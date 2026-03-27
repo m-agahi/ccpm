@@ -51,6 +51,23 @@ Or interactively: run `/plugin`, go to **Discover**, and select the plugin.
 /code-review:review-local
 ```
 
+## Local development
+
+To develop plugins locally without reinstalling after every change, symlink the plugin into the local marketplace directory and sync to cache:
+
+```bash
+# Create the symlink (one-time setup)
+ln -sfn /path/to/ccpm/plugins/code-review ~/.claude/plugins/local/local-code-review
+
+# After making changes, sync to cache
+rsync -avL --delete \
+  ~/.claude/plugins/local/local-code-review/ \
+  ~/.claude/plugins/cache/local-plugins/local-code-review/unknown/ \
+  --exclude='.git' --exclude='LICENSE' --exclude='README.md'
+```
+
+Restart Claude Code after syncing to pick up changes.
+
 ## License
 
 Apache-2.0
