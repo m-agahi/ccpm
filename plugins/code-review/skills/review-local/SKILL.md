@@ -18,22 +18,35 @@ from pathlib import Path
 
 def find_version(start):
     d = start.resolve()
+    # Read this plugin's name from its own plugin.json
+    pj = d / '.claude-plugin' / 'plugin.json'
+    name = None
+    if pj.exists():
+        try:
+            name = json.loads(pj.read_text()).get('name')
+            # Check for version in plugin.json itself
+            v = json.loads(pj.read_text()).get('version')
+            if v:
+                return v
+        except Exception:
+            pass
+    # Walk up to find marketplace.json and match by plugin name
+    p = d.parent
     while True:
-        for candidate in [d / 'marketplace.json', d / '.claude-plugin' / 'marketplace.json']:
+        for candidate in [p / 'marketplace.json', p / '.claude-plugin' / 'marketplace.json']:
             if candidate.exists():
                 try:
                     data = json.loads(candidate.read_text())
-                    v = data.get('metadata', {}).get('version')
-                    if v:
-                        return v
-                    for p in data.get('plugins', []):
-                        if p.get('version'):
-                            return p['version']
+                    for plugin in data.get('plugins', []):
+                        if name and plugin.get('name') == name and plugin.get('version'):
+                            return plugin['version']
+                        if plugin.get('version'):
+                            return plugin['version']
                 except Exception:
                     pass
-        if (d / '.git').exists() or d == d.parent:
+        if (p / '.git').exists() or p == p.parent:
             break
-        d = d.parent
+        p = p.parent
     return 'unknown'
 
 print(find_version(Path('${CLAUDE_PLUGIN_ROOT}')))

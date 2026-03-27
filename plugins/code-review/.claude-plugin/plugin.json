@@ -1,7 +1,6 @@
 {
   "name": "code-review",
   "description": "Comprehensive local code review with static analysis, security scanning, dependency auditing, container scanning, and best practices enforcement. v3: Python orchestrates claude -p inside the container — no LLM orchestration, no permission prompts. All analysis is local — only optional Jira ticket creation touches remote systems.",
-  "version": "3.4.0",
   "author": {
     "name": "Max Agahi"
   },
