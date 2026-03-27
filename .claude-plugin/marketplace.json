@@ -1,0 +1,24 @@
+{
+  "name": "maxagahi-marketplace",
+  "owner": {
+    "name": "Max Agahi"
+  },
+  "metadata": {
+    "description": "Personal marketplace for Claude Code plugins and skills.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "code-review",
+      "description": "Comprehensive local code review with static analysis, security scanning, dependency auditing, container scanning (Trivy), SonarQube, and best practices enforcement. All analysis is local — never pushes to remote.",
+      "source": "./plugins/code-review",
+      "version": "3.4.0",
+      "author": {
+        "name": "Max Agahi"
+      },
+      "license": "Apache-2.0",
+      "category": "security",
+      "keywords": ["code-review", "security", "static-analysis", "trivy", "sonarqube", "linting", "fuzz-testing"]
+    }
+  ]
+}

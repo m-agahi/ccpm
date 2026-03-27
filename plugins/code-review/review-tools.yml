@@ -1,0 +1,110 @@
+# Language → Agent mapping configuration
+# Used by review-cli.py to determine which optional agents are relevant
+
+agents:
+  # Always-on agents — run regardless of language
+  always:
+    - name: code-quality-reviewer
+      model: opus
+      findings: findings-code-quality.md
+    - name: security-reviewer
+      model: opus
+      findings: findings-security.md
+    - name: dependency-checker
+      model: sonnet
+      findings: findings-dependencies.md
+
+  # Optional agents — shown in menu, filtered by detected languages
+  optional:
+    - name: sonarqube-scanner
+      model: sonnet
+      number: 5
+      label: "SonarQube analysis — full static analysis via Docker"
+      findings: findings-sonarqube.md
+      languages: [java, kotlin, javascript, typescript, python, go, php]
+
+    - name: trivy-scanner
+      model: null  # script, not LLM agent
+      number: 6
+      label: "Trivy/Hadolint scan — container & filesystem vulnerabilities"
+      findings: findings-trivy.md
+      languages: [docker]
+      script: run_trivy_report.sh
+      condition: has_dockerfiles
+
+    - name: fuzz-tester
+      model: sonnet
+      number: 7
+      label: "Fuzz testing — property-based testing with random inputs"
+      findings: findings-fuzz.md
+      languages: [python, javascript, typescript, go, rust, java, php]
+
+    - name: type-checker
+      model: haiku
+      number: 8
+      label: "Type checking — static type analysis (tsc, mypy, staticcheck, etc.)"
+      findings: findings-type-check.md
+      languages: [typescript, python, go, java, shell, sql, php]
+
+    - name: linter
+      model: haiku
+      number: 9
+      label: "Linter — style, anti-patterns, duplication (ESLint, ruff, PMD, etc.)"
+      findings: findings-lint.md
+      languages: [typescript, javascript, python, go, java, php, shell]
+
+    - name: gha-security
+      model: sonnet
+      number: 10
+      label: "GHA security — GitHub Actions workflow security audit"
+      findings: findings-gha-security.md
+      languages: [github-actions]
+      condition: has_gha_workflows
+
+  # Post-review agents — launched after main agents complete
+  post:
+    - name: report-generator
+      model: sonnet
+      findings: null
+    - name: improvement-advisor
+      model: haiku
+      findings: image-improvements.md
+    - name: ticket-drafter
+      model: sonnet
+      findings: null
+      trigger: user_choice
+    - name: jira-ticket-creator
+      model: sonnet
+      findings: null
+      trigger: user_choice
+
+# Language detection mapping — scc language names to our canonical names
+language_aliases:
+  Python: python
+  Java: java
+  Kotlin: kotlin
+  JavaScript: javascript
+  TypeScript: typescript
+  Go: go
+  Rust: rust
+  PHP: php
+  Shell: shell
+  Bash: shell
+  Zsh: shell
+  SQL: sql
+  HCL: hcl
+  Terraform: hcl
+  Dockerfile: docker
+  Docker: docker
+  Makefile: makefile
+  YAML: yaml
+  Helm: helm
+
+# Special detection rules (not language-based)
+special_detections:
+  docker:
+    glob: ["Dockerfile*", "docker-compose*", "*.dockerfile"]
+  github-actions:
+    glob: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+  helm:
+    glob: ["Chart.yaml"]
