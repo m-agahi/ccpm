@@ -54,11 +54,20 @@ jobs:
     needs: release
     runs-on: docker
     container:
-      image: docker:27-cli
-      options: -v /var/run/docker.sock:/var/run/docker.sock
+      image: node:22-bookworm
+    env:
+      DOCKER_HOST: tcp://172.17.0.1:2375
     steps:
-      - name: Install dependencies
-        run: apk add --no-cache git bash python3 coreutils ca-certificates
+      - name: Install Docker CLI
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg python3
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list
+          apt-get update && apt-get install -y --no-install-recommends docker-ce-cli
+
+      - name: Verify Docker access
+        run: docker info
 
       - name: Checkout
         uses: https://data.forgejo.org/actions/checkout@v6
@@ -86,4 +95,6 @@ jobs:
         shell: bash
         env:
           FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: python3 .forgejo/scripts/build_images.py

@@ -14,9 +14,6 @@ import pathlib
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
-from lib import workflow_io
-
 
 def run(cmd, **kwargs):
     """Run a command, printing it and streaming output."""
@@ -39,10 +36,15 @@ def main():
         return
 
     repo = os.environ.get("FORGEJO_REPOSITORY") or os.environ.get("GITHUB_REPOSITORY", "")
-    token = workflow_io.require_env("FORGEJO_TOKEN")
+    registry_user = os.environ.get("REGISTRY_USER", "")
+    registry_token = os.environ.get("REGISTRY_TOKEN", "")
 
     if not repo:
         print("ERROR: FORGEJO_REPOSITORY not set", file=sys.stderr)
+        sys.exit(1)
+
+    if not registry_user or not registry_token:
+        print("ERROR: REGISTRY_USER and REGISTRY_TOKEN must be set", file=sys.stderr)
         sys.exit(1)
 
     registry = "codeberg.org"
@@ -50,8 +52,8 @@ def main():
 
     # Login to container registry
     login = run(
-        ["docker", "login", registry, "-u", "token", "--password-stdin"],
-        input=token,
+        ["docker", "login", registry, "-u", registry_user, "--password-stdin"],
+        input=registry_token,
         text=True,
         capture_output=True,
     )

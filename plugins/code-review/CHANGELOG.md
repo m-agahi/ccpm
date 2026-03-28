@@ -5,6 +5,13 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.5.1] - 2026-03-28
+
+### Fixed
+
+- **CI image build**: Fixed release workflow to use `node:22-bookworm` with Docker CLI for
+  container image builds. Switched to `DOCKER_HOST` for host daemon access.
+
 ## [3.5.0] - 2026-03-28
 
 ### Added
