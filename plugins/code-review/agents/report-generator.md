@@ -178,12 +178,15 @@ Create a prioritized action list with three tiers:
 ### 8. Write the Final Report
 
 **Get the current timestamp** by running:
+
 ```bash
 date +%Y%m%d-%H%M%S
 ```
+
 Use the output as the timestamp in the filename. Do NOT hardcode or guess the time.
 
 Save the report:
+
 ```bash
 cat > /tmp/review-work/review-YYYYMMDD-HHMMSS.md << "REPORT_EOF"
 ...report content...

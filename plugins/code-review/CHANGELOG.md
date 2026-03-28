@@ -5,6 +5,12 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Prettier formatting**: Applied consistent formatting to plugin.json, agent specs, review-tools.yml, and SKILL.md. No functional changes.
+
 ## [3.4.0] - 2026-03-26
 
 ### Added

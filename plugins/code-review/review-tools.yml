@@ -24,7 +24,7 @@ agents:
       languages: [java, kotlin, javascript, typescript, python, go, php]
 
     - name: trivy-scanner
-      model: null  # script, not LLM agent
+      model: null # script, not LLM agent
       number: 6
       label: "Trivy/Hadolint scan — container & filesystem vulnerabilities"
       findings: findings-trivy.md

@@ -244,7 +244,7 @@ def test_process_ids_types_never_crashes(ids, types):
 #### TypeScript/JavaScript (fast-check)
 
 ```typescript
-import * as fc from "fast-check"
+import * as fc from "fast-check";
 
 test("processData never crashes", () => {
   fc.assert(
@@ -252,17 +252,17 @@ test("processData never crashes", () => {
       fc.record({
         id: fc.string({ minLength: 1 }),
         name: fc.string(),
-        value: fc.integer({ min: 0, max: 10000 })
+        value: fc.integer({ min: 0, max: 10000 }),
       }),
       (input) => {
-        const result = processData(input)
-        expect(result).toBeDefined()
-        expect(typeof result.id).toBe("string")
-      }
+        const result = processData(input);
+        expect(result).toBeDefined();
+        expect(typeof result.id).toBe("string");
+      },
     ),
-    { numRuns: 1000 }
-  )
-})
+    { numRuns: 1000 },
+  );
+});
 ```
 
 #### Go (built-in fuzz)

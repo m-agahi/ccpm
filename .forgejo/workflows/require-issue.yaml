@@ -5,10 +5,6 @@ on:
   pull_request:
     types: [opened, reopened, edited]
 
-permissions:
-  pull-requests: write
-  issues: write
-
 jobs:
   check-issue:
     runs-on: docker

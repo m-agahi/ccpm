@@ -116,6 +116,7 @@ language in the review is a critical gap.
 - **Test coverage** (MANDATORY — always report, never skip):
 
   **Step 1: Discover test files** — use Glob to find test directories and files:
+
   - Python: `tests/`, `test_*.py`, `*_test.py`
   - JS/TS: `__tests__/`, `*.test.ts`, `*.spec.ts`, `*.test.js`
   - Java: `src/test/`, `*Test.java`, `*Tests.java`
@@ -125,6 +126,7 @@ language in the review is a critical gap.
   - Rust: `#[cfg(test)]` modules, `tests/`
 
   **Step 2: Run coverage if possible:**
+
   - Python: `python3 -m pytest --cov=src --cov-report=term-missing`
   - JS/TS: `npx jest --coverage` or `npx vitest run --coverage`
   - PHP: `php vendor/bin/phpunit --coverage-text` (if phpunit installed in project)
@@ -137,6 +139,7 @@ language in the review is a critical gap.
   coverage.
 
   **Step 4: Always report as an explicit finding:**
+
   - HIGH priority if coverage <30%
   - MEDIUM if <60%
   - Suggestion if <80%

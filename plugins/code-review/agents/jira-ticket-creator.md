@@ -7,7 +7,17 @@ description:
   at 3 (Critical/High).
 model: sonnet
 color: orange
-allowed-tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "AskUserQuestion", "ToolSearch"]
+allowed-tools:
+  [
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "AskUserQuestion",
+    "ToolSearch",
+  ]
 ---
 
 You are a Jira ticket creation agent for local code review findings. Your job is to read a review

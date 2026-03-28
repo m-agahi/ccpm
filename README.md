@@ -1,6 +1,6 @@
 # ccpm — Claude Code Plugin Marketplace
 
-![plugins](https://img.shields.io/badge/plugins-1-blue)
+![plugins](https://img.shields.io/badge/plugins-2-blue)
 
 Personal plugin marketplace for [Claude Code](https://claude.ai/code).
 
@@ -30,6 +30,17 @@ Comprehensive local code review with 12 specialized agents. All analysis runs lo
 **Languages supported:** Python, Java, Kotlin, JavaScript, TypeScript, Go, Rust, PHP, Ruby, Shell, SQL, Terraform/HCL, Docker, Helm, Makefiles, GitHub Actions.
 
 **Requirements:** Docker, Claude Code CLI.
+
+### update-jira (v1.0.0)
+
+Post progress updates to Jira tickets based on session work, git activity, and PRs.
+
+- **Targeted mode** — `/update-jira PROJ-123` — update a specific ticket from your session context
+- **Scan mode** — `/update-jira` — batch-scan active tickets and recent PRs, correlate, and update
+
+Auto-fixes PR titles (adds ticket prefix) and PR bodies (adds Jira link). Configurable per-project via memory file (Jira project, GitHub org, repos, email).
+
+**Requirements:** Atlassian MCP server, GitHub MCP server.
 
 ## Installation
 

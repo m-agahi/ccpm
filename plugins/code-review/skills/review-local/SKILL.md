@@ -109,6 +109,7 @@ check files, or run `ls`/`ps`/`cat`. Just wait.
 ## AFTER USER CONFIRMS RUN-AGENTS IS DONE
 
 Print results to the user:
+
 1. Report path (newest `REVIEW_DIR/.local-review/review-*.md`)
 2. Read the report and show findings by severity
 3. Top 3 critical issues
@@ -122,5 +123,6 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-cli.py cleanup REVIEW_DIR
 ## TICKETS (Jira creation — optional, runs on host)
 
 Ask: "Create Jira tickets? (jira / no)"
+
 - jira → launch the **jira-ticket-creator** Agent from `${CLAUDE_PLUGIN_ROOT}/agents/jira-ticket-creator.md` (runs on host with MCP tools, NOT inside container)
 - no → skip

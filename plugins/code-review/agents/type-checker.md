@@ -65,19 +65,19 @@ Run analysis for ALL detected languages, not just one.
 For each detected language, check if the type checker exists inside the container. **If missing,
 install it** and log the install.
 
-| Language      | Tool        | Check                   | Install                                                                                                                                          |
-| ------------- | ----------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| TypeScript/JS | tsc         | `tsc --version`         | `npm install -g typescript`                                                                                                                      |
-| Python        | mypy        | `mypy --version`        | `pip install mypy`                                                                                                                               |
-| Python        | pyright     | `pyright --version`     | `npm install -g pyright`                                                                                                                         |
+| Language      | Tool        | Check                   | Install                                                                                                                                                |
+| ------------- | ----------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| TypeScript/JS | tsc         | `tsc --version`         | `npm install -g typescript`                                                                                                                            |
+| Python        | mypy        | `mypy --version`        | `pip install mypy`                                                                                                                                     |
+| Python        | pyright     | `pyright --version`     | `npm install -g pyright`                                                                                                                               |
 | Rust          | cargo       | `cargo --version`       | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh -s -- -y --default-toolchain stable --profile minimal && rustup component add clippy` |
-| Go            | staticcheck | `staticcheck --version` | `go install honnef.co/go/tools/cmd/staticcheck@latest`                                                                                           |
-| Java          | spotbugs    | `spotbugs -version`     | Already in image (check `/opt/spotbugs/bin/`)                                                                                                    |
-| Bash          | shellcheck  | `shellcheck --version`  | `apt-get update && apt-get install -y shellcheck`                                                                                                |
-| SQL           | sqlfluff    | `sqlfluff version`      | `pip install sqlfluff`                                                                                                                           |
-| PHP           | phpstan     | `phpstan --version`     | `curl -sL https://github.com/phpstan/phpstan/releases/latest/download/phpstan.phar -o /usr/local/bin/phpstan && chmod +x /usr/local/bin/phpstan` |
-| PHP           | psalm       | `psalm --version`       | `curl -sL https://github.com/vimeo/psalm/releases/latest/download/psalm.phar -o /usr/local/bin/psalm && chmod +x /usr/local/bin/psalm`           |
-| Ruby          | sorbet      | `srb --version`         | `gem install sorbet-runtime sorbet`                                                                                                              |
+| Go            | staticcheck | `staticcheck --version` | `go install honnef.co/go/tools/cmd/staticcheck@latest`                                                                                                 |
+| Java          | spotbugs    | `spotbugs -version`     | Already in image (check `/opt/spotbugs/bin/`)                                                                                                          |
+| Bash          | shellcheck  | `shellcheck --version`  | `apt-get update && apt-get install -y shellcheck`                                                                                                      |
+| SQL           | sqlfluff    | `sqlfluff version`      | `pip install sqlfluff`                                                                                                                                 |
+| PHP           | phpstan     | `phpstan --version`     | `curl -sL https://github.com/phpstan/phpstan/releases/latest/download/phpstan.phar -o /usr/local/bin/phpstan && chmod +x /usr/local/bin/phpstan`       |
+| PHP           | psalm       | `psalm --version`       | `curl -sL https://github.com/vimeo/psalm/releases/latest/download/psalm.phar -o /usr/local/bin/psalm && chmod +x /usr/local/bin/psalm`                 |
+| Ruby          | sorbet      | `srb --version`         | `gem install sorbet-runtime sorbet`                                                                                                                    |
 
 **Pattern:**
 
@@ -197,6 +197,7 @@ Key Rust type errors to watch for:
 - Clippy: `missing_errors_doc`, `missing_panics_doc` on pub functions
 
 **Notes:**
+
 - Always use `--workspace` to check all crates in the workspace
 - Use `--all-targets` to include tests, benches, and examples
 - If the project has a `rust-toolchain.toml`, respect the specified toolchain version

@@ -77,7 +77,7 @@ install it** (the container runs as root) and log the install.
 | prettier      | `prettier --version`      | `npm install -g prettier`                                                                                                                                                 |
 | jscpd         | `jscpd --version`         | `npm install -g jscpd`                                                                                                                                                    |
 | ruff          | `ruff --version`          | `pip install ruff`                                                                                                                                                        |
-| cargo clippy  | `cargo clippy --version`  | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh -s -- -y --default-toolchain stable --profile minimal && rustup component add clippy rustfmt`             |
+| cargo clippy  | `cargo clippy --version`  | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh -s -- -y --default-toolchain stable --profile minimal && rustup component add clippy rustfmt`            |
 | rustfmt       | `rustfmt --version`       | (installed with cargo clippy above)                                                                                                                                       |
 | golangci-lint | `golangci-lint --version` | `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest`                                                                                                   |
 | pmd           | `pmd --version`           | Download from GitHub releases                                                                                                                                             |
@@ -180,6 +180,7 @@ cargo fmt --all -- --check 2>&1 || true
 ```
 
 Key clippy lint categories:
+
 - `clippy::correctness` — outright bugs (enabled by default)
 - `clippy::suspicious` — likely-buggy patterns
 - `clippy::complexity` — unnecessarily complex code
@@ -188,6 +189,7 @@ Key clippy lint categories:
 - `clippy::pedantic` — stricter checks (only enable if project uses them)
 
 **Notes:**
+
 - Always use `--workspace` for multi-crate projects
 - If the project has a `clippy.toml` or `rust-toolchain.toml`, respect those settings
 - Report `unsafe` blocks without safety comments as findings

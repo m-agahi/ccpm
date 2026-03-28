@@ -6,7 +6,13 @@
   },
   "repository": "https://codeberg.org/maxagahi/ccpm",
   "license": "Apache-2.0",
-  "keywords": ["code-review", "security", "static-analysis", "trivy", "sonarqube"],
+  "keywords": [
+    "code-review",
+    "security",
+    "static-analysis",
+    "trivy",
+    "sonarqube"
+  ],
   "permissions": {
     "required": [
       "Read(*)",

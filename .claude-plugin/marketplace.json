@@ -18,7 +18,27 @@
       },
       "license": "Apache-2.0",
       "category": "security",
-      "keywords": ["code-review", "security", "static-analysis", "trivy", "sonarqube", "linting", "fuzz-testing"]
+      "keywords": [
+        "code-review",
+        "security",
+        "static-analysis",
+        "trivy",
+        "sonarqube",
+        "linting",
+        "fuzz-testing"
+      ]
+    },
+    {
+      "name": "update-jira",
+      "description": "Post progress updates to Jira tickets based on session work, git activity, and PRs. Supports targeted single-ticket updates and batch scan mode across repos.",
+      "source": "./plugins/update-jira",
+      "version": "1.0.0",
+      "author": {
+        "name": "Christian Biamont"
+      },
+      "license": "Apache-2.0",
+      "category": "productivity",
+      "keywords": ["jira", "progress", "updates", "pr-sync", "atlassian"]
     }
   ]
 }
