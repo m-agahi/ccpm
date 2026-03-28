@@ -9,9 +9,34 @@
 
 set -euo pipefail
 
-IMAGE_NAME="localhost/review-tools:latest"
+REGISTRY_IMAGE="codeberg.org/maxagahi/ccpm/code-review:latest"
+LOCAL_IMAGE="localhost/review-tools:latest"
+IMAGE_NAME=""
 SOURCE_MOUNT="/workspace-src"
 WORKSPACE="/workspace"
+
+_resolve_image() {
+  # Use registry image if available, otherwise fall back to local
+  if docker image inspect "$REGISTRY_IMAGE" >/dev/null 2>&1; then
+    IMAGE_NAME="$REGISTRY_IMAGE"
+  elif docker pull "$REGISTRY_IMAGE" >/dev/null 2>&1; then
+    IMAGE_NAME="$REGISTRY_IMAGE"
+  elif docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1; then
+    IMAGE_NAME="$LOCAL_IMAGE"
+  else
+    echo "Pulling image from registry..."
+    if docker pull "$REGISTRY_IMAGE" 2>/dev/null; then
+      IMAGE_NAME="$REGISTRY_IMAGE"
+    else
+      echo "ERROR: No image available. Either pull from registry or build locally:" >&2
+      PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+      echo "  docker pull $REGISTRY_IMAGE" >&2
+      echo "  docker build -t $LOCAL_IMAGE $PLUGIN_ROOT/docker/" >&2
+      return 1
+    fi
+  fi
+  echo "Using image: $IMAGE_NAME"
+}
 
 _container_name() {
   # Derive unique container name from project directory
@@ -48,13 +73,8 @@ cmd_start() {
     docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1
   fi
 
-  # Check image exists
-  if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-    echo "ERROR: Image '$IMAGE_NAME' not found. Build it first:" >&2
-    PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-    echo "  docker build -t $IMAGE_NAME $PLUGIN_ROOT/docker/" >&2
-    return 1
-  fi
+  # Resolve image (registry or local)
+  _resolve_image || return 1
 
   echo "Starting review-tools container..."
   # Ensure Podman socket is running (idempotent, user-level only)

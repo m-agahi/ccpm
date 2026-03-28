@@ -49,3 +49,41 @@ jobs:
           FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
           RELEASE_SHA: ${{ github.sha }}
         run: python3 .forgejo/scripts/create_releases.py
+
+  build-images:
+    needs: release
+    runs-on: docker
+    container:
+      image: docker:27-cli
+      options: -v /var/run/docker.sock:/var/run/docker.sock
+    steps:
+      - name: Install dependencies
+        run: apk add --no-cache git bash python3 coreutils ca-certificates
+
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Detect version changes
+        id: detect
+        shell: bash
+        env:
+          BASE_REF: HEAD~1
+        run: python3 .forgejo/scripts/check_releases.py
+
+      - name: Save release plan
+        if: steps.detect.outputs.has_releases == 'true'
+        shell: bash
+        env:
+          RELEASES_JSON: ${{ steps.detect.outputs.releases }}
+        run: |
+          mkdir -p .ci-outputs
+          printf '%s' "$RELEASES_JSON" > .ci-outputs/releases.json
+
+      - name: Build and push Docker images
+        if: steps.detect.outputs.has_releases == 'true'
+        shell: bash
+        env:
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: python3 .forgejo/scripts/build_images.py

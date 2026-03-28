@@ -5,11 +5,31 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [3.5.0] - 2026-03-28
+
+### Added
+
+- **Pre-built Docker image from registry**: The container image is now published to
+  `codeberg.org/maxagahi/ccpm/code-review` on every release. `container.sh` pulls from the registry
+  automatically — no local build required. Falls back to `localhost/review-tools:latest` if the
+  registry is unreachable.
+- **CI image build**: The release workflow builds and pushes Docker images for any plugin that
+  contains a Dockerfile.
 
 ### Changed
 
-- **Prettier formatting**: Applied consistent formatting to plugin.json, agent specs, review-tools.yml, and SKILL.md. No functional changes.
+- **Prettier formatting**: Applied consistent formatting to plugin.json, agent specs, review-tools.yml,
+  and SKILL.md. No functional changes.
+
+### Updated
+
+- **Binary tools**: Gitleaks 8.30.0→8.30.1, PMD 7.22.0→7.23.0, Zizmor 1.22.0→1.23.1,
+  Terraform 1.13.4→1.14.8, golangci-lint v1.64.8→v2.11.4, shfmt v3.12.0→v3.13.0
+- **Python packages**: semgrep 1.154.0→1.156.0, checkov 3.2.508→3.2.513, ruff 0.11.0→0.15.8,
+  mypy 1.15.0→1.19.1, pip-audit 2.9.0→2.10.0, sqlfluff 3.3.1→4.1.0, yamllint 1.37.0→1.38.0,
+  hypothesis 6.130.0→6.151.9, pytest 8.3.5→9.0.2, pytest-cov 6.1.1→7.1.0
+- **Node packages**: pyright 1.1.400→1.1.408, eslint 9.22.0→10.1.0, prettier 3.5.3→3.8.1,
+  typescript 5.8.2→6.0.2
 
 ## [3.4.0] - 2026-03-26
 

@@ -10,15 +10,15 @@ ENV PATH="/usr/local/go/bin:/root/go/bin:/opt/sonar-scanner/bin:/opt/spotbugs/bi
 # Pinned tool versions (update these to rebuild with newer tools)
 ENV GO_VERSION=1.26.1 \
     TRIVY_VERSION=0.69.3 \
-    GITLEAKS_VERSION=8.30.0 \
+    GITLEAKS_VERSION=8.30.1 \
     HADOLINT_VERSION=2.14.0 \
     SHELLCHECK_VERSION=v0.11.0 \
     TFLINT_VERSION=0.61.0 \
-    PMD_VERSION=7.22.0 \
+    PMD_VERSION=7.23.0 \
     SPOTBUGS_VERSION=4.9.8 \
     SONAR_VERSION=8.0.1.6346 \
-    ZIZMOR_VERSION=1.22.0 \
-    TERRAFORM_VERSION=1.13.4
+    ZIZMOR_VERSION=1.23.1 \
+    TERRAFORM_VERSION=1.14.8
 
 WORKDIR /workspace
 
@@ -79,26 +79,26 @@ RUN gem install --no-document rubocop bundler-audit
 # Python tools (pinned via pip)
 # ============================================================
 RUN pip install --no-cache-dir \
-    semgrep==1.154.0 \
-    checkov==3.2.508 \
-    ruff==0.11.0 \
-    mypy==1.15.0 \
-    pip-audit==2.9.0 \
-    sqlfluff==3.3.1 \
-    yamllint==1.37.0 \
-    hypothesis==6.130.0 \
-    pytest==8.3.5 \
-    pytest-cov==6.1.1
+    semgrep==1.156.0 \
+    checkov==3.2.513 \
+    ruff==0.15.8 \
+    mypy==1.19.1 \
+    pip-audit==2.10.0 \
+    sqlfluff==4.1.0 \
+    yamllint==1.38.0 \
+    hypothesis==6.151.9 \
+    pytest==9.0.2 \
+    pytest-cov==7.1.0
 
 # ============================================================
 # Node.js tools (global)
 # ============================================================
 RUN npm install -g \
     jscpd@4.0.8 \
-    pyright@1.1.400 \
-    eslint@9.22.0 \
-    prettier@3.5.3 \
-    typescript@5.8.2 \
+    pyright@1.1.408 \
+    eslint@10.1.0 \
+    prettier@3.8.1 \
+    typescript@6.0.2 \
     @anthropic-ai/claude-code
 
 # Claude Code CLI settings (allow Bash and Read inside container)
@@ -118,9 +118,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 # ============================================================
 # Go tools (pinned to specific versions where possible)
 # ============================================================
-RUN go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8 \
+RUN go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4 \
     && go install honnef.co/go/tools/cmd/staticcheck@v0.7.0 \
-    && go install mvdan.cc/sh/v3/cmd/shfmt@v3.12.0 \
+    && go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.0 \
     && go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11 \
     && go install github.com/mrtazz/checkmake/cmd/checkmake@v0.2.2 \
     && rm -rf /root/go/pkg/mod/cache

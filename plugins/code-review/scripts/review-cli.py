@@ -25,7 +25,9 @@ import yaml
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PLUGIN_ROOT / "review-tools.yml"
-IMAGE_NAME = "localhost/review-tools:latest"
+REGISTRY_IMAGE = "codeberg.org/maxagahi/ccpm/code-review:latest"
+LOCAL_IMAGE = "localhost/review-tools:latest"
+IMAGE_NAME = REGISTRY_IMAGE  # resolved at runtime by container.sh
 WORKSPACE = "/workspace"
 REVIEW_WORK = "/tmp/review-work"
 MAX_PARALLEL = 6  # max concurrent claude -p processes
