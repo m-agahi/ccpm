@@ -5,6 +5,15 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.5.3] - 2026-03-28
+
+### Fixed
+
+- **NVD API key for faster builds**: Pass `NVD_API_KEY` as a Docker build arg so the
+  dependency-check database download uses the API key instead of rate-limited anonymous access.
+- **Build failures now fail the workflow**: The build-images script exits with non-zero if any
+  image build or push fails.
+
 ## [3.5.2] - 2026-03-28
 
 ### Fixed

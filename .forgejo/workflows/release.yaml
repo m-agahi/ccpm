@@ -97,4 +97,5 @@ jobs:
           FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
           REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
           REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: python3 .forgejo/scripts/build_images.py

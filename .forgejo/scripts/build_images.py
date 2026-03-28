@@ -48,7 +48,9 @@ def main():
         sys.exit(1)
 
     registry = "codeberg.org"
+    nvd_api_key = os.environ.get("NVD_API_KEY", "")
     built = []
+    failed = []
 
     # Login to container registry
     login = run(
@@ -76,16 +78,19 @@ def main():
         image_latest = f"{image_base}:latest"
 
         print(f"\nBuilding {image_versioned}...")
-        build = run(
-            [
-                "docker", "build",
-                "-t", image_versioned,
-                "-t", image_latest,
-                str(dockerfile_dir),
-            ],
-        )
+        build_cmd = [
+            "docker", "build",
+            "-t", image_versioned,
+            "-t", image_latest,
+        ]
+        if nvd_api_key:
+            build_cmd += ["--build-arg", f"NVD_API_KEY={nvd_api_key}"]
+        build_cmd.append(str(dockerfile_dir))
+
+        build = run(build_cmd)
         if build.returncode != 0:
             print(f"ERROR: Failed to build {name}", file=sys.stderr)
+            failed.append(name)
             continue
 
         print(f"Pushing {image_versioned}...")
@@ -96,11 +101,15 @@ def main():
             print(f"Pushed {image_versioned} and {image_latest}")
             built.append(name)
         else:
-            print(f"WARNING: Push failed for {name}", file=sys.stderr)
+            print(f"ERROR: Push failed for {name}", file=sys.stderr)
+            failed.append(name)
 
     if built:
         print(f"\nBuilt and pushed images for: {', '.join(built)}")
-    else:
+    if failed:
+        print(f"\nFailed: {', '.join(failed)}", file=sys.stderr)
+        sys.exit(1)
+    if not built and not failed:
         print("\nNo images to build.")
 
 
