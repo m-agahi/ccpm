@@ -173,9 +173,18 @@ def check_permissions():
 
 
 def check_image_exists():
-    """Check if the review-tools Docker image is built."""
-    result = run(["docker", "image", "inspect", IMAGE_NAME], check=False)
-    return result.returncode == 0
+    """Check if the review-tools Docker image is available (locally or from registry)."""
+    # Check registry image locally
+    if run(["docker", "image", "inspect", REGISTRY_IMAGE], check=False).returncode == 0:
+        return True
+    # Try pulling from registry
+    print("\033[1mPulling review-tools image from registry...\033[0m")
+    if run(["docker", "pull", REGISTRY_IMAGE], check=False, capture=False).returncode == 0:
+        return True
+    # Check local image as fallback
+    if run(["docker", "image", "inspect", LOCAL_IMAGE], check=False).returncode == 0:
+        return True
+    return False
 
 
 def start_container(project_dir):
@@ -319,12 +328,13 @@ def cmd_setup(args):
 
     # 2. Check image
     if not check_image_exists():
-        print(f"\n\033[1;31mThe review-tools Docker image is not built yet.\033[0m")
-        print(f"Build it with:\n")
-        print(f"  docker build -t {IMAGE_NAME} {PLUGIN_ROOT}/docker/\n")
+        print(f"\n\033[1;31mThe review-tools Docker image is not available.\033[0m")
+        print(f"Pull it with:\n")
+        print(f"  docker pull {REGISTRY_IMAGE}\n")
         print(
-            "This takes ~10 minutes the first time. After building, re-run the review.\n"
+            "If the registry is unreachable, you can build locally:\n"
         )
+        print(f"  docker build -t {LOCAL_IMAGE} {PLUGIN_ROOT}/docker/\n")
         (lr / "manifest.json").write_text(json.dumps({"error": "image_missing"}))
         sys.exit(1)
 

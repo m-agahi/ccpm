@@ -5,6 +5,14 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.5.4] - 2026-03-28
+
+### Fixed
+
+- **Auto-pull Docker image from registry**: `check_image_exists()` now tries pulling the image from
+  the registry before failing, instead of only checking locally and telling users to build. Error
+  message updated to suggest `docker pull` first, with local build as fallback.
+
 ## [3.5.3] - 2026-03-28
 
 ### Fixed
