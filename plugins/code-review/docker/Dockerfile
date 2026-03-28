@@ -18,7 +18,9 @@ ENV GO_VERSION=1.26.1 \
     SPOTBUGS_VERSION=4.9.8 \
     SONAR_VERSION=8.0.1.6346 \
     ZIZMOR_VERSION=1.23.1 \
-    TERRAFORM_VERSION=1.14.8
+    TERRAFORM_VERSION=1.14.8 \
+    CHECKSTYLE_VERSION=13.3.0 \
+    GOOGLE_JAVA_FORMAT_VERSION=1.35.0
 
 WORKDIR /workspace
 
@@ -172,6 +174,14 @@ RUN curl -fsSL "https://github.com/pmd/pmd/releases/download/pmd_releases%2F${PM
 RUN curl -fsSL "https://github.com/spotbugs/spotbugs/releases/download/${SPOTBUGS_VERSION}/spotbugs-${SPOTBUGS_VERSION}.tgz" | tar -C /opt -xz \
     && ln -sf /opt/spotbugs-${SPOTBUGS_VERSION} /opt/spotbugs
 
+# Checkstyle (Google style rules for Java)
+RUN curl -fsSL "https://github.com/checkstyle/checkstyle/releases/download/checkstyle-${CHECKSTYLE_VERSION}/checkstyle-${CHECKSTYLE_VERSION}-all.jar" \
+      -o /usr/local/bin/checkstyle.jar
+
+# google-java-format (Java code formatter)
+RUN curl -fsSL "https://github.com/google/google-java-format/releases/download/v${GOOGLE_JAVA_FORMAT_VERSION}/google-java-format-${GOOGLE_JAVA_FORMAT_VERSION}-all-deps.jar" \
+      -o /usr/local/bin/google-java-format.jar
+
 # OWASP Dependency-Check CLI
 ENV DC_VERSION=12.1.0
 RUN curl -fsSL "https://github.com/jeremylong/DependencyCheck/releases/download/v${DC_VERSION}/dependency-check-${DC_VERSION}-release.zip" -o /tmp/dc.zip \
@@ -248,6 +258,8 @@ RUN echo "=== Tool Versions ===" \
     && sonar-scanner --version 2>&1 | head -2 \
     && mvn --version | head -1 \
     && javac -version 2>&1 \
+    && java -jar /usr/local/bin/checkstyle.jar --version \
+    && java -jar /usr/local/bin/google-java-format.jar --version \
     && dependency-check.sh --version 2>&1 | head -1 || true \
     && echo "=== All tools verified ==="
 

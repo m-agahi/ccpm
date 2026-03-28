@@ -5,6 +5,15 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.5.5] - 2026-03-28
+
+### Added
+
+- **Checkstyle in Docker image**: Pre-baked checkstyle v13.3.0 jar. Eliminates runtime download for
+  Java style checking.
+- **google-java-format in Docker image**: Pre-baked google-java-format v1.35.0 jar. Eliminates
+  runtime download for Java formatting checks.
+
 ## [3.5.4] - 2026-03-28
 
 ### Fixed
