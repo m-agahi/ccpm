@@ -83,7 +83,7 @@ RUN pip install --no-cache-dir \
     checkov==3.2.513 \
     ruff==0.15.8 \
     mypy==1.19.1 \
-    pip-audit==2.10.0 \
+    pip-audit==2.9.0 \
     sqlfluff==4.1.0 \
     yamllint==1.38.0 \
     hypothesis==6.151.9 \

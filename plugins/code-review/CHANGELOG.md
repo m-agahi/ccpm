@@ -5,12 +5,14 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [3.5.1] - 2026-03-28
+## [3.5.2] - 2026-03-28
 
 ### Fixed
 
 - **CI image build**: Fixed release workflow to use `node:22-bookworm` with Docker CLI for
   container image builds. Switched to `DOCKER_HOST` for host daemon access.
+- **pip-audit pinned to 2.9.0**: Reverted from 2.10.0 due to `tomli` dependency conflict with
+  semgrep (semgrep needs `tomli~=2.0.1`, pip-audit 2.10.0 needs `tomli>=2.2.1`).
 
 ## [3.5.0] - 2026-03-28
 
