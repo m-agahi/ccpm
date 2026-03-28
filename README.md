@@ -1,5 +1,7 @@
 # ccpm — Claude Code Plugin Marketplace
 
+![plugins](https://img.shields.io/badge/plugins-1-blue)
+
 Personal plugin marketplace for [Claude Code](https://claude.ai/code).
 
 ## Plugins
@@ -10,20 +12,20 @@ Comprehensive local code review with 12 specialized agents. All analysis runs lo
 
 **Agents included:**
 
-| Agent | Model | What it does |
-|-------|-------|--------------|
-| code-quality-reviewer | opus | Bugs, design patterns, performance, maintainability |
-| security-reviewer | opus | OWASP Top 10, injection, Semgrep, Gitleaks |
-| dependency-checker | sonnet | CVEs, outdated versions, license compliance |
-| sonarqube-scanner | sonnet | Full SonarQube static analysis |
-| trivy-scanner | script | Container & filesystem vulnerabilities, Hadolint |
-| fuzz-tester | sonnet | Property-based testing (Hypothesis, fast-check, etc.) |
-| type-checker | haiku | tsc, mypy, pyright, staticcheck, ShellCheck, sqlfluff |
-| linter | haiku | ESLint, ruff, golangci-lint, PMD, phpcs, clippy |
-| gha-security | sonnet | GitHub Actions workflow security (zizmor, actionlint) |
-| report-generator | sonnet | Deduplicates and compiles all findings |
-| improvement-advisor | haiku | Suggests Docker image and tooling improvements |
-| jira-ticket-creator | sonnet | Creates Jira tickets from findings (optional) |
+| Agent                 | Model  | What it does                                          |
+| --------------------- | ------ | ----------------------------------------------------- |
+| code-quality-reviewer | opus   | Bugs, design patterns, performance, maintainability   |
+| security-reviewer     | opus   | OWASP Top 10, injection, Semgrep, Gitleaks            |
+| dependency-checker    | sonnet | CVEs, outdated versions, license compliance           |
+| sonarqube-scanner     | sonnet | Full SonarQube static analysis                        |
+| trivy-scanner         | script | Container & filesystem vulnerabilities, Hadolint      |
+| fuzz-tester           | sonnet | Property-based testing (Hypothesis, fast-check, etc.) |
+| type-checker          | haiku  | tsc, mypy, pyright, staticcheck, ShellCheck, sqlfluff |
+| linter                | haiku  | ESLint, ruff, golangci-lint, PMD, phpcs, clippy       |
+| gha-security          | sonnet | GitHub Actions workflow security (zizmor, actionlint) |
+| report-generator      | sonnet | Deduplicates and compiles all findings                |
+| improvement-advisor   | haiku  | Suggests Docker image and tooling improvements        |
+| jira-ticket-creator   | sonnet | Creates Jira tickets from findings (optional)         |
 
 **Languages supported:** Python, Java, Kotlin, JavaScript, TypeScript, Go, Rust, PHP, Ruby, Shell, SQL, Terraform/HCL, Docker, Helm, Makefiles, GitHub Actions.
 
@@ -51,7 +53,49 @@ Or interactively: run `/plugin`, go to **Discover**, and select the plugin.
 /code-review:review-local
 ```
 
-## Local development
+## Development
+
+### Pre-commit hooks
+
+This repo uses [pre-commit](https://pre-commit.com/) to catch issues before they reach CI.
+
+```bash
+# Install pre-commit (once)
+pip install pre-commit
+
+# Set up the git hooks (once, from the repo root)
+pre-commit install
+```
+
+After that, every `git commit` automatically runs:
+
+| Hook                       | What it does                                                         |
+| -------------------------- | -------------------------------------------------------------------- |
+| `check-json`               | Validates JSON syntax                                                |
+| `check-yaml`               | Validates YAML syntax                                                |
+| `end-of-file-fixer`        | Ensures files end with a newline                                     |
+| `trailing-whitespace`      | Strips trailing whitespace                                           |
+| `mixed-line-ending`        | Enforces consistent line endings                                     |
+| `prettier`                 | Auto-formats JSON, Markdown, and YAML                                |
+| `validate-plugin-versions` | Fails if version is set in both `marketplace.json` and `plugin.json` |
+| `update-plugin-count`      | Auto-updates the plugin count badge in this README                   |
+| `check-skill-frontmatter`  | Validates YAML frontmatter in `SKILL.md` files                       |
+| `check-changelog`          | Fails if a modified plugin has no CHANGELOG entry                    |
+
+To run all hooks manually (without committing):
+
+```bash
+pre-commit run --all-files
+```
+
+To run a specific hook:
+
+```bash
+pre-commit run check-json --all-files
+pre-commit run check-changelog --all-files
+```
+
+### Local plugin development
 
 To develop plugins locally without reinstalling after every change, symlink the plugin into the local marketplace directory and sync to cache:
 

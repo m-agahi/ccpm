@@ -14,6 +14,13 @@ venv/
 .local-review/
 .scannerwork/
 
+# Claude Code
+.claude/
+
+# Test / type caches
+.pytest_cache/
+.mypy_cache/
+
 # IDE
 .idea/
 .vscode/

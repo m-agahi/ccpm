@@ -1,0 +1,51 @@
+---
+name: Release plugins
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: docker
+    container:
+      image: node:22-alpine
+    steps:
+      - name: Install system dependencies
+        run: apk add --no-cache git bash python3 coreutils ca-certificates
+
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Detect version changes
+        id: detect
+        shell: bash
+        env:
+          BASE_REF: HEAD~1
+        run: python3 .forgejo/scripts/check_releases.py
+
+      - name: Save release plan
+        if: steps.detect.outputs.has_releases == 'true'
+        shell: bash
+        env:
+          RELEASES_JSON: ${{ steps.detect.outputs.releases }}
+        run: |
+          mkdir -p .ci-outputs
+          printf '%s' "$RELEASES_JSON" > .ci-outputs/releases.json
+
+      - name: Create tags and releases
+        if: steps.detect.outputs.has_releases == 'true'
+        shell: bash
+        env:
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: python3 .forgejo/scripts/create_releases.py

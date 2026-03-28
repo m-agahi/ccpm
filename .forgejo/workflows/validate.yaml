@@ -1,0 +1,78 @@
+---
+name: Validate plugins
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  validate:
+    runs-on: docker
+    container:
+      image: node:22-alpine
+    steps:
+      - name: Install system dependencies
+        run: apk add --no-cache git bash python3 'py3-yaml~=6.0' coreutils ca-certificates
+
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check formatting
+        shell: bash
+        run: npx --yes prettier@3.1.0 --check '**/*.{json,md,yaml,yml}' --ignore-path .gitignore
+
+      - name: Validate JSON syntax
+        shell: bash
+        run: |
+          errors=0
+          while IFS= read -r -d '' f; do
+            if ! python3 -c "import json, sys; json.load(open(sys.argv[1]))" "$f"; then
+              echo "::error::Invalid JSON: $f"
+              errors=1
+            fi
+          done < <(find . \( -name "plugin.json" -o -name "marketplace.json" \) -print0 | grep -z -v node_modules | grep -z -v ".git/")
+          if [ "$errors" -eq 0 ]; then
+            echo "All JSON files are syntactically valid."
+          else
+            exit 1
+          fi
+
+      - name: Check SKILL.md frontmatter
+        shell: bash
+        run: |
+          while IFS= read -r -d '' f; do
+            python3 -c "
+          import re, sys, yaml
+          content = open(sys.argv[1]).read()
+          m = re.match(r'^---\n(.*?)\n---', content, re.DOTALL)
+          if m:
+              yaml.safe_load(m.group(1))
+              print('OK: ' + sys.argv[1])
+          else:
+              print('WARN: No frontmatter in ' + sys.argv[1])
+          " "$f" || exit 1
+          done < <(find plugins -name "SKILL.md" -print0 2>/dev/null)
+
+      - name: Check version consistency
+        run: python3 .forgejo/scripts/check_versions.py
+
+      - name: Check plugin count badge
+        shell: bash
+        run: |
+          python3 .forgejo/scripts/update_plugin_count.py
+          if [ -n "$(git diff README.md)" ]; then
+            echo "::error::Plugin count badge in README.md is out of date."
+            echo "Run 'python3 .forgejo/scripts/update_plugin_count.py' and commit." >&2
+            exit 1
+          fi
+
+      - name: Check CHANGELOG for modified plugins
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: python3 .forgejo/scripts/check_changelog.py

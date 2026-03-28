@@ -1,0 +1,48 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-json
+        files: \.(json)$
+      - id: check-yaml
+        files: \.(yaml|yml)$
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.1.0
+    hooks:
+      - id: prettier
+        files: \.(json|md|yaml|yml)$
+
+  - repo: local
+    hooks:
+      - id: validate-plugin-versions
+        name: Check plugin version consistency
+        language: python
+        entry: python3 .forgejo/scripts/check_versions.py
+        files: (marketplace\.json|plugin\.json)$
+        pass_filenames: false
+
+      - id: update-plugin-count
+        name: Update plugin count badge in README
+        language: python
+        entry: python3 .forgejo/scripts/update_plugin_count.py
+        files: marketplace\.json$
+        pass_filenames: false
+
+      - id: check-skill-frontmatter
+        name: Validate SKILL.md YAML frontmatter
+        language: python
+        additional_dependencies: [pyyaml]
+        entry: python3 .forgejo/scripts/check_skill_frontmatter.py
+        files: SKILL\.md$
+        pass_filenames: false
+
+      - id: check-changelog
+        name: Check CHANGELOG updated for modified plugins
+        language: python
+        entry: python3 .forgejo/scripts/check_changelog_staged.py
+        files: ^plugins/
+        pass_filenames: false
