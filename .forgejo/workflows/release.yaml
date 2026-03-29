@@ -17,10 +17,26 @@ jobs:
   release:
     runs-on: docker
     container:
-      image: node:22-alpine
+      image: node:22-bookworm
+    env:
+      DOCKER_HOST: tcp://172.17.0.1:2375
     steps:
-      - name: Install system dependencies
-        run: apk add --no-cache git bash python3 coreutils ca-certificates
+      - name: Install system dependencies + Docker CLI + buildx
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends \
+            git bash python3 coreutils ca-certificates curl gnupg
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list
+          apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin
+
+      - name: Register QEMU for multi-arch builds
+        run: docker run --rm --privileged tonistiigi/binfmt --install all
+
+      - name: Create buildx builder
+        run: |
+          docker buildx create --name multiarch --driver docker-container --use
+          docker buildx inspect --bootstrap
 
       - name: Checkout
         uses: https://data.forgejo.org/actions/checkout@v6
@@ -50,49 +66,6 @@ jobs:
           FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
           RELEASE_SHA: ${{ github.sha }}
         run: python3 .forgejo/scripts/create_releases.py
-
-  build-images:
-    needs: release
-    runs-on: docker
-    container:
-      image: node:22-bookworm
-    env:
-      DOCKER_HOST: tcp://172.17.0.1:2375
-    steps:
-      - name: Install Docker CLI + buildx + QEMU
-        run: |
-          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg python3 qemu-user-static binfmt-support
-          install -m 0755 -d /etc/apt/keyrings
-          curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list
-          apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin
-
-      - name: Verify Docker access and create buildx builder
-        run: |
-          docker info
-          docker buildx create --name multiarch --driver remote --use tcp://172.17.0.1:2375 || docker buildx create --name multiarch --use
-          docker buildx inspect --bootstrap
-
-      - name: Checkout
-        uses: https://data.forgejo.org/actions/checkout@v6
-        with:
-          fetch-depth: 2
-
-      - name: Detect version changes
-        id: detect
-        shell: bash
-        env:
-          BASE_REF: HEAD~1
-        run: python3 .forgejo/scripts/check_releases.py
-
-      - name: Save release plan
-        if: steps.detect.outputs.has_releases == 'true'
-        shell: bash
-        env:
-          RELEASES_JSON: ${{ steps.detect.outputs.releases }}
-        run: |
-          mkdir -p .ci-outputs
-          printf '%s' "$RELEASES_JSON" > .ci-outputs/releases.json
 
       - name: Build and push Docker images
         if: steps.detect.outputs.has_releases == 'true' || github.event_name == 'workflow_dispatch'
