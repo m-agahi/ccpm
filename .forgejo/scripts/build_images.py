@@ -26,14 +26,28 @@ def run(cmd, **kwargs):
 
 def main():
     releases_path = pathlib.Path(".ci-outputs/releases.json")
-    if not releases_path.exists():
-        print("No releases.json found, nothing to build.")
-        return
-
-    releases = json.loads(releases_path.read_text())
-    if not releases:
-        print("Empty release list, nothing to build.")
-        return
+    if releases_path.exists():
+        releases = json.loads(releases_path.read_text())
+        if not releases:
+            print("Empty release list, nothing to build.")
+            return
+    else:
+        # Manual trigger — discover all plugins with a Dockerfile
+        print("No releases.json found, discovering all plugins with Dockerfiles...")
+        marketplace_path = pathlib.Path(".claude-plugin/marketplace.json")
+        if not marketplace_path.exists():
+            print("ERROR: marketplace.json not found", file=sys.stderr)
+            sys.exit(1)
+        marketplace = json.loads(marketplace_path.read_text())
+        releases = [
+            {"name": p["name"], "version": p.get("version", "latest")}
+            for p in marketplace.get("plugins", [])
+            if (pathlib.Path(f"plugins/{p['name']}/docker/Dockerfile")).exists()
+        ]
+        if not releases:
+            print("No plugins with Dockerfiles found.")
+            return
+        print(f"Found {len(releases)} plugin(s): {', '.join(r['name'] for r in releases)}")
 
     repo = os.environ.get("FORGEJO_REPOSITORY") or os.environ.get("GITHUB_REPOSITORY", "")
     registry_user = os.environ.get("REGISTRY_USER", "")
