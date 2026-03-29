@@ -30,11 +30,15 @@ jobs:
           echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list
           apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin
 
-      - name: Register QEMU for multi-arch builds
-        run: docker run --rm --privileged tonistiigi/binfmt --install all
-
-      - name: Create buildx builder
+      - name: Register QEMU and create buildx builder
         run: |
+          if docker run --rm --privileged tonistiigi/binfmt --install all 2>/dev/null; then
+            echo "QEMU registered — multi-arch builds available"
+            echo "PLATFORMS=linux/amd64,linux/arm64" >> "$GITHUB_ENV"
+          else
+            echo "QEMU registration failed — building amd64 only"
+            echo "PLATFORMS=linux/amd64" >> "$GITHUB_ENV"
+          fi
           docker buildx create --name multiarch --driver docker-container --use
           docker buildx inspect --bootstrap
 

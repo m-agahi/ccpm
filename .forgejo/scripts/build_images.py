@@ -91,7 +91,7 @@ def main():
         image_versioned = f"{image_base}:{version}"
         image_latest = f"{image_base}:latest"
 
-        platforms = "linux/amd64,linux/arm64"
+        platforms = os.environ.get("PLATFORMS", "linux/amd64,linux/arm64")
         print(f"\nBuilding {image_versioned} for {platforms}...")
         build_cmd = [
             "docker", "buildx", "build",
