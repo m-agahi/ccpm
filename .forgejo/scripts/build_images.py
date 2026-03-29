@@ -77,11 +77,14 @@ def main():
         image_versioned = f"{image_base}:{version}"
         image_latest = f"{image_base}:latest"
 
-        print(f"\nBuilding {image_versioned}...")
+        platforms = "linux/amd64,linux/arm64"
+        print(f"\nBuilding {image_versioned} for {platforms}...")
         build_cmd = [
-            "docker", "build",
+            "docker", "buildx", "build",
+            "--platform", platforms,
             "-t", image_versioned,
             "-t", image_latest,
+            "--push",
         ]
         if nvd_api_key:
             build_cmd += ["--build-arg", f"NVD_API_KEY={nvd_api_key}"]
@@ -93,16 +96,8 @@ def main():
             failed.append(name)
             continue
 
-        print(f"Pushing {image_versioned}...")
-        push_v = run(["docker", "push", image_versioned])
-        push_l = run(["docker", "push", image_latest])
-
-        if push_v.returncode == 0 and push_l.returncode == 0:
-            print(f"Pushed {image_versioned} and {image_latest}")
-            built.append(name)
-        else:
-            print(f"ERROR: Push failed for {name}", file=sys.stderr)
-            failed.append(name)
+        print(f"Pushed {image_versioned} and {image_latest}")
+        built.append(name)
 
     if built:
         print(f"\nBuilt and pushed images for: {', '.join(built)}")

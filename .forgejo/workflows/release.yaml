@@ -8,6 +8,7 @@ concurrency:
 on:
   push:
     branches: [master]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -58,16 +59,19 @@ jobs:
     env:
       DOCKER_HOST: tcp://172.17.0.1:2375
     steps:
-      - name: Install Docker CLI
+      - name: Install Docker CLI + buildx + QEMU
         run: |
-          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg python3
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg python3 qemu-user-static binfmt-support
           install -m 0755 -d /etc/apt/keyrings
           curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
           echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list
-          apt-get update && apt-get install -y --no-install-recommends docker-ce-cli
+          apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin
 
-      - name: Verify Docker access
-        run: docker info
+      - name: Verify Docker access and create buildx builder
+        run: |
+          docker info
+          docker buildx create --name multiarch --driver remote --use tcp://172.17.0.1:2375 || docker buildx create --name multiarch --use
+          docker buildx inspect --bootstrap
 
       - name: Checkout
         uses: https://data.forgejo.org/actions/checkout@v6
