@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [3.5.5] - 2026-03-28
 
+### Fixed
+
+- **Go tools use pre-built binaries**: Switch golangci-lint, staticcheck, shfmt, and actionlint from
+  `go install` to pre-built binary downloads. Fixes arm64 build timeout under QEMU emulation.
+
 ### Added
 
 - **Checkstyle in Docker image**: Pre-baked checkstyle v13.3.0 jar. Eliminates runtime download for

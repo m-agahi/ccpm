@@ -118,13 +118,36 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
     && rm -rf /usr/local/rustup/toolchains/stable-*/share/doc /usr/local/cargo/registry/cache
 
 # ============================================================
-# Go tools (pinned to specific versions where possible)
+# Go tools (pre-built binaries for multi-arch support)
 # ============================================================
-RUN go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4 \
-    && go install honnef.co/go/tools/cmd/staticcheck@v0.7.0 \
-    && go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.0 \
-    && go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11 \
-    && go install github.com/mrtazz/checkmake/cmd/checkmake@v0.2.2 \
+ENV GOLANGCI_LINT_VERSION=2.11.4 \
+    STATICCHECK_VERSION=2026.1 \
+    SHFMT_VERSION=3.13.0 \
+    ACTIONLINT_VERSION=1.7.11 \
+    CHECKMAKE_VERSION=0.2.2
+
+# golangci-lint
+RUN ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-${ARCH}.tar.gz" \
+       | tar -C /usr/local/bin -xz --strip-components=1 "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-${ARCH}/golangci-lint"
+
+# staticcheck
+RUN ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL "https://github.com/dominikh/go-tools/releases/download/${STATICCHECK_VERSION}/staticcheck_linux_${ARCH}.tar.gz" \
+       | tar -C /usr/local/bin -xz --strip-components=1 "staticcheck/staticcheck"
+
+# shfmt
+RUN ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_${ARCH}" \
+       -o /usr/local/bin/shfmt && chmod +x /usr/local/bin/shfmt
+
+# actionlint
+RUN ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_${ARCH}.tar.gz" \
+       | tar -C /usr/local/bin -xz actionlint
+
+# checkmake (only available as go install — compile natively)
+RUN go install github.com/mrtazz/checkmake/cmd/checkmake@v${CHECKMAKE_VERSION} \
     && rm -rf /root/go/pkg/mod/cache
 
 # ============================================================
