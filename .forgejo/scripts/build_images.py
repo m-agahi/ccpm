@@ -91,24 +91,49 @@ def main():
         image_versioned = f"{image_base}:{version}"
         image_latest = f"{image_base}:latest"
 
-        platforms = os.environ.get("PLATFORMS", "linux/amd64,linux/arm64")
+        platforms = os.environ.get("PLATFORMS", "linux/amd64")
         print(f"\nBuilding {image_versioned} for {platforms}...")
-        build_cmd = [
-            "docker", "buildx", "build",
-            "--platform", platforms,
-            "-t", image_versioned,
-            "-t", image_latest,
-            "--push",
-        ]
-        if nvd_api_key:
-            build_cmd += ["--build-arg", f"NVD_API_KEY={nvd_api_key}"]
-        build_cmd.append(str(dockerfile_dir))
 
-        build = run(build_cmd)
-        if build.returncode != 0:
-            print(f"ERROR: Failed to build {name}", file=sys.stderr)
-            failed.append(name)
-            continue
+        build_args = []
+        if nvd_api_key:
+            build_args += ["--build-arg", f"NVD_API_KEY={nvd_api_key}"]
+
+        if "," in platforms:
+            # Multi-platform: requires buildx with --push
+            build_cmd = [
+                "docker", "buildx", "build",
+                "--platform", platforms,
+                "-t", image_versioned,
+                "-t", image_latest,
+                "--push",
+                *build_args,
+                str(dockerfile_dir),
+            ]
+            build = run(build_cmd)
+            if build.returncode != 0:
+                print(f"ERROR: Failed to build {name}", file=sys.stderr)
+                failed.append(name)
+                continue
+        else:
+            # Single platform: plain docker build + push
+            build_cmd = [
+                "docker", "build",
+                "-t", image_versioned,
+                "-t", image_latest,
+                *build_args,
+                str(dockerfile_dir),
+            ]
+            build = run(build_cmd)
+            if build.returncode != 0:
+                print(f"ERROR: Failed to build {name}", file=sys.stderr)
+                failed.append(name)
+                continue
+            push_v = run(["docker", "push", image_versioned])
+            push_l = run(["docker", "push", image_latest])
+            if push_v.returncode != 0 or push_l.returncode != 0:
+                print(f"ERROR: Push failed for {name}", file=sys.stderr)
+                failed.append(name)
+                continue
 
         print(f"Pushed {image_versioned} and {image_latest}")
         built.append(name)
