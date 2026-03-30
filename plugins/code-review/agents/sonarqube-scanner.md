@@ -180,7 +180,43 @@ sonar.exclusions=.terraform/**,.venv/**,__pycache__/**,**/.git/**,**/tmp/review-
 sonar.host.url=SONARQUBE_URL
 ```
 
-### 4. Run the Scan
+### 4. Generate Test Coverage Report (before scan)
+
+SonarQube does NOT run tests — it only reads coverage reports. You must generate them first.
+
+**For Maven projects:**
+
+```bash
+# Run tests with JaCoCo to generate coverage report
+mvn test -pl . -Djacoco.skip=false -Dmaven.test.failure.ignore=true 2>&1 || true
+```
+
+If the project uses JaCoCo (check pom.xml for `jacoco-maven-plugin`), this produces
+`target/site/jacoco/jacoco.xml`. If JaCoCo is not configured, coverage will be 0% — note this
+in the findings but don't fail the scan.
+
+**For Gradle projects:**
+
+```bash
+./gradlew test jacocoTestReport 2>&1 || true
+```
+
+**For Python projects:**
+
+```bash
+pytest --cov=src --cov-report=xml:coverage.xml 2>&1 || true
+```
+
+**For JS/TS projects:**
+
+```bash
+npx jest --coverage --coverageReporters=lcov 2>&1 || true
+```
+
+If tests fail, that's OK — we still want whatever coverage was produced. The `|| true` ensures
+the scan proceeds regardless.
+
+### 5. Run the Scan
 
 **For Maven projects** (preferred — no sonar-scanner CLI needed, no properties file needed):
 
@@ -190,8 +226,12 @@ mvn sonar:sonar \
   -Dsonar.host.url="${SQ_URL}" \
   -Dsonar.token="$TOKEN" \
   -Dsonar.qualitygate.wait=true \
-  -Dsonar.java.binaries=target/classes
+  -Dsonar.java.binaries=target/classes \
+  -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
 ```
+
+If `target/site/jacoco/jacoco.xml` does not exist after the test step, omit the
+`sonar.coverage.jacoco.xmlReportPaths` flag (SonarQube will report 0% coverage).
 
 **For Gradle projects** (no properties file needed):
 
@@ -214,7 +254,7 @@ quality gate wait are passed as CLI flags so they don't need to be in the file.
 If `sonar-scanner` is not installed and the project is not Maven/Gradle, report that SonarQube was
 skipped and suggest installing sonar-scanner.
 
-### 5. Clean Up Temporary Properties File
+### 6. Clean Up Temporary Properties File
 
 **IMPORTANT:** Only remove the file if we created it in step 3. Never delete a pre-existing
 `sonar-project.properties`.
@@ -226,7 +266,7 @@ if [[ "$CREATED_SONAR_PROPS" == "true" ]]; then
 fi
 ```
 
-### 6. Fetch Results via API
+### 7. Fetch Results via API
 
 After the scan completes, fetch results using the API:
 
@@ -247,7 +287,7 @@ curl -sf -u admin:${SQ_PASS} "$SQ_URL/api/issues/search?componentKeys=$PK&ps=20&
 curl -sf -u admin:${SQ_PASS} "$SQ_URL/api/qualitygates/project_status?projectKey=$PK"
 ```
 
-### 7. Categorize Findings
+### 8. Categorize Findings
 
 Group issues by:
 
@@ -255,7 +295,7 @@ Group issues by:
 - **Severity**: BLOCKER, CRITICAL, MAJOR, MINOR, INFO
 - **File**: Group related issues per file
 
-### 8. Provide Actionable Analysis
+### 9. Provide Actionable Analysis
 
 For each significant finding:
 

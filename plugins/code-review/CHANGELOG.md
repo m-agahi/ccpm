@@ -5,6 +5,34 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.0] - 2026-03-30
+
+### Changed
+
+- **Rich live progress tables**: Replace ANSI cursor-hack heartbeat with Rich `Live` + `Table` for
+  flicker-free, properly aligned live progress display during agent execution. Both parallel and
+  sequential phases now show smooth-updating tables with status, agent, model, duration, cost, and
+  findings columns.
+
+### Added
+
+- **`rich` dependency**: Required on the host for the live progress display. Clear error message
+  shown if not installed.
+
+### Fixed
+
+- **SonarQube quality gate always passes**: Fresh SonarQube CE has no conditions on the default
+  quality gate, so it always passes. Now configures standard conditions (new bugs = 0, new
+  vulnerabilities = 0, new hotspots reviewed = 100%, coverage >= 80%, duplication <= 3%) after
+  startup.
+- **SonarQube test coverage always 0%**: The scanner agent ran `mvn sonar:sonar` without first
+  running tests with JaCoCo. Added a test+coverage step before the scan for Maven, Gradle,
+  Python, and JS/TS projects.
+- **SonarQube scanner timeout**: Extended from 30min to 45min since it now runs tests before
+  scanning.
+- **Timeout column in progress table**: Parallel agent table now shows each agent's timeout
+  threshold so you can see how much time remains.
+
 ## [3.6.3] - 2026-03-30
 
 ### Changed

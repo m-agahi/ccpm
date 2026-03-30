@@ -23,6 +23,17 @@ from pathlib import Path
 
 import yaml
 
+try:
+    from rich.console import Console
+    from rich.live import Live
+    from rich.table import Table
+except ImportError:
+    print(
+        "Error: 'rich' is required. Install it with: pip install rich",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PLUGIN_ROOT / "review-tools.yml"
 REGISTRY_IMAGE = "codeberg.org/maxagahi/ccpm/code-review:latest"
@@ -33,7 +44,7 @@ REVIEW_WORK = "/tmp/review-work"
 MAX_PARALLEL = 6  # max concurrent claude -p processes
 PARALLEL_TIMEOUT = 1800  # 30 min max per parallel agent
 # Agents that need extra time (fuzz runs 10k iterations + Rust compilation)
-EXTENDED_TIMEOUT_AGENTS = {"fuzz-tester": 1800}  # 30 min
+EXTENDED_TIMEOUT_AGENTS = {"sonarqube-scanner": 2700}  # 45 min
 
 
 def find_version(start: Path) -> str:
@@ -753,6 +764,69 @@ def _extract_host_port(cname, sq_name):
     return None
 
 
+def _configure_sonarqube_quality_gate(sq_url):
+    """Configure the default quality gate with standard conditions.
+
+    SonarQube CE ships with no conditions on the default gate, so it always
+    passes. We add conditions matching the 'Sonar way' built-in profile.
+    """
+    auth = ("admin", "admin")
+    # Get the default quality gate ID
+    result = run(
+        [
+            "curl",
+            "-sf",
+            "-u",
+            f"{auth[0]}:{auth[1]}",
+            f"{sq_url}/api/qualitygates/list",
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        return
+
+    try:
+        data = json.loads(result.stdout)
+    except (ValueError, TypeError):
+        return
+
+    # Find the default gate
+    gate_id = None
+    for gate in data.get("qualitygates", []):
+        if gate.get("isDefault"):
+            gate_id = gate.get("id")
+            break
+    if not gate_id:
+        return
+
+    # Standard conditions (matches Sonar way):
+    # - New bugs = 0, new vulnerabilities = 0, new security hotspots reviewed = 100%
+    # - New code coverage >= 80%, new duplicated lines <= 3%
+    conditions = [
+        {"metric": "new_bugs", "op": "GT", "error": "0"},
+        {"metric": "new_vulnerabilities", "op": "GT", "error": "0"},
+        {"metric": "new_security_hotspots_reviewed", "op": "LT", "error": "100"},
+        {"metric": "new_coverage", "op": "LT", "error": "80"},
+        {"metric": "new_duplicated_lines_density", "op": "GT", "error": "3"},
+    ]
+
+    for cond in conditions:
+        run(
+            [
+                "curl",
+                "-sf",
+                "-u",
+                f"{auth[0]}:{auth[1]}",
+                "-X",
+                "POST",
+                f"{sq_url}/api/qualitygates/create_condition",
+                "-d",
+                f"gateId={gate_id}&metric={cond['metric']}&op={cond['op']}&error={cond['error']}",
+            ],
+            check=False,
+        )
+
+
 def _start_sonarqube(cname):
     """Start SonarQube CE container if sonarqube-scanner is in the plan.
 
@@ -807,6 +881,7 @@ def _start_sonarqube(cname):
         )
         if check.returncode == 0 and '"status":"UP"' in check.stdout:
             print(f"  SonarQube ready at {sq_url}")
+            _configure_sonarqube_quality_gate(sq_url)
             return sq_url
         time.sleep(1)
 
@@ -852,7 +927,8 @@ def cmd_run_agents(args):
     start_time = time.time()
 
     # 1. Copy prompts into container
-    print("\033[1mCopying prompts into container...\033[0m")
+    console = Console()
+    console.print("[bold]Copying prompts into container...[/bold]")
     prompts_src = str(lr / "prompts")
     run(
         ["docker", "cp", f"{prompts_src}/.", f"{cname}:{REVIEW_WORK}/prompts/"],
@@ -885,10 +961,11 @@ def cmd_run_agents(args):
             break
 
     # 3. Run parallel items
-    print(f"\n\033[1mRunning {len(parallel_items)} parallel agents/scripts...\033[0m")
+    console.print(f"\n[bold]Running {len(parallel_items)} parallel agents/scripts...[/bold]\n")
     processes = {}  # name → (Popen, item, start_time)
     results = {}  # name → {status, cost, duration, output}
     active = set()
+    seen_findings = set()
 
     for item in parallel_items:
         # Throttle: wait if at max concurrency
@@ -902,7 +979,6 @@ def cmd_run_agents(args):
 
         if item["type"] == "agent":
             cmd = _build_claude_cmd(cname, item)
-            print(f"  \033[36m▶\033[0m {name} ({item.get('model', 'sonnet')})")
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -921,7 +997,6 @@ def cmd_run_agents(args):
                 "-c",
                 container_cmd,
             ]
-            print(f"  \033[36m▶\033[0m {name} (script)")
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -934,40 +1009,25 @@ def cmd_run_agents(args):
         processes[name] = (proc, item, item_start)
         active.add(name)
 
-    # Wait for all parallel to finish, with watch-style status table
-    last_heartbeat = 0  # print immediately on first pass
-    seen_findings = set()
-    prev_lines = [0]  # mutable counter for overwrite tracking
-    while active:
-        _collect_finished(processes, results, active)
-        now = time.time()
-        if now - last_heartbeat >= 10:
-            _heartbeat(
-                cname,
-                active,
-                processes,
-                results,
-                seen_findings,
-                parallel_items,
-                start_time,
-                prev_lines,
+    # Wait for all parallel to finish with Rich live table
+    with Live(
+        _build_parallel_table(
+            parallel_items, processes, results, active, seen_findings, start_time
+        ),
+        console=console,
+        refresh_per_second=2,
+    ) as live:
+        while active:
+            _collect_finished(processes, results, active)
+            _update_seen_findings(cname, seen_findings)
+            live.update(
+                _build_parallel_table(
+                    parallel_items, processes, results, active, seen_findings, start_time
+                )
             )
-            last_heartbeat = now
-        if active:
-            time.sleep(1)
-
-    # Final heartbeat to show completed state
-    _heartbeat(
-        cname,
-        active,
-        processes,
-        results,
-        seen_findings,
-        parallel_items,
-        start_time,
-        prev_lines,
-    )
-    print()
+            if active:
+                time.sleep(0.5)
+    console.print()
 
     # 4. Intermediate data stays in /tmp/review-work/ inside the container.
     # Only final outputs (report, improvements, tickets) are copied after sequential agents.
@@ -976,13 +1036,13 @@ def cmd_run_agents(args):
     _write_cost_manifest(lr, results, plan)
 
     # 6. Check results (probe inside container)
-    print("\033[1mChecking results...\033[0m")
+    console.print("[bold]Checking results...[/bold]")
     _check_findings(cname, plan)
 
     # 7. Run sequential items
     sequential_items = plan.get("sequential", [])
     if sequential_items:
-        print(f"\n\033[1mRunning {len(sequential_items)} sequential agents...\033[0m")
+        console.print(f"\n[bold]Running {len(sequential_items)} sequential agents...[/bold]\n")
 
     # Generate a fixed report filename so agents don't create duplicates
     report_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -998,13 +1058,72 @@ def cmd_run_agents(args):
         check=False,
     )
 
-    for item in sequential_items:
-        name = item["name"]
-        if item["type"] != "agent":
-            continue
+    seq_results = {}
+    with Live(
+        _build_sequential_table(sequential_items, seq_results, None, 0, start_time),
+        console=console,
+        refresh_per_second=2,
+    ) as live:
+        for item in sequential_items:
+            name = item["name"]
+            if item["type"] != "agent":
+                continue
 
-        # Inject fixed report filename for report-generator
-        if name == "report-generator":
+            # Inject fixed report filename for report-generator
+            if name == "report-generator":
+                run(
+                    [
+                        "docker",
+                        "exec",
+                        cname,
+                        "bash",
+                        "-c",
+                        f"echo '\n\nIMPORTANT: Use exactly this filename for the report: "
+                        f"review-{report_timestamp}.md\n"
+                        f"Write to: /tmp/review-work/review-{report_timestamp}.md\n"
+                        f"Do NOT run date to generate a timestamp. Do NOT write multiple report files.' "
+                        f">> {REVIEW_WORK}/{item['prompt_file']}",
+                    ],
+                    check=False,
+                )
+
+            item_start = time.time()
+            cmd = _build_claude_cmd(cname, item)
+
+            # Run in background so we can update the live table
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            while proc.poll() is None:
+                live.update(
+                    _build_sequential_table(
+                        sequential_items, seq_results, name, item_start, start_time
+                    )
+                )
+                time.sleep(0.5)
+
+            stdout, _ = proc.communicate()
+            duration = time.time() - item_start
+            parsed = _parse_claude_output(stdout)
+            cost = parsed.get("total_cost_usd", 0) if parsed else 0
+
+            status = "ok" if proc.returncode == 0 else "failed"
+            seq_results[name] = {
+                "status": status,
+                "cost": cost,
+                "duration": duration,
+                "output": parsed,
+            }
+            results[name] = seq_results[name]
+
+            live.update(
+                _build_sequential_table(sequential_items, seq_results, None, 0, start_time)
+            )
+
+            # Copy results after each sequential agent
             run(
                 [
                     "docker",
@@ -1012,56 +1131,13 @@ def cmd_run_agents(args):
                     cname,
                     "bash",
                     "-c",
-                    f"echo '\n\nIMPORTANT: Use exactly this filename for the report: "
-                    f"review-{report_timestamp}.md\n"
-                    f"Write to: /tmp/review-work/review-{report_timestamp}.md\n"
-                    f"Do NOT run date to generate a timestamp. Do NOT write multiple report files.' "
-                    f">> {REVIEW_WORK}/{item['prompt_file']}",
+                    f"cp -f {REVIEW_WORK}/review-*.md {WORKSPACE}/.local-review/ 2>/dev/null; "
+                    f"cp -f {REVIEW_WORK}/image-improvements.md {WORKSPACE}/.local-review/ 2>/dev/null; "
+                    f"cp -rf {REVIEW_WORK}/tickets {WORKSPACE}/.local-review/ 2>/dev/null; "
+                    f"true",
                 ],
                 check=False,
             )
-
-        print(f"  \033[36m▶\033[0m {name} ({item.get('model', 'sonnet')})")
-        item_start = time.time()
-        cmd = _build_claude_cmd(cname, item)
-
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=1800,
-        )
-
-        duration = time.time() - item_start
-        parsed = _parse_claude_output(proc.stdout)
-        cost = parsed.get("total_cost_usd", 0) if parsed else 0
-
-        status = "ok" if proc.returncode == 0 else "failed"
-        results[name] = {
-            "status": status,
-            "cost": cost,
-            "duration": duration,
-            "output": parsed,
-        }
-
-        status_icon = "\033[32m✓\033[0m" if status == "ok" else "\033[31m✗\033[0m"
-        print(f"  {status_icon} {name} — {duration:.0f}s — ${cost:.2f}")
-
-        # Copy results after each sequential agent
-        run(
-            [
-                "docker",
-                "exec",
-                cname,
-                "bash",
-                "-c",
-                f"cp -f {REVIEW_WORK}/review-*.md {WORKSPACE}/.local-review/ 2>/dev/null; "
-                f"cp -f {REVIEW_WORK}/image-improvements.md {WORKSPACE}/.local-review/ 2>/dev/null; "
-                f"cp -rf {REVIEW_WORK}/tickets {WORKSPACE}/.local-review/ 2>/dev/null; "
-                f"true",
-            ],
-            check=False,
-        )
 
     # 8. Update cost manifest with sequential agents
     _write_cost_manifest(lr, results, plan)
@@ -1076,23 +1152,26 @@ def cmd_run_agents(args):
     passed = sum(1 for r in results.values() if r["status"] == "ok")
     failed = sum(1 for r in results.values() if r["status"] != "ok")
 
-    print(f"\n\033[1m{'═' * 50}\033[0m")
-    print(f"\033[1mReview complete\033[0m")
-    print(f"  Elapsed: {elapsed:.0f}s ({elapsed / 60:.1f}min)")
-    print(f"  Total cost: \033[1m${total_cost:.2f}\033[0m")
-    print(f"  Agents: \033[32m{passed} passed\033[0m", end="")
+    console.print()
+    console.print(f"[bold]{'═' * 50}[/bold]")
+    console.print("[bold]Review complete[/bold]")
+    console.print(f"  Elapsed: {elapsed:.0f}s ({elapsed / 60:.1f}min)")
+    console.print(f"  Total cost: [bold]${total_cost:.2f}[/bold]")
+    console.print(f"  Agents: [green]{passed} passed[/green]", end="")
     if failed:
-        print(f", \033[31m{failed} failed\033[0m")
+        console.print(f", [red]{failed} failed[/red]")
     else:
-        print()
-    print(f"\033[1m{'═' * 50}\033[0m\n")
+        console.print()
+    console.print(f"[bold]{'═' * 50}[/bold]\n")
 
 
-def _heartbeat(
-    cname, active, processes, results, seen_findings, all_items, start_time, prev_lines
-):
-    """Overwrite in-place status table showing all agents."""
-    # Check for findings files inside the container
+def _fmt_duration(seconds):
+    """Format seconds as 'Xm YYs'."""
+    return f"{int(seconds // 60)}m {int(seconds % 60):02d}s"
+
+
+def _update_seen_findings(cname, seen_findings):
+    """Check for new findings files inside the container."""
     result = run(
         [
             "docker",
@@ -1104,31 +1183,46 @@ def _heartbeat(
         ],
         check=False,
     )
-    current_findings = set()
     if result.stdout.strip():
         for line in result.stdout.strip().splitlines():
             name = line.split("findings-")[-1].replace(".md", "")
-            current_findings.add(name)
-    seen_findings.update(current_findings)
+            seen_findings.add(name)
 
+
+def _build_parallel_table(
+    all_items, processes, results, active, seen_findings, start_time
+):
+    """Build a Rich Table for parallel agent progress."""
     now = time.time()
-    total_elapsed = now - start_time
-    done_count = len(results)
-    total_count = len(all_items)
+    elapsed = now - start_time
+    done = len(results)
+    running = len(active)
 
-    # Move cursor up to overwrite previous heartbeat
-    if prev_lines[0] > 0:
-        sys.stdout.write(f"\033[{prev_lines[0]}A")
-
-    lines = []
-    elapsed_str = f"{int(total_elapsed // 60)}m {int(total_elapsed % 60):02d}s"
-    lines.append(
-        f"  \033[1m━━━ {done_count}/{total_count} done │ {len(active)} running │ {elapsed_str} elapsed ━━━\033[0m"
+    table = Table(
+        title=(
+            f"[bold]{done}/{len(all_items)} done · {running} running "
+            f"· {_fmt_duration(elapsed)} elapsed[/bold]"
+        ),
+        title_style="bold white",
+        show_header=True,
+        header_style="bold cyan",
+        border_style="dim",
+        pad_edge=False,
+        expand=False,
     )
+    table.add_column("", width=3, justify="center")
+    table.add_column("Agent", min_width=26)
+    table.add_column("Model", min_width=8, justify="center")
+    table.add_column("Duration", min_width=10, justify="center")
+    table.add_column("Timeout", min_width=8, justify="center")
+    table.add_column("Cost", min_width=8, justify="center")
+    table.add_column("Findings", min_width=10, justify="center")
 
     for item in all_items:
         name = item["name"]
         model = item.get("model", "script")
+        agent_timeout = EXTENDED_TIMEOUT_AGENTS.get(name, PARALLEL_TIMEOUT)
+        timeout_str = f"{agent_timeout // 60}m"
         findings_key = (
             _findings_key(name)
             if item["type"] == "agent"
@@ -1138,38 +1232,98 @@ def _heartbeat(
 
         if name in results:
             res = results[name]
-            dur = res["duration"]
-            dur_str = f"{int(dur // 60)}m {int(dur % 60):02d}s"
+            dur_str = _fmt_duration(res["duration"])
             cost_str = f"${res.get('cost', 0):.2f}" if res.get("cost") else ""
             status = res["status"]
             if status == "ok":
-                icon = "\033[32m✓\033[0m"
+                icon = "[green]✓[/green]"
             elif status == "timeout":
-                icon = "\033[33m⏱\033[0m"
+                icon = "[yellow]⏱[/yellow]"
             else:
-                icon = "\033[31m✗\033[0m"
-            findings_icon = "📄" if has_findings else "  "
-            lines.append(
-                f"  {icon} {name:<28s} {model:<8s} {dur_str:>8s}  {cost_str:>6s}  {findings_icon}"
-            )
+                icon = "[red]✗[/red]"
+            findings = "[green]✔[/green]" if has_findings else ""
+            table.add_row(icon, name, model, dur_str, timeout_str, cost_str, findings)
         elif name in active:
-            proc, _, item_start = processes[name]
-            dur = now - item_start
-            dur_str = f"{int(dur // 60)}m {int(dur % 60):02d}s"
-            findings_icon = "📄" if has_findings else "  "
-            lines.append(
-                f"  \033[36m▶\033[0m {name:<28s} {model:<8s} {dur_str:>8s}  \033[90m...\033[0m     {findings_icon}"
+            _, _, item_start = processes[name]
+            dur_str = _fmt_duration(now - item_start)
+            findings = "[green]✔[/green]" if has_findings else ""
+            table.add_row(
+                "[cyan]▶[/cyan]",
+                f"[cyan]{name}[/cyan]",
+                model,
+                f"[dim]{dur_str}[/dim]",
+                timeout_str,
+                "[dim]...[/dim]",
+                findings,
             )
         else:
-            lines.append(f"  \033[90m◌ {name:<28s} {model:<8s}     —\033[0m")
+            table.add_row(
+                "[dim]◌[/dim]",
+                f"[dim]{name}[/dim]",
+                f"[dim]{model}[/dim]",
+                "[dim]—[/dim]",
+                f"[dim]{timeout_str}[/dim]",
+                "",
+                "",
+            )
 
-    output = "\n".join(lines)
-    # Clear each line before writing to avoid leftover chars
-    for i, line in enumerate(lines):
-        sys.stdout.write(f"\033[K{line}\n")
-    sys.stdout.flush()
+    return table
 
-    prev_lines[0] = len(lines)
+
+def _build_sequential_table(all_items, seq_results, current_agent, agent_start, start_time):
+    """Build a Rich Table for sequential agent progress."""
+    now = time.time()
+    elapsed = now - start_time
+    done = len(seq_results)
+    total = len([i for i in all_items if i.get("type") == "agent"])
+
+    table = Table(
+        title=f"[bold]{done}/{total} done · {_fmt_duration(elapsed)} elapsed[/bold]",
+        title_style="bold white",
+        show_header=True,
+        header_style="bold cyan",
+        border_style="dim",
+        pad_edge=False,
+        expand=False,
+    )
+    table.add_column("", width=3, justify="center")
+    table.add_column("Agent", min_width=26)
+    table.add_column("Model", min_width=8, justify="center")
+    table.add_column("Duration", min_width=10, justify="center")
+    table.add_column("Cost", min_width=8, justify="center")
+
+    for item in all_items:
+        if item.get("type") != "agent":
+            continue
+        name = item["name"]
+        model = item.get("model", "sonnet")
+
+        if name in seq_results:
+            res = seq_results[name]
+            dur_str = _fmt_duration(res["duration"])
+            cost_str = f"${res.get('cost', 0):.2f}"
+            status = res["status"]
+            icon = "[green]✓[/green]" if status == "ok" else "[red]✗[/red]"
+            table.add_row(icon, name, model, dur_str, cost_str)
+        elif name == current_agent:
+            dur_str = _fmt_duration(now - agent_start)
+            table.add_row(
+                "[cyan]▶[/cyan]",
+                f"[cyan]{name}[/cyan]",
+                model,
+                f"[dim]{dur_str}[/dim]",
+                "[dim]...[/dim]",
+            )
+        else:
+            table.add_row(
+                "[dim]◌[/dim]",
+                f"[dim]{name}[/dim]",
+                f"[dim]{model}[/dim]",
+                "[dim]—[/dim]",
+                "",
+            )
+
+    return table
 
 
 def _collect_finished(processes, results, active):
@@ -1183,7 +1337,6 @@ def _collect_finished(processes, results, active):
         # Kill if exceeded timeout (per-agent override for slow agents like fuzz)
         agent_timeout = EXTENDED_TIMEOUT_AGENTS.get(name, PARALLEL_TIMEOUT)
         if ret is None and elapsed > agent_timeout:
-            print(f"  \033[33m⏱\033[0m {name} — killed after {elapsed:.0f}s (timeout)")
             proc.kill()
             proc.wait()
             results[name] = {
