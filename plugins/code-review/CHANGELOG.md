@@ -5,7 +5,7 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [3.7.1] - 2026-03-30
+## [3.7.2] - 2026-03-30
 
 ### Fixed
 
