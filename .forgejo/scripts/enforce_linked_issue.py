@@ -20,8 +20,9 @@ from lib import forgejo_api, workflow_io
 
 EXEMPT_LABELS = {"docs", "chore", "dependencies"}
 ISSUE_PATTERN = re.compile(
-    r"(closes|fixes|resolves|related\s+to)\s+#\d+", re.IGNORECASE
+    r"(closes|fixes|resolves|related[ \t]+to)[ \t]+#(\d+)", re.IGNORECASE
 )
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
 def get_pr():
@@ -61,10 +62,26 @@ def is_author_exempt(pr_data):
     return False
 
 
+def issue_exists(issue_number):
+    """Check that the referenced issue exists and is not a pull request."""
+    try:
+        issue = forgejo_api.get(
+            forgejo_api.repo_path(f"/issues/{issue_number}")
+        )
+        if issue and not issue.get("pull_request"):
+            return True
+    except RuntimeError:
+        pass
+    return False
+
+
 def has_linked_issue(pr_number, pr_data):
     body = pr_data.get("body") or ""
-    if ISSUE_PATTERN.search(body):
-        return True
+    body = HTML_COMMENT.sub("", body)
+    for match in ISSUE_PATTERN.finditer(body):
+        issue_number = int(match.group(2))
+        if issue_exists(issue_number):
+            return True
 
     # Check timeline for cross-references
     try:

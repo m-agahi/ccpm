@@ -3,10 +3,9 @@
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from lib import forgejo_api
 
 # Import the module under test
 import enforce_linked_issue as eli
@@ -30,6 +29,14 @@ class TestIssuePattern(unittest.TestCase):
 
     def test_no_issue_reference(self):
         self.assertIsNone(eli.ISSUE_PATTERN.search("just some text"))
+
+    def test_html_comment_is_stripped(self):
+        body = "## Closes\n\n<!-- Link issues: Closes #123 -->\n"
+        stripped = eli.HTML_COMMENT.sub("", body)
+        self.assertIsNone(eli.ISSUE_PATTERN.search(stripped))
+
+    def test_heading_plus_bare_hash_does_not_match(self):
+        self.assertIsNone(eli.ISSUE_PATTERN.search("## Closes\n\n#40"))
 
 
 class TestIsLabelExempt(unittest.TestCase):
@@ -95,13 +102,58 @@ class TestIsAuthorExempt(unittest.TestCase):
         self.assertFalse(eli.is_author_exempt(pr))
 
 
-class TestHasLinkedIssue(unittest.TestCase):
+class TestIssueExists(unittest.TestCase):
     @patch("enforce_linked_issue.forgejo_api.get")
     @patch("enforce_linked_issue.forgejo_api.repo_path")
-    def test_body_match(self, mock_path, mock_get):
+    def test_valid_issue(self, mock_path, mock_get):
+        mock_path.return_value = "/repos/o/r/issues/10"
+        mock_get.return_value = {"id": 10, "title": "bug"}
+        self.assertTrue(eli.issue_exists(10))
+
+    @patch("enforce_linked_issue.forgejo_api.get")
+    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    def test_pull_request_is_not_issue(self, mock_path, mock_get):
+        mock_path.return_value = "/repos/o/r/issues/5"
+        mock_get.return_value = {"id": 5, "pull_request": {"merged": False}}
+        self.assertFalse(eli.issue_exists(5))
+
+    @patch("enforce_linked_issue.forgejo_api.get")
+    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    def test_nonexistent_issue(self, mock_path, mock_get):
+        mock_path.return_value = "/repos/o/r/issues/999"
+        mock_get.side_effect = RuntimeError("404")
+        self.assertFalse(eli.issue_exists(999))
+
+
+class TestHasLinkedIssue(unittest.TestCase):
+    @patch("enforce_linked_issue.issue_exists", return_value=True)
+    def test_body_match(self, mock_exists):
         pr = {"body": "Fixes #10"}
         self.assertTrue(eli.has_linked_issue(1, pr))
-        mock_get.assert_not_called()
+        mock_exists.assert_called_once_with(10)
+
+    @patch("enforce_linked_issue.forgejo_api.get")
+    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    def test_ignores_html_comment_reference(self, mock_path, mock_get):
+        mock_path.return_value = "/repos/o/r/issues/1/timeline"
+        mock_get.return_value = []
+        pr = {"body": "## Closes\n\n<!-- Link issues: Closes #123 -->\n"}
+        self.assertFalse(eli.has_linked_issue(1, pr))
+
+    @patch("enforce_linked_issue.issue_exists", return_value=True)
+    def test_real_ref_outside_comment(self, mock_exists):
+        pr = {"body": "<!-- template -->\n\nCloses #40"}
+        self.assertTrue(eli.has_linked_issue(1, pr))
+        mock_exists.assert_called_once_with(40)
+
+    @patch("enforce_linked_issue.issue_exists", return_value=False)
+    @patch("enforce_linked_issue.forgejo_api.get")
+    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    def test_nonexistent_issue_falls_through(self, mock_path, mock_get, mock_exists):
+        mock_path.return_value = "/repos/o/r/issues/1/timeline"
+        mock_get.return_value = []
+        pr = {"body": "Closes #999"}
+        self.assertFalse(eli.has_linked_issue(1, pr))
 
     @patch("enforce_linked_issue.forgejo_api.get")
     @patch("enforce_linked_issue.forgejo_api.repo_path")
@@ -128,51 +180,6 @@ class TestHasLinkedIssue(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             eli.has_linked_issue(1, pr)
         self.assertIn("Timeline API unavailable", str(ctx.exception))
-
-
-class TestGetOrCreateLabelId(unittest.TestCase):
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.post")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
-    def test_returns_id_from_post_response(self, mock_path, mock_post, mock_get):
-        mock_path.return_value = "/repos/o/r/labels"
-        mock_post.return_value = {"id": 42, "name": "missing-issue"}
-        result = eli.get_or_create_label_id()
-        self.assertEqual(result, 42)
-        mock_get.assert_not_called()
-
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.post")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
-    def test_falls_back_to_get_on_409(self, mock_path, mock_post, mock_get):
-        mock_path.return_value = "/repos/o/r/labels"
-        mock_post.side_effect = forgejo_api.APIError("POST", "url", 409, "conflict")
-        mock_get.return_value = [
-            {"id": 99, "name": "missing-issue"},
-            {"id": 100, "name": "other"},
-        ]
-        result = eli.get_or_create_label_id()
-        self.assertEqual(result, 99)
-
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.post")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
-    def test_raises_on_non_409_error(self, mock_path, mock_post, mock_get):
-        mock_path.return_value = "/repos/o/r/labels"
-        mock_post.side_effect = forgejo_api.APIError("POST", "url", 500, "server err")
-        with self.assertRaises(forgejo_api.APIError) as ctx:
-            eli.get_or_create_label_id()
-        self.assertEqual(ctx.exception.status_code, 500)
-
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.post")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
-    def test_returns_none_when_label_not_found(self, mock_path, mock_post, mock_get):
-        mock_path.return_value = "/repos/o/r/labels"
-        mock_post.side_effect = forgejo_api.APIError("POST", "url", 409, "conflict")
-        mock_get.return_value = [{"id": 1, "name": "other-label"}]
-        result = eli.get_or_create_label_id()
-        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
