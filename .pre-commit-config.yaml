@@ -32,6 +32,13 @@ repos:
         files: marketplace\.json$
         pass_filenames: false
 
+      - id: update-plugin-versions
+        name: Update plugin versions in README
+        language: python
+        entry: python3 .forgejo/scripts/update_plugin_versions.py
+        files: marketplace\.json$
+        pass_filenames: false
+
       - id: check-skill-frontmatter
         name: Validate SKILL.md YAML frontmatter
         language: python

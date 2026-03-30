@@ -6,7 +6,7 @@ Personal plugin marketplace for [Claude Code](https://claude.ai/code).
 
 ## Plugins
 
-### code-review (v3.5.3)
+### code-review (v3.6.3)
 
 Comprehensive local code review with 12 specialized agents. All analysis runs locally inside a Docker container — nothing is pushed to remote.
 
@@ -30,6 +30,32 @@ Comprehensive local code review with 12 specialized agents. All analysis runs lo
 **Languages supported:** Python, Java, Kotlin, JavaScript, TypeScript, Go, Rust, PHP, Ruby, Shell, SQL, Terraform/HCL, Docker, Helm, Makefiles, GitHub Actions.
 
 **Requirements:** Docker, Claude Code CLI.
+
+#### Configuration
+
+##### Private registries
+
+If your project pulls from private package registries (Maven, npm, pip, Go, etc.), configure credential mounts so the review container can resolve dependencies:
+
+```bash
+# Edit the config (auto-created on first run from the bundled template)
+$EDITOR ~/.config/code-review/registries.yml
+```
+
+Uncomment the entries you need and point them at your local credential files. Supported registries:
+
+| Package manager | Source file                    | Works with                                        |
+| --------------- | ------------------------------ | ------------------------------------------------- |
+| Maven           | `~/.m2/settings.xml`           | Nexus, Artifactory, AWS CodeArtifact, GitHub Pkgs |
+| npm             | `~/.npmrc`                     | npm Enterprise, Artifactory, GitHub Pkgs, GitLab  |
+| pip             | `~/.config/pip/pip.conf`       | Private PyPI, AWS CodeArtifact, Artifactory       |
+| Go              | `~/.netrc`                     | Private modules, GOPROXY                          |
+| Gradle          | `~/.gradle/gradle.properties`  | Nexus, Artifactory, GitHub Pkgs                   |
+| Cargo           | `~/.cargo/credentials.toml`    | Private crate registries                          |
+| Composer        | `~/.config/composer/auth.json` | Private Packagist, Satis                          |
+| NuGet           | `~/.nuget/NuGet/NuGet.Config`  | Azure Artifacts, GitHub Pkgs, private NuGet feeds |
+
+You can also pass environment variables (e.g., `GOPROXY`, `PIP_INDEX_URL`) via the `env:` section in the same file.
 
 ### update-jira (v1.0.0)
 
@@ -90,6 +116,7 @@ After that, every `git commit` automatically runs:
 | `prettier`                 | Auto-formats JSON, Markdown, and YAML                                |
 | `validate-plugin-versions` | Fails if version is set in both `marketplace.json` and `plugin.json` |
 | `update-plugin-count`      | Auto-updates the plugin count badge in this README                   |
+| `update-plugin-versions`   | Auto-updates plugin version strings in this README                   |
 | `check-skill-frontmatter`  | Validates YAML frontmatter in `SKILL.md` files                       |
 | `check-changelog`          | Fails if a modified plugin has no CHANGELOG entry                    |
 

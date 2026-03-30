@@ -68,6 +68,16 @@ jobs:
             exit 1
           fi
 
+      - name: Check plugin versions in README
+        shell: bash
+        run: |
+          python3 .forgejo/scripts/update_plugin_versions.py
+          if [ -n "$(git diff README.md)" ]; then
+            echo "::error::Plugin versions in README.md are out of date."
+            echo "Run 'python3 .forgejo/scripts/update_plugin_versions.py' and commit." >&2
+            exit 1
+          fi
+
       - name: Check CHANGELOG for modified plugins
         if: github.event_name == 'pull_request'
         shell: bash
