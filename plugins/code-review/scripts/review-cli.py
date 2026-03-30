@@ -44,7 +44,7 @@ REVIEW_WORK = "/tmp/review-work"
 MAX_PARALLEL = 6  # max concurrent claude -p processes
 PARALLEL_TIMEOUT = 1800  # 30 min max per parallel agent
 # Agents that need extra time (fuzz runs 10k iterations + Rust compilation)
-EXTENDED_TIMEOUT_AGENTS = {"sonarqube-scanner": 2700}  # 45 min
+EXTENDED_TIMEOUT_AGENTS = {"sonarqube-scanner": 3600, "fuzz-tester": 3600}  # 60 min
 
 
 def find_version(start: Path) -> str:
@@ -964,55 +964,13 @@ def cmd_run_agents(args):
             break
 
     # 3. Run parallel items
-    console.print(f"\n[bold]Running {len(parallel_items)} parallel agents/scripts...[/bold]\n")
+    console.print(f"\n[bold]Running {len(parallel_items)} agents...[/bold]\n")
     processes = {}  # name → (Popen, item, start_time)
     results = {}  # name → {status, cost, duration, output}
     active = set()
     seen_findings = set()
+    pending = list(parallel_items)  # items not yet launched
 
-    for item in parallel_items:
-        # Throttle: wait if at max concurrency
-        while len(active) >= MAX_PARALLEL:
-            _collect_finished(processes, results, active)
-            if len(active) >= MAX_PARALLEL:
-                time.sleep(1)
-
-        name = item["name"]
-        item_start = time.time()
-
-        if item["type"] == "agent":
-            cmd = _build_claude_cmd(cname, item)
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        elif item["type"] == "script":
-            container_cmd = item["container_cmd"]
-            cmd = [
-                "docker",
-                "exec",
-                "-w",
-                WORKSPACE,
-                cname,
-                "bash",
-                "-c",
-                container_cmd,
-            ]
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        else:
-            continue
-
-        processes[name] = (proc, item, item_start)
-        active.add(name)
-
-    # Wait for all parallel to finish with Rich live table
     with Live(
         _build_parallel_table(
             parallel_items, processes, results, active, seen_findings, start_time
@@ -1020,7 +978,46 @@ def cmd_run_agents(args):
         console=console,
         refresh_per_second=2,
     ) as live:
-        while active:
+        while pending or active:
+            # Launch agents up to MAX_PARALLEL
+            while pending and len(active) < MAX_PARALLEL:
+                item = pending.pop(0)
+                name = item["name"]
+                item_start = time.time()
+
+                if item["type"] == "agent":
+                    cmd = _build_claude_cmd(cname, item)
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                elif item["type"] == "script":
+                    container_cmd = item["container_cmd"]
+                    cmd = [
+                        "docker",
+                        "exec",
+                        "-w",
+                        WORKSPACE,
+                        cname,
+                        "bash",
+                        "-c",
+                        container_cmd,
+                    ]
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                else:
+                    continue
+
+                processes[name] = (proc, item, item_start)
+                active.add(name)
+
+            # Collect finished and update display
             _collect_finished(processes, results, active)
             _update_seen_findings(cname, seen_findings)
             live.update(
@@ -1028,7 +1025,7 @@ def cmd_run_agents(args):
                     parallel_items, processes, results, active, seen_findings, start_time
                 )
             )
-            if active:
+            if pending or active:
                 time.sleep(0.5)
     console.print()
 
@@ -1166,6 +1163,35 @@ def cmd_run_agents(args):
     else:
         console.print()
     console.print(f"[bold]{'═' * 50}[/bold]\n")
+
+    # 11. Auto-cleanup containers
+    _auto_cleanup(project_dir, cname)
+
+
+def _auto_cleanup(project_dir, cname):
+    """Remove review and SonarQube containers + volumes after run completes."""
+    slug = cname.replace("review-", "", 1)
+    sq_name = f"sonarqube-{slug}"
+
+    # Copy final results out before stopping
+    run(
+        [
+            "docker",
+            "exec",
+            cname,
+            "bash",
+            "-c",
+            f"cp -f {REVIEW_WORK}/review-*.md {WORKSPACE}/.local-review/ 2>/dev/null; "
+            f"cp -f {REVIEW_WORK}/image-improvements.md {WORKSPACE}/.local-review/ 2>/dev/null; "
+            f"cp -rf {REVIEW_WORK}/tickets {WORKSPACE}/.local-review/ 2>/dev/null; "
+            f"true",
+        ],
+        check=False,
+    )
+
+    # Remove containers + volumes
+    run(["docker", "rm", "-fv", sq_name], check=False)
+    run(["docker", "rm", "-fv", cname], check=False)
 
 
 def _fmt_duration(seconds):

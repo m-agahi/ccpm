@@ -5,6 +5,19 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.3] - 2026-03-30
+
+### Fixed
+
+- **Rich live table blocked by agent throttle**: The Live table only started after all agents were
+  launched, but the throttle loop (MAX_PARALLEL=6) blocked waiting for agents to finish before
+  launching the remaining ones. Moved agent launch inside the Live context so the table renders
+  immediately.
+- **Misleading header**: Changed "Running N parallel agents/scripts..." to "Running N agents...".
+- **Fuzz-tester and SonarQube timeout**: Extended both to 60min (was 30min default).
+- **Containers left running after review**: `run-agents` now auto-removes review and SonarQube
+  containers after completion. Previously required a manual `cleanup` step.
+
 ## [3.7.2] - 2026-03-30
 
 ### Fixed
