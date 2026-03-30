@@ -1,0 +1,53 @@
+# Registry authentication for the code-review container.
+#
+# Copy this file to ~/.config/code-review/registries.yml and uncomment
+# the entries you need. Each mount injects a read-only config file into
+# the container so package managers can resolve private dependencies.
+#
+# Works with any registry: Google Artifact Registry, AWS CodeArtifact,
+# Nexus, Artifactory, GitHub Packages, GitLab, etc.
+
+mounts:
+  # Maven — settings.xml with server credentials
+  # - source: ~/.m2/settings.xml
+  #   target: /root/.m2/settings.xml
+
+  # npm — .npmrc with registry tokens
+  # - source: ~/.npmrc
+  #   target: /root/.npmrc
+
+  # pip — pip.conf for private PyPI index
+  # - source: ~/.config/pip/pip.conf
+  #   target: /root/.config/pip/pip.conf
+
+  # Go — netrc for private module authentication
+  # - source: ~/.netrc
+  #   target: /root/.netrc
+
+  # Gradle — gradle.properties with credentials
+  # - source: ~/.gradle/gradle.properties
+  #   target: /root/.gradle/gradle.properties
+
+  # Cargo (Rust) — registry credentials
+  # - source: ~/.cargo/credentials.toml
+  #   target: /root/.cargo/credentials.toml
+
+  # Composer (PHP) — auth.json for private packages
+  # - source: ~/.config/composer/auth.json
+  #   target: /root/.config/composer/auth.json
+
+  # NuGet (.NET) — nuget.config with package sources
+  # - source: ~/.nuget/NuGet/NuGet.Config
+  #   target: /root/.nuget/NuGet/NuGet.Config
+
+env:
+  []
+  # Extra environment variables passed to the container.
+  # Useful for registries that use env-based auth or custom proxy URLs.
+  #
+  # Examples:
+  # - GOPROXY=https://proxy.company.com,direct
+  # - GONOSUMCHECK=company.com/*
+  # - PIP_INDEX_URL=https://pypi.company.com/simple
+  # - NPM_CONFIG_REGISTRY=https://npm.company.com
+  # - CODEARTIFACT_AUTH_TOKEN=<token>

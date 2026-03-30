@@ -7,57 +7,7 @@ description:
 
 **User input:** "$ARGUMENTS"
 
-## FIRST: Print version
-
-Run the version lookup and print it:
-
-```bash
-python3 -c "
-import json
-from pathlib import Path
-
-def find_version(start):
-    d = start.resolve()
-    # Read this plugin's name from its own plugin.json
-    pj = d / '.claude-plugin' / 'plugin.json'
-    name = None
-    if pj.exists():
-        try:
-            name = json.loads(pj.read_text()).get('name')
-            # Check for version in plugin.json itself
-            v = json.loads(pj.read_text()).get('version')
-            if v:
-                return v
-        except Exception:
-            pass
-    # Walk up to find marketplace.json and match by plugin name
-    p = d.parent
-    while True:
-        for candidate in [p / 'marketplace.json', p / '.claude-plugin' / 'marketplace.json']:
-            if candidate.exists():
-                try:
-                    data = json.loads(candidate.read_text())
-                    for plugin in data.get('plugins', []):
-                        if name and plugin.get('name') == name and plugin.get('version'):
-                            return plugin['version']
-                        if plugin.get('version'):
-                            return plugin['version']
-                except Exception:
-                    pass
-        if (p / '.git').exists() or p == p.parent:
-            break
-        p = p.parent
-    return 'unknown'
-
-print(find_version(Path('${CLAUDE_PLUGIN_ROOT}')))
-"
-```
-
-Print the result as:
-
-> **code-review v{version}**
-
-## THEN: Ask what to review
+## FIRST: Ask what to review
 
 If "$ARGUMENTS" is not empty, use it as the path. Skip to SETUP.
 
@@ -91,13 +41,13 @@ instead of this script.
 **Do NOT run `run-agents` via the Bash tool.** It takes 10-50 minutes and must run in the user's
 terminal for live progress output. Print this message to the user:
 
-> **Setup complete.** Now run this in your terminal:
+> **Setup complete.** Run this in your terminal to start the review:
 >
 > ```
 > python3 PLUGIN_ROOT/scripts/review-cli.py run-agents REVIEW_DIR
 > ```
 >
-> This runs all review agents inside the container. You'll see a live status table showing progress.
+> You'll see a live status table showing agent progress.
 > Come back here when it finishes and I'll read the report.
 
 Replace `PLUGIN_ROOT` with the actual value of `${CLAUDE_PLUGIN_ROOT}` and `REVIEW_DIR` with the

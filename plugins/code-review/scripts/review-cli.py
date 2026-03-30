@@ -95,10 +95,102 @@ def run(cmd, check=True, capture=True, **kwargs):
     )
 
 
+REGISTRIES_PATH = Path.home() / ".config" / "code-review" / "registries.yml"
+
+
 def load_config():
     """Load review-tools.yml."""
     with open(CONFIG_PATH) as f:
         return yaml.safe_load(f)
+
+
+def load_registries():
+    """Load ~/.config/code-review/registries.yml if it exists.
+
+    Returns (mounts, envs) where mounts is a list of (source, target) tuples
+    and envs is a list of "KEY=VALUE" strings. Returns ([], []) if not found.
+    """
+    if not REGISTRIES_PATH.exists():
+        return [], []
+    try:
+        with open(REGISTRIES_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+    except (yaml.YAMLError, OSError):
+        return [], []
+
+    mounts = []
+    for m in cfg.get("mounts") or []:
+        src = Path(m.get("source", "")).expanduser()
+        tgt = m.get("target", "")
+        if src and tgt and src.exists():
+            mounts.append((str(src), tgt))
+
+    envs = [str(e) for e in (cfg.get("env") or []) if "=" in str(e)]
+    return mounts, envs
+
+
+def _ensure_registries_config():
+    """Copy the example registries.yml to ~/.config/code-review/ if it doesn't exist.
+
+    Returns True if the file was just created (first time), False if it already existed.
+    """
+    if REGISTRIES_PATH.exists():
+        return False
+
+    example = PLUGIN_ROOT / "registries.example.yml"
+    if not example.exists():
+        return False
+
+    REGISTRIES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    import shutil
+
+    shutil.copy2(example, REGISTRIES_PATH)
+    return True
+
+
+def print_registries_info():
+    """Print a boxed info message about private registry configuration."""
+    first_time = _ensure_registries_config()
+    mounts, envs = load_registries()
+
+    if mounts or envs:
+        lines = []
+        count = len(mounts) + len(envs)
+        lines.append(f"  Private registries: {count} config(s) active")
+        for src, tgt in mounts:
+            src_short = src.replace(str(Path.home()), "~")
+            lines.append(f"  {src_short} \u2192 {tgt}")
+        for e in envs:
+            key = e.split("=", 1)[0]
+            lines.append(f"  ${key} (env)")
+    elif first_time:
+        short_path = str(REGISTRIES_PATH).replace(str(Path.home()), "~")
+        lines = [
+            f"  Created {short_path}",
+            "",
+            "  To resolve private dependencies (Maven, npm, pip, ...),",
+            "  edit the file and uncomment the registries you need.",
+            "  Changes take effect on the next review.",
+        ]
+    else:
+        short_path = str(REGISTRIES_PATH).replace(str(Path.home()), "~")
+        lines = [
+            "  Private registries: not configured",
+            "",
+            f"  Edit {short_path}",
+            "  to mount credentials for Maven, npm, pip, Go, etc.",
+        ]
+
+    # Calculate box width
+    width = max(len(l) for l in lines) + 2
+    border_color = "\033[36m"  # cyan
+    reset = "\033[0m"
+
+    print(f"\n{border_color}\u250c{'\u2500' * width}\u2510{reset}")
+    for l in lines:
+        padded = l.ljust(width)
+        print(f"{border_color}\u2502{reset}{padded}{border_color}\u2502{reset}")
+    print(f"{border_color}\u2514{'\u2500' * width}\u2518{reset}")
 
 
 def review_dir(args):
@@ -354,10 +446,13 @@ def cmd_setup(args):
     languages = detect_languages(project_dir)
     print(f"  Found: {', '.join(languages) if languages else 'none'}")
 
-    # 6. Agent selection menu
+    # 6. Show registries info
+    print_registries_info()
+
+    # 7. Agent selection menu
     agents = select_agents(languages, project_dir, user_input=args.agents)
 
-    # 7. Write manifest
+    # 8. Write manifest
     manifest = {
         "project_dir": str(project_dir),
         "languages": languages,

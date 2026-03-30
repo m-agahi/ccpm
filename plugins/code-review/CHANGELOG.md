@@ -5,6 +5,25 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.0] - 2026-03-30
+
+### Added
+
+- **Private registry authentication**: New `~/.config/code-review/registries.yml` config file for
+  mounting package manager credentials (Maven, npm, pip, Go, Gradle, Cargo, Composer, NuGet) into
+  the review container. Works with any registry: Google Artifact Registry, AWS CodeArtifact, Nexus,
+  Artifactory, GitHub Packages, etc. Example template at `registries.example.yml`.
+- **Auto-create registries config**: On first run, the example config is automatically copied to
+  `~/.config/code-review/registries.yml`. Users just uncomment the entries they need.
+- **Registries info box**: Setup output now shows a cyan-bordered box with registry configuration
+  status — active mounts, first-time setup instructions, or a reminder to configure.
+
+### Changed
+
+- **Version printed once**: Removed the duplicate version lookup from SKILL.md. Version is now only
+  printed by `review-cli.py setup` (the `── local-code-review v{version} ──` banner).
+- **Cleaner skill output**: Simplified the run-agents instruction message shown to users.
+
 ## [3.5.5] - 2026-03-28
 
 ### Fixed

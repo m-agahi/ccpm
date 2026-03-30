@@ -113,6 +113,32 @@ cmd_start() {
     echo "         claude -p agents inside the container will fail." >&2
   fi
 
+  # Mount private registry configs (Maven, npm, pip, etc.) from user config.
+  local registries_yml="${HOME}/.config/code-review/registries.yml"
+  if [[ -f "$registries_yml" ]]; then
+    # Parse mounts and env from YAML using python3 (already a dependency)
+    local _parsed
+    _parsed=$(python3 -c "
+import yaml, os, sys
+with open('$registries_yml') as f:
+    cfg = yaml.safe_load(f) or {}
+for m in cfg.get('mounts') or []:
+    src = os.path.expanduser(m.get('source', ''))
+    tgt = m.get('target', '')
+    if src and tgt and os.path.exists(src):
+        print(f'MOUNT:{src}:{tgt}')
+for e in cfg.get('env') or []:
+    if '=' in str(e):
+        print(f'ENV:{e}')
+" 2>/dev/null) || _parsed=""
+    while IFS= read -r line; do
+      case "$line" in
+        MOUNT:*) extra_args+=(-v "${line#MOUNT:}:ro") ;;
+        ENV:*)   extra_args+=(-e "${line#ENV:}") ;;
+      esac
+    done <<< "$_parsed"
+  fi
+
   docker run -d \
     --name "$CONTAINER_NAME" \
     --cpus="$(nproc)" \
