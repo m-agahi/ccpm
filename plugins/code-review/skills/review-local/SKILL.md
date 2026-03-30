@@ -36,12 +36,32 @@ detection, agent filtering, manifest, prompt generation, and execution plan. Do 
 find, ls, mkdir, docker exec, git diff, run_tooling_check.sh, or any other commands before or
 instead of this script.
 
+## SHOW SETUP SUMMARY
+
+Claude Code collapses long Bash output, so the user won't see the setup script's banners.
+After setup completes, **read the manifest and re-display key info as regular text**:
+
+1. Read `REVIEW_DIR/.local-review/manifest.json` to get version, languages, and agent count.
+2. Check `~/.config/code-review/registries.yml` — if all mount entries are commented out, registries
+   are **not configured**.
+3. Print a summary like this (adjust to actual values):
+
+> **local-code-review vX.Y.Z**
+>
+> Languages detected: java, docker, hcl
+> Agents: 7 parallel + 3 sequential
+>
+> Private registries: not configured
+> Edit `~/.config/code-review/registries.yml` to mount credentials for Maven, npm, pip, etc.
+
+If registries ARE configured (uncommented mounts exist), show which ones are active instead.
+
 ## RUN AGENTS (user runs manually in terminal)
 
 **Do NOT run `run-agents` via the Bash tool.** It takes 10-50 minutes and must run in the user's
 terminal for live progress output. Print this message to the user:
 
-> **Setup complete.** Run this in your terminal to start the review:
+> Run this in your terminal to start the review:
 >
 > ```
 > python3 PLUGIN_ROOT/scripts/review-cli.py run-agents REVIEW_DIR

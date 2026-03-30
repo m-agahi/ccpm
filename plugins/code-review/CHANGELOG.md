@@ -5,6 +5,17 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.1] - 2026-03-30
+
+### Fixed
+
+- **Version detection in multi-plugin repos**: `find_version()` returned the marketplace-level
+  version (`metadata.version`) instead of the plugin version from the `plugins[]` array. Now checks
+  `plugins[]` first, matching by `name == "code-review"`.
+- **Setup summary hidden by collapsed output**: Claude Code collapses long Bash output, hiding the
+  version banner and registry info box. SKILL.md now re-displays version, languages, agent count,
+  and registry status as regular text after setup completes.
+
 ## [3.6.0] - 2026-03-30
 
 ### Added

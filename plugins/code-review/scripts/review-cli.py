@@ -51,14 +51,16 @@ def find_version(start: Path) -> str:
             if candidate.exists():
                 try:
                     data = json.loads(candidate.read_text())
+                    # Multi-plugin repo: search plugins array first
+                    plugins = data.get("plugins", [])
+                    if plugins:
+                        for p in plugins:
+                            if p.get("name") == "code-review" and p.get("version"):
+                                return p["version"]
                     # Single-plugin repo: metadata.version
                     v = data.get("metadata", {}).get("version")
                     if v:
                         return v
-                    # Multi-plugin repo: search plugins array
-                    for p in data.get("plugins", []):
-                        if p.get("version"):
-                            return p["version"]
                 except (json.JSONDecodeError, OSError):
                     pass
         if (d / ".git").exists() or d == d.parent:
@@ -454,6 +456,7 @@ def cmd_setup(args):
 
     # 8. Write manifest
     manifest = {
+        "version": version,
         "project_dir": str(project_dir),
         "languages": languages,
         "agents": [],
