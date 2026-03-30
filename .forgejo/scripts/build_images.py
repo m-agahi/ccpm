@@ -14,6 +14,9 @@ import pathlib
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(__file__))
+from lib import git
+
 
 def run(cmd, **kwargs):
     """Run a command, printing it and streaming output."""
@@ -78,6 +81,14 @@ def main():
         sys.exit(1)
     print("Logged in to container registry.")
 
+    # Detect which files changed vs previous commit (for automatic triggers).
+    # workflow_dispatch always builds (manual trigger = explicit intent).
+    is_manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    try:
+        changed_files = git.diff_names("HEAD~1")
+    except Exception:
+        changed_files = []
+
     for rel in releases:
         name = rel["name"]
         version = rel["version"]
@@ -86,6 +97,14 @@ def main():
         if not (dockerfile_dir / "Dockerfile").exists():
             print(f"Skipping {name} — no Dockerfile found.")
             continue
+
+        # Skip build if no docker-related files changed (unless manual trigger)
+        if not is_manual:
+            docker_prefix = f"plugins/{name}/docker/"
+            docker_changed = any(f.startswith(docker_prefix) for f in changed_files)
+            if not docker_changed:
+                print(f"Skipping {name} — no changes in {docker_prefix}")
+                continue
 
         image_base = f"{registry}/{repo}/{name}"
         image_versioned = f"{image_base}:{version}"
