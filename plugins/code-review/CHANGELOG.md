@@ -5,6 +5,15 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.2] - 2026-03-30
+
+### Changed
+
+- **Review path selection uses operational question**: The "What should I review?" prompt now uses
+  the `AskUserQuestion` tool to present a clickable multi-choice UI instead of plain text.
+- **Parallel agent timeout increased to 30 minutes**: Was 10 minutes. Agents that need to build
+  dependencies (e.g., dependency-checker, type-checker) now have enough time to complete.
+
 ## [3.6.1] - 2026-03-30
 
 ### Fixed

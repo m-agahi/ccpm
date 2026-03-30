@@ -31,7 +31,7 @@ IMAGE_NAME = REGISTRY_IMAGE  # resolved at runtime by container.sh
 WORKSPACE = "/workspace"
 REVIEW_WORK = "/tmp/review-work"
 MAX_PARALLEL = 6  # max concurrent claude -p processes
-PARALLEL_TIMEOUT = 600  # 10 min max per parallel agent
+PARALLEL_TIMEOUT = 1800  # 30 min max per parallel agent
 # Agents that need extra time (fuzz runs 10k iterations + Rust compilation)
 EXTENDED_TIMEOUT_AGENTS = {"fuzz-tester": 1800}  # 30 min
 

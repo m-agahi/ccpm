@@ -11,14 +11,16 @@ description:
 
 If "$ARGUMENTS" is not empty, use it as the path. Skip to SETUP.
 
-Otherwise ask ONLY this (nothing else in the message):
+Otherwise, use the **AskUserQuestion** tool to ask. Use these parameters:
 
-> What should I review?
->
-> 1. Current directory
-> 2. Custom path
+- question: "What should I review?"
+- header: "Review path"
+- options:
+  1. label: "Current directory", description: "Review the current working directory"
+  2. label: "Custom path", description: "Specify a different directory to review"
 
-Wait for the user's answer. Then proceed to SETUP.
+If the user picks "Current directory", use the current working directory. If "Custom path" or
+"Other", use the path they provide. Then proceed to SETUP.
 
 ## SETUP (run FIRST — before any other bash command)
 
