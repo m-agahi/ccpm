@@ -23,7 +23,7 @@ Run commands directly (no `docker exec`):
 - Find files: `find /workspace -name "*.java"`
 
 Report input: `/tmp/review-work/review-*.md`
-Ticket output: `/tmp/review-work/tickets/NNNN-slug.md`
+Ticket output: `/tmp/review-work/tickets/YYMMDDHHMM-NNNN-slug.md`
 
 ## Process
 
@@ -74,15 +74,19 @@ to:
 For each actionable finding in the report, create a markdown file inside the container:
 
 ```bash
-cat > /tmp/review-work/tickets/NNNN-slug.md << "TICKET_EOF"
+cat > /tmp/review-work/tickets/YYMMDDHHMM-NNNN-slug.md << "TICKET_EOF"
 ...ticket content...
 TICKET_EOF
 ```
 
-**Filename pattern:** `/tmp/review-work/tickets/NNNN-<slug>.md`
+**Filename pattern:** `/tmp/review-work/tickets/YYMMDDHHMM-NNNN-<slug>.md`
 
 Where:
 
+- `YYMMDDHHMM` — timestamp derived from the review report filename. The report is named
+  `review-YYYYMMDD-HHMMSS.md` (e.g., `review-20260330-143022.md`). Drop the century, seconds,
+  and dash to get `2603301430`. Reuse this prefix for ALL tickets in the same run to group them
+  and prevent filename collisions across multiple runs.
 - `NNNN` — zero-padded sequence number (0001, 0002, ...)
 - `<slug>` — kebab-case summary (max 50 chars), e.g., `division-by-zero-kafka-batch`,
   `null-pointer-forecast-settings`
@@ -268,10 +272,10 @@ INDEX_EOF
 **Report:** review-YYYYMMDD-HHMMSS.md **Total drafts:** N tickets **By severity:** X Critical/High,
 Y Medium, Z Low
 
-| #    | File                                 | Severity | Priority | Type | Title                                      |
-| ---- | ------------------------------------ | -------- | -------- | ---- | ------------------------------------------ |
-| 0001 | 0001-division-by-zero-kafka-batch.md | CRITICAL | High (3) | Bug  | Division-by-zero in Kafka batch processing |
-| 0002 | 0002-upgrade-spring-boot-parent.md   | CRITICAL | High (3) | Task | Upgrade Spring Boot parent 3.4.3 → 3.4.5   |
+| #    | File                                                    | Severity | Priority | Type | Title                                      |
+| ---- | ------------------------------------------------------- | -------- | -------- | ---- | ------------------------------------------ |
+| 0001 | 2603301430-0001-division-by-zero-kafka-batch.md    | CRITICAL | High (3) | Bug  | Division-by-zero in Kafka batch processing |
+| 0002 | 2603301430-0002-upgrade-spring-boot-parent.md      | CRITICAL | High (3) | Task | Upgrade Spring Boot parent 3.4.3 → 3.4.5   |
 
 ...
 

@@ -205,7 +205,7 @@ Create this ticket? (yes / no / edit / stop)
 
 When a ticket is successfully created in Jira:
 
-1. Delete the draft file: `rm <reviewed-dir>/.local-review/tickets/NNNN-slug.md`
+1. Delete the draft file: `rm <reviewed-dir>/.local-review/tickets/YYMMDDHHMM-NNNN-slug.md`
 2. This ensures only uncreated drafts remain in the tickets directory for future runs
 
 When a finding is skipped:

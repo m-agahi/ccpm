@@ -5,6 +5,14 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.3] - 2026-03-30
+
+### Changed
+
+- **Datetime prefix on ticket draft filenames**: Ticket drafts now use `YYMMDDHHMM-NNNN-slug.md`
+  format (e.g., `2603301430-0001-division-by-zero.md`) instead of `NNNN-slug.md`. Timestamp is
+  derived from the review report filename, preventing filename collisions across multiple runs.
+
 ## [3.6.2] - 2026-03-30
 
 ### Changed
