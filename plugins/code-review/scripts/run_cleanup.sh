@@ -131,10 +131,10 @@ if [[ -f "$REVIEWED_DIR/sonar-project.properties" ]]; then
   }
 fi
 
-# SonarQube containers (started by orchestrator — slug-based naming)
+# SonarQube containers + volumes (started by orchestrator — slug-based naming)
 for sq in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep '^sonarqube-'); do
-  echo "Stopping SonarQube container: $sq"
-  docker rm -f "$sq" >/dev/null 2>&1
+  echo "Removing SonarQube container + volumes: $sq"
+  docker rm -fv "$sq" >/dev/null 2>&1
 done
 
 # Clean .local-review/ artifacts (keep review-*.md, tickets/, image-improvements.md, cost-manifest.json)

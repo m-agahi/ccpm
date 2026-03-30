@@ -12,6 +12,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Container memory limit**: Cap review container at 50% of system RAM (min 4GB, max 8GB) with
   up to equal swap. Previously used full system RAM with unlimited swap, causing system-wide
   thrashing when multiple Maven/Java agents ran concurrent builds.
+- **SonarQube crashes on near-full disk**: Elasticsearch flood-stage watermark defaults to 95%,
+  causing SonarQube to crash on machines with high disk usage. Raised watermarks to 97/98/99%.
+- **Cleanup leaks container volumes**: `docker rm -f` replaced with `docker rm -fv` for both
+  review and SonarQube containers. Also prunes old review-tools image versions (keeps latest).
+  Previously, anonymous volumes from each run accumulated indefinitely (100+ GB observed).
 - **Rich live table not rendering**: Rich detected a non-interactive terminal and silently skipped
   the live display. Force terminal mode so the progress table always renders.
 

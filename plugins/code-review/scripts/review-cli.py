@@ -863,6 +863,9 @@ def _start_sonarqube(cname):
             f"{host_port}:9000",
             "-e",
             "SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true",
+            "-e",
+            "SONAR_ES_JAVAOPTS=-Des.disk.watermark.flood_stage=99% "
+            "-Des.disk.watermark.high=98% -Des.disk.watermark.low=97%",
             "sonarqube:lts-community",
         ],
         check=False,
@@ -1620,20 +1623,44 @@ def cmd_cleanup(args):
     print("\033[1mRunning cleanup...\033[0m")
     run(["bash", cleanup_script, str(project_dir)], capture=False, check=False)
 
-    # Stop SonarQube container if running (use slug-based name)
+    # Stop SonarQube container + volumes (use slug-based name)
     slug = cname.replace("review-", "", 1)
     sq_name = f"sonarqube-{slug}"
-    print(f"\033[1mStopping SonarQube container ({sq_name})...\033[0m")
-    run(["docker", "rm", "-f", sq_name], capture=False, check=False)
+    print("\033[1mRemoving SonarQube container + volumes...\033[0m")
+    run(["docker", "rm", "-fv", sq_name], capture=False, check=False)
     # Also try the legacy name
-    run(["docker", "rm", "-f", "sonarqube-review"], capture=False, check=False)
+    run(["docker", "rm", "-fv", "sonarqube-review"], capture=False, check=False)
 
-    # Stop review-tools container
-    container_script = str(PLUGIN_ROOT / "scripts" / "container.sh")
-    print("\033[1mStopping container...\033[0m")
-    run(
-        ["bash", container_script, "stop", str(project_dir)], capture=False, check=False
+    # Stop review-tools container + volumes
+    print("\033[1mRemoving review container + volumes...\033[0m")
+    run(["docker", "rm", "-fv", cname], capture=False, check=False)
+
+    # Prune old review-tools images (keep latest)
+    print("\033[1mPruning old review-tools images...\033[0m")
+    result = run(
+        [
+            "docker",
+            "images",
+            "--format",
+            "{{.ID}} {{.Repository}}:{{.Tag}}",
+        ],
+        check=False,
     )
+    if result.returncode == 0:
+        latest_id = None
+        old_ids = []
+        for line in result.stdout.strip().splitlines():
+            parts = line.split(" ", 1)
+            if len(parts) != 2:
+                continue
+            img_id, img_name = parts
+            if REGISTRY_IMAGE in img_name or "review-tools" in img_name:
+                if latest_id is None:
+                    latest_id = img_id  # first match is newest
+                elif img_id != latest_id:
+                    old_ids.append(img_id)
+        for img_id in old_ids:
+            run(["docker", "rmi", img_id], check=False)
 
     print("\033[32mDone.\033[0m\n")
 
