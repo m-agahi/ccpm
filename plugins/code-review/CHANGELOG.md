@@ -5,6 +5,16 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.1] - 2026-03-30
+
+### Fixed
+
+- **Container memory limit**: Cap review container at 50% of system RAM (min 4GB, max 8GB) with
+  up to equal swap. Previously used full system RAM with unlimited swap, causing system-wide
+  thrashing when multiple Maven/Java agents ran concurrent builds.
+- **Rich live table not rendering**: Rich detected a non-interactive terminal and silently skipped
+  the live display. Force terminal mode so the progress table always renders.
+
 ## [3.7.0] - 2026-03-30
 
 ### Changed

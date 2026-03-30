@@ -927,7 +927,7 @@ def cmd_run_agents(args):
     start_time = time.time()
 
     # 1. Copy prompts into container
-    console = Console()
+    console = Console(force_terminal=True)
     console.print("[bold]Copying prompts into container...[/bold]")
     prompts_src = str(lr / "prompts")
     run(

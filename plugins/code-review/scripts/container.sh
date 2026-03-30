@@ -142,7 +142,8 @@ for e in cfg.get('env') or []:
   docker run -d \
     --name "$CONTAINER_NAME" \
     --cpus="$(nproc)" \
-    --memory="$(awk '/MemTotal/{printf "%.0fg", $2/1048576}' /proc/meminfo)" \
+    --memory="$(awk '/MemTotal/{mem=$2/1048576; limit=int(mem*0.5); if(limit<4) limit=4; if(limit>8) limit=8; printf "%dg", limit}' /proc/meminfo)" \
+    --memory-swap="$(awk '/MemTotal/{mem=$2/1048576; limit=int(mem*0.5); if(limit<4) limit=4; if(limit>8) limit=8; printf "%dg", limit*2}' /proc/meminfo)" \
     -v "${project_dir}:${SOURCE_MOUNT}:ro" \
     -v "${project_dir}/.local-review:${WORKSPACE}/.local-review" \
     "${extra_args[@]}" \
