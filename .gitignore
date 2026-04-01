@@ -14,8 +14,9 @@ venv/
 .local-review/
 .scannerwork/
 
-# Claude Code
+# AI
 .claude/
+.omc/
 
 # Test / type caches
 .pytest_cache/
