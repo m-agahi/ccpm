@@ -98,19 +98,33 @@ cmd_start() {
   mkdir -p "${project_dir}/.local-review"
 
   # Claude Code auth for claude -p inside container.
-  # Priority: ANTHROPIC_API_KEY env var > extract from ~/.claude/config.json
+  # Priority: ANTHROPIC_API_KEY env var > OAuth session (~/.claude.json) > legacy config.json key
   local api_key="${ANTHROPIC_API_KEY:-}"
-  if [[ -z "$api_key" ]]; then
+  local auth_ok=false
+
+  if [[ -n "$api_key" ]]; then
+    # Explicit API key set — use it directly
+    extra_args+=(-e "ANTHROPIC_API_KEY=${api_key}")
+    auth_ok=true
+  elif [[ -f "${HOME}/.claude.json" ]]; then
+    # Mount OAuth session file (Claude Code v2.x uses ~/.claude.json for auth)
+    extra_args+=(-v "${HOME}/.claude.json:/root/.claude.json:ro")
+    auth_ok=true
+  else
+    # Legacy fallback: extract primaryApiKey from ~/.claude/config.json
     local claude_config="${HOME}/.claude/config.json"
     if [[ -f "$claude_config" ]]; then
       api_key=$(python3 -c "import json; print(json.load(open('$claude_config')).get('primaryApiKey',''))" 2>/dev/null) || api_key=""
     fi
+    if [[ -n "$api_key" && "$api_key" != sk-ant-oat* ]]; then
+      extra_args+=(-e "ANTHROPIC_API_KEY=${api_key}")
+      auth_ok=true
+    fi
   fi
-  if [[ -n "$api_key" ]]; then
-    extra_args+=(-e "ANTHROPIC_API_KEY=${api_key}")
-  else
-    echo "WARNING: No API key found. Set ANTHROPIC_API_KEY or configure ~/.claude/config.json." >&2
-    echo "         claude -p agents inside the container will fail." >&2
+
+  if [[ "$auth_ok" != true ]]; then
+    echo "WARNING: No usable auth found for claude -p inside the container." >&2
+    echo "         Set ANTHROPIC_API_KEY or log in with 'claude' on the host." >&2
   fi
 
   # Mount private registry configs (Maven, npm, pip, etc.) from user config.

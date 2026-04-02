@@ -1164,12 +1164,16 @@ def cmd_run_agents(args):
         console.print()
     console.print(f"[bold]{'═' * 50}[/bold]\n")
 
-    # 11. Auto-cleanup containers
-    _auto_cleanup(project_dir, cname)
+    # 11. Auto-cleanup containers (skip if too many agents failed — keep alive for debugging)
+    _auto_cleanup(project_dir, cname, failed)
 
 
-def _auto_cleanup(project_dir, cname):
-    """Remove review and SonarQube containers + volumes after run completes."""
+def _auto_cleanup(project_dir, cname, failed_count=0):
+    """Remove review and SonarQube containers + volumes after run completes.
+
+    If more than 2 agents failed, keep the review container alive so the user
+    can exec into it for debugging.  SonarQube is always cleaned up.
+    """
     slug = cname.replace("review-", "", 1)
     sq_name = f"sonarqube-{slug}"
 
@@ -1189,8 +1193,19 @@ def _auto_cleanup(project_dir, cname):
         check=False,
     )
 
-    # Remove containers + volumes
+    # Always remove SonarQube
     run(["docker", "rm", "-fv", sq_name], check=False)
+
+    # Keep review container alive when many agents failed (likely a systemic issue)
+    if failed_count > 2:
+        print(
+            f"\033[33mWARNING: {failed_count} agents failed — keeping container "
+            f"'{cname}' alive for debugging.\033[0m"
+        )
+        print(f"  Run: docker exec -it {cname} bash")
+        print(f"  Cleanup later: docker rm -fv {cname}")
+        return
+
     run(["docker", "rm", "-fv", cname], check=False)
 
 

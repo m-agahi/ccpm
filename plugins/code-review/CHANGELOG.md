@@ -5,6 +5,19 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.8.0] - 2026-04-02
+
+### Fixed
+
+- **OAuth auth inside container**: Claude Code v2.x stores OAuth session data in `~/.claude.json`
+  instead of a plain API key in `~/.claude/config.json`. The old approach of extracting
+  `primaryApiKey` and passing it as `ANTHROPIC_API_KEY` broke because that field now holds an
+  OAuth token which the API rejects. Auth now mounts `~/.claude.json` read-only into the container.
+  Falls back to `ANTHROPIC_API_KEY` env var and legacy `config.json` extraction (non-OAuth keys only).
+- **Aggressive cleanup on mass failure**: When more than 2 agents fail (e.g. systemic auth error),
+  the review container is kept alive for debugging instead of being auto-removed. Prints
+  `docker exec` instructions for inspection.
+
 ## [3.7.3] - 2026-03-30
 
 ### Fixed
