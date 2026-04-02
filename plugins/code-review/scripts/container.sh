@@ -106,9 +106,10 @@ cmd_start() {
     # Explicit API key set — use it directly
     extra_args+=(-e "ANTHROPIC_API_KEY=${api_key}")
     auth_ok=true
-  elif [[ -f "${HOME}/.claude.json" ]]; then
-    # Mount OAuth session file (Claude Code v2.x uses ~/.claude.json for auth)
+  elif [[ -f "${HOME}/.claude.json" && -f "${HOME}/.claude/.credentials.json" ]]; then
+    # Mount OAuth session + credentials (Claude Code v2.x needs both for auth)
     extra_args+=(-v "${HOME}/.claude.json:/root/.claude.json:ro")
+    extra_args+=(-v "${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro")
     auth_ok=true
   else
     # Legacy fallback: extract primaryApiKey from ~/.claude/config.json

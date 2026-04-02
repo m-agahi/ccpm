@@ -5,6 +5,13 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.8.1] - 2026-04-02
+
+### Fixed
+
+- **OAuth auth incomplete**: Mounting only `~/.claude.json` is not enough — Claude CLI also needs
+  `~/.claude/.credentials.json` which holds the actual OAuth access token. Now mounts both files.
+
 ## [3.8.0] - 2026-04-02
 
 ### Fixed
