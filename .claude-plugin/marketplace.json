@@ -39,6 +39,18 @@
       "license": "Apache-2.0",
       "category": "productivity",
       "keywords": ["jira", "progress", "updates", "pr-sync", "atlassian"]
+    },
+    {
+      "name": "confluence-rfc",
+      "description": "Create RFC pages in Confluence following the team's established template. Supports PP and APIM spaces, Jira ticket integration, and auto-fills content from conversation context.",
+      "source": "./plugins/confluence-rfc",
+      "version": "1.2.1",
+      "author": {
+        "name": "Max Agahi"
+      },
+      "license": "Apache-2.0",
+      "category": "productivity",
+      "keywords": ["confluence", "rfc", "documentation", "atlassian", "wiki"]
     }
   ]
 }
