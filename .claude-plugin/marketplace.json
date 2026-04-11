@@ -51,6 +51,18 @@
       "license": "Apache-2.0",
       "category": "productivity",
       "keywords": ["confluence", "rfc", "documentation", "atlassian", "wiki"]
+    },
+    {
+      "name": "git-flow",
+      "description": "Safe git workflow enforcer for worktree-based development. Prevents committing to master, pushing to merged branches, and skipping the branching workflow. Handles commit, push, PR creation (Codeberg/Forgejo), and worktree management.",
+      "source": "./plugins/git-flow",
+      "version": "1.0.1",
+      "author": {
+        "name": "Max Agahi"
+      },
+      "license": "Apache-2.0",
+      "category": "productivity",
+      "keywords": ["git", "workflow", "branching", "worktree", "safety", "pr"]
     }
   ]
 }

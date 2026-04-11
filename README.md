@@ -1,6 +1,6 @@
 # ccpm — Claude Code Plugin Marketplace
 
-![plugins](https://img.shields.io/badge/plugins-3-blue)
+![plugins](https://img.shields.io/badge/plugins-4-blue)
 
 Personal plugin marketplace for [Claude Code](https://claude.ai/code).
 
@@ -67,6 +67,69 @@ Post progress updates to Jira tickets based on session work, git activity, and P
 Auto-fixes PR titles (adds ticket prefix) and PR bodies (adds Jira link). Configurable per-project via memory file (Jira project, GitHub org, repos, email).
 
 **Requirements:** Atlassian MCP server, GitHub MCP server.
+
+### git-flow (v1.0.1)
+
+Safe git workflow enforcer for worktree-based development.
+
+- Guards against committing or pushing to `master`
+- Guards against operating on merged/closed branches
+- Worktree-first branching — uses `git worktree add` instead of `git checkout -b`
+- Handles commit, push, PR creation (Codeberg/Forgejo), and branch cleanup
+- Detects merged branches via `git ls-remote` and optional Forgejo API check
+- First-run setup wizard configures the companion `PreToolUse` hook automatically
+
+**Subcommands:** `branch`, `commit`, `push`, `pr`, `cleanup`, `status`.
+If no subcommand is given, the skill infers the action from context.
+
+**Requirements:** `op` CLI (1Password) for Codeberg PAT when creating PRs.
+
+#### git-flow hook setup
+
+The git-flow skill works best with a `PreToolUse` hook that injects a safety
+reminder before every `git` Bash command — even when the skill is not explicitly
+invoked. The skill detects if this hook is missing on first run and offers to
+configure it automatically.
+
+To set it up manually:
+
+**1. Create the hook script:**
+
+```bash
+mkdir -p ~/.claude/hooks
+cat > ~/.claude/hooks/git-flow-guard.sh << 'EOF'
+#!/bin/bash
+INPUT=$(cat)
+CMD=$(echo "$INPUT" | python3 -c "import json,sys; \
+  d=json.load(sys.stdin); \
+  print(d.get('tool_input',{}).get('command',''))" 2>/dev/null)
+if echo "$CMD" | grep -qw "git"; then
+  printf '{"type":"context","text":"[GIT-FLOW GUARD] Check branch before proceeding: run git branch --show-current. NEVER commit or push to master. NEVER operate on a merged branch. Follow the git-flow skill rules."}'
+fi
+EOF
+chmod +x ~/.claude/hooks/git-flow-guard.sh
+```
+
+**2. Add the hook to `~/.claude/settings.json`** under `hooks.PreToolUse`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/git-flow-guard.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
+```
 
 ## Installation
 

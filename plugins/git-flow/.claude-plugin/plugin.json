@@ -1,0 +1,10 @@
+{
+  "name": "git-flow",
+  "description": "Safe git workflow enforcer for worktree-based development. Prevents committing to master, pushing to merged branches, and skipping the branching workflow. Handles commit, push, PR creation (Codeberg/Forgejo), and worktree management.",
+  "author": {
+    "name": "Max Agahi"
+  },
+  "repository": "https://codeberg.org/maxagahi/ccpm",
+  "license": "Apache-2.0",
+  "keywords": ["git", "workflow", "branching", "worktree", "safety", "pr"]
+}
