@@ -17,9 +17,15 @@ Two modes of operation:
 
 ## Configuration
 
-This skill needs to know your Jira project, GitHub org, and repos. On first run (or if
-config is missing), check for a memory file called `update-jira-config.md` in the project
-memory directory. If it doesn't exist, ask the user for:
+This skill needs to know your Jira project, GitHub org, and repos. Look for config in
+this order (first found wins):
+
+1. **Project config**: `update-jira-config.md` in the project memory directory — highest
+   precedence, allows per-project overrides.
+2. **Global config**: `~/.config/claude/update-jira-config.md` — shared across all projects,
+   suitable for Nix/dotfile management. Non-Nix users can also place their config here manually.
+
+If neither exists, ask the user for:
 
 1. **Jira email** — their Jira account email (for `mcp__atlassian__jira_get_user_profile`)
 2. **Jira project key** — e.g. `PROJ`, `ENG`, `PLATFORM`
@@ -27,8 +33,9 @@ memory directory. If it doesn't exist, ask the user for:
 4. **GitHub org** — e.g. `mycompany`
 5. **GitHub repos** — comma-separated list of repos to scan for PRs
 
-Save as `update-jira-config.md` in the project memory directory so it persists across
-sessions. The user can update config by saying "reconfigure update-jira".
+Then save the config to `~/.config/claude/update-jira-config.md` (global, works for
+everyone) and inform the user they can also manage it via Nix/dotfiles.
+The user can update config by saying "reconfigure update-jira".
 
 Throughout this skill, replace these placeholders with the configured values:
 

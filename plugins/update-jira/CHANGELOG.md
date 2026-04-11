@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.0] - 2026-04-11
+
+### Added
+
+- Global config lookup at `~/.config/claude/update-jira-config.md` — shared across all
+  projects, suitable for Nix/dotfile management or manual placement
+- Project memory config still takes precedence (per-project overrides still work)
+- On first-run setup, config is now saved globally so it works across all projects
+  without repeating setup
+
 ## [1.0.0] - 2026-03-28
 
 ### Added
