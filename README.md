@@ -57,7 +57,7 @@ Uncomment the entries you need and point them at your local credential files. Su
 
 You can also pass environment variables (e.g., `GOPROXY`, `PIP_INDEX_URL`) via the `env:` section in the same file.
 
-### update-jira (v1.0.0)
+### update-jira (v1.1.0)
 
 Post progress updates to Jira tickets based on session work, git activity, and PRs.
 
