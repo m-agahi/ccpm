@@ -44,7 +44,7 @@
       "name": "confluence-rfc",
       "description": "Create RFC pages in Confluence following the team's established template. Supports PP and APIM spaces, Jira ticket integration, and auto-fills content from conversation context.",
       "source": "./plugins/confluence-rfc",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "author": {
         "name": "Max Agahi"
       },

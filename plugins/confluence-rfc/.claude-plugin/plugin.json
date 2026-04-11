@@ -1,0 +1,10 @@
+{
+  "name": "confluence-rfc",
+  "description": "Create RFC pages in Confluence following the team's established template. Supports multiple spaces, Jira ticket integration, and auto-fills content from conversation context.",
+  "author": {
+    "name": "Max Agahi"
+  },
+  "repository": "https://codeberg.org/maxagahi/ccpm",
+  "license": "Apache-2.0",
+  "keywords": ["confluence", "rfc", "documentation", "atlassian", "wiki"]
+}

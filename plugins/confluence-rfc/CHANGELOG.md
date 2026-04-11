@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.2] - 2026-04-11
+
+### Fixed
+
+- Added missing `.claude-plugin/plugin.json` manifest
+
 ## [1.2.1] - 2026-04-11
 
 ### Fixed
