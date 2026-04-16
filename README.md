@@ -1,6 +1,6 @@
 # ccpm — Claude Code Plugin Marketplace
 
-![plugins](https://img.shields.io/badge/plugins-4-blue)
+![plugins](https://img.shields.io/badge/plugins-5-blue)
 
 Personal plugin marketplace for [Claude Code](https://claude.ai/code).
 
@@ -130,6 +130,31 @@ chmod +x ~/.claude/hooks/git-flow-guard.sh
   }
 }
 ```
+
+### tf-naming-check (v1.0.0)
+
+Terraform naming convention checker powered by a Haiku agent.
+
+- Reads a team-editable `tf-naming-config.md` rulebook — ships with opinionated defaults based on the HashiCorp style guide
+- Project-level override: place `tf-naming-config.md` in your project root to take precedence over the installed default
+- Scans all `**/*.tf` files, skipping `.terraform/`, `vendor/`, and `.terragrunt-cache/`
+- Optional path-prefix scoping: `/tf-naming-check modules/networking`
+- Three-tier severity reporting: ERROR (wrong format), WARNING (anti-pattern), INFO (suggestion)
+
+**Default rulebook covers:** resources, variables, outputs, locals, modules, data sources, and tags — including AWS subnet/security group Name tag patterns and region-dash exceptions.
+
+**Requirements:** None — no external tools or MCP servers needed.
+
+#### Configuration
+
+The skill ships with a default config at `~/.claude/skills/tf-naming-check/tf-naming-check/tf-naming-config.md`.
+To customise rules for a project, copy it to the project root:
+
+```bash
+cp ~/.claude/skills/tf-naming-check/tf-naming-check/tf-naming-config.md ./tf-naming-config.md
+```
+
+Then edit `tf-naming-config.md` to add, remove, or adjust rules. The project-level file takes precedence automatically.
 
 ## Installation
 

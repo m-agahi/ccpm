@@ -1,0 +1,17 @@
+{
+  "name": "tf-naming-check",
+  "description": "Terraform naming convention checker. Reads a team-editable rulebook config and uses a Haiku agent to scan .tf files for naming violations, reporting findings by severity.",
+  "author": {
+    "name": "Max Agahi"
+  },
+  "repository": "https://codeberg.org/maxagahi/ccpm",
+  "license": "Apache-2.0",
+  "keywords": [
+    "terraform",
+    "naming",
+    "conventions",
+    "lint",
+    "hcl",
+    "infrastructure"
+  ]
+}
