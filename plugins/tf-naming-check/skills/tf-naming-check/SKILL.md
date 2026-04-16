@@ -14,8 +14,8 @@ Checks Terraform code against a naming convention rulebook and reports violation
 
 ## Arguments
 
-`$ARGUMENTS` — optional path prefix to limit scope (e.g. `modules/networking`).
-If omitted, scans all `.tf` files under the project root.
+`$ARGUMENTS` — optional path to scan (e.g. `modules/networking` or an absolute path).
+If omitted, scans all `.tf` files under the current working directory where Claude is running.
 
 ---
 
@@ -42,18 +42,21 @@ Do not proceed without a config.
 
 ---
 
-## Step 2: Scan for .tf files
+## Step 2: Determine scan root and find .tf files
 
-Use `Glob("**/*.tf")` from the project root. Then filter out paths containing:
+Determine the scan root:
+
+- If `$ARGUMENTS` is set, use it as the scan root (resolve relative to `pwd` if not absolute)
+- Otherwise, use `pwd` (current working directory where Claude is running)
+
+Use `Glob("**/*.tf", path=<scan-root>)`. Then filter out paths containing:
 
 - `.terraform/`
 - `vendor/`
 - `.terragrunt-cache/`
 - `.terraform.lock.hcl` (not a directory but worth noting)
 
-If `$ARGUMENTS` is set, only include files whose path starts with that prefix.
-
-Report: `Found N .tf files to check.`
+Report: `Found N .tf files to check under <scan-root>.`
 
 ---
 

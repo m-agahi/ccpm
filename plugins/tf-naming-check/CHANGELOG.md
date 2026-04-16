@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1] - 2026-04-16
+
+### Changed
+
+- Scan root defaults to current working directory (`pwd`) instead of git project root
+- `$ARGUMENTS` now sets the scan root path rather than acting as a path-prefix filter
+
 ## [1.0.0] - 2026-04-16
 
 ### Added
