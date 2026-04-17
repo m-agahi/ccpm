@@ -68,7 +68,7 @@
       "name": "tf-naming-check",
       "description": "Terraform naming convention checker. Reads a team-editable rulebook config and uses a Haiku agent to scan .tf files for naming violations, reporting findings by severity.",
       "source": "./plugins/tf-naming-check",
-      "version": "1.0.1",
+      "version": "1.1.0",
       "author": {
         "name": "Max Agahi"
       },

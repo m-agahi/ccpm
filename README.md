@@ -131,7 +131,7 @@ chmod +x ~/.claude/hooks/git-flow-guard.sh
 }
 ```
 
-### tf-naming-check (v1.0.1)
+### tf-naming-check (v1.1.0)
 
 Terraform naming convention checker powered by a Haiku agent.
 
