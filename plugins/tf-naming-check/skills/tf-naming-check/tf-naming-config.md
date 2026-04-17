@@ -27,6 +27,65 @@ Edit this file to match your team's conventions. Rules not listed here are not c
 
 ---
 
+## Block Structure — resource, module, data
+
+### Meta-argument ordering
+
+`count`, `for_each`, `provider`, `providers`, and `source` (for modules) must appear **at the top** of the block, before any other arguments. (ERROR)
+
+After the last meta-argument there must be exactly **one blank line** separating them from the remaining arguments. (WARNING)
+
+Example (correct):
+
+```hcl
+resource "aws_instance" "this" {
+  count = 2
+
+  ami           = "ami-123"
+  instance_type = "t3.micro"
+}
+```
+
+Example (wrong — `count` not at top):
+
+```hcl
+resource "aws_instance" "this" {
+  ami           = "ami-123"
+  count         = 2
+  instance_type = "t3.micro"
+}
+```
+
+### Argument key ordering
+
+All argument keys within a block must be sorted **alphabetically** (ERROR). This applies at every nesting level — nested blocks and inline maps are also sorted.
+
+### Map and list value ordering
+
+When a map literal (`{ key = value, ... }`) or list literal (`["a", "b", ...]`) is passed as a value, its keys (for maps) or elements (for lists of strings) must be sorted alphabetically (WARNING).
+
+Example (correct):
+
+```hcl
+tags = {
+  Environment = "production"
+  ManagedBy   = "terraform"
+  Name        = "my-resource"
+}
+```
+
+Example (wrong — keys not sorted):
+
+```hcl
+tags = {
+  Name        = "my-resource"
+  Environment = "production"
+  ManagedBy   = "terraform"
+}
+```
+
+---
+
 ## Resources
 
 - Labels must be `snake_case` and lowercase

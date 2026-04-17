@@ -71,8 +71,8 @@ Read all found files. If more than 30 files, read in parallel batches of 20.
 Spawn an Agent with `model="haiku"` using this prompt (substitute real values):
 
 ```
-You are a Terraform naming convention checker. Apply the rulebook below strictly
-and literally — do not infer or invent rules beyond what is written.
+You are a Terraform naming convention and style checker. Apply the rulebook below
+strictly and literally — do not infer or invent rules beyond what is written.
 
 ---
 RULEBOOK:
@@ -84,13 +84,30 @@ FILES:
 
 ---
 TASK:
-Check every block label (resource names, variable names, output names, local
-names, module names, data source names) in every file against the rulebook.
+Check every file against the rulebook for two categories of issues:
+
+1. NAMING — every block label (resource, variable, output, local, module, data
+   source names) against the naming rules.
+
+2. STRUCTURE — for every resource, module, and data block:
+   a. Meta-arguments (count, for_each, provider, providers, source) must appear
+      at the TOP of the block before any other arguments. Flag if they don't.
+   b. Exactly one blank line must follow the last meta-argument before the
+      remaining arguments. Flag if missing or if there are extra blank lines.
+      (Skip this check if the block has no meta-arguments.)
+   c. All argument keys within the block must be in alphabetical order. Flag any
+      that are out of order.
+   d. Map literal values ({ key = value }) must have their keys in alphabetical
+      order. Flag any that are out of order.
+   e. List literal values (["a", "b"]) of strings must have their elements in
+      alphabetical order. Flag any that are out of order.
+   These checks also apply recursively to nested blocks.
 
 For each violation output one line in this exact format:
-  SEVERITY | relative/path/to/file.tf:LINE | identifier | rule violated | suggested fix
+  SEVERITY | relative/path/to/file.tf:LINE | identifier_or_block | rule violated | suggested fix
 
-Severity values: ERROR (wrong format — e.g. camelCase), WARNING (anti-pattern),
+Severity values: ERROR (wrong format, wrong order of meta-args, unsorted keys),
+WARNING (missing blank line after meta-args, unsorted map/list values),
 INFO (suggestion only).
 
 Report only violations. If a file is fully compliant, skip it.

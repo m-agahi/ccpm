@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0] - 2026-04-17
+
+### Added
+
+- Block structure checks for `resource`, `module`, and `data` blocks:
+  - Meta-arguments (`count`, `for_each`, `provider`, `providers`, `source`) must appear at the top of the block (ERROR)
+  - Exactly one blank line required after the last meta-argument (WARNING)
+  - All argument keys within a block must be sorted alphabetically (ERROR)
+  - Map literal keys must be sorted alphabetically (WARNING)
+  - List literal string elements must be sorted alphabetically (WARNING)
+  - All checks apply recursively to nested blocks
+
 ## [1.0.1] - 2026-04-16
 
 ### Changed
