@@ -55,7 +55,7 @@ jobs:
         run: python3 .forgejo/scripts/check_releases.py
 
       - name: Save release plan
-        if: steps.detect.outputs.has_releases == 'true'
+        if: steps.detect.outputs.has_releases == 'true' && github.event_name != 'workflow_dispatch'
         shell: bash
         env:
           RELEASES_JSON: ${{ steps.detect.outputs.releases }}
@@ -64,7 +64,7 @@ jobs:
           printf '%s' "$RELEASES_JSON" > .ci-outputs/releases.json
 
       - name: Create tags and releases
-        if: steps.detect.outputs.has_releases == 'true'
+        if: steps.detect.outputs.has_releases == 'true' && github.event_name != 'workflow_dispatch'
         shell: bash
         env:
           FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
