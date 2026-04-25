@@ -2,6 +2,7 @@ FROM python:3.13-slim AS base
 
 LABEL maintainer="local-code-review"
 LABEL description="All-in-one scanner toolbox for local code reviews"
+LABEL version="3.8.2"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8

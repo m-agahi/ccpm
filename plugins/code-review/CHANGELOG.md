@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Dual-registry CI publish**: Release workflow now pushes images to both Codeberg and DockerHub
   when `DOCKERHUB_TOKEN` is set. Codeberg remains the canonical source; DockerHub is an additional
   mirror. If the token is absent, only Codeberg is pushed.
+- **Dockerfile version label**: Added `LABEL version="3.8.2"` to the image.
 
 ## [3.8.1] - 2026-04-02
 
