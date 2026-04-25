@@ -5,6 +5,13 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.8.3] - 2026-04-25
+
+### Infrastructure
+
+- **Bump version to trigger image build**: Ensures the Docker image is built and pushed to both
+  Codeberg and DockerHub registries for the 3.8.2 registry-switch changes.
+
 ## [3.8.2] - 2026-04-25
 
 ### Changed
