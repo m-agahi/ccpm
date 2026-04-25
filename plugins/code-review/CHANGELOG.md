@@ -5,6 +5,20 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.8.2] - 2026-04-25
+
+### Changed
+
+- **Default registry switched to DockerHub**: `container.sh` and `review-cli.py` now pull from
+  `looseking/code-review:latest` (DockerHub) instead of `codeberg.org/maxagahi/ccpm/code-review:latest`.
+  Faster pulls for most users; no setup change required.
+
+### Infrastructure
+
+- **Dual-registry CI publish**: Release workflow now pushes images to both Codeberg and DockerHub
+  when `DOCKERHUB_TOKEN` is set. Codeberg remains the canonical source; DockerHub is an additional
+  mirror. If the token is absent, only Codeberg is pushed.
+
 ## [3.8.1] - 2026-04-02
 
 ### Fixed

@@ -65,11 +65,13 @@ def main():
         sys.exit(1)
 
     registry = "codeberg.org"
+    dockerhub_token = os.environ.get("DOCKERHUB_TOKEN", "")
+    dockerhub_user = "looseking"
     nvd_api_key = os.environ.get("NVD_API_KEY", "")
     built = []
     failed = []
 
-    # Login to container registry
+    # Login to Codeberg container registry
     login = run(
         ["docker", "login", registry, "-u", registry_user, "--password-stdin"],
         input=registry_token,
@@ -79,7 +81,22 @@ def main():
     if login.returncode != 0:
         print(f"ERROR: Docker login failed: {login.stderr}", file=sys.stderr)
         sys.exit(1)
-    print("Logged in to container registry.")
+    print("Logged in to Codeberg container registry.")
+
+    # Login to DockerHub
+    if dockerhub_token:
+        dh_login = run(
+            ["docker", "login", "-u", dockerhub_user, "--password-stdin"],
+            input=dockerhub_token,
+            text=True,
+            capture_output=True,
+        )
+        if dh_login.returncode != 0:
+            print(f"ERROR: DockerHub login failed: {dh_login.stderr}", file=sys.stderr)
+            sys.exit(1)
+        print("Logged in to DockerHub.")
+    else:
+        print("WARNING: DOCKERHUB_TOKEN not set, skipping DockerHub push.", file=sys.stderr)
 
     # Detect which files changed vs previous commit (for automatic triggers).
     # workflow_dispatch always builds (manual trigger = explicit intent).
@@ -110,6 +127,9 @@ def main():
         image_versioned = f"{image_base}:{version}"
         image_latest = f"{image_base}:latest"
 
+        dh_image_versioned = f"{dockerhub_user}/{name}:{version}"
+        dh_image_latest = f"{dockerhub_user}/{name}:latest"
+
         platforms = os.environ.get("PLATFORMS", "linux/amd64")
         print(f"\nBuilding {image_versioned} for {platforms}...")
 
@@ -117,13 +137,17 @@ def main():
         if nvd_api_key:
             build_args += ["--build-arg", f"NVD_API_KEY={nvd_api_key}"]
 
+        # Collect all tags (Codeberg + DockerHub)
+        tag_args = ["-t", image_versioned, "-t", image_latest]
+        if dockerhub_token:
+            tag_args += ["-t", dh_image_versioned, "-t", dh_image_latest]
+
         if "," in platforms:
             # Multi-platform: requires buildx with --push
             build_cmd = [
                 "docker", "buildx", "build",
                 "--platform", platforms,
-                "-t", image_versioned,
-                "-t", image_latest,
+                *tag_args,
                 "--push",
                 *build_args,
                 str(dockerfile_dir),
@@ -137,8 +161,7 @@ def main():
             # Single platform: plain docker build + push
             build_cmd = [
                 "docker", "build",
-                "-t", image_versioned,
-                "-t", image_latest,
+                *tag_args,
                 *build_args,
                 str(dockerfile_dir),
             ]
@@ -153,8 +176,18 @@ def main():
                 print(f"ERROR: Push failed for {name}", file=sys.stderr)
                 failed.append(name)
                 continue
+            if dockerhub_token:
+                dh_push_v = run(["docker", "push", dh_image_versioned])
+                dh_push_l = run(["docker", "push", dh_image_latest])
+                if dh_push_v.returncode != 0 or dh_push_l.returncode != 0:
+                    print(f"ERROR: DockerHub push failed for {name}", file=sys.stderr)
+                    failed.append(name)
+                    continue
 
-        print(f"Pushed {image_versioned} and {image_latest}")
+        pushed_to = image_versioned
+        if dockerhub_token:
+            pushed_to += f" and {dh_image_versioned}"
+        print(f"Pushed {pushed_to} (+ :latest tags)")
         built.append(name)
 
     if built:

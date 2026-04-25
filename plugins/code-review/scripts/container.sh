@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-REGISTRY_IMAGE="codeberg.org/maxagahi/ccpm/code-review:latest"
+REGISTRY_IMAGE="looseking/code-review:latest"
 LOCAL_IMAGE="localhost/review-tools:latest"
 IMAGE_NAME=""
 SOURCE_MOUNT="/workspace-src"

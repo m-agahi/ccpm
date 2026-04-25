@@ -36,7 +36,7 @@ except ImportError:
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PLUGIN_ROOT / "review-tools.yml"
-REGISTRY_IMAGE = "codeberg.org/maxagahi/ccpm/code-review:latest"
+REGISTRY_IMAGE = "looseking/code-review:latest"
 LOCAL_IMAGE = "localhost/review-tools:latest"
 IMAGE_NAME = REGISTRY_IMAGE  # resolved at runtime by container.sh
 WORKSPACE = "/workspace"
