@@ -102,7 +102,7 @@ def main():
             )
             print(f"Created release: {title} ({tag})")
         except forgejo_api.APIError as e:
-            if e.status_code == 409:
+            if e.status_code in (409, 422):
                 print(f"  Release for {tag} already exists, skipping")
             else:
                 raise
