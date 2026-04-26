@@ -41,6 +41,21 @@ def extract_changelog_entry(plugin_name, version):
     return "\n".join(lines).strip()
 
 
+def create_tag(tag, sha):
+    """Create the git tag via the API. No-ops if it already exists."""
+    try:
+        forgejo_api.post(
+            forgejo_api.repo_path("/tags"),
+            {"tag_name": tag, "target": sha},
+        )
+        print(f"  Created tag: {tag}")
+    except forgejo_api.APIError as e:
+        if e.status_code in (409, 422):
+            print(f"  Tag {tag} already exists, skipping tag creation")
+        else:
+            raise
+
+
 def main():
     outputs_path = pathlib.Path(".ci-outputs/releases.json")
     if not outputs_path.exists():
@@ -69,19 +84,28 @@ def main():
 
         body = "\n\n".join(body_parts).strip()
 
-        # Create the release (Forgejo auto-creates the tag)
-        forgejo_api.post(
-            forgejo_api.repo_path("/releases"),
-            {
-                "tag_name": tag,
-                "target_commitish": sha,
-                "name": title,
-                "body": body,
-                "draft": False,
-                "prerelease": False,
-            },
-        )
-        print(f"Created release: {title} ({tag})")
+        # Explicitly create the tag first — Forgejo does not reliably auto-create
+        # tags via the releases endpoint and returns 409 "Release has no Tag" if
+        # the tag doesn't already exist when the release is created.
+        create_tag(tag, sha)
+
+        try:
+            forgejo_api.post(
+                forgejo_api.repo_path("/releases"),
+                {
+                    "tag_name": tag,
+                    "name": title,
+                    "body": body,
+                    "draft": False,
+                    "prerelease": False,
+                },
+            )
+            print(f"Created release: {title} ({tag})")
+        except forgejo_api.APIError as e:
+            if e.status_code == 409:
+                print(f"  Release for {tag} already exists, skipping")
+            else:
+                raise
 
 
 if __name__ == "__main__":
