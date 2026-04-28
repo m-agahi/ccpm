@@ -113,6 +113,59 @@ class TestRequest(unittest.TestCase):
         self.assertIn("exceeds", str(ctx.exception))
 
 
+class TestRetry(unittest.TestCase):
+    def _mock_response(self, data):
+        body = json.dumps(data).encode()
+        resp = MagicMock()
+        resp.read.return_value = body
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    def _http_error(self, code):
+        return urllib.error.HTTPError(
+            "http://x", code, "Error", {}, io.BytesIO(b"oops")
+        )
+
+    @patch.dict(os.environ, {"FORGEJO_TOKEN": "tok"})
+    @patch("lib.forgejo_api.time.sleep")
+    @patch("lib.forgejo_api.urllib.request.urlopen")
+    def test_5xx_is_retried_and_succeeds_on_second_attempt(
+        self, mock_urlopen, mock_sleep
+    ):
+        mock_urlopen.side_effect = [
+            self._http_error(502),
+            self._mock_response({"ok": True}),
+        ]
+        result = forgejo_api.get("/repos/o/r")
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(mock_urlopen.call_count, 2)
+        mock_sleep.assert_called_once_with(forgejo_api._RETRY_DELAYS[0])
+
+    @patch.dict(os.environ, {"FORGEJO_TOKEN": "tok"})
+    @patch("lib.forgejo_api.time.sleep")
+    @patch("lib.forgejo_api.urllib.request.urlopen")
+    def test_5xx_exhausts_all_retries_and_raises(self, mock_urlopen, mock_sleep):
+        total_attempts = len(forgejo_api._RETRY_DELAYS) + 1
+        mock_urlopen.side_effect = [self._http_error(503)] * total_attempts
+        with self.assertRaises(forgejo_api.APIError) as ctx:
+            forgejo_api.get("/repos/o/r")
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(mock_urlopen.call_count, total_attempts)
+        self.assertEqual(mock_sleep.call_count, len(forgejo_api._RETRY_DELAYS))
+
+    @patch.dict(os.environ, {"FORGEJO_TOKEN": "tok"})
+    @patch("lib.forgejo_api.time.sleep")
+    @patch("lib.forgejo_api.urllib.request.urlopen")
+    def test_4xx_is_not_retried(self, mock_urlopen, mock_sleep):
+        mock_urlopen.side_effect = self._http_error(404)
+        with self.assertRaises(forgejo_api.APIError) as ctx:
+            forgejo_api.get("/repos/o/r")
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(mock_urlopen.call_count, 1)
+        mock_sleep.assert_not_called()
+
+
 class TestUrlConstruction(unittest.TestCase):
     @patch.dict(
         os.environ,

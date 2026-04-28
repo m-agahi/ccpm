@@ -3,11 +3,13 @@
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 
 API_BASE = os.environ.get("FORGEJO_API_BASE", "https://codeberg.org/api/v1")
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024  # 10 MiB
+_RETRY_DELAYS = (2, 4)  # seconds to wait before 2nd and 3rd attempt on 5xx
 
 
 class APIError(RuntimeError):
@@ -36,7 +38,11 @@ def _repo():
 
 
 def _request(method, path, body=None, token=None):
-    """Make an authenticated API request. Returns parsed JSON or None."""
+    """Make an authenticated API request. Returns parsed JSON or None.
+
+    Retries up to len(_RETRY_DELAYS) times on 5xx responses with delays
+    defined by _RETRY_DELAYS before giving up and raising APIError.
+    """
     url = f"{API_BASE}{path}" if path.startswith("/") else f"{API_BASE}/{path}"
     if not url.startswith(API_BASE):
         raise ValueError(f"Refusing request to URL outside API_BASE: {url!r}")
@@ -46,17 +52,27 @@ def _request(method, path, body=None, token=None):
     }
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raise RuntimeError(
-                    f"API {method} {url} response exceeds {MAX_RESPONSE_BYTES} bytes"
-                )
-            return json.loads(raw) if raw else None
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        raise APIError(method, url, e.code, error_body[:500]) from e
+
+    last_err = None
+    for delay in (*_RETRY_DELAYS, None):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise RuntimeError(
+                        f"API {method} {url} response exceeds {MAX_RESPONSE_BYTES} bytes"
+                    )
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+            api_err = APIError(method, url, e.code, error_body[:500])
+            if e.code < 500 or delay is None:
+                raise api_err from e
+            last_err = api_err
+        if delay is not None:
+            time.sleep(delay)
+
+    raise last_err  # all retries exhausted
 
 
 def get(path, token=None):
