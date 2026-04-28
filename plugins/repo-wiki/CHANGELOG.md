@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.1] - 2026-04-28
+
+### Changed
+
+- Minor internal update
+
 ## [1.0.0] - 2026-04-27
 
 ### Added
