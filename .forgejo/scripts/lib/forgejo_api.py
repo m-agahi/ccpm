@@ -75,6 +75,40 @@ def delete(path, token=None):
     return _request("DELETE", path, token=token)
 
 
+def upload_asset(release_id, file_path, asset_name, token=None):
+    """Upload a binary file as a release asset (multipart/form-data)."""
+    import pathlib
+    import uuid
+
+    url = f"{API_BASE}{repo_path(f'/releases/{release_id}/assets')}?name={asset_name}"
+    if not url.startswith(API_BASE):
+        raise ValueError(f"Refusing request to URL outside API_BASE: {url!r}")
+
+    boundary = uuid.uuid4().hex
+    file_bytes = pathlib.Path(file_path).read_bytes()
+
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="attachment"; filename="{asset_name}"\r\n'
+        f"Content-Type: application/octet-stream\r\n"
+        f"\r\n"
+    ).encode() + file_bytes + f"\r\n--{boundary}--\r\n".encode()
+
+    headers = {
+        "Authorization": f"Bearer {token or _token()}",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Content-Length": str(len(body)),
+    }
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            raw = resp.read(MAX_RESPONSE_BYTES + 1)
+            return json.loads(raw) if raw else None
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+        raise APIError("POST", url, e.code, error_body[:500]) from e
+
+
 def repo_path(suffix=""):
     """Build /repos/{owner}/{repo}{suffix} path."""
     return f"/repos/{_repo()}{suffix}"

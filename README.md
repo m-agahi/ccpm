@@ -1,6 +1,6 @@
 # ccpm — Claude Code Plugin Marketplace
 
-![plugins](https://img.shields.io/badge/plugins-5-blue)
+![plugins](https://img.shields.io/badge/plugins-6-blue)
 
 Personal plugin marketplace for [Claude Code](https://claude.ai/code).
 

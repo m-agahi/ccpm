@@ -1,0 +1,17 @@
+{
+  "name": "repo-wiki",
+  "description": "Incremental, merge-safe repository documentation system. Generates wiki pages under .local-review/wiki/ using hash-based change detection, preserving manual notes and avoiding full overwrites.",
+  "author": {
+    "name": "Max Agahi"
+  },
+  "repository": "https://codeberg.org/maxagahi/ccpm",
+  "license": "Apache-2.0",
+  "keywords": [
+    "documentation",
+    "wiki",
+    "incremental",
+    "repo-analysis",
+    "hash",
+    "merge-safe"
+  ]
+}
