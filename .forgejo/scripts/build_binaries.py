@@ -38,11 +38,12 @@ def find_release_id(tag):
         return None
 
 
-def build_binary(cargo_toml, target_dir):
+def build_binary(cargo_toml):
     """Compile a release binary. Returns path to the binary or None on failure."""
+    indexer_dir = pathlib.Path(cargo_toml).resolve().parent
     result = run(
-        ["cargo", "build", "--release", "--manifest-path", str(cargo_toml)],
-        cwd=pathlib.Path(cargo_toml).parent,
+        ["cargo", "build", "--release"],
+        cwd=indexer_dir,
     )
     if result.returncode != 0:
         return None
@@ -53,7 +54,7 @@ def build_binary(cargo_toml, target_dir):
         if line.strip().startswith("name") and "=" in line:
             bin_name = line.split("=", 1)[1].strip().strip('"')
             break
-    binary = target_dir / "release" / bin_name
+    binary = indexer_dir / "target" / "release" / bin_name
     if not binary.exists():
         print(f"  ERROR: expected binary not found at {binary}", file=sys.stderr)
         return None
@@ -90,8 +91,7 @@ def main():
 
         print(f"\nBuilding binary for {name} v{version}...")
 
-        target_dir = cargo_toml.parent / "target"
-        binary = build_binary(cargo_toml, target_dir)
+        binary = build_binary(cargo_toml)
         if binary is None:
             failed.append(name)
             continue
