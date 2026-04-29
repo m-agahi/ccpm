@@ -87,7 +87,7 @@
       "name": "repo-wiki",
       "description": "Incremental, merge-safe repository documentation system. Generates wiki pages under .local-review/wiki/ using hash-based change detection, preserving manual notes and avoiding full overwrites.",
       "source": "./plugins/repo-wiki",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "author": {
         "name": "Max Agahi"
       },
