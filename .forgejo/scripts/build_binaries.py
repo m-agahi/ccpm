@@ -8,15 +8,15 @@ as an asset to the matching Forgejo release.
 Asset naming: <plugin-name>-indexer-linux-amd64 (or -arm64 based on PLATFORMS env)
 """
 
+import json
 import os
 import pathlib
 import subprocess
 import sys
+import urllib.parse
 
 sys.path.insert(0, os.path.dirname(__file__))
 from lib import forgejo_api
-
-import json
 
 
 def run(cmd, **kwargs):
@@ -30,8 +30,9 @@ def run(cmd, **kwargs):
 
 def find_release_id(tag):
     """Return the Forgejo release ID for a given tag, or None if not found."""
+    encoded_tag = urllib.parse.quote(tag, safe="")
     try:
-        release = forgejo_api.get(forgejo_api.repo_path(f"/releases/tags/{tag}"))
+        release = forgejo_api.get(forgejo_api.repo_path(f"/releases/tags/{encoded_tag}"))
         return release["id"] if release else None
     except forgejo_api.APIError as e:
         print(f"  WARNING: could not find release for tag {tag!r}: {e}", file=sys.stderr)
