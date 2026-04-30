@@ -1110,7 +1110,11 @@ def cmd_run_agents(args):
             parsed = _parse_claude_output(stdout)
             cost = parsed.get("total_cost_usd", 0) if parsed else 0
 
-            status = "ok" if proc.returncode == 0 else "failed"
+            returncode = proc.returncode
+            # claude -p exits 0 even on auth/API errors; check is_error in JSON
+            if returncode == 0 and parsed and parsed.get("is_error"):
+                returncode = 1
+            status = "ok" if returncode == 0 else "failed"
             seq_results[name] = {
                 "status": status,
                 "cost": cost,
@@ -1399,6 +1403,9 @@ def _collect_finished(processes, results, active):
             if item["type"] == "agent":
                 parsed = _parse_claude_output(stdout)
                 cost = parsed.get("total_cost_usd", 0) if parsed else 0
+                # claude -p exits 0 even on auth/API errors; check is_error in JSON
+                if ret == 0 and parsed and parsed.get("is_error"):
+                    ret = 1
             else:
                 parsed = None
                 cost = 0

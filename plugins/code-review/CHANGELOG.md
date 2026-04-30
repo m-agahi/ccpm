@@ -5,6 +5,17 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.0] - 2026-04-30
+
+### Fixed
+
+- **Container auth**: `container.sh` now mounts `~/.claude.json` and `~/.claude/.credentials.json`
+  independently rather than requiring both to exist simultaneously. The legacy API key fallback no
+  longer excludes `sk-ant-oat*` tokens, fixing auth on OAuth-only setups.
+- **Silent auth failures**: `review-cli.py` now checks `is_error` in `claude -p` JSON output for
+  both parallel and sequential agent paths. Auth errors (exit 0 but `"is_error": true`) are now
+  treated as failures, keeping the container alive for debugging and surfacing the real error.
+
 ## [3.8.3] - 2026-04-25
 
 ### Infrastructure

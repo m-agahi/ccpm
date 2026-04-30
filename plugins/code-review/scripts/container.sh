@@ -106,20 +106,27 @@ cmd_start() {
     # Explicit API key set — use it directly
     extra_args+=(-e "ANTHROPIC_API_KEY=${api_key}")
     auth_ok=true
-  elif [[ -f "${HOME}/.claude.json" && -f "${HOME}/.claude/.credentials.json" ]]; then
-    # Mount OAuth session + credentials (Claude Code v2.x needs both for auth)
-    extra_args+=(-v "${HOME}/.claude.json:/root/.claude.json:ro")
-    extra_args+=(-v "${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro")
-    auth_ok=true
   else
-    # Legacy fallback: extract primaryApiKey from ~/.claude/config.json
-    local claude_config="${HOME}/.claude/config.json"
-    if [[ -f "$claude_config" ]]; then
-      api_key=$(python3 -c "import json; print(json.load(open('$claude_config')).get('primaryApiKey',''))" 2>/dev/null) || api_key=""
-    fi
-    if [[ -n "$api_key" && "$api_key" != sk-ant-oat* ]]; then
-      extra_args+=(-e "ANTHROPIC_API_KEY=${api_key}")
+    # OAuth session files — mount whichever exist independently (Claude Code v2.x)
+    if [[ -f "${HOME}/.claude.json" ]]; then
+      extra_args+=(-v "${HOME}/.claude.json:/root/.claude.json:ro")
       auth_ok=true
+    fi
+    if [[ -f "${HOME}/.claude/.credentials.json" ]]; then
+      extra_args+=(-v "${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro")
+      auth_ok=true
+    fi
+
+    if [[ "$auth_ok" != true ]]; then
+      # Legacy fallback: extract primaryApiKey from ~/.claude/config.json
+      local claude_config="${HOME}/.claude/config.json"
+      if [[ -f "$claude_config" ]]; then
+        api_key=$(python3 -c "import json; print(json.load(open('$claude_config')).get('primaryApiKey',''))" 2>/dev/null) || api_key=""
+      fi
+      if [[ -n "$api_key" ]]; then
+        extra_args+=(-e "ANTHROPIC_API_KEY=${api_key}")
+        auth_ok=true
+      fi
     fi
   fi
 
