@@ -5,6 +5,13 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.1] - 2026-04-30
+
+### Fixed
+
+- **Docker build**: Added `--fix-missing` to `apt-get install` to handle transient 404s from
+  `debian-security` (e.g. `linux-libc-dev` version mismatch between index and mirror).
+
 ## [3.9.0] - 2026-04-30
 
 ### Fixed

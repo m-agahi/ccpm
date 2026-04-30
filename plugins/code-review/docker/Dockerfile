@@ -2,7 +2,7 @@ FROM python:3.13-slim AS base
 
 LABEL maintainer="local-code-review"
 LABEL description="All-in-one scanner toolbox for local code reviews"
-LABEL version="3.9.0"
+LABEL version="3.9.1"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
@@ -29,7 +29,7 @@ WORKDIR /workspace
 # System dependencies + Node.js 22 LTS + PHP 8.4 + Ruby (single apt layer)
 # ============================================================
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends --fix-missing \
        curl wget git unzip xz-utils ca-certificates gnupg jq \
        build-essential pkg-config \
        libssl-dev \
