@@ -142,35 +142,64 @@ def main():
         if dockerhub_token:
             tag_args += ["-t", dh_image_versioned, "-t", dh_image_latest]
 
-        # Registry-based layer cache: use DockerHub if available, else Codeberg.
-        # mode=min caches only exported layers; ignore-error=true skips cache on
-        # write failures (e.g. missing push credentials on first run).
-        cache_ref = (
-            f"{dockerhub_user}/{name}:buildcache"
-            if dockerhub_token
-            else f"{image_base}:buildcache"
-        )
-        cache_args = [
-            "--cache-from", f"type=registry,ref={cache_ref}",
-            "--cache-to", f"type=registry,ref={cache_ref},mode=min,ignore-error=true",
-        ]
-
-        # Unified buildx path for both single- and multi-platform.
-        # buildx is always installed in the CI container (see release.yaml).
-        build_cmd = [
-            "docker", "buildx", "build",
-            "--platform", platforms,
-            *tag_args,
-            "--push",
-            *cache_args,
-            *build_args,
-            str(dockerfile_dir),
-        ]
-        build = run(build_cmd)
-        if build.returncode != 0:
-            print(f"ERROR: Failed to build {name}", file=sys.stderr)
-            failed.append(name)
-            continue
+        if "," in platforms:
+            # Multi-platform: requires buildx with --push.
+            # Registry cache works reliably here because the multiarch builder
+            # (docker-container driver) handles credential forwarding via BuildKit.
+            cache_ref = (
+                f"{dockerhub_user}/{name}:buildcache"
+                if dockerhub_token
+                else f"{image_base}:buildcache"
+            )
+            cache_args = [
+                "--cache-from", f"type=registry,ref={cache_ref}",
+                "--cache-to", f"type=registry,ref={cache_ref},mode=min,ignore-error=true",
+            ]
+            build_cmd = [
+                "docker", "buildx", "build",
+                "--platform", platforms,
+                *tag_args,
+                "--push",
+                *cache_args,
+                *build_args,
+                str(dockerfile_dir),
+            ]
+            build = run(build_cmd)
+            if build.returncode != 0:
+                print(f"ERROR: Failed to build {name}", file=sys.stderr)
+                failed.append(name)
+                continue
+        else:
+            # Single-platform: plain docker build + explicit per-registry pushes.
+            # This is more reliable with DOCKER_HOST=tcp:// setups where buildx
+            # credential forwarding for multi-registry --push can be unreliable
+            # (the docker-container builder may not receive DockerHub credentials).
+            build_cmd = [
+                "docker", "build",
+                *tag_args,
+                *build_args,
+                str(dockerfile_dir),
+            ]
+            build = run(build_cmd)
+            if build.returncode != 0:
+                print(f"ERROR: Failed to build {name}", file=sys.stderr)
+                failed.append(name)
+                continue
+            push_failed = False
+            for tag in [image_versioned, image_latest]:
+                if run(["docker", "push", tag]).returncode != 0:
+                    print(f"ERROR: Push failed for {tag}", file=sys.stderr)
+                    push_failed = True
+                    break
+            if not push_failed and dockerhub_token:
+                for tag in [dh_image_versioned, dh_image_latest]:
+                    if run(["docker", "push", tag]).returncode != 0:
+                        print(f"ERROR: DockerHub push failed for {tag}", file=sys.stderr)
+                        push_failed = True
+                        break
+            if push_failed:
+                failed.append(name)
+                continue
 
         pushed_to = image_versioned
         if dockerhub_token:
