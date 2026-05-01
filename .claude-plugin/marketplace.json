@@ -12,7 +12,7 @@
       "name": "code-review",
       "description": "Comprehensive local code review with static analysis, security scanning, dependency auditing, container scanning (Trivy), SonarQube, and best practices enforcement. All analysis is local — never pushes to remote.",
       "source": "./plugins/code-review",
-      "version": "3.9.2",
+      "version": "3.9.3",
       "author": {
         "name": "Max Agahi"
       },

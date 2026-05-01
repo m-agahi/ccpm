@@ -5,6 +5,14 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.3] - 2026-05-01
+
+### Fixed
+
+- **Dockerfile BuildKit parse error**: Inline comment after `LABEL version=` caused `docker buildx
+build` (BuildKit) to fail with "can't find = in #". Moved comment to its own line. The legacy
+  builder was lenient; BuildKit's strict parser is not.
+
 ## [3.9.2] - 2026-05-01
 
 ### Fixed

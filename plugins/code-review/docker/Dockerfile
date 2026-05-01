@@ -287,6 +287,7 @@ RUN echo "=== Tool Versions ===" \
     && echo "=== All tools verified ==="
 
 # Review helper scripts (baked in — no need to copy at runtime)
-LABEL version="3.9.2" # this is just to allow triggering new builds
+# Bump version label to trigger a new image build.
+LABEL version="3.9.3"
 COPY scripts/ /opt/review-scripts/
 ENTRYPOINT ["sleep", "infinity"]
