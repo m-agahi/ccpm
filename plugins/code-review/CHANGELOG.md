@@ -5,6 +5,16 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.4] - 2026-05-01
+
+### Fixed
+
+- **DockerHub push on single-platform CI**: Restored explicit per-registry `docker push` for
+  single-platform builds. The previous unified `docker buildx build --push` path silently skipped
+  DockerHub when running with `DOCKER_HOST=tcp://` because the `docker-container` builder does not
+  reliably forward DockerHub credentials in that setup. Multi-platform builds retain the buildx
+  path with registry cache.
+
 ## [3.9.3] - 2026-05-01
 
 ### Fixed
