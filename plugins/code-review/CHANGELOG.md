@@ -5,6 +5,23 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.5] - 2026-05-01
+
+### Fixed
+
+- **Opus agents die on large codebases**: Default opus budget raised from $3 to $10. At $15/MTok
+  input, $3 is exhausted after ~200k tokens of context — easily hit when scanning 95+ Python files
+  plus pre-computed artifacts (semgrep.json, trivy output, etc.). $10 covers ~650k input tokens,
+  sufficient for large real-world repos.
+
+- **Agents abort silently with 0 turns on projects with hooks**: `claude -p` inside the container
+  loaded the reviewed project's `.claude/settings.json` (copied to `/workspace/`), which may contain
+  hooks that reference absolute host-side paths (e.g. yadgar, OMC, or any custom hook setup). A
+  failing `UserPromptSubmit` hook causes Claude Code 2.1+ to exit with 0 turns and 0 API calls —
+  exit code 0 — so the failure was invisible. Fixed by adding `--bare` to the `claude -p` invocation,
+  which skips hook loading and CLAUDE.md discovery entirely. Affects any machine whose reviewed
+  project has project-level hooks, regardless of OS or distro.
+
 ## [3.9.4] - 2026-05-01
 
 ### Fixed

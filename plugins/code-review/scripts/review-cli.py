@@ -615,7 +615,7 @@ def cmd_generate_prompts(args):
 
     # Build execution plan (v3.0.0 format)
     # Budget per model: opus agents get more, haiku agents get less
-    model_budgets = {"opus": 3, "sonnet": 2, "haiku": 1}
+    model_budgets = {"opus": 10, "sonnet": 2, "haiku": 1}
     parallel_items = []
     for agent in all_agents:
         model = agent.get("model", "sonnet")
@@ -695,8 +695,12 @@ def _build_claude_cmd(cname, item):
 
     # Note: --dangerously-skip-permissions cannot be used as root.
     # Permissions are pre-configured in /root/.claude/settings.json (baked into image).
+    # --bare: skip hook loading and CLAUDE.md discovery. Projects that have a
+    # .claude/settings.json with hooks (e.g. yadgar, OMC) reference host-side paths
+    # that don't exist inside the container. A failing UserPromptSubmit hook causes
+    # claude -p to abort silently with 0 turns in Claude Code 2.1+.
     claude_inner = (
-        f"cat {prompt_path} | claude -p --model {model} "
+        f"cat {prompt_path} | claude -p --bare --model {model} "
         f"--allowedTools 'Bash(*)' 'Read(*)' "
         f"--output-format json "
         f"--max-budget-usd {budget} "
