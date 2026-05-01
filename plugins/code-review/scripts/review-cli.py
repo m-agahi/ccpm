@@ -913,6 +913,38 @@ def _stop_sonarqube(cname):
         run(["docker", "rm", "-f", sq_name], check=False)
 
 
+def _check_container_auth(cname):
+    """Check if Claude Code credentials are available in the container.
+
+    Returns None if credentials are present, or an error string if missing.
+    Fast/free: no API call, just checks for credential files or ANTHROPIC_API_KEY.
+    File presence is the most common failure; actual auth validity is caught later
+    by the parsed-output check in _collect_finished.
+    """
+    result = run(
+        [
+            "docker",
+            "exec",
+            cname,
+            "bash",
+            "-c",
+            "test -n \"$ANTHROPIC_API_KEY\" || "
+            "test -s /root/.claude.json || "
+            "test -s /root/.claude/.credentials.json",
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        return (
+            "No Claude Code credentials found in container.\n"
+            "  Fix one of:\n"
+            "    1. Set ANTHROPIC_API_KEY before running the review, OR\n"
+            "    2. Log in with 'claude' on the host so ~/.claude.json or\n"
+            "       ~/.claude/.credentials.json exists (created automatically on login)"
+        )
+    return None
+
+
 def cmd_run_agents(args):
     """Execute agents inside the container via claude -p."""
     project_dir = review_dir(args)
@@ -937,6 +969,12 @@ def cmd_run_agents(args):
         ["docker", "cp", f"{prompts_src}/.", f"{cname}:{REVIEW_WORK}/prompts/"],
         check=False,
     )
+
+    # 1.5. Pre-flight auth check — fail fast before launching agents
+    auth_err = _check_container_auth(cname)
+    if auth_err:
+        console.print(f"\n[bold red]Auth check failed:[/bold red]\n{auth_err}\n")
+        sys.exit(1)
 
     # 2. Check if sonarqube-scanner is in the plan and start SonarQube if needed
     sq_url = None
@@ -1038,6 +1076,7 @@ def cmd_run_agents(args):
     # 6. Check results (probe inside container)
     console.print("[bold]Checking results...[/bold]")
     _check_findings(cname, plan)
+    _print_agent_diagnostics(results)
 
     # 7. Run sequential items
     sequential_items = plan.get("sequential", [])
@@ -1105,21 +1144,33 @@ def cmd_run_agents(args):
                 )
                 time.sleep(0.5)
 
-            stdout, _ = proc.communicate()
+            stdout, stderr = proc.communicate()
             duration = time.time() - item_start
             parsed = _parse_claude_output(stdout)
             cost = parsed.get("total_cost_usd", 0) if parsed else 0
 
             returncode = proc.returncode
-            # claude -p exits 0 even on auth/API errors; check is_error in JSON
-            if returncode == 0 and parsed and parsed.get("is_error"):
-                returncode = 1
+            if returncode == 0:
+                if parsed is None:
+                    # No valid JSON output — claude failed auth or crashed.
+                    # claude -p exits 0 even on auth/API errors.
+                    returncode = 1
+                elif parsed.get("is_error"):
+                    returncode = 1
             status = "ok" if returncode == 0 else "failed"
+
+            error_output = None
+            if parsed is None and returncode != 0:
+                raw = ((stdout or "") + (stderr or "")).strip()
+                if raw:
+                    error_output = raw[:500]
+
             seq_results[name] = {
                 "status": status,
                 "cost": cost,
                 "duration": duration,
                 "output": parsed,
+                "error_output": error_output,
             }
             results[name] = seq_results[name]
 
@@ -1145,6 +1196,7 @@ def cmd_run_agents(args):
 
     # 8. Update cost manifest with sequential agents
     _write_cost_manifest(lr, results, plan)
+    _print_agent_diagnostics(seq_results)
 
     # 9. Stop SonarQube container (no longer needed after agents finish)
     if sq_url:
@@ -1403,18 +1455,31 @@ def _collect_finished(processes, results, active):
             if item["type"] == "agent":
                 parsed = _parse_claude_output(stdout)
                 cost = parsed.get("total_cost_usd", 0) if parsed else 0
-                # claude -p exits 0 even on auth/API errors; check is_error in JSON
-                if ret == 0 and parsed and parsed.get("is_error"):
-                    ret = 1
+                if ret == 0:
+                    if parsed is None:
+                        # No valid JSON output — claude failed auth or crashed.
+                        # claude -p exits 0 even on auth/API errors, so we must
+                        # check the output to distinguish success from silent failure.
+                        ret = 1
+                    elif parsed.get("is_error"):
+                        ret = 1
             else:
                 parsed = None
                 cost = 0
+
+            # Capture raw output for diagnostics when no JSON was produced
+            error_output = None
+            if parsed is None and ret != 0:
+                raw = ((stdout or "") + (stderr or "")).strip()
+                if raw:
+                    error_output = raw[:500]
 
             results[name] = {
                 "status": "ok" if ret == 0 else "failed",
                 "cost": cost,
                 "duration": duration,
                 "output": parsed,
+                "error_output": error_output,
             }
             active.discard(name)
 
@@ -1489,6 +1554,25 @@ def _check_findings(cname, plan):
         print(f"  \033[32mPassed:\033[0m {len(passed)} — {', '.join(passed)}")
     if failed:
         print(f"  \033[31mMissing findings:\033[0m {len(failed)} — {', '.join(failed)}")
+
+
+def _print_agent_diagnostics(results):
+    """Print raw error output for agents that failed without producing JSON.
+
+    Called after the parallel table closes so it doesn't disrupt the Live display.
+    Helps diagnose auth failures where claude outputs plain-text errors.
+    """
+    shown_header = False
+    for name, res in results.items():
+        error_output = res.get("error_output")
+        if not error_output:
+            continue
+        if not shown_header:
+            print("\n\033[33mAgent failure output (auth errors, crashes):\033[0m")
+            shown_header = True
+        print(f"\n  \033[31m{name}:\033[0m")
+        for line in error_output.splitlines()[:8]:
+            print(f"    {line}")
 
 
 def _findings_key(agent_name):

@@ -142,47 +142,35 @@ def main():
         if dockerhub_token:
             tag_args += ["-t", dh_image_versioned, "-t", dh_image_latest]
 
-        if "," in platforms:
-            # Multi-platform: requires buildx with --push
-            build_cmd = [
-                "docker", "buildx", "build",
-                "--platform", platforms,
-                *tag_args,
-                "--push",
-                *build_args,
-                str(dockerfile_dir),
-            ]
-            build = run(build_cmd)
-            if build.returncode != 0:
-                print(f"ERROR: Failed to build {name}", file=sys.stderr)
-                failed.append(name)
-                continue
-        else:
-            # Single platform: plain docker build + push
-            build_cmd = [
-                "docker", "build",
-                *tag_args,
-                *build_args,
-                str(dockerfile_dir),
-            ]
-            build = run(build_cmd)
-            if build.returncode != 0:
-                print(f"ERROR: Failed to build {name}", file=sys.stderr)
-                failed.append(name)
-                continue
-            push_v = run(["docker", "push", image_versioned])
-            push_l = run(["docker", "push", image_latest])
-            if push_v.returncode != 0 or push_l.returncode != 0:
-                print(f"ERROR: Push failed for {name}", file=sys.stderr)
-                failed.append(name)
-                continue
-            if dockerhub_token:
-                dh_push_v = run(["docker", "push", dh_image_versioned])
-                dh_push_l = run(["docker", "push", dh_image_latest])
-                if dh_push_v.returncode != 0 or dh_push_l.returncode != 0:
-                    print(f"ERROR: DockerHub push failed for {name}", file=sys.stderr)
-                    failed.append(name)
-                    continue
+        # Registry-based layer cache: use DockerHub if available, else Codeberg.
+        # mode=min caches only exported layers; ignore-error=true skips cache on
+        # write failures (e.g. missing push credentials on first run).
+        cache_ref = (
+            f"{dockerhub_user}/{name}:buildcache"
+            if dockerhub_token
+            else f"{image_base}:buildcache"
+        )
+        cache_args = [
+            "--cache-from", f"type=registry,ref={cache_ref}",
+            "--cache-to", f"type=registry,ref={cache_ref},mode=min,ignore-error=true",
+        ]
+
+        # Unified buildx path for both single- and multi-platform.
+        # buildx is always installed in the CI container (see release.yaml).
+        build_cmd = [
+            "docker", "buildx", "build",
+            "--platform", platforms,
+            *tag_args,
+            "--push",
+            *cache_args,
+            *build_args,
+            str(dockerfile_dir),
+        ]
+        build = run(build_cmd)
+        if build.returncode != 0:
+            print(f"ERROR: Failed to build {name}", file=sys.stderr)
+            failed.append(name)
+            continue
 
         pushed_to = image_versioned
         if dockerhub_token:

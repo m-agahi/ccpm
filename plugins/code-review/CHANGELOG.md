@@ -5,6 +5,22 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.2] - 2026-05-01
+
+### Fixed
+
+- **False-success on auth failure**: `review-cli.py` now treats `parsed=None` (no valid JSON from
+  `claude -p`) as a hard failure in both parallel and sequential agent loops. Previously, agents
+  that exited 0 with no JSON output (e.g. auth errors that emit plain text) were silently marked
+  as passed.
+- **Pre-flight auth check**: Added `_check_container_auth` that runs before any agent is launched.
+  It checks for `ANTHROPIC_API_KEY`, `~/.claude.json`, or `~/.claude/.credentials.json` inside the
+  container and exits early with a clear remediation message rather than letting all agents run and
+  silently succeed.
+- **Auth error diagnostics**: When an agent fails with no JSON output, the first 500 chars of
+  stdout+stderr are captured and printed via `_print_agent_diagnostics` so the raw error (e.g.
+  "Not logged in", "Invalid API key") is visible without needing to exec into the container.
+
 ## [3.9.1] - 2026-04-30
 
 ### Fixed

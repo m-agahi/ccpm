@@ -6,7 +6,7 @@ Personal plugin marketplace for [Claude Code](https://claude.ai/code).
 
 ## Plugins
 
-### code-review (v3.9.1)
+### code-review (v3.9.2)
 
 Comprehensive local code review with 12 specialized agents. All analysis runs locally inside a Docker container — nothing is pushed to remote.
 

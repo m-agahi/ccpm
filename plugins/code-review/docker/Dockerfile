@@ -2,7 +2,6 @@ FROM python:3.13-slim AS base
 
 LABEL maintainer="local-code-review"
 LABEL description="All-in-one scanner toolbox for local code reviews"
-LABEL version="3.9.1"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
@@ -288,6 +287,6 @@ RUN echo "=== Tool Versions ===" \
     && echo "=== All tools verified ==="
 
 # Review helper scripts (baked in — no need to copy at runtime)
+LABEL version="3.9.2" # this is just to allow triggering new builds
 COPY scripts/ /opt/review-scripts/
-
 ENTRYPOINT ["sleep", "infinity"]
