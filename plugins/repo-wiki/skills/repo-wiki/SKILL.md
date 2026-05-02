@@ -301,6 +301,14 @@ DEPRECATED:  0 entities
 Re-run deletion detection with Option B (delete files) instead of Option A.
 Requires explicit user confirmation before deleting.
 
+### `export-yadgar`
+
+Export all wiki pages and IR files from `.local-review/` to Yadgar's file
+queue. Works whether the Yadgar service is running or not — the queue drainer
+processes entries when the service is next available.
+
+Also runs automatically at the end of `update` when Yadgar is detected.
+
 ---
 
 ## Pipeline Orchestration
@@ -313,6 +321,7 @@ Full recommended pipeline order:
 3. synthesis      → prose descriptions per entity
 4. merge          → this skill (repo-wiki update)
 5. diagrams       → update diagrams.md
+6. yadgar export  → queue wiki + IR entries to Yadgar (if installed)
 ```
 
 ### Running the indexer (step 1)
@@ -328,6 +337,135 @@ merge phase to drive wiki generation.
 
 The skill can be run at step 4 regardless of whether earlier stages used the
 Rust indexer or a Python/other tool — as long as the IR includes `hash` fields.
+
+---
+
+## Yadgar Integration
+
+When Yadgar is installed on the system (detected by `~/.yadgar/` or
+`$YADGAR_DATA_DIR` existing), export wiki and IR output to Yadgar's durable
+file queue. The queue drainer picks up entries the next time the service runs —
+no live connection required.
+
+### Detection
+
+```bash
+YADGAR_DATA="${YADGAR_DATA_DIR:-$HOME/.yadgar}"
+if [ -d "$YADGAR_DATA" ]; then
+  echo "Yadgar detected at $YADGAR_DATA — will export"
+fi
+```
+
+### Export Script
+
+Run after `update` completes (or standalone via `export-yadgar`):
+
+````bash
+python3 << 'YADGAR_EXPORT'
+import json, os, sys, time, uuid
+from pathlib import Path
+
+yadgar_base = Path(os.environ.get("YADGAR_DATA_DIR", Path.home() / ".yadgar"))
+if not yadgar_base.exists():
+    print("Yadgar not detected — skipping export")
+    sys.exit(0)
+
+queue_dir = yadgar_base / "queue"
+queue_dir.mkdir(parents=True, exist_ok=True)
+
+wiki_dir = Path(".local-review/wiki")
+ir_dir   = Path(".local-review/ir")
+count    = 0
+
+def enqueue(op: str, payload: dict) -> None:
+    global count
+    record_id = str(uuid.uuid4())
+    data  = {"op": op, "id": record_id, "payload": payload, "ts": time.time()}
+    fname = f"{int(time.time() * 1000):016d}_{record_id}.json"
+    tmp   = queue_dir / (fname + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False))
+    tmp.rename(queue_dir / fname)  # atomic on POSIX
+    count += 1
+
+def parse_frontmatter(text: str) -> dict:
+    if not text.startswith("---"):
+        return {}
+    try:
+        end = text.index("---", 3)
+    except ValueError:
+        return {}
+    fm = {}
+    for line in text[3:end].strip().splitlines():
+        if ":" in line:
+            k, _, v = line.partition(":")
+            fm[k.strip()] = v.strip()
+    return fm
+
+# --- wiki pages ---
+# Title = entity_id from frontmatter (e.g. "fn:seed.py::seed_project").
+# Tags  = [entity_id_prefix, subdir] where subdir is "modules", "functions", etc.
+if wiki_dir.exists():
+    for md_file in sorted(wiki_dir.rglob("*.md")):
+        content   = md_file.read_text()
+        fm        = parse_frontmatter(content)
+        entity_id = fm.get("entity_id", md_file.stem)
+        subdir    = md_file.parent.name
+        prefix    = entity_id.split(":")[0] if ":" in entity_id else "wiki"
+        tags      = [prefix] + ([subdir] if subdir not in ("wiki", ".") else [])
+        enqueue("wiki_add", {
+            "title":      entity_id,
+            "content":    content,
+            "category":   "reference",
+            "tags":       tags,
+            "confidence": "high",
+            "append":     False,
+        })
+
+# --- IR files ---
+# Files under 65 000 bytes are embedded as fenced JSON blocks.
+# Larger files get a summary page (keys, size, line count).
+_MAX_BYTES = 65_000
+if ir_dir.exists():
+    for ir_file in sorted(ir_dir.glob("*.json")):
+        raw   = ir_file.read_text()
+        title = f"ir: {ir_file.stem}"
+        if len(raw.encode()) <= _MAX_BYTES:
+            content = f"# {title}\n\n```json\n{raw}\n```\n"
+        else:
+            try:
+                data     = json.loads(raw)
+                top_keys = list(data.keys())[:20] if isinstance(data, dict) else []
+            except json.JSONDecodeError:
+                top_keys = []
+            content = (
+                f"# {title}\n\n"
+                f"**File**: `{ir_file}`  \n"
+                f"**Size**: {len(raw):,} bytes / {raw.count(chr(10)):,} lines  \n"
+                f"**Top-level keys**: {top_keys}\n\n"
+                f"> File too large to embed in full ({len(raw):,} bytes).\n"
+                f"> Access the raw file at `.local-review/ir/{ir_file.name}`.\n"
+            )
+        enqueue("wiki_add", {
+            "title":      title,
+            "content":    content,
+            "category":   "reference",
+            "tags":       ["ir", ir_file.stem],
+            "confidence": "high",
+            "append":     False,
+        })
+
+print(f"Queued {count} entries → {queue_dir}")
+YADGAR_EXPORT
+````
+
+### Title Derivation
+
+| Source    | Title used              | Example                    |
+| --------- | ----------------------- | -------------------------- |
+| Wiki file | `entity_id` frontmatter | `fn:seed.py::seed_project` |
+| IR file   | `ir: <stem>`            | `ir: functions`            |
+
+If a wiki file has no frontmatter, `entity_id` falls back to the filename stem.
 
 ---
 

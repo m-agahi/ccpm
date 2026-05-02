@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.0] - 2026-05-02
+
+### Added
+
+- `export-yadgar` subcommand — exports all `.local-review/wiki/` pages and `.local-review/ir/` files to Yadgar's durable file queue; works whether the Yadgar service is running or not (queue drainer picks up entries on next start)
+- Yadgar auto-export runs automatically at the end of `update` when Yadgar is detected (`~/.yadgar/` or `$YADGAR_DATA_DIR` exists)
+- IR files under 65 KB are embedded as fenced JSON blocks; larger files (callgraph, functions) get a summary page with key count, size, and top-level keys
+- Title derivation documented: wiki pages use `entity_id` from frontmatter; IR files use `ir: <stem>`
+
 ## [1.0.3] - 2026-04-29
 
 ### Changed
