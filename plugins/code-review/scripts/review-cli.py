@@ -36,7 +36,7 @@ except ImportError:
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PLUGIN_ROOT / "review-tools.yml"
-REGISTRY_IMAGE = "looseking/code-review:latest"
+REGISTRY_IMAGE = "openfantasy/code-review:latest"
 LOCAL_IMAGE = "localhost/review-tools:latest"
 IMAGE_NAME = REGISTRY_IMAGE  # resolved at runtime by container.sh
 WORKSPACE = "/workspace"
@@ -695,12 +695,12 @@ def _build_claude_cmd(cname, item):
 
     # Note: --dangerously-skip-permissions cannot be used as root.
     # Permissions are pre-configured in /root/.claude/settings.json (baked into image).
-    # --bare: skip hook loading and CLAUDE.md discovery. Projects that have a
-    # .claude/settings.json with hooks (e.g. yadgar, OMC) reference host-side paths
-    # that don't exist inside the container. A failing UserPromptSubmit hook causes
-    # claude -p to abort silently with 0 turns in Claude Code 2.1+.
+    # --bare was previously used to suppress project hooks, but Claude Code 2.1.123+
+    # skips credential file reads under --bare, causing "Not logged in" for OAuth users.
+    # Instead, workspace .claude/settings.json is removed before agents run (see
+    # cmd_run_agents) so hooks referencing host-side paths never reach claude.
     claude_inner = (
-        f"cat {prompt_path} | claude -p --bare --model {model} "
+        f"cat {prompt_path} | claude -p --model {model} "
         f"--allowedTools 'Bash(*)' 'Read(*)' "
         f"--output-format json "
         f"--max-budget-usd {budget} "
@@ -979,6 +979,23 @@ def cmd_run_agents(args):
     if auth_err:
         console.print(f"\n[bold red]Auth check failed:[/bold red]\n{auth_err}\n")
         sys.exit(1)
+
+    # 1.6. Remove project hooks from workspace inside container.
+    # .claude/settings.json in the workspace may reference host-side paths (e.g. yadgar,
+    # OMC hooks). A failing UserPromptSubmit hook aborts claude -p silently (0 turns,
+    # Claude Code 2.1+). Removing these files is safe — container image ships its own
+    # /root/.claude/settings.json with the correct tool permissions.
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            cname,
+            "bash",
+            "-c",
+            "rm -f /workspace/.claude/settings.json /workspace/.claude/settings.local.json",
+        ],
+        capture_output=True,
+    )
 
     # 2. Check if sonarqube-scanner is in the plan and start SonarQube if needed
     sq_url = None

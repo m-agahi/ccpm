@@ -5,6 +5,35 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.8] - 2026-05-09
+
+### Changed
+
+- **Registry image renamed**: `looseking/code-review:latest` → `openfantasy/code-review:latest` in `container.sh` and `review-cli.py`.
+- **CI workflow**: Added `.github/workflows/ci.yaml` — Docker BuildX cloud build (`openfantasy/builder`), multi-platform (`linux/amd64,linux/arm64`), registry-based BuildKit cache, change-gated via `changes` job.
+
+## [3.9.7] - 2026-05-09
+
+### Fixed
+
+- **OAuth login broken inside container ("Not logged in")**: `--bare` in Claude Code 2.1.123 skips
+  reading credential files, so OAuth-authenticated users receive a "Not logged in" error and agents
+  produce zero output. Removed `--bare` from the `claude -p` invocation. Project hooks are now
+  neutralized by deleting `/workspace/.claude/settings.json` (and `settings.local.json`) inside the
+  container before any agent runs — preserving the original hook-suppression intent without hiding
+  credentials from the CLI.
+
+## [3.9.6] - 2026-05-09
+
+### Fixed
+
+- **All Claude-based review agents fail in 0 seconds**: `${HOME}/.claude.json` was bind-mounted
+  read-only into the review container. Claude Code writes to `/root/.claude.json` on startup; when
+  the mount is `:ro`, the write fails with EROFS and Claude exits silently with code 0, producing
+  zero output. Fixed by removing the read-only `.claude.json` mount entirely — the container creates
+  a fresh writable copy on its own. Authentication continues to work via the `.credentials.json`
+  mount that remains intact.
+
 ## [3.9.5] - 2026-05-01
 
 ### Fixed

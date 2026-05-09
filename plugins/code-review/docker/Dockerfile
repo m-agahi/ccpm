@@ -288,6 +288,6 @@ RUN echo "=== Tool Versions ===" \
 
 # Review helper scripts (baked in — no need to copy at runtime)
 # Bump version label to trigger a new image build.
-LABEL version="3.9.5"
+LABEL version="3.9.6"
 COPY scripts/ /opt/review-scripts/
 ENTRYPOINT ["sleep", "infinity"]

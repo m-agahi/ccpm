@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-REGISTRY_IMAGE="looseking/code-review:latest"
+REGISTRY_IMAGE="openfantasy/code-review:latest"
 LOCAL_IMAGE="localhost/review-tools:latest"
 IMAGE_NAME=""
 SOURCE_MOUNT="/workspace-src"
@@ -108,10 +108,6 @@ cmd_start() {
     auth_ok=true
   else
     # OAuth session files — mount whichever exist independently (Claude Code v2.x)
-    if [[ -f "${HOME}/.claude.json" ]]; then
-      extra_args+=(-v "${HOME}/.claude.json:/root/.claude.json:ro")
-      auth_ok=true
-    fi
     if [[ -f "${HOME}/.claude/.credentials.json" ]]; then
       extra_args+=(-v "${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro")
       auth_ok=true
