@@ -66,7 +66,7 @@ def main():
 
     registry = "codeberg.org"
     dockerhub_token = os.environ.get("DOCKERHUB_TOKEN", "")
-    dockerhub_user = "looseking"
+    dockerhub_user = "openfantasy"
     nvd_api_key = os.environ.get("NVD_API_KEY", "")
     built = []
     failed = []
