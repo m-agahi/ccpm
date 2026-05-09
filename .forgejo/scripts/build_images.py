@@ -65,8 +65,9 @@ def main():
         sys.exit(1)
 
     registry = "codeberg.org"
+    dockerhub_registry = "docker.io"
     dockerhub_token = os.environ.get("DOCKERHUB_TOKEN", "")
-    dockerhub_user = "openfantasy"
+    dockerhub_user = "looseking"
     nvd_api_key = os.environ.get("NVD_API_KEY", "")
     built = []
     failed = []
@@ -86,7 +87,7 @@ def main():
     # Login to DockerHub
     if dockerhub_token:
         dh_login = run(
-            ["docker", "login", "-u", dockerhub_user, "--password-stdin"],
+            ["docker", "login", dockerhub_registry, "-u", dockerhub_user, "--password-stdin"],
             input=dockerhub_token,
             text=True,
             capture_output=True,
@@ -127,8 +128,8 @@ def main():
         image_versioned = f"{image_base}:{version}"
         image_latest = f"{image_base}:latest"
 
-        dh_image_versioned = f"{dockerhub_user}/{name}:{version}"
-        dh_image_latest = f"{dockerhub_user}/{name}:latest"
+        dh_image_versioned = f"{dockerhub_registry}/openfantasy/{name}:{version}"
+        dh_image_latest = f"{dockerhub_registry}/openfantasy/{name}:latest"
 
         platforms = os.environ.get("PLATFORMS", "linux/amd64")
         print(f"\nBuilding {image_versioned} for {platforms}...")
@@ -147,7 +148,7 @@ def main():
             # Registry cache works reliably here because the multiarch builder
             # (docker-container driver) handles credential forwarding via BuildKit.
             cache_ref = (
-                f"{dockerhub_user}/{name}:buildcache"
+                f"{dockerhub_registry}/openfantasy/{name}:buildcache"
                 if dockerhub_token
                 else f"{image_base}:buildcache"
             )
