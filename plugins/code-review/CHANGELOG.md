@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - **Registry image renamed**: `looseking/code-review:latest` → `openfantasy/code-review:latest` in `container.sh` and `review-cli.py`.
 - **CI workflow**: Added `.github/workflows/ci.yaml` — Docker BuildX cloud build (`openfantasy/builder`), multi-platform (`linux/amd64,linux/arm64`), registry-based BuildKit cache, change-gated via `changes` job.
+- **Dockerfile**: Added `NVD_API_KEY` build argument to pass to the container.
+- **Dockerfile**: Fixed mismatched versions
 
 ## [3.9.7] - 2026-05-09
 

@@ -53,3 +53,10 @@ repos:
         entry: python3 .forgejo/scripts/check_changelog_staged.py
         files: ^plugins/
         pass_filenames: false
+
+      - id: check-code-review-version
+        name: Check code-review version consistency
+        language: python
+        entry: python3 .forgejo/scripts/check_code_review_version.py
+        files: ^(plugins/code-review/docker/Dockerfile|plugins/code-review/CHANGELOG\.md|\.claude-plugin/marketplace\.json)$
+        pass_filenames: false
