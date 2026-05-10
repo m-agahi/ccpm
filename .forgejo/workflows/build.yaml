@@ -38,7 +38,9 @@ jobs:
     runs-on: ubuntu-latest
     # Push on version tags and direct pushes to master (not PRs)
     # On master: only when Docker-relevant files changed; on version tags: always
-    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.docker == 'true')
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.docker == 'true'))
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
