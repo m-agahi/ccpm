@@ -48,7 +48,7 @@ jobs:
       - name: Install Docker CLI
         run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends docker-ce-cli
+          apt-get install -y --no-install-recommends docker.io
 
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
