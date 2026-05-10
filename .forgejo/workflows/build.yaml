@@ -45,6 +45,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Install Docker CLI
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends docker-ce-cli
+
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
