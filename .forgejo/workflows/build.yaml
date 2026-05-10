@@ -86,6 +86,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: NVD_API_KEY=${{ secrets.NVD_API_KEY }}
           # Registry-based BuildKit cache on DockerHub. Reused across runs on
           # the same builder; survives runner restarts unlike actions/cache.
           cache-from: type=registry,ref=openfantasy/code-review:buildcache
