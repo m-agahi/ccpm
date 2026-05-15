@@ -5,6 +5,13 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [4.1.1] - 2026-05-15
+
+### Fixed
+
+- Removed `ARG NVD_API_KEY` from Dockerfile (BuildKit `SecretsUsedInArgOrEnv` warning). Replaced with BuildKit secret mount via `RUN --mount=type=secret,id=nvd_api_key,env=NVD_API_KEY ...`. Workflow passes `secrets:` instead of `build-args:`.
+- Matrix job display name in Forgejo Actions: `build-docker` now shows just the plugin name (e.g. `build-docker (code-review)`) instead of the full matrix object dump.
+
 ## [4.1.0] - 2026-05-15
 
 ### Added

@@ -118,6 +118,7 @@ jobs:
           echo "Discovered: $plugins"
 
   build-docker:
+    name: build-docker (${{ matrix.plugin.name }})
     needs: [discover]
     if: needs.discover.outputs.any == 'true'
     runs-on: ubuntu-latest
@@ -170,6 +171,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: NVD_API_KEY=${{ secrets.NVD_API_KEY }}
+          secrets: |
+            nvd_api_key=${{ secrets.NVD_API_KEY }}
           cache-from: type=registry,ref=${{ matrix.plugin.image }}:buildcache
           cache-to: type=registry,ref=${{ matrix.plugin.image }}:buildcache,mode=max

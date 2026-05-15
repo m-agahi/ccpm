@@ -222,9 +222,11 @@ RUN ARCH=$(dpkg --print-architecture) \
 
 # ============================================================
 # Pre-bake vulnerability databases (saves 30-60s per run)
+# NVD_API_KEY passed via BuildKit secret (not ARG) to avoid
+# leaking the key into image layer history / metadata.
 # ============================================================
-ARG NVD_API_KEY=""
-RUN trivy image --download-db-only 2>/dev/null || true \
+RUN --mount=type=secret,id=nvd_api_key,env=NVD_API_KEY \
+    trivy image --download-db-only 2>/dev/null || true \
     && trivy image --download-java-db-only 2>/dev/null || true \
     && dependency-check --updateonly ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"} 2>/dev/null || true \
     && mkdir -p /tmp/tflint-init && echo 'plugin "aws" { enabled = true, version = "0.35.0", source = "github.com/terraform-linters/tflint-ruleset-aws" }' > /tmp/tflint-init/.tflint.hcl \
@@ -288,6 +290,6 @@ RUN echo "=== Tool Versions ===" \
 
 # Review helper scripts (baked in — no need to copy at runtime)
 # Bump version label to trigger a new image build.
-LABEL version="4.1.0"
+LABEL version="4.1.1"
 COPY scripts/ /opt/review-scripts/
 ENTRYPOINT ["sleep", "infinity"]
