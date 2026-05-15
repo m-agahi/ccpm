@@ -5,6 +5,59 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [4.0.0] - 2026-05-15
+
+### Added
+
+- **`test-case-suggester` agent** (Phase C): New haiku-model sequential post-agent that reads
+  `findings.json`, filters coverage findings, selects top 5 untested modules by risk, and emits
+  concrete pseudo-code test cases referencing real functions/classes from each module. Outputs
+  `test-cases.json` and `test-cases.md` to `.local-review/runs/<run_id>/`. Skips silently when no
+  coverage findings exist. `--skip-test-case-suggester` flag available on `run-agents` subcommand.
+- **Per-run subdirectories**: All artifacts now written to `.local-review/runs/<ts>/` instead of
+  flat `.local-review/`. Single `run_id` generated in `cmd_setup` and propagated through all phases.
+- **Atomic `latest` symlink**: `.local-review/latest` always points to the newest run directory.
+- **Auto-prune**: Oldest runs beyond the last 10 are automatically deleted after each run.
+- **JSON-first output**: `findings.json`, `tickets.json`, and `summary.json` emitted in parallel
+  with existing markdown. Agents inject these into `/tmp/review-work/` alongside findings-\*.md.
+- **CIA-axis impact matrix**: Every finding and ticket now carries
+  `impact.confidentiality/integrity/availability` + `likelihood` + derived `risk`.
+- **Risk derivation**: `risk = max(CIA) × likelihood` per documented matrix.
+- **JSON schema validation**: `review-cli.py` validates all three JSON files post-run; exits
+  non-zero on missing/malformed files, warns on >50% markdown vs JSON count divergence.
+- **`jira-ticket-creator` consumes `tickets.json`**: Prefers structured JSON over parsing markdown.
+
+### Added (Phase B)
+
+- **Pattern propagation**: New `pattern_propagation.py` — after agents complete, ripgrep scans the
+  project for each finding's `grep_pattern`, then sonnet triages matches as `same_issue` /
+  `unrelated` / `unsure`. Same-issue matches are appended to `findings.json` `pattern_matches[]`
+  and summarised in a `## Pattern Propagation Results (v4)` section in `review.md`.
+- **`grep_pattern` guidance in scanner agents**: `security-reviewer.md`,
+  `code-quality-reviewer.md`, `linter.md`, and `sonarqube-scanner.md` now include a
+  `## GREP_PATTERN GUIDANCE (v4)` section instructing agents to emit a PCRE2-compatible regex per
+  finding where the antipattern is regex-expressible, with a cap of 256 chars and a >100-hit
+  broadness guard.
+- **`--skip-pattern-propagation` flag**: Pass to `run-agents` to disable propagation (default:
+  enabled). Propagation failures are non-fatal; the pipeline continues regardless.
+
+### Changed
+
+- `report-generator.md`, `ticket-drafter.md`: Added `## JSON OUTPUT REQUIREMENT (v4)` sections
+  with full schema documentation and risk derivation matrix.
+- `review-cli.py`: Version string updated to v4.0.0; `_auto_cleanup` signature includes `run_id`.
+- Execution plan `version` field bumped to `4.0.0`.
+- `run_id` injected into every agent's context block for use as JSON `run_id` field.
+
+### Fixed (Phase D — advisor follow-up)
+
+- Scanner agents now use a concrete markdown convention (`**Grep pattern:** `<regex>``) for
+  emitting greppable patterns, with explicit extraction rules in report-generator.
+- report-generator now has CIA-axis classification heuristics with a per-finding-type guidance
+  table, replacing implicit "fill the schema" with explicit "classify like this".
+- JSON validation failures are now warnings by default; `--strict-json` opts into fatal mode.
+  Prevents first runs from hard-failing while prompts settle.
+
 ## [3.9.8] - 2026-05-09
 
 ### Changed

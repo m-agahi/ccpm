@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deterministic review pipeline runner (v3.0.0).
+Deterministic review pipeline runner (v4.0.0).
 
 Handles all non-LLM phases of the code review: permission checks, container
 lifecycle, language detection, agent selection, prompt generation, and agent
@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -35,6 +36,7 @@ except ImportError:
     sys.exit(1)
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = PLUGIN_ROOT / "review-tools.yml"
 REGISTRY_IMAGE = "openfantasy/code-review:latest"
 LOCAL_IMAGE = "localhost/review-tools:latest"
@@ -220,6 +222,197 @@ def local_review_dir(project_dir):
     d = project_dir / ".local-review"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def run_dir_for(project_dir, run_id):
+    """Return .local-review/runs/<run_id>/ path, creating it if needed."""
+    d = project_dir / ".local-review" / "runs" / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def update_latest_symlink(lr, run_id):
+    """Atomically update .local-review/latest to point to runs/<run_id>."""
+    target = f"runs/{run_id}"
+    latest = lr / "latest"
+    tmp = lr / "latest.tmp"
+    # Remove stale tmp if it exists
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    os.symlink(target, tmp)
+    os.replace(tmp, latest)
+
+
+def prune_old_runs(lr, keep=10):
+    """Delete all but the newest `keep` run subdirectories."""
+    runs_dir = lr / "runs"
+    if not runs_dir.is_dir():
+        return
+    try:
+        entries = [
+            e for e in runs_dir.iterdir() if e.is_dir()
+        ]
+        entries.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+        for old in entries[keep:]:
+            try:
+                shutil.rmtree(old)
+            except Exception as exc:
+                print(f"\033[33mWARNING: Could not prune old run {old}: {exc}\033[0m")
+    except Exception as exc:
+        print(f"\033[33mWARNING: Prune failed: {exc}\033[0m")
+
+
+def _find_latest_manifest(lr):
+    """Find the most recent manifest.json under .local-review/runs/*, or fall back to lr root."""
+    runs_dir = lr / "runs"
+    if runs_dir.is_dir():
+        entries = sorted(
+            [e for e in runs_dir.iterdir() if e.is_dir()],
+            key=lambda e: e.stat().st_mtime,
+            reverse=True,
+        )
+        for entry in entries:
+            candidate = entry / "manifest.json"
+            if candidate.exists():
+                return candidate
+    # Legacy fallback (pre-v4 runs)
+    return lr / "manifest.json"
+
+
+def _validate_json_outputs(rd):
+    """Validate findings.json, tickets.json, summary.json in the run directory.
+
+    Returns True if all present and valid. Prints warnings on failure.
+    Returns False if any file is missing, unparseable, or structurally invalid.
+    Callers decide whether to treat False as fatal (see --strict-json).
+    """
+    all_valid = True
+
+    # --- findings.json ---
+    findings_path = rd / "findings.json"
+    if not findings_path.exists():
+        print(f"\033[33mWARNING: {findings_path} not found — report-generator did not emit findings.json\033[0m")
+        all_valid = False
+    else:
+        try:
+            data = json.loads(findings_path.read_text())
+            for key in ("schema_version", "run_id", "generated_at", "findings"):
+                if key not in data:
+                    print(f"\033[33mWARNING: {findings_path}: missing key '{key}'\033[0m")
+                    all_valid = False
+            findings = data.get("findings", [])
+            if not isinstance(findings, list):
+                print(f"\033[33mWARNING: {findings_path}: 'findings' must be an array\033[0m")
+                all_valid = False
+            else:
+                required_finding_keys = ("id", "category", "severity", "risk", "impact", "likelihood", "title", "locations", "description")
+                for i, f in enumerate(findings):
+                    for fk in required_finding_keys:
+                        if fk not in f:
+                            print(f"\033[33mWARNING: {findings_path}: finding[{i}] missing key '{fk}'\033[0m")
+                            all_valid = False
+                    impact = f.get("impact", {})
+                    for axis in ("confidentiality", "integrity", "availability"):
+                        if axis not in impact:
+                            print(f"\033[33mWARNING: {findings_path}: finding[{i}].impact missing '{axis}'\033[0m")
+                            all_valid = False
+        except json.JSONDecodeError as exc:
+            print(f"\033[33mWARNING: {findings_path}: JSON parse error: {exc}\033[0m")
+            all_valid = False
+
+    # --- tickets.json ---
+    tickets_path = rd / "tickets.json"
+    if not tickets_path.exists():
+        print(f"\033[33mWARNING: {tickets_path} not found — ticket-drafter did not emit tickets.json\033[0m")
+        all_valid = False
+    else:
+        try:
+            data = json.loads(tickets_path.read_text())
+            for key in ("schema_version", "run_id", "generated_at", "tickets"):
+                if key not in data:
+                    print(f"\033[33mWARNING: {tickets_path}: missing key '{key}'\033[0m")
+                    all_valid = False
+            tickets = data.get("tickets", [])
+            if not isinstance(tickets, list):
+                print(f"\033[33mWARNING: {tickets_path}: 'tickets' must be an array\033[0m")
+                all_valid = False
+            else:
+                for i, t in enumerate(tickets):
+                    for tk in ("impact", "likelihood", "risk"):
+                        if tk not in t:
+                            print(f"\033[33mWARNING: {tickets_path}: ticket[{i}] missing key '{tk}'\033[0m")
+                            all_valid = False
+        except json.JSONDecodeError as exc:
+            print(f"\033[33mWARNING: {tickets_path}: JSON parse error: {exc}\033[0m")
+            all_valid = False
+
+    # --- summary.json ---
+    summary_path = rd / "summary.json"
+    if not summary_path.exists():
+        print(f"\033[33mWARNING: {summary_path} not found — report-generator did not emit summary.json\033[0m")
+        all_valid = False
+    else:
+        try:
+            data = json.loads(summary_path.read_text())
+            for key in ("schema_version", "run_id", "counts", "by_impact_axis", "by_category"):
+                if key not in data:
+                    print(f"\033[33mWARNING: {summary_path}: missing key '{key}'\033[0m")
+                    all_valid = False
+        except json.JSONDecodeError as exc:
+            print(f"\033[33mWARNING: {summary_path}: JSON parse error: {exc}\033[0m")
+            all_valid = False
+
+    # --- test-cases.json (optional — absent when no coverage findings) ---
+    test_cases_path = rd / "test-cases.json"
+    if test_cases_path.exists():
+        try:
+            data = json.loads(test_cases_path.read_text())
+            for key in ("schema_version", "run_id", "modules"):
+                if key not in data:
+                    print(f"\033[33mWARNING: {test_cases_path}: missing key '{key}'\033[0m")
+            modules = data.get("modules", [])
+            if not isinstance(modules, list):
+                print(f"\033[33mWARNING: {test_cases_path}: 'modules' must be an array\033[0m")
+        except json.JSONDecodeError as exc:
+            print(f"\033[33mWARNING: {test_cases_path}: JSON parse error: {exc}\033[0m")
+    # test-cases.json absent → no coverage findings, silently OK
+
+    # --- Cross-check: markdown vs findings.json ---
+    review_md = rd / "review.md"
+    if review_md.exists() and (rd / "findings.json").exists():
+        try:
+            with open(review_md) as fh:
+                md_lines = fh.readlines()
+            # Count table rows (lines starting with '| ' that aren't headers/separators)
+            md_finding_rows = sum(
+                1 for line in md_lines
+                if line.startswith("| ") and not line.startswith("| ---") and "---" not in line
+                and not line.startswith("| #") and not line.startswith("| Tool")
+                and not line.startswith("| Package") and not line.startswith("| File")
+            )
+            try:
+                findings_data = json.loads((rd / "findings.json").read_text())
+                json_count = len(findings_data.get("findings", []))
+                if md_finding_rows > 0 and json_count == 0:
+                    print(
+                        f"\033[33mWARNING: review.md has ~{md_finding_rows} table rows but "
+                        f"findings.json has 0 findings — JSON output appears incomplete\033[0m"
+                    )
+                    all_valid = False
+                elif md_finding_rows > 0 and json_count > 0:
+                    ratio = abs(md_finding_rows - json_count) / max(md_finding_rows, json_count)
+                    if ratio > 0.5:
+                        print(
+                            f"\033[33mWARNING: review.md has ~{md_finding_rows} table rows but "
+                            f"findings.json has {json_count} findings — counts differ by "
+                            f"{ratio:.0%} (>50%)\033[0m"
+                        )
+            except (json.JSONDecodeError, OSError):
+                pass
+        except OSError:
+            pass
+
+    return all_valid
 
 
 # ─── Phase: setup ─────────────────────────────────────────────────────────────
@@ -413,7 +606,11 @@ def cmd_setup(args):
     print(f"\n\033[1;36m── local-code-review v{version} ──\033[0m")
 
     project_dir = review_dir(args)
-    lr = local_review_dir(project_dir)
+
+    # Generate a single run_id for all artifacts in this run.
+    # run_dir_for creates .local-review/runs/<run_id>/ (parents=True covers .local-review/).
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    rd = run_dir_for(project_dir, run_id)
 
     # 1. Check permissions
     missing = check_permissions()
@@ -426,7 +623,7 @@ def cmd_setup(args):
         print(
             "Please exit and re-run /local-code-review:review-local after restarting.\n"
         )
-        (lr / "manifest.json").write_text(
+        (rd / "manifest.json").write_text(
             json.dumps({"error": "permissions_added", "missing": missing})
         )
         sys.exit(1)
@@ -440,14 +637,14 @@ def cmd_setup(args):
             "If the registry is unreachable, you can build locally:\n"
         )
         print(f"  docker build -t {LOCAL_IMAGE} {PLUGIN_ROOT}/docker/\n")
-        (lr / "manifest.json").write_text(json.dumps({"error": "image_missing"}))
+        (rd / "manifest.json").write_text(json.dumps({"error": "image_missing"}))
         sys.exit(1)
 
     # 3. Start container
     print("\n\033[1mStarting review-tools container...\033[0m")
     if not start_container(project_dir):
         print("\033[1;31mFailed to start container.\033[0m", file=sys.stderr)
-        (lr / "manifest.json").write_text(json.dumps({"error": "container_failed"}))
+        (rd / "manifest.json").write_text(json.dumps({"error": "container_failed"}))
         sys.exit(1)
 
     # 4. Tooling check
@@ -465,7 +662,7 @@ def cmd_setup(args):
     # 7. Agent selection menu
     agents = select_agents(languages, project_dir, user_input=args.agents)
 
-    # 8. Write manifest
+    # 8. Write manifest (into run subdirectory)
     manifest = {
         "version": version,
         "project_dir": str(project_dir),
@@ -473,6 +670,7 @@ def cmd_setup(args):
         "agents": [],
         "scripts": [],
         "context": {
+            "run_id": run_id,
             "languages_csv": ",".join(languages),
             "container_name": container_name(project_dir),
             "workspace": WORKSPACE,
@@ -495,11 +693,12 @@ def cmd_setup(args):
             entry["type"] = "agent"
             manifest["agents"].append(entry)
 
-    manifest_path = lr / "manifest.json"
+    manifest_path = rd / "manifest.json"
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
     print(f"\n\033[32mManifest written to {manifest_path}\033[0m")
+    print(f"  Run ID: {run_id}")
     print(f"  Agents: {len(manifest['agents'])}  Scripts: {len(manifest['scripts'])}")
     print(f"  Languages: {', '.join(languages)}\n")
 
@@ -519,23 +718,26 @@ def strip_yaml_frontmatter(text):
     return text
 
 
-def build_context_block(languages_csv, project_path="", agent_name=None):
+def build_context_block(languages_csv, project_path="", agent_name=None, run_id=None):
     """Build the in-container context block appended to every agent prompt.
 
-    v3.0.0: agents run directly inside the container via `claude -p`.
+    v4.0.0: agents run directly inside the container via `claude -p`.
     No docker exec — commands run natively.
     """
+    run_id_line = f"- Run ID (use as run_id in JSON outputs): {run_id}" if run_id else ""
     block = f"""---
 Review context:
 - You are running INSIDE the review-tools container. Project at /workspace.
 - Original project path (for reports): {project_path}
 - Detected languages: {languages_csv}
+{run_id_line}
 - Run commands directly (no docker exec):
   - Read files: cat /workspace/path/to/file
   - Search code: grep -rn "pattern" /workspace/src/
   - Find files: find /workspace -name "*.java"
   - Run scanners: cd /workspace && semgrep scan --config auto .
 - Findings go to: /tmp/review-work/findings-NAME.md
+- JSON outputs go to: /tmp/review-work/ (findings.json, tickets.json, summary.json)
 - Scanner output goes to: /tmp/review-work/
 - Auto-install: pip install / npm install -g (container runs as root)
 - Log installs: echo <pkg> >> /tmp/review-work/runtime-installs.txt
@@ -557,7 +759,9 @@ def cmd_generate_prompts(args):
     """Generate composed prompt files and execution-plan.json from manifest."""
     project_dir = review_dir(args)
     lr = local_review_dir(project_dir)
-    manifest_path = lr / "manifest.json"
+
+    # Locate manifest — check run dirs sorted by mtime (newest first), fallback to lr root
+    manifest_path = _find_latest_manifest(lr)
 
     if not manifest_path.exists():
         print("Error: No manifest.json found. Run setup first.", file=sys.stderr)
@@ -570,11 +774,17 @@ def cmd_generate_prompts(args):
         print(f"Error in manifest: {manifest['error']}", file=sys.stderr)
         sys.exit(1)
 
+    run_id = manifest["context"].get("run_id")
+    if not run_id:
+        print("Error: manifest.json missing run_id. Run setup again.", file=sys.stderr)
+        sys.exit(1)
+
+    rd = run_dir_for(project_dir, run_id)
     languages_csv = manifest["context"]["languages_csv"]
     plugin_root = manifest["context"]["plugin_root"]
 
-    # Create prompts directory
-    prompts_dir = lr / "prompts"
+    # Create prompts directory inside the run subdir
+    prompts_dir = rd / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate prompt files for each agent in the manifest
@@ -588,7 +798,7 @@ def cmd_generate_prompts(args):
 
         spec_text = spec_path.read_text()
         spec_body = strip_yaml_frontmatter(spec_text)
-        context = build_context_block(languages_csv, str(project_dir), agent_name)
+        context = build_context_block(languages_csv, str(project_dir), agent_name, run_id)
         prompt = spec_body.rstrip() + "\n\n" + context
 
         prompt_file = prompts_dir / f"{agent_name}.txt"
@@ -607,13 +817,13 @@ def cmd_generate_prompts(args):
             continue
         spec_text = spec_path.read_text()
         spec_body = strip_yaml_frontmatter(spec_text)
-        context = build_context_block(languages_csv, str(project_dir), pa_name)
+        context = build_context_block(languages_csv, str(project_dir), pa_name, run_id)
         prompt = spec_body.rstrip() + "\n\n" + context
 
         prompt_file = prompts_dir / f"{pa_name}.txt"
         prompt_file.write_text(prompt)
 
-    # Build execution plan (v3.0.0 format)
+    # Build execution plan (v4.0.0 format)
     # Budget per model: opus agents get more, haiku agents get less
     model_budgets = {"opus": 10, "sonnet": 2, "haiku": 1}
     parallel_items = []
@@ -654,6 +864,13 @@ def cmd_generate_prompts(args):
             "max_budget_usd": 2,
         },
         {
+            "name": "test-case-suggester",
+            "prompt_file": "prompts/test-case-suggester.txt",
+            "model": "haiku",
+            "type": "agent",
+            "max_budget_usd": 1,
+        },
+        {
             "name": "improvement-advisor",
             "prompt_file": "prompts/improvement-advisor.txt",
             "model": "haiku",
@@ -663,12 +880,13 @@ def cmd_generate_prompts(args):
     ]
 
     plan = {
-        "version": "3.0.0",
+        "version": "4.0.0",
+        "run_id": run_id,
         "parallel": parallel_items,
         "sequential": sequential_items,
     }
 
-    plan_path = lr / "execution-plan.json"
+    plan_path = rd / "execution-plan.json"
     with open(plan_path, "w") as f:
         json.dump(plan, f, indent=2)
 
@@ -953,7 +1171,21 @@ def cmd_run_agents(args):
     """Execute agents inside the container via claude -p."""
     project_dir = review_dir(args)
     lr = local_review_dir(project_dir)
-    plan_path = lr / "execution-plan.json"
+
+    # Locate manifest to get run_id
+    manifest_path = _find_latest_manifest(lr)
+    if not manifest_path.exists():
+        print("Error: No manifest.json found. Run setup first.", file=sys.stderr)
+        sys.exit(1)
+    with open(manifest_path) as f:
+        _manifest = json.load(f)
+    run_id = _manifest["context"].get("run_id")
+    if not run_id:
+        print("Error: manifest.json missing run_id. Run setup again.", file=sys.stderr)
+        sys.exit(1)
+
+    rd = run_dir_for(project_dir, run_id)
+    plan_path = rd / "execution-plan.json"
 
     if not plan_path.exists():
         print("Error: No execution-plan.json found. Run setup first.", file=sys.stderr)
@@ -968,7 +1200,7 @@ def cmd_run_agents(args):
     # 1. Copy prompts into container
     console = Console(force_terminal=True)
     console.print("[bold]Copying prompts into container...[/bold]")
-    prompts_src = str(lr / "prompts")
+    prompts_src = str(rd / "prompts")
     run(
         ["docker", "cp", f"{prompts_src}/.", f"{cname}:{REVIEW_WORK}/prompts/"],
         check=False,
@@ -1005,7 +1237,7 @@ def cmd_run_agents(args):
             sq_url = _start_sonarqube(cname)
             if sq_url:
                 # Inject SonarQube URL into the agent's prompt
-                prompt_file = lr / item["prompt_file"]
+                prompt_file = rd / item["prompt_file"]
                 if prompt_file.exists():
                     prompt_text = prompt_file.read_text()
                     prompt_text = prompt_text.replace("SONARQUBE_URL", sq_url)
@@ -1092,7 +1324,7 @@ def cmd_run_agents(args):
     # Only final outputs (report, improvements, tickets) are copied after sequential agents.
 
     # 5. Write cost manifest from actual data (host-side)
-    _write_cost_manifest(lr, results, plan)
+    _write_cost_manifest(rd, results, plan)
 
     # 6. Check results (probe inside container)
     console.print("[bold]Checking results...[/bold]")
@@ -1104,8 +1336,7 @@ def cmd_run_agents(args):
     if sequential_items:
         console.print(f"\n[bold]Running {len(sequential_items)} sequential agents...[/bold]\n")
 
-    # Generate a fixed report filename so agents don't create duplicates
-    report_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # Tell report-generator to use a stable filename: review.md (run_id is already in context)
     run(
         [
             "docker",
@@ -1113,7 +1344,7 @@ def cmd_run_agents(args):
             cname,
             "bash",
             "-c",
-            f"echo '{report_timestamp}' > {REVIEW_WORK}/report-timestamp.txt",
+            f"echo '{run_id}' > {REVIEW_WORK}/report-timestamp.txt",
         ],
         check=False,
     )
@@ -1138,14 +1369,74 @@ def cmd_run_agents(args):
                         cname,
                         "bash",
                         "-c",
-                        f"echo '\n\nIMPORTANT: Use exactly this filename for the report: "
-                        f"review-{report_timestamp}.md\n"
-                        f"Write to: /tmp/review-work/review-{report_timestamp}.md\n"
-                        f"Do NOT run date to generate a timestamp. Do NOT write multiple report files.' "
-                        f">> {REVIEW_WORK}/{item['prompt_file']}",
+                        f"printf '\\n\\nIMPORTANT: Use exactly this filename for the report: "
+                        f"review.md\\n"
+                        f"Write to: /tmp/review-work/review.md\\n"
+                        f"Do NOT run date to generate a timestamp. Do NOT write multiple report files.\\n"
+                        f"Also write findings.json and summary.json to /tmp/review-work/ as specified.\\n'"
+                        f" >> {REVIEW_WORK}/{item['prompt_file']}",
                     ],
                     check=False,
                 )
+
+            # Inject tickets.json instruction for ticket-drafter
+            if name == "ticket-drafter":
+                run(
+                    [
+                        "docker",
+                        "exec",
+                        cname,
+                        "bash",
+                        "-c",
+                        f"printf '\\n\\nIMPORTANT: Also write tickets.json to /tmp/review-work/ "
+                        f"as specified in the JSON OUTPUT REQUIREMENT section.\\n'"
+                        f" >> {REVIEW_WORK}/{item['prompt_file']}",
+                    ],
+                    check=False,
+                )
+
+            # Skip test-case-suggester if flag set or no coverage findings in findings.json
+            if name == "test-case-suggester":
+                skip_reason = None
+                if getattr(args, "skip_test_case_suggester", False):
+                    skip_reason = "--skip-test-case-suggester flag"
+                else:
+                    # Check findings.json for any coverage-category findings
+                    probe = run(
+                        [
+                            "docker",
+                            "exec",
+                            cname,
+                            "bash",
+                            "-c",
+                            f"python3 -c \""
+                            f"import json,sys; "
+                            f"d=json.load(open('{REVIEW_WORK}/findings.json')); "
+                            f"cov=[f for f in d.get('findings',[]) "
+                            f"  if f.get('category')=='coverage' or "
+                            f"  'untest' in str(f.get('subcategory','')).lower() or "
+                            f"  'missing_test' in str(f.get('subcategory','')).lower() or "
+                            f"  'no_test' in str(f.get('subcategory','')).lower()]; "
+                            f"sys.exit(0 if cov else 1)"
+                            f"\" 2>/dev/null",
+                        ],
+                        check=False,
+                    )
+                    if probe.returncode != 0:
+                        skip_reason = "no coverage findings in findings.json"
+                if skip_reason:
+                    seq_results[name] = {
+                        "status": "skipped",
+                        "cost": 0,
+                        "duration": 0,
+                        "output": None,
+                        "error_output": skip_reason,
+                    }
+                    results[name] = seq_results[name]
+                    live.update(
+                        _build_sequential_table(sequential_items, seq_results, None, 0, start_time)
+                    )
+                    continue
 
             item_start = time.time()
             cmd = _build_claude_cmd(cname, item)
@@ -1199,7 +1490,7 @@ def cmd_run_agents(args):
                 _build_sequential_table(sequential_items, seq_results, None, 0, start_time)
             )
 
-            # Copy results after each sequential agent
+            # Copy results after each sequential agent into the run subdirectory
             run(
                 [
                     "docker",
@@ -1207,16 +1498,21 @@ def cmd_run_agents(args):
                     cname,
                     "bash",
                     "-c",
-                    f"cp -f {REVIEW_WORK}/review-*.md {WORKSPACE}/.local-review/ 2>/dev/null; "
-                    f"cp -f {REVIEW_WORK}/image-improvements.md {WORKSPACE}/.local-review/ 2>/dev/null; "
-                    f"cp -rf {REVIEW_WORK}/tickets {WORKSPACE}/.local-review/ 2>/dev/null; "
+                    f"cp -f {REVIEW_WORK}/review.md {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+                    f"cp -f {REVIEW_WORK}/image-improvements.md {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+                    f"cp -rf {REVIEW_WORK}/tickets {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+                    f"cp -f {REVIEW_WORK}/findings.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+                    f"cp -f {REVIEW_WORK}/tickets.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+                    f"cp -f {REVIEW_WORK}/summary.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+                    f"cp -f {REVIEW_WORK}/test-cases.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+                    f"cp -f {REVIEW_WORK}/test-cases.md {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
                     f"true",
                 ],
                 check=False,
             )
 
     # 8. Update cost manifest with sequential agents
-    _write_cost_manifest(lr, results, plan)
+    _write_cost_manifest(rd, results, plan)
     _print_agent_diagnostics(seq_results)
 
     # 9. Stop SonarQube container (no longer needed after agents finish)
@@ -1242,10 +1538,28 @@ def cmd_run_agents(args):
     console.print(f"[bold]{'═' * 50}[/bold]\n")
 
     # 11. Auto-cleanup containers (skip if too many agents failed — keep alive for debugging)
-    _auto_cleanup(project_dir, cname, failed)
+    _auto_cleanup(project_dir, cname, run_id, failed)
+
+    # 12. Validate JSON outputs
+    json_valid = _validate_json_outputs(rd)
+
+    # 13. Pattern propagation (best-effort; non-fatal)
+    if not getattr(args, "skip_pattern_propagation", False):
+        run_pattern_propagation(rd, project_dir)
+
+    # 14. Update latest symlink and prune old runs
+    update_latest_symlink(lr, run_id)
+    prune_old_runs(lr, keep=10)
+
+    if not json_valid:
+        if getattr(args, "strict_json", False):
+            print("\033[31mJSON validation failed; --strict-json is set, exiting non-zero.\033[0m")
+            sys.exit(1)
+        else:
+            print("\033[33mWARNING: JSON validation failed. Use --strict-json to make this fatal.\033[0m")
 
 
-def _auto_cleanup(project_dir, cname, failed_count=0):
+def _auto_cleanup(project_dir, cname, run_id, failed_count=0):
     """Remove review and SonarQube containers + volumes after run completes.
 
     If more than 2 agents failed, keep the review container alive so the user
@@ -1254,7 +1568,7 @@ def _auto_cleanup(project_dir, cname, failed_count=0):
     slug = cname.replace("review-", "", 1)
     sq_name = f"sonarqube-{slug}"
 
-    # Copy final results out before stopping
+    # Copy final results out before stopping (into per-run subdir)
     run(
         [
             "docker",
@@ -1262,9 +1576,12 @@ def _auto_cleanup(project_dir, cname, failed_count=0):
             cname,
             "bash",
             "-c",
-            f"cp -f {REVIEW_WORK}/review-*.md {WORKSPACE}/.local-review/ 2>/dev/null; "
-            f"cp -f {REVIEW_WORK}/image-improvements.md {WORKSPACE}/.local-review/ 2>/dev/null; "
-            f"cp -rf {REVIEW_WORK}/tickets {WORKSPACE}/.local-review/ 2>/dev/null; "
+            f"cp -f {REVIEW_WORK}/review.md {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+            f"cp -f {REVIEW_WORK}/image-improvements.md {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+            f"cp -rf {REVIEW_WORK}/tickets {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+            f"cp -f {REVIEW_WORK}/findings.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+            f"cp -f {REVIEW_WORK}/tickets.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
+            f"cp -f {REVIEW_WORK}/summary.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
             f"true",
         ],
         check=False,
@@ -1284,6 +1601,37 @@ def _auto_cleanup(project_dir, cname, failed_count=0):
         return
 
     run(["docker", "rm", "-fv", cname], check=False)
+
+
+def run_pattern_propagation(run_dir: Path, project_root: Path) -> None:
+    """Run pattern_propagation.py on the run dir (best-effort; failures are non-fatal)."""
+    script = SCRIPT_DIR / "pattern_propagation.py"
+    if not script.exists():
+        print(
+            "\033[33mWARNING: pattern_propagation.py not found — skipping pattern propagation\033[0m"
+        )
+        return
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script), str(run_dir)],
+            cwd=str(project_root),
+            capture_output=False,
+            text=True,
+            timeout=600,
+        )
+        if result.returncode != 0:
+            print(
+                "\033[33mWARNING: pattern_propagation.py exited non-zero"
+                f" ({result.returncode}) — continuing\033[0m"
+            )
+    except subprocess.TimeoutExpired:
+        print(
+            "\033[33mWARNING: pattern_propagation.py timed out — continuing\033[0m"
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"\033[33mWARNING: pattern_propagation.py failed: {exc} — continuing\033[0m"
+        )
 
 
 def _fmt_duration(seconds):
@@ -1505,8 +1853,8 @@ def _collect_finished(processes, results, active):
             active.discard(name)
 
 
-def _write_cost_manifest(lr, results, plan):
-    """Write cost-manifest.json from actual agent run data."""
+def _write_cost_manifest(rd, results, plan):
+    """Write cost-manifest.json from actual agent run data (into run subdir)."""
     cost = {"agents": [], "scripts": []}
 
     for items in [plan.get("parallel", []), plan.get("sequential", [])]:
@@ -1537,7 +1885,7 @@ def _write_cost_manifest(lr, results, plan):
                     }
                 )
 
-    cost_path = lr / "cost-manifest.json"
+    cost_path = rd / "cost-manifest.json"
     with open(cost_path, "w") as f:
         json.dump(cost, f, indent=2)
 
@@ -1619,7 +1967,7 @@ def cmd_check_results(args):
     """Check agent outputs for failures. Optionally call Haiku for diagnosis."""
     project_dir = review_dir(args)
     lr = local_review_dir(project_dir)
-    manifest_path = lr / "manifest.json"
+    manifest_path = _find_latest_manifest(lr)
 
     if not manifest_path.exists():
         print("Error: No manifest.json found. Run setup first.", file=sys.stderr)
@@ -1627,6 +1975,9 @@ def cmd_check_results(args):
 
     with open(manifest_path) as f:
         manifest = json.load(f)
+
+    run_id = manifest["context"].get("run_id")
+    rd = run_dir_for(project_dir, run_id) if run_id else lr
 
     results = {"passed": [], "failed": [], "skipped": [], "retried": []}
 
@@ -1637,7 +1988,7 @@ def cmd_check_results(args):
             results["passed"].append(entry["name"])
             continue
 
-        findings_path = lr / findings_file
+        findings_path = rd / findings_file
         if not findings_path.exists():
             results["failed"].append(
                 {
@@ -1667,7 +2018,7 @@ def cmd_check_results(args):
             results["diagnosis_error"] = str(e)
 
     # Write results
-    status_path = lr / "results-status.json"
+    status_path = rd / "results-status.json"
     with open(status_path, "w") as f:
         json.dump(results, f, indent=2)
 
@@ -1736,7 +2087,7 @@ def cmd_cost_manifest(args):
     """Write cost-manifest.json from the manifest (only agents that ran)."""
     project_dir = review_dir(args)
     lr = local_review_dir(project_dir)
-    manifest_path = lr / "manifest.json"
+    manifest_path = _find_latest_manifest(lr)
 
     if not manifest_path.exists():
         print("Error: No manifest.json found.", file=sys.stderr)
@@ -1744,6 +2095,9 @@ def cmd_cost_manifest(args):
 
     with open(manifest_path) as f:
         manifest = json.load(f)
+
+    run_id = manifest["context"].get("run_id")
+    rd = run_dir_for(project_dir, run_id) if run_id else lr
 
     cost = {
         "agents": [
@@ -1756,7 +2110,7 @@ def cmd_cost_manifest(args):
         ],
     }
 
-    cost_path = lr / "cost-manifest.json"
+    cost_path = rd / "cost-manifest.json"
     with open(cost_path, "w") as f:
         json.dump(cost, f, indent=2)
 
@@ -1823,7 +2177,7 @@ def cmd_cleanup(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Deterministic review pipeline runner (v3.0.0)",
+        description="Deterministic review pipeline runner (v4.0.0)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -1850,6 +2204,28 @@ def main():
         "run-agents", help="Execute agents inside container via claude -p"
     )
     p_run.add_argument("directory", help="Project directory")
+    p_run.add_argument(
+        "--skip-pattern-propagation",
+        dest="skip_pattern_propagation",
+        action="store_true",
+        default=False,
+        help="Skip post-run pattern propagation (ripgrep + sonnet triage).",
+    )
+    p_run.add_argument(
+        "--strict-json",
+        dest="strict_json",
+        action="store_true",
+        default=False,
+        help="Treat JSON validation failures as fatal (exit non-zero). Default: warn only.",
+    )
+    p_run.add_argument(
+        "--skip-test-case-suggester",
+        action="store_true",
+        default=False,
+        dest="skip_test_case_suggester",
+        help="Skip the test-case-suggester agent (enabled by default; auto-skipped if no "
+        "coverage findings exist in findings.json).",
+    )
 
     # check-results
     p_check = sub.add_parser("check-results", help="Check agent outputs for failures")

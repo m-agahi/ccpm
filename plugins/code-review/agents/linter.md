@@ -426,6 +426,43 @@ commands]
 - Do NOT modify any code — this is a read-only analysis
 - Report missing tools clearly with install commands
 
+## GREP_PATTERN GUIDANCE (v4)
+
+When an antipattern you flag is greppable across the codebase (i.e. matchable by a regex without
+LLM judgement), include a `Grep pattern:` line as the LAST line of that finding in your markdown
+output. The exact format (use code-fence backticks around the regex):
+
+    **Grep pattern:** `<regex here>`
+
+For findings that are NOT regex-expressible (architectural smells, naming critiques, missing
+memoization, anything needing LLM judgement to spot), either OMIT the line entirely OR write:
+
+    **Grep pattern:** none
+
+This convention lets the report-generator agent extract patterns from scanner markdown and
+populate the `grep_pattern` field in findings.json. Patterns from this line will be run via
+ripgrep across the codebase after the report is produced, and triaged for same-issue propagation.
+
+Examples (regex pattern table preserved below):
+
+| Pattern                        | Example regex                                                             |
+| ------------------------------ | ------------------------------------------------------------------------- |
+| Hardcoded credentials          | `(api[_-]?key\|token\|secret\|password)\s*[:=]\s*['"][A-Za-z0-9_\-]{12,}` |
+| `console.log` debug            | `console\.log\(`                                                          |
+| Loose equality                 | `[^=!]==[^=]`                                                             |
+| `urllib.request.urlopen`       | `urllib\.request\.urlopen\(`                                              |
+| Implicit Optional              | `:\s*\w+\s*=\s*None\b`                                                    |
+| `eval` / `exec`                | `\b(eval\|exec)\(`                                                        |
+| Magic string                   | exact literal in quotes                                                   |
+| Commented-out code (heuristic) | `^\s*#\s*(if\|for\|while\|def\|return\|class)\b`                          |
+
+Constraints:
+
+- Pattern must be PCRE2-compatible (ripgrep --pcre2)
+- Keep pattern length ≤ 256 chars
+- Avoid catastrophic backtracking (no nested unbounded quantifiers)
+- If a pattern would yield >100 hits in any reasonably-sized repo, it's too broad — skip it
+
 ## Intermediate Output
 
 After completing the analysis, save your findings:

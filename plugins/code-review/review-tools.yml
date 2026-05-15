@@ -73,6 +73,9 @@ agents:
       model: sonnet
       findings: null
       trigger: user_choice
+    - name: test-case-suggester
+      model: haiku
+      findings: test-cases.json
     - name: jira-ticket-creator
       model: sonnet
       findings: null

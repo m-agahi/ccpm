@@ -109,36 +109,62 @@ Then ask:
 
 ### Step 3: Read Ticket Drafts
 
-Check for pre-generated ticket drafts from the ticket-drafter agent:
+Locate the most recent run directory via the `latest` symlink:
 
 ```bash
-ls <reviewed-directory>/.local-review/tickets/*.md 2>/dev/null | grep -v INDEX.md
+ls -la <reviewed-directory>/.local-review/latest
+# latest -> runs/YYYYMMDD-HHMMSS
 ```
 
-**If ticket drafts exist (preferred path):**
+**Primary path — tickets.json (structured, preferred):**
 
-Read the `INDEX.md` for an overview, then read each draft file. Each draft has YAML frontmatter
-with:
+Check for the machine-readable tickets.json first:
 
-- `sequence` — ordering number
-- `status` — should be `draft` (skip any with `created` or `skipped`)
+```bash
+cat <reviewed-directory>/.local-review/latest/tickets.json 2>/dev/null
+```
+
+If `tickets.json` exists, use its structured fields directly. Each ticket record contains:
+
+- `id` — ticket identifier (e.g., TICKET-001)
+- `title` — ticket summary
 - `severity` — CRITICAL, HIGH, MEDIUM, LOW
+- `risk` — derived risk level (critical/high/medium/low/info)
+- `impact` — object with `confidentiality`, `integrity`, `availability` fields
+- `likelihood` — low/medium/high
 - `jira_priority` — 3, 4, or 5
 - `category` — Bug, Security, Dependencies, etc.
 - `type` — Bug or Task
 - `labels` — array of labels
 - `files` — array of file paths (from repo root)
-- `tools` — array of tools that detected the finding
+- `finding_ids` — corresponding finding IDs from findings.json
+- `description`, `fix`, `fix_snippet` — content for Jira description
 
-The draft body contains the full ticket description with code blocks, suggested fixes, impact, and
-recommendations — use this directly as the Jira ticket description.
+When creating Jira issues from `tickets.json`, use the structured `severity`, `risk`, `impact`, and
+`labels` fields directly rather than parsing markdown.
 
-**If no ticket drafts exist (fallback):**
+**Secondary path — per-ticket markdown files:**
 
-Fall back to reading the review report directly:
+If `tickets.json` is not available (pre-v4 run or agent failure), fall back to per-ticket markdown
+files in the run directory:
 
 ```bash
-ls -t <reviewed-directory>/.local-review/review-*.md | head -1
+ls <reviewed-directory>/.local-review/latest/tickets/*.md 2>/dev/null | grep -v INDEX.md
+```
+
+Read the `INDEX.md` for an overview, then read each draft file. Each draft has YAML frontmatter
+with: `sequence`, `status`, `severity`, `risk`, `impact`, `likelihood`, `jira_priority`, `category`,
+`type`, `labels`, `files`, `tools`.
+
+The draft body contains the full ticket description — use this directly as the Jira ticket
+description.
+
+**Tertiary fallback — review report:**
+
+If neither `tickets.json` nor markdown ticket files exist, fall back to reading the review report:
+
+```bash
+cat <reviewed-directory>/.local-review/latest/review.md 2>/dev/null
 ```
 
 Parse findings from the report sections (Critical Issues, Security, Code Quality, Dependencies,
@@ -205,7 +231,7 @@ Create this ticket? (yes / no / edit / stop)
 
 When a ticket is successfully created in Jira:
 
-1. Delete the draft file: `rm <reviewed-dir>/.local-review/tickets/YYMMDDHHMM-NNNN-slug.md`
+1. Delete the draft file: `rm <reviewed-dir>/.local-review/latest/tickets/YYMMDDHHMM-NNNN-slug.md`
 2. This ensures only uncreated drafts remain in the tickets directory for future runs
 
 When a finding is skipped:

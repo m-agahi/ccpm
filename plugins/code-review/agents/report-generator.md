@@ -410,6 +410,155 @@ Select the top 3 by: first sort by severity (CRITICAL > HIGH > MEDIUM), then wit
 severity pick findings with the broadest impact (crashes > data loss > security > silent failures).
 If all tools were installed, show "All review tools available" instead of the missing tools section.
 
+## JSON OUTPUT REQUIREMENT (v4)
+
+You MUST emit **both** the markdown report AND the following JSON files. JSON is additional output,
+not a replacement — both must be present and consistent.
+
+The `run_id` value is provided in the context block appended to this prompt (look for
+`Run ID (use as run_id in JSON outputs): ...`).
+
+### findings.json
+
+Write to `/tmp/review-work/findings.json`:
+
+```json
+{
+  "schema_version": "1.0",
+  "run_id": "<run_id from context>",
+  "generated_at": "<ISO8601 UTC timestamp>",
+  "project": { "path": "<absolute path>", "languages": ["python", "shell"] },
+  "findings": [
+    {
+      "id": "H-1",
+      "category": "security | quality | dependencies | container | coverage | infra | lint | types",
+      "subcategory": "xss-stored | hardcoded-credentials | algorithm-bug",
+      "severity": "critical | high | medium | low | info",
+      "risk": "critical | high | medium | low | info",
+      "impact": {
+        "confidentiality": "none | low | medium | high",
+        "integrity": "none | low | medium | high",
+        "availability": "none | low | medium | high"
+      },
+      "likelihood": "low | medium | high",
+      "title": "Short one-line title",
+      "locations": [{ "file": "path", "line": 947, "snippet": "≤200 chars" }],
+      "description": "1-3 sentences",
+      "fix": "1-3 sentences",
+      "fix_snippet": "optional code snippet",
+      "tools": ["semgrep", "manual"],
+      "related": ["M-3"],
+      "grep_pattern": null,
+      "pattern_matches": []
+    }
+  ]
+}
+```
+
+### Classifying impact and likelihood
+
+For each finding you place into `findings.json`, you MUST assign:
+
+- `impact.confidentiality` — does this issue enable unauthorized read of data?
+- `impact.integrity` — does this issue enable unauthorized modification?
+- `impact.availability` — does this issue enable downtime or DoS?
+- `likelihood` — how exploitable / reachable is this in the current code?
+
+Each axis is `none | low | medium | high`. Use these heuristics as guidance, NOT as a rigid rubric — apply judgement based on the actual finding text:
+
+| Finding type                            | C      | I      | A      | Likelihood notes                |
+| --------------------------------------- | ------ | ------ | ------ | ------------------------------- |
+| Stored XSS / reflected XSS              | high   | medium | low    | high if user input reachable    |
+| Hardcoded credentials in source / image | high   | high   | high   | high if container exposed       |
+| SQL injection                           | high   | high   | medium | high if endpoint reachable      |
+| ReDoS / catastrophic regex              | low    | low    | high   | medium if user-supplied pattern |
+| Missing authentication on endpoint      | high   | high   | medium | high if internet-reachable      |
+| CORS `*` / open                         | high   | low    | none   | medium                          |
+| Logic bug producing incorrect output    | none   | high   | none   | high if hot path                |
+| Null-deref / unhandled exception        | none   | low    | medium | medium                          |
+| Dependency CVE — RCE                    | high   | high   | high   | medium                          |
+| Dependency CVE — DoS-only               | none   | none   | high   | medium                          |
+| Code smell / maintainability            | none   | none   | none   | n/a → info                      |
+| Dead code                               | none   | none   | none   | n/a → info                      |
+| Missing tests / coverage gap            | none   | none   | none   | n/a → info                      |
+| Lint nit / style violation              | none   | none   | none   | n/a → info                      |
+| Performance issue (non-DoS)             | none   | none   | low    | low                             |
+| Hardcoded URL / HTTP-not-HTTPS          | medium | low    | none   | medium                          |
+
+Likelihood considers reachability (is the vulnerable code on a hot path or behind auth?), attacker access (local vs remote), and exploit complexity. Most internal-only-tool findings should be `likelihood: medium` unless evidence suggests otherwise.
+
+For the CIA fields, if uncertain between two levels, pick the LOWER. Inflated severity hurts triage.
+
+### Extracting grep_pattern from scanner markdown
+
+Scanner agents (security-reviewer, code-quality-reviewer, linter, sonarqube-scanner) emit findings
+in markdown. When a finding is regex-expressible, they include a line at the end of that finding:
+
+    **Grep pattern:** `<regex>`
+
+When extracting findings into `findings.json`, for each finding:
+
+- If the source markdown has a `Grep pattern:` line with a regex → copy that regex (between the
+  backticks) into the `grep_pattern` field
+- If the line is absent or says `none` → set `grep_pattern: null`
+
+Do NOT invent grep_pattern values. If the scanner didn't emit one, leave it null.
+
+**Risk derivation rule** (derive `risk` from `impact` + `likelihood`):
+
+- max(impact.C, impact.I, impact.A) = high × likelihood = high → risk = critical
+- max = high × likelihood = medium → risk = high
+- max = high × likelihood = low → risk = medium
+- max = medium × likelihood = high → risk = high
+- max = medium × likelihood = medium → risk = medium
+- max = medium × likelihood = low → risk = low
+- max = low × any → risk = low
+- max = none × any → risk = info
+
+Every finding in the markdown report MUST have a corresponding entry in `findings.json`.
+Use the same IDs (e.g., H-1, M-3) across both formats.
+
+```bash
+cat > /tmp/review-work/findings.json << 'FINDINGS_EOF'
+{
+  "schema_version": "1.0",
+  ...
+}
+FINDINGS_EOF
+```
+
+### summary.json
+
+Write to `/tmp/review-work/summary.json`:
+
+```json
+{
+  "schema_version": "1.0",
+  "run_id": "<run_id from context>",
+  "generated_at": "<ISO8601 UTC timestamp>",
+  "counts": { "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0 },
+  "by_impact_axis": {
+    "confidentiality": { "high": 0, "medium": 0, "low": 0, "none": 0 },
+    "integrity": { "high": 0, "medium": 0, "low": 0, "none": 0 },
+    "availability": { "high": 0, "medium": 0, "low": 0, "none": 0 }
+  },
+  "by_category": { "security": 0, "quality": 0 },
+  "by_module": { "path/x": 0 },
+  "tooling": { "sonarqube": "ok | missing | error", "trivy": "ok" }
+}
+```
+
+Counts must match the findings array in `findings.json`.
+
+```bash
+cat > /tmp/review-work/summary.json << 'SUMMARY_EOF'
+{
+  "schema_version": "1.0",
+  ...
+}
+SUMMARY_EOF
+```
+
 ## Important
 
 - **Deduplication is the primary value** of this agent — without it, the same bug appears 3-5 times
@@ -429,3 +578,5 @@ If all tools were installed, show "All review tools available" instead of the mi
   reveals a more serious issue (e.g., a bug + infinite retry = DoS).
 - **The report is the final artifact** — it must be self-contained and readable without access to
   the intermediate files.
+- **JSON is mandatory** — `findings.json` and `summary.json` must always be written. The validator
+  in review-cli.py will fail the run if they are missing or malformed.

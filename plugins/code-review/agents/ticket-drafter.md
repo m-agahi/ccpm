@@ -288,6 +288,92 @@ Y Medium, Z Low
 4. **Drafts are removed** from this directory when a Jira ticket is successfully created for them
 ```
 
+## JSON OUTPUT REQUIREMENT (v4)
+
+You MUST emit **both** the per-ticket markdown files AND `tickets.json`. JSON is additional output,
+not a replacement — all markdown ticket files in `/tmp/review-work/tickets/` must still be written.
+
+The `run_id` value is provided in the context block appended to this prompt (look for
+`Run ID (use as run_id in JSON outputs): ...`).
+
+Each ticket must include CIA (Confidentiality / Integrity / Availability) impact, likelihood, and
+derived risk in BOTH the markdown frontmatter AND the JSON record.
+
+### tickets.json
+
+Write to `/tmp/review-work/tickets.json` after all ticket files are written:
+
+```json
+{
+  "schema_version": "1.0",
+  "run_id": "<run_id from context>",
+  "generated_at": "<ISO8601 UTC timestamp>",
+  "tickets": [
+    {
+      "id": "TICKET-001",
+      "title": "Fix stored XSS in visualization UI",
+      "severity": "high",
+      "risk": "high",
+      "impact": {"confidentiality": "high", "integrity": "medium", "availability": "low"},
+      "likelihood": "medium",
+      "category": "security",
+      "subcategory": "xss-stored",
+      "finding_ids": ["H-1"],
+      "files": ["yadgar/static/index.html"],
+      "description": "...",
+      "fix": "...",
+      "fix_snippet": "...",
+      "labels": ["security", "xss"]
+    }
+  ]
+}
+```
+
+**Risk derivation rule** (derive `risk` from `impact` + `likelihood`):
+
+- max(impact.C, impact.I, impact.A) = high  × likelihood = high   → risk = critical
+- max = high  × likelihood = medium → risk = high
+- max = high  × likelihood = low    → risk = medium
+- max = medium × likelihood = high   → risk = high
+- max = medium × likelihood = medium → risk = medium
+- max = medium × likelihood = low    → risk = low
+- max = low   × any               → risk = low
+- max = none  × any               → risk = info
+
+```bash
+cat > /tmp/review-work/tickets.json << 'TICKETS_EOF'
+{
+  "schema_version": "1.0",
+  ...
+}
+TICKETS_EOF
+```
+
+### CIA fields in markdown frontmatter
+
+Add `impact`, `likelihood`, and `risk` fields to each ticket's YAML frontmatter:
+
+```yaml
+---
+sequence: 1
+status: draft
+severity: HIGH
+risk: high
+impact:
+  confidentiality: high
+  integrity: medium
+  availability: low
+likelihood: medium
+jira_priority: 3
+category: Security
+type: Bug
+labels: [code-review, automated, security]
+files:
+  - path/to/file.java
+tools: [Security, SonarQube]
+---
+```
+
 ## Important
 
 - **Read the actual source code** for every finding — do not just copy text from the report. The
@@ -304,4 +390,6 @@ Y Medium, Z Low
   `skipped`.
 - **Do NOT create tickets** — only draft them. The jira-ticket-creator agent handles actual
   creation.
+- **JSON is mandatory** — `tickets.json` must always be written. The validator in review-cli.py
+  will fail the run if it is missing or malformed.
 ````
