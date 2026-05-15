@@ -44,19 +44,26 @@ Claude Code collapses long Bash output, so the user won't see the setup script's
 After setup completes, **read the manifest and re-display key info as regular text**:
 
 1. Read `REVIEW_DIR/.local-review/manifest.json` to get version, languages, and agent count.
-2. Check `~/.config/code-review/registries.yml` — if all mount entries are commented out, registries
+2. Check `~/.config/code-review/registries.yaml` — if all mount entries are commented out, registries
    are **not configured**.
 3. Print a summary like this (adjust to actual values):
 
 > **local-code-review vX.Y.Z**
 >
 > Languages detected: java, docker, hcl
-> Agents: 7 parallel + 3 sequential
+> Agents: N parallel + M scripts + K sequential
+>
+> (Counts vary by language selection; read manifest.json for exact values.)
 >
 > Private registries: not configured
-> Edit `~/.config/code-review/registries.yml` to mount credentials for Maven, npm, pip, etc.
+> Edit `~/.config/code-review/registries.yaml` to mount credentials for Maven, npm, pip, etc.
 
 If registries ARE configured (uncommented mounts exist), show which ones are active instead.
+
+If the setup script printed a **PRIVATE REGISTRY AUTH NOT CONFIGURED** warning, surface it
+prominently in your summary to the user. Do not bury it. Mention that the user can read
+`<PLUGIN_ROOT>/docs/REGISTRIES.md` for setup steps (replace `<PLUGIN_ROOT>` with the actual
+value of `${CLAUDE_PLUGIN_ROOT}`).
 
 ## RUN AGENTS (user runs manually in terminal)
 

@@ -5,6 +5,50 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [4.1.0] - 2026-05-15
+
+### Added
+
+- **Proactive private-registry auth warning**: `setup` now detects languages that commonly need
+  private registry credentials (Maven/Gradle, npm, pip, Go, Composer, NuGet, Cargo) and checks
+  whether matching mounts or env vars are configured in `registries.yaml`. Missing auth triggers
+  a loud warning block listing the affected languages.
+- **Interactive continue/abort prompt**: When running in a TTY and auth is not configured, the
+  user is prompted `Continue without private auth? [y/N]`. Pressing Enter or `n` aborts cleanly
+  with a message pointing to `registries.yaml`. Non-interactive mode (CI) prints the warning
+  and continues automatically.
+- **`--ignore-private-auth` flag**: New flag on the `setup` subcommand skips the auth check
+  entirely. Useful for projects with only public dependencies.
+- **`docs/REGISTRIES.md`**: New setup guide with per-language walkthroughs (Maven, Gradle, npm,
+  pip, Go modules, Composer, NuGet, Cargo, Google Artifact Registry, AWS CodeArtifact) plus
+  a troubleshooting section.
+
+### Changed
+
+- Config file `~/.config/code-review/registries.yml` renamed to `registries.yaml`. Plugin
+  retains a back-compat fallback that reads `.yml` with a deprecation warning to stderr.
+- Plugin source: `registries.example.yml` → `registries.example.yaml`.
+- `_ensure_registries_config()` copies the example to `.yaml` (not `.yml`) on first run.
+  If the legacy `.yml` already exists, it is left untouched (no silent migration).
+- `SKILL.md` summary template generalised: agent count now shown as
+  `N parallel + M scripts + K sequential` with a note to read `manifest.json` for exact values.
+- `SKILL.md` instructs the LLM to surface the PRIVATE REGISTRY AUTH NOT CONFIGURED warning
+  prominently in the setup summary and link to `docs/REGISTRIES.md`.
+- **CI consolidation**: `release.yaml` is now the single Forgejo workflow.
+  Replaces the previous split between `build.yaml` (Docker push) and
+  `release.yaml` (Forgejo release + Rust binaries). New `discover` job
+  auto-detects every plugin with a Dockerfile under `plugins/*/docker/`
+  or `plugins/*/Dockerfile`, then `build-docker` matrix-builds each via
+  Docker Build Cloud (`openfantasy/builder`) with per-plugin change
+  detection and registry buildcache. `build.yaml` and
+  `.forgejo/scripts/build_images.py` deleted.
+
+### Deprecated
+
+- The `.yml` extension for `registries.yml`. The plugin still reads it but prints a deprecation
+  warning to stderr on every run. The `.yml` extension will be removed in v5 — rename to
+  `registries.yaml` to silence the warning.
+
 ## [4.0.0] - 2026-05-15
 
 ### Added

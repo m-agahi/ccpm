@@ -132,13 +132,22 @@ cmd_start() {
   fi
 
   # Mount private registry configs (Maven, npm, pip, etc.) from user config.
+  local registries_yaml="${HOME}/.config/code-review/registries.yaml"
   local registries_yml="${HOME}/.config/code-review/registries.yml"
-  if [[ -f "$registries_yml" ]]; then
+  local _registries_file=""
+  if [[ -f "$registries_yaml" ]]; then
+    _registries_file="$registries_yaml"
+  elif [[ -f "$registries_yml" ]]; then
+    echo "WARNING: ~/.config/code-review/registries.yml is deprecated. Rename to registries.yaml." >&2
+    echo "         Plugin v5 will stop reading the .yml extension." >&2
+    _registries_file="$registries_yml"
+  fi
+  if [[ -n "$_registries_file" ]]; then
     # Parse mounts and env from YAML using python3 (already a dependency)
     local _parsed
     _parsed=$(python3 -c "
 import yaml, os, sys
-with open('$registries_yml') as f:
+with open('$_registries_file') as f:
     cfg = yaml.safe_load(f) or {}
 for m in cfg.get('mounts') or []:
     src = os.path.expanduser(m.get('source', ''))

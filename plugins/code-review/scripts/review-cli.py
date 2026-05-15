@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deterministic review pipeline runner (v4.0.0).
+Deterministic review pipeline runner (v4.1.0).
 
 Handles all non-LLM phases of the code review: permission checks, container
 lifecycle, language detection, agent selection, prompt generation, and agent
@@ -110,7 +110,28 @@ def run(cmd, check=True, capture=True, **kwargs):
     )
 
 
-REGISTRIES_PATH = Path.home() / ".config" / "code-review" / "registries.yml"
+REGISTRIES_PATH = Path.home() / ".config" / "code-review" / "registries.yaml"
+REGISTRIES_LEGACY_PATH = Path.home() / ".config" / "code-review" / "registries.yml"
+
+
+def _active_registries_path():
+    """Return (path, is_legacy) for the active registries config file.
+
+    Prefers registries.yaml. Falls back to registries.yml with a deprecation
+    warning printed to stderr. Returns (REGISTRIES_PATH, False) if neither exists
+    (caller should handle the missing-file case).
+    """
+    if REGISTRIES_PATH.exists():
+        return REGISTRIES_PATH, False
+    if REGISTRIES_LEGACY_PATH.exists():
+        print(
+            "WARNING: ~/.config/code-review/registries.yml is deprecated. "
+            "Rename to registries.yaml.\n"
+            "         Plugin v5 will stop reading the .yml extension.",
+            file=sys.stderr,
+        )
+        return REGISTRIES_LEGACY_PATH, True
+    return REGISTRIES_PATH, False
 
 
 def load_config():
@@ -120,15 +141,16 @@ def load_config():
 
 
 def load_registries():
-    """Load ~/.config/code-review/registries.yml if it exists.
+    """Load ~/.config/code-review/registries.yaml (or legacy .yml) if it exists.
 
     Returns (mounts, envs) where mounts is a list of (source, target) tuples
     and envs is a list of "KEY=VALUE" strings. Returns ([], []) if not found.
     """
-    if not REGISTRIES_PATH.exists():
+    active_path, _ = _active_registries_path()
+    if not active_path.exists():
         return [], []
     try:
-        with open(REGISTRIES_PATH) as f:
+        with open(active_path) as f:
             cfg = yaml.safe_load(f) or {}
     except (yaml.YAMLError, OSError):
         return [], []
@@ -145,14 +167,15 @@ def load_registries():
 
 
 def _ensure_registries_config():
-    """Copy the example registries.yml to ~/.config/code-review/ if it doesn't exist.
+    """Copy the example registries.yaml to ~/.config/code-review/ if neither .yaml nor .yml exists.
 
-    Returns True if the file was just created (first time), False if it already existed.
+    Returns True if the file was just created (first time), False if it already existed
+    (either registries.yaml or the legacy registries.yml).
     """
-    if REGISTRIES_PATH.exists():
+    if REGISTRIES_PATH.exists() or REGISTRIES_LEGACY_PATH.exists():
         return False
 
-    example = PLUGIN_ROOT / "registries.example.yml"
+    example = PLUGIN_ROOT / "registries.example.yaml"
     if not example.exists():
         return False
 
@@ -167,6 +190,7 @@ def print_registries_info():
     """Print a boxed info message about private registry configuration."""
     first_time = _ensure_registries_config()
     mounts, envs = load_registries()
+    active_path, _ = _active_registries_path()
 
     if mounts or envs:
         lines = []
@@ -188,7 +212,7 @@ def print_registries_info():
             "  Changes take effect on the next review.",
         ]
     else:
-        short_path = str(REGISTRIES_PATH).replace(str(Path.home()), "~")
+        short_path = str(active_path).replace(str(Path.home()), "~")
         lines = [
             "  Private registries: not configured",
             "",
@@ -206,6 +230,127 @@ def print_registries_info():
         padded = l.ljust(width)
         print(f"{border_color}\u2502{reset}{padded}{border_color}\u2502{reset}")
     print(f"{border_color}\u2514{'\u2500' * width}\u2518{reset}")
+
+
+LANGUAGE_AUTH_HINTS = {
+    "java": {
+        "mounts": ["/root/.m2/settings.xml", "/root/.gradle/gradle.properties"],
+        "label": "Maven / Gradle",
+    },
+    "javascript": {"mounts": ["/root/.npmrc"], "label": "npm"},
+    "typescript": {"mounts": ["/root/.npmrc"], "label": "npm"},
+    "python": {"mounts": ["/root/.config/pip/pip.conf"], "label": "pip"},
+    "go": {"mounts": ["/root/.netrc"], "label": "Go modules"},
+    "php": {"mounts": ["/root/.config/composer/auth.json"], "label": "Composer"},
+    "csharp": {"mounts": ["/root/.nuget/NuGet/NuGet.Config"], "label": "NuGet"},
+    "dotnet": {"mounts": ["/root/.nuget/NuGet/NuGet.Config"], "label": "NuGet"},
+    "rust": {"mounts": ["/root/.cargo/credentials.toml"], "label": "Cargo"},
+}
+
+# Env-key prefix → language name (for env-based auth detection)
+_ENV_LANG_MAP = {
+    "NPM": "javascript",
+    "PIP": "python",
+    "MAVEN": "java",
+    "GRADLE": "java",
+    "GO": "go",
+    "COMPOSER": "php",
+    "NUGET": "csharp",
+    "CARGO": "rust",
+}
+
+
+def check_private_auth(languages, mounts, envs):
+    """Check that detected languages have matching private registry auth configured.
+
+    Parameters
+    ----------
+    languages:  list of detected language strings (e.g. ["java", "python"])
+    mounts:     list of (source, target) tuples from load_registries()
+    envs:       list of "KEY=VALUE" strings from load_registries()
+
+    Returns True if all languages have auth or none require it. Returns False
+    if the user aborted the interactive prompt.
+    """
+    mount_targets = {tgt for _, tgt in mounts}
+    env_keys = {e.split("=", 1)[0].upper() for e in envs}
+
+    def _lang_has_env(lang):
+        """Return True if any configured env key matches the language."""
+        for prefix, mapped_lang in _ENV_LANG_MAP.items():
+            if mapped_lang == lang or (lang == "typescript" and mapped_lang == "javascript"):
+                if any(k.startswith(prefix) for k in env_keys):
+                    return True
+        return False
+
+    lacking = []
+    for lang in languages:
+        hints = LANGUAGE_AUTH_HINTS.get(lang)
+        if hints is None:
+            continue  # not a known package-managed language
+        has_mount = any(t in mount_targets for t in hints["mounts"])
+        has_env = _lang_has_env(lang)
+        if not has_mount and not has_env:
+            lacking.append((lang, hints["label"]))
+
+    if not lacking:
+        return True
+
+    # Build active config path string for display
+    active_path, _ = _active_registries_path()
+    short_cfg = str(active_path).replace(str(Path.home()), "~")
+    example_path = str(PLUGIN_ROOT / "registries.example.yaml")
+    docs_path = str(PLUGIN_ROOT / "docs" / "REGISTRIES.md")
+
+    warn_lines = [
+        "\033[33m============================================================\033[0m",
+        "\033[33m⚠  PRIVATE REGISTRY AUTH NOT CONFIGURED\033[0m",
+        "\033[33m============================================================\033[0m",
+        "",
+        "Detected languages that commonly need private registry credentials:",
+    ]
+    for lang, label in lacking:
+        warn_lines.append(f"  - {lang}   ({label})")
+    warn_lines += [
+        "",
+        "No matching mounts or env vars found in:",
+        f"  {short_cfg}",
+        "",
+        "If this project pulls from INTERNAL/PRIVATE repositories (Artifactory,",
+        "Nexus, Google Artifact Registry, AWS CodeArtifact, GitHub Packages,",
+        "GitLab Package Registry, etc.) the dependency-checker, SonarQube, and",
+        "build-time tools will FAIL to resolve those dependencies.",
+        "",
+        "If this project uses only PUBLIC dependencies, you can safely continue.",
+        "",
+        f"Setup guide: {docs_path}",
+        f"Example template: {example_path}",
+        f"Active config:    {short_cfg}",
+        "",
+    ]
+
+    for line in warn_lines:
+        print(line)
+
+    if not sys.stdin.isatty():
+        # Non-interactive: warn but don't block
+        print(
+            "  (Non-interactive mode — continuing without auth. "
+            "Pass --ignore-private-auth to suppress this warning.)",
+            file=sys.stderr,
+        )
+        return True
+
+    try:
+        answer = input("Continue without private auth? [y/N]: ").strip().lower()
+    except EOFError:
+        answer = ""
+
+    if answer in ("y", "yes"):
+        return True
+
+    print("Aborted. Edit ~/.config/code-review/registries.yaml and re-run.")
+    sys.exit(0)
 
 
 def review_dir(args):
@@ -658,6 +803,13 @@ def cmd_setup(args):
 
     # 6. Show registries info
     print_registries_info()
+
+    # 6a. Check private registry auth (warn/prompt if languages lack credentials)
+    if not getattr(args, "ignore_private_auth", False):
+        mounts, envs = load_registries()
+        if not check_private_auth(languages, mounts, envs):
+            # check_private_auth already called sys.exit(0) — won't reach here
+            sys.exit(0)  # pragma: no cover
 
     # 7. Agent selection menu
     agents = select_agents(languages, project_dir, user_input=args.agents)
@@ -2177,7 +2329,7 @@ def cmd_cleanup(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Deterministic review pipeline runner (v4.0.0)",
+        description="Deterministic review pipeline runner (v4.1.0)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -2191,6 +2343,14 @@ def main():
         default=None,
         help="Agent selection: 'all', 'none', or space-separated numbers (e.g. '5 7 8'). "
         "If omitted, shows interactive menu (requires TTY).",
+    )
+    p_setup.add_argument(
+        "--ignore-private-auth",
+        dest="ignore_private_auth",
+        action="store_true",
+        default=False,
+        help="Skip the private registry auth check entirely. Use when the project "
+        "has only public dependencies.",
     )
 
     # generate-prompts

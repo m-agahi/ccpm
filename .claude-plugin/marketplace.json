@@ -10,9 +10,9 @@
   "plugins": [
     {
       "name": "code-review",
-      "description": "Comprehensive local code review with static analysis, security scanning, dependency auditing, container scanning (Trivy), SonarQube, and best practices enforcement. All analysis is local — never pushes to remote. v4: JSON-first machine-readable output with per-run subdirs, CIA-axis impact matrix, and pattern propagation.",
+      "description": "Comprehensive local code review with static analysis, security scanning, dependency auditing, container scanning (Trivy), SonarQube, and best practices enforcement. All analysis is local — never pushes to remote. v4: JSON-first machine-readable output with per-run subdirs, CIA-axis impact matrix, pattern propagation, and proactive private-registry auth detection.",
       "source": "./plugins/code-review",
-      "version": "4.0.0",
+      "version": "4.1.0",
       "author": {
         "name": "Max Agahi"
       },

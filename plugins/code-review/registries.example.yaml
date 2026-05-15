@@ -1,6 +1,6 @@
 # Registry authentication for the code-review container.
 #
-# Copy this file to ~/.config/code-review/registries.yml and uncomment
+# Copy this file to ~/.config/code-review/registries.yaml and uncomment
 # the entries you need. Each mount injects a read-only config file into
 # the container so package managers can resolve private dependencies.
 #
