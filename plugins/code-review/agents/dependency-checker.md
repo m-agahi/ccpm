@@ -240,6 +240,25 @@ List of packages not referenced in source code.
 - Do NOT install or upgrade the **project's** dependencies — but DO install missing **audit tools**
   (pip-audit, npm, composer, trivy) in the container if needed
 
+## CONFIDENCE GUIDANCE
+
+For each finding, emit a confidence line immediately after the finding description:
+
+    **Confidence:** confirmed|heuristic|speculative
+
+Tiers:
+
+- `confirmed` — CVE matched by trivy, pip-audit, npm audit, or OWASP dependency-check at an exact
+  package version; verifiable by re-running the scanner
+- `heuristic` — version range match, transitive dependency, or outdated package without a known CVE;
+  actual exploitability depends on usage patterns
+- `speculative` — inferred from indirect evidence (e.g., known vulnerable code pattern without
+  scanner confirmation)
+
+Optionally emit verification steps (max 3; omit if `confirmed`):
+
+    **Verification:** <step 1> | <step 2>
+
 ## Intermediate Output
 
 After completing the audit, save your findings inside the container:

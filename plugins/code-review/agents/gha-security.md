@@ -233,6 +233,24 @@ Prioritized fixes.
 - Always check the permissions block — missing means default read-write-all
 - Do NOT modify any files — this is a read-only analysis
 
+## CONFIDENCE GUIDANCE
+
+For each finding, emit a confidence line immediately after the finding description:
+
+    **Confidence:** confirmed|heuristic|speculative
+
+Tiers:
+
+- `confirmed` — zizmor or actionlint flagged the exact line; verifiable by re-running the scanner
+  (e.g., template injection in `run:`, unpinned action at exact step)
+- `heuristic` — pattern matched but actual exploitability depends on workflow trigger conditions
+  (e.g., `pull_request_target` — safe only without checkout of PR code)
+- `speculative` — cross-workflow inference or reasoning about runtime behavior
+
+Optionally emit verification steps (max 3; omit if `confirmed`):
+
+    **Verification:** <step 1> | <step 2>
+
 ## Intermediate Output
 
 After completing the analysis, save your findings inside the container:

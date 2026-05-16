@@ -1,4 +1,4 @@
-FROM python:3.13-slim AS base
+FROM python:3.14-slim AS base
 
 LABEL maintainer="local-code-review"
 LABEL description="All-in-one scanner toolbox for local code reviews"
@@ -8,24 +8,24 @@ ENV LANG=C.UTF-8
 ENV PATH="/usr/local/go/bin:/root/go/bin:/opt/sonar-scanner/bin:/opt/spotbugs/bin:/opt/pmd/bin:/opt/terraform:${PATH}"
 
 # Pinned tool versions (update these to rebuild with newer tools)
-ENV GO_VERSION=1.26.1 \
-    TRIVY_VERSION=0.69.3 \
+ENV GO_VERSION=1.26.3 \
+    TRIVY_VERSION=0.70.0 \
     GITLEAKS_VERSION=8.30.1 \
     HADOLINT_VERSION=2.14.0 \
     SHELLCHECK_VERSION=v0.11.0 \
-    TFLINT_VERSION=0.61.0 \
-    PMD_VERSION=7.23.0 \
+    TFLINT_VERSION=0.62.1 \
+    PMD_VERSION=7.24.0 \
     SPOTBUGS_VERSION=4.9.8 \
-    SONAR_VERSION=8.0.1.6346 \
-    ZIZMOR_VERSION=1.23.1 \
-    TERRAFORM_VERSION=1.14.8 \
-    CHECKSTYLE_VERSION=13.3.0 \
+    SONAR_VERSION=8.1.0.6389 \
+    ZIZMOR_VERSION=1.25.2 \
+    TERRAFORM_VERSION=1.15.3 \
+    CHECKSTYLE_VERSION=13.4.2 \
     GOOGLE_JAVA_FORMAT_VERSION=1.35.0
 
 WORKDIR /workspace
 
 # ============================================================
-# System dependencies + Node.js 22 LTS + PHP 8.4 + Ruby (single apt layer)
+# System dependencies + Node.js 24 LTS + PHP 8.4 + Ruby (single apt layer)
 # ============================================================
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --fix-missing \
@@ -33,12 +33,24 @@ RUN apt-get update \
        build-essential pkg-config \
        libssl-dev \
        libgtk-3-dev libglib2.0-dev libwebkit2gtk-4.1-dev \
-       default-jdk-headless maven \
+       maven \
        php-cli php-xml php-mbstring php-curl php-zip php-tokenizer \
        ruby ruby-dev \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# ============================================================
+# Eclipse Temurin JDK 21 + 24 (Adoptium)
+# ============================================================
+RUN wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /usr/share/keyrings/adoptium.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" > /etc/apt/sources.list.d/adoptium.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends temurin-21-jdk temurin-24-jdk \
+    && update-alternatives --set java /usr/lib/jvm/temurin-21-amd64/bin/java \
+    && update-alternatives --set javac /usr/lib/jvm/temurin-21-amd64/bin/javac
+ENV JAVA_HOME=/usr/lib/jvm/temurin-21-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 # ============================================================
 # Go (pinned version)
@@ -81,26 +93,26 @@ RUN gem install --no-document rubocop bundler-audit
 # Python tools (pinned via pip)
 # ============================================================
 RUN pip install --no-cache-dir \
-    semgrep==1.156.0 \
-    checkov==3.2.513 \
-    ruff==0.15.8 \
-    mypy==1.19.1 \
-    pip-audit==2.9.0 \
-    sqlfluff==4.1.0 \
+    semgrep==1.163.0 \
+    checkov==3.2.529 \
+    ruff==0.15.13 \
+    mypy==2.1.0 \
+    pip-audit==2.10.0 \
+    sqlfluff==4.2.1 \
     yamllint==1.38.0 \
-    hypothesis==6.151.9 \
-    pytest==9.0.2 \
+    hypothesis==6.152.7 \
+    pytest==9.0.3 \
     pytest-cov==7.1.0
 
 # ============================================================
 # Node.js tools (global)
 # ============================================================
 RUN npm install -g \
-    jscpd@4.0.8 \
-    pyright@1.1.408 \
-    eslint@10.1.0 \
-    prettier@3.8.1 \
-    typescript@6.0.2 \
+    jscpd@4.2.2 \
+    pyright@1.1.409 \
+    eslint@10.4.0 \
+    prettier@3.8.3 \
+    typescript@6.0.3 \
     @anthropic-ai/claude-code
 
 # Claude Code CLI settings (allow Bash and Read inside container)
@@ -120,11 +132,11 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 # ============================================================
 # Go tools (pre-built binaries for multi-arch support)
 # ============================================================
-ENV GOLANGCI_LINT_VERSION=2.11.4 \
+ENV GOLANGCI_LINT_VERSION=2.12.2 \
     STATICCHECK_VERSION=2026.1 \
-    SHFMT_VERSION=3.13.0 \
-    ACTIONLINT_VERSION=1.7.11 \
-    CHECKMAKE_VERSION=0.2.2
+    SHFMT_VERSION=3.13.1 \
+    ACTIONLINT_VERSION=1.7.12 \
+    CHECKMAKE_VERSION=0.3.2
 
 # golangci-lint
 RUN ARCH=$(dpkg --print-architecture) \
@@ -229,7 +241,7 @@ RUN --mount=type=secret,id=nvd_api_key,env=NVD_API_KEY \
     trivy image --download-db-only 2>/dev/null || true \
     && trivy image --download-java-db-only 2>/dev/null || true \
     && dependency-check --updateonly ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"} 2>/dev/null || true \
-    && mkdir -p /tmp/tflint-init && echo 'plugin "aws" { enabled = true, version = "0.35.0", source = "github.com/terraform-linters/tflint-ruleset-aws" }' > /tmp/tflint-init/.tflint.hcl \
+    && mkdir -p /tmp/tflint-init && echo 'plugin "aws" { enabled = true, version = "0.47.0", source = "github.com/terraform-linters/tflint-ruleset-aws" }' > /tmp/tflint-init/.tflint.hcl \
     && tflint --init --config=/tmp/tflint-init/.tflint.hcl 2>/dev/null || true \
     && rm -rf /tmp/tflint-init
 
@@ -290,6 +302,6 @@ RUN echo "=== Tool Versions ===" \
 
 # Review helper scripts (baked in — no need to copy at runtime)
 # Bump version label to trigger a new image build.
-LABEL version="4.1.1"
+LABEL version="5.0.0"
 COPY scripts/ /opt/review-scripts/
 ENTRYPOINT ["sleep", "infinity"]

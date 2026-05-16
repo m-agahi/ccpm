@@ -269,6 +269,19 @@ def run_pattern_propagation(run_dir: Path) -> None:
         same_issue_hits.sort(key=lambda h: (h["file"], h["line"]))
         same_issue_hits = same_issue_hits[:MAX_MATCHES]
 
+        # Inherit confidence from parent finding, downgraded one tier
+        parent_confidence = finding.get("confidence", "heuristic")
+        _CONFIDENCE_TIERS = ["speculative", "heuristic", "confirmed"]
+        try:
+            tier_idx = _CONFIDENCE_TIERS.index(parent_confidence)
+        except ValueError:
+            tier_idx = 1  # default: heuristic
+        match_confidence = _CONFIDENCE_TIERS[max(0, tier_idx - 1)]
+
+        for hit in same_issue_hits:
+            hit["confidence"] = match_confidence
+            hit["verification_steps"] = [f"compare to parent finding {finding_id}"]
+
         finding["pattern_matches"] = same_issue_hits
         total_with_matches += 1
         total_locations += len(same_issue_hits)

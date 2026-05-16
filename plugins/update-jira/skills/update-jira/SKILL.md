@@ -201,9 +201,11 @@ Use Markdown format (the MCP `mcp__atlassian__jira_add_comment` tool accepts Mar
   - Skip if ticket number already present anywhere in the title.
   - Use `gh api repos/{ORG}/<repo>/pulls/<number> --method PATCH -f title="<new title>"` (no MCP update tool exists).
 - **PR body**: must include a Jira link at the top:
+
   ```
   Jira: {JIRA_BASE}/browse/{PROJECT}-123
   ```
+
   - Skip if the body already contains a link to the ticket.
   - Use `gh api repos/{ORG}/<repo>/pulls/<number> --method PATCH -f body="<new body>"` (no MCP update tool exists).
 

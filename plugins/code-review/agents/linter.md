@@ -463,6 +463,24 @@ Constraints:
 - Avoid catastrophic backtracking (no nested unbounded quantifiers)
 - If a pattern would yield >100 hits in any reasonably-sized repo, it's too broad — skip it
 
+## CONFIDENCE GUIDANCE
+
+For each finding, emit a confidence line immediately after the finding description:
+
+    **Confidence:** confirmed|heuristic|speculative
+
+Tiers:
+
+- `confirmed` — tool matched exact line; verifiable in seconds (linter error at exact location,
+  ruff S-rule match, phpcs violation, eslint-plugin-security hit)
+- `heuristic` — pattern matched but reachability needs human check (pmd, ruff style rules, jscpd
+  duplication reports)
+- `speculative` — cross-file inference or reasoning beyond direct tool output
+
+Optionally emit verification steps (max 3; omit if `confirmed`):
+
+    **Verification:** <step 1> | <step 2>
+
 ## Intermediate Output
 
 After completing the analysis, save your findings:

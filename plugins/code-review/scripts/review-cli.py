@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deterministic review pipeline runner (v4.1.0).
+Deterministic review pipeline runner (v5.0.0).
 
 Handles all non-LLM phases of the code review: permission checks, container
 lifecycle, language detection, agent selection, prompt generation, and agent
@@ -38,6 +38,10 @@ except ImportError:
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = PLUGIN_ROOT / "review-tools.yml"
+
+# Set to True when project Python version differs from the container's Python version.
+# Findings from sonarqube-scanner are tagged tool_version_mismatch=true when this is True.
+TOOL_VERSION_MISMATCH = False
 REGISTRY_IMAGE = "openfantasy/code-review:latest"
 LOCAL_IMAGE = "localhost/review-tools:latest"
 IMAGE_NAME = REGISTRY_IMAGE  # resolved at runtime by container.sh
@@ -87,6 +91,95 @@ def container_name(project_dir):
     slug = Path(project_dir).name.lower()
     slug = re.sub(r"[^a-z0-9-]", "-", slug)
     return f"review-{slug}"
+
+
+def check_python_version_mismatch(project_dir: Path) -> tuple[bool, str, str]:
+    """Detect project's target Python version and compare to sys.version_info.
+
+    Checks (in order): .python-version, pyproject.toml (requires-python or [tool.python]),
+    runtime.txt.
+
+    Returns (mismatch, container_version, project_version) where mismatch is True when
+    major.minor differ.
+    """
+    container_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    project_ver = None
+
+    # 1. .python-version
+    pv_file = project_dir / ".python-version"
+    if pv_file.exists():
+        try:
+            raw = pv_file.read_text().strip()
+            # May be "3.11" or "3.11.4"
+            parts = raw.split(".")
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                project_ver = f"{parts[0]}.{parts[1]}"
+        except OSError:
+            pass
+
+    # 2. pyproject.toml requires-python or [tool.python]
+    if not project_ver:
+        pyproject = project_dir / "pyproject.toml"
+        if pyproject.exists():
+            try:
+                text = pyproject.read_text()
+                # requires-python = ">=3.11" or "==3.11.*" or "~=3.11"
+                m = re.search(r'requires-python\s*=\s*["\'][^"\']*?(\d+)\.(\d+)', text)
+                if m:
+                    project_ver = f"{m.group(1)}.{m.group(2)}"
+                else:
+                    # [tool.python] version = "3.11"
+                    m = re.search(r'\[tool\.python\].*?version\s*=\s*["\'](\d+)\.(\d+)', text, re.DOTALL)
+                    if m:
+                        project_ver = f"{m.group(1)}.{m.group(2)}"
+            except OSError:
+                pass
+
+    # 3. runtime.txt (e.g. "python-3.11.4" or "3.11")
+    if not project_ver:
+        runtime = project_dir / "runtime.txt"
+        if runtime.exists():
+            try:
+                raw = runtime.read_text().strip()
+                m = re.search(r"(\d+)\.(\d+)", raw)
+                if m:
+                    project_ver = f"{m.group(1)}.{m.group(2)}"
+            except OSError:
+                pass
+
+    if not project_ver:
+        return False, container_ver, "unknown"
+
+    mismatch = project_ver != container_ver
+    return mismatch, container_ver, project_ver
+
+
+def run_python_version_check(project_dir: Path) -> None:
+    """Run Python version mismatch check at startup.
+
+    Sets global TOOL_VERSION_MISMATCH flag and emits a loud warning when the container
+    Python version differs from the project's target Python version.
+    """
+    global TOOL_VERSION_MISMATCH
+    mismatch, container_ver, project_ver = check_python_version_mismatch(project_dir)
+    if mismatch:
+        TOOL_VERSION_MISMATCH = True
+        print(
+            f"\n\033[1;33m{'⚠' * 3}  Python version mismatch  {'⚠' * 3}\033[0m"
+        )
+        print(
+            f"\033[33m  Container Python: {sys.version}\033[0m"
+        )
+        print(
+            f"\033[33m  Project target:   {project_ver}\033[0m"
+        )
+        print(
+            "\033[33m  SonarQube coverage findings may be inaccurate.\033[0m"
+        )
+        print(
+            "\033[33m  Affected findings will be tagged tool_version_mismatch=true\033[0m"
+            " and confidence set to speculative.\n"
+        )
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -424,6 +517,49 @@ def _find_latest_manifest(lr):
     return lr / "manifest.json"
 
 
+def _tag_tool_version_mismatch_findings(rd: Path) -> None:
+    """Tag findings from sonarqube-scanner with tool_version_mismatch=True and
+    confidence=speculative when a Python version mismatch was detected.
+
+    This is a best-effort post-processing step; failures are non-fatal.
+    """
+    findings_path = rd / "findings.json"
+    if not findings_path.exists():
+        return
+    try:
+        data = json.loads(findings_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return
+
+    findings = data.get("findings", [])
+    if not isinstance(findings, list):
+        return
+
+    changed = False
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        tools = f.get("tools", [])
+        if isinstance(tools, list) and any("sonar" in str(t).lower() for t in tools):
+            f["tool_version_mismatch"] = True
+            f["confidence"] = "speculative"
+            if not f.get("verification_steps"):
+                f["verification_steps"] = [
+                    "Re-run sonarqube-scanner in an environment matching the project's Python version"
+                ]
+            changed = True
+
+    if changed:
+        try:
+            findings_path.write_text(json.dumps(data, indent=2) + "\n")
+            print(
+                "\033[33mNOTE: Tagged SonarQube findings with tool_version_mismatch=true "
+                "and confidence=speculative due to Python version mismatch.\033[0m"
+            )
+        except OSError as exc:
+            print(f"\033[33mWARNING: Could not update findings.json for version mismatch: {exc}\033[0m")
+
+
 def _validate_json_outputs(rd):
     """Validate findings.json, tickets.json, summary.json in the run directory.
 
@@ -461,16 +597,21 @@ def _validate_json_outputs(rd):
                         if axis not in impact:
                             print(f"\033[33mWARNING: {findings_path}: finding[{i}].impact missing '{axis}'\033[0m")
                             all_valid = False
+                    # Optional fields: warn but do not fail (schema_version 1.1)
+                    if "confidence" not in f:
+                        print(f"\033[33mWARNING: {findings_path}: finding[{i}] missing optional 'confidence' (default: heuristic)\033[0m")
+                    if "verification_steps" not in f:
+                        print(f"\033[33mWARNING: {findings_path}: finding[{i}] missing optional 'verification_steps' (default: [])\033[0m")
+                    # Warn when speculative finding has no verification steps
+                    if f.get("confidence") == "speculative" and not f.get("verification_steps"):
+                        print(f"\033[33mWARNING: {findings_path}: finding[{i}] has confidence=speculative but empty verification_steps\033[0m")
         except json.JSONDecodeError as exc:
             print(f"\033[33mWARNING: {findings_path}: JSON parse error: {exc}\033[0m")
             all_valid = False
 
-    # --- tickets.json ---
+    # --- tickets.json (optional — absent unless user requested ticket creation) ---
     tickets_path = rd / "tickets.json"
-    if not tickets_path.exists():
-        print(f"\033[33mWARNING: {tickets_path} not found — ticket-drafter did not emit tickets.json\033[0m")
-        all_valid = False
-    else:
+    if tickets_path.exists():
         try:
             data = json.loads(tickets_path.read_text())
             for key in ("schema_version", "run_id", "generated_at", "tickets"):
@@ -490,6 +631,7 @@ def _validate_json_outputs(rd):
         except json.JSONDecodeError as exc:
             print(f"\033[33mWARNING: {tickets_path}: JSON parse error: {exc}\033[0m")
             all_valid = False
+    # tickets.json absent → ticket-drafter was not run (on-demand only), silently OK
 
     # --- summary.json ---
     summary_path = rd / "summary.json"
@@ -1009,13 +1151,6 @@ def cmd_generate_prompts(args):
             "max_budget_usd": 2,
         },
         {
-            "name": "ticket-drafter",
-            "prompt_file": "prompts/ticket-drafter.txt",
-            "model": "sonnet",
-            "type": "agent",
-            "max_budget_usd": 2,
-        },
-        {
             "name": "test-case-suggester",
             "prompt_file": "prompts/test-case-suggester.txt",
             "model": "haiku",
@@ -1324,6 +1459,9 @@ def cmd_run_agents(args):
     project_dir = review_dir(args)
     lr = local_review_dir(project_dir)
 
+    # Pre-scan: check Python version mismatch (sets TOOL_VERSION_MISMATCH global)
+    run_python_version_check(project_dir)
+
     # Locate manifest to get run_id
     manifest_path = _find_latest_manifest(lr)
     if not manifest_path.exists():
@@ -1531,22 +1669,6 @@ def cmd_run_agents(args):
                     check=False,
                 )
 
-            # Inject tickets.json instruction for ticket-drafter
-            if name == "ticket-drafter":
-                run(
-                    [
-                        "docker",
-                        "exec",
-                        cname,
-                        "bash",
-                        "-c",
-                        f"printf '\\n\\nIMPORTANT: Also write tickets.json to /tmp/review-work/ "
-                        f"as specified in the JSON OUTPUT REQUIREMENT section.\\n'"
-                        f" >> {REVIEW_WORK}/{item['prompt_file']}",
-                    ],
-                    check=False,
-                )
-
             # Skip test-case-suggester if flag set or no coverage findings in findings.json
             if name == "test-case-suggester":
                 skip_reason = None
@@ -1652,9 +1774,7 @@ def cmd_run_agents(args):
                     "-c",
                     f"cp -f {REVIEW_WORK}/review.md {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
                     f"cp -f {REVIEW_WORK}/image-improvements.md {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
-                    f"cp -rf {REVIEW_WORK}/tickets {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
                     f"cp -f {REVIEW_WORK}/findings.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
-                    f"cp -f {REVIEW_WORK}/tickets.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
                     f"cp -f {REVIEW_WORK}/summary.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
                     f"cp -f {REVIEW_WORK}/test-cases.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
                     f"cp -f {REVIEW_WORK}/test-cases.md {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
@@ -1695,6 +1815,10 @@ def cmd_run_agents(args):
     # 12. Validate JSON outputs
     json_valid = _validate_json_outputs(rd)
 
+    # 12a. Tag sonarqube-scanner findings with tool_version_mismatch if Python versions differ
+    if TOOL_VERSION_MISMATCH:
+        _tag_tool_version_mismatch_findings(rd)
+
     # 13. Pattern propagation (best-effort; non-fatal)
     if not getattr(args, "skip_pattern_propagation", False):
         run_pattern_propagation(rd, project_dir)
@@ -1730,7 +1854,6 @@ def _auto_cleanup(project_dir, cname, run_id, failed_count=0):
             "-c",
             f"cp -f {REVIEW_WORK}/review.md {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
             f"cp -f {REVIEW_WORK}/image-improvements.md {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
-            f"cp -rf {REVIEW_WORK}/tickets {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
             f"cp -f {REVIEW_WORK}/findings.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
             f"cp -f {REVIEW_WORK}/tickets.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "
             f"cp -f {REVIEW_WORK}/summary.json {WORKSPACE}/.local-review/runs/{run_id}/ 2>/dev/null; "

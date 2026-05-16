@@ -499,6 +499,25 @@ Prioritized list of bugs to fix and edge cases to handle.
   in `requirements.txt`
 - Save generated test files but do NOT modify existing test files
 
+## CONFIDENCE GUIDANCE
+
+For each finding, emit a confidence line immediately after the finding description:
+
+    **Confidence:** confirmed|heuristic|speculative
+
+Tiers:
+
+- `confirmed` — fuzz test crashed or assertion failed at a specific input; verifiable by
+  re-running with the failing seed (fuzz crash, property violation)
+- `heuristic` — test ran without crash but logic suggests edge-case risk (no crash found but input
+  was not exercised)
+- `speculative` — target could not be fuzzed (network calls, framework decorators); finding is
+  inferred from code inspection
+
+Optionally emit verification steps (max 3; omit if `confirmed`):
+
+    **Verification:** <step 1> | <step 2>
+
 ## Intermediate Output
 
 After completing the tests, save your findings inside the container:

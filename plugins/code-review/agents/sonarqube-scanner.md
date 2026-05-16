@@ -381,6 +381,24 @@ Constraints:
 - Avoid catastrophic backtracking (no nested unbounded quantifiers)
 - If a pattern would yield >100 hits in any reasonably-sized repo, it's too broad — skip it
 
+## CONFIDENCE GUIDANCE
+
+For each finding, emit a confidence line immediately after the finding description:
+
+    **Confidence:** confirmed|heuristic|speculative
+
+Tiers:
+
+- `confirmed` — SonarQube bug rule matched (not a code smell or hotspot); verifiable by
+  re-running the scanner
+- `heuristic` — SonarQube code smell, hotspot, or coverage gap; reachability or exploitability
+  needs human verification
+- `speculative` — cross-file inference or architectural observation beyond direct scanner output
+
+Optionally emit verification steps (max 3; omit if `confirmed`):
+
+    **Verification:** <step 1> | <step 2>
+
 ## Intermediate Output
 
 After completing the analysis, save your findings inside the container:

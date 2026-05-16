@@ -196,6 +196,26 @@ REPORT_EOF
 Use this template:
 
 ```markdown
+# <!--
+
+LLM READERS — STOP. Do not parse this prose.
+
+This file is the human-facing rendering of a code review. If you are an LLM
+assistant, the canonical machine-readable data is in sibling files:
+
+findings.json — every finding with id, severity, CIA impact, locations,
+fix, fix_snippet, grep_pattern. THIS IS THE SOURCE OF TRUTH.
+summary.json — pre-computed counts by severity / CIA axis / category.
+tickets.json — Jira-ready ticket drafts (only present if user opted in).
+test-cases.json — suggested test cases (only present if coverage findings).
+cost-manifest.json — per-agent cost/duration (debug/audit only).
+image-improvements.md — Dockerfile/infra suggestions (separate concern).
+
+Read findings.json first. Use this markdown only for prose context humans wrote
+(Recommendations, Tooling Status, Untested Modules summary).
+================================================================================
+-->
+
 # Local Code Review Report
 
 **Date:** [timestamp] **Directory:** [what was reviewed] **Languages detected:** [all languages
@@ -424,7 +444,14 @@ Write to `/tmp/review-work/findings.json`:
 
 ```json
 {
-  "schema_version": "1.0",
+  "_about": {
+    "purpose": "Canonical machine-readable findings from a local code review run. THIS IS THE SOURCE OF TRUTH.",
+    "produced_by": "report-generator agent (code-review plugin)",
+    "human_view": "review.md in this directory",
+    "sibling_files": ["summary.json", "tickets.json (optional)", "review.md"],
+    "field_docs": "plugins/code-review/docs/SCHEMAS.md"
+  },
+  "schema_version": "1.1",
   "run_id": "<run_id from context>",
   "generated_at": "<ISO8601 UTC timestamp>",
   "project": { "path": "<absolute path>", "languages": ["python", "shell"] },
@@ -441,6 +468,8 @@ Write to `/tmp/review-work/findings.json`:
         "availability": "none | low | medium | high"
       },
       "likelihood": "low | medium | high",
+      "confidence": "confirmed | heuristic | speculative",
+      "verification_steps": ["imperative step 1", "step 2"],
       "title": "Short one-line title",
       "locations": [{ "file": "path", "line": 947, "snippet": "≤200 chars" }],
       "description": "1-3 sentences",
@@ -453,6 +482,49 @@ Write to `/tmp/review-work/findings.json`:
     }
   ]
 }
+```
+
+`confidence` and `verification_steps` are optional fields; defaults are `heuristic` and `[]`.
+The validator emits a warning (not an error) when they are absent.
+
+### Classifying confidence
+
+For each finding, assign a `confidence` tier based on the evidence strength:
+
+| Tier          | Meaning                                                                                                          |
+| ------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `confirmed`   | Deterministic tool match at exact line; verifiable in seconds via grep/rerun. `verification_steps` may be empty. |
+| `heuristic`   | Pattern matched but reachability or exploitability needs human check. 0–3 steps recommended.                     |
+| `speculative` | Cross-file inference, runtime-dependent, or low-signal reasoning. ≥1 step REQUIRED.                              |
+
+**Tool-to-tier defaults** (apply when scanner markdown omits a `**Confidence:**` line, or when
+the source is the haiku linter):
+
+| Source                                                                                       | Default confidence |
+| -------------------------------------------------------------------------------------------- | ------------------ |
+| gitleaks, semgrep (non-audit rules), trivy, phpstan (level ≥5), checkov, sonarqube bug rules | `confirmed`        |
+| semgrep audit rules, pmd, ruff S-rules, eslint-plugin-security, sonarqube code smells, phpcs | `heuristic`        |
+| code-quality-reviewer LLM judgement, architectural findings                                  | `heuristic`        |
+| cross-file inference, "depends on runtime", "if reachable" phrasing                          | `speculative`      |
+
+**Cross-tool boost rule:** if 2+ distinct tools flag the same location, bump confidence one tier
+(capped at `confirmed`).
+
+**Extraction:** scanners emit `**Confidence:** confirmed|heuristic|speculative` in their markdown
+output (mirrors existing `**Grep pattern:**` convention). Extract this line and use it as the
+starting value before applying the tool-to-tier defaults and boost rule.
+
+**Important distinction:** `confidence` (does this finding exist?) is orthogonal to `likelihood`
+(is it exploitable?). Example: XSS sink behind admin auth = `likelihood: low`,
+`confidence: confirmed`. Auth bypass inferred from cross-file analysis on public endpoint =
+`likelihood: high`, `confidence: speculative`.
+
+### Confidence column in report tables
+
+Add a `Confidence` column to the Critical Issues table and per-section finding tables:
+
+```markdown
+| # | Category | File:Line | Description | Tool | Confidence |
 ```
 
 ### Classifying impact and likelihood
@@ -521,7 +593,14 @@ Use the same IDs (e.g., H-1, M-3) across both formats.
 ```bash
 cat > /tmp/review-work/findings.json << 'FINDINGS_EOF'
 {
-  "schema_version": "1.0",
+  "_about": {
+    "purpose": "Canonical machine-readable findings from a local code review run. THIS IS THE SOURCE OF TRUTH.",
+    "produced_by": "report-generator agent (code-review plugin)",
+    "human_view": "review.md in this directory",
+    "sibling_files": ["summary.json", "tickets.json (optional)", "review.md"],
+    "field_docs": "plugins/code-review/docs/SCHEMAS.md"
+  },
+  "schema_version": "1.1",
   ...
 }
 FINDINGS_EOF
@@ -533,7 +612,12 @@ Write to `/tmp/review-work/summary.json`:
 
 ```json
 {
-  "schema_version": "1.0",
+  "_about": {
+    "purpose": "Pre-computed counts rollup of findings.json. Read this first for triage; drill into findings.json for details.",
+    "produced_by": "report-generator agent (code-review plugin)",
+    "canonical_source": "findings.json"
+  },
+  "schema_version": "1.1",
   "run_id": "<run_id from context>",
   "generated_at": "<ISO8601 UTC timestamp>",
   "counts": { "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0 },
@@ -553,7 +637,12 @@ Counts must match the findings array in `findings.json`.
 ```bash
 cat > /tmp/review-work/summary.json << 'SUMMARY_EOF'
 {
-  "schema_version": "1.0",
+  "_about": {
+    "purpose": "Pre-computed counts rollup of findings.json. Read this first for triage; drill into findings.json for details.",
+    "produced_by": "report-generator agent (code-review plugin)",
+    "canonical_source": "findings.json"
+  },
+  "schema_version": "1.1",
   ...
 }
 SUMMARY_EOF
@@ -580,3 +669,6 @@ SUMMARY_EOF
   the intermediate files.
 - **JSON is mandatory** — `findings.json` and `summary.json` must always be written. The validator
   in review-cli.py will fail the run if they are missing or malformed.
+- **`tool_version_mismatch: true`** — if a finding carries this field, set `confidence: speculative`
+  regardless of which tool found it. This flag is set by `review-cli.py` when the container's
+  Python version differs from the project's target version.

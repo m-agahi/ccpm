@@ -341,6 +341,23 @@ Prioritized list of fixes.
 - Do NOT modify any code — this is a read-only analysis
 - Report missing tools clearly with install commands so the user can set them up
 
+## CONFIDENCE GUIDANCE
+
+For each finding, emit a confidence line immediately after the finding description:
+
+    **Confidence:** confirmed|heuristic|speculative
+
+Tiers:
+
+- `confirmed` — compiler or type-checker flagged the exact line (tsc error, mypy error,
+  staticcheck diagnostic, go vet error); verifiable by re-running the tool
+- `heuristic` — warning-level diagnostic; fix may be optional depending on project conventions
+- `speculative` — cross-file inference or type reasoning beyond direct tool output
+
+Optionally emit verification steps (max 3; omit if `confirmed`):
+
+    **Verification:** <step 1> | <step 2>
+
 ## Intermediate Output
 
 After completing the analysis, save your findings inside the container:

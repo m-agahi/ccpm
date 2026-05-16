@@ -143,25 +143,10 @@ If `tickets.json` exists, use its structured fields directly. Each ticket record
 When creating Jira issues from `tickets.json`, use the structured `severity`, `risk`, `impact`, and
 `labels` fields directly rather than parsing markdown.
 
-**Secondary path — per-ticket markdown files:**
+**Fallback — review report:**
 
-If `tickets.json` is not available (pre-v4 run or agent failure), fall back to per-ticket markdown
-files in the run directory:
-
-```bash
-ls <reviewed-directory>/.local-review/latest/tickets/*.md 2>/dev/null | grep -v INDEX.md
-```
-
-Read the `INDEX.md` for an overview, then read each draft file. Each draft has YAML frontmatter
-with: `sequence`, `status`, `severity`, `risk`, `impact`, `likelihood`, `jira_priority`, `category`,
-`type`, `labels`, `files`, `tools`.
-
-The draft body contains the full ticket description — use this directly as the Jira ticket
-description.
-
-**Tertiary fallback — review report:**
-
-If neither `tickets.json` nor markdown ticket files exist, fall back to reading the review report:
+If `tickets.json` is not present (ticket-drafter was not run), fall back to reading the review
+report:
 
 ```bash
 cat <reviewed-directory>/.local-review/latest/review.md 2>/dev/null
@@ -229,15 +214,10 @@ Create this ticket? (yes / no / edit / stop)
 
 ### After Successful Ticket Creation
 
-When a ticket is successfully created in Jira:
+When a ticket is successfully created in Jira, note the ticket key (e.g., PROJ-123) and move to the
+next finding. Users can edit tickets directly in Jira after creation.
 
-1. Delete the draft file: `rm <reviewed-dir>/.local-review/latest/tickets/YYMMDDHHMM-NNNN-slug.md`
-2. This ensures only uncreated drafts remain in the tickets directory for future runs
-
-When a finding is skipped:
-
-1. Update the draft file's frontmatter to `status: skipped`
-2. The draft remains for the user to revisit later if they change their mind
+When a finding is skipped, note it in the summary and move to the next.
 
 ### Creating a Ticket
 

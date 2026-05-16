@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.1] - 2026-05-16
+
+### Changed
+
+- Bumped tree-sitter dependency constraints: `tree-sitter` `0.22` → `0.25`; all grammar crates (`tree-sitter-rust`, `tree-sitter-python`, `tree-sitter-javascript`, `tree-sitter-typescript`, `tree-sitter-go`, `tree-sitter-java`, `tree-sitter-php`) `0.21`/`0.22` → `0.25`
+
 ## [1.1.0] - 2026-05-02
 
 ### Added

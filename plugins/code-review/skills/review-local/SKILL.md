@@ -101,7 +101,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-cli.py cleanup REVIEW_DIR
 
 ## TICKETS (Jira creation — optional, runs on host)
 
-Ask: "Create Jira tickets? (jira / no)"
+Ask: "Create Jira tickets? (yes/no)"
 
-- jira → launch the **jira-ticket-creator** Agent from `${CLAUDE_PLUGIN_ROOT}/agents/jira-ticket-creator.md` (runs on host with MCP tools, NOT inside container)
-- no → skip
+- **yes** →
+  1. Launch the **ticket-drafter** Agent from `${CLAUDE_PLUGIN_ROOT}/agents/ticket-drafter.md`
+     (runs inside container — generates `tickets.json` from `findings.json`)
+  2. After ticket-drafter completes, launch the **jira-ticket-creator** Agent from
+     `${CLAUDE_PLUGIN_ROOT}/agents/jira-ticket-creator.md`
+     (runs on host with MCP tools — creates tickets interactively one by one)
+- **no** → skip both agents

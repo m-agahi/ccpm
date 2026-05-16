@@ -238,6 +238,29 @@ Constraints:
 - Avoid catastrophic backtracking (no nested unbounded quantifiers)
 - If a pattern would yield >100 hits in any reasonably-sized repo, it's too broad — skip it
 
+## CONFIDENCE GUIDANCE
+
+For each finding, emit a confidence line immediately after the finding description:
+
+    **Confidence:** confirmed|heuristic|speculative
+
+This agent computes an internal 0–100 confidence score for each finding based on evidence quality.
+Map that score to the tier:
+
+- Score ≥ 80 → `confirmed`
+- Score 50–79 → `heuristic`
+- Score < 50 → `speculative`
+
+Tiers:
+
+- `confirmed` — deterministic pattern matched at exact line; verifiable in seconds
+- `heuristic` — pattern matched but reachability or exploitability needs human check
+- `speculative` — cross-file inference, runtime-dependent, or low-signal reasoning
+
+Optionally emit verification steps (max 3; omit if `confirmed`):
+
+    **Verification:** <step 1> | <step 2>
+
 ## Intermediate Output
 
 After completing the review, save your findings:

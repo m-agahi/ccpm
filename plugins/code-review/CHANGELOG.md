@@ -5,6 +5,92 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [5.0.0] - 2026-05-16
+
+### Added
+
+- **`docs/SCHEMAS.md`**: Field documentation for all JSON outputs (`findings.json`, `summary.json`,
+  `tickets.json`, `test-cases.json`, `cost-manifest.json`). Referenced by `_about.field_docs` in
+  every JSON artifact.
+- **LLM-redirect header in `review.md`**: HTML comment as the first line of every generated
+  `review.md`, directing LLM readers to `findings.json` as the canonical source of truth instead of
+  parsing prose.
+- **`_about` metadata block** in `findings.json` and `summary.json`: machine-readable metadata
+  identifying each file's purpose, producing agent, human-readable counterpart, and sibling files.
+  Schema version bumped to `1.1`.
+- **`confidence` field** in findings.json: `confirmed | heuristic | speculative`. Optional;
+  defaults to `heuristic`. Indicates evidence strength, orthogonal to `likelihood`.
+- **`verification_steps` field** in findings.json: array of imperative steps to verify a finding.
+  Optional; defaults to `[]`. Required (warning if absent) when `confidence == "speculative"`.
+- **CONFIDENCE GUIDANCE section** in all 8 scanner agents: `security-reviewer`,
+  `code-quality-reviewer`, `linter`, `sonarqube-scanner`, `dependency-checker`, `gha-security`,
+  `type-checker`, `fuzz-tester`. Each agent now emits `**Confidence:** confirmed|heuristic|speculative`
+  and optional `**Verification:** <step> | <step>` lines per finding (max 3 steps; omit if confirmed).
+- **Python version mismatch guard**: `review-cli.py` now detects the project's target Python version
+  from `.python-version`, `pyproject.toml` (`requires-python` or `[tool.python]`), or `runtime.txt`
+  and compares to `sys.version_info`. Major.minor mismatch emits a loud WARNING block, sets
+  `TOOL_VERSION_MISMATCH=True`, and tags all SonarQube findings with `"tool_version_mismatch": true`
+  (confidence automatically downgraded to `speculative`).
+
+### Changed
+
+- **Ticket generation is now on-demand only (BREAKING)**: `ticket-drafter` removed from the default
+  sequential pipeline. Tickets are generated only when the user explicitly requests ticket creation.
+  SKILL.md asks "Create Jira tickets? (yes/no)" — if yes, runs `ticket-drafter` then
+  `jira-ticket-creator` in sequence.
+- **`ticket-drafter` output: `tickets.json` only (BREAKING)**: Per-ticket `.md` files and
+  `tickets/INDEX.md` are no longer written. `tickets.json` (with new `_about` block) is the sole
+  output. `jira-ticket-creator` fallback path simplified: `tickets.json` → `review.md` (per-ticket
+  .md path removed). Users edit tickets in Jira after creation.
+- **`tickets.json` validation now optional**: `_validate_json_outputs` no longer fails the run when
+  `tickets.json` is absent — silently OK when ticket-drafter was not invoked.
+- **Pattern propagation inheritance**: `pattern_matches[]` entries now inherit the parent finding's
+  `confidence` downgraded one tier (`confirmed→heuristic`, `heuristic→speculative`) and carry
+  `verification_steps: ["compare to parent finding <parent_id>"]`.
+- **`report-generator`**: Tool-to-confidence defaults applied when scanner omits `confidence`.
+  Cross-tool boost: 2+ distinct tools at same location → bump one tier (capped at `confirmed`).
+  Confidence column added to Critical Issues table and per-section finding tables.
+- **`findings.json` schema version**: `"1.0"` → `"1.1"`. `confidence` and `verification_steps`
+  are optional with defaults; validator emits warning (not error) when absent.
+
+### Fixed
+
+- `_validate_json_outputs`: changed `NOTE:` prefix to `WARNING:` for missing optional-field
+  messages (`confidence`, `verification_steps`). Consistent with all other validator messages.
+
+## [4.2.0] - 2026-05-16
+
+### Changed
+
+- Base image: `python:3.13-slim` → `python:3.14-slim`
+- Node.js: 22 LTS → 24 LTS (`setup_24.x`)
+- Java: replaced `default-jdk-headless` (JDK 17) with Eclipse Temurin 21 + 24 (Adoptium); default `JAVA_HOME` set to Temurin 21
+- Go: `1.26.1` → `1.26.3`
+- Trivy: `0.69.3` → `0.70.0`
+- TFLint: `0.61.0` → `0.62.1`; tflint-ruleset-aws `0.35.0` → `0.47.0`
+- PMD: `7.23.0` → `7.24.0`
+- SonarScanner CLI: `8.0.1.6346` → `8.1.0.6389`
+- Zizmor: `1.23.1` → `1.25.2`
+- Terraform CLI: `1.14.8` → `1.15.3`
+- Checkstyle: `13.3.0` → `13.4.2`
+- golangci-lint: `2.11.4` → `2.12.2`
+- shfmt: `3.13.0` → `3.13.1`
+- actionlint: `1.7.11` → `1.7.12`
+- checkmake: `0.2.2` → `0.3.2`
+- semgrep: `1.156.0` → `1.163.0`
+- checkov: `3.2.513` → `3.2.529`
+- ruff: `0.15.8` → `0.15.13`
+- mypy: `1.19.1` → `2.1.0`
+- pip-audit: `2.9.0` → `2.10.0`
+- sqlfluff: `4.1.0` → `4.2.1`
+- hypothesis: `6.151.9` → `6.152.7`
+- pytest: `9.0.2` → `9.0.3`
+- jscpd: `4.0.8` → `4.2.2`
+- pyright: `1.1.408` → `1.1.409`
+- eslint: `10.1.0` → `10.4.0`
+- prettier: `3.8.1` → `3.8.3`
+- typescript: `6.0.2` → `6.0.3`
+
 ## [4.1.1] - 2026-05-15
 
 ### Fixed

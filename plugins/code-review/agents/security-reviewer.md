@@ -243,6 +243,24 @@ Constraints:
 - Avoid catastrophic backtracking (no nested unbounded quantifiers)
 - If a pattern would yield >100 hits in any reasonably-sized repo, it's too broad — skip it
 
+## CONFIDENCE GUIDANCE
+
+For each finding, emit a confidence line immediately after the finding description:
+
+    **Confidence:** confirmed|heuristic|speculative
+
+Tiers:
+
+- `confirmed` — tool matched exact line; verifiable in seconds (gitleaks hit, semgrep non-audit
+  match, checkov rule match, compiler error)
+- `heuristic` — pattern matched but reachability or exploitability needs human check (semgrep audit
+  rules, manual pattern inspection)
+- `speculative` — cross-file inference, runtime-dependent reasoning, or "if reachable" phrasing
+
+Optionally emit verification steps (max 3; omit if `confirmed`):
+
+    **Verification:** <step 1> | <step 2>
+
 ## Intermediate Output
 
 After completing the review, save your findings:
