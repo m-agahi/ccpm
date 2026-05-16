@@ -6,7 +6,7 @@ Personal plugin marketplace for [Claude Code](https://claude.ai/code).
 
 ## Plugins
 
-### code-review (v5.0.0)
+### code-review (v5.0.1)
 
 Comprehensive local code review with 12 specialized agents. All analysis runs locally inside a Docker container — nothing is pushed to remote.
 
@@ -57,7 +57,7 @@ Uncomment the entries you need and point them at your local credential files. Su
 
 You can also pass environment variables (e.g., `GOPROXY`, `PIP_INDEX_URL`) via the `env:` section in the same file.
 
-### update-jira (v1.1.0)
+### update-jira (v1.1.1)
 
 Post progress updates to Jira tickets based on session work, git activity, and PRs.
 
@@ -68,7 +68,7 @@ Auto-fixes PR titles (adds ticket prefix) and PR bodies (adds Jira link). Config
 
 **Requirements:** Atlassian MCP server, GitHub MCP server.
 
-### git-flow (v1.0.1)
+### git-flow (v1.0.3)
 
 Safe git workflow enforcer for worktree-based development.
 

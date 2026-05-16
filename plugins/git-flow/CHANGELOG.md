@@ -1,6 +1,18 @@
 # Changelog
 
-## [1.0.2] - 2026-05-16\n\n### Fixed\n\n- Prettier formatting\n\n## [1.0.1] - 2026-04-11
+## [1.0.3] - 2026-05-16
+
+### Fixed
+
+- CI build stability improvements
+
+## [1.0.2] - 2026-05-16
+
+### Fixed
+
+- Prettier formatting
+
+## [1.0.1] - 2026-04-11
 
 ### Fixed
 

@@ -47,9 +47,11 @@ RUN wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gp
     && echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" > /etc/apt/sources.list.d/adoptium.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends temurin-21-jdk temurin-24-jdk \
-    && update-alternatives --set java /usr/lib/jvm/temurin-21-amd64/bin/java \
-    && update-alternatives --set javac /usr/lib/jvm/temurin-21-amd64/bin/javac
-ENV JAVA_HOME=/usr/lib/jvm/temurin-21-amd64
+    && JAVA21=$(find /usr/lib/jvm -maxdepth 1 -name "temurin-21*" -type d | head -1) \
+    && update-alternatives --set java "${JAVA21}/bin/java" \
+    && update-alternatives --set javac "${JAVA21}/bin/javac" \
+    && ln -sfn "${JAVA21}" /usr/lib/jvm/temurin-21
+ENV JAVA_HOME=/usr/lib/jvm/temurin-21
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 # ============================================================
@@ -302,6 +304,6 @@ RUN echo "=== Tool Versions ===" \
 
 # Review helper scripts (baked in — no need to copy at runtime)
 # Bump version label to trigger a new image build.
-LABEL version="5.0.0"
+LABEL version="5.0.1"
 COPY scripts/ /opt/review-scripts/
 ENTRYPOINT ["sleep", "infinity"]

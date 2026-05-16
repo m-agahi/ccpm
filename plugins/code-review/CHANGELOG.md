@@ -5,6 +5,12 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [5.0.1] - 2026-05-16
+
+### Fixed
+
+- CI build stability improvements
+
 ## [5.0.0] - 2026-05-16
 
 ### Added
@@ -57,6 +63,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - `_validate_json_outputs`: changed `NOTE:` prefix to `WARNING:` for missing optional-field
   messages (`confidence`, `verification_steps`). Consistent with all other validator messages.
+- Dockerfile: Temurin JAVA_HOME path now resolved dynamically via `find` + symlink (was hardcoded `/usr/lib/jvm/temurin-21-amd64`, incorrect on all platforms)
 
 ## [4.2.0] - 2026-05-16
 

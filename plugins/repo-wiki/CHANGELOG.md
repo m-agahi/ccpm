@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Bumped tree-sitter dependency constraints: `tree-sitter` `0.22` → `0.25`; all grammar crates (`tree-sitter-rust`, `tree-sitter-python`, `tree-sitter-javascript`, `tree-sitter-typescript`, `tree-sitter-go`, `tree-sitter-java`, `tree-sitter-php`) `0.21`/`0.22` → `0.25`
+- Bumped tree-sitter dependency constraints: `tree-sitter` `0.22` → `0.25`; grammar crates updated to their actual latest versions (each crate has independent versioning: rust→0.24, python/js/go→0.25, java/typescript→0.23, php→0.24)
 
 ## [1.1.0] - 2026-05-02
 
