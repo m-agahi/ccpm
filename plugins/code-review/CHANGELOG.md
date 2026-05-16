@@ -5,6 +5,12 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [5.0.2] - 2026-05-16
+
+### Fixed
+
+- `checkmake` module path renamed from `github.com/mrtazz/checkmake` to `github.com/checkmake/checkmake` in v0.3.2
+
 ## [5.0.1] - 2026-05-16
 
 ### Fixed

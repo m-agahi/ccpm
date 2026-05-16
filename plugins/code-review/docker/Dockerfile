@@ -161,7 +161,7 @@ RUN ARCH=$(dpkg --print-architecture) \
        | tar -C /usr/local/bin -xz actionlint
 
 # checkmake (only available as go install — compile natively)
-RUN go install github.com/mrtazz/checkmake/cmd/checkmake@v${CHECKMAKE_VERSION} \
+RUN go install github.com/checkmake/checkmake/cmd/checkmake@v${CHECKMAKE_VERSION} \
     && rm -rf /root/go/pkg/mod/cache
 
 # ============================================================
@@ -304,6 +304,6 @@ RUN echo "=== Tool Versions ===" \
 
 # Review helper scripts (baked in — no need to copy at runtime)
 # Bump version label to trigger a new image build.
-LABEL version="5.0.1"
+LABEL version="5.0.2"
 COPY scripts/ /opt/review-scripts/
 ENTRYPOINT ["sleep", "infinity"]
