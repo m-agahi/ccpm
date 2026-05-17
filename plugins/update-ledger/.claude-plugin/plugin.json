@@ -1,6 +1,6 @@
 {
   "name": "update-ledger",
-  "description": "Multi-workspace chronological work ledger. Pulls Jira tickets and GitHub PRs per workspace (company, solo, client), writes immutable event entries, regenerates per-entity rollups, and produces daily/weekly/monthly/quarterly/yearly summaries plus cross-workspace timelines. Survives job changes — workspaces are pluggable. Supports manual notes for work not in Jira/PRs. Delegates per-item composition to cheap haiku subagents to keep main-thread context small.",
+  "description": "Multi-workspace chronological work ledger. Pulls Jira tickets, GitHub PRs, and Codeberg/Forgejo PRs per workspace (company, solo, client), writes immutable event entries, regenerates per-entity rollups, and produces daily/weekly/monthly/quarterly/yearly summaries plus cross-workspace timelines. Survives job changes — workspaces are pluggable. Supports manual notes for work not in Jira/PRs. Delegates per-item composition to cheap haiku subagents to keep main-thread context small.",
   "author": {
     "name": "Max Agahi"
   },
@@ -12,6 +12,8 @@
     "timeline",
     "jira",
     "github",
+    "codeberg",
+    "forgejo",
     "multi-workspace",
     "career-log",
     "atlassian",

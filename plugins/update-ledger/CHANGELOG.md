@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.1.0] - 2026-05-17
+
+### Added
+
+- Codeberg / Forgejo support as a third source alongside Jira and GitHub. Pulls authored
+  and reviewed PRs per workspace via the Forgejo REST API (`/repos/issues/search` with
+  boolean `created=true` / `reviewed=true` filters, scoped to the PAT owner).
+- New `sources.codeberg` block in `workspace.yaml` with `enabled`, `host` (default
+  `codeberg.org`), `user`, `token_env` (default `CODEBERG_TOKEN`), `include_authored`,
+  `include_reviewed`.
+- New cursor field `codeberg_updated_after` in `.ledger/last_sync.json`.
+- New entity id namespace: `codeberg__<owner>__<repo>__<n>` for PRs and
+  `codeberg__<owner>__<repo>` for solo repo rollups (no collision with GitHub ids).
+- Self-hosted Forgejo/Gitea hosts supported via `forgejo-<short-host>__...` id prefix.
+- `init <name>` flow now prompts for Codeberg/Forgejo configuration after GitHub.
+
+### Security
+
+- PAT read only from env var. Skill never echoes, logs, commits, or forwards the token
+  value to subagents. `workspace.yaml` stores only the env var name.
+
+### Known limitations
+
+- The `created` / `reviewed` filters on `/repos/issues/search` are scoped to the
+  authenticated user (the PAT owner). `sources.codeberg.user` must equal the token
+  owner — pulling PRs for a different user requires their PAT.
+- GitLab / Bitbucket / self-hosted Jira still not supported.
+
 ## [1.0.0] - 2026-05-17
 
 ### Added

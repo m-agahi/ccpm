@@ -1,6 +1,6 @@
 ---
 name: update-ledger
-description: "Maintains a multi-workspace chronological work ledger. Pulls Jira tickets and GitHub PRs per workspace (company, solo, client), writes immutable entries, regenerates per-entity rollups, and updates daily/weekly/monthly/quarterly summaries plus cross-workspace rollups. Auto-commits and pushes. Triggers on /update-ledger, update ledger, log to ledger, ledger sync, sync ledger. Subcommands include init for bootstrap, sync-all, note and note bulk for manual entries, enrich for retroactive complexity/impact rating, and regen-summaries to refresh after changes."
+description: "Maintains a multi-workspace chronological work ledger. Pulls Jira tickets, GitHub PRs, and Codeberg/Forgejo PRs per workspace (company, solo, client), writes immutable entries, regenerates per-entity rollups, and updates daily/weekly/monthly/quarterly summaries plus cross-workspace rollups. Auto-commits and pushes. Triggers on /update-ledger, update ledger, log to ledger, ledger sync, sync ledger. Subcommands include init for bootstrap, sync-all, note and note bulk for manual entries, enrich for retroactive complexity/impact rating, and regen-summaries to refresh after changes."
 ---
 
 # update-ledger skill
@@ -78,6 +78,7 @@ Skill = orchestrator. Heavy per-item work delegates to haiku subagents via the A
 | Config + cursor read/write             | Skill (main) | small, stateful        |
 | Jira MCP calls                         | Skill (main) | needs MCP perms        |
 | `gh` CLI calls                         | Skill (main) | needs auth             |
+| Forgejo/Codeberg API calls (curl)      | Skill (main) | needs PAT env var      |
 | Inline enrichment AskUserQuestion      | Skill (main) | interactive            |
 | Entry file writing (per item)          | Haiku agent  | structured transform   |
 | Rollup composition (per entity)        | Haiku agent  | summarisation          |
@@ -105,10 +106,12 @@ the full ledger state. Keep payloads small and self-contained.
 1. `cd /home/max/git/ledger`. Abort if directory missing.
 2. Read `.ledger/config.yaml`. Abort if absent.
 3. For each workspace to sync: read `workspaces/<name>/workspace.yaml`. If missing, skip that workspace and log — do NOT abort entire run.
-4. Run `gh auth status`. Capture result. If failure, log — do NOT abort (may be jira-only workspace).
+4. Run `gh auth status`. Capture result. If failure, log — do NOT abort (may be jira-only or codeberg-only workspace).
 5. Verify atlassian MCP tools reachable by checking that `mcp__atlassian__jira_search` and `mcp__atlassian__jira_get_issue` are available. If unavailable, log — do NOT abort.
-6. If workspace needs jira but MCP unavailable → skip jira pass for that workspace, log it.
-7. If both sources fail for a workspace → skip that workspace entirely, log it.
+6. For each workspace with `sources.codeberg.enabled: true`: resolve token env var name from `sources.codeberg.token_env` (default `CODEBERG_TOKEN`). If env var unset, log — do NOT abort. Probe API: `curl -fsS -H "Authorization: token $TOKEN" https://<host>/api/v1/user`. If non-200, log — do NOT abort. On 200, compare returned `login` to `sources.codeberg.user`; on mismatch, log warning (the boolean `created`/`reviewed` filters are PAT-scoped, so the configured user must equal the token owner — otherwise results will reflect the token owner, not the configured user).
+7. If workspace needs jira but MCP unavailable → skip jira pass for that workspace, log it.
+8. If workspace needs codeberg but token unset or probe failed → skip codeberg pass, log it.
+9. If all enabled sources fail for a workspace → skip that workspace entirely, log it.
 
 ---
 
@@ -220,6 +223,105 @@ gh api repos/{owner}/{repo}/pulls/{n}/comments \
 
 ---
 
+## 5.5 Codeberg / Forgejo pull (per workspace, if `sources.codeberg.enabled: true`)
+
+Codeberg = managed Forgejo instance at `codeberg.org`. Same flow applies to any self-hosted
+Forgejo or Gitea host — set `sources.codeberg.host` accordingly. No `gh`-equivalent CLI
+is assumed; the skill calls the Forgejo REST API directly via `curl`.
+
+### 5.5.1 Token
+
+Read PAT from env var named by `sources.codeberg.token_env` (default `CODEBERG_TOKEN`).
+NEVER echo, log, or commit the token. NEVER pass it to a subagent. Build curl auth header
+in the skill only.
+
+```bash
+TOKEN="$CODEBERG_TOKEN"        # or whichever env var name
+HOST="${codeberg_host:-codeberg.org}"
+AUTH=(-H "Authorization: token $TOKEN" -H "Accept: application/json")
+```
+
+If token env var unset → skip codeberg for this workspace (already logged per §2.6).
+
+### 5.5.2 Authored PRs (if `include_authored: true`)
+
+`/repos/issues/search` filters are **scoped to the authenticated user** (the PAT owner) —
+there is no `created_by=<other-user>` param. The boolean `created=true` filter returns
+PRs authored by whoever owns the PAT. Cursor uses `since=<ISO8601>` (RFC3339) which
+filters by `updated`.
+
+```bash
+PAGE=1
+while :; do
+  RES=$(curl -fsS "${AUTH[@]}" \
+    "https://$HOST/api/v1/repos/issues/search?type=pulls&state=all&created=true&since=$CURSOR&page=$PAGE&limit=50&sort=newest")
+  COUNT=$(jq 'length' <<<"$RES")
+  [[ "$COUNT" -eq 0 ]] && break
+  echo "$RES" >> codeberg_authored.jsonl
+  PAGE=$((PAGE+1))
+  [[ "$PAGE" -gt 20 ]] && break   # 1000-item hard cap, same as gh pass
+done
+```
+
+`/repos/issues/search` returns issues; filter client-side to `pull_request != null` if
+the server doesn't honour `type=pulls` (older Forgejo). Each result includes
+`html_url`, `number`, `title`, `state`, `created_at`, `updated_at`, `closed_at`,
+`pull_request.merged_at`, `user.login`, `body`, `labels`, `repository.full_name`.
+
+`sources.codeberg.user` MUST equal the PAT owner. Skill verifies this during §2.6 probe
+(`GET /api/v1/user` returns `login` — compare against configured `user`, log mismatch).
+
+### 5.5.3 Reviewed PRs (if `include_reviewed: true`)
+
+Same loop, swap the boolean filter:
+
+```
+?type=pulls&state=all&reviewed=true&since=$CURSOR&page=$PAGE&limit=50&sort=newest
+```
+
+Like `created=true`, this is scoped to the PAT owner — returns PRs the authenticated
+user has reviewed.
+
+### 5.5.4 Per-PR detail + comments
+
+For each PR returned, fetch issue comments and review threads:
+
+```bash
+OWNER_REPO="${pr.repository.full_name}"   # e.g. maxagahi/myproj
+N="${pr.number}"
+
+curl -fsS "${AUTH[@]}" \
+  "https://$HOST/api/v1/repos/$OWNER_REPO/issues/$N/comments?limit=50" \
+  > comments_$N.json
+
+curl -fsS "${AUTH[@]}" \
+  "https://$HOST/api/v1/repos/$OWNER_REPO/pulls/$N/reviews?limit=50" \
+  > reviews_$N.json
+```
+
+Also fetch the pull object itself to get `additions`, `deletions`, `changed_files`,
+`mergeable`, `merged`:
+
+```bash
+curl -fsS "${AUTH[@]}" \
+  "https://$HOST/api/v1/repos/$OWNER_REPO/pulls/$N" \
+  > pr_$N.json
+```
+
+Three-call cost per PR is fine — sync is incremental.
+
+### 5.5.5 Dedup
+
+Dedup authored vs reviewed passes by `html_url`. Then dedup across sources by full id
+(see §6) — never collides with GitHub since codeberg ids are prefixed with `codeberg__`.
+
+### 5.5.6 Rate limits
+
+Codeberg returns `429` with `Retry-After`. On 429: sleep that many seconds, retry once.
+On second 429: stop codeberg pass for this workspace, log, continue with the rest.
+
+---
+
 ## 6. Entry file generation (immutable)
 
 Delegate writing to a haiku agent per entity batch. See §1.5.
@@ -237,6 +339,7 @@ workspaces/<workspace>/entries/YYYY/MM/DD/YYYYMMDD_HHMM_<type>_<id>_<slug>.md
 - `<id>`:
   - Jira: `QUI-1234`
   - GitHub PR: `quinyx__core__456` (org**repo**number) or `maxagahi__myproject__7` for solo
+  - Codeberg/Forgejo PR: `codeberg__maxagahi__myproject__7` (host**owner**repo\*\*number). For self-hosted Forgejo with non-default host: `forgejo-<short-host>__<owner>__<repo>__<n>` — the short-host is the hostname's first label (e.g. `git.example.org` → `git`).
 - `<slug>`: derived from title by these rules, applied IN ORDER by the skill (not the agent):
   1. Lowercase ASCII only — transliterate or drop non-ASCII
   2. Replace any of `\\/:*?"<>|` with empty string
@@ -326,11 +429,15 @@ Write one rollup per touched entity. Regenerate from scratch each run EXCEPT `##
 
 ### Paths
 
-| Entity type        | Path                                               |
-| ------------------ | -------------------------------------------------- |
-| Jira ticket        | `workspaces/<workspace>/tickets/<KEY>.md`          |
-| GitHub PR          | `workspaces/<workspace>/prs/<org>__<repo>__<n>.md` |
-| GitHub repo (solo) | `workspaces/<workspace>/repos/<owner>__<repo>.md`  |
+| Entity type          | Path                                                           |
+| -------------------- | -------------------------------------------------------------- |
+| Jira ticket          | `workspaces/<workspace>/tickets/<KEY>.md`                      |
+| GitHub PR            | `workspaces/<workspace>/prs/<org>__<repo>__<n>.md`             |
+| GitHub repo (solo)   | `workspaces/<workspace>/repos/<owner>__<repo>.md`              |
+| Codeberg/Forgejo PR  | `workspaces/<workspace>/prs/codeberg__<owner>__<repo>__<n>.md` |
+| Codeberg repo (solo) | `workspaces/<workspace>/repos/codeberg__<owner>__<repo>.md`    |
+
+For self-hosted Forgejo, swap `codeberg` for `forgejo-<short-host>` per §6.
 
 ### Frontmatter
 
@@ -883,8 +990,16 @@ Bootstrap new workspace interactively.
      - Ask: org (or "none" for solo / no org filter)
      - Ask: include authored PRs? (yes/no)
      - Ask: include reviewed PRs? (yes/no)
-6. Ask: tags (comma-split free text, or "none")
-7. Write `workspaces/<name>/workspace.yaml`:
+6. Ask: enable Codeberg / Forgejo? (recommended for solo personal projects)
+   - If yes:
+     - Ask: host (default `codeberg.org`; user can enter a self-hosted Forgejo/Gitea host)
+     - Ask: token env var name (default `CODEBERG_TOKEN`). Skill does NOT read or store the token value — only the env var name.
+     - If the env var is set in the current shell: probe `GET https://<host>/api/v1/user` with the token and auto-fill `user` from the returned `login`. Confirm with user.
+     - If the env var is unset: ask username manually and warn that probe will run on first sync.
+     - Ask: include authored PRs? (yes/no, default yes)
+     - Ask: include reviewed PRs? (yes/no, default no)
+7. Ask: tags (comma-split free text, or "none")
+8. Write `workspaces/<name>/workspace.yaml`:
 
 ```yaml
 name: <name>
@@ -906,6 +1021,13 @@ sources:
     org: <null|org>
     include_authored: <bool>
     include_reviewed: <bool>
+  codeberg:
+    enabled: <bool>
+    host: "codeberg.org"
+    user: "<username>"
+    token_env: "CODEBERG_TOKEN"
+    include_authored: <bool>
+    include_reviewed: <bool>
 paths:
   entries: entries
   tickets: tickets
@@ -915,7 +1037,7 @@ paths:
 
 For solo workspaces: set `paths.prs: repos` instead of `prs`.
 
-8. Create `.gitkeep` in all subdirs:
+9. Create `.gitkeep` in all subdirs:
 
    - `workspaces/<name>/entries/`
    - `workspaces/<name>/tickets/` (or `repos/` for solo)
@@ -926,7 +1048,7 @@ For solo workspaces: set `paths.prs: repos` instead of `prs`.
    - `workspaces/<name>/summaries/monthly/`
    - `workspaces/<name>/summaries/quarterly/`
 
-9. Update `.ledger/last_sync.json` — add entry for new workspace with null cursors:
+10. Update `.ledger/last_sync.json` — add entry for new workspace with null cursors:
 
 ```json
 {
@@ -934,6 +1056,7 @@ For solo workspaces: set `paths.prs: repos` instead of `prs`.
     "<name>": {
       "jira_updated_after": null,
       "github_updated_after": null,
+      "codeberg_updated_after": null,
       "last_run": null
     }
   }
@@ -942,7 +1065,7 @@ For solo workspaces: set `paths.prs: repos` instead of `prs`.
 
 Preserve all existing workspace entries.
 
-10. Do NOT modify `.ledger/config.yaml` automatically. Print:
+11. Do NOT modify `.ledger/config.yaml` automatically. Print:
 
 ```
 Workspace '<name>' ready.
@@ -1171,6 +1294,7 @@ After successful sync of workspace, update `.ledger/last_sync.json`:
     "<name>": {
       "jira_updated_after": "<latest jira updated ts seen, ISO8601>",
       "github_updated_after": "<latest gh updated ts seen, ISO8601>",
+      "codeberg_updated_after": "<latest forgejo updated_at seen, ISO8601>",
       "last_run": "<now ISO8601>"
     }
   }
@@ -1182,8 +1306,8 @@ Rules:
 - Preserve other workspaces' cursors verbatim.
 - If `--since` was used WITHOUT `--save-cursor` → do NOT update cursor.
 - If `--since` WITH `--save-cursor` → update cursor to the `--since` date (used as starting point).
-- Don't update cursor for source that wasn't synced this run (e.g. jira skipped → don't touch `jira_updated_after`).
-- `<latest ts seen>` = max `updated` field across all items returned from that source.
+- Don't update cursor for source that wasn't synced this run (e.g. jira skipped → don't touch `jira_updated_after`; codeberg skipped → don't touch `codeberg_updated_after`).
+- `<latest ts seen>` = max `updated`/`updated_at` field across all items returned from that source.
 
 ---
 
@@ -1236,7 +1360,11 @@ If second push fails: stop and report. NEVER force push.
 | ---------------------------------- | ----------------------------------------------------------------- |
 | Atlassian MCP unavailable          | Skip jira pass for affected workspaces, log, continue             |
 | `gh` not authed                    | Skip gh pass for affected workspaces, log, continue               |
-| Both sources fail for a workspace  | Skip workspace entirely, log, continue with others                |
+| Codeberg token env var unset       | Skip codeberg pass for affected workspaces, log, continue         |
+| Codeberg API 401/403               | Skip codeberg pass, log "token rejected or expired", continue     |
+| Codeberg API 429 twice in a row    | Skip remainder of codeberg pass for that workspace, log, continue |
+| Codeberg host unreachable          | Skip codeberg pass, log connection error, continue                |
+| All enabled sources fail for a ws  | Skip workspace entirely, log, continue with others                |
 | Cursor null                        | Abort with instructions for `--since ... --save-cursor` or `init` |
 | User aborts enrichment             | Write placeholders, `enrichment_pending: true`                    |
 | Pre-commit hook fails              | Fix root cause; don't `--no-verify`. Report and stop.             |
@@ -1251,9 +1379,11 @@ If second push fails: stop and report. NEVER force push.
 After run, print terse per-workspace summary:
 
 ```
-<workspace>: jira <N> issues (<M> new), gh <N> PRs (<M> new), entries <N>, rollups <M>, summaries <K>
+<workspace>: jira <N> issues (<M> new), gh <N> PRs (<M> new), codeberg <N> PRs (<M> new), entries <N>, rollups <M>, summaries <K>
 <workspace>: notes <N> added
 ```
+
+Omit any source's segment if that source is disabled or skipped for the workspace.
 
 Second line emitted only if manual notes written this run.
 
@@ -1281,3 +1411,4 @@ skipped: <workspace-list with reason>
 - Manual notes (type=note) MUST have `manual: true` in frontmatter so they can be distinguished from synced ticket/PR rollups in queries and exports.
 - Skill MUST sanitise slugs server-side per §6. Never trust agent output verbatim for filename components.
 - Skill MUST backtick-wrap entity ids and quote-wrap titles in all summary markdown. Required for `__` and `_` characters to render correctly.
+- Codeberg/Forgejo PAT MUST be read only from the env var named by `sources.codeberg.token_env`. Skill MUST NOT echo, log, write to disk, commit, or pass the token value to any subagent. Workspace.yaml stores the env var NAME, never the token value.
