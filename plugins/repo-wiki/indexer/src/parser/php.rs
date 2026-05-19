@@ -5,7 +5,7 @@ use crate::utils::hash;
 
 pub fn parse_file(source: &str, file_path: &str) -> FileIR {
     let mut parser = Parser::new();
-    if let Err(e) = parser.set_language(&tree_sitter_php::language_php()) {
+    if let Err(e) = parser.set_language(&tree_sitter_php::LANGUAGE_PHP.into()) {
         log::warn!("Failed to set PHP language: {}", e);
         return empty_file_ir(source, file_path);
     }

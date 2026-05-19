@@ -25,13 +25,7 @@ BINARY="${CLAUDE_PLUGIN_ROOT}/indexer/target/release/repo-indexer"
 if [ ! -f "$BINARY" ]; then
   mkdir -p "$(dirname "$BINARY")"
   # Try downloading pre-built binary from the release
-  PLUGIN_VERSION=$(python3 -c "
-import json, pathlib
-mp = pathlib.Path('${CLAUDE_PLUGIN_ROOT}/../../.claude-plugin/marketplace.json')
-plugins = json.loads(mp.read_text()).get('plugins', [])
-ver = next((p['version'] for p in plugins if p['name'] == 'repo-wiki'), None)
-print(ver or '')
-" 2>/dev/null)
+  PLUGIN_VERSION=$(basename "$CLAUDE_PLUGIN_ROOT")
   ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
   ASSET_URL="https://codeberg.org/maxagahi/ccpm/releases/download/repo-wiki%2Fv${PLUGIN_VERSION}/repo-wiki-indexer-linux-${ARCH}"
   if [ -n "$PLUGIN_VERSION" ] && curl -fsSL -o "$BINARY" "$ASSET_URL" 2>/dev/null; then

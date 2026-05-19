@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.2.0 — Skill spec overhaul
+
+- **[new]** `backfill` subcommand spec: chunked historical fill, does not touch forward cursor
+- **[new]** `--dry-run` flag: fetch + count without writing
+- **[fix]** GitHub: removed invalid `gh search prs --json` fields (`reviewDecision`, `mergedAt`, `additions`, `deletions`, `changedFiles`); added follow-up `gh pr view` for per-PR detail
+- **[fix]** GitHub: pagination detection — detect result count == limit, recommend `gh api` for large sets
+- **[fix]** Jira: removed non-existent `cloudId` parameter from `mcp__atlassian__jira_search` call
+- **[fix]** Jira: description truncation to 400 chars before agent context
+- **[fix]** Pre-commit hook: first-commit retry vs subsequent-commit amend distinction
+- **[fix]** Dedup: explicit that all source PR lists merge and dedup by URL before entry generation; origin tagged as authored/reviewed/both
+- **[spec]** Agent batching: threshold rule — N>20 entities → batch ~50 per agent; defer prose to `enrich`
+- **[spec]** Slug computation: skill-side only; agent returns title only
+- **[spec]** MCP disconnect handling: per-fetch catch, partial-sync warning, continue on source failure
+- **[spec]** Summary regen: backfill suppresses auto-regen, prints notice to run `regen-summaries`
+- **[spec]** All fetch outputs go to disk (`/tmp/ledger-sync/`); skill operates on paths not inline strings
+- **[spec]** SQLite verifier: post-sync count check with stale-index warning
+- **[spec]** Cursor schema versioning: per-workspace `schema_version` field
+
 ## [1.1.0] - 2026-05-17
 
 ### Added

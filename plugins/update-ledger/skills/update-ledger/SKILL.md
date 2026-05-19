@@ -47,22 +47,24 @@ Note: `ask_inline: true` previously meant inline-at-sync. New default = `false` 
 
 Parse `$ARGUMENTS` (what follows the skill trigger word):
 
-| Input                                        | Action                                                                                           |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `` (empty)                                   | Sync `default_workspace` from `.ledger/config.yaml`                                              |
-| `sync-all`                                   | Sync every workspace where any source is `enabled: true`                                         |
-| `init <name>`                                | Bootstrap new workspace (see §11)                                                                |
-| `<workspace-name>`                           | Sync only that workspace                                                                         |
-| `status`                                     | Print last_sync state per workspace; no fetching                                                 |
-| `note`                                       | Interactive: prompt for one manual note in `default_workspace`                                   |
-| `note <workspace>`                           | Interactive: prompt for one manual note in named workspace                                       |
-| `note bulk <workspace>`                      | Interactive: paste multiple notes (one per line or `---` separated), skill splits into N entries |
-| `enrich`                                     | Loop pending-enrichment rollups in `default_workspace`, ask in chunks                            |
-| `enrich <workspace>`                         | Same, named workspace                                                                            |
-| `enrich --chunk N`                           | Override chunk size (default 5)                                                                  |
-| `enrich --max N`                             | Stop after N items this run (resumable)                                                          |
-| `regen-summaries [workspace] [--period <p>]` | Force-regenerate summaries without syncing. Useful after enrich or template changes.             |
-| `--since <date>`                             | Override cursor for this run; don't update cursor unless `--save-cursor` also present            |
+| Input                                                                                  | Action                                                                                                 |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `` (empty)                                                                             | Sync `default_workspace` from `.ledger/config.yaml`                                                    |
+| `sync-all`                                                                             | Sync every workspace where any source is `enabled: true`                                               |
+| `init <name>`                                                                          | Bootstrap new workspace (see §11)                                                                      |
+| `<workspace-name>`                                                                     | Sync only that workspace                                                                               |
+| `status`                                                                               | Print last_sync state per workspace; no fetching                                                       |
+| `note`                                                                                 | Interactive: prompt for one manual note in `default_workspace`                                         |
+| `note <workspace>`                                                                     | Interactive: prompt for one manual note in named workspace                                             |
+| `note bulk <workspace>`                                                                | Interactive: paste multiple notes (one per line or `---` separated), skill splits into N entries       |
+| `enrich`                                                                               | Loop pending-enrichment rollups in `default_workspace`, ask in chunks                                  |
+| `enrich <workspace>`                                                                   | Same, named workspace                                                                                  |
+| `enrich --chunk N`                                                                     | Override chunk size (default 5)                                                                        |
+| `enrich --max N`                                                                       | Stop after N items this run (resumable)                                                                |
+| `regen-summaries [workspace] [--period <p>]`                                           | Force-regenerate summaries without syncing. Useful after enrich or template changes.                   |
+| `backfill [workspace] --from YYYY-MM[-DD] --to YYYY-MM[-DD] [--chunk monthly\|weekly]` | Fill historical gaps; does NOT touch the forward cursor (see §1.6).                                    |
+| `--since <date>`                                                                       | Override cursor for this run; don't update cursor unless `--save-cursor` also present                  |
+| `--dry-run`                                                                            | Fetch + count only; print estimated files, cursor advance, summary periods — write nothing (see §1.7). |
 
 Flags can combine with workspace name, e.g. `quinyx --since 2026-01-01 --save-cursor`.
 
@@ -88,9 +90,9 @@ Skill = orchestrator. Heavy per-item work delegates to haiku subagents via the A
 | Git commit + push                      | Skill (main) | sequential, idempotent |
 | SQLite index upsert                    | Skill (main) | small batched writes   |
 
-Batch granularity: one agent call per entity for entries+rollup (small payload, parallelisable).
-One agent call per summary period (daily/weekly/etc). Launch in parallel via multiple Agent
-calls in a single message when independent.
+Batch granularity: one agent call per entity for entries+rollup when N ≤ 20 (small payload,
+parallelisable). One agent call per summary period (daily/weekly/etc). Launch in parallel via
+multiple Agent calls in a single message when independent.
 
 Pass to each agent: the raw jira/gh JSON for that item, the existing rollup file contents
 (if any — for `## Notes` preservation), and a strict output spec (markdown). Agent returns
@@ -98,6 +100,55 @@ the rendered file content. Skill writes it.
 
 Never give a haiku agent: git access, network access beyond what the skill already fetched,
 the full ledger state. Keep payloads small and self-contained.
+
+Threshold rule — if N > 20 entities in a single sync, batch into agents of ~50 each with
+python-deterministic body composition. Skip haiku prose generation; defer to
+`/update-ledger enrich`. For backfill (where enrich is deferred anyway): skip haiku prose
+generation entirely; use batched-deterministic Python body composition.
+
+---
+
+## 1.6 `backfill` subcommand
+
+```
+/update-ledger backfill [workspace] --from YYYY-MM[-DD] --to YYYY-MM[-DD] [--chunk monthly|weekly]
+```
+
+Fills historical gaps without touching the forward cursor. Use to hydrate periods before
+the first sync, or to re-pull a range after cursor corruption.
+
+### Rules
+
+- Walk chunks oldest→newest by default. `--reverse` flag for newest→oldest.
+- JQL filter for each chunk: `updated >= "<start>" AND updated < "<end>"` appended to the
+  workspace's `jql_filter`.
+- GitHub pass for each chunk: `--updated="<start>..<end>"`.
+- Codeberg pass for each chunk: `since=<start>&until=<end>` query params.
+- Does NOT touch `last_sync.json` cursor. Backfill is for gaps; the forward edge remains
+  untouched so the next normal sync picks up correctly.
+- Commit + push after each chunk so progress is durable. If interrupted, re-run: already-
+  existing entry files are skipped (idempotent per §6 idempotency rule).
+- Skip chunks where all entry files already exist (idempotent).
+- After backfill completes: do NOT auto-regenerate summaries. Print:
+  `Summaries stale for periods <range>. Run /update-ledger regen-summaries <workspace> to refresh.`
+
+---
+
+## 1.7 `--dry-run` flag
+
+Append `--dry-run` to any sync or backfill invocation:
+
+```
+/update-ledger <workspace> --dry-run
+/update-ledger backfill <workspace> --from 2025-01 --to 2026-01 --dry-run
+```
+
+Behaviour:
+
+- Fetch data from all enabled sources for the target period (Jira, GitHub, Codeberg).
+- Compute and print: estimated files to write, cursor advance value, summary periods affected.
+- Writes nothing — no entry files, no rollups, no cursor update, no git commit.
+- Critical for previewing a backfill before committing to it.
 
 ---
 
@@ -112,6 +163,13 @@ the full ledger state. Keep payloads small and self-contained.
 7. If workspace needs jira but MCP unavailable → skip jira pass for that workspace, log it.
 8. If workspace needs codeberg but token unset or probe failed → skip codeberg pass, log it.
 9. If all enabled sources fail for a workspace → skip that workspace entirely, log it.
+10. **Fetch output directory**: all raw fetch outputs go to `/tmp/ledger-sync/<workspace>_<source>_<period>.json`
+    before any processing. Skill operates on disk paths, not inline strings. This prevents
+    context blowout on large result sets. Apply to both `gh search` outputs and `jira_search`
+    outputs. Clean up temp files after the sync run completes.
+11. Catch MCP tool-not-available errors per fetch (not just at startup). On mid-run disconnect:
+    log timestamp + which entity/source was being processed; continue with remaining sources.
+    Surface a "partial sync" warning at the end so the user knows to re-run for missing data.
 
 ---
 
@@ -158,21 +216,34 @@ AND project = <project_filter>
 
 Call `mcp__atlassian__jira_search` with:
 
-- `cloudId`: resolved cloud_id
 - `jql`: built query
 - `fields`: `[summary, status, priority, labels, components, issuetype, assignee, reporter, created, updated, resolutiondate, description]`
 - Paginate via `nextPageToken` until exhausted.
 - Hard cap: 1000 items per run. If more seen, save cursor between batches and continue on next invocation — tell user at end.
 
+Note: `mcp__atlassian__jira_search` does NOT accept a `cloudId` parameter — the server is
+preconfigured globally. Do not pass `cloudId` in tool calls. The `cloud_id` field in
+`workspace.yaml` is documentation only (used for the resolve step above, not passed to MCP).
+
 ### 4d. Fetch comments
 
 For each issue returned: call `mcp__atlassian__jira_get_issue` with:
 
-- `cloudId`: resolved cloud_id
 - `issue_key`: the issue key (e.g. `QUI-1234`)
 - `comment_limit`: value from `sources.jira.comment_limit` (default 20)
 
 Skip attachments entirely.
+
+### 4e. Truncate descriptions before passing to agents
+
+Before writing results to `/tmp/ledger-sync/` or passing to agents, trim description field:
+
+```bash
+jq '.[].fields.description = (.[].fields.description // "" | .[0:400])' results.json
+```
+
+Full description is available at `source_url`. Truncation is essential for backfill — full
+descriptions can be 5KB+ per ticket and will blow agent context.
 
 ---
 
@@ -182,6 +253,11 @@ Two passes. Dedup by PR URL across both passes.
 
 ### Pass 1 — authored PRs (if `include_authored: true` and `user` set)
 
+Valid `--json` fields for `gh search prs`: `assignees, authorAssociation, body, closedAt,
+commentsCount, createdAt, id, isDraft, isLocked, isPullRequest, labels, number, repository,
+state, title, updatedAt, url, author`. Fields `reviewDecision`, `mergedAt`, `additions`,
+`deletions`, `changedFiles` are NOT valid for `gh search prs --json` (only for `gh pr view`).
+
 With org:
 
 ```bash
@@ -190,7 +266,7 @@ gh search prs \
   --owner=<org> \
   --updated=">=<cursor>" \
   --limit 1000 \
-  --json number,title,url,state,createdAt,updatedAt,closedAt,mergedAt,author,body,labels,repository,additions,deletions,changedFiles,reviewDecision,comments
+  --json number,title,url,state,createdAt,updatedAt,closedAt,author,body,labels,repository,commentsCount
 ```
 
 Without org (solo — `org: null`):
@@ -200,7 +276,7 @@ gh search prs \
   --author=<user> \
   --updated=">=<cursor>" \
   --limit 1000 \
-  --json number,title,url,state,createdAt,updatedAt,closedAt,mergedAt,author,body,labels,repository,additions,deletions,changedFiles,reviewDecision,comments
+  --json number,title,url,state,createdAt,updatedAt,closedAt,author,body,labels,repository,commentsCount
 ```
 
 ### Pass 2 — reviewed PRs (if `include_reviewed: true`)
@@ -211,8 +287,29 @@ gh search prs \
   [--owner=<org>] \
   --updated=">=<cursor>" \
   --limit 1000 \
-  --json number,title,url,state,createdAt,updatedAt,closedAt,mergedAt,author,body,labels,repository,additions,deletions,changedFiles,reviewDecision,comments
+  --json number,title,url,state,createdAt,updatedAt,closedAt,author,body,labels,repository,commentsCount
 ```
+
+### Pagination detection
+
+`gh search prs --limit 1000` has an effective cap that may be as low as 100 despite the
+`--limit` flag. If the result count equals `--limit`, assume truncation and either:
+
+- Page via `gh api` with `since`/`until` query params for precise date-range control, or
+- Warn the user: "Result count hit limit for <workspace> — some PRs may be missing."
+
+Prefer `gh api /search/issues` with `q=` for pagination control on large sets (200+ PRs/month).
+
+### Per PR: fetch detail (mergedAt, additions, deletions, changedFiles)
+
+For any PR where merge/change data is needed, call:
+
+```bash
+gh pr view <number> --repo <owner>/<repo> \
+  --json mergeCommit,mergedAt,additions,deletions,changedFiles
+```
+
+This is the only valid way to get those fields — they are not available in `gh search prs --json`.
 
 ### Per PR: fetch review comments (lightweight)
 
@@ -324,6 +421,23 @@ On second 429: stop codeberg pass for this workspace, log, continue with the res
 
 ## 6. Entry file generation (immutable)
 
+### 6.0 Dedup all source lists BEFORE entry generation
+
+Before spawning any agent or writing any entry file, merge and dedup all PR/issue fetches
+into a single list keyed by URL:
+
+- Jira issues: keyed by `self` URL (or `<cloud_id>/<issue_key>`)
+- GitHub PRs: keyed by `url`
+- Codeberg PRs: keyed by `html_url`
+
+For PRs appearing in both authored and reviewed passes: tag with `origin: both`. Otherwise:
+`origin: authored` or `origin: reviewed`. This prevents duplicate entries for PRs the user
+both authored and reviewed.
+
+Dedup MUST happen before any agent spawning. Agents receive the merged, deduplicated list.
+
+---
+
 Delegate writing to a haiku agent per entity batch. See §1.5.
 
 Write one file per detected event (created, status-changed, commented, merged, closed, reviewed).
@@ -409,11 +523,11 @@ source_url: <link>
 <2-5 line body describing this event. No filler. Reference rollup for full history.>
 END
 
-Slug rules: kebab-case, ≤40 chars, derived from title.
 No prose outside the fenced blocks. No markdown headers in the body. Body is plain text.
 
-- Propose a slug from title but DO NOT escape underscores. Output plain title-cased slug. Skill sanitises afterwards.
-- If you escape underscores (`\_`) in your slug, the skill will strip the backslashes. Save effort by not escaping.
+- Output the entity title as-is in the PATH placeholder — do NOT compute or format a slug.
+  The skill derives and sanitises the slug from the title server-side. Including slug format
+  rules in agent prompts causes drift; the skill is the single source of truth for slug logic.
   > > > )
 
 Skill parses the agent's response, writes each PATH/content block to disk (idempotent: skip
@@ -747,6 +861,17 @@ Delegate per-period composition to haiku agents. See §10.1.
 
 After all entries and rollups written, regenerate summaries for each touched date range.
 
+### Backfill: suppress auto-regen
+
+After a `backfill` run: do NOT auto-regenerate summaries. Backfill of 38 months touches 38
+monthly summaries, 4 quarterly, 1+ yearly — unbounded and slow. Instead, print:
+
+```
+Summaries stale for periods <from>–<to>. Run /update-ledger regen-summaries <workspace> to refresh.
+```
+
+After a normal (forward) sync: auto-regenerate as usual.
+
 ### Per-workspace summaries
 
 Paths:
@@ -1052,8 +1177,10 @@ For solo workspaces: set `paths.prs: repos` instead of `prs`.
 
 ```json
 {
+  "schema_version": 2,
   "workspaces": {
     "<name>": {
+      "schema_version": 1,
       "jira_updated_after": null,
       "github_updated_after": null,
       "codeberg_updated_after": null,
@@ -1192,7 +1319,7 @@ Rules:
 
 - Preserve user's voice. Don't editorialise. Don't add content the user didn't write.
 - If user wrote less than 3 sections, still emit all headings; use "_(none)_" for empty ones.
-- Slug rule: kebab-case ≤40 chars, derived from title, ASCII only.
+- Output the title as-is; do NOT format or compute a slug — skill derives slug server-side.
 - Frontmatter `manual: true` distinguishes from synced ticket/PR rollups.
   > > > )
 
@@ -1265,6 +1392,21 @@ CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(workspace, status);
 - Insert events on each new entry file written.
 - Use `python3` or `sqlite3` CLI via Bash within the skill.
 
+### Post-sync verifier
+
+After each sync, run:
+
+```sql
+SELECT COUNT(*) FROM entities WHERE workspace=? AND last_synced > ?
+```
+
+where `?` is the workspace name and the sync start time. Report the count in the final report.
+If count = 0, surface a warning:
+
+```
+Warning: SQLite index may be stale — no entities updated for <workspace>. Check upsert logic.
+```
+
 Example upsert (python):
 
 ```python
@@ -1290,8 +1432,10 @@ After successful sync of workspace, update `.ledger/last_sync.json`:
 
 ```json
 {
+  "schema_version": 2,
   "workspaces": {
     "<name>": {
+      "schema_version": 1,
       "jira_updated_after": "<latest jira updated ts seen, ISO8601>",
       "github_updated_after": "<latest gh updated ts seen, ISO8601>",
       "codeberg_updated_after": "<latest forgejo updated_at seen, ISO8601>",
@@ -1301,6 +1445,10 @@ After successful sync of workspace, update `.ledger/last_sync.json`:
 }
 ```
 
+Schema versioning: the top-level `schema_version: 2` covers the file format. Each workspace
+block also carries `schema_version: 1` (introduced v1.2.0). The `codeberg_updated_after`
+field was added in v1.1.0. Future cursor fields increment the per-workspace schema_version.
+
 Rules:
 
 - Preserve other workspaces' cursors verbatim.
@@ -1308,6 +1456,7 @@ Rules:
 - If `--since` WITH `--save-cursor` → update cursor to the `--since` date (used as starting point).
 - Don't update cursor for source that wasn't synced this run (e.g. jira skipped → don't touch `jira_updated_after`; codeberg skipped → don't touch `codeberg_updated_after`).
 - `<latest ts seen>` = max `updated`/`updated_at` field across all items returned from that source.
+- Backfill runs MUST NOT update any cursor field.
 
 ---
 
@@ -1328,7 +1477,16 @@ git commit -m "<commit_prefix> sync <workspace-or-all> YYYY-MM-DD (<N> entries, 
 - NEVER add Co-Authored-By trailer
 - NEVER use `--no-verify`
 
-If pre-commit hook reformats files:
+If pre-commit hook reformats files on the FIRST commit attempt (i.e. no prior commit exists
+to amend): re-stage the reformatted files and retry with a new commit — do NOT amend:
+
+```bash
+git add -A
+git commit -m "<same message>"
+```
+
+If this is a SUBSEQUENT commit in a multi-commit run (e.g. backfill chunked commits) and the
+hook reformats: amend is correct since the commit was already created before the hook ran:
 
 ```bash
 git add -A
@@ -1356,21 +1514,22 @@ If second push fails: stop and report. NEVER force push.
 
 ## 15. Failure modes
 
-| Failure                            | Action                                                            |
-| ---------------------------------- | ----------------------------------------------------------------- |
-| Atlassian MCP unavailable          | Skip jira pass for affected workspaces, log, continue             |
-| `gh` not authed                    | Skip gh pass for affected workspaces, log, continue               |
-| Codeberg token env var unset       | Skip codeberg pass for affected workspaces, log, continue         |
-| Codeberg API 401/403               | Skip codeberg pass, log "token rejected or expired", continue     |
-| Codeberg API 429 twice in a row    | Skip remainder of codeberg pass for that workspace, log, continue |
-| Codeberg host unreachable          | Skip codeberg pass, log connection error, continue                |
-| All enabled sources fail for a ws  | Skip workspace entirely, log, continue with others                |
-| Cursor null                        | Abort with instructions for `--since ... --save-cursor` or `init` |
-| User aborts enrichment             | Write placeholders, `enrichment_pending: true`                    |
-| Pre-commit hook fails              | Fix root cause; don't `--no-verify`. Report and stop.             |
-| Git push rejected                  | Rebase once, retry, then stop. Never force push.                  |
-| `workspace.yaml` missing           | Skip workspace, log                                               |
-| Duplicate entry (same id+ts+event) | Skip (idempotent)                                                 |
+| Failure                            | Action                                                                                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Atlassian MCP unavailable          | Skip jira pass for affected workspaces, log, continue                                                                                                   |
+| `gh` not authed                    | Skip gh pass for affected workspaces, log, continue                                                                                                     |
+| Codeberg token env var unset       | Skip codeberg pass for affected workspaces, log, continue                                                                                               |
+| Codeberg API 401/403               | Skip codeberg pass, log "token rejected or expired", continue                                                                                           |
+| Codeberg API 429 twice in a row    | Skip remainder of codeberg pass for that workspace, log, continue                                                                                       |
+| Codeberg host unreachable          | Skip codeberg pass, log connection error, continue                                                                                                      |
+| All enabled sources fail for a ws  | Skip workspace entirely, log, continue with others                                                                                                      |
+| Cursor null                        | Abort with instructions for `--since ... --save-cursor` or `init`                                                                                       |
+| User aborts enrichment             | Write placeholders, `enrichment_pending: true`                                                                                                          |
+| Pre-commit hook fails              | Fix root cause; don't `--no-verify`. Report and stop.                                                                                                   |
+| Git push rejected                  | Rebase once, retry, then stop. Never force push.                                                                                                        |
+| `workspace.yaml` missing           | Skip workspace, log                                                                                                                                     |
+| Duplicate entry (same id+ts+event) | Skip (idempotent)                                                                                                                                       |
+| MCP disconnect mid-run             | Log timestamp + entity being processed; continue with remaining sources; surface "partial sync" warning at end — user must re-run to fill missing data. |
 
 ---
 

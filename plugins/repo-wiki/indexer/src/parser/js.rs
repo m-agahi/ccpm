@@ -14,9 +14,9 @@ pub fn parse_file(source: &str, file_path: &str, is_typescript: bool) -> FileIR 
 
     let mut parser = Parser::new();
     let lang = if is_typescript {
-        tree_sitter_typescript::language_typescript()
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
     } else {
-        tree_sitter_javascript::language()
+        tree_sitter_javascript::LANGUAGE.into()
     };
 
     if let Err(e) = parser.set_language(&lang) {

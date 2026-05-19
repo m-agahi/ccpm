@@ -6,7 +6,7 @@ use crate::utils::hash;
 pub fn parse_file(source: &str, file_path: &str) -> FileIR {
     let mut parser = Parser::new();
     // tree-sitter-rust 0.21 is compatible with tree-sitter 0.22
-    if let Err(e) = parser.set_language(&tree_sitter_rust::language()) {
+    if let Err(e) = parser.set_language(&tree_sitter_rust::LANGUAGE.into()) {
         log::warn!("Failed to set Rust language: {}", e);
         return empty_file_ir(source, file_path);
     }

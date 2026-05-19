@@ -5,7 +5,7 @@ use crate::utils::hash;
 
 pub fn parse_file(source: &str, file_path: &str) -> FileIR {
     let mut parser = Parser::new();
-    if let Err(e) = parser.set_language(&tree_sitter_python::language()) {
+    if let Err(e) = parser.set_language(&tree_sitter_python::LANGUAGE.into()) {
         log::warn!("Failed to set Python language: {}", e);
         return empty_file_ir(source, file_path);
     }

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.2] - 2026-05-19
+
+### Fixed
+
+- Updated tree-sitter parser source files to use v0.25 static API (`LANGUAGE.into()` instead of `language()`)
+
 ## [1.1.1] - 2026-05-16
 
 ### Changed
