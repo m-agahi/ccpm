@@ -6,6 +6,10 @@
 
 - Updated tree-sitter parser source files to use v0.25 static API (`LANGUAGE.into()` instead of `language()`)
 
+### Changed
+
+- Republished v1.1.2 release on Codeberg to attach prebuilt indexer binaries (`linux/amd64` and `linux/arm64`). The original v1.1.1 release tag exists but has empty assets due to a CI build failure (now fixed in CI workflow alongside this republish).
+
 ## [1.1.1] - 2026-05-16
 
 ### Changed

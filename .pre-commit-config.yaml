@@ -51,7 +51,7 @@ repos:
         name: Check CHANGELOG updated for modified plugins
         language: python
         entry: python3 .forgejo/scripts/check_changelog_staged.py
-        files: ^plugins/
+        files: ^(plugins/.*|\.claude-plugin/marketplace\.json)$
         pass_filenames: false
 
       - id: check-code-review-version
