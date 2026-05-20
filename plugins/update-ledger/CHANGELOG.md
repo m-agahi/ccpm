@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.0 — Backfill hardening (addendum 16-25)
+
+- **[spec]** Model picker: codified haiku/sonnet/skeleton decision table; `AskUserQuestion` required at backfill kickoff when N > 100 entities/month — no silent model choice
+- **[new]** `enrich --prose`: full prose rewrite of Summary/Why/Complexity/Challenges/Impact for `enrichment_pending: true` rollups; skeleton pass + `enrich --prose` is cheapest path to full-prose (~$5–10 vs $30+ via sonnet-per-chunk)
+- **[spec]** Agent output robustness: ship JSON schema or literal example in prompt; parallel agents drift without it; prefer JSONL; merge step uses rollup frontmatter as ground truth, not manifest
+- **[spec]** Staging hard rule: backfill agents write rollups ONLY to `/tmp/ledger-stage/`; skill owns live write; prompt must include explicit DO/DON'T — "for safety" dual-writes cause diff drift
+- **[spec]** Owning-chunk rule: parallel backfill assigns each entity to `chunk(max(updated_at))`; only that chunk-agent writes the rollup; all chunks write entries for events in their range — no write collision
+- **[spec]** Parallel chunked dispatch is the default for backfill ranges > 2 months; `--sequential` to opt out; rationale: gh fetches free in parallel, jira MCP is per-agent bottleneck
+- **[spec]** Split rollup commit: > 1000 rollup files → separate commits by entity-type (tickets then prs) to bound pre-commit hook latency; single 2200-file commit pegged hooks for minutes
+- **[fix]** SSH agent flakiness: `Permission denied (publickey)` + empty `ssh-add -l` → print actionable hint (`ssh-add ~/.ssh/<key>`), abort; only treat as real auth failure when agent has keys loaded
+- **[spec]** Entries-per-entity ratio: final report includes `R rollups, E entries (E/R events/entity)` per chunk; flag ratio > 5 as anomaly
+- **[fix]** GitHub auth fallback: inspect `gh auth status` for active vs default account; if default invalid but `GH_TOKEN` account valid, use that explicitly; fail at preconditions with clear message if no valid account
+
 ## v1.2.0 — Skill spec overhaul
 
 - **[new]** `backfill` subcommand spec: chunked historical fill, does not touch forward cursor

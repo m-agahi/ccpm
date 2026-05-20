@@ -106,6 +106,55 @@ python-deterministic body composition. Skip haiku prose generation; defer to
 `/update-ledger enrich`. For backfill (where enrich is deferred anyway): skip haiku prose
 generation entirely; use batched-deterministic Python body composition.
 
+Threshold rule — model picker:
+
+| N entities / chunk            | Mode                                            | When                                                |
+| ----------------------------- | ----------------------------------------------- | --------------------------------------------------- |
+| ≤ 20                          | per-entity haiku                                | small / forward sync                                |
+| 21–100                        | one haiku agent per chunk (batched composition) | default backfill                                    |
+| > 100 + durable output        | one sonnet agent per chunk                      | retrospectives, career artifacts, audit             |
+| backfill, enrichment deferred | python skeleton, no agent prose                 | fastest hydration; user runs `enrich --prose` after |
+
+At backfill kickoff with N > 100 entities/month, skill MUST `AskUserQuestion` for mode
+choice. Do not pick silently.
+
+---
+
+## 1.5.1 Agent output robustness
+
+When dispatching agents that emit structured output, ship a JSON example or literal schema
+in the prompt. Vague prompts ("array of records") drift across parallel agents. Observed:
+6 of 12 parallel agents wrapped the output array in `{entries: [...]}`, `{summary, entries}`,
+or `{items: [...]}` when the prompt said only "return an array".
+
+Prefer JSONL (one record per line, no top-level wrapper possible) over JSON when feasible.
+
+Merge/aggregation step MUST parse rollup `.md` frontmatter as ground truth, NOT the manifest.
+Manifest is a hint; frontmatter is canon. Use PyYAML to read frontmatter from each staged
+rollup file — this is robust to schema drift in the manifest.
+
+---
+
+## 1.5.2 Staging vs live writes — agents
+
+Backfill agents write rollups ONLY to `/tmp/ledger-stage/<chunk>/<tickets|prs>/<id>.md`.
+Never to live ledger paths.
+
+Skill merges staged files into live paths after all chunks complete and validate.
+
+WRONG (observed): agent writes to BOTH staging AND live ledger path "for safety" — causes
+diff drift between staged and live on partial runs.
+
+RIGHT: stage-only. Skill owns the live write.
+
+Prompt phrasing for backfill agents MUST include an explicit DO/DON'T, not just "stage to
+/tmp":
+
+```
+DO:   write rollups to /tmp/ledger-stage/<chunk>/<tickets|prs>/<id>.md
+DON'T: write to workspaces/<workspace>/tickets/ or prs/ — skill handles that merge step
+```
+
 ---
 
 ## 1.6 `backfill` subcommand
@@ -132,6 +181,24 @@ the first sync, or to re-pull a range after cursor corruption.
 - After backfill completes: do NOT auto-regenerate summaries. Print:
   `Summaries stale for periods <range>. Run /update-ledger regen-summaries <workspace> to refresh.`
 
+### Parallel chunked dispatch (default for ranges > 2 months)
+
+Backfill ranges > 2 months default to parallel chunked dispatch: one agent per chunk,
+monthly chunks, launched in parallel via multiple Agent calls in a single message.
+Sequential is the explicit opt-in: pass `--sequential` to disable parallel dispatch.
+
+Rationale: `gh search` fetches parallelise for free (background bash). Jira MCP calls are
+sequential per-agent and are the per-agent bottleneck (~5–10 min/agent). With 12 agents
+in parallel that's ~10 min for the slowest month. Sequential 38-month backfill via one
+agent would take ~2 hours.
+
+### Owning-chunk rule (parallel backfill only)
+
+For parallel chunked backfill, assign each entity to its
+`owning_chunk = chunk(max(updated_at))`. Only the chunk-agent owning the entity writes
+its rollup. All chunk-agents that touch the entity write entry files for events in their
+date range. Result: no rollup write collision across parallel chunks.
+
 ---
 
 ## 1.7 `--dry-run` flag
@@ -157,7 +224,12 @@ Behaviour:
 1. `cd /home/max/git/ledger`. Abort if directory missing.
 2. Read `.ledger/config.yaml`. Abort if absent.
 3. For each workspace to sync: read `workspaces/<name>/workspace.yaml`. If missing, skip that workspace and log — do NOT abort entire run.
-4. Run `gh auth status`. Capture result. If failure, log — do NOT abort (may be jira-only or codeberg-only workspace).
+4. Run `gh auth status`. Parse output for account entries. Two cases:
+   - If the `default` account shows as invalid BUT a `GH_TOKEN` env-set account is valid:
+     use that account explicitly for all `gh` calls (log it; do not suppress the warning).
+   - If no valid account found (default invalid, no env-set account, or command errors):
+     fail at preconditions with: `No valid GitHub auth — set GH_TOKEN or run \`gh auth login\`.`
+     Do not silently proceed when the default account is broken.
 5. Verify atlassian MCP tools reachable by checking that `mcp__atlassian__jira_search` and `mcp__atlassian__jira_get_issue` are available. If unavailable, log — do NOT abort.
 6. For each workspace with `sources.codeberg.enabled: true`: resolve token env var name from `sources.codeberg.token_env` (default `CODEBERG_TOKEN`). If env var unset, log — do NOT abort. Probe API: `curl -fsS -H "Authorization: token $TOKEN" https://<host>/api/v1/user`. If non-200, log — do NOT abort. On 200, compare returned `login` to `sources.codeberg.user`; on mismatch, log warning (the boolean `created`/`reviewed` filters are PAT-scoped, so the configured user must equal the token owner — otherwise results will reflect the token owner, not the configured user).
 7. If workspace needs jira but MCP unavailable → skip jira pass for that workspace, log it.
@@ -808,6 +880,18 @@ or override per the existing flow.
 
 Retroactive enrichment for rollups with `enrichment_pending: true`. Decoupled from sync so
 forward syncs stay fast and non-interactive.
+
+Flags:
+
+| Flag        | Behaviour                                                                                                                                                                                                                           |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--chunk N` | Override chunk size (default 5)                                                                                                                                                                                                     |
+| `--max N`   | Stop after N items this run (resumable)                                                                                                                                                                                             |
+| `--prose`   | Full rewrite of Summary, Why it mattered, Complexity, Challenges, Impact for rollups with `enrichment_pending: true`. Uses haiku agents. Does not ask the user for values — generates prose from source data already in the rollup. |
+
+`--prose` workflow: skeleton backfill pass (python, no agents) → then `enrich --prose` is the
+cheapest path to full-prose rollups. Estimated cost: ~$5–10/year for haiku vs $30+ if using
+sonnet agents per chunk during backfill itself.
 
 ### 9.5.1 Flow
 
@@ -1495,6 +1579,18 @@ git commit --amend --no-edit
 
 If pre-commit hook fails for another reason: stop, report error, do NOT use `--no-verify`.
 
+When committing > 1000 rollup files, split into separate commits by entity-type to bound
+pre-commit hook latency. Commit ticket rollups first, then PR rollups:
+
+```bash
+git add workspaces/<workspace>/tickets/
+git commit -m "<commit_prefix> sync <workspace> YYYY-MM-DD tickets (<N> rollups)"
+git add workspaces/<workspace>/prs/
+git commit -m "<commit_prefix> sync <workspace> YYYY-MM-DD prs (<M> rollups)"
+```
+
+Observed: a single 2200-file commit pegged pre-commit hooks for several minutes.
+
 ### If `auto_push: true`
 
 ```bash
@@ -1509,6 +1605,17 @@ git push origin <branch>
 ```
 
 If second push fails: stop and report. NEVER force push.
+
+If push fails with `Permission denied (publickey)`: before reporting as auth failure, run
+`ssh-add -l`. If output is `The agent has no identities` or empty, this is an SSH agent
+key-loading issue, NOT a bad credential. Print:
+
+```
+SSH agent has no keys. Run: ssh-add ~/.ssh/<key>
+```
+
+and abort. Only treat publickey-denial as real auth failure when `ssh-add -l` shows loaded
+keys.
 
 ---
 
@@ -1545,6 +1652,14 @@ After run, print terse per-workspace summary:
 Omit any source's segment if that source is disabled or skipped for the workspace.
 
 Second line emitted only if manual notes written this run.
+
+For backfill runs, also print per-chunk stats:
+
+```
+<period>: <R> rollups, <E> entries (<E/R> events/entity)
+```
+
+Flag ratio > 5 as anomaly: `WARNING: <period> ratio <X> — check for duplicate writes or loop`.
 
 Then global:
 
