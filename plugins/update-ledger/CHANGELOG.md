@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.5.1 — Release sync
+
+- **[chore]** Bump `marketplace.json` version (was stuck at 1.3.0) so the previously merged v1.4.0 (Jira boards, #116) and v1.5.0 (portable skill, #117) actually publish to the marketplace. No functional changes.
+
 ## v1.5.0 — Portable skill (no hardcoded paths or orgs)
 
 - **[fix]** Ledger root no longer hardcoded. Skill resolves path via `$LEDGER_HOME` env var at startup (§2 preconditions). Init flow (§11 step 0) asks user for path when `$LEDGER_HOME` is unset, verifies it's an existing git repo, and halts with a clear message if not — never auto-`git init`.
