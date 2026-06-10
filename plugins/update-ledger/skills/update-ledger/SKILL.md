@@ -317,6 +317,32 @@ jq '.[].fields.description = (.[].fields.description // "" | .[0:400])' results.
 Full description is available at `source_url`. Truncation is essential for backfill — full
 descriptions can be 5KB+ per ticket and will blow agent context.
 
+### 4f. Board pull (extra pass, if `sources.jira.boards` non-empty)
+
+`sources.jira.boards` is a list of `{ id, name }` entries identifying agile boards whose
+issues should be pulled in addition to the `jql_filter` results. Use for team / support /
+epic boards where the user is NOT necessarily assignee or reporter but still wants the
+work tracked in the ledger.
+
+For each board in the list:
+
+- Call `mcp__atlassian__jira_get_board_issues` with:
+  - `board_id`: stringified board id (e.g. `"1553"`)
+  - `jql`: `updated >= "<cursor>" ORDER BY updated ASC` (cursor is the same
+    `jira_updated_after` used in §4b — boards share the workspace's Jira cursor)
+  - `fields`: same field list as §4c
+  - `start_at` / `limit`: paginate until exhausted; hard cap 1000/board/run
+- For each issue returned: fetch comments per §4d, truncate description per §4e.
+- Dedup by `issue.key` against the §4b–4e result set BEFORE entry generation. An issue
+  matched by both `jql_filter` and a board appears once.
+- Tag every entry sourced from a board with `board:<name>` (e.g. `board:DevOps-Team`) in
+  the entry frontmatter's `labels` array so rollups can attribute work to a board.
+- Board pull failures (MCP error, board deleted, permission denied) log and continue —
+  do NOT abort the workspace sync.
+
+The same pass runs during `backfill`: append `AND updated >= "<chunk_start>" AND updated <
+"<chunk_end>"` to the board JQL.
+
 ---
 
 ## 5. GitHub pull (per workspace, if `sources.github.enabled: true`)
@@ -1224,6 +1250,7 @@ sources:
     jql_filter: "<filter>"
     project_filter: <null|key>
     comment_limit: 20
+    boards: [] # optional: list of { id: <int>, name: "<board name>" }
   github:
     enabled: <bool>
     user: "<username>"

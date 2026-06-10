@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.0 — Jira board pull pass
+
+- **[new]** `sources.jira.boards`: optional list of `{ id, name }` agile boards. Spec §4f
+  adds a per-board fetch via `mcp__atlassian__jira_get_board_issues` on top of the
+  workspace `jql_filter`. Dedups by issue key against the JQL pass, tags entries
+  `board:<name>` for rollup attribution, fails-soft per board, backfill-aware (chunk
+  date range appended to board JQL). Use for team/support/epic boards where the user
+  isn't necessarily assignee or reporter but still wants the work tracked.
+- **[spec]** Init template (§init) gains `boards: []` placeholder under `sources.jira`.
+
 ## v1.3.0 — Backfill hardening (addendum 16-25)
 
 - **[spec]** Model picker: codified haiku/sonnet/skeleton decision table; `AskUserQuestion` required at backfill kickoff when N > 100 entities/month — no silent model choice
