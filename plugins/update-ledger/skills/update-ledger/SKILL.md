@@ -66,7 +66,7 @@ Parse `$ARGUMENTS` (what follows the skill trigger word):
 | `--since <date>`                                                                       | Override cursor for this run; don't update cursor unless `--save-cursor` also present                  |
 | `--dry-run`                                                                            | Fetch + count only; print estimated files, cursor advance, summary periods — write nothing (see §1.7). |
 
-Flags can combine with workspace name, e.g. `quinyx --since 2026-01-01 --save-cursor`.
+Flags can combine with workspace name, e.g. `acme --since 2026-01-01 --save-cursor`.
 
 ---
 
@@ -221,7 +221,18 @@ Behaviour:
 
 ## 2. Preconditions
 
-1. `cd /home/max/git/ledger`. Abort if directory missing.
+1. Resolve ledger root: read `$LEDGER_HOME` env var. If unset, abort:
+   ```
+   LEDGER_HOME is not set.
+   Set it to your ledger repo path (e.g. export LEDGER_HOME=/path/to/ledger)
+   or run `/update-ledger init` to bootstrap.
+   ```
+   `cd $LEDGER_HOME`. If directory missing, abort:
+   ```
+   LEDGER_HOME=$LEDGER_HOME does not exist.
+   Create the ledger repo first: git init $LEDGER_HOME
+   Then re-run this command.
+   ```
 2. Read `.ledger/config.yaml`. Abort if absent.
 3. For each workspace to sync: read `workspaces/<name>/workspace.yaml`. If missing, skip that workspace and log — do NOT abort entire run.
 4. Run `gh auth status`. Parse output for account entries. Two cases:
@@ -267,9 +278,11 @@ Behaviour:
 
 If `sources.jira.cloud_id` is empty in `workspace.yaml`:
 
-- Call atlassian MCP to list accessible Jira cloud resources.
-- Pick the one whose domain matches user's email domain (`64974579+m-agahi@users.noreply.github.com` → `quinyx`).
-- If multiple match or none match, ask user to pick.
+- Call atlassian MCP `getAccessibleAtlassianResources` to list accessible Jira cloud resources.
+- Derive user's email domain at runtime (e.g. `<user>@<company>.com` → `<company>`). Match against resource domains.
+- If exactly one resource domain matches: use it automatically.
+- If multiple match or none match: ask user to pick from the returned list.
+- Never hardcode email addresses or domain→cloud_id mappings in the skill.
 - Write resolved `cloud_id` back to `workspace.yaml`.
 
 ### 4b. Build JQL
@@ -301,7 +314,7 @@ preconfigured globally. Do not pass `cloudId` in tool calls. The `cloud_id` fiel
 
 For each issue returned: call `mcp__atlassian__jira_get_issue` with:
 
-- `issue_key`: the issue key (e.g. `QUI-1234`)
+- `issue_key`: the issue key (e.g. `PROJ-1234`)
 - `comment_limit`: value from `sources.jira.comment_limit` (default 20)
 
 Skip attachments entirely.
@@ -482,7 +495,7 @@ user has reviewed.
 For each PR returned, fetch issue comments and review threads:
 
 ```bash
-OWNER_REPO="${pr.repository.full_name}"   # e.g. maxagahi/myproj
+OWNER_REPO="${pr.repository.full_name}"   # e.g. acme/api
 N="${pr.number}"
 
 curl -fsS "${AUTH[@]}" \
@@ -549,9 +562,9 @@ workspaces/<workspace>/entries/YYYY/MM/DD/YYYYMMDD_HHMM_<type>_<id>_<slug>.md
 - `YYYY/MM/DD` from event timestamp (UTC)
 - `<type>`: `ticket` | `pr` | `repo` | `note` | `incident`
 - `<id>`:
-  - Jira: `QUI-1234`
-  - GitHub PR: `quinyx__core__456` (org**repo**number) or `maxagahi__myproject__7` for solo
-  - Codeberg/Forgejo PR: `codeberg__maxagahi__myproject__7` (host**owner**repo\*\*number). For self-hosted Forgejo with non-default host: `forgejo-<short-host>__<owner>__<repo>__<n>` — the short-host is the hostname's first label (e.g. `git.example.org` → `git`).
+  - Jira: `PROJ-1234`
+  - GitHub PR: `acme__core__456` (org**repo**number) or `alice__myproject__7` for solo
+  - Codeberg/Forgejo PR: `codeberg__alice__myproject__7` (host**owner**repo\*\*number). For self-hosted Forgejo with non-default host: `forgejo-<short-host>__<owner>__<repo>__<n>` — the short-host is the hostname's first label (e.g. `git.example.org` → `git`).
 - `<slug>`: derived from title by these rules, applied IN ORDER by the skill (not the agent):
   1. Lowercase ASCII only — transliterate or drop non-ASCII
   2. Replace any of `\\/:*?"<>|` with empty string
@@ -1163,7 +1176,7 @@ Rules:
 
 Format rules:
 
-- Wrap all entity ids in backticks: `quinyx__meridian__18`, `QRND-1234`. Never bare.
+- Wrap all entity ids in backticks: `acme__platform__18`, `PROJ-1234`. Never bare.
 - Wrap all PR/ticket titles in double quotes when included in a line. Never bare.
 - This prevents markdown interpretation of underscores in ids/titles.
 - Within fenced code blocks, you may omit backticks.
@@ -1209,6 +1222,21 @@ Force-regenerate summary files without pulling new data. Use after:
 Bootstrap new workspace interactively.
 
 ### Steps
+
+0. Resolve ledger repo root:
+
+   - If `$LEDGER_HOME` is set: verify it exists and contains a `.git/` directory. If not:
+     ```
+     LEDGER_HOME=$LEDGER_HOME does not exist or is not a git repo.
+     Create it first: git init $LEDGER_HOME
+     Then re-run `/update-ledger init <name>`.
+     ```
+     STOP. Do not auto-`git init` for the user.
+   - If `$LEDGER_HOME` is unset: ask user for the ledger repo path (AskUserQuestion).
+     Verify it exists and is a git repo. If not: print the same STOP message above.
+     Tell user: `export LEDGER_HOME=<path>` (or add to shell profile) so the skill can find it on future runs.
+   - Create `.ledger/` directory inside the repo root if absent.
+   - All subsequent steps operate relative to this root.
 
 1. Ask (AskUserQuestion): workspace type → `company` | `solo` | `client`
 2. Ask: display_name (free text)
@@ -1456,7 +1484,7 @@ Body: one-line title reference. Full content lives in the rollup.
 
 ### 11.5.5 Notes dir for non-solo workspaces
 
-Quinyx (and other `company` workspaces) didn't get a `notes/` dir at scaffold. Skill creates
+Company workspaces (e.g. `acme`, `examplecorp`) created before this fix didn't get a `notes/` dir at scaffold. Skill creates
 `workspaces/<workspace>/notes/.gitkeep` lazily on first note. Same for any new workspace
 that lacks one.
 
@@ -1521,8 +1549,8 @@ Warning: SQLite index may be stale — no entities updated for <workspace>. Chec
 Example upsert (python):
 
 ```python
-import sqlite3, json
-conn = sqlite3.connect('/home/max/git/ledger/.ledger/index.sqlite')
+import sqlite3, json, os
+conn = sqlite3.connect(os.path.join(os.environ['LEDGER_HOME'], '.ledger', 'index.sqlite'))
 conn.execute("""
   INSERT INTO entities (id, workspace, type, title, status, opened, closed, complexity, impact, tags, last_synced)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1578,7 +1606,7 @@ Read `git` block from `.ledger/config.yaml`.
 ### If `auto_commit: true`
 
 ```bash
-cd /home/max/git/ledger
+cd $LEDGER_HOME
 git add -A
 git diff --cached --quiet && echo "nothing to commit" && exit 0
 git commit -m "<commit_prefix> sync <workspace-or-all> YYYY-MM-DD (<N> entries, <M> entities)"
@@ -1703,7 +1731,7 @@ skipped: <workspace-list with reason>
 - NEVER add `Co-Authored-By:` trailer to any commit.
 - NEVER use `--no-verify` on any git command.
 - NEVER touch terraform / tofu / tfp in any form.
-- ALWAYS `cd /home/max/git/ledger` before file operations.
+- ALWAYS resolve `$LEDGER_HOME` and `cd $LEDGER_HOME` before file operations (abort if unset or missing per §2).
 - NEVER force-push.
 - NEVER overwrite rollup `## Notes` section.
 - NEVER auto-apply infrastructure changes.

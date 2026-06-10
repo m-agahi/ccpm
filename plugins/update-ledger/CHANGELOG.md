@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.5.0 — Portable skill (no hardcoded paths or orgs)
+
+- **[fix]** Ledger root no longer hardcoded. Skill resolves path via `$LEDGER_HOME` env var at startup (§2 preconditions). Init flow (§11 step 0) asks user for path when `$LEDGER_HOME` is unset, verifies it's an existing git repo, and halts with a clear message if not — never auto-`git init`.
+- **[fix]** Jira cloud_id resolution (§4a) no longer contains a hardcoded email-to-domain mapping. Detection is purely runtime: derive domain from current user's email, match against `getAccessibleAtlassianResources` results, prompt user if ambiguous.
+- **[fix]** All example org/user names replaced with generic placeholders: `acme__core__456`, `acme__platform__18`, `alice__myproject__7`, `PROJ-1234`. No Quinyx-specific strings remain.
+- **[fix]** SQLite example (§12) and git commit example (§14) use `$LEDGER_HOME` instead of hardcoded path.
+- **[migration]** Existing users: set `export LEDGER_HOME=<your-ledger-path>` in your shell profile (e.g. `export LEDGER_HOME=/home/max/git/ledger`), or run `/update-ledger init <name>` to be prompted.
+
 ## v1.4.0 — Jira board pull pass
 
 - **[new]** `sources.jira.boards`: optional list of `{ id, name }` agile boards. Spec §4f
