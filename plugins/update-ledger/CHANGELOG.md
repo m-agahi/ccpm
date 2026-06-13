@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.6.0 — Full-quality single run by default
+
+- **[change]** New default: a single `/update-ledger <workspace>` run now produces full-prose,
+  fully-enriched rollups and regenerated summaries — no follow-up `enrich` or `regen-summaries`
+  needed. Promotes the existing §9.5 `--prose` haiku logic to the default sync path.
+- **[new]** `enrichment.auto_prose` config knob (default `true`). Each sync runs the §9.1
+  heuristic suggester per entity to infer complexity/impact/challenges non-interactively, feeds
+  them into the §7.1 composer for full prose, and writes `enrichment_pending: false`. Set
+  `false` to restore the old deferred behaviour (skeleton + `enrichment_pending: true`, fill
+  later via `enrich --prose`).
+- **[new]** `summaries.auto_regen` config knob (default `true`). Summaries regenerate after
+  every run including backfill. Set `false` to defer summary regen on huge historical backfills.
+- **[change]** Entity-count gate fixed (§1.5): runs with > 20 entities no longer silently drop
+  to a python-skeleton rollup (the prior "poor quality" path). High counts now batch into
+  haiku-per-chunk agents that still emit full prose per entity. Skeleton is opt-in only via
+  `auto_prose: false`.
+- **[change]** Backfill now produces full prose and regenerates summaries by default, matching
+  forward sync. The `> 100 entities/month` `AskUserQuestion` is now a model-tier choice
+  (haiku vs sonnet per chunk), not a prompt to skip prose.
+- **[change]** Enrichment mode precedence documented: `ask_inline: true` (interactive) >
+  `auto_prose: true` (non-interactive full prose, default) > both false (deferred skeleton).
+- **[docs]** §0 now ships a complete annotated `.ledger/config.yaml` reference (all knobs with
+  defaults) instead of the enrichment block alone. Removed the dead `ask_on_sync` alias.
+- **[migration]** No action required for full-quality output — it is now automatic. Users who
+  preferred fast non-blocking syncs add `enrichment.auto_prose: false` (and optionally
+  `summaries.auto_regen: false`) to `.ledger/config.yaml`.
+
 ## v1.5.1 — Release sync
 
 - **[chore]** Bump `marketplace.json` version (was stuck at 1.3.0) so the previously merged v1.4.0 (Jira boards, #116) and v1.5.0 (portable skill, #117) actually publish to the marketplace. No functional changes.

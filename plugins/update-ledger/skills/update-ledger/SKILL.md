@@ -14,7 +14,7 @@ Caveman tone in prose; exact in queries, schemas, headings, frontmatter keys.
 
 ```
 ledger/
-  .ledger/config.yaml           # global config, sync_all_enabled, git settings
+  .ledger/config.yaml           # global config: default_workspace, enrichment, summaries, git, cross_summaries
   .ledger/last_sync.json        # {workspaces: {<name>: {jira_updated_after, github_updated_after, last_run}}}
   .ledger/index.sqlite          # gitignored; SQLite entity + event index
   workspaces/
@@ -29,17 +29,46 @@ ledger/
   cross/timeline/
 ```
 
-Example `.ledger/config.yaml` enrichment block:
+Full `.ledger/config.yaml` reference (all knobs, with defaults applied when a key is omitted):
 
 ```yaml
+default_workspace: null # workspace synced when /update-ledger called with no arg. null = require explicit name.
+
 enrichment:
-  ask_inline: false # sync-time enrichment OFF by default (was true)
-  ask_on_sync: false # alias
-  default_chunk: 5 # for /update-ledger enrich
-  default_max: 50 # for /update-ledger enrich
+  auto_prose: true # DEFAULT. Every sync (forward AND backfill) auto-generates full prose
+  # enrichment from source data, non-interactively: complexity/impact/challenges inferred
+  # via the heuristic suggester (§9.1), summary/why/impact prose written by the composer
+  # (§7.1). Rollups land complete — enrichment_pending: false. No `?` placeholders, no
+  # follow-up `enrich` run needed. Set false to defer (skeleton + enrichment_pending: true,
+  # fill later via `/update-ledger enrich --prose`).
+  ask_inline: false # interactive ask-the-user flow at sync time (blocking). Overrides
+  # auto_prose when true. Default false — full quality is produced without prompting.
+  default_chunk: 5 # chunk size for /update-ledger enrich
+  default_max: 50 # max items per /update-ledger enrich run (resumable)
+
+summaries:
+  auto_regen: true # DEFAULT. Regenerate daily/weekly/monthly/quarterly summaries after
+  # every run, including backfill, so one run yields complete data. Set false to defer
+  # summary regen to /update-ledger regen-summaries (faster on huge historical backfills).
+
+git:
+  auto_commit: true # commit after sync. Default true.
+  auto_push: true # push after commit. Default true.
+  commit_prefix: "ledger:" # commit message prefix. Default "ledger:".
+
+cross_summaries:
+  enabled: false # generate cross-workspace aggregate summaries under cross/summaries/.
+  # Default false (single-workspace users don't need them).
 ```
 
-Note: `ask_inline: true` previously meant inline-at-sync. New default = `false` so syncs are non-blocking. Enrichment happens via §9.5 subcommand.
+Quality default (v1.6.0): a single `/update-ledger <workspace>` run produces full-prose,
+fully-enriched rollups and regenerated summaries — no follow-up command required. Reduce
+quality/cost only by explicit opt-out: set `enrichment.auto_prose: false` (defer enrichment)
+or `summaries.auto_regen: false` (defer summaries). Set `enrichment.ask_inline: true` if you
+want to be prompted for each rating instead of accepting inferred values.
+
+Precedence for enrichment mode: `ask_inline: true` (interactive) > `auto_prose: true`
+(non-interactive full prose, DEFAULT) > both false (skeleton + deferred).
 
 ---
 
@@ -101,22 +130,25 @@ the rendered file content. Skill writes it.
 Never give a haiku agent: git access, network access beyond what the skill already fetched,
 the full ledger state. Keep payloads small and self-contained.
 
-Threshold rule — if N > 20 entities in a single sync, batch into agents of ~50 each with
-python-deterministic body composition. Skip haiku prose generation; defer to
-`/update-ledger enrich`. For backfill (where enrich is deferred anyway): skip haiku prose
-generation entirely; use batched-deterministic Python body composition.
+Threshold rule — full prose always (default). With `enrichment.auto_prose: true` (default),
+EVERY run produces haiku-composed prose rollups regardless of entity count — both forward
+sync and backfill. High count never silently downgrades to skeleton. Scale by batching, not
+by dropping prose: above 20 entities, group into chunks of ~50 and run one haiku agent per
+chunk (still emitting full prose per entity), instead of one agent per entity. The
+python-skeleton path is opt-in only, reached when the user sets `enrichment.auto_prose: false`.
 
 Threshold rule — model picker:
 
-| N entities / chunk            | Mode                                            | When                                                |
-| ----------------------------- | ----------------------------------------------- | --------------------------------------------------- |
-| ≤ 20                          | per-entity haiku                                | small / forward sync                                |
-| 21–100                        | one haiku agent per chunk (batched composition) | default backfill                                    |
-| > 100 + durable output        | one sonnet agent per chunk                      | retrospectives, career artifacts, audit             |
-| backfill, enrichment deferred | python skeleton, no agent prose                 | fastest hydration; user runs `enrich --prose` after |
+| N entities / chunk          | Mode                                              | When                                                       |
+| --------------------------- | ------------------------------------------------- | ---------------------------------------------------------- |
+| ≤ 20                        | per-entity haiku, full prose                      | small / forward sync (DEFAULT)                             |
+| 21–100                      | one haiku agent per chunk, full prose per entity  | larger sync or backfill (DEFAULT)                          |
+| > 100 + durable output      | one sonnet agent per chunk, full prose per entity | retrospectives, career artifacts, audit                    |
+| `auto_prose: false` opt-out | python skeleton, no agent prose                   | explicit opt-out; user runs `enrich --prose` to fill later |
 
-At backfill kickoff with N > 100 entities/month, skill MUST `AskUserQuestion` for mode
-choice. Do not pick silently.
+At backfill kickoff with N > 100 entities/month, skill MUST `AskUserQuestion` for model
+choice (haiku-per-chunk vs sonnet-per-chunk). Do not pick silently. This is a model/cost
+choice within the full-prose default — NOT a prompt to skip prose.
 
 ---
 
@@ -178,7 +210,10 @@ the first sync, or to re-pull a range after cursor corruption.
 - Commit + push after each chunk so progress is durable. If interrupted, re-run: already-
   existing entry files are skipped (idempotent per §6 idempotency rule).
 - Skip chunks where all entry files already exist (idempotent).
-- After backfill completes: do NOT auto-regenerate summaries. Print:
+- After backfill completes: regenerate summaries for every touched period when
+  `summaries.auto_regen: true` (default) — backfill is a full-quality run like any other.
+  Only when the user sets `summaries.auto_regen: false` (perf opt-out for huge ranges) skip
+  the regen and print:
   `Summaries stale for periods <range>. Run /update-ledger regen-summaries <workspace> to refresh.`
 
 ### Parallel chunked dispatch (default for ranges > 2 months)
@@ -740,11 +775,16 @@ Raw source data:
 Existing rollup file (or "NONE" if first time):
 <paste existing file contents>
 
-Inline enrichment values from user (or "PENDING" if user skipped):
+Enrichment values (from the §9.1 suggester under `auto_prose`, from the user under
+`ask_inline`, or "PENDING" only when deferred via `auto_prose: false`):
 
 - complexity: <S|M|L|XL|PENDING>
 - impact: <low|med|high|critical|PENDING>
 - challenges: <comma-separated tags or PENDING>
+
+When concrete values are supplied (the default), write full prose for every section and set
+`enrichment_pending: false`. When values are PENDING, use `?` for complexity/impact, `[]` for
+challenges, and set `enrichment_pending: true`.
 
 Output exactly this structure — frontmatter then body:
 
@@ -834,13 +874,28 @@ Same rule applies to summary files: preserve `## Notes`, `## Narrative`, and any
 
 ---
 
-## 9. Inline enrichment (per workspace setting `enrichment.ask_inline`)
+## 9. Enrichment at sync time
 
-**Default: disabled.** With `enrichment.ask_inline: false` (default), skill writes rollups
-with `enrichment_pending: true` and skips the asking flow. User runs `/update-ledger enrich`
-later (§9.5) to fill in complexity/impact/challenges in batches.
+Three modes, selected by config (precedence: `ask_inline` > `auto_prose` > skeleton):
 
-When `ask_inline: true`: original flow below applies.
+**DEFAULT — `auto_prose: true`, `ask_inline: false` (non-interactive full prose).** Every
+sync auto-enriches each rollup without prompting: run the heuristic suggester (§9.1) per
+entity to infer complexity/impact/challenges, feed those values into the rollup composer
+(§7.1) so it writes full prose for Summary / Why it mattered / Complexity / Challenges /
+Impact, and set `enrichment_pending: false`. The rollup lands complete in one run — no `?`
+placeholders, no follow-up `enrich`. This is the §9.5 `--prose` logic promoted to the
+default sync path. Inferred ratings are accepted as-is (no AskUserQuestion); the user can
+correct any later via `/update-ledger enrich`. Applies to forward sync and backfill alike.
+
+**`ask_inline: true` (interactive).** Overrides `auto_prose`. The original prompt-the-user
+flow below applies — show inferred defaults, let the user accept or override each rating via
+AskUserQuestion. Use when the user wants to curate every rating at sync time.
+
+**`auto_prose: false` and `ask_inline: false` (deferred skeleton — opt-out).** Skill writes
+rollups with `enrichment_pending: true` and `?` placeholders, skipping both the asking flow
+and prose generation. User runs `/update-ledger enrich` (or `enrich --prose`) later (§9.5)
+to fill in complexity/impact/challenges in batches. This is the fast/cheap opt-out, no
+longer the default.
 
 ### For NEW entities (not seen in prior rollup)
 
@@ -917,8 +972,11 @@ or override per the existing flow.
 
 ## 9.5 `enrich [workspace]` subcommand
 
-Retroactive enrichment for rollups with `enrichment_pending: true`. Decoupled from sync so
-forward syncs stay fast and non-interactive.
+Retroactive enrichment for rollups with `enrichment_pending: true`. With the default
+`auto_prose: true`, syncs already produce fully-enriched rollups, so nothing is pending and
+this subcommand is a no-op cleanup tool. It matters in two cases: (a) the user set
+`auto_prose: false` (deferred opt-out), leaving rollups pending; (b) the user wants to
+re-rate items the auto-inference got wrong. Decoupled from sync either way.
 
 Flags:
 
@@ -928,9 +986,11 @@ Flags:
 | `--max N`   | Stop after N items this run (resumable)                                                                                                                                                                                             |
 | `--prose`   | Full rewrite of Summary, Why it mattered, Complexity, Challenges, Impact for rollups with `enrichment_pending: true`. Uses haiku agents. Does not ask the user for values — generates prose from source data already in the rollup. |
 
-`--prose` workflow: skeleton backfill pass (python, no agents) → then `enrich --prose` is the
-cheapest path to full-prose rollups. Estimated cost: ~$5–10/year for haiku vs $30+ if using
-sonnet agents per chunk during backfill itself.
+`--prose` workflow (only when `auto_prose: false`): skeleton pass (python, no agents) → then
+`enrich --prose` is the cheapest path to full-prose rollups. Estimated cost: ~$5–10/year for
+haiku vs $30+ if using sonnet agents per chunk. Under the `auto_prose: true` default this
+same haiku prose generation runs inline during every sync, so `enrich --prose` is rarely
+needed.
 
 ### 9.5.1 Flow
 
@@ -984,16 +1044,21 @@ Delegate per-period composition to haiku agents. See §10.1.
 
 After all entries and rollups written, regenerate summaries for each touched date range.
 
-### Backfill: suppress auto-regen
+### Auto-regen (gated by `summaries.auto_regen`, default true)
 
-After a `backfill` run: do NOT auto-regenerate summaries. Backfill of 38 months touches 38
-monthly summaries, 4 quarterly, 1+ yearly — unbounded and slow. Instead, print:
+With `summaries.auto_regen: true` (default), regenerate summaries for every touched period
+after any run — forward sync AND backfill — so one run yields complete data.
+
+Backfill of 38 months touches 38 monthly summaries, 4 quarterly, 1+ yearly — unbounded and
+slow. Users who want backfill to stay fast set `summaries.auto_regen: false`; then skip the
+regen after backfill and print:
 
 ```
 Summaries stale for periods <from>–<to>. Run /update-ledger regen-summaries <workspace> to refresh.
 ```
 
-After a normal (forward) sync: auto-regenerate as usual.
+Forward sync always regenerates the (small) set of touched periods unless
+`summaries.auto_regen: false`.
 
 ### Per-workspace summaries
 
