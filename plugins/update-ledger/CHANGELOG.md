@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.7.0 — Deterministic helper scripts
+
+- **[new]** `skills/update-ledger/scripts/` — four Python helpers that own the
+  mechanical, silently-breakable parts of a sync, so the skill stops hand-rolling
+  them (and stops getting them wrong). Prose composition still goes to haiku
+  agents; scripts = mechanics, agents = writing. See new SKILL.md §1.8.
+  - `build_entities.py` — dedup all fetches, detect events
+    (created/closed/status-changed/opened/merged) using OLD status from the
+    SQLite index, convert every timestamp to UTC, emit entry-path stubs, and
+    apply a heuristic complexity/impact default (preserving prior values for
+    existing entities). Emits `<tmp>/ent/<id>.json` + `manifest_ids.json`.
+  - `fix_frontmatter.py` — re-quote every rollup `title:` scalar and verify the
+    frontmatter parses. Fixes the unquoted-colon-title YAML bug haiku composers
+    reliably produce (e.g. `title: chore(FOO-1): bar`), which silently broke
+    summary regen and the next sync's index.
+  - `index_upsert.py` — SQLite entity upsert (frontmatter is canon) + event
+    insert (dedup by file path) + stale-index verifier.
+  - `gen_summaries.py` — deterministically (re)generate daily/weekly/monthly/
+    quarterly (+ yearly for cross) summaries for every period touched on/after
+    `--since`, with exact counts and `## Notes` / `## Narrative` preservation.
+    Replaces the §10 haiku composer for the metric-summary case.
+- **[change]** SKILL.md §1.8 added; §6/§7/§10/§12 now point at the scripts as the
+  reference implementation of their mechanics ("where a script and prose
+  disagree, the script wins").
+- **[change]** On-disk fetch contract is now a hard dependency of the scripts:
+  every source fetch must be dumped to `/tmp/ledger-sync/` with a known name
+  (`jira_search*.json`, `jira_board_<Name>.json`, `jira_comments_<KEY>.json`,
+  `gh_merged.json`, `cb_merged.json`) — no hand-transcription of inline results.
+- **[fix]** Board-only tickets get their `board:<Name>` label from the fetch
+  filename deterministically (was hand-applied).
+- **[test]** `tests/test_scripts.py` — 32 pytest cases covering slug/UTC/status
+  helpers, the complexity/impact heuristics, and all four scripts end-to-end via
+  a throwaway `$LEDGER_HOME` sandbox (new vs existing event detection, board-tag
+  derivation, dedup, the colon-title guard, index dedup-on-rerun, summary counts,
+  and `## Notes` / `## Narrative` preservation). Run: `pytest` from the skill dir.
+- **[change]** `slugify` simplified to `[^a-z0-9]+ -> '-'` so parentheses and
+  other punctuation are stripped from filenames (the prior char-list left `(`),
+  matching the entry filenames the agents already produced.
+- **[migration]** No config change. Requires `python3` + `PyYAML` on the sync
+  host (`pytest` only to run the tests). The scripts are additive; the prior
+  inline/agent flow still works if the scripts are absent.
+
 ## v1.6.0 — Full-quality single run by default
 
 - **[change]** New default: a single `/update-ledger <workspace>` run now produces full-prose,

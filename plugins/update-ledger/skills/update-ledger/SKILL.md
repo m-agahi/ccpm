@@ -254,6 +254,46 @@ Behaviour:
 
 ---
 
+## 1.8 Helper scripts (deterministic mechanics) — USE THESE
+
+`skills/update-ledger/scripts/` ships four Python helpers that own the
+MECHANICAL, silently-breakable parts of a sync. The skill MUST call them
+instead of hand-deriving events, timezones, slugs, counts, or SQLite writes —
+those hand steps are where past runs corrupted data (tz math off by an offset,
+unquoted-colon YAML titles, missed status-transition entries). Prose
+composition still goes to haiku agents (§1.5); scripts = mechanics, agents =
+writing.
+
+Requires `python3` + `PyYAML`. All resolve the ledger via `$LEDGER_HOME`.
+
+| Script                                                   | Does                                                                                                                                                                                                                                                                                          | When (step)                           |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `build_entities.py <ws> [--tmp DIR] [--last-synced ISO]` | Dedup all fetches; detect events (created/closed/status-changed/opened/merged) using OLD status from SQLite; convert every ts to UTC; emit entry-path stubs; heuristic complexity/impact (preserving prior values for existing entities). Writes `<tmp>/ent/<id>.json` + `manifest_ids.json`. | after §5.5, before §6 agent dispatch  |
+| `fix_frontmatter.py [--ent-dir DIR] <glob>...`           | Re-quote every rollup's `title:` scalar (idempotent) and verify the frontmatter parses. Kills the unquoted-colon-title bug haiku composers reliably produce.                                                                                                                                  | right after §7 composer agents return |
+| `index_upsert.py <ws> [--tmp DIR] [--entries-minutes N]` | Upsert entity rows from rollup frontmatter (canon) named in `manifest_ids.json`; insert one event row per recently-written entry file (dedup by path).                                                                                                                                        | §12                                   |
+| `gen_summaries.py <ws> --since YYYY-MM-DD [--cross]`     | DETERMINISTICALLY (re)generate daily + weekly + monthly + quarterly (+ yearly for cross) summaries for every period touched on/after `--since`. Exact counts; preserves `## Notes` / `## Narrative`. Replaces the §10 haiku summary composer for the metrics case.                            | §10                                   |
+
+**On-disk fetch contract (hard dependency).** `build_entities.py` reads the raw
+source data from files under `--tmp` (default `/tmp/ledger-sync`), never from
+inline tool output. So §2.10's "dump every fetch to disk" is MANDATORY when
+using the scripts, with these names:
+
+- `jira_search*.json` — Jira search results `{issues:[...]}` (no board tag)
+- `jira_board_<BoardName>.json` — board results; the filename's `<BoardName>`
+  becomes the `board:<BoardName>` label (§4f)
+- `jira_comments_<KEY>.json` — optional per-issue comment array (feeds the
+  complexity heuristic)
+- `gh_merged.json` / `cb_merged.json` — the deduped, origin-tagged PR lists
+  (§6.0)
+
+If an MCP call returns results inline instead of to a file, re-dump them to the
+expected path before calling `build_entities.py` — do NOT hand-transcribe.
+
+The scripts are the reference implementation of §6/§7/§9/§10/§12 mechanics;
+where a script and prose disagree, the script wins (fix the prose).
+
+---
+
 ## 2. Preconditions
 
 1. Resolve ledger root: read `$LEDGER_HOME` env var. If unset, abort:
@@ -567,6 +607,11 @@ On second 429: stop codeberg pass for this workspace, log, continue with the res
 
 ## 6. Entry file generation (immutable)
 
+> **Use `build_entities.py` (§1.8).** Dedup, event detection, UTC conversion,
+> slug stubs, and heuristic enrichment are all done deterministically by the
+> script, which emits one `<tmp>/ent/<id>.json` per entity. The §6.1 agent then
+> just renders markdown from that file. Do not hand-derive events or timezones.
+
 ### 6.0 Dedup all source lists BEFORE entry generation
 
 Before spawning any agent or writing any entry file, merge and dedup all PR/issue fetches
@@ -684,6 +729,10 @@ if file already exists with same timestamp+id+event).
 ## 7. Rollup generation (regenerated each sync)
 
 Delegate composition to a haiku agent per entity. See §1.5 and §7.1.
+
+> **After the composer agents return, run `fix_frontmatter.py` (§1.8)** over the
+> written rollups to re-quote `title:` scalars and verify frontmatter parses —
+> haiku composers reliably emit unquoted-colon titles that break YAML.
 
 Write one rollup per touched entity. Regenerate from scratch each run EXCEPT `## Notes` (see §8).
 
@@ -1039,6 +1088,14 @@ they're worth enriching.
 ---
 
 ## 10. Summary regeneration
+
+> **Use `gen_summaries.py <ws> --since <first-touched-date> [--cross]` (§1.8).**
+> Summaries are pure aggregation (event list + complexity/impact counts +
+> top-5-by-impact + top-5 themes); the script computes exact counts from the
+> SQLite index and preserves `## Notes` / `## Narrative`. It regenerates every
+> touched daily/weekly/monthly/quarterly (+ yearly for cross) period in one
+> call. The §10.1 haiku composer below is the fallback for narrative-heavy
+> summaries only — the metric summaries should be script-generated.
 
 Delegate per-period composition to haiku agents. See §10.1.
 
@@ -1558,6 +1615,10 @@ that lacks one.
 ## 12. SQLite index
 
 File: `.ledger/index.sqlite` (must be in `.gitignore`).
+
+> **Use `index_upsert.py <ws> (§1.8)`** for the upsert + event-insert + stale
+> verifier. It reads rollup frontmatter as canon and dedups events by file
+> path. The schema/SQL below is what the script implements (reference).
 
 ### Schema
 
