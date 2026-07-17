@@ -10,9 +10,6 @@ on:
     branches: [master]
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   release:
     runs-on: ubuntu-latest
