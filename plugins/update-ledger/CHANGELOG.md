@@ -1,5 +1,42 @@
 # Changelog
 
+## v1.8.0 — Full sync pipeline as scripts (Rovo Jira, entries, chunk staging)
+
+- **[new]** `scripts/flatten_jira.py` — flattens Rovo-shaped Jira search dumps
+  (`{issues:{nodes:[{fields:{...}}]}}`) into the flat `{issues:[...]}` shape
+  `build_entities.py` expects, and writes `jira_comments_<KEY>.json` sidecars
+  from `fields.comment.comments`. Needed on every sync since the legacy
+  `mcp__atlassian__` server was permanently disabled 2026-08-10 and
+  `mcp__claude_ai_Atlassian_Rovo__searchJiraIssuesUsingJql` is the only Jira
+  MCP left — this was previously hand-rolled in `/tmp` every single run.
+- **[new]** `scripts/write_entries.py` — writes every immutable entry file
+  directly from `ent/<id>.json` events. Entries are a fixed, fully-derivable
+  template (frontmatter + a 2-line body), so this replaces the §6.1 agent
+  dispatch entirely — no prose judgment needed, one dispatch removed per sync.
+- **[new]** `scripts/build_chunks.py` — stages one `chunks/chunk_NN.json` per
+  rollup-composer agent: round-robins entities, attaches each one's
+  `existing_notes` **and** `existing_timeline` (extracted from the live
+  rollup — composers need both or a zero-new-event entity loses its history
+  on regen, see SKILL.md gotcha in §7.1/agent-prompt library), and folds in
+  GitHub PR stats + review comments. Auto-sizes chunk count to a target of 15
+  records/chunk, capped at 18 chunks to stay under the 20-concurrent-subagent
+  harness limit.
+- **[new]** `scripts/merge_pr_detail.py` — folds per-PR `gh pr view` stats
+  (additions/deletions/changedFiles/mergedAt) from `pr_detail/*.json` into
+  `gh_merged.json` in place, so PR complexity isn't stuck at the LOC-blind
+  `"S"` default (`gh search prs --json` can't return those fields directly).
+- **[change]** SKILL.md §1.8 table and the on-disk fetch contract now cover
+  all seven scripts and the `jira_rovo_raw*.json` / `pr_detail/` /
+  `pr_reviews/` input conventions the new scripts read.
+- **[change]** `scripts/README.md` sync order expanded from 5 to 7 steps.
+- **[test]** `tests/test_scripts.py` — 7 new cases for the four new scripts
+  (39 total), including the gotcha this most directly guards against:
+  `existing_timeline` must survive into a regen-only entity's chunk record.
+- Motivation: every prior large sync (2026-08-10, 2026-08-21, 2026-08-31)
+  hand-wrote these same three steps as throwaway `/tmp` scripts because the
+  plugin didn't ship them. Same bug (or the same fix) got re-derived each
+  time instead of being fixed once.
+
 ## v1.7.0 — Deterministic helper scripts
 
 - **[new]** `skills/update-ledger/scripts/` — four Python helpers that own the

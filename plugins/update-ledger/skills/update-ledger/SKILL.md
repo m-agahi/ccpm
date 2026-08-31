@@ -256,35 +256,50 @@ Behaviour:
 
 ## 1.8 Helper scripts (deterministic mechanics) — USE THESE
 
-`skills/update-ledger/scripts/` ships four Python helpers that own the
-MECHANICAL, silently-breakable parts of a sync. The skill MUST call them
-instead of hand-deriving events, timezones, slugs, counts, or SQLite writes —
-those hand steps are where past runs corrupted data (tz math off by an offset,
-unquoted-colon YAML titles, missed status-transition entries). Prose
-composition still goes to haiku agents (§1.5); scripts = mechanics, agents =
-writing.
+`skills/update-ledger/scripts/` ships Python helpers that own the MECHANICAL,
+silently-breakable parts of a sync. The skill MUST call them instead of
+hand-deriving events, timezones, slugs, counts, chunk payloads, or SQLite
+writes — those hand steps are where past runs corrupted data (tz math off by
+an offset, unquoted-colon YAML titles, missed status-transition entries, lost
+`## Timeline` history on regen). Prose composition still goes to agents
+(§1.5); scripts = mechanics, agents = writing. Every script below was added
+because a real run hand-rolled the same logic ad hoc and it broke or had to be
+rebuilt from scratch the next time — if a sync step needs one-off Python that
+isn't here, add it here instead of writing it into `/tmp` again.
 
 Requires `python3` + `PyYAML`. All resolve the ledger via `$LEDGER_HOME`.
 
-| Script                                                   | Does                                                                                                                                                                                                                                                                                          | When (step)                           |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `build_entities.py <ws> [--tmp DIR] [--last-synced ISO]` | Dedup all fetches; detect events (created/closed/status-changed/opened/merged) using OLD status from SQLite; convert every ts to UTC; emit entry-path stubs; heuristic complexity/impact (preserving prior values for existing entities). Writes `<tmp>/ent/<id>.json` + `manifest_ids.json`. | after §5.5, before §6 agent dispatch  |
-| `fix_frontmatter.py [--ent-dir DIR] <glob>...`           | Re-quote every rollup's `title:` scalar (idempotent) and verify the frontmatter parses. Kills the unquoted-colon-title bug haiku composers reliably produce.                                                                                                                                  | right after §7 composer agents return |
-| `index_upsert.py <ws> [--tmp DIR] [--entries-minutes N]` | Upsert entity rows from rollup frontmatter (canon) named in `manifest_ids.json`; insert one event row per recently-written entry file (dedup by path).                                                                                                                                        | §12                                   |
-| `gen_summaries.py <ws> --since YYYY-MM-DD [--cross]`     | DETERMINISTICALLY (re)generate daily + weekly + monthly + quarterly (+ yearly for cross) summaries for every period touched on/after `--since`. Exact counts; preserves `## Notes` / `## Narrative`. Replaces the §10 haiku summary composer for the metrics case.                            | §10                                   |
+| Script                                                                | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | When (step)                                              |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `flatten_jira.py [--tmp DIR] [--in-glob GLOB]`                        | Flattens Rovo-shaped `{issues:{nodes:[{fields:{...}}]}}` search dumps into the flat `{issues:[...]}` shape `build_entities.py` expects, and writes `jira_comments_<KEY>.json` sidecars from `fields.comment.comments`. Needed whenever Jira comes from `mcp__claude_ai_Atlassian_Rovo__searchJiraIssuesUsingJql` (the only Jira MCP since `mcp__atlassian__` was permanently disabled 2026-08-10).                                                                                    | after §4c/§4d fetch, before `build_entities.py`          |
+| `merge_pr_detail.py [--tmp DIR] [--gh-merged FILE]`                   | Folds per-PR `gh pr view` stats (additions/deletions/changedFiles/mergedAt) from `<tmp>/pr_detail/<owner>__<repo>__<n>.json` into `gh_merged.json` in place, so PR complexity isn't stuck at the LOC-blind "S" default.                                                                                                                                                                                                                                                               | after §5 per-PR detail fetch, before `build_entities.py` |
+| `build_entities.py <ws> [--tmp DIR] [--last-synced ISO]`              | Dedup all fetches; detect events (created/closed/status-changed/opened/merged) using OLD status from SQLite; convert every ts to UTC; emit entry-path stubs; heuristic complexity/impact (preserving prior values for existing entities). Writes `<tmp>/ent/<id>.json` + `manifest_ids.json`.                                                                                                                                                                                         | after §5.5, before §6                                    |
+| `write_entries.py <ws> [--tmp DIR]`                                   | Writes every immutable entry file directly from `ent/<id>.json` events — no agent, no prose judgment needed; entries are a fixed template. Idempotent (skips existing paths).                                                                                                                                                                                                                                                                                                         | §6, replaces the §6.1 agent dispatch entirely            |
+| `build_chunks.py <ws> [--tmp DIR] [--target-size N] [--max-chunks N]` | Stages one `<tmp>/chunks/chunk_NN.json` per rollup-composer agent: round-robins entities, and for each one attaches `existing_notes`/`existing_timeline` (extracted from the live rollup, gotcha: composers MUST get `existing_timeline` too or a zero-new-event entity loses its history on regen) plus GitHub stats/review comments. Auto-sizes chunk count to `--target-size` (default 15), capped at `--max-chunks` (default 18, under the 20-concurrent-subagent harness limit). | §7.1 step 4, right before dispatching composer agents    |
+| `fix_frontmatter.py [--ent-dir DIR] <glob>...`                        | Re-quote every rollup's `title:` scalar (idempotent) and verify the frontmatter parses. Kills the unquoted-colon-title bug composer agents reliably produce.                                                                                                                                                                                                                                                                                                                          | right after §7 composer agents return                    |
+| `index_upsert.py <ws> [--tmp DIR] [--entries-minutes N]`              | Upsert entity rows from rollup frontmatter (canon) named in `manifest_ids.json`; insert one event row per recently-written entry file (dedup by path).                                                                                                                                                                                                                                                                                                                                | §12                                                      |
+| `gen_summaries.py <ws> --since YYYY-MM-DD [--cross]`                  | DETERMINISTICALLY (re)generate daily + weekly + monthly + quarterly (+ yearly for cross) summaries for every period touched on/after `--since`. Exact counts; preserves `## Notes` / `## Narrative`. Replaces the §10 haiku summary composer for the metrics case.                                                                                                                                                                                                                    | §10                                                      |
 
 **On-disk fetch contract (hard dependency).** `build_entities.py` reads the raw
 source data from files under `--tmp` (default `/tmp/ledger-sync`), never from
 inline tool output. So §2.10's "dump every fetch to disk" is MANDATORY when
 using the scripts, with these names:
 
-- `jira_search*.json` — Jira search results `{issues:[...]}` (no board tag)
+- `jira_search*.json` — Jira search results `{issues:[...]}` (no board tag).
+  Coming from Rovo? Dump the raw per-page results as `jira_rovo_raw*.json`
+  instead and run `flatten_jira.py` first — it writes `jira_search_flat.json`,
+  which matches this glob.
 - `jira_board_<BoardName>.json` — board results; the filename's `<BoardName>`
   becomes the `board:<BoardName>` label (§4f)
 - `jira_comments_<KEY>.json` — optional per-issue comment array (feeds the
-  complexity heuristic)
+  complexity heuristic); `flatten_jira.py` writes these automatically when the
+  Rovo `fields` list included `"comment"`
 - `gh_merged.json` / `cb_merged.json` — the deduped, origin-tagged PR lists
   (§6.0)
+- `pr_detail/<owner>__<repo>__<n>.json`, `pr_reviews/<owner>__<repo>__<n>.json`
+  — optional per-PR `gh pr view` / review-comment dumps; fold the former into
+  `gh_merged.json` with `merge_pr_detail.py`, the latter is read directly by
+  `build_chunks.py`
 
 If an MCP call returns results inline instead of to a file, re-dump them to the
 expected path before calling `build_entities.py` — do NOT hand-transcribe.

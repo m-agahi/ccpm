@@ -1,10 +1,10 @@
 # update-ledger helper scripts
 
 Deterministic mechanics for a ledger sync. The skill (`SKILL.md`) calls these
-instead of hand-deriving events, timezones, slugs, counts, or SQLite writes —
-the hand steps are where past runs silently corrupted data. Prose composition
-(rollup Summary/Why/Impact, note bodies) stays with haiku agents. **Scripts =
-mechanics; agents = writing.** See `SKILL.md` §1.8.
+instead of hand-deriving events, timezones, slugs, counts, chunk payloads, or
+SQLite writes — the hand steps are where past runs silently corrupted data.
+Prose composition (rollup Summary/Why/Impact, note bodies) stays with agents.
+**Scripts = mechanics; agents = writing.** See `SKILL.md` §1.8.
 
 ## Requirements
 
@@ -15,20 +15,34 @@ mechanics; agents = writing.** See `SKILL.md` §1.8.
 ## Order in a sync
 
 ```
+# 0. (Rovo-shaped Jira MCP only) flatten raw pages + split out comment sidecars
+python3 scripts/flatten_jira.py --tmp /tmp/ledger-sync
+
+# 0b. (optional) fold gh pr view stats into gh_merged.json before build_entities
+python3 scripts/merge_pr_detail.py --tmp /tmp/ledger-sync
+
 # 1. after fetching, build per-entity JSON (events, UTC ts, slug stubs, enrichment)
 python3 scripts/build_entities.py <workspace> --tmp /tmp/ledger-sync --last-synced <ISO8601>
 
-# 2. dispatch haiku composer agents (SKILL §6.1/§7.1); each reads one ent/<id>.json
+# 2. write immutable entry files directly — no agent, entries are a fixed template
+python3 scripts/write_entries.py <workspace> --tmp /tmp/ledger-sync
 
-# 3. guard the rollups the agents wrote
+# 3. stage one chunk payload per rollup-composer agent (existing Notes/Timeline
+#    attached, GitHub stats/review comments folded in)
+python3 scripts/build_chunks.py <workspace> --tmp /tmp/ledger-sync
+
+# 4. dispatch composer agents (SKILL §7.1); each reads one chunks/chunk_NN.json
+#    and writes N rollups straight to their live out_path
+
+# 5. guard the rollups the agents wrote
 python3 scripts/fix_frontmatter.py --ent-dir /tmp/ledger-sync/ent \
     "$LEDGER_HOME/workspaces/<workspace>/tickets/*.md" \
     "$LEDGER_HOME/workspaces/<workspace>/prs/*.md"
 
-# 4. refresh the SQLite index
+# 6. refresh the SQLite index
 python3 scripts/index_upsert.py <workspace> --tmp /tmp/ledger-sync --entries-minutes 60
 
-# 5. regenerate summaries for every touched period (add --cross if cross_summaries.enabled)
+# 7. regenerate summaries for every touched period (add --cross if cross_summaries.enabled)
 python3 scripts/gen_summaries.py <workspace> --since <first-touched-date> --cross
 ```
 
@@ -37,13 +51,16 @@ python3 scripts/gen_summaries.py <workspace> --since <first-touched-date> --cros
 `build_entities.py` reads raw source data from files under `--tmp` (never inline
 tool output). Dump every fetch with these names:
 
-| File                          | Contents                                                          |
-| ----------------------------- | ----------------------------------------------------------------- |
-| `jira_search*.json`           | Jira search results `{issues:[...]}` (no board tag)               |
-| `jira_board_<BoardName>.json` | board results; filename `<BoardName>` → `board:<BoardName>` label |
-| `jira_comments_<KEY>.json`    | optional per-issue comment array (feeds complexity heuristic)     |
-| `gh_merged.json`              | deduped, origin-tagged GitHub PR list                             |
-| `cb_merged.json`              | deduped, origin-tagged Codeberg/Forgejo PR list                   |
+| File                                   | Contents                                                                                                          |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `jira_rovo_raw*.json`                  | raw Rovo search pages `{issues:{nodes:[...]}}` — run `flatten_jira.py` to turn these into `jira_search_flat.json` |
+| `jira_search*.json`                    | Jira search results `{issues:[...]}` (no board tag), flat shape                                                   |
+| `jira_board_<BoardName>.json`          | board results; filename `<BoardName>` → `board:<BoardName>` label                                                 |
+| `jira_comments_<KEY>.json`             | optional per-issue comment array (feeds complexity heuristic); `flatten_jira.py` writes these for you             |
+| `gh_merged.json`                       | deduped, origin-tagged GitHub PR list                                                                             |
+| `cb_merged.json`                       | deduped, origin-tagged Codeberg/Forgejo PR list                                                                   |
+| `pr_detail/<owner>__<repo>__<n>.json`  | optional `gh pr view --json additions,deletions,changedFiles,mergedAt` dump; fold in with `merge_pr_detail.py`    |
+| `pr_reviews/<owner>__<repo>__<n>.json` | optional `gh api .../pulls/<n>/comments` dump; read directly by `build_chunks.py`                                 |
 
 If an MCP call returns results inline, re-dump them to the expected path before
 running `build_entities.py`. Do not hand-transcribe.
@@ -52,7 +69,7 @@ running `build_entities.py`. Do not hand-transcribe.
 
 ```
 pip install pytest pyyaml
-pytest plugins/update-ledger/skills/update-ledger/tests   # 32 cases, ~1s
+pytest plugins/update-ledger/skills/update-ledger/tests   # 39 cases, ~4s
 ```
 
 The suite unit-tests the pure helpers (slug/UTC/status/heuristics) and drives

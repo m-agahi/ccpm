@@ -296,6 +296,145 @@ def test_index_and_summaries_end_to_end(sandbox):
     assert "Complexity: S=1 M=1 L=0 XL=0 ?=0" in weekly
 
 
+# --------------------------------------------------------------------------- #
+# integration: flatten_jira
+# --------------------------------------------------------------------------- #
+def test_flatten_jira_rovo_shape_and_comments(sandbox):
+    rovo = {"issues": {"nodes": [{
+        "key": "TEST-9", "self": "https://x/issue/1",
+        "fields": {
+            "summary": "s", "status": {"name": "Done"}, "issuetype": {"name": "Task"},
+            "created": "2026-07-16T14:15:29+0200", "updated": "2026-07-16T14:22:55+0200",
+            "resolutiondate": "2026-07-16T14:22:54+0200", "description": "d", "labels": [],
+            "comment": {"comments": [{"body": "hello"}, {"body": "world"}]},
+        },
+    }], "pageInfo": {"hasNextPage": False}}}
+    (sandbox["tmp"] / "jira_rovo_raw_p1.json").write_text(json.dumps(rovo))
+    r = run("flatten_jira.py", "--tmp", str(sandbox["tmp"]), env=sandbox["env"])
+    assert r.returncode == 0, r.stderr
+    flat = json.load(open(sandbox["tmp"] / "jira_search_flat.json"))
+    assert len(flat["issues"]) == 1
+    iss = flat["issues"][0]
+    assert iss["key"] == "TEST-9" and iss["summary"] == "s"   # flattened, not nested under fields
+    comments = json.load(open(sandbox["tmp"] / "jira_comments_TEST-9.json"))
+    assert comments == ["hello", "world"]
+
+
+def test_flatten_jira_dedups_across_pages(sandbox):
+    def page(key):
+        return {"issues": {"nodes": [{"key": key, "self": "u", "fields": {
+            "summary": "s", "status": {"name": "Done"}, "created": "2026-07-16T00:00:00Z",
+            "updated": "2026-07-16T00:00:00Z", "labels": [],
+        }}]}}
+    (sandbox["tmp"] / "jira_rovo_raw_p1.json").write_text(json.dumps(page("TEST-1")))
+    (sandbox["tmp"] / "jira_rovo_raw_p2.json").write_text(json.dumps(page("TEST-1")))
+    r = run("flatten_jira.py", "--tmp", str(sandbox["tmp"]), env=sandbox["env"])
+    assert r.returncode == 0, r.stderr
+    flat = json.load(open(sandbox["tmp"] / "jira_search_flat.json"))
+    assert len(flat["issues"]) == 1                            # first-seen wins, no dup
+
+
+# --------------------------------------------------------------------------- #
+# integration: write_entries
+# --------------------------------------------------------------------------- #
+def _make_ent(sandbox, eid, kind, title, events, **extra):
+    d = {
+        "kind": kind, "id": eid, "path": str(sandbox["root"] / f"workspaces/test/tickets/{eid}.md"),
+        "exists": False, "title": title, "status": "open", "opened": "2026-07-16",
+        "closed": None, "source_url": "https://x/browse/" + eid, "labels": [],
+        "complexity": "S", "impact": "med", "last_synced": "2026-07-16T18:30:00Z",
+        "events": [],
+    }
+    d.update(extra)
+    for ev in events:
+        d["events"].append({
+            "event": ev, "ts": "2026-07-16T12:15:29Z", "status": "open",
+            "ts_utc": "2026-07-16T12:15:29Z", "date_path": "2026/07/16",
+            "fname_prefix": f"20260716_1215_{'ticket' if kind == 'ticket' else 'pr'}_{eid}_",
+        })
+    (sandbox["tmp"] / "ent").mkdir(parents=True, exist_ok=True)
+    json.dump(d, open(sandbox["tmp"] / f"ent/{eid}.json", "w"))
+    return d
+
+
+def test_write_entries_writes_frontmatter_and_body(sandbox):
+    _make_ent(sandbox, "TEST-1", "ticket", "fix(x): thing", ["created"])
+    r = run("write_entries.py", "test", "--tmp", str(sandbox["tmp"]), env=sandbox["env"])
+    assert r.returncode == 0, r.stderr
+    res = json.loads(r.stdout)
+    assert res["written"] == 1 and res["skipped_existing"] == 0
+    p = sandbox["root"] / "workspaces/test/entries/2026/07/16/20260716_1215_ticket_TEST-1_fix-x-thing.md"
+    assert p.exists()
+    body = p.read_text()
+    assert "id: TEST-1" in body and "event: created" in body and "`TEST-1`" in body
+
+
+def test_write_entries_idempotent_skips_existing(sandbox):
+    _make_ent(sandbox, "TEST-1", "ticket", "fix(x): thing", ["created"])
+    run("write_entries.py", "test", "--tmp", str(sandbox["tmp"]), env=sandbox["env"])
+    r2 = run("write_entries.py", "test", "--tmp", str(sandbox["tmp"]), env=sandbox["env"])
+    res = json.loads(r2.stdout)
+    assert res["written"] == 0 and res["skipped_existing"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# integration: build_chunks
+# --------------------------------------------------------------------------- #
+def test_build_chunks_stages_existing_timeline_and_notes(sandbox):
+    # regen-only entity: zero new events, but a pre-existing rollup with history
+    _make_ent(sandbox, "TEST-1", "ticket", "fix(x): thing", [], priority="P1",
+              issuetype="Task", description="d", comments=["c1"])
+    p = sandbox["root"] / "workspaces/test/tickets/TEST-1.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("---\nid: TEST-1\n---\n## Timeline\n- 2026-07-01: created\n## Notes\nkeep me\n")
+    json.dump(["TEST-1"], open(sandbox["tmp"] / "manifest_ids.json", "w"))
+    r = run("build_chunks.py", "test", "--tmp", str(sandbox["tmp"]), "--target-size", "5",
+            env=sandbox["env"])
+    assert r.returncode == 0, r.stderr
+    chunk = json.load(open(sandbox["tmp"] / "chunks/chunk_00.json"))
+    assert len(chunk) == 1
+    rec = chunk[0]
+    assert rec["existing_timeline"] == "- 2026-07-01: created"    # gotcha #14: must be staged
+    assert rec["existing_notes"] == "keep me"
+    assert rec["out_path"] == str(p)
+
+
+def test_build_chunks_folds_gh_stats_and_caps_chunk_count(sandbox):
+    for i in range(40):
+        _make_ent(sandbox, f"acme__core__{i}", "pr", "t", ["opened"], repo="acme/core", number=i)
+    (sandbox["tmp"] / "gh_merged.json").write_text(json.dumps([
+        {"number": i, "repository": {"nameWithOwner": "acme/core"},
+         "additions": 10 + i, "deletions": 1, "changedFiles": 2}
+        for i in range(40)
+    ]))
+    json.dump([f"acme__core__{i}" for i in range(40)], open(sandbox["tmp"] / "manifest_ids.json", "w"))
+    r = run("build_chunks.py", "test", "--tmp", str(sandbox["tmp"]), "--target-size", "1",
+            "--max-chunks", "5", env=sandbox["env"])
+    assert r.returncode == 0, r.stderr
+    res = json.loads(r.stdout)
+    assert res["n_chunks"] == 5                                   # capped, not 40
+    chunk = json.load(open(sandbox["tmp"] / "chunks/chunk_00.json"))
+    ids = {rec["id"]: rec for rec in chunk}
+    assert ids["acme__core__0"]["additions"] == 10                # gh stats folded in
+
+
+# --------------------------------------------------------------------------- #
+# integration: merge_pr_detail
+# --------------------------------------------------------------------------- #
+def test_merge_pr_detail_folds_stats_into_gh_merged(sandbox):
+    (sandbox["tmp"] / "gh_merged.json").write_text(json.dumps([
+        {"number": 42, "repository": {"nameWithOwner": "acme/core"}, "title": "t"},
+    ]))
+    (sandbox["tmp"] / "pr_detail").mkdir()
+    (sandbox["tmp"] / "pr_detail/acme__core__42.json").write_text(json.dumps(
+        {"additions": 50, "deletions": 10, "changedFiles": 3, "mergedAt": "2026-07-16T09:00:00Z"}))
+    r = run("merge_pr_detail.py", "--tmp", str(sandbox["tmp"]), env=sandbox["env"])
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["matched"] == 1
+    gh = json.load(open(sandbox["tmp"] / "gh_merged.json"))
+    assert gh[0]["additions"] == 50 and gh[0]["changedFiles"] == 3
+
+
 def test_summaries_preserve_notes(sandbox):
     _make_rollup(sandbox, "tickets", "TEST-1", "ticket", "done", "S", "low", [])
     _make_entry(sandbox, "2026-07-16T12:15:29Z", "ticket", "TEST-1", "created", "open")
