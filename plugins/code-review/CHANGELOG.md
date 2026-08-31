@@ -5,6 +5,32 @@ All notable changes to the local-code-review plugin will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [5.1.0] - 2026-08-31
+
+### Changed
+
+- **Docker toolbox refreshed** (`docker/Dockerfile`) — first rebuild since 2026-05-16, all pinned
+  tool versions checked live against GitHub Releases / PyPI / npm and bumped where newer stable
+  releases exist:
+  - Go 1.26.3→1.27.0, Trivy 0.70.0→0.74.0, Hadolint 2.14.0→2.15.1, TFLint 0.62.1→0.64.0,
+    PMD 7.24.0→7.27.0, SpotBugs 4.9.8→4.10.4, Zizmor 1.25.2→1.30.0, Terraform CLI 1.15.3→1.16.0,
+    google-java-format 1.35.0→1.36.1, golangci-lint 2.12.2→2.13.2, staticcheck 2026.1→2026.2.1,
+    shfmt 3.13.1→3.14.0.
+  - Python: semgrep 1.163.0→1.175.0, checkov 3.2.529→3.3.16, ruff 0.15.13→0.16.5,
+    mypy 2.1.0→2.3.1, pip-audit 2.10.0→2.10.1, sqlfluff 4.2.1→4.3.0, hypothesis 6.152.7→6.167.1,
+    pytest 9.0.3→9.1.1.
+  - Node: pyright 1.1.409→1.1.413, eslint 10.4.0→10.9.1, prettier 3.8.3→3.9.6.
+  - Unchanged (already current): gitleaks 8.30.1, ShellCheck v0.11.0, sonar-scanner-cli 8.1.0.6389,
+    actionlint 1.7.12, checkmake 0.3.2, OWASP DependencyCheck 12.1.0, yamllint 1.38.0,
+    pytest-cov 7.1.0, python:3.14-slim base image, Node.js 24 LTS.
+  - **[breaking, tool-level]** Three major-version bumps — verify these don't change output
+    format/behavior your workflow depends on before relying on a fresh build:
+    - **checkstyle 13.4.2→14.1.0**
+    - **jscpd 4.2.2→5.1.0**
+    - **TypeScript 6.0.3→7.0.2** (global fallback `tsc` only — a reviewed project's own
+      local `typescript` in `node_modules` still takes priority via `npx`)
+  - `LABEL version` bumped 5.0.2→5.1.0 to force a rebuild.
+
 ## [5.0.2] - 2026-05-16
 
 ### Fixed

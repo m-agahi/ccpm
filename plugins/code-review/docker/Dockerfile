@@ -8,19 +8,19 @@ ENV LANG=C.UTF-8
 ENV PATH="/usr/local/go/bin:/root/go/bin:/opt/sonar-scanner/bin:/opt/spotbugs/bin:/opt/pmd/bin:/opt/terraform:${PATH}"
 
 # Pinned tool versions (update these to rebuild with newer tools)
-ENV GO_VERSION=1.26.3 \
-    TRIVY_VERSION=0.70.0 \
+ENV GO_VERSION=1.27.0 \
+    TRIVY_VERSION=0.74.0 \
     GITLEAKS_VERSION=8.30.1 \
-    HADOLINT_VERSION=2.14.0 \
+    HADOLINT_VERSION=2.15.1 \
     SHELLCHECK_VERSION=v0.11.0 \
-    TFLINT_VERSION=0.62.1 \
-    PMD_VERSION=7.24.0 \
-    SPOTBUGS_VERSION=4.9.8 \
+    TFLINT_VERSION=0.64.0 \
+    PMD_VERSION=7.27.0 \
+    SPOTBUGS_VERSION=4.10.4 \
     SONAR_VERSION=8.1.0.6389 \
-    ZIZMOR_VERSION=1.25.2 \
-    TERRAFORM_VERSION=1.15.3 \
-    CHECKSTYLE_VERSION=13.4.2 \
-    GOOGLE_JAVA_FORMAT_VERSION=1.35.0
+    ZIZMOR_VERSION=1.30.0 \
+    TERRAFORM_VERSION=1.16.0 \
+    CHECKSTYLE_VERSION=14.1.0 \
+    GOOGLE_JAVA_FORMAT_VERSION=1.36.1
 
 WORKDIR /workspace
 
@@ -95,26 +95,26 @@ RUN gem install --no-document rubocop bundler-audit
 # Python tools (pinned via pip)
 # ============================================================
 RUN pip install --no-cache-dir \
-    semgrep==1.163.0 \
-    checkov==3.2.529 \
-    ruff==0.15.13 \
-    mypy==2.1.0 \
-    pip-audit==2.10.0 \
-    sqlfluff==4.2.1 \
+    semgrep==1.175.0 \
+    checkov==3.3.16 \
+    ruff==0.16.5 \
+    mypy==2.3.1 \
+    pip-audit==2.10.1 \
+    sqlfluff==4.3.0 \
     yamllint==1.38.0 \
-    hypothesis==6.152.7 \
-    pytest==9.0.3 \
+    hypothesis==6.167.1 \
+    pytest==9.1.1 \
     pytest-cov==7.1.0
 
 # ============================================================
 # Node.js tools (global)
 # ============================================================
 RUN npm install -g \
-    jscpd@4.2.2 \
-    pyright@1.1.409 \
-    eslint@10.4.0 \
-    prettier@3.8.3 \
-    typescript@6.0.3 \
+    jscpd@5.1.0 \
+    pyright@1.1.413 \
+    eslint@10.9.1 \
+    prettier@3.9.6 \
+    typescript@7.0.2 \
     @anthropic-ai/claude-code
 
 # Claude Code CLI settings (allow Bash and Read inside container)
@@ -134,9 +134,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 # ============================================================
 # Go tools (pre-built binaries for multi-arch support)
 # ============================================================
-ENV GOLANGCI_LINT_VERSION=2.12.2 \
-    STATICCHECK_VERSION=2026.1 \
-    SHFMT_VERSION=3.13.1 \
+ENV GOLANGCI_LINT_VERSION=2.13.2 \
+    STATICCHECK_VERSION=2026.2.1 \
+    SHFMT_VERSION=3.14.0 \
     ACTIONLINT_VERSION=1.7.12 \
     CHECKMAKE_VERSION=0.3.2
 
@@ -304,6 +304,6 @@ RUN echo "=== Tool Versions ===" \
 
 # Review helper scripts (baked in — no need to copy at runtime)
 # Bump version label to trigger a new image build.
-LABEL version="5.0.2"
+LABEL version="5.1.0"
 COPY scripts/ /opt/review-scripts/
 ENTRYPOINT ["sleep", "infinity"]
