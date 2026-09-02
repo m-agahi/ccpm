@@ -54,9 +54,9 @@ repos:
         files: ^(plugins/.*|\.claude-plugin/marketplace\.json)$
         pass_filenames: false
 
-      - id: check-code-review-version
-        name: Check code-review version consistency
+      - id: check-audit-lab-version
+        name: Check audit-lab version consistency
         language: python
-        entry: python3 .forgejo/scripts/check_code_review_version.py
-        files: ^(plugins/code-review/docker/Dockerfile|plugins/code-review/CHANGELOG\.md|\.claude-plugin/marketplace\.json)$
+        entry: python3 .forgejo/scripts/check_audit_lab_version.py
+        files: ^(plugins/audit-lab/docker/Dockerfile|plugins/audit-lab/CHANGELOG\.md|\.claude-plugin/marketplace\.json)$
         pass_filenames: false

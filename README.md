@@ -6,7 +6,7 @@ Personal plugin marketplace for [Claude Code](https://claude.ai/code).
 
 ## Plugins
 
-### code-review (v5.1.0)
+### audit-lab (v6.0.0)
 
 Comprehensive local code review with 12 specialized agents. All analysis runs locally inside a Docker container — nothing is pushed to remote.
 
@@ -39,7 +39,7 @@ If your project pulls from private package registries (Maven, npm, pip, Go, etc.
 
 ```bash
 # Edit the config (auto-created on first run from the bundled template)
-$EDITOR ~/.config/code-review/registries.yml
+$EDITOR ~/.config/audit-lab/registries.yml
 ```
 
 Uncomment the entries you need and point them at your local credential files. Supported registries:
@@ -167,7 +167,7 @@ Then edit `tf-naming-config.md` to add, remove, or adjust rules. The project-lev
 ### 2. Install a plugin
 
 ```
-/plugin install code-review@maxagahi-marketplace
+/plugin install audit-lab@maxagahi-marketplace
 ```
 
 Or interactively: run `/plugin`, go to **Discover**, and select the plugin.
@@ -175,7 +175,7 @@ Or interactively: run `/plugin`, go to **Discover**, and select the plugin.
 ### 3. Use it
 
 ```
-/code-review:review-local
+/audit-lab:review-local
 ```
 
 ## Development
@@ -227,12 +227,12 @@ To develop plugins locally without reinstalling after every change, symlink the 
 
 ```bash
 # Create the symlink (one-time setup)
-ln -sfn /path/to/ccpm/plugins/code-review ~/.claude/plugins/local/local-code-review
+ln -sfn /path/to/ccpm/plugins/audit-lab ~/.claude/plugins/local/local-audit-lab
 
 # After making changes, sync to cache
 rsync -avL --delete \
-  ~/.claude/plugins/local/local-code-review/ \
-  ~/.claude/plugins/cache/local-plugins/local-code-review/unknown/ \
+  ~/.claude/plugins/local/local-audit-lab/ \
+  ~/.claude/plugins/cache/local-plugins/local-audit-lab/unknown/ \
   --exclude='.git' --exclude='LICENSE' --exclude='README.md'
 ```
 

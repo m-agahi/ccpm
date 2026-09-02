@@ -1,0 +1,36 @@
+{
+  "name": "audit-lab",
+  "description": "Comprehensive local code review with static analysis, security scanning, dependency auditing, container scanning, and best practices enforcement. v4: JSON-first output (findings.json, tickets.json, summary.json) with CIA-axis impact matrix, per-run subdirectories, and pattern propagation. Python orchestrates claude -p inside the container — no LLM orchestration, no permission prompts. All analysis is local — only optional Jira ticket creation touches remote systems.",
+  "author": {
+    "name": "Max Agahi"
+  },
+  "repository": "https://codeberg.org/maxagahi/ccpm",
+  "license": "Apache-2.0",
+  "keywords": [
+    "audit-lab",
+    "security",
+    "static-analysis",
+    "trivy",
+    "sonarqube"
+  ],
+  "permissions": {
+    "required": [
+      "Read(*)",
+      "Bash(docker exec *)",
+      "Bash(docker ps *)",
+      "Bash(docker rm *)",
+      "Bash(docker run *)",
+      "Bash(docker image inspect *)",
+      "Bash(docker cp *)",
+      "Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/*)",
+      "Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)",
+      "Bash(mkdir -p */.local-review*)",
+      "Bash(git *)",
+      "Bash(find *)",
+      "Bash(rm -rf */.scannerwork*)",
+      "Bash(rm -rf *__pycache__*)",
+      "Bash(rm -f *)"
+    ],
+    "description": "Python orchestrates agents via 'claude -p' inside the container. Host needs docker exec/cp/run for container management. Read(*) for reading reports. These permissions must be present BEFORE starting Claude Code."
+  }
+}

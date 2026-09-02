@@ -4,7 +4,7 @@
 
 | Plugin      | Version | Supported |
 | ----------- | ------- | --------- |
-| code-review | 3.x     | Yes       |
+| audit-lab   | 3.x     | Yes       |
 | update-jira | 1.x     | Yes       |
 
 ## Reporting a Vulnerability

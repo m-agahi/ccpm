@@ -32,7 +32,7 @@ This guide walks you through adding a new plugin to the ccpm marketplace.
   pre-commit install
   ```
 
-- Look at the `code-review` plugin under `plugins/` as a working reference
+- Look at the `audit-lab` plugin under `plugins/` as a working reference
 
 ## Plugin Structure
 
@@ -378,7 +378,7 @@ To also auto-enable specific plugins:
     }
   },
   "enabledPlugins": {
-    "code-review@maxagahi-marketplace": true
+    "audit-lab@maxagahi-marketplace": true
   }
 }
 ```

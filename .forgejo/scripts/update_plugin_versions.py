@@ -2,7 +2,7 @@
 """Keep plugin version strings in README.md in sync with marketplace.json.
 
 Looks for headings like:
-  ### code-review (v3.6.3)
+  ### audit-lab (v3.6.3)
 and replaces the version with the actual value from marketplace.json.
 """
 
