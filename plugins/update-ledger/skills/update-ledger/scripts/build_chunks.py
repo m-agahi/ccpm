@@ -7,7 +7,11 @@ each entity's live rollup file (SKILL.md §8, gotcha #14 — composers MUST get
 `existing_timeline`, not just `existing_notes`, or a pre-existing rollup with
 zero new events this run loses its history), folds in per-PR stats from
 `gh_merged.json` (additions/deletions/changedFiles — populate these first via
-`merge_pr_detail.py`) and optional review comments from `pr_reviews/`, then
+`merge_pr_detail.py`) and optional review comments from `pr_reviews/`, carries
+the live rollup's frontmatter `tags` as `existing_tags` (every tag except the
+re-derived `origin:*` ones — composers rebuild `tags` from `labels`, which never
+carries `board:*` / `tool:*` / `task:*` / `ai-*` enrichment, so without this a
+re-composed rollup silently loses that attribution for good), then
 round-robins everything into `<tmp>/chunks/chunk_NN.json` files sized for one
 sonnet composer agent each (pattern: `agent-prompt-ledger-rollup-compose-chunk`
 in the yadgar wiki).
@@ -24,7 +28,31 @@ Usage:
 import os, sys, json, math, argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ledger_lib import ledger_root, extract_sections
+from ledger_lib import ledger_root, extract_sections, read_frontmatter
+
+
+def existing_tags(path):
+    """Live rollup's frontmatter tags minus `origin:*` (re-derived each sync).
+
+    Composers MUST union these into `tags` (SKILL.md §7.1). Carrying a stale
+    tag is harmless; dropping one (e.g. `board:DevOps-Team` — the Jira board
+    pass is off, so labels can't recreate it) is unrecoverable.
+    """
+    fm = read_frontmatter(path) or {}
+    tags = fm.get("tags") if isinstance(fm, dict) else None
+    if tags is None:
+        return []
+    if not isinstance(tags, list):
+        tags = [tags]
+    out = []
+    for t in tags:
+        if t is None:
+            continue
+        t = str(t)
+        if t.startswith("origin:") or t in out:
+            continue
+        out.append(t)
+    return out
 
 
 def main():
@@ -66,6 +94,7 @@ def main():
             "complexity": e["complexity"], "impact": e["impact"], "source_url": e["source_url"],
             "labels": e.get("labels", []), "events": e["events"], "out_path": path,
             "existing_notes": sec["Notes"], "existing_timeline": sec["Timeline"],
+            "existing_tags": existing_tags(path),
             "last_synced": e["last_synced"],
         }
         if e["kind"] == "ticket":

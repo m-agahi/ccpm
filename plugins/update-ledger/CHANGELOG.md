@@ -1,5 +1,45 @@
 # Changelog
 
+## v1.9.0 — GitHub merge/fetch scripts, rollup verifier, board-tag data-loss fix
+
+- **[fix]** `scripts/build_chunks.py` — every record now carries
+  `existing_tags`: the live rollup's frontmatter `tags` minus `origin:*`.
+  Composers rebuilt `tags` from `labels`, which never carries `board:*` (the
+  Jira board pass is off), so every re-composed older rollup silently lost its
+  board attribution — 71 of 236 rollups on the 2026-09-21 sync, unrecoverable
+  from source. All non-`origin:` tags are carried, not just `board:*`:
+  `tool:*`, `task:*`, `ai-*` enrichment is the same loss class, and under the
+  union rule a carried stale tag is harmless while a dropped one is gone.
+  `origin:*` is excluded because it is re-derived every sync.
+- **[new]** `scripts/merge_gh.py` — merges `gh_authored.json` +
+  `gh_reviewed.json`: dedup by `url`, `origin: authored|reviewed|both`, drop
+  `updatedAt <= cursor` (from `--cursor` or `last_sync.json`), write
+  `gh_merged.json`, print counts + `max_updated_at` (the next GitHub cursor).
+- **[new]** `scripts/fetch_pr_detail.sh` — parallel (`xargs -P`, default 8)
+  per-PR `gh pr view` detail + review-comment dumps into `pr_detail/` and
+  `pr_reviews/`. `GH_BIN` override (multi-word, e.g.
+  `GH_BIN="env -u GH_TOKEN gh"` when `GH_TOKEN` is set but invalid). Deletes
+  failed/empty outputs, lists them, exits non-zero.
+- **[new]** `scripts/verify_rollups.py` — post-composer verifier: out_path
+  exists, frontmatter parses, `enrichment_pending: false`, `last_synced`
+  quoted and equal to NOW (reported apart: `last_synced_unquoted` vs
+  `last_synced_stale`), no `0001-01-01` closed, exact headings, no empty sections except
+  Notes, byte-exact title; and vs `git show <baseline>:<rel>`: no lost Timeline
+  bullet, no lost `board:*` tag, Notes unchanged. JSON report, exit 1 on any
+  failure. `--fix-board-tags` / `--fix-titles` repair in place by text edit
+  (flow and block `tags:` forms) and re-check.
+- **[change]** SKILL.md §7.1 composer rules: `tags` = labels ∪
+  `existing_tags` (never drop `board:*`); copy `title` byte-exact incl.
+  non-ASCII/NBSP, never correct spelling; `last_synced` quoted. §1.8 table,
+  §5, §6.0, §7 now point at the new scripts instead of hand-written steps.
+- **[test]** 13 new cases (52 total): merge_gh dedup/origin/cursor,
+  fetch_pr_detail.sh against a stub `gh` (incl. the multi-word `GH_BIN`
+  workaround and failure reporting), every verify_rollups failure class
+  against a temp git baseline, both fixers, and `existing_tags` staging.
+- Motivation: the 2026-09-21 quinyx sync hand-wrote the gh dedup, the per-PR
+  fetch loop, and the rollup verifier in `/tmp` again, and found the
+  board-tag loss only because the ad-hoc verifier happened to check it.
+
 ## v1.8.0 — Full sync pipeline as scripts (Rovo Jira, entries, chunk staging)
 
 - **[new]** `scripts/flatten_jira.py` — flattens Rovo-shaped Jira search dumps

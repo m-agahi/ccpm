@@ -446,3 +446,327 @@ def test_summaries_preserve_notes(sandbox):
     run("gen_summaries.py", "test", "--since", "2026-07-16", env=sandbox["env"])
     out = m.read_text()
     assert "MY STORY" in out and "MY NOTE" in out
+
+
+# --------------------------------------------------------------------------- #
+# integration: build_chunks existing_tags (v1.9.0, task 1011)
+# --------------------------------------------------------------------------- #
+def test_build_chunks_carries_existing_tags_minus_origin(sandbox):
+    _make_ent(sandbox, "TEST-1", "ticket", "fix(x): thing", [], labels=["chore"])
+    p = sandbox["root"] / "workspaces/test/tickets/TEST-1.md"
+    p.write_text('---\nid: TEST-1\ntags: ["board:DevOps-Team", "chore", "tool:terraform", '
+                 '"origin:authored"]\n---\n## Timeline\n- 2026-07-01: created\n## Notes\n\n')
+    _make_ent(sandbox, "TEST-2", "ticket", "new", [])                 # no live rollup
+    json.dump(["TEST-1", "TEST-2"], open(sandbox["tmp"] / "manifest_ids.json", "w"))
+    r = run("build_chunks.py", "test", "--tmp", str(sandbox["tmp"]), env=sandbox["env"])
+    assert r.returncode == 0, r.stderr
+    recs = {x["id"]: x for x in json.load(open(sandbox["tmp"] / "chunks/chunk_00.json"))}
+    assert recs["TEST-1"]["existing_tags"] == ["board:DevOps-Team", "chore", "tool:terraform"]
+    assert recs["TEST-2"]["existing_tags"] == []
+    assert recs["TEST-1"]["existing_timeline"] == "- 2026-07-01: created"   # unchanged behaviour
+
+
+def test_build_chunks_existing_tags_block_form_and_junk(sandbox):
+    _make_ent(sandbox, "TEST-1", "ticket", "t", [])
+    p = sandbox["root"] / "workspaces/test/tickets/TEST-1.md"
+    p.write_text("---\nid: TEST-1\ntags:\n  - board:Ops\n  - 7\n---\n## Notes\n\n")
+    json.dump(["TEST-1"], open(sandbox["tmp"] / "manifest_ids.json", "w"))
+    r = run("build_chunks.py", "test", "--tmp", str(sandbox["tmp"]), env=sandbox["env"])
+    assert r.returncode == 0, r.stderr
+    rec = json.load(open(sandbox["tmp"] / "chunks/chunk_00.json"))[0]
+    assert rec["existing_tags"] == ["board:Ops", "7"]
+
+
+# --------------------------------------------------------------------------- #
+# integration: merge_gh (v1.9.0, task 945)
+# --------------------------------------------------------------------------- #
+def _gh_row(n, updated, repo="acme/core", title="t"):
+    return {"number": n, "title": title, "url": f"https://github.com/{repo}/pull/{n}",
+            "state": "MERGED", "createdAt": "2026-09-01T00:00:00Z", "updatedAt": updated,
+            "closedAt": None, "author": {"login": "me"}, "body": "b", "labels": [],
+            "repository": {"nameWithOwner": repo}, "commentsCount": 0}
+
+
+def test_merge_gh_dedups_tags_origin_and_filters_cursor(sandbox):
+    tmp = sandbox["tmp"]
+    (tmp / "gh_authored.json").write_text(json.dumps([
+        _gh_row(1, "2026-09-20T10:00:00Z"), _gh_row(2, "2026-09-21T10:00:00Z"),
+        _gh_row(3, "2026-09-10T00:00:00Z")]))           # 3 is older than cursor
+    (tmp / "gh_reviewed.json").write_text(json.dumps([
+        _gh_row(2, "2026-09-21T10:00:00Z"), _gh_row(4, "2026-09-21T12:36:49Z"),
+        _gh_row(5, "2026-09-15T00:00:00Z")]))           # 5 == cursor -> dropped
+    r = run("merge_gh.py", "--tmp", str(tmp), "--cursor", "2026-09-15T00:00:00Z",
+            env=sandbox["env"])
+    assert r.returncode == 0, r.stderr
+    res = json.loads(r.stdout)
+    assert res["total_unique"] == 5 and res["kept"] == 3
+    assert res["origin_counts"] == {"authored": 1, "reviewed": 1, "both": 1}
+    assert res["max_updated_at"] == "2026-09-21T12:36:49Z"
+    out = {p["number"]: p for p in json.load(open(tmp / "gh_merged.json"))}
+    assert set(out) == {1, 2, 4}
+    assert out[1]["origin"] == "authored" and out[2]["origin"] == "both"
+    assert out[4]["origin"] == "reviewed"
+
+
+def test_merge_gh_reads_cursor_from_last_sync(sandbox):
+    tmp = sandbox["tmp"]
+    (sandbox["root"] / ".ledger/last_sync.json").write_text(json.dumps(
+        {"workspaces": {"test": {"github_updated_after": "2026-09-20T00:00:00Z"}}}))
+    (tmp / "gh_authored.json").write_text(json.dumps([
+        _gh_row(1, "2026-09-19T00:00:00Z"), _gh_row(2, "2026-09-21T00:00:00Z")]))
+    r = run("merge_gh.py", "test", "--tmp", str(tmp), env=sandbox["env"])   # no reviewed file
+    assert r.returncode == 0, r.stderr
+    res = json.loads(r.stdout)
+    assert res["cursor"] == "2026-09-20T00:00:00Z" and res["kept"] == 1
+    assert [p["number"] for p in json.load(open(tmp / "gh_merged.json"))] == [2]
+
+
+def test_merge_gh_no_cursor_keeps_all(sandbox):
+    tmp = sandbox["tmp"]
+    (tmp / "gh_reviewed.json").write_text(json.dumps([_gh_row(1, "2026-01-01T00:00:00Z")]))
+    r = run("merge_gh.py", "--tmp", str(tmp), env=sandbox["env"])
+    assert r.returncode == 0, r.stderr
+    res = json.loads(r.stdout)
+    assert res["kept"] == 1 and res["cursor"] is None
+
+
+# --------------------------------------------------------------------------- #
+# integration: fetch_pr_detail.sh (v1.9.0, task 945) — stub gh, no network
+# --------------------------------------------------------------------------- #
+GH_STUB = r"""#!/usr/bin/env bash
+# fake gh: `pr view N --repo R --json ...` and `api repos/R/pulls/N/comments --jq ...`
+if [ -n "$GH_TOKEN" ]; then echo "bad token" >&2; exit 4; fi
+if [ "$1" = pr ]; then
+  n=$3
+  [ "$n" = 99 ] && { echo "boom" >&2; exit 1; }
+  echo "{\"additions\": $n, \"deletions\": 1, \"changedFiles\": 2, \"mergedAt\": null, \"mergeCommit\": null}"
+elif [ "$1" = api ]; then
+  echo '[{"user":"rev","body":"lgtm","created_at":"2026-09-21T00:00:00Z"}]'
+fi
+"""
+
+
+def run_sh(script, *args, env=None):
+    e = dict(os.environ)
+    if env:
+        e.update(env)
+    return subprocess.run(["bash", os.path.join(SCRIPTS, script), *args],
+                          capture_output=True, text=True, env=e)
+
+
+def _stub_gh(tmp_path):
+    stub = tmp_path / "gh_stub"
+    stub.write_text(GH_STUB)
+    stub.chmod(0o755)
+    return stub
+
+
+def test_fetch_pr_detail_writes_files_in_parallel(sandbox, tmp_path):
+    stub = _stub_gh(tmp_path)
+    tmp = sandbox["tmp"]
+    (tmp / "gh_merged.json").write_text(json.dumps(
+        [_gh_row(n, "2026-09-21T00:00:00Z", repo="acme/core") for n in (1, 2, 3)]
+        + [_gh_row(7, "2026-09-21T00:00:00Z", repo="acme/web")]))
+    # multi-word GH_BIN is the documented workaround for a set-but-invalid GH_TOKEN
+    r = run_sh("fetch_pr_detail.sh", "--tmp", str(tmp), "-P", "3",
+               env={"GH_BIN": f"env -u GH_TOKEN {stub}", "GH_TOKEN": "invalid"})
+    assert r.returncode == 0, r.stderr + r.stdout
+    res = json.loads(r.stdout)
+    assert res["prs"] == 4 and res["detail_written"] == 4 and res["reviews_written"] == 4
+    assert res["failed"] == []
+    d = json.load(open(tmp / "pr_detail/acme__web__7.json"))
+    assert d["additions"] == 7
+    rv = json.load(open(tmp / "pr_reviews/acme__core__2.json"))
+    assert rv[0]["user"] == "rev"
+
+
+def test_fetch_pr_detail_reports_failures_nonzero(sandbox, tmp_path):
+    stub = _stub_gh(tmp_path)
+    tmp = sandbox["tmp"]
+    (tmp / "gh_merged.json").write_text(json.dumps(
+        [_gh_row(1, "2026-09-21T00:00:00Z"), _gh_row(99, "2026-09-21T00:00:00Z")]))
+    r = run_sh("fetch_pr_detail.sh", "--tmp", str(tmp), env={"GH_BIN": str(stub), "GH_TOKEN": ""})
+    assert r.returncode != 0
+    res = json.loads(r.stdout)
+    assert res["detail_written"] == 1
+    assert any("acme/core#99" in f and "detail" in f for f in res["failed"])
+    assert not (tmp / "pr_detail/acme__core__99.json").exists()     # no empty leftovers
+
+
+# --------------------------------------------------------------------------- #
+# integration: verify_rollups (v1.9.0) — temp git repo as the baseline
+# --------------------------------------------------------------------------- #
+NOW = "2026-09-21T14:19:51Z"
+SECTIONS = ["Summary", "Why it mattered", "Complexity", "Challenges", "Impact", "Timeline", "Notes"]
+
+
+def _rollup_text(eid, title_line, tags_line, timeline, notes="", last_synced=f'"{NOW}"',
+                 closed="2026-09-20", pending="false", sections=None, empty=()):
+    fm = (f"---\nid: {eid}\nworkspace: test\ntype: ticket\n{title_line}\nstatus: done\n"
+          f"opened: 2026-09-01\nclosed: {closed}\ncomplexity: S\nimpact: low\nchallenges: []\n"
+          f"{tags_line}\nlast_synced: {last_synced}\nenrichment_pending: {pending}\n---\n")
+    body = ""
+    for s in (sections or SECTIONS):
+        if s == "Timeline":
+            content = "\n".join(timeline)
+        elif s == "Notes":
+            content = notes
+        else:
+            content = "" if s in empty else f"{s} text."
+        body += f"## {s}\n\n{content}\n\n"
+    return fm + body
+
+
+def _git(root, *args):
+    subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "-c", "commit.gpgsign=false", *args],
+                   check=True, capture_output=True, text=True)
+
+
+@pytest.fixture
+def git_sandbox(sandbox):
+    root = sandbox["root"]
+    _git(root, "init", "-q")
+    return sandbox
+
+
+def _baseline(sb, files):
+    root = sb["root"]
+    for eid, txt in files.items():
+        (root / f"workspaces/test/tickets/{eid}.md").write_text(txt)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "baseline")
+    return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+
+
+def _chunk(sb, recs):
+    (sb["tmp"] / "chunks").mkdir(exist_ok=True)
+    out = []
+    for eid, title in recs:
+        out.append({"id": eid, "title": title, "last_synced": NOW,
+                    "out_path": str(sb["root"] / f"workspaces/test/tickets/{eid}.md")})
+    json.dump(out, open(sb["tmp"] / "chunks/chunk_00.json", "w"))
+
+
+def _verify(sb, base, *extra):
+    r = run("verify_rollups.py", "test", "--baseline", base, "--tmp", str(sb["tmp"]),
+            *extra, env=sb["env"])
+    try:
+        return r, json.loads(r.stdout)
+    except ValueError:
+        raise AssertionError(r.stdout + r.stderr)
+
+
+def test_verify_rollups_clean_passes(git_sandbox):
+    sb = git_sandbox
+    old = _rollup_text("T-1", 'title: "a b"', 'tags: ["board:Ops"]', ["- 2026-09-01: created"],
+                       notes="keep", last_synced='"2026-09-01T00:00:00Z"')
+    base = _baseline(sb, {"T-1": old})
+    new = _rollup_text("T-1", 'title: "a b"', 'tags: ["board:Ops", "x"]',
+                       ["- 2026-09-01: created", "- 2026-09-20: closed"], notes="keep")
+    (sb["root"] / "workspaces/test/tickets/T-1.md").write_text(new)
+    _chunk(sb, [("T-1", "a b")])
+    r, rep = _verify(sb, base, "--now", NOW)
+    assert r.returncode == 0, rep
+    assert rep["checked"] == 1 and rep["failures"] == {}
+
+
+def test_verify_rollups_detects_every_failure_class(git_sandbox):
+    sb = git_sandbox
+    old = _rollup_text("T-1", 'title: "Réunion plan"', 'tags: ["board:Ops", "y"]',
+                       ["- 2026-09-01: created", "- 2026-09-05: status-changed"], notes="keep")
+    base = _baseline(sb, {"T-1": old})
+    tdir = sb["root"] / "workspaces/test/tickets"
+    # T-1: title "fixed", board tag lost, timeline bullet lost, notes edited
+    (tdir / "T-1.md").write_text(_rollup_text(
+        "T-1", 'title: "Reunion plan"', 'tags: ["y"]', ["- 2026-09-01: created"], notes="edited"))
+    # T-2: unquoted last_synced, sentinel closed, pending, empty Impact
+    (tdir / "T-2.md").write_text(_rollup_text(
+        "T-2", 'title: "two"', "tags: []", ["- x"], last_synced=NOW, closed="0001-01-01",
+        pending="true", empty=("Impact",)))
+    # T-3: headings out of order; T-4: unparseable; T-5: missing
+    (tdir / "T-3.md").write_text(_rollup_text("T-3", 'title: "three"', "tags: []", ["- x"],
+                                              sections=["Summary", "Timeline", "Notes"]))
+    (tdir / "T-4.md").write_text('---\ntitle: a: b: [\n---\n## Summary\n')
+    _chunk(sb, [("T-1", "Réunion plan"), ("T-2", "two"), ("T-3", "three"),
+                ("T-4", "four"), ("T-5", "five")])
+    r, rep = _verify(sb, base, "--now", NOW)
+    assert r.returncode == 1
+    f = {k: v["ids"] for k, v in rep["failures"].items()}
+    assert f["title_mismatch"] == ["T-1"]
+    assert f["board_tags_lost"] == ["T-1"]
+    assert f["timeline_lost"] == ["T-1"]
+    assert f["notes_changed"] == ["T-1"]
+    assert f["last_synced_unquoted"] == ["T-2"]
+    assert f["closed_sentinel"] == ["T-2"]
+    assert f["enrichment_pending"] == ["T-2"]
+    assert f["empty_sections"] == ["T-2"]
+    assert f["bad_headings"] == ["T-3"]
+    assert f["unparseable"] == ["T-4"]
+    assert f["missing"] == ["T-5"]
+    assert rep["failures"]["board_tags_lost"]["count"] == 1
+
+
+def test_verify_rollups_now_from_tmp_file(git_sandbox):
+    sb = git_sandbox
+    (sb["root"] / "README").write_text("x")
+    _git(sb["root"], "add", "-A"); _git(sb["root"], "commit", "-q", "-m", "init")
+    base = "HEAD"
+    (sb["root"] / "workspaces/test/tickets/T-9.md").write_text(_rollup_text(
+        "T-9", 'title: "n"', "tags: []", ["- x"], last_synced='"2026-01-01T00:00:00Z"'))
+    _chunk(sb, [("T-9", "n")])
+    (sb["tmp"] / "NOW").write_text("2026-01-01T00:00:00Z\n")
+    r, rep = _verify(sb, base)
+    assert r.returncode == 0, rep                                     # new rollup, no baseline
+
+
+def test_verify_rollups_fix_board_tags_flow_and_block(git_sandbox):
+    sb = git_sandbox
+    tl = ["- 2026-09-01: created"]
+    base = _baseline(sb, {
+        "T-1": _rollup_text("T-1", 'title: "a"', 'tags: ["board:Ops", "board:Dev"]', tl),
+        "T-2": _rollup_text("T-2", 'title: "b"', "tags:\n  - board:Ops", tl),
+        "T-3": _rollup_text("T-3", 'title: "c"', 'tags: ["board:Ops"]', tl)})
+    tdir = sb["root"] / "workspaces/test/tickets"
+    (tdir / "T-1.md").write_text(_rollup_text("T-1", 'title: "a"', 'tags: ["x", board:Dev]', tl))
+    (tdir / "T-2.md").write_text(_rollup_text("T-2", 'title: "b"', "tags:\n  - x\n  - y", tl))
+    (tdir / "T-3.md").write_text(_rollup_text("T-3", 'title: "c"', "tags: []", tl))
+    _chunk(sb, [("T-1", "a"), ("T-2", "b"), ("T-3", "c")])
+    r, rep = _verify(sb, base, "--now", NOW, "--fix-board-tags")
+    assert r.returncode == 0, rep
+    assert sorted(rep["fixed"]["board_tags"]) == ["T-1", "T-2", "T-3"]
+    fm = lambda eid: lib.read_frontmatter(str(tdir / f"{eid}.md"))  # noqa: E731
+    assert fm("T-1")["tags"] == ["x", "board:Dev", "board:Ops"]
+    assert fm("T-2")["tags"] == ["x", "y", "board:Ops"]
+    assert fm("T-3")["tags"] == ["board:Ops"]
+    assert "## Summary" in (tdir / "T-2.md").read_text()                # body untouched
+
+
+def test_verify_rollups_fix_titles_restores_baseline_line(git_sandbox):
+    sb = git_sandbox
+    title = "Réunion plan: q3"
+    old_line = 'title: "Réunion plan: q3"'
+    tl = ["- 2026-09-01: created"]
+    base = _baseline(sb, {"T-1": _rollup_text("T-1", old_line, "tags: []", tl)})
+    p = sb["root"] / "workspaces/test/tickets/T-1.md"
+    p.write_text(_rollup_text("T-1", "title: 'Reunion plan: Q3'", "tags: []", tl))
+    _chunk(sb, [("T-1", title)])
+    r, rep = _verify(sb, base, "--now", NOW, "--fix-titles")
+    assert r.returncode == 0, rep
+    assert rep["fixed"]["titles"] == ["T-1"]
+    assert old_line in p.read_text()
+    assert lib.read_frontmatter(str(p))["title"] == title
+
+
+def test_verify_rollups_quoted_but_stale_last_synced_is_its_own_class(git_sandbox):
+    sb = git_sandbox
+    (sb["root"] / "README").write_text("x")
+    _git(sb["root"], "add", "-A"); _git(sb["root"], "commit", "-q", "-m", "init")
+    (sb["root"] / "workspaces/test/tickets/T-8.md").write_text(_rollup_text(
+        "T-8", 'title: "s"', "tags: []", ["- x"], last_synced='"2026-01-01T00:00:00Z"'))
+    _chunk(sb, [("T-8", "s")])
+    r, rep = _verify(sb, "HEAD", "--now", NOW)
+    assert r.returncode == 1
+    assert list(rep["failures"]) == ["last_synced_stale"]          # quoted, wrong value
+    assert rep["failures"]["last_synced_stale"]["sample"]["T-8"]["want"] == NOW
