@@ -11,13 +11,12 @@ index/summary steps (SKILL.md §7).
 Usage:
   fix_frontmatter.py [--ent-dir DIR] <file-or-glob> [<file-or-glob> ...]
 """
-import os, sys, glob, argparse
+import os, sys, glob, json, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ledger_lib import read_frontmatter
 
 
 def canonical_titles(ent_dir):
-    import json
     out = {}
     if ent_dir and os.path.isdir(ent_dir):
         for f in glob.glob(f"{ent_dir}/*.json"):
@@ -27,6 +26,25 @@ def canonical_titles(ent_dir):
             except Exception:
                 pass
     return out
+
+
+def _parse_scalar(cur):
+    """Decode a YAML scalar line value to str, or None when it does not parse to a string."""
+    import yaml
+    try:
+        v = yaml.safe_load("t: " + cur)
+        v = v["t"] if isinstance(v, dict) else None
+    except Exception:
+        return None
+    return v if isinstance(v, str) else None
+
+
+def _dump_scalar(title):
+    """Emit a YAML double-quoted scalar; non-ASCII stays literal, controls are escaped."""
+    out = json.dumps(title, ensure_ascii=False)
+    # json leaves these raw; PyYAML treats them as line breaks / non-printable
+    return (out.replace("\x7f", "\\x7f").replace("\x85", "\\x85")
+               .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
 
 
 def quote_title(path, canon):
@@ -40,18 +58,21 @@ def quote_title(path, canon):
     for k in range(1, end):
         if lines[k].startswith("title:"):
             cur = lines[k][6:].strip()
-            if (cur.startswith('"') and cur.endswith('"')) or (cur.startswith("'") and cur.endswith("'")):
-                inner = cur[1:-1]
-            else:
-                inner = cur
+            parsed = _parse_scalar(cur)
             fid = None
             for j in range(1, end):
                 if lines[j].startswith("id:"):
                     fid = lines[j][3:].strip().strip('"\'')
                     break
-            title = canon.get(fid, inner)
-            esc = str(title).replace("\\", "\\\\").replace('"', '\\"')
-            new = f'title: "{esc}"'
+            if fid in canon:
+                title = str(canon[fid])
+            elif parsed is not None:
+                title = parsed
+            else:
+                title = cur  # unquoted and unparseable: keep the raw text
+            if parsed == title:
+                break  # existing scalar already decodes to the target: leave it
+            new = "title: " + _dump_scalar(title)
             if lines[k] != new:
                 lines[k] = new
                 changed = True

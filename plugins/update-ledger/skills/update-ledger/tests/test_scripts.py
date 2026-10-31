@@ -242,6 +242,101 @@ def test_fix_frontmatter_idempotent_on_quoted(sandbox):
     assert lib.read_frontmatter(str(p))["title"] == "already safe"
 
 
+def _ff_rollup(sandbox, eid, title_line):
+    p = sandbox["root"] / f"workspaces/test/tickets/{eid}.md"
+    p.write_text(f"---\nid: {eid}\n{title_line}\nstatus: done\n---\n## Notes\nkeep\n",
+                 encoding="utf-8")
+    return p
+
+
+def _ff_canon(sandbox, eid, title):
+    d = sandbox["tmp"] / "ent"
+    d.mkdir(exist_ok=True)
+    (d / f"{eid}.json").write_text(json.dumps({"id": eid, "title": title}))
+    return str(d)
+
+
+def _ff_run(sandbox, p, ent=None):
+    args = ["--ent-dir", ent or str(sandbox["tmp"] / "ent"), str(p)]
+    return run("fix_frontmatter.py", *args, env=sandbox["env"])
+
+
+def test_fix_frontmatter_no_backslash_doubling_without_canon(sandbox):
+    # id not in canon: the existing quoted scalar is the only source of truth
+    p = _ff_rollup(sandbox, "TEST-10", 'title: "say \\"hi\\" C:\\\\dir"')
+    want = 'say "hi" C:\\dir'
+    assert lib.read_frontmatter(str(p))["title"] == want
+    before = p.read_text(encoding="utf-8")
+    for _ in range(3):
+        r = _ff_run(sandbox, p)
+        assert r.returncode == 0, r.stderr
+        assert lib.read_frontmatter(str(p))["title"] == want
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_fix_frontmatter_decodes_yaml_escape_for_non_ascii(sandbox):
+    p = _ff_rollup(sandbox, "TEST-11", 'title: "caf\\xE9 \\xA0 x"')
+    r = _ff_run(sandbox, p)
+    assert r.returncode == 0, r.stderr
+    assert lib.read_frontmatter(str(p))["title"] == "caf\u00e9 \u00a0 x"
+
+
+def test_fix_frontmatter_title_with_newline_stays_parseable(sandbox):
+    ent = _ff_canon(sandbox, "TEST-12", "Patch: Deploy x to prod\n")
+    p = _ff_rollup(sandbox, "TEST-12", "title: Patch: Deploy x to prod")
+    r = _ff_run(sandbox, p, ent)
+    assert r.returncode == 0, r.stderr
+    assert lib.read_frontmatter(str(p))["title"] == "Patch: Deploy x to prod\n"
+    assert len(p.read_text(encoding="utf-8").split("\n")) == 8  # no raw newline split
+    ent = _ff_canon(sandbox, "TEST-13", "(AI crawler tracking)\n\n")
+    p = _ff_rollup(sandbox, "TEST-13", 'title: "old"')
+    assert _ff_run(sandbox, p, ent).returncode == 0
+    assert lib.read_frontmatter(str(p))["title"] == "(AI crawler tracking)\n\n"
+
+
+def test_fix_frontmatter_leaves_equivalent_single_quoted_alone(sandbox):
+    # prettier rewrites to single quotes; script must not churn it back
+    ent = _ff_canon(sandbox, "TEST-14", 'say "hi": ok')
+    p = _ff_rollup(sandbox, "TEST-14", "title: 'say \"hi\": ok'")
+    before = p.read_text(encoding="utf-8")
+    r = _ff_run(sandbox, p, ent)
+    assert r.returncode == 0, r.stderr
+    assert p.read_text(encoding="utf-8") == before
+    assert "title_quoted=0" in r.stdout
+
+
+def test_fix_frontmatter_rewrites_when_parsed_differs_from_canon(sandbox):
+    ent = _ff_canon(sandbox, "TEST-15", "new title")
+    p = _ff_rollup(sandbox, "TEST-15", "title: 'old title'")
+    r = _ff_run(sandbox, p, ent)
+    assert r.returncode == 0, r.stderr
+    assert lib.read_frontmatter(str(p))["title"] == "new title"
+    assert "title_quoted=1" in r.stdout
+
+
+def test_fix_frontmatter_double_run_is_noop(sandbox):
+    ent = _ff_canon(sandbox, "TEST-16", 'a "q" \\ b\n: c')
+    p = _ff_rollup(sandbox, "TEST-16", "title: x: y")
+    assert _ff_run(sandbox, p, ent).returncode == 0
+    once = p.read_text(encoding="utf-8")
+    r = _ff_run(sandbox, p, ent)
+    assert r.returncode == 0 and "title_quoted=0" in r.stdout
+    assert p.read_text(encoding="utf-8") == once
+    assert lib.read_frontmatter(str(p))["title"] == 'a "q" \\ b\n: c'
+
+
+def test_fix_frontmatter_nbsp_and_accent_survive_byte_exact(sandbox):
+    title = "fix:\u00a0caf\u00e9 \u2014 ok"
+    ent = _ff_canon(sandbox, "TEST-17", title)
+    p = _ff_rollup(sandbox, "TEST-17", "title: placeholder")
+    assert _ff_run(sandbox, p, ent).returncode == 0
+    assert lib.read_frontmatter(str(p))["title"] == title
+    txt = p.read_text(encoding="utf-8")
+    assert "\u00a0" in txt and "\u00e9" in txt      # literal chars, not escapes
+    assert _ff_run(sandbox, p).returncode == 0   # no canon this time
+    assert p.read_text(encoding="utf-8") == txt
+
+
 # --------------------------------------------------------------------------- #
 # integration: index_upsert + gen_summaries
 # --------------------------------------------------------------------------- #
