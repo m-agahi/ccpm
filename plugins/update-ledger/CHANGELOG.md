@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.9.2 — repository URL points to GitHub
+
+- **[chore]** `repository` URL now points to https://github.com/m-agahi/ccpm (repo moved from Codeberg). Codeberg/Forgejo source support is unchanged.
+
 ## v1.9.1 — fix_frontmatter: decode-then-escape titles (ledger task 943)
 
 - **[fix]** `scripts/fix_frontmatter.py` — the existing quoted `title:` scalar
@@ -212,12 +216,6 @@
 - **[spec]** All fetch outputs go to disk (`/tmp/ledger-sync/`); skill operates on paths not inline strings
 - **[spec]** SQLite verifier: post-sync count check with stale-index warning
 - **[spec]** Cursor schema versioning: per-workspace `schema_version` field
-
-## [1.9.1] - 2026-10-31
-
-### Changed
-
-- `repository` URL now points to https://github.com/m-agahi/ccpm (repo moved from Codeberg). Codeberg/Forgejo source support is unchanged.
 
 ## [1.1.0] - 2026-05-17
 
