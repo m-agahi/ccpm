@@ -61,7 +61,7 @@ def build_binary(cargo_toml, triple):
     """
     indexer_dir = pathlib.Path(cargo_toml).resolve().parent
     result = run(
-        ["cargo", "build", "--release", "--target", triple],
+        ["cargo", "build", "--release", "--locked", "--target", triple],
         cwd=indexer_dir,
     )
     if result.returncode != 0:
@@ -72,6 +72,55 @@ def build_binary(cargo_toml, triple):
         print(f"  ERROR: expected binary not found at {binary}", file=sys.stderr)
         return None
     return binary
+
+
+def upload_binary(release, binary, asset_name):
+    """Upload ``binary`` as ``asset_name``. Returns True on success or skip.
+
+    On a 422 ``already_exists`` the asset list is re-read: an asset left in a
+    non-``uploaded`` state by an interrupted run is deleted and uploaded once
+    more; a fully uploaded asset is kept as-is.
+    """
+    try:
+        github_api.upload_asset(release, binary, asset_name)
+        print(f"  Uploaded {asset_name}")
+        return True
+    except github_api.APIError as e:
+        if not github_api.is_already_exists(e):
+            print(f"  ERROR uploading asset: {e}", file=sys.stderr)
+            return False
+
+    try:
+        assets = github_api.get(
+            github_api.repo_path(f"/releases/{release['id']}/assets?per_page=100")
+        ) or []
+    except github_api.APIError as e:
+        print(f"  ERROR listing assets: {e}", file=sys.stderr)
+        return False
+    existing = next((a for a in assets if a.get("name") == asset_name), None)
+    if existing is None:
+        print(
+            f"  ERROR: upload of {asset_name} reported already_exists, "
+            "but the asset is not listed on the release",
+            file=sys.stderr,
+        )
+        return False
+    if existing.get("state") == "uploaded":
+        print(f"  Asset {asset_name} already exists on release, skipping")
+        return True
+
+    print(
+        f"  Asset {asset_name} exists in state {existing.get('state')!r}; "
+        "deleting and uploading again"
+    )
+    try:
+        github_api.delete(github_api.repo_path(f"/releases/assets/{existing['id']}"))
+        github_api.upload_asset(release, binary, asset_name)
+    except github_api.APIError as e:
+        print(f"  ERROR replacing asset: {e}", file=sys.stderr)
+        return False
+    print(f"  Uploaded {asset_name}")
+    return True
 
 
 def main():
@@ -117,16 +166,9 @@ def main():
 
             asset_name = f"{name}-indexer-linux-{arch}"
             print(f"  Uploading {asset_name} to release {tag} (id={release.get('id')})...")
-            try:
-                github_api.upload_asset(release, binary, asset_name)
-                print(f"  Uploaded {asset_name}")
-            except github_api.APIError as e:
-                if github_api.is_already_exists(e):
-                    print(f"  Asset {asset_name} already exists on release, skipping")
-                else:
-                    print(f"  ERROR uploading asset: {e}", file=sys.stderr)
-                    failed.append(f"{name}:{arch}")
-                    plugin_had_failure = True
+            if not upload_binary(release, binary, asset_name):
+                failed.append(f"{name}:{arch}")
+                plugin_had_failure = True
 
         if not plugin_had_failure:
             built.append(name)

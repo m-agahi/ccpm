@@ -3,17 +3,30 @@ name: Release plugins
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a release mid-upload. Note: GitHub keeps at most one pending
+  # run per group, so a third push while one run is active and one pending
+  # replaces the pending run; re-release a skipped bump via workflow_dispatch.
+  cancel-in-progress: false
 
 on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      base_ref:
+        description: >-
+          Commit/ref to compare against. Plugins whose marketplace.json version
+          differs from this ref are (re)released; existing releases and assets
+          are skipped. Empty = HEAD~1.
+        type: string
+        required: false
+        default: ""
 
 permissions: {}
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -21,18 +34,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Resolve base ref
+        id: base
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          INPUT_BASE_REF: ${{ inputs.base_ref }}
+        run: python3 .github/scripts/resolve_base_ref.py
 
       - name: Detect version changes
         id: detect
         shell: bash
         env:
-          BASE_REF: HEAD~1
+          BASE_REF: ${{ steps.base.outputs.base_ref }}
         run: python3 .github/scripts/check_releases.py
 
       - name: Save release plan
-        if: steps.detect.outputs.has_releases == 'true' && github.event_name != 'workflow_dispatch'
+        if: steps.detect.outputs.has_releases == 'true'
         shell: bash
         env:
           RELEASES_JSON: ${{ steps.detect.outputs.releases }}
@@ -41,7 +62,7 @@ jobs:
           printf '%s' "$RELEASES_JSON" > .ci-outputs/releases.json
 
       - name: Create releases
-        if: steps.detect.outputs.has_releases == 'true' && github.event_name != 'workflow_dispatch'
+        if: steps.detect.outputs.has_releases == 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -49,17 +70,17 @@ jobs:
         run: python3 .github/scripts/create_releases.py
 
       - name: Install Rust toolchain
-        if: steps.detect.outputs.has_releases == 'true' && github.event_name != 'workflow_dispatch'
+        if: steps.detect.outputs.has_releases == 'true'
         shell: bash
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends gcc gcc-aarch64-linux-gnu
+          sudo apt-get install -y --no-install-recommends gcc gcc-aarch64-linux-gnu libc6-dev-arm64-cross
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 
       - name: Build and attach Rust binary assets to GitHub release
-        if: steps.detect.outputs.has_releases == 'true' && github.event_name != 'workflow_dispatch'
+        if: steps.detect.outputs.has_releases == 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -68,6 +89,7 @@ jobs:
           python3 .github/scripts/build_binaries.py
 
   discover:
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -77,16 +99,30 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Resolve base ref
+        id: base
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          INPUT_BASE_REF: ${{ inputs.base_ref }}
+        run: python3 .github/scripts/resolve_base_ref.py
 
       - name: Discover plugins with Dockerfile + per-plugin change detection
         id: find
         shell: bash
+        env:
+          BASE_REF: ${{ steps.base.outputs.base_ref }}
         run: |
           set -euo pipefail
           plugins='[]'
           any=false
+          changed_files="$RUNNER_TEMP/changed-files.txt"
+          if [[ -n "$BASE_REF" ]]; then
+            git diff --name-only "$BASE_REF" HEAD > "$changed_files"
+          fi
           for df in plugins/*/docker/Dockerfile plugins/*/Dockerfile; do
             [[ -f "$df" ]] || continue
             if [[ "$df" == */docker/Dockerfile ]]; then
@@ -98,11 +134,10 @@ jobs:
             context="$(dirname "$df")"
             image="openfantasy/${plugin_name}"
 
+            # No base (root commit) -> treat as changed.
             changed=true
-            if git rev-parse HEAD~1 >/dev/null 2>&1; then
-              if ! git diff --name-only HEAD~1 HEAD | grep -qE "^plugins/${plugin_name}/(docker/|scripts/)"; then
-                changed=false
-              fi
+            if [[ -n "$BASE_REF" ]] && ! grep -qE "^plugins/${plugin_name}/(docker/|scripts/)" "$changed_files"; then
+              changed=false
             fi
             [[ "$changed" == "true" ]] || continue
 
