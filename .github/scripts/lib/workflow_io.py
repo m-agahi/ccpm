@@ -2,6 +2,7 @@
 
 import os
 import sys
+import uuid
 
 
 def set_output(key, value):
@@ -13,11 +14,18 @@ def set_output(key, value):
             file=sys.stderr,
         )
         return
-    safe_value = (
-        str(value).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-    )
+    value = str(value)
+    if "\n" in value or "\r" in value:
+        # Multiline values need the heredoc form; pick a delimiter that cannot
+        # collide with the value.
+        delim = f"ghadelimiter_{uuid.uuid4().hex}"
+        while delim in value:
+            delim = f"ghadelimiter_{uuid.uuid4().hex}"
+        line = f"{key}<<{delim}\n{value}\n{delim}\n"
+    else:
+        line = f"{key}={value}\n"
     with open(output_file, "a") as f:
-        f.write(f"{key}={safe_value}\n")
+        f.write(line)
 
 
 def error(msg):

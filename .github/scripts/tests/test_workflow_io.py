@@ -44,17 +44,31 @@ class TestSetOutput(unittest.TestCase):
         finally:
             os.unlink(path)
 
-    def test_encodes_newlines_in_value(self):
+    def _write(self, key, value):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             path = f.name
-        try:
-            with patch.dict(os.environ, {"GITHUB_OUTPUT": path}):
-                workflow_io.set_output("releases", "line1\nline2\rline3")
-            with open(path) as f:
-                content = f.read()
-            self.assertEqual(content, "releases=line1%0Aline2%0Dline3\n")
-        finally:
-            os.unlink(path)
+        self.addCleanup(os.unlink, path)
+        with patch.dict(os.environ, {"GITHUB_OUTPUT": path}):
+            workflow_io.set_output(key, value)
+        with open(path, newline="") as f:
+            return f.read()
+
+    def test_single_line_value_is_written_verbatim(self):
+        # No legacy %25/%0A escaping: GITHUB_OUTPUT never decodes it.
+        self.assertEqual(self._write("k", "100% a,b"), "k=100% a,b\n")
+
+    def test_multiline_value_uses_heredoc_delimiter(self):
+        content = self._write("releases", "line1\nline2\rline3")
+        lines = content.split("\n")
+        self.assertTrue(lines[0].startswith("releases<<ghadelimiter_"))
+        delim = lines[0].split("<<", 1)[1]
+        self.assertEqual(content, f"releases<<{delim}\nline1\nline2\rline3\n{delim}\n")
+
+    def test_delimiter_never_occurs_in_value(self):
+        with patch("lib.workflow_io.uuid.uuid4") as mock_uuid:
+            mock_uuid.side_effect = [type("U", (), {"hex": "aaa"})(), type("U", (), {"hex": "bbb"})()]
+            content = self._write("k", "x\nghadelimiter_aaa\ny")
+        self.assertTrue(content.startswith("k<<ghadelimiter_bbb\n"))
 
     @patch("sys.stderr", new_callable=StringIO)
     def test_forgejo_output_is_ignored(self, mock_stderr):

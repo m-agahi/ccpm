@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.9.1 — fix_frontmatter: decode-then-escape titles (ledger task 943)
+
+- **[fix]** `scripts/fix_frontmatter.py` — the existing quoted `title:` scalar
+  is now DECODED with a YAML parse, not sliced. The old slice kept YAML escapes
+  (`\"`, `\\`, `\xA0`) as raw text and re-escaped the backslashes, so every run
+  doubled them whenever the id had no canon JSON in `--ent-dir`.
+- **[fix]** Titles with control characters (a trailing `\n` in canon titles, seen
+  2026-10-31) no longer split the frontmatter line. The title is emitted with
+  `json.dumps(..., ensure_ascii=False)`: valid YAML double-quoted, non-ASCII
+  (NBSP, accents) stays literal. U+2028/U+2029/U+0085/DEL are escaped too.
+- **[fix]** A line whose scalar already parses to the target title is left
+  unchanged, so prettier's single-quote rewrite no longer causes churn.
+- 7 new tests (52 -> 59 cases).
+
 ## v1.9.0 — GitHub merge/fetch scripts, rollup verifier, board-tag data-loss fix
 
 - **[fix]** `scripts/build_chunks.py` — every record now carries
