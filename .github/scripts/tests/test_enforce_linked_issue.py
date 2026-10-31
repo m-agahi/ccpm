@@ -61,40 +61,51 @@ class TestIsLabelExempt(unittest.TestCase):
 
 
 class TestIsAuthorExempt(unittest.TestCase):
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_admin_is_exempt(self, mock_path, mock_get):
         mock_path.return_value = "/repos/o/r/collaborators/alice/permission"
         mock_get.return_value = {"permission": "admin"}
         pr = {"user": {"login": "alice"}}
         self.assertTrue(eli.is_author_exempt(pr))
 
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_owner_is_exempt(self, mock_path, mock_get):
-        mock_path.return_value = "/repos/o/r/collaborators/bob/permission"
-        mock_get.return_value = {"permission": "owner"}
+        mock_path.return_value = "/repos/o/r"
+        mock_get.return_value = {"owner": {"login": "bob"}}
         pr = {"user": {"login": "bob"}}
         self.assertTrue(eli.is_author_exempt(pr))
 
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
+    def test_maintain_is_not_exempt(self, mock_path, mock_get):
+        mock_path.return_value = "/repos/o/r/collaborators/mia/permission"
+        mock_get.side_effect = [
+            {"owner": {"login": "someone-else"}},
+            {"permission": "write", "role_name": "maintain"},
+        ]
+        pr = {"user": {"login": "mia"}}
+        self.assertFalse(eli.is_author_exempt(pr))
+
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_write_is_not_exempt(self, mock_path, mock_get):
         mock_path.return_value = "/repos/o/r/collaborators/carol/permission"
         mock_get.return_value = {"permission": "write"}
         pr = {"user": {"login": "carol"}}
         self.assertFalse(eli.is_author_exempt(pr))
 
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_none_response_returns_false(self, mock_path, mock_get):
         mock_path.return_value = "/repos/o/r/collaborators/dave/permission"
         mock_get.return_value = None
         pr = {"user": {"login": "dave"}}
         self.assertFalse(eli.is_author_exempt(pr))
 
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_api_error_returns_false(self, mock_path, mock_get):
         mock_path.return_value = "/repos/o/r/collaborators/eve/permission"
         mock_get.side_effect = RuntimeError("API down")
@@ -103,22 +114,22 @@ class TestIsAuthorExempt(unittest.TestCase):
 
 
 class TestIssueExists(unittest.TestCase):
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_valid_issue(self, mock_path, mock_get):
         mock_path.return_value = "/repos/o/r/issues/10"
         mock_get.return_value = {"id": 10, "title": "bug"}
         self.assertTrue(eli.issue_exists(10))
 
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_pull_request_is_not_issue(self, mock_path, mock_get):
         mock_path.return_value = "/repos/o/r/issues/5"
         mock_get.return_value = {"id": 5, "pull_request": {"merged": False}}
         self.assertFalse(eli.issue_exists(5))
 
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_nonexistent_issue(self, mock_path, mock_get):
         mock_path.return_value = "/repos/o/r/issues/999"
         mock_get.side_effect = RuntimeError("404")
@@ -132,8 +143,8 @@ class TestHasLinkedIssue(unittest.TestCase):
         self.assertTrue(eli.has_linked_issue(1, pr))
         mock_exists.assert_called_once_with(10)
 
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_ignores_html_comment_reference(self, mock_path, mock_get):
         mock_path.return_value = "/repos/o/r/issues/1/timeline"
         mock_get.return_value = []
@@ -147,32 +158,57 @@ class TestHasLinkedIssue(unittest.TestCase):
         mock_exists.assert_called_once_with(40)
 
     @patch("enforce_linked_issue.issue_exists", return_value=False)
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_nonexistent_issue_falls_through(self, mock_path, mock_get, mock_exists):
         mock_path.return_value = "/repos/o/r/issues/1/timeline"
         mock_get.return_value = []
         pr = {"body": "Closes #999"}
         self.assertFalse(eli.has_linked_issue(1, pr))
 
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
-    def test_timeline_cross_ref(self, mock_path, mock_get):
-        mock_path.return_value = "/repos/o/r/issues/1/timeline"
-        mock_get.return_value = [{"type": "cross_ref"}]
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
+    def test_timeline_cross_referenced(self, mock_path, mock_get):
+        mock_path.side_effect = lambda suffix="": f"/repos/o/r{suffix}"
+        mock_get.return_value = [{"event": "cross-referenced"}]
+        pr = {"body": "no issue ref here"}
+        self.assertTrue(eli.has_linked_issue(1, pr))
+        mock_get.assert_called_once_with("/repos/o/r/issues/1/timeline?per_page=100")
+
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
+    def test_timeline_connected(self, mock_path, mock_get):
+        mock_path.return_value = "/repos/o/r/issues/1/timeline?per_page=100"
+        mock_get.return_value = [{"event": "labeled"}, {"event": "connected"}]
         pr = {"body": "no issue ref here"}
         self.assertTrue(eli.has_linked_issue(1, pr))
 
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
+    def test_timeline_connected_then_disconnected(self, mock_path, mock_get):
+        mock_path.return_value = "/repos/o/r/issues/1/timeline?per_page=100"
+        mock_get.return_value = [{"event": "connected"}, {"event": "disconnected"}]
+        pr = {"body": "no issue ref here"}
+        self.assertFalse(eli.has_linked_issue(1, pr))
+
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
+    def test_forgejo_timeline_types_ignored(self, mock_path, mock_get):
+        mock_path.return_value = "/repos/o/r/issues/1/timeline?per_page=100"
+        mock_get.return_value = [{"type": "cross_ref"}, {"type": "ref"}]
+        pr = {"body": "no issue ref here"}
+        self.assertFalse(eli.has_linked_issue(1, pr))
+
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_no_match_returns_false(self, mock_path, mock_get):
         mock_path.return_value = "/repos/o/r/issues/1/timeline"
         mock_get.return_value = []
         pr = {"body": "just a PR"}
         self.assertFalse(eli.has_linked_issue(1, pr))
 
-    @patch("enforce_linked_issue.forgejo_api.get")
-    @patch("enforce_linked_issue.forgejo_api.repo_path")
+    @patch("enforce_linked_issue.github_api.get")
+    @patch("enforce_linked_issue.github_api.repo_path")
     def test_api_error_re_raises(self, mock_path, mock_get):
         mock_path.return_value = "/repos/o/r/issues/1/timeline"
         mock_get.side_effect = RuntimeError("timeout")

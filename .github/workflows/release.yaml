@@ -10,28 +10,26 @@ on:
     branches: [master]
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   release:
     runs-on: ubuntu-latest
-    container:
-      image: node:24-bookworm
+    permissions:
+      contents: write
     steps:
-      - name: Install system dependencies
-        run: |
-          apt-get update && apt-get install -y --no-install-recommends \
-            git bash python3 coreutils ca-certificates curl
-
       - name: Checkout
-        uses: https://data.forgejo.org/actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+          persist-credentials: false
 
       - name: Detect version changes
         id: detect
         shell: bash
         env:
           BASE_REF: HEAD~1
-        run: python3 .forgejo/scripts/check_releases.py
+        run: python3 .github/scripts/check_releases.py
 
       - name: Save release plan
         if: steps.detect.outputs.has_releases == 'true' && github.event_name != 'workflow_dispatch'
@@ -42,44 +40,45 @@ jobs:
           mkdir -p .ci-outputs
           printf '%s' "$RELEASES_JSON" > .ci-outputs/releases.json
 
-      - name: Create tags and releases
+      - name: Create releases
         if: steps.detect.outputs.has_releases == 'true' && github.event_name != 'workflow_dispatch'
         shell: bash
         env:
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
-        run: python3 .forgejo/scripts/create_releases.py
+        run: python3 .github/scripts/create_releases.py
 
       - name: Install Rust toolchain
         if: steps.detect.outputs.has_releases == 'true' && github.event_name != 'workflow_dispatch'
+        shell: bash
         run: |
-          apt-get install -y --no-install-recommends gcc gcc-aarch64-linux-gnu
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          "$HOME/.cargo/bin/rustup" target add aarch64-unknown-linux-gnu
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc gcc-aarch64-linux-gnu
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 
-      - name: Build and attach Rust binary assets to Codeberg release
+      - name: Build and attach Rust binary assets to GitHub release
         if: steps.detect.outputs.has_releases == 'true' && github.event_name != 'workflow_dispatch'
         shell: bash
         env:
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-          python3 .forgejo/scripts/build_binaries.py
+          python3 .github/scripts/build_binaries.py
 
   discover:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       plugins: ${{ steps.find.outputs.plugins }}
       any: ${{ steps.find.outputs.any }}
     steps:
-      - name: Install jq
-        run: apt-get update -qq && apt-get install -y --no-install-recommends jq
-
-      - uses: https://data.forgejo.org/actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+          persist-credentials: false
 
       - name: Discover plugins with Dockerfile + per-plugin change detection
         id: find
@@ -121,38 +120,40 @@ jobs:
     needs: [discover]
     if: needs.discover.outputs.any == 'true'
     runs-on: ubuntu-latest
-    container:
-      image: docker:cli
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         plugin: ${{ fromJSON(needs.discover.outputs.plugins) }}
     steps:
-      - name: Install minimal tools
-        run: apk add --no-cache bash python3 nodejs git curl
-
-      - uses: https://data.forgejo.org/actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Log in to Docker Hub
-        uses: https://github.com/docker/login-action@v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Docker Buildx (Build Cloud)
-        uses: https://github.com/docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver: cloud
           endpoint: openfantasy/builder
 
       - name: Get version from Dockerfile LABEL
         id: get-version
+        shell: bash
+        env:
+          DOCKERFILE: ${{ matrix.plugin.dockerfile }}
         run: |
-          echo "version=$(grep 'LABEL version=' ${{ matrix.plugin.dockerfile }} | sed 's/.*version="\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+          echo "version=$(grep 'LABEL version=' "$DOCKERFILE" | sed 's/.*version="\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
 
       - name: Docker metadata
         id: meta
-        uses: https://github.com/docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ matrix.plugin.image }}
           tags: |
@@ -162,7 +163,7 @@ jobs:
             type=raw,value=${{ steps.get-version.outputs.version }},enable={{is_default_branch}}
 
       - name: Build and push (${{ matrix.plugin.name }})
-        uses: https://github.com/docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.plugin.context }}
           file: ${{ matrix.plugin.dockerfile }}

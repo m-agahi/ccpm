@@ -34,7 +34,7 @@ class TestSetOutput(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             path = f.name
         try:
-            with patch.dict(os.environ, {"FORGEJO_OUTPUT": path}):
+            with patch.dict(os.environ, {"GITHUB_OUTPUT": path}):
                 workflow_io.set_output("key1", "val1")
                 workflow_io.set_output("key2", "val2")
             with open(path) as f:
@@ -48,11 +48,24 @@ class TestSetOutput(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             path = f.name
         try:
-            with patch.dict(os.environ, {"FORGEJO_OUTPUT": path}):
+            with patch.dict(os.environ, {"GITHUB_OUTPUT": path}):
                 workflow_io.set_output("releases", "line1\nline2\rline3")
             with open(path) as f:
                 content = f.read()
             self.assertEqual(content, "releases=line1%0Aline2%0Dline3\n")
+        finally:
+            os.unlink(path)
+
+    @patch("sys.stderr", new_callable=StringIO)
+    def test_forgejo_output_is_ignored(self, mock_stderr):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            path = f.name
+        try:
+            with patch.dict(os.environ, {"FORGEJO_OUTPUT": path}, clear=True):
+                workflow_io.set_output("k", "v")
+            with open(path) as f:
+                self.assertEqual(f.read(), "")
+            self.assertIn("GITHUB_OUTPUT not set", mock_stderr.getvalue())
         finally:
             os.unlink(path)
 

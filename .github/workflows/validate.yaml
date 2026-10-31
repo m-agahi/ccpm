@@ -5,19 +5,26 @@ on:
   pull_request:
     branches: [master]
 
+permissions:
+  contents: read
+
 jobs:
   validate:
-    runs-on: docker
-    container:
-      image: node:24-alpine
+    runs-on: ubuntu-latest
     steps:
-      - name: Install system dependencies
-        run: apk add --no-cache git bash python3 'py3-yaml~=6.0' coreutils ca-certificates
-
       - name: Checkout
-        uses: https://data.forgejo.org/actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Install Python dependencies
+        run: python3 -m pip install 'pyyaml~=6.0'
 
       - name: Check formatting
         shell: bash
@@ -56,25 +63,25 @@ jobs:
           done < <(find plugins -name "SKILL.md" -print0 2>/dev/null)
 
       - name: Check version consistency
-        run: python3 .forgejo/scripts/check_versions.py
+        run: python3 .github/scripts/check_versions.py
 
       - name: Check plugin count badge
         shell: bash
         run: |
-          python3 .forgejo/scripts/update_plugin_count.py
+          python3 .github/scripts/update_plugin_count.py
           if [ -n "$(git diff README.md)" ]; then
             echo "::error::Plugin count badge in README.md is out of date."
-            echo "Run 'python3 .forgejo/scripts/update_plugin_count.py' and commit." >&2
+            echo "Run 'python3 .github/scripts/update_plugin_count.py' and commit." >&2
             exit 1
           fi
 
       - name: Check plugin versions in README
         shell: bash
         run: |
-          python3 .forgejo/scripts/update_plugin_versions.py
+          python3 .github/scripts/update_plugin_versions.py
           if [ -n "$(git diff README.md)" ]; then
             echo "::error::Plugin versions in README.md are out of date."
-            echo "Run 'python3 .forgejo/scripts/update_plugin_versions.py' and commit." >&2
+            echo "Run 'python3 .github/scripts/update_plugin_versions.py' and commit." >&2
             exit 1
           fi
 
@@ -83,4 +90,4 @@ jobs:
         shell: bash
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha }}
-        run: python3 .forgejo/scripts/check_changelog.py
+        run: python3 .github/scripts/check_changelog.py

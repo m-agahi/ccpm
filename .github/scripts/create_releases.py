@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Create Forgejo tags and releases for each version-bumped plugin.
+"""Create GitHub releases (and their tags) for each version-bumped plugin.
 
 Reads the release plan from .ci-outputs/releases.json (written by
-check_releases.py during the detect step) and creates a git tag +
-release for each entry, pulling the changelog entry as the body.
+check_releases.py during the detect step) and creates a GitHub release for
+each entry, pulling the changelog entry as the body. GitHub creates the tag
+at RELEASE_SHA when it does not exist yet; an existing tag is reused as-is.
 """
 
 import json
 import os
 import pathlib
 import sys
+import urllib.parse
 
 sys.path.insert(0, os.path.dirname(__file__))
-from lib import forgejo_api
+from lib import github_api
 
 sha = (os.environ.get("RELEASE_SHA") or os.environ.get("GITHUB_SHA", "")).strip()
 if not sha:
@@ -41,19 +43,39 @@ def extract_changelog_entry(plugin_name, version):
     return "\n".join(lines).strip()
 
 
-def create_tag(tag, sha):
-    """Create the git tag via the API. No-ops if it already exists."""
+def create_release(tag, title, body, sha):
+    """Create the release for ``tag``. Returns True if created, False if skipped.
+
+    Idempotent: skips when a release for the tag already exists.
+    """
+    encoded_tag = urllib.parse.quote(tag, safe="")
     try:
-        forgejo_api.post(
-            forgejo_api.repo_path("/tags"),
-            {"tag_name": tag, "target": sha},
-        )
-        print(f"  Created tag: {tag}")
-    except forgejo_api.APIError as e:
-        if e.status_code in (409, 422):
-            print(f"  Tag {tag} already exists, skipping tag creation")
-        else:
+        github_api.get(github_api.repo_path(f"/releases/tags/{encoded_tag}"))
+        print(f"  Release for {tag} already exists, skipping")
+        return False
+    except github_api.APIError as e:
+        if e.status_code != 404:
             raise
+
+    try:
+        github_api.post(
+            github_api.repo_path("/releases"),
+            {
+                "tag_name": tag,
+                "target_commitish": sha,
+                "name": title,
+                "body": body,
+                "draft": False,
+                "prerelease": False,
+            },
+        )
+    except github_api.APIError as e:
+        if github_api.is_already_exists(e):
+            print(f"  Release for {tag} already exists, skipping")
+            return False
+        raise
+    print(f"Created release: {title} ({tag})")
+    return True
 
 
 def main():
@@ -84,28 +106,7 @@ def main():
 
         body = "\n\n".join(body_parts).strip()
 
-        # Explicitly create the tag first — Forgejo does not reliably auto-create
-        # tags via the releases endpoint and returns 409 "Release has no Tag" if
-        # the tag doesn't already exist when the release is created.
-        create_tag(tag, sha)
-
-        try:
-            forgejo_api.post(
-                forgejo_api.repo_path("/releases"),
-                {
-                    "tag_name": tag,
-                    "name": title,
-                    "body": body,
-                    "draft": False,
-                    "prerelease": False,
-                },
-            )
-            print(f"Created release: {title} ({tag})")
-        except forgejo_api.APIError as e:
-            if e.status_code in (409, 422):
-                print(f"  Release for {tag} already exists, skipping")
-            else:
-                raise
+        create_release(tag, title, body, sha)
 
 
 if __name__ == "__main__":

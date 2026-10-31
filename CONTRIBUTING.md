@@ -309,10 +309,10 @@ pre-commit run --all-files
 
 ```bash
 # Version consistency
-python3 .forgejo/scripts/check_versions.py
+python3 .github/scripts/check_versions.py
 
 # SKILL.md frontmatter
-python3 .forgejo/scripts/check_skill_frontmatter.py
+python3 .github/scripts/check_skill_frontmatter.py
 ```
 
 ### Debug plugin loading
