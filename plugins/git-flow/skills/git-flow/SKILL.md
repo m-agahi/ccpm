@@ -78,7 +78,7 @@ git ls-remote --heads origin <branch>
 
 # Or ask the forge — detect the host first (see "Forge Detection" below)
 # GitHub:
-gh pr list --head "$BRANCH" --state all --json number,state,mergedAt
+gh pr list --repo "$OWNER/$REPO" --head "$BRANCH" --state all --json number,state,mergedAt
 
 # Forgejo / Gitea / Codeberg:
 curl -s -H "Authorization: token $TOKEN" \
@@ -114,7 +114,13 @@ BASE=$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^origin/##')
 
 **Forgejo / Gitea token:** read it from an env var the user already has set
 (e.g. `CODEBERG_TOKEN`, `FORGEJO_TOKEN`), or ask the user which 1Password
-reference to `op read`. Never print the token. Never write a token value into
+reference to `op read`.
+
+```bash
+TOKEN="${CODEBERG_TOKEN:-$FORGEJO_TOKEN}"   # empty → ask the user for an op:// reference
+```
+
+Never print the token. Never write a token value into
 a file or a commit.
 
 ---
