@@ -80,7 +80,7 @@ Create `.claude-plugin/plugin.json` in your plugin directory:
     "name": "Your Name",
     "email": "you@example.com"
   },
-  "repository": "https://codeberg.org/you/your-repo",
+  "repository": "https://github.com/you/your-repo",
   "license": "Apache-2.0",
   "keywords": ["relevant", "keywords"]
 }
@@ -248,7 +248,7 @@ Add your plugin to `.claude-plugin/marketplace.json`:
       "category": "tools",
       "keywords": ["relevant", "keywords"],
       "homepage": "https://your-docs-site.example.com",
-      "repository": "https://codeberg.org/you/your-repo"
+      "repository": "https://github.com/you/your-repo"
     }
   ]
 }
@@ -323,7 +323,7 @@ claude --debug --plugin-dir ./plugins/my-plugin
 
 ## Step 8: Submit a PR
 
-1. [Open an issue](https://codeberg.org/maxagahi/ccpm/issues/new) describing your change (new
+1. [Open an issue](https://github.com/m-agahi/ccpm/issues/new) describing your change (new
    plugin, bug fix, etc.)
 2. Create a feature branch: `git checkout -b feat/add-my-plugin`
 3. Commit and push (pre-commit hooks will catch formatting and validation issues automatically)
@@ -354,8 +354,8 @@ project's `.claude/settings.json`:
   "extraKnownMarketplaces": {
     "maxagahi-marketplace": {
       "source": {
-        "source": "codeberg",
-        "repo": "maxagahi/ccpm"
+        "source": "github",
+        "repo": "m-agahi/ccpm"
       }
     }
   }
@@ -372,8 +372,8 @@ To also auto-enable specific plugins:
   "extraKnownMarketplaces": {
     "maxagahi-marketplace": {
       "source": {
-        "source": "codeberg",
-        "repo": "maxagahi/ccpm"
+        "source": "github",
+        "repo": "m-agahi/ccpm"
       }
     }
   },

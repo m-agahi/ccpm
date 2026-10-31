@@ -5,6 +5,14 @@ All notable changes to the local-audit-lab plugin will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [6.0.1] - 2026-10-31
+
+### Changed
+
+- `repository` URL now points to https://github.com/m-agahi/ccpm (repo moved from Codeberg).
+- Docker image `LABEL version` bumped to 6.0.1.
+- `review-cli.py`: neutral wording in the `find_version` docstring (no host names).
+
 ## [6.0.0] - 2026-09-02
 
 ### Changed

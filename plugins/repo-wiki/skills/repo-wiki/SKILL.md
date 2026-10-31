@@ -27,7 +27,7 @@ if [ ! -f "$BINARY" ]; then
   # Try downloading pre-built binary from the release
   PLUGIN_VERSION=$(basename "$CLAUDE_PLUGIN_ROOT")
   ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-  ASSET_URL="https://codeberg.org/maxagahi/ccpm/releases/download/repo-wiki%2Fv${PLUGIN_VERSION}/repo-wiki-indexer-linux-${ARCH}"
+  ASSET_URL="https://github.com/m-agahi/ccpm/releases/download/repo-wiki%2Fv${PLUGIN_VERSION}/repo-wiki-indexer-linux-${ARCH}"
   if [ -n "$PLUGIN_VERSION" ] && curl -fsSL -o "$BINARY" "$ASSET_URL" 2>/dev/null; then
     chmod +x "$BINARY"
     echo "Downloaded repo-indexer v${PLUGIN_VERSION}"
@@ -38,7 +38,7 @@ if [ ! -f "$BINARY" ]; then
 fi
 ```
 
-**Pre-built binaries** are attached to each `repo-wiki` release on Codeberg for
+**Pre-built binaries** are attached to each `repo-wiki` GitHub release for
 `linux/amd64` and `linux/arm64`. Source build fallback requires `cargo` + `gcc`
 (~1 min first run).
 

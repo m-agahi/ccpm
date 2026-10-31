@@ -12,7 +12,7 @@
       "name": "audit-lab",
       "description": "Comprehensive local code review with static analysis, security scanning, dependency auditing, container scanning (Trivy), SonarQube, and best practices enforcement. All analysis is local — never pushes to remote. v5: SSoT JSON outputs with _about metadata, on-demand ticket generation, confidence field, verification steps, and Python version mismatch detection.",
       "source": "./plugins/audit-lab",
-      "version": "6.0.0",
+      "version": "6.0.1",
       "author": {
         "name": "Max Agahi"
       },
@@ -32,7 +32,7 @@
       "name": "update-jira",
       "description": "Post progress updates to Jira tickets based on session work, git activity, and PRs. Supports targeted single-ticket updates and batch scan mode across repos.",
       "source": "./plugins/update-jira",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "author": {
         "name": "Christian Biamont"
       },
@@ -44,7 +44,7 @@
       "name": "confluence-rfc",
       "description": "Create RFC pages in Confluence following the team's established template. Supports PP and APIM spaces, Jira ticket integration, and auto-fills content from conversation context.",
       "source": "./plugins/confluence-rfc",
-      "version": "1.2.2",
+      "version": "1.2.3",
       "author": {
         "name": "Max Agahi"
       },
@@ -54,9 +54,9 @@
     },
     {
       "name": "git-flow",
-      "description": "Safe git workflow enforcer for worktree-based development. Prevents committing to master, pushing to merged branches, and skipping the branching workflow. Handles commit, push, PR creation (Codeberg/Forgejo), and worktree management.",
+      "description": "Safe git workflow enforcer for worktree-based development. Prevents committing to master, pushing to merged branches, and skipping the branching workflow. Handles commit, push, forge-aware PR creation (GitHub via gh, Forgejo/Gitea via REST API), and worktree management.",
       "source": "./plugins/git-flow",
-      "version": "1.0.3",
+      "version": "1.1.0",
       "author": {
         "name": "Max Agahi"
       },
@@ -68,7 +68,7 @@
       "name": "tf-naming-check",
       "description": "Terraform naming convention checker. Reads a team-editable rulebook config and uses a Haiku agent to scan .tf files for naming violations, reporting findings by severity.",
       "source": "./plugins/tf-naming-check",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "author": {
         "name": "Max Agahi"
       },
@@ -87,7 +87,7 @@
       "name": "repo-wiki",
       "description": "Incremental, merge-safe repository documentation system. Generates wiki pages under .local-review/wiki/ using hash-based change detection, preserving manual notes and avoiding full overwrites.",
       "source": "./plugins/repo-wiki",
-      "version": "1.1.2",
+      "version": "1.1.3",
       "author": {
         "name": "Max Agahi"
       },
@@ -107,7 +107,7 @@
       "name": "update-ledger",
       "description": "Multi-workspace chronological work ledger. Pulls Jira tickets, GitHub PRs, and Codeberg/Forgejo PRs per workspace (company, solo, client), writes immutable event entries, regenerates per-entity rollups, and produces daily/weekly/monthly/quarterly/yearly summaries plus cross-workspace timelines. Survives job changes — workspaces are pluggable. Supports manual notes for work not in Jira/PRs. Delegates per-item composition to cheap haiku subagents to keep main-thread context small.",
       "source": "./plugins/update-ledger",
-      "version": "1.9.0",
+      "version": "1.9.1",
       "author": {
         "name": "Max Agahi"
       },

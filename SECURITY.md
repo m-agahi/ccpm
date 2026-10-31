@@ -10,7 +10,7 @@
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability, please report it privately by contacting
-[@maxagahi on Codeberg](https://codeberg.org/maxagahi).
+[@m-agahi on GitHub](https://github.com/m-agahi).
 
 Please include:
 
