@@ -1,0 +1,121 @@
+---
+name: Rebuild plugin images
+
+# Weekly rebuild of every plugin Docker image so base OS packages, scanner
+# tools and vulnerability DBs stay fresh between plugin releases.
+# Build/push steps mirror the build-docker job in release.yaml (same pinned
+# actions, Build Cloud builder, BuildKit secret). Kept as a copy instead of a
+# reusable workflow so release.yaml behaviour stays untouched; keep both in
+# sync when changing one.
+#
+# Note: GitHub disables scheduled workflows on public repos after 60 days
+# without repo activity. Re-enable from the Actions tab if that happens.
+
+on:
+  schedule:
+    - cron: "17 3 * * 1" # Mon 03:17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: rebuild-images
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  discover:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      plugins: ${{ steps.find.outputs.plugins }}
+      any: ${{ steps.find.outputs.any }}
+      date: ${{ steps.find.outputs.date }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Discover plugins with Dockerfile
+        id: find
+        shell: bash
+        run: |
+          set -euo pipefail
+          plugins='[]'
+          any=false
+          for df in plugins/*/docker/Dockerfile; do
+            [[ -f "$df" ]] || continue
+            plugin_name="$(basename "$(dirname "$(dirname "$df")")")"
+            version="$(jq -r --arg n "$plugin_name" \
+              '.plugins[] | select(.name == $n) | .version' .claude-plugin/marketplace.json)"
+            if [[ -z "$version" ]]; then
+              echo "::error::no version for $plugin_name in marketplace.json"
+              exit 1
+            fi
+            entry=$(jq -nc --arg name "$plugin_name" --arg df "$df" \
+                    --arg ctx "$(dirname "$df")" --arg img "openfantasy/${plugin_name}" \
+                    --arg ver "$version" \
+                    '{name:$name, dockerfile:$df, context:$ctx, image:$img, version:$ver}')
+            plugins=$(jq -c --argjson e "$entry" '. + [$e]' <<<"$plugins")
+            any=true
+          done
+          {
+            echo "plugins=$plugins"
+            echo "any=$any"
+            echo "date=$(date -u +%Y%m%d)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Discovered: $plugins"
+
+  rebuild:
+    name: rebuild (${{ matrix.plugin.name }})
+    needs: [discover]
+    if: needs.discover.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJSON(needs.discover.outputs.plugins) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx (Build Cloud)
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver: cloud
+          endpoint: openfantasy/builder
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ matrix.plugin.image }}
+          tags: |
+            type=raw,value=${{ matrix.plugin.version }}
+            type=raw,value=${{ matrix.plugin.version }}-${{ needs.discover.outputs.date }}
+            type=raw,value=latest
+
+      # Fresh base + no layer cache so package upgrades and DB updates land.
+      - name: Build and push (${{ matrix.plugin.name }})
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.plugin.context }}
+          file: ${{ matrix.plugin.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          pull: true
+          no-cache: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          secrets: |
+            nvd_api_key=${{ secrets.NVD_API_KEY }}
