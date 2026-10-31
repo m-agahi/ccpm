@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.0] - 2026-10-31
+
+### Changed
+
+- PR creation and merged-branch checks are forge-aware: the skill detects host, owner and repo from the `origin` remote. GitHub uses `gh`; Forgejo/Gitea/Codeberg use the REST API.
+- PR template lookup covers `.github/`, `.gitea/`, `.forgejo/`, repo root and `docs/`, plus the GitHub org `.github` fallback.
+- Removed hard-coded Codeberg owner/repo and 1Password reference. Forgejo tokens come from the user's env var or a user-supplied `op` reference.
+- Snippets assign `TOKEN` from `CODEBERG_TOKEN`/`FORGEJO_TOKEN` and pass `--repo` to `gh` so SSH-alias remotes work.
+- `repository` URL now points to https://github.com/m-agahi/ccpm.
+
 ## [1.0.3] - 2026-05-16
 
 ### Fixed

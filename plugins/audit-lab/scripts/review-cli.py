@@ -75,7 +75,7 @@ def find_version(start: Path) -> str:
     """Walk up from start looking for marketplace.json or .claude-plugin/marketplace.json.
 
     Stops at .git boundary or filesystem root. Works in both single-plugin repos
-    (Codeberg: metadata.version) and multi-plugin repos (Quinyx: plugins[].version).
+    (metadata.version) and multi-plugin repos (plugins[].version).
     """
     d = start.resolve()
     while True:

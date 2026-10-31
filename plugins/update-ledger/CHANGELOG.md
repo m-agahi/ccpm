@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.9.2 — repository URL points to GitHub
+
+- **[chore]** `repository` URL now points to https://github.com/m-agahi/ccpm (repo moved from Codeberg). Codeberg/Forgejo source support is unchanged.
+
 ## v1.9.1 — fix_frontmatter: decode-then-escape titles (ledger task 943)
 
 - **[fix]** `scripts/fix_frontmatter.py` — the existing quoted `title:` scalar

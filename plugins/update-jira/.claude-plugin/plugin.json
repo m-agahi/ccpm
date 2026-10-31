@@ -4,7 +4,7 @@
   "author": {
     "name": "Christian Biamont"
   },
-  "repository": "https://codeberg.org/maxagahi/ccpm",
+  "repository": "https://github.com/m-agahi/ccpm",
   "license": "Apache-2.0",
   "keywords": ["jira", "progress", "updates", "pr-sync"]
 }

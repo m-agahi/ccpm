@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3] - 2026-10-31
+
+### Changed
+
+- Pre-built `repo-indexer` binaries now download from GitHub releases (`https://github.com/m-agahi/ccpm/releases/download/repo-wiki%2Fv<version>/...`). Codeberg is no longer the release host.
+- `repository` URL now points to https://github.com/m-agahi/ccpm.
+
 ## [1.1.2] - 2026-05-19
 
 ### Fixed

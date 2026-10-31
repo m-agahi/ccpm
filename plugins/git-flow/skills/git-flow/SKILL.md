@@ -30,8 +30,8 @@ If no subcommand is given, infer the action from context (what was the user aski
    `git branch --show-current && git status` first.
 4. **Worktree-first** — new work always starts in its own worktree. Use `git worktree add`
    when a worktree is needed. Never use `git checkout -b` to start work.
-5. **Always look for the PR template** at `.gitea/pull_request_template.md` before
-   creating a PR. Use it if found.
+5. **Always look for the PR template** before creating a PR (`.github/`, `.gitea/`,
+   `.forgejo/`, repo root or `docs/` — see the `pr` subcommand). Use it if found.
 6. **Conventional commits**: `type(scope): subject` — e.g., `feat(git-flow): add safety guards`.
 7. **Never `git add -A`** — always stage specific files by name.
 8. **Never force-push** unless the user explicitly asks.
@@ -76,14 +76,52 @@ Check if branch is merged:
 # Check if remote branch still exists (deleted = likely merged)
 git ls-remote --heads origin <branch>
 
-# Or via Forgejo API (if Codeberg repo)
-TOKEN=$(op read "op://Private/Codeberg/Security/PAT")
-OWNER=$(git remote get-url origin | sed 's|.*codeberg.org/||;s|/.*||')
-REPO=$(git remote get-url origin | sed 's|.*codeberg.org/[^/]*/||;s|\.git||')
+# Or ask the forge — detect the host first (see "Forge Detection" below)
+# GitHub:
+gh pr list --repo "$OWNER/$REPO" --head "$BRANCH" --state all --json number,state,mergedAt
+
+# Forgejo / Gitea / Codeberg:
 curl -s -H "Authorization: token $TOKEN" \
-  "https://codeberg.org/api/v1/repos/$OWNER/$REPO/pulls?state=closed&head=$BRANCH&limit=5" \
+  "https://$HOST/api/v1/repos/$OWNER/$REPO/pulls?state=closed&head=$BRANCH&limit=5" \
   | python3 -c "import json,sys; prs=json.load(sys.stdin); print(any(p.get('merged') for p in prs))"
 ```
+
+---
+
+## Forge Detection
+
+Derive host, owner and repo from the `origin` remote. Never hard-code them.
+
+```bash
+URL=$(git remote get-url origin)
+# Handles https://host/owner/repo(.git), git@host:owner/repo(.git), ssh://git@host/owner/repo(.git)
+HOST=$(printf '%s' "$URL" | sed -E 's#^[a-z+]+://##; s#^[^@/]*@##; s#[:/].*$##')
+SLUG=$(printf '%s' "$URL" | sed -E 's#^[a-z+]+://[^/]+/##; s#^[^@/]*@[^:/]+[:/]##; s#\.git$##')
+OWNER=${SLUG%%/*}
+REPO=${SLUG#*/}
+BRANCH=$(git branch --show-current)
+BASE=$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^origin/##')
+```
+
+`HOST` can be an SSH alias (e.g. `github-personal`). Resolve it with
+`ssh -G "$HOST" | awk '/^hostname /{print $2}'`.
+
+| Resolved host                                              | Forge           | PR tool             |
+| ---------------------------------------------------------- | --------------- | ------------------- |
+| `github.com` (or a GitHub Enterprise host known to `gh`)   | GitHub          | `gh` CLI            |
+| `codeberg.org`, or a host whose `/api/v1/version` responds | Forgejo / Gitea | REST API via `curl` |
+| Anything else                                              | Unknown         | Ask the user        |
+
+**Forgejo / Gitea token:** read it from an env var the user already has set
+(e.g. `CODEBERG_TOKEN`, `FORGEJO_TOKEN`), or ask the user which 1Password
+reference to `op read`.
+
+```bash
+TOKEN="${CODEBERG_TOKEN:-$FORGEJO_TOKEN}"   # empty → ask the user for an op:// reference
+```
+
+Never print the token. Never write a token value into
+a file or a commit.
 
 ---
 
@@ -199,39 +237,44 @@ Report:
 2. Check for PR template:
 
    ```bash
-   cat .gitea/pull_request_template.md 2>/dev/null || \
-   cat .github/pull_request_template.md 2>/dev/null
+   find . -maxdepth 3 -not -path './.git/*' -iname 'pull_request_template*' 2>/dev/null
+   # Typical locations: .github/, .gitea/, .forgejo/, repo root, docs/
    ```
 
-3. Fill the template from commit history and session context.
-   Infer issue number from branch name if possible (e.g. `feat/65-topic` → `#65`).
+   On GitHub, also check the org fallback:
+   `gh api repos/$OWNER/.github/contents/.github 2>/dev/null`.
 
-4. Get repo details:
+3. Fill the template from commit history and session context. Keep every
+   template section header. Infer issue number from branch name if possible
+   (e.g. `feat/65-topic` → `#65`).
+
+4. Detect the forge, owner and repo (see **Forge Detection** above). Determine
+   the base branch (`$BASE`) from `origin/HEAD`.
+
+5. Create the PR with the tool for that forge.
+
+   **GitHub** — use `gh`:
 
    ```bash
-   git remote get-url origin
-   # e.g. https://codeberg.org/maxagahi/ccpm.git
-   OWNER=maxagahi
-   REPO=ccpm
+   gh pr create --repo "$OWNER/$REPO" --base "$BASE" --head "$BRANCH" \
+     --title "<PR title>" --body-file <filled-template-file>
    ```
 
-5. Create PR via Forgejo API (this is Codeberg — NOT GitHub, do NOT use `gh`):
+   **Forgejo / Gitea / Codeberg** — use the REST API (`gh` does not work here):
 
    ```bash
-   TOKEN=$(op read "op://Private/Codeberg/Security/PAT")
+   python3 -c 'import json,sys; print(json.dumps({"title": sys.argv[1], "head": sys.argv[2], "base": sys.argv[3], "body": open(sys.argv[4]).read()}))' \
+     "<PR title>" "$BRANCH" "$BASE" <filled-template-file> > /tmp/pr.json
    curl -s -X POST \
      -H "Authorization: token $TOKEN" \
      -H "Content-Type: application/json" \
-     https://codeberg.org/api/v1/repos/$OWNER/$REPO/pulls \
-     -d "{
-       \"title\": \"<PR title>\",
-       \"body\": \"<filled template>\",
-       \"head\": \"<branch>\",
-       \"base\": \"master\"
-     }"
+     "https://$HOST/api/v1/repos/$OWNER/$REPO/pulls" \
+     --data @/tmp/pr.json
    ```
 
-6. Report the PR URL.
+6. Verify the PR body kept every template section header
+   (`gh pr view <N> --json body` on GitHub; `GET /api/v1/repos/$OWNER/$REPO/pulls/<N>`
+   on Forgejo). Report the PR URL.
 
 ---
 
@@ -293,15 +336,15 @@ If `missing`, offer to configure it automatically. See the
 
 ## Rules Summary
 
-| Rule                 | Detail                                                   |
-| -------------------- | -------------------------------------------------------- |
-| No push to master    | Stop and ask the user which branch to use                |
-| No merged branches   | Stop and offer to start a new branch                     |
-| Check branch first   | Always run `git branch --show-current` before write ops  |
-| Worktree-first       | Use `git worktree add`, never `git checkout -b`          |
-| No `git add -A`      | Stage specific files only                                |
-| No force-push        | Unless explicitly asked                                  |
-| No amend             | Create new commits; never amend unless asked             |
-| Conventional commits | `type(scope): subject` format                            |
-| Codeberg API for PRs | Never use `gh` — use Forgejo REST API with 1Password PAT |
-| Pre-commit failure   | Re-stage reformatted files and create a new commit       |
+| Rule                 | Detail                                                    |
+| -------------------- | --------------------------------------------------------- |
+| No push to master    | Stop and ask the user which branch to use                 |
+| No merged branches   | Stop and offer to start a new branch                      |
+| Check branch first   | Always run `git branch --show-current` before write ops   |
+| Worktree-first       | Use `git worktree add`, never `git checkout -b`           |
+| No `git add -A`      | Stage specific files only                                 |
+| No force-push        | Unless explicitly asked                                   |
+| No amend             | Create new commits; never amend unless asked              |
+| Conventional commits | `type(scope): subject` format                             |
+| Forge-aware PRs      | GitHub → `gh`; Forgejo/Gitea → REST API with user's token |
+| Pre-commit failure   | Re-stage reformatted files and create a new commit        |

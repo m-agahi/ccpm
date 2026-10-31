@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.1] - 2026-10-31
+
+### Changed
+
+- `repository` URL now points to https://github.com/m-agahi/ccpm (repo moved from Codeberg).
+
 ## [1.1.0] - 2026-04-17
 
 ### Added

@@ -6,7 +6,7 @@ Personal plugin marketplace for [Claude Code](https://claude.ai/code).
 
 ## Plugins
 
-### audit-lab (v6.0.0)
+### audit-lab (v6.0.1)
 
 Comprehensive local code review with 12 specialized agents. All analysis runs locally inside a Docker container — nothing is pushed to remote.
 
@@ -57,7 +57,7 @@ Uncomment the entries you need and point them at your local credential files. Su
 
 You can also pass environment variables (e.g., `GOPROXY`, `PIP_INDEX_URL`) via the `env:` section in the same file.
 
-### update-jira (v1.1.1)
+### update-jira (v1.1.2)
 
 Post progress updates to Jira tickets based on session work, git activity, and PRs.
 
@@ -68,21 +68,22 @@ Auto-fixes PR titles (adds ticket prefix) and PR bodies (adds Jira link). Config
 
 **Requirements:** Atlassian MCP server, GitHub MCP server.
 
-### git-flow (v1.0.3)
+### git-flow (v1.1.0)
 
 Safe git workflow enforcer for worktree-based development.
 
 - Guards against committing or pushing to `master`
 - Guards against operating on merged/closed branches
 - Worktree-first branching — uses `git worktree add` instead of `git checkout -b`
-- Handles commit, push, PR creation (Codeberg/Forgejo), and branch cleanup
-- Detects merged branches via `git ls-remote` and optional Forgejo API check
+- Handles commit, push, PR creation, and branch cleanup
+- Forge-aware: detects the host from `origin` — GitHub via `gh`, Forgejo/Gitea/Codeberg via REST API
+- Detects merged branches via `git ls-remote`, `gh pr list`, or the Forgejo API
 - First-run setup wizard configures the companion `PreToolUse` hook automatically
 
 **Subcommands:** `branch`, `commit`, `push`, `pr`, `cleanup`, `status`.
 If no subcommand is given, the skill infers the action from context.
 
-**Requirements:** `op` CLI (1Password) for Codeberg PAT when creating PRs.
+**Requirements:** `gh` CLI (authenticated) for GitHub repos; for Forgejo/Gitea repos, an API token in an env var (or a 1Password reference read with `op`).
 
 #### git-flow hook setup
 
@@ -131,7 +132,7 @@ chmod +x ~/.claude/hooks/git-flow-guard.sh
 }
 ```
 
-### tf-naming-check (v1.1.0)
+### tf-naming-check (v1.1.1)
 
 Terraform naming convention checker powered by a Haiku agent.
 
@@ -161,7 +162,13 @@ Then edit `tf-naming-config.md` to add, remove, or adjust rules. The project-lev
 ### 1. Add the marketplace
 
 ```
-/plugin marketplace add https://codeberg.org/maxagahi/ccpm.git
+/plugin marketplace add m-agahi/ccpm
+```
+
+Or with the full URL:
+
+```
+/plugin marketplace add https://github.com/m-agahi/ccpm.git
 ```
 
 ### 2. Install a plugin
