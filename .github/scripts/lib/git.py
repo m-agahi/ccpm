@@ -24,8 +24,41 @@ def diff_names(target):
 
 
 def show_file(ref, path):
-    """Return file contents at a given git ref, or None if missing."""
+    """Return file contents at a given git ref, or None if missing.
+
+    Callers must validate ``ref`` first (see commit_sha): an unknown ref
+    also yields None here.
+    """
     try:
         return run("show", f"{ref}:{path}")
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, RuntimeError):
         return None
+
+
+def commit_sha(ref):
+    """Return the full sha of the commit ``ref`` names, or None if unknown."""
+    if not ref or ref.startswith("-"):
+        return None
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def is_ancestor(ancestor, descendant="HEAD"):
+    """True when ``ancestor`` is reachable from ``descendant``."""
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode in (0, 1):
+        return result.returncode == 0
+    stderr = result.stderr.strip() or "(no stderr)"
+    raise RuntimeError(
+        f"git merge-base --is-ancestor failed (exit {result.returncode}): {stderr}"
+    )
