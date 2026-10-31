@@ -2,7 +2,7 @@
 """Detect plugin version changes between two git states.
 
 Compares marketplace.json at BASE_REF against the current working tree.
-Outputs a JSON array of releases to FORGEJO_OUTPUT so the workflow can
+Outputs a JSON array of releases to GITHUB_OUTPUT so the workflow can
 create tags and releases for each changed plugin.
 """
 

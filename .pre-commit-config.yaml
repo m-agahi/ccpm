@@ -21,21 +21,21 @@ repos:
       - id: validate-plugin-versions
         name: Check plugin version consistency
         language: python
-        entry: python3 .forgejo/scripts/check_versions.py
+        entry: python3 .github/scripts/check_versions.py
         files: (marketplace\.json|plugin\.json)$
         pass_filenames: false
 
       - id: update-plugin-count
         name: Update plugin count badge in README
         language: python
-        entry: python3 .forgejo/scripts/update_plugin_count.py
+        entry: python3 .github/scripts/update_plugin_count.py
         files: marketplace\.json$
         pass_filenames: false
 
       - id: update-plugin-versions
         name: Update plugin versions in README
         language: python
-        entry: python3 .forgejo/scripts/update_plugin_versions.py
+        entry: python3 .github/scripts/update_plugin_versions.py
         files: marketplace\.json$
         pass_filenames: false
 
@@ -43,20 +43,20 @@ repos:
         name: Validate SKILL.md YAML frontmatter
         language: python
         additional_dependencies: [pyyaml]
-        entry: python3 .forgejo/scripts/check_skill_frontmatter.py
+        entry: python3 .github/scripts/check_skill_frontmatter.py
         files: SKILL\.md$
         pass_filenames: false
 
       - id: check-changelog
         name: Check CHANGELOG updated for modified plugins
         language: python
-        entry: python3 .forgejo/scripts/check_changelog_staged.py
+        entry: python3 .github/scripts/check_changelog_staged.py
         files: ^(plugins/.*|\.claude-plugin/marketplace\.json)$
         pass_filenames: false
 
       - id: check-audit-lab-version
         name: Check audit-lab version consistency
         language: python
-        entry: python3 .forgejo/scripts/check_audit_lab_version.py
+        entry: python3 .github/scripts/check_audit_lab_version.py
         files: ^(plugins/audit-lab/docker/Dockerfile|plugins/audit-lab/CHANGELOG\.md|\.claude-plugin/marketplace\.json)$
         pass_filenames: false

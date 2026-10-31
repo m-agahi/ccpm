@@ -2,13 +2,14 @@
 """Enforce that every PR references a linked issue.
 
 Checks the PR body for issue keywords (closes, fixes, resolves,
-related to) followed by #N, and the Forgejo timeline for
-cross-references. If no issue is found and the author isn't exempt,
-closes the PR with an explanatory comment.
+related to) followed by #N, and the GitHub issue timeline for
+cross-references (``cross-referenced``) or sidebar-linked issues
+(``connected`` not later ``disconnected``). If no issue is found and the
+author isn't exempt, fails the check with an explanatory error.
 
 Exempt conditions:
   - PR has a "docs", "chore", or "dependencies" label
-  - PR author has admin or owner permissions on the repo
+  - PR author is the repo owner or has admin permission on the repo
 """
 
 import os
@@ -16,7 +17,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from lib import forgejo_api, workflow_io
+from lib import github_api, workflow_io
 
 EXEMPT_LABELS = {"docs", "chore", "dependencies"}
 ISSUE_PATTERN = re.compile(
@@ -27,7 +28,7 @@ HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 def get_pr():
     pr_number = workflow_io.require_env("PR_NUMBER")
-    return int(pr_number), forgejo_api.get(forgejo_api.repo_path(f"/pulls/{pr_number}"))
+    return int(pr_number), github_api.get(github_api.repo_path(f"/pulls/{pr_number}"))
 
 
 def is_label_exempt(pr_data):
@@ -36,25 +37,25 @@ def is_label_exempt(pr_data):
 
 
 def is_author_exempt(pr_data):
-    """Check if the PR author is the repo owner.
+    """Check if the PR author is the repo owner or a repo admin.
 
-    The collaborator permission endpoint requires admin access on Codeberg,
-    so instead we compare the PR author against the repo owner directly.
+    GitHub permission values are admin/maintain/write/triage/read/none; there
+    is no "owner" value, so ownership is checked against the repo owner login.
     """
     login = pr_data["user"]["login"]
     try:
-        repo = forgejo_api.get(forgejo_api.repo_path())
+        repo = github_api.get(github_api.repo_path())
         if repo and repo.get("owner", {}).get("login") == login:
             return True
     except RuntimeError as e:
         print(f"WARNING: repo owner check failed: {e}", file=sys.stderr)
 
-    # Fallback: try the permission endpoint (works if token has admin scope)
+    # Fallback: collaborator permission endpoint (admin only)
     try:
-        collab = forgejo_api.get(
-            forgejo_api.repo_path(f"/collaborators/{login}/permission")
+        collab = github_api.get(
+            github_api.repo_path(f"/collaborators/{login}/permission")
         )
-        if collab and collab.get("permission") in ("admin", "owner"):
+        if collab and collab.get("permission") == "admin":
             return True
     except RuntimeError:
         pass
@@ -65,8 +66,8 @@ def is_author_exempt(pr_data):
 def issue_exists(issue_number):
     """Check that the referenced issue exists and is not a pull request."""
     try:
-        issue = forgejo_api.get(
-            forgejo_api.repo_path(f"/issues/{issue_number}")
+        issue = github_api.get(
+            github_api.repo_path(f"/issues/{issue_number}")
         )
         if issue and not issue.get("pull_request"):
             return True
@@ -83,15 +84,23 @@ def has_linked_issue(pr_number, pr_data):
         if issue_exists(issue_number):
             return True
 
-    # Check timeline for cross-references
+    # Check timeline for cross-references and sidebar-linked issues.
+    # One page of 100 events is enough for a PR's linking history.
     try:
-        timeline = forgejo_api.get(
-            forgejo_api.repo_path(f"/issues/{pr_number}/timeline")
+        timeline = github_api.get(
+            github_api.repo_path(f"/issues/{pr_number}/timeline?per_page=100")
         )
-        if timeline:
-            for event in timeline:
-                if event.get("type") in ("cross_ref", "ref"):
-                    return True
+        connected = 0
+        for event in timeline or []:
+            kind = event.get("event")
+            if kind == "cross-referenced":
+                return True
+            if kind == "connected":
+                connected += 1
+            elif kind == "disconnected":
+                connected -= 1
+        if connected > 0:
+            return True
     except RuntimeError as e:
         raise RuntimeError(f"Timeline API unavailable for PR #{pr_number}: {e}") from e
 

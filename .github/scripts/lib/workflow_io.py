@@ -1,15 +1,15 @@
-"""Forgejo Actions I/O helpers."""
+"""GitHub Actions I/O helpers."""
 
 import os
 import sys
 
 
 def set_output(key, value):
-    """Write a step output to $FORGEJO_OUTPUT."""
-    output_file = os.environ.get("FORGEJO_OUTPUT")
+    """Write a step output to $GITHUB_OUTPUT."""
+    output_file = os.environ.get("GITHUB_OUTPUT")
     if not output_file:
         print(
-            f"WARNING: FORGEJO_OUTPUT not set, would output {key}={value}",
+            f"WARNING: GITHUB_OUTPUT not set, would output {key}={value}",
             file=sys.stderr,
         )
         return
@@ -21,7 +21,7 @@ def set_output(key, value):
 
 
 def error(msg):
-    """Emit a Forgejo Actions error annotation."""
+    """Emit a GitHub Actions error annotation."""
     print(f"::error::{msg}")
 
 

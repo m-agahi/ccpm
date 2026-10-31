@@ -3,7 +3,7 @@
 
 For each plugin in .ci-outputs/releases.json, checks if an indexer/Cargo.toml
 exists under plugins/<name>/. If so, compiles release binaries for both
-linux/amd64 and linux/arm64, and uploads both assets to the matching Forgejo
+linux/amd64 and linux/arm64, and uploads both assets to the matching GitHub
 release.
 
 Asset naming: <plugin-name>-indexer-linux-amd64 / <plugin-name>-indexer-linux-arm64
@@ -17,7 +17,7 @@ import sys
 import urllib.parse
 
 sys.path.insert(0, os.path.dirname(__file__))
-from lib import forgejo_api
+from lib import github_api
 
 
 def run(cmd, **kwargs):
@@ -29,13 +29,12 @@ def run(cmd, **kwargs):
     return result
 
 
-def find_release_id(tag):
-    """Return the Forgejo release ID for a given tag, or None if not found."""
+def find_release(tag):
+    """Return the GitHub release object for a given tag, or None if not found."""
     encoded_tag = urllib.parse.quote(tag, safe="")
     try:
-        release = forgejo_api.get(forgejo_api.repo_path(f"/releases/tags/{encoded_tag}"))
-        return release["id"] if release else None
-    except forgejo_api.APIError as e:
+        return github_api.get(github_api.repo_path(f"/releases/tags/{encoded_tag}"))
+    except github_api.APIError as e:
         print(f"  WARNING: could not find release for tag {tag!r}: {e}", file=sys.stderr)
         return None
 
@@ -100,8 +99,8 @@ def main():
             continue
 
         tag = f"{name}/v{version}"
-        release_id = find_release_id(tag)
-        if release_id is None:
+        release = find_release(tag)
+        if not release:
             print(f"  ERROR: release not found for tag {tag!r}", file=sys.stderr)
             failed.append(name)
             continue
@@ -117,12 +116,12 @@ def main():
                 continue
 
             asset_name = f"{name}-indexer-linux-{arch}"
-            print(f"  Uploading {asset_name} to release {tag} (id={release_id})...")
+            print(f"  Uploading {asset_name} to release {tag} (id={release.get('id')})...")
             try:
-                forgejo_api.upload_asset(release_id, binary, asset_name)
+                github_api.upload_asset(release, binary, asset_name)
                 print(f"  Uploaded {asset_name}")
-            except forgejo_api.APIError as e:
-                if e.status_code == 422:
+            except github_api.APIError as e:
+                if github_api.is_already_exists(e):
                     print(f"  Asset {asset_name} already exists on release, skipping")
                 else:
                     print(f"  ERROR uploading asset: {e}", file=sys.stderr)

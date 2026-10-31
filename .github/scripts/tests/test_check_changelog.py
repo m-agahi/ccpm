@@ -41,7 +41,7 @@ class TestChangelogClassification(unittest.TestCase):
         self.assertEqual(missing, set())
 
     def test_non_plugin_file_ignored(self):
-        missing = self._classify(["README.md", ".forgejo/scripts/check.py"])
+        missing = self._classify(["README.md", ".github/scripts/check.py"])
         self.assertEqual(missing, set())
 
     def test_multiple_plugins_mixed(self):
