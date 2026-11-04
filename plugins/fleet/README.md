@@ -82,6 +82,16 @@ receive only the criterion test files in `frozen_tests`. Everything else (whole-
 also receive `code_base_ref`, the commit before the first coder round, because a re-freeze after
 `fix_tests` moves `freeze_ref` past earlier coder commits.
 
+Frozen files stay byte-equal between freezes. The only exception is an approved `fix_tests`
+round: its writers may revise frozen tests in place, and the script then re-freezes. In that
+re-freeze, only the test files of the criteria named in the code judge's `fix_tests` findings may
+change. Any other changed key (another criterion's tests, runner config, ignore rules, symlinks)
+stops the run with "re-freeze touched unrouted path". Each re-freeze is recorded in
+`refreeze_log` (`round`, `freeze_ref_before`, `freeze_ref_after`, `changed`). On a re-entry, the
+fleet branch is first merged into every criterion branch, and each writer and every test-judge
+round get the code judge's findings (writers: only those for their criterion) and the coder's
+commits.
+
 The hasher returns four separate maps (`files`, `sections`, `git`, `symlinks`), so a real file
 named like a synthetic key (for example `symlink:conftest.py`) cannot mask one. Every walked path
 with `:` or `#` in a name goes on a `suspicious` list. A non-empty list stops the run at freeze and
@@ -156,7 +166,8 @@ too. It does not catch a change that a judge makes and reverts within its own ru
   "path": "full",
   "rounds": { "tests": 1, "code": 1 },
   "gates_not_run": [{ "gate": "held_out", "reason": "..." }],
-  "role_versions": { "fleet-coder": 3 },
+  "role_versions": { "fleet-coder": 5 },
+  "refreeze_log": [],
   "gate_log": ["..."],
   "yadgar_findings": [{ "role": "fleet-coder", "findings": ["..."] }]
 }

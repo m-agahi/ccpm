@@ -61,13 +61,13 @@ function inputsOf(prompt) {
 
 // The minimum role versions the workflow was built against.
 const FROZEN_VERSIONS = {
-  "scope-and-plan": 9,
-  "plan-audit": 8,
-  "fleet-test-writer": 3,
-  "fleet-test-judge": 3,
-  "fleet-coder": 3,
-  "fleet-code-judge": 4,
-  "fleet-pr-opener": 3,
+  "scope-and-plan": 11,
+  "plan-audit": 9,
+  "fleet-test-writer": 4,
+  "fleet-test-judge": 4,
+  "fleet-coder": 5,
+  "fleet-code-judge": 5,
+  "fleet-pr-opener": 4,
 };
 
 // Keys each role must return on status ok (the frozen fleet-v1 contract).
@@ -1613,31 +1613,31 @@ test("S-2: roles get only criterion test files in frozen_tests; config files go 
 
 test("S-8: a role version lower than the frozen minimum stops in preflight", async () => {
   const s = happy();
-  s.preflight.versions["fleet-coder"] = 2;
+  s.preflight.versions["fleet-coder"] = 4;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder version 2 < frozen 3/);
+  assert.match(out.result.reason, /role fleet-coder version 4 < frozen 5/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
 test("S-8: a higher role version is logged as prose-only and recorded", async () => {
   const s = happy();
-  s.preflight.versions["fleet-code-judge"] = 6;
+  s.preflight.versions["fleet-code-judge"] = 7;
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v6 > frozen v4: prose-only changes assumed/.test(l)));
-  assert.equal(out.result.role_versions["fleet-code-judge"], 6);
-  assert.equal(out.result.role_versions["fleet-coder"], 3);
+  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v7 > frozen v5: prose-only changes assumed/.test(l)));
+  assert.equal(out.result.role_versions["fleet-code-judge"], 7);
+  assert.equal(out.result.role_versions["fleet-coder"], 5);
 });
 
 test("S-8: a role runner that loaded a different version than preflight is discarded", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"].role_version = 4;
+  s["role:fleet-coder:r1"].role_version = 6;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-coder/);
-  assert.match(out.result.reason, /version 4/);
+  assert.match(out.result.reason, /version 6/);
   assert.ok(!out.labels.includes("hasher:post-coder:r1"));
 });
 
@@ -1734,7 +1734,7 @@ test("contract marker: a role runner that loaded another contract is discarded",
 
 test("contract drift: planner ok output missing a required key stops", async () => {
   const s = happy();
-  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: 9, role_contract: "CONTRACT: fleet-v1" });
+  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: 11, role_contract: "CONTRACT: fleet-v1" });
   delete p.allowed_additions;
   delete p.held_out_examples;
   s["role:scope-and-plan"] = p;
@@ -1747,7 +1747,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
   const s = happy();
   s["role:fleet-code-judge:r1"] = {
     __raw: true,
-    role_version: 4,
+    role_version: 5,
     role_contract: "CONTRACT: fleet-v1",
     status: "ok",
     reason: "approved with gates not run: coverage",
@@ -1764,7 +1764,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
 
 test("contract drift: pr-opener ok output missing a required key stops", async () => {
   const s = happy();
-  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: 3, role_contract: "CONTRACT: fleet-v1" });
+  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: 4, role_contract: "CONTRACT: fleet-v1" });
   delete pr.template_used;
   s["role:fleet-pr-opener"] = pr;
   const out = await run(s, ARGS);
@@ -1783,7 +1783,7 @@ test("contract drift: null/empty values are fine where allowed", async () => {
 
 test("contract drift: a needs_human output may lack the role fields", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"] = { __raw: true, role_version: 3, role_contract: "CONTRACT: fleet-v1", status: "needs_human", reason: "test AC1 wrong" };
+  s["role:fleet-coder:r1"] = { __raw: true, role_version: 5, role_contract: "CONTRACT: fleet-v1", status: "needs_human", reason: "test AC1 wrong" };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /test AC1 wrong/);
@@ -1795,4 +1795,69 @@ test("contract drift: an unknown verdict value stops (defence in depth over the 
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /contract drift: fleet-test-judge verdict approve_with_nits/);
+});
+
+
+// ---------------------------------------------------------------- round 4: writer context + re-freeze
+
+test("re-entry writers get code_judge_findings for their own criterion only", async () => {
+  const f1 = { target: "tests", criterion: "AC1", finding: "wrong expectation" };
+  const f2 = { target: "tests", criterion: "AC2", finding: "other criterion" };
+  const s = fixTestsReentry({
+    "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_tests", routed_findings: [f1, f2] },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  const w = inputsOf(call(out, "role:fleet-test-writer:AC1:r3").prompt);
+  assert.deepEqual(w.code_judge_findings, [f1]);
+  assert.ok(!("code_judge_findings" in inputsOf(call(out, "role:fleet-test-writer:AC1:r1").prompt)));
+});
+
+test("re-freeze after an approved fix_tests round updates the map and the log", async () => {
+  const after = H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" });
+  const s = fixTestsReentry({
+    "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: after },
+    "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: after },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  assert.deepEqual(out.result.refreeze_log, [
+    {
+      round: 1,
+      freeze_ref_before: "P1",
+      freeze_ref_after: "M3",
+      changed: [{ path: "tests/test_a.py", before: "ha", after: "ha2" }],
+    },
+  ]);
+  const c2 = inputsOf(call(out, "role:fleet-coder:r2").prompt);
+  assert.equal(c2.frozen_tests["tests/test_a.py"], "ha2");
+  assert.equal(c2.freeze_ref, "M3");
+  assert.equal(c2.code_base_ref, "P1");
+});
+
+test("re-freeze touching another criterion's test file stops with needs_human", async () => {
+  const s = fixTestsReentry({
+    "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: H({ ...HASHES_FLAT, "tests/test_b.py": "hb2" }) },
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /re-freeze touched unrouted path tests\/test_b\.py/);
+  assert.ok(!out.labels.includes("role:fleet-coder:r2"));
+});
+
+test("re-freeze touching runner config or a symlink stops with needs_human", async () => {
+  for (const [k, v] of [["conftest.py", "new"], ["pyproject.toml#tool.pytest", "hp2"], ["symlink:lib", "../x"], ["git:info/exclude", "e2"]]) {
+    const s = fixTestsReentry({
+      "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: H({ ...HASHES_FLAT, [k]: v }) },
+    });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", k);
+    assert.ok(out.result.reason.includes("re-freeze touched unrouted path " + k), out.result.reason);
+  }
+});
+
+test("no fix_tests round means an empty refreeze_log", async () => {
+  const out = await run(happy(), ARGS);
+  assert.deepEqual(out.result.refreeze_log, []);
 });

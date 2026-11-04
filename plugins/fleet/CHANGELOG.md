@@ -21,5 +21,6 @@
   judge gets a `hash_recheck` report.
 - Role contract pinning: minimum role versions, `CONTRACT: fleet-v1` marker, required keys and
   verdict enums checked in code. The short path is disabled in v1.
+- Guarded re-freeze after an approved `fix_tests` round, recorded in `refreeze_log`.
 - `fleet:judge` read-only agent for judges, preflight and hasher.
 - `node --test` scenario suite for the workflow logic and the hasher program.

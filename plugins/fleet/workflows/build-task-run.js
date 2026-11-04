@@ -38,13 +38,13 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks"];
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 9,
-  "plan-audit": 8,
-  "fleet-test-writer": 3,
-  "fleet-test-judge": 3,
-  "fleet-coder": 3,
-  "fleet-code-judge": 4,
-  "fleet-pr-opener": 3,
+  "scope-and-plan": 11,
+  "plan-audit": 9,
+  "fleet-test-writer": 4,
+  "fleet-test-judge": 4,
+  "fleet-coder": 5,
+  "fleet-code-judge": 5,
+  "fleet-pr-opener": 4,
 };
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
 const CONTRACT = "fleet-v1";
@@ -764,6 +764,7 @@ const state = {
   gatesNotRun: null,
   models: {},
   roleVersions: {},
+  refreezeLog: [],
 };
 
 function gate(msg) {
@@ -899,6 +900,7 @@ function finish(status, reason) {
     agents: state.agents,
     gates_not_run: state.gatesNotRun,
     role_versions: state.roleVersions,
+    refreeze_log: state.refreezeLog,
     gate_log: state.gateLog,
     yadgar_findings: state.findings,
   };
@@ -1152,7 +1154,10 @@ async function main(input) {
                   worktree: wt.path,
                   branch: wt.branch,
                   routed_findings: p.findings,
-                }),
+                },
+                codeFindings
+                  ? { code_judge_findings: codeFindings.filter((f) => f.criterion === c.id) }
+                  : {}),
               ),
               { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" },
             );
@@ -1235,13 +1240,42 @@ async function main(input) {
   const frozenFiles = [];
   for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
 
-  async function freeze() {
+  // refreeze: {round, criteria} after an approved fix_tests round. Only the
+  // test files of those criteria may change; any other key -> needs_human.
+  async function freeze(refreeze) {
     freezes++;
     const h = await hasher("hasher:freeze:f" + freezes, mainWt, "hashes", frozenFiles, "Freeze");
     if (lastJudgeFp && !sameFingerprint(lastJudgeFp, h.fingerprint))
       halt("needs_human", "worktree changed between test approval and freeze");
     if (h.hashes.suspicious.length)
       halt("needs_human", "suspicious path names (':' or '#') in the worktree at freeze: " + h.hashes.suspicious.join(", "));
+    if (refreeze && frozen) {
+      const allowed = {};
+      for (const c of testable) if (refreeze.criteria.indexOf(c.id) >= 0) for (const f of c.test_files) allowed[f] = true;
+      const changed = [];
+      for (const m of HASH_MAPS) {
+        const a = frozen[m] || {};
+        const b = h.hashes[m] || {};
+        const keys = {};
+        for (const k of Object.keys(a)) keys[k] = true;
+        for (const k of Object.keys(b)) keys[k] = true;
+        for (const k of Object.keys(keys).sort()) {
+          const before = k in a ? a[k] : null;
+          const after = k in b ? b[k] : null;
+          if (before === after) continue;
+          const name = keyName(m, k);
+          if (m !== "files" || !allowed[k]) halt("needs_human", "re-freeze touched unrouted path " + name);
+          changed.push({ path: name, before, after });
+        }
+      }
+      state.refreezeLog.push({
+        round: refreeze.round,
+        freeze_ref_before: freezeRef,
+        freeze_ref_after: h.fingerprint.head,
+        changed,
+      });
+      gate("re-freeze after fix_tests (code round " + refreeze.round + "): " + changed.length + " frozen test file(s) changed");
+    }
     frozen = h.hashes;
     freezeRef = h.fingerprint.head;
     if (!codeBaseRef) codeBaseRef = freezeRef;
@@ -1344,7 +1378,10 @@ async function main(input) {
       phase("Tests");
       await testLoop([], tf);
       phase("Freeze");
-      await freeze();
+      await freeze({
+        round: m,
+        criteria: tf.map((f) => f.criterion).filter((x, i, a) => x && a.indexOf(x) === i),
+      });
       phase("Code");
       // a fix_tests verdict may also carry code findings: keep them
       coderFindings = routed.filter((f) => f.target === "code");
