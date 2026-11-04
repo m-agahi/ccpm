@@ -280,9 +280,22 @@ issue text. So:
    newline. `test_cmd.command` may also hold the `<paths>` token, and must start with a test
    runner: `pytest`, `python[3] -m pytest`, `uv run [--frozen] [--no-sync] [--extra <x>]... pytest`,
    `npm test`, `npm run test[:<name>]`, `npx jest`, `npx vitest`, `pnpm test`, `yarn test`,
-   `cargo test`, `go test` or `make test`. The remaining tokens are flags and paths only: no URL
-   (`://`), no `install`, `add` or `pip`, no `-m` other than `-m pytest` ("test_cmd shape not
-   allowed"). A `check_cmd` must be exactly one of:
+   `cargo test`, `go test` or `make test`. Every argument after the runner is denied by default
+   ("test_cmd arg <x> not allowed"). Allowed: the `<paths>` token; relative paths (no leading `/`,
+   no `..` segment, no `:`, no `=`); and flags on a per-runner list:
+
+   - pytest: `-q -v -vv -x -s -n<N> -n0 --maxfail=<N> -k <expr> -m <expr> -p no:<name> --tb=short|line|no|long -ra -rA --no-header --durations=<N> --timeout=<N>`.
+     A `-k`/`-m` expression is one plain word, or plain words in double quotes
+     (`-k "foo and not bar"`); no other quoting anywhere.
+   - go test: `-run <word> -count=<N> -v -race -short`, plus paths such as `./...`.
+   - cargo test: `--lib --tests --all-features --workspace -q`, then optionally `--` and test
+     names (`word` or `mod::word`).
+   - npm, pnpm and yarn test: nothing, or `--` followed by paths.
+   - jest and vitest: `--run --silent --passWithNoTests` (and `vitest run`), plus paths.
+   - make test: no arguments.
+
+   A URL (`://`) and the words `install`, `add` and `pip` are refused as well. A `check_cmd` must
+   be exactly one of:
 
    - `pre-commit run <hook-id> [--all-files] [--hook-stage <stage>] [--from-ref <ref> --to-ref <ref>]`
    - `make <target>`
@@ -290,9 +303,12 @@ issue text. So:
    - `<dir>/<path/to/script> [plain args]`
 
    where `<dir>` is `scripts`, `bin`, `tools`, `hack` or `ci`; the path has no `.venv`, `venv`,
-   `node_modules`, `.git`, `__pycache__` or `.tox` segment; and its file name is not an
-   interpreter or package manager (`python*`, `pip*`, `node`, `npm`, `npx`, `sh`, `bash`, `zsh`,
-   `uv`, `make`).
+   `node_modules`, `.git`, `__pycache__` or `.tox` segment in any letter case; its extension is
+   `.py`, `.sh`, `.bash` or none; and its file name is not an interpreter or package manager
+   (`python*`, `pip*`, `node`, `npm`, `npx`, `sh`, `bash`, `zsh`, `uv`, `make`). In plan mode a
+   read-only infra step (`infra:check-scripts`, `fleet:judge`) runs a fixed program that checks
+   each script path is a tracked regular file, not a symlink, whose realpath stays under the same
+   root. A failure, or a missing result, makes the obligation judge-only.
 
 2. **Forbidden words.** The words terraform, tofu, tfp, digger and atlantis, anywhere in a command
    and in any case, refuse it.
@@ -387,9 +403,11 @@ too. It does not catch a change that a judge makes and reverts within its own ru
   carry only allowlisted env names, and are approved by Max verbatim. The workflow script itself
   runs none of them.
 - An approved `make` target, hook or script can still do anything its code does, and the coder can
-  change that code. The allowlist only fixes the command line. That a `check_cmd` script is a
-  tracked file is not checked by the script (the workflow runs no infra step on it); the code
-  judge decides whether to run it.
+  change that code. The allowlist only fixes the command line.
+- The tracked-file and realpath checks on a `check_cmd` script are not verified by the script
+  itself: an infra agent runs the fixed check program and the script trusts its report. They hold
+  at plan time only; the coder may change the script later, and the code judge decides whether to
+  run it.
 - Obligations without a pre-push or pre-commit hook rest on the code judge's `obligations_check`
   alone. CI-only rules are caught by CI after the PR opens, not by the fleet.
 

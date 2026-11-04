@@ -42,7 +42,7 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks"];
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 18,
+  "scope-and-plan": 19,
   "plan-audit": 11,
   "fleet-test-writer": 7,
   "fleet-test-judge": 7,
@@ -94,6 +94,10 @@ const MAKE_TARGET_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 const SCRIPT_ROOTS = ["scripts", "bin", "tools", "hack", "ci"];
 const SCRIPT_BAD_SEGMENTS = [".venv", "venv", "node_modules", ".git", "__pycache__", ".tox"];
 const SCRIPT_BAD_BASENAME_RE = /^(python[0-9.]*|pip[0-9.]*|node|npm|npx|sh|bash|zsh|uv|make)$/;
+const SCRIPT_EXTENSIONS = [".py", ".sh", ".bash"];
+// test_cmd arguments after the runner: deny by default. A plain word (for
+// -k/-m expressions, -run patterns and cargo test names).
+const WORD_RE = /^[A-Za-z0-9_]+$/;
 // test_cmd tokens after the runner prefix: never one of these subcommands.
 const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
 // stop_gate values: which gate ended a stopped run (null when none applies).
@@ -427,6 +431,33 @@ print(json.dumps(out, sort_keys=True))
 // HASHER_PY_END
 
 
+// The check_cmd script check. Args: worktree, paths JSON. A path is ok when
+// git tracks it, it is a regular file and not a symlink, and its realpath
+// stays under the same top-level script root inside the worktree. It reads
+// metadata only and never runs the script. Prints {<path>: {ok, reason}}.
+// SCRIPT_CHECK_PY_BEGIN
+const SCRIPT_CHECK_PY = String.raw`
+import json, os, subprocess, sys
+wt, paths = sys.argv[1], json.loads(sys.argv[2])
+real_wt = os.path.realpath(wt)
+out = {}
+for p in paths:
+    full = os.path.join(wt, p)
+    root = os.path.join(real_wt, p.split('/')[0])
+    if os.path.islink(full):
+        out[p] = {'ok': False, 'reason': 'is a symlink'}
+    elif not os.path.isfile(full):
+        out[p] = {'ok': False, 'reason': 'not a regular file'}
+    elif not os.path.realpath(full).startswith(root + os.sep):
+        out[p] = {'ok': False, 'reason': 'resolves outside ' + p.split('/')[0] + '/'}
+    elif subprocess.run(['git', '-C', wt, 'ls-files', '--error-unmatch', '--', p], capture_output=True).returncode != 0:
+        out[p] = {'ok': False, 'reason': 'not tracked'}
+    else:
+        out[p] = {'ok': True, 'reason': 'ok'}
+print(json.dumps(out, sort_keys=True))
+`;
+// SCRIPT_CHECK_PY_END
+
 // ---------------------------------------------------------------- schemas
 
 const STR = { type: "string" };
@@ -586,6 +617,7 @@ const INFRA_SCHEMA = {
     remote_head: STR,
     push_result: { type: "string", enum: ["ok", "hook_rejected", "network", "non_ff", "remote_rejected"] },
     hook_tail: STR,
+    checks: { type: "object" },
     purged: { type: "number" },
     superseded_head: STR,
     ref_sha256: STR,
@@ -841,9 +873,12 @@ function planFactsProblem(testCmd, obligations) {
 function scriptPathProblem(path) {
   const segs = path.split("/");
   if (segs.length < 2 || SCRIPT_ROOTS.indexOf(segs[0]) < 0) return "script path must be under " + SCRIPT_ROOTS.join("/, ") + "/";
-  const bad = segs.find((x) => SCRIPT_BAD_SEGMENTS.indexOf(x) >= 0);
+  const bad = segs.find((x) => SCRIPT_BAD_SEGMENTS.indexOf(x.toLowerCase()) >= 0);
   if (bad) return "script path has a " + bad + " segment";
-  if (SCRIPT_BAD_BASENAME_RE.test(segs[segs.length - 1])) return "script path names an interpreter or package manager";
+  const base = segs[segs.length - 1];
+  if (SCRIPT_BAD_BASENAME_RE.test(base.toLowerCase())) return "script path names an interpreter or package manager";
+  const dot = base.lastIndexOf(".");
+  if (dot > 0 && SCRIPT_EXTENSIONS.indexOf(base.slice(dot)) < 0) return "script extension must be " + SCRIPT_EXTENSIONS.join(", ") + " or none";
   return null;
 }
 
@@ -859,7 +894,7 @@ function relPath(p) {
 //   make <target>
 //   [uv run [--extra <x>]] python[3] <relative/path.py> [plain args]
 //   <relative/path/to/script> [plain args]
-// Returns {ok: true} or {ok: false, reason}.
+// Returns {ok: true, script?: <relative script path>} or {ok: false, reason}.
 function parseCheckCmd(cmd) {
   const bad = (reason) => ({ ok: false, reason });
   if (typeof cmd !== "string" || !cmd.trim()) return bad("empty command");
@@ -901,11 +936,11 @@ function parseCheckCmd(cmd) {
     const path = relPath(t[i + 1]);
     if (!path || !/\.py$/.test(path)) return bad("python: only `python[3] <relative/path.py> [args]`");
     const why = scriptPathProblem(path);
-    return why ? bad(why) : { ok: true };
+    return why ? bad(why) : { ok: true, script: path };
   }
   if (i === 0 && t[0].indexOf("/") >= 0 && relPath(t[0])) {
     const why = scriptPathProblem(relPath(t[0]));
-    return why ? bad(why) : { ok: true };
+    return why ? bad(why) : { ok: true, script: relPath(t[0]) };
   }
   return bad("not an allowed command shape");
 }
@@ -917,8 +952,8 @@ function parseCheckCmd(cmd) {
 //   cargo test | go test | make test
 function testRunnerPrefix(t) {
   const is = (i, ...w) => w.indexOf(t[i]) >= 0;
-  if (is(0, "pytest")) return 1;
-  if (is(0, "python", "python3") && t[1] === "-m" && t[2] === "pytest") return 3;
+  if (is(0, "pytest")) return { n: 1, kind: "pytest" };
+  if (is(0, "python", "python3") && t[1] === "-m" && t[2] === "pytest") return { n: 3, kind: "pytest" };
   if (t[0] === "uv" && t[1] === "run") {
     let i = 2;
     for (;;) {
@@ -926,13 +961,97 @@ function testRunnerPrefix(t) {
       else if (t[i] === "--extra" && t[i + 1] && t[i + 1].charAt(0) !== "-" && t[i + 1] !== PATHS_TOKEN) i += 2;
       else break;
     }
-    return t[i] === "pytest" ? i + 1 : 0;
+    return t[i] === "pytest" ? { n: i + 1, kind: "pytest" } : null;
   }
-  if (t[0] === "npm" && t[1] === "test") return 2;
-  if (t[0] === "npm" && t[1] === "run" && /^test(:[A-Za-z0-9_.-]+)?$/.test(t[2] || "")) return 3;
-  if (t[0] === "npx" && is(1, "jest", "vitest")) return 2;
-  if (is(0, "pnpm", "yarn", "cargo", "go", "make") && t[1] === "test") return 2;
-  return 0;
+  if (t[0] === "npm" && t[1] === "test") return { n: 2, kind: "npm" };
+  if (t[0] === "npm" && t[1] === "run" && /^test(:[A-Za-z0-9_.-]+)?$/.test(t[2] || "")) return { n: 3, kind: "npm" };
+  if (t[0] === "npx" && is(1, "jest", "vitest")) return { n: 2, kind: "jest" };
+  if (is(0, "pnpm", "yarn") && t[1] === "test") return { n: 2, kind: "npm" };
+  if (is(0, "cargo", "go", "make") && t[1] === "test") return { n: 2, kind: t[0] };
+  return null;
+}
+
+// A test path argument: <paths>, or relative with no leading `/` or `-`, no
+// `..` segment, no `:` and no `=`.
+function testPathArg(x) {
+  if (x === PATHS_TOKEN) return true;
+  if (!x || x.charAt(0) === "/" || x.charAt(0) === "-" || /[:=]/.test(x)) return false;
+  return x.split("/").every((seg) => seg !== "..");
+}
+
+const PYTEST_FLAGS = ["-q", "-v", "-vv", "-x", "-s", "-n0", "-ra", "-rA", "--no-header"];
+const PYTEST_FLAG_RE = /^(-n[0-9]+|--maxfail=[0-9]+|--tb=(short|line|no|long)|--durations=[0-9]+|--timeout=[0-9]+)$/;
+
+// Arguments after the runner, per runner kind. Returns the first refused
+// token, or null.
+function testArgsProblem(kind, a) {
+  if (kind === "make") return a.length ? a[0] : null;
+  if (kind === "npm") {
+    if (!a.length) return null;
+    if (a[0] !== "--") return a[0];
+    return a.slice(1).find((x) => !testPathArg(x)) || null;
+  }
+  if (kind === "cargo") {
+    let i = 0;
+    for (; i < a.length && a[i] !== "--"; i++)
+      if (["--lib", "--tests", "--all-features", "--workspace", "-q"].indexOf(a[i]) < 0) return a[i];
+    for (i += 1; i < a.length; i++) if (!/^[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*$/.test(a[i])) return a[i];
+    return null;
+  }
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    if (kind === "pytest") {
+      if (PYTEST_FLAGS.indexOf(x) >= 0 || PYTEST_FLAG_RE.test(x)) continue;
+      if (x === "-k" || x === "-m") {
+        if (!WORD_RE.test(a[i + 1] || "")) return x + " " + (a[i + 1] || "");
+        i++;
+        continue;
+      }
+      if (x === "-p") {
+        if (!/^no:[A-Za-z0-9_.-]+$/.test(a[i + 1] || "")) return x + " " + (a[i + 1] || "");
+        i++;
+        continue;
+      }
+    } else if (kind === "go") {
+      if (["-v", "-race", "-short"].indexOf(x) >= 0 || /^-count=[0-9]+$/.test(x)) continue;
+      if (x === "-run") {
+        if (!WORD_RE.test(a[i + 1] || "")) return x + " " + (a[i + 1] || "");
+        i++;
+        continue;
+      }
+    } else if (kind === "jest") {
+      if (["--run", "--silent", "--passWithNoTests", "run"].indexOf(x) >= 0) continue;
+    }
+    if (testPathArg(x)) continue;
+    return x;
+  }
+  return null;
+}
+
+// Split a test_cmd into tokens. A double-quoted token is allowed only as the
+// expression right after -k or -m: plain words separated by single spaces
+// (so `"foo and not bar"`), standing alone between spaces. Returns
+// {tokens} or {problem}.
+function splitTestCmd(cmd) {
+  const tokens = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(cmd))) {
+    if (m[1] === undefined) {
+      tokens.push(m[2]);
+      continue;
+    }
+    const before = m.index === 0 ? " " : cmd.charAt(m.index - 1);
+    const after = re.lastIndex >= cmd.length ? " " : cmd.charAt(re.lastIndex);
+    const prev = tokens[tokens.length - 1];
+    if (!/\s/.test(before) || !/\s/.test(after) || (prev !== "-k" && prev !== "-m"))
+      return { problem: "a quoted argument is allowed only as the expression after -k or -m" };
+    if (!/^[A-Za-z0-9_]+( [A-Za-z0-9_]+)*$/.test(m[1]))
+      return { problem: "test_cmd arg " + JSON.stringify(m[0]) + " not allowed: a -k/-m expression is plain words" };
+    // the words are checked; the arg check sees one plain word for it
+    tokens.push(m[1].split(" ")[0]);
+  }
+  return { tokens };
 }
 
 // test_cmd: an allowed test runner, then flags and paths only (plain tokens,
@@ -942,17 +1061,21 @@ function testCmdProblem(tc) {
   const cmd = tc && tc.command;
   if (typeof cmd !== "string" || !cmd.trim()) return "no command";
   if (FORBIDDEN_WORD_RE.test(cmd)) return "names a forbidden tool";
-  const t = cmd.trim().split(/[ \t]+/);
+  const split = splitTestCmd(cmd.trim());
+  if (split.problem) return "test_cmd shape not allowed: " + split.problem;
+  const t = split.tokens;
   for (const x of t)
     if (x !== PATHS_TOKEN && !CMD_TOKEN_RE.test(x)) return "token " + JSON.stringify(x) + " is not plain (shell metacharacter, quote or glob)";
-  const n = testRunnerPrefix(t);
-  if (!n) return "test_cmd shape not allowed: it must start with an allowed test runner";
+  const pre = testRunnerPrefix(t);
+  if (!pre) return "test_cmd shape not allowed: it must start with an allowed test runner";
+  const n = pre.n;
   for (let i = n; i < t.length; i++) {
     const x = t[i];
     if (x.indexOf("://") >= 0) return "test_cmd shape not allowed: " + JSON.stringify(x) + " is a URL";
     if (TEST_CMD_BAD_WORDS.indexOf(x) >= 0) return "test_cmd shape not allowed: " + JSON.stringify(x) + " subcommand";
-    if (x === "-m" && t[i + 1] !== "pytest") return "test_cmd shape not allowed: -m " + JSON.stringify(t[i + 1] || null);
   }
+  const badArg = testArgsProblem(pre.kind, t.slice(n));
+  if (badArg !== null) return "test_cmd shape not allowed: test_cmd arg " + JSON.stringify(badArg) + " not allowed";
   const env = tc.env === undefined || tc.env === null ? {} : tc.env;
   if (typeof env !== "object" || Array.isArray(env)) return "env must be an object";
   for (const k of Object.keys(env)) {
@@ -1540,6 +1663,17 @@ async function purgeBytecode(label, worktree, phaseName) {
   return r;
 }
 
+function checkScriptsPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: check check_cmd script paths. READ ONLY: no edits, no commits; run nothing but the one command below. Never run a script.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run `run` exactly as written, unmodified, as one Bash call in the foreground. It prints one JSON object {<path>: {ok, reason}}. Copy it unchanged as `checks`. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, checks}."
+  );
+}
+
 function pushPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: push the approved fleet branch. No edits, no commits.\n" +
@@ -1973,8 +2107,8 @@ function testableOf(criteria) {
 // A check_cmd outside the allowlist is never offered to any role: it is kept
 // as check_cmd_rejected (with the reason) and the code judge rules on the
 // obligation from the diff alone.
-function screenCheckCmds(obligations) {
-  return obligations.map((o) => {
+async function screenCheckCmds(obligations, worktree, phaseName, sfx) {
+  const out = obligations.map((o) => {
     if (typeof o.check_cmd !== "string" || !o.check_cmd.trim()) {
       const d = Object.assign({}, o);
       if (d.check_cmd !== undefined) delete d.check_cmd;
@@ -1984,6 +2118,29 @@ function screenCheckCmds(obligations) {
     if (pc.ok) return o;
     gate(o.id + " check_cmd refused (judge-only): " + pc.reason + ": " + JSON.stringify(o.check_cmd));
     return demote(o, pc.reason);
+  });
+  // a script must be a tracked regular file whose realpath stays under its root
+  const paths = [];
+  for (const o of out) {
+    const sp = typeof o.check_cmd === "string" ? parseCheckCmd(o.check_cmd).script : null;
+    if (sp && paths.indexOf(sp) < 0) paths.push(sp);
+  }
+  if (!paths.length) return out;
+  const r = await infra(
+    "infra:check-scripts" + (sfx || ""),
+    checkScriptsPrompt({ worktree, paths, run: "python3 -I -c " + shQuote(SCRIPT_CHECK_PY) + " " + shQuote(worktree) + " " + shQuote(JSON.stringify(paths)) }),
+    phaseName,
+    JUDGE_AGENT,
+  );
+  const checks = r.checks && typeof r.checks === "object" ? r.checks : {};
+  return out.map((o) => {
+    const sp = typeof o.check_cmd === "string" ? parseCheckCmd(o.check_cmd).script : null;
+    if (!sp) return o;
+    const c = checks[sp];
+    if (c && c.ok === true) return o;
+    const why = "script check failed: " + (c && c.reason ? c.reason : "no result for " + sp);
+    gate(o.id + " check_cmd refused (judge-only): " + why + ": " + JSON.stringify(o.check_cmd));
+    return demote(o, why);
   });
 }
 
@@ -2014,7 +2171,7 @@ async function planAndAudit(ctx) {
   if (factsProblem) halt("needs_human", factsProblem.msg, factsProblem.gate);
   const tcProblem = testCmdProblem(plan.test_cmd);
   if (tcProblem) halt("needs_human", "test_cmd refused: " + tcProblem + ": " + JSON.stringify(plan.test_cmd.command), "commands");
-  const obligations = screenCheckCmds(plan.repo_obligations);
+  const obligations = await screenCheckCmds(plan.repo_obligations, ctx.common.worktree, "Plan", sfx);
   const planPath = normPath(plan.plan_path);
   if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
     halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");

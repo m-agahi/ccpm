@@ -62,7 +62,7 @@ function inputsOf(prompt) {
 
 // The minimum role versions the workflow was built against.
 const FROZEN_VERSIONS = {
-  "scope-and-plan": 18,
+  "scope-and-plan": 19,
   "plan-audit": 11,
   "fleet-test-writer": 7,
   "fleet-test-judge": 7,
@@ -3255,8 +3255,8 @@ test("a stale-bytecode suspicious entry after the coder rejects the round", asyn
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-test("role versions: scope-and-plan 18, coder 11 and code-judge 10 are the minimums", async () => {
-  for (const [role, v] of [["scope-and-plan", 17], ["fleet-coder", 10], ["fleet-code-judge", 9]]) {
+test("role versions: scope-and-plan 19, coder 11 and code-judge 10 are the minimums", async () => {
+  for (const [role, v] of [["scope-and-plan", 18], ["fleet-coder", 10], ["fleet-code-judge", 9]]) {
     const s = happy();
     s.preflight.versions[role] = v;
     const out = await runOne(s, ARGS);
@@ -3290,7 +3290,17 @@ function withObligations(obs, over) {
   s["role:scope-and-plan"].repo_obligations = obs;
   s["role:scope-and-plan"].test_cmd = TEST_CMD;
   s["role:fleet-code-judge:r1"].obligations_check = obs.map((o) => ({ id: o.id, met: true, evidence: "diff" }));
+  s["infra:check-scripts"] = checkScriptsAll({});
   return s;
+}
+
+// Plan-time script check stub: every path passes unless named in fail.
+function checkScriptsAll(fail) {
+  return (prompt) => {
+    const checks = {};
+    for (const path of inputsOf(prompt).paths) checks[path] = fail[path] ? { ok: false, reason: fail[path] } : { ok: true, reason: "ok" };
+    return { status: "ok", reason: "checked", checks };
+  };
 }
 
 // Scripts a second code round that passes and pushes.
@@ -3812,4 +3822,187 @@ test("2.0.3 build re-checks the sealed commands: a disallowed check_cmd or test_
   assert.match(badT.result.reason, /test_cmd refused/);
   const noCmds = await buildFrom(priorRef(PLAN_MD, { plan_facts: { allowed_additions: null, est_diff_lines: 10, test_cmd: TEST_CMD, repo_obligations: [] } }));
   assert.match(noCmds.result.reason, /plan_ref predates 2\.0\.3/);
+});
+
+// ---------------------------------------------------------------- 2.0.4: deny-by-default test args, script path checks
+
+test("2.0.4 test_cmd args are deny-by-default per runner", async () => {
+  for (const command of [
+    "pytest -p pytest_cov <paths>",
+    "pytest -c other.ini <paths>",
+    "pytest --rootdir=/ <paths>",
+    "pytest --rootdir x <paths>",
+    "pytest --basetemp=x <paths>",
+    "pytest --config x <paths>",
+    "pytest --tb=auto <paths>",
+    "pytest -k a.b <paths>",
+    "pytest /abs/tests",
+    "pytest ../outside",
+    "pytest tests/a.py:3",
+    "pytest x=1",
+    "go test -exec x ./...",
+    "go test -toolexec x ./...",
+    "go test -run a.b ./...",
+    "go test -count=x ./...",
+    "cargo test --manifest-path x",
+    "cargo test --features x",
+    "cargo test -- a.b",
+    "npm test x",
+    "npm test -- --watch",
+    "yarn test --coverage",
+    "npx jest --config x",
+    "npx vitest --root x",
+    "make test -f other.mk",
+    "make -C x test",
+    "make test VAR=x",
+    "make test x",
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", command);
+    assert.match(out.result.reason, /not allowed/, command);
+    assert.equal(out.result.stop_gate, "commands", command);
+    assert.ok(!out.labels.includes("role:plan-audit"), command);
+  }
+  for (const command of [
+    "pytest -q -v -vv -x -s -n4 -n0 --maxfail=2 -k slow -m unit -p no:randomly --tb=short -ra -rA --no-header --durations=5 --timeout=30 <paths>",
+    "pytest -k not <paths>",
+    "go test -run TestX -count=1 -v -race -short ./...",
+    "cargo test --lib --tests --all-features --workspace -q -- parser::tests round_trip",
+    "npm test",
+    "npm test -- <paths>",
+    "pnpm test -- tests/a.test.ts",
+    "npx jest --silent --passWithNoTests <paths>",
+    "npx vitest --run tests/x.test.ts",
+    "make test",
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "awaiting_confirmation", command + " " + out.result.reason);
+  }
+});
+
+test("2.0.4 check_cmd script path: case-folded segments, extension allowlist", async () => {
+  for (const cmd of ["scripts/.VENV/bin/check", "tools/Node_Modules/x", "bin/check.rb", "scripts/x.js", "hack/run.exe", "ci/check.PY"]) {
+    const s = withObligations([Object.assign({}, OB_BUMP, { check_cmd: cmd })]);
+    const out = await runOne(s, ARGS);
+    noUnscripted(out);
+    const ob = JSON.parse(s.__store[PC]).plan_facts.repo_obligations[0];
+    assert.ok(!("check_cmd" in ob), cmd);
+    assert.ok(out.logs.some((l) => /OB1 check_cmd refused \(judge-only\)/.test(l)), cmd);
+  }
+  for (const cmd of ["scripts/check.sh", "bin/check.bash", "bin/check-version", "tools/x.py"]) {
+    const s = withObligations([Object.assign({}, OB_BUMP, { check_cmd: cmd })]);
+    await runOne(s, ARGS);
+    assert.equal(JSON.parse(s.__store[PC]).plan_facts.repo_obligations[0].check_cmd, cmd);
+  }
+});
+
+test("2.0.4 plan-time script check: realpath, regular file, tracked; a failure is judge-only", async () => {
+  const s = withObligations([OB_BUMP, Object.assign({}, OB_LOG, { check_cmd: "pre-commit run check-changelog" })]);
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  const c = call(out, "infra:check-scripts");
+  assert.equal(c.opts.agentType, "fleet:judge");
+  const ci = inputsOf(c.prompt);
+  assert.deepEqual(ci.paths, ["scripts/check_version_bump.py"]);
+  assert.match(ci.run, /^python3 -I -c /);
+  assert.ok(out.labels.indexOf("infra:check-scripts") < out.labels.indexOf("role:plan-audit"));
+  // no script path -> no step
+  const n = withObligations([Object.assign({}, OB_LOG, { check_cmd: "make check" })]);
+  assert.ok(!(await runOne(n, ARGS)).labels.includes("infra:check-scripts"));
+  // a failed or missing check is judge-only
+  for (const stub of [checkScriptsAll({ "scripts/check_version_bump.py": "symlink" }), { status: "ok", reason: "x", checks: {} }]) {
+    const f = withObligations([OB_BUMP]);
+    f["infra:check-scripts"] = stub;
+    const outF = await runOne(f, ARGS);
+    noUnscripted(outF);
+    const ob = JSON.parse(f.__store[PC]).plan_facts.repo_obligations[0];
+    assert.ok(!("check_cmd" in ob));
+    assert.match(ob.check_rejected_reason, /script check failed/);
+    assert.ok(outF.logs.some((l) => /OB1 check_cmd refused \(judge-only\): script check failed/.test(l)));
+  }
+});
+
+function scriptCheckPy() {
+  const m = /SCRIPT_CHECK_PY_BEGIN\n([\s\S]*?)\n\/\/ SCRIPT_CHECK_PY_END/.exec(SOURCE);
+  assert.ok(m, "SCRIPT_CHECK_PY markers present");
+  return m[1].replace(/^const SCRIPT_CHECK_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
+}
+
+test("script check program: regular tracked file whose realpath stays under its root", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-scriptcheck-"));
+  const outside = mkdtempSync(join(tmpdir(), "fleet-outside-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@t");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "mkdir", "-p", "scripts", "tools", "bin");
+    writeFileSync(join(wt, "scripts/ok.py"), "print(1)\n");
+    writeFileSync(join(wt, "tools/real.sh"), "true\n");
+    writeFileSync(join(outside, "evil.sh"), "true\n");
+    sh(wt, "ln", "-s", "ok.py", "scripts/link.py");
+    sh(wt, "ln", "-s", "../tools/real.sh", "scripts/cross.sh");
+    sh(wt, "ln", "-s", outside, "bin/out");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "init");
+    writeFileSync(join(wt, "scripts/new.py"), "print(2)\n");
+    const paths = ["scripts/ok.py", "scripts/link.py", "scripts/cross.sh", "bin/out/evil.sh", "scripts/new.py", "scripts/missing.py"];
+    const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify(paths)], { input: scriptCheckPy(), encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.deepEqual(
+      Object.fromEntries(paths.map((x) => [x, out[x].ok])),
+      { "scripts/ok.py": true, "scripts/link.py": false, "scripts/cross.sh": false, "bin/out/evil.sh": false, "scripts/new.py": false, "scripts/missing.py": false },
+    );
+    assert.match(out["scripts/new.py"].reason, /not tracked/);
+    assert.match(out["bin/out/evil.sh"].reason, /outside/);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("2.0.4 coordinator cases: rejected and accepted test_cmd args", async () => {
+  for (const command of [
+    "pytest -p evil",
+    "pytest -c x.ini",
+    "pytest --rootdir /",
+    "pytest --basetemp /tmp",
+    "go test -exec sh ./...",
+    "go test -toolexec x ./...",
+    "cargo test --manifest-path x",
+    "make test -f x",
+    "make test VAR=1",
+    "npm test -- --config x",
+    "pytest ../x",
+    'pytest -k "a;b"',
+    'pytest -k "a" -m "b c"x',
+    'pytest "tests/a.py"',
+    'pytest -k ""',
+    "pytest -k 'a'",
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", command);
+    assert.equal(out.result.stop_gate, "commands", command);
+  }
+  for (const command of [
+    "uv run --extra test pytest <paths> -n0",
+    "pytest -q -x tests/unit",
+    'pytest -p no:cacheprovider -k "foo and not bar"',
+    'pytest -m "unit or smoke" <paths>',
+    "go test -race ./...",
+    "cargo test --lib -- my_test",
+    "npm test",
+    "make test",
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "awaiting_confirmation", command + " " + out.result.reason);
+  }
 });
