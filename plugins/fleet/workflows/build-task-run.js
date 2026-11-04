@@ -42,12 +42,12 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks"];
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 13,
-  "plan-audit": 10,
-  "fleet-test-writer": 6,
-  "fleet-test-judge": 6,
-  "fleet-coder": 9,
-  "fleet-code-judge": 8,
+  "scope-and-plan": 14,
+  "plan-audit": 11,
+  "fleet-test-writer": 7,
+  "fleet-test-judge": 7,
+  "fleet-coder": 10,
+  "fleet-code-judge": 9,
   "fleet-pr-opener": 5,
 };
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
@@ -59,12 +59,12 @@ const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
 // also have that JS type (null only where the schema allows it); a wrong type
 // is contract drift too ("contract drift: <role> <key> type").
 const REQUIRED_ON_OK = {
-  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff"],
+  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff", "repo_obligations", "test_cmd"],
   "plan-audit": ["verdict", "routed_findings"],
   "fleet-test-writer": ["criterion_id", "tests", "commit"],
   "fleet-test-judge": ["verdict", "routed_findings", "checked"],
-  "fleet-coder": ["commits", "suite_result", "added_symbols", "frozen_tests_red_at_start"],
-  "fleet-code-judge": ["verdict", "routed_findings", "suite_result", "hash_check", "gates_not_run"],
+  "fleet-coder": ["commits", "suite_result", "added_symbols", "frozen_tests_red_at_start", "obligations_done"],
+  "fleet-code-judge": ["verdict", "routed_findings", "suite_result", "hash_check", "gates_not_run", "obligations_check"],
   "fleet-pr-opener": ["pr_url", "pr_number", "created", "template_used", "gates_not_run_stated"],
 };
 const VERDICTS = {
@@ -73,6 +73,14 @@ const VERDICTS = {
   "fleet-code-judge": ["approve", "fix_code", "fix_tests", "plan_wrong"],
 };
 const GATES_PREFIX = "approved with gates not run:";
+// Repo obligations (2.0.3): push and CI rules the plan names for the coder.
+const OBLIGATION_KINDS = ["version_bump", "changelog", "docs", "generated", "other"];
+// A check_cmd runs in the fleet worktree after the coder. One that pushes or
+// runs terraform (or a terraform bot) is refused, whatever the plan says.
+const FORBIDDEN_CHECK_RE = /\bgit\b[^\n;&|]*\bpush\b|\b(terraform|tofu|tfp|digger|atlantis)\b/i;
+const CHECK_TIMEOUT_S = 300;
+// stop_gate values: which gate ended a stopped run (null when none applies).
+const STOP_GATES = ["hash", "fingerprint", "obligations", "contract", "role", "cap"];
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 const MAX_AGENTS = 60;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
@@ -451,6 +459,26 @@ const SCHEMAS = {
     },
     est_diff_lines: { type: "number" },
     new_behaviour: { type: "boolean" },
+    repo_obligations: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: STR,
+          kind: { type: "string", enum: OBLIGATION_KINDS },
+          rule_source: STR,
+          files: { type: "array", items: STR },
+          instruction: STR,
+          check_cmd: STR_OR_NULL,
+        },
+        required: ["id", "kind", "instruction"],
+      },
+    },
+    test_cmd: {
+      type: "object",
+      properties: { command: STR, paths_placeholder: STR, env: { type: "object" }, tools: { type: "array", items: STR } },
+      required: ["command"],
+    },
     tldr: STR,
     plan_diff: { type: "array", items: STR },
     fleet_estimate: {
@@ -479,6 +507,7 @@ const SCHEMAS = {
     frozen_tests_red_at_start: { type: "boolean" },
     suite_result: SUITE,
     addressed_findings: { type: "array", items: ANY_ITEM },
+    obligations_done: { type: "array", items: ANY_ITEM },
   }),
   "fleet-code-judge": roleSchema({
     verdict: { type: "string", enum: ["approve", "fix_code", "fix_tests", "plan_wrong"] },
@@ -488,6 +517,10 @@ const SCHEMAS = {
     gates_not_run: {
       type: "array",
       items: { type: "object", properties: { gate: STR, reason: STR }, required: ["gate"] },
+    },
+    obligations_check: {
+      type: "array",
+      items: { type: "object", properties: { id: STR, met: { type: "boolean" }, evidence: STR }, required: ["id", "met"] },
     },
   }),
   "fleet-pr-opener": roleSchema({
@@ -602,6 +635,23 @@ const HASHER_SCHEMA = {
         git: { type: "object", additionalProperties: STR },
         symlinks: { type: "object", additionalProperties: STR },
         suspicious: { type: "array", items: STR },
+      },
+    },
+  },
+};
+
+const OBLIGATIONS_SCHEMA = {
+  type: "object",
+  required: ["status", "reason"],
+  properties: {
+    status: { type: "string", enum: ["ok", "needs_human", "failed"] },
+    reason: STR,
+    results: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { id: STR, exit_code: { type: ["integer", "null"] }, tail: STR },
+        required: ["id"],
       },
     },
   },
@@ -756,6 +806,84 @@ function sameFingerprint(a, b) {
     a.status_sha256 === b.status_sha256 &&
     a.diff_sha256 === b.diff_sha256
   );
+}
+
+// test_cmd and repo_obligations from the planner (or a loaded ref).
+// Returns {msg, gate} or null. Types are checked by checkRole first; this
+// checks the shape the coder, the judges and the obligations step rely on.
+function planFactsProblem(testCmd, obligations) {
+  const drift = (m) => ({ msg: "role scope-and-plan contract drift: scope-and-plan " + m, gate: "contract" });
+  if (!testCmd || typeof testCmd !== "object" || Array.isArray(testCmd)) return drift("test_cmd type: got " + jsType(testCmd));
+  if (typeof testCmd.command !== "string" || !testCmd.command.trim())
+    return drift("test_cmd.command must be a non-empty string");
+  if (!Array.isArray(obligations)) return drift("repo_obligations type: got " + jsType(obligations));
+  const seen = {};
+  for (const o of obligations) {
+    if (!o || typeof o !== "object" || Array.isArray(o)) return drift("repo_obligations: an entry is not an object");
+    if (typeof o.id !== "string" || !o.id.trim()) return drift("repo_obligations: an entry has no id");
+    if (seen[o.id]) return drift("repo_obligations: duplicate id " + o.id);
+    seen[o.id] = true;
+    if (OBLIGATION_KINDS.indexOf(o.kind) < 0) return drift("repo_obligations: " + o.id + " kind " + JSON.stringify(o.kind));
+    if (typeof o.instruction !== "string") return drift("repo_obligations: " + o.id + " has no instruction");
+    if (o.files !== undefined && (!Array.isArray(o.files) || !o.files.every((f) => typeof f === "string")))
+      return drift("repo_obligations: " + o.id + " files must be an array of strings");
+    if (o.check_cmd !== undefined && o.check_cmd !== null && typeof o.check_cmd !== "string")
+      return drift("repo_obligations: " + o.id + " check_cmd must be a string");
+    if (typeof o.check_cmd === "string" && FORBIDDEN_CHECK_RE.test(o.check_cmd))
+      return {
+        msg: "repo obligation " + o.id + " check_cmd refused (pushes or runs terraform/tofu/tfp/digger/atlantis): " + JSON.stringify(o.check_cmd),
+        gate: "obligations",
+      };
+  }
+  return null;
+}
+
+function checkedObligations(obligations) {
+  return (obligations || []).filter((o) => typeof o.check_cmd === "string" && o.check_cmd.trim());
+}
+
+// The exact command the obligations step runs for one check_cmd: in the
+// worktree, with the test env, time-boxed.
+function obligationRunCmd(worktree, env, checkCmd) {
+  const envs = Object.keys(env)
+    .sort()
+    .map((k) => k + "=" + shQuote(env[k]))
+    .join(" ");
+  return "cd " + shQuote(worktree) + " && " + envs + " timeout " + CHECK_TIMEOUT_S + " bash -c " + shQuote(checkCmd);
+}
+
+// One result per check_cmd obligation, in plan order. A missing result or a
+// non-integer exit code stays in the list with exit_code null (fail closed).
+function obligationResults(checked, results) {
+  const byId = {};
+  for (const x of Array.isArray(results) ? results : []) if (x && typeof x.id === "string" && !(x.id in byId)) byId[x.id] = x;
+  return checked.map((o) => {
+    const x = byId[o.id];
+    if (!x) return { id: o.id, exit_code: null, tail: "no result returned for this check_cmd" };
+    return { id: o.id, exit_code: Number.isInteger(x.exit_code) ? x.exit_code : null, tail: typeof x.tail === "string" ? x.tail : "" };
+  });
+}
+
+// The script gate on a code-judge approve: every check_cmd exits 0 and every
+// obligation is met:true in obligations_check. Returns routed code findings.
+function obligationFailures(obligations, results, check) {
+  const out = [];
+  for (const r of results)
+    if (r.exit_code !== 0)
+      out.push(
+        r.id + ": check_cmd " + (r.exit_code === null ? "gave no usable exit code" : "exited " + r.exit_code) +
+          (r.tail ? ": " + r.tail : "") + " -- satisfy the obligation in production commits",
+      );
+  const list = Array.isArray(check) ? check : [];
+  for (const o of obligations || []) {
+    const e = list.find((x) => x && x.id === o.id);
+    if (!e || e.met !== true)
+      out.push(
+        o.id + ": code-judge did not confirm the obligation met" + (e && e.evidence ? " (" + e.evidence + ")" : "") +
+          " -- " + String(o.instruction || ""),
+      );
+  }
+  return out.map((f) => ({ target: "code", criterion: null, finding: f }));
 }
 
 function shQuote(s) {
@@ -1279,6 +1407,18 @@ async function purgeBytecode(label, worktree, phaseName) {
   return r;
 }
 
+function obligationsPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: run each repo obligation's check command, READ ONLY. No edits, no commits, no stash, no push. Never change a file, a git setting or a command to make a check pass.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "For each entry of `obligations` (id, run), in order: run `run` exactly as written, unmodified, as one Bash call in the foreground with timeout 600000 ms, stdout and stderr redirected to a temp file OUTSIDE <main_worktree>; then `echo $?`. " +
+    "exit_code = that exit status (an integer). tail = the last 20 lines of the temp file. Delete the temp file. Never run anything else in <main_worktree>, never retry a check with changes.\n" +
+    "Return {status: \"ok\", reason, results: [{id, exit_code, tail}]}, one result per entry."
+  );
+}
+
 function pushPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: push the approved fleet branch. No edits, no commits.\n" +
@@ -1369,6 +1509,7 @@ const state = {
   models: {},
   roleVersions: {},
   refreezeLog: [],
+  stopGate: null,
 };
 
 function gate(msg) {
@@ -1376,7 +1517,9 @@ function gate(msg) {
   log(msg);
 }
 
-function halt(status, msg) {
+// stopGate: the gate that ended the run (one of STOP_GATES), or omitted.
+function halt(status, msg, stopGate) {
+  state.stopGate = STOP_GATES.indexOf(stopGate) >= 0 ? stopGate : null;
   gate(msg);
   stop(status, msg);
 }
@@ -1386,6 +1529,7 @@ function reserve(n, what) {
     halt(
       "needs_human",
       "agent cap " + MAX_AGENTS + " reached: " + state.agents + " dispatched, " + n + " more needed for " + what,
+      "cap",
     );
 }
 
@@ -1432,39 +1576,51 @@ function collect(role, r) {
     state.findings.push({ role, findings: r.yadgar_findings });
 }
 
-async function callRole(role, label, inputs, phaseName, agentType) {
+// deferCheck: the caller runs its script gates (hash, fingerprint) first and
+// calls checkRole after them, so a gate violation is reported before drift.
+async function callRole(role, label, inputs, phaseName, agentType, deferCheck) {
   const opts = { schema: SCHEMAS[role], phase: phaseName };
   if (agentType) opts.agentType = agentType;
   reserve(1, label);
   state.agents++;
   const r = await roleAgent(role, label, rolePrompt(role, inputs), opts);
   if (r == null) halt("failed", "agent " + label + " returned no result");
+  if (deferCheck) return r;
   checkRole(role, r);
   collect(role, r);
   return r;
 }
 
-// Contract checks on every role result: the runner loaded the same version
-// and contract marker that preflight saw, and an ok result carries every
-// required key and a known verdict.
-function checkRole(role, r) {
+// Contract checks on a role result, as a message (null when clean): the
+// runner loaded the same version and contract marker that preflight saw, and
+// an ok result carries every required key and a known verdict.
+function contractProblem(role, r) {
   if (r.role_version !== state.roleVersions[role])
-    halt(
-      "needs_human",
-      "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded",
-    );
+    return "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded";
   const c = contractOf(r.role_contract);
-  if (c !== CONTRACT)
-    halt("needs_human", "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded");
-  if (r.status !== "ok") return r;
+  if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded";
+  if (r.status !== "ok") return null;
   for (const k of REQUIRED_ON_OK[role] || []) {
-    if (!(k in r)) halt("needs_human", "role " + role + " contract drift: missing " + k);
+    if (!(k in r)) return "role " + role + " contract drift: missing " + k;
     if (!typeMatches(SCHEMAS[role] && SCHEMAS[role].properties[k], r[k]))
-      halt("needs_human", "contract drift: " + role + " " + k + " type: got " + jsType(r[k]));
+      return "contract drift: " + role + " " + k + " type: got " + jsType(r[k]);
   }
-  if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0)
-    halt("needs_human", "contract drift: " + role + " verdict " + r.verdict);
-  return r;
+  if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0) return "contract drift: " + role + " verdict " + r.verdict;
+  return null;
+}
+
+// A role's own needs_human/failed reason wins over contract drift; drift is
+// reported only when the role says ok.
+function roleStatusText(role, r) {
+  return role + " returned " + r.status + ": " + (r.reason || "no reason");
+}
+
+function checkRole(role, r) {
+  const drift = contractProblem(role, r);
+  if (!drift) return r;
+  if (r.status === "failed" || r.status === "needs_human")
+    halt(r.status, roleStatusText(role, r) + " (also: " + drift + ")", "role");
+  halt("needs_human", drift, "contract");
 }
 
 function jsType(v) {
@@ -1483,7 +1639,7 @@ function typeMatches(prop, v) {
 
 function requireOk(who, r) {
   if (r.status === "ok") return r;
-  halt(r.status === "failed" ? "failed" : "needs_human", who + " returned " + r.status + ": " + (r.reason || "no reason"));
+  halt(r.status === "failed" ? "failed" : "needs_human", who + " returned " + r.status + ": " + (r.reason || "no reason"), "role");
 }
 
 async function hasher(label, worktree, mode, testFiles, phaseName) {
@@ -1513,13 +1669,16 @@ async function infra(label, prompt, phaseName, agentType) {
 async function judged(role, label, roundTag, inputs, worktree, phaseName, preFp) {
   const before =
     preFp || (await hasher("hasher:fp-pre:" + roundTag, worktree, "fingerprint", [], phaseName)).fingerprint;
-  const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT);
+  const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT, true);
   const after = (await hasher("hasher:fp-post:" + roundTag, worktree, "fingerprint", [], phaseName)).fingerprint;
   if (!sameFingerprint(before, after))
     halt(
       "needs_human",
       "judge mutated worktree: " + role + " (" + label + ") changed HEAD, status or diff; verdict discarded",
+      "fingerprint",
     );
+  checkRole(role, r);
+  collect(role, r);
   requireOk(role, r);
   return { r, fp: after };
 }
@@ -1536,6 +1695,7 @@ function finish(status, reason) {
     rounds: { tests: state.rounds.tests, code: state.rounds.code },
     agents: state.agents,
     gates_not_run: state.gatesNotRun,
+    stop_gate: status === "ok" || status === "awaiting_confirmation" ? null : state.stopGate,
     role_versions: state.roleVersions,
     refreeze_log: state.refreezeLog,
     gate_log: state.gateLog,
@@ -1576,12 +1736,12 @@ async function preflightStep() {
     const got = versions[role];
     const want = EXPECTED_VERSIONS[role];
     if (typeof got !== "number")
-      halt("needs_human", "role " + role + " version missing in preflight (frozen minimum " + want + ")");
-    if (got < want) halt("needs_human", "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back)");
+      halt("needs_human", "role " + role + " version missing in preflight (frozen minimum " + want + ")", "contract");
+    if (got < want) halt("needs_human", "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back)", "contract");
     if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");
     state.roleVersions[role] = got;
     const c = contractOf(contracts[role]);
-    if (c !== CONTRACT) halt("needs_human", "role " + role + " contract " + c + " != " + CONTRACT);
+    if (c !== CONTRACT) halt("needs_human", "role " + role + " contract " + c + " != " + CONTRACT, "contract");
   }
   const dispatchLines = pre.dispatch || {};
   for (const role of ROLES) {
@@ -1702,9 +1862,11 @@ async function planAndAudit(ctx) {
   if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
     halt("failed", "scope-and-plan returned no plan_path/criteria");
   if (!Array.isArray(plan.plan_diff) || !plan.plan_diff.length || !plan.plan_diff.every((x) => typeof x === "string"))
-    halt("needs_human", "role scope-and-plan contract drift: plan_diff must be a non-empty array of strings");
+    halt("needs_human", "role scope-and-plan contract drift: plan_diff must be a non-empty array of strings", "contract");
   if (typeof plan.tldr !== "string" || !plan.tldr.trim())
-    halt("needs_human", "role scope-and-plan contract drift: tldr must be a non-empty string");
+    halt("needs_human", "role scope-and-plan contract drift: tldr must be a non-empty string", "contract");
+  const factsProblem = planFactsProblem(plan.test_cmd, plan.repo_obligations);
+  if (factsProblem) halt("needs_human", factsProblem.msg, factsProblem.gate);
   const planPath = normPath(plan.plan_path);
   if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
     halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
@@ -1712,7 +1874,13 @@ async function planAndAudit(ctx) {
   const planFacts = {
     allowed_additions: plan.allowed_additions ? stripHeldOut(plan.allowed_additions) : null,
     est_diff_lines: typeof plan.est_diff_lines === "number" ? plan.est_diff_lines : null,
+    test_cmd: stripHeldOut(plan.test_cmd),
+    repo_obligations: stripHeldOut(plan.repo_obligations),
   };
+  gate(
+    "plan: test_cmd " + JSON.stringify(plan.test_cmd.command) + ", " + plan.repo_obligations.length + " repo obligation(s)" +
+      (plan.repo_obligations.length ? " (" + plan.repo_obligations.map((o) => o.id + ":" + o.kind).join(", ") + ")" : ""),
+  );
   if (Array.isArray(plan[HELD_OUT_KEY]) || plan.criteria.some((c) => c && c[HELD_OUT_KEY]))
     gate("planner emitted held_out_examples: dropped, never returned or forwarded");
   gate("plan: " + planPath + ", " + criteria.length + " criteria, test files disjoint");
@@ -1752,6 +1920,7 @@ async function planAndAudit(ctx) {
     halt(
       audit.verdict ? "needs_human" : "failed",
       "plan-audit verdict " + (audit.verdict || "missing") + (first.length ? ": " + first.join("; ") : ""),
+      "role",
     );
   }
   gate("plan-audit: approve");
@@ -2011,6 +2180,11 @@ async function buildMode(input, date) {
   if (lp) halt("needs_human", "ref file " + tiny.ref_path + ": " + lp);
   if (loaded.branch !== tiny.branch || cleanRepo(loaded.brief.repo) !== repo || refPathFor(loaded.task_id) !== tiny.ref_path)
     halt("needs_human", "ref file " + tiny.ref_path + " does not match plan_ref (branch, repo or task id)");
+  const pf = loaded.plan_facts;
+  if (!pf || typeof pf !== "object" || !("test_cmd" in pf) || !("repo_obligations" in pf))
+    halt("needs_human", "plan_ref predates 2.0.3; re-run plan (" + tiny.ref_path + " has no plan_facts.test_cmd/repo_obligations)");
+  const refFacts = planFactsProblem(pf.test_cmd, pf.repo_obligations);
+  if (refFacts) halt("needs_human", "ref file " + tiny.ref_path + ": " + refFacts.msg, refFacts.gate);
   const ref = Object.assign({}, loaded, { plan_commit: tiny.plan_commit, ref_path: tiny.ref_path });
   const brief = cleanBrief(ref.brief);
   const names = { taskId: ref.task_id, slug: ref.slug };
@@ -2054,9 +2228,12 @@ async function buildMode(input, date) {
   const common = { project, worktree: mainWt, branch, default_branch: defaultBranch, scratch_dir: lay.scratch };
   const planCtx = { plan_path: ref.plan_path };
   const planFacts = {
-    allowed_additions: ref.plan_facts ? ref.plan_facts.allowed_additions : null,
-    est_diff_lines: ref.plan_facts && typeof ref.plan_facts.est_diff_lines === "number" ? ref.plan_facts.est_diff_lines : null,
+    allowed_additions: ref.plan_facts.allowed_additions,
+    est_diff_lines: typeof ref.plan_facts.est_diff_lines === "number" ? ref.plan_facts.est_diff_lines : null,
+    test_cmd: ref.plan_facts.test_cmd,
+    repo_obligations: ref.plan_facts.repo_obligations,
   };
+  const checked = checkedObligations(planFacts.repo_obligations);
   state.path = "full";
   const testable = testableOf(criteria);
 
@@ -2122,6 +2299,7 @@ async function buildMode(input, date) {
                 Object.assign({}, common, planCtx, {
                   criterion: writerCriterion(c),
                   test_files: c.test_files,
+                  test_cmd: planFacts.test_cmd,
                   worktree: wt.path,
                   branch: wt.branch,
                   routed_findings: p.findings,
@@ -2185,6 +2363,7 @@ async function buildMode(input, date) {
         halt(
           "needs_human",
           "test-judge raised a plan finding: " + planF.map((f) => (f.criterion || "-") + ": " + f.finding).join("; "),
+          "role",
         );
       if (tj.verdict === "approve") {
         gate("test-judge r" + n + ": approve");
@@ -2198,7 +2377,7 @@ async function buildMode(input, date) {
       if (!pending.length) halt("needs_human", "test-judge revise r" + n + " routed no finding to a known criterion");
       gate("test-judge r" + n + ": revise -> " + pending.map((p) => p.criterion.id).join(", "));
     }
-    halt("needs_human", "test rounds exhausted (" + MAX_TEST_ROUNDS + ") without test-judge approval");
+    halt("needs_human", "test rounds exhausted (" + MAX_TEST_ROUNDS + ") without test-judge approval", "cap");
   }
 
   // freeze
@@ -2220,12 +2399,13 @@ async function buildMode(input, date) {
     await purgeBytecode("infra:purge-bytecode:freeze-f" + freezes, mainWt, "Freeze");
     const h = await hasher("hasher:freeze:f" + freezes, mainWt, "hashes", hashedFiles, "Freeze");
     if (lastJudgeFp && !sameFingerprint(lastJudgeFp, h.fingerprint))
-      halt("needs_human", "worktree changed between test approval and freeze");
+      halt("needs_human", "worktree changed between test approval and freeze", "fingerprint");
     if (h.hashes.suspicious.length)
       halt(
         "needs_human",
         "suspicious paths in the worktree at freeze (':' or '#' in a name, or runner config in a skipped cache dir): " +
           h.hashes.suspicious.join(", "),
+        "hash",
       );
     if (refreeze && frozen) {
       const allowed = {};
@@ -2242,7 +2422,7 @@ async function buildMode(input, date) {
           const after = k in b ? b[k] : null;
           if (before === after) continue;
           const name = keyName(m, k);
-          if (m !== "files" || !allowed[k]) halt("needs_human", "re-freeze touched unrouted path " + name);
+          if (m !== "files" || !allowed[k]) halt("needs_human", "re-freeze touched unrouted path " + name, "hash");
           changed.push({ path: name, before, after });
         }
       }
@@ -2275,12 +2455,20 @@ async function buildMode(input, date) {
   let coderFindings = [];
   let approvedSha = null;
   let approval = null;
+  // the script gate that rejected the last code round, for the cap message
+  let lastRoundGate = null;
   for (;;) {
     if (state.rounds.code >= MAX_CODE_ROUNDS)
-      halt("needs_human", "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval");
+      halt(
+        "needs_human",
+        "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval" +
+          (lastRoundGate ? "; last round rejected by the " + lastRoundGate + " gate" : ""),
+        "cap",
+      );
     state.rounds.code++;
     const m = state.rounds.code;
-    reserve(5, "code round " + m);
+    lastRoundGate = null;
+    reserve(5 + (checked.length ? 2 : 0), "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
       frozen_tests: testFilesView(frozen, frozenFiles),
@@ -2291,22 +2479,37 @@ async function buildMode(input, date) {
       test_env: TEST_ENV,
       test_env_note: TEST_ENV_NOTE,
     });
-    const coder = requireOk(
+    // the role check runs after the hash check: a hash violation is reported
+    // even when the coder's output is also malformed or not ok
+    const coder = await callRole(
       "fleet-coder",
-      await callRole(
-        "fleet-coder",
-        "role:fleet-coder:r" + m,
-        Object.assign({}, codeInputs, { routed_findings: coderFindings }),
-        "Code",
-      ),
+      "role:fleet-coder:r" + m,
+      Object.assign({}, codeInputs, { routed_findings: coderFindings }),
+      "Code",
+      null,
+      true,
     );
-    for (const s of coder.commits || []) coderCommits.push(s);
+    if (Array.isArray(coder.commits)) for (const s of coder.commits) if (typeof s === "string") coderCommits.push(s);
     // purge before the check and the judge; the judge's "before" fingerprint
     // is the post-purge hasher fingerprint
     await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");
     const h = await hasher("hasher:post-coder:r" + m, mainWt, "hashes", hashedFiles, "Code");
     const viol = diffHashes(frozen, h.hashes);
+    const coderDrift = contractProblem("fleet-coder", coder);
+    if (viol.length && (coderDrift || coder.status !== "ok"))
+      halt(
+        "needs_human",
+        "code round " + m + ": hash violation on " + viol.join(", ") + " (frozen paths changed since " + freezeRef + ")" +
+          " (role output also: " + (coder.status !== "ok" ? roleStatusText("fleet-coder", coder) : coderDrift) + ")",
+        "hash",
+      );
+    if (!viol.length) {
+      checkRole("fleet-coder", coder);
+      requireOk("fleet-coder", coder);
+    }
+    collect("fleet-coder", coder);
     if (viol.length) {
+      lastRoundGate = "hash";
       coderFindings = [
         {
           target: "code",
@@ -2322,7 +2525,32 @@ async function buildMode(input, date) {
       gate("code round " + m + ": hash violation on " + viol.join(", ") + " -> coder output rejected");
       continue;
     }
-    // the post-coder fingerprint is the judge's "before" fingerprint
+    // obligations: run each check_cmd read-only, fingerprinted like a judge
+    let obResults = [];
+    let judgeFp = h.fingerprint;
+    if (checked.length) {
+      const ob = await dispatch(
+        "infra:obligations:r" + m,
+        obligationsPrompt({
+          main_worktree: mainWt,
+          obligations: checked.map((o) => ({ id: o.id, run: obligationRunCmd(mainWt, TEST_ENV, o.check_cmd) })),
+        }),
+        { schema: OBLIGATIONS_SCHEMA, agentType: JUDGE_AGENT, phase: "Code" },
+      );
+      const after = (await hasher("hasher:fp-post:obligations:r" + m, mainWt, "fingerprint", [], "Code")).fingerprint;
+      if (!sameFingerprint(h.fingerprint, after))
+        halt("needs_human", "code round " + m + ": an obligation check changed the worktree (HEAD, status or diff); results discarded", "fingerprint");
+      if (ob.status !== "ok")
+        halt(
+          ob.status === "failed" ? "failed" : "needs_human",
+          "infra:obligations:r" + m + " returned " + ob.status + ": " + (ob.reason || "no reason"),
+          "obligations",
+        );
+      obResults = obligationResults(checked, ob.results);
+      judgeFp = after;
+      gate("code round " + m + ": obligation checks " + obResults.map((x) => x.id + "=" + x.exit_code).join(", "));
+    }
+    // the last fingerprint before the judge is its "before" fingerprint
     const judgedCode = await judged(
       "fleet-code-judge",
       "role:fleet-code-judge:r" + m,
@@ -2332,14 +2560,25 @@ async function buildMode(input, date) {
         hash_recheck: hashRecheck(frozen, h.hashes),
         held_out_results: HELD_OUT_NOT_RUN,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
+        obligation_results: obResults,
       }),
       mainWt,
       "Code",
-      h.fingerprint,
+      judgeFp,
     );
     const cj = judgedCode.r;
     const routed = cj.routed_findings || [];
     if (cj.verdict === "approve") {
+      const obFail = obligationFailures(planFacts.repo_obligations, obResults, cj.obligations_check);
+      if (obFail.length) {
+        coderFindings = obFail;
+        lastRoundGate = "obligations";
+        gate(
+          "code round " + m + ": obligations gate: code-judge approve converted to fix_code (" +
+            obFail.map((f) => f.finding).join("; ") + ")",
+        );
+        continue;
+      }
       approvedSha = judgedCode.fp.head;
       approval = cj;
       state.gatesNotRun = gatesNotRun(cj.gates_not_run);

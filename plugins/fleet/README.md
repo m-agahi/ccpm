@@ -76,13 +76,18 @@ the brief title.
 
 The full plan ref is a file, `.fleet/<task id>/plan_ref.json`, committed in the plan commit. It
 holds `branch`, `plan_path`, `plan_sha256`, `criteria`, `brief`, `task_id`, `slug`, `tldr`,
-`plan_facts` (scope fence and estimate), `history` (cumulative runs, re-plans and agents) and
+`plan_facts` (scope fence, estimate, `test_cmd` and `repo_obligations`), `history` (cumulative
+runs, re-plans and agents) and
 `seal`, the sha256 of the canonical JSON of the rest. It holds no held-out example. Commit-plan
 reads the file back from the commit; the script checks that it parses to the sealed ref (a
 formatter hook may change the bytes, not the content).
 
 The caller gets only a tiny `plan_ref`: `{branch, plan_commit, ref_path, ref_sha256, repo}`, where
 `ref_sha256` is the sha256 of the committed file bytes. The skill passes it back unchanged.
+
+Since 2.0.3, `plan_facts` is `{allowed_additions, est_diff_lines, test_cmd, repo_obligations}`,
+covered by the seal. Build mode refuses a ref without `test_cmd` and `repo_obligations` (made by
+2.0.2 or earlier) with `needs_human` "plan_ref predates 2.0.3; re-run plan".
 
 ### Build mode
 
@@ -100,9 +105,11 @@ args: `{mode: "build", plan_ref, date, project?}`.
 | 8    | integrate (infra)  | merges the writer branches into the fleet branch                        |
 | 9    | test judge         | `revise` routes findings to the named writers only; 3 rounds max        |
 | 10   | hasher (freeze)    | sha256 of test files and runner config; `freeze_ref` = HEAD             |
-| 11   | coder              | status                                                                  |
+| 11   | coder              | status (checked after the hash check)                                   |
 | 12   | hasher             | any changed, new or removed hash key -> coder round rejected            |
+| 12a  | obligations (r/o)  | each `check_cmd` run in the worktree; fingerprint before and after      |
 | 13   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan |
+| 13a  | -                  | `approve` with an unmet obligation -> `fix_code` (counts as a round)    |
 | 14   | push (infra)       | pushes `approved_sha`; origin must then be at that sha                  |
 | 15   | pr-opener          | draft PR at `approved_sha` (HEAD after the approving judge run)         |
 | 16   | write-back         | ledger section and one marked comment per external source               |
@@ -223,6 +230,39 @@ taken after the purge. The coder and the code judge get
 the frozen tests. The code judge also gets `hash_recheck`
 (`{"<map>/<key>": {frozen, current, match}}`) for its report; the script's own comparison decides.
 
+### Repo obligations and test_cmd
+
+The planner scans the repo's push and CI gates: `.pre-commit-config.yaml` (every stage, `pre-push`
+included, and the entry script of each local hook), the PR workflows, `Makefile`,
+`AGENTS.md`/`CONTRIBUTING.md` rules and version-bump checkers. Each rule the change must satisfy
+becomes one entry of `repo_obligations`:
+`{id, kind: version_bump|changelog|docs|generated|other, rule_source: "<file>:<line or hook id>", files, instruction, check_cmd?}`.
+`[]` means none apply. The planner also returns
+`test_cmd: {command, paths_placeholder: "<paths>", env, tools}`, the exact command that runs the
+repo's tests (for example `uv run --extra test pytest <paths> -n0`), and verifies it on one existing
+test in a throwaway worktree. Plan-audit re-scans the gates independently (a missing obligation is
+a `plan_defect`) and runs `test_cmd` itself.
+
+The script checks the shape: `test_cmd.command` is a non-empty string; each obligation has a
+unique `id`, a known `kind` and an `instruction`. A `check_cmd` that pushes or runs terraform, tofu,
+tfp, digger or atlantis is refused with `needs_human`, in plan mode and again in build mode.
+
+Plan-audit, the coder and the code judge get `repo_obligations` and `test_cmd`; the writers and
+the test judge get `test_cmd`. Every test run uses `test_cmd` with `test_cmd.env` first and
+`test_env` on top. The coder satisfies every obligation in `feat|fix(...)` commits and reports
+`obligations_done`.
+
+After the coder, the bytecode purge and the hash check, the infra step `infra:obligations:r<n>`
+(read-only, `fleet:judge`) runs each `check_cmd` in the main worktree as
+`cd <worktree> && <test_env> timeout 300 bash -c <check_cmd>` and returns `{id, exit_code, tail}`.
+The script takes the worktree fingerprint before and after it, as for a judge; a change stops the
+run (`stop_gate: fingerprint`). It skips the step when no obligation has a `check_cmd`. The code
+judge gets the results as `obligation_results` and returns `obligations_check: [{id, met, evidence}]`.
+On `approve`, the script requires every `check_cmd` to have exit code 0 (a missing result or a
+non-integer exit code fails) and every obligation to be `met: true`. Otherwise it converts the
+verdict to `fix_code`, routes the failures to the coder as findings and logs it. That round counts
+toward the 3 code rounds.
+
 ### Role contract
 
 The script pins the role contract, not the prose:
@@ -237,6 +277,11 @@ The script pins the role contract, not the prose:
 - `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are
   checked against the frozen enums. A missing key or an unknown verdict is contract drift and stops
   the run.
+- Stop reason precedence: (1) a script gate violation (hash, fingerprint, obligations) with that
+  gate's own reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
+  neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
+  check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
+  `obligations`, `contract`, `role` or `cap` (`null` when the run did not stop at one of them).
 
 ### Models
 
@@ -246,7 +291,7 @@ its role page. Preflight returns those lines; the script parses them. Accepted t
 it. A role agent that dies is retried once on its fallback tier, when one is set; the retry counts
 toward the agent cap. Infra agents (preflight, intake, workspace, branch-scan, stage-plan,
 commit-plan, load-ref, verify, prepare,
-integrate, hasher, push, write-back) run on `sonnet`.
+integrate, hasher, obligations, push, write-back) run on `sonnet`.
 
 ### Judge separation
 
@@ -308,7 +353,8 @@ Build mode, `status: "ok"`:
   "agents": 14,
   "cumulative": { "runs": 2, "replans": 0, "agents": 20 },
   "gates_not_run": [{ "gate": "held_out", "reason": "..." }],
-  "role_versions": { "fleet-coder": 7 },
+  "stop_gate": null,
+  "role_versions": { "fleet-coder": 10 },
   "refreeze_log": [],
   "write_back": {
     "ledger": [{ "ref": "42", "status": "written" }],

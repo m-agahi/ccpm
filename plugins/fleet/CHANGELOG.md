@@ -1,5 +1,45 @@
 # Changelog
 
+## [2.0.3] - 2026-11-04
+
+### Added
+
+- Repo obligations: the planner scans the repo's push and CI gates (pre-commit and pre-push hooks,
+  PR workflows, Makefile, AGENTS/CONTRIBUTING rules, version-bump checkers) and returns
+  `repo_obligations: [{id, kind, rule_source, files, instruction, check_cmd?}]`, `[]` when none.
+  `kind` is one of `version_bump`, `changelog`, `docs`, `generated`, `other`. The coder satisfies
+  each one in its commits and reports `obligations_done`; the code judge reports
+  `obligations_check: [{id, met, evidence}]`.
+- `test_cmd: {command, paths_placeholder, env, tools}`: the exact command that runs the repo's
+  tests, verified by the planner and the auditor on one existing test. Writers, the test judge, the
+  coder and the code judge run every test with it (`test_cmd.env`, then `test_env`).
+- Obligations gate: after the coder (after the bytecode purge and the hash check), a read-only
+  infra step `infra:obligations:r<n>` runs each `check_cmd` in the main worktree with `test_env`
+  and returns `{id, exit_code, tail}`. The worktree fingerprint is taken around it as around a
+  judge. The code judge gets the results as `obligation_results`. A code-judge `approve` is
+  converted to `fix_code` with routed findings when a `check_cmd` did not exit 0 (a missing result
+  or a non-integer exit code counts as a failure) or an obligation is not `met: true`; that round
+  counts as a code round. A `check_cmd` that pushes or runs terraform, tofu, tfp, digger or
+  atlantis is refused with `needs_human`.
+- `stop_gate` in the result: `hash`, `fingerprint`, `obligations`, `contract`, `role` or `cap` for
+  the gate that stopped the run; `null` on `ok`, `awaiting_confirmation` and other stops.
+
+### Changed
+
+- The sealed plan ref gains `plan_facts.test_cmd` and `plan_facts.repo_obligations`. Build mode
+  refuses a ref without them with `needs_human` "plan_ref predates 2.0.3; re-run plan".
+- `REQUIRED_ON_OK`: scope-and-plan adds `repo_obligations` (array) and `test_cmd` (object with a
+  non-empty string `command`); the coder adds `obligations_done`; the code judge adds
+  `obligations_check` (arrays).
+- Honest stop reason. A script gate violation (hash, fingerprint, obligations) is reported first,
+  then the role's own `needs_human`/`failed` reason, and contract drift only when neither applies.
+  The coder's hash check now runs before its contract check: a coder output that is malformed or
+  not ok AND changed a frozen hash stops with the hash violation. A judge that mutates the worktree
+  reports the fingerprint even when its output also drifts.
+- Minimum role versions: scope-and-plan 14, plan-audit 11, fleet-test-writer 7, fleet-test-judge 7,
+  fleet-coder 10, fleet-code-judge 9. The contract marker stays `fleet-v2`; the new keys are
+  additive.
+
 ## [2.0.2] - 2026-11-04
 
 ### Fixed
