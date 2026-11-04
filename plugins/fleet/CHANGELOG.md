@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.0.1] - 2026-11-04
+
+### Changed
+
+- The caller now carries a tiny `plan_ref`: `{branch, plan_commit, ref_path, ref_sha256, repo}`.
+  The full sealed ref is written to `.fleet/<task id>/plan_ref.json` and committed in the same local
+  plan commit. Build mode loads it from the plan commit, checks its sha256 and its inner seal, and
+  stops with `needs_human` on any mismatch before any role runs. The ref file is frozen with the
+  tests, so editing it rejects a coder round.
+- Plan commits use the subject `plan(<task id>): <slug>`. The plan is staged and hashed before the
+  ref is sealed; the committed plan must hash the same.
+
+### Fixed
+
+- Plan mode no longer commits a plan on top of code. A fleet branch with any commit beyond
+  `origin/<default>` other than earlier plan commits of the task stops with "branch has build
+  commits; run build, or delete branch".
+  A plan commit must have the subject `plan(<task id>):` and touch only exactly the plan path
+  named by the sealed ref file at that commit and `.fleet/<task id>/plan_ref.json`; any other file
+  (another `.md`, an extra file under `.fleet/<task id>/`) makes it a build commit.
+
 ## [2.0.0] - 2026-11-04
 
 ### Changed (breaking)
