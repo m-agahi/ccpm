@@ -16,14 +16,21 @@
   coder and the code judge run every test with it (`test_cmd.env`, then `test_env`).
 - Obligations gate: a code-judge `approve` is converted to `fix_code` with routed findings when an
   obligation is not `met: true` in `obligations_check`; that round counts as a code round.
-- Push hook rejection: the push step classifies `push_result` as `ok`, `hook_rejected`, `network`
-  or `non_ff`. A push a repo pre-push hook rejects goes back to the coder as `fix_code` with the
-  hook output tail; it counts as a code round, and the code judge must approve again before the
-  next push. `non_ff` still stops with `needs_human`; `network` is retried and then fails.
+- Push hook rejection: the push step classifies `push_result` as `ok`, `hook_rejected`, `network`,
+  `non_ff` or `remote_rejected`, on git's own `error:`/`fatal:`/` ! [` lines only (never on the
+  hook's output or the URL). A push a repo pre-push hook rejects goes back to the coder as
+  `fix_code` with the hook output tail; it counts as a code round, and the code judge must approve
+  again before the next push. `non_ff` and `remote_rejected` stop with `needs_human`; `network` is
+  retried and then fails.
 - Command safety: `test_cmd` and `check_cmd` come from a planner that reads untrusted ticket text,
   so they pass an allowlist in script code (plain tokens only, no quote, glob, `; & | $ ( ) < >`,
-  backquote or newline; a `check_cmd` must be `pre-commit run <hook> [...]`, `make <target>`,
-  `[uv run [--extra x]] python[3] <rel/path.py> [args]` or `<rel/path/script> [args]`), and the
+  backquote or newline). `test_cmd` must start with a test runner (`pytest`,
+  `python[3] -m pytest`, `uv run [...] pytest`, `npm test`, `npm run test[:x]`, `npx jest|vitest`,
+  `pnpm test`, `yarn test`, `cargo test`, `go test`, `make test`) followed by flags and paths only
+  (no URL, no `install`/`add`/`pip`, no `-m` but `-m pytest`). A `check_cmd` must be
+  `pre-commit run <hook> [...]`, `make <target>`, `[uv run [--extra x]] python[3] <dir>/<x.py>
+[args]` or `<dir>/<script> [args]` with `<dir>` one of `scripts`, `bin`, `tools`, `hack`, `ci`,
+  no venv/dependency/VCS segment and no interpreter or package-manager file name. The
   words terraform, tofu, tfp, digger and atlantis refuse a command. `test_cmd.env` may hold only
   `DJANGO_SETTINGS_MODULE`, `PYTHONUNBUFFERED`, `TZ`, `LANG`, `LC_ALL`, `NO_COLOR`, `FORCE_COLOR`
   and `CI`. A refused `test_cmd` stops the plan; a refused `check_cmd` becomes
@@ -49,7 +56,7 @@
   ok AND changed a frozen hash stops with the hash violation. A judge that mutates the worktree
   reports the fingerprint even when its output also drifts. A cap stop names the gate that rejected
   the last round.
-- Minimum role versions: scope-and-plan 17, plan-audit 11, fleet-test-writer 7, fleet-test-judge 7,
+- Minimum role versions: scope-and-plan 18, plan-audit 11, fleet-test-writer 7, fleet-test-judge 7,
   fleet-coder 11, fleet-code-judge 10. The contract marker stays `fleet-v2`; the new keys are
   additive.
 

@@ -259,12 +259,16 @@ obligation in `feat|fix(...)` commits and reports `obligations_done`.
    unmet obligations to the coder and logs "obligations gate". That round counts toward the 3 code
    rounds.
 3. **Push hook rejection goes back to the coder.** The push step classifies its result as
-   `push_result: ok | hook_rejected | network | non_ff`. `hook_rejected` (git printed
-   `failed to push some refs` with no ref status, network, auth or HTTP error, so a local pre-push
-   hook declined it) is not a stop: the script routes the hook output tail (`hook_tail`) to the
-   coder as a `fix_code` finding. The round counts as a code round, and the code judge must approve
-   again before the next push (`infra:push:p<n>`). `non_ff` stops with `needs_human`; `network` is
-   retried 3 times with backoff and then fails.
+   `push_result: ok | hook_rejected | network | non_ff | remote_rejected`, on git's own lines only
+   (lines that start with `error:`, `fatal:` or ` ! [`), never on the hook's output or the remote
+   URL. Checked against real git output: a failing local pre-push hook gives exit code 1 and only
+   `error: failed to push some refs`; a non-fast-forward gives ` ! [rejected] ... (fetch first)` or
+   `(non-fast-forward)`; a network error gives exit code 128 and a `fatal:` line. `hook_rejected`
+   is not a stop: the script routes the hook output tail (`hook_tail`) to the coder as a `fix_code`
+   finding. The round counts as a code round, and the code judge must approve again before the next
+   push (`infra:push:p<n>`). `non_ff` and `remote_rejected` (` ! [remote rejected]`: a server hook
+   or branch protection) stop with `needs_human`; `network` is retried 3 times with backoff and
+   then fails.
 
 #### Command safety
 
@@ -273,13 +277,22 @@ issue text. So:
 
 1. **Allowlist (script code, plan mode and again in build mode).** Every token must be plain:
    letters, digits and `_ . / : = @ % + , -`. No quote, glob, `; & | $ ( ) < >`, backquote or
-   newline. `test_cmd.command` may also hold the `<paths>` token. A `check_cmd` must be exactly one
-   of:
+   newline. `test_cmd.command` may also hold the `<paths>` token, and must start with a test
+   runner: `pytest`, `python[3] -m pytest`, `uv run [--frozen] [--no-sync] [--extra <x>]... pytest`,
+   `npm test`, `npm run test[:<name>]`, `npx jest`, `npx vitest`, `pnpm test`, `yarn test`,
+   `cargo test`, `go test` or `make test`. The remaining tokens are flags and paths only: no URL
+   (`://`), no `install`, `add` or `pip`, no `-m` other than `-m pytest` ("test_cmd shape not
+   allowed"). A `check_cmd` must be exactly one of:
 
    - `pre-commit run <hook-id> [--all-files] [--hook-stage <stage>] [--from-ref <ref> --to-ref <ref>]`
    - `make <target>`
-   - `[uv run [--extra <x>]] python[3] <relative/path.py> [plain args]`
-   - `<relative/path/to/script> [plain args]`
+   - `[uv run [--extra <x>]] python[3] <dir>/<path.py> [plain args]`
+   - `<dir>/<path/to/script> [plain args]`
+
+   where `<dir>` is `scripts`, `bin`, `tools`, `hack` or `ci`; the path has no `.venv`, `venv`,
+   `node_modules`, `.git`, `__pycache__` or `.tox` segment; and its file name is not an
+   interpreter or package manager (`python*`, `pip*`, `node`, `npm`, `npx`, `sh`, `bash`, `zsh`,
+   `uv`, `make`).
 
 2. **Forbidden words.** The words terraform, tofu, tfp, digger and atlantis, anywhere in a command
    and in any case, refuse it.
@@ -374,7 +387,9 @@ too. It does not catch a change that a judge makes and reverts within its own ru
   carry only allowlisted env names, and are approved by Max verbatim. The workflow script itself
   runs none of them.
 - An approved `make` target, hook or script can still do anything its code does, and the coder can
-  change that code. The allowlist only fixes the command line.
+  change that code. The allowlist only fixes the command line. That a `check_cmd` script is a
+  tracked file is not checked by the script (the workflow runs no infra step on it); the code
+  judge decides whether to run it.
 - Obligations without a pre-push or pre-commit hook rest on the code judge's `obligations_check`
   alone. CI-only rules are caught by CI after the PR opens, not by the fleet.
 

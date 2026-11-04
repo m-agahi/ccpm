@@ -42,7 +42,7 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks"];
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 17,
+  "scope-and-plan": 18,
   "plan-audit": 11,
   "fleet-test-writer": 7,
   "fleet-test-judge": 7,
@@ -89,6 +89,13 @@ const FORBIDDEN_WORD_RE = /terraform|tofu|tfp|digger|atlantis/i;
 const TEST_ENV_ALLOWED = ["DJANGO_SETTINGS_MODULE", "PYTHONUNBUFFERED", "TZ", "LANG", "LC_ALL", "NO_COLOR", "FORCE_COLOR", "CI"];
 const ENV_VALUE_RE = /^[A-Za-z0-9_.\/:=@%+, -]*$/;
 const MAKE_TARGET_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
+// A check_cmd script lives under one of these top-level dirs, never inside a
+// venv, dependency or VCS dir, and is never an interpreter or package manager.
+const SCRIPT_ROOTS = ["scripts", "bin", "tools", "hack", "ci"];
+const SCRIPT_BAD_SEGMENTS = [".venv", "venv", "node_modules", ".git", "__pycache__", ".tox"];
+const SCRIPT_BAD_BASENAME_RE = /^(python[0-9.]*|pip[0-9.]*|node|npm|npx|sh|bash|zsh|uv|make)$/;
+// test_cmd tokens after the runner prefix: never one of these subcommands.
+const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
 // stop_gate values: which gate ended a stopped run (null when none applies).
 const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap"];
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
@@ -577,7 +584,7 @@ const INFRA_SCHEMA = {
     },
     plan_touched: { type: "array", items: STR },
     remote_head: STR,
-    push_result: { type: "string", enum: ["ok", "hook_rejected", "network", "non_ff"] },
+    push_result: { type: "string", enum: ["ok", "hook_rejected", "network", "non_ff", "remote_rejected"] },
     hook_tail: STR,
     purged: { type: "number" },
     superseded_head: STR,
@@ -829,6 +836,17 @@ function planFactsProblem(testCmd, obligations) {
   return null;
 }
 
+// A check_cmd script path: relative, under SCRIPT_ROOTS, no venv/dependency/
+// VCS segment, not an interpreter or package manager. Returns a reason or null.
+function scriptPathProblem(path) {
+  const segs = path.split("/");
+  if (segs.length < 2 || SCRIPT_ROOTS.indexOf(segs[0]) < 0) return "script path must be under " + SCRIPT_ROOTS.join("/, ") + "/";
+  const bad = segs.find((x) => SCRIPT_BAD_SEGMENTS.indexOf(x) >= 0);
+  if (bad) return "script path has a " + bad + " segment";
+  if (SCRIPT_BAD_BASENAME_RE.test(segs[segs.length - 1])) return "script path names an interpreter or package manager";
+  return null;
+}
+
 function relPath(p) {
   if (typeof p !== "string" || !p || p.charAt(0) === "/" || p.charAt(0) === "-") return null;
   const q = p.indexOf("./") === 0 ? p.slice(2) : p;
@@ -882,20 +900,59 @@ function parseCheckCmd(cmd) {
   if (t[i] === "python" || t[i] === "python3") {
     const path = relPath(t[i + 1]);
     if (!path || !/\.py$/.test(path)) return bad("python: only `python[3] <relative/path.py> [args]`");
-    return { ok: true };
+    const why = scriptPathProblem(path);
+    return why ? bad(why) : { ok: true };
   }
-  if (i === 0 && t[0].indexOf("/") >= 0 && relPath(t[0])) return { ok: true };
+  if (i === 0 && t[0].indexOf("/") >= 0 && relPath(t[0])) {
+    const why = scriptPathProblem(relPath(t[0]));
+    return why ? bad(why) : { ok: true };
+  }
   return bad("not an allowed command shape");
 }
 
-// test_cmd: plain tokens, the <paths> placeholder, allowlisted env names with
-// plain values; no forbidden word.
+// The test runner a test_cmd starts with. Returns the number of prefix tokens,
+// or 0 when the command does not start with an allowed runner:
+//   pytest | python[3] -m pytest | uv run [--frozen] [--no-sync] [--extra <x>]... pytest
+//   npm test | npm run test[:<name>] | npx jest|vitest | pnpm test | yarn test
+//   cargo test | go test | make test
+function testRunnerPrefix(t) {
+  const is = (i, ...w) => w.indexOf(t[i]) >= 0;
+  if (is(0, "pytest")) return 1;
+  if (is(0, "python", "python3") && t[1] === "-m" && t[2] === "pytest") return 3;
+  if (t[0] === "uv" && t[1] === "run") {
+    let i = 2;
+    for (;;) {
+      if (is(i, "--frozen", "--no-sync")) i += 1;
+      else if (t[i] === "--extra" && t[i + 1] && t[i + 1].charAt(0) !== "-" && t[i + 1] !== PATHS_TOKEN) i += 2;
+      else break;
+    }
+    return t[i] === "pytest" ? i + 1 : 0;
+  }
+  if (t[0] === "npm" && t[1] === "test") return 2;
+  if (t[0] === "npm" && t[1] === "run" && /^test(:[A-Za-z0-9_.-]+)?$/.test(t[2] || "")) return 3;
+  if (t[0] === "npx" && is(1, "jest", "vitest")) return 2;
+  if (is(0, "pnpm", "yarn", "cargo", "go", "make") && t[1] === "test") return 2;
+  return 0;
+}
+
+// test_cmd: an allowed test runner, then flags and paths only (plain tokens,
+// the <paths> placeholder; no URL, no install/add/pip, no -m other than
+// pytest), allowlisted env names with plain values; no forbidden word.
 function testCmdProblem(tc) {
   const cmd = tc && tc.command;
   if (typeof cmd !== "string" || !cmd.trim()) return "no command";
   if (FORBIDDEN_WORD_RE.test(cmd)) return "names a forbidden tool";
-  for (const x of cmd.trim().split(/[ \t]+/))
+  const t = cmd.trim().split(/[ \t]+/);
+  for (const x of t)
     if (x !== PATHS_TOKEN && !CMD_TOKEN_RE.test(x)) return "token " + JSON.stringify(x) + " is not plain (shell metacharacter, quote or glob)";
+  const n = testRunnerPrefix(t);
+  if (!n) return "test_cmd shape not allowed: it must start with an allowed test runner";
+  for (let i = n; i < t.length; i++) {
+    const x = t[i];
+    if (x.indexOf("://") >= 0) return "test_cmd shape not allowed: " + JSON.stringify(x) + " is a URL";
+    if (TEST_CMD_BAD_WORDS.indexOf(x) >= 0) return "test_cmd shape not allowed: " + JSON.stringify(x) + " subcommand";
+    if (x === "-m" && t[i + 1] !== "pytest") return "test_cmd shape not allowed: -m " + JSON.stringify(t[i + 1] || null);
+  }
   const env = tc.env === undefined || tc.env === null ? {} : tc.env;
   if (typeof env !== "object" || Array.isArray(env)) return "env must be an object";
   for (const k of Object.keys(env)) {
@@ -1491,10 +1548,12 @@ function pushPrompt(inputs) {
     "\n" +
     "1. <branch> must differ from <default_branch>; `git -C <main_worktree> branch --show-current` must equal <branch>; `git -C <main_worktree> rev-parse HEAD` must equal <approved_sha>; `git -C <main_worktree> status --porcelain` must be empty. Any mismatch -> needs_human.\n" +
     "2. Push ONCE: `git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Classify the result as push_result:\n" +
-    "   - exit 0 -> `ok`.\n" +
-    "   - the output has `non-fast-forward`, `fetch first` or `[rejected]` -> `non_ff`: return status needs_human at once, no retry.\n" +
-    "   - the output has `failed to push some refs` and none of `[rejected]`, `[remote rejected]`, `non-fast-forward`, `fetch first`, `Could not read from remote`, `Authentication failed`, `unable to access`, `HTTP`, `Connection`, `timed out` -> a local hook (pre-push) declined the push: `hook_rejected`. hook_tail = the last 60 lines of the temp file. No retry. Return status ok.\n" +
-    "   - anything else (auth, network, 5xx) -> `network`: retry up to 3 times with backoff 5 15 45 (seconds): " +
+    "   Classify on git's own lines only: lines that start with `error:`, `fatal:` or ` ! [`. Never match words in other lines: those are the hook's own output, and the remote URL holds `https` too. In order:\n" +
+    "   - exit code 0 -> `ok`.\n" +
+    "   - a line starting with ` ! [rejected]` (git ends it with `(non-fast-forward)` or `(fetch first)`) -> `non_ff`: return status needs_human at once, no retry.\n" +
+    "   - a line starting with ` ! [remote rejected]` (a server-side hook or branch protection) -> `remote_rejected`: return status needs_human at once with that line, no retry.\n" +
+    "   - exit code 1, a line starting with `error: failed to push some refs`, no line starting with ` ! [` and no line starting with `fatal:` -> a local pre-push hook declined the push: `hook_rejected`. hook_tail = the last 60 lines of the temp file. No retry. Return status ok.\n" +
+    "   - anything else (typically exit code 128 with a `fatal:` line: auth, network, 5xx) -> `network`: retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
     " Exit 0 now -> `ok`. Still failing after the 3 retries -> status failed with the last error.\n" +
     "   Delete the temp file. Step 3 runs only when push_result is `ok`.\n" +

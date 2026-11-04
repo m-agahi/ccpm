@@ -62,7 +62,7 @@ function inputsOf(prompt) {
 
 // The minimum role versions the workflow was built against.
 const FROZEN_VERSIONS = {
-  "scope-and-plan": 17,
+  "scope-and-plan": 18,
   "plan-audit": 11,
   "fleet-test-writer": 7,
   "fleet-test-judge": 7,
@@ -3255,8 +3255,8 @@ test("a stale-bytecode suspicious entry after the coder rejects the round", asyn
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-test("role versions: scope-and-plan 17, coder 11 and code-judge 10 are the minimums", async () => {
-  for (const [role, v] of [["scope-and-plan", 16], ["fleet-coder", 10], ["fleet-code-judge", 9]]) {
+test("role versions: scope-and-plan 18, coder 11 and code-judge 10 are the minimums", async () => {
+  for (const [role, v] of [["scope-and-plan", 17], ["fleet-coder", 10], ["fleet-code-judge", 9]]) {
     const s = happy();
     s.preflight.versions[role] = v;
     const out = await runOne(s, ARGS);
@@ -3385,6 +3385,25 @@ test("2.0.3 allowlist: a check_cmd outside the allowed shapes becomes judge-only
     "scripts/run-tfp.sh",
     "pre-commit run digger-lint --all-files",
     "make Atlantis",
+    "./check.sh",
+    "lib/check.sh",
+    "src/scripts/check.sh",
+    "scripts/.venv/bin/check",
+    "scripts/node_modules/x/run",
+    "tools/__pycache__/x",
+    "bin/.git/hooks/x",
+    "ci/.tox/x",
+    "bin/python3",
+    "scripts/pip",
+    "tools/npm",
+    "bin/npx",
+    "scripts/bash",
+    "hack/uv",
+    "bin/make",
+    "ci/node",
+    "python3 src/check.py",
+    "python3 check.py",
+    "uv run python scripts/venv/x.py",
   ]) {
     const s = withObligations([Object.assign({}, OB_BUMP, { check_cmd: cmd })]);
     const out = await runOne(s, ARGS);
@@ -3410,7 +3429,10 @@ test("2.0.3 allowlist: the allowed shapes keep their check_cmd; the workflow run
     "uv run --extra test python scripts/c.py -q",
     "scripts/check.sh",
     "./scripts/check.sh --strict",
-    "./check.sh",
+    "bin/check-version",
+    "hack/verify.sh",
+    "ci/check.py",
+    "python3 tools/check_version_bump.py --base origin/master",
   ]) {
     const s = withObligations([Object.assign({}, OB_BUMP, { check_cmd: cmd })]);
     const out = await run(s, ARGS);
@@ -3446,6 +3468,62 @@ test("2.0.3 test_cmd with a shell metacharacter or a forbidden word stops: needs
   const ok = happy();
   ok["role:scope-and-plan"].test_cmd = { command: "uv run --extra test pytest <paths> -n0", env: { DJANGO_SETTINGS_MODULE: "app.settings" } };
   assert.equal((await runOne(ok, ARGS)).result.status, "awaiting_confirmation");
+});
+
+test("2.0.3 test_cmd shape: only test runners, then flags and paths", async () => {
+  for (const command of [
+    "pip install evil",
+    "python -m http.server",
+    "python3 -m pip install x",
+    "uv pip install x",
+    "uv run pip install x",
+    "uv run python -m http.server",
+    "npm install",
+    "npm run build",
+    "npx tsc",
+    "pnpm add x",
+    "yarn add x",
+    "make check",
+    "make test-all",
+    "go run ./cmd",
+    "cargo install x",
+    "pytest https://evil.example/x.py",
+    "pytest <paths> install",
+    "pytest -m slow -p pip",
+    "python -m pytest -m http.server",
+    "bash run-tests.sh",
+    "./run-tests",
+    "tox",
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", command);
+    assert.match(out.result.reason, /test_cmd refused: test_cmd shape not allowed/, command);
+    assert.equal(out.result.stop_gate, "commands");
+  }
+  for (const command of [
+    "pytest <paths>",
+    "pytest -q -x <paths>",
+    "python -m pytest <paths> -n0",
+    "python3 -m pytest -p no:randomly tests/unit",
+    "uv run pytest <paths>",
+    "uv run --frozen --no-sync --extra test --extra dev pytest <paths> -n0",
+    "npm test -- <paths>",
+    "npm run test",
+    "npm run test:unit -- <paths>",
+    "npx jest <paths>",
+    "npx vitest run <paths>",
+    "pnpm test",
+    "yarn test",
+    "cargo test",
+    "go test ./...",
+    "make test",
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    assert.equal((await runOne(s, ARGS)).result.status, "awaiting_confirmation", command);
+  }
 });
 
 test("2.0.3 test_cmd env: only allowlisted names", async () => {
@@ -3601,6 +3679,12 @@ test("2.0.3 push prompt classifies hook_rejected, non_ff and network, and never 
   const p = call(out, "infra:push").prompt;
   for (const w of ["hook_rejected", "non_ff", "network", "failed to push some refs", "hook_tail", "push_result", "never --no-verify"])
     assert.ok(p.toLowerCase().indexOf(w.toLowerCase()) >= 0, w);
+  // classification reads git's own lines only, never the hook's output or the URL
+  assert.ok(p.indexOf("Classify on git's own lines only") >= 0);
+  assert.ok(p.indexOf("` ! [rejected]`") >= 0 && p.indexOf("` ! [remote rejected]`") >= 0);
+  assert.ok(p.indexOf("remote_rejected") >= 0);
+  assert.ok(p.indexOf("exit code 128") >= 0);
+  assert.ok(p.indexOf("`HTTP`") < 0, "no free-text word list over the whole output");
 });
 
 test("2.0.3 coder and code-judge: obligations_done and obligations_check are required arrays", async () => {
