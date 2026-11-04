@@ -46,10 +46,17 @@ args: `{mode: "plan", input, repo, date, project?}`.
 | 1    | preflight          | yadgar unreachable, a role missing, a low version or a wrong marker       |
 | 2    | intake (read only) | `needs_human` (ambiguous repo or ticket) stops before any other step      |
 | 3    | workspace (infra)  | creates or reuses branch `fleet/<task id>-<slug>` and its worktree        |
-| 4    | scope-and-plan     | criterion ids; disjoint test files; `tldr`; `plan_diff` is a string array |
-| 5    | -                  | risk tier logged; short path disabled (always full)                       |
-| 6    | plan-audit         | verdict other than `approve` -> `needs_human`                             |
-| 7    | commit-plan        | commits the plan doc LOCALLY; returns its commit and sha256; no push      |
+| 4    | branch-scan (r/o)  | any commit beyond origin/<default> that is not a plan commit -> stop      |
+| 5    | scope-and-plan     | criterion ids; disjoint test files; `tldr`; `plan_diff` is a string array |
+| 6    | -                  | risk tier logged; short path disabled (always full)                       |
+| 7    | plan-audit         | verdict other than `approve` -> `needs_human`                             |
+| 8    | stage-plan         | stages the plan doc; returns the sha256 of the staged bytes               |
+| 9    | commit-plan        | writes the sealed ref file; commits plan + ref LOCALLY in ONE commit      |
+
+Branch-scan: a plan commit has the subject `plan(<task id>): <slug>` and touches only the plan doc
+(one `.md` file) and `.fleet/<task id>/`. If the fleet branch carries any other commit, plan mode
+stops with "branch has build commits; run build, or delete branch". It never commits a plan on top
+of code. On a plan-only branch it adds a new plan commit.
 
 Plan mode returns `awaiting_confirmation` with `tldr`, `plan_diff`, `fleet_size`
 (`{criteria, est_agents, est_rounds}`), `plan_path` and `plan_ref`. It makes no push, no PR, no
@@ -64,9 +71,15 @@ names no repo, or several, stops with `needs_human`. The task id comes from the 
 GitHub or Codeberg source (`plan` for an ingested plan, `task` for free text). The slug comes from
 the brief title.
 
-`plan_ref` holds `branch`, `plan_commit`, `plan_path`, `plan_sha256`, `criteria`, `brief`, plus
-`task_id`, `slug`, `tldr`, `plan_facts` (scope fence and estimate), `history` (cumulative runs,
-re-plans and agents) and `seal`, the sha256 of the rest. The skill passes it back unchanged.
+The full plan ref is a file, `.fleet/<task id>/plan_ref.json`, committed in the plan commit. It
+holds `branch`, `plan_path`, `plan_sha256`, `criteria`, `brief`, `task_id`, `slug`, `tldr`,
+`plan_facts` (scope fence and estimate), `history` (cumulative runs, re-plans and agents) and
+`seal`, the sha256 of the canonical JSON of the rest. It holds no held-out example. Commit-plan
+reads the file back from the commit; the script checks that it parses to the sealed ref (a
+formatter hook may change the bytes, not the content).
+
+The caller gets only a tiny `plan_ref`: `{branch, plan_commit, ref_path, ref_sha256, repo}`, where
+`ref_sha256` is the sha256 of the committed file bytes. The skill passes it back unchanged.
 
 ### Build mode
 
@@ -74,27 +87,34 @@ args: `{mode: "build", plan_ref, date, project?}`.
 
 | Step | Agent              | Gate in script code                                                     |
 | ---- | ------------------ | ----------------------------------------------------------------------- |
-| 1    | -                  | `plan_ref` seal or shape wrong -> `needs_human` before any agent        |
+| 1    | -                  | tiny `plan_ref` shape wrong -> `needs_human` before any agent           |
 | 2    | preflight          | as in plan mode                                                         |
 | 3    | workspace (infra)  | reuses the fleet branch and worktree                                    |
-| 4    | verify (read only) | plan hash at `plan_commit` and HEAD; HEAD position (below)              |
-| 5    | prepare (infra)    | one worktree per testable criterion on `<branch>--p<sha8>-t-<id>`       |
-| 6    | test writers       | one per criterion, in parallel                                          |
-| 7    | integrate (infra)  | merges the writer branches into the fleet branch                        |
-| 8    | test judge         | `revise` routes findings to the named writers only; 3 rounds max        |
-| 9    | hasher (freeze)    | sha256 of test files and runner config; `freeze_ref` = HEAD             |
-| 10   | coder              | status                                                                  |
-| 11   | hasher             | any changed, new or removed hash key -> coder round rejected            |
-| 12   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan |
-| 13   | push (infra)       | pushes `approved_sha`; origin must then be at that sha                  |
-| 14   | pr-opener          | draft PR at `approved_sha` (HEAD after the approving judge run)         |
-| 15   | write-back         | ledger section and one marked comment per external source               |
+| 4    | load-ref (r/o)     | ref file at `plan_commit`: sha256, seal, branch, repo (below)           |
+| 5    | verify (read only) | plan hash at `plan_commit` and HEAD; HEAD position (below)              |
+| 6    | prepare (infra)    | one worktree per testable criterion on `<branch>--p<sha8>-t-<id>`       |
+| 7    | test writers       | one per criterion, in parallel                                          |
+| 8    | integrate (infra)  | merges the writer branches into the fleet branch                        |
+| 9    | test judge         | `revise` routes findings to the named writers only; 3 rounds max        |
+| 10   | hasher (freeze)    | sha256 of test files and runner config; `freeze_ref` = HEAD             |
+| 11   | coder              | status                                                                  |
+| 12   | hasher             | any changed, new or removed hash key -> coder round rejected            |
+| 13   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan |
+| 14   | push (infra)       | pushes `approved_sha`; origin must then be at that sha                  |
+| 15   | pr-opener          | draft PR at `approved_sha` (HEAD after the approving judge run)         |
+| 16   | write-back         | ledger section and one marked comment per external source               |
+
+Load-ref: an infra step returns `git show <plan_commit>:<ref_path>` and its sha256. Both must
+equal `ref_sha256`, the inner seal must hold, and the file's branch, repo and task id must match the
+tiny ref. Any mismatch stops with `needs_human` before any role runs. The script then uses the
+loaded ref. The ref file is also frozen: the hasher hashes it as a read-only config key, so a coder
+or writer that edits it trips the freeze.
 
 Verify: the sha256 of `plan_path` at `plan_commit` must equal `plan_sha256`, or the run stops with
 "plan changed since approval". HEAD must equal `plan_commit`, or descend from it by fleet commits of
 this build only (`test(<id>): ...`, `feat|fix(...): ...`, and the merges of this plan's criterion
-branches), with `plan_path` unchanged. Anything else stops with the same reason. Commit-plan and
-verify run the same embedded hash program.
+branches), with `plan_path` and the ref file unchanged. Anything else stops with the same reason.
+Stage-plan, commit-plan and verify run the same embedded hash program.
 
 The risk tier is still computed and logged (short = `est_diff_lines < 20` AND `new_behaviour`
 false), but the fleet always takes the full path: no role prompt supports a coder without frozen
@@ -203,12 +223,14 @@ Each role runs on the tier named by the first `DISPATCH: model=<tier> (fallback=
 its role page. Preflight returns those lines; the script parses them. Accepted tiers: `fable`,
 `opus`, `sonnet`, `haiku`. A missing, unparseable or unknown line gives `sonnet`, and the run logs
 it. A role agent that dies is retried once on its fallback tier, when one is set; the retry counts
-toward the agent cap. Infra agents (preflight, intake, workspace, commit-plan, verify, prepare,
+toward the agent cap. Infra agents (preflight, intake, workspace, branch-scan, stage-plan,
+commit-plan, load-ref, verify, prepare,
 integrate, hasher, push, write-back) run on `sonnet`.
 
 ### Judge separation
 
-Judges, preflight, intake, verify, the comment listing and the hasher run as the `fleet:judge` agent, which has `Write`, `Edit` and
+Judges, preflight, intake, branch-scan, load-ref, verify, the comment listing and the hasher run as
+the `fleet:judge` agent, which has `Write`, `Edit` and
 `NotebookEdit` disallowed. `Bash` stays, because the code judge must run the suite. The backstop is
 a worktree fingerprint (HEAD, sha256 of `git status --porcelain`, sha256 of `git diff HEAD`) taken
 before and after every judge run. Any difference discards the verdict and returns `needs_human`

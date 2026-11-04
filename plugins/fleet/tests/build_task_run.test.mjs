@@ -233,9 +233,39 @@ function criteria(n = 2) {
   }));
 }
 
+const sha256 = (t) => createHash("sha256").update(t, "utf8").digest("hex");
+
+// The ref file content the commit-plan prompt writes (heredoc body + newline).
+function refContentOf(prompt) {
+  const m = /<<'FLEET_REF_JSON'\n([\s\S]*?)\nFLEET_REF_JSON/.exec(prompt);
+  return m ? m[1] + "\n" : null;
+}
+
+// commit-plan stub: records the committed ref file per commit sha in store.
+function commitStub(store, head, planSha) {
+  return (prompt) => {
+    const c = refContentOf(prompt);
+    if (c == null) return { status: "failed", reason: "no ref content in the prompt" };
+    store[head] = c;
+    return { status: "ok", reason: "committed", head, plan_sha256: planSha, ref_sha256: sha256(c), ref_content: c };
+  };
+}
+
+// load-ref stub: `git show <plan_commit>:<ref_path>` from the store.
+function loadStub(store) {
+  return (prompt) => {
+    const i = inputsOf(prompt);
+    const c = store[i.plan_commit];
+    if (c === undefined) return { status: "failed", reason: "no ref file at " + i.plan_commit };
+    return { status: "ok", reason: "read", content: c, sha256: sha256(c) };
+  };
+}
+
 function happy(over = {}) {
   const crit = over.criteria || criteria(2);
+  const store = {};
   const s = {
+    __store: store,
     preflight: {
       reachable: true,
       missing: [],
@@ -243,7 +273,10 @@ function happy(over = {}) {
       contract: Object.fromEntries(Object.keys(FROZEN_VERSIONS).map((k) => [k, "CONTRACT: fleet-v2"])),
     },
     intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF },
-    "infra:commit-plan": { status: "ok", reason: "committed", head: PC, plan_sha256: PSHA },
+    "infra:branch-scan": { status: "ok", reason: "scanned", commits: [] },
+    "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
+    "infra:commit-plan": commitStub(store, PC, PSHA),
+    "infra:load-ref": loadStub(store),
     "infra:verify-plan": {
       status: "ok",
       reason: "verified",
@@ -869,7 +902,8 @@ test("agent cap stops the run with needs_human before exceeding 60 agents", asyn
   noUnscripted(out);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /agent cap/);
-  assert.ok(out.calls.length <= 60, "dispatched " + out.calls.length);
+  // the cap is per run: the build run alone stays within it
+  assert.ok(out.build.calls.length <= 60, "dispatched " + out.build.calls.length);
   assert.ok(out.logs.some((l) => /agent cap/.test(l)));
 });
 
@@ -909,7 +943,7 @@ test("hasher prompt carries the extraction rules and the config list", async () 
     assert.ok(p.includes(needle), "hasher prompt mentions " + needle);
   }
   const h = inputsOf(p);
-  assert.deepEqual(h.test_files.sort(), ["tests/test_a.py", "tests/test_b.py"]);
+  assert.deepEqual(h.test_files.sort(), [".fleet/l42/plan_ref.json", "tests/test_a.py", "tests/test_b.py"]);
   assert.equal(h.mode, "hashes");
 });
 
@@ -1768,7 +1802,7 @@ test("manual criteria: no writer, no frozen entry, still listed for the PR opene
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
   assert.ok(!out.labels.some((l) => l.startsWith("role:fleet-test-writer:AC9")));
-  assert.deepEqual(inputsOf(call(out, "hasher:freeze:f1").prompt).test_files, ["tests/test_a.py"]);
+  assert.deepEqual(inputsOf(call(out, "hasher:freeze:f1").prompt).test_files, ["tests/test_a.py", ".fleet/l42/plan_ref.json"]);
   assert.ok(!inputsOf(call(out, "role:fleet-test-judge:r1").prompt).criteria.some((c) => c.id === "AC9"));
   const pr = inputsOf(call(out, "role:fleet-pr-opener").prompt);
   assert.ok(pr.criteria.some((c) => c.id === "AC9" && c.test_files.length === 0));
@@ -2031,13 +2065,21 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
   assert.deepEqual(r.plan_diff, ["new plan"]);
   assert.deepEqual(r.fleet_size, { criteria: 2, est_agents: 20, est_rounds: 1 });
   assert.equal(r.plan_path, "docs/plans/x.md");
-  const ref = r.plan_ref;
-  for (const k of ["branch", "plan_commit", "plan_path", "plan_sha256", "criteria", "brief"]) assert.ok(k in ref, k);
-  assert.equal(ref.branch, "fleet/l42-add-thing");
-  assert.equal(ref.plan_commit, PC);
+  // the caller gets a tiny ref; the full sealed ref is committed in the plan commit
+  const tiny = r.plan_ref;
+  assert.deepEqual(Object.keys(tiny).sort(), ["branch", "plan_commit", "ref_path", "ref_sha256", "repo"]);
+  assert.equal(tiny.branch, "fleet/l42-add-thing");
+  assert.equal(tiny.plan_commit, PC);
+  assert.equal(tiny.ref_path, ".fleet/l42/plan_ref.json");
+  assert.equal(tiny.repo, "/r");
+  const content = out.calls.length && richPlanStore(out);
+  assert.equal(tiny.ref_sha256, sha256(content));
+  const ref = JSON.parse(content);
+  for (const k of ["branch", "plan_path", "plan_sha256", "criteria", "brief", "plan_facts", "history", "seal"]) assert.ok(k in ref, k);
   assert.equal(ref.plan_sha256, PSHA);
   assert.deepEqual(ref.brief, BRIEF);
   assert.deepEqual(ref.criteria.map((c) => c.id), ["AC1", "AC2"]);
+  assert.ok(!content.includes("held_out_examples") && !content.includes(SECRET), "the ref file holds no held-out example");
   // held-out examples are dropped: never returned
   assert.ok(!JSON.stringify(r).includes('"held_out_examples":'), "no held_out_examples key in the result");
   assert.ok(!JSON.stringify(r).includes(SECRET));
@@ -2046,20 +2088,31 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "preflight",
     "intake",
     "workspace",
+    "infra:branch-scan",
     "role:scope-and-plan",
     "role:plan-audit",
+    "infra:stage-plan",
     "infra:commit-plan",
   ]);
   const cp = call(out, "infra:commit-plan").prompt;
   assert.match(cp, /LOCALLY/);
   assert.match(cp, /Never push/);
+  assert.match(cp, /plan\(l42\): add-thing/);
   assert.deepEqual(inputsOf(cp), {
     worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
     branch: "fleet/l42-add-thing",
     plan_path: "docs/plans/x.md",
+    ref_path: ".fleet/l42/plan_ref.json",
+    task_id: "l42",
     slug: "add-thing",
   });
 });
+
+// the ref file the plan run committed at the plan commit
+function richPlanStore(out) {
+  const c = call(out, "infra:commit-plan");
+  return refContentOf(c.prompt);
+}
 
 test("plan_diff is forwarded to plan-audit as an array", async () => {
   const s = happy();
@@ -2140,22 +2193,204 @@ function buildArgs(ref, over) {
   return Object.assign({ mode: "build", plan_ref: ref, date: "2026-11-04", repo: "/r", project: "o/r" }, over || {});
 }
 
-test("plan_ref seal is the sha256 of its canonical JSON (utf-8, non-ASCII included)", async () => {
+test("ref file seal is the sha256 of its canonical JSON (utf-8, non-ASCII included)", async () => {
   const s = happy({ brief: { ...BRIEF, title: "Add Thing — ünïcode 🚀", description: "em — dash" } });
-  const ref = await planRefFor(s);
+  const tiny = await planRefFor(s);
+  const ref = JSON.parse(s.__store[tiny.plan_commit]);
   const o = Object.assign({}, ref);
   delete o.seal;
   assert.equal(ref.seal, createHash("sha256").update(canon(o), "utf8").digest("hex"));
 });
 
-test("a plan_ref changed after the plan run is refused before any agent", async () => {
-  const ref = await planRefFor(happy());
-  const bad = JSON.parse(JSON.stringify(ref));
-  bad.criteria[0].text = "something else";
-  const out = await runOne(happy(), buildArgs(bad));
+test("tiny plan_ref round trip: build mode loads the committed ref and uses it", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  assert.ok(JSON.stringify(tiny).length < 400, "tiny ref is small: " + JSON.stringify(tiny).length);
+  const out = await runOne(s, buildArgs(tiny));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  const load = call(out, "infra:load-ref");
+  assert.equal(load.opts.agentType, "fleet:judge");
+  assert.deepEqual(inputsOf(load.prompt), {
+    main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
+    plan_commit: PC,
+    ref_path: ".fleet/l42/plan_ref.json",
+  });
+  assert.ok(out.labels.indexOf("infra:load-ref") < out.labels.indexOf("infra:verify-plan"));
+  assert.deepEqual(inputsOf(call(out, "role:fleet-coder:r1").prompt).criteria.map((c) => c.id), ["AC1", "AC2"]);
+});
+
+test("a malformed tiny plan_ref is refused before any agent", async () => {
+  const tiny = await planRefFor(happy());
+  for (const bad of [
+    { ...tiny, ref_sha256: "x" },
+    { ...tiny, plan_commit: "P1" },
+    { ...tiny, ref_path: "../etc/plan_ref.json" },
+    { ...tiny, branch: "main" },
+    { ...tiny, repo: "r" },
+  ]) {
+    const out = await runOne(happy(), buildArgs(bad));
+    assert.equal(out.result.status, "needs_human", JSON.stringify(bad));
+    assert.equal(out.calls.length, 0);
+  }
+});
+
+test("a wrong ref_sha256 stops after the load, before any role", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const out = await runOne(s, buildArgs({ ...tiny, ref_sha256: "e".repeat(64) }));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /ref_sha256/);
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+});
+
+test("a tampered ref file stops before any role", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  // the file at the plan commit differs from the one the plan run committed
+  const ref = JSON.parse(s.__store[PC]);
+  ref.criteria[0].text = "something else";
+  s.__store[PC] = JSON.stringify(ref) + "\n";
+  let out = await runOne(s, buildArgs(tiny));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /ref_sha256/);
+  assert.ok(!out.labels.some((l) => ROLE_LABEL.test(l)));
+  // a ref whose bytes match the tiny ref but whose inner seal is broken
+  out = await runOne(s, buildArgs({ ...tiny, ref_sha256: sha256(s.__store[PC]) }));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /seal mismatch/);
-  assert.equal(out.calls.length, 0);
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+});
+
+test("a ref file for another branch or repo stops before any role", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  for (const over of [{ repo: "/other" }, { branch: "fleet/l42-other-slug" }]) {
+    const out = await runOne(s, buildArgs({ ...tiny, ...over }));
+    assert.equal(out.result.status, "needs_human", JSON.stringify(over));
+    assert.match(out.result.reason, /ref file \.fleet\/l42\/plan_ref\.json does not match plan_ref/);
+    assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+  }
+});
+
+test("a load step that copies the right sha256 but changed content stops", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const ref = JSON.parse(s.__store[PC]);
+  ref.tldr = "other";
+  s["infra:load-ref"] = { status: "ok", reason: "read", content: JSON.stringify(ref) + "\n", sha256: tiny.ref_sha256 };
+  const out = await runOne(s, buildArgs(tiny));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /does not match ref_sha256/);
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+});
+
+test("a load step that returns content not matching its own sha256 stops", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  s["infra:load-ref"] = { status: "ok", reason: "read", content: s.__store[PC], sha256: "f".repeat(64) };
+  const out = await runOne(s, buildArgs(tiny));
+  assert.equal(out.result.status, "needs_human");
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+});
+
+test("commit-plan: committed ref bytes may be reformatted, but must parse to the same ref", async () => {
+  // a formatter hook pretty-printed the file: same object, new bytes -> ok
+  const s = happy();
+  s["infra:commit-plan"] = (prompt) => {
+    const pretty = JSON.stringify(JSON.parse(refContentOf(prompt)), null, 2) + "\n";
+    s.__store[PC] = pretty;
+    return { status: "ok", reason: "committed", head: PC, plan_sha256: PSHA, ref_sha256: sha256(pretty), ref_content: pretty };
+  };
+  const tiny = await planRefFor(s);
+  assert.equal(tiny.ref_sha256, sha256(s.__store[PC]));
+  const out = await runOne(s, buildArgs(tiny));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  // a committed ref that differs from what the script wrote -> failed, no plan_ref
+  const bad = happy();
+  bad["infra:commit-plan"] = (prompt) => {
+    const o = JSON.parse(refContentOf(prompt));
+    o.tldr = "changed";
+    const c = JSON.stringify(o) + "\n";
+    return { status: "ok", reason: "committed", head: PC, plan_sha256: PSHA, ref_sha256: sha256(c), ref_content: c };
+  };
+  const r = await runOne(bad, ARGS);
+  assert.equal(r.result.status, "failed");
+  assert.ok(!("plan_ref" in r.result));
+});
+
+test("commit-plan: a plan hash that differs from the staged one fails", async () => {
+  const s = happy({ script: { "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: "9".repeat(64) } } });
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /staged/);
+});
+
+test("the ref file is frozen: the hasher hashes it and the coder gets it as read-only config", async () => {
+  const s = happy();
+  const withRef = H({ ...HASHES_FLAT, ".fleet/l42/plan_ref.json": "hr" });
+  s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_PLAN, hashes: withRef };
+  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes: withRef };
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  const fz = inputsOf(call(out, "hasher:freeze:f1").prompt);
+  assert.ok(fz.test_files.includes(".fleet/l42/plan_ref.json"));
+  const coder = inputsOf(call(out, "role:fleet-coder:r1").prompt);
+  assert.ok(!(".fleet/l42/plan_ref.json" in coder.frozen_tests));
+  assert.equal(coder.frozen_config_sections[".fleet/l42/plan_ref.json"], "hr");
+});
+
+test("a coder round that edits the ref file is rejected", async () => {
+  const frozenRef = H({ ...HASHES_FLAT, ".fleet/l42/plan_ref.json": "hr" });
+  const s = hashViolation(H({ ...HASHES_FLAT, ".fleet/l42/plan_ref.json": "TAMPERED" }));
+  s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_PLAN, hashes: frozenRef };
+  s["hasher:post-coder:r2"] = { status: "ok", fingerprint: FP_K2, hashes: frozenRef };
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /\.fleet\/l42\/plan_ref\.json/);
+});
+
+// ---------------------------------------------------------------- plan mode on a built branch
+
+test("plan mode on a branch with build commits stops before the planner", async () => {
+  for (const commits of [
+    [{ sha: "1111111", subject: "feat(x): add it", files: ["src/x.py"] }],
+    [{ sha: "1111111", subject: "plan(l42): add-thing", files: ["docs/plans/x.md", "src/x.py"] }],
+    [{ sha: "1111111", subject: "plan(l43): other", files: ["docs/plans/y.md"] }],
+    [{ sha: "1111111", subject: "plan(l42): add-thing", files: ["docs/plans/x.md", "README.md"] }],
+    [{ sha: "1111111", subject: "plan(l42): add-thing", files: ["docs/plans/x.md", ".fleet/l43/plan_ref.json"] }],
+    [
+      { sha: "1111111", subject: "plan(l42): add-thing", files: ["docs/plans/x.md", ".fleet/l42/plan_ref.json"] },
+      { sha: "2222222", subject: "test(AC1): behaviour 1", files: ["tests/test_a.py"] },
+    ],
+  ]) {
+    const s = happy({ script: { "infra:branch-scan": { status: "ok", reason: "scanned", commits } } });
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(commits));
+    assert.match(out.result.reason, /branch has build commits; run build, or delete branch/);
+    assert.ok(!out.labels.includes("role:scope-and-plan"));
+    assert.ok(!out.labels.includes("infra:commit-plan"));
+  }
+});
+
+test("plan mode on a plan-only branch re-plans and adds a new plan commit", async () => {
+  const commits = [
+    { sha: "1111111", subject: "plan(l42): add-thing", files: ["docs/plans/x.md", ".fleet/l42/plan_ref.json"] },
+    { sha: "2222222", subject: "plan(l42): add-thing", files: [".fleet/l42/plan_ref.json"] },
+  ];
+  const s = happy({ script: { "infra:branch-scan": { status: "ok", reason: "scanned", commits } } });
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation");
+  assert.ok(out.labels.includes("infra:commit-plan"));
+  const scan = call(out, "infra:branch-scan");
+  assert.equal(scan.opts.agentType, "fleet:judge");
+  assert.deepEqual(inputsOf(scan.prompt), {
+    main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
+    default_branch: "master",
+  });
 });
 
 // ---------------------------------------------------------------- v2: build mode verify
@@ -2166,7 +2401,7 @@ test("build mode: preflight first, then workspace, verify, prepare; no planner",
   const out = await runOne(s, buildArgs(ref));
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.deepEqual(out.labels.slice(0, 4), ["preflight", "workspace", "infra:verify-plan", "infra:prepare"]);
+  assert.deepEqual(out.labels.slice(0, 5), ["preflight", "workspace", "infra:load-ref", "infra:verify-plan", "infra:prepare"]);
   assert.ok(!out.labels.some((l) => l.startsWith("role:scope-and-plan") || l.startsWith("role:plan-audit")));
   const v = inputsOf(call(out, "infra:verify-plan").prompt);
   assert.deepEqual(v, {
@@ -2174,6 +2409,7 @@ test("build mode: preflight first, then workspace, verify, prepare; no planner",
     branch: "fleet/l42-add-thing",
     plan_commit: PC,
     plan_path: "docs/plans/x.md",
+    ref_path: ".fleet/l42/plan_ref.json",
   });
   assert.equal(call(out, "infra:verify-plan").opts.agentType, "fleet:judge");
 });
@@ -2268,11 +2504,11 @@ test("build mode: a push that did not land the approved sha stops before the PR"
   assert.ok(!out.labels.includes("role:fleet-pr-opener"));
 });
 
-test("plan hash: commit and verify steps embed the same program, and it hashes the committed bytes", { skip: !HAVE_PY }, async () => {
+test("plan hash: stage and verify steps embed the same program, and it hashes the committed bytes", { skip: !HAVE_PY }, async () => {
   const s = happy();
   const plan = await runOne(s, ARGS);
   const build = await runOne(s, buildArgs(plan.result.plan_ref));
-  const progs = [call(plan, "infra:commit-plan").prompt, call(build, "infra:verify-plan").prompt].map((p) => {
+  const progs = [call(plan, "infra:stage-plan").prompt, call(build, "infra:verify-plan").prompt].map((p) => {
     const m = p.match(/python3 -I -c ('(?:[^']|'\\'')*')/);
     assert.ok(m, "prompt embeds the plan hash program");
     return m[1];
@@ -2300,8 +2536,8 @@ test("plan hash: commit and verify steps embed the same program, and it hashes t
 const PC2 = "0123456789ab";
 
 function planWrong(findings) {
-  return happy({
-    script: {
+  const s = happy();
+  return Object.assign(s, {
       "role:fleet-code-judge:r1": { status: "ok", reason: "plan wrong", verdict: "plan_wrong", routed_findings: findings },
       "infra:replan-worktree": { status: "ok", reason: "ok", head: PC },
       "role:scope-and-plan:replan": {
@@ -2317,9 +2553,9 @@ function planWrong(findings) {
         held_out_examples: [{ criterion_id: "AC3", given: "g", when: "w", then: SECRET }],
       },
       "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
-      "infra:commit-plan:replan": { status: "ok", reason: "committed", head: PC2, plan_sha256: "d".repeat(64) },
+      "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
+      "infra:commit-plan:replan": commitStub(s.__store, PC2, "d".repeat(64)),
       "infra:replan-reset": { status: "ok", reason: "reset", head: PC2, superseded_head: "K1" },
-    },
   });
 }
 
@@ -2344,7 +2580,8 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.equal(r.fleet_size.criteria, 3);
   assert.equal(r.plan_ref.plan_commit, PC2);
   assert.equal(r.plan_ref.branch, "fleet/l42-add-thing");
-  assert.equal(r.plan_ref.history.replans, 1);
+  assert.equal(r.plan_ref.ref_sha256, sha256(s.__store[PC2]));
+  assert.equal(JSON.parse(s.__store[PC2]).history.replans, 1);
   assert.ok(!JSON.stringify(r).includes(SECRET));
   // no PR, no push, no write-back on a plan_wrong stop
   for (const l of ["infra:push", "role:fleet-pr-opener", "infra:ledger-writeback", "infra:comments-list", "infra:comments-post"])
@@ -2355,6 +2592,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
     "infra:replan-worktree",
     "role:scope-and-plan:replan",
     "role:plan-audit:replan",
+    "infra:stage-plan:replan",
     "infra:commit-plan:replan",
     "infra:replan-reset",
   ]);
@@ -2406,12 +2644,12 @@ test("plan_wrong: the next build starts fresh from the new plan with new criteri
     "fleet/l42-add-thing--p01234567-t-AC2",
     "fleet/l42-add-thing--p01234567-t-AC3",
   ]);
-  assert.equal(inputsOf(call(second, "hasher:freeze:f1").prompt).test_files.length, 3);
+  assert.equal(inputsOf(call(second, "hasher:freeze:f1").prompt).test_files.length, 4);
   assert.deepEqual(second.result.rounds, { tests: 1, code: 1 });
   assert.equal(second.result.agents, second.calls.length);
   assert.equal(second.result.cumulative.runs, 3);
   assert.equal(second.result.cumulative.replans, 1);
-  assert.equal(second.result.cumulative.agents, ref.history.agents + first.result.agents + second.result.agents);
+  assert.equal(second.result.cumulative.agents, JSON.parse(s.__store[PC]).history.agents + first.result.agents + second.result.agents);
 });
 
 // ---------------------------------------------------------------- v2: write-back

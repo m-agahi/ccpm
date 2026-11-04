@@ -80,6 +80,8 @@ const MODES = ["plan", "build"];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
+const BRANCH_RE = /^fleet\/[a-z0-9][a-z0-9-]*$/;
+const REF_PATH_RE = /^\.fleet\/([a-z0-9][a-z0-9-]*)\/plan_ref\.json$/;
 const SOURCE_KINDS = ["ledger", "jira", "github", "codeberg", "plan", "text"];
 const EXTERNAL_KINDS = ["jira", "github", "codeberg"];
 // Sources whose ref names the task, in priority order, for the task id.
@@ -437,6 +439,18 @@ const INFRA_SCHEMA = {
     plan_touched: { type: "array", items: STR },
     remote_head: STR,
     superseded_head: STR,
+    ref_sha256: STR,
+    ref_content: STR,
+    sha256: STR,
+    content: STR,
+    commits: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { sha: STR, subject: STR, files: { type: "array", items: STR } },
+        required: ["sha", "subject"],
+      },
+    },
     results: {
       type: "array",
       items: {
@@ -798,6 +812,33 @@ const PLAN_HASH_PY =
   "d = subprocess.run(['git', '-C', sys.argv[1], 'show', sys.argv[2] + ':' + sys.argv[3]], capture_output=True, check=True).stdout\n" +
   "print(hashlib.sha256(d).hexdigest())";
 
+// Prints {sha256, content} of a file as git stores it at a commit. Commit-plan
+// (at HEAD) and build-mode load-ref (at plan_commit) run this exact program.
+const LOAD_REF_PY =
+  "import hashlib, json, subprocess, sys\n" +
+  "d = subprocess.run(['git', '-C', sys.argv[1], 'show', sys.argv[2] + ':' + sys.argv[3]], capture_output=True, check=True).stdout\n" +
+  "print(json.dumps({'sha256': hashlib.sha256(d).hexdigest(), 'content': d.decode('utf-8')}, ensure_ascii=False))";
+
+function loadRefCmd(worktree, rev, refPath) {
+  return "python3 -I -c " + shQuote(LOAD_REF_PY) + " " + shQuote(worktree) + " " + shQuote(rev) + " " + shQuote(refPath);
+}
+
+// The full sealed plan ref lives in the plan commit at this path. The caller
+// only carries {branch, plan_commit, ref_path, ref_sha256, repo}.
+function refPathFor(taskId) {
+  return ".fleet/" + taskId + "/plan_ref.json";
+}
+
+// The command that writes the ref file: a quoted heredoc, so the bytes are
+// exactly content + newline. content is one line of JSON.
+function writeRefCmd(worktree, refPath, content) {
+  const dir = refPath.slice(0, refPath.lastIndexOf("/"));
+  return (
+    "mkdir -p " + shQuote(worktree + "/" + dir) + " && cat > " + shQuote(worktree + "/" + refPath) +
+    " <<'FLEET_REF_JSON'\n" + content + "\nFLEET_REF_JSON"
+  );
+}
+
 function planHashCmd(worktree, rev, planPath) {
   return "python3 -I -c " + shQuote(PLAN_HASH_PY) + " " + shQuote(worktree) + " " + shQuote(rev) + " " + shQuote(planPath);
 }
@@ -957,10 +998,21 @@ function intakePrompt(inputs) {
   );
 }
 
-function commitPlanPrompt(inputs) {
-  const cmd = planHashCmd(inputs.worktree, "HEAD", inputs.plan_path);
+function branchScanPrompt(inputs) {
   return (
-    "Infra step of the fleet build workflow: commit the plan doc LOCALLY. No other edits. Never push. Never --no-verify or any hook bypass; no Co-Authored-By trailer. No ledger, ticket or comment writes.\n" +
+    "Infra step of the fleet build workflow: list the commits the fleet branch carries. Read only: no edits, no commits, no checkout, no reset, no push.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "For every line of `git -C <main_worktree> log --format=%H%x09%s origin/<default_branch>..HEAD` (empty when the branch adds nothing), " +
+    "files = the lines of `git -C <main_worktree> show --name-only --format= <sha>`.\n" +
+    "Return {status, reason, commits: [{sha, subject, files}]}."
+  );
+}
+
+function stagePlanPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: stage the plan doc and hash the staged bytes. No other edits, no commit, no push.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
@@ -969,14 +1021,56 @@ function commitPlanPrompt(inputs) {
       ? "`git -C <worktree> branch --show-current` must equal <branch>; mismatch -> needs_human."
       : "The worktree must be on a detached HEAD (`git -C <worktree> symbolic-ref -q HEAD` fails); else needs_human.") +
     "\n" +
-    "2. `git -C <worktree> status --porcelain`: any dirty path other than <plan_path> -> needs_human with the paths.\n" +
-    '3. If <plan_path> is dirty: `git -C <worktree> add -- <plan_path>` and `git -C <worktree> commit -m "docs(plan): <slug>"`. Hook failure: fix the cause and retry once; a second failure -> failed. A clean plan_path makes no commit.\n' +
-    "4. `git -C <worktree> ls-files --error-unmatch -- <plan_path>` must succeed and `git -C <worktree> status --porcelain` must be empty; else needs_human.\n" +
-    "5. head = `git -C <worktree> rev-parse HEAD`.\n" +
-    "6. plan_sha256 = the output of this one command, run exactly as written:\n" +
-    cmd +
+    "2. `git -C <worktree> status --porcelain`: any dirty path other than <plan_path> and <ref_path> -> needs_human with the paths.\n" +
+    "3. `git -C <worktree> add -- <plan_path>`.\n" +
+    "4. plan_sha256 = the output of this one command (it hashes the staged copy), run exactly as written:\n" +
+    planHashCmd(inputs.worktree, "", inputs.plan_path) +
     "\n" +
-    "Return {status, reason, head, plan_sha256}."
+    "Return {status, reason, plan_sha256}."
+  );
+}
+
+function commitPlanPrompt(inputs, refContent) {
+  return (
+    "Infra step of the fleet build workflow: commit the plan doc and its ref file LOCALLY, in ONE commit. No other edits. Never push. Never --no-verify or any hook bypass; no Co-Authored-By trailer. No ledger, ticket or comment writes.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. " +
+    (inputs.branch
+      ? "`git -C <worktree> branch --show-current` must equal <branch>; mismatch -> needs_human."
+      : "The worktree must be on a detached HEAD (`git -C <worktree> symbolic-ref -q HEAD` fails); else needs_human.") +
+    "\n" +
+    "2. `git -C <worktree> status --porcelain`: any dirty path other than <plan_path> and <ref_path> -> needs_human with the paths.\n" +
+    "3. Write the ref file: run this one command exactly as written, unmodified:\n" +
+    writeRefCmd(inputs.worktree, inputs.ref_path, refContent) +
+    "\n" +
+    "4. `git -C <worktree> add -- <plan_path> <ref_path>` and `git -C <worktree> commit -m " +
+    shQuote("plan(" + inputs.task_id + "): " + inputs.slug) +
+    "`. If a hook rewrites a file, re-add <plan_path> and <ref_path> and commit once more; any other hook failure: fix the cause and retry once; a second failure -> failed. Never edit the ref file by hand.\n" +
+    "5. `git -C <worktree> ls-files --error-unmatch -- <plan_path> <ref_path>` must succeed and `git -C <worktree> status --porcelain` must be empty; else needs_human.\n" +
+    "6. head = `git -C <worktree> rev-parse HEAD`.\n" +
+    "7. plan_sha256 = the output of this command, run exactly as written:\n" +
+    planHashCmd(inputs.worktree, "HEAD", inputs.plan_path) +
+    "\n" +
+    "8. Run this command exactly as written; it prints {sha256, content}. Copy them unchanged as ref_sha256 and ref_content:\n" +
+    loadRefCmd(inputs.worktree, "HEAD", inputs.ref_path) +
+    "\n" +
+    "Return {status, reason, head, plan_sha256, ref_sha256, ref_content}."
+  );
+}
+
+function loadRefPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: LOAD the approved plan ref. Read only: no edits, no commits, no checkout, no reset, no push.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified:\n" +
+    loadRefCmd(inputs.main_worktree, inputs.plan_commit, inputs.ref_path) +
+    "\n" +
+    'It prints one JSON object {sha256, content}. Return {status: "ok", reason, sha256, content} with both values copied exactly, byte for byte. ' +
+    'If the command exits non-zero, return {status: "needs_human", reason: <its stderr>}. Run no other command.'
   );
 }
 
@@ -997,7 +1091,7 @@ function verifyPlanPrompt(inputs) {
     "\n" +
     "6. is_ancestor = whether `git -C <main_worktree> merge-base --is-ancestor <plan_commit> HEAD` exits 0.\n" +
     "7. commits_since = every line of `git -C <main_worktree> log --format=%H%x09%s <plan_commit>..HEAD` as {sha, subject} (empty when head equals plan_commit or is_ancestor is false).\n" +
-    "8. plan_touched = the lines of `git -C <main_worktree> log --format=%H <plan_commit>..HEAD -- <plan_path>`.\n" +
+    "8. plan_touched = the lines of `git -C <main_worktree> log --format=%H <plan_commit>..HEAD -- <plan_path> <ref_path>`.\n" +
     "Return {status, reason, head, plan_sha256, plan_sha256_head, is_ancestor, commits_since, plan_touched}."
   );
 }
@@ -1279,7 +1373,10 @@ function cleanRepo(r) {
 }
 
 function layout(names, repo) {
-  const key = names.taskId + "-" + names.slug;
+  return layoutKey(names.taskId + "-" + names.slug, repo);
+}
+
+function layoutKey(key, repo) {
   const root = repo + "/.claude/worktrees/fleet-" + key;
   return { key, branch: "fleet/" + key, root, mainWt: root + "/main", scratch: root + "/scratch" };
 }
@@ -1499,19 +1596,47 @@ async function planAndAudit(ctx) {
   };
 }
 
-async function commitPlan(label, worktree, branch, planPath, slug, phaseName) {
-  const r = await infra(label, commitPlanPrompt({ worktree, branch, plan_path: planPath, slug }), phaseName);
+// Stage the plan, seal the full ref with the staged plan hash, then write the
+// ref file and commit both in ONE local commit. ctx.after: agents this run
+// still dispatches after the ref is sealed (counted into its history).
+async function commitPlanAndRef(ctx) {
+  const sfx = ctx.suffix || "";
+  const refPath = refPathFor(ctx.fields.taskId);
+  const base = { worktree: ctx.worktree, branch: ctx.branch, plan_path: ctx.fields.planPath };
+  const st = await infra("infra:stage-plan" + sfx, stagePlanPrompt(Object.assign({}, base, { ref_path: refPath })), ctx.phaseName);
+  if (typeof st.plan_sha256 !== "string" || !SHA256_RE.test(st.plan_sha256))
+    halt("failed", "infra:stage-plan" + sfx + " returned no usable plan_sha256");
+  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after });
+  const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: st.plan_sha256, history }));
+  const label = "infra:commit-plan" + sfx;
+  const r = await infra(
+    label,
+    commitPlanPrompt(Object.assign({}, base, { ref_path: refPath, task_id: full.task_id, slug: full.slug }), JSON.stringify(full)),
+    ctx.phaseName,
+  );
   if (typeof r.head !== "string" || !SHA_RE.test(r.head)) halt("failed", label + " returned no usable head sha: " + JSON.stringify(r.head));
-  if (typeof r.plan_sha256 !== "string" || !SHA256_RE.test(r.plan_sha256))
-    halt("failed", label + " returned no usable plan_sha256");
-  gate("plan committed locally at " + r.head + " (" + planPath + " sha256 " + r.plan_sha256 + "); not pushed");
-  return { head: r.head, planSha: r.plan_sha256 };
+  if (r.plan_sha256 !== st.plan_sha256)
+    halt("failed", label + ": the committed plan hashes " + r.plan_sha256 + ", the staged plan " + st.plan_sha256);
+  if (typeof r.ref_content !== "string" || typeof r.ref_sha256 !== "string" || sha256Hex(r.ref_content) !== r.ref_sha256)
+    halt("failed", label + " returned a ref_content that does not match its ref_sha256");
+  let committed = null;
+  try {
+    committed = JSON.parse(r.ref_content);
+  } catch (e) {
+    committed = null;
+  }
+  if (canonical(committed) !== canonical(full)) halt("failed", label + ": the committed ref file differs from the sealed ref");
+  gate("plan and ref committed locally at " + r.head + " (" + full.plan_path + " sha256 " + full.plan_sha256 + ", " + refPath + " sha256 " + r.ref_sha256 + "); not pushed");
+  return {
+    full,
+    tiny: { branch: full.branch, plan_commit: r.head, ref_path: refPath, ref_sha256: r.ref_sha256, repo: full.brief.repo },
+  };
 }
 
+// The full ref, sealed. It has no plan_commit: it is committed in that commit.
 function makePlanRef(f) {
   const ref = stripHeldOut({
     branch: f.branch,
-    plan_commit: f.planCommit,
     plan_path: f.planPath,
     plan_sha256: f.planSha,
     criteria: f.criteria,
@@ -1526,17 +1651,31 @@ function makePlanRef(f) {
   return ref;
 }
 
-function awaiting(reason, p, ref, extra) {
+function awaiting(reason, p, tiny, full, extra) {
   return stripHeldOut(
     Object.assign(finish("awaiting_confirmation", reason), {
       tldr: p.tldr,
       plan_diff: p.planDiff,
       fleet_size: p.fleetSize,
       plan_path: p.planPath,
-      plan_ref: ref,
-      cumulative: ref.history,
+      plan_ref: tiny,
+      cumulative: full.history,
     }, extra || {}),
   );
+}
+
+// Commits on the fleet branch beyond origin/<default> that are not earlier
+// plan commits of this task: subject plan(<task id>): and files only the plan
+// doc (one .md) and this task's .fleet/ directory.
+function buildCommitsOf(commits, taskId) {
+  const re = new RegExp("^plan\\(" + escapeRe(taskId) + "\\): ");
+  const dir = ".fleet/" + taskId + "/";
+  return commits.filter((c) => {
+    if (!re.test(String((c && c.subject) || ""))) return true;
+    if (!Array.isArray(c.files)) return true;
+    const other = c.files.filter((f) => String(f).indexOf(dir) !== 0);
+    return other.length > 1 || other.some((f) => !/\.md$/i.test(String(f)));
+  });
 }
 
 // ---------------------------------------------------------------- plan mode
@@ -1572,33 +1711,65 @@ async function planMode(input, date) {
   const project = input.project || ws.remoteSlug;
   const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
 
+  // never commit a plan on top of code: only earlier plan commits may be there
+  const scan = await infra(
+    "infra:branch-scan",
+    branchScanPrompt({ main_worktree: lay.mainWt, default_branch: ws.defaultBranch }),
+    "Workspace",
+    JUDGE_AGENT,
+  );
+  if (!Array.isArray(scan.commits)) halt("failed", "infra:branch-scan returned no commit list");
+  const built = buildCommitsOf(scan.commits, names.taskId);
+  if (built.length)
+    halt(
+      "needs_human",
+      "branch has build commits; run build, or delete branch " + lay.branch + " (first: " + built[0].sha + " " + JSON.stringify(built[0].subject) + ")",
+    );
+  if (scan.commits.length) gate("branch-scan: " + scan.commits.length + " earlier plan commit(s); re-planning on top");
+
   phase("Plan");
   const p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug });
-  const pc = await commitPlan("infra:commit-plan", lay.mainWt, lay.branch, p.planPath, names.slug, "Plan");
-  const ref = makePlanRef({
+  const pc = await commitPlanAndRef({
+    worktree: lay.mainWt,
     branch: lay.branch,
-    planCommit: pc.head,
-    planPath: p.planPath,
-    planSha: pc.planSha,
-    criteria: p.criteria,
-    brief,
-    taskId: names.taskId,
-    slug: names.slug,
-    tldr: p.tldr,
-    planFacts: p.planFacts,
-    history: { runs: 1, replans: 0, agents: state.agents },
+    phaseName: "Plan",
+    after: 1,
+    fields: {
+      branch: lay.branch,
+      planPath: p.planPath,
+      criteria: p.criteria,
+      brief,
+      taskId: names.taskId,
+      slug: names.slug,
+      tldr: p.tldr,
+      planFacts: p.planFacts,
+      history: { runs: 1, replans: 0, agents: 0 },
+    },
   });
-  return awaiting("plan ready: confirm, then run mode build with plan_ref", p, ref);
+  return awaiting("plan ready: confirm, then run mode build with plan_ref", p, pc.tiny, pc.full);
 }
 
 // ---------------------------------------------------------------- build mode
 
+// The tiny ref the caller carries.
+function tinyRefProblem(t) {
+  if (!t || typeof t !== "object") return "missing";
+  if (typeof t.branch !== "string" || !BRANCH_RE.test(t.branch)) return "branch is not a fleet branch";
+  if (typeof t.plan_commit !== "string" || !SHA_RE.test(t.plan_commit)) return "plan_commit is not a commit sha";
+  const m = typeof t.ref_path === "string" ? REF_PATH_RE.exec(t.ref_path) : null;
+  if (!m) return "ref_path is not .fleet/<task id>/plan_ref.json";
+  if (t.branch.indexOf("fleet/" + m[1] + "-") !== 0) return "ref_path does not belong to the branch";
+  if (typeof t.ref_sha256 !== "string" || !SHA256_RE.test(t.ref_sha256)) return "ref_sha256 is not a sha256";
+  if (!cleanRepo(t.repo)) return "repo must be an absolute path";
+  return null;
+}
+
+// The full ref loaded from the ref file.
 function planRefProblem(r) {
   if (!r || typeof r !== "object") return "missing";
   if (typeof r.seal !== "string" || r.seal !== sealOf(r)) return "seal mismatch (changed after the plan run)";
-  for (const k of ["branch", "plan_commit", "plan_path", "plan_sha256", "task_id", "slug", "tldr"])
+  for (const k of ["branch", "plan_path", "plan_sha256", "task_id", "slug", "tldr"])
     if (typeof r[k] !== "string" || !r[k]) return k + " missing";
-  if (!SHA_RE.test(r.plan_commit)) return "plan_commit is not a commit sha";
   if (!SHA256_RE.test(r.plan_sha256)) return "plan_sha256 is not a sha256";
   if (!Array.isArray(r.criteria)) return "criteria missing";
   const b = briefProblem(r.brief);
@@ -1624,22 +1795,45 @@ function isFleetCommit(subject, branch, critPrefix, ids) {
 }
 
 async function buildMode(input, date) {
-  const problem = planRefProblem(input.plan_ref);
-  if (problem) stop("needs_human", "args.plan_ref " + problem + ": run /build-task again to re-plan");
-  const ref = input.plan_ref;
+  const tp = tinyRefProblem(input.plan_ref);
+  if (tp) stop("needs_human", "args.plan_ref " + tp + ": run /build-task again to re-plan");
+  const tiny = input.plan_ref;
+  const repo = cleanRepo(tiny.repo);
+  const lay = layoutKey(tiny.branch.slice("fleet/".length), repo);
+  state.branch = lay.branch;
+
+  await preflightStep();
+  const ws = await workspaceStep(repo, lay);
+
+  // load the sealed ref from the plan commit; nothing else is trusted
+  phase("Verify");
+  const ld = await infra(
+    "infra:load-ref",
+    loadRefPrompt({ main_worktree: lay.mainWt, plan_commit: tiny.plan_commit, ref_path: tiny.ref_path }),
+    "Verify",
+    JUDGE_AGENT,
+  );
+  if (typeof ld.content !== "string" || ld.sha256 !== tiny.ref_sha256 || sha256Hex(ld.content) !== tiny.ref_sha256)
+    halt("needs_human", "plan changed since approval: " + tiny.ref_path + " at " + tiny.plan_commit + " does not match ref_sha256 " + tiny.ref_sha256);
+  let loaded = null;
+  try {
+    loaded = JSON.parse(ld.content);
+  } catch (e) {
+    loaded = null;
+  }
+  const lp = planRefProblem(loaded);
+  if (lp) halt("needs_human", "ref file " + tiny.ref_path + ": " + lp);
+  if (loaded.branch !== tiny.branch || cleanRepo(loaded.brief.repo) !== repo || refPathFor(loaded.task_id) !== tiny.ref_path)
+    halt("needs_human", "ref file " + tiny.ref_path + " does not match plan_ref (branch, repo or task id)");
+  const ref = Object.assign({}, loaded, { plan_commit: tiny.plan_commit, ref_path: tiny.ref_path });
   const brief = cleanBrief(ref.brief);
   const names = { taskId: ref.task_id, slug: ref.slug };
-  const lay = layout(names, brief.repo);
-  state.branch = lay.branch;
   const history = {
     runs: (ref.history.runs || 0) + 1,
     replans: ref.history.replans || 0,
     agents: ref.history.agents || 0,
   };
-  gate("build " + lay.branch + " from plan " + ref.plan_path + " @ " + ref.plan_commit + " (run " + history.runs + ", re-plans so far " + history.replans + ")");
-
-  await preflightStep();
-  const ws = await workspaceStep(brief.repo, lay);
+  gate("build " + lay.branch + " from plan " + ref.plan_path + " @ " + ref.plan_commit + " (run " + history.runs + ", re-plans so far " + history.replans + "); ref file sha256 matches, seal ok");
   const project = input.project || ws.remoteSlug;
   const defaultBranch = ws.defaultBranch;
   const remoteSlug = ws.remoteSlug;
@@ -1647,13 +1841,12 @@ async function buildMode(input, date) {
   const branch = lay.branch;
 
   // verify the approved plan
-  phase("Verify");
   const sha8 = ref.plan_commit.slice(0, 8);
   const critPrefix = branch + "--p" + sha8 + "-t-";
   const criteria = normCriteria(ref.criteria);
   const v = await infra(
     "infra:verify-plan",
-    verifyPlanPrompt({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_path: ref.plan_path }),
+    verifyPlanPrompt({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_path: ref.plan_path, ref_path: ref.ref_path }),
     "Verify",
     JUDGE_AGENT,
   );
@@ -1664,7 +1857,7 @@ async function buildMode(input, date) {
     if (v.is_ancestor !== true)
       halt("needs_human", "plan changed since approval: branch HEAD " + v.head + " does not descend from plan_commit " + ref.plan_commit);
     if (v.plan_sha256_head !== ref.plan_sha256 || (v.plan_touched || []).length)
-      halt("needs_human", "plan changed since approval: a commit after " + ref.plan_commit + " changed " + ref.plan_path);
+      halt("needs_human", "plan changed since approval: a commit after " + ref.plan_commit + " changed " + ref.plan_path + " or " + ref.ref_path);
     const ids = criteria.map((c) => c.id);
     for (const c of v.commits_since || [])
       if (!isFleetCommit(String(c.subject || ""), branch, critPrefix, ids))
@@ -1831,12 +2024,14 @@ async function buildMode(input, date) {
   let codeBaseRef = null;
   const frozenFiles = [];
   for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
+  // the ref file is frozen too (hashed as a config key, read-only for every role)
+  const hashedFiles = frozenFiles.concat([ref.ref_path]);
 
   // refreeze: {round, criteria} after an approved fix_tests round. Only the
   // test files of those criteria may change; any other key -> needs_human.
   async function freeze(refreeze) {
     freezes++;
-    const h = await hasher("hasher:freeze:f" + freezes, mainWt, "hashes", frozenFiles, "Freeze");
+    const h = await hasher("hasher:freeze:f" + freezes, mainWt, "hashes", hashedFiles, "Freeze");
     if (lastJudgeFp && !sameFingerprint(lastJudgeFp, h.fingerprint))
       halt("needs_human", "worktree changed between test approval and freeze");
     if (h.hashes.suspicious.length)
@@ -1913,7 +2108,7 @@ async function buildMode(input, date) {
       ),
     );
     for (const s of coder.commits || []) coderCommits.push(s);
-    const h = await hasher("hasher:post-coder:r" + m, mainWt, "hashes", frozenFiles, "Code");
+    const h = await hasher("hasher:post-coder:r" + m, mainWt, "hashes", hashedFiles, "Code");
     const viol = diffHashes(frozen, h.hashes);
     if (viol.length) {
       coderFindings = [
@@ -2066,7 +2261,25 @@ async function replan(ctx) {
     remoteSlug,
     suffix: ":replan",
   });
-  const pc = await commitPlan("infra:commit-plan:replan", replanWt, null, p.planPath, names.slug, "Re-plan");
+  const pc = await commitPlanAndRef({
+    worktree: replanWt,
+    branch: null,
+    phaseName: "Re-plan",
+    suffix: ":replan",
+    after: 2,
+    fields: {
+      branch: lay.branch,
+      planPath: p.planPath,
+      criteria: p.criteria,
+      brief,
+      taskId: names.taskId,
+      slug: names.slug,
+      tldr: p.tldr,
+      planFacts: p.planFacts,
+      history: { runs: history.runs, replans: n, agents: history.agents },
+    },
+  });
+  const newHead = pc.tiny.plan_commit;
   const rs = await infra(
     "infra:replan-reset",
     replanResetPrompt({
@@ -2074,29 +2287,16 @@ async function replan(ctx) {
       branch: lay.branch,
       expected_head: ctx.expectedHead,
       superseded_branch: superseded,
-      new_plan_commit: pc.head,
+      new_plan_commit: newHead,
       replan_worktree: replanWt,
     }),
     "Re-plan",
   );
-  if (rs.head !== pc.head) halt("failed", "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + pc.head);
-  gate("re-plan " + n + ": old head " + (rs.superseded_head || ctx.expectedHead) + " saved as " + superseded + "; " + lay.branch + " reset to " + pc.head);
-  const hist = { runs: history.runs, replans: n, agents: history.agents + state.agents };
+  if (rs.head !== newHead) halt("failed", "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + newHead);
+  gate("re-plan " + n + ": old head " + (rs.superseded_head || ctx.expectedHead) + " saved as " + superseded + "; " + lay.branch + " reset to " + newHead);
+  const hist = pc.full.history;
   gate("cumulative: run " + hist.runs + ", re-plans " + hist.replans + ", agents " + hist.agents);
-  const newRef = makePlanRef({
-    branch: lay.branch,
-    planCommit: pc.head,
-    planPath: p.planPath,
-    planSha: pc.planSha,
-    criteria: p.criteria,
-    brief,
-    taskId: names.taskId,
-    slug: names.slug,
-    tldr: p.tldr,
-    planFacts: p.planFacts,
-    history: hist,
-  });
-  return awaiting("code-judge plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, newRef, {
+  return awaiting("code-judge plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, pc.tiny, pc.full, {
     proposed_plan_change: proposed,
     plan_findings: ctx.findings,
     superseded_ref: superseded,

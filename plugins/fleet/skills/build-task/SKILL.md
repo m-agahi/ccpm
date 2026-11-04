@@ -80,8 +80,9 @@ runs `/build-task` explicitly, always use the fleet.
                       date: "<date>", project: "<project, if any>" } })
    ```
 
-   Pass `plan_ref` exactly as the workflow returned it. Do not edit, reorder or re-type any field:
-   the workflow checks a seal over it and refuses a changed one.
+   `plan_ref` is small: `{branch, plan_commit, ref_path, ref_sha256, repo}`. Pass it exactly as the
+   workflow returned it. The full plan ref lives in the plan commit; the workflow checks it against
+   `ref_sha256` and refuses a mismatch.
 
    If the result is `awaiting_confirmation` again, the code judge found the plan wrong and the
    workflow re-planned. Show `proposed_plan_change` (a bullet list), then the new `tldr`,
@@ -102,7 +103,8 @@ runs `/build-task` explicitly, always use the fleet.
 ## Re-running
 
 A second plan run for the same input reuses the branch and worktree under
-`<repo>/.claude/worktrees/fleet-<task id>-<slug>/` and updates the plan in place. A build run
+`<repo>/.claude/worktrees/fleet-<task id>-<slug>/` and updates the plan in place, with a new plan
+commit. If the branch already has build commits, plan mode stops: run build, or delete the branch. A build run
 started again with the same `plan_ref` continues on the same criterion branches. The workflow never
 deletes a branch or a worktree. It resets the fleet branch only during a re-plan after
 `plan_wrong`, and only after it saved the old head on `superseded_ref`.
