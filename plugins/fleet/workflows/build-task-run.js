@@ -46,8 +46,8 @@ const EXPECTED_VERSIONS = {
   "plan-audit": 10,
   "fleet-test-writer": 6,
   "fleet-test-judge": 6,
-  "fleet-coder": 7,
-  "fleet-code-judge": 7,
+  "fleet-coder": 9,
+  "fleet-code-judge": 8,
   "fleet-pr-opener": 5,
 };
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
@@ -132,8 +132,11 @@ const RUNNER_CONFIG_FILES = [
   "*.pth (repo root only)",
 ];
 const WALK_SKIP_DIRS = [".git", "node_modules", ".venv", "venv", ".tox", ".nox"];
-// The hasher's suspicious-list entry for runner config in a skipped cache dir.
-const CACHE_SUSPICIOUS_PREFIX = "runner config in a skipped cache dir: ";
+// The hasher's descriptive suspicious-list entries (other entries are odd path
+// names): runner config in a skipped cache dir, and bytecode (*.pyc/*.pyo)
+// named after a frozen test module or conftest, found anywhere the walk or a
+// cache scan reaches.
+const SUSPICIOUS_PREFIXES = ["runner config in a skipped cache dir: ", "bytecode for a frozen file: "];
 const CACHE_SKIP_DIRS = ["__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".import_linter_cache", ".hypothesis"];
 // Ignore rules are frozen too: hiding a new config file behind an ignore rule
 // changes one of these keys. A .gitignore is hashed in the files map when
@@ -204,6 +207,12 @@ PACKAGE_KEYS = ['jest', 'vitest', 'mocha']
 
 wt, mode = sys.argv[1], sys.argv[2]
 explicit = json.loads(sys.argv[3]) if len(sys.argv) > 3 else []
+# module names whose bytecode could shadow a frozen file (the purge removes
+# all bytecode before every hash check, so any such pyc is planted)
+FROZEN_STEMS = set(os.path.basename(f)[:-3] for f in explicit if f.endswith('.py')) | {'conftest'}
+
+def frozen_pyc(name):
+    return (name.endswith('.pyc') or name.endswith('.pyo')) and name.split('.')[0] in FROZEN_STEMS
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
@@ -247,9 +256,11 @@ def scan_cache(reldir):
     # an ignored cache dir is not hashed; any runner config inside it is suspicious
     for dp, dns, fns in os.walk(os.path.join(wt, reldir)):
         for f in sorted(fns):
+            rel = os.path.normpath(os.path.join(os.path.relpath(dp, wt), f))
             if any(fnmatch.fnmatch(f, g) for g in CONFIG_GLOBS) or f in CACHE_ALARM_NAMES:
-                rel = os.path.normpath(os.path.join(os.path.relpath(dp, wt), f))
                 SUSPICIOUS.append('runner config in a skipped cache dir: ' + rel)
+            if frozen_pyc(f):
+                SUSPICIOUS.append('bytecode for a frozen file: ' + rel)
 
 def walk_from(start, found, deferred):
     # never follows a symlink; every link outside the skipped dirs is recorded with its target
@@ -278,6 +289,8 @@ def walk_from(start, found, deferred):
                 LINKS[rel] = os.readlink(full)
             if odd(rel):
                 SUSPICIOUS.append(rel)
+            if frozen_pyc(f):
+                SUSPICIOUS.append('bytecode for a frozen file: ' + rel)
             found.append(rel)
 
 def walk():
@@ -520,6 +533,7 @@ const INFRA_SCHEMA = {
     },
     plan_touched: { type: "array", items: STR },
     remote_head: STR,
+    purged: { type: "number" },
     superseded_head: STR,
     ref_sha256: STR,
     ref_content: STR,
@@ -678,7 +692,7 @@ function diffHashes(frozen, now) {
     }
   }
   for (const p of (now && now.suspicious) || [])
-    out.push(p.indexOf(CACHE_SUSPICIOUS_PREFIX) === 0 ? "suspicious " + p : "suspicious path name " + p);
+    out.push(SUSPICIOUS_PREFIXES.some((x) => p.indexOf(x) === 0) ? "suspicious " + p : "suspicious path name " + p);
   return out;
 }
 
@@ -1224,8 +1238,45 @@ function RETRY_SHELL(cmd, fatalRe) {
     cmd +
     ' 2>"$e"; then rc=0; break; fi;' +
     fatal +
-    ' done; cat "$e"; echo rc=$rc`'
+    ' done; cat "$e"; echo rc=$rc` (run it as one Bash call with timeout 600000 ms; the waits alone take 65s)'
   );
+}
+
+// Deletes every __pycache__ dir, *.pyc/*.pyo file and .pytest_cache dir in the
+// worktree (sparing .git, venvs, node_modules and nested fleet worktrees), and
+// prints purged=<count>. Bytecode is not hashed, so a planted pyc whose header
+// matches a frozen test's mtime and size would run instead of the test.
+const PURGE_FIND =
+  "find <worktree> \\( -name .git -o -name .venv -o -name venv -o -name .tox -o -name .nox -o -name node_modules -o -path '*/.claude/worktrees' \\) -prune -o " +
+  "\\( -type d \\( -name __pycache__ -o -name .pytest_cache \\) -prune -print0 \\) -o \\( -type f \\( -name '*.pyc' -o -name '*.pyo' \\) -print0 \\)";
+const PURGE_CMD =
+  "n=$(" + PURGE_FIND + " | tr -cd '\\0' | wc -c) && " + PURGE_FIND + " | xargs -0 -r rm -rf -- && echo purged=$n";
+// The env every suite run of the frozen tests uses: no bytecode written, no
+// pytest cache (so no stale or planted cache is read either).
+const TEST_ENV = { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" };
+const TEST_ENV_NOTE =
+  "test_env: set these environment variables for every run of the frozen tests and the suite (frozen-test red check included), so no bytecode or pytest cache is written or read. The workflow deletes all bytecode before every hash check and code-judge run.";
+
+function purgePrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: delete Python bytecode and pytest caches. No other change: never touch tracked files, never commit.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one Bash command exactly as written (replace <worktree> with the shell-quoted worktree path), in the foreground. It removes every __pycache__ dir, *.pyc and *.pyo file and .pytest_cache dir, and skips .git, .venv, venv, .tox, .nox, node_modules and .claude/worktrees:\n" +
+    "PURGE: " +
+    PURGE_CMD +
+    "\n" +
+    "purged = the number after `purged=`. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, purged}."
+  );
+}
+
+async function purgeBytecode(label, worktree, phaseName) {
+  const r = await infra(label, purgePrompt({ worktree }), phaseName);
+  if (typeof r.purged !== "number") halt("failed", label + " returned no purged count");
+  gate(label + ": purged " + r.purged + " bytecode/cache paths");
+  return r;
 }
 
 function pushPrompt(inputs) {
@@ -2166,6 +2217,7 @@ async function buildMode(input, date) {
   // test files of those criteria may change; any other key -> needs_human.
   async function freeze(refreeze) {
     freezes++;
+    await purgeBytecode("infra:purge-bytecode:freeze-f" + freezes, mainWt, "Freeze");
     const h = await hasher("hasher:freeze:f" + freezes, mainWt, "hashes", hashedFiles, "Freeze");
     if (lastJudgeFp && !sameFingerprint(lastJudgeFp, h.fingerprint))
       halt("needs_human", "worktree changed between test approval and freeze");
@@ -2228,7 +2280,7 @@ async function buildMode(input, date) {
       halt("needs_human", "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval");
     state.rounds.code++;
     const m = state.rounds.code;
-    reserve(4, "code round " + m);
+    reserve(5, "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
       frozen_tests: testFilesView(frozen, frozenFiles),
@@ -2236,6 +2288,8 @@ async function buildMode(input, date) {
       frozen_tests_note: frozenNote,
       freeze_ref: freezeRef,
       code_base_ref: codeBaseRef,
+      test_env: TEST_ENV,
+      test_env_note: TEST_ENV_NOTE,
     });
     const coder = requireOk(
       "fleet-coder",
@@ -2247,6 +2301,9 @@ async function buildMode(input, date) {
       ),
     );
     for (const s of coder.commits || []) coderCommits.push(s);
+    // purge before the check and the judge; the judge's "before" fingerprint
+    // is the post-purge hasher fingerprint
+    await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");
     const h = await hasher("hasher:post-coder:r" + m, mainWt, "hashes", hashedFiles, "Code");
     const viol = diffHashes(frozen, h.hashes);
     if (viol.length) {

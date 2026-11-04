@@ -66,8 +66,8 @@ const FROZEN_VERSIONS = {
   "plan-audit": 10,
   "fleet-test-writer": 6,
   "fleet-test-judge": 6,
-  "fleet-coder": 7,
-  "fleet-code-judge": 7,
+  "fleet-coder": 9,
+  "fleet-code-judge": 8,
   "fleet-pr-opener": 5,
 };
 
@@ -92,6 +92,8 @@ async function runOne(script, args) {
   const agent = async (prompt, opts = {}) => {
     const label = opts.label;
     calls.push({ label, prompt, opts });
+    // the bytecode purge is mechanical; unscripted purges succeed by default
+    if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
     if (!(label in script)) {
       unscripted.push(label);
       return null;
@@ -1719,31 +1721,31 @@ test("S-2: roles get only criterion test files in frozen_tests; config files go 
 
 test("S-8: a role version lower than the frozen minimum stops in preflight", async () => {
   const s = happy();
-  s.preflight.versions["fleet-coder"] = 6;
+  s.preflight.versions["fleet-coder"] = 8;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder version 6 < frozen 7/);
+  assert.match(out.result.reason, /role fleet-coder version 8 < frozen 9/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
 test("S-8: a higher role version is logged as prose-only and recorded", async () => {
   const s = happy();
-  s.preflight.versions["fleet-code-judge"] = 8;
+  s.preflight.versions["fleet-code-judge"] = 9;
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v8 > frozen v7: prose-only changes assumed/.test(l)));
-  assert.equal(out.result.role_versions["fleet-code-judge"], 8);
-  assert.equal(out.result.role_versions["fleet-coder"], 7);
+  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v9 > frozen v8: prose-only changes assumed/.test(l)));
+  assert.equal(out.result.role_versions["fleet-code-judge"], 9);
+  assert.equal(out.result.role_versions["fleet-coder"], 9);
 });
 
 test("S-8: a role runner that loaded a different version than preflight is discarded", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"].role_version = 8;
+  s["role:fleet-coder:r1"].role_version = 10;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-coder/);
-  assert.match(out.result.reason, /version 8/);
+  assert.match(out.result.reason, /version 10/);
   assert.ok(!out.labels.includes("hasher:post-coder:r1"));
 });
 
@@ -1866,7 +1868,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
   const s = happy();
   s["role:fleet-code-judge:r1"] = {
     __raw: true,
-    role_version: 7,
+    role_version: 8,
     role_contract: "CONTRACT: fleet-v2",
     status: "ok",
     reason: "approved with gates not run: coverage",
@@ -1902,7 +1904,7 @@ test("contract drift: null/empty values are fine where allowed", async () => {
 
 test("contract drift: a needs_human output may lack the role fields", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"] = { __raw: true, role_version: 7, role_contract: "CONTRACT: fleet-v2", status: "needs_human", reason: "test AC1 wrong" };
+  s["role:fleet-coder:r1"] = { __raw: true, role_version: 9, role_contract: "CONTRACT: fleet-v2", status: "needs_human", reason: "test AC1 wrong" };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /test AC1 wrong/);
@@ -3078,7 +3080,7 @@ test("contract drift: a coder ok output missing added_symbols is still rejected"
   const s = happy();
   const c = Object.assign({}, REQUIRED_DEFAULTS["fleet-coder"], s["role:fleet-coder:r1"], {
     __raw: true,
-    role_version: 7,
+    role_version: 9,
     role_contract: "CONTRACT: fleet-v2",
     status: "ok",
     reason: "done",
@@ -3099,6 +3101,7 @@ test("push prompt retries with backoff, reads remote_head through the gh api, ke
   assert.ok(inp.remote_slug, "push gets the remote slug");
   assert.match(p, /5 15 45/);
   assert.match(p, /retry up to 3 times/);
+  assert.match(p, /timeout 600000 ms/);
   assert.match(p, /api repos\/<owner>\/<name>\/branches\/<branch> --jq \.commit\.sha/);
   assert.match(p, /gh-personal/);
   assert.match(p, /non-fast-forward[^.]*needs_human/i);
@@ -3119,4 +3122,145 @@ test("the script still compares the gh-api remote_head to the approved sha", asy
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /deadbeef, not the approved K1/);
+});
+
+// ---------------------------------------------------------------- 2.0.2: bytecode poisoning
+
+test("a bytecode purge runs before every hasher check and every code-judge, in that order", async () => {
+  const s = happy({
+    script: {
+      "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_code", routed_findings: [{ target: "code", criterion: "AC1", finding: "x" }] },
+      "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
+      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
+      "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  const L = out.build.labels;
+  for (const m of [1, 2]) {
+    const iCoder = L.indexOf("role:fleet-coder:r" + m);
+    const iPurge = L.indexOf("infra:purge-bytecode:code-r" + m);
+    const iHash = L.indexOf("hasher:post-coder:r" + m);
+    const iJudge = L.indexOf("role:fleet-code-judge:r" + m);
+    assert.ok(iCoder >= 0 && iCoder < iPurge && iPurge < iHash && iHash < iJudge, "round " + m + ": " + L.join(", "));
+  }
+  const iFp = L.indexOf("infra:purge-bytecode:freeze-f1");
+  assert.ok(iFp >= 0 && iFp < L.indexOf("hasher:freeze:f1"), "purge before the freeze hasher");
+  const p = call(out, "infra:purge-bytecode:code-r1").prompt;
+  assert.ok(inputsOf(p).worktree, "purge names the worktree");
+  assert.match(p, /__pycache__/);
+  assert.match(p, /\.pytest_cache/);
+  assert.match(p, /purged/);
+});
+
+test("a failed bytecode purge stops the run before the code-judge", async () => {
+  const s = happy({ script: { "infra:purge-bytecode:code-r1": { status: "failed", reason: "rm failed" } } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+});
+
+test("the purge command deletes bytecode and pytest caches, sparing venvs and .git", () => {
+  const out0 = (async () => run(happy(), ARGS))();
+  return out0.then((out) => {
+    const p = call(out, "infra:purge-bytecode:code-r1").prompt;
+    const m = /^PURGE: (.*)$/m.exec(p);
+    assert.ok(m, "prompt carries a PURGE: command line");
+    const wt = mkdtempSync(join(tmpdir(), "fleet-purge-"));
+    try {
+      for (const d of ["a/__pycache__", ".pytest_cache/v", "b", ".venv/lib/__pycache__", ".git/x", "venv/__pycache__"])
+        sh(wt, "mkdir", "-p", d);
+      for (const f of ["a/__pycache__/m.cpython-313.pyc", "b/old.pyc", "b/old.pyo", ".pytest_cache/v/x", ".venv/lib/__pycache__/k.pyc", ".git/x/y.pyc", "venv/__pycache__/z.pyc", "b/keep.py"])
+        writeFileSync(join(wt, f), "x");
+      const r = spawnSync("bash", ["-c", m[1].split("<worktree>").join(shq(wt))], { encoding: "utf8" });
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /purged=4\b/);
+      const left = sh(wt, "find", ".", "-type", "f").split("\n").filter(Boolean).sort();
+      assert.deepEqual(left, ["./.git/x/y.pyc", "./.venv/lib/__pycache__/k.pyc", "./b/keep.py", "./venv/__pycache__/z.pyc"]);
+    } finally {
+      rmSync(wt, { recursive: true, force: true });
+    }
+  });
+});
+
+function shq(v) {
+  return "'" + String(v).replace(/'/g, "'\\''") + "'";
+}
+
+test("code-judge and coder get test_env; the coder gets it as a note for frozen-test runs", async () => {
+  const out = await run(happy(), ARGS);
+  const want = { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" };
+  assert.deepEqual(inputsOf(call(out, "role:fleet-code-judge:r1").prompt).test_env, want);
+  const c = inputsOf(call(out, "role:fleet-coder:r1").prompt);
+  assert.deepEqual(c.test_env, want);
+  assert.match(c.test_env_note, /frozen/);
+});
+
+test("hasher 2.0.2: a planted pyc for a frozen test is suspicious and rejects the round", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-pyc-", "__pycache__/\n");
+  try {
+    writeFileSync(join(wt, "tests", "test_frozen.py"), "def test_f():\n    assert False\n");
+    const a = runHasherRaw(wt, "hashes", ["tests/test_frozen.py"]);
+    assert.deepEqual(a.hashes.suspicious, []);
+    sh(wt, "mkdir", "-p", "tests/__pycache__");
+    writeFileSync(join(wt, "tests", "__pycache__", "test_frozen.cpython-313.pyc"), "poison");
+    const b = runHasherRaw(wt, "hashes", ["tests/test_frozen.py"]);
+    assert.ok(b.hashes.suspicious.some((x) => x.includes("tests/__pycache__/test_frozen.cpython-313.pyc")), JSON.stringify(b.hashes.suspicious));
+    assert.equal(hasherMismatch(a, b), true);
+    // pytest's assertion-rewrite name and a pyc in a NOT-ignored cache dir are caught too
+    rmSync(join(wt, "tests", "__pycache__"), { recursive: true });
+    writeFileSync(join(wt, ".gitignore"), "*.log\n");
+    sh(wt, "mkdir", "-p", "tests/__pycache__");
+    writeFileSync(join(wt, "tests", "__pycache__", "test_frozen.cpython-313-pytest-8.3.4.pyc"), "poison");
+    const c = runHasherRaw(wt, "hashes", ["tests/test_frozen.py"]);
+    assert.ok(c.hashes.suspicious.some((x) => x.includes("test_frozen.cpython-313-pytest-8.3.4.pyc")), JSON.stringify(c.hashes.suspicious));
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("hasher 2.0.2: pyc files unrelated to frozen tests are no violation", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-pycok-", "__pycache__/\n");
+  try {
+    writeFileSync(join(wt, "tests", "test_frozen.py"), "def test_f():\n    pass\n");
+    const a = runHasherRaw(wt, "hashes", ["tests/test_frozen.py"]);
+    sh(wt, "mkdir", "-p", "src/__pycache__");
+    writeFileSync(join(wt, "src", "__pycache__", "mod.cpython-313.pyc"), "x");
+    writeFileSync(join(wt, "src", "__pycache__", "test_frozen_helpers.cpython-313.pyc"), "x");
+    const b = runHasherRaw(wt, "hashes", ["tests/test_frozen.py"]);
+    assert.deepEqual(b.hashes.suspicious, []);
+    assert.equal(hasherMismatch(a, b), false);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("a stale-bytecode suspicious entry after the coder rejects the round", async () => {
+  const s = happy({
+    script: {
+      "hasher:post-coder:r1": {
+        status: "ok",
+        fingerprint: FP_K1,
+        hashes: H(HASHES_FLAT, ["bytecode for a frozen file: tests/__pycache__/test_a.cpython-313.pyc"]),
+      },
+    },
+  });
+  const out = await run(s, ARGS);
+  assert.ok(out.logs.some((l) => /hash violation on suspicious bytecode for a frozen file/.test(l)), out.logs.join("\n"));
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+});
+
+test("role versions: coder 9 and code-judge 8 are the minimums; coder v8 stops", async () => {
+  const s = happy();
+  s.preflight.versions["fleet-coder"] = 8;
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /role fleet-coder version 8 < frozen 9/);
+  const j = happy();
+  j.preflight.versions["fleet-code-judge"] = 7;
+  const outJ = await runOne(j, ARGS);
+  assert.match(outJ.result.reason, /role fleet-code-judge version 7 < frozen 8/);
 });

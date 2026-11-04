@@ -21,6 +21,19 @@
   `remote_head` comes from `gh api repos/<owner>/<name>/branches/<branch>` (`gh-personal` for the
   personal account), with `git ls-remote` only when gh is not installed. An `ls-remote` error in
   the workspace step is no longer read as "branch absent".
+- Bytecode poisoning: bytecode is not hashed, so a planted `__pycache__/test_x.cpython-3XX.pyc`
+  could run instead of a frozen test. A new infra step `infra:purge-bytecode` deletes every
+  `__pycache__`, `*.pyc`/`*.pyo` and `.pytest_cache` (sparing `.git` and venvs) before every freeze
+  and every post-coder hash check, so before every code-judge run. The judge fingerprint is taken
+  after the purge. The hasher also flags any pyc named after a frozen test module or `conftest` as
+  suspicious. The coder and code judge get
+  `test_env: {PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider"}`.
+- Retry loops tell the infra agent to run them as one Bash call with a 600000 ms timeout.
+
+### Changed
+
+- Minimum role versions: `fleet-coder` 9 and `fleet-code-judge` 8 (both honour `test_env` and
+  treat compiled bytecode as frozen-adjacent).
 
 ## [2.0.1] - 2026-11-04
 

@@ -168,12 +168,19 @@ The hasher freezes every criterion test file, plus:
   one): `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `tox.ini`, `setup.cfg`,
   `noxfile.py`, `sitecustomize.py`, `usercustomize.py`, `jest.config.*`, `vitest.config.*`,
   `vitest.workspace*`, `karma.conf.*`, `.mocharc*`, `.babelrc*`, `babel.config.*`, and `*.pth` at
-  the repo root. The walk skips `.git`, `.claude/worktrees`, `node_modules`, `__pycache__`, `.venv`,
-  `venv`, `.tox`, `.nox`, `.mypy_cache` and `.pytest_cache`;
+  the repo root. The walk skips `.git`, `.claude/worktrees`, `node_modules`, `.venv`, `venv`, `.tox`
+  and `.nox`. It also skips the tool cache dirs `__pycache__`, `.mypy_cache`, `.pytest_cache`,
+  `.ruff_cache`, `.import_linter_cache` and `.hypothesis`, but only when git ignores them (by an
+  outside rule or their own `*` `.gitignore`). A skipped cache dir is still scanned: runner config,
+  a `pyproject.toml` or a `package.json` inside one is suspicious;
 - symlinks: every symlink the walk meets, file or directory, outside the skipped dirs, under key
   `symlink:<path>` with its `readlink` target as the value. Links are never followed, so adding or
   retargeting a link (for example a linked directory holding a `conftest.py`) is a change;
-- ignore rules: every `.gitignore` in the tree, the worktree's `info/exclude` (key
+- ignore rules: every `.gitignore` git reads, that is every one `git ls-files -z --cached --others
+--exclude-standard -- ':(glob)**/.gitignore' .gitignore` lists, plus every walked one whose
+  directory no outside rule ignores (so a `.gitignore` that ignores itself still counts). A
+  `.gitignore` inside an ignored dir is not frozen: git never reads it, and tools rewrite them on
+  every commit (`.ruff_cache/.gitignore`). Also frozen: the worktree's `info/exclude` (key
   `git:info/exclude`, resolved with `git rev-parse --git-path`) and the global
   `core.excludesFile` (key `git:core.excludesFile`). Editing an ignore rule is a change;
 - sections, hashed under `<path>#<section>` after canonicalisation (sorted keys, compact JSON):
@@ -200,9 +207,20 @@ round get the code judge's findings (writers: only those for their criterion) an
 commits.
 
 The hasher returns four separate maps (`files`, `sections`, `git`, `symlinks`), so a real file
-named like a synthetic key (for example `symlink:conftest.py`) cannot mask one. Every walked path
-with `:` or `#` in a name goes on a `suspicious` list. A non-empty list stops the run at freeze and
-rejects a coder round after it. The code judge also gets `hash_recheck`
+named like a synthetic key (for example `symlink:conftest.py`) cannot mask one. The `suspicious`
+list holds every walked path with `:` or `#` in a name, runner config found in a skipped cache
+dir, and any `*.pyc`/`*.pyo` named after a frozen test module or `conftest`. A non-empty list stops
+the run at freeze and rejects a coder round after it.
+
+Bytecode is not hashed, so a planted `__pycache__/test_x.cpython-3XX.pyc` (or a pytest
+assertion-rewrite pyc) whose header matches a frozen test's mtime and size would run instead of
+the frozen source. Before every freeze and every post-coder hash check (so before every code-judge
+run), an infra step `infra:purge-bytecode` deletes every `__pycache__` dir, `*.pyc`/`*.pyo` file and
+`.pytest_cache` dir in the worktree (sparing `.git`, `.venv`, `venv`, `.tox`, `.nox`,
+`node_modules`, `.claude/worktrees`) and returns the count. The judge's "before" fingerprint is
+taken after the purge. The coder and the code judge get
+`test_env: {PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider"}` for every run of
+the frozen tests. The code judge also gets `hash_recheck`
 (`{"<map>/<key>": {frozen, current, match}}`) for its report; the script's own comparison decides.
 
 ### Role contract
@@ -262,6 +280,11 @@ too. It does not catch a change that a judge makes and reverts within its own ru
 - A judge's test run that leaves untracked, unignored files (caches the repo does not ignore) flips
   the fingerprint and stops the run. The workspace step adds `__pycache__/`, `.pytest_cache/` and
   `.coverage` to `info/exclude` to cut this down.
+- Bytecode inside `.venv`, `venv`, `.tox` and `.nox` is not purged or checked. A pyc planted there
+  for an installed module is not detected. A frozen test's pyc is caught only by name (its module
+  stem); the purge, not the name check, is the main defence.
+- A `.pyc` outside `__pycache__` that git does not ignore shows in `git status`. Purging it between
+  the test judge and the freeze trips "worktree changed between test approval and freeze".
 - Not yet executed in the real Workflow runtime; the scenario suite stubs the runtime.
 - The hasher program travels in the hasher prompt and the agent runs it verbatim. A transcription
   error would show up as a hash mismatch (fail-closed), not as a silent pass.
