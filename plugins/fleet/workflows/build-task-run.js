@@ -27,6 +27,13 @@ const ROLES = [
   "fleet-code-judge",
   "fleet-pr-opener",
 ];
+// Model tiers come from each role page's "DISPATCH: model=<tier> (fallback=<tier>)"
+// line, fetched by preflight. No role->model map lives here.
+const TIERS = ["fable", "opus", "sonnet", "haiku"];
+const DEFAULT_TIER = "sonnet";
+const INFRA_MODEL = "sonnet";
+const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\))?/;
+const HASH_MAPS = ["files", "sections", "git", "symlinks"];
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 const MAX_AGENTS = 60;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
@@ -68,14 +75,17 @@ const RUNNER_CONFIG_FILES = [
 ];
 const WALK_SKIP_DIRS = [".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", ".nox", ".mypy_cache", ".pytest_cache"];
 // Ignore rules are frozen too: hiding a new config file behind an ignore rule
-// changes one of these keys. Every .gitignore in the tree is hashed under its
-// path; the worktree's info/exclude (git rev-parse --git-path info/exclude,
-// the common dir for a linked worktree) under "git:info/exclude"; the global
-// core.excludesFile under "git:core.excludesFile".
+// changes one of these keys. Every .gitignore in the tree is hashed in the
+// files map; the worktree's info/exclude (git rev-parse --git-path
+// info/exclude, the common dir for a linked worktree) and the global
+// core.excludesFile in the git map.
+// The hasher returns four separate maps (files, sections, git, symlinks), so
+// a real file name can never mask a synthetic key, plus a suspicious list of
+// walked paths with ':' or '#' in a component; a non-empty list is a violation.
 // Every symlink the walk meets (file or directory, outside the skipped dirs) is
-// frozen as "symlink:<path>" = its readlink target. Links are never followed,
+// frozen in the symlinks map as <path> = its readlink target. Links are never followed,
 // so adding or retargeting one is a change.
-const SYMLINK_RULE = "every symlink outside the skipped dirs -> key symlink:<path> = readlink target (never followed)";
+const SYMLINK_RULE = "every symlink outside the skipped dirs -> symlinks[<path>] = readlink target (never followed)";
 const IGNORE_RULE_FILES = [".gitignore (every one in the tree)", "git:info/exclude", "git:core.excludesFile"];
 // Sections of files that are NOT hashed whole (dependencies stay editable).
 // Each section is canonicalised (sorted keys, compact JSON) and hashed under a
@@ -144,6 +154,10 @@ def abs_hash(path):
         return sha(fh.read())
 
 LINKS = {}
+SUSPICIOUS = []
+
+def odd(rel):
+    return ':' in rel or '#' in rel
 
 def walk():
     # never follows a symlink; every link outside SKIP_DIRS is recorded with its target
@@ -154,8 +168,11 @@ def walk():
             if d in SKIP_DIRS or os.path.join(reld, d) in ('./.claude/worktrees', '.claude/worktrees'):
                 continue
             full = os.path.join(dp, d)
+            reldir = os.path.normpath(os.path.join(reld, d))
+            if odd(reldir):
+                SUSPICIOUS.append(reldir + '/')
             if os.path.islink(full):
-                LINKS[os.path.normpath(os.path.join(reld, d))] = os.readlink(full)
+                LINKS[reldir] = os.readlink(full)
                 continue
             keep.append(d)
         dns[:] = keep
@@ -164,6 +181,8 @@ def walk():
             full = os.path.join(dp, f)
             if os.path.islink(full):
                 LINKS[rel] = os.readlink(full)
+            if odd(rel):
+                SUSPICIOUS.append(rel)
             yield rel
 
 def norm(rel):
@@ -178,22 +197,23 @@ out = {'fingerprint': {
 }}
 
 if mode == 'hashes':
-    hashes = {}
+    # one map per key kind, so a real file name can never mask a synthetic key
+    files, sections, gitmap, symlinks = {}, {}, {}, {}
     for rel in walk():
         base = os.path.basename(rel)
-        if base == '.gitignore' or any(fnmatch.fnmatch(base, g) for g in CONFIG_GLOBS):
-            hashes[rel] = file_hash(rel)
+        if base == '.gitignore' or any(fnmatch.fnmatch(base, g) for g in CONFIG_GLOBS) or odd(rel):
+            files[rel] = file_hash(rel)
         elif '/' not in rel and any(fnmatch.fnmatch(base, g) for g in ROOT_ONLY_GLOBS):
-            hashes[rel] = file_hash(rel)
+            files[rel] = file_hash(rel)
     for rel in sorted(LINKS):
-        hashes['symlink:' + rel] = LINKS[rel]
+        symlinks[rel] = LINKS[rel]
     ex = git('rev-parse', '--git-path', 'info/exclude').decode().strip()
-    hashes['git:info/exclude'] = abs_hash(ex if os.path.isabs(ex) else os.path.join(wt, ex))
+    gitmap['info/exclude'] = abs_hash(ex if os.path.isabs(ex) else os.path.join(wt, ex))
     gx = subprocess.run(['git', '-C', wt, 'config', '--path', 'core.excludesFile'], capture_output=True)
     gpath = gx.stdout.decode().strip()
     if not gpath:
         gpath = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'git', 'ignore')
-    hashes['git:core.excludesFile'] = abs_hash(gpath)
+    gitmap['core.excludesFile'] = abs_hash(gpath)
     listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\x00')
     for rel in sorted(set(f.decode() for f in listed if f)):
         base = os.path.basename(rel)
@@ -204,11 +224,11 @@ if mode == 'hashes':
                 with open(os.path.join(wt, rel), 'rb') as fh:
                     data = tomllib.load(fh)
                 sec = data.get('tool', {}).get('pytest')
-                hashes[rel + '#tool.pytest'] = 'ABSENT' if sec is None else sha(canon(sec))
+                sections[rel + '#tool.pytest'] = 'ABSENT' if sec is None else sha(canon(sec))
             except FileNotFoundError:
-                hashes[rel + '#tool.pytest'] = 'MISSING'
+                sections[rel + '#tool.pytest'] = 'MISSING'
             except Exception:
-                hashes[rel + '#tool.pytest'] = 'UNPARSEABLE'
+                sections[rel + '#tool.pytest'] = 'UNPARSEABLE'
         elif base == 'package.json':
             try:
                 with open(os.path.join(wt, rel), 'rb') as fh:
@@ -227,11 +247,12 @@ if mode == 'hashes':
                     v = sha(canon(s['test'])) if isinstance(s, dict) and 'test' in s else 'ABSENT'
                 else:
                     v = sha(canon(data[k])) if k in data else 'ABSENT'
-                hashes[rel + '#' + k] = v
+                sections[rel + '#' + k] = v
     for rel in explicit:
         rel = norm(rel)
-        hashes[rel] = file_hash(rel)
-    out['hashes'] = hashes
+        files[rel] = file_hash(rel)
+    out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
+                     'suspicious': sorted(set(SUSPICIOUS))}
 
 print(json.dumps(out, sort_keys=True))
 `;
@@ -319,6 +340,7 @@ const SCHEMAS = {
     pr_number: { type: ["integer", "null"] },
     created: { type: "boolean" },
     template_used: STR_OR_NULL,
+    gates_not_run_stated: { type: "boolean" },
   }),
 };
 
@@ -329,6 +351,7 @@ const PREFLIGHT_SCHEMA = {
     reachable: { type: "boolean" },
     missing: { type: "array", items: STR },
     versions: { type: "object" },
+    dispatch: { type: "object", additionalProperties: { type: ["string", "null"] } },
     reason: STR,
   },
 };
@@ -359,7 +382,17 @@ const HASHER_SCHEMA = {
     status: { type: "string", enum: ["ok", "failed"] },
     reason: STR,
     fingerprint: FINGERPRINT,
-    hashes: { type: "object", additionalProperties: STR },
+    hashes: {
+      type: "object",
+      required: ["files", "sections", "git", "symlinks", "suspicious"],
+      properties: {
+        files: { type: "object", additionalProperties: STR },
+        sections: { type: "object", additionalProperties: STR },
+        git: { type: "object", additionalProperties: STR },
+        symlinks: { type: "object", additionalProperties: STR },
+        suspicious: { type: "array", items: STR },
+      },
+    },
   },
 };
 
@@ -410,16 +443,20 @@ function gatesNotRun(judgeList) {
   ];
 }
 
-// Split the frozen map: plain worktree files (plain=true) vs synthetic keys
-// (<path>#<section>, git:<...>). Roles sha256sum plain files; synthetic keys
-// are not paths.
-function plainKeys(map, plain) {
-  const o = {};
-  for (const k of Object.keys(map || {})) {
-    const synthetic = k.indexOf("#") >= 0 || k.indexOf("git:") === 0 || k.indexOf("symlink:") === 0;
-    if (synthetic !== plain) o[k] = map[k];
-  }
-  return o;
+// Parse a role page's DISPATCH line. null when missing, unparseable or the
+// tier is unknown.
+function parseDispatch(line) {
+  if (typeof line !== "string") return null;
+  const m = DISPATCH_RE.exec(line);
+  if (!m || TIERS.indexOf(m[1]) < 0) return null;
+  return { model: m[1], fallback: m[2] && TIERS.indexOf(m[2]) >= 0 ? m[2] : null };
+}
+
+// Display name of a hash key per map; used in findings and logs only.
+function keyName(map, k) {
+  if (map === "git") return "git:" + k;
+  if (map === "symlinks") return "symlink:" + k;
+  return k;
 }
 
 function normPath(p) {
@@ -440,18 +477,60 @@ function findOverlaps(criteria) {
   return overlaps;
 }
 
-// Keys whose value differs, including keys only one side has.
+// Keys whose value differs, compared map by map, including keys only one side
+// has. A non-empty suspicious list is always a violation.
 function diffHashes(frozen, now) {
-  const keys = {};
-  for (const k of Object.keys(frozen || {})) keys[k] = true;
-  for (const k of Object.keys(now || {})) keys[k] = true;
-  return Object.keys(keys)
-    .filter((k) => {
-      const a = frozen && k in frozen ? frozen[k] : "<new>";
-      const b = now && k in now ? now[k] : "<removed>";
-      return a !== b;
-    })
-    .sort();
+  const out = [];
+  for (const m of HASH_MAPS) {
+    const a = (frozen && frozen[m]) || {};
+    const b = (now && now[m]) || {};
+    const keys = {};
+    for (const k of Object.keys(a)) keys[k] = true;
+    for (const k of Object.keys(b)) keys[k] = true;
+    for (const k of Object.keys(keys).sort()) {
+      const va = k in a ? a[k] : "<new>";
+      const vb = k in b ? b[k] : "<removed>";
+      if (va !== vb) out.push(keyName(m, k));
+    }
+  }
+  for (const p of (now && now.suspicious) || []) out.push("suspicious path name " + p);
+  return out;
+}
+
+// Role view of the non-file maps: one flat map with keys path#section,
+// git:<key>, symlink:<rel> (the shape the role prompts read). Files go to
+// frozen_tests, so these prefixes cannot collide with a real path here.
+function configView(h) {
+  const o = {};
+  for (const m of ["sections", "git", "symlinks"])
+    for (const k of Object.keys((h && h[m]) || {})) o[keyName(m, k)] = h[m][k];
+  return o;
+}
+
+// For the code judge: {"<map>/<key>": {frozen, current, match}}, plus the
+// suspicious list when non-empty. Report only; diffHashes stays authoritative.
+function hashRecheck(frozen, now) {
+  const out = {};
+  for (const m of HASH_MAPS) {
+    const a = (frozen && frozen[m]) || {};
+    const b = (now && now[m]) || {};
+    const keys = {};
+    for (const k of Object.keys(a)) keys[k] = true;
+    for (const k of Object.keys(b)) keys[k] = true;
+    for (const k of Object.keys(keys).sort()) {
+      const fa = k in a ? a[k] : null;
+      const cb = k in b ? b[k] : null;
+      out[m + "/" + k] = { frozen: fa, current: cb, match: fa !== null && cb !== null && fa === cb };
+    }
+  }
+  if (now && now.suspicious && now.suspicious.length) out.suspicious = now.suspicious.slice();
+  return out;
+}
+
+function countKeys(h) {
+  let n = 0;
+  for (const m of HASH_MAPS) n += Object.keys((h && h[m]) || {}).length;
+  return n;
 }
 
 function sameFingerprint(a, b) {
@@ -504,7 +583,9 @@ function preflightPrompt(inputs) {
     "Load mcp__yadgar__agent_prompt_get via ToolSearch. Call it once per pattern in `roles`, with project=`role_project`. " +
     "A pattern is missing when the call returns an error such as not_found, or empty content. " +
     "reachable=false when the tool is absent or every call fails with a transport, auth or connection error. " +
-    "versions maps each found pattern to its `version`. Return {reachable, missing, versions, reason}."
+    "versions maps each found pattern to its `version`. " +
+    "dispatch maps each found pattern to the first line of its `content` that matches `DISPATCH: model=<tier> (fallback=<tier>)` (the fallback part is optional), copied raw; null when no line matches. " +
+    "Return {reachable, missing, versions, dispatch, reason}."
   );
 }
 
@@ -586,7 +667,7 @@ function hasherPrompt(inputs) {
     "Run this one Bash command exactly as written, unmodified, in the foreground:\n" +
     cmd +
     "\n" +
-    'It prints one JSON object with `fingerprint` and (mode hashes) `hashes`. Return {status: "ok", fingerprint, hashes} with those values copied exactly. ' +
+    'It prints one JSON object with `fingerprint` and (mode hashes) `hashes` = {files, sections, git, symlinks, suspicious}. Return {status: "ok", fingerprint, hashes} with those values copied exactly. ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>, fingerprint: {head: "", status_sha256: "", diff_sha256: ""}}. Run no other command.\n' +
     "Extraction rules (the program implements them): " +
     rules
@@ -615,6 +696,7 @@ const state = {
   branch: null,
   pr: null,
   gatesNotRun: null,
+  models: {},
 };
 
 function gate(msg) {
@@ -635,12 +717,29 @@ function reserve(n, what) {
     );
 }
 
+// Infra agents: always INFRA_MODEL.
 async function dispatch(label, prompt, opts) {
   reserve(1, label);
   state.agents++;
-  const r = await agent(prompt, Object.assign({}, opts, { label }));
+  const r = await agent(prompt, Object.assign({}, opts, { label, model: INFRA_MODEL }));
   if (r == null) halt("failed", "agent " + label + " returned no result");
   return r;
+}
+
+// Role agents: the tier from the role page. The caller has already counted
+// the first attempt. A dead agent (null) is retried once on the fallback tier;
+// the retry counts toward the agent cap.
+async function roleAgent(role, label, prompt, opts) {
+  const tier = state.models[role] || { model: DEFAULT_TIER, fallback: null };
+  const r = await agent(prompt, Object.assign({}, opts, { label, model: tier.model }));
+  if (r != null || !tier.fallback) return r;
+  if (state.agents + 1 > MAX_AGENTS) {
+    gate("agent cap " + MAX_AGENTS + " reached: no fallback retry for " + label);
+    return null;
+  }
+  state.agents++;
+  gate("fallback: " + role + " (" + label + ") died on " + tier.model + "; retrying once on " + tier.fallback);
+  return agent(prompt, Object.assign({}, opts, { label: label + ":fallback", model: tier.fallback }));
 }
 
 function collect(role, r) {
@@ -651,7 +750,10 @@ function collect(role, r) {
 async function callRole(role, label, inputs, phaseName, agentType) {
   const opts = { schema: SCHEMAS[role], phase: phaseName };
   if (agentType) opts.agentType = agentType;
-  const r = await dispatch(label, rolePrompt(role, inputs), opts);
+  reserve(1, label);
+  state.agents++;
+  const r = await roleAgent(role, label, rolePrompt(role, inputs), opts);
+  if (r == null) halt("failed", "agent " + label + " returned no result");
   collect(role, r);
   return r;
 }
@@ -668,7 +770,10 @@ async function hasher(label, worktree, mode, testFiles, phaseName) {
     agentType: JUDGE_AGENT,
     phase: phaseName,
   });
-  if (r.status !== "ok" || !r.fingerprint || !r.fingerprint.head || (mode === "hashes" && !r.hashes))
+  const h = r.hashes;
+  const mapsOk =
+    !!h && HASH_MAPS.every((m) => h[m] && typeof h[m] === "object") && Array.isArray(h.suspicious);
+  if (r.status !== "ok" || !r.fingerprint || !r.fingerprint.head || (mode === "hashes" && !mapsOk))
     halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
   return r;
 }
@@ -742,6 +847,19 @@ async function main(input) {
   const missing = pre.missing || [];
   if (missing.length) halt("needs_human", "role missing in yadgar: " + missing.join(", "));
   gate("preflight: all " + ROLES.length + " roles loadable");
+  const dispatchLines = pre.dispatch || {};
+  for (const role of ROLES) {
+    const t = parseDispatch(dispatchLines[role]);
+    if (t) {
+      state.models[role] = t;
+      gate("model: " + role + " -> " + t.model + (t.fallback ? " (fallback " + t.fallback + ")" : ""));
+    } else {
+      state.models[role] = { model: DEFAULT_TIER, fallback: null };
+      gate(
+        "model: " + role + " has no usable DISPATCH line (" + JSON.stringify(dispatchLines[role] || null) + ") -> " + DEFAULT_TIER,
+      );
+    }
+  }
 
   // 2. workspace
   phase("Workspace");
@@ -900,7 +1018,9 @@ async function main(input) {
           pending.map((p) => () => {
             const c = p.criterion;
             const wt = critWt[c.id];
-            return agent(
+            return roleAgent(
+              "fleet-test-writer",
+              "role:fleet-test-writer:" + c.id + ":r" + n,
               rolePrompt(
                 "fleet-test-writer",
                 Object.assign({}, common, planCtx, {
@@ -911,11 +1031,7 @@ async function main(input) {
                   routed_findings: p.findings,
                 }),
               ),
-              {
-                label: "role:fleet-test-writer:" + c.id + ":r" + n,
-                schema: SCHEMAS["fleet-test-writer"],
-                phase: "Tests",
-              },
+              { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" },
             );
           }),
         );
@@ -999,10 +1115,12 @@ async function main(input) {
     const h = await hasher("hasher:freeze:f" + freezes, mainWt, "hashes", frozenFiles, "Freeze");
     if (lastJudgeFp && !sameFingerprint(lastJudgeFp, h.fingerprint))
       halt("needs_human", "worktree changed between test approval and freeze");
+    if (h.hashes.suspicious.length)
+      halt("needs_human", "suspicious path names (':' or '#') in the worktree at freeze: " + h.hashes.suspicious.join(", "));
     frozen = h.hashes;
     freezeRef = h.fingerprint.head;
     if (!codeBaseRef) codeBaseRef = freezeRef;
-    gate("freeze f" + freezes + " at " + freezeRef + ": " + Object.keys(frozen).length + " hashed keys");
+    gate("freeze f" + freezes + " at " + freezeRef + ": " + countKeys(frozen) + " hashed keys");
   }
 
   if (!shortPath) {
@@ -1018,7 +1136,7 @@ async function main(input) {
   // 8. code
   phase("Code");
   const frozenNote =
-    "frozen_tests holds plain worktree files only (sha256 of the content). frozen_config_sections holds canonicalised test-runner config sections (<path>#<section>), symlinks (symlink:<path> = link target) and ignore-rule files outside the worktree (git:info/exclude, git:core.excludesFile); ABSENT/MISSING mean the section or file did not exist at freeze. Every key in both maps is read-only. The workflow recomputes every key itself after the coder. code_base_ref is the commit before the first coder round; diff production changes from it.";
+    "frozen_tests holds worktree files only (sha256 of the content). frozen_config_sections is one flat map: <path>#<section> (canonicalised test-runner config section), git:info/exclude and git:core.excludesFile (ignore-rule files outside the worktree), symlink:<rel> (link target). ABSENT/MISSING mean the section or file did not exist at freeze. Every key is read-only. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. code_base_ref is the commit before the first coder round; diff production changes from it.";
   let coderFindings = [];
   let approvedSha = null;
   let approval = null;
@@ -1030,8 +1148,8 @@ async function main(input) {
     reserve(4, "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
-      frozen_tests: plainKeys(frozen, true),
-      frozen_config_sections: plainKeys(frozen, false),
+      frozen_tests: frozen.files,
+      frozen_config_sections: configView(frozen),
       frozen_tests_note: frozenNote,
       freeze_ref: freezeRef,
       code_base_ref: codeBaseRef,
@@ -1071,6 +1189,7 @@ async function main(input) {
       "code-judge:r" + m,
       Object.assign({}, codeInputs, {
         coder_output: stripHeldOut(coder),
+        hash_recheck: hashRecheck(frozen, h.hashes),
         held_out_results: HELD_OUT_NOT_RUN,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
       }),

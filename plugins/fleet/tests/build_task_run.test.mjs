@@ -133,12 +133,26 @@ const FP_PLAN = { head: "P1", status_sha256: "s", diff_sha256: "d" };
 const FP_K1 = { head: "K1", status_sha256: "s", diff_sha256: "d" };
 const FP_K2 = { head: "K2", status_sha256: "s", diff_sha256: "d" };
 const FP_M3 = { head: "M3", status_sha256: "s", diff_sha256: "d" };
-const HASHES = {
+// Hasher output is four maps plus a suspicious list. Fixtures are written as
+// flat prefixed keys and converted: "git:<k>" -> git, "symlink:<k>" ->
+// symlinks, a key with "#" -> sections, anything else -> files.
+function H(flat, suspicious) {
+  const h = { files: {}, sections: {}, git: {}, symlinks: {}, suspicious: suspicious || [] };
+  for (const [k, v] of Object.entries(flat)) {
+    if (k.startsWith("git:")) h.git[k.slice(4)] = v;
+    else if (k.startsWith("symlink:")) h.symlinks[k.slice(8)] = v;
+    else if (k.includes("#")) h.sections[k] = v;
+    else h.files[k] = v;
+  }
+  return h;
+}
+const HASHES_FLAT = {
   "tests/test_a.py": "ha",
   "tests/test_b.py": "hb",
   "pyproject.toml#tool.pytest": "hp",
 };
-const CONFIG_ONLY = { "pyproject.toml#tool.pytest": "hp" };
+const HASHES = H(HASHES_FLAT);
+const CONFIG_ONLY = H({ "pyproject.toml#tool.pytest": "hp" });
 
 function criteria(n = 2) {
   return Array.from({ length: n }, (_, i) => ({
@@ -306,6 +320,7 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
   const coder = inputsOf(call(out, "role:fleet-coder:r1").prompt);
   // roles get plain files in frozen_tests and synthetic section keys apart
   assert.deepEqual(coder.frozen_tests, { "tests/test_a.py": "ha", "tests/test_b.py": "hb" });
+  // role view: flat keys path#section, git:<k>, symlink:<rel>
   assert.deepEqual(coder.frozen_config_sections, { "pyproject.toml#tool.pytest": "hp" });
   const cjIn = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
   assert.deepEqual(cjIn.frozen_tests, coder.frozen_tests);
@@ -535,7 +550,7 @@ function hashViolation(hashes) {
 }
 
 test("changed frozen test hash rejects the coder round regardless of judge", async () => {
-  const out = await run(hashViolation({ ...HASHES, "tests/test_a.py": "TAMPERED" }), ARGS);
+  const out = await run(hashViolation(H({ ...HASHES_FLAT, "tests/test_a.py": "TAMPERED" })), ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"), "judge not run on a violated round");
@@ -548,7 +563,7 @@ test("changed frozen test hash rejects the coder round regardless of judge", asy
 });
 
 test("a new runner-config key (added conftest) is a hash violation", async () => {
-  const out = await run(hashViolation({ ...HASHES, "tests/conftest.py": "new" }), ARGS);
+  const out = await run(hashViolation(H({ ...HASHES_FLAT, "tests/conftest.py": "new" })), ARGS);
   noUnscripted(out);
   const c2 = inputsOf(call(out, "role:fleet-coder:r2").prompt);
   assert.match(c2.routed_findings[0].finding, /tests\/conftest\.py/);
@@ -556,7 +571,7 @@ test("a new runner-config key (added conftest) is a hash violation", async () =>
 
 test("a changed pytest section (addopts tamper) is a hash violation", async () => {
   const out = await run(
-    hashViolation({ ...HASHES, "pyproject.toml#tool.pytest": "addopts-changed" }),
+    hashViolation(H({ ...HASHES_FLAT, "pyproject.toml#tool.pytest": "addopts-changed" })),
     ARGS,
   );
   noUnscripted(out);
@@ -565,9 +580,9 @@ test("a changed pytest section (addopts tamper) is a hash violation", async () =
 });
 
 test("a removed frozen file is a hash violation", async () => {
-  const h = { ...HASHES };
+  const h = { ...HASHES_FLAT };
   delete h["tests/test_b.py"];
-  const out = await run(hashViolation(h), ARGS);
+  const out = await run(hashViolation(H(h)), ARGS);
   noUnscripted(out);
   assert.match(
     inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding,
@@ -625,13 +640,13 @@ test("fix_tests routes to the test-judge, never the coder, then re-freezes", asy
       "hasher:freeze:f2": {
         status: "ok",
         fingerprint: FP_M3,
-        hashes: { ...HASHES, "tests/test_a.py": "ha2" },
+        hashes: H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" }),
       },
       "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
       "hasher:post-coder:r2": {
         status: "ok",
         fingerprint: FP_K2,
-        hashes: { ...HASHES, "tests/test_a.py": "ha2" },
+        hashes: H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" }),
       },
       "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
       "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
@@ -742,8 +757,9 @@ test("agent cap stops the run with needs_human before exceeding 60 agents", asyn
     for (const c of crit)
       extra["role:fleet-test-writer:" + c.id + ":r" + n] = { status: "ok", criterion_id: c.id };
   }
-  const hashes = {};
-  for (const c of crit) hashes[c.test_files[0]] = "h";
+  const flatHashes = {};
+  for (const c of crit) flatHashes[c.test_files[0]] = "h";
+  const hashes = H(flatHashes);
   extra["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_PLAN, hashes };
   extra["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes };
   const out = await run(happy({ criteria: crit, script: extra }), ARGS);
@@ -810,13 +826,24 @@ function sh(cwd, ...cmd) {
   return r.stdout;
 }
 
-function runHasher(wt, mode, files) {
+function runHasherRaw(wt, mode, files) {
   const r = spawnSync("python3", ["-I", "-", wt, mode, JSON.stringify(files)], {
     input: hasherPy(),
     encoding: "utf8",
   });
   if (r.status !== 0) throw new Error("hasher failed: " + r.stderr);
   return JSON.parse(r.stdout);
+}
+
+// Flatten the four maps to prefixed keys for the older assertions.
+function runHasher(wt, mode, files) {
+  const out = runHasherRaw(wt, mode, files);
+  if (!out.hashes) return out;
+  const h = out.hashes;
+  const flat = Object.assign({}, h.files, h.sections);
+  for (const [k, v] of Object.entries(h.git)) flat["git:" + k] = v;
+  for (const [k, v] of Object.entries(h.symlinks)) flat["symlink:" + k] = v;
+  return { fingerprint: out.fingerprint, hashes: flat, suspicious: h.suspicious };
 }
 
 const py = spawnSync("python3", ["-c", "import tomllib"]);
@@ -1114,7 +1141,7 @@ test("fix_tests carries its code findings to the next coder round; code_base_ref
 
 test("an ignored new conftest plus an ignore-rule edit rejects the coder round", async () => {
   const out = await run(
-    hashViolation({ ...HASHES, ".gitignore": "edited", "sub/conftest.py": "new", "git:info/exclude": "edited" }),
+    hashViolation(H({ ...HASHES_FLAT, ".gitignore": "edited", "sub/conftest.py": "new", "git:info/exclude": "edited" })),
     ARGS,
   );
   noUnscripted(out);
@@ -1228,7 +1255,7 @@ test("hasher program: symlinks are frozen by target, never followed", { skip: !H
 });
 
 test("script rejects a coder round that adds a symlink key", async () => {
-  const out = await run(hashViolation({ ...HASHES, "symlink:plugins_dir": "/tmp/evil" }), ARGS);
+  const out = await run(hashViolation(H({ ...HASHES_FLAT, "symlink:plugins_dir": "/tmp/evil" })), ARGS);
   noUnscripted(out);
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
   assert.match(
@@ -1243,12 +1270,12 @@ test("symlink keys go to frozen_config_sections, not frozen_tests", async () => 
       "hasher:freeze:f1": {
         status: "ok",
         fingerprint: FP_PLAN,
-        hashes: { ...HASHES, "symlink:lib": "../x" },
+        hashes: H({ ...HASHES_FLAT, "symlink:lib": "../x" }),
       },
       "hasher:post-coder:r1": {
         status: "ok",
         fingerprint: FP_K1,
-        hashes: { ...HASHES, "symlink:lib": "../x" },
+        hashes: H({ ...HASHES_FLAT, "symlink:lib": "../x" }),
       },
     },
   });
@@ -1257,4 +1284,203 @@ test("symlink keys go to frozen_config_sections, not frozen_tests", async () => 
   const c = inputsOf(call(out, "role:fleet-coder:r1").prompt);
   assert.ok(!("symlink:lib" in c.frozen_tests));
   assert.equal(c.frozen_config_sections["symlink:lib"], "../x");
+});
+
+// ---------------------------------------------------------------- per-role model from DISPATCH lines
+
+const DISPATCH = {
+  "scope-and-plan": "DISPATCH: model=opus (needs code exploration THEN design synthesis)",
+  "plan-audit": "DISPATCH: model=fable (fallback=opus) — adversarial audit",
+  "fleet-test-writer": "DISPATCH: model=sonnet (fallback=opus) — mechanical",
+  "fleet-test-judge": "garbage line",
+  "fleet-coder": null,
+  "fleet-code-judge": "DISPATCH: model=gpt5 (fallback=opus)",
+  "fleet-pr-opener": "DISPATCH: model=haiku",
+};
+
+function withDispatch(s, dispatch) {
+  s.preflight = Object.assign({}, s.preflight, { dispatch });
+  return s;
+}
+
+test("each role runs on the tier its DISPATCH line names; bad lines fall back to sonnet", async () => {
+  const out = await run(withDispatch(happy(), DISPATCH), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  const model = (l) => call(out, l).opts.model;
+  assert.equal(model("role:scope-and-plan"), "opus");
+  assert.equal(model("role:plan-audit"), "fable");
+  assert.equal(model("role:fleet-test-writer:AC1:r1"), "sonnet");
+  assert.equal(model("role:fleet-test-judge:r1"), "sonnet"); // garbage
+  assert.equal(model("role:fleet-coder:r1"), "sonnet"); // missing
+  assert.equal(model("role:fleet-code-judge:r1"), "sonnet"); // unknown tier
+  assert.equal(model("role:fleet-pr-opener"), "haiku");
+  for (const role of ["fleet-test-judge", "fleet-coder", "fleet-code-judge"])
+    assert.ok(
+      out.logs.some((l) => l.includes(role) && /sonnet/.test(l)),
+      "logged the sonnet default for " + role,
+    );
+});
+
+test("infra agents run on sonnet explicitly", async () => {
+  const out = await run(withDispatch(happy(), DISPATCH), ARGS);
+  for (const c of out.calls)
+    if (!c.label.startsWith("role:")) assert.equal(c.opts.model, "sonnet", c.label);
+});
+
+test("preflight asks for each role's DISPATCH line", async () => {
+  const out = await run(happy(), ARGS);
+  const c = call(out, "preflight");
+  assert.ok(c.opts.schema.properties.dispatch, "preflight schema has dispatch");
+  assert.match(c.prompt, /DISPATCH: model=/);
+});
+
+test("a role agent that dies is retried once on its fallback tier", async () => {
+  const s = withDispatch(
+    happy({
+      script: {
+        "role:fleet-test-writer:AC1:r1": null,
+        "role:fleet-test-writer:AC1:r1:fallback": { status: "ok", criterion_id: "AC1", commit: "t" },
+        "role:plan-audit": null,
+        "role:plan-audit:fallback": { status: "ok", verdict: "approve", routed_findings: [] },
+      },
+    }),
+    DISPATCH,
+  );
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  assert.equal(call(out, "role:plan-audit:fallback").opts.model, "opus");
+  assert.equal(call(out, "role:fleet-test-writer:AC1:r1:fallback").opts.model, "opus");
+  assert.ok(out.logs.some((l) => /fallback/.test(l) && /plan-audit/.test(l)));
+  assert.equal(out.result.agents, out.calls.length, "retries count toward the agent cap");
+});
+
+test("a dead role with no fallback tier fails without a retry", async () => {
+  const s = withDispatch(happy({ script: { "role:scope-and-plan": null } }), DISPATCH);
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.ok(!out.labels.includes("role:scope-and-plan:fallback"));
+});
+
+
+// ---------------------------------------------------------------- synthetic key collisions
+
+function scratchRepo(prefix) {
+  const wt = mkdtempSync(join(tmpdir(), prefix));
+  sh(wt, "git", "init", "-q");
+  sh(wt, "git", "config", "user.email", "t@example.com");
+  sh(wt, "git", "config", "user.name", "t");
+  sh(wt, "git", "config", "commit.gpgsign", "false");
+  return wt;
+}
+
+test("hasher program: a file named like a synthetic key cannot mask one", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-hasher-collide-");
+  try {
+    writeFileSync(
+      join(wt, "pyproject.toml"),
+      '[tool.pytest.ini_options]\naddopts = "-q"\n',
+    );
+    sh(wt, "git", "add", ".");
+    sh(wt, "git", "commit", "-q", "-m", "init");
+    const base = runHasherRaw(wt, "hashes", []).hashes;
+    assert.deepEqual(base.suspicious, []);
+    const realSection = base.sections["pyproject.toml#tool.pytest"];
+    assert.match(realSection, /^[0-9a-f]{64}$/);
+
+    writeFileSync(join(wt, "symlink:conftest.py"), "import os\n");
+    writeFileSync(join(wt, "pyproject.toml#tool.pytest"), "junk\n");
+    const h = runHasherRaw(wt, "hashes", []).hashes;
+    assert.ok("symlink:conftest.py" in h.files, "real file lands in files");
+    assert.ok(!("conftest.py" in h.symlinks), "not in symlinks");
+    assert.deepEqual(Object.keys(h.symlinks), []);
+    assert.ok(h.suspicious.includes("symlink:conftest.py"));
+    assert.ok(h.suspicious.includes("pyproject.toml#tool.pytest"));
+    assert.equal(h.sections["pyproject.toml#tool.pytest"], realSection, "section key intact");
+    assert.ok(!("pyproject.toml#tool.pytest" in h.sections && h.sections["pyproject.toml#tool.pytest"] !== realSection));
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("a suspicious path name rejects the coder round", async () => {
+  const s = hashViolation(H(HASHES_FLAT, ["symlink:conftest.py"]));
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+  assert.match(
+    inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding,
+    /suspicious path name symlink:conftest\.py/,
+  );
+});
+
+test("a file key and a synthetic key with the same text are compared separately", async () => {
+  // files["git:info/exclude"] changes while git["info/exclude"] stays: still a violation
+  const frozen = H(HASHES_FLAT);
+  frozen.files["git:info/exclude"] = "f1";
+  frozen.git["info/exclude"] = "g1";
+  const now = JSON.parse(JSON.stringify(frozen));
+  now.files["git:info/exclude"] = "f2";
+  const s = happy({
+    script: {
+      "hasher:freeze:f1": { status: "ok", fingerprint: FP_PLAN, hashes: frozen },
+      "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: now },
+      "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: frozen },
+      "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
+      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+});
+
+test("suspicious path names at freeze stop the run", async () => {
+  const s = happy({
+    script: { "hasher:freeze:f1": { status: "ok", fingerprint: FP_PLAN, hashes: H(HASHES_FLAT, ["a#b"]) } },
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /suspicious/);
+});
+
+
+// ---------------------------------------------------------------- round 3
+
+test("real DISPATCH format with a Why: line parses, and the fallback tier is used", async () => {
+  const line = "DISPATCH: model=opus (fallback=fable)\nWhy: the failure this role exists for is a plausible diff";
+  const s = withDispatch(
+    happy({
+      script: {
+        "role:fleet-code-judge:r1": null,
+        "role:fleet-code-judge:r1:fallback": { status: "ok", verdict: "approve", routed_findings: [] },
+      },
+    }),
+    Object.assign({}, DISPATCH, { "fleet-code-judge": line }),
+  );
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  assert.equal(call(out, "role:fleet-code-judge:r1").opts.model, "opus");
+  assert.equal(call(out, "role:fleet-code-judge:r1:fallback").opts.model, "fable");
+});
+
+test("code-judge gets hash_recheck built from the frozen and post-coder maps", async () => {
+  const frozen = H({ ...HASHES_FLAT, "git:info/exclude": "g1", "symlink:lib": "../x" });
+  const s = happy({
+    script: {
+      "hasher:freeze:f1": { status: "ok", fingerprint: FP_PLAN, hashes: frozen },
+      "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: frozen },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  const rc = inputsOf(call(out, "role:fleet-code-judge:r1").prompt).hash_recheck;
+  assert.deepEqual(rc["files/tests/test_a.py"], { frozen: "ha", current: "ha", match: true });
+  assert.deepEqual(rc["sections/pyproject.toml#tool.pytest"], { frozen: "hp", current: "hp", match: true });
+  assert.deepEqual(rc["git/info/exclude"], { frozen: "g1", current: "g1", match: true });
+  assert.deepEqual(rc["symlinks/lib"], { frozen: "../x", current: "../x", match: true });
+  assert.ok(!("suspicious" in rc));
 });

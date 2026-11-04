@@ -15,5 +15,9 @@
 - Held-out examples from the planner are withheld from every other role. Judges get explicit
   `not_run` markers for held-out, mutation, coverage and scanner gates; `gates_not_run` reaches the
   PR opener and the result.
+- Per-role model tier from each role page's DISPATCH line (fallback tier retried once when an agent
+  dies); infra agents on sonnet.
+- Hasher returns separate files/sections/git/symlinks maps plus a suspicious-name list; the code
+  judge gets a `hash_recheck` report.
 - `fleet:judge` read-only agent for judges, preflight and hasher.
 - `node --test` scenario suite for the workflow logic and the hasher program.

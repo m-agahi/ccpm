@@ -76,6 +76,21 @@ receive plain files in `frozen_tests` and the synthetic keys in `frozen_config_s
 also receive `code_base_ref`, the commit before the first coder round, because a re-freeze after
 `fix_tests` moves `freeze_ref` past earlier coder commits.
 
+The hasher returns four separate maps (`files`, `sections`, `git`, `symlinks`), so a real file
+named like a synthetic key (for example `symlink:conftest.py`) cannot mask one. Every walked path
+with `:` or `#` in a name goes on a `suspicious` list. A non-empty list stops the run at freeze and
+rejects a coder round after it. The code judge also gets `hash_recheck`
+(`{"<map>/<key>": {frozen, current, match}}`) for its report; the script's own comparison decides.
+
+### Models
+
+Each role runs on the tier named by the first `DISPATCH: model=<tier> (fallback=<tier>)` line of
+its role page. Preflight returns those lines; the script parses them. Accepted tiers: `fable`,
+`opus`, `sonnet`, `haiku`. A missing, unparseable or unknown line gives `sonnet`, and the run logs
+it. A role agent that dies is retried once on its fallback tier, when one is set; the retry counts
+toward the agent cap. Infra agents (preflight, workspace, prepare, integrate, hasher) run on
+`sonnet`.
+
 ### Judge separation
 
 Judges, preflight and the hasher run as the `fleet:judge` agent, which has `Write`, `Edit` and
@@ -96,7 +111,7 @@ too. It does not catch a change that a judge makes and reverts within its own ru
 - Interpreter startup hooks inside an in-worktree virtualenv are not detected. The walk skips
   `.venv`, `venv`, `.tox` and `.nox`, because an editable install writes a `.pth` file there and
   would cause a false mismatch. So a coder can drop a `.pth` or `sitecustomize.py` into such a venv
-  and v1 does not see it. v1.1 (ledger task 1925) hashes the startup hooks in the site-packages of
+  and v1 does not see it. A planned follow-up (v1.1) hashes the startup hooks in the site-packages of
   the judge's interpreter.
 - New files outside `allowed_additions` are not denied by script in v1.
 - A judge's test run that leaves untracked, unignored files (caches the repo does not ignore) flips
