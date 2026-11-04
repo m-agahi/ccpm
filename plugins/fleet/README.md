@@ -281,13 +281,15 @@ issue text. So:
    runner: `pytest`, `python[3] -m pytest`, `uv run [--frozen] [--no-sync] [--extra <x>]... pytest`,
    `npm test`, `npm run test[:<name>]`, `npx jest`, `npx vitest`, `pnpm test`, `yarn test`,
    `cargo test`, `go test` or `make test`. Every argument after the runner is denied by default
-   ("test_cmd arg <x> not allowed"). Allowed: the `<paths>` token; relative paths (no leading `/`,
-   no `..` segment, no `:`, no `=`); and flags on a per-runner list:
+   ("test*cmd arg <x> not allowed"). The whole raw command may hold only `[A-Za-z0-9*./:=<>"() -]`with plain spaces (0x20), checked before tokenizing, because the shell also splits on tab,`\v`,
+`\f`, `\r`and unicode spaces; it is split on plain spaces only. Allowed: the`<paths>`token;
+relative paths that match`^[A-Za-z0-9\_][A-Za-z0-9_./-]\*$`with no`..`segment (so no`@file`,
+   which pytest reads as an args file); and flags on a per-runner list:
 
    - pytest: `-q -v -vv -x -s -n<N> -n0 --maxfail=<N> -k <expr> -m <expr> -p no:<name> --tb=short|line|no|long -ra -rA --no-header --durations=<N> --timeout=<N>`.
-     A `-k`/`-m` expression is one plain word, or plain words in double quotes
-     (`-k "foo and not bar"`); no other quoting anywhere.
-   - go test: `-run <word> -count=<N> -v -race -short`, plus paths such as `./...`.
+     A `-k`/`-m` expression is one plain word, or words of `[A-Za-z0-9_()]` in double quotes
+     (`-k "foo and not (bar or baz)"`); no other quoting anywhere.
+   - go test: `-run <word> -count=<N> -v -race -short`, plus paths and `./...` or `./<path>/...`.
    - cargo test: `--lib --tests --all-features --workspace -q`, then optionally `--` and test
      names (`word` or `mod::word`).
    - npm, pnpm and yarn test: nothing, or `--` followed by paths.
@@ -308,7 +310,10 @@ issue text. So:
    (`python*`, `pip*`, `node`, `npm`, `npx`, `sh`, `bash`, `zsh`, `uv`, `make`). In plan mode a
    read-only infra step (`infra:check-scripts`, `fleet:judge`) runs a fixed program that checks
    each script path is a tracked regular file, not a symlink, whose realpath stays under the same
-   root. A failure, or a missing result, makes the obligation judge-only.
+   root. A failure, or a missing result, makes the obligation judge-only. The build runs the same
+   check again (`infra:check-scripts:r<n>`) in the main worktree right before every code-judge
+   run, at the commit the judge sees; an obligation that fails reaches the judge without its
+   `check_cmd` (as `check_cmd_rejected`) for that round.
 
 2. **Forbidden words.** The words terraform, tofu, tfp, digger and atlantis, anywhere in a command
    and in any case, refuse it.
@@ -405,9 +410,9 @@ too. It does not catch a change that a judge makes and reverts within its own ru
 - An approved `make` target, hook or script can still do anything its code does, and the coder can
   change that code. The allowlist only fixes the command line.
 - The tracked-file and realpath checks on a `check_cmd` script are not verified by the script
-  itself: an infra agent runs the fixed check program and the script trusts its report. They hold
-  at plan time only; the coder may change the script later, and the code judge decides whether to
-  run it.
+  itself: an infra agent runs the fixed check program and the script trusts its report. They are
+  re-run before every code-judge run, but the script's content is not judged; the code judge
+  decides whether to run it.
 - Obligations without a pre-push or pre-commit hook rest on the code judge's `obligations_check`
   alone. CI-only rules are caught by CI after the PR opens, not by the fleet.
 

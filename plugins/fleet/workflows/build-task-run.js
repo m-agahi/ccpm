@@ -98,6 +98,13 @@ const SCRIPT_EXTENSIONS = [".py", ".sh", ".bash"];
 // test_cmd arguments after the runner: deny by default. A plain word (for
 // -k/-m expressions, -run patterns and cargo test names).
 const WORD_RE = /^[A-Za-z0-9_]+$/;
+// Every character a test_cmd may hold, checked on the whole raw command before
+// any tokenizing: the shell splits on characters a regex \s does not match
+// (tab, \v, \f, \r, NBSP, ...), so nothing else is let through. Parens are
+// valid only inside a quoted -k/-m expression; the token checks enforce that.
+const TEST_CMD_CHARS_RE = /^[A-Za-z0-9_./:=<>"() -]*$/;
+const QUOTED_EXPR_RE = /^[A-Za-z0-9_()]+( [A-Za-z0-9_()]+)*$/;
+const PATH_ARG_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
 // test_cmd tokens after the runner prefix: never one of these subcommands.
 const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
 // stop_gate values: which gate ended a stopped run (null when none applies).
@@ -971,12 +978,19 @@ function testRunnerPrefix(t) {
   return null;
 }
 
-// A test path argument: <paths>, or relative with no leading `/` or `-`, no
-// `..` segment, no `:` and no `=`.
+// A test path argument: <paths>, or a relative path that starts with a word
+// character (no `/`, `-`, `.` or `@` start: pytest reads `@file` as an args
+// file) and has no `..` segment.
 function testPathArg(x) {
   if (x === PATHS_TOKEN) return true;
-  if (!x || x.charAt(0) === "/" || x.charAt(0) === "-" || /[:=]/.test(x)) return false;
-  return x.split("/").every((seg) => seg !== "..");
+  return PATH_ARG_RE.test(x) && x.split("/").every((seg) => seg !== "..");
+}
+
+// go test package patterns: ./... or ./<path>/...
+function goPackageArg(x) {
+  if (x === "./...") return true;
+  const m = /^\.\/(.+)\/\.\.\.$/.exec(x);
+  return !!m && testPathArg(m[1]);
 }
 
 const PYTEST_FLAGS = ["-q", "-v", "-vv", "-x", "-s", "-n0", "-ra", "-rA", "--no-header"];
@@ -1013,7 +1027,7 @@ function testArgsProblem(kind, a) {
         continue;
       }
     } else if (kind === "go") {
-      if (["-v", "-race", "-short"].indexOf(x) >= 0 || /^-count=[0-9]+$/.test(x)) continue;
+      if (["-v", "-race", "-short"].indexOf(x) >= 0 || /^-count=[0-9]+$/.test(x) || goPackageArg(x)) continue;
       if (x === "-run") {
         if (!WORD_RE.test(a[i + 1] || "")) return x + " " + (a[i + 1] || "");
         i++;
@@ -1028,28 +1042,36 @@ function testArgsProblem(kind, a) {
   return null;
 }
 
-// Split a test_cmd into tokens. A double-quoted token is allowed only as the
-// expression right after -k or -m: plain words separated by single spaces
-// (so `"foo and not bar"`), standing alone between spaces. Returns
-// {tokens} or {problem}.
+// Split a test_cmd into tokens on plain spaces (0x20) only. A double-quoted
+// token is allowed only as the expression right after -k or -m: words of
+// [A-Za-z0-9_()] separated by single spaces (so `"foo and not (bar or baz)"`),
+// standing alone between spaces. Returns {tokens} or {problem}.
 function splitTestCmd(cmd) {
+  if (!TEST_CMD_CHARS_RE.test(cmd)) return { problem: "a character outside [A-Za-z0-9_./:=<>\"() -]" };
   const tokens = [];
-  const re = /"([^"]*)"|(\S+)/g;
-  let m;
-  while ((m = re.exec(cmd))) {
-    if (m[1] === undefined) {
-      tokens.push(m[2]);
+  let i = 0;
+  while (i < cmd.length) {
+    if (cmd.charAt(i) === " ") {
+      i++;
       continue;
     }
-    const before = m.index === 0 ? " " : cmd.charAt(m.index - 1);
-    const after = re.lastIndex >= cmd.length ? " " : cmd.charAt(re.lastIndex);
+    if (cmd.charAt(i) !== '"') {
+      const j = cmd.indexOf(" ", i);
+      const end = j < 0 ? cmd.length : j;
+      tokens.push(cmd.slice(i, end));
+      i = end;
+      continue;
+    }
+    const close = cmd.indexOf('"', i + 1);
     const prev = tokens[tokens.length - 1];
-    if (!/\s/.test(before) || !/\s/.test(after) || (prev !== "-k" && prev !== "-m"))
+    if (close < 0 || (close + 1 < cmd.length && cmd.charAt(close + 1) !== " ") || (prev !== "-k" && prev !== "-m"))
       return { problem: "a quoted argument is allowed only as the expression after -k or -m" };
-    if (!/^[A-Za-z0-9_]+( [A-Za-z0-9_]+)*$/.test(m[1]))
-      return { problem: "test_cmd arg " + JSON.stringify(m[0]) + " not allowed: a -k/-m expression is plain words" };
-    // the words are checked; the arg check sees one plain word for it
-    tokens.push(m[1].split(" ")[0]);
+    const expr = cmd.slice(i + 1, close);
+    if (!QUOTED_EXPR_RE.test(expr))
+      return { problem: "test_cmd arg " + JSON.stringify(cmd.slice(i, close + 1)) + " not allowed: a -k/-m expression is plain words" };
+    // the expression is checked; the arg check sees one plain word for it
+    tokens.push("expr");
+    i = close + 1;
   }
   return { tokens };
 }
@@ -1061,7 +1083,7 @@ function testCmdProblem(tc) {
   const cmd = tc && tc.command;
   if (typeof cmd !== "string" || !cmd.trim()) return "no command";
   if (FORBIDDEN_WORD_RE.test(cmd)) return "names a forbidden tool";
-  const split = splitTestCmd(cmd.trim());
+  const split = splitTestCmd(cmd);
   if (split.problem) return "test_cmd shape not allowed: " + split.problem;
   const t = split.tokens;
   for (const x of t)
@@ -2119,21 +2141,33 @@ async function screenCheckCmds(obligations, worktree, phaseName, sfx) {
     gate(o.id + " check_cmd refused (judge-only): " + pc.reason + ": " + JSON.stringify(o.check_cmd));
     return demote(o, pc.reason);
   });
-  // a script must be a tracked regular file whose realpath stays under its root
+  return checkScripts("infra:check-scripts" + (sfx || ""), out, worktree, phaseName);
+}
+
+function scriptPathsOf(obligations) {
   const paths = [];
-  for (const o of out) {
+  for (const o of obligations) {
     const sp = typeof o.check_cmd === "string" ? parseCheckCmd(o.check_cmd).script : null;
     if (sp && paths.indexOf(sp) < 0) paths.push(sp);
   }
-  if (!paths.length) return out;
+  return paths;
+}
+
+// A check_cmd script must be a tracked regular file whose realpath stays
+// under its root, in `worktree` as it is now. Run at plan time and again
+// before every code-judge run (the coder may have changed it). A failure, or
+// a missing result, demotes the obligation to judge-only.
+async function checkScripts(label, obligations, worktree, phaseName) {
+  const paths = scriptPathsOf(obligations);
+  if (!paths.length) return obligations;
   const r = await infra(
-    "infra:check-scripts" + (sfx || ""),
+    label,
     checkScriptsPrompt({ worktree, paths, run: "python3 -I -c " + shQuote(SCRIPT_CHECK_PY) + " " + shQuote(worktree) + " " + shQuote(JSON.stringify(paths)) }),
     phaseName,
     JUDGE_AGENT,
   );
   const checks = r.checks && typeof r.checks === "object" ? r.checks : {};
-  return out.map((o) => {
+  return obligations.map((o) => {
     const sp = typeof o.check_cmd === "string" ? parseCheckCmd(o.check_cmd).script : null;
     if (!sp) return o;
     const c = checks[sp];
@@ -2782,8 +2816,8 @@ async function buildMode(input, date) {
     state.rounds.code++;
     const m = state.rounds.code;
     lastRoundGate = null;
-    // coder, purge, hasher, judge, fingerprint, push
-    reserve(6, "code round " + m);
+    // coder, purge, hasher, script check, judge, fingerprint, push
+    reserve(6 + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
       frozen_tests: testFilesView(frozen, frozenFiles),
@@ -2840,6 +2874,10 @@ async function buildMode(input, date) {
       gate("code round " + m + ": hash violation on " + viol.join(", ") + " -> coder output rejected");
       continue;
     }
+    // re-check check_cmd scripts at the commit the judge sees; a failure is
+    // judge-only for this round. The check is read-only: the judge's
+    // fingerprint (taken at the post-coder hash) catches any change.
+    const judgeObligations = await checkScripts("infra:check-scripts:r" + m, planFacts.repo_obligations, mainWt, "Code");
     // the post-coder fingerprint is the judge's "before" fingerprint
     const judgedCode = await judged(
       "fleet-code-judge",
@@ -2850,6 +2888,7 @@ async function buildMode(input, date) {
         hash_recheck: hashRecheck(frozen, h.hashes),
         held_out_results: HELD_OUT_NOT_RUN,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
+        repo_obligations: judgeObligations,
       }),
       mainWt,
       "Code",
