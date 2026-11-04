@@ -1,17 +1,21 @@
 export const meta = {
   name: "build-task-run",
   description:
-    "Role fleet for one task: plan, audit, per-criterion test writers, test judge, freeze, coder, code judge, draft PR. Every gate runs in script code.",
+    "Role fleet for one task in two modes. plan: intake, plan, audit, commit the plan locally, return for confirmation. build: verify the approved plan, per-criterion test writers, test judge, freeze, coder, code judge, push, draft PR, write-back. Every gate runs in script code.",
   whenToUse:
-    "Run by the /build-task skill. args: {task, repo, date, title?, project?}. If invoked with no args, do not call Workflow again: tell the user to run /build-task <ledger id | plan path>.",
+    "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, project?} or {mode: \"build\", plan_ref, date, project?}. If invoked with no args, do not call Workflow again: tell the user to run /build-task <task>.",
   phases: [
     { title: "Preflight", detail: "load all seven role prompts from yadgar" },
+    { title: "Intake", detail: "resolve the input into a brief (plan mode)" },
     { title: "Workspace", detail: "create or reuse the fleet branch and worktree" },
-    { title: "Plan", detail: "scope-and-plan, risk tier, plan-audit" },
+    { title: "Plan", detail: "scope-and-plan, risk tier, plan-audit, local plan commit (plan mode)" },
+    { title: "Verify", detail: "re-hash the approved plan, check the branch (build mode)" },
     { title: "Tests", detail: "one test writer per criterion, test judge, revise rounds" },
     { title: "Freeze", detail: "hash frozen tests and test-runner config" },
     { title: "Code", detail: "coder, hash check, code judge, fix rounds" },
-    { title: "PR", detail: "draft PR from the approved sha" },
+    { title: "Re-plan", detail: "on plan_wrong: re-plan, save the superseded head, return for confirmation" },
+    { title: "PR", detail: "push, draft PR from the approved sha" },
+    { title: "Write-back", detail: "ledger section and one marked comment per external source" },
   ],
 };
 
@@ -38,21 +42,21 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks"];
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 11,
-  "plan-audit": 9,
-  "fleet-test-writer": 4,
-  "fleet-test-judge": 4,
-  "fleet-coder": 5,
-  "fleet-code-judge": 5,
-  "fleet-pr-opener": 4,
+  "scope-and-plan": 13,
+  "plan-audit": 10,
+  "fleet-test-writer": 6,
+  "fleet-test-judge": 6,
+  "fleet-coder": 7,
+  "fleet-code-judge": 7,
+  "fleet-pr-opener": 5,
 };
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
-const CONTRACT = "fleet-v1";
+const CONTRACT = "fleet-v2";
 const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
 // Keys each role must return when status is "ok" (checked with `key in obj`;
 // null or empty values are allowed). A missing key is contract drift.
 const REQUIRED_ON_OK = {
-  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples"],
+  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff"],
   "plan-audit": ["verdict", "routed_findings"],
   "fleet-test-writer": ["criterion_id", "tests", "commit"],
   "fleet-test-judge": ["verdict", "routed_findings", "checked"],
@@ -70,13 +74,27 @@ const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallo
 const MAX_AGENTS = 60;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
 const MAX_CODE_ROUNDS = 3; // total coder rounds; a fix_tests detour counts as one
-const SHORT_PATH_MAX_DIFF = 20; // tier is computed and logged; the short path is disabled in v1
+const SHORT_PATH_MAX_DIFF = 20; // tier is computed and logged; the short path is disabled
 
-// v1 runs no held-out examples and no mutation/coverage/scanner gates. Judges
-// get these explicit not_run markers, never an empty list: a judge must not
-// read a missing gate as a passing one (fail-closed).
-const HELD_OUT_NOT_RUN = { status: "not_run", reason: "v1: held-out execution lands in v1.1" };
-const SCRIPT_FINDINGS_NOT_RUN = { status: "not_run", reason: "v1: mutation/coverage/scan gates land in v1.1" };
+const MODES = ["plan", "build"];
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const SHA_RE = /^[0-9a-f]{7,40}$/;
+const SHA256_RE = /^[0-9a-f]{64}$/;
+const SOURCE_KINDS = ["ledger", "jira", "github", "codeberg", "plan", "text"];
+const EXTERNAL_KINDS = ["jira", "github", "codeberg"];
+// Sources whose ref names the task, in priority order, for the task id.
+const ID_KINDS = ["ledger", "jira", "github", "codeberg"];
+// A comment line that starts with one of these words triggers a terraform
+// bot on the PR or issue. The script never posts such a comment.
+const FORBIDDEN_COMMENT_RE = /^\s*(digger|atlantis)\b/im;
+const PROPOSED_RE = /Proposed plan change:\s*(.+?)\s*$/m;
+const LEDGER_SECTION = "Fleet build";
+
+// The fleet runs no held-out examples and no mutation/coverage/scanner gates
+// yet. Judges get these explicit not_run markers, never an empty list: a judge
+// must not read a missing gate as a passing one (fail-closed).
+const HELD_OUT_NOT_RUN = { status: "not_run", reason: "fleet v2: held-out execution is not run yet" };
+const SCRIPT_FINDINGS_NOT_RUN = { status: "not_run", reason: "fleet v2: mutation/coverage/scan gates are not run yet" };
 // The planner may emit these. They must never reach another role.
 const HELD_OUT_KEY = "held_out_examples";
 
@@ -337,6 +355,12 @@ const SCHEMAS = {
     },
     est_diff_lines: { type: "number" },
     new_behaviour: { type: "boolean" },
+    tldr: STR,
+    plan_diff: { type: "array", items: STR },
+    fleet_estimate: {
+      type: "object",
+      properties: { criteria: { type: "number" }, agents: { type: "number" }, rounds: { type: "number" } },
+    },
   }),
   "plan-audit": roleSchema({
     verdict: { type: "string", enum: ["approve", "untestable_criteria", "plan_defect"] },
@@ -403,6 +427,48 @@ const INFRA_SCHEMA = {
     remote_slug: STR,
     created: { type: "boolean" },
     merged: ANY_ARRAY,
+    plan_sha256: STR,
+    plan_sha256_head: STR,
+    is_ancestor: { type: "boolean" },
+    commits_since: {
+      type: "array",
+      items: { type: "object", properties: { sha: STR, subject: STR }, required: ["sha", "subject"] },
+    },
+    plan_touched: { type: "array", items: STR },
+    remote_head: STR,
+    superseded_head: STR,
+    results: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { key: STR, status: STR, has_marker: { type: "boolean" }, reason: STR, url: STR_OR_NULL },
+        required: ["key"],
+      },
+    },
+  },
+};
+const SOURCE_SCHEMA = {
+  type: "object",
+  required: ["kind", "ref", "body"],
+  properties: { kind: { type: "string", enum: SOURCE_KINDS }, ref: STR, url: STR_OR_NULL, body: STR },
+};
+const INTAKE_SCHEMA = {
+  type: "object",
+  required: ["status", "reason"],
+  properties: {
+    status: { type: "string", enum: ["ok", "needs_human", "failed"] },
+    reason: STR,
+    brief: {
+      type: "object",
+      required: ["title", "description", "sources", "repo"],
+      properties: {
+        title: STR,
+        description: STR,
+        sources: { type: "array", items: SOURCE_SCHEMA },
+        repo: STR,
+        plan_path: STR_OR_NULL,
+      },
+    },
   },
 };
 const FINGERPRINT = {
@@ -440,21 +506,6 @@ function slugify(s, max) {
     .replace(/^-+|-+$/g, "")
     .slice(0, max || 40)
     .replace(/-+$/g, "");
-}
-
-function isPlanPath(task) {
-  return /\.md$/i.test(task) || task.indexOf("/") >= 0;
-}
-
-// Task id: "plan" for a plan path, else the slugified ledger id.
-// Slug: the plan filename stem, else the title, else "task".
-// Branch: fleet/<task id>-<slug>.
-function deriveNames(task, title) {
-  if (isPlanPath(task)) {
-    const stem = task.split("/").pop().replace(/\.md$/i, "");
-    return { taskId: "plan", slug: slugify(stem) || "task", planPath: task };
-  }
-  return { taskId: slugify(task, 40), slug: slugify(title) || "task", planPath: null };
 }
 
 // Deep copy without any held_out_examples key, at any depth.
@@ -607,6 +658,150 @@ function settingsFor(worktree) {
   });
 }
 
+// Canonical JSON: object keys sorted at every depth, undefined values dropped.
+function canonical(v) {
+  if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
+  if (v && typeof v === "object")
+    return (
+      "{" +
+      Object.keys(v)
+        .sort()
+        .filter((k) => v[k] !== undefined)
+        .map((k) => JSON.stringify(k) + ":" + canonical(v[k]))
+        .join(",") +
+      "}"
+    );
+  return JSON.stringify(v === undefined ? null : v);
+}
+
+// SHA-256 in plain JS (workflow scripts have no crypto module). Used for the
+// plan_ref seal only; file hashes are computed by infra agents.
+const K256 = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+
+function utf8Bytes(str) {
+  const out = [];
+  for (const ch of String(str)) {
+    const c = ch.codePointAt(0);
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+    else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+  }
+  return out;
+}
+
+function rotr(x, n) {
+  return (x >>> n) | (x << (32 - n));
+}
+
+function sha256Hex(str) {
+  const bytes = utf8Bytes(str);
+  const bitLen = bytes.length * 8;
+  bytes.push(0x80);
+  while (bytes.length % 64 !== 56) bytes.push(0);
+  const hi = Math.floor(bitLen / 0x100000000);
+  const lo = bitLen >>> 0;
+  for (const x of [hi, lo]) bytes.push((x >>> 24) & 255, (x >>> 16) & 255, (x >>> 8) & 255, x & 255);
+  const h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+  const w = new Array(64);
+  for (let i = 0; i < bytes.length; i += 64) {
+    for (let t = 0; t < 16; t++)
+      w[t] = (bytes[i + 4 * t] << 24) | (bytes[i + 4 * t + 1] << 16) | (bytes[i + 4 * t + 2] << 8) | bytes[i + 4 * t + 3];
+    for (let t = 16; t < 64; t++) {
+      const s0 = rotr(w[t - 15], 7) ^ rotr(w[t - 15], 18) ^ (w[t - 15] >>> 3);
+      const s1 = rotr(w[t - 2], 17) ^ rotr(w[t - 2], 19) ^ (w[t - 2] >>> 10);
+      w[t] = (w[t - 16] + s0 + w[t - 7] + s1) | 0;
+    }
+    let a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], k = h[7];
+    for (let t = 0; t < 64; t++) {
+      const t1 = (k + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K256[t] + w[t]) | 0;
+      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      k = g;
+      g = f;
+      f = e;
+      e = (d + t1) | 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (t1 + t2) | 0;
+    }
+    h[0] = (h[0] + a) | 0;
+    h[1] = (h[1] + b) | 0;
+    h[2] = (h[2] + c) | 0;
+    h[3] = (h[3] + d) | 0;
+    h[4] = (h[4] + e) | 0;
+    h[5] = (h[5] + f) | 0;
+    h[6] = (h[6] + g) | 0;
+    h[7] = (h[7] + k) | 0;
+  }
+  return h.map((x) => (x >>> 0).toString(16).padStart(8, "0")).join("");
+}
+
+// The plan_ref travels through the skill (a model) between the plan and the
+// build run. The seal detects any change to it in transit.
+function sealOf(ref) {
+  const o = Object.assign({}, ref);
+  delete o.seal;
+  return sha256Hex(canonical(o));
+}
+
+function escapeRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Task id for the branch name and the comment marker: the first ledger, Jira,
+// GitHub or Codeberg source names it; else "plan" (an ingested plan) or
+// "task" (free text). The slug comes from the brief title.
+function namesFor(brief) {
+  let taskId = null;
+  for (const kind of ID_KINDS) {
+    const src = brief.sources.find((x) => x.kind === kind);
+    if (!src) continue;
+    taskId = kind === "ledger" ? "l" + slugify(String(src.ref).replace(/^l/i, ""), 24) : slugify(src.ref, 24);
+    break;
+  }
+  if (taskId === null) taskId = brief.sources.some((x) => x.kind === "plan") ? "plan" : "task";
+  return { taskId, slug: slugify(brief.title) || "task" };
+}
+
+// Proposed plan changes from the code judge's plan findings: the text after
+// "Proposed plan change:", else the whole finding (logged; never dropped).
+function proposedChanges(findings, note) {
+  return findings.map((f) => {
+    const text = String(f.finding || "");
+    const m = PROPOSED_RE.exec(text);
+    if (m && m[1]) return m[1];
+    note("code-judge plan finding has no 'Proposed plan change:' line; using the full finding: " + text);
+    return text;
+  });
+}
+
+function commentText(kind, taskId, tldr, planLink, prUrl) {
+  const body = String(tldr || "").trim() + "\n\nPlan: " + planLink + "\nPR: " + prUrl;
+  const marker = "fleet:" + taskId;
+  return kind === "jira" ? body + "\n\n" + marker : body + "\n\n<!-- " + marker + " -->";
+}
+
+// The plan file's sha256 as git stores it at a commit. Plan mode and build
+// mode run this exact program, so the two hashes are comparable.
+const PLAN_HASH_PY =
+  "import hashlib, subprocess, sys\n" +
+  "d = subprocess.run(['git', '-C', sys.argv[1], 'show', sys.argv[2] + ':' + sys.argv[3]], capture_output=True, check=True).stdout\n" +
+  "print(hashlib.sha256(d).hexdigest())";
+
+function planHashCmd(worktree, rev, planPath) {
+  return "python3 -I -c " + shQuote(PLAN_HASH_PY) + " " + shQuote(worktree) + " " + shQuote(rev) + " " + shQuote(planPath);
+}
+
 // ---------------------------------------------------------------- prompts
 
 // The ONLY prompt text a role gets. The role's instructions live in yadgar.
@@ -661,20 +856,6 @@ function workspacePrompt(inputs) {
     "8. base_ref = `git -C <main_worktree> merge-base HEAD origin/<default_branch>`.\n" +
     "9. remote_slug = <owner>/<name> parsed from `git -C <repo> remote get-url origin`.\n" +
     "Return {status, reason, default_branch, base_ref, remote_slug, created}."
-  );
-}
-
-function preparePrompt(inputs) {
-  return (
-    "Infra step of the fleet build workflow: commit the plan doc and create per-criterion test worktrees. No other edits. Never push. Never --no-verify or any hook bypass; no Co-Authored-By trailer.\n" +
-    "Inputs: " +
-    JSON.stringify(inputs) +
-    "\n" +
-    "1. `git -C <main_worktree> branch --show-current` must equal <branch>; mismatch -> needs_human.\n" +
-    '2. If `git -C <main_worktree> status --porcelain -- <plan_path>` is non-empty: `git -C <main_worktree> add <plan_path>` and `git -C <main_worktree> commit -m "docs(plan): <slug>"`. Hook failure: fix the cause and retry once; a second failure -> failed. Any other dirty path in main_worktree -> needs_human with the paths.\n' +
-    "3. For each entry of `criterion_worktrees`: if entry.path is a worktree on entry.branch, reuse it. Else if local branch entry.branch exists: `git -C <main_worktree> worktree add <entry.path> <entry.branch>`. Else `git -C <main_worktree> worktree add --no-track -b <entry.branch> <entry.path> <branch>`. Path exists on another branch -> needs_human. In each worktree you create, write `<entry.path>/.claude/settings.local.json` with exactly entry.settings_local_json.\n" +
-    "4. head = `git -C <main_worktree> rev-parse HEAD`; `git -C <main_worktree> status --porcelain` must be empty.\n" +
-    "Return {status, reason, head}."
   );
 }
 
@@ -740,6 +921,173 @@ function hasherPrompt(inputs) {
   );
 }
 
+function preparePrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: create per-criterion test worktrees for the approved plan. No edits, no commits. Never push.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> status --porcelain` must be empty; else needs_human with the paths.\n" +
+    "2. For each entry of `criterion_worktrees`: if entry.path is a worktree on entry.branch, reuse it. Else if local branch entry.branch exists: `git -C <main_worktree> worktree add <entry.path> <entry.branch>`. Else `git -C <main_worktree> worktree add --no-track -b <entry.branch> <entry.path> <branch>`. Path exists on another branch -> needs_human. In each worktree you create, write `<entry.path>/.claude/settings.local.json` with exactly entry.settings_local_json.\n" +
+    "3. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
+    "Return {status, reason, head}."
+  );
+}
+
+function intakePrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: INTAKE. Read only. Never write, edit, comment, transition or post anywhere: no file edits, no git writes, no ledger, ticket, issue or PR writes.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Resolve `input` into ONE work item and fetch its text. Classify it in this order:\n" +
+    "1. Ledger id (`L42`, `42`, `#42`): kind ledger. Load mcp__yadgar__task_get via ToolSearch; call it with project_id=<project> and id=<the number>. If it refuses with external_task_ledger, use mcp__yaadgaar__read_task with number=<the number> instead. No project -> needs_human. ref = the number; body = the title, status and full body. If the task names a plan path that exists in the repo, also set plan_path and add a `plan` source for it.\n" +
+    "2. Jira key (`ABC-123`): kind jira. Load the Atlassian MCP tools via ToolSearch: getAccessibleAtlassianResources for the cloudId, then getJiraIssue(issueIdOrKey, responseContentFormat=\"markdown\"). Tools absent -> needs_human. ref = the key; url = the browse URL; body = summary + description.\n" +
+    "3. GitHub issue or PR URL (`https://github.com/<o>/<r>/issues/<n>` or `/pull/<n>`): kind github. `gh-personal issue view <url> --json title,body,url` (or `pr view`); use `gh` only when gh-personal is not installed. ref = `<o>/<r>#<n>`.\n" +
+    "4. Codeberg issue or PR URL (`https://codeberg.org/<o>/<r>/issues/<n>` or `/pulls/<n>`): kind codeberg. `curl -sf https://codeberg.org/api/v1/repos/<o>/<r>/issues/<n>`. ref = `<o>/<r>#<n>`.\n" +
+    "5. A path to an existing `.md` file inside <repo>: kind plan. ref and plan_path = the path relative to <repo>; body = the file text.\n" +
+    "6. Anything else: kind text; ref = \"text\"; body = `input` verbatim.\n" +
+    "Repo (brief.repo is the ABSOLUTE path of the local checkout to work in):\n" +
+    "- text, plan, ledger: <repo>.\n" +
+    "- github or codeberg: the item's own repo. If `git -C <repo> remote get-url origin` names it -> <repo>. Else look for exactly one sibling checkout (`dirname <repo>`/*) whose origin names it; none or several -> needs_human.\n" +
+    "- jira: the ticket must name exactly one repo (in its text, components or links); none or several -> needs_human listing what you found. Map that repo to a checkout as for github.\n" +
+    "Any ambiguity (several matching tickets, an unclear id, several repos, a reference you cannot read) -> status needs_human with the candidates in reason. Do not guess.\n" +
+    "brief.title: the item's title; for free text, a short title (at most 8 words) that names the change. brief.description: one paragraph that states the requested change.\n" +
+    "Return {status, reason, brief: {title, description, sources: [{kind, ref, url, body}], repo, plan_path}}. plan_path is null when no plan was ingested."
+  );
+}
+
+function commitPlanPrompt(inputs) {
+  const cmd = planHashCmd(inputs.worktree, "HEAD", inputs.plan_path);
+  return (
+    "Infra step of the fleet build workflow: commit the plan doc LOCALLY. No other edits. Never push. Never --no-verify or any hook bypass; no Co-Authored-By trailer. No ledger, ticket or comment writes.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. " +
+    (inputs.branch
+      ? "`git -C <worktree> branch --show-current` must equal <branch>; mismatch -> needs_human."
+      : "The worktree must be on a detached HEAD (`git -C <worktree> symbolic-ref -q HEAD` fails); else needs_human.") +
+    "\n" +
+    "2. `git -C <worktree> status --porcelain`: any dirty path other than <plan_path> -> needs_human with the paths.\n" +
+    '3. If <plan_path> is dirty: `git -C <worktree> add -- <plan_path>` and `git -C <worktree> commit -m "docs(plan): <slug>"`. Hook failure: fix the cause and retry once; a second failure -> failed. A clean plan_path makes no commit.\n' +
+    "4. `git -C <worktree> ls-files --error-unmatch -- <plan_path>` must succeed and `git -C <worktree> status --porcelain` must be empty; else needs_human.\n" +
+    "5. head = `git -C <worktree> rev-parse HEAD`.\n" +
+    "6. plan_sha256 = the output of this one command, run exactly as written:\n" +
+    cmd +
+    "\n" +
+    "Return {status, reason, head, plan_sha256}."
+  );
+}
+
+function verifyPlanPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: VERIFY the approved plan. Read only: no edits, no commits, no checkout, no reset, no push.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> status --porcelain` must be empty; else needs_human.\n" +
+    "2. `git -C <main_worktree> cat-file -e '<plan_commit>^{commit}'` (keep the quotes: zsh globs `^`) must succeed; else needs_human.\n" +
+    "3. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
+    "4. plan_sha256 = the output of this command, run exactly as written:\n" +
+    planHashCmd(inputs.main_worktree, inputs.plan_commit, inputs.plan_path) +
+    "\n" +
+    "5. plan_sha256_head = the output of this command, run exactly as written:\n" +
+    planHashCmd(inputs.main_worktree, "HEAD", inputs.plan_path) +
+    "\n" +
+    "6. is_ancestor = whether `git -C <main_worktree> merge-base --is-ancestor <plan_commit> HEAD` exits 0.\n" +
+    "7. commits_since = every line of `git -C <main_worktree> log --format=%H%x09%s <plan_commit>..HEAD` as {sha, subject} (empty when head equals plan_commit or is_ancestor is false).\n" +
+    "8. plan_touched = the lines of `git -C <main_worktree> log --format=%H <plan_commit>..HEAD -- <plan_path>`.\n" +
+    "Return {status, reason, head, plan_sha256, plan_sha256_head, is_ancestor, commits_since, plan_touched}."
+  );
+}
+
+function replanWorktreePrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: create a throwaway worktree for a re-plan. No edits in any other worktree. Never push.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. If <worktree> exists: reuse it only when `git -C <worktree> rev-parse HEAD` equals <plan_commit>, it is on a detached HEAD and `git -C <worktree> status --porcelain` is empty; else needs_human.\n" +
+    "2. Else `git -C <main_worktree> worktree add --detach <worktree> <plan_commit>`, then write `<worktree>/.claude/settings.local.json` with exactly `settings_local_json`.\n" +
+    "3. head = `git -C <worktree> rev-parse HEAD`.\n" +
+    "Return {status, reason, head}."
+  );
+}
+
+function replanResetPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: move the fleet branch to the re-approved plan. This is the ONLY step that may reset a branch, and only as written here. Never push, never delete a branch.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. `git -C <main_worktree> branch --show-current` must equal <branch>, `git -C <main_worktree> rev-parse HEAD` must equal <expected_head>, and `git -C <main_worktree> status --porcelain` must be empty; else needs_human.\n" +
+    "2. Save the old head: if branch <superseded_branch> exists, it must point at <expected_head> (else needs_human); else `git -C <main_worktree> branch <superseded_branch> <expected_head>`. superseded_head = `git -C <main_worktree> rev-parse <superseded_branch>`.\n" +
+    "3. Only after step 2 succeeded: `git -C <main_worktree> reset --hard <new_plan_commit>`.\n" +
+    "4. `git -C <main_worktree> worktree remove <replan_worktree>` (it must be clean; never --force).\n" +
+    "5. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
+    "Return {status, reason, head, superseded_head}."
+  );
+}
+
+function pushPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: push the approved fleet branch. No edits, no commits.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. <branch> must differ from <default_branch>; `git -C <main_worktree> branch --show-current` must equal <branch>; `git -C <main_worktree> rev-parse HEAD` must equal <approved_sha>; `git -C <main_worktree> status --porcelain` must be empty. Any mismatch -> needs_human.\n" +
+    "2. `git -C <main_worktree> push -u origin <branch>`. Never --force, never --no-verify, never push another ref. Rejected as non-fast-forward -> needs_human. An auth or network error -> retry once, then failed with the error; never change remotes or credentials.\n" +
+    "3. remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints.\n" +
+    "Return {status, reason, remote_head}."
+  );
+}
+
+function ledgerWritebackPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: append ONE section to each ledger task's body. Change nothing else on the task: not its title, status or plan.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Load mcp__yadgar__task_get, mcp__yadgar__wiki_read and mcp__yadgar__wiki_append_section via ToolSearch. For each entry of `tasks` (key, ref):\n" +
+    "1. task_get(project_id=<project>, id=<ref as an integer>). Refused or absent -> that entry failed with the error.\n" +
+    "2. The row must have a body_slug; none -> failed (\"task has no body page\").\n" +
+    "3. wiki_read(slug=<body_slug>, project=<project>). If the content already contains <marker> -> skipped.\n" +
+    "4. wiki_append_section(slug=<body_slug>, section_heading=<section_heading>, content=<section_text>, position=\"new_section_bottom\", project=<project>). A section_exists error -> skipped. The page is the task body that body_slug names, so this writes the body; do not call task_write.\n" +
+    "Return {status: \"ok\", reason, results: [{key, status: written|skipped|failed, reason}]}."
+  );
+}
+
+function commentsListPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: LIST existing comments. Read only: never post, edit or delete anything.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "For each entry of `sources` (key, kind, ref, url), read every comment (all pages) and set has_marker = whether any comment body contains <marker>:\n" +
+    "- github: `gh-personal api --paginate repos/<o>/<r>/issues/<n>/comments --jq '.[].body'` (PR conversation comments are issue comments too).\n" +
+    "- codeberg: `curl -sf 'https://codeberg.org/api/v1/repos/<o>/<r>/issues/<n>/comments'`.\n" +
+    "- jira: load the Atlassian MCP tools via ToolSearch; getJiraIssue(issueIdOrKey=<ref>, fields=[\"comment\"], responseContentFormat=\"markdown\").\n" +
+    "A source you cannot read -> that entry gets status failed with the error and no has_marker.\n" +
+    "Return {status: \"ok\", reason, results: [{key, status: ok|failed, has_marker, reason}]}."
+  );
+}
+
+function commentsPostPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: POST one comment per entry. Post each `text` VERBATIM, byte for byte. Never edit an issue, ticket or PR body, never edit or delete a comment, never post anything else. Never post a comment any line of which starts with `digger` or `atlantis`.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "For each entry of `posts` (key, kind, ref, url, text):\n" +
+    "- github: write text to a temp file outside every worktree, then `gh-personal issue comment <url> --body-file <file>` (for a `/pull/` url: `gh-personal pr comment <url> --body-file <file>`); delete the file.\n" +
+    "- codeberg: POST `https://codeberg.org/api/v1/repos/<o>/<r>/issues/<n>/comments` with JSON `{\"body\": text}` and header `Authorization: token $CODEBERG_TOKEN` (the bot identity). No token -> failed.\n" +
+    "- jira: load the Atlassian MCP tools via ToolSearch; getAccessibleAtlassianResources for the cloudId, then addCommentToJiraIssue(cloudId, issueIdOrKey=<ref>, commentBody=<text>, contentFormat=\"markdown\"). Never pass commentId.\n" +
+    "Tool absent or the post fails -> that entry failed with the error. Do not retry a post that may have landed.\n" +
+    "Return {status: \"ok\", reason, results: [{key, status: posted|failed, reason, url}]}."
+  );
+}
+
 // ---------------------------------------------------------------- run state
 
 class Stop extends Error {
@@ -754,6 +1102,7 @@ function stop(status, reason) {
 }
 
 const state = {
+  mode: null,
   agents: 0,
   gateLog: [],
   findings: [],
@@ -791,6 +1140,19 @@ async function dispatch(label, prompt, opts) {
   state.agents++;
   const r = await agent(prompt, Object.assign({}, opts, { label, model: INFRA_MODEL }));
   if (r == null) halt("failed", "agent " + label + " returned no result");
+  return r;
+}
+
+// Infra agents whose failure must not stop the run (write-back). Returns null
+// when the cap is reached or the agent dies.
+async function softDispatch(label, prompt, opts) {
+  if (state.agents + 1 > MAX_AGENTS) {
+    gate("agent cap " + MAX_AGENTS + " reached: " + label + " not run");
+    return null;
+  }
+  state.agents++;
+  const r = await agent(prompt, Object.assign({}, opts, { label, model: INFRA_MODEL }));
+  if (r == null) gate(label + " returned no result");
   return r;
 }
 
@@ -867,8 +1229,10 @@ async function hasher(label, worktree, mode, testFiles, phaseName) {
   return r;
 }
 
-async function infra(label, prompt, phaseName) {
-  const r = await dispatch(label, prompt, { schema: INFRA_SCHEMA, phase: phaseName });
+async function infra(label, prompt, phaseName, agentType) {
+  const opts = { schema: INFRA_SCHEMA, phase: phaseName };
+  if (agentType) opts.agentType = agentType;
+  const r = await dispatch(label, prompt, opts);
   return requireOk(label, r);
 }
 
@@ -892,6 +1256,7 @@ function finish(status, reason) {
   return {
     status,
     reason,
+    mode: state.mode,
     branch: state.branch,
     pr_url: state.pr ? state.pr.pr_url : null,
     pr_number: state.pr ? state.pr.pr_number : null,
@@ -906,30 +1271,20 @@ function finish(status, reason) {
   };
 }
 
-// ---------------------------------------------------------------- main
+// ---------------------------------------------------------------- shared steps
 
-async function main(input) {
-  const task = typeof input.task === "string" ? input.task.trim() : "";
-  const repo = typeof input.repo === "string" ? input.repo.replace(/\/+$/, "") : "";
-  const date = input.date;
-  if (!task) stop("needs_human", "args.task missing: run /build-task <ledger id | plan path>");
-  if (!repo || repo.charAt(0) !== "/") stop("needs_human", "args.repo must be the absolute path of the target repo");
-  if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date))
-    stop("needs_human", "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)");
+function cleanRepo(r) {
+  const s = typeof r === "string" ? r.replace(/\/+$/, "") : "";
+  return s && s.charAt(0) === "/" ? s : "";
+}
 
-  const names = deriveNames(task, input.title);
-  if (!names.planPath && (typeof input.title !== "string" || !input.title.trim()))
-    stop("needs_human", "a ledger-id task needs args.title (the skill reads it from the ledger); none given");
-  if (!names.taskId) stop("needs_human", "task id derives to an empty slug: " + JSON.stringify(task));
+function layout(names, repo) {
   const key = names.taskId + "-" + names.slug;
-  const branch = "fleet/" + key;
   const root = repo + "/.claude/worktrees/fleet-" + key;
-  const mainWt = root + "/main";
-  const scratch = root + "/scratch";
-  state.branch = branch;
-  gate("task " + JSON.stringify(task) + " -> branch " + branch + ", worktree " + mainWt);
+  return { key, branch: "fleet/" + key, root, mainWt: root + "/main", scratch: root + "/scratch" };
+}
 
-  // 1. preflight
+async function preflightStep() {
   phase("Preflight");
   const pre = await dispatch("preflight", preflightPrompt({ roles: ROLES, role_project: ROLE_PROJECT }), {
     schema: PREFLIGHT_SCHEMA,
@@ -966,55 +1321,67 @@ async function main(input) {
       );
     }
   }
+}
 
-  // 2. workspace
+async function workspaceStep(repo, lay) {
   phase("Workspace");
   const ws = await infra(
     "workspace",
     workspacePrompt({
       repo,
-      branch,
-      main_worktree: mainWt,
-      scratch_dir: scratch,
-      settings_local_json: settingsFor(mainWt),
+      branch: lay.branch,
+      main_worktree: lay.mainWt,
+      scratch_dir: lay.scratch,
+      settings_local_json: settingsFor(lay.mainWt),
     }),
     "Workspace",
   );
   if (!ws.default_branch || !ws.base_ref) halt("failed", "workspace returned no default_branch/base_ref");
-  const defaultBranch = ws.default_branch;
   // remote_slug (owner/name of origin) is the GitHub repo for the planner and
   // the PR; project is only the recall scope
   if (!ws.remote_slug) halt("needs_human", "workspace found no origin remote owner/name (remote_slug)");
-  const remoteSlug = ws.remote_slug;
-  const project = input.project || remoteSlug;
-  gate("workspace: " + (ws.created ? "created " : "reused ") + mainWt + " off " + defaultBranch + " @ " + ws.base_ref);
+  if (ws.default_branch === lay.branch) halt("needs_human", "fleet branch equals the default branch " + ws.default_branch);
+  gate("workspace: " + (ws.created ? "created " : "reused ") + lay.mainWt + " off " + ws.default_branch + " @ " + ws.base_ref);
+  return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: ws.remote_slug };
+}
 
-  const common = { project, worktree: mainWt, branch, default_branch: defaultBranch, scratch_dir: scratch };
+// Brief from intake, or from a plan_ref: shape checked in code.
+function briefProblem(b) {
+  if (!b || typeof b !== "object") return "no brief";
+  if (typeof b.title !== "string" || !b.title.trim()) return "brief has no title";
+  if (!Array.isArray(b.sources) || !b.sources.length) return "brief has no sources";
+  for (const src of b.sources) {
+    if (!src || SOURCE_KINDS.indexOf(src.kind) < 0) return "brief source kind " + JSON.stringify(src && src.kind) + " is unknown";
+    if (typeof src.ref !== "string" || !src.ref) return "brief source has no ref";
+  }
+  if (!cleanRepo(b.repo)) return "brief.repo must be an absolute path";
+  if (b.plan_path != null) {
+    if (typeof b.plan_path !== "string" || !normPath(b.plan_path)) return "brief.plan_path is not a path";
+    if (b.plan_path.charAt(0) === "/" || normPath(b.plan_path).split("/").indexOf("..") >= 0)
+      return "brief.plan_path must be relative to the repo";
+  }
+  return null;
+}
 
-  // 3. plan
-  phase("Plan");
-  const plan = requireOk(
-    "scope-and-plan",
-    await callRole(
-      "scope-and-plan",
-      "role:scope-and-plan",
-      Object.assign({}, common, {
-        task,
-        title: input.title || null,
-        plan_path: names.planPath,
-        repo: remoteSlug,
-        base_ref: ws.base_ref,
-        date,
-        mode: "commit=false",
-      }),
-      "Plan",
-    ),
-  );
-  if (typeof plan.plan_path !== "string" || !Array.isArray(plan.criteria))
-    halt("failed", "scope-and-plan returned no plan_path/criteria");
+function cleanBrief(b) {
+  return {
+    title: b.title.trim(),
+    description: typeof b.description === "string" ? b.description : "",
+    sources: b.sources.map((src) => ({
+      kind: src.kind,
+      ref: src.ref,
+      url: typeof src.url === "string" ? src.url : null,
+      body: typeof src.body === "string" ? src.body : "",
+    })),
+    repo: cleanRepo(b.repo),
+    plan_path: b.plan_path ? normPath(b.plan_path) : null,
+  };
+}
+
+function normCriteria(raw) {
   const seen = {};
-  const criteria = plan.criteria.map((c) => {
-    const id = String(c.id || "");
+  const criteria = raw.map((c) => {
+    const id = String((c && c.id) || "");
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(id))
       halt("needs_human", "criterion id not usable in a branch name: " + JSON.stringify(id));
     if (seen[id]) halt("needs_human", "duplicate criterion id " + id);
@@ -1025,23 +1392,60 @@ async function main(input) {
       test_files: (c.test_files || []).map(normPath).filter(Boolean),
     });
   });
-  // plan facts forwarded to later roles; held-out examples stay behind
+  const overlaps = findOverlaps(criteria);
+  if (overlaps.length) halt("needs_human", "test_files overlap across criteria: " + overlaps.join("; "));
+  return criteria;
+}
+
+function testableOf(criteria) {
+  const testable = criteria.filter((c) => c.test_files.length);
+  for (const c of criteria)
+    if (!c.test_files.length) gate("criterion " + c.id + " has no test_files ([manual]): no writer");
+  if (!testable.length) halt("needs_human", "full path but no testable criteria (all [manual])");
+  return testable;
+}
+
+// scope-and-plan then plan-audit. ctx: {common, brief, date, baseRef,
+// remoteSlug, suffix}. Returns the plan facts; held-out examples stay behind.
+async function planAndAudit(ctx) {
+  const sfx = ctx.suffix || "";
+  const plan = requireOk(
+    "scope-and-plan",
+    await callRole(
+      "scope-and-plan",
+      "role:scope-and-plan" + sfx,
+      Object.assign({}, ctx.common, {
+        brief: ctx.brief,
+        date: ctx.date,
+        repo: ctx.remoteSlug,
+        base_ref: ctx.baseRef,
+        mode: "commit=false",
+      }),
+      "Plan",
+    ),
+  );
+  if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
+    halt("failed", "scope-and-plan returned no plan_path/criteria");
+  if (!Array.isArray(plan.plan_diff) || !plan.plan_diff.length || !plan.plan_diff.every((x) => typeof x === "string"))
+    halt("needs_human", "role scope-and-plan contract drift: plan_diff must be a non-empty array of strings");
+  if (typeof plan.tldr !== "string" || !plan.tldr.trim())
+    halt("needs_human", "role scope-and-plan contract drift: tldr must be a non-empty string");
+  const planPath = normPath(plan.plan_path);
+  if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
+    halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
+  const criteria = normCriteria(plan.criteria);
   const planFacts = {
     allowed_additions: plan.allowed_additions ? stripHeldOut(plan.allowed_additions) : null,
     est_diff_lines: typeof plan.est_diff_lines === "number" ? plan.est_diff_lines : null,
   };
   if (Array.isArray(plan[HELD_OUT_KEY]) || plan.criteria.some((c) => c && c[HELD_OUT_KEY]))
-    gate("planner emitted held_out_examples: withheld from every other role (v1 does not run them)");
-  const overlaps = findOverlaps(criteria);
-  if (overlaps.length) halt("needs_human", "test_files overlap across criteria: " + overlaps.join("; "));
-  gate("plan: " + plan.plan_path + ", " + criteria.length + " criteria, test files disjoint");
+    gate("planner emitted held_out_examples: dropped, never returned or forwarded");
+  gate("plan: " + planPath + ", " + criteria.length + " criteria, test files disjoint");
 
-  // 4. risk tier: computed and logged; the short path is disabled in v1
-  // because no role prompt supports a coder without frozen criterion tests
+  // risk tier: computed and logged; the short path is disabled because no
+  // role prompt supports a coder without frozen criterion tests
   const wouldBeShort =
-    typeof plan.est_diff_lines === "number" &&
-    plan.est_diff_lines < SHORT_PATH_MAX_DIFF &&
-    plan.new_behaviour === false;
+    typeof plan.est_diff_lines === "number" && plan.est_diff_lines < SHORT_PATH_MAX_DIFF && plan.new_behaviour === false;
   state.path = "full";
   gate(
     "risk tier (short = est_diff_lines < 20 AND new_behaviour false): est_diff_lines=" +
@@ -1050,60 +1454,248 @@ async function main(input) {
       plan.new_behaviour +
       " -> " +
       (wouldBeShort ? "short" : "full") +
-      "; short path disabled in v1 -> full path",
+      "; short path disabled -> full path",
   );
 
-  const planCtx = { plan_path: plan.plan_path };
-  let testable = [];
-  {
-    // 5. plan-audit
-    const audit = requireOk(
+  const audit = requireOk(
+    "plan-audit",
+    await callRole(
       "plan-audit",
-      await callRole(
-        "plan-audit",
-        "role:plan-audit",
-        Object.assign({}, common, planCtx, planFacts, { criteria, base_ref: ws.base_ref, mode: "writeback=false" }),
-        "Plan",
-      ),
+      "role:plan-audit" + sfx,
+      Object.assign({}, ctx.common, planFacts, {
+        plan_path: planPath,
+        criteria,
+        plan_diff: plan.plan_diff.slice(),
+        base_ref: ctx.baseRef,
+        mode: "writeback=false",
+      }),
+      "Plan",
+    ),
+  );
+  if (audit.verdict !== "approve") {
+    const first = (audit.routed_findings || []).slice(0, 3).map((f) => (f.criterion || "-") + ": " + f.finding);
+    halt(
+      audit.verdict ? "needs_human" : "failed",
+      "plan-audit verdict " + (audit.verdict || "missing") + (first.length ? ": " + first.join("; ") : ""),
     );
-    if (audit.verdict !== "approve") {
-      const first = (audit.routed_findings || [])
-        .slice(0, 3)
-        .map((f) => (f.criterion || "-") + ": " + f.finding);
-      halt(
-        audit.verdict ? "needs_human" : "failed",
-        "plan-audit verdict " + (audit.verdict || "missing") + (first.length ? ": " + first.join("; ") : ""),
-      );
-    }
-    gate("plan-audit: approve");
-    testable = criteria.filter((c) => c.test_files.length);
-    for (const c of criteria)
-      if (!c.test_files.length) gate("criterion " + c.id + " has no test_files ([manual]): no writer");
-    if (!testable.length) halt("needs_human", "full path but no testable criteria (all [manual])");
   }
+  gate("plan-audit: approve");
+  const testable = testableOf(criteria);
+  const est = plan.fleet_estimate && typeof plan.fleet_estimate === "object" ? plan.fleet_estimate : {};
+  if (typeof est.criteria === "number" && est.criteria !== testable.length)
+    gate("planner fleet_estimate.criteria " + est.criteria + " != " + testable.length + " testable criteria");
+  return {
+    planPath,
+    criteria,
+    testable,
+    planFacts,
+    planDiff: plan.plan_diff.slice(),
+    tldr: plan.tldr.trim(),
+    fleetSize: {
+      criteria: testable.length,
+      est_agents: typeof est.agents === "number" ? est.agents : null,
+      est_rounds: typeof est.rounds === "number" ? est.rounds : null,
+    },
+  };
+}
+
+async function commitPlan(label, worktree, branch, planPath, slug, phaseName) {
+  const r = await infra(label, commitPlanPrompt({ worktree, branch, plan_path: planPath, slug }), phaseName);
+  if (typeof r.head !== "string" || !SHA_RE.test(r.head)) halt("failed", label + " returned no usable head sha: " + JSON.stringify(r.head));
+  if (typeof r.plan_sha256 !== "string" || !SHA256_RE.test(r.plan_sha256))
+    halt("failed", label + " returned no usable plan_sha256");
+  gate("plan committed locally at " + r.head + " (" + planPath + " sha256 " + r.plan_sha256 + "); not pushed");
+  return { head: r.head, planSha: r.plan_sha256 };
+}
+
+function makePlanRef(f) {
+  const ref = stripHeldOut({
+    branch: f.branch,
+    plan_commit: f.planCommit,
+    plan_path: f.planPath,
+    plan_sha256: f.planSha,
+    criteria: f.criteria,
+    brief: f.brief,
+    task_id: f.taskId,
+    slug: f.slug,
+    tldr: f.tldr,
+    plan_facts: f.planFacts,
+    history: f.history,
+  });
+  ref.seal = sealOf(ref);
+  return ref;
+}
+
+function awaiting(reason, p, ref, extra) {
+  return stripHeldOut(
+    Object.assign(finish("awaiting_confirmation", reason), {
+      tldr: p.tldr,
+      plan_diff: p.planDiff,
+      fleet_size: p.fleetSize,
+      plan_path: p.planPath,
+      plan_ref: ref,
+      cumulative: ref.history,
+    }, extra || {}),
+  );
+}
+
+// ---------------------------------------------------------------- plan mode
+
+async function planMode(input, date) {
+  const raw = typeof input.input === "string" ? input.input.trim() : "";
+  const repo = cleanRepo(input.repo);
+  if (!raw) stop("needs_human", "args.input missing: run /build-task <ledger id | Jira key | issue or PR URL | plan path | text>");
+  if (!repo) stop("needs_human", "args.repo must be the absolute path of the caller's git toplevel");
+
+  await preflightStep();
+
+  phase("Intake");
+  const it = await dispatch("intake", intakePrompt({ input: raw, repo, project: input.project || null }), {
+    schema: INTAKE_SCHEMA,
+    agentType: JUDGE_AGENT,
+    phase: "Intake",
+  });
+  if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", "intake " + it.status + ": " + (it.reason || "no reason"));
+  const problem = briefProblem(it.brief);
+  if (problem) halt("needs_human", "intake: " + problem);
+  const brief = cleanBrief(it.brief);
+  const names = namesFor(brief);
+  if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
+  const lay = layout(names, brief.repo);
+  state.branch = lay.branch;
+  if (brief.repo !== repo) gate("intake: work repo " + brief.repo + " differs from the caller's " + repo);
+  gate(
+    "intake: " + brief.sources.map((x) => x.kind + ":" + x.ref).join(", ") + " -> branch " + lay.branch + ", worktree " + lay.mainWt,
+  );
+
+  const ws = await workspaceStep(brief.repo, lay);
+  const project = input.project || ws.remoteSlug;
+  const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
+
+  phase("Plan");
+  const p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug });
+  const pc = await commitPlan("infra:commit-plan", lay.mainWt, lay.branch, p.planPath, names.slug, "Plan");
+  const ref = makePlanRef({
+    branch: lay.branch,
+    planCommit: pc.head,
+    planPath: p.planPath,
+    planSha: pc.planSha,
+    criteria: p.criteria,
+    brief,
+    taskId: names.taskId,
+    slug: names.slug,
+    tldr: p.tldr,
+    planFacts: p.planFacts,
+    history: { runs: 1, replans: 0, agents: state.agents },
+  });
+  return awaiting("plan ready: confirm, then run mode build with plan_ref", p, ref);
+}
+
+// ---------------------------------------------------------------- build mode
+
+function planRefProblem(r) {
+  if (!r || typeof r !== "object") return "missing";
+  if (typeof r.seal !== "string" || r.seal !== sealOf(r)) return "seal mismatch (changed after the plan run)";
+  for (const k of ["branch", "plan_commit", "plan_path", "plan_sha256", "task_id", "slug", "tldr"])
+    if (typeof r[k] !== "string" || !r[k]) return k + " missing";
+  if (!SHA_RE.test(r.plan_commit)) return "plan_commit is not a commit sha";
+  if (!SHA256_RE.test(r.plan_sha256)) return "plan_sha256 is not a sha256";
+  if (!Array.isArray(r.criteria)) return "criteria missing";
+  const b = briefProblem(r.brief);
+  if (b) return b;
+  if (r.branch !== "fleet/" + r.task_id + "-" + r.slug) return "branch does not match task_id and slug";
+  if (!r.history || typeof r.history !== "object") return "history missing";
+  return null;
+}
+
+// A commit after plan_commit that a fleet step of this build makes: a test
+// writer commit, a coder commit, the integrate merge of a criterion branch, or
+// the sync merge into one. Subject patterns only: git cannot prove authorship.
+function isFleetCommit(subject, branch, critPrefix, ids) {
+  const idAlt = ids.map(escapeRe).join("|");
+  const crit = escapeRe(critPrefix) + "(?:" + idAlt + ")";
+  const pats = [
+    new RegExp("^Merge branch '" + crit + "'"),
+    new RegExp("^Merge branch '" + escapeRe(branch) + "' into " + crit + "$"),
+    new RegExp("^test\\((?:" + idAlt + ")\\): "),
+    /^(?:feat|fix)(?:\([^)]*\))?!?: /,
+  ];
+  return pats.some((re) => re.test(subject));
+}
+
+async function buildMode(input, date) {
+  const problem = planRefProblem(input.plan_ref);
+  if (problem) stop("needs_human", "args.plan_ref " + problem + ": run /build-task again to re-plan");
+  const ref = input.plan_ref;
+  const brief = cleanBrief(ref.brief);
+  const names = { taskId: ref.task_id, slug: ref.slug };
+  const lay = layout(names, brief.repo);
+  state.branch = lay.branch;
+  const history = {
+    runs: (ref.history.runs || 0) + 1,
+    replans: ref.history.replans || 0,
+    agents: ref.history.agents || 0,
+  };
+  gate("build " + lay.branch + " from plan " + ref.plan_path + " @ " + ref.plan_commit + " (run " + history.runs + ", re-plans so far " + history.replans + ")");
+
+  await preflightStep();
+  const ws = await workspaceStep(brief.repo, lay);
+  const project = input.project || ws.remoteSlug;
+  const defaultBranch = ws.defaultBranch;
+  const remoteSlug = ws.remoteSlug;
+  const mainWt = lay.mainWt;
+  const branch = lay.branch;
+
+  // verify the approved plan
+  phase("Verify");
+  const sha8 = ref.plan_commit.slice(0, 8);
+  const critPrefix = branch + "--p" + sha8 + "-t-";
+  const criteria = normCriteria(ref.criteria);
+  const v = await infra(
+    "infra:verify-plan",
+    verifyPlanPrompt({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_path: ref.plan_path }),
+    "Verify",
+    JUDGE_AGENT,
+  );
+  if (typeof v.head !== "string" || !SHA_RE.test(v.head)) halt("failed", "infra:verify-plan returned no usable head");
+  if (v.plan_sha256 !== ref.plan_sha256)
+    halt("needs_human", "plan changed since approval: " + ref.plan_path + " at " + ref.plan_commit + " hashes " + v.plan_sha256 + ", approved " + ref.plan_sha256);
+  if (v.head !== ref.plan_commit) {
+    if (v.is_ancestor !== true)
+      halt("needs_human", "plan changed since approval: branch HEAD " + v.head + " does not descend from plan_commit " + ref.plan_commit);
+    if (v.plan_sha256_head !== ref.plan_sha256 || (v.plan_touched || []).length)
+      halt("needs_human", "plan changed since approval: a commit after " + ref.plan_commit + " changed " + ref.plan_path);
+    const ids = criteria.map((c) => c.id);
+    for (const c of v.commits_since || [])
+      if (!isFleetCommit(String(c.subject || ""), branch, critPrefix, ids))
+        halt("needs_human", "plan changed since approval: branch moved by a non-fleet commit " + c.sha + " " + JSON.stringify(c.subject));
+    gate("verify: HEAD " + v.head + " descends from plan_commit by " + (v.commits_since || []).length + " fleet commit(s)");
+  } else gate("verify: HEAD is plan_commit " + ref.plan_commit + "; plan hash matches");
+
+  const common = { project, worktree: mainWt, branch, default_branch: defaultBranch, scratch_dir: lay.scratch };
+  const planCtx = { plan_path: ref.plan_path };
+  const planFacts = {
+    allowed_additions: ref.plan_facts ? ref.plan_facts.allowed_additions : null,
+    est_diff_lines: ref.plan_facts && typeof ref.plan_facts.est_diff_lines === "number" ? ref.plan_facts.est_diff_lines : null,
+  };
+  state.path = "full";
+  const testable = testableOf(criteria);
 
   const critWt = {};
   for (const c of testable) {
-    const p = root + "/t-" + c.id;
-    critWt[c.id] = { criterion: c.id, path: p, branch: branch + "--t-" + c.id, settings_local_json: settingsFor(p) };
+    const p = lay.root + "/p" + sha8 + "-t-" + c.id;
+    critWt[c.id] = { criterion: c.id, path: p, branch: critPrefix + c.id, settings_local_json: settingsFor(p) };
   }
-
   const prep = await infra(
     "infra:prepare",
-    preparePrompt({
-      main_worktree: mainWt,
-      branch,
-      slug: names.slug,
-      plan_path: plan.plan_path,
-      criterion_worktrees: testable.map((c) => critWt[c.id]),
-    }),
+    preparePrompt({ main_worktree: mainWt, branch, criterion_worktrees: testable.map((c) => critWt[c.id]) }),
     "Tests",
   );
-  if (!prep.head) halt("failed", "infra:prepare returned no head");
-  const planHead = prep.head;
-  gate("plan committed at " + planHead + (testable.length ? "; " + testable.length + " test worktrees ready" : ""));
+  if (prep.head !== v.head) halt("needs_human", "branch moved between verify (" + v.head + ") and prepare (" + prep.head + ")");
+  const planHead = ref.plan_commit;
+  gate(testable.length + " test worktrees ready off " + v.head);
 
-  // 6. tests
+  // tests
   function writerCriterion(c) {
     const o = Object.assign({}, c);
     delete o.test_files;
@@ -1230,7 +1822,7 @@ async function main(input) {
     halt("needs_human", "test rounds exhausted (" + MAX_TEST_ROUNDS + ") without test-judge approval");
   }
 
-  // 7. freeze
+  // freeze
   let freezes = 0;
   let frozen = null;
   let freezeRef = null;
@@ -1290,7 +1882,7 @@ async function main(input) {
   phase("Freeze");
   await freeze();
 
-  // 8. code
+  // code
   phase("Code");
   const frozenNote =
     "frozen_tests holds the criterion test files only (sha256 of the content). frozen_config_sections is one flat map of everything else that is frozen: whole-file runner config and .gitignore files keyed by path (sha256), <path>#<section> (sha256 of a canonicalised test-runner config section), git:info/exclude and git:core.excludesFile (sha256 of ignore-rule files outside the worktree), and symlink:<rel> whose values are link targets, not hashes. Special values: ABSENT (the section did not exist at freeze), MISSING (the file did not exist), UNPARSEABLE (the file could not be parsed at freeze). Every key is read-only. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. code_base_ref is the commit before the first coder round; diff production changes from it.";
@@ -1366,7 +1958,11 @@ async function main(input) {
       break;
     }
     if (cj.verdict === "plan_wrong")
-      halt("needs_human", "code-judge verdict plan_wrong: " + routed.map((f) => f.finding).join("; "));
+      return replan({
+        ref, brief, names, lay, common, date, history, remoteSlug,
+        findings: routed.filter((f) => f.target === "plan"),
+        expectedHead: judgedCode.fp.head,
+      });
     if (cj.verdict === "fix_code") {
       coderFindings = routed.filter((f) => f.target === "code");
       gate("code-judge r" + m + ": fix_code -> coder (" + coderFindings.length + " findings)");
@@ -1390,8 +1986,16 @@ async function main(input) {
     halt("failed", "code-judge returned no verdict");
   }
 
-  // 9. PR
+  // push, then PR
   phase("PR");
+  const push = await infra(
+    "infra:push",
+    pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha }),
+    "PR",
+  );
+  if (push.remote_head !== approvedSha)
+    halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha);
+  gate("pushed " + branch + " at " + approvedSha);
   const pr = requireOk(
     "fleet-pr-opener",
     await callRole(
@@ -1411,10 +2015,200 @@ async function main(input) {
   gate("pr-opener: " + (pr.created ? "created " : "updated ") + pr.pr_url);
   if (state.gatesNotRun && state.gatesNotRun.length && pr.gates_not_run_stated !== true)
     halt("needs_human", "pr-opener did not state gates_not_run in the PR body; fix the body of " + pr.pr_url);
+
+  phase("Write-back");
+  const wb = await writeBack({
+    ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr.pr_url,
+  });
+  history.agents += state.agents;
+  gate("cumulative: run " + history.runs + ", re-plans " + history.replans + ", agents " + history.agents);
   const out = finish("ok", "draft PR ready for review");
   out.created = pr.created;
   out.template_used = pr.template_used || null;
+  out.cumulative = history;
+  return Object.assign(out, wb);
+}
+
+// plan_wrong: re-plan from the approved plan in a detached worktree, commit
+// the new plan there, save the old head, then move the branch to the new plan.
+async function replan(ctx) {
+  const { ref, brief, names, lay, common, date, history, remoteSlug } = ctx;
+  if (!ctx.findings.length) halt("needs_human", "code-judge verdict plan_wrong without a plan finding");
+  const proposed = proposedChanges(ctx.findings, gate);
+  gate("code-judge verdict plan_wrong: " + proposed.join("; "));
+  const n = history.replans + 1;
+  const superseded = lay.branch + "--superseded-" + n;
+  const replanWt = lay.root + "/replan-" + n;
+  // worktree, planner, audit, commit, reset: reserve all before any step
+  reserve(5, "re-plan " + n);
+  phase("Re-plan");
+  const rw = await infra(
+    "infra:replan-worktree",
+    replanWorktreePrompt({
+      main_worktree: lay.mainWt,
+      worktree: replanWt,
+      plan_commit: ref.plan_commit,
+      settings_local_json: settingsFor(replanWt),
+    }),
+    "Re-plan",
+  );
+  if (rw.head !== ref.plan_commit) halt("failed", "infra:replan-worktree is at " + rw.head + ", not " + ref.plan_commit);
+  const findingsText = ctx.findings.map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n");
+  const replanBrief = Object.assign({}, brief, {
+    plan_path: ref.plan_path,
+    sources: brief.sources.concat([{ kind: "text", ref: "code-judge plan findings", url: null, body: findingsText }]),
+  });
+  const p = await planAndAudit({
+    common: Object.assign({}, common, { worktree: replanWt }),
+    brief: replanBrief,
+    date,
+    baseRef: ref.plan_commit,
+    remoteSlug,
+    suffix: ":replan",
+  });
+  const pc = await commitPlan("infra:commit-plan:replan", replanWt, null, p.planPath, names.slug, "Re-plan");
+  const rs = await infra(
+    "infra:replan-reset",
+    replanResetPrompt({
+      main_worktree: lay.mainWt,
+      branch: lay.branch,
+      expected_head: ctx.expectedHead,
+      superseded_branch: superseded,
+      new_plan_commit: pc.head,
+      replan_worktree: replanWt,
+    }),
+    "Re-plan",
+  );
+  if (rs.head !== pc.head) halt("failed", "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + pc.head);
+  gate("re-plan " + n + ": old head " + (rs.superseded_head || ctx.expectedHead) + " saved as " + superseded + "; " + lay.branch + " reset to " + pc.head);
+  const hist = { runs: history.runs, replans: n, agents: history.agents + state.agents };
+  gate("cumulative: run " + hist.runs + ", re-plans " + hist.replans + ", agents " + hist.agents);
+  const newRef = makePlanRef({
+    branch: lay.branch,
+    planCommit: pc.head,
+    planPath: p.planPath,
+    planSha: pc.planSha,
+    criteria: p.criteria,
+    brief,
+    taskId: names.taskId,
+    slug: names.slug,
+    tldr: p.tldr,
+    planFacts: p.planFacts,
+    history: hist,
+  });
+  return awaiting("code-judge plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, newRef, {
+    proposed_plan_change: proposed,
+    plan_findings: ctx.findings,
+    superseded_ref: superseded,
+    superseded_head: rs.superseded_head || ctx.expectedHead,
+  });
+}
+
+// ---------------------------------------------------------------- write-back
+
+// Never stops the run: every failure is reported in the result.
+async function writeBack(ctx) {
+  const { ref, brief, project, remoteSlug, branch, prUrl } = ctx;
+  const planLink = "https://github.com/" + remoteSlug + "/blob/" + branch + "/" + ref.plan_path;
+  const marker = "fleet:" + ref.task_id;
+  const out = { write_back: { ledger: [], comments: [] }, ledger_status: "none", comment_status: "none", comment_text: null };
+
+  // (a) ledger
+  const ledger = brief.sources.map((s, i) => Object.assign({ key: "s" + i }, s)).filter((s) => s.kind === "ledger");
+  if (ledger.length) {
+    const sectionText = "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
+    let results = null;
+    let why = null;
+    if (!project) why = "args.project missing: no ledger project to write to";
+    else {
+      const r = await softDispatch(
+        "infra:ledger-writeback",
+        ledgerWritebackPrompt({
+          project,
+          tasks: ledger.map((s) => ({ key: s.key, ref: s.ref })),
+          section_heading: LEDGER_SECTION,
+          section_text: sectionText,
+          marker,
+        }),
+        { schema: INFRA_SCHEMA, phase: "Write-back" },
+      );
+      if (r && Array.isArray(r.results)) results = r.results;
+      else why = (r && r.reason) || "ledger write-back agent returned no result";
+    }
+    for (const s of ledger) {
+      const hit = results && results.find((x) => x.key === s.key);
+      const st = hit && ["written", "skipped"].indexOf(hit.status) >= 0 ? hit.status : "failed";
+      const e = { ref: s.ref, status: st, reason: hit ? hit.reason || null : why };
+      if (st === "failed") e.section_text = sectionText;
+      out.write_back.ledger.push(e);
+    }
+    out.ledger_status = out.write_back.ledger.some((e) => e.status === "failed") ? "failed" : "ok";
+    gate("write-back ledger: " + out.write_back.ledger.map((e) => e.ref + "=" + e.status).join(", "));
+  }
+
+  // (b) one marked comment per external source
+  const ext = brief.sources
+    .map((s, i) => Object.assign({ key: "s" + i }, s, { text: commentText(s.kind, ref.task_id, ref.tldr, planLink, prUrl) }))
+    .filter((s) => EXTERNAL_KINDS.indexOf(s.kind) >= 0);
+  if (ext.length) {
+    const res = {};
+    const listable = [];
+    for (const s of ext) {
+      if (FORBIDDEN_COMMENT_RE.test(s.text)) res[s.key] = { status: "failed", reason: "refused: a comment line starts with digger or atlantis" };
+      else listable.push(s);
+    }
+    let toPost = [];
+    if (listable.length) {
+      const l = await softDispatch(
+        "infra:comments-list",
+        commentsListPrompt({ sources: listable.map((s) => ({ key: s.key, kind: s.kind, ref: s.ref, url: s.url })), marker }),
+        { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Write-back" },
+      );
+      for (const s of listable) {
+        const hit = l && Array.isArray(l.results) ? l.results.find((x) => x.key === s.key) : null;
+        if (!hit || hit.status === "failed" || typeof hit.has_marker !== "boolean")
+          res[s.key] = { status: "failed", reason: "could not list existing comments: " + ((hit && hit.reason) || (l && l.reason) || "no result") };
+        else if (hit.has_marker) res[s.key] = { status: "skipped", reason: "a comment with " + marker + " exists" };
+        else toPost.push(s);
+      }
+    }
+    if (toPost.length) {
+      const p = await softDispatch(
+        "infra:comments-post",
+        commentsPostPrompt({ posts: toPost.map((s) => ({ key: s.key, kind: s.kind, ref: s.ref, url: s.url, text: s.text })) }),
+        { schema: INFRA_SCHEMA, phase: "Write-back" },
+      );
+      for (const s of toPost) {
+        const hit = p && Array.isArray(p.results) ? p.results.find((x) => x.key === s.key) : null;
+        res[s.key] =
+          hit && hit.status === "posted"
+            ? { status: "posted", reason: hit.reason || null, url: hit.url || null }
+            : { status: "failed", reason: (hit && hit.reason) || (p && p.reason) || "comment post agent returned no result" };
+      }
+    }
+    for (const s of ext) {
+      const e = Object.assign({ kind: s.kind, ref: s.ref }, res[s.key]);
+      if (e.status === "failed") e.comment_text = s.text;
+      out.write_back.comments.push(e);
+    }
+    const failed = out.write_back.comments.filter((e) => e.status === "failed");
+    out.comment_status = failed.length ? "failed" : out.write_back.comments.some((e) => e.status === "posted") ? "posted" : "skipped";
+    if (failed.length) out.comment_text = failed[0].comment_text;
+    gate("write-back comments: " + out.write_back.comments.map((e) => e.kind + ":" + e.ref + "=" + e.status).join(", "));
+  }
   return out;
+}
+
+// ---------------------------------------------------------------- main
+
+async function main(input) {
+  const mode = input.mode;
+  if (MODES.indexOf(mode) < 0)
+    stop("needs_human", "args.mode must be \"plan\" or \"build\", got " + JSON.stringify(mode === undefined ? null : mode) + ": run /build-task <task>");
+  state.mode = mode;
+  if (typeof input.date !== "string" || !DATE_RE.test(input.date))
+    stop("needs_human", "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)");
+  return mode === "plan" ? planMode(input, input.date) : buildMode(input, input.date);
 }
 
 // ---------------------------------------------------------------- entry
@@ -1433,7 +2227,7 @@ if (badArgs || input == null || typeof input !== "object" || Object.keys(input).
   return {
     status: "needs_human",
     reason:
-      "build-task-run was started without args. Run /build-task <ledger id | plan path>; the skill supplies task, repo and date. Do not re-invoke this workflow by hand.",
+      "build-task-run was started without args. Run /build-task <task>; the skill supplies mode, input, repo and date. Do not re-invoke this workflow by hand.",
   };
 }
 

@@ -157,11 +157,11 @@ cp ~/.claude/skills/tf-naming-check/tf-naming-check/tf-naming-config.md ./tf-nam
 
 Then edit `tf-naming-config.md` to add, remove, or adjust rules. The project-level file takes precedence automatically.
 
-### fleet (v1.0.0)
+### fleet (v2.0.0)
 
 Role fleet for one task, run as a Claude Code workflow.
 
-- `/build-task <ledger id | plan path>` — plan, plan audit, one test writer per acceptance criterion, test judge, hash freeze, coder, code judge, draft PR
+- `/build-task <ledger id | Jira key | issue or PR URL | plan path | text>` — plan mode (intake, plan, plan audit, local plan commit) returns for confirmation; build mode runs one test writer per acceptance criterion, test judge, hash freeze, coder, code judge, draft PR and write-back to the sources
 - Role prompts load from yadgar at run time; the workflow script holds only role names, inputs, schemas and gates
 - Gates in script code: disjoint test files, frozen-test and runner-config hashes, judge worktree fingerprints, round caps, 60-agent cap
 - PRs stay draft; a human merges

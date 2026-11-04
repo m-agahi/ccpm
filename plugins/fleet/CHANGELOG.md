@@ -1,5 +1,39 @@
 # Changelog
 
+## [2.0.0] - 2026-11-04
+
+### Changed (breaking)
+
+- `fleet:build-task-run` takes `args.mode`: `"plan"` or `"build"`. A missing or other value returns
+  `needs_human`. The v1 args `task` and `title` are gone.
+- Role contract bumped to `CONTRACT: fleet-v2`. A page with the v1 marker halts the run. Minimum role
+  versions: scope-and-plan 13, plan-audit 10, fleet-test-writer 6, fleet-test-judge 6, fleet-coder 7,
+  fleet-code-judge 7, fleet-pr-opener 5. scope-and-plan now takes `brief` and `date`, and must return
+  `tldr` and `plan_diff` (an array of strings); plan-audit gets `plan_diff`.
+- `/build-task <anything>` is model-invocable. It triggers on non-trivial code changes and tells the
+  model to skip the fleet for one-line or mechanical edits. It runs plan mode, asks the user to
+  confirm, then runs build mode.
+
+### Added
+
+- Intake (read only): resolves a ledger id, Jira key, GitHub or Codeberg issue or PR URL, plan path
+  or free text into a brief. An ambiguous repo or ticket stops before any other step.
+- Plan mode: preflight, intake, workspace, scope-and-plan, plan-audit, local plan commit. Returns
+  `awaiting_confirmation` with `tldr`, `plan_diff`, `fleet_size`, `plan_path` and a sealed
+  `plan_ref`. No push, PR, ledger write or comment.
+- Build mode: checks the `plan_ref` seal, re-hashes the plan at `plan_commit` and checks the branch
+  position ("plan changed since approval"), then runs the test, freeze, code and judge pipeline,
+  pushes the approved sha and opens the draft PR. Criterion branches are named by the plan commit.
+  The verify step quotes the `<sha>^{commit}` ref, so a zsh agent shell does not glob it.
+- `plan_wrong` re-plan: re-plans in a detached worktree at the approved plan, saves the old head as
+  `--superseded-<n>`, resets the fleet branch to the new plan commit and returns
+  `awaiting_confirmation` with `proposed_plan_change`. Caps reset per run; `cumulative` counts runs,
+  re-plans and agents.
+- Write-back after the PR: a section on each ledger task body, and one comment with a hidden
+  `fleet:<task id>` marker on each Jira, GitHub and Codeberg source. Existing marked comments are
+  skipped; comments with a line starting with `digger` or `atlantis` are refused in code; failures are
+  reported as `comment_status: failed` with `comment_text` and never change the run status.
+
 ## [1.0.0] - 2026-11-04
 
 ### Added

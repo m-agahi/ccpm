@@ -129,9 +129,9 @@
     },
     {
       "name": "fleet",
-      "description": "Role fleet for one task: /build-task plans, audits, writes tests per acceptance criterion, judges and hash-freezes them, codes against them, judges the code and opens a draft PR. Role prompts load from yadgar; every gate runs in workflow script code.",
+      "description": "Role fleet for one non-trivial change: /build-task <anything> resolves the input, plans and audits, asks for confirmation, then writes tests per acceptance criterion, judges and hash-freezes them, codes against them, judges the code, opens a draft PR and writes back to the sources. Role prompts load from yadgar; every gate runs in workflow script code.",
       "source": "./plugins/fleet",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "author": {
         "name": "Max Agahi"
       },
