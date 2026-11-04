@@ -9,7 +9,7 @@
   writer per acceptance criterion, test judge with revise rounds, hash freeze, coder, code judge with
   fix rounds, draft PR. Role prompts load from yadgar at run time; the script embeds no role text.
 - Script-side gates: disjoint test files, frozen-test and test-runner-config hashing (config found
-  by filesystem walk, ignore-rule files frozen, `pyproject.toml#tool.pytest` and `package.json`
+  by filesystem walk, symlinks frozen by target, ignore-rule files frozen, `pyproject.toml#tool.pytest` and `package.json`
   jest/vitest/mocha/`scripts.test` sections), judge
   worktree fingerprint before and after every judge run, round caps, 60-agent cap.
 - Held-out examples from the planner are withheld from every other role. Judges get explicit

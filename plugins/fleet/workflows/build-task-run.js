@@ -72,6 +72,10 @@ const WALK_SKIP_DIRS = [".git", "node_modules", "__pycache__", ".venv", "venv", 
 // path; the worktree's info/exclude (git rev-parse --git-path info/exclude,
 // the common dir for a linked worktree) under "git:info/exclude"; the global
 // core.excludesFile under "git:core.excludesFile".
+// Every symlink the walk meets (file or directory, outside the skipped dirs) is
+// frozen as "symlink:<path>" = its readlink target. Links are never followed,
+// so adding or retargeting one is a change.
+const SYMLINK_RULE = "every symlink outside the skipped dirs -> key symlink:<path> = readlink target (never followed)";
 const IGNORE_RULE_FILES = [".gitignore (every one in the tree)", "git:info/exclude", "git:core.excludesFile"];
 // Sections of files that are NOT hashed whole (dependencies stay editable).
 // Each section is canonicalised (sorted keys, compact JSON) and hashed under a
@@ -139,13 +143,28 @@ def abs_hash(path):
     with open(path, 'rb') as fh:
         return sha(fh.read())
 
+LINKS = {}
+
 def walk():
+    # never follows a symlink; every link outside SKIP_DIRS is recorded with its target
     for dp, dns, fns in os.walk(wt):
         reld = os.path.relpath(dp, wt)
-        dns[:] = sorted(d for d in dns if d not in SKIP_DIRS
-                        and os.path.join(reld, d) not in ('./.claude/worktrees', '.claude/worktrees'))
+        keep = []
+        for d in sorted(dns):
+            if d in SKIP_DIRS or os.path.join(reld, d) in ('./.claude/worktrees', '.claude/worktrees'):
+                continue
+            full = os.path.join(dp, d)
+            if os.path.islink(full):
+                LINKS[os.path.normpath(os.path.join(reld, d))] = os.readlink(full)
+                continue
+            keep.append(d)
+        dns[:] = keep
         for f in sorted(fns):
-            yield os.path.normpath(os.path.join(reld, f))
+            rel = os.path.normpath(os.path.join(reld, f))
+            full = os.path.join(dp, f)
+            if os.path.islink(full):
+                LINKS[rel] = os.readlink(full)
+            yield rel
 
 def norm(rel):
     while rel.startswith('./'):
@@ -166,6 +185,8 @@ if mode == 'hashes':
             hashes[rel] = file_hash(rel)
         elif '/' not in rel and any(fnmatch.fnmatch(base, g) for g in ROOT_ONLY_GLOBS):
             hashes[rel] = file_hash(rel)
+    for rel in sorted(LINKS):
+        hashes['symlink:' + rel] = LINKS[rel]
     ex = git('rev-parse', '--git-path', 'info/exclude').decode().strip()
     hashes['git:info/exclude'] = abs_hash(ex if os.path.isabs(ex) else os.path.join(wt, ex))
     gx = subprocess.run(['git', '-C', wt, 'config', '--path', 'core.excludesFile'], capture_output=True)
@@ -395,7 +416,7 @@ function gatesNotRun(judgeList) {
 function plainKeys(map, plain) {
   const o = {};
   for (const k of Object.keys(map || {})) {
-    const synthetic = k.indexOf("#") >= 0 || k.indexOf("git:") === 0;
+    const synthetic = k.indexOf("#") >= 0 || k.indexOf("git:") === 0 || k.indexOf("symlink:") === 0;
     if (synthetic !== plain) o[k] = map[k];
   }
   return o;
@@ -548,6 +569,8 @@ function hasherPrompt(inputs) {
   const rules =
     "runner-config files hashed whole: " +
     RUNNER_CONFIG_FILES.join(", ") +
+    ". Symlinks: " +
+    SYMLINK_RULE +
     ". Ignore-rule files hashed whole: " +
     IGNORE_RULE_FILES.join(", ") +
     ". Walk skips: " +
@@ -995,7 +1018,7 @@ async function main(input) {
   // 8. code
   phase("Code");
   const frozenNote =
-    "frozen_tests holds plain worktree files only (sha256 of the content). frozen_config_sections holds canonicalised test-runner config sections (<path>#<section>) and ignore-rule files outside the worktree (git:info/exclude, git:core.excludesFile); ABSENT/MISSING mean the section or file did not exist at freeze. Every key in both maps is read-only. The workflow recomputes every key itself after the coder. code_base_ref is the commit before the first coder round; diff production changes from it.";
+    "frozen_tests holds plain worktree files only (sha256 of the content). frozen_config_sections holds canonicalised test-runner config sections (<path>#<section>), symlinks (symlink:<path> = link target) and ignore-rule files outside the worktree (git:info/exclude, git:core.excludesFile); ABSENT/MISSING mean the section or file did not exist at freeze. Every key in both maps is read-only. The workflow recomputes every key itself after the coder. code_base_ref is the commit before the first coder round; diff production changes from it.";
   let coderFindings = [];
   let approvedSha = null;
   let approval = null;

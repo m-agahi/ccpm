@@ -59,6 +59,9 @@ The hasher freezes every criterion test file, plus:
   `vitest.workspace*`, `karma.conf.*`, `.mocharc*`, `.babelrc*`, `babel.config.*`, and `*.pth` at
   the repo root. The walk skips `.git`, `.claude/worktrees`, `node_modules`, `__pycache__`, `.venv`,
   `venv`, `.tox`, `.nox`, `.mypy_cache` and `.pytest_cache`;
+- symlinks: every symlink the walk meets, file or directory, outside the skipped dirs, under key
+  `symlink:<path>` with its `readlink` target as the value. Links are never followed, so adding or
+  retargeting a link (for example a linked directory holding a `conftest.py`) is a change;
 - ignore rules: every `.gitignore` in the tree, the worktree's `info/exclude` (key
   `git:info/exclude`, resolved with `git rev-parse --git-path`) and the global
   `core.excludesFile` (key `git:core.excludesFile`). Editing an ignore rule is a change;
@@ -90,8 +93,12 @@ too. It does not catch a change that a judge makes and reverts within its own ru
   `{status: "not_run"}` markers, and `gates_not_run` reaches the PR opener and the result. The
   planner's `held_out_examples` are deleted before any other role sees the plan. v1 cannot check
   that the planner kept them out of the plan doc itself.
-- Config inside the skipped dirs (for example a `sitecustomize.py` or `.pth` file installed into a
-  virtualenv) is not hashed. New files outside `allowed_additions` are not denied by script in v1.
+- Interpreter startup hooks inside an in-worktree virtualenv are not detected. The walk skips
+  `.venv`, `venv`, `.tox` and `.nox`, because an editable install writes a `.pth` file there and
+  would cause a false mismatch. So a coder can drop a `.pth` or `sitecustomize.py` into such a venv
+  and v1 does not see it. v1.1 (ledger task 1925) hashes the startup hooks in the site-packages of
+  the judge's interpreter.
+- New files outside `allowed_additions` are not denied by script in v1.
 - A judge's test run that leaves untracked, unignored files (caches the repo does not ignore) flips
   the fingerprint and stops the run. The workspace step adds `__pycache__/`, `.pytest_cache/` and
   `.coverage` to `info/exclude` to cut this down.

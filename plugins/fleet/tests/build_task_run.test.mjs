@@ -1188,3 +1188,73 @@ test("hasher program: ignore rules are frozen and ignored config is still found"
     rmSync(wt, { recursive: true, force: true });
   }
 });
+
+test("hasher program: symlinks are frozen by target, never followed", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-hasher-link-"));
+  const outside = mkdtempSync(join(tmpdir(), "fleet-hasher-outside-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    writeFileSync(join(wt, "a.py"), "x = 1\n");
+    sh(wt, "git", "add", ".");
+    sh(wt, "git", "commit", "-q", "-m", "init");
+    const base = runHasher(wt, "hashes", []).hashes;
+    assert.ok(!Object.keys(base).some((k) => k.startsWith("symlink:")));
+
+    // a new directory symlink that holds a conftest.py
+    writeFileSync(join(outside, "conftest.py"), "import os\n");
+    sh(wt, "ln", "-s", outside, "plugins_dir");
+    const dirLink = runHasher(wt, "hashes", []).hashes;
+    assert.equal(dirLink["symlink:plugins_dir"], outside);
+    assert.ok(!("plugins_dir/conftest.py" in dirLink), "the walk does not follow links");
+
+    // a file symlink to a conftest outside the tree, and retargeting it
+    sh(wt, "ln", "-s", join(outside, "conftest.py"), "conftest.py");
+    const fileLink = runHasher(wt, "hashes", []).hashes;
+    assert.equal(fileLink["symlink:conftest.py"], join(outside, "conftest.py"));
+    sh(wt, "ln", "-sfn", "/dev/null", "conftest.py");
+    assert.equal(runHasher(wt, "hashes", []).hashes["symlink:conftest.py"], "/dev/null");
+
+    // a symlink inside a skipped dir is not a key
+    sh(wt, "mkdir", "-p", "node_modules");
+    sh(wt, "ln", "-s", outside, "node_modules/x");
+    assert.ok(!("symlink:node_modules/x" in runHasher(wt, "hashes", []).hashes));
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("script rejects a coder round that adds a symlink key", async () => {
+  const out = await run(hashViolation({ ...HASHES, "symlink:plugins_dir": "/tmp/evil" }), ARGS);
+  noUnscripted(out);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+  assert.match(
+    inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding,
+    /symlink:plugins_dir/,
+  );
+});
+
+test("symlink keys go to frozen_config_sections, not frozen_tests", async () => {
+  const s = happy({
+    script: {
+      "hasher:freeze:f1": {
+        status: "ok",
+        fingerprint: FP_PLAN,
+        hashes: { ...HASHES, "symlink:lib": "../x" },
+      },
+      "hasher:post-coder:r1": {
+        status: "ok",
+        fingerprint: FP_K1,
+        hashes: { ...HASHES, "symlink:lib": "../x" },
+      },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  const c = inputsOf(call(out, "role:fleet-coder:r1").prompt);
+  assert.ok(!("symlink:lib" in c.frozen_tests));
+  assert.equal(c.frozen_config_sections["symlink:lib"], "../x");
+});
