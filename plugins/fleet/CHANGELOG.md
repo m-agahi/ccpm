@@ -24,6 +24,7 @@
 - Build mode: checks the `plan_ref` seal, re-hashes the plan at `plan_commit` and checks the branch
   position ("plan changed since approval"), then runs the test, freeze, code and judge pipeline,
   pushes the approved sha and opens the draft PR. Criterion branches are named by the plan commit.
+  The verify step quotes the `<sha>^{commit}` ref, so a zsh agent shell does not glob it.
 - `plan_wrong` re-plan: re-plans in a detached worktree at the approved plan, saves the old head as
   `--superseded-<n>`, resets the fleet branch to the new plan commit and returns
   `awaiting_confirmation` with `proposed_plan_change`. Caps reset per run; `cumulative` counts runs,

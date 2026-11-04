@@ -987,7 +987,7 @@ function verifyPlanPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> status --porcelain` must be empty; else needs_human.\n" +
-    "2. `git -C <main_worktree> cat-file -e <plan_commit>^{commit}` must succeed; else needs_human.\n" +
+    "2. `git -C <main_worktree> cat-file -e '<plan_commit>^{commit}'` (keep the quotes: zsh globs `^`) must succeed; else needs_human.\n" +
     "3. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
     "4. plan_sha256 = the output of this command, run exactly as written:\n" +
     planHashCmd(inputs.main_worktree, inputs.plan_commit, inputs.plan_path) +
