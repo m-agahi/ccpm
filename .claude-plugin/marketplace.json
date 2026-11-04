@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "audit-lab",
-      "description": "Comprehensive local code review with static analysis, security scanning, dependency auditing, container scanning (Trivy), SonarQube, and best practices enforcement. All analysis is local \u2014 never pushes to remote. v5: SSoT JSON outputs with _about metadata, on-demand ticket generation, confidence field, verification steps, and Python version mismatch detection.",
+      "description": "Comprehensive local code review with static analysis, security scanning, dependency auditing, container scanning (Trivy), SonarQube, and best practices enforcement. All analysis is local — never pushes to remote. v5: SSoT JSON outputs with _about metadata, on-demand ticket generation, confidence field, verification steps, and Python version mismatch detection.",
       "source": "./plugins/audit-lab",
       "version": "6.0.1",
       "author": {
@@ -105,7 +105,7 @@
     },
     {
       "name": "update-ledger",
-      "description": "Multi-workspace chronological work ledger. Pulls Jira tickets, GitHub PRs, and Codeberg/Forgejo PRs per workspace (company, solo, client), writes immutable event entries, regenerates per-entity rollups, and produces daily/weekly/monthly/quarterly/yearly summaries plus cross-workspace timelines. Survives job changes \u2014 workspaces are pluggable. Supports manual notes for work not in Jira/PRs. Delegates per-item composition to cheap haiku subagents to keep main-thread context small.",
+      "description": "Multi-workspace chronological work ledger. Pulls Jira tickets, GitHub PRs, and Codeberg/Forgejo PRs per workspace (company, solo, client), writes immutable event entries, regenerates per-entity rollups, and produces daily/weekly/monthly/quarterly/yearly summaries plus cross-workspace timelines. Survives job changes — workspaces are pluggable. Supports manual notes for work not in Jira/PRs. Delegates per-item composition to cheap haiku subagents to keep main-thread context small.",
       "source": "./plugins/update-ledger",
       "version": "1.9.2",
       "author": {
