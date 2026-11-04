@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.0.5] - 2026-11-04
+
+### Fixed
+
+- `test_cmd` tokenizing matched the shell only on plain spaces: a regex `\s`/`\S` split
+  disagreed with the shell on tab, `\v`, `\f`, `\r` and unicode spaces. The whole raw command
+  must now hold only `[A-Za-z0-9_./:=<>"() -]` with plain spaces, and it is split on plain spaces
+  only. A quoted `-k`/`-m` expression holds only words of `[A-Za-z0-9_()]`.
+- `test_cmd` path arguments must match `^[A-Za-z0-9_][A-Za-z0-9_./-]*$` with no `..` segment, so
+  `@file` (a pytest args file) and dot-prefixed paths are refused; go test keeps `./...` and
+  `./<path>/...`.
+- check_cmd scripts are re-checked (`infra:check-scripts:r<n>`, tracked regular file, realpath
+  under its root) in the main worktree before every code-judge run, not only at plan time. An
+  obligation that fails reaches the judge as judge-only (`check_cmd_rejected`) for that round.
+
 ## [2.0.4] - 2026-11-04
 
 ### Changed

@@ -3291,6 +3291,7 @@ function withObligations(obs, over) {
   s["role:scope-and-plan"].test_cmd = TEST_CMD;
   s["role:fleet-code-judge:r1"].obligations_check = obs.map((o) => ({ id: o.id, met: true, evidence: "diff" }));
   s["infra:check-scripts"] = checkScriptsAll({});
+  for (const m of [1, 2, 3]) s["infra:check-scripts:r" + m] = checkScriptsAll({});
   return s;
 }
 
@@ -4005,4 +4006,78 @@ test("2.0.4 coordinator cases: rejected and accepted test_cmd args", async () =>
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "awaiting_confirmation", command + " " + out.result.reason);
   }
+});
+
+// ---------------------------------------------------------------- 2.0.5: character allowlist, path args, build-time script re-check
+
+test("2.0.5 test_cmd: any character outside the allowlist rejects the whole command", async () => {
+  for (const command of [
+    "pytest\t<paths>",
+    "pytest <paths>\t",
+    "pytest\v<paths>",
+    "pytest\f<paths>",
+    "pytest\r<paths>",
+    "pytest <paths>\n",
+    "pytest <paths>",
+    "pytest <paths>",
+    'pytest -k "a\tb"',
+    'pytest -k "foo bar"',
+    "pytest tests/a+b.py",
+    "pytest tests/a%b.py",
+    "pytest -k foo,bar",
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(command));
+    assert.equal(out.result.stop_gate, "commands", JSON.stringify(command));
+  }
+  for (const command of ['pytest -k "foo and (bar or baz)" <paths>', "pytest  -q   <paths>", 'pytest -m "not slow"']) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    assert.equal((await runOne(s, ARGS)).result.status, "awaiting_confirmation", command);
+  }
+  const q = happy();
+  q["role:scope-and-plan"].test_cmd = { command: 'pytest -k "a ) b"x' };
+  assert.equal((await runOne(q, ARGS)).result.status, "needs_human");
+});
+
+test("2.0.5 test_cmd path args: start with a word character; no @file, no dot start", async () => {
+  for (const command of ["pytest @args.txt", "pytest .hidden/x.py", "pytest tests/../x", "pytest -- x"]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", command);
+  }
+  for (const command of ["pytest tests/unit/test_a.py", "go test ./...", "go test ./pkg/...", "pytest tests/a-b_c.py"]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    assert.equal((await runOne(s, ARGS)).result.status, "awaiting_confirmation", command);
+  }
+});
+
+test("2.0.5 build re-checks check_cmd scripts before each code-judge run; a failure is judge-only", async () => {
+  const s = withObligations([OB_BUMP]);
+  s["infra:check-scripts:r1"] = checkScriptsAll({ "scripts/check_version_bump.py": "is a symlink" });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const c = call(out, "infra:check-scripts:r1");
+  assert.equal(c.opts.agentType, "fleet:judge");
+  assert.deepEqual(inputsOf(c.prompt).paths, ["scripts/check_version_bump.py"]);
+  assert.equal(inputsOf(c.prompt).worktree, "/r/.claude/worktrees/fleet-l42-add-thing/main");
+  const L = out.labels;
+  assert.ok(L.indexOf("hasher:post-coder:r1") < L.indexOf("infra:check-scripts:r1"));
+  assert.ok(L.indexOf("infra:check-scripts:r1") < L.indexOf("role:fleet-code-judge:r1"));
+  const ob = inputsOf(call(out, "role:fleet-code-judge:r1").prompt).repo_obligations[0];
+  assert.ok(!("check_cmd" in ob));
+  assert.equal(ob.check_cmd_rejected, OB_BUMP.check_cmd);
+  assert.match(ob.check_rejected_reason, /symlink/);
+  assert.ok(out.logs.some((l) => /OB1 check_cmd refused \(judge-only\): script check failed/.test(l)));
+  // passing check: the judge still gets check_cmd; no script -> no step
+  const ok = withObligations([OB_BUMP]);
+  const outOk = await run(ok, ARGS);
+  assert.equal(inputsOf(call(outOk, "role:fleet-code-judge:r1").prompt).repo_obligations[0].check_cmd, OB_BUMP.check_cmd);
+  const none = withObligations([OB_LOG]);
+  assert.ok(!(await run(none, ARGS)).labels.some((l) => /^infra:check-scripts:r/.test(l)));
 });
