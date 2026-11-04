@@ -62,12 +62,12 @@ function inputsOf(prompt) {
 
 // The minimum role versions the workflow was built against.
 const FROZEN_VERSIONS = {
-  "scope-and-plan": 13,
-  "plan-audit": 10,
-  "fleet-test-writer": 6,
-  "fleet-test-judge": 6,
-  "fleet-coder": 9,
-  "fleet-code-judge": 8,
+  "scope-and-plan": 18,
+  "plan-audit": 11,
+  "fleet-test-writer": 7,
+  "fleet-test-judge": 7,
+  "fleet-coder": 11,
+  "fleet-code-judge": 10,
   "fleet-pr-opener": 5,
 };
 
@@ -75,12 +75,12 @@ const FROZEN_VERSIONS = {
 // The harness fills missing ones with neutral defaults for terse override
 // stubs; a stub with __raw: true is returned as written (drift tests).
 const REQUIRED_DEFAULTS = {
-  "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [], tldr: "adds a thing", plan_diff: ["new plan"] },
+  "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [], tldr: "adds a thing", plan_diff: ["new plan"], repo_obligations: [], test_cmd: { command: "pytest <paths>", paths_placeholder: "<paths>", env: {}, tools: [] } },
   "plan-audit": { verdict: "approve", routed_findings: [] },
   "fleet-test-writer": { criterion_id: "AC1", tests: [], commit: null },
   "fleet-test-judge": { verdict: "approve", routed_findings: [], checked: [] },
-  "fleet-coder": { commits: [], suite_result: { command: "pytest", exit_code: 0 }, added_symbols: [], frozen_tests_red_at_start: true },
-  "fleet-code-judge": { verdict: "approve", routed_findings: [], suite_result: { command: "pytest", exit_code: 0 }, hash_check: { match: true, mismatched: [] }, gates_not_run: [] },
+  "fleet-coder": { commits: [], suite_result: { command: "pytest", exit_code: 0 }, added_symbols: [], frozen_tests_red_at_start: true, obligations_done: [] },
+  "fleet-code-judge": { verdict: "approve", routed_findings: [], suite_result: { command: "pytest", exit_code: 0 }, hash_check: { match: true, mismatched: [] }, gates_not_run: [], obligations_check: [] },
   "fleet-pr-opener": { pr_url: null, pr_number: null, created: true, template_used: null, gates_not_run_stated: true },
 };
 
@@ -289,7 +289,7 @@ function happy(over = {}) {
       commits_since: [],
       plan_touched: [],
     },
-    "infra:push": (prompt) => ({ status: "ok", reason: "pushed", remote_head: inputsOf(prompt).approved_sha }),
+    "infra:push": (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha }),
     "infra:ledger-writeback": (prompt) => ({
       status: "ok",
       reason: "ok",
@@ -1721,32 +1721,34 @@ test("S-2: roles get only criterion test files in frozen_tests; config files go 
 
 test("S-8: a role version lower than the frozen minimum stops in preflight", async () => {
   const s = happy();
-  s.preflight.versions["fleet-coder"] = 8;
+  s.preflight.versions["fleet-coder"] = 10;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder version 8 < frozen 9/);
+  assert.match(out.result.reason, /role fleet-coder version 10 < frozen 11/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
 test("S-8: a higher role version is logged as prose-only and recorded", async () => {
   const s = happy();
-  s.preflight.versions["fleet-code-judge"] = 9;
+  s.preflight.versions["fleet-code-judge"] = 11;
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v9 > frozen v8: prose-only changes assumed/.test(l)));
-  assert.equal(out.result.role_versions["fleet-code-judge"], 9);
-  assert.equal(out.result.role_versions["fleet-coder"], 9);
+  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v11 > frozen v10: prose-only changes assumed/.test(l)));
+  assert.equal(out.result.role_versions["fleet-code-judge"], 11);
+  assert.equal(out.result.role_versions["fleet-coder"], 11);
 });
 
 test("S-8: a role runner that loaded a different version than preflight is discarded", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"].role_version = 10;
+  s["role:fleet-coder:r1"].role_version = 12;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-coder/);
-  assert.match(out.result.reason, /version 10/);
-  assert.ok(!out.labels.includes("hasher:post-coder:r1"));
+  assert.match(out.result.reason, /version 12/);
+  assert.equal(out.result.stop_gate, "contract");
+  // 2.0.3: the hash check runs before the role check; the judge does not
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
 test("S-8: preflight with no version for a role stops", async () => {
@@ -1855,7 +1857,7 @@ test("contract marker: a role runner that loaded another contract is discarded",
 
 test("contract drift: planner ok output missing a required key stops", async () => {
   const s = happy();
-  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: 13, role_contract: "CONTRACT: fleet-v2" });
+  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: "CONTRACT: fleet-v2" });
   delete p.allowed_additions;
   delete p.held_out_examples;
   s["role:scope-and-plan"] = p;
@@ -1868,7 +1870,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
   const s = happy();
   s["role:fleet-code-judge:r1"] = {
     __raw: true,
-    role_version: 8,
+    role_version: FROZEN_VERSIONS["fleet-code-judge"],
     role_contract: "CONTRACT: fleet-v2",
     status: "ok",
     reason: "approved with gates not run: coverage",
@@ -1885,7 +1887,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
 
 test("contract drift: pr-opener ok output missing a required key stops", async () => {
   const s = happy();
-  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: 5, role_contract: "CONTRACT: fleet-v2" });
+  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: FROZEN_VERSIONS["fleet-pr-opener"], role_contract: "CONTRACT: fleet-v2" });
   delete pr.template_used;
   s["role:fleet-pr-opener"] = pr;
   const out = await run(s, ARGS);
@@ -1904,7 +1906,7 @@ test("contract drift: null/empty values are fine where allowed", async () => {
 
 test("contract drift: a needs_human output may lack the role fields", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"] = { __raw: true, role_version: 9, role_contract: "CONTRACT: fleet-v2", status: "needs_human", reason: "test AC1 wrong" };
+  s["role:fleet-coder:r1"] = { __raw: true, role_version: FROZEN_VERSIONS["fleet-coder"], role_contract: "CONTRACT: fleet-v2", status: "needs_human", reason: "test AC1 wrong" };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /test AC1 wrong/);
@@ -2142,7 +2144,7 @@ test("REQUIRED_ON_OK: a planner ok output without tldr or plan_diff stops", asyn
     const s = happy();
     const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], {
       __raw: true,
-      role_version: 13,
+      role_version: FROZEN_VERSIONS["scope-and-plan"],
       role_contract: "CONTRACT: fleet-v2",
     });
     delete p[k];
@@ -2553,7 +2555,7 @@ test("build mode: the script pushes the approved sha before the PR opener runs",
 });
 
 test("build mode: a push that did not land the approved sha stops before the PR", async () => {
-  const s = happy({ script: { "infra:push": { status: "ok", reason: "x", remote_head: "other" } } });
+  const s = happy({ script: { "infra:push": { status: "ok", reason: "x", push_result: "ok", remote_head: "other" } } });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /not the approved K1/);
@@ -3080,7 +3082,7 @@ test("contract drift: a coder ok output missing added_symbols is still rejected"
   const s = happy();
   const c = Object.assign({}, REQUIRED_DEFAULTS["fleet-coder"], s["role:fleet-coder:r1"], {
     __raw: true,
-    role_version: 9,
+    role_version: FROZEN_VERSIONS["fleet-coder"],
     role_contract: "CONTRACT: fleet-v2",
     status: "ok",
     reason: "done",
@@ -3118,7 +3120,7 @@ test("workspace prompt retries fetch with backoff and treats only ls-remote exit
 });
 
 test("the script still compares the gh-api remote_head to the approved sha", async () => {
-  const s = happy({ script: { "infra:push": { status: "ok", reason: "x", remote_head: "deadbeef" } } });
+  const s = happy({ script: { "infra:push": { status: "ok", reason: "x", push_result: "ok", remote_head: "deadbeef" } } });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /deadbeef, not the approved K1/);
@@ -3253,14 +3255,561 @@ test("a stale-bytecode suspicious entry after the coder rejects the round", asyn
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-test("role versions: coder 9 and code-judge 8 are the minimums; coder v8 stops", async () => {
-  const s = happy();
-  s.preflight.versions["fleet-coder"] = 8;
+test("role versions: scope-and-plan 18, coder 11 and code-judge 10 are the minimums", async () => {
+  for (const [role, v] of [["scope-and-plan", 17], ["fleet-coder", 10], ["fleet-code-judge", 9]]) {
+    const s = happy();
+    s.preflight.versions[role] = v;
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", role);
+    assert.match(out.result.reason, new RegExp("role " + role + " version " + v + " < frozen " + (v + 1)));
+  }
+});
+
+// ---------------------------------------------------------------- 2.0.3: repo obligations, test_cmd, honest stop reasons
+
+const TEST_CMD = { command: "uv run --extra test pytest <paths> -n0", paths_placeholder: "<paths>", env: {}, tools: ["mypy"] };
+const OB_BUMP = {
+  id: "OB1",
+  kind: "version_bump",
+  rule_source: "scripts/check_version_bump.py:1",
+  files: ["pyproject.toml", "server.json"],
+  instruction: "bump the core version in pyproject.toml and its mirrors",
+  check_cmd: "python3 scripts/check_version_bump.py",
+};
+const OB_LOG = {
+  id: "OB2",
+  kind: "changelog",
+  rule_source: ".pre-commit-config.yaml:check-changelog",
+  files: ["CHANGELOG.md"],
+  instruction: "add a CHANGELOG line",
+};
+
+// A happy run whose planner returns obligations and a test_cmd.
+function withObligations(obs, over) {
+  const s = happy(over);
+  s["role:scope-and-plan"].repo_obligations = obs;
+  s["role:scope-and-plan"].test_cmd = TEST_CMD;
+  s["role:fleet-code-judge:r1"].obligations_check = obs.map((o) => ({ id: o.id, met: true, evidence: "diff" }));
+  return s;
+}
+
+// Scripts a second code round that passes and pushes.
+function secondRoundPasses(s, check, pushLabel) {
+  s["role:fleet-coder:r2"] = { status: "ok", commits: ["k2"] };
+  s["hasher:post-coder:r2"] = { status: "ok", fingerprint: FP_K2, hashes: HASHES };
+  s["role:fleet-code-judge:r2"] = { status: "ok", verdict: "approve", routed_findings: [], obligations_check: check };
+  s["hasher:fp-post:code-judge:r2"] = { status: "ok", fingerprint: FP_K2 };
+  if (pushLabel) s[pushLabel] = (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha });
+}
+
+test("2.0.3 plan_ref: plan_facts carries test_cmd, repo_obligations and commands, covered by the seal", async () => {
+  const s = withObligations([OB_BUMP, OB_LOG]);
   const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation");
+  const ref = JSON.parse(s.__store[PC]);
+  assert.deepEqual(ref.plan_facts.test_cmd, TEST_CMD);
+  assert.deepEqual(ref.plan_facts.repo_obligations, [OB_BUMP, OB_LOG]);
+  assert.deepEqual(ref.plan_facts.commands, out.result.commands);
+  const o = Object.assign({}, ref);
+  delete o.seal;
+  assert.equal(ref.seal, sha256(canon(o)));
+});
+
+test("2.0.3 scope-and-plan: repo_obligations and test_cmd are required on ok", async () => {
+  for (const k of ["repo_obligations", "test_cmd"]) {
+    const s = happy();
+    const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], {
+      __raw: true,
+      role_version: FROZEN_VERSIONS["scope-and-plan"],
+      role_contract: "CONTRACT: fleet-v2",
+    });
+    delete p[k];
+    s["role:scope-and-plan"] = p;
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", k);
+    assert.match(out.result.reason, new RegExp("role scope-and-plan contract drift: missing " + k));
+    assert.equal(out.result.stop_gate, "contract");
+    assert.ok(!out.labels.includes("role:plan-audit"));
+  }
+});
+
+test("2.0.3 scope-and-plan: wrong types for repo_obligations or test_cmd are contract drift", async () => {
+  for (const [k, v, re] of [
+    ["repo_obligations", "[]", /contract drift: scope-and-plan repo_obligations type/],
+    ["test_cmd", "pytest", /contract drift: scope-and-plan test_cmd type/],
+    ["test_cmd", { paths_placeholder: "<paths>" }, /contract drift: scope-and-plan test_cmd\.command/],
+    ["test_cmd", { command: "  " }, /contract drift: scope-and-plan test_cmd\.command/],
+    ["repo_obligations", [{ id: "OB1", kind: "bogus", instruction: "x" }], /contract drift: scope-and-plan repo_obligations/],
+    ["repo_obligations", [{ kind: "other", instruction: "x" }], /contract drift: scope-and-plan repo_obligations/],
+    ["repo_obligations", [OB_LOG, OB_LOG], /contract drift: scope-and-plan repo_obligations/],
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"][k] = v;
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", k + " " + JSON.stringify(v));
+    assert.match(out.result.reason, re);
+    assert.equal(out.result.stop_gate, "contract");
+  }
+});
+
+test("2.0.3 allowlist: a check_cmd outside the allowed shapes becomes judge-only, never run", async () => {
+  for (const cmd of [
+    "git push origin HEAD",
+    "g''it push",
+    "python -c print(1)",
+    "python3 -c x",
+    "bash scripts/x.sh",
+    "scripts/x.sh $(id)",
+    "make check; rm -rf x",
+    "make check && echo",
+    "make check | tee x",
+    "scripts/x.sh `id`",
+    "scripts/x.sh > out",
+    "/usr/bin/check",
+    "../outside/check.py",
+    "python3 ../x.py",
+    "pytest",
+    "pre-commit run",
+    "pre-commit run x --hook-stage",
+    "pre-commit run x --from-ref a",
+    "pre-commit install",
+    "make",
+    "make a b",
+    "uv run pytest",
+    "uv run --extra test python3 scripts/x.sh",
+    "make check\nscripts/x.sh",
+    "scripts/x.sh 'a b'",
+    "terraform plan",
+    "make check-tofu",
+    "scripts/run-tfp.sh",
+    "pre-commit run digger-lint --all-files",
+    "make Atlantis",
+    "./check.sh",
+    "lib/check.sh",
+    "src/scripts/check.sh",
+    "scripts/.venv/bin/check",
+    "scripts/node_modules/x/run",
+    "tools/__pycache__/x",
+    "bin/.git/hooks/x",
+    "ci/.tox/x",
+    "bin/python3",
+    "scripts/pip",
+    "tools/npm",
+    "bin/npx",
+    "scripts/bash",
+    "hack/uv",
+    "bin/make",
+    "ci/node",
+    "python3 src/check.py",
+    "python3 check.py",
+    "uv run python scripts/venv/x.py",
+  ]) {
+    const s = withObligations([Object.assign({}, OB_BUMP, { check_cmd: cmd })]);
+    const out = await runOne(s, ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "awaiting_confirmation", JSON.stringify(cmd) + " " + out.result.reason);
+    const ob = JSON.parse(s.__store[PC]).plan_facts.repo_obligations[0];
+    assert.ok(!("check_cmd" in ob), cmd);
+    assert.equal(ob.check_cmd_rejected, cmd);
+    assert.equal(typeof ob.check_rejected_reason, "string");
+    assert.ok(out.logs.some((l) => /OB1 check_cmd refused \(judge-only\)/.test(l)), cmd);
+    assert.deepEqual(inputsOf(call(out, "role:plan-audit").prompt).repo_obligations[0].check_cmd_rejected, cmd);
+  }
+});
+
+test("2.0.3 allowlist: the allowed shapes keep their check_cmd; the workflow runs none of them", async () => {
+  for (const cmd of [
+    "pre-commit run check-changelog",
+    "pre-commit run check-versions --all-files --hook-stage pre-push --from-ref origin/master --to-ref HEAD",
+    "make check",
+    "python3 scripts/check_version_bump.py",
+    "python scripts/c.py --base origin/master",
+    "uv run python3 scripts/c.py",
+    "uv run --extra test python scripts/c.py -q",
+    "scripts/check.sh",
+    "./scripts/check.sh --strict",
+    "bin/check-version",
+    "hack/verify.sh",
+    "ci/check.py",
+    "python3 tools/check_version_bump.py --base origin/master",
+  ]) {
+    const s = withObligations([Object.assign({}, OB_BUMP, { check_cmd: cmd })]);
+    const out = await run(s, ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "ok", cmd + " " + out.result.reason);
+    assert.equal(JSON.parse(s.__store[PC]).plan_facts.repo_obligations[0].check_cmd, cmd);
+    // informational for the code judge; no infra step runs it
+    assert.equal(inputsOf(call(out, "role:fleet-code-judge:r1").prompt).repo_obligations[0].check_cmd, cmd);
+    assert.ok(!out.labels.some((l) => /obligation|verify-commands/.test(l)), cmd);
+  }
+});
+
+test("2.0.3 test_cmd with a shell metacharacter or a forbidden word stops: needs_human", async () => {
+  for (const tc of [
+    { command: "pytest <paths>; curl x" },
+    { command: "pytest $(id) <paths>" },
+    { command: "pytest <paths> | tee" },
+    { command: "pytest `id`" },
+    { command: "pytest <paths> > x" },
+    { command: "pytest <other>" },
+    { command: "terraform test" },
+    { command: "pytest <paths>", env: { X: "$(id)" } },
+    { command: "pytest <paths>", env: { "A;B": "1" } },
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = tc;
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(tc));
+    assert.match(out.result.reason, /test_cmd refused/);
+    assert.equal(out.result.stop_gate, "commands");
+    assert.ok(!out.labels.includes("role:plan-audit"));
+  }
+  const ok = happy();
+  ok["role:scope-and-plan"].test_cmd = { command: "uv run --extra test pytest <paths> -n0", env: { DJANGO_SETTINGS_MODULE: "app.settings" } };
+  assert.equal((await runOne(ok, ARGS)).result.status, "awaiting_confirmation");
+});
+
+test("2.0.3 test_cmd shape: only test runners, then flags and paths", async () => {
+  for (const command of [
+    "pip install evil",
+    "python -m http.server",
+    "python3 -m pip install x",
+    "uv pip install x",
+    "uv run pip install x",
+    "uv run python -m http.server",
+    "npm install",
+    "npm run build",
+    "npx tsc",
+    "pnpm add x",
+    "yarn add x",
+    "make check",
+    "make test-all",
+    "go run ./cmd",
+    "cargo install x",
+    "pytest https://evil.example/x.py",
+    "pytest <paths> install",
+    "pytest -m slow -p pip",
+    "python -m pytest -m http.server",
+    "bash run-tests.sh",
+    "./run-tests",
+    "tox",
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", command);
+    assert.match(out.result.reason, /test_cmd refused: test_cmd shape not allowed/, command);
+    assert.equal(out.result.stop_gate, "commands");
+  }
+  for (const command of [
+    "pytest <paths>",
+    "pytest -q -x <paths>",
+    "python -m pytest <paths> -n0",
+    "python3 -m pytest -p no:randomly tests/unit",
+    "uv run pytest <paths>",
+    "uv run --frozen --no-sync --extra test --extra dev pytest <paths> -n0",
+    "npm test -- <paths>",
+    "npm run test",
+    "npm run test:unit -- <paths>",
+    "npx jest <paths>",
+    "npx vitest run <paths>",
+    "pnpm test",
+    "yarn test",
+    "cargo test",
+    "go test ./...",
+    "make test",
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command };
+    assert.equal((await runOne(s, ARGS)).result.status, "awaiting_confirmation", command);
+  }
+});
+
+test("2.0.3 test_cmd env: only allowlisted names", async () => {
+  for (const name of ["LD_PRELOAD", "PYTHONPATH", "PYTEST_ADDOPTS", "GH_TOKEN", "MY_SETTING", "PATH", "HOME", "lang", "AWS_REGION"]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command: "pytest <paths>", env: { [name]: "1" } };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", name);
+    assert.ok(out.result.reason.indexOf("test_cmd env " + name + " not allowed") >= 0, name + ": " + out.result.reason);
+    assert.equal(out.result.stop_gate, "commands");
+    assert.ok(!out.labels.includes("role:plan-audit"), name);
+  }
+  const ok = happy();
+  ok["role:scope-and-plan"].test_cmd = {
+    command: "pytest <paths>",
+    env: { DJANGO_SETTINGS_MODULE: "app.settings", PYTHONUNBUFFERED: "1", TZ: "UTC", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", NO_COLOR: "1", FORCE_COLOR: "0", CI: "true" },
+  };
+  assert.equal((await runOne(ok, ARGS)).result.status, "awaiting_confirmation");
+  const bad = happy();
+  bad["role:scope-and-plan"].test_cmd = { command: "pytest <paths>", env: { TZ: "$(id)" } };
+  assert.match((await runOne(bad, ARGS)).result.reason, /test_cmd refused: env TZ value is not plain/);
+});
+
+test("2.0.3 awaiting_confirmation lists every command verbatim with env, tools, rule_source and who runs it", async () => {
+  const s = withObligations([OB_BUMP, Object.assign({}, OB_LOG, { check_cmd: "python -c x" })]);
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  const cmds = out.result.commands;
+  assert.deepEqual(cmds.map((c) => c.command), [TEST_CMD.command, OB_BUMP.check_cmd, "python -c x"]);
+  assert.deepEqual(cmds.map((c) => c.rule_source), ["test_cmd", OB_BUMP.rule_source, OB_LOG.rule_source]);
+  assert.deepEqual(cmds.map((c) => c.run_by), ["roles", "code-judge (optional)", "nobody"]);
+  assert.deepEqual(cmds[0].env, {});
+  assert.deepEqual(cmds[0].tools, ["mypy"]);
+  assert.match(cmds[2].note, /^refused: /);
+});
+
+test("2.0.3 build from a 2.0.2 plan_ref stops: plan_ref predates 2.0.3", async () => {
+  const s = happy();
+  const content = priorRef(PLAN_MD);
+  s.__store[PC] = content;
+  const out = await runOne(s, {
+    mode: "build",
+    plan_ref: { branch: "fleet/l42-add-thing", plan_commit: PC, ref_path: REF_L42, ref_sha256: sha256(content), repo: "/r" },
+    date: "2026-11-04",
+    project: "o/r",
+  });
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder version 8 < frozen 9/);
-  const j = happy();
-  j.preflight.versions["fleet-code-judge"] = 7;
-  const outJ = await runOne(j, ARGS);
-  assert.match(outJ.result.reason, /role fleet-code-judge version 7 < frozen 8/);
+  assert.match(out.result.reason, /plan_ref predates 2\.0\.3; re-run plan/);
+  assert.ok(!out.labels.includes("infra:verify-plan"));
+});
+
+test("2.0.3 inputs: plan-audit, coder and code-judge get repo_obligations and test_cmd; writers and test-judge get test_cmd", async () => {
+  const s = withObligations([OB_LOG]);
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  for (const l of ["role:plan-audit", "role:fleet-coder:r1", "role:fleet-code-judge:r1"]) {
+    const i = inputsOf(call(out, l).prompt);
+    assert.deepEqual(i.repo_obligations, [OB_LOG], l);
+    assert.deepEqual(i.test_cmd, TEST_CMD, l);
+  }
+  for (const l of ["role:fleet-test-writer:AC1:r1", "role:fleet-test-judge:r1"])
+    assert.deepEqual(inputsOf(call(out, l).prompt).test_cmd, TEST_CMD, l);
+  assert.ok(!("obligation_results" in inputsOf(call(out, "role:fleet-code-judge:r1").prompt)));
+});
+
+test("2.0.3 approve without met:true for every obligation is converted to fix_code", async () => {
+  for (const check of [[], [{ id: "OB1", met: true, evidence: "x" }], [{ id: "OB1", met: true }, { id: "OB2", met: false, evidence: "no line" }]]) {
+    const s = withObligations([OB_BUMP, OB_LOG]);
+    s["role:fleet-code-judge:r1"].obligations_check = check;
+    secondRoundPasses(s, [{ id: "OB1", met: true, evidence: "ok" }, { id: "OB2", met: true, evidence: "ok" }]);
+    const out = await run(s, ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "ok", JSON.stringify(check) + " " + out.result.reason);
+    assert.equal(out.result.rounds.code, 2, JSON.stringify(check));
+    assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings.map((x) => x.finding).join("\n"), /OB2/);
+    assert.ok(out.logs.some((l) => /obligations gate/.test(l)));
+    // no push of an unconfirmed approval
+    assert.equal(out.labels.filter((l) => /^infra:push/.test(l)).length, 1);
+  }
+});
+
+test("2.0.3 obligations gate failing every round stops at the cap with the gate named", async () => {
+  const s = withObligations([OB_BUMP]);
+  for (const m of [1, 2, 3]) {
+    const fp = { head: "K" + m, status_sha256: "s", diff_sha256: "d" };
+    s["role:fleet-coder:r" + m] = { status: "ok", commits: ["k" + m] };
+    s["hasher:post-coder:r" + m] = { status: "ok", fingerprint: fp, hashes: HASHES };
+    s["role:fleet-code-judge:r" + m] = { status: "ok", verdict: "approve", routed_findings: [], obligations_check: [{ id: "OB1", met: false, evidence: "x" }] };
+    s["hasher:fp-post:code-judge:r" + m] = { status: "ok", fingerprint: fp };
+  }
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /code rounds exhausted \(3\).*obligations gate/);
+  assert.equal(out.result.stop_gate, "cap");
+});
+
+test("2.0.3 push rejected by a repo hook routes to the coder as fix_code; the judge re-approves before the next push", async () => {
+  const s = happy();
+  s["infra:push"] = { status: "ok", reason: "hook", push_result: "hook_rejected", hook_tail: "check_version_bump: core version not bumped\nerror: failed to push some refs" };
+  secondRoundPasses(s, [], "infra:push:p2");
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.rounds.code, 2);
+  const f = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings;
+  assert.equal(f.length, 1);
+  assert.equal(f[0].target, "code");
+  assert.match(f[0].finding, /push rejected by a repo hook/);
+  assert.match(f[0].finding, /core version not bumped/);
+  const L = out.labels;
+  assert.ok(L.indexOf("infra:push") < L.indexOf("role:fleet-coder:r2"));
+  assert.ok(L.indexOf("role:fleet-code-judge:r2") < L.indexOf("infra:push:p2"));
+  assert.equal(inputsOf(call(out, "infra:push:p2").prompt).approved_sha, "K2");
+  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, "K2");
+  assert.ok(out.logs.some((l) => /rejected by a repo hook -> coder/.test(l)));
+});
+
+test("2.0.3 push hook rejection on the last round stops at the cap, naming the push hook", async () => {
+  const s = happy();
+  for (const m of [1, 2, 3]) {
+    const fp = { head: "K" + m, status_sha256: "s", diff_sha256: "d" };
+    s["role:fleet-coder:r" + m] = { status: "ok", commits: ["k" + m] };
+    s["hasher:post-coder:r" + m] = { status: "ok", fingerprint: fp, hashes: HASHES };
+    s["role:fleet-code-judge:r" + m] = { status: "ok", verdict: "approve", routed_findings: [] };
+    s["hasher:fp-post:code-judge:r" + m] = { status: "ok", fingerprint: fp };
+    s["infra:push" + (m > 1 ? ":p" + m : "")] = { status: "ok", reason: "hook", push_result: "hook_rejected", hook_tail: "nope" };
+  }
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /code rounds exhausted \(3\).*push hook/);
+  assert.equal(out.result.stop_gate, "cap");
+  assert.ok(!out.labels.includes("role:fleet-pr-opener"));
+});
+
+test("2.0.3 push: non-fast-forward stops for a human, network exhaustion fails, an unclassified ok fails", async () => {
+  const nf = happy({ script: { "infra:push": { status: "needs_human", reason: "non_ff", push_result: "non_ff" } } });
+  const a = await run(nf, ARGS);
+  assert.equal(a.result.status, "needs_human");
+  assert.ok(!a.labels.includes("role:fleet-coder:r2"));
+  const nw = happy({ script: { "infra:push": { status: "failed", reason: "network", push_result: "network" } } });
+  assert.equal((await run(nw, ARGS)).result.status, "failed");
+  const un = happy({ script: { "infra:push": (prompt) => ({ status: "ok", reason: "x", remote_head: inputsOf(prompt).approved_sha }) } });
+  const c = await run(un, ARGS);
+  assert.equal(c.result.status, "failed");
+  assert.match(c.result.reason, /push_result null/);
+});
+
+test("2.0.3 push prompt classifies hook_rejected, non_ff and network, and never bypasses hooks", async () => {
+  const out = await run(happy(), ARGS);
+  const p = call(out, "infra:push").prompt;
+  for (const w of ["hook_rejected", "non_ff", "network", "failed to push some refs", "hook_tail", "push_result", "never --no-verify"])
+    assert.ok(p.toLowerCase().indexOf(w.toLowerCase()) >= 0, w);
+  // classification reads git's own lines only, never the hook's output or the URL
+  assert.ok(p.indexOf("Classify on git's own lines only") >= 0);
+  assert.ok(p.indexOf("` ! [rejected]`") >= 0 && p.indexOf("` ! [remote rejected]`") >= 0);
+  assert.ok(p.indexOf("remote_rejected") >= 0);
+  assert.ok(p.indexOf("exit code 128") >= 0);
+  assert.ok(p.indexOf("`HTTP`") < 0, "no free-text word list over the whole output");
+});
+
+test("2.0.3 coder and code-judge: obligations_done and obligations_check are required arrays", async () => {
+  for (const [label, role, key] of [
+    ["role:fleet-coder:r1", "fleet-coder", "obligations_done"],
+    ["role:fleet-code-judge:r1", "fleet-code-judge", "obligations_check"],
+  ]) {
+    const s = happy();
+    const r = Object.assign({}, REQUIRED_DEFAULTS[role], s[label], {
+      __raw: true,
+      role_version: FROZEN_VERSIONS[role],
+      role_contract: "CONTRACT: fleet-v2",
+    });
+    delete r[key];
+    s[label] = r;
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", key);
+    assert.match(out.result.reason, new RegExp("role " + role + " contract drift: missing " + key));
+    const t = happy();
+    t[label][key] = "[]";
+    const outT = await run(t, ARGS);
+    assert.match(outT.result.reason, new RegExp("contract drift: " + role + " " + key + " type"));
+  }
+});
+
+test("2.0.3 B3: a coder output missing a key AND a hash violation reports the hash violation", async () => {
+  const s = happy();
+  const c = Object.assign({}, REQUIRED_DEFAULTS["fleet-coder"], s["role:fleet-coder:r1"], {
+    __raw: true,
+    role_version: FROZEN_VERSIONS["fleet-coder"],
+    role_contract: "CONTRACT: fleet-v2",
+  });
+  delete c.added_symbols;
+  s["role:fleet-coder:r1"] = c;
+  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes: H({ ...HASHES_FLAT, "tests/test_a.py": "TAMPERED" }) };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /^code round 1: hash violation on .*tests\/test_a\.py/);
+  assert.doesNotMatch(out.result.reason.split("(role output also")[0], /contract drift/);
+  assert.equal(out.result.stop_gate, "hash");
+  assert.ok(!out.labels.includes("role:fleet-coder:r2"), "no re-dispatch after a malformed output");
+});
+
+test("2.0.3 B3: a coder needs_human with a hash violation reports the hash violation", async () => {
+  const s = happy();
+  s["role:fleet-coder:r1"] = { status: "needs_human", reason: "a tool rewrote .gitignore" };
+  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes: H({ ...HASHES_FLAT, "tests/test_b.py": "X" }) };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /^code round 1: hash violation on .*tests\/test_b\.py/);
+  assert.match(out.result.reason, /a tool rewrote \.gitignore/);
+  assert.equal(out.result.stop_gate, "hash");
+});
+
+test("2.0.3 B3: a clean coder needs_human reports the role's reason; contract drift alone is contract", async () => {
+  const s = happy();
+  s["role:fleet-coder:r1"] = { status: "needs_human", reason: "test AC1 contradicts the plan" };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /test AC1 contradicts the plan/);
+  assert.equal(out.result.stop_gate, "role");
+  const t = happy();
+  t["role:fleet-coder:r1"].added_symbols = "[]";
+  const outT = await run(t, ARGS);
+  assert.equal(outT.result.stop_gate, "contract");
+});
+
+test("2.0.3 B3: a role's needs_human beats a version mismatch (contract drift is last)", async () => {
+  const s = happy();
+  s["role:fleet-code-judge:r1"] = { status: "needs_human", reason: "suite cannot run", role_version: 1 };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /suite cannot run/);
+  assert.equal(out.result.stop_gate, "role");
+});
+
+test("2.0.3 B3: a judge that mutates the worktree and drifts reports the fingerprint", async () => {
+  const s = happy();
+  s["role:fleet-code-judge:r1"].hash_check = "{}";
+  s["hasher:fp-post:code-judge:r1"] = { status: "ok", fingerprint: { head: "K1", status_sha256: "CHANGED", diff_sha256: "d" } };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /^judge mutated worktree/);
+  assert.equal(out.result.stop_gate, "fingerprint");
+});
+
+test("2.0.3 stop_gate: null on ok and awaiting; fingerprint at freeze", async () => {
+  const ok = await run(happy(), ARGS);
+  assert.equal(ok.result.status, "ok");
+  assert.equal(ok.result.stop_gate, null);
+  assert.equal(ok.planResult.stop_gate, null);
+  const s = happy({ script: { "hasher:freeze:f1": { status: "ok", fingerprint: { head: "P9", status_sha256: "s", diff_sha256: "d" }, hashes: HASHES } } });
+  const out = await run(s, ARGS);
+  assert.match(out.result.reason, /worktree changed between test approval and freeze/);
+  assert.equal(out.result.stop_gate, "fingerprint");
+});
+
+// A 2.0.3-shaped ref file for build-mode tests.
+function refWithFacts(facts) {
+  return priorRef(PLAN_MD, {
+    plan_facts: Object.assign({ allowed_additions: null, est_diff_lines: 10, test_cmd: TEST_CMD, repo_obligations: [], commands: [] }, facts),
+  });
+}
+
+async function buildFrom(content) {
+  const s = happy();
+  s.__store[PC] = content;
+  return runOne(s, {
+    mode: "build",
+    plan_ref: { branch: "fleet/l42-add-thing", plan_commit: PC, ref_path: REF_L42, ref_sha256: sha256(content), repo: "/r" },
+    date: "2026-11-04",
+    project: "o/r",
+  });
+}
+
+test("2.0.3 build re-checks the sealed commands: a disallowed check_cmd or test_cmd stops", async () => {
+  const bad = await buildFrom(refWithFacts({ repo_obligations: [Object.assign({}, OB_BUMP, { check_cmd: "python -c x" })] }));
+  assert.equal(bad.result.status, "needs_human");
+  assert.match(bad.result.reason, /OB1 check_cmd/);
+  assert.equal(bad.result.stop_gate, "commands");
+  assert.ok(!bad.labels.includes("infra:verify-plan"));
+  const badEnv = await buildFrom(refWithFacts({ test_cmd: { command: "pytest <paths>", env: { LD_PRELOAD: "x" } } }));
+  assert.match(badEnv.result.reason, /test_cmd env LD_PRELOAD not allowed/);
+  const badT = await buildFrom(refWithFacts({ test_cmd: { command: "pytest; id" } }));
+  assert.match(badT.result.reason, /test_cmd refused/);
+  const noCmds = await buildFrom(priorRef(PLAN_MD, { plan_facts: { allowed_additions: null, est_diff_lines: 10, test_cmd: TEST_CMD, repo_obligations: [] } }));
+  assert.match(noCmds.result.reason, /plan_ref predates 2\.0\.3/);
 });

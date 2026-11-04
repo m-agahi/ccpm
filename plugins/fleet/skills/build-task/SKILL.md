@@ -68,8 +68,15 @@ runs `/build-task` explicitly, always use the fleet.
    - fleet size: `fleet_size.criteria` criteria, about `fleet_size.est_agents` agents, about
      `fleet_size.est_rounds` fix rounds;
    - `plan_path` and the branch (`plan_ref.branch`). The plan is committed locally only.
+   - `commands`: EVERY entry, its `command` VERBATIM in a code span (never paraphrased, shortened
+     or summarised), with its `env` (every name and value, verbatim; `{}` when empty) and `tools`
+     (test_cmd), its `rule_source` and `run_by` (`roles` = the test command the agents run,
+     `code-judge (optional)` = a check the code judge may run, `nobody` = refused, with its
+     `note`). These are the only commands the roles run; approving the plan approves them. Say so
+     in the question.
 
-   Then ask with AskUserQuestion: "Build this plan?" with the options "Build" and "Stop". On "Stop"
+   Then ask with AskUserQuestion: "Build this plan and run the commands listed above?" with the
+   options "Build" and "Stop". On "Stop"
    (or any other answer), say the plan stays committed locally on the branch and stop.
 
 8. **Build.** On "Build":
@@ -86,7 +93,7 @@ runs `/build-task` explicitly, always use the fleet.
 
    If the result is `awaiting_confirmation` again, the code judge found the plan wrong and the
    workflow re-planned. Show `proposed_plan_change` (a bullet list), then the new `tldr`,
-   `plan_diff` and fleet size, and say that the old work is saved on `superseded_ref`. Ask again as
+   `plan_diff`, fleet size and `commands` (verbatim, as in step 7), and say that the old work is saved on `superseded_ref`. Ask again as
    in step 7. On "Build", repeat step 8 with the NEW `plan_ref`.
 
 9. **Report.** Relay, in this order:

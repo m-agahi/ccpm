@@ -42,12 +42,12 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks"];
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 13,
-  "plan-audit": 10,
-  "fleet-test-writer": 6,
-  "fleet-test-judge": 6,
-  "fleet-coder": 9,
-  "fleet-code-judge": 8,
+  "scope-and-plan": 18,
+  "plan-audit": 11,
+  "fleet-test-writer": 7,
+  "fleet-test-judge": 7,
+  "fleet-coder": 11,
+  "fleet-code-judge": 10,
   "fleet-pr-opener": 5,
 };
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
@@ -59,12 +59,12 @@ const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
 // also have that JS type (null only where the schema allows it); a wrong type
 // is contract drift too ("contract drift: <role> <key> type").
 const REQUIRED_ON_OK = {
-  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff"],
+  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff", "repo_obligations", "test_cmd"],
   "plan-audit": ["verdict", "routed_findings"],
   "fleet-test-writer": ["criterion_id", "tests", "commit"],
   "fleet-test-judge": ["verdict", "routed_findings", "checked"],
-  "fleet-coder": ["commits", "suite_result", "added_symbols", "frozen_tests_red_at_start"],
-  "fleet-code-judge": ["verdict", "routed_findings", "suite_result", "hash_check", "gates_not_run"],
+  "fleet-coder": ["commits", "suite_result", "added_symbols", "frozen_tests_red_at_start", "obligations_done"],
+  "fleet-code-judge": ["verdict", "routed_findings", "suite_result", "hash_check", "gates_not_run", "obligations_check"],
   "fleet-pr-opener": ["pr_url", "pr_number", "created", "template_used", "gates_not_run_stated"],
 };
 const VERDICTS = {
@@ -73,6 +73,31 @@ const VERDICTS = {
   "fleet-code-judge": ["approve", "fix_code", "fix_tests", "plan_wrong"],
 };
 const GATES_PREFIX = "approved with gates not run:";
+// Repo obligations (2.0.3): push and CI rules the plan names for the coder.
+const OBLIGATION_KINDS = ["version_bump", "changelog", "docs", "generated", "other"];
+// Commands from the plan (test_cmd, check_cmd) come from a model that reads
+// untrusted ticket text. The workflow script never runs either one. They are
+// allowlisted here, shown to Max verbatim in the confirmation and sealed in
+// the plan ref; roles run test_cmd, and the code judge may run a check_cmd.
+// A command token is plain: no shell metacharacter, no quote, no glob, no
+// whitespace other than the single separating space or tab.
+const CMD_TOKEN_RE = /^[A-Za-z0-9_.\/:=@%+,-]+$/;
+const PATHS_TOKEN = "<paths>";
+// Checked anywhere in a command, case-insensitively.
+const FORBIDDEN_WORD_RE = /terraform|tofu|tfp|digger|atlantis/i;
+// test_cmd.env: only these names, never anything the planner invents.
+const TEST_ENV_ALLOWED = ["DJANGO_SETTINGS_MODULE", "PYTHONUNBUFFERED", "TZ", "LANG", "LC_ALL", "NO_COLOR", "FORCE_COLOR", "CI"];
+const ENV_VALUE_RE = /^[A-Za-z0-9_.\/:=@%+, -]*$/;
+const MAKE_TARGET_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
+// A check_cmd script lives under one of these top-level dirs, never inside a
+// venv, dependency or VCS dir, and is never an interpreter or package manager.
+const SCRIPT_ROOTS = ["scripts", "bin", "tools", "hack", "ci"];
+const SCRIPT_BAD_SEGMENTS = [".venv", "venv", "node_modules", ".git", "__pycache__", ".tox"];
+const SCRIPT_BAD_BASENAME_RE = /^(python[0-9.]*|pip[0-9.]*|node|npm|npx|sh|bash|zsh|uv|make)$/;
+// test_cmd tokens after the runner prefix: never one of these subcommands.
+const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
+// stop_gate values: which gate ended a stopped run (null when none applies).
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap"];
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 const MAX_AGENTS = 60;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
@@ -401,6 +426,7 @@ print(json.dumps(out, sort_keys=True))
 `;
 // HASHER_PY_END
 
+
 // ---------------------------------------------------------------- schemas
 
 const STR = { type: "string" };
@@ -451,6 +477,26 @@ const SCHEMAS = {
     },
     est_diff_lines: { type: "number" },
     new_behaviour: { type: "boolean" },
+    repo_obligations: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: STR,
+          kind: { type: "string", enum: OBLIGATION_KINDS },
+          rule_source: STR,
+          files: { type: "array", items: STR },
+          instruction: STR,
+          check_cmd: STR_OR_NULL,
+        },
+        required: ["id", "kind", "instruction"],
+      },
+    },
+    test_cmd: {
+      type: "object",
+      properties: { command: STR, paths_placeholder: STR, env: { type: "object" }, tools: { type: "array", items: STR } },
+      required: ["command"],
+    },
     tldr: STR,
     plan_diff: { type: "array", items: STR },
     fleet_estimate: {
@@ -479,6 +525,7 @@ const SCHEMAS = {
     frozen_tests_red_at_start: { type: "boolean" },
     suite_result: SUITE,
     addressed_findings: { type: "array", items: ANY_ITEM },
+    obligations_done: { type: "array", items: ANY_ITEM },
   }),
   "fleet-code-judge": roleSchema({
     verdict: { type: "string", enum: ["approve", "fix_code", "fix_tests", "plan_wrong"] },
@@ -488,6 +535,10 @@ const SCHEMAS = {
     gates_not_run: {
       type: "array",
       items: { type: "object", properties: { gate: STR, reason: STR }, required: ["gate"] },
+    },
+    obligations_check: {
+      type: "array",
+      items: { type: "object", properties: { id: STR, met: { type: "boolean" }, evidence: STR }, required: ["id", "met"] },
     },
   }),
   "fleet-pr-opener": roleSchema({
@@ -533,6 +584,8 @@ const INFRA_SCHEMA = {
     },
     plan_touched: { type: "array", items: STR },
     remote_head: STR,
+    push_result: { type: "string", enum: ["ok", "hook_rejected", "network", "non_ff", "remote_rejected"] },
+    hook_tail: STR,
     purged: { type: "number" },
     superseded_head: STR,
     ref_sha256: STR,
@@ -756,6 +809,214 @@ function sameFingerprint(a, b) {
     a.status_sha256 === b.status_sha256 &&
     a.diff_sha256 === b.diff_sha256
   );
+}
+
+// test_cmd and repo_obligations from the planner (or a loaded ref).
+// Returns {msg, gate} or null. Types are checked by checkRole first; this
+// checks the shape the coder and the judges rely on.
+function planFactsProblem(testCmd, obligations) {
+  const drift = (m) => ({ msg: "role scope-and-plan contract drift: scope-and-plan " + m, gate: "contract" });
+  if (!testCmd || typeof testCmd !== "object" || Array.isArray(testCmd)) return drift("test_cmd type: got " + jsType(testCmd));
+  if (typeof testCmd.command !== "string" || !testCmd.command.trim())
+    return drift("test_cmd.command must be a non-empty string");
+  if (!Array.isArray(obligations)) return drift("repo_obligations type: got " + jsType(obligations));
+  const seen = {};
+  for (const o of obligations) {
+    if (!o || typeof o !== "object" || Array.isArray(o)) return drift("repo_obligations: an entry is not an object");
+    if (typeof o.id !== "string" || !o.id.trim()) return drift("repo_obligations: an entry has no id");
+    if (seen[o.id]) return drift("repo_obligations: duplicate id " + o.id);
+    seen[o.id] = true;
+    if (OBLIGATION_KINDS.indexOf(o.kind) < 0) return drift("repo_obligations: " + o.id + " kind " + JSON.stringify(o.kind));
+    if (typeof o.instruction !== "string") return drift("repo_obligations: " + o.id + " has no instruction");
+    if (o.files !== undefined && (!Array.isArray(o.files) || !o.files.every((f) => typeof f === "string")))
+      return drift("repo_obligations: " + o.id + " files must be an array of strings");
+    if (o.check_cmd !== undefined && o.check_cmd !== null && typeof o.check_cmd !== "string")
+      return drift("repo_obligations: " + o.id + " check_cmd must be a string");
+  }
+  return null;
+}
+
+// A check_cmd script path: relative, under SCRIPT_ROOTS, no venv/dependency/
+// VCS segment, not an interpreter or package manager. Returns a reason or null.
+function scriptPathProblem(path) {
+  const segs = path.split("/");
+  if (segs.length < 2 || SCRIPT_ROOTS.indexOf(segs[0]) < 0) return "script path must be under " + SCRIPT_ROOTS.join("/, ") + "/";
+  const bad = segs.find((x) => SCRIPT_BAD_SEGMENTS.indexOf(x) >= 0);
+  if (bad) return "script path has a " + bad + " segment";
+  if (SCRIPT_BAD_BASENAME_RE.test(segs[segs.length - 1])) return "script path names an interpreter or package manager";
+  return null;
+}
+
+function relPath(p) {
+  if (typeof p !== "string" || !p || p.charAt(0) === "/" || p.charAt(0) === "-") return null;
+  const q = p.indexOf("./") === 0 ? p.slice(2) : p;
+  if (!q || q.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) return null;
+  return q;
+}
+
+// The allowlist. A check_cmd must be exactly one of:
+//   pre-commit run <hook-id> [--all-files] [--hook-stage <stage>] [--from-ref <ref> --to-ref <ref>]
+//   make <target>
+//   [uv run [--extra <x>]] python[3] <relative/path.py> [plain args]
+//   <relative/path/to/script> [plain args]
+// Returns {ok: true} or {ok: false, reason}.
+function parseCheckCmd(cmd) {
+  const bad = (reason) => ({ ok: false, reason });
+  if (typeof cmd !== "string" || !cmd.trim()) return bad("empty command");
+  if (FORBIDDEN_WORD_RE.test(cmd)) return bad("names a forbidden tool");
+  const t = cmd.trim().split(/[ \t]+/);
+  for (const x of t)
+    if (!CMD_TOKEN_RE.test(x)) return bad("token " + JSON.stringify(x) + " is not plain (shell metacharacter, quote or glob)");
+  const opt = (x) => x === undefined || x.charAt(0) === "-";
+  if (t[0] === "pre-commit") {
+    if (t[1] !== "run" || opt(t[2])) return bad("pre-commit: only `pre-commit run <hook-id> ...`");
+    let i = 3;
+    const seen = {};
+    while (i < t.length) {
+      const f = t[i];
+      if (seen[f]) return bad("pre-commit: repeated " + f);
+      seen[f] = true;
+      if (f === "--all-files") i += 1;
+      else if (f === "--hook-stage" && !opt(t[i + 1])) i += 2;
+      else if (f === "--from-ref" && !opt(t[i + 1]) && t[i + 2] === "--to-ref" && !opt(t[i + 3])) i += 4;
+      else return bad("pre-commit: option " + JSON.stringify(f) + " not allowed here");
+    }
+    return { ok: true };
+  }
+  if (t[0] === "make") {
+    if (t.length !== 2 || !MAKE_TARGET_RE.test(t[1])) return bad("make: only `make <target>`");
+    return { ok: true };
+  }
+  let i = 0;
+  if (t[0] === "uv") {
+    if (t[1] !== "run") return bad("uv: only `uv run [--extra <x>] python <file.py>`");
+    i = 2;
+    if (t[i] === "--extra") {
+      if (opt(t[i + 1])) return bad("uv run --extra needs a name");
+      i += 2;
+    }
+    if (t[i] !== "python" && t[i] !== "python3") return bad("uv run: only a python script");
+  }
+  if (t[i] === "python" || t[i] === "python3") {
+    const path = relPath(t[i + 1]);
+    if (!path || !/\.py$/.test(path)) return bad("python: only `python[3] <relative/path.py> [args]`");
+    const why = scriptPathProblem(path);
+    return why ? bad(why) : { ok: true };
+  }
+  if (i === 0 && t[0].indexOf("/") >= 0 && relPath(t[0])) {
+    const why = scriptPathProblem(relPath(t[0]));
+    return why ? bad(why) : { ok: true };
+  }
+  return bad("not an allowed command shape");
+}
+
+// The test runner a test_cmd starts with. Returns the number of prefix tokens,
+// or 0 when the command does not start with an allowed runner:
+//   pytest | python[3] -m pytest | uv run [--frozen] [--no-sync] [--extra <x>]... pytest
+//   npm test | npm run test[:<name>] | npx jest|vitest | pnpm test | yarn test
+//   cargo test | go test | make test
+function testRunnerPrefix(t) {
+  const is = (i, ...w) => w.indexOf(t[i]) >= 0;
+  if (is(0, "pytest")) return 1;
+  if (is(0, "python", "python3") && t[1] === "-m" && t[2] === "pytest") return 3;
+  if (t[0] === "uv" && t[1] === "run") {
+    let i = 2;
+    for (;;) {
+      if (is(i, "--frozen", "--no-sync")) i += 1;
+      else if (t[i] === "--extra" && t[i + 1] && t[i + 1].charAt(0) !== "-" && t[i + 1] !== PATHS_TOKEN) i += 2;
+      else break;
+    }
+    return t[i] === "pytest" ? i + 1 : 0;
+  }
+  if (t[0] === "npm" && t[1] === "test") return 2;
+  if (t[0] === "npm" && t[1] === "run" && /^test(:[A-Za-z0-9_.-]+)?$/.test(t[2] || "")) return 3;
+  if (t[0] === "npx" && is(1, "jest", "vitest")) return 2;
+  if (is(0, "pnpm", "yarn", "cargo", "go", "make") && t[1] === "test") return 2;
+  return 0;
+}
+
+// test_cmd: an allowed test runner, then flags and paths only (plain tokens,
+// the <paths> placeholder; no URL, no install/add/pip, no -m other than
+// pytest), allowlisted env names with plain values; no forbidden word.
+function testCmdProblem(tc) {
+  const cmd = tc && tc.command;
+  if (typeof cmd !== "string" || !cmd.trim()) return "no command";
+  if (FORBIDDEN_WORD_RE.test(cmd)) return "names a forbidden tool";
+  const t = cmd.trim().split(/[ \t]+/);
+  for (const x of t)
+    if (x !== PATHS_TOKEN && !CMD_TOKEN_RE.test(x)) return "token " + JSON.stringify(x) + " is not plain (shell metacharacter, quote or glob)";
+  const n = testRunnerPrefix(t);
+  if (!n) return "test_cmd shape not allowed: it must start with an allowed test runner";
+  for (let i = n; i < t.length; i++) {
+    const x = t[i];
+    if (x.indexOf("://") >= 0) return "test_cmd shape not allowed: " + JSON.stringify(x) + " is a URL";
+    if (TEST_CMD_BAD_WORDS.indexOf(x) >= 0) return "test_cmd shape not allowed: " + JSON.stringify(x) + " subcommand";
+    if (x === "-m" && t[i + 1] !== "pytest") return "test_cmd shape not allowed: -m " + JSON.stringify(t[i + 1] || null);
+  }
+  const env = tc.env === undefined || tc.env === null ? {} : tc.env;
+  if (typeof env !== "object" || Array.isArray(env)) return "env must be an object";
+  for (const k of Object.keys(env)) {
+    if (TEST_ENV_ALLOWED.indexOf(k) < 0) return "test_cmd env " + k + " not allowed";
+    if (typeof env[k] !== "string" || !ENV_VALUE_RE.test(env[k]) || FORBIDDEN_WORD_RE.test(env[k]))
+      return "env " + k + " value is not plain";
+  }
+  if (tc.tools !== undefined && (!Array.isArray(tc.tools) || !tc.tools.every((x) => typeof x === "string" && CMD_TOKEN_RE.test(x))))
+    return "tools must be plain names";
+  return null;
+}
+
+// What Max confirms: every command, verbatim, with its source and who runs
+// it, and the test_cmd's env and tools.
+function commandsOf(testCmd, obligations) {
+  const out = [
+    {
+      kind: "test_cmd",
+      id: null,
+      command: testCmd.command,
+      env: testCmd.env || {},
+      tools: testCmd.tools || [],
+      rule_source: "test_cmd",
+      run_by: "roles",
+    },
+  ];
+  for (const o of obligations) {
+    if (typeof o.check_cmd === "string")
+      out.push({ kind: "check_cmd", id: o.id, command: o.check_cmd, rule_source: o.rule_source || null, run_by: "code-judge (optional)" });
+    else if (typeof o.check_cmd_rejected === "string")
+      out.push({
+        kind: "check_cmd",
+        id: o.id,
+        command: o.check_cmd_rejected,
+        rule_source: o.rule_source || null,
+        run_by: "nobody",
+        note: "refused: " + (o.check_rejected_reason || ""),
+      });
+  }
+  return out;
+}
+
+function demote(o, reason) {
+  const d = Object.assign({}, o);
+  delete d.check_cmd;
+  d.check_cmd_rejected = o.check_cmd;
+  d.check_rejected_reason = reason;
+  return d;
+}
+
+// The script gate on a code-judge approve: every obligation is met:true in
+// obligations_check. Returns routed code findings.
+function obligationFailures(obligations, check) {
+  const out = [];
+  const list = Array.isArray(check) ? check : [];
+  for (const o of obligations || []) {
+    const e = list.find((x) => x && x.id === o.id);
+    if (!e || e.met !== true)
+      out.push(
+        o.id + ": code-judge did not confirm the obligation met" + (e && e.evidence ? " (" + e.evidence + ")" : "") +
+          " -- " + String(o.instruction || ""),
+      );
+  }
+  return out.map((f) => ({ target: "code", criterion: null, finding: f }));
 }
 
 function shQuote(s) {
@@ -1286,15 +1547,21 @@ function pushPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "1. <branch> must differ from <default_branch>; `git -C <main_worktree> branch --show-current` must equal <branch>; `git -C <main_worktree> rev-parse HEAD` must equal <approved_sha>; `git -C <main_worktree> status --porcelain` must be empty. Any mismatch -> needs_human.\n" +
-    "2. `git -C <main_worktree> push -u origin <branch>`, retry up to 3 times with backoff 5 15 45 (seconds). Never --force, never --no-verify, never push another ref; never change remotes or credentials. " +
-    "Rejected as non-fast-forward (stderr has `non-fast-forward`, `fetch first` or `[rejected]`) -> needs_human at once, no retry. An auth, network or 5xx error -> retry: " +
+    "2. Push ONCE: `git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Classify the result as push_result:\n" +
+    "   Classify on git's own lines only: lines that start with `error:`, `fatal:` or ` ! [`. Never match words in other lines: those are the hook's own output, and the remote URL holds `https` too. In order:\n" +
+    "   - exit code 0 -> `ok`.\n" +
+    "   - a line starting with ` ! [rejected]` (git ends it with `(non-fast-forward)` or `(fetch first)`) -> `non_ff`: return status needs_human at once, no retry.\n" +
+    "   - a line starting with ` ! [remote rejected]` (a server-side hook or branch protection) -> `remote_rejected`: return status needs_human at once with that line, no retry.\n" +
+    "   - exit code 1, a line starting with `error: failed to push some refs`, no line starting with ` ! [` and no line starting with `fatal:` -> a local pre-push hook declined the push: `hook_rejected`. hook_tail = the last 60 lines of the temp file. No retry. Return status ok.\n" +
+    "   - anything else (typically exit code 128 with a `fatal:` line: auth, network, 5xx) -> `network`: retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
-    " Still failing after the 3 retries -> failed with the last error.\n" +
+    " Exit 0 now -> `ok`. Still failing after the 3 retries -> status failed with the last error.\n" +
+    "   Delete the temp file. Step 3 runs only when push_result is `ok`.\n" +
     "3. remote_head through the GitHub API, not git over the network: <owner>/<name> = <remote_slug>. <gh> = `gh-personal` when `command -v gh-personal` succeeds and `gh-personal api user --jq .login` equals <owner>; else `gh`. " +
     "remote_head = the output of `<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha` (the branch name goes in the path as is, slashes included), retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha") +
     " Only when neither gh nor gh-personal is installed: remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints, with the same backoff. remote_head must be the full 40-hex sha.\n" +
-    "Return {status, reason, remote_head}."
+    "Return {status, reason, push_result, hook_tail, remote_head}."
   );
 }
 
@@ -1369,6 +1636,7 @@ const state = {
   models: {},
   roleVersions: {},
   refreezeLog: [],
+  stopGate: null,
 };
 
 function gate(msg) {
@@ -1376,7 +1644,9 @@ function gate(msg) {
   log(msg);
 }
 
-function halt(status, msg) {
+// stopGate: the gate that ended the run (one of STOP_GATES), or omitted.
+function halt(status, msg, stopGate) {
+  state.stopGate = STOP_GATES.indexOf(stopGate) >= 0 ? stopGate : null;
   gate(msg);
   stop(status, msg);
 }
@@ -1386,6 +1656,7 @@ function reserve(n, what) {
     halt(
       "needs_human",
       "agent cap " + MAX_AGENTS + " reached: " + state.agents + " dispatched, " + n + " more needed for " + what,
+      "cap",
     );
 }
 
@@ -1432,39 +1703,51 @@ function collect(role, r) {
     state.findings.push({ role, findings: r.yadgar_findings });
 }
 
-async function callRole(role, label, inputs, phaseName, agentType) {
+// deferCheck: the caller runs its script gates (hash, fingerprint) first and
+// calls checkRole after them, so a gate violation is reported before drift.
+async function callRole(role, label, inputs, phaseName, agentType, deferCheck) {
   const opts = { schema: SCHEMAS[role], phase: phaseName };
   if (agentType) opts.agentType = agentType;
   reserve(1, label);
   state.agents++;
   const r = await roleAgent(role, label, rolePrompt(role, inputs), opts);
   if (r == null) halt("failed", "agent " + label + " returned no result");
+  if (deferCheck) return r;
   checkRole(role, r);
   collect(role, r);
   return r;
 }
 
-// Contract checks on every role result: the runner loaded the same version
-// and contract marker that preflight saw, and an ok result carries every
-// required key and a known verdict.
-function checkRole(role, r) {
+// Contract checks on a role result, as a message (null when clean): the
+// runner loaded the same version and contract marker that preflight saw, and
+// an ok result carries every required key and a known verdict.
+function contractProblem(role, r) {
   if (r.role_version !== state.roleVersions[role])
-    halt(
-      "needs_human",
-      "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded",
-    );
+    return "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded";
   const c = contractOf(r.role_contract);
-  if (c !== CONTRACT)
-    halt("needs_human", "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded");
-  if (r.status !== "ok") return r;
+  if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded";
+  if (r.status !== "ok") return null;
   for (const k of REQUIRED_ON_OK[role] || []) {
-    if (!(k in r)) halt("needs_human", "role " + role + " contract drift: missing " + k);
+    if (!(k in r)) return "role " + role + " contract drift: missing " + k;
     if (!typeMatches(SCHEMAS[role] && SCHEMAS[role].properties[k], r[k]))
-      halt("needs_human", "contract drift: " + role + " " + k + " type: got " + jsType(r[k]));
+      return "contract drift: " + role + " " + k + " type: got " + jsType(r[k]);
   }
-  if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0)
-    halt("needs_human", "contract drift: " + role + " verdict " + r.verdict);
-  return r;
+  if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0) return "contract drift: " + role + " verdict " + r.verdict;
+  return null;
+}
+
+// A role's own needs_human/failed reason wins over contract drift; drift is
+// reported only when the role says ok.
+function roleStatusText(role, r) {
+  return role + " returned " + r.status + ": " + (r.reason || "no reason");
+}
+
+function checkRole(role, r) {
+  const drift = contractProblem(role, r);
+  if (!drift) return r;
+  if (r.status === "failed" || r.status === "needs_human")
+    halt(r.status, roleStatusText(role, r) + " (also: " + drift + ")", "role");
+  halt("needs_human", drift, "contract");
 }
 
 function jsType(v) {
@@ -1483,7 +1766,7 @@ function typeMatches(prop, v) {
 
 function requireOk(who, r) {
   if (r.status === "ok") return r;
-  halt(r.status === "failed" ? "failed" : "needs_human", who + " returned " + r.status + ": " + (r.reason || "no reason"));
+  halt(r.status === "failed" ? "failed" : "needs_human", who + " returned " + r.status + ": " + (r.reason || "no reason"), "role");
 }
 
 async function hasher(label, worktree, mode, testFiles, phaseName) {
@@ -1505,7 +1788,8 @@ async function infra(label, prompt, phaseName, agentType) {
   const opts = { schema: INFRA_SCHEMA, phase: phaseName };
   if (agentType) opts.agentType = agentType;
   const r = await dispatch(label, prompt, opts);
-  return requireOk(label, r);
+  if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+  return r;
 }
 
 // Fingerprint the worktree around a judge run. Any change discards the
@@ -1513,13 +1797,16 @@ async function infra(label, prompt, phaseName, agentType) {
 async function judged(role, label, roundTag, inputs, worktree, phaseName, preFp) {
   const before =
     preFp || (await hasher("hasher:fp-pre:" + roundTag, worktree, "fingerprint", [], phaseName)).fingerprint;
-  const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT);
+  const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT, true);
   const after = (await hasher("hasher:fp-post:" + roundTag, worktree, "fingerprint", [], phaseName)).fingerprint;
   if (!sameFingerprint(before, after))
     halt(
       "needs_human",
       "judge mutated worktree: " + role + " (" + label + ") changed HEAD, status or diff; verdict discarded",
+      "fingerprint",
     );
+  checkRole(role, r);
+  collect(role, r);
   requireOk(role, r);
   return { r, fp: after };
 }
@@ -1536,6 +1823,7 @@ function finish(status, reason) {
     rounds: { tests: state.rounds.tests, code: state.rounds.code },
     agents: state.agents,
     gates_not_run: state.gatesNotRun,
+    stop_gate: status === "ok" || status === "awaiting_confirmation" ? null : state.stopGate,
     role_versions: state.roleVersions,
     refreeze_log: state.refreezeLog,
     gate_log: state.gateLog,
@@ -1576,12 +1864,12 @@ async function preflightStep() {
     const got = versions[role];
     const want = EXPECTED_VERSIONS[role];
     if (typeof got !== "number")
-      halt("needs_human", "role " + role + " version missing in preflight (frozen minimum " + want + ")");
-    if (got < want) halt("needs_human", "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back)");
+      halt("needs_human", "role " + role + " version missing in preflight (frozen minimum " + want + ")", "contract");
+    if (got < want) halt("needs_human", "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back)", "contract");
     if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");
     state.roleVersions[role] = got;
     const c = contractOf(contracts[role]);
-    if (c !== CONTRACT) halt("needs_human", "role " + role + " contract " + c + " != " + CONTRACT);
+    if (c !== CONTRACT) halt("needs_human", "role " + role + " contract " + c + " != " + CONTRACT, "contract");
   }
   const dispatchLines = pre.dispatch || {};
   for (const role of ROLES) {
@@ -1682,6 +1970,23 @@ function testableOf(criteria) {
 
 // scope-and-plan then plan-audit. ctx: {common, brief, date, baseRef,
 // remoteSlug, suffix}. Returns the plan facts; held-out examples stay behind.
+// A check_cmd outside the allowlist is never offered to any role: it is kept
+// as check_cmd_rejected (with the reason) and the code judge rules on the
+// obligation from the diff alone.
+function screenCheckCmds(obligations) {
+  return obligations.map((o) => {
+    if (typeof o.check_cmd !== "string" || !o.check_cmd.trim()) {
+      const d = Object.assign({}, o);
+      if (d.check_cmd !== undefined) delete d.check_cmd;
+      return d;
+    }
+    const pc = parseCheckCmd(o.check_cmd);
+    if (pc.ok) return o;
+    gate(o.id + " check_cmd refused (judge-only): " + pc.reason + ": " + JSON.stringify(o.check_cmd));
+    return demote(o, pc.reason);
+  });
+}
+
 async function planAndAudit(ctx) {
   const sfx = ctx.suffix || "";
   const plan = requireOk(
@@ -1702,9 +2007,14 @@ async function planAndAudit(ctx) {
   if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
     halt("failed", "scope-and-plan returned no plan_path/criteria");
   if (!Array.isArray(plan.plan_diff) || !plan.plan_diff.length || !plan.plan_diff.every((x) => typeof x === "string"))
-    halt("needs_human", "role scope-and-plan contract drift: plan_diff must be a non-empty array of strings");
+    halt("needs_human", "role scope-and-plan contract drift: plan_diff must be a non-empty array of strings", "contract");
   if (typeof plan.tldr !== "string" || !plan.tldr.trim())
-    halt("needs_human", "role scope-and-plan contract drift: tldr must be a non-empty string");
+    halt("needs_human", "role scope-and-plan contract drift: tldr must be a non-empty string", "contract");
+  const factsProblem = planFactsProblem(plan.test_cmd, plan.repo_obligations);
+  if (factsProblem) halt("needs_human", factsProblem.msg, factsProblem.gate);
+  const tcProblem = testCmdProblem(plan.test_cmd);
+  if (tcProblem) halt("needs_human", "test_cmd refused: " + tcProblem + ": " + JSON.stringify(plan.test_cmd.command), "commands");
+  const obligations = screenCheckCmds(plan.repo_obligations);
   const planPath = normPath(plan.plan_path);
   if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
     halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
@@ -1712,7 +2022,14 @@ async function planAndAudit(ctx) {
   const planFacts = {
     allowed_additions: plan.allowed_additions ? stripHeldOut(plan.allowed_additions) : null,
     est_diff_lines: typeof plan.est_diff_lines === "number" ? plan.est_diff_lines : null,
+    test_cmd: stripHeldOut(plan.test_cmd),
+    repo_obligations: stripHeldOut(obligations),
+    commands: commandsOf(plan.test_cmd, obligations),
   };
+  gate(
+    "plan: test_cmd " + JSON.stringify(plan.test_cmd.command) + ", " + obligations.length + " repo obligation(s)" +
+      (obligations.length ? " (" + obligations.map((o) => o.id + ":" + o.kind).join(", ") + ")" : ""),
+  );
   if (Array.isArray(plan[HELD_OUT_KEY]) || plan.criteria.some((c) => c && c[HELD_OUT_KEY]))
     gate("planner emitted held_out_examples: dropped, never returned or forwarded");
   gate("plan: " + planPath + ", " + criteria.length + " criteria, test files disjoint");
@@ -1752,6 +2069,7 @@ async function planAndAudit(ctx) {
     halt(
       audit.verdict ? "needs_human" : "failed",
       "plan-audit verdict " + (audit.verdict || "missing") + (first.length ? ": " + first.join("; ") : ""),
+      "role",
     );
   }
   gate("plan-audit: approve");
@@ -1836,6 +2154,7 @@ function awaiting(reason, p, tiny, full, extra) {
       plan_diff: p.planDiff,
       fleet_size: p.fleetSize,
       plan_path: p.planPath,
+      commands: p.planFacts.commands,
       plan_ref: tiny,
       cumulative: full.history,
     }, extra || {}),
@@ -2011,6 +2330,18 @@ async function buildMode(input, date) {
   if (lp) halt("needs_human", "ref file " + tiny.ref_path + ": " + lp);
   if (loaded.branch !== tiny.branch || cleanRepo(loaded.brief.repo) !== repo || refPathFor(loaded.task_id) !== tiny.ref_path)
     halt("needs_human", "ref file " + tiny.ref_path + " does not match plan_ref (branch, repo or task id)");
+  const pf = loaded.plan_facts;
+  if (!pf || typeof pf !== "object" || !("test_cmd" in pf) || !("repo_obligations" in pf) || !Array.isArray(pf.commands))
+    halt("needs_human", "plan_ref predates 2.0.3; re-run plan (" + tiny.ref_path + " has no plan_facts.test_cmd/repo_obligations/commands)");
+  const refFacts = planFactsProblem(pf.test_cmd, pf.repo_obligations);
+  if (refFacts) halt("needs_human", "ref file " + tiny.ref_path + ": " + refFacts.msg, refFacts.gate);
+  const refTc = testCmdProblem(pf.test_cmd);
+  if (refTc) halt("needs_human", "ref file " + tiny.ref_path + ": test_cmd refused: " + refTc, "commands");
+  for (const o of pf.repo_obligations) {
+    if (typeof o.check_cmd !== "string") continue;
+    const pc = parseCheckCmd(o.check_cmd);
+    if (!pc.ok) halt("needs_human", "ref file " + tiny.ref_path + ": " + o.id + " check_cmd refused: " + pc.reason, "commands");
+  }
   const ref = Object.assign({}, loaded, { plan_commit: tiny.plan_commit, ref_path: tiny.ref_path });
   const brief = cleanBrief(ref.brief);
   const names = { taskId: ref.task_id, slug: ref.slug };
@@ -2054,8 +2385,10 @@ async function buildMode(input, date) {
   const common = { project, worktree: mainWt, branch, default_branch: defaultBranch, scratch_dir: lay.scratch };
   const planCtx = { plan_path: ref.plan_path };
   const planFacts = {
-    allowed_additions: ref.plan_facts ? ref.plan_facts.allowed_additions : null,
-    est_diff_lines: ref.plan_facts && typeof ref.plan_facts.est_diff_lines === "number" ? ref.plan_facts.est_diff_lines : null,
+    allowed_additions: ref.plan_facts.allowed_additions,
+    est_diff_lines: typeof ref.plan_facts.est_diff_lines === "number" ? ref.plan_facts.est_diff_lines : null,
+    test_cmd: ref.plan_facts.test_cmd,
+    repo_obligations: ref.plan_facts.repo_obligations,
   };
   state.path = "full";
   const testable = testableOf(criteria);
@@ -2122,6 +2455,7 @@ async function buildMode(input, date) {
                 Object.assign({}, common, planCtx, {
                   criterion: writerCriterion(c),
                   test_files: c.test_files,
+                  test_cmd: planFacts.test_cmd,
                   worktree: wt.path,
                   branch: wt.branch,
                   routed_findings: p.findings,
@@ -2185,6 +2519,7 @@ async function buildMode(input, date) {
         halt(
           "needs_human",
           "test-judge raised a plan finding: " + planF.map((f) => (f.criterion || "-") + ": " + f.finding).join("; "),
+          "role",
         );
       if (tj.verdict === "approve") {
         gate("test-judge r" + n + ": approve");
@@ -2198,7 +2533,7 @@ async function buildMode(input, date) {
       if (!pending.length) halt("needs_human", "test-judge revise r" + n + " routed no finding to a known criterion");
       gate("test-judge r" + n + ": revise -> " + pending.map((p) => p.criterion.id).join(", "));
     }
-    halt("needs_human", "test rounds exhausted (" + MAX_TEST_ROUNDS + ") without test-judge approval");
+    halt("needs_human", "test rounds exhausted (" + MAX_TEST_ROUNDS + ") without test-judge approval", "cap");
   }
 
   // freeze
@@ -2220,12 +2555,13 @@ async function buildMode(input, date) {
     await purgeBytecode("infra:purge-bytecode:freeze-f" + freezes, mainWt, "Freeze");
     const h = await hasher("hasher:freeze:f" + freezes, mainWt, "hashes", hashedFiles, "Freeze");
     if (lastJudgeFp && !sameFingerprint(lastJudgeFp, h.fingerprint))
-      halt("needs_human", "worktree changed between test approval and freeze");
+      halt("needs_human", "worktree changed between test approval and freeze", "fingerprint");
     if (h.hashes.suspicious.length)
       halt(
         "needs_human",
         "suspicious paths in the worktree at freeze (':' or '#' in a name, or runner config in a skipped cache dir): " +
           h.hashes.suspicious.join(", "),
+        "hash",
       );
     if (refreeze && frozen) {
       const allowed = {};
@@ -2242,7 +2578,7 @@ async function buildMode(input, date) {
           const after = k in b ? b[k] : null;
           if (before === after) continue;
           const name = keyName(m, k);
-          if (m !== "files" || !allowed[k]) halt("needs_human", "re-freeze touched unrouted path " + name);
+          if (m !== "files" || !allowed[k]) halt("needs_human", "re-freeze touched unrouted path " + name, "hash");
           changed.push({ path: name, before, after });
         }
       }
@@ -2275,12 +2611,22 @@ async function buildMode(input, date) {
   let coderFindings = [];
   let approvedSha = null;
   let approval = null;
+  // the script gate that rejected the last code round, for the cap message
+  let lastRoundGate = null;
+  let pushes = 0;
   for (;;) {
     if (state.rounds.code >= MAX_CODE_ROUNDS)
-      halt("needs_human", "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval");
+      halt(
+        "needs_human",
+        "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval" +
+          (lastRoundGate ? "; last round rejected by the " + lastRoundGate + " gate" : ""),
+        "cap",
+      );
     state.rounds.code++;
     const m = state.rounds.code;
-    reserve(5, "code round " + m);
+    lastRoundGate = null;
+    // coder, purge, hasher, judge, fingerprint, push
+    reserve(6, "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
       frozen_tests: testFilesView(frozen, frozenFiles),
@@ -2291,22 +2637,37 @@ async function buildMode(input, date) {
       test_env: TEST_ENV,
       test_env_note: TEST_ENV_NOTE,
     });
-    const coder = requireOk(
+    // the role check runs after the hash check: a hash violation is reported
+    // even when the coder's output is also malformed or not ok
+    const coder = await callRole(
       "fleet-coder",
-      await callRole(
-        "fleet-coder",
-        "role:fleet-coder:r" + m,
-        Object.assign({}, codeInputs, { routed_findings: coderFindings }),
-        "Code",
-      ),
+      "role:fleet-coder:r" + m,
+      Object.assign({}, codeInputs, { routed_findings: coderFindings }),
+      "Code",
+      null,
+      true,
     );
-    for (const s of coder.commits || []) coderCommits.push(s);
+    if (Array.isArray(coder.commits)) for (const s of coder.commits) if (typeof s === "string") coderCommits.push(s);
     // purge before the check and the judge; the judge's "before" fingerprint
     // is the post-purge hasher fingerprint
     await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");
     const h = await hasher("hasher:post-coder:r" + m, mainWt, "hashes", hashedFiles, "Code");
     const viol = diffHashes(frozen, h.hashes);
+    const coderDrift = contractProblem("fleet-coder", coder);
+    if (viol.length && (coderDrift || coder.status !== "ok"))
+      halt(
+        "needs_human",
+        "code round " + m + ": hash violation on " + viol.join(", ") + " (frozen paths changed since " + freezeRef + ")" +
+          " (role output also: " + (coder.status !== "ok" ? roleStatusText("fleet-coder", coder) : coderDrift) + ")",
+        "hash",
+      );
+    if (!viol.length) {
+      checkRole("fleet-coder", coder);
+      requireOk("fleet-coder", coder);
+    }
+    collect("fleet-coder", coder);
     if (viol.length) {
+      lastRoundGate = "hash";
       coderFindings = [
         {
           target: "code",
@@ -2340,12 +2701,54 @@ async function buildMode(input, date) {
     const cj = judgedCode.r;
     const routed = cj.routed_findings || [];
     if (cj.verdict === "approve") {
-      approvedSha = judgedCode.fp.head;
+      const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check);
+      if (obFail.length) {
+        coderFindings = obFail;
+        lastRoundGate = "obligations";
+        gate(
+          "code round " + m + ": obligations gate: code-judge approve converted to fix_code (" +
+            obFail.map((f) => f.finding).join("; ") + ")",
+        );
+        continue;
+      }
+      const sha = judgedCode.fp.head;
+      gate("code-judge r" + m + ": approve at " + sha);
+      // push the approved sha; the repo's own pre-push hooks run here
+      phase("PR");
+      pushes++;
+      const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
+      const push = await infra(
+        pushLabel,
+        pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: sha, remote_slug: remoteSlug }),
+        "PR",
+      );
+      if (push.push_result === "hook_rejected") {
+        // a repo hook declined the push: the coder fixes it, the judge re-approves
+        const tail = String(push.hook_tail || "").trim();
+        coderFindings = [
+          {
+            target: "code",
+            criterion: null,
+            finding:
+              "push rejected by a repo hook (pre-push) at " + sha + "; satisfy it in production commits, never bypass it. Hook output (tail):\n" +
+              (tail || "(no output captured)"),
+          },
+        ];
+        lastRoundGate = "push hook";
+        gate("code round " + m + ": push of " + sha + " rejected by a repo hook -> coder (fix_code)");
+        phase("Code");
+        continue;
+      }
+      if (push.push_result !== "ok")
+        halt("failed", pushLabel + " returned push_result " + JSON.stringify(push.push_result || null) + " with status ok");
+      if (push.remote_head !== sha)
+        halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + sha);
+      gate("pushed " + branch + " at " + sha);
+      approvedSha = sha;
       approval = cj;
       state.gatesNotRun = gatesNotRun(cj.gates_not_run);
       if (state.gatesNotRun.length && String(cj.reason || "").indexOf(GATES_PREFIX) !== 0)
         gate("warning: code-judge approve reason does not start with '" + GATES_PREFIX + "' although gates did not run");
-      gate("code-judge r" + m + ": approve at " + approvedSha);
       break;
     }
     if (cj.verdict === "plan_wrong")
@@ -2377,16 +2780,7 @@ async function buildMode(input, date) {
     halt("failed", "code-judge returned no verdict");
   }
 
-  // push, then PR
-  phase("PR");
-  const push = await infra(
-    "infra:push",
-    pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug }),
-    "PR",
-  );
-  if (push.remote_head !== approvedSha)
-    halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha);
-  gate("pushed " + branch + " at " + approvedSha);
+  // PR at the pushed, approved sha
   const pr = requireOk(
     "fleet-pr-opener",
     await callRole(

@@ -76,13 +76,19 @@ the brief title.
 
 The full plan ref is a file, `.fleet/<task id>/plan_ref.json`, committed in the plan commit. It
 holds `branch`, `plan_path`, `plan_sha256`, `criteria`, `brief`, `task_id`, `slug`, `tldr`,
-`plan_facts` (scope fence and estimate), `history` (cumulative runs, re-plans and agents) and
+`plan_facts` (scope fence, estimate, `test_cmd` and `repo_obligations`), `history` (cumulative
+runs, re-plans and agents) and
 `seal`, the sha256 of the canonical JSON of the rest. It holds no held-out example. Commit-plan
 reads the file back from the commit; the script checks that it parses to the sealed ref (a
 formatter hook may change the bytes, not the content).
 
 The caller gets only a tiny `plan_ref`: `{branch, plan_commit, ref_path, ref_sha256, repo}`, where
 `ref_sha256` is the sha256 of the committed file bytes. The skill passes it back unchanged.
+
+Since 2.0.3, `plan_facts` is
+`{allowed_additions, est_diff_lines, test_cmd, repo_obligations, commands}`, covered by the seal.
+Build mode refuses a ref without `test_cmd`, `repo_obligations` and `commands` (made by 2.0.2 or
+earlier) with `needs_human` "plan_ref predates 2.0.3; re-run plan".
 
 ### Build mode
 
@@ -100,10 +106,11 @@ args: `{mode: "build", plan_ref, date, project?}`.
 | 8    | integrate (infra)  | merges the writer branches into the fleet branch                        |
 | 9    | test judge         | `revise` routes findings to the named writers only; 3 rounds max        |
 | 10   | hasher (freeze)    | sha256 of test files and runner config; `freeze_ref` = HEAD             |
-| 11   | coder              | status                                                                  |
+| 11   | coder              | status (checked after the hash check)                                   |
 | 12   | hasher             | any changed, new or removed hash key -> coder round rejected            |
 | 13   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan |
-| 14   | push (infra)       | pushes `approved_sha`; origin must then be at that sha                  |
+| 13a  | -                  | `approve` with an unmet obligation -> `fix_code` (counts as a round)    |
+| 14   | push (infra)       | pushes the approved sha; a hook rejection -> coder (`fix_code`)         |
 | 15   | pr-opener          | draft PR at `approved_sha` (HEAD after the approving judge run)         |
 | 16   | write-back         | ledger section and one marked comment per external source               |
 
@@ -223,6 +230,86 @@ taken after the purge. The coder and the code judge get
 the frozen tests. The code judge also gets `hash_recheck`
 (`{"<map>/<key>": {frozen, current, match}}`) for its report; the script's own comparison decides.
 
+### Repo obligations and test_cmd
+
+The planner scans the repo's push and CI gates: `.pre-commit-config.yaml` (every stage, `pre-push`
+included, and the entry script of each local hook), the PR workflows, `Makefile`,
+`AGENTS.md`/`CONTRIBUTING.md` rules and version-bump checkers. Each rule the change must satisfy
+becomes one entry of `repo_obligations`:
+`{id, kind: version_bump|changelog|docs|generated|other, rule_source: "<file>:<line or hook id>", files, instruction, check_cmd?}`.
+`[]` means none apply. The planner also returns
+`test_cmd: {command, paths_placeholder: "<paths>", env, tools}`, the exact command that runs the
+repo's tests (for example `uv run --extra test pytest <paths> -n0`), and verifies it on one existing
+test in a throwaway worktree. Plan-audit re-scans the gates independently (a missing obligation is
+a `plan_defect`) and runs `test_cmd` itself.
+
+The script checks the shape: `test_cmd.command` is a non-empty string; each obligation has a
+unique `id`, a known `kind` and an `instruction`. Plan-audit, the coder and the code judge get
+`repo_obligations` and `test_cmd`; the writers and the test judge get `test_cmd`. Every test run
+uses `test_cmd` with `test_cmd.env` first and `test_env` on top. The coder satisfies every
+obligation in `feat|fix(...)` commits and reports `obligations_done`.
+
+**The workflow script runs no planner-supplied command.** Obligations are enforced three ways:
+
+1. **The repo's own hooks.** Pre-commit hooks fire on the coder's commits. Pre-push hooks fire on
+   the workflow's push (`infra:push`), which never bypasses them.
+2. **The code judge.** It returns `obligations_check: [{id, met, evidence}]`, judged from the diff;
+   it may run an obligation's `check_cmd` at its own judgement. On `approve`, the script requires
+   every obligation to be `met: true`; otherwise it converts the verdict to `fix_code`, routes the
+   unmet obligations to the coder and logs "obligations gate". That round counts toward the 3 code
+   rounds.
+3. **Push hook rejection goes back to the coder.** The push step classifies its result as
+   `push_result: ok | hook_rejected | network | non_ff | remote_rejected`, on git's own lines only
+   (lines that start with `error:`, `fatal:` or ` ! [`), never on the hook's output or the remote
+   URL. Checked against real git output: a failing local pre-push hook gives exit code 1 and only
+   `error: failed to push some refs`; a non-fast-forward gives ` ! [rejected] ... (fetch first)` or
+   `(non-fast-forward)`; a network error gives exit code 128 and a `fatal:` line. `hook_rejected`
+   is not a stop: the script routes the hook output tail (`hook_tail`) to the coder as a `fix_code`
+   finding. The round counts as a code round, and the code judge must approve again before the next
+   push (`infra:push:p<n>`). `non_ff` and `remote_rejected` (` ! [remote rejected]`: a server hook
+   or branch protection) stop with `needs_human`; `network` is retried 3 times with backoff and
+   then fails.
+
+#### Command safety
+
+`test_cmd` and every `check_cmd` come from the planner, and the planner reads untrusted ticket and
+issue text. So:
+
+1. **Allowlist (script code, plan mode and again in build mode).** Every token must be plain:
+   letters, digits and `_ . / : = @ % + , -`. No quote, glob, `; & | $ ( ) < >`, backquote or
+   newline. `test_cmd.command` may also hold the `<paths>` token, and must start with a test
+   runner: `pytest`, `python[3] -m pytest`, `uv run [--frozen] [--no-sync] [--extra <x>]... pytest`,
+   `npm test`, `npm run test[:<name>]`, `npx jest`, `npx vitest`, `pnpm test`, `yarn test`,
+   `cargo test`, `go test` or `make test`. The remaining tokens are flags and paths only: no URL
+   (`://`), no `install`, `add` or `pip`, no `-m` other than `-m pytest` ("test_cmd shape not
+   allowed"). A `check_cmd` must be exactly one of:
+
+   - `pre-commit run <hook-id> [--all-files] [--hook-stage <stage>] [--from-ref <ref> --to-ref <ref>]`
+   - `make <target>`
+   - `[uv run [--extra <x>]] python[3] <dir>/<path.py> [plain args]`
+   - `<dir>/<path/to/script> [plain args]`
+
+   where `<dir>` is `scripts`, `bin`, `tools`, `hack` or `ci`; the path has no `.venv`, `venv`,
+   `node_modules`, `.git`, `__pycache__` or `.tox` segment; and its file name is not an
+   interpreter or package manager (`python*`, `pip*`, `node`, `npm`, `npx`, `sh`, `bash`, `zsh`,
+   `uv`, `make`).
+
+2. **Forbidden words.** The words terraform, tofu, tfp, digger and atlantis, anywhere in a command
+   and in any case, refuse it.
+3. **Env allowlist.** `test_cmd.env` may hold only `DJANGO_SETTINGS_MODULE`, `PYTHONUNBUFFERED`,
+   `TZ`, `LANG`, `LC_ALL`, `NO_COLOR`, `FORCE_COLOR` and `CI`, with plain values. Any other name
+   stops the plan ("test_cmd env <NAME> not allowed").
+4. **Human approval.** Plan mode returns `commands`: the `test_cmd` (with its `env` and `tools`)
+   and every `check_cmd`, verbatim, each with `rule_source` and `run_by` (`roles`,
+   `code-judge (optional)`, or `nobody` for a refused one, with its `note`). The skill shows them
+   verbatim in the confirmation question. They live in the sealed `plan_facts`, so roles run only
+   commands Max saw.
+
+A `test_cmd` that fails any check stops the run with `needs_human` (`stop_gate: commands`). A
+`check_cmd` that fails is never offered to a role: the obligation keeps `check_cmd_rejected` and
+`check_rejected_reason`, the run logs `<id> check_cmd refused (judge-only)`, and the code judge
+rules on it from the diff.
+
 ### Role contract
 
 The script pins the role contract, not the prose:
@@ -237,6 +324,12 @@ The script pins the role contract, not the prose:
 - `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are
   checked against the frozen enums. A missing key or an unknown verdict is contract drift and stops
   the run.
+- Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
+  reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
+  neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
+  check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
+  `commands`, `contract`, `role` or `cap` (`null` when the run did not stop at one of them). A cap
+  stop names the gate that rejected the last round (hash, obligations gate or push hook).
 
 ### Models
 
@@ -270,6 +363,7 @@ too. It does not catch a change that a judge makes and reverts within its own ru
   The plan-file checks (hash at `plan_commit` and at HEAD, no commit touching it) do not depend on
   that.
 - The pr-opener role pushes the branch too. The script pushes first, so the role's push is a no-op.
+- Each push attempt follows an approve, so a hook rejection costs a full coder and judge round.
 - The plan link in comments assumes a GitHub origin (`https://github.com/<owner>/<repo>/blob/...`).
 - Interpreter startup hooks inside an in-worktree virtualenv are not detected. The walk skips
   `.venv`, `venv`, `.tox` and `.nox`, because an editable install writes a `.pth` file there and
@@ -286,11 +380,18 @@ too. It does not catch a change that a judge makes and reverts within its own ru
 - A `.pyc` outside `__pycache__` that git does not ignore shows in `git status`. Purging it between
   the test judge and the freeze trips "worktree changed between test approval and freeze".
 - Not yet executed in the real Workflow runtime; the scenario suite stubs the runtime.
-- The hasher program travels in the hasher prompt and the agent runs it verbatim. A transcription
-  error would show up as a hash mismatch (fail-closed), not as a silent pass.
-- Whether workflow agents honour a worktree-local `.claude/settings.local.json` is not verified.
-  The workspace and prepare steps write one (Edit/Write allowed for that worktree) as a
-  precaution; it is excluded from git status.
+- Command safety covers the commands the plan names, not the code they run. The test writers, the
+  test judge, the coder and the code judge run `test_cmd` (and the coder or code judge an approved
+  `check_cmd`) with the agent's normal environment, credentials included: running tests executes
+  repo code, and that is inherent. What 2.0.3 adds is that the commands themselves are allowlisted,
+  carry only allowlisted env names, and are approved by Max verbatim. The workflow script itself
+  runs none of them.
+- An approved `make` target, hook or script can still do anything its code does, and the coder can
+  change that code. The allowlist only fixes the command line. That a `check_cmd` script is a
+  tracked file is not checked by the script (the workflow runs no infra step on it); the code
+  judge decides whether to run it.
+- Obligations without a pre-push or pre-commit hook rest on the code judge's `obligations_check`
+  alone. CI-only rules are caught by CI after the PR opens, not by the fleet.
 
 ## Result
 
@@ -308,7 +409,8 @@ Build mode, `status: "ok"`:
   "agents": 14,
   "cumulative": { "runs": 2, "replans": 0, "agents": 20 },
   "gates_not_run": [{ "gate": "held_out", "reason": "..." }],
-  "role_versions": { "fleet-coder": 7 },
+  "stop_gate": null,
+  "role_versions": { "fleet-coder": 10 },
   "refreeze_log": [],
   "write_back": {
     "ledger": [{ "ref": "42", "status": "written" }],
@@ -323,7 +425,7 @@ Build mode, `status: "ok"`:
 ```
 
 `status: "awaiting_confirmation"` (plan mode, or build mode after `plan_wrong`) adds `tldr`,
-`plan_diff`, `fleet_size`, `plan_path`, `plan_ref` and `cumulative`; after `plan_wrong` also
+`plan_diff`, `fleet_size`, `plan_path`, `commands`, `plan_ref` and `cumulative`; after `plan_wrong` also
 `proposed_plan_change`, `plan_findings`, `superseded_ref` and `superseded_head`.
 
 ## Tests

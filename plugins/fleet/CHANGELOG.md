@@ -1,5 +1,65 @@
 # Changelog
 
+## [2.0.3] - 2026-11-04
+
+### Added
+
+- Repo obligations: the planner scans the repo's push and CI gates (pre-commit and pre-push hooks,
+  PR workflows, Makefile, AGENTS/CONTRIBUTING rules, version-bump checkers) and returns
+  `repo_obligations: [{id, kind, rule_source, files, instruction, check_cmd?}]`, `[]` when none.
+  `kind` is one of `version_bump`, `changelog`, `docs`, `generated`, `other`. The coder satisfies
+  each one in its commits and reports `obligations_done`; the code judge reports
+  `obligations_check: [{id, met, evidence}]`. `check_cmd` is informational: the code judge may run
+  it; the workflow script never does.
+- `test_cmd: {command, paths_placeholder, env, tools}`: the exact command that runs the repo's
+  tests, verified by the planner and the auditor on one existing test. Writers, the test judge, the
+  coder and the code judge run every test with it (`test_cmd.env`, then `test_env`).
+- Obligations gate: a code-judge `approve` is converted to `fix_code` with routed findings when an
+  obligation is not `met: true` in `obligations_check`; that round counts as a code round.
+- Push hook rejection: the push step classifies `push_result` as `ok`, `hook_rejected`, `network`,
+  `non_ff` or `remote_rejected`, on git's own `error:`/`fatal:`/` ! [` lines only (never on the
+  hook's output or the URL). A push a repo pre-push hook rejects goes back to the coder as
+  `fix_code` with the hook output tail; it counts as a code round, and the code judge must approve
+  again before the next push. `non_ff` and `remote_rejected` stop with `needs_human`; `network` is
+  retried and then fails.
+- Command safety: `test_cmd` and `check_cmd` come from a planner that reads untrusted ticket text,
+  so they pass an allowlist in script code (plain tokens only, no quote, glob, `; & | $ ( ) < >`,
+  backquote or newline). `test_cmd` must start with a test runner (`pytest`,
+  `python[3] -m pytest`, `uv run [...] pytest`, `npm test`, `npm run test[:x]`, `npx jest|vitest`,
+  `pnpm test`, `yarn test`, `cargo test`, `go test`, `make test`) followed by flags and paths only
+  (no URL, no `install`/`add`/`pip`, no `-m` but `-m pytest`). A `check_cmd` must be
+  `pre-commit run <hook> [...]`, `make <target>`, `[uv run [--extra x]] python[3] <dir>/<x.py>
+[args]` or `<dir>/<script> [args]` with `<dir>` one of `scripts`, `bin`, `tools`, `hack`, `ci`,
+  no venv/dependency/VCS segment and no interpreter or package-manager file name. The
+  words terraform, tofu, tfp, digger and atlantis refuse a command. `test_cmd.env` may hold only
+  `DJANGO_SETTINGS_MODULE`, `PYTHONUNBUFFERED`, `TZ`, `LANG`, `LC_ALL`, `NO_COLOR`, `FORCE_COLOR`
+  and `CI`. A refused `test_cmd` stops the plan; a refused `check_cmd` becomes
+  `check_cmd_rejected` and is never offered to a role. Plan mode returns `commands`, every command
+  verbatim with its env, tools, `rule_source` and `run_by`, sealed in `plan_facts`; the skill shows
+  them verbatim in the confirmation question. Build mode re-checks the sealed commands.
+- `stop_gate` in the result: `hash`, `fingerprint`, `commands`, `contract`, `role` or `cap` for the
+  gate that stopped the run; `null` on `ok`, `awaiting_confirmation` and other stops.
+
+### Changed
+
+- The sealed plan ref gains `plan_facts.test_cmd`, `plan_facts.repo_obligations` and
+  `plan_facts.commands`. Build mode refuses a ref without them with `needs_human`
+  "plan_ref predates 2.0.3; re-run plan".
+- `REQUIRED_ON_OK`: scope-and-plan adds `repo_obligations` (array) and `test_cmd` (object with a
+  non-empty string `command`); the coder adds `obligations_done`; the code judge adds
+  `obligations_check` (arrays).
+- The push runs inside the code loop, right after an approve, so a hook rejection can route back.
+  Its first attempt keeps the label `infra:push`; later ones are `infra:push:p<n>`.
+- Honest stop reason. A script gate violation (hash, fingerprint) is reported first, then the
+  role's own `needs_human`/`failed` reason, and contract drift only when neither applies. The
+  coder's hash check now runs before its contract check: a coder output that is malformed or not
+  ok AND changed a frozen hash stops with the hash violation. A judge that mutates the worktree
+  reports the fingerprint even when its output also drifts. A cap stop names the gate that rejected
+  the last round.
+- Minimum role versions: scope-and-plan 18, plan-audit 11, fleet-test-writer 7, fleet-test-judge 7,
+  fleet-coder 11, fleet-code-judge 10. The contract marker stays `fleet-v2`; the new keys are
+  additive.
+
 ## [2.0.2] - 2026-11-04
 
 ### Fixed
