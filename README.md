@@ -1,6 +1,6 @@
 # ccpm — Claude Code Plugin Marketplace
 
-![plugins](https://img.shields.io/badge/plugins-7-blue)
+![plugins](https://img.shields.io/badge/plugins-8-blue)
 
 Personal plugin marketplace for [Claude Code](https://claude.ai/code).
 
@@ -156,6 +156,17 @@ cp ~/.claude/skills/tf-naming-check/tf-naming-check/tf-naming-config.md ./tf-nam
 ```
 
 Then edit `tf-naming-config.md` to add, remove, or adjust rules. The project-level file takes precedence automatically.
+
+### fleet (v1.0.0)
+
+Role fleet for one task, run as a Claude Code workflow.
+
+- `/build-task <ledger id | plan path>` — plan, plan audit, one test writer per acceptance criterion, test judge, hash freeze, coder, code judge, draft PR
+- Role prompts load from yadgar at run time; the workflow script holds only role names, inputs, schemas and gates
+- Gates in script code: disjoint test files, frozen-test and runner-config hashes, judge worktree fingerprints, round caps, 60-agent cap
+- PRs stay draft; a human merges
+
+**Requirements:** Workflow tool, yadgar MCP server with the seven fleet role prompts, `gh`, `python3` >= 3.11.
 
 ## Installation
 
