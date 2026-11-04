@@ -69,12 +69,11 @@ runs `/build-task` explicitly, always use the fleet.
      `fleet_size.est_rounds` fix rounds;
    - `plan_path` and the branch (`plan_ref.branch`). The plan is committed locally only.
    - `commands`: EVERY entry, its `command` VERBATIM in a code span (never paraphrased, shortened
-     or summarised), with its `env` (every name and value, verbatim; `{}` when empty), its `tools`
-     (test_cmd), its `exec` (the exact argv a workflow check runs) and `check_files` (frozen for
-     it), its `rule_source` and `run_by` (`roles` = the test command the agents run, `workflow` =
-     a check the workflow runs sandboxed with no credentials and no network, `nobody` =
-     judge-only, with its `note`). These are the only commands the build runs; approving the plan
-     approves them. Say so in the question.
+     or summarised), with its `env` (every name and value, verbatim; `{}` when empty) and `tools`
+     (test_cmd), its `rule_source` and `run_by` (`roles` = the test command the agents run,
+     `code-judge (optional)` = a check the code judge may run, `nobody` = refused, with its
+     `note`). These are the only commands the roles run; approving the plan approves them. Say so
+     in the question.
 
    Then ask with AskUserQuestion: "Build this plan and run the commands listed above?" with the
    options "Build" and "Stop". On "Stop"

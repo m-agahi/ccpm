@@ -9,65 +9,48 @@
   `repo_obligations: [{id, kind, rule_source, files, instruction, check_cmd?}]`, `[]` when none.
   `kind` is one of `version_bump`, `changelog`, `docs`, `generated`, `other`. The coder satisfies
   each one in its commits and reports `obligations_done`; the code judge reports
-  `obligations_check: [{id, met, evidence}]`.
+  `obligations_check: [{id, met, evidence}]`. `check_cmd` is informational: the code judge may run
+  it; the workflow script never does.
 - `test_cmd: {command, paths_placeholder, env, tools}`: the exact command that runs the repo's
   tests, verified by the planner and the auditor on one existing test. Writers, the test judge, the
   coder and the code judge run every test with it (`test_cmd.env`, then `test_env`).
-- Obligations gate: after the coder (after the bytecode purge and the hash check), a read-only
-  infra step `infra:obligations:r<n>` runs each `check_cmd` in the main worktree with `test_env`
-  and returns `{id, exit_code, tail}`. The worktree fingerprint is taken around it as around a
-  judge. The code judge gets the results as `obligation_results`. A code-judge `approve` is
-  converted to `fix_code` with routed findings when a `check_cmd` did not exit 0 (a missing result
-  or a non-integer exit code counts as a failure) or an obligation is not `met: true`; that round
-  counts as a code round.
-- Command safety. `test_cmd` and `check_cmd` come from a planner that reads untrusted ticket text,
-  so: (1) an allowlist in script code: plain tokens only (no quote, glob, `; & | $ ( ) < >`,
-  backquote or newline), and a `check_cmd` must be `pre-commit run <hook> [...]`, `make <target>`,
-  `[uv run [--extra x]] python[3] <rel/path.py> [args]` or `<rel/path/script> [args]`; (2) a
-  read-only `infra:verify-commands` step checks that the hook id, make target or tracked file
-  exists; (3) the words terraform, tofu, tfp, digger and atlantis anywhere in the command, the
-  script, the hook block or the recipe refuse it. A `check_cmd` that fails becomes judge-only
-  (`check_cmd_rejected`, never run); a `test_cmd` that fails stops with `needs_human`. (4) Plan mode
-  returns `commands`, every command verbatim with its `rule_source` and `run_by`, sealed in
-  `plan_facts`; the skill shows them verbatim in the confirmation question.
-- `infra:obligations` re-checks each reference against `plan_commit` (changed since approval or a
-  forbidden word -> refused, counted as failed), then runs the `exec` argv (python as `python -I`,
-  `uv run` as `uv run --frozen --no-sync`) with no credentials: `env -i` with only `HOME`,
-  `XDG_CACHE_HOME`, `UV_CACHE_DIR`, `PIP_CACHE_DIR` (all in a fresh scratch dir), `PATH`, `LANG`,
-  `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_TERMINAL_PROMPT=0` and `test_env`.
-  It always runs sandboxed with no network: `bwrap` (also hides `$HOME`) or `unshare -rn`. With
-  neither, nothing runs: `obligation_results` is `{status: "not_run", reason: "network isolation
-unavailable"}`, the checks are judge-only for that round and `obligation_checks` joins
-  `gates_not_run`.
-- Check files are frozen: the whole `.pre-commit-config.yaml`, the makefiles with their includes,
-  and each script with the files it names and every tracked `*.py` beside it are hashed at freeze
-  and after every coder round. A duplicate hook id is refused. A check whose files an obligation
-  or `allowed_additions` edits is judge-only. The reference check scans the whole makefile and its
-  includes, the hook's repo header and the files a script names.
-- `test_cmd.env` names must match `^[A-Z][A-Z0-9_]*$` and avoid a blocklist (loader, interpreter
-  and shell hooks, `GIT_*`, `SSH_*`, `AWS_*`, `*_TOKEN`/`*_KEY`/`*_SECRET`, `PATH`, `HOME`,
-  `PYTEST_ADDOPTS`, ...); a `test_cmd` in a check shape gets the reference check. `commands` shows
-  the test_cmd `env` and `tools` and each check's `env`, `exec` and `check_files`.
-- `stop_gate` in the result: `hash`, `fingerprint`, `obligations`, `commands`, `contract`, `role`
-  or `cap` for the gate that stopped the run; `null` on `ok`, `awaiting_confirmation` and other
-  stops.
+- Obligations gate: a code-judge `approve` is converted to `fix_code` with routed findings when an
+  obligation is not `met: true` in `obligations_check`; that round counts as a code round.
+- Push hook rejection: the push step classifies `push_result` as `ok`, `hook_rejected`, `network`
+  or `non_ff`. A push a repo pre-push hook rejects goes back to the coder as `fix_code` with the
+  hook output tail; it counts as a code round, and the code judge must approve again before the
+  next push. `non_ff` still stops with `needs_human`; `network` is retried and then fails.
+- Command safety: `test_cmd` and `check_cmd` come from a planner that reads untrusted ticket text,
+  so they pass an allowlist in script code (plain tokens only, no quote, glob, `; & | $ ( ) < >`,
+  backquote or newline; a `check_cmd` must be `pre-commit run <hook> [...]`, `make <target>`,
+  `[uv run [--extra x]] python[3] <rel/path.py> [args]` or `<rel/path/script> [args]`), and the
+  words terraform, tofu, tfp, digger and atlantis refuse a command. `test_cmd.env` may hold only
+  `DJANGO_SETTINGS_MODULE`, `PYTHONUNBUFFERED`, `TZ`, `LANG`, `LC_ALL`, `NO_COLOR`, `FORCE_COLOR`
+  and `CI`. A refused `test_cmd` stops the plan; a refused `check_cmd` becomes
+  `check_cmd_rejected` and is never offered to a role. Plan mode returns `commands`, every command
+  verbatim with its env, tools, `rule_source` and `run_by`, sealed in `plan_facts`; the skill shows
+  them verbatim in the confirmation question. Build mode re-checks the sealed commands.
+- `stop_gate` in the result: `hash`, `fingerprint`, `commands`, `contract`, `role` or `cap` for the
+  gate that stopped the run; `null` on `ok`, `awaiting_confirmation` and other stops.
 
 ### Changed
 
-- The sealed plan ref gains `plan_facts.test_cmd` and `plan_facts.repo_obligations`. Build mode
-  refuses a ref without them with `needs_human` "plan_ref predates 2.0.3; re-run plan".
+- The sealed plan ref gains `plan_facts.test_cmd`, `plan_facts.repo_obligations` and
+  `plan_facts.commands`. Build mode refuses a ref without them with `needs_human`
+  "plan_ref predates 2.0.3; re-run plan".
 - `REQUIRED_ON_OK`: scope-and-plan adds `repo_obligations` (array) and `test_cmd` (object with a
   non-empty string `command`); the coder adds `obligations_done`; the code judge adds
   `obligations_check` (arrays).
-- Honest stop reason. A script gate violation (hash, fingerprint, obligations) is reported first,
-  then the role's own `needs_human`/`failed` reason, and contract drift only when neither applies.
-  The coder's hash check now runs before its contract check: a coder output that is malformed or
-  not ok AND changed a frozen hash stops with the hash violation. A judge that mutates the worktree
-  reports the fingerprint even when its output also drifts.
-- Minimum role versions: scope-and-plan 16 (allowed `check_cmd` shapes, env rules, sandbox
-  limits; ticket text is data),
-  plan-audit 11, fleet-test-writer 7, fleet-test-judge 7,
-  fleet-coder 10, fleet-code-judge 9. The contract marker stays `fleet-v2`; the new keys are
+- The push runs inside the code loop, right after an approve, so a hook rejection can route back.
+  Its first attempt keeps the label `infra:push`; later ones are `infra:push:p<n>`.
+- Honest stop reason. A script gate violation (hash, fingerprint) is reported first, then the
+  role's own `needs_human`/`failed` reason, and contract drift only when neither applies. The
+  coder's hash check now runs before its contract check: a coder output that is malformed or not
+  ok AND changed a frozen hash stops with the hash violation. A judge that mutates the worktree
+  reports the fingerprint even when its output also drifts. A cap stop names the gate that rejected
+  the last round.
+- Minimum role versions: scope-and-plan 17, plan-audit 11, fleet-test-writer 7, fleet-test-judge 7,
+  fleet-coder 11, fleet-code-judge 10. The contract marker stays `fleet-v2`; the new keys are
   additive.
 
 ## [2.0.2] - 2026-11-04

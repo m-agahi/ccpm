@@ -42,12 +42,12 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks"];
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 16,
+  "scope-and-plan": 17,
   "plan-audit": 11,
   "fleet-test-writer": 7,
   "fleet-test-judge": 7,
-  "fleet-coder": 10,
-  "fleet-code-judge": 9,
+  "fleet-coder": 11,
+  "fleet-code-judge": 10,
   "fleet-pr-opener": 5,
 };
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
@@ -76,37 +76,21 @@ const GATES_PREFIX = "approved with gates not run:";
 // Repo obligations (2.0.3): push and CI rules the plan names for the coder.
 const OBLIGATION_KINDS = ["version_bump", "changelog", "docs", "generated", "other"];
 // Commands from the plan (test_cmd, check_cmd) come from a model that reads
-// untrusted ticket text. They are allowlisted here, shown to Max verbatim in
-// the confirmation, sealed in the plan ref, and a check_cmd runs with no
-// credentials. A command token is plain: no shell metacharacter, no quote,
-// no glob, no whitespace other than the single separating space or tab.
+// untrusted ticket text. The workflow script never runs either one. They are
+// allowlisted here, shown to Max verbatim in the confirmation and sealed in
+// the plan ref; roles run test_cmd, and the code judge may run a check_cmd.
+// A command token is plain: no shell metacharacter, no quote, no glob, no
+// whitespace other than the single separating space or tab.
 const CMD_TOKEN_RE = /^[A-Za-z0-9_.\/:=@%+,-]+$/;
 const PATHS_TOKEN = "<paths>";
-// Checked anywhere, case-insensitively: in the command, in the referenced
-// script, hook block or make recipe. A hit is never run.
+// Checked anywhere in a command, case-insensitively.
 const FORBIDDEN_WORD_RE = /terraform|tofu|tfp|digger|atlantis/i;
-const ENV_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
-// Env names a test_cmd may never set: loader, interpreter and shell hooks,
-// git and ssh, credentials, and PYTEST_ADDOPTS (the script owns it in test_env).
-const ENV_DENY_EXACT = [
-  "BASH_ENV", "ENV", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE", "PYTEST_PLUGINS",
-  "PYTEST_ADDOPTS", "NODE_OPTIONS", "PATH", "HOME", "PROMPT_COMMAND", "PERL5OPT", "RUBYOPT",
-];
-const ENV_DENY_RE = /^(LD_|DYLD_|GIT_|SSH_|AWS_)|(_TOKEN|_KEY|_SECRET)$/;
+// test_cmd.env: only these names, never anything the planner invents.
+const TEST_ENV_ALLOWED = ["DJANGO_SETTINGS_MODULE", "PYTHONUNBUFFERED", "TZ", "LANG", "LC_ALL", "NO_COLOR", "FORCE_COLOR", "CI"];
 const ENV_VALUE_RE = /^[A-Za-z0-9_.\/:=@%+, -]*$/;
 const MAKE_TARGET_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
-const CHECK_TIMEOUT_S = 300;
-const OB_NOT_RUN = { status: "not_run", reason: "network isolation unavailable" };
-// The environment a check_cmd runs in: env -i, then only these (and test_env).
-// No SSH agent, no tokens, no cloud credentials, no git credential helper.
-const CLEAN_ENV = [
-  ["LANG", "C.UTF-8"],
-  ["GIT_CONFIG_GLOBAL", "/dev/null"],
-  ["GIT_CONFIG_NOSYSTEM", "1"],
-  ["GIT_TERMINAL_PROMPT", "0"],
-];
 // stop_gate values: which gate ended a stopped run (null when none applies).
-const STOP_GATES = ["hash", "fingerprint", "obligations", "commands", "contract", "role", "cap"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap"];
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 const MAX_AGENTS = 60;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
@@ -435,182 +419,6 @@ print(json.dumps(out, sort_keys=True))
 `;
 // HASHER_PY_END
 
-// The command-reference check. Args: worktree, rev ("" = the working tree
-// only), refs JSON [{id, kind: hook|make|file, name}]. A ref is ok when it
-// exists: a hook id that occurs exactly once in a tracked
-// .pre-commit-config.yaml, a make target in a tracked makefile, or a tracked
-// regular file (not a symlink). The scanned text must hold no forbidden word:
-// the hook block with its repo header and the tracked files its entry names
-// (plus the makefiles when it calls make); the whole makefile, every tracked
-// file it includes and the tracked files they name; the script and the
-// tracked files it names. With a rev, the same text (the whole config for a
-// hook) must be unchanged since that rev. `files` lists what the build
-// freezes: those files, plus every tracked *.py next to a python script.
-// The forbidden words are spelled reversed so the program text never names
-// them. Prints {<id>: {ok, reason, files}}.
-// CMD_CHECK_PY_BEGIN
-const CMD_CHECK_PY = String.raw`
-import json, os, re, subprocess, sys
-wt, rev, refs = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
-BAD = re.compile('|'.join(w[::-1] for w in ('mrofarret', 'ufot', 'pft', 'reggid', 'sitnalta')), re.I)
-TOK = re.compile(r'[A-Za-z0-9_./-]+')
-CFG = '.pre-commit-config.yaml'
-MAKEFILES = ('GNUmakefile', 'makefile', 'Makefile')
-
-def git(*a):
-    return subprocess.run(['git', '-C', wt] + list(a), capture_output=True)
-
-def tracked(p):
-    return git('ls-files', '--error-unmatch', '--', p).returncode == 0
-
-def is_link(p):
-    return os.path.islink(os.path.join(wt, p))
-
-def read(p, at):
-    if at:
-        r = git('show', at + ':' + p)
-        return r.stdout.decode('utf-8', 'replace') if r.returncode == 0 else None
-    try:
-        with open(os.path.join(wt, p), 'rb') as f:
-            return f.read().decode('utf-8', 'replace')
-    except OSError:
-        return None
-
-def hook_ids(text):
-    return [m.group(1) for m in re.finditer(r'(?m)^\s*-\s*id:\s*["\']?([^"\'\s#]+)', text)]
-
-def hook_block(text, hid):
-    header, out, in_header = [], None, False
-    for ln in text.splitlines():
-        is_repo = re.match(r'\s*-\s*repo:', ln)
-        m = re.match(r'\s*-\s*id:\s*["\']?([^"\'\s#]+)', ln)
-        if is_repo:
-            if out is not None:
-                break
-            header, in_header = [ln], True
-            continue
-        if m:
-            if out is not None:
-                break
-            in_header = False
-            if m.group(1) == hid:
-                out = header + [ln]
-            continue
-        if out is not None:
-            out.append(ln)
-        elif in_header:
-            header.append(ln)
-    return None if out is None else '\n'.join(out)
-
-def make_has_target(text, target):
-    for ln in text.splitlines():
-        m = re.match(r'([^\s:=#][^:=#]*?)\s*:(?!=)', ln)
-        if m and target in m.group(1).split():
-            return True
-    return False
-
-def make_bundle(at):
-    files, parts = [], []
-    for src in MAKEFILES:
-        if tracked(src):
-            t = read(src, at) or ''
-            files.append(src)
-            parts.append(t)
-            for m in re.finditer(r'(?m)^\s*-?include\s+(.+)$', t):
-                for inc in m.group(1).split():
-                    if inc not in files and tracked(inc):
-                        files.append(inc)
-                        parts.append(read(inc, at) or '')
-    return files, parts
-
-def named_files(text, skip):
-    seen = []
-    for tok in TOK.findall(text):
-        t = tok[2:] if tok.startswith('./') else tok
-        if ('/' in t or '.' in t) and t not in seen and t not in skip and os.path.isfile(os.path.join(wt, t)) and tracked(t):
-            seen.append(t)
-    return seen
-
-def py_siblings(path):
-    d = os.path.dirname(path)
-    r = git('ls-files', '-z', '--', d or '.')
-    out = []
-    for f in r.stdout.decode('utf-8', 'replace').split('\0'):
-        if f and f.endswith('.py') and os.path.dirname(f) == d:
-            out.append(f)
-    return out
-
-# returns (scan_text, compare_text, files, why)
-def content(ref, at):
-    kind, name = ref['kind'], ref['name']
-    if kind == 'file':
-        if not tracked(name):
-            return None, None, [], 'not tracked: ' + name
-        if is_link(name):
-            return None, None, [], 'is a symlink: ' + name
-        c = read(name, at)
-        if c is None:
-            return None, None, [], 'unreadable: ' + name
-        named = named_files(c, [name])
-        files = [name] + named + (py_siblings(name) if name.endswith('.py') else [])
-        text = c
-    elif kind == 'hook':
-        if not tracked(CFG):
-            return None, None, [], CFG + ' not tracked'
-        cfg = read(CFG, at) or ''
-        n = hook_ids(cfg).count(name)
-        if n == 0:
-            return None, None, [], 'hook id not found: ' + name
-        if n > 1:
-            return None, None, [], 'duplicate hook id: ' + name
-        block = hook_block(cfg, name) or ''
-        named = named_files(block, [CFG])
-        files, text, compare_head = [CFG] + named, block, cfg
-        if re.search(r'(?<![\w-])make(?![\w-])', block):
-            mfiles, mparts = make_bundle(at)
-            files += mfiles
-            text += '\n' + '\n'.join(mparts)
-            compare_head += '\n' + '\n'.join(mparts)
-    elif kind == 'make':
-        mfiles, mparts = make_bundle(at)
-        if not mfiles or not any(make_has_target(t, name) for t in mparts):
-            return None, None, [], 'make target not found: ' + name
-        bundle = '\n'.join(mparts)
-        named = named_files(bundle, mfiles)
-        files, text = mfiles + named, bundle
-    else:
-        return None, None, [], 'unknown kind: ' + str(kind)
-    for f in named:
-        if is_link(f):
-            return None, None, [], 'names a symlink: ' + f
-    extra = [read(f, at) or '' for f in named]
-    scan = '\n'.join([text] + extra)
-    compare = '\n'.join([compare_head if kind == 'hook' else text] + extra)
-    seen = []
-    for f in files:
-        if f not in seen:
-            seen.append(f)
-    return scan, compare, sorted(seen), ''
-
-out = {}
-for ref in refs:
-    rid = ref['id']
-    scan, compare, files, why = content(ref, '')
-    if scan is None:
-        out[rid] = {'ok': False, 'reason': why, 'files': []}
-        continue
-    if BAD.search(scan) or BAD.search(ref['name']):
-        out[rid] = {'ok': False, 'reason': 'names a forbidden tool', 'files': files}
-        continue
-    if rev:
-        s0, c0, f0, why0 = content(ref, rev)
-        if c0 != compare:
-            out[rid] = {'ok': False, 'reason': 'changed since ' + rev + (': ' + why0 if why0 else ''), 'files': files}
-            continue
-    out[rid] = {'ok': True, 'reason': 'ok', 'files': files}
-print(json.dumps(out, sort_keys=True))
-`;
-// CMD_CHECK_PY_END
 
 // ---------------------------------------------------------------- schemas
 
@@ -769,6 +577,8 @@ const INFRA_SCHEMA = {
     },
     plan_touched: { type: "array", items: STR },
     remote_head: STR,
+    push_result: { type: "string", enum: ["ok", "hook_rejected", "network", "non_ff"] },
+    hook_tail: STR,
     purged: { type: "number" },
     superseded_head: STR,
     ref_sha256: STR,
@@ -840,34 +650,6 @@ const HASHER_SCHEMA = {
         suspicious: { type: "array", items: STR },
       },
     },
-  },
-};
-
-const OBLIGATIONS_SCHEMA = {
-  type: "object",
-  required: ["status", "reason"],
-  properties: {
-    status: { type: "string", enum: ["ok", "needs_human", "failed"] },
-    reason: STR,
-    results: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: { id: STR, exit_code: { type: ["integer", "null"] }, tail: STR },
-        required: ["id"],
-      },
-    },
-    prechecks: { type: "object" },
-    sandbox: STR,
-  },
-};
-const VERIFY_COMMANDS_SCHEMA = {
-  type: "object",
-  required: ["status", "reason"],
-  properties: {
-    status: { type: "string", enum: ["ok", "needs_human", "failed"] },
-    reason: STR,
-    checks: { type: "object" },
   },
 };
 
@@ -1024,7 +806,7 @@ function sameFingerprint(a, b) {
 
 // test_cmd and repo_obligations from the planner (or a loaded ref).
 // Returns {msg, gate} or null. Types are checked by checkRole first; this
-// checks the shape the coder, the judges and the obligations step rely on.
+// checks the shape the coder and the judges rely on.
 function planFactsProblem(testCmd, obligations) {
   const drift = (m) => ({ msg: "role scope-and-plan contract drift: scope-and-plan " + m, gate: "contract" });
   if (!testCmd || typeof testCmd !== "object" || Array.isArray(testCmd)) return drift("test_cmd type: got " + jsType(testCmd));
@@ -1059,7 +841,7 @@ function relPath(p) {
 //   make <target>
 //   [uv run [--extra <x>]] python[3] <relative/path.py> [plain args]
 //   <relative/path/to/script> [plain args]
-// Returns {ok: true, tokens, ref: {kind: hook|make|file, name}} or {ok: false, reason}.
+// Returns {ok: true} or {ok: false, reason}.
 function parseCheckCmd(cmd) {
   const bad = (reason) => ({ ok: false, reason });
   if (typeof cmd !== "string" || !cmd.trim()) return bad("empty command");
@@ -1081,22 +863,18 @@ function parseCheckCmd(cmd) {
       else if (f === "--from-ref" && !opt(t[i + 1]) && t[i + 2] === "--to-ref" && !opt(t[i + 3])) i += 4;
       else return bad("pre-commit: option " + JSON.stringify(f) + " not allowed here");
     }
-    return { ok: true, tokens: t, exec: t, ref: { kind: "hook", name: t[2] } };
+    return { ok: true };
   }
   if (t[0] === "make") {
     if (t.length !== 2 || !MAKE_TARGET_RE.test(t[1])) return bad("make: only `make <target>`");
-    return { ok: true, tokens: t, exec: t, ref: { kind: "make", name: t[1] } };
+    return { ok: true };
   }
   let i = 0;
-  // what actually runs: python in isolated mode (-I); uv never resolves or installs
-  let pre = [];
   if (t[0] === "uv") {
     if (t[1] !== "run") return bad("uv: only `uv run [--extra <x>] python <file.py>`");
     i = 2;
-    pre = ["uv", "run", "--frozen", "--no-sync"];
     if (t[i] === "--extra") {
       if (opt(t[i + 1])) return bad("uv run --extra needs a name");
-      pre.push("--extra", t[i + 1]);
       i += 2;
     }
     if (t[i] !== "python" && t[i] !== "python3") return bad("uv run: only a python script");
@@ -1104,17 +882,14 @@ function parseCheckCmd(cmd) {
   if (t[i] === "python" || t[i] === "python3") {
     const path = relPath(t[i + 1]);
     if (!path || !/\.py$/.test(path)) return bad("python: only `python[3] <relative/path.py> [args]`");
-    const exec = pre.concat([t[i], "-I"], t.slice(i + 1));
-    return { ok: true, tokens: t, exec, ref: { kind: "file", name: path } };
+    return { ok: true };
   }
-  if (i === 0 && t[0].indexOf("/") >= 0) {
-    const path = relPath(t[0]);
-    if (path) return { ok: true, tokens: t, exec: t, ref: { kind: "file", name: path } };
-  }
+  if (i === 0 && t[0].indexOf("/") >= 0 && relPath(t[0])) return { ok: true };
   return bad("not an allowed command shape");
 }
 
-// test_cmd: plain tokens, the <paths> placeholder, plain env; no forbidden word.
+// test_cmd: plain tokens, the <paths> placeholder, allowlisted env names with
+// plain values; no forbidden word.
 function testCmdProblem(tc) {
   const cmd = tc && tc.command;
   if (typeof cmd !== "string" || !cmd.trim()) return "no command";
@@ -1124,7 +899,7 @@ function testCmdProblem(tc) {
   const env = tc.env === undefined || tc.env === null ? {} : tc.env;
   if (typeof env !== "object" || Array.isArray(env)) return "env must be an object";
   for (const k of Object.keys(env)) {
-    if (!ENV_NAME_RE.test(k) || ENV_DENY_EXACT.indexOf(k) >= 0 || ENV_DENY_RE.test(k)) return "test_cmd env " + k + " not allowed";
+    if (TEST_ENV_ALLOWED.indexOf(k) < 0) return "test_cmd env " + k + " not allowed";
     if (typeof env[k] !== "string" || !ENV_VALUE_RE.test(env[k]) || FORBIDDEN_WORD_RE.test(env[k]))
       return "env " + k + " value is not plain";
   }
@@ -1133,17 +908,8 @@ function testCmdProblem(tc) {
   return null;
 }
 
-// A test_cmd in one of the check_cmd shapes (without <paths>) has a reference
-// the verify step can check; any other test_cmd has none.
-function testCmdRef(tc) {
-  const t = tc.command.trim().split(/[ \t]+/).filter((x) => x !== PATHS_TOKEN);
-  const pc = parseCheckCmd(t.join(" "));
-  return pc.ok ? pc.ref : null;
-}
-
-// What Max confirms: every command, verbatim, with its env, source and who
-// runs it; for a workflow check also the exact argv it runs and the files
-// frozen for it.
+// What Max confirms: every command, verbatim, with its source and who runs
+// it, and the test_cmd's env and tools.
 function commandsOf(testCmd, obligations) {
   const out = [
     {
@@ -1158,16 +924,7 @@ function commandsOf(testCmd, obligations) {
   ];
   for (const o of obligations) {
     if (typeof o.check_cmd === "string")
-      out.push({
-        kind: "check_cmd",
-        id: o.id,
-        command: o.check_cmd,
-        exec: parseCheckCmd(o.check_cmd).exec.join(" "),
-        env: Object.assign({}, TEST_ENV),
-        check_files: o.check_files || [],
-        rule_source: o.rule_source || null,
-        run_by: "workflow",
-      });
+      out.push({ kind: "check_cmd", id: o.id, command: o.check_cmd, rule_source: o.rule_source || null, run_by: "code-judge (optional)" });
     else if (typeof o.check_cmd_rejected === "string")
       out.push({
         kind: "check_cmd",
@@ -1175,7 +932,7 @@ function commandsOf(testCmd, obligations) {
         command: o.check_cmd_rejected,
         rule_source: o.rule_source || null,
         run_by: "nobody",
-        note: "judge-only: " + (o.check_rejected_reason || ""),
+        note: "refused: " + (o.check_rejected_reason || ""),
       });
   }
   return out;
@@ -1189,72 +946,10 @@ function demote(o, reason) {
   return d;
 }
 
-function cmdCheckCmd(worktree, rev, refs) {
-  return "python3 -I -c " + shQuote(CMD_CHECK_PY) + " " + shQuote(worktree) + " " + shQuote(rev) + " " + shQuote(JSON.stringify(refs));
-}
-
-function checkedObligations(obligations) {
-  return (obligations || []).filter((o) => typeof o.check_cmd === "string" && o.check_cmd.trim());
-}
-
-// The exact commands the obligations step may run for one allowlisted
-// check_cmd: in the worktree, env -i with no credentials (HOME and every cache
-// in a fresh scratch dir), time-boxed, its exec argv (no bash -c), and always
-// sandboxed with no network: bwrap (also hides $HOME, binds back the worktree,
-// the scratch dir and the git common dir) or unshare -rn. No unsandboxed
-// variant exists.
-function obligationRunCmd(worktree, scratch, env, exec, sandbox) {
-  const sc = scratch + "/obligations";
-  const vars = [
-    "HOME=" + shQuote(sc + "/home"),
-    'PATH="$PATH"',
-    "XDG_CACHE_HOME=" + shQuote(sc + "/cache"),
-    "UV_CACHE_DIR=" + shQuote(sc + "/cache/uv"),
-    "PIP_CACHE_DIR=" + shQuote(sc + "/cache/pip"),
-  ]
-    .concat(CLEAN_ENV.map((kv) => kv[0] + "=" + shQuote(kv[1])))
-    .concat(
-      Object.keys(env)
-        .sort()
-        .map((k) => k + "=" + shQuote(env[k])),
-    );
-  const inner = "env -i " + vars.join(" ") + " timeout " + CHECK_TIMEOUT_S + " " + exec.join(" ");
-  const head = "cd " + shQuote(worktree) + " && mkdir -p " + shQuote(sc + "/home") + " " + shQuote(sc + "/cache") + " && ";
-  if (sandbox === "unshare") return head + "unshare -rn " + inner;
-  const common = '"$(git -C ' + shQuote(worktree) + ' rev-parse --path-format=absolute --git-common-dir)"';
-  return (
-    head +
-    "bwrap --die-with-parent --unshare-net --dev-bind / / --tmpfs \"$HOME\" --bind " + shQuote(worktree) + " " + shQuote(worktree) +
-    " --bind " + shQuote(sc) + " " + shQuote(sc) + " --ro-bind " + common + " " + common + " -- " + inner
-  );
-}
-
-// One result per check_cmd obligation, in plan order. A missing result or a
-// non-integer exit code stays in the list with exit_code null (fail closed).
-function obligationResults(checked, results, prechecks) {
-  const byId = {};
-  for (const x of Array.isArray(results) ? results : []) if (x && typeof x.id === "string" && !(x.id in byId)) byId[x.id] = x;
-  const pc = prechecks && typeof prechecks === "object" ? prechecks : {};
-  return checked.map((o) => {
-    const p = pc[o.id];
-    if (!p || p.ok !== true)
-      return { id: o.id, exit_code: null, tail: "refused by precheck: " + (p && p.reason ? p.reason : "no precheck result") };
-    const x = byId[o.id];
-    if (!x) return { id: o.id, exit_code: null, tail: "no result returned for this check_cmd" };
-    return { id: o.id, exit_code: Number.isInteger(x.exit_code) ? x.exit_code : null, tail: typeof x.tail === "string" ? x.tail : "" };
-  });
-}
-
-// The script gate on a code-judge approve: every check_cmd exits 0 and every
-// obligation is met:true in obligations_check. Returns routed code findings.
-function obligationFailures(obligations, results, check) {
+// The script gate on a code-judge approve: every obligation is met:true in
+// obligations_check. Returns routed code findings.
+function obligationFailures(obligations, check) {
   const out = [];
-  for (const r of results)
-    if (r.exit_code !== 0)
-      out.push(
-        r.id + ": check_cmd " + (r.exit_code === null ? "gave no usable exit code" : "exited " + r.exit_code) +
-          (r.tail ? ": " + r.tail : "") + " -- satisfy the obligation in production commits",
-      );
   const list = Array.isArray(check) ? check : [];
   for (const o of obligations || []) {
     const e = list.find((x) => x && x.id === o.id);
@@ -1788,32 +1483,6 @@ async function purgeBytecode(label, worktree, phaseName) {
   return r;
 }
 
-function verifyCommandsPrompt(inputs) {
-  return (
-    "Infra step of the fleet build workflow: check that each command reference exists. READ ONLY: no edits, no commits; run nothing but the one command below.\n" +
-    "Inputs: " +
-    JSON.stringify(inputs) +
-    "\n" +
-    "Run `run` exactly as written, unmodified, as one Bash call in the foreground. It prints one JSON object {<id>: {ok, reason}}. Copy it unchanged as `checks`. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, checks}."
-  );
-}
-
-function obligationsPrompt(inputs) {
-  return (
-    "Infra step of the fleet build workflow: run each repo obligation's check command, READ ONLY. No edits, no commits, no stash, no push. Never change a file, a git setting or a command to make a check pass. Never run a command that is not given here.\n" +
-    "Inputs: " +
-    JSON.stringify(inputs) +
-    "\n" +
-    "1. Run `precheck` exactly as written, unmodified, as one Bash call. It prints one JSON object {<id>: {ok, reason}}; copy it unchanged as `prechecks`. Non-zero exit -> failed.\n" +
-    "2. Pick the sandbox: if `bwrap --die-with-parent --unshare-net --dev-bind / / true` exits 0, sandbox = \"bwrap\"; else if `unshare -rn true` exits 0, sandbox = \"unshare\"; else sandbox = \"none\". With sandbox \"none\", run NOTHING in step 3 and return results: [].\n" +
-    "3. For each entry of `obligations` (id, run_bwrap, run_unshare), in order: if prechecks[id].ok is not true, do NOT run it; its result is {id, exit_code: null, tail: \"refused by precheck\"}. " +
-    "Otherwise run `run_bwrap` (sandbox bwrap) or `run_unshare` (sandbox unshare), exactly as written, unmodified, as one Bash call in the foreground with timeout 600000 ms, stdout and stderr redirected to a temp file OUTSIDE <main_worktree>; then `echo $?`. Never run a check outside the sandbox. " +
-    "exit_code = that exit status (an integer). tail = the last 20 lines of the temp file. Delete the temp file. Never retry a check with changes.\n" +
-    "Return {status: \"ok\", reason, prechecks, sandbox, results: [{id, exit_code, tail}]}, one result per entry run or refused."
-  );
-}
-
 function pushPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: push the approved fleet branch. No edits, no commits.\n" +
@@ -1821,15 +1490,19 @@ function pushPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "1. <branch> must differ from <default_branch>; `git -C <main_worktree> branch --show-current` must equal <branch>; `git -C <main_worktree> rev-parse HEAD` must equal <approved_sha>; `git -C <main_worktree> status --porcelain` must be empty. Any mismatch -> needs_human.\n" +
-    "2. `git -C <main_worktree> push -u origin <branch>`, retry up to 3 times with backoff 5 15 45 (seconds). Never --force, never --no-verify, never push another ref; never change remotes or credentials. " +
-    "Rejected as non-fast-forward (stderr has `non-fast-forward`, `fetch first` or `[rejected]`) -> needs_human at once, no retry. An auth, network or 5xx error -> retry: " +
+    "2. Push ONCE: `git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Classify the result as push_result:\n" +
+    "   - exit 0 -> `ok`.\n" +
+    "   - the output has `non-fast-forward`, `fetch first` or `[rejected]` -> `non_ff`: return status needs_human at once, no retry.\n" +
+    "   - the output has `failed to push some refs` and none of `[rejected]`, `[remote rejected]`, `non-fast-forward`, `fetch first`, `Could not read from remote`, `Authentication failed`, `unable to access`, `HTTP`, `Connection`, `timed out` -> a local hook (pre-push) declined the push: `hook_rejected`. hook_tail = the last 60 lines of the temp file. No retry. Return status ok.\n" +
+    "   - anything else (auth, network, 5xx) -> `network`: retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
-    " Still failing after the 3 retries -> failed with the last error.\n" +
+    " Exit 0 now -> `ok`. Still failing after the 3 retries -> status failed with the last error.\n" +
+    "   Delete the temp file. Step 3 runs only when push_result is `ok`.\n" +
     "3. remote_head through the GitHub API, not git over the network: <owner>/<name> = <remote_slug>. <gh> = `gh-personal` when `command -v gh-personal` succeeds and `gh-personal api user --jq .login` equals <owner>; else `gh`. " +
     "remote_head = the output of `<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha` (the branch name goes in the path as is, slashes included), retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha") +
     " Only when neither gh nor gh-personal is installed: remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints, with the same backoff. remote_head must be the full 40-hex sha.\n" +
-    "Return {status, reason, remote_head}."
+    "Return {status, reason, push_result, hook_tail, remote_head}."
   );
 }
 
@@ -2056,7 +1729,8 @@ async function infra(label, prompt, phaseName, agentType) {
   const opts = { schema: INFRA_SCHEMA, phase: phaseName };
   if (agentType) opts.agentType = agentType;
   const r = await dispatch(label, prompt, opts);
-  return requireOk(label, r);
+  if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+  return r;
 }
 
 // Fingerprint the worktree around a judge run. Any change discards the
@@ -2237,70 +1911,21 @@ function testableOf(criteria) {
 
 // scope-and-plan then plan-audit. ctx: {common, brief, date, baseRef,
 // remoteSlug, suffix}. Returns the plan facts; held-out examples stay behind.
-// Each check_cmd must pass the allowlist and the read-only reference check
-// (hook id, make target or tracked file exists, no duplicate hook id, no
-// forbidden word in it or in what it names). It then carries check_files,
-// the files frozen for it. A check whose files the change edits, or that
-// fails any step, stays an obligation the code judge rules on but is never
-// run. A test_cmd in a check shape gets the same reference check; failing it
-// stops the run.
-async function screenCommands(testCmd, obligations, allowedFiles, worktree, phaseName, sfx) {
-  const out = [];
-  const pending = [];
-  for (const o of obligations) {
+// A check_cmd outside the allowlist is never offered to any role: it is kept
+// as check_cmd_rejected (with the reason) and the code judge rules on the
+// obligation from the diff alone.
+function screenCheckCmds(obligations) {
+  return obligations.map((o) => {
     if (typeof o.check_cmd !== "string" || !o.check_cmd.trim()) {
       const d = Object.assign({}, o);
       if (d.check_cmd !== undefined) delete d.check_cmd;
-      out.push(d);
-      continue;
+      return d;
     }
     const pc = parseCheckCmd(o.check_cmd);
-    if (!pc.ok) {
-      gate(o.id + " check_cmd not auto-run (judge-only): " + pc.reason + ": " + JSON.stringify(o.check_cmd));
-      out.push(demote(o, pc.reason));
-      continue;
-    }
-    pending.push({ o, ref: Object.assign({ id: o.id }, pc.ref), idx: out.length });
-    out.push(o);
-  }
-  const tcRef = testCmdRef(testCmd);
-  const refs = pending.map((x) => x.ref).concat(tcRef ? [Object.assign({ id: "test_cmd" }, tcRef)] : []);
-  if (!refs.length) return out;
-  const v = await infra(
-    "infra:verify-commands" + (sfx || ""),
-    verifyCommandsPrompt({ worktree, refs, run: cmdCheckCmd(worktree, "", refs) }),
-    phaseName,
-    JUDGE_AGENT,
-  );
-  const checks = v.checks && typeof v.checks === "object" ? v.checks : {};
-  if (tcRef) {
-    const c = checks.test_cmd;
-    if (!c || c.ok !== true)
-      halt(
-        "needs_human",
-        "test_cmd refused: reference check failed: " + (c && c.reason ? c.reason : "no result") + ": " + JSON.stringify(testCmd.command),
-        "commands",
-      );
-  }
-  const edited = {};
-  for (const o of obligations) for (const f of o.files || []) if (relPath(f)) edited[relPath(f)] = true;
-  for (const f of allowedFiles || []) if (relPath(f)) edited[relPath(f)] = true;
-  for (const x of pending) {
-    const c = checks[x.o.id];
-    let why = null;
-    const files = c && Array.isArray(c.files) ? c.files.map(relPath) : [];
-    if (!c || c.ok !== true) why = "reference check failed: " + (c && c.reason ? c.reason : "no result");
-    else if (!files.length || files.some((f) => !f)) why = "reference check returned no usable file list";
-    else {
-      const hit = files.filter((f) => edited[f]);
-      if (hit.length) why = "the change edits a file its check reads: " + hit.join(", ");
-    }
-    if (why) {
-      gate(x.o.id + " check_cmd not auto-run (judge-only): " + why + ": " + JSON.stringify(x.o.check_cmd));
-      out[x.idx] = demote(x.o, why);
-    } else out[x.idx] = Object.assign({}, x.o, { check_files: files.slice().sort() });
-  }
-  return out;
+    if (pc.ok) return o;
+    gate(o.id + " check_cmd refused (judge-only): " + pc.reason + ": " + JSON.stringify(o.check_cmd));
+    return demote(o, pc.reason);
+  });
 }
 
 async function planAndAudit(ctx) {
@@ -2330,14 +1955,7 @@ async function planAndAudit(ctx) {
   if (factsProblem) halt("needs_human", factsProblem.msg, factsProblem.gate);
   const tcProblem = testCmdProblem(plan.test_cmd);
   if (tcProblem) halt("needs_human", "test_cmd refused: " + tcProblem + ": " + JSON.stringify(plan.test_cmd.command), "commands");
-  const obligations = await screenCommands(
-    plan.test_cmd,
-    plan.repo_obligations,
-    plan.allowed_additions && Array.isArray(plan.allowed_additions.files) ? plan.allowed_additions.files : [],
-    ctx.common.worktree,
-    "Plan",
-    sfx,
-  );
+  const obligations = screenCheckCmds(plan.repo_obligations);
   const planPath = normPath(plan.plan_path);
   if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
     halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
@@ -2664,8 +2282,6 @@ async function buildMode(input, date) {
     if (typeof o.check_cmd !== "string") continue;
     const pc = parseCheckCmd(o.check_cmd);
     if (!pc.ok) halt("needs_human", "ref file " + tiny.ref_path + ": " + o.id + " check_cmd refused: " + pc.reason, "commands");
-    if (!Array.isArray(o.check_files) || !o.check_files.length || !o.check_files.every((f) => relPath(f) === f))
-      halt("needs_human", "ref file " + tiny.ref_path + ": " + o.id + " check_cmd refused: no check_files to freeze", "commands");
   }
   const ref = Object.assign({}, loaded, { plan_commit: tiny.plan_commit, ref_path: tiny.ref_path });
   const brief = cleanBrief(ref.brief);
@@ -2715,7 +2331,6 @@ async function buildMode(input, date) {
     test_cmd: ref.plan_facts.test_cmd,
     repo_obligations: ref.plan_facts.repo_obligations,
   };
-  const checked = checkedObligations(planFacts.repo_obligations);
   state.path = "full";
   const testable = testableOf(criteria);
 
@@ -2872,9 +2487,7 @@ async function buildMode(input, date) {
   const frozenFiles = [];
   for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
   // the ref file is frozen too (hashed as a config key, read-only for every role)
-  // so are the files every workflow check reads (config, makefiles, scripts)
   const hashedFiles = frozenFiles.concat([ref.ref_path]);
-  for (const o of checked) for (const f of o.check_files || []) if (hashedFiles.indexOf(f) < 0) hashedFiles.push(f);
 
   // refreeze: {round, criteria} after an approved fix_tests round. Only the
   // test files of those criteria may change; any other key -> needs_human.
@@ -2941,6 +2554,7 @@ async function buildMode(input, date) {
   let approval = null;
   // the script gate that rejected the last code round, for the cap message
   let lastRoundGate = null;
+  let pushes = 0;
   for (;;) {
     if (state.rounds.code >= MAX_CODE_ROUNDS)
       halt(
@@ -2952,7 +2566,8 @@ async function buildMode(input, date) {
     state.rounds.code++;
     const m = state.rounds.code;
     lastRoundGate = null;
-    reserve(5 + (checked.length ? 2 : 0), "code round " + m);
+    // coder, purge, hasher, judge, fingerprint, push
+    reserve(6, "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
       frozen_tests: testFilesView(frozen, frozenFiles),
@@ -3009,50 +2624,7 @@ async function buildMode(input, date) {
       gate("code round " + m + ": hash violation on " + viol.join(", ") + " -> coder output rejected");
       continue;
     }
-    // obligations: run each check_cmd read-only, fingerprinted like a judge
-    let obResults = [];
-    let obNotRun = null;
-    let judgeFp = h.fingerprint;
-    if (checked.length) {
-      const parsed = checked.map((o) => ({ o, pc: parseCheckCmd(o.check_cmd) }));
-      const refs = parsed.map((x) => Object.assign({ id: x.o.id }, x.pc.ref));
-      const ob = await dispatch(
-        "infra:obligations:r" + m,
-        obligationsPrompt({
-          main_worktree: mainWt,
-          plan_commit: ref.plan_commit,
-          refs,
-          precheck: cmdCheckCmd(mainWt, ref.plan_commit, refs),
-          obligations: parsed.map((x) => ({
-            id: x.o.id,
-            run_bwrap: obligationRunCmd(mainWt, lay.scratch, TEST_ENV, x.pc.exec, "bwrap"),
-            run_unshare: obligationRunCmd(mainWt, lay.scratch, TEST_ENV, x.pc.exec, "unshare"),
-          })),
-        }),
-        { schema: OBLIGATIONS_SCHEMA, agentType: JUDGE_AGENT, phase: "Code" },
-      );
-      const after = (await hasher("hasher:fp-post:obligations:r" + m, mainWt, "fingerprint", [], "Code")).fingerprint;
-      if (!sameFingerprint(h.fingerprint, after))
-        halt("needs_human", "code round " + m + ": an obligation check changed the worktree (HEAD, status or diff); results discarded", "fingerprint");
-      if (ob.status !== "ok")
-        halt(
-          ob.status === "failed" ? "failed" : "needs_human",
-          "infra:obligations:r" + m + " returned " + ob.status + ": " + (ob.reason || "no reason"),
-          "obligations",
-        );
-      judgeFp = after;
-      if (ob.sandbox === "bwrap" || ob.sandbox === "unshare") {
-        obResults = obligationResults(checked, ob.results, ob.prechecks);
-        gate("code round " + m + ": obligation checks ran in sandbox " + ob.sandbox + " with no credentials and no network");
-      } else {
-        // fail closed: no sandbox, no run; every check becomes judge-only
-        obNotRun = OB_NOT_RUN;
-        obResults = OB_NOT_RUN;
-        gate("code round " + m + ": no sandbox (" + JSON.stringify(ob.sandbox || null) + "): obligation checks not run; judge-only this round");
-      }
-      if (!obNotRun) gate("code round " + m + ": obligation checks " + obResults.map((x) => x.id + "=" + x.exit_code).join(", "));
-    }
-    // the last fingerprint before the judge is its "before" fingerprint
+    // the post-coder fingerprint is the judge's "before" fingerprint
     const judgedCode = await judged(
       "fleet-code-judge",
       "role:fleet-code-judge:r" + m,
@@ -3062,17 +2634,15 @@ async function buildMode(input, date) {
         hash_recheck: hashRecheck(frozen, h.hashes),
         held_out_results: HELD_OUT_NOT_RUN,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
-        obligation_results: obResults,
-      },
-      obNotRun ? { repo_obligations: planFacts.repo_obligations.map((o) => (typeof o.check_cmd === "string" ? demote(o, obNotRun.reason) : o)) } : {}),
+      }),
       mainWt,
       "Code",
-      judgeFp,
+      h.fingerprint,
     );
     const cj = judgedCode.r;
     const routed = cj.routed_findings || [];
     if (cj.verdict === "approve") {
-      const obFail = obligationFailures(planFacts.repo_obligations, obNotRun ? [] : obResults, cj.obligations_check);
+      const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check);
       if (obFail.length) {
         coderFindings = obFail;
         lastRoundGate = "obligations";
@@ -3082,13 +2652,44 @@ async function buildMode(input, date) {
         );
         continue;
       }
-      approvedSha = judgedCode.fp.head;
+      const sha = judgedCode.fp.head;
+      gate("code-judge r" + m + ": approve at " + sha);
+      // push the approved sha; the repo's own pre-push hooks run here
+      phase("PR");
+      pushes++;
+      const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
+      const push = await infra(
+        pushLabel,
+        pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: sha, remote_slug: remoteSlug }),
+        "PR",
+      );
+      if (push.push_result === "hook_rejected") {
+        // a repo hook declined the push: the coder fixes it, the judge re-approves
+        const tail = String(push.hook_tail || "").trim();
+        coderFindings = [
+          {
+            target: "code",
+            criterion: null,
+            finding:
+              "push rejected by a repo hook (pre-push) at " + sha + "; satisfy it in production commits, never bypass it. Hook output (tail):\n" +
+              (tail || "(no output captured)"),
+          },
+        ];
+        lastRoundGate = "push hook";
+        gate("code round " + m + ": push of " + sha + " rejected by a repo hook -> coder (fix_code)");
+        phase("Code");
+        continue;
+      }
+      if (push.push_result !== "ok")
+        halt("failed", pushLabel + " returned push_result " + JSON.stringify(push.push_result || null) + " with status ok");
+      if (push.remote_head !== sha)
+        halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + sha);
+      gate("pushed " + branch + " at " + sha);
+      approvedSha = sha;
       approval = cj;
       state.gatesNotRun = gatesNotRun(cj.gates_not_run);
-      if (obNotRun) state.gatesNotRun.push({ gate: "obligation_checks", reason: obNotRun.reason });
       if (state.gatesNotRun.length && String(cj.reason || "").indexOf(GATES_PREFIX) !== 0)
         gate("warning: code-judge approve reason does not start with '" + GATES_PREFIX + "' although gates did not run");
-      gate("code-judge r" + m + ": approve at " + approvedSha);
       break;
     }
     if (cj.verdict === "plan_wrong")
@@ -3120,16 +2721,7 @@ async function buildMode(input, date) {
     halt("failed", "code-judge returned no verdict");
   }
 
-  // push, then PR
-  phase("PR");
-  const push = await infra(
-    "infra:push",
-    pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug }),
-    "PR",
-  );
-  if (push.remote_head !== approvedSha)
-    halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha);
-  gate("pushed " + branch + " at " + approvedSha);
+  // PR at the pushed, approved sha
   const pr = requireOk(
     "fleet-pr-opener",
     await callRole(
