@@ -47,6 +47,12 @@ runs `/build-task` explicitly, always use the fleet.
 3. **Date.** Run `date -u +%F`. Use the output as `date`. The workflow cannot read the clock.
 4. **Project (optional).** Use the `<owner>/<repo>` project key from the session banner, if one is
    shown, as `project`. It scopes ledger reads and the ledger write-back. Otherwise omit it.
+
+   **Confirm mode.** `confirm` is `"ask"` by default: the interactive confirmation in step 7. Use
+   `"auto"` only when the user asked for an unattended or goal run (for example "build L42
+   unattended", "run the fleet on L42 without asking", or a goal/loop that runs without the user).
+   Never pick `"auto"` on your own for an interactive request.
+
 5. **Workflow tool.** Check that `Workflow` is among the tools you can call now. If it is not, say
    "the fleet needs the Workflow tool, which this session does not have" and stop. Never run the
    roles yourself by hand: the gates exist only in the workflow script.
@@ -55,11 +61,19 @@ runs `/build-task` explicitly, always use the fleet.
    ```
    Workflow({ name: "fleet:build-task-run",
               args: { mode: "plan", input: "<input>", repo: "<repo>", date: "<date>",
-                      project: "<project, if any>" } })
+                      project: "<project, if any>", confirm: "<ask | auto>" } })
    ```
 
-   Pass `args` as an object, not a JSON string. Wait for the result. Do not narrate progress. Any
-   status other than `awaiting_confirmation` -> report it as in step 9 and stop.
+   Pass `args` as an object, not a JSON string. Wait for the result. Do not narrate progress.
+
+   - `confirm: "ask"`: any status other than `awaiting_confirmation` -> report it as in step 9 and
+     stop.
+   - `confirm: "auto"`: the workflow does not ask. It runs its intent, command and scope gates and,
+     when they pass, builds in the same run: the result is the build result
+     (`auto_confirmed: true`); report it as in step 9 and skip steps 7 and 8. When a gate fails, the result is
+     `needs_human` with `failed_check` and `needs_max_section`: show `needs_max_section` verbatim
+     and stop. Do not ask, do not retry, do not switch to `"ask"`. After Max rules in the task, the
+     run is repeated with step 8 and `confirm: "auto"` (the same `plan_ref`).
 
 7. **Confirm.** Show the user, in this order:
 
@@ -87,6 +101,10 @@ runs `/build-task` explicitly, always use the fleet.
                       date: "<date>", project: "<project, if any>" } })
    ```
 
+   For a repeat after a ruling on an auto-mode stop, add `confirm: "auto"`: the workflow re-reads
+   the task and runs its gates again before it builds. On `needs_human` with `needs_max_section`,
+   show it verbatim and stop.
+
    `plan_ref` is small: `{branch, plan_commit, ref_path, ref_sha256, repo}`. Pass it exactly as the
    workflow returned it. The full plan ref lives in the plan commit; the workflow checks it against
    `ref_sha256` and refuses a mismatch.
@@ -102,6 +120,8 @@ runs `/build-task` explicitly, always use the fleet.
    - `branch`, `rounds`, `cumulative`, `role_versions`.
    - `pr_url` when present. The PR is a **draft**. The user reviews and merges it. Never mark it
      ready, never merge it, never enable auto-merge.
+   - `review`: verdict, rounds, blocking findings and nits, the sweep verdict when it ran, and the
+     model used. With `confirm: "auto"`, also `auto_confirmed` and the `intent` verdict.
    - `gates_not_run`: list every gate the run did not execute.
    - Write-back: `ledger_status` and `comment_status`. On `failed`, show `comment_text` (and any
      `section_text`) so the user can post it by hand.
@@ -111,7 +131,11 @@ runs `/build-task` explicitly, always use the fleet.
 
 A second plan run for the same input reuses the branch and worktree under
 `<repo>/.claude/worktrees/fleet-<task id>-<slug>/` and updates the plan in place, with a new plan
-commit. If the branch already has build commits, plan mode stops: run build, or delete the branch. A build run
-started again with the same `plan_ref` continues on the same criterion branches. The workflow never
-deletes a branch or a worktree. It resets the fleet branch only during a re-plan after
-`plan_wrong`, and only after it saved the old head on `superseded_ref`.
+commit. If the branch already has build commits, plan mode stops: run build, or delete the branch.
+Writers and the coder never commit: the only build commits are made by the workflow's commit step
+after the code judge approves. So a build that stopped before that leaves uncommitted tests and code
+in the fleet worktree, and a build started again with the same `plan_ref` stops with `needs_human`
+on the dirty worktree. Tell the user: a human must commit, stash or clean that work first. The
+workflow never deletes a branch or a worktree (it removes only the review's scratch worktrees). It
+resets the fleet branch only during a re-plan after `plan_wrong`, and only after it saved the
+uncommitted work on `superseded_ref`.

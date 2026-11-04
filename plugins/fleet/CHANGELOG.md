@@ -1,5 +1,59 @@
 # Changelog
 
+## [2.1.0] - 2026-11-04
+
+### Changed
+
+- **No RED commit.** Many repos run the full suite in a pre-commit hook, so a commit of RED tests
+  always fails, and hooks are never bypassed. Writers now work in the ONE fleet worktree,
+  concurrently, on disjoint test files, and never commit. The per-criterion worktrees and branches,
+  the prepare, integrate and sync steps are gone. The coder works uncommitted too.
+- **Ownership check** after each writer round: HEAD unchanged ("writer committed"); each writer's
+  `files` holds only its own criterion's test files; every changed path (tree delta from the round
+  start plus changed hasher-map keys) is a test file of a criterion pending this round and was
+  reported by a writer. The post-coder check stops a run whose HEAD moved ("coder committed").
+- **Tree fingerprint.** The hasher returns `{head, tree}`: the tree is built in a temporary index
+  (`GIT_INDEX_FILE=<tmp> git read-tree HEAD && git add -A && git write-tree`), so the real index is
+  untouched and no hook runs. Judge before/after states compare HEAD, tree and every hasher map
+  (ignored runner config included). The status and diff hashes are gone. `freeze_tree` and
+  `code_tree` replace the commit-based refs; test judge and code judge get both plus `plan_commit`.
+  `refreeze_log` records `freeze_tree_before`/`freeze_tree_after`.
+- **Commit step** (`infra:commit:r<n>`) after the code judge approves and the obligations gate
+  passes: `git add -A`, staged tree must equal `code_tree`, then ONE commit WITH hooks. A hook
+  rejection goes to the coder as `fix_code` (a code round); hook-modified files, a staged-tree
+  mismatch or a committed-tree mismatch stop with `needs_human`. `approved_sha` is the new HEAD.
+  Later fixes are new commits `fix(<task id>): code round <n>`; verify accepts only these and the
+  first `feat(<task id>): <slug words>` subject.
+- **Contract fleet-v3.** Writer: `criterion_id, tests, files`. Coder: `changed_paths, suite_result,
+added_symbols, frozen_tests_red_at_start, obligations_done`. The `commit`/`commits` keys are
+  gone. Preflight checks ten roles: `fleet-intent-judge`, `pr-review` and
+  `gate-change-nonweakening-sweep` are new.
+- **Models.** A role page with no usable DISPATCH line now stops the run in preflight; no tier is
+  hardcoded (2.0.x fell back to sonnet). Every role dispatch logs `model used: <label> -> <tier>`.
+  The DISPATCH parser accepts text after the fallback tier (`(fallback=sonnet for small PRs)`).
+- A re-plan after `plan_wrong` saves the uncommitted work as a `git commit-tree` object on
+  `superseded_ref`, then resets the branch and runs `git clean -fd`.
+- Minimum role versions for the three new roles are PLACEHOLDERS (intent judge 1, pr-review 16,
+  sweep 2) until the fleet-v3 pages are published.
+
+### Added
+
+- **`confirm: "auto"`** (opt-in; the default `"ask"` is unchanged). After plan-audit approves, G1
+  intent judge (`fleet-intent-judge`: verdict, deviations with `allowed_by` and `fails_closed`,
+  coverage), G2 commands (`test_cmd`, or `pre-commit run <id> [--all-files] [--hook-stage <s>]`
+  whose id appears once in `.pre-commit-config.yaml` at `plan_commit`), G3 scope fence (IaC,
+  Kubernetes and Helm files, `.github/`, rulesets, secret-like paths, kubectl/helm/IaC commands,
+  default branch, foreign repo). A failure returns `needs_human` with `failed_check`, `intent`,
+  `plan_ref`, `plan_path` and `needs_max_section`; a pass builds in the same run
+  (`auto_confirmed: true`). Build mode with `confirm: "auto"` re-reads the task and re-runs the
+  gates against the current rulings. The sealed plan ref now holds `plan_diff`.
+- **Independent review** after the draft PR: `pr-review` (self-authored mode, fleet inputs, no plan
+  reasoning) and, for gate changes, `gate-change-nonweakening-sweep`, both fingerprinted on the
+  fleet worktree, probes in `scratch_dir`, cleanup always run. A blocking finding (or a weakening
+  sweep) goes to the coder; a new commit, push and PR-body update follow, then one more review at
+  most. Nits reach the pr-opener as `review_notes`. The result carries
+  `review: {verdict, blocking, nits, rounds, sweep, model}`.
+
 ## [2.0.5] - 2026-11-04
 
 ### Fixed

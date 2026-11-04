@@ -6,8 +6,14 @@ Role fleet for one non-trivial code change. `/build-task <anything>` runs the
 1. **plan mode** reads the input, plans the change, audits the plan and commits it locally. It
    returns `awaiting_confirmation` with a short summary, the plan diff and the fleet size.
 2. After Max confirms, **build mode** checks that the approved plan is unchanged, writes tests per
-   acceptance criterion, judges and freezes them, codes against them, judges the code, pushes the
-   branch and opens a **draft** PR. It then writes back to the sources. Max reviews and merges.
+   acceptance criterion, judges and freezes them, codes against them and judges the code. Nothing is
+   committed until the code judge approves: then ONE commit step commits tests and code together
+   with the repo's hooks. It pushes the branch, opens a **draft** PR, has the PR reviewed
+   independently, and writes back to the sources. Max reviews and merges.
+
+With `confirm: "auto"` (opt-in, for goal or unattended runs) plan mode does not ask. It runs three
+gates (intent, commands, scope) and, when they pass, builds in the same run. When one fails it
+stops with `needs_human` and a ready `needs_max_section`.
 
 The input is any of: a yadgar ledger id, a Jira key, a GitHub or Codeberg issue or PR URL, a plan
 path, or free text.
@@ -22,9 +28,12 @@ path, or free text.
 ## Requirements
 
 - Claude Code with the Workflow tool (dynamic workflows) enabled.
-- The `yadgar` MCP server, with the seven role prompts in project `m-agahi/yadgar`:
+- The `yadgar` MCP server, with the ten role prompts in project `m-agahi/yadgar`:
   `scope-and-plan`, `plan-audit`, `fleet-test-writer`, `fleet-test-judge`, `fleet-coder`,
-  `fleet-code-judge`, `fleet-pr-opener`. The workflow embeds no role text. Each role agent loads its
+  `fleet-code-judge`, `fleet-pr-opener`, `fleet-intent-judge`, `pr-review` and
+  `gate-change-nonweakening-sweep`. Preflight checks all ten on every run, also when a run does not
+  need the intent judge (`confirm: "ask"`) or the sweep (no gate change). The workflow embeds no
+  role text. Each role agent loads its
   prompt with `mcp__yadgar__agent_prompt_get`. A missing role stops the run in preflight; there is no
   local fallback.
 - `git`, `gh` (authenticated), and `python3` >= 3.11 (or `tomli`) in the target repo's environment.
@@ -39,7 +48,9 @@ agent runs.
 
 ### Plan mode
 
-args: `{mode: "plan", input, repo, date, project?}`.
+args: `{mode: "plan", input, repo, date, project?, confirm?}`. `confirm` is `"ask"` (the default:
+return for confirmation) or `"auto"` (see below). Any other value returns `needs_human` before any
+agent runs.
 
 | Step | Agent              | Gate in script code                                                       |
 | ---- | ------------------ | ------------------------------------------------------------------------- |
@@ -76,7 +87,8 @@ the brief title.
 
 The full plan ref is a file, `.fleet/<task id>/plan_ref.json`, committed in the plan commit. It
 holds `branch`, `plan_path`, `plan_sha256`, `criteria`, `brief`, `task_id`, `slug`, `tldr`,
-`plan_facts` (scope fence, estimate, `test_cmd` and `repo_obligations`), `history` (cumulative
+`plan_diff` (2.1.0), `plan_facts` (scope fence, estimate, `test_cmd` and `repo_obligations`),
+`history` (cumulative
 runs, re-plans and agents) and
 `seal`, the sha256 of the canonical JSON of the rest. It holds no held-out example. Commit-plan
 reads the file back from the commit; the script checks that it parses to the sealed ref (a
@@ -90,29 +102,107 @@ Since 2.0.3, `plan_facts` is
 Build mode refuses a ref without `test_cmd`, `repo_obligations` and `commands` (made by 2.0.2 or
 earlier) with `needs_human` "plan_ref predates 2.0.3; re-run plan".
 
+### confirm "auto"
+
+After plan-audit approves and the plan is committed, `confirm: "auto"` runs these gates in order.
+The first failure stops the run:
+
+1. **G1 intent.** The role `fleet-intent-judge` (as `fleet:judge`, fingerprinted on the fleet
+   worktree) gets the brief with the source bodies, the ledger task body with its rulings
+   (`ledger_task`), `plan_path`, `criteria`, `plan_diff`, `allowed_additions`, `repo_obligations`
+   and `commands`. It returns `verdict` (`approve` or `refuse`), `deviations` (each
+   `{item, allowed_by, source_ref, fails_closed, verdict, reason}`) and `coverage`
+   (`{covered, missing}`). The script passes the gate only when the verdict is `approve`, every deviation has verdict `approve`, a non-empty
+   `allowed_by` and `fails_closed: true`, and `coverage.covered` is `true`. A `needs_human` or
+   `failed` from the judge fails the gate too.
+2. **G2 commands.** Every entry of `commands` must be the `test_cmd`, or a `check_cmd` of exactly
+   `pre-commit run <id> [--all-files] [--hook-stage <stage>]` whose hook id appears exactly once in
+   `.pre-commit-config.yaml` at `plan_commit`. A read-only infra step (`infra:precommit-ids`) runs a
+   fixed program: `git show <plan_commit>:.pre-commit-config.yaml`, parsed with PyYAML. No config,
+   no PyYAML or a parse error fails the gate. A refused command (`run_by: nobody`) fails it.
+3. **G3 scope fence**, pure script code over every planned path (criteria `test_files`,
+   `allowed_additions.files`, obligation `files`) and every command. It refuses `*.tf`, `*.tfvars`,
+   a `terraform/` or `.terraform` dir, `kustomization.y*ml`, YAML under `k8s/` or `manifests/`,
+   `charts/*/templates/`, anything under `.github/`, `rulesets`, secret-like paths (`.env*`,
+   `*secret*`, `*.pem`, `*.key`, `id_rsa*`, `*credentials*`), a command that names kubectl, helm or
+   an IaC tool, the default branch as the target, and a work repo other than the caller's.
+
+On a failure the result is `needs_human` with `failed_check` (`intent`, `commands` or `scope`),
+`intent` (the judge output), `plan_ref`, `plan_path` and `needs_max_section`: ready markdown with
+the failed check, the reasons, the judge's quotes and the plan path. It never asks. Max rules in the
+task, then the run is repeated in build mode with the same `plan_ref` and `confirm: "auto"`.
+
+When all gates pass, the same run continues into build mode with the `plan_ref` it just made. It
+skips preflight and workspace (already done in this run) and runs the shared verify path
+(load-ref, verify). The result carries `auto_confirmed: true` and `intent`.
+
+Build mode with `confirm: "auto"` re-runs G1-G3 before any writer: intake re-reads the sealed task
+(`intake:rulings`, so new ledger rulings count), the script checks that it resolves to the same
+source and repo, and the intent judge runs again (`:rerun` labels). A failure returns the same
+`needs_human` shape. A ref made before 2.1.0 has no `plan_diff` and stops with "re-run plan".
+
 ### Build mode
 
-args: `{mode: "build", plan_ref, date, project?}`.
+args: `{mode: "build", plan_ref, date, project?, confirm?}`.
 
-| Step | Agent              | Gate in script code                                                     |
-| ---- | ------------------ | ----------------------------------------------------------------------- |
-| 1    | -                  | tiny `plan_ref` shape wrong -> `needs_human` before any agent           |
-| 2    | preflight          | as in plan mode                                                         |
-| 3    | workspace (infra)  | reuses the fleet branch and worktree                                    |
-| 4    | load-ref (r/o)     | ref file at `plan_commit`: sha256, seal, branch, repo (below)           |
-| 5    | verify (read only) | plan hash at `plan_commit` and HEAD; HEAD position (below)              |
-| 6    | prepare (infra)    | one worktree per testable criterion on `<branch>--p<sha8>-t-<id>`       |
-| 7    | test writers       | one per criterion, in parallel                                          |
-| 8    | integrate (infra)  | merges the writer branches into the fleet branch                        |
-| 9    | test judge         | `revise` routes findings to the named writers only; 3 rounds max        |
-| 10   | hasher (freeze)    | sha256 of test files and runner config; `freeze_ref` = HEAD             |
-| 11   | coder              | status (checked after the hash check)                                   |
-| 12   | hasher             | any changed, new or removed hash key -> coder round rejected            |
-| 13   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan |
-| 13a  | -                  | `approve` with an unmet obligation -> `fix_code` (counts as a round)    |
-| 14   | push (infra)       | pushes the approved sha; a hook rejection -> coder (`fix_code`)         |
-| 15   | pr-opener          | draft PR at `approved_sha` (HEAD after the approving judge run)         |
-| 16   | write-back         | ledger section and one marked comment per external source               |
+| Step | Agent              | Gate in script code                                                        |
+| ---- | ------------------ | -------------------------------------------------------------------------- |
+| 1    | -                  | tiny `plan_ref` shape wrong -> `needs_human` before any agent              |
+| 2    | preflight          | as in plan mode                                                            |
+| 3    | workspace (infra)  | reuses the fleet branch and worktree                                       |
+| 4    | load-ref (r/o)     | ref file at `plan_commit`: sha256, seal, branch, repo (below)              |
+| 5    | verify (read only) | plan hash at `plan_commit` and HEAD; HEAD position (below)                 |
+| 5a   | auto gates         | `confirm: "auto"` only: G1-G3 against the current rulings                  |
+| 6    | test writers       | one per criterion, in parallel, all in the ONE fleet worktree, uncommitted |
+| 7    | hasher (ownership) | HEAD unchanged; changed paths = the pending criteria's reported files      |
+| 8    | test judge         | `revise` routes findings to the named writers only; 3 rounds max           |
+| 9    | hasher (freeze)    | test files and runner config; `freeze_tree` = the worktree tree            |
+| 10   | coder              | works uncommitted; status checked after the hash check                     |
+| 11   | hasher             | HEAD moved -> stop; any changed, new or removed hash key -> round rejected |
+| 12   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan    |
+| 12a  | -                  | `approve` with an unmet obligation -> `fix_code` (counts as a round)       |
+| 13   | commit (infra)     | `git add -A`, staged tree = `code_tree`, ONE commit WITH hooks (below)     |
+| 14   | push (infra)       | pushes the commit; a hook rejection -> coder (`fix_code`)                  |
+| 15   | pr-opener          | draft PR at `approved_sha` (the commit step's HEAD)                        |
+| 16   | review             | pr-review, plus the non-weakening sweep for gate changes (below)           |
+| 17   | write-back         | ledger section and one marked comment per external source                  |
+
+### No commit before approval
+
+Many repos run the full test suite in a pre-commit hook, so a commit of RED tests always fails, and
+hooks are never bypassed. So nothing commits until the code judge approves.
+
+- **Writers** all work in the one fleet worktree (`main_worktree`), concurrently, on disjoint
+  `test_files`. They never commit. After each writer round the hasher lists the changed paths: the
+  tree delta from the state at the round start (`git diff --name-only <base_tree> <tree>`) plus
+  every changed hasher-map key (an ignored conftest, an ignore rule). The script checks that HEAD
+  did not move ("writer committed"), that every writer's `files` holds only its own criterion's
+  test files ("writer AC1 touched <p>"), that every changed path is a test file of a criterion
+  pending this round ("writer touched <p>"), and that every changed path was reported in a
+  writer's `files`.
+- **The coder** works uncommitted too. The post-coder hasher stops the run when HEAD moved
+  ("coder committed"). The hash and fingerprint gates work on the files, as before.
+- **Tree fingerprint.** A worktree state is `{head, tree}` plus the hasher maps. `tree` is built in
+  a temporary index outside the worktree: `GIT_INDEX_FILE=<tmp> git read-tree HEAD`, `git add -A`,
+  `git write-tree`. The real index is not touched and no hook runs. A judge's before and after
+  states must match in HEAD, tree and every hasher map (the maps cover ignored runner config, which
+  the tree does not). `freeze_tree` is the tree at freeze; `code_tree` is the tree the code judge
+  judged. Test judge and code judge get `freeze_tree`, `code_tree` and `plan_commit`; diff
+  production changes with `git diff <freeze_tree>`.
+- **Commit step** (`infra:commit:r<n>`), after the code judge approves and the obligations gate
+  passes: `git add -A`; the staged tree (`git write-tree`) must equal `code_tree` ("staged tree X
+  != code tree Y", nothing committed); then ONE `git commit` WITH the hooks, never `--no-verify`,
+  never `--amend`. The step then builds the worktree tree again.
+
+  - The commit fails and the worktree tree still equals `code_tree`: a hook rejected it. The hook
+    output tail goes to the coder as `fix_code`; the changes stay staged; this counts as a code
+    round.
+  - The worktree tree differs from `code_tree` (an auto-formatting hook rewrote files), or the
+    committed `HEAD^{tree}` differs: `needs_human` "hook modified files". Never auto-accepted.
+  - Success: `approved_sha` = the new HEAD.
+
+  The first commit's subject is `feat(<task id>): <slug words>`; each later one (a review or hook
+  fix) is a NEW commit `fix(<task id>): code round <n>` (the PR squash-merges).
 
 Load-ref: an infra step returns `git show <plan_commit>:<ref_path>` and its sha256. Both must
 equal `ref_sha256`, the inner seal must hold, and the file's branch, repo and task id must match the
@@ -121,9 +211,9 @@ loaded ref. The ref file is also frozen: the hasher hashes it as a read-only con
 or writer that edits it trips the freeze.
 
 Verify: the sha256 of `plan_path` at `plan_commit` must equal `plan_sha256`, or the run stops with
-"plan changed since approval". HEAD must equal `plan_commit`, or descend from it by fleet commits of
-this build only (`test(<id>): ...`, `feat|fix(...): ...`, and the merges of this plan's criterion
-branches), with `plan_path` and the ref file unchanged. Anything else stops with the same reason.
+"plan changed since approval". HEAD must equal `plan_commit`, or descend from it by commit-step
+commits of this plan only (`feat(<task id>): <slug words>` and `fix(<task id>): code round <n>`),
+with `plan_path` and the ref file unchanged. Anything else stops with the same reason.
 Stage-plan, commit-plan and verify run the same embedded hash program.
 
 The risk tier is still computed and logged (short = `est_diff_lines < 20` AND `new_behaviour`
@@ -131,8 +221,8 @@ false), but the fleet always takes the full path: no role prompt supports a code
 criterion tests. A criterion with `test_files: []` is manual: it gets no writer, no frozen entry and
 no disjointness check, and it still reaches the PR opener so a human sees it.
 
-Worktrees live under `<repo>/.claude/worktrees/fleet-<task id>-<slug>/` (`main`,
-`p<sha8>-t-<criterion>`, `scratch`, `replan-<n>`). The workspace step adds `.claude/worktrees/` and
+Worktrees live under `<repo>/.claude/worktrees/fleet-<task id>-<slug>/` (`main`, `scratch`,
+`replan-<n>`). The workspace step adds `.claude/worktrees/` and
 `.claude/settings.local.json` to the repo's `info/exclude` when they are not already ignored.
 
 ### plan_wrong
@@ -143,13 +233,13 @@ A `plan_wrong` verdict stops the build. The script:
    `proposed_plan_change[]` (a finding without that line is used whole and logged);
 2. creates a detached worktree at the old `plan_commit`, runs scope-and-plan (the findings are an
    extra `text` source) and plan-audit there, and commits the new plan there;
-3. saves the old fleet-branch head as `fleet/<task id>-<slug>--superseded-<n>`, then resets the
-   fleet branch to the new plan commit;
+3. saves the uncommitted work (the judged tree) as `fleet/<task id>-<slug>--superseded-<n>`, a
+   plumbing `git commit-tree` object on the old head (no hooks run; it is never pushed), then
+   resets the fleet branch to the new plan commit and runs `git clean -fd` (never `-x`);
 4. returns `awaiting_confirmation` with `proposed_plan_change`, `plan_findings`, `superseded_ref`
    and a fresh `plan_ref`.
 
-The next build run starts fresh from the new plan: new criterion branches (named by the new plan
-commit), a new freeze. Round and agent caps reset per run; `cumulative` counts runs, re-plans and
+The next build run starts fresh from the new plan, with a new freeze. Round and agent caps reset per run; `cumulative` counts runs, re-plans and
 agents across runs.
 
 ### Write-back
@@ -199,19 +289,20 @@ The comparison runs in the script, never in an agent. A key that appears (for ex
 `conftest.py`), disappears or changes rejects the coder round, whatever the code judge says. Roles
 receive only the criterion test files in `frozen_tests`. Everything else (whole-file runner config,
 `.gitignore` files, sections, ignore rules outside the worktree, symlinks) goes in
-`frozen_config_sections`; `symlink:` values are link targets, not hashes. Judges
-also receive `code_base_ref`, the commit before the first coder round, because a re-freeze after
-`fix_tests` moves `freeze_ref` past earlier coder commits.
+`frozen_config_sections`; `symlink:` values are link targets, not hashes. Roles also receive
+`freeze_ref` (HEAD at the latest freeze), `freeze_tree` and `code_base_ref` (HEAD at the first
+freeze).
 
 Frozen files stay byte-equal between freezes. The only exception is an approved `fix_tests`
 round: its writers may revise frozen tests in place, and the script then re-freezes. In that
 re-freeze, only the test files of the criteria named in the code judge's `fix_tests` findings may
 change. Any other changed key (another criterion's tests, runner config, ignore rules, symlinks)
-stops the run with "re-freeze touched unrouted path". Each re-freeze is recorded in
-`refreeze_log` (`round`, `freeze_ref_before`, `freeze_ref_after`, `changed`). On a re-entry, the
-fleet branch is first merged into every criterion branch, and each writer and every test-judge
-round get the code judge's findings (writers: only those for their criterion) and the coder's
-commits.
+stops the run with "re-freeze touched unrouted path" (the ownership check after each writer round
+catches most of these first). Each re-freeze is recorded in `refreeze_log` (`round`,
+`freeze_tree_before`, `freeze_tree_after`, `changed`). On a re-entry, the writers work in the fleet
+worktree on top of the coder's uncommitted code; each writer and every test-judge round get the
+code judge's findings (writers: only those for their criterion), and the test judge gets
+`code_tree`.
 
 The hasher returns four separate maps (`files`, `sections`, `git`, `symlinks`), so a real file
 named like a synthetic key (for example `symlink:conftest.py`) cannot mask one. The `suspicious`
@@ -224,8 +315,9 @@ assertion-rewrite pyc) whose header matches a frozen test's mtime and size would
 the frozen source. Before every freeze and every post-coder hash check (so before every code-judge
 run), an infra step `infra:purge-bytecode` deletes every `__pycache__` dir, `*.pyc`/`*.pyo` file and
 `.pytest_cache` dir in the worktree (sparing `.git`, `.venv`, `venv`, `.tox`, `.nox`,
-`node_modules`, `.claude/worktrees`) and returns the count. The judge's "before" fingerprint is
-taken after the purge. The coder and the code judge get
+`node_modules`, `.claude/worktrees`) and returns the count. The judge's "before" state is taken
+after the purge. The judge fingerprint leaves the `suspicious` list out (a test run may leave
+bytecode); the freeze and post-coder checks act on it. The writers, both judges and the coder get
 `test_env: {PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider"}` for every run of
 the frozen tests. The code judge also gets `hash_recheck`
 (`{"<map>/<key>": {frozen, current, match}}`) for its report; the script's own comparison decides.
@@ -247,12 +339,12 @@ The script checks the shape: `test_cmd.command` is a non-empty string; each obli
 unique `id`, a known `kind` and an `instruction`. Plan-audit, the coder and the code judge get
 `repo_obligations` and `test_cmd`; the writers and the test judge get `test_cmd`. Every test run
 uses `test_cmd` with `test_cmd.env` first and `test_env` on top. The coder satisfies every
-obligation in `feat|fix(...)` commits and reports `obligations_done`.
+obligation in its uncommitted changes and reports `obligations_done`.
 
 **The workflow script runs no planner-supplied command.** Obligations are enforced three ways:
 
-1. **The repo's own hooks.** Pre-commit hooks fire on the coder's commits. Pre-push hooks fire on
-   the workflow's push (`infra:push`), which never bypasses them.
+1. **The repo's own hooks.** Pre-commit hooks fire on the commit step (`infra:commit:r<n>`).
+   Pre-push hooks fire on the workflow's push (`infra:push`). Neither bypasses them.
 2. **The code judge.** It returns `obligations_check: [{id, met, evidence}]`, judged from the diff;
    it may run an obligation's `check_cmd` at its own judgement. On `approve`, the script requires
    every obligation to be `met: true`; otherwise it converts the verdict to `fix_code`, routes the
@@ -338,44 +430,91 @@ The script pins the role contract, not the prose:
 - `EXPECTED_VERSIONS` holds the minimum role-page versions. Preflight reads each page's version. A
   lower version (stale or rolled back) stops the run; a higher one is logged as "prose-only changes
   assumed" and returned as `role_versions`.
-- Every role page carries `CONTRACT: fleet-v2` under its DISPATCH line. Preflight and every role
+- Every role page carries `CONTRACT: fleet-v3` under its DISPATCH line. Preflight and every role
   runner report the marker; any other value stops the run.
 - Each role runner reports the version and marker it loaded. A value that differs from preflight
   (the page changed mid-run) discards the result.
 - `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are
-  checked against the frozen enums. A missing key or an unknown verdict is contract drift and stops
+  checked against the frozen enums. fleet-v3: the writer returns `criterion_id, tests, files`; the
+  coder `changed_paths, suite_result, added_symbols, frozen_tests_red_at_start, obligations_done`
+  (no `commit`/`commits` key any more); the intent judge `verdict, deviations, coverage`;
+  pr-review `verdict, findings, touches_gate, checked`; the sweep `verdict, units, findings`. A missing key or an unknown verdict is contract drift and stops
   the run.
 - Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
-  `commands`, `contract`, `role` or `cap` (`null` when the run did not stop at one of them). A cap
-  stop names the gate that rejected the last round (hash, obligations gate or push hook).
+  `commands`, `contract`, `role`, `cap`, `ownership`, `commit`, `review`, `intent` or `scope`
+  (`null` when the run did not stop at one of them). A cap stop names the gate that rejected the
+  last round (hash, obligations gate, commit hook, push hook or review).
 
 ### Models
 
-Each role runs on the tier named by the first `DISPATCH: model=<tier> (fallback=<tier>)` line of
-its role page. Preflight returns those lines; the script parses them. Accepted tiers: `fable`,
-`opus`, `sonnet`, `haiku`. A missing, unparseable or unknown line gives `sonnet`, and the run logs
-it. A role agent that dies is retried once on its fallback tier, when one is set; the retry counts
-toward the agent cap. Infra agents (preflight, intake, workspace, branch-scan, stage-plan,
-commit-plan, load-ref, verify, prepare,
-integrate, hasher, push, write-back) run on `sonnet`.
+Each role, the reviewer and the sweep included, runs on the tier named by the first
+`DISPATCH: model=<tier> (fallback=<tier> ...)` line of its role page. Preflight returns those
+lines; the script parses them. Accepted tiers: `fable`, `opus`, `sonnet`, `haiku`. No tier is
+hardcoded: a missing, unparseable or unknown line stops the run in preflight (`stop_gate:
+contract`). A role agent that dies is retried once on the page's fallback tier, when one is set,
+never on any other; the retry counts toward the agent cap. Every role dispatch logs
+`model used: <label> -> <tier>`. Infra agents (preflight, intake, workspace, branch-scan,
+stage-plan, commit-plan, load-ref, verify, hasher, commit, push, review paths and cleanup,
+write-back) run on `sonnet`.
+
+### Independent review
+
+After the commit step, the push and the pr-opener (draft PR open):
+
+1. `infra:review-paths:v<n>` (read only) lists `changed_paths` =
+   `git diff --name-only <code_base_ref>..<approved_sha>`.
+2. `pr-review` (library pattern, `fleet:judge`, fingerprinted on the fleet worktree) gets
+   `pr_url`, `pr_number`, `repo`, `base_ref`, `head_sha`, `worktree`, `scratch_dir`, `criteria`
+   (`[{id, text}]`), `repo_obligations`, `changed_paths`, `mode: "self-authored"` and
+   `fleet: true`, and no tldr or plan reasoning. It returns `verdict`, `findings` (each
+   `{id, severity, category, file, line, summary, evidence}`, severity `blocking` or `nit`),
+   `touches_gate` and `checked`. Any blocking finding makes it `changes_requested`, whatever the
+   stated verdict.
+3. The non-weakening sweep (`gate-change-nonweakening-sweep`, same inputs) runs when
+   `touches_gate` is true or a changed path names a hook, gate, guard, validator, policy, auth rule,
+   check or CI file, `.github/`, `.pre-commit-config*` or a `Makefile`. A `weakening` verdict is a
+   blocking finding.
+4. Probes run in detached worktrees under `scratch_dir`. `infra:review-cleanup:v<n>` always runs
+   afterwards, even when the review stops the run (`git worktree remove --force` for every
+   worktree under `scratch_dir`, then `git worktree prune`).
+
+Blocking findings go to the coder as `fix_code`, then hasher, code judge, a NEW commit, push, the
+pr-opener updates the PR body, and the review runs again. A review fix counts as a code round. At
+most one extra review round: a second blocking review stops with `needs_human` and the findings
+(`stop_gate: review`). Nits go to the pr-opener as `review_notes`. The result carries
+`review: {verdict, blocking, nits, rounds, sweep, model}`. Without a PR the review is skipped and
+listed in `gates_not_run`.
 
 ### Judge separation
 
-Judges, preflight, intake, branch-scan, load-ref, verify, the comment listing and the hasher run as
-the `fleet:judge` agent, which has `Write`, `Edit` and
-`NotebookEdit` disallowed. `Bash` stays, because the code judge must run the suite. The backstop is
-a worktree fingerprint (HEAD, sha256 of `git status --porcelain`, sha256 of `git diff HEAD`) taken
-before and after every judge run. Any difference discards the verdict and returns `needs_human`
-with reason `judge mutated worktree`. This catches a suite that leaves tracked or unignored changes
-too. It does not catch a change that a judge makes and reverts within its own run.
+Judges (test, code, intent, pr-review, sweep), preflight, intake, branch-scan, load-ref, verify,
+the pre-commit id read, the review path listing, the comment listing and the hasher run as the
+`fleet:judge` agent, which has `Write`, `Edit` and `NotebookEdit` disallowed. `Bash` stays, because
+the code judge must run the suite. The backstop is a worktree state (HEAD, the temp-index tree and
+every hasher map) taken before and after every judge run. Any difference discards the verdict and
+returns `needs_human` with reason `judge mutated worktree` and the changed parts. This catches a
+suite that leaves tracked or unignored changes, and ignored runner config, too. It does not catch a
+change that a judge makes and reverts within its own run.
 
 ### Limits
 
-- Agent cap 60 per run. Test rounds: 3 per entry into the test loop. Code rounds: 3 per build run;
-  a `fix_tests` detour counts as one code round and opens a new test-loop entry.
+- Agent cap 60 per run. With `confirm: "auto"` one run holds the plan, the gates, the build and the
+  review, so the cap is reached sooner (a two-criterion happy run uses about 35 agents; one review
+  fix round adds about 13). Test rounds: 3 per entry into the test loop. Code rounds: 3 per build
+  run; a `fix_tests` detour, a commit-hook rejection, a push-hook rejection and a review fix each
+  count as one code round.
+- Nothing is committed before the code judge approves, so an interrupted build leaves uncommitted
+  tests and code in the fleet worktree. The workspace and verify steps require a clean worktree,
+  so a re-run stops with `needs_human` until a human commits, stashes or cleans that work.
+- The ownership check sees what the writers left in the tree; it cannot tell which concurrent
+  writer wrote a file beyond each writer's own `files` report.
+- G2 needs PyYAML in the `python3 -I` interpreter; without it every `check_cmd` fails the gate.
+- The intent judge reads rulings from the ledger task body; a ruling kept elsewhere is not seen.
+- A re-plan after `plan_wrong` saves the uncommitted work with `git commit-tree` (a plumbing commit
+  object on a side branch, no hooks). That is not a `git commit`, and it is never pushed.
 - The fleet runs no held-out examples and no mutation, coverage or scanner gates. Judges receive
   explicit `{status: "not_run"}` markers, and `gates_not_run` reaches the PR opener and the result.
   The planner's `held_out_examples` are dropped before any other role sees the plan. The script
@@ -391,9 +530,10 @@ too. It does not catch a change that a judge makes and reverts within its own ru
   would cause a false mismatch. So a coder can drop a `.pth` or `sitecustomize.py` into such a venv
   and v1 does not see it. A planned follow-up (v1.1) hashes the startup hooks in the site-packages of
   the judge's interpreter.
-- New files outside `allowed_additions` are not denied by script in v1.
-- A judge's test run that leaves untracked, unignored files (caches the repo does not ignore) flips
-  the fingerprint and stops the run. The workspace step adds `__pycache__/`, `.pytest_cache/` and
+- New files outside `allowed_additions` are not denied by script in v1 (the auto-mode scope fence
+  checks the planned paths, not the coder's).
+- A judge's test run that leaves untracked, unignored files (caches the repo does not ignore)
+  changes the tree and stops the run. The workspace step adds `__pycache__/`, `.pytest_cache/` and
   `.coverage` to `info/exclude` to cut this down.
 - Bytecode inside `.venv`, `venv`, `.tox` and `.nox` is not purged or checked. A pyc planted there
   for an installed module is not detected. A frozen test's pyc is caught only by name (its module
@@ -435,6 +575,16 @@ Build mode, `status: "ok"`:
   "stop_gate": null,
   "role_versions": { "fleet-coder": 10 },
   "refreeze_log": [],
+  "review": {
+    "verdict": "approve",
+    "blocking": [],
+    "nits": [],
+    "rounds": 1,
+    "sweep": null,
+    "model": "opus"
+  },
+  "auto_confirmed": false,
+  "intent": null,
   "write_back": {
     "ledger": [{ "ref": "42", "status": "written" }],
     "comments": []
@@ -450,6 +600,9 @@ Build mode, `status: "ok"`:
 `status: "awaiting_confirmation"` (plan mode, or build mode after `plan_wrong`) adds `tldr`,
 `plan_diff`, `fleet_size`, `plan_path`, `commands`, `plan_ref` and `cumulative`; after `plan_wrong` also
 `proposed_plan_change`, `plan_findings`, `superseded_ref` and `superseded_head`.
+
+`status: "needs_human"` from a failed auto gate adds `failed_check`, `intent`, `plan_ref`,
+`plan_path` and `needs_max_section`.
 
 ## Tests
 
