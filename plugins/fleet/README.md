@@ -190,8 +190,10 @@ hooks are never bypassed. So nothing commits until the code judge approves.
   judged. Test judge and code judge get `freeze_tree`, `code_tree` and `plan_commit`; diff
   production changes with `git diff <freeze_tree>`.
 - **Scope fence on the real changes** (every mode, not only `confirm: "auto"`). The post-coder
-  hasher lists every path this build changed (`git diff --name-only <code_base_ref> <tree>`, the
-  tree holding untracked files too), and the writer-round listing does the same per round. Any
+  hasher lists every path this build changed (`git diff --name-only <plan_commit> <tree>`, the
+  tree holding untracked files too), and the writer-round listing does the same per round. Verify
+  fences the commits already on the branch (`git diff --name-only <plan_commit>..HEAD`) before any
+  role runs. The review paths and the sweep trigger also diff from `plan_commit`. Any
   path the fence refuses (IaC files, Kubernetes and Helm manifests, `.github/`, rulesets,
   secret-like paths; see G3) stops the run with `needs_human` naming the path
   (`stop_gate: scope`), before anything is committed.
@@ -289,11 +291,27 @@ The hasher freezes every criterion test file, plus:
   every commit (`.ruff_cache/.gitignore`). Also frozen: the worktree's `info/exclude` (key
   `git:info/exclude`, resolved with `git rev-parse --git-path`) and the global
   `core.excludesFile` (key `git:core.excludesFile`). Editing an ignore rule is a change;
-- the hook surface: the whole `.pre-commit-config.yaml` (anywhere), every repo file named in the
-  `entry` of a `repo: local` hook of the root config, `git:core.hooksPath` (its value, `UNSET` when
-  not set) and every file under the hooks dir git uses (`git:hooks/<file>`, under
-  `core.hooksPath` or `git rev-parse --git-path hooks`). The commit step runs these hooks, and
-  G2 checked the hook ids at the plan commit, so the coder may not change them;
+- the hook surface: the whole `.pre-commit-config.yaml` (anywhere), `git:core.hooksPath` (its
+  value, `UNSET` when not set) and every file under the hooks dir git uses (`git:hooks/<file>`).
+  For each `repo: local` hook of the root config, the `entry` and every `args` item are
+  shell-split; `-m <mod>` resolves to `<mod>.py` or `<mod>/__init__.py`. The whole dir tree of
+  every repo file named this way is frozen (tracked and untracked-not-ignored). A `-c` payload, or
+  a token that is neither a repo file nor a binary on PATH, is suspicious and stops the run at
+  freeze ("unresolvable local hook <id>"). The commit step runs these hooks, and G2 checked the
+  hook ids at the plan commit, so the coder may not change them;
+- git config exec vectors: `git config --local --list` (sorted, with values; `branch.*` and
+  `remote.*.gh-resolved` left out, because the workflow's own push and `gh` set them), the worktree
+  config when `extensions.worktreeConfig` is on, every `include.path`/`includeIf.*.path` target,
+  every `.gitattributes` and `info/attributes`. So a coder cannot add an fsmonitor, a filter
+  driver or an include. The hasher's own git calls and the commit step run with
+  `GIT_CONFIG_NOSYSTEM=1` and `-c core.fsmonitor=false`; the commit step also pins
+  `-c core.hooksPath` to the frozen value (or git's default hooks dir);
+- ignored files (map `ignored`): `git ls-files --others --ignored --exclude-standard`, minus the
+  tool caches (`__pycache__`, `.pytest_cache`, `.hypothesis`, `.ruff_cache`, `.mypy_cache`,
+  `.import_linter_cache`, `node_modules/.cache`, `.coverage`). Inside `.venv`, `venv`, `.tox`,
+  `.nox` and `node_modules` only `*.pth`, `sitecustomize.py` and `usercustomize.py` count. A new or
+  changed ignored path after a writer round or a coder round is a violation ("ignored path
+  written: <p>");
 - sections, hashed under `<path>#<section>` after canonicalisation (sorted keys, compact JSON):
   `pyproject.toml#tool.pytest` (every `[tool.pytest.*]` table), `package.json#jest`,
   `package.json#vitest`, `package.json#mocha`, `package.json#scripts.test`. The rest of these files
@@ -479,7 +497,7 @@ write-back) run on `sonnet`.
 After the commit step, the push and the pr-opener (draft PR open):
 
 1. `infra:review-paths:v<n>` (read only) lists `changed_paths` =
-   `git diff --name-only <code_base_ref>..<approved_sha>`.
+   `git diff --name-only <plan_commit>..<approved_sha>`.
 2. `pr-review` (library pattern, `fleet:judge`, fingerprinted on the fleet worktree) gets
    `pr_url`, `pr_number`, `repo`, `base_ref`, `head_sha`, `worktree`, `scratch_dir`, `criteria`
    (`[{id, text}]`), `repo_obligations`, `changed_paths`, `mode: "self-authored"` and
@@ -515,9 +533,9 @@ change that a judge makes and reverts within its own run.
 
 ### Limits
 
-- Agent cap 60 per run. With `confirm: "auto"` one run holds the plan, the gates, the build and the
-  review, so the cap is reached sooner (a two-criterion happy run uses about 35 agents; one review
-  fix round adds about 13). Test rounds: 3 per entry into the test loop. Code rounds: 3 per build
+- Agent cap 100 per run (60 before 2.1.0). With `confirm: "auto"` one run holds the plan, the
+  gates, the build and the review: a two-criterion happy run uses about 35 agents, and one review
+  fix round adds about 13. Every cap hit is logged. Test rounds: 3 per entry into the test loop. Code rounds: 3 per build
   run; a `fix_tests` detour, a commit-hook rejection, a push-hook rejection and a review fix each
   count as one code round.
 - Nothing is committed before the code judge approves, so an interrupted build leaves uncommitted
@@ -527,8 +545,13 @@ change that a judge makes and reverts within its own run.
   writer wrote a file beyond each writer's own `files` report.
 - G2 needs PyYAML in the `python3 -I` interpreter; without it every `check_cmd` fails the gate.
 - The intent judge reads rulings from the ledger task body; a ruling kept elsewhere is not seen.
+- A test run that leaves ignored output outside the tool-cache list (`build/`, `dist/`,
+  `*.egg-info`, coverage XML) changes the `ignored` map: after a judge it reads as "judge mutated
+  worktree", after a writer or the coder as "ignored path written".
 - The hook surface is frozen, so a change that must edit `.pre-commit-config.yaml`, a local hook
-  script or the hooks dir cannot pass the fleet. The real-change scope fence likewise stops any
+  script (or anything in its dir) or the hooks dir cannot pass the fleet. A local hook whose
+  command uses a word that is neither a repo file nor a binary on PATH (for example
+  `uv run ...`) stops every run at freeze. The real-change scope fence likewise stops any
   change to `.github/`, IaC, Kubernetes, rulesets or secret-like paths, in every mode.
 - A re-plan after `plan_wrong` saves the uncommitted work with `git commit-tree` (a plumbing commit
   object on a side branch, no hooks). That is not a `git commit`, and it is never pushed.

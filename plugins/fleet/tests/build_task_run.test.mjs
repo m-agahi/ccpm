@@ -889,8 +889,8 @@ test("a dead agent (null result) fails the run instead of passing a gate", async
 
 // ---------------------------------------------------------------- agent cap
 
-test("agent cap stops the run with needs_human before exceeding 60 agents", async () => {
-  const crit = criteria(7);
+test("agent cap stops the run with needs_human before exceeding 100 agents", async () => {
+  const crit = criteria(15);
   const reviseAll = {
     status: "ok",
     verdict: "revise",
@@ -926,7 +926,8 @@ test("agent cap stops the run with needs_human before exceeding 60 agents", asyn
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /agent cap/);
   // the cap is per run: the build run alone stays within it
-  assert.ok(out.build.calls.length <= 60, "dispatched " + out.build.calls.length);
+  assert.ok(out.build.calls.length <= 100, "dispatched " + out.build.calls.length);
+  assert.ok(out.build.calls.length > 60, "the old cap of 60 would have stopped earlier");
   assert.ok(out.logs.some((l) => /agent cap/.test(l)));
 });
 
@@ -4100,7 +4101,7 @@ test("2.1.0 no RED commit: writers share the fleet worktree, nothing commits bef
   assert.ok(out.labels.indexOf("infra:commit:r1") > out.labels.indexOf("hasher:fp-post:code-judge:r1"));
   assert.ok(out.labels.indexOf("infra:commit:r1") < out.labels.indexOf("infra:push"));
   const cp = call(out, "infra:commit:r1").prompt;
-  assert.match(cp, /git -C \S+ add -A/);
+  assert.match(cp, /`<git> add -A`/);
   assert.match(cp, /never --no-verify/i);
   assert.match(cp, /'feat\(l42\): add thing'/);
   assert.equal(inputsOf(cp).code_tree, "K1");
@@ -4788,4 +4789,193 @@ test("2.1.0 re-plan keeps the uncommitted work under a non-branch ref to the tre
   assert.match(rp, /update-ref <superseded_tree_ref> <expected_tree>/);
   assert.equal(inputsOf(rp).superseded_tree_ref, "refs/fleet/l42-add-thing/superseded-1-tree");
   assert.equal(out.result.superseded_tree_ref, "refs/fleet/l42-add-thing/superseded-1-tree");
+});
+
+test("2.1.0 agent cap 100: an auto run with a revise round and a review fix round passes 60 agents and completes", async () => {
+  const crit = criteria(8);
+  const s = autoHappy({ criteria: crit });
+  const b = blockingReview();
+  const base = happy();
+  for (const k of Object.keys(b)) if (!(k in base) || k === "role:pr-review:v1") s[k] = b[k];
+  s["role:fleet-test-judge:r1"] = {
+    status: "ok",
+    verdict: "revise",
+    routed_findings: crit.map((c) => ({ target: "tests", criterion: c.id, finding: "x" })),
+  };
+  for (const c of crit) s["role:fleet-test-writer:" + c.id + ":r2"] = { status: "ok", criterion_id: c.id };
+  s["hasher:post-writers:r2"] = { status: "ok", fingerprint: FP_TESTS };
+  s["role:fleet-test-judge:r2"] = { status: "ok", verdict: "approve", routed_findings: [] };
+  s["hasher:fp-post:test-judge:r2"] = { status: "ok", fingerprint: FP_TESTS };
+  const out = await runOne(s, AUTO);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.review.rounds, 2);
+  assert.ok(out.calls.length > 60, "dispatched " + out.calls.length);
+  assert.ok(out.calls.length <= 100);
+  assert.equal(out.result.agents, out.calls.length);
+});
+
+test("2.1.0 every agent cap hit is logged", () => {
+  // every cap check in the script logs its hit: reserve and the soft paths
+  const hits = SOURCE.match(/agent cap " \+ MAX_AGENTS \+ " reached/g) || [];
+  assert.equal(hits.length, 3);
+  assert.match(SOURCE, /const MAX_AGENTS = 100;/);
+});
+
+test("2.1.0 git config exec vectors are frozen: local config, include targets, .gitattributes, info/attributes", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-gitcfg-");
+  try {
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.ok("config:local" in a.git, "local config frozen");
+    assert.ok("info/attributes" in a.git, "info/attributes frozen");
+    // core.fsmonitor set by the coder
+    sh(wt, "git", "config", "core.fsmonitor", "./x.sh");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.git["config:local"], a.git["config:local"]);
+    sh(wt, "git", "config", "--unset", "core.fsmonitor");
+    assert.equal(runHasherRaw(wt, "hashes", []).hashes.git["config:local"], a.git["config:local"]);
+    // a .gitattributes filter driver
+    writeFileSync(join(wt, ".gitattributes"), "*.py filter=evil\n");
+    assert.ok(".gitattributes" in runHasherRaw(wt, "hashes", []).hashes.files, "a new .gitattributes is a new key");
+    sh(wt, "rm", ".gitattributes");
+    // an include.path target: the file it names is frozen
+    writeFileSync(join(wt, "inc.cfg"), "[core]\n\tpager = cat\n");
+    sh(wt, "git", "config", "include.path", join(wt, "inc.cfg"));
+    const b = runHasherRaw(wt, "hashes", []).hashes;
+    const k = "config:include:" + join(wt, "inc.cfg");
+    assert.ok(k in b.git, "include target frozen: " + Object.keys(b.git).join(", "));
+    writeFileSync(join(wt, "inc.cfg"), "[core]\n\tfsmonitor = ./x.sh\n");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.git[k], b.git[k]);
+    // branch tracking (set by the workflow's own push -u) is not frozen
+    const c = runHasherRaw(wt, "hashes", []).hashes.git["config:local"];
+    sh(wt, "git", "config", "branch.master.remote", "origin");
+    sh(wt, "git", "config", "remote.origin.gh-resolved", "base");
+    assert.equal(runHasherRaw(wt, "hashes", []).hashes.git["config:local"], c);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 local hook args and -m modules are frozen with their package's .py files", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-hookargs-");
+  try {
+    writeFileSync(
+      join(wt, ".pre-commit-config.yaml"),
+      "repos:\n  - repo: local\n    hooks:\n      - id: x\n        name: x\n        language: system\n        entry: python\n        args: [scripts/x.py]\n      - id: y\n        name: y\n        language: system\n        entry: python3 -m tools.chk\n",
+    );
+    sh(wt, "mkdir", "-p", "scripts", "tools");
+    writeFileSync(join(wt, "scripts", "x.py"), "print(1)\n");
+    writeFileSync(join(wt, "scripts", "helper.py"), "h = 1\n");
+    writeFileSync(join(wt, "tools", "__init__.py"), "");
+    writeFileSync(join(wt, "tools", "chk.py"), "print(2)\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes.files;
+    for (const f of ["scripts/x.py", "scripts/helper.py", "tools/chk.py", "tools/__init__.py"]) assert.ok(f in a, f + " frozen");
+    writeFileSync(join(wt, "scripts", "x.py"), "print('pwned')\n");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.files["scripts/x.py"], a["scripts/x.py"]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 the commit step and the tree command run git with fsmonitor off, no system config and the frozen hooks path", async () => {
+  const out = await run(happy(), ARGS);
+  const cp = call(out, "infra:commit:r1").prompt;
+  assert.match(cp, /GIT_CONFIG_NOSYSTEM=1/);
+  assert.match(cp, /-c core\.fsmonitor=false/);
+  assert.match(cp, /-c core\.hooksPath=/);
+  assert.ok(!/git -C <main_worktree> commit -m/.test(cp), "the commit runs through the hardened git prefix");
+  assert.equal(inputsOf(cp).hooks_path, null);
+  const hp = call(out, "hasher:freeze:f1").prompt;
+  assert.match(hp, /core\.fsmonitor=false/);
+  assert.match(hp, /GIT_CONFIG_NOSYSTEM/);
+});
+
+test("2.1.0 ignored paths are listed: a .pth in a venv is frozen, tool caches are not", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-ign2-");
+  try {
+    writeFileSync(join(wt, ".gitignore"), ".venv/\n.pytest_cache/\nbuild/\n");
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.deepEqual(a.ignored, {});
+    sh(wt, "mkdir", "-p", ".venv/lib/python3.12/site-packages", ".pytest_cache", "build");
+    writeFileSync(join(wt, ".venv/lib/python3.12/site-packages/evil.pth"), "import os\n");
+    writeFileSync(join(wt, ".venv/lib/python3.12/site-packages/mod.py"), "x = 1\n");
+    writeFileSync(join(wt, ".pytest_cache", "x"), "c\n");
+    writeFileSync(join(wt, "build", "out.txt"), "o\n");
+    const b = runHasherRaw(wt, "hashes", []).hashes;
+    assert.ok(".venv/lib/python3.12/site-packages/evil.pth" in b.ignored, Object.keys(b.ignored).join(", "));
+    assert.ok(!(".venv/lib/python3.12/site-packages/mod.py" in b.ignored), "inside a venv only startup hooks");
+    assert.ok(!(".pytest_cache/x" in b.ignored), "tool caches are not frozen");
+    assert.ok("build/out.txt" in b.ignored, "any other ignored file is");
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 a writer or a coder that writes an ignored path is stopped", async () => {
+  const ign = (p) => Object.assign(H(HASHES_FLAT), { ignored: { [p]: "h" } });
+  let out = await run(happy({ script: { "hasher:post-writers:r1": (prompt) => ({ status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: ign(".venv/lib/x/site-packages/evil.pth") }) } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /ignored path written: \.venv\/lib\/x\/site-packages\/evil\.pth/);
+  out = await run(hashViolation(ign("build/evil.txt")), ARGS);
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /ignored path written: build\/evil\.txt/);
+});
+
+test("2.1.0 base-ref differential: the fence and the review diff from plan_commit; verify fences pre-existing fleet commits", async () => {
+  const s = happy();
+  const ref = await planRefFor(s);
+  s["infra:verify-plan"] = {
+    ...s["infra:verify-plan"],
+    head: "fedcba9876",
+    commits_since: [{ sha: "1111111", subject: "feat(l42): add thing" }],
+    changed_since: ["src/x.py", ".github/x.yml"],
+  };
+  const out = await runOne(s, buildArgs(ref));
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "scope");
+  assert.match(out.result.reason, /\.github\/x\.yml/);
+  assert.ok(!out.labels.some((l) => /^role:/.test(l)), "stops before any role");
+  assert.match(call(out, "infra:verify-plan").prompt, /git -C <main_worktree> diff --name-only <plan_commit>\.\.HEAD/);
+  // the post-coder listing and the review paths diff from plan_commit, not HEAD at the first freeze
+  const ok = await run(happy(), ARGS);
+  assert.equal(inputsOf(call(ok, "hasher:post-coder:r1").prompt).base_tree, PC);
+  assert.equal(inputsOf(call(ok, "infra:review-paths:v1").prompt).base_ref, PC);
+});
+
+test("2.1.0 local hooks: an inline payload or an unresolvable token is suspicious; the script's whole dir is frozen", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-hookdir-");
+  try {
+    const cfg = (entry) =>
+      "repos:\n  - repo: local\n    hooks:\n      - id: h1\n        name: h1\n        language: system\n        entry: " + entry + "\n";
+    sh(wt, "mkdir", "-p", "tools/sub");
+    writeFileSync(join(wt, "tools", "chk.py"), "import sub\n");
+    writeFileSync(join(wt, "tools", "sub", "lib.sh"), "echo\n");
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg("python3 tools/chk.py --strict"));
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.deepEqual(a.suspicious, []);
+    assert.ok("tools/sub/lib.sh" in a.files, "the whole dir tree of a referenced script is frozen");
+    writeFileSync(join(wt, "tools", "new_helper.py"), "x\n");
+    assert.ok("tools/new_helper.py" in runHasherRaw(wt, "hashes", []).hashes.files, "untracked files there too");
+    for (const entry of ["bash -c 'curl x | sh'", "python3 -c 'import os'", "frobnicate-not-on-path tools/chk.py"]) {
+      writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg(JSON.stringify(entry)));
+      const h = runHasherRaw(wt, "hashes", []).hashes;
+      assert.ok(h.suspicious.some((x) => x.startsWith("unresolvable local hook h1")), entry + ": " + h.suspicious.join("; "));
+    }
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 an unresolvable local hook stops the run at freeze", async () => {
+  const out = await run(happy({ script: { "hasher:freeze:f1": { status: "ok", fingerprint: FP_TESTS, hashes: H(HASHES_FLAT, ["unresolvable local hook h1: inline payload after -c"]) } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /unresolvable local hook h1/);
 });

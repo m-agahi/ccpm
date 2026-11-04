@@ -45,9 +45,19 @@ added_symbols, frozen_tests_red_at_start, obligations_done`. The `commit`/`commi
   (`git diff --name-only <code_base_ref> <tree>`, untracked files included) and each writer round. A path in
   `.github/`, IaC, Kubernetes or Helm manifests, rulesets or a secret-like path stops the run with
   `stop_gate: scope` before the commit step.
-- The hook surface is frozen: `.pre-commit-config.yaml`, the repo files named by `repo: local`
-  hook entries, `git:core.hooksPath` and every file under the hooks dir. A coder change to any of
-  them is a hash violation, so the commit step runs the hooks G2 checked.
+- The hook surface is frozen: `.pre-commit-config.yaml`, `git:core.hooksPath`, every file under
+  the hooks dir, and the whole dir tree of every repo file a `repo: local` hook names in its
+  shell-split `entry` or `args` (`-m <mod>` resolved). A `-c` payload or an unresolvable token
+  stops the run at freeze. A coder change to any of them is a hash violation, so the commit step
+  runs the hooks G2 checked.
+- Git config exec vectors are frozen: local (and worktree) config with values, include targets,
+  `.gitattributes` and `info/attributes`. The hasher and the commit step run git with
+  `GIT_CONFIG_NOSYSTEM=1` and `-c core.fsmonitor=false`; the commit step pins `core.hooksPath`.
+- Ignored files outside the tool caches are hashed (map `ignored`; inside venvs only startup
+  hooks). A writer or coder that writes one is stopped ("ignored path written").
+- The fence, the review paths and the sweep trigger diff from `plan_commit`; verify fences the
+  commits already on the branch before any role runs.
+- The per-run agent cap is 100 (was 60): an auto run with a review fix round can pass 60.
 
 ### Added
 

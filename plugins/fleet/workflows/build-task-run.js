@@ -42,7 +42,8 @@ const ROLES = [
 const TIERS = ["fable", "opus", "sonnet", "haiku"];
 const INFRA_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
-const HASH_MAPS = ["files", "sections", "git", "symlinks"];
+// "ignored": ignored files outside tool caches (startup hooks only inside venvs)
+const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // Minimum role-page versions this script was built against. Names and enums
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
@@ -137,7 +138,7 @@ const PRECOMMIT_CMD_RE = /^pre-commit run ([A-Za-z0-9_.:-]+)( --all-files)?( --h
 // confirm "auto" G3 scope fence over every planned path and command.
 const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp)\b/i;
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
-const MAX_AGENTS = 60;
+const MAX_AGENTS = 100;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
 const MAX_CODE_ROUNDS = 3; // total coder rounds; a fix_tests detour counts as one
 const SHORT_PATH_MAX_DIFF = 20; // tier is computed and logged; the short path is disabled
@@ -201,7 +202,7 @@ const WALK_SKIP_DIRS = [".git", "node_modules", ".venv", "venv", ".tox", ".nox"]
 // names): runner config in a skipped cache dir, and bytecode (*.pyc/*.pyo)
 // named after a frozen test module or conftest, found anywhere the walk or a
 // cache scan reaches.
-const SUSPICIOUS_PREFIXES = ["runner config in a skipped cache dir: ", "bytecode for a frozen file: "];
+const SUSPICIOUS_PREFIXES = ["runner config in a skipped cache dir: ", "bytecode for a frozen file: ", "unresolvable local hook "];
 const CACHE_SKIP_DIRS = ["__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".import_linter_cache", ".hypothesis"];
 // Ignore rules are frozen too: hiding a new config file behind an ignore rule
 // changes one of these keys. A .gitignore is hashed in the files map when
@@ -253,7 +254,7 @@ const RUNNER_CONFIG_SECTIONS = [
 // script, never in an agent.
 // HASHER_PY_BEGIN
 const HASHER_PY = String.raw`
-import fnmatch, hashlib, json, os, subprocess, sys, tempfile
+import fnmatch, hashlib, json, os, re, shlex, shutil, subprocess, sys, tempfile
 try:
     import tomllib
 except ImportError:
@@ -265,7 +266,7 @@ except ImportError:
 CONFIG_GLOBS = ['conftest.py', 'pytest.ini', '.pytest.ini', 'pytest.toml', 'tox.ini', 'setup.cfg',
                 'noxfile.py', 'sitecustomize.py', 'usercustomize.py', 'jest.config.*', 'vitest.config.*',
                 'vitest.workspace*', 'karma.conf.*', '.mocharc*', '.babelrc*', 'babel.config.*',
-                '.pre-commit-config.yaml']
+                '.pre-commit-config.yaml', '.gitattributes']
 ROOT_ONLY_GLOBS = ['*.pth']
 SKIP_DIRS = {'.git', 'node_modules', '.venv', 'venv', '.tox', '.nox'}
 # tool cache dirs: skipped only when git ignores them; runner config inside one is suspicious
@@ -274,6 +275,9 @@ CACHE_ALARM_NAMES = ['pyproject.toml', 'package.json']
 PACKAGE_KEYS = ['jest', 'vitest', 'mocha']
 
 wt = sys.argv[1]
+# every git call: no system config, no fsmonitor (a local config could name a program for it)
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+GIT = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
 explicit = json.loads(sys.argv[2]) if len(sys.argv) > 2 else []
 # a tree sha: list the paths that differ between it and the tree now
 base_tree = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
@@ -288,7 +292,7 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 def git(*a):
-    return subprocess.run(['git', '-C', wt] + list(a), capture_output=True, check=True).stdout
+    return subprocess.run(GIT + list(a), capture_output=True, check=True).stdout
 
 def work_tree():
     # the tree of the worktree as git add -A would stage it (untracked and
@@ -299,8 +303,8 @@ def work_tree():
     env = dict(os.environ, GIT_INDEX_FILE=tmp)
     try:
         for a in (['read-tree', 'HEAD'], ['add', '-A']):
-            subprocess.run(['git', '-C', wt] + a, capture_output=True, check=True, env=env)
-        return subprocess.run(['git', '-C', wt, 'write-tree'], capture_output=True, check=True, env=env).stdout.decode().strip()
+            subprocess.run(GIT + a, capture_output=True, check=True, env=env)
+        return subprocess.run(GIT + ['write-tree'], capture_output=True, check=True, env=env).stdout.decode().strip()
     finally:
         os.unlink(tmp)
 
@@ -330,7 +334,7 @@ def check_ignore(paths):
     # the subset of paths git ignores (exit 1 = none ignored)
     if not paths:
         return set()
-    r = subprocess.run(['git', '-C', wt, 'check-ignore', '-z', '--stdin'],
+    r = subprocess.run(GIT + ['check-ignore', '-z', '--stdin'],
                        input=b'\x00'.join(p.encode() for p in paths) + b'\x00', capture_output=True)
     if r.returncode not in (0, 1):
         sys.exit('git check-ignore failed: ' + r.stderr.decode(errors='replace'))
@@ -414,42 +418,151 @@ def norm(rel):
         rel = rel[2:]
     return rel.rstrip('/')
 
-def local_hook_entries():
-    # repo files named in the entry of a repo: local hook of the root
-    # .pre-commit-config.yaml (PyYAML when present, else every entry: line)
+def repo_file(tok):
+    # a relative path to a regular file inside the worktree, else None
+    if not tok or tok.startswith('/') or '..' in tok.split('/'):
+        return None
+    full = os.path.realpath(os.path.join(wt, tok))
+    real_wt = os.path.realpath(wt)
+    return norm(tok) if full.startswith(real_wt + os.sep) and os.path.isfile(full) else None
+
+def local_hooks():
+    # [(id, entry, args)] of the repo: local hooks in the root .pre-commit-config.yaml
     p = os.path.join(wt, '.pre-commit-config.yaml')
     if not os.path.isfile(p):
-        return []
+        return [], []
     with open(p, 'rb') as fh:
         raw = fh.read()
-    entries = []
+    out = []
     try:
         import yaml
-        data = yaml.safe_load(raw)
+    except ImportError:
+        yaml = None
+    if yaml is not None:
+        try:
+            data = yaml.safe_load(raw)
+        except Exception:
+            return [], ['unresolvable local hook *: .pre-commit-config.yaml does not parse']
         for repo in (data.get('repos') or []) if isinstance(data, dict) else []:
             if isinstance(repo, dict) and repo.get('repo') == 'local':
                 for h in repo.get('hooks') or []:
-                    if isinstance(h, dict) and isinstance(h.get('entry'), str):
-                        entries.append(h['entry'])
-    except Exception:
-        for line in raw.decode('utf-8', 'replace').splitlines():
-            t = line.strip()
-            if t.startswith('entry:'):
-                entries.append(t[len('entry:'):].strip().strip('"').strip("'"))
-    out = set()
-    real_wt = os.path.realpath(wt)
-    for e in entries:
-        for tok in e.split():
-            if tok.startswith('/') or '..' in tok.split('/'):
+                    if isinstance(h, dict):
+                        args = h.get('args') if isinstance(h.get('args'), list) else []
+                        out.append((str(h.get('id')), h.get('entry') if isinstance(h.get('entry'), str) else '',
+                                    [str(x) for x in args]))
+        return out, []
+    # no PyYAML: every entry: and inline args: [..] line, under the last id: line
+    hid, cur = '?', None
+    for line in raw.decode('utf-8', 'replace').splitlines():
+        t = line.strip().lstrip('-').strip()
+        if t.startswith('id:'):
+            hid = t[3:].strip().strip('"').strip("'")
+            cur = [hid, '', []]
+            out.append(cur)
+        elif t.startswith('entry:') and cur is not None:
+            cur[1] = t[6:].strip().strip('"').strip("'")
+        elif t.startswith('args:') and cur is not None:
+            v = t[5:].strip()
+            if v.startswith('[') and v.endswith(']'):
+                cur[2] = [x.strip().strip('"').strip("'") for x in v[1:-1].split(',') if x.strip()]
+    return [tuple(x) for x in out], []
+
+def hook_refs():
+    # repo files every local hook names (entry and args, shlex-split; -m mod
+    # resolved to its file), and an alarm for any token that is neither a repo
+    # file nor a binary on PATH, or an inline payload after -c
+    hooks, bad = local_hooks()
+    refs = set()
+    for hid, entry, args in hooks:
+        try:
+            toks = shlex.split(entry) + [t for x in args for t in shlex.split(x)]
+        except ValueError:
+            bad.append('unresolvable local hook ' + hid + ': entry or args do not shell-split')
+            continue
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            if t == '-c':
+                bad.append('unresolvable local hook ' + hid + ': inline payload after -c')
+                break
+            if t == '-m':
+                mod = toks[i + 1].replace('.', '/') if i + 1 < len(toks) else ''
+                f = repo_file(mod + '.py') or repo_file(mod + '/__init__.py') if mod else None
+                if f:
+                    refs.add(f)
+                else:
+                    bad.append('unresolvable local hook ' + hid + ': module ' + (toks[i + 1] if i + 1 < len(toks) else '?'))
+                i += 2
                 continue
-            full = os.path.realpath(os.path.join(wt, tok))
-            if full.startswith(real_wt + os.sep) and os.path.isfile(full):
-                out.add(norm(tok))
-    return sorted(out)
+            if t.startswith('-'):
+                i += 1
+                continue
+            f = repo_file(t)
+            if f:
+                refs.add(f)
+            elif '/' not in t and shutil.which(t):
+                pass
+            else:
+                bad.append('unresolvable local hook ' + hid + ': ' + t)
+            i += 1
+    # the whole dir tree of each referenced file (tracked and untracked-not-ignored)
+    frozen = set()
+    for f in refs:
+        frozen.add(f)
+        d = os.path.dirname(f)
+        if d:
+            for x in git('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', d).split(b'\x00'):
+                if x:
+                    frozen.add(x.decode())
+    return sorted(frozen), bad
+
+def config_freeze(gitmap):
+    # local (and worktree) git config, sorted with values, minus branch.* (the
+    # workflow's push -u) and remote.*.gh-resolved (gh); every include target
+    def lst(*scope):
+        r = subprocess.run(GIT + ['config'] + list(scope) + ['--list'], capture_output=True)
+        return r.stdout.decode('utf-8', 'replace').splitlines() if r.returncode == 0 else []
+    keep = lambda l: not l.startswith('branch.') and not re.match(r'remote\.[^=]*\.gh-resolved=', l)
+    local = sorted(l for l in lst('--local') if keep(l))
+    gitmap['config:local'] = sha('\n'.join(local).encode())
+    on = subprocess.run(GIT + ['config', '--bool', 'extensions.worktreeConfig'], capture_output=True).stdout.strip()
+    wtc = sorted(l for l in lst('--worktree') if keep(l)) if on == b'true' else None
+    gitmap['config:worktree'] = sha('\n'.join(wtc).encode()) if wtc is not None else 'OFF'
+    common = git('rev-parse', '--git-common-dir').decode().strip()
+    common = common if os.path.isabs(common) else os.path.join(wt, common)
+    for l in local + (wtc or []):
+        k, _, v = l.partition('=')
+        if k == 'include.path' or (k.startswith('includeif.') and k.endswith('.path')):
+            path = os.path.expanduser(v)
+            gitmap['config:include:' + v] = abs_hash(path if os.path.isabs(path) else os.path.join(common, path))
+    ia = git('rev-parse', '--git-path', 'info/attributes').decode().strip()
+    gitmap['info/attributes'] = abs_hash(ia if os.path.isabs(ia) else os.path.join(wt, ia))
+
+IGNORED_CACHE = {'__pycache__', '.pytest_cache', '.hypothesis', '.ruff_cache', '.mypy_cache', '.import_linter_cache'}
+
+def ignored_files():
+    # every ignored file except tool caches; inside a skipped dir (venv,
+    # node_modules, ...) only interpreter startup hooks
+    out = {}
+    for x in git('ls-files', '-z', '--others', '--ignored', '--exclude-standard').split(b'\x00'):
+        if not x:
+            continue
+        rel = x.decode()
+        segs = rel.split('/')
+        base = segs[-1]
+        if any(s in IGNORED_CACHE for s in segs) or '/'.join(segs[:2]) == 'node_modules/.cache' or '/node_modules/.cache/' in rel:
+            continue
+        if base == '.coverage' or rel.startswith('.claude/worktrees/'):
+            continue
+        if any(s in SKIP_DIRS for s in segs[:-1]):
+            if not (base.endswith('.pth') or base in ('sitecustomize.py', 'usercustomize.py')):
+                continue
+        out[rel] = file_hash(rel)
+    return out
 
 def hook_files(gitmap):
     # core.hooksPath (its value) and every file under the hooks dir git uses
-    hp = subprocess.run(['git', '-C', wt, 'config', 'core.hooksPath'], capture_output=True).stdout.decode().strip()
+    hp = subprocess.run(GIT + ['config', 'core.hooksPath'], capture_output=True).stdout.decode().strip()
     gitmap['core.hooksPath'] = hp or 'UNSET'
     if hp:
         d = hp if os.path.isabs(hp) else os.path.join(wt, hp)
@@ -483,14 +596,17 @@ for rel in sorted(LINKS):
     symlinks[rel] = LINKS[rel]
 ex = git('rev-parse', '--git-path', 'info/exclude').decode().strip()
 gitmap['info/exclude'] = abs_hash(ex if os.path.isabs(ex) else os.path.join(wt, ex))
-gx = subprocess.run(['git', '-C', wt, 'config', '--path', 'core.excludesFile'], capture_output=True)
+gx = subprocess.run(GIT + ['config', '--path', 'core.excludesFile'], capture_output=True)
 gpath = gx.stdout.decode().strip()
 if not gpath:
     gpath = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'git', 'ignore')
 gitmap['core.excludesFile'] = abs_hash(gpath)
 hook_files(gitmap)
-for rel in local_hook_entries():
+config_freeze(gitmap)
+hook_frozen, hook_bad = hook_refs()
+for rel in hook_frozen:
     files[rel] = file_hash(rel)
+SUSPICIOUS.extend(hook_bad)
 listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\x00')
 for rel in sorted(set(f.decode() for f in listed if f)):
     base = os.path.basename(rel)
@@ -529,6 +645,7 @@ for rel in explicit:
     rel = norm(rel)
     files[rel] = file_hash(rel)
 out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
+                 'ignored': ignored_files(),
                  'suspicious': sorted(set(SUSPICIOUS))}
 
 print(json.dumps(out, sort_keys=True))
@@ -769,6 +886,7 @@ const INFRA_SCHEMA = {
       items: { type: "object", properties: { sha: STR, subject: STR }, required: ["sha", "subject"] },
     },
     plan_touched: { type: "array", items: STR },
+    changed_since: { type: "array", items: STR },
     remote_head: STR,
     push_result: { type: "string", enum: ["ok", "hook_rejected", "network", "non_ff", "remote_rejected"] },
     hook_tail: STR,
@@ -906,6 +1024,7 @@ function parseDispatch(line) {
 function keyName(map, k) {
   if (map === "git") return "git:" + k;
   if (map === "symlinks") return "symlink:" + k;
+  if (map === "ignored") return "ignored:" + k;
   return k;
 }
 
@@ -949,7 +1068,7 @@ function changedKeys(a0, b0) {
 // changedKeys by display name, plus every suspicious entry: a non-empty
 // suspicious list is always a violation.
 function diffHashes(frozen, now) {
-  const out = changedKeys(frozen, now).map((x) => x.name);
+  const out = changedKeys(frozen, now).map((x) => (x.map === "ignored" ? "ignored path written: " + x.key : x.name));
   for (const p of (now && now.suspicious) || [])
     out.push(SUSPICIOUS_PREFIXES.some((x) => p.indexOf(x) === 0) ? "suspicious " + p : "suspicious path name " + p);
   return out;
@@ -963,7 +1082,7 @@ function configView(h, testFiles) {
   const tests = {};
   for (const f of testFiles || []) tests[f] = true;
   for (const k of Object.keys((h && h.files) || {})) if (!tests[k]) o[k] = h.files[k];
-  for (const m of ["sections", "git", "symlinks"])
+  for (const m of ["sections", "git", "symlinks", "ignored"])
     for (const k of Object.keys((h && h[m]) || {})) o[keyName(m, k)] = h[m][k];
   return o;
 }
@@ -1739,7 +1858,8 @@ function verifyPlanPrompt(inputs) {
     "6. is_ancestor = whether `git -C <main_worktree> merge-base --is-ancestor <plan_commit> HEAD` exits 0.\n" +
     "7. commits_since = every line of `git -C <main_worktree> log --format=%H%x09%s <plan_commit>..HEAD` as {sha, subject} (empty when head equals plan_commit or is_ancestor is false).\n" +
     "8. plan_touched = the lines of `git -C <main_worktree> log --format=%H <plan_commit>..HEAD -- <plan_path> <ref_path>`.\n" +
-    "Return {status, reason, head, plan_sha256, plan_sha256_head, is_ancestor, commits_since, plan_touched}."
+    "9. changed_since = the lines of `git -C <main_worktree> diff --name-only <plan_commit>..HEAD` (empty when head equals plan_commit or is_ancestor is false).\n" +
+    "Return {status, reason, head, plan_sha256, plan_sha256_head, is_ancestor, commits_since, plan_touched, changed_since}."
   );
 }
 
@@ -1863,21 +1983,22 @@ function pushPrompt(inputs) {
 // The worktree's tree as `git add -A` would stage it, built in a temporary
 // index outside the worktree: the real index is untouched and no hook runs.
 function treeCmd(worktree) {
-  const g = "GIT_INDEX_FILE=\"$tmp\" git -C " + shQuote(worktree);
+  const g = "GIT_CONFIG_NOSYSTEM=1 GIT_INDEX_FILE=\"$tmp\" git -c core.fsmonitor=false -C " + shQuote(worktree);
   return "tmp=$(mktemp) && " + g + " read-tree HEAD && " + g + " add -A && " + g + " write-tree; rm -f \"$tmp\"";
 }
 
 function commitStepPrompt(inputs) {
   return (
-    "Infra step of the fleet build workflow: COMMIT the code the code judge approved, in ONE new commit, WITH the repo's hooks. Never --no-verify, never -n, never --amend, never -c core.hooksPath or any other hook bypass; no Co-Authored-By trailer. Never push. Never edit, format, unstage or restore a file, and never retry the commit.\n" +
+    "Infra step of the fleet build workflow: COMMIT the code the code judge approved, in ONE new commit, WITH the repo's hooks. Never --no-verify, never -n, never --amend, never any other hook bypass; no Co-Authored-By trailer. Never push. Never edit, format, unstage or restore a file, and never retry the commit.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> rev-parse HEAD` must equal <expected_head>; else needs_human.\n" +
-    "2. `git -C <main_worktree> add -A`.\n" +
-    "3. staged_tree = the output of `git -C <main_worktree> write-tree`. If it differs from <code_tree>: commit_result = `tree_mismatch`; do NOT commit; go to step 5.\n" +
-    "4. Commit once: `git -C <main_worktree> commit -m " + shQuote(inputs.subject) + "` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The pre-commit hooks run here; let them. " +
-    "Exit code 0 -> commit_result `committed`; head = `git -C <main_worktree> rev-parse HEAD`; head_tree = `git -C <main_worktree> rev-parse 'HEAD^{tree}'` (keep the quotes). " +
+    "Every git command below runs as <git> = `env GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -c core.hooksPath=<H> -C <main_worktree>`, where <H> is <hooks_path> when it is not null, else the output of `git -C <main_worktree> rev-parse --path-format=absolute --git-common-dir` followed by `/hooks`. Never drop or change these options.\n" +
+    "1. `<git> branch --show-current` must equal <branch> and `<git> rev-parse HEAD` must equal <expected_head>; else needs_human.\n" +
+    "2. `<git> add -A`.\n" +
+    "3. staged_tree = the output of `<git> write-tree`. If it differs from <code_tree>: commit_result = `tree_mismatch`; do NOT commit; go to step 5.\n" +
+    "4. Commit once: `<git> commit -m " + shQuote(inputs.subject) + "` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The pre-commit hooks run here; let them. " +
+    "Exit code 0 -> commit_result `committed`; head = `<git> rev-parse HEAD`; head_tree = `<git> rev-parse 'HEAD^{tree}'` (keep the quotes). " +
     "Any other exit code -> commit_result `hook_rejected`; hook_tail = the last 60 lines of the temp file. Delete the temp file.\n" +
     "5. worktree_tree = the output of this one command, run exactly as written:\n" +
     treeCmd(inputs.main_worktree) +
@@ -2174,6 +2295,8 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
     phase: phaseName,
   });
   const h = r.hashes;
+  // the embedded program always returns the ignored map; a missing one reads as empty
+  if (h && h.ignored === undefined) h.ignored = {};
   const mapsOk =
     !!h && HASH_MAPS.every((m) => h[m] && typeof h[m] === "object") && Array.isArray(h.suspicious);
   const fp = r.fingerprint;
@@ -3072,6 +3195,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     for (const c of v.commits_since || [])
       if (!isFleetCommit(String(c.subject || ""), names.taskId, names.slug))
         halt("needs_human", "plan changed since approval: branch moved by a non-fleet commit " + c.sha + " " + JSON.stringify(c.subject));
+    // earlier fleet commits are fenced too, before any role runs
+    fenceChanged("verify (commits since the plan commit)", v.changed_since || []);
     gate("verify: HEAD " + v.head + " descends from plan_commit by " + (v.commits_since || []).length + " fleet commit(s)");
   } else gate("verify: HEAD is plan_commit " + ref.plan_commit + "; plan hash matches");
 
@@ -3186,7 +3311,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     }
     fenceChanged("test round " + n, post.changed);
     const changed = post.changed.map(normPath);
-    for (const k of changedKeys(pre.hashes, post.hashes)) if (!(k.map === "files" && owner[k.key])) changed.push(k.name);
+    for (const k of changedKeys(pre.hashes, post.hashes)) {
+      if (k.map === "ignored") halt("needs_human", "ignored path written: " + k.key + " in test round " + n, "ownership");
+      if (!(k.map === "files" && owner[k.key])) changed.push(k.name);
+    }
     const ids = pending.map((p) => p.criterion.id).join(", ");
     for (const p of changed.filter((x, i, a) => a.indexOf(x) === i)) {
       if (!owner[p]) halt("needs_human", "writer touched " + p + " in test round " + n + " (not a test file of " + ids + ")", "ownership");
@@ -3394,8 +3522,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // purge before the check and the judge; the judge's "before" state is the
     // post-purge hasher state
     await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");
-    // changed: every path of this build so far (tracked and untracked), from HEAD at the first freeze
-    const h = await hasher("hasher:post-coder:r" + m, mainWt, hashedFiles, "Code", codeBaseRef);
+    // changed: every path of this build (tracked and untracked), from the plan commit
+    const h = await hasher("hasher:post-coder:r" + m, mainWt, hashedFiles, "Code", ref.plan_commit);
     if (h.fingerprint.head !== expectedHead)
       halt("needs_human", "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + "; the coder works uncommitted", "ownership");
     fenceChanged("code round " + m, h.changed);
@@ -3500,7 +3628,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const subject = commitsMade ? fixSubject(names.taskId, m) : commitSubject(names.taskId, names.slug);
     const cs = await infra(
       "infra:commit:r" + m,
-      commitStepPrompt({ main_worktree: mainWt, branch, expected_head: expectedHead, code_tree: codeTree, subject }),
+      commitStepPrompt({
+        main_worktree: mainWt,
+        branch,
+        expected_head: expectedHead,
+        code_tree: codeTree,
+        subject,
+        // the hooks path frozen at freeze (null: git's default hooks dir)
+        hooks_path: frozen.git["core.hooksPath"] && frozen.git["core.hooksPath"] !== "UNSET" ? frozen.git["core.hooksPath"] : null,
+      }),
       "Code",
     );
     if (cs.staged_tree !== codeTree)
@@ -3586,7 +3722,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     }
     reviews++;
     const rv = await reviewStep(reviews, {
-      mainWt, lay, remoteSlug, pr, approvedSha, codeBaseRef, criteria, obligations: planFacts.repo_obligations, hashedFiles,
+      mainWt, lay, remoteSlug, pr, approvedSha, baseRef: ref.plan_commit, criteria, obligations: planFacts.repo_obligations, hashedFiles,
     });
     state.review = { verdict: rv.verdict, blocking: rv.blocking, nits: rv.nits, rounds: reviews, sweep: rv.sweep, model: rv.model };
     if (!rv.blocking.length) {
@@ -3638,7 +3774,7 @@ async function reviewStep(k, ctx) {
   try {
     const rp = await infra(
       "infra:review-paths:v" + k,
-      reviewPathsPrompt({ main_worktree: ctx.mainWt, base_ref: ctx.codeBaseRef, head_sha: ctx.approvedSha }),
+      reviewPathsPrompt({ main_worktree: ctx.mainWt, base_ref: ctx.baseRef, head_sha: ctx.approvedSha }),
       "Review",
       JUDGE_AGENT,
     );
@@ -3648,7 +3784,7 @@ async function reviewStep(k, ctx) {
       pr_url: ctx.pr.pr_url,
       pr_number: ctx.pr.pr_number,
       repo: ctx.remoteSlug,
-      base_ref: ctx.codeBaseRef,
+      base_ref: ctx.baseRef,
       head_sha: ctx.approvedSha,
       worktree: ctx.mainWt,
       scratch_dir: ctx.lay.scratch,
