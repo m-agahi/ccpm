@@ -2354,21 +2354,63 @@ test("a coder round that edits the ref file is rejected", async () => {
 
 // ---------------------------------------------------------------- plan mode on a built branch
 
+// A sealed ref file as an earlier plan commit of task l42 holds it.
+function priorRef(planPath, over) {
+  const o = Object.assign(
+    {
+      branch: "fleet/l42-add-thing",
+      plan_path: planPath,
+      plan_sha256: PSHA,
+      criteria: criteria(1),
+      brief: BRIEF,
+      task_id: "l42",
+      slug: "add-thing",
+      tldr: "t",
+      plan_facts: { allowed_additions: null, est_diff_lines: 10 },
+      history: { runs: 1, replans: 0, agents: 8 },
+    },
+    over || {},
+  );
+  o.seal = sha256(canon(o));
+  return JSON.stringify(o) + "\n";
+}
+
+const PLAN_MD = "docs/plans/x.md";
+const REF_L42 = ".fleet/l42/plan_ref.json";
+
+function planCommit(sha, files, over) {
+  return Object.assign({ sha, subject: "plan(l42): add-thing", files, ref_content: priorRef(PLAN_MD) }, over || {});
+}
+
 test("plan mode on a branch with build commits stops before the planner", async () => {
+  const tampered = JSON.parse(priorRef(PLAN_MD));
+  tampered.plan_path = "README.md";
   for (const commits of [
-    [{ sha: "1111111", subject: "feat(x): add it", files: ["src/x.py"] }],
-    [{ sha: "1111111", subject: "plan(l42): add-thing", files: ["docs/plans/x.md", "src/x.py"] }],
-    [{ sha: "1111111", subject: "plan(l43): other", files: ["docs/plans/y.md"] }],
-    [{ sha: "1111111", subject: "plan(l42): add-thing", files: ["docs/plans/x.md", "README.md"] }],
-    [{ sha: "1111111", subject: "plan(l42): add-thing", files: ["docs/plans/x.md", ".fleet/l43/plan_ref.json"] }],
-    [
-      { sha: "1111111", subject: "plan(l42): add-thing", files: ["docs/plans/x.md", ".fleet/l42/plan_ref.json"] },
-      { sha: "2222222", subject: "test(AC1): behaviour 1", files: ["tests/test_a.py"] },
-    ],
+    [{ sha: "1111111", subject: "feat(x): add it", files: ["src/x.py"], ref_content: null }],
+    // the right subject with the wrong files
+    [planCommit("1111111", [PLAN_MD, "src/x.py"])],
+    [planCommit("1111111", ["src/x.py"])],
+    // any other .md file is not the plan
+    [planCommit("1111111", ["README.md"])],
+    [planCommit("1111111", [PLAN_MD, "README.md"])],
+    [planCommit("1111111", ["docs/plans/other.md"])],
+    // any other file under .fleet/<task>/ is not the ref file
+    [planCommit("1111111", [PLAN_MD, ".fleet/l42/notes.txt"])],
+    [planCommit("1111111", [".fleet/l42/plan_ref.json.bak"])],
+    [planCommit("1111111", [PLAN_MD, ".fleet/l43/plan_ref.json"])],
+    // another task's plan subject
+    [planCommit("1111111", [PLAN_MD], { subject: "plan(l43): other" })],
+    // no files, no ref file at the commit, or a ref whose seal is broken
+    [planCommit("1111111", [])],
+    [planCommit("1111111", [PLAN_MD], { ref_content: null })],
+    [planCommit("1111111", ["README.md"], { ref_content: JSON.stringify(tampered) + "\n" })],
+    // a ref file of another task
+    [planCommit("1111111", [PLAN_MD], { ref_content: priorRef(PLAN_MD, { task_id: "l43", branch: "fleet/l43-add-thing" }) })],
+    [planCommit("1111111", [PLAN_MD, REF_L42]), { sha: "2222222", subject: "test(AC1): behaviour 1", files: ["tests/test_a.py"], ref_content: null }],
   ]) {
     const s = happy({ script: { "infra:branch-scan": { status: "ok", reason: "scanned", commits } } });
     const out = await runOne(s, ARGS);
-    assert.equal(out.result.status, "needs_human", JSON.stringify(commits));
+    assert.equal(out.result.status, "needs_human", JSON.stringify(commits.map((c) => [c.subject, c.files])));
     assert.match(out.result.reason, /branch has build commits; run build, or delete branch/);
     assert.ok(!out.labels.includes("role:scope-and-plan"));
     assert.ok(!out.labels.includes("infra:commit-plan"));
@@ -2376,21 +2418,32 @@ test("plan mode on a branch with build commits stops before the planner", async 
 });
 
 test("plan mode on a plan-only branch re-plans and adds a new plan commit", async () => {
-  const commits = [
-    { sha: "1111111", subject: "plan(l42): add-thing", files: ["docs/plans/x.md", ".fleet/l42/plan_ref.json"] },
-    { sha: "2222222", subject: "plan(l42): add-thing", files: [".fleet/l42/plan_ref.json"] },
-  ];
-  const s = happy({ script: { "infra:branch-scan": { status: "ok", reason: "scanned", commits } } });
-  const out = await runOne(s, ARGS);
-  noUnscripted(out);
-  assert.equal(out.result.status, "awaiting_confirmation");
-  assert.ok(out.labels.includes("infra:commit-plan"));
+  for (const commits of [
+    [planCommit("1111111", [PLAN_MD])],
+    [planCommit("1111111", [PLAN_MD, REF_L42])],
+    [planCommit("1111111", ["./" + PLAN_MD, REF_L42]), planCommit("2222222", [REF_L42])],
+    // each commit's own ref file names its plan path
+    [
+      planCommit("1111111", ["docs/plans/old.md", REF_L42], { ref_content: priorRef("docs/plans/old.md") }),
+      planCommit("2222222", [PLAN_MD, REF_L42]),
+    ],
+  ]) {
+    const s = happy({ script: { "infra:branch-scan": { status: "ok", reason: "scanned", commits } } });
+    const out = await runOne(s, ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "awaiting_confirmation", JSON.stringify(commits.map((c) => c.files)) + " " + out.result.reason);
+    assert.ok(out.labels.includes("infra:commit-plan"));
+  }
+  const out = await runOne(happy(), ARGS);
   const scan = call(out, "infra:branch-scan");
   assert.equal(scan.opts.agentType, "fleet:judge");
   assert.deepEqual(inputsOf(scan.prompt), {
     main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
     default_branch: "master",
+    ref_path: REF_L42,
   });
+  // the same load-ref program reads each commit's ref file
+  assert.ok(scan.prompt.includes("python3 -I -c") && scan.prompt.includes("'<sha>' '.fleet/l42/plan_ref.json'"));
 });
 
 // ---------------------------------------------------------------- v2: build mode verify

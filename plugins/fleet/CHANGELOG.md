@@ -17,6 +17,9 @@
 - Plan mode no longer commits a plan on top of code. A fleet branch with any commit beyond
   `origin/<default>` other than earlier plan commits of the task stops with "branch has build
   commits; run build, or delete branch".
+  A plan commit must have the subject `plan(<task id>):` and touch only exactly the plan path
+  named by the sealed ref file at that commit and `.fleet/<task id>/plan_ref.json`; any other file
+  (another `.md`, an extra file under `.fleet/<task id>/`) makes it a build commit.
 
 ## [2.0.0] - 2026-11-04
 

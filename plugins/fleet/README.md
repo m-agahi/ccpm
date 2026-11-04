@@ -53,9 +53,12 @@ args: `{mode: "plan", input, repo, date, project?}`.
 | 8    | stage-plan         | stages the plan doc; returns the sha256 of the staged bytes               |
 | 9    | commit-plan        | writes the sealed ref file; commits plan + ref LOCALLY in ONE commit      |
 
-Branch-scan: a plan commit has the subject `plan(<task id>): <slug>` and touches only the plan doc
-(one `.md` file) and `.fleet/<task id>/`. If the fleet branch carries any other commit, plan mode
-stops with "branch has build commits; run build, or delete branch". It never commits a plan on top
+Branch-scan: a plan commit has the subject `plan(<task id>): <slug>`, and its file set is a
+non-empty subset of exactly `{plan_path, .fleet/<task id>/plan_ref.json}`. The scan reads
+`plan_path` from the sealed ref file at that same commit; paths are compared exactly after
+normalisation, with no prefix or extension match. A commit with no readable ref file, a broken seal,
+another task's ref, or any other file is a build commit. If the fleet branch carries any build
+commit, plan mode stops with "branch has build commits; run build, or delete branch". It never commits a plan on top
 of code. On a plan-only branch it adds a new plan commit.
 
 Plan mode returns `awaiting_confirmation` with `tldr`, `plan_diff`, `fleet_size`

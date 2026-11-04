@@ -447,7 +447,7 @@ const INFRA_SCHEMA = {
       type: "array",
       items: {
         type: "object",
-        properties: { sha: STR, subject: STR, files: { type: "array", items: STR } },
+        properties: { sha: STR, subject: STR, files: { type: "array", items: STR }, ref_content: STR_OR_NULL },
         required: ["sha", "subject"],
       },
     },
@@ -1004,9 +1004,12 @@ function branchScanPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "For every line of `git -C <main_worktree> log --format=%H%x09%s origin/<default_branch>..HEAD` (empty when the branch adds nothing), " +
-    "files = the lines of `git -C <main_worktree> show --name-only --format= <sha>`.\n" +
-    "Return {status, reason, commits: [{sha, subject, files}]}."
+    "For every line of `git -C <main_worktree> log --format=%H%x09%s origin/<default_branch>..HEAD` (empty when the branch adds nothing):\n" +
+    "- files = the lines of `git -C <main_worktree> show --name-only --format= <sha>`;\n" +
+    "- ref_content = the `content` this command prints, with <sha> replaced by the commit sha and nothing else changed (null when it exits non-zero):\n" +
+    loadRefCmd(inputs.main_worktree, "<sha>", inputs.ref_path) +
+    "\n" +
+    "Return {status, reason, commits: [{sha, subject, files, ref_content}]}."
   );
 }
 
@@ -1664,18 +1667,26 @@ function awaiting(reason, p, tiny, full, extra) {
   );
 }
 
-// Commits on the fleet branch beyond origin/<default> that are not earlier
-// plan commits of this task: subject plan(<task id>): and files only the plan
-// doc (one .md) and this task's .fleet/ directory.
+// A plan commit of this task: subject plan(<task id>):, and a non-empty file
+// set that is a subset of exactly {plan_path, .fleet/<task id>/plan_ref.json}.
+// plan_path comes from the sealed ref file at that same commit. Exact paths
+// after normalisation; anything else is a build commit.
+function isPlanCommit(c, taskId) {
+  if (!c || !new RegExp("^plan\\(" + escapeRe(taskId) + "\\): ").test(String(c.subject || ""))) return false;
+  if (!Array.isArray(c.files) || !c.files.length) return false;
+  let ref = null;
+  try {
+    ref = typeof c.ref_content === "string" ? JSON.parse(c.ref_content) : null;
+  } catch (e) {
+    ref = null;
+  }
+  if (planRefProblem(ref) || ref.task_id !== taskId) return false;
+  const allowed = [normPath(ref.plan_path), refPathFor(taskId)];
+  return c.files.every((f) => allowed.indexOf(normPath(String(f))) >= 0);
+}
+
 function buildCommitsOf(commits, taskId) {
-  const re = new RegExp("^plan\\(" + escapeRe(taskId) + "\\): ");
-  const dir = ".fleet/" + taskId + "/";
-  return commits.filter((c) => {
-    if (!re.test(String((c && c.subject) || ""))) return true;
-    if (!Array.isArray(c.files)) return true;
-    const other = c.files.filter((f) => String(f).indexOf(dir) !== 0);
-    return other.length > 1 || other.some((f) => !/\.md$/i.test(String(f)));
-  });
+  return commits.filter((c) => !isPlanCommit(c, taskId));
 }
 
 // ---------------------------------------------------------------- plan mode
@@ -1714,7 +1725,7 @@ async function planMode(input, date) {
   // never commit a plan on top of code: only earlier plan commits may be there
   const scan = await infra(
     "infra:branch-scan",
-    branchScanPrompt({ main_worktree: lay.mainWt, default_branch: ws.defaultBranch }),
+    branchScanPrompt({ main_worktree: lay.mainWt, default_branch: ws.defaultBranch, ref_path: refPathFor(names.taskId) }),
     "Workspace",
     JUDGE_AGENT,
   );
