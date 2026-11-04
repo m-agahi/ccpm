@@ -74,6 +74,10 @@ runs `/build-task` explicitly, always use the fleet.
      `needs_human` with `failed_check` and `needs_max_section`: show `needs_max_section` verbatim
      and stop. Do not ask, do not retry, do not switch to `"ask"`. After Max rules in the task, the
      run is repeated with step 8 and `confirm: "auto"` (the same `plan_ref`).
+   - `confirm: "auto"` and the result is `awaiting_confirmation` (the code judge found the plan
+     wrong and the workflow re-planned): show `proposed_plan_change`, `tldr`, `plan_diff` and
+     `commands`, say the old work is on `superseded_ref` and `superseded_tree_ref`, and stop. Do
+     not ask: an unattended run has no one to answer.
 
 7. **Confirm.** Show the user, in this order:
 

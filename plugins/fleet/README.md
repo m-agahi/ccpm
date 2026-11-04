@@ -189,6 +189,12 @@ hooks are never bypassed. So nothing commits until the code judge approves.
   the tree does not). `freeze_tree` is the tree at freeze; `code_tree` is the tree the code judge
   judged. Test judge and code judge get `freeze_tree`, `code_tree` and `plan_commit`; diff
   production changes with `git diff <freeze_tree>`.
+- **Scope fence on the real changes** (every mode, not only `confirm: "auto"`). The post-coder
+  hasher lists every path this build changed (`git diff --name-only <code_base_ref> <tree>`, the
+  tree holding untracked files too), and the writer-round listing does the same per round. Any
+  path the fence refuses (IaC files, Kubernetes and Helm manifests, `.github/`, rulesets,
+  secret-like paths; see G3) stops the run with `needs_human` naming the path
+  (`stop_gate: scope`), before anything is committed.
 - **Commit step** (`infra:commit:r<n>`), after the code judge approves and the obligations gate
   passes: `git add -A`; the staged tree (`git write-tree`) must equal `code_tree` ("staged tree X
   != code tree Y", nothing committed); then ONE `git commit` WITH the hooks, never `--no-verify`,
@@ -233,18 +239,21 @@ A `plan_wrong` verdict stops the build. The script:
    `proposed_plan_change[]` (a finding without that line is used whole and logged);
 2. creates a detached worktree at the old `plan_commit`, runs scope-and-plan (the findings are an
    extra `text` source) and plan-audit there, and commits the new plan there;
-3. saves the uncommitted work (the judged tree) as `fleet/<task id>-<slug>--superseded-<n>`, a
-   plumbing `git commit-tree` object on the old head (no hooks run; it is never pushed), then
-   resets the fleet branch to the new plan commit and runs `git clean -fd` (never `-x`);
-4. returns `awaiting_confirmation` with `proposed_plan_change`, `plan_findings`, `superseded_ref`
-   and a fresh `plan_ref`.
+3. saves the old head as branch `fleet/<task id>-<slug>--superseded-<n>` and the uncommitted work
+   (the judged tree) under `refs/fleet/<task id>-<slug>/superseded-<n>-tree` (`git update-ref` to
+   the tree object; no commit is created, nothing is pushed), then resets the fleet branch to the
+   new plan commit and runs `git clean -fd` (never `-x`);
+4. returns `awaiting_confirmation` with `proposed_plan_change`, `plan_findings`, `superseded_ref`,
+   `superseded_tree_ref` and a fresh `plan_ref`.
 
 The next build run starts fresh from the new plan, with a new freeze. Round and agent caps reset per run; `cumulative` counts runs, re-plans and
 agents across runs.
 
 ### Write-back
 
-After the PR opens, build mode writes back. A failure here never changes the run status.
+Right after the first PR opens (before the review), build mode writes back once, so a review that
+stops the run still leaves the ledger section and the comments. A failure here never changes the
+run status.
 
 - **Ledger:** for each `ledger` source, one `## Fleet build` section (tldr, plan path, PR URL,
   hidden `fleet:<task id>` marker) is appended to the task's body page (`body_slug`) in
@@ -280,6 +289,11 @@ The hasher freezes every criterion test file, plus:
   every commit (`.ruff_cache/.gitignore`). Also frozen: the worktree's `info/exclude` (key
   `git:info/exclude`, resolved with `git rev-parse --git-path`) and the global
   `core.excludesFile` (key `git:core.excludesFile`). Editing an ignore rule is a change;
+- the hook surface: the whole `.pre-commit-config.yaml` (anywhere), every repo file named in the
+  `entry` of a `repo: local` hook of the root config, `git:core.hooksPath` (its value, `UNSET` when
+  not set) and every file under the hooks dir git uses (`git:hooks/<file>`, under
+  `core.hooksPath` or `git rev-parse --git-path hooks`). The commit step runs these hooks, and
+  G2 checked the hook ids at the plan commit, so the coder may not change them;
 - sections, hashed under `<path>#<section>` after canonicalisation (sorted keys, compact JSON):
   `pyproject.toml#tool.pytest` (every `[tool.pytest.*]` table), `package.json#jest`,
   `package.json#vitest`, `package.json#mocha`, `package.json#scripts.test`. The rest of these files
@@ -513,6 +527,9 @@ change that a judge makes and reverts within its own run.
   writer wrote a file beyond each writer's own `files` report.
 - G2 needs PyYAML in the `python3 -I` interpreter; without it every `check_cmd` fails the gate.
 - The intent judge reads rulings from the ledger task body; a ruling kept elsewhere is not seen.
+- The hook surface is frozen, so a change that must edit `.pre-commit-config.yaml`, a local hook
+  script or the hooks dir cannot pass the fleet. The real-change scope fence likewise stops any
+  change to `.github/`, IaC, Kubernetes, rulesets or secret-like paths, in every mode.
 - A re-plan after `plan_wrong` saves the uncommitted work with `git commit-tree` (a plumbing commit
   object on a side branch, no hooks). That is not a `git commit`, and it is never pushed.
 - The fleet runs no held-out examples and no mutation, coverage or scanner gates. Judges receive

@@ -193,6 +193,8 @@ const RUNNER_CONFIG_FILES = [
   ".babelrc*",
   "babel.config.*",
   "*.pth (repo root only)",
+  ".pre-commit-config.yaml",
+  "every repo file named in the entry of a repo: local hook of the root .pre-commit-config.yaml",
 ];
 const WALK_SKIP_DIRS = [".git", "node_modules", ".venv", "venv", ".tox", ".nox"];
 // The hasher's descriptive suspicious-list entries (other entries are odd path
@@ -223,6 +225,8 @@ const IGNORE_RULE_FILES = [
   ".gitignore listed by `git ls-files -z --cached --others --exclude-standard -- ':(glob)**/.gitignore' .gitignore`, plus any walked .gitignore whose directory is not ignored from outside",
   "git:info/exclude",
   "git:core.excludesFile",
+  "git:core.hooksPath (its config value, UNSET when not set)",
+  "git:hooks/<file> for every file under core.hooksPath, else under `git rev-parse --git-path hooks`",
 ];
 // Sections of files that are NOT hashed whole (dependencies stay editable).
 // Each section is canonicalised (sorted keys, compact JSON) and hashed under a
@@ -260,7 +264,8 @@ except ImportError:
 
 CONFIG_GLOBS = ['conftest.py', 'pytest.ini', '.pytest.ini', 'pytest.toml', 'tox.ini', 'setup.cfg',
                 'noxfile.py', 'sitecustomize.py', 'usercustomize.py', 'jest.config.*', 'vitest.config.*',
-                'vitest.workspace*', 'karma.conf.*', '.mocharc*', '.babelrc*', 'babel.config.*']
+                'vitest.workspace*', 'karma.conf.*', '.mocharc*', '.babelrc*', 'babel.config.*',
+                '.pre-commit-config.yaml']
 ROOT_ONLY_GLOBS = ['*.pth']
 SKIP_DIRS = {'.git', 'node_modules', '.venv', 'venv', '.tox', '.nox'}
 # tool cache dirs: skipped only when git ignores them; runner config inside one is suspicious
@@ -409,6 +414,55 @@ def norm(rel):
         rel = rel[2:]
     return rel.rstrip('/')
 
+def local_hook_entries():
+    # repo files named in the entry of a repo: local hook of the root
+    # .pre-commit-config.yaml (PyYAML when present, else every entry: line)
+    p = os.path.join(wt, '.pre-commit-config.yaml')
+    if not os.path.isfile(p):
+        return []
+    with open(p, 'rb') as fh:
+        raw = fh.read()
+    entries = []
+    try:
+        import yaml
+        data = yaml.safe_load(raw)
+        for repo in (data.get('repos') or []) if isinstance(data, dict) else []:
+            if isinstance(repo, dict) and repo.get('repo') == 'local':
+                for h in repo.get('hooks') or []:
+                    if isinstance(h, dict) and isinstance(h.get('entry'), str):
+                        entries.append(h['entry'])
+    except Exception:
+        for line in raw.decode('utf-8', 'replace').splitlines():
+            t = line.strip()
+            if t.startswith('entry:'):
+                entries.append(t[len('entry:'):].strip().strip('"').strip("'"))
+    out = set()
+    real_wt = os.path.realpath(wt)
+    for e in entries:
+        for tok in e.split():
+            if tok.startswith('/') or '..' in tok.split('/'):
+                continue
+            full = os.path.realpath(os.path.join(wt, tok))
+            if full.startswith(real_wt + os.sep) and os.path.isfile(full):
+                out.add(norm(tok))
+    return sorted(out)
+
+def hook_files(gitmap):
+    # core.hooksPath (its value) and every file under the hooks dir git uses
+    hp = subprocess.run(['git', '-C', wt, 'config', 'core.hooksPath'], capture_output=True).stdout.decode().strip()
+    gitmap['core.hooksPath'] = hp or 'UNSET'
+    if hp:
+        d = hp if os.path.isabs(hp) else os.path.join(wt, hp)
+    else:
+        d = git('rev-parse', '--git-path', 'hooks').decode().strip()
+        d = d if os.path.isabs(d) else os.path.join(wt, d)
+    for dp, dns, fns in os.walk(d):
+        dns.sort()
+        for f in sorted(fns):
+            full = os.path.join(dp, f)
+            rel = os.path.relpath(full, d)
+            gitmap['hooks/' + rel] = 'symlink:' + os.readlink(full) if os.path.islink(full) else abs_hash(full)
+
 tree = work_tree()
 out = {'fingerprint': {'head': git('rev-parse', 'HEAD').decode().strip(), 'tree': tree}}
 if base_tree:
@@ -434,6 +488,9 @@ gpath = gx.stdout.decode().strip()
 if not gpath:
     gpath = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'git', 'ignore')
 gitmap['core.excludesFile'] = abs_hash(gpath)
+hook_files(gitmap)
+for rel in local_hook_entries():
+    files[rel] = file_hash(rel)
 listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\x00')
 for rel in sorted(set(f.decode() for f in listed if f)):
     base = os.path.basename(rel)
@@ -1708,7 +1765,7 @@ function replanResetPrompt(inputs) {
     "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> rev-parse HEAD` must equal <expected_head>; else needs_human. The tests and code are uncommitted: the worktree tree, the output of this command run exactly as written, must equal <expected_tree>; else needs_human:\n" +
     treeCmd(inputs.main_worktree) +
     "\n" +
-    "2. Save the uncommitted work: if branch <superseded_branch> exists, `git -C <main_worktree> rev-parse '<superseded_branch>^{tree}'` must equal <expected_tree> (else needs_human). Else run `c=$(git -C <main_worktree> commit-tree <expected_tree> -p <expected_head> -m " + shQuote("fleet: work superseded by a re-plan") + ") && git -C <main_worktree> branch <superseded_branch> \"$c\"` (a plumbing commit object on a side branch; it is never pushed and moves no other branch). superseded_head = `git -C <main_worktree> rev-parse <superseded_branch>`.\n" +
+    "2. Save the old head and the uncommitted work, creating no commit: if branch <superseded_branch> exists it must point at <expected_head> (else needs_human); else `git -C <main_worktree> branch <superseded_branch> <expected_head>`. If ref <superseded_tree_ref> exists it must equal <expected_tree> (else needs_human); else `git -C <main_worktree> update-ref <superseded_tree_ref> <expected_tree>` (a ref to the judged tree object; never pushed). superseded_head = `git -C <main_worktree> rev-parse <superseded_branch>`.\n" +
     "3. Only after step 2 succeeded: `git -C <main_worktree> reset --hard <new_plan_commit>`, then `git -C <main_worktree> clean -fd` (never -x: ignored files stay).\n" +
     "4. `git -C <main_worktree> worktree remove <replan_worktree>` (it must be clean; never --force).\n" +
     "5. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
@@ -2878,6 +2935,18 @@ function planRefProblem(r) {
   return null;
 }
 
+// The scope fence on the REAL changed paths (every mode): a path the fence
+// refuses (IaC, Kubernetes, .github/, rulesets, secret-like) stops the run
+// before anything is committed.
+function fenceChanged(where, changed) {
+  const bad = [];
+  for (const p of changed || []) {
+    const why = fencePathProblem(p);
+    if (why) bad.push(normPath(p) + " (" + why + ")");
+  }
+  if (bad.length) halt("needs_human", where + ": changed path outside the scope fence: " + bad.join(", "), "scope");
+}
+
 // The commit step's subjects, derived from the sealed task id and slug only:
 // the first commit of a build, and each later one (a review or push-hook fix).
 function commitSubject(taskId, slug) {
@@ -2935,6 +3004,7 @@ async function rereadBrief(brief, project, repo) {
 // confirm "auto" once its gates passed (opt.intent). Both run the same verify
 // path. opt.rerunGates: build mode with confirm "auto" re-runs G1-G3.
 async function buildFromRef(input, date, tiny, lay, ws, opt) {
+  state.mode = "build";
   const repo = cleanRepo(tiny.repo);
   // load the sealed ref from the plan commit; nothing else is trusted
   phase("Verify");
@@ -3114,6 +3184,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         reported[nf] = true;
       }
     }
+    fenceChanged("test round " + n, post.changed);
     const changed = post.changed.map(normPath);
     for (const k of changedKeys(pre.hashes, post.hashes)) if (!(k.map === "files" && owner[k.key])) changed.push(k.name);
     const ids = pending.map((p) => p.criterion.id).join(", ");
@@ -3250,6 +3321,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   let reviews = 0;
   let pr = null;
   let reviewNotes = [];
+  let wb = null;
   // HEAD the coder must leave alone; it moves only at the commit step
   let expectedHead = v.head;
   let commitsMade = v.head !== ref.plan_commit;
@@ -3322,9 +3394,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // purge before the check and the judge; the judge's "before" state is the
     // post-purge hasher state
     await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");
-    const h = await hasher("hasher:post-coder:r" + m, mainWt, hashedFiles, "Code");
+    // changed: every path of this build so far (tracked and untracked), from HEAD at the first freeze
+    const h = await hasher("hasher:post-coder:r" + m, mainWt, hashedFiles, "Code", codeBaseRef);
     if (h.fingerprint.head !== expectedHead)
       halt("needs_human", "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + "; the coder works uncommitted", "ownership");
+    fenceChanged("code round " + m, h.changed);
     const viol = diffHashes(frozen, h.hashes);
     const coderDrift = contractProblem("fleet-coder", coder);
     if (viol.length && (coderDrift || coder.status !== "ok"))
@@ -3497,6 +3571,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // draft PR at the pushed, approved sha (later rounds update its body)
     prOpens++;
     pr = await openPr("role:fleet-pr-opener" + (prOpens > 1 ? ":p" + prOpens : ""));
+    // write-back once, right after the first PR opens: a review that stops
+    // the run still leaves the ledger section and the source comments
+    if (!wb) {
+      phase("Write-back");
+      wb = await writeBack({ ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr.pr_url });
+    }
 
     // independent review of the PR
     if (!pr.pr_url || pr.pr_number == null) {
@@ -3529,10 +3609,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     phase("Code");
   }
 
-  phase("Write-back");
-  const wb = await writeBack({
-    ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr.pr_url,
-  });
   history.agents += state.agents - opt.agentsBase;
   gate("cumulative: run " + history.runs + ", re-plans " + history.replans + ", agents " + history.agents);
   const out = finish("ok", "draft PR ready for review");
@@ -3648,6 +3724,7 @@ async function replan(ctx) {
   gate("code-judge verdict plan_wrong: " + proposed.join("; "));
   const n = history.replans + 1;
   const superseded = lay.branch + "--superseded-" + n;
+  const supersededTree = "refs/fleet/" + lay.key + "/superseded-" + n + "-tree";
   const replanWt = lay.root + "/replan-" + n;
   // worktree, planner, audit, commit, reset: reserve all before any step
   reserve(5, "re-plan " + n);
@@ -3704,6 +3781,7 @@ async function replan(ctx) {
       expected_head: ctx.expectedHead,
       expected_tree: ctx.expectedTree,
       superseded_branch: superseded,
+      superseded_tree_ref: supersededTree,
       new_plan_commit: newHead,
       replan_worktree: replanWt,
     }),
@@ -3717,6 +3795,7 @@ async function replan(ctx) {
     proposed_plan_change: proposed,
     plan_findings: ctx.findings,
     superseded_ref: superseded,
+    superseded_tree_ref: supersededTree,
     superseded_head: rs.superseded_head || ctx.expectedHead,
   });
 }

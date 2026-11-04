@@ -31,10 +31,23 @@ added_symbols, frozen_tests_red_at_start, obligations_done`. The `commit`/`commi
 - **Models.** A role page with no usable DISPATCH line now stops the run in preflight; no tier is
   hardcoded (2.0.x fell back to sonnet). Every role dispatch logs `model used: <label> -> <tier>`.
   The DISPATCH parser accepts text after the fallback tier (`(fallback=sonnet for small PRs)`).
-- A re-plan after `plan_wrong` saves the uncommitted work as a `git commit-tree` object on
-  `superseded_ref`, then resets the branch and runs `git clean -fd`.
+- A re-plan after `plan_wrong` keeps the old head on `superseded_ref` and the uncommitted work
+  under `superseded_tree_ref` (`git update-ref` to the tree; no commit is created), then resets the
+  branch and runs `git clean -fd`.
+- Write-back runs once right after the first PR opens, before the review, so a review that stops
+  the run still leaves the ledger section and the comments.
 - Minimum role versions for the three new roles are PLACEHOLDERS (intent judge 1, pr-review 16,
   sweep 2) until the fleet-v3 pages are published.
+
+### Security
+
+- The scope fence runs on the REAL changed paths in every mode: the post-coder listing
+  (`git diff --name-only <code_base_ref> <tree>`, untracked files included) and each writer round. A path in
+  `.github/`, IaC, Kubernetes or Helm manifests, rulesets or a secret-like path stops the run with
+  `stop_gate: scope` before the commit step.
+- The hook surface is frozen: `.pre-commit-config.yaml`, the repo files named by `repo: local`
+  hook entries, `git:core.hooksPath` and every file under the hooks dir. A coder change to any of
+  them is a hash violation, so the commit step runs the hooks G2 checked.
 
 ### Added
 

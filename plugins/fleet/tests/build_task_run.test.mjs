@@ -2649,15 +2649,15 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.equal(inputsOf(call(out, "role:plan-audit:replan").prompt).base_ref, PC);
   assert.equal(inputsOf(call(out, "infra:commit-plan:replan").prompt).branch, null);
   const reset = inputsOf(call(out, "infra:replan-reset").prompt);
-  // the coder's work is uncommitted: the reset saves the judged tree on the
-  // superseded branch (a plumbing commit object, no hooks) before resetting
+  // the coder's work is uncommitted: the reset keeps the old head on the
+  // superseded branch and the judged tree under a ref, creating no commit
   assert.deepEqual(
     { superseded_branch: reset.superseded_branch, expected_head: reset.expected_head, expected_tree: reset.expected_tree, new_plan_commit: reset.new_plan_commit },
     { superseded_branch: "fleet/l42-add-thing--superseded-1", expected_head: PC, expected_tree: "K1", new_plan_commit: PC2 },
   );
   const rp = call(out, "infra:replan-reset").prompt;
   assert.match(rp, /Only after step 2 succeeded/);
-  assert.match(rp, /commit-tree <expected_tree> -p <expected_head>/);
+  assert.match(rp, /branch <superseded_branch> <expected_head>/);
   assert.match(rp, /clean -fd` \(never -x/);
   assert.ok(!/git -C <main_worktree> commit -/.test(rp));
 });
@@ -4439,12 +4439,6 @@ test("2.1.0 G3 scope fence: infra, CI, secrets, rulesets and a foreign repo are 
   assert.match(out.result.needs_max_section, /\/other/);
 });
 
-test("2.1.0 G3 scope fence: helm or kubectl in a command is refused", () => {
-  const m = /function scopeProblems\(([\s\S]*?)\n\}\n/.exec(SOURCE);
-  assert.ok(m, "scopeProblems in the script");
-  assert.match(SOURCE, /kubectl\|helm\|terraform\|tofu\|tfp/);
-});
-
 test("2.1.0 build with confirm auto re-runs the gates against the current ledger rulings", async () => {
   const s = autoHappy();
   const plan = await runOne(s, ARGS);
@@ -4683,4 +4677,115 @@ test("2.1.0 hasher program: tree fingerprint leaves the real index alone and see
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- 2.1.0 security review fixes
+
+test("2.1.0 scope fence on the REAL changes: a coder that writes CI, IaC or a secret file stops (every mode)", async () => {
+  for (const p of [".github/workflows/ci.yml", "infra/main.tf", ".env.local"]) {
+    const s = happy({
+      script: { "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES, changed: ["src/x.py", p] } },
+    });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", p);
+    assert.equal(out.result.stop_gate, "scope", p);
+    assert.ok(out.result.reason.includes(p), out.result.reason);
+    assert.ok(!out.labels.includes("role:fleet-code-judge:r1"), p);
+    assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)), p);
+  }
+  // the post-coder listing diffs the whole change from the first freeze's HEAD
+  const out = await run(happy(), ARGS);
+  assert.equal(inputsOf(call(out, "hasher:post-coder:r1").prompt).base_tree, PC);
+  // writers' changed paths are fenced too (limited to test files, so it does not fire in practice)
+  const w = await run(happy({ criteria: [{ id: "AC1", text: "a", test_files: [".github/tests/test_a.py"] }] }), ARGS);
+  assert.equal(w.result.status, "needs_human");
+  assert.equal(w.result.stop_gate, "scope");
+});
+
+test("2.1.0 the hook surface is frozen: .pre-commit-config.yaml, local hook entries, core.hooksPath and the hooks dir", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-hooks-");
+  try {
+    writeFileSync(
+      join(wt, ".pre-commit-config.yaml"),
+      "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        language: system\n        entry: python3 scripts/chk.py\n",
+    );
+    sh(wt, "mkdir", "-p", "scripts");
+    writeFileSync(join(wt, "scripts", "chk.py"), "print(1)\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.ok(".pre-commit-config.yaml" in a.files);
+    assert.ok("scripts/chk.py" in a.files, "local hook entry file is frozen");
+    assert.equal(a.git["core.hooksPath"], "UNSET");
+    // editing the config, the entry script, adding a hook file or setting hooksPath: all changes
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), "repos: []\n");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.files[".pre-commit-config.yaml"], a.files[".pre-commit-config.yaml"]);
+    sh(wt, "git", "checkout", "-q", "--", ".");
+    writeFileSync(join(wt, "scripts", "chk.py"), "print(2)\n");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.files["scripts/chk.py"], a.files["scripts/chk.py"]);
+    sh(wt, "git", "checkout", "-q", "--", ".");
+    const hooksDir = sh(wt, "git", "rev-parse", "--git-path", "hooks").trim();
+    const hd = hooksDir.startsWith("/") ? hooksDir : join(wt, hooksDir);
+    sh(wt, "mkdir", "-p", hd);
+    writeFileSync(join(hd, "pre-commit"), "#!/bin/sh\nexit 0\n");
+    const b = runHasherRaw(wt, "hashes", []).hashes;
+    assert.ok("hooks/pre-commit" in b.git, "a file in the hooks dir is frozen");
+    sh(wt, "git", "config", "core.hooksPath", ".githooks");
+    assert.equal(runHasherRaw(wt, "hashes", []).hashes.git["core.hooksPath"], ".githooks");
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 a coder that edits .pre-commit-config.yaml or adds a hook file is a hash violation", async () => {
+  for (const [k, v] of [[".pre-commit-config.yaml", "edited"], ["git:hooks/pre-commit", "new"], ["git:core.hooksPath", ".githooks"]]) {
+    const frozen = H({ ...HASHES_FLAT, ".pre-commit-config.yaml": "pc", "git:core.hooksPath": "UNSET" });
+    const s = hashViolation(H({ ...HASHES_FLAT, ".pre-commit-config.yaml": "pc", "git:core.hooksPath": "UNSET", [k]: v }));
+    s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_PLAN, hashes: frozen };
+    s["hasher:post-coder:r2"] = { status: "ok", fingerprint: FP_K2, hashes: frozen };
+    const out = await run(s, ARGS);
+    noUnscripted(out);
+    assert.ok(!out.labels.includes("role:fleet-code-judge:r1"), k);
+    assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, new RegExp(k.replace(/[.]/g, "\\.")));
+  }
+});
+
+test("2.1.0 G3 behaviour: a check_cmd hook named for helm passes G2 and is refused by the scope fence", async () => {
+  const s = autoHappy({
+    script: {
+      "role:scope-and-plan": Object.assign({}, happy()["role:scope-and-plan"], {
+        repo_obligations: [{ id: "docs", kind: "docs", instruction: "regen", check_cmd: "pre-commit run helm-docs" }],
+      }),
+      "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["helm-docs"], parser: "yaml" },
+    },
+  });
+  const out = await runOne(s, AUTO);
+  autoFail(out, "scope");
+  assert.ok(out.labels.includes("infra:precommit-ids"));
+});
+
+test("2.1.0 an auto build reports mode build", async () => {
+  const out = await runOne(autoHappy(), AUTO);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.mode, "build");
+});
+
+test("2.1.0 write-back runs right after the first PR opens, so a stopped review still leaves it", async () => {
+  const out = await run(happy({ script: { "role:pr-review:v1": { status: "needs_human", reason: "cannot read PR" } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  const L = out.labels;
+  assert.ok(L.indexOf("infra:ledger-writeback") > L.indexOf("role:fleet-pr-opener"));
+  assert.ok(L.indexOf("infra:ledger-writeback") < L.indexOf("role:pr-review:v1"));
+});
+
+test("2.1.0 re-plan keeps the uncommitted work under a non-branch ref to the tree: no commit object", async () => {
+  const s = planWrong([{ target: "plan", criterion: "AC2", finding: "x — Proposed plan change: y" }]);
+  const ref = await planRefFor(s);
+  const out = await runOne(s, buildArgs(ref));
+  assert.equal(out.result.status, "awaiting_confirmation");
+  const rp = call(out, "infra:replan-reset").prompt;
+  assert.ok(!/commit-tree/.test(rp));
+  assert.match(rp, /update-ref <superseded_tree_ref> <expected_tree>/);
+  assert.equal(inputsOf(rp).superseded_tree_ref, "refs/fleet/l42-add-thing/superseded-1-tree");
+  assert.equal(out.result.superseded_tree_ref, "refs/fleet/l42-add-thing/superseded-1-tree");
 });
