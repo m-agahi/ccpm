@@ -323,7 +323,14 @@ The hasher freezes every criterion test file, plus:
   For each `repo: local` hook of the root config, the `entry` and every `args` item are
   shell-split; `-m <mod>` resolves to `<mod>.py` or `<mod>/__init__.py`. A launcher as the first
   word (`uv`, `uvx`, `poetry`, `pipx`, `npx`, `pnpm`, `yarn`, `npm`, `hatch`, `pdm`) and its
-  subcommand words (`run`, `exec`, `--`) are accepted, and resolving goes on from the next token. The whole dir tree of
+  subcommand words (`run`, `exec`, `--`) are accepted, and resolving goes on from the next token.
+  When any local hook uses a launcher, the script tables are frozen as sections:
+  `package.json#scripts`, `pyproject.toml#project.scripts`, `#tool.poetry.scripts`,
+  `#tool.pdm.scripts` and `#tool.hatch.envs.*.scripts`. `npm|pnpm|yarn run <name>` needs `<name>`
+  in `package.json` `scripts`; `npx`/`uvx`/`pnpm exec <tool>` needs the tool in `node_modules/.bin`
+  or `.venv/bin` inside the repo, or declared in `devDependencies` or a pyproject dependency table
+  (a PATH lookup alone is not enough). The words after such a script or tool are its arguments:
+  repo files among them are frozen, other words are accepted. The whole dir tree of
   every repo file named this way is frozen (tracked and untracked-not-ignored). A `-c` payload, or
   a token that is neither a repo file nor a binary on PATH, is suspicious and stops the run at
   freeze ("unresolvable local hook <id>"). The commit step runs these hooks, and G2 checked the
@@ -337,9 +344,11 @@ The hasher freezes every criterion test file, plus:
   `-c core.hooksPath` to the frozen value (or git's default hooks dir);
 - ignored files (map `ignored`): `git ls-files --others --ignored --exclude-standard`, minus the
   tool caches (`__pycache__`, `.pytest_cache`, `.hypothesis`, `.ruff_cache`, `.mypy_cache`,
-  `.import_linter_cache`, `node_modules/.cache`) and build or coverage output (`build/`, `dist/`,
-  `htmlcov/`, `.eggs/`, `coverage.xml`, `.coverage`, `.coverage.*`, `junit*.xml`). `*.egg-info`
-  stays frozen: its `entry_points` can register pytest plugins. Inside `.venv`, `venv`, `.tox`,
+  `.import_linter_cache`, `node_modules/.cache`) and build or coverage output: the dirs `build/`,
+  `dist/`, `htmlcov/` and `.eggs/` at the top level only, and `coverage.xml`, `.coverage`,
+  `.coverage.*` and `junit*.xml` at the repo root only. `*.egg-info` and `EGG-INFO` stay frozen
+  anywhere (their `entry_points` can register pytest plugins); they and the venv startup-hook rule
+  are checked before these exclusions. Inside `.venv`, `venv`, `.tox`,
   `.nox` and `node_modules` only `*.pth`, `sitecustomize.py` and `usercustomize.py` count. A new or
   changed ignored path after a writer round or a coder round is a violation ("ignored path
   written: <p>");

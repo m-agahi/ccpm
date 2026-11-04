@@ -62,6 +62,10 @@ added_symbols, frozen_tests_red_at_start, obligations_done`. The `commit`/`commi
   word after the launcher's subcommand. Ignored build and coverage output (`build/`, `dist/`,
   `htmlcov/`, `.eggs/`, `coverage.xml`, `.coverage.*`, `junit*.xml`) is not frozen; `*.egg-info`
   still is.
+- Launcher hooks freeze the script tables (`package.json` `scripts`, pyproject `project.scripts`,
+  `tool.poetry.scripts`, `tool.pdm.scripts`, `tool.hatch.envs.*.scripts`). `npm run <name>` needs
+  the script; `npx`/`uvx` need a repo-local or declared tool. Build-output exclusions apply at the
+  top level (dirs) and the repo root (files) only; `*.egg-info` is checked first.
 - README: a "Threat model" section. The freeze guards against reward hacking, not against a hostile
   agent with a shell.
 

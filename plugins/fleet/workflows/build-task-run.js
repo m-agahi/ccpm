@@ -421,6 +421,101 @@ def norm(rel):
 LAUNCHERS = {'uv', 'uvx', 'poetry', 'pipx', 'npx', 'pnpm', 'yarn', 'npm', 'hatch', 'pdm'}
 LAUNCHER_WORDS = {'run', 'exec', '--'}
 
+def root_json(name):
+    try:
+        with open(os.path.join(wt, name), 'rb') as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return 'UNPARSEABLE'
+
+def root_toml():
+    p = os.path.join(wt, 'pyproject.toml')
+    if not os.path.isfile(p):
+        return None
+    if tomllib is None:
+        return 'UNPARSEABLE'
+    try:
+        with open(p, 'rb') as fh:
+            return tomllib.load(fh)
+    except Exception:
+        return 'UNPARSEABLE'
+
+def dig(d, *keys):
+    for k in keys:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(k)
+    return d
+
+def hatch_scripts(pp):
+    envs = dig(pp, 'tool', 'hatch', 'envs')
+    if not isinstance(envs, dict):
+        return None
+    out = {k: v['scripts'] for k, v in envs.items() if isinstance(v, dict) and 'scripts' in v}
+    return out or None
+
+def launcher_tables():
+    # the script tables a launcher hook runs, as canonical sections
+    pj, pp = root_json('package.json'), root_toml()
+    def sec(data, val):
+        if data is None:
+            return 'MISSING'
+        if not isinstance(data, dict):
+            return 'UNPARSEABLE'
+        return 'ABSENT' if val is None else sha(canon(val))
+    return {
+        'package.json#scripts': sec(pj, dig(pj, 'scripts')),
+        'pyproject.toml#project.scripts': sec(pp, dig(pp, 'project', 'scripts')),
+        'pyproject.toml#tool.poetry.scripts': sec(pp, dig(pp, 'tool', 'poetry', 'scripts')),
+        'pyproject.toml#tool.pdm.scripts': sec(pp, dig(pp, 'tool', 'pdm', 'scripts')),
+        'pyproject.toml#tool.hatch.envs.*.scripts': sec(pp, hatch_scripts(pp)),
+    }
+
+def dist_name(x):
+    m = re.match(r'[A-Za-z0-9][A-Za-z0-9._-]*', str(x).strip())
+    return re.sub(r'[._]', '-', m.group(0).lower()) if m else None
+
+def repo_names():
+    # npm script names, Python script names, and the tools the repo declares
+    pj, pp = root_json('package.json'), root_toml()
+    npm = set(dig(pj, 'scripts') or {}) if isinstance(dig(pj, 'scripts'), dict) else set()
+    py = set()
+    for t in (dig(pp, 'project', 'scripts'), dig(pp, 'tool', 'poetry', 'scripts'), dig(pp, 'tool', 'pdm', 'scripts')):
+        if isinstance(t, dict):
+            py |= set(t)
+    for t in (hatch_scripts(pp) or {}).values():
+        if isinstance(t, dict):
+            py |= set(t)
+    tools = set()
+    dev = dig(pj, 'devDependencies')
+    if isinstance(dev, dict):
+        tools |= set(dist_name(k) for k in dev)
+    lists = [dig(pp, 'project', 'dependencies')]
+    for grp in (dig(pp, 'project', 'optional-dependencies'), dig(pp, 'dependency-groups'), dig(pp, 'tool', 'pdm', 'dev-dependencies')):
+        if isinstance(grp, dict):
+            lists += list(grp.values())
+    for l in lists:
+        if isinstance(l, list):
+            tools |= set(dist_name(x) for x in l if isinstance(x, str))
+    tables = [dig(pp, 'tool', 'poetry', 'dependencies'), dig(pp, 'tool', 'poetry', 'dev-dependencies')]
+    groups = dig(pp, 'tool', 'poetry', 'group')
+    if isinstance(groups, dict):
+        tables += [dig(g, 'dependencies') for g in groups.values()]
+    for t in tables:
+        if isinstance(t, dict):
+            tools |= set(dist_name(k) for k in t)
+    tools.discard(None)
+    return npm, py, tools
+
+def declared_tool(tool, tools):
+    # npx/uvx: a repo-local bin or a declared dependency; never a PATH lookup alone
+    for d in ('node_modules/.bin', '.venv/bin'):
+        if os.path.lexists(os.path.join(wt, d, tool)):
+            return True
+    return dist_name(tool) in tools
+
 def repo_file(tok):
     # a relative path to a regular file inside the worktree, else None
     if not tok or tok.startswith('/') or '..' in tok.split('/'):
@@ -473,9 +568,12 @@ def local_hooks():
 def hook_refs():
     # repo files every local hook names (entry and args, shlex-split; -m mod
     # resolved to its file), and an alarm for any token that is neither a repo
-    # file nor a binary on PATH, or an inline payload after -c
+    # file nor a binary on PATH, or an inline payload after -c. A launcher hook
+    # also freezes the script tables (see launcher_tables).
     hooks, bad = local_hooks()
     refs = set()
+    used_launcher = False
+    npm_scripts, py_scripts, tools = repo_names()
     for hid, entry, args in hooks:
         try:
             toks = shlex.split(entry) + [t for x in args for t in shlex.split(x)]
@@ -483,18 +581,38 @@ def hook_refs():
             bad.append('unresolvable local hook ' + hid + ': entry or args do not shell-split')
             continue
         i = 0
-        # a launcher (uv run, poetry run, npx, ...): accept it and its
-        # subcommand words, then resolve from the next token
-        if toks and toks[0] in LAUNCHERS:
+        # lenient: the rest are the arguments of a frozen script or a declared tool
+        lenient = False
+        launcher = toks[0] if toks and toks[0] in LAUNCHERS else None
+        if launcher:
+            used_launcher = True
             i = 1
+            sub = []
             while i < len(toks) and toks[i] in LAUNCHER_WORDS:
+                sub.append(toks[i])
                 i += 1
+            name = toks[i] if i < len(toks) else None
+            if launcher in ('npm', 'pnpm', 'yarn') and ('run' in sub or (launcher == 'yarn' and not sub)):
+                if name not in npm_scripts:
+                    bad.append('unresolvable local hook ' + hid + ': npm script missing: ' + str(name))
+                    continue
+                i += 1
+                lenient = True
+            elif launcher in ('npx', 'uvx') or (launcher == 'pnpm' and 'exec' in sub):
+                if not name or not declared_tool(name, tools):
+                    bad.append('unresolvable local hook ' + hid + ': ' + str(name))
+                    continue
+                i += 1
+                lenient = True
+            elif name in py_scripts:
+                i += 1
+                lenient = True
         while i < len(toks):
             t = toks[i]
-            if t == '-c':
+            if t == '-c' and not lenient:
                 bad.append('unresolvable local hook ' + hid + ': inline payload after -c')
                 break
-            if t == '-m':
+            if t == '-m' and not lenient:
                 mod = toks[i + 1].replace('.', '/') if i + 1 < len(toks) else ''
                 f = repo_file(mod + '.py') or repo_file(mod + '/__init__.py') if mod else None
                 if f:
@@ -509,7 +627,7 @@ def hook_refs():
             f = repo_file(t)
             if f:
                 refs.add(f)
-            elif '/' not in t and shutil.which(t):
+            elif lenient or ('/' not in t and shutil.which(t)):
                 pass
             else:
                 bad.append('unresolvable local hook ' + hid + ': ' + t)
@@ -523,7 +641,7 @@ def hook_refs():
             for x in git('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', d).split(b'\x00'):
                 if x:
                     frozen.add(x.decode())
-    return sorted(frozen), bad
+    return sorted(frozen), bad, used_launcher
 
 def config_freeze(gitmap):
     # local (and worktree) git config, sorted with values, minus branch.* (the
@@ -547,14 +665,15 @@ def config_freeze(gitmap):
     ia = git('rev-parse', '--git-path', 'info/attributes').decode().strip()
     gitmap['info/attributes'] = abs_hash(ia if os.path.isabs(ia) else os.path.join(wt, ia))
 
-IGNORED_CACHE = {'__pycache__', '.pytest_cache', '.hypothesis', '.ruff_cache', '.mypy_cache', '.import_linter_cache',
-                 'build', 'dist', 'htmlcov', '.eggs'}
-# build and coverage output files; *.egg-info stays frozen (entry_points can register pytest plugins)
-IGNORED_OUTPUT = ['coverage.xml', '.coverage', '.coverage.*', 'junit*.xml']
+IGNORED_CACHE = {'__pycache__', '.pytest_cache', '.hypothesis', '.ruff_cache', '.mypy_cache', '.import_linter_cache'}
+# build and coverage output: these dirs at the top level only, these files at the root only;
+# *.egg-info and EGG-INFO stay frozen anywhere (entry_points can register pytest plugins)
+OUTPUT_DIRS = {'build', 'dist', 'htmlcov', '.eggs'}
+OUTPUT_FILES = ['coverage.xml', '.coverage', '.coverage.*', 'junit*.xml']
 
 def ignored_files():
-    # every ignored file except tool caches; inside a skipped dir (venv,
-    # node_modules, ...) only interpreter startup hooks
+    # every ignored file except tool caches and top-level build output; inside
+    # a skipped dir (venv, node_modules, ...) only interpreter startup hooks
     out = {}
     for x in git('ls-files', '-z', '--others', '--ignored', '--exclude-standard').split(b'\x00'):
         if not x:
@@ -562,13 +681,19 @@ def ignored_files():
         rel = x.decode()
         segs = rel.split('/')
         base = segs[-1]
-        if any(s in IGNORED_CACHE for s in segs) or '/'.join(segs[:2]) == 'node_modules/.cache' or '/node_modules/.cache/' in rel:
-            continue
-        if any(fnmatch.fnmatch(base, g) for g in IGNORED_OUTPUT) or rel.startswith('.claude/worktrees/'):
+        if rel.startswith('.claude/worktrees/'):
             continue
         if any(s in SKIP_DIRS for s in segs[:-1]):
-            if not (base.endswith('.pth') or base in ('sitecustomize.py', 'usercustomize.py')):
-                continue
+            if base.endswith('.pth') or base in ('sitecustomize.py', 'usercustomize.py'):
+                out[rel] = file_hash(rel)
+            continue
+        if any(s.endswith('.egg-info') or s == 'EGG-INFO' for s in segs):
+            out[rel] = file_hash(rel)
+            continue
+        if any(s in IGNORED_CACHE for s in segs):
+            continue
+        if (len(segs) > 1 and segs[0] in OUTPUT_DIRS) or (len(segs) == 1 and any(fnmatch.fnmatch(base, g) for g in OUTPUT_FILES)):
+            continue
         out[rel] = file_hash(rel)
     return out
 
@@ -615,9 +740,11 @@ if not gpath:
 gitmap['core.excludesFile'] = abs_hash(gpath)
 hook_files(gitmap)
 config_freeze(gitmap)
-hook_frozen, hook_bad = hook_refs()
+hook_frozen, hook_bad, hook_launcher = hook_refs()
 for rel in hook_frozen:
     files[rel] = file_hash(rel)
+if hook_launcher:
+    sections.update(launcher_tables())
 SUSPICIOUS.extend(hook_bad)
 listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\x00')
 for rel in sorted(set(f.decode() for f in listed if f)):

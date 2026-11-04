@@ -5018,3 +5018,65 @@ test("2.1.0 ignored build and coverage output is not frozen; *.egg-info still is
     rmSync(wt, { recursive: true, force: true });
   }
 });
+
+test("2.1.0 launcher hooks freeze the script tables; npm run needs the script; npx/uvx need a repo-declared tool", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-scripts-");
+  try {
+    const cfg = (entry) =>
+      "repos:\n  - repo: local\n    hooks:\n      - id: h1\n        name: h1\n        language: system\n        entry: " + entry + "\n";
+    writeFileSync(join(wt, "package.json"), JSON.stringify({ scripts: { lint: "eslint .", test: "jest" }, devDependencies: { eslint: "9" } }));
+    writeFileSync(
+      join(wt, "pyproject.toml"),
+      '[project]\nname = "x"\ndependencies = ["ruff>=0.5"]\n\n[project.scripts]\nmycli = "x:main"\n\n[tool.hatch.envs.default.scripts]\ncheck = "ruff check"\n',
+    );
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg("npm run lint"));
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.deepEqual(a.suspicious, []);
+    for (const k of ["package.json#scripts", "pyproject.toml#project.scripts", "pyproject.toml#tool.poetry.scripts", "pyproject.toml#tool.pdm.scripts", "pyproject.toml#tool.hatch.envs.*.scripts"])
+      assert.ok(k in a.sections, k + " frozen: " + Object.keys(a.sections).join(", "));
+    // the coder edits scripts.lint: a section change
+    writeFileSync(join(wt, "package.json"), JSON.stringify({ scripts: { lint: "true", test: "jest" }, devDependencies: { eslint: "9" } }));
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.sections["package.json#scripts"], a.sections["package.json#scripts"]);
+    sh(wt, "git", "checkout", "-q", "--", ".");
+    const sus = (entry) => {
+      writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg(JSON.stringify(entry)));
+      return runHasherRaw(wt, "hashes", []).hashes.suspicious;
+    };
+    assert.ok(sus("npm run missing").some((x) => /unresolvable local hook h1: npm script missing/.test(x)));
+    assert.deepEqual(sus("npx eslint ."), [], "npx tool in devDependencies");
+    assert.deepEqual(sus("uvx ruff check"), [], "uvx tool in pyproject dependencies");
+    assert.deepEqual(sus("uv run mycli"), [], "uv run of a [project.scripts] entry");
+    assert.ok(sus("npx ls").some((x) => /unresolvable local hook h1: ls/.test(x)), "a PATH lookup alone is not enough for npx");
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 build-output exclusions apply only at the top level; egg-info is always frozen", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-toplvl-");
+  try {
+    writeFileSync(join(wt, ".gitignore"), "build/\ncoverage.xml\n*.egg-info/\n");
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    sh(wt, "mkdir", "-p", "build/lib", "src/build", "sub", "build/x.egg-info");
+    for (const f of ["build/lib/ok.py", "src/build/x.py", "coverage.xml", "sub/coverage.xml", "build/x.egg-info/entry_points.txt"])
+      writeFileSync(join(wt, f), "x\n");
+    const ign = Object.keys(runHasherRaw(wt, "hashes", []).hashes.ignored).sort();
+    assert.deepEqual(ign, ["build/x.egg-info/entry_points.txt", "src/build/x.py", "sub/coverage.xml"]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 a coder that edits package.json scripts (a launcher hook's table) is a hash violation", async () => {
+  const frozen = H({ ...HASHES_FLAT, "package.json#scripts": "s1" });
+  const s = hashViolation(H({ ...HASHES_FLAT, "package.json#scripts": "s2" }));
+  s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_PLAN, hashes: frozen };
+  s["hasher:post-coder:r2"] = { status: "ok", fingerprint: FP_K2, hashes: frozen };
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /package\.json#scripts/);
+});
