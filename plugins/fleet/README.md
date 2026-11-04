@@ -1,9 +1,16 @@
 # fleet
 
-Role fleet for one task. `/build-task <ledger id | plan path>` runs the `fleet:build-task-run`
-workflow. The workflow plans the change, audits the plan, writes tests per acceptance criterion,
-judges and freezes them, codes against them, judges the code and opens a **draft** PR. Max reviews
-and merges.
+Role fleet for one non-trivial code change. `/build-task <anything>` runs the
+`fleet:build-task-run` workflow twice:
+
+1. **plan mode** reads the input, plans the change, audits the plan and commits it locally. It
+   returns `awaiting_confirmation` with a short summary, the plan diff and the fleet size.
+2. After Max confirms, **build mode** checks that the approved plan is unchanged, writes tests per
+   acceptance criterion, judges and freezes them, codes against them, judges the code, pushes the
+   branch and opens a **draft** PR. It then writes back to the sources. Max reviews and merges.
+
+The input is any of: a yadgar ledger id, a Jira key, a GitHub or Codeberg issue or PR URL, a plan
+path, or free text.
 
 ## Install
 
@@ -21,37 +28,114 @@ and merges.
   prompt with `mcp__yadgar__agent_prompt_get`. A missing role stops the run in preflight; there is no
   local fallback.
 - `git`, `gh` (authenticated), and `python3` >= 3.11 (or `tomli`) in the target repo's environment.
+- For Jira input or write-back: the Atlassian MCP server. For GitHub write-back: `gh-personal`. For
+  Codeberg write-back: `$CODEBERG_TOKEN`. A missing tool makes intake stop, or makes that comment
+  fail (reported in the result, the run stays ok).
 
 ## Flow
 
-| Step | Agent             | Gate in script code                                                  |
-| ---- | ----------------- | -------------------------------------------------------------------- |
-| 1    | preflight         | yadgar unreachable or any role missing -> `needs_human`              |
-| 2    | workspace (infra) | creates or reuses branch `fleet/<task id>-<slug>` and its worktree   |
-| 3    | scope-and-plan    | status; criterion ids; test files disjoint across criteria           |
-| 4    | -                 | risk tier logged; short path disabled in v1 (always full)            |
-| 5    | plan-audit        | verdict other than `approve` -> `needs_human`                        |
-| 6    | prepare (infra)   | commits the plan doc; creates one worktree per testable criterion    |
-| 7    | test writers      | one per criterion, in parallel, each on `<branch>--t-<id>`           |
-| 8    | integrate (infra) | merges the writer branches into the fleet branch                     |
-| 9    | test judge        | `revise` routes findings to the named writers only; 3 rounds max     |
-| 10   | hasher (freeze)   | sha256 of test files and runner config; `freeze_ref` = HEAD          |
-| 11   | coder             | status                                                               |
-| 12   | hasher            | any changed, new or removed hash key -> coder round rejected         |
-| 13   | code judge        | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> stop |
-| 14   | pr-opener         | draft PR at `approved_sha` (HEAD after the approving judge run)      |
+`args.mode` is `"plan"` or `"build"`. A missing or other value returns `needs_human` before any
+agent runs.
+
+### Plan mode
+
+args: `{mode: "plan", input, repo, date, project?}`.
+
+| Step | Agent              | Gate in script code                                                       |
+| ---- | ------------------ | ------------------------------------------------------------------------- |
+| 1    | preflight          | yadgar unreachable, a role missing, a low version or a wrong marker       |
+| 2    | intake (read only) | `needs_human` (ambiguous repo or ticket) stops before any other step      |
+| 3    | workspace (infra)  | creates or reuses branch `fleet/<task id>-<slug>` and its worktree        |
+| 4    | scope-and-plan     | criterion ids; disjoint test files; `tldr`; `plan_diff` is a string array |
+| 5    | -                  | risk tier logged; short path disabled (always full)                       |
+| 6    | plan-audit         | verdict other than `approve` -> `needs_human`                             |
+| 7    | commit-plan        | commits the plan doc LOCALLY; returns its commit and sha256; no push      |
+
+Plan mode returns `awaiting_confirmation` with `tldr`, `plan_diff`, `fleet_size`
+(`{criteria, est_agents, est_rounds}`), `plan_path` and `plan_ref`. It makes no push, no PR, no
+ledger write and no comment. The planner's `held_out_examples` are dropped: never returned and
+never forwarded.
+
+Intake classifies the input and fetches its text: a ledger task through yadgar `task_get`, a Jira
+ticket through the Atlassian MCP, an issue or PR through `gh-personal` or the Codeberg API, a plan
+file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body}],
+repo, plan_path}`. Free text, a plan and a ledger task work in the caller's repo. A Jira ticket that
+names no repo, or several, stops with `needs_human`. The task id comes from the first ledger, Jira,
+GitHub or Codeberg source (`plan` for an ingested plan, `task` for free text). The slug comes from
+the brief title.
+
+`plan_ref` holds `branch`, `plan_commit`, `plan_path`, `plan_sha256`, `criteria`, `brief`, plus
+`task_id`, `slug`, `tldr`, `plan_facts` (scope fence and estimate), `history` (cumulative runs,
+re-plans and agents) and `seal`, the sha256 of the rest. The skill passes it back unchanged.
+
+### Build mode
+
+args: `{mode: "build", plan_ref, date, project?}`.
+
+| Step | Agent              | Gate in script code                                                     |
+| ---- | ------------------ | ----------------------------------------------------------------------- |
+| 1    | -                  | `plan_ref` seal or shape wrong -> `needs_human` before any agent        |
+| 2    | preflight          | as in plan mode                                                         |
+| 3    | workspace (infra)  | reuses the fleet branch and worktree                                    |
+| 4    | verify (read only) | plan hash at `plan_commit` and HEAD; HEAD position (below)              |
+| 5    | prepare (infra)    | one worktree per testable criterion on `<branch>--p<sha8>-t-<id>`       |
+| 6    | test writers       | one per criterion, in parallel                                          |
+| 7    | integrate (infra)  | merges the writer branches into the fleet branch                        |
+| 8    | test judge         | `revise` routes findings to the named writers only; 3 rounds max        |
+| 9    | hasher (freeze)    | sha256 of test files and runner config; `freeze_ref` = HEAD             |
+| 10   | coder              | status                                                                  |
+| 11   | hasher             | any changed, new or removed hash key -> coder round rejected            |
+| 12   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan |
+| 13   | push (infra)       | pushes `approved_sha`; origin must then be at that sha                  |
+| 14   | pr-opener          | draft PR at `approved_sha` (HEAD after the approving judge run)         |
+| 15   | write-back         | ledger section and one marked comment per external source               |
+
+Verify: the sha256 of `plan_path` at `plan_commit` must equal `plan_sha256`, or the run stops with
+"plan changed since approval". HEAD must equal `plan_commit`, or descend from it by fleet commits of
+this build only (`test(<id>): ...`, `feat|fix(...): ...`, and the merges of this plan's criterion
+branches), with `plan_path` unchanged. Anything else stops with the same reason. Commit-plan and
+verify run the same embedded hash program.
 
 The risk tier is still computed and logged (short = `est_diff_lines < 20` AND `new_behaviour`
-false), but v1 always takes the full path: no role prompt supports a coder without frozen criterion
-tests. A criterion with `test_files: []` is manual: it gets no writer, no frozen entry and no
-disjointness check, and it still reaches the PR opener so a human sees it. A ledger-id task needs a
-`title` arg; the run stops without one.
+false), but the fleet always takes the full path: no role prompt supports a coder without frozen
+criterion tests. A criterion with `test_files: []` is manual: it gets no writer, no frozen entry and
+no disjointness check, and it still reaches the PR opener so a human sees it.
 
-Task id and slug: a plan path (ends in `.md` or contains `/`) gives task id `plan` and the
-slugified file stem. A ledger id gives the slugified id and the slugified `title` arg (`task` when
-absent). Worktrees live under `<repo>/.claude/worktrees/fleet-<task id>-<slug>/` (`main`,
-`t-<criterion>`, `scratch`). The workspace step adds `.claude/worktrees/` and
+Worktrees live under `<repo>/.claude/worktrees/fleet-<task id>-<slug>/` (`main`,
+`p<sha8>-t-<criterion>`, `scratch`, `replan-<n>`). The workspace step adds `.claude/worktrees/` and
 `.claude/settings.local.json` to the repo's `info/exclude` when they are not already ignored.
+
+### plan_wrong
+
+A `plan_wrong` verdict stops the build. The script:
+
+1. takes the code judge's `plan` findings and parses each `Proposed plan change: <line>` into
+   `proposed_plan_change[]` (a finding without that line is used whole and logged);
+2. creates a detached worktree at the old `plan_commit`, runs scope-and-plan (the findings are an
+   extra `text` source) and plan-audit there, and commits the new plan there;
+3. saves the old fleet-branch head as `fleet/<task id>-<slug>--superseded-<n>`, then resets the
+   fleet branch to the new plan commit;
+4. returns `awaiting_confirmation` with `proposed_plan_change`, `plan_findings`, `superseded_ref`
+   and a fresh `plan_ref`.
+
+The next build run starts fresh from the new plan: new criterion branches (named by the new plan
+commit), a new freeze. Round and agent caps reset per run; `cumulative` counts runs, re-plans and
+agents across runs.
+
+### Write-back
+
+After the PR opens, build mode writes back. A failure here never changes the run status.
+
+- **Ledger:** for each `ledger` source, one `## Fleet build` section (tldr, plan path, PR URL,
+  hidden `fleet:<task id>` marker) is appended to the task's body page (`body_slug`) in
+  `args.project`. A body that already carries the marker is skipped. `ledger_status` is `ok`,
+  `failed` or `none`.
+- **Comments:** one comment on each `jira`, `github` and `codeberg` source: tldr, plan link, PR
+  link and the marker `fleet:<task id>` (an HTML comment on GitHub and Codeberg, a plain last line
+  on Jira). A read-only step lists the existing comments first; a source that already has the
+  marker is skipped. The script refuses, in code, any comment with a line that starts with `digger`
+  or `atlantis`. Ticket and issue bodies are never edited. `comment_status` is `posted`, `skipped`,
+  `failed` or `none`; on `failed`, `comment_text` holds the text to post by hand.
 
 ### Frozen set
 
@@ -105,7 +189,7 @@ The script pins the role contract, not the prose:
 - `EXPECTED_VERSIONS` holds the minimum role-page versions. Preflight reads each page's version. A
   lower version (stale or rolled back) stops the run; a higher one is logged as "prose-only changes
   assumed" and returned as `role_versions`.
-- Every role page carries `CONTRACT: fleet-v1` under its DISPATCH line. Preflight and every role
+- Every role page carries `CONTRACT: fleet-v2` under its DISPATCH line. Preflight and every role
   runner report the marker; any other value stops the run.
 - Each role runner reports the version and marker it loaded. A value that differs from preflight
   (the page changed mid-run) discards the result.
@@ -119,12 +203,12 @@ Each role runs on the tier named by the first `DISPATCH: model=<tier> (fallback=
 its role page. Preflight returns those lines; the script parses them. Accepted tiers: `fable`,
 `opus`, `sonnet`, `haiku`. A missing, unparseable or unknown line gives `sonnet`, and the run logs
 it. A role agent that dies is retried once on its fallback tier, when one is set; the retry counts
-toward the agent cap. Infra agents (preflight, workspace, prepare, integrate, hasher) run on
-`sonnet`.
+toward the agent cap. Infra agents (preflight, intake, workspace, commit-plan, verify, prepare,
+integrate, hasher, push, write-back) run on `sonnet`.
 
 ### Judge separation
 
-Judges, preflight and the hasher run as the `fleet:judge` agent, which has `Write`, `Edit` and
+Judges, preflight, intake, verify, the comment listing and the hasher run as the `fleet:judge` agent, which has `Write`, `Edit` and
 `NotebookEdit` disallowed. `Bash` stays, because the code judge must run the suite. The backstop is
 a worktree fingerprint (HEAD, sha256 of `git status --porcelain`, sha256 of `git diff HEAD`) taken
 before and after every judge run. Any difference discards the verdict and returns `needs_human`
@@ -133,12 +217,17 @@ too. It does not catch a change that a judge makes and reverts within its own ru
 
 ### Limits
 
-- Agent cap 60. Test rounds: 3 per entry into the test loop. Code rounds: 3 in total; a `fix_tests`
-  detour counts as one code round and opens a new test-loop entry.
-- v1 runs no held-out examples and no mutation, coverage or scanner gates. Judges receive explicit
-  `{status: "not_run"}` markers, and `gates_not_run` reaches the PR opener and the result. The
-  planner's `held_out_examples` are deleted before any other role sees the plan. v1 cannot check
-  that the planner kept them out of the plan doc itself.
+- Agent cap 60 per run. Test rounds: 3 per entry into the test loop. Code rounds: 3 per build run;
+  a `fix_tests` detour counts as one code round and opens a new test-loop entry.
+- The fleet runs no held-out examples and no mutation, coverage or scanner gates. Judges receive
+  explicit `{status: "not_run"}` markers, and `gates_not_run` reaches the PR opener and the result.
+  The planner's `held_out_examples` are dropped before any other role sees the plan. The script
+  cannot check that the planner kept them out of the plan doc itself.
+- Verify tells fleet commits apart by their subject lines only; git cannot prove who made a commit.
+  The plan-file checks (hash at `plan_commit` and at HEAD, no commit touching it) do not depend on
+  that.
+- The pr-opener role pushes the branch too. The script pushes first, so the role's push is a no-op.
+- The plan link in comments assumes a GitHub origin (`https://github.com/<owner>/<repo>/blob/...`).
 - Interpreter startup hooks inside an in-worktree virtualenv are not detected. The walk skips
   `.venv`, `venv`, `.tox` and `.nox`, because an editable install writes a `.pth` file there and
   would cause a false mismatch. So a coder can drop a `.pth` or `sitecustomize.py` into such a venv
@@ -157,21 +246,37 @@ too. It does not catch a change that a judge makes and reverts within its own ru
 
 ## Result
 
+Build mode, `status: "ok"`:
+
 ```json
 {
-  "status": "ok | needs_human | failed",
+  "status": "ok",
+  "mode": "build",
   "reason": "...",
   "branch": "fleet/<task id>-<slug>",
   "pr_url": "...",
   "path": "full",
   "rounds": { "tests": 1, "code": 1 },
+  "agents": 14,
+  "cumulative": { "runs": 2, "replans": 0, "agents": 20 },
   "gates_not_run": [{ "gate": "held_out", "reason": "..." }],
-  "role_versions": { "fleet-coder": 5 },
+  "role_versions": { "fleet-coder": 7 },
   "refreeze_log": [],
+  "write_back": {
+    "ledger": [{ "ref": "42", "status": "written" }],
+    "comments": []
+  },
+  "ledger_status": "ok",
+  "comment_status": "none",
+  "comment_text": null,
   "gate_log": ["..."],
   "yadgar_findings": [{ "role": "fleet-coder", "findings": ["..."] }]
 }
 ```
+
+`status: "awaiting_confirmation"` (plan mode, or build mode after `plan_wrong`) adds `tldr`,
+`plan_diff`, `fleet_size`, `plan_path`, `plan_ref` and `cumulative`; after `plan_wrong` also
+`proposed_plan_change`, `plan_findings`, `superseded_ref` and `superseded_head`.
 
 ## Tests
 

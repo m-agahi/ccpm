@@ -13,6 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -61,20 +62,20 @@ function inputsOf(prompt) {
 
 // The minimum role versions the workflow was built against.
 const FROZEN_VERSIONS = {
-  "scope-and-plan": 11,
-  "plan-audit": 9,
-  "fleet-test-writer": 4,
-  "fleet-test-judge": 4,
-  "fleet-coder": 5,
-  "fleet-code-judge": 5,
-  "fleet-pr-opener": 4,
+  "scope-and-plan": 13,
+  "plan-audit": 10,
+  "fleet-test-writer": 6,
+  "fleet-test-judge": 6,
+  "fleet-coder": 7,
+  "fleet-code-judge": 7,
+  "fleet-pr-opener": 5,
 };
 
-// Keys each role must return on status ok (the frozen fleet-v1 contract).
+// Keys each role must return on status ok (the frozen fleet-v2 contract).
 // The harness fills missing ones with neutral defaults for terse override
 // stubs; a stub with __raw: true is returned as written (drift tests).
 const REQUIRED_DEFAULTS = {
-  "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [] },
+  "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [], tldr: "adds a thing", plan_diff: ["new plan"] },
   "plan-audit": { verdict: "approve", routed_findings: [] },
   "fleet-test-writer": { criterion_id: "AC1", tests: [], commit: null },
   "fleet-test-judge": { verdict: "approve", routed_findings: [], checked: [] },
@@ -83,7 +84,7 @@ const REQUIRED_DEFAULTS = {
   "fleet-pr-opener": { pr_url: null, pr_number: null, created: true, template_used: null, gates_not_run_stated: true },
 };
 
-async function run(script, args) {
+async function runOne(script, args) {
   const calls = [];
   const unscripted = [];
   const logs = [];
@@ -113,7 +114,7 @@ async function run(script, args) {
         const pv = script.preflight && script.preflight.versions ? script.preflight.versions[role] : undefined;
         r.role_version = pv !== undefined ? pv : FROZEN_VERSIONS[role];
       }
-      if (!("role_contract" in r)) r.role_contract = "CONTRACT: fleet-v1";
+      if (!("role_contract" in r)) r.role_contract = "CONTRACT: fleet-v2";
       if (r.status === "ok")
         for (const [k, v] of Object.entries(REQUIRED_DEFAULTS[role] || {})) if (!(k in r)) r[k] = v;
     }
@@ -151,6 +152,28 @@ async function run(script, args) {
   return { result, calls, unscripted, logs, labels: calls.map((c) => c.label) };
 }
 
+// Plan mode, then (when it returns awaiting_confirmation) build mode with the
+// returned plan_ref, as the skill does after Max confirms. The merged view
+// holds both runs' calls; .plan and .build hold each run alone.
+async function run(script, args, buildOver) {
+  const plan = await runOne(script, args);
+  if (!plan.result || plan.result.status !== "awaiting_confirmation" || !args || typeof args !== "object" || args.mode !== "plan")
+    return Object.assign({}, plan, { plan, build: null });
+  const bargs = Object.assign({}, args, { mode: "build", plan_ref: plan.result.plan_ref }, buildOver || {});
+  delete bargs.input;
+  const build = await runOne(script, bargs);
+  return {
+    result: build.result,
+    planResult: plan.result,
+    calls: plan.calls.concat(build.calls),
+    unscripted: plan.unscripted.concat(build.unscripted),
+    logs: plan.logs.concat(build.logs),
+    labels: plan.labels.concat(build.labels),
+    plan,
+    build,
+  };
+}
+
 function call(out, label) {
   const c = out.calls.find((x) => x.label === label);
   assert.ok(c, "expected a call labelled " + label + "; got " + out.labels.join(", "));
@@ -162,11 +185,20 @@ function noUnscripted(out) {
 }
 
 const ARGS = {
-  task: "L42",
-  title: "Add Thing!",
+  mode: "plan",
+  input: "L42",
   repo: "/r",
   project: "o/r",
   date: "2026-11-04",
+};
+const PC = "abc1234def0";
+const PSHA = "a".repeat(64);
+const BRIEF = {
+  title: "Add Thing!",
+  description: "add a thing",
+  sources: [{ kind: "ledger", ref: "42", url: null, body: "task body" }],
+  repo: "/r",
+  plan_path: null,
 };
 const FP_PLAN = { head: "P1", status_sha256: "s", diff_sha256: "d" };
 const FP_K1 = { head: "K1", status_sha256: "s", diff_sha256: "d" };
@@ -208,8 +240,26 @@ function happy(over = {}) {
       reachable: true,
       missing: [],
       versions: { ...FROZEN_VERSIONS },
-      contract: Object.fromEntries(Object.keys(FROZEN_VERSIONS).map((k) => [k, "CONTRACT: fleet-v1"])),
+      contract: Object.fromEntries(Object.keys(FROZEN_VERSIONS).map((k) => [k, "CONTRACT: fleet-v2"])),
     },
+    intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF },
+    "infra:commit-plan": { status: "ok", reason: "committed", head: PC, plan_sha256: PSHA },
+    "infra:verify-plan": {
+      status: "ok",
+      reason: "verified",
+      head: PC,
+      plan_sha256: PSHA,
+      plan_sha256_head: PSHA,
+      is_ancestor: true,
+      commits_since: [],
+      plan_touched: [],
+    },
+    "infra:push": (prompt) => ({ status: "ok", reason: "pushed", remote_head: inputsOf(prompt).approved_sha }),
+    "infra:ledger-writeback": (prompt) => ({
+      status: "ok",
+      reason: "ok",
+      results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "written" })),
+    }),
     workspace: {
       status: "ok",
       reason: "created",
@@ -225,10 +275,13 @@ function happy(over = {}) {
       criteria: crit,
       est_diff_lines: 80,
       new_behaviour: true,
+      tldr: "adds a thing",
+      plan_diff: ["new plan"],
+      fleet_estimate: { criteria: crit.length, agents: 20, rounds: 1 },
       yadgar_findings: ["planner fact"],
     },
     "role:plan-audit": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
-    "infra:prepare": { status: "ok", reason: "ok", head: "P1" },
+    "infra:prepare": { status: "ok", reason: "ok", head: PC },
     "hasher:fp-pre:test-judge:r1": { status: "ok", fingerprint: FP_PLAN },
     "role:fleet-test-judge:r1": {
       status: "ok",
@@ -291,15 +344,21 @@ test("no args returns needs_human and dispatches nothing", async () => {
 });
 
 test("string args are parsed as JSON", async () => {
-  const out = await run(happy(), JSON.stringify(ARGS));
+  const out = await runOne(happy(), JSON.stringify(ARGS));
   noUnscripted(out);
-  assert.equal(out.result.status, "ok");
+  assert.equal(out.result.status, "awaiting_confirmation");
 });
 
 test("missing repo or date is rejected before any agent", async () => {
-  const out = await run({}, { task: "L42" });
-  assert.equal(out.result.status, "needs_human");
-  assert.equal(out.calls.length, 0);
+  for (const args of [
+    { mode: "plan", input: "L42", date: "2026-11-04" },
+    { mode: "plan", input: "L42", repo: "/r" },
+    { mode: "plan", input: "  ", repo: "/r", date: "2026-11-04" },
+  ]) {
+    const out = await runOne({}, args);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(args));
+    assert.equal(out.calls.length, 0);
+  }
 });
 
 test("branch name derives deterministically from a ledger id and title", async () => {
@@ -310,16 +369,26 @@ test("branch name derives deterministically from a ledger id and title", async (
   assert.equal(out.result.branch, "fleet/l42-add-thing");
 });
 
-test("branch name derives from a plan path stem", async () => {
-  const out = await run(happy(), {
-    ...ARGS,
-    task: "docs/plans/Foo_Bar-2026-11-04.md",
-    title: undefined,
-  });
+test("an ingested plan: task id plan, slug from the brief title, plan_path forwarded in the brief", async () => {
+  const brief = {
+    title: "Foo Bar",
+    description: "d",
+    sources: [{ kind: "plan", ref: "docs/plans/Foo_Bar-2026-11-04.md", url: null, body: "# plan" }],
+    repo: "/r",
+    plan_path: "./docs/plans/Foo_Bar-2026-11-04.md",
+  };
+  const s = happy({ brief });
+  s["role:scope-and-plan"].plan_path = "docs/plans/Foo_Bar-2026-11-04.md";
+  s["role:scope-and-plan"].plan_diff = ["AC2 added"];
+  const out = await runOne(s, { ...ARGS, input: "docs/plans/Foo_Bar-2026-11-04.md" });
+  noUnscripted(out);
   const ws = inputsOf(call(out, "workspace").prompt);
-  assert.equal(ws.branch, "fleet/plan-foo-bar-2026-11-04");
+  assert.equal(ws.branch, "fleet/plan-foo-bar");
   const plan = inputsOf(call(out, "role:scope-and-plan").prompt);
-  assert.equal(plan.plan_path, "docs/plans/Foo_Bar-2026-11-04.md");
+  assert.equal(plan.brief.plan_path, "docs/plans/Foo_Bar-2026-11-04.md");
+  assert.equal(plan.date, "2026-11-04");
+  assert.ok(!("task" in plan) && !("title" in plan), "v1 task/title inputs are gone");
+  assert.deepEqual(out.result.plan_diff, ["AC2 added"]);
 });
 
 // ---------------------------------------------------------------- preflight
@@ -368,8 +437,9 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
   assert.equal(cjIn.code_base_ref, "P1");
   assert.equal(coder.freeze_ref, "P1");
   // every role's yadgar findings are forwarded
+  // plan-run findings come back with the plan result, build-run findings with the build result
+  assert.ok(out.planResult.yadgar_findings.some((y) => y.role === "scope-and-plan"));
   const roles = r.yadgar_findings.map((y) => y.role);
-  assert.ok(roles.includes("scope-and-plan"));
   assert.ok(roles.includes("fleet-test-judge"));
   assert.ok(roles.includes("fleet-pr-opener"));
   assert.ok(Array.isArray(r.gate_log) && r.gate_log.length > 0);
@@ -399,7 +469,7 @@ test("judges run as the read-only fleet:judge agent", async () => {
   for (const c of out.calls) assert.notEqual(c.opts.isolation, "worktree", c.label);
 });
 
-test("short path is disabled in v1: a small no-new-behaviour plan still takes the full path", async () => {
+test("short path is disabled: a small no-new-behaviour plan still takes the full path", async () => {
   const s = happy();
   s["role:scope-and-plan"].est_diff_lines = 10;
   s["role:scope-and-plan"].new_behaviour = false;
@@ -409,7 +479,7 @@ test("short path is disabled in v1: a small no-new-behaviour plan still takes th
   assert.equal(out.result.path, "full");
   assert.ok(out.labels.includes("role:plan-audit"));
   assert.ok(out.labels.includes("role:fleet-test-writer:AC1:r1"));
-  assert.ok(out.logs.some((l) => /short path disabled in v1/.test(l)));
+  assert.ok(out.logs.some((l) => /short path disabled/.test(l)));
   assert.ok(out.logs.some((l) => /est_diff_lines < 20 AND new_behaviour false/.test(l)));
 });
 
@@ -697,7 +767,7 @@ test("fix_tests routes to the test-judge, never the coder, then re-freezes", asy
   assert.ok(!c2.routed_findings.some((f) => f.target === "tests"));
 });
 
-test("plan_wrong from the code-judge stops before the PR", async () => {
+test("plan_wrong without a plan finding stops before the PR", async () => {
   const s = happy({
     script: { "role:fleet-code-judge:r1": { status: "ok", verdict: "plan_wrong" } },
   });
@@ -1044,7 +1114,7 @@ test("writers get the full criterion; judges get full criteria, scope fence and 
   const tj = inputsOf(call(out, "role:fleet-test-judge:r1").prompt);
   assert.deepEqual(tj.allowed_additions, fence);
   assert.equal(tj.est_diff_lines, 80);
-  assert.equal(tj.base_ref, "P1");
+  assert.equal(tj.base_ref, PC);
   assert.deepEqual(tj.criteria[0].examples, richCriteria()[0].examples);
   assert.equal(tj.criteria[0].property, "idempotent");
   assert.equal(tj.criteria[1].spec_quote, "README: h() refuses");
@@ -1082,7 +1152,7 @@ test("test-judge writer_outputs carry this round's writer results only", async (
   assert.equal(r2[0].commit, "t2b");
 });
 
-const NOT_RUN = /^v1: /;
+const NOT_RUN = /^fleet v2: /;
 
 test("judges get fail-closed not_run gates, never an empty list", async () => {
   const out = await run(happy(), ARGS);
@@ -1387,7 +1457,9 @@ test("a role agent that dies is retried once on its fallback tier", async () => 
   assert.equal(call(out, "role:plan-audit:fallback").opts.model, "opus");
   assert.equal(call(out, "role:fleet-test-writer:AC1:r1:fallback").opts.model, "opus");
   assert.ok(out.logs.some((l) => /fallback/.test(l) && /plan-audit/.test(l)));
-  assert.equal(out.result.agents, out.calls.length, "retries count toward the agent cap");
+  // caps reset per run: each run counts its own dispatches
+  assert.equal(out.planResult.agents, out.plan.calls.length, "retries count toward the agent cap");
+  assert.equal(out.result.agents, out.build.calls.length, "retries count toward the agent cap");
 });
 
 test("a dead role with no fallback tier fails without a retry", async () => {
@@ -1568,8 +1640,8 @@ test("MI-2: a fix_tests re-entry merges the fleet branch into the criterion bran
   const sync = inputsOf(call(out, "infra:sync:r3").prompt);
   assert.equal(sync.branch, "fleet/l42-add-thing");
   assert.deepEqual(sync.criterion_worktrees.map((w) => w.branch).sort(), [
-    "fleet/l42-add-thing--t-AC1",
-    "fleet/l42-add-thing--t-AC2",
+    "fleet/l42-add-thing--pabc1234d-t-AC1",
+    "fleet/l42-add-thing--pabc1234d-t-AC2",
   ]);
   assert.ok(!out.labels.includes("infra:sync:r1"), "no sync on the initial entry");
 });
@@ -1613,31 +1685,31 @@ test("S-2: roles get only criterion test files in frozen_tests; config files go 
 
 test("S-8: a role version lower than the frozen minimum stops in preflight", async () => {
   const s = happy();
-  s.preflight.versions["fleet-coder"] = 4;
+  s.preflight.versions["fleet-coder"] = 6;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder version 4 < frozen 5/);
+  assert.match(out.result.reason, /role fleet-coder version 6 < frozen 7/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
 test("S-8: a higher role version is logged as prose-only and recorded", async () => {
   const s = happy();
-  s.preflight.versions["fleet-code-judge"] = 7;
+  s.preflight.versions["fleet-code-judge"] = 8;
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v7 > frozen v5: prose-only changes assumed/.test(l)));
-  assert.equal(out.result.role_versions["fleet-code-judge"], 7);
-  assert.equal(out.result.role_versions["fleet-coder"], 5);
+  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v8 > frozen v7: prose-only changes assumed/.test(l)));
+  assert.equal(out.result.role_versions["fleet-code-judge"], 8);
+  assert.equal(out.result.role_versions["fleet-coder"], 7);
 });
 
 test("S-8: a role runner that loaded a different version than preflight is discarded", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"].role_version = 6;
+  s["role:fleet-coder:r1"].role_version = 8;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-coder/);
-  assert.match(out.result.reason, /version 6/);
+  assert.match(out.result.reason, /version 8/);
   assert.ok(!out.labels.includes("hasher:post-coder:r1"));
 });
 
@@ -1668,13 +1740,14 @@ test("S-5: an approve reason without the gates prefix only logs a warning", asyn
   assert.ok(!out2.logs.some((l) => /warning/.test(l) && /approved with gates not run:/.test(l)));
 });
 
-test("S-6: a ledger-id task without a title is rejected before any agent", async () => {
-  const out = await run({}, { ...ARGS, title: undefined });
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /title/);
-  assert.equal(out.calls.length, 0);
-  const blank = await run({}, { ...ARGS, title: "  " });
-  assert.equal(blank.result.status, "needs_human");
+test("an intake brief without a title stops before any role", async () => {
+  for (const title of [undefined, "  "]) {
+    const s = happy({ brief: { ...BRIEF, title } });
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human");
+    assert.match(out.result.reason, /title/);
+    assert.deepEqual(out.labels, ["preflight", "intake"]);
+  }
 });
 
 test("S-3: the frozen note explains UNPARSEABLE and symlink targets", async () => {
@@ -1704,37 +1777,49 @@ test("manual criteria: no writer, no frozen entry, still listed for the PR opene
 
 // ---------------------------------------------------------------- contract marker + output asserts
 
-test("contract marker: missing or fleet-v2 in preflight stops; fleet-v1 passes", async () => {
+test("contract marker: missing or fleet-v1 in preflight halts; fleet-v2 passes", async () => {
   const missing = happy();
   missing.preflight.contract["fleet-coder"] = null;
   let out = await run(missing, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder contract null != fleet-v1/);
+  assert.match(out.result.reason, /role fleet-coder contract null != fleet-v2/);
   assert.deepEqual(out.labels, ["preflight"]);
 
-  const v2 = happy();
-  v2.preflight.contract["plan-audit"] = "CONTRACT: fleet-v2";
-  out = await run(v2, ARGS);
+  const v1 = happy();
+  v1.preflight.contract["plan-audit"] = "CONTRACT: fleet-v1";
+  out = await run(v1, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role plan-audit contract fleet-v2 != fleet-v1/);
+  assert.match(out.result.reason, /role plan-audit contract fleet-v1 != fleet-v2/);
+  assert.deepEqual(out.labels, ["preflight"]);
 
   out = await run(happy(), ARGS);
   assert.equal(out.result.status, "ok");
 });
 
+test("contract marker: a v1 marker in build-mode preflight halts before any build step", async () => {
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  assert.equal(plan.result.status, "awaiting_confirmation");
+  s.preflight.contract["fleet-coder"] = "CONTRACT: fleet-v1";
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /contract fleet-v1 != fleet-v2/);
+  assert.deepEqual(out.labels, ["preflight"]);
+});
+
 test("contract marker: a role runner that loaded another contract is discarded", async () => {
   const s = happy();
-  s["role:fleet-test-judge:r1"].role_contract = "CONTRACT: fleet-v2";
+  s["role:fleet-test-judge:r1"].role_contract = "CONTRACT: fleet-v1";
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-test-judge/);
-  assert.match(out.result.reason, /contract fleet-v2 != fleet-v1/);
+  assert.match(out.result.reason, /contract fleet-v1 != fleet-v2/);
   assert.ok(!out.labels.includes("hasher:freeze:f1"));
 });
 
 test("contract drift: planner ok output missing a required key stops", async () => {
   const s = happy();
-  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: 11, role_contract: "CONTRACT: fleet-v1" });
+  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: 13, role_contract: "CONTRACT: fleet-v2" });
   delete p.allowed_additions;
   delete p.held_out_examples;
   s["role:scope-and-plan"] = p;
@@ -1747,8 +1832,8 @@ test("contract drift: judge ok output missing a required key stops", async () =>
   const s = happy();
   s["role:fleet-code-judge:r1"] = {
     __raw: true,
-    role_version: 5,
-    role_contract: "CONTRACT: fleet-v1",
+    role_version: 7,
+    role_contract: "CONTRACT: fleet-v2",
     status: "ok",
     reason: "approved with gates not run: coverage",
     verdict: "approve",
@@ -1764,7 +1849,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
 
 test("contract drift: pr-opener ok output missing a required key stops", async () => {
   const s = happy();
-  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: 4, role_contract: "CONTRACT: fleet-v1" });
+  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: 5, role_contract: "CONTRACT: fleet-v2" });
   delete pr.template_used;
   s["role:fleet-pr-opener"] = pr;
   const out = await run(s, ARGS);
@@ -1783,7 +1868,7 @@ test("contract drift: null/empty values are fine where allowed", async () => {
 
 test("contract drift: a needs_human output may lack the role fields", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"] = { __raw: true, role_version: 5, role_contract: "CONTRACT: fleet-v1", status: "needs_human", reason: "test AC1 wrong" };
+  s["role:fleet-coder:r1"] = { __raw: true, role_version: 7, role_contract: "CONTRACT: fleet-v2", status: "needs_human", reason: "test AC1 wrong" };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /test AC1 wrong/);
@@ -1860,4 +1945,596 @@ test("re-freeze touching runner config or a symlink stops with needs_human", asy
 test("no fix_tests round means an empty refreeze_log", async () => {
   const out = await run(happy(), ARGS);
   assert.deepEqual(out.result.refreeze_log, []);
+});
+
+
+// ---------------------------------------------------------------- v2: modes
+
+const ROLE_LABEL = /^role:/;
+
+test("mode: missing or invalid mode returns needs_human before any agent", async () => {
+  for (const mode of [undefined, "", "deploy", "PLAN", 1]) {
+    const out = await runOne(happy(), { ...ARGS, mode });
+    assert.equal(out.result.status, "needs_human", String(mode));
+    assert.match(out.result.reason, /args\.mode must be "plan" or "build"/);
+    assert.equal(out.calls.length, 0);
+  }
+});
+
+test("mode build without a plan_ref returns needs_human before any agent", async () => {
+  const out = await runOne(happy(), { mode: "build", date: "2026-11-04", repo: "/r" });
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan_ref missing/);
+  assert.equal(out.calls.length, 0);
+});
+
+// ---------------------------------------------------------------- v2: intake
+
+test("intake ambiguity stops before any role or workspace step", async () => {
+  const s = happy({
+    script: { intake: { status: "needs_human", reason: "ABC-1 names two repos: o/r, o/s" } },
+  });
+  const out = await runOne(s, { ...ARGS, input: "ABC-1" });
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /two repos/);
+  assert.deepEqual(out.labels, ["preflight", "intake"]);
+});
+
+test("intake runs read-only, gets input, repo and project", async () => {
+  const out = await runOne(happy(), ARGS);
+  const c = call(out, "intake");
+  assert.equal(c.opts.agentType, "fleet:judge");
+  assert.equal(c.opts.model, "sonnet");
+  assert.deepEqual(inputsOf(c.prompt), { input: "L42", repo: "/r", project: "o/r" });
+  assert.match(c.prompt, /Read only/);
+  assert.ok(out.labels.indexOf("intake") < out.labels.indexOf("workspace"));
+});
+
+test("intake brief with an unknown source kind or a relative repo stops", async () => {
+  for (const brief of [
+    { ...BRIEF, sources: [{ kind: "slack", ref: "x", body: "" }] },
+    { ...BRIEF, repo: "r" },
+    { ...BRIEF, sources: [] },
+    { ...BRIEF, plan_path: "../outside.md" },
+  ]) {
+    const out = await runOne(happy({ brief }), ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(brief));
+    assert.deepEqual(out.labels, ["preflight", "intake"]);
+  }
+});
+
+test("intake brief repo is where the fleet works; the brief reaches the planner", async () => {
+  const brief = {
+    title: "Fix login",
+    description: "d",
+    sources: [{ kind: "jira", ref: "ABC-12", url: "https://x.atlassian.net/browse/ABC-12", body: "names o/s" }],
+    repo: "/src/s",
+    plan_path: null,
+  };
+  const out = await runOne(happy({ brief }), { ...ARGS, input: "ABC-12" });
+  noUnscripted(out);
+  const ws = inputsOf(call(out, "workspace").prompt);
+  assert.equal(ws.repo, "/src/s");
+  assert.equal(ws.branch, "fleet/abc-12-fix-login");
+  assert.deepEqual(inputsOf(call(out, "role:scope-and-plan").prompt).brief, brief);
+});
+
+// ---------------------------------------------------------------- v2: plan mode
+
+test("plan mode returns awaiting_confirmation with every field and makes no push, PR or comment call", async () => {
+  const out = await runOne(richPlan(), ARGS);
+  noUnscripted(out);
+  const r = out.result;
+  assert.equal(r.status, "awaiting_confirmation");
+  assert.equal(r.mode, "plan");
+  assert.equal(r.tldr, "adds a thing");
+  assert.deepEqual(r.plan_diff, ["new plan"]);
+  assert.deepEqual(r.fleet_size, { criteria: 2, est_agents: 20, est_rounds: 1 });
+  assert.equal(r.plan_path, "docs/plans/x.md");
+  const ref = r.plan_ref;
+  for (const k of ["branch", "plan_commit", "plan_path", "plan_sha256", "criteria", "brief"]) assert.ok(k in ref, k);
+  assert.equal(ref.branch, "fleet/l42-add-thing");
+  assert.equal(ref.plan_commit, PC);
+  assert.equal(ref.plan_sha256, PSHA);
+  assert.deepEqual(ref.brief, BRIEF);
+  assert.deepEqual(ref.criteria.map((c) => c.id), ["AC1", "AC2"]);
+  // held-out examples are dropped: never returned
+  assert.ok(!JSON.stringify(r).includes('"held_out_examples":'), "no held_out_examples key in the result");
+  assert.ok(!JSON.stringify(r).includes(SECRET));
+  // the plan is committed locally; nothing is pushed, opened or posted
+  assert.deepEqual(out.labels, [
+    "preflight",
+    "intake",
+    "workspace",
+    "role:scope-and-plan",
+    "role:plan-audit",
+    "infra:commit-plan",
+  ]);
+  const cp = call(out, "infra:commit-plan").prompt;
+  assert.match(cp, /LOCALLY/);
+  assert.match(cp, /Never push/);
+  assert.deepEqual(inputsOf(cp), {
+    worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
+    branch: "fleet/l42-add-thing",
+    plan_path: "docs/plans/x.md",
+    slug: "add-thing",
+  });
+});
+
+test("plan_diff is forwarded to plan-audit as an array", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].plan_diff = ["AC1 example changed", "scope: dropped src/old.py"];
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.deepEqual(inputsOf(call(out, "role:plan-audit").prompt).plan_diff, ["AC1 example changed", "scope: dropped src/old.py"]);
+  assert.deepEqual(out.result.plan_diff, ["AC1 example changed", "scope: dropped src/old.py"]);
+});
+
+test("plan_diff that is not an array of strings is contract drift", async () => {
+  for (const bad of ["new", "new plan", [], [1], null]) {
+    const s = happy();
+    s["role:scope-and-plan"].plan_diff = bad;
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(bad));
+    assert.match(out.result.reason, /contract drift: plan_diff/);
+    assert.ok(!out.labels.includes("role:plan-audit"));
+  }
+});
+
+test("REQUIRED_ON_OK: a planner ok output without tldr or plan_diff stops", async () => {
+  for (const k of ["tldr", "plan_diff"]) {
+    const s = happy();
+    const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], {
+      __raw: true,
+      role_version: 13,
+      role_contract: "CONTRACT: fleet-v2",
+    });
+    delete p[k];
+    s["role:scope-and-plan"] = p;
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human");
+    assert.match(out.result.reason, new RegExp("role scope-and-plan contract drift: missing " + k));
+  }
+});
+
+test("an ingested plan must be updated in place, not replaced", async () => {
+  const s = happy({ brief: { ...BRIEF, plan_path: "docs/plans/old.md" } });
+  s["role:scope-and-plan"].plan_path = "docs/plans/new.md";
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /updated in place/);
+  assert.ok(!out.labels.includes("role:plan-audit"));
+});
+
+test("a commit-plan step that returns no sha fails before a plan_ref exists", async () => {
+  const s = happy({ script: { "infra:commit-plan": { status: "ok", reason: "x", head: "P1", plan_sha256: PSHA } } });
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.ok(!("plan_ref" in out.result));
+});
+
+// ---------------------------------------------------------------- v2: plan_ref seal
+
+function canon(v) {
+  if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
+  if (v && typeof v === "object")
+    return (
+      "{" +
+      Object.keys(v)
+        .sort()
+        .filter((k) => v[k] !== undefined)
+        .map((k) => JSON.stringify(k) + ":" + canon(v[k]))
+        .join(",") +
+      "}"
+    );
+  return JSON.stringify(v === undefined ? null : v);
+}
+
+async function planRefFor(s) {
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  return out.result.plan_ref;
+}
+
+function buildArgs(ref, over) {
+  return Object.assign({ mode: "build", plan_ref: ref, date: "2026-11-04", repo: "/r", project: "o/r" }, over || {});
+}
+
+test("plan_ref seal is the sha256 of its canonical JSON (utf-8, non-ASCII included)", async () => {
+  const s = happy({ brief: { ...BRIEF, title: "Add Thing — ünïcode 🚀", description: "em — dash" } });
+  const ref = await planRefFor(s);
+  const o = Object.assign({}, ref);
+  delete o.seal;
+  assert.equal(ref.seal, createHash("sha256").update(canon(o), "utf8").digest("hex"));
+});
+
+test("a plan_ref changed after the plan run is refused before any agent", async () => {
+  const ref = await planRefFor(happy());
+  const bad = JSON.parse(JSON.stringify(ref));
+  bad.criteria[0].text = "something else";
+  const out = await runOne(happy(), buildArgs(bad));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /seal mismatch/);
+  assert.equal(out.calls.length, 0);
+});
+
+// ---------------------------------------------------------------- v2: build mode verify
+
+test("build mode: preflight first, then workspace, verify, prepare; no planner", async () => {
+  const s = happy();
+  const ref = await planRefFor(s);
+  const out = await runOne(s, buildArgs(ref));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  assert.deepEqual(out.labels.slice(0, 4), ["preflight", "workspace", "infra:verify-plan", "infra:prepare"]);
+  assert.ok(!out.labels.some((l) => l.startsWith("role:scope-and-plan") || l.startsWith("role:plan-audit")));
+  const v = inputsOf(call(out, "infra:verify-plan").prompt);
+  assert.deepEqual(v, {
+    main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
+    branch: "fleet/l42-add-thing",
+    plan_commit: PC,
+    plan_path: "docs/plans/x.md",
+  });
+  assert.equal(call(out, "infra:verify-plan").opts.agentType, "fleet:judge");
+});
+
+test("build mode: a plan hash mismatch stops with 'plan changed since approval'", async () => {
+  const s = happy();
+  const ref = await planRefFor(s);
+  s["infra:verify-plan"] = { ...s["infra:verify-plan"], plan_sha256: "b".repeat(64) };
+  const out = await runOne(s, buildArgs(ref));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan changed since approval/);
+  assert.ok(!out.labels.includes("infra:prepare"));
+  assert.ok(!out.labels.some((l) => ROLE_LABEL.test(l)));
+});
+
+test("build mode: a branch moved off the plan commit stops", async () => {
+  const s = happy();
+  const ref = await planRefFor(s);
+  const cases = [
+    // HEAD not a descendant of plan_commit
+    { head: "fedcba9876", is_ancestor: false, commits_since: [] },
+    // a descendant with a non-fleet commit
+    { head: "fedcba9876", is_ancestor: true, commits_since: [{ sha: "fedcba9876", subject: "wip: hand edit" }] },
+    // a later commit changed the plan file
+    { head: "fedcba9876", is_ancestor: true, plan_touched: ["fedcba9876"], commits_since: [{ sha: "fedcba9876", subject: "fix: x" }] },
+    { head: "fedcba9876", is_ancestor: true, plan_sha256_head: "c".repeat(64), commits_since: [{ sha: "fedcba9876", subject: "fix: x" }] },
+  ];
+  for (const c of cases) {
+    s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], ...c };
+    const out = await runOne(s, buildArgs(ref));
+    assert.equal(out.result.status, "needs_human", JSON.stringify(c));
+    assert.match(out.result.reason, /plan changed since approval/);
+    assert.ok(!out.labels.includes("infra:prepare"), JSON.stringify(c));
+  }
+});
+
+test("build mode: a descendant made only by fleet steps of this build proceeds", async () => {
+  const s = happy();
+  const ref = await planRefFor(s);
+  const head = "fedcba9876";
+  s["infra:verify-plan"] = {
+    ...s["infra:verify-plan"],
+    head,
+    commits_since: [
+      { sha: "1111111", subject: "test(AC1): behaviour 1" },
+      { sha: "2222222", subject: "Merge branch 'fleet/l42-add-thing--pabc1234d-t-AC1'" },
+      { sha: "3333333", subject: "Merge branch 'fleet/l42-add-thing' into fleet/l42-add-thing--pabc1234d-t-AC2" },
+      { sha: "4444444", subject: "feat(thing): add it" },
+    ],
+  };
+  s["infra:prepare"] = { status: "ok", reason: "ok", head };
+  const out = await runOne(s, buildArgs(ref));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  assert.ok(out.logs.some((l) => /descends from plan_commit by 4 fleet commit/.test(l)));
+  // a merge of a criterion branch from another plan is not a fleet step of this build
+  s["infra:verify-plan"].commits_since = [{ sha: "5", subject: "Merge branch 'fleet/l42-add-thing--p99999999-t-AC1'" }];
+  const other = await runOne(s, buildArgs(ref));
+  assert.equal(other.result.status, "needs_human");
+});
+
+test("build mode: criterion branches and worktrees are named by the plan commit", async () => {
+  const s = happy();
+  const ref = await planRefFor(s);
+  const out = await runOne(s, buildArgs(ref));
+  const prep = inputsOf(call(out, "infra:prepare").prompt);
+  assert.deepEqual(prep.criterion_worktrees.map((w) => w.branch), [
+    "fleet/l42-add-thing--pabc1234d-t-AC1",
+    "fleet/l42-add-thing--pabc1234d-t-AC2",
+  ]);
+  assert.equal(prep.criterion_worktrees[0].path, "/r/.claude/worktrees/fleet-l42-add-thing/pabc1234d-t-AC1");
+  assert.doesNotMatch(call(out, "infra:prepare").prompt, /git -C <main_worktree> commit/);
+});
+
+test("build mode: the script pushes the approved sha before the PR opener runs", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  const iPush = out.labels.indexOf("infra:push");
+  const iPr = out.labels.indexOf("role:fleet-pr-opener");
+  assert.ok(iPush > 0 && iPr > iPush);
+  const p = inputsOf(call(out, "infra:push").prompt);
+  assert.equal(p.approved_sha, "K1");
+  assert.equal(p.branch, "fleet/l42-add-thing");
+  assert.match(call(out, "infra:push").prompt, /Never --force/);
+});
+
+test("build mode: a push that did not land the approved sha stops before the PR", async () => {
+  const s = happy({ script: { "infra:push": { status: "ok", reason: "x", remote_head: "other" } } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /not the approved K1/);
+  assert.ok(!out.labels.includes("role:fleet-pr-opener"));
+});
+
+test("plan hash: commit and verify steps embed the same program, and it hashes the committed bytes", { skip: !HAVE_PY }, async () => {
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  const build = await runOne(s, buildArgs(plan.result.plan_ref));
+  const progs = [call(plan, "infra:commit-plan").prompt, call(build, "infra:verify-plan").prompt].map((p) => {
+    const m = p.match(/python3 -I -c ('(?:[^']|'\\'')*')/);
+    assert.ok(m, "prompt embeds the plan hash program");
+    return m[1];
+  });
+  assert.equal(progs[0], progs[1]);
+  const prog = progs[0].slice(1, -1).replace(/'\\''/g, "'");
+  const wt = scratchRepo("fleet-planhash-");
+  try {
+    const text = "# plan — ü\n";
+    sh(wt, "mkdir", "-p", "docs");
+    writeFileSync(join(wt, "docs", "p.md"), text);
+    sh(wt, "git", "add", ".");
+    sh(wt, "git", "commit", "-q", "-m", "plan");
+    const head = sh(wt, "git", "rev-parse", "HEAD").trim();
+    const got = sh(wt, "python3", "-I", "-c", prog, wt, head, "docs/p.md").trim();
+    assert.equal(got, createHash("sha256").update(text, "utf8").digest("hex"));
+    assert.equal(sh(wt, "python3", "-I", "-c", prog, wt, "HEAD", "docs/p.md").trim(), got);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- v2: plan_wrong re-plan
+
+const PC2 = "0123456789ab";
+
+function planWrong(findings) {
+  return happy({
+    script: {
+      "role:fleet-code-judge:r1": { status: "ok", reason: "plan wrong", verdict: "plan_wrong", routed_findings: findings },
+      "infra:replan-worktree": { status: "ok", reason: "ok", head: PC },
+      "role:scope-and-plan:replan": {
+        status: "ok",
+        reason: "replanned",
+        plan_path: "docs/plans/x.md",
+        criteria: [...criteria(2), { id: "AC3", text: "behaviour 3", test_files: ["tests/test_c.py"] }],
+        est_diff_lines: 90,
+        new_behaviour: true,
+        tldr: "adds a thing, now with AC3",
+        plan_diff: ["AC3 added: the code judge found a missing behaviour"],
+        fleet_estimate: { criteria: 3, agents: 24, rounds: 1 },
+        held_out_examples: [{ criterion_id: "AC3", given: "g", when: "w", then: SECRET }],
+      },
+      "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
+      "infra:commit-plan:replan": { status: "ok", reason: "committed", head: PC2, plan_sha256: "d".repeat(64) },
+      "infra:replan-reset": { status: "ok", reason: "reset", head: PC2, superseded_head: "K1" },
+    },
+  });
+}
+
+test("plan_wrong: re-plan from the approved plan, save the superseded head, return awaiting_confirmation", async () => {
+  const f = {
+    target: "plan",
+    criterion: "AC2",
+    finding: "src/x.py:3 — AC2 contradicts AC1 — Proposed plan change: split AC2 into AC2 and AC3",
+  };
+  const s = planWrong([f, { target: "code", criterion: "AC1", finding: "ignored" }]);
+  const ref = await planRefFor(s);
+  const out = await runOne(s, buildArgs(ref));
+  noUnscripted(out);
+  const r = out.result;
+  assert.equal(r.status, "awaiting_confirmation");
+  assert.deepEqual(r.proposed_plan_change, ["split AC2 into AC2 and AC3"]);
+  assert.deepEqual(r.plan_findings, [f]);
+  assert.equal(r.superseded_ref, "fleet/l42-add-thing--superseded-1");
+  assert.equal(r.superseded_head, "K1");
+  assert.equal(r.tldr, "adds a thing, now with AC3");
+  assert.deepEqual(r.plan_diff, ["AC3 added: the code judge found a missing behaviour"]);
+  assert.equal(r.fleet_size.criteria, 3);
+  assert.equal(r.plan_ref.plan_commit, PC2);
+  assert.equal(r.plan_ref.branch, "fleet/l42-add-thing");
+  assert.equal(r.plan_ref.history.replans, 1);
+  assert.ok(!JSON.stringify(r).includes(SECRET));
+  // no PR, no push, no write-back on a plan_wrong stop
+  for (const l of ["infra:push", "role:fleet-pr-opener", "infra:ledger-writeback", "infra:comments-list", "infra:comments-post"])
+    assert.ok(!out.labels.includes(l), l);
+  // order: worktree at the old plan commit, planner, audit, commit there, then save + reset
+  const tail = out.labels.slice(out.labels.indexOf("hasher:fp-post:code-judge:r1") + 1);
+  assert.deepEqual(tail, [
+    "infra:replan-worktree",
+    "role:scope-and-plan:replan",
+    "role:plan-audit:replan",
+    "infra:commit-plan:replan",
+    "infra:replan-reset",
+  ]);
+  const rw = inputsOf(call(out, "infra:replan-worktree").prompt);
+  assert.equal(rw.plan_commit, PC);
+  const planner = inputsOf(call(out, "role:scope-and-plan:replan").prompt);
+  assert.equal(planner.worktree, rw.worktree);
+  assert.equal(planner.brief.plan_path, "docs/plans/x.md");
+  assert.ok(planner.brief.sources.some((x) => x.kind === "text" && x.body.includes("Proposed plan change: split AC2")));
+  assert.equal(inputsOf(call(out, "role:plan-audit:replan").prompt).base_ref, PC);
+  assert.equal(inputsOf(call(out, "infra:commit-plan:replan").prompt).branch, null);
+  const reset = inputsOf(call(out, "infra:replan-reset").prompt);
+  assert.deepEqual(
+    { superseded_branch: reset.superseded_branch, expected_head: reset.expected_head, new_plan_commit: reset.new_plan_commit },
+    { superseded_branch: "fleet/l42-add-thing--superseded-1", expected_head: "K1", new_plan_commit: PC2 },
+  );
+  assert.match(call(out, "infra:replan-reset").prompt, /Only after step 2 succeeded/);
+});
+
+test("plan_wrong: a finding without the marker line falls back to the full text and is logged", async () => {
+  const f = { target: "plan", criterion: null, finding: "the plan assumes a sync API that does not exist" };
+  const s = planWrong([f]);
+  const ref = await planRefFor(s);
+  const out = await runOne(s, buildArgs(ref));
+  assert.equal(out.result.status, "awaiting_confirmation");
+  assert.deepEqual(out.result.proposed_plan_change, ["the plan assumes a sync API that does not exist"]);
+  assert.ok(out.logs.some((l) => /no 'Proposed plan change:' line/.test(l)));
+});
+
+test("plan_wrong: the next build starts fresh from the new plan with new criterion branches; caps reset, counts accumulate", async () => {
+  const s = planWrong([{ target: "plan", criterion: "AC2", finding: "x — Proposed plan change: y" }]);
+  const ref = await planRefFor(s);
+  const first = await runOne(s, buildArgs(ref));
+  const ref2 = first.result.plan_ref;
+  // second build run: the code judge now approves; the branch sits at the new plan commit
+  s["role:fleet-code-judge:r1"] = happy()["role:fleet-code-judge:r1"];
+  s["infra:verify-plan"] = { ...s["infra:verify-plan"], head: PC2, plan_sha256: "d".repeat(64), plan_sha256_head: "d".repeat(64) };
+  s["infra:prepare"] = { status: "ok", reason: "ok", head: PC2 };
+  s["role:fleet-test-writer:AC3:r1"] = { status: "ok", reason: "red", criterion_id: "AC3", tests: [], commit: "t-AC3" };
+  const hashes = H({ ...HASHES_FLAT, "tests/test_c.py": "hc" });
+  s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_PLAN, hashes };
+  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes };
+  const second = await runOne(s, buildArgs(ref2));
+  noUnscripted(second);
+  assert.equal(second.result.status, "ok");
+  const prep = inputsOf(call(second, "infra:prepare").prompt);
+  assert.deepEqual(prep.criterion_worktrees.map((w) => w.branch), [
+    "fleet/l42-add-thing--p01234567-t-AC1",
+    "fleet/l42-add-thing--p01234567-t-AC2",
+    "fleet/l42-add-thing--p01234567-t-AC3",
+  ]);
+  assert.equal(inputsOf(call(second, "hasher:freeze:f1").prompt).test_files.length, 3);
+  assert.deepEqual(second.result.rounds, { tests: 1, code: 1 });
+  assert.equal(second.result.agents, second.calls.length);
+  assert.equal(second.result.cumulative.runs, 3);
+  assert.equal(second.result.cumulative.replans, 1);
+  assert.equal(second.result.cumulative.agents, ref.history.agents + first.result.agents + second.result.agents);
+});
+
+// ---------------------------------------------------------------- v2: write-back
+
+function withSources(sources, over) {
+  return happy({ brief: { ...BRIEF, sources }, script: over || {} });
+}
+
+const GH = { kind: "github", ref: "o/r#5", url: "https://github.com/o/r/issues/5", body: "issue" };
+const JIRA = { kind: "jira", ref: "ABC-9", url: "https://x.atlassian.net/browse/ABC-9", body: "ticket" };
+
+function listing(hasMarker) {
+  return (prompt) => ({
+    status: "ok",
+    reason: "listed",
+    results: inputsOf(prompt).sources.map((x) => ({ key: x.key, status: "ok", has_marker: !!hasMarker[x.ref] })),
+  });
+}
+
+function posting(fail) {
+  return (prompt) => ({
+    status: "ok",
+    reason: "posted",
+    results: inputsOf(prompt).posts.map((x) =>
+      fail && fail[x.ref] ? { key: x.key, status: "failed", reason: "403" } : { key: x.key, status: "posted", url: "u" },
+    ),
+  });
+}
+
+test("write-back: the ledger is written only for ledger sources", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  const lw = inputsOf(call(out, "infra:ledger-writeback").prompt);
+  assert.equal(lw.project, "o/r");
+  assert.deepEqual(lw.tasks, [{ key: "s0", ref: "42" }]);
+  assert.match(lw.section_text, /adds a thing/);
+  assert.match(lw.section_text, /docs\/plans\/x\.md/);
+  assert.match(lw.section_text, /https:\/\/github\.com\/o\/r\/pull\/7/);
+  assert.match(lw.section_text, /fleet:l42/);
+  assert.equal(out.result.ledger_status, "ok");
+  assert.equal(out.result.comment_status, "none");
+
+  const gh = await run(withSources([GH], { "infra:comments-list": listing({}), "infra:comments-post": posting() }), {
+    ...ARGS,
+    input: GH.url,
+  });
+  noUnscripted(gh);
+  assert.ok(!gh.labels.includes("infra:ledger-writeback"));
+  assert.equal(gh.result.ledger_status, "none");
+});
+
+test("write-back: one marked comment per external source; GitHub hides the marker, Jira ends with it", async () => {
+  const s = withSources([JIRA, GH], { "infra:comments-list": listing({}), "infra:comments-post": posting() });
+  const out = await run(s, { ...ARGS, input: "ABC-9" });
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  assert.equal(out.result.comment_status, "posted");
+  const posts = inputsOf(call(out, "infra:comments-post").prompt).posts;
+  assert.equal(posts.length, 2);
+  const jira = posts.find((x) => x.kind === "jira").text;
+  const gh = posts.find((x) => x.kind === "github").text;
+  assert.match(jira, /\n\nfleet:abc-9$/);
+  assert.match(gh, /\n\n<!-- fleet:abc-9 -->$/);
+  for (const t of [jira, gh]) {
+    assert.match(t, /^adds a thing/);
+    assert.match(t, /Plan: https:\/\/github\.com\/o\/r\/blob\/fleet\/abc-9-add-thing\/docs\/plans\/x\.md/);
+    assert.match(t, /PR: https:\/\/github\.com\/o\/r\/pull\/7/);
+  }
+  assert.equal(call(out, "infra:comments-list").opts.agentType, "fleet:judge");
+  assert.match(call(out, "infra:comments-post").prompt, /Never edit an issue, ticket or PR body/);
+  assert.ok(out.labels.indexOf("infra:comments-post") > out.labels.indexOf("role:fleet-pr-opener"));
+});
+
+test("write-back: a source whose comments already carry the marker is skipped, not posted", async () => {
+  const s = withSources([JIRA, GH], { "infra:comments-list": listing({ "o/r#5": true }), "infra:comments-post": posting() });
+  const out = await run(s, { ...ARGS, input: "ABC-9" });
+  noUnscripted(out);
+  const posts = inputsOf(call(out, "infra:comments-post").prompt).posts;
+  assert.deepEqual(posts.map((x) => x.ref), ["ABC-9"]);
+  const all = withSources([GH], { "infra:comments-list": listing({ "o/r#5": true }) });
+  const out2 = await run(all, { ...ARGS, input: GH.url });
+  noUnscripted(out2);
+  assert.ok(!out2.labels.includes("infra:comments-post"));
+  assert.equal(out2.result.comment_status, "skipped");
+  assert.equal(out2.result.write_back.comments[0].status, "skipped");
+});
+
+test("write-back: a comment failure reports comment_status failed with the text; the run stays ok", async () => {
+  for (const over of [
+    { "infra:comments-list": listing({}), "infra:comments-post": posting({ "o/r#5": true }) },
+    { "infra:comments-list": listing({}), "infra:comments-post": null },
+    { "infra:comments-list": { status: "failed", reason: "MCP absent" } },
+  ]) {
+    const out = await run(withSources([GH], over), { ...ARGS, input: GH.url });
+    assert.equal(out.result.status, "ok");
+    assert.equal(out.result.pr_url, "https://github.com/o/r/pull/7");
+    assert.equal(out.result.comment_status, "failed");
+    assert.match(out.result.comment_text, /<!-- fleet:o-r-5 -->/);
+    assert.equal(out.result.write_back.comments[0].comment_text, out.result.comment_text);
+  }
+});
+
+test("write-back: a ledger failure is reported and never stops the run", async () => {
+  const out = await run(happy({ script: { "infra:ledger-writeback": null } }), ARGS);
+  assert.equal(out.result.status, "ok");
+  assert.equal(out.result.ledger_status, "failed");
+  assert.match(out.result.write_back.ledger[0].section_text, /fleet:l42/);
+  const noProject = await run(happy(), ARGS, { project: undefined });
+  assert.equal(noProject.result.status, "ok");
+  assert.ok(!noProject.build.labels.includes("infra:ledger-writeback"));
+  assert.equal(noProject.result.ledger_status, "failed");
+});
+
+test("write-back: comment text with a line starting with a terraform-bot word is refused in code", async () => {
+  const word = ["dig", "ger"].join("");
+  for (const tldr of [word + " apply", "  Atlantis plan -p x", "fine\n" + word.toUpperCase() + " unlock"]) {
+    const s = withSources([GH], { "infra:comments-list": listing({}), "infra:comments-post": posting() });
+    s["role:scope-and-plan"].tldr = tldr;
+    const out = await run(s, { ...ARGS, input: GH.url });
+    assert.equal(out.result.status, "ok", tldr);
+    assert.ok(!out.labels.includes("infra:comments-list"), tldr);
+    assert.ok(!out.labels.includes("infra:comments-post"), tldr);
+    assert.equal(out.result.comment_status, "failed");
+    assert.match(out.result.write_back.comments[0].reason, /refused/);
+  }
 });
