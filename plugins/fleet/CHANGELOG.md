@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.0.4] - 2026-11-04
+
+### Changed
+
+- `test_cmd` arguments after the runner are deny-by-default: only `<paths>`, relative paths (no
+  leading `/`, no `..`, no `:` or `=`) and a per-runner flag list (pytest, go test, cargo test,
+  npm/pnpm/yarn test, jest/vitest; `make test` takes no arguments). A pytest `-k`/`-m` expression
+  is one word or double-quoted plain words. Anything else stops the plan with
+  "test_cmd arg <x> not allowed" (`-p <plugin>`, `-c`, `--rootdir`, `--basetemp`, `--config`,
+  `-exec`, `-toolexec`, `--manifest-path`, `make -f`, `make -C`, `make VAR=x`, ...).
+- `check_cmd` script paths: segments are lower-cased before the bad-segment check; the extension
+  must be `.py`, `.sh`, `.bash` or none. A plan-time read-only infra step `infra:check-scripts`
+  checks that each script is a tracked regular file, not a symlink, whose realpath stays under its
+  root. Any failure makes the obligation judge-only and is logged.
+- Minimum role version: scope-and-plan 19 (the argument and script-path rules).
+
 ## [2.0.3] - 2026-11-04
 
 ### Added
