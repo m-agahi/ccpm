@@ -25,7 +25,7 @@ permissions: {}
 jobs:
   discover:
     if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     outputs:
@@ -71,7 +71,7 @@ jobs:
     name: rebuild (${{ matrix.plugin.name }})
     needs: [discover]
     if: needs.discover.outputs.any == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     strategy:
