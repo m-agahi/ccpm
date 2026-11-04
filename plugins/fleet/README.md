@@ -250,7 +250,7 @@ unique `id`, a known `kind` and an `instruction`.
 #### Command safety
 
 `test_cmd` and every `check_cmd` come from the planner, and the planner reads untrusted ticket and
-issue text. So the commands pass four layers before anything runs:
+issue text. So the commands pass these layers before anything runs:
 
 1. **Allowlist (script code, plan mode).** Every token must be plain: letters, digits and
    `_ . / : = @ % + , -`. No quote, glob, `; & | $ ( ) < >`, backquote or newline. A `check_cmd`
@@ -261,22 +261,40 @@ issue text. So the commands pass four layers before anything runs:
    - `[uv run [--extra <x>]] python[3] <relative/path.py> [plain args]`
    - `<relative/path/to/script> [plain args]`
 
-   `test_cmd.command` gets the token rule (with `<paths>` allowed) and plain `env`. A `test_cmd`
-   that fails stops the run with `needs_human` (`stop_gate: commands`). A `check_cmd` that fails is
+   `test_cmd.command` gets the token rule (with `<paths>` allowed). `test_cmd.env` names must
+   match `^[A-Z][A-Z0-9_]*$` and are never `LD_*`, `DYLD_*`, `BASH_ENV`, `ENV`, `PYTHONPATH`,
+   `PYTHONHOME`, `PYTHONSTARTUP`, `PYTHONUSERBASE`, `PYTEST_PLUGINS`, `PYTEST_ADDOPTS` (the script
+   owns it), `NODE_OPTIONS`, `GIT_*`, `PATH`, `HOME`, `SSH_*`, `*_TOKEN`, `*_KEY`, `*_SECRET`,
+   `AWS_*`, `PROMPT_COMMAND`, `PERL5OPT` or `RUBYOPT` ("test_cmd env <NAME> not allowed"); values
+   are plain text. A `test_cmd` in one of the `check_cmd` shapes (for example `make test`) also
+   gets the reference check below. A `test_cmd` that fails stops the run with `needs_human`
+   (`stop_gate: commands`). A `check_cmd` that fails is
    not run: the obligation keeps `check_cmd_rejected` and `check_rejected_reason`, the run logs
    `<id> check_cmd not auto-run (judge-only)`, and the code judge rules on it from the diff.
 
 2. **Reference check (read-only infra step `infra:verify-commands`, plan mode).** An embedded
-   Python program checks that the hook id exists in a tracked `.pre-commit-config.yaml`, the make
-   target in a tracked makefile, or the path is a tracked regular file (not a symlink). A failure
-   makes the obligation judge-only.
+   Python program checks that the hook id occurs exactly once in a tracked
+   `.pre-commit-config.yaml` (a duplicate id is refused), the make target exists in a tracked
+   makefile, or the path is a tracked regular file (not a symlink). It returns `files`, the set
+   the build freezes for the check (below). A failure makes the obligation judge-only.
 3. **Forbidden words.** The words terraform, tofu, tfp, digger and atlantis, anywhere and in any
    case, make a command judge-only (or stop the run, for `test_cmd`). The reference check also
-   searches the referenced script, the hook block (and tracked files its entry names) and the make
-   recipe (and tracked files it names).
-4. **Human approval.** Plan mode returns `commands`: every `test_cmd` and `check_cmd`, verbatim,
-   with `rule_source` and `run_by` (`roles`, `workflow`, or `nobody` for judge-only). The skill
-   shows them verbatim in the confirmation question. They live in the sealed `plan_facts`, so the
+   searches: the script and the tracked files it names; the hook block with its `repo:`/`rev:`
+   header and the tracked files its entry names (plus the makefiles when the entry calls make);
+   the whole makefile, every tracked file it `include`s and the tracked files they name (so
+   prerequisites and variables are covered).
+4. **Frozen check files.** Each auto-run check carries `check_files`: the whole
+   `.pre-commit-config.yaml` and its entry files (hook); the makefiles, their includes and the
+   files they name (make); the script, the files it names and every tracked `*.py` in a python
+   script's directory (file). The build hashes them at freeze and after every coder round, like
+   the frozen tests, so any change rejects the round. If an obligation's `files` or
+   `allowed_additions.files` hit a check file, that check becomes judge-only at plan time
+   ("the change edits a file its check reads").
+5. **Human approval.** Plan mode returns `commands`: every `test_cmd` and `check_cmd`, verbatim,
+   with `rule_source` and `run_by` (`roles`, `workflow`, or `nobody` for judge-only), plus the
+   `test_cmd` `env` and `tools` and each check's `env`, `exec` (the exact argv: python runs as
+   `python -I`, `uv run` as `uv run --frozen --no-sync`) and `check_files`. The skill shows them
+   verbatim in the confirmation question. They live in the sealed `plan_facts`, so the
    build runs only commands Max saw. Build mode re-applies the allowlist to the sealed commands.
 
 Plan-audit, the coder and the code judge get `repo_obligations` and `test_cmd`; the writers and
@@ -288,11 +306,17 @@ After the coder, the bytecode purge and the hash check, the infra step `infra:ob
 (read-only, `fleet:judge`) first re-runs the reference check against `plan_commit`: a referenced
 file, hook block or recipe that changed since the approved plan, or now contains a forbidden word,
 is refused and counts as a failed check (exit code `null`), whatever the agent reports. It then runs
-each allowed `check_cmd` as its plain argv (no `bash -c`) with no credentials:
-`cd <worktree> && env -i HOME=<scratch>/obligations-home PATH="$PATH" XDG_CACHE_HOME=<caches> LANG=C.UTF-8 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 <test_env> [unshare -rn] timeout 300 <check_cmd>`.
-No `SSH_AUTH_SOCK`, `GH_TOKEN`, `AWS_*`, `CODEBERG_TOKEN` or 1Password session reaches it. When
-`unshare -rn true` works on the host, the command also runs with no network; otherwise the run logs
-"network not isolated". The step returns `{prechecks, network_isolated, results: [{id, exit_code, tail}]}`.
+each allowed `check_cmd` as its `exec` argv (no `bash -c`), always sandboxed with no network and
+no credentials. The step picks `bwrap` when `bwrap --unshare-net ... true` works, else `unshare -rn`:
+`cd <worktree> && mkdir -p ... && bwrap --die-with-parent --unshare-net --dev-bind / / --tmpfs "$HOME" --bind <worktree> --bind <scratch> --ro-bind <git common dir> -- env -i <vars> timeout 300 <exec>`
+or `... && unshare -rn env -i <vars> timeout 300 <exec>`, where `<vars>` is
+`HOME=<scratch>/obligations/home PATH="$PATH" XDG_CACHE_HOME=<scratch>/obligations/cache UV_CACHE_DIR=... PIP_CACHE_DIR=... LANG=C.UTF-8 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 <test_env>`.
+No `SSH_AUTH_SOCK`, `GH_TOKEN`, `AWS_*`, `CODEBERG_TOKEN` or 1Password session reaches it, and the
+caches are fresh (never the real ones). `bwrap` also hides `$HOME`, so credential files there are
+out of reach. With neither sandbox available (`sandbox: none`) nothing runs: the round gets
+`obligation_results: {status: "not_run", reason: "network isolation unavailable"}`, every check is
+judge-only for that round, and `obligation_checks` joins `gates_not_run`. The step returns
+`{prechecks, sandbox, results: [{id, exit_code, tail}]}` and the run logs the sandbox used.
 The script takes the worktree fingerprint before and after it, as for a judge; a change stops the
 run (`stop_gate: fingerprint`). It skips the step when no obligation has a `check_cmd`. The code
 judge gets the results as `obligation_results` and returns `obligations_check: [{id, met, evidence}]`.
@@ -321,6 +345,8 @@ The script pins the role contract, not the prose:
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
   `obligations`, `commands`, `contract`, `role` or `cap` (`null` when the run did not stop at one of
   them).
+- Since scope-and-plan 16 the planner's prompt carries the `check_cmd` shapes, the env name rules
+  and the sandbox limits, so it proposes commands the script accepts.
 
 ### Models
 
@@ -379,8 +405,17 @@ too. It does not catch a change that a judge makes and reverts within its own ru
 - An approved `make` target, hook or script can still do anything its code does. The reference
   check only refuses a missing reference, a symlink, a forbidden word, or (at build time) a change
   since the approved plan.
-- `infra:obligations` keeps `XDG_CACHE_HOME` so pre-commit and uv reuse their caches. With network
-  isolation, a check that must download hooks or packages fails and counts as unmet.
+- Checks run offline with empty caches. A check that must download hooks or packages (a remote
+  pre-commit hook, `uv run` without a synced `.venv`) fails and counts as unmet; prefer a
+  stdlib-only script.
+- `unshare -rn` hides credential env vars and the network, not files: a script can still read
+  credential files under `$HOME` by path. `bwrap` hides `$HOME`; it is used when installed.
+  Tools installed under `$HOME` are hidden by `bwrap` too.
+- Freezing whole check files means a change that must edit the `.pre-commit-config.yaml`, the
+  makefile or a script directory a check reads trips the hash gate, unless the plan names that
+  file (then the check is judge-only).
+- "Changed since the approved plan" and the freeze cover the files the check names literally.
+  A module a python script imports from another directory is not frozen.
 - The isolation probe (`unshare -rn true`) and the precheck run by an infra agent, as the hasher
   does. The script enforces the precheck result it is given; it cannot prove the agent ran the
   command it reports.

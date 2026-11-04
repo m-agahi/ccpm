@@ -62,7 +62,7 @@ function inputsOf(prompt) {
 
 // The minimum role versions the workflow was built against.
 const FROZEN_VERSIONS = {
-  "scope-and-plan": 15,
+  "scope-and-plan": 16,
   "plan-audit": 11,
   "fleet-test-writer": 7,
   "fleet-test-judge": 7,
@@ -3297,24 +3297,28 @@ function withObligations(obs, over) {
 }
 
 // Plan-mode verify step stub: every ref passes unless named in fail.
-function verifyAll(fail) {
+function verifyAll(fail, files) {
+  files = files || {};
   return (prompt) => {
     const i = inputsOf(prompt);
     const checks = {};
-    for (const r of i.refs) checks[r.id] = fail[r.id] ? { ok: false, reason: fail[r.id] } : { ok: true, reason: "ok" };
+    for (const r of i.refs)
+      checks[r.id] = fail[r.id]
+        ? { ok: false, reason: fail[r.id], files: [] }
+        : { ok: true, reason: "ok", files: files[r.id] || [r.kind === "file" ? r.name : r.kind === "hook" ? ".pre-commit-config.yaml" : "Makefile"] };
     return { status: "ok", reason: "verified", checks };
   };
 }
 
 // Build-mode obligations step result; prechecks pass unless overridden.
-function obResults(results, prechecks, isolated) {
+function obResults(results, prechecks, sandbox) {
   const pc = { OB1: { ok: true, reason: "ok" }, OB2: { ok: true, reason: "ok" } };
   for (const r of results) if (r && r.id) pc[r.id] = { ok: true, reason: "ok" };
   return {
     status: "ok",
     reason: "ran",
     prechecks: Object.assign(pc, prechecks || {}),
-    network_isolated: isolated === undefined ? true : isolated,
+    sandbox: sandbox === undefined ? "unshare" : sandbox,
     results,
   };
 }
@@ -3326,7 +3330,7 @@ test("2.0.3 plan_ref: plan_facts carries test_cmd and repo_obligations, covered 
   assert.equal(out.result.status, "awaiting_confirmation");
   const ref = JSON.parse(s.__store[PC]);
   assert.deepEqual(ref.plan_facts.test_cmd, TEST_CMD);
-  assert.deepEqual(ref.plan_facts.repo_obligations, [OB_BUMP, OB_LOG]);
+  assert.deepEqual(ref.plan_facts.repo_obligations, [Object.assign({}, OB_BUMP, { check_files: ["scripts/check_version_bump.py"] }), OB_LOG]);
   const o = Object.assign({}, ref);
   delete o.seal;
   assert.equal(ref.seal, sha256(canon(o)));
@@ -3427,6 +3431,7 @@ test("2.0.3 allowlist: the allowed shapes go to the read-only verify step with t
     ["uv run --extra test python scripts/c.py -q", { kind: "file", name: "scripts/c.py" }],
     ["scripts/check.sh", { kind: "file", name: "scripts/check.sh" }],
     ["./scripts/check.sh --strict", { kind: "file", name: "scripts/check.sh" }],
+    ["./check.sh", { kind: "file", name: "check.sh" }],
   ]) {
     const s = withObligations([Object.assign({}, OB_BUMP, { check_cmd: cmd })]);
     const out = await runOne(s, ARGS);
@@ -3437,7 +3442,9 @@ test("2.0.3 allowlist: the allowed shapes go to the read-only verify step with t
     const vi = inputsOf(v.prompt);
     assert.deepEqual(vi.refs, [Object.assign({ id: "OB1" }, ref)], cmd);
     assert.match(vi.run, /^python3 -I -c /);
-    assert.equal(JSON.parse(s.__store[PC]).plan_facts.repo_obligations[0].check_cmd, cmd);
+    const ob = JSON.parse(s.__store[PC]).plan_facts.repo_obligations[0];
+    assert.equal(ob.check_cmd, cmd);
+    assert.ok(Array.isArray(ob.check_files) && ob.check_files.length, cmd);
     const order = out.labels;
     assert.ok(order.indexOf("infra:verify-commands") < order.indexOf("role:plan-audit"), cmd);
   }
@@ -3480,8 +3487,74 @@ test("2.0.3 test_cmd with a shell metacharacter or a forbidden word stops: needs
     assert.ok(!out.labels.includes("role:plan-audit"));
   }
   const ok = happy();
-  ok["role:scope-and-plan"].test_cmd = { command: "uv run --extra test pytest <paths> -n0", env: { PYTEST_ADDOPTS: "-p no:randomly" } };
+  ok["role:scope-and-plan"].test_cmd = { command: "uv run --extra test pytest <paths> -n0", env: { DJANGO_SETTINGS_MODULE: "app.settings" } };
   assert.equal((await runOne(ok, ARGS)).result.status, "awaiting_confirmation");
+});
+
+test("2.0.3 test_cmd env names: only plain upper-case names outside the blocklist", async () => {
+  for (const name of [
+    "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "ENV", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
+    "PYTHONUSERBASE", "PYTEST_PLUGINS", "PYTEST_ADDOPTS", "NODE_OPTIONS", "GIT_DIR", "GIT_SSH_COMMAND", "PATH",
+    "HOME", "SSH_AUTH_SOCK", "GH_TOKEN", "API_KEY", "MY_SECRET", "AWS_REGION", "PROMPT_COMMAND", "PERL5OPT",
+    "RUBYOPT", "lower", "_X", "9X",
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].test_cmd = { command: "pytest <paths>", env: { [name]: "1" } };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", name);
+    assert.ok(out.result.reason.indexOf("test_cmd env " + name + " not allowed") >= 0, name + ": " + out.result.reason);
+    assert.equal(out.result.stop_gate, "commands");
+  }
+});
+
+test("2.0.3 a test_cmd in an allowed shape gets the reference check too", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].test_cmd = { command: "make test" };
+  s["infra:verify-commands"] = verifyAll({});
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation");
+  assert.deepEqual(inputsOf(call(out, "infra:verify-commands").prompt).refs, [{ id: "test_cmd", kind: "make", name: "test" }]);
+  const t = happy();
+  t["role:scope-and-plan"].test_cmd = { command: "make test" };
+  t["infra:verify-commands"] = verifyAll({ test_cmd: "names a forbidden tool" });
+  const outT = await runOne(t, ARGS);
+  assert.equal(outT.result.status, "needs_human");
+  assert.match(outT.result.reason, /test_cmd refused: reference check failed: names a forbidden tool/);
+  assert.equal(outT.result.stop_gate, "commands");
+  assert.ok(!outT.labels.includes("role:plan-audit"));
+});
+
+test("2.0.3 a check whose files the change edits becomes judge-only", async () => {
+  for (const [obs, aa] of [
+    [[OB_BUMP, Object.assign({}, OB_LOG, { files: ["scripts/check_version_bump.py"] })], null],
+    [[OB_BUMP], { files: ["scripts/helper.py"], symbols: [], deps: [], settings: [] }],
+  ]) {
+    const s = withObligations(obs);
+    s["infra:verify-commands"] = verifyAll({}, { OB1: ["scripts/check_version_bump.py", "scripts/helper.py"] });
+    if (aa) s["role:scope-and-plan"].allowed_additions = aa;
+    const out = await runOne(s, ARGS);
+    noUnscripted(out);
+    const ob = JSON.parse(s.__store[PC]).plan_facts.repo_obligations[0];
+    assert.ok(!("check_cmd" in ob));
+    assert.match(ob.check_rejected_reason, /the change edits a file its check reads: scripts\/(check_version_bump|helper)\.py/);
+  }
+});
+
+test("2.0.3 check files are frozen at freeze and re-checked after the coder", async () => {
+  const s = withObligations([OB_BUMP]);
+  s["infra:verify-commands"] = verifyAll({}, { OB1: ["scripts/check_version_bump.py", "scripts/lib.py"] });
+  s["infra:obligations:r1"] = obResults([{ id: "OB1", exit_code: 0, tail: "ok" }]);
+  s["hasher:fp-post:obligations:r1"] = { status: "ok", fingerprint: FP_K1 };
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  for (const l of ["hasher:freeze:f1", "hasher:post-coder:r1"]) {
+    const tf = inputsOf(call(out, l).prompt).test_files;
+    assert.ok(tf.includes("scripts/check_version_bump.py") && tf.includes("scripts/lib.py"), l);
+  }
+  // frozen for the coder too, as read-only config, never as a frozen test
+  const ci = inputsOf(call(out, "role:fleet-coder:r1").prompt);
+  assert.ok(!("scripts/lib.py" in ci.frozen_tests));
 });
 
 test("2.0.3 awaiting_confirmation lists every command verbatim with its rule_source; sealed in plan_facts", async () => {
@@ -3492,7 +3565,16 @@ test("2.0.3 awaiting_confirmation lists every command verbatim with its rule_sou
   assert.deepEqual(cmds.map((c) => c.command), [TEST_CMD.command, OB_BUMP.check_cmd, "python -c x"]);
   assert.deepEqual(cmds.map((c) => c.rule_source), ["test_cmd", OB_BUMP.rule_source, OB_LOG.rule_source]);
   assert.deepEqual(cmds.map((c) => c.run_by), ["roles", "workflow", "nobody"]);
+  assert.deepEqual(cmds[0].env, {});
+  assert.deepEqual(cmds[0].tools, ["mypy"]);
+  assert.equal(cmds[1].exec, "python3 -I scripts/check_version_bump.py");
+  assert.deepEqual(cmds[1].env, { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" });
+  assert.deepEqual(cmds[1].check_files, ["scripts/check_version_bump.py"]);
   assert.deepEqual(JSON.parse(s.__store[PC]).plan_facts.commands, cmds);
+  // uv run never resolves or installs: --frozen --no-sync is added
+  const u = withObligations([Object.assign({}, OB_BUMP, { check_cmd: "uv run --extra test python scripts/c.py -q" })]);
+  const outU = await runOne(u, ARGS);
+  assert.equal(outU.result.commands[1].exec, "uv run --frozen --no-sync --extra test python -I scripts/c.py -q");
 });
 
 test("2.0.3 build from a 2.0.2 plan_ref stops: plan_ref predates 2.0.3", async () => {
@@ -3539,16 +3621,18 @@ test("2.0.3 obligations step runs check_cmd read-only between hasher and code-ju
   const oi = inputsOf(ob.prompt);
   assert.deepEqual(oi.obligations.map((o) => o.id), ["OB1"]);
   const wt = "/r/.claude/worktrees/fleet-l42-add-thing/main";
+  const sc = "/r/.claude/worktrees/fleet-l42-add-thing/scratch/obligations";
   const envs =
-    "env -i HOME='/r/.claude/worktrees/fleet-l42-add-thing/scratch/obligations-home' PATH=\"$PATH\" " +
-    "XDG_CACHE_HOME=\"${XDG_CACHE_HOME:-$HOME/.cache}\" LANG='C.UTF-8' GIT_CONFIG_GLOBAL='/dev/null' " +
+    "env -i HOME='" + sc + "/home' PATH=\"$PATH\" XDG_CACHE_HOME='" + sc + "/cache' UV_CACHE_DIR='" + sc + "/cache/uv' " +
+    "PIP_CACHE_DIR='" + sc + "/cache/pip' LANG='C.UTF-8' GIT_CONFIG_GLOBAL='/dev/null' " +
     "GIT_CONFIG_NOSYSTEM='1' GIT_TERMINAL_PROMPT='0' PYTEST_ADDOPTS='-p no:cacheprovider' PYTHONDONTWRITEBYTECODE='1'";
-  assert.equal(oi.obligations[0].run, "cd '" + wt + "' && " + envs + " timeout 300 python3 scripts/check_version_bump.py");
-  assert.equal(
-    oi.obligations[0].run_isolated,
-    "cd '" + wt + "' && " + envs + " unshare -rn timeout 300 python3 scripts/check_version_bump.py",
-  );
-  assert.doesNotMatch(oi.obligations[0].run, /bash -c|SSH_AUTH_SOCK|GH_TOKEN/);
+  const argv = " timeout 300 python3 -I scripts/check_version_bump.py";
+  assert.equal(oi.obligations[0].run_unshare, "cd '" + wt + "' && mkdir -p '" + sc + "/home' '" + sc + "/cache' && unshare -rn " + envs + argv);
+  assert.match(oi.obligations[0].run_bwrap, /^cd '[^']+' && mkdir -p .* && bwrap --die-with-parent --unshare-net --dev-bind \/ \/ --tmpfs "\$HOME" --bind '/);
+  assert.ok(oi.obligations[0].run_bwrap.endsWith(" -- " + envs + argv));
+  assert.match(oi.obligations[0].run_bwrap, /--ro-bind "\$\(git -C '[^']+' rev-parse --path-format=absolute --git-common-dir\)"/);
+  assert.ok(!("run" in oi.obligations[0]), "no unsandboxed variant is ever handed out");
+  for (const r of [oi.obligations[0].run_unshare, oi.obligations[0].run_bwrap]) assert.doesNotMatch(r, /bash -c|SSH_AUTH_SOCK|GH_TOKEN|\.cache"/);
   assert.match(oi.precheck, /^python3 -I -c /);
   assert.deepEqual(oi.refs, [{ id: "OB1", kind: "file", name: "scripts/check_version_bump.py" }]);
   assert.equal(oi.plan_commit, PC);
@@ -3767,14 +3851,29 @@ test("2.0.3 obligations step: a refused precheck is never a pass, whatever the a
   assert.equal(inputsOf(call(outT, "role:fleet-code-judge:r1").prompt).obligation_results[0].exit_code, null);
 });
 
-test("2.0.3 obligations step: no network isolation is logged", async () => {
-  const s = withObligations([OB_BUMP]);
-  s["infra:obligations:r1"] = obResults([{ id: "OB1", exit_code: 0, tail: "ok" }], null, false);
-  s["hasher:fp-post:obligations:r1"] = { status: "ok", fingerprint: FP_K1 };
-  const out = await run(s, ARGS);
-  noUnscripted(out);
-  assert.equal(out.result.status, "ok");
-  assert.ok(out.logs.some((l) => /network not isolated/.test(l)), out.logs.join("\n"));
+test("2.0.3 obligations step: no sandbox means the checks do not count (fail closed, judge-only)", async () => {
+  for (const sb of ["none", undefined, "plain"]) {
+    const s = withObligations([OB_BUMP]);
+    const res = obResults([{ id: "OB1", exit_code: 0, tail: "ok" }], null, sb === undefined ? "none" : sb);
+    if (sb === undefined) delete res.sandbox;
+    s["infra:obligations:r1"] = res;
+    s["hasher:fp-post:obligations:r1"] = { status: "ok", fingerprint: FP_K1 };
+    const out = await run(s, ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "ok", String(sb) + " " + out.result.reason);
+    const ji = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
+    assert.deepEqual(ji.obligation_results, { status: "not_run", reason: "network isolation unavailable" });
+    assert.ok(!("check_cmd" in ji.repo_obligations[0]));
+    assert.equal(ji.repo_obligations[0].check_cmd_rejected, OB_BUMP.check_cmd);
+    assert.ok(out.result.gates_not_run.some((g) => g.gate === "obligation_checks" && /network isolation unavailable/.test(g.reason)));
+    assert.ok(inputsOf(call(out, "role:fleet-pr-opener").prompt).gates_not_run.some((g) => g.gate === "obligation_checks"));
+  }
+  const b = withObligations([OB_BUMP]);
+  b["infra:obligations:r1"] = obResults([{ id: "OB1", exit_code: 0, tail: "ok" }], null, "bwrap");
+  b["hasher:fp-post:obligations:r1"] = { status: "ok", fingerprint: FP_K1 };
+  const outB = await run(b, ARGS);
+  assert.deepEqual(inputsOf(call(outB, "role:fleet-code-judge:r1").prompt).obligation_results, [{ id: "OB1", exit_code: 0, tail: "ok" }]);
+  assert.ok(outB.logs.some((l) => /sandbox bwrap/.test(l)));
 });
 
 // A 2.0.3-shaped ref file for build-mode tests.
@@ -3801,6 +3900,10 @@ test("2.0.3 build re-checks the sealed commands: a disallowed check_cmd or test_
   assert.match(bad.result.reason, /OB1 check_cmd/);
   assert.equal(bad.result.stop_gate, "commands");
   assert.ok(!bad.labels.includes("infra:verify-plan"));
+  const noFiles = await buildFrom(refWithFacts({ repo_obligations: [OB_BUMP] }));
+  assert.match(noFiles.result.reason, /OB1 check_cmd refused: no check_files/);
+  const badEnv = await buildFrom(refWithFacts({ test_cmd: { command: "pytest <paths>", env: { LD_PRELOAD: "x" } } }));
+  assert.match(badEnv.result.reason, /test_cmd env LD_PRELOAD not allowed/);
   const badT = await buildFrom(refWithFacts({ test_cmd: { command: "pytest; id" } }));
   assert.match(badT.result.reason, /test_cmd refused/);
   const noCmds = await buildFrom(priorRef(PLAN_MD, { plan_facts: { allowed_additions: null, est_diff_lines: 10, test_cmd: TEST_CMD, repo_obligations: [] } }));
@@ -3820,50 +3923,95 @@ function runCmdCheck(wt, rev, refs) {
   return JSON.parse(r.stdout);
 }
 
-test("command reference program: hooks, make targets, tracked files, forbidden words, changes", { skip: !HAVE_PY }, () => {
+// A scratch git repo with the given files committed.
+function mkRepo(files, links) {
   const wt = mkdtempSync(join(tmpdir(), "fleet-cmdcheck-"));
+  sh(wt, "git", "init", "-q");
+  sh(wt, "git", "config", "user.email", "t@t");
+  sh(wt, "git", "config", "user.name", "t");
+  for (const [f, c] of Object.entries(files)) {
+    sh(wt, "mkdir", "-p", dirname(join(wt, f)));
+    writeFileSync(join(wt, f), c);
+  }
+  for (const [l, target] of Object.entries(links || {})) sh(wt, "ln", "-s", target, l);
+  sh(wt, "git", "add", "-A");
+  sh(wt, "git", "commit", "-qm", "init");
+  return wt;
+}
+
+const W = ["terra", "form"].join("");
+
+test("command reference program: hooks, make, files, includes, forbidden words, frozen files, changes", { skip: !HAVE_PY }, () => {
+  const repos = [];
   try {
-    sh(wt, "git", "init", "-q");
-    sh(wt, "git", "config", "user.email", "t@t");
-    sh(wt, "git", "config", "user.name", "t");
-    sh(wt, "mkdir", "scripts");
-    writeFileSync(
-      join(wt, ".pre-commit-config.yaml"),
+    const cfg =
       "repos:\n  - repo: local\n    hooks:\n      - id: check-changelog\n        entry: python3 scripts/ok.py\n        language: system\n" +
-        "      - id: bad-hook\n        entry: python3 scripts/bad.py\n        language: system\n",
+      "      - id: bad-hook\n        entry: python3 scripts/bad.py\n        language: system\n" +
+      "      - id: dup\n        entry: echo a\n        language: system\n" +
+      "  - repo: https://example.com/hooks\n    rev: v1.0.0\n    hooks:\n      - id: dup\n      - id: remote-hook\n";
+    const wt = mkRepo(
+      {
+        ".pre-commit-config.yaml": cfg,
+        "scripts/ok.py": "print(1)\n",
+        "scripts/other.py": "X = 1\n",
+        "scripts/bad.py": "import subprocess\nsubprocess.run(['" + W + "', 'apply'])\n",
+        "scripts/run.sh": "#!/bin/sh\n. scripts/lib.sh\n",
+        "scripts/lib.sh": W + " apply\n",
+        "Makefile": "check: helper\n\tpython3 scripts/ok.py\n\nhelper:\n\techo hi\n",
+      },
+      { "scripts/link.py": "ok.py" },
     );
-    writeFileSync(join(wt, "scripts/ok.py"), "print(1)\n");
-    writeFileSync(join(wt, "scripts/bad.py"), "import subprocess\nsubprocess.run(['terraform', 'apply'])\n");
-    writeFileSync(join(wt, "Makefile"), "check:\n\tpython3 scripts/ok.py\n\nlint:\n\ttofu fmt\n");
-    sh(wt, "ln", "-s", "ok.py", "scripts/link.py");
-    sh(wt, "git", "add", "-A");
-    sh(wt, "git", "commit", "-qm", "init");
+    repos.push(wt);
     writeFileSync(join(wt, "scripts/new.py"), "print(2)\n");
     const refs = [
       { id: "H1", kind: "hook", name: "check-changelog" },
       { id: "H2", kind: "hook", name: "bad-hook" },
       { id: "H3", kind: "hook", name: "missing" },
+      { id: "H4", kind: "hook", name: "dup" },
+      { id: "H5", kind: "hook", name: "remote-hook" },
       { id: "M1", kind: "make", name: "check" },
-      { id: "M2", kind: "make", name: "lint" },
       { id: "M3", kind: "make", name: "nope" },
       { id: "F1", kind: "file", name: "scripts/ok.py" },
       { id: "F2", kind: "file", name: "scripts/bad.py" },
       { id: "F3", kind: "file", name: "scripts/new.py" },
       { id: "F4", kind: "file", name: "scripts/link.py" },
+      { id: "F5", kind: "file", name: "scripts/run.sh" },
     ];
     const out = runCmdCheck(wt, "", refs);
     const ok = Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.ok]));
-    assert.deepEqual(ok, { H1: true, H2: false, H3: false, M1: true, M2: false, M3: false, F1: true, F2: false, F3: false, F4: false });
+    assert.deepEqual(ok, { H1: true, H2: false, H3: false, H4: false, H5: true, M1: true, M3: false, F1: true, F2: false, F3: false, F4: false, F5: false });
     assert.match(out.H2.reason, /forbidden/);
+    assert.match(out.H4.reason, /duplicate hook id/);
     assert.match(out.F3.reason, /not tracked/);
-    // after approval: a changed referenced file is refused against the plan commit
+    assert.match(out.F5.reason, /forbidden/, "a sourced helper is scanned");
+    assert.deepEqual(out.H1.files, [".pre-commit-config.yaml", "scripts/ok.py"]);
+    assert.deepEqual(out.M1.files, ["Makefile", "scripts/ok.py"]);
+    // a python script freezes every tracked .py in its directory
+    assert.deepEqual(out.F1.files, ["scripts/bad.py", "scripts/link.py", "scripts/ok.py", "scripts/other.py"]);
+    // after approval: a changed file, recipe script or repo rev is refused against the plan commit
     writeFileSync(join(wt, "scripts/ok.py"), "print(3)\n");
-    const later = runCmdCheck(wt, "HEAD", [refs[0], refs[3], refs[6]]);
-    assert.equal(later.F1.ok, false);
-    assert.match(later.F1.reason, /changed since/);
-    assert.equal(later.H1.ok, false, "the hook's entry file changed too");
-    assert.equal(later.M1.ok, false, "the make recipe's script changed too");
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg.replace("rev: v1.0.0", "rev: v6.6.6"));
+    const later = runCmdCheck(wt, "HEAD", [refs[0], refs[4], refs[5], refs[7]]);
+    for (const k of ["H1", "H5", "M1", "F1"]) {
+      assert.equal(later[k].ok, false, k);
+      assert.match(later[k].reason, /changed since/, k);
+    }
+    // make: prerequisites, variables and included makefiles are scanned
+    for (const files of [
+      { Makefile: "check: plan\n\techo ok\n\nplan:\n\t" + W + " plan\n" },
+      { Makefile: "TF := " + W + "\ncheck:\n\t$(TF) apply\n" },
+      { Makefile: "include extra.mk\ncheck:\n\techo ok\n", "extra.mk": "x:\n\t" + W + " apply\n" },
+    ]) {
+      const m = mkRepo(files);
+      repos.push(m);
+      const r = runCmdCheck(m, "", [{ id: "M", kind: "make", name: "check" }]);
+      assert.equal(r.M.ok, false, JSON.stringify(files));
+      assert.match(r.M.reason, /forbidden/);
+    }
+    const inc = mkRepo({ Makefile: "include extra.mk\ncheck:\n\techo ok\n", "extra.mk": "x:\n\techo y\n" });
+    repos.push(inc);
+    assert.deepEqual(runCmdCheck(inc, "", [{ id: "M", kind: "make", name: "check" }]).M.files, ["Makefile", "extra.mk"]);
   } finally {
-    rmSync(wt, { recursive: true, force: true });
+    for (const r of repos) rmSync(r, { recursive: true, force: true });
   }
 });

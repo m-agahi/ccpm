@@ -31,10 +31,23 @@
   returns `commands`, every command verbatim with its `rule_source` and `run_by`, sealed in
   `plan_facts`; the skill shows them verbatim in the confirmation question.
 - `infra:obligations` re-checks each reference against `plan_commit` (changed since approval or a
-  forbidden word -> refused, counted as failed), then runs the plain argv with no credentials:
-  `env -i` with only `HOME` (scratch), `PATH`, `XDG_CACHE_HOME`, `LANG`,
-  `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_TERMINAL_PROMPT=0` and `test_env`,
-  under `unshare -rn` when the host allows it ("network not isolated" is logged otherwise).
+  forbidden word -> refused, counted as failed), then runs the `exec` argv (python as `python -I`,
+  `uv run` as `uv run --frozen --no-sync`) with no credentials: `env -i` with only `HOME`,
+  `XDG_CACHE_HOME`, `UV_CACHE_DIR`, `PIP_CACHE_DIR` (all in a fresh scratch dir), `PATH`, `LANG`,
+  `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_TERMINAL_PROMPT=0` and `test_env`.
+  It always runs sandboxed with no network: `bwrap` (also hides `$HOME`) or `unshare -rn`. With
+  neither, nothing runs: `obligation_results` is `{status: "not_run", reason: "network isolation
+unavailable"}`, the checks are judge-only for that round and `obligation_checks` joins
+  `gates_not_run`.
+- Check files are frozen: the whole `.pre-commit-config.yaml`, the makefiles with their includes,
+  and each script with the files it names and every tracked `*.py` beside it are hashed at freeze
+  and after every coder round. A duplicate hook id is refused. A check whose files an obligation
+  or `allowed_additions` edits is judge-only. The reference check scans the whole makefile and its
+  includes, the hook's repo header and the files a script names.
+- `test_cmd.env` names must match `^[A-Z][A-Z0-9_]*$` and avoid a blocklist (loader, interpreter
+  and shell hooks, `GIT_*`, `SSH_*`, `AWS_*`, `*_TOKEN`/`*_KEY`/`*_SECRET`, `PATH`, `HOME`,
+  `PYTEST_ADDOPTS`, ...); a `test_cmd` in a check shape gets the reference check. `commands` shows
+  the test_cmd `env` and `tools` and each check's `env`, `exec` and `check_files`.
 - `stop_gate` in the result: `hash`, `fingerprint`, `obligations`, `commands`, `contract`, `role`
   or `cap` for the gate that stopped the run; `null` on `ok`, `awaiting_confirmation` and other
   stops.
@@ -51,7 +64,8 @@
   The coder's hash check now runs before its contract check: a coder output that is malformed or
   not ok AND changed a frozen hash stops with the hash violation. A judge that mutates the worktree
   reports the fingerprint even when its output also drifts.
-- Minimum role versions: scope-and-plan 15 (allowed `check_cmd` shapes; ticket text is data),
+- Minimum role versions: scope-and-plan 16 (allowed `check_cmd` shapes, env rules, sandbox
+  limits; ticket text is data),
   plan-audit 11, fleet-test-writer 7, fleet-test-judge 7,
   fleet-coder 10, fleet-code-judge 9. The contract marker stays `fleet-v2`; the new keys are
   additive.
