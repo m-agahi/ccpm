@@ -58,6 +58,12 @@ added_symbols, frozen_tests_red_at_start, obligations_done`. The `commit`/`commi
 - The fence, the review paths and the sweep trigger diff from `plan_commit`; verify fences the
   commits already on the branch before any role runs.
 - The per-run agent cap is 100 (was 60): an auto run with a review fix round can pass 60.
+- Local hooks behind a launcher (`uv run`, `poetry run`, `npx`, `pnpm exec`, ...) resolve from the
+  word after the launcher's subcommand. Ignored build and coverage output (`build/`, `dist/`,
+  `htmlcov/`, `.eggs/`, `coverage.xml`, `.coverage.*`, `junit*.xml`) is not frozen; `*.egg-info`
+  still is.
+- README: a "Threat model" section. The freeze guards against reward hacking, not against a hostile
+  agent with a shell.
 
 ### Added
 

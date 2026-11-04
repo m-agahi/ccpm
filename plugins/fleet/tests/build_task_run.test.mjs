@@ -4897,22 +4897,22 @@ test("2.1.0 the commit step and the tree command run git with fsmonitor off, no 
 test("2.1.0 ignored paths are listed: a .pth in a venv is frozen, tool caches are not", { skip: !HAVE_PY }, () => {
   const wt = scratchRepo("fleet-ign2-");
   try {
-    writeFileSync(join(wt, ".gitignore"), ".venv/\n.pytest_cache/\nbuild/\n");
+    writeFileSync(join(wt, ".gitignore"), ".venv/\n.pytest_cache/\nout/\n");
     writeFileSync(join(wt, "a.py"), "a\n");
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "i");
     const a = runHasherRaw(wt, "hashes", []).hashes;
     assert.deepEqual(a.ignored, {});
-    sh(wt, "mkdir", "-p", ".venv/lib/python3.12/site-packages", ".pytest_cache", "build");
+    sh(wt, "mkdir", "-p", ".venv/lib/python3.12/site-packages", ".pytest_cache", "out");
     writeFileSync(join(wt, ".venv/lib/python3.12/site-packages/evil.pth"), "import os\n");
     writeFileSync(join(wt, ".venv/lib/python3.12/site-packages/mod.py"), "x = 1\n");
     writeFileSync(join(wt, ".pytest_cache", "x"), "c\n");
-    writeFileSync(join(wt, "build", "out.txt"), "o\n");
+    writeFileSync(join(wt, "out", "out.txt"), "o\n");
     const b = runHasherRaw(wt, "hashes", []).hashes;
     assert.ok(".venv/lib/python3.12/site-packages/evil.pth" in b.ignored, Object.keys(b.ignored).join(", "));
     assert.ok(!(".venv/lib/python3.12/site-packages/mod.py" in b.ignored), "inside a venv only startup hooks");
     assert.ok(!(".pytest_cache/x" in b.ignored), "tool caches are not frozen");
-    assert.ok("build/out.txt" in b.ignored, "any other ignored file is");
+    assert.ok("out/out.txt" in b.ignored, "any other ignored file is");
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }
@@ -4978,4 +4978,43 @@ test("2.1.0 an unresolvable local hook stops the run at freeze", async () => {
   const out = await run(happy({ script: { "hasher:freeze:f1": { status: "ok", fingerprint: FP_TESTS, hashes: H(HASHES_FLAT, ["unresolvable local hook h1: inline payload after -c"]) } } }), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /unresolvable local hook h1/);
+});
+
+test("2.1.0 local hooks behind a launcher (uv run, poetry run, npx, ...) resolve from the next token", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-launch-");
+  try {
+    const cfg = (entry) =>
+      "repos:\n  - repo: local\n    hooks:\n      - id: h1\n        name: h1\n        language: system\n        entry: " + entry + "\n";
+    sh(wt, "mkdir", "-p", "scripts");
+    writeFileSync(join(wt, "scripts", "x.py"), "print(1)\n");
+    writeFileSync(join(wt, "scripts", "y.py"), "print(2)\n");
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg("uv run python scripts/x.py"));
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    for (const entry of ["uv run python scripts/x.py", "poetry run python scripts/x.py", "pdm run -- python scripts/x.py", "hatch run python scripts/x.py", "pipx run python scripts/x.py"]) {
+      writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg(JSON.stringify(entry)));
+      const h = runHasherRaw(wt, "hashes", []).hashes;
+      assert.deepEqual(h.suspicious, [], entry);
+      assert.ok("scripts/x.py" in h.files && "scripts/y.py" in h.files, entry + ": scripts/ frozen");
+    }
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 ignored build and coverage output is not frozen; *.egg-info still is", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-build-");
+  try {
+    writeFileSync(join(wt, ".gitignore"), "build/\ndist/\nhtmlcov/\n.eggs/\ncoverage.xml\n.coverage.*\njunit*.xml\n*.egg-info/\n");
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    sh(wt, "mkdir", "-p", "build/lib", "dist", "htmlcov", ".eggs", "pkg.egg-info");
+    for (const f of ["build/lib/x.py", "dist/x.whl", "htmlcov/index.html", ".eggs/x", "coverage.xml", ".coverage.host.1", "junit-report.xml", "pkg.egg-info/entry_points.txt"])
+      writeFileSync(join(wt, f), "x\n");
+    const ign = runHasherRaw(wt, "hashes", []).hashes.ignored;
+    assert.deepEqual(Object.keys(ign), ["pkg.egg-info/entry_points.txt"]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
 });

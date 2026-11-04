@@ -268,6 +268,33 @@ run status.
   or `atlantis`. Ticket and issue bodies are never edited. `comment_status` is `posted`, `skipped`,
   `failed` or `none`; on `failed`, `comment_text` holds the text to post by hand.
 
+### Threat model
+
+The freeze guards against **reward hacking**: a writer or coder that weakens tests or gates to get
+green. It is **not** a security boundary against a hostile agent. Every role already has a shell
+with the user's credentials and runs repo code through the tests, so no hashing can contain a
+hostile coder.
+
+Defended (each by a gate in script code):
+
+- test and gate weakening: frozen test files, runner config and sections, ignore rules, symlinks,
+  bytecode purge, the code judge's checks;
+- edits to frozen files, including the plan ref;
+- edits to the hook and git-config surface the commit step relies on (`.pre-commit-config.yaml`,
+  local hook scripts and their dirs, the hooks dir, local git config, `.gitattributes`);
+- scope escapes: the scope fence on the planned paths (`confirm: "auto"`) and on the real changed
+  paths (every mode), writer ownership, the ignored-path listing;
+- planner-command injection: `test_cmd` and `check_cmd` pass a script allowlist and Max approves
+  them verbatim (or G2 checks them), and the workflow script runs none of them.
+
+Not defended:
+
+- a hostile agent with a shell: it can run anything the user can, outside the worktree too;
+- in-environment exec vectors: git filter drivers that act during the hasher's own `git add`,
+  interpreter flag clusters (for example `-xc` in a hook entry), nested git config includes,
+  virtualenv and `node_modules` internals beyond the startup hooks, and anything else that runs
+  code without changing a frozen key.
+
 ### Frozen set
 
 The hasher freezes every criterion test file, plus:
@@ -294,7 +321,9 @@ The hasher freezes every criterion test file, plus:
 - the hook surface: the whole `.pre-commit-config.yaml` (anywhere), `git:core.hooksPath` (its
   value, `UNSET` when not set) and every file under the hooks dir git uses (`git:hooks/<file>`).
   For each `repo: local` hook of the root config, the `entry` and every `args` item are
-  shell-split; `-m <mod>` resolves to `<mod>.py` or `<mod>/__init__.py`. The whole dir tree of
+  shell-split; `-m <mod>` resolves to `<mod>.py` or `<mod>/__init__.py`. A launcher as the first
+  word (`uv`, `uvx`, `poetry`, `pipx`, `npx`, `pnpm`, `yarn`, `npm`, `hatch`, `pdm`) and its
+  subcommand words (`run`, `exec`, `--`) are accepted, and resolving goes on from the next token. The whole dir tree of
   every repo file named this way is frozen (tracked and untracked-not-ignored). A `-c` payload, or
   a token that is neither a repo file nor a binary on PATH, is suspicious and stops the run at
   freeze ("unresolvable local hook <id>"). The commit step runs these hooks, and G2 checked the
@@ -308,7 +337,9 @@ The hasher freezes every criterion test file, plus:
   `-c core.hooksPath` to the frozen value (or git's default hooks dir);
 - ignored files (map `ignored`): `git ls-files --others --ignored --exclude-standard`, minus the
   tool caches (`__pycache__`, `.pytest_cache`, `.hypothesis`, `.ruff_cache`, `.mypy_cache`,
-  `.import_linter_cache`, `node_modules/.cache`, `.coverage`). Inside `.venv`, `venv`, `.tox`,
+  `.import_linter_cache`, `node_modules/.cache`) and build or coverage output (`build/`, `dist/`,
+  `htmlcov/`, `.eggs/`, `coverage.xml`, `.coverage`, `.coverage.*`, `junit*.xml`). `*.egg-info`
+  stays frozen: its `entry_points` can register pytest plugins. Inside `.venv`, `venv`, `.tox`,
   `.nox` and `node_modules` only `*.pth`, `sitecustomize.py` and `usercustomize.py` count. A new or
   changed ignored path after a writer round or a coder round is a violation ("ignored path
   written: <p>");
@@ -545,13 +576,13 @@ change that a judge makes and reverts within its own run.
   writer wrote a file beyond each writer's own `files` report.
 - G2 needs PyYAML in the `python3 -I` interpreter; without it every `check_cmd` fails the gate.
 - The intent judge reads rulings from the ledger task body; a ruling kept elsewhere is not seen.
-- A test run that leaves ignored output outside the tool-cache list (`build/`, `dist/`,
-  `*.egg-info`, coverage XML) changes the `ignored` map: after a judge it reads as "judge mutated
-  worktree", after a writer or the coder as "ignored path written".
+- A test run that leaves ignored output outside the cache and build-output lists (for example a
+  new `*.egg-info`) changes the `ignored` map: after a judge it reads as "judge mutated worktree",
+  after a writer or the coder as "ignored path written".
 - The hook surface is frozen, so a change that must edit `.pre-commit-config.yaml`, a local hook
   script (or anything in its dir) or the hooks dir cannot pass the fleet. A local hook whose
-  command uses a word that is neither a repo file nor a binary on PATH (for example
-  `uv run ...`) stops every run at freeze. The real-change scope fence likewise stops any
+  command uses a word that is neither a repo file, a binary on PATH nor a launcher subcommand
+  stops every run at freeze. The real-change scope fence likewise stops any
   change to `.github/`, IaC, Kubernetes, rulesets or secret-like paths, in every mode.
 - A re-plan after `plan_wrong` saves the uncommitted work with `git commit-tree` (a plumbing commit
   object on a side branch, no hooks). That is not a `git commit`, and it is never pushed.

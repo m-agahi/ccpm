@@ -418,6 +418,9 @@ def norm(rel):
         rel = rel[2:]
     return rel.rstrip('/')
 
+LAUNCHERS = {'uv', 'uvx', 'poetry', 'pipx', 'npx', 'pnpm', 'yarn', 'npm', 'hatch', 'pdm'}
+LAUNCHER_WORDS = {'run', 'exec', '--'}
+
 def repo_file(tok):
     # a relative path to a regular file inside the worktree, else None
     if not tok or tok.startswith('/') or '..' in tok.split('/'):
@@ -480,6 +483,12 @@ def hook_refs():
             bad.append('unresolvable local hook ' + hid + ': entry or args do not shell-split')
             continue
         i = 0
+        # a launcher (uv run, poetry run, npx, ...): accept it and its
+        # subcommand words, then resolve from the next token
+        if toks and toks[0] in LAUNCHERS:
+            i = 1
+            while i < len(toks) and toks[i] in LAUNCHER_WORDS:
+                i += 1
         while i < len(toks):
             t = toks[i]
             if t == '-c':
@@ -538,7 +547,10 @@ def config_freeze(gitmap):
     ia = git('rev-parse', '--git-path', 'info/attributes').decode().strip()
     gitmap['info/attributes'] = abs_hash(ia if os.path.isabs(ia) else os.path.join(wt, ia))
 
-IGNORED_CACHE = {'__pycache__', '.pytest_cache', '.hypothesis', '.ruff_cache', '.mypy_cache', '.import_linter_cache'}
+IGNORED_CACHE = {'__pycache__', '.pytest_cache', '.hypothesis', '.ruff_cache', '.mypy_cache', '.import_linter_cache',
+                 'build', 'dist', 'htmlcov', '.eggs'}
+# build and coverage output files; *.egg-info stays frozen (entry_points can register pytest plugins)
+IGNORED_OUTPUT = ['coverage.xml', '.coverage', '.coverage.*', 'junit*.xml']
 
 def ignored_files():
     # every ignored file except tool caches; inside a skipped dir (venv,
@@ -552,7 +564,7 @@ def ignored_files():
         base = segs[-1]
         if any(s in IGNORED_CACHE for s in segs) or '/'.join(segs[:2]) == 'node_modules/.cache' or '/node_modules/.cache/' in rel:
             continue
-        if base == '.coverage' or rel.startswith('.claude/worktrees/'):
+        if any(fnmatch.fnmatch(base, g) for g in IGNORED_OUTPUT) or rel.startswith('.claude/worktrees/'):
             continue
         if any(s in SKIP_DIRS for s in segs[:-1]):
             if not (base.endswith('.pth') or base in ('sitecustomize.py', 'usercustomize.py')):
