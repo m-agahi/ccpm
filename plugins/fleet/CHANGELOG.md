@@ -1,5 +1,40 @@
 # Changelog
 
+## [2.0.2] - 2026-11-04
+
+### Fixed
+
+- Freeze false positive: the hasher no longer freezes `.gitignore` files that git never reads. It
+  hashes the `.gitignore` files listed by `git ls-files --cached --others --exclude-standard`, plus
+  any walked `.gitignore` whose directory no outside rule ignores, so a `.gitignore` that ignores
+  itself is still frozen. A tool rewriting `.ruff_cache/.gitignore` or
+  `.import_linter_cache/.gitignore` on every commit no longer rejects coder rounds.
+- The tool cache dirs `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`,
+  `.import_linter_cache` and `.hypothesis` are skipped only when git ignores them (by an outside
+  rule or their own `*` `.gitignore`). A skipped cache dir is still scanned: runner config, a
+  `pyproject.toml` or a `package.json` inside one is suspicious, which rejects the round.
+- Role outputs: array fields are typed in each role schema. On `ok`, every required key whose
+  schema type is array, object or boolean must have that type; a wrong type is
+  `contract drift: <role> <key> type` (a string `"[]"` is no longer accepted as an array).
+- Push and fetch robustness: the workspace fetch, the push and the remote check retry up to 3
+  times with backoff (5s, 15s, 45s). A non-fast-forward push is still `needs_human` at once.
+  `remote_head` comes from `gh api repos/<owner>/<name>/branches/<branch>` (`gh-personal` for the
+  personal account), with `git ls-remote` only when gh is not installed. An `ls-remote` error in
+  the workspace step is no longer read as "branch absent".
+- Bytecode poisoning: bytecode is not hashed, so a planted `__pycache__/test_x.cpython-3XX.pyc`
+  could run instead of a frozen test. A new infra step `infra:purge-bytecode` deletes every
+  `__pycache__`, `*.pyc`/`*.pyo` and `.pytest_cache` (sparing `.git` and venvs) before every freeze
+  and every post-coder hash check, so before every code-judge run. The judge fingerprint is taken
+  after the purge. The hasher also flags any pyc named after a frozen test module or `conftest` as
+  suspicious. The coder and code judge get
+  `test_env: {PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider"}`.
+- Retry loops tell the infra agent to run them as one Bash call with a 600000 ms timeout.
+
+### Changed
+
+- Minimum role versions: `fleet-coder` 9 and `fleet-code-judge` 8 (both honour `test_env` and
+  treat compiled bytecode as frozen-adjacent).
+
 ## [2.0.1] - 2026-11-04
 
 ### Changed

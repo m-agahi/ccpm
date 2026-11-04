@@ -66,8 +66,8 @@ const FROZEN_VERSIONS = {
   "plan-audit": 10,
   "fleet-test-writer": 6,
   "fleet-test-judge": 6,
-  "fleet-coder": 7,
-  "fleet-code-judge": 7,
+  "fleet-coder": 9,
+  "fleet-code-judge": 8,
   "fleet-pr-opener": 5,
 };
 
@@ -92,6 +92,8 @@ async function runOne(script, args) {
   const agent = async (prompt, opts = {}) => {
     const label = opts.label;
     calls.push({ label, prompt, opts });
+    // the bytecode purge is mechanical; unscripted purges succeed by default
+    if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
     if (!(label in script)) {
       unscripted.push(label);
       return null;
@@ -1719,31 +1721,31 @@ test("S-2: roles get only criterion test files in frozen_tests; config files go 
 
 test("S-8: a role version lower than the frozen minimum stops in preflight", async () => {
   const s = happy();
-  s.preflight.versions["fleet-coder"] = 6;
+  s.preflight.versions["fleet-coder"] = 8;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder version 6 < frozen 7/);
+  assert.match(out.result.reason, /role fleet-coder version 8 < frozen 9/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
 test("S-8: a higher role version is logged as prose-only and recorded", async () => {
   const s = happy();
-  s.preflight.versions["fleet-code-judge"] = 8;
+  s.preflight.versions["fleet-code-judge"] = 9;
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v8 > frozen v7: prose-only changes assumed/.test(l)));
-  assert.equal(out.result.role_versions["fleet-code-judge"], 8);
-  assert.equal(out.result.role_versions["fleet-coder"], 7);
+  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v9 > frozen v8: prose-only changes assumed/.test(l)));
+  assert.equal(out.result.role_versions["fleet-code-judge"], 9);
+  assert.equal(out.result.role_versions["fleet-coder"], 9);
 });
 
 test("S-8: a role runner that loaded a different version than preflight is discarded", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"].role_version = 8;
+  s["role:fleet-coder:r1"].role_version = 10;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-coder/);
-  assert.match(out.result.reason, /version 8/);
+  assert.match(out.result.reason, /version 10/);
   assert.ok(!out.labels.includes("hasher:post-coder:r1"));
 });
 
@@ -1866,7 +1868,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
   const s = happy();
   s["role:fleet-code-judge:r1"] = {
     __raw: true,
-    role_version: 7,
+    role_version: 8,
     role_contract: "CONTRACT: fleet-v2",
     status: "ok",
     reason: "approved with gates not run: coverage",
@@ -1902,7 +1904,7 @@ test("contract drift: null/empty values are fine where allowed", async () => {
 
 test("contract drift: a needs_human output may lack the role fields", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"] = { __raw: true, role_version: 7, role_contract: "CONTRACT: fleet-v2", status: "needs_human", reason: "test AC1 wrong" };
+  s["role:fleet-coder:r1"] = { __raw: true, role_version: 9, role_contract: "CONTRACT: fleet-v2", status: "needs_human", reason: "test AC1 wrong" };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /test AC1 wrong/);
@@ -2129,7 +2131,8 @@ test("plan_diff that is not an array of strings is contract drift", async () => 
     s["role:scope-and-plan"].plan_diff = bad;
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human", JSON.stringify(bad));
-    assert.match(out.result.reason, /contract drift: plan_diff/);
+    // the generic type check (an array) fires first for non-arrays
+    assert.match(out.result.reason, /contract drift: (scope-and-plan )?plan_diff/);
     assert.ok(!out.labels.includes("role:plan-audit"));
   }
 });
@@ -2828,4 +2831,436 @@ test("write-back: comment text with a line starting with a terraform-bot word is
     assert.equal(out.result.comment_status, "failed");
     assert.match(out.result.write_back.comments[0].reason, /refused/);
   }
+});
+
+// ---------------------------------------------------------------- 2.0.2: ignore-rule scope, cache dirs
+
+// "Mismatch" as the script sees it: any of the four maps differs, or the
+// suspicious list is non-empty.
+function hasherMismatch(a, b) {
+  for (const m of ["files", "sections", "git", "symlinks"])
+    if (JSON.stringify(a.hashes[m]) !== JSON.stringify(b.hashes[m])) return true;
+  return b.hashes.suspicious.length > 0;
+}
+
+function cacheRepo(prefix, rootIgnore) {
+  const wt = scratchRepo(prefix);
+  writeFileSync(join(wt, ".gitignore"), rootIgnore);
+  sh(wt, "mkdir", "-p", "tests");
+  writeFileSync(join(wt, "tests", "test_a.py"), "def test_a():\n    pass\n");
+  sh(wt, "git", "add", ".");
+  sh(wt, "git", "commit", "-q", "-m", "init");
+  return wt;
+}
+
+test("hasher 2.0.2: an untracked .gitignore in an ignored .ruff_cache/ may be rewritten", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-ruff-", ".ruff_cache/\n.import_linter_cache/\n");
+  try {
+    for (const d of [".ruff_cache", ".import_linter_cache"]) {
+      sh(wt, "mkdir", "-p", d);
+      writeFileSync(join(wt, d, ".gitignore"), "# Automatically created\n*");
+    }
+    const a = runHasherRaw(wt, "hashes", []);
+    assert.ok(!(".ruff_cache/.gitignore" in a.hashes.files), "cache .gitignore is not a key");
+    for (const d of [".ruff_cache", ".import_linter_cache"]) writeFileSync(join(wt, d, ".gitignore"), "# rewritten by a hook\n*\n");
+    const b = runHasherRaw(wt, "hashes", []);
+    assert.equal(hasherMismatch(a, b), false);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("hasher 2.0.2: a self-ignoring cache dir (no root rule) is skipped too", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-selfcache-", "*.log\n");
+  try {
+    sh(wt, "mkdir", "-p", ".ruff_cache/0.6.0");
+    writeFileSync(join(wt, ".ruff_cache", ".gitignore"), "*");
+    const a = runHasherRaw(wt, "hashes", []);
+    writeFileSync(join(wt, ".ruff_cache", ".gitignore"), "# Automatically created by ruff.\n*\n");
+    const b = runHasherRaw(wt, "hashes", []);
+    assert.equal(hasherMismatch(a, b), false);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("hasher 2.0.2: a .gitignore inside a dir ignored from outside is not frozen", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-out-", "out/\n");
+  try {
+    sh(wt, "mkdir", "-p", "out/sub");
+    writeFileSync(join(wt, "out", ".gitignore"), "a\n");
+    writeFileSync(join(wt, "out", "sub", ".gitignore"), "a\n");
+    const a = runHasherRaw(wt, "hashes", []);
+    assert.ok(!("out/.gitignore" in a.hashes.files));
+    writeFileSync(join(wt, "out", ".gitignore"), "b\n");
+    writeFileSync(join(wt, "out", "sub", ".gitignore"), "b\n");
+    assert.equal(hasherMismatch(a, runHasherRaw(wt, "hashes", [])), false);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("hasher 2.0.2: a new untracked non-ignored tests/.gitignore is a mismatch", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-newign-", ".ruff_cache/\n");
+  try {
+    const a = runHasherRaw(wt, "hashes", []);
+    writeFileSync(join(wt, "tests", ".gitignore"), "hidden_*.py\n");
+    const b = runHasherRaw(wt, "hashes", []);
+    assert.ok("tests/.gitignore" in b.hashes.files);
+    assert.equal(hasherMismatch(a, b), true);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("hasher 2.0.2: a self-ignoring tests/.gitignore hiding a nested pyproject is a mismatch", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-selfign-", ".ruff_cache/\n");
+  try {
+    const a = runHasherRaw(wt, "hashes", []);
+    writeFileSync(join(wt, "tests", ".gitignore"), "*\n");
+    writeFileSync(join(wt, "tests", "pyproject.toml"), '[tool.pytest.ini_options]\naddopts = "-k nothing"\n');
+    const b = runHasherRaw(wt, "hashes", []);
+    assert.ok("tests/.gitignore" in b.hashes.files, "a .gitignore that ignores itself is still frozen");
+    assert.equal(hasherMismatch(a, b), true);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("hasher 2.0.2: an ignored new conftest plus a tracked .gitignore edit is a mismatch", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-regress-", ".ruff_cache/\n");
+  try {
+    const a = runHasherRaw(wt, "hashes", []);
+    writeFileSync(join(wt, ".gitignore"), ".ruff_cache/\ntests/conftest.py\n");
+    writeFileSync(join(wt, "tests", "conftest.py"), "import os\n");
+    const b = runHasherRaw(wt, "hashes", []);
+    assert.ok("tests/conftest.py" in b.hashes.files);
+    assert.notEqual(b.hashes.files[".gitignore"], a.hashes.files[".gitignore"]);
+    assert.equal(hasherMismatch(a, b), true);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("hasher 2.0.2: runner config dropped into an ignored cache dir is suspicious", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-cacheconf-", ".ruff_cache/\n__pycache__/\n.hypothesis/\n");
+  try {
+    for (const d of [".ruff_cache", "tests/__pycache__", ".hypothesis"]) sh(wt, "mkdir", "-p", d);
+    writeFileSync(join(wt, "tests", "__pycache__", "test_a.cpython-312.pyc"), "x");
+    const a = runHasherRaw(wt, "hashes", []);
+    assert.deepEqual(a.hashes.suspicious, []);
+    for (const [d, f] of [[".ruff_cache", "conftest.py"], ["tests/__pycache__", "conftest.py"], [".hypothesis", "pytest.ini"]]) {
+      writeFileSync(join(wt, d, f), "x\n");
+      const b = runHasherRaw(wt, "hashes", []);
+      assert.ok(b.hashes.suspicious.some((s) => s.includes(d + "/" + f)), d + "/" + f + " in " + JSON.stringify(b.hashes.suspicious));
+      assert.equal(hasherMismatch(a, b), true);
+      rmSync(join(wt, d, f));
+    }
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("hasher 2.0.2: deleting a cache dir is not a mismatch", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-delcache-", ".ruff_cache/\n.mypy_cache/\n");
+  try {
+    for (const d of [".ruff_cache", ".mypy_cache"]) {
+      sh(wt, "mkdir", "-p", d);
+      writeFileSync(join(wt, d, ".gitignore"), "*\n");
+      writeFileSync(join(wt, d, "data"), "x\n");
+    }
+    const a = runHasherRaw(wt, "hashes", []);
+    rmSync(join(wt, ".ruff_cache"), { recursive: true, force: true });
+    rmSync(join(wt, ".mypy_cache"), { recursive: true, force: true });
+    assert.equal(hasherMismatch(a, runHasherRaw(wt, "hashes", [])), false);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("hasher 2.0.2: a cache-named dir that is NOT ignored is walked normally", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-notign-", "*.log\n");
+  try {
+    sh(wt, "mkdir", "-p", "__pycache__");
+    writeFileSync(join(wt, "__pycache__", "conftest.py"), "x\n");
+    const h = runHasherRaw(wt, "hashes", []);
+    assert.ok("__pycache__/conftest.py" in h.hashes.files);
+    assert.deepEqual(h.hashes.suspicious, []);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("hasher prompt names the cache dirs and the ignore-rule scope", async () => {
+  const out = await run(happy(), ARGS);
+  const p = call(out, "hasher:freeze:f1").prompt;
+  for (const d of [".ruff_cache", ".import_linter_cache", ".mypy_cache", ".pytest_cache", ".hypothesis", "__pycache__"])
+    assert.ok(p.includes(d), "hasher prompt names " + d);
+  assert.match(p, /ls-files -z --cached --others --exclude-standard -- ':\(glob\)\*\*\/\.gitignore' \.gitignore/);
+});
+
+test("a cache-dir suspicious entry at freeze stops the run with a clear reason", async () => {
+  const s = happy({
+    script: {
+      "hasher:freeze:f1": {
+        status: "ok",
+        fingerprint: FP_PLAN,
+        hashes: H(HASHES_FLAT, ["runner config in a skipped cache dir: .ruff_cache/conftest.py"]),
+      },
+    },
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /runner config in a skipped cache dir: \.ruff_cache\/conftest\.py/);
+});
+
+// ---------------------------------------------------------------- 2.0.2: typed role outputs
+
+// The array fields each role schema must type (present, not required).
+const TYPED_ARRAYS = {
+  "fleet-coder": ["commits", "added_symbols", "addressed_findings"],
+  "fleet-test-writer": ["tests", "addressed_findings"],
+  "plan-audit": ["routed_findings"],
+  "fleet-test-judge": ["routed_findings", "checked"],
+  "fleet-code-judge": ["routed_findings", "gates_not_run"],
+};
+
+// Minimal JSON-schema type check: enough to show the schema rejects a value.
+function schemaTypeOk(prop, v) {
+  const types = [].concat(prop.type);
+  return types.some((t) =>
+    t === "array" ? Array.isArray(v) : t === "null" ? v === null : t === "object" ? v !== null && typeof v === "object" && !Array.isArray(v) : t === "integer" ? Number.isInteger(v) : typeof v === t,
+  );
+}
+
+test("role schemas type every array field and still do not require it", async () => {
+  const out = await run(happy(), ARGS);
+  const seen = {};
+  for (const c of out.calls.concat(out.build ? out.build.calls : [])) {
+    const m = /^role:([a-z-]+)/.exec(c.label);
+    if (m && c.opts && c.opts.schema) seen[m[1]] = c.opts.schema;
+  }
+  for (const [role, keys] of Object.entries(TYPED_ARRAYS)) {
+    const sc = seen[role];
+    assert.ok(sc, "saw schema for " + role);
+    for (const k of keys) {
+      assert.ok(sc.properties[k], role + " types " + k);
+      assert.equal(sc.properties[k].type, "array", role + " " + k);
+      assert.ok(sc.properties[k].items, role + " " + k + " has items");
+      assert.equal(schemaTypeOk(sc.properties[k], "[]"), false, role + " " + k + " rejects the string []");
+      assert.ok(!sc.required.includes(k), role + " " + k + " not schema-required");
+    }
+  }
+});
+
+test("contract drift: a string \"[]\" for a required array key is rejected in code", async () => {
+  const s = happy();
+  s["role:fleet-coder:r1"].added_symbols = "[]";
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /contract drift: fleet-coder added_symbols type/);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+});
+
+test("contract drift: wrong object and boolean types are rejected in code", async () => {
+  for (const [label, key, val, role] of [
+    ["role:fleet-code-judge:r1", "hash_check", "{}", "fleet-code-judge"],
+    ["role:fleet-coder:r1", "frozen_tests_red_at_start", "true", "fleet-coder"],
+    ["role:fleet-test-judge:r1", "checked", "[]", "fleet-test-judge"],
+  ]) {
+    const s = happy();
+    s[label][key] = val;
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", label);
+    assert.match(out.result.reason, new RegExp("contract drift: " + role + " " + key + " type"), label);
+  }
+});
+
+test("contract drift: a coder ok output missing added_symbols is still rejected", async () => {
+  const s = happy();
+  const c = Object.assign({}, REQUIRED_DEFAULTS["fleet-coder"], s["role:fleet-coder:r1"], {
+    __raw: true,
+    role_version: 9,
+    role_contract: "CONTRACT: fleet-v2",
+    status: "ok",
+    reason: "done",
+  });
+  delete c.added_symbols;
+  s["role:fleet-coder:r1"] = c;
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /role fleet-coder contract drift: missing added_symbols/);
+});
+
+// ---------------------------------------------------------------- 2.0.2: push / fetch robustness
+
+test("push prompt retries with backoff, reads remote_head through the gh api, keeps non-ff fatal", async () => {
+  const out = await run(happy(), ARGS);
+  const p = call(out, "infra:push").prompt;
+  const inp = inputsOf(p);
+  assert.ok(inp.remote_slug, "push gets the remote slug");
+  assert.match(p, /5 15 45/);
+  assert.match(p, /retry up to 3 times/);
+  assert.match(p, /timeout 600000 ms/);
+  assert.match(p, /api repos\/<owner>\/<name>\/branches\/<branch> --jq \.commit\.sha/);
+  assert.match(p, /gh-personal/);
+  assert.match(p, /non-fast-forward[^.]*needs_human/i);
+  assert.match(p, /ls-remote/, "ls-remote only as the fallback");
+  assert.match(p, /Never --force/);
+});
+
+test("workspace prompt retries fetch with backoff and treats only ls-remote exit 2 as absent", async () => {
+  const out = await run(happy(), ARGS);
+  const ws = out.calls.concat(out.build ? out.build.calls : []).find((c) => /^(infra:)?workspace$/.test(c.label));
+  assert.ok(ws, "workspace call");
+  assert.match(ws.prompt, /fetch origin --prune[^\n]*5 15 45/);
+  assert.match(ws.prompt, /exit code 2/);
+});
+
+test("the script still compares the gh-api remote_head to the approved sha", async () => {
+  const s = happy({ script: { "infra:push": { status: "ok", reason: "x", remote_head: "deadbeef" } } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /deadbeef, not the approved K1/);
+});
+
+// ---------------------------------------------------------------- 2.0.2: bytecode poisoning
+
+test("a bytecode purge runs before every hasher check and every code-judge, in that order", async () => {
+  const s = happy({
+    script: {
+      "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_code", routed_findings: [{ target: "code", criterion: "AC1", finding: "x" }] },
+      "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
+      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
+      "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  const L = out.build.labels;
+  for (const m of [1, 2]) {
+    const iCoder = L.indexOf("role:fleet-coder:r" + m);
+    const iPurge = L.indexOf("infra:purge-bytecode:code-r" + m);
+    const iHash = L.indexOf("hasher:post-coder:r" + m);
+    const iJudge = L.indexOf("role:fleet-code-judge:r" + m);
+    assert.ok(iCoder >= 0 && iCoder < iPurge && iPurge < iHash && iHash < iJudge, "round " + m + ": " + L.join(", "));
+  }
+  const iFp = L.indexOf("infra:purge-bytecode:freeze-f1");
+  assert.ok(iFp >= 0 && iFp < L.indexOf("hasher:freeze:f1"), "purge before the freeze hasher");
+  const p = call(out, "infra:purge-bytecode:code-r1").prompt;
+  assert.ok(inputsOf(p).worktree, "purge names the worktree");
+  assert.match(p, /__pycache__/);
+  assert.match(p, /\.pytest_cache/);
+  assert.match(p, /purged/);
+});
+
+test("a failed bytecode purge stops the run before the code-judge", async () => {
+  const s = happy({ script: { "infra:purge-bytecode:code-r1": { status: "failed", reason: "rm failed" } } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+});
+
+test("the purge command deletes bytecode and pytest caches, sparing venvs and .git", () => {
+  const out0 = (async () => run(happy(), ARGS))();
+  return out0.then((out) => {
+    const p = call(out, "infra:purge-bytecode:code-r1").prompt;
+    const m = /^PURGE: (.*)$/m.exec(p);
+    assert.ok(m, "prompt carries a PURGE: command line");
+    const wt = mkdtempSync(join(tmpdir(), "fleet-purge-"));
+    try {
+      for (const d of ["a/__pycache__", ".pytest_cache/v", "b", ".venv/lib/__pycache__", ".git/x", "venv/__pycache__"])
+        sh(wt, "mkdir", "-p", d);
+      for (const f of ["a/__pycache__/m.cpython-313.pyc", "b/old.pyc", "b/old.pyo", ".pytest_cache/v/x", ".venv/lib/__pycache__/k.pyc", ".git/x/y.pyc", "venv/__pycache__/z.pyc", "b/keep.py"])
+        writeFileSync(join(wt, f), "x");
+      const r = spawnSync("bash", ["-c", m[1].split("<worktree>").join(shq(wt))], { encoding: "utf8" });
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /purged=4\b/);
+      const left = sh(wt, "find", ".", "-type", "f").split("\n").filter(Boolean).sort();
+      assert.deepEqual(left, ["./.git/x/y.pyc", "./.venv/lib/__pycache__/k.pyc", "./b/keep.py", "./venv/__pycache__/z.pyc"]);
+    } finally {
+      rmSync(wt, { recursive: true, force: true });
+    }
+  });
+});
+
+function shq(v) {
+  return "'" + String(v).replace(/'/g, "'\\''") + "'";
+}
+
+test("code-judge and coder get test_env; the coder gets it as a note for frozen-test runs", async () => {
+  const out = await run(happy(), ARGS);
+  const want = { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" };
+  assert.deepEqual(inputsOf(call(out, "role:fleet-code-judge:r1").prompt).test_env, want);
+  const c = inputsOf(call(out, "role:fleet-coder:r1").prompt);
+  assert.deepEqual(c.test_env, want);
+  assert.match(c.test_env_note, /frozen/);
+});
+
+test("hasher 2.0.2: a planted pyc for a frozen test is suspicious and rejects the round", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-pyc-", "__pycache__/\n");
+  try {
+    writeFileSync(join(wt, "tests", "test_frozen.py"), "def test_f():\n    assert False\n");
+    const a = runHasherRaw(wt, "hashes", ["tests/test_frozen.py"]);
+    assert.deepEqual(a.hashes.suspicious, []);
+    sh(wt, "mkdir", "-p", "tests/__pycache__");
+    writeFileSync(join(wt, "tests", "__pycache__", "test_frozen.cpython-313.pyc"), "poison");
+    const b = runHasherRaw(wt, "hashes", ["tests/test_frozen.py"]);
+    assert.ok(b.hashes.suspicious.some((x) => x.includes("tests/__pycache__/test_frozen.cpython-313.pyc")), JSON.stringify(b.hashes.suspicious));
+    assert.equal(hasherMismatch(a, b), true);
+    // pytest's assertion-rewrite name and a pyc in a NOT-ignored cache dir are caught too
+    rmSync(join(wt, "tests", "__pycache__"), { recursive: true });
+    writeFileSync(join(wt, ".gitignore"), "*.log\n");
+    sh(wt, "mkdir", "-p", "tests/__pycache__");
+    writeFileSync(join(wt, "tests", "__pycache__", "test_frozen.cpython-313-pytest-8.3.4.pyc"), "poison");
+    const c = runHasherRaw(wt, "hashes", ["tests/test_frozen.py"]);
+    assert.ok(c.hashes.suspicious.some((x) => x.includes("test_frozen.cpython-313-pytest-8.3.4.pyc")), JSON.stringify(c.hashes.suspicious));
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("hasher 2.0.2: pyc files unrelated to frozen tests are no violation", { skip: !HAVE_PY }, () => {
+  const wt = cacheRepo("fleet-202-pycok-", "__pycache__/\n");
+  try {
+    writeFileSync(join(wt, "tests", "test_frozen.py"), "def test_f():\n    pass\n");
+    const a = runHasherRaw(wt, "hashes", ["tests/test_frozen.py"]);
+    sh(wt, "mkdir", "-p", "src/__pycache__");
+    writeFileSync(join(wt, "src", "__pycache__", "mod.cpython-313.pyc"), "x");
+    writeFileSync(join(wt, "src", "__pycache__", "test_frozen_helpers.cpython-313.pyc"), "x");
+    const b = runHasherRaw(wt, "hashes", ["tests/test_frozen.py"]);
+    assert.deepEqual(b.hashes.suspicious, []);
+    assert.equal(hasherMismatch(a, b), false);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("a stale-bytecode suspicious entry after the coder rejects the round", async () => {
+  const s = happy({
+    script: {
+      "hasher:post-coder:r1": {
+        status: "ok",
+        fingerprint: FP_K1,
+        hashes: H(HASHES_FLAT, ["bytecode for a frozen file: tests/__pycache__/test_a.cpython-313.pyc"]),
+      },
+    },
+  });
+  const out = await run(s, ARGS);
+  assert.ok(out.logs.some((l) => /hash violation on suspicious bytecode for a frozen file/.test(l)), out.logs.join("\n"));
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+});
+
+test("role versions: coder 9 and code-judge 8 are the minimums; coder v8 stops", async () => {
+  const s = happy();
+  s.preflight.versions["fleet-coder"] = 8;
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /role fleet-coder version 8 < frozen 9/);
+  const j = happy();
+  j.preflight.versions["fleet-code-judge"] = 7;
+  const outJ = await runOne(j, ARGS);
+  assert.match(outJ.result.reason, /role fleet-code-judge version 7 < frozen 8/);
 });

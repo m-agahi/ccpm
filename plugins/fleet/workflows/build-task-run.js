@@ -46,15 +46,18 @@ const EXPECTED_VERSIONS = {
   "plan-audit": 10,
   "fleet-test-writer": 6,
   "fleet-test-judge": 6,
-  "fleet-coder": 7,
-  "fleet-code-judge": 7,
+  "fleet-coder": 9,
+  "fleet-code-judge": 8,
   "fleet-pr-opener": 5,
 };
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
 const CONTRACT = "fleet-v2";
 const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
 // Keys each role must return when status is "ok" (checked with `key in obj`;
-// null or empty values are allowed). A missing key is contract drift.
+// null or empty values are allowed). A missing key is contract drift. A
+// required key whose role schema types it as array, object or boolean must
+// also have that JS type (null only where the schema allows it); a wrong type
+// is contract drift too ("contract drift: <role> <key> type").
 const REQUIRED_ON_OK = {
   "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff"],
   "plan-audit": ["verdict", "routed_findings"],
@@ -105,7 +108,10 @@ const HELD_OUT_KEY = "held_out_examples";
 // untracked and not ignored):
 // Found by walking the filesystem (not git ls-files), so a config file that an
 // ignore rule hides is still hashed. The walk skips .git, .claude/worktrees and
-// the dependency/cache dirs in WALK_SKIP_DIRS.
+// the dependency dirs in WALK_SKIP_DIRS, plus each tool cache dir in
+// CACHE_SKIP_DIRS that git ignores (by an outside rule or its own '*'
+// .gitignore). A skipped cache dir is still scanned: a runner-config file (or a
+// pyproject.toml/package.json) inside one goes on the suspicious list.
 const RUNNER_CONFIG_FILES = [
   "conftest.py",
   "pytest.ini",
@@ -125,20 +131,36 @@ const RUNNER_CONFIG_FILES = [
   "babel.config.*",
   "*.pth (repo root only)",
 ];
-const WALK_SKIP_DIRS = [".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", ".nox", ".mypy_cache", ".pytest_cache"];
+const WALK_SKIP_DIRS = [".git", "node_modules", ".venv", "venv", ".tox", ".nox"];
+// The hasher's descriptive suspicious-list entries (other entries are odd path
+// names): runner config in a skipped cache dir, and bytecode (*.pyc/*.pyo)
+// named after a frozen test module or conftest, found anywhere the walk or a
+// cache scan reaches.
+const SUSPICIOUS_PREFIXES = ["runner config in a skipped cache dir: ", "bytecode for a frozen file: "];
+const CACHE_SKIP_DIRS = ["__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".import_linter_cache", ".hypothesis"];
 // Ignore rules are frozen too: hiding a new config file behind an ignore rule
-// changes one of these keys. Every .gitignore in the tree is hashed in the
-// files map; the worktree's info/exclude (git rev-parse --git-path
+// changes one of these keys. A .gitignore is hashed in the files map when
+// git can read its rules: every one `git ls-files -z --cached --others
+// --exclude-standard -- ':(glob)**/.gitignore' .gitignore` lists (tracked, or
+// untracked and not ignored), plus every walked one whose directory no
+// outside rule ignores (so a .gitignore that ignores itself still counts). A
+// .gitignore inside an ignored dir is not hashed: git never reads it, and
+// tools rewrite them (.ruff_cache/.gitignore on every commit). Also hashed: the worktree's info/exclude (git rev-parse --git-path
 // info/exclude, the common dir for a linked worktree) and the global
 // core.excludesFile in the git map.
 // The hasher returns four separate maps (files, sections, git, symlinks), so
 // a real file name can never mask a synthetic key, plus a suspicious list of
-// walked paths with ':' or '#' in a component; a non-empty list is a violation.
+// walked paths with ':' or '#' in a component and runner config found inside a
+// skipped cache dir; a non-empty list is a violation.
 // Every symlink the walk meets (file or directory, outside the skipped dirs) is
 // frozen in the symlinks map as <path> = its readlink target. Links are never followed,
 // so adding or retargeting one is a change.
 const SYMLINK_RULE = "every symlink outside the skipped dirs -> symlinks[<path>] = readlink target (never followed)";
-const IGNORE_RULE_FILES = [".gitignore (every one in the tree)", "git:info/exclude", "git:core.excludesFile"];
+const IGNORE_RULE_FILES = [
+  ".gitignore listed by `git ls-files -z --cached --others --exclude-standard -- ':(glob)**/.gitignore' .gitignore`, plus any walked .gitignore whose directory is not ignored from outside",
+  "git:info/exclude",
+  "git:core.excludesFile",
+];
 // Sections of files that are NOT hashed whole (dependencies stay editable).
 // Each section is canonicalised (sorted keys, compact JSON) and hashed under a
 // synthetic key "<path>#<section>". A section that does not exist hashes as
@@ -177,11 +199,20 @@ CONFIG_GLOBS = ['conftest.py', 'pytest.ini', '.pytest.ini', 'pytest.toml', 'tox.
                 'noxfile.py', 'sitecustomize.py', 'usercustomize.py', 'jest.config.*', 'vitest.config.*',
                 'vitest.workspace*', 'karma.conf.*', '.mocharc*', '.babelrc*', 'babel.config.*']
 ROOT_ONLY_GLOBS = ['*.pth']
-SKIP_DIRS = {'.git', 'node_modules', '__pycache__', '.venv', 'venv', '.tox', '.nox', '.mypy_cache', '.pytest_cache'}
+SKIP_DIRS = {'.git', 'node_modules', '.venv', 'venv', '.tox', '.nox'}
+# tool cache dirs: skipped only when git ignores them; runner config inside one is suspicious
+CACHE_DIRS = {'__pycache__', '.mypy_cache', '.pytest_cache', '.ruff_cache', '.import_linter_cache', '.hypothesis'}
+CACHE_ALARM_NAMES = ['pyproject.toml', 'package.json']
 PACKAGE_KEYS = ['jest', 'vitest', 'mocha']
 
 wt, mode = sys.argv[1], sys.argv[2]
 explicit = json.loads(sys.argv[3]) if len(sys.argv) > 3 else []
+# module names whose bytecode could shadow a frozen file (the purge removes
+# all bytecode before every hash check, so any such pyc is planted)
+FROZEN_STEMS = set(os.path.basename(f)[:-3] for f in explicit if f.endswith('.py')) | {'conftest'}
+
+def frozen_pyc(name):
+    return (name.endswith('.pyc') or name.endswith('.pyo')) and name.split('.')[0] in FROZEN_STEMS
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
@@ -211,9 +242,29 @@ SUSPICIOUS = []
 def odd(rel):
     return ':' in rel or '#' in rel
 
-def walk():
-    # never follows a symlink; every link outside SKIP_DIRS is recorded with its target
-    for dp, dns, fns in os.walk(wt):
+def check_ignore(paths):
+    # the subset of paths git ignores (exit 1 = none ignored)
+    if not paths:
+        return set()
+    r = subprocess.run(['git', '-C', wt, 'check-ignore', '-z', '--stdin'],
+                       input=b'\x00'.join(p.encode() for p in paths) + b'\x00', capture_output=True)
+    if r.returncode not in (0, 1):
+        sys.exit('git check-ignore failed: ' + r.stderr.decode(errors='replace'))
+    return set(x.decode() for x in r.stdout.split(b'\x00') if x)
+
+def scan_cache(reldir):
+    # an ignored cache dir is not hashed; any runner config inside it is suspicious
+    for dp, dns, fns in os.walk(os.path.join(wt, reldir)):
+        for f in sorted(fns):
+            rel = os.path.normpath(os.path.join(os.path.relpath(dp, wt), f))
+            if any(fnmatch.fnmatch(f, g) for g in CONFIG_GLOBS) or f in CACHE_ALARM_NAMES:
+                SUSPICIOUS.append('runner config in a skipped cache dir: ' + rel)
+            if frozen_pyc(f):
+                SUSPICIOUS.append('bytecode for a frozen file: ' + rel)
+
+def walk_from(start, found, deferred):
+    # never follows a symlink; every link outside the skipped dirs is recorded with its target
+    for dp, dns, fns in os.walk(os.path.join(wt, start) if start else wt):
         reld = os.path.relpath(dp, wt)
         keep = []
         for d in sorted(dns):
@@ -226,6 +277,9 @@ def walk():
             if os.path.islink(full):
                 LINKS[reldir] = os.readlink(full)
                 continue
+            if d in CACHE_DIRS:
+                deferred.append(reldir)
+                continue
             keep.append(d)
         dns[:] = keep
         for f in sorted(fns):
@@ -235,7 +289,41 @@ def walk():
                 LINKS[rel] = os.readlink(full)
             if odd(rel):
                 SUSPICIOUS.append(rel)
-            yield rel
+            if frozen_pyc(f):
+                SUSPICIOUS.append('bytecode for a frozen file: ' + rel)
+            found.append(rel)
+
+def walk():
+    # cache-named dirs are walked like any other dir unless git ignores them
+    # (by an outside rule or by their own '*' .gitignore); ignored ones are only
+    # scanned for runner config
+    found, pending = [], []
+    walk_from('', found, pending)
+    while pending:
+        ign = check_ignore(pending + [d + '/' for d in pending])
+        nxt = []
+        for d in pending:
+            if d in ign or d + '/' in ign:
+                scan_cache(d)
+            else:
+                walk_from(d, found, nxt)
+        pending = nxt
+    return found
+
+def frozen_ignore_files(walked):
+    # .gitignore files whose rules can matter: tracked or untracked-not-ignored
+    # ones, plus any walked one whose directory no outside rule ignores (a
+    # .gitignore that ignores itself still counts; git never reads one inside
+    # an ignored dir)
+    keep = set(f.decode() for f in git('ls-files', '-z', '--cached', '--others', '--exclude-standard',
+                                       '--', ':(glob)**/.gitignore', '.gitignore').split(b'\x00') if f)
+    cands = [rel for rel in walked if os.path.basename(rel) == '.gitignore']
+    parents = sorted(set(os.path.dirname(rel) for rel in cands if os.path.dirname(rel)))
+    ign = check_ignore(parents)
+    for rel in cands:
+        if os.path.dirname(rel) not in ign:
+            keep.add(rel)
+    return keep
 
 def norm(rel):
     while rel.startswith('./'):
@@ -251,12 +339,15 @@ out = {'fingerprint': {
 if mode == 'hashes':
     # one map per key kind, so a real file name can never mask a synthetic key
     files, sections, gitmap, symlinks = {}, {}, {}, {}
-    for rel in walk():
+    walked = walk()
+    for rel in walked:
         base = os.path.basename(rel)
-        if base == '.gitignore' or any(fnmatch.fnmatch(base, g) for g in CONFIG_GLOBS) or odd(rel):
+        if any(fnmatch.fnmatch(base, g) for g in CONFIG_GLOBS) or odd(rel):
             files[rel] = file_hash(rel)
         elif '/' not in rel and any(fnmatch.fnmatch(base, g) for g in ROOT_ONLY_GLOBS):
             files[rel] = file_hash(rel)
+    for rel in frozen_ignore_files(walked):
+        files[rel] = file_hash(rel)
     for rel in sorted(LINKS):
         symlinks[rel] = LINKS[rel]
     ex = git('rev-parse', '--git-path', 'info/exclude').decode().strip()
@@ -315,6 +406,9 @@ print(json.dumps(out, sort_keys=True))
 const STR = { type: "string" };
 const STR_OR_NULL = { type: ["string", "null"] };
 const ANY_ARRAY = { type: "array" };
+// Array items whose shape the role pages own: a path, a symbol name or a
+// finding object. Typed loosely; the array itself is what the gates rely on.
+const ANY_ITEM = { type: ["string", "object"] };
 const FINDINGS = {
   type: "array",
   items: {
@@ -370,20 +464,21 @@ const SCHEMAS = {
   }),
   "fleet-test-writer": roleSchema({
     criterion_id: STR,
-    tests: ANY_ARRAY,
+    tests: { type: "array", items: ANY_ITEM },
     commit: STR_OR_NULL,
-    addressed_findings: ANY_ARRAY,
+    addressed_findings: { type: "array", items: ANY_ITEM },
   }),
   "fleet-test-judge": roleSchema({
     verdict: { type: "string", enum: ["approve", "revise"] },
     routed_findings: FINDINGS,
-    checked: ANY_ARRAY,
+    checked: { type: "array", items: ANY_ITEM },
   }),
   "fleet-coder": roleSchema({
     commits: { type: "array", items: STR },
+    added_symbols: { type: "array", items: ANY_ITEM },
     frozen_tests_red_at_start: { type: "boolean" },
     suite_result: SUITE,
-    addressed_findings: ANY_ARRAY,
+    addressed_findings: { type: "array", items: ANY_ITEM },
   }),
   "fleet-code-judge": roleSchema({
     verdict: { type: "string", enum: ["approve", "fix_code", "fix_tests", "plan_wrong"] },
@@ -438,6 +533,7 @@ const INFRA_SCHEMA = {
     },
     plan_touched: { type: "array", items: STR },
     remote_head: STR,
+    purged: { type: "number" },
     superseded_head: STR,
     ref_sha256: STR,
     ref_content: STR,
@@ -595,7 +691,8 @@ function diffHashes(frozen, now) {
       if (va !== vb) out.push(keyName(m, k));
     }
   }
-  for (const p of (now && now.suspicious) || []) out.push("suspicious path name " + p);
+  for (const p of (now && now.suspicious) || [])
+    out.push(SUSPICIOUS_PREFIXES.some((x) => p.indexOf(x) === 0) ? "suspicious " + p : "suspicious path name " + p);
   return out;
 }
 
@@ -887,11 +984,13 @@ function workspacePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Steps (use `git -C`):\n" +
-    "1. `git -C <repo> fetch origin --prune`.\n" +
+    "1. `git -C <repo> fetch origin --prune`, retry up to 3 times with backoff 5 15 45 (seconds): " +
+    RETRY_SHELL("git -C <repo> fetch origin --prune") +
+    " Still failing after the 3 retries -> failed with the last error.\n" +
     "2. default_branch = `git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD` without the `origin/` prefix; if that fails, `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` run in <repo>.\n" +
     "3. Keep fleet files out of git status: if `git -C <repo> check-ignore -q .claude/worktrees/probe` fails, append the line `.claude/worktrees/` to `$(git -C <repo> rev-parse --path-format=absolute --git-common-dir)/info/exclude`. Do the same for `.claude/settings.local.json` (probe that path), and for the test caches `__pycache__/`, `.pytest_cache/`, `.coverage`, `.hypothesis/` (a judge's test run must not leave untracked noise). Never edit a tracked .gitignore.\n" +
     "4. Branch state: `gh pr list --head <branch> --state all --json number,state` in <repo>. MERGED or CLOSED -> status needs_human.\n" +
-    "5. main_worktree: if it exists and `git -C <main_worktree> branch --show-current` equals <branch>, reuse it (created=false). If the path exists otherwise -> needs_human. If absent: local branch <branch> exists -> `git -C <repo> worktree add <main_worktree> <branch>`; else remote branch exists (`git -C <repo> ls-remote --exit-code --heads origin <branch>`) -> `git -C <repo> worktree add -b <branch> <main_worktree> origin/<branch>`; else `git -C <repo> worktree add --no-track -b <branch> <main_worktree> origin/<default_branch>` (created=true).\n" +
+    "5. main_worktree: if it exists and `git -C <main_worktree> branch --show-current` equals <branch>, reuse it (created=false). If the path exists otherwise -> needs_human. If absent: local branch <branch> exists -> `git -C <repo> worktree add <main_worktree> <branch>`; else remote branch exists (`git -C <repo> ls-remote --exit-code --heads origin <branch>`: exit code 0 = exists, exit code 2 = absent; any other exit code is a network/auth error -> retry with the same 5 15 45 backoff, and still erroring after the 3 retries -> failed; never treat an error as absent) -> `git -C <repo> worktree add -b <branch> <main_worktree> origin/<branch>`; else `git -C <repo> worktree add --no-track -b <branch> <main_worktree> origin/<default_branch>` (created=true).\n" +
     "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths.\n" +
     "7. `mkdir -p <scratch_dir>`.\n" +
     "8. base_ref = `git -C <main_worktree> merge-base HEAD origin/<default_branch>`.\n" +
@@ -944,7 +1043,9 @@ function hasherPrompt(inputs) {
     IGNORE_RULE_FILES.join(", ") +
     ". Walk skips: " +
     WALK_SKIP_DIRS.join(", ") +
-    ", .claude/worktrees. Sections hashed under <path>#<section> (whole file NOT hashed): " +
+    ", .claude/worktrees, and these cache dirs when git ignores them: " +
+    CACHE_SKIP_DIRS.join(", ") +
+    " (runner config inside a skipped cache dir is suspicious). Sections hashed under <path>#<section> (whole file NOT hashed): " +
     RUNNER_CONFIG_SECTIONS.map((s) => s.file + "#" + s.section + " = " + s.rule).join("; ") +
     ". Canonical form: json.dumps(sort_keys=True, separators=(',', ':')). Missing section = ABSENT, missing file = MISSING.";
   return (
@@ -1127,6 +1228,57 @@ function replanResetPrompt(inputs) {
   );
 }
 
+// One inline shell retry loop: the first attempt, then up to 3 retries after
+// 5, 15 and 45 seconds. With fatalRe, a matching stderr stops the loop at once.
+// The loop prints the last stderr and rc=<0|1>.
+function RETRY_SHELL(cmd, fatalRe) {
+  const fatal = fatalRe ? " grep -Eq " + shQuote(fatalRe) + ' "$e" && break;' : "";
+  return (
+    '`e=$(mktemp); rc=1; for d in 0 5 15 45; do sleep $d; if ' +
+    cmd +
+    ' 2>"$e"; then rc=0; break; fi;' +
+    fatal +
+    ' done; cat "$e"; echo rc=$rc` (run it as one Bash call with timeout 600000 ms; the waits alone take 65s)'
+  );
+}
+
+// Deletes every __pycache__ dir, *.pyc/*.pyo file and .pytest_cache dir in the
+// worktree (sparing .git, venvs, node_modules and nested fleet worktrees), and
+// prints purged=<count>. Bytecode is not hashed, so a planted pyc whose header
+// matches a frozen test's mtime and size would run instead of the test.
+const PURGE_FIND =
+  "find <worktree> \\( -name .git -o -name .venv -o -name venv -o -name .tox -o -name .nox -o -name node_modules -o -path '*/.claude/worktrees' \\) -prune -o " +
+  "\\( -type d \\( -name __pycache__ -o -name .pytest_cache \\) -prune -print0 \\) -o \\( -type f \\( -name '*.pyc' -o -name '*.pyo' \\) -print0 \\)";
+const PURGE_CMD =
+  "n=$(" + PURGE_FIND + " | tr -cd '\\0' | wc -c) && " + PURGE_FIND + " | xargs -0 -r rm -rf -- && echo purged=$n";
+// The env every suite run of the frozen tests uses: no bytecode written, no
+// pytest cache (so no stale or planted cache is read either).
+const TEST_ENV = { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" };
+const TEST_ENV_NOTE =
+  "test_env: set these environment variables for every run of the frozen tests and the suite (frozen-test red check included), so no bytecode or pytest cache is written or read. The workflow deletes all bytecode before every hash check and code-judge run.";
+
+function purgePrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: delete Python bytecode and pytest caches. No other change: never touch tracked files, never commit.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one Bash command exactly as written (replace <worktree> with the shell-quoted worktree path), in the foreground. It removes every __pycache__ dir, *.pyc and *.pyo file and .pytest_cache dir, and skips .git, .venv, venv, .tox, .nox, node_modules and .claude/worktrees:\n" +
+    "PURGE: " +
+    PURGE_CMD +
+    "\n" +
+    "purged = the number after `purged=`. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, purged}."
+  );
+}
+
+async function purgeBytecode(label, worktree, phaseName) {
+  const r = await infra(label, purgePrompt({ worktree }), phaseName);
+  if (typeof r.purged !== "number") halt("failed", label + " returned no purged count");
+  gate(label + ": purged " + r.purged + " bytecode/cache paths");
+  return r;
+}
+
 function pushPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: push the approved fleet branch. No edits, no commits.\n" +
@@ -1134,8 +1286,14 @@ function pushPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "1. <branch> must differ from <default_branch>; `git -C <main_worktree> branch --show-current` must equal <branch>; `git -C <main_worktree> rev-parse HEAD` must equal <approved_sha>; `git -C <main_worktree> status --porcelain` must be empty. Any mismatch -> needs_human.\n" +
-    "2. `git -C <main_worktree> push -u origin <branch>`. Never --force, never --no-verify, never push another ref. Rejected as non-fast-forward -> needs_human. An auth or network error -> retry once, then failed with the error; never change remotes or credentials.\n" +
-    "3. remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints.\n" +
+    "2. `git -C <main_worktree> push -u origin <branch>`, retry up to 3 times with backoff 5 15 45 (seconds). Never --force, never --no-verify, never push another ref; never change remotes or credentials. " +
+    "Rejected as non-fast-forward (stderr has `non-fast-forward`, `fetch first` or `[rejected]`) -> needs_human at once, no retry. An auth, network or 5xx error -> retry: " +
+    RETRY_SHELL("git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
+    " Still failing after the 3 retries -> failed with the last error.\n" +
+    "3. remote_head through the GitHub API, not git over the network: <owner>/<name> = <remote_slug>. <gh> = `gh-personal` when `command -v gh-personal` succeeds and `gh-personal api user --jq .login` equals <owner>; else `gh`. " +
+    "remote_head = the output of `<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha` (the branch name goes in the path as is, slashes included), retry up to 3 times with backoff 5 15 45 (seconds): " +
+    RETRY_SHELL("<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha") +
+    " Only when neither gh nor gh-personal is installed: remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints, with the same backoff. remote_head must be the full 40-hex sha.\n" +
     "Return {status, reason, remote_head}."
   );
 }
@@ -1299,11 +1457,28 @@ function checkRole(role, r) {
   if (c !== CONTRACT)
     halt("needs_human", "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded");
   if (r.status !== "ok") return r;
-  for (const k of REQUIRED_ON_OK[role] || [])
+  for (const k of REQUIRED_ON_OK[role] || []) {
     if (!(k in r)) halt("needs_human", "role " + role + " contract drift: missing " + k);
+    if (!typeMatches(SCHEMAS[role] && SCHEMAS[role].properties[k], r[k]))
+      halt("needs_human", "contract drift: " + role + " " + k + " type: got " + jsType(r[k]));
+  }
   if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0)
     halt("needs_human", "contract drift: " + role + " verdict " + r.verdict);
   return r;
+}
+
+function jsType(v) {
+  return v === null ? "null" : Array.isArray(v) ? "array" : typeof v;
+}
+
+// Only array, object and boolean are checked; any other schema type passes.
+function typeMatches(prop, v) {
+  if (!prop || prop.type === undefined) return true;
+  const types = [].concat(prop.type);
+  const checked = types.filter((t) => t === "array" || t === "object" || t === "boolean");
+  if (!checked.length) return true;
+  if (v === null) return types.indexOf("null") >= 0;
+  return checked.indexOf(jsType(v)) >= 0 || types.some((t) => checked.indexOf(t) < 0 && t !== "null" && jsType(v) === t);
 }
 
 function requireOk(who, r) {
@@ -2042,11 +2217,16 @@ async function buildMode(input, date) {
   // test files of those criteria may change; any other key -> needs_human.
   async function freeze(refreeze) {
     freezes++;
+    await purgeBytecode("infra:purge-bytecode:freeze-f" + freezes, mainWt, "Freeze");
     const h = await hasher("hasher:freeze:f" + freezes, mainWt, "hashes", hashedFiles, "Freeze");
     if (lastJudgeFp && !sameFingerprint(lastJudgeFp, h.fingerprint))
       halt("needs_human", "worktree changed between test approval and freeze");
     if (h.hashes.suspicious.length)
-      halt("needs_human", "suspicious path names (':' or '#') in the worktree at freeze: " + h.hashes.suspicious.join(", "));
+      halt(
+        "needs_human",
+        "suspicious paths in the worktree at freeze (':' or '#' in a name, or runner config in a skipped cache dir): " +
+          h.hashes.suspicious.join(", "),
+      );
     if (refreeze && frozen) {
       const allowed = {};
       for (const c of testable) if (refreeze.criteria.indexOf(c.id) >= 0) for (const f of c.test_files) allowed[f] = true;
@@ -2091,7 +2271,7 @@ async function buildMode(input, date) {
   // code
   phase("Code");
   const frozenNote =
-    "frozen_tests holds the criterion test files only (sha256 of the content). frozen_config_sections is one flat map of everything else that is frozen: whole-file runner config and .gitignore files keyed by path (sha256), <path>#<section> (sha256 of a canonicalised test-runner config section), git:info/exclude and git:core.excludesFile (sha256 of ignore-rule files outside the worktree), and symlink:<rel> whose values are link targets, not hashes. Special values: ABSENT (the section did not exist at freeze), MISSING (the file did not exist), UNPARSEABLE (the file could not be parsed at freeze). Every key is read-only. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. code_base_ref is the commit before the first coder round; diff production changes from it.";
+    "frozen_tests holds the criterion test files only (sha256 of the content). frozen_config_sections is one flat map of everything else that is frozen: whole-file runner config and the .gitignore files git reads (not those inside ignored dirs) keyed by path (sha256), <path>#<section> (sha256 of a canonicalised test-runner config section), git:info/exclude and git:core.excludesFile (sha256 of ignore-rule files outside the worktree), and symlink:<rel> whose values are link targets, not hashes. Special values: ABSENT (the section did not exist at freeze), MISSING (the file did not exist), UNPARSEABLE (the file could not be parsed at freeze). Every key is read-only. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. code_base_ref is the commit before the first coder round; diff production changes from it.";
   let coderFindings = [];
   let approvedSha = null;
   let approval = null;
@@ -2100,7 +2280,7 @@ async function buildMode(input, date) {
       halt("needs_human", "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval");
     state.rounds.code++;
     const m = state.rounds.code;
-    reserve(4, "code round " + m);
+    reserve(5, "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
       frozen_tests: testFilesView(frozen, frozenFiles),
@@ -2108,6 +2288,8 @@ async function buildMode(input, date) {
       frozen_tests_note: frozenNote,
       freeze_ref: freezeRef,
       code_base_ref: codeBaseRef,
+      test_env: TEST_ENV,
+      test_env_note: TEST_ENV_NOTE,
     });
     const coder = requireOk(
       "fleet-coder",
@@ -2119,6 +2301,9 @@ async function buildMode(input, date) {
       ),
     );
     for (const s of coder.commits || []) coderCommits.push(s);
+    // purge before the check and the judge; the judge's "before" fingerprint
+    // is the post-purge hasher fingerprint
+    await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");
     const h = await hasher("hasher:post-coder:r" + m, mainWt, "hashes", hashedFiles, "Code");
     const viol = diffHashes(frozen, h.hashes);
     if (viol.length) {
@@ -2196,7 +2381,7 @@ async function buildMode(input, date) {
   phase("PR");
   const push = await infra(
     "infra:push",
-    pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha }),
+    pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug }),
     "PR",
   );
   if (push.remote_head !== approvedSha)
