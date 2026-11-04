@@ -85,9 +85,10 @@ formatter hook may change the bytes, not the content).
 The caller gets only a tiny `plan_ref`: `{branch, plan_commit, ref_path, ref_sha256, repo}`, where
 `ref_sha256` is the sha256 of the committed file bytes. The skill passes it back unchanged.
 
-Since 2.0.3, `plan_facts` is `{allowed_additions, est_diff_lines, test_cmd, repo_obligations}`,
-covered by the seal. Build mode refuses a ref without `test_cmd` and `repo_obligations` (made by
-2.0.2 or earlier) with `needs_human` "plan_ref predates 2.0.3; re-run plan".
+Since 2.0.3, `plan_facts` is
+`{allowed_additions, est_diff_lines, test_cmd, repo_obligations, commands}`, covered by the seal.
+Build mode refuses a ref without `test_cmd`, `repo_obligations` and `commands` (made by 2.0.2 or
+earlier) with `needs_human` "plan_ref predates 2.0.3; re-run plan".
 
 ### Build mode
 
@@ -244,8 +245,39 @@ test in a throwaway worktree. Plan-audit re-scans the gates independently (a mis
 a `plan_defect`) and runs `test_cmd` itself.
 
 The script checks the shape: `test_cmd.command` is a non-empty string; each obligation has a
-unique `id`, a known `kind` and an `instruction`. A `check_cmd` that pushes or runs terraform, tofu,
-tfp, digger or atlantis is refused with `needs_human`, in plan mode and again in build mode.
+unique `id`, a known `kind` and an `instruction`.
+
+#### Command safety
+
+`test_cmd` and every `check_cmd` come from the planner, and the planner reads untrusted ticket and
+issue text. So the commands pass four layers before anything runs:
+
+1. **Allowlist (script code, plan mode).** Every token must be plain: letters, digits and
+   `_ . / : = @ % + , -`. No quote, glob, `; & | $ ( ) < >`, backquote or newline. A `check_cmd`
+   must be exactly one of:
+
+   - `pre-commit run <hook-id> [--all-files] [--hook-stage <stage>] [--from-ref <ref> --to-ref <ref>]`
+   - `make <target>`
+   - `[uv run [--extra <x>]] python[3] <relative/path.py> [plain args]`
+   - `<relative/path/to/script> [plain args]`
+
+   `test_cmd.command` gets the token rule (with `<paths>` allowed) and plain `env`. A `test_cmd`
+   that fails stops the run with `needs_human` (`stop_gate: commands`). A `check_cmd` that fails is
+   not run: the obligation keeps `check_cmd_rejected` and `check_rejected_reason`, the run logs
+   `<id> check_cmd not auto-run (judge-only)`, and the code judge rules on it from the diff.
+
+2. **Reference check (read-only infra step `infra:verify-commands`, plan mode).** An embedded
+   Python program checks that the hook id exists in a tracked `.pre-commit-config.yaml`, the make
+   target in a tracked makefile, or the path is a tracked regular file (not a symlink). A failure
+   makes the obligation judge-only.
+3. **Forbidden words.** The words terraform, tofu, tfp, digger and atlantis, anywhere and in any
+   case, make a command judge-only (or stop the run, for `test_cmd`). The reference check also
+   searches the referenced script, the hook block (and tracked files its entry names) and the make
+   recipe (and tracked files it names).
+4. **Human approval.** Plan mode returns `commands`: every `test_cmd` and `check_cmd`, verbatim,
+   with `rule_source` and `run_by` (`roles`, `workflow`, or `nobody` for judge-only). The skill
+   shows them verbatim in the confirmation question. They live in the sealed `plan_facts`, so the
+   build runs only commands Max saw. Build mode re-applies the allowlist to the sealed commands.
 
 Plan-audit, the coder and the code judge get `repo_obligations` and `test_cmd`; the writers and
 the test judge get `test_cmd`. Every test run uses `test_cmd` with `test_cmd.env` first and
@@ -253,8 +285,14 @@ the test judge get `test_cmd`. Every test run uses `test_cmd` with `test_cmd.env
 `obligations_done`.
 
 After the coder, the bytecode purge and the hash check, the infra step `infra:obligations:r<n>`
-(read-only, `fleet:judge`) runs each `check_cmd` in the main worktree as
-`cd <worktree> && <test_env> timeout 300 bash -c <check_cmd>` and returns `{id, exit_code, tail}`.
+(read-only, `fleet:judge`) first re-runs the reference check against `plan_commit`: a referenced
+file, hook block or recipe that changed since the approved plan, or now contains a forbidden word,
+is refused and counts as a failed check (exit code `null`), whatever the agent reports. It then runs
+each allowed `check_cmd` as its plain argv (no `bash -c`) with no credentials:
+`cd <worktree> && env -i HOME=<scratch>/obligations-home PATH="$PATH" XDG_CACHE_HOME=<caches> LANG=C.UTF-8 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 <test_env> [unshare -rn] timeout 300 <check_cmd>`.
+No `SSH_AUTH_SOCK`, `GH_TOKEN`, `AWS_*`, `CODEBERG_TOKEN` or 1Password session reaches it. When
+`unshare -rn true` works on the host, the command also runs with no network; otherwise the run logs
+"network not isolated". The step returns `{prechecks, network_isolated, results: [{id, exit_code, tail}]}`.
 The script takes the worktree fingerprint before and after it, as for a judge; a change stops the
 run (`stop_gate: fingerprint`). It skips the step when no obligation has a `check_cmd`. The code
 judge gets the results as `obligation_results` and returns `obligations_check: [{id, met, evidence}]`.
@@ -281,7 +319,8 @@ The script pins the role contract, not the prose:
   gate's own reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
-  `obligations`, `contract`, `role` or `cap` (`null` when the run did not stop at one of them).
+  `obligations`, `commands`, `contract`, `role` or `cap` (`null` when the run did not stop at one of
+  them).
 
 ### Models
 
@@ -291,12 +330,12 @@ its role page. Preflight returns those lines; the script parses them. Accepted t
 it. A role agent that dies is retried once on its fallback tier, when one is set; the retry counts
 toward the agent cap. Infra agents (preflight, intake, workspace, branch-scan, stage-plan,
 commit-plan, load-ref, verify, prepare,
-integrate, hasher, obligations, push, write-back) run on `sonnet`.
+integrate, hasher, verify-commands, obligations, push, write-back) run on `sonnet`.
 
 ### Judge separation
 
 Judges, preflight, intake, branch-scan, load-ref, verify, the comment listing and the hasher run as
-the `fleet:judge` agent, which has `Write`, `Edit` and
+the `fleet:judge` agent (as do verify-commands and obligations), which has `Write`, `Edit` and
 `NotebookEdit` disallowed. `Bash` stays, because the code judge must run the suite. The backstop is
 a worktree fingerprint (HEAD, sha256 of `git status --porcelain`, sha256 of `git diff HEAD`) taken
 before and after every judge run. Any difference discards the verdict and returns `needs_human`
@@ -331,6 +370,20 @@ too. It does not catch a change that a judge makes and reverts within its own ru
 - A `.pyc` outside `__pycache__` that git does not ignore shows in `git status`. Purging it between
   the test judge and the freeze trips "worktree changed between test approval and freeze".
 - Not yet executed in the real Workflow runtime; the scenario suite stubs the runtime.
+- Command safety covers the commands the plan names, not the code they run. The test writers, the
+  test judge, the coder and the code judge run `test_cmd` (and the coder an approved `check_cmd`)
+  with the agent's normal environment, credentials included: running tests executes repo code, and
+  that is inherent. What changed in 2.0.3 is that the commands themselves are allowlisted and
+  approved by Max verbatim; only the workflow's own `infra:obligations` step runs a `check_cmd`
+  with no credentials.
+- An approved `make` target, hook or script can still do anything its code does. The reference
+  check only refuses a missing reference, a symlink, a forbidden word, or (at build time) a change
+  since the approved plan.
+- `infra:obligations` keeps `XDG_CACHE_HOME` so pre-commit and uv reuse their caches. With network
+  isolation, a check that must download hooks or packages fails and counts as unmet.
+- The isolation probe (`unshare -rn true`) and the precheck run by an infra agent, as the hasher
+  does. The script enforces the precheck result it is given; it cannot prove the agent ran the
+  command it reports.
 - The hasher program travels in the hasher prompt and the agent runs it verbatim. A transcription
   error would show up as a hash mismatch (fail-closed), not as a silent pass.
 - Whether workflow agents honour a worktree-local `.claude/settings.local.json` is not verified.
@@ -369,7 +422,7 @@ Build mode, `status: "ok"`:
 ```
 
 `status: "awaiting_confirmation"` (plan mode, or build mode after `plan_wrong`) adds `tldr`,
-`plan_diff`, `fleet_size`, `plan_path`, `plan_ref` and `cumulative`; after `plan_wrong` also
+`plan_diff`, `fleet_size`, `plan_path`, `commands`, `plan_ref` and `cumulative`; after `plan_wrong` also
 `proposed_plan_change`, `plan_findings`, `superseded_ref` and `superseded_head`.
 
 ## Tests

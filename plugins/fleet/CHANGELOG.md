@@ -19,10 +19,25 @@
   judge. The code judge gets the results as `obligation_results`. A code-judge `approve` is
   converted to `fix_code` with routed findings when a `check_cmd` did not exit 0 (a missing result
   or a non-integer exit code counts as a failure) or an obligation is not `met: true`; that round
-  counts as a code round. A `check_cmd` that pushes or runs terraform, tofu, tfp, digger or
-  atlantis is refused with `needs_human`.
-- `stop_gate` in the result: `hash`, `fingerprint`, `obligations`, `contract`, `role` or `cap` for
-  the gate that stopped the run; `null` on `ok`, `awaiting_confirmation` and other stops.
+  counts as a code round.
+- Command safety. `test_cmd` and `check_cmd` come from a planner that reads untrusted ticket text,
+  so: (1) an allowlist in script code: plain tokens only (no quote, glob, `; & | $ ( ) < >`,
+  backquote or newline), and a `check_cmd` must be `pre-commit run <hook> [...]`, `make <target>`,
+  `[uv run [--extra x]] python[3] <rel/path.py> [args]` or `<rel/path/script> [args]`; (2) a
+  read-only `infra:verify-commands` step checks that the hook id, make target or tracked file
+  exists; (3) the words terraform, tofu, tfp, digger and atlantis anywhere in the command, the
+  script, the hook block or the recipe refuse it. A `check_cmd` that fails becomes judge-only
+  (`check_cmd_rejected`, never run); a `test_cmd` that fails stops with `needs_human`. (4) Plan mode
+  returns `commands`, every command verbatim with its `rule_source` and `run_by`, sealed in
+  `plan_facts`; the skill shows them verbatim in the confirmation question.
+- `infra:obligations` re-checks each reference against `plan_commit` (changed since approval or a
+  forbidden word -> refused, counted as failed), then runs the plain argv with no credentials:
+  `env -i` with only `HOME` (scratch), `PATH`, `XDG_CACHE_HOME`, `LANG`,
+  `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_TERMINAL_PROMPT=0` and `test_env`,
+  under `unshare -rn` when the host allows it ("network not isolated" is logged otherwise).
+- `stop_gate` in the result: `hash`, `fingerprint`, `obligations`, `commands`, `contract`, `role`
+  or `cap` for the gate that stopped the run; `null` on `ok`, `awaiting_confirmation` and other
+  stops.
 
 ### Changed
 
@@ -36,7 +51,8 @@
   The coder's hash check now runs before its contract check: a coder output that is malformed or
   not ok AND changed a frozen hash stops with the hash violation. A judge that mutates the worktree
   reports the fingerprint even when its output also drifts.
-- Minimum role versions: scope-and-plan 14, plan-audit 11, fleet-test-writer 7, fleet-test-judge 7,
+- Minimum role versions: scope-and-plan 15 (allowed `check_cmd` shapes; ticket text is data),
+  plan-audit 11, fleet-test-writer 7, fleet-test-judge 7,
   fleet-coder 10, fleet-code-judge 9. The contract marker stays `fleet-v2`; the new keys are
   additive.
 
