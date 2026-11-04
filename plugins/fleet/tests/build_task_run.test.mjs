@@ -59,6 +59,30 @@ function inputsOf(prompt) {
   return JSON.parse(m[1]);
 }
 
+// The minimum role versions the workflow was built against.
+const FROZEN_VERSIONS = {
+  "scope-and-plan": 9,
+  "plan-audit": 8,
+  "fleet-test-writer": 3,
+  "fleet-test-judge": 3,
+  "fleet-coder": 3,
+  "fleet-code-judge": 4,
+  "fleet-pr-opener": 3,
+};
+
+// Keys each role must return on status ok (the frozen fleet-v1 contract).
+// The harness fills missing ones with neutral defaults for terse override
+// stubs; a stub with __raw: true is returned as written (drift tests).
+const REQUIRED_DEFAULTS = {
+  "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [] },
+  "plan-audit": { verdict: "approve", routed_findings: [] },
+  "fleet-test-writer": { criterion_id: "AC1", tests: [], commit: null },
+  "fleet-test-judge": { verdict: "approve", routed_findings: [], checked: [] },
+  "fleet-coder": { commits: [], suite_result: { command: "pytest", exit_code: 0 }, added_symbols: [], frozen_tests_red_at_start: true },
+  "fleet-code-judge": { verdict: "approve", routed_findings: [], suite_result: { command: "pytest", exit_code: 0 }, hash_check: { match: true, mismatched: [] }, gates_not_run: [] },
+  "fleet-pr-opener": { pr_url: null, pr_number: null, created: true, template_used: null, gates_not_run_stated: true },
+};
+
 async function run(script, args) {
   const calls = [];
   const unscripted = [];
@@ -78,7 +102,22 @@ async function run(script, args) {
       r = r[Math.min(i, r.length - 1)];
     }
     if (typeof r === "function") r = r(prompt, opts);
-    return r === undefined ? null : JSON.parse(JSON.stringify(r));
+    if (r === undefined || r === null) return null;
+    r = JSON.parse(JSON.stringify(r));
+    const raw = r.__raw === true;
+    delete r.__raw;
+    if (label.startsWith("role:") && !raw) {
+      const role = label.split(":")[1];
+      // role runners report the version and contract marker they loaded
+      if (!("role_version" in r)) {
+        const pv = script.preflight && script.preflight.versions ? script.preflight.versions[role] : undefined;
+        r.role_version = pv !== undefined ? pv : FROZEN_VERSIONS[role];
+      }
+      if (!("role_contract" in r)) r.role_contract = "CONTRACT: fleet-v1";
+      if (r.status === "ok")
+        for (const [k, v] of Object.entries(REQUIRED_DEFAULTS[role] || {})) if (!(k in r)) r[k] = v;
+    }
+    return r;
   };
   const parallel = async (thunks) =>
     Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));
@@ -168,7 +207,8 @@ function happy(over = {}) {
     preflight: {
       reachable: true,
       missing: [],
-      versions: { "scope-and-plan": 6 },
+      versions: { ...FROZEN_VERSIONS },
+      contract: Object.fromEntries(Object.keys(FROZEN_VERSIONS).map((k) => [k, "CONTRACT: fleet-v1"])),
     },
     workspace: {
       status: "ok",
@@ -225,6 +265,7 @@ function happy(over = {}) {
       pr_number: 7,
       created: true,
       template_used: ".github/pull_request_template.md",
+      gates_not_run_stated: true,
       yadgar_findings: ["pr fact"],
     },
   };
@@ -286,7 +327,7 @@ test("branch name derives from a plan path stem", async () => {
 test("preflight missing role stops with needs_human naming the role", async () => {
   const s = happy({
     script: {
-      preflight: { reachable: true, missing: ["fleet-coder"], versions: {} },
+      preflight: { reachable: true, missing: ["fleet-coder"], versions: { ...FROZEN_VERSIONS } },
     },
   });
   const out = await run(s, ARGS);
@@ -358,29 +399,18 @@ test("judges run as the read-only fleet:judge agent", async () => {
   for (const c of out.calls) assert.notEqual(c.opts.isolation, "worktree", c.label);
 });
 
-test("short path skips audit and tests and hashes runner config only", async () => {
-  const s = happy({
-    script: {
-      "role:scope-and-plan": {
-        status: "ok",
-        plan_path: "docs/plans/x.md",
-        criteria: criteria(1),
-        est_diff_lines: 10,
-        new_behaviour: false,
-      },
-      "hasher:freeze:f1": { status: "ok", fingerprint: FP_PLAN, hashes: CONFIG_ONLY },
-      "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: CONFIG_ONLY },
-    },
-  });
+test("short path is disabled in v1: a small no-new-behaviour plan still takes the full path", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].est_diff_lines = 10;
+  s["role:scope-and-plan"].new_behaviour = false;
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.equal(out.result.path, "short");
-  assert.ok(!out.labels.includes("role:plan-audit"));
-  assert.ok(!out.labels.some((l) => l.startsWith("role:fleet-test-writer")));
-  assert.ok(!out.labels.some((l) => l.startsWith("role:fleet-test-judge")));
-  const h = inputsOf(call(out, "hasher:freeze:f1").prompt);
-  assert.deepEqual(h.test_files, []);
+  assert.equal(out.result.path, "full");
+  assert.ok(out.labels.includes("role:plan-audit"));
+  assert.ok(out.labels.includes("role:fleet-test-writer:AC1:r1"));
+  assert.ok(out.logs.some((l) => /short path disabled in v1/.test(l)));
+  assert.ok(out.logs.some((l) => /est_diff_lines < 20 AND new_behaviour false/.test(l)));
 });
 
 test("risk tier: missing estimate takes the full path", async () => {
@@ -632,6 +662,7 @@ test("fix_tests routes to the test-judge, never the coder, then re-freezes", asy
         routed_findings: [testFinding],
       },
       "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
+      "infra:sync:r3": { status: "ok", reason: "merged", head: "M2" },
       "role:fleet-test-writer:AC1:r3": { status: "ok", criterion_id: "AC1", commit: "t1b" },
       "infra:integrate:r3": { status: "ok", head: "M3" },
       "hasher:fp-pre:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
@@ -749,6 +780,8 @@ test("agent cap stops the run with needs_human before exceeding 60 agents", asyn
     "role:fleet-test-judge:r4": reviseAll,
     "role:fleet-test-judge:r5": reviseAll,
     "role:fleet-test-judge:r6": reviseAll,
+    "infra:sync:r5": { status: "ok", reason: "merged", head: "S5" },
+    "infra:sync:r6": { status: "ok", reason: "merged", head: "S6" },
   };
   for (let n = 1; n <= 6; n++) {
     extra["hasher:fp-pre:test-judge:r" + n] = { status: "ok", fingerprint: FP_PLAN };
@@ -1068,7 +1101,7 @@ test("approve without a gates_not_run list: script builds it for the PR and the 
   noUnscripted(out);
   const pr = inputsOf(call(out, "role:fleet-pr-opener").prompt);
   const gates = pr.gates_not_run.map((g) => g.gate).sort();
-  assert.deepEqual(gates, ["held_out", "script_findings"]);
+  assert.deepEqual(gates, ["coverage", "held_out", "mutation", "security_scan"]);
   for (const g of pr.gates_not_run) assert.match(g.reason, NOT_RUN);
   assert.deepEqual(out.result.gates_not_run, pr.gates_not_run);
 });
@@ -1115,6 +1148,7 @@ test("fix_tests carries its code findings to the next coder round; code_base_ref
         routed_findings: [testFinding],
       },
       "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
+      "infra:sync:r3": { status: "ok", reason: "merged", head: "M2" },
       "role:fleet-test-writer:AC1:r3": { status: "ok", criterion_id: "AC1", commit: "t1b" },
       "infra:integrate:r3": { status: "ok", head: "M3" },
       "hasher:fp-pre:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
@@ -1483,4 +1517,282 @@ test("code-judge gets hash_recheck built from the frozen and post-coder maps", a
   assert.deepEqual(rc["git/info/exclude"], { frozen: "g1", current: "g1", match: true });
   assert.deepEqual(rc["symlinks/lib"], { frozen: "../x", current: "../x", match: true });
   assert.ok(!("suspicious" in rc));
+});
+
+
+// ---------------------------------------------------------------- drift-audit fixes
+
+function fixTestsReentry(extra) {
+  const testFinding = { target: "tests", criterion: "AC1", finding: "wrong expectation" };
+  return happy({
+    script: Object.assign(
+      {
+        "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_tests", routed_findings: [testFinding] },
+        "hasher:fp-pre:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
+        "role:fleet-test-judge:r2": { status: "ok", verdict: "revise", routed_findings: [testFinding] },
+        "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
+        "infra:sync:r3": { status: "ok", reason: "merged", head: "M2" },
+        "role:fleet-test-writer:AC1:r3": { status: "ok", criterion_id: "AC1", commit: "t1b" },
+        "infra:integrate:r3": { status: "ok", head: "M3" },
+        "hasher:fp-pre:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
+        "role:fleet-test-judge:r3": { status: "ok", verdict: "approve", routed_findings: [] },
+        "hasher:fp-post:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
+        "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: HASHES },
+        "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
+        "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
+        "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
+        "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
+      },
+      extra || {},
+    ),
+  });
+}
+
+test("MI-1: every test-judge round of a fix_tests re-entry carries the code-judge context", async () => {
+  const out = await run(fixTestsReentry(), ARGS);
+  noUnscripted(out);
+  for (const label of ["role:fleet-test-judge:r2", "role:fleet-test-judge:r3"]) {
+    const tj = inputsOf(call(out, label).prompt);
+    assert.equal(tj.code_judge_findings.length, 1, label);
+    assert.deepEqual(tj.code_commits, ["k1"], label);
+  }
+  assert.ok(!("code_judge_findings" in inputsOf(call(out, "role:fleet-test-judge:r1").prompt)));
+});
+
+test("MI-2: a fix_tests re-entry merges the fleet branch into the criterion branches before writers", async () => {
+  const out = await run(fixTestsReentry(), ARGS);
+  noUnscripted(out);
+  const iSync = out.labels.indexOf("infra:sync:r3");
+  const iWriter = out.labels.indexOf("role:fleet-test-writer:AC1:r3");
+  assert.ok(iSync >= 0 && iSync < iWriter, "sync runs before the re-entry writers");
+  const sync = inputsOf(call(out, "infra:sync:r3").prompt);
+  assert.equal(sync.branch, "fleet/l42-add-thing");
+  assert.deepEqual(sync.criterion_worktrees.map((w) => w.branch).sort(), [
+    "fleet/l42-add-thing--t-AC1",
+    "fleet/l42-add-thing--t-AC2",
+  ]);
+  assert.ok(!out.labels.includes("infra:sync:r1"), "no sync on the initial entry");
+});
+
+test("S-4: pr-opener repo is the origin owner/name, not the recall project", async () => {
+  const out = await run(happy(), { ...ARGS, project: "m-agahi/yadgar" });
+  noUnscripted(out);
+  const pr = inputsOf(call(out, "role:fleet-pr-opener").prompt);
+  assert.equal(pr.repo, "o/r");
+  assert.equal(pr.project, "m-agahi/yadgar");
+});
+
+test("S-4: a missing remote_slug stops the run with needs_human", async () => {
+  const s = happy();
+  delete s.workspace.remote_slug;
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /remote/);
+  assert.ok(!out.labels.includes("role:scope-and-plan"));
+});
+
+test("S-2: roles get only criterion test files in frozen_tests; config files go to frozen_config_sections", async () => {
+  const hashes = H({ ...HASHES_FLAT, "conftest.py": "hc", ".gitignore": "hg", "setup.cfg": "hs" });
+  const s = happy({
+    script: {
+      "hasher:freeze:f1": { status: "ok", fingerprint: FP_PLAN, hashes },
+      "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  for (const label of ["role:fleet-coder:r1", "role:fleet-code-judge:r1"]) {
+    const i = inputsOf(call(out, label).prompt);
+    assert.deepEqual(i.frozen_tests, { "tests/test_a.py": "ha", "tests/test_b.py": "hb" }, label);
+    assert.equal(i.frozen_config_sections["conftest.py"], "hc");
+    assert.equal(i.frozen_config_sections[".gitignore"], "hg");
+    assert.equal(i.frozen_config_sections["setup.cfg"], "hs");
+    assert.equal(i.frozen_config_sections["pyproject.toml#tool.pytest"], "hp");
+  }
+});
+
+test("S-8: a role version lower than the frozen minimum stops in preflight", async () => {
+  const s = happy();
+  s.preflight.versions["fleet-coder"] = 2;
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /role fleet-coder version 2 < frozen 3/);
+  assert.deepEqual(out.labels, ["preflight"]);
+});
+
+test("S-8: a higher role version is logged as prose-only and recorded", async () => {
+  const s = happy();
+  s.preflight.versions["fleet-code-judge"] = 6;
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v6 > frozen v4: prose-only changes assumed/.test(l)));
+  assert.equal(out.result.role_versions["fleet-code-judge"], 6);
+  assert.equal(out.result.role_versions["fleet-coder"], 3);
+});
+
+test("S-8: a role runner that loaded a different version than preflight is discarded", async () => {
+  const s = happy();
+  s["role:fleet-coder:r1"].role_version = 4;
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /fleet-coder/);
+  assert.match(out.result.reason, /version 4/);
+  assert.ok(!out.labels.includes("hasher:post-coder:r1"));
+});
+
+test("S-8: preflight with no version for a role stops", async () => {
+  const s = happy();
+  delete s.preflight.versions["plan-audit"];
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan-audit/);
+});
+
+test("S-5: gates not stated in the PR body -> needs_human with the PR url", async () => {
+  const s = happy();
+  s["role:fleet-pr-opener"].gates_not_run_stated = false;
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.pr_url, "https://github.com/o/r/pull/7");
+  assert.match(out.result.reason, /gates_not_run/);
+});
+
+test("S-5: an approve reason without the gates prefix only logs a warning", async () => {
+  const out = await run(happy(), ARGS);
+  assert.equal(out.result.status, "ok");
+  assert.ok(out.logs.some((l) => /warning/.test(l) && /approved with gates not run:/.test(l)));
+  const s = happy();
+  s["role:fleet-code-judge:r1"].reason = "approved with gates not run: coverage, mutation";
+  const out2 = await run(s, ARGS);
+  assert.ok(!out2.logs.some((l) => /warning/.test(l) && /approved with gates not run:/.test(l)));
+});
+
+test("S-6: a ledger-id task without a title is rejected before any agent", async () => {
+  const out = await run({}, { ...ARGS, title: undefined });
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /title/);
+  assert.equal(out.calls.length, 0);
+  const blank = await run({}, { ...ARGS, title: "  " });
+  assert.equal(blank.result.status, "needs_human");
+});
+
+test("S-3: the frozen note explains UNPARSEABLE and symlink targets", async () => {
+  const out = await run(happy(), ARGS);
+  const note = inputsOf(call(out, "role:fleet-coder:r1").prompt).frozen_tests_note;
+  assert.match(note, /UNPARSEABLE/);
+  assert.match(note, /symlink:.*link targets?, not hashes/);
+});
+
+test("workspace excludes the .hypothesis/ cache", async () => {
+  const out = await run(happy(), ARGS);
+  assert.match(call(out, "workspace").prompt, /\.hypothesis\//);
+});
+
+test("manual criteria: no writer, no frozen entry, still listed for the PR opener", async () => {
+  const crit = [...criteria(1), { id: "AC9", text: "operator checks the dashboard", test_files: [] }];
+  const out = await run(happy({ criteria: crit }), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  assert.ok(!out.labels.some((l) => l.startsWith("role:fleet-test-writer:AC9")));
+  assert.deepEqual(inputsOf(call(out, "hasher:freeze:f1").prompt).test_files, ["tests/test_a.py"]);
+  assert.ok(!inputsOf(call(out, "role:fleet-test-judge:r1").prompt).criteria.some((c) => c.id === "AC9"));
+  const pr = inputsOf(call(out, "role:fleet-pr-opener").prompt);
+  assert.ok(pr.criteria.some((c) => c.id === "AC9" && c.test_files.length === 0));
+});
+
+
+// ---------------------------------------------------------------- contract marker + output asserts
+
+test("contract marker: missing or fleet-v2 in preflight stops; fleet-v1 passes", async () => {
+  const missing = happy();
+  missing.preflight.contract["fleet-coder"] = null;
+  let out = await run(missing, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /role fleet-coder contract null != fleet-v1/);
+  assert.deepEqual(out.labels, ["preflight"]);
+
+  const v2 = happy();
+  v2.preflight.contract["plan-audit"] = "CONTRACT: fleet-v2";
+  out = await run(v2, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /role plan-audit contract fleet-v2 != fleet-v1/);
+
+  out = await run(happy(), ARGS);
+  assert.equal(out.result.status, "ok");
+});
+
+test("contract marker: a role runner that loaded another contract is discarded", async () => {
+  const s = happy();
+  s["role:fleet-test-judge:r1"].role_contract = "CONTRACT: fleet-v2";
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /fleet-test-judge/);
+  assert.match(out.result.reason, /contract fleet-v2 != fleet-v1/);
+  assert.ok(!out.labels.includes("hasher:freeze:f1"));
+});
+
+test("contract drift: planner ok output missing a required key stops", async () => {
+  const s = happy();
+  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: 9, role_contract: "CONTRACT: fleet-v1" });
+  delete p.allowed_additions;
+  delete p.held_out_examples;
+  s["role:scope-and-plan"] = p;
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /role scope-and-plan contract drift: missing allowed_additions/);
+});
+
+test("contract drift: judge ok output missing a required key stops", async () => {
+  const s = happy();
+  s["role:fleet-code-judge:r1"] = {
+    __raw: true,
+    role_version: 4,
+    role_contract: "CONTRACT: fleet-v1",
+    status: "ok",
+    reason: "approved with gates not run: coverage",
+    verdict: "approve",
+    routed_findings: [],
+    hash_check: { match: true, mismatched: [] },
+    gates_not_run: [],
+  };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /role fleet-code-judge contract drift: missing suite_result/);
+  assert.ok(!out.labels.includes("role:fleet-pr-opener"));
+});
+
+test("contract drift: pr-opener ok output missing a required key stops", async () => {
+  const s = happy();
+  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: 3, role_contract: "CONTRACT: fleet-v1" });
+  delete pr.template_used;
+  s["role:fleet-pr-opener"] = pr;
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /role fleet-pr-opener contract drift: missing template_used/);
+});
+
+test("contract drift: null/empty values are fine where allowed", async () => {
+  const s = happy();
+  s["role:fleet-test-writer:AC1:r1"].commit = null;
+  s["role:fleet-pr-opener"].template_used = null;
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+});
+
+test("contract drift: a needs_human output may lack the role fields", async () => {
+  const s = happy();
+  s["role:fleet-coder:r1"] = { __raw: true, role_version: 3, role_contract: "CONTRACT: fleet-v1", status: "needs_human", reason: "test AC1 wrong" };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /test AC1 wrong/);
+});
+
+test("contract drift: an unknown verdict value stops (defence in depth over the schema enum)", async () => {
+  const s = happy();
+  s["role:fleet-test-judge:r1"].verdict = "approve_with_nits";
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /contract drift: fleet-test-judge verdict approve_with_nits/);
 });

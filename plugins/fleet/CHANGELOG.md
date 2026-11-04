@@ -19,5 +19,7 @@
   dies); infra agents on sonnet.
 - Hasher returns separate files/sections/git/symlinks maps plus a suspicious-name list; the code
   judge gets a `hash_recheck` report.
+- Role contract pinning: minimum role versions, `CONTRACT: fleet-v1` marker, required keys and
+  verdict enums checked in code. The short path is disabled in v1.
 - `fleet:judge` read-only agent for judges, preflight and hasher.
 - `node --test` scenario suite for the workflow logic and the hasher program.

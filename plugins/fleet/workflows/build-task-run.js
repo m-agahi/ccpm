@@ -34,11 +34,43 @@ const DEFAULT_TIER = "sonnet";
 const INFRA_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks"];
+// Minimum role-page versions this script was built against. Names and enums
+// are frozen at these versions; a higher version is assumed to change prose
+// only and is logged; a lower one (stale or rolled back) stops the run.
+const EXPECTED_VERSIONS = {
+  "scope-and-plan": 9,
+  "plan-audit": 8,
+  "fleet-test-writer": 3,
+  "fleet-test-judge": 3,
+  "fleet-coder": 3,
+  "fleet-code-judge": 4,
+  "fleet-pr-opener": 3,
+};
+// Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
+const CONTRACT = "fleet-v1";
+const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
+// Keys each role must return when status is "ok" (checked with `key in obj`;
+// null or empty values are allowed). A missing key is contract drift.
+const REQUIRED_ON_OK = {
+  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples"],
+  "plan-audit": ["verdict", "routed_findings"],
+  "fleet-test-writer": ["criterion_id", "tests", "commit"],
+  "fleet-test-judge": ["verdict", "routed_findings", "checked"],
+  "fleet-coder": ["commits", "suite_result", "added_symbols", "frozen_tests_red_at_start"],
+  "fleet-code-judge": ["verdict", "routed_findings", "suite_result", "hash_check", "gates_not_run"],
+  "fleet-pr-opener": ["pr_url", "pr_number", "created", "template_used", "gates_not_run_stated"],
+};
+const VERDICTS = {
+  "plan-audit": ["approve", "untestable_criteria", "plan_defect"],
+  "fleet-test-judge": ["approve", "revise"],
+  "fleet-code-judge": ["approve", "fix_code", "fix_tests", "plan_wrong"],
+};
+const GATES_PREFIX = "approved with gates not run:";
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 const MAX_AGENTS = 60;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
 const MAX_CODE_ROUNDS = 3; // total coder rounds; a fix_tests detour counts as one
-const SHORT_PATH_MAX_DIFF = 20;
+const SHORT_PATH_MAX_DIFF = 20; // tier is computed and logged; the short path is disabled in v1
 
 // v1 runs no held-out examples and no mutation/coverage/scanner gates. Judges
 // get these explicit not_run markers, never an empty list: a judge must not
@@ -277,11 +309,13 @@ function roleSchema(extra) {
   return {
     type: "object",
     additionalProperties: true,
-    required: ["status", "reason"],
+    required: ["status", "reason", "role_version", "role_contract"],
     properties: Object.assign(
       {
         status: { type: "string", enum: ["ok", "needs_human", "failed"] },
         reason: STR,
+        role_version: { type: ["integer", "null"] },
+        role_contract: STR_OR_NULL,
         artefacts: ANY_ARRAY,
         yadgar_findings: ANY_ARRAY,
       },
@@ -352,6 +386,7 @@ const PREFLIGHT_SCHEMA = {
     missing: { type: "array", items: STR },
     versions: { type: "object" },
     dispatch: { type: "object", additionalProperties: { type: ["string", "null"] } },
+    contract: { type: "object", additionalProperties: { type: ["string", "null"] } },
     reason: STR,
   },
 };
@@ -438,8 +473,10 @@ function stripHeldOut(v) {
 function gatesNotRun(judgeList) {
   if (Array.isArray(judgeList) && judgeList.length) return judgeList;
   return [
+    { gate: "mutation", reason: SCRIPT_FINDINGS_NOT_RUN.reason },
+    { gate: "coverage", reason: SCRIPT_FINDINGS_NOT_RUN.reason },
+    { gate: "security_scan", reason: SCRIPT_FINDINGS_NOT_RUN.reason },
     { gate: "held_out", reason: HELD_OUT_NOT_RUN.reason },
-    { gate: "script_findings", reason: SCRIPT_FINDINGS_NOT_RUN.reason },
   ];
 }
 
@@ -500,8 +537,11 @@ function diffHashes(frozen, now) {
 // Role view of the non-file maps: one flat map with keys path#section,
 // git:<key>, symlink:<rel> (the shape the role prompts read). Files go to
 // frozen_tests, so these prefixes cannot collide with a real path here.
-function configView(h) {
+function configView(h, testFiles) {
   const o = {};
+  const tests = {};
+  for (const f of testFiles || []) tests[f] = true;
+  for (const k of Object.keys((h && h.files) || {})) if (!tests[k]) o[k] = h.files[k];
   for (const m of ["sections", "git", "symlinks"])
     for (const k of Object.keys((h && h[m]) || {})) o[keyName(m, k)] = h[m][k];
   return o;
@@ -525,6 +565,19 @@ function hashRecheck(frozen, now) {
   }
   if (now && now.suspicious && now.suspicious.length) out.suspicious = now.suspicious.slice();
   return out;
+}
+
+// Criterion test files only, for the roles' frozen_tests.
+function testFilesView(h, testFiles) {
+  const o = {};
+  for (const f of testFiles || []) if (h && h.files && f in h.files) o[f] = h.files[f];
+  return o;
+}
+
+function contractOf(line) {
+  if (typeof line !== "string") return null;
+  const m = CONTRACT_RE.exec(line);
+  return m ? m[1] : null;
 }
 
 function countKeys(h) {
@@ -568,6 +621,7 @@ function rolePrompt(role, inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Return the role's final JSON object through the StructuredOutput tool; the schema enforces its keys. " +
+    "Also set role_version to the `version` field the call returned, and role_contract to the raw `CONTRACT:` line of the loaded content (null when there is none). " +
     'If the role prompt cannot be loaded, return {"status": "failed", "reason": "role ' +
     role +
     ' not loadable"}.'
@@ -585,7 +639,8 @@ function preflightPrompt(inputs) {
     "reachable=false when the tool is absent or every call fails with a transport, auth or connection error. " +
     "versions maps each found pattern to its `version`. " +
     "dispatch maps each found pattern to the first line of its `content` that matches `DISPATCH: model=<tier> (fallback=<tier>)` (the fallback part is optional), copied raw; null when no line matches. " +
-    "Return {reachable, missing, versions, dispatch, reason}."
+    "contract maps each found pattern to the first line of its `content` that starts with `CONTRACT:`, copied raw; null when none. " +
+    "Return {reachable, missing, versions, dispatch, contract, reason}."
   );
 }
 
@@ -598,7 +653,7 @@ function workspacePrompt(inputs) {
     "Steps (use `git -C`):\n" +
     "1. `git -C <repo> fetch origin --prune`.\n" +
     "2. default_branch = `git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD` without the `origin/` prefix; if that fails, `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` run in <repo>.\n" +
-    "3. Keep fleet files out of git status: if `git -C <repo> check-ignore -q .claude/worktrees/probe` fails, append the line `.claude/worktrees/` to `$(git -C <repo> rev-parse --path-format=absolute --git-common-dir)/info/exclude`. Do the same for `.claude/settings.local.json` (probe that path), and for the test caches `__pycache__/`, `.pytest_cache/`, `.coverage` (a judge's test run must not leave untracked noise). Never edit a tracked .gitignore.\n" +
+    "3. Keep fleet files out of git status: if `git -C <repo> check-ignore -q .claude/worktrees/probe` fails, append the line `.claude/worktrees/` to `$(git -C <repo> rev-parse --path-format=absolute --git-common-dir)/info/exclude`. Do the same for `.claude/settings.local.json` (probe that path), and for the test caches `__pycache__/`, `.pytest_cache/`, `.coverage`, `.hypothesis/` (a judge's test run must not leave untracked noise). Never edit a tracked .gitignore.\n" +
     "4. Branch state: `gh pr list --head <branch> --state all --json number,state` in <repo>. MERGED or CLOSED -> status needs_human.\n" +
     "5. main_worktree: if it exists and `git -C <main_worktree> branch --show-current` equals <branch>, reuse it (created=false). If the path exists otherwise -> needs_human. If absent: local branch <branch> exists -> `git -C <repo> worktree add <main_worktree> <branch>`; else remote branch exists (`git -C <repo> ls-remote --exit-code --heads origin <branch>`) -> `git -C <repo> worktree add -b <branch> <main_worktree> origin/<branch>`; else `git -C <repo> worktree add --no-track -b <branch> <main_worktree> origin/<default_branch>` (created=true).\n" +
     "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths.\n" +
@@ -633,6 +688,17 @@ function integratePrompt(inputs) {
     "2. For each name in `criterion_branches`, in order: if `git -C <main_worktree> merge-base --is-ancestor <name> HEAD` succeeds, skip it; else `git -C <main_worktree> merge --no-ff --no-edit <name>`. On conflict: `git -C <main_worktree> merge --abort`, then needs_human naming the conflicting files.\n" +
     "3. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
     "Return {status, reason, head, merged}."
+  );
+}
+
+function syncPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: bring each criterion test branch up to the main fleet branch (the coder's commits) before a fix_tests re-entry. No edits. Never push. Never --no-verify; no Co-Authored-By trailer.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "For each entry of `criterion_worktrees`: `git -C <entry.path> branch --show-current` must equal entry.branch and `git -C <entry.path> status --porcelain` must be empty, else needs_human. If `git -C <entry.path> merge-base --is-ancestor <branch> HEAD` succeeds, skip it; else `git -C <entry.path> merge --no-edit <branch>`. On conflict: `git -C <entry.path> merge --abort`, then needs_human naming the files.\n" +
+    "Return {status, reason, merged}."
   );
 }
 
@@ -697,6 +763,7 @@ const state = {
   pr: null,
   gatesNotRun: null,
   models: {},
+  roleVersions: {},
 };
 
 function gate(msg) {
@@ -754,7 +821,28 @@ async function callRole(role, label, inputs, phaseName, agentType) {
   state.agents++;
   const r = await roleAgent(role, label, rolePrompt(role, inputs), opts);
   if (r == null) halt("failed", "agent " + label + " returned no result");
+  checkRole(role, r);
   collect(role, r);
+  return r;
+}
+
+// Contract checks on every role result: the runner loaded the same version
+// and contract marker that preflight saw, and an ok result carries every
+// required key and a known verdict.
+function checkRole(role, r) {
+  if (r.role_version !== state.roleVersions[role])
+    halt(
+      "needs_human",
+      "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded",
+    );
+  const c = contractOf(r.role_contract);
+  if (c !== CONTRACT)
+    halt("needs_human", "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded");
+  if (r.status !== "ok") return r;
+  for (const k of REQUIRED_ON_OK[role] || [])
+    if (!(k in r)) halt("needs_human", "role " + role + " contract drift: missing " + k);
+  if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0)
+    halt("needs_human", "contract drift: " + role + " verdict " + r.verdict);
   return r;
 }
 
@@ -810,6 +898,7 @@ function finish(status, reason) {
     rounds: { tests: state.rounds.tests, code: state.rounds.code },
     agents: state.agents,
     gates_not_run: state.gatesNotRun,
+    role_versions: state.roleVersions,
     gate_log: state.gateLog,
     yadgar_findings: state.findings,
   };
@@ -827,6 +916,8 @@ async function main(input) {
     stop("needs_human", "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)");
 
   const names = deriveNames(task, input.title);
+  if (!names.planPath && (typeof input.title !== "string" || !input.title.trim()))
+    stop("needs_human", "a ledger-id task needs args.title (the skill reads it from the ledger); none given");
   if (!names.taskId) stop("needs_human", "task id derives to an empty slug: " + JSON.stringify(task));
   const key = names.taskId + "-" + names.slug;
   const branch = "fleet/" + key;
@@ -847,6 +938,19 @@ async function main(input) {
   const missing = pre.missing || [];
   if (missing.length) halt("needs_human", "role missing in yadgar: " + missing.join(", "));
   gate("preflight: all " + ROLES.length + " roles loadable");
+  const versions = pre.versions || {};
+  const contracts = pre.contract || {};
+  for (const role of ROLES) {
+    const got = versions[role];
+    const want = EXPECTED_VERSIONS[role];
+    if (typeof got !== "number")
+      halt("needs_human", "role " + role + " version missing in preflight (frozen minimum " + want + ")");
+    if (got < want) halt("needs_human", "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back)");
+    if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");
+    state.roleVersions[role] = got;
+    const c = contractOf(contracts[role]);
+    if (c !== CONTRACT) halt("needs_human", "role " + role + " contract " + c + " != " + CONTRACT);
+  }
   const dispatchLines = pre.dispatch || {};
   for (const role of ROLES) {
     const t = parseDispatch(dispatchLines[role]);
@@ -876,8 +980,11 @@ async function main(input) {
   );
   if (!ws.default_branch || !ws.base_ref) halt("failed", "workspace returned no default_branch/base_ref");
   const defaultBranch = ws.default_branch;
-  const project = input.project || ws.remote_slug;
-  if (!project) halt("needs_human", "no project (<owner>/<repo>): pass args.project");
+  // remote_slug (owner/name of origin) is the GitHub repo for the planner and
+  // the PR; project is only the recall scope
+  if (!ws.remote_slug) halt("needs_human", "workspace found no origin remote owner/name (remote_slug)");
+  const remoteSlug = ws.remote_slug;
+  const project = input.project || remoteSlug;
   gate("workspace: " + (ws.created ? "created " : "reused ") + mainWt + " off " + defaultBranch + " @ " + ws.base_ref);
 
   const common = { project, worktree: mainWt, branch, default_branch: defaultBranch, scratch_dir: scratch };
@@ -893,7 +1000,7 @@ async function main(input) {
         task,
         title: input.title || null,
         plan_path: names.planPath,
-        repo: project,
+        repo: remoteSlug,
         base_ref: ws.base_ref,
         date,
         mode: "commit=false",
@@ -927,25 +1034,26 @@ async function main(input) {
   if (overlaps.length) halt("needs_human", "test_files overlap across criteria: " + overlaps.join("; "));
   gate("plan: " + plan.plan_path + ", " + criteria.length + " criteria, test files disjoint");
 
-  // 4. risk tier
-  const shortPath =
+  // 4. risk tier: computed and logged; the short path is disabled in v1
+  // because no role prompt supports a coder without frozen criterion tests
+  const wouldBeShort =
     typeof plan.est_diff_lines === "number" &&
     plan.est_diff_lines < SHORT_PATH_MAX_DIFF &&
     plan.new_behaviour === false;
-  state.path = shortPath ? "short" : "full";
+  state.path = "full";
   gate(
-    "risk tier: est_diff_lines=" +
+    "risk tier (short = est_diff_lines < 20 AND new_behaviour false): est_diff_lines=" +
       plan.est_diff_lines +
       ", new_behaviour=" +
       plan.new_behaviour +
       " -> " +
-      state.path +
-      " path",
+      (wouldBeShort ? "short" : "full") +
+      "; short path disabled in v1 -> full path",
   );
 
   const planCtx = { plan_path: plan.plan_path };
   let testable = [];
-  if (!shortPath) {
+  {
     // 5. plan-audit
     const audit = requireOk(
       "plan-audit",
@@ -987,7 +1095,7 @@ async function main(input) {
       plan_path: plan.plan_path,
       criterion_worktrees: testable.map((c) => critWt[c.id]),
     }),
-    shortPath ? "Plan" : "Tests",
+    "Tests",
   );
   if (!prep.head) halt("failed", "infra:prepare returned no head");
   const planHead = prep.head;
@@ -1012,7 +1120,22 @@ async function main(input) {
       const judgeFirst = !!codeFindings && i === 0;
       const roundOut = [];
       if (!judgeFirst) {
-        reserve(pending.length + 4, "test round " + n);
+        const reentry = !!codeFindings;
+        reserve(pending.length + 4 + (reentry ? 1 : 0), "test round " + n);
+        if (reentry)
+          // writers on a fix_tests re-entry build on the coder's commits
+          await infra(
+            "infra:sync:r" + n,
+            syncPrompt({
+              branch,
+              criterion_worktrees: testable.map((c) => ({
+                criterion: c.id,
+                path: critWt[c.id].path,
+                branch: critWt[c.id].branch,
+              })),
+            }),
+            "Tests",
+          );
         state.agents += pending.length;
         const results = await parallel(
           pending.map((p) => () => {
@@ -1038,6 +1161,7 @@ async function main(input) {
         results.forEach((r, idx) => {
           const cid = pending[idx].criterion.id;
           if (r == null) halt("failed", "test writer " + cid + " r" + n + " returned no result");
+          checkRole("fleet-test-writer", r);
           collect("fleet-test-writer", r);
           requireOk("fleet-test-writer " + cid, r);
           writerOut[cid] = stripHeldOut(r);
@@ -1064,7 +1188,8 @@ async function main(input) {
         writer_outputs: judgeFirst ? testable.map((c) => writerOut[c.id]).filter(Boolean) : roundOut,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
       });
-      if (judgeFirst) {
+      // every round of a fix_tests re-entry carries the code-judge context
+      if (codeFindings) {
         judgeInputs.code_judge_findings = codeFindings;
         judgeInputs.code_commits = coderCommits.slice();
       }
@@ -1123,20 +1248,18 @@ async function main(input) {
     gate("freeze f" + freezes + " at " + freezeRef + ": " + countKeys(frozen) + " hashed keys");
   }
 
-  if (!shortPath) {
-    phase("Tests");
-    await testLoop(
-      testable.map((c) => ({ criterion: c, findings: [] })),
-      null,
-    );
-  }
+  phase("Tests");
+  await testLoop(
+    testable.map((c) => ({ criterion: c, findings: [] })),
+    null,
+  );
   phase("Freeze");
   await freeze();
 
   // 8. code
   phase("Code");
   const frozenNote =
-    "frozen_tests holds worktree files only (sha256 of the content). frozen_config_sections is one flat map: <path>#<section> (canonicalised test-runner config section), git:info/exclude and git:core.excludesFile (ignore-rule files outside the worktree), symlink:<rel> (link target). ABSENT/MISSING mean the section or file did not exist at freeze. Every key is read-only. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. code_base_ref is the commit before the first coder round; diff production changes from it.";
+    "frozen_tests holds the criterion test files only (sha256 of the content). frozen_config_sections is one flat map of everything else that is frozen: whole-file runner config and .gitignore files keyed by path (sha256), <path>#<section> (sha256 of a canonicalised test-runner config section), git:info/exclude and git:core.excludesFile (sha256 of ignore-rule files outside the worktree), and symlink:<rel> whose values are link targets, not hashes. Special values: ABSENT (the section did not exist at freeze), MISSING (the file did not exist), UNPARSEABLE (the file could not be parsed at freeze). Every key is read-only. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. code_base_ref is the commit before the first coder round; diff production changes from it.";
   let coderFindings = [];
   let approvedSha = null;
   let approval = null;
@@ -1148,8 +1271,8 @@ async function main(input) {
     reserve(4, "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
-      frozen_tests: frozen.files,
-      frozen_config_sections: configView(frozen),
+      frozen_tests: testFilesView(frozen, frozenFiles),
+      frozen_config_sections: configView(frozen, frozenFiles),
       frozen_tests_note: frozenNote,
       freeze_ref: freezeRef,
       code_base_ref: codeBaseRef,
@@ -1203,6 +1326,8 @@ async function main(input) {
       approvedSha = judgedCode.fp.head;
       approval = cj;
       state.gatesNotRun = gatesNotRun(cj.gates_not_run);
+      if (state.gatesNotRun.length && String(cj.reason || "").indexOf(GATES_PREFIX) !== 0)
+        gate("warning: code-judge approve reason does not start with '" + GATES_PREFIX + "' although gates did not run");
       gate("code-judge r" + m + ": approve at " + approvedSha);
       break;
     }
@@ -1214,7 +1339,6 @@ async function main(input) {
       continue;
     }
     if (cj.verdict === "fix_tests") {
-      if (shortPath) halt("needs_human", "code-judge fix_tests on the short path (no test fleet ran)");
       const tf = routed.filter((f) => f.target === "tests");
       gate("code-judge r" + m + ": fix_tests -> test-judge (" + tf.length + " findings)");
       phase("Tests");
@@ -1237,7 +1361,7 @@ async function main(input) {
       "fleet-pr-opener",
       "role:fleet-pr-opener",
       Object.assign({}, common, planCtx, {
-        repo: project,
+        repo: remoteSlug,
         approved_sha: approvedSha,
         criteria,
         suite_result: approval.suite_result || null,
@@ -1248,6 +1372,8 @@ async function main(input) {
   );
   state.pr = pr;
   gate("pr-opener: " + (pr.created ? "created " : "updated ") + pr.pr_url);
+  if (state.gatesNotRun && state.gatesNotRun.length && pr.gates_not_run_stated !== true)
+    halt("needs_human", "pr-opener did not state gates_not_run in the PR body; fix the body of " + pr.pr_url);
   const out = finish("ok", "draft PR ready for review");
   out.created = pr.created;
   out.template_used = pr.template_used || null;

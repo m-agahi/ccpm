@@ -24,24 +24,28 @@ and merges.
 
 ## Flow
 
-| Step | Agent             | Gate in script code                                                    |
-| ---- | ----------------- | ---------------------------------------------------------------------- |
-| 1    | preflight         | yadgar unreachable or any role missing -> `needs_human`                |
-| 2    | workspace (infra) | creates or reuses branch `fleet/<task id>-<slug>` and its worktree     |
-| 3    | scope-and-plan    | status; criterion ids; test files disjoint across criteria             |
-| 4    | -                 | risk tier: `est_diff_lines < 20` and `new_behaviour == false` -> short |
-| 5    | plan-audit        | verdict other than `approve` -> `needs_human`                          |
-| 6    | prepare (infra)   | commits the plan doc; creates one worktree per testable criterion      |
-| 7    | test writers      | one per criterion, in parallel, each on `<branch>--t-<id>`             |
-| 8    | integrate (infra) | merges the writer branches into the fleet branch                       |
-| 9    | test judge        | `revise` routes findings to the named writers only; 3 rounds max       |
-| 10   | hasher (freeze)   | sha256 of test files and runner config; `freeze_ref` = HEAD            |
-| 11   | coder             | status                                                                 |
-| 12   | hasher            | any changed, new or removed hash key -> coder round rejected           |
-| 13   | code judge        | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> stop   |
-| 14   | pr-opener         | draft PR at `approved_sha` (HEAD after the approving judge run)        |
+| Step | Agent             | Gate in script code                                                  |
+| ---- | ----------------- | -------------------------------------------------------------------- |
+| 1    | preflight         | yadgar unreachable or any role missing -> `needs_human`              |
+| 2    | workspace (infra) | creates or reuses branch `fleet/<task id>-<slug>` and its worktree   |
+| 3    | scope-and-plan    | status; criterion ids; test files disjoint across criteria           |
+| 4    | -                 | risk tier logged; short path disabled in v1 (always full)            |
+| 5    | plan-audit        | verdict other than `approve` -> `needs_human`                        |
+| 6    | prepare (infra)   | commits the plan doc; creates one worktree per testable criterion    |
+| 7    | test writers      | one per criterion, in parallel, each on `<branch>--t-<id>`           |
+| 8    | integrate (infra) | merges the writer branches into the fleet branch                     |
+| 9    | test judge        | `revise` routes findings to the named writers only; 3 rounds max     |
+| 10   | hasher (freeze)   | sha256 of test files and runner config; `freeze_ref` = HEAD          |
+| 11   | coder             | status                                                               |
+| 12   | hasher            | any changed, new or removed hash key -> coder round rejected         |
+| 13   | code judge        | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> stop |
+| 14   | pr-opener         | draft PR at `approved_sha` (HEAD after the approving judge run)      |
 
-The short path skips steps 5 and 7-9. Its hash set is the runner config only.
+The risk tier is still computed and logged (short = `est_diff_lines < 20` AND `new_behaviour`
+false), but v1 always takes the full path: no role prompt supports a coder without frozen criterion
+tests. A criterion with `test_files: []` is manual: it gets no writer, no frozen entry and no
+disjointness check, and it still reaches the PR opener so a human sees it. A ledger-id task needs a
+`title` arg; the run stops without one.
 
 Task id and slug: a plan path (ends in `.md` or contains `/`) gives task id `plan` and the
 slugified file stem. A ledger id gives the slugified id and the slugified `title` arg (`task` when
@@ -72,7 +76,9 @@ The hasher freezes every criterion test file, plus:
 
 The comparison runs in the script, never in an agent. A key that appears (for example a new
 `conftest.py`), disappears or changes rejects the coder round, whatever the code judge says. Roles
-receive plain files in `frozen_tests` and the synthetic keys in `frozen_config_sections`. Judges
+receive only the criterion test files in `frozen_tests`. Everything else (whole-file runner config,
+`.gitignore` files, sections, ignore rules outside the worktree, symlinks) goes in
+`frozen_config_sections`; `symlink:` values are link targets, not hashes. Judges
 also receive `code_base_ref`, the commit before the first coder round, because a re-freeze after
 `fix_tests` moves `freeze_ref` past earlier coder commits.
 
@@ -81,6 +87,21 @@ named like a synthetic key (for example `symlink:conftest.py`) cannot mask one. 
 with `:` or `#` in a name goes on a `suspicious` list. A non-empty list stops the run at freeze and
 rejects a coder round after it. The code judge also gets `hash_recheck`
 (`{"<map>/<key>": {frozen, current, match}}`) for its report; the script's own comparison decides.
+
+### Role contract
+
+The script pins the role contract, not the prose:
+
+- `EXPECTED_VERSIONS` holds the minimum role-page versions. Preflight reads each page's version. A
+  lower version (stale or rolled back) stops the run; a higher one is logged as "prose-only changes
+  assumed" and returned as `role_versions`.
+- Every role page carries `CONTRACT: fleet-v1` under its DISPATCH line. Preflight and every role
+  runner report the marker; any other value stops the run.
+- Each role runner reports the version and marker it loaded. A value that differs from preflight
+  (the page changed mid-run) discards the result.
+- `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are
+  checked against the frozen enums. A missing key or an unknown verdict is contract drift and stops
+  the run.
 
 ### Models
 
@@ -132,9 +153,10 @@ too. It does not catch a change that a judge makes and reverts within its own ru
   "reason": "...",
   "branch": "fleet/<task id>-<slug>",
   "pr_url": "...",
-  "path": "short | full",
+  "path": "full",
   "rounds": { "tests": 1, "code": 1 },
   "gates_not_run": [{ "gate": "held_out", "reason": "..." }],
+  "role_versions": { "fleet-coder": 3 },
   "gate_log": ["..."],
   "yadgar_findings": [{ "role": "fleet-coder", "findings": ["..."] }]
 }

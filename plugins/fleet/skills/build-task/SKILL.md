@@ -38,9 +38,10 @@ the work. You only collect its arguments, start it, wait for it and report.
    repository" and stop. Use the output as `repo`.
 3. **Date.** Run `date -u +%F`. Use the output as `date`. The workflow cannot read the clock; the
    planner names the plan doc with this date.
-4. **Title (ledger id only, optional).** If a task-ledger read tool is available in this session,
-   read the task and use its title as `title`. The workflow builds the branch name
-   `fleet/<task id>-<slugified title>` from it. Skip this step when no ledger tool is available.
+4. **Title (required for a ledger id).** Read the task with the task-ledger read tool available
+   in this session and use its title as `title`. The workflow builds the branch name
+   `fleet/<task id>-<slugified title>` from it and stops without one. No ledger tool, or no title
+   -> say so and stop. A plan path needs no title.
 5. **Project (optional).** Use the `<owner>/<repo>` project key from the session banner, if one is
    shown, as `project`. Otherwise omit it; the workflow derives it from the `origin` remote.
 6. **Workflow tool.** Check that `Workflow` is among the tools you can call now. If it is not, say
@@ -60,7 +61,7 @@ the work. You only collect its arguments, start it, wait for it and report.
 8. **Report.** Relay, in this order:
    - `status` and `reason`. `needs_human` means a gate stopped the run on purpose: quote the reason
      and the last `gate_log` lines, and say what a human must decide.
-   - `branch`, `path` (`short` or `full`), `rounds`.
+   - `branch`, `path` (always `full` in v1), `rounds`, `role_versions`.
    - `pr_url` when present. The PR is a **draft**. Max reviews and merges it. Never mark it ready,
      never merge it, never enable auto-merge.
    - `gates_not_run`: list every gate the run did not execute. An approval in v1 rests on the judges'
