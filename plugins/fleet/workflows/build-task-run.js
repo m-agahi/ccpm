@@ -44,15 +44,35 @@ const HELD_OUT_KEY = "held_out_examples";
 // Test-runner config the hasher freezes, in addition to every criterion test
 // file. Whole files, matched on basename anywhere in the tree (tracked, or
 // untracked and not ignored):
+// Found by walking the filesystem (not git ls-files), so a config file that an
+// ignore rule hides is still hashed. The walk skips .git, .claude/worktrees and
+// the dependency/cache dirs in WALK_SKIP_DIRS.
 const RUNNER_CONFIG_FILES = [
   "conftest.py",
   "pytest.ini",
+  ".pytest.ini",
+  "pytest.toml",
   "tox.ini",
   "setup.cfg",
+  "noxfile.py",
+  "sitecustomize.py",
+  "usercustomize.py",
   "jest.config.*",
   "vitest.config.*",
+  "vitest.workspace*",
+  "karma.conf.*",
   ".mocharc*",
+  ".babelrc*",
+  "babel.config.*",
+  "*.pth (repo root only)",
 ];
+const WALK_SKIP_DIRS = [".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", ".nox", ".mypy_cache", ".pytest_cache"];
+// Ignore rules are frozen too: hiding a new config file behind an ignore rule
+// changes one of these keys. Every .gitignore in the tree is hashed under its
+// path; the worktree's info/exclude (git rev-parse --git-path info/exclude,
+// the common dir for a linked worktree) under "git:info/exclude"; the global
+// core.excludesFile under "git:core.excludesFile".
+const IGNORE_RULE_FILES = [".gitignore (every one in the tree)", "git:info/exclude", "git:core.excludesFile"];
 // Sections of files that are NOT hashed whole (dependencies stay editable).
 // Each section is canonicalised (sorted keys, compact JSON) and hashed under a
 // synthetic key "<path>#<section>". A section that does not exist hashes as
@@ -87,7 +107,11 @@ except ImportError:
     except ImportError:
         tomllib = None
 
-CONFIG_GLOBS = ['conftest.py', 'pytest.ini', 'tox.ini', 'setup.cfg', 'jest.config.*', 'vitest.config.*', '.mocharc*']
+CONFIG_GLOBS = ['conftest.py', 'pytest.ini', '.pytest.ini', 'pytest.toml', 'tox.ini', 'setup.cfg',
+                'noxfile.py', 'sitecustomize.py', 'usercustomize.py', 'jest.config.*', 'vitest.config.*',
+                'vitest.workspace*', 'karma.conf.*', '.mocharc*', '.babelrc*', 'babel.config.*']
+ROOT_ONLY_GLOBS = ['*.pth']
+SKIP_DIRS = {'.git', 'node_modules', '__pycache__', '.venv', 'venv', '.tox', '.nox', '.mypy_cache', '.pytest_cache'}
 PACKAGE_KEYS = ['jest', 'vitest', 'mocha']
 
 wt, mode = sys.argv[1], sys.argv[2]
@@ -109,6 +133,20 @@ def file_hash(rel):
     with open(p, 'rb') as fh:
         return sha(fh.read())
 
+def abs_hash(path):
+    if not path or not os.path.isfile(path):
+        return 'MISSING'
+    with open(path, 'rb') as fh:
+        return sha(fh.read())
+
+def walk():
+    for dp, dns, fns in os.walk(wt):
+        reld = os.path.relpath(dp, wt)
+        dns[:] = sorted(d for d in dns if d not in SKIP_DIRS
+                        and os.path.join(reld, d) not in ('./.claude/worktrees', '.claude/worktrees'))
+        for f in sorted(fns):
+            yield os.path.normpath(os.path.join(reld, f))
+
 def norm(rel):
     while rel.startswith('./'):
         rel = rel[2:]
@@ -122,12 +160,23 @@ out = {'fingerprint': {
 
 if mode == 'hashes':
     hashes = {}
+    for rel in walk():
+        base = os.path.basename(rel)
+        if base == '.gitignore' or any(fnmatch.fnmatch(base, g) for g in CONFIG_GLOBS):
+            hashes[rel] = file_hash(rel)
+        elif '/' not in rel and any(fnmatch.fnmatch(base, g) for g in ROOT_ONLY_GLOBS):
+            hashes[rel] = file_hash(rel)
+    ex = git('rev-parse', '--git-path', 'info/exclude').decode().strip()
+    hashes['git:info/exclude'] = abs_hash(ex if os.path.isabs(ex) else os.path.join(wt, ex))
+    gx = subprocess.run(['git', '-C', wt, 'config', '--path', 'core.excludesFile'], capture_output=True)
+    gpath = gx.stdout.decode().strip()
+    if not gpath:
+        gpath = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'git', 'ignore')
+    hashes['git:core.excludesFile'] = abs_hash(gpath)
     listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\x00')
     for rel in sorted(set(f.decode() for f in listed if f)):
         base = os.path.basename(rel)
-        if any(fnmatch.fnmatch(base, g) for g in CONFIG_GLOBS):
-            hashes[rel] = file_hash(rel)
-        elif base == 'pyproject.toml':
+        if base == 'pyproject.toml':
             if tomllib is None:
                 sys.exit('tomllib unavailable: need python >= 3.11 or tomli')
             try:
@@ -340,6 +389,18 @@ function gatesNotRun(judgeList) {
   ];
 }
 
+// Split the frozen map: plain worktree files (plain=true) vs synthetic keys
+// (<path>#<section>, git:<...>). Roles sha256sum plain files; synthetic keys
+// are not paths.
+function plainKeys(map, plain) {
+  const o = {};
+  for (const k of Object.keys(map || {})) {
+    const synthetic = k.indexOf("#") >= 0 || k.indexOf("git:") === 0;
+    if (synthetic !== plain) o[k] = map[k];
+  }
+  return o;
+}
+
 function normPath(p) {
   let s = String(p).trim();
   while (s.indexOf("./") === 0) s = s.slice(2);
@@ -435,7 +496,7 @@ function workspacePrompt(inputs) {
     "Steps (use `git -C`):\n" +
     "1. `git -C <repo> fetch origin --prune`.\n" +
     "2. default_branch = `git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD` without the `origin/` prefix; if that fails, `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` run in <repo>.\n" +
-    "3. Keep fleet files out of git status: if `git -C <repo> check-ignore -q .claude/worktrees/probe` fails, append the line `.claude/worktrees/` to `$(git -C <repo> rev-parse --path-format=absolute --git-common-dir)/info/exclude`. Do the same for `.claude/settings.local.json` (probe that path). Never edit a tracked .gitignore.\n" +
+    "3. Keep fleet files out of git status: if `git -C <repo> check-ignore -q .claude/worktrees/probe` fails, append the line `.claude/worktrees/` to `$(git -C <repo> rev-parse --path-format=absolute --git-common-dir)/info/exclude`. Do the same for `.claude/settings.local.json` (probe that path), and for the test caches `__pycache__/`, `.pytest_cache/`, `.coverage` (a judge's test run must not leave untracked noise). Never edit a tracked .gitignore.\n" +
     "4. Branch state: `gh pr list --head <branch> --state all --json number,state` in <repo>. MERGED or CLOSED -> status needs_human.\n" +
     "5. main_worktree: if it exists and `git -C <main_worktree> branch --show-current` equals <branch>, reuse it (created=false). If the path exists otherwise -> needs_human. If absent: local branch <branch> exists -> `git -C <repo> worktree add <main_worktree> <branch>`; else remote branch exists (`git -C <repo> ls-remote --exit-code --heads origin <branch>`) -> `git -C <repo> worktree add -b <branch> <main_worktree> origin/<branch>`; else `git -C <repo> worktree add --no-track -b <branch> <main_worktree> origin/<default_branch>` (created=true).\n" +
     "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths.\n" +
@@ -487,7 +548,11 @@ function hasherPrompt(inputs) {
   const rules =
     "runner-config files hashed whole: " +
     RUNNER_CONFIG_FILES.join(", ") +
-    ". Sections hashed under <path>#<section> (whole file NOT hashed): " +
+    ". Ignore-rule files hashed whole: " +
+    IGNORE_RULE_FILES.join(", ") +
+    ". Walk skips: " +
+    WALK_SKIP_DIRS.join(", ") +
+    ", .claude/worktrees. Sections hashed under <path>#<section> (whole file NOT hashed): " +
     RUNNER_CONFIG_SECTIONS.map((s) => s.file + "#" + s.section + " = " + s.rule).join("; ") +
     ". Canonical form: json.dumps(sort_keys=True, separators=(',', ':')). Missing section = ABSENT, missing file = MISSING.";
   return (
@@ -900,6 +965,9 @@ async function main(input) {
   let freezes = 0;
   let frozen = null;
   let freezeRef = null;
+  // the first freeze ref, before any coder commit: a re-freeze after fix_tests
+  // moves freeze_ref past earlier coder commits, so judges diff from this one
+  let codeBaseRef = null;
   const frozenFiles = [];
   for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
 
@@ -910,6 +978,7 @@ async function main(input) {
       halt("needs_human", "worktree changed between test approval and freeze");
     frozen = h.hashes;
     freezeRef = h.fingerprint.head;
+    if (!codeBaseRef) codeBaseRef = freezeRef;
     gate("freeze f" + freezes + " at " + freezeRef + ": " + Object.keys(frozen).length + " hashed keys");
   }
 
@@ -926,7 +995,7 @@ async function main(input) {
   // 8. code
   phase("Code");
   const frozenNote =
-    "frozen_tests keys containing '#' are canonicalised test-runner config sections (<path>#<section>), not file paths; ABSENT/MISSING mean the section or file did not exist at freeze. The workflow recomputes every key itself after the coder.";
+    "frozen_tests holds plain worktree files only (sha256 of the content). frozen_config_sections holds canonicalised test-runner config sections (<path>#<section>) and ignore-rule files outside the worktree (git:info/exclude, git:core.excludesFile); ABSENT/MISSING mean the section or file did not exist at freeze. Every key in both maps is read-only. The workflow recomputes every key itself after the coder. code_base_ref is the commit before the first coder round; diff production changes from it.";
   let coderFindings = [];
   let approvedSha = null;
   let approval = null;
@@ -938,9 +1007,11 @@ async function main(input) {
     reserve(4, "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
-      frozen_tests: frozen,
+      frozen_tests: plainKeys(frozen, true),
+      frozen_config_sections: plainKeys(frozen, false),
       frozen_tests_note: frozenNote,
       freeze_ref: freezeRef,
+      code_base_ref: codeBaseRef,
     });
     const coder = requireOk(
       "fleet-coder",
@@ -1009,7 +1080,8 @@ async function main(input) {
       phase("Freeze");
       await freeze();
       phase("Code");
-      coderFindings = [];
+      // a fix_tests verdict may also carry code findings: keep them
+      coderFindings = routed.filter((f) => f.target === "code");
       continue;
     }
     halt("failed", "code-judge returned no verdict");

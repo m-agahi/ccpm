@@ -304,7 +304,12 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
   assert.equal(pr.repo, "o/r");
   // coder gets the frozen map and the freeze ref
   const coder = inputsOf(call(out, "role:fleet-coder:r1").prompt);
-  assert.deepEqual(coder.frozen_tests, HASHES);
+  // roles get plain files in frozen_tests and synthetic section keys apart
+  assert.deepEqual(coder.frozen_tests, { "tests/test_a.py": "ha", "tests/test_b.py": "hb" });
+  assert.deepEqual(coder.frozen_config_sections, { "pyproject.toml#tool.pytest": "hp" });
+  const cjIn = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
+  assert.deepEqual(cjIn.frozen_tests, coder.frozen_tests);
+  assert.equal(cjIn.code_base_ref, "P1");
   assert.equal(coder.freeze_ref, "P1");
   // every role's yadgar findings are forwarded
   const roles = r.yadgar_findings.map((y) => y.role);
@@ -762,6 +767,18 @@ test("hasher prompt carries the extraction rules and the config list", async () 
     "jest.config.",
     "vitest.config.",
     ".mocharc",
+    ".pytest.ini",
+    "pytest.toml",
+    "vitest.workspace",
+    "karma.conf.",
+    ".babelrc",
+    "babel.config.",
+    "sitecustomize.py",
+    "usercustomize.py",
+    "*.pth",
+    "noxfile.py",
+    ".gitignore",
+    "info/exclude",
     "tool.pytest",
     "scripts.test",
     '"jest"',
@@ -1049,4 +1066,125 @@ test("approve with a gates_not_run list: the code-judge list is forwarded", asyn
   noUnscripted(out);
   assert.deepEqual(inputsOf(call(out, "role:fleet-pr-opener").prompt).gates_not_run, list);
   assert.deepEqual(out.result.gates_not_run, list);
+});
+
+
+// ---------------------------------------------------------------- review fixes
+
+test("fix_tests carries its code findings to the next coder round; code_base_ref stays at the first freeze", async () => {
+  const testFinding = { target: "tests", criterion: "AC1", finding: "wrong expectation" };
+  const codeFinding = { target: "code", criterion: "AC2", finding: "dead branch" };
+  const s = happy({
+    script: {
+      "role:fleet-code-judge:r1": {
+        status: "ok",
+        verdict: "fix_tests",
+        routed_findings: [testFinding, codeFinding],
+      },
+      "hasher:fp-pre:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
+      "role:fleet-test-judge:r2": {
+        status: "ok",
+        verdict: "revise",
+        routed_findings: [testFinding],
+      },
+      "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
+      "role:fleet-test-writer:AC1:r3": { status: "ok", criterion_id: "AC1", commit: "t1b" },
+      "infra:integrate:r3": { status: "ok", head: "M3" },
+      "hasher:fp-pre:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
+      "role:fleet-test-judge:r3": { status: "ok", verdict: "approve", routed_findings: [] },
+      "hasher:fp-post:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
+      "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: HASHES },
+      "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
+      "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
+      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  const c2 = inputsOf(call(out, "role:fleet-coder:r2").prompt);
+  assert.deepEqual(c2.routed_findings, [codeFinding]);
+  assert.equal(c2.freeze_ref, "M3");
+  assert.equal(c2.code_base_ref, "P1");
+  const cj2 = inputsOf(call(out, "role:fleet-code-judge:r2").prompt);
+  assert.equal(cj2.code_base_ref, "P1");
+  assert.equal(cj2.freeze_ref, "M3");
+});
+
+test("an ignored new conftest plus an ignore-rule edit rejects the coder round", async () => {
+  const out = await run(
+    hashViolation({ ...HASHES, ".gitignore": "edited", "sub/conftest.py": "new", "git:info/exclude": "edited" }),
+    ARGS,
+  );
+  noUnscripted(out);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+  const f = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding;
+  assert.match(f, /\.gitignore/);
+  assert.match(f, /sub\/conftest\.py/);
+  assert.match(f, /git:info\/exclude/);
+});
+
+test("hasher program: ignore rules are frozen and ignored config is still found", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-hasher-ign-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    writeFileSync(join(wt, ".gitignore"), "*.log\n");
+    writeFileSync(join(wt, "a.py"), "x = 1\n");
+    sh(wt, "git", "add", ".");
+    sh(wt, "git", "commit", "-q", "-m", "init");
+    const base = runHasher(wt, "hashes", []).hashes;
+    assert.match(base[".gitignore"], /^[0-9a-f]{64}$/);
+    assert.ok("git:info/exclude" in base, "info/exclude is a key");
+    assert.ok(!("sub/conftest.py" in base));
+
+    // the bypass: a new conftest hidden by an ignore rule
+    sh(wt, "mkdir", "-p", "sub");
+    writeFileSync(join(wt, "sub", "conftest.py"), "import os\n");
+    writeFileSync(join(wt, ".gitignore"), "*.log\nsub/conftest.py\n");
+    const tam = runHasher(wt, "hashes", []).hashes;
+    assert.ok("sub/conftest.py" in tam, "ignored conftest found by the filesystem walk");
+    assert.notEqual(tam[".gitignore"], base[".gitignore"]);
+
+    // info/exclude edit is visible too
+    const ex = sh(wt, "git", "rev-parse", "--git-path", "info/exclude").trim();
+    writeFileSync(join(wt, ex), "sub/\n");
+    assert.notEqual(runHasher(wt, "hashes", [])["hashes"]["git:info/exclude"], base["git:info/exclude"]);
+
+    // new config globs; *.pth only at the root
+    for (const f of [
+      ".pytest.ini",
+      "pytest.toml",
+      "vitest.workspace.ts",
+      "karma.conf.js",
+      ".babelrc.json",
+      "babel.config.js",
+      "sitecustomize.py",
+      "usercustomize.py",
+      "noxfile.py",
+      "evil.pth",
+    ])
+      writeFileSync(join(wt, f), "x\n");
+    writeFileSync(join(wt, "sub", "deep.pth"), "x\n");
+    const g = runHasher(wt, "hashes", []).hashes;
+    for (const f of [
+      ".pytest.ini",
+      "pytest.toml",
+      "vitest.workspace.ts",
+      "karma.conf.js",
+      ".babelrc.json",
+      "babel.config.js",
+      "sitecustomize.py",
+      "usercustomize.py",
+      "noxfile.py",
+      "evil.pth",
+    ])
+      assert.match(g[f] || "", /^[0-9a-f]{64}$/, f);
+    assert.ok(!("sub/deep.pth" in g), "*.pth is matched at the repo root only");
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
 });

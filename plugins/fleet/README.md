@@ -51,18 +51,27 @@ absent). Worktrees live under `<repo>/.claude/worktrees/fleet-<task id>-<slug>/`
 
 ### Frozen set
 
-The hasher freezes every criterion test file, plus runner config found anywhere in the tree
-(tracked, or untracked and not ignored):
+The hasher freezes every criterion test file, plus:
 
-- whole files: `conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`, `jest.config.*`,
-  `vitest.config.*`, `.mocharc*`;
+- runner config, whole files, found by walking the filesystem (so an ignore rule cannot hide
+  one): `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `tox.ini`, `setup.cfg`,
+  `noxfile.py`, `sitecustomize.py`, `usercustomize.py`, `jest.config.*`, `vitest.config.*`,
+  `vitest.workspace*`, `karma.conf.*`, `.mocharc*`, `.babelrc*`, `babel.config.*`, and `*.pth` at
+  the repo root. The walk skips `.git`, `.claude/worktrees`, `node_modules`, `__pycache__`, `.venv`,
+  `venv`, `.tox`, `.nox`, `.mypy_cache` and `.pytest_cache`;
+- ignore rules: every `.gitignore` in the tree, the worktree's `info/exclude` (key
+  `git:info/exclude`, resolved with `git rev-parse --git-path`) and the global
+  `core.excludesFile` (key `git:core.excludesFile`). Editing an ignore rule is a change;
 - sections, hashed under `<path>#<section>` after canonicalisation (sorted keys, compact JSON):
   `pyproject.toml#tool.pytest` (every `[tool.pytest.*]` table), `package.json#jest`,
   `package.json#vitest`, `package.json#mocha`, `package.json#scripts.test`. The rest of these files
   (dependencies) stays editable. A missing section hashes as `ABSENT`, so adding one is a change.
 
 The comparison runs in the script, never in an agent. A key that appears (for example a new
-`conftest.py`), disappears or changes rejects the coder round, whatever the code judge says.
+`conftest.py`), disappears or changes rejects the coder round, whatever the code judge says. Roles
+receive plain files in `frozen_tests` and the synthetic keys in `frozen_config_sections`. Judges
+also receive `code_base_ref`, the commit before the first coder round, because a re-freeze after
+`fix_tests` moves `freeze_ref` past earlier coder commits.
 
 ### Judge separation
 
@@ -81,6 +90,12 @@ too. It does not catch a change that a judge makes and reverts within its own ru
   `{status: "not_run"}` markers, and `gates_not_run` reaches the PR opener and the result. The
   planner's `held_out_examples` are deleted before any other role sees the plan. v1 cannot check
   that the planner kept them out of the plan doc itself.
+- Config inside the skipped dirs (for example a `sitecustomize.py` or `.pth` file installed into a
+  virtualenv) is not hashed. New files outside `allowed_additions` are not denied by script in v1.
+- A judge's test run that leaves untracked, unignored files (caches the repo does not ignore) flips
+  the fingerprint and stops the run. The workspace step adds `__pycache__/`, `.pytest_cache/` and
+  `.coverage` to `info/exclude` to cut this down.
+- Not yet executed in the real Workflow runtime; the scenario suite stubs the runtime.
 - The hasher program travels in the hasher prompt and the agent runs it verbatim. A transcription
   error would show up as a hash mismatch (fail-closed), not as a silent pass.
 - Whether workflow agents honour a worktree-local `.claude/settings.local.json` is not verified.
