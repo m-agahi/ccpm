@@ -1,5 +1,41 @@
 # Changelog
 
+## [2.1.4] - 2026-11-05
+
+### Changed
+
+- **The sealed plan ref is a local git object, not a committed file.** Plan mode no longer writes
+  or commits `.fleet/<task id>/plan_ref.json`: that file leaked into a real PR with the pushed
+  branch, and a global `.fleet/` gitignore would have dropped it silently. The plan commit now
+  holds `plan_path` only (checked in code). The sealed JSON is the message of an annotated tag
+  object (`git mktag`, no tag name, no index change, `core.hooksPath=/dev/null`) that targets the
+  plan commit, at `refs/fleet/<task id>/plan`. The ref is local and never pushed. A re-plan keeps
+  the earlier value as `refs/fleet/<task id>/plan-<n>`.
+- **The tiny `plan_ref` is `{branch, plan_commit, plan_ref, ref_sha256, repo}`.** `ref_sha256` is
+  the sha256 of the tag message bytes. Build mode loads the ref with `git cat-file` and checks the
+  tag target, the message sha256, the seal and the branch, repo and task id. A missing ref or any
+  mismatch stops with `needs_human` "plan ref missing or changed; re-run plan". A `plan_ref` with
+  `ref_path` (2.0.1 to 2.1.3) stops with "plan_ref predates 2.1.4; re-run plan".
+- **Identical re-plan reuses the plan commit.** When HEAD is a plan-only commit of the task and
+  the staged plan doc is byte-identical to HEAD's, commit-plan makes no commit (never
+  `--allow-empty`) and points the new plan ref at HEAD. The old ref moves to `plan-<n>` only when
+  its target or message differs.
+- The run-state write's `update-ref` runs with `core.hooksPath=/dev/null` too, so no
+  `reference-transaction` hook runs.
+- **Plan-commit classifier.** A plan commit is `plan(<task id>):` with a file set of exactly
+  `{plan_path}`, where `plan_path` comes from a plan ref of the task whose target is that commit.
+- The plan ref is frozen through the hasher's `refs/fleet/*` snapshot, not as a hashed file; the
+  coder and writers no longer see a `.fleet/` path. A re-plan's own plan-ref write updates the
+  frozen snapshot.
+
+### Added
+
+- **No `.fleet/` path reaches a PR.** Before every push and every pr-opener call, a read-only
+  `infra:fleet-scan:*` step lists `git diff --name-only origin/<default>...<approved_sha>` and the
+  files of every commit on the branch. A path with a `.fleet/` segment, or an incomplete scan,
+  stops with `needs_human`, `stop_gate: "scope"`, "fleet internal files in PR diff: <paths>".
+- The scope fence refuses `.fleet/` paths, so a writer or coder that creates one stops the round.
+
 ## [2.1.3] - 2026-11-05
 
 ### Fixed
