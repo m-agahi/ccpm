@@ -745,6 +745,11 @@ if not gpath:
 gitmap['core.excludesFile'] = abs_hash(gpath)
 hook_files(gitmap)
 config_freeze(gitmap)
+# every run-state ref (name -> target): only the workflow's own state write may move one
+for line in git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/fleet/').decode().splitlines():
+    name, _, obj = line.partition(' ')
+    if name:
+        gitmap['fleetref:' + name] = obj
 hook_frozen, hook_bad, hook_launcher = hook_refs()
 for rel in hook_frozen:
     files[rel] = file_hash(rel)
@@ -1214,10 +1219,18 @@ function changedKeys(a0, b0) {
   return out;
 }
 
-// changedKeys by display name, plus every suspicious entry: a non-empty
+// The violation text for a changed key.
+const FLEETREF = "fleetref:";
+function violationName(x) {
+  if (x.map === "ignored") return "ignored path written: " + x.key;
+  if (x.map === "git" && x.key.indexOf(FLEETREF) === 0) return "run-state ref touched by role: " + x.key.slice(FLEETREF.length);
+  return x.name;
+}
+
+// changedKeys by violation text, plus every suspicious entry: a non-empty
 // suspicious list is always a violation.
 function diffHashes(frozen, now) {
-  const out = changedKeys(frozen, now).map((x) => (x.map === "ignored" ? "ignored path written: " + x.key : x.name));
+  const out = changedKeys(frozen, now).map(violationName);
   for (const p of (now && now.suspicious) || [])
     out.push(SUSPICIOUS_PREFIXES.some((x) => p.indexOf(x) === 0) ? "suspicious " + p : "suspicious path name " + p);
   return out;
@@ -1239,7 +1252,9 @@ function configView(h, testFiles) {
 // sha256 of every hasher map (canonical JSON): the run-state's frozen-maps digest.
 function mapsDigest(h) {
   const o = {};
-  for (const m of HASH_MAPS) o[m] = (h && h[m]) || {};
+  for (const m of HASH_MAPS) o[m] = Object.assign({}, (h && h[m]) || {});
+  // the run-state ref moves with every state write; the digest leaves it out
+  for (const k of Object.keys(o.git)) if (k.indexOf(FLEETREF) === 0) delete o.git[k];
   return sha256Hex(canonical(o));
 }
 
@@ -2550,7 +2565,7 @@ async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, f
     const what = [];
     if (before.fingerprint.head !== after.fingerprint.head) what.push("HEAD");
     if (before.fingerprint.tree !== after.fingerprint.tree) what.push("tree");
-    for (const k of changedKeys(before.hashes, after.hashes)) what.push(k.name);
+    for (const k of changedKeys(before.hashes, after.hashes)) what.push(violationName(k));
     halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") changed " + what.join(", ") + "; verdict discarded", "fingerprint");
   }
   checkRole(role, r);
@@ -3439,6 +3454,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
   // the ref file is frozen too (hashed as a config key, read-only for every role)
   const hashedFiles = frozenFiles.concat([ref.ref_path]);
+  // the frozen maps (set at freeze; the run-state write keeps its ref current)
+  let frozen = null;
 
   // run-state: a build whose approved commit exists resumes at the step after
   // its last completed milestone, or stops; it never re-runs the writers on a
@@ -3572,6 +3589,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     );
     const r = await infra(label, writeStatePrompt({ main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha }, JSON.stringify(st)), "PR");
     if (r.head !== approvedSha) halt("failed", label + ": the run-state landed on " + r.head + ", not " + approvedSha);
+    if (typeof r.state_sha !== "string" || !/^[0-9a-f]{40}$/.test(r.state_sha)) halt("failed", label + " returned no usable state_sha");
+    // the script's own write: the next comparison starts from the new value
+    if (frozen) frozen.git[FLEETREF + stateRef] = r.state_sha;
     gate("run-state " + lastGate + " at " + approvedSha);
   }
 
@@ -3770,7 +3790,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     fenceChanged("test round " + n, post.changed);
     const changed = post.changed.map(normPath);
     for (const k of changedKeys(pre.hashes, post.hashes)) {
-      if (k.map === "ignored") halt("needs_human", "ignored path written: " + k.key + " in test round " + n, "ownership");
+      if (k.map === "ignored" || (k.map === "git" && k.key.indexOf(FLEETREF) === 0))
+        halt("needs_human", violationName(k) + " in test round " + n, "ownership");
       if (!(k.map === "files" && owner[k.key])) changed.push(k.name);
     }
     const ids = pending.map((p) => p.criterion.id).join(", ");
@@ -3841,7 +3862,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
 
   // freeze
   let freezes = 0;
-  let frozen = null;
   let freezeRef = null;
   // HEAD at the first freeze: the base every diff of this build starts from
   let codeBaseRef = null;

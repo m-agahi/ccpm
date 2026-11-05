@@ -71,6 +71,9 @@ added_symbols, frozen_tests_red_at_start, obligations_done`. The `commit`/`commi
   frozen-maps digest all match; it runs no writer, coder or judge. A mismatch stops with
   "run-state mismatch: <which>"; build commits without a run-state stop with "approved but
   unresumable". Fixes a re-run after a failed push that re-ran the writers on the approved commit.
+- Every `refs/fleet/*` ref is snapshotted into the frozen git map; a role that creates, moves or
+  deletes one is a violation ("run-state ref touched by role"), so a forged run-state cannot make
+  a later re-run skip the judge. Only the workflow's own state write moves it.
 - Write-back follows the review again (the milestone order). Transport git config (`remote.*`,
   `url.*`, `credential.*`, `http.*`, `core.sshCommand`) is no longer frozen, so a fixed remote
   does not block a resume.

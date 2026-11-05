@@ -274,6 +274,11 @@ the intent result and, at the end, the write-back result. The milestones, in ord
 | `reviewed`     | the review passes | write-back                           |
 | `written_back` | write-back        | nothing: returns the recorded result |
 
+Every ref under `refs/fleet/` (name and target) is in the frozen git map, at freeze and around
+every writer, coder and judge step. A role that creates, moves or deletes one is a violation ("run-state ref
+touched by role"). Only the workflow's own state write moves it; the snapshot follows that write,
+and the resume digest leaves the ref out.
+
 Right after verify, build mode reads the run-state (`infra:read-state`). It resumes only when the
 state's `plan_commit`, `ref_sha256` and `seal` match the plan ref, its target and HEAD equal
 `approved_sha`, `HEAD^{tree}` equals `code_tree`, the worktree is clean, and a fresh hasher run
@@ -323,8 +328,9 @@ Not defended:
 - a hostile agent with a shell: it can run anything the user can, outside the worktree too;
 - in-environment exec vectors: git filter drivers that act during the hasher's own `git add`,
   interpreter flag clusters (for example `-xc` in a hook entry), nested git config includes,
-  virtualenv and `node_modules` internals beyond the startup hooks, and anything else that runs
-  code without changing a frozen key.
+  the transport git config left unfrozen for resume (for example `credential.helper=!<command>`,
+  `core.sshCommand`), virtualenv and `node_modules` internals beyond the startup hooks, and
+  anything else that runs code without changing a frozen key.
 
 ### Frozen set
 

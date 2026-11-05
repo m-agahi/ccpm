@@ -99,14 +99,17 @@ async function runOne(script, args) {
   // before the freeze, the worktree holds what the first freeze will hash
   const f1 = script["hasher:freeze:f1"];
   let lastHashes = f1 && typeof f1 === "object" && !Array.isArray(f1) && f1.hashes ? f1.hashes : null;
+  const fleetRefs = {};
   const agent = async (prompt, opts = {}) => {
     const label = opts.label;
     calls.push({ label, prompt, opts });
     // the bytecode purge is mechanical; unscripted purges succeed by default
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
     // run-state writes are mechanical too: the ref lands on the expected head
-    if (!(label in script) && /^infra:state:/.test(label))
+    if (!(label in script) && /^infra:state:/.test(label)) {
+      fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = "f".repeat(40);
       return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
+    }
     if (!(label in script)) {
       unscripted.push(label);
       return null;
@@ -128,8 +131,14 @@ async function runOne(script, args) {
     if (label.startsWith("hasher:") && !raw && r.status === "ok") {
       if (!("hashes" in r)) r.hashes = JSON.parse(JSON.stringify(lastHashes || DEFAULT_HASHES));
       if (!("changed" in r)) r.changed = [];
+      // the real hasher sees the run-state refs the workflow's own state writes made
+      const g = r.hashes.git || (r.hashes.git = {});
+      if (!Object.keys(g).some((k) => k.startsWith("fleetref:"))) Object.assign(g, fleetRefs);
       lastHashes = r.hashes;
     }
+    // a run-state write moves its ref
+    if (label.startsWith("infra:state:") && !raw && r.status === "ok" && typeof r.state_sha === "string")
+      fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = r.state_sha;
     // a terse writer stub reports exactly its criterion's test files
     if (label.startsWith("role:fleet-test-writer:") && !raw && r.status === "ok" && !("files" in r))
       r.files = inputsOf(prompt).test_files;
@@ -5292,4 +5301,65 @@ test("2.1.0 resume survives a transport fix: remote, url, credential, http and s
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- 2.1.0 run-state ref snapshot
+
+const FREF = "refs/fleet/l42/state";
+const withFleetRef = (sha) => H({ ...HASHES_FLAT, ["git:fleetref:" + FREF]: sha });
+
+test("2.1.0 run-state refs are snapshotted into the git map by the hasher", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-fref-");
+  try {
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    assert.ok(!Object.keys(runHasherRaw(wt, "hashes", []).hashes.git).some((k) => k.startsWith("fleetref:")));
+    const head = sh(wt, "git", "rev-parse", "HEAD").trim();
+    sh(wt, "git", "update-ref", FREF, head);
+    assert.equal(runHasherRaw(wt, "hashes", []).hashes.git["fleetref:" + FREF], head);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 a coder that creates a run-state ref is a violation", async () => {
+  const out = await run(hashViolation(withFleetRef("1234567890abcdef1234567890abcdef12345678")), ARGS);
+  noUnscripted(out);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /run-state ref touched by role: refs\/fleet\/l42\/state/);
+});
+
+test("2.1.0 a judge or a writer that touches a run-state ref is stopped", async () => {
+  let out = await run(happy({ script: { "hasher:fp-post:code-judge:r1": { status: "ok", fingerprint: FP_K1, hashes: withFleetRef("ab".repeat(20)) } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /judge mutated worktree.*run-state ref touched by role/);
+  out = await run(happy({ script: { "hasher:post-writers:r1": { status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: withFleetRef("ab".repeat(20)) } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /run-state ref touched by role: refs\/fleet\/l42\/state/);
+});
+
+test("2.1.0 the script's own run-state write is no violation: the snapshot follows saveState", async () => {
+  // review round 1 requests changes after the committed/pushed/pr_open writes moved the state ref
+  const s = blockingReview();
+  const moved = withFleetRef("f".repeat(40));
+  s["hasher:pre-review:v1"] = { status: "ok", fingerprint: { head: CSHA(1), tree: "K1" }, hashes: moved };
+  s["hasher:fp-post:pr-review:v1"] = { status: "ok", fingerprint: { head: CSHA(1), tree: "K1" }, hashes: moved };
+  s["hasher:post-coder:r2"] = { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" }, hashes: moved };
+  s["hasher:fp-post:code-judge:r2"] = { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" }, hashes: moved };
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.rounds.code, 2);
+});
+
+test("2.1.0 the resume digest ignores the run-state ref itself", async () => {
+  const states = {};
+  const s = recording(happy(), states);
+  s["infra:push"] = { status: "failed", reason: "ssh" };
+  const plan = await runOne(s, ARGS);
+  await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  rerunScript(s, states.committed, { hasher: { hashes: withFleetRef("f".repeat(40)) } });
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  assert.equal(out.result.status, "ok", out.result.reason);
 });
