@@ -332,6 +332,45 @@ Not defended:
   `core.sshCommand`), virtualenv and `node_modules` internals beyond the startup hooks, and
   anything else that runs code without changing a frozen key.
 
+#### IaC hooks
+
+The user rule forbids any agent to cause terraform, tofu or tfp to run. The one exemption is a
+pre-existing pre-commit hook that runs fmt, validate, tflint or docs at `git commit`, with the
+backend off. Pre-push hooks are not exempt. The fleet runs the repo's hooks at its commit step and
+at its push step, so the script checks the hooks first.
+
+- An infra step (`infra:iac-hooks`, read-only, `fleet:judge`) reads `.pre-commit-config.yaml` at
+  the plan commit with `git show` and PyYAML. It runs once per build, after verify, and a resumed
+  build reads it too. The script decides in code which hooks are IaC hooks.
+- An IaC hook is a hook whose id, name, entry, args or repo URL matches
+  `terraform|tofu|\btfp\b|tflint|terragrunt|tfsec|infracost|checkov.*terraform`, or a hook from
+  `antonbabenko/pre-commit-terraform` or `tofuutils/pre-commit-opentofu`.
+- Effective stages: the hook's `stages`, else `default_stages`, else `pre-commit` and `pre-push`
+  (pre-commit's default includes pre-push). `commit` and `push` count as `pre-commit` and
+  `pre-push`.
+- Any IaC hook at `pre-push`: the build commits, records run-state `committed`, and stops before
+  the push with `needs_human`, `stop_gate: "iac"` and "pre-push hooks run IaC tooling (<ids>);
+  push by hand". A resumed run stops at the same place.
+- An IaC hook at a commit-time stage (`pre-commit`, `commit-msg`, `prepare-commit-msg`,
+  `pre-merge-commit`, `post-commit`) stops the build before the commit step, unless its id is
+  `terraform_`/`tofu_` + `fmt`, `validate`, `tflint` or `docs` at the `pre-commit` stage.
+- The plan commit (plan mode and re-plan) runs the repo's commit hooks too. Before it, an infra
+  step (`infra:iac-hooks:commit-plan`) reads the config at `HEAD`, and the same commit-stage rule
+  stops the run with nothing committed.
+- The commit step re-checks the rule. The frozen `.pre-commit-config.yaml` must hash to the copy
+  that was checked; a mismatch stops with `stop_gate: "iac"`.
+- An unreadable config (no PyYAML, a parse error, a bad revision) stops before the commit. An
+  absent config means no IaC hooks.
+- `confirm: "auto"` refuses at G3 (`failed_check: "scope"`) any repo with an IaC hook at any stage:
+  "repo hooks run IaC tooling".
+- `tflint` and `terragrunt` are forbidden words in `test_cmd`/`check_cmd` and in the G3 command
+  fence.
+
+Not covered: hooks outside the root `.pre-commit-config.yaml` (husky, lefthook, a hand-written
+script in the hooks dir, a `pre-commit -c <other config>` entry), stages other than the commit-time
+stages and pre-push (for example `post-checkout` during worktree creation), and whether an
+exempt `terraform_validate` hook really runs with the backend off. The script cannot verify these.
+
 ### Frozen set
 
 The hasher freezes every criterion test file, plus:
@@ -542,7 +581,11 @@ The script pins the role contract, not the prose:
   lower version (stale or rolled back) stops the run; a higher one is logged as "prose-only changes
   assumed" and returned as `role_versions`.
 - Every role page carries `CONTRACT: fleet-v3` under its DISPATCH line. Preflight and every role
-  runner report the marker; any other value stops the run.
+  runner report the marker; any other value stops the run. `agent_prompt_save` strips a page's
+  final newline, so the parsing never needs one: the last line counts like any other.
+- 2.1.1 pins: scope-and-plan 24, plan-audit 13, fleet-test-writer 9, fleet-test-judge 9,
+  fleet-coder 16, fleet-code-judge 13, fleet-pr-opener 10, fleet-intent-judge 2, pr-review 17,
+  gate-change-nonweakening-sweep 4.
 - Each role runner reports the version and marker it loaded. A value that differs from preflight
   (the page changed mid-run) discards the result.
 - `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are
@@ -555,8 +598,8 @@ The script pins the role contract, not the prose:
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
-  `commands`, `contract`, `role`, `cap`, `ownership`, `commit`, `review`, `intent` or `scope`
-  (`null` when the run did not stop at one of them). A cap stop names the gate that rejected the
+  `commands`, `contract`, `role`, `cap`, `ownership`, `commit`, `review`, `intent`, `scope`,
+  `resume` or `iac` (`null` when the run did not stop at one of them). A cap stop names the gate that rejected the
   last round (hash, obligations gate, commit hook, push hook or review).
 
 ### Models
