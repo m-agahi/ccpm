@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.2] - 2026-11-05
+
+### Changed
+
+- **IaC repos are refused.** The 2.1.1 hook classifier is removed: stage parsing, the per-id
+  commit-stage exemption, shim detection and file-filter matching. A security review found
+  fail-open gaps in all four. In its place is one blunt, fail-closed scan,
+  `infra:iac-scan:plan` (plan mode, right after the workspace step) and `infra:iac-scan:verify`
+  (build mode, after verify, on every build and resume). Any IaC file, any IaC pattern match in the
+  repo's hook and task-runner files or in any file of the hooks dir, or an incomplete scan stops the
+  run with `stop_gate: "iac"`: "repo contains IaC files or IaC tooling in hooks; the fleet does not
+  run here". The confirm auto G3 IaC read is gone too, because plan mode refuses such repos first.
+- Every `git worktree add` the fleet runs uses `-c core.hooksPath=/dev/null`, so no
+  `post-checkout` hook runs.
+
 ## [2.1.1] - 2026-11-05
 
 ### Fixed
