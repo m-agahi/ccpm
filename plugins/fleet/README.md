@@ -62,13 +62,14 @@ agent runs.
 | 6    | -                  | risk tier logged; short path disabled (always full)                       |
 | 7    | plan-audit         | verdict other than `approve` -> `needs_human`                             |
 | 8    | stage-plan         | stages the plan doc; returns the sha256 of the staged bytes               |
-| 9    | commit-plan        | writes the sealed ref file; commits plan + ref LOCALLY in ONE commit      |
+| 9    | commit-plan        | commits the plan doc only, LOCALLY; writes the sealed ref as a git object |
 
-Branch-scan: a plan commit has the subject `plan(<task id>): <slug>`, and its file set is a
-non-empty subset of exactly `{plan_path, .fleet/<task id>/plan_ref.json}`. The scan reads
-`plan_path` from the sealed ref file at that same commit; paths are compared exactly after
-normalisation, with no prefix or extension match. A commit with no readable ref file, a broken seal,
-another task's ref, or any other file is a build commit. If the fleet branch carries any build
+Branch-scan: a plan commit has the subject `plan(<task id>): <slug>`, and its file set is exactly
+`{plan_path}`. The scan reads `plan_path` from a sealed plan ref of the task
+(`refs/fleet/<task id>/plan`, or an earlier one kept as `refs/fleet/<task id>/plan-<n>`) whose tag
+target is that commit; paths are compared exactly after normalisation, with no prefix or extension
+match. A commit with no such plan ref, a broken seal, another task's ref, or any other file (a
+`.fleet/` path included) is a build commit. If the fleet branch carries any build
 commit, plan mode stops with "branch has build commits; run build, or delete branch". It never commits a plan on top
 of code. On a plan-only branch it adds a new plan commit.
 
@@ -85,17 +86,24 @@ names no repo, or several, stops with `needs_human`. The task id comes from the 
 GitHub or Codeberg source (`plan` for an ingested plan, `task` for free text). The slug comes from
 the brief title.
 
-The full plan ref is a file, `.fleet/<task id>/plan_ref.json`, committed in the plan commit. It
+Since 2.1.4 the full plan ref is a local git object, never a file and never pushed: an annotated
+tag object (`git mktag`, no tag name, index untouched, `core.hooksPath=/dev/null` so no hook runs)
+whose target is the plan commit and whose message is the sealed JSON, at
+`refs/fleet/<task id>/plan`. A re-plan moves that ref to the new plan commit and keeps the earlier
+value as `refs/fleet/<task id>/plan-<n>`. The plan commit holds `plan_path` only; nothing under
+`.fleet/` is written, staged or committed, so a global `.fleet/` gitignore changes nothing. It
 holds `branch`, `plan_path`, `plan_sha256`, `criteria`, `brief`, `task_id`, `slug`, `tldr`,
 `plan_diff` (2.1.0), `plan_facts` (scope fence, estimate, `test_cmd` and `repo_obligations`),
 `history` (cumulative
 runs, re-plans and agents) and
 `seal`, the sha256 of the canonical JSON of the rest. It holds no held-out example. Commit-plan
-reads the file back from the commit; the script checks that it parses to the sealed ref (a
-formatter hook may change the bytes, not the content).
+reads the ref back with `git cat-file tag`; the script checks that the commit holds exactly
+`plan_path`, that the tag targets the plan commit, and that the message parses to the sealed ref.
 
-The caller gets only a tiny `plan_ref`: `{branch, plan_commit, ref_path, ref_sha256, repo}`, where
-`ref_sha256` is the sha256 of the committed file bytes. The skill passes it back unchanged.
+The caller gets only a tiny `plan_ref`: `{branch, plan_commit, plan_ref, ref_sha256, repo}`, where
+`plan_ref` is `refs/fleet/<task id>/plan` and `ref_sha256` is the sha256 of the tag message bytes.
+The skill passes it back unchanged. A tiny ref with `ref_path` (2.0.1 to 2.1.3) stops with
+`needs_human` "plan_ref predates 2.1.4; re-run plan"; there is no compatibility path.
 
 Since 2.0.3, `plan_facts` is
 `{allowed_additions, est_diff_lines, test_cmd, repo_obligations, commands}`, covered by the seal.
@@ -123,7 +131,7 @@ The first failure stops the run:
 3. **G3 scope fence**, pure script code over every planned path (criteria `test_files`,
    `allowed_additions.files`, obligation `files`) and every command. It refuses `*.tf`, `*.tfvars`,
    a `terraform/` or `.terraform` dir, `kustomization.y*ml`, YAML under `k8s/` or `manifests/`,
-   `charts/*/templates/`, anything under `.github/`, `rulesets`, secret-like paths (`.env*`,
+   `charts/*/templates/`, anything under `.github/` or `.fleet/`, `rulesets`, secret-like paths (`.env*`,
    `*secret*`, `*.pem`, `*.key`, `id_rsa*`, `*credentials*`), a command that names kubectl, helm or
    an IaC tool, the default branch as the target, and a work repo other than the caller's.
 
@@ -162,8 +170,8 @@ args: `{mode: "build", plan_ref, date, project?, confirm?}`.
 | 12   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan    |
 | 12a  | -                  | `approve` with an unmet obligation -> `fix_code` (counts as a round)       |
 | 13   | commit (infra)     | `git add -A`, staged tree = `code_tree`, ONE commit WITH hooks (below)     |
-| 14   | push (infra)       | pushes the commit; a hook rejection -> coder (`fix_code`)                  |
-| 15   | pr-opener          | draft PR at `approved_sha` (the commit step's HEAD)                        |
+| 14   | push (infra)       | `.fleet/` check first; pushes; a hook rejection -> coder (`fix_code`)      |
+| 15   | pr-opener          | `.fleet/` check first; draft PR at `approved_sha` (the commit step's HEAD) |
 | 16   | review             | pr-review, plus the non-weakening sweep for gate changes (below)           |
 | 17   | write-back         | ledger section and one marked comment per external source                  |
 
@@ -212,16 +220,18 @@ hooks are never bypassed. So nothing commits until the code judge approves.
   The first commit's subject is `feat(<task id>): <slug words>`; each later one (a review or hook
   fix) is a NEW commit `fix(<task id>): code round <n>` (the PR squash-merges).
 
-Load-ref: an infra step returns `git show <plan_commit>:<ref_path>` and its sha256. Both must
-equal `ref_sha256`, the inner seal must hold, and the file's branch, repo and task id must match the
-tiny ref. Any mismatch stops with `needs_human` before any role runs. The script then uses the
-loaded ref. The ref file is also frozen: the hasher hashes it as a read-only config key, so a coder
-or writer that edits it trips the freeze.
+Load-ref: an infra step reads the plan refs with `git cat-file` and returns each tag's target,
+message and message sha256. The ref named by `plan_ref` must be an annotated tag of `plan_commit`,
+its message sha256 must equal `ref_sha256`, the inner seal must hold, and its branch, repo and task
+id must match the tiny ref. A missing ref or any mismatch stops with `needs_human` "plan ref missing
+or changed; re-run plan" before any role runs. The script then uses the loaded ref. The plan ref is
+frozen with every other `refs/fleet/*` ref in the hasher's git map, so a coder or writer that moves
+it trips the freeze; the script's own plan-ref write in a re-plan updates the frozen snapshot.
 
 Verify: the sha256 of `plan_path` at `plan_commit` must equal `plan_sha256`, or the run stops with
 "plan changed since approval". HEAD must equal `plan_commit`, or descend from it by commit-step
 commits of this plan only (`feat(<task id>): <slug words>` and `fix(<task id>): code round <n>`),
-with `plan_path` and the ref file unchanged. Anything else stops with the same reason.
+with `plan_path` unchanged. Anything else stops with the same reason.
 Stage-plan, commit-plan and verify run the same embedded hash program.
 
 The risk tier is still computed and logged (short = `est_diff_lines < 20` AND `new_behaviour`
@@ -320,6 +330,12 @@ Defended (each by a gate in script code):
   local hook scripts and their dirs, the hooks dir, local git config, `.gitattributes`);
 - scope escapes: the scope fence on the planned paths (`confirm: "auto"`) and on the real changed
   paths (every mode), writer ownership, the ignored-path listing;
+- fleet-internal files in a PR (2.1.4): before every push and every pr-opener call a read-only
+  infra step (`infra:fleet-scan:*`, a fixed program) lists the paths of
+  `git diff --name-only origin/<default>...<approved_sha>` and the files of every commit in
+  `origin/<default>..<approved_sha>`. Any path with a `.fleet/` directory segment, or a scan that
+  does not complete, stops the run with `needs_human` and `stop_gate: "scope"`: "fleet internal
+  files in PR diff: <paths>";
 - planner-command injection: `test_cmd` and `check_cmd` pass a script allowlist and Max approves
   them verbatim (or G2 checks them), and the workflow script runs none of them.
 

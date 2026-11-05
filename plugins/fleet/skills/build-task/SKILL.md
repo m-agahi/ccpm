@@ -109,9 +109,11 @@ runs `/build-task` explicitly, always use the fleet.
    the task and runs its gates again before it builds. On `needs_human` with `needs_max_section`,
    show it verbatim and stop.
 
-   `plan_ref` is small: `{branch, plan_commit, ref_path, ref_sha256, repo}`. Pass it exactly as the
-   workflow returned it. The full plan ref lives in the plan commit; the workflow checks it against
-   `ref_sha256` and refuses a mismatch.
+   `plan_ref` is small: `{branch, plan_commit, plan_ref, ref_sha256, repo}`. Pass it exactly as the
+   workflow returned it. The full plan ref is a local git object at `refs/fleet/<task id>/plan`
+   (never a file, never pushed); the workflow checks it against `ref_sha256` and refuses a
+   mismatch. A `plan_ref` with `ref_path` comes from 2.1.3 or earlier: the workflow stops with
+   "plan_ref predates 2.1.4; re-run plan", so run the plan step again.
 
    If the result is `awaiting_confirmation` again, the code judge found the plan wrong and the
    workflow re-planned. Show `proposed_plan_change` (a bullet list), then the new `tldr`,
