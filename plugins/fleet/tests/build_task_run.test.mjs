@@ -107,7 +107,7 @@ async function runOne(script, args) {
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
     // unscripted IaC hook reads see no .pre-commit-config.yaml (no IaC hooks)
     if (!(label in script) && /^infra:iac-hooks/.test(label))
-      return { status: "ok", reason: "absent", present: false, parser: null, sha256: "MISSING", default_stages: null, hooks: [] };
+      return { status: "ok", reason: "absent", present: false, parser: null, sha256: "MISSING", default_stages: null, hooks: [], installed: {} };
     // run-state writes are mechanical too: the ref lands on the expected head
     if (!(label in script) && /^infra:state:/.test(label)) {
       fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = "f".repeat(40);
@@ -4936,6 +4936,49 @@ test("2.1.0 ignored paths are listed: a .pth in a venv is frozen, tool caches ar
   }
 });
 
+test("2.1.1 venv entry points and egg-links are frozen: a pytest11 plugin a coder installs is a violation", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-ign-ep-");
+  try {
+    writeFileSync(join(wt, ".gitignore"), ".venv/\n.tox/\n");
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const sp = ".venv/lib/python3.12/site-packages";
+    sh(wt, "mkdir", "-p", sp + "/ok-1.0.dist-info", sp + "/old.egg-info", ".tox/py/lib/site-packages/t-2.0.dist-info");
+    writeFileSync(join(wt, sp, "ok-1.0.dist-info", "entry_points.txt"), "[console_scripts]\nok = ok:main\n");
+    writeFileSync(join(wt, sp, "ok-1.0.dist-info", "RECORD"), "ok.py,,\n");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.ok(sp + "/ok-1.0.dist-info/entry_points.txt" in a.ignored, Object.keys(a.ignored).join(", "));
+    assert.ok(!(sp + "/ok-1.0.dist-info/RECORD" in a.ignored), "other dist-info files are not frozen");
+    // the coder installs a package that registers a pytest plugin
+    sh(wt, "mkdir", "-p", sp + "/evil-1.0.dist-info");
+    writeFileSync(join(wt, sp, "evil-1.0.dist-info", "entry_points.txt"), "[pytest11]\nevil = evil_plugin\n");
+    writeFileSync(join(wt, sp, "old.egg-info", "entry_points.txt"), "[pytest11]\nold = old\n");
+    writeFileSync(join(wt, sp, "evil.egg-link"), "/tmp/evil\n.\n");
+    writeFileSync(join(wt, ".tox/py/lib/site-packages/t-2.0.dist-info", "entry_points.txt"), "[pytest11]\nt = t\n");
+    const b = runHasherRaw(wt, "hashes", []).hashes;
+    for (const p of [
+      sp + "/evil-1.0.dist-info/entry_points.txt",
+      sp + "/old.egg-info/entry_points.txt",
+      sp + "/evil.egg-link",
+      ".tox/py/lib/site-packages/t-2.0.dist-info/entry_points.txt",
+    ])
+      assert.ok(p in b.ignored, p + " in " + Object.keys(b.ignored).join(", "));
+    // a changed entry_points.txt changes its hash
+    writeFileSync(join(wt, sp, "ok-1.0.dist-info", "entry_points.txt"), "[pytest11]\nok = ok\n");
+    const c = runHasherRaw(wt, "hashes", []).hashes;
+    assert.notEqual(c.ignored[sp + "/ok-1.0.dist-info/entry_points.txt"], a.ignored[sp + "/ok-1.0.dist-info/entry_points.txt"]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.1 a coder that installs a venv entry_points.txt is stopped as an ignored path written", async () => {
+  const p = ".venv/lib/python3.12/site-packages/evil-1.0.dist-info/entry_points.txt";
+  const out = await run(hashViolation(Object.assign(H(HASHES_FLAT), { ignored: { [p]: "h" } })), ARGS);
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /ignored path written: \.venv\/lib\/python3\.12\/site-packages\/evil-1\.0\.dist-info\/entry_points\.txt/);
+});
+
 test("2.1.0 a writer or a coder that writes an ignored path is stopped", async () => {
   const ign = (p) => Object.assign(H(HASHES_FLAT), { ignored: { [p]: "h" } });
   let out = await run(happy({ script: { "hasher:post-writers:r1": (prompt) => ({ status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: ign(".venv/lib/x/site-packages/evil.pth") }) } }), ARGS);
@@ -5415,6 +5458,7 @@ function iacCfg(hooks, defaults) {
     parser: "yaml",
     sha256: "c".repeat(64),
     default_stages: defaults || null,
+    installed: {},
     hooks: hooks.map((h) => Object.assign({ repo: IAC_REPO, name: null, entry: null, args: [], stages: null }, h)),
   };
 }
@@ -5496,6 +5540,39 @@ test("2.1.1 IaC: the plan commit runs commit hooks too: a non-exempt IaC hook st
   assert.ok(ok.labels.indexOf("infra:iac-hooks:commit-plan") < ok.labels.indexOf("infra:commit-plan"));
 });
 
+test("2.1.1 IaC: installed hook files, local entry scripts and IaC file filters count", async () => {
+  const PLAIN = "https://github.com/pre-commit/mirrors-prettier";
+  const withInstalled = (installed, hooks) => Object.assign(iacCfg(hooks || []), { installed });
+  const shim = { generated: true, config: ".pre-commit-config.yaml", iac: false };
+  // push stops: a hand-written pre-push hook that runs IaC tooling
+  let out = await run(iacScript(withInstalled({ "pre-commit": { hook: shim }, "pre-push": { hook: { generated: false, config: null, iac: true } } })), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.stop_gate, "iac", out.result.reason);
+  assert.match(out.result.reason, /pre-push hooks run IaC tooling \(installed pre-push hook\)/);
+  assert.ok(out.labels.includes("infra:commit:r1"));
+  // commit stops: a legacy chain with IaC, a shim for another config, a local entry script, a .tf file filter
+  for (const [installed, hooks] of [
+    [{ "pre-commit": { hook: shim, legacy: { generated: false, config: null, iac: true } } }, []],
+    [{ "pre-commit": { hook: { generated: true, config: "other.yaml", iac: false } } }, []],
+    [{}, [{ id: "lint", repo: "local", entry: "scripts/lint.sh", stages: ["pre-commit"], entry_iac: true }]],
+    [{}, [{ id: "fmt-check", repo: "local", entry: "bash", files: "\\.tf$", stages: ["pre-commit"] }]],
+    [{}, [{ id: "hcl", repo: PLAIN, types: ["hcl"], stages: ["pre-commit"] }]],
+  ]) {
+    out = await run(iacScript(withInstalled(installed, hooks)), ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.stop_gate, "iac", JSON.stringify([installed, hooks]) + " " + out.result.reason);
+    assert.match(out.result.reason, /commit hooks run IaC tooling/);
+  }
+  // a husky-style pre-push hook with no IaC tooling, and a plain shim: unchanged flow
+  out = await run(iacScript(withInstalled({ "pre-commit": { hook: shim }, "pre-push": { hook: { generated: false, config: null, iac: false } } }, [{ id: "prettier", repo: PLAIN }])), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  // a malformed installed entry fails closed
+  out = await run(iacScript(withInstalled({ "pre-push": { hook: { generated: false } } })), ARGS);
+  assert.equal(out.result.stop_gate, "iac", out.result.reason);
+  assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)));
+});
+
 test("2.1.1 IaC: a repo with no IaC hooks keeps the unchanged flow", async () => {
   const cfg = iacCfg([
     { id: "prettier", repo: "https://github.com/pre-commit/mirrors-prettier" },
@@ -5510,9 +5587,11 @@ test("2.1.1 IaC: a repo with no IaC hooks keeps the unchanged flow", async () =>
 
 test("2.1.1 IaC: an unreadable or unparseable config fails closed before the commit", async () => {
   for (const cfg of [
-    { status: "ok", reason: "no yaml", present: true, parser: null, error: "PyYAML unavailable", sha256: "c".repeat(64), default_stages: null, hooks: [] },
-    { status: "ok", reason: "bad", present: true, parser: "yaml", error: "unparseable: x", sha256: "c".repeat(64), default_stages: null, hooks: [] },
-    { status: "ok", reason: "odd", present: true, parser: "yaml", sha256: "c".repeat(64), default_stages: null },
+    { status: "ok", reason: "no yaml", present: true, parser: null, error: "PyYAML unavailable", sha256: "c".repeat(64), default_stages: null, hooks: [], installed: {} },
+    { status: "ok", reason: "bad", present: true, parser: "yaml", error: "unparseable: x", sha256: "c".repeat(64), default_stages: null, hooks: [], installed: {} },
+    { status: "ok", reason: "odd", present: true, parser: "yaml", sha256: "c".repeat(64), default_stages: null, installed: {} },
+    // the installed hook files were not read: fail closed
+    { status: "ok", reason: "no installed", present: false, parser: null, sha256: "MISSING", default_stages: null, hooks: [] },
   ]) {
     const out = await run(iacScript(cfg), ARGS);
     noUnscripted(out);
@@ -5596,14 +5675,31 @@ test("2.1.1 IaC hook reader program: raw hook fields, stages, sha256; absent con
       "      - id: lint\n" +
       "        name: Lint\n" +
       "        entry: scripts/lint.sh\n" +
-      "        language: script\n";
+      "        language: script\n" +
+      "      - id: fmt-check\n" +
+      "        entry: bash\n" +
+      "        args: [scripts/fmt.sh]\n" +
+      "        files: \\.(tf|tfvars)$\n" +
+      "        types: [file]\n" +
+      "        language: system\n";
     writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg);
+    sh(wt, "mkdir", "-p", "scripts");
+    writeFileSync(join(wt, "scripts", "lint.sh"), "#!/bin/sh\ntflint --recursive\n");
+    writeFileSync(join(wt, "scripts", "fmt.sh"), "#!/bin/sh\nprettier --check .\n");
+    // installed hook files: a pre-commit shim, its legacy chain, and a hand-written pre-push
+    const hooksDir = join(wt, ".git", "hooks");
+    writeFileSync(join(hooksDir, "pre-commit"), "#!/usr/bin/env bash\n# File generated by pre-commit: https://pre-commit.com\nARGS=(hook-impl --config=.pre-commit-config.yaml --hook-type=pre-commit)\n");
+    writeFileSync(join(hooksDir, "pre-commit.legacy"), "#!/bin/sh\nterragrunt hclfmt\n");
+    writeFileSync(join(hooksDir, "pre-push"), "#!/bin/sh\nnpx lint-staged\n");
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "config");
     const m = /IAC_HOOKS_PY_BEGIN\n([\s\S]*?)\n\/\/ IAC_HOOKS_PY_END/.exec(SOURCE);
     assert.ok(m, "IAC_HOOKS_PY markers");
     const body = m[1].replace(/^const IAC_HOOKS_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
     assert.doesNotMatch(body, /terraform|tofu|tflint|terragrunt|\btfp\b/i, "the Bash guard blocks these words");
+    // the pieced Python pattern is the script's IAC_HOOK_RE
+    const pyPat = Function("return " + /PAT = re\.compile\((.*), re\.I\)/.exec(body)[1])();
+    assert.equal(pyPat, /const IAC_HOOK_RE = \/(.*)\/i;/.exec(SOURCE)[1]);
     const runPy = (rev) => {
       const r = spawnSync("python3", ["-I", "-", wt, rev], { input: body, encoding: "utf8" });
       assert.equal(r.status, 0, r.stderr);
@@ -5615,13 +5711,21 @@ test("2.1.1 IaC hook reader program: raw hook fields, stages, sha256; absent con
     assert.equal(got.sha256, sha256(cfg));
     assert.deepEqual(got.default_stages, ["commit"]);
     assert.deepEqual(got.hooks, [
-      { repo: "https://github.com/antonbabenko/pre-commit-terraform", id: "terraform_fmt", name: null, entry: null, args: [], stages: null },
-      { repo: "https://github.com/antonbabenko/pre-commit-terraform", id: "terraform_tflint", name: null, entry: null, args: ["--args=--config=x", "3"], stages: ["pre-push"] },
-      { repo: "local", id: "lint", name: "Lint", entry: "scripts/lint.sh", args: [], stages: null },
+      { repo: "https://github.com/antonbabenko/pre-commit-terraform", id: "terraform_fmt", name: null, entry: null, args: [], stages: null, files: null, types: null, types_or: null, entry_iac: false },
+      { repo: "https://github.com/antonbabenko/pre-commit-terraform", id: "terraform_tflint", name: null, entry: null, args: ["--args=--config=x", "3"], stages: ["pre-push"], files: null, types: null, types_or: null, entry_iac: false },
+      { repo: "local", id: "lint", name: "Lint", entry: "scripts/lint.sh", args: [], stages: null, files: null, types: null, types_or: null, entry_iac: true },
+      { repo: "local", id: "fmt-check", name: null, entry: "bash", args: ["scripts/fmt.sh"], stages: null, files: "\\.(tf|tfvars)$", types: ["file"], types_or: null, entry_iac: false },
     ]);
+    assert.deepEqual(got.installed["pre-commit"], {
+      hook: { generated: true, config: ".pre-commit-config.yaml", iac: false },
+      legacy: { generated: false, config: null, iac: true },
+    });
+    assert.deepEqual(got.installed["pre-push"], { hook: { generated: false, config: null, iac: false } });
+    assert.deepEqual(got.installed["commit-msg"], {});
     const none = runPy(bare);
     assert.equal(none.present, false);
     assert.equal(none.sha256, "MISSING");
+    assert.ok(none.installed["pre-commit"].legacy.iac, "installed hooks are read without a config too");
     const bad = runPy("0".repeat(40));
     assert.equal(bad.present, true, "a bad rev is not an absent config");
     assert.ok(bad.error);

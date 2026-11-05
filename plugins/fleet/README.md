@@ -344,7 +344,15 @@ at its push step, so the script checks the hooks first.
   build reads it too. The script decides in code which hooks are IaC hooks.
 - An IaC hook is a hook whose id, name, entry, args or repo URL matches
   `terraform|tofu|\btfp\b|tflint|terragrunt|tfsec|infracost|checkov.*terraform`, or a hook from
-  `antonbabenko/pre-commit-terraform` or `tofuutils/pre-commit-opentofu`.
+  `antonbabenko/pre-commit-terraform` or `tofuutils/pre-commit-opentofu`. A hook whose `files`,
+  `types` or `types_or` names terraform, hcl or `.tf`/`.tfvars` counts too, and so does a
+  `repo: local` hook whose entry or args name a repo file whose content matches the pattern.
+- The same step reads the hook files git runs (`core.hooksPath`, else the hooks dir) for each
+  commit-time stage and pre-push, and their pre-commit `*.legacy` files. A pre-commit shim for the
+  root config is checked through the config. A shim for another config counts as an IaC hook at its
+  stage. Any other hook file (husky, lefthook, hand-written, `*.legacy`) counts when its content
+  matches the pattern. The program spells no tool name whole (the local Bash guard), so its
+  pattern is built from pieces.
 - Effective stages: the hook's `stages`, else `default_stages`, else `pre-commit` and `pre-push`
   (pre-commit's default includes pre-push). `commit` and `push` count as `pre-commit` and
   `pre-push`.
@@ -366,10 +374,13 @@ at its push step, so the script checks the hooks first.
 - `tflint` and `terragrunt` are forbidden words in `test_cmd`/`check_cmd` and in the G3 command
   fence.
 
-Not covered: hooks outside the root `.pre-commit-config.yaml` (husky, lefthook, a hand-written
-script in the hooks dir, a `pre-commit -c <other config>` entry), stages other than the commit-time
-stages and pre-push (for example `post-checkout` during worktree creation), and whether an
-exempt `terraform_validate` hook really runs with the backend off. The script cannot verify these.
+Not covered (content scans are lexical, one level deep): a remote hook repo whose own
+`.pre-commit-hooks.yaml` runs IaC tooling under an unrelated id with no IaC file filter in the
+config; a hook file or entry script that calls another script or tool which runs IaC tooling
+(`make lint`, `npx lint-staged`); stages other than the commit-time stages and pre-push (for
+example `post-checkout` during worktree creation); and whether an exempt `terraform_validate` hook
+really runs with the backend off, or whether a `repo: local` hook reuses an exempt id. The script
+cannot verify these.
 
 ### Frozen set
 
@@ -427,7 +438,9 @@ The hasher freezes every criterion test file, plus:
   `.coverage.*` and `junit*.xml` at the repo root only. `*.egg-info` and `EGG-INFO` stay frozen
   anywhere (their `entry_points` can register pytest plugins); they and the venv startup-hook rule
   are checked before these exclusions. Inside `.venv`, `venv`, `.tox`,
-  `.nox` and `node_modules` only `*.pth`, `sitecustomize.py` and `usercustomize.py` count. A new or
+  `.nox` and `node_modules` only `*.pth`, `sitecustomize.py`, `usercustomize.py`, `*.egg-link` and
+  the `entry_points.txt` of a `*.dist-info` or `*.egg-info` dir count (an installed package can
+  register a `pytest11` plugin that skips or passes tests). A new or
   changed ignored path after a writer round or a coder round is a violation ("ignored path
   written: <p>");
 - sections, hashed under `<path>#<section>` after canonicalisation (sorted keys, compact JSON):

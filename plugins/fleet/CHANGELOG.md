@@ -19,11 +19,17 @@
   after the commit and its `committed` run-state. An IaC hook at a commit-time stage, other than
   a fmt/validate/tflint/docs hook at pre-commit, stops it before the commit step. The commit step
   re-checks the rule against the frozen config's hash. An unreadable config fails closed.
+- The IaC check also reads the installed hook files git runs (hooks dir or `core.hooksPath`,
+  `*.legacy` chains) and scans `repo: local` entry scripts and `files`/`types` filters.
 - The plan commit runs the repo's commit hooks too: `infra:iac-hooks:commit-plan` reads the config
   at `HEAD` first, and the commit-stage rule stops plan mode and re-plan before the plan commit.
 - `confirm: "auto"` G3 refuses any repo with an IaC hook ("repo hooks run IaC tooling").
 - `tflint` and `terragrunt` join the forbidden command words and the G3 command fence.
 - README: "IaC hooks" under Threat model, with what the check does not cover.
+- **Venv entry points are frozen.** Inside `.venv`, `venv`, `.tox`, `.nox` (and `node_modules`)
+  the hasher's ignored-files scan now also hashes every `*.dist-info/entry_points.txt`,
+  `*.egg-info/entry_points.txt` and `*.egg-link`. A coder that installs a package registering a
+  `pytest11` plugin is stopped as "ignored path written".
 
 ## [2.1.0] - 2026-11-04
 
