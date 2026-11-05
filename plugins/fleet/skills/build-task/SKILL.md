@@ -137,9 +137,19 @@ A second plan run for the same input reuses the branch and worktree under
 `<repo>/.claude/worktrees/fleet-<task id>-<slug>/` and updates the plan in place, with a new plan
 commit. If the branch already has build commits, plan mode stops: run build, or delete the branch.
 Writers and the coder never commit: the only build commits are made by the workflow's commit step
-after the code judge approves. So a build that stopped before that leaves uncommitted tests and code
-in the fleet worktree, and a build started again with the same `plan_ref` stops with `needs_human`
-on the dirty worktree. Tell the user: a human must commit, stash or clean that work first. The
+after the code judge approves.
+
+A build re-run with the same `plan_ref` resumes at the last completed gate. After the commit, the
+push, the PR, the review and the write-back, the workflow records a local run-state ref. When a
+later step failed (for example the push, on an SSH identity), fix the cause and run step 8 again
+with the same `plan_ref`: the result says `resumed_at`, and no writer, coder or judge runs again.
+A `needs_human` "run-state mismatch" means the branch or worktree changed since that milestone;
+"approved but unresumable" means build commits exist without a run-state. Relay the reason; a
+human pushes by hand or deletes the branch.
+
+A build that stopped before its commit step leaves uncommitted tests and code in the fleet
+worktree, and a build started again with the same `plan_ref` stops with `needs_human` on the dirty
+worktree. Tell the user: a human must commit, stash or clean that work first. The
 workflow never deletes a branch or a worktree (it removes only the review's scratch worktrees). It
 resets the fleet branch only during a re-plan after `plan_wrong`, and only after it saved the
 uncommitted work on `superseded_ref`.

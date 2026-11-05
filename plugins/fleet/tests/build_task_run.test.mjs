@@ -104,6 +104,9 @@ async function runOne(script, args) {
     calls.push({ label, prompt, opts });
     // the bytecode purge is mechanical; unscripted purges succeed by default
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
+    // run-state writes are mechanical too: the ref lands on the expected head
+    if (!(label in script) && /^infra:state:/.test(label))
+      return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
     if (!(label in script)) {
       unscripted.push(label);
       return null;
@@ -330,6 +333,7 @@ function happy(over = {}) {
     "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
     "infra:commit-plan": commitStub(store, PC, PSHA),
     "infra:load-ref": loadStub(store),
+    "infra:read-state": { status: "ok", reason: "no run-state", exists: false },
     "infra:verify-plan": {
       status: "ok",
       reason: "verified",
@@ -2460,7 +2464,7 @@ test("build mode: preflight first, then workspace, verify, then the writers' bas
   const out = await runOne(s, buildArgs(ref));
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.deepEqual(out.labels.slice(0, 5), ["preflight", "workspace", "infra:load-ref", "infra:verify-plan", "hasher:pre-writers:r1"]);
+  assert.deepEqual(out.labels.slice(0, 6), ["preflight", "workspace", "infra:load-ref", "infra:verify-plan", "infra:read-state", "hasher:pre-writers:r1"]);
   assert.ok(!out.labels.some((l) => l.startsWith("role:scope-and-plan") || l.startsWith("role:plan-audit")));
   const v = inputsOf(call(out, "infra:verify-plan").prompt);
   assert.deepEqual(v, {
@@ -2505,7 +2509,7 @@ test("build mode: a branch moved off the plan commit stops", async () => {
   }
 });
 
-test("build mode: a descendant made only by the commit step of this plan proceeds", async () => {
+test("build mode: commit-step commits pass verify; without a run-state the build stops as unresumable", async () => {
   const s = happy();
   const ref = await planRefFor(s);
   const head = "fedcba9876";
@@ -2519,7 +2523,7 @@ test("build mode: a descendant made only by the commit step of this plan proceed
   };
   const out = await runOne(s, buildArgs(ref));
   assert.ok(out.logs.some((l) => /descends from plan_commit by 2 fleet commit/.test(l)));
-  assert.ok(out.labels.includes("hasher:pre-writers:r1"));
+  assert.match(out.result.reason, /approved but unresumable/);
   // any other subject is not a commit step of this plan (writers and the coder never commit)
   for (const subject of ["test(AC1): behaviour 1", "Merge branch 'fleet/l42-add-thing--pabc1234d-t-AC1'", "feat(thing): add it", "fix(l43): code round 2"]) {
     s["infra:verify-plan"].commits_since = [{ sha: "5555555", subject }];
@@ -4771,12 +4775,12 @@ test("2.1.0 an auto build reports mode build", async () => {
   assert.equal(out.result.mode, "build");
 });
 
-test("2.1.0 write-back runs right after the first PR opens, so a stopped review still leaves it", async () => {
+test("2.1.0 write-back follows the review (the run-state milestone order)", async () => {
   const out = await run(happy({ script: { "role:pr-review:v1": { status: "needs_human", reason: "cannot read PR" } } }), ARGS);
   assert.equal(out.result.status, "needs_human");
-  const L = out.labels;
-  assert.ok(L.indexOf("infra:ledger-writeback") > L.indexOf("role:fleet-pr-opener"));
-  assert.ok(L.indexOf("infra:ledger-writeback") < L.indexOf("role:pr-review:v1"));
+  assert.ok(!out.labels.includes("infra:ledger-writeback"));
+  const ok = await run(happy(), ARGS);
+  assert.ok(ok.labels.indexOf("infra:ledger-writeback") > ok.labels.indexOf("role:pr-review:v1"));
 });
 
 test("2.1.0 re-plan keeps the uncommitted work under a non-branch ref to the tree: no commit object", async () => {
@@ -5079,4 +5083,213 @@ test("2.1.0 a coder that edits package.json scripts (a launcher hook's table) is
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /package\.json#scripts/);
+});
+
+// ---------------------------------------------------------------- 2.1.0 run-state resume
+
+// The state JSON a run-state write step carries (quoted heredoc body).
+function stateJsonOf(prompt) {
+  const m = /<<'FLEET_STATE_JSON'\n([\s\S]*?)\nFLEET_STATE_JSON/.exec(prompt);
+  return m ? JSON.parse(m[1]) : null;
+}
+
+// A build run that records every run-state write into `states` (gate -> JSON).
+function recording(s, states) {
+  for (const label of ["infra:state:committed:r1", "infra:state:pushed:p1", "infra:state:pr_open:p1", "infra:state:reviewed:v1", "infra:state:written_back"])
+    s[label] = (prompt) => {
+      const st = stateJsonOf(prompt);
+      states[st.last_gate] = st;
+      return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
+    };
+  return s;
+}
+
+// Build-mode script for a re-run on the approved commit, reading `st`.
+function rerunScript(s, st, over) {
+  s["infra:verify-plan"] = {
+    ...happy()["infra:verify-plan"],
+    head: st.approved_sha,
+    commits_since: [{ sha: st.approved_sha, subject: "feat(l42): add thing" }],
+    changed_since: ["src/x.py", "tests/test_a.py"],
+  };
+  s["infra:read-state"] = Object.assign(
+    { status: "ok", reason: "read", exists: true, target: st.approved_sha, message: JSON.stringify(st), head: st.approved_sha, head_tree: st.code_tree, clean: true },
+    (over && over.read) || {},
+  );
+  s["hasher:resume"] = Object.assign({ status: "ok", fingerprint: { head: st.approved_sha, tree: st.code_tree }, hashes: HASHES }, (over && over.hasher) || {});
+  s["infra:push"] = (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha });
+  return s;
+}
+
+const NO_REWORK = /^(role:fleet-test-writer|role:fleet-coder|role:fleet-code-judge|role:fleet-test-judge|hasher:pre-writers|hasher:freeze|infra:commit:)/;
+
+test("2.1.0 run-state: every milestone writes the state ref, in order, with a mktag object and no hooks", async () => {
+  const states = {};
+  const out = await run(recording(happy(), states), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const order = ["infra:state:committed:r1", "infra:push", "infra:state:pushed:p1", "role:fleet-pr-opener", "infra:state:pr_open:p1", "role:pr-review:v1", "infra:state:reviewed:v1", "infra:ledger-writeback", "infra:state:written_back"];
+  for (let i = 1; i < order.length; i++) assert.ok(out.labels.indexOf(order[i]) > out.labels.indexOf(order[i - 1]), order[i]);
+  const p = call(out, "infra:state:committed:r1").prompt;
+  assert.match(p, /mktag/);
+  assert.match(p, /update-ref 'refs\/fleet\/l42\/state'/);
+  assert.match(p, /GIT_CONFIG_NOSYSTEM=1/);
+  assert.equal(states.committed.plan_commit, PC);
+  assert.equal(states.committed.approved_sha, CSHA(1));
+  assert.equal(states.committed.code_tree, "K1");
+  assert.match(states.committed.maps_digest, /^[0-9a-f]{64}$/);
+  assert.equal(states.pr_open.pr_number, 7);
+  assert.equal(states.written_back.ledger_status, "ok");
+});
+
+test("2.1.0 resume: a push that failed resumes at push on the re-run; no writer, coder or judge runs", async () => {
+  const s = recording(happy(), {});
+  const states = {};
+  recording(s, states);
+  s["infra:push"] = { status: "failed", reason: "ssh: permission denied (publickey)" };
+  const plan = await runOne(s, ARGS);
+  const first = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  assert.equal(first.result.status, "failed");
+  assert.equal(states.committed.last_gate, "committed");
+  rerunScript(s, states.committed);
+  const second = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  noUnscripted(second);
+  assert.equal(second.result.status, "ok", second.result.reason);
+  assert.ok(!second.labels.some((l) => NO_REWORK.test(l)), second.labels.join(", "));
+  assert.ok(second.logs.some((l) => /resuming at push/.test(l)));
+  assert.equal(inputsOf(call(second, "infra:push").prompt).approved_sha, CSHA(1));
+  assert.ok(second.labels.includes("role:fleet-pr-opener"));
+  assert.ok(second.labels.includes("role:pr-review:v1"));
+  assert.equal(second.result.pr_url, "https://github.com/o/r/pull/7");
+});
+
+test("2.1.0 resume: a run stopped after the PR opened resumes at review", async () => {
+  const states = {};
+  const s = recording(happy(), states);
+  s["role:pr-review:v1"] = { status: "needs_human", reason: "cannot read PR" };
+  const plan = await runOne(s, ARGS);
+  const first = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  assert.equal(first.result.status, "needs_human");
+  assert.ok(!first.labels.includes("infra:ledger-writeback"), "write-back follows the review");
+  rerunScript(s, states.pr_open);
+  s["role:pr-review:v1"] = happy()["role:pr-review:v1"];
+  const second = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  noUnscripted(second);
+  assert.equal(second.result.status, "ok", second.result.reason);
+  assert.ok(second.logs.some((l) => /resuming at review/.test(l)));
+  assert.ok(!second.labels.some((l) => NO_REWORK.test(l) || l === "infra:push" || l === "role:fleet-pr-opener"), second.labels.join(", "));
+  assert.equal(inputsOf(call(second, "role:pr-review:v1").prompt).pr_number, 7);
+  assert.ok(second.labels.includes("infra:ledger-writeback"));
+});
+
+test("2.1.0 resume: written_back returns the recorded result with no role agent", async () => {
+  const states = {};
+  const s = recording(happy(), states);
+  const plan = await runOne(s, ARGS);
+  await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  rerunScript(s, states.written_back);
+  const again = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  noUnscripted(again);
+  assert.equal(again.result.status, "ok", again.result.reason);
+  assert.equal(again.result.pr_url, "https://github.com/o/r/pull/7");
+  assert.equal(again.result.ledger_status, "ok");
+  assert.equal(again.result.resumed_at, "done");
+  assert.ok(!again.labels.some((l) => /^role:/.test(l) || l === "infra:push" || /^infra:state:/.test(l)), again.labels.join(", "));
+});
+
+test("2.1.0 resume: a run-state that does not match stops with run-state mismatch; never re-runs writers", async () => {
+  const states = {};
+  const s = recording(happy(), states);
+  s["infra:push"] = { status: "failed", reason: "ssh" };
+  const plan = await runOne(s, ARGS);
+  await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  const st = states.committed;
+  for (const [over, re] of [
+    [{ read: { head: "abcabcabca" } }, /run-state mismatch: HEAD/],
+    [{ read: { head_tree: "OTHER" } }, /run-state mismatch: tree/],
+    [{ read: { clean: false } }, /run-state mismatch: worktree not clean/],
+    [{ read: { message: JSON.stringify(Object.assign({}, st, { ref_sha256: "0".repeat(64) })) } }, /run-state mismatch: ref_sha256/],
+    [{ hasher: { hashes: H({ ...HASHES_FLAT, "tests/test_a.py": "WEAKENED" }) } }, /run-state mismatch: frozen maps/],
+  ]) {
+    rerunScript(s, st, over);
+    const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+    assert.equal(out.result.status, "needs_human", String(re));
+    assert.match(out.result.reason, re);
+    assert.ok(!out.labels.some((l) => NO_REWORK.test(l)), out.labels.join(", "));
+  }
+});
+
+test("2.1.0 resume: no run-state but build commits on the branch stops as unresumable", async () => {
+  const s = happy();
+  const ref = await planRefFor(s);
+  s["infra:verify-plan"] = { ...s["infra:verify-plan"], head: "fedcba9876", commits_since: [{ sha: "fedcba9876", subject: "feat(l42): add thing" }], changed_since: ["src/x.py"] };
+  const out = await runOne(s, buildArgs(ref));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /approved but unresumable: branch has build commits without run-state; push manually or delete branch/);
+  assert.ok(!out.labels.some((l) => NO_REWORK.test(l)));
+});
+
+test("2.1.0 resume: a stale run-state of another plan is ignored when HEAD is the plan commit", async () => {
+  const s = happy();
+  const ref = await planRefFor(s);
+  s["infra:read-state"] = { status: "ok", reason: "read", exists: true, target: "1234567", message: JSON.stringify({ plan_commit: "9999999", last_gate: "committed" }), head: PC, head_tree: "T0", clean: true };
+  const out = await runOne(s, buildArgs(ref));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.logs.some((l) => /stale run-state/.test(l)));
+});
+
+test("2.1.0 run-state program: the write command and the read program round-trip in a real repo", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-state-");
+  try {
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const m = /WRITE_STATE_SH_BEGIN\n([\s\S]*?)\n\/\/ WRITE_STATE_SH_END/.exec(SOURCE);
+    assert.ok(m, "WRITE_STATE_SH markers");
+    const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+    const writeStateCmd = Function("q", "return (" + m[1].trim().replace(/^function writeStateCmd/, "function").replace(/shQuote/g, "q") + ")")(q);
+    const st = { plan_commit: "abc", last_gate: "committed", note: "it's \"quoted\"" };
+    const cmd = writeStateCmd(wt, "refs/fleet/l42/state", JSON.stringify(st));
+    const r = spawnSync("bash", ["-c", cmd], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    const head = sh(wt, "git", "rev-parse", "HEAD").trim();
+    assert.equal(sh(wt, "git", "cat-file", "-t", "refs/fleet/l42/state").trim(), "tag");
+    assert.equal(sh(wt, "git", "tag", "-l").trim(), "", "no tag name left");
+    const rm = /READ_STATE_PY_BEGIN\n([\s\S]*?)\n\/\/ READ_STATE_PY_END/.exec(SOURCE);
+    const body = rm[1].replace(/^const READ_STATE_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
+    const rr = spawnSync("python3", ["-I", "-", wt, "refs/fleet/l42/state"], { input: body, encoding: "utf8" });
+    assert.equal(rr.status, 0, rr.stderr);
+    const got = JSON.parse(rr.stdout);
+    assert.equal(got.exists, true);
+    assert.equal(got.target, head);
+    assert.deepEqual(JSON.parse(got.message), st);
+    assert.equal(got.head, head);
+    assert.equal(got.clean, true);
+    const none = JSON.parse(spawnSync("python3", ["-I", "-", wt, "refs/fleet/l43/state"], { input: body, encoding: "utf8" }).stdout);
+    assert.equal(none.exists, false);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 resume survives a transport fix: remote, url, credential, http and sshCommand config are not frozen", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-transport-");
+  try {
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes.git["config:local"];
+    sh(wt, "git", "remote", "add", "origin", "git@github.com:o/r.git");
+    sh(wt, "git", "config", "remote.origin.url", "https://github.com/o/r.git");
+    sh(wt, "git", "config", "core.sshCommand", "ssh -i ~/.ssh/other");
+    sh(wt, "git", "config", "url.git@github.com:.insteadOf", "https://github.com/");
+    sh(wt, "git", "config", "credential.helper", "store");
+    sh(wt, "git", "config", "http.postBuffer", "1048576");
+    assert.equal(runHasherRaw(wt, "hashes", []).hashes.git["config:local"], a);
+    sh(wt, "git", "config", "core.fsmonitor", "./x.sh");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.git["config:local"], a);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
 });

@@ -124,7 +124,9 @@ const PATH_ARG_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
 // test_cmd tokens after the runner prefix: never one of these subcommands.
 const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
 // stop_gate values: which gate ended a stopped run (null when none applies).
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume"];
+// Run-state milestones, in order, and the step a resumed build runs next.
+const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "done" };
 const CONFIRMS = ["ask", "auto"];
 // Review (2.1.0): at most one review round after the first.
 const MAX_REVIEWS = 2;
@@ -644,12 +646,15 @@ def hook_refs():
     return sorted(frozen), bad, used_launcher
 
 def config_freeze(gitmap):
-    # local (and worktree) git config, sorted with values, minus branch.* (the
-    # workflow's push -u) and remote.*.gh-resolved (gh); every include target
+    # local (and worktree) git config, sorted with values, minus the keys
+    # below; every include target
     def lst(*scope):
         r = subprocess.run(GIT + ['config'] + list(scope) + ['--list'], capture_output=True)
         return r.stdout.decode('utf-8', 'replace').splitlines() if r.returncode == 0 else []
-    keep = lambda l: not l.startswith('branch.') and not re.match(r'remote\.[^=]*\.gh-resolved=', l)
+    # left out: branch.* (the workflow's push -u) and transport settings a
+    # human may fix between runs (remote.*, url.*, credential.*, http.*,
+    # core.sshcommand); none of them weakens a test or a gate
+    keep = lambda l: not re.match(r'(branch|remote|url|credential|http)\.|core\.sshcommand=', l)
     local = sorted(l for l in lst('--local') if keep(l))
     gitmap['config:local'] = sha('\n'.join(local).encode())
     on = subprocess.run(GIT + ['config', '--bool', 'extensions.worktreeConfig'], capture_output=True).stdout.strip()
@@ -1054,6 +1059,11 @@ const INFRA_SCHEMA = {
     parser: STR_OR_NULL,
     error: STR,
     removed: { type: "array", items: STR },
+    state_sha: STR,
+    exists: { type: "boolean" },
+    target: STR,
+    message: STR,
+    clean: { type: "boolean" },
     results: {
       type: "array",
       items: {
@@ -1224,6 +1234,13 @@ function configView(h, testFiles) {
   for (const m of ["sections", "git", "symlinks", "ignored"])
     for (const k of Object.keys((h && h[m]) || {})) o[keyName(m, k)] = h[m][k];
   return o;
+}
+
+// sha256 of every hasher map (canonical JSON): the run-state's frozen-maps digest.
+function mapsDigest(h) {
+  const o = {};
+  for (const m of HASH_MAPS) o[m] = (h && h[m]) || {};
+  return sha256Hex(canonical(o));
 }
 
 // For the code judge: {"<map>/<key>": {frozen, current, match}}, plus the
@@ -2212,6 +2229,75 @@ function precommitIdsPrompt(inputs) {
     "\n" +
     "It prints one JSON object {present, ids, parser, error?}. Copy every value unchanged. Non-zero exit -> failed with its stderr.\n" +
     "Return {status, reason, present, ids, parser, error}."
+  );
+}
+
+// The run-state ref: refs/fleet/<task id>/state points at an annotated tag
+// object (git mktag, no tag name, no hook, index untouched) whose target is
+// HEAD and whose message is the state JSON. Local only, never pushed.
+// WRITE_STATE_SH_BEGIN
+function writeStateCmd(worktree, stateRef, json) {
+  const g = "GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -C " + shQuote(worktree);
+  return (
+    "c=$(" + g + " rev-parse HEAD) && t=$( { printf 'object %s\\ntype commit\\ntag fleet-state\\ntagger fleet <fleet@localhost> 0 +0000\\n\\n' \"$c\"; cat <<'FLEET_STATE_JSON'\n" +
+    json +
+    "\nFLEET_STATE_JSON\n} | " + g + " mktag) && " + g + " update-ref " + shQuote(stateRef) + " \"$t\" && echo \"$c $t\""
+  );
+}
+// WRITE_STATE_SH_END
+
+function writeStatePrompt(inputs, json) {
+  return (
+    "Infra step of the fleet build workflow: record the run-state. Local only: never push, never create a tag name, never commit, never touch the index or any file.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one Bash command exactly as written, unmodified:\n" +
+    writeStateCmd(inputs.main_worktree, inputs.state_ref, json) +
+    "\n" +
+    "It prints `<head> <state_sha>`. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, head, state_sha}."
+  );
+}
+
+// Reads the run-state ref: {exists, target, message, head, head_tree, clean}.
+// READ_STATE_PY_BEGIN
+const READ_STATE_PY = String.raw`
+import json, os, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+wt, ref = sys.argv[1], sys.argv[2]
+G = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
+def run(*a):
+    return subprocess.run(G + list(a), capture_output=True)
+out = {'exists': False}
+t = run('cat-file', '-t', ref)
+if t.returncode == 0:
+    out['exists'] = True
+    out['target'] = ''
+    out['message'] = ''
+    if t.stdout.strip() == b'tag':
+        raw = run('cat-file', 'tag', ref).stdout.decode('utf-8', 'replace')
+        hdr, _, msg = raw.partition('\n\n')
+        out['target'] = next((l[7:] for l in hdr.splitlines() if l.startswith('object ')), '')
+        out['message'] = msg.strip()
+out['head'] = run('rev-parse', 'HEAD').stdout.decode().strip()
+out['head_tree'] = run('rev-parse', 'HEAD^{tree}').stdout.decode().strip()
+out['clean'] = run('status', '--porcelain').stdout == b''
+print(json.dumps(out))
+`;
+// READ_STATE_PY_END
+
+function readStatePrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: READ the run-state. Read only: no edits, no commits, no checkout, no push; run nothing but the one command below.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified:\n" +
+    "python3 -I -c " + shQuote(READ_STATE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.state_ref) +
+    "\n" +
+    "It prints one JSON object {exists, target, message, head, head_tree, clean}. Copy every value unchanged, byte for byte. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, exists, target, message, head, head_tree, clean}."
   );
 }
 
@@ -3354,9 +3440,44 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // the ref file is frozen too (hashed as a config key, read-only for every role)
   const hashedFiles = frozenFiles.concat([ref.ref_path]);
 
+  // run-state: a build whose approved commit exists resumes at the step after
+  // its last completed milestone, or stops; it never re-runs the writers on a
+  // committed fleet branch
+  const stateRef = "refs/fleet/" + names.taskId + "/state";
+  const rs = await infra("infra:read-state", readStatePrompt({ main_worktree: mainWt, state_ref: stateRef }), "Verify", JUDGE_AGENT);
+  let resume = null;
+  if (rs.exists === true) {
+    let st = null;
+    try {
+      st = JSON.parse(String(rs.message || ""));
+    } catch (e) {
+      st = null;
+    }
+    if (st && typeof st === "object" && st.plan_commit !== ref.plan_commit && v.head === ref.plan_commit)
+      gate("stale run-state of plan " + st.plan_commit + " ignored: HEAD is the plan commit " + ref.plan_commit);
+    else {
+      const mis = (what) =>
+        halt("needs_human", "run-state mismatch: " + what + " (" + stateRef + "); a committed fleet branch is never rebuilt from the writers", "resume");
+      if (!st || typeof st !== "object") mis("unreadable state");
+      if (st.plan_commit !== ref.plan_commit) mis("plan_commit " + st.plan_commit + " != " + ref.plan_commit);
+      if (st.ref_sha256 !== tiny.ref_sha256) mis("ref_sha256");
+      if (st.seal !== ref.seal) mis("seal");
+      if (RESUME_NEXT[st.last_gate] === undefined) mis("last_gate " + JSON.stringify(st.last_gate));
+      if (typeof st.approved_sha !== "string" || rs.target !== st.approved_sha) mis("state target " + rs.target + " != approved_sha " + st.approved_sha);
+      if (rs.head !== st.approved_sha || v.head !== st.approved_sha) mis("HEAD " + rs.head + " != approved_sha " + st.approved_sha);
+      if (rs.head_tree !== st.code_tree) mis("tree " + rs.head_tree + " != code_tree " + st.code_tree);
+      if (rs.clean !== true) mis("worktree not clean");
+      const hr = await hasher("hasher:resume", mainWt, hashedFiles, "Verify");
+      if (mapsDigest(hr.hashes) !== st.maps_digest) mis("frozen maps changed since " + st.last_gate);
+      resume = st;
+    }
+  } else if (v.head !== ref.plan_commit)
+    halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
+
   // confirm "auto" in build mode: re-run G1-G3 against the current rulings
-  let intent = opt.intent;
-  if (opt.rerunGates) {
+  // (a resumed build was approved already)
+  let intent = resume ? resume.intent || null : opt.intent;
+  if (opt.rerunGates && !resume) {
     phase("Auto-confirm");
     if (!Array.isArray(ref.plan_diff))
       halt("needs_human", "plan_ref predates 2.1.0 (no plan_diff in " + tiny.ref_path + "): re-run plan to use confirm auto");
@@ -3380,6 +3501,204 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     intent = g.intent;
   }
   const autoConfirmed = !!intent;
+  let approvedSha = null;
+  let pushes = 0;
+  let prOpens = 0;
+  let reviews = 0;
+  let pr = null;
+  let reviewNotes = [];
+  let wb = null;
+  // what the run-state records next to the approved sha
+  let shipTree = null;
+  let shipDigest = null;
+  let suiteResult = null;
+  const intentForPr = intent
+    ? { verdict: intent.verdict, reason: intent.reason || null, deviations: intent.deviations || [], coverage: intent.coverage || null }
+    : null;
+
+  async function openPr(label, extra) {
+    const r = requireOk(
+      "fleet-pr-opener",
+      await callRole(
+        "fleet-pr-opener",
+        label,
+        Object.assign({}, common, planCtx, {
+          repo: remoteSlug,
+          approved_sha: approvedSha,
+          criteria,
+          suite_result: suiteResult,
+          gates_not_run: state.gatesNotRun,
+          auto_confirmed: autoConfirmed,
+          intent: intentForPr,
+          review_notes: reviewNotes,
+        }, pr ? { pr_url: pr.pr_url, pr_number: pr.pr_number } : {}, extra || {}),
+        "PR",
+      ),
+    );
+    state.pr = r;
+    gate("pr-opener: " + (r.created ? "created " : "updated ") + r.pr_url);
+    if (state.gatesNotRun && state.gatesNotRun.length && r.gates_not_run_stated !== true)
+      halt("needs_human", "pr-opener did not state gates_not_run in the PR body; fix the body of " + r.pr_url);
+    return r;
+  }
+
+
+  // Records a milestone on the run-state ref (HEAD = the approved commit).
+  async function saveState(lastGate, label) {
+    const st = stripHeldOut(
+      Object.assign(
+        {
+          plan_commit: ref.plan_commit,
+          ref_sha256: tiny.ref_sha256,
+          seal: ref.seal,
+          last_gate: lastGate,
+          approved_sha: approvedSha,
+          code_tree: shipTree,
+          maps_digest: shipDigest,
+          pr_number: pr ? pr.pr_number : null,
+          pr_url: pr ? pr.pr_url : null,
+          pr_created: pr ? pr.created : null,
+          template_used: pr ? pr.template_used || null : null,
+          review: state.review,
+          reviews,
+          rounds: state.rounds,
+          suite_result: suiteResult,
+          gates_not_run: state.gatesNotRun,
+          auto_confirmed: autoConfirmed,
+          intent: intentForPr,
+        },
+        wb ? { write_back: wb.write_back, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
+      ),
+    );
+    const r = await infra(label, writeStatePrompt({ main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha }, JSON.stringify(st)), "PR");
+    if (r.head !== approvedSha) halt("failed", label + ": the run-state landed on " + r.head + ", not " + approvedSha);
+    gate("run-state " + lastGate + " at " + approvedSha);
+  }
+
+  // The steps after the commit, from `from` (push, pr, review, writeback),
+  // each followed by its run-state milestone. Returns null when done, or
+  // {gate, findings} when a coder round is needed.
+  async function ship(from) {
+    const steps = ["push", "pr", "review", "writeback"];
+    for (let i = steps.indexOf(from); i < steps.length; i++) {
+      const step = steps[i];
+      if (step === "push") {
+        // the repo's own pre-push hooks run here
+        phase("PR");
+        pushes++;
+        const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
+        const push = await infra(
+          pushLabel,
+          pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug }),
+          "PR",
+        );
+        if (push.push_result === "hook_rejected") {
+          const tail = String(push.hook_tail || "").trim();
+          gate("push of " + approvedSha + " rejected by a repo hook -> coder (fix_code)");
+          return {
+            gate: "push hook",
+            findings: [
+              {
+                target: "code",
+                criterion: null,
+                finding:
+                  "push rejected by a repo hook (pre-push) at " + approvedSha + "; satisfy it in production code, never bypass it. Hook output (tail):\n" +
+                  (tail || "(no output captured)"),
+              },
+            ],
+          };
+        }
+        if (push.push_result !== "ok")
+          halt("failed", pushLabel + " returned push_result " + JSON.stringify(push.push_result || null) + " with status ok");
+        if (push.remote_head !== approvedSha)
+          halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha);
+        gate("pushed " + branch + " at " + approvedSha);
+        await saveState("pushed", "infra:state:pushed:p" + pushes);
+      } else if (step === "pr") {
+        // draft PR at the pushed, approved sha (later rounds update its body)
+        prOpens++;
+        pr = await openPr("role:fleet-pr-opener" + (prOpens > 1 ? ":p" + prOpens : ""));
+        await saveState("pr_open", "infra:state:pr_open:p" + prOpens);
+      } else if (step === "review") {
+        if (!pr || !pr.pr_url || pr.pr_number == null) {
+          state.gatesNotRun = (state.gatesNotRun || []).concat([{ gate: "review", reason: "no PR to review (pr-opener returned no pr_url/pr_number)" }]);
+          gate("review skipped: no PR");
+          continue;
+        }
+        reviews++;
+        const rv = await reviewStep(reviews, {
+          mainWt, lay, remoteSlug, pr, approvedSha, baseRef: ref.plan_commit, criteria, obligations: planFacts.repo_obligations, hashedFiles,
+        });
+        state.review = { verdict: rv.verdict, blocking: rv.blocking, nits: rv.nits, rounds: reviews, sweep: rv.sweep, model: rv.model };
+        if (rv.blocking.length) {
+          if (reviews >= MAX_REVIEWS)
+            halt(
+              "needs_human",
+              "review round " + reviews + " requested changes again: " + rv.blocking.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "),
+              "review",
+            );
+          reviewNotes = rv.nits;
+          gate("review v" + reviews + ": changes_requested (" + rv.blocking.length + " blocking) -> coder (fix_code)");
+          return { gate: "review", findings: rv.blocking.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
+        }
+        if (rv.nits.length) {
+          reviewNotes = rv.nits;
+          pr = await openPr("role:fleet-pr-opener:notes");
+        }
+        await saveState("reviewed", "infra:state:reviewed:v" + reviews);
+      } else {
+        phase("Write-back");
+        wb = await writeBack({ ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr ? pr.pr_url : null });
+        await saveState("written_back", "infra:state:written_back");
+      }
+    }
+    return null;
+  }
+
+  function finishOk(resumedAt) {
+    history.agents += state.agents - opt.agentsBase;
+    gate("cumulative: run " + history.runs + ", re-plans " + history.replans + ", agents " + history.agents);
+    const out = finish("ok", resumedAt === "done" ? "resumed: the run had already finished; recorded result" : "draft PR ready for review");
+    out.created = pr ? pr.created : null;
+    out.template_used = pr ? pr.template_used || null : null;
+    out.cumulative = history;
+    out.auto_confirmed = autoConfirmed;
+    out.intent = intentForPr;
+    if (resumedAt) out.resumed_at = resumedAt;
+    return Object.assign(out, wb || {});
+  }
+
+  if (resume) {
+    approvedSha = resume.approved_sha;
+    shipTree = resume.code_tree;
+    shipDigest = resume.maps_digest;
+    suiteResult = resume.suite_result || null;
+    state.gatesNotRun = resume.gates_not_run || null;
+    state.review = resume.review || null;
+    reviews = resume.reviews || 0;
+    if (resume.rounds && typeof resume.rounds === "object") state.rounds = resume.rounds;
+    if (resume.pr_url || resume.pr_number != null) {
+      pr = { pr_url: resume.pr_url, pr_number: resume.pr_number, created: resume.pr_created, template_used: resume.template_used };
+      state.pr = pr;
+      prOpens = 1;
+    }
+    if (resume.write_back) wb = { write_back: resume.write_back, ledger_status: resume.ledger_status, comment_status: resume.comment_status, comment_text: resume.comment_text };
+    const next = RESUME_NEXT[resume.last_gate];
+    if (next === "done") {
+      gate("resuming at done: run-state written_back at " + approvedSha + "; returning the recorded result");
+      return finishOk("done");
+    }
+    gate("resuming at " + next + " (run-state " + resume.last_gate + " at " + approvedSha + ")");
+    const fix = await ship(next);
+    if (fix)
+      halt(
+        "needs_human",
+        "resumed run at " + next + ": the " + fix.gate + " gate needs a coder round, which a resumed run cannot start (no freeze); fix by hand or re-plan: " +
+          fix.findings.map((f) => f.finding).join("; "),
+        fix.gate === "review" ? "review" : "resume",
+      );
+    return finishOk(next);
+  }
 
   // tests: every writer works in the ONE fleet worktree, uncommitted, on
   // disjoint test files. Nothing is committed until the code judge approves.
@@ -3579,49 +3898,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const frozenNote =
     "frozen_tests holds the criterion test files only (sha256 of the content). frozen_config_sections is one flat map of everything else that is frozen: whole-file runner config and the .gitignore files git reads (not those inside ignored dirs) keyed by path (sha256), <path>#<section> (sha256 of a canonicalised test-runner config section), git:info/exclude and git:core.excludesFile (sha256 of ignore-rule files outside the worktree), and symlink:<rel> whose values are link targets, not hashes. Special values: ABSENT (the section did not exist at freeze), MISSING (the file did not exist), UNPARSEABLE (the file could not be parsed at freeze). Every key is read-only. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. Nothing is committed until the code judge approves: the tests and the code stay uncommitted in the worktree. freeze_tree is the worktree tree at freeze; diff production changes with `git diff <freeze_tree>` (code_base_ref is HEAD at the first freeze).";
   let coderFindings = [];
-  let approvedSha = null;
-  let approval = null;
   // the script gate that rejected the last code round, for the cap message
   let lastRoundGate = null;
-  let pushes = 0;
-  let prOpens = 0;
-  let reviews = 0;
-  let pr = null;
-  let reviewNotes = [];
-  let wb = null;
   // HEAD the coder must leave alone; it moves only at the commit step
   let expectedHead = v.head;
   let commitsMade = v.head !== ref.plan_commit;
-  const intentForPr = intent
-    ? { verdict: intent.verdict, reason: intent.reason || null, deviations: intent.deviations || [], coverage: intent.coverage || null }
-    : null;
-
-  async function openPr(label, extra) {
-    const r = requireOk(
-      "fleet-pr-opener",
-      await callRole(
-        "fleet-pr-opener",
-        label,
-        Object.assign({}, common, planCtx, {
-          repo: remoteSlug,
-          approved_sha: approvedSha,
-          criteria,
-          suite_result: approval.suite_result || null,
-          gates_not_run: state.gatesNotRun,
-          auto_confirmed: autoConfirmed,
-          intent: intentForPr,
-          review_notes: reviewNotes,
-        }, pr ? { pr_url: pr.pr_url, pr_number: pr.pr_number } : {}, extra || {}),
-        "PR",
-      ),
-    );
-    state.pr = r;
-    gate("pr-opener: " + (r.created ? "created " : "updated ") + r.pr_url);
-    if (state.gatesNotRun && state.gatesNotRun.length && r.gates_not_run_stated !== true)
-      halt("needs_human", "pr-opener did not state gates_not_run in the PR body; fix the body of " + r.pr_url);
-    return r;
-  }
-
   for (;;) {
     if (state.rounds.code >= MAX_CODE_ROUNDS)
       halt(
@@ -3803,96 +4084,25 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       halt("needs_human", "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
     expectedHead = cs.head;
     commitsMade = true;
-    const sha = cs.head;
-    gate("committed tree " + codeTree + " as " + sha + " (" + JSON.stringify(subject) + ")");
-
-    // push the commit; the repo's own pre-push hooks run here
-    phase("PR");
-    pushes++;
-    const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
-    const push = await infra(
-      pushLabel,
-      pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: sha, remote_slug: remoteSlug }),
-      "PR",
-    );
-    if (push.push_result === "hook_rejected") {
-      // a repo hook declined the push: the coder fixes it, the judge re-approves
-      const tail = String(push.hook_tail || "").trim();
-      coderFindings = [
-        {
-          target: "code",
-          criterion: null,
-          finding:
-            "push rejected by a repo hook (pre-push) at " + sha + "; satisfy it in production code, never bypass it. Hook output (tail):\n" +
-            (tail || "(no output captured)"),
-        },
-      ];
-      lastRoundGate = "push hook";
-      gate("code round " + m + ": push of " + sha + " rejected by a repo hook -> coder (fix_code)");
-      phase("Code");
-      continue;
-    }
-    if (push.push_result !== "ok")
-      halt("failed", pushLabel + " returned push_result " + JSON.stringify(push.push_result || null) + " with status ok");
-    if (push.remote_head !== sha)
-      halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + sha);
-    gate("pushed " + branch + " at " + sha);
-    approvedSha = sha;
-    approval = cj;
+    approvedSha = cs.head;
+    shipTree = codeTree;
+    shipDigest = mapsDigest(jc.state.hashes);
+    suiteResult = cj.suite_result || null;
     state.gatesNotRun = gatesNotRun(cj.gates_not_run);
     if (state.gatesNotRun.length && String(cj.reason || "").indexOf(GATES_PREFIX) !== 0)
       gate("warning: code-judge approve reason does not start with '" + GATES_PREFIX + "' although gates did not run");
+    gate("committed tree " + codeTree + " as " + approvedSha + " (" + JSON.stringify(subject) + ")");
+    await saveState("committed", "infra:state:committed:r" + m);
 
-    // draft PR at the pushed, approved sha (later rounds update its body)
-    prOpens++;
-    pr = await openPr("role:fleet-pr-opener" + (prOpens > 1 ? ":p" + prOpens : ""));
-    // write-back once, right after the first PR opens: a review that stops
-    // the run still leaves the ledger section and the source comments
-    if (!wb) {
-      phase("Write-back");
-      wb = await writeBack({ ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr.pr_url });
-    }
-
-    // independent review of the PR
-    if (!pr.pr_url || pr.pr_number == null) {
-      state.gatesNotRun = state.gatesNotRun.concat([{ gate: "review", reason: "no PR to review (pr-opener returned no pr_url/pr_number)" }]);
-      gate("review skipped: no PR");
-      break;
-    }
-    reviews++;
-    const rv = await reviewStep(reviews, {
-      mainWt, lay, remoteSlug, pr, approvedSha, baseRef: ref.plan_commit, criteria, obligations: planFacts.repo_obligations, hashedFiles,
-    });
-    state.review = { verdict: rv.verdict, blocking: rv.blocking, nits: rv.nits, rounds: reviews, sweep: rv.sweep, model: rv.model };
-    if (!rv.blocking.length) {
-      if (rv.nits.length) {
-        reviewNotes = rv.nits;
-        pr = await openPr("role:fleet-pr-opener:notes");
-      }
-      break;
-    }
-    if (reviews >= MAX_REVIEWS)
-      halt(
-        "needs_human",
-        "review round " + reviews + " requested changes again: " + rv.blocking.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "),
-        "review",
-      );
-    coderFindings = rv.blocking.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) }));
-    reviewNotes = rv.nits;
-    lastRoundGate = "review";
-    gate("review v" + reviews + ": changes_requested (" + rv.blocking.length + " blocking) -> coder (fix_code)");
+    // push, PR, review, write-back; a hook or review finding returns to the coder
+    const fix = await ship("push");
+    if (!fix) break;
+    coderFindings = fix.findings;
+    lastRoundGate = fix.gate;
     phase("Code");
   }
 
-  history.agents += state.agents - opt.agentsBase;
-  gate("cumulative: run " + history.runs + ", re-plans " + history.replans + ", agents " + history.agents);
-  const out = finish("ok", "draft PR ready for review");
-  out.created = pr.created;
-  out.template_used = pr.template_used || null;
-  out.cumulative = history;
-  out.auto_confirmed = autoConfirmed;
-  out.intent = intentForPr;
-  return Object.assign(out, wb);
+  return finishOk(null);
 }
 
 function reviewFindingText(f) {

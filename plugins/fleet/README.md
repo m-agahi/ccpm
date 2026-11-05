@@ -253,9 +253,40 @@ agents across runs.
 
 ### Write-back
 
-Right after the first PR opens (before the review), build mode writes back once, so a review that
-stops the run still leaves the ledger section and the comments. A failure here never changes the
-run status.
+After the review, build mode writes back once. A failure here never changes the run status.
+
+### Resume (run-state)
+
+A build re-run with the same `plan_ref` resumes at the last completed gate.
+
+After each milestone an infra step records the run-state: `refs/fleet/<task id>/state` points at an
+annotated tag object made with `git mktag` (no tag name, no hook, index untouched, never pushed).
+Its target is HEAD (the approved commit). Its message is JSON: `plan_commit`, `ref_sha256`,
+`seal`, `last_gate`, `approved_sha`, `code_tree`, `maps_digest` (sha256 of every hasher map at the
+approving code-judge run), PR number and URL, review, rounds, `suite_result`, `gates_not_run`,
+the intent result and, at the end, the write-back result. The milestones, in order:
+
+| `last_gate`    | recorded after    | a re-run resumes at                  |
+| -------------- | ----------------- | ------------------------------------ |
+| `committed`    | the commit step   | push                                 |
+| `pushed`       | the push          | the pr-opener                        |
+| `pr_open`      | the PR opens      | the review                           |
+| `reviewed`     | the review passes | write-back                           |
+| `written_back` | write-back        | nothing: returns the recorded result |
+
+Right after verify, build mode reads the run-state (`infra:read-state`). It resumes only when the
+state's `plan_commit`, `ref_sha256` and `seal` match the plan ref, its target and HEAD equal
+`approved_sha`, `HEAD^{tree}` equals `code_tree`, the worktree is clean, and a fresh hasher run
+(`hasher:resume`) gives the same `maps_digest`. It logs `resuming at <step>` and runs no writer,
+coder or judge. Any failed check stops with `needs_human` "run-state mismatch: <which>"
+(`stop_gate: resume`). A resumed step that would need a coder round (a pre-push hook rejection, a
+blocking review) stops with `needs_human`: a resumed run has no freeze to code against.
+
+With no run-state but build commits on the branch past `plan_commit` (a branch from 2.0.x, or a
+run that stopped before its first state write), the build stops with "approved but unresumable:
+branch has build commits without run-state; push manually or delete branch". It never re-runs the
+writers on a committed fleet branch. A run-state of another plan is ignored (and logged) when HEAD
+is the plan commit, for example after a re-plan.
 
 - **Ledger:** for each `ledger` source, one `## Fleet build` section (tldr, plan path, PR URL,
   hidden `fleet:<task id>` marker) is appended to the task's body page (`body_slug`) in
@@ -335,8 +366,10 @@ The hasher freezes every criterion test file, plus:
   a token that is neither a repo file nor a binary on PATH, is suspicious and stops the run at
   freeze ("unresolvable local hook <id>"). The commit step runs these hooks, and G2 checked the
   hook ids at the plan commit, so the coder may not change them;
-- git config exec vectors: `git config --local --list` (sorted, with values; `branch.*` and
-  `remote.*.gh-resolved` left out, because the workflow's own push and `gh` set them), the worktree
+- git config exec vectors: `git config --local --list` (sorted, with values; `branch.*` is left
+  out because the workflow's own push sets it, and the transport settings `remote.*`, `url.*`,
+  `credential.*`, `http.*` and `core.sshCommand` because a human may fix them before a resumed
+  run; none of them weakens a test or a gate), the worktree
   config when `extensions.worktreeConfig` is on, every `include.path`/`includeIf.*.path` target,
   every `.gitattributes` and `info/attributes`. So a coder cannot add an fsmonitor, a filter
   driver or an include. The hasher's own git calls and the commit step run with
@@ -578,9 +611,10 @@ change that a judge makes and reverts within its own run.
   fix round adds about 13. Every cap hit is logged. Test rounds: 3 per entry into the test loop. Code rounds: 3 per build
   run; a `fix_tests` detour, a commit-hook rejection, a push-hook rejection and a review fix each
   count as one code round.
-- Nothing is committed before the code judge approves, so an interrupted build leaves uncommitted
-  tests and code in the fleet worktree. The workspace and verify steps require a clean worktree,
-  so a re-run stops with `needs_human` until a human commits, stashes or cleans that work.
+- Nothing is committed before the code judge approves, so a build interrupted before its commit
+  step leaves uncommitted tests and code in the fleet worktree. The workspace and verify steps
+  require a clean worktree, so a re-run stops with `needs_human` until a human commits, stashes or
+  cleans that work. After the commit step, a re-run resumes from the run-state instead.
 - The ownership check sees what the writers left in the tree; it cannot tell which concurrent
   writer wrote a file beyond each writer's own `files` report.
 - G2 needs PyYAML in the `python3 -I` interpreter; without it every `check_cmd` fails the gate.

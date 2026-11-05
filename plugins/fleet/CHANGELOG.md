@@ -34,8 +34,6 @@ added_symbols, frozen_tests_red_at_start, obligations_done`. The `commit`/`commi
 - A re-plan after `plan_wrong` keeps the old head on `superseded_ref` and the uncommitted work
   under `superseded_tree_ref` (`git update-ref` to the tree; no commit is created), then resets the
   branch and runs `git clean -fd`.
-- Write-back runs once right after the first PR opens, before the review, so a review that stops
-  the run still leaves the ledger section and the comments.
 - Minimum role versions for the three new roles are PLACEHOLDERS (intent judge 1, pr-review 16,
   sweep 2) until the fleet-v3 pages are published.
 
@@ -66,6 +64,16 @@ added_symbols, frozen_tests_red_at_start, obligations_done`. The `commit`/`commi
   `tool.poetry.scripts`, `tool.pdm.scripts`, `tool.hatch.envs.*.scripts`). `npm run <name>` needs
   the script; `npx`/`uvx` need a repo-local or declared tool. Build-output exclusions apply at the
   top level (dirs) and the repo root (files) only; `*.egg-info` is checked first.
+- **Run-state resume.** After the commit, push, PR, review and write-back milestones the build
+  records `refs/fleet/<task id>/state`, a `git mktag` tag object on the approved commit with the
+  state as JSON (local, no hooks, index untouched). A build re-run with the same `plan_ref`
+  resumes at the step after the last milestone when the plan ref, HEAD, tree, clean worktree and
+  frozen-maps digest all match; it runs no writer, coder or judge. A mismatch stops with
+  "run-state mismatch: <which>"; build commits without a run-state stop with "approved but
+  unresumable". Fixes a re-run after a failed push that re-ran the writers on the approved commit.
+- Write-back follows the review again (the milestone order). Transport git config (`remote.*`,
+  `url.*`, `credential.*`, `http.*`, `core.sshCommand`) is no longer frozen, so a fixed remote
+  does not block a resume.
 - README: a "Threat model" section. The freeze guards against reward hacking, not against a hostile
   agent with a shell.
 
