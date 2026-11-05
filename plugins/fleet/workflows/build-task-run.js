@@ -143,7 +143,7 @@ const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\
 // fleet does not run in a repo with IaC files or IaC tooling in its hooks or
 // task runners (IAC_SCAN_PY lists the places). IAC_SCAN_PY spells this
 // pattern in pieces (the local Bash guard), and a test keeps the two equal.
-const IAC_RE = /terraform|\btofu\b|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger/i;
+const IAC_RE = /terraform|tofu|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger/i;
 const IAC_REFUSAL = "repo contains IaC files or IaC tooling in hooks; the fleet does not run here";
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 const MAX_AGENTS = 100;
@@ -2259,22 +2259,29 @@ function precommitIdsPrompt(inputs) {
 
 // IaC refusal scan of <rev> (git objects, so uncommitted edits do not count)
 // and of the hooks dir git uses now (core.hooksPath, else the hooks dir):
-// - iac_files: tracked paths ending .tf, .tfvars, .tf.json, .tfvars.json or
-//   .hcl, or under a .terraform/ or terraform/ dir;
+// - iac_files: tracked paths ending .tf, .tfvars, .tf.json, .tfvars.json,
+//   .hcl, or the same four with .tofu for .tf, or under a .terraform/ or
+//   terraform/ dir;
 // - iac_text: where IAC_RE matches the text of .pre-commit-config.yaml, every
 //   file in the hooks dir ("hooks:<name>"), .husky/**, lefthook*.y*ml,
-//   .lefthook*, .githooks/**, Makefile, package.json scripts, or the script and
-//   task tables of pyproject.toml.
+//   .lefthook*, .githooks/**, Makefile, package.json scripts, the script and
+//   task tables of pyproject.toml, or any tracked file one of these names (a
+//   hook entry or arg, a hook-manager command, a shim's --config=<path>),
+//   followed up to MAX_DEPTH levels deep.
 // The script refuses on any hit, an error, or a missing list. Prints
 // {iac_files, iac_text, error?}.
 // IAC_SCAN_PY_BEGIN
 const IAC_SCAN_PY = String.raw`
 import fnmatch, json, os, re, subprocess, sys
 wt, rev = sys.argv[1], sys.argv[2]
-PAT = re.compile('terra' + 'form|\\bto' + 'fu\\b|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|atlan' + 'tis|dig' + 'ger', re.I)
+PAT = re.compile('terra' + 'form|to' + 'fu|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|atlan' + 'tis|dig' + 'ger', re.I)
 DIRS = {'.terra' + 'form', 'terra' + 'form'}
-EXTS = ('.tf', '.tfvars', '.tf.json', '.tfvars.json', '.hcl')
+T = '.to' + 'fu'
+EXTS = ('.tf', '.tfvars', '.tf.json', '.tfvars.json', '.hcl', T, T + 'vars', T + '.json', T + 'vars.json')
+TOKEN = re.compile(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*')
 CAP = 50
+MAX_DEPTH = 4
+MAX_REFS = 2000
 def done(**k):
     print(json.dumps(k))
     sys.exit(0)
@@ -2284,10 +2291,20 @@ ls = git('ls-tree', '-r', '-z', '--name-only', rev + '^{commit}')
 if ls.returncode != 0:
     done(iac_files=[], iac_text=[], error='bad rev ' + rev + ': ' + ls.stderr.decode('utf-8', 'replace').strip())
 paths = [x.decode('utf-8', 'replace') for x in ls.stdout.split(b'\x00') if x]
+tracked = set(paths)
 files, text = [], []
-def hit(name, data):
-    if PAT.search(data if isinstance(data, str) else data.decode('utf-8', 'replace')):
+# repo files named in scanned text (hook entries and args, hook-manager
+# commands, a shim's --config=<path>, task-runner scripts): scanned too
+seen, queue = set(), []
+def hit(name, data, depth=0):
+    s = data if isinstance(data, str) else data.decode('utf-8', 'replace')
+    if PAT.search(s) and name not in text:
         text.append(name)
+    for tok in TOKEN.findall(s):
+        p = os.path.normpath(tok)
+        if p in tracked and p not in seen:
+            seen.add(p)
+            queue.append((p, depth + 1))
 def blob(p):
     b = git('cat-file', 'blob', rev + ':' + p)
     if b.returncode != 0:
@@ -2311,14 +2328,17 @@ for p in paths:
     if base == '.pre-commit-config.yaml' or base in ('Makefile', 'makefile', 'GNUmakefile') \
             or segs[0] in ('.husky', '.githooks') or segs[0].startswith('.lefthook') \
             or fnmatch.fnmatch(base, 'lefthook*.y*ml'):
+        seen.add(p)
         hit(p, blob(p))
     elif base == 'package.json' and 'node_modules' not in segs:
+        seen.add(p)
         raw = blob(p)
         try:
             hit(p, json.dumps(json.loads(raw).get('scripts')))
         except Exception:
             hit(p, raw)
     elif base == 'pyproject.toml':
+        seen.add(p)
         raw = blob(p)
         try:
             import tomllib
@@ -2344,6 +2364,14 @@ if os.path.isdir(hd):
                     hit('hooks:' + os.path.relpath(fp, hd), fh.read())
             except OSError as e:
                 done(iac_files=files[:CAP], iac_text=text[:CAP], error='cannot read hook ' + fp + ': ' + str(e))
+n = 0
+while queue:
+    p, d = queue.pop(0)
+    n += 1
+    if n > MAX_REFS:
+        done(iac_files=files[:CAP], iac_text=text[:CAP], error='more than ' + str(MAX_REFS) + ' referenced files')
+    if d <= MAX_DEPTH:
+        hit(p, blob(p), d)
 done(iac_files=files[:CAP], iac_text=text[:CAP])
 `;
 // IAC_SCAN_PY_END
@@ -3115,7 +3143,7 @@ function fencePathProblem(p) {
   const segs = q.split("/");
   const dirs = segs.slice(0, -1).map((x) => x.toLowerCase());
   const base = segs[segs.length - 1].toLowerCase();
-  if (/\.(tf|tfvars)$/.test(base) || dirs.indexOf("terraform") >= 0 || segs.some((x) => x.toLowerCase() === ".terraform"))
+  if (/\.(tf|tfvars|tofu|tofuvars)(\.json)?$/.test(base) || dirs.indexOf("terraform") >= 0 || segs.some((x) => x.toLowerCase() === ".terraform"))
     return "infrastructure-as-code path";
   if (/^kustomization\.ya?ml$/.test(base)) return "kubernetes manifest";
   if (/\.ya?ml$/.test(base) && (dirs.indexOf("k8s") >= 0 || dirs.indexOf("manifests") >= 0)) return "kubernetes manifest";

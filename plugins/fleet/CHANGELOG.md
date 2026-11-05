@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.1.3] - 2026-11-05
+
+### Fixed
+
+- **`tofu` matches without word boundaries.** In 2.1.2, `\btofu\b` missed `tofu_fmt` and
+  `opentofu`. `IAC_RE` now matches `tofu` anywhere.
+- **The `.tofu` extensions are IaC files:** `.tofu`, `.tofuvars`, `.tofu.json` and
+  `.tofuvars.json` are now in the scan and in the G3 / real-change scope fence.
+- **The scan follows referenced files.** A tracked file is scanned when a scanned source names it:
+  a local hook entry or args, a husky or lefthook command, a hooks-dir shim's `--config=<path>`, or
+  a task-runner script. The scan follows these names up to 4 levels deep and stops with an error
+  past 2000 referenced files.
+
 ## [2.1.2] - 2026-11-05
 
 ### Changed

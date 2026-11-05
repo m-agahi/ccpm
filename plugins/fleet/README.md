@@ -349,10 +349,11 @@ Both scans run before anything is committed or pushed. The run stops with `needs
 `stop_gate: "iac"` and "repo contains IaC files or IaC tooling in hooks; the fleet does not run
 here" when any of these is true:
 
-- A tracked file ends in `.tf`, `.tfvars`, `.tf.json`, `.tfvars.json` or `.hcl`. This covers
-  `.terraform.lock.hcl`, `terragrunt.hcl` and `.tflint.hcl`.
+- A tracked file ends in `.tf`, `.tfvars`, `.tf.json`, `.tfvars.json`, `.hcl`, `.tofu`,
+  `.tofuvars`, `.tofu.json` or `.tofuvars.json`. This covers `.terraform.lock.hcl`,
+  `terragrunt.hcl` and `.tflint.hcl`.
 - A tracked file sits under a `.terraform/` or `terraform/` dir.
-- `IAC_RE` (`terraform|\btofu\b|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger`, any
+- `IAC_RE` (`terraform|tofu|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger`, any
   case) matches anywhere in one of these:
   - `.pre-commit-config.yaml`;
   - every file in the hooks dir git uses (`core.hooksPath`, else `git rev-parse --git-path hooks`),
@@ -360,8 +361,13 @@ here" when any of these is true:
   - `.husky/**`, `lefthook*.y*ml`, `.lefthook*` or `.githooks/**`;
   - any `Makefile`;
   - the `scripts` of any `package.json`;
-  - the script and task tables of any `pyproject.toml`.
-- The scan cannot complete: a bad revision, an unreadable file or hook, or a missing list.
+  - the script and task tables of any `pyproject.toml`;
+  - any tracked file named in the text of one of the above, such as a hook `entry` or `args`, a
+    husky or lefthook command, or a hooks-dir shim's `--config=<path>`. The scan follows these
+    names up to 4 levels deep. A name is any run of `A-Z a-z 0-9 _ . / -` that resolves to a
+    tracked path.
+- The scan cannot complete: a bad revision, an unreadable file or hook, more than 2000 referenced
+  files, or a missing list.
 
 The scan reads tracked files from the git objects at the scanned revision. It reads the hooks dir in
 its current state. The scan program never spells a tool name in full, because the local Bash guard
