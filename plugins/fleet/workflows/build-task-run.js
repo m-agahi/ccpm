@@ -42,23 +42,23 @@ const ROLES = [
 const TIERS = ["fable", "opus", "sonnet", "haiku"];
 const INFRA_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
-// "ignored": ignored files outside tool caches (startup hooks only inside venvs)
+// "ignored": ignored files outside tool caches (inside venvs only startup hooks,
+// egg-links and dist-info/egg-info entry_points.txt)
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // Minimum role-page versions this script was built against. Names and enums
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 19,
-  "plan-audit": 11,
-  "fleet-test-writer": 7,
-  "fleet-test-judge": 7,
-  "fleet-coder": 11,
-  "fleet-code-judge": 10,
-  "fleet-pr-opener": 5,
-  // PLACEHOLDERS until the role owner publishes the fleet-v3 pages
-  "fleet-intent-judge": 1,
-  "pr-review": 16,
-  "gate-change-nonweakening-sweep": 2,
+  "scope-and-plan": 24,
+  "plan-audit": 13,
+  "fleet-test-writer": 9,
+  "fleet-test-judge": 9,
+  "fleet-coder": 16,
+  "fleet-code-judge": 13,
+  "fleet-pr-opener": 10,
+  "fleet-intent-judge": 2,
+  "pr-review": 17,
+  "gate-change-nonweakening-sweep": 4,
 };
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
 const CONTRACT = "fleet-v3";
@@ -100,7 +100,7 @@ const OBLIGATION_KINDS = ["version_bump", "changelog", "docs", "generated", "oth
 const CMD_TOKEN_RE = /^[A-Za-z0-9_.\/:=@%+,-]+$/;
 const PATHS_TOKEN = "<paths>";
 // Checked anywhere in a command, case-insensitively.
-const FORBIDDEN_WORD_RE = /terraform|tofu|tfp|digger|atlantis/i;
+const FORBIDDEN_WORD_RE = /terraform|tofu|tfp|tflint|terragrunt|digger|atlantis/i;
 // test_cmd.env: only these names, never anything the planner invents.
 const TEST_ENV_ALLOWED = ["DJANGO_SETTINGS_MODULE", "PYTHONUNBUFFERED", "TZ", "LANG", "LC_ALL", "NO_COLOR", "FORCE_COLOR", "CI"];
 const ENV_VALUE_RE = /^[A-Za-z0-9_.\/:=@%+, -]*$/;
@@ -124,7 +124,7 @@ const PATH_ARG_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
 // test_cmd tokens after the runner prefix: never one of these subcommands.
 const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
 // stop_gate values: which gate ended a stopped run (null when none applies).
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac"];
 // Run-state milestones, in order, and the step a resumed build runs next.
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "done" };
 const CONFIRMS = ["ask", "auto"];
@@ -138,7 +138,28 @@ const GATE_PATH_RE = /(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\
 // confirm "auto" G2: the only check_cmd shape the auto gate accepts.
 const PRECOMMIT_CMD_RE = /^pre-commit run ([A-Za-z0-9_.:-]+)( --all-files)?( --hook-stage ([A-Za-z0-9_-]+))?$/;
 // confirm "auto" G3 scope fence over every planned path and command.
-const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp)\b/i;
+const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\b/i;
+// IaC hooks (2.1.1, a HARD user rule: never cause IaC tooling to run). A
+// pre-commit hook is an IaC hook when its id, name, entry, args or repo URL
+// matches IAC_HOOK_RE, or its repo is one of IAC_HOOK_REPOS. Only these ids,
+// at the pre-commit stage, may run during the fleet's commit; no IaC hook may
+// run at pre-push (the fleet stops before its push).
+const IAC_HOOK_RE = /terraform|tofu|\btfp\b|tflint|terragrunt|tfsec|infracost|checkov.*terraform/i;
+// A hook whose files, types or types_or name IaC sources is an IaC hook too.
+const IAC_FILES_RE = /terraform|\bhcl\b|\.tf(vars)?\b|\btf\b/i;
+const IAC_HOOK_REPOS =["antonbabenko/pre-commit-terraform", "tofuutils/pre-commit-opentofu"];
+const IAC_COMMIT_OK = [
+  "terraform_fmt", "terraform_validate", "terraform_tflint", "terraform_docs",
+  "tofu_fmt", "tofu_validate", "tofu_tflint", "tofu_docs",
+];
+// Stages that fire during `git commit`. A hook named at any of them runs
+// during the fleet's commit; only an IAC_COMMIT_OK id at pre-commit is exempt.
+const COMMIT_TIME_STAGES = ["pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-commit"];
+// The stages the rules assume for a hook with no stages and no
+// default_stages: pre-commit's default includes pre-push. Other stages are
+// not assumed; a hook or default_stages that names one is checked as named.
+const UNSTAGED_HOOK_STAGES = ["pre-commit", "pre-push"];
+const LEGACY_STAGES = { commit: "pre-commit", push: "pre-push", "merge-commit": "pre-merge-commit" };
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 const MAX_AGENTS = 100;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
@@ -690,6 +711,9 @@ def ignored_files():
             continue
         if any(s in SKIP_DIRS for s in segs[:-1]):
             if base.endswith('.pth') or base in ('sitecustomize.py', 'usercustomize.py'):
+                out[rel] = file_hash(rel)
+            # installed entry points (a pytest11 plugin) and editable-install links
+            elif base.endswith('.egg-link') or (base == 'entry_points.txt' and len(segs) > 1 and (segs[-2].endswith('.dist-info') or segs[-2].endswith('.egg-info'))):
                 out[rel] = file_hash(rel)
             continue
         if any(s.endswith('.egg-info') or s == 'EGG-INFO' for s in segs):
@@ -1843,6 +1867,7 @@ function preflightPrompt(inputs) {
     "versions maps each found pattern to its `version`. " +
     "dispatch maps each found pattern to the first line of its `content` that matches `DISPATCH: model=<tier> (fallback=<tier>)` (the fallback part is optional), copied raw; null when no line matches. " +
     "contract maps each found pattern to the first line of its `content` that starts with `CONTRACT:`, copied raw; null when none. " +
+    "`content` often has no trailing newline: its last line counts as a line like any other. " +
     "Return {reachable, missing, versions, dispatch, contract, reason}."
   );
 }
@@ -2245,6 +2270,204 @@ function precommitIdsPrompt(inputs) {
     "It prints one JSON object {present, ids, parser, error?}. Copy every value unchanged. Non-zero exit -> failed with its stderr.\n" +
     "Return {status, reason, present, ids, parser, error}."
   );
+}
+
+// IaC hooks (2.1.1): the raw hook fields of .pre-commit-config.yaml as git
+// stores it at <rev>, plus two content scans the script cannot do itself:
+// - entry_iac per repo: local hook: a file at <rev> named by its entry or
+//   args matches the IaC pattern;
+// - installed: the hook files git runs (core.hooksPath, else the hooks dir)
+//   for each commit-time stage and pre-push, and their pre-commit *.legacy
+//   files: {generated (a pre-commit shim), config (its --config=), iac}.
+// The script decides in JS what is an IaC hook (iacHooks). The program spells
+// no IaC tool name whole (the pattern is built from pieces and must equal
+// IAC_HOOK_RE), so the local Bash guard lets the infra agent run it. Fails
+// closed: a bad rev, no PyYAML or a parse error give an error; only a config
+// absent from a valid commit is present=false.
+// Prints {present, parser, sha256, default_stages, hooks, installed, error?}.
+// IAC_HOOKS_PY_BEGIN
+const IAC_HOOKS_PY = String.raw`
+import hashlib, json, os, re, shlex, subprocess, sys
+wt, rev = sys.argv[1], sys.argv[2]
+NAME = '.pre-commit-config.yaml'
+PAT = re.compile('terra' + 'form|to' + 'fu|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|checkov.*terra' + 'form', re.I)
+STAGES = ['pre-commit', 'pre-merge-commit', 'prepare-commit-msg', 'commit-msg', 'post-commit', 'pre-push']
+installed = None
+def out(**k):
+    base = {'present': True, 'parser': None, 'sha256': None, 'default_stages': None, 'hooks': [], 'installed': installed}
+    base.update(k)
+    print(json.dumps(base))
+    sys.exit(0)
+def scan(data):
+    return bool(PAT.search(data.decode('utf-8', 'replace')))
+ls = subprocess.run(['git', '-C', wt, 'ls-tree', '--name-only', rev + '^{commit}', '--', NAME], capture_output=True)
+if ls.returncode != 0:
+    out(error='bad rev ' + rev + ': ' + ls.stderr.decode('utf-8', 'replace').strip())
+hp = subprocess.run(['git', '-C', wt, 'config', 'core.hooksPath'], capture_output=True).stdout.decode('utf-8', 'replace').strip()
+if hp:
+    hd = os.path.expanduser(hp)
+    if not os.path.isabs(hd):
+        top = subprocess.run(['git', '-C', wt, 'rev-parse', '--show-toplevel'], capture_output=True).stdout.decode().strip()
+        hd = os.path.join(top or wt, hd)
+else:
+    g = subprocess.run(['git', '-C', wt, 'rev-parse', '--path-format=absolute', '--git-path', 'hooks'], capture_output=True)
+    if g.returncode != 0:
+        out(error='hooks dir: ' + g.stderr.decode('utf-8', 'replace').strip())
+    hd = g.stdout.decode().strip()
+installed = {}
+for st in STAGES:
+    e = {}
+    for key, name in (('hook', st), ('legacy', st + '.legacy')):
+        p = os.path.join(hd, name)
+        if os.path.isfile(p):
+            with open(p, 'rb') as fh:
+                d = fh.read()
+            t = d.decode('utf-8', 'replace')
+            m = re.search(r'--config[= ]([^\s)\'"]+)', t)
+            e[key] = {'generated': 'File generated by pre-commit' in t, 'config': m.group(1) if m else None, 'iac': scan(d)}
+    installed[st] = e
+if ls.stdout.decode('utf-8', 'replace').strip() != NAME:
+    out(present=False, sha256='MISSING')
+r = subprocess.run(['git', '-C', wt, 'show', rev + ':' + NAME], capture_output=True)
+if r.returncode != 0:
+    out(error='git show failed: ' + r.stderr.decode('utf-8', 'replace').strip())
+digest = hashlib.sha256(r.stdout).hexdigest()
+try:
+    import yaml
+except ImportError:
+    out(sha256=digest, error='PyYAML unavailable')
+try:
+    data = yaml.safe_load(r.stdout)
+except Exception as e:
+    out(sha256=digest, parser='yaml', error='unparseable: ' + str(e))
+if data is None:
+    data = {}
+if not isinstance(data, dict):
+    out(sha256=digest, parser='yaml', error='top level is not a mapping')
+def strs(v):
+    if v is None:
+        return None
+    if isinstance(v, list):
+        return [str(x) for x in v]
+    return [str(v)]
+def s(v):
+    return None if v is None else str(v)
+def entry_iac(entry, args):
+    try:
+        toks = shlex.split(entry or '')
+    except ValueError:
+        toks = (entry or '').split()
+    for t in (toks + list(args))[:40]:
+        p = os.path.normpath(t)
+        if os.path.isabs(p) or p.startswith('..') or p == '.':
+            continue
+        b = subprocess.run(['git', '-C', wt, 'cat-file', 'blob', rev + ':' + p], capture_output=True)
+        if b.returncode == 0 and scan(b.stdout):
+            return True
+    return False
+hooks = []
+repos = data.get('repos')
+if repos is not None and not isinstance(repos, list):
+    out(sha256=digest, parser='yaml', error='repos is not a list')
+for repo in repos or []:
+    if not isinstance(repo, dict):
+        out(sha256=digest, parser='yaml', error='a repos entry is not a mapping')
+    hs = repo.get('hooks')
+    if hs is not None and not isinstance(hs, list):
+        out(sha256=digest, parser='yaml', error='hooks is not a list')
+    for h in hs or []:
+        if not isinstance(h, dict):
+            out(sha256=digest, parser='yaml', error='a hook is not a mapping')
+        args = strs(h.get('args')) or []
+        local = repo.get('repo') == 'local'
+        hooks.append({'repo': s(repo.get('repo')), 'id': s(h.get('id')), 'name': s(h.get('name')),
+                      'entry': s(h.get('entry')), 'args': args, 'stages': strs(h.get('stages')),
+                      'files': s(h.get('files')), 'types': strs(h.get('types')), 'types_or': strs(h.get('types_or')),
+                      'entry_iac': entry_iac(s(h.get('entry')), args) if local else False})
+out(sha256=digest, parser='yaml', default_stages=strs(data.get('default_stages')), hooks=hooks)
+`;
+// IAC_HOOKS_PY_END
+
+function iacHooksPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: read the hooks of .pre-commit-config.yaml at the plan commit. READ ONLY: no edits, no commits; run nothing but the one command below. Never run pre-commit or a hook.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified:\n" +
+    "python3 -I -c " + shQuote(IAC_HOOKS_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.plan_commit) +
+    "\n" +
+    "It prints one JSON object {present, parser, sha256, default_stages, hooks, installed, error?}. Copy every value unchanged; never add, drop or edit a hook or an installed entry. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, present, parser, sha256, default_stages, hooks, installed, error}."
+  );
+}
+
+function normStage(x) {
+  const v = String(x);
+  return LEGACY_STAGES[v] || v;
+}
+
+// Installed hook files that are not a plain pre-commit shim for the root
+// config: a shim for another config, or any other hook file (husky,
+// lefthook, hand-written, *.legacy) whose content matches the IaC pattern.
+// Returns pseudo-hooks {id, stages: [stage]}, or a string error.
+function iacInstalled(installed) {
+  if (!installed || typeof installed !== "object" || Array.isArray(installed)) return "installed hook files not read";
+  const out = [];
+  for (const st of COMMIT_TIME_STAGES.concat(["pre-push"])) {
+    const e = installed[st] || {};
+    for (const key of ["hook", "legacy"]) {
+      const x = e[key];
+      if (!x) continue;
+      if (typeof x !== "object" || typeof x.iac !== "boolean" || typeof x.generated !== "boolean") return "installed " + st + " " + key + " entry malformed";
+      const name = "installed " + st + (key === "legacy" ? ".legacy" : "") + " hook";
+      if (key === "hook" && x.generated && x.config === ".pre-commit-config.yaml") continue;
+      if (key === "hook" && x.generated) out.push({ id: name + " for config " + JSON.stringify(x.config), stages: [st] });
+      else if (x.iac) out.push({ id: name, stages: [st] });
+    }
+  }
+  return out;
+}
+
+// The IaC hooks in an iac-hooks infra output, each with its effective stages:
+// its own stages, else default_stages, else pre-commit and pre-push
+// (pre-commit's default includes pre-push), plus the installed hook files
+// that run IaC tooling. {error, hooks: [{id, stages}], sha256}.
+function iacHooks(cfg) {
+  const inst = iacInstalled(cfg && cfg.installed);
+  if (typeof inst === "string") return { error: inst, hooks: [], sha256: null };
+  if (cfg && cfg.present === false && !cfg.error) return { error: null, hooks: inst, sha256: "MISSING" };
+  if (!cfg || cfg.present !== true || cfg.error || cfg.parser !== "yaml" || !Array.isArray(cfg.hooks))
+    return { error: ".pre-commit-config.yaml unreadable: " + ((cfg && cfg.error) || "no parser or no hook list"), hooks: [], sha256: null };
+  const defaults = Array.isArray(cfg.default_stages) && cfg.default_stages.length ? cfg.default_stages.map(normStage) : null;
+  const hooks = inst.slice();
+  for (const h of cfg.hooks) {
+    if (!h || typeof h !== "object") return { error: ".pre-commit-config.yaml unreadable: a hook is not an object", hooks: [], sha256: null };
+    const repo = String(h.repo == null ? "" : h.repo);
+    const args = Array.isArray(h.args) ? h.args.map(String) : [];
+    const text = [h.id, h.name, h.entry, repo].map((x) => String(x == null ? "" : x)).concat(args).join(" ");
+    const fileText = [h.files].concat(Array.isArray(h.types) ? h.types : [], Array.isArray(h.types_or) ? h.types_or : []).map((x) => String(x == null ? "" : x)).join(" ");
+    const lowRepo = repo.toLowerCase();
+    if (!IAC_HOOK_RE.test(text) && !IAC_FILES_RE.test(fileText) && h.entry_iac !== true && !IAC_HOOK_REPOS.some((r) => lowRepo.indexOf(r) >= 0)) continue;
+    const own = Array.isArray(h.stages) && h.stages.length ? h.stages.map(normStage) : null;
+    hooks.push({ id: String(h.id == null ? "?" : h.id), stages: own || defaults || UNSTAGED_HOOK_STAGES.slice() });
+  }
+  return { error: null, hooks, sha256: typeof cfg.sha256 === "string" ? cfg.sha256 : null };
+}
+
+// Ids of IaC hooks that run during the fleet's commit and are not an exempt
+// fmt/validate/tflint/docs hook at the pre-commit stage.
+function iacCommitIds(iac) {
+  const out = [];
+  for (const h of iac.hooks)
+    if (h.stages.some((st) => COMMIT_TIME_STAGES.indexOf(st) >= 0 && !(st === "pre-commit" && IAC_COMMIT_OK.indexOf(h.id) >= 0)))
+      out.push(h.id);
+  return out;
+}
+
+// Ids of IaC hooks that run at the fleet's push.
+function iacPushIds(iac) {
+  return iac.hooks.filter((h) => h.stages.indexOf("pre-push") >= 0).map((h) => h.id);
 }
 
 // The run-state ref: refs/fleet/<task id>/state points at an annotated tag
@@ -2900,7 +3123,14 @@ async function commitPlanAndRef(ctx) {
   const st = await infra("infra:stage-plan" + sfx, stagePlanPrompt(Object.assign({}, base, { ref_path: refPath })), ctx.phaseName);
   if (typeof st.plan_sha256 !== "string" || !SHA256_RE.test(st.plan_sha256))
     halt("failed", "infra:stage-plan" + sfx + " returned no usable plan_sha256");
-  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after });
+  // the plan commit runs the repo's commit hooks too: the IaC rule applies
+  const iacLabel = "infra:iac-hooks:commit-plan" + sfx;
+  const iac = iacHooks(await infra(iacLabel, iacHooksPrompt({ main_worktree: ctx.worktree, plan_commit: "HEAD" }), ctx.phaseName, JUDGE_AGENT));
+  if (iac.error) halt("needs_human", "plan commit: cannot check the repo hooks for IaC tooling: " + iac.error + "; nothing committed", "iac");
+  const iacBad = iacCommitIds(iac);
+  if (iacBad.length)
+    halt("needs_human", "plan commit: commit hooks run IaC tooling (" + iacBad.join(", ") + ") beyond fmt/validate/tflint/docs at pre-commit; nothing committed", "iac");
+  const history =Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after });
   const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: st.plan_sha256, history }));
   const label = "infra:commit-plan" + sfx;
   const r = await infra(
@@ -3150,16 +3380,27 @@ async function autoGates(ctx) {
     if (g2.length) return fail("commands", g2);
   }
   gate("auto-confirm: commands ok (" + (ctx.planFacts.commands || []).length + ")");
+  // G3 also refuses any repo whose hooks run IaC tooling, at any stage
+  const iacCfg = await infra(
+    "infra:iac-hooks:plan" + sfx,
+    iacHooksPrompt({ main_worktree: ctx.mainWt, plan_commit: ctx.planCommit }),
+    "Auto-confirm",
+    JUDGE_AGENT,
+  );
+  const iac = iacHooks(iacCfg);
   const g3 = scopeProblems(ctx);
+  if (iac.error) g3.push("cannot check the repo hooks for IaC tooling: " + iac.error);
+  else if (iac.hooks.length) g3.push("repo hooks run IaC tooling (" + iac.hooks.map((h) => h.id).join(", ") + ")");
   if (g3.length) return fail("scope", g3);
   gate("auto-confirm: scope fence ok");
   return { ok: true, intent };
 }
 
 // How many agents autoGates dispatches after the plan ref is sealed (all
-// gates pass): intent pre-hasher, judge, post-hasher, and the config read.
+// gates pass): intent pre-hasher, judge, post-hasher, the IaC hook read, and
+// the hook-id config read.
 function autoGateAgents(commands) {
-  return 3 + (commandShapeProblems(commands).hookIds.length ? 1 : 0);
+  return 4 + (commandShapeProblems(commands).hookIds.length ? 1 : 0);
 }
 
 function autoFailResult(g, planPath, tiny) {
@@ -3491,6 +3732,34 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   } else if (v.head !== ref.plan_commit)
     halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
 
+  // IaC hooks: read once per build (a resumed one included, as it may push),
+  // at the plan commit; the commit and push steps apply the rules to it
+  const iacCfg = await infra(
+    "infra:iac-hooks",
+    iacHooksPrompt({ main_worktree: mainWt, plan_commit: ref.plan_commit }),
+    "Verify",
+    JUDGE_AGENT,
+  );
+  const iac = iacHooks(iacCfg);
+  if (iac.error) gate("iac hooks: " + iac.error + " (the commit step stops)");
+  else gate("iac hooks: " + (iac.hooks.length ? iac.hooks.map((h) => h.id + " [" + h.stages.join(",") + "]").join("; ") : "none"));
+  // Stops before the commit when IaC tooling would run during it. hashes: the
+  // judged maps; the frozen .pre-commit-config.yaml must be the copy read above.
+  function iacCommitCheck(hashes, m) {
+    if (iac.error) halt("needs_human", "commit step r" + m + ": cannot check the repo hooks for IaC tooling: " + iac.error + "; commit and push by hand", "iac");
+    const fz = hashes && hashes.files ? hashes.files[".pre-commit-config.yaml"] : undefined;
+    if (fz !== undefined && fz !== iac.sha256)
+      halt("needs_human", "commit step r" + m + ": the frozen .pre-commit-config.yaml (" + fz + ") is not the copy checked for IaC hooks at " + ref.plan_commit + " (" + iac.sha256 + ")", "iac");
+    const bad = iacCommitIds(iac);
+    if (bad.length)
+      halt("needs_human", "commit hooks run IaC tooling (" + bad.join(", ") + ") beyond fmt/validate/tflint/docs at pre-commit; commit and push by hand", "iac");
+  }
+  function iacPushCheck() {
+    if (iac.error) halt("needs_human", "push: cannot check the repo hooks for IaC tooling: " + iac.error + "; push by hand", "iac");
+    const ids = iacPushIds(iac);
+    if (ids.length) halt("needs_human", "pre-push hooks run IaC tooling (" + ids.join(", ") + "); push by hand", "iac");
+  }
+
   // confirm "auto" in build mode: re-run G1-G3 against the current rulings
   // (a resumed build was approved already)
   let intent = resume ? resume.intent || null : opt.intent;
@@ -3603,8 +3872,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     for (let i = steps.indexOf(from); i < steps.length; i++) {
       const step = steps[i];
       if (step === "push") {
-        // the repo's own pre-push hooks run here
+        // the repo's own pre-push hooks run here; never when one runs IaC tooling
         phase("PR");
+        iacPushCheck();
         pushes++;
         const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
         const push = await infra(
@@ -4065,6 +4335,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("code-judge r" + m + ": approve of tree " + codeTree);
 
     // the commit step: the first commit of this build, with the repo's hooks
+    iacCommitCheck(jc.state.hashes, m);
     const subject = commitsMade ? fixSubject(names.taskId, m) : commitSubject(names.taskId, names.slug);
     const cs = await infra(
       "infra:commit:r" + m,

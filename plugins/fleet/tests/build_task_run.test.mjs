@@ -62,16 +62,16 @@ function inputsOf(prompt) {
 
 // The minimum role versions the workflow was built against.
 const FROZEN_VERSIONS = {
-  "scope-and-plan": 19,
-  "plan-audit": 11,
-  "fleet-test-writer": 7,
-  "fleet-test-judge": 7,
-  "fleet-coder": 11,
-  "fleet-code-judge": 10,
-  "fleet-pr-opener": 5,
-  "fleet-intent-judge": 1,
-  "pr-review": 16,
-  "gate-change-nonweakening-sweep": 2,
+  "scope-and-plan": 24,
+  "plan-audit": 13,
+  "fleet-test-writer": 9,
+  "fleet-test-judge": 9,
+  "fleet-coder": 16,
+  "fleet-code-judge": 13,
+  "fleet-pr-opener": 10,
+  "fleet-intent-judge": 2,
+  "pr-review": 17,
+  "gate-change-nonweakening-sweep": 4,
 };
 const ROLE_NAMES = Object.keys(FROZEN_VERSIONS);
 
@@ -105,6 +105,9 @@ async function runOne(script, args) {
     calls.push({ label, prompt, opts });
     // the bytecode purge is mechanical; unscripted purges succeed by default
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
+    // unscripted IaC hook reads see no .pre-commit-config.yaml (no IaC hooks)
+    if (!(label in script) && /^infra:iac-hooks/.test(label))
+      return { status: "ok", reason: "absent", present: false, parser: null, sha256: "MISSING", default_stages: null, hooks: [], installed: {} };
     // run-state writes are mechanical too: the ref lands on the expected head
     if (!(label in script) && /^infra:state:/.test(label)) {
       fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = "f".repeat(40);
@@ -1736,22 +1739,22 @@ test("S-2: roles get only criterion test files in frozen_tests; config files go 
 
 test("S-8: a role version lower than the frozen minimum stops in preflight", async () => {
   const s = happy();
-  s.preflight.versions["fleet-coder"] = 10;
+  s.preflight.versions["fleet-coder"] = 15;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder version 10 < frozen 11/);
+  assert.match(out.result.reason, /role fleet-coder version 15 < frozen 16/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
 test("S-8: a higher role version is logged as prose-only and recorded", async () => {
   const s = happy();
-  s.preflight.versions["fleet-code-judge"] = 11;
+  s.preflight.versions["fleet-code-judge"] = 14;
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v11 > frozen v10: prose-only changes assumed/.test(l)));
-  assert.equal(out.result.role_versions["fleet-code-judge"], 11);
-  assert.equal(out.result.role_versions["fleet-coder"], 11);
+  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v14 > frozen v13: prose-only changes assumed/.test(l)));
+  assert.equal(out.result.role_versions["fleet-code-judge"], 14);
+  assert.equal(out.result.role_versions["fleet-coder"], 16);
 });
 
 test("S-8: a role runner that loaded a different version than preflight is discarded", async () => {
@@ -2110,6 +2113,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "role:scope-and-plan",
     "role:plan-audit",
     "infra:stage-plan",
+    "infra:iac-hooks:commit-plan",
     "infra:commit-plan",
   ]);
   const cp = call(out, "infra:commit-plan").prompt;
@@ -2473,7 +2477,7 @@ test("build mode: preflight first, then workspace, verify, then the writers' bas
   const out = await runOne(s, buildArgs(ref));
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.deepEqual(out.labels.slice(0, 6), ["preflight", "workspace", "infra:load-ref", "infra:verify-plan", "infra:read-state", "hasher:pre-writers:r1"]);
+  assert.deepEqual(out.labels.slice(0, 7), ["preflight", "workspace", "infra:load-ref", "infra:verify-plan", "infra:read-state", "infra:iac-hooks", "hasher:pre-writers:r1"]);
   assert.ok(!out.labels.some((l) => l.startsWith("role:scope-and-plan") || l.startsWith("role:plan-audit")));
   const v = inputsOf(call(out, "infra:verify-plan").prompt);
   assert.deepEqual(v, {
@@ -2651,6 +2655,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
     "role:scope-and-plan:replan",
     "role:plan-audit:replan",
     "infra:stage-plan:replan",
+    "infra:iac-hooks:commit-plan:replan",
     "infra:commit-plan:replan",
     "infra:replan-reset",
   ]);
@@ -3262,8 +3267,8 @@ test("a stale-bytecode suspicious entry after the coder rejects the round", asyn
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-test("role versions: scope-and-plan 19, coder 11 and code-judge 10 are the minimums", async () => {
-  for (const [role, v] of [["scope-and-plan", 18], ["fleet-coder", 10], ["fleet-code-judge", 9]]) {
+test("role versions: scope-and-plan 24, coder 16 and code-judge 13 are the minimums", async () => {
+  for (const [role, v] of [["scope-and-plan", 23], ["fleet-coder", 15], ["fleet-code-judge", 12]]) {
     const s = happy();
     s.preflight.versions[role] = v;
     const out = await runOne(s, ARGS);
@@ -4283,7 +4288,7 @@ function REQUIRED_OF(src) {
 }
 
 test("2.1.0 REQUIRED_ON_OK: writer files and coder changed_paths are required arrays; commit keys are gone", async () => {
-  let out = await run(happy({ script: { "role:fleet-test-writer:AC1:r1": { __raw: true, status: "ok", reason: "x", role_version: 7, role_contract: "CONTRACT: fleet-v3", criterion_id: "AC1", tests: [] } } }), ARGS);
+  let out = await run(happy({ script: { "role:fleet-test-writer:AC1:r1": { __raw: true, status: "ok", reason: "x", role_version: FROZEN_VERSIONS["fleet-test-writer"], role_contract: "CONTRACT: fleet-v3", criterion_id: "AC1", tests: [] } } }), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-test-writer contract drift: missing files/);
   out = await run(happy({ script: { "role:fleet-coder:r1": { status: "ok", changed_paths: "src/x.py" } } }), ARGS);
@@ -4931,6 +4936,49 @@ test("2.1.0 ignored paths are listed: a .pth in a venv is frozen, tool caches ar
   }
 });
 
+test("2.1.1 venv entry points and egg-links are frozen: a pytest11 plugin a coder installs is a violation", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-ign-ep-");
+  try {
+    writeFileSync(join(wt, ".gitignore"), ".venv/\n.tox/\n");
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const sp = ".venv/lib/python3.12/site-packages";
+    sh(wt, "mkdir", "-p", sp + "/ok-1.0.dist-info", sp + "/old.egg-info", ".tox/py/lib/site-packages/t-2.0.dist-info");
+    writeFileSync(join(wt, sp, "ok-1.0.dist-info", "entry_points.txt"), "[console_scripts]\nok = ok:main\n");
+    writeFileSync(join(wt, sp, "ok-1.0.dist-info", "RECORD"), "ok.py,,\n");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.ok(sp + "/ok-1.0.dist-info/entry_points.txt" in a.ignored, Object.keys(a.ignored).join(", "));
+    assert.ok(!(sp + "/ok-1.0.dist-info/RECORD" in a.ignored), "other dist-info files are not frozen");
+    // the coder installs a package that registers a pytest plugin
+    sh(wt, "mkdir", "-p", sp + "/evil-1.0.dist-info");
+    writeFileSync(join(wt, sp, "evil-1.0.dist-info", "entry_points.txt"), "[pytest11]\nevil = evil_plugin\n");
+    writeFileSync(join(wt, sp, "old.egg-info", "entry_points.txt"), "[pytest11]\nold = old\n");
+    writeFileSync(join(wt, sp, "evil.egg-link"), "/tmp/evil\n.\n");
+    writeFileSync(join(wt, ".tox/py/lib/site-packages/t-2.0.dist-info", "entry_points.txt"), "[pytest11]\nt = t\n");
+    const b = runHasherRaw(wt, "hashes", []).hashes;
+    for (const p of [
+      sp + "/evil-1.0.dist-info/entry_points.txt",
+      sp + "/old.egg-info/entry_points.txt",
+      sp + "/evil.egg-link",
+      ".tox/py/lib/site-packages/t-2.0.dist-info/entry_points.txt",
+    ])
+      assert.ok(p in b.ignored, p + " in " + Object.keys(b.ignored).join(", "));
+    // a changed entry_points.txt changes its hash
+    writeFileSync(join(wt, sp, "ok-1.0.dist-info", "entry_points.txt"), "[pytest11]\nok = ok\n");
+    const c = runHasherRaw(wt, "hashes", []).hashes;
+    assert.notEqual(c.ignored[sp + "/ok-1.0.dist-info/entry_points.txt"], a.ignored[sp + "/ok-1.0.dist-info/entry_points.txt"]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.1 a coder that installs a venv entry_points.txt is stopped as an ignored path written", async () => {
+  const p = ".venv/lib/python3.12/site-packages/evil-1.0.dist-info/entry_points.txt";
+  const out = await run(hashViolation(Object.assign(H(HASHES_FLAT), { ignored: { [p]: "h" } })), ARGS);
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /ignored path written: \.venv\/lib\/python3\.12\/site-packages\/evil-1\.0\.dist-info\/entry_points\.txt/);
+});
+
 test("2.1.0 a writer or a coder that writes an ignored path is stopped", async () => {
   const ign = (p) => Object.assign(H(HASHES_FLAT), { ignored: { [p]: "h" } });
   let out = await run(happy({ script: { "hasher:post-writers:r1": (prompt) => ({ status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: ign(".venv/lib/x/site-packages/evil.pth") }) } }), ARGS);
@@ -5362,4 +5410,326 @@ test("2.1.0 the resume digest ignores the run-state ref itself", async () => {
   rerunScript(s, states.committed, { hasher: { hashes: withFleetRef("f".repeat(40)) } });
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
   assert.equal(out.result.status, "ok", out.result.reason);
+});
+
+// ---------------------------------------------------------------- 2.1.1 role pins, IaC hooks
+
+test("2.1.1 a live-shaped role page with no trailing newline parses: DISPATCH tier and CONTRACT on the last line", async () => {
+  // agent_prompt_save strips the final newline: the CONTRACT line can be the
+  // page's last line, and the DISPATCH value carries the rest of the page
+  const page = "DISPATCH: model=opus (fallback=sonnet) — review depth scales with blast radius\nCONTRACT: fleet-v3";
+  assert.ok(!page.endsWith("\n"));
+  const s = withDispatch(
+    happy({
+      script: {
+        "role:fleet-code-judge:r1": null,
+        "role:fleet-code-judge:r1:fallback": { status: "ok", verdict: "approve", routed_findings: [] },
+      },
+    }),
+    Object.assign({}, DISPATCH, { "fleet-code-judge": page }),
+  );
+  s.preflight.contract["fleet-code-judge"] = page.split("\n")[1];
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(call(out, "role:fleet-code-judge:r1").opts.model, "opus");
+  assert.equal(call(out, "role:fleet-code-judge:r1:fallback").opts.model, "sonnet");
+  assert.match(call(out, "preflight").prompt, /last line/);
+});
+
+test("2.1.1 tflint and terragrunt are forbidden words in a check_cmd", async () => {
+  for (const cmd of ["make tflint", "scripts/run-terragrunt.sh", "pre-commit run tflint-all --all-files"]) {
+    const s = withObligations([Object.assign({}, OB_BUMP, { check_cmd: cmd })]);
+    const out = await runOne(s, ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "awaiting_confirmation", JSON.stringify(cmd) + " " + out.result.reason);
+    const ob = JSON.parse(s.__store[PC]).plan_facts.repo_obligations[0];
+    assert.equal(ob.check_cmd_rejected, cmd);
+    assert.match(ob.check_rejected_reason, /forbidden tool/, cmd);
+  }
+});
+
+const IAC_REPO = "https://github.com/antonbabenko/pre-commit-terraform";
+function iacCfg(hooks, defaults) {
+  return {
+    status: "ok",
+    reason: "read",
+    present: true,
+    parser: "yaml",
+    sha256: "c".repeat(64),
+    default_stages: defaults || null,
+    installed: {},
+    hooks: hooks.map((h) => Object.assign({ repo: IAC_REPO, name: null, entry: null, args: [], stages: null }, h)),
+  };
+}
+function iacScript(cfg, extra) {
+  return happy({ script: Object.assign({ "infra:iac-hooks": cfg }, extra || {}) });
+}
+
+test("2.1.1 IaC: a pre-commit-terraform hook with no stages runs at pre-push too: commit, then stop before the push", async () => {
+  const out = await run(iacScript(iacCfg([{ id: "terraform_fmt" }])), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "iac");
+  assert.match(out.result.reason, /pre-push hooks run IaC tooling \(terraform_fmt\); push by hand/);
+  assert.ok(out.labels.includes("infra:commit:r1"), "the commit may run");
+  assert.ok(out.labels.includes("infra:state:committed:r1"), "last_gate committed is recorded");
+  assert.ok(!out.labels.some((l) => /^infra:push/.test(l)), out.labels.join(", "));
+  const c = call(out, "infra:iac-hooks");
+  assert.equal(c.opts.agentType, "fleet:judge");
+  assert.equal(inputsOf(c.prompt).plan_commit, PC);
+  // the local Bash guard blocks these words: the command must not carry them
+  assert.doesNotMatch(c.prompt, /terraform|tofu|tflint|terragrunt|\btfp\b/i);
+  // read once per build, after verify and before the writers
+  assert.equal(out.build.labels.filter((l) => /^infra:iac-hooks/.test(l)).length, 1);
+  assert.ok(out.build.labels.indexOf("infra:iac-hooks") > out.build.labels.indexOf("infra:verify-plan"));
+  assert.ok(out.build.labels.indexOf("infra:iac-hooks") < out.build.labels.indexOf("hasher:pre-writers:r1"));
+});
+
+test("2.1.1 IaC: the same hook pinned to the commit stage does not stop the push", async () => {
+  for (const stages of [["pre-commit"], ["commit"]]) {
+    const out = await run(iacScript(iacCfg([{ id: "terraform_fmt", stages }])), ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "ok", JSON.stringify(stages) + " " + out.result.reason);
+    assert.ok(out.labels.includes("infra:push"));
+  }
+});
+
+test("2.1.1 IaC: default_stages [pre-commit] keeps an unstaged IaC hook off pre-push", async () => {
+  const out = await run(iacScript(iacCfg([{ id: "terraform_validate" }, { id: "terraform_docs" }], ["pre-commit"])), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.labels.includes("infra:push"));
+});
+
+test("2.1.1 IaC: a non-fmt/validate/tflint/docs IaC hook at commit stage stops before the commit", async () => {
+  for (const hooks of [
+    [{ id: "terraform_plan_check", stages: ["pre-commit"] }],
+    [{ id: "infracost_breakdown", repo: IAC_REPO, stages: ["commit"] }],
+    [{ id: "plan", repo: "local", entry: "scripts/run.sh", args: ["terragrunt", "plan"], stages: ["pre-commit"] }],
+    // an allowlisted id still runs during git commit at commit-msg: not exempt
+    [{ id: "terraform_fmt", stages: ["commit-msg"] }],
+  ]) {
+    const out = await run(iacScript(iacCfg(hooks)), ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(hooks) + " " + out.result.reason);
+    assert.equal(out.result.stop_gate, "iac");
+    assert.match(out.result.reason, /commit hooks run IaC tooling/);
+    assert.ok(out.labels.includes("role:fleet-code-judge:r1"), "the build ran up to the commit step");
+    assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)), out.labels.join(", "));
+  }
+});
+
+test("2.1.1 IaC: the plan commit runs commit hooks too: a non-exempt IaC hook stops plan mode before it", async () => {
+  for (const hooks of [[{ id: "terraform_plan_check", stages: ["pre-commit"] }], [{ id: "terraform_fmt", stages: ["commit-msg"] }]]) {
+    const s = happy({ script: { "infra:iac-hooks:commit-plan": iacCfg(hooks) } });
+    const out = await runOne(s, ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "needs_human", out.result.reason);
+    assert.equal(out.result.stop_gate, "iac");
+    assert.match(out.result.reason, /plan commit: commit hooks run IaC tooling/);
+    assert.ok(!out.labels.includes("infra:commit-plan"), out.labels.join(", "));
+    const c = call(out, "infra:iac-hooks:commit-plan");
+    assert.equal(c.opts.agentType, "fleet:judge");
+    assert.equal(inputsOf(c.prompt).plan_commit, "HEAD");
+  }
+  // exempt fmt at pre-commit, even with a pre-push stage: the plan commit runs
+  const ok = await runOne(happy({ script: { "infra:iac-hooks:commit-plan": iacCfg([{ id: "terraform_fmt" }]) } }), ARGS);
+  noUnscripted(ok);
+  assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+  assert.ok(ok.labels.indexOf("infra:iac-hooks:commit-plan") < ok.labels.indexOf("infra:commit-plan"));
+});
+
+test("2.1.1 IaC: installed hook files, local entry scripts and IaC file filters count", async () => {
+  const PLAIN = "https://github.com/pre-commit/mirrors-prettier";
+  const withInstalled = (installed, hooks) => Object.assign(iacCfg(hooks || []), { installed });
+  const shim = { generated: true, config: ".pre-commit-config.yaml", iac: false };
+  // push stops: a hand-written pre-push hook that runs IaC tooling
+  let out = await run(iacScript(withInstalled({ "pre-commit": { hook: shim }, "pre-push": { hook: { generated: false, config: null, iac: true } } })), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.stop_gate, "iac", out.result.reason);
+  assert.match(out.result.reason, /pre-push hooks run IaC tooling \(installed pre-push hook\)/);
+  assert.ok(out.labels.includes("infra:commit:r1"));
+  // commit stops: a legacy chain with IaC, a shim for another config, a local entry script, a .tf file filter
+  for (const [installed, hooks] of [
+    [{ "pre-commit": { hook: shim, legacy: { generated: false, config: null, iac: true } } }, []],
+    [{ "pre-commit": { hook: { generated: true, config: "other.yaml", iac: false } } }, []],
+    [{}, [{ id: "lint", repo: "local", entry: "scripts/lint.sh", stages: ["pre-commit"], entry_iac: true }]],
+    [{}, [{ id: "fmt-check", repo: "local", entry: "bash", files: "\\.tf$", stages: ["pre-commit"] }]],
+    [{}, [{ id: "hcl", repo: PLAIN, types: ["hcl"], stages: ["pre-commit"] }]],
+  ]) {
+    out = await run(iacScript(withInstalled(installed, hooks)), ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.stop_gate, "iac", JSON.stringify([installed, hooks]) + " " + out.result.reason);
+    assert.match(out.result.reason, /commit hooks run IaC tooling/);
+  }
+  // a husky-style pre-push hook with no IaC tooling, and a plain shim: unchanged flow
+  out = await run(iacScript(withInstalled({ "pre-commit": { hook: shim }, "pre-push": { hook: { generated: false, config: null, iac: false } } }, [{ id: "prettier", repo: PLAIN }])), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  // a malformed installed entry fails closed
+  out = await run(iacScript(withInstalled({ "pre-push": { hook: { generated: false } } })), ARGS);
+  assert.equal(out.result.stop_gate, "iac", out.result.reason);
+  assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)));
+});
+
+test("2.1.1 IaC: a repo with no IaC hooks keeps the unchanged flow", async () => {
+  const cfg = iacCfg([
+    { id: "prettier", repo: "https://github.com/pre-commit/mirrors-prettier" },
+    { id: "ruff", repo: "https://github.com/astral-sh/ruff-pre-commit", args: ["--fix"] },
+  ]);
+  const base = await run(happy(), ARGS);
+  const out = await run(iacScript(cfg), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.deepEqual(out.labels, base.labels);
+});
+
+test("2.1.1 IaC: an unreadable or unparseable config fails closed before the commit", async () => {
+  for (const cfg of [
+    { status: "ok", reason: "no yaml", present: true, parser: null, error: "PyYAML unavailable", sha256: "c".repeat(64), default_stages: null, hooks: [], installed: {} },
+    { status: "ok", reason: "bad", present: true, parser: "yaml", error: "unparseable: x", sha256: "c".repeat(64), default_stages: null, hooks: [], installed: {} },
+    { status: "ok", reason: "odd", present: true, parser: "yaml", sha256: "c".repeat(64), default_stages: null, installed: {} },
+    // the installed hook files were not read: fail closed
+    { status: "ok", reason: "no installed", present: false, parser: null, sha256: "MISSING", default_stages: null, hooks: [] },
+  ]) {
+    const out = await run(iacScript(cfg), ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "needs_human", out.result.reason);
+    assert.equal(out.result.stop_gate, "iac");
+    assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)));
+  }
+});
+
+test("2.1.1 IaC: the commit step re-checks against the frozen copy of the config", async () => {
+  const withCfgHash = (h) => {
+    const frozen = H({ ...HASHES_FLAT, ".pre-commit-config.yaml": h });
+    return {
+      "hasher:freeze:f1": { status: "ok", fingerprint: FP_TESTS, hashes: frozen },
+      "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: frozen },
+    };
+  };
+  const cfg = iacCfg([{ id: "prettier", repo: "https://github.com/pre-commit/mirrors-prettier" }]);
+  let out = await run(iacScript(cfg, withCfgHash("c".repeat(64))), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  out = await run(iacScript(cfg, withCfgHash("d".repeat(64))), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "iac");
+  assert.match(out.result.reason, /frozen/);
+  assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)));
+});
+
+test("2.1.1 IaC: a resumed run at push still stops before a pre-push IaC hook", async () => {
+  const states = {};
+  const s = recording(happy(), states);
+  s["infra:push"] = { status: "failed", reason: "ssh" };
+  const plan = await runOne(s, ARGS);
+  await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  assert.equal(states.committed.last_gate, "committed");
+  rerunScript(s, states.committed);
+  s["infra:iac-hooks"] = iacCfg([{ id: "terraform_fmt" }]);
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  noUnscripted(out);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "iac");
+  assert.ok(!out.labels.some((l) => /^infra:push/.test(l)), out.labels.join(", "));
+});
+
+test("2.1.1 IaC: confirm auto refuses at G3 any repo with an IaC hook", async () => {
+  for (const hooks of [[{ id: "terraform_fmt", stages: ["pre-commit"] }], [{ id: "tofu_fmt", repo: "https://github.com/tofuutils/pre-commit-opentofu" }]]) {
+    const out = await runOne(autoHappy({ script: { "infra:iac-hooks:plan": iacCfg(hooks) } }), AUTO);
+    noUnscripted(out);
+    autoFail(out, "scope");
+    assert.match(out.result.reason, /repo hooks run IaC tooling/);
+    assert.equal(call(out, "infra:iac-hooks:plan").opts.agentType, "fleet:judge");
+  }
+  const ok = await runOne(autoHappy(), AUTO);
+  noUnscripted(ok);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+  assert.ok(ok.labels.includes("infra:iac-hooks:plan"));
+});
+
+const HAVE_YAML = spawnSync("python3", ["-c", "import yaml"]).status === 0;
+
+test("2.1.1 IaC hook reader program: raw hook fields, stages, sha256; absent config; bad rev", { skip: !HAVE_YAML }, () => {
+  const wt = scratchRepo("fleet-iac-");
+  try {
+    writeFileSync(join(wt, "a.txt"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "no config");
+    const bare = sh(wt, "git", "rev-parse", "HEAD").trim();
+    const cfg =
+      "default_stages: [commit]\n" +
+      "repos:\n" +
+      "  - repo: https://github.com/antonbabenko/pre-commit-terraform\n" +
+      "    rev: v1.96.1\n" +
+      "    hooks:\n" +
+      "      - id: terraform_fmt\n" +
+      "      - id: terraform_tflint\n" +
+      "        args: [--args=--config=x, 3]\n" +
+      "        stages: [pre-push]\n" +
+      "  - repo: local\n" +
+      "    hooks:\n" +
+      "      - id: lint\n" +
+      "        name: Lint\n" +
+      "        entry: scripts/lint.sh\n" +
+      "        language: script\n" +
+      "      - id: fmt-check\n" +
+      "        entry: bash\n" +
+      "        args: [scripts/fmt.sh]\n" +
+      "        files: \\.(tf|tfvars)$\n" +
+      "        types: [file]\n" +
+      "        language: system\n";
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg);
+    sh(wt, "mkdir", "-p", "scripts");
+    writeFileSync(join(wt, "scripts", "lint.sh"), "#!/bin/sh\ntflint --recursive\n");
+    writeFileSync(join(wt, "scripts", "fmt.sh"), "#!/bin/sh\nprettier --check .\n");
+    // installed hook files: a pre-commit shim, its legacy chain, and a hand-written pre-push
+    const hooksDir = join(wt, ".git", "hooks");
+    writeFileSync(join(hooksDir, "pre-commit"), "#!/usr/bin/env bash\n# File generated by pre-commit: https://pre-commit.com\nARGS=(hook-impl --config=.pre-commit-config.yaml --hook-type=pre-commit)\n");
+    writeFileSync(join(hooksDir, "pre-commit.legacy"), "#!/bin/sh\nterragrunt hclfmt\n");
+    writeFileSync(join(hooksDir, "pre-push"), "#!/bin/sh\nnpx lint-staged\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "config");
+    const m = /IAC_HOOKS_PY_BEGIN\n([\s\S]*?)\n\/\/ IAC_HOOKS_PY_END/.exec(SOURCE);
+    assert.ok(m, "IAC_HOOKS_PY markers");
+    const body = m[1].replace(/^const IAC_HOOKS_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
+    assert.doesNotMatch(body, /terraform|tofu|tflint|terragrunt|\btfp\b/i, "the Bash guard blocks these words");
+    // the pieced Python pattern is the script's IAC_HOOK_RE
+    const pyPat = Function("return " + /PAT = re\.compile\((.*), re\.I\)/.exec(body)[1])();
+    assert.equal(pyPat, /const IAC_HOOK_RE = \/(.*)\/i;/.exec(SOURCE)[1]);
+    const runPy = (rev) => {
+      const r = spawnSync("python3", ["-I", "-", wt, rev], { input: body, encoding: "utf8" });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const got = runPy("HEAD");
+    assert.equal(got.present, true);
+    assert.equal(got.parser, "yaml");
+    assert.equal(got.sha256, sha256(cfg));
+    assert.deepEqual(got.default_stages, ["commit"]);
+    assert.deepEqual(got.hooks, [
+      { repo: "https://github.com/antonbabenko/pre-commit-terraform", id: "terraform_fmt", name: null, entry: null, args: [], stages: null, files: null, types: null, types_or: null, entry_iac: false },
+      { repo: "https://github.com/antonbabenko/pre-commit-terraform", id: "terraform_tflint", name: null, entry: null, args: ["--args=--config=x", "3"], stages: ["pre-push"], files: null, types: null, types_or: null, entry_iac: false },
+      { repo: "local", id: "lint", name: "Lint", entry: "scripts/lint.sh", args: [], stages: null, files: null, types: null, types_or: null, entry_iac: true },
+      { repo: "local", id: "fmt-check", name: null, entry: "bash", args: ["scripts/fmt.sh"], stages: null, files: "\\.(tf|tfvars)$", types: ["file"], types_or: null, entry_iac: false },
+    ]);
+    assert.deepEqual(got.installed["pre-commit"], {
+      hook: { generated: true, config: ".pre-commit-config.yaml", iac: false },
+      legacy: { generated: false, config: null, iac: true },
+    });
+    assert.deepEqual(got.installed["pre-push"], { hook: { generated: false, config: null, iac: false } });
+    assert.deepEqual(got.installed["commit-msg"], {});
+    const none = runPy(bare);
+    assert.equal(none.present, false);
+    assert.equal(none.sha256, "MISSING");
+    assert.ok(none.installed["pre-commit"].legacy.iac, "installed hooks are read without a config too");
+    const bad = runPy("0".repeat(40));
+    assert.equal(bad.present, true, "a bad rev is not an absent config");
+    assert.ok(bad.error);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
 });
