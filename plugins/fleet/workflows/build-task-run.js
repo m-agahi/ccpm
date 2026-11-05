@@ -139,27 +139,12 @@ const GATE_PATH_RE = /(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\
 const PRECOMMIT_CMD_RE = /^pre-commit run ([A-Za-z0-9_.:-]+)( --all-files)?( --hook-stage ([A-Za-z0-9_-]+))?$/;
 // confirm "auto" G3 scope fence over every planned path and command.
 const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\b/i;
-// IaC hooks (2.1.1, a HARD user rule: never cause IaC tooling to run). A
-// pre-commit hook is an IaC hook when its id, name, entry, args or repo URL
-// matches IAC_HOOK_RE, or its repo is one of IAC_HOOK_REPOS. Only these ids,
-// at the pre-commit stage, may run during the fleet's commit; no IaC hook may
-// run at pre-push (the fleet stops before its push).
-const IAC_HOOK_RE = /terraform|tofu|\btfp\b|tflint|terragrunt|tfsec|infracost|checkov.*terraform/i;
-// A hook whose files, types or types_or name IaC sources is an IaC hook too.
-const IAC_FILES_RE = /terraform|\bhcl\b|\.tf(vars)?\b|\btf\b/i;
-const IAC_HOOK_REPOS =["antonbabenko/pre-commit-terraform", "tofuutils/pre-commit-opentofu"];
-const IAC_COMMIT_OK = [
-  "terraform_fmt", "terraform_validate", "terraform_tflint", "terraform_docs",
-  "tofu_fmt", "tofu_validate", "tofu_tflint", "tofu_docs",
-];
-// Stages that fire during `git commit`. A hook named at any of them runs
-// during the fleet's commit; only an IAC_COMMIT_OK id at pre-commit is exempt.
-const COMMIT_TIME_STAGES = ["pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-commit"];
-// The stages the rules assume for a hook with no stages and no
-// default_stages: pre-commit's default includes pre-push. Other stages are
-// not assumed; a hook or default_stages that names one is checked as named.
-const UNSTAGED_HOOK_STAGES = ["pre-commit", "pre-push"];
-const LEGACY_STAGES = { commit: "pre-commit", push: "pre-push", "merge-commit": "pre-merge-commit" };
+// IaC refusal (2.1.2, a HARD user rule: never cause IaC tooling to run). The
+// fleet does not run in a repo with IaC files or IaC tooling in its hooks or
+// task runners (IAC_SCAN_PY lists the places). IAC_SCAN_PY spells this
+// pattern in pieces (the local Bash guard), and a test keeps the two equal.
+const IAC_RE = /terraform|\btofu\b|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger/i;
+const IAC_REFUSAL = "repo contains IaC files or IaC tooling in hooks; the fleet does not run here";
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 const MAX_AGENTS = 100;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
@@ -1885,7 +1870,7 @@ function workspacePrompt(inputs) {
     "2. default_branch = `git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD` without the `origin/` prefix; if that fails, `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` run in <repo>.\n" +
     "3. Keep fleet files out of git status: if `git -C <repo> check-ignore -q .claude/worktrees/probe` fails, append the line `.claude/worktrees/` to `$(git -C <repo> rev-parse --path-format=absolute --git-common-dir)/info/exclude`. Do the same for `.claude/settings.local.json` (probe that path), and for the test caches `__pycache__/`, `.pytest_cache/`, `.coverage`, `.hypothesis/` (a judge's test run must not leave untracked noise). Never edit a tracked .gitignore.\n" +
     "4. Branch state: `gh pr list --head <branch> --state all --json number,state` in <repo>. MERGED or CLOSED -> status needs_human.\n" +
-    "5. main_worktree: if it exists and `git -C <main_worktree> branch --show-current` equals <branch>, reuse it (created=false). If the path exists otherwise -> needs_human. If absent: local branch <branch> exists -> `git -C <repo> worktree add <main_worktree> <branch>`; else remote branch exists (`git -C <repo> ls-remote --exit-code --heads origin <branch>`: exit code 0 = exists, exit code 2 = absent; any other exit code is a network/auth error -> retry with the same 5 15 45 backoff, and still erroring after the 3 retries -> failed; never treat an error as absent) -> `git -C <repo> worktree add -b <branch> <main_worktree> origin/<branch>`; else `git -C <repo> worktree add --no-track -b <branch> <main_worktree> origin/<default_branch>` (created=true).\n" +
+    "5. main_worktree: if it exists and `git -C <main_worktree> branch --show-current` equals <branch>, reuse it (created=false). If the path exists otherwise -> needs_human. If absent: local branch <branch> exists -> `git -C <repo> -c core.hooksPath=/dev/null worktree add <main_worktree> <branch>`; else remote branch exists (`git -C <repo> ls-remote --exit-code --heads origin <branch>`: exit code 0 = exists, exit code 2 = absent; any other exit code is a network/auth error -> retry with the same 5 15 45 backoff, and still erroring after the 3 retries -> failed; never treat an error as absent) -> `git -C <repo> -c core.hooksPath=/dev/null worktree add -b <branch> <main_worktree> origin/<branch>`; else `git -C <repo> -c core.hooksPath=/dev/null worktree add --no-track -b <branch> <main_worktree> origin/<default_branch>` (created=true).\n" +
     "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths.\n" +
     "7. `mkdir -p <scratch_dir>`.\n" +
     "8. base_ref = `git -C <main_worktree> merge-base HEAD origin/<default_branch>`.\n" +
@@ -2066,7 +2051,7 @@ function replanWorktreePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "1. If <worktree> exists: reuse it only when `git -C <worktree> rev-parse HEAD` equals <plan_commit>, it is on a detached HEAD and `git -C <worktree> status --porcelain` is empty; else needs_human.\n" +
-    "2. Else `git -C <main_worktree> worktree add --detach <worktree> <plan_commit>`, then write `<worktree>/.claude/settings.local.json` with exactly `settings_local_json`.\n" +
+    "2. Else `git -C <main_worktree> -c core.hooksPath=/dev/null worktree add --detach <worktree> <plan_commit>`, then write `<worktree>/.claude/settings.local.json` with exactly `settings_local_json`.\n" +
     "3. head = `git -C <worktree> rev-parse HEAD`.\n" +
     "Return {status, reason, head}."
   );
@@ -2272,202 +2257,119 @@ function precommitIdsPrompt(inputs) {
   );
 }
 
-// IaC hooks (2.1.1): the raw hook fields of .pre-commit-config.yaml as git
-// stores it at <rev>, plus two content scans the script cannot do itself:
-// - entry_iac per repo: local hook: a file at <rev> named by its entry or
-//   args matches the IaC pattern;
-// - installed: the hook files git runs (core.hooksPath, else the hooks dir)
-//   for each commit-time stage and pre-push, and their pre-commit *.legacy
-//   files: {generated (a pre-commit shim), config (its --config=), iac}.
-// The script decides in JS what is an IaC hook (iacHooks). The program spells
-// no IaC tool name whole (the pattern is built from pieces and must equal
-// IAC_HOOK_RE), so the local Bash guard lets the infra agent run it. Fails
-// closed: a bad rev, no PyYAML or a parse error give an error; only a config
-// absent from a valid commit is present=false.
-// Prints {present, parser, sha256, default_stages, hooks, installed, error?}.
-// IAC_HOOKS_PY_BEGIN
-const IAC_HOOKS_PY = String.raw`
-import hashlib, json, os, re, shlex, subprocess, sys
+// IaC refusal scan of <rev> (git objects, so uncommitted edits do not count)
+// and of the hooks dir git uses now (core.hooksPath, else the hooks dir):
+// - iac_files: tracked paths ending .tf, .tfvars, .tf.json, .tfvars.json or
+//   .hcl, or under a .terraform/ or terraform/ dir;
+// - iac_text: where IAC_RE matches the text of .pre-commit-config.yaml, every
+//   file in the hooks dir ("hooks:<name>"), .husky/**, lefthook*.y*ml,
+//   .lefthook*, .githooks/**, Makefile, package.json scripts, or the script and
+//   task tables of pyproject.toml.
+// The script refuses on any hit, an error, or a missing list. Prints
+// {iac_files, iac_text, error?}.
+// IAC_SCAN_PY_BEGIN
+const IAC_SCAN_PY = String.raw`
+import fnmatch, json, os, re, subprocess, sys
 wt, rev = sys.argv[1], sys.argv[2]
-NAME = '.pre-commit-config.yaml'
-PAT = re.compile('terra' + 'form|to' + 'fu|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|checkov.*terra' + 'form', re.I)
-STAGES = ['pre-commit', 'pre-merge-commit', 'prepare-commit-msg', 'commit-msg', 'post-commit', 'pre-push']
-installed = None
-def out(**k):
-    base = {'present': True, 'parser': None, 'sha256': None, 'default_stages': None, 'hooks': [], 'installed': installed}
-    base.update(k)
-    print(json.dumps(base))
+PAT = re.compile('terra' + 'form|\\bto' + 'fu\\b|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|atlan' + 'tis|dig' + 'ger', re.I)
+DIRS = {'.terra' + 'form', 'terra' + 'form'}
+EXTS = ('.tf', '.tfvars', '.tf.json', '.tfvars.json', '.hcl')
+CAP = 50
+def done(**k):
+    print(json.dumps(k))
     sys.exit(0)
-def scan(data):
-    return bool(PAT.search(data.decode('utf-8', 'replace')))
-ls = subprocess.run(['git', '-C', wt, 'ls-tree', '--name-only', rev + '^{commit}', '--', NAME], capture_output=True)
+def git(*a):
+    return subprocess.run(['git', '-C', wt] + list(a), capture_output=True)
+ls = git('ls-tree', '-r', '-z', '--name-only', rev + '^{commit}')
 if ls.returncode != 0:
-    out(error='bad rev ' + rev + ': ' + ls.stderr.decode('utf-8', 'replace').strip())
-hp = subprocess.run(['git', '-C', wt, 'config', 'core.hooksPath'], capture_output=True).stdout.decode('utf-8', 'replace').strip()
+    done(iac_files=[], iac_text=[], error='bad rev ' + rev + ': ' + ls.stderr.decode('utf-8', 'replace').strip())
+paths = [x.decode('utf-8', 'replace') for x in ls.stdout.split(b'\x00') if x]
+files, text = [], []
+def hit(name, data):
+    if PAT.search(data if isinstance(data, str) else data.decode('utf-8', 'replace')):
+        text.append(name)
+def blob(p):
+    b = git('cat-file', 'blob', rev + ':' + p)
+    if b.returncode != 0:
+        done(iac_files=files, iac_text=text, error='cannot read ' + p)
+    return b.stdout
+def tables(obj):
+    # every value under a key that names scripts or tasks, at any depth
+    out = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).lower() in ('scripts', 'gui-scripts', 'tasks', 'script'):
+                out.append(v)
+            else:
+                out.extend(tables(v))
+    return out
+for p in paths:
+    segs = p.split('/')
+    base = segs[-1]
+    if base.lower().endswith(EXTS) or any(s in DIRS for s in segs[:-1]):
+        files.append(p)
+    if base == '.pre-commit-config.yaml' or base in ('Makefile', 'makefile', 'GNUmakefile') \
+            or segs[0] in ('.husky', '.githooks') or segs[0].startswith('.lefthook') \
+            or fnmatch.fnmatch(base, 'lefthook*.y*ml'):
+        hit(p, blob(p))
+    elif base == 'package.json' and 'node_modules' not in segs:
+        raw = blob(p)
+        try:
+            hit(p, json.dumps(json.loads(raw).get('scripts')))
+        except Exception:
+            hit(p, raw)
+    elif base == 'pyproject.toml':
+        raw = blob(p)
+        try:
+            import tomllib
+            hit(p, json.dumps(tables(tomllib.loads(raw.decode('utf-8'))), default=str))
+        except Exception:
+            hit(p, raw)
+hp = git('config', 'core.hooksPath').stdout.decode('utf-8', 'replace').strip()
 if hp:
     hd = os.path.expanduser(hp)
     if not os.path.isabs(hd):
-        top = subprocess.run(['git', '-C', wt, 'rev-parse', '--show-toplevel'], capture_output=True).stdout.decode().strip()
-        hd = os.path.join(top or wt, hd)
+        hd = os.path.join(git('rev-parse', '--show-toplevel').stdout.decode().strip() or wt, hd)
 else:
-    g = subprocess.run(['git', '-C', wt, 'rev-parse', '--path-format=absolute', '--git-path', 'hooks'], capture_output=True)
+    g = git('rev-parse', '--path-format=absolute', '--git-path', 'hooks')
     if g.returncode != 0:
-        out(error='hooks dir: ' + g.stderr.decode('utf-8', 'replace').strip())
+        done(iac_files=files[:CAP], iac_text=text[:CAP], error='hooks dir: ' + g.stderr.decode('utf-8', 'replace').strip())
     hd = g.stdout.decode().strip()
-installed = {}
-for st in STAGES:
-    e = {}
-    for key, name in (('hook', st), ('legacy', st + '.legacy')):
-        p = os.path.join(hd, name)
-        if os.path.isfile(p):
-            with open(p, 'rb') as fh:
-                d = fh.read()
-            t = d.decode('utf-8', 'replace')
-            m = re.search(r'--config[= ]([^\s)\'"]+)', t)
-            e[key] = {'generated': 'File generated by pre-commit' in t, 'config': m.group(1) if m else None, 'iac': scan(d)}
-    installed[st] = e
-if ls.stdout.decode('utf-8', 'replace').strip() != NAME:
-    out(present=False, sha256='MISSING')
-r = subprocess.run(['git', '-C', wt, 'show', rev + ':' + NAME], capture_output=True)
-if r.returncode != 0:
-    out(error='git show failed: ' + r.stderr.decode('utf-8', 'replace').strip())
-digest = hashlib.sha256(r.stdout).hexdigest()
-try:
-    import yaml
-except ImportError:
-    out(sha256=digest, error='PyYAML unavailable')
-try:
-    data = yaml.safe_load(r.stdout)
-except Exception as e:
-    out(sha256=digest, parser='yaml', error='unparseable: ' + str(e))
-if data is None:
-    data = {}
-if not isinstance(data, dict):
-    out(sha256=digest, parser='yaml', error='top level is not a mapping')
-def strs(v):
-    if v is None:
-        return None
-    if isinstance(v, list):
-        return [str(x) for x in v]
-    return [str(v)]
-def s(v):
-    return None if v is None else str(v)
-def entry_iac(entry, args):
-    try:
-        toks = shlex.split(entry or '')
-    except ValueError:
-        toks = (entry or '').split()
-    for t in (toks + list(args))[:40]:
-        p = os.path.normpath(t)
-        if os.path.isabs(p) or p.startswith('..') or p == '.':
-            continue
-        b = subprocess.run(['git', '-C', wt, 'cat-file', 'blob', rev + ':' + p], capture_output=True)
-        if b.returncode == 0 and scan(b.stdout):
-            return True
-    return False
-hooks = []
-repos = data.get('repos')
-if repos is not None and not isinstance(repos, list):
-    out(sha256=digest, parser='yaml', error='repos is not a list')
-for repo in repos or []:
-    if not isinstance(repo, dict):
-        out(sha256=digest, parser='yaml', error='a repos entry is not a mapping')
-    hs = repo.get('hooks')
-    if hs is not None and not isinstance(hs, list):
-        out(sha256=digest, parser='yaml', error='hooks is not a list')
-    for h in hs or []:
-        if not isinstance(h, dict):
-            out(sha256=digest, parser='yaml', error='a hook is not a mapping')
-        args = strs(h.get('args')) or []
-        local = repo.get('repo') == 'local'
-        hooks.append({'repo': s(repo.get('repo')), 'id': s(h.get('id')), 'name': s(h.get('name')),
-                      'entry': s(h.get('entry')), 'args': args, 'stages': strs(h.get('stages')),
-                      'files': s(h.get('files')), 'types': strs(h.get('types')), 'types_or': strs(h.get('types_or')),
-                      'entry_iac': entry_iac(s(h.get('entry')), args) if local else False})
-out(sha256=digest, parser='yaml', default_stages=strs(data.get('default_stages')), hooks=hooks)
+if os.path.isdir(hd):
+    for root, ds, fs in os.walk(hd):
+        for f in sorted(fs):
+            fp = os.path.join(root, f)
+            try:
+                with open(fp, 'rb') as fh:
+                    hit('hooks:' + os.path.relpath(fp, hd), fh.read())
+            except OSError as e:
+                done(iac_files=files[:CAP], iac_text=text[:CAP], error='cannot read hook ' + fp + ': ' + str(e))
+done(iac_files=files[:CAP], iac_text=text[:CAP])
 `;
-// IAC_HOOKS_PY_END
+// IAC_SCAN_PY_END
 
-function iacHooksPrompt(inputs) {
+function iacScanPrompt(inputs) {
   return (
-    "Infra step of the fleet build workflow: read the hooks of .pre-commit-config.yaml at the plan commit. READ ONLY: no edits, no commits; run nothing but the one command below. Never run pre-commit or a hook.\n" +
+    "Infra step of the fleet workflow: scan the repo for IaC files and IaC tooling in its hooks. READ ONLY: no edits, no commits; run nothing but the one command below. Never run a hook.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(IAC_HOOKS_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.plan_commit) +
+    "python3 -I -c " + shQuote(IAC_SCAN_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.rev) +
     "\n" +
-    "It prints one JSON object {present, parser, sha256, default_stages, hooks, installed, error?}. Copy every value unchanged; never add, drop or edit a hook or an installed entry. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, present, parser, sha256, default_stages, hooks, installed, error}."
+    "It prints one JSON object {iac_files, iac_text, error?}. Copy every value unchanged; never drop a path. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, iac_files, iac_text, error}."
   );
 }
 
-function normStage(x) {
-  const v = String(x);
-  return LEGACY_STAGES[v] || v;
-}
-
-// Installed hook files that are not a plain pre-commit shim for the root
-// config: a shim for another config, or any other hook file (husky,
-// lefthook, hand-written, *.legacy) whose content matches the IaC pattern.
-// Returns pseudo-hooks {id, stages: [stage]}, or a string error.
-function iacInstalled(installed) {
-  if (!installed || typeof installed !== "object" || Array.isArray(installed)) return "installed hook files not read";
-  const out = [];
-  for (const st of COMMIT_TIME_STAGES.concat(["pre-push"])) {
-    const e = installed[st] || {};
-    for (const key of ["hook", "legacy"]) {
-      const x = e[key];
-      if (!x) continue;
-      if (typeof x !== "object" || typeof x.iac !== "boolean" || typeof x.generated !== "boolean") return "installed " + st + " " + key + " entry malformed";
-      const name = "installed " + st + (key === "legacy" ? ".legacy" : "") + " hook";
-      if (key === "hook" && x.generated && x.config === ".pre-commit-config.yaml") continue;
-      if (key === "hook" && x.generated) out.push({ id: name + " for config " + JSON.stringify(x.config), stages: [st] });
-      else if (x.iac) out.push({ id: name, stages: [st] });
-    }
-  }
-  return out;
-}
-
-// The IaC hooks in an iac-hooks infra output, each with its effective stages:
-// its own stages, else default_stages, else pre-commit and pre-push
-// (pre-commit's default includes pre-push), plus the installed hook files
-// that run IaC tooling. {error, hooks: [{id, stages}], sha256}.
-function iacHooks(cfg) {
-  const inst = iacInstalled(cfg && cfg.installed);
-  if (typeof inst === "string") return { error: inst, hooks: [], sha256: null };
-  if (cfg && cfg.present === false && !cfg.error) return { error: null, hooks: inst, sha256: "MISSING" };
-  if (!cfg || cfg.present !== true || cfg.error || cfg.parser !== "yaml" || !Array.isArray(cfg.hooks))
-    return { error: ".pre-commit-config.yaml unreadable: " + ((cfg && cfg.error) || "no parser or no hook list"), hooks: [], sha256: null };
-  const defaults = Array.isArray(cfg.default_stages) && cfg.default_stages.length ? cfg.default_stages.map(normStage) : null;
-  const hooks = inst.slice();
-  for (const h of cfg.hooks) {
-    if (!h || typeof h !== "object") return { error: ".pre-commit-config.yaml unreadable: a hook is not an object", hooks: [], sha256: null };
-    const repo = String(h.repo == null ? "" : h.repo);
-    const args = Array.isArray(h.args) ? h.args.map(String) : [];
-    const text = [h.id, h.name, h.entry, repo].map((x) => String(x == null ? "" : x)).concat(args).join(" ");
-    const fileText = [h.files].concat(Array.isArray(h.types) ? h.types : [], Array.isArray(h.types_or) ? h.types_or : []).map((x) => String(x == null ? "" : x)).join(" ");
-    const lowRepo = repo.toLowerCase();
-    if (!IAC_HOOK_RE.test(text) && !IAC_FILES_RE.test(fileText) && h.entry_iac !== true && !IAC_HOOK_REPOS.some((r) => lowRepo.indexOf(r) >= 0)) continue;
-    const own = Array.isArray(h.stages) && h.stages.length ? h.stages.map(normStage) : null;
-    hooks.push({ id: String(h.id == null ? "?" : h.id), stages: own || defaults || UNSTAGED_HOOK_STAGES.slice() });
-  }
-  return { error: null, hooks, sha256: typeof cfg.sha256 === "string" ? cfg.sha256 : null };
-}
-
-// Ids of IaC hooks that run during the fleet's commit and are not an exempt
-// fmt/validate/tflint/docs hook at the pre-commit stage.
-function iacCommitIds(iac) {
-  const out = [];
-  for (const h of iac.hooks)
-    if (h.stages.some((st) => COMMIT_TIME_STAGES.indexOf(st) >= 0 && !(st === "pre-commit" && IAC_COMMIT_OK.indexOf(h.id) >= 0)))
-      out.push(h.id);
-  return out;
-}
-
-// Ids of IaC hooks that run at the fleet's push.
-function iacPushIds(iac) {
-  return iac.hooks.filter((h) => h.stages.indexOf("pre-push") >= 0).map((h) => h.id);
+// Runs the IaC scan and stops the run on any hit, an error or a missing list.
+async function iacRefuse(label, worktree, rev, phaseName) {
+  const r = await infra(label, iacScanPrompt({ worktree, rev }), phaseName, JUDGE_AGENT);
+  if (r.error || !Array.isArray(r.iac_files) || !Array.isArray(r.iac_text))
+    halt("needs_human", IAC_REFUSAL + " (the scan could not complete: " + (r.error || "no iac_files/iac_text lists") + ")", "iac");
+  const hits = r.iac_files.concat(r.iac_text);
+  if (hits.length) halt("needs_human", IAC_REFUSAL + " (" + hits.map(String).join(", ") + ")", "iac");
+  gate(label + ": no IaC files and no IaC tooling in hooks at " + rev);
 }
 
 // The run-state ref: refs/fleet/<task id>/state points at an annotated tag
@@ -3123,14 +3025,7 @@ async function commitPlanAndRef(ctx) {
   const st = await infra("infra:stage-plan" + sfx, stagePlanPrompt(Object.assign({}, base, { ref_path: refPath })), ctx.phaseName);
   if (typeof st.plan_sha256 !== "string" || !SHA256_RE.test(st.plan_sha256))
     halt("failed", "infra:stage-plan" + sfx + " returned no usable plan_sha256");
-  // the plan commit runs the repo's commit hooks too: the IaC rule applies
-  const iacLabel = "infra:iac-hooks:commit-plan" + sfx;
-  const iac = iacHooks(await infra(iacLabel, iacHooksPrompt({ main_worktree: ctx.worktree, plan_commit: "HEAD" }), ctx.phaseName, JUDGE_AGENT));
-  if (iac.error) halt("needs_human", "plan commit: cannot check the repo hooks for IaC tooling: " + iac.error + "; nothing committed", "iac");
-  const iacBad = iacCommitIds(iac);
-  if (iacBad.length)
-    halt("needs_human", "plan commit: commit hooks run IaC tooling (" + iacBad.join(", ") + ") beyond fmt/validate/tflint/docs at pre-commit; nothing committed", "iac");
-  const history =Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after });
+  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after });
   const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: st.plan_sha256, history }));
   const label = "infra:commit-plan" + sfx;
   const r = await infra(
@@ -3380,27 +3275,16 @@ async function autoGates(ctx) {
     if (g2.length) return fail("commands", g2);
   }
   gate("auto-confirm: commands ok (" + (ctx.planFacts.commands || []).length + ")");
-  // G3 also refuses any repo whose hooks run IaC tooling, at any stage
-  const iacCfg = await infra(
-    "infra:iac-hooks:plan" + sfx,
-    iacHooksPrompt({ main_worktree: ctx.mainWt, plan_commit: ctx.planCommit }),
-    "Auto-confirm",
-    JUDGE_AGENT,
-  );
-  const iac = iacHooks(iacCfg);
   const g3 = scopeProblems(ctx);
-  if (iac.error) g3.push("cannot check the repo hooks for IaC tooling: " + iac.error);
-  else if (iac.hooks.length) g3.push("repo hooks run IaC tooling (" + iac.hooks.map((h) => h.id).join(", ") + ")");
   if (g3.length) return fail("scope", g3);
   gate("auto-confirm: scope fence ok");
   return { ok: true, intent };
 }
 
 // How many agents autoGates dispatches after the plan ref is sealed (all
-// gates pass): intent pre-hasher, judge, post-hasher, the IaC hook read, and
-// the hook-id config read.
+// gates pass): intent pre-hasher, judge, post-hasher, and the config read.
 function autoGateAgents(commands) {
-  return 4 + (commandShapeProblems(commands).hookIds.length ? 1 : 0);
+  return 3 + (commandShapeProblems(commands).hookIds.length ? 1 : 0);
 }
 
 function autoFailResult(g, planPath, tiny) {
@@ -3444,6 +3328,8 @@ async function planMode(input, date) {
   );
 
   const ws = await workspaceStep(brief.repo, lay);
+  // the IaC refusal: before any role runs or anything is committed
+  await iacRefuse("infra:iac-scan:plan", lay.mainWt, "HEAD", "Workspace");
   const project = input.project || ws.remoteSlug;
   const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
 
@@ -3680,6 +3566,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     fenceChanged("verify (commits since the plan commit)", v.changed_since || []);
     gate("verify: HEAD " + v.head + " descends from plan_commit by " + (v.commits_since || []).length + " fleet commit(s)");
   } else gate("verify: HEAD is plan_commit " + ref.plan_commit + "; plan hash matches");
+  // the IaC refusal again, at the branch HEAD (the plan commit or later), on
+  // every build and resume, before anything is committed or pushed
+  await iacRefuse("infra:iac-scan:verify", mainWt, v.head, "Verify");
 
   const common = { project, worktree: mainWt, branch, default_branch: defaultBranch, scratch_dir: lay.scratch };
   const planCtx = { plan_path: ref.plan_path };
@@ -3731,34 +3620,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     }
   } else if (v.head !== ref.plan_commit)
     halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
-
-  // IaC hooks: read once per build (a resumed one included, as it may push),
-  // at the plan commit; the commit and push steps apply the rules to it
-  const iacCfg = await infra(
-    "infra:iac-hooks",
-    iacHooksPrompt({ main_worktree: mainWt, plan_commit: ref.plan_commit }),
-    "Verify",
-    JUDGE_AGENT,
-  );
-  const iac = iacHooks(iacCfg);
-  if (iac.error) gate("iac hooks: " + iac.error + " (the commit step stops)");
-  else gate("iac hooks: " + (iac.hooks.length ? iac.hooks.map((h) => h.id + " [" + h.stages.join(",") + "]").join("; ") : "none"));
-  // Stops before the commit when IaC tooling would run during it. hashes: the
-  // judged maps; the frozen .pre-commit-config.yaml must be the copy read above.
-  function iacCommitCheck(hashes, m) {
-    if (iac.error) halt("needs_human", "commit step r" + m + ": cannot check the repo hooks for IaC tooling: " + iac.error + "; commit and push by hand", "iac");
-    const fz = hashes && hashes.files ? hashes.files[".pre-commit-config.yaml"] : undefined;
-    if (fz !== undefined && fz !== iac.sha256)
-      halt("needs_human", "commit step r" + m + ": the frozen .pre-commit-config.yaml (" + fz + ") is not the copy checked for IaC hooks at " + ref.plan_commit + " (" + iac.sha256 + ")", "iac");
-    const bad = iacCommitIds(iac);
-    if (bad.length)
-      halt("needs_human", "commit hooks run IaC tooling (" + bad.join(", ") + ") beyond fmt/validate/tflint/docs at pre-commit; commit and push by hand", "iac");
-  }
-  function iacPushCheck() {
-    if (iac.error) halt("needs_human", "push: cannot check the repo hooks for IaC tooling: " + iac.error + "; push by hand", "iac");
-    const ids = iacPushIds(iac);
-    if (ids.length) halt("needs_human", "pre-push hooks run IaC tooling (" + ids.join(", ") + "); push by hand", "iac");
-  }
 
   // confirm "auto" in build mode: re-run G1-G3 against the current rulings
   // (a resumed build was approved already)
@@ -3872,9 +3733,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     for (let i = steps.indexOf(from); i < steps.length; i++) {
       const step = steps[i];
       if (step === "push") {
-        // the repo's own pre-push hooks run here; never when one runs IaC tooling
+        // the repo's own pre-push hooks run here
         phase("PR");
-        iacPushCheck();
         pushes++;
         const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
         const push = await infra(
@@ -4335,7 +4195,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("code-judge r" + m + ": approve of tree " + codeTree);
 
     // the commit step: the first commit of this build, with the repo's hooks
-    iacCommitCheck(jc.state.hashes, m);
     const subject = commitsMade ? fixSubject(names.taskId, m) : commitSubject(names.taskId, names.slug);
     const cs = await infra(
       "infra:commit:r" + m,

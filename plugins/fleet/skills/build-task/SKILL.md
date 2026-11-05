@@ -147,10 +147,9 @@ A `needs_human` "run-state mismatch" means the branch or worktree changed since 
 "approved but unresumable" means build commits exist without a run-state. Relay the reason; a
 human pushes by hand or deletes the branch.
 
-`stop_gate: "iac"` means the repo's hooks would run IaC tooling. "pre-push hooks run IaC tooling"
-comes after the commit: tell the user to push the branch by hand. "commit hooks run IaC tooling"
-comes before the commit: the tests and code stay uncommitted in the fleet worktree for the user to
-commit and push by hand. Never push or commit for the user, and never bypass a hook.
+`stop_gate: "iac"` means the repo contains IaC files, or IaC tooling in its hooks or task runners.
+The fleet refuses such a repo before any commit or push. Relay the reason to the user. The fleet
+does not run there: do not retry, and never commit, push or bypass a hook for the user.
 
 A build that stopped before its commit step leaves uncommitted tests and code in the fleet
 worktree, and a build started again with the same `plan_ref` stops with `needs_human` on the dirty

@@ -332,55 +332,45 @@ Not defended:
   `core.sshCommand`), virtualenv and `node_modules` internals beyond the startup hooks, and
   anything else that runs code without changing a frozen key.
 
-#### IaC hooks
+#### IaC repos: refused
 
-The user rule forbids any agent to cause terraform, tofu or tfp to run. The one exemption is a
-pre-existing pre-commit hook that runs fmt, validate, tflint or docs at `git commit`, with the
-backend off. Pre-push hooks are not exempt. The fleet runs the repo's hooks at its commit step and
-at its push step, so the script checks the hooks first.
+The user rule forbids any agent to cause IaC tooling (terraform, tofu, tfp and their kin) to run.
+The fleet runs the repo's own hooks at its commits and its push. So it does not run in any repo
+that could reach that tooling. There is no hook classifier, no stage parsing and no exemption. The
+check is blunt and fails closed.
 
-- An infra step (`infra:iac-hooks`, read-only, `fleet:judge`) reads `.pre-commit-config.yaml` at
-  the plan commit with `git show` and PyYAML. It runs once per build, after verify, and a resumed
-  build reads it too. The script decides in code which hooks are IaC hooks.
-- An IaC hook is a hook whose id, name, entry, args or repo URL matches
-  `terraform|tofu|\btfp\b|tflint|terragrunt|tfsec|infracost|checkov.*terraform`, or a hook from
-  `antonbabenko/pre-commit-terraform` or `tofuutils/pre-commit-opentofu`. A hook whose `files`,
-  `types` or `types_or` names terraform, hcl or `.tf`/`.tfvars` counts too, and so does a
-  `repo: local` hook whose entry or args name a repo file whose content matches the pattern.
-- The same step reads the hook files git runs (`core.hooksPath`, else the hooks dir) for each
-  commit-time stage and pre-push, and their pre-commit `*.legacy` files. A pre-commit shim for the
-  root config is checked through the config. A shim for another config counts as an IaC hook at its
-  stage. Any other hook file (husky, lefthook, hand-written, `*.legacy`) counts when its content
-  matches the pattern. The program spells no tool name whole (the local Bash guard), so its
-  pattern is built from pieces.
-- Effective stages: the hook's `stages`, else `default_stages`, else `pre-commit` and `pre-push`
-  (pre-commit's default includes pre-push). `commit` and `push` count as `pre-commit` and
-  `pre-push`.
-- Any IaC hook at `pre-push`: the build commits, records run-state `committed`, and stops before
-  the push with `needs_human`, `stop_gate: "iac"` and "pre-push hooks run IaC tooling (<ids>);
-  push by hand". A resumed run stops at the same place.
-- An IaC hook at a commit-time stage (`pre-commit`, `commit-msg`, `prepare-commit-msg`,
-  `pre-merge-commit`, `post-commit`) stops the build before the commit step, unless its id is
-  `terraform_`/`tofu_` + `fmt`, `validate`, `tflint` or `docs` at the `pre-commit` stage.
-- The plan commit (plan mode and re-plan) runs the repo's commit hooks too. Before it, an infra
-  step (`infra:iac-hooks:commit-plan`) reads the config at `HEAD`, and the same commit-stage rule
-  stops the run with nothing committed.
-- The commit step re-checks the rule. The frozen `.pre-commit-config.yaml` must hash to the copy
-  that was checked; a mismatch stops with `stop_gate: "iac"`.
-- An unreadable config (no PyYAML, a parse error, a bad revision) stops before the commit. An
-  absent config means no IaC hooks.
-- `confirm: "auto"` refuses at G3 (`failed_check: "scope"`) any repo with an IaC hook at any stage:
-  "repo hooks run IaC tooling".
-- `tflint` and `terragrunt` are forbidden words in `test_cmd`/`check_cmd` and in the G3 command
-  fence.
+A read-only infra step (`fleet:judge`) scans the repo twice:
 
-Not covered (content scans are lexical, one level deep): a remote hook repo whose own
-`.pre-commit-hooks.yaml` runs IaC tooling under an unrelated id with no IaC file filter in the
-config; a hook file or entry script that calls another script or tool which runs IaC tooling
-(`make lint`, `npx lint-staged`); stages other than the commit-time stages and pre-push (for
-example `post-checkout` during worktree creation); and whether an exempt `terraform_validate` hook
-really runs with the backend off, or whether a `repo: local` hook reuses an exempt id. The script
-cannot verify these.
+- in plan mode, right after the workspace step (`infra:iac-scan:plan`, at `HEAD`);
+- in build mode, after verify (`infra:iac-scan:verify`, at the branch HEAD), on every build and
+  every resume.
+
+Both scans run before anything is committed or pushed. The run stops with `needs_human`,
+`stop_gate: "iac"` and "repo contains IaC files or IaC tooling in hooks; the fleet does not run
+here" when any of these is true:
+
+- A tracked file ends in `.tf`, `.tfvars`, `.tf.json`, `.tfvars.json` or `.hcl`. This covers
+  `.terraform.lock.hcl`, `terragrunt.hcl` and `.tflint.hcl`.
+- A tracked file sits under a `.terraform/` or `terraform/` dir.
+- `IAC_RE` (`terraform|\btofu\b|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger`, any
+  case) matches anywhere in one of these:
+  - `.pre-commit-config.yaml`;
+  - every file in the hooks dir git uses (`core.hooksPath`, else `git rev-parse --git-path hooks`),
+    with any file name;
+  - `.husky/**`, `lefthook*.y*ml`, `.lefthook*` or `.githooks/**`;
+  - any `Makefile`;
+  - the `scripts` of any `package.json`;
+  - the script and task tables of any `pyproject.toml`.
+- The scan cannot complete: a bad revision, an unreadable file or hook, or a missing list.
+
+The scan reads tracked files from the git objects at the scanned revision. It reads the hooks dir in
+its current state. The scan program never spells a tool name in full, because the local Bash guard
+blocks those words. It builds its pattern from pieces, and a test checks that the pattern equals
+`IAC_RE`.
+
+Every `git worktree add` the fleet runs uses `-c core.hooksPath=/dev/null`, so no `post-checkout`
+hook runs before the scan. The scope-and-plan role page creates the planner's own probe worktree;
+the script does not create it.
 
 ### Frozen set
 
