@@ -1,5 +1,103 @@
 # Changelog
 
+## [2.1.0] - 2026-11-04
+
+### Changed
+
+- **No RED commit.** Many repos run the full suite in a pre-commit hook, so a commit of RED tests
+  always fails, and hooks are never bypassed. Writers now work in the ONE fleet worktree,
+  concurrently, on disjoint test files, and never commit. The per-criterion worktrees and branches,
+  the prepare, integrate and sync steps are gone. The coder works uncommitted too.
+- **Ownership check** after each writer round: HEAD unchanged ("writer committed"); each writer's
+  `files` holds only its own criterion's test files; every changed path (tree delta from the round
+  start plus changed hasher-map keys) is a test file of a criterion pending this round and was
+  reported by a writer. The post-coder check stops a run whose HEAD moved ("coder committed").
+- **Tree fingerprint.** The hasher returns `{head, tree}`: the tree is built in a temporary index
+  (`GIT_INDEX_FILE=<tmp> git read-tree HEAD && git add -A && git write-tree`), so the real index is
+  untouched and no hook runs. Judge before/after states compare HEAD, tree and every hasher map
+  (ignored runner config included). The status and diff hashes are gone. `freeze_tree` and
+  `code_tree` replace the commit-based refs; test judge and code judge get both plus `plan_commit`.
+  `refreeze_log` records `freeze_tree_before`/`freeze_tree_after`.
+- **Commit step** (`infra:commit:r<n>`) after the code judge approves and the obligations gate
+  passes: `git add -A`, staged tree must equal `code_tree`, then ONE commit WITH hooks. A hook
+  rejection goes to the coder as `fix_code` (a code round); hook-modified files, a staged-tree
+  mismatch or a committed-tree mismatch stop with `needs_human`. `approved_sha` is the new HEAD.
+  Later fixes are new commits `fix(<task id>): code round <n>`; verify accepts only these and the
+  first `feat(<task id>): <slug words>` subject.
+- **Contract fleet-v3.** Writer: `criterion_id, tests, files`. Coder: `changed_paths, suite_result,
+added_symbols, frozen_tests_red_at_start, obligations_done`. The `commit`/`commits` keys are
+  gone. Preflight checks ten roles: `fleet-intent-judge`, `pr-review` and
+  `gate-change-nonweakening-sweep` are new.
+- **Models.** A role page with no usable DISPATCH line now stops the run in preflight; no tier is
+  hardcoded (2.0.x fell back to sonnet). Every role dispatch logs `model used: <label> -> <tier>`.
+  The DISPATCH parser accepts text after the fallback tier (`(fallback=sonnet for small PRs)`).
+- A re-plan after `plan_wrong` keeps the old head on `superseded_ref` and the uncommitted work
+  under `superseded_tree_ref` (`git update-ref` to the tree; no commit is created), then resets the
+  branch and runs `git clean -fd`.
+- Minimum role versions for the three new roles are PLACEHOLDERS (intent judge 1, pr-review 16,
+  sweep 2) until the fleet-v3 pages are published.
+
+### Security
+
+- The scope fence runs on the REAL changed paths in every mode: the post-coder listing
+  (`git diff --name-only <code_base_ref> <tree>`, untracked files included) and each writer round. A path in
+  `.github/`, IaC, Kubernetes or Helm manifests, rulesets or a secret-like path stops the run with
+  `stop_gate: scope` before the commit step.
+- The hook surface is frozen: `.pre-commit-config.yaml`, `git:core.hooksPath`, every file under
+  the hooks dir, and the whole dir tree of every repo file a `repo: local` hook names in its
+  shell-split `entry` or `args` (`-m <mod>` resolved). A `-c` payload or an unresolvable token
+  stops the run at freeze. A coder change to any of them is a hash violation, so the commit step
+  runs the hooks G2 checked.
+- Git config exec vectors are frozen: local (and worktree) config with values, include targets,
+  `.gitattributes` and `info/attributes`. The hasher and the commit step run git with
+  `GIT_CONFIG_NOSYSTEM=1` and `-c core.fsmonitor=false`; the commit step pins `core.hooksPath`.
+- Ignored files outside the tool caches are hashed (map `ignored`; inside venvs only startup
+  hooks). A writer or coder that writes one is stopped ("ignored path written").
+- The fence, the review paths and the sweep trigger diff from `plan_commit`; verify fences the
+  commits already on the branch before any role runs.
+- The per-run agent cap is 100 (was 60): an auto run with a review fix round can pass 60.
+- Local hooks behind a launcher (`uv run`, `poetry run`, `npx`, `pnpm exec`, ...) resolve from the
+  word after the launcher's subcommand. Ignored build and coverage output (`build/`, `dist/`,
+  `htmlcov/`, `.eggs/`, `coverage.xml`, `.coverage.*`, `junit*.xml`) is not frozen; `*.egg-info`
+  still is.
+- Launcher hooks freeze the script tables (`package.json` `scripts`, pyproject `project.scripts`,
+  `tool.poetry.scripts`, `tool.pdm.scripts`, `tool.hatch.envs.*.scripts`). `npm run <name>` needs
+  the script; `npx`/`uvx` need a repo-local or declared tool. Build-output exclusions apply at the
+  top level (dirs) and the repo root (files) only; `*.egg-info` is checked first.
+- **Run-state resume.** After the commit, push, PR, review and write-back milestones the build
+  records `refs/fleet/<task id>/state`, a `git mktag` tag object on the approved commit with the
+  state as JSON (local, no hooks, index untouched). A build re-run with the same `plan_ref`
+  resumes at the step after the last milestone when the plan ref, HEAD, tree, clean worktree and
+  frozen-maps digest all match; it runs no writer, coder or judge. A mismatch stops with
+  "run-state mismatch: <which>"; build commits without a run-state stop with "approved but
+  unresumable". Fixes a re-run after a failed push that re-ran the writers on the approved commit.
+- Every `refs/fleet/*` ref is snapshotted into the frozen git map; a role that creates, moves or
+  deletes one is a violation ("run-state ref touched by role"), so a forged run-state cannot make
+  a later re-run skip the judge. Only the workflow's own state write moves it.
+- Write-back follows the review again (the milestone order). Transport git config (`remote.*`,
+  `url.*`, `credential.*`, `http.*`, `core.sshCommand`) is no longer frozen, so a fixed remote
+  does not block a resume.
+- README: a "Threat model" section. The freeze guards against reward hacking, not against a hostile
+  agent with a shell.
+
+### Added
+
+- **`confirm: "auto"`** (opt-in; the default `"ask"` is unchanged). After plan-audit approves, G1
+  intent judge (`fleet-intent-judge`: verdict, deviations with `allowed_by` and `fails_closed`,
+  coverage), G2 commands (`test_cmd`, or `pre-commit run <id> [--all-files] [--hook-stage <s>]`
+  whose id appears once in `.pre-commit-config.yaml` at `plan_commit`), G3 scope fence (IaC,
+  Kubernetes and Helm files, `.github/`, rulesets, secret-like paths, kubectl/helm/IaC commands,
+  default branch, foreign repo). A failure returns `needs_human` with `failed_check`, `intent`,
+  `plan_ref`, `plan_path` and `needs_max_section`; a pass builds in the same run
+  (`auto_confirmed: true`). Build mode with `confirm: "auto"` re-reads the task and re-runs the
+  gates against the current rulings. The sealed plan ref now holds `plan_diff`.
+- **Independent review** after the draft PR: `pr-review` (self-authored mode, fleet inputs, no plan
+  reasoning) and, for gate changes, `gate-change-nonweakening-sweep`, both fingerprinted on the
+  fleet worktree, probes in `scratch_dir`, cleanup always run. A blocking finding (or a weakening
+  sweep) goes to the coder; a new commit, push and PR-body update follow, then one more review at
+  most. Nits reach the pr-opener as `review_notes`. The result carries
+  `review: {verdict, blocking, nits, rounds, sweep, model}`.
+
 ## [2.0.5] - 2026-11-04
 
 ### Fixed

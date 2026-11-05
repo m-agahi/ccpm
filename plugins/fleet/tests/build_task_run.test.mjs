@@ -69,19 +69,26 @@ const FROZEN_VERSIONS = {
   "fleet-coder": 11,
   "fleet-code-judge": 10,
   "fleet-pr-opener": 5,
+  "fleet-intent-judge": 1,
+  "pr-review": 16,
+  "gate-change-nonweakening-sweep": 2,
 };
+const ROLE_NAMES = Object.keys(FROZEN_VERSIONS);
 
-// Keys each role must return on status ok (the frozen fleet-v2 contract).
+// Keys each role must return on status ok (the frozen fleet-v3 contract).
 // The harness fills missing ones with neutral defaults for terse override
 // stubs; a stub with __raw: true is returned as written (drift tests).
 const REQUIRED_DEFAULTS = {
   "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [], tldr: "adds a thing", plan_diff: ["new plan"], repo_obligations: [], test_cmd: { command: "pytest <paths>", paths_placeholder: "<paths>", env: {}, tools: [] } },
   "plan-audit": { verdict: "approve", routed_findings: [] },
-  "fleet-test-writer": { criterion_id: "AC1", tests: [], commit: null },
+  "fleet-test-writer": { criterion_id: "AC1", tests: [], files: [] },
   "fleet-test-judge": { verdict: "approve", routed_findings: [], checked: [] },
-  "fleet-coder": { commits: [], suite_result: { command: "pytest", exit_code: 0 }, added_symbols: [], frozen_tests_red_at_start: true, obligations_done: [] },
+  "fleet-coder": { changed_paths: [], suite_result: { command: "pytest", exit_code: 0 }, added_symbols: [], frozen_tests_red_at_start: true, obligations_done: [] },
   "fleet-code-judge": { verdict: "approve", routed_findings: [], suite_result: { command: "pytest", exit_code: 0 }, hash_check: { match: true, mismatched: [] }, gates_not_run: [], obligations_check: [] },
   "fleet-pr-opener": { pr_url: null, pr_number: null, created: true, template_used: null, gates_not_run_stated: true },
+  "fleet-intent-judge": { verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } },
+  "pr-review": { verdict: "approve", findings: [], touches_gate: false, checked: [] },
+  "gate-change-nonweakening-sweep": { verdict: "non_weakening", units: [], findings: [] },
 };
 
 async function runOne(script, args) {
@@ -89,11 +96,20 @@ async function runOne(script, args) {
   const unscripted = [];
   const logs = [];
   const counters = {};
+  // before the freeze, the worktree holds what the first freeze will hash
+  const f1 = script["hasher:freeze:f1"];
+  let lastHashes = f1 && typeof f1 === "object" && !Array.isArray(f1) && f1.hashes ? f1.hashes : null;
+  const fleetRefs = {};
   const agent = async (prompt, opts = {}) => {
     const label = opts.label;
     calls.push({ label, prompt, opts });
     // the bytecode purge is mechanical; unscripted purges succeed by default
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
+    // run-state writes are mechanical too: the ref lands on the expected head
+    if (!(label in script) && /^infra:state:/.test(label)) {
+      fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = "f".repeat(40);
+      return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
+    }
     if (!(label in script)) {
       unscripted.push(label);
       return null;
@@ -109,6 +125,23 @@ async function runOne(script, args) {
     r = JSON.parse(JSON.stringify(r));
     const raw = r.__raw === true;
     delete r.__raw;
+    // hasher stubs that give only a fingerprint carry the maps of the last
+    // hasher result forward (nothing changed; the judge fingerprint compares
+    // the maps too) and list no changed paths
+    if (label.startsWith("hasher:") && !raw && r.status === "ok") {
+      if (!("hashes" in r)) r.hashes = JSON.parse(JSON.stringify(lastHashes || DEFAULT_HASHES));
+      if (!("changed" in r)) r.changed = [];
+      // the real hasher sees the run-state refs the workflow's own state writes made
+      const g = r.hashes.git || (r.hashes.git = {});
+      if (!Object.keys(g).some((k) => k.startsWith("fleetref:"))) Object.assign(g, fleetRefs);
+      lastHashes = r.hashes;
+    }
+    // a run-state write moves its ref
+    if (label.startsWith("infra:state:") && !raw && r.status === "ok" && typeof r.state_sha === "string")
+      fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = r.state_sha;
+    // a terse writer stub reports exactly its criterion's test files
+    if (label.startsWith("role:fleet-test-writer:") && !raw && r.status === "ok" && !("files" in r))
+      r.files = inputsOf(prompt).test_files;
     if (label.startsWith("role:") && !raw) {
       const role = label.split(":")[1];
       // role runners report the version and contract marker they loaded
@@ -116,7 +149,7 @@ async function runOne(script, args) {
         const pv = script.preflight && script.preflight.versions ? script.preflight.versions[role] : undefined;
         r.role_version = pv !== undefined ? pv : FROZEN_VERSIONS[role];
       }
-      if (!("role_contract" in r)) r.role_contract = "CONTRACT: fleet-v2";
+      if (!("role_contract" in r)) r.role_contract = "CONTRACT: fleet-v3";
       if (r.status === "ok")
         for (const [k, v] of Object.entries(REQUIRED_DEFAULTS[role] || {})) if (!(k in r)) r[k] = v;
     }
@@ -202,10 +235,18 @@ const BRIEF = {
   repo: "/r",
   plan_path: null,
 };
-const FP_PLAN = { head: "P1", status_sha256: "s", diff_sha256: "d" };
-const FP_K1 = { head: "K1", status_sha256: "s", diff_sha256: "d" };
-const FP_K2 = { head: "K2", status_sha256: "s", diff_sha256: "d" };
-const FP_M3 = { head: "M3", status_sha256: "s", diff_sha256: "d" };
+// Fingerprints are {head, tree}. Writers and the coder never commit, so the
+// head stays at the plan commit until the commit step; only the tree moves.
+// FP_PRE: the plan commit before the writers; FP_PLAN (= FP_TESTS): the
+// worktree holding the approved tests.
+const FP_PRE = { head: PC, tree: "T0" };
+const FP_TESTS = { head: PC, tree: "T1" };
+const FP_PLAN = FP_TESTS;
+const FP_K1 = { head: PC, tree: "K1" };
+const FP_K2 = { head: PC, tree: "K2" };
+const FP_M3 = { head: PC, tree: "M3" };
+// the commit step's head for code round m
+const CSHA = (m) => "c00000" + m;
 // Hasher output is four maps plus a suspicious list. Fixtures are written as
 // flat prefixed keys and converted: "git:<k>" -> git, "symlink:<k>" ->
 // symlinks, a key with "#" -> sections, anything else -> files.
@@ -225,6 +266,7 @@ const HASHES_FLAT = {
   "pyproject.toml#tool.pytest": "hp",
 };
 const HASHES = H(HASHES_FLAT);
+const DEFAULT_HASHES = HASHES;
 const CONFIG_ONLY = H({ "pyproject.toml#tool.pytest": "hp" });
 
 function criteria(n = 2) {
@@ -263,22 +305,44 @@ function loadStub(store) {
   };
 }
 
+// commit-step stub: hooks pass; the commit holds exactly the judged tree.
+function commitStepStub(m, live) {
+  return (prompt) => {
+    const code = inputsOf(prompt).code_tree;
+    if (live) Object.assign(live, { head: CSHA(m), tree: code });
+    return {
+      status: "ok",
+      reason: "committed",
+      commit_result: "committed",
+      staged_tree: code,
+      worktree_tree: code,
+      head: CSHA(m),
+      head_tree: code,
+    };
+  };
+}
+
 function happy(over = {}) {
   const crit = over.criteria || criteria(2);
   const store = {};
+  // the last commit the commit step made: the review's worktree state
+  const live = {};
+  const reviewState = () => ({ status: "ok", fingerprint: { head: live.head, tree: live.tree } });
   const s = {
     __store: store,
     preflight: {
       reachable: true,
       missing: [],
       versions: { ...FROZEN_VERSIONS },
-      contract: Object.fromEntries(Object.keys(FROZEN_VERSIONS).map((k) => [k, "CONTRACT: fleet-v2"])),
+      contract: Object.fromEntries(ROLE_NAMES.map((k) => [k, "CONTRACT: fleet-v3"])),
+      dispatch: Object.fromEntries(ROLE_NAMES.map((k) => [k, "DISPATCH: model=sonnet"])),
     },
     intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF },
     "infra:branch-scan": { status: "ok", reason: "scanned", commits: [] },
     "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
     "infra:commit-plan": commitStub(store, PC, PSHA),
     "infra:load-ref": loadStub(store),
+    "infra:read-state": { status: "ok", reason: "no run-state", exists: false },
     "infra:verify-plan": {
       status: "ok",
       reason: "verified",
@@ -316,8 +380,12 @@ function happy(over = {}) {
       yadgar_findings: ["planner fact"],
     },
     "role:plan-audit": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
-    "infra:prepare": { status: "ok", reason: "ok", head: PC },
-    "hasher:fp-pre:test-judge:r1": { status: "ok", fingerprint: FP_PLAN },
+    "hasher:pre-writers:r1": { status: "ok", fingerprint: FP_PRE },
+    "hasher:post-writers:r1": (prompt) => ({
+      status: "ok",
+      fingerprint: FP_TESTS,
+      changed: crit.flatMap((c) => c.test_files),
+    }),
     "role:fleet-test-judge:r1": {
       status: "ok",
       reason: "good",
@@ -326,13 +394,12 @@ function happy(over = {}) {
       checked: [],
       yadgar_findings: ["judge fact"],
     },
-    "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: FP_PLAN },
-    "infra:integrate:r1": { status: "ok", reason: "merged", head: "P1" },
-    "hasher:freeze:f1": { status: "ok", fingerprint: FP_PLAN, hashes: HASHES },
+    "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: FP_TESTS },
+    "hasher:freeze:f1": { status: "ok", fingerprint: FP_TESTS, hashes: HASHES },
     "role:fleet-coder:r1": {
       status: "ok",
       reason: "done",
-      commits: ["k1"],
+      changed_paths: ["src/x.py"],
       frozen_tests_red_at_start: true,
       suite_result: { command: "pytest", exit_code: 0 },
     },
@@ -346,6 +413,14 @@ function happy(over = {}) {
       suite_result: { command: "pytest", exit_code: 0 },
     },
     "hasher:fp-post:code-judge:r1": { status: "ok", fingerprint: FP_K1 },
+    "infra:commit:r1": commitStepStub(1, live),
+    "infra:commit:r2": commitStepStub(2, live),
+    "infra:commit:r3": commitStepStub(3, live),
+    "infra:review-paths:v1": { status: "ok", reason: "listed", changed_paths: ["src/x.py", "tests/test_a.py"] },
+    "hasher:pre-review:v1": reviewState,
+    "role:pr-review:v1": { status: "ok", reason: "clean", verdict: "approve", findings: [], touches_gate: false, checked: ["diff"] },
+    "hasher:fp-post:pr-review:v1": reviewState,
+    "infra:review-cleanup:v1": { status: "ok", reason: "clean" },
     "role:fleet-pr-opener": {
       status: "ok",
       reason: "opened",
@@ -363,7 +438,7 @@ function happy(over = {}) {
       reason: "red",
       criterion_id: c.id,
       tests: [],
-      commit: "t-" + c.id,
+      files: c.test_files.slice(),
     };
   }
   return Object.assign(s, over.script || {});
@@ -457,9 +532,9 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
   assert.equal(r.path, "full");
   assert.equal(r.pr_url, "https://github.com/o/r/pull/7");
   assert.deepEqual(r.rounds, { tests: 1, code: 1 });
-  // approved_sha comes from the post-judge fingerprint
+  // approved_sha is the commit the commit step made after the judge approved
   const pr = inputsOf(call(out, "role:fleet-pr-opener").prompt);
-  assert.equal(pr.approved_sha, "K1");
+  assert.equal(pr.approved_sha, CSHA(1));
   assert.equal(pr.repo, "o/r");
   // coder gets the frozen map and the freeze ref
   const coder = inputsOf(call(out, "role:fleet-coder:r1").prompt);
@@ -469,8 +544,8 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
   assert.deepEqual(coder.frozen_config_sections, { "pyproject.toml#tool.pytest": "hp" });
   const cjIn = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
   assert.deepEqual(cjIn.frozen_tests, coder.frozen_tests);
-  assert.equal(cjIn.code_base_ref, "P1");
-  assert.equal(coder.freeze_ref, "P1");
+  assert.equal(cjIn.code_base_ref, PC);
+  assert.equal(coder.freeze_ref, PC);
   // every role's yadgar findings are forwarded
   // plan-run findings come back with the plan result, build-run findings with the build result
   assert.ok(out.planResult.yadgar_findings.some((y) => y.role === "scope-and-plan"));
@@ -541,7 +616,7 @@ test("plan-audit untestable_criteria stops before any test writer", async () => 
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /untestable_criteria/);
-  assert.ok(!out.labels.includes("infra:prepare"));
+  assert.ok(!out.labels.includes("hasher:pre-writers:r1"));
 });
 
 test("plan-audit plan_defect stops", async () => {
@@ -597,9 +672,8 @@ test("test-judge revise routes only the listed criteria back to their writers", 
         verdict: "revise",
         routed_findings: [{ target: "tests", criterion: "AC2", finding: "weak assert" }],
       },
-      "role:fleet-test-writer:AC2:r2": { status: "ok", criterion_id: "AC2", commit: "t2" },
-      "infra:integrate:r2": { status: "ok", head: "P2" },
-      "hasher:fp-pre:test-judge:r2": { status: "ok", fingerprint: FP_PLAN },
+      "role:fleet-test-writer:AC2:r2": { status: "ok", criterion_id: "AC2" },
+      "hasher:post-writers:r2": { status: "ok", fingerprint: FP_PLAN },
       "role:fleet-test-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
       "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_PLAN },
     },
@@ -626,9 +700,8 @@ test("three revise rounds end in needs_human without freezing", async () => {
   const extra = {};
   for (const n of [1, 2, 3]) {
     extra["role:fleet-test-judge:r" + n] = revise;
-    extra["hasher:fp-pre:test-judge:r" + n] = { status: "ok", fingerprint: FP_PLAN };
+    extra["hasher:post-writers:r" + n] = { status: "ok", fingerprint: FP_PLAN };
     extra["hasher:fp-post:test-judge:r" + n] = { status: "ok", fingerprint: FP_PLAN };
-    extra["infra:integrate:r" + n] = { status: "ok", head: "P" + n };
     extra["role:fleet-test-writer:AC1:r" + n] = { status: "ok", criterion_id: "AC1" };
   }
   const out = await run(happy({ script: extra }), ARGS);
@@ -660,7 +733,7 @@ test("test-judge that mutates the worktree is discarded: needs_human", async () 
     script: {
       "hasher:fp-post:test-judge:r1": {
         status: "ok",
-        fingerprint: { head: "P1", status_sha256: "CHANGED", diff_sha256: "d" },
+        fingerprint: { head: PC, tree: "CHANGED" },
       },
     },
   });
@@ -676,7 +749,7 @@ function hashViolation(hashes) {
   return happy({
     script: {
       "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes },
-      "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
+      "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
       "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
       "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
       "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
@@ -694,7 +767,7 @@ test("changed frozen test hash rejects the coder round regardless of judge", asy
   assert.equal(c2.routed_findings[0].target, "code");
   assert.match(c2.routed_findings[0].finding, /tests\/test_a\.py/);
   assert.equal(out.result.rounds.code, 2);
-  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, "K2");
+  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, CSHA(2));
 });
 
 test("a new runner-config key (added conftest) is a hash violation", async () => {
@@ -736,7 +809,7 @@ test("fix_code routes code findings back to the coder only", async () => {
           { target: "tests", criterion: "AC2", finding: "ignored here" },
         ],
       },
-      "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
+      "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
       "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
       "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
       "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
@@ -751,53 +824,16 @@ test("fix_code routes code findings back to the coder only", async () => {
 });
 
 test("fix_tests routes to the test-judge, never the coder, then re-freezes", async () => {
-  const testFinding = { target: "tests", criterion: "AC1", finding: "asserts unrequired thing" };
-  const s = happy({
-    script: {
-      "role:fleet-code-judge:r1": {
-        status: "ok",
-        verdict: "fix_tests",
-        routed_findings: [testFinding],
-      },
-      // re-entry: judge first, with the code-judge findings
-      "hasher:fp-pre:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
-      "role:fleet-test-judge:r2": {
-        status: "ok",
-        verdict: "revise",
-        routed_findings: [testFinding],
-      },
-      "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
-      "infra:sync:r3": { status: "ok", reason: "merged", head: "M2" },
-      "role:fleet-test-writer:AC1:r3": { status: "ok", criterion_id: "AC1", commit: "t1b" },
-      "infra:integrate:r3": { status: "ok", head: "M3" },
-      "hasher:fp-pre:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
-      "role:fleet-test-judge:r3": { status: "ok", verdict: "approve", routed_findings: [] },
-      "hasher:fp-post:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
-      "hasher:freeze:f2": {
-        status: "ok",
-        fingerprint: FP_M3,
-        hashes: H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" }),
-      },
-      "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
-      "hasher:post-coder:r2": {
-        status: "ok",
-        fingerprint: FP_K2,
-        hashes: H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" }),
-      },
-      "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
-      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
-    },
-  });
-  const out = await run(s, ARGS);
+  const out = await run(fixTestsReentry({}, H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" })), ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
   const tj = inputsOf(call(out, "role:fleet-test-judge:r2").prompt);
-  assert.deepEqual(tj.code_judge_findings, [testFinding]);
+  assert.deepEqual(tj.code_judge_findings, [{ target: "tests", criterion: "AC1", finding: "wrong expectation" }]);
   const iJudge = out.labels.indexOf("role:fleet-test-judge:r2");
   const iCoder2 = out.labels.indexOf("role:fleet-coder:r2");
   assert.ok(iJudge > 0 && iCoder2 > iJudge, "test-judge runs before the next coder round");
   const c2 = inputsOf(call(out, "role:fleet-coder:r2").prompt);
-  assert.equal(c2.freeze_ref, "M3");
+  assert.equal(c2.freeze_tree, "M3");
   assert.equal(c2.frozen_tests["tests/test_a.py"], "ha2");
   assert.ok(!c2.routed_findings.some((f) => f.target === "tests"));
 });
@@ -820,7 +856,7 @@ test("three fix_code rounds end in needs_human", async () => {
   };
   const extra = {};
   for (const n of [1, 2, 3]) {
-    extra["role:fleet-coder:r" + n] = { status: "ok", commits: ["k" + n] };
+    extra["role:fleet-coder:r" + n] = { status: "ok", changed_paths: ["src/x.py"] };
     extra["hasher:post-coder:r" + n] = { status: "ok", fingerprint: FP_K1, hashes: HASHES };
     extra["role:fleet-code-judge:r" + n] = fix;
     extra["hasher:fp-post:code-judge:r" + n] = { status: "ok", fingerprint: FP_K1 };
@@ -838,7 +874,7 @@ test("code-judge that mutates the worktree is discarded: needs_human", async () 
     script: {
       "hasher:fp-post:code-judge:r1": {
         status: "ok",
-        fingerprint: { head: "K1", status_sha256: "s", diff_sha256: "SUITE-LEFT-CHANGES" },
+        fingerprint: { head: PC, tree: "SUITE-LEFT-CHANGES" },
       },
     },
   });
@@ -866,8 +902,8 @@ test("a dead agent (null result) fails the run instead of passing a gate", async
 
 // ---------------------------------------------------------------- agent cap
 
-test("agent cap stops the run with needs_human before exceeding 60 agents", async () => {
-  const crit = criteria(6);
+test("agent cap stops the run with needs_human before exceeding 100 agents", async () => {
+  const crit = criteria(15);
   const reviseAll = {
     status: "ok",
     verdict: "revise",
@@ -885,13 +921,11 @@ test("agent cap stops the run with needs_human before exceeding 60 agents", asyn
     "role:fleet-test-judge:r4": reviseAll,
     "role:fleet-test-judge:r5": reviseAll,
     "role:fleet-test-judge:r6": reviseAll,
-    "infra:sync:r5": { status: "ok", reason: "merged", head: "S5" },
-    "infra:sync:r6": { status: "ok", reason: "merged", head: "S6" },
   };
   for (let n = 1; n <= 6; n++) {
-    extra["hasher:fp-pre:test-judge:r" + n] = { status: "ok", fingerprint: FP_PLAN };
-    extra["hasher:fp-post:test-judge:r" + n] = { status: "ok", fingerprint: FP_PLAN };
-    extra["infra:integrate:r" + n] = { status: "ok", head: "P1" };
+    extra["hasher:post-writers:r" + n] = { status: "ok", fingerprint: FP_PLAN };
+    // r4 is the judge-first re-entry round: it judges the code judge's state
+    extra["hasher:fp-post:test-judge:r" + n] = { status: "ok", fingerprint: n === 4 ? FP_K1 : FP_PLAN };
     for (const c of crit)
       extra["role:fleet-test-writer:" + c.id + ":r" + n] = { status: "ok", criterion_id: c.id };
   }
@@ -905,7 +939,8 @@ test("agent cap stops the run with needs_human before exceeding 60 agents", asyn
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /agent cap/);
   // the cap is per run: the build run alone stays within it
-  assert.ok(out.build.calls.length <= 60, "dispatched " + out.build.calls.length);
+  assert.ok(out.build.calls.length <= 100, "dispatched " + out.build.calls.length);
+  assert.ok(out.build.calls.length > 60, "the old cap of 60 would have stopped earlier");
   assert.ok(out.logs.some((l) => /agent cap/.test(l)));
 });
 
@@ -940,13 +975,16 @@ test("hasher prompt carries the extraction rules and the config list", async () 
     '"vitest"',
     '"mocha"',
     "sort_keys=True",
-    "status', '--porcelain",
+    "GIT_INDEX_FILE",
+    "'read-tree', 'HEAD'",
+    "'add', '-A'",
+    "write-tree",
   ]) {
     assert.ok(p.includes(needle), "hasher prompt mentions " + needle);
   }
   const h = inputsOf(p);
   assert.deepEqual(h.test_files.sort(), [".fleet/l42/plan_ref.json", "tests/test_a.py", "tests/test_b.py"]);
-  assert.equal(h.mode, "hashes");
+  assert.ok(!("mode" in h));
 });
 
 // The hasher's Python program is embedded in the workflow between markers.
@@ -965,8 +1003,9 @@ function sh(cwd, ...cmd) {
   return r.stdout;
 }
 
-function runHasherRaw(wt, mode, files) {
-  const r = spawnSync("python3", ["-I", "-", wt, mode, JSON.stringify(files)], {
+// mode is kept for the older call sites; the program always hashes.
+function runHasherRaw(wt, mode, files, baseTree) {
+  const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify(files)].concat(baseTree ? [baseTree] : []), {
     input: hasherPy(),
     encoding: "utf8",
   });
@@ -1058,16 +1097,15 @@ test("hasher program: sections, config files, fingerprint", { skip: !HAVE_PY }, 
     // fingerprint: ignored files do not change it; untracked and tracked edits do
     sh(wt, "git", "checkout", "-q", "--", ".");
     sh(wt, "rm", "-rf", "sub");
-    const fp0 = runHasher(wt, "fingerprint", []).fingerprint;
-    assert.ok(!("hashes" in runHasher(wt, "fingerprint", [])));
+    const fp0 = runHasher(wt, "hashes", []).fingerprint;
     writeFileSync(join(wt, "ignored.log"), "noise\n");
-    assert.deepEqual(runHasher(wt, "fingerprint", []).fingerprint, fp0);
+    assert.deepEqual(runHasher(wt, "hashes", []).fingerprint, fp0);
     writeFileSync(join(wt, "stray.txt"), "x\n");
-    assert.notDeepEqual(runHasher(wt, "fingerprint", []).fingerprint, fp0);
+    assert.notDeepEqual(runHasher(wt, "hashes", []).fingerprint, fp0);
     sh(wt, "rm", "stray.txt");
     writeFileSync(join(wt, "test_a.py"), "def test(): assert 1\n");
-    const fpEdit = runHasher(wt, "fingerprint", []).fingerprint;
-    assert.notEqual(fpEdit.diff_sha256, fp0.diff_sha256);
+    const fpEdit = runHasher(wt, "hashes", []).fingerprint;
+    assert.notEqual(fpEdit.tree, fp0.tree);
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }
@@ -1172,9 +1210,8 @@ test("test-judge writer_outputs carry this round's writer results only", async (
         verdict: "revise",
         routed_findings: [{ target: "tests", criterion: "AC2", finding: "weak" }],
       },
-      "role:fleet-test-writer:AC2:r2": { status: "ok", criterion_id: "AC2", commit: "t2b" },
-      "infra:integrate:r2": { status: "ok", head: "P2" },
-      "hasher:fp-pre:test-judge:r2": { status: "ok", fingerprint: FP_PLAN },
+      "role:fleet-test-writer:AC2:r2": { status: "ok", criterion_id: "AC2" },
+      "hasher:post-writers:r2": { status: "ok", fingerprint: FP_PLAN },
       "role:fleet-test-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
       "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_PLAN },
     },
@@ -1185,7 +1222,7 @@ test("test-judge writer_outputs carry this round's writer results only", async (
   assert.deepEqual(r1.map((w) => w.criterion_id).sort(), ["AC1", "AC2"]);
   const r2 = inputsOf(call(out, "role:fleet-test-judge:r2").prompt).writer_outputs;
   assert.deepEqual(r2.map((w) => w.criterion_id), ["AC2"]);
-  assert.equal(r2[0].commit, "t2b");
+  assert.deepEqual(r2[0].files, ["tests/test_b.py"]);
 });
 
 const NOT_RUN = /^fleet v2: /;
@@ -1240,43 +1277,19 @@ test("approve with a gates_not_run list: the code-judge list is forwarded", asyn
 test("fix_tests carries its code findings to the next coder round; code_base_ref stays at the first freeze", async () => {
   const testFinding = { target: "tests", criterion: "AC1", finding: "wrong expectation" };
   const codeFinding = { target: "code", criterion: "AC2", finding: "dead branch" };
-  const s = happy({
-    script: {
-      "role:fleet-code-judge:r1": {
-        status: "ok",
-        verdict: "fix_tests",
-        routed_findings: [testFinding, codeFinding],
-      },
-      "hasher:fp-pre:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
-      "role:fleet-test-judge:r2": {
-        status: "ok",
-        verdict: "revise",
-        routed_findings: [testFinding],
-      },
-      "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
-      "infra:sync:r3": { status: "ok", reason: "merged", head: "M2" },
-      "role:fleet-test-writer:AC1:r3": { status: "ok", criterion_id: "AC1", commit: "t1b" },
-      "infra:integrate:r3": { status: "ok", head: "M3" },
-      "hasher:fp-pre:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
-      "role:fleet-test-judge:r3": { status: "ok", verdict: "approve", routed_findings: [] },
-      "hasher:fp-post:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
-      "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: HASHES },
-      "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
-      "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
-      "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
-      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
-    },
+  const s = fixTestsReentry({
+    "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_tests", routed_findings: [testFinding, codeFinding] },
   });
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
   const c2 = inputsOf(call(out, "role:fleet-coder:r2").prompt);
   assert.deepEqual(c2.routed_findings, [codeFinding]);
-  assert.equal(c2.freeze_ref, "M3");
-  assert.equal(c2.code_base_ref, "P1");
+  assert.equal(c2.freeze_tree, "M3");
+  assert.equal(c2.code_base_ref, PC);
   const cj2 = inputsOf(call(out, "role:fleet-code-judge:r2").prompt);
-  assert.equal(cj2.code_base_ref, "P1");
-  assert.equal(cj2.freeze_ref, "M3");
+  assert.equal(cj2.code_base_ref, PC);
+  assert.equal(cj2.freeze_tree, "M3");
 });
 
 test("an ignored new conftest plus an ignore-rule edit rejects the coder round", async () => {
@@ -1432,10 +1445,13 @@ const DISPATCH = {
   "scope-and-plan": "DISPATCH: model=opus (needs code exploration THEN design synthesis)",
   "plan-audit": "DISPATCH: model=fable (fallback=opus) — adversarial audit",
   "fleet-test-writer": "DISPATCH: model=sonnet (fallback=opus) — mechanical",
-  "fleet-test-judge": "garbage line",
-  "fleet-coder": null,
-  "fleet-code-judge": "DISPATCH: model=gpt5 (fallback=opus)",
+  "fleet-test-judge": "DISPATCH: model=sonnet",
+  "fleet-coder": "DISPATCH: model=opus",
+  "fleet-code-judge": "DISPATCH: model=opus (fallback=sonnet)",
   "fleet-pr-opener": "DISPATCH: model=haiku",
+  "fleet-intent-judge": "DISPATCH: model=fable (fallback=opus)",
+  "pr-review": "DISPATCH: model=opus (fallback=sonnet for small/mechanical PRs) — review depth",
+  "gate-change-nonweakening-sweep": "DISPATCH: model=sonnet (fallback=opus) — mechanical measurement",
 };
 
 function withDispatch(s, dispatch) {
@@ -1443,7 +1459,7 @@ function withDispatch(s, dispatch) {
   return s;
 }
 
-test("each role runs on the tier its DISPATCH line names; bad lines fall back to sonnet", async () => {
+test("each role runs on the tier its DISPATCH line names; a bad or missing line halts (no default tier)", async () => {
   const out = await run(withDispatch(happy(), DISPATCH), ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
@@ -1451,15 +1467,17 @@ test("each role runs on the tier its DISPATCH line names; bad lines fall back to
   assert.equal(model("role:scope-and-plan"), "opus");
   assert.equal(model("role:plan-audit"), "fable");
   assert.equal(model("role:fleet-test-writer:AC1:r1"), "sonnet");
-  assert.equal(model("role:fleet-test-judge:r1"), "sonnet"); // garbage
-  assert.equal(model("role:fleet-coder:r1"), "sonnet"); // missing
-  assert.equal(model("role:fleet-code-judge:r1"), "sonnet"); // unknown tier
+  assert.equal(model("role:fleet-test-judge:r1"), "sonnet");
+  assert.equal(model("role:fleet-coder:r1"), "opus");
+  assert.equal(model("role:fleet-code-judge:r1"), "opus");
   assert.equal(model("role:fleet-pr-opener"), "haiku");
-  for (const role of ["fleet-test-judge", "fleet-coder", "fleet-code-judge"])
-    assert.ok(
-      out.logs.some((l) => l.includes(role) && /sonnet/.test(l)),
-      "logged the sonnet default for " + role,
-    );
+  assert.equal(model("role:pr-review:v1"), "opus");
+  for (const bad of ["garbage line", null, "DISPATCH: model=gpt5 (fallback=opus)"]) {
+    const o = await runOne(withDispatch(happy(), Object.assign({}, DISPATCH, { "fleet-coder": bad })), ARGS);
+    assert.equal(o.result.status, "needs_human", String(bad));
+    assert.match(o.result.reason, /fleet-coder has no usable DISPATCH line/);
+    assert.ok(!o.labels.includes("intake"), "halts in preflight");
+  }
 });
 
 test("infra agents run on sonnet explicitly", async () => {
@@ -1480,7 +1498,7 @@ test("a role agent that dies is retried once on its fallback tier", async () => 
     happy({
       script: {
         "role:fleet-test-writer:AC1:r1": null,
-        "role:fleet-test-writer:AC1:r1:fallback": { status: "ok", criterion_id: "AC1", commit: "t" },
+        "role:fleet-test-writer:AC1:r1:fallback": { status: "ok", criterion_id: "AC1" },
         "role:plan-audit": null,
         "role:plan-audit:fallback": { status: "ok", verdict: "approve", routed_findings: [] },
       },
@@ -1568,7 +1586,7 @@ test("a file key and a synthetic key with the same text are compared separately"
     script: {
       "hasher:freeze:f1": { status: "ok", fingerprint: FP_PLAN, hashes: frozen },
       "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: now },
-      "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
+      "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
       "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: frozen },
       "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
       "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
@@ -1630,24 +1648,25 @@ test("code-judge gets hash_recheck built from the frozen and post-coder maps", a
 
 // ---------------------------------------------------------------- drift-audit fixes
 
-function fixTestsReentry(extra) {
+// A fix_tests re-entry: the judge runs first on the code judge's state (K1),
+// then AC1's writer rewrites its test in the fleet worktree (tree M3, maps
+// `after`), the judge approves and the tests are re-frozen.
+function fixTestsReentry(extra, after) {
   const testFinding = { target: "tests", criterion: "AC1", finding: "wrong expectation" };
+  const h = after || HASHES;
   return happy({
     script: Object.assign(
       {
         "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_tests", routed_findings: [testFinding] },
-        "hasher:fp-pre:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
         "role:fleet-test-judge:r2": { status: "ok", verdict: "revise", routed_findings: [testFinding] },
         "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
-        "infra:sync:r3": { status: "ok", reason: "merged", head: "M2" },
-        "role:fleet-test-writer:AC1:r3": { status: "ok", criterion_id: "AC1", commit: "t1b" },
-        "infra:integrate:r3": { status: "ok", head: "M3" },
-        "hasher:fp-pre:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
+        "role:fleet-test-writer:AC1:r3": { status: "ok", criterion_id: "AC1" },
+        "hasher:post-writers:r3": { status: "ok", fingerprint: FP_M3, changed: ["tests/test_a.py"], hashes: h },
         "role:fleet-test-judge:r3": { status: "ok", verdict: "approve", routed_findings: [] },
         "hasher:fp-post:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
-        "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: HASHES },
-        "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
-        "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
+        "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: h },
+        "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
+        "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: h },
         "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
         "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
       },
@@ -1662,24 +1681,20 @@ test("MI-1: every test-judge round of a fix_tests re-entry carries the code-judg
   for (const label of ["role:fleet-test-judge:r2", "role:fleet-test-judge:r3"]) {
     const tj = inputsOf(call(out, label).prompt);
     assert.equal(tj.code_judge_findings.length, 1, label);
-    assert.deepEqual(tj.code_commits, ["k1"], label);
+    assert.equal(tj.code_tree, "K1", label);
   }
   assert.ok(!("code_judge_findings" in inputsOf(call(out, "role:fleet-test-judge:r1").prompt)));
 });
 
-test("MI-2: a fix_tests re-entry merges the fleet branch into the criterion branches before writers", async () => {
+test("MI-2: fix_tests re-entry writers work in the fleet worktree on top of the coder's uncommitted code", async () => {
   const out = await run(fixTestsReentry(), ARGS);
   noUnscripted(out);
-  const iSync = out.labels.indexOf("infra:sync:r3");
-  const iWriter = out.labels.indexOf("role:fleet-test-writer:AC1:r3");
-  assert.ok(iSync >= 0 && iSync < iWriter, "sync runs before the re-entry writers");
-  const sync = inputsOf(call(out, "infra:sync:r3").prompt);
-  assert.equal(sync.branch, "fleet/l42-add-thing");
-  assert.deepEqual(sync.criterion_worktrees.map((w) => w.branch).sort(), [
-    "fleet/l42-add-thing--pabc1234d-t-AC1",
-    "fleet/l42-add-thing--pabc1234d-t-AC2",
-  ]);
-  assert.ok(!out.labels.includes("infra:sync:r1"), "no sync on the initial entry");
+  assert.ok(!out.labels.some((l) => /^infra:(sync|integrate|prepare)/.test(l)));
+  const w = inputsOf(call(out, "role:fleet-test-writer:AC1:r3").prompt);
+  assert.equal(w.worktree, "/r/.claude/worktrees/fleet-l42-add-thing/main");
+  // the ownership delta starts at the code judge's tree, not the plan commit
+  assert.equal(inputsOf(call(out, "hasher:post-writers:r3").prompt).base_tree, "K1");
+  assert.ok(!out.labels.includes("hasher:pre-writers:r3"));
 });
 
 test("S-4: pr-opener repo is the origin owner/name, not the recall project", async () => {
@@ -1815,19 +1830,19 @@ test("manual criteria: no writer, no frozen entry, still listed for the PR opene
 
 // ---------------------------------------------------------------- contract marker + output asserts
 
-test("contract marker: missing or fleet-v1 in preflight halts; fleet-v2 passes", async () => {
+test("contract marker: missing or fleet-v1 in preflight halts; fleet-v3 passes", async () => {
   const missing = happy();
   missing.preflight.contract["fleet-coder"] = null;
   let out = await run(missing, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder contract null != fleet-v2/);
+  assert.match(out.result.reason, /role fleet-coder contract null != fleet-v3/);
   assert.deepEqual(out.labels, ["preflight"]);
 
   const v1 = happy();
   v1.preflight.contract["plan-audit"] = "CONTRACT: fleet-v1";
   out = await run(v1, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role plan-audit contract fleet-v1 != fleet-v2/);
+  assert.match(out.result.reason, /role plan-audit contract fleet-v1 != fleet-v3/);
   assert.deepEqual(out.labels, ["preflight"]);
 
   out = await run(happy(), ARGS);
@@ -1841,7 +1856,7 @@ test("contract marker: a v1 marker in build-mode preflight halts before any buil
   s.preflight.contract["fleet-coder"] = "CONTRACT: fleet-v1";
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /contract fleet-v1 != fleet-v2/);
+  assert.match(out.result.reason, /contract fleet-v1 != fleet-v3/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -1851,13 +1866,13 @@ test("contract marker: a role runner that loaded another contract is discarded",
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-test-judge/);
-  assert.match(out.result.reason, /contract fleet-v1 != fleet-v2/);
+  assert.match(out.result.reason, /contract fleet-v1 != fleet-v3/);
   assert.ok(!out.labels.includes("hasher:freeze:f1"));
 });
 
 test("contract drift: planner ok output missing a required key stops", async () => {
   const s = happy();
-  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: "CONTRACT: fleet-v2" });
+  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: "CONTRACT: fleet-v3" });
   delete p.allowed_additions;
   delete p.held_out_examples;
   s["role:scope-and-plan"] = p;
@@ -1871,7 +1886,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
   s["role:fleet-code-judge:r1"] = {
     __raw: true,
     role_version: FROZEN_VERSIONS["fleet-code-judge"],
-    role_contract: "CONTRACT: fleet-v2",
+    role_contract: "CONTRACT: fleet-v3",
     status: "ok",
     reason: "approved with gates not run: coverage",
     verdict: "approve",
@@ -1887,7 +1902,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
 
 test("contract drift: pr-opener ok output missing a required key stops", async () => {
   const s = happy();
-  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: FROZEN_VERSIONS["fleet-pr-opener"], role_contract: "CONTRACT: fleet-v2" });
+  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: FROZEN_VERSIONS["fleet-pr-opener"], role_contract: "CONTRACT: fleet-v3" });
   delete pr.template_used;
   s["role:fleet-pr-opener"] = pr;
   const out = await run(s, ARGS);
@@ -1906,7 +1921,7 @@ test("contract drift: null/empty values are fine where allowed", async () => {
 
 test("contract drift: a needs_human output may lack the role fields", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"] = { __raw: true, role_version: FROZEN_VERSIONS["fleet-coder"], role_contract: "CONTRACT: fleet-v2", status: "needs_human", reason: "test AC1 wrong" };
+  s["role:fleet-coder:r1"] = { __raw: true, role_version: FROZEN_VERSIONS["fleet-coder"], role_contract: "CONTRACT: fleet-v3", status: "needs_human", reason: "test AC1 wrong" };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /test AC1 wrong/);
@@ -1938,45 +1953,44 @@ test("re-entry writers get code_judge_findings for their own criterion only", as
 
 test("re-freeze after an approved fix_tests round updates the map and the log", async () => {
   const after = H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" });
-  const s = fixTestsReentry({
-    "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: after },
-    "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: after },
-  });
-  const out = await run(s, ARGS);
+  const out = await run(fixTestsReentry({}, after), ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
   assert.deepEqual(out.result.refreeze_log, [
     {
       round: 1,
-      freeze_ref_before: "P1",
-      freeze_ref_after: "M3",
+      freeze_tree_before: "T1",
+      freeze_tree_after: "M3",
       changed: [{ path: "tests/test_a.py", before: "ha", after: "ha2" }],
     },
   ]);
   const c2 = inputsOf(call(out, "role:fleet-coder:r2").prompt);
   assert.equal(c2.frozen_tests["tests/test_a.py"], "ha2");
-  assert.equal(c2.freeze_ref, "M3");
-  assert.equal(c2.code_base_ref, "P1");
+  assert.equal(c2.freeze_tree, "M3");
+  assert.equal(c2.freeze_ref, PC);
+  assert.equal(c2.code_base_ref, PC);
 });
 
-test("re-freeze touching another criterion's test file stops with needs_human", async () => {
+test("re-entry touching another criterion's test file stops with needs_human (ownership, then re-freeze)", async () => {
+  const out = await run(fixTestsReentry({}, H({ ...HASHES_FLAT, "tests/test_b.py": "hb2" })), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /writer touched tests\/test_b\.py/);
+  assert.ok(!out.labels.includes("role:fleet-coder:r2"));
+  // the re-freeze check backs it: a change that reached the freeze anyway
   const s = fixTestsReentry({
     "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: H({ ...HASHES_FLAT, "tests/test_b.py": "hb2" }) },
+    "hasher:fp-post:test-judge:r3": { status: "ok", fingerprint: FP_M3, hashes: H({ ...HASHES_FLAT, "tests/test_b.py": "hb2" }) },
   });
-  const out = await run(s, ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /re-freeze touched unrouted path tests\/test_b\.py/);
-  assert.ok(!out.labels.includes("role:fleet-coder:r2"));
+  const out2 = await run(s, ARGS);
+  assert.equal(out2.result.status, "needs_human");
+  assert.match(out2.result.reason, /judge mutated worktree|re-freeze touched unrouted path tests\/test_b\.py/);
 });
 
-test("re-freeze touching runner config or a symlink stops with needs_human", async () => {
+test("re-entry touching runner config or a symlink stops with needs_human", async () => {
   for (const [k, v] of [["conftest.py", "new"], ["pyproject.toml#tool.pytest", "hp2"], ["symlink:lib", "../x"], ["git:info/exclude", "e2"]]) {
-    const s = fixTestsReentry({
-      "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: H({ ...HASHES_FLAT, [k]: v }) },
-    });
-    const out = await run(s, ARGS);
+    const out = await run(fixTestsReentry({}, H({ ...HASHES_FLAT, [k]: v })), ARGS);
     assert.equal(out.result.status, "needs_human", k);
-    assert.ok(out.result.reason.includes("re-freeze touched unrouted path " + k), out.result.reason);
+    assert.ok(out.result.reason.includes("writer touched " + k), out.result.reason);
   }
 });
 
@@ -2145,7 +2159,7 @@ test("REQUIRED_ON_OK: a planner ok output without tldr or plan_diff stops", asyn
     const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], {
       __raw: true,
       role_version: FROZEN_VERSIONS["scope-and-plan"],
-      role_contract: "CONTRACT: fleet-v2",
+      role_contract: "CONTRACT: fleet-v3",
     });
     delete p[k];
     s["role:scope-and-plan"] = p;
@@ -2453,13 +2467,13 @@ test("plan mode on a plan-only branch re-plans and adds a new plan commit", asyn
 
 // ---------------------------------------------------------------- v2: build mode verify
 
-test("build mode: preflight first, then workspace, verify, prepare; no planner", async () => {
+test("build mode: preflight first, then workspace, verify, then the writers' base state; no planner", async () => {
   const s = happy();
   const ref = await planRefFor(s);
   const out = await runOne(s, buildArgs(ref));
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.deepEqual(out.labels.slice(0, 5), ["preflight", "workspace", "infra:load-ref", "infra:verify-plan", "infra:prepare"]);
+  assert.deepEqual(out.labels.slice(0, 6), ["preflight", "workspace", "infra:load-ref", "infra:verify-plan", "infra:read-state", "hasher:pre-writers:r1"]);
   assert.ok(!out.labels.some((l) => l.startsWith("role:scope-and-plan") || l.startsWith("role:plan-audit")));
   const v = inputsOf(call(out, "infra:verify-plan").prompt);
   assert.deepEqual(v, {
@@ -2479,7 +2493,7 @@ test("build mode: a plan hash mismatch stops with 'plan changed since approval'"
   const out = await runOne(s, buildArgs(ref));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan changed since approval/);
-  assert.ok(!out.labels.includes("infra:prepare"));
+  assert.ok(!out.labels.includes("hasher:pre-writers:r1"));
   assert.ok(!out.labels.some((l) => ROLE_LABEL.test(l)));
 });
 
@@ -2500,11 +2514,11 @@ test("build mode: a branch moved off the plan commit stops", async () => {
     const out = await runOne(s, buildArgs(ref));
     assert.equal(out.result.status, "needs_human", JSON.stringify(c));
     assert.match(out.result.reason, /plan changed since approval/);
-    assert.ok(!out.labels.includes("infra:prepare"), JSON.stringify(c));
+    assert.ok(!out.labels.includes("hasher:pre-writers:r1"), JSON.stringify(c));
   }
 });
 
-test("build mode: a descendant made only by fleet steps of this build proceeds", async () => {
+test("build mode: commit-step commits pass verify; without a run-state the build stops as unresumable", async () => {
   const s = happy();
   const ref = await planRefFor(s);
   const head = "fedcba9876";
@@ -2512,34 +2526,20 @@ test("build mode: a descendant made only by fleet steps of this build proceeds",
     ...s["infra:verify-plan"],
     head,
     commits_since: [
-      { sha: "1111111", subject: "test(AC1): behaviour 1" },
-      { sha: "2222222", subject: "Merge branch 'fleet/l42-add-thing--pabc1234d-t-AC1'" },
-      { sha: "3333333", subject: "Merge branch 'fleet/l42-add-thing' into fleet/l42-add-thing--pabc1234d-t-AC2" },
-      { sha: "4444444", subject: "feat(thing): add it" },
+      { sha: "1111111", subject: "feat(l42): add thing" },
+      { sha: "2222222", subject: "fix(l42): code round 2" },
     ],
   };
-  s["infra:prepare"] = { status: "ok", reason: "ok", head };
   const out = await runOne(s, buildArgs(ref));
-  noUnscripted(out);
-  assert.equal(out.result.status, "ok");
-  assert.ok(out.logs.some((l) => /descends from plan_commit by 4 fleet commit/.test(l)));
-  // a merge of a criterion branch from another plan is not a fleet step of this build
-  s["infra:verify-plan"].commits_since = [{ sha: "5", subject: "Merge branch 'fleet/l42-add-thing--p99999999-t-AC1'" }];
-  const other = await runOne(s, buildArgs(ref));
-  assert.equal(other.result.status, "needs_human");
-});
-
-test("build mode: criterion branches and worktrees are named by the plan commit", async () => {
-  const s = happy();
-  const ref = await planRefFor(s);
-  const out = await runOne(s, buildArgs(ref));
-  const prep = inputsOf(call(out, "infra:prepare").prompt);
-  assert.deepEqual(prep.criterion_worktrees.map((w) => w.branch), [
-    "fleet/l42-add-thing--pabc1234d-t-AC1",
-    "fleet/l42-add-thing--pabc1234d-t-AC2",
-  ]);
-  assert.equal(prep.criterion_worktrees[0].path, "/r/.claude/worktrees/fleet-l42-add-thing/pabc1234d-t-AC1");
-  assert.doesNotMatch(call(out, "infra:prepare").prompt, /git -C <main_worktree> commit/);
+  assert.ok(out.logs.some((l) => /descends from plan_commit by 2 fleet commit/.test(l)));
+  assert.match(out.result.reason, /approved but unresumable/);
+  // any other subject is not a commit step of this plan (writers and the coder never commit)
+  for (const subject of ["test(AC1): behaviour 1", "Merge branch 'fleet/l42-add-thing--pabc1234d-t-AC1'", "feat(thing): add it", "fix(l43): code round 2"]) {
+    s["infra:verify-plan"].commits_since = [{ sha: "5555555", subject }];
+    const other = await runOne(s, buildArgs(ref));
+    assert.equal(other.result.status, "needs_human", subject);
+    assert.match(other.result.reason, /non-fleet commit/);
+  }
 });
 
 test("build mode: the script pushes the approved sha before the PR opener runs", async () => {
@@ -2549,7 +2549,7 @@ test("build mode: the script pushes the approved sha before the PR opener runs",
   const iPr = out.labels.indexOf("role:fleet-pr-opener");
   assert.ok(iPush > 0 && iPr > iPush);
   const p = inputsOf(call(out, "infra:push").prompt);
-  assert.equal(p.approved_sha, "K1");
+  assert.equal(p.approved_sha, CSHA(1));
   assert.equal(p.branch, "fleet/l42-add-thing");
   assert.match(call(out, "infra:push").prompt, /Never --force/);
 });
@@ -2558,7 +2558,7 @@ test("build mode: a push that did not land the approved sha stops before the PR"
   const s = happy({ script: { "infra:push": { status: "ok", reason: "x", push_result: "ok", remote_head: "other" } } });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /not the approved K1/);
+  assert.match(out.result.reason, /not the approved c000001/);
   assert.ok(!out.labels.includes("role:fleet-pr-opener"));
 });
 
@@ -2613,7 +2613,7 @@ function planWrong(findings) {
       "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
       "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
       "infra:commit-plan:replan": commitStub(s.__store, PC2, "d".repeat(64)),
-      "infra:replan-reset": { status: "ok", reason: "reset", head: PC2, superseded_head: "K1" },
+      "infra:replan-reset": { status: "ok", reason: "reset", head: PC2, superseded_head: "5555555" },
   });
 }
 
@@ -2632,7 +2632,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.deepEqual(r.proposed_plan_change, ["split AC2 into AC2 and AC3"]);
   assert.deepEqual(r.plan_findings, [f]);
   assert.equal(r.superseded_ref, "fleet/l42-add-thing--superseded-1");
-  assert.equal(r.superseded_head, "K1");
+  assert.equal(r.superseded_head, "5555555");
   assert.equal(r.tldr, "adds a thing, now with AC3");
   assert.deepEqual(r.plan_diff, ["AC3 added: the code judge found a missing behaviour"]);
   assert.equal(r.fleet_size.criteria, 3);
@@ -2663,11 +2663,17 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.equal(inputsOf(call(out, "role:plan-audit:replan").prompt).base_ref, PC);
   assert.equal(inputsOf(call(out, "infra:commit-plan:replan").prompt).branch, null);
   const reset = inputsOf(call(out, "infra:replan-reset").prompt);
+  // the coder's work is uncommitted: the reset keeps the old head on the
+  // superseded branch and the judged tree under a ref, creating no commit
   assert.deepEqual(
-    { superseded_branch: reset.superseded_branch, expected_head: reset.expected_head, new_plan_commit: reset.new_plan_commit },
-    { superseded_branch: "fleet/l42-add-thing--superseded-1", expected_head: "K1", new_plan_commit: PC2 },
+    { superseded_branch: reset.superseded_branch, expected_head: reset.expected_head, expected_tree: reset.expected_tree, new_plan_commit: reset.new_plan_commit },
+    { superseded_branch: "fleet/l42-add-thing--superseded-1", expected_head: PC, expected_tree: "K1", new_plan_commit: PC2 },
   );
-  assert.match(call(out, "infra:replan-reset").prompt, /Only after step 2 succeeded/);
+  const rp = call(out, "infra:replan-reset").prompt;
+  assert.match(rp, /Only after step 2 succeeded/);
+  assert.match(rp, /branch <superseded_branch> <expected_head>/);
+  assert.match(rp, /clean -fd` \(never -x/);
+  assert.ok(!/git -C <main_worktree> commit -/.test(rp));
 });
 
 test("plan_wrong: a finding without the marker line falls back to the full text and is logged", async () => {
@@ -2688,20 +2694,20 @@ test("plan_wrong: the next build starts fresh from the new plan with new criteri
   // second build run: the code judge now approves; the branch sits at the new plan commit
   s["role:fleet-code-judge:r1"] = happy()["role:fleet-code-judge:r1"];
   s["infra:verify-plan"] = { ...s["infra:verify-plan"], head: PC2, plan_sha256: "d".repeat(64), plan_sha256_head: "d".repeat(64) };
-  s["infra:prepare"] = { status: "ok", reason: "ok", head: PC2 };
-  s["role:fleet-test-writer:AC3:r1"] = { status: "ok", reason: "red", criterion_id: "AC3", tests: [], commit: "t-AC3" };
+  s["role:fleet-test-writer:AC3:r1"] = { status: "ok", reason: "red", criterion_id: "AC3", tests: [] };
   const hashes = H({ ...HASHES_FLAT, "tests/test_c.py": "hc" });
-  s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_PLAN, hashes };
-  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes };
+  // the branch now sits at the new plan commit
+  s["hasher:pre-writers:r1"] = { status: "ok", fingerprint: { head: PC2, tree: "T0" }, hashes };
+  s["hasher:post-writers:r1"] = { status: "ok", fingerprint: { head: PC2, tree: "T1" }, hashes, changed: ["tests/test_a.py", "tests/test_b.py", "tests/test_c.py"] };
+  s["hasher:fp-post:test-judge:r1"] = { status: "ok", fingerprint: { head: PC2, tree: "T1" }, hashes };
+  s["hasher:freeze:f1"] = { status: "ok", fingerprint: { head: PC2, tree: "T1" }, hashes };
+  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: { head: PC2, tree: "K1" }, hashes };
+  s["hasher:fp-post:code-judge:r1"] = { status: "ok", fingerprint: { head: PC2, tree: "K1" }, hashes };
   const second = await runOne(s, buildArgs(ref2));
   noUnscripted(second);
-  assert.equal(second.result.status, "ok");
-  const prep = inputsOf(call(second, "infra:prepare").prompt);
-  assert.deepEqual(prep.criterion_worktrees.map((w) => w.branch), [
-    "fleet/l42-add-thing--p01234567-t-AC1",
-    "fleet/l42-add-thing--p01234567-t-AC2",
-    "fleet/l42-add-thing--p01234567-t-AC3",
-  ]);
+  assert.equal(second.result.status, "ok", second.result.reason);
+  for (const id of ["AC1", "AC2", "AC3"]) assert.ok(second.labels.includes("role:fleet-test-writer:" + id + ":r1"), id);
+  assert.equal(inputsOf(call(second, "infra:commit:r1").prompt).expected_head, PC2);
   assert.equal(inputsOf(call(second, "hasher:freeze:f1").prompt).test_files.length, 4);
   assert.deepEqual(second.result.rounds, { tests: 1, code: 1 });
   assert.equal(second.result.agents, second.calls.length);
@@ -3020,8 +3026,9 @@ test("a cache-dir suspicious entry at freeze stops the run with a clear reason",
 
 // The array fields each role schema must type (present, not required).
 const TYPED_ARRAYS = {
-  "fleet-coder": ["commits", "added_symbols", "addressed_findings"],
-  "fleet-test-writer": ["tests", "addressed_findings"],
+  "fleet-coder": ["changed_paths", "added_symbols", "addressed_findings"],
+  "fleet-test-writer": ["tests", "files", "addressed_findings"],
+  "pr-review": ["findings", "checked"],
   "plan-audit": ["routed_findings"],
   "fleet-test-judge": ["routed_findings", "checked"],
   "fleet-code-judge": ["routed_findings", "gates_not_run"],
@@ -3083,7 +3090,7 @@ test("contract drift: a coder ok output missing added_symbols is still rejected"
   const c = Object.assign({}, REQUIRED_DEFAULTS["fleet-coder"], s["role:fleet-coder:r1"], {
     __raw: true,
     role_version: FROZEN_VERSIONS["fleet-coder"],
-    role_contract: "CONTRACT: fleet-v2",
+    role_contract: "CONTRACT: fleet-v3",
     status: "ok",
     reason: "done",
   });
@@ -3123,7 +3130,7 @@ test("the script still compares the gh-api remote_head to the approved sha", asy
   const s = happy({ script: { "infra:push": { status: "ok", reason: "x", push_result: "ok", remote_head: "deadbeef" } } });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /deadbeef, not the approved K1/);
+  assert.match(out.result.reason, /deadbeef, not the approved c000001/);
 });
 
 // ---------------------------------------------------------------- 2.0.2: bytecode poisoning
@@ -3132,7 +3139,7 @@ test("a bytecode purge runs before every hasher check and every code-judge, in t
   const s = happy({
     script: {
       "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_code", routed_findings: [{ target: "code", criterion: "AC1", finding: "x" }] },
-      "role:fleet-coder:r2": { status: "ok", commits: ["k2"] },
+      "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
       "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
       "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
       "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
@@ -3305,11 +3312,14 @@ function checkScriptsAll(fail) {
 }
 
 // Scripts a second code round that passes and pushes.
-function secondRoundPasses(s, check, pushLabel) {
-  s["role:fleet-coder:r2"] = { status: "ok", commits: ["k2"] };
-  s["hasher:post-coder:r2"] = { status: "ok", fingerprint: FP_K2, hashes: HASHES };
+// head: HEAD under the second round (the first round's commit when its push
+// was rejected; the commit step only ever adds commits)
+function secondRoundPasses(s, check, pushLabel, head) {
+  const fp = { head: head || PC, tree: "K2" };
+  s["role:fleet-coder:r2"] = { status: "ok", changed_paths: ["src/x.py"] };
+  s["hasher:post-coder:r2"] = { status: "ok", fingerprint: fp, hashes: HASHES };
   s["role:fleet-code-judge:r2"] = { status: "ok", verdict: "approve", routed_findings: [], obligations_check: check };
-  s["hasher:fp-post:code-judge:r2"] = { status: "ok", fingerprint: FP_K2 };
+  s["hasher:fp-post:code-judge:r2"] = { status: "ok", fingerprint: fp };
   if (pushLabel) s[pushLabel] = (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha });
 }
 
@@ -3333,7 +3343,7 @@ test("2.0.3 scope-and-plan: repo_obligations and test_cmd are required on ok", a
     const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], {
       __raw: true,
       role_version: FROZEN_VERSIONS["scope-and-plan"],
-      role_contract: "CONTRACT: fleet-v2",
+      role_contract: "CONTRACT: fleet-v3",
     });
     delete p[k];
     s["role:scope-and-plan"] = p;
@@ -3620,8 +3630,8 @@ test("2.0.3 approve without met:true for every obligation is converted to fix_co
 test("2.0.3 obligations gate failing every round stops at the cap with the gate named", async () => {
   const s = withObligations([OB_BUMP]);
   for (const m of [1, 2, 3]) {
-    const fp = { head: "K" + m, status_sha256: "s", diff_sha256: "d" };
-    s["role:fleet-coder:r" + m] = { status: "ok", commits: ["k" + m] };
+    const fp = { head: PC, tree: "K" + m };
+    s["role:fleet-coder:r" + m] = { status: "ok", changed_paths: ["src/x.py"] };
     s["hasher:post-coder:r" + m] = { status: "ok", fingerprint: fp, hashes: HASHES };
     s["role:fleet-code-judge:r" + m] = { status: "ok", verdict: "approve", routed_findings: [], obligations_check: [{ id: "OB1", met: false, evidence: "x" }] };
     s["hasher:fp-post:code-judge:r" + m] = { status: "ok", fingerprint: fp };
@@ -3636,7 +3646,7 @@ test("2.0.3 obligations gate failing every round stops at the cap with the gate 
 test("2.0.3 push rejected by a repo hook routes to the coder as fix_code; the judge re-approves before the next push", async () => {
   const s = happy();
   s["infra:push"] = { status: "ok", reason: "hook", push_result: "hook_rejected", hook_tail: "check_version_bump: core version not bumped\nerror: failed to push some refs" };
-  secondRoundPasses(s, [], "infra:push:p2");
+  secondRoundPasses(s, [], "infra:push:p2", CSHA(1));
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
@@ -3649,16 +3659,19 @@ test("2.0.3 push rejected by a repo hook routes to the coder as fix_code; the ju
   const L = out.labels;
   assert.ok(L.indexOf("infra:push") < L.indexOf("role:fleet-coder:r2"));
   assert.ok(L.indexOf("role:fleet-code-judge:r2") < L.indexOf("infra:push:p2"));
-  assert.equal(inputsOf(call(out, "infra:push:p2").prompt).approved_sha, "K2");
-  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, "K2");
+  // the fix is a new commit on top of the rejected one
+  assert.equal(inputsOf(call(out, "infra:commit:r2").prompt).expected_head, CSHA(1));
+  assert.match(call(out, "infra:commit:r2").prompt, /'fix\(l42\): code round 2'/);
+  assert.equal(inputsOf(call(out, "infra:push:p2").prompt).approved_sha, CSHA(2));
+  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, CSHA(2));
   assert.ok(out.logs.some((l) => /rejected by a repo hook -> coder/.test(l)));
 });
 
 test("2.0.3 push hook rejection on the last round stops at the cap, naming the push hook", async () => {
   const s = happy();
   for (const m of [1, 2, 3]) {
-    const fp = { head: "K" + m, status_sha256: "s", diff_sha256: "d" };
-    s["role:fleet-coder:r" + m] = { status: "ok", commits: ["k" + m] };
+    const fp = { head: m === 1 ? PC : CSHA(m - 1), tree: "K" + m };
+    s["role:fleet-coder:r" + m] = { status: "ok", changed_paths: ["src/x.py"] };
     s["hasher:post-coder:r" + m] = { status: "ok", fingerprint: fp, hashes: HASHES };
     s["role:fleet-code-judge:r" + m] = { status: "ok", verdict: "approve", routed_findings: [] };
     s["hasher:fp-post:code-judge:r" + m] = { status: "ok", fingerprint: fp };
@@ -3707,7 +3720,7 @@ test("2.0.3 coder and code-judge: obligations_done and obligations_check are req
     const r = Object.assign({}, REQUIRED_DEFAULTS[role], s[label], {
       __raw: true,
       role_version: FROZEN_VERSIONS[role],
-      role_contract: "CONTRACT: fleet-v2",
+      role_contract: "CONTRACT: fleet-v3",
     });
     delete r[key];
     s[label] = r;
@@ -3726,7 +3739,7 @@ test("2.0.3 B3: a coder output missing a key AND a hash violation reports the ha
   const c = Object.assign({}, REQUIRED_DEFAULTS["fleet-coder"], s["role:fleet-coder:r1"], {
     __raw: true,
     role_version: FROZEN_VERSIONS["fleet-coder"],
-    role_contract: "CONTRACT: fleet-v2",
+    role_contract: "CONTRACT: fleet-v3",
   });
   delete c.added_symbols;
   s["role:fleet-coder:r1"] = c;
@@ -3775,7 +3788,7 @@ test("2.0.3 B3: a role's needs_human beats a version mismatch (contract drift is
 test("2.0.3 B3: a judge that mutates the worktree and drifts reports the fingerprint", async () => {
   const s = happy();
   s["role:fleet-code-judge:r1"].hash_check = "{}";
-  s["hasher:fp-post:code-judge:r1"] = { status: "ok", fingerprint: { head: "K1", status_sha256: "CHANGED", diff_sha256: "d" } };
+  s["hasher:fp-post:code-judge:r1"] = { status: "ok", fingerprint: { head: PC, tree: "CHANGED" } };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /^judge mutated worktree/);
@@ -3787,7 +3800,7 @@ test("2.0.3 stop_gate: null on ok and awaiting; fingerprint at freeze", async ()
   assert.equal(ok.result.status, "ok");
   assert.equal(ok.result.stop_gate, null);
   assert.equal(ok.planResult.stop_gate, null);
-  const s = happy({ script: { "hasher:freeze:f1": { status: "ok", fingerprint: { head: "P9", status_sha256: "s", diff_sha256: "d" }, hashes: HASHES } } });
+  const s = happy({ script: { "hasher:freeze:f1": { status: "ok", fingerprint: { head: PC, tree: "T9" }, hashes: HASHES } } });
   const out = await run(s, ARGS);
   assert.match(out.result.reason, /worktree changed between test approval and freeze/);
   assert.equal(out.result.stop_gate, "fingerprint");
@@ -4080,4 +4093,1273 @@ test("2.0.5 build re-checks check_cmd scripts before each code-judge run; a fail
   assert.equal(inputsOf(call(outOk, "role:fleet-code-judge:r1").prompt).repo_obligations[0].check_cmd, OB_BUMP.check_cmd);
   const none = withObligations([OB_LOG]);
   assert.ok(!(await run(none, ARGS)).labels.some((l) => /^infra:check-scripts:r/.test(l)));
+});
+
+// ================================================================ 2.1.0
+
+// A repo whose pre-commit hook runs the full suite: committing a RED test
+// always fails, so nothing may commit until the code judge approves.
+test("2.1.0 no RED commit: writers share the fleet worktree, nothing commits before approve, then one commit step", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  for (const l of out.labels) assert.ok(!/^infra:(prepare|integrate|sync)/.test(l), "no per-criterion branch step: " + l);
+  for (const c of criteria(2)) {
+    const w = inputsOf(call(out, "role:fleet-test-writer:" + c.id + ":r1").prompt);
+    assert.equal(w.worktree, "/r/.claude/worktrees/fleet-l42-add-thing/main");
+    assert.equal(w.branch, "fleet/l42-add-thing");
+  }
+  const commits = out.labels.filter((l) => /^infra:commit:/.test(l));
+  assert.deepEqual(commits, ["infra:commit:r1"]);
+  assert.ok(out.labels.indexOf("infra:commit:r1") > out.labels.indexOf("hasher:fp-post:code-judge:r1"));
+  assert.ok(out.labels.indexOf("infra:commit:r1") < out.labels.indexOf("infra:push"));
+  const cp = call(out, "infra:commit:r1").prompt;
+  assert.match(cp, /`<git> add -A`/);
+  assert.match(cp, /never --no-verify/i);
+  assert.match(cp, /'feat\(l42\): add thing'/);
+  assert.equal(inputsOf(cp).code_tree, "K1");
+  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, CSHA(1));
+  assert.equal(inputsOf(call(out, "infra:push").prompt).approved_sha, CSHA(1));
+});
+
+test("2.1.0 commit step: a hook rejection routes to fix_code with the hook tail; the next round makes a new commit", async () => {
+  const s = happy({
+    script: {
+      "infra:commit:r1": (prompt) => {
+        const code = inputsOf(prompt).code_tree;
+        return { status: "ok", reason: "hook failed", commit_result: "hook_rejected", staged_tree: code, worktree_tree: code, hook_tail: "pytest: 2 failed" };
+      },
+      "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
+      "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
+      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
+      "hasher:pre-review:v1": { status: "ok", fingerprint: { head: CSHA(2), tree: "K2" } },
+      "hasher:fp-post:pr-review:v1": { status: "ok", fingerprint: { head: CSHA(2), tree: "K2" } },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const f = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings;
+  assert.equal(f.length, 1);
+  assert.match(f[0].finding, /commit hook/i);
+  assert.match(f[0].finding, /pytest: 2 failed/);
+  assert.equal(out.result.rounds.code, 2);
+  assert.equal(inputsOf(call(out, "infra:commit:r2").prompt).code_tree, "K2");
+  assert.match(call(out, "infra:commit:r2").prompt, /'feat\(l42\): add thing'/);
+  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, CSHA(2));
+});
+
+test("2.1.0 commit step: hook-modified files, a staged-tree mismatch or a committed tree mismatch stop for a human", async () => {
+  const cases = [
+    { commit_result: "hook_rejected", staged_tree: "K1", worktree_tree: "FORMATTED", hook_tail: "prettier fixed 1 file", re: /hook modified files/ },
+    { commit_result: "tree_mismatch", staged_tree: "OTHER", worktree_tree: "K1", re: /staged tree OTHER != code tree K1/ },
+    { commit_result: "committed", staged_tree: "K1", worktree_tree: "K1", head: CSHA(1), head_tree: "RESTAGED", re: /hook modified files/ },
+    { commit_result: "committed", staged_tree: "K1", worktree_tree: "DIRTY", head: CSHA(1), head_tree: "K1", re: /hook modified files/ },
+  ];
+  for (const c of cases) {
+    const { re, ...r } = c;
+    const out = await run(happy({ script: { "infra:commit:r1": { status: "ok", reason: "x", ...r } } }), ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(c));
+    assert.match(out.result.reason, re);
+    assert.equal(out.result.stop_gate, "commit");
+    assert.ok(!out.labels.includes("infra:push"));
+  }
+});
+
+test("2.1.0 a writer or the coder that commits stops the run", async () => {
+  let out = await run(happy({ script: { "hasher:post-writers:r1": { status: "ok", fingerprint: { head: "fff0001", tree: "T1" }, changed: [] } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /writer committed/);
+  out = await run(happy({ script: { "hasher:post-coder:r1": { status: "ok", fingerprint: { head: "fff0002", tree: "K1" }, hashes: HASHES } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /coder committed/);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+});
+
+test("2.1.0 ownership: changed paths must be the pending criteria's test files, reported by their writers", async () => {
+  const post = (changed, hashes) => ({ "hasher:post-writers:r1": { status: "ok", fingerprint: FP_TESTS, changed, hashes: hashes || HASHES } });
+  let out = await run(happy({ script: post(["tests/test_a.py", "tests/test_b.py", "src/x.py"]) }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /writer touched src\/x\.py/);
+  assert.ok(!out.labels.includes("role:fleet-test-judge:r1"));
+  // a writer that reports another criterion's file
+  out = await run(happy({ script: { "role:fleet-test-writer:AC1:r1": { status: "ok", criterion_id: "AC1", files: ["tests/test_a.py", "tests/test_b.py"] } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /writer AC1 touched tests\/test_b\.py/);
+  // a change no writer reported
+  out = await run(happy({ script: { "role:fleet-test-writer:AC2:r1": { status: "ok", criterion_id: "AC2", files: [] } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /writer touched tests\/test_b\.py.*not reported/);
+  // a runner-config key changed during the writer round (an ignored conftest)
+  out = await run(happy({ script: post(["tests/test_a.py", "tests/test_b.py"], H({ ...HASHES_FLAT, "tests/conftest.py": "new" })) }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /writer touched tests\/conftest\.py/);
+});
+
+test("2.1.0 ownership on a revise round: only the pending criterion's files may change; the tree delta is from the round start", async () => {
+  const s = happy({
+    script: {
+      "role:fleet-test-judge:r1": { status: "ok", verdict: "revise", routed_findings: [{ target: "tests", criterion: "AC2", finding: "weak" }] },
+      "role:fleet-test-writer:AC2:r2": { status: "ok", criterion_id: "AC2", files: ["tests/test_b.py"] },
+      "hasher:post-writers:r2": { status: "ok", fingerprint: { head: PC, tree: "T2" }, changed: ["tests/test_a.py", "tests/test_b.py"] },
+    },
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /writer touched tests\/test_a\.py/);
+  // the round's base tree is the last judged state, not the plan commit
+  assert.equal(inputsOf(call(out, "hasher:post-writers:r2").prompt).base_tree, "T1");
+  assert.ok(!out.labels.includes("hasher:pre-writers:r2"));
+});
+
+test("2.1.0 judge fingerprint: a tree change or a changed hasher map discards the verdict", async () => {
+  let out = await run(happy({ script: { "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: { head: PC, tree: "CHANGED" } } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /judge mutated worktree/);
+  out = await run(
+    happy({ script: { "hasher:fp-post:code-judge:r1": { status: "ok", fingerprint: FP_K1, hashes: H({ ...HASHES_FLAT, "sub/conftest.py": "ignored" }) } } }),
+    ARGS,
+  );
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /judge mutated worktree/);
+  assert.equal(out.result.stop_gate, "fingerprint");
+});
+
+test("2.1.0 judges get freeze_tree, code_tree and plan_commit; the hasher returns a tree fingerprint", async () => {
+  const out = await run(happy(), ARGS);
+  const tj = inputsOf(call(out, "role:fleet-test-judge:r1").prompt);
+  assert.equal(tj.plan_commit, PC);
+  assert.equal(tj.freeze_tree, null);
+  assert.equal(tj.code_tree, null);
+  const cj = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
+  assert.equal(cj.plan_commit, PC);
+  assert.equal(cj.freeze_tree, "T1");
+  assert.equal(cj.code_tree, "K1");
+  const coder = inputsOf(call(out, "role:fleet-coder:r1").prompt);
+  assert.equal(coder.freeze_tree, "T1");
+  assert.equal(coder.freeze_ref, PC);
+  const hp = call(out, "hasher:freeze:f1").prompt;
+  assert.match(hp, /GIT_INDEX_FILE/);
+  assert.match(hp, /write-tree/);
+  assert.ok(!/status_sha256|diff_sha256/.test(hp));
+});
+
+test("2.1.0 re-freeze after fix_tests records the tree before and after", async () => {
+  const tf = { target: "tests", criterion: "AC1", finding: "wrong expectation" };
+  const A2 = H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" });
+  const s = happy({
+    script: {
+      "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_tests", routed_findings: [tf] },
+      "role:fleet-test-judge:r2": { status: "ok", verdict: "revise", routed_findings: [tf] },
+      "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
+      "role:fleet-test-writer:AC1:r3": { status: "ok", criterion_id: "AC1", files: ["tests/test_a.py"] },
+      "hasher:post-writers:r3": { status: "ok", fingerprint: FP_M3, changed: ["tests/test_a.py"], hashes: A2 },
+      "role:fleet-test-judge:r3": { status: "ok", verdict: "approve", routed_findings: [] },
+      "hasher:fp-post:test-judge:r3": { status: "ok", fingerprint: FP_M3, hashes: A2 },
+      "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: A2 },
+      "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: A2 },
+      "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
+      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2, hashes: A2 },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  // the re-entry writers start from the code judge's state: no sync, no commit
+  assert.equal(inputsOf(call(out, "hasher:post-writers:r3").prompt).base_tree, "K1");
+  assert.equal(out.result.refreeze_log.length, 1);
+  assert.equal(out.result.refreeze_log[0].freeze_tree_before, "T1");
+  assert.equal(out.result.refreeze_log[0].freeze_tree_after, "M3");
+  const tj2 = inputsOf(call(out, "role:fleet-test-judge:r2").prompt);
+  assert.equal(tj2.code_tree, "K1");
+});
+
+// REQUIRED_ON_OK as written in the script source
+function REQUIRED_OF(src) {
+  const m = /const REQUIRED_ON_OK = (\{[\s\S]*?\n\});/.exec(src);
+  return Function("return " + m[1])();
+}
+
+test("2.1.0 REQUIRED_ON_OK: writer files and coder changed_paths are required arrays; commit keys are gone", async () => {
+  let out = await run(happy({ script: { "role:fleet-test-writer:AC1:r1": { __raw: true, status: "ok", reason: "x", role_version: 7, role_contract: "CONTRACT: fleet-v3", criterion_id: "AC1", tests: [] } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /fleet-test-writer contract drift: missing files/);
+  out = await run(happy({ script: { "role:fleet-coder:r1": { status: "ok", changed_paths: "src/x.py" } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /fleet-coder changed_paths type/);
+  const req = REQUIRED_OF(SOURCE);
+  assert.ok(!/"commits?"/.test(JSON.stringify(req)));
+  assert.deepEqual(req["fleet-test-writer"], ["criterion_id", "tests", "files"]);
+  assert.deepEqual(req["fleet-intent-judge"], ["verdict", "deviations", "coverage"]);
+  assert.deepEqual(req["pr-review"], ["verdict", "findings", "touches_gate", "checked"]);
+  assert.deepEqual(req["gate-change-nonweakening-sweep"], ["verdict", "units", "findings"]);
+});
+
+// ---------------------------------------------------------------- 2.1.0 auto confirm
+
+const AUTO = { ...ARGS, confirm: "auto" };
+
+function autoHappy(over = {}) {
+  const s = happy(over);
+  Object.assign(s, {
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "role:fleet-intent-judge": {
+      status: "ok",
+      reason: "matches the task",
+      verdict: "approve",
+      deviations: [{ item: "adds f()", allowed_by: "task body: 'add f'", source_ref: "L42", fails_closed: true, verdict: "approve", reason: "asked for" }],
+      coverage: { covered: true, missing: [] },
+    },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" },
+  });
+  return Object.assign(s, over.script || {});
+}
+
+test("2.1.0 confirm: a value other than ask or auto is refused before any agent", async () => {
+  const out = await runOne(happy(), { ...ARGS, confirm: "yes" });
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /confirm/);
+  assert.equal(out.calls.length, 0);
+});
+
+test("2.1.0 confirm ask (default) stays interactive: no intent judge", async () => {
+  const out = await runOne(happy(), ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation");
+  assert.ok(!out.labels.some((l) => /intent|precommit-ids/.test(l)));
+});
+
+test("2.1.0 confirm auto: gates pass, the same run builds through the shared verify path", async () => {
+  const out = await runOne(autoHappy(), AUTO);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.auto_confirmed, true);
+  assert.equal(out.result.intent.verdict, "approve");
+  assert.equal(out.labels.filter((l) => l === "preflight").length, 1);
+  assert.equal(out.labels.filter((l) => l === "workspace").length, 1);
+  const i = out.labels.indexOf("role:fleet-intent-judge");
+  assert.ok(i > out.labels.indexOf("infra:commit-plan"));
+  assert.ok(out.labels.indexOf("infra:load-ref") > i);
+  assert.ok(out.labels.indexOf("infra:verify-plan") > i);
+  assert.equal(call(out, "role:fleet-intent-judge").opts.agentType, "fleet:judge");
+  const ij = inputsOf(call(out, "role:fleet-intent-judge").prompt);
+  for (const k of ["brief", "ledger_task", "plan_path", "criteria", "plan_diff", "allowed_additions", "repo_obligations", "commands"])
+    assert.ok(k in ij, "intent judge input " + k);
+  assert.equal(ij.brief.sources[0].body, "task body");
+  assert.equal(ij.ledger_task.body, "task body");
+  const pr = inputsOf(call(out, "role:fleet-pr-opener").prompt);
+  assert.equal(pr.auto_confirmed, true);
+  assert.equal(pr.intent.verdict, "approve");
+  assert.equal(pr.intent.deviations[0].allowed_by, "task body: 'add f'");
+  // no check_cmd: the pre-commit config is not read
+  assert.ok(!out.labels.includes("infra:precommit-ids"));
+  // cumulative agents: no double count of the plan part
+  assert.equal(out.result.cumulative.agents, out.calls.length);
+});
+
+function autoFail(out, check) {
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.failed_check, check, out.result.reason);
+  assert.ok(out.result.plan_ref && out.result.plan_ref.plan_commit);
+  assert.equal(out.result.plan_path, "docs/plans/x.md");
+  assert.match(out.result.needs_max_section, /docs\/plans\/x\.md/);
+  assert.match(out.result.needs_max_section, /re-run with the same plan_ref after a ruling/);
+  assert.match(out.result.needs_max_section, new RegExp(check));
+  assert.ok(!out.labels.includes("infra:load-ref"));
+  assert.ok(!out.labels.some((l) => /test-writer/.test(l)));
+}
+
+test("2.1.0 G1 intent: refuse, an unbacked deviation or missing coverage fail the gate", async () => {
+  const dev = (o) => ({ item: "x", allowed_by: "task", source_ref: "L42", fails_closed: true, verdict: "approve", reason: "r", ...o });
+  for (const ij of [
+    { verdict: "refuse", deviations: [], coverage: { covered: true, missing: [] } },
+    { verdict: "approve", deviations: [dev({ allowed_by: "" })], coverage: { covered: true, missing: [] } },
+    { verdict: "approve", deviations: [dev({ fails_closed: false })], coverage: { covered: true, missing: [] } },
+    { verdict: "approve", deviations: [dev({ verdict: "refuse" })], coverage: { covered: true, missing: [] } },
+    { verdict: "approve", deviations: [], coverage: { covered: false, missing: ["AC for f(0)"] } },
+    { status: "needs_human", reason: "task unclear" },
+  ]) {
+    const out = await runOne(autoHappy({ script: { "role:fleet-intent-judge": { status: "ok", reason: "r", ...ij } } }), AUTO);
+    autoFail(out, "intent");
+    assert.ok(out.result.intent, "intent output carried");
+  }
+});
+
+test("2.1.0 G2 commands: only test_cmd and `pre-commit run <id>` hooks that exist at plan_commit", async () => {
+  const withCheck = (cmd, extra) =>
+    autoHappy({
+      script: Object.assign(
+        {
+          "role:scope-and-plan": Object.assign({}, happy()["role:scope-and-plan"], {
+            repo_obligations: [{ id: "fmt", kind: "other", instruction: "format", check_cmd: cmd }],
+          }),
+          "role:fleet-code-judge:r1": Object.assign({}, happy()["role:fleet-code-judge:r1"], { obligations_check: [{ id: "fmt", met: true, evidence: "ran" }] }),
+        },
+        extra || {},
+      ),
+    });
+  let out = await runOne(withCheck("pre-commit run prettier --all-files"), AUTO);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const pi = call(out, "infra:precommit-ids");
+  assert.equal(pi.opts.agentType, "fleet:judge");
+  assert.match(pi.prompt, /\.pre-commit-config\.yaml/);
+  assert.equal(inputsOf(pi.prompt).plan_commit, PC);
+  for (const [cmd, extra] of [
+    ["pre-commit run missing-hook", null],
+    ["make lint", null],
+    ["pre-commit run prettier --from-ref a --to-ref b", null],
+    ["pre-commit run prettier", { "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "prettier"], parser: "yaml" } }],
+    ["pre-commit run prettier", { "infra:precommit-ids": { status: "ok", reason: "absent", present: false, ids: [], parser: null } }],
+    ["pre-commit run prettier", { "infra:precommit-ids": { status: "ok", reason: "no yaml", present: true, ids: [], parser: null, error: "PyYAML unavailable" } }],
+    ["pre-commit run prettier --hook-stage manual --all-files", null],
+  ]) {
+    out = await runOne(withCheck(cmd, extra), AUTO);
+    autoFail(out, "commands");
+  }
+});
+
+test("2.1.0 G3 scope fence: infra, CI, secrets, rulesets and a foreign repo are refused", async () => {
+  const planWith = (o) => autoHappy({ script: { "role:scope-and-plan": Object.assign({}, happy()["role:scope-and-plan"], o) } });
+  const fence = (files) => ({ allowed_additions: { files, symbols: [], deps: [], settings: [] } });
+  for (const o of [
+    fence(["infra/main.tf"]),
+    fence(["envs/prod.tfvars"]),
+    fence(["terraform/x.py"]),
+    fence(["mod/.terraform/x"]),
+    fence(["k8s/deploy.yaml"]),
+    fence(["deploy/kustomization.yml"]),
+    fence(["charts/app/templates/svc.yaml"]),
+    fence(["manifests/a.yml"]),
+    fence([".github/workflows/ci.yml"]),
+    fence(["config/rulesets/main.json"]),
+    fence([".env.local"]),
+    fence(["src/db_secret.py"]),
+    fence(["certs/server.pem"]),
+    fence(["keys/deploy.key"]),
+    fence(["home/id_rsa.pub"]),
+    fence(["aws_credentials.json"]),
+    { criteria: [{ id: "AC1", text: "a", test_files: [".github/tests/test_a.py"] }] },
+    { repo_obligations: [{ id: "o", kind: "other", instruction: "x", files: ["deploy/x.tf"] }] },
+  ]) {
+    const out = await runOne(planWith(o), AUTO);
+    autoFail(out, "scope");
+  }
+  // the work repo must be the caller's repo
+  const out = await runOne(autoHappy({ brief: { ...BRIEF, repo: "/other" } }), AUTO);
+  autoFail(out, "scope");
+  assert.match(out.result.needs_max_section, /\/other/);
+});
+
+test("2.1.0 build with confirm auto re-runs the gates against the current ledger rulings", async () => {
+  const s = autoHappy();
+  const plan = await runOne(s, ARGS);
+  assert.equal(plan.result.status, "awaiting_confirmation");
+  s["intake:rulings"] = { status: "ok", reason: "re-read", brief: { ...BRIEF, sources: [{ kind: "ledger", ref: "42", url: null, body: "task body\n\nRuling: no new deps" }] } };
+  s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
+  s["role:fleet-intent-judge:rerun"] = { status: "ok", reason: "violates ruling", verdict: "refuse", deviations: [], coverage: { covered: true, missing: [] } };
+  s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
+  const bargs = { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r", confirm: "auto" };
+  const build = await runOne(s, bargs);
+  assert.equal(build.result.status, "needs_human");
+  assert.equal(build.result.failed_check, "intent");
+  assert.equal(inputsOf(call(build, "intake:rulings").prompt).input, "L42");
+  assert.match(inputsOf(call(build, "role:fleet-intent-judge:rerun").prompt).ledger_task.body, /Ruling: no new deps/);
+  assert.ok(!build.labels.some((l) => /test-writer/.test(l)));
+  // approve on the re-run: the build proceeds
+  s["role:fleet-intent-judge:rerun"] = { status: "ok", reason: "fine", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } };
+  const ok = await runOne(s, bargs);
+  noUnscripted(ok);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+  assert.equal(ok.result.auto_confirmed, true);
+  // a re-read that resolves to another task stops
+  s["intake:rulings"] = { status: "ok", reason: "x", brief: { ...BRIEF, sources: [{ kind: "ledger", ref: "43", url: null, body: "b" }] } };
+  const b2 = await runOne(s, bargs);
+  assert.equal(b2.result.status, "needs_human");
+  assert.match(b2.result.reason, /re-read/);
+});
+
+// ---------------------------------------------------------------- 2.1.0 review
+
+test("2.1.0 review: after the draft PR, pr-review gets the PR, the diff paths and no plan reasoning; cleanup always runs", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  const order = ["infra:commit:r1", "infra:push", "role:fleet-pr-opener", "infra:review-paths:v1", "role:pr-review:v1", "infra:review-cleanup:v1"];
+  for (let i = 1; i < order.length; i++) assert.ok(out.labels.indexOf(order[i]) > out.labels.indexOf(order[i - 1]), order[i]);
+  const rp = inputsOf(call(out, "infra:review-paths:v1").prompt);
+  assert.equal(rp.base_ref, PC);
+  assert.equal(rp.head_sha, CSHA(1));
+  const rv = call(out, "role:pr-review:v1");
+  assert.equal(rv.opts.agentType, "fleet:judge");
+  const ri = inputsOf(rv.prompt);
+  assert.equal(ri.mode, "self-authored");
+  assert.equal(ri.fleet, true);
+  assert.equal(ri.pr_number, 7);
+  assert.equal(ri.pr_url, "https://github.com/o/r/pull/7");
+  assert.equal(ri.repo, "o/r");
+  assert.equal(ri.base_ref, PC);
+  assert.equal(ri.head_sha, CSHA(1));
+  assert.deepEqual(ri.changed_paths, ["src/x.py", "tests/test_a.py"]);
+  assert.equal(ri.scratch_dir, "/r/.claude/worktrees/fleet-l42-add-thing/scratch");
+  assert.deepEqual(ri.criteria, [{ id: "AC1", text: "behaviour 1" }, { id: "AC2", text: "behaviour 2" }]);
+  for (const k of ["tldr", "plan_path", "plan_diff", "brief"]) assert.ok(!(k in ri), "no " + k);
+  assert.match(call(out, "infra:review-cleanup:v1").prompt, /worktree remove --force/);
+  assert.match(call(out, "infra:review-cleanup:v1").prompt, /worktree prune/);
+  assert.deepEqual(out.result.review, { verdict: "approve", blocking: [], nits: [], rounds: 1, sweep: null, model: "sonnet" });
+  assert.ok(!out.labels.some((l) => /sweep/.test(l)));
+});
+
+function blockingReview(extra) {
+  const finding = { id: "R1", severity: "blocking", category: "fail_open", file: "src/x.py", line: 3, summary: "empty input passes", evidence: "ran x" };
+  return happy({
+    script: Object.assign(
+      {
+        "role:pr-review:v1": { status: "ok", reason: "x", verdict: "approve", findings: [finding], touches_gate: false, checked: [] },
+        "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
+        "hasher:post-coder:r2": { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" }, hashes: HASHES },
+        "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
+        "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" } },
+        "infra:push:p2": (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha }),
+        "role:fleet-pr-opener:p2": { status: "ok", reason: "updated", pr_url: "https://github.com/o/r/pull/7", pr_number: 7, created: false, template_used: null, gates_not_run_stated: true },
+        "infra:review-paths:v2": { status: "ok", reason: "listed", changed_paths: ["src/x.py"] },
+        "hasher:pre-review:v2": { status: "ok", fingerprint: { head: CSHA(2), tree: "K2" } },
+        "role:pr-review:v2": { status: "ok", reason: "clean", verdict: "approve", findings: [], touches_gate: false, checked: [] },
+        "hasher:fp-post:pr-review:v2": { status: "ok", fingerprint: { head: CSHA(2), tree: "K2" } },
+        "infra:review-cleanup:v2": { status: "ok", reason: "clean" },
+      },
+      extra || {},
+    ),
+  });
+}
+
+test("2.1.0 review: a blocking finding is changes_requested whatever the verdict; coder, judge, a NEW commit, push, PR update, review again", async () => {
+  const out = await run(blockingReview(), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const f = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings;
+  assert.equal(f[0].target, "code");
+  assert.match(f[0].finding, /empty input passes/);
+  const cp = call(out, "infra:commit:r2").prompt;
+  assert.match(cp, /'fix\(l42\): code round 2'/);
+  assert.equal(inputsOf(cp).expected_head, CSHA(1));
+  const pr2 = inputsOf(call(out, "role:fleet-pr-opener:p2").prompt);
+  assert.equal(pr2.pr_number, 7);
+  assert.equal(pr2.approved_sha, CSHA(2));
+  assert.equal(inputsOf(call(out, "role:pr-review:v2").prompt).head_sha, CSHA(2));
+  assert.equal(out.result.review.rounds, 2);
+  assert.equal(out.result.review.verdict, "approve");
+  assert.equal(out.result.rounds.code, 2);
+});
+
+test("2.1.0 review: a second blocking review stops with the findings; a review fix past the code cap stops at the cap", async () => {
+  const b = { id: "R2", severity: "blocking", category: "correctness", file: "src/x.py", line: 9, summary: "still wrong", evidence: "e" };
+  let out = await run(blockingReview({ "role:pr-review:v2": { status: "ok", reason: "x", verdict: "changes_requested", findings: [b], touches_gate: false, checked: [] } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /review/);
+  assert.match(out.result.reason, /still wrong/);
+  assert.equal(out.result.stop_gate, "review");
+  assert.ok(out.labels.includes("infra:review-cleanup:v2"));
+  // review fixes count as code rounds
+  const fix = { status: "ok", verdict: "fix_code", routed_findings: [{ target: "code", criterion: null, finding: "x" }] };
+  out = await run(
+    blockingReview({
+      "role:fleet-code-judge:r2": fix,
+      "role:fleet-coder:r3": { status: "ok", changed_paths: [] },
+      "hasher:post-coder:r3": { status: "ok", fingerprint: { head: CSHA(1), tree: "K3" } },
+      "role:fleet-code-judge:r3": fix,
+      "hasher:fp-post:code-judge:r3": { status: "ok", fingerprint: { head: CSHA(1), tree: "K3" } },
+    }),
+    ARGS,
+  );
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /code rounds exhausted/);
+});
+
+test("2.1.0 review: nits go to the pr-opener as review_notes", async () => {
+  const nit = { id: "R1", severity: "nit", category: "other", file: "README.md", line: 1, summary: "typo", evidence: "q" };
+  const s = happy({
+    script: {
+      "role:pr-review:v1": { status: "ok", reason: "x", verdict: "approve", findings: [nit], touches_gate: false, checked: [] },
+      "role:fleet-pr-opener:notes": { status: "ok", reason: "updated", pr_url: "https://github.com/o/r/pull/7", pr_number: 7, created: false, template_used: null, gates_not_run_stated: true },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  assert.deepEqual(inputsOf(call(out, "role:fleet-pr-opener:notes").prompt).review_notes, [nit]);
+  assert.deepEqual(out.result.review.nits, [nit]);
+  assert.ok(!out.labels.includes("role:fleet-coder:r2"));
+});
+
+test("2.1.0 sweep: runs when the review flags a gate or a gate path changed; weakening is blocking", async () => {
+  const sweepScript = (verdict) => ({
+    "role:gate-change-nonweakening-sweep:v1": { status: "ok", reason: "s", verdict, units: [{ unit: "hook", mutation: "m", shipped_refuses: true, new_refuses: verdict !== "weakening" }], findings: [] },
+    "hasher:fp-post:sweep:v1": { status: "ok", fingerprint: { head: CSHA(1), tree: "K1" } },
+  });
+  let out = await run(happy({ script: Object.assign({ "role:pr-review:v1": { status: "ok", reason: "x", verdict: "approve", findings: [], touches_gate: true, checked: [] } }, sweepScript("non_weakening")) }), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  const sw = inputsOf(call(out, "role:gate-change-nonweakening-sweep:v1").prompt);
+  assert.equal(sw.base_ref, PC);
+  assert.equal(sw.head_sha, CSHA(1));
+  assert.equal(sw.fleet, true);
+  assert.equal(call(out, "role:gate-change-nonweakening-sweep:v1").opts.agentType, "fleet:judge");
+  assert.equal(out.result.review.sweep.verdict, "non_weakening");
+  for (const p of [".pre-commit-config.yaml", "src/hooks/pre_push.py", "lib/validators.py", "Makefile", ".github/workflows/ci.yml", "app/auth_policy.py", "ci/run.sh"]) {
+    out = await run(happy({ script: Object.assign({ "infra:review-paths:v1": { status: "ok", reason: "l", changed_paths: [p] } }, sweepScript("non_weakening")) }), ARGS);
+    assert.ok(out.labels.includes("role:gate-change-nonweakening-sweep:v1"), p);
+  }
+  for (const p of ["src/checkout.py", "docs/guide.md"]) {
+    out = await run(happy({ script: { "infra:review-paths:v1": { status: "ok", reason: "l", changed_paths: [p] } } }), ARGS);
+    assert.ok(!out.labels.includes("role:gate-change-nonweakening-sweep:v1"), p);
+  }
+  out = await run(happy({ script: Object.assign({ "infra:review-paths:v1": { status: "ok", reason: "l", changed_paths: ["hooks/x.py"] } }, sweepScript("weakening")) }), ARGS);
+  assert.ok(out.labels.includes("role:fleet-coder:r2"), "weakening routes back to the coder");
+  assert.match(JSON.stringify(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings), /weaken/);
+});
+
+test("2.1.0 review: a review that stops still gets its scratch cleanup", async () => {
+  const out = await run(happy({ script: { "role:pr-review:v1": { status: "needs_human", reason: "cannot read PR" } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /cannot read PR/);
+  assert.ok(out.labels.indexOf("infra:review-cleanup:v1") > out.labels.indexOf("role:pr-review:v1"));
+});
+
+test("2.1.0 review skipped when no PR exists: listed in gates_not_run", async () => {
+  const out = await run(happy({ script: { "role:fleet-pr-opener": { status: "ok", reason: "x", pr_url: null, pr_number: null, created: false, template_used: null, gates_not_run_stated: true } } }), ARGS);
+  assert.ok(!out.labels.includes("role:pr-review:v1"));
+  assert.ok(out.result.gates_not_run.some((g) => g.gate === "review"));
+  assert.equal(out.result.review, null);
+});
+
+// ---------------------------------------------------------------- 2.1.0 contract
+
+test("2.1.0 contract fleet-v3: preflight loads ten roles; fleet-v2 pages halt", async () => {
+  let out = await run(happy(), ARGS);
+  const pf = inputsOf(call(out, "preflight").prompt);
+  assert.deepEqual(pf.roles.slice().sort(), ROLE_NAMES.slice().sort());
+  const s = happy();
+  s.preflight.contract["pr-review"] = "CONTRACT: fleet-v2";
+  out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /pr-review contract fleet-v2 != fleet-v3/);
+});
+
+test("2.1.0 models: a role without a usable DISPATCH line halts (no hardcoded tier); the tier used is logged", async () => {
+  const s = happy();
+  delete s.preflight.dispatch["gate-change-nonweakening-sweep"];
+  let out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /gate-change-nonweakening-sweep has no usable DISPATCH line/);
+  assert.equal(out.result.stop_gate, "contract");
+  const s2 = happy();
+  s2.preflight.dispatch["pr-review"] = "DISPATCH: model=opus (fallback=sonnet for small/mechanical PRs) — review depth";
+  out = await run(s2, ARGS);
+  assert.equal(call(out, "role:pr-review:v1").opts.model, "opus");
+  assert.equal(out.result.review.model, "opus");
+  assert.ok(out.result.gate_log.some((l) => /model used: role:pr-review:v1 -> opus/.test(l)));
+});
+
+test("2.1.0 hasher program: tree fingerprint leaves the real index alone and sees untracked content; changed paths from a base tree", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-tree-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "a.py");
+    sh(wt, "git", "commit", "-qm", "i");
+    const h0 = runHasherRaw(wt, "hashes", []);
+    assert.match(h0.fingerprint.tree, /^[0-9a-f]{40}$/);
+    assert.deepEqual(Object.keys(h0.fingerprint).sort(), ["head", "tree"]);
+    writeFileSync(join(wt, "new.py"), "x\n");
+    const h1 = runHasherRaw(wt, "hashes", [], h0.fingerprint.tree);
+    assert.notEqual(h1.fingerprint.tree, h0.fingerprint.tree);
+    assert.deepEqual(h1.changed, ["new.py"]);
+    writeFileSync(join(wt, "new.py"), "y\n");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).fingerprint.tree, h1.fingerprint.tree);
+    assert.equal(sh(wt, "git", "diff", "--cached", "--name-only"), "");
+    assert.match(sh(wt, "git", "status", "--porcelain"), /\?\? new\.py/);
+    // the same tree git write-tree gives after a real `git add -A`
+    const before = runHasherRaw(wt, "hashes", []).fingerprint.tree;
+    sh(wt, "git", "add", "-A");
+    assert.equal(sh(wt, "git", "write-tree").trim(), before);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- 2.1.0 security review fixes
+
+test("2.1.0 scope fence on the REAL changes: a coder that writes CI, IaC or a secret file stops (every mode)", async () => {
+  for (const p of [".github/workflows/ci.yml", "infra/main.tf", ".env.local"]) {
+    const s = happy({
+      script: { "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES, changed: ["src/x.py", p] } },
+    });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", p);
+    assert.equal(out.result.stop_gate, "scope", p);
+    assert.ok(out.result.reason.includes(p), out.result.reason);
+    assert.ok(!out.labels.includes("role:fleet-code-judge:r1"), p);
+    assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)), p);
+  }
+  // the post-coder listing diffs the whole change from the first freeze's HEAD
+  const out = await run(happy(), ARGS);
+  assert.equal(inputsOf(call(out, "hasher:post-coder:r1").prompt).base_tree, PC);
+  // writers' changed paths are fenced too (limited to test files, so it does not fire in practice)
+  const w = await run(happy({ criteria: [{ id: "AC1", text: "a", test_files: [".github/tests/test_a.py"] }] }), ARGS);
+  assert.equal(w.result.status, "needs_human");
+  assert.equal(w.result.stop_gate, "scope");
+});
+
+test("2.1.0 the hook surface is frozen: .pre-commit-config.yaml, local hook entries, core.hooksPath and the hooks dir", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-hooks-");
+  try {
+    writeFileSync(
+      join(wt, ".pre-commit-config.yaml"),
+      "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        language: system\n        entry: python3 scripts/chk.py\n",
+    );
+    sh(wt, "mkdir", "-p", "scripts");
+    writeFileSync(join(wt, "scripts", "chk.py"), "print(1)\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.ok(".pre-commit-config.yaml" in a.files);
+    assert.ok("scripts/chk.py" in a.files, "local hook entry file is frozen");
+    assert.equal(a.git["core.hooksPath"], "UNSET");
+    // editing the config, the entry script, adding a hook file or setting hooksPath: all changes
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), "repos: []\n");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.files[".pre-commit-config.yaml"], a.files[".pre-commit-config.yaml"]);
+    sh(wt, "git", "checkout", "-q", "--", ".");
+    writeFileSync(join(wt, "scripts", "chk.py"), "print(2)\n");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.files["scripts/chk.py"], a.files["scripts/chk.py"]);
+    sh(wt, "git", "checkout", "-q", "--", ".");
+    const hooksDir = sh(wt, "git", "rev-parse", "--git-path", "hooks").trim();
+    const hd = hooksDir.startsWith("/") ? hooksDir : join(wt, hooksDir);
+    sh(wt, "mkdir", "-p", hd);
+    writeFileSync(join(hd, "pre-commit"), "#!/bin/sh\nexit 0\n");
+    const b = runHasherRaw(wt, "hashes", []).hashes;
+    assert.ok("hooks/pre-commit" in b.git, "a file in the hooks dir is frozen");
+    sh(wt, "git", "config", "core.hooksPath", ".githooks");
+    assert.equal(runHasherRaw(wt, "hashes", []).hashes.git["core.hooksPath"], ".githooks");
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 a coder that edits .pre-commit-config.yaml or adds a hook file is a hash violation", async () => {
+  for (const [k, v] of [[".pre-commit-config.yaml", "edited"], ["git:hooks/pre-commit", "new"], ["git:core.hooksPath", ".githooks"]]) {
+    const frozen = H({ ...HASHES_FLAT, ".pre-commit-config.yaml": "pc", "git:core.hooksPath": "UNSET" });
+    const s = hashViolation(H({ ...HASHES_FLAT, ".pre-commit-config.yaml": "pc", "git:core.hooksPath": "UNSET", [k]: v }));
+    s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_PLAN, hashes: frozen };
+    s["hasher:post-coder:r2"] = { status: "ok", fingerprint: FP_K2, hashes: frozen };
+    const out = await run(s, ARGS);
+    noUnscripted(out);
+    assert.ok(!out.labels.includes("role:fleet-code-judge:r1"), k);
+    assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, new RegExp(k.replace(/[.]/g, "\\.")));
+  }
+});
+
+test("2.1.0 G3 behaviour: a check_cmd hook named for helm passes G2 and is refused by the scope fence", async () => {
+  const s = autoHappy({
+    script: {
+      "role:scope-and-plan": Object.assign({}, happy()["role:scope-and-plan"], {
+        repo_obligations: [{ id: "docs", kind: "docs", instruction: "regen", check_cmd: "pre-commit run helm-docs" }],
+      }),
+      "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["helm-docs"], parser: "yaml" },
+    },
+  });
+  const out = await runOne(s, AUTO);
+  autoFail(out, "scope");
+  assert.ok(out.labels.includes("infra:precommit-ids"));
+});
+
+test("2.1.0 an auto build reports mode build", async () => {
+  const out = await runOne(autoHappy(), AUTO);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.mode, "build");
+});
+
+test("2.1.0 write-back follows the review (the run-state milestone order)", async () => {
+  const out = await run(happy({ script: { "role:pr-review:v1": { status: "needs_human", reason: "cannot read PR" } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.ok(!out.labels.includes("infra:ledger-writeback"));
+  const ok = await run(happy(), ARGS);
+  assert.ok(ok.labels.indexOf("infra:ledger-writeback") > ok.labels.indexOf("role:pr-review:v1"));
+});
+
+test("2.1.0 re-plan keeps the uncommitted work under a non-branch ref to the tree: no commit object", async () => {
+  const s = planWrong([{ target: "plan", criterion: "AC2", finding: "x — Proposed plan change: y" }]);
+  const ref = await planRefFor(s);
+  const out = await runOne(s, buildArgs(ref));
+  assert.equal(out.result.status, "awaiting_confirmation");
+  const rp = call(out, "infra:replan-reset").prompt;
+  assert.ok(!/commit-tree/.test(rp));
+  assert.match(rp, /update-ref <superseded_tree_ref> <expected_tree>/);
+  assert.equal(inputsOf(rp).superseded_tree_ref, "refs/fleet/l42-add-thing/superseded-1-tree");
+  assert.equal(out.result.superseded_tree_ref, "refs/fleet/l42-add-thing/superseded-1-tree");
+});
+
+test("2.1.0 agent cap 100: an auto run with a revise round and a review fix round passes 60 agents and completes", async () => {
+  const crit = criteria(8);
+  const s = autoHappy({ criteria: crit });
+  const b = blockingReview();
+  const base = happy();
+  for (const k of Object.keys(b)) if (!(k in base) || k === "role:pr-review:v1") s[k] = b[k];
+  s["role:fleet-test-judge:r1"] = {
+    status: "ok",
+    verdict: "revise",
+    routed_findings: crit.map((c) => ({ target: "tests", criterion: c.id, finding: "x" })),
+  };
+  for (const c of crit) s["role:fleet-test-writer:" + c.id + ":r2"] = { status: "ok", criterion_id: c.id };
+  s["hasher:post-writers:r2"] = { status: "ok", fingerprint: FP_TESTS };
+  s["role:fleet-test-judge:r2"] = { status: "ok", verdict: "approve", routed_findings: [] };
+  s["hasher:fp-post:test-judge:r2"] = { status: "ok", fingerprint: FP_TESTS };
+  const out = await runOne(s, AUTO);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.review.rounds, 2);
+  assert.ok(out.calls.length > 60, "dispatched " + out.calls.length);
+  assert.ok(out.calls.length <= 100);
+  assert.equal(out.result.agents, out.calls.length);
+});
+
+test("2.1.0 every agent cap hit is logged", () => {
+  // every cap check in the script logs its hit: reserve and the soft paths
+  const hits = SOURCE.match(/agent cap " \+ MAX_AGENTS \+ " reached/g) || [];
+  assert.equal(hits.length, 3);
+  assert.match(SOURCE, /const MAX_AGENTS = 100;/);
+});
+
+test("2.1.0 git config exec vectors are frozen: local config, include targets, .gitattributes, info/attributes", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-gitcfg-");
+  try {
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.ok("config:local" in a.git, "local config frozen");
+    assert.ok("info/attributes" in a.git, "info/attributes frozen");
+    // core.fsmonitor set by the coder
+    sh(wt, "git", "config", "core.fsmonitor", "./x.sh");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.git["config:local"], a.git["config:local"]);
+    sh(wt, "git", "config", "--unset", "core.fsmonitor");
+    assert.equal(runHasherRaw(wt, "hashes", []).hashes.git["config:local"], a.git["config:local"]);
+    // a .gitattributes filter driver
+    writeFileSync(join(wt, ".gitattributes"), "*.py filter=evil\n");
+    assert.ok(".gitattributes" in runHasherRaw(wt, "hashes", []).hashes.files, "a new .gitattributes is a new key");
+    sh(wt, "rm", ".gitattributes");
+    // an include.path target: the file it names is frozen
+    writeFileSync(join(wt, "inc.cfg"), "[core]\n\tpager = cat\n");
+    sh(wt, "git", "config", "include.path", join(wt, "inc.cfg"));
+    const b = runHasherRaw(wt, "hashes", []).hashes;
+    const k = "config:include:" + join(wt, "inc.cfg");
+    assert.ok(k in b.git, "include target frozen: " + Object.keys(b.git).join(", "));
+    writeFileSync(join(wt, "inc.cfg"), "[core]\n\tfsmonitor = ./x.sh\n");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.git[k], b.git[k]);
+    // branch tracking (set by the workflow's own push -u) is not frozen
+    const c = runHasherRaw(wt, "hashes", []).hashes.git["config:local"];
+    sh(wt, "git", "config", "branch.master.remote", "origin");
+    sh(wt, "git", "config", "remote.origin.gh-resolved", "base");
+    assert.equal(runHasherRaw(wt, "hashes", []).hashes.git["config:local"], c);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 local hook args and -m modules are frozen with their package's .py files", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-hookargs-");
+  try {
+    writeFileSync(
+      join(wt, ".pre-commit-config.yaml"),
+      "repos:\n  - repo: local\n    hooks:\n      - id: x\n        name: x\n        language: system\n        entry: python\n        args: [scripts/x.py]\n      - id: y\n        name: y\n        language: system\n        entry: python3 -m tools.chk\n",
+    );
+    sh(wt, "mkdir", "-p", "scripts", "tools");
+    writeFileSync(join(wt, "scripts", "x.py"), "print(1)\n");
+    writeFileSync(join(wt, "scripts", "helper.py"), "h = 1\n");
+    writeFileSync(join(wt, "tools", "__init__.py"), "");
+    writeFileSync(join(wt, "tools", "chk.py"), "print(2)\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes.files;
+    for (const f of ["scripts/x.py", "scripts/helper.py", "tools/chk.py", "tools/__init__.py"]) assert.ok(f in a, f + " frozen");
+    writeFileSync(join(wt, "scripts", "x.py"), "print('pwned')\n");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.files["scripts/x.py"], a["scripts/x.py"]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 the commit step and the tree command run git with fsmonitor off, no system config and the frozen hooks path", async () => {
+  const out = await run(happy(), ARGS);
+  const cp = call(out, "infra:commit:r1").prompt;
+  assert.match(cp, /GIT_CONFIG_NOSYSTEM=1/);
+  assert.match(cp, /-c core\.fsmonitor=false/);
+  assert.match(cp, /-c core\.hooksPath=/);
+  assert.ok(!/git -C <main_worktree> commit -m/.test(cp), "the commit runs through the hardened git prefix");
+  assert.equal(inputsOf(cp).hooks_path, null);
+  const hp = call(out, "hasher:freeze:f1").prompt;
+  assert.match(hp, /core\.fsmonitor=false/);
+  assert.match(hp, /GIT_CONFIG_NOSYSTEM/);
+});
+
+test("2.1.0 ignored paths are listed: a .pth in a venv is frozen, tool caches are not", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-ign2-");
+  try {
+    writeFileSync(join(wt, ".gitignore"), ".venv/\n.pytest_cache/\nout/\n");
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.deepEqual(a.ignored, {});
+    sh(wt, "mkdir", "-p", ".venv/lib/python3.12/site-packages", ".pytest_cache", "out");
+    writeFileSync(join(wt, ".venv/lib/python3.12/site-packages/evil.pth"), "import os\n");
+    writeFileSync(join(wt, ".venv/lib/python3.12/site-packages/mod.py"), "x = 1\n");
+    writeFileSync(join(wt, ".pytest_cache", "x"), "c\n");
+    writeFileSync(join(wt, "out", "out.txt"), "o\n");
+    const b = runHasherRaw(wt, "hashes", []).hashes;
+    assert.ok(".venv/lib/python3.12/site-packages/evil.pth" in b.ignored, Object.keys(b.ignored).join(", "));
+    assert.ok(!(".venv/lib/python3.12/site-packages/mod.py" in b.ignored), "inside a venv only startup hooks");
+    assert.ok(!(".pytest_cache/x" in b.ignored), "tool caches are not frozen");
+    assert.ok("out/out.txt" in b.ignored, "any other ignored file is");
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 a writer or a coder that writes an ignored path is stopped", async () => {
+  const ign = (p) => Object.assign(H(HASHES_FLAT), { ignored: { [p]: "h" } });
+  let out = await run(happy({ script: { "hasher:post-writers:r1": (prompt) => ({ status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: ign(".venv/lib/x/site-packages/evil.pth") }) } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /ignored path written: \.venv\/lib\/x\/site-packages\/evil\.pth/);
+  out = await run(hashViolation(ign("build/evil.txt")), ARGS);
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /ignored path written: build\/evil\.txt/);
+});
+
+test("2.1.0 base-ref differential: the fence and the review diff from plan_commit; verify fences pre-existing fleet commits", async () => {
+  const s = happy();
+  const ref = await planRefFor(s);
+  s["infra:verify-plan"] = {
+    ...s["infra:verify-plan"],
+    head: "fedcba9876",
+    commits_since: [{ sha: "1111111", subject: "feat(l42): add thing" }],
+    changed_since: ["src/x.py", ".github/x.yml"],
+  };
+  const out = await runOne(s, buildArgs(ref));
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "scope");
+  assert.match(out.result.reason, /\.github\/x\.yml/);
+  assert.ok(!out.labels.some((l) => /^role:/.test(l)), "stops before any role");
+  assert.match(call(out, "infra:verify-plan").prompt, /git -C <main_worktree> diff --name-only <plan_commit>\.\.HEAD/);
+  // the post-coder listing and the review paths diff from plan_commit, not HEAD at the first freeze
+  const ok = await run(happy(), ARGS);
+  assert.equal(inputsOf(call(ok, "hasher:post-coder:r1").prompt).base_tree, PC);
+  assert.equal(inputsOf(call(ok, "infra:review-paths:v1").prompt).base_ref, PC);
+});
+
+test("2.1.0 local hooks: an inline payload or an unresolvable token is suspicious; the script's whole dir is frozen", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-hookdir-");
+  try {
+    const cfg = (entry) =>
+      "repos:\n  - repo: local\n    hooks:\n      - id: h1\n        name: h1\n        language: system\n        entry: " + entry + "\n";
+    sh(wt, "mkdir", "-p", "tools/sub");
+    writeFileSync(join(wt, "tools", "chk.py"), "import sub\n");
+    writeFileSync(join(wt, "tools", "sub", "lib.sh"), "echo\n");
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg("python3 tools/chk.py --strict"));
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.deepEqual(a.suspicious, []);
+    assert.ok("tools/sub/lib.sh" in a.files, "the whole dir tree of a referenced script is frozen");
+    writeFileSync(join(wt, "tools", "new_helper.py"), "x\n");
+    assert.ok("tools/new_helper.py" in runHasherRaw(wt, "hashes", []).hashes.files, "untracked files there too");
+    for (const entry of ["bash -c 'curl x | sh'", "python3 -c 'import os'", "frobnicate-not-on-path tools/chk.py"]) {
+      writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg(JSON.stringify(entry)));
+      const h = runHasherRaw(wt, "hashes", []).hashes;
+      assert.ok(h.suspicious.some((x) => x.startsWith("unresolvable local hook h1")), entry + ": " + h.suspicious.join("; "));
+    }
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 an unresolvable local hook stops the run at freeze", async () => {
+  const out = await run(happy({ script: { "hasher:freeze:f1": { status: "ok", fingerprint: FP_TESTS, hashes: H(HASHES_FLAT, ["unresolvable local hook h1: inline payload after -c"]) } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /unresolvable local hook h1/);
+});
+
+test("2.1.0 local hooks behind a launcher (uv run, poetry run, npx, ...) resolve from the next token", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-launch-");
+  try {
+    const cfg = (entry) =>
+      "repos:\n  - repo: local\n    hooks:\n      - id: h1\n        name: h1\n        language: system\n        entry: " + entry + "\n";
+    sh(wt, "mkdir", "-p", "scripts");
+    writeFileSync(join(wt, "scripts", "x.py"), "print(1)\n");
+    writeFileSync(join(wt, "scripts", "y.py"), "print(2)\n");
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg("uv run python scripts/x.py"));
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    for (const entry of ["uv run python scripts/x.py", "poetry run python scripts/x.py", "pdm run -- python scripts/x.py", "hatch run python scripts/x.py", "pipx run python scripts/x.py"]) {
+      writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg(JSON.stringify(entry)));
+      const h = runHasherRaw(wt, "hashes", []).hashes;
+      assert.deepEqual(h.suspicious, [], entry);
+      assert.ok("scripts/x.py" in h.files && "scripts/y.py" in h.files, entry + ": scripts/ frozen");
+    }
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 ignored build and coverage output is not frozen; *.egg-info still is", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-build-");
+  try {
+    writeFileSync(join(wt, ".gitignore"), "build/\ndist/\nhtmlcov/\n.eggs/\ncoverage.xml\n.coverage.*\njunit*.xml\n*.egg-info/\n");
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    sh(wt, "mkdir", "-p", "build/lib", "dist", "htmlcov", ".eggs", "pkg.egg-info");
+    for (const f of ["build/lib/x.py", "dist/x.whl", "htmlcov/index.html", ".eggs/x", "coverage.xml", ".coverage.host.1", "junit-report.xml", "pkg.egg-info/entry_points.txt"])
+      writeFileSync(join(wt, f), "x\n");
+    const ign = runHasherRaw(wt, "hashes", []).hashes.ignored;
+    assert.deepEqual(Object.keys(ign), ["pkg.egg-info/entry_points.txt"]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 launcher hooks freeze the script tables; npm run needs the script; npx/uvx need a repo-declared tool", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-scripts-");
+  try {
+    const cfg = (entry) =>
+      "repos:\n  - repo: local\n    hooks:\n      - id: h1\n        name: h1\n        language: system\n        entry: " + entry + "\n";
+    writeFileSync(join(wt, "package.json"), JSON.stringify({ scripts: { lint: "eslint .", test: "jest" }, devDependencies: { eslint: "9" } }));
+    writeFileSync(
+      join(wt, "pyproject.toml"),
+      '[project]\nname = "x"\ndependencies = ["ruff>=0.5"]\n\n[project.scripts]\nmycli = "x:main"\n\n[tool.hatch.envs.default.scripts]\ncheck = "ruff check"\n',
+    );
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg("npm run lint"));
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes;
+    assert.deepEqual(a.suspicious, []);
+    for (const k of ["package.json#scripts", "pyproject.toml#project.scripts", "pyproject.toml#tool.poetry.scripts", "pyproject.toml#tool.pdm.scripts", "pyproject.toml#tool.hatch.envs.*.scripts"])
+      assert.ok(k in a.sections, k + " frozen: " + Object.keys(a.sections).join(", "));
+    // the coder edits scripts.lint: a section change
+    writeFileSync(join(wt, "package.json"), JSON.stringify({ scripts: { lint: "true", test: "jest" }, devDependencies: { eslint: "9" } }));
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.sections["package.json#scripts"], a.sections["package.json#scripts"]);
+    sh(wt, "git", "checkout", "-q", "--", ".");
+    const sus = (entry) => {
+      writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg(JSON.stringify(entry)));
+      return runHasherRaw(wt, "hashes", []).hashes.suspicious;
+    };
+    assert.ok(sus("npm run missing").some((x) => /unresolvable local hook h1: npm script missing/.test(x)));
+    assert.deepEqual(sus("npx eslint ."), [], "npx tool in devDependencies");
+    assert.deepEqual(sus("uvx ruff check"), [], "uvx tool in pyproject dependencies");
+    assert.deepEqual(sus("uv run mycli"), [], "uv run of a [project.scripts] entry");
+    assert.ok(sus("npx ls").some((x) => /unresolvable local hook h1: ls/.test(x)), "a PATH lookup alone is not enough for npx");
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 build-output exclusions apply only at the top level; egg-info is always frozen", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-toplvl-");
+  try {
+    writeFileSync(join(wt, ".gitignore"), "build/\ncoverage.xml\n*.egg-info/\n");
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    sh(wt, "mkdir", "-p", "build/lib", "src/build", "sub", "build/x.egg-info");
+    for (const f of ["build/lib/ok.py", "src/build/x.py", "coverage.xml", "sub/coverage.xml", "build/x.egg-info/entry_points.txt"])
+      writeFileSync(join(wt, f), "x\n");
+    const ign = Object.keys(runHasherRaw(wt, "hashes", []).hashes.ignored).sort();
+    assert.deepEqual(ign, ["build/x.egg-info/entry_points.txt", "src/build/x.py", "sub/coverage.xml"]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 a coder that edits package.json scripts (a launcher hook's table) is a hash violation", async () => {
+  const frozen = H({ ...HASHES_FLAT, "package.json#scripts": "s1" });
+  const s = hashViolation(H({ ...HASHES_FLAT, "package.json#scripts": "s2" }));
+  s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_PLAN, hashes: frozen };
+  s["hasher:post-coder:r2"] = { status: "ok", fingerprint: FP_K2, hashes: frozen };
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /package\.json#scripts/);
+});
+
+// ---------------------------------------------------------------- 2.1.0 run-state resume
+
+// The state JSON a run-state write step carries (quoted heredoc body).
+function stateJsonOf(prompt) {
+  const m = /<<'FLEET_STATE_JSON'\n([\s\S]*?)\nFLEET_STATE_JSON/.exec(prompt);
+  return m ? JSON.parse(m[1]) : null;
+}
+
+// A build run that records every run-state write into `states` (gate -> JSON).
+function recording(s, states) {
+  for (const label of ["infra:state:committed:r1", "infra:state:pushed:p1", "infra:state:pr_open:p1", "infra:state:reviewed:v1", "infra:state:written_back"])
+    s[label] = (prompt) => {
+      const st = stateJsonOf(prompt);
+      states[st.last_gate] = st;
+      return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
+    };
+  return s;
+}
+
+// Build-mode script for a re-run on the approved commit, reading `st`.
+function rerunScript(s, st, over) {
+  s["infra:verify-plan"] = {
+    ...happy()["infra:verify-plan"],
+    head: st.approved_sha,
+    commits_since: [{ sha: st.approved_sha, subject: "feat(l42): add thing" }],
+    changed_since: ["src/x.py", "tests/test_a.py"],
+  };
+  s["infra:read-state"] = Object.assign(
+    { status: "ok", reason: "read", exists: true, target: st.approved_sha, message: JSON.stringify(st), head: st.approved_sha, head_tree: st.code_tree, clean: true },
+    (over && over.read) || {},
+  );
+  s["hasher:resume"] = Object.assign({ status: "ok", fingerprint: { head: st.approved_sha, tree: st.code_tree }, hashes: HASHES }, (over && over.hasher) || {});
+  s["infra:push"] = (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha });
+  return s;
+}
+
+const NO_REWORK = /^(role:fleet-test-writer|role:fleet-coder|role:fleet-code-judge|role:fleet-test-judge|hasher:pre-writers|hasher:freeze|infra:commit:)/;
+
+test("2.1.0 run-state: every milestone writes the state ref, in order, with a mktag object and no hooks", async () => {
+  const states = {};
+  const out = await run(recording(happy(), states), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const order = ["infra:state:committed:r1", "infra:push", "infra:state:pushed:p1", "role:fleet-pr-opener", "infra:state:pr_open:p1", "role:pr-review:v1", "infra:state:reviewed:v1", "infra:ledger-writeback", "infra:state:written_back"];
+  for (let i = 1; i < order.length; i++) assert.ok(out.labels.indexOf(order[i]) > out.labels.indexOf(order[i - 1]), order[i]);
+  const p = call(out, "infra:state:committed:r1").prompt;
+  assert.match(p, /mktag/);
+  assert.match(p, /update-ref 'refs\/fleet\/l42\/state'/);
+  assert.match(p, /GIT_CONFIG_NOSYSTEM=1/);
+  assert.equal(states.committed.plan_commit, PC);
+  assert.equal(states.committed.approved_sha, CSHA(1));
+  assert.equal(states.committed.code_tree, "K1");
+  assert.match(states.committed.maps_digest, /^[0-9a-f]{64}$/);
+  assert.equal(states.pr_open.pr_number, 7);
+  assert.equal(states.written_back.ledger_status, "ok");
+});
+
+test("2.1.0 resume: a push that failed resumes at push on the re-run; no writer, coder or judge runs", async () => {
+  const s = recording(happy(), {});
+  const states = {};
+  recording(s, states);
+  s["infra:push"] = { status: "failed", reason: "ssh: permission denied (publickey)" };
+  const plan = await runOne(s, ARGS);
+  const first = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  assert.equal(first.result.status, "failed");
+  assert.equal(states.committed.last_gate, "committed");
+  rerunScript(s, states.committed);
+  const second = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  noUnscripted(second);
+  assert.equal(second.result.status, "ok", second.result.reason);
+  assert.ok(!second.labels.some((l) => NO_REWORK.test(l)), second.labels.join(", "));
+  assert.ok(second.logs.some((l) => /resuming at push/.test(l)));
+  assert.equal(inputsOf(call(second, "infra:push").prompt).approved_sha, CSHA(1));
+  assert.ok(second.labels.includes("role:fleet-pr-opener"));
+  assert.ok(second.labels.includes("role:pr-review:v1"));
+  assert.equal(second.result.pr_url, "https://github.com/o/r/pull/7");
+});
+
+test("2.1.0 resume: a run stopped after the PR opened resumes at review", async () => {
+  const states = {};
+  const s = recording(happy(), states);
+  s["role:pr-review:v1"] = { status: "needs_human", reason: "cannot read PR" };
+  const plan = await runOne(s, ARGS);
+  const first = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  assert.equal(first.result.status, "needs_human");
+  assert.ok(!first.labels.includes("infra:ledger-writeback"), "write-back follows the review");
+  rerunScript(s, states.pr_open);
+  s["role:pr-review:v1"] = happy()["role:pr-review:v1"];
+  const second = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  noUnscripted(second);
+  assert.equal(second.result.status, "ok", second.result.reason);
+  assert.ok(second.logs.some((l) => /resuming at review/.test(l)));
+  assert.ok(!second.labels.some((l) => NO_REWORK.test(l) || l === "infra:push" || l === "role:fleet-pr-opener"), second.labels.join(", "));
+  assert.equal(inputsOf(call(second, "role:pr-review:v1").prompt).pr_number, 7);
+  assert.ok(second.labels.includes("infra:ledger-writeback"));
+});
+
+test("2.1.0 resume: written_back returns the recorded result with no role agent", async () => {
+  const states = {};
+  const s = recording(happy(), states);
+  const plan = await runOne(s, ARGS);
+  await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  rerunScript(s, states.written_back);
+  const again = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  noUnscripted(again);
+  assert.equal(again.result.status, "ok", again.result.reason);
+  assert.equal(again.result.pr_url, "https://github.com/o/r/pull/7");
+  assert.equal(again.result.ledger_status, "ok");
+  assert.equal(again.result.resumed_at, "done");
+  assert.ok(!again.labels.some((l) => /^role:/.test(l) || l === "infra:push" || /^infra:state:/.test(l)), again.labels.join(", "));
+});
+
+test("2.1.0 resume: a run-state that does not match stops with run-state mismatch; never re-runs writers", async () => {
+  const states = {};
+  const s = recording(happy(), states);
+  s["infra:push"] = { status: "failed", reason: "ssh" };
+  const plan = await runOne(s, ARGS);
+  await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  const st = states.committed;
+  for (const [over, re] of [
+    [{ read: { head: "abcabcabca" } }, /run-state mismatch: HEAD/],
+    [{ read: { head_tree: "OTHER" } }, /run-state mismatch: tree/],
+    [{ read: { clean: false } }, /run-state mismatch: worktree not clean/],
+    [{ read: { message: JSON.stringify(Object.assign({}, st, { ref_sha256: "0".repeat(64) })) } }, /run-state mismatch: ref_sha256/],
+    [{ hasher: { hashes: H({ ...HASHES_FLAT, "tests/test_a.py": "WEAKENED" }) } }, /run-state mismatch: frozen maps/],
+  ]) {
+    rerunScript(s, st, over);
+    const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+    assert.equal(out.result.status, "needs_human", String(re));
+    assert.match(out.result.reason, re);
+    assert.ok(!out.labels.some((l) => NO_REWORK.test(l)), out.labels.join(", "));
+  }
+});
+
+test("2.1.0 resume: no run-state but build commits on the branch stops as unresumable", async () => {
+  const s = happy();
+  const ref = await planRefFor(s);
+  s["infra:verify-plan"] = { ...s["infra:verify-plan"], head: "fedcba9876", commits_since: [{ sha: "fedcba9876", subject: "feat(l42): add thing" }], changed_since: ["src/x.py"] };
+  const out = await runOne(s, buildArgs(ref));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /approved but unresumable: branch has build commits without run-state; push manually or delete branch/);
+  assert.ok(!out.labels.some((l) => NO_REWORK.test(l)));
+});
+
+test("2.1.0 resume: a stale run-state of another plan is ignored when HEAD is the plan commit", async () => {
+  const s = happy();
+  const ref = await planRefFor(s);
+  s["infra:read-state"] = { status: "ok", reason: "read", exists: true, target: "1234567", message: JSON.stringify({ plan_commit: "9999999", last_gate: "committed" }), head: PC, head_tree: "T0", clean: true };
+  const out = await runOne(s, buildArgs(ref));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.logs.some((l) => /stale run-state/.test(l)));
+});
+
+test("2.1.0 run-state program: the write command and the read program round-trip in a real repo", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-state-");
+  try {
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const m = /WRITE_STATE_SH_BEGIN\n([\s\S]*?)\n\/\/ WRITE_STATE_SH_END/.exec(SOURCE);
+    assert.ok(m, "WRITE_STATE_SH markers");
+    const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+    const writeStateCmd = Function("q", "return (" + m[1].trim().replace(/^function writeStateCmd/, "function").replace(/shQuote/g, "q") + ")")(q);
+    const st = { plan_commit: "abc", last_gate: "committed", note: "it's \"quoted\"" };
+    const cmd = writeStateCmd(wt, "refs/fleet/l42/state", JSON.stringify(st));
+    const r = spawnSync("bash", ["-c", cmd], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    const head = sh(wt, "git", "rev-parse", "HEAD").trim();
+    assert.equal(sh(wt, "git", "cat-file", "-t", "refs/fleet/l42/state").trim(), "tag");
+    assert.equal(sh(wt, "git", "tag", "-l").trim(), "", "no tag name left");
+    const rm = /READ_STATE_PY_BEGIN\n([\s\S]*?)\n\/\/ READ_STATE_PY_END/.exec(SOURCE);
+    const body = rm[1].replace(/^const READ_STATE_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
+    const rr = spawnSync("python3", ["-I", "-", wt, "refs/fleet/l42/state"], { input: body, encoding: "utf8" });
+    assert.equal(rr.status, 0, rr.stderr);
+    const got = JSON.parse(rr.stdout);
+    assert.equal(got.exists, true);
+    assert.equal(got.target, head);
+    assert.deepEqual(JSON.parse(got.message), st);
+    assert.equal(got.head, head);
+    assert.equal(got.clean, true);
+    const none = JSON.parse(spawnSync("python3", ["-I", "-", wt, "refs/fleet/l43/state"], { input: body, encoding: "utf8" }).stdout);
+    assert.equal(none.exists, false);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 resume survives a transport fix: remote, url, credential, http and sshCommand config are not frozen", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-transport-");
+  try {
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const a = runHasherRaw(wt, "hashes", []).hashes.git["config:local"];
+    sh(wt, "git", "remote", "add", "origin", "git@github.com:o/r.git");
+    sh(wt, "git", "config", "remote.origin.url", "https://github.com/o/r.git");
+    sh(wt, "git", "config", "core.sshCommand", "ssh -i ~/.ssh/other");
+    sh(wt, "git", "config", "url.git@github.com:.insteadOf", "https://github.com/");
+    sh(wt, "git", "config", "credential.helper", "store");
+    sh(wt, "git", "config", "http.postBuffer", "1048576");
+    assert.equal(runHasherRaw(wt, "hashes", []).hashes.git["config:local"], a);
+    sh(wt, "git", "config", "core.fsmonitor", "./x.sh");
+    assert.notEqual(runHasherRaw(wt, "hashes", []).hashes.git["config:local"], a);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- 2.1.0 run-state ref snapshot
+
+const FREF = "refs/fleet/l42/state";
+const withFleetRef = (sha) => H({ ...HASHES_FLAT, ["git:fleetref:" + FREF]: sha });
+
+test("2.1.0 run-state refs are snapshotted into the git map by the hasher", { skip: !HAVE_PY }, () => {
+  const wt = scratchRepo("fleet-fref-");
+  try {
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    assert.ok(!Object.keys(runHasherRaw(wt, "hashes", []).hashes.git).some((k) => k.startsWith("fleetref:")));
+    const head = sh(wt, "git", "rev-parse", "HEAD").trim();
+    sh(wt, "git", "update-ref", FREF, head);
+    assert.equal(runHasherRaw(wt, "hashes", []).hashes.git["fleetref:" + FREF], head);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.0 a coder that creates a run-state ref is a violation", async () => {
+  const out = await run(hashViolation(withFleetRef("1234567890abcdef1234567890abcdef12345678")), ARGS);
+  noUnscripted(out);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /run-state ref touched by role: refs\/fleet\/l42\/state/);
+});
+
+test("2.1.0 a judge or a writer that touches a run-state ref is stopped", async () => {
+  let out = await run(happy({ script: { "hasher:fp-post:code-judge:r1": { status: "ok", fingerprint: FP_K1, hashes: withFleetRef("ab".repeat(20)) } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /judge mutated worktree.*run-state ref touched by role/);
+  out = await run(happy({ script: { "hasher:post-writers:r1": { status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: withFleetRef("ab".repeat(20)) } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /run-state ref touched by role: refs\/fleet\/l42\/state/);
+});
+
+test("2.1.0 the script's own run-state write is no violation: the snapshot follows saveState", async () => {
+  // review round 1 requests changes after the committed/pushed/pr_open writes moved the state ref
+  const s = blockingReview();
+  const moved = withFleetRef("f".repeat(40));
+  s["hasher:pre-review:v1"] = { status: "ok", fingerprint: { head: CSHA(1), tree: "K1" }, hashes: moved };
+  s["hasher:fp-post:pr-review:v1"] = { status: "ok", fingerprint: { head: CSHA(1), tree: "K1" }, hashes: moved };
+  s["hasher:post-coder:r2"] = { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" }, hashes: moved };
+  s["hasher:fp-post:code-judge:r2"] = { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" }, hashes: moved };
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.rounds.code, 2);
+});
+
+test("2.1.0 the resume digest ignores the run-state ref itself", async () => {
+  const states = {};
+  const s = recording(happy(), states);
+  s["infra:push"] = { status: "failed", reason: "ssh" };
+  const plan = await runOne(s, ARGS);
+  await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  rerunScript(s, states.committed, { hasher: { hashes: withFleetRef("f".repeat(40)) } });
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  assert.equal(out.result.status, "ok", out.result.reason);
 });

@@ -1,20 +1,22 @@
 export const meta = {
   name: "build-task-run",
   description:
-    "Role fleet for one task in two modes. plan: intake, plan, audit, commit the plan locally, return for confirmation. build: verify the approved plan, per-criterion test writers, test judge, freeze, coder, code judge, push, draft PR, write-back. Every gate runs in script code.",
+    "Role fleet for one task in two modes. plan: intake, plan, audit, commit the plan locally, return for confirmation (confirm \"auto\": intent, command and scope gates, then build in the same run). build: verify the approved plan, test writers in the fleet worktree, test judge, freeze, coder, code judge, one commit step, push, draft PR, independent review, write-back. Every gate runs in script code.",
   whenToUse:
-    "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, project?} or {mode: \"build\", plan_ref, date, project?}. If invoked with no args, do not call Workflow again: tell the user to run /build-task <task>.",
+    "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, project?, confirm?} or {mode: \"build\", plan_ref, date, project?, confirm?}; confirm is \"ask\" (default) or \"auto\". If invoked with no args, do not call Workflow again: tell the user to run /build-task <task>.",
   phases: [
-    { title: "Preflight", detail: "load all seven role prompts from yadgar" },
+    { title: "Preflight", detail: "load all ten role prompts from yadgar" },
     { title: "Intake", detail: "resolve the input into a brief (plan mode)" },
     { title: "Workspace", detail: "create or reuse the fleet branch and worktree" },
     { title: "Plan", detail: "scope-and-plan, risk tier, plan-audit, local plan commit (plan mode)" },
+    { title: "Auto-confirm", detail: "confirm auto: intent judge, command and scope gates" },
     { title: "Verify", detail: "re-hash the approved plan, check the branch (build mode)" },
-    { title: "Tests", detail: "one test writer per criterion, test judge, revise rounds" },
+    { title: "Tests", detail: "one test writer per criterion in the fleet worktree, ownership check, test judge, revise rounds" },
     { title: "Freeze", detail: "hash frozen tests and test-runner config" },
-    { title: "Code", detail: "coder, hash check, code judge, fix rounds" },
+    { title: "Code", detail: "coder, hash check, code judge, commit step, fix rounds" },
     { title: "Re-plan", detail: "on plan_wrong: re-plan, save the superseded head, return for confirmation" },
     { title: "PR", detail: "push, draft PR from the approved sha" },
+    { title: "Review", detail: "pr-review and, for gate changes, the non-weakening sweep; fix round" },
     { title: "Write-back", detail: "ledger section and one marked comment per external source" },
   ],
 };
@@ -30,14 +32,18 @@ const ROLES = [
   "fleet-coder",
   "fleet-code-judge",
   "fleet-pr-opener",
+  "fleet-intent-judge",
+  "pr-review",
+  "gate-change-nonweakening-sweep",
 ];
-// Model tiers come from each role page's "DISPATCH: model=<tier> (fallback=<tier>)"
-// line, fetched by preflight. No role->model map lives here.
+// Model tiers come from each role page's "DISPATCH: model=<tier> (fallback=<tier> ...)"
+// line, fetched by preflight. No role->model map and no default tier live
+// here: a role with no usable DISPATCH line stops the run in preflight.
 const TIERS = ["fable", "opus", "sonnet", "haiku"];
-const DEFAULT_TIER = "sonnet";
 const INFRA_MODEL = "sonnet";
-const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\))?/;
-const HASH_MAPS = ["files", "sections", "git", "symlinks"];
+const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
+// "ignored": ignored files outside tool caches (startup hooks only inside venvs)
+const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // Minimum role-page versions this script was built against. Names and enums
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
@@ -49,9 +55,13 @@ const EXPECTED_VERSIONS = {
   "fleet-coder": 11,
   "fleet-code-judge": 10,
   "fleet-pr-opener": 5,
+  // PLACEHOLDERS until the role owner publishes the fleet-v3 pages
+  "fleet-intent-judge": 1,
+  "pr-review": 16,
+  "gate-change-nonweakening-sweep": 2,
 };
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
-const CONTRACT = "fleet-v2";
+const CONTRACT = "fleet-v3";
 const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
 // Keys each role must return when status is "ok" (checked with `key in obj`;
 // null or empty values are allowed). A missing key is contract drift. A
@@ -61,16 +71,22 @@ const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
 const REQUIRED_ON_OK = {
   "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff", "repo_obligations", "test_cmd"],
   "plan-audit": ["verdict", "routed_findings"],
-  "fleet-test-writer": ["criterion_id", "tests", "commit"],
+  "fleet-test-writer": ["criterion_id", "tests", "files"],
   "fleet-test-judge": ["verdict", "routed_findings", "checked"],
-  "fleet-coder": ["commits", "suite_result", "added_symbols", "frozen_tests_red_at_start", "obligations_done"],
+  "fleet-coder": ["changed_paths", "suite_result", "added_symbols", "frozen_tests_red_at_start", "obligations_done"],
   "fleet-code-judge": ["verdict", "routed_findings", "suite_result", "hash_check", "gates_not_run", "obligations_check"],
   "fleet-pr-opener": ["pr_url", "pr_number", "created", "template_used", "gates_not_run_stated"],
+  "fleet-intent-judge": ["verdict", "deviations", "coverage"],
+  "pr-review": ["verdict", "findings", "touches_gate", "checked"],
+  "gate-change-nonweakening-sweep": ["verdict", "units", "findings"],
 };
 const VERDICTS = {
   "plan-audit": ["approve", "untestable_criteria", "plan_defect"],
   "fleet-test-judge": ["approve", "revise"],
   "fleet-code-judge": ["approve", "fix_code", "fix_tests", "plan_wrong"],
+  "fleet-intent-judge": ["approve", "refuse"],
+  "pr-review": ["approve", "changes_requested"],
+  "gate-change-nonweakening-sweep": ["non_weakening", "weakening", "not_applicable"],
 };
 const GATES_PREFIX = "approved with gates not run:";
 // Repo obligations (2.0.3): push and CI rules the plan names for the coder.
@@ -108,9 +124,23 @@ const PATH_ARG_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
 // test_cmd tokens after the runner prefix: never one of these subcommands.
 const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
 // stop_gate values: which gate ended a stopped run (null when none applies).
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume"];
+// Run-state milestones, in order, and the step a resumed build runs next.
+const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "done" };
+const CONFIRMS = ["ask", "auto"];
+// Review (2.1.0): at most one review round after the first.
+const MAX_REVIEWS = 2;
+const FINDING_SEVERITIES = ["blocking", "nit"];
+const FINDING_CATEGORIES = ["correctness", "security", "fail_open", "pr_body_claim", "test_quality", "obligation", "other"];
+// A changed path that names a gate, hook, validator, policy, auth rule, check
+// or CI file triggers the non-weakening sweep (as does pr-review touches_gate).
+const GATE_PATH_RE = /(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\w*|checks?|ci)(\/|\.|_|$)|^\.github\/|\.pre-commit-config|(^|\/)Makefile$/i;
+// confirm "auto" G2: the only check_cmd shape the auto gate accepts.
+const PRECOMMIT_CMD_RE = /^pre-commit run ([A-Za-z0-9_.:-]+)( --all-files)?( --hook-stage ([A-Za-z0-9_-]+))?$/;
+// confirm "auto" G3 scope fence over every planned path and command.
+const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp)\b/i;
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
-const MAX_AGENTS = 60;
+const MAX_AGENTS = 100;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
 const MAX_CODE_ROUNDS = 3; // total coder rounds; a fix_tests detour counts as one
 const SHORT_PATH_MAX_DIFF = 20; // tier is computed and logged; the short path is disabled
@@ -166,13 +196,15 @@ const RUNNER_CONFIG_FILES = [
   ".babelrc*",
   "babel.config.*",
   "*.pth (repo root only)",
+  ".pre-commit-config.yaml",
+  "every repo file named in the entry of a repo: local hook of the root .pre-commit-config.yaml",
 ];
 const WALK_SKIP_DIRS = [".git", "node_modules", ".venv", "venv", ".tox", ".nox"];
 // The hasher's descriptive suspicious-list entries (other entries are odd path
 // names): runner config in a skipped cache dir, and bytecode (*.pyc/*.pyo)
 // named after a frozen test module or conftest, found anywhere the walk or a
 // cache scan reaches.
-const SUSPICIOUS_PREFIXES = ["runner config in a skipped cache dir: ", "bytecode for a frozen file: "];
+const SUSPICIOUS_PREFIXES = ["runner config in a skipped cache dir: ", "bytecode for a frozen file: ", "unresolvable local hook "];
 const CACHE_SKIP_DIRS = ["__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".import_linter_cache", ".hypothesis"];
 // Ignore rules are frozen too: hiding a new config file behind an ignore rule
 // changes one of these keys. A .gitignore is hashed in the files map when
@@ -196,6 +228,8 @@ const IGNORE_RULE_FILES = [
   ".gitignore listed by `git ls-files -z --cached --others --exclude-standard -- ':(glob)**/.gitignore' .gitignore`, plus any walked .gitignore whose directory is not ignored from outside",
   "git:info/exclude",
   "git:core.excludesFile",
+  "git:core.hooksPath (its config value, UNSET when not set)",
+  "git:hooks/<file> for every file under core.hooksPath, else under `git rev-parse --git-path hooks`",
 ];
 // Sections of files that are NOT hashed whole (dependencies stay editable).
 // Each section is canonicalised (sorted keys, compact JSON) and hashed under a
@@ -222,7 +256,7 @@ const RUNNER_CONFIG_SECTIONS = [
 // script, never in an agent.
 // HASHER_PY_BEGIN
 const HASHER_PY = String.raw`
-import fnmatch, hashlib, json, os, subprocess, sys
+import fnmatch, hashlib, json, os, re, shlex, shutil, subprocess, sys, tempfile
 try:
     import tomllib
 except ImportError:
@@ -233,7 +267,8 @@ except ImportError:
 
 CONFIG_GLOBS = ['conftest.py', 'pytest.ini', '.pytest.ini', 'pytest.toml', 'tox.ini', 'setup.cfg',
                 'noxfile.py', 'sitecustomize.py', 'usercustomize.py', 'jest.config.*', 'vitest.config.*',
-                'vitest.workspace*', 'karma.conf.*', '.mocharc*', '.babelrc*', 'babel.config.*']
+                'vitest.workspace*', 'karma.conf.*', '.mocharc*', '.babelrc*', 'babel.config.*',
+                '.pre-commit-config.yaml', '.gitattributes']
 ROOT_ONLY_GLOBS = ['*.pth']
 SKIP_DIRS = {'.git', 'node_modules', '.venv', 'venv', '.tox', '.nox'}
 # tool cache dirs: skipped only when git ignores them; runner config inside one is suspicious
@@ -241,8 +276,13 @@ CACHE_DIRS = {'__pycache__', '.mypy_cache', '.pytest_cache', '.ruff_cache', '.im
 CACHE_ALARM_NAMES = ['pyproject.toml', 'package.json']
 PACKAGE_KEYS = ['jest', 'vitest', 'mocha']
 
-wt, mode = sys.argv[1], sys.argv[2]
-explicit = json.loads(sys.argv[3]) if len(sys.argv) > 3 else []
+wt = sys.argv[1]
+# every git call: no system config, no fsmonitor (a local config could name a program for it)
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+GIT = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
+explicit = json.loads(sys.argv[2]) if len(sys.argv) > 2 else []
+# a tree sha: list the paths that differ between it and the tree now
+base_tree = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
 # module names whose bytecode could shadow a frozen file (the purge removes
 # all bytecode before every hash check, so any such pyc is planted)
 FROZEN_STEMS = set(os.path.basename(f)[:-3] for f in explicit if f.endswith('.py')) | {'conftest'}
@@ -254,7 +294,21 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 def git(*a):
-    return subprocess.run(['git', '-C', wt] + list(a), capture_output=True, check=True).stdout
+    return subprocess.run(GIT + list(a), capture_output=True, check=True).stdout
+
+def work_tree():
+    # the tree of the worktree as git add -A would stage it (untracked and
+    # not ignored files included), built in a temporary index: the real index
+    # is never touched and no hook runs
+    fd, tmp = tempfile.mkstemp(prefix='fleet-index-')
+    os.close(fd)
+    env = dict(os.environ, GIT_INDEX_FILE=tmp)
+    try:
+        for a in (['read-tree', 'HEAD'], ['add', '-A']):
+            subprocess.run(GIT + a, capture_output=True, check=True, env=env)
+        return subprocess.run(GIT + ['write-tree'], capture_output=True, check=True, env=env).stdout.decode().strip()
+    finally:
+        os.unlink(tmp)
 
 def canon(obj):
     return json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str).encode()
@@ -282,7 +336,7 @@ def check_ignore(paths):
     # the subset of paths git ignores (exit 1 = none ignored)
     if not paths:
         return set()
-    r = subprocess.run(['git', '-C', wt, 'check-ignore', '-z', '--stdin'],
+    r = subprocess.run(GIT + ['check-ignore', '-z', '--stdin'],
                        input=b'\x00'.join(p.encode() for p in paths) + b'\x00', capture_output=True)
     if r.returncode not in (0, 1):
         sys.exit('git check-ignore failed: ' + r.stderr.decode(errors='replace'))
@@ -366,72 +420,382 @@ def norm(rel):
         rel = rel[2:]
     return rel.rstrip('/')
 
-out = {'fingerprint': {
-    'head': git('rev-parse', 'HEAD').decode().strip(),
-    'status_sha256': sha(git('status', '--porcelain')),
-    'diff_sha256': sha(git('diff', 'HEAD')),
-}}
+LAUNCHERS = {'uv', 'uvx', 'poetry', 'pipx', 'npx', 'pnpm', 'yarn', 'npm', 'hatch', 'pdm'}
+LAUNCHER_WORDS = {'run', 'exec', '--'}
 
-if mode == 'hashes':
-    # one map per key kind, so a real file name can never mask a synthetic key
-    files, sections, gitmap, symlinks = {}, {}, {}, {}
-    walked = walk()
-    for rel in walked:
-        base = os.path.basename(rel)
-        if any(fnmatch.fnmatch(base, g) for g in CONFIG_GLOBS) or odd(rel):
-            files[rel] = file_hash(rel)
-        elif '/' not in rel and any(fnmatch.fnmatch(base, g) for g in ROOT_ONLY_GLOBS):
-            files[rel] = file_hash(rel)
-    for rel in frozen_ignore_files(walked):
-        files[rel] = file_hash(rel)
-    for rel in sorted(LINKS):
-        symlinks[rel] = LINKS[rel]
-    ex = git('rev-parse', '--git-path', 'info/exclude').decode().strip()
-    gitmap['info/exclude'] = abs_hash(ex if os.path.isabs(ex) else os.path.join(wt, ex))
-    gx = subprocess.run(['git', '-C', wt, 'config', '--path', 'core.excludesFile'], capture_output=True)
-    gpath = gx.stdout.decode().strip()
-    if not gpath:
-        gpath = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'git', 'ignore')
-    gitmap['core.excludesFile'] = abs_hash(gpath)
-    listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\x00')
-    for rel in sorted(set(f.decode() for f in listed if f)):
-        base = os.path.basename(rel)
-        if base == 'pyproject.toml':
-            if tomllib is None:
-                sys.exit('tomllib unavailable: need python >= 3.11 or tomli')
-            try:
-                with open(os.path.join(wt, rel), 'rb') as fh:
-                    data = tomllib.load(fh)
-                sec = data.get('tool', {}).get('pytest')
-                sections[rel + '#tool.pytest'] = 'ABSENT' if sec is None else sha(canon(sec))
-            except FileNotFoundError:
-                sections[rel + '#tool.pytest'] = 'MISSING'
-            except Exception:
-                sections[rel + '#tool.pytest'] = 'UNPARSEABLE'
-        elif base == 'package.json':
-            try:
-                with open(os.path.join(wt, rel), 'rb') as fh:
-                    data = json.load(fh)
-            except FileNotFoundError:
-                data = None
-            except Exception:
-                data = 'UNPARSEABLE'
-            for k in PACKAGE_KEYS + ['scripts.test']:
-                if data is None:
-                    v = 'MISSING'
-                elif not isinstance(data, dict):
-                    v = 'UNPARSEABLE'
-                elif k == 'scripts.test':
-                    s = data.get('scripts')
-                    v = sha(canon(s['test'])) if isinstance(s, dict) and 'test' in s else 'ABSENT'
+def root_json(name):
+    try:
+        with open(os.path.join(wt, name), 'rb') as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return 'UNPARSEABLE'
+
+def root_toml():
+    p = os.path.join(wt, 'pyproject.toml')
+    if not os.path.isfile(p):
+        return None
+    if tomllib is None:
+        return 'UNPARSEABLE'
+    try:
+        with open(p, 'rb') as fh:
+            return tomllib.load(fh)
+    except Exception:
+        return 'UNPARSEABLE'
+
+def dig(d, *keys):
+    for k in keys:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(k)
+    return d
+
+def hatch_scripts(pp):
+    envs = dig(pp, 'tool', 'hatch', 'envs')
+    if not isinstance(envs, dict):
+        return None
+    out = {k: v['scripts'] for k, v in envs.items() if isinstance(v, dict) and 'scripts' in v}
+    return out or None
+
+def launcher_tables():
+    # the script tables a launcher hook runs, as canonical sections
+    pj, pp = root_json('package.json'), root_toml()
+    def sec(data, val):
+        if data is None:
+            return 'MISSING'
+        if not isinstance(data, dict):
+            return 'UNPARSEABLE'
+        return 'ABSENT' if val is None else sha(canon(val))
+    return {
+        'package.json#scripts': sec(pj, dig(pj, 'scripts')),
+        'pyproject.toml#project.scripts': sec(pp, dig(pp, 'project', 'scripts')),
+        'pyproject.toml#tool.poetry.scripts': sec(pp, dig(pp, 'tool', 'poetry', 'scripts')),
+        'pyproject.toml#tool.pdm.scripts': sec(pp, dig(pp, 'tool', 'pdm', 'scripts')),
+        'pyproject.toml#tool.hatch.envs.*.scripts': sec(pp, hatch_scripts(pp)),
+    }
+
+def dist_name(x):
+    m = re.match(r'[A-Za-z0-9][A-Za-z0-9._-]*', str(x).strip())
+    return re.sub(r'[._]', '-', m.group(0).lower()) if m else None
+
+def repo_names():
+    # npm script names, Python script names, and the tools the repo declares
+    pj, pp = root_json('package.json'), root_toml()
+    npm = set(dig(pj, 'scripts') or {}) if isinstance(dig(pj, 'scripts'), dict) else set()
+    py = set()
+    for t in (dig(pp, 'project', 'scripts'), dig(pp, 'tool', 'poetry', 'scripts'), dig(pp, 'tool', 'pdm', 'scripts')):
+        if isinstance(t, dict):
+            py |= set(t)
+    for t in (hatch_scripts(pp) or {}).values():
+        if isinstance(t, dict):
+            py |= set(t)
+    tools = set()
+    dev = dig(pj, 'devDependencies')
+    if isinstance(dev, dict):
+        tools |= set(dist_name(k) for k in dev)
+    lists = [dig(pp, 'project', 'dependencies')]
+    for grp in (dig(pp, 'project', 'optional-dependencies'), dig(pp, 'dependency-groups'), dig(pp, 'tool', 'pdm', 'dev-dependencies')):
+        if isinstance(grp, dict):
+            lists += list(grp.values())
+    for l in lists:
+        if isinstance(l, list):
+            tools |= set(dist_name(x) for x in l if isinstance(x, str))
+    tables = [dig(pp, 'tool', 'poetry', 'dependencies'), dig(pp, 'tool', 'poetry', 'dev-dependencies')]
+    groups = dig(pp, 'tool', 'poetry', 'group')
+    if isinstance(groups, dict):
+        tables += [dig(g, 'dependencies') for g in groups.values()]
+    for t in tables:
+        if isinstance(t, dict):
+            tools |= set(dist_name(k) for k in t)
+    tools.discard(None)
+    return npm, py, tools
+
+def declared_tool(tool, tools):
+    # npx/uvx: a repo-local bin or a declared dependency; never a PATH lookup alone
+    for d in ('node_modules/.bin', '.venv/bin'):
+        if os.path.lexists(os.path.join(wt, d, tool)):
+            return True
+    return dist_name(tool) in tools
+
+def repo_file(tok):
+    # a relative path to a regular file inside the worktree, else None
+    if not tok or tok.startswith('/') or '..' in tok.split('/'):
+        return None
+    full = os.path.realpath(os.path.join(wt, tok))
+    real_wt = os.path.realpath(wt)
+    return norm(tok) if full.startswith(real_wt + os.sep) and os.path.isfile(full) else None
+
+def local_hooks():
+    # [(id, entry, args)] of the repo: local hooks in the root .pre-commit-config.yaml
+    p = os.path.join(wt, '.pre-commit-config.yaml')
+    if not os.path.isfile(p):
+        return [], []
+    with open(p, 'rb') as fh:
+        raw = fh.read()
+    out = []
+    try:
+        import yaml
+    except ImportError:
+        yaml = None
+    if yaml is not None:
+        try:
+            data = yaml.safe_load(raw)
+        except Exception:
+            return [], ['unresolvable local hook *: .pre-commit-config.yaml does not parse']
+        for repo in (data.get('repos') or []) if isinstance(data, dict) else []:
+            if isinstance(repo, dict) and repo.get('repo') == 'local':
+                for h in repo.get('hooks') or []:
+                    if isinstance(h, dict):
+                        args = h.get('args') if isinstance(h.get('args'), list) else []
+                        out.append((str(h.get('id')), h.get('entry') if isinstance(h.get('entry'), str) else '',
+                                    [str(x) for x in args]))
+        return out, []
+    # no PyYAML: every entry: and inline args: [..] line, under the last id: line
+    hid, cur = '?', None
+    for line in raw.decode('utf-8', 'replace').splitlines():
+        t = line.strip().lstrip('-').strip()
+        if t.startswith('id:'):
+            hid = t[3:].strip().strip('"').strip("'")
+            cur = [hid, '', []]
+            out.append(cur)
+        elif t.startswith('entry:') and cur is not None:
+            cur[1] = t[6:].strip().strip('"').strip("'")
+        elif t.startswith('args:') and cur is not None:
+            v = t[5:].strip()
+            if v.startswith('[') and v.endswith(']'):
+                cur[2] = [x.strip().strip('"').strip("'") for x in v[1:-1].split(',') if x.strip()]
+    return [tuple(x) for x in out], []
+
+def hook_refs():
+    # repo files every local hook names (entry and args, shlex-split; -m mod
+    # resolved to its file), and an alarm for any token that is neither a repo
+    # file nor a binary on PATH, or an inline payload after -c. A launcher hook
+    # also freezes the script tables (see launcher_tables).
+    hooks, bad = local_hooks()
+    refs = set()
+    used_launcher = False
+    npm_scripts, py_scripts, tools = repo_names()
+    for hid, entry, args in hooks:
+        try:
+            toks = shlex.split(entry) + [t for x in args for t in shlex.split(x)]
+        except ValueError:
+            bad.append('unresolvable local hook ' + hid + ': entry or args do not shell-split')
+            continue
+        i = 0
+        # lenient: the rest are the arguments of a frozen script or a declared tool
+        lenient = False
+        launcher = toks[0] if toks and toks[0] in LAUNCHERS else None
+        if launcher:
+            used_launcher = True
+            i = 1
+            sub = []
+            while i < len(toks) and toks[i] in LAUNCHER_WORDS:
+                sub.append(toks[i])
+                i += 1
+            name = toks[i] if i < len(toks) else None
+            if launcher in ('npm', 'pnpm', 'yarn') and ('run' in sub or (launcher == 'yarn' and not sub)):
+                if name not in npm_scripts:
+                    bad.append('unresolvable local hook ' + hid + ': npm script missing: ' + str(name))
+                    continue
+                i += 1
+                lenient = True
+            elif launcher in ('npx', 'uvx') or (launcher == 'pnpm' and 'exec' in sub):
+                if not name or not declared_tool(name, tools):
+                    bad.append('unresolvable local hook ' + hid + ': ' + str(name))
+                    continue
+                i += 1
+                lenient = True
+            elif name in py_scripts:
+                i += 1
+                lenient = True
+        while i < len(toks):
+            t = toks[i]
+            if t == '-c' and not lenient:
+                bad.append('unresolvable local hook ' + hid + ': inline payload after -c')
+                break
+            if t == '-m' and not lenient:
+                mod = toks[i + 1].replace('.', '/') if i + 1 < len(toks) else ''
+                f = repo_file(mod + '.py') or repo_file(mod + '/__init__.py') if mod else None
+                if f:
+                    refs.add(f)
                 else:
-                    v = sha(canon(data[k])) if k in data else 'ABSENT'
-                sections[rel + '#' + k] = v
-    for rel in explicit:
-        rel = norm(rel)
+                    bad.append('unresolvable local hook ' + hid + ': module ' + (toks[i + 1] if i + 1 < len(toks) else '?'))
+                i += 2
+                continue
+            if t.startswith('-'):
+                i += 1
+                continue
+            f = repo_file(t)
+            if f:
+                refs.add(f)
+            elif lenient or ('/' not in t and shutil.which(t)):
+                pass
+            else:
+                bad.append('unresolvable local hook ' + hid + ': ' + t)
+            i += 1
+    # the whole dir tree of each referenced file (tracked and untracked-not-ignored)
+    frozen = set()
+    for f in refs:
+        frozen.add(f)
+        d = os.path.dirname(f)
+        if d:
+            for x in git('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', d).split(b'\x00'):
+                if x:
+                    frozen.add(x.decode())
+    return sorted(frozen), bad, used_launcher
+
+def config_freeze(gitmap):
+    # local (and worktree) git config, sorted with values, minus the keys
+    # below; every include target
+    def lst(*scope):
+        r = subprocess.run(GIT + ['config'] + list(scope) + ['--list'], capture_output=True)
+        return r.stdout.decode('utf-8', 'replace').splitlines() if r.returncode == 0 else []
+    # left out: branch.* (the workflow's push -u) and transport settings a
+    # human may fix between runs (remote.*, url.*, credential.*, http.*,
+    # core.sshcommand); none of them weakens a test or a gate
+    keep = lambda l: not re.match(r'(branch|remote|url|credential|http)\.|core\.sshcommand=', l)
+    local = sorted(l for l in lst('--local') if keep(l))
+    gitmap['config:local'] = sha('\n'.join(local).encode())
+    on = subprocess.run(GIT + ['config', '--bool', 'extensions.worktreeConfig'], capture_output=True).stdout.strip()
+    wtc = sorted(l for l in lst('--worktree') if keep(l)) if on == b'true' else None
+    gitmap['config:worktree'] = sha('\n'.join(wtc).encode()) if wtc is not None else 'OFF'
+    common = git('rev-parse', '--git-common-dir').decode().strip()
+    common = common if os.path.isabs(common) else os.path.join(wt, common)
+    for l in local + (wtc or []):
+        k, _, v = l.partition('=')
+        if k == 'include.path' or (k.startswith('includeif.') and k.endswith('.path')):
+            path = os.path.expanduser(v)
+            gitmap['config:include:' + v] = abs_hash(path if os.path.isabs(path) else os.path.join(common, path))
+    ia = git('rev-parse', '--git-path', 'info/attributes').decode().strip()
+    gitmap['info/attributes'] = abs_hash(ia if os.path.isabs(ia) else os.path.join(wt, ia))
+
+IGNORED_CACHE = {'__pycache__', '.pytest_cache', '.hypothesis', '.ruff_cache', '.mypy_cache', '.import_linter_cache'}
+# build and coverage output: these dirs at the top level only, these files at the root only;
+# *.egg-info and EGG-INFO stay frozen anywhere (entry_points can register pytest plugins)
+OUTPUT_DIRS = {'build', 'dist', 'htmlcov', '.eggs'}
+OUTPUT_FILES = ['coverage.xml', '.coverage', '.coverage.*', 'junit*.xml']
+
+def ignored_files():
+    # every ignored file except tool caches and top-level build output; inside
+    # a skipped dir (venv, node_modules, ...) only interpreter startup hooks
+    out = {}
+    for x in git('ls-files', '-z', '--others', '--ignored', '--exclude-standard').split(b'\x00'):
+        if not x:
+            continue
+        rel = x.decode()
+        segs = rel.split('/')
+        base = segs[-1]
+        if rel.startswith('.claude/worktrees/'):
+            continue
+        if any(s in SKIP_DIRS for s in segs[:-1]):
+            if base.endswith('.pth') or base in ('sitecustomize.py', 'usercustomize.py'):
+                out[rel] = file_hash(rel)
+            continue
+        if any(s.endswith('.egg-info') or s == 'EGG-INFO' for s in segs):
+            out[rel] = file_hash(rel)
+            continue
+        if any(s in IGNORED_CACHE for s in segs):
+            continue
+        if (len(segs) > 1 and segs[0] in OUTPUT_DIRS) or (len(segs) == 1 and any(fnmatch.fnmatch(base, g) for g in OUTPUT_FILES)):
+            continue
+        out[rel] = file_hash(rel)
+    return out
+
+def hook_files(gitmap):
+    # core.hooksPath (its value) and every file under the hooks dir git uses
+    hp = subprocess.run(GIT + ['config', 'core.hooksPath'], capture_output=True).stdout.decode().strip()
+    gitmap['core.hooksPath'] = hp or 'UNSET'
+    if hp:
+        d = hp if os.path.isabs(hp) else os.path.join(wt, hp)
+    else:
+        d = git('rev-parse', '--git-path', 'hooks').decode().strip()
+        d = d if os.path.isabs(d) else os.path.join(wt, d)
+    for dp, dns, fns in os.walk(d):
+        dns.sort()
+        for f in sorted(fns):
+            full = os.path.join(dp, f)
+            rel = os.path.relpath(full, d)
+            gitmap['hooks/' + rel] = 'symlink:' + os.readlink(full) if os.path.islink(full) else abs_hash(full)
+
+tree = work_tree()
+out = {'fingerprint': {'head': git('rev-parse', 'HEAD').decode().strip(), 'tree': tree}}
+if base_tree:
+    out['changed'] = sorted(set(f.decode() for f in git('diff', '--name-only', '-z', '--no-renames', base_tree, tree).split(b'\x00') if f))
+
+# one map per key kind, so a real file name can never mask a synthetic key
+files, sections, gitmap, symlinks = {}, {}, {}, {}
+walked = walk()
+for rel in walked:
+    base = os.path.basename(rel)
+    if any(fnmatch.fnmatch(base, g) for g in CONFIG_GLOBS) or odd(rel):
         files[rel] = file_hash(rel)
-    out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
-                     'suspicious': sorted(set(SUSPICIOUS))}
+    elif '/' not in rel and any(fnmatch.fnmatch(base, g) for g in ROOT_ONLY_GLOBS):
+        files[rel] = file_hash(rel)
+for rel in frozen_ignore_files(walked):
+    files[rel] = file_hash(rel)
+for rel in sorted(LINKS):
+    symlinks[rel] = LINKS[rel]
+ex = git('rev-parse', '--git-path', 'info/exclude').decode().strip()
+gitmap['info/exclude'] = abs_hash(ex if os.path.isabs(ex) else os.path.join(wt, ex))
+gx = subprocess.run(GIT + ['config', '--path', 'core.excludesFile'], capture_output=True)
+gpath = gx.stdout.decode().strip()
+if not gpath:
+    gpath = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'git', 'ignore')
+gitmap['core.excludesFile'] = abs_hash(gpath)
+hook_files(gitmap)
+config_freeze(gitmap)
+# every run-state ref (name -> target): only the workflow's own state write may move one
+for line in git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/fleet/').decode().splitlines():
+    name, _, obj = line.partition(' ')
+    if name:
+        gitmap['fleetref:' + name] = obj
+hook_frozen, hook_bad, hook_launcher = hook_refs()
+for rel in hook_frozen:
+    files[rel] = file_hash(rel)
+if hook_launcher:
+    sections.update(launcher_tables())
+SUSPICIOUS.extend(hook_bad)
+listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\x00')
+for rel in sorted(set(f.decode() for f in listed if f)):
+    base = os.path.basename(rel)
+    if base == 'pyproject.toml':
+        if tomllib is None:
+            sys.exit('tomllib unavailable: need python >= 3.11 or tomli')
+        try:
+            with open(os.path.join(wt, rel), 'rb') as fh:
+                data = tomllib.load(fh)
+            sec = data.get('tool', {}).get('pytest')
+            sections[rel + '#tool.pytest'] = 'ABSENT' if sec is None else sha(canon(sec))
+        except FileNotFoundError:
+            sections[rel + '#tool.pytest'] = 'MISSING'
+        except Exception:
+            sections[rel + '#tool.pytest'] = 'UNPARSEABLE'
+    elif base == 'package.json':
+        try:
+            with open(os.path.join(wt, rel), 'rb') as fh:
+                data = json.load(fh)
+        except FileNotFoundError:
+            data = None
+        except Exception:
+            data = 'UNPARSEABLE'
+        for k in PACKAGE_KEYS + ['scripts.test']:
+            if data is None:
+                v = 'MISSING'
+            elif not isinstance(data, dict):
+                v = 'UNPARSEABLE'
+            elif k == 'scripts.test':
+                s = data.get('scripts')
+                v = sha(canon(s['test'])) if isinstance(s, dict) and 'test' in s else 'ABSENT'
+            else:
+                v = sha(canon(data[k])) if k in data else 'ABSENT'
+            sections[rel + '#' + k] = v
+for rel in explicit:
+    rel = norm(rel)
+    files[rel] = file_hash(rel)
+out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
+                 'ignored': ignored_files(),
+                 'suspicious': sorted(set(SUSPICIOUS))}
 
 print(json.dumps(out, sort_keys=True))
 `;
@@ -482,6 +846,22 @@ const FINDINGS = {
   },
 };
 const SUITE = { type: "object" };
+const REVIEW_FINDINGS = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      id: STR,
+      severity: { type: "string", enum: FINDING_SEVERITIES },
+      category: { type: "string", enum: FINDING_CATEGORIES },
+      file: STR_OR_NULL,
+      line: { type: ["integer", "null"] },
+      summary: STR,
+      evidence: STR,
+    },
+    required: ["severity", "summary"],
+  },
+};
 
 function roleSchema(extra) {
   return {
@@ -549,7 +929,7 @@ const SCHEMAS = {
   "fleet-test-writer": roleSchema({
     criterion_id: STR,
     tests: { type: "array", items: ANY_ITEM },
-    commit: STR_OR_NULL,
+    files: { type: "array", items: STR },
     addressed_findings: { type: "array", items: ANY_ITEM },
   }),
   "fleet-test-judge": roleSchema({
@@ -558,7 +938,7 @@ const SCHEMAS = {
     checked: { type: "array", items: ANY_ITEM },
   }),
   "fleet-coder": roleSchema({
-    commits: { type: "array", items: STR },
+    changed_paths: { type: "array", items: STR },
     added_symbols: { type: "array", items: ANY_ITEM },
     frozen_tests_red_at_start: { type: "boolean" },
     suite_result: SUITE,
@@ -585,6 +965,40 @@ const SCHEMAS = {
     created: { type: "boolean" },
     template_used: STR_OR_NULL,
     gates_not_run_stated: { type: "boolean" },
+  }),
+  "fleet-intent-judge": roleSchema({
+    verdict: { type: "string", enum: VERDICTS["fleet-intent-judge"] },
+    deviations: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          item: STR,
+          allowed_by: STR_OR_NULL,
+          source_ref: STR_OR_NULL,
+          fails_closed: { type: "boolean" },
+          verdict: { type: "string", enum: ["approve", "refuse"] },
+          reason: STR,
+        },
+        required: ["item", "verdict"],
+      },
+    },
+    coverage: {
+      type: "object",
+      properties: { covered: { type: "boolean" }, missing: { type: "array", items: STR } },
+      required: ["covered"],
+    },
+  }),
+  "pr-review": roleSchema({
+    verdict: { type: "string", enum: VERDICTS["pr-review"] },
+    findings: REVIEW_FINDINGS,
+    touches_gate: { type: "boolean" },
+    checked: { type: "array", items: ANY_ITEM },
+  }),
+  "gate-change-nonweakening-sweep": roleSchema({
+    verdict: { type: "string", enum: VERDICTS["gate-change-nonweakening-sweep"] },
+    units: { type: "array", items: { type: "object" } },
+    findings: REVIEW_FINDINGS,
   }),
 };
 
@@ -621,6 +1035,7 @@ const INFRA_SCHEMA = {
       items: { type: "object", properties: { sha: STR, subject: STR }, required: ["sha", "subject"] },
     },
     plan_touched: { type: "array", items: STR },
+    changed_since: { type: "array", items: STR },
     remote_head: STR,
     push_result: { type: "string", enum: ["ok", "hook_rejected", "network", "non_ff", "remote_rejected"] },
     hook_tail: STR,
@@ -639,6 +1054,21 @@ const INFRA_SCHEMA = {
         required: ["sha", "subject"],
       },
     },
+    commit_result: { type: "string", enum: ["committed", "hook_rejected", "tree_mismatch"] },
+    staged_tree: STR,
+    worktree_tree: STR,
+    head_tree: STR,
+    changed_paths: { type: "array", items: STR },
+    present: { type: "boolean" },
+    ids: { type: "array", items: STR },
+    parser: STR_OR_NULL,
+    error: STR,
+    removed: { type: "array", items: STR },
+    state_sha: STR,
+    exists: { type: "boolean" },
+    target: STR,
+    message: STR,
+    clean: { type: "boolean" },
     results: {
       type: "array",
       items: {
@@ -673,10 +1103,11 @@ const INTAKE_SCHEMA = {
     },
   },
 };
+// head + the worktree's tree sha (see work_tree in the hasher program).
 const FINGERPRINT = {
   type: "object",
-  required: ["head", "status_sha256", "diff_sha256"],
-  properties: { head: STR, status_sha256: STR, diff_sha256: STR },
+  required: ["head", "tree"],
+  properties: { head: STR, tree: STR },
 };
 const HASHER_SCHEMA = {
   type: "object",
@@ -685,6 +1116,7 @@ const HASHER_SCHEMA = {
     status: { type: "string", enum: ["ok", "failed"] },
     reason: STR,
     fingerprint: FINGERPRINT,
+    changed: { type: "array", items: STR },
     hashes: {
       type: "object",
       required: ["files", "sections", "git", "symlinks", "suspicious"],
@@ -746,6 +1178,7 @@ function parseDispatch(line) {
 function keyName(map, k) {
   if (map === "git") return "git:" + k;
   if (map === "symlinks") return "symlink:" + k;
+  if (map === "ignored") return "ignored:" + k;
   return k;
 }
 
@@ -768,21 +1201,36 @@ function findOverlaps(criteria) {
 }
 
 // Keys whose value differs, compared map by map, including keys only one side
-// has. A non-empty suspicious list is always a violation.
-function diffHashes(frozen, now) {
+// has: [{map, key, name}].
+function changedKeys(a0, b0) {
   const out = [];
   for (const m of HASH_MAPS) {
-    const a = (frozen && frozen[m]) || {};
-    const b = (now && now[m]) || {};
+    const a = (a0 && a0[m]) || {};
+    const b = (b0 && b0[m]) || {};
     const keys = {};
     for (const k of Object.keys(a)) keys[k] = true;
     for (const k of Object.keys(b)) keys[k] = true;
     for (const k of Object.keys(keys).sort()) {
       const va = k in a ? a[k] : "<new>";
       const vb = k in b ? b[k] : "<removed>";
-      if (va !== vb) out.push(keyName(m, k));
+      if (va !== vb) out.push({ map: m, key: k, name: keyName(m, k) });
     }
   }
+  return out;
+}
+
+// The violation text for a changed key.
+const FLEETREF = "fleetref:";
+function violationName(x) {
+  if (x.map === "ignored") return "ignored path written: " + x.key;
+  if (x.map === "git" && x.key.indexOf(FLEETREF) === 0) return "run-state ref touched by role: " + x.key.slice(FLEETREF.length);
+  return x.name;
+}
+
+// changedKeys by violation text, plus every suspicious entry: a non-empty
+// suspicious list is always a violation.
+function diffHashes(frozen, now) {
+  const out = changedKeys(frozen, now).map(violationName);
   for (const p of (now && now.suspicious) || [])
     out.push(SUSPICIOUS_PREFIXES.some((x) => p.indexOf(x) === 0) ? "suspicious " + p : "suspicious path name " + p);
   return out;
@@ -796,9 +1244,18 @@ function configView(h, testFiles) {
   const tests = {};
   for (const f of testFiles || []) tests[f] = true;
   for (const k of Object.keys((h && h.files) || {})) if (!tests[k]) o[k] = h.files[k];
-  for (const m of ["sections", "git", "symlinks"])
+  for (const m of ["sections", "git", "symlinks", "ignored"])
     for (const k of Object.keys((h && h[m]) || {})) o[keyName(m, k)] = h[m][k];
   return o;
+}
+
+// sha256 of every hasher map (canonical JSON): the run-state's frozen-maps digest.
+function mapsDigest(h) {
+  const o = {};
+  for (const m of HASH_MAPS) o[m] = Object.assign({}, (h && h[m]) || {});
+  // the run-state ref moves with every state write; the digest leaves it out
+  for (const k of Object.keys(o.git)) if (k.indexOf(FLEETREF) === 0) delete o.git[k];
+  return sha256Hex(canonical(o));
 }
 
 // For the code judge: {"<map>/<key>": {frozen, current, match}}, plus the
@@ -840,13 +1297,20 @@ function countKeys(h) {
   return n;
 }
 
-function sameFingerprint(a, b) {
+// A worktree state is a hasher result: {fingerprint: {head, tree}, hashes}.
+// Two states match when HEAD, the tree (tracked plus untracked-not-ignored
+// files) and every hasher map (ignored runner config, ignore rules, symlinks)
+// match. The suspicious list is left out: a test run may leave bytecode, which
+// the purge removes before every freeze and post-coder check.
+function sameState(a, b) {
   return (
     !!a &&
     !!b &&
-    a.head === b.head &&
-    a.status_sha256 === b.status_sha256 &&
-    a.diff_sha256 === b.diff_sha256
+    !!a.fingerprint &&
+    !!b.fingerprint &&
+    a.fingerprint.head === b.fingerprint.head &&
+    a.fingerprint.tree === b.fingerprint.tree &&
+    changedKeys(a.hashes, b.hashes).length === 0
   );
 }
 
@@ -1405,38 +1869,13 @@ function workspacePrompt(inputs) {
   );
 }
 
-function integratePrompt(inputs) {
-  return (
-    "Infra step of the fleet build workflow: merge the test writers' branches into the main fleet branch. No edits. Never push. Never --no-verify; no Co-Authored-By trailer.\n" +
-    "Inputs: " +
-    JSON.stringify(inputs) +
-    "\n" +
-    "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> status --porcelain` must be empty; else needs_human.\n" +
-    "2. For each name in `criterion_branches`, in order: if `git -C <main_worktree> merge-base --is-ancestor <name> HEAD` succeeds, skip it; else `git -C <main_worktree> merge --no-ff --no-edit <name>`. On conflict: `git -C <main_worktree> merge --abort`, then needs_human naming the conflicting files.\n" +
-    "3. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
-    "Return {status, reason, head, merged}."
-  );
-}
-
-function syncPrompt(inputs) {
-  return (
-    "Infra step of the fleet build workflow: bring each criterion test branch up to the main fleet branch (the coder's commits) before a fix_tests re-entry. No edits. Never push. Never --no-verify; no Co-Authored-By trailer.\n" +
-    "Inputs: " +
-    JSON.stringify(inputs) +
-    "\n" +
-    "For each entry of `criterion_worktrees`: `git -C <entry.path> branch --show-current` must equal entry.branch and `git -C <entry.path> status --porcelain` must be empty, else needs_human. If `git -C <entry.path> merge-base --is-ancestor <branch> HEAD` succeeds, skip it; else `git -C <entry.path> merge --no-edit <branch>`. On conflict: `git -C <entry.path> merge --abort`, then needs_human naming the files.\n" +
-    "Return {status, reason, merged}."
-  );
-}
-
 function hasherPrompt(inputs) {
   const cmd =
     "python3 -I - " +
     shQuote(inputs.worktree) +
     " " +
-    inputs.mode +
-    " " +
     shQuote(JSON.stringify(inputs.test_files)) +
+    (inputs.base_tree ? " " + shQuote(inputs.base_tree) : "") +
     " <<'FLEET_HASHER_PY'\n" +
     HASHER_PY.trim() +
     "\nFLEET_HASHER_PY";
@@ -1462,23 +1901,11 @@ function hasherPrompt(inputs) {
     "Run this one Bash command exactly as written, unmodified, in the foreground:\n" +
     cmd +
     "\n" +
-    'It prints one JSON object with `fingerprint` and (mode hashes) `hashes` = {files, sections, git, symlinks, suspicious}. Return {status: "ok", fingerprint, hashes} with those values copied exactly. ' +
-    'If the command exits non-zero, return {status: "failed", reason: <its stderr>, fingerprint: {head: "", status_sha256: "", diff_sha256: ""}}. Run no other command.\n' +
+    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, suspicious} and, when a base tree is given, `changed` (the paths that differ from it). Return {status: "ok", fingerprint, hashes, changed} with those values copied exactly. ' +
+    "The tree is built in a temporary index (GIT_INDEX_FILE=<temp file>: git read-tree HEAD, git add -A, git write-tree); the real index is never touched and no hook runs. " +
+    'If the command exits non-zero, return {status: "failed", reason: <its stderr>, fingerprint: {head: "", tree: ""}}. Run no other command.\n' +
     "Extraction rules (the program implements them): " +
     rules
-  );
-}
-
-function preparePrompt(inputs) {
-  return (
-    "Infra step of the fleet build workflow: create per-criterion test worktrees for the approved plan. No edits, no commits. Never push.\n" +
-    "Inputs: " +
-    JSON.stringify(inputs) +
-    "\n" +
-    "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> status --porcelain` must be empty; else needs_human with the paths.\n" +
-    "2. For each entry of `criterion_worktrees`: if entry.path is a worktree on entry.branch, reuse it. Else if local branch entry.branch exists: `git -C <main_worktree> worktree add <entry.path> <entry.branch>`. Else `git -C <main_worktree> worktree add --no-track -b <entry.branch> <entry.path> <branch>`. Path exists on another branch -> needs_human. In each worktree you create, write `<entry.path>/.claude/settings.local.json` with exactly entry.settings_local_json.\n" +
-    "3. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
-    "Return {status, reason, head}."
   );
 }
 
@@ -1602,7 +2029,8 @@ function verifyPlanPrompt(inputs) {
     "6. is_ancestor = whether `git -C <main_worktree> merge-base --is-ancestor <plan_commit> HEAD` exits 0.\n" +
     "7. commits_since = every line of `git -C <main_worktree> log --format=%H%x09%s <plan_commit>..HEAD` as {sha, subject} (empty when head equals plan_commit or is_ancestor is false).\n" +
     "8. plan_touched = the lines of `git -C <main_worktree> log --format=%H <plan_commit>..HEAD -- <plan_path> <ref_path>`.\n" +
-    "Return {status, reason, head, plan_sha256, plan_sha256_head, is_ancestor, commits_since, plan_touched}."
+    "9. changed_since = the lines of `git -C <main_worktree> diff --name-only <plan_commit>..HEAD` (empty when head equals plan_commit or is_ancestor is false).\n" +
+    "Return {status, reason, head, plan_sha256, plan_sha256_head, is_ancestor, commits_since, plan_touched, changed_since}."
   );
 }
 
@@ -1621,13 +2049,15 @@ function replanWorktreePrompt(inputs) {
 
 function replanResetPrompt(inputs) {
   return (
-    "Infra step of the fleet build workflow: move the fleet branch to the re-approved plan. This is the ONLY step that may reset a branch, and only as written here. Never push, never delete a branch.\n" +
+    "Infra step of the fleet build workflow: move the fleet branch to the re-approved plan. This is the ONLY step that may reset a branch or clean the worktree, and only as written here. Never push, never delete a branch, never `git commit`.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "1. `git -C <main_worktree> branch --show-current` must equal <branch>, `git -C <main_worktree> rev-parse HEAD` must equal <expected_head>, and `git -C <main_worktree> status --porcelain` must be empty; else needs_human.\n" +
-    "2. Save the old head: if branch <superseded_branch> exists, it must point at <expected_head> (else needs_human); else `git -C <main_worktree> branch <superseded_branch> <expected_head>`. superseded_head = `git -C <main_worktree> rev-parse <superseded_branch>`.\n" +
-    "3. Only after step 2 succeeded: `git -C <main_worktree> reset --hard <new_plan_commit>`.\n" +
+    "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> rev-parse HEAD` must equal <expected_head>; else needs_human. The tests and code are uncommitted: the worktree tree, the output of this command run exactly as written, must equal <expected_tree>; else needs_human:\n" +
+    treeCmd(inputs.main_worktree) +
+    "\n" +
+    "2. Save the old head and the uncommitted work, creating no commit: if branch <superseded_branch> exists it must point at <expected_head> (else needs_human); else `git -C <main_worktree> branch <superseded_branch> <expected_head>`. If ref <superseded_tree_ref> exists it must equal <expected_tree> (else needs_human); else `git -C <main_worktree> update-ref <superseded_tree_ref> <expected_tree>` (a ref to the judged tree object; never pushed). superseded_head = `git -C <main_worktree> rev-parse <superseded_branch>`.\n" +
+    "3. Only after step 2 succeeded: `git -C <main_worktree> reset --hard <new_plan_commit>`, then `git -C <main_worktree> clean -fd` (never -x: ignored files stay).\n" +
     "4. `git -C <main_worktree> worktree remove <replan_worktree>` (it must be clean; never --force).\n" +
     "5. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
     "Return {status, reason, head, superseded_head}."
@@ -1721,6 +2151,171 @@ function pushPrompt(inputs) {
   );
 }
 
+// The worktree's tree as `git add -A` would stage it, built in a temporary
+// index outside the worktree: the real index is untouched and no hook runs.
+function treeCmd(worktree) {
+  const g = "GIT_CONFIG_NOSYSTEM=1 GIT_INDEX_FILE=\"$tmp\" git -c core.fsmonitor=false -C " + shQuote(worktree);
+  return "tmp=$(mktemp) && " + g + " read-tree HEAD && " + g + " add -A && " + g + " write-tree; rm -f \"$tmp\"";
+}
+
+function commitStepPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: COMMIT the code the code judge approved, in ONE new commit, WITH the repo's hooks. Never --no-verify, never -n, never --amend, never any other hook bypass; no Co-Authored-By trailer. Never push. Never edit, format, unstage or restore a file, and never retry the commit.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Every git command below runs as <git> = `env GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -c core.hooksPath=<H> -C <main_worktree>`, where <H> is <hooks_path> when it is not null, else the output of `git -C <main_worktree> rev-parse --path-format=absolute --git-common-dir` followed by `/hooks`. Never drop or change these options.\n" +
+    "1. `<git> branch --show-current` must equal <branch> and `<git> rev-parse HEAD` must equal <expected_head>; else needs_human.\n" +
+    "2. `<git> add -A`.\n" +
+    "3. staged_tree = the output of `<git> write-tree`. If it differs from <code_tree>: commit_result = `tree_mismatch`; do NOT commit; go to step 5.\n" +
+    "4. Commit once: `<git> commit -m " + shQuote(inputs.subject) + "` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The pre-commit hooks run here; let them. " +
+    "Exit code 0 -> commit_result `committed`; head = `<git> rev-parse HEAD`; head_tree = `<git> rev-parse 'HEAD^{tree}'` (keep the quotes). " +
+    "Any other exit code -> commit_result `hook_rejected`; hook_tail = the last 60 lines of the temp file. Delete the temp file.\n" +
+    "5. worktree_tree = the output of this one command, run exactly as written:\n" +
+    treeCmd(inputs.main_worktree) +
+    "\n" +
+    "Return {status: \"ok\", reason, commit_result, staged_tree, worktree_tree, head, head_tree, hook_tail}."
+  );
+}
+
+function reviewPathsPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: list the paths the PR changes. Read only: no edits, no commits, no checkout, no push.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "changed_paths = the lines of `git -C <main_worktree> diff --name-only <base_ref>..<head_sha>`. A non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, changed_paths}."
+  );
+}
+
+function reviewCleanupPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: remove the review's scratch worktrees. Touch nothing else: never remove a worktree outside <scratch_dir>, never delete a branch, never edit a file.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. For every `worktree <path>` line of `git -C <main_worktree> worktree list --porcelain` whose path is inside <scratch_dir>: `git -C <main_worktree> worktree remove --force <path>`.\n" +
+    "2. `git -C <main_worktree> worktree prune`.\n" +
+    "Return {status, reason, removed} (removed = the paths you removed)."
+  );
+}
+
+// G2 (confirm auto): the hook ids in .pre-commit-config.yaml as git stores it
+// at the plan commit. Fails closed: no file, no PyYAML or a parse error give
+// no ids. Prints {present, ids, parser, error?}.
+// PRECOMMIT_IDS_PY_BEGIN
+const PRECOMMIT_IDS_PY = String.raw`
+import json, subprocess, sys
+wt, rev = sys.argv[1], sys.argv[2]
+r = subprocess.run(['git', '-C', wt, 'show', rev + ':.pre-commit-config.yaml'], capture_output=True)
+if r.returncode != 0:
+    print(json.dumps({'present': False, 'ids': [], 'parser': None}))
+    sys.exit(0)
+try:
+    import yaml
+except ImportError:
+    print(json.dumps({'present': True, 'ids': [], 'parser': None, 'error': 'PyYAML unavailable'}))
+    sys.exit(0)
+try:
+    data = yaml.safe_load(r.stdout)
+except Exception as e:
+    print(json.dumps({'present': True, 'ids': [], 'parser': 'yaml', 'error': 'unparseable: ' + str(e)}))
+    sys.exit(0)
+ids = []
+repos = data.get('repos') if isinstance(data, dict) else None
+for repo in repos if isinstance(repos, list) else []:
+    hooks = repo.get('hooks') if isinstance(repo, dict) else None
+    for h in hooks if isinstance(hooks, list) else []:
+        if isinstance(h, dict) and isinstance(h.get('id'), str):
+            ids.append(h['id'])
+print(json.dumps({'present': True, 'ids': ids, 'parser': 'yaml'}))
+`;
+// PRECOMMIT_IDS_PY_END
+
+function precommitIdsPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: read the hook ids of .pre-commit-config.yaml at the plan commit. READ ONLY: no edits, no commits; run nothing but the one command below. Never run pre-commit or a hook.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified:\n" +
+    "python3 -I -c " + shQuote(PRECOMMIT_IDS_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.plan_commit) +
+    "\n" +
+    "It prints one JSON object {present, ids, parser, error?}. Copy every value unchanged. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, present, ids, parser, error}."
+  );
+}
+
+// The run-state ref: refs/fleet/<task id>/state points at an annotated tag
+// object (git mktag, no tag name, no hook, index untouched) whose target is
+// HEAD and whose message is the state JSON. Local only, never pushed.
+// WRITE_STATE_SH_BEGIN
+function writeStateCmd(worktree, stateRef, json) {
+  const g = "GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -C " + shQuote(worktree);
+  return (
+    "c=$(" + g + " rev-parse HEAD) && t=$( { printf 'object %s\\ntype commit\\ntag fleet-state\\ntagger fleet <fleet@localhost> 0 +0000\\n\\n' \"$c\"; cat <<'FLEET_STATE_JSON'\n" +
+    json +
+    "\nFLEET_STATE_JSON\n} | " + g + " mktag) && " + g + " update-ref " + shQuote(stateRef) + " \"$t\" && echo \"$c $t\""
+  );
+}
+// WRITE_STATE_SH_END
+
+function writeStatePrompt(inputs, json) {
+  return (
+    "Infra step of the fleet build workflow: record the run-state. Local only: never push, never create a tag name, never commit, never touch the index or any file.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one Bash command exactly as written, unmodified:\n" +
+    writeStateCmd(inputs.main_worktree, inputs.state_ref, json) +
+    "\n" +
+    "It prints `<head> <state_sha>`. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, head, state_sha}."
+  );
+}
+
+// Reads the run-state ref: {exists, target, message, head, head_tree, clean}.
+// READ_STATE_PY_BEGIN
+const READ_STATE_PY = String.raw`
+import json, os, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+wt, ref = sys.argv[1], sys.argv[2]
+G = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
+def run(*a):
+    return subprocess.run(G + list(a), capture_output=True)
+out = {'exists': False}
+t = run('cat-file', '-t', ref)
+if t.returncode == 0:
+    out['exists'] = True
+    out['target'] = ''
+    out['message'] = ''
+    if t.stdout.strip() == b'tag':
+        raw = run('cat-file', 'tag', ref).stdout.decode('utf-8', 'replace')
+        hdr, _, msg = raw.partition('\n\n')
+        out['target'] = next((l[7:] for l in hdr.splitlines() if l.startswith('object ')), '')
+        out['message'] = msg.strip()
+out['head'] = run('rev-parse', 'HEAD').stdout.decode().strip()
+out['head_tree'] = run('rev-parse', 'HEAD^{tree}').stdout.decode().strip()
+out['clean'] = run('status', '--porcelain').stdout == b''
+print(json.dumps(out))
+`;
+// READ_STATE_PY_END
+
+function readStatePrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: READ the run-state. Read only: no edits, no commits, no checkout, no push; run nothing but the one command below.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified:\n" +
+    "python3 -I -c " + shQuote(READ_STATE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.state_ref) +
+    "\n" +
+    "It prints one JSON object {exists, target, message, head, head_tree, clean}. Copy every value unchanged, byte for byte. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, exists, target, message, head, head_tree, clean}."
+  );
+}
+
 function ledgerWritebackPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: append ONE section to each ledger task's body. Change nothing else on the task: not its title, status or plan.\n" +
@@ -1793,6 +2388,7 @@ const state = {
   roleVersions: {},
   refreezeLog: [],
   stopGate: null,
+  review: null,
 };
 
 function gate(msg) {
@@ -1842,7 +2438,9 @@ async function softDispatch(label, prompt, opts) {
 // the first attempt. A dead agent (null) is retried once on the fallback tier;
 // the retry counts toward the agent cap.
 async function roleAgent(role, label, prompt, opts) {
-  const tier = state.models[role] || { model: DEFAULT_TIER, fallback: null };
+  const tier = state.models[role];
+  if (!tier) halt("needs_human", "role " + role + " has no DISPATCH tier from preflight", "contract");
+  gate("model used: " + label + " -> " + tier.model);
   const r = await agent(prompt, Object.assign({}, opts, { label, model: tier.model }));
   if (r != null || !tier.fallback) return r;
   if (state.agents + 1 > MAX_AGENTS) {
@@ -1851,6 +2449,7 @@ async function roleAgent(role, label, prompt, opts) {
   }
   state.agents++;
   gate("fallback: " + role + " (" + label + ") died on " + tier.model + "; retrying once on " + tier.fallback);
+  gate("model used: " + label + ":fallback -> " + tier.fallback);
   return agent(prompt, Object.assign({}, opts, { label: label + ":fallback", model: tier.fallback }));
 }
 
@@ -1925,17 +2524,23 @@ function requireOk(who, r) {
   halt(r.status === "failed" ? "failed" : "needs_human", who + " returned " + r.status + ": " + (r.reason || "no reason"), "role");
 }
 
-async function hasher(label, worktree, mode, testFiles, phaseName) {
-  const inputs = { worktree, mode, test_files: testFiles };
+// A worktree state: {fingerprint: {head, tree}, hashes, changed}. baseTree:
+// also list the paths that differ from that tree (the ownership check).
+async function hasher(label, worktree, testFiles, phaseName, baseTree) {
+  const inputs = { worktree, test_files: testFiles };
+  if (baseTree) inputs.base_tree = baseTree;
   const r = await dispatch(label, hasherPrompt(inputs), {
     schema: HASHER_SCHEMA,
     agentType: JUDGE_AGENT,
     phase: phaseName,
   });
   const h = r.hashes;
+  // the embedded program always returns the ignored map; a missing one reads as empty
+  if (h && h.ignored === undefined) h.ignored = {};
   const mapsOk =
     !!h && HASH_MAPS.every((m) => h[m] && typeof h[m] === "object") && Array.isArray(h.suspicious);
-  if (r.status !== "ok" || !r.fingerprint || !r.fingerprint.head || (mode === "hashes" && !mapsOk))
+  const fp = r.fingerprint;
+  if (r.status !== "ok" || !fp || !fp.head || !fp.tree || !mapsOk || (baseTree && !Array.isArray(r.changed)))
     halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
   return r;
 }
@@ -1948,23 +2553,25 @@ async function infra(label, prompt, phaseName, agentType) {
   return r;
 }
 
-// Fingerprint the worktree around a judge run. Any change discards the
-// verdict, whatever it was. preFp: a fingerprint already taken right before.
-async function judged(role, label, roundTag, inputs, worktree, phaseName, preFp) {
-  const before =
-    preFp || (await hasher("hasher:fp-pre:" + roundTag, worktree, "fingerprint", [], phaseName)).fingerprint;
+// Fingerprint the worktree around a judge run: HEAD, the tree and the hasher
+// maps. Any change discards the verdict, whatever it was. pre: the state
+// taken right before (a hasher result); preLabel: take it now instead.
+// opts.allowNotOk: return a needs_human/failed result instead of stopping.
+async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, files, opts) {
+  const before = pre || (await hasher(opts && opts.preLabel ? opts.preLabel : "hasher:fp-pre:" + roundTag, worktree, files, phaseName));
   const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT, true);
-  const after = (await hasher("hasher:fp-post:" + roundTag, worktree, "fingerprint", [], phaseName)).fingerprint;
-  if (!sameFingerprint(before, after))
-    halt(
-      "needs_human",
-      "judge mutated worktree: " + role + " (" + label + ") changed HEAD, status or diff; verdict discarded",
-      "fingerprint",
-    );
+  const after = await hasher("hasher:fp-post:" + roundTag, worktree, files, phaseName);
+  if (!sameState(before, after)) {
+    const what = [];
+    if (before.fingerprint.head !== after.fingerprint.head) what.push("HEAD");
+    if (before.fingerprint.tree !== after.fingerprint.tree) what.push("tree");
+    for (const k of changedKeys(before.hashes, after.hashes)) what.push(violationName(k));
+    halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") changed " + what.join(", ") + "; verdict discarded", "fingerprint");
+  }
   checkRole(role, r);
   collect(role, r);
-  requireOk(role, r);
-  return { r, fp: after };
+  if (!(opts && opts.allowNotOk)) requireOk(role, r);
+  return { r, state: after };
 }
 
 function finish(status, reason) {
@@ -1980,6 +2587,7 @@ function finish(status, reason) {
     agents: state.agents,
     gates_not_run: state.gatesNotRun,
     stop_gate: status === "ok" || status === "awaiting_confirmation" ? null : state.stopGate,
+    review: state.review,
     role_versions: state.roleVersions,
     refreeze_log: state.refreezeLog,
     gate_log: state.gateLog,
@@ -2030,15 +2638,14 @@ async function preflightStep() {
   const dispatchLines = pre.dispatch || {};
   for (const role of ROLES) {
     const t = parseDispatch(dispatchLines[role]);
-    if (t) {
-      state.models[role] = t;
-      gate("model: " + role + " -> " + t.model + (t.fallback ? " (fallback " + t.fallback + ")" : ""));
-    } else {
-      state.models[role] = { model: DEFAULT_TIER, fallback: null };
-      gate(
-        "model: " + role + " has no usable DISPATCH line (" + JSON.stringify(dispatchLines[role] || null) + ") -> " + DEFAULT_TIER,
+    if (!t)
+      halt(
+        "needs_human",
+        "role " + role + " has no usable DISPATCH line (" + JSON.stringify(dispatchLines[role] || null) + "); no tier is hardcoded",
+        "contract",
       );
-    }
+    state.models[role] = t;
+    gate("model: " + role + " -> " + t.model + (t.fallback ? " (fallback " + t.fallback + ")" : ""));
   }
 }
 
@@ -2331,6 +2938,7 @@ function makePlanRef(f) {
     task_id: f.taskId,
     slug: f.slug,
     tldr: f.tldr,
+    plan_diff: f.planDiff,
     plan_facts: f.planFacts,
     history: f.history,
   });
@@ -2372,6 +2980,197 @@ function isPlanCommit(c, taskId) {
 
 function buildCommitsOf(commits, taskId) {
   return commits.filter((c) => !isPlanCommit(c, taskId));
+}
+
+// ---------------------------------------------------------------- confirm "auto"
+
+// G3: why a planned path is outside the scope fence (null when inside).
+function fencePathProblem(p) {
+  const q = normPath(p);
+  const segs = q.split("/");
+  const dirs = segs.slice(0, -1).map((x) => x.toLowerCase());
+  const base = segs[segs.length - 1].toLowerCase();
+  if (/\.(tf|tfvars)$/.test(base) || dirs.indexOf("terraform") >= 0 || segs.some((x) => x.toLowerCase() === ".terraform"))
+    return "infrastructure-as-code path";
+  if (/^kustomization\.ya?ml$/.test(base)) return "kubernetes manifest";
+  if (/\.ya?ml$/.test(base) && (dirs.indexOf("k8s") >= 0 || dirs.indexOf("manifests") >= 0)) return "kubernetes manifest";
+  if (/(^|\/)charts\/[^/]+\/templates\//i.test(q)) return "helm chart template";
+  if (segs.some((x) => x.toLowerCase() === ".github")) return ".github/ (CI, settings, rulesets)";
+  if (q.toLowerCase().indexOf("rulesets") >= 0) return "rulesets";
+  if (base.indexOf(".env") === 0 || base.indexOf("secret") >= 0 || /\.(pem|key)$/.test(base) || base.indexOf("id_rsa") === 0 || base.indexOf("credentials") >= 0)
+    return "secret-like path";
+  return null;
+}
+
+// G3: the scope fence over every planned path (criteria test_files,
+// allowed_additions.files, obligation files) and every command, plus the
+// branch and repo. Pure: no agent.
+function scopeProblems(ctx) {
+  const out = [];
+  const paths = [];
+  for (const c of ctx.criteria) for (const f of c.test_files) paths.push(f);
+  const aa = ctx.planFacts.allowed_additions;
+  if (aa && Array.isArray(aa.files)) for (const f of aa.files) if (typeof f === "string") paths.push(f);
+  for (const o of ctx.planFacts.repo_obligations || []) for (const f of o.files || []) if (typeof f === "string") paths.push(f);
+  for (const p of paths) {
+    const why = fencePathProblem(p);
+    if (why) out.push("path " + JSON.stringify(p) + ": " + why);
+  }
+  for (const c of ctx.planFacts.commands || [])
+    if (FENCE_COMMAND_RE.test(String(c.command || ""))) out.push("command " + JSON.stringify(c.command) + " names kubectl, helm or an IaC tool");
+  if (!ctx.branch || ctx.branch === ctx.defaultBranch) out.push("target branch " + JSON.stringify(ctx.branch) + " is the default branch");
+  if (ctx.brief.repo !== ctx.callerRepo) out.push("work repo " + ctx.brief.repo + " is not the caller's repo " + ctx.callerRepo);
+  return out;
+}
+
+// G2, the shape part: test_cmd (allowlisted at plan time), or a check_cmd of
+// the exact form `pre-commit run <id> [--all-files] [--hook-stage <s>]`.
+// Returns {problems, hookIds}.
+function commandShapeProblems(commands) {
+  const problems = [];
+  const hookIds = [];
+  for (const c of commands || []) {
+    if (c.run_by === "nobody") {
+      problems.push((c.id || c.kind) + ": refused command " + JSON.stringify(c.command) + " (run_by nobody)");
+      continue;
+    }
+    if (c.kind === "test_cmd") continue;
+    const m = c.kind === "check_cmd" ? PRECOMMIT_CMD_RE.exec(String(c.command || "")) : null;
+    if (!m) {
+      problems.push((c.id || c.kind) + ": " + JSON.stringify(c.command) + " is not `pre-commit run <id> [--all-files] [--hook-stage <s>]`");
+      continue;
+    }
+    hookIds.push({ id: c.id, hook: m[1] });
+  }
+  return { problems, hookIds };
+}
+
+// G2, the config part: each hook id exists exactly once in the config at
+// plan_commit; a missing or unreadable config fails closed.
+function hookIdProblems(hookIds, cfg) {
+  if (!cfg || cfg.present !== true) return ["no .pre-commit-config.yaml at the plan commit"];
+  if (cfg.error || cfg.parser !== "yaml" || !Array.isArray(cfg.ids))
+    return [".pre-commit-config.yaml unreadable: " + (cfg.error || "no parser")];
+  const out = [];
+  const count = {};
+  for (const id of cfg.ids) count[id] = (count[id] || 0) + 1;
+  for (const h of hookIds) {
+    if (!count[h.hook]) out.push(h.id + ": hook id " + h.hook + " not in .pre-commit-config.yaml at the plan commit");
+    else if (count[h.hook] > 1) out.push(h.id + ": hook id " + h.hook + " appears " + count[h.hook] + " times in .pre-commit-config.yaml");
+  }
+  return out;
+}
+
+// G1: the script's own check of the intent judge's output.
+function intentProblems(r) {
+  if (r.status !== "ok") return ["intent judge returned " + r.status + ": " + (r.reason || "no reason")];
+  const out = [];
+  if (r.verdict !== "approve") out.push("intent verdict " + r.verdict + ": " + (r.reason || ""));
+  for (const d of r.deviations) {
+    const tag = JSON.stringify((d && d.item) || "?");
+    if (!d || d.verdict !== "approve") out.push("deviation " + tag + " refused: " + ((d && d.reason) || ""));
+    else if (typeof d.allowed_by !== "string" || !d.allowed_by.trim()) out.push("deviation " + tag + " has no allowed_by");
+    else if (d.fails_closed !== true) out.push("deviation " + tag + " does not fail closed");
+  }
+  if (!r.coverage || r.coverage.covered !== true)
+    out.push("coverage incomplete: " + ((r.coverage && (r.coverage.missing || []).join("; ")) || "covered is not true"));
+  return out;
+}
+
+function needsMaxSection(check, reasons, intent, planPath, tiny) {
+  const lines = ["## Needs Max: auto-confirm stopped at the " + check + " check", "", "Failed check: `" + check + "`", "", "Reasons:"];
+  for (const r of reasons) lines.push("- " + r);
+  if (intent) {
+    lines.push("", "Intent judge: " + (intent.verdict || intent.status) + " -- " + (intent.reason || ""));
+    for (const d of intent.deviations || [])
+      lines.push("- " + JSON.stringify(d.item) + ": " + d.verdict + ", allowed_by " + JSON.stringify(d.allowed_by || null) + " (" + (d.source_ref || "no source") + "), fails_closed " + d.fails_closed);
+    if (intent.coverage && (intent.coverage.missing || []).length) lines.push("- missing coverage: " + intent.coverage.missing.join("; "));
+  }
+  lines.push(
+    "",
+    "Plan: `" + planPath + "` on `" + tiny.branch + "` at `" + tiny.plan_commit + "` (committed locally, not pushed).",
+    "",
+    "Rule on it in the task, then re-run with the same plan_ref after a ruling (build mode, confirm auto).",
+  );
+  return lines.join("\n");
+}
+
+// G1-G3 in order; the first failure stops. ctx: {sfx, common, mainWt,
+// planCommit, brief, callerRepo, branch, defaultBranch, criteria, planPath,
+// planDiff, planFacts, files}. Returns {ok, failedCheck, reasons, intent}.
+async function autoGates(ctx) {
+  const sfx = ctx.sfx || "";
+  const ledger = ctx.brief.sources.find((x) => x.kind === "ledger");
+  const jr = await judged(
+    "fleet-intent-judge",
+    "role:fleet-intent-judge" + sfx,
+    "intent" + sfx,
+    Object.assign({}, ctx.common, {
+      brief: ctx.brief,
+      ledger_task: ledger ? { ref: ledger.ref, body: ledger.body } : null,
+      plan_path: ctx.planPath,
+      plan_commit: ctx.planCommit,
+      criteria: ctx.criteria,
+      plan_diff: ctx.planDiff,
+      allowed_additions: ctx.planFacts.allowed_additions,
+      repo_obligations: ctx.planFacts.repo_obligations,
+      commands: ctx.planFacts.commands,
+    }),
+    ctx.mainWt,
+    "Auto-confirm",
+    null,
+    ctx.files,
+    { allowNotOk: true, preLabel: "hasher:pre-intent" + sfx },
+  );
+  const r = jr.r;
+  const intent = stripHeldOut({
+    status: r.status,
+    verdict: r.verdict || null,
+    reason: r.reason || null,
+    deviations: Array.isArray(r.deviations) ? r.deviations : [],
+    coverage: r.coverage || null,
+  });
+  const fail = (failedCheck, reasons) => {
+    gate("auto-confirm: " + failedCheck + " check failed: " + reasons.join("; "));
+    return { ok: false, failedCheck, reasons, intent };
+  };
+  const g1 = intentProblems(r);
+  if (g1.length) return fail("intent", g1);
+  gate("auto-confirm: intent approve (" + intent.deviations.length + " deviation(s), all allowed and fail-closed)");
+  const shape = commandShapeProblems(ctx.planFacts.commands);
+  if (shape.problems.length) return fail("commands", shape.problems);
+  if (shape.hookIds.length) {
+    const cfg = await infra(
+      "infra:precommit-ids" + sfx,
+      precommitIdsPrompt({ main_worktree: ctx.mainWt, plan_commit: ctx.planCommit }),
+      "Auto-confirm",
+      JUDGE_AGENT,
+    );
+    const g2 = hookIdProblems(shape.hookIds, cfg);
+    if (g2.length) return fail("commands", g2);
+  }
+  gate("auto-confirm: commands ok (" + (ctx.planFacts.commands || []).length + ")");
+  const g3 = scopeProblems(ctx);
+  if (g3.length) return fail("scope", g3);
+  gate("auto-confirm: scope fence ok");
+  return { ok: true, intent };
+}
+
+// How many agents autoGates dispatches after the plan ref is sealed (all
+// gates pass): intent pre-hasher, judge, post-hasher, and the config read.
+function autoGateAgents(commands) {
+  return 3 + (commandShapeProblems(commands).hookIds.length ? 1 : 0);
+}
+
+function autoFailResult(g, planPath, tiny) {
+  state.stopGate = g.failedCheck;
+  return Object.assign(finish("needs_human", "auto-confirm: " + g.failedCheck + " check failed: " + g.reasons.join("; ")), {
+    failed_check: g.failedCheck,
+    intent: g.intent,
+    plan_ref: tiny,
+    plan_path: planPath,
+    needs_max_section: needsMaxSection(g.failedCheck, g.reasons, g.intent, planPath, tiny),
+  });
 }
 
 // ---------------------------------------------------------------- plan mode
@@ -2425,11 +3224,13 @@ async function planMode(input, date) {
 
   phase("Plan");
   const p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug });
+  const auto = input.confirm === "auto";
   const pc = await commitPlanAndRef({
     worktree: lay.mainWt,
     branch: lay.branch,
     phaseName: "Plan",
-    after: 1,
+    // the commit-plan step itself, and with confirm auto the gate agents
+    after: 1 + (auto ? autoGateAgents(p.planFacts.commands) : 0),
     fields: {
       branch: lay.branch,
       planPath: p.planPath,
@@ -2438,11 +3239,33 @@ async function planMode(input, date) {
       taskId: names.taskId,
       slug: names.slug,
       tldr: p.tldr,
+      planDiff: p.planDiff,
       planFacts: p.planFacts,
       history: { runs: 1, replans: 0, agents: 0 },
     },
   });
-  return awaiting("plan ready: confirm, then run mode build with plan_ref", p, pc.tiny, pc.full);
+  if (!auto) return awaiting("plan ready: confirm, then run mode build with plan_ref", p, pc.tiny, pc.full);
+
+  // confirm "auto": G1-G3 instead of the question; never ask
+  phase("Auto-confirm");
+  const g = await autoGates({
+    sfx: "",
+    common,
+    mainWt: lay.mainWt,
+    planCommit: pc.tiny.plan_commit,
+    brief,
+    callerRepo: repo,
+    branch: lay.branch,
+    defaultBranch: ws.defaultBranch,
+    criteria: p.criteria,
+    planPath: p.planPath,
+    planDiff: p.planDiff,
+    planFacts: p.planFacts,
+    files: p.testable.reduce((a, c) => a.concat(c.test_files), []).concat([pc.tiny.ref_path]),
+  });
+  if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
+  gate("auto-confirm: all gates pass; building " + pc.tiny.branch + " from " + pc.tiny.plan_commit + " in this run");
+  return buildFromRef(input, date, pc.tiny, lay, ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents });
 }
 
 // ---------------------------------------------------------------- build mode
@@ -2475,19 +3298,31 @@ function planRefProblem(r) {
   return null;
 }
 
-// A commit after plan_commit that a fleet step of this build makes: a test
-// writer commit, a coder commit, the integrate merge of a criterion branch, or
-// the sync merge into one. Subject patterns only: git cannot prove authorship.
-function isFleetCommit(subject, branch, critPrefix, ids) {
-  const idAlt = ids.map(escapeRe).join("|");
-  const crit = escapeRe(critPrefix) + "(?:" + idAlt + ")";
-  const pats = [
-    new RegExp("^Merge branch '" + crit + "'"),
-    new RegExp("^Merge branch '" + escapeRe(branch) + "' into " + crit + "$"),
-    new RegExp("^test\\((?:" + idAlt + ")\\): "),
-    /^(?:feat|fix)(?:\([^)]*\))?!?: /,
-  ];
-  return pats.some((re) => re.test(subject));
+// The scope fence on the REAL changed paths (every mode): a path the fence
+// refuses (IaC, Kubernetes, .github/, rulesets, secret-like) stops the run
+// before anything is committed.
+function fenceChanged(where, changed) {
+  const bad = [];
+  for (const p of changed || []) {
+    const why = fencePathProblem(p);
+    if (why) bad.push(normPath(p) + " (" + why + ")");
+  }
+  if (bad.length) halt("needs_human", where + ": changed path outside the scope fence: " + bad.join(", "), "scope");
+}
+
+// The commit step's subjects, derived from the sealed task id and slug only:
+// the first commit of a build, and each later one (a review or push-hook fix).
+function commitSubject(taskId, slug) {
+  return ("feat(" + taskId + "): " + slug.replace(/-/g, " ")).slice(0, 72).replace(/\s+$/, "");
+}
+function fixSubject(taskId, round) {
+  return "fix(" + taskId + "): code round " + round;
+}
+
+// A commit after plan_commit that the commit step of a build of this plan
+// made. Subject patterns only: git cannot prove authorship.
+function isFleetCommit(subject, taskId, slug) {
+  return subject === commitSubject(taskId, slug) || new RegExp("^fix\\(" + escapeRe(taskId) + "\\): code round [0-9]+$").test(subject);
 }
 
 async function buildMode(input, date) {
@@ -2500,7 +3335,40 @@ async function buildMode(input, date) {
 
   await preflightStep();
   const ws = await workspaceStep(repo, lay);
+  return buildFromRef(input, date, tiny, lay, ws, { rerunGates: input.confirm === "auto", intent: null, agentsBase: 0 });
+}
 
+// Re-read the sealed task through intake (confirm "auto" in build mode), so
+// the intent judge sees the current ledger rulings. Plan and text sources
+// have no rulings: the sealed brief is used as is.
+async function rereadBrief(brief, project, repo) {
+  const src = brief.sources.find((x) => ID_KINDS.indexOf(x.kind) >= 0);
+  if (!src) return brief;
+  const input = src.kind === "ledger" ? "L" + src.ref : src.url || src.ref;
+  const it = await dispatch("intake:rulings", intakePrompt({ input, repo, project: project || null }), {
+    schema: INTAKE_SCHEMA,
+    agentType: JUDGE_AGENT,
+    phase: "Auto-confirm",
+  });
+  if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", "re-read of " + src.kind + ":" + src.ref + " " + it.status + ": " + (it.reason || "no reason"));
+  const problem = briefProblem(it.brief);
+  if (problem) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + ": " + problem);
+  const fresh = cleanBrief(it.brief);
+  if (fresh.repo !== brief.repo || !fresh.sources.some((x) => x.kind === src.kind && x.ref === src.ref))
+    halt(
+      "needs_human",
+      "re-read of " + src.kind + ":" + src.ref + " resolved to " + fresh.sources.map((x) => x.kind + ":" + x.ref).join(", ") + " in " + fresh.repo + ", not the sealed task",
+    );
+  gate("auto-confirm: re-read " + src.kind + ":" + src.ref + " for current rulings");
+  return fresh;
+}
+
+// The build from an approved plan ref: build mode, and plan mode with
+// confirm "auto" once its gates passed (opt.intent). Both run the same verify
+// path. opt.rerunGates: build mode with confirm "auto" re-runs G1-G3.
+async function buildFromRef(input, date, tiny, lay, ws, opt) {
+  state.mode = "build";
+  const repo = cleanRepo(tiny.repo);
   // load the sealed ref from the plan commit; nothing else is trusted
   phase("Verify");
   const ld = await infra(
@@ -2549,8 +3417,6 @@ async function buildMode(input, date) {
   const branch = lay.branch;
 
   // verify the approved plan
-  const sha8 = ref.plan_commit.slice(0, 8);
-  const critPrefix = branch + "--p" + sha8 + "-t-";
   const criteria = normCriteria(ref.criteria);
   const v = await infra(
     "infra:verify-plan",
@@ -2566,10 +3432,11 @@ async function buildMode(input, date) {
       halt("needs_human", "plan changed since approval: branch HEAD " + v.head + " does not descend from plan_commit " + ref.plan_commit);
     if (v.plan_sha256_head !== ref.plan_sha256 || (v.plan_touched || []).length)
       halt("needs_human", "plan changed since approval: a commit after " + ref.plan_commit + " changed " + ref.plan_path + " or " + ref.ref_path);
-    const ids = criteria.map((c) => c.id);
     for (const c of v.commits_since || [])
-      if (!isFleetCommit(String(c.subject || ""), branch, critPrefix, ids))
+      if (!isFleetCommit(String(c.subject || ""), names.taskId, names.slug))
         halt("needs_human", "plan changed since approval: branch moved by a non-fleet commit " + c.sha + " " + JSON.stringify(c.subject));
+    // earlier fleet commits are fenced too, before any role runs
+    fenceChanged("verify (commits since the plan commit)", v.changed_since || []);
     gate("verify: HEAD " + v.head + " descends from plan_commit by " + (v.commits_since || []).length + " fleet commit(s)");
   } else gate("verify: HEAD is plan_commit " + ref.plan_commit + "; plan hash matches");
 
@@ -2583,30 +3450,359 @@ async function buildMode(input, date) {
   };
   state.path = "full";
   const testable = testableOf(criteria);
+  const frozenFiles = [];
+  for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
+  // the ref file is frozen too (hashed as a config key, read-only for every role)
+  const hashedFiles = frozenFiles.concat([ref.ref_path]);
+  // the frozen maps (set at freeze; the run-state write keeps its ref current)
+  let frozen = null;
 
-  const critWt = {};
-  for (const c of testable) {
-    const p = lay.root + "/p" + sha8 + "-t-" + c.id;
-    critWt[c.id] = { criterion: c.id, path: p, branch: critPrefix + c.id, settings_local_json: settingsFor(p) };
+  // run-state: a build whose approved commit exists resumes at the step after
+  // its last completed milestone, or stops; it never re-runs the writers on a
+  // committed fleet branch
+  const stateRef = "refs/fleet/" + names.taskId + "/state";
+  const rs = await infra("infra:read-state", readStatePrompt({ main_worktree: mainWt, state_ref: stateRef }), "Verify", JUDGE_AGENT);
+  let resume = null;
+  if (rs.exists === true) {
+    let st = null;
+    try {
+      st = JSON.parse(String(rs.message || ""));
+    } catch (e) {
+      st = null;
+    }
+    if (st && typeof st === "object" && st.plan_commit !== ref.plan_commit && v.head === ref.plan_commit)
+      gate("stale run-state of plan " + st.plan_commit + " ignored: HEAD is the plan commit " + ref.plan_commit);
+    else {
+      const mis = (what) =>
+        halt("needs_human", "run-state mismatch: " + what + " (" + stateRef + "); a committed fleet branch is never rebuilt from the writers", "resume");
+      if (!st || typeof st !== "object") mis("unreadable state");
+      if (st.plan_commit !== ref.plan_commit) mis("plan_commit " + st.plan_commit + " != " + ref.plan_commit);
+      if (st.ref_sha256 !== tiny.ref_sha256) mis("ref_sha256");
+      if (st.seal !== ref.seal) mis("seal");
+      if (RESUME_NEXT[st.last_gate] === undefined) mis("last_gate " + JSON.stringify(st.last_gate));
+      if (typeof st.approved_sha !== "string" || rs.target !== st.approved_sha) mis("state target " + rs.target + " != approved_sha " + st.approved_sha);
+      if (rs.head !== st.approved_sha || v.head !== st.approved_sha) mis("HEAD " + rs.head + " != approved_sha " + st.approved_sha);
+      if (rs.head_tree !== st.code_tree) mis("tree " + rs.head_tree + " != code_tree " + st.code_tree);
+      if (rs.clean !== true) mis("worktree not clean");
+      const hr = await hasher("hasher:resume", mainWt, hashedFiles, "Verify");
+      if (mapsDigest(hr.hashes) !== st.maps_digest) mis("frozen maps changed since " + st.last_gate);
+      resume = st;
+    }
+  } else if (v.head !== ref.plan_commit)
+    halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
+
+  // confirm "auto" in build mode: re-run G1-G3 against the current rulings
+  // (a resumed build was approved already)
+  let intent = resume ? resume.intent || null : opt.intent;
+  if (opt.rerunGates && !resume) {
+    phase("Auto-confirm");
+    if (!Array.isArray(ref.plan_diff))
+      halt("needs_human", "plan_ref predates 2.1.0 (no plan_diff in " + tiny.ref_path + "): re-run plan to use confirm auto");
+    const fresh = await rereadBrief(brief, input.project, repo);
+    const g = await autoGates({
+      sfx: ":rerun",
+      common,
+      mainWt,
+      planCommit: ref.plan_commit,
+      brief: fresh,
+      callerRepo: repo,
+      branch,
+      defaultBranch,
+      criteria,
+      planPath: ref.plan_path,
+      planDiff: ref.plan_diff,
+      planFacts: ref.plan_facts,
+      files: hashedFiles,
+    });
+    if (!g.ok) return autoFailResult(g, ref.plan_path, tiny);
+    intent = g.intent;
   }
-  const prep = await infra(
-    "infra:prepare",
-    preparePrompt({ main_worktree: mainWt, branch, criterion_worktrees: testable.map((c) => critWt[c.id]) }),
-    "Tests",
-  );
-  if (prep.head !== v.head) halt("needs_human", "branch moved between verify (" + v.head + ") and prepare (" + prep.head + ")");
-  const planHead = ref.plan_commit;
-  gate(testable.length + " test worktrees ready off " + v.head);
+  const autoConfirmed = !!intent;
+  let approvedSha = null;
+  let pushes = 0;
+  let prOpens = 0;
+  let reviews = 0;
+  let pr = null;
+  let reviewNotes = [];
+  let wb = null;
+  // what the run-state records next to the approved sha
+  let shipTree = null;
+  let shipDigest = null;
+  let suiteResult = null;
+  const intentForPr = intent
+    ? { verdict: intent.verdict, reason: intent.reason || null, deviations: intent.deviations || [], coverage: intent.coverage || null }
+    : null;
 
-  // tests
+  async function openPr(label, extra) {
+    const r = requireOk(
+      "fleet-pr-opener",
+      await callRole(
+        "fleet-pr-opener",
+        label,
+        Object.assign({}, common, planCtx, {
+          repo: remoteSlug,
+          approved_sha: approvedSha,
+          criteria,
+          suite_result: suiteResult,
+          gates_not_run: state.gatesNotRun,
+          auto_confirmed: autoConfirmed,
+          intent: intentForPr,
+          review_notes: reviewNotes,
+        }, pr ? { pr_url: pr.pr_url, pr_number: pr.pr_number } : {}, extra || {}),
+        "PR",
+      ),
+    );
+    state.pr = r;
+    gate("pr-opener: " + (r.created ? "created " : "updated ") + r.pr_url);
+    if (state.gatesNotRun && state.gatesNotRun.length && r.gates_not_run_stated !== true)
+      halt("needs_human", "pr-opener did not state gates_not_run in the PR body; fix the body of " + r.pr_url);
+    return r;
+  }
+
+
+  // Records a milestone on the run-state ref (HEAD = the approved commit).
+  async function saveState(lastGate, label) {
+    const st = stripHeldOut(
+      Object.assign(
+        {
+          plan_commit: ref.plan_commit,
+          ref_sha256: tiny.ref_sha256,
+          seal: ref.seal,
+          last_gate: lastGate,
+          approved_sha: approvedSha,
+          code_tree: shipTree,
+          maps_digest: shipDigest,
+          pr_number: pr ? pr.pr_number : null,
+          pr_url: pr ? pr.pr_url : null,
+          pr_created: pr ? pr.created : null,
+          template_used: pr ? pr.template_used || null : null,
+          review: state.review,
+          reviews,
+          rounds: state.rounds,
+          suite_result: suiteResult,
+          gates_not_run: state.gatesNotRun,
+          auto_confirmed: autoConfirmed,
+          intent: intentForPr,
+        },
+        wb ? { write_back: wb.write_back, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
+      ),
+    );
+    const r = await infra(label, writeStatePrompt({ main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha }, JSON.stringify(st)), "PR");
+    if (r.head !== approvedSha) halt("failed", label + ": the run-state landed on " + r.head + ", not " + approvedSha);
+    if (typeof r.state_sha !== "string" || !/^[0-9a-f]{40}$/.test(r.state_sha)) halt("failed", label + " returned no usable state_sha");
+    // the script's own write: the next comparison starts from the new value
+    if (frozen) frozen.git[FLEETREF + stateRef] = r.state_sha;
+    gate("run-state " + lastGate + " at " + approvedSha);
+  }
+
+  // The steps after the commit, from `from` (push, pr, review, writeback),
+  // each followed by its run-state milestone. Returns null when done, or
+  // {gate, findings} when a coder round is needed.
+  async function ship(from) {
+    const steps = ["push", "pr", "review", "writeback"];
+    for (let i = steps.indexOf(from); i < steps.length; i++) {
+      const step = steps[i];
+      if (step === "push") {
+        // the repo's own pre-push hooks run here
+        phase("PR");
+        pushes++;
+        const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
+        const push = await infra(
+          pushLabel,
+          pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug }),
+          "PR",
+        );
+        if (push.push_result === "hook_rejected") {
+          const tail = String(push.hook_tail || "").trim();
+          gate("push of " + approvedSha + " rejected by a repo hook -> coder (fix_code)");
+          return {
+            gate: "push hook",
+            findings: [
+              {
+                target: "code",
+                criterion: null,
+                finding:
+                  "push rejected by a repo hook (pre-push) at " + approvedSha + "; satisfy it in production code, never bypass it. Hook output (tail):\n" +
+                  (tail || "(no output captured)"),
+              },
+            ],
+          };
+        }
+        if (push.push_result !== "ok")
+          halt("failed", pushLabel + " returned push_result " + JSON.stringify(push.push_result || null) + " with status ok");
+        if (push.remote_head !== approvedSha)
+          halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha);
+        gate("pushed " + branch + " at " + approvedSha);
+        await saveState("pushed", "infra:state:pushed:p" + pushes);
+      } else if (step === "pr") {
+        // draft PR at the pushed, approved sha (later rounds update its body)
+        prOpens++;
+        pr = await openPr("role:fleet-pr-opener" + (prOpens > 1 ? ":p" + prOpens : ""));
+        await saveState("pr_open", "infra:state:pr_open:p" + prOpens);
+      } else if (step === "review") {
+        if (!pr || !pr.pr_url || pr.pr_number == null) {
+          state.gatesNotRun = (state.gatesNotRun || []).concat([{ gate: "review", reason: "no PR to review (pr-opener returned no pr_url/pr_number)" }]);
+          gate("review skipped: no PR");
+          continue;
+        }
+        reviews++;
+        const rv = await reviewStep(reviews, {
+          mainWt, lay, remoteSlug, pr, approvedSha, baseRef: ref.plan_commit, criteria, obligations: planFacts.repo_obligations, hashedFiles,
+        });
+        state.review = { verdict: rv.verdict, blocking: rv.blocking, nits: rv.nits, rounds: reviews, sweep: rv.sweep, model: rv.model };
+        if (rv.blocking.length) {
+          if (reviews >= MAX_REVIEWS)
+            halt(
+              "needs_human",
+              "review round " + reviews + " requested changes again: " + rv.blocking.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "),
+              "review",
+            );
+          reviewNotes = rv.nits;
+          gate("review v" + reviews + ": changes_requested (" + rv.blocking.length + " blocking) -> coder (fix_code)");
+          return { gate: "review", findings: rv.blocking.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
+        }
+        if (rv.nits.length) {
+          reviewNotes = rv.nits;
+          pr = await openPr("role:fleet-pr-opener:notes");
+        }
+        await saveState("reviewed", "infra:state:reviewed:v" + reviews);
+      } else {
+        phase("Write-back");
+        wb = await writeBack({ ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr ? pr.pr_url : null });
+        await saveState("written_back", "infra:state:written_back");
+      }
+    }
+    return null;
+  }
+
+  function finishOk(resumedAt) {
+    history.agents += state.agents - opt.agentsBase;
+    gate("cumulative: run " + history.runs + ", re-plans " + history.replans + ", agents " + history.agents);
+    const out = finish("ok", resumedAt === "done" ? "resumed: the run had already finished; recorded result" : "draft PR ready for review");
+    out.created = pr ? pr.created : null;
+    out.template_used = pr ? pr.template_used || null : null;
+    out.cumulative = history;
+    out.auto_confirmed = autoConfirmed;
+    out.intent = intentForPr;
+    if (resumedAt) out.resumed_at = resumedAt;
+    return Object.assign(out, wb || {});
+  }
+
+  if (resume) {
+    approvedSha = resume.approved_sha;
+    shipTree = resume.code_tree;
+    shipDigest = resume.maps_digest;
+    suiteResult = resume.suite_result || null;
+    state.gatesNotRun = resume.gates_not_run || null;
+    state.review = resume.review || null;
+    reviews = resume.reviews || 0;
+    if (resume.rounds && typeof resume.rounds === "object") state.rounds = resume.rounds;
+    if (resume.pr_url || resume.pr_number != null) {
+      pr = { pr_url: resume.pr_url, pr_number: resume.pr_number, created: resume.pr_created, template_used: resume.template_used };
+      state.pr = pr;
+      prOpens = 1;
+    }
+    if (resume.write_back) wb = { write_back: resume.write_back, ledger_status: resume.ledger_status, comment_status: resume.comment_status, comment_text: resume.comment_text };
+    const next = RESUME_NEXT[resume.last_gate];
+    if (next === "done") {
+      gate("resuming at done: run-state written_back at " + approvedSha + "; returning the recorded result");
+      return finishOk("done");
+    }
+    gate("resuming at " + next + " (run-state " + resume.last_gate + " at " + approvedSha + ")");
+    const fix = await ship(next);
+    if (fix)
+      halt(
+        "needs_human",
+        "resumed run at " + next + ": the " + fix.gate + " gate needs a coder round, which a resumed run cannot start (no freeze); fix by hand or re-plan: " +
+          fix.findings.map((f) => f.finding).join("; "),
+        fix.gate === "review" ? "review" : "resume",
+      );
+    return finishOk(next);
+  }
+
+  // tests: every writer works in the ONE fleet worktree, uncommitted, on
+  // disjoint test files. Nothing is committed until the code judge approves.
   function writerCriterion(c) {
     const o = Object.assign({}, c);
     delete o.test_files;
     return o;
   }
   const writerOut = {};
-  const coderCommits = [];
-  let lastJudgeFp = null;
+  // the last worktree state a gate saw (a hasher result); the next writer
+  // round's ownership delta starts from it
+  let last = null;
+  let freezeTree = null;
+  let codeTree = null;
+
+  // One writer round, then the ownership check: HEAD did not move, every
+  // changed path (tree delta from the round start, plus any hasher-map key)
+  // is a test file of a criterion pending this round and was reported in its
+  // writer's `files`, and no writer reports another criterion's file.
+  async function writerRound(n, pending, codeFindings) {
+    const pre = last || (await hasher("hasher:pre-writers:r" + n, mainWt, hashedFiles, "Tests"));
+    state.agents += pending.length;
+    const results = await parallel(
+      pending.map((p) => () => {
+        const c = p.criterion;
+        return roleAgent(
+          "fleet-test-writer",
+          "role:fleet-test-writer:" + c.id + ":r" + n,
+          rolePrompt(
+            "fleet-test-writer",
+            Object.assign({}, common, planCtx, {
+              criterion: writerCriterion(c),
+              test_files: c.test_files,
+              test_cmd: planFacts.test_cmd,
+              test_env: TEST_ENV,
+              test_env_note: TEST_ENV_NOTE,
+              routed_findings: p.findings,
+            },
+            codeFindings ? { code_judge_findings: codeFindings.filter((f) => f.criterion === c.id) } : {}),
+          ),
+          { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" },
+        );
+      }),
+    );
+    const roundOut = [];
+    results.forEach((r, idx) => {
+      const cid = pending[idx].criterion.id;
+      if (r == null) halt("failed", "test writer " + cid + " r" + n + " returned no result");
+      checkRole("fleet-test-writer", r);
+      collect("fleet-test-writer", r);
+      requireOk("fleet-test-writer " + cid, r);
+      writerOut[cid] = stripHeldOut(r);
+      roundOut.push(writerOut[cid]);
+    });
+    const post = await hasher("hasher:post-writers:r" + n, mainWt, hashedFiles, "Tests", pre.fingerprint.tree);
+    if (post.fingerprint.head !== pre.fingerprint.head)
+      halt("needs_human", "writer committed: HEAD moved from " + pre.fingerprint.head + " to " + post.fingerprint.head + " in test round " + n + "; writers never commit", "ownership");
+    const owner = {};
+    for (const p of pending) for (const f of p.criterion.test_files) owner[f] = p.criterion.id;
+    const reported = {};
+    for (const p of pending) {
+      const cid = p.criterion.id;
+      for (const f of writerOut[cid].files) {
+        const nf = normPath(f);
+        if (owner[nf] !== cid) halt("needs_human", "writer " + cid + " touched " + nf + " in test round " + n + " (not its own test file)", "ownership");
+        reported[nf] = true;
+      }
+    }
+    fenceChanged("test round " + n, post.changed);
+    const changed = post.changed.map(normPath);
+    for (const k of changedKeys(pre.hashes, post.hashes)) {
+      if (k.map === "ignored" || (k.map === "git" && k.key.indexOf(FLEETREF) === 0))
+        halt("needs_human", violationName(k) + " in test round " + n, "ownership");
+      if (!(k.map === "files" && owner[k.key])) changed.push(k.name);
+    }
+    const ids = pending.map((p) => p.criterion.id).join(", ");
+    for (const p of changed.filter((x, i, a) => a.indexOf(x) === i)) {
+      if (!owner[p]) halt("needs_human", "writer touched " + p + " in test round " + n + " (not a test file of " + ids + ")", "ownership");
+      if (!reported[p]) halt("needs_human", "writer touched " + p + " in test round " + n + " but it was not reported in any writer's files", "ownership");
+    }
+    gate("test round " + n + ": writers ok: " + ids + "; " + changed.length + " owned path(s) changed, HEAD unchanged");
+    last = post;
+    return roundOut;
+  }
 
   // pending: [{criterion, findings}] to (re)write this round.
   // codeFindings: set on a fix_tests re-entry; the judge then runs first.
@@ -2615,95 +3811,32 @@ async function buildMode(input, date) {
       state.rounds.tests++;
       const n = state.rounds.tests;
       const judgeFirst = !!codeFindings && i === 0;
-      const roundOut = [];
+      let roundOut = [];
       if (!judgeFirst) {
-        const reentry = !!codeFindings;
-        reserve(pending.length + 4 + (reentry ? 1 : 0), "test round " + n);
-        if (reentry)
-          // writers on a fix_tests re-entry build on the coder's commits
-          await infra(
-            "infra:sync:r" + n,
-            syncPrompt({
-              branch,
-              criterion_worktrees: testable.map((c) => ({
-                criterion: c.id,
-                path: critWt[c.id].path,
-                branch: critWt[c.id].branch,
-              })),
-            }),
-            "Tests",
-          );
-        state.agents += pending.length;
-        const results = await parallel(
-          pending.map((p) => () => {
-            const c = p.criterion;
-            const wt = critWt[c.id];
-            return roleAgent(
-              "fleet-test-writer",
-              "role:fleet-test-writer:" + c.id + ":r" + n,
-              rolePrompt(
-                "fleet-test-writer",
-                Object.assign({}, common, planCtx, {
-                  criterion: writerCriterion(c),
-                  test_files: c.test_files,
-                  test_cmd: planFacts.test_cmd,
-                  worktree: wt.path,
-                  branch: wt.branch,
-                  routed_findings: p.findings,
-                },
-                codeFindings
-                  ? { code_judge_findings: codeFindings.filter((f) => f.criterion === c.id) }
-                  : {}),
-              ),
-              { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" },
-            );
-          }),
-        );
-        results.forEach((r, idx) => {
-          const cid = pending[idx].criterion.id;
-          if (r == null) halt("failed", "test writer " + cid + " r" + n + " returned no result");
-          checkRole("fleet-test-writer", r);
-          collect("fleet-test-writer", r);
-          requireOk("fleet-test-writer " + cid, r);
-          writerOut[cid] = stripHeldOut(r);
-          roundOut.push(writerOut[cid]);
-        });
-        gate("test round " + n + ": writers ok: " + pending.map((p) => p.criterion.id).join(", "));
-        await infra(
-          "infra:integrate:r" + n,
-          integratePrompt({
-            main_worktree: mainWt,
-            branch,
-            criterion_branches: testable.map((c) => critWt[c.id].branch),
-          }),
-          "Tests",
-        );
+        // (pre-hasher), writers, post-hasher, judge, post-judge hasher
+        reserve(pending.length + 3 + (last ? 0 : 1), "test round " + n);
+        roundOut = await writerRound(n, pending, codeFindings);
       } else {
-        reserve(3, "test round " + n);
+        reserve(2, "test round " + n);
       }
       // writer_outputs: this round's writer results; a judge-first re-entry
       // round ran no writer, so it gets the latest result per criterion
       const judgeInputs = Object.assign({}, common, planCtx, planFacts, {
         criteria: testable,
-        base_ref: planHead,
+        base_ref: ref.plan_commit,
+        plan_commit: ref.plan_commit,
+        freeze_tree: freezeTree,
+        code_tree: codeTree,
         writer_outputs: judgeFirst ? testable.map((c) => writerOut[c.id]).filter(Boolean) : roundOut,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
+        test_env: TEST_ENV,
+        test_env_note: TEST_ENV_NOTE,
       });
       // every round of a fix_tests re-entry carries the code-judge context
-      if (codeFindings) {
-        judgeInputs.code_judge_findings = codeFindings;
-        judgeInputs.code_commits = coderCommits.slice();
-      }
-      const judgedTests = await judged(
-        "fleet-test-judge",
-        "role:fleet-test-judge:r" + n,
-        "test-judge:r" + n,
-        judgeInputs,
-        mainWt,
-        "Tests",
-      );
-      const tj = judgedTests.r;
-      lastJudgeFp = judgedTests.fp;
+      if (codeFindings) judgeInputs.code_judge_findings = codeFindings;
+      const jt = await judged("fleet-test-judge", "role:fleet-test-judge:r" + n, "test-judge:r" + n, judgeInputs, mainWt, "Tests", last, hashedFiles);
+      const tj = jt.r;
+      last = jt.state;
       const routed = tj.routed_findings || [];
       const planF = routed.filter((f) => f.target === "plan");
       if (planF.length)
@@ -2719,7 +3852,7 @@ async function buildMode(input, date) {
       if (tj.verdict !== "revise") halt("failed", "test-judge returned no verdict");
       const byCrit = {};
       for (const f of routed)
-        if (f.target === "tests" && critWt[f.criterion]) (byCrit[f.criterion] = byCrit[f.criterion] || []).push(f);
+        if (f.target === "tests" && testable.some((c) => c.id === f.criterion)) (byCrit[f.criterion] = byCrit[f.criterion] || []).push(f);
       pending = testable.filter((c) => byCrit[c.id]).map((c) => ({ criterion: c, findings: byCrit[c.id] }));
       if (!pending.length) halt("needs_human", "test-judge revise r" + n + " routed no finding to a known criterion");
       gate("test-judge r" + n + ": revise -> " + pending.map((p) => p.criterion.id).join(", "));
@@ -2729,23 +3862,17 @@ async function buildMode(input, date) {
 
   // freeze
   let freezes = 0;
-  let frozen = null;
   let freezeRef = null;
-  // the first freeze ref, before any coder commit: a re-freeze after fix_tests
-  // moves freeze_ref past earlier coder commits, so judges diff from this one
+  // HEAD at the first freeze: the base every diff of this build starts from
   let codeBaseRef = null;
-  const frozenFiles = [];
-  for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
-  // the ref file is frozen too (hashed as a config key, read-only for every role)
-  const hashedFiles = frozenFiles.concat([ref.ref_path]);
 
   // refreeze: {round, criteria} after an approved fix_tests round. Only the
   // test files of those criteria may change; any other key -> needs_human.
   async function freeze(refreeze) {
     freezes++;
     await purgeBytecode("infra:purge-bytecode:freeze-f" + freezes, mainWt, "Freeze");
-    const h = await hasher("hasher:freeze:f" + freezes, mainWt, "hashes", hashedFiles, "Freeze");
-    if (lastJudgeFp && !sameFingerprint(lastJudgeFp, h.fingerprint))
+    const h = await hasher("hasher:freeze:f" + freezes, mainWt, hashedFiles, "Freeze");
+    if (last && !sameState(last, h))
       halt("needs_human", "worktree changed between test approval and freeze", "fingerprint");
     if (h.hashes.suspicious.length)
       halt(
@@ -2758,33 +3885,24 @@ async function buildMode(input, date) {
       const allowed = {};
       for (const c of testable) if (refreeze.criteria.indexOf(c.id) >= 0) for (const f of c.test_files) allowed[f] = true;
       const changed = [];
-      for (const m of HASH_MAPS) {
-        const a = frozen[m] || {};
-        const b = h.hashes[m] || {};
-        const keys = {};
-        for (const k of Object.keys(a)) keys[k] = true;
-        for (const k of Object.keys(b)) keys[k] = true;
-        for (const k of Object.keys(keys).sort()) {
-          const before = k in a ? a[k] : null;
-          const after = k in b ? b[k] : null;
-          if (before === after) continue;
-          const name = keyName(m, k);
-          if (m !== "files" || !allowed[k]) halt("needs_human", "re-freeze touched unrouted path " + name, "hash");
-          changed.push({ path: name, before, after });
-        }
+      for (const k of changedKeys(frozen, h.hashes)) {
+        if (k.map !== "files" || !allowed[k.key]) halt("needs_human", "re-freeze touched unrouted path " + k.name, "hash");
+        changed.push({ path: k.name, before: k.key in frozen.files ? frozen.files[k.key] : null, after: k.key in h.hashes.files ? h.hashes.files[k.key] : null });
       }
       state.refreezeLog.push({
         round: refreeze.round,
-        freeze_ref_before: freezeRef,
-        freeze_ref_after: h.fingerprint.head,
+        freeze_tree_before: freezeTree,
+        freeze_tree_after: h.fingerprint.tree,
         changed,
       });
       gate("re-freeze after fix_tests (code round " + refreeze.round + "): " + changed.length + " frozen test file(s) changed");
     }
     frozen = h.hashes;
     freezeRef = h.fingerprint.head;
+    freezeTree = h.fingerprint.tree;
     if (!codeBaseRef) codeBaseRef = freezeRef;
-    gate("freeze f" + freezes + " at " + freezeRef + ": " + countKeys(frozen) + " hashed keys");
+    last = h;
+    gate("freeze f" + freezes + " at tree " + freezeTree + " (HEAD " + freezeRef + "): " + countKeys(frozen) + " hashed keys");
   }
 
   phase("Tests");
@@ -2798,13 +3916,13 @@ async function buildMode(input, date) {
   // code
   phase("Code");
   const frozenNote =
-    "frozen_tests holds the criterion test files only (sha256 of the content). frozen_config_sections is one flat map of everything else that is frozen: whole-file runner config and the .gitignore files git reads (not those inside ignored dirs) keyed by path (sha256), <path>#<section> (sha256 of a canonicalised test-runner config section), git:info/exclude and git:core.excludesFile (sha256 of ignore-rule files outside the worktree), and symlink:<rel> whose values are link targets, not hashes. Special values: ABSENT (the section did not exist at freeze), MISSING (the file did not exist), UNPARSEABLE (the file could not be parsed at freeze). Every key is read-only. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. code_base_ref is the commit before the first coder round; diff production changes from it.";
+    "frozen_tests holds the criterion test files only (sha256 of the content). frozen_config_sections is one flat map of everything else that is frozen: whole-file runner config and the .gitignore files git reads (not those inside ignored dirs) keyed by path (sha256), <path>#<section> (sha256 of a canonicalised test-runner config section), git:info/exclude and git:core.excludesFile (sha256 of ignore-rule files outside the worktree), and symlink:<rel> whose values are link targets, not hashes. Special values: ABSENT (the section did not exist at freeze), MISSING (the file did not exist), UNPARSEABLE (the file could not be parsed at freeze). Every key is read-only. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. Nothing is committed until the code judge approves: the tests and the code stay uncommitted in the worktree. freeze_tree is the worktree tree at freeze; diff production changes with `git diff <freeze_tree>` (code_base_ref is HEAD at the first freeze).";
   let coderFindings = [];
-  let approvedSha = null;
-  let approval = null;
   // the script gate that rejected the last code round, for the cap message
   let lastRoundGate = null;
-  let pushes = 0;
+  // HEAD the coder must leave alone; it moves only at the commit step
+  let expectedHead = v.head;
+  let commitsMade = v.head !== ref.plan_commit;
   for (;;) {
     if (state.rounds.code >= MAX_CODE_ROUNDS)
       halt(
@@ -2816,14 +3934,17 @@ async function buildMode(input, date) {
     state.rounds.code++;
     const m = state.rounds.code;
     lastRoundGate = null;
-    // coder, purge, hasher, script check, judge, fingerprint, push
-    reserve(6 + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
+    // coder, purge, hasher, script check, judge, fingerprint, commit, push
+    reserve(7 + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
       frozen_tests: testFilesView(frozen, frozenFiles),
       frozen_config_sections: configView(frozen, frozenFiles),
       frozen_tests_note: frozenNote,
       freeze_ref: freezeRef,
+      freeze_tree: freezeTree,
+      code_tree: codeTree,
+      plan_commit: ref.plan_commit,
       code_base_ref: codeBaseRef,
       test_env: TEST_ENV,
       test_env_note: TEST_ENV_NOTE,
@@ -2838,17 +3959,20 @@ async function buildMode(input, date) {
       null,
       true,
     );
-    if (Array.isArray(coder.commits)) for (const s of coder.commits) if (typeof s === "string") coderCommits.push(s);
-    // purge before the check and the judge; the judge's "before" fingerprint
-    // is the post-purge hasher fingerprint
+    // purge before the check and the judge; the judge's "before" state is the
+    // post-purge hasher state
     await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");
-    const h = await hasher("hasher:post-coder:r" + m, mainWt, "hashes", hashedFiles, "Code");
+    // changed: every path of this build (tracked and untracked), from the plan commit
+    const h = await hasher("hasher:post-coder:r" + m, mainWt, hashedFiles, "Code", ref.plan_commit);
+    if (h.fingerprint.head !== expectedHead)
+      halt("needs_human", "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + "; the coder works uncommitted", "ownership");
+    fenceChanged("code round " + m, h.changed);
     const viol = diffHashes(frozen, h.hashes);
     const coderDrift = contractProblem("fleet-coder", coder);
     if (viol.length && (coderDrift || coder.status !== "ok"))
       halt(
         "needs_human",
-        "code round " + m + ": hash violation on " + viol.join(", ") + " (frozen paths changed since " + freezeRef + ")" +
+        "code round " + m + ": hash violation on " + viol.join(", ") + " (frozen paths changed since freeze tree " + freezeTree + ")" +
           " (role output also: " + (coder.status !== "ok" ? roleStatusText("fleet-coder", coder) : coderDrift) + ")",
         "hash",
       );
@@ -2857,6 +3981,7 @@ async function buildMode(input, date) {
       requireOk("fleet-coder", coder);
     }
     collect("fleet-coder", coder);
+    last = h;
     if (viol.length) {
       lastRoundGate = "hash";
       coderFindings = [
@@ -2866,24 +3991,24 @@ async function buildMode(input, date) {
           finding:
             "frozen test or runner-config hash changed: " +
             viol.join(", ") +
-            " -- frozen paths are read-only; restore them to " +
-            freezeRef +
+            " -- frozen paths are read-only; restore them to their content in freeze tree " +
+            freezeTree +
             " and fix production code instead",
         },
       ];
       gate("code round " + m + ": hash violation on " + viol.join(", ") + " -> coder output rejected");
       continue;
     }
-    // re-check check_cmd scripts at the commit the judge sees; a failure is
+    // re-check check_cmd scripts in the tree the judge sees; a failure is
     // judge-only for this round. The check is read-only: the judge's
     // fingerprint (taken at the post-coder hash) catches any change.
     const judgeObligations = await checkScripts("infra:check-scripts:r" + m, planFacts.repo_obligations, mainWt, "Code");
-    // the post-coder fingerprint is the judge's "before" fingerprint
-    const judgedCode = await judged(
+    const jc = await judged(
       "fleet-code-judge",
       "role:fleet-code-judge:r" + m,
       "code-judge:r" + m,
       Object.assign({}, codeInputs, {
+        code_tree: h.fingerprint.tree,
         coder_output: stripHeldOut(coder),
         hash_recheck: hashRecheck(frozen, h.hashes),
         held_out_results: HELD_OUT_NOT_RUN,
@@ -2892,66 +4017,19 @@ async function buildMode(input, date) {
       }),
       mainWt,
       "Code",
-      h.fingerprint,
+      h,
+      hashedFiles,
     );
-    const cj = judgedCode.r;
+    const cj = jc.r;
+    last = jc.state;
+    codeTree = jc.state.fingerprint.tree;
     const routed = cj.routed_findings || [];
-    if (cj.verdict === "approve") {
-      const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check);
-      if (obFail.length) {
-        coderFindings = obFail;
-        lastRoundGate = "obligations";
-        gate(
-          "code round " + m + ": obligations gate: code-judge approve converted to fix_code (" +
-            obFail.map((f) => f.finding).join("; ") + ")",
-        );
-        continue;
-      }
-      const sha = judgedCode.fp.head;
-      gate("code-judge r" + m + ": approve at " + sha);
-      // push the approved sha; the repo's own pre-push hooks run here
-      phase("PR");
-      pushes++;
-      const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
-      const push = await infra(
-        pushLabel,
-        pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: sha, remote_slug: remoteSlug }),
-        "PR",
-      );
-      if (push.push_result === "hook_rejected") {
-        // a repo hook declined the push: the coder fixes it, the judge re-approves
-        const tail = String(push.hook_tail || "").trim();
-        coderFindings = [
-          {
-            target: "code",
-            criterion: null,
-            finding:
-              "push rejected by a repo hook (pre-push) at " + sha + "; satisfy it in production commits, never bypass it. Hook output (tail):\n" +
-              (tail || "(no output captured)"),
-          },
-        ];
-        lastRoundGate = "push hook";
-        gate("code round " + m + ": push of " + sha + " rejected by a repo hook -> coder (fix_code)");
-        phase("Code");
-        continue;
-      }
-      if (push.push_result !== "ok")
-        halt("failed", pushLabel + " returned push_result " + JSON.stringify(push.push_result || null) + " with status ok");
-      if (push.remote_head !== sha)
-        halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + sha);
-      gate("pushed " + branch + " at " + sha);
-      approvedSha = sha;
-      approval = cj;
-      state.gatesNotRun = gatesNotRun(cj.gates_not_run);
-      if (state.gatesNotRun.length && String(cj.reason || "").indexOf(GATES_PREFIX) !== 0)
-        gate("warning: code-judge approve reason does not start with '" + GATES_PREFIX + "' although gates did not run");
-      break;
-    }
     if (cj.verdict === "plan_wrong")
       return replan({
         ref, brief, names, lay, common, date, history, remoteSlug,
         findings: routed.filter((f) => f.target === "plan"),
-        expectedHead: judgedCode.fp.head,
+        expectedHead: jc.state.fingerprint.head,
+        expectedTree: codeTree,
       });
     if (cj.verdict === "fix_code") {
       coderFindings = routed.filter((f) => f.target === "code");
@@ -2973,41 +4051,173 @@ async function buildMode(input, date) {
       coderFindings = routed.filter((f) => f.target === "code");
       continue;
     }
-    halt("failed", "code-judge returned no verdict");
+    if (cj.verdict !== "approve") halt("failed", "code-judge returned no verdict");
+    const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check);
+    if (obFail.length) {
+      coderFindings = obFail;
+      lastRoundGate = "obligations";
+      gate(
+        "code round " + m + ": obligations gate: code-judge approve converted to fix_code (" +
+          obFail.map((f) => f.finding).join("; ") + ")",
+      );
+      continue;
+    }
+    gate("code-judge r" + m + ": approve of tree " + codeTree);
+
+    // the commit step: the first commit of this build, with the repo's hooks
+    const subject = commitsMade ? fixSubject(names.taskId, m) : commitSubject(names.taskId, names.slug);
+    const cs = await infra(
+      "infra:commit:r" + m,
+      commitStepPrompt({
+        main_worktree: mainWt,
+        branch,
+        expected_head: expectedHead,
+        code_tree: codeTree,
+        subject,
+        // the hooks path frozen at freeze (null: git's default hooks dir)
+        hooks_path: frozen.git["core.hooksPath"] && frozen.git["core.hooksPath"] !== "UNSET" ? frozen.git["core.hooksPath"] : null,
+      }),
+      "Code",
+    );
+    if (cs.staged_tree !== codeTree)
+      halt("needs_human", "commit step r" + m + ": staged tree " + cs.staged_tree + " != code tree " + codeTree + "; nothing committed", "commit");
+    if (cs.worktree_tree !== codeTree)
+      halt("needs_human", "commit step r" + m + ": hook modified files (worktree tree " + cs.worktree_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
+    if (cs.commit_result === "hook_rejected") {
+      const tail = String(cs.hook_tail || "").trim();
+      coderFindings = [
+        {
+          target: "code",
+          criterion: null,
+          finding:
+            "the commit was rejected by a repo commit hook (pre-commit) for tree " + codeTree + "; satisfy it in production code, never bypass it. Hook output (tail):\n" +
+            (tail || "(no output captured)"),
+        },
+      ];
+      lastRoundGate = "commit hook";
+      gate("code round " + m + ": commit rejected by a repo hook -> coder (fix_code)");
+      continue;
+    }
+    if (cs.commit_result !== "committed" || typeof cs.head !== "string" || !SHA_RE.test(cs.head))
+      halt("failed", "commit step r" + m + " returned commit_result " + JSON.stringify(cs.commit_result || null) + " and head " + JSON.stringify(cs.head || null));
+    if (cs.head_tree !== codeTree)
+      halt("needs_human", "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
+    expectedHead = cs.head;
+    commitsMade = true;
+    approvedSha = cs.head;
+    shipTree = codeTree;
+    shipDigest = mapsDigest(jc.state.hashes);
+    suiteResult = cj.suite_result || null;
+    state.gatesNotRun = gatesNotRun(cj.gates_not_run);
+    if (state.gatesNotRun.length && String(cj.reason || "").indexOf(GATES_PREFIX) !== 0)
+      gate("warning: code-judge approve reason does not start with '" + GATES_PREFIX + "' although gates did not run");
+    gate("committed tree " + codeTree + " as " + approvedSha + " (" + JSON.stringify(subject) + ")");
+    await saveState("committed", "infra:state:committed:r" + m);
+
+    // push, PR, review, write-back; a hook or review finding returns to the coder
+    const fix = await ship("push");
+    if (!fix) break;
+    coderFindings = fix.findings;
+    lastRoundGate = fix.gate;
+    phase("Code");
   }
 
-  // PR at the pushed, approved sha
-  const pr = requireOk(
-    "fleet-pr-opener",
-    await callRole(
-      "fleet-pr-opener",
-      "role:fleet-pr-opener",
-      Object.assign({}, common, planCtx, {
-        repo: remoteSlug,
-        approved_sha: approvedSha,
-        criteria,
-        suite_result: approval.suite_result || null,
-        gates_not_run: state.gatesNotRun,
-      }),
-      "PR",
-    ),
-  );
-  state.pr = pr;
-  gate("pr-opener: " + (pr.created ? "created " : "updated ") + pr.pr_url);
-  if (state.gatesNotRun && state.gatesNotRun.length && pr.gates_not_run_stated !== true)
-    halt("needs_human", "pr-opener did not state gates_not_run in the PR body; fix the body of " + pr.pr_url);
+  return finishOk(null);
+}
 
-  phase("Write-back");
-  const wb = await writeBack({
-    ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr.pr_url,
-  });
-  history.agents += state.agents;
-  gate("cumulative: run " + history.runs + ", re-plans " + history.replans + ", agents " + history.agents);
-  const out = finish("ok", "draft PR ready for review");
-  out.created = pr.created;
-  out.template_used = pr.template_used || null;
-  out.cumulative = history;
-  return Object.assign(out, wb);
+function reviewFindingText(f) {
+  return (
+    "review " + (f.id || "-") + " [" + (f.category || "other") + "] " + (f.file || "-") + (f.line ? ":" + f.line : "") + ": " + f.summary +
+    (f.evidence ? " (evidence: " + f.evidence + ")" : "")
+  );
+}
+
+// The independent review (pr-review, and the non-weakening sweep for gate
+// changes), each fingerprinted on the fleet worktree. Probes run in detached
+// worktrees under scratch_dir; the cleanup step always runs, even when the
+// review stops the run. Returns {verdict, blocking, nits, sweep, model}.
+async function reviewStep(k, ctx) {
+  // paths, pre-hasher, review, post-hasher, sweep, post-hasher, cleanup
+  reserve(7, "review " + k);
+  phase("Review");
+  try {
+    const rp = await infra(
+      "infra:review-paths:v" + k,
+      reviewPathsPrompt({ main_worktree: ctx.mainWt, base_ref: ctx.baseRef, head_sha: ctx.approvedSha }),
+      "Review",
+      JUDGE_AGENT,
+    );
+    if (!Array.isArray(rp.changed_paths)) halt("failed", "infra:review-paths:v" + k + " returned no changed_paths");
+    const changedPaths = rp.changed_paths.map(normPath).filter(Boolean);
+    const inputs = {
+      pr_url: ctx.pr.pr_url,
+      pr_number: ctx.pr.pr_number,
+      repo: ctx.remoteSlug,
+      base_ref: ctx.baseRef,
+      head_sha: ctx.approvedSha,
+      worktree: ctx.mainWt,
+      scratch_dir: ctx.lay.scratch,
+      criteria: ctx.criteria.map((c) => ({ id: c.id, text: c.text })),
+      repo_obligations: ctx.obligations,
+      changed_paths: changedPaths,
+      mode: "self-authored",
+      fleet: true,
+    };
+    const pre = await hasher("hasher:pre-review:v" + k, ctx.mainWt, ctx.hashedFiles, "Review");
+    if (pre.fingerprint.head !== ctx.approvedSha)
+      halt("needs_human", "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha, "review");
+    const jr = await judged("pr-review", "role:pr-review:v" + k, "pr-review:v" + k, inputs, ctx.mainWt, "Review", pre, ctx.hashedFiles);
+    const r = jr.r;
+    const blocking = r.findings.filter((f) => f && f.severity === "blocking");
+    const nits = r.findings.filter((f) => f && f.severity !== "blocking");
+    if (r.verdict === "changes_requested" && !blocking.length)
+      blocking.push({ id: "review", severity: "blocking", category: "other", file: null, line: null, summary: "pr-review requested changes: " + (r.reason || "no reason"), evidence: "" });
+    let sweep = null;
+    const triggers = changedPaths.filter((p) => GATE_PATH_RE.test(p));
+    if (r.touches_gate === true || triggers.length) {
+      gate("review v" + k + ": sweep triggered (" + (r.touches_gate === true ? "touches_gate" : "") + (triggers.length ? " paths " + triggers.join(", ") : "") + ")");
+      const js = await judged(
+        "gate-change-nonweakening-sweep",
+        "role:gate-change-nonweakening-sweep:v" + k,
+        "sweep:v" + k,
+        inputs,
+        ctx.mainWt,
+        "Review",
+        jr.state,
+        ctx.hashedFiles,
+      );
+      const sw = js.r;
+      for (const f of sw.findings) if (f && f.severity === "blocking") blocking.push(f);
+      for (const f of sw.findings) if (f && f.severity !== "blocking") nits.push(f);
+      if (sw.verdict === "weakening") {
+        const loose = sw.units.filter((u) => u && u.shipped_refuses === true && u.new_refuses === false).map((u) => u.unit + " (" + u.mutation + ")");
+        blocking.push({
+          id: "sweep",
+          severity: "blocking",
+          category: "fail_open",
+          file: null,
+          line: null,
+          summary: "gate change weakens a gate: the shipped gate refuses and the new one accepts " + (loose.join("; ") || "(see sweep units)"),
+          evidence: "gate-change-nonweakening-sweep verdict weakening",
+        });
+      }
+      sweep = { verdict: sw.verdict, units: sw.units.length, model: state.models["gate-change-nonweakening-sweep"].model };
+    }
+    const verdict = blocking.length ? "changes_requested" : "approve";
+    gate("review v" + k + ": " + verdict + " (" + blocking.length + " blocking, " + nits.length + " nits)" + (sweep ? "; sweep " + sweep.verdict : ""));
+    return { verdict, blocking, nits, sweep, model: state.models["pr-review"].model };
+  } finally {
+    try {
+      const c = await softDispatch(
+        "infra:review-cleanup:v" + k,
+        reviewCleanupPrompt({ main_worktree: ctx.mainWt, scratch_dir: ctx.lay.scratch }),
+        { schema: INFRA_SCHEMA, phase: "Review" },
+      );
+      if (!c || c.status !== "ok") gate("review cleanup v" + k + " did not finish: " + ((c && c.reason) || "no result"));
+    } catch (e) {
+      gate("review cleanup v" + k + " failed: " + String((e && e.message) || e));
+    }
+  }
 }
 
 // plan_wrong: re-plan from the approved plan in a detached worktree, commit
@@ -3019,6 +4229,7 @@ async function replan(ctx) {
   gate("code-judge verdict plan_wrong: " + proposed.join("; "));
   const n = history.replans + 1;
   const superseded = lay.branch + "--superseded-" + n;
+  const supersededTree = "refs/fleet/" + lay.key + "/superseded-" + n + "-tree";
   const replanWt = lay.root + "/replan-" + n;
   // worktree, planner, audit, commit, reset: reserve all before any step
   reserve(5, "re-plan " + n);
@@ -3061,6 +4272,7 @@ async function replan(ctx) {
       taskId: names.taskId,
       slug: names.slug,
       tldr: p.tldr,
+      planDiff: p.planDiff,
       planFacts: p.planFacts,
       history: { runs: history.runs, replans: n, agents: history.agents },
     },
@@ -3072,7 +4284,9 @@ async function replan(ctx) {
       main_worktree: lay.mainWt,
       branch: lay.branch,
       expected_head: ctx.expectedHead,
+      expected_tree: ctx.expectedTree,
       superseded_branch: superseded,
+      superseded_tree_ref: supersededTree,
       new_plan_commit: newHead,
       replan_worktree: replanWt,
     }),
@@ -3086,6 +4300,7 @@ async function replan(ctx) {
     proposed_plan_change: proposed,
     plan_findings: ctx.findings,
     superseded_ref: superseded,
+    superseded_tree_ref: supersededTree,
     superseded_head: rs.superseded_head || ctx.expectedHead,
   });
 }
@@ -3192,6 +4407,8 @@ async function main(input) {
   if (MODES.indexOf(mode) < 0)
     stop("needs_human", "args.mode must be \"plan\" or \"build\", got " + JSON.stringify(mode === undefined ? null : mode) + ": run /build-task <task>");
   state.mode = mode;
+  if (input.confirm !== undefined && CONFIRMS.indexOf(input.confirm) < 0)
+    stop("needs_human", "args.confirm must be \"ask\" or \"auto\", got " + JSON.stringify(input.confirm));
   if (typeof input.date !== "string" || !DATE_RE.test(input.date))
     stop("needs_human", "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)");
   return mode === "plan" ? planMode(input, input.date) : buildMode(input, input.date);
