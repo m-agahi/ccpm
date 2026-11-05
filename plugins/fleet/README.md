@@ -90,7 +90,9 @@ Since 2.1.4 the full plan ref is a local git object, never a file and never push
 tag object (`git mktag`, no tag name, index untouched, `core.hooksPath=/dev/null` so no hook runs)
 whose target is the plan commit and whose message is the sealed JSON, at
 `refs/fleet/<task id>/plan`. A re-plan moves that ref to the new plan commit and keeps the earlier
-value as `refs/fleet/<task id>/plan-<n>`. The plan commit holds `plan_path` only; nothing under
+value as `refs/fleet/<task id>/plan-<n>` when its target or message differs. When HEAD is a
+plan-only commit of the task and the staged plan doc is byte-identical to HEAD's, commit-plan makes
+no commit (never `--allow-empty`) and the new ref targets HEAD. The plan commit holds `plan_path` only; nothing under
 `.fleet/` is written, staged or committed, so a global `.fleet/` gitignore changes nothing. It
 holds `branch`, `plan_path`, `plan_sha256`, `criteria`, `brief`, `task_id`, `slug`, `tldr`,
 `plan_diff` (2.1.0), `plan_facts` (scope fence, estimate, `test_cmd` and `repo_obligations`),

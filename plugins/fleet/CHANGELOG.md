@@ -16,6 +16,12 @@
   tag target, the message sha256, the seal and the branch, repo and task id. A missing ref or any
   mismatch stops with `needs_human` "plan ref missing or changed; re-run plan". A `plan_ref` with
   `ref_path` (2.0.1 to 2.1.3) stops with "plan_ref predates 2.1.4; re-run plan".
+- **Identical re-plan reuses the plan commit.** When HEAD is a plan-only commit of the task and
+  the staged plan doc is byte-identical to HEAD's, commit-plan makes no commit (never
+  `--allow-empty`) and points the new plan ref at HEAD. The old ref moves to `plan-<n>` only when
+  its target or message differs.
+- The run-state write's `update-ref` runs with `core.hooksPath=/dev/null` too, so no
+  `reference-transaction` hook runs.
 - **Plan-commit classifier.** A plan commit is `plan(<task id>):` with a file set of exactly
   `{plan_path}`, where `plan_path` comes from a plan ref of the task whose target is that commit.
 - The plan ref is frozen through the hasher's `refs/fleet/*` snapshot, not as a hashed file; the

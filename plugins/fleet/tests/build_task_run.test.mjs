@@ -2147,6 +2147,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     plan_path: "docs/plans/x.md",
     task_id: "l42",
     slug: "add-thing",
+    reuse_head: null,
   });
   // 2.1.4: the commit holds the plan doc only; the sealed ref is a tag object
   // (git mktag, no hook) at refs/fleet/l42/plan; nothing under .fleet/ is written
@@ -2168,6 +2169,62 @@ test("2.1.4 plan mode: a plan commit that holds anything but plan_path fails, no
     assert.match(out.result.reason, /plan commit holds/);
     assert.ok(!("plan_ref" in out.result) || out.result.plan_ref == null);
   }
+});
+
+test("2.1.4 identical re-plan: an unchanged plan doc on a plan-only HEAD reuses that commit, no new commit, ref valid", async () => {
+  const s = happy({ script: scanOut([planCommit(PC, [PLAN_MD])], [refEntry("refs/fleet/l42/plan", PC, priorRef(PLAN_MD))]) });
+  // the agent finds the staged plan equal to HEAD's and does not commit
+  s["infra:commit-plan"] = (prompt) => {
+    const i = inputsOf(prompt);
+    const c = refContentOf(prompt);
+    s.__store[PC] = c;
+    s.__store.__planHead = PC;
+    return { status: "ok", reason: "reused", reused: true, head: i.reuse_head, files: [i.plan_path], plan_sha256: PSHA, refs: planRefsOf(s.__store) };
+  };
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const cp = call(out, "infra:commit-plan");
+  assert.equal(inputsOf(cp.prompt).reuse_head, PC);
+  assert.match(cp.prompt, /diff --cached --quiet -- <plan_path>/);
+  assert.ok(!/commit --allow-empty|commit [^`]*--allow-empty/.test(cp.prompt.replace(/Never --allow-empty/g, "")), "never --allow-empty");
+  assert.equal(out.result.plan_ref.plan_commit, PC);
+  assert.equal(out.result.plan_ref.ref_sha256, sha256(s.__store[PC]));
+  assert.ok(out.logs.some((l) => /reused plan commit/.test(l)));
+  // the build loads the reused ref
+  const b = await runOne(s, buildArgs(out.result.plan_ref));
+  noUnscripted(b);
+  assert.equal(b.result.status, "ok", b.result.reason);
+});
+
+test("2.1.4 identical re-plan: reuse is offered only for a plan-only HEAD, and a reuse claim must name it", async () => {
+  // no earlier plan commit: no reuse offered
+  let out = await runOne(happy(), ARGS);
+  assert.equal(inputsOf(call(out, "infra:commit-plan").prompt).reuse_head, null);
+  // a claimed reuse with no reuse_head, or on another head, fails
+  for (const [scan, head] of [[null, PC], [[planCommit(PC, [PLAN_MD])], "9999999"]]) {
+    const s = happy({ script: scan ? scanOut(scan, [refEntry("refs/fleet/l42/plan", PC, priorRef(PLAN_MD))]) : {} });
+    const base = s["infra:commit-plan"];
+    s["infra:commit-plan"] = (prompt) => Object.assign(base(prompt), { reused: true, head });
+    out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "failed", JSON.stringify([scan, head]) + " " + out.result.reason);
+    assert.match(out.result.reason, /reuse/);
+  }
+});
+
+test("2.1.4 re-plan in build (plan_wrong) offers the approved plan commit for reuse", async () => {
+  const s = planWrong([{ target: "plan", criterion: "AC2", finding: "x — Proposed plan change: y" }]);
+  const ref = await planRefFor(s);
+  const out = await runOne(s, buildArgs(ref));
+  assert.equal(inputsOf(call(out, "infra:commit-plan:replan").prompt).reuse_head, PC);
+});
+
+test("2.1.4 run-state write: update-ref runs with core.hooksPath=/dev/null (no reference-transaction hook)", () => {
+  const m = /WRITE_STATE_SH_BEGIN\n([\s\S]*?)\n\/\/ WRITE_STATE_SH_END/.exec(SOURCE);
+  assert.ok(m);
+  const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+  const cmd = Function("q", "return (" + m[1].trim().replace(/^function writeStateCmd/, "function").replace(/shQuote/g, "q") + ")")(q)("/wt", "refs/fleet/l42/state", "{}");
+  assert.match(cmd, /-c core\.hooksPath=\/dev\/null[^&|]* update-ref /);
 });
 
 test("2.1.4 plan mode: the written plan ref must target the plan commit and read back as the sealed ref", async () => {
@@ -2796,6 +2853,19 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
     assert.deepEqual(JSON.parse(by["refs/fleet/l42/plan"].content), ref2);
     assert.equal(by["refs/fleet/l42/plan-1"].target, head);
     assert.equal(by["refs/fleet/l42/plan-1"].tag_sha, e.tag_sha);
+    // an identical re-write (same target, same message) archives nothing
+    r = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(ref2))], { encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(read().map((x) => x.name), ["refs/fleet/l42/plan", "refs/fleet/l42/plan-1"]);
+    // same target, new message (an identical re-plan reusing HEAD): the old value is kept as plan-2
+    const ref3 = { task_id: "l42", n: 3 };
+    r = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(ref3))], { encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    const by3 = Object.fromEntries(read().map((x) => [x.name, x]));
+    assert.deepEqual(Object.keys(by3).sort(), ["refs/fleet/l42/plan", "refs/fleet/l42/plan-1", "refs/fleet/l42/plan-2"]);
+    assert.equal(by3["refs/fleet/l42/plan-2"].target, head2);
+    assert.deepEqual(JSON.parse(by3["refs/fleet/l42/plan"].content), ref3);
+    assert.equal(by3["refs/fleet/l42/plan"].target, head2);
     // nothing reaches a push of the branch: the branch holds no .fleet/ path
     assert.equal(g("log", "--format=", "--name-only", "master").split("\n").filter((x) => x.includes(".fleet")).length, 0);
     // a ref that points at a commit, not a tag, reads as no message

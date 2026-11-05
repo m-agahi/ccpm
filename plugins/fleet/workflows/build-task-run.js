@@ -2079,9 +2079,9 @@ function commitPlanPrompt(inputs, refContent) {
       : "The worktree must be on a detached HEAD (`git -C <worktree> symbolic-ref -q HEAD` fails); else needs_human.") +
     "\n" +
     "2. `git -C <worktree> status --porcelain`: any dirty path other than <plan_path> -> needs_human with the paths.\n" +
-    "3. `git -C <worktree> add -- <plan_path>` and `git -C <worktree> commit -m " +
+    "3. `git -C <worktree> add -- <plan_path>`. Reuse check: when <reuse_head> is not null, `git -C <worktree> rev-parse HEAD` equals <reuse_head> and `git -C <worktree> diff --cached --quiet -- <plan_path>` exits 0 (the staged plan is byte-identical to HEAD's), make NO commit and set reused = true. Otherwise set reused = false and run `git -C <worktree> commit -m " +
     shQuote("plan(" + inputs.task_id + "): " + inputs.slug) +
-    "`. If a hook rewrites the plan, re-add <plan_path> and commit once more; any other hook failure: fix the cause and retry once; a second failure -> failed.\n" +
+    "`. Never --allow-empty. If a hook rewrites the plan, re-add <plan_path> and commit once more; any other hook failure: fix the cause and retry once; a second failure -> failed.\n" +
     "4. `git -C <worktree> ls-files --error-unmatch -- <plan_path>` must succeed and `git -C <worktree> status --porcelain` must be empty; else needs_human.\n" +
     "5. head = `git -C <worktree> rev-parse HEAD`; files = the lines of `git -C <worktree> show --name-only --format= HEAD`.\n" +
     "6. plan_sha256 = the output of this command, run exactly as written:\n" +
@@ -2093,7 +2093,7 @@ function commitPlanPrompt(inputs, refContent) {
     "8. Run this command exactly as written; it prints {refs}. Copy refs unchanged, byte for byte:\n" +
     planRefsCmd(inputs.worktree, inputs.task_id) +
     "\n" +
-    "Return {status, reason, head, files, plan_sha256, refs}."
+    "Return {status, reason, reused, head, files, plan_sha256, refs}."
   );
 }
 
@@ -2509,7 +2509,7 @@ async function iacRefuse(label, worktree, rev, phaseName) {
 // HEAD and whose message is the state JSON. Local only, never pushed.
 // WRITE_STATE_SH_BEGIN
 function writeStateCmd(worktree, stateRef, json) {
-  const g = "GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -C " + shQuote(worktree);
+  const g = "GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C " + shQuote(worktree);
   return (
     "c=$(" + g + " rev-parse HEAD) && t=$( { printf 'object %s\\ntype commit\\ntag fleet-state\\ntagger fleet <fleet@localhost> 0 +0000\\n\\n' \"$c\"; cat <<'FLEET_STATE_JSON'\n" +
     json +
@@ -3165,10 +3165,16 @@ async function commitPlanAndRef(ctx) {
   const label = "infra:commit-plan" + sfx;
   const r = await infra(
     label,
-    commitPlanPrompt(Object.assign({}, base, { task_id: full.task_id, slug: full.slug }), JSON.stringify(full)),
+    commitPlanPrompt(Object.assign({}, base, { task_id: full.task_id, slug: full.slug, reuse_head: ctx.reuseHead || null }), JSON.stringify(full)),
     ctx.phaseName,
   );
   if (typeof r.head !== "string" || !SHA_RE.test(r.head)) halt("failed", label + " returned no usable head sha: " + JSON.stringify(r.head));
+  // identical re-plan: an unchanged plan doc on a plan-only HEAD reuses that commit
+  if (r.reused === true) {
+    if (!ctx.reuseHead) halt("failed", label + " claimed a reuse of HEAD, but no plan-only HEAD was offered for reuse");
+    if (r.head !== ctx.reuseHead) halt("failed", label + " claimed a reuse, but HEAD " + r.head + " is not the offered reuse head " + ctx.reuseHead);
+    gate("reused plan commit " + r.head + ": the plan doc is unchanged; no new commit");
+  }
   if (r.plan_sha256 !== st.plan_sha256)
     halt("failed", label + ": the committed plan hashes " + r.plan_sha256 + ", the staged plan " + st.plan_sha256);
   const files = Array.isArray(r.files) ? Array.from(new Set(r.files.map((f) => normPath(String(f))))) : null;
@@ -3494,6 +3500,8 @@ async function planMode(input, date) {
       "branch has build commits; run build, or delete branch " + lay.branch + " (first: " + built[0].sha + " " + JSON.stringify(built[0].subject) + ")",
     );
   if (scan.commits.length) gate("branch-scan: " + scan.commits.length + " earlier plan commit(s); re-planning on top");
+  // newest first: HEAD, a plan-only commit of this task (no build commit is there)
+  const reuseHead = scan.commits.length ? String(scan.commits[0].sha) : null;
 
   phase("Plan");
   const p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug });
@@ -3504,6 +3512,7 @@ async function planMode(input, date) {
     phaseName: "Plan",
     // the commit-plan step itself, and with confirm auto the gate agents
     after: 1 + (auto ? autoGateAgents(p.planFacts.commands) : 0),
+    reuseHead,
     fields: {
       branch: lay.branch,
       planPath: p.planPath,
@@ -4567,6 +4576,8 @@ async function replan(ctx) {
     suffix: ":replan",
     after: 2,
     onRefs: ctx.onPlanRefs,
+    // the re-plan worktree sits at the approved plan commit (plan-only)
+    reuseHead: ref.plan_commit,
     fields: {
       branch: lay.branch,
       planPath: p.planPath,
