@@ -116,6 +116,8 @@ async function runOne(script, args0) {
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
     // unscripted IaC scans find nothing (a clean repo)
     if (!(label in script) && /^infra:iac-scan:/.test(label)) return { status: "ok", reason: "scanned", iac_files: [], iac_text: [] };
+    // unscripted plan parks move the draft and leave the worktree clean
+    if (!(label in script) && /^infra:park-plan/.test(label)) return { status: "ok", reason: "parked", target: inputsOf(prompt).dest, clean: true };
     // unscripted plan formatting changes nothing (the hooks found nothing to fix)
     if (!(label in script) && /^infra:format-plan/.test(label)) return { status: "ok", reason: "formatted", changed_paths: [] };
     // unscripted fleet-internal scans find no .fleet/ path in the PR diff
@@ -6279,4 +6281,40 @@ test("2.1.5 format-plan: no changed_paths list fails closed", async () => {
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "failed");
   assert.match(out.result.reason, /format-plan/);
+});
+
+// 2.1.4 trial bug #4: a plan run that stopped after the planner left the
+// draft plan untracked in the fleet worktree, and the next plan run's
+// workspace step refused the dirty tree. Plan mode now moves its OWN draft
+// (plan_path only) out of the worktree before it returns the stop.
+test("2.1.5 a plan stop after the planner parks the run's own draft plan and keeps the stop reason", async () => {
+  const s = happy({ script: { "role:plan-audit": { status: "ok", verdict: "plan_defect", routed_findings: [{ target: "plan", criterion: "AC1", finding: "bad" }] } } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan-audit verdict plan_defect/);
+  const pk = call(out, "infra:park-plan");
+  const inp = inputsOf(pk.prompt);
+  assert.equal(inp.worktree, "/r/.claude/worktrees/fleet-l42-add-thing/main");
+  assert.equal(inp.plan_path, "docs/plans/x.md");
+  assert.equal(inp.dest, "/r/.claude/worktrees/fleet-l42-add-thing/scratch/parked/" + NONCE + "/docs/plans/x.md");
+  assert.match(pk.prompt, /other than <plan_path>.*needs_human|any path other than <plan_path>/);
+  assert.match(out.result.reason, /draft plan moved to .*scratch\/parked/);
+  assert.equal(out.result.stop_gate, "role");
+});
+
+test("2.1.5 a failed park never replaces the stop reason", async () => {
+  const s = happy({ script: { "role:plan-audit": { status: "ok", verdict: "plan_defect" }, "infra:park-plan": { status: "needs_human", reason: "README.md is dirty too" } } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan-audit verdict plan_defect/);
+  assert.match(out.result.reason, /draft plan left in the worktree.*README\.md is dirty too/);
+});
+
+test("2.1.5 a stop before the planner returns parks nothing; an ok plan run parks nothing", async () => {
+  const s = happy({ script: { "role:scope-and-plan": { status: "needs_human", reason: "ambiguous" } } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.ok(!out.labels.includes("infra:park-plan"));
+  const ok = await run(happy(), ARGS);
+  assert.ok(!ok.labels.includes("infra:park-plan"));
 });

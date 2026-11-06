@@ -2100,6 +2100,22 @@ function stagePlanPrompt(inputs) {
   );
 }
 
+// Moves the stopped run's own draft plan out of the fleet worktree, so the
+// next plan run's workspace step finds a clean tree.
+function parkPlanPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: move this run's draft plan doc out of the worktree. Touch <plan_path> only. No commit, no push, no reset of the branch; never touch any other path.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. `git -C <worktree> status --porcelain`. Empty -> return {status: \"ok\", reason: \"nothing to park\", clean: true}. Any path other than <plan_path> listed -> return needs_human with those paths and change nothing.\n" +
+    "2. `mkdir -p \"$(dirname <dest>)\"` and `cp -p <worktree>/<plan_path> <dest>` (skip the copy when the file is absent).\n" +
+    "3. If `git -C <worktree> cat-file -e 'HEAD:<plan_path>'` succeeds (keep the quotes), run `git -C <worktree> restore --staged --worktree --source=HEAD -- <plan_path>`; else run `git -C <worktree> rm -q --cached --ignore-unmatch -- <plan_path>` and then `rm -f <worktree>/<plan_path>`.\n" +
+    "4. clean = whether `git -C <worktree> status --porcelain` is now empty.\n" +
+    "Return {status, reason, target: <dest>, clean}."
+  );
+}
+
 // Runs the repo's pre-commit hooks on the plan doc before the audit, so the
 // audit approves, and the plan commit holds, the bytes the fixers leave.
 function formatPlanPrompt(inputs) {
@@ -3118,6 +3134,8 @@ async function planAndAudit(ctx) {
   );
   if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
     halt("failed", "scope-and-plan returned no plan_path/criteria");
+  // from here on a stop leaves a draft plan in the worktree
+  if (ctx.onPlanPath) ctx.onPlanPath(normPath(plan.plan_path));
   if (!Array.isArray(plan.plan_diff) || !plan.plan_diff.length || !plan.plan_diff.every((x) => typeof x === "string"))
     halt("needs_human", "role scope-and-plan contract drift: plan_diff must be a non-empty array of strings", "contract");
   if (typeof plan.tldr !== "string" || !plan.tldr.trim())
@@ -3571,28 +3589,52 @@ async function planMode(input, date) {
   const reuseHead = scan.commits.length ? String(scan.commits[0].sha) : null;
 
   phase("Plan");
-  const p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug });
+  // a stop between the planner and the plan commit parks the draft (2.1.4: the
+  // next run's workspace step refused the untracked plan)
+  let draft = null;
+  const parkOnStop = async (e) => {
+    if (!(e instanceof Stop) || !draft) throw e;
+    const dest = lay.scratch + "/parked/" + state.nonce + "/" + draft;
+    const pk = await softDispatch("infra:park-plan", parkPlanPrompt({ worktree: lay.mainWt, plan_path: draft, dest }), {
+      schema: INFRA_SCHEMA,
+      phase: "Plan",
+    });
+    const note =
+      pk && pk.status === "ok" && pk.clean === true
+        ? pk.target
+          ? "; draft plan moved to " + dest + " (the worktree is clean for a re-run)"
+          : "; no draft plan to park (the worktree is clean)"
+        : "; draft plan left in the worktree (park failed: " + ((pk && pk.reason) || "no result") + ")";
+    gate("park-plan" + note);
+    throw new Stop(e.status, e.reason + note);
+  };
   const auto = input.confirm === "auto";
-  const pc = await commitPlanAndRef({
-    worktree: lay.mainWt,
-    branch: lay.branch,
-    phaseName: "Plan",
-    // the commit-plan step itself, and with confirm auto the gate agents
-    after: 1 + (auto ? autoGateAgents(p.planFacts.commands) : 0),
-    reuseHead,
-    fields: {
+  let p, pc;
+  try {
+    p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, onPlanPath: (x) => (draft = x) });
+    pc = await commitPlanAndRef({
+      worktree: lay.mainWt,
       branch: lay.branch,
-      planPath: p.planPath,
-      criteria: p.criteria,
-      brief,
-      taskId: names.taskId,
-      slug: names.slug,
-      tldr: p.tldr,
-      planDiff: p.planDiff,
-      planFacts: p.planFacts,
-      history: { runs: 1, replans: 0, agents: 0 },
-    },
-  });
+      phaseName: "Plan",
+      // the commit-plan step itself, and with confirm auto the gate agents
+      after: 1 + (auto ? autoGateAgents(p.planFacts.commands) : 0),
+      reuseHead,
+      fields: {
+        branch: lay.branch,
+        planPath: p.planPath,
+        criteria: p.criteria,
+        brief,
+        taskId: names.taskId,
+        slug: names.slug,
+        tldr: p.tldr,
+        planDiff: p.planDiff,
+        planFacts: p.planFacts,
+        history: { runs: 1, replans: 0, agents: 0 },
+      },
+    });
+  } catch (e) {
+    await parkOnStop(e);
+  }
   if (!auto) return awaiting("plan ready: confirm, then run mode build with plan_ref", p, pc.tiny, pc.full);
 
   // confirm "auto": G1-G3 instead of the question; never ask

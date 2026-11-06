@@ -35,6 +35,12 @@ Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
   approves, and the commit holds, the fixed bytes. A hook that fails without a rewrite, or touches
   any other path, stops the run. Commit-plan no longer re-adds a plan a hook rewrote: it stops
   instead. Repos with hooks outside pre-commit (husky, lefthook) are not covered yet.
+- **A stopped plan run parks its draft.** A stop between the planner and the plan commit (a
+  plan-audit refusal, a refused command, a failed commit) left the untracked plan in the fleet
+  worktree, and the next plan run's workspace step refused the dirty tree. Plan mode now moves the
+  run's own `plan_path` (nothing else; any other dirty path leaves the worktree untouched) to
+  `scratch/parked/<run_nonce>/` and appends the path to the stop reason. A park failure never
+  replaces the stop reason.
 
 ## [2.1.4] - 2026-11-05
 

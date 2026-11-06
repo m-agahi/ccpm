@@ -146,7 +146,10 @@ runs `/build-task` explicitly, always use the fleet.
 
 A second plan run for the same input reuses the branch and worktree under
 `<repo>/.claude/worktrees/fleet-<task id>-<slug>/` and updates the plan in place, with a new plan
-commit. If the branch already has build commits, plan mode stops: run build, or delete the branch.
+commit. A plan run that stops before its plan commit (for example on a plan-audit refusal) moves
+its own draft plan to `<repo>/.claude/worktrees/fleet-<task id>-<slug>/scratch/parked/` so the
+next run starts on a clean worktree; the reason names the path. If the branch already has build
+commits, plan mode stops: run build, or delete the branch.
 Writers and the coder never commit: the only build commits are made by the workflow's commit step
 after the code judge approves.
 
