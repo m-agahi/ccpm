@@ -6660,3 +6660,21 @@ test("2.1.5 confirm auto: a second plan-audit refusal stops; confirm ask never r
   assert.equal(o2.result.status, "needs_human");
   assert.ok(!o2.labels.includes("role:scope-and-plan:audit-fix"));
 });
+
+// 2.1.4 trial bug #6: a free-text task took its slug from the model-written
+// title, so every re-plan made a new branch and worktree, and every free-text
+// task shared the task id "task" (one plan ref for all of them). The id and
+// slug now derive from the text itself.
+test("2.1.5 free text: task id and slug derive from the text, not the model's title", async () => {
+  const body = "Make the Foo parser keep NBSP inside quoted scalars";
+  const brief = (title, b) => ({ ...BRIEF, title, sources: [{ kind: "text", ref: "text", url: null, body: b }] });
+  const a = await runOne(happy({ brief: brief("Keep NBSP in quoted scalars", body) }), { ...ARGS, input: body });
+  const b = await runOne(happy({ brief: brief("Foo parser: preserve NBSP", body) }), { ...ARGS, input: body });
+  assert.equal(a.result.status, "awaiting_confirmation", a.result.reason);
+  const id = "t" + sha256(body).slice(0, 8);
+  assert.equal(a.result.branch, "fleet/" + id + "-make-the-foo-parser-keep-nbsp-inside-quo");
+  assert.equal(b.result.branch, a.result.branch, "same text, same branch, whatever the title");
+  assert.equal(a.result.plan_ref.plan_ref, "refs/fleet/" + id + "/plan");
+  const c = await runOne(happy({ brief: brief("x", "another change") }), { ...ARGS, input: "another change" });
+  assert.notEqual(c.result.plan_ref.plan_ref, a.result.plan_ref.plan_ref, "another text, another plan ref");
+});

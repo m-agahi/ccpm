@@ -18,6 +18,11 @@ Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
   `:audit-fix`; the draft is updated in place, then formatted and audited again). A second
   refusal stops as before. The sealed brief does not carry the findings. confirm ask is
   unchanged: the refusal stops the run.
+- **Free-text tasks get a stable branch.** The slug came from the title intake writes, so a
+  re-plan of the same text could open a new branch and worktree, and every free-text task shared
+  the task id `task` and so one plan ref. A free-text task id is now `t` + the first 8 hex of the
+  text's sha256 and its slug comes from the text: the same text reuses its branch, another text
+  gets its own plan ref. Ledger, Jira and issue ids were already stable.
 - **Undeclared array fields in result schemas.** `INFRA_SCHEMA` now declares `iac_files`,
   `iac_text`, `files`, `diff`, `refs` (with an item shape) and `reused`; scope-and-plan declares
   `allowed_additions` (object or null, with `files`, `symbols`, `deps`, `settings` arrays). An

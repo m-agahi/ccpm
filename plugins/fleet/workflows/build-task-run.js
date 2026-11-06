@@ -1812,6 +1812,11 @@ function namesFor(brief) {
           : slugify(src.ref, 24);
     break;
   }
+  // free text: id and slug from the text itself, never from the model-written
+  // title, so a re-run of the same text reuses its branch and two texts never
+  // share a plan ref
+  const text = taskId === null && !brief.sources.some((x) => x.kind === "plan") ? brief.sources.find((x) => x.kind === "text") : null;
+  if (text) return { taskId: "t" + sha256Hex(text.body.trim()).slice(0, 8), slug: slugify(text.body) || "task" };
   if (taskId === null) taskId = brief.sources.some((x) => x.kind === "plan") ? "plan" : "task";
   return { taskId, slug: slugify(brief.title) || "task" };
 }
