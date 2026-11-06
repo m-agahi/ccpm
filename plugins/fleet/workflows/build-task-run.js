@@ -906,6 +906,15 @@ const SCHEMAS = {
     },
     est_diff_lines: { type: "number" },
     new_behaviour: { type: "boolean" },
+    allowed_additions: {
+      type: ["object", "null"],
+      properties: {
+        files: { type: "array", items: STR },
+        symbols: { type: "array", items: ANY_ITEM },
+        deps: { type: "array", items: ANY_ITEM },
+        settings: { type: "array", items: ANY_ITEM },
+      },
+    },
     repo_obligations: {
       type: "array",
       items: {
@@ -1037,7 +1046,28 @@ const INFRA_SCHEMA = {
     base_ref: STR,
     remote_slug: STR,
     created: { type: "boolean" },
+    reused: { type: "boolean" },
     merged: ANY_ARRAY,
+    iac_files: { type: "array", items: STR },
+    iac_text: { type: "array", items: STR },
+    files: { type: "array", items: STR },
+    diff: { type: "array", items: STR },
+    refs: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: STR,
+          tag_sha: STR,
+          type: STR,
+          target: STR,
+          target_type: STR,
+          sha256: STR_OR_NULL,
+          content: STR_OR_NULL,
+        },
+        required: ["name"],
+      },
+    },
     plan_sha256: STR,
     plan_sha256_head: STR,
     is_ancestor: { type: "boolean" },
@@ -1130,12 +1160,13 @@ const HASHER_SCHEMA = {
     changed: { type: "array", items: STR },
     hashes: {
       type: "object",
-      required: ["files", "sections", "git", "symlinks", "suspicious"],
+      required: ["files", "sections", "git", "symlinks", "ignored", "suspicious"],
       properties: {
         files: { type: "object", additionalProperties: STR },
         sections: { type: "object", additionalProperties: STR },
         git: { type: "object", additionalProperties: STR },
         symlinks: { type: "object", additionalProperties: STR },
+        ignored: { type: "object", additionalProperties: STR },
         suspicious: { type: "array", items: STR },
       },
     },
@@ -2001,7 +2032,7 @@ function hasherPrompt(inputs) {
     "Run this one Bash command exactly as written, unmodified, in the foreground:\n" +
     cmd +
     "\n" +
-    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, suspicious} and, when a base tree is given, `changed` (the paths that differ from it). Return {status: "ok", fingerprint, hashes, changed} with those values copied exactly. ' +
+    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored, suspicious} and, when a base tree is given, `changed` (the paths that differ from it). Return {status: "ok", fingerprint, hashes, changed} with those values copied exactly. ' +
     "The tree is built in a temporary index (GIT_INDEX_FILE=<temp file>: git read-tree HEAD, git add -A, git write-tree); the real index is never touched and no hook runs. " +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>, fingerprint: {head: "", tree: ""}}. Run no other command.\n' +
     "Extraction rules (the program implements them): " +
@@ -2792,8 +2823,7 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
     phase: phaseName,
   });
   const h = r.hashes;
-  // the embedded program always returns the ignored map; a missing one reads as empty
-  if (h && h.ignored === undefined) h.ignored = {};
+  // every map is required: a map the relay dropped (2.1.4: ignored) must not read as empty
   const mapsOk =
     !!h && HASH_MAPS.every((m) => h[m] && typeof h[m] === "object") && Array.isArray(h.suspicious);
   const fp = r.fingerprint;

@@ -255,7 +255,7 @@ const CSHA = (m) => "c00000" + m;
 // flat prefixed keys and converted: "git:<k>" -> git, "symlink:<k>" ->
 // symlinks, a key with "#" -> sections, anything else -> files.
 function H(flat, suspicious) {
-  const h = { files: {}, sections: {}, git: {}, symlinks: {}, suspicious: suspicious || [] };
+  const h = { files: {}, sections: {}, git: {}, symlinks: {}, ignored: {}, suspicious: suspicious || [] };
   for (const [k, v] of Object.entries(flat)) {
     if (k.startsWith("git:")) h.git[k.slice(4)] = v;
     else if (k.startsWith("symlink:")) h.symlinks[k.slice(8)] = v;
@@ -5992,4 +5992,121 @@ test("2.1.2 IaC scan program: files, hook dirs, hook managers, Makefile, package
   } finally {
     rmSync(wt2, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- 2.1.5
+
+// The schema each agent label was dispatched with, from a full happy run.
+async function schemasByKind() {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  // confirm auto adds the intent judge; its result is not needed, only the call
+  const auto = await runOne(autoHappy(), AUTO);
+  const by = {};
+  for (const c of out.calls.concat(auto.calls)) {
+    const l = c.label;
+    const kind = l.startsWith("role:") ? "role:" + l.split(":")[1] : l.startsWith("hasher:") ? "hasher" : l.startsWith("infra:") || l === "workspace" ? "infra" : l;
+    if (c.opts && c.opts.schema && !(kind in by)) by[kind] = c.opts.schema;
+  }
+  return by;
+}
+
+// "infra:commits[].files" -> the property schema at that path, or null.
+function schemaAt(by, spec) {
+  const i = spec.lastIndexOf(":");
+  let s = by[spec.slice(0, i)];
+  for (const seg of spec.slice(i + 1).split(".")) {
+    if (!s) return null;
+    const arr = seg.endsWith("[]");
+    s = s.properties && s.properties[arr ? seg.slice(0, -2) : seg];
+    if (arr) s = s && s.items;
+  }
+  return s || null;
+}
+
+// Every Array.isArray(<v>.<field>) site in the workflow, keyed by
+// "<expr> @ <enclosing function>", maps to the schema of the agent result the
+// object came from ("<label kind>:<path>"), or to "parsed: <why>" when the
+// object is no agent result. A new site with no entry fails; a field the
+// mapped schema does not type as array fails (2.1.4 trial bug #2: an
+// undeclared field came back as the string "[]").
+const ARRAY_SITES = {
+  "o.files @ planFactsProblem": "role:scope-and-plan:repo_obligations[].files",
+  "tc.tools @ testCmdProblem": "role:scope-and-plan:test_cmd.tools",
+  "r.iac_files @ iacRefuse": "infra:iac_files",
+  "r.iac_text @ iacRefuse": "infra:iac_text",
+  "r.yadgar_findings @ collect": "role:scope-and-plan:yadgar_findings",
+  "h.suspicious @ hasher": "hasher:hashes.suspicious",
+  "r.changed @ hasher": "hasher:changed",
+  "b.sources @ briefProblem": "intake:brief.sources",
+  "plan.criteria @ planAndAudit": "role:scope-and-plan:criteria",
+  "plan.plan_diff @ planAndAudit": "role:scope-and-plan:plan_diff",
+  "r.files @ commitPlanAndRef": "infra:files",
+  "r.refs @ commitPlanAndRef": "infra:refs",
+  "c.files @ isPlanCommit": "infra:commits[].files",
+  "aa.files @ scopeProblems": "role:scope-and-plan:allowed_additions.files",
+  "cfg.ids @ hookIdProblems": "infra:ids",
+  "r.deviations @ autoGates": "role:fleet-intent-judge:deviations",
+  "scan.commits @ planMode": "infra:commits",
+  "scan.refs @ planMode": "infra:refs",
+  "r.criteria @ planRefProblem": "parsed: the sealed plan ref (JSON.parse of a verified tag message)",
+  "ld.refs @ buildFromRef": "infra:refs",
+  "pf.commands @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
+  "ref.plan_diff @ buildFromRef": "parsed: the sealed plan ref",
+  "r.diff @ fleetScan": "infra:diff",
+  "r.commits @ fleetScan": "infra:commits",
+  "c.files @ fleetScan": "infra:commits[].files",
+  "rp.changed_paths @ reviewStep": "infra:changed_paths",
+  "r.results @ writeBack": "infra:results",
+  "l.results @ writeBack": "infra:results",
+  "p.results @ writeBack": "infra:results",
+};
+
+function arraySites() {
+  const sites = [];
+  let fn = "<top>";
+  for (const line of SOURCE.split("\n")) {
+    const f = /^\s*(?:async\s+)?function\s+([A-Za-z0-9_]+)\s*\(/.exec(line);
+    if (f) fn = f[1];
+    for (const m of line.matchAll(/Array\.isArray\(([A-Za-z_$][A-Za-z0-9_$]*)\.([A-Za-z_$][A-Za-z0-9_$]*)\)/g))
+      sites.push(m[1] + "." + m[2] + " @ " + fn);
+  }
+  return sites;
+}
+
+test("2.1.5 every Array.isArray(<result>.<field>) reads a field its schema declares as an array", async () => {
+  const by = await schemasByKind();
+  const sites = arraySites();
+  assert.ok(sites.length >= 20, "found the sites: " + sites.length);
+  const problems = [];
+  for (const s of new Set(sites)) {
+    const spec = ARRAY_SITES[s];
+    if (!spec) {
+      problems.push(s + ": no entry in ARRAY_SITES (map it to its schema or mark it parsed)");
+      continue;
+    }
+    if (spec.startsWith("parsed:")) continue;
+    const p = schemaAt(by, spec);
+    if (!p) problems.push(s + ": " + spec + " is not declared");
+    else if (![].concat(p.type).includes("array")) problems.push(s + ": " + spec + " is typed " + JSON.stringify(p.type));
+  }
+  for (const k of Object.keys(ARRAY_SITES)) if (!sites.includes(k)) problems.push(k + ": stale ARRAY_SITES entry");
+  assert.deepEqual(problems, []);
+});
+
+test("2.1.5 the hasher schema declares and requires every hash map the script reads", async () => {
+  const by = await schemasByKind();
+  const h = by.hasher.properties.hashes;
+  for (const m of ["files", "sections", "git", "symlinks", "ignored", "suspicious"]) {
+    assert.ok(h.properties[m], "hashes." + m + " declared");
+    assert.ok(h.required.includes(m), "hashes." + m + " required");
+  }
+});
+
+test("2.1.5 a hasher result with no ignored map fails; it never reads as empty", async () => {
+  const s = happy();
+  s["hasher:pre-writers:r1"] = { __raw: true, status: "ok", fingerprint: FP_PRE, hashes: { files: {}, sections: {}, git: {}, symlinks: {}, suspicious: [] } };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /hasher hasher:pre-writers:r1 failed/);
 });

@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.1.5] - 2026-11-06
+
+Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
+
+### Fixed
+
+- **Undeclared array fields in result schemas.** `INFRA_SCHEMA` now declares `iac_files`,
+  `iac_text`, `files`, `diff`, `refs` (with an item shape) and `reused`; scope-and-plan declares
+  `allowed_additions` (object or null, with `files`, `symbols`, `deps`, `settings` arrays). An
+  undeclared field came back as the string `"[]"` and stopped the run with a false IaC refusal or
+  a false "no plan-ref list". A test maps every `Array.isArray(<result>.<field>)` site to the
+  schema its object came from and fails on an unmapped site or an undeclared field.
+- **The hasher's `ignored` map is declared and required.** The schema and the prompt left it out,
+  the relay dropped it, and the script read the missing map as empty: the next fingerprint then
+  saw `.claude/settings.local.json` as "ignored path written" by the intent judge. A hasher result
+  without the map now fails.
+
 ## [2.1.4] - 2026-11-05
 
 ### Changed
