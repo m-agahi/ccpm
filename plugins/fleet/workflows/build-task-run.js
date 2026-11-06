@@ -63,6 +63,10 @@ const EXPECTED_VERSIONS = {
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
 const CONTRACT = "fleet-v3";
 const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
+// A session keeps the plugin version it started with; a mismatch after an
+// update usually means this script is the stale one.
+const RELOAD_HINT =
+  " (this fleet workflow expects " + CONTRACT + "; if the plugin was updated after this session started, run /reload-plugins or start a new session, then run /build-task again)";
 // Keys each role must return when status is "ok" (checked with `key in obj`;
 // null or empty values are allowed). A missing key is contract drift. A
 // required key whose role schema types it as array, object or boolean must
@@ -2861,7 +2865,7 @@ function contractProblem(role, r) {
   if (r.role_version !== state.roleVersions[role])
     return "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded";
   const c = contractOf(r.role_contract);
-  if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded";
+  if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded" + RELOAD_HINT;
   if (r.status !== "ok") return null;
   for (const k of REQUIRED_ON_OK[role] || []) {
     if (!(k in r)) return "role " + role + " contract drift: missing " + k;
@@ -3018,7 +3022,7 @@ async function preflightStep() {
     if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");
     state.roleVersions[role] = got;
     const c = contractOf(contracts[role]);
-    if (c !== CONTRACT) halt("needs_human", "role " + role + " contract " + c + " != " + CONTRACT, "contract");
+    if (c !== CONTRACT) halt("needs_human", "role " + role + " contract " + c + " != " + CONTRACT + RELOAD_HINT, "contract");
   }
   const dispatchLines = pre.dispatch || {};
   for (const role of ROLES) {
@@ -3106,6 +3110,32 @@ function cleanBrief(b) {
   };
 }
 
+// The first character outside printable ASCII (plus newline) in any string
+// of v, as "U+XXXX at <path>", or null.
+function nonAsciiIn(v, at) {
+  if (typeof v === "string") {
+    for (const ch of v) {
+      const c = ch.codePointAt(0);
+      if (c !== 10 && (c < 0x20 || c > 0x7e)) return "U+" + c.toString(16).toUpperCase().padStart(4, "0") + " at " + (at || "text");
+    }
+    return null;
+  }
+  if (Array.isArray(v)) {
+    for (let i = 0; i < v.length; i++) {
+      const r = nonAsciiIn(v[i], at + "[" + i + "]");
+      if (r) return r;
+    }
+    return null;
+  }
+  if (v && typeof v === "object")
+    for (const k of Object.keys(v)) {
+      if (k === HELD_OUT_KEY) continue;
+      const r = nonAsciiIn(v[k], at ? at + "." + k : k);
+      if (r) return r;
+    }
+  return null;
+}
+
 function normCriteria(raw) {
   const seen = {};
   const criteria = raw.map((c) => {
@@ -3114,6 +3144,12 @@ function normCriteria(raw) {
       halt("needs_human", "criterion id not usable in a branch name: " + JSON.stringify(id));
     if (seen[id]) halt("needs_human", "duplicate criterion id " + id);
     seen[id] = true;
+    const bad = nonAsciiIn(c, "");
+    if (bad)
+      halt(
+        "needs_human",
+        "criterion " + id + " holds a character that is not printable ASCII (" + bad + "); the JSON path can turn it into another character (2.1.4: NBSP became a space). Re-plan with a named constant in the text, e.g. NBSP = chr(0xA0)",
+      );
     return Object.assign(stripHeldOut(c), {
       id,
       text: String(c.text || ""),

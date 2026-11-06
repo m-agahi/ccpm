@@ -6590,3 +6590,37 @@ test("2.1.5 yaadgaar: a sealed legacy ledger source on a yadgarhq/ project stops
   assert.match(out.result.reason, /yaadgaar.*re-run plan/);
   assert.ok(!out.labels.some((l) => ROLE_LABEL.test(l)));
 });
+
+// 2.1.4 trial bug #1: a session started before a plugin update keeps the old
+// workflow; the contract stop now says how to load the new one.
+test("2.1.5 a contract mismatch tells the user to reload the plugins", async () => {
+  const s = happy();
+  s.preflight = { ...s.preflight, contract: { ...s.preflight.contract, "scope-and-plan": "CONTRACT: fleet-v4" } };
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /contract fleet-v4 != fleet-v3/);
+  assert.match(out.result.reason, /\/reload-plugins or start a new session/);
+  const r = happy({ script: { "role:scope-and-plan": { status: "ok", role_contract: "CONTRACT: fleet-v4" } } });
+  const o2 = await runOne(r, ARGS);
+  assert.match(o2.result.reason, /\/reload-plugins or start a new session/);
+});
+
+// 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
+// escaped NBSP, which the JSON path turned into a plain space. Criteria text
+// must be printable ASCII; a special character is named (NBSP = chr(0xA0)).
+test("2.1.5 criteria with non-ASCII or invisible characters stop before the audit", async () => {
+  for (const bad of ["keep a b", "zero​width", "tab\there", "bell\u0007", "ünï"]) {
+    const crit = criteria(2);
+    crit[1].text = bad;
+    const out = await runOne(happy({ criteria: crit }), ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(bad));
+    assert.match(out.result.reason, /AC2.*not printable ASCII.*U\+/, JSON.stringify(bad));
+    assert.match(out.result.reason, /named constant/);
+    assert.ok(!out.labels.includes("role:plan-audit"));
+  }
+  const crit = criteria(2);
+  crit[0].text = "NBSP = chr(0xA0): 'a' + NBSP + 'b' stays quoted";
+  crit[0].examples = ["a\\u00a0b"];
+  const ok = await runOne(happy({ criteria: crit }), ARGS);
+  assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+});

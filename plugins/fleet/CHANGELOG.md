@@ -6,6 +6,13 @@ Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
 
 ### Fixed
 
+- **Contract-mismatch stops say how to recover.** Both contract stops (preflight and a role
+  runner) now end with "run /reload-plugins or start a new session, then run /build-task again":
+  a session started before a plugin update keeps the old workflow.
+- **Criteria must be printable ASCII.** A criterion about NBSP lost its NBSP on the JSON path and
+  became a duplicate of the plain-space case. Any string in a criterion (text, examples, ...) with
+  a character outside printable ASCII and newline now stops the run before the audit, naming the
+  code point; the planner must write a named constant such as `NBSP = chr(0xA0)`.
 - **Undeclared array fields in result schemas.** `INFRA_SCHEMA` now declares `iac_files`,
   `iac_text`, `files`, `diff`, `refs` (with an item shape) and `reused`; scope-and-plan declares
   `allowed_additions` (object or null, with `files`, `symbols`, `deps`, `settings` arrays). An
