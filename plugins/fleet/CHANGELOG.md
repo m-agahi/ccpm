@@ -13,6 +13,11 @@ Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
   became a duplicate of the plain-space case. Any string in a criterion (text, examples, ...) with
   a character outside printable ASCII and newline now stops the run before the audit, naming the
   code point; the planner must write a named constant such as `NBSP = chr(0xA0)`.
+- **confirm auto: one re-plan round after a plan-audit refusal.** A `plan_defect` or
+  `untestable_criteria` verdict now sends the audit findings to the planner once (labels
+  `:audit-fix`; the draft is updated in place, then formatted and audited again). A second
+  refusal stops as before. The sealed brief does not carry the findings. confirm ask is
+  unchanged: the refusal stops the run.
 - **Undeclared array fields in result schemas.** `INFRA_SCHEMA` now declares `iac_files`,
   `iac_text`, `files`, `diff`, `refs` (with an item shape) and `reused`; scope-and-plan declares
   `allowed_additions` (object or null, with `files`, `symbols`, `deps`, `settings` arrays). An

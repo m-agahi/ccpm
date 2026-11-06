@@ -3312,6 +3312,22 @@ async function planAndAudit(ctx) {
       "Plan",
     ),
   );
+  // confirm auto: one re-plan round with the audit findings, then stop
+  if (ctx.auditRetry && (audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria")) {
+    const body = (audit.routed_findings || []).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n") || audit.reason || audit.verdict;
+    gate("plan-audit verdict " + audit.verdict + " (confirm auto): one re-plan round with the audit findings");
+    return planAndAudit(
+      Object.assign({}, ctx, {
+        auditRetry: false,
+        suffix: sfx + ":audit-fix",
+        // the planner updates its draft in place
+        brief: Object.assign({}, ctx.brief, {
+          plan_path: planPath,
+          sources: ctx.brief.sources.concat([{ kind: "text", ref: "plan-audit findings (" + audit.verdict + ")", url: null, body }]),
+        }),
+      }),
+    );
+  }
   if (audit.verdict !== "approve") {
     const first = (audit.routed_findings || []).slice(0, 3).map((f) => (f.criterion || "-") + ": " + f.finding);
     halt(
@@ -3715,7 +3731,7 @@ async function planMode(input, date) {
   const auto = input.confirm === "auto";
   let p, pc;
   try {
-    p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, onPlanPath: (x) => (draft = x) });
+    p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, onPlanPath: (x) => (draft = x), auditRetry: auto });
     pc = await commitPlanAndRef({
       worktree: lay.mainWt,
       branch: lay.branch,

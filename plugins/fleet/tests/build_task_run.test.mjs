@@ -6624,3 +6624,39 @@ test("2.1.5 criteria with non-ASCII or invisible characters stop before the audi
   const ok = await runOne(happy({ criteria: crit }), ARGS);
   assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
 });
+
+// 2.1.4 trial bug #3: under confirm auto a plan-audit refusal stopped the run
+// and the findings never reached the planner. One automatic re-plan round
+// now gets them; a second refusal stops as before.
+test("2.1.5 confirm auto: a plan-audit refusal gets one re-plan round with the findings", async () => {
+  const s = autoHappy();
+  s["role:plan-audit"] = { status: "ok", reason: "defect", verdict: "plan_defect", routed_findings: [{ target: "plan", criterion: "AC1", finding: "NBSP example lost" }] };
+  s["role:scope-and-plan:audit-fix"] = s["role:scope-and-plan"];
+  s["role:plan-audit:audit-fix"] = { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] };
+  const out = await runOne(s, AUTO);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const l = out.labels;
+  assert.ok(l.indexOf("role:scope-and-plan:audit-fix") > l.indexOf("role:plan-audit"));
+  assert.ok(l.indexOf("role:plan-audit:audit-fix") > l.indexOf("infra:format-plan:audit-fix"));
+  const b = inputsOf(call(out, "role:scope-and-plan:audit-fix").prompt).brief;
+  assert.equal(b.plan_path, "docs/plans/x.md", "the draft is updated in place");
+  assert.ok(b.sources.some((x) => x.kind === "text" && /AC1: NBSP example lost/.test(x.body)));
+  // the sealed brief is the task's, without the audit findings
+  assert.ok(!JSON.stringify(inputsOf(call(out, "role:fleet-intent-judge").prompt).brief).includes("NBSP example lost"));
+});
+
+test("2.1.5 confirm auto: a second plan-audit refusal stops; confirm ask never re-plans", async () => {
+  const s = autoHappy();
+  s["role:plan-audit"] = { status: "ok", reason: "defect", verdict: "plan_defect", routed_findings: [] };
+  s["role:plan-audit:audit-fix"] = { status: "ok", reason: "still", verdict: "untestable_criteria", routed_findings: [] };
+  s["role:scope-and-plan:audit-fix"] = s["role:scope-and-plan"];
+  const out = await runOne(s, AUTO);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan-audit verdict untestable_criteria/);
+  assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix:audit-fix"));
+  const a = happy({ script: { "role:plan-audit": { status: "ok", verdict: "plan_defect" } } });
+  const o2 = await runOne(a, ARGS);
+  assert.equal(o2.result.status, "needs_human");
+  assert.ok(!o2.labels.includes("role:scope-and-plan:audit-fix"));
+});
