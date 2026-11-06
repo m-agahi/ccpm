@@ -23,9 +23,18 @@ Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
   appended to every infra and hasher prompt, so a new invocation never replays one. The script
   cannot read git state itself; the nonce is the only lever. A runtime resume therefore re-runs
   everything after preflight; build mode keeps its own run-state resume.
-- **The judge fingerprint tolerates `.claude/settings.local.json`.** Claude Code may write this
-  ignored file during a judge run. The judge fingerprint (only) skips exactly that root key and
-  logs it; any other ignored path, and the writer, freeze and coder checks, are unchanged.
+- **No exemption for `.claude/settings.local.json`.** The trial's "judge mutated worktree ...
+  settings.local.json" stop came from the dropped `ignored` map above, not from the judge. With the
+  map required, the file is in both states and the judge fingerprint is unchanged from 2.1.4: any
+  change to the file during a judge run (a `hooks` key, a new permission, its removal) still
+  discards the verdict.
+- **The plan runs through the repo's hooks before the audit.** A prettier hook rewrote the plan in
+  the plan commit, so the committed plan no longer hashed as the staged one. A new
+  `infra:format-plan` step (after the planner and the IaC refusal, before plan-audit) runs
+  `pre-commit run --files <plan_path>` until the fixers are done (at most 3 runs); the audit then
+  approves, and the commit holds, the fixed bytes. A hook that fails without a rewrite, or touches
+  any other path, stops the run. Commit-plan no longer re-adds a plan a hook rewrote: it stops
+  instead. Repos with hooks outside pre-commit (husky, lefthook) are not covered yet.
 
 ## [2.1.4] - 2026-11-05
 

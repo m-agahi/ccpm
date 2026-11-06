@@ -1265,9 +1265,6 @@ function changedKeys(a0, b0) {
 
 // The violation text for a changed key.
 const FLEETREF = "fleetref:";
-// The worktree's Claude Code settings (an ignored path): the judge
-// fingerprint alone tolerates a change to exactly this key.
-const HARNESS_SETTINGS = ".claude/settings.local.json";
 function violationName(x) {
   if (x.map === "ignored") return "ignored path written: " + x.key;
   if (x.map === "git" && x.key.indexOf(FLEETREF) === 0) return "run-state ref touched by role: " + x.key.slice(FLEETREF.length);
@@ -2103,6 +2100,21 @@ function stagePlanPrompt(inputs) {
   );
 }
 
+// Runs the repo's pre-commit hooks on the plan doc before the audit, so the
+// audit approves, and the plan commit holds, the bytes the fixers leave.
+function formatPlanPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: run the repo's pre-commit hooks on the plan doc ONLY, so the later plan commit has nothing left to rewrite. Change no other path. No staging, no commit, no push. Never bypass or skip a hook, never edit a hook or its config, never edit the plan by hand.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. If `<worktree>/.pre-commit-config.yaml` does not exist: return {status: \"ok\", reason: \"no pre-commit config\", changed_paths: <the paths of `git -C <worktree> status --porcelain`>}.\n" +
+    "2. Run `cd <worktree> && pre-commit run --files <plan_path>` as one Bash call with timeout 600000 ms. Exit 0 -> go to step 3. A non-zero exit after which `git -C <worktree> hash-object <plan_path>` differs from before the run means a fixer rewrote the plan: run the same command again, at most 3 runs in all. A non-zero exit that left the plan unchanged, `pre-commit` not installed, or a 3rd run that still fails -> return {status: \"needs_human\", reason: <the failing hook ids and the last 60 lines of output>}.\n" +
+    "3. changed_paths = the paths of `git -C <worktree> status --porcelain` (the plan doc itself is expected there).\n" +
+    "Return {status, reason, changed_paths}."
+  );
+}
+
 function commitPlanPrompt(inputs, refContent) {
   return (
     "Infra step of the fleet build workflow: commit the plan doc LOCALLY, in ONE commit that holds <plan_path> only, then record the sealed plan ref as a local git object. No other edits. Never push. Never --no-verify or any hook bypass; no Co-Authored-By trailer. No ledger, ticket or comment writes. Never stage, force-add or write any other path.\n" +
@@ -2117,7 +2129,7 @@ function commitPlanPrompt(inputs, refContent) {
     "2. `git -C <worktree> status --porcelain`: any dirty path other than <plan_path> -> needs_human with the paths.\n" +
     "3. `git -C <worktree> add -- <plan_path>`. Reuse check: when <reuse_head> is not null, `git -C <worktree> rev-parse HEAD` equals <reuse_head> and `git -C <worktree> diff --cached --quiet -- <plan_path>` exits 0 (the staged plan is byte-identical to HEAD's), make NO commit and set reused = true. Otherwise set reused = false and run `git -C <worktree> commit -m " +
     shQuote("plan(" + inputs.task_id + "): " + inputs.slug) +
-    "`. Never --allow-empty. If a hook rewrites the plan, re-add <plan_path> and commit once more; any other hook failure: fix the cause and retry once; a second failure -> failed.\n" +
+    "`. Never --allow-empty. If a hook rewrites the plan, do not re-add it and do not commit again: return needs_human with the hook output (the plan ran through the hooks before the audit; a rewrite now would commit bytes the audit never saw). Any other hook failure: fix the cause and retry once; a second failure -> failed.\n" +
     "4. `git -C <worktree> ls-files --error-unmatch -- <plan_path>` must succeed and `git -C <worktree> status --porcelain` must be empty; else needs_human.\n" +
     "5. head = `git -C <worktree> rev-parse HEAD`; files = the lines of `git -C <worktree> show --name-only --format= HEAD`.\n" +
     "6. plan_sha256 = the output of this command, run exactly as written:\n" +
@@ -2863,19 +2875,11 @@ async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, f
   const before = pre || (await hasher(opts && opts.preLabel ? opts.preLabel : "hasher:fp-pre:" + roundTag, worktree, files, phaseName));
   const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT, true);
   const after = await hasher("hasher:fp-post:" + roundTag, worktree, files, phaseName);
-  const what = [];
-  if (before.fingerprint.head !== after.fingerprint.head) what.push("HEAD");
-  if (before.fingerprint.tree !== after.fingerprint.tree) what.push("tree");
-  for (const k of changedKeys(before.hashes, after.hashes)) {
-    // Claude Code itself writes this file (the workflow's allowlist, or a
-    // permission the user grants mid-run); exactly this ignored path, nothing else
-    if (k.map === "ignored" && k.key === HARNESS_SETTINGS) {
-      gate(label + ": " + HARNESS_SETTINGS + " changed during the judge run; harness state, not a judge mutation");
-      continue;
-    }
-    what.push(violationName(k));
-  }
-  if (what.length) {
+  if (!sameState(before, after)) {
+    const what = [];
+    if (before.fingerprint.head !== after.fingerprint.head) what.push("HEAD");
+    if (before.fingerprint.tree !== after.fingerprint.tree) what.push("tree");
+    for (const k of changedKeys(before.hashes, after.hashes)) what.push(violationName(k));
     halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") changed " + what.join(", ") + "; verdict discarded", "fingerprint");
   }
   checkRole(role, r);
@@ -3156,6 +3160,16 @@ async function planAndAudit(ctx) {
       (wouldBeShort ? "short" : "full") +
       "; short path disabled -> full path",
   );
+
+  // the repo's fixers run on the plan now, so the audit sees the bytes the
+  // plan commit will hold (2.1.4: prettier rewrote the plan in the commit)
+  const fmtLabel = "infra:format-plan" + sfx;
+  const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath }), "Plan");
+  if (!Array.isArray(fmt.changed_paths)) halt("failed", fmtLabel + " returned no changed_paths list");
+  const fmtOther = fmt.changed_paths.map((x) => normPath(String(x))).filter((x) => x !== planPath);
+  if (fmtOther.length)
+    halt("needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + fmtOther.join(", ") + " (never committed; clean the worktree)", "scope");
+  gate(fmtLabel + ": " + (fmt.reason || "hooks run on " + planPath));
 
   const audit = requireOk(
     "plan-audit",

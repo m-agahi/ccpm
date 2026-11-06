@@ -116,6 +116,8 @@ async function runOne(script, args0) {
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
     // unscripted IaC scans find nothing (a clean repo)
     if (!(label in script) && /^infra:iac-scan:/.test(label)) return { status: "ok", reason: "scanned", iac_files: [], iac_text: [] };
+    // unscripted plan formatting changes nothing (the hooks found nothing to fix)
+    if (!(label in script) && /^infra:format-plan/.test(label)) return { status: "ok", reason: "formatted", changed_paths: [] };
     // unscripted fleet-internal scans find no .fleet/ path in the PR diff
     if (!(label in script) && /^infra:fleet-scan:/.test(label)) return { status: "ok", reason: "scanned", diff: [], commits: [] };
     // run-state writes are mechanical too: the ref lands on the expected head
@@ -2143,6 +2145,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:iac-scan:plan",
     "infra:branch-scan",
     "role:scope-and-plan",
+    "infra:format-plan",
     "role:plan-audit",
     "infra:stage-plan",
     "infra:commit-plan",
@@ -3017,6 +3020,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.deepEqual(tail, [
     "infra:replan-worktree",
     "role:scope-and-plan:replan",
+    "infra:format-plan:replan",
     "role:plan-audit:replan",
     "infra:stage-plan:replan",
     "infra:commit-plan:replan",
@@ -6051,6 +6055,7 @@ const ARRAY_SITES = {
   "b.sources @ briefProblem": "intake:brief.sources",
   "plan.criteria @ planAndAudit": "role:scope-and-plan:criteria",
   "plan.plan_diff @ planAndAudit": "role:scope-and-plan:plan_diff",
+  "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   "r.files @ commitPlanAndRef": "infra:files",
   "r.refs @ commitPlanAndRef": "infra:refs",
   "c.files @ isPlanCommit": "infra:commits[].files",
@@ -6155,33 +6160,56 @@ test("2.1.5 every infra and hasher prompt carries run_nonce; role prompts do not
   for (const c of out2.plan.calls) if (!c.label.startsWith("role:")) assert.notEqual(c.prompt, p1[c.label], c.label);
 });
 
-// 2.1.4 trial bug #9: Claude Code (not the judge) may write the worktree's
-// .claude/settings.local.json; the judge fingerprint ignores exactly that
-// ignored path and nothing else.
-function judgeIgnored(key) {
+// 2.1.4 trial bug #9: the intent judge was reported as writing the
+// workflow's own .claude/settings.local.json. The journal shows the
+// pre-judge hasher result came back WITHOUT its ignored map (undeclared in
+// the schema, dropped in the relay) and the script read it as empty. That map
+// is now required, so the file is in both states and nothing is exempt: any
+// change to it during a judge run, a hooks key included, still discards the
+// verdict, exactly as in 2.1.4.
+function judgeIgnored(key, value) {
   const h = H({ ...HASHES_FLAT });
-  h.ignored = { [key]: "s1" };
+  h.ignored = { [key]: value || "s1" };
   return { status: "ok", fingerprint: FP_TESTS, hashes: h };
 }
 
-test("2.1.5 judge fingerprint: the root .claude/settings.local.json appearing is not a judge mutation", async () => {
-  const s = happy();
-  s["hasher:fp-post:test-judge:r1"] = judgeIgnored(".claude/settings.local.json");
-  // the file stays: every later state holds it
-  const withIt = judgeIgnored(".claude/settings.local.json").hashes;
-  s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_TESTS, hashes: withIt };
-  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes: withIt };
-  // before the judge the file is absent
-  const post = s["hasher:post-writers:r1"];
-  s["hasher:post-writers:r1"] = (p) => Object.assign(post(p), { hashes: H({ ...HASHES_FLAT }) });
-  s["hasher:pre-writers:r1"] = { status: "ok", fingerprint: FP_PRE, hashes: H({ ...HASHES_FLAT }) };
-  const out = await run(s, ARGS);
+// The settings file exists from the workspace step on: every state holds it.
+function withSettings(s, value) {
+  const h = judgeIgnored(".claude/settings.local.json", value).hashes;
+  s["hasher:pre-writers:r1"] = { status: "ok", fingerprint: FP_PRE, hashes: h };
+  s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_TESTS, hashes: h };
+  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes: h };
+  return s;
+}
+
+test("2.1.5 judge fingerprint: an unchanged .claude/settings.local.json passes", async () => {
+  const out = await run(withSettings(happy(), "allowlist"), ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.ok(out.logs.some((l) => /settings\.local\.json/.test(l) && /not a judge mutation/.test(l)));
 });
 
-test("2.1.5 judge fingerprint: any other ignored path a judge writes still discards the verdict", async () => {
+test("2.1.5 judge fingerprint: a judge that changes .claude/settings.local.json (a hooks key) is stopped", async () => {
+  const s = withSettings(happy(), "allowlist");
+  // the judge adds a hooks key: the file's hash changes
+  s["hasher:fp-post:test-judge:r1"] = judgeIgnored(".claude/settings.local.json", "allowlist+hooks");
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /judge mutated worktree: fleet-test-judge .*ignored path written: \.claude\/settings\.local\.json/);
+  assert.equal(out.result.stop_gate, "fingerprint");
+});
+
+test("2.1.5 judge fingerprint: settings.local.json appearing or vanishing during a judge run is stopped", async () => {
+  const s1 = happy();
+  s1["hasher:fp-post:test-judge:r1"] = judgeIgnored(".claude/settings.local.json");
+  const o1 = await run(s1, ARGS);
+  assert.equal(o1.result.stop_gate, "fingerprint");
+  const s2 = withSettings(happy(), "allowlist");
+  s2["hasher:fp-post:test-judge:r1"] = { status: "ok", fingerprint: FP_TESTS, hashes: H({ ...HASHES_FLAT }) };
+  const o2 = await run(s2, ARGS);
+  assert.equal(o2.result.stop_gate, "fingerprint");
+});
+
+test("2.1.5 judge fingerprint: any other ignored path a judge writes discards the verdict", async () => {
   for (const key of ["sub/.claude/settings.local.json", ".claude/settings.json", ".claude/settings.local.json.bak"]) {
     const s = happy();
     s["hasher:fp-post:test-judge:r1"] = judgeIgnored(key);
@@ -6204,4 +6232,51 @@ test("2.1.5 writer round: .claude/settings.local.json written by a writer is sti
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /ignored path written: \.claude\/settings\.local\.json/);
+});
+
+// 2.1.4 trial bug #8: a pre-commit fixer (prettier) rewrote the plan in the
+// commit, so the committed plan no longer hashed as the staged one. The plan
+// now runs through the repo's pre-commit hooks BEFORE the audit: the audit
+// approves, and the commit holds, the formatted bytes.
+test("2.1.5 format-plan runs the repo's hooks on the plan after the planner and before the audit", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  const l = out.plan.labels;
+  assert.ok(l.indexOf("infra:format-plan") > l.indexOf("role:scope-and-plan"));
+  assert.ok(l.indexOf("infra:format-plan") < l.indexOf("role:plan-audit"));
+  assert.ok(l.indexOf("infra:format-plan") > l.indexOf("infra:iac-scan:plan"), "hooks run only after the IaC refusal");
+  const p = call(out, "infra:format-plan").prompt;
+  assert.deepEqual(inputsOf(p), { worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main", plan_path: "docs/plans/x.md" });
+  assert.match(p, /pre-commit run --files/);
+  assert.match(p, /--no-verify|never bypass|Never bypass/i);
+  // the commit step no longer re-adds a rewritten plan and commits again
+  const cp = call(out, "infra:commit-plan").prompt;
+  assert.ok(!/re-add <plan_path> and commit once more/.test(cp), "no re-add after a hook rewrite");
+  assert.match(cp, /rewrites the plan/);
+});
+
+test("2.1.5 format-plan: a hook that touches any other path stops the run", async () => {
+  const s = happy();
+  s["infra:format-plan"] = { status: "ok", reason: "formatted", changed_paths: ["docs/plans/x.md", "README.md"] };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /format-plan.*README\.md/);
+  assert.ok(!out.labels.includes("role:plan-audit"));
+});
+
+test("2.1.5 format-plan: a hook failure stops before the audit", async () => {
+  const s = happy();
+  s["infra:format-plan"] = { status: "needs_human", reason: "hook check-yaml failed: ..." };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /format-plan/);
+  assert.ok(!out.labels.includes("role:plan-audit"));
+});
+
+test("2.1.5 format-plan: no changed_paths list fails closed", async () => {
+  const s = happy();
+  s["infra:format-plan"] = { status: "ok", reason: "formatted" };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /format-plan/);
 });
