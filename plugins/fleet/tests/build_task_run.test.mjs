@@ -6277,6 +6277,8 @@ test("2.1.5 format-plan runs the repo's hooks on the plan after the planner and 
   const p = call(out, "infra:format-plan").prompt;
   assert.deepEqual(inputsOf(p), { worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main", plan_path: "docs/plans/x.md" });
   assert.match(p, /pre-commit run --files/);
+  // a new plans dir must list the file, not the dir
+  assert.ok(!/status --porcelain`/.test(p) && /status --porcelain --untracked-files=all/.test(p), "files in new untracked dirs are listed");
   assert.match(p, /--no-verify|never bypass|Never bypass/i);
   // the commit step no longer re-adds a rewritten plan and commits again
   const cp = call(out, "infra:commit-plan").prompt;
@@ -6325,6 +6327,7 @@ test("2.1.5 a plan stop after the planner parks the run's own draft plan and kee
   assert.equal(inp.plan_path, "docs/plans/x.md");
   assert.equal(inp.dest, "/r/.claude/worktrees/fleet-l42-add-thing/scratch/parked/" + NONCE + "/docs/plans/x.md");
   assert.match(pk.prompt, /other than <plan_path>.*needs_human|any path other than <plan_path>/);
+  assert.ok(!/status --porcelain`/.test(pk.prompt) && /status --porcelain --untracked-files=all/.test(pk.prompt));
   assert.match(out.result.reason, /draft plan moved to .*scratch\/parked/);
   assert.equal(out.result.stop_gate, "role");
 });

@@ -2165,10 +2165,10 @@ function parkPlanPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "1. `git -C <worktree> status --porcelain`. Empty -> return {status: \"ok\", reason: \"nothing to park\", clean: true}. Any path other than <plan_path> listed -> return needs_human with those paths and change nothing.\n" +
+    "1. `git -C <worktree> status --porcelain --untracked-files=all`. Empty -> return {status: \"ok\", reason: \"nothing to park\", clean: true}. Any path other than <plan_path> listed -> return needs_human with those paths and change nothing.\n" +
     "2. `mkdir -p \"$(dirname <dest>)\"` and `cp -p <worktree>/<plan_path> <dest>` (skip the copy when the file is absent).\n" +
     "3. If `git -C <worktree> cat-file -e 'HEAD:<plan_path>'` succeeds (keep the quotes), run `git -C <worktree> restore --staged --worktree --source=HEAD -- <plan_path>`; else run `git -C <worktree> rm -q --cached --ignore-unmatch -- <plan_path>` and then `rm -f <worktree>/<plan_path>`.\n" +
-    "4. clean = whether `git -C <worktree> status --porcelain` is now empty.\n" +
+    "4. clean = whether `git -C <worktree> status --porcelain --untracked-files=all` is now empty.\n" +
     "Return {status, reason, target: <dest>, clean}."
   );
 }
@@ -2181,9 +2181,9 @@ function formatPlanPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "1. If `<worktree>/.pre-commit-config.yaml` does not exist: return {status: \"ok\", reason: \"no pre-commit config\", changed_paths: <the paths of `git -C <worktree> status --porcelain`>}.\n" +
+    "1. If `<worktree>/.pre-commit-config.yaml` does not exist: return {status: \"ok\", reason: \"no pre-commit config\", changed_paths: <the paths of `git -C <worktree> status --porcelain --untracked-files=all`>}.\n" +
     "2. Run `cd <worktree> && pre-commit run --files <plan_path>` as one Bash call with timeout 600000 ms. Exit 0 -> go to step 3. A non-zero exit after which `git -C <worktree> hash-object <plan_path>` differs from before the run means a fixer rewrote the plan: run the same command again, at most 3 runs in all. A non-zero exit that left the plan unchanged, `pre-commit` not installed, or a 3rd run that still fails -> return {status: \"needs_human\", reason: <the failing hook ids and the last 60 lines of output>}.\n" +
-    "3. changed_paths = the paths of `git -C <worktree> status --porcelain` (the plan doc itself is expected there).\n" +
+    "3. changed_paths = the paths of `git -C <worktree> status --porcelain --untracked-files=all` (the plan doc itself is expected there).\n" +
     "Return {status, reason, changed_paths}."
   );
 }

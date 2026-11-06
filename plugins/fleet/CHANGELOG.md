@@ -51,7 +51,7 @@ Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
   `infra:format-plan` step (after the planner and the IaC refusal, before plan-audit) runs
   `pre-commit run --files <plan_path>` until the fixers are done (at most 3 runs); the audit then
   approves, and the commit holds, the fixed bytes. A hook that fails without a rewrite, or touches
-  any other path, stops the run. Commit-plan no longer re-adds a plan a hook rewrote: it stops
+  any other path (listed with `--untracked-files=all`, so a new plans dir shows its file), stops the run. Commit-plan no longer re-adds a plan a hook rewrote: it stops
   instead. Repos with hooks outside pre-commit (husky, lefthook) are not covered yet.
 - **A stopped plan run parks its draft.** A stop between the planner and the plan commit (a
   plan-audit refusal, a refused command, a failed commit) left the untracked plan in the fleet
