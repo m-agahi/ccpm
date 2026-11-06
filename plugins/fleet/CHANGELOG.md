@@ -39,7 +39,8 @@ Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
   hasher map. `args.run_nonce` is now required in both modes (the skill passes `date +%s%N`) and is
   appended to every infra and hasher prompt, so a new invocation never replays one. The script
   cannot read git state itself; the nonce is the only lever. A runtime resume therefore re-runs
-  everything after preflight; build mode keeps its own run-state resume.
+  everything after preflight; build mode keeps its own run-state resume. The skill and the README
+  document the new argument.
 - **No exemption for `.claude/settings.local.json`.** The trial's "judge mutated worktree ...
   settings.local.json" stop came from the dropped `ignored` map above, not from the judge. With the
   map required, the file is in both states and the judge fingerprint is unchanged from 2.1.4: any

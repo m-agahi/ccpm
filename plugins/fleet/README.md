@@ -48,9 +48,11 @@ agent runs.
 
 ### Plan mode
 
-args: `{mode: "plan", input, repo, date, project?, confirm?}`. `confirm` is `"ask"` (the default:
+args: `{mode: "plan", input, repo, date, run_nonce, project?, confirm?}`. `confirm` is `"ask"` (the default:
 return for confirmation) or `"auto"` (see below). Any other value returns `needs_human` before any
-agent runs.
+agent runs. `run_nonce` (2.1.5) is a fresh value per invocation (the skill passes `date +%s%N`);
+every infra prompt carries it, so `resumeFromRunId` never replays a stale git or worktree check.
+A missing nonce returns `needs_human` before any agent runs.
 
 | Step | Agent              | Gate in script code                                                       |
 | ---- | ------------------ | ------------------------------------------------------------------------- |
@@ -153,7 +155,7 @@ source and repo, and the intent judge runs again (`:rerun` labels). A failure re
 
 ### Build mode
 
-args: `{mode: "build", plan_ref, date, project?, confirm?}`.
+args: `{mode: "build", plan_ref, date, run_nonce, project?, confirm?}`.
 
 | Step | Agent              | Gate in script code                                                        |
 | ---- | ------------------ | -------------------------------------------------------------------------- |
