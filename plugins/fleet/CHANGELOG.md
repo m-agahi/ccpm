@@ -16,6 +16,16 @@ Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
   the relay dropped it, and the script read the missing map as empty: the next fingerprint then
   saw `.claude/settings.local.json` as "ignored path written" by the intent judge. A hasher result
   without the map now fails.
+- **No replayed worktree checks on resume.** The workflow runtime replays the cached result of an
+  unchanged prompt on `resumeFromRunId`, so a resumed run got the workspace step's earlier "dirty"
+  verdict for a worktree that was already clean, and could equally get a stale "clean" or a stale
+  hasher map. `args.run_nonce` is now required in both modes (the skill passes `date +%s%N`) and is
+  appended to every infra and hasher prompt, so a new invocation never replays one. The script
+  cannot read git state itself; the nonce is the only lever. A runtime resume therefore re-runs
+  everything after preflight; build mode keeps its own run-state resume.
+- **The judge fingerprint tolerates `.claude/settings.local.json`.** Claude Code may write this
+  ignored file during a judge run. The judge fingerprint (only) skips exactly that root key and
+  logs it; any other ignored path, and the writer, freeze and coder checks, are unchanged.
 
 ## [2.1.4] - 2026-11-05
 

@@ -3,7 +3,7 @@ export const meta = {
   description:
     "Role fleet for one task in two modes. plan: intake, plan, audit, commit the plan locally, return for confirmation (confirm \"auto\": intent, command and scope gates, then build in the same run). build: verify the approved plan, test writers in the fleet worktree, test judge, freeze, coder, code judge, one commit step, push, draft PR, independent review, write-back. Every gate runs in script code.",
   whenToUse:
-    "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, project?, confirm?} or {mode: \"build\", plan_ref, date, project?, confirm?}; confirm is \"ask\" (default) or \"auto\". If invoked with no args, do not call Workflow again: tell the user to run /build-task <task>.",
+    "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, run_nonce, project?, confirm?} or {mode: \"build\", plan_ref, date, run_nonce, project?, confirm?}; confirm is \"ask\" (default) or \"auto\". If invoked with no args, do not call Workflow again: tell the user to run /build-task <task>.",
   phases: [
     { title: "Preflight", detail: "load all ten role prompts from yadgar" },
     { title: "Intake", detail: "resolve the input into a brief (plan mode)" },
@@ -153,6 +153,8 @@ const SHORT_PATH_MAX_DIFF = 20; // tier is computed and logged; the short path i
 
 const MODES = ["plan", "build"];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// args.run_nonce: a fresh value per invocation (the skill uses `date +%s%N`).
+const NONCE_RE = /^[A-Za-z0-9_.:-]{6,64}$/;
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const BRANCH_RE = /^fleet\/[a-z0-9][a-z0-9-]*$/;
@@ -1263,6 +1265,9 @@ function changedKeys(a0, b0) {
 
 // The violation text for a changed key.
 const FLEETREF = "fleetref:";
+// The worktree's Claude Code settings (an ignored path): the judge
+// fingerprint alone tolerates a change to exactly this key.
+const HARNESS_SETTINGS = ".claude/settings.local.json";
 function violationName(x) {
   if (x.map === "ignored") return "ignored path written: " + x.key;
   if (x.map === "git" && x.key.indexOf(FLEETREF) === 0) return "run-state ref touched by role: " + x.key.slice(FLEETREF.length);
@@ -2664,6 +2669,7 @@ function stop(status, reason) {
 
 const state = {
   mode: null,
+  nonce: null,
   agents: 0,
   gateLog: [],
   findings: [],
@@ -2700,11 +2706,20 @@ function reserve(n, what) {
     );
 }
 
+// The caller's run_nonce, appended to every infra prompt. The workflow
+// runtime replays a cached result for an unchanged prompt on resume
+// (resumeFromRunId); a stateful check (workspace, hasher, branch-scan, ...)
+// must never return the verdict of an earlier worktree. A new invocation has
+// a new nonce, so no infra call replays, and no role call after one does.
+function nonced(prompt) {
+  return prompt + "\nRun nonce: " + state.nonce + " (keys the workflow cache to this invocation; ignore it).";
+}
+
 // Infra agents: always INFRA_MODEL.
 async function dispatch(label, prompt, opts) {
   reserve(1, label);
   state.agents++;
-  const r = await agent(prompt, Object.assign({}, opts, { label, model: INFRA_MODEL }));
+  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model: INFRA_MODEL }));
   if (r == null) halt("failed", "agent " + label + " returned no result");
   return r;
 }
@@ -2717,7 +2732,7 @@ async function softDispatch(label, prompt, opts) {
     return null;
   }
   state.agents++;
-  const r = await agent(prompt, Object.assign({}, opts, { label, model: INFRA_MODEL }));
+  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model: INFRA_MODEL }));
   if (r == null) gate(label + " returned no result");
   return r;
 }
@@ -2848,11 +2863,19 @@ async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, f
   const before = pre || (await hasher(opts && opts.preLabel ? opts.preLabel : "hasher:fp-pre:" + roundTag, worktree, files, phaseName));
   const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT, true);
   const after = await hasher("hasher:fp-post:" + roundTag, worktree, files, phaseName);
-  if (!sameState(before, after)) {
-    const what = [];
-    if (before.fingerprint.head !== after.fingerprint.head) what.push("HEAD");
-    if (before.fingerprint.tree !== after.fingerprint.tree) what.push("tree");
-    for (const k of changedKeys(before.hashes, after.hashes)) what.push(violationName(k));
+  const what = [];
+  if (before.fingerprint.head !== after.fingerprint.head) what.push("HEAD");
+  if (before.fingerprint.tree !== after.fingerprint.tree) what.push("tree");
+  for (const k of changedKeys(before.hashes, after.hashes)) {
+    // Claude Code itself writes this file (the workflow's allowlist, or a
+    // permission the user grants mid-run); exactly this ignored path, nothing else
+    if (k.map === "ignored" && k.key === HARNESS_SETTINGS) {
+      gate(label + ": " + HARNESS_SETTINGS + " changed during the judge run; harness state, not a judge mutation");
+      continue;
+    }
+    what.push(violationName(k));
+  }
+  if (what.length) {
     halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") changed " + what.join(", ") + "; verdict discarded", "fingerprint");
   }
   checkRole(role, r);
@@ -4755,6 +4778,12 @@ async function main(input) {
     stop("needs_human", "args.confirm must be \"ask\" or \"auto\", got " + JSON.stringify(input.confirm));
   if (typeof input.date !== "string" || !DATE_RE.test(input.date))
     stop("needs_human", "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)");
+  if (typeof input.run_nonce !== "string" || !NONCE_RE.test(input.run_nonce))
+    stop(
+      "needs_human",
+      "args.run_nonce missing or malformed: the skill passes a fresh value (date +%s%N) on every invocation; run /build-task again, never resumeFromRunId (it would replay stale worktree checks)",
+    );
+  state.nonce = input.run_nonce;
   return mode === "plan" ? planMode(input, input.date) : buildMode(input, input.date);
 }
 

@@ -91,7 +91,16 @@ const REQUIRED_DEFAULTS = {
   "gate-change-nonweakening-sweep": { verdict: "non_weakening", units: [], findings: [] },
 };
 
-async function runOne(script, args) {
+// The skill passes a fresh run_nonce on every invocation; scenario args that
+// do not name one get the default (null means "no nonce" in a test).
+const NONCE = "n1-0000001";
+function withNonce(args) {
+  if (!args || typeof args !== "object" || !args.mode || "run_nonce" in args) return args;
+  return Object.assign({}, args, { run_nonce: NONCE });
+}
+
+async function runOne(script, args0) {
+  const args = withNonce(args0);
   const calls = [];
   const unscripted = [];
   const logs = [];
@@ -229,8 +238,9 @@ const ARGS = {
   repo: "/r",
   project: "o/r",
   date: "2026-11-04",
+  run_nonce: NONCE,
 };
-const PC = "abc1234def0";
+const PC ="abc1234def0";
 const PSHA = "a".repeat(64);
 const BRIEF = {
   title: "Add Thing!",
@@ -6109,4 +6119,89 @@ test("2.1.5 a hasher result with no ignored map fails; it never reads as empty",
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "failed");
   assert.match(out.result.reason, /hasher hasher:pre-writers:r1 failed/);
+});
+
+// 2.1.4 trial bugs #5/#9: resumeFromRunId replays cached agent calls whose
+// prompts did not change, so a stateful check (workspace, hasher, branch-scan,
+// ...) returned the verdict of a worktree that no longer existed. Every infra
+// prompt carries the caller's run_nonce, so a new invocation never replays one.
+test("2.1.5 run_nonce is required in both modes; no agent runs without it", async () => {
+  for (const args of [
+    { ...ARGS, run_nonce: null },
+    { ...ARGS, run_nonce: "" },
+    { ...ARGS, run_nonce: "bad nonce!" },
+    { mode: "build", plan_ref: { branch: "fleet/l42-x" }, date: ARGS.date, run_nonce: null },
+  ]) {
+    const a = args;
+    const out = await runOne(happy(), a);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(a));
+    assert.match(out.result.reason, /run_nonce/);
+    assert.equal(out.calls.length, 0);
+  }
+});
+
+test("2.1.5 every infra and hasher prompt carries run_nonce; role prompts do not", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  for (const c of out.calls) {
+    const has = c.prompt.includes("Run nonce: " + NONCE);
+    if (c.label.startsWith("role:")) assert.ok(!has, c.label);
+    else assert.ok(has, c.label + " carries the run nonce");
+  }
+  // a second invocation with a new nonce changes every infra prompt
+  const out2 = await run(happy(), { ...ARGS, run_nonce: "n2-0000002" });
+  const p1 = Object.fromEntries(out.plan.calls.map((c) => [c.label, c.prompt]));
+  for (const c of out2.plan.calls) if (!c.label.startsWith("role:")) assert.notEqual(c.prompt, p1[c.label], c.label);
+});
+
+// 2.1.4 trial bug #9: Claude Code (not the judge) may write the worktree's
+// .claude/settings.local.json; the judge fingerprint ignores exactly that
+// ignored path and nothing else.
+function judgeIgnored(key) {
+  const h = H({ ...HASHES_FLAT });
+  h.ignored = { [key]: "s1" };
+  return { status: "ok", fingerprint: FP_TESTS, hashes: h };
+}
+
+test("2.1.5 judge fingerprint: the root .claude/settings.local.json appearing is not a judge mutation", async () => {
+  const s = happy();
+  s["hasher:fp-post:test-judge:r1"] = judgeIgnored(".claude/settings.local.json");
+  // the file stays: every later state holds it
+  const withIt = judgeIgnored(".claude/settings.local.json").hashes;
+  s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_TESTS, hashes: withIt };
+  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes: withIt };
+  // before the judge the file is absent
+  const post = s["hasher:post-writers:r1"];
+  s["hasher:post-writers:r1"] = (p) => Object.assign(post(p), { hashes: H({ ...HASHES_FLAT }) });
+  s["hasher:pre-writers:r1"] = { status: "ok", fingerprint: FP_PRE, hashes: H({ ...HASHES_FLAT }) };
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.logs.some((l) => /settings\.local\.json/.test(l) && /not a judge mutation/.test(l)));
+});
+
+test("2.1.5 judge fingerprint: any other ignored path a judge writes still discards the verdict", async () => {
+  for (const key of ["sub/.claude/settings.local.json", ".claude/settings.json", ".claude/settings.local.json.bak"]) {
+    const s = happy();
+    s["hasher:fp-post:test-judge:r1"] = judgeIgnored(key);
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", key);
+    assert.match(out.result.reason, /judge mutated worktree/, key);
+    assert.equal(out.result.stop_gate, "fingerprint", key);
+  }
+});
+
+test("2.1.5 writer round: .claude/settings.local.json written by a writer is still an ownership stop", async () => {
+  const s = happy();
+  const post = s["hasher:post-writers:r1"];
+  s["hasher:post-writers:r1"] = (p) => {
+    const r = post(p);
+    r.hashes = H({ ...HASHES_FLAT });
+    r.hashes.ignored = { ".claude/settings.local.json": "s1" };
+    return r;
+  };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /ignored path written: \.claude\/settings\.local\.json/);
 });
