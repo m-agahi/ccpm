@@ -41,6 +41,19 @@ Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
   run's own `plan_path` (nothing else; any other dirty path leaves the worktree untouched) to
   `scratch/parked/<run_nonce>/` and appends the path to the stop reason. A park failure never
   replaces the stop reason.
+- **Less plan-ref text through a model.** `infra:load-ref` asked a model to copy the whole sealed
+  plan JSON, and it wrote `[truncated: ...]`. The workflow script has no file access, so a model
+  must carry any bytes the script needs; the relay is now kept small and checked:
+  - commit-plan reads the refs in `meta` mode (names, targets, hashes; no message text). The
+    script hashes the bytes it sealed itself (`sha256(JSON + "\n")`) and compares.
+  - confirm auto builds from the sealed ref it holds in memory; load-ref reads `meta` only.
+  - a standalone build reads the message as `chunks` of at most 1000 characters, joins them and
+    checks the sha256 against `ref_sha256`. A mismatch is read once more
+    (`infra:load-ref:retry`), then stops as before. This is a mitigation: a model still copies the
+    chunks.
+- **Hasher maps are checked after the relay.** The hasher program prints a `digest` (sha256 of
+  the canonical fingerprint, maps and changed list); the script recomputes it over the relayed
+  values and fails the step on a dropped or changed key.
 
 ## [2.1.4] - 2026-11-05
 

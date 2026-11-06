@@ -809,6 +809,8 @@ for rel in explicit:
 out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
                  'ignored': ignored_files(),
                  'suspicious': sorted(set(SUSPICIOUS))}
+# the script recomputes this over the relayed values: a dropped key fails
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 
 print(json.dumps(out, sort_keys=True))
 `;
@@ -1054,6 +1056,7 @@ const INFRA_SCHEMA = {
     iac_text: { type: "array", items: STR },
     files: { type: "array", items: STR },
     diff: { type: "array", items: STR },
+    chunks: { type: "array", items: STR },
     refs: {
       type: "array",
       items: {
@@ -1160,6 +1163,7 @@ const HASHER_SCHEMA = {
     reason: STR,
     fingerprint: FINGERPRINT,
     changed: { type: "array", items: STR },
+    digest: STR,
     hashes: {
       type: "object",
       required: ["files", "sections", "git", "symlinks", "ignored", "suspicious"],
@@ -1855,6 +1859,9 @@ const PLAN_REF_PY = String.raw`
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, tid = sys.argv[1], sys.argv[2]
+# mode: '' (full content), 'meta' (no content) or 'chunks:<plan ref name>' (no
+# content in the entries; that ref's message as 'chunks' of <= 1000 chars)
+mode = sys.argv[3] if len(sys.argv) > 3 else ''
 if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', tid):
     sys.exit('bad task id: ' + tid)
 G = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
@@ -1889,12 +1896,40 @@ for name in fe.stdout.decode().splitlines():
                 e['content'] = None
     out.append(e)
 out.sort(key=lambda x: x['name'])
-print(json.dumps({'refs': out}, ensure_ascii=False))
+res = {'refs': out}
+if mode:
+    want = None
+    if mode.startswith('chunks:'):
+        want = mode[len('chunks:'):]
+        if not name_re.fullmatch(want):
+            sys.exit('bad chunks ref: ' + want)
+    elif mode != 'meta':
+        sys.exit('bad mode: ' + mode)
+    for e in out:
+        c = e.pop('content')
+        if want is not None and e['name'] == want and c is not None:
+            res['chunks'] = [c[i:i + 1000] for i in range(0, len(c), 1000)]
+print(json.dumps(res, ensure_ascii=False))
 `;
 // PLAN_REF_PY_END
 
-function planRefsCmd(worktree, taskId) {
-  return "python3 -I -c " + shQuote(PLAN_REF_PY) + " " + shQuote(worktree) + " " + shQuote(taskId);
+function planRefsCmd(worktree, taskId, mode) {
+  return "python3 -I -c " + shQuote(PLAN_REF_PY) + " " + shQuote(worktree) + " " + shQuote(taskId) + (mode ? " " + shQuote(mode) : "");
+}
+
+// Why a plan-ref entry read without content (meta or chunks mode) is not the
+// ref of commit `target` whose message hashes `sha` (null: ok).
+function planRefMetaProblem(e, target, sha) {
+  if (!e || typeof e !== "object") return "is missing";
+  if (e.type !== "tag" || e.target_type !== "commit") return "is not an annotated tag of a commit";
+  if (e.target !== target) return "targets " + e.target + ", not " + target;
+  if (e.sha256 !== sha) return "message sha256 " + e.sha256 + " is not " + sha;
+  return null;
+}
+
+// The exact tag message writePlanRefCmd stores for a sealed ref (heredoc + newline).
+function refMessage(full) {
+  return JSON.stringify(full) + "\n";
 }
 
 // Why a plan-ref entry is unusable as the ref of commit `target` (null: ok).
@@ -2034,7 +2069,7 @@ function hasherPrompt(inputs) {
     "Run this one Bash command exactly as written, unmodified, in the foreground:\n" +
     cmd +
     "\n" +
-    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored, suspicious} and, when a base tree is given, `changed` (the paths that differ from it). Return {status: "ok", fingerprint, hashes, changed} with those values copied exactly. ' +
+    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored, suspicious} and, when a base tree is given, `changed` (the paths that differ from it), plus `digest` (a sha256 over all of them). Return {status: "ok", fingerprint, hashes, changed, digest} with those values copied exactly: every key of every map, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     "The tree is built in a temporary index (GIT_INDEX_FILE=<temp file>: git read-tree HEAD, git add -A, git write-tree); the real index is never touched and no hook runs. " +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>, fingerprint: {head: "", tree: ""}}. Run no other command.\n' +
     "Extraction rules (the program implements them): " +
@@ -2154,8 +2189,8 @@ function commitPlanPrompt(inputs, refContent) {
     "7. Write the plan ref: run this one Bash command exactly as written, unmodified (it makes no commit, no tag name and no index change, and runs no hook). It prints `<head> <tag_sha>`; non-zero exit -> failed with its stderr:\n" +
     writePlanRefCmd(inputs.worktree, inputs.task_id, refContent) +
     "\n" +
-    "8. Run this command exactly as written; it prints {refs}. Copy refs unchanged, byte for byte:\n" +
-    planRefsCmd(inputs.worktree, inputs.task_id) +
+    "8. Run this command exactly as written; it prints {refs} (names, targets and hashes; no message text). Copy refs unchanged, byte for byte:\n" +
+    planRefsCmd(inputs.worktree, inputs.task_id, "meta") +
     "\n" +
     "Return {status, reason, reused, head, files, plan_sha256, refs}."
   );
@@ -2168,9 +2203,11 @@ function loadRefPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified (it reads the refs with git cat-file):\n" +
-    planRefsCmd(inputs.main_worktree, inputs.task_id) +
+    planRefsCmd(inputs.main_worktree, inputs.task_id, inputs.mode === "chunks" ? "chunks:" + inputs.plan_ref : "meta") +
     "\n" +
-    'It prints one JSON object {refs}. Return {status: "ok", reason, refs} with refs copied exactly, byte for byte. ' +
+    (inputs.mode === "chunks"
+      ? 'It prints one JSON object {refs, chunks}. Return {status: "ok", reason, refs, chunks} with both copied exactly, byte for byte: every chunk in full and in order. NEVER shorten, summarise, elide, merge or drop a chunk, and never write an ellipsis or a placeholder such as [truncated ...]; the script checks the joined chunks against a sha256 and stops the run on any change. '
+      : 'It prints one JSON object {refs}. Return {status: "ok", reason, refs} with refs copied exactly, byte for byte. ') +
     'If the command exits non-zero, return {status: "needs_human", reason: <its stderr>}. Run no other command.'
   );
 }
@@ -2872,6 +2909,11 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
   const fp = r.fingerprint;
   if (r.status !== "ok" || !fp || !fp.head || !fp.tree || !mapsOk || (baseTree && !Array.isArray(r.changed)))
     halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
+  // the maps travel through a model: recompute the program's digest over them
+  const relayed = { fingerprint: fp, hashes: h };
+  if (baseTree) relayed.changed = r.changed;
+  if (typeof r.digest !== "string" || sha256Hex(canonical(relayed)) !== r.digest)
+    halt("failed", "hasher " + label + " failed: the relayed maps do not match the program's digest (a key was dropped or changed in the copy)");
   return r;
 }
 
@@ -3265,16 +3307,10 @@ async function commitPlanAndRef(ctx) {
   const files = Array.isArray(r.files) ? Array.from(new Set(r.files.map((f) => normPath(String(f))))) : null;
   if (!files || files.length !== 1 || files[0] !== normPath(full.plan_path))
     halt("needs_human", label + ": the plan commit holds " + JSON.stringify(r.files || null) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
+  // the script wrote these bytes itself: it hashes them, the step relays no content
   const e = Array.isArray(r.refs) ? r.refs.find((x) => x && x.name === refName) : null;
-  const ep = planRefEntryProblem(e, r.head);
-  if (ep) halt("failed", label + ": the plan ref " + refName + " " + ep);
-  let written = null;
-  try {
-    written = JSON.parse(e.content);
-  } catch (err) {
-    written = null;
-  }
-  if (canonical(written) !== canonical(full)) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref");
+  const ep = planRefMetaProblem(e, r.head, sha256Hex(refMessage(full)));
+  if (ep) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref (" + ep + ")");
   if (ctx.onRefs) ctx.onRefs(r.refs);
   gate("plan committed locally at " + r.head + " (" + full.plan_path + " sha256 " + full.plan_sha256 + "); sealed ref at " + refName + " (sha256 " + e.sha256 + "); not pushed");
   return {
@@ -3656,7 +3692,7 @@ async function planMode(input, date) {
   });
   if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
   gate("auto-confirm: all gates pass; building " + pc.tiny.branch + " from " + pc.tiny.plan_commit + " in this run");
-  return buildFromRef(input, date, pc.tiny, lay, ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents });
+  return buildFromRef(input, date, pc.tiny, lay, ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents, full: pc.full });
 }
 
 // ---------------------------------------------------------------- build mode
@@ -3766,20 +3802,32 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // load the sealed ref from its local tag object; nothing else is trusted
   phase("Verify");
   const refTask = PLAN_REF_NAME_RE.exec(tiny.plan_ref)[1];
-  const ld = await infra(
-    "infra:load-ref",
-    loadRefPrompt({ main_worktree: lay.mainWt, task_id: refTask, plan_ref: tiny.plan_ref }),
-    "Verify",
-    JUDGE_AGENT,
-  );
   const changed = (why) => halt("needs_human", "plan ref missing or changed; re-run plan (" + tiny.plan_ref + " " + why + ")");
-  const entry = Array.isArray(ld.refs) ? ld.refs.find((x) => x && x.name === tiny.plan_ref) : null;
-  const ep = planRefEntryProblem(entry, tiny.plan_commit);
+  // 2.1.4: a model relaying the whole ref shortened it. With the sealed ref in
+  // memory (confirm auto, same run) only names and hashes are read; else the
+  // message comes in short chunks, checked against ref_sha256, asked for once more
+  const mem = opt.full && sha256Hex(refMessage(opt.full)) === tiny.ref_sha256 ? opt.full : null;
+  const load = (label) =>
+    infra(label, loadRefPrompt({ main_worktree: lay.mainWt, task_id: refTask, plan_ref: tiny.plan_ref, mode: mem ? "meta" : "chunks" }), "Verify", JUDGE_AGENT);
+  let ld = await load("infra:load-ref");
+  const entryOf = (r) => (Array.isArray(r.refs) ? r.refs.find((x) => x && x.name === tiny.plan_ref) : null);
+  const joined = (r) => (Array.isArray(r.chunks) && r.chunks.length && r.chunks.every((c) => typeof c === "string") ? r.chunks.join("") : null);
+  let entry = entryOf(ld);
+  const ep = planRefMetaProblem(entry, tiny.plan_commit, tiny.ref_sha256);
   if (ep) changed(ep);
-  if (entry.sha256 !== tiny.ref_sha256) changed("message sha256 " + entry.sha256 + " does not match ref_sha256 " + tiny.ref_sha256);
+  let content = mem ? refMessage(mem) : joined(ld);
+  if (!mem && content !== null && sha256Hex(content) !== tiny.ref_sha256) {
+    gate("infra:load-ref: the copied chunks do not match ref_sha256; reading once more");
+    ld = await load("infra:load-ref:retry");
+    entry = entryOf(ld);
+    const ep2 = planRefMetaProblem(entry, tiny.plan_commit, tiny.ref_sha256);
+    if (ep2) changed(ep2);
+    content = joined(ld);
+  }
+  if (content === null || sha256Hex(content) !== tiny.ref_sha256) changed("message chunks do not match ref_sha256 " + tiny.ref_sha256);
   let loaded = null;
   try {
-    loaded = JSON.parse(entry.content);
+    loaded = JSON.parse(content);
   } catch (e) {
     loaded = null;
   }

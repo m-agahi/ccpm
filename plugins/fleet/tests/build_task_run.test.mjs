@@ -152,6 +152,12 @@ async function runOne(script, args0) {
       const g = r.hashes.git || (r.hashes.git = {});
       if (!Object.keys(g).some((k) => k.startsWith("fleetref:"))) Object.assign(g, fleetRefs);
       lastHashes = r.hashes;
+      // the program's digest over what it printed (2.1.5)
+      if (!("digest" in r)) {
+        const o = { fingerprint: r.fingerprint, hashes: r.hashes };
+        if (inputsOf(prompt).base_tree) o.changed = r.changed;
+        r.digest = sha256(canon(o));
+      }
     }
     // a run-state write moves its ref
     if (label.startsWith("infra:state:") && !raw && r.status === "ok" && typeof r.state_sha === "string")
@@ -337,9 +343,28 @@ function commitStub(store, head, planSha) {
   };
 }
 
-// load-ref stub: the plan-ref reader over the store.
+// load-ref stub: the plan-ref reader over the store, in the prompt's mode
+// (2.1.5): no content in the entries; "chunks" adds the plan ref's message
+// in pieces of at most 1000 characters.
 function loadStub(store) {
-  return (prompt) => ({ status: "ok", reason: "read", refs: planRefsOf(store, inputsOf(prompt).task_id) });
+  return (prompt) => {
+    const inp = inputsOf(prompt);
+    const all = planRefsOf(store, inp.task_id);
+    const refs = all.map((e) => {
+      const o = { ...e };
+      delete o.content;
+      return o;
+    });
+    const r = { status: "ok", reason: "read", refs };
+    if (inp.mode === "chunks") {
+      const e = all.find((x) => x.name === inp.plan_ref);
+      if (e && typeof e.content === "string") {
+        r.chunks = [];
+        for (let i = 0; i < e.content.length; i += 1000) r.chunks.push(e.content.slice(i, i + 1000));
+      }
+    }
+    return r;
+  };
 }
 
 // commit-step stub: hooks pass; the commit holds exactly the judged tree.
@@ -2374,6 +2399,7 @@ test("tiny plan_ref round trip: build mode loads the plan ref object and uses it
     main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
     task_id: "l42",
     plan_ref: "refs/fleet/l42/plan",
+    mode: "chunks",
   });
   // the reader program runs read-only: cat-file, never a checkout or a write
   assert.match(load.prompt, /python3 -I -c/);
@@ -6067,7 +6093,8 @@ const ARRAY_SITES = {
   "scan.commits @ planMode": "infra:commits",
   "scan.refs @ planMode": "infra:refs",
   "r.criteria @ planRefProblem": "parsed: the sealed plan ref (JSON.parse of a verified tag message)",
-  "ld.refs @ buildFromRef": "infra:refs",
+  "r.refs @ buildFromRef": "infra:refs",
+  "r.chunks @ buildFromRef": "infra:chunks",
   "pf.commands @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
   "ref.plan_diff @ buildFromRef": "parsed: the sealed plan ref",
   "r.diff @ fleetScan": "infra:diff",
@@ -6317,4 +6344,175 @@ test("2.1.5 a stop before the planner returns parks nothing; an ok plan run park
   assert.ok(!out.labels.includes("infra:park-plan"));
   const ok = await run(happy(), ARGS);
   assert.ok(!ok.labels.includes("infra:park-plan"));
+});
+
+// 2.1.4 trial bug #10: load-ref relayed the whole sealed plan JSON through
+// a model, which shortened it to "[truncated: ...]". The commit-plan step and
+// the auto path no longer relay ref content at all (the script hashes the
+// bytes it wrote); a standalone build reads the content in short chunks,
+// checks them against ref_sha256 and asks once more on a mismatch.
+const CHUNK = 1000;
+function chunksOf(c) {
+  const out = [];
+  for (let i = 0; i < c.length; i += CHUNK) out.push(c.slice(i, i + CHUNK));
+  return out;
+}
+
+test("2.1.5 commit-plan relays no ref content: the script hashes the bytes it sealed", async () => {
+  const s = happy({ brief: { ...BRIEF, title: "Add Thing — ünï 🚀", description: "nbsp here" } });
+  s["infra:commit-plan"] = ((inner) => (p) => {
+    const r = inner(p);
+    r.refs = r.refs.map((e) => { const o = { ...e }; delete o.content; return o; });
+    return r;
+  })(commitStub(s.__store, PC, PSHA));
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const cp = call(out, "infra:commit-plan").prompt;
+  assert.match(cp, / 'meta'\n/, "the reader runs in meta mode");
+  assert.equal(out.result.plan_ref.ref_sha256, sha256(s.__store[PC]));
+});
+
+test("2.1.5 commit-plan: a ref whose sha256 is not the sealed bytes' stops", async () => {
+  const s = happy();
+  s["infra:commit-plan"] = ((inner) => (p) => {
+    const r = inner(p);
+    r.refs[0].sha256 = "e".repeat(64);
+    return r;
+  })(commitStub(s.__store, PC, PSHA));
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /differs from the sealed ref/);
+});
+
+test("2.1.5 load-ref reads the content in chunks and checks them against ref_sha256", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const out = await runOne(s, buildArgs(tiny));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const p = call(out, "infra:load-ref").prompt;
+  assert.equal(inputsOf(p).mode, "chunks");
+  assert.match(p, / 'chunks:refs\/fleet\/l42\/plan'\n/);
+  assert.match(p, /never shorten|NEVER shorten/i);
+});
+
+test("2.1.5 load-ref: a truncated chunk is asked for once more; a second bad copy stops", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const good = loadStub(s.__store);
+  const bad = (p) => {
+    const r = good(p);
+    r.chunks = r.chunks.slice();
+    r.chunks[0] = "[truncated: full plan JSON ...]";
+    return r;
+  };
+  s["infra:load-ref"] = bad;
+  s["infra:load-ref:retry"] = good;
+  let out = await runOne(s, buildArgs(tiny));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.labels.includes("infra:load-ref:retry"));
+  s["infra:load-ref:retry"] = bad;
+  out = await runOne(s, buildArgs(tiny));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan ref missing or changed; re-run plan.*chunks do not match/);
+});
+
+test("2.1.5 confirm auto builds from the in-memory sealed ref: load-ref reads metadata only", async () => {
+  const out = await runOne(autoHappy(), AUTO);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const p = call(out, "infra:load-ref").prompt;
+  assert.equal(inputsOf(p).mode, "meta");
+  assert.match(p, / 'meta'\n/);
+});
+
+test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebuilds the exact bytes", { skip: !HAVE_PY }, () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-chunks-"));
+  const wt = join(home, "repo");
+  try {
+    const cfg = join(home, "gitconfig");
+    writeFileSync(cfg, "[user]\n\temail = t@example.com\n\tname = t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = master\n");
+    const env = gitEnv(home, cfg);
+    spawnSync("git", ["init", "-q", wt], { env });
+    writeFileSync(join(wt, "a.py"), "a\n");
+    spawnSync("git", ["-C", wt, "add", "-A"], { env });
+    spawnSync("git", ["-C", wt, "commit", "-qm", "i"], { env });
+    const writeCmd = extractFn("WRITE_PLAN_REF_SH_BEGIN", "WRITE_PLAN_REF_SH_END", "writePlanRefCmd");
+    const reader = extractPy("PLAN_REF_PY_BEGIN", "PLAN_REF_PY_END", "PLAN_REF_PY");
+    const big = { task_id: "l42", body: "x y — ü 🚀 ".repeat(400) };
+    const w = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(big))], { encoding: "utf8", env });
+    assert.equal(w.status, 0, w.stderr);
+    const read = (mode) => {
+      const r = spawnSync("python3", ["-I", "-", wt, "l42"].concat(mode ? [mode] : []), { input: reader, encoding: "utf8", env });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const full = read("").refs[0];
+    const meta = read("meta");
+    assert.ok(!("content" in meta.refs[0]));
+    assert.equal(meta.refs[0].sha256, full.sha256);
+    assert.equal(meta.chunks, undefined);
+    const ch = read("chunks:refs/fleet/l42/plan");
+    assert.ok(!("content" in ch.refs[0]));
+    assert.ok(ch.chunks.length >= 5, "several chunks: " + ch.chunks.length);
+    assert.ok(ch.chunks.every((c) => [...c].length <= CHUNK), "at most 1000 code points per chunk");
+    assert.equal(ch.chunks.join(""), full.content);
+    assert.equal(sha256(ch.chunks.join("")), full.sha256);
+    const bad = spawnSync("python3", ["-I", "-", wt, "l42", "chunks:refs/heads/master"], { input: reader, encoding: "utf8", env });
+    assert.notEqual(bad.status, 0, "chunks of a non-plan ref are refused");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// The hasher's maps are relayed by a model too (2.1.4: the pre-intent result
+// lost its whole ignored map). The program prints a digest of what it found;
+// the script recomputes it over the relayed values, so a dropped or changed
+// key fails the hasher step instead of reading as "nothing there".
+function hasherDigest(r, withChanged) {
+  const o = { fingerprint: r.fingerprint, hashes: r.hashes };
+  if (withChanged) o.changed = r.changed;
+  return sha256(canon(o));
+}
+
+test("2.1.5 hasher program: digest is the sha256 of the canonical fingerprint, hashes and changed", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-digest-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    writeFileSync(join(wt, "pyproject.toml"), "[tool.pytest.ini_options]\naddopts = '-q'\n");
+    writeFileSync(join(wt, "test_ünï x.py"), "def test_a():\n    pass\n");
+    writeFileSync(join(wt, ".gitignore"), "local.txt\n");
+    writeFileSync(join(wt, "local.txt"), "x\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const out = runHasherRaw(wt, "hash", ["test_ünï x.py"]);
+    assert.match(out.digest, /^[0-9a-f]{64}$/);
+    assert.equal(out.digest, hasherDigest(out, false));
+    assert.ok("local.txt" in out.hashes.ignored);
+    const base = out.fingerprint.tree;
+    writeFileSync(join(wt, "test_ünï x.py"), "def test_a():\n    assert 1\n");
+    const out2 = runHasherRaw(wt, "hash", ["test_ünï x.py"], base);
+    assert.deepEqual(out2.changed, ["test_ünï x.py"]);
+    assert.equal(out2.digest, hasherDigest(out2, true));
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.5 a hasher result whose relayed maps do not match the digest fails", async () => {
+  const s = happy();
+  const h = H({ ...HASHES_FLAT });
+  h.ignored = { ".claude/settings.local.json": "s1" };
+  const good = { status: "ok", fingerprint: FP_PRE, hashes: h };
+  const digest = hasherDigest(good, false);
+  // the relay dropped the ignored key
+  s["hasher:pre-writers:r1"] = { __raw: true, status: "ok", fingerprint: FP_PRE, hashes: { ...h, ignored: {} }, digest };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /hasher hasher:pre-writers:r1 failed: .*digest/);
 });
