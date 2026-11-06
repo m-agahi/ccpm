@@ -2100,7 +2100,7 @@ test("intake runs read-only, gets input, repo and project", async () => {
   const c = call(out, "intake");
   assert.equal(c.opts.agentType, "fleet:judge");
   assert.equal(c.opts.model, "sonnet");
-  assert.deepEqual(inputsOf(c.prompt), { input: "L42", repo: "/r", project: "o/r" });
+  assert.deepEqual(inputsOf(c.prompt), { input: "L42", repo: "/r", project: "o/r", ledger: "yadgar" });
   assert.match(c.prompt, /Read only/);
   assert.ok(out.labels.indexOf("intake") < out.labels.indexOf("workspace"));
 });
@@ -6515,4 +6515,78 @@ test("2.1.5 a hasher result whose relayed maps do not match the digest fails", a
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "failed");
   assert.match(out.result.reason, /hasher hasher:pre-writers:r1 failed: .*digest/);
+});
+
+// 2.1.4 trial bug #11: on a yadgarhq/* project intake turned "yaadgaar #622"
+// into the frozen legacy ledger task L622. Projects whose id starts with
+// yadgarhq/ keep their tasks in yaadgaar (ADR-0994): the script tells intake
+// which ledger to use, a "#N" there is a yaadgaar task, and the sealed source
+// names the ledger.
+const YQ = { ...ARGS, input: "yaadgaar #622", project: "yadgarhq/docs" };
+const YBRIEF = { ...BRIEF, title: "Mark plain scalars", sources: [{ kind: "yaadgaar", ref: "622", url: null, body: "yaadgaar task body" }] };
+
+test("2.1.5 yaadgaar: intake is told the ledger by project; the task id and the sealed source name yaadgaar", async () => {
+  const s = happy({ brief: YBRIEF });
+  const out = await runOne(s, YQ);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const it = call(out, "intake");
+  assert.equal(inputsOf(it.prompt).ledger, "yaadgaar");
+  assert.match(it.prompt, /mcp__yaadgaar__read_task/);
+  assert.match(it.prompt, /never.*L<N>|never map/i);
+  assert.equal(out.result.branch, "fleet/y622-mark-plain-scalars");
+  assert.equal(out.result.plan_ref.plan_ref, "refs/fleet/y622/plan");
+  const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
+  assert.deepEqual(ref.brief.sources.map((x) => x.kind + ":" + x.ref), ["yaadgaar:622"]);
+  // another project keeps the yadgar ledger
+  const o = await runOne(happy(), ARGS);
+  assert.equal(inputsOf(call(o, "intake").prompt).ledger, "yadgar");
+});
+
+test("2.1.5 yaadgaar: a legacy ledger source on a yadgarhq/ project stops before the workspace", async () => {
+  for (const input of ["#622", "622", "yaadgaar #622", "L622"]) {
+    const s = happy({ brief: { ...YBRIEF, sources: [{ kind: "ledger", ref: "622", url: null, body: "TLS_ROTATION knob, done" }] } });
+    const out = await runOne(s, { ...YQ, input });
+    assert.equal(out.result.status, "needs_human", input);
+    assert.match(out.result.reason, /yaadgaar/, input);
+    assert.ok(!out.labels.includes("workspace"), input);
+  }
+});
+
+test("2.1.5 yaadgaar: a yaadgaar source on another project stops", async () => {
+  const out = await runOne(happy({ brief: YBRIEF }), { ...ARGS, input: "yaadgaar #622" });
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /yaadgaar/);
+  assert.ok(!out.labels.includes("workspace"));
+});
+
+test("2.1.5 yaadgaar: build re-reads the yaadgaar task, never L<N>", async () => {
+  const s = autoHappy({ brief: YBRIEF });
+  const plan = await runOne(s, { ...YQ, confirm: "ask" });
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  s["intake:rulings"] = { status: "ok", reason: "re-read", brief: YBRIEF };
+  s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
+  s["role:fleet-intent-judge:rerun"] = { status: "ok", reason: "fine", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } };
+  s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
+  const build = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs", confirm: "auto" });
+  noUnscripted(build);
+  assert.equal(build.result.status, "ok", build.result.reason);
+  const rr = inputsOf(call(build, "intake:rulings").prompt);
+  assert.equal(rr.input, "yaadgaar #622");
+  assert.equal(rr.ledger, "yaadgaar");
+  assert.equal(inputsOf(call(build, "role:fleet-intent-judge:rerun").prompt).ledger_task.ref, "622");
+  // write-back to yaadgaar is not wired yet (task 1928): no yadgar write, the section is handed back
+  assert.ok(!build.labels.includes("infra:ledger-writeback"));
+  assert.equal(build.result.ledger_status, "failed");
+  assert.match(build.result.write_back.ledger[0].reason, /yaadgaar/);
+  assert.match(build.result.write_back.ledger[0].section_text, /fleet:y622/);
+});
+
+test("2.1.5 yaadgaar: a sealed legacy ledger source on a yadgarhq/ project stops the build", async () => {
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /yaadgaar.*re-run plan/);
+  assert.ok(!out.labels.some((l) => ROLE_LABEL.test(l)));
 });

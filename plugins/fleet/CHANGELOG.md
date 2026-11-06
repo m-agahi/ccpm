@@ -54,6 +54,16 @@ Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
 - **Hasher maps are checked after the relay.** The hasher program prints a `digest` (sha256 of
   the canonical fingerprint, maps and changed list); the script recomputes it over the relayed
   values and fails the step on a dropped or changed key.
+- **yaadgaar tasks.** On a `yadgarhq/*` project, intake turned "yaadgaar #622" into the frozen
+  legacy task L622. The script now tells intake which ledger the project uses (`ledger:
+"yaadgaar"` for `yadgarhq/*`, else `"yadgar"`). There a `#N` is read with
+  `mcp__yaadgaar__read_task` after a check that yaadgaar resolves to the same project; the source
+  kind is `yaadgaar`, the task id `y<N>` (so `#622` and `L622` never share a branch or a plan
+  ref), and the sealed brief names the ledger. A legacy ledger source on a `yadgarhq/*` project,
+  or a yaadgaar source elsewhere, stops in plan mode and in build mode (a 2.1.4 ref: "re-run
+  plan"). The confirm-auto re-read asks for `yaadgaar #N`. Write-back to yaadgaar is not wired
+  yet (ccpm task 1928): the section is handed back as `section_text` and never written to the
+  yadgar ledger.
 
 ## [2.1.4] - 2026-11-05
 

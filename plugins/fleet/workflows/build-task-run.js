@@ -161,10 +161,14 @@ const BRANCH_RE = /^fleet\/[a-z0-9][a-z0-9-]*$/;
 // The sealed plan ref is an annotated tag object at refs/fleet/<task id>/plan
 // (local only, never pushed); earlier ones are kept as plan-<n>.
 const PLAN_REF_NAME_RE = /^refs\/fleet\/([a-z0-9][a-z0-9-]*)\/plan$/;
-const SOURCE_KINDS = ["ledger", "jira", "github", "codeberg", "plan", "text"];
+// "ledger" is the yadgar task ledger (L<N>); "yaadgaar" is the yaadgaar
+// gateway ledger that projects whose id starts with yadgarhq/ use (ADR-0994).
+const SOURCE_KINDS = ["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"];
 const EXTERNAL_KINDS = ["jira", "github", "codeberg"];
 // Sources whose ref names the task, in priority order, for the task id.
-const ID_KINDS = ["ledger", "jira", "github", "codeberg"];
+const ID_KINDS = ["ledger", "yaadgaar", "jira", "github", "codeberg"];
+const LEDGER_KINDS = ["ledger", "yaadgaar"];
+const YAADGAAR_PROJECT_RE = /^yadgarhq\//;
 // A comment line that starts with one of these words triggers a terraform
 // bot on the PR or issue. The script never posts such a comment.
 const FORBIDDEN_COMMENT_RE = /^\s*(digger|atlantis)\b/im;
@@ -1795,7 +1799,13 @@ function namesFor(brief) {
   for (const kind of ID_KINDS) {
     const src = brief.sources.find((x) => x.kind === kind);
     if (!src) continue;
-    taskId = kind === "ledger" ? "l" + slugify(String(src.ref).replace(/^l/i, ""), 24) : slugify(src.ref, 24);
+    // yaadgaar tasks get their own prefix: #622 and L622 are different tasks
+    taskId =
+      kind === "ledger"
+        ? "l" + slugify(String(src.ref).replace(/^l/i, ""), 24)
+        : kind === "yaadgaar"
+          ? "y" + slugify(String(src.ref).replace(/^#/, ""), 24)
+          : slugify(src.ref, 24);
     break;
   }
   if (taskId === null) taskId = brief.sources.some((x) => x.kind === "plan") ? "plan" : "task";
@@ -2084,14 +2094,17 @@ function intakePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Resolve `input` into ONE work item and fetch its text. Classify it in this order:\n" +
-    "1. Ledger id (`L42`, `42`, `#42`): kind ledger. Load mcp__yadgar__task_get via ToolSearch; call it with project_id=<project> and id=<the number>. If it refuses with external_task_ledger, use mcp__yaadgaar__read_task with number=<the number> instead. No project -> needs_human. ref = the number; body = the title, status and full body. If the task names a plan path that exists in the repo, also set plan_path and add a `plan` source for it.\n" +
+    "1. Task id (`L42`, `42`, `#42`, `yaadgaar #42`). No project -> needs_human. The ledger is fixed by `ledger`; never choose it yourself:\n" +
+    "   - ledger `yaadgaar` (the project's tasks live in yaadgaar): `42`, `#42` and `yaadgaar #42` are yaadgaar task 42; never map them to the yadgar ledger or to L<N>, and never call mcp__yadgar__task_get (that ledger is frozen history for this project). An `L42` input -> needs_human (a legacy id; this project builds from yaadgaar tasks only). First check that yaadgaar resolves to <project>: it names the project from the first `.yadgar/project-id` found walking up from <repo>, else from `git -C <repo> remote get-url origin` (<owner>/<name>); anything else -> needs_human. Load mcp__yaadgaar__read_task via ToolSearch and call it with number=<the number>; when the answer names a project that is not <project> -> needs_human. kind yaadgaar; ref = the number.\n" +
+    "   - ledger `yadgar`: kind ledger. Load mcp__yadgar__task_get via ToolSearch; call it with project_id=<project> and id=<the number>. A `yaadgaar #42` input, or a refusal with external_task_ledger -> needs_human. ref = the number.\n" +
+    "   body = the title, status and full body. If the task names a plan path that exists in the repo, also set plan_path and add a `plan` source for it.\n" +
     "2. Jira key (`ABC-123`): kind jira. Load the Atlassian MCP tools via ToolSearch: getAccessibleAtlassianResources for the cloudId, then getJiraIssue(issueIdOrKey, responseContentFormat=\"markdown\"). Tools absent -> needs_human. ref = the key; url = the browse URL; body = summary + description.\n" +
     "3. GitHub issue or PR URL (`https://github.com/<o>/<r>/issues/<n>` or `/pull/<n>`): kind github. `gh-personal issue view <url> --json title,body,url` (or `pr view`); use `gh` only when gh-personal is not installed. ref = `<o>/<r>#<n>`.\n" +
     "4. Codeberg issue or PR URL (`https://codeberg.org/<o>/<r>/issues/<n>` or `/pulls/<n>`): kind codeberg. `curl -sf https://codeberg.org/api/v1/repos/<o>/<r>/issues/<n>`. ref = `<o>/<r>#<n>`.\n" +
     "5. A path to an existing `.md` file inside <repo>: kind plan. ref and plan_path = the path relative to <repo>; body = the file text.\n" +
     "6. Anything else: kind text; ref = \"text\"; body = `input` verbatim.\n" +
     "Repo (brief.repo is the ABSOLUTE path of the local checkout to work in):\n" +
-    "- text, plan, ledger: <repo>.\n" +
+    "- text, plan, ledger, yaadgaar: <repo>.\n" +
     "- github or codeberg: the item's own repo. If `git -C <repo> remote get-url origin` names it -> <repo>. Else look for exactly one sibling checkout (`dirname <repo>`/*) whose origin names it; none or several -> needs_human.\n" +
     "- jira: the ticket must name exactly one repo (in its text, components or links); none or several -> needs_human listing what you found. Map that repo to a checkout as for github.\n" +
     "Any ambiguity (several matching tickets, an unclear id, several repos, a reference you cannot read) -> status needs_human with the candidates in reason. Do not guess.\n" +
@@ -3061,6 +3074,23 @@ function briefProblem(b) {
   return null;
 }
 
+// Which task ledger a project uses: yaadgaar for yadgarhq/*, else yadgar.
+function ledgerFor(project) {
+  return typeof project === "string" && YAADGAAR_PROJECT_RE.test(project) ? "yaadgaar" : "yadgar";
+}
+
+// A source from the wrong ledger for the project (null: ok).
+function ledgerProblem(brief, project) {
+  const y = ledgerFor(project) === "yaadgaar";
+  for (const s of brief.sources) {
+    if (y && s.kind === "ledger")
+      return "source ledger:" + s.ref + " is a legacy yadgar task, but project " + project + " keeps its tasks in yaadgaar (ADR-0994; a #N is a yaadgaar task)";
+    if (!y && s.kind === "yaadgaar")
+      return "source yaadgaar:" + s.ref + " needs a yadgarhq/ project; project " + (project || "(none)") + " uses the yadgar ledger";
+  }
+  return null;
+}
+
 function cleanBrief(b) {
   return {
     title: b.title.trim(),
@@ -3498,7 +3528,7 @@ function needsMaxSection(check, reasons, intent, planPath, tiny) {
 // planDiff, planFacts, files}. Returns {ok, failedCheck, reasons, intent}.
 async function autoGates(ctx) {
   const sfx = ctx.sfx || "";
-  const ledger = ctx.brief.sources.find((x) => x.kind === "ledger");
+  const ledger = ctx.brief.sources.find((x) => LEDGER_KINDS.indexOf(x.kind) >= 0);
   const jr = await judged(
     "fleet-intent-judge",
     "role:fleet-intent-judge" + sfx,
@@ -3582,7 +3612,7 @@ async function planMode(input, date) {
   await preflightStep();
 
   phase("Intake");
-  const it = await dispatch("intake", intakePrompt({ input: raw, repo, project: input.project || null }), {
+  const it = await dispatch("intake", intakePrompt({ input: raw, repo, project: input.project || null, ledger: ledgerFor(input.project) }), {
     schema: INTAKE_SCHEMA,
     agentType: JUDGE_AGENT,
     phase: "Intake",
@@ -3591,6 +3621,8 @@ async function planMode(input, date) {
   const problem = briefProblem(it.brief);
   if (problem) halt("needs_human", "intake: " + problem);
   const brief = cleanBrief(it.brief);
+  const lp = ledgerProblem(brief, input.project);
+  if (lp) halt("needs_human", "intake: " + lp);
   const names = namesFor(brief);
   if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
   const lay = layout(names, brief.repo);
@@ -3774,8 +3806,8 @@ async function buildMode(input, date) {
 async function rereadBrief(brief, project, repo) {
   const src = brief.sources.find((x) => ID_KINDS.indexOf(x.kind) >= 0);
   if (!src) return brief;
-  const input = src.kind === "ledger" ? "L" + src.ref : src.url || src.ref;
-  const it = await dispatch("intake:rulings", intakePrompt({ input, repo, project: project || null }), {
+  const input = src.kind === "ledger" ? "L" + src.ref : src.kind === "yaadgaar" ? "yaadgaar #" + src.ref : src.url || src.ref;
+  const it = await dispatch("intake:rulings", intakePrompt({ input, repo, project: project || null, ledger: ledgerFor(project) }), {
     schema: INTAKE_SCHEMA,
     agentType: JUDGE_AGENT,
     phase: "Auto-confirm",
@@ -3857,6 +3889,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   };
   gate("build " + lay.branch + " from plan " + ref.plan_path + " @ " + ref.plan_commit + " (run " + history.runs + ", re-plans so far " + history.replans + "); plan ref sha256 matches, seal ok");
   const project = input.project || ws.remoteSlug;
+  // a ref sealed before 2.1.5 may hold a legacy ledger source of a yaadgaar project
+  const lpb = ledgerProblem(brief, project);
+  if (lpb) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + lpb + "; re-run plan");
   const defaultBranch = ws.defaultBranch;
   const remoteSlug = ws.remoteSlug;
   const mainWt = lay.mainWt;
@@ -4816,6 +4851,21 @@ async function writeBack(ctx) {
     }
     out.ledger_status = out.write_back.ledger.some((e) => e.status === "failed") ? "failed" : "ok";
     gate("write-back ledger: " + out.write_back.ledger.map((e) => e.ref + "=" + e.status).join(", "));
+  }
+  // yaadgaar tasks: the write path is not wired yet; never write the section
+  // to the yadgar ledger (its L<N> is another, frozen task). Hand it back.
+  const yq = brief.sources.filter((s) => s.kind === "yaadgaar");
+  if (yq.length) {
+    const sectionText = "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
+    for (const s of yq)
+      out.write_back.ledger.push({
+        ref: "yaadgaar #" + s.ref,
+        status: "failed",
+        reason: "yaadgaar write-back is not supported yet (ccpm task 1928); add section_text to the task by hand",
+        section_text: sectionText,
+      });
+    out.ledger_status = "failed";
+    gate("write-back ledger: " + yq.map((s) => "yaadgaar #" + s.ref + "=failed (not supported yet)").join(", "));
   }
 
   // (b) one marked comment per external source

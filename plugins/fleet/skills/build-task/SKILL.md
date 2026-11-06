@@ -54,6 +54,8 @@ runs `/build-task` explicitly, always use the fleet.
 
 4. **Project (optional).** Use the `<owner>/<repo>` project key from the session banner, if one is
    shown, as `project`. It scopes ledger reads and the ledger write-back. Otherwise omit it.
+   On a `yadgarhq/` project a task id (`#622`, `622`, `yaadgaar #622`) is a yaadgaar task, never
+   the legacy `L622`; the workflow needs `project` to tell them apart.
 
    **Confirm mode.** `confirm` is `"ask"` by default: the interactive confirmation in step 7. Use
    `"auto"` only when the user asked for an unattended or goal run (for example "build L42
