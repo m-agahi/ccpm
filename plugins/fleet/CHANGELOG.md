@@ -9,20 +9,31 @@ Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
 - **Contract-mismatch stops say how to recover.** Both contract stops (preflight and a role
   runner) now end with "run /reload-plugins or start a new session, then run /build-task again":
   a session started before a plugin update keeps the old workflow.
-- **Criteria must be printable ASCII.** A criterion about NBSP lost its NBSP on the JSON path and
-  became a duplicate of the plain-space case. Any string in a criterion (text, examples, ...) with
-  a character outside printable ASCII and newline now stops the run before the audit, naming the
-  code point; the planner must write a named constant such as `NBSP = chr(0xA0)`.
-- **confirm auto: one re-plan round after a plan-audit refusal.** A `plan_defect` or
-  `untestable_criteria` verdict now sends the audit findings to the planner once (labels
-  `:audit-fix`; the draft is updated in place, then formatted and audited again). A second
-  refusal stops as before. The sealed brief does not carry the findings. confirm ask is
-  unchanged: the refusal stops the run.
-- **Free-text tasks get a stable branch.** The slug came from the title intake writes, so a
-  re-plan of the same text could open a new branch and worktree, and every free-text task shared
-  the task id `task` and so one plan ref. A free-text task id is now `t` + the first 8 hex of the
-  text's sha256 and its slug comes from the text: the same text reuses its branch, another text
-  gets its own plan ref. Ledger, Jira and issue ids were already stable.
+- **No invisible or confusable characters in criteria examples.** A criterion about NBSP lost its
+  NBSP on the JSON path and became a duplicate of the plain-space case. A string in a criterion's
+  `examples` or `property` that holds NBSP, U+2000-U+200F, U+2028-U+202F (separators, bidi
+  embeddings, narrow NBSP), U+205F, U+2066-U+2069, U+061C, U+3000, U+FEFF, a C0 control other
+  than tab and newline, DEL or a C1 control now stops the run before format and audit, naming the
+  code point; the planner must write a named constant such as `NBSP = chr(0xA0)`. Visible
+  non-ASCII (em dash, smart quotes, arrows) is fine, and `text`, `dont_care` and `spec_quote` are
+  not checked.
+- **confirm auto: one re-plan round after a plan refusal.** A `plan_defect` or
+  `untestable_criteria` verdict, or a confusable character in the criteria, now sends the findings
+  to the planner once (labels `:audit-fix`; the draft is updated in place, then checked, formatted
+  and audited again). A second refusal stops as before. The sealed brief does not carry the
+  findings. confirm ask is unchanged: the refusal stops the run.
+- **Stable task ids for free text and ingested plans.** The slug came from the title intake
+  writes, so a re-plan of the same text could open a new branch and worktree. Every free-text task
+  also shared the task id `task`, and every ingested plan the id `plan`, so each shared one plan
+  ref. A free-text task id is now `t` + the first 8 hex of the sha256 of the raw input, with the
+  slug from that input; an ingested plan's id is `p` + the first 8 hex of the sha256 of its plan
+  path. Ledger, Jira and issue ids were already stable.
+- **The planner's `plan_path` is checked before anything touches it.** An absolute path, a `..`
+  segment or a name that does not end in `.md` stops the run before the park or format steps.
+- **A crash after the planner still parks the draft.** Any error, not only a gate stop, moves the
+  run's own draft out of the worktree; the original error is rethrown unchanged.
+- **Canonical JSON sorts keys by code point.** It now matches Python's `sort_keys`, so the hasher
+  digest holds for paths with astral characters (JS `.sort()` put them before U+E000-U+FFFF).
 - **Undeclared array fields in result schemas.** `INFRA_SCHEMA` now declares `iac_files`,
   `iac_text`, `files`, `diff`, `refs` (with an item shape) and `reused`; scope-and-plan declares
   `allowed_additions` (object or null, with `files`, `symbols`, `deps`, `settings` arrays). An

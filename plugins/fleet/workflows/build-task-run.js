@@ -1695,14 +1695,27 @@ function settingsFor(worktree) {
   });
 }
 
-// Canonical JSON: object keys sorted at every depth, undefined values dropped.
+// Compares two strings by Unicode code point, as Python's sort does
+// (JS .sort() compares UTF-16 units: astral characters sort before U+E000-U+FFFF).
+function codePointCompare(a, b) {
+  const x = Array.from(a);
+  const y = Array.from(b);
+  for (let i = 0; i < x.length && i < y.length; i++) {
+    const d = x[i].codePointAt(0) - y[i].codePointAt(0);
+    if (d) return d;
+  }
+  return x.length - y.length;
+}
+
+// Canonical JSON: object keys sorted by code point at every depth (Python's
+// json.dumps sort_keys order), undefined values dropped.
 function canonical(v) {
   if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
   if (v && typeof v === "object")
     return (
       "{" +
       Object.keys(v)
-        .sort()
+        .sort(codePointCompare)
         .filter((k) => v[k] !== undefined)
         .map((k) => JSON.stringify(k) + ":" + canonical(v[k]))
         .join(",") +
@@ -1796,9 +1809,10 @@ function escapeRe(s) {
 }
 
 // Task id for the branch name and the comment marker: the first ledger, Jira,
-// GitHub or Codeberg source names it; else "plan" (an ingested plan) or
-// "task" (free text). The slug comes from the brief title.
-function namesFor(brief) {
+// GitHub or Codeberg source names it; else p<sha256(plan path)[:8]> (an
+// ingested plan) or t<sha256(raw input)[:8]> (free text). The slug comes from
+// the brief title, for free text from the raw input.
+function namesFor(brief, raw) {
   let taskId = null;
   for (const kind of ID_KINDS) {
     const src = brief.sources.find((x) => x.kind === kind);
@@ -1815,9 +1829,15 @@ function namesFor(brief) {
   // free text: id and slug from the text itself, never from the model-written
   // title, so a re-run of the same text reuses its branch and two texts never
   // share a plan ref
-  const text = taskId === null && !brief.sources.some((x) => x.kind === "plan") ? brief.sources.find((x) => x.kind === "text") : null;
-  if (text) return { taskId: "t" + sha256Hex(text.body.trim()).slice(0, 8), slug: slugify(text.body) || "task" };
-  if (taskId === null) taskId = brief.sources.some((x) => x.kind === "plan") ? "plan" : "task";
+  // (the raw input, not intake's relayed copy of it)
+  const planSrc = brief.sources.find((x) => x.kind === "plan");
+  if (taskId === null && planSrc) taskId = "p" + sha256Hex(normPath(brief.plan_path || planSrc.ref)).slice(0, 8);
+  const text = taskId === null ? brief.sources.find((x) => x.kind === "text") : null;
+  if (text) {
+    const src = typeof raw === "string" && raw.trim() ? raw.trim() : text.body.trim();
+    return { taskId: "t" + sha256Hex(src).slice(0, 8), slug: slugify(src) || "task" };
+  }
+  if (taskId === null) taskId = "task";
   return { taskId, slug: slugify(brief.title) || "task" };
 }
 
@@ -3115,19 +3135,37 @@ function cleanBrief(b) {
   };
 }
 
-// The first character outside printable ASCII (plus newline) in any string
-// of v, as "U+XXXX at <path>", or null.
-function nonAsciiIn(v, at) {
+// Code points a model's JSON can silently turn into another character, or
+// that cannot be seen: NBSP, the U+2000-U+200F spaces and marks, line and
+// paragraph separators, narrow and math spaces, the ideographic space, BOM,
+// C0 (except tab and newline) and C1 controls, DEL, and the bidi controls.
+function confusableCp(c) {
+  return (
+    (c < 0x20 && c !== 9 && c !== 10) ||
+    (c >= 0x7f && c <= 0x9f) ||
+    c === 0xa0 ||
+    c === 0x61c ||
+    (c >= 0x2000 && c <= 0x200f) ||
+    (c >= 0x2028 && c <= 0x202f) ||
+    c === 0x205f ||
+    (c >= 0x2066 && c <= 0x2069) ||
+    c === 0x3000 ||
+    c === 0xfeff
+  );
+}
+
+// The first confusable code point in any string of v, as "U+XXXX at <path>", or null.
+function confusableIn(v, at) {
   if (typeof v === "string") {
     for (const ch of v) {
       const c = ch.codePointAt(0);
-      if (c !== 10 && (c < 0x20 || c > 0x7e)) return "U+" + c.toString(16).toUpperCase().padStart(4, "0") + " at " + (at || "text");
+      if (confusableCp(c)) return "U+" + c.toString(16).toUpperCase().padStart(4, "0") + " at " + at;
     }
     return null;
   }
   if (Array.isArray(v)) {
     for (let i = 0; i < v.length; i++) {
-      const r = nonAsciiIn(v[i], at + "[" + i + "]");
+      const r = confusableIn(v[i], at + "[" + i + "]");
       if (r) return r;
     }
     return null;
@@ -3135,10 +3173,27 @@ function nonAsciiIn(v, at) {
   if (v && typeof v === "object")
     for (const k of Object.keys(v)) {
       if (k === HELD_OUT_KEY) continue;
-      const r = nonAsciiIn(v[k], at ? at + "." + k : k);
+      const r = confusableIn(v[k], at + "." + k);
       if (r) return r;
     }
   return null;
+}
+
+// Criteria whose examples or property hold a confusable character, as
+// findings {criterion, finding}. text, dont_care and spec_quote are prose and
+// are not checked; visible non-ASCII is fine.
+function confusableFindings(criteria) {
+  const out = [];
+  for (const c of criteria) {
+    const bad = confusableIn(c.examples, "examples") || confusableIn(c.property, "property");
+    if (bad)
+      out.push({
+        criterion: c.id,
+        finding:
+          "invisible or confusable character " + bad + "; the JSON path can turn it into another character (2.1.4: NBSP became a space). Write a named constant instead, e.g. NBSP = chr(0xA0), and build the example from it",
+      });
+  }
+  return out;
 }
 
 function normCriteria(raw) {
@@ -3149,12 +3204,6 @@ function normCriteria(raw) {
       halt("needs_human", "criterion id not usable in a branch name: " + JSON.stringify(id));
     if (seen[id]) halt("needs_human", "duplicate criterion id " + id);
     seen[id] = true;
-    const bad = nonAsciiIn(c, "");
-    if (bad)
-      halt(
-        "needs_human",
-        "criterion " + id + " holds a character that is not printable ASCII (" + bad + "); the JSON path can turn it into another character (2.1.4: NBSP became a space). Re-plan with a named constant in the text, e.g. NBSP = chr(0xA0)",
-      );
     return Object.assign(stripHeldOut(c), {
       id,
       text: String(c.text || ""),
@@ -3228,6 +3277,33 @@ async function checkScripts(label, obligations, worktree, phaseName) {
   });
 }
 
+// Why a planner plan_path is unusable (null: ok): it must be a relative .md
+// path inside the repo. The park step moves it and the commit stages it.
+function planPathProblem(p) {
+  const s = String(p).trim();
+  if (s.charAt(0) === "/") return "is absolute";
+  if (normPath(s).split("/").indexOf("..") >= 0) return "has a .. segment";
+  if (!/\.md$/.test(normPath(s))) return "is not a .md file";
+  return null;
+}
+
+// confirm auto: the one re-plan round. The planner gets the findings as a
+// text source and updates its draft in place; the round never repeats.
+function replanWithFindings(ctx, planPath, what, findings, fallback) {
+  const body = findings.map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n") || fallback;
+  gate(what + " (confirm auto): one re-plan round with the findings");
+  return planAndAudit(
+    Object.assign({}, ctx, {
+      auditRetry: false,
+      suffix: (ctx.suffix || "") + ":audit-fix",
+      brief: Object.assign({}, ctx.brief, {
+        plan_path: planPath,
+        sources: ctx.brief.sources.concat([{ kind: "text", ref: "plan findings (" + what + ")", url: null, body }]),
+      }),
+    }),
+  );
+}
+
 async function planAndAudit(ctx) {
   const sfx = ctx.suffix || "";
   const plan = requireOk(
@@ -3247,6 +3323,8 @@ async function planAndAudit(ctx) {
   );
   if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
     halt("failed", "scope-and-plan returned no plan_path/criteria");
+  const ppBad = planPathProblem(plan.plan_path);
+  if (ppBad) halt("needs_human", "scope-and-plan plan_path " + JSON.stringify(plan.plan_path) + " " + ppBad);
   // from here on a stop leaves a draft plan in the worktree
   if (ctx.onPlanPath) ctx.onPlanPath(normPath(plan.plan_path));
   if (!Array.isArray(plan.plan_diff) || !plan.plan_diff.length || !plan.plan_diff.every((x) => typeof x === "string"))
@@ -3262,6 +3340,13 @@ async function planAndAudit(ctx) {
   if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
     halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
   const criteria = normCriteria(plan.criteria);
+  // 2.1.4 #7: an invisible or confusable character in examples or property
+  const conf = confusableFindings(criteria);
+  if (conf.length) {
+    const what = "criteria hold an invisible or confusable character";
+    if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, conf, what);
+    halt("needs_human", what + ": " + conf.map((f) => f.criterion + ": " + f.finding).join("; "));
+  }
   const planFacts = {
     allowed_additions: plan.allowed_additions ? stripHeldOut(plan.allowed_additions) : null,
     est_diff_lines: typeof plan.est_diff_lines === "number" ? plan.est_diff_lines : null,
@@ -3318,21 +3403,8 @@ async function planAndAudit(ctx) {
     ),
   );
   // confirm auto: one re-plan round with the audit findings, then stop
-  if (ctx.auditRetry && (audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria")) {
-    const body = (audit.routed_findings || []).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n") || audit.reason || audit.verdict;
-    gate("plan-audit verdict " + audit.verdict + " (confirm auto): one re-plan round with the audit findings");
-    return planAndAudit(
-      Object.assign({}, ctx, {
-        auditRetry: false,
-        suffix: sfx + ":audit-fix",
-        // the planner updates its draft in place
-        brief: Object.assign({}, ctx.brief, {
-          plan_path: planPath,
-          sources: ctx.brief.sources.concat([{ kind: "text", ref: "plan-audit findings (" + audit.verdict + ")", url: null, body }]),
-        }),
-      }),
-    );
-  }
+  if (ctx.auditRetry && (audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria"))
+    return replanWithFindings(ctx, planPath, "plan-audit verdict " + audit.verdict, audit.routed_findings || [], audit.reason || audit.verdict);
   if (audit.verdict !== "approve") {
     const first = (audit.routed_findings || []).slice(0, 3).map((f) => (f.criterion || "-") + ": " + f.finding);
     halt(
@@ -3680,7 +3752,7 @@ async function planMode(input, date) {
   const brief = cleanBrief(it.brief);
   const lp = ledgerProblem(brief, input.project);
   if (lp) halt("needs_human", "intake: " + lp);
-  const names = namesFor(brief);
+  const names = namesFor(brief, raw);
   if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
   const lay = layout(names, brief.repo);
   state.branch = lay.branch;
@@ -3718,12 +3790,19 @@ async function planMode(input, date) {
   // next run's workspace step refused the untracked plan)
   let draft = null;
   const parkOnStop = async (e) => {
-    if (!(e instanceof Stop) || !draft) throw e;
+    if (!draft) throw e;
     const dest = lay.scratch + "/parked/" + state.nonce + "/" + draft;
-    const pk = await softDispatch("infra:park-plan", parkPlanPrompt({ worktree: lay.mainWt, plan_path: draft, dest }), {
-      schema: INFRA_SCHEMA,
-      phase: "Plan",
-    });
+    let pk = null;
+    try {
+      pk = await softDispatch("infra:park-plan", parkPlanPrompt({ worktree: lay.mainWt, plan_path: draft, dest }), {
+        schema: INFRA_SCHEMA,
+        phase: "Plan",
+      });
+    } catch (err) {
+      pk = null;
+    }
+    // any other error (a crash, a dead runtime call) is rethrown unchanged
+    if (!(e instanceof Stop)) throw e;
     const note =
       pk && pk.status === "ok" && pk.clean === true
         ? pk.target

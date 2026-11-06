@@ -541,7 +541,7 @@ test("branch name derives deterministically from a ledger id and title", async (
   assert.equal(out.result.branch, "fleet/l42-add-thing");
 });
 
-test("an ingested plan: task id plan, slug from the brief title, plan_path forwarded in the brief", async () => {
+test("an ingested plan: task id p<sha256(plan path)[:8]>, slug from the brief title, plan_path forwarded in the brief", async () => {
   const brief = {
     title: "Foo Bar",
     description: "d",
@@ -555,7 +555,7 @@ test("an ingested plan: task id plan, slug from the brief title, plan_path forwa
   const out = await runOne(s, { ...ARGS, input: "docs/plans/Foo_Bar-2026-11-04.md" });
   noUnscripted(out);
   const ws = inputsOf(call(out, "workspace").prompt);
-  assert.equal(ws.branch, "fleet/plan-foo-bar");
+  assert.equal(ws.branch, "fleet/p" + sha256("docs/plans/Foo_Bar-2026-11-04.md").slice(0, 8) + "-foo-bar");
   const plan = inputsOf(call(out, "role:scope-and-plan").prompt);
   assert.equal(plan.brief.plan_path, "docs/plans/Foo_Bar-2026-11-04.md");
   assert.equal(plan.date, "2026-11-04");
@@ -6609,23 +6609,61 @@ test("2.1.5 a contract mismatch tells the user to reload the plugins", async () 
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
-// escaped NBSP, which the JSON path turned into a plain space. Criteria text
-// must be printable ASCII; a special character is named (NBSP = chr(0xA0)).
-test("2.1.5 criteria with non-ASCII or invisible characters stop before the audit", async () => {
-  for (const bad of ["keep a b", "zero​width", "tab\there", "bell\u0007", "ünï"]) {
-    const crit = criteria(2);
-    crit[1].text = bad;
-    const out = await runOne(happy({ criteria: crit }), ARGS);
-    assert.equal(out.result.status, "needs_human", JSON.stringify(bad));
-    assert.match(out.result.reason, /AC2.*not printable ASCII.*U\+/, JSON.stringify(bad));
-    assert.match(out.result.reason, /named constant/);
-    assert.ok(!out.labels.includes("role:plan-audit"));
+// escaped NBSP, which the JSON path turned into a plain space. Examples and
+// properties must not hold invisible, whitespace-confusable or control
+// characters; a special character is named (NBSP = chr(0xA0)). Visible
+// non-ASCII (an em dash, a smart quote, an arrow) and the text, dont_care and
+// spec_quote fields are not checked.
+test("2.1.5 criteria: an invisible or confusable character in examples or property stops before the audit", async () => {
+  const bads = ["a b", "zero​width", "en space", "line sep", "nnbsp ", "mm sp", "ideo　sp", "bom﻿", "bell\u0007", "cr\rlf", "c1\u0085", "bidi‮", "iso⁦x", "alm؜"];
+  for (const bad of bads) {
+    for (const field of ["examples", "property"]) {
+      const crit = criteria(2);
+      crit[1][field] = field === "examples" ? ["ok", bad] : { holds: bad };
+      const out = await runOne(happy({ criteria: crit }), ARGS);
+      assert.equal(out.result.status, "needs_human", field + " " + JSON.stringify(bad));
+      assert.match(out.result.reason, /AC2.*invisible or confusable character U\+/, JSON.stringify(bad));
+      assert.match(out.result.reason, /named constant/);
+      assert.ok(!out.labels.includes("role:plan-audit"));
+    }
   }
+});
+
+test("2.1.5 criteria: visible non-ASCII, tabs, newlines and the text, dont_care and spec_quote fields pass", async () => {
   const crit = criteria(2);
-  crit[0].text = "NBSP = chr(0xA0): 'a' + NBSP + 'b' stays quoted";
-  crit[0].examples = ["a\\u00a0b"];
+  crit[0].text = "Keep a b — NBSP = chr(0xA0); “quoted” ≥ 2 → ok";
+  crit[0].dont_care = ["zero​width in prose"];
+  crit[0].spec_quote = "“Smart” quote — copied verbatim";
+  crit[0].examples = ["tab\there", "line\nbreak", "ünï — “x” → ≥", "'a' + NBSP + 'b'"];
+  crit[0].property = { input: "αβγ", note: "em — dash" };
   const ok = await runOne(happy({ criteria: crit }), ARGS);
   assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+});
+
+test("2.1.5 confirm auto: a confusable character in the criteria goes to the one :audit-fix round", async () => {
+  const crit = criteria(2);
+  crit[1].examples = ["a b"];
+  const s = autoHappy({ criteria: crit });
+  s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], criteria: criteria(2) };
+  s["role:plan-audit:audit-fix"] = s["role:plan-audit"];
+  const out = await runOne(s, AUTO);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const l = out.labels;
+  assert.ok(!l.includes("infra:format-plan") && !l.includes("role:plan-audit"), "no format or audit for the refused plan");
+  const b = inputsOf(call(out, "role:scope-and-plan:audit-fix").prompt).brief;
+  assert.ok(b.sources.some((x) => x.kind === "text" && /AC2: .*U\+00A0/.test(x.body)));
+  // still bad after the round: stop, no second round
+  const t = autoHappy({ criteria: crit });
+  t["role:scope-and-plan:audit-fix"] = t["role:scope-and-plan"];
+  const o2 = await runOne(t, AUTO);
+  assert.equal(o2.result.status, "needs_human");
+  assert.match(o2.result.reason, /invisible or confusable/);
+  assert.ok(!o2.labels.includes("role:scope-and-plan:audit-fix:audit-fix"));
+  // confirm ask stops at once
+  const o3 = await runOne(happy({ criteria: crit }), ARGS);
+  assert.equal(o3.result.status, "needs_human");
+  assert.ok(!o3.labels.includes("role:scope-and-plan:audit-fix"));
 });
 
 // 2.1.4 trial bug #3: under confirm auto a plan-audit refusal stopped the run
@@ -6681,3 +6719,93 @@ test("2.1.5 free text: task id and slug derive from the text, not the model's ti
   const c = await runOne(happy({ brief: brief("x", "another change") }), { ...ARGS, input: "another change" });
   assert.notEqual(c.result.plan_ref.plan_ref, a.result.plan_ref.plan_ref, "another text, another plan ref");
 });
+
+// Review of #33 (minor findings).
+test("2.1.5 free text: the task id hashes the raw input, not the relayed body", async () => {
+  const raw = "Make the Foo parser keep NBSP";
+  const brief = { ...BRIEF, title: "t", sources: [{ kind: "text", ref: "text", url: null, body: raw + " (relayed, changed)" }] };
+  const out = await runOne(happy({ brief }), { ...ARGS, input: raw });
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.equal(out.result.branch, "fleet/t" + sha256(raw).slice(0, 8) + "-make-the-foo-parser-keep-nbsp");
+});
+
+test("2.1.5 an ingested plan gets its own task id from the plan path", async () => {
+  const brief = (p) => ({ ...BRIEF, title: "Foo Bar", sources: [{ kind: "plan", ref: p, url: null, body: "# plan" }], plan_path: p });
+  const run1 = async (p) => {
+    const s = happy({ brief: brief(p) });
+    s["role:scope-and-plan"].plan_path = p;
+    return runOne(s, { ...ARGS, input: p });
+  };
+  const a = await run1("docs/plans/a.md");
+  const b = await run1("docs/plans/b.md");
+  assert.equal(a.result.status, "awaiting_confirmation", a.result.reason);
+  assert.equal(a.result.plan_ref.plan_ref, "refs/fleet/p" + sha256("docs/plans/a.md").slice(0, 8) + "/plan");
+  assert.notEqual(a.result.plan_ref.plan_ref, b.result.plan_ref.plan_ref);
+});
+
+test("2.1.5 a plan_path that is absolute, climbs out or is not .md stops before any park or audit", async () => {
+  for (const p of ["/etc/x.md", "docs/../../x.md", "../x.md", "docs/plans/x.txt", "docs/plans/x"]) {
+    const s = happy();
+    s["role:scope-and-plan"].plan_path = p;
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", p);
+    assert.match(out.result.reason, /plan_path/, p);
+    assert.ok(!out.labels.includes("infra:park-plan"), p);
+    assert.ok(!out.labels.includes("role:plan-audit"), p);
+  }
+});
+
+test("2.1.5 a crash after the planner still parks the draft and rethrows the original error", async () => {
+  const s = happy();
+  s["infra:format-plan"] = () => {
+    throw new Error("transport died");
+  };
+  let parked = null;
+  s["infra:park-plan"] = (p) => {
+    parked = inputsOf(p).plan_path;
+    return { status: "ok", reason: "parked", target: inputsOf(p).dest, clean: true };
+  };
+  await assert.rejects(() => runOne(s, ARGS), /transport died/);
+  assert.equal(parked, "docs/plans/x.md");
+});
+
+test("2.1.5 canonical JSON sorts keys by code point, as Python sort_keys does", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-sort-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    const files = ["test_\u{1F600}.py", "test_！.py"];
+    for (const f of files) writeFileSync(join(wt, f), "def test_a():\n    pass\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const out = runHasherRaw(wt, "hash", files);
+    // the workflow accepts the program's digest for these keys
+    const fn = new Function(extractCanonical() + "\nreturn canonical;")();
+    const o = { fingerprint: out.fingerprint, hashes: out.hashes };
+    assert.equal(sha256(fn(o)), out.digest);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.5 a hasher result with a matching digest but no ignored map still fails as incomplete", async () => {
+  const s = happy();
+  const h = { files: {}, sections: {}, git: {}, symlinks: {}, suspicious: [] };
+  const digest = sha256(canon({ fingerprint: FP_PRE, hashes: h }));
+  s["hasher:pre-writers:r1"] = { __raw: true, status: "ok", fingerprint: FP_PRE, hashes: h, digest };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /hasher hasher:pre-writers:r1 failed: incomplete output/);
+});
+
+// The workflow's canonical() and its code-point comparator, as source.
+function extractCanonical() {
+  const grab = (name) => {
+    const i = SOURCE.indexOf("\nfunction " + name + "(");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  };
+  return grab("codePointCompare") + grab("canonical");
+}
