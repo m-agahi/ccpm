@@ -3,7 +3,7 @@ export const meta = {
   description:
     "Role fleet for one task in two modes. plan: intake, plan, audit, commit the plan locally, return for confirmation (confirm \"auto\": intent, command and scope gates, then build in the same run). build: verify the approved plan, test writers in the fleet worktree, test judge, freeze, coder, code judge, one commit step, push, draft PR, independent review, write-back. Every gate runs in script code.",
   whenToUse:
-    "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, project?, confirm?} or {mode: \"build\", plan_ref, date, project?, confirm?}; confirm is \"ask\" (default) or \"auto\". If invoked with no args, do not call Workflow again: tell the user to run /build-task <task>.",
+    "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, run_nonce, project?, confirm?} or {mode: \"build\", plan_ref, date, run_nonce, project?, confirm?}; confirm is \"ask\" (default) or \"auto\". If invoked with no args, do not call Workflow again: tell the user to run /build-task <task>.",
   phases: [
     { title: "Preflight", detail: "load all ten role prompts from yadgar" },
     { title: "Intake", detail: "resolve the input into a brief (plan mode)" },
@@ -63,6 +63,10 @@ const EXPECTED_VERSIONS = {
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
 const CONTRACT = "fleet-v3";
 const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
+// A session keeps the plugin version it started with; a mismatch after an
+// update usually means this script is the stale one.
+const RELOAD_HINT =
+  " (this fleet workflow expects " + CONTRACT + "; if the plugin was updated after this session started, run /reload-plugins or start a new session, then run /build-task again)";
 // Keys each role must return when status is "ok" (checked with `key in obj`;
 // null or empty values are allowed). A missing key is contract drift. A
 // required key whose role schema types it as array, object or boolean must
@@ -153,16 +157,22 @@ const SHORT_PATH_MAX_DIFF = 20; // tier is computed and logged; the short path i
 
 const MODES = ["plan", "build"];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// args.run_nonce: a fresh value per invocation (the skill uses `date +%s%N`).
+const NONCE_RE = /^[A-Za-z0-9_.:-]{6,64}$/;
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const BRANCH_RE = /^fleet\/[a-z0-9][a-z0-9-]*$/;
 // The sealed plan ref is an annotated tag object at refs/fleet/<task id>/plan
 // (local only, never pushed); earlier ones are kept as plan-<n>.
 const PLAN_REF_NAME_RE = /^refs\/fleet\/([a-z0-9][a-z0-9-]*)\/plan$/;
-const SOURCE_KINDS = ["ledger", "jira", "github", "codeberg", "plan", "text"];
+// "ledger" is the yadgar task ledger (L<N>); "yaadgaar" is the yaadgaar
+// gateway ledger that projects whose id starts with yadgarhq/ use (ADR-0994).
+const SOURCE_KINDS = ["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"];
 const EXTERNAL_KINDS = ["jira", "github", "codeberg"];
 // Sources whose ref names the task, in priority order, for the task id.
-const ID_KINDS = ["ledger", "jira", "github", "codeberg"];
+const ID_KINDS = ["ledger", "yaadgaar", "jira", "github", "codeberg"];
+const LEDGER_KINDS = ["ledger", "yaadgaar"];
+const YAADGAAR_PROJECT_RE = /^yadgarhq\//;
 // A comment line that starts with one of these words triggers a terraform
 // bot on the PR or issue. The script never posts such a comment.
 const FORBIDDEN_COMMENT_RE = /^\s*(digger|atlantis)\b/im;
@@ -807,6 +817,8 @@ for rel in explicit:
 out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
                  'ignored': ignored_files(),
                  'suspicious': sorted(set(SUSPICIOUS))}
+# the script recomputes this over the relayed values: a dropped key fails
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 
 print(json.dumps(out, sort_keys=True))
 `;
@@ -906,6 +918,15 @@ const SCHEMAS = {
     },
     est_diff_lines: { type: "number" },
     new_behaviour: { type: "boolean" },
+    allowed_additions: {
+      type: ["object", "null"],
+      properties: {
+        files: { type: "array", items: STR },
+        symbols: { type: "array", items: ANY_ITEM },
+        deps: { type: "array", items: ANY_ITEM },
+        settings: { type: "array", items: ANY_ITEM },
+      },
+    },
     repo_obligations: {
       type: "array",
       items: {
@@ -1037,7 +1058,29 @@ const INFRA_SCHEMA = {
     base_ref: STR,
     remote_slug: STR,
     created: { type: "boolean" },
+    reused: { type: "boolean" },
     merged: ANY_ARRAY,
+    iac_files: { type: "array", items: STR },
+    iac_text: { type: "array", items: STR },
+    files: { type: "array", items: STR },
+    diff: { type: "array", items: STR },
+    chunks: { type: "array", items: STR },
+    refs: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: STR,
+          tag_sha: STR,
+          type: STR,
+          target: STR,
+          target_type: STR,
+          sha256: STR_OR_NULL,
+          content: STR_OR_NULL,
+        },
+        required: ["name"],
+      },
+    },
     plan_sha256: STR,
     plan_sha256_head: STR,
     is_ancestor: { type: "boolean" },
@@ -1128,14 +1171,16 @@ const HASHER_SCHEMA = {
     reason: STR,
     fingerprint: FINGERPRINT,
     changed: { type: "array", items: STR },
+    digest: STR,
     hashes: {
       type: "object",
-      required: ["files", "sections", "git", "symlinks", "suspicious"],
+      required: ["files", "sections", "git", "symlinks", "ignored", "suspicious"],
       properties: {
         files: { type: "object", additionalProperties: STR },
         sections: { type: "object", additionalProperties: STR },
         git: { type: "object", additionalProperties: STR },
         symlinks: { type: "object", additionalProperties: STR },
+        ignored: { type: "object", additionalProperties: STR },
         suspicious: { type: "array", items: STR },
       },
     },
@@ -1650,14 +1695,27 @@ function settingsFor(worktree) {
   });
 }
 
-// Canonical JSON: object keys sorted at every depth, undefined values dropped.
+// Compares two strings by Unicode code point, as Python's sort does
+// (JS .sort() compares UTF-16 units: astral characters sort before U+E000-U+FFFF).
+function codePointCompare(a, b) {
+  const x = Array.from(a);
+  const y = Array.from(b);
+  for (let i = 0; i < x.length && i < y.length; i++) {
+    const d = x[i].codePointAt(0) - y[i].codePointAt(0);
+    if (d) return d;
+  }
+  return x.length - y.length;
+}
+
+// Canonical JSON: object keys sorted by code point at every depth (Python's
+// json.dumps sort_keys order), undefined values dropped.
 function canonical(v) {
   if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
   if (v && typeof v === "object")
     return (
       "{" +
       Object.keys(v)
-        .sort()
+        .sort(codePointCompare)
         .filter((k) => v[k] !== undefined)
         .map((k) => JSON.stringify(k) + ":" + canonical(v[k]))
         .join(",") +
@@ -1751,17 +1809,35 @@ function escapeRe(s) {
 }
 
 // Task id for the branch name and the comment marker: the first ledger, Jira,
-// GitHub or Codeberg source names it; else "plan" (an ingested plan) or
-// "task" (free text). The slug comes from the brief title.
-function namesFor(brief) {
+// GitHub or Codeberg source names it; else p<sha256(plan path)[:8]> (an
+// ingested plan) or t<sha256(raw input)[:8]> (free text). The slug comes from
+// the brief title, for free text from the raw input.
+function namesFor(brief, raw) {
   let taskId = null;
   for (const kind of ID_KINDS) {
     const src = brief.sources.find((x) => x.kind === kind);
     if (!src) continue;
-    taskId = kind === "ledger" ? "l" + slugify(String(src.ref).replace(/^l/i, ""), 24) : slugify(src.ref, 24);
+    // yaadgaar tasks get their own prefix: #622 and L622 are different tasks
+    taskId =
+      kind === "ledger"
+        ? "l" + slugify(String(src.ref).replace(/^l/i, ""), 24)
+        : kind === "yaadgaar"
+          ? "y" + slugify(String(src.ref).replace(/^#/, ""), 24)
+          : slugify(src.ref, 24);
     break;
   }
-  if (taskId === null) taskId = brief.sources.some((x) => x.kind === "plan") ? "plan" : "task";
+  // free text: id and slug from the text itself, never from the model-written
+  // title, so a re-run of the same text reuses its branch and two texts never
+  // share a plan ref
+  // (the raw input, not intake's relayed copy of it)
+  const planSrc = brief.sources.find((x) => x.kind === "plan");
+  if (taskId === null && planSrc) taskId = "p" + sha256Hex(normPath(brief.plan_path || planSrc.ref)).slice(0, 8);
+  const text = taskId === null ? brief.sources.find((x) => x.kind === "text") : null;
+  if (text) {
+    const src = typeof raw === "string" && raw.trim() ? raw.trim() : text.body.trim();
+    return { taskId: "t" + sha256Hex(src).slice(0, 8), slug: slugify(src) || "task" };
+  }
+  if (taskId === null) taskId = "task";
   return { taskId, slug: slugify(brief.title) || "task" };
 }
 
@@ -1822,6 +1898,9 @@ const PLAN_REF_PY = String.raw`
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, tid = sys.argv[1], sys.argv[2]
+# mode: '' (full content), 'meta' (no content) or 'chunks:<plan ref name>' (no
+# content in the entries; that ref's message as 'chunks' of <= 1000 chars)
+mode = sys.argv[3] if len(sys.argv) > 3 else ''
 if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', tid):
     sys.exit('bad task id: ' + tid)
 G = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
@@ -1856,12 +1935,40 @@ for name in fe.stdout.decode().splitlines():
                 e['content'] = None
     out.append(e)
 out.sort(key=lambda x: x['name'])
-print(json.dumps({'refs': out}, ensure_ascii=False))
+res = {'refs': out}
+if mode:
+    want = None
+    if mode.startswith('chunks:'):
+        want = mode[len('chunks:'):]
+        if not name_re.fullmatch(want):
+            sys.exit('bad chunks ref: ' + want)
+    elif mode != 'meta':
+        sys.exit('bad mode: ' + mode)
+    for e in out:
+        c = e.pop('content')
+        if want is not None and e['name'] == want and c is not None:
+            res['chunks'] = [c[i:i + 1000] for i in range(0, len(c), 1000)]
+print(json.dumps(res, ensure_ascii=False))
 `;
 // PLAN_REF_PY_END
 
-function planRefsCmd(worktree, taskId) {
-  return "python3 -I -c " + shQuote(PLAN_REF_PY) + " " + shQuote(worktree) + " " + shQuote(taskId);
+function planRefsCmd(worktree, taskId, mode) {
+  return "python3 -I -c " + shQuote(PLAN_REF_PY) + " " + shQuote(worktree) + " " + shQuote(taskId) + (mode ? " " + shQuote(mode) : "");
+}
+
+// Why a plan-ref entry read without content (meta or chunks mode) is not the
+// ref of commit `target` whose message hashes `sha` (null: ok).
+function planRefMetaProblem(e, target, sha) {
+  if (!e || typeof e !== "object") return "is missing";
+  if (e.type !== "tag" || e.target_type !== "commit") return "is not an annotated tag of a commit";
+  if (e.target !== target) return "targets " + e.target + ", not " + target;
+  if (e.sha256 !== sha) return "message sha256 " + e.sha256 + " is not " + sha;
+  return null;
+}
+
+// The exact tag message writePlanRefCmd stores for a sealed ref (heredoc + newline).
+function refMessage(full) {
+  return JSON.stringify(full) + "\n";
 }
 
 // Why a plan-ref entry is unusable as the ref of commit `target` (null: ok).
@@ -2001,7 +2108,7 @@ function hasherPrompt(inputs) {
     "Run this one Bash command exactly as written, unmodified, in the foreground:\n" +
     cmd +
     "\n" +
-    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, suspicious} and, when a base tree is given, `changed` (the paths that differ from it). Return {status: "ok", fingerprint, hashes, changed} with those values copied exactly. ' +
+    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored, suspicious} and, when a base tree is given, `changed` (the paths that differ from it), plus `digest` (a sha256 over all of them). Return {status: "ok", fingerprint, hashes, changed, digest} with those values copied exactly: every key of every map, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     "The tree is built in a temporary index (GIT_INDEX_FILE=<temp file>: git read-tree HEAD, git add -A, git write-tree); the real index is never touched and no hook runs. " +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>, fingerprint: {head: "", tree: ""}}. Run no other command.\n' +
     "Extraction rules (the program implements them): " +
@@ -2016,14 +2123,17 @@ function intakePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Resolve `input` into ONE work item and fetch its text. Classify it in this order:\n" +
-    "1. Ledger id (`L42`, `42`, `#42`): kind ledger. Load mcp__yadgar__task_get via ToolSearch; call it with project_id=<project> and id=<the number>. If it refuses with external_task_ledger, use mcp__yaadgaar__read_task with number=<the number> instead. No project -> needs_human. ref = the number; body = the title, status and full body. If the task names a plan path that exists in the repo, also set plan_path and add a `plan` source for it.\n" +
+    "1. Task id (`L42`, `42`, `#42`, `yaadgaar #42`). No project -> needs_human. The ledger is fixed by `ledger`; never choose it yourself:\n" +
+    "   - ledger `yaadgaar` (the project's tasks live in yaadgaar): `42`, `#42` and `yaadgaar #42` are yaadgaar task 42; never map them to the yadgar ledger or to L<N>, and never call mcp__yadgar__task_get (that ledger is frozen history for this project). An `L42` input -> needs_human (a legacy id; this project builds from yaadgaar tasks only). First check that yaadgaar resolves to <project>: it names the project from the first `.yadgar/project-id` found walking up from <repo>, else from `git -C <repo> remote get-url origin` (<owner>/<name>); anything else -> needs_human. Load mcp__yaadgaar__read_task via ToolSearch and call it with number=<the number>; when the answer names a project that is not <project> -> needs_human. kind yaadgaar; ref = the number.\n" +
+    "   - ledger `yadgar`: kind ledger. Load mcp__yadgar__task_get via ToolSearch; call it with project_id=<project> and id=<the number>. A `yaadgaar #42` input, or a refusal with external_task_ledger -> needs_human. ref = the number.\n" +
+    "   body = the title, status and full body. If the task names a plan path that exists in the repo, also set plan_path and add a `plan` source for it.\n" +
     "2. Jira key (`ABC-123`): kind jira. Load the Atlassian MCP tools via ToolSearch: getAccessibleAtlassianResources for the cloudId, then getJiraIssue(issueIdOrKey, responseContentFormat=\"markdown\"). Tools absent -> needs_human. ref = the key; url = the browse URL; body = summary + description.\n" +
     "3. GitHub issue or PR URL (`https://github.com/<o>/<r>/issues/<n>` or `/pull/<n>`): kind github. `gh-personal issue view <url> --json title,body,url` (or `pr view`); use `gh` only when gh-personal is not installed. ref = `<o>/<r>#<n>`.\n" +
     "4. Codeberg issue or PR URL (`https://codeberg.org/<o>/<r>/issues/<n>` or `/pulls/<n>`): kind codeberg. `curl -sf https://codeberg.org/api/v1/repos/<o>/<r>/issues/<n>`. ref = `<o>/<r>#<n>`.\n" +
     "5. A path to an existing `.md` file inside <repo>: kind plan. ref and plan_path = the path relative to <repo>; body = the file text.\n" +
     "6. Anything else: kind text; ref = \"text\"; body = `input` verbatim.\n" +
     "Repo (brief.repo is the ABSOLUTE path of the local checkout to work in):\n" +
-    "- text, plan, ledger: <repo>.\n" +
+    "- text, plan, ledger, yaadgaar: <repo>.\n" +
     "- github or codeberg: the item's own repo. If `git -C <repo> remote get-url origin` names it -> <repo>. Else look for exactly one sibling checkout (`dirname <repo>`/*) whose origin names it; none or several -> needs_human.\n" +
     "- jira: the ticket must name exactly one repo (in its text, components or links); none or several -> needs_human listing what you found. Map that repo to a checkout as for github.\n" +
     "Any ambiguity (several matching tickets, an unclear id, several repos, a reference you cannot read) -> status needs_human with the candidates in reason. Do not guess.\n" +
@@ -2067,6 +2177,37 @@ function stagePlanPrompt(inputs) {
   );
 }
 
+// Moves the stopped run's own draft plan out of the fleet worktree, so the
+// next plan run's workspace step finds a clean tree.
+function parkPlanPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: move this run's draft plan doc out of the worktree. Touch <plan_path> only. No commit, no push, no reset of the branch; never touch any other path.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. `git -C <worktree> status --porcelain --untracked-files=all`. Empty -> return {status: \"ok\", reason: \"nothing to park\", clean: true}. Any path other than <plan_path> listed -> return needs_human with those paths and change nothing.\n" +
+    "2. `mkdir -p \"$(dirname <dest>)\"` and `cp -p <worktree>/<plan_path> <dest>` (skip the copy when the file is absent).\n" +
+    "3. If `git -C <worktree> cat-file -e 'HEAD:<plan_path>'` succeeds (keep the quotes), run `git -C <worktree> restore --staged --worktree --source=HEAD -- <plan_path>`; else run `git -C <worktree> rm -q --cached --ignore-unmatch -- <plan_path>` and then `rm -f <worktree>/<plan_path>`.\n" +
+    "4. clean = whether `git -C <worktree> status --porcelain --untracked-files=all` is now empty.\n" +
+    "Return {status, reason, target: <dest>, clean}."
+  );
+}
+
+// Runs the repo's pre-commit hooks on the plan doc before the audit, so the
+// audit approves, and the plan commit holds, the bytes the fixers leave.
+function formatPlanPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: run the repo's pre-commit hooks on the plan doc ONLY, so the later plan commit has nothing left to rewrite. Change no other path. No staging, no commit, no push. Never bypass or skip a hook, never edit a hook or its config, never edit the plan by hand.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. If `<worktree>/.pre-commit-config.yaml` does not exist: return {status: \"ok\", reason: \"no pre-commit config\", changed_paths: <the paths of `git -C <worktree> status --porcelain --untracked-files=all`>}.\n" +
+    "2. Run `cd <worktree> && pre-commit run --files <plan_path>` as one Bash call with timeout 600000 ms. Exit 0 -> go to step 3. A non-zero exit after which `git -C <worktree> hash-object <plan_path>` differs from before the run means a fixer rewrote the plan: run the same command again, at most 3 runs in all. A non-zero exit that left the plan unchanged, `pre-commit` not installed, or a 3rd run that still fails -> return {status: \"needs_human\", reason: <the failing hook ids and the last 60 lines of output>}.\n" +
+    "3. changed_paths = the paths of `git -C <worktree> status --porcelain --untracked-files=all` (the plan doc itself is expected there).\n" +
+    "Return {status, reason, changed_paths}."
+  );
+}
+
 function commitPlanPrompt(inputs, refContent) {
   return (
     "Infra step of the fleet build workflow: commit the plan doc LOCALLY, in ONE commit that holds <plan_path> only, then record the sealed plan ref as a local git object. No other edits. Never push. Never --no-verify or any hook bypass; no Co-Authored-By trailer. No ledger, ticket or comment writes. Never stage, force-add or write any other path.\n" +
@@ -2081,7 +2222,7 @@ function commitPlanPrompt(inputs, refContent) {
     "2. `git -C <worktree> status --porcelain`: any dirty path other than <plan_path> -> needs_human with the paths.\n" +
     "3. `git -C <worktree> add -- <plan_path>`. Reuse check: when <reuse_head> is not null, `git -C <worktree> rev-parse HEAD` equals <reuse_head> and `git -C <worktree> diff --cached --quiet -- <plan_path>` exits 0 (the staged plan is byte-identical to HEAD's), make NO commit and set reused = true. Otherwise set reused = false and run `git -C <worktree> commit -m " +
     shQuote("plan(" + inputs.task_id + "): " + inputs.slug) +
-    "`. Never --allow-empty. If a hook rewrites the plan, re-add <plan_path> and commit once more; any other hook failure: fix the cause and retry once; a second failure -> failed.\n" +
+    "`. Never --allow-empty. If a hook rewrites the plan, do not re-add it and do not commit again: return needs_human with the hook output (the plan ran through the hooks before the audit; a rewrite now would commit bytes the audit never saw). Any other hook failure: fix the cause and retry once; a second failure -> failed.\n" +
     "4. `git -C <worktree> ls-files --error-unmatch -- <plan_path>` must succeed and `git -C <worktree> status --porcelain` must be empty; else needs_human.\n" +
     "5. head = `git -C <worktree> rev-parse HEAD`; files = the lines of `git -C <worktree> show --name-only --format= HEAD`.\n" +
     "6. plan_sha256 = the output of this command, run exactly as written:\n" +
@@ -2090,8 +2231,8 @@ function commitPlanPrompt(inputs, refContent) {
     "7. Write the plan ref: run this one Bash command exactly as written, unmodified (it makes no commit, no tag name and no index change, and runs no hook). It prints `<head> <tag_sha>`; non-zero exit -> failed with its stderr:\n" +
     writePlanRefCmd(inputs.worktree, inputs.task_id, refContent) +
     "\n" +
-    "8. Run this command exactly as written; it prints {refs}. Copy refs unchanged, byte for byte:\n" +
-    planRefsCmd(inputs.worktree, inputs.task_id) +
+    "8. Run this command exactly as written; it prints {refs} (names, targets and hashes; no message text). Copy refs unchanged, byte for byte:\n" +
+    planRefsCmd(inputs.worktree, inputs.task_id, "meta") +
     "\n" +
     "Return {status, reason, reused, head, files, plan_sha256, refs}."
   );
@@ -2104,9 +2245,11 @@ function loadRefPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified (it reads the refs with git cat-file):\n" +
-    planRefsCmd(inputs.main_worktree, inputs.task_id) +
+    planRefsCmd(inputs.main_worktree, inputs.task_id, inputs.mode === "chunks" ? "chunks:" + inputs.plan_ref : "meta") +
     "\n" +
-    'It prints one JSON object {refs}. Return {status: "ok", reason, refs} with refs copied exactly, byte for byte. ' +
+    (inputs.mode === "chunks"
+      ? 'It prints one JSON object {refs, chunks}. Return {status: "ok", reason, refs, chunks} with both copied exactly, byte for byte: every chunk in full and in order. NEVER shorten, summarise, elide, merge or drop a chunk, and never write an ellipsis or a placeholder such as [truncated ...]; the script checks the joined chunks against a sha256 and stops the run on any change. '
+      : 'It prints one JSON object {refs}. Return {status: "ok", reason, refs} with refs copied exactly, byte for byte. ') +
     'If the command exits non-zero, return {status: "needs_human", reason: <its stderr>}. Run no other command.'
   );
 }
@@ -2633,6 +2776,7 @@ function stop(status, reason) {
 
 const state = {
   mode: null,
+  nonce: null,
   agents: 0,
   gateLog: [],
   findings: [],
@@ -2669,11 +2813,20 @@ function reserve(n, what) {
     );
 }
 
+// The caller's run_nonce, appended to every infra prompt. The workflow
+// runtime replays a cached result for an unchanged prompt on resume
+// (resumeFromRunId); a stateful check (workspace, hasher, branch-scan, ...)
+// must never return the verdict of an earlier worktree. A new invocation has
+// a new nonce, so no infra call replays, and no role call after one does.
+function nonced(prompt) {
+  return prompt + "\nRun nonce: " + state.nonce + " (keys the workflow cache to this invocation; ignore it).";
+}
+
 // Infra agents: always INFRA_MODEL.
 async function dispatch(label, prompt, opts) {
   reserve(1, label);
   state.agents++;
-  const r = await agent(prompt, Object.assign({}, opts, { label, model: INFRA_MODEL }));
+  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model: INFRA_MODEL }));
   if (r == null) halt("failed", "agent " + label + " returned no result");
   return r;
 }
@@ -2686,7 +2839,7 @@ async function softDispatch(label, prompt, opts) {
     return null;
   }
   state.agents++;
-  const r = await agent(prompt, Object.assign({}, opts, { label, model: INFRA_MODEL }));
+  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model: INFRA_MODEL }));
   if (r == null) gate(label + " returned no result");
   return r;
 }
@@ -2737,7 +2890,7 @@ function contractProblem(role, r) {
   if (r.role_version !== state.roleVersions[role])
     return "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded";
   const c = contractOf(r.role_contract);
-  if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded";
+  if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded" + RELOAD_HINT;
   if (r.status !== "ok") return null;
   for (const k of REQUIRED_ON_OK[role] || []) {
     if (!(k in r)) return "role " + role + " contract drift: missing " + k;
@@ -2792,13 +2945,17 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
     phase: phaseName,
   });
   const h = r.hashes;
-  // the embedded program always returns the ignored map; a missing one reads as empty
-  if (h && h.ignored === undefined) h.ignored = {};
+  // every map is required: a map the relay dropped (2.1.4: ignored) must not read as empty
   const mapsOk =
     !!h && HASH_MAPS.every((m) => h[m] && typeof h[m] === "object") && Array.isArray(h.suspicious);
   const fp = r.fingerprint;
   if (r.status !== "ok" || !fp || !fp.head || !fp.tree || !mapsOk || (baseTree && !Array.isArray(r.changed)))
     halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
+  // the maps travel through a model: recompute the program's digest over them
+  const relayed = { fingerprint: fp, hashes: h };
+  if (baseTree) relayed.changed = r.changed;
+  if (typeof r.digest !== "string" || sha256Hex(canonical(relayed)) !== r.digest)
+    halt("failed", "hasher " + label + " failed: the relayed maps do not match the program's digest (a key was dropped or changed in the copy)");
   return r;
 }
 
@@ -2890,7 +3047,7 @@ async function preflightStep() {
     if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");
     state.roleVersions[role] = got;
     const c = contractOf(contracts[role]);
-    if (c !== CONTRACT) halt("needs_human", "role " + role + " contract " + c + " != " + CONTRACT, "contract");
+    if (c !== CONTRACT) halt("needs_human", "role " + role + " contract " + c + " != " + CONTRACT + RELOAD_HINT, "contract");
   }
   const dispatchLines = pre.dispatch || {};
   for (const role of ROLES) {
@@ -2946,6 +3103,23 @@ function briefProblem(b) {
   return null;
 }
 
+// Which task ledger a project uses: yaadgaar for yadgarhq/*, else yadgar.
+function ledgerFor(project) {
+  return typeof project === "string" && YAADGAAR_PROJECT_RE.test(project) ? "yaadgaar" : "yadgar";
+}
+
+// A source from the wrong ledger for the project (null: ok).
+function ledgerProblem(brief, project) {
+  const y = ledgerFor(project) === "yaadgaar";
+  for (const s of brief.sources) {
+    if (y && s.kind === "ledger")
+      return "source ledger:" + s.ref + " is a legacy yadgar task, but project " + project + " keeps its tasks in yaadgaar (ADR-0994; a #N is a yaadgaar task)";
+    if (!y && s.kind === "yaadgaar")
+      return "source yaadgaar:" + s.ref + " needs a yadgarhq/ project; project " + (project || "(none)") + " uses the yadgar ledger";
+  }
+  return null;
+}
+
 function cleanBrief(b) {
   return {
     title: b.title.trim(),
@@ -2959,6 +3133,67 @@ function cleanBrief(b) {
     repo: cleanRepo(b.repo),
     plan_path: b.plan_path ? normPath(b.plan_path) : null,
   };
+}
+
+// Code points a model's JSON can silently turn into another character, or
+// that cannot be seen: NBSP, the U+2000-U+200F spaces and marks, line and
+// paragraph separators, narrow and math spaces, the ideographic space, BOM,
+// C0 (except tab and newline) and C1 controls, DEL, and the bidi controls.
+function confusableCp(c) {
+  return (
+    (c < 0x20 && c !== 9 && c !== 10) ||
+    (c >= 0x7f && c <= 0x9f) ||
+    c === 0xa0 ||
+    c === 0x61c ||
+    (c >= 0x2000 && c <= 0x200f) ||
+    (c >= 0x2028 && c <= 0x202f) ||
+    c === 0x205f ||
+    (c >= 0x2066 && c <= 0x2069) ||
+    c === 0x3000 ||
+    c === 0xfeff
+  );
+}
+
+// The first confusable code point in any string of v, as "U+XXXX at <path>", or null.
+function confusableIn(v, at) {
+  if (typeof v === "string") {
+    for (const ch of v) {
+      const c = ch.codePointAt(0);
+      if (confusableCp(c)) return "U+" + c.toString(16).toUpperCase().padStart(4, "0") + " at " + at;
+    }
+    return null;
+  }
+  if (Array.isArray(v)) {
+    for (let i = 0; i < v.length; i++) {
+      const r = confusableIn(v[i], at + "[" + i + "]");
+      if (r) return r;
+    }
+    return null;
+  }
+  if (v && typeof v === "object")
+    for (const k of Object.keys(v)) {
+      if (k === HELD_OUT_KEY) continue;
+      const r = confusableIn(v[k], at + "." + k);
+      if (r) return r;
+    }
+  return null;
+}
+
+// Criteria whose examples or property hold a confusable character, as
+// findings {criterion, finding}. text, dont_care and spec_quote are prose and
+// are not checked; visible non-ASCII is fine.
+function confusableFindings(criteria) {
+  const out = [];
+  for (const c of criteria) {
+    const bad = confusableIn(c.examples, "examples") || confusableIn(c.property, "property");
+    if (bad)
+      out.push({
+        criterion: c.id,
+        finding:
+          "invisible or confusable character " + bad + "; the JSON path can turn it into another character (2.1.4: NBSP became a space). Write a named constant instead, e.g. NBSP = chr(0xA0), and build the example from it",
+      });
+  }
+  return out;
 }
 
 function normCriteria(raw) {
@@ -3042,6 +3277,33 @@ async function checkScripts(label, obligations, worktree, phaseName) {
   });
 }
 
+// Why a planner plan_path is unusable (null: ok): it must be a relative .md
+// path inside the repo. The park step moves it and the commit stages it.
+function planPathProblem(p) {
+  const s = String(p).trim();
+  if (s.charAt(0) === "/") return "is absolute";
+  if (normPath(s).split("/").indexOf("..") >= 0) return "has a .. segment";
+  if (!/\.md$/.test(normPath(s))) return "is not a .md file";
+  return null;
+}
+
+// confirm auto: the one re-plan round. The planner gets the findings as a
+// text source and updates its draft in place; the round never repeats.
+function replanWithFindings(ctx, planPath, what, findings, fallback) {
+  const body = findings.map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n") || fallback;
+  gate(what + " (confirm auto): one re-plan round with the findings");
+  return planAndAudit(
+    Object.assign({}, ctx, {
+      auditRetry: false,
+      suffix: (ctx.suffix || "") + ":audit-fix",
+      brief: Object.assign({}, ctx.brief, {
+        plan_path: planPath,
+        sources: ctx.brief.sources.concat([{ kind: "text", ref: "plan findings (" + what + ")", url: null, body }]),
+      }),
+    }),
+  );
+}
+
 async function planAndAudit(ctx) {
   const sfx = ctx.suffix || "";
   const plan = requireOk(
@@ -3061,6 +3323,10 @@ async function planAndAudit(ctx) {
   );
   if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
     halt("failed", "scope-and-plan returned no plan_path/criteria");
+  const ppBad = planPathProblem(plan.plan_path);
+  if (ppBad) halt("needs_human", "scope-and-plan plan_path " + JSON.stringify(plan.plan_path) + " " + ppBad);
+  // from here on a stop leaves a draft plan in the worktree
+  if (ctx.onPlanPath) ctx.onPlanPath(normPath(plan.plan_path));
   if (!Array.isArray(plan.plan_diff) || !plan.plan_diff.length || !plan.plan_diff.every((x) => typeof x === "string"))
     halt("needs_human", "role scope-and-plan contract drift: plan_diff must be a non-empty array of strings", "contract");
   if (typeof plan.tldr !== "string" || !plan.tldr.trim())
@@ -3074,6 +3340,13 @@ async function planAndAudit(ctx) {
   if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
     halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
   const criteria = normCriteria(plan.criteria);
+  // 2.1.4 #7: an invisible or confusable character in examples or property
+  const conf = confusableFindings(criteria);
+  if (conf.length) {
+    const what = "criteria hold an invisible or confusable character";
+    if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, conf, what);
+    halt("needs_human", what + ": " + conf.map((f) => f.criterion + ": " + f.finding).join("; "));
+  }
   const planFacts = {
     allowed_additions: plan.allowed_additions ? stripHeldOut(plan.allowed_additions) : null,
     est_diff_lines: typeof plan.est_diff_lines === "number" ? plan.est_diff_lines : null,
@@ -3104,6 +3377,16 @@ async function planAndAudit(ctx) {
       "; short path disabled -> full path",
   );
 
+  // the repo's fixers run on the plan now, so the audit sees the bytes the
+  // plan commit will hold (2.1.4: prettier rewrote the plan in the commit)
+  const fmtLabel = "infra:format-plan" + sfx;
+  const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath }), "Plan");
+  if (!Array.isArray(fmt.changed_paths)) halt("failed", fmtLabel + " returned no changed_paths list");
+  const fmtOther = fmt.changed_paths.map((x) => normPath(String(x))).filter((x) => x !== planPath);
+  if (fmtOther.length)
+    halt("needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + fmtOther.join(", ") + " (never committed; clean the worktree)", "scope");
+  gate(fmtLabel + ": " + (fmt.reason || "hooks run on " + planPath));
+
   const audit = requireOk(
     "plan-audit",
     await callRole(
@@ -3119,6 +3402,9 @@ async function planAndAudit(ctx) {
       "Plan",
     ),
   );
+  // confirm auto: one re-plan round with the audit findings, then stop
+  if (ctx.auditRetry && (audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria"))
+    return replanWithFindings(ctx, planPath, "plan-audit verdict " + audit.verdict, audit.routed_findings || [], audit.reason || audit.verdict);
   if (audit.verdict !== "approve") {
     const first = (audit.routed_findings || []).slice(0, 3).map((f) => (f.criterion || "-") + ": " + f.finding);
     halt(
@@ -3180,16 +3466,10 @@ async function commitPlanAndRef(ctx) {
   const files = Array.isArray(r.files) ? Array.from(new Set(r.files.map((f) => normPath(String(f))))) : null;
   if (!files || files.length !== 1 || files[0] !== normPath(full.plan_path))
     halt("needs_human", label + ": the plan commit holds " + JSON.stringify(r.files || null) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
+  // the script wrote these bytes itself: it hashes them, the step relays no content
   const e = Array.isArray(r.refs) ? r.refs.find((x) => x && x.name === refName) : null;
-  const ep = planRefEntryProblem(e, r.head);
-  if (ep) halt("failed", label + ": the plan ref " + refName + " " + ep);
-  let written = null;
-  try {
-    written = JSON.parse(e.content);
-  } catch (err) {
-    written = null;
-  }
-  if (canonical(written) !== canonical(full)) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref");
+  const ep = planRefMetaProblem(e, r.head, sha256Hex(refMessage(full)));
+  if (ep) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref (" + ep + ")");
   if (ctx.onRefs) ctx.onRefs(r.refs);
   gate("plan committed locally at " + r.head + " (" + full.plan_path + " sha256 " + full.plan_sha256 + "); sealed ref at " + refName + " (sha256 " + e.sha256 + "); not pushed");
   return {
@@ -3377,7 +3657,7 @@ function needsMaxSection(check, reasons, intent, planPath, tiny) {
 // planDiff, planFacts, files}. Returns {ok, failedCheck, reasons, intent}.
 async function autoGates(ctx) {
   const sfx = ctx.sfx || "";
-  const ledger = ctx.brief.sources.find((x) => x.kind === "ledger");
+  const ledger = ctx.brief.sources.find((x) => LEDGER_KINDS.indexOf(x.kind) >= 0);
   const jr = await judged(
     "fleet-intent-judge",
     "role:fleet-intent-judge" + sfx,
@@ -3461,7 +3741,7 @@ async function planMode(input, date) {
   await preflightStep();
 
   phase("Intake");
-  const it = await dispatch("intake", intakePrompt({ input: raw, repo, project: input.project || null }), {
+  const it = await dispatch("intake", intakePrompt({ input: raw, repo, project: input.project || null, ledger: ledgerFor(input.project) }), {
     schema: INTAKE_SCHEMA,
     agentType: JUDGE_AGENT,
     phase: "Intake",
@@ -3470,7 +3750,9 @@ async function planMode(input, date) {
   const problem = briefProblem(it.brief);
   if (problem) halt("needs_human", "intake: " + problem);
   const brief = cleanBrief(it.brief);
-  const names = namesFor(brief);
+  const lp = ledgerProblem(brief, input.project);
+  if (lp) halt("needs_human", "intake: " + lp);
+  const names = namesFor(brief, raw);
   if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
   const lay = layout(names, brief.repo);
   state.branch = lay.branch;
@@ -3504,28 +3786,59 @@ async function planMode(input, date) {
   const reuseHead = scan.commits.length ? String(scan.commits[0].sha) : null;
 
   phase("Plan");
-  const p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug });
+  // a stop between the planner and the plan commit parks the draft (2.1.4: the
+  // next run's workspace step refused the untracked plan)
+  let draft = null;
+  const parkOnStop = async (e) => {
+    if (!draft) throw e;
+    const dest = lay.scratch + "/parked/" + state.nonce + "/" + draft;
+    let pk = null;
+    try {
+      pk = await softDispatch("infra:park-plan", parkPlanPrompt({ worktree: lay.mainWt, plan_path: draft, dest }), {
+        schema: INFRA_SCHEMA,
+        phase: "Plan",
+      });
+    } catch (err) {
+      pk = null;
+    }
+    // any other error (a crash, a dead runtime call) is rethrown unchanged
+    if (!(e instanceof Stop)) throw e;
+    const note =
+      pk && pk.status === "ok" && pk.clean === true
+        ? pk.target
+          ? "; draft plan moved to " + dest + " (the worktree is clean for a re-run)"
+          : "; no draft plan to park (the worktree is clean)"
+        : "; draft plan left in the worktree (park failed: " + ((pk && pk.reason) || "no result") + ")";
+    gate("park-plan" + note);
+    throw new Stop(e.status, e.reason + note);
+  };
   const auto = input.confirm === "auto";
-  const pc = await commitPlanAndRef({
-    worktree: lay.mainWt,
-    branch: lay.branch,
-    phaseName: "Plan",
-    // the commit-plan step itself, and with confirm auto the gate agents
-    after: 1 + (auto ? autoGateAgents(p.planFacts.commands) : 0),
-    reuseHead,
-    fields: {
+  let p, pc;
+  try {
+    p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, onPlanPath: (x) => (draft = x), auditRetry: auto });
+    pc = await commitPlanAndRef({
+      worktree: lay.mainWt,
       branch: lay.branch,
-      planPath: p.planPath,
-      criteria: p.criteria,
-      brief,
-      taskId: names.taskId,
-      slug: names.slug,
-      tldr: p.tldr,
-      planDiff: p.planDiff,
-      planFacts: p.planFacts,
-      history: { runs: 1, replans: 0, agents: 0 },
-    },
-  });
+      phaseName: "Plan",
+      // the commit-plan step itself, and with confirm auto the gate agents
+      after: 1 + (auto ? autoGateAgents(p.planFacts.commands) : 0),
+      reuseHead,
+      fields: {
+        branch: lay.branch,
+        planPath: p.planPath,
+        criteria: p.criteria,
+        brief,
+        taskId: names.taskId,
+        slug: names.slug,
+        tldr: p.tldr,
+        planDiff: p.planDiff,
+        planFacts: p.planFacts,
+        history: { runs: 1, replans: 0, agents: 0 },
+      },
+    });
+  } catch (e) {
+    await parkOnStop(e);
+  }
   if (!auto) return awaiting("plan ready: confirm, then run mode build with plan_ref", p, pc.tiny, pc.full);
 
   // confirm "auto": G1-G3 instead of the question; never ask
@@ -3547,7 +3860,7 @@ async function planMode(input, date) {
   });
   if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
   gate("auto-confirm: all gates pass; building " + pc.tiny.branch + " from " + pc.tiny.plan_commit + " in this run");
-  return buildFromRef(input, date, pc.tiny, lay, ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents });
+  return buildFromRef(input, date, pc.tiny, lay, ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents, full: pc.full });
 }
 
 // ---------------------------------------------------------------- build mode
@@ -3629,8 +3942,8 @@ async function buildMode(input, date) {
 async function rereadBrief(brief, project, repo) {
   const src = brief.sources.find((x) => ID_KINDS.indexOf(x.kind) >= 0);
   if (!src) return brief;
-  const input = src.kind === "ledger" ? "L" + src.ref : src.url || src.ref;
-  const it = await dispatch("intake:rulings", intakePrompt({ input, repo, project: project || null }), {
+  const input = src.kind === "ledger" ? "L" + src.ref : src.kind === "yaadgaar" ? "yaadgaar #" + src.ref : src.url || src.ref;
+  const it = await dispatch("intake:rulings", intakePrompt({ input, repo, project: project || null, ledger: ledgerFor(project) }), {
     schema: INTAKE_SCHEMA,
     agentType: JUDGE_AGENT,
     phase: "Auto-confirm",
@@ -3657,20 +3970,32 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // load the sealed ref from its local tag object; nothing else is trusted
   phase("Verify");
   const refTask = PLAN_REF_NAME_RE.exec(tiny.plan_ref)[1];
-  const ld = await infra(
-    "infra:load-ref",
-    loadRefPrompt({ main_worktree: lay.mainWt, task_id: refTask, plan_ref: tiny.plan_ref }),
-    "Verify",
-    JUDGE_AGENT,
-  );
   const changed = (why) => halt("needs_human", "plan ref missing or changed; re-run plan (" + tiny.plan_ref + " " + why + ")");
-  const entry = Array.isArray(ld.refs) ? ld.refs.find((x) => x && x.name === tiny.plan_ref) : null;
-  const ep = planRefEntryProblem(entry, tiny.plan_commit);
+  // 2.1.4: a model relaying the whole ref shortened it. With the sealed ref in
+  // memory (confirm auto, same run) only names and hashes are read; else the
+  // message comes in short chunks, checked against ref_sha256, asked for once more
+  const mem = opt.full && sha256Hex(refMessage(opt.full)) === tiny.ref_sha256 ? opt.full : null;
+  const load = (label) =>
+    infra(label, loadRefPrompt({ main_worktree: lay.mainWt, task_id: refTask, plan_ref: tiny.plan_ref, mode: mem ? "meta" : "chunks" }), "Verify", JUDGE_AGENT);
+  let ld = await load("infra:load-ref");
+  const entryOf = (r) => (Array.isArray(r.refs) ? r.refs.find((x) => x && x.name === tiny.plan_ref) : null);
+  const joined = (r) => (Array.isArray(r.chunks) && r.chunks.length && r.chunks.every((c) => typeof c === "string") ? r.chunks.join("") : null);
+  let entry = entryOf(ld);
+  const ep = planRefMetaProblem(entry, tiny.plan_commit, tiny.ref_sha256);
   if (ep) changed(ep);
-  if (entry.sha256 !== tiny.ref_sha256) changed("message sha256 " + entry.sha256 + " does not match ref_sha256 " + tiny.ref_sha256);
+  let content = mem ? refMessage(mem) : joined(ld);
+  if (!mem && content !== null && sha256Hex(content) !== tiny.ref_sha256) {
+    gate("infra:load-ref: the copied chunks do not match ref_sha256; reading once more");
+    ld = await load("infra:load-ref:retry");
+    entry = entryOf(ld);
+    const ep2 = planRefMetaProblem(entry, tiny.plan_commit, tiny.ref_sha256);
+    if (ep2) changed(ep2);
+    content = joined(ld);
+  }
+  if (content === null || sha256Hex(content) !== tiny.ref_sha256) changed("message chunks do not match ref_sha256 " + tiny.ref_sha256);
   let loaded = null;
   try {
-    loaded = JSON.parse(entry.content);
+    loaded = JSON.parse(content);
   } catch (e) {
     loaded = null;
   }
@@ -3700,6 +4025,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   };
   gate("build " + lay.branch + " from plan " + ref.plan_path + " @ " + ref.plan_commit + " (run " + history.runs + ", re-plans so far " + history.replans + "); plan ref sha256 matches, seal ok");
   const project = input.project || ws.remoteSlug;
+  // a ref sealed before 2.1.5 may hold a legacy ledger source of a yaadgaar project
+  const lpb = ledgerProblem(brief, project);
+  if (lpb) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + lpb + "; re-run plan");
   const defaultBranch = ws.defaultBranch;
   const remoteSlug = ws.remoteSlug;
   const mainWt = lay.mainWt;
@@ -4660,6 +4988,21 @@ async function writeBack(ctx) {
     out.ledger_status = out.write_back.ledger.some((e) => e.status === "failed") ? "failed" : "ok";
     gate("write-back ledger: " + out.write_back.ledger.map((e) => e.ref + "=" + e.status).join(", "));
   }
+  // yaadgaar tasks: the write path is not wired yet; never write the section
+  // to the yadgar ledger (its L<N> is another, frozen task). Hand it back.
+  const yq = brief.sources.filter((s) => s.kind === "yaadgaar");
+  if (yq.length) {
+    const sectionText = "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
+    for (const s of yq)
+      out.write_back.ledger.push({
+        ref: "yaadgaar #" + s.ref,
+        status: "failed",
+        reason: "yaadgaar write-back is not supported yet (ccpm task 1928); add section_text to the task by hand",
+        section_text: sectionText,
+      });
+    out.ledger_status = "failed";
+    gate("write-back ledger: " + yq.map((s) => "yaadgaar #" + s.ref + "=failed (not supported yet)").join(", "));
+  }
 
   // (b) one marked comment per external source
   const ext = brief.sources
@@ -4725,6 +5068,12 @@ async function main(input) {
     stop("needs_human", "args.confirm must be \"ask\" or \"auto\", got " + JSON.stringify(input.confirm));
   if (typeof input.date !== "string" || !DATE_RE.test(input.date))
     stop("needs_human", "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)");
+  if (typeof input.run_nonce !== "string" || !NONCE_RE.test(input.run_nonce))
+    stop(
+      "needs_human",
+      "args.run_nonce missing or malformed: the skill passes a fresh value (date +%s%N) on every invocation; run /build-task again, never resumeFromRunId (it would replay stale worktree checks)",
+    );
+  state.nonce = input.run_nonce;
   return mode === "plan" ? planMode(input, input.date) : buildMode(input, input.date);
 }
 

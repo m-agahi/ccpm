@@ -45,8 +45,17 @@ runs `/build-task` explicitly, always use the fleet.
 2. **Repo.** Run `git rev-parse --show-toplevel`. Failure -> say "run /build-task inside a git
    repository" and stop. Use the output as `repo`.
 3. **Date.** Run `date -u +%F`. Use the output as `date`. The workflow cannot read the clock.
+
+   **Run nonce.** Before EVERY Workflow call below (plan, build, each repeat), run `date +%s%N`
+   and pass the output as `run_nonce`. Never reuse one, and never restart a run with
+   `resumeFromRunId`: a resume replays the cached results of git and worktree checks that no longer
+   hold. To continue a stopped run, call the workflow again with a new nonce; build mode resumes
+   from its own run-state ref.
+
 4. **Project (optional).** Use the `<owner>/<repo>` project key from the session banner, if one is
    shown, as `project`. It scopes ledger reads and the ledger write-back. Otherwise omit it.
+   On a `yadgarhq/` project a task id (`#622`, `622`, `yaadgaar #622`) is a yaadgaar task, never
+   the legacy `L622`; the workflow needs `project` to tell them apart.
 
    **Confirm mode.** `confirm` is `"ask"` by default: the interactive confirmation in step 7. Use
    `"auto"` only when the user asked for an unattended or goal run (for example "build L42
@@ -61,7 +70,8 @@ runs `/build-task` explicitly, always use the fleet.
    ```
    Workflow({ name: "fleet:build-task-run",
               args: { mode: "plan", input: "<input>", repo: "<repo>", date: "<date>",
-                      project: "<project, if any>", confirm: "<ask | auto>" } })
+                      project: "<project, if any>", confirm: "<ask | auto>",
+                      run_nonce: "<fresh date +%s%N output>" } })
    ```
 
    Pass `args` as an object, not a JSON string. Wait for the result. Do not narrate progress.
@@ -102,7 +112,8 @@ runs `/build-task` explicitly, always use the fleet.
    ```
    Workflow({ name: "fleet:build-task-run",
               args: { mode: "build", plan_ref: <plan_ref from the last result, unchanged>,
-                      date: "<date>", project: "<project, if any>" } })
+                      date: "<date>", project: "<project, if any>",
+                      run_nonce: "<fresh date +%s%N output>" } })
    ```
 
    For a repeat after a ruling on an auto-mode stop, add `confirm: "auto"`: the workflow re-reads
@@ -137,7 +148,10 @@ runs `/build-task` explicitly, always use the fleet.
 
 A second plan run for the same input reuses the branch and worktree under
 `<repo>/.claude/worktrees/fleet-<task id>-<slug>/` and updates the plan in place, with a new plan
-commit. If the branch already has build commits, plan mode stops: run build, or delete the branch.
+commit. A plan run that stops before its plan commit (for example on a plan-audit refusal) moves
+its own draft plan to `<repo>/.claude/worktrees/fleet-<task id>-<slug>/scratch/parked/` so the
+next run starts on a clean worktree; the reason names the path. If the branch already has build
+commits, plan mode stops: run build, or delete the branch.
 Writers and the coder never commit: the only build commits are made by the workflow's commit step
 after the code judge approves.
 

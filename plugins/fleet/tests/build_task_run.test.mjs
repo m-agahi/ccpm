@@ -91,7 +91,16 @@ const REQUIRED_DEFAULTS = {
   "gate-change-nonweakening-sweep": { verdict: "non_weakening", units: [], findings: [] },
 };
 
-async function runOne(script, args) {
+// The skill passes a fresh run_nonce on every invocation; scenario args that
+// do not name one get the default (null means "no nonce" in a test).
+const NONCE = "n1-0000001";
+function withNonce(args) {
+  if (!args || typeof args !== "object" || !args.mode || "run_nonce" in args) return args;
+  return Object.assign({}, args, { run_nonce: NONCE });
+}
+
+async function runOne(script, args0) {
+  const args = withNonce(args0);
   const calls = [];
   const unscripted = [];
   const logs = [];
@@ -107,6 +116,10 @@ async function runOne(script, args) {
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
     // unscripted IaC scans find nothing (a clean repo)
     if (!(label in script) && /^infra:iac-scan:/.test(label)) return { status: "ok", reason: "scanned", iac_files: [], iac_text: [] };
+    // unscripted plan parks move the draft and leave the worktree clean
+    if (!(label in script) && /^infra:park-plan/.test(label)) return { status: "ok", reason: "parked", target: inputsOf(prompt).dest, clean: true };
+    // unscripted plan formatting changes nothing (the hooks found nothing to fix)
+    if (!(label in script) && /^infra:format-plan/.test(label)) return { status: "ok", reason: "formatted", changed_paths: [] };
     // unscripted fleet-internal scans find no .fleet/ path in the PR diff
     if (!(label in script) && /^infra:fleet-scan:/.test(label)) return { status: "ok", reason: "scanned", diff: [], commits: [] };
     // run-state writes are mechanical too: the ref lands on the expected head
@@ -139,6 +152,12 @@ async function runOne(script, args) {
       const g = r.hashes.git || (r.hashes.git = {});
       if (!Object.keys(g).some((k) => k.startsWith("fleetref:"))) Object.assign(g, fleetRefs);
       lastHashes = r.hashes;
+      // the program's digest over what it printed (2.1.5)
+      if (!("digest" in r)) {
+        const o = { fingerprint: r.fingerprint, hashes: r.hashes };
+        if (inputsOf(prompt).base_tree) o.changed = r.changed;
+        r.digest = sha256(canon(o));
+      }
     }
     // a run-state write moves its ref
     if (label.startsWith("infra:state:") && !raw && r.status === "ok" && typeof r.state_sha === "string")
@@ -229,8 +248,9 @@ const ARGS = {
   repo: "/r",
   project: "o/r",
   date: "2026-11-04",
+  run_nonce: NONCE,
 };
-const PC = "abc1234def0";
+const PC ="abc1234def0";
 const PSHA = "a".repeat(64);
 const BRIEF = {
   title: "Add Thing!",
@@ -255,7 +275,7 @@ const CSHA = (m) => "c00000" + m;
 // flat prefixed keys and converted: "git:<k>" -> git, "symlink:<k>" ->
 // symlinks, a key with "#" -> sections, anything else -> files.
 function H(flat, suspicious) {
-  const h = { files: {}, sections: {}, git: {}, symlinks: {}, suspicious: suspicious || [] };
+  const h = { files: {}, sections: {}, git: {}, symlinks: {}, ignored: {}, suspicious: suspicious || [] };
   for (const [k, v] of Object.entries(flat)) {
     if (k.startsWith("git:")) h.git[k.slice(4)] = v;
     else if (k.startsWith("symlink:")) h.symlinks[k.slice(8)] = v;
@@ -323,9 +343,28 @@ function commitStub(store, head, planSha) {
   };
 }
 
-// load-ref stub: the plan-ref reader over the store.
+// load-ref stub: the plan-ref reader over the store, in the prompt's mode
+// (2.1.5): no content in the entries; "chunks" adds the plan ref's message
+// in pieces of at most 1000 characters.
 function loadStub(store) {
-  return (prompt) => ({ status: "ok", reason: "read", refs: planRefsOf(store, inputsOf(prompt).task_id) });
+  return (prompt) => {
+    const inp = inputsOf(prompt);
+    const all = planRefsOf(store, inp.task_id);
+    const refs = all.map((e) => {
+      const o = { ...e };
+      delete o.content;
+      return o;
+    });
+    const r = { status: "ok", reason: "read", refs };
+    if (inp.mode === "chunks") {
+      const e = all.find((x) => x.name === inp.plan_ref);
+      if (e && typeof e.content === "string") {
+        r.chunks = [];
+        for (let i = 0; i < e.content.length; i += 1000) r.chunks.push(e.content.slice(i, i + 1000));
+      }
+    }
+    return r;
+  };
 }
 
 // commit-step stub: hooks pass; the commit holds exactly the judged tree.
@@ -502,7 +541,7 @@ test("branch name derives deterministically from a ledger id and title", async (
   assert.equal(out.result.branch, "fleet/l42-add-thing");
 });
 
-test("an ingested plan: task id plan, slug from the brief title, plan_path forwarded in the brief", async () => {
+test("an ingested plan: task id p<sha256(plan path)[:8]>, slug from the brief title, plan_path forwarded in the brief", async () => {
   const brief = {
     title: "Foo Bar",
     description: "d",
@@ -516,7 +555,7 @@ test("an ingested plan: task id plan, slug from the brief title, plan_path forwa
   const out = await runOne(s, { ...ARGS, input: "docs/plans/Foo_Bar-2026-11-04.md" });
   noUnscripted(out);
   const ws = inputsOf(call(out, "workspace").prompt);
-  assert.equal(ws.branch, "fleet/plan-foo-bar");
+  assert.equal(ws.branch, "fleet/p" + sha256("docs/plans/Foo_Bar-2026-11-04.md").slice(0, 8) + "-foo-bar");
   const plan = inputsOf(call(out, "role:scope-and-plan").prompt);
   assert.equal(plan.brief.plan_path, "docs/plans/Foo_Bar-2026-11-04.md");
   assert.equal(plan.date, "2026-11-04");
@@ -2061,7 +2100,7 @@ test("intake runs read-only, gets input, repo and project", async () => {
   const c = call(out, "intake");
   assert.equal(c.opts.agentType, "fleet:judge");
   assert.equal(c.opts.model, "sonnet");
-  assert.deepEqual(inputsOf(c.prompt), { input: "L42", repo: "/r", project: "o/r" });
+  assert.deepEqual(inputsOf(c.prompt), { input: "L42", repo: "/r", project: "o/r", ledger: "yadgar" });
   assert.match(c.prompt, /Read only/);
   assert.ok(out.labels.indexOf("intake") < out.labels.indexOf("workspace"));
 });
@@ -2133,6 +2172,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:iac-scan:plan",
     "infra:branch-scan",
     "role:scope-and-plan",
+    "infra:format-plan",
     "role:plan-audit",
     "infra:stage-plan",
     "infra:commit-plan",
@@ -2359,6 +2399,7 @@ test("tiny plan_ref round trip: build mode loads the plan ref object and uses it
     main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
     task_id: "l42",
     plan_ref: "refs/fleet/l42/plan",
+    mode: "chunks",
   });
   // the reader program runs read-only: cat-file, never a checkout or a write
   assert.match(load.prompt, /python3 -I -c/);
@@ -3007,6 +3048,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.deepEqual(tail, [
     "infra:replan-worktree",
     "role:scope-and-plan:replan",
+    "infra:format-plan:replan",
     "role:plan-audit:replan",
     "infra:stage-plan:replan",
     "infra:commit-plan:replan",
@@ -5993,3 +6035,777 @@ test("2.1.2 IaC scan program: files, hook dirs, hook managers, Makefile, package
     rmSync(wt2, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------- 2.1.5
+
+// The schema each agent label was dispatched with, from a full happy run.
+async function schemasByKind() {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  // confirm auto adds the intent judge; its result is not needed, only the call
+  const auto = await runOne(autoHappy(), AUTO);
+  const by = {};
+  for (const c of out.calls.concat(auto.calls)) {
+    const l = c.label;
+    const kind = l.startsWith("role:") ? "role:" + l.split(":")[1] : l.startsWith("hasher:") ? "hasher" : l.startsWith("infra:") || l === "workspace" ? "infra" : l;
+    if (c.opts && c.opts.schema && !(kind in by)) by[kind] = c.opts.schema;
+  }
+  return by;
+}
+
+// "infra:commits[].files" -> the property schema at that path, or null.
+function schemaAt(by, spec) {
+  const i = spec.lastIndexOf(":");
+  let s = by[spec.slice(0, i)];
+  for (const seg of spec.slice(i + 1).split(".")) {
+    if (!s) return null;
+    const arr = seg.endsWith("[]");
+    s = s.properties && s.properties[arr ? seg.slice(0, -2) : seg];
+    if (arr) s = s && s.items;
+  }
+  return s || null;
+}
+
+// Every Array.isArray(<v>.<field>) site in the workflow, keyed by
+// "<expr> @ <enclosing function>", maps to the schema of the agent result the
+// object came from ("<label kind>:<path>"), or to "parsed: <why>" when the
+// object is no agent result. A new site with no entry fails; a field the
+// mapped schema does not type as array fails (2.1.4 trial bug #2: an
+// undeclared field came back as the string "[]").
+const ARRAY_SITES = {
+  "o.files @ planFactsProblem": "role:scope-and-plan:repo_obligations[].files",
+  "tc.tools @ testCmdProblem": "role:scope-and-plan:test_cmd.tools",
+  "r.iac_files @ iacRefuse": "infra:iac_files",
+  "r.iac_text @ iacRefuse": "infra:iac_text",
+  "r.yadgar_findings @ collect": "role:scope-and-plan:yadgar_findings",
+  "h.suspicious @ hasher": "hasher:hashes.suspicious",
+  "r.changed @ hasher": "hasher:changed",
+  "b.sources @ briefProblem": "intake:brief.sources",
+  "plan.criteria @ planAndAudit": "role:scope-and-plan:criteria",
+  "plan.plan_diff @ planAndAudit": "role:scope-and-plan:plan_diff",
+  "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
+  "r.files @ commitPlanAndRef": "infra:files",
+  "r.refs @ commitPlanAndRef": "infra:refs",
+  "c.files @ isPlanCommit": "infra:commits[].files",
+  "aa.files @ scopeProblems": "role:scope-and-plan:allowed_additions.files",
+  "cfg.ids @ hookIdProblems": "infra:ids",
+  "r.deviations @ autoGates": "role:fleet-intent-judge:deviations",
+  "scan.commits @ planMode": "infra:commits",
+  "scan.refs @ planMode": "infra:refs",
+  "r.criteria @ planRefProblem": "parsed: the sealed plan ref (JSON.parse of a verified tag message)",
+  "r.refs @ buildFromRef": "infra:refs",
+  "r.chunks @ buildFromRef": "infra:chunks",
+  "pf.commands @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
+  "ref.plan_diff @ buildFromRef": "parsed: the sealed plan ref",
+  "r.diff @ fleetScan": "infra:diff",
+  "r.commits @ fleetScan": "infra:commits",
+  "c.files @ fleetScan": "infra:commits[].files",
+  "rp.changed_paths @ reviewStep": "infra:changed_paths",
+  "r.results @ writeBack": "infra:results",
+  "l.results @ writeBack": "infra:results",
+  "p.results @ writeBack": "infra:results",
+};
+
+function arraySites() {
+  const sites = [];
+  let fn = "<top>";
+  for (const line of SOURCE.split("\n")) {
+    const f = /^\s*(?:async\s+)?function\s+([A-Za-z0-9_]+)\s*\(/.exec(line);
+    if (f) fn = f[1];
+    for (const m of line.matchAll(/Array\.isArray\(([A-Za-z_$][A-Za-z0-9_$]*)\.([A-Za-z_$][A-Za-z0-9_$]*)\)/g))
+      sites.push(m[1] + "." + m[2] + " @ " + fn);
+  }
+  return sites;
+}
+
+test("2.1.5 every Array.isArray(<result>.<field>) reads a field its schema declares as an array", async () => {
+  const by = await schemasByKind();
+  const sites = arraySites();
+  assert.ok(sites.length >= 20, "found the sites: " + sites.length);
+  const problems = [];
+  for (const s of new Set(sites)) {
+    const spec = ARRAY_SITES[s];
+    if (!spec) {
+      problems.push(s + ": no entry in ARRAY_SITES (map it to its schema or mark it parsed)");
+      continue;
+    }
+    if (spec.startsWith("parsed:")) continue;
+    const p = schemaAt(by, spec);
+    if (!p) problems.push(s + ": " + spec + " is not declared");
+    else if (![].concat(p.type).includes("array")) problems.push(s + ": " + spec + " is typed " + JSON.stringify(p.type));
+  }
+  for (const k of Object.keys(ARRAY_SITES)) if (!sites.includes(k)) problems.push(k + ": stale ARRAY_SITES entry");
+  assert.deepEqual(problems, []);
+});
+
+test("2.1.5 the hasher schema declares and requires every hash map the script reads", async () => {
+  const by = await schemasByKind();
+  const h = by.hasher.properties.hashes;
+  for (const m of ["files", "sections", "git", "symlinks", "ignored", "suspicious"]) {
+    assert.ok(h.properties[m], "hashes." + m + " declared");
+    assert.ok(h.required.includes(m), "hashes." + m + " required");
+  }
+});
+
+test("2.1.5 a hasher result with no ignored map fails; it never reads as empty", async () => {
+  const s = happy();
+  s["hasher:pre-writers:r1"] = { __raw: true, status: "ok", fingerprint: FP_PRE, hashes: { files: {}, sections: {}, git: {}, symlinks: {}, suspicious: [] } };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /hasher hasher:pre-writers:r1 failed/);
+});
+
+// 2.1.4 trial bugs #5/#9: resumeFromRunId replays cached agent calls whose
+// prompts did not change, so a stateful check (workspace, hasher, branch-scan,
+// ...) returned the verdict of a worktree that no longer existed. Every infra
+// prompt carries the caller's run_nonce, so a new invocation never replays one.
+test("2.1.5 run_nonce is required in both modes; no agent runs without it", async () => {
+  for (const args of [
+    { ...ARGS, run_nonce: null },
+    { ...ARGS, run_nonce: "" },
+    { ...ARGS, run_nonce: "bad nonce!" },
+    { mode: "build", plan_ref: { branch: "fleet/l42-x" }, date: ARGS.date, run_nonce: null },
+  ]) {
+    const a = args;
+    const out = await runOne(happy(), a);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(a));
+    assert.match(out.result.reason, /run_nonce/);
+    assert.equal(out.calls.length, 0);
+  }
+});
+
+test("2.1.5 every infra and hasher prompt carries run_nonce; role prompts do not", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok");
+  for (const c of out.calls) {
+    const has = c.prompt.includes("Run nonce: " + NONCE);
+    if (c.label.startsWith("role:")) assert.ok(!has, c.label);
+    else assert.ok(has, c.label + " carries the run nonce");
+  }
+  // a second invocation with a new nonce changes every infra prompt
+  const out2 = await run(happy(), { ...ARGS, run_nonce: "n2-0000002" });
+  const p1 = Object.fromEntries(out.plan.calls.map((c) => [c.label, c.prompt]));
+  for (const c of out2.plan.calls) if (!c.label.startsWith("role:")) assert.notEqual(c.prompt, p1[c.label], c.label);
+});
+
+// 2.1.4 trial bug #9: the intent judge was reported as writing the
+// workflow's own .claude/settings.local.json. The journal shows the
+// pre-judge hasher result came back WITHOUT its ignored map (undeclared in
+// the schema, dropped in the relay) and the script read it as empty. That map
+// is now required, so the file is in both states and nothing is exempt: any
+// change to it during a judge run, a hooks key included, still discards the
+// verdict, exactly as in 2.1.4.
+function judgeIgnored(key, value) {
+  const h = H({ ...HASHES_FLAT });
+  h.ignored = { [key]: value || "s1" };
+  return { status: "ok", fingerprint: FP_TESTS, hashes: h };
+}
+
+// The settings file exists from the workspace step on: every state holds it.
+function withSettings(s, value) {
+  const h = judgeIgnored(".claude/settings.local.json", value).hashes;
+  s["hasher:pre-writers:r1"] = { status: "ok", fingerprint: FP_PRE, hashes: h };
+  s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_TESTS, hashes: h };
+  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes: h };
+  return s;
+}
+
+test("2.1.5 judge fingerprint: an unchanged .claude/settings.local.json passes", async () => {
+  const out = await run(withSettings(happy(), "allowlist"), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+});
+
+test("2.1.5 judge fingerprint: a judge that changes .claude/settings.local.json (a hooks key) is stopped", async () => {
+  const s = withSettings(happy(), "allowlist");
+  // the judge adds a hooks key: the file's hash changes
+  s["hasher:fp-post:test-judge:r1"] = judgeIgnored(".claude/settings.local.json", "allowlist+hooks");
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /judge mutated worktree: fleet-test-judge .*ignored path written: \.claude\/settings\.local\.json/);
+  assert.equal(out.result.stop_gate, "fingerprint");
+});
+
+test("2.1.5 judge fingerprint: settings.local.json appearing or vanishing during a judge run is stopped", async () => {
+  const s1 = happy();
+  s1["hasher:fp-post:test-judge:r1"] = judgeIgnored(".claude/settings.local.json");
+  const o1 = await run(s1, ARGS);
+  assert.equal(o1.result.stop_gate, "fingerprint");
+  const s2 = withSettings(happy(), "allowlist");
+  s2["hasher:fp-post:test-judge:r1"] = { status: "ok", fingerprint: FP_TESTS, hashes: H({ ...HASHES_FLAT }) };
+  const o2 = await run(s2, ARGS);
+  assert.equal(o2.result.stop_gate, "fingerprint");
+});
+
+test("2.1.5 judge fingerprint: any other ignored path a judge writes discards the verdict", async () => {
+  for (const key of ["sub/.claude/settings.local.json", ".claude/settings.json", ".claude/settings.local.json.bak"]) {
+    const s = happy();
+    s["hasher:fp-post:test-judge:r1"] = judgeIgnored(key);
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", key);
+    assert.match(out.result.reason, /judge mutated worktree/, key);
+    assert.equal(out.result.stop_gate, "fingerprint", key);
+  }
+});
+
+test("2.1.5 writer round: .claude/settings.local.json written by a writer is still an ownership stop", async () => {
+  const s = happy();
+  const post = s["hasher:post-writers:r1"];
+  s["hasher:post-writers:r1"] = (p) => {
+    const r = post(p);
+    r.hashes = H({ ...HASHES_FLAT });
+    r.hashes.ignored = { ".claude/settings.local.json": "s1" };
+    return r;
+  };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /ignored path written: \.claude\/settings\.local\.json/);
+});
+
+// 2.1.4 trial bug #8: a pre-commit fixer (prettier) rewrote the plan in the
+// commit, so the committed plan no longer hashed as the staged one. The plan
+// now runs through the repo's pre-commit hooks BEFORE the audit: the audit
+// approves, and the commit holds, the formatted bytes.
+test("2.1.5 format-plan runs the repo's hooks on the plan after the planner and before the audit", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  const l = out.plan.labels;
+  assert.ok(l.indexOf("infra:format-plan") > l.indexOf("role:scope-and-plan"));
+  assert.ok(l.indexOf("infra:format-plan") < l.indexOf("role:plan-audit"));
+  assert.ok(l.indexOf("infra:format-plan") > l.indexOf("infra:iac-scan:plan"), "hooks run only after the IaC refusal");
+  const p = call(out, "infra:format-plan").prompt;
+  assert.deepEqual(inputsOf(p), { worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main", plan_path: "docs/plans/x.md" });
+  assert.match(p, /pre-commit run --files/);
+  // a new plans dir must list the file, not the dir
+  assert.ok(!/status --porcelain`/.test(p) && /status --porcelain --untracked-files=all/.test(p), "files in new untracked dirs are listed");
+  assert.match(p, /--no-verify|never bypass|Never bypass/i);
+  // the commit step no longer re-adds a rewritten plan and commits again
+  const cp = call(out, "infra:commit-plan").prompt;
+  assert.ok(!/re-add <plan_path> and commit once more/.test(cp), "no re-add after a hook rewrite");
+  assert.match(cp, /rewrites the plan/);
+});
+
+test("2.1.5 format-plan: a hook that touches any other path stops the run", async () => {
+  const s = happy();
+  s["infra:format-plan"] = { status: "ok", reason: "formatted", changed_paths: ["docs/plans/x.md", "README.md"] };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /format-plan.*README\.md/);
+  assert.ok(!out.labels.includes("role:plan-audit"));
+});
+
+test("2.1.5 format-plan: a hook failure stops before the audit", async () => {
+  const s = happy();
+  s["infra:format-plan"] = { status: "needs_human", reason: "hook check-yaml failed: ..." };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /format-plan/);
+  assert.ok(!out.labels.includes("role:plan-audit"));
+});
+
+test("2.1.5 format-plan: no changed_paths list fails closed", async () => {
+  const s = happy();
+  s["infra:format-plan"] = { status: "ok", reason: "formatted" };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /format-plan/);
+});
+
+// 2.1.4 trial bug #4: a plan run that stopped after the planner left the
+// draft plan untracked in the fleet worktree, and the next plan run's
+// workspace step refused the dirty tree. Plan mode now moves its OWN draft
+// (plan_path only) out of the worktree before it returns the stop.
+test("2.1.5 a plan stop after the planner parks the run's own draft plan and keeps the stop reason", async () => {
+  const s = happy({ script: { "role:plan-audit": { status: "ok", verdict: "plan_defect", routed_findings: [{ target: "plan", criterion: "AC1", finding: "bad" }] } } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan-audit verdict plan_defect/);
+  const pk = call(out, "infra:park-plan");
+  const inp = inputsOf(pk.prompt);
+  assert.equal(inp.worktree, "/r/.claude/worktrees/fleet-l42-add-thing/main");
+  assert.equal(inp.plan_path, "docs/plans/x.md");
+  assert.equal(inp.dest, "/r/.claude/worktrees/fleet-l42-add-thing/scratch/parked/" + NONCE + "/docs/plans/x.md");
+  assert.match(pk.prompt, /other than <plan_path>.*needs_human|any path other than <plan_path>/);
+  assert.ok(!/status --porcelain`/.test(pk.prompt) && /status --porcelain --untracked-files=all/.test(pk.prompt));
+  assert.match(out.result.reason, /draft plan moved to .*scratch\/parked/);
+  assert.equal(out.result.stop_gate, "role");
+});
+
+test("2.1.5 a failed park never replaces the stop reason", async () => {
+  const s = happy({ script: { "role:plan-audit": { status: "ok", verdict: "plan_defect" }, "infra:park-plan": { status: "needs_human", reason: "README.md is dirty too" } } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan-audit verdict plan_defect/);
+  assert.match(out.result.reason, /draft plan left in the worktree.*README\.md is dirty too/);
+});
+
+test("2.1.5 a stop before the planner returns parks nothing; an ok plan run parks nothing", async () => {
+  const s = happy({ script: { "role:scope-and-plan": { status: "needs_human", reason: "ambiguous" } } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.ok(!out.labels.includes("infra:park-plan"));
+  const ok = await run(happy(), ARGS);
+  assert.ok(!ok.labels.includes("infra:park-plan"));
+});
+
+// 2.1.4 trial bug #10: load-ref relayed the whole sealed plan JSON through
+// a model, which shortened it to "[truncated: ...]". The commit-plan step and
+// the auto path no longer relay ref content at all (the script hashes the
+// bytes it wrote); a standalone build reads the content in short chunks,
+// checks them against ref_sha256 and asks once more on a mismatch.
+const CHUNK = 1000;
+function chunksOf(c) {
+  const out = [];
+  for (let i = 0; i < c.length; i += CHUNK) out.push(c.slice(i, i + CHUNK));
+  return out;
+}
+
+test("2.1.5 commit-plan relays no ref content: the script hashes the bytes it sealed", async () => {
+  const s = happy({ brief: { ...BRIEF, title: "Add Thing — ünï 🚀", description: "nbsp here" } });
+  s["infra:commit-plan"] = ((inner) => (p) => {
+    const r = inner(p);
+    r.refs = r.refs.map((e) => { const o = { ...e }; delete o.content; return o; });
+    return r;
+  })(commitStub(s.__store, PC, PSHA));
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const cp = call(out, "infra:commit-plan").prompt;
+  assert.match(cp, / 'meta'\n/, "the reader runs in meta mode");
+  assert.equal(out.result.plan_ref.ref_sha256, sha256(s.__store[PC]));
+});
+
+test("2.1.5 commit-plan: a ref whose sha256 is not the sealed bytes' stops", async () => {
+  const s = happy();
+  s["infra:commit-plan"] = ((inner) => (p) => {
+    const r = inner(p);
+    r.refs[0].sha256 = "e".repeat(64);
+    return r;
+  })(commitStub(s.__store, PC, PSHA));
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /differs from the sealed ref/);
+});
+
+test("2.1.5 load-ref reads the content in chunks and checks them against ref_sha256", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const out = await runOne(s, buildArgs(tiny));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const p = call(out, "infra:load-ref").prompt;
+  assert.equal(inputsOf(p).mode, "chunks");
+  assert.match(p, / 'chunks:refs\/fleet\/l42\/plan'\n/);
+  assert.match(p, /never shorten|NEVER shorten/i);
+});
+
+test("2.1.5 load-ref: a truncated chunk is asked for once more; a second bad copy stops", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const good = loadStub(s.__store);
+  const bad = (p) => {
+    const r = good(p);
+    r.chunks = r.chunks.slice();
+    r.chunks[0] = "[truncated: full plan JSON ...]";
+    return r;
+  };
+  s["infra:load-ref"] = bad;
+  s["infra:load-ref:retry"] = good;
+  let out = await runOne(s, buildArgs(tiny));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.labels.includes("infra:load-ref:retry"));
+  s["infra:load-ref:retry"] = bad;
+  out = await runOne(s, buildArgs(tiny));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan ref missing or changed; re-run plan.*chunks do not match/);
+});
+
+test("2.1.5 confirm auto builds from the in-memory sealed ref: load-ref reads metadata only", async () => {
+  const out = await runOne(autoHappy(), AUTO);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const p = call(out, "infra:load-ref").prompt;
+  assert.equal(inputsOf(p).mode, "meta");
+  assert.match(p, / 'meta'\n/);
+});
+
+test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebuilds the exact bytes", { skip: !HAVE_PY }, () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-chunks-"));
+  const wt = join(home, "repo");
+  try {
+    const cfg = join(home, "gitconfig");
+    writeFileSync(cfg, "[user]\n\temail = t@example.com\n\tname = t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = master\n");
+    const env = gitEnv(home, cfg);
+    spawnSync("git", ["init", "-q", wt], { env });
+    writeFileSync(join(wt, "a.py"), "a\n");
+    spawnSync("git", ["-C", wt, "add", "-A"], { env });
+    spawnSync("git", ["-C", wt, "commit", "-qm", "i"], { env });
+    const writeCmd = extractFn("WRITE_PLAN_REF_SH_BEGIN", "WRITE_PLAN_REF_SH_END", "writePlanRefCmd");
+    const reader = extractPy("PLAN_REF_PY_BEGIN", "PLAN_REF_PY_END", "PLAN_REF_PY");
+    const big = { task_id: "l42", body: "x y — ü 🚀 ".repeat(400) };
+    const w = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(big))], { encoding: "utf8", env });
+    assert.equal(w.status, 0, w.stderr);
+    const read = (mode) => {
+      const r = spawnSync("python3", ["-I", "-", wt, "l42"].concat(mode ? [mode] : []), { input: reader, encoding: "utf8", env });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const full = read("").refs[0];
+    const meta = read("meta");
+    assert.ok(!("content" in meta.refs[0]));
+    assert.equal(meta.refs[0].sha256, full.sha256);
+    assert.equal(meta.chunks, undefined);
+    const ch = read("chunks:refs/fleet/l42/plan");
+    assert.ok(!("content" in ch.refs[0]));
+    assert.ok(ch.chunks.length >= 5, "several chunks: " + ch.chunks.length);
+    assert.ok(ch.chunks.every((c) => [...c].length <= CHUNK), "at most 1000 code points per chunk");
+    assert.equal(ch.chunks.join(""), full.content);
+    assert.equal(sha256(ch.chunks.join("")), full.sha256);
+    const bad = spawnSync("python3", ["-I", "-", wt, "l42", "chunks:refs/heads/master"], { input: reader, encoding: "utf8", env });
+    assert.notEqual(bad.status, 0, "chunks of a non-plan ref are refused");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// The hasher's maps are relayed by a model too (2.1.4: the pre-intent result
+// lost its whole ignored map). The program prints a digest of what it found;
+// the script recomputes it over the relayed values, so a dropped or changed
+// key fails the hasher step instead of reading as "nothing there".
+function hasherDigest(r, withChanged) {
+  const o = { fingerprint: r.fingerprint, hashes: r.hashes };
+  if (withChanged) o.changed = r.changed;
+  return sha256(canon(o));
+}
+
+test("2.1.5 hasher program: digest is the sha256 of the canonical fingerprint, hashes and changed", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-digest-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    writeFileSync(join(wt, "pyproject.toml"), "[tool.pytest.ini_options]\naddopts = '-q'\n");
+    writeFileSync(join(wt, "test_ünï x.py"), "def test_a():\n    pass\n");
+    writeFileSync(join(wt, ".gitignore"), "local.txt\n");
+    writeFileSync(join(wt, "local.txt"), "x\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const out = runHasherRaw(wt, "hash", ["test_ünï x.py"]);
+    assert.match(out.digest, /^[0-9a-f]{64}$/);
+    assert.equal(out.digest, hasherDigest(out, false));
+    assert.ok("local.txt" in out.hashes.ignored);
+    const base = out.fingerprint.tree;
+    writeFileSync(join(wt, "test_ünï x.py"), "def test_a():\n    assert 1\n");
+    const out2 = runHasherRaw(wt, "hash", ["test_ünï x.py"], base);
+    assert.deepEqual(out2.changed, ["test_ünï x.py"]);
+    assert.equal(out2.digest, hasherDigest(out2, true));
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.5 a hasher result whose relayed maps do not match the digest fails", async () => {
+  const s = happy();
+  const h = H({ ...HASHES_FLAT });
+  h.ignored = { ".claude/settings.local.json": "s1" };
+  const good = { status: "ok", fingerprint: FP_PRE, hashes: h };
+  const digest = hasherDigest(good, false);
+  // the relay dropped the ignored key
+  s["hasher:pre-writers:r1"] = { __raw: true, status: "ok", fingerprint: FP_PRE, hashes: { ...h, ignored: {} }, digest };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /hasher hasher:pre-writers:r1 failed: .*digest/);
+});
+
+// 2.1.4 trial bug #11: on a yadgarhq/* project intake turned "yaadgaar #622"
+// into the frozen legacy ledger task L622. Projects whose id starts with
+// yadgarhq/ keep their tasks in yaadgaar (ADR-0994): the script tells intake
+// which ledger to use, a "#N" there is a yaadgaar task, and the sealed source
+// names the ledger.
+const YQ = { ...ARGS, input: "yaadgaar #622", project: "yadgarhq/docs" };
+const YBRIEF = { ...BRIEF, title: "Mark plain scalars", sources: [{ kind: "yaadgaar", ref: "622", url: null, body: "yaadgaar task body" }] };
+
+test("2.1.5 yaadgaar: intake is told the ledger by project; the task id and the sealed source name yaadgaar", async () => {
+  const s = happy({ brief: YBRIEF });
+  const out = await runOne(s, YQ);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const it = call(out, "intake");
+  assert.equal(inputsOf(it.prompt).ledger, "yaadgaar");
+  assert.match(it.prompt, /mcp__yaadgaar__read_task/);
+  assert.match(it.prompt, /never.*L<N>|never map/i);
+  assert.equal(out.result.branch, "fleet/y622-mark-plain-scalars");
+  assert.equal(out.result.plan_ref.plan_ref, "refs/fleet/y622/plan");
+  const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
+  assert.deepEqual(ref.brief.sources.map((x) => x.kind + ":" + x.ref), ["yaadgaar:622"]);
+  // another project keeps the yadgar ledger
+  const o = await runOne(happy(), ARGS);
+  assert.equal(inputsOf(call(o, "intake").prompt).ledger, "yadgar");
+});
+
+test("2.1.5 yaadgaar: a legacy ledger source on a yadgarhq/ project stops before the workspace", async () => {
+  for (const input of ["#622", "622", "yaadgaar #622", "L622"]) {
+    const s = happy({ brief: { ...YBRIEF, sources: [{ kind: "ledger", ref: "622", url: null, body: "TLS_ROTATION knob, done" }] } });
+    const out = await runOne(s, { ...YQ, input });
+    assert.equal(out.result.status, "needs_human", input);
+    assert.match(out.result.reason, /yaadgaar/, input);
+    assert.ok(!out.labels.includes("workspace"), input);
+  }
+});
+
+test("2.1.5 yaadgaar: a yaadgaar source on another project stops", async () => {
+  const out = await runOne(happy({ brief: YBRIEF }), { ...ARGS, input: "yaadgaar #622" });
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /yaadgaar/);
+  assert.ok(!out.labels.includes("workspace"));
+});
+
+test("2.1.5 yaadgaar: build re-reads the yaadgaar task, never L<N>", async () => {
+  const s = autoHappy({ brief: YBRIEF });
+  const plan = await runOne(s, { ...YQ, confirm: "ask" });
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  s["intake:rulings"] = { status: "ok", reason: "re-read", brief: YBRIEF };
+  s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
+  s["role:fleet-intent-judge:rerun"] = { status: "ok", reason: "fine", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } };
+  s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
+  const build = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs", confirm: "auto" });
+  noUnscripted(build);
+  assert.equal(build.result.status, "ok", build.result.reason);
+  const rr = inputsOf(call(build, "intake:rulings").prompt);
+  assert.equal(rr.input, "yaadgaar #622");
+  assert.equal(rr.ledger, "yaadgaar");
+  assert.equal(inputsOf(call(build, "role:fleet-intent-judge:rerun").prompt).ledger_task.ref, "622");
+  // write-back to yaadgaar is not wired yet (task 1928): no yadgar write, the section is handed back
+  assert.ok(!build.labels.includes("infra:ledger-writeback"));
+  assert.equal(build.result.ledger_status, "failed");
+  assert.match(build.result.write_back.ledger[0].reason, /yaadgaar/);
+  assert.match(build.result.write_back.ledger[0].section_text, /fleet:y622/);
+});
+
+test("2.1.5 yaadgaar: a sealed legacy ledger source on a yadgarhq/ project stops the build", async () => {
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /yaadgaar.*re-run plan/);
+  assert.ok(!out.labels.some((l) => ROLE_LABEL.test(l)));
+});
+
+// 2.1.4 trial bug #1: a session started before a plugin update keeps the old
+// workflow; the contract stop now says how to load the new one.
+test("2.1.5 a contract mismatch tells the user to reload the plugins", async () => {
+  const s = happy();
+  s.preflight = { ...s.preflight, contract: { ...s.preflight.contract, "scope-and-plan": "CONTRACT: fleet-v4" } };
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /contract fleet-v4 != fleet-v3/);
+  assert.match(out.result.reason, /\/reload-plugins or start a new session/);
+  const r = happy({ script: { "role:scope-and-plan": { status: "ok", role_contract: "CONTRACT: fleet-v4" } } });
+  const o2 = await runOne(r, ARGS);
+  assert.match(o2.result.reason, /\/reload-plugins or start a new session/);
+});
+
+// 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
+// escaped NBSP, which the JSON path turned into a plain space. Examples and
+// properties must not hold invisible, whitespace-confusable or control
+// characters; a special character is named (NBSP = chr(0xA0)). Visible
+// non-ASCII (an em dash, a smart quote, an arrow) and the text, dont_care and
+// spec_quote fields are not checked.
+test("2.1.5 criteria: an invisible or confusable character in examples or property stops before the audit", async () => {
+  const bads = ["a b", "zero​width", "en space", "line sep", "nnbsp ", "mm sp", "ideo　sp", "bom﻿", "bell\u0007", "cr\rlf", "c1\u0085", "bidi‮", "iso⁦x", "alm؜"];
+  for (const bad of bads) {
+    for (const field of ["examples", "property"]) {
+      const crit = criteria(2);
+      crit[1][field] = field === "examples" ? ["ok", bad] : { holds: bad };
+      const out = await runOne(happy({ criteria: crit }), ARGS);
+      assert.equal(out.result.status, "needs_human", field + " " + JSON.stringify(bad));
+      assert.match(out.result.reason, /AC2.*invisible or confusable character U\+/, JSON.stringify(bad));
+      assert.match(out.result.reason, /named constant/);
+      assert.ok(!out.labels.includes("role:plan-audit"));
+    }
+  }
+});
+
+test("2.1.5 criteria: visible non-ASCII, tabs, newlines and the text, dont_care and spec_quote fields pass", async () => {
+  const crit = criteria(2);
+  crit[0].text = "Keep a b — NBSP = chr(0xA0); “quoted” ≥ 2 → ok";
+  crit[0].dont_care = ["zero​width in prose"];
+  crit[0].spec_quote = "“Smart” quote — copied verbatim";
+  crit[0].examples = ["tab\there", "line\nbreak", "ünï — “x” → ≥", "'a' + NBSP + 'b'"];
+  crit[0].property = { input: "αβγ", note: "em — dash" };
+  const ok = await runOne(happy({ criteria: crit }), ARGS);
+  assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+});
+
+test("2.1.5 confirm auto: a confusable character in the criteria goes to the one :audit-fix round", async () => {
+  const crit = criteria(2);
+  crit[1].examples = ["a b"];
+  const s = autoHappy({ criteria: crit });
+  s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], criteria: criteria(2) };
+  s["role:plan-audit:audit-fix"] = s["role:plan-audit"];
+  const out = await runOne(s, AUTO);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const l = out.labels;
+  assert.ok(!l.includes("infra:format-plan") && !l.includes("role:plan-audit"), "no format or audit for the refused plan");
+  const b = inputsOf(call(out, "role:scope-and-plan:audit-fix").prompt).brief;
+  assert.ok(b.sources.some((x) => x.kind === "text" && /AC2: .*U\+00A0/.test(x.body)));
+  // still bad after the round: stop, no second round
+  const t = autoHappy({ criteria: crit });
+  t["role:scope-and-plan:audit-fix"] = t["role:scope-and-plan"];
+  const o2 = await runOne(t, AUTO);
+  assert.equal(o2.result.status, "needs_human");
+  assert.match(o2.result.reason, /invisible or confusable/);
+  assert.ok(!o2.labels.includes("role:scope-and-plan:audit-fix:audit-fix"));
+  // confirm ask stops at once
+  const o3 = await runOne(happy({ criteria: crit }), ARGS);
+  assert.equal(o3.result.status, "needs_human");
+  assert.ok(!o3.labels.includes("role:scope-and-plan:audit-fix"));
+});
+
+// 2.1.4 trial bug #3: under confirm auto a plan-audit refusal stopped the run
+// and the findings never reached the planner. One automatic re-plan round
+// now gets them; a second refusal stops as before.
+test("2.1.5 confirm auto: a plan-audit refusal gets one re-plan round with the findings", async () => {
+  const s = autoHappy();
+  s["role:plan-audit"] = { status: "ok", reason: "defect", verdict: "plan_defect", routed_findings: [{ target: "plan", criterion: "AC1", finding: "NBSP example lost" }] };
+  s["role:scope-and-plan:audit-fix"] = s["role:scope-and-plan"];
+  s["role:plan-audit:audit-fix"] = { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] };
+  const out = await runOne(s, AUTO);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const l = out.labels;
+  assert.ok(l.indexOf("role:scope-and-plan:audit-fix") > l.indexOf("role:plan-audit"));
+  assert.ok(l.indexOf("role:plan-audit:audit-fix") > l.indexOf("infra:format-plan:audit-fix"));
+  const b = inputsOf(call(out, "role:scope-and-plan:audit-fix").prompt).brief;
+  assert.equal(b.plan_path, "docs/plans/x.md", "the draft is updated in place");
+  assert.ok(b.sources.some((x) => x.kind === "text" && /AC1: NBSP example lost/.test(x.body)));
+  // the sealed brief is the task's, without the audit findings
+  assert.ok(!JSON.stringify(inputsOf(call(out, "role:fleet-intent-judge").prompt).brief).includes("NBSP example lost"));
+});
+
+test("2.1.5 confirm auto: a second plan-audit refusal stops; confirm ask never re-plans", async () => {
+  const s = autoHappy();
+  s["role:plan-audit"] = { status: "ok", reason: "defect", verdict: "plan_defect", routed_findings: [] };
+  s["role:plan-audit:audit-fix"] = { status: "ok", reason: "still", verdict: "untestable_criteria", routed_findings: [] };
+  s["role:scope-and-plan:audit-fix"] = s["role:scope-and-plan"];
+  const out = await runOne(s, AUTO);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan-audit verdict untestable_criteria/);
+  assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix:audit-fix"));
+  const a = happy({ script: { "role:plan-audit": { status: "ok", verdict: "plan_defect" } } });
+  const o2 = await runOne(a, ARGS);
+  assert.equal(o2.result.status, "needs_human");
+  assert.ok(!o2.labels.includes("role:scope-and-plan:audit-fix"));
+});
+
+// 2.1.4 trial bug #6: a free-text task took its slug from the model-written
+// title, so every re-plan made a new branch and worktree, and every free-text
+// task shared the task id "task" (one plan ref for all of them). The id and
+// slug now derive from the text itself.
+test("2.1.5 free text: task id and slug derive from the text, not the model's title", async () => {
+  const body = "Make the Foo parser keep NBSP inside quoted scalars";
+  const brief = (title, b) => ({ ...BRIEF, title, sources: [{ kind: "text", ref: "text", url: null, body: b }] });
+  const a = await runOne(happy({ brief: brief("Keep NBSP in quoted scalars", body) }), { ...ARGS, input: body });
+  const b = await runOne(happy({ brief: brief("Foo parser: preserve NBSP", body) }), { ...ARGS, input: body });
+  assert.equal(a.result.status, "awaiting_confirmation", a.result.reason);
+  const id = "t" + sha256(body).slice(0, 8);
+  assert.equal(a.result.branch, "fleet/" + id + "-make-the-foo-parser-keep-nbsp-inside-quo");
+  assert.equal(b.result.branch, a.result.branch, "same text, same branch, whatever the title");
+  assert.equal(a.result.plan_ref.plan_ref, "refs/fleet/" + id + "/plan");
+  const c = await runOne(happy({ brief: brief("x", "another change") }), { ...ARGS, input: "another change" });
+  assert.notEqual(c.result.plan_ref.plan_ref, a.result.plan_ref.plan_ref, "another text, another plan ref");
+});
+
+// Review of #33 (minor findings).
+test("2.1.5 free text: the task id hashes the raw input, not the relayed body", async () => {
+  const raw = "Make the Foo parser keep NBSP";
+  const brief = { ...BRIEF, title: "t", sources: [{ kind: "text", ref: "text", url: null, body: raw + " (relayed, changed)" }] };
+  const out = await runOne(happy({ brief }), { ...ARGS, input: raw });
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.equal(out.result.branch, "fleet/t" + sha256(raw).slice(0, 8) + "-make-the-foo-parser-keep-nbsp");
+});
+
+test("2.1.5 an ingested plan gets its own task id from the plan path", async () => {
+  const brief = (p) => ({ ...BRIEF, title: "Foo Bar", sources: [{ kind: "plan", ref: p, url: null, body: "# plan" }], plan_path: p });
+  const run1 = async (p) => {
+    const s = happy({ brief: brief(p) });
+    s["role:scope-and-plan"].plan_path = p;
+    return runOne(s, { ...ARGS, input: p });
+  };
+  const a = await run1("docs/plans/a.md");
+  const b = await run1("docs/plans/b.md");
+  assert.equal(a.result.status, "awaiting_confirmation", a.result.reason);
+  assert.equal(a.result.plan_ref.plan_ref, "refs/fleet/p" + sha256("docs/plans/a.md").slice(0, 8) + "/plan");
+  assert.notEqual(a.result.plan_ref.plan_ref, b.result.plan_ref.plan_ref);
+});
+
+test("2.1.5 a plan_path that is absolute, climbs out or is not .md stops before any park or audit", async () => {
+  for (const p of ["/etc/x.md", "docs/../../x.md", "../x.md", "docs/plans/x.txt", "docs/plans/x"]) {
+    const s = happy();
+    s["role:scope-and-plan"].plan_path = p;
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", p);
+    assert.match(out.result.reason, /plan_path/, p);
+    assert.ok(!out.labels.includes("infra:park-plan"), p);
+    assert.ok(!out.labels.includes("role:plan-audit"), p);
+  }
+});
+
+test("2.1.5 a crash after the planner still parks the draft and rethrows the original error", async () => {
+  const s = happy();
+  s["infra:format-plan"] = () => {
+    throw new Error("transport died");
+  };
+  let parked = null;
+  s["infra:park-plan"] = (p) => {
+    parked = inputsOf(p).plan_path;
+    return { status: "ok", reason: "parked", target: inputsOf(p).dest, clean: true };
+  };
+  await assert.rejects(() => runOne(s, ARGS), /transport died/);
+  assert.equal(parked, "docs/plans/x.md");
+});
+
+test("2.1.5 canonical JSON sorts keys by code point, as Python sort_keys does", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-sort-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    const files = ["test_\u{1F600}.py", "test_！.py"];
+    for (const f of files) writeFileSync(join(wt, f), "def test_a():\n    pass\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const out = runHasherRaw(wt, "hash", files);
+    // the workflow accepts the program's digest for these keys
+    const fn = new Function(extractCanonical() + "\nreturn canonical;")();
+    const o = { fingerprint: out.fingerprint, hashes: out.hashes };
+    assert.equal(sha256(fn(o)), out.digest);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("2.1.5 a hasher result with a matching digest but no ignored map still fails as incomplete", async () => {
+  const s = happy();
+  const h = { files: {}, sections: {}, git: {}, symlinks: {}, suspicious: [] };
+  const digest = sha256(canon({ fingerprint: FP_PRE, hashes: h }));
+  s["hasher:pre-writers:r1"] = { __raw: true, status: "ok", fingerprint: FP_PRE, hashes: h, digest };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /hasher hasher:pre-writers:r1 failed: incomplete output/);
+});
+
+// The workflow's canonical() and its code-point comparator, as source.
+function extractCanonical() {
+  const grab = (name) => {
+    const i = SOURCE.indexOf("\nfunction " + name + "(");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  };
+  return grab("codePointCompare") + grab("canonical");
+}

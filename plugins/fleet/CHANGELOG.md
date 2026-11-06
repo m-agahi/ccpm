@@ -1,5 +1,99 @@
 # Changelog
 
+## [2.1.5] - 2026-11-06
+
+Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
+
+### Fixed
+
+- **Contract-mismatch stops say how to recover.** Both contract stops (preflight and a role
+  runner) now end with "run /reload-plugins or start a new session, then run /build-task again":
+  a session started before a plugin update keeps the old workflow.
+- **No invisible or confusable characters in criteria examples.** A criterion about NBSP lost its
+  NBSP on the JSON path and became a duplicate of the plain-space case. A string in a criterion's
+  `examples` or `property` that holds NBSP, U+2000-U+200F, U+2028-U+202F (separators, bidi
+  embeddings, narrow NBSP), U+205F, U+2066-U+2069, U+061C, U+3000, U+FEFF, a C0 control other
+  than tab and newline, DEL or a C1 control now stops the run before format and audit, naming the
+  code point; the planner must write a named constant such as `NBSP = chr(0xA0)`. Visible
+  non-ASCII (em dash, smart quotes, arrows) is fine, and `text`, `dont_care` and `spec_quote` are
+  not checked.
+- **confirm auto: one re-plan round after a plan refusal.** A `plan_defect` or
+  `untestable_criteria` verdict, or a confusable character in the criteria, now sends the findings
+  to the planner once (labels `:audit-fix`; the draft is updated in place, then checked, formatted
+  and audited again). A second refusal stops as before. The sealed brief does not carry the
+  findings. confirm ask is unchanged: the refusal stops the run.
+- **Stable task ids for free text and ingested plans.** The slug came from the title intake
+  writes, so a re-plan of the same text could open a new branch and worktree. Every free-text task
+  also shared the task id `task`, and every ingested plan the id `plan`, so each shared one plan
+  ref. A free-text task id is now `t` + the first 8 hex of the sha256 of the raw input, with the
+  slug from that input; an ingested plan's id is `p` + the first 8 hex of the sha256 of its plan
+  path. Ledger, Jira and issue ids were already stable.
+- **The planner's `plan_path` is checked before anything touches it.** An absolute path, a `..`
+  segment or a name that does not end in `.md` stops the run before the park or format steps.
+- **A crash after the planner still parks the draft.** Any error, not only a gate stop, moves the
+  run's own draft out of the worktree; the original error is rethrown unchanged.
+- **Canonical JSON sorts keys by code point.** It now matches Python's `sort_keys`, so the hasher
+  digest holds for paths with astral characters (JS `.sort()` put them before U+E000-U+FFFF).
+- **Undeclared array fields in result schemas.** `INFRA_SCHEMA` now declares `iac_files`,
+  `iac_text`, `files`, `diff`, `refs` (with an item shape) and `reused`; scope-and-plan declares
+  `allowed_additions` (object or null, with `files`, `symbols`, `deps`, `settings` arrays). An
+  undeclared field came back as the string `"[]"` and stopped the run with a false IaC refusal or
+  a false "no plan-ref list". A test maps every `Array.isArray(<result>.<field>)` site to the
+  schema its object came from and fails on an unmapped site or an undeclared field.
+- **The hasher's `ignored` map is declared and required.** The schema and the prompt left it out,
+  the relay dropped it, and the script read the missing map as empty: the next fingerprint then
+  saw `.claude/settings.local.json` as "ignored path written" by the intent judge. A hasher result
+  without the map now fails.
+- **No replayed worktree checks on resume.** The workflow runtime replays the cached result of an
+  unchanged prompt on `resumeFromRunId`, so a resumed run got the workspace step's earlier "dirty"
+  verdict for a worktree that was already clean, and could equally get a stale "clean" or a stale
+  hasher map. `args.run_nonce` is now required in both modes (the skill passes `date +%s%N`) and is
+  appended to every infra and hasher prompt, so a new invocation never replays one. The script
+  cannot read git state itself; the nonce is the only lever. A runtime resume therefore re-runs
+  everything after preflight; build mode keeps its own run-state resume. The skill and the README
+  document the new argument.
+- **No exemption for `.claude/settings.local.json`.** The trial's "judge mutated worktree ...
+  settings.local.json" stop came from the dropped `ignored` map above, not from the judge. With the
+  map required, the file is in both states and the judge fingerprint is unchanged from 2.1.4: any
+  change to the file during a judge run (a `hooks` key, a new permission, its removal) still
+  discards the verdict.
+- **The plan runs through the repo's hooks before the audit.** A prettier hook rewrote the plan in
+  the plan commit, so the committed plan no longer hashed as the staged one. A new
+  `infra:format-plan` step (after the planner and the IaC refusal, before plan-audit) runs
+  `pre-commit run --files <plan_path>` until the fixers are done (at most 3 runs); the audit then
+  approves, and the commit holds, the fixed bytes. A hook that fails without a rewrite, or touches
+  any other path (listed with `--untracked-files=all`, so a new plans dir shows its file), stops the run. Commit-plan no longer re-adds a plan a hook rewrote: it stops
+  instead. Repos with hooks outside pre-commit (husky, lefthook) are not covered yet.
+- **A stopped plan run parks its draft.** A stop between the planner and the plan commit (a
+  plan-audit refusal, a refused command, a failed commit) left the untracked plan in the fleet
+  worktree, and the next plan run's workspace step refused the dirty tree. Plan mode now moves the
+  run's own `plan_path` (nothing else; any other dirty path leaves the worktree untouched) to
+  `scratch/parked/<run_nonce>/` and appends the path to the stop reason. A park failure never
+  replaces the stop reason.
+- **Less plan-ref text through a model.** `infra:load-ref` asked a model to copy the whole sealed
+  plan JSON, and it wrote `[truncated: ...]`. The workflow script has no file access, so a model
+  must carry any bytes the script needs; the relay is now kept small and checked:
+  - commit-plan reads the refs in `meta` mode (names, targets, hashes; no message text). The
+    script hashes the bytes it sealed itself (`sha256(JSON + "\n")`) and compares.
+  - confirm auto builds from the sealed ref it holds in memory; load-ref reads `meta` only.
+  - a standalone build reads the message as `chunks` of at most 1000 characters, joins them and
+    checks the sha256 against `ref_sha256`. A mismatch is read once more
+    (`infra:load-ref:retry`), then stops as before. This is a mitigation: a model still copies the
+    chunks.
+- **Hasher maps are checked after the relay.** The hasher program prints a `digest` (sha256 of
+  the canonical fingerprint, maps and changed list); the script recomputes it over the relayed
+  values and fails the step on a dropped or changed key.
+- **yaadgaar tasks.** On a `yadgarhq/*` project, intake turned "yaadgaar #622" into the frozen
+  legacy task L622. The script now tells intake which ledger the project uses (`ledger:
+"yaadgaar"` for `yadgarhq/*`, else `"yadgar"`). There a `#N` is read with
+  `mcp__yaadgaar__read_task` after a check that yaadgaar resolves to the same project; the source
+  kind is `yaadgaar`, the task id `y<N>` (so `#622` and `L622` never share a branch or a plan
+  ref), and the sealed brief names the ledger. A legacy ledger source on a `yadgarhq/*` project,
+  or a yaadgaar source elsewhere, stops in plan mode and in build mode (a 2.1.4 ref: "re-run
+  plan"). The confirm-auto re-read asks for `yaadgaar #N`. Write-back to yaadgaar is not wired
+  yet (ccpm task 1928): the section is handed back as `section_text` and never written to the
+  yadgar ledger.
+
 ## [2.1.4] - 2026-11-05
 
 ### Changed
