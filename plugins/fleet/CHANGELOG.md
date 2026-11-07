@@ -29,10 +29,13 @@ Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
   a `diff=` attribute, the class rather than its method). It also lists `excluded` (criterion test
   files, the plan doc), `unclassified` (no definition pattern, binary) and `unattributed`
   (module-level changes); path names are printed with non-printable characters escaped. Makefile
-  targets and variables, shell functions and shebang scripts are classified. A definition counts as
-  mapped only when its symbol has an occurrence in the same file inside its lines; an unclassified
-  file or an unattributed change passes only in a file the plan names (an occurrence path,
-  `allowed_additions.files` or a repo obligation's `files`). Every excluded or unclassified path
+  targets and variables, shell functions and shebang scripts are classified. Every added line is
+  attributed on its own (a line inside a new definition to it, a decorator to the definition after
+  it, any other line to its enclosing base definition). A definition counts as mapped only when
+  its symbol has an occurrence in the same file inside its lines; an unclassified file, an
+  unattributed change or a definition whose name is no identifier passes only in a file the plan
+  lists explicitly (`allowed_additions.files` or a repo obligation's `files`; an occurrence of a
+  mapped symbol there does not count). Every excluded or unclassified path
   gets a gate line. The relayed lists are checked against the program's digest. A ref sealed before
   2.1.6 skips the check with a gate line. Tests: the actions#211 B1 PoC (the coder changes
   `prestop_sleep`, which the plan never mapped) stops before the commit; a same-named function in

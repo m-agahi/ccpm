@@ -137,8 +137,10 @@ commit step, a read-only step (`infra:changed-defs:r<n>`, the `fleet:judge` agen
 over `git diff <plan_commit> <approved tree>` (`-U0`, renames off) for the files that existed at the
 plan commit (modified, type-changed or deleted). For each hunk it reads the base blob: a removed
 definition line, or a re-added one (then every base definition of that name), names that
-definition; any other removed line, and an insertion whose first line is not a definition, names
-the innermost definition above it with a smaller indent. Each definition is printed as
+definition; every added line is attributed on its own: a line inside a new definition belongs to
+it, a decorator line to the definition after it, and any other line, removed or added, names the
+innermost definition above it with a smaller indent (so a hunk that adds a helper and then edits
+the enclosing function names that function). Each definition is printed as
 `{name, at: "<path>:<line>", end}` (`end` = the last line of its body), every one of a name. The
 program does this itself instead of reading git's hunk header: without a `diff=` attribute git
 names the nearest column-0 line, the class rather than its method. It also prints `excluded`
@@ -153,9 +155,12 @@ committed:
 - a definition whose name is no symbol of the sealed `changed_symbols`, or whose symbol has no
   occurrence in the same file inside the definition's lines (a same-named function in another file
   is not covered: "mapped only elsewhere");
-- an unclassified file, or an unattributed change, in a file the plan does not name. The plan names
-  a file through an occurrence path of `changed_symbols`, `allowed_additions.files` or a repo
-  obligation's `files`, so a CHANGELOG or docs file an obligation lists passes.
+- an unclassified file, an unattributed (module-level) change, or a definition whose name is no
+  identifier (a hyphenated Makefile target, which `changed_symbols` cannot name), in a file the
+  plan does not list explicitly: in `allowed_additions.files` or a repo obligation's `files`. An
+  occurrence of a mapped symbol in that file does not count (a file that calls `foo` waives
+  nothing else). A CHANGELOG or docs file an obligation lists passes; an added import needs its
+  file in `allowed_additions.files`.
 
 Every excluded and every unclassified path gets a gate line. The script cannot tell a coder's scope
 creep from a planner's miss, so a human decides (re-plan with the symbol mapped, or narrow the

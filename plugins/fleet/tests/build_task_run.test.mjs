@@ -8026,11 +8026,11 @@ test("3.0.0 review: an unclassified file or a module-level change stops unless t
   const ok = await run(mk({ unclassified: ["CHANGELOG.md"] }, [Object.assign({}, OB_LOG, { files: ["CHANGELOG.md"] })]), ARGS);
   assert.equal(ok.result.status, "ok", ok.result.reason);
   assert.ok(ok.result.gate_log.some((m) => /infra:changed-defs:r1: unclassified CHANGELOG\.md/.test(m)));
-  // a module-level change in a file whose symbol the plan maps passes
+  // second review: a module-level change in a file whose symbol the plan maps is NOT waived
   const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
   s["infra:changed-defs:r1"] = defsOut([], { unattributed: ["chart/render.py:1"] });
   const o3 = await run(s, ARGS);
-  assert.equal(o3.result.status, "ok", o3.result.reason);
+  assert.equal(o3.result.stop_gate, "callers", o3.result.reason);
 });
 
 // ---------------------------------------------------------------- 3.0.0 fixer hooks on build files (ledger 1951)
@@ -8162,4 +8162,95 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- 3.0.0 second review of the build caller check
+
+function gitRepo(prefix, files) {
+  const wt = mkdtempSync(join(tmpdir(), prefix));
+  sh(wt, "git", "init", "-q");
+  sh(wt, "git", "config", "user.email", "t@example.com");
+  sh(wt, "git", "config", "user.name", "t");
+  sh(wt, "git", "config", "commit.gpgsign", "false");
+  for (const [k, v] of Object.entries(files)) {
+    spawnSync("mkdir", ["-p", dirname(join(wt, k))]);
+    writeFileSync(join(wt, k), v);
+  }
+  sh(wt, "git", "add", "-A");
+  sh(wt, "git", "commit", "-qm", "base");
+  return wt;
+}
+function treeAfter(wt, files) {
+  for (const [k, v] of Object.entries(files)) writeFileSync(join(wt, k), v);
+  sh(wt, "git", "add", "-A");
+  return sh(wt, "git", "write-tree").trim();
+}
+
+test("3.0.0 review 2: an insertion that starts with a new helper and continues inside an existing function names that function", { skip: !HAVE_PY }, () => {
+  const wt = gitRepo("fleet-defs5-", { "m.py": "def outer(x):\n    a = 1\n    return a\n", "n.py": "import os\n\n\ndef f():\n    return 1\n" });
+  try {
+    const base = sh(wt, "git", "rev-parse", "HEAD").trim();
+    const tree = treeAfter(wt, {
+      "m.py": "def outer(x):\n    a = 1\n    def helper():\n        return 2\n    a = helper()\n    return a\n",
+      // a new helper at module level, then a module-level statement
+      "n.py": "import os\n\n\ndef helper():\n    return 2\nprint(helper())\n\n\ndef f():\n    return 1\n",
+    });
+    const o = runDefs(wt, base, tree, []);
+    assert.deepEqual(o.defs, [{ name: "outer", at: "m.py:1", end: 3 }]);
+    assert.deepEqual(o.unattributed, ["n.py:3"]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review 2: a decorator line belongs to the definition that follows it", { skip: !HAVE_PY }, () => {
+  const wt = gitRepo("fleet-defs6-", { "d.py": "import functools\n\n\n@functools.cache\ndef f():\n    return 1\n" });
+  try {
+    const base = sh(wt, "git", "rev-parse", "HEAD").trim();
+    const tree = treeAfter(wt, { "d.py": "import functools\n\n\n@functools.lru_cache(1)\ndef f():\n    return 1\n\n\n@functools.cache\ndef g():\n    return 2\n" });
+    const o = runDefs(wt, base, tree, []);
+    assert.deepEqual(o.defs, [{ name: "f", at: "d.py:5", end: 6 }]);
+    assert.deepEqual(o.unattributed, []);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review 2: a definition whose name is no identifier is listed as a definition", { skip: !HAVE_PY }, () => {
+  const wt = gitRepo("fleet-defs7-", { Makefile: "build-x:\n\tcc a.c\n\ntest:\n\tpytest\n" });
+  try {
+    const base = sh(wt, "git", "rev-parse", "HEAD").trim();
+    const o = runDefs(wt, base, treeAfter(wt, { Makefile: "build-x:\n\tcc -O2 a.c\n\ntest:\n\tpytest\n" }), []);
+    assert.deepEqual(o.defs, [{ name: "build-x", at: "Makefile:1", end: 2 }]);
+    assert.deepEqual(o.unattributed, []);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review 2: a caller occurrence does not waive module-level changes; only a file the plan lists does", async () => {
+  // guard_verdict's caller sits in chart/render.py; a module-level edit there is not waived by it
+  const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
+  s["infra:changed-defs:r1"] = defsOut([], { unattributed: ["chart/render.py:1"] });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "callers", out.result.reason);
+  assert.match(out.result.reason, /module-level change at chart\/render\.py:1/);
+  // the plan lists the file in allowed_additions.files: waived
+  const t = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
+  t["role:scope-and-plan"].allowed_additions = { files: ["chart/render.py"], symbols: [], deps: [], settings: [] };
+  t["infra:changed-defs:r1"] = defsOut([], { unattributed: ["chart/render.py:1"] });
+  const o2 = await run(t, ARGS);
+  assert.equal(o2.result.status, "ok", o2.result.reason);
+});
+
+test("3.0.0 review 2: a definition changed_symbols cannot name (no identifier) passes only in a file the plan lists", async () => {
+  const s = happy();
+  s["infra:changed-defs:r1"] = defsOut([{ name: "build-x", at: "Makefile:1", end: 2 }]);
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "callers", out.result.reason);
+  assert.match(out.result.reason, /build-x \(Makefile:1; not an identifier: changed_symbols cannot map it, and the plan does not list Makefile\)/);
+  const t = withObligations([Object.assign({}, OB_LOG, { files: ["Makefile"] })]);
+  t["infra:changed-defs:r1"] = defsOut([{ name: "build-x", at: "Makefile:1", end: 2 }]);
+  const o2 = await run(t, ARGS);
+  assert.equal(o2.result.status, "ok", o2.result.reason);
 });

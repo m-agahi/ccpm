@@ -2308,6 +2308,7 @@ def defname(lang, line):
 def indent(line):
     return len(line) - len(line.lstrip(' \t'))
 HUNK = re.compile(rb'^@@ -([0-9]+)(?:,([0-9]+))? \+[0-9]+(?:,[0-9]+)? @@')
+DECO = re.compile(r'^\s*(?:@[A-Za-z_]|#\[)')
 MAKE_TARGET = re.compile(r'^([A-Za-z_][A-Za-z0-9_.-]*)\s*::?(?!=)')
 MAKE_VAR = re.compile(r'^(?:override\s+|export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[:?+!]?=')
 def mk_defname(line):
@@ -2363,8 +2364,18 @@ while i + 1 < len(st):
     by_name = {}
     for n, s in enumerate(lines):
         d = dn(s)
-        if d and IDENT.match(d):
+        if d:
             by_name.setdefault(d, []).append(n)
+    deco = (lambda x: False) if lang in ('mk', 'sh') else (lambda x: bool(DECO.match(x)))
+    def next_base_def(k):
+        # the definition a decorator above lines[k] belongs to, or None
+        for q in range(max(k, 0), len(lines)):
+            t = lines[q]
+            if not t.strip() or deco(t):
+                continue
+            d = dn(t)
+            return (d, q) if d else None
+        return None
     def record(name, n):
         defs[(name, esc(path) + ':' + str(n + 1))] = span(lines, n)
     def attribute(L, ind, at_line):
@@ -2376,10 +2387,7 @@ while i + 1 < len(st):
             if indent(s) < ind:
                 d = dn(s)
                 if d:
-                    if IDENT.match(d):
-                        record(d, k)
-                    else:
-                        unattributed.add(esc(path) + ':' + str(at_line))
+                    record(d, k)
                     return
                 if indent(s) == 0:
                     break
@@ -2402,21 +2410,48 @@ while i + 1 < len(st):
             if not s.strip():
                 continue
             d = dn(s)
-            if d and IDENT.match(d):
+            if d:
                 record(d, L)
-            elif d:
-                unattributed.add(esc(path) + ':' + str(L + 1))
+            elif deco(s):
+                nd = next_base_def(L + 1)
+                if nd:
+                    record(*nd)
+                else:
+                    attribute(L - 1, indent(s), L + 1)
             else:
                 attribute(L - 1, indent(s), L + 1)
+        # every added non-blank line: a line inside a new definition belongs to
+        # it; a decorator to the definition after it; a re-added or duplicated
+        # definition line to every base definition of that name; any other
+        # line to the enclosing base definition at the hunk, else module level
+        start = a - 2 if b > 0 else a - 1
+        new_ind, pending = None, []
         for s in added:
+            if not s.strip():
+                continue
+            ind = indent(s)
+            if new_ind is not None and ind > new_ind:
+                continue
+            new_ind = None
+            if deco(s):
+                pending.append(s)
+                continue
             d = dn(s)
-            # a re-added or duplicated definition line: every base definition of that name
-            for n in by_name.get(d, []) if d else []:
-                record(d, n)
-        if b == 0:
-            first = next((s for s in added if s.strip()), None)
-            if first is not None and not dn(first):
-                attribute(a - 1, indent(first), max(a, 1))
+            if d:
+                for n in by_name.get(d, []):
+                    record(d, n)
+                new_ind, pending = ind, []
+                continue
+            for t in pending + [s]:
+                attribute(start, indent(t), max(a, 1))
+            pending = []
+        if pending:
+            nd = next_base_def(a - 1 + b if b > 0 else a)
+            if nd:
+                record(*nd)
+            else:
+                for t in pending:
+                    attribute(start, indent(t), max(a, 1))
 o = {
     'defs': [{'name': n, 'at': at, 'end': e} for (n, at), e in sorted(defs.items(), key=lambda x: (x[0][1], x[0][0]))],
     'excluded': sorted(excluded),
@@ -3995,9 +4030,11 @@ async function callerCheck(label, symbols, worktree, planPath) {
 // sealed changed_symbols maps it: a symbol of that name with an occurrence in
 // the same file inside the definition's lines (a same-named function in
 // another file is not covered). A change in a file no definition pattern
-// covers, or a module-level change in a classified file, passes only when
-// the plan names that file (an occurrence path, allowed_additions.files or a
-// repo obligation's files). Anything else stops the run before the commit:
+// covers, a module-level change in a classified file, and a definition whose
+// name is no identifier (changed_symbols cannot name it) pass only when the
+// plan lists that file explicitly (allowed_additions.files or a repo
+// obligation's files; an occurrence of a mapped symbol there does not
+// count). Anything else stops the run before the commit:
 // the script cannot tell a coder's scope creep from a planner's miss, and the
 // actions#211 B1 weakening was exactly such an unmodelled definition.
 function buildCallerFindings(relayed, symbols, scopeFiles) {
@@ -4006,8 +4043,9 @@ function buildCallerFindings(relayed, symbols, scopeFiles) {
     const k = occurrenceKey(o.at);
     if (k) (occ[sy.symbol] = occ[sy.symbol] || []).push(k);
   }
+  // only a file the plan lists explicitly waives (an occurrence of some
+  // symbol in that file does not: a caller of foo waives nothing else)
   const scope = {};
-  for (const sy of symbols) for (const k of occ[sy.symbol] || []) scope[k.slice(0, k.lastIndexOf(":"))] = true;
   for (const f of scopeFiles) scope[normPath(String(f))] = true;
   const out = [];
   for (const d of relayed.defs) {
@@ -4015,6 +4053,12 @@ function buildCallerFindings(relayed, symbols, scopeFiles) {
     const path = at ? at.slice(0, at.lastIndexOf(":")) : null;
     const start = at ? Number(at.slice(at.lastIndexOf(":") + 1)) : 0;
     const end = typeof d.end === "number" && d.end >= start ? d.end : start;
+    // changed_symbols cannot name it (SYMBOL_RE): covered only by a listed file
+    if (!SYMBOL_RE.test(d.name)) {
+      if (!(path !== null && scope[path]))
+        out.push(d.name + " (" + d.at + "; not an identifier: changed_symbols cannot map it, and the plan does not list " + (path || d.at) + ")");
+      continue;
+    }
     const hit = (occ[d.name] || []).some((k) => {
       const n = Number(k.slice(k.lastIndexOf(":") + 1));
       return path !== null && k.slice(0, k.lastIndexOf(":")) === path && n >= start && n <= end;
