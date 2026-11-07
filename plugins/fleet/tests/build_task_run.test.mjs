@@ -8277,7 +8277,10 @@ test("3.0.0 yaadgaar write-back: an agent step edits the task through mcp__yaadg
   assert.equal(i.marker, "fleet:y622");
   assert.equal(i.section_heading, "Fleet build");
   assert.match(i.section_text, /<!-- fleet:y622 -->/);
-  assert.equal(i.section_sha256, sha256(i.section_text));
+  assert.equal(i.section_body, "## Fleet build\n\n" + i.section_text);
+  assert.equal(i.section_sha256, sha256(i.section_body));
+  assert.equal(i.repo, "/r");
+  assert.match(c.prompt, /\.yadgar\/project-id/);
   for (const re of [/mcp__yaadgaar__read_task/, /mcp__yaadgaar__edit_task/, /expect_version/, /VERSION_MISMATCH/, /patch/, /expect_count/, /expect_body_sha256/, /never mcp__yadgar__task_/i, /id=<the task's id/])
     assert.match(c.prompt, re);
   assert.equal(out.result.ledger_status, "ok");

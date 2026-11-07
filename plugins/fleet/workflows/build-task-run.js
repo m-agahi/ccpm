@@ -3346,10 +3346,10 @@ function yaadgaarWritebackPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Load mcp__yaadgaar__read_task and mcp__yaadgaar__edit_task via ToolSearch; read their schemas first. Tools absent -> every entry failed. For each entry of `tasks` (key, number):\n" +
-    "1. read_task(number=<number>). Refused or absent -> that entry failed with the error. The task must belong to <project> (its project id, or the project its id names); any other project -> failed (\"task #<number> resolves in project <x>, not <project>\"), and write nothing. Note the task's id (URN), version and body.\n" +
+    "1. First check that yaadgaar resolves to <project>: the client names the project from the first `.yadgar/project-id` found walking up from <repo>, else from `git -C <repo> remote get-url origin` (<owner>/<name>); anything else -> every entry failed, write nothing. Then read_task(number=<number>). Refused or absent -> that entry failed with the error. When the answer names a project that is not <project> -> failed (\"task #<number> resolves in project <x>, not <project>\"), and write nothing. Note the task's id (URN), version and body.\n" +
     "2. If the body already contains <marker> -> skipped.\n" +
     "3. Edit by id=<the task's id URN> (never by number), with expect_version = the version you read:\n" +
-    "   - empty body: edit_task(id, expect_version, body = <section_text> exactly, expect_body_sha256 = <section_sha256>).\n" +
+    "   - empty body: edit_task(id, expect_version, body = <section_body> exactly, expect_body_sha256 = <section_sha256>).\n" +
     "   - otherwise never send the whole body. tail = the body's last line (with the newline before it when there is one); while tail does not occur exactly once in the body, extend it backwards one line. Send edit_task(id, expect_version, patch = {old: tail, new: tail + \"\\n\\n## \" + <section_heading> + \"\\n\\n\" + <section_text>, expect_count: 1}). Copy tail byte for byte from the body you read.\n" +
     "4. A refusal starting with VERSION_MISMATCH: read_task again, repeat steps 2 and 3 once with the new version and body. A second refusal, or any other refusal (PATCH_COUNT_MISMATCH, BODY_SHA256_MISMATCH, ...) -> that entry failed with the refusal text; do not retry.\n" +
     "5. After an edit: read_task again; the body must contain <marker> and still start with the body you read before the edit (nothing cut). Else failed (\"edit did not land as an append\").\n" +
@@ -5925,8 +5925,11 @@ async function writeBack(ctx) {
           project,
           tasks,
           section_heading: LEDGER_SECTION,
+          repo: brief.repo,
           section_text: sectionText,
-          section_sha256: sha256Hex(sectionText),
+          // the whole body for a task whose body is empty: heading + section
+          section_body: "## " + LEDGER_SECTION + "\n\n" + sectionText,
+          section_sha256: sha256Hex("## " + LEDGER_SECTION + "\n\n" + sectionText),
           marker,
         }),
         { schema: INFRA_SCHEMA, phase: "Write-back" },

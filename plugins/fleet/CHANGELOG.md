@@ -64,7 +64,8 @@ changed; the new page text and the optional `symbol` key are additions, guarded 
 - **yaadgaar write-back** (ledger 1928). For a `yaadgaar` source of a `yadgarhq/` project,
   `infra:yaadgaar-writeback` (default agent; `fleet:judge` may not write to a ledger) appends the
   `## Fleet build` section with `mcp__yaadgaar__read_task` and `mcp__yaadgaar__edit_task`: it
-  checks the task's project, edits by id with `expect_version`, sends an empty body whole with a
+  checks that the client resolves to the project and that the task names no other project, edits
+  by id with `expect_version`, writes an empty body as the heading plus the section with a
   script-computed `expect_body_sha256` and appends to a non-empty one only through a literal
   `patch` on a unique tail, retries once on `VERSION_MISMATCH`, and re-reads to confirm. Never the
   yadgar ledger. 2.1.6 handed the section back for a human to post.

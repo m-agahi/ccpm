@@ -412,7 +412,8 @@ is the plan commit, for example after a re-plan.
   `infra:yaadgaar-writeback` (the default agent: `fleet:judge` may never write to a ledger) loads
   `mcp__yaadgaar__read_task` and `mcp__yaadgaar__edit_task`. It reads the task by number, checks
   that it belongs to `args.project` (the yaadgaar client resolves a number in the session's start
-  project) and then edits it by id with `expect_version`: an empty body gets `body` =
+  project; it checks `.yadgar/project-id` or origin first) and then edits it by id with
+  `expect_version`: an empty body gets `body` = the `## Fleet build` heading plus
   `section_text` with `expect_body_sha256` (computed by the script); a non-empty body is never
   re-sent, the section is appended with a literal `patch` on a unique tail of the body
   (`expect_count: 1`). On `VERSION_MISMATCH` it re-reads and retries once; any other refusal fails
