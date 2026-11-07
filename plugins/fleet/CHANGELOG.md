@@ -10,6 +10,9 @@ Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
   every commit, a modified existing definition that is not a symbol of the sealed
   `changed_symbols` stops the run (`needs_human`, new `stop_gate: "callers"`). Builds that 2.1.6
   committed can now stop here.
+- **Branch-scan output shape** (ledger 1952). `infra:branch-scan` returns `{commits, refs, digest}`;
+  each ref entry carries `task_id`, `plan_path` and `ref_ok` instead of `content`. The plan-ref
+  reader has no full-content mode any more (`meta` or `chunks:<ref>` only).
 
 ### Added
 
@@ -26,6 +29,15 @@ Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
   listed. The relayed lists are checked against the program's digest. A ref sealed before 2.1.6
   skips the check with a gate line. Test: the actions#211 B1 PoC (the coder changes
   `prestop_sleep`, which the plan never mapped) stops before the commit.
+- **No model blob relays left on the gate path** (ledger 1952). The branch scan is one program that
+  reads each plan-ref message itself and prints `task_id`, `plan_path` and `ref_ok` (the
+  `planRefProblem` checks, ported; a test checks Python and JS agree), never the message text.
+  `infra:iac-scan`, `infra:fleet-scan`, `infra:read-state`, `infra:review-paths` (now a program,
+  not a raw git command) and `infra:check-scripts` print a digest the script recomputes. A
+  mismatch stops the step: iac (`stop_gate: iac`), fleet-scan (`scope`), read-state (`resume`),
+  review-paths and branch-scan (failed); for check-scripts every script becomes judge-only. The
+  iac scan always prints `error` (`null` when none), and the read-state program always prints
+  every key.
 
 ### Changed
 

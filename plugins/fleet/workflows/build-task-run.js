@@ -849,7 +849,7 @@ print(json.dumps(out, sort_keys=True))
 // metadata only and never runs the script. Prints {<path>: {ok, reason}}.
 // SCRIPT_CHECK_PY_BEGIN
 const SCRIPT_CHECK_PY = String.raw`
-import json, os, subprocess, sys
+import hashlib, json, os, subprocess, sys
 wt, paths = sys.argv[1], json.loads(sys.argv[2])
 real_wt = os.path.realpath(wt)
 out = {}
@@ -866,7 +866,9 @@ for p in paths:
         out[p] = {'ok': False, 'reason': 'not tracked'}
     else:
         out[p] = {'ok': True, 'reason': 'ok'}
-print(json.dumps(out, sort_keys=True))
+out = {'checks': out}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, sort_keys=True, ensure_ascii=False))
 `;
 // SCRIPT_CHECK_PY_END
 
@@ -1125,6 +1127,9 @@ const INFRA_SCHEMA = {
           target_type: STR,
           sha256: STR_OR_NULL,
           content: STR_OR_NULL,
+          task_id: STR_OR_NULL,
+          plan_path: STR_OR_NULL,
+          ref_ok: { type: "boolean" },
         },
         required: ["name"],
       },
@@ -1164,7 +1169,7 @@ const INFRA_SCHEMA = {
     present: { type: "boolean" },
     ids: { type: "array", items: STR },
     parser: STR_OR_NULL,
-    error: STR,
+    error: STR_OR_NULL,
     removed: { type: "array", items: STR },
     state_sha: STR,
     exists: { type: "boolean" },
@@ -1954,9 +1959,10 @@ const PLAN_REF_PY = String.raw`
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, tid = sys.argv[1], sys.argv[2]
-# mode: '' (full content), 'meta' (no content) or 'chunks:<plan ref name>' (no
-# content in the entries; that ref's message as 'chunks' of <= 1000 chars)
-mode = sys.argv[3] if len(sys.argv) > 3 else ''
+# mode: 'meta' (no content) or 'chunks:<plan ref name>' (no content in the
+# entries; that ref's message as 'chunks' of <= 1000 chars). No mode prints
+# message text whole (3.0.0, ledger 1952).
+mode = sys.argv[3]
 if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', tid):
     sys.exit('bad task id: ' + tid)
 G = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
@@ -1992,7 +1998,7 @@ for name in fe.stdout.decode().splitlines():
     out.append(e)
 out.sort(key=lambda x: x['name'])
 res = {'refs': out}
-if mode:
+if True:
     want = None
     if mode.startswith('chunks:'):
         want = mode[len('chunks:'):]
@@ -2037,12 +2043,20 @@ function planRefEntryProblem(e, target) {
   return null;
 }
 
+// The relayed keys of a program's output match the digest it printed (3.0.0,
+// ledger 1952). A key the relay dropped counts as null.
+function relayDigestOk(r, keys) {
+  const o = {};
+  for (const k of keys) o[k] = r[k] === undefined ? null : r[k];
+  return typeof r.digest === "string" && SHA256_RE.test(r.digest) && sha256Hex(canonical(o)) === r.digest;
+}
+
 // The PR-diff check for fleet-internal paths: the paths of
 // `git diff origin/<default>...<sha>` and the files of every commit in
 // origin/<default>..<sha>. Read only.
 // FLEET_SCAN_PY_BEGIN
 const FLEET_SCAN_PY = String.raw`
-import json, os, subprocess, sys
+import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, default, sha = sys.argv[1], sys.argv[2], sys.argv[3]
 G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
@@ -2059,9 +2073,134 @@ commits = []
 for c in run('rev-list', base + '..' + sha).decode().split():
     files = names(run('diff-tree', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c))
     commits.append({'sha': c, 'files': sorted(set(files))})
-print(json.dumps({'diff': diff, 'commits': commits}, ensure_ascii=False))
+out = {'diff': diff, 'commits': commits}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
 `;
 // FLEET_SCAN_PY_END
+
+// The branch scan (3.0.0, ledger 1952): the commits origin/<default>..HEAD
+// carries, newest first, each {sha, subject, files}, and every plan ref of
+// the task WITHOUT its message text: the program parses each message itself
+// and prints task_id, plan_path and ref_ok, the same checks as the script's
+// planRefProblem (seal over canonical JSON, required fields, brief shape,
+// branch = fleet/<task_id>-<slug>). digest: sha256 over {commits, refs}.
+// A message whose canonical form differs between Python and JS (a float the
+// two print differently) reads as not ok: a plan commit then counts as a
+// build commit and the run stops (fail-closed). Read only.
+// BRANCH_SCAN_PY_BEGIN
+const BRANCH_SCAN_PY = String.raw`
+import hashlib, json, os, re, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+wt, default, tid, kinds = sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
+if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', tid):
+    sys.exit('bad task id: ' + tid)
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
+def run(*a, check=True):
+    r = subprocess.run(G + list(a), capture_output=True)
+    if check and r.returncode != 0:
+        sys.exit(r.stderr.decode('utf-8', 'replace'))
+    return r
+def names(b):
+    return [x.decode('utf-8', 'replace') for x in b.split(b'\0') if x]
+def canon(v):
+    return json.dumps(v, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+def sha(t):
+    return hashlib.sha256(t.encode('utf-8')).hexdigest()
+def norm(p):
+    s = str(p).strip()
+    while s.startswith('./'):
+        s = s[2:]
+    return s.rstrip('/')
+def nonempty(o, k):
+    return isinstance(o.get(k), str) and o.get(k) != ''
+def brief_ok(b):
+    if not isinstance(b, dict) or not isinstance(b.get('title'), str) or not b['title'].strip():
+        return False
+    src = b.get('sources')
+    if not isinstance(src, list) or not src:
+        return False
+    for x in src:
+        if not isinstance(x, dict) or x.get('kind') not in kinds or not nonempty(x, 'ref'):
+            return False
+    repo = b.get('repo')
+    if not isinstance(repo, str) or not repo.rstrip('/').startswith('/'):
+        return False
+    pp = b.get('plan_path')
+    if pp is not None:
+        if not isinstance(pp, str) or not norm(pp) or pp.startswith('/') or '..' in norm(pp).split('/'):
+            return False
+    return True
+def ref_ok(r):
+    if not isinstance(r, dict) or not isinstance(r.get('seal'), str):
+        return False
+    o = dict(r)
+    del o['seal']
+    if r['seal'] != sha(canon(o)):
+        return False
+    if not all(nonempty(r, k) for k in ('branch', 'plan_path', 'plan_sha256', 'task_id', 'slug', 'tldr')):
+        return False
+    if not re.fullmatch(r'[0-9a-f]{64}', r['plan_sha256']) or not isinstance(r.get('criteria'), list):
+        return False
+    if not brief_ok(r.get('brief')) or r['branch'] != 'fleet/' + r['task_id'] + '-' + r['slug']:
+        return False
+    return isinstance(r.get('history'), (dict, list))
+base = 'refs/remotes/origin/' + default
+commits = []
+for line in run('log', '--format=%H%x00%s', base + '..HEAD').stdout.decode('utf-8', 'replace').splitlines():
+    c, _, subj = line.partition('\0')
+    files = names(run('diff-tree', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c).stdout)
+    commits.append({'sha': c, 'subject': subj, 'files': sorted(set(files))})
+pre = 'refs/fleet/' + tid + '/'
+name_re = re.compile(re.escape(pre) + r'plan(-[0-9]+)?')
+refs = []
+for name in run('for-each-ref', '--format=%(refname)', pre).stdout.decode().splitlines():
+    if not name_re.fullmatch(name):
+        continue
+    e = {'name': name, 'tag_sha': '', 'type': '', 'target': '', 'target_type': '', 'sha256': None, 'task_id': None, 'plan_path': None, 'ref_ok': False}
+    e['tag_sha'] = run('rev-parse', '-q', '--verify', name, check=False).stdout.decode().strip()
+    if e['tag_sha']:
+        e['type'] = run('cat-file', '-t', e['tag_sha'], check=False).stdout.decode().strip()
+    if e['type'] == 'tag':
+        raw = run('cat-file', 'tag', e['tag_sha']).stdout
+        hdr, sep, msg = raw.partition(b'\n\n')
+        for h in hdr.decode('utf-8', 'replace').splitlines():
+            if h.startswith('object '):
+                e['target'] = h[7:]
+            elif h.startswith('type '):
+                e['target_type'] = h[5:]
+        if sep:
+            e['sha256'] = hashlib.sha256(msg).hexdigest()
+            try:
+                r = json.loads(msg.decode('utf-8'))
+                if isinstance(r, dict):
+                    e['task_id'] = r.get('task_id') if isinstance(r.get('task_id'), str) else None
+                    e['plan_path'] = r.get('plan_path') if isinstance(r.get('plan_path'), str) else None
+                e['ref_ok'] = ref_ok(r)
+            except Exception:
+                e['ref_ok'] = False
+    refs.append(e)
+refs.sort(key=lambda x: x['name'])
+out = {'commits': commits, 'refs': refs}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
+`;
+// BRANCH_SCAN_PY_END
+
+// The paths base_ref..head_sha changes (review), with a digest. Read only.
+// REVIEW_PATHS_PY_BEGIN
+const REVIEW_PATHS_PY = String.raw`
+import hashlib, json, os, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+wt, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
+r = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt, 'diff', '--name-only', '-z', base + '..' + head, '--'], capture_output=True)
+if r.returncode != 0:
+    sys.exit(r.stderr.decode('utf-8', 'replace'))
+out = {'changed_paths': [x.decode('utf-8', 'replace') for x in r.stdout.split(b'\0') if x]}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
+`;
+// REVIEW_PATHS_PY_END
 
 // The caller grep (2.1.6): every word-boundary occurrence of each changed
 // symbol in the tracked text files, as "<path>:<line>", the run's own plan doc
@@ -2371,12 +2510,10 @@ function branchScanPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "1. For every line of `git -C <main_worktree> log --format=%H%x09%s origin/<default_branch>..HEAD` (empty when the branch adds nothing): " +
-    "files = the lines of `git -C <main_worktree> show --name-only --format= <sha>`.\n" +
-    "2. Run this one command exactly as written, unmodified; it prints {refs}. Copy refs unchanged, byte for byte:\n" +
-    planRefsCmd(inputs.main_worktree, inputs.task_id) +
+    "Run this one command exactly as written, unmodified; run nothing else:\n" +
+    "python3 -I -c " + shQuote(BRANCH_SCAN_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.default_branch) + " " + shQuote(inputs.task_id) + " " + shQuote(JSON.stringify(SOURCE_KINDS)) +
     "\n" +
-    "Return {status, reason, commits: [{sha, subject, files}], refs}."
+    'It prints one JSON object {commits, refs, digest} (names, hashes and checks only; no message text). Return {status: "ok", reason, commits, refs, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Non-zero exit -> failed with its stderr.'
   );
 }
 
@@ -2486,8 +2623,8 @@ function fleetScanPrompt(inputs) {
     "Run this one command exactly as written, unmodified:\n" +
     "python3 -I -c " + shQuote(FLEET_SCAN_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.default_branch) + " " + shQuote(inputs.approved_sha) +
     "\n" +
-    "It prints one JSON object {diff, commits}. Copy every value unchanged; never drop a path. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, diff, commits}."
+    "It prints one JSON object {diff, commits, digest}. Copy every value unchanged; never drop a path (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, diff, commits, digest}."
   );
 }
 
@@ -2629,8 +2766,8 @@ function checkScriptsPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "Run `run` exactly as written, unmodified, as one Bash call in the foreground. It prints one JSON object {<path>: {ok, reason}}. Copy it unchanged as `checks`. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, checks}."
+    "Run `run` exactly as written, unmodified, as one Bash call in the foreground. It prints one JSON object {checks: {<path>: {ok, reason}}, digest}. Copy both unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, checks, digest}."
   );
 }
 
@@ -2692,8 +2829,11 @@ function reviewPathsPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "changed_paths = the lines of `git -C <main_worktree> diff --name-only <base_ref>..<head_sha>`. A non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, changed_paths}."
+    "Run this one command exactly as written, unmodified; run nothing else:\n" +
+    "python3 -I -c " + shQuote(REVIEW_PATHS_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.base_ref) + " " + shQuote(inputs.head_sha) +
+    "\n" +
+    "It prints one JSON object {changed_paths, digest}. Copy both unchanged, every path in order (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, changed_paths, digest}."
   );
 }
 
@@ -2770,7 +2910,7 @@ function precommitIdsPrompt(inputs) {
 // {iac_files, iac_text, error?}.
 // IAC_SCAN_PY_BEGIN
 const IAC_SCAN_PY = String.raw`
-import fnmatch, json, os, re, subprocess, sys
+import fnmatch, hashlib, json, os, re, subprocess, sys
 wt, rev = sys.argv[1], sys.argv[2]
 PAT = re.compile('terra' + 'form|to' + 'fu|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|atlan' + 'tis|dig' + 'ger', re.I)
 DIRS = {'.terra' + 'form', 'terra' + 'form'}
@@ -2780,8 +2920,10 @@ TOKEN = re.compile(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*')
 CAP = 50
 MAX_DEPTH = 4
 MAX_REFS = 2000
-def done(**k):
-    print(json.dumps(k))
+def done(iac_files, iac_text, error=None):
+    out = {'iac_files': iac_files, 'iac_text': iac_text, 'error': error}
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
     sys.exit(0)
 def git(*a):
     return subprocess.run(['git', '-C', wt] + list(a), capture_output=True)
@@ -2883,8 +3025,8 @@ function iacScanPrompt(inputs) {
     "Run this one command exactly as written, unmodified:\n" +
     "python3 -I -c " + shQuote(IAC_SCAN_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.rev) +
     "\n" +
-    "It prints one JSON object {iac_files, iac_text, error?}. Copy every value unchanged; never drop a path. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, iac_files, iac_text, error}."
+    "It prints one JSON object {iac_files, iac_text, error, digest}. Copy every value unchanged, error null included; never drop a path (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, iac_files, iac_text, error, digest}."
   );
 }
 
@@ -2893,6 +3035,9 @@ async function iacRefuse(label, worktree, rev, phaseName) {
   const r = await infra(label, iacScanPrompt({ worktree, rev }), phaseName, JUDGE_AGENT);
   if (r.error || !Array.isArray(r.iac_files) || !Array.isArray(r.iac_text))
     halt("needs_human", IAC_REFUSAL + " (the scan could not complete: " + (r.error || "no iac_files/iac_text lists") + ")", "iac");
+  // no error here: a dropped or emptied error key is the program's null
+  if (!relayDigestOk(Object.assign({}, r, { error: null }), ["iac_files", "iac_text", "error"]))
+    halt("needs_human", IAC_REFUSAL + " (the scan could not complete: the relayed lists do not match the program's digest)", "iac");
   const hits = r.iac_files.concat(r.iac_text);
   if (hits.length) halt("needs_human", IAC_REFUSAL + " (" + hits.map(String).join(", ") + ")", "iac");
   gate(label + ": no IaC files and no IaC tooling in hooks at " + rev);
@@ -2929,18 +3074,16 @@ function writeStatePrompt(inputs, json) {
 // Reads the run-state ref: {exists, target, message, head, head_tree, clean}.
 // READ_STATE_PY_BEGIN
 const READ_STATE_PY = String.raw`
-import json, os, subprocess, sys
+import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, ref = sys.argv[1], sys.argv[2]
 G = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
 def run(*a):
     return subprocess.run(G + list(a), capture_output=True)
-out = {'exists': False}
+out = {'exists': False, 'target': '', 'message': ''}
 t = run('cat-file', '-t', ref)
 if t.returncode == 0:
     out['exists'] = True
-    out['target'] = ''
-    out['message'] = ''
     if t.stdout.strip() == b'tag':
         raw = run('cat-file', 'tag', ref).stdout.decode('utf-8', 'replace')
         hdr, _, msg = raw.partition('\n\n')
@@ -2949,7 +3092,8 @@ if t.returncode == 0:
 out['head'] = run('rev-parse', 'HEAD').stdout.decode().strip()
 out['head_tree'] = run('rev-parse', 'HEAD^{tree}').stdout.decode().strip()
 out['clean'] = run('status', '--porcelain').stdout == b''
-print(json.dumps(out))
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
 `;
 // READ_STATE_PY_END
 
@@ -2962,8 +3106,8 @@ function readStatePrompt(inputs) {
     "Run this one command exactly as written, unmodified:\n" +
     "python3 -I -c " + shQuote(READ_STATE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.state_ref) +
     "\n" +
-    "It prints one JSON object {exists, target, message, head, head_tree, clean}. Copy every value unchanged, byte for byte. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, exists, target, message, head, head_tree, clean}."
+    "It prints one JSON object {exists, target, message, head, head_tree, clean, digest}. Copy every value unchanged, byte for byte, empty strings included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, exists, target, message, head, head_tree, clean, digest}."
   );
 }
 
@@ -3527,7 +3671,9 @@ async function checkScripts(label, obligations, worktree, phaseName) {
     phaseName,
     JUDGE_AGENT,
   );
-  const checks = r.checks && typeof r.checks === "object" ? r.checks : {};
+  // a relay that changed a verdict: every script stays judge-only
+  const checks = r.checks && typeof r.checks === "object" && relayDigestOk(r, ["checks"]) ? r.checks : {};
+  if (r.checks && !relayDigestOk(r, ["checks"])) gate(label + ": the relayed checks do not match the program's digest; every check_cmd script is judge-only");
   return obligations.map((o) => {
     const sp = typeof o.check_cmd === "string" ? parseCheckCmd(o.check_cmd).script : null;
     if (!sp) return o;
@@ -3950,22 +4096,19 @@ function awaiting(reason, p, tiny, full, extra) {
 // A plan commit of this task: subject plan(<task id>):, and a file set that
 // is exactly {plan_path}, where plan_path comes from a sealed plan ref of
 // this task (refs/fleet/<task id>/plan or plan-<n>) whose target is that
-// commit. No such ref, or any other path: a build commit.
+// commit. No such ref, or any other path: a build commit. 3.0.0: the scan
+// program reads each message and reports task_id, plan_path and ref_ok (the
+// planRefProblem checks); no message text crosses the relay.
 function isPlanCommit(c, taskId, refs) {
   if (!c || !new RegExp("^plan\\(" + escapeRe(taskId) + "\\): ").test(String(c.subject || ""))) return false;
   if (!Array.isArray(c.files) || !c.files.length) return false;
   const files = Array.from(new Set(c.files.map((f) => normPath(String(f)))));
   const nameRe = new RegExp("^refs/fleet/" + escapeRe(taskId) + "/plan(-[0-9]+)?$");
   for (const e of refs || []) {
-    if (!e || !nameRe.test(String(e.name)) || planRefEntryProblem(e, c.sha)) continue;
-    let ref = null;
-    try {
-      ref = JSON.parse(e.content);
-    } catch (err) {
-      ref = null;
-    }
-    if (planRefProblem(ref) || ref.task_id !== taskId) continue;
-    if (files.length === 1 && files[0] === normPath(ref.plan_path)) return true;
+    if (!e || !nameRe.test(String(e.name))) continue;
+    if (planRefMetaProblem(e, c.sha, e.sha256) || typeof e.sha256 !== "string" || !SHA256_RE.test(e.sha256)) continue;
+    if (e.ref_ok !== true || e.task_id !== taskId || typeof e.plan_path !== "string") continue;
+    if (files.length === 1 && files[0] === normPath(e.plan_path)) return true;
   }
   return false;
 }
@@ -4212,6 +4355,8 @@ async function planMode(input, date) {
     JUDGE_AGENT,
   );
   if (!Array.isArray(scan.commits) || !Array.isArray(scan.refs)) halt("failed", "infra:branch-scan returned no commit or plan-ref list");
+  if (!relayDigestOk(scan, ["commits", "refs"]))
+    halt("failed", "infra:branch-scan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
   const built = buildCommitsOf(scan.commits, names.taskId, scan.refs);
   if (built.length)
     halt(
@@ -4529,6 +4674,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // committed fleet branch
   const stateRef = "refs/fleet/" + names.taskId + "/state";
   const rs = await infra("infra:read-state", readStatePrompt({ main_worktree: mainWt, state_ref: stateRef }), "Verify", JUDGE_AGENT);
+  if (!relayDigestOk(rs, ["exists", "target", "message", "head", "head_tree", "clean"]))
+    halt("needs_human", "run-state read did not complete: the relayed state does not match the program's digest (" + stateRef + ")", "resume");
   let resume = null;
   if (rs.exists === true) {
     let st = null;
@@ -4607,6 +4754,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const r = await infra(label, fleetScanPrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha }), "PR", JUDGE_AGENT);
     if (!Array.isArray(r.diff) || !Array.isArray(r.commits) || !r.commits.every((c) => c && Array.isArray(c.files)))
       halt("needs_human", "fleet internal files check did not complete: " + label + " returned no diff/commits lists", "scope");
+    if (!relayDigestOk(r, ["diff", "commits"]))
+      halt("needs_human", "fleet internal files check did not complete: " + label + ": the relayed lists do not match the program's digest", "scope");
     const bad = fleetInternalPaths(r.diff);
     for (const c of r.commits) for (const q of fleetInternalPaths(c.files)) bad.push(q + " (commit " + c.sha + ")");
     if (bad.length) halt("needs_human", "fleet internal files in PR diff: " + bad.join(", "), "scope");
@@ -5250,6 +5399,8 @@ async function reviewStep(k, ctx) {
       JUDGE_AGENT,
     );
     if (!Array.isArray(rp.changed_paths)) halt("failed", "infra:review-paths:v" + k + " returned no changed_paths");
+    if (!relayDigestOk(rp, ["changed_paths"]))
+      halt("failed", "infra:review-paths:v" + k + ": the relayed paths do not match the program's digest (a path was dropped or changed in the copy)");
     const changedPaths = rp.changed_paths.map(normPath).filter(Boolean);
     const inputs = {
       pr_url: ctx.pr.pr_url,

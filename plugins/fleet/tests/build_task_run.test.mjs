@@ -100,6 +100,58 @@ function withNonce(args) {
   return Object.assign({}, args, { run_nonce: NONCE });
 }
 
+// 3.0.0 (ledger 1952): the relayed infra programs print a digest over these
+// keys. Stubs that give none get the program's digest (a key absent counts as
+// null, as in the script); branch-scan stubs written with message text are
+// turned into the program's metadata entries first.
+const RELAY_KEYS = [
+  [/^infra:iac-scan:/, ["iac_files", "iac_text", "error"]],
+  [/^infra:fleet-scan:/, ["diff", "commits"]],
+  [/^infra:read-state$/, ["exists", "target", "message", "head", "head_tree", "clean"]],
+  [/^infra:review-paths:/, ["changed_paths"]],
+  [/^infra:check-scripts/, ["checks"]],
+  [/^infra:branch-scan$/, ["commits", "refs"]],
+];
+function relayDigestOf(r, keys) {
+  const o = {};
+  for (const k of keys) o[k] = r[k] === undefined ? null : r[k];
+  return sha256(canon(o));
+}
+// One plan-ref entry as the branch-scan program prints it: no content; the
+// program's own task_id, plan_path and ref_ok.
+function scanEntry(e) {
+  if (!e || typeof e !== "object" || !("content" in e)) return e;
+  const out = Object.assign({}, e);
+  delete out.content;
+  let r = null;
+  try {
+    r = typeof e.content === "string" ? JSON.parse(e.content) : null;
+  } catch (err) {
+    r = null;
+  }
+  const obj = r && typeof r === "object" && !Array.isArray(r) ? r : null;
+  out.task_id = obj && typeof obj.task_id === "string" ? obj.task_id : null;
+  out.plan_path = obj && typeof obj.plan_path === "string" ? obj.plan_path : null;
+  let ok = !!obj && typeof e.content === "string" && sha256(e.content) === e.sha256 && typeof obj.seal === "string";
+  if (ok) {
+    const o = Object.assign({}, obj);
+    delete o.seal;
+    ok = obj.seal === sha256(canon(o)) && obj.branch === "fleet/" + obj.task_id + "-" + obj.slug;
+  }
+  out.ref_ok = ok;
+  // the program hashes the bytes it read: a stub's mismatched sha256 is a broken ref
+  return out;
+}
+function withRelayDigest(label, r) {
+  if (!r || typeof r !== "object" || r.status !== "ok" || "digest" in r) return r;
+  const hit = RELAY_KEYS.find(([re]) => re.test(label));
+  if (!hit) return r;
+  if (/^infra:branch-scan$/.test(label) && Array.isArray(r.refs)) r.refs = r.refs.map(scanEntry);
+  if (/^infra:iac-scan:/.test(label) && !("error" in r)) r.error = null;
+  r.digest = relayDigestOf(r, hit[1]);
+  return r;
+}
+
 async function runOne(script, args0) {
   const args = withNonce(args0);
   const calls = [];
@@ -116,7 +168,7 @@ async function runOne(script, args0) {
     // the bytecode purge is mechanical; unscripted purges succeed by default
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
     // unscripted IaC scans find nothing (a clean repo)
-    if (!(label in script) && /^infra:iac-scan:/.test(label)) return { status: "ok", reason: "scanned", iac_files: [], iac_text: [] };
+    if (!(label in script) && /^infra:iac-scan:/.test(label)) return withRelayDigest(label, { status: "ok", reason: "scanned", iac_files: [], iac_text: [] });
     // unscripted plan parks move the draft and leave the worktree clean
     if (!(label in script) && /^infra:park-plan/.test(label)) return { status: "ok", reason: "parked", target: inputsOf(prompt).dest, clean: true };
     // unscripted plan formatting changes nothing (the hooks found nothing to fix)
@@ -124,7 +176,7 @@ async function runOne(script, args0) {
     // unscripted build caller checks find no modified existing definition
     if (!(label in script) && /^infra:changed-defs:/.test(label)) return defsOut([]);
     // unscripted fleet-internal scans find no .fleet/ path in the PR diff
-    if (!(label in script) && /^infra:fleet-scan:/.test(label)) return { status: "ok", reason: "scanned", diff: [], commits: [] };
+    if (!(label in script) && /^infra:fleet-scan:/.test(label)) return withRelayDigest(label, { status: "ok", reason: "scanned", diff: [], commits: [] });
     // run-state writes are mechanical too: the ref lands on the expected head
     if (!(label in script) && /^infra:state:/.test(label)) {
       fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = "f".repeat(40);
@@ -145,6 +197,7 @@ async function runOne(script, args0) {
     r = JSON.parse(JSON.stringify(r));
     const raw = r.__raw === true;
     delete r.__raw;
+    if (!raw) withRelayDigest(label, r);
     // hasher stubs that give only a fingerprint carry the maps of the last
     // hasher result forward (nothing changed; the judge fingerprint compares
     // the maps too) and list no changed paths
@@ -2863,10 +2916,17 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
     const head = g("rev-parse", "HEAD").trim();
     const writeCmd = extractFn("WRITE_PLAN_REF_SH_BEGIN", "WRITE_PLAN_REF_SH_END", "writePlanRefCmd");
     const reader = extractPy("PLAN_REF_PY_BEGIN", "PLAN_REF_PY_END", "PLAN_REF_PY");
+    // 3.0.0: no mode prints message text whole; meta lists, chunks rebuild it
     const read = () => {
-      const r = spawnSync("python3", ["-I", "-", wt, "l42"], { input: reader, encoding: "utf8", env });
-      assert.equal(r.status, 0, r.stderr);
-      return JSON.parse(r.stdout).refs;
+      const run1 = (mode) => {
+        const r = spawnSync("python3", ["-I", "-", wt, "l42", mode], { input: reader, encoding: "utf8", env });
+        assert.equal(r.status, 0, r.stderr);
+        return JSON.parse(r.stdout);
+      };
+      return run1("meta").refs.map((x) => {
+        const ch = run1("chunks:" + x.name).chunks;
+        return Object.assign({}, x, { content: Array.isArray(ch) ? ch.join("") : null });
+      });
     };
     const ref1 = { task_id: "l42", note: "it's \"quoted\" — ünï", n: 1 };
     let r = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(ref1))], { encoding: "utf8", env });
@@ -2923,7 +2983,7 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
     assert.equal(plain.type, "commit");
     assert.equal(plain.content, null);
     // missing: another task has no plan refs
-    const none = spawnSync("python3", ["-I", "-", wt, "l43"], { input: reader, encoding: "utf8", env });
+    const none = spawnSync("python3", ["-I", "-", wt, "l43", "meta"], { input: reader, encoding: "utf8", env });
     assert.deepEqual(JSON.parse(none.stdout).refs, []);
   } finally {
     rmSync(home, { recursive: true, force: true });
@@ -4375,7 +4435,9 @@ test("script check program: regular tracked file whose realpath stays under its 
     const paths = ["scripts/ok.py", "scripts/link.py", "scripts/cross.sh", "bin/out/evil.sh", "scripts/new.py", "scripts/missing.py"];
     const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify(paths)], { input: scriptCheckPy(), encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
-    const out = JSON.parse(r.stdout);
+    const printed = JSON.parse(r.stdout);
+    const out = printed.checks;
+    assert.equal(printed.digest, sha256(canon({ checks: out })));
     assert.deepEqual(
       Object.fromEntries(paths.map((x) => [x, out[x].ok])),
       { "scripts/ok.py": true, "scripts/link.py": false, "scripts/cross.sh": false, "bin/out/evil.sh": false, "scripts/new.py": false, "scripts/missing.py": false },
@@ -6466,8 +6528,13 @@ test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebui
       assert.equal(r.status, 0, r.stderr);
       return JSON.parse(r.stdout);
     };
-    const full = read("").refs[0];
+    // 3.0.0 (ledger 1952): the full-content mode is gone
+    const none = spawnSync("python3", ["-I", "-", wt, "l42", ""], { input: reader, encoding: "utf8", env });
+    assert.notEqual(none.status, 0, "an empty mode is refused");
+    const noArg = spawnSync("python3", ["-I", "-", wt, "l42"], { input: reader, encoding: "utf8", env });
+    assert.notEqual(noArg.status, 0, "a missing mode is refused");
     const meta = read("meta");
+    const full = { sha256: sha256(JSON.stringify(big) + "\n"), content: JSON.stringify(big) + "\n" };
     assert.ok(!("content" in meta.refs[0]));
     assert.equal(meta.refs[0].sha256, full.sha256);
     assert.equal(meta.chunks, undefined);
@@ -7583,4 +7650,235 @@ test("3.0.0 build caller check: a ref sealed before 2.1.6 (changed_symbols null)
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.ok(!out.labels.some((x) => x.startsWith("infra:changed-defs")));
   assert.ok(out.result.gate_log.some((m) => /build caller check skipped: plan ref sealed before 2\.1\.6/.test(m)));
+});
+
+// ---------------------------------------------------------------- 3.0.0 no blob relays (ledger 1952)
+
+// The workflow's planRefProblem and everything it calls, as a function.
+function jsPlanRefProblem() {
+  const grab = (name) => {
+    const i = SOURCE.indexOf("\nfunction " + name + "(");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  };
+  const k = SOURCE.indexOf("\nconst K256 = [");
+  const consts =
+    SOURCE.slice(k, SOURCE.indexOf("];", k) + 2) +
+    "\nconst SHA256_RE = /^[0-9a-f]{64}$/;\nconst SOURCE_KINDS = " +
+    JSON.stringify(["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]) +
+    ";\n";
+  assert.match(SOURCE, /const SOURCE_KINDS = \["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"\];/);
+  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "sealOf", "normPath", "cleanRepo", "briefProblem", "planRefProblem"].map(grab).join("\n");
+  return new Function(consts + fns + "\nreturn planRefProblem;")();
+}
+
+function scanRepo(home, env) {
+  const wt = join(home, "repo");
+  const g = (...a) => {
+    const r = spawnSync("git", ["-C", wt].concat(a), { encoding: "utf8", env });
+    if (r.status !== 0) throw new Error("git " + a.join(" ") + ": " + r.stderr);
+    return r.stdout;
+  };
+  spawnSync("git", ["init", "-q", wt], { env });
+  writeFileSync(join(wt, "a.py"), "a\n");
+  g("add", "-A");
+  g("commit", "-qm", "i");
+  g("update-ref", "refs/remotes/origin/master", "HEAD");
+  g("checkout", "-qb", "fleet/l42-add-thing");
+  spawnSync("mkdir", ["-p", join(wt, "docs", "plans")]);
+  writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan\n");
+  g("add", "-A");
+  g("commit", "-qm", "plan(l42): add-thing");
+  return { wt, g };
+}
+
+test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; Python and JS agree on the ref checks", { skip: !HAVE_PY }, () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-bscan-"));
+  try {
+    const cfg = join(home, "gitconfig");
+    writeFileSync(cfg, "[user]\n\temail = t@example.com\n\tname = t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = master\n");
+    const env = gitEnv(home, cfg);
+    const { wt, g } = scanRepo(home, env);
+    const head = g("rev-parse", "HEAD").trim();
+    const writeCmd = extractFn("WRITE_PLAN_REF_SH_BEGIN", "WRITE_PLAN_REF_SH_END", "writePlanRefCmd");
+    const prog = extractPy("BRANCH_SCAN_PY_BEGIN", "BRANCH_SCAN_PY_END", "BRANCH_SCAN_PY");
+    const kinds = JSON.stringify(["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]);
+    const scan = () => {
+      const r = spawnSync("python3", ["-I", "-", wt, "master", "l42", kinds], { input: prog, encoding: "utf8", env });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const problem = jsPlanRefProblem();
+    const sealed = (o) => {
+      const x = Object.assign({}, o);
+      delete x.seal;
+      x.seal = sha256(canon(x));
+      return x;
+    };
+    const base = JSON.parse(priorRef("docs/plans/x.md", { tldr: "ünï — 🚀 \"q\" \\ \t", plan_facts: { est_diff_lines: 12, ratio: 0.5, big: 123456789012 } }));
+    const cases = [
+      ["sealed, non-ASCII and numbers", base],
+      ["seal broken", Object.assign({}, base, { tldr: "changed" })],
+      ["no slug", sealed(Object.assign({}, base, { slug: "" }))],
+      ["branch mismatch", sealed(Object.assign({}, base, { branch: "fleet/l42-other" }))],
+      ["bad plan_sha256", sealed(Object.assign({}, base, { plan_sha256: "x" }))],
+      ["criteria not a list", sealed(Object.assign({}, base, { criteria: {} }))],
+      ["brief source kind", sealed(Object.assign({}, base, { brief: { ...BRIEF, sources: [{ kind: "nope", ref: "1" }] } }))],
+      ["brief repo relative", sealed(Object.assign({}, base, { brief: { ...BRIEF, repo: "r" } }))],
+      ["brief plan_path ..", sealed(Object.assign({}, base, { brief: { ...BRIEF, plan_path: "../x.md" } }))],
+      ["history null", sealed(Object.assign({}, base, { history: null }))],
+    ];
+    for (const [what, ref] of cases) {
+      const msg = JSON.stringify(ref);
+      const w = spawnSync("bash", ["-c", writeCmd(wt, "l42", msg)], { encoding: "utf8", env });
+      assert.equal(w.status, 0, w.stderr);
+      const o = scan();
+      const e = o.refs.find((x) => x.name === "refs/fleet/l42/plan");
+      assert.ok(!("content" in e), "no message text");
+      assert.ok(!JSON.stringify(o).includes("ünï"), "no message text anywhere");
+      assert.equal(e.target, head);
+      assert.equal(e.sha256, sha256(msg + "\n"));
+      assert.equal(e.ref_ok, problem(JSON.parse(msg)) === null, what + ": python " + e.ref_ok + ", js " + problem(JSON.parse(msg)));
+      assert.equal(e.task_id, "l42");
+      assert.equal(e.plan_path, "docs/plans/x.md");
+      assert.deepEqual(o.commits, [{ sha: head, subject: "plan(l42): add-thing", files: ["docs/plans/x.md"] }]);
+      assert.equal(o.digest, sha256(canon({ commits: o.commits, refs: o.refs })));
+    }
+    assert.equal(scan().refs.filter((x) => x.ref_ok).length >= 0, true);
+    // the first case is the real shape: ok in both
+    assert.equal(problem(base), null);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 branch-scan: the prompt carries the program, not a copy-the-text step; a broken relay fails; ref_ok false is a build commit", async () => {
+  const out = await runOne(happy(), ARGS);
+  const p = call(out, "infra:branch-scan").prompt;
+  assert.match(p, /python3 -I -c /);
+  assert.doesNotMatch(p, /byte for byte/);
+  assert.doesNotMatch(p, /git -C <main_worktree> log/);
+  // a dropped entry
+  const s = happy({ script: scanOut([planCommit("1111111", [PLAN_MD])], [refEntry("refs/fleet/l42/plan", "1111111", priorRef(PLAN_MD))]) });
+  const good = withRelayDigest("infra:branch-scan", JSON.parse(JSON.stringify(s["infra:branch-scan"])));
+  s["infra:branch-scan"] = { ...good, refs: [] };
+  const o2 = await runOne(s, ARGS);
+  assert.equal(o2.result.status, "failed");
+  assert.match(o2.result.reason, /infra:branch-scan: the relayed lists do not match the program's digest/);
+  // the program says the ref is not ok: the plan commit is a build commit
+  const t = happy();
+  const meta = { name: "refs/fleet/l42/plan", tag_sha: "7".repeat(40), type: "tag", target: "1111111", target_type: "commit", sha256: "a".repeat(64), task_id: "l42", plan_path: PLAN_MD, ref_ok: false };
+  t["infra:branch-scan"] = { status: "ok", reason: "scanned", commits: [planCommit("1111111", [PLAN_MD])], refs: [meta] };
+  const o3 = await runOne(t, ARGS);
+  assert.equal(o3.result.status, "needs_human");
+  assert.match(o3.result.reason, /branch has build commits/);
+  t["infra:branch-scan"] = { status: "ok", reason: "scanned", commits: [planCommit("1111111", [PLAN_MD])], refs: [{ ...meta, ref_ok: true }] };
+  const o4 = await runOne(t, ARGS);
+  assert.equal(o4.result.status, "awaiting_confirmation", o4.result.reason);
+});
+
+test("3.0.0 relays carry program digests: iac-scan, fleet-scan, read-state, review-paths, check-scripts", async () => {
+  // iac-scan: a dropped hit
+  {
+    const s = happy();
+    const good = withRelayDigest("infra:iac-scan:plan", { status: "ok", reason: "x", iac_files: ["main.tf"], iac_text: [] });
+    s["infra:iac-scan:plan"] = { ...good, iac_files: [] };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human");
+    assert.equal(out.result.stop_gate, "iac");
+    assert.match(out.result.reason, /do not match the program's digest/);
+    // an error key the relay emptied or dropped is the program's null
+    const t = happy();
+    const g2 = withRelayDigest("infra:iac-scan:plan", { status: "ok", reason: "x", iac_files: [], iac_text: [] });
+    t["infra:iac-scan:plan"] = { ...g2, error: "" };
+    assert.equal((await runOne(t, ARGS)).result.status, "awaiting_confirmation");
+    const u = happy();
+    const g3 = { ...g2 };
+    delete g3.error;
+    u["infra:iac-scan:plan"] = g3;
+    assert.equal((await runOne(u, ARGS)).result.status, "awaiting_confirmation");
+    assert.match(call(await runOne(happy(), ARGS), "infra:iac-scan:plan").prompt, /error null included/);
+  }
+  // fleet-scan: a dropped .fleet/ path
+  {
+    const s = happy();
+    const good = withRelayDigest("infra:fleet-scan:push", { status: "ok", reason: "x", diff: [".fleet/l42/x"], commits: [] });
+    s["infra:fleet-scan:push"] = { ...good, diff: [] };
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human");
+    assert.equal(out.result.stop_gate, "scope");
+    assert.match(out.result.reason, /fleet-scan:push: the relayed lists do not match the program's digest/);
+  }
+  // read-state: a changed message
+  {
+    const s = happy();
+    const tiny = await planRefFor(s);
+    const good = withRelayDigest("infra:read-state", { status: "ok", reason: "x", exists: false, target: "", message: "", head: PC, head_tree: "T0", clean: true });
+    s["infra:read-state"] = { ...good, exists: true, message: "{}" };
+    const out = await runOne(s, buildArgs(tiny));
+    assert.equal(out.result.status, "needs_human");
+    assert.equal(out.result.stop_gate, "resume");
+    assert.match(out.result.reason, /run-state read did not complete/);
+    assert.match(call(out, "infra:read-state").prompt, /digest/);
+  }
+  // review-paths: a dropped gate path, and the prompt runs the program
+  {
+    const s = happy();
+    const good = withRelayDigest("infra:review-paths:v1", { status: "ok", reason: "x", changed_paths: ["src/x.py", ".github/workflows/ci.yaml"] });
+    s["infra:review-paths:v1"] = { ...good, changed_paths: ["src/x.py"] };
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "failed");
+    assert.match(out.result.reason, /infra:review-paths:v1: the relayed paths do not match the program's digest/);
+    const p = call(out, "infra:review-paths:v1").prompt;
+    assert.match(p, /python3 -I -c /);
+    assert.doesNotMatch(p, /changed_paths = the lines of `git -C/);
+  }
+});
+
+test("3.0.0 check-scripts: a relay that flips a verdict makes every script judge-only", async () => {
+  const s = withObligations([OB_BUMP]);
+  const good = withRelayDigest("infra:check-scripts", { status: "ok", reason: "x", checks: { "scripts/check_version_bump.py": { ok: false, reason: "not tracked" } } });
+  s["infra:check-scripts"] = { ...good, checks: { "scripts/check_version_bump.py": { ok: true, reason: "ok" } } };
+  const out = await runOne(s, ARGS);
+  assert.ok(!("check_cmd" in JSON.parse(s.__store[PC]).plan_facts.repo_obligations[0]), "demoted to judge-only");
+  assert.ok(out.result.gate_log.some((m) => /infra:check-scripts: the relayed checks do not match the program's digest; every check_cmd script is judge-only/.test(m)), out.result.gate_log.join("\n"));
+  assert.match(call(out, "infra:check-scripts").prompt, /\{checks: \{<path>: \{ok, reason\}\}, digest\}/);
+});
+
+test("3.0.0 relay programs print digests the workflow accepts (iac-scan, read-state, review-paths, fleet-scan)", { skip: !HAVE_PY }, () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-relays-"));
+  try {
+    const cfg = join(home, "gitconfig");
+    writeFileSync(cfg, "[user]\n\temail = t@example.com\n\tname = t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = master\n");
+    const env = gitEnv(home, cfg);
+    const { wt, g } = scanRepo(home, env);
+    const head = g("rev-parse", "HEAD").trim();
+    const fn = new Function(extractCanonical() + "\nreturn canonical;")();
+    const runP = (b, e, c, args) => {
+      const r = spawnSync("python3", ["-I", "-", wt].concat(args), { input: extractPy(b, e, c), encoding: "utf8", env });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const check = (o, keys) => {
+      const x = {};
+      for (const k of keys) x[k] = o[k] === undefined ? null : o[k];
+      assert.equal(sha256(fn(x)), o.digest, keys.join(","));
+    };
+    const iac = runP("IAC_SCAN_PY_BEGIN", "IAC_SCAN_PY_END", "IAC_SCAN_PY", ["HEAD"]);
+    assert.equal(iac.error, null);
+    check(iac, ["iac_files", "iac_text", "error"]);
+    const bad = runP("IAC_SCAN_PY_BEGIN", "IAC_SCAN_PY_END", "IAC_SCAN_PY", ["nope"]);
+    assert.match(bad.error, /bad rev/);
+    check(bad, ["iac_files", "iac_text", "error"]);
+    const st = runP("READ_STATE_PY_BEGIN", "READ_STATE_PY_END", "READ_STATE_PY", ["refs/fleet/l42/state"]);
+    assert.deepEqual([st.exists, st.target, st.message], [false, "", ""]);
+    check(st, ["exists", "target", "message", "head", "head_tree", "clean"]);
+    const rp = runP("REVIEW_PATHS_PY_BEGIN", "REVIEW_PATHS_PY_END", "REVIEW_PATHS_PY", ["refs/remotes/origin/master", head]);
+    assert.deepEqual(rp.changed_paths, ["docs/plans/x.md"]);
+    check(rp, ["changed_paths"]);
+    const fs = runP("FLEET_SCAN_PY_BEGIN", "FLEET_SCAN_PY_END", "FLEET_SCAN_PY", ["master", head]);
+    check(fs, ["diff", "commits"]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

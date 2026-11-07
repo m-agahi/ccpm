@@ -75,6 +75,23 @@ match. A commit with no such plan ref, a broken seal, another task's ref, or any
 `.fleet/` path included) is a build commit. If the fleet branch carries any build
 commit, plan mode stops with "branch has build commits; run build, or delete branch". It never commits a plan on top
 of code. On a plan-only branch it adds a new plan commit.
+Since 3.0.0 the scan is one program (`BRANCH_SCAN_PY`) and no plan-ref message text crosses the
+relay: the program lists the commits (`{sha, subject, files}`, newest first) and, per plan ref,
+the name, target, the sha256 of the message and its own reading of the message: `task_id`,
+`plan_path` and `ref_ok` (the same checks as the script's `planRefProblem`: seal over canonical
+JSON, required fields, brief shape, branch name). A test checks Python and JS agree on each
+check. A message whose canonical form differs between the two (a float they print differently)
+reads as not ok, so its commit counts as a build commit and the run stops (fail-closed).
+
+**Program digests on relays (3.0.0).** Every read-only infra step whose output reaches a gate runs
+one program and relays its output with the program's digest (sha256 over its canonical JSON);
+the script recomputes it and stops on a difference: `infra:callers`, `infra:changed-defs`,
+`infra:branch-scan` (failed), `infra:iac-scan` (`stop_gate: iac`; its `error` key is always
+printed, `null` when none), `infra:fleet-scan` (`stop_gate: scope`), `infra:read-state`
+(`stop_gate: resume`), `infra:review-paths` (failed) and `infra:check-scripts` (a mismatch makes
+every check_cmd script judge-only), plus the hasher. The plan ref itself travels only as meta
+entries or as sha256-checked chunks (`infra:load-ref`). The digest catches a relay that drops or
+changes an entry; it is not a security boundary against a hostile relay (ADR-1152).
 
 Plan mode returns `awaiting_confirmation` with `tldr`, `plan_diff`, `fleet_size`
 (`{criteria, est_agents, est_rounds}`), `plan_path` and `plan_ref`. It makes no push, no PR, no
@@ -690,8 +707,8 @@ write-back) run on `sonnet`.
 
 After the commit step, the push and the pr-opener (draft PR open):
 
-1. `infra:review-paths:v<n>` (read only) lists `changed_paths` =
-   `git diff --name-only <plan_commit>..<approved_sha>`.
+1. `infra:review-paths:v<n>` (read only) runs a program that lists `changed_paths` =
+   `git diff --name-only <plan_commit>..<approved_sha>`, with its digest.
 2. `pr-review` (library pattern, `fleet:judge`, fingerprinted on the fleet worktree) gets
    `pr_url`, `pr_number`, `repo`, `base_ref`, `head_sha`, `worktree`, `scratch_dir`, `criteria`
    (`[{id, text}]`), `repo_obligations`, `changed_paths`, `mode: "self-authored"` and
