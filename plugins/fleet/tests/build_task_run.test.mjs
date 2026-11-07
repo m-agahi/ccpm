@@ -65,14 +65,14 @@ function inputsOf(prompt) {
 const FROZEN_VERSIONS = {
   "scope-and-plan": 27,
   "plan-audit": 16,
-  "fleet-test-writer": 9,
-  "fleet-test-judge": 9,
+  "fleet-test-writer": 10,
+  "fleet-test-judge": 10,
   "fleet-coder": 17,
-  "fleet-code-judge": 13,
+  "fleet-code-judge": 15,
   "fleet-pr-opener": 10,
   "fleet-intent-judge": 2,
-  "pr-review": 17,
-  "gate-change-nonweakening-sweep": 4,
+  "pr-review": 18,
+  "gate-change-nonweakening-sweep": 5,
 };
 const ROLE_NAMES = Object.keys(FROZEN_VERSIONS);
 
@@ -112,6 +112,11 @@ const RELAY_KEYS = [
   [/^infra:check-scripts/, ["checks"]],
   [/^infra:branch-scan$/, ["commits", "refs"]],
   [/^infra:format-(tests|code):/, ["ran", "reason", "runs", "stable", "files", "changed", "refused"]],
+  // 3.1.0 (ledger 1959)
+  [/^infra:verify-plan$/, ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since"]],
+  [/^infra:commit-plan/, ["head", "files"]],
+  // 3.1.0 (ledger 1935c)
+  [/^infra:push(:p\d+)?$/, ["push_result", "exit_code", "hook_tail"]],
 ];
 function relayDigestOf(r, keys) {
   const o = {};
@@ -481,6 +486,7 @@ function happy(over = {}) {
       is_ancestor: true,
       commits_since: [],
       plan_touched: [],
+      changed_since: [],
     },
     "infra:push": (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha }),
     "infra:ledger-writeback": (prompt) => ({
@@ -1875,12 +1881,12 @@ test("S-8: a role version lower than the frozen minimum stops in preflight", asy
 
 test("S-8: a higher role version is logged as prose-only and recorded", async () => {
   const s = happy();
-  s.preflight.versions["fleet-code-judge"] = 14;
+  s.preflight.versions["fleet-code-judge"] = 16;
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v14 > frozen v13: prose-only changes assumed/.test(l)));
-  assert.equal(out.result.role_versions["fleet-code-judge"], 14);
+  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v16 > frozen v15: prose-only changes assumed/.test(l)));
+  assert.equal(out.result.role_versions["fleet-code-judge"], 16);
   assert.equal(out.result.role_versions["fleet-coder"], 17);
 });
 
@@ -3588,7 +3594,8 @@ test("push prompt retries with backoff, reads remote_head through the gh api, ke
   assert.match(p, /timeout 600000 ms/);
   assert.match(p, /api repos\/<owner>\/<name>\/branches\/<branch> --jq \.commit\.sha/);
   assert.match(p, /gh-personal/);
-  assert.match(p, /non-fast-forward[^.]*needs_human/i);
+  assert.match(p, /`non_ff` or `remote_rejected` -> return status needs_human/);
+  assert.match(p, /non-fast-forward\|fetch first/, "the retry loop still stops on a non-fast-forward");
   assert.match(p, /ls-remote/, "ls-remote only as the fallback");
   assert.match(p, /Never --force/);
 });
@@ -3737,8 +3744,8 @@ test("a stale-bytecode suspicious entry after the coder rejects the round", asyn
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-test("role versions: scope-and-plan 27, plan-audit 16, coder 17 and code-judge 13 are the minimums (3.0.0)", async () => {
-  for (const [role, v] of [["scope-and-plan", 26], ["plan-audit", 15], ["fleet-coder", 16], ["fleet-code-judge", 12]]) {
+test("role versions: scope-and-plan 27, plan-audit 16, coder 17 and code-judge 15 are the minimums (3.1.0)", async () => {
+  for (const [role, v] of [["scope-and-plan", 26], ["plan-audit", 15], ["fleet-coder", 16], ["fleet-code-judge", 14], ["fleet-test-writer", 9], ["fleet-test-judge", 9], ["pr-review", 17], ["gate-change-nonweakening-sweep", 4]]) {
     const s = happy();
     s.preflight.versions[role] = v;
     const out = await runOne(s, ARGS);
@@ -4120,7 +4127,7 @@ test("2.0.3 obligations gate failing every round stops at the cap with the gate 
 
 test("2.0.3 push rejected by a repo hook routes to the coder as fix_code; the judge re-approves before the next push", async () => {
   const s = happy();
-  s["infra:push"] = { status: "ok", reason: "hook", push_result: "hook_rejected", hook_tail: "check_version_bump: core version not bumped\nerror: failed to push some refs" };
+  s["infra:push"] = { status: "ok", reason: "hook", push_result: "hook_rejected", exit_code: 1, hook_tail: "check_version_bump: core version not bumped\nerror: failed to push some refs" };
   secondRoundPasses(s, [], "infra:push:p2", CSHA(1));
   const out = await run(s, ARGS);
   noUnscripted(out);
@@ -4150,7 +4157,7 @@ test("2.0.3 push hook rejection on the last round stops at the cap, naming the p
     s["hasher:post-coder:r" + m] = { status: "ok", fingerprint: fp, hashes: HASHES };
     s["role:fleet-code-judge:r" + m] = { status: "ok", verdict: "approve", routed_findings: [] };
     s["hasher:fp-post:code-judge:r" + m] = { status: "ok", fingerprint: fp };
-    s["infra:push" + (m > 1 ? ":p" + m : "")] = { status: "ok", reason: "hook", push_result: "hook_rejected", hook_tail: "nope" };
+    s["infra:push" + (m > 1 ? ":p" + m : "")] = { status: "ok", reason: "hook", push_result: "hook_rejected", exit_code: 1, hook_tail: "nope" };
   }
   const out = await run(s, ARGS);
   noUnscripted(out);
@@ -4178,11 +4185,13 @@ test("2.0.3 push prompt classifies hook_rejected, non_ff and network, and never 
   const p = call(out, "infra:push").prompt;
   for (const w of ["hook_rejected", "non_ff", "network", "failed to push some refs", "hook_tail", "push_result", "never --no-verify"])
     assert.ok(p.toLowerCase().indexOf(w.toLowerCase()) >= 0, w);
-  // classification reads git's own lines only, never the hook's output or the URL
-  assert.ok(p.indexOf("Classify on git's own lines only") >= 0);
-  assert.ok(p.indexOf("` ! [rejected]`") >= 0 && p.indexOf("` ! [remote rejected]`") >= 0);
+  // classification reads git's own lines only, never the hook's output or the
+  // URL; since 3.1.0 a program classifies (ledger 1935c), never the agent
+  assert.ok(p.indexOf("Never classify the output yourself") >= 0);
+  const prog = extractPy("PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY");
+  assert.match(prog, /x\.startswith\(\('error:', 'fatal:', ' ! \['\)\)/);
+  assert.ok(prog.indexOf("' ! [rejected]'") >= 0 && prog.indexOf("' ! [remote rejected]'") >= 0);
   assert.ok(p.indexOf("remote_rejected") >= 0);
-  assert.ok(p.indexOf("exit code 128") >= 0);
   assert.ok(p.indexOf("`HTTP`") < 0, "no free-text word list over the whole output");
 });
 
@@ -5474,7 +5483,9 @@ test("2.1.0 base-ref differential: the fence and the review diff from plan_commi
   assert.equal(out.result.stop_gate, "scope");
   assert.match(out.result.reason, /\.github\/x\.yml/);
   assert.ok(!out.labels.some((l) => /^role:/.test(l)), "stops before any role");
-  assert.match(call(out, "infra:verify-plan").prompt, /git -C <main_worktree> diff --name-only <plan_commit>\.\.HEAD/);
+  // 3.1.0 (ledger 1959): the program lists plan_commit..HEAD
+  assert.ok(call(out, "infra:verify-plan").prompt.includes(extractPy("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY").replace(/'/g, "'\\''")));
+  assert.match(extractPy("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY"), /run\('diff', '--name-only', '-z', '--no-renames', pc \+ '\.\.' \+ head, '--'\)/);
   // the post-coder listing and the review paths diff from plan_commit, not HEAD at the first freeze
   const ok = await run(happy(), ARGS);
   assert.equal(inputsOf(call(ok, "hasher:post-coder:r1").prompt).base_tree, PC);
@@ -6190,6 +6201,10 @@ const ARRAY_SITES = {
   "r.results @ writeBack": "infra:results",
   "l.results @ writeBack": "infra:results",
   "p.results @ writeBack": "infra:results",
+  // 3.1.0
+  "v.commits_since @ buildFromRef": "infra:commits_since",
+  "v.plan_touched @ buildFromRef": "infra:plan_touched",
+  "v.changed_since @ buildFromRef": "infra:changed_since",
 };
 
 function arraySites() {
@@ -7389,7 +7404,7 @@ test("2.1.6 review: a role page below its pin names the page, the project and th
   s.preflight.versions["scope-and-plan"] = 25;
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /agent_prompt_get\(scope-and-plan, project m-agahi\/yadgar\) wiki version 25 must be >= 27; update that page in place; see CHANGELOG 3\.0\.0 deploy order/);
+  assert.match(out.result.reason, /agent_prompt_get\(scope-and-plan, project m-agahi\/yadgar\) wiki version 25 must be >= 27; update that page in place; see CHANGELOG 3\.1\.0 deploy order/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -7501,7 +7516,7 @@ test("3.0.0 preflight: a page below its pin names the agent_prompt_get wiki vers
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /agent_prompt_get\(plan-audit, project m-agahi\/yadgar\) wiki version 14/);
-  assert.match(out.result.reason, /see CHANGELOG 3\.0\.0 deploy order/);
+  assert.match(out.result.reason, /see CHANGELOG 3\.1\.0 deploy order/);
   assert.doesNotMatch(out.result.reason, /update agent-prompt-plan-audit \(project/);
 });
 
@@ -9065,4 +9080,271 @@ test("3.0.0 review 8: the nix pre-commit's own interpreter reads the config thro
   } finally {
     r.done();
   }
+});
+
+// ---------------------------------------------------------------- 3.1.0 (ledger 1941a): prose-only pages pinned at their live versions
+
+test("3.1.0 pins: every role page at its live version (fleet-code-judge at the 3.1.0 write)", () => {
+  const m = /const EXPECTED_VERSIONS = (\{[\s\S]*?\});/.exec(SOURCE);
+  assert.ok(m, "EXPECTED_VERSIONS");
+  const got = Function("return " + m[1])();
+  assert.deepEqual(got, {
+    "scope-and-plan": 27,
+    "plan-audit": 16,
+    "fleet-test-writer": 10,
+    "fleet-test-judge": 10,
+    "fleet-coder": 17,
+    "fleet-code-judge": 15,
+    "fleet-pr-opener": 10,
+    "fleet-intent-judge": 2,
+    "pr-review": 18,
+    "gate-change-nonweakening-sweep": 5,
+  });
+  assert.deepEqual(got, FROZEN_VERSIONS, "the harness pins follow the script");
+});
+
+test("3.1.0 pins: a page below its pin names the 3.1.0 deploy order", async () => {
+  const s = happy();
+  s.preflight.versions["fleet-code-judge"] = 14;
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /agent_prompt_get\(fleet-code-judge, project m-agahi\/yadgar\) wiki version 14 must be >= 15; update that page in place; see CHANGELOG 3\.1\.0 deploy order/);
+});
+
+// ---------------------------------------------------------------- 3.1.0 (ledger 1959): verify-plan and commit-plan relay program output, not raw git
+
+const VERIFY_KEYS = ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since"];
+
+test("3.1.0 1959: the verify and plan-files programs print what git says, with a digest the workflow recomputes", { skip: !HAVE_PY }, () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-1959-"));
+  try {
+    const cfg = join(home, "gitconfig");
+    writeFileSync(cfg, "[user]\n\temail = t@example.com\n\tname = t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = master\n");
+    const env = gitEnv(home, cfg);
+    const { wt, g } = scanRepo(home, env);
+    const fn = new Function(extractCanonical() + "\nreturn canonical;")();
+    const check = (o, keys) => {
+      const x = {};
+      for (const k of keys) x[k] = o[k] === undefined ? null : o[k];
+      assert.equal(sha256(fn(x)), o.digest, keys.join(","));
+    };
+    // the agent's shell sits in the worktree; the programs run from / anyway
+    const runP = (b, e, c, args) => {
+      const r = spawnSync("python3", ["-I", "-c", extractPy(b, e, c), wt].concat(args), { encoding: "utf8", env, cwd: wt });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const pc = g("rev-parse", "HEAD").trim();
+    // the plan commit holds the plan doc only
+    const pf = runP("PLAN_FILES_PY_BEGIN", "PLAN_FILES_PY_END", "PLAN_FILES_PY", []);
+    assert.deepEqual([pf.head, pf.files], [pc, ["docs/plans/x.md"]]);
+    check(pf, ["head", "files"]);
+    // head = plan commit: nothing since
+    let v = runP("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY", [pc, "docs/plans/x.md"]);
+    assert.deepEqual(v, Object.assign({ head: pc, is_ancestor: true, commits_since: [], plan_touched: [], changed_since: [] }, { digest: v.digest }));
+    check(v, VERIFY_KEYS);
+    // two commits after it: a non-ASCII subject with a tab and a control character, and one that touches the plan
+    writeFileSync(join(wt, "a.py"), "b\n");
+    writeFileSync(join(wt, "ü é.py"), "x\n");
+    g("add", "-A");
+    g("commit", "-qm", "feat(l42): ü\tthing \u0001 done");
+    const c1 = g("rev-parse", "HEAD").trim();
+    writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan 2\n");
+    g("commit", "-qam", "edit plan");
+    const c2 = g("rev-parse", "HEAD").trim();
+    v = runP("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY", [pc, "docs/plans/x.md"]);
+    assert.equal(v.head, c2);
+    assert.equal(v.is_ancestor, true);
+    assert.deepEqual(v.commits_since, [
+      { sha: c2, subject: "edit plan" },
+      { sha: c1, subject: "feat(l42): ü\tthing \u0001 done" },
+    ]);
+    assert.deepEqual(v.plan_touched, [c2]);
+    assert.deepEqual(v.changed_since, ["a.py", "docs/plans/x.md", "ü é.py"]);
+    check(v, VERIFY_KEYS);
+    // a plan commit HEAD does not descend from: no lists, is_ancestor false
+    g("checkout", "-q", "--orphan", "other");
+    g("commit", "-qm", "orphan");
+    v = runP("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY", [pc, "docs/plans/x.md"]);
+    assert.deepEqual([v.is_ancestor, v.commits_since, v.plan_touched, v.changed_since], [false, [], [], []]);
+    check(v, VERIFY_KEYS);
+    // a bad revision fails the step
+    const bad = spawnSync("python3", ["-I", "-c", extractPy("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY"), wt, "0".repeat(40), "docs/plans/x.md"], { encoding: "utf8", env });
+    assert.notEqual(bad.status, 0);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("3.1.0 1959: the verify and commit-plan prompts run the programs, not raw git listings", async () => {
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  const build = await runOne(s, buildArgs(plan.result.plan_ref));
+  const vp = call(build, "infra:verify-plan").prompt;
+  const cp = call(plan, "infra:commit-plan").prompt;
+  const q = (b, e, c) => "python3 -I -c '\n" + extractPy(b, e, c).replace(/'/g, "'\\''");
+  assert.ok(vp.includes(q("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY")));
+  assert.ok(cp.includes(q("PLAN_FILES_PY_BEGIN", "PLAN_FILES_PY_END", "PLAN_FILES_PY")));
+  assert.doesNotMatch(vp, /log --format=%H%x09%s/);
+  assert.doesNotMatch(vp, /diff --name-only <plan_commit>\.\.HEAD/);
+  assert.doesNotMatch(cp, /show --name-only --format= HEAD/);
+  // the plan hash program stays the first one in the verify prompt
+  assert.ok(vp.indexOf(extractPy("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY").slice(0, 40)) > vp.indexOf("python3 -I -c "));
+});
+
+test("3.1.0 1959: a verify relay that drops or changes an entry stops the run", async () => {
+  const cases = [
+    (r) => ({ ...r, commits_since: [] }),
+    (r) => ({ ...r, changed_since: ["src/x.py"] }),
+    (r) => ({ ...r, plan_touched: [] }),
+    (r) => ({ ...r, is_ancestor: true, head: "fedcba9877" }),
+    (r) => {
+      const o = { ...r };
+      delete o.changed_since;
+      return o;
+    },
+  ];
+  for (const mut of cases) {
+    const s = happy();
+    const ref = await planRefFor(s);
+    const good = withRelayDigest("infra:verify-plan", {
+      ...s["infra:verify-plan"],
+      head: "fedcba9876",
+      commits_since: [{ sha: "fedcba9876", subject: "feat(l42): add thing" }],
+      plan_touched: ["fedcba9876"],
+      changed_since: ["src/x.py", ".github/x.yml"],
+    });
+    s["infra:verify-plan"] = mut(good);
+    const out = await runOne(s, buildArgs(ref));
+    assert.equal(out.result.status, "failed", JSON.stringify(out.result.reason));
+    assert.match(out.result.reason, /infra:verify-plan: the relayed (lists do not match the program's digest|result has no)/);
+    assert.ok(!out.labels.some((l) => /^role:/.test(l)), "stops before any role");
+  }
+  // the untampered relay reaches the fence (and stops on .github/)
+  const s = happy();
+  const ref = await planRefFor(s);
+  s["infra:verify-plan"] = { ...s["infra:verify-plan"], head: "fedcba9876", commits_since: [{ sha: "fedcba9876", subject: "feat(l42): add thing" }], changed_since: [".github/x.yml"] };
+  const ok = await runOne(s, buildArgs(ref));
+  assert.equal(ok.result.stop_gate, "scope");
+});
+
+test("3.1.0 1959: a commit-plan relay whose files or head differ from the program's digest stops the run", async () => {
+  for (const mut of [(r) => ({ ...r, files: [] }), (r) => ({ ...r, files: r.files.concat(["x.py"]) }), (r) => ({ ...r, head: "abc1234def1" })]) {
+    const s = happy();
+    const inner = commitStub(s.__store, PC, PSHA);
+    s["infra:commit-plan"] = (prompt) => {
+      const r = inner(prompt);
+      r.digest = relayDigestOf(r, ["head", "files"]);
+      return mut(r);
+    };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "failed", out.result.reason);
+    assert.match(out.result.reason, /infra:commit-plan: the relayed head and files do not match the program's digest/);
+  }
+  // no digest at all (an agent that ran git itself) stops too
+  const s = happy();
+  const inner = commitStub(s.__store, PC, PSHA);
+  s["infra:commit-plan"] = (prompt) => Object.assign(inner(prompt), { __raw: true });
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "failed");
+});
+
+test("3.1.0 1959: every embedded program takes the worktree as an argument and runs git from /", () => {
+  for (const [b, e, c] of [
+    ["VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY"],
+    ["PLAN_FILES_PY_BEGIN", "PLAN_FILES_PY_END", "PLAN_FILES_PY"],
+    ["PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY"],
+  ]) {
+    const p = extractPy(b, e, c);
+    assert.match(p, /^os\.chdir\('\/'\)$/m, c + " leaves the worktree before it does anything");
+    if (c !== "PUSH_CLASSIFY_PY") assert.match(p, /'-C', wt\]/, c + " names the worktree with git -C");
+  }
+});
+
+// ---------------------------------------------------------------- 3.1.0 (ledger 1935c): the push classifier is a program, tested on real git output
+
+// Captured with git 2.55.0 (scratch repos and a local smart-HTTP server; LANG=C).
+// remote_rejected: a bare remote whose pre-receive hook exits 1. hook_rejected:
+// a local pre-push hook that prints an `error:` line and exits 1. http_5xx_post:
+// GET info/refs served by git http-backend, POST answered 500/502. http_5xx_get:
+// info/refs answered 500/503.
+const PUSH_FIXTURES = {
+  ok: [0, "branch 'main' set up to track 'origin/main'.\nTo /tmp/pushcap/ok.git\n * [new branch]      main -> main\n", "ok"],
+  remote_rejected: [1, "remote: policy: branch protected        \nTo /tmp/pushcap/rr.git\n ! [remote rejected] main -> main (pre-receive hook declined)\nerror: failed to push some refs to '/tmp/pushcap/rr.git'\n", "remote_rejected"],
+  hook_rejected: [1, "run make bump\nerror: version not bumped\nerror: failed to push some refs to '/tmp/pushcap/ok.git'\n", "hook_rejected"],
+  non_ff: [1, "To /tmp/pushcap/ok.git\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs to '/tmp/pushcap/ok.git'\nhint: Updates were rejected because the remote contains work that you do not\nhint: have locally.\n", "non_ff"],
+  http_500_post: [1, "error: RPC failed; HTTP 500 curl 22 The requested URL returned error: 500\nsend-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly\nEverything up-to-date\n", "network"],
+  http_502_post: [1, "error: RPC failed; HTTP 502 curl 22 The requested URL returned error: 502\nsend-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly\nEverything up-to-date\n", "network"],
+  http_500_get: [128, "fatal: unable to access 'http://127.0.0.1:60457/x.git/': The requested URL returned error: 500\n", "network"],
+  http_503_get: [128, "fatal: unable to access 'http://127.0.0.1:60457/x.git/': The requested URL returned error: 503\n", "network"],
+  // DERIVED, not observed: an RPC failure whose `fatal:` line is missing (the
+  // shape the 3.0.0 prose rule routed to hook_rejected: exit 1, `error: failed
+  // to push some refs`, no ` ! [`, no `fatal:`). A transport failure is never a hook.
+  rpc_no_fatal: [1, "error: RPC failed; HTTP 500 curl 22 The requested URL returned error: 500\nerror: failed to push some refs to 'https://github.com/o/r.git'\n", "network"],
+};
+
+function classifyPush(code, output) {
+  const home = mkdtempSync(join(tmpdir(), "fleet-push-"));
+  try {
+    const f = join(home, "out.txt");
+    writeFileSync(f, output);
+    const r = spawnSync("python3", ["-I", "-c", extractPy("PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY"), f, String(code)], { encoding: "utf8", cwd: home });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test("3.1.0 1935c: the push classifier routes real git push output", { skip: !HAVE_PY }, () => {
+  const fn = new Function(extractCanonical() + "\nreturn canonical;")();
+  for (const [name, [code, output, want]] of Object.entries(PUSH_FIXTURES)) {
+    const o = classifyPush(code, output);
+    assert.equal(o.push_result, want, name);
+    assert.equal(o.exit_code, code, name);
+    assert.equal(o.hook_tail, want === "hook_rejected" ? output.replace(/\n$/, "") : "", name);
+    assert.equal(o.digest, sha256(fn({ push_result: o.push_result, exit_code: o.exit_code, hook_tail: o.hook_tail })), name);
+  }
+  // the hook's own words never classify: a hook that prints rejected-looking text mid-line stays a hook
+  const o = classifyPush(1, "hook: ! [rejected] is what you get\nsee fatal: nothing\nerror: failed to push some refs to 'x'\n");
+  assert.equal(o.push_result, "hook_rejected");
+  // the tail is the last 60 lines
+  const long = Array.from({ length: 80 }, (_, i) => "line " + i).join("\n") + "\nerror: failed to push some refs to 'x'\n";
+  const t = classifyPush(1, long).hook_tail.split("\n");
+  assert.equal(t.length, 60);
+  assert.equal(t[59], "error: failed to push some refs to 'x'");
+});
+
+test("3.1.0 1935c: the push step runs the classifier program; a hook_rejected the program did not print stops the run", async () => {
+  const s = happy();
+  const out = await run(s, ARGS);
+  const p = call(out, "infra:push").prompt;
+  assert.ok(p.includes("python3 -I -c '\n" + extractPy("PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY").replace(/'/g, "'\\''")));
+  assert.match(p, /\{push_result, exit_code, hook_tail, digest\}/);
+  // a relayed hook_rejected whose tail or result was changed in the copy
+  for (const bad of [
+    (r) => ({ ...r, hook_tail: "a different tail" }),
+    (r) => ({ ...r, push_result: "hook_rejected", exit_code: 1, hook_tail: "x", digest: undefined }),
+    (r) => ({ ...r, exit_code: 128 }),
+  ]) {
+    const t = happy();
+    const good = { status: "ok", reason: "hook", push_result: "hook_rejected", exit_code: 1, hook_tail: "check_version_bump: core version not bumped\nerror: failed to push some refs" };
+    good.digest = relayDigestOf(good, ["push_result", "exit_code", "hook_tail"]);
+    const r = bad(good);
+    if (r.digest === undefined) delete r.digest;
+    t["infra:push"] = Object.assign(r, { __raw: true });
+    const o = await run(t, ARGS);
+    assert.equal(o.result.status, "failed", JSON.stringify(o.result.reason));
+    assert.match(o.result.reason, /infra:push: the relayed hook_rejected result does not match the classifier program's digest/);
+    assert.ok(!o.labels.includes("role:fleet-coder:r2"), "no coder round on an unverified hook rejection");
+  }
+});
+
+test("3.1.0 1935c: a gh error string in remote_head never passes as the pushed sha", async () => {
+  // DERIVED from gh's error format, not observed: a 5xx from the GitHub API
+  const s = happy();
+  s["infra:push"] = { status: "ok", reason: "pushed", push_result: "ok", remote_head: "gh: HTTP 502: Bad Gateway (https://api.github.com/repos/o/r/branches/fleet/l42-add-thing)" };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /push: origin\/fleet\/l42-add-thing is at gh: HTTP 502/);
 });

@@ -51,14 +51,14 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 const EXPECTED_VERSIONS = {
   "scope-and-plan": 27,
   "plan-audit": 16,
-  "fleet-test-writer": 9,
-  "fleet-test-judge": 9,
+  "fleet-test-writer": 10,
+  "fleet-test-judge": 10,
   "fleet-coder": 17,
-  "fleet-code-judge": 13,
+  "fleet-code-judge": 15,
   "fleet-pr-opener": 10,
   "fleet-intent-judge": 2,
-  "pr-review": 17,
-  "gate-change-nonweakening-sweep": 4,
+  "pr-review": 18,
+  "gate-change-nonweakening-sweep": 5,
 };
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
 const CONTRACT = "fleet-v3";
@@ -1147,6 +1147,7 @@ const INFRA_SCHEMA = {
     changed_since: { type: "array", items: STR },
     remote_head: STR,
     push_result: { type: "string", enum: ["ok", "hook_rejected", "network", "non_ff", "remote_rejected"] },
+    exit_code: { type: "integer" },
     hook_tail: STR,
     checks: { type: "object" },
     purged: { type: "number" },
@@ -2219,6 +2220,68 @@ print(json.dumps(out, ensure_ascii=False))
 `;
 // REVIEW_PATHS_PY_END
 
+// Verify (3.1.0, ledger 1959): what the branch did since the plan commit, from
+// git itself. Args: worktree, plan commit, plan path. Prints {head,
+// is_ancestor, commits_since: [{sha, subject}] newest first, plan_touched
+// (shas of commits after the plan commit that change the plan path),
+// changed_since (paths plan_commit..HEAD changes), digest}. The three lists
+// are empty when HEAD is the plan commit or does not descend from it.
+// digest: sha256 over every key but itself, in canonical JSON. Read only;
+// git runs from /, never from the worktree.
+// VERIFY_SINCE_PY_BEGIN
+const VERIFY_SINCE_PY = String.raw`
+import hashlib, json, os, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+wt, base, plan_path = sys.argv[1], sys.argv[2], sys.argv[3]
+os.chdir('/')
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
+def run(*a, ok=(0,)):
+    r = subprocess.run(G + list(a), capture_output=True)
+    if r.returncode not in ok:
+        sys.exit(r.stderr.decode('utf-8', 'replace') or 'git ' + a[0] + ' exited ' + str(r.returncode))
+    return r
+def z(b):
+    return [x.decode('utf-8', 'replace') for x in b.split(b'\0') if x]
+head = run('rev-parse', '--verify', 'HEAD^{commit}').stdout.decode().strip()
+pc = run('rev-parse', '--verify', base + '^{commit}').stdout.decode().strip()
+anc = run('merge-base', '--is-ancestor', pc, head, ok=(0, 1)).returncode == 0
+commits, touched, changed = [], [], []
+if anc and head != pc:
+    for rec in z(run('log', '-z', '--format=%H %s', pc + '..' + head).stdout):
+        sha, _, subj = rec.partition(' ')
+        commits.append({'sha': sha, 'subject': subj})
+    touched = z(run('log', '-z', '--format=%H', pc + '..' + head, '--', ':(literal)' + plan_path).stdout)
+    changed = z(run('diff', '--name-only', '-z', '--no-renames', pc + '..' + head, '--').stdout)
+out = {'head': head, 'is_ancestor': anc, 'commits_since': commits, 'plan_touched': touched, 'changed_since': changed}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
+`;
+// VERIFY_SINCE_PY_END
+const VERIFY_SINCE_KEYS = ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since"];
+
+// Commit-plan (3.1.0, ledger 1959): HEAD and the paths the HEAD commit
+// changes. Arg: worktree. Prints {head, files, digest}. Read only; git runs
+// from /.
+// PLAN_FILES_PY_BEGIN
+const PLAN_FILES_PY = String.raw`
+import hashlib, json, os, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+wt = sys.argv[1]
+os.chdir('/')
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
+def run(*a):
+    r = subprocess.run(G + list(a), capture_output=True)
+    if r.returncode != 0:
+        sys.exit(r.stderr.decode('utf-8', 'replace') or 'git ' + a[0] + ' exited ' + str(r.returncode))
+    return r.stdout
+head = run('rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
+files = [x.decode('utf-8', 'replace') for x in run('diff-tree', '-r', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', head).split(b'\0') if x]
+out = {'head': head, 'files': files}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
+`;
+// PLAN_FILES_PY_END
+
 // The caller grep (2.1.6): every word-boundary occurrence of each changed
 // symbol in the tracked text files, as "<path>:<line>", the run's own plan doc
 // excluded. A symbol with more than <cap> hits is listed in capped, with an
@@ -3106,7 +3169,10 @@ function commitPlanPrompt(inputs, refContent) {
     shQuote("plan(" + inputs.task_id + "): " + inputs.slug) +
     "`. Never --allow-empty. If a hook rewrites the plan, do not re-add it and do not commit again: return needs_human with the hook output (the plan ran through the hooks before the audit; a rewrite now would commit bytes the audit never saw). Any other hook failure: fix the cause and retry once; a second failure -> failed.\n" +
     "4. `git -C <worktree> ls-files --error-unmatch -- <plan_path>` must succeed and `git -C <worktree> status --porcelain` must be empty; else needs_human.\n" +
-    "5. head = `git -C <worktree> rev-parse HEAD`; files = the lines of `git -C <worktree> show --name-only --format= HEAD`.\n" +
+    "5. Run this command exactly as written, unmodified: " +
+    "python3 -I -c " + shQuote(PLAN_FILES_PY) + " " + shQuote(inputs.worktree) +
+    "\n" +
+    "It prints one JSON object {head, files, digest}: copy all three unchanged, every path in order (the script recomputes the digest). Never list the files with git yourself. Non-zero exit -> failed with its stderr.\n" +
     "6. plan_sha256 = the output of this command, run exactly as written:\n" +
     planHashCmd(inputs.worktree, "HEAD", inputs.plan_path) +
     "\n" +
@@ -3116,7 +3182,7 @@ function commitPlanPrompt(inputs, refContent) {
     "8. Run this command exactly as written; it prints {refs} (names, targets and hashes; no message text). Copy refs unchanged, byte for byte:\n" +
     planRefsCmd(inputs.worktree, inputs.task_id, "meta") +
     "\n" +
-    "Return {status, reason, reused, head, files, plan_sha256, refs}."
+    "Return {status, reason, reused, head, files, digest, plan_sha256, refs}."
   );
 }
 
@@ -3186,18 +3252,17 @@ function verifyPlanPrompt(inputs) {
     "\n" +
     "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> status --porcelain` must be empty; else needs_human.\n" +
     "2. `git -C <main_worktree> cat-file -e '<plan_commit>^{commit}'` (keep the quotes: zsh globs `^`) must succeed; else needs_human.\n" +
-    "3. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
-    "4. plan_sha256 = the output of this command, run exactly as written:\n" +
+    "3. plan_sha256 = the output of this command, run exactly as written:\n" +
     planHashCmd(inputs.main_worktree, inputs.plan_commit, inputs.plan_path) +
     "\n" +
-    "5. plan_sha256_head = the output of this command, run exactly as written:\n" +
+    "4. plan_sha256_head = the output of this command, run exactly as written:\n" +
     planHashCmd(inputs.main_worktree, "HEAD", inputs.plan_path) +
     "\n" +
-    "6. is_ancestor = whether `git -C <main_worktree> merge-base --is-ancestor <plan_commit> HEAD` exits 0.\n" +
-    "7. commits_since = every line of `git -C <main_worktree> log --format=%H%x09%s <plan_commit>..HEAD` as {sha, subject} (empty when head equals plan_commit or is_ancestor is false).\n" +
-    "8. plan_touched = the lines of `git -C <main_worktree> log --format=%H <plan_commit>..HEAD -- <plan_path>`.\n" +
-    "9. changed_since = the lines of `git -C <main_worktree> diff --name-only <plan_commit>..HEAD` (empty when head equals plan_commit or is_ancestor is false).\n" +
-    "Return {status, reason, head, plan_sha256, plan_sha256_head, is_ancestor, commits_since, plan_touched, changed_since}."
+    "5. Run this command exactly as written, unmodified:\n" +
+    "python3 -I -c " + shQuote(VERIFY_SINCE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.plan_commit) + " " + shQuote(inputs.plan_path) +
+    "\n" +
+    "It prints one JSON object {head, is_ancestor, commits_since, plan_touched, changed_since, digest}. Copy every value unchanged: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Never run git log or git diff yourself for these values. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, head, plan_sha256, plan_sha256_head, is_ancestor, commits_since, plan_touched, changed_since, digest}."
   );
 }
 
@@ -3293,6 +3358,43 @@ function checkScriptsPrompt(inputs) {
   );
 }
 
+// The push classifier (3.1.0, ledger 1935c). Args: the file holding the
+// first push attempt's stdout and stderr, and its exit code. It reads git's
+// own lines only (`error:`, `fatal:`, ` ! [` at the start of a line), never
+// the hook's words or the remote URL. In order: exit 0 -> ok; ` ! [rejected]`
+// -> non_ff; ` ! [remote rejected]` -> remote_rejected; exit 1 with
+// `error: failed to push some refs`, no ` ! [`, no `fatal:` and no
+// `error: RPC failed` (a transport failure is never a hook) -> hook_rejected,
+// hook_tail = the last 60 lines; anything else -> network. Prints
+// {push_result, exit_code, hook_tail, digest}. Runs nothing; reads one file.
+// PUSH_CLASSIFY_PY_BEGIN
+const PUSH_CLASSIFY_PY = String.raw`
+import hashlib, json, os, sys
+path, code = sys.argv[1], int(sys.argv[2])
+os.chdir('/')
+with open(path, 'rb') as fh:
+    lines = fh.read().decode('utf-8', 'replace').splitlines()
+own = [x for x in lines if x.startswith(('error:', 'fatal:', ' ! ['))]
+def has(p):
+    return any(x.startswith(p) for x in own)
+tail = ''
+if code == 0:
+    res = 'ok'
+elif has(' ! [rejected]'):
+    res = 'non_ff'
+elif has(' ! [remote rejected]'):
+    res = 'remote_rejected'
+elif code == 1 and has('error: failed to push some refs') and not has(' ! [') and not has('fatal:') and not has('error: RPC failed'):
+    res = 'hook_rejected'
+    tail = '\n'.join(lines[-60:])
+else:
+    res = 'network'
+out = {'push_result': res, 'exit_code': code, 'hook_tail': tail}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
+`;
+// PUSH_CLASSIFY_PY_END
+
 function pushPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: push the approved fleet branch. No edits, no commits.\n" +
@@ -3300,13 +3402,13 @@ function pushPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "1. <branch> must differ from <default_branch>; `git -C <main_worktree> branch --show-current` must equal <branch>; `git -C <main_worktree> rev-parse HEAD` must equal <approved_sha>; `git -C <main_worktree> status --porcelain` must be empty. Any mismatch -> needs_human.\n" +
-    "2. Push ONCE: `git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Classify the result as push_result:\n" +
-    "   Classify on git's own lines only: lines that start with `error:`, `fatal:` or ` ! [`. Never match words in other lines: those are the hook's own output, and the remote URL holds `https` too. In order:\n" +
-    "   - exit code 0 -> `ok`.\n" +
-    "   - a line starting with ` ! [rejected]` (git ends it with `(non-fast-forward)` or `(fetch first)`) -> `non_ff`: return status needs_human at once, no retry.\n" +
-    "   - a line starting with ` ! [remote rejected]` (a server-side hook or branch protection) -> `remote_rejected`: return status needs_human at once with that line, no retry.\n" +
-    "   - exit code 1, a line starting with `error: failed to push some refs`, no line starting with ` ! [` and no line starting with `fatal:` -> a local pre-push hook declined the push: `hook_rejected`. hook_tail = the last 60 lines of the temp file. No retry. Return status ok.\n" +
-    "   - anything else (typically exit code 128 with a `fatal:` line: auth, network, 5xx) -> `network`: retry up to 3 times with backoff 5 15 45 (seconds): " +
+    "2. Push ONCE: `git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Never classify the output yourself: run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code:\n" +
+    "python3 -I -c " + shQuote(PUSH_CLASSIFY_PY) + " <file> <exit>\n" +
+    "   It prints one JSON object {push_result, exit_code, hook_tail, digest}. Copy all four unchanged (the script recomputes the digest). Then, by push_result:\n" +
+    "   - `ok` -> step 3.\n" +
+    "   - `non_ff` or `remote_rejected` -> return status needs_human at once with the git line, no retry.\n" +
+    "   - `hook_rejected` (a local pre-push hook declined the push) -> no retry. Return status ok with the program's push_result, exit_code, hook_tail and digest.\n" +
+    "   - `network` (auth, network, 5xx) -> retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
     " Exit 0 now -> `ok`. Still failing after the 3 retries -> status failed with the last error.\n" +
     "   Delete the temp file. Step 3 runs only when push_result is `ok`.\n" +
@@ -3314,7 +3416,7 @@ function pushPrompt(inputs) {
     "remote_head = the output of `<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha` (the branch name goes in the path as is, slashes included), retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha") +
     " Only when neither gh nor gh-personal is installed: remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints, with the same backoff. remote_head must be the full 40-hex sha.\n" +
-    "Return {status, reason, push_result, hook_tail, remote_head}."
+    "Return {status, reason, push_result, exit_code, hook_tail, digest, remote_head}."
   );
 }
 
@@ -4004,7 +4106,7 @@ async function preflightStep() {
     if (got < want)
       halt(
         "needs_human",
-        "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): the agent_prompt_get(" + role + ", project " + ROLE_PROJECT + ") wiki version " + got + " must be >= " + want + "; update that page in place; see CHANGELOG 3.0.0 deploy order",
+        "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): the agent_prompt_get(" + role + ", project " + ROLE_PROJECT + ") wiki version " + got + " must be >= " + want + "; update that page in place; see CHANGELOG 3.1.0 deploy order",
         "contract",
       );
     if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");
@@ -4659,6 +4761,9 @@ async function commitPlanAndRef(ctx) {
     ctx.phaseName,
   );
   if (typeof r.head !== "string" || !SHA_RE.test(r.head)) halt("failed", label + " returned no usable head sha: " + JSON.stringify(r.head));
+  // head and files come from a program (3.1.0, ledger 1959), not from a copy of git's output
+  if (!Array.isArray(r.files) || !relayDigestOk(r, ["head", "files"]))
+    halt("failed", label + ": the relayed head and files do not match the program's digest (a path was dropped or changed in the copy)");
   // identical re-plan: an unchanged plan doc on a plan-only HEAD reuses that commit
   if (r.reused === true) {
     if (!ctx.reuseHead) halt("failed", label + " claimed a reuse of HEAD, but no plan-only HEAD was offered for reuse");
@@ -5250,6 +5355,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     JUDGE_AGENT,
   );
   if (typeof v.head !== "string" || !SHA_RE.test(v.head)) halt("failed", "infra:verify-plan returned no usable head");
+  // the branch facts come from a program (3.1.0, ledger 1959): every list
+  // present, and all of them equal to what the program printed
+  if (typeof v.is_ancestor !== "boolean" || !Array.isArray(v.commits_since) || !Array.isArray(v.plan_touched) || !Array.isArray(v.changed_since))
+    halt("failed", "infra:verify-plan: the relayed result has no is_ancestor, commits_since, plan_touched or changed_since list");
+  if (!relayDigestOk(v, VERIFY_SINCE_KEYS))
+    halt("failed", "infra:verify-plan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
   if (v.plan_sha256 !== ref.plan_sha256)
     halt("needs_human", "plan changed since approval: " + ref.plan_path + " at " + ref.plan_commit + " hashes " + v.plan_sha256 + ", approved " + ref.plan_sha256);
   if (v.head !== ref.plan_commit) {
@@ -5466,6 +5577,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           "PR",
         );
         if (push.push_result === "hook_rejected") {
+          // the only push result that does not stop the run: it must be the
+          // classifier program's own (3.1.0, ledger 1935c)
+          if (push.exit_code !== 1 || typeof push.hook_tail !== "string" || !relayDigestOk(push, ["push_result", "exit_code", "hook_tail"]))
+            halt("failed", pushLabel + ": the relayed hook_rejected result does not match the classifier program's digest (exit_code " + JSON.stringify(push.exit_code === undefined ? null : push.exit_code) + ")");
           const tail = String(push.hook_tail || "").trim();
           gate("push of " + approvedSha + " rejected by a repo hook -> coder (fix_code)");
           return {

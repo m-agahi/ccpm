@@ -1,5 +1,43 @@
 # Changelog
 
+## [3.1.0] - 2026-11-07
+
+Ledger tasks 1959, 1958, 1935 and 1941.
+
+**Deploy order:** update the role page `fleet-code-judge` in place to version 15 BEFORE installing
+3.1.0. The change is additive (a new optional `check_exit` key in `obligations_check` entries, and
+the rule that the judge runs every allowlisted `check_cmd`), so 3.0.0 keeps running on the new page
+and logs "prose-only changes assumed". 3.1.0 pins `fleet-code-judge` 15: an older page stops the
+run in preflight ("... must be >= 15; update that page in place; see CHANGELOG 3.1.0 deploy
+order"). The contract marker stays `fleet-v3`.
+
+### Changed
+
+- **Role-page pins at the live versions** (ledger 1941a). `fleet-test-writer` 10,
+  `fleet-test-judge` 10, `pr-review` 18 and `gate-change-nonweakening-sweep` 5 (each read with
+  `agent_prompt_get(<role>, project="m-agahi/yadgar")` on 2026-11-07), and `fleet-code-judge` 15
+  (the 3.1.0 page write). `scope-and-plan` 27, `plan-audit` 16, `fleet-coder` 17, `fleet-pr-opener`
+  10 and `fleet-intent-judge` 2 are unchanged.
+- **verify-plan and commit-plan relay programs, not git output** (ledger 1959). `infra:verify-plan`
+  runs `VERIFY_SINCE_PY` (worktree, plan commit, plan path), which prints
+  `{head, is_ancestor, commits_since, plan_touched, changed_since, digest}`; `infra:commit-plan`
+  runs `PLAN_FILES_PY`, which prints `{head, files, digest}`. The script recomputes each digest and
+  stops the run (`failed`) on a dropped or changed entry, or on a missing list. Both programs run
+  with `python3 -I`, take the worktree as an argument and change to `/` before they run git.
+- **The push classifier is a program** (ledger 1935c). `infra:push` runs `PUSH_CLASSIFY_PY` on the
+  first attempt's output and exit code; it prints `{push_result, exit_code, hook_tail, digest}`.
+  The rules are the 3.0.0 rules, plus one: an `error: RPC failed` line is never `hook_rejected`
+  (a transport failure, retried as `network`). The script accepts `hook_rejected`, the one result
+  that does not stop the run, only with exit code 1 and the program's digest.
+
+### Tests
+
+- Push fixtures captured from git 2.55.0: `[remote rejected]` from a pre-receive hook, a declined
+  local pre-push hook, a non-fast-forward, HTTP 500 and 502 on the receive-pack POST, and HTTP 500
+  and 503 on `info/refs`. One derived (not observed) case: an RPC failure without its `fatal:`
+  line, which the 3.0.0 prose rule routed to `hook_rejected`. A gh 5xx error string in
+  `remote_head` stops the run (derived from gh's error format).
+
 ## [3.0.0] - 2026-11-07
 
 Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
