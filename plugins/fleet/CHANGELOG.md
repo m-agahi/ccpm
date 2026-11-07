@@ -37,6 +37,14 @@ Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
   2.1.6 skips the check with a gate line. Tests: the actions#211 B1 PoC (the coder changes
   `prestop_sleep`, which the plan never mapped) stops before the commit; a same-named function in
   another file is not covered by the mapped one (security review).
+- **Fixer hooks on build files** (ledger 1951). `infra:format-tests:r<n>` (before the ownership
+  hash, the test judge and the freeze) and `infra:format-code:r<n>` (before the purge, the
+  post-coder hash and the code judge) run `pre-commit run --files <paths>` until a run changes
+  nothing, at most 3 runs, so the judges and the hashes see the bytes the commit-time hooks leave.
+  A pre-commit fixer no longer stops the build at the commit step. A hook that changes a frozen
+  file (`stop_gate: hash`), a path outside the files it was given (`scope`), or still rewrites
+  after 3 runs (`commit`) stops the run. The commit step's tree-equality check (ADR-1151) is
+  unchanged.
 - **No model blob relays left on the gate path** (ledger 1952). The branch scan is one program that
   reads each plan-ref message itself and prints `task_id`, `plan_path` and `ref_ok` (the
   `planRefProblem` checks, ported; a test checks Python and JS agree), never the message text.

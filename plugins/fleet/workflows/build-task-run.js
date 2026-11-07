@@ -1171,6 +1171,10 @@ const INFRA_SCHEMA = {
     parser: STR_OR_NULL,
     error: STR_OR_NULL,
     removed: { type: "array", items: STR },
+    ran: { type: "boolean" },
+    changed: { type: "array", items: STR },
+    runs: { type: "number" },
+    stable: { type: "boolean" },
     state_sha: STR,
     exists: { type: "boolean" },
     occurrences: { type: "object", additionalProperties: { type: "array", items: STR } },
@@ -2606,6 +2610,112 @@ function parkPlanPrompt(inputs) {
     "4. clean = whether `git -C <worktree> status --porcelain --untracked-files=all` is now empty.\n" +
     "Return {status, reason, target: <dest>, clean}."
   );
+}
+
+// The repo's fixer hooks on build-phase files (3.0.0, ledger 1951): runs
+// `pre-commit run --files <paths>` in the worktree until a run changes
+// nothing (at most 3 runs), so the judges and the hashes see the bytes the
+// commit-time hooks leave and the one commit step has nothing to rewrite.
+// sel: {"paths": [...]} (the writers' files) or {"dirty": true} (every path
+// the worktree changes against HEAD, frozen ones left out). Exit codes are
+// ignored: a check hook that fails (a full-suite hook on RED tests) is the
+// commit step's business; only bytes count. changed: every path that differs
+// between the worktree tree before the first run and after the last (a temp
+// index, so the real index is untouched), whatever hook changed it. Prints
+// {ran, reason, runs, stable, files, changed, digest}.
+// FORMAT_FILES_PY_BEGIN
+const FORMAT_FILES_PY = String.raw`
+import hashlib, json, os, shutil, subprocess, sys, tempfile
+wt, sel, frozen = sys.argv[1], json.loads(sys.argv[2]), set(json.loads(sys.argv[3]))
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
+def git(*a, env=None):
+    r = subprocess.run(G + list(a), capture_output=True, env=env)
+    if r.returncode != 0:
+        sys.exit(r.stderr.decode('utf-8', 'replace'))
+    return r.stdout
+def snapshot():
+    fd, idx = tempfile.mkstemp()
+    os.close(fd)
+    try:
+        env = dict(os.environ, GIT_INDEX_FILE=idx, GIT_CONFIG_NOSYSTEM='1')
+        git('read-tree', 'HEAD', env=env)
+        git('add', '-A', env=env)
+        return git('write-tree', env=env).decode().strip()
+    finally:
+        os.unlink(idx)
+def names(b):
+    return [x.decode('utf-8', 'replace') for x in b.split(b'\0') if x]
+def done(**k):
+    out = {'ran': False, 'reason': '', 'runs': 0, 'stable': True, 'files': [], 'changed': []}
+    out.update(k)
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, sort_keys=True, ensure_ascii=False))
+    sys.exit(0)
+before = snapshot()
+if sel.get('dirty') is True:
+    cand = names(git('diff-tree', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', before))
+else:
+    cand = list(sel.get('paths') or [])
+files = sorted({p for p in cand if p not in frozen and os.path.isfile(os.path.join(wt, p)) and not os.path.islink(os.path.join(wt, p))})
+if not os.path.isfile(os.path.join(wt, '.pre-commit-config.yaml')):
+    done(reason='no .pre-commit-config.yaml', files=files)
+if not files:
+    done(reason='no files to format', files=files)
+if shutil.which('pre-commit') is None:
+    done(reason='pre-commit is not installed', files=files)
+prev, runs, stable = before, 0, False
+while runs < 3:
+    runs += 1
+    subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=wt, capture_output=True, timeout=600)
+    now = snapshot()
+    if now == prev:
+        stable = True
+        break
+    prev = now
+changed = names(git('diff-tree', '-r', '-z', '--name-only', '--no-renames', before, prev)) if prev != before else []
+done(ran=True, reason='ran pre-commit run --files', runs=runs, stable=stable, files=files, changed=sorted(changed))
+`;
+// FORMAT_FILES_PY_END
+
+function formatFilesPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: run the repo's pre-commit fixer hooks on the listed build files, so the one commit step has nothing left to rewrite. Run nothing but the one command below. Never edit a file by hand, never stage, commit or push, never bypass, skip or edit a hook or its config.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified, as one Bash call with timeout 600000 ms:\n" +
+    "python3 -I -c " + shQuote(FORMAT_FILES_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(JSON.stringify(inputs.select)) + " " + shQuote(JSON.stringify(inputs.frozen)) +
+    "\n" +
+    'It prints one JSON object {ran, reason, runs, stable, files, changed, digest}. Return {status: "ok", reason, ran, runs, stable, files, changed, digest} with those values copied exactly (the script recomputes the digest). ' +
+    'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
+  );
+}
+
+// Runs the fixer hooks and stops on what the script must not accept: a
+// frozen file changed (stop_gate hash), a path outside `allowed` changed
+// (scope), or hooks that still rewrite after 3 runs (commit).
+async function formatFiles(label, worktree, select, frozenList, allowed, phaseName) {
+  const r = await infra(label, formatFilesPrompt({ worktree, select, frozen: frozenList }), phaseName);
+  const keys = ["ran", "reason", "runs", "stable", "files", "changed"];
+  if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed))
+    halt("failed", label + " returned no ran/stable/files/changed");
+  if (!relayDigestOk(r, keys)) halt("failed", label + ": the relayed result does not match the program's digest");
+  if (!r.ran) {
+    gate(label + ": fixer hooks not run (" + r.reason + ")");
+    return r;
+  }
+  const changed = r.changed.map((x) => normPath(String(x)));
+  const frozenHit = changed.filter((x) => frozenList.indexOf(x) >= 0);
+  if (frozenHit.length)
+    halt("needs_human", label + ": a fixer hook changed frozen path(s) " + frozenHit.join(", ") + " after freeze; never accepted", "hash");
+  // allowed null: the files the program passed to the hooks
+  const allow = (allowed || r.files).map((x) => normPath(String(x)));
+  const outside = changed.filter((x) => allow.indexOf(x) < 0);
+  if (outside.length)
+    halt("needs_human", label + ": the fixer hooks changed path(s) outside the files they were given (" + allow.join(", ") + "): " + outside.join(", "), "scope");
+  if (!r.stable) halt("needs_human", label + ": the fixer hooks still rewrite files after 3 runs: " + changed.join(", "), "commit");
+  gate(label + ": fixer hooks ran " + r.runs + "x on " + r.files.length + " file(s); " + (changed.length ? "reformatted " + changed.join(", ") : "no change"));
+  return r;
 }
 
 // Runs the repo's pre-commit hooks on the plan doc before the audit, so the
@@ -5109,6 +5219,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       writerOut[cid] = stripHeldOut(r);
       roundOut.push(writerOut[cid]);
     });
+    // the repo's fixers on this round's test files, before the ownership hash,
+    // the test judge and the freeze (3.0.0, ledger 1951)
+    const wrote = [];
+    for (const p of pending)
+      for (const f of writerOut[p.criterion.id].files) {
+        const nf = normPath(f);
+        if (p.criterion.test_files.indexOf(nf) >= 0 && wrote.indexOf(nf) < 0) wrote.push(nf);
+      }
+    await formatFiles("infra:format-tests:r" + n, mainWt, { paths: wrote }, [], wrote, "Tests");
     const post = await hasher("hasher:post-writers:r" + n, mainWt, hashedFiles, "Tests", pre.fingerprint.tree);
     if (post.fingerprint.head !== pre.fingerprint.head)
       halt("needs_human", "writer committed: HEAD moved from " + pre.fingerprint.head + " to " + post.fingerprint.head + " in test round " + n + "; writers never commit", "ownership");
@@ -5149,8 +5268,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const judgeFirst = !!codeFindings && i === 0;
       let roundOut = [];
       if (!judgeFirst) {
-        // (pre-hasher), writers, post-hasher, judge, post-judge hasher
-        reserve(pending.length + 3 + (last ? 0 : 1), "test round " + n);
+        // (pre-hasher), writers, fixers, post-hasher, judge, post-judge hasher
+        reserve(pending.length + 4 + (last ? 0 : 1), "test round " + n);
         roundOut = await writerRound(n, pending, codeFindings);
       } else {
         reserve(2, "test round " + n);
@@ -5270,8 +5389,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     state.rounds.code++;
     const m = state.rounds.code;
     lastRoundGate = null;
-    // coder, purge, hasher, script check, judge, fingerprint, caller check, commit, push
-    reserve(7 + (planFacts.changed_symbols ? 1 : 0) + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
+    // coder, fixers, purge, hasher, script check, judge, fingerprint, caller check, commit, push
+    reserve(8 + (planFacts.changed_symbols ? 1 : 0) + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
       frozen_tests: testFilesView(frozen, frozenFiles),
@@ -5295,6 +5414,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       null,
       true,
     );
+    // the repo's fixers on every non-frozen path the worktree changes, before
+    // the hash check and the judge (3.0.0, ledger 1951); a hook that touches
+    // a frozen file or another path stops the run
+    await formatFiles("infra:format-code:r" + m, mainWt, { dirty: true }, Object.keys(frozen.files).map(normPath), null, "Code");
     // purge before the check and the judge; the judge's "before" state is the
     // post-purge hasher state
     await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");

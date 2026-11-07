@@ -116,6 +116,22 @@ through an alias, a re-export under another name, a name built at runtime, submo
 treats as binary and other repos are not searched or not found. An empty `changed_symbols` is only
 checked by the audit. A ref sealed before 2.1.6 builds without caller coverage (gate line).
 
+Fixer hooks on build files (3.0.0, steps 6a and 10a): the one commit step must commit exactly the
+approved tree (ADR-1151), so a pre-commit fixer that rewrote a file at commit time used to stop
+the run. A program (`infra:format-tests:r<n>`, `infra:format-code:r<n>`, the default agent: it
+writes) now runs `pre-commit run --files <paths>` in the fleet worktree until a run changes
+nothing, at most 3 runs: on the round's test files before the ownership hash, the test judge and
+the freeze, and on every path the worktree changes against HEAD, frozen files left out, before the
+purge, the post-coder hash and the code judge. Judges and hashes then see the formatted bytes and
+the commit-time hooks have nothing to rewrite. Exit codes are ignored (a check hook that fails,
+such as a full-suite hook on RED tests, stays the commit step's business); only bytes count. The
+program reports every path that differs between the worktree tree before the first run and after
+the last, whatever hook changed it, with a digest. The run stops with `needs_human` when a hook
+changed a frozen file (`stop_gate: hash`), a path outside the files it was given (`scope`), or
+still rewrites after 3 runs (`commit`). No `.pre-commit-config.yaml`, no file to format or no
+`pre-commit` binary: a gate line, and the commit step behaves as before. The commit step's
+tree-equality check is unchanged.
+
 Build-time caller check (3.0.0, step 12b): after the code judge approves a tree and before every
 commit step, a read-only step (`infra:changed-defs:r<n>`, the `fleet:judge` agent) runs a program
 over `git diff <plan_commit> <approved tree>` (`-U0`, renames off) for the files that existed at the
@@ -238,10 +254,12 @@ args: `{mode: "build", plan_ref, date, run_nonce, project?, confirm?}`.
 | 5    | verify (read only) | plan hash at `plan_commit` and HEAD; HEAD position (below)                 |
 | 5a   | auto gates         | `confirm: "auto"` only: G1-G3 against the current rulings                  |
 | 6    | test writers       | one per criterion, in parallel, all in the ONE fleet worktree, uncommitted |
+| 6a   | fixers (infra)     | `pre-commit run --files` on the round's test files until stable (below)    |
 | 7    | hasher (ownership) | HEAD unchanged; changed paths = the pending criteria's reported files      |
 | 8    | test judge         | `revise` routes findings to the named writers only; 3 rounds max           |
 | 9    | hasher (freeze)    | test files and runner config; `freeze_tree` = the worktree tree            |
 | 10   | coder              | works uncommitted; status checked after the hash check                     |
+| 10a  | fixers (infra)     | `pre-commit run --files` on every non-frozen dirty path (below)            |
 | 11   | hasher             | HEAD moved -> stop; any changed, new or removed hash key -> round rejected |
 | 12   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan    |
 | 12a  | -                  | `approve` with an unmet obligation -> `fix_code` (counts as a round)       |

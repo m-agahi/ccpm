@@ -111,6 +111,7 @@ const RELAY_KEYS = [
   [/^infra:review-paths:/, ["changed_paths"]],
   [/^infra:check-scripts/, ["checks"]],
   [/^infra:branch-scan$/, ["commits", "refs"]],
+  [/^infra:format-(tests|code):/, ["ran", "reason", "runs", "stable", "files", "changed"]],
 ];
 function relayDigestOf(r, keys) {
   const o = {};
@@ -173,6 +174,11 @@ async function runOne(script, args0) {
     if (!(label in script) && /^infra:park-plan/.test(label)) return { status: "ok", reason: "parked", target: inputsOf(prompt).dest, clean: true };
     // unscripted plan formatting changes nothing (the hooks found nothing to fix)
     if (!(label in script) && /^infra:format-plan/.test(label)) return { status: "ok", reason: "formatted", changed_paths: [] };
+    // unscripted fixer-hook runs change nothing (3.0.0)
+    if (!(label in script) && /^infra:format-(tests|code):/.test(label)) {
+      const sel = inputsOf(prompt).select;
+      return withRelayDigest(label, { status: "ok", reason: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [] });
+    }
     // unscripted build caller checks find no modified existing definition
     if (!(label in script) && /^infra:changed-defs:/.test(label)) return defsOut([]);
     // unscripted fleet-internal scans find no .fleet/ path in the PR diff
@@ -6159,6 +6165,8 @@ const ARRAY_SITES = {
   "r.defs @ buildCallerCheck": "infra:defs",
   "pf.changed_symbols @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
   "o.files @ planScopeFiles": "parsed: repo_obligations of the sealed plan facts",
+  "r.files @ formatFiles": "infra:files",
+  "r.changed @ formatFiles": "infra:changed",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   "r.files @ commitPlanAndRef": "infra:files",
   "r.refs @ commitPlanAndRef": "infra:refs",
@@ -8023,4 +8031,135 @@ test("3.0.0 review: an unclassified file or a module-level change stops unless t
   s["infra:changed-defs:r1"] = defsOut([], { unattributed: ["chart/render.py:1"] });
   const o3 = await run(s, ARGS);
   assert.equal(o3.result.status, "ok", o3.result.reason);
+});
+
+// ---------------------------------------------------------------- 3.0.0 fixer hooks on build files (ledger 1951)
+
+function formatOut(over) {
+  const o = Object.assign({ ran: true, reason: "ran pre-commit run --files", runs: 1, stable: true, files: [], changed: [] }, over || {});
+  const keys = ["ran", "reason", "runs", "stable", "files", "changed"];
+  const d = {};
+  for (const k of keys) d[k] = o[k];
+  return Object.assign({ status: "ok" }, o, { digest: sha256(canon(d)) });
+}
+
+test("3.0.0 fixers: writers' test files are formatted before the ownership hash and the test judge; the coder's paths before the purge and the post-coder hash", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const l = out.labels;
+  const ft = call(out, "infra:format-tests:r1");
+  assert.equal(ft.opts.agentType, undefined, "the fixers write: default agent, not fleet:judge");
+  assert.deepEqual(inputsOf(ft.prompt).select, { paths: ["tests/test_a.py", "tests/test_b.py"] });
+  assert.deepEqual(inputsOf(ft.prompt).frozen, []);
+  assert.ok(l.indexOf("role:fleet-test-writer:AC2:r1") < l.indexOf("infra:format-tests:r1"));
+  assert.ok(l.indexOf("infra:format-tests:r1") < l.indexOf("hasher:post-writers:r1"));
+  assert.ok(l.indexOf("infra:format-tests:r1") < l.indexOf("role:fleet-test-judge:r1"));
+  const fc = call(out, "infra:format-code:r1");
+  assert.deepEqual(inputsOf(fc.prompt).select, { dirty: true });
+  assert.ok(inputsOf(fc.prompt).frozen.includes("tests/test_a.py"));
+  assert.ok(l.indexOf("role:fleet-coder:r1") < l.indexOf("infra:format-code:r1"));
+  assert.ok(l.indexOf("infra:format-code:r1") < l.indexOf("infra:purge-bytecode:code-r1"));
+  assert.ok(l.indexOf("infra:format-code:r1") < l.indexOf("hasher:post-coder:r1"));
+  assert.match(fc.prompt, /python3 -I -c /);
+});
+
+test("3.0.0 fixers: a hook that changes a frozen test after freeze, or a path outside its files, stops the run; unsettled hooks stop too", async () => {
+  const s = happy();
+  s["infra:format-code:r1"] = formatOut({ files: ["src/x.py"], changed: ["src/x.py", "tests/test_a.py"] });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "hash");
+  assert.match(out.result.reason, /changed frozen path\(s\) tests\/test_a\.py after freeze/);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+  const t = happy();
+  t["infra:format-code:r1"] = formatOut({ files: ["src/x.py"], changed: ["README.md"] });
+  const o2 = await run(t, ARGS);
+  assert.equal(o2.result.stop_gate, "scope");
+  assert.match(o2.result.reason, /outside the files they were given \(src\/x\.py\): README\.md/);
+  const u = happy();
+  u["infra:format-tests:r1"] = formatOut({ files: ["tests/test_a.py", "tests/test_b.py"], changed: ["tests/conftest.py"] });
+  const o3 = await run(u, ARGS);
+  assert.equal(o3.result.stop_gate, "scope");
+  const w = happy();
+  w["infra:format-code:r1"] = formatOut({ files: ["src/x.py"], changed: ["src/x.py"], runs: 3, stable: false });
+  const o4 = await run(w, ARGS);
+  assert.equal(o4.result.stop_gate, "commit");
+  assert.match(o4.result.reason, /still rewrite files after 3 runs/);
+  // a reformat of the coder's own file is accepted and logged
+  const v = happy();
+  v["infra:format-code:r1"] = formatOut({ files: ["src/x.py"], changed: ["src/x.py"], runs: 2 });
+  const o5 = await run(v, ARGS);
+  assert.equal(o5.result.status, "ok", o5.result.reason);
+  assert.ok(o5.result.gate_log.some((m) => /infra:format-code:r1: fixer hooks ran 2x on 1 file\(s\); reformatted src\/x\.py/.test(m)));
+});
+
+test("3.0.0 fixers: no pre-commit is a gate line; a relay that drops a changed path fails", async () => {
+  const s = happy();
+  s["infra:format-code:r1"] = formatOut({ ran: false, reason: "pre-commit is not installed", runs: 0, files: ["src/x.py"] });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.result.gate_log.some((m) => /infra:format-code:r1: fixer hooks not run \(pre-commit is not installed\)/.test(m)));
+  const t = happy();
+  t["infra:format-code:r1"] = { ...formatOut({ files: ["src/x.py"], changed: ["tests/test_a.py"] }), changed: [] };
+  const o2 = await run(t, ARGS);
+  assert.equal(o2.result.status, "failed");
+  assert.match(o2.result.reason, /infra:format-code:r1: the relayed result does not match the program's digest/);
+});
+
+test("3.0.0 fixer program: runs pre-commit until stable, reports every changed path, leaves frozen files out of --files", { skip: !HAVE_PY }, () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-fmt-"));
+  const wt = join(home, "repo");
+  const bin = join(home, "bin");
+  try {
+    spawnSync("mkdir", ["-p", wt, bin]);
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), "repos: []\n");
+    writeFileSync(join(wt, "a.py"), "x=1\n");
+    writeFileSync(join(wt, "test_a.py"), "y=1\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "base");
+    // the coder's change, and a frozen test
+    writeFileSync(join(wt, "a.py"), "x=2\n");
+    writeFileSync(join(wt, "test_a.py"), "y=2\n");
+    // a fake pre-commit: logs its args, rewrites each file once (a fixer), and
+    // touches other.txt when TOUCH_OTHER is set (a pass_filenames: false hook)
+    writeFileSync(
+      join(bin, "pre-commit"),
+      "#!/bin/sh\nshift 2\necho \"$@\" >> \"$LOG\"\nfor f in \"$@\"; do grep -q fmt \"$f\" || echo '# fmt' >> \"$f\"; done\n[ -n \"$TOUCH_OTHER\" ] && echo x >> other.txt\nexit 1\n",
+      { mode: 0o755 },
+    );
+    const prog = extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY");
+    const env = (extra) => Object.assign({}, process.env, { PATH: bin + ":" + process.env.PATH, LOG: join(home, "log") }, extra || {});
+    const runF = (sel, frozen, extra) => {
+      const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify(sel), JSON.stringify(frozen)], { input: prog, encoding: "utf8", env: env(extra) });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const o = runF({ dirty: true }, ["test_a.py"]);
+    assert.equal(o.ran, true);
+    assert.equal(o.stable, true);
+    assert.equal(o.runs, 2, "a second run changed nothing");
+    assert.deepEqual(o.files, ["a.py"]);
+    assert.deepEqual(o.changed, ["a.py"]);
+    assert.equal(readFileSync(join(home, "log"), "utf8").trim().split("\n")[0], "a.py", "the frozen test is never passed");
+    const d = {};
+    for (const k of ["ran", "reason", "runs", "stable", "files", "changed"]) d[k] = o[k];
+    assert.equal(o.digest, sha256(canon(d)));
+    // a hook that touches another path: reported, and never settles
+    const o2 = runF({ paths: ["a.py"] }, [], { TOUCH_OTHER: "1" });
+    assert.ok(o2.changed.includes("other.txt"));
+    assert.equal(o2.stable, false);
+    assert.equal(o2.runs, 3);
+    // no config: not run
+    rmSync(join(wt, ".pre-commit-config.yaml"));
+    const o3 = runF({ dirty: true }, []);
+    assert.equal(o3.ran, false);
+    assert.match(o3.reason, /no \.pre-commit-config\.yaml/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
