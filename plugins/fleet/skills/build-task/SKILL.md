@@ -141,7 +141,7 @@ runs `/build-task` explicitly, always use the fleet.
      model used. With `confirm: "auto"`, also `auto_confirmed` and the `intent` verdict.
    - `gates_not_run`: list every gate the run did not execute.
    - Write-back: `ledger_status` and `comment_status`. On `failed`, show `comment_text` (and any
-     `section_text`) so the user can post it by hand.
+     `section_text`, for a ledger or yaadgaar entry that failed) so the user can post it by hand.
    - `yadgar_findings`, grouped by role, so the main thread can capture them.
 
 ## Re-running

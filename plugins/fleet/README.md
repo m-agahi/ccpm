@@ -75,6 +75,23 @@ match. A commit with no such plan ref, a broken seal, another task's ref, or any
 `.fleet/` path included) is a build commit. If the fleet branch carries any build
 commit, plan mode stops with "branch has build commits; run build, or delete branch". It never commits a plan on top
 of code. On a plan-only branch it adds a new plan commit.
+Since 3.0.0 the scan is one program (`BRANCH_SCAN_PY`) and no plan-ref message text crosses the
+relay: the program lists the commits (`{sha, subject, files}`, newest first) and, per plan ref,
+the name, target, the sha256 of the message and its own reading of the message: `task_id`,
+`plan_path` and `ref_ok` (the same checks as the script's `planRefProblem`: seal over canonical
+JSON, required fields, brief shape, branch name). A test checks Python and JS agree on each
+check. A message whose canonical form differs between the two (a float they print differently)
+reads as not ok, so its commit counts as a build commit and the run stops (fail-closed).
+
+**Program digests on relays (3.0.0).** Every read-only infra step whose output reaches a gate runs
+one program and relays its output with the program's digest (sha256 over its canonical JSON);
+the script recomputes it and stops on a difference: `infra:callers`, `infra:changed-defs`,
+`infra:branch-scan` (failed), `infra:iac-scan` (`stop_gate: iac`; its `error` key is always
+printed, `null` when none), `infra:fleet-scan` (`stop_gate: scope`), `infra:read-state`
+(`stop_gate: resume`), `infra:review-paths` (failed) and `infra:check-scripts` (a mismatch makes
+every check_cmd script judge-only), plus the hasher. The plan ref itself travels only as meta
+entries or as sha256-checked chunks (`infra:load-ref`). The digest catches a relay that drops or
+changes an entry; it is not a security boundary against a hostile relay (ADR-1152).
 
 Plan mode returns `awaiting_confirmation` with `tldr`, `plan_diff`, `fleet_size`
 (`{criteria, est_agents, est_rounds}`), `plan_path` and `plan_ref`. It makes no push, no PR, no
@@ -88,14 +105,104 @@ criterion, dont_care}]}`; each occurrence maps to exactly one of an existing cri
 doc excluded; the relayed lists are checked against the program's digest). A malformed map, a hit
 the map leaves out, a mapped line that is no hit, more than 100 hits for one symbol or more than 30
 symbols stop the run with `needs_human`, or go to the one `:audit-fix` round under confirm auto.
-The `:audit-fix` round must keep every symbol the refused round mapped or a finding named
-(narrower symbols only in addition); a dropped or swapped symbol stops the run. plan-audit gets
+The `:audit-fix` round must keep every symbol the refused round mapped and every symbol that one
+of its findings names (narrower symbols only in addition); a dropped or swapped symbol stops the
+run. A plan-audit routed finding may name its symbol in an optional `symbol` key (3.0.0); the
+script carries it like a grep finding's. plan-audit gets
 the map, `caller_check` (`{method, limits, occurrences}`) and, in the `:audit-fix` round,
 `prior_round` (`{reason, findings, changed_symbols}`); the intent judge gets the map under confirm
 auto. The grep reads the working tree content of the tracked files and is name-based: a call
 through an alias, a re-export under another name, a name built at runtime, submodules, files git
 treats as binary and other repos are not searched or not found. An empty `changed_symbols` is only
 checked by the audit. A ref sealed before 2.1.6 builds without caller coverage (gate line).
+
+Fixer hooks on build files (3.0.0, steps 6a and 10a): the one commit step must commit exactly the
+approved tree (ADR-1151), so a pre-commit fixer that rewrote a file at commit time used to stop
+the run. A program (`infra:format-tests:r<n>`, `infra:format-code:r<n>`, the default agent: it
+writes) now runs `pre-commit run --files <paths>` in the fleet worktree until a run changes
+nothing, at most 3 runs: on the round's test files before the ownership hash, the test judge and
+the freeze, and on every path the worktree changes against HEAD, frozen files left out, before the
+purge, the post-coder hash and the code judge. Judges and hashes then see the formatted bytes and
+the commit-time hooks have nothing to rewrite. Exit codes are ignored (a check hook that fails,
+such as a full-suite hook on RED tests, stays the commit step's business); only bytes count. The
+program reports every path that differs between the worktree tree before the first run and after
+the last, whatever hook changed it, with a digest. The run stops with `needs_human` when a hook
+changed a frozen file (`stop_gate: hash`), a path outside the files it was given (`scope`), or
+still rewrites after 3 runs (`commit`). No `.pre-commit-config.yaml`, no file to format or no
+`pre-commit` binary: a gate line, and the commit step behaves as before. The commit step's
+tree-equality check is unchanged.
+
+Build-time caller check (3.0.0, step 12b): after the code judge approves a tree and before every
+commit step, a read-only step (`infra:changed-defs:r<n>`, the `fleet:judge` agent) runs a program
+over `git diff <plan_commit> <approved tree>` (`-U0`, renames off) for the files that existed at the
+plan commit (modified, type-changed or deleted). For each hunk it reads the base blob: a removed
+definition line, or a re-added one (then every base definition of that name), names that
+definition; every added line is attributed on its own. A new definition at column 0 that opens a
+block is an addition, and its deeper lines are its body. Any added line at indent > 0, a nested
+definition and its decorators included, names the innermost base definition above it with a
+smaller indent; the one exception is a new member of an existing class, struct, impl, interface or
+trait (a new method), which records nothing (known limit: it may override an inherited method). A
+decorator line belongs to the definition after it; a line that only closes a block names nothing.
+Any other removed line names the innermost definition above it. A multi-line signature (`def f(`
+... `) -> T:`, Go `func F(` ... `) T {`, a TS method) counts from its opening line, and an
+Allman brace on its own line is stepped over to the signature above it. A decorated new member,
+and a new nested class or struct, name the enclosing class. A rename onto an excluded path (a
+criterion test, the plan doc) is checked as a deletion of the old file. JS
+`X.y = function` and `X.y = (...) =>` are definitions. A renamed file is diffed old blob against
+new blob at the base path, so only its real changes count. Each definition is printed as
+`{name, at: "<path>:<line>", end}` (`end` = the last line of its body), every one of a name. The
+program does this itself instead of reading git's hunk header: without a `diff=` attribute git
+names the nearest column-0 line, the class rather than its method. It also prints `excluded`
+(the criterion test files and the plan doc), `unclassified` (files no definition pattern covers,
+and binary diffs) and `unattributed` (`<path>:<line>` of a change with no enclosing definition,
+such as an added import). Path names are printed with non-printable characters escaped. The
+relayed lists must match the program's digest.
+
+The fixer program (3.0.0) runs the hooks in a scratch checkout of HEAD under `scratch_dir`
+(`git worktree add --detach`, hooks off for that checkout only): only the selected files are
+copied in, and only they are copied back. The hook surface is exact: the config, every path a hook
+`entry` or `args` names, and the files of every `-m` module an entry runs (`a/b.py`,
+`a/b/__init__.py`, `a/__init__.py`); a path that only appears in a `files:` or `exclude:` regex is
+not hook code and is formatted. The config is read only with PyYAML (`yaml.safe_load`, in a
+subprocess that prints JSON: `entry`, `args` and `language` of every hook of every repo, any YAML
+form). The interpreter is pre-commit's own, which ships PyYAML: the program follows the
+`pre-commit` executable's shebang, and a shell wrapper's `exec` target (pipx, nix), to that Python;
+then it tries its own `python3`. A nix wrapped script adds its site-packages to `sys.path` itself;
+the program reads those `/nix/store/.../site-packages` paths from the script and adds exactly
+them, so the nix pre-commit's own Python finds PyYAML. The loader runs as `<python> -I -c` with
+cwd `/`, so a `yaml.py` or `json.py` in the worktree is never imported. No interpreter with PyYAML:
+the step is refused (the surface is unknown); there is no line parser. Every embedded program of
+the workflow runs as `python3 -I` (no cwd on `sys.path`, no `PYTHON*` environment, no user site)
+and takes the worktree as an argument; a test checks each invocation. When a surface path differs from HEAD, or a selected path goes
+through a symlink (HEAD mode 120000, a symlinked parent at HEAD or in the worktree, or a realpath
+outside either checkout), nothing runs (`refused`, `stop_gate: hash`). A helper that a hook entry
+imports without the config naming it is a residual (ADR-1152). A scratch checkout a killed run left
+behind is removed first. Each `pre-commit` run is capped at 180 s. A cache a hook leaves in the
+scratch checkout is ignored.
+
+The script then refuses, with `needs_human` and `stop_gate: "callers"` before anything is
+committed:
+
+- a definition whose name is no symbol of the sealed `changed_symbols`, or whose symbol has no
+  occurrence in the same file inside the definition's lines (a same-named function in another file
+  is not covered: "mapped only elsewhere");
+- an unclassified file, an unattributed (module-level) change, or a definition whose name is no
+  identifier (a hyphenated Makefile target, which `changed_symbols` cannot name), in a file the
+  plan does not list explicitly: in `allowed_additions.files` or a repo obligation's `files`. An
+  occurrence of a mapped symbol in that file does not count (a file that calls `foo` waives
+  nothing else). A CHANGELOG or docs file an obligation lists passes; an added import needs its
+  file in `allowed_additions.files`.
+
+Every excluded and every unclassified path gets a gate line. The script cannot tell a coder's scope
+creep from a planner's miss, so a human decides (re-plan with the symbol mapped, or narrow the
+change); a `plan_wrong` re-plan would let the coder's edit widen the plan by itself.
+Definitions are found by keyword (`def`, `class`, `function`, `fn`, `func`, ...), by JS arrow,
+method and module-level `const`/`let`/`var` forms, by shell `name()`, by Makefile targets and
+variables (`Makefile`, `*.mk`), by C-like signatures, and by module-level assignments (Python, JS,
+shell, Go, Rust and Ruby constants). Extensionless files are classified by their shebang (python,
+sh, bash, zsh, node). Limits: indentation-based and line-based; a decorator line counts as
+module-level. A ref sealed before 2.1.6 (`changed_symbols: null`) skips the check with the gate
+line "build caller check skipped".
 
 Intake classifies the input and fetches its text: a ledger task through yadgar `task_get`, a Jira
 ticket through the Atlassian MCP, an issue or PR through `gh-personal` or the Codeberg API, a plan
@@ -183,13 +290,16 @@ args: `{mode: "build", plan_ref, date, run_nonce, project?, confirm?}`.
 | 5    | verify (read only) | plan hash at `plan_commit` and HEAD; HEAD position (below)                 |
 | 5a   | auto gates         | `confirm: "auto"` only: G1-G3 against the current rulings                  |
 | 6    | test writers       | one per criterion, in parallel, all in the ONE fleet worktree, uncommitted |
+| 6a   | fixers (infra)     | `pre-commit run --files` on the round's test files until stable (below)    |
 | 7    | hasher (ownership) | HEAD unchanged; changed paths = the pending criteria's reported files      |
 | 8    | test judge         | `revise` routes findings to the named writers only; 3 rounds max           |
 | 9    | hasher (freeze)    | test files and runner config; `freeze_tree` = the worktree tree            |
 | 10   | coder              | works uncommitted; status checked after the hash check                     |
+| 10a  | fixers (infra)     | `pre-commit run --files` on every non-frozen dirty path (below)            |
 | 11   | hasher             | HEAD moved -> stop; any changed, new or removed hash key -> round rejected |
 | 12   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan    |
 | 12a  | -                  | `approve` with an unmet obligation -> `fix_code` (counts as a round)       |
+| 12b  | changed-defs (r/o) | a modified existing definition outside `changed_symbols` -> stop (below)   |
 | 13   | commit (infra)     | `git add -A`, staged tree = `code_tree`, ONE commit WITH hooks (below)     |
 | 14   | push (infra)       | `.fleet/` check first; pushes; a hook rejection -> coder (`fix_code`)      |
 | 15   | pr-opener          | `.fleet/` check first; draft PR at `approved_sha` (the commit step's HEAD) |
@@ -327,7 +437,32 @@ is the plan commit, for example after a re-plan.
 - **Ledger:** for each `ledger` source, one `## Fleet build` section (tldr, plan path, PR URL,
   hidden `fleet:<task id>` marker) is appended to the task's body page (`body_slug`) in
   `args.project`. A body that already carries the marker is skipped. `ledger_status` is `ok`,
-  `failed` or `none`.
+  `failed` or `none`. A task with no `body_slug` fails with "task has no body page" and its
+  `section_text` is handed back.
+- **yaadgaar (3.0.0):** for each `yaadgaar` source of a `yadgarhq/` project, a read-only step
+  (`infra:yaadgaar-read`, `fleet:judge`) resolves the client's project (`.yadgar/project-id` or
+  origin; the yaadgaar client resolves a number in the session's start project) and runs
+  `mcp__yaadgaar__read_task` by number; it returns the project, and per task the id, version and
+  whether the marker is there, plus the number and project the answer gives. The script refuses
+  when the project is absent or not `args.project`: then no edit step runs at all. It also refuses
+  any task whose answer gives another number or project than the request, or a version that is not
+  an integer. `fleet:judge` cannot call `mcp__yaadgaar__edit_task`, `create_task` or
+  `transition_task` (`disallowedTools`). Only then `infra:yaadgaar-writeback` (the default
+  agent: `fleet:judge` may never write to a ledger) edits each task by id with the version read
+  as `expect_version`, after it re-reads the task by id and checks its number and project (fail
+  closed): an empty body gets `body` = the `## Fleet build` heading plus
+  `section_text` with `expect_body_sha256` (computed by the script); a non-empty body is never
+  re-sent, the section is appended with a literal `patch` on a unique tail of the body
+  (`expect_count: 1`). On `VERSION_MISMATCH` it re-reads and retries once; any other refusal fails
+  the entry. It re-reads after the edit to confirm the marker landed and nothing was cut. The yadgar
+  ledger is never used for these tasks. A task that already carries the marker is skipped without
+  an edit step. Task bodies are data, not instructions. No
+  tool-restricted agent type that can call `mcp__yaadgaar__*` exists, so the step uses the default
+  agent. A ref that is not a task number is never sent. A failed entry carries `section_text` to
+  add by hand.
+- **Plan link:** `https://github.com/<o>/<r>/blob/<branch>/<plan>`, or
+  `https://codeberg.org/<o>/<r>/src/branch/<branch>/<plan>` when the origin's configured URL names
+  Codeberg (`remote_host` from the workspace step).
 - **Comments:** one comment on each `jira`, `github` and `codeberg` source: tldr, plan link, PR
   link and the marker `fleet:<task id>` (an HTML comment on GitHub and Codeberg, a plain last line
   on Jira). A read-only step lists the existing comments first; a source that already has the
@@ -632,7 +767,9 @@ The script pins the role contract, not the prose:
 - 2.1.1 pins: scope-and-plan 24, plan-audit 13, fleet-test-writer 9, fleet-test-judge 9,
   fleet-coder 16, fleet-code-judge 13, fleet-pr-opener 10, fleet-intent-judge 2, pr-review 17,
   gate-change-nonweakening-sweep 4. 2.1.6 raises scope-and-plan to 26 and plan-audit to 15
-  (`changed_symbols`, `caller_check`).
+  (`changed_symbols`, `caller_check`). 3.0.0 raises scope-and-plan to 27, plan-audit to 16 and
+  fleet-coder to 17 (the build-time caller check and the optional finding `symbol`; additive, so
+  the marker stays `fleet-v3`).
 - Each role runner reports the version and marker it loaded. A value that differs from preflight
   (the page changed mid-run) discards the result.
 - `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are
@@ -647,7 +784,7 @@ The script pins the role contract, not the prose:
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
   `commands`, `contract`, `role`, `cap`, `ownership`, `commit`, `review`, `intent`, `scope`,
-  `resume` or `iac` (`null` when the run did not stop at one of them). A cap stop names the gate that rejected the
+  `resume`, `iac` or `callers` (`null` when the run did not stop at one of them). A cap stop names the gate that rejected the
   last round (hash, obligations gate, commit hook, push hook or review).
 
 ### Models
@@ -666,8 +803,8 @@ write-back) run on `sonnet`.
 
 After the commit step, the push and the pr-opener (draft PR open):
 
-1. `infra:review-paths:v<n>` (read only) lists `changed_paths` =
-   `git diff --name-only <plan_commit>..<approved_sha>`.
+1. `infra:review-paths:v<n>` (read only) runs a program that lists `changed_paths` =
+   `git diff --name-only <plan_commit>..<approved_sha>`, with its digest.
 2. `pr-review` (library pattern, `fleet:judge`, fingerprinted on the fleet worktree) gets
    `pr_url`, `pr_number`, `repo`, `base_ref`, `head_sha`, `worktree`, `scratch_dir`, `criteria`
    (`[{id, text}]`), `repo_obligations`, `changed_paths`, `mode: "self-authored"` and
@@ -825,4 +962,6 @@ against a scratch git repo.
 node --test 'plugins/fleet/tests/*.test.mjs'
 ```
 
-Node 22+ (the glob form is required; `node --test <dir>` does not work on Node 24).
+Node 22+. Pass files or a quoted glob: `node --test <dir>` runs the directory as one file and fails
+on Node 22 and later. CI (`validate.yaml`, step "Run plugin node tests") runs every
+`plugins/*/tests/*.test.mjs` on Node 24, with the list expanded by the shell.

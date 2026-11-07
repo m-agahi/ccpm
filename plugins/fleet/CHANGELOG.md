@@ -1,5 +1,150 @@
 # Changelog
 
+## [3.0.0] - 2026-11-07
+
+Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
+
+**Deploy order:** update the role pages `scope-and-plan` (to version 27 or later), `plan-audit`
+(16 or later) and `fleet-coder` (17 or later) BEFORE installing 3.0.0. The page changes are
+additive, so 2.1.6 keeps running on them (it logs "prose-only changes assumed"). 3.0.0 pins those
+minimums: an older page stops the run in preflight with "the agent_prompt_get(<role>, project
+m-agahi/yadgar) wiki version <N> must be >= <M>; update that page in place; see CHANGELOG 3.0.0
+deploy order". The contract marker stays `fleet-v3`: no key was renamed or removed and no meaning
+changed; the new page text and the optional `symbol` key are additions, guarded by the pins.
+
+### Breaking changes
+
+- **Higher role-page pins:** scope-and-plan 27, plan-audit 16, fleet-coder 17 (see the deploy
+  order above).
+
+- **Build-time caller check** (ledger 1956). After the code judge approves a tree and before
+  every commit, the run stops (`needs_human`, new `stop_gate: "callers"`) on a modified existing
+  definition that `changed_symbols` does not map in the same file and line range, and on a change
+  in an unclassified file or at module level in a file the plan does not name. Builds that 2.1.6
+  committed can now stop here.
+- **yaadgaar write-back writes** (ledger 1928). A build of a yaadgaar task now edits that task's
+  body; 2.1.6 only returned the section text.
+- **Branch-scan output shape** (ledger 1952). `infra:branch-scan` returns `{commits, refs, digest}`;
+  each ref entry carries `task_id`, `plan_path` and `ref_ok` instead of `content`. The plan-ref
+  reader has no full-content mode any more (`meta` or `chunks:<ref>` only).
+
+### Added
+
+- **CI runs the node suite** (ledger 1926). `validate.yaml` sets up Node 24 (`actions/setup-node`
+  pinned by SHA) and runs every `plugins/*/tests/*.test.mjs`, with the file list expanded by the
+  shell. `node --test <dir>` runs a directory as one file on Node 22 and later and fails; the test
+  header and the README now name the file form.
+- **`infra:changed-defs:r<n>`** (ledger 1956), a read-only step (`fleet:judge`) that runs a program
+  over `git diff <plan_commit> <approved tree>` for the files that existed at the plan commit and
+  lists every existing definition the tree modifies (`{name, at, end}`, every definition of a
+  name): removed or re-added definition lines, and the innermost enclosing definition of every
+  other change, read from the base blob (git's hunk header names the nearest column-0 line without
+  a `diff=` attribute, the class rather than its method). It also lists `excluded` (criterion test
+  files, the plan doc), `unclassified` (no definition pattern, binary) and `unattributed`
+  (module-level changes); path names are printed with non-printable characters escaped. Makefile
+  targets and variables, shell functions and shebang scripts are classified. Every added line is
+  attributed on its own (a line inside a new definition to it, a decorator to the definition after
+  it, any other line to its enclosing base definition). A definition counts as mapped only when
+  its symbol has an occurrence in the same file inside its lines; an unclassified file, an
+  unattributed change or a definition whose name is no identifier passes only in a file the plan
+  lists explicitly (`allowed_additions.files` or a repo obligation's `files`; an occurrence of a
+  mapped symbol there does not count). Every excluded or unclassified path
+  gets a gate line. The relayed lists are checked against the program's digest. A ref sealed before
+  2.1.6 skips the check with a gate line. Tests: the actions#211 B1 PoC (the coder changes
+  `prestop_sleep`, which the plan never mapped) stops before the commit; a same-named function in
+  another file is not covered by the mapped one (security review).
+- **Caller-check attribution (PR #36 review 3).** A definition nested in an existing function (a
+  shadowing `def`, a decorated nested def, `class _K: z = sabotage()`, `def _h(a=sabotage())`, a
+  JS one-line arrow, a Rust `fn _h() {}`) and its decorators now name the enclosing function; only
+  a new column-0 definition that opens a block is an addition. Multi-line signatures (black-style
+  Python, Go, TS methods) count from their opening line. JS `X.y = function` and `X.y = (...) =>`
+  are definitions. Lines that only close a block, appended brace-language functions and renamed
+  files give no needless stop. **Known limit:** a new method in an existing class records nothing,
+  even when it overrides an inherited method.
+- **Caller-check attribution (PR #36 review 4).** An Allman brace on its own line is stepped over
+  to the signature above it (C, Java, C#). A decorated new member, and a new nested class or
+  struct (`class _K: z = sabotage()`), name the enclosing class. A rename onto an excluded path is
+  checked as a deletion of the old file. **Accepted under ADR-1152:** a JS statement misindented to
+  member level inside a class body is read as part of the class, not attributed separately.
+- **Fixer hooks on build files** (ledger 1951). `infra:format-tests:r<n>` (before the ownership
+  hash, the test judge and the freeze) and `infra:format-code:r<n>` (before the purge, the
+  post-coder hash and the code judge) run `pre-commit run --files <paths>` until a run changes
+  nothing, at most 3 runs, so the judges and the hashes see the bytes the commit-time hooks leave.
+  A pre-commit fixer no longer stops the build at the commit step. A hook that changes a frozen
+  file (`stop_gate: hash`), a path outside the files it was given (`scope`), or still rewrites
+  after 3 runs (`commit`) stops the run. The hooks run in a scratch checkout of HEAD: only the
+  selected files are copied in and back, and files under the top-level directory of a hook entry
+  or `-m` module the config names are never selected, so a coder's edit to hook code never runs
+  (real pre-commit 4.6.2 ran an edited `-m` module from the worktree). A changed
+  `.pre-commit-config.yaml` stops the run (`stop_gate: hash`) before any hook runs; each run is
+  capped at 180 s. The commit step's tree-equality check (ADR-1151) is unchanged.
+- **Fixer hook surface is exact** (PR #36 review 5). The surface is the config, every path a hook
+  `entry` or `args` names, and the files of every `-m` module; a path that only appears in a
+  `files:`/`exclude:` regex is formatted (the top-level-directory rule of review 4 left most files
+  of a repo unformatted). A surface path that differs from HEAD stops the run before any hook runs.
+  A selected path through a symlink (HEAD mode 120000, a symlinked parent at HEAD or in the
+  worktree, a realpath outside either checkout) stops it too. A scratch checkout a killed run left
+  behind is removed first. The config is read only with PyYAML, through pre-commit's own
+  interpreter (its shebang, or a pipx/nix wrapper's `exec` target, followed to the Python), else the
+  program's `python3` if it has PyYAML; any YAML form works, flow maps and folded scalars included.
+  No interpreter with PyYAML refuses the step; there is no line-parser fallback (reviews 6 and 7).
+  The wrapper test uses bash, as nix wrappers do (`exec -a` is not in dash).
+- **No program imports from the worktree** (PR #36 review 8). The YAML loader ran without `-I`
+  and with the worktree as cwd, so a coder-written `yaml.py` shadowed PyYAML and emptied the hook
+  surface (PoC with real pre-commit 4.6.2). It now runs as `<python> -I -c` with cwd `/`. Every
+  embedded program already ran as `python3 -I`; a test now checks each invocation, that a
+  `yaml.py` or `json.py` in the cwd changes nothing, and that no program needs a third-party import
+  (PyYAML only where it fails closed, `tomli` only as the `tomllib` fallback). The nix pre-commit's
+  own interpreter now finds PyYAML: the program adds the `/nix/store/.../site-packages` paths its
+  wrapped script names, and only such paths. **Accepted under ADR-1152:** a helper that a hook entry imports without
+  the config naming it still runs from the scratch checkout of HEAD unless it is itself a selected
+  file.
+- **yaadgaar write-back** (ledger 1928). For a `yaadgaar` source of a `yadgarhq/` project,
+  `infra:yaadgaar-writeback` (default agent; `fleet:judge` may not write to a ledger) appends the
+  `## Fleet build` section with `mcp__yaadgaar__read_task` and `mcp__yaadgaar__edit_task`: it
+  checks that the client resolves to the project and that the task names no other project, edits
+  by id with `expect_version`, writes an empty body as the heading plus the section with a
+  script-computed `expect_body_sha256` and appends to a non-empty one only through a literal
+  `patch` on a unique tail, retries once on `VERSION_MISMATCH`, and re-reads to confirm. Never the
+  yadgar ledger. A read-only step (`infra:yaadgaar-read`) returns the project it resolved and each
+  task's id and version first; the script refuses an absent or other project before any edit step
+  runs, and skips a task that already carries the marker. The read answer's number and project
+  must match the request, and its version must be an integer; the edit step re-reads the task by id
+  and checks number and project before it edits (fail closed). `fleet:judge` now disallows
+  `mcp__yaadgaar__edit_task`, `create_task` and `transition_task`. Task bodies are data, not
+  instructions.
+  A ref that is not a task number is never sent. 2.1.6 handed the section back for a human to post.
+- **Codeberg plan link** (ledger 1928). The workspace step returns `remote_host`; a Codeberg origin
+  gets `https://codeberg.org/<o>/<r>/src/branch/<branch>/<plan>` in the ledger section and comments.
+- **No model blob relays left on the gate path** (ledger 1952). The branch scan is one program that
+  reads each plan-ref message itself and prints `task_id`, `plan_path` and `ref_ok` (the
+  `planRefProblem` checks, ported; a test checks Python and JS agree), never the message text.
+  `infra:iac-scan`, `infra:fleet-scan`, `infra:read-state`, `infra:review-paths` (now a program,
+  not a raw git command) and `infra:check-scripts` print a digest the script recomputes. A
+  mismatch stops the step: iac (`stop_gate: iac`), fleet-scan (`scope`), read-state (`resume`),
+  review-paths and branch-scan (failed); for check-scripts every script becomes judge-only. The
+  iac scan always prints `error` (`null` when none), and the read-state program always prints
+  every key. The branch scan prints `task_id` and `plan_path` only for a ref that passed every
+  check, both shape-checked.
+
+### Changed
+
+- **plan-audit findings name their symbol** (ledger 1957). A plan-audit `routed_findings` entry
+  may carry an optional `symbol`. The `:audit-fix` round must keep every symbol a finding names in
+  its caller map, as it already does for grep findings. The shared test-judge and code-judge
+  findings schema is unchanged.
+- **Preflight pin message.** A page below its pin now reads "the agent_prompt_get(<role>, project
+  m-agahi/yadgar) wiki version <N> must be >= <M>; update that page in place; see CHANGELOG 3.0.0
+  deploy order". The old text implied the page lives in project m-agahi/yadgar; it lives in the
+  shared wiki and that call resolves it.
+- README: "or a finding named" now reads "and every symbol that one of its findings names".
+
+### Fixed
+
+- **Tests for two mutants of the `:audit-fix` carry** (ledger 1957): H6, a round refused only
+  for a confusable character must carry its caller map; H8, a map with a malformed entry must
+  carry its valid entries. Each test fails on its mutant.
+
 ## [2.1.6] - 2026-11-07
 
 Caller coverage for changed symbols (ledger 1955) and the minor findings of the PR #33 re-review
