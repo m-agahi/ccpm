@@ -8,6 +8,11 @@ Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
 
 ### Added
 
+- **CI runs the node suite** (ledger 1926). `validate.yaml` sets up Node 24 (`actions/setup-node`
+  pinned by SHA) and runs every `plugins/*/tests/*.test.mjs`, with the file list expanded by the
+  shell. `node --test <dir>` runs a directory as one file on Node 22 and later and fails; the test
+  header and the README now name the file form.
+
 ### Changed
 
 ### Fixed

@@ -8,7 +8,8 @@
 // agent's label. An unscripted label is recorded and fails the test, so label
 // drift is loud.
 //
-// Run: node --test plugins/fleet/tests/
+// Run: node --test plugins/*/tests/*.test.mjs (the shell expands the list;
+// `node --test <dir>` fails on Node 22 and later: it runs the directory as a file)
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

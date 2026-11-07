@@ -31,6 +31,24 @@ jobs:
         working-directory: .github/scripts
         run: python3 -m unittest discover -s tests -t .
 
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      # The shell expands the file list. `node --test <dir>` treats a
+      # directory as one file on Node 22 and later and fails.
+      - name: Run plugin node tests
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(plugins/*/tests/*.test.mjs)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no plugins/*/tests/*.test.mjs files found"
+            exit 1
+          fi
+          node --test "${files[@]}"
+
       - name: Check formatting
         shell: bash
         run: npx --yes prettier@3.1.0 --check '**/*.{json,md,yaml,yml}' --ignore-path .gitignore

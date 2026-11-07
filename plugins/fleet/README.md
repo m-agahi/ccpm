@@ -825,4 +825,6 @@ against a scratch git repo.
 node --test 'plugins/fleet/tests/*.test.mjs'
 ```
 
-Node 22+ (the glob form is required; `node --test <dir>` does not work on Node 24).
+Node 22+. Pass files or a quoted glob: `node --test <dir>` runs the directory as one file and fails
+on Node 22 and later. CI (`validate.yaml`, step "Run plugin node tests") runs every
+`plugins/*/tests/*.test.mjs` on Node 24, with the list expanded by the shell.
