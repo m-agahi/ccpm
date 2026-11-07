@@ -125,6 +125,7 @@ const RELAY_KEYS = [
   [/^infra:commit-plan/, ["head", "files", "args"]],
   // 3.1.0 (ledger 1935c)
   [/^infra:push(:p\d+)?$/, ["push_result", "exit_code", "hook_tail", "args"]],
+  [/^infra:hook-surface:/, ["surface", "error", "args"]],
 ];
 function relayDigestOf(r, keys) {
   const o = {};
@@ -164,6 +165,7 @@ function fillArgs(label, r, prompt) {
     const i = inputsOf(prompt);
     r.args = [i.main_worktree, i.plan_commit, i.plan_path];
   } else if (/^infra:commit-plan/.test(label)) r.args = [inputsOf(prompt).worktree];
+  else if (/^infra:hook-surface:/.test(label)) r.args = [inputsOf(prompt).worktree, inputsOf(prompt).rev];
   else if (/^infra:push(:p\d+)?$/.test(label) && r.push_result === "hook_rejected") r.args = ["/tmp/fleet-push.out", String(r.exit_code)];
   return r;
 }
@@ -203,6 +205,9 @@ async function runOne(script, args0) {
       const sel = inputsOf(prompt).select;
       return withRelayDigest(label, { status: "ok", reason: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [] });
     }
+    // 3.1.0: unscripted hook-surface reads find no hook entry file
+    if (!(label in script) && /^infra:hook-surface:/.test(label))
+      return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], error: null }, prompt));
     // 3.1.0: unscripted ledger reads find a task with a body page
     if (!(label in script) && /^infra:ledger-read:pre$/.test(label))
       return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
@@ -2271,6 +2276,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:iac-scan:plan",
     "infra:branch-scan",
     "role:scope-and-plan",
+    "infra:hook-surface:plan",
     "infra:format-plan",
     "role:plan-audit",
     "infra:stage-plan",
@@ -3154,6 +3160,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.deepEqual(tail, [
     "infra:replan-worktree",
     "role:scope-and-plan:replan",
+    "infra:hook-surface:plan:replan",
     "infra:format-plan:replan",
     "role:plan-audit:replan",
     "infra:stage-plan:replan",
@@ -4946,7 +4953,7 @@ test("2.1.0 G3 scope fence: infra, CI, secrets, rulesets and a foreign repo are 
     fence(["deploy/kustomization.yml"]),
     fence(["charts/app/templates/svc.yaml"]),
     fence(["manifests/a.yml"]),
-    fence([".github/workflows/ci.yml"]),
+    fence([".github/CODEOWNERS"]),
     fence(["config/rulesets/main.json"]),
     fence([".env.local"]),
     fence(["src/db_secret.py"]),
@@ -4960,6 +4967,10 @@ test("2.1.0 G3 scope fence: infra, CI, secrets, rulesets and a foreign repo are 
     const out = await runOne(planWith(o), AUTO);
     autoFail(out, "scope");
   }
+  // 3.1.0: a CI workflow is hook surface: Max's rule stops the plan earlier, before the audit
+  const wf = await runOne(planWith(fence([".github/workflows/ci.yml"])), AUTO);
+  assert.equal(wf.result.status, "needs_human");
+  assert.equal(wf.result.stop_gate, "hooks");
   // the work repo must be the caller's repo
   const out = await runOne(autoHappy({ brief: { ...BRIEF, repo: "/other" } }), AUTO);
   autoFail(out, "scope");
@@ -6242,6 +6253,9 @@ const ARRAY_SITES = {
   "r.results @ writeBodies": "infra:results",
   "pre.results @ writeBack": "infra:results",
   "o.files @ obligationFailures": "parsed: repo_obligations of the sealed plan facts",
+  "r.surface @ hookSurface": "infra:surface",
+  "pf.changed_symbols @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
+  "e.occurrences @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
 };
 
 function arraySites() {
@@ -10159,5 +10173,112 @@ test("3.1.0 caps: the IaC scan refuses a file over 1 MiB a hook names, and deep 
     }
   } finally {
     rmSync(pc, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- 3.1.0 (Max's rule): hook changes are their own PR and need Max
+
+const SEPARATE = /hook changes must be a separate PR \(Max's rule\)/;
+const CONFIRM = /hook change needs Max's confirmation/;
+
+test("3.1.0 hooks: a plan scope with the hook config, a workflow or a hook entry file stops at plan time", async () => {
+  const cases = [
+    [{ files: [".pre-commit-config.yaml"] }, [], [], CONFIRM],
+    [{ files: [".pre-commit-config.yaml", "src/a.py"] }, [], [], SEPARATE],
+    [{ files: ["src/a.py"] }, [".github/workflows/ci.yml"], [], SEPARATE],
+    [{ files: [".gitlab-ci.yml"] }, [], [], CONFIRM],
+    [{ files: [".forgejo/workflows/x.yml", "README.md"] }, [], [], SEPARATE],
+    // a file a hook entry names (the program's surface)
+    [{ files: ["ci/chk.sh"] }, [], ["ci/chk.sh"], CONFIRM],
+    // a changed symbol whose caller is in a hook entry file
+    [{ files: [] }, [], ["ci/chk.sh"], CONFIRM, [{ symbol: "f", occurrences: [{ at: "ci/chk.sh:3", criterion: "AC1", dont_care: null }] }]],
+  ];
+  for (const [aa, obFiles, surface, re, symbols] of cases) {
+    const s = happy();
+    s["role:scope-and-plan"].allowed_additions = Object.assign({ files: [], symbols: [], deps: [], settings: [] }, aa);
+    if (obFiles.length) s["role:scope-and-plan"].repo_obligations = [{ id: "OB1", kind: "other", rule_source: "x", files: obFiles, instruction: "x" }];
+    if (symbols) {
+      s["role:scope-and-plan"].changed_symbols = symbols;
+      s["infra:callers"] = callersOut({ f: ["ci/chk.sh:3"] });
+    }
+    s["infra:hook-surface:plan"] = { status: "ok", reason: "read", surface, error: null };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(aa) + " " + out.result.reason);
+    assert.match(out.result.reason, re);
+    assert.equal(out.result.stop_gate, "hooks");
+    assert.ok(!out.labels.includes("role:plan-audit"), "stops before the audit");
+  }
+  // code only: the plan goes on
+  const ok = await runOne(happy(), ARGS);
+  assert.equal(ok.result.status, "awaiting_confirmation");
+  assert.equal(call(ok, "infra:hook-surface:plan").opts.agentType, "fleet:judge");
+});
+
+test("3.1.0 hooks: the approved tree's diff is checked right before the commit; a mixed or hook-only diff stops, even under confirm auto", async () => {
+  for (const [changed, re, auto] of [
+    [["src/x.py", "ci/chk.sh"], SEPARATE, false],
+    [["ci/chk.sh"], CONFIRM, false],
+    [["ci/chk.sh"], CONFIRM, true],
+    [["src/x.py", "tools/__init__.py"], SEPARATE, false],
+  ]) {
+    const s = auto ? autoHappy() : happy();
+    s["hasher:post-coder:r1"] = Object.assign({}, s["hasher:post-coder:r1"], { changed });
+    s["infra:hook-surface:r1"] = { status: "ok", reason: "read", surface: ["ci/chk.sh", "tools/__init__.py", "tools/fmt.py"], error: null };
+    const out = auto ? await runOne(s, AUTO) : await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(changed) + " " + out.result.reason);
+    assert.match(out.result.reason, re);
+    assert.equal(out.result.stop_gate, "hooks");
+    assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)), "nothing committed");
+  }
+  // a code-only diff is committed
+  const s = happy();
+  s["hasher:post-coder:r1"] = Object.assign({}, s["hasher:post-coder:r1"], { changed: ["src/x.py"] });
+  s["infra:hook-surface:r1"] = { status: "ok", reason: "read", surface: ["ci/chk.sh"], error: null };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const L = out.labels;
+  assert.ok(L.indexOf("infra:hook-surface:r1") > L.indexOf("role:fleet-code-judge:r1") && L.indexOf("infra:hook-surface:r1") < L.indexOf("infra:commit:r1"));
+});
+
+test("3.1.0 hooks: a surface that cannot be computed, or a relay that differs from the program, refuses", async () => {
+  const s = happy();
+  s["infra:hook-surface:plan"] = { status: "ok", reason: "read", surface: [], error: "no Python with PyYAML found" };
+  let out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /hook surface cannot be computed \(no Python with PyYAML found\)/);
+  assert.equal(out.result.stop_gate, "hooks");
+  const t = happy();
+  t["infra:hook-surface:plan"] = (prompt) => {
+    const r = { status: "ok", reason: "read", surface: ["ci/chk.sh"], error: null, args: [inputsOf(prompt).worktree, inputsOf(prompt).rev] };
+    r.digest = relayDigestOf(r, ["surface", "error", "args"]);
+    r.surface = [];
+    return r;
+  };
+  out = await runOne(t, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /infra:hook-surface:plan: the relayed surface does not match the program's digest/);
+});
+
+test("3.1.0 hooks: the surface program lists hook entries, args and -m modules; no PyYAML or a bomb refuses", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const cfg = "repos:\n- repo: local\n  hooks:\n  - id: a\n    name: a\n    entry: ci/chk.sh\n    args: [tools/gen.py, --fast]\n    language: script\n  - id: b\n    name: b\n    entry: python3 -m pkg.fmt\n    language: system\n";
+  const wt = repoWith("fleet-hooksurf-", { ".pre-commit-config.yaml": cfg });
+  try {
+    const prog = extractPy("HOOK_SURFACE_PY_BEGIN", "HOOK_SURFACE_PY_END", "HOOK_SURFACE_PY");
+    const runP = (extra) => {
+      const r = spawnSync("python3", ["-I", "-c", prog, wt, "HEAD"].concat(extra || []), { encoding: "utf8", cwd: wt });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const o = runP();
+    assert.equal(o.error, null);
+    for (const p of ["ci/chk.sh", "tools/gen.py", "pkg/__init__.py", "pkg/fmt.py"]) assert.ok(o.surface.includes(p), p);
+    assert.deepEqual(o.args, [wt, "HEAD"]);
+    const fn = new Function(extractCanonical() + "\nreturn canonical;")();
+    assert.equal(o.digest, sha256(fn({ surface: o.surface, error: o.error, args: o.args })));
+    assert.match(runP(["no-yaml"]).error, /no Python with PyYAML/);
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), LAUGHS + "repos:\n- repo: local\n  hooks:\n  - id: a\n    entry: x\n    args: *l8\n");
+    assert.match(runP().error, /args is not a list of strings/);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
   }
 });

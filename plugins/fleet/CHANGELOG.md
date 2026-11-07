@@ -25,6 +25,19 @@ contract marker stays `fleet-v3`.
   non-zero, has no `check_exit` and no `gates_not_run` entry `check_cmd:<id>`, or when the change
   edits what that `check_cmd` runs and the obligation does not list the file.
 - A push whose output mixes the hook's lines with git's (`ambiguous`) stops for a human.
+- **Hook changes are their own PR, and need Max (Max's rule).** The hook surface is
+  `.pre-commit-config.yaml`, every file a hook `entry` or `args` names (and its `-m` module
+  files; the program `HOOK_SURFACE_PY` computes them with the fixer's isolated PyYAML loader, at
+  the base and in the worktree), `.github/workflows/**`, `.gitlab-ci.yml` and `.forgejo/**`. A
+  plan scope (`allowed_additions.files`, obligation files, the paths of caller occurrences mapped to
+  a criterion) checked before the audit (`infra:hook-surface:plan`), and the approved tree's diff
+  from the plan commit checked right before the commit (`infra:hook-surface:r<n>`), stop with
+  `needs_human` and `stop_gate: "hooks"`: "hook changes must be a separate PR (Max's rule)" when
+  they touch the surface and anything else, "hook change needs Max's confirmation" when they touch
+  only the surface. There is no automatic path, not even under `confirm: "auto"`. A surface that
+  cannot be computed (no PyYAML, a parse error, a capped value) refuses. The `scope-and-plan` page
+  gets one sentence telling the planner so (prepared, not written; the pin stays 27, because the
+  rule lives in script code).
 - A verify, commit-plan or `hook_rejected` push relay that does not match its program's digest,
   or whose program ran on other arguments, fails the run.
 

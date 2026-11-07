@@ -601,6 +601,16 @@ The scan reads tracked files from the git objects at the scanned revision. It re
 untracked files and the pre-commit cache in their current state. It reads no file over 1 MiB (it
 refuses: such a file cannot be scanned whole) and at most 64 MiB in all.
 
+#### Hook changes: their own PR, with Max (3.1.0)
+
+The hook surface is `.pre-commit-config.yaml`, every file a hook `entry` or `args` names and its
+`-m` module files (`HOOK_SURFACE_PY`, read-only, the fixer's isolated PyYAML loader), and
+`.github/workflows/**`, `.gitlab-ci.yml` and `.forgejo/**`. The plan scope is checked before the
+audit and the approved diff right before the commit. Touching the surface and anything else stops
+with "hook changes must be a separate PR (Max's rule)"; touching only the surface stops with "hook
+change needs Max's confirmation". Both are `needs_human`, `stop_gate: "hooks"`, in every confirm
+mode. A surface that cannot be computed refuses.
+
 **Resource caps (3.1.0).** Every embedded Python program sets `RLIMIT_AS` 1 GiB and `RLIMIT_CPU`
 300 s before anything else, and tunes git's children to stay inside them; the repo's own hooks
 that the fixer runs get the limits lifted back. The YAML loaders (60 s, 1 GiB) read at most

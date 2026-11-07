@@ -146,7 +146,7 @@ const CALLER_LIMITS = [
 // The plan doc's path, character by character (2.1.6): it reaches git and shell commands.
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
 // stop_gate values: which gate ended a stopped run (null when none applies).
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "callers"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "callers", "hooks"];
 // Run-state milestones, in order, and the step a resumed build runs next.
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "done" };
 const CONFIRMS = ["ask", "auto"];
@@ -1190,6 +1190,7 @@ const INFRA_SCHEMA = {
     push_result: { type: "string", enum: ["ok", "hook_rejected", "network", "non_ff", "remote_rejected", "ambiguous"] },
     exit_code: { type: "integer" },
     args: { type: "array", items: STR },
+    surface: { type: "array", items: STR },
     hook_tail: STR,
     checks: { type: "object" },
     purged: { type: "number" },
@@ -3634,6 +3635,158 @@ print(json.dumps(out, ensure_ascii=False))
 `;
 // PUSH_CLASSIFY_PY_END
 
+// The hook surface (3.1.0, Max's rule): .pre-commit-config.yaml (at <rev> and
+// in the worktree), read with the fixer's isolated PyYAML loader; every name
+// a hook entry or args holds, and the files of every -m module. Args:
+// worktree, rev. Prints {surface, error, args, digest}; error (no PyYAML, a
+// parse error, a capped value) makes the script refuse. Read only.
+// HOOK_SURFACE_PY_BEGIN
+const HOOK_SURFACE_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+import hashlib, json, os, re, shutil, subprocess, sys
+wt, rev = sys.argv[1], sys.argv[2]
+# argv[3] == 'no-yaml' (tests only): behave as if no Python had PyYAML
+no_yaml = len(sys.argv) > 3 and sys.argv[3] == 'no-yaml'
+os.chdir('/')
+LOADER = (
+    "import json, site, sys\n"
+    "import resource\n"
+    "for k, v in ((resource.RLIMIT_AS, 1 << 30), (resource.RLIMIT_CPU, 60)):\n"
+    "    h = resource.getrlimit(k)[1]\n"
+    "    resource.setrlimit(k, (v if h == resource.RLIM_INFINITY else min(v, h), h))\n"
+    "for p in sys.argv[1:]:\n"
+    "    if p.startswith('/nix/store/'):\n"
+    "        site.addsitedir(p)\n"
+    "try:\n    import yaml\nexcept ImportError:\n    sys.exit(3)\n"
+    # 3.1.0 security review: alias amplification. At most 256 KiB in, only
+    # strings out (an alias is never walked or stringified), at most 1 MiB out.
+    "raw = sys.stdin.buffer.read(262145)\n"
+    "if len(raw) > 262144:\n    sys.exit(5)\n"
+    "d = yaml.safe_load(raw)\n"
+    "n = [0]\n"
+    "def grow(k):\n    n[0] += k\n    if n[0] > 1048576:\n        sys.exit(4)\n"
+    "def s(h, k):\n    v = h.get(k)\n    if v is None:\n        return None\n    if not isinstance(v, str):\n        sys.exit(6)\n    grow(len(v))\n    return v\n"
+    "out = []\n"
+    "for r in (d.get('repos') if isinstance(d, dict) else None) or []:\n"
+    "    for h in (r.get('hooks') if isinstance(r, dict) else None) or []:\n"
+    "        if isinstance(h, dict):\n"
+    "            a = h.get('args')\n"
+    "            if a is not None and not (isinstance(a, list) and all(isinstance(x, str) for x in a)):\n"
+    "                sys.exit(7)\n"
+    "            for x in a or []:\n                grow(len(x))\n"
+    "            out.append({'entry': s(h, 'entry'), 'args': a or [], 'language': s(h, 'language')})\n"
+    "print(json.dumps(out))\n"
+)
+LOADER_EXITS = {4: 'the loader output over 1 MiB', 5: 'the config is over 256 KiB', 6: 'a hook entry or language is not a string', 7: 'a hook args is not a list of strings'}
+SHELLS = ('sh', 'bash', 'dash', 'zsh', 'ksh')
+NIX_SITE = re.compile(r"'(/nix/store/[^'\s]+/site-packages)'")
+def interpreters(path, depth=0):
+    # [(interpreter, site dirs)]: a script's shebang interpreter, with the
+    # /nix/store site-packages a nix wrapped script adds to sys.path itself
+    try:
+        with open(path, 'rb') as fh:
+            head = fh.read(262144)
+    except OSError:
+        return []
+    if not head.startswith(b'#!'):
+        return []
+    words = head.split(b'\n', 1)[0][2:].decode('utf-8', 'replace').split()
+    if not words:
+        return []
+    interp = words[0]
+    if os.path.basename(interp) == 'env':
+        prog = next((w for w in words[1:] if not w.startswith('-') and '=' not in w), None)
+        interp = shutil.which(prog) if prog else None
+    text = head.decode('utf-8', 'replace')
+    sites = [m for line in text.splitlines()[:12] if 'site.addsitedir' in line or 'sys.path' in line for m in NIX_SITE.findall(line)]
+    out = [(interp, sites)] if interp else []
+    if interp and os.path.basename(interp) in SHELLS and depth < 3:
+        for t in re.findall(rb'exec\s+(?:-a\s+\S+\s+)?["\']?(/[^\s"\']+)', head):
+            t = t.decode('utf-8', 'replace')
+            if not os.path.isfile(t):
+                continue
+            # a script target names its interpreter; a binary target may be one
+            with open(t, 'rb') as fh:
+                script = fh.read(2) == b'#!'
+            if script:
+                out.extend(interpreters(t, depth + 1))
+            else:
+                out.append((t, []))
+    return out
+def values(raw):
+    # (names, None) or (None, why), as the fixer program reads the config
+    if len(raw) > 262144:
+        return None, 'the config is over 256 KiB'
+    cands = []
+    pc = shutil.which('pre-commit')
+    if pc:
+        cands.extend(interpreters(os.path.realpath(pc)))
+        cands.extend(interpreters(pc))
+    cands.append((sys.executable, []))
+    tried = set()
+    for c, sites in cands:
+        if not c or (c, tuple(sites)) in tried or os.path.basename(c) in SHELLS or os.path.basename(c) == 'env' or no_yaml:
+            continue
+        tried.add((c, tuple(sites)))
+        try:
+            r = subprocess.run([c, '-I', '-c', LOADER] + sites, input=raw, capture_output=True, timeout=60, cwd='/')
+        except OSError:
+            continue
+        except subprocess.TimeoutExpired:
+            return None, 'the YAML loader timed out (' + c + ')'
+        if r.returncode in LOADER_EXITS:
+            return None, LOADER_EXITS[r.returncode]
+        if r.returncode == 3 or (r.returncode != 0 and b'No module named' in r.stderr):
+            continue
+        if r.returncode != 0:
+            return None, 'the config does not parse with PyYAML (' + c + '): ' + (r.stderr.decode('utf-8', 'replace').strip().splitlines() or [''])[-1]
+        names = []
+        for h in json.loads(r.stdout):
+            if isinstance(h.get('entry'), str):
+                names.append(h['entry'])
+            names.extend(h.get('args') or [])
+        return names, None
+    return None, 'no Python with PyYAML found'
+configs = []
+r = subprocess.run(['git', '-C', wt, 'show', rev + ':.pre-commit-config.yaml'], capture_output=True)
+if r.returncode == 0:
+    configs.append(r.stdout)
+p = os.path.join(wt, '.pre-commit-config.yaml')
+if os.path.isfile(p):
+    with open(p, 'rb') as fh:
+        configs.append(fh.read(262145))
+surface, error = set(), None
+for raw in configs:
+    names, error = values(raw)
+    if error:
+        break
+    for v in names:
+        for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', v):
+            q = os.path.normpath(tok)
+            if q != '.' and not q.startswith('..'):
+                surface.add(q)
+        for mod in re.findall(r'-m\s+([A-Za-z_][A-Za-z0-9_.]*)', v):
+            parts = mod.split('.')
+            for k in range(1, len(parts) + 1):
+                surface.add('/'.join(parts[:k]) + '/__init__.py')
+            surface.add('/'.join(parts) + '.py')
+out = {'surface': [] if error else sorted(surface), 'error': error, 'args': [wt, rev]}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
+`;
+// HOOK_SURFACE_PY_END
+
+
 function pushPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: push the approved fleet branch. No edits, no commits.\n" +
@@ -5185,6 +5338,63 @@ async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, s
   return relayed;
 }
 
+// Hook-surface separation (3.1.0, Max's rule): a change to the hook surface is
+// never built with other changes, and never without Max. The surface is
+// .pre-commit-config.yaml, the CI workflow files and every file the program
+// HOOK_SURFACE_PY finds a hook entry or args naming (its -m modules too).
+function hookSurfacePrompt(inputs) {
+  return (
+    "Infra step of the fleet workflow: list the hook surface. READ ONLY: no edits, no commits; run nothing but the one command below. Never run a hook.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified:\n" +
+    "python3 -I -c " + shQuote(HOOK_SURFACE_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.rev) +
+    "\n" +
+    "It prints one JSON object {surface, error, args, digest}. Copy every value unchanged, error null included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, surface, error, args, digest}."
+  );
+}
+
+async function hookSurface(label, worktree, rev, phaseName) {
+  const r = await infra(label, hookSurfacePrompt({ worktree, rev }), phaseName, JUDGE_AGENT);
+  if (!Array.isArray(r.surface) || !relayDigestOk(r, ["surface", "error", "args"]))
+    halt("failed", label + ": the relayed surface does not match the program's digest");
+  if (canonical(r.args) !== canonical([worktree, rev])) halt("failed", label + ": the program ran on other arguments");
+  if (r.error !== null)
+    halt("needs_human", "hook surface cannot be computed (" + r.error + "); hook change needs Max's confirmation", "hooks");
+  return r.surface.map((x) => normPath(String(x)));
+}
+
+function isHookPath(p, surface) {
+  return p === ".pre-commit-config.yaml" || p.indexOf(".github/workflows/") === 0 || p === ".gitlab-ci.yml" || p.indexOf(".forgejo/") === 0 || surface.indexOf(p) >= 0;
+}
+
+// Stops (needs_human, stop_gate hooks) when paths touch the hook surface:
+// together with other paths, or alone. There is no automatic path.
+function hookGate(what, paths, surface) {
+  const ps = Array.from(new Set(paths.map((x) => normPath(String(x))).filter(Boolean)));
+  const hooks = ps.filter((p) => isHookPath(p, surface));
+  const other = ps.filter((p) => !isHookPath(p, surface));
+  if (hooks.length && other.length)
+    halt("needs_human", "hook changes must be a separate PR (Max's rule): " + what + " touches " + hooks.join(", ") + " and " + other.join(", "), "hooks");
+  if (hooks.length) halt("needs_human", "hook change needs Max's confirmation: " + what + " touches " + hooks.join(", "), "hooks");
+  gate(what + ": no hook-surface path");
+}
+
+// A plan's scope: the files it names and the paths of the caller occurrences
+// it maps to a criterion (the callers the change alters).
+function planScopePaths(pf) {
+  const out = planScopeFiles(pf);
+  for (const e of (pf && Array.isArray(pf.changed_symbols) ? pf.changed_symbols : []))
+    for (const o of (e && Array.isArray(e.occurrences) ? e.occurrences : []))
+      if (o && o.criterion && typeof o.at === "string") {
+        const m = OCCURRENCE_RE.exec(o.at);
+        if (m) out.push(m[1]);
+      }
+  return out;
+}
+
 // The files a plan names outside changed_symbols: allowed_additions.files and
 // every repo obligation's files.
 function planScopeFiles(pf) {
@@ -5300,6 +5510,9 @@ async function planAndAudit(ctx) {
       (wouldBeShort ? "short" : "full") +
       "; short path disabled -> full path",
   );
+
+  // Max's rule (3.1.0): a plan that touches the hook surface stops here
+  hookGate("the plan scope", planScopePaths(planFacts), await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", "Plan"));
 
   // the repo's fixers run on the plan now, so the audit sees the bytes the
   // plan commit will hold (2.1.4: prettier rewrote the plan in the commit)
@@ -6677,6 +6890,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       continue;
     }
     gate("code-judge r" + m + ": approve of tree " + codeTree);
+
+    // Max's rule (3.1.0): the approved diff never touches the hook surface
+    hookGate("the approved tree " + codeTree, h.changed || [], await hookSurface("infra:hook-surface:r" + m, mainWt, ref.plan_commit, "Code"));
 
     // the build-time caller check, on every tree before it is committed
     if (planFacts.changed_symbols) {
