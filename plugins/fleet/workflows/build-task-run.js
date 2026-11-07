@@ -49,8 +49,8 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 24,
-  "plan-audit": 13,
+  "scope-and-plan": 26,
+  "plan-audit": 15,
   "fleet-test-writer": 9,
   "fleet-test-judge": 9,
   "fleet-coder": 16,
@@ -73,7 +73,7 @@ const RELOAD_HINT =
 // also have that JS type (null only where the schema allows it); a wrong type
 // is contract drift too ("contract drift: <role> <key> type").
 const REQUIRED_ON_OK = {
-  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff", "repo_obligations", "test_cmd"],
+  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff", "repo_obligations", "test_cmd", "changed_symbols"],
   "plan-audit": ["verdict", "routed_findings"],
   "fleet-test-writer": ["criterion_id", "tests", "files"],
   "fleet-test-judge": ["verdict", "routed_findings", "checked"],
@@ -127,6 +127,24 @@ const QUOTED_EXPR_RE = /^[A-Za-z0-9_()]+( [A-Za-z0-9_()]+)*$/;
 const PATH_ARG_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
 // test_cmd tokens after the runner prefix: never one of these subcommands.
 const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
+// Caller coverage (2.1.6, ledger 1955): a changed symbol is a bare
+// identifier; it reaches a command line, so nothing else is let through.
+const SYMBOL_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+const OCCURRENCE_RE = /^(.+):([1-9][0-9]*)$/;
+const MAX_CHANGED_SYMBOLS = 30;
+// More grep hits than this for one symbol: the plan cannot model them all.
+const MAX_SYMBOL_HITS = 100;
+const CALLER_METHOD =
+  "git grep -n -I -w -F --full-name -e <symbol>: the working tree content of the tracked files in the fleet worktree, the run's own plan doc excluded; every hit must be mapped and every mapped line must be a hit (checked by the script)";
+const CALLER_LIMITS = [
+  "name-based: a call through an alias (import x as y), a re-export under another name, a name built at runtime (string concatenation, formatted lookups) and callers in other repos are not found; a literal string that holds the name is a hit",
+  "submodules are not searched (no --recurse-submodules), and files git treats as binary (-I, including files .gitattributes marks binary) are skipped",
+  "over-matches: comments, docs, strings and another symbol with the same name are hits; the planner maps them as dont_care",
+  "word boundary is [A-Za-z0-9_]: a symbol inside a longer identifier is not a hit",
+  "a symbol is a bare identifier: a method is grepped by its last name only",
+];
+// The plan doc's path, character by character (2.1.6): it reaches git and shell commands.
+const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
 // stop_gate values: which gate ended a stopped run (null when none applies).
 const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac"];
 // Run-state milestones, in order, and the step a resumed build runs next.
@@ -949,6 +967,26 @@ const SCHEMAS = {
     },
     tldr: STR,
     plan_diff: { type: "array", items: STR },
+    // every occurrence of each existing function, guard or symbol the plan
+    // changes: "<path>:<line>", mapped to a criterion id or a dont_care reason
+    changed_symbols: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          symbol: STR,
+          occurrences: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { at: STR, criterion: STR_OR_NULL, dont_care: STR_OR_NULL },
+              required: ["at"],
+            },
+          },
+        },
+        required: ["symbol", "occurrences"],
+      },
+    },
     fleet_estimate: {
       type: "object",
       properties: { criteria: { type: "number" }, agents: { type: "number" }, rounds: { type: "number" } },
@@ -1120,6 +1158,9 @@ const INFRA_SCHEMA = {
     removed: { type: "array", items: STR },
     state_sha: STR,
     exists: { type: "boolean" },
+    occurrences: { type: "object", additionalProperties: { type: "array", items: STR } },
+    capped: { type: "array", items: STR },
+    digest: STR,
     target: STR,
     message: STR,
     clean: { type: "boolean" },
@@ -2007,6 +2048,42 @@ print(json.dumps({'diff': diff, 'commits': commits}, ensure_ascii=False))
 `;
 // FLEET_SCAN_PY_END
 
+// The caller grep (2.1.6): every word-boundary occurrence of each changed
+// symbol in the tracked text files, as "<path>:<line>", the run's own plan doc
+// excluded. A symbol with more than <cap> hits is listed in capped, with an
+// empty list. digest: sha256 over {occurrences, capped} in canonical JSON, so
+// the script can tell when the relay dropped or changed a hit. Read only.
+// CALLERS_PY_BEGIN
+const CALLERS_PY = String.raw`
+import hashlib, json, os, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+wt, plan_path, syms, cap = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), int(sys.argv[4])
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
+occ = {}
+capped = []
+for s in syms:
+    r = subprocess.run(G + ['grep', '-n', '-z', '-I', '-w', '-F', '--full-name', '--no-color', '-e', s, '--', '.', ':(exclude,literal)' + plan_path], capture_output=True)
+    if r.returncode not in (0, 1):
+        sys.exit(r.stderr.decode('utf-8', 'replace'))
+    hits = set()
+    for rec in r.stdout.split(b'\n'):
+        if not rec:
+            continue
+        parts = rec.split(b'\0', 2)
+        if len(parts) != 3 or not parts[1].isdigit():
+            sys.exit('unparseable git grep output: ' + repr(rec[:200]))
+        hits.add(parts[0].decode('utf-8', 'replace') + ':' + str(int(parts[1])))
+    if len(hits) > cap:
+        capped.append(s)
+        occ[s] = []
+    else:
+        occ[s] = sorted(hits)
+out = {'occurrences': occ, 'capped': sorted(capped)}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, sort_keys=True, ensure_ascii=False))
+`;
+// CALLERS_PY_END
+
 // Paths with a .fleet/ directory segment: fleet-internal, never in a PR.
 function fleetInternalPaths(paths) {
   return (paths || []).map((p) => normPath(String(p))).filter((q) => q.split("/").slice(0, -1).some((x) => x.toLowerCase() === ".fleet"));
@@ -2265,6 +2342,20 @@ function fleetScanPrompt(inputs) {
     "\n" +
     "It prints one JSON object {diff, commits}. Copy every value unchanged; never drop a path. Non-zero exit -> failed with its stderr.\n" +
     "Return {status, reason, diff, commits}."
+  );
+}
+
+function callersPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: list every occurrence of the changed symbols. Read only: no edits, no commits, no checkout, no fetch, no push; run nothing but the one command below.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified:\n" +
+    "python3 -I -c " + shQuote(CALLERS_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.plan_path) + " " + shQuote(JSON.stringify(inputs.symbols)) + " " + shQuote(String(inputs.cap)) +
+    "\n" +
+    'It prints one JSON object {occurrences, capped, digest}. Return {status: "ok", reason, occurrences, capped, digest} with those values copied exactly: every key, every list entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
 
@@ -3043,7 +3134,12 @@ async function preflightStep() {
     const want = EXPECTED_VERSIONS[role];
     if (typeof got !== "number")
       halt("needs_human", "role " + role + " version missing in preflight (frozen minimum " + want + ")", "contract");
-    if (got < want) halt("needs_human", "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back)", "contract");
+    if (got < want)
+      halt(
+        "needs_human",
+        "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): update agent-prompt-" + role + " (project " + ROLE_PROJECT + ") to >= v" + want + "; see CHANGELOG 2.1.6 deploy order",
+        "contract",
+      );
     if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");
     state.roleVersions[role] = got;
     const c = contractOf(contracts[role]);
@@ -3136,21 +3232,22 @@ function cleanBrief(b) {
 }
 
 // Code points a model's JSON can silently turn into another character, or
-// that cannot be seen: NBSP, the U+2000-U+200F spaces and marks, line and
-// paragraph separators, narrow and math spaces, the ideographic space, BOM,
-// C0 (except tab and newline) and C1 controls, DEL, and the bidi controls.
+// that cannot be seen: every control (Cc, CR included), format character (Cf:
+// zero-width, bidi, soft hyphen, BOM, tags), space (Zs: NBSP and the other
+// spaces) and line or paragraph separator (Zl, Zp) except the plain space, tab
+// and newline; plus the variation selectors U+FE00-U+FE0F, the tag block
+// U+E0000-U+E007F, the Hangul fillers U+115F, U+1160, U+3164, U+FFA0, the
+// combining grapheme joiner U+034F, U+180E and U+00AD. Emoji built with a
+// zero-width joiner or U+FE0F are refused too.
+const CONFUSABLE_CAT_RE = /[\p{Cc}\p{Cf}\p{Zs}\p{Zl}\p{Zp}]/u;
+const CONFUSABLE_EXTRA = [0x115f, 0x1160, 0x3164, 0xffa0, 0x034f, 0x180e, 0x00ad];
 function confusableCp(c) {
+  if (c === 0x20 || c === 9 || c === 10) return false;
   return (
-    (c < 0x20 && c !== 9 && c !== 10) ||
-    (c >= 0x7f && c <= 0x9f) ||
-    c === 0xa0 ||
-    c === 0x61c ||
-    (c >= 0x2000 && c <= 0x200f) ||
-    (c >= 0x2028 && c <= 0x202f) ||
-    c === 0x205f ||
-    (c >= 0x2066 && c <= 0x2069) ||
-    c === 0x3000 ||
-    c === 0xfeff
+    CONFUSABLE_CAT_RE.test(String.fromCodePoint(c)) ||
+    (c >= 0xfe00 && c <= 0xfe0f) ||
+    (c >= 0xe0000 && c <= 0xe007f) ||
+    CONFUSABLE_EXTRA.indexOf(c) >= 0
   );
 }
 
@@ -3179,13 +3276,18 @@ function confusableIn(v, at) {
   return null;
 }
 
-// Criteria whose examples or property hold a confusable character, as
-// findings {criterion, finding}. text, dont_care and spec_quote are prose and
-// are not checked; visible non-ASCII is fine.
+// Criteria whose text, examples, dont_care or property hold a confusable
+// character, as findings {criterion, finding}. Test writers get the whole
+// criterion (2.1.6). spec_quote, a verbatim copy of the spec, is not checked;
+// visible non-ASCII is fine.
 function confusableFindings(criteria) {
   const out = [];
   for (const c of criteria) {
-    const bad = confusableIn(c.examples, "examples") || confusableIn(c.property, "property");
+    const bad =
+      confusableIn(c.text, "text") ||
+      confusableIn(c.examples, "examples") ||
+      confusableIn(c.dont_care, "dont_care") ||
+      confusableIn(c.property, "property");
     if (bad)
       out.push({
         criterion: c.id,
@@ -3278,9 +3380,11 @@ async function checkScripts(label, obligations, worktree, phaseName) {
 }
 
 // Why a planner plan_path is unusable (null: ok): it must be a relative .md
-// path inside the repo. The park step moves it and the commit stages it.
+// path inside the repo, in [A-Za-z0-9._/-] only. The park step moves it, the
+// commit stages it and the caller grep excludes it.
 function planPathProblem(p) {
   const s = String(p).trim();
+  if (!PLAN_PATH_CHARS_RE.test(s)) return "holds a character outside [A-Za-z0-9._/-]";
   if (s.charAt(0) === "/") return "is absolute";
   if (normPath(s).split("/").indexOf("..") >= 0) return "has a .. segment";
   if (!/\.md$/.test(normPath(s))) return "is not a .md file";
@@ -3289,12 +3393,24 @@ function planPathProblem(p) {
 
 // confirm auto: the one re-plan round. The planner gets the findings as a
 // text source and updates its draft in place; the round never repeats.
-function replanWithFindings(ctx, planPath, what, findings, fallback) {
+// rawMap: the refused round's changed_symbols as returned (2.1.6). Every
+// symbol it names, and every symbol a finding names, is carried: the next
+// round must keep each one in its map (narrower symbols only in addition),
+// and its audit gets the round as prior_round.
+function replanWithFindings(ctx, planPath, what, findings, fallback, rawMap) {
   const body = findings.map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n") || fallback;
   gate(what + " (confirm auto): one re-plan round with the findings");
+  const map = Array.isArray(rawMap) ? stripHeldOut(rawMap).filter((e) => e && typeof e === "object" && !Array.isArray(e)) : null;
+  const symbols = [];
+  const carry = (x) => {
+    if (typeof x === "string" && SYMBOL_RE.test(x) && symbols.indexOf(x) < 0) symbols.push(x);
+  };
+  for (const e of map || []) carry(e.symbol);
+  for (const f of findings) carry(f.symbol);
   return planAndAudit(
     Object.assign({}, ctx, {
       auditRetry: false,
+      priorRound: { reason: what, findings: stripHeldOut(findings), changed_symbols: map, symbols },
       suffix: (ctx.suffix || "") + ":audit-fix",
       brief: Object.assign({}, ctx.brief, {
         plan_path: planPath,
@@ -3302,6 +3418,112 @@ function replanWithFindings(ctx, planPath, what, findings, fallback) {
       }),
     }),
   );
+}
+
+// "<path>:<line>" with the path normalised (no ./, no empty or . segments),
+// or null when it is not a relative path inside the repo and a line >= 1.
+function occurrenceKey(at) {
+  if (typeof at !== "string") return null;
+  const m = OCCURRENCE_RE.exec(at.trim());
+  if (!m) return null;
+  const segs = normPath(m[1]).split("/").filter((x) => x && x !== ".");
+  if (!segs.length || m[1].trim().charAt(0) === "/" || segs.indexOf("..") >= 0) return null;
+  return segs.join("/") + ":" + m[2];
+}
+
+// Caller coverage (2.1.6, ledger 1955). The planner's changed_symbols as
+// {findings, clean}: each symbol a bare identifier listed once, with a
+// non-empty occurrences list; each occurrence a "<path>:<line>" listed once
+// and mapped to exactly one of an existing criterion id or a dont_care reason.
+function changedSymbolFindings(raw, criteria) {
+  const ids = criteria.map((c) => c.id);
+  const findings = [];
+  const clean = [];
+  const bad = (f) => findings.push({ criterion: null, finding: f });
+  if (raw.length > MAX_CHANGED_SYMBOLS) {
+    bad(raw.length + " symbols; at most " + MAX_CHANGED_SYMBOLS + " can be checked (split the task)");
+    return { findings, clean };
+  }
+  const seen = {};
+  raw.forEach((e, i) => {
+    if (!e || typeof e !== "object" || Array.isArray(e)) return bad("entry " + i + " is not an object");
+    const sym = e.symbol;
+    if (typeof sym !== "string" || !SYMBOL_RE.test(sym))
+      return bad("entry " + i + " symbol " + JSON.stringify(sym) + " is not a bare identifier ([A-Za-z_][A-Za-z0-9_]*, at most 128)");
+    const badSym = (f) => findings.push({ criterion: null, symbol: sym, finding: f });
+    if (seen[sym]) return badSym(sym + ": symbol listed twice");
+    seen[sym] = true;
+    if (!Array.isArray(e.occurrences) || !e.occurrences.length)
+      return badSym(sym + ": no occurrences list (list every occurrence, the definition included)");
+    const at = {};
+    const occ = [];
+    e.occurrences.forEach((o, j) => {
+      const k = o && typeof o === "object" ? occurrenceKey(o.at) : null;
+      if (!k) return badSym(sym + ": occurrence " + j + " " + JSON.stringify(o && o.at) + " is not path:line (a relative path in the repo, line >= 1)");
+      if (at[k]) return badSym(sym + ": " + k + " listed twice");
+      at[k] = true;
+      const crit = typeof o.criterion === "string" && o.criterion.trim() ? o.criterion.trim() : null;
+      const dc = typeof o.dont_care === "string" && o.dont_care.trim() ? o.dont_care.trim() : null;
+      const conf = confusableIn(o.criterion, "criterion") || confusableIn(o.dont_care, "dont_care");
+      if (conf) return badSym(sym + ": " + k + " invisible or confusable character " + conf + "; write plain text");
+      if (!crit && !dc) return badSym(sym + ": " + k + " is mapped to neither a criterion nor dont_care with a reason");
+      if (crit && dc) return badSym(sym + ": " + k + " is mapped to both a criterion and dont_care; pick one");
+      if (crit && ids.indexOf(crit) < 0) return badSym(sym + ": " + k + " criterion " + crit + " does not exist");
+      occ.push({ at: o.at, criterion: crit, dont_care: dc });
+    });
+    clean.push({ symbol: sym, occurrences: occ });
+  });
+  return { findings, clean };
+}
+
+// The caller grep and its diff against the planner's map: a hit the map does
+// not list, a mapped line that is no hit, and a symbol over the cap are
+// findings. Returns {findings, occurrences}. The relayed lists must match the
+// program's digest.
+async function callerCheck(label, symbols, worktree, planPath) {
+  const names = symbols.map((s) => s.symbol);
+  const r = await infra(
+    label,
+    callersPrompt({ worktree, plan_path: planPath, symbols: names, cap: MAX_SYMBOL_HITS }),
+    "Plan",
+    JUDGE_AGENT,
+  );
+  const occ = r.occurrences;
+  if (!occ || typeof occ !== "object" || Array.isArray(occ) || !Array.isArray(r.capped))
+    halt("failed", label + " returned no occurrences map or capped list");
+  for (const n of names)
+    if (!Array.isArray(occ[n]) || !occ[n].every((x) => typeof x === "string"))
+      halt("failed", label + " returned no occurrence list for " + n);
+  if (typeof r.digest !== "string" || sha256Hex(canonical({ occurrences: occ, capped: r.capped })) !== r.digest)
+    halt("failed", label + ": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
+  const findings = [];
+  for (const s of symbols) {
+    if (r.capped.indexOf(s.symbol) >= 0) {
+      findings.push({
+        criterion: null,
+        symbol: s.symbol,
+        finding:
+          s.symbol + ": more than " + MAX_SYMBOL_HITS + " occurrences (git grep -w); too common a name to check by grep. It stays in changed_symbols: narrower symbols may be added in addition, never in its place; a human decides",
+      });
+      continue;
+    }
+    const hits = occ[s.symbol];
+    const mapped = s.occurrences.map((o) => occurrenceKey(o.at));
+    for (const h of hits)
+      if (mapped.indexOf(h) < 0)
+        findings.push({ criterion: null, symbol: s.symbol, finding: s.symbol + ": " + h + " is an occurrence (git grep -w) not mapped in changed_symbols; map it to a criterion or to dont_care with a reason" });
+    for (const k of mapped)
+      if (hits.indexOf(k) < 0)
+        findings.push({ criterion: null, symbol: s.symbol, finding: s.symbol + ": " + k + " is mapped but git grep -w finds no occurrence there (stale line or wrong path; cite lines at the worktree HEAD)" });
+  }
+  return { findings, occurrences: occ };
+}
+
+// A stop or the one confirm-auto re-plan round for plan findings.
+function planFindingsStop(ctx, planPath, what, findings, rawMap) {
+  if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, findings, what, rawMap);
+  const shown = findings.slice(0, 10).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding);
+  halt("needs_human", what + ": " + shown.join("; ") + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : ""));
 }
 
 async function planAndAudit(ctx) {
@@ -3344,8 +3566,33 @@ async function planAndAudit(ctx) {
   const conf = confusableFindings(criteria);
   if (conf.length) {
     const what = "criteria hold an invisible or confusable character";
-    if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, conf, what);
+    if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, conf, what, plan.changed_symbols);
     halt("needs_human", what + ": " + conf.map((f) => f.criterion + ": " + f.finding).join("; "));
+  }
+  // 2.1.6 (ledger 1955): every occurrence of each changed symbol is mapped,
+  // and a word-boundary grep finds no occurrence the map leaves out
+  if (!Array.isArray(plan.changed_symbols))
+    halt("needs_human", "role scope-and-plan contract drift: changed_symbols must be an array", "contract");
+  const cs = changedSymbolFindings(stripHeldOut(plan.changed_symbols), criteria);
+  if (cs.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols caller map refused", cs.findings, plan.changed_symbols);
+  // the :audit-fix round keeps every symbol the refused round mapped or a
+  // finding named (2.1.6 review): dropping or swapping one stops the run
+  const prior = ctx.priorRound || null;
+  if (prior) {
+    const now = cs.clean.map((x) => x.symbol);
+    const dropped = prior.symbols.filter((x) => now.indexOf(x) < 0);
+    if (dropped.length)
+      halt(
+        "needs_human",
+        "changed_symbols dropped " + dropped.join(", ") + " after the " + prior.reason + " round; a mapped or flagged symbol stays in the map (narrower symbols only in addition)",
+      );
+  }
+  let callerOcc = null;
+  if (cs.clean.length) {
+    const cc = await callerCheck("infra:callers" + sfx, cs.clean, ctx.common.worktree, planPath);
+    if (cc.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols);
+    callerOcc = cc.occurrences;
+    gate("callers: " + cs.clean.map((s) => s.symbol + " " + s.occurrences.length).join(", ") + " occurrence(s) mapped; git grep -w agrees");
   }
   const planFacts = {
     allowed_additions: plan.allowed_additions ? stripHeldOut(plan.allowed_additions) : null,
@@ -3353,6 +3600,7 @@ async function planAndAudit(ctx) {
     test_cmd: stripHeldOut(plan.test_cmd),
     repo_obligations: stripHeldOut(obligations),
     commands: commandsOf(plan.test_cmd, obligations),
+    changed_symbols: cs.clean,
   };
   gate(
     "plan: test_cmd " + JSON.stringify(plan.test_cmd.command) + ", " + obligations.length + " repo obligation(s)" +
@@ -3398,13 +3646,16 @@ async function planAndAudit(ctx) {
         plan_diff: plan.plan_diff.slice(),
         base_ref: ctx.baseRef,
         mode: "writeback=false",
+        caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc },
+        // the refused round before this :audit-fix round, or null
+        prior_round: prior ? { reason: prior.reason, findings: prior.findings, changed_symbols: prior.changed_symbols } : null,
       }),
       "Plan",
     ),
   );
   // confirm auto: one re-plan round with the audit findings, then stop
   if (ctx.auditRetry && (audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria"))
-    return replanWithFindings(ctx, planPath, "plan-audit verdict " + audit.verdict, audit.routed_findings || [], audit.reason || audit.verdict);
+    return replanWithFindings(ctx, planPath, "plan-audit verdict " + audit.verdict, audit.routed_findings || [], audit.reason || audit.verdict, plan.changed_symbols);
   if (audit.verdict !== "approve") {
     const first = (audit.routed_findings || []).slice(0, 3).map((f) => (f.criterion || "-") + ": " + f.finding);
     halt(
@@ -3672,6 +3923,7 @@ async function autoGates(ctx) {
       allowed_additions: ctx.planFacts.allowed_additions,
       repo_obligations: ctx.planFacts.repo_obligations,
       commands: ctx.planFacts.commands,
+      changed_symbols: ctx.planFacts.changed_symbols,
     }),
     ctx.mainWt,
     "Auto-confirm",
@@ -3801,14 +4053,18 @@ async function planMode(input, date) {
     } catch (err) {
       pk = null;
     }
-    // any other error (a crash, a dead runtime call) is rethrown unchanged
-    if (!(e instanceof Stop)) throw e;
     const note =
       pk && pk.status === "ok" && pk.clean === true
         ? pk.target
           ? "; draft plan moved to " + dest + " (the worktree is clean for a re-run)"
           : "; no draft plan to park (the worktree is clean)"
         : "; draft plan left in the worktree (park failed: " + ((pk && pk.reason) || "no result") + ")";
+    // any other error (a crash, a dead runtime call) is rethrown unchanged,
+    // after the park outcome is logged (2.1.6)
+    if (!(e instanceof Stop)) {
+      log("park-plan" + note);
+      throw e;
+    }
     gate("park-plan" + note);
     throw new Stop(e.status, e.reason + note);
   };
@@ -4067,7 +4323,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     est_diff_lines: typeof ref.plan_facts.est_diff_lines === "number" ? ref.plan_facts.est_diff_lines : null,
     test_cmd: ref.plan_facts.test_cmd,
     repo_obligations: ref.plan_facts.repo_obligations,
+    // the approved caller map (2.1.6); null in a ref sealed before 2.1.6
+    changed_symbols: Array.isArray(pf.changed_symbols) ? pf.changed_symbols : null,
   };
+  if (!planFacts.changed_symbols) gate("plan ref sealed before 2.1.6: no changed_symbols; this build runs without caller coverage");
   state.path = "full";
   const testable = testableOf(criteria);
   const frozenFiles = [];

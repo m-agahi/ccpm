@@ -62,8 +62,8 @@ function inputsOf(prompt) {
 
 // The minimum role versions the workflow was built against.
 const FROZEN_VERSIONS = {
-  "scope-and-plan": 24,
-  "plan-audit": 13,
+  "scope-and-plan": 26,
+  "plan-audit": 15,
   "fleet-test-writer": 9,
   "fleet-test-judge": 9,
   "fleet-coder": 16,
@@ -79,7 +79,7 @@ const ROLE_NAMES = Object.keys(FROZEN_VERSIONS);
 // The harness fills missing ones with neutral defaults for terse override
 // stubs; a stub with __raw: true is returned as written (drift tests).
 const REQUIRED_DEFAULTS = {
-  "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [], tldr: "adds a thing", plan_diff: ["new plan"], repo_obligations: [], test_cmd: { command: "pytest <paths>", paths_placeholder: "<paths>", env: {}, tools: [] } },
+  "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [], tldr: "adds a thing", plan_diff: ["new plan"], repo_obligations: [], test_cmd: { command: "pytest <paths>", paths_placeholder: "<paths>", env: {}, tools: [] }, changed_symbols: [] },
   "plan-audit": { verdict: "approve", routed_findings: [] },
   "fleet-test-writer": { criterion_id: "AC1", tests: [], files: [] },
   "fleet-test-judge": { verdict: "approve", routed_findings: [], checked: [] },
@@ -193,6 +193,11 @@ async function runOne(script, args0) {
       }),
     );
   const fn = compile();
+  // a crashed run rethrows; its logs travel on the error (2.1.6)
+  const crashed = (e) => {
+    if (e && typeof e === "object") e.__logs = logs;
+    throw e;
+  };
   const result = await fn(
     agent,
     parallel,
@@ -206,7 +211,7 @@ async function runOne(script, args0) {
     },
     ThrowingDate,
     SafeMath,
-  );
+  ).catch(crashed);
   return { result, calls, unscripted, logs, labels: calls.map((c) => c.label) };
 }
 
@@ -3663,8 +3668,8 @@ test("a stale-bytecode suspicious entry after the coder rejects the round", asyn
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-test("role versions: scope-and-plan 24, coder 16 and code-judge 13 are the minimums", async () => {
-  for (const [role, v] of [["scope-and-plan", 23], ["fleet-coder", 15], ["fleet-code-judge", 12]]) {
+test("role versions: scope-and-plan 26, plan-audit 15, coder 16 and code-judge 13 are the minimums", async () => {
+  for (const [role, v] of [["scope-and-plan", 25], ["plan-audit", 14], ["fleet-coder", 15], ["fleet-code-judge", 12]]) {
     const s = happy();
     s.preflight.versions[role] = v;
     const out = await runOne(s, ARGS);
@@ -6083,6 +6088,10 @@ const ARRAY_SITES = {
   "b.sources @ briefProblem": "intake:brief.sources",
   "plan.criteria @ planAndAudit": "role:scope-and-plan:criteria",
   "plan.plan_diff @ planAndAudit": "role:scope-and-plan:plan_diff",
+  "plan.changed_symbols @ planAndAudit": "role:scope-and-plan:changed_symbols",
+  "e.occurrences @ changedSymbolFindings": "role:scope-and-plan:changed_symbols[].occurrences",
+  "r.capped @ callerCheck": "infra:capped",
+  "pf.changed_symbols @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   "r.files @ commitPlanAndRef": "infra:files",
   "r.refs @ commitPlanAndRef": "infra:refs",
@@ -6629,10 +6638,12 @@ test("2.1.5 criteria: an invisible or confusable character in examples or proper
   }
 });
 
-test("2.1.5 criteria: visible non-ASCII, tabs, newlines and the text, dont_care and spec_quote fields pass", async () => {
+// 2.1.6 (ledger 1954): text and dont_care are now checked too (test writers get
+// the whole criterion); only spec_quote, a verbatim copy, stays unchecked.
+test("2.1.6 criteria: visible non-ASCII, tabs, newlines and a confusable spec_quote pass", async () => {
   const crit = criteria(2);
-  crit[0].text = "Keep a b — NBSP = chr(0xA0); “quoted” ≥ 2 → ok";
-  crit[0].dont_care = ["zero​width in prose"];
+  crit[0].text = "Keep a b — NBSP = chr(0xA0); “quoted” ≥ 2 → ok";
+  crit[0].dont_care = ["log wording — “any”"];
   crit[0].spec_quote = "“Smart” quote — copied verbatim";
   crit[0].examples = ["tab\there", "line\nbreak", "ünï — “x” → ≥", "'a' + NBSP + 'b'"];
   crit[0].property = { input: "αβγ", note: "em — dash" };
@@ -6809,3 +6820,532 @@ function extractCanonical() {
   };
   return grab("codePointCompare") + grab("canonical");
 }
+
+// ---------------------------------------------------------------- 2.1.6
+
+// Ledger 1955: a build from a fleet-audited plan shipped a guard weakening
+// (yadgarhq/actions#211 B1): the plan changed guard_verdict but modelled one
+// of its two call sites; prestop_sleep, the other, was never looked at. The
+// planner now returns changed_symbols: every occurrence of each changed
+// symbol, mapped to a criterion or to dont_care with a reason. The script
+// checks the map and diffs it against a word-boundary git grep.
+
+// The caller-grep program's output for {symbol: ["<path>:<line>", ...]}, with its digest.
+function callersOut(occ, capped) {
+  const o = { occurrences: occ, capped: capped || [] };
+  return { status: "ok", reason: "grepped", ...o, digest: sha256(canon(o)) };
+}
+
+const GV_DEF = { at: "chart/guards.py:10", criterion: "AC1", dont_care: null };
+const GV_RENDER = { at: "chart/render.py:42", criterion: "AC2", dont_care: null };
+const GV_PRESTOP = { at: "chart/render.py:77", criterion: "AC2", dont_care: null };
+const GV_HITS = { guard_verdict: ["chart/guards.py:10", "chart/render.py:42", "chart/render.py:77"] };
+
+// A plan that changes guard_verdict and maps `occ`; the grep finds `hits`.
+function callerPlan(occ, hits, mk) {
+  const s = (mk || happy)();
+  s["role:scope-and-plan"].changed_symbols = [{ symbol: "guard_verdict", occurrences: occ }];
+  s["infra:callers"] = callersOut(hits || GV_HITS);
+  return s;
+}
+
+test("2.1.6 incident: one function, two call sites, the plan maps one -> refused before format and audit; grep names the other", async () => {
+  const out = await runOne(callerPlan([GV_DEF, GV_RENDER]), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /guard_verdict/);
+  assert.match(out.result.reason, /chart\/render\.py:77/);
+  assert.match(out.result.reason, /not mapped/);
+  assert.ok(out.labels.includes("infra:callers"));
+  assert.ok(!out.labels.includes("infra:format-plan"));
+  assert.ok(!out.labels.includes("role:plan-audit"));
+});
+
+test("2.1.6 incident under confirm auto: one :audit-fix re-plan with the grep finding; a second miss stops", async () => {
+  const s = callerPlan([GV_DEF, GV_RENDER], null, autoHappy);
+  s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], changed_symbols: [{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] }] };
+  s["infra:callers:audit-fix"] = callersOut(GV_HITS);
+  s["role:plan-audit:audit-fix"] = s["role:plan-audit"];
+  const out = await runOne(s, AUTO);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(!out.labels.includes("role:plan-audit"), "the refused plan is never audited");
+  const b = inputsOf(call(out, "role:scope-and-plan:audit-fix").prompt).brief;
+  assert.ok(b.sources.some((x) => x.kind === "text" && /guard_verdict: chart\/render\.py:77/.test(x.body)));
+  // still unmapped after the round: stop, no second round
+  const t = callerPlan([GV_DEF, GV_RENDER], null, autoHappy);
+  t["role:scope-and-plan:audit-fix"] = t["role:scope-and-plan"];
+  t["infra:callers:audit-fix"] = callersOut(GV_HITS);
+  const o2 = await runOne(t, AUTO);
+  assert.equal(o2.result.status, "needs_human");
+  assert.match(o2.result.reason, /chart\/render\.py:77/);
+  assert.ok(!o2.labels.includes("role:scope-and-plan:audit-fix:audit-fix"));
+  assert.ok(!o2.labels.includes("infra:callers:audit-fix:audit-fix"));
+});
+
+test("2.1.6 a full caller map passes; the audit gets the map and the grep result; the grep runs read-only with the symbols and the plan excluded", async () => {
+  const out = await runOne(callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const g = call(out, "infra:callers");
+  assert.equal(g.opts.agentType, "fleet:judge");
+  const gi = inputsOf(g.prompt);
+  assert.deepEqual(gi.symbols, ["guard_verdict"]);
+  assert.equal(gi.plan_path, "docs/plans/x.md");
+  assert.match(g.prompt, /python3 -I -c /);
+  assert.match(g.prompt, /'\["guard_verdict"\]'/);
+  assert.match(g.prompt, /Run nonce: /);
+  const l = out.labels;
+  assert.ok(l.indexOf("infra:callers") < l.indexOf("infra:format-plan"));
+  const a = inputsOf(call(out, "role:plan-audit").prompt);
+  assert.deepEqual(a.changed_symbols, [{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] }]);
+  assert.deepEqual(a.caller_check.occurrences, GV_HITS);
+  assert.match(a.caller_check.method, /git grep/);
+  assert.ok(Array.isArray(a.caller_check.limits) && a.caller_check.limits.length);
+});
+
+test("2.1.6 no changed symbols: no grep step, and the audit is told the map is empty", async () => {
+  const out = await runOne(happy(), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.ok(!out.labels.some((x) => x.startsWith("infra:callers")));
+  const a = inputsOf(call(out, "role:plan-audit").prompt);
+  assert.deepEqual(a.changed_symbols, []);
+  assert.equal(a.caller_check.occurrences, null);
+});
+
+test("2.1.6 a planner ok output without changed_symbols is contract drift", async () => {
+  const s = happy();
+  const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: "CONTRACT: fleet-v3" });
+  delete p.changed_symbols;
+  s["role:scope-and-plan"] = p;
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /role scope-and-plan contract drift: missing changed_symbols/);
+  const q = happy();
+  q["role:scope-and-plan"].changed_symbols = "[]";
+  const o2 = await runOne(q, ARGS);
+  assert.equal(o2.result.status, "needs_human");
+  assert.match(o2.result.reason, /contract drift: scope-and-plan changed_symbols type/);
+});
+
+test("2.1.6 caller map structure: every malformed entry is refused before any grep", async () => {
+  const sym = (symbol, occurrences) => [{ symbol, occurrences }];
+  const occ = (o) => sym("guard_verdict", [Object.assign({}, GV_DEF, o)]);
+  const cases = [
+    [sym("guard_verdict; rm -rf /", [GV_DEF]), /symbol/],
+    [sym("$(id)", [GV_DEF]), /symbol/],
+    [sym("a b", [GV_DEF]), /symbol/],
+    [sym("1abc", [GV_DEF]), /symbol/],
+    [sym("", [GV_DEF]), /symbol/],
+    [sym("x".repeat(129), [GV_DEF]), /symbol/],
+    [[{ symbol: "guard_verdict" }], /no occurrences list/],
+    [sym("guard_verdict", "chart/guards.py:10"), /no occurrences list/],
+    [sym("guard_verdict", []), /no occurrences list/],
+    [occ({ at: "chart/guards.py" }), /path:line/],
+    [occ({ at: "chart/guards.py:0" }), /path:line/],
+    [occ({ at: "chart/guards.py:3a" }), /path:line/],
+    [occ({ at: "/abs/guards.py:3" }), /path:line/],
+    [occ({ at: "../guards.py:3" }), /path:line/],
+    [occ({ at: 10 }), /path:line/],
+    [occ({ criterion: null, dont_care: null }), /neither a criterion nor dont_care/],
+    [occ({ criterion: null, dont_care: "   " }), /neither a criterion nor dont_care/],
+    [occ({ criterion: "AC1", dont_care: "unrelated" }), /both a criterion and dont_care/],
+    [occ({ criterion: "AC9" }), /criterion AC9 does not exist/],
+    [[{ symbol: "guard_verdict", occurrences: [GV_DEF] }, { symbol: "guard_verdict", occurrences: [GV_RENDER] }], /listed twice/],
+    [sym("guard_verdict", [GV_DEF, { ...GV_DEF, criterion: "AC2" }]), /chart\/guards\.py:10 listed twice/],
+    [["guard_verdict"], /not an object/],
+  ];
+  for (const [cs, re] of cases) {
+    const s = happy();
+    s["role:scope-and-plan"].changed_symbols = cs;
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(cs));
+    assert.match(out.result.reason, /changed_symbols/, JSON.stringify(cs));
+    assert.match(out.result.reason, re, JSON.stringify(cs));
+    assert.ok(!out.labels.some((x) => x.startsWith("infra:callers")), "no grep: " + JSON.stringify(cs));
+    assert.ok(!out.labels.includes("role:plan-audit"), JSON.stringify(cs));
+  }
+  // a manual criterion is a real criterion id; a dont_care alone is fine
+  const crit = criteria(2);
+  crit[1].test_files = [];
+  const s = happy({ criteria: crit });
+  s["role:scope-and-plan"].changed_symbols = sym("guard_verdict", [GV_DEF, { at: "chart/render.py:42", criterion: null, dont_care: "logging only" }, GV_PRESTOP]);
+  s["infra:callers"] = callersOut(GV_HITS);
+  const ok = await runOne(s, ARGS);
+  assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+});
+
+test("2.1.6 too many changed symbols is refused before any grep", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].changed_symbols = Array.from({ length: 31 }, (_, i) => ({ symbol: "f" + i, occurrences: [{ at: "a.py:" + (i + 1), criterion: "AC1", dont_care: null }] }));
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /changed_symbols.*31 symbols/);
+  assert.ok(!out.labels.some((x) => x.startsWith("infra:callers")));
+});
+
+test("2.1.6 a mapped line the grep does not find is refused (stale or invented)", async () => {
+  const out = await runOne(callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP, { at: "chart/render.py:90", criterion: "AC2", dont_care: null }]), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /guard_verdict: chart\/render\.py:90 .*no occurrence/);
+  assert.ok(!out.labels.includes("role:plan-audit"));
+});
+
+test("2.1.6 a mapped path is compared after normalisation", async () => {
+  const out = await runOne(callerPlan([{ ...GV_DEF, at: "./chart//guards.py:10" }, GV_RENDER, GV_PRESTOP]), ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+});
+
+test("2.1.6 a symbol over the grep cap is refused, never silently cut", async () => {
+  const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
+  s["infra:callers"] = callersOut({ guard_verdict: [] }, ["guard_verdict"]);
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /guard_verdict: more than 100 occurrences/);
+});
+
+test("2.1.6 a grep result whose relayed lists do not match the program's digest fails", async () => {
+  const s = callerPlan([GV_DEF, GV_RENDER]);
+  // the relay dropped the prestop line: the digest is still the program's
+  const full = callersOut(GV_HITS);
+  s["infra:callers"] = { ...full, occurrences: { guard_verdict: ["chart/guards.py:10", "chart/render.py:42"] } };
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /infra:callers.*digest/);
+  // a list missing for a symbol fails too
+  const t = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
+  t["infra:callers"] = callersOut({});
+  const o2 = await runOne(t, ARGS);
+  assert.equal(o2.result.status, "failed");
+  assert.match(o2.result.reason, /infra:callers.*guard_verdict/);
+});
+
+test("2.1.6 the caller map is sealed in plan_facts and reaches the coder and the code judge", async () => {
+  const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const want = [{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] }];
+  assert.deepEqual(inputsOf(call(out, "role:fleet-coder:r1").prompt).changed_symbols, want);
+  assert.deepEqual(inputsOf(call(out, "role:fleet-code-judge:r1").prompt).changed_symbols, want);
+  const ref = JSON.parse(s.__store[out.planResult.plan_ref.plan_commit]);
+  assert.deepEqual(ref.plan_facts.changed_symbols, want);
+});
+
+test("2.1.6 caller grep program: word-boundary hits in tracked text files, the plan doc excluded, cap and digest", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-callers-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    spawnSync("mkdir", ["-p", join(wt, "chart"), join(wt, "docs", "plans")]);
+    writeFileSync(join(wt, "chart", "guards.py"), "def guard_verdict(x):\n    return x\n");
+    writeFileSync(
+      join(wt, "chart", "render.py"),
+      "from chart.guards import guard_verdict\n" +
+        "a = guard_verdict(1)\n" +
+        "b = guard_verdict_extra(2)\n" +
+        "c = my_guard_verdict(3)\n" +
+        "d = guard_verdict(4)  # prestop_sleep\n",
+    );
+    writeFileSync(join(wt, "docs", "plans", "x.md"), "changes guard_verdict\n");
+    writeFileSync(join(wt, "blob.bin"), Buffer.from("guard_verdict\0\x01\x02"));
+    writeFileSync(join(wt, "x y.py"), "guard_verdict()\n");
+    writeFileSync(join(wt, "many.py"), "z = 1\n".repeat(6));
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    writeFileSync(join(wt, "untracked.py"), "guard_verdict()\n");
+    const prog = extractPy("CALLERS_PY_BEGIN", "CALLERS_PY_END", "CALLERS_PY");
+    const r = spawnSync("python3", ["-I", "-", wt, "docs/plans/x.md", JSON.stringify(["guard_verdict", "nohit", "z"]), "5"], { input: prog, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    const o = JSON.parse(r.stdout);
+    assert.deepEqual(o.occurrences.guard_verdict, ["chart/guards.py:1", "chart/render.py:1", "chart/render.py:2", "chart/render.py:5", "x y.py:1"].sort());
+    assert.deepEqual(o.occurrences.nohit, []);
+    // "z" is a word on more than 5 lines: capped, its list left empty; guard_verdict (5) is not
+    assert.deepEqual(o.capped, ["z"]);
+    assert.deepEqual(o.occurrences.z, []);
+    assert.equal(o.digest, sha256(canon({ occurrences: o.occurrences, capped: o.capped })));
+    // the workflow accepts this digest
+    const fn = new Function(extractCanonical() + "\nreturn canonical;")();
+    assert.equal(sha256(fn({ occurrences: o.occurrences, capped: o.capped })), o.digest);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- 2.1.6 minors (ledger 1954)
+
+// M12: the load-ref retry must check the re-read ref's metadata as well.
+test("2.1.6 load-ref retry: correct chunks but a ref that now targets another commit stops", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const good = loadStub(s.__store);
+  s["infra:load-ref"] = (p) => {
+    const r = good(p);
+    r.chunks = r.chunks.slice();
+    r.chunks[0] = "[truncated]";
+    return r;
+  };
+  s["infra:load-ref:retry"] = (p) => {
+    const r = good(p);
+    r.refs = r.refs.map((e) => (e.name === tiny.plan_ref ? { ...e, target: "deadbee" } : e));
+    return r;
+  };
+  const out = await runOne(s, buildArgs(tiny));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan ref missing or changed; re-run plan.*targets deadbee, not /);
+  assert.ok(!out.labels.some((x) => x.startsWith("role:")));
+});
+
+test("2.1.6 criteria: a confusable character in text or dont_care stops too (writers get the whole criterion)", async () => {
+  for (const [field, v] of [["text", "[unit] keep a b"], ["dont_care", ["zero​width"]]]) {
+    const crit = criteria(2);
+    crit[1][field] = v;
+    const out = await runOne(happy({ criteria: crit }), ARGS);
+    assert.equal(out.result.status, "needs_human", field);
+    assert.match(out.result.reason, new RegExp("AC2: invisible or confusable character U\\+[0-9A-F]+ at " + field), field);
+    assert.ok(!out.labels.includes("role:plan-audit"), field);
+  }
+});
+
+test("2.1.6 criteria: each added confusable class is refused; CR still is; visible typography passes", async () => {
+  const cases = {
+    "Cf U+2060 word joiner": "a⁠b",
+    "Cf U+00AD soft hyphen": "soft­hyphen",
+    "Cf U+180E Mongolian vowel separator": "a᠎b",
+    "Cf U+E0041 tag": "a\u{E0041}b",
+    "Cf U+E0001 language tag": "a\u{E0001}b",
+    "U+E0000 (tag block, unassigned)": "a\u{E0000}b",
+    "U+E007F cancel tag": "a\u{E007F}b",
+    "Zs U+1680 ogham space": "a b",
+    "Zl U+2028": "a b",
+    "Zp U+2029": "a b",
+    "Cc U+0001": "a\u0001b",
+    "Cc CR": "a\rb",
+    "FE00 variation selector 1": "a︀b",
+    "FE0F variation selector 16": "a️b",
+    "U+115F Hangul choseong filler": "aᅟb",
+    "U+1160 Hangul jungseong filler": "aᅠb",
+    "U+3164 Hangul filler": "aㅤb",
+    "U+FFA0 halfwidth Hangul filler": "aﾠb",
+    "U+034F combining grapheme joiner": "a͏b",
+  };
+  for (const [name, bad] of Object.entries(cases)) {
+    const crit = criteria(2);
+    crit[1].examples = ["ok", bad];
+    const out = await runOne(happy({ criteria: crit }), ARGS);
+    assert.equal(out.result.status, "needs_human", name);
+    assert.match(out.result.reason, /AC2: invisible or confusable character U\+/, name);
+  }
+  const crit = criteria(2);
+  crit[0].examples = ["em — dash", "“smart” ‘quotes’", "arrow → ⇒", "ellipsis …", "tab\tand\nnewline", "plain space"];
+  crit[0].text = "[unit] « guillemets » — ok";
+  const ok = await runOne(happy({ criteria: crit }), ARGS);
+  assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+});
+
+test("2.1.6 a crash after the planner logs the park outcome before it rethrows", async () => {
+  const s = happy();
+  s["infra:format-plan"] = () => {
+    throw new Error("transport died");
+  };
+  let logs = null;
+  s["infra:park-plan"] = (p) => ({ status: "ok", reason: "parked", target: inputsOf(p).dest, clean: true });
+  await assert.rejects(async () => {
+    try {
+      await runOne(s, ARGS);
+    } catch (e) {
+      logs = e.__logs || null;
+      throw e;
+    }
+  }, /transport died/);
+  assert.ok(logs, "the harness exposes the logs of a crashed run");
+  assert.ok(logs.some((m) => /park-plan; draft plan moved to .*scratch\/parked\//.test(m)), logs.join("\n"));
+  // a failed park is logged too
+  const t = happy();
+  t["infra:format-plan"] = () => {
+    throw new Error("transport died");
+  };
+  t["infra:park-plan"] = { status: "needs_human", reason: "README.md is dirty" };
+  let l2 = null;
+  await assert.rejects(async () => {
+    try {
+      await runOne(t, ARGS);
+    } catch (e) {
+      l2 = e.__logs || null;
+      throw e;
+    }
+  }, /transport died/);
+  assert.ok(l2.some((m) => /park-plan; draft plan left in the worktree \(park failed: README\.md is dirty\)/.test(m)), l2.join("\n"));
+});
+
+test("2.1.6 a plan_path with a character outside [A-Za-z0-9._/-] stops before any park or audit", async () => {
+  for (const p of ["docs/plans/a b.md", "docs/plans/$x.md", "docs/plans/`x`.md", "docs/plans/a;b.md", "docs/plans/ünï.md", "docs/plans/a b.md", "docs/plans/a'b.md"]) {
+    const s = happy();
+    s["role:scope-and-plan"].plan_path = p;
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", p);
+    assert.match(out.result.reason, /plan_path .* holds a character outside \[A-Za-z0-9\._\/-\]/, p);
+    assert.ok(!out.labels.includes("infra:park-plan"), p);
+    assert.ok(!out.labels.includes("role:plan-audit"), p);
+  }
+  const s = happy();
+  s["role:scope-and-plan"].plan_path = "docs/plans/Foo_Bar-2026.11.07.md";
+  const ok = await runOne(s, ARGS);
+  assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+});
+
+test("2.1.6 plan_wrong re-plan greps the detached re-plan worktree at the old plan commit, not the fleet worktree", async () => {
+  const s = planWrong([{ target: "plan", criterion: "AC2", finding: "x — Proposed plan change: y" }]);
+  s["role:scope-and-plan:replan"].changed_symbols = [{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] }];
+  s["infra:callers:replan"] = callersOut(GV_HITS);
+  const ref = await planRefFor(s);
+  const out = await runOne(s, buildArgs(ref));
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const g = inputsOf(call(out, "infra:callers:replan").prompt);
+  assert.equal(g.worktree, inputsOf(call(out, "infra:replan-worktree").prompt).worktree);
+  assert.match(g.worktree, /\/replan-1$/);
+  const l = out.labels;
+  assert.ok(l.indexOf("role:scope-and-plan:replan") < l.indexOf("infra:callers:replan"));
+  assert.ok(l.indexOf("infra:callers:replan") < l.indexOf("role:plan-audit:replan"));
+});
+
+// Gate non-weakening: every code point the 2.1.5 predicate refused is still refused.
+test("2.1.6 confusableCp refuses every code point 2.1.5 refused", () => {
+  const old = (c) =>
+    (c < 0x20 && c !== 9 && c !== 10) ||
+    (c >= 0x7f && c <= 0x9f) ||
+    c === 0xa0 ||
+    c === 0x61c ||
+    (c >= 0x2000 && c <= 0x200f) ||
+    (c >= 0x2028 && c <= 0x202f) ||
+    c === 0x205f ||
+    (c >= 0x2066 && c <= 0x2069) ||
+    c === 0x3000 ||
+    c === 0xfeff;
+  const grab = (name) => {
+    const i = SOURCE.indexOf("\nfunction " + name + "(");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  };
+  const consts = SOURCE.split("\n").filter((l) => /^const (CONFUSABLE_CAT_RE|CONFUSABLE_EXTRA) = /.test(l)).join("\n");
+  const now = new Function(consts + "\n" + grab("confusableCp") + "\nreturn confusableCp;")();
+  const lost = [];
+  for (let c = 0; c <= 0x10ffff; c++) if (old(c) && !now(c)) lost.push(c.toString(16));
+  assert.deepEqual(lost, []);
+  for (const c of [0x20, 9, 10, 0x2014, 0x201c, 0x2192, 0x41]) assert.equal(now(c), false, c.toString(16));
+});
+
+// ---------------------------------------------------------------- 2.1.6 review of #35
+
+// HIGH: the :audit-fix round must not let a flagged symbol drop out of the map.
+function droppedRound(round2) {
+  const s = callerPlan([GV_DEF, GV_RENDER], null, autoHappy);
+  s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], changed_symbols: round2 };
+  s["infra:callers:audit-fix"] = (p) => callersOut(Object.fromEntries(inputsOf(p).symbols.map((x) => [x, x === "guard_verdict" ? GV_HITS.guard_verdict : ["chart/other.py:3"]])));
+  s["role:plan-audit:audit-fix"] = s["role:plan-audit"];
+  return s;
+}
+
+test("2.1.6 review PoC: the :audit-fix round returns an empty map -> stops, the flagged symbol may not drop out", async () => {
+  const out = await runOne(droppedRound([]), AUTO);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /guard_verdict/);
+  assert.match(out.result.reason, /dropped/);
+  assert.ok(!out.labels.includes("role:plan-audit:audit-fix"));
+  assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix:audit-fix"));
+});
+
+test("2.1.6 review PoC: the :audit-fix round swaps the flagged symbol for another -> stops", async () => {
+  const out = await runOne(droppedRound([{ symbol: "verdict_core", occurrences: [{ at: "chart/other.py:3", criterion: "AC1", dont_care: null }] }]), AUTO);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /dropped.*guard_verdict/);
+  assert.ok(!out.labels.includes("role:plan-audit:audit-fix"));
+});
+
+test("2.1.6 review: the :audit-fix round keeps the flagged symbol and adds a narrower one -> passes; the audit gets prior_round", async () => {
+  const out = await runOne(
+    droppedRound([
+      { symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] },
+      { symbol: "verdict_core", occurrences: [{ at: "chart/other.py:3", criterion: "AC1", dont_care: null }] },
+    ]),
+    AUTO,
+  );
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const a = inputsOf(call(out, "role:plan-audit:audit-fix").prompt);
+  assert.deepEqual(a.prior_round.changed_symbols, [{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER] }]);
+  assert.ok(a.prior_round.findings.some((f) => /chart\/render\.py:77/.test(f.finding) && f.symbol === "guard_verdict"));
+  assert.match(a.prior_round.reason, /changed_symbols/);
+  // the first-round audit had no prior round
+  const plain = await runOne(callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]), ARGS);
+  assert.equal(inputsOf(call(plain, "role:plan-audit").prompt).prior_round, null);
+});
+
+test("2.1.6 review: after a plan-audit refusal the round-1 map symbols are carried too", async () => {
+  const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP], null, autoHappy);
+  s["role:plan-audit"] = { status: "ok", reason: "defect", verdict: "plan_defect", routed_findings: [{ target: "plan", criterion: "AC2", finding: "prestop path untested" }] };
+  s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], changed_symbols: [] };
+  const out = await runOne(s, AUTO);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /dropped.*guard_verdict/);
+});
+
+test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only in addition", async () => {
+  const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
+  s["infra:callers"] = callersOut({ guard_verdict: [] }, ["guard_verdict"]);
+  const out = await runOne(s, ARGS);
+  assert.match(out.result.reason, /in addition/);
+  assert.doesNotMatch(out.result.reason, /name the narrower symbols the change touches/);
+});
+
+test("2.1.6 review: a role page below its pin names the page, the project and the deploy order", async () => {
+  const s = happy();
+  s.preflight.versions["scope-and-plan"] = 25;
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /update agent-prompt-scope-and-plan \(project m-agahi\/yadgar\) to >= v26; see CHANGELOG 2\.1\.6 deploy order/);
+});
+
+test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const ref = JSON.parse(s.__store[tiny.plan_commit]);
+  delete ref.plan_facts.changed_symbols;
+  delete ref.seal;
+  ref.seal = sha256(canon(ref));
+  s.__store[tiny.plan_commit] = JSON.stringify(ref) + "\n";
+  const out = await runOne(s, buildArgs({ ...tiny, ref_sha256: sha256(s.__store[tiny.plan_commit]) }));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.result.gate_log.some((m) => /without caller coverage/.test(m)), "gate line");
+  assert.equal(inputsOf(call(out, "role:fleet-coder:r1").prompt).changed_symbols, null);
+});
+
+test("2.1.6 review: the intent judge gets changed_symbols under confirm auto", async () => {
+  const out = await runOne(callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP], null, autoHappy), AUTO);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.deepEqual(inputsOf(call(out, "role:fleet-intent-judge").prompt).changed_symbols, [{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] }]);
+});
+
+test("2.1.6 review: a confusable character in an occurrence's criterion or dont_care is refused", async () => {
+  for (const o of [{ ...GV_RENDER, criterion: "AC2​" }, { at: "chart/render.py:42", criterion: null, dont_care: "logging only" }]) {
+    const out = await runOne(callerPlan([GV_DEF, o, GV_PRESTOP]), ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(o));
+    assert.match(out.result.reason, /changed_symbols.*invisible or confusable character U\+/, JSON.stringify(o));
+    assert.ok(!out.labels.some((x) => x.startsWith("infra:callers")), JSON.stringify(o));
+  }
+});
+
+test("2.1.6 review: the grep limits say what is really missed", () => {
+  const src = SOURCE.slice(SOURCE.indexOf("const CALLER_METHOD"), SOURCE.indexOf("const PLAN_PATH_CHARS_RE"));
+  assert.match(src, /submodule/);
+  assert.match(src, /gitattributes/);
+  assert.match(src, /built at runtime/);
+  assert.match(src, /working tree/);
+  assert.doesNotMatch(src, /HEAD state/);
+  assert.doesNotMatch(src, /getattr/);
+});

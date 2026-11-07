@@ -61,6 +61,7 @@ A missing nonce returns `needs_human` before any agent runs.
 | 3    | workspace (infra)  | creates or reuses branch `fleet/<task id>-<slug>` and its worktree        |
 | 4    | branch-scan (r/o)  | any commit beyond origin/<default> that is not a plan commit -> stop      |
 | 5    | scope-and-plan     | criterion ids; disjoint test files; `tldr`; `plan_diff` is a string array |
+| 5a   | callers (r/o)      | `changed_symbols` map well formed; `git grep -w` hits equal the map       |
 | 6    | -                  | risk tier logged; short path disabled (always full)                       |
 | 7    | plan-audit         | verdict other than `approve` -> `needs_human`                             |
 | 8    | stage-plan         | stages the plan doc; returns the sha256 of the staged bytes               |
@@ -79,6 +80,22 @@ Plan mode returns `awaiting_confirmation` with `tldr`, `plan_diff`, `fleet_size`
 (`{criteria, est_agents, est_rounds}`), `plan_path` and `plan_ref`. It makes no push, no PR, no
 ledger write and no comment. The planner's `held_out_examples` are dropped: never returned and
 never forwarded.
+
+Caller coverage (2.1.6): the planner returns `changed_symbols`, every occurrence of each existing
+function, guard or symbol the plan changes, as `{symbol, occurrences: [{at: "<path>:<line>",
+criterion, dont_care}]}`; each occurrence maps to exactly one of an existing criterion id or a
+`dont_care` reason. Step 5a greps each symbol (`git grep -n -I -w -F`, tracked text files, the plan
+doc excluded; the relayed lists are checked against the program's digest). A malformed map, a hit
+the map leaves out, a mapped line that is no hit, more than 100 hits for one symbol or more than 30
+symbols stop the run with `needs_human`, or go to the one `:audit-fix` round under confirm auto.
+The `:audit-fix` round must keep every symbol the refused round mapped or a finding named
+(narrower symbols only in addition); a dropped or swapped symbol stops the run. plan-audit gets
+the map, `caller_check` (`{method, limits, occurrences}`) and, in the `:audit-fix` round,
+`prior_round` (`{reason, findings, changed_symbols}`); the intent judge gets the map under confirm
+auto. The grep reads the working tree content of the tracked files and is name-based: a call
+through an alias, a re-export under another name, a name built at runtime, submodules, files git
+treats as binary and other repos are not searched or not found. An empty `changed_symbols` is only
+checked by the audit. A ref sealed before 2.1.6 builds without caller coverage (gate line).
 
 Intake classifies the input and fetches its text: a ledger task through yadgar `task_get`, a Jira
 ticket through the Atlassian MCP, an issue or PR through `gh-personal` or the Codeberg API, a plan
@@ -614,14 +631,16 @@ The script pins the role contract, not the prose:
   final newline, so the parsing never needs one: the last line counts like any other.
 - 2.1.1 pins: scope-and-plan 24, plan-audit 13, fleet-test-writer 9, fleet-test-judge 9,
   fleet-coder 16, fleet-code-judge 13, fleet-pr-opener 10, fleet-intent-judge 2, pr-review 17,
-  gate-change-nonweakening-sweep 4.
+  gate-change-nonweakening-sweep 4. 2.1.6 raises scope-and-plan to 26 and plan-audit to 15
+  (`changed_symbols`, `caller_check`).
 - Each role runner reports the version and marker it loaded. A value that differs from preflight
   (the page changed mid-run) discards the result.
 - `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are
   checked against the frozen enums. fleet-v3: the writer returns `criterion_id, tests, files`; the
   coder `changed_paths, suite_result, added_symbols, frozen_tests_red_at_start, obligations_done`
   (no `commit`/`commits` key any more); the intent judge `verdict, deviations, coverage`;
-  pr-review `verdict, findings, touches_gate, checked`; the sweep `verdict, units, findings`. A missing key or an unknown verdict is contract drift and stops
+  pr-review `verdict, findings, touches_gate, checked`; the sweep `verdict, units, findings`;
+  since 2.1.6 the planner also `changed_symbols`. A missing key or an unknown verdict is contract drift and stops
   the run.
 - Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when

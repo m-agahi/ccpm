@@ -1,5 +1,69 @@
 # Changelog
 
+## [2.1.6] - 2026-11-07
+
+Caller coverage for changed symbols (ledger 1955) and the minor findings of the PR #33 re-review
+(ledger 1954).
+
+**Deploy order:** update the role pages `scope-and-plan` (to version 26 or later) and `plan-audit`
+(to version 15 or later) BEFORE installing 2.1.6. This release pins those minimums, so an older
+page stops the run in preflight with "update agent-prompt-<role> (project m-agahi/yadgar) to >= v<N>;
+see CHANGELOG 2.1.6 deploy order". The contract marker stays `fleet-v3`.
+
+### Added
+
+- **Caller map for every changed symbol.** A build from an audited plan shipped a guard weakening
+  (yadgarhq/actions#211 B1): the plan changed `guard_verdict` but modelled one of its two call
+  sites. The planner now returns `changed_symbols` (required on `ok`): for each existing function,
+  guard or symbol the plan changes, every occurrence as `"<path>:<line>"`, mapped to exactly one of
+  an existing criterion id or a `dont_care` reason. The script refuses a symbol that is not a bare
+  identifier or is listed twice, a missing or empty occurrences list, an occurrence that is not
+  `path:line` or is listed twice, one mapped to neither or to both, an unknown criterion id, and
+  more than 30 symbols.
+- **Independent grep check.** A read-only step (`infra:callers`, the read-only judge agent) runs
+  `git grep -n -I -w -F` for each symbol over the tracked text files, the run's own plan doc
+  excluded. The script diffs the hits against the map: a hit the map leaves out, a mapped line that
+  is no hit, and a symbol with more than 100 hits are refused. The program prints a digest over its
+  lists, and the script recomputes it, so a hit the relay drops fails the step. Limits: the grep is
+  name-based: a call through an alias, a re-export under another name, a name built at runtime
+  and callers in other repos are missed (a literal string holding the name is a hit). Submodules
+  are not searched, and files git treats as binary (`-I`, `.gitattributes` included) are skipped.
+  It reads the working tree content of the tracked files. It over-matches comments, docs and
+  same-named symbols (the planner maps those as `dont_care`). An occurrence's `criterion` and
+  `dont_care` must hold no invisible or confusable character.
+- These refusals stop the run with `needs_human`; under confirm auto they go to the one
+  `:audit-fix` re-plan round (the one-round total is unchanged). That round must keep every symbol
+  the refused round mapped or a finding named; a dropped or swapped symbol stops the run (narrower
+  symbols only in addition). A symbol over the grep cap therefore always ends with a human.
+- **The audit gets the map.** plan-audit receives `changed_symbols` and `caller_check`
+  (`{method, limits, occurrences}`) to judge whether each mapping is right. The map is sealed in
+  `plan_facts` and reaches the coder, the code judge and, under confirm auto, the intent judge. In
+  the `:audit-fix` round the audit also gets `prior_round` (`{reason, findings, changed_symbols}`
+  of the refused round; `null` otherwise).
+- A ref sealed before 2.1.6 still builds, with `changed_symbols: null` and the gate line "this
+  build runs without caller coverage".
+
+### Changed
+
+- **Confusable check covers text and dont_care.** Test writers get the whole criterion, so a
+  criterion's `text` and `dont_care` are now checked as well as `examples` and `property`. Only
+  `spec_quote` stays unchecked.
+- **Wider confusable set.** Every Unicode control (Cc, CR included), format character (Cf), space
+  (Zs) and line or paragraph separator (Zl, Zp) is refused except the plain space, tab and newline;
+  also U+FE00-U+FE0F, U+E0000-U+E007F, U+115F, U+1160, U+3164, U+FFA0, U+034F, U+180E and U+00AD.
+  Visible typography (em dash, smart quotes, arrows) still passes. Emoji built with U+200D or
+  U+FE0F are now refused. A test checks every code point: all that 2.1.5 refused are still
+  refused.
+- The `fleet:judge` agent description names the caller grep step.
+- **plan_path characters.** A planner `plan_path` must use only `[A-Za-z0-9._/-]`.
+
+### Fixed
+
+- **A crash after the planner logs the park outcome** (moved to the scratch dir, or left in the
+  worktree) before it rethrows the original error.
+- **load-ref retry:** a test now covers a retry whose chunks match but whose ref targets another
+  commit; the run stops (the re-check of the retried ref was untested).
+
 ## [2.1.5] - 2026-11-06
 
 Fixes from the 2.1.4 live trial (yaadgaar #622, confirm auto).
