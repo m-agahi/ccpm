@@ -2,10 +2,10 @@
 name: ledger-writer
 description:
   Fleet agent for the ledger body step of the fleet:build-task-run workflow: creates a yadgar ledger
-  task's body page and links it with task_write. MCP tools only; no shell and no file tools. Not for
-  direct invocation.
+  task's body page and links it with task_write. Five yadgar MCP tools only, no shell, no files, no
+  other agent. Not for direct invocation.
 model: inherit
-disallowedTools: Write, Edit, NotebookEdit, Bash, mcp__yaadgaar__edit_task, mcp__yaadgaar__create_task, mcp__yaadgaar__transition_task
+tools: ToolSearch, StructuredOutput, mcp__yadgar__task_get, mcp__yadgar__wiki_read, mcp__yadgar__wiki_add, mcp__yadgar__wiki_append_section, mcp__yadgar__task_write
 ---
 
 You run the ledger body step of the fleet build workflow. The dispatch prompt names the tasks, the

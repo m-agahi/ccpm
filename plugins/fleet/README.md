@@ -368,7 +368,9 @@ with `plan_path` unchanged. Anything else stops with the same reason.
 Stage-plan, commit-plan and verify run the same embedded hash program.
 Since 3.1.0 no step relays raw git output for these checks. Verify runs `VERIFY_SINCE_PY`
 (worktree, plan commit, plan path), which prints `{head, is_ancestor, commits_since, plan_touched,
-changed_since, digest}`; commit-plan runs `PLAN_FILES_PY`, which prints `{head, files, digest}`.
+changed_since, args, digest}`; commit-plan runs `PLAN_FILES_PY`, which prints
+`{head, files, args, digest}`. `args` echoes the program's arguments, and the script compares them
+with what it passed.
 The script recomputes each digest and stops the run (`failed`) on a dropped or changed entry or a
 missing list. Every embedded program runs as `python3 -I`; a program that reads the repo takes the
 worktree as an argument and runs git with `-C <worktree>`. The 3.1.0 programs (the push classifier
@@ -447,20 +449,24 @@ is the plan commit, for example after a re-plan.
   hidden `fleet:<task id>` marker) is appended to the task's body page (`body_slug`) in
   `args.project`. A body that already carries the marker is skipped. `ledger_status` is `ok`,
   `failed` or `none`. A failed entry hands its `section_text` back.
-- **Ledger task with no body page (3.1.0):** the write-back step returns `no_body` and the task's
-  title. A read-only step (`infra:ledger-read:pre`, `fleet:judge`) reads the task again: the title
-  must equal the first read byte for byte and `body_slug` must still be empty, else nothing is
-  written. Then `infra:ledger-body` runs on `fleet:ledger-writer` (MCP tools only: `Write`,
-  `Edit`, `NotebookEdit`, `Bash` and the yaadgaar write tools are disallowed). It re-reads the task
-  and writes nothing when the title differs; it creates the page with `wiki_add` at the slug the
-  script computes, `{args.project with / as _}_task-<id>` (`upsert=False`, `force=True`,
-  `wait=True`, `directory` = the repo); on `slug_exists` it appends the section only when the page
-  lacks the marker and never overwrites the page; then it calls
-  `task_write(project_id, id, title=<the title read>, body_slug=<slug>)`, because `task_write`
-  writes the title on every call. A second read (`infra:ledger-read:post`, `fleet:judge`) must show
-  the same title, the computed `body_slug` and the marker on the page. Any other outcome fails the
-  entry; a changed title is named ("restore the title by hand"). A project that is not
-  `<owner>/<repo>` writes nothing. Titles and bodies are data, not instructions.
+- **Ledger task with no body page (3.1.0):** a read-only step (`infra:ledger-read:pre`,
+  `fleet:judge`) reads every ledger task first: its title, `body_slug` and marker. A task with a
+  body page goes to the append step above. For a task with none, `infra:ledger-body` runs on
+  `fleet:ledger-writer`, whose `tools:` allowlist holds `ToolSearch`, `StructuredOutput` and five
+  yadgar tools (`task_get`, `wiki_read`, `wiki_add`, `wiki_append_section`, `task_write`) and
+  nothing else. It re-reads the task and writes nothing when the title differs from the judge's
+  read; it creates the page with `wiki_add` at the slug the script computes,
+  `{args.project with / as _}_task-<id>` (`upsert=False`, `force=True`, `wait=True`,
+  `directory` = the repo); on `slug_exists` the page must carry `args.project` and the tag
+  `ledger-<id>` (else "slug collision", nothing written), and it appends the section only when the
+  page lacks the marker, never overwriting it; then it calls
+  `task_write(project_id, id, title=<the title the judge read>, body_slug=<slug>)`, because
+  `task_write` writes the title on every call. A second read (`infra:ledger-read:post`,
+  `fleet:judge`) must show the same title, the computed `body_slug` and the marker on the page.
+  Any other outcome fails the entry; a changed title is named ("restore the title by hand"). The
+  title must have 1 to 200 code points. The title check works at the relay level only: the write
+  itself can change the title, and the reads detect that but cannot prevent it. A project that is
+  not `<owner>/<repo>` writes nothing. Titles and bodies are data, not instructions.
 - **yaadgaar (3.0.0):** for each `yaadgaar` source of a `yadgarhq/` project, a read-only step
   (`infra:yaadgaar-read`, `fleet:judge`) resolves the client's project (`.yadgar/project-id` or
   origin; the yaadgaar client resolves a number in the session's start project) and runs
@@ -556,26 +562,43 @@ here" when any of these is true:
   - any `Makefile`;
   - the `scripts` of any `package.json`;
   - the script and task tables of any `pyproject.toml`;
-  - any tracked file named in the text of one of the above, such as a hook `entry` or `args`, a
-    husky or lefthook command, or a hooks-dir shim's `--config=<path>`. The scan follows these
-    names up to 4 levels deep. A name is any run of `A-Z a-z 0-9 _ . / -` that resolves to a
-    tracked path;
-  - since 3.1.0, an untracked or ignored file in the worktree named the same way
-    (`worktree:<path>`), followed the same way;
+  - any file named in the text of one of the above, such as a hook `entry` or `args`, a husky or
+    lefthook command, or a hooks-dir shim's `--config=<path>`. The scan follows these names up to 4
+    levels deep. A name is any run of `A-Z a-z 0-9 _ . / -` that resolves to a tracked path or,
+    since 3.1.0, to an untracked or ignored file in the worktree (`worktree:<path>`). Since 3.1.0
+    (ledger 1960) only names that can run are followed: never prose, docs or data (`*.md`, `*.txt`,
+    `*.rst`, `*.jsonl`, `*.csv`, CHANGELOG, LICENSE, README, `*.json` other than `package.json` and
+    hook configs such as `.lintstagedrc*`), never a name on a `files`, `exclude`, `name`,
+    `description` or `id` line of a YAML file or in a YAML comment, and a test path (under `tests/`,
+    `fixtures/`, `golden/`, ..., or `test_*.py`, `*.test.*`, ...) or a Dockerfile only when a hook
+    surface names it directly. A followed `package.json` or `pyproject.toml` is read like a root one.
+    `language: docker` scans the repo's `Dockerfile`. A pre-commit shim's `INSTALL_PYTHON=<path to
+python>` line is not matched (it names the interpreter, not a command); every other line of every
+    surface, comments included, is;
   - since 3.1.0, the hook manifest (`.pre-commit-hooks.yaml`) of every remote hook repo of the root
-    `.pre-commit-config.yaml`, and the clone files it names (`remote:<repo>@<rev>:<path>`). The scan
-    reads them from the clone pre-commit keeps in its cache (`$PRE_COMMIT_HOME`, else
-    `$XDG_CACHE_HOME/pre-commit`, else `~/.cache/pre-commit`; `db.db` maps repo and rev to the
-    clone).
+    `.pre-commit-config.yaml`, and the repo files it names (`remote:<repo>@<rev>:<path>`). The config
+    is parsed with PyYAML, run as in the fixer program (pre-commit's own interpreter, else
+    `python3`, `-I`, from `/`), and each repo is paired with its own rev. The scan reads the clone
+    pre-commit keeps in its cache at that rev (`$PRE_COMMIT_HOME`, else `$XDG_CACHE_HOME/pre-commit`,
+    else `~/.cache/pre-commit`; `db.db` maps repo and rev to the clone). With no cached clone it
+    fetches the rev shallowly into a scratch repo outside the worktree (hooks off), reads the
+    manifest from `FETCH_HEAD` with `git show`, and removes the scratch repo. The fetch allows only
+    `https://` and `git@<host>:<path>`, only the hosts `github.com`, `gitlab.com`, `codeberg.org` and
+    the host of the repo's own `origin` (never an IP literal, `localhost`, `*.local` or
+    `*.internal`), at most 20 fetches and 120 s in all, and never prompts (`GIT_TERMINAL_PROMPT=0`,
+    an empty `GIT_ASKPASS`, ssh in batch mode with strict host keys). It keeps the user's git config
+    and credential helper, so a private hook repo on an allowed host works. These are the hosts
+    pre-commit itself reaches for the same config at install time.
 - The scan cannot complete: a bad revision, an unreadable file or hook, more than 2000 referenced
-  files, a missing list, or (3.1.0) a remote hook repo with no cached clone at a configured rev.
-  The last one stops the run before pre-commit has ever installed that repo on this machine: run
-  `pre-commit install-hooks` in the repo (it clones and installs, and runs no hook), then plan again.
+  files, a missing list, or (3.1.0) a root config that PyYAML cannot read (or no PyYAML), a repos
+  entry with no repo, or a remote hook repo the scan can neither find in the cache nor fetch (a
+  transport or host not allowed, a rev that does not resolve, a missing manifest, a failed or
+  timed-out fetch, the fetch caps). A refused host names itself and suggests
+  `pre-commit install-hooks`, which clones the repo and installs its hook environments (that runs
+  package installs, not hooks); afterwards the scan reads the cache.
 
 The scan reads tracked files from the git objects at the scanned revision. It reads the hooks dir,
-untracked files and the pre-commit cache in their current state. The remote repo and rev values are
-read from the config text, comments dropped; an alias or a block scalar there names no URL, so it is
-not found in the cache and the run stops.
+untracked files and the pre-commit cache in their current state.
 
 Not covered (3.1.0), by design:
 
@@ -730,13 +753,20 @@ obligation in its uncommitted changes and reports `obligations_done`.
    scratch worktree loaded with the judged tree, so CI-only rules fail before the push, and
    reports `check_exit`. On `approve` the gate also requires, for every obligation that still has
    a `check_cmd` this round, `check_exit: 0` or a `gates_not_run` entry `check_cmd:<id>` (stated in
-   the PR body); a non-zero exit or neither one converts the verdict to `fix_code`. Limit: a
+   the PR body); any exit other than the integer 0, disclosed or not, or neither one converts the
+   verdict to `fix_code`. The coder may not edit what a `check_cmd` runs: a change from the plan
+   commit that touches its script, a Makefile or `*.mk` (for `make`) or `.pre-commit-config.yaml`
+   (for `pre-commit run`) converts an `approve` to `fix_code` unless the obligation's `files` list
+   that path (a local hook's entry file is refused earlier, by the fixer step). Limits: a
    `check_cmd` that cannot run in the scratch worktree (a missing tool or dependency) is only
-   stated as not run, and a CI rule with no `check_cmd` is still judged from the diff alone.
+   stated as not run; a module a check script imports is not traced; and a CI rule with no
+   `check_cmd` is still judged from the diff alone. `gates_not_run` in the PR is the union of the
+   judge's list and the gates the script knows did not run.
 3. **Push hook rejection goes back to the coder.** The push step classifies its result as
-   `push_result: ok | hook_rejected | network | non_ff | remote_rejected`, on git's own lines only
-   (lines that start with `error:`, `fatal:` or ` ! [`), never on the hook's output or the remote
-   URL. Checked against real git output: a failing local pre-push hook gives exit code 1 and only
+   `push_result: ok | hook_rejected | network | non_ff | remote_rejected | ambiguous`, on
+   line-start prefixes only (`error:`, `fatal:`, ` ! [`), never on words inside a line or the
+   remote URL. A hook can print the same prefixes, so no rule retries what may be a hook's verdict.
+   Checked against real git output: a failing local pre-push hook gives exit code 1 and only
    `error: failed to push some refs`; a non-fast-forward gives ` ! [rejected] ... (fetch first)` or
    `(non-fast-forward)`; a network error gives exit code 128 and a `fatal:` line. `hook_rejected`
    is not a stop: the script routes the hook output tail (`hook_tail`) to the coder as a `fix_code`
@@ -744,11 +774,14 @@ obligation in its uncommitted changes and reports `obligations_done`.
    push (`infra:push:p<n>`). `non_ff` and `remote_rejected` (` ! [remote rejected]`: a server hook
    or branch protection) stop with `needs_human`; `network` is retried 3 times with backoff and
    then fails. Since 3.1.0 a program classifies, not the agent: `PUSH_CLASSIFY_PY` reads the first
-   attempt's output file and exit code and prints `{push_result, exit_code, hook_tail, digest}`.
-   One rule is added: an `error: RPC failed` line (an HTTP 5xx on the pack upload) is never
-   `hook_rejected`. The script accepts `hook_rejected` only with exit code 1 and the program's
-   digest. The tests replay git 2.55.0 output captured for `[remote rejected]`, a declined
-   pre-push hook, a non-fast-forward, HTTP 500/502 on the upload and HTTP 500/503 on `info/refs`.
+   attempt's output file and exit code and prints `{push_result, exit_code, hook_tail, args,
+digest}`. `error: failed to push some refs` with exit 1 and a `fatal:` or `error: RPC failed`
+   line (a hook's line or a transport failure: they cannot be told apart) is `ambiguous`, a stop
+   with `needs_human`, never a network retry that re-runs the hook. A git-lfs pre-push network
+   failure is `hook_rejected`. The script accepts `hook_rejected` only with exit code 1, the
+   program's digest and `args` naming a file outside the worktree and that exit code. The tests
+   replay git 2.55.0 output captured for `[remote rejected]`, a declined pre-push hook, a
+   non-fast-forward, HTTP 500/502 on the upload and HTTP 500/503 on `info/refs`.
 
 #### Command safety
 
@@ -891,7 +924,9 @@ listed in `gates_not_run`.
 Judges (test, code, intent, pr-review, sweep), preflight, intake, branch-scan, load-ref, verify,
 the pre-commit id read, the review path listing, the comment listing, the ledger task reads and the
 hasher run as the `fleet:judge` agent, which has `Write`, `Edit` and `NotebookEdit` disallowed, and
-(since 3.1.0) the yadgar `task_write`, `wiki_add`, `wiki_append_section` and `wiki_update` tools. `Bash` stays, because
+(since 3.1.0) every yadgar writer (`task_write`, the `wiki_*` writers, `memorize`, `forget`,
+`memory_update`, `anchor`, the `block_*` writers, `adr_add`, `agent_prompt_save`, `config_set`);
+a denylist, hygiene only, because the judge has `Bash`. `Bash` stays, because
 the code judge must run the suite. The backstop is a worktree state (HEAD, the temp-index tree and
 every hasher map) taken before and after every judge run. Any difference discards the verdict and
 returns `needs_human` with reason `judge mutated worktree` and the changed parts. This catches a

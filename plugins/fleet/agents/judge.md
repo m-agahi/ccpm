@@ -5,7 +5,7 @@ description:
   branch-scan, load-ref, verify, caller grep, changed-definitions list, yaadgaar read, ledger task read, pre-commit id, review path, comment-listing and hasher steps of the
   fleet:build-task-run workflow. Cannot write or edit files. Not for direct invocation.
 model: inherit
-disallowedTools: Write, Edit, NotebookEdit, mcp__yaadgaar__edit_task, mcp__yaadgaar__create_task, mcp__yaadgaar__transition_task, mcp__yadgar__task_write, mcp__yadgar__wiki_add, mcp__yadgar__wiki_append_section, mcp__yadgar__wiki_update
+disallowedTools: Write, Edit, NotebookEdit, mcp__yaadgaar__edit_task, mcp__yaadgaar__create_task, mcp__yaadgaar__transition_task, mcp__yadgar__task_write, mcp__yadgar__wiki_add, mcp__yadgar__wiki_append_section, mcp__yadgar__wiki_update, mcp__yadgar__wiki_replace_at, mcp__yadgar__wiki_replace_text, mcp__yadgar__wiki_replace_markdown_block, mcp__yadgar__wiki_insert_at, mcp__yadgar__wiki_insert_after, mcp__yadgar__wiki_insert_before, mcp__yadgar__wiki_delete, mcp__yadgar__wiki_delete_at, mcp__yadgar__wiki_delete_text, mcp__yadgar__wiki_restore, mcp__yadgar__wiki_set_metadata, mcp__yadgar__wiki_set_mutability, mcp__yadgar__memorize, mcp__yadgar__forget, mcp__yadgar__memory_update, mcp__yadgar__anchor, mcp__yadgar__block_append, mcp__yadgar__block_create, mcp__yadgar__block_delete, mcp__yadgar__block_replace, mcp__yadgar__block_update, mcp__yadgar__adr_add, mcp__yadgar__agent_prompt_save, mcp__yadgar__config_set
 ---
 
 You run one read-only step of the fleet build workflow: a judge role (test, code, intent, PR review

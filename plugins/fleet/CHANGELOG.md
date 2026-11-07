@@ -2,24 +2,28 @@
 
 ## [3.1.0] - 2026-11-07
 
-Ledger tasks 1959, 1958, 1935 and 1941.
+Ledger tasks 1959, 1958, 1935, 1941 and 1960, plus the review rounds of PR #38.
 
 **Deploy order:** update the role page `fleet-code-judge` in place to version 15 BEFORE installing
-3.1.0. The change is additive (a new optional `check_exit` key in `obligations_check` entries, and
-the rule that the judge runs every allowlisted `check_cmd`), so 3.0.0 keeps running on the new page
-and logs "prose-only changes assumed". 3.1.0 pins `fleet-code-judge` 15: an older page stops the
-run in preflight ("... must be >= 15; update that page in place; see CHANGELOG 3.1.0 deploy
-order"). The contract marker stays `fleet-v3`.
+3.1.0. Version 15 makes the `check_cmd` run required and adds the optional `check_exit` key to
+`obligations_check` entries; no key is renamed or removed, so 3.0.0 keeps running on it and logs
+"prose-only changes assumed". 3.1.0 pins `fleet-code-judge` 15: an older page stops the run in
+preflight ("... must be >= 15; update that page in place; see CHANGELOG 3.1.0 deploy order"). The
+contract marker stays `fleet-v3`.
 
 ### New stops (fail-closed additions; no key renamed or removed)
 
-- A remote hook repo with no cached pre-commit clone at its rev is fetched shallowly at that rev;
-  a fetch that fails or times out, a rev that does not resolve, a missing manifest, or a transport
-  other than `https://` and `git@<host>:<path>` stops plan and build (`stop_gate: iac`).
-- A code-judge `approve` with an allowlisted `check_cmd` that exited non-zero, or that has no
-  `check_exit` and no `gates_not_run` entry `check_cmd:<id>`, becomes a `fix_code` round.
-- A verify, commit-plan or `hook_rejected` push relay that does not match its program's digest
-  fails the run.
+- A remote hook repo with no cached pre-commit clone at its rev is fetched shallowly at that rev.
+  A fetch that fails or times out, a rev that does not resolve, a missing manifest, a transport
+  other than `https://` and `git@<host>:<path>`, a host off the allowlist, more than 20 fetches or
+  more than 120 s of fetching stops plan and build (`stop_gate: iac`). A root
+  `.pre-commit-config.yaml` that PyYAML cannot read (or no PyYAML at all) stops them too.
+- A code-judge `approve` becomes a `fix_code` round when an allowlisted `check_cmd` exited
+  non-zero, has no `check_exit` and no `gates_not_run` entry `check_cmd:<id>`, or when the change
+  edits what that `check_cmd` runs and the obligation does not list the file.
+- A push whose output mixes the hook's lines with git's (`ambiguous`) stops for a human.
+- A verify, commit-plan or `hook_rejected` push relay that does not match its program's digest,
+  or whose program ran on other arguments, fails the run.
 
 ### Changed
 
@@ -29,51 +33,77 @@ order"). The contract marker stays `fleet-v3`.
   (the 3.1.0 page write). `scope-and-plan` 27, `plan-audit` 16, `fleet-coder` 17, `fleet-pr-opener`
   10 and `fleet-intent-judge` 2 are unchanged.
 - **verify-plan and commit-plan relay programs, not git output** (ledger 1959). `infra:verify-plan`
-  runs `VERIFY_SINCE_PY` (worktree, plan commit, plan path), which prints
-  `{head, is_ancestor, commits_since, plan_touched, changed_since, digest}`; `infra:commit-plan`
-  runs `PLAN_FILES_PY`, which prints `{head, files, digest}`. The script recomputes each digest and
-  stops the run (`failed`) on a dropped or changed entry, or on a missing list. Both programs run
-  with `python3 -I`, take the worktree as an argument and change to `/` before they run git.
+  runs `VERIFY_SINCE_PY`, which prints
+  `{head, is_ancestor, commits_since, plan_touched, changed_since, args, digest}`;
+  `infra:commit-plan` runs `PLAN_FILES_PY`, which prints `{head, files, args, digest}`. `args`
+  echoes the program's arguments. The script recomputes each digest, compares `args` with what it
+  passed, and stops the run (`failed`) on any difference or a missing list. Both programs run with
+  `python3 -I`, take the worktree as an argument and change to `/` before they run git.
 - **The push classifier is a program** (ledger 1935c). `infra:push` runs `PUSH_CLASSIFY_PY` on the
-  first attempt's output and exit code; it prints `{push_result, exit_code, hook_tail, digest}`.
-  The rules are the 3.0.0 rules, plus one: an `error: RPC failed` line is never `hook_rejected`
-  (a transport failure, retried as `network`). The script accepts `hook_rejected`, the one result
-  that does not stop the run, only with exit code 1 and the program's digest.
+  first attempt's output and exit code; it prints `{push_result, exit_code, hook_tail, args,
+digest}`. It reads line-start prefixes only, and a pre-push hook can print the same prefixes, so
+  no rule retries what may be a hook's verdict (a retry re-runs the hook): `error: failed to push
+  some refs` (git's line for a declined pre-push hook) with exit 1 and no ` ! [` is
+  `hook_rejected`, unless a `fatal:` or `error: RPC failed` line is there too, which is the new
+  `ambiguous` (a stop for a human). A git-lfs pre-push network failure is `hook_rejected`. Only an
+  output with no hook verdict is `network` and retried. The script accepts `hook_rejected` only
+  with exit code 1, the program's digest and `args` that name a file outside the worktree and that
+  exit code.
 - **CI-only obligations are checked before the push** (ledger 1935b). The code judge (page 15)
   runs every allowlisted `check_cmd` in a scratch worktree loaded with the judged tree and reports
-  `check_exit` in the obligation's `obligations_check` entry. On `approve`, the obligations gate
-  also converts the verdict to `fix_code` for an obligation whose `check_cmd` exited non-zero, or
-  that has neither `check_exit: 0` nor a `gates_not_run` entry `check_cmd:<id>` (which the PR body
-  states). An obligation whose `check_cmd` the script check demoted that round needs no exit. The
-  workflow script still runs no planner command. In `commands`, a check_cmd now shows
+  `check_exit`. On `approve`, the obligations gate converts the verdict to `fix_code` for an
+  obligation whose `check_cmd` exited with anything but the integer 0 (disclosed or not), or that
+  has neither `check_exit: 0` nor a `gates_not_run` entry `check_cmd:<id>` (stated in the PR
+  body). An obligation whose `check_cmd` the script check demoted that round needs no exit. The
+  workflow script still runs no planner command. In `commands`, a check_cmd shows
   `code-judge (required)` as its `run_by`.
-- **Write-back to a yadgar ledger task without a body page** (ledger 1958). The write-back step
-  returns `no_body` and the task's title for such a task instead of failing it. A read-only judge
-  step (`infra:ledger-read:pre`) reads the task again; its title must equal the first read and it
-  must still have no `body_slug`. The new `fleet:ledger-writer` agent (MCP tools only: no shell,
-  no file tools, no yaadgaar writes) then runs `infra:ledger-body`: it re-reads the task (title
-  byte for byte, else it writes nothing), creates the page with `wiki_add` at the slug the script
-  computes, `{project with / as _}_task-<id>` (`upsert=False`, `wait=True`; an existing page is
-  appended to only when it lacks the marker, never overwritten), and links it with
-  `task_write(project_id, id, title=<the current title>, body_slug=<slug>)`. A second judge read
-  (`infra:ledger-read:post`) must show the same title, the computed `body_slug` and the marker;
-  otherwise the entry fails and hands `section_text` back, and a changed title is named ("restore
-  the title by hand"). A project that is not `<owner>/<repo>` writes nothing. The yaadgaar path is
-  unchanged. `fleet:judge` can no longer call `task_write`, `wiki_add`, `wiki_append_section` or
-  `wiki_update`.
-- **IaC scan: remote hook manifests and untracked hook scripts** (ledger 1941b). For every remote
-  hook repo of the root `.pre-commit-config.yaml`, the scan reads `.pre-commit-hooks.yaml` and the
-  clone files it names from the pre-commit cache (`db.db` maps repo and rev to the clone; a key
-  with `additional_dependencies` counts too). A remote repo with no cached clone at its rev is
-  fetched: `git init` of a scratch repo outside the worktree (hooks off), a shallow
-  `git fetch --depth 1` of the url and rev (https and ssh only, no prompt, 120 s timeout), then
-  `git show` of the manifest at `FETCH_HEAD`; the scratch repo is removed. Any failure refuses. Each rev
-  belongs to the repo before it; a rev that cannot be paired refuses. Only the root config's
-  remote repos are read.
-  The scan also reads an untracked or ignored worktree file that a scanned hook text names
-  (`worktree:<path>`), and follows it like a tracked one. Not closed, and documented: code inside
-  an installed hook package named by a command, and test code (the scan does not read tests: many
-  repos name the tools in test data, so it would refuse them).
+- **The coder may not edit what a check_cmd runs** (review F2). On `approve`, a change from the
+  plan commit to the judged tree that touches the check_cmd's script, a Makefile or `*.mk` (for
+  `make <target>`) or `.pre-commit-config.yaml` (for `pre-commit run <id>`) is a `fix_code` round,
+  unless the obligation's `files` list that path. A local hook's entry file was already refused by
+  the fixer step (`infra:format-code`). Limit: a module that a check script imports is not traced.
+- **`gates_not_run` is a union** (review). The PR states every gate the code judge lists plus every
+  gate the script knows did not run; the judge's list no longer replaces the script's.
+- **Write-back to a yadgar ledger task without a body page** (ledger 1958). A read-only judge step
+  (`infra:ledger-read:pre`, `fleet:judge`) reads every ledger task first. A task with a body page
+  goes to the append step (`infra:ledger-writeback`, as in 3.0.0). For a task with none,
+  `infra:ledger-body` runs on the new `fleet:ledger-writer` agent: it re-reads the task (title byte
+  for byte, else it writes nothing), creates the page with `wiki_add` at the slug the script
+  computes, `{project with / as _}_task-<id>` (`upsert=False`, `wait=True`; on `slug_exists` the
+  page must carry this project and the tag `ledger-<id>`, else "slug collision" and nothing is
+  written; it is appended to only when it lacks the marker, never overwritten), and links it with
+  `task_write(project_id, id, title=<the title the judge read>, body_slug=<slug>)`. A second judge
+  read (`infra:ledger-read:post`) must show the same title, the computed `body_slug` and the
+  marker; otherwise the entry fails and hands `section_text` back, and a changed title is named
+  ("restore the title by hand"). The title must have 1 to 200 code points. **The title check
+  works at the relay level only:** `task_write` requires a title on every update, so the write
+  itself can change it; the reads before and after detect that, they cannot prevent it. A project
+  that is not `<owner>/<repo>` writes nothing. The yaadgaar path is unchanged.
+- **Agent tools** (review F1). `fleet:ledger-writer` has a `tools:` allowlist: `ToolSearch`,
+  `StructuredOutput` and `mcp__yadgar__task_get`, `wiki_read`, `wiki_add`, `wiki_append_section`
+  and `task_write`; nothing else (no shell, no files, no other agent, no other MCP server).
+  `fleet:judge` keeps its denylist (it needs `Bash` and many read tools), extended to every yadgar
+  writer: `task_write`, the `wiki_*` writers, `memorize`, `forget`, `memory_update`, `anchor`, the
+  `block_*` writers, `adr_add`, `agent_prompt_save` and `config_set`. For the judge this is hygiene
+  only: it has `Bash`.
+- **IaC scan: remote hook manifests and untracked hook scripts** (ledger 1941b). The root
+  `.pre-commit-config.yaml` is parsed with PyYAML, run as in the fixer program (pre-commit's own
+  interpreter, else `python3`, `-I`, from `/`); each repo is paired with its own rev. For every
+  remote hook repo the scan reads `.pre-commit-hooks.yaml` and the files it names from the
+  pre-commit cache clone at that rev (`db.db`; a key with `additional_dependencies` counts too).
+  With no cached clone, it fetches: `git init` of a scratch repo outside the worktree (hooks off),
+  a shallow `git fetch --depth 1` of the url and rev, then `git show` of the manifest at
+  `FETCH_HEAD`; the scratch repo is removed. The fetch is limited to `https://` and
+  `git@<host>:<path>` (`protocol.allow=never` plus https and ssh), to the hosts `github.com`,
+  `gitlab.com`, `codeberg.org` and the host of the repo's own `origin` (never an IP literal,
+  `localhost`, `*.local` or `*.internal`), to 20 fetches and 120 s in all, with no prompt
+  (`GIT_TERMINAL_PROMPT=0`, an empty `GIT_ASKPASS`, `ssh -o BatchMode=yes -o
+StrictHostKeyChecking=yes`). The user's git config and credential helper stay, so a private hook
+  repo on an allowed host works; the helper sends a host's credentials only to that host. These
+  are the hosts pre-commit itself reaches for the same config at install time. The scan also reads
+  an untracked or ignored worktree file that a scanned hook text names (`worktree:<path>`). Not
+  closed, and documented: code inside an installed hook package named by a command, test code, and
+  remote manifests of configs other than the root one.
 - **IaC scan follows only names that can run** (ledger 1960). At 3.0.0 the scan refused ccpm and
   yadgar themselves: it followed names into README, CHANGELOG, plugin manifests, a Dockerfile named
   only in a `files:` filter, and test data. Now it never follows prose, docs or data (`*.md`,
@@ -90,9 +120,11 @@ order"). The contract marker stays `fleet-v3`.
 
 - Push fixtures captured from git 2.55.0: `[remote rejected]` from a pre-receive hook, a declined
   local pre-push hook, a non-fast-forward, HTTP 500 and 502 on the receive-pack POST, and HTTP 500
-  and 503 on `info/refs`. One derived (not observed) case: an RPC failure without its `fatal:`
-  line, which the 3.0.0 prose rule routed to `hook_rejected`. A gh 5xx error string in
-  `remote_head` stops the run (derived from gh's error format).
+  and 503 on `info/refs`. Derived (not observed): an RPC failure without its `fatal:` line, a hook
+  that prints a line-start `fatal:`, a git-lfs pre-push network failure, and a gh 5xx error string
+  in `remote_head`.
+- IaC fetch tests serve hook repos from local bare repos through a test-only URL rewrite
+  (`FLEET_IAC_TEST_INSTEADOF`), so CI needs no network.
 
 ## [3.0.0] - 2026-11-07
 
