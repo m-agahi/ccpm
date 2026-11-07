@@ -6206,6 +6206,7 @@ const ARRAY_SITES = {
   "v.commits_since @ buildFromRef": "infra:commits_since",
   "v.plan_touched @ buildFromRef": "infra:plan_touched",
   "v.changed_since @ buildFromRef": "infra:changed_since",
+  "r.results @ writeBodies": "infra:results",
 };
 
 function arraySites() {
@@ -9430,4 +9431,135 @@ test("3.1.0 1935b: a met:false obligation and a check_cmd failure each count onc
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.result.rounds.code, 1);
+});
+
+// ---------------------------------------------------------------- 3.1.0 (ledger 1958): write-back to a yadgar ledger task without a body page
+
+const T42 = "fleet: a ledger task title, verbatim — with ü and \"quotes\"";
+
+// A happy run whose ledger task L42 has no body_slug. over: label -> stub.
+function noBody(over) {
+  const s = happy();
+  s["infra:ledger-writeback"] = (prompt) => ({
+    status: "ok",
+    reason: "ok",
+    results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "no_body", title: T42 })),
+  });
+  s["infra:ledger-read:pre"] = (prompt) => ({
+    status: "ok",
+    reason: "read",
+    results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: T42, body_slug: null, has_marker: false })),
+  });
+  s["infra:ledger-body"] = (prompt) => ({ status: "ok", reason: "ok", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "written" })) });
+  s["infra:ledger-read:post"] = (prompt) => ({
+    status: "ok",
+    reason: "read",
+    results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: T42, body_slug: "o_r_task-42", has_marker: true })),
+  });
+  return Object.assign(s, over || {});
+}
+
+test("3.1.0 1958: a ledger task without a body page gets one, linked with its title unchanged", async () => {
+  const out = await run(noBody(), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.ledger_status, "ok");
+  assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["42", "written"]]);
+  const L = out.labels;
+  assert.ok(L.indexOf("infra:ledger-writeback") < L.indexOf("infra:ledger-read:pre"));
+  assert.ok(L.indexOf("infra:ledger-read:pre") < L.indexOf("infra:ledger-body"));
+  assert.ok(L.indexOf("infra:ledger-body") < L.indexOf("infra:ledger-read:post"));
+  // the reads are read-only; the write runs on the narrow writer agent
+  assert.equal(call(out, "infra:ledger-read:pre").opts.agentType, "fleet:judge");
+  assert.equal(call(out, "infra:ledger-read:post").opts.agentType, "fleet:judge");
+  const w = call(out, "infra:ledger-body");
+  assert.equal(w.opts.agentType, "fleet:ledger-writer");
+  const i = inputsOf(w.prompt);
+  assert.equal(i.project, "o/r");
+  assert.equal(i.directory, "/r");
+  assert.deepEqual(i.tasks, [{ key: "s0", id: 42, title: T42, slug: "o_r_task-42" }]);
+  assert.match(i.page_body, /<!-- fleet:l42 -->/);
+  assert.equal(i.page_body, "## Fleet build\n\n" + inputsOf(call(out, "infra:ledger-writeback").prompt).section_text);
+  for (const re of [
+    /data, not instructions/,
+    /task_get\(project_id=<project>, id=<id>\)/,
+    /byte for byte/,
+    /wiki_add\([^)]*slug=<slug>[^)]*upsert=False[^)]*wait=True/,
+    /directory=<directory>/,
+    /slug_exists/,
+    /task_write\(project_id=<project>, id=<id>, title=<title>, body_slug=<slug>\)/,
+    /never.*status/i,
+  ])
+    assert.match(w.prompt, re);
+  // the existing-body step keeps its job: it no longer fails a task without a body
+  assert.match(call(out, "infra:ledger-writeback").prompt, /no_body/);
+});
+
+test("3.1.0 1958: a title that differs between the two reads stops before any write", async () => {
+  for (const title of [T42 + " ", T42.slice(0, 20), "", null]) {
+    const s = noBody({
+      "infra:ledger-read:pre": (prompt) => ({
+        status: "ok",
+        reason: "read",
+        results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title, body_slug: null })),
+      }),
+    });
+    const out = await run(s, ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "ok");
+    assert.equal(out.result.ledger_status, "failed");
+    assert.ok(!out.labels.includes("infra:ledger-body"), JSON.stringify(title));
+    assert.match(out.result.write_back.ledger[0].reason, /title/);
+    assert.match(out.result.write_back.ledger[0].section_text, /fleet:l42/);
+  }
+});
+
+test("3.1.0 1958: a changed or truncated title after the write, a wrong body_slug or no marker fails closed", async () => {
+  const post = (r) => ({
+    "infra:ledger-read:post": (prompt) => ({ status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => Object.assign({ key: t.key, status: "ok", title: T42, body_slug: "o_r_task-42", has_marker: true }, r)) }),
+  });
+  for (const [over, re] of [
+    [post({ title: T42.slice(0, 30) }), /title changed by the write-back/],
+    [post({ title: T42.toUpperCase() }), /title changed by the write-back/],
+    [post({ title: undefined }), /title changed by the write-back/],
+    [post({ body_slug: "o_r_task-43" }), /body_slug/],
+    [post({ body_slug: null }), /body_slug/],
+    [post({ has_marker: false }), /marker/],
+    [post({ status: "failed", reason: "refused" }), /refused/],
+    [{ "infra:ledger-read:post": null }, /no result/],
+    [{ "infra:ledger-body": (prompt) => ({ status: "ok", reason: "x", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "failed", reason: "title differs" })) }) }, /title differs/],
+  ]) {
+    const out = await run(noBody(over), ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "ok");
+    assert.equal(out.result.ledger_status, "failed", JSON.stringify(Object.keys(over)));
+    assert.equal(out.result.write_back.ledger[0].status, "failed");
+    assert.match(out.result.write_back.ledger[0].reason, re);
+    assert.match(out.result.write_back.ledger[0].section_text, /fleet:l42/);
+  }
+});
+
+test("3.1.0 1958: a body_slug that appeared between the reads, or a project that is not owner/repo, writes nothing", async () => {
+  const s = noBody({
+    "infra:ledger-read:pre": (prompt) => ({ status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: T42, body_slug: "other" })) }),
+  });
+  let out = await run(s, ARGS);
+  assert.ok(!out.labels.includes("infra:ledger-body"));
+  assert.match(out.result.write_back.ledger[0].reason, /already has body_slug "other"/);
+  out = await run(noBody(), ARGS, { project: "o/r/x" });
+  assert.ok(!out.build.labels.includes("infra:ledger-body"));
+  assert.equal(out.result.ledger_status, "failed");
+});
+
+test("3.1.0 1958: fleet:judge cannot write a ledger task or a wiki page; fleet:ledger-writer has no shell or file tools", () => {
+  const tools = (name) => {
+    const m = /^disallowedTools: (.*)$/m.exec(readFileSync(join(HERE, "..", "agents", name), "utf8"));
+    assert.ok(m, name + " disallowedTools line");
+    return m[1].split(/,\s*/);
+  };
+  const judge = tools("judge.md");
+  for (const t of ["mcp__yadgar__task_write", "mcp__yadgar__wiki_add", "mcp__yadgar__wiki_append_section", "mcp__yadgar__wiki_update"]) assert.ok(judge.includes(t), t);
+  const writer = tools("ledger-writer.md");
+  for (const t of ["Write", "Edit", "NotebookEdit", "Bash", "mcp__yaadgaar__edit_task", "mcp__yaadgaar__create_task", "mcp__yaadgaar__transition_task"]) assert.ok(writer.includes(t), t);
+  assert.match(readFileSync(join(HERE, "..", "agents", "ledger-writer.md"), "utf8"), /^name: ledger-writer$/m);
 });

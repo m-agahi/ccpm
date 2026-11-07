@@ -37,6 +37,20 @@ order"). The contract marker stays `fleet-v3`.
   states). An obligation whose `check_cmd` the script check demoted that round needs no exit. The
   workflow script still runs no planner command. In `commands`, a check_cmd now shows
   `code-judge (required)` as its `run_by`.
+- **Write-back to a yadgar ledger task without a body page** (ledger 1958). The write-back step
+  returns `no_body` and the task's title for such a task instead of failing it. A read-only judge
+  step (`infra:ledger-read:pre`) reads the task again; its title must equal the first read and it
+  must still have no `body_slug`. The new `fleet:ledger-writer` agent (MCP tools only: no shell,
+  no file tools, no yaadgaar writes) then runs `infra:ledger-body`: it re-reads the task (title
+  byte for byte, else it writes nothing), creates the page with `wiki_add` at the slug the script
+  computes, `{project with / as _}_task-<id>` (`upsert=False`, `wait=True`; an existing page is
+  appended to only when it lacks the marker, never overwritten), and links it with
+  `task_write(project_id, id, title=<the current title>, body_slug=<slug>)`. A second judge read
+  (`infra:ledger-read:post`) must show the same title, the computed `body_slug` and the marker;
+  otherwise the entry fails and hands `section_text` back, and a changed title is named ("restore
+  the title by hand"). A project that is not `<owner>/<repo>` writes nothing. The yaadgaar path is
+  unchanged. `fleet:judge` can no longer call `task_write`, `wiki_add`, `wiki_append_section` or
+  `wiki_update`.
 - **Writers and the test judge get the plan's env** (ledger 1935a): already true in 3.0.0 (they get
   the whole `test_cmd`, `env` included, plus `test_env`); a regression test now pins it.
 
