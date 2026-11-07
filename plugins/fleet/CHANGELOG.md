@@ -15,7 +15,21 @@ Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
 
 ### Changed
 
+- **plan-audit findings name their symbol** (ledger 1957). A plan-audit `routed_findings` entry
+  may carry an optional `symbol`. The `:audit-fix` round must keep every symbol a finding names in
+  its caller map, as it already does for grep findings. The shared test-judge and code-judge
+  findings schema is unchanged.
+- **Preflight pin message.** A page below its pin now reads "the agent_prompt_get(<role>, project
+  m-agahi/yadgar) wiki version <N> must be >= <M>; update that page in place; see CHANGELOG 3.0.0
+  deploy order". The old text implied the page lives in project m-agahi/yadgar; it lives in the
+  shared wiki and that call resolves it.
+- README: "or a finding named" now reads "and every symbol that one of its findings names".
+
 ### Fixed
+
+- **Tests for two mutants of the `:audit-fix` carry** (ledger 1957): H6, a round refused only
+  for a confusable character must carry its caller map; H8, a map with a malformed entry must
+  carry its valid entries. Each test fails on its mutant.
 
 ## [2.1.6] - 2026-11-07
 

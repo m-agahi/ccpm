@@ -886,6 +886,16 @@ const FINDINGS = {
     required: ["target", "finding"],
   },
 };
+// plan-audit findings may name the changed symbol they are about (3.0.0): the
+// :audit-fix round must keep every named symbol in its caller map.
+const AUDIT_FINDINGS = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: { target: STR, criterion: STR_OR_NULL, symbol: STR, finding: STR },
+    required: ["target", "finding"],
+  },
+};
 const SUITE = { type: "object" };
 const REVIEW_FINDINGS = {
   type: "array",
@@ -994,7 +1004,7 @@ const SCHEMAS = {
   }),
   "plan-audit": roleSchema({
     verdict: { type: "string", enum: ["approve", "untestable_criteria", "plan_defect"] },
-    routed_findings: FINDINGS,
+    routed_findings: AUDIT_FINDINGS,
   }),
   "fleet-test-writer": roleSchema({
     criterion_id: STR,
@@ -3137,7 +3147,7 @@ async function preflightStep() {
     if (got < want)
       halt(
         "needs_human",
-        "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): update agent-prompt-" + role + " (project " + ROLE_PROJECT + ") to >= v" + want + "; see CHANGELOG 2.1.6 deploy order",
+        "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): the agent_prompt_get(" + role + ", project " + ROLE_PROJECT + ") wiki version " + got + " must be >= " + want + "; update that page in place; see CHANGELOG 3.0.0 deploy order",
         "contract",
       );
     if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");

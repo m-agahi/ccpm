@@ -88,8 +88,10 @@ criterion, dont_care}]}`; each occurrence maps to exactly one of an existing cri
 doc excluded; the relayed lists are checked against the program's digest). A malformed map, a hit
 the map leaves out, a mapped line that is no hit, more than 100 hits for one symbol or more than 30
 symbols stop the run with `needs_human`, or go to the one `:audit-fix` round under confirm auto.
-The `:audit-fix` round must keep every symbol the refused round mapped or a finding named
-(narrower symbols only in addition); a dropped or swapped symbol stops the run. plan-audit gets
+The `:audit-fix` round must keep every symbol the refused round mapped and every symbol that one
+of its findings names (narrower symbols only in addition); a dropped or swapped symbol stops the
+run. A plan-audit routed finding may name its symbol in an optional `symbol` key (3.0.0); the
+script carries it like a grep finding's. plan-audit gets
 the map, `caller_check` (`{method, limits, occurrences}`) and, in the `:audit-fix` round,
 `prior_round` (`{reason, findings, changed_symbols}`); the intent judge gets the map under confirm
 auto. The grep reads the working tree content of the tracked files and is name-based: a call

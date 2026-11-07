@@ -7308,7 +7308,7 @@ test("2.1.6 review: a role page below its pin names the page, the project and th
   s.preflight.versions["scope-and-plan"] = 25;
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /update agent-prompt-scope-and-plan \(project m-agahi\/yadgar\) to >= v26; see CHANGELOG 2\.1\.6 deploy order/);
+  assert.match(out.result.reason, /agent_prompt_get\(scope-and-plan, project m-agahi\/yadgar\) wiki version 25 must be >= 26; update that page in place; see CHANGELOG 3\.0\.0 deploy order/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -7349,4 +7349,77 @@ test("2.1.6 review: the grep limits say what is really missed", () => {
   assert.match(src, /working tree/);
   assert.doesNotMatch(src, /HEAD state/);
   assert.doesNotMatch(src, /getattr/);
+});
+
+// ---------------------------------------------------------------- 3.0.0 (ledger 1957)
+
+// H6: a round refused only for a confusable character still carries its caller map.
+test("3.0.0 H6: a round refused only for a confusable character carries its map; the :audit-fix round may not drop a symbol", async () => {
+  const mk = (round2) => {
+    const crit = criteria(2);
+    crit[1].examples = ["a b"];
+    const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP], null, () => autoHappy({ criteria: crit }));
+    s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], criteria: criteria(2), changed_symbols: round2 };
+    s["infra:callers:audit-fix"] = callersOut(GV_HITS);
+    s["role:plan-audit:audit-fix"] = s["role:plan-audit"];
+    return s;
+  };
+  const out = await runOne(mk([]), AUTO);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /dropped guard_verdict/);
+  assert.ok(!out.labels.includes("infra:callers"), "the refused round never reached the grep");
+  const kept = await runOne(mk([{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] }]), AUTO);
+  noUnscripted(kept);
+  assert.equal(kept.result.status, "ok", kept.result.reason);
+  const a = inputsOf(call(kept, "role:plan-audit:audit-fix").prompt);
+  assert.deepEqual(a.prior_round.changed_symbols, [{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] }]);
+});
+
+// H8: a malformed entry refuses the map, but its valid entries are still carried.
+test("3.0.0 H8: a map with a malformed entry carries its valid entries into the :audit-fix round", async () => {
+  const mk = (round2) => {
+    const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP], null, autoHappy);
+    s["role:scope-and-plan"].changed_symbols.push("not an entry");
+    s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], changed_symbols: round2 };
+    s["infra:callers:audit-fix"] = callersOut(GV_HITS);
+    s["role:plan-audit:audit-fix"] = s["role:plan-audit"];
+    return s;
+  };
+  const out = await runOne(mk([]), AUTO);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /dropped guard_verdict/);
+  const kept = await runOne(mk([{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] }]), AUTO);
+  noUnscripted(kept);
+  assert.equal(kept.result.status, "ok", kept.result.reason);
+  const a = inputsOf(call(kept, "role:plan-audit:audit-fix").prompt);
+  assert.deepEqual(a.prior_round.changed_symbols, [{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] }]);
+  assert.ok(a.prior_round.findings.some((f) => /entry 1 is not an object/.test(f.finding)));
+});
+
+test("3.0.0 plan-audit routed_findings declare an optional symbol; a symbol an audit finding names is carried", async () => {
+  const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP], null, autoHappy);
+  s["role:plan-audit"] = {
+    status: "ok",
+    reason: "defect",
+    verdict: "plan_defect",
+    routed_findings: [{ target: "plan", criterion: null, symbol: "prestop_sleep", finding: "prestop_sleep at chart/render.py:70 is unmodelled" }],
+  };
+  s["role:scope-and-plan:audit-fix"] = s["role:scope-and-plan"];
+  s["infra:callers:audit-fix"] = callersOut(GV_HITS);
+  const out = await runOne(s, AUTO);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /dropped prestop_sleep/);
+  const items = call(out, "role:plan-audit").opts.schema.properties.routed_findings.items;
+  assert.deepEqual(items.properties.symbol, { type: "string" });
+  assert.ok(items.required.indexOf("symbol") < 0, "symbol stays optional");
+});
+
+test("3.0.0 preflight: a page below its pin names the agent_prompt_get wiki version, not a page in that project", async () => {
+  const s = happy();
+  s.preflight.versions["plan-audit"] = 14;
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /agent_prompt_get\(plan-audit, project m-agahi\/yadgar\) wiki version 14/);
+  assert.match(out.result.reason, /see CHANGELOG 3\.0\.0 deploy order/);
+  assert.doesNotMatch(out.result.reason, /update agent-prompt-plan-audit \(project/);
 });
