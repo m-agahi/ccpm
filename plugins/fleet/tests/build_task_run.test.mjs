@@ -63,11 +63,11 @@ function inputsOf(prompt) {
 
 // The minimum role versions the workflow was built against.
 const FROZEN_VERSIONS = {
-  "scope-and-plan": 26,
-  "plan-audit": 15,
+  "scope-and-plan": 27,
+  "plan-audit": 16,
   "fleet-test-writer": 9,
   "fleet-test-judge": 9,
-  "fleet-coder": 16,
+  "fleet-coder": 17,
   "fleet-code-judge": 13,
   "fleet-pr-opener": 10,
   "fleet-intent-judge": 2,
@@ -1866,10 +1866,10 @@ test("S-2: roles get only criterion test files in frozen_tests; config files go 
 
 test("S-8: a role version lower than the frozen minimum stops in preflight", async () => {
   const s = happy();
-  s.preflight.versions["fleet-coder"] = 15;
+  s.preflight.versions["fleet-coder"] = 16;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder version 15 < frozen 16/);
+  assert.match(out.result.reason, /role fleet-coder version 16 < frozen 17/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -1881,7 +1881,7 @@ test("S-8: a higher role version is logged as prose-only and recorded", async ()
   assert.equal(out.result.status, "ok");
   assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v14 > frozen v13: prose-only changes assumed/.test(l)));
   assert.equal(out.result.role_versions["fleet-code-judge"], 14);
-  assert.equal(out.result.role_versions["fleet-coder"], 16);
+  assert.equal(out.result.role_versions["fleet-coder"], 17);
 });
 
 test("S-8: a role runner that loaded a different version than preflight is discarded", async () => {
@@ -3737,8 +3737,8 @@ test("a stale-bytecode suspicious entry after the coder rejects the round", asyn
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-test("role versions: scope-and-plan 26, plan-audit 15, coder 16 and code-judge 13 are the minimums", async () => {
-  for (const [role, v] of [["scope-and-plan", 25], ["plan-audit", 14], ["fleet-coder", 15], ["fleet-code-judge", 12]]) {
+test("role versions: scope-and-plan 27, plan-audit 16, coder 17 and code-judge 13 are the minimums (3.0.0)", async () => {
+  for (const [role, v] of [["scope-and-plan", 26], ["plan-audit", 15], ["fleet-coder", 16], ["fleet-code-judge", 12]]) {
     const s = happy();
     s.preflight.versions[role] = v;
     const out = await runOne(s, ARGS);
@@ -7386,7 +7386,7 @@ test("2.1.6 review: a role page below its pin names the page, the project and th
   s.preflight.versions["scope-and-plan"] = 25;
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /agent_prompt_get\(scope-and-plan, project m-agahi\/yadgar\) wiki version 25 must be >= 26; update that page in place; see CHANGELOG 3\.0\.0 deploy order/);
+  assert.match(out.result.reason, /agent_prompt_get\(scope-and-plan, project m-agahi\/yadgar\) wiki version 25 must be >= 27; update that page in place; see CHANGELOG 3\.0\.0 deploy order/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {

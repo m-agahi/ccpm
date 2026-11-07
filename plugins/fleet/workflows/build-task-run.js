@@ -49,11 +49,11 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 26,
-  "plan-audit": 15,
+  "scope-and-plan": 27,
+  "plan-audit": 16,
   "fleet-test-writer": 9,
   "fleet-test-judge": 9,
-  "fleet-coder": 16,
+  "fleet-coder": 17,
   "fleet-code-judge": 13,
   "fleet-pr-opener": 10,
   "fleet-intent-judge": 2,

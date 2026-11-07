@@ -725,7 +725,9 @@ The script pins the role contract, not the prose:
 - 2.1.1 pins: scope-and-plan 24, plan-audit 13, fleet-test-writer 9, fleet-test-judge 9,
   fleet-coder 16, fleet-code-judge 13, fleet-pr-opener 10, fleet-intent-judge 2, pr-review 17,
   gate-change-nonweakening-sweep 4. 2.1.6 raises scope-and-plan to 26 and plan-audit to 15
-  (`changed_symbols`, `caller_check`).
+  (`changed_symbols`, `caller_check`). 3.0.0 raises scope-and-plan to 27, plan-audit to 16 and
+  fleet-coder to 17 (the build-time caller check and the optional finding `symbol`; additive, so
+  the marker stays `fleet-v3`).
 - Each role runner reports the version and marker it loaded. A value that differs from preflight
   (the page changed mid-run) discards the result.
 - `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are

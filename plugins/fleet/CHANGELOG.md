@@ -4,7 +4,18 @@
 
 Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
 
+**Deploy order:** update the role pages `scope-and-plan` (to version 27 or later), `plan-audit`
+(16 or later) and `fleet-coder` (17 or later) BEFORE installing 3.0.0. The page changes are
+additive, so 2.1.6 keeps running on them (it logs "prose-only changes assumed"). 3.0.0 pins those
+minimums: an older page stops the run in preflight with "the agent_prompt_get(<role>, project
+m-agahi/yadgar) wiki version <N> must be >= <M>; update that page in place; see CHANGELOG 3.0.0
+deploy order". The contract marker stays `fleet-v3`: no key was renamed or removed and no meaning
+changed; the new page text and the optional `symbol` key are additions, guarded by the pins.
+
 ### Breaking changes
+
+- **Higher role-page pins:** scope-and-plan 27, plan-audit 16, fleet-coder 17 (see the deploy
+  order above).
 
 - **Build-time caller check** (ledger 1956). After the code judge approves a tree and before
   every commit, the run stops (`needs_human`, new `stop_gate: "callers"`) on a modified existing
