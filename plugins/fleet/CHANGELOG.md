@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.0.0] - 2026-11-07
+
+Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
+
+### Breaking changes
+
+### Added
+
+### Changed
+
+### Fixed
+
 ## [2.1.6] - 2026-11-07
 
 Caller coverage for changed symbols (ledger 1955) and the minor findings of the PR #33 re-review
