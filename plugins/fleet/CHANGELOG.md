@@ -64,7 +64,8 @@ order"). The contract marker stays `fleet-v3`.
   hook repo of the root `.pre-commit-config.yaml`, the scan reads `.pre-commit-hooks.yaml` and the
   clone files it names from the pre-commit cache (`db.db` maps repo and rev to the clone; a key
   with `additional_dependencies` counts too). A remote repo with no cached clone at a configured
-  rev is an error, so the run stops (fail-closed): run `pre-commit install-hooks`, then plan again.
+  rev is an error, so the run stops (fail-closed); the error says to run `pre-commit install-hooks`
+  in the repo, then plan again. Only the root config's remote repos are read.
   The scan also reads an untracked or ignored worktree file that a scanned hook text names
   (`worktree:<path>`), and follows it like a tracked one. Not closed, and documented: code inside
   an installed hook package named by a command, and test code (the scan does not read tests: many

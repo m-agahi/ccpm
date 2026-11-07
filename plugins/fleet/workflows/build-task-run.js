@@ -3680,7 +3680,7 @@ if '.pre-commit-config.yaml' in tracked:
             got = [(r, ref, path) for (r, ref, path) in rows if (r == url or r.startswith(url + ':')) and ref in revs]
             if not got or not all(os.path.isdir(path) for (_, _, path) in got):
                 done(iac_files=files[:CAP], iac_text=text[:CAP], error='remote hook repo ' + url + ' is not in the pre-commit cache ' + pc_home +
-                     ' at a configured rev (' + ', '.join(sorted(revs)) + '): its hook manifest cannot be scanned')
+                     ' at a configured rev (' + ', '.join(sorted(revs)) + '): its hook manifest cannot be scanned; run pre-commit install-hooks in the repo (it runs no hook), then plan again')
             for (r, ref, path) in got:
                 label = 'remote:' + r + '@' + ref
                 seen.add((label, '.pre-commit-hooks.yaml'))

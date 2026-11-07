@@ -6125,6 +6125,7 @@ test("2.1.2 IaC scan program: files, hook dirs, hook managers, Makefile, package
     assert.deepEqual(scan(wt2, "HEAD").iac_text, ["ci/hooks.yaml"]);
   } finally {
     rmSync(wt2, { recursive: true, force: true });
+    rmSync(pcHome, { recursive: true, force: true });
   }
 });
 
@@ -9606,7 +9607,7 @@ test("3.1.0 1941b: the IaC scan reads remote hook manifests from the pre-commit 
     // additional_dependencies: pre-commit keys the clone as <repo>:<deps>
     [cfg(), [[U + ":pyyaml", "v1.2.0", Object.assign({}, clean, { "hooks/fmt.sh": "digger plan\n" })]], {}, ["remote:" + U + ":pyyaml@v1.2.0:hooks/fmt.sh"], null],
     // not cached, or cached at another rev: the manifest cannot be scanned
-    [cfg(), [], {}, [], /remote hook repo https:\/\/example\.com\/acme\/hooks is not in the pre-commit cache/],
+    [cfg(), [], {}, [], /remote hook repo https:\/\/example\.com\/acme\/hooks is not in the pre-commit cache .* run pre-commit install-hooks in the repo/],
     [cfg(), [[U, "v1.1.0", clean]], {}, [], /not in the pre-commit cache/],
     // flow style is read too; a commented-out repo is not
     ["repos:\n- {repo: '" + U + "', rev: \"v1.2.0\", hooks: [{id: fmt}]}\n", [[U, "v1.2.0", { ".pre-commit-hooks.yaml": "- id: fmt\n  entry: infracost diff\n" }]], {}, ["remote:" + U + "@v1.2.0:.pre-commit-hooks.yaml"], null],

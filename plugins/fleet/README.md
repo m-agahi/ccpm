@@ -370,8 +370,9 @@ Since 3.1.0 no step relays raw git output for these checks. Verify runs `VERIFY_
 (worktree, plan commit, plan path), which prints `{head, is_ancestor, commits_since, plan_touched,
 changed_since, digest}`; commit-plan runs `PLAN_FILES_PY`, which prints `{head, files, digest}`.
 The script recomputes each digest and stops the run (`failed`) on a dropped or changed entry or a
-missing list. Every embedded program runs as `python3 -I`, takes the worktree as an argument and
-runs git with `-C <worktree>`; the 3.1.0 programs change to `/` before they do anything.
+missing list. Every embedded program runs as `python3 -I`; a program that reads the repo takes the
+worktree as an argument and runs git with `-C <worktree>`. The 3.1.0 programs (the push classifier
+too, which reads only its output file) change to `/` before they do anything.
 
 The risk tier is still computed and logged (short = `est_diff_lines < 20` AND `new_behaviour`
 false), but the fleet always takes the full path: no role prompt supports a coder without frozen
@@ -580,6 +581,9 @@ Not covered (3.1.0), by design:
 
 - Code inside an installed hook package that a manifest names by a command (a console-script
   `entry` such as `check-yaml`) and not by a file path.
+- Remote hook repos of any config other than the root `.pre-commit-config.yaml` (for example one
+  that only a hooks-dir shim names with `--config=<path>`): that config's text is scanned, its
+  remote manifests are not.
 - Test code. The roles run `test_cmd` (an allowlisted test runner), and a test may start any
   program. The scan does not read test files: many repos, this one included, name the tools in test
   data, so the scan would refuse them. The allowlisted `test_cmd` shapes, the forbidden words in
