@@ -8870,40 +8870,83 @@ test("3.0.0 review 6: a folded entry or literal args naming an edited hook file 
   }
 });
 
-test("3.0.0 review 6: without PyYAML a block or folded scalar, an anchor, an alias or a second document is refused, never guessed", { skip: !HAVE_PY }, () => {
-  for (const [what, cfg] of [
-    ["folded entry", FOLDED_CFG],
-    ["literal args", "repos:\n  - repo: local\n    hooks:\n      - id: x\n        name: x\n        entry: python3\n        args: |-\n          tools/gen.py\n        language: system\n"],
-    ["anchor and alias", "repos:\n  - repo: local\n    hooks:\n      - &h\n        id: x\n        name: x\n        entry: ci/chk.sh\n        language: script\n      - *h\n"],
-    ["second document", "repos: []\n---\nrepos: []\n"],
-    ["multi-line flow list", "repos:\n  - repo: local\n    hooks:\n      - id: x\n        name: x\n        entry: python3\n        args: [\n          tools/gen.py]\n        language: system\n"],
-  ]) {
-    const r = fixerRepo("fleet-r6-noyaml-", cfg, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "tools/gen.py": "print(1)\n", "a.py": "x=1\n" });
+test("3.0.0 review 7: with no Python that has PyYAML the step is refused, plain or folded; no line parser", { skip: !HAVE_PY }, () => {
+  const plain = "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        entry: ci/chk.sh\n        language: script\n";
+  for (const [what, cfg] of [["folded", FOLDED_CFG], ["plain", plain]]) {
+    const r = fixerRepo("fleet-r7-noyaml-", cfg, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "tools/gen.py": "print(1)\n", "a.py": "x=1\n" });
     try {
       writeFileSync(join(r.wt, "a.py"), "x=2\n");
       const o = r.runF(null, 180, true);
       assert.equal(o.ran, false, what);
       assert.deepEqual(o.refused, [".pre-commit-config.yaml"], what);
-      assert.match(o.reason, /PyYAML is unavailable/, what);
+      assert.match(o.reason, /no Python with PyYAML found/, what);
       assert.ok(!existsSync(join(r.home, "log")), what + ": no hook ran");
     } finally {
       r.done();
     }
   }
+  const prog = extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY");
+  assert.doesNotMatch(prog, /entry\|args\)\\s\*:/, "the line parser is gone");
 });
 
-test("3.0.0 review 6: a plain config behaves as before, with and without PyYAML", { skip: !HAVE_PY }, () => {
+test("3.0.0 review 7: the config is read by pre-commit's own interpreter, through a wrapper's exec target", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const r = fixerRepo("fleet-r7-interp-", FOLDED_CFG, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "tools/gen.py": "print(1)\n", "a.py": "x=1\n" });
+  try {
+    // a nix-style wrapper: bin/pre-commit execs libexec/.pre-commit-wrapped, whose
+    // shebang names pre-commit's python (a logging shim around python3)
+    const libexec = join(r.home, "libexec");
+    spawnSync("mkdir", ["-p", libexec]);
+    const shim = join(libexec, "pc-python");
+    const py = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim();
+    writeFileSync(shim, "#!/bin/sh\necho used >> " + JSON.stringify(join(r.home, "pylog")) + "\nexec " + JSON.stringify(py) + " \"$@\"\n", { mode: 0o755 });
+    const wrapped = join(libexec, ".pre-commit-wrapped");
+    writeFileSync(wrapped, "#!" + shim + "\nimport os, sys\nfiles = sys.argv[3:]\nopen(os.environ['LOG'], 'a').write(' '.join(files) + '\\n')\nfor f in files:\n    t = open(f).read()\n    if 'fmt' not in t:\n        open(f, 'a').write('# fmt\\n')\n", { mode: 0o755 });
+    writeFileSync(join(r.home, "bin", "pre-commit"), "#!/bin/sh\nexec -a \"$0\" " + JSON.stringify(wrapped) + " \"$@\"\n", { mode: 0o755 });
+    writeFileSync(join(r.wt, "a.py"), "x=2\n");
+    writeFileSync(join(r.wt, "ci/chk.sh"), "#!/bin/sh\nrm -rf /\n");
+    const o = r.runF();
+    assert.deepEqual(o.refused, ["ci/chk.sh"], o.reason);
+    assert.ok(existsSync(join(r.home, "pylog")), "pre-commit's interpreter parsed the config");
+    sh(r.wt, "git", "checkout", "--", "ci/chk.sh");
+    const ok = r.runF();
+    assert.equal(ok.ran, true, ok.reason);
+    assert.deepEqual(ok.files, ["a.py"]);
+    assert.equal(readFileSync(join(r.wt, "a.py"), "utf8"), "x=2\n# fmt\n");
+  } finally {
+    r.done();
+  }
+});
+
+test("3.0.0 review 7: a flow-map hook {id: x, entry: ci/chk.sh} is in the surface; an edited entry is refused", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const cfg = "repos:\n  - {repo: local, hooks: [{id: x, name: x, entry: ci/chk.sh, language: script}]}\n";
+  const r = fixerRepo("fleet-r7-flow-", cfg, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "a.py": "x=1\n" });
+  try {
+    writeFileSync(join(r.wt, "a.py"), "x=2\n");
+    writeFileSync(join(r.wt, "ci/chk.sh"), "#!/bin/sh\nrm -rf /\n");
+    const o = r.runF();
+    assert.equal(o.ran, false);
+    assert.deepEqual(o.refused, ["ci/chk.sh"]);
+  } finally {
+    r.done();
+  }
+});
+
+test("3.0.0 review 6: a plain config behaves as before with PyYAML; without it, it is refused", { skip: !HAVE_PY }, () => {
   const cfg = "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        entry: ci/chk.sh\n        language: script\n        args: [--fix, tools/gen.py]\n        files: ^common/\n";
   for (const noYaml of HAVE_YAML ? [false, true] : [true]) {
     const r = fixerRepo("fleet-r6-plain-", cfg, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "tools/gen.py": "print(1)\n", "common/a.py": "x=1\n" });
     try {
       writeFileSync(join(r.wt, "common/a.py"), "x=2\n");
       const o = r.runF(null, 180, noYaml);
-      assert.equal(o.ran, true, String(noYaml) + " " + o.reason);
+      if (noYaml) {
+        assert.deepEqual([o.ran, o.refused], [false, [".pre-commit-config.yaml"]]);
+        continue;
+      }
+      assert.equal(o.ran, true, o.reason);
       assert.deepEqual(o.files, ["common/a.py"]);
       assert.deepEqual(o.refused, []);
       writeFileSync(join(r.wt, "tools/gen.py"), "print(2)\n");
-      assert.deepEqual(r.runF(null, 180, noYaml).refused, ["tools/gen.py"], String(noYaml));
+      assert.deepEqual(r.runF().refused, ["tools/gen.py"]);
     } finally {
       r.done();
     }

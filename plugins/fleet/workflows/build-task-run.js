@@ -2780,13 +2780,8 @@ const FORMAT_FILES_PY = String.raw`
 import glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile
 wt, sel, frozen = sys.argv[1], json.loads(sys.argv[2]), set(json.loads(sys.argv[3]))
 scratch_root, tmo = sys.argv[4], int(sys.argv[5])
-# argv[6] == 'no-yaml' (tests only): behave as if PyYAML were missing
-try:
-    if len(sys.argv) > 6 and sys.argv[6] == 'no-yaml':
-        raise ImportError
-    import yaml
-except ImportError:
-    yaml = None
+# argv[6] == 'no-yaml' (tests only): behave as if no Python had PyYAML
+no_yaml = len(sys.argv) > 6 and sys.argv[6] == 'no-yaml'
 G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false']
 def git(cwd, *a, env=None, check=True):
     r = subprocess.run(G + ['-C', cwd] + list(a), capture_output=True, env=env)
@@ -2834,51 +2829,93 @@ def differs(p):
 # files:/exclude: regex are not hook code and stay formattable)
 head_cfg = git(wt, 'show', 'HEAD:.pre-commit-config.yaml', check=False)
 surface = {'.pre-commit-config.yaml'}
-unreadable = None
-vals = []
-if head_cfg.returncode == 0 and yaml is not None:
-    # PyYAML reads every scalar form: entry and args of every hook of every repo
+# The config is read with PyYAML, never by a line parser: pre-commit's own
+# interpreter has it (pre-commit depends on PyYAML). Follow the pre-commit
+# executable's shebang, and a shell wrapper's exec target (pipx, nix), to that
+# Python; then this python3 if it has PyYAML. None found: nothing runs.
+LOADER = (
+    "import json, sys\n"
+    "try:\n    import yaml\nexcept ImportError:\n    sys.exit(3)\n"
+    "d = yaml.safe_load(sys.stdin.buffer.read())\n"
+    "out = []\n"
+    "for r in (d.get('repos') if isinstance(d, dict) else None) or []:\n"
+    "    for h in (r.get('hooks') if isinstance(r, dict) else None) or []:\n"
+    "        if isinstance(h, dict):\n"
+    "            out.append({'entry': h.get('entry'), 'args': h.get('args'), 'language': h.get('language')})\n"
+    "print(json.dumps(out, default=str))\n"
+)
+SHELLS = ('sh', 'bash', 'dash', 'zsh', 'ksh')
+def interpreters(path, depth=0):
     try:
-        data = yaml.safe_load(head_cfg.stdout)
-    except Exception as e:
-        data, unreadable = None, 'the config does not parse: ' + str(e).splitlines()[0]
-    for repo in (data.get('repos') if isinstance(data, dict) else None) or []:
-        for h in (repo.get('hooks') if isinstance(repo, dict) else None) or []:
-            if not isinstance(h, dict):
+        with open(path, 'rb') as fh:
+            head = fh.read(65536)
+    except OSError:
+        return []
+    if not head.startswith(b'#!'):
+        return []
+    words = head.split(b'\n', 1)[0][2:].decode('utf-8', 'replace').split()
+    if not words:
+        return []
+    interp = words[0]
+    if os.path.basename(interp) == 'env':
+        prog = next((w for w in words[1:] if not w.startswith('-') and '=' not in w), None)
+        interp = shutil.which(prog) if prog else None
+    out = [interp] if interp else []
+    if interp and os.path.basename(interp) in SHELLS and depth < 3:
+        for t in re.findall(rb'exec\s+(?:-a\s+\S+\s+)?["\']?(/[^\s"\']+)', head):
+            t = t.decode('utf-8', 'replace')
+            if not os.path.isfile(t):
                 continue
-            if isinstance(h.get('entry'), str):
-                vals.append(h['entry'])
-            a = h.get('args')
-            for x in a if isinstance(a, list) else ([a] if a is not None else []):
-                vals.append(str(x))
-elif head_cfg.returncode == 0:
-    # no PyYAML: the line parser reads plain scalars only; anything else is refused, never guessed
-    text = head_cfg.stdout.decode('utf-8', 'replace')
-    if re.search(r'^\s*(?:-\s+)?(?:entry|args)\s*:\s*[|>]', text, re.M):
-        unreadable = 'a block or folded scalar for entry or args'
-    elif re.search(r'^\s*(?:-\s+)?(?:entry|args)\s*:\s*(?:\[[^\]]*|"[^"]*|\'[^\']*)\s*(?:#.*)?$', text, re.M):
-        unreadable = 'an entry or args value continued on the next line'
-    elif re.search(r'(?:^|[\s\[{,:-])[&*][A-Za-z0-9_-]+', re.sub(r'#.*', '', re.sub(r'"[^"]*"|\'[^\']*\'', '', text))):
-        unreadable = 'an anchor or alias'
-    elif re.findall(r'^(?:---|\.\.\.)(?:\s.*)?$', text, re.M)[1 if text.startswith('---') else 0:]:
-        unreadable = 'more than one YAML document'
-    lines = text.split('\n')
-    for n, line in enumerate(lines):
-        m = re.match(r'^(\s*)(?:-\s+)?(entry|args)\s*:\s*(.*)$', line)
-        if not m:
+            # a script target names its interpreter; a binary target may be one
+            with open(t, 'rb') as fh:
+                script = fh.read(2) == b'#!'
+            if script:
+                out.extend(interpreters(t, depth + 1))
+            else:
+                out.append(t)
+    return out
+def hook_values():
+    # (values, None) or (None, why)
+    cands = []
+    pc = shutil.which('pre-commit')
+    if pc:
+        cands.extend(interpreters(os.path.realpath(pc)))
+        cands.extend(interpreters(pc))
+    cands.append(sys.executable)
+    seen = set()
+    for c in cands:
+        if not c or c in seen or os.path.basename(c) in SHELLS or os.path.basename(c) == 'env':
             continue
-        vals.append(m.group(3))
-        if m.group(2) == 'args' and not m.group(3).strip():
-            for nxt in lines[n + 1:]:
-                mm = re.match(r'^(\s*)-\s+(.*)$', nxt)
-                if not nxt.strip():
-                    continue
-                if mm and len(mm.group(1)) >= len(m.group(1)):
-                    vals.append(mm.group(2))
-                    continue
-                break
-if unreadable:
-    done(reason='hook surface unknown: ' + unreadable + ('' if yaml is not None else ' and PyYAML is unavailable') + '; no hook was run', refused=['.pre-commit-config.yaml'])
+        seen.add(c)
+        if no_yaml:
+            continue
+        try:
+            r = subprocess.run([c, '-c', LOADER], input=head_cfg.stdout, capture_output=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 3 or (r.returncode != 0 and b'No module named' in r.stderr):
+            continue
+        if r.returncode != 0:
+            return None, 'the config does not parse with PyYAML (' + c + '): ' + (r.stderr.decode('utf-8', 'replace').strip().splitlines() or [''])[-1]
+        try:
+            hooks = json.loads(r.stdout)
+        except ValueError:
+            continue
+        vals = []
+        for h in hooks if isinstance(hooks, list) else []:
+            if isinstance(h, dict):
+                if isinstance(h.get('entry'), str):
+                    vals.append(h['entry'])
+                a = h.get('args')
+                for x in a if isinstance(a, list) else ([a] if a is not None else []):
+                    vals.append(str(x))
+        return vals, None
+    return None, 'no Python with PyYAML found (tried pre-commit\'s interpreter and ' + sys.executable + ')'
+vals = []
+if head_cfg.returncode == 0 and shutil.which('pre-commit') is not None:
+    vals, why = hook_values()
+    if why:
+        done(reason='hook surface unknown: ' + why + '; no hook was run', refused=['.pre-commit-config.yaml'])
 for v in vals:
     for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', v):
         q = os.path.normpath(tok)

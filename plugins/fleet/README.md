@@ -163,11 +163,12 @@ The fixer program (3.0.0) runs the hooks in a scratch checkout of HEAD under `sc
 copied in, and only they are copied back. The hook surface is exact: the config, every path a hook
 `entry` or `args` names, and the files of every `-m` module an entry runs (`a/b.py`,
 `a/b/__init__.py`, `a/__init__.py`); a path that only appears in a `files:` or `exclude:` regex is
-not hook code and is formatted. With PyYAML the program parses the config and takes `entry` and
-`args` of every hook of every repo, in any scalar form. Without PyYAML a line parser reads plain
-scalars only: a block or folded scalar (`|`, `>-`, ...) for `entry` or `args`, a value continued on
-the next line, an anchor or alias, or a second YAML document refuses the step (the surface is
-unknown; nothing is guessed). When a surface path differs from HEAD, or a selected path goes
+not hook code and is formatted. The config is read only with PyYAML (`yaml.safe_load`, in a
+subprocess that prints JSON: `entry`, `args` and `language` of every hook of every repo, any YAML
+form). The interpreter is pre-commit's own, which ships PyYAML: the program follows the
+`pre-commit` executable's shebang, and a shell wrapper's `exec` target (pipx, nix), to that Python;
+then it tries its own `python3`. No interpreter with PyYAML: the step is refused (the surface is
+unknown); there is no line parser. When a surface path differs from HEAD, or a selected path goes
 through a symlink (HEAD mode 120000, a symlinked parent at HEAD or in the worktree, or a realpath
 outside either checkout), nothing runs (`refused`, `stop_gate: hash`). A helper that a hook entry
 imports without the config naming it is a residual (ADR-1152). A scratch checkout a killed run left
