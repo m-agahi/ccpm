@@ -4177,13 +4177,25 @@ def leafy(p):
 # (the context never crosses a line: a shebang's interpreter names nothing)
 EXEC_CTX = re.compile(r'(?:^|[\s;&|(\x60])(?:bash|sh|zsh|dash|ksh|node|deno|bun|python[0-9.]*|ruby|perl|exec|source|xargs|env|cat)[ \t]+([^;&|\n\x60)]*)'
                       r'|(?:^|[;&|][ \t]*)\.[ \t]+([^;&|\n]*)|<[ \t]*([^\s;&|)]+)|(?:^|[ \t])-f[ \t]+([^\s;&|)]+)', re.M)
-def exec_tokens(s):
-    out = set()
+def exec_sets(s):
+    # (run, args): run = what is executed (the first operand of an interpreter
+    # or exec, a sourced file, a < redirect, a -f file); args = the other
+    # operands of that command (data a script is given)
+    run, args = set(), set()
     for m in EXEC_CTX.finditer(s):
-        for g in m.groups():
+        g1, g2, g3, g4 = m.groups()
+        if g1 is not None:
+            toks = [t for t in g1.split() if t]
+            first = next((t for t in toks if not t.startswith('-')), None)
+            for t in toks:
+                for tok in TOKEN.findall(t):
+                    (run if t == first else args).add(os.path.normpath(tok))
+        for g in (g2, g3, g4):
             for tok in TOKEN.findall(g or ''):
-                out.add(os.path.normpath(tok))
-    return out
+                run.add(os.path.normpath(tok))
+    for m in re.finditer(r'(?:^|[\s;&|(])(\./[^\s;&|)]+)', s, re.M):
+        run.add(os.path.normpath(m.group(1)))
+    return run, args
 def tok_text(name, s):
     # the text names are taken from: a YAML file without its comments and
     # its file filters, names and descriptions
@@ -4264,31 +4276,38 @@ def hit(name, data, depth=0, root=None, label=None, leaf=False):
     t = tok_text(name, s)
     toks = TOKEN.findall(t)
     # a YAML hook config's surviving lines (entry, args, run) are commands
-    ex = set(os.path.normpath(x) for x in toks) if base(name).lower().endswith(('.yaml', '.yml')) else exec_tokens(t)
+    run, args = exec_sets(t)
+    if base(name).lower().endswith(('.yaml', '.yml')):
+        # a hook config: each entry's program is run, every other name is an argument
+        for m in re.finditer(r'\bentry\s*:\s*[\'"]?([A-Za-z0-9_.][A-Za-z0-9_./-]*)', t):
+            run.add(os.path.normpath(m.group(1)))
+        args.update(os.path.normpath(x) for x in toks)
     if base(name).endswith('.yaml') and DOCKER_LANG.search(s):
         toks.append('Dockerfile')
-        ex.add('Dockerfile')
+        run.add('Dockerfile')
     for tok in toks:
         p = os.path.normpath(tok)
         if p == '..' or p.startswith('../'):
             continue
-        # a name in an execution context is traced like any script; a doc,
-        # data, test or Dockerfile that is merely mentioned is matched only
-        # when a surface names it directly (a doc or data file never)
-        lf = leafy(p) and p not in ex
-        if lf and (inert(p) or depth + 1 >= 2):
+        # what is run is traced like any script; a doc, data, test or Dockerfile
+        # given as an argument is matched only (a leaf); one merely mentioned
+        # is matched only when a surface names it directly (a doc or data
+        # file never)
+        x = p in run or (leafy(p) and p in args)
+        lf = leafy(p) and p not in run
+        if lf and not x and (inert(p) or depth + 1 >= 2):
             continue
         if root is not None:
             if (label, p) not in followed and root_has(root, p):
                 followed.add((label, p))
-                queue.append(('clone', p, depth + 1, root, label, lf, p in ex))
+                queue.append(('clone', p, depth + 1, root, label, lf, x))
         elif p in tracked:
             if p not in followed:
                 followed.add(p)
-                queue.append(('git', p, depth + 1, None, None, lf, p in ex))
+                queue.append(('git', p, depth + 1, None, None, lf, x))
         elif ('disk', p) not in followed and os.path.isfile(os.path.join(top, p)):
             followed.add(('disk', p))
-            queue.append(('disk', p, depth + 1, None, None, lf, p in ex))
+            queue.append(('disk', p, depth + 1, None, None, lf, x))
 def disk(fp, leaf=False):
     try:
         with open(fp, 'rb') as fh:
@@ -4570,11 +4589,15 @@ while queue:
         fail('more than ' + str(MAX_REFS) + ' referenced files')
     if d > MAX_DEPTH:
         continue
-    # a doc or data file over FILE_CAP that is merely mentioned is matched on
-    # its first FILE_CAP bytes and not followed; one in an execution context,
-    # and anything else over the cap, refuses
-    if not lf and not run and inert(p) and over(kind, p, root):
-        lf = True
+    # over FILE_CAP: a file in an execution context (run or given to a
+    # command) refuses; a leaf or a doc or data file merely mentioned is
+    # matched on its first FILE_CAP bytes and not followed; anything else
+    # refuses when it is read whole
+    if over(kind, p, root):
+        if run:
+            fail(p + ' is over ' + str(FILE_CAP) + ' bytes; the scan cannot read it whole')
+        if lf or inert(p):
+            lf = True
     if kind == 'git':
         hit(p, head(['git', '-C', wt], rev + ':' + p) if lf else blob(p), d, leaf=lf)
     elif kind == 'disk':

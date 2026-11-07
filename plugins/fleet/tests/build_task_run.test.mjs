@@ -9954,8 +9954,11 @@ test("3.1.0 1960: docs, manifests, test data, file filters and comments are not 
     [{ ".pre-commit-config.yaml": local("  - id: t\n    name: t\n    entry: tests/run.sh\n    language: script\n"), "tests/run.sh": "#!/bin/sh\nterragrunt plan\n" }, ["tests/run.sh"]],
     [{ ".pre-commit-config.yaml": local("  - id: w\n    name: w\n    entry: python3 scripts/w.py\n    language: system\n"), "scripts/w.py": "ALLOW = ['tests/test_x.py', 'tests/fixtures/plan.yaml', 'benchmarks/golden/set.jsonl']\n", "tests/test_x.py": "assert 'terraform' in s\n", "tests/fixtures/plan.yaml": "cmd: terraform plan\n", "benchmarks/golden/set.jsonl": '{"q": "tofu"}\n' }, []],
     // a pyproject.toml the config names is read like the root one: script and task tables only
-    // (delta review: a file a hook command names is traced, as in 3.0.0)
-    [{ ".pre-commit-config.yaml": local("  - id: p\n    name: p\n    entry: python3 -m x --config pyproject.toml\n    language: system\n"), "pyproject.toml": '[tool.ruff.lint.per-file-ignores]\n"src/t.py" = ["E1"]\n', "src/t.py": "x = 'terraform'\n" }, ["src/t.py"]],
+    // (a file given to a hook command as an argument is matched, not followed out of)
+    [{ ".pre-commit-config.yaml": local("  - id: p\n    name: p\n    entry: python3 -m x --config pyproject.toml\n    language: system\n"), "pyproject.toml": '[tool.ruff.lint.per-file-ignores]\n"src/t.py" = ["E1"]\n', "src/t.py": "x = 'terraform'\n" }, []],
+    // the yadgar shape: a baseline JSON given to a check script names a module that mentions the tool
+    [{ ".pre-commit-config.yaml": local("  - id: c\n    name: c\n    entry: python scripts/cc.py --baseline .baseline.json\n    language: system\n"), "scripts/cc.py": "print(1)\n", ".baseline.json": '{"src/m.py": 3}\n', "src/m.py": "# no terraform here\n" }, []],
+    [{ ".pre-commit-config.yaml": local("  - id: c\n    name: c\n    entry: python scripts/cc.py --baseline .baseline.json\n    language: system\n"), "scripts/cc.py": "print(1)\n", ".baseline.json": '{"cmd": "terraform fmt"}\n' }, [".baseline.json"]],
     [{ "Makefile": "lint:\n\tcat sub/pyproject.toml\n", "sub/pyproject.toml": '[tool.poe.tasks]\nplan = "terragrunt plan"\n' }, ["sub/pyproject.toml"]],
     // a comment in the config names nothing
     [{ ".pre-commit-config.yaml": local("  # see ci/old.sh\n  - id: c\n    name: c\n    entry: true\n    language: system\n"), "ci/old.sh": "terraform apply\n" }, []],

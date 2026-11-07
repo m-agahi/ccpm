@@ -55,7 +55,9 @@ contract marker stays `fleet-v3`.
   `.husky/**`, `.githooks/**`, lefthook configs, the `core.hooksPath` directory, `package.json`
   scripts) are traced like CI files for the scripts they name, and a hook shell script's directly
   run scripts (`bash`/`sh`/`python`/`node X`, `./X`) join the surface; a hook-manager file that
-  does not parse (a `package.json` that is not JSON) or is over 1 MiB refuses.
+  does not parse (a `package.json` that is not JSON) or is over 1 MiB refuses. The
+  `scope-and-plan` page gets one sentence telling the planner so, with the full path list
+  (prepared, not written; the pin stays 27, because the rule lives in script code).
 - **Delta review LOW.** The hook-repo fetch adds `http.followRedirects=false`, and its test-only URL
   rewrite moved from the environment to argv (`--test-instead-of=`). A git-lfs `batch request:`,
   `batch response:` or `LFS:` line next to a declined push is `ambiguous`, not `hook_rejected`.
@@ -67,9 +69,11 @@ contract marker stays `fleet-v3`.
   `install_hooks`, `project_register`, `project_seed`, `reembed_all`, the seed tools,
   `sync_instructions`, `update_active_work`, the vacuum tools, `wiki_autolink`,
   `wiki_write_task_list`). An oversized doc or data file in an execution context now refuses;
-  only a merely-mentioned leaf is matched on its first 1 MiB. The `scope-and-plan` page
-  gets one sentence telling the planner so (prepared, not written; the pin stays 27, because the
-  rule lives in script code).
+  only a merely-mentioned leaf is matched on its first 1 MiB. The execution context separates what
+  is run (an interpreter's first operand, a sourced file, a `<` redirect, a `-f` file, a hook
+  `entry`'s program, `./X`: traced like a script) from the other operands of that command (data a
+  script is given: matched, never followed out of). A baseline JSON passed to a check script is
+  therefore matched, but the modules it names are not scanned.
 - A verify, commit-plan or `hook_rejected` push relay that does not match its program's digest,
   or whose program ran on other arguments, fails the run.
 
