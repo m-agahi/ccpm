@@ -6168,6 +6168,7 @@ const ARRAY_SITES = {
   "r.files @ formatFiles": "infra:files",
   "r.changed @ formatFiles": "infra:changed",
   "r.refused @ formatFiles": "infra:refused",
+  "rd.results @ writeBack": "infra:results",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   "r.files @ commitPlanAndRef": "infra:files",
   "r.refs @ commitPlanAndRef": "infra:refs",
@@ -6661,7 +6662,8 @@ test("2.1.5 yaadgaar: build re-reads the yaadgaar task, never L<N>", async () =>
   s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
   s["role:fleet-intent-judge:rerun"] = { status: "ok", reason: "fine", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } };
   s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
-  s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", project: inputsOf(p).project, results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
+  s["infra:yaadgaar-read"] = yaadgaarRead("yadgarhq/docs");
+  s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
   const build = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs", confirm: "auto" });
   noUnscripted(build);
   assert.equal(build.result.status, "ok", build.result.reason);
@@ -8121,13 +8123,15 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
     writeFileSync(join(wt, ".pre-commit-config.yaml"), "repos: []\n");
     writeFileSync(join(wt, "a.py"), "x=1\n");
     writeFileSync(join(wt, "test_a.py"), "y=1\n");
+    writeFileSync(join(wt, "other.txt"), "o\n");
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "base");
     // the coder's change, and a frozen test
     writeFileSync(join(wt, "a.py"), "x=2\n");
     writeFileSync(join(wt, "test_a.py"), "y=2\n");
     // a fake pre-commit: logs its args, rewrites each file once (a fixer), and
-    // touches other.txt when TOUCH_OTHER is set (a pass_filenames: false hook)
+    // touches other.txt when TOUCH_OTHER is set (a pass_filenames: false hook);
+    // it runs in a scratch checkout of HEAD (review 4)
     writeFileSync(
       join(bin, "pre-commit"),
       "#!/bin/sh\nshift 2\necho \"$@\" >> \"$LOG\"\nfor f in \"$@\"; do grep -q fmt \"$f\" || echo '# fmt' >> \"$f\"; done\n[ -n \"$TOUCH_OTHER\" ] && echo x >> other.txt\nexit 1\n",
@@ -8136,7 +8140,7 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
     const prog = extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY");
     const env = (extra) => Object.assign({}, process.env, { PATH: bin + ":" + process.env.PATH, LOG: join(home, "log") }, extra || {});
     const runF = (sel, frozen, extra) => {
-      const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify(sel), JSON.stringify(frozen)], { input: prog, encoding: "utf8", env: env(extra) });
+      const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify(sel), JSON.stringify(frozen), join(home, "scratch"), "180"], { input: prog, encoding: "utf8", env: env(extra) });
       assert.equal(r.status, 0, r.stderr);
       return JSON.parse(r.stdout);
     };
@@ -8150,16 +8154,17 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
     const d = {};
     for (const k of ["ran", "reason", "runs", "stable", "files", "changed", "refused"]) d[k] = o[k];
     assert.equal(o.digest, sha256(canon(d)));
-    // a hook that touches another path: reported, and never settles
+    // a hook that touches another path: reported, never settles, and never copied back
     const o2 = runF({ paths: ["a.py"] }, [], { TOUCH_OTHER: "1" });
     assert.ok(o2.changed.includes("other.txt"));
     assert.equal(o2.stable, false);
     assert.equal(o2.runs, 3);
-    // no config: not run
+    assert.equal(readFileSync(join(wt, "other.txt"), "utf8"), "o\n", "only the selected files come back");
+    // a deleted config differs from HEAD: refused, nothing runs (review 4)
     rmSync(join(wt, ".pre-commit-config.yaml"));
     const o3 = runF({ dirty: true }, []);
     assert.equal(o3.ran, false);
-    assert.match(o3.reason, /no \.pre-commit-config\.yaml/);
+    assert.deepEqual(o3.refused, [".pre-commit-config.yaml"]);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -8258,39 +8263,55 @@ test("3.0.0 review 2: a definition changed_symbols cannot name (no identifier) p
 
 // ---------------------------------------------------------------- 3.0.0 yaadgaar write-back (ledger 1928)
 
-async function yaadgaarBuild(writeback, buildOver) {
+// The read-only step's answer: the project it resolved and each task's id and version.
+function yaadgaarRead(project, over) {
+  return (p) => ({
+    status: "ok",
+    reason: "read",
+    project,
+    results: inputsOf(p).tasks.map((t) => Object.assign({ key: t.key, status: "ok", id: "yadgar:task:0192", version: 3, has_marker: false }, over || {})),
+  });
+}
+
+async function yaadgaarBuild(writeback, buildOver, read) {
   const s = autoHappy({ brief: YBRIEF });
   const plan = await runOne(s, { ...YQ, confirm: "ask" });
   assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  s["infra:yaadgaar-read"] = read || yaadgaarRead("yadgarhq/docs");
   if (writeback !== undefined) s["infra:yaadgaar-writeback"] = writeback;
   return runOne(s, Object.assign({ mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" }, buildOver || {}));
 }
 
 test("3.0.0 yaadgaar write-back: an agent step edits the task through mcp__yaadgaar__ tools, never the yadgar ledger", async () => {
-  const out = await yaadgaarBuild((p) => ({ status: "ok", reason: "ok", project: inputsOf(p).project, results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) }));
+  const out = await yaadgaarBuild((p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) }));
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.ok(!out.labels.includes("infra:ledger-writeback"));
   const c = call(out, "infra:yaadgaar-writeback");
   assert.equal(c.opts.agentType, undefined, "default agent: fleet:judge must never write to a ledger");
   const i = inputsOf(c.prompt);
-  assert.equal(i.project, "yadgarhq/docs");
-  assert.deepEqual(i.tasks, [{ key: "s0", number: 622 }]);
+  assert.deepEqual(i.tasks, [{ key: "s0", id: "yadgar:task:0192", version: 3 }]);
   assert.equal(i.marker, "fleet:y622");
   assert.equal(i.section_heading, "Fleet build");
   assert.match(i.section_text, /<!-- fleet:y622 -->/);
   assert.equal(i.section_body, "## Fleet build\n\n" + i.section_text);
   assert.equal(i.section_sha256, sha256(i.section_body));
-  assert.equal(i.repo, "/r");
-  assert.match(c.prompt, /\.yadgar\/project-id/);
-  for (const re of [/mcp__yaadgaar__read_task/, /mcp__yaadgaar__edit_task/, /expect_version/, /VERSION_MISMATCH/, /patch/, /expect_count/, /expect_body_sha256/, /never mcp__yadgar__task_/i, /id=<the task's id/])
+  const r = call(out, "infra:yaadgaar-read");
+  assert.equal(r.opts.agentType, "fleet:judge", "the read step is read-only");
+  const ri = inputsOf(r.prompt);
+  assert.equal(ri.project, "yadgarhq/docs");
+  assert.deepEqual(ri.tasks, [{ key: "s0", number: 622 }]);
+  assert.equal(ri.repo, "/r");
+  assert.match(r.prompt, /\.yadgar\/project-id/);
+  assert.ok(out.labels.indexOf("infra:yaadgaar-read") < out.labels.indexOf("infra:yaadgaar-writeback"));
+  for (const re of [/mcp__yaadgaar__read_task/, /mcp__yaadgaar__edit_task/, /expect_version/, /VERSION_MISMATCH/, /patch/, /expect_count/, /expect_body_sha256/, /never mcp__yadgar__task_/i, /id=<id>/])
     assert.match(c.prompt, re);
   assert.equal(out.result.ledger_status, "ok");
   assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["yaadgaar #622", "written"]]);
 });
 
 test("3.0.0 yaadgaar write-back: a failed or missing result hands the section back; no project writes nothing", async () => {
-  const out = await yaadgaarBuild({ status: "ok", reason: "x", project: "yadgarhq/docs", results: [{ key: "s0", status: "failed", reason: "VERSION_MISMATCH twice" }] });
+  const out = await yaadgaarBuild({ status: "ok", reason: "x", results: [{ key: "s0", status: "failed", reason: "VERSION_MISMATCH twice" }] });
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.result.ledger_status, "failed");
   assert.match(out.result.write_back.ledger[0].reason, /VERSION_MISMATCH twice/);
@@ -8298,7 +8319,7 @@ test("3.0.0 yaadgaar write-back: a failed or missing result hands the section ba
   const dead = await yaadgaarBuild(null);
   assert.equal(dead.result.ledger_status, "failed");
   assert.match(dead.result.write_back.ledger[0].section_text, /fleet:y622/);
-  const skipped = await yaadgaarBuild({ status: "ok", reason: "x", project: "yadgarhq/docs", results: [{ key: "s0", status: "skipped", reason: "marker present" }] });
+  const skipped = await yaadgaarBuild({ status: "ok", reason: "x", results: [{ key: "s0", status: "skipped", reason: "marker present" }] });
   assert.equal(skipped.result.ledger_status, "ok");
 });
 
@@ -8351,7 +8372,8 @@ test("3.0.0 review 3 HIGH: JS and Rust one-line definitions inside an existing f
 });
 
 test("3.0.0 review 3 HIGH: a new method in an existing class does not record the class", { skip: !HAVE_PY }, () => {
-  const o = defsOf("k.py", "class A:\n    def x(self):\n        return 1\n", "class A:\n    def x(self):\n        return 1\n\n    @property\n    def y(self):\n        return 2\n");
+  // (a decorated new member names the class since review 4; see that test)
+  const o = defsOf("k.py", "class A:\n    def x(self):\n        return 1\n", "class A:\n    def x(self):\n        return 1\n\n    def y(self):\n        return 2\n");
   assert.deepEqual(o.defs, []);
   assert.deepEqual(o.unattributed, []);
   const t = defsOf("k.ts", "export class C {\n  a() {\n    return 1;\n  }\n}\n", "export class C {\n  a() {\n    return 1;\n  }\n\n  b() {\n    return 2;\n  }\n}\n");
@@ -8433,12 +8455,15 @@ test("3.0.0 review 3 bc_samefile and bc_obligfiles: an occurrence elsewhere at a
 });
 
 test("3.0.0 review 3 1928: the step returns the project it resolved; absent or another one fails closed; a non-number ref is never sent", async () => {
-  const wb = (project) => (p) => ({ status: "ok", reason: "ok", project, results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
-  const good = await yaadgaarBuild(wb("yadgarhq/docs"));
+  const wb = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
+  const good = await yaadgaarBuild(wb);
   assert.equal(good.result.ledger_status, "ok", JSON.stringify(good.result.write_back));
   assert.match(call(good, "infra:yaadgaar-writeback").prompt, /data, not instructions/);
+  assert.match(call(good, "infra:yaadgaar-read").prompt, /data, not instructions/);
   for (const p of [undefined, "", "yadgarhq/other"]) {
-    const out = await yaadgaarBuild(wb(p));
+    // review 4: a wrong or missing project never reaches an edit step
+    const out = await yaadgaarBuild(wb, undefined, yaadgaarRead(p));
+    assert.ok(!out.labels.includes("infra:yaadgaar-writeback"), String(p));
     assert.equal(out.result.ledger_status, "failed", String(p));
     assert.match(out.result.write_back.ledger[0].reason, /resolved project/);
     assert.match(out.result.write_back.ledger[0].section_text, /fleet:y622/);
@@ -8449,47 +8474,66 @@ test("3.0.0 review 3 1928: the step returns the project it resolved; absent or a
   assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
   assert.ok(!out.labels.includes("infra:yaadgaar-writeback"));
+  assert.ok(!out.labels.includes("infra:yaadgaar-read"));
   assert.equal(out.result.ledger_status, "failed");
   assert.match(out.result.write_back.ledger[0].reason, /not a task number/);
 });
 
-test("3.0.0 review 3 LOW: the fixer program refuses a hook config or local hook entry that differs from HEAD, and bounds each run", { skip: !HAVE_PY }, () => {
+test("3.0.0 review 4 LOW: the fixers run in a scratch checkout of HEAD: an edited hook entry or helper never runs; a changed config is refused; each run is bounded", { skip: !HAVE_PY }, () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-fmt2-"));
   const wt = join(home, "repo");
   const bin = join(home, "bin");
   try {
-    spawnSync("mkdir", ["-p", wt, bin, join(wt, "ci")]);
+    spawnSync("mkdir", ["-p", wt, bin, join(wt, "ci"), join(wt, "hooklib")]);
     sh(wt, "git", "init", "-q");
     sh(wt, "git", "config", "user.email", "t@example.com");
     sh(wt, "git", "config", "user.name", "t");
     sh(wt, "git", "config", "commit.gpgsign", "false");
-    writeFileSync(join(wt, ".pre-commit-config.yaml"), "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        entry: ci/chk.sh\n        language: script\n");
-    writeFileSync(join(wt, "ci", "chk.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(
+      join(wt, ".pre-commit-config.yaml"),
+      "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        entry: ci/chk.sh\n        language: script\n      - id: fmt\n        name: fmt\n        entry: python3 -m hooklib.fmt\n        language: system\n",
+    );
+    writeFileSync(join(wt, "ci", "chk.sh"), "#!/bin/sh\necho head >> \"$LOG\"\n", { mode: 0o755 });
+    writeFileSync(join(wt, "hooklib", "__init__.py"), "");
+    writeFileSync(join(wt, "hooklib", "fmt.py"), "import os\nopen(os.environ['LOG'], 'a').write('head-py\\n')\n");
     writeFileSync(join(wt, "a.py"), "x=1\n");
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "base");
-    writeFileSync(join(bin, "pre-commit"), "#!/bin/sh\necho ran >> \"$LOG\"\nexit 0\n", { mode: 0o755 });
+    // the fake pre-commit runs the local hook entry from its working dir
+    writeFileSync(join(bin, "pre-commit"), "#!/bin/sh\n./ci/chk.sh\npython3 -m hooklib.fmt\n[ -n \"$SLEEP\" ] && sleep \"$SLEEP\"\nexit 0\n", { mode: 0o755 });
     const prog = extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY");
-    assert.match(prog, /timeout=180/);
-    const env = Object.assign({}, process.env, { PATH: bin + ":" + process.env.PATH, LOG: join(home, "log") });
-    const runF = () => {
-      const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify({ dirty: true }), "[]"], { input: prog, encoding: "utf8", env });
+    const env = (extra) => Object.assign({}, process.env, { PATH: bin + ":" + process.env.PATH, LOG: join(home, "log") }, extra || {});
+    const runF = (timeout, extra) => {
+      const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify({ dirty: true }), "[]", join(home, "scratch"), String(timeout)], { input: prog, encoding: "utf8", env: env(extra) });
       assert.equal(r.status, 0, r.stderr);
       return JSON.parse(r.stdout);
     };
+    // the coder edits a hook entry and the module a `-m` hook runs (real pre-commit 4.6.2 ran both)
     writeFileSync(join(wt, "a.py"), "x=2\n");
-    writeFileSync(join(wt, "ci", "chk.sh"), "#!/bin/sh\nrm -rf /tmp/x\n", { mode: 0o755 });
-    const o = runF();
-    assert.deepEqual(o.refused, ["ci/chk.sh"]);
-    assert.equal(o.ran, false);
-    assert.ok(!existsSync(join(home, "log")), "pre-commit never ran");
-    sh(wt, "git", "checkout", "--", "ci/chk.sh");
+    writeFileSync(join(wt, "hooklib", "fmt.py"), "import os\nopen(os.environ['LOG'], 'a').write('edited-py\\n')\n");
+    writeFileSync(join(wt, "ci", "chk.sh"), "#!/bin/sh\necho edited-entry >> \"$LOG\"\n", { mode: 0o755 });
+    const o = runF(180);
+    assert.equal(o.ran, true, o.reason);
+    assert.deepEqual(o.refused, []);
+    assert.deepEqual(readFileSync(join(home, "log"), "utf8").trim().split("\n"), ["head", "head-py"], "HEAD's hook code ran, never the edited one");
+    assert.equal(readFileSync(join(wt, "ci", "chk.sh"), "utf8"), "#!/bin/sh\necho edited-entry >> \"$LOG\"\n", "the coder's files stay as they were");
+    assert.deepEqual(o.files, ["a.py"], "only non-frozen, non-hook-surface files are passed");
+    assert.ok(!existsSync(join(home, "scratch", "fmt")) || spawnSync("ls", [join(home, "scratch")]).stdout.toString().trim() === "", "the scratch checkout is removed");
+    assert.equal(sh(wt, "git", "worktree", "list").trim().split("\n").length, 1, "no scratch worktree left registered");
+    // n_ff_timeout: a run over its time budget ends the loop, unsettled
+    const t = runF(1, { SLEEP: "3" });
+    assert.equal(t.ran, true);
+    assert.equal(t.runs, 1);
+    assert.equal(t.stable, false);
+    assert.match(prog, /timeout=tmo/);
+    // a changed hook config is refused; nothing runs
+    sh(wt, "git", "checkout", "--", "ci/chk.sh", "hooklib/fmt.py");
     writeFileSync(join(wt, ".pre-commit-config.yaml"), "repos: []\n");
-    assert.deepEqual(runF().refused, [".pre-commit-config.yaml"]);
-    sh(wt, "git", "checkout", "--", ".pre-commit-config.yaml");
-    const ok = runF();
-    assert.deepEqual(ok.refused, []);
-    assert.equal(ok.ran, true);
+    rmSync(join(home, "log"), { force: true });
+    const c = runF(180);
+    assert.deepEqual(c.refused, [".pre-commit-config.yaml"]);
+    assert.equal(c.ran, false);
+    assert.ok(!existsSync(join(home, "log")));
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -8501,7 +8545,7 @@ test("3.0.0 review 3 LOW: a refused fixer run stops the build (hook surface chan
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "hash");
-  assert.match(out.result.reason, /hook config or a local hook entry differs from HEAD: \.pre-commit-config\.yaml/);
+  assert.match(out.result.reason, /hook config differs from HEAD: \.pre-commit-config\.yaml/);
 });
 
 test("3.0.0 review 3 LOW: branch-scan prints task_id and plan_path only for an ok ref", { skip: !HAVE_PY }, () => {
@@ -8533,4 +8577,112 @@ test("3.0.0 review 3 LOW: no dead checks left (isPlanCommit self-compare, PLAN_R
   assert.doesNotMatch(SOURCE, /planRefMetaProblem\(e, c\.sha, e\.sha256\)/);
   const m = /PLAN_REF_PY_BEGIN([\s\S]*?)PLAN_REF_PY_END/.exec(SOURCE);
   assert.doesNotMatch(m[1], /if True:/);
+});
+
+// ---------------------------------------------------------------- 3.0.0 review 4 (PR #36 delta)
+
+test("3.0.0 review 4 MED: an Allman-style C or Java guard edit names its function, and a listed file does not waive it", { skip: !HAVE_PY }, () => {
+  const c = defsOf("guard.c", "int check(int x)\n{\n    if (x < 0)\n        return 0;\n    return 1;\n}\n", "int check(int x)\n{\n    if (x < -1)\n        return 0;\n    return 1;\n}\n");
+  assert.deepEqual(c.defs, [{ name: "check", at: "guard.c:1", end: 1 }]);
+  assert.deepEqual(c.unattributed, []);
+  const j = defsOf(
+    "G.java",
+    "public class G\n{\n    public boolean allow(int x)\n    {\n        if (x < 0)\n            return false;\n        return true;\n    }\n}\n",
+    "public class G\n{\n    public boolean allow(int x)\n    {\n        return true;\n    }\n}\n",
+  );
+  assert.deepEqual(j.defs, [{ name: "allow", at: "G.java:3", end: 3 }]);
+  assert.deepEqual(j.unattributed, []);
+});
+
+test("3.0.0 review 4 MED: an Allman guard edit in a listed file still stops the run", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].allowed_additions = { files: ["guard.c"], symbols: [], deps: [], settings: [] };
+  s["infra:changed-defs:r1"] = defsOut([{ name: "check", at: "guard.c:1", end: 1 }]);
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "callers", out.result.reason);
+});
+
+test("3.0.0 review 4 LOW: a rename onto an excluded path still checks the old file as a deletion", { skip: !HAVE_PY }, () => {
+  const wt = gitRepo("fleet-r4-mv-", { "chart/guard.py": "def guard(v):\n    return v\n" });
+  try {
+    const base = sh(wt, "git", "rev-parse", "HEAD").trim();
+    spawnSync("mkdir", ["-p", join(wt, "tests")]);
+    sh(wt, "git", "mv", "chart/guard.py", "tests/test_a.py");
+    const o = runDefs(wt, base, treeAfter(wt, { "tests/test_a.py": "def guard(v):\n    return v\n" }), ["tests/test_a.py"]);
+    assert.deepEqual(o.defs, [{ name: "guard", at: "chart/guard.py:1", end: 2 }]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review 4 LOW: a decorator on a new member, and a new nested class with side effects, name the enclosing class", { skip: !HAVE_PY }, () => {
+  const BASE = "class A:\n    def x(self):\n        return 1\n";
+  const d = defsOf("k.py", BASE, "class A:\n    def x(self):\n        return 1\n\n    @sabotage\n    def y(self):\n        return 2\n");
+  assert.deepEqual(d.defs, [{ name: "A", at: "k.py:1", end: 3 }]);
+  const n = defsOf("k.py", BASE, "class A:\n    def x(self):\n        return 1\n\n    class _K: z = sabotage()\n");
+  assert.deepEqual(n.defs, [{ name: "A", at: "k.py:1", end: 3 }]);
+  // a plain new method still records nothing
+  const p = defsOf("k.py", BASE, "class A:\n    def x(self):\n        return 1\n\n    def y(self):\n        return 2\n");
+  assert.deepEqual(p.defs, []);
+});
+
+test("3.0.0 review 4 n_opens_block: a one-line column-0 definition has no body; an over-indented statement after it is module level", { skip: !HAVE_PY }, () => {
+  const o = defsOf("a.js", "export function a() {\n  return 1;\n}\n", "export function a() {\n  return 1;\n}\nconst noop = () => 0;\n    sabotage();\n");
+  assert.deepEqual(o.defs, []);
+  assert.deepEqual(o.unattributed, ["a.js:3"]);
+  // a block-opening column-0 definition's body is its own
+  const b = defsOf("a.js", "export function a() {\n  return 1;\n}\n", "export function a() {\n  return 1;\n}\nfunction b() {\n    sabotage();\n}\n");
+  assert.deepEqual([b.defs, b.unattributed], [[], []]);
+});
+
+test("3.0.0 review 4 n_bs_refok_regex: a sealed ref whose task_id or plan_path fails the shape check is not ok", { skip: !HAVE_PY }, () => {
+  const prog = extractPy("BRANCH_SCAN_PY_BEGIN", "BRANCH_SCAN_PY_END", "BRANCH_SCAN_PY");
+  const kinds = JSON.stringify(["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]);
+  const writeCmd = extractFn("WRITE_PLAN_REF_SH_BEGIN", "WRITE_PLAN_REF_SH_END", "writePlanRefCmd");
+  for (const over of [{ plan_path: "docs/plans/x y.md" }, { plan_path: "docs/plans/x;.md" }]) {
+    const home = mkdtempSync(join(tmpdir(), "fleet-bscan3-"));
+    try {
+      const cfg = join(home, "gitconfig");
+      writeFileSync(cfg, "[user]\n\temail = t@example.com\n\tname = t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = master\n");
+      const env = gitEnv(home, cfg);
+      const { wt } = scanRepo(home, env);
+      const msg = priorRef("docs/plans/x.md", over).trimEnd();
+      assert.equal(jsPlanRefProblem()(JSON.parse(msg)), null, "sealed and well formed for planRefProblem");
+      const w = spawnSync("bash", ["-c", writeCmd(wt, "l42", msg)], { encoding: "utf8", env });
+      assert.equal(w.status, 0, w.stderr);
+      const r = spawnSync("python3", ["-I", "-", wt, "master", "l42", kinds], { input: prog, encoding: "utf8", env });
+      const e = JSON.parse(r.stdout).refs[0];
+      assert.equal(e.ref_ok, false, JSON.stringify(over));
+      assert.equal(e.plan_path, null);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("3.0.0 review 4 n_planref_argc: the plan-ref reader refuses an extra argument", { skip: !HAVE_PY }, () => {
+  const reader = extractPy("PLAN_REF_PY_BEGIN", "PLAN_REF_PY_END", "PLAN_REF_PY");
+  const wt = gitRepo("fleet-r4-argc-", { "a.py": "a\n" });
+  try {
+    for (const args of [[wt, "l42", "meta", "extra"], [wt, "l42"]]) {
+      const r = spawnSync("python3", ["-I", "-"].concat(args), { input: reader, encoding: "utf8" });
+      assert.notEqual(r.status, 0, args.join(" "));
+      assert.match(r.stderr, /usage/);
+    }
+    const ok = spawnSync("python3", ["-I", "-", wt, "l42", "meta"], { input: reader, encoding: "utf8" });
+    assert.equal(ok.status, 0, ok.stderr);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review 4 1928: a task that already carries the marker is skipped without an edit step", async () => {
+  const out = await yaadgaarBuild(() => ({ status: "ok", reason: "x", results: [] }), undefined, yaadgaarRead("yadgarhq/docs", { has_marker: true }));
+  assert.ok(!out.labels.includes("infra:yaadgaar-writeback"));
+  assert.equal(out.result.ledger_status, "ok");
+  assert.equal(out.result.write_back.ledger[0].status, "skipped");
+  const bad = await yaadgaarBuild(() => ({ status: "ok", reason: "x", results: [] }), undefined, yaadgaarRead("yadgarhq/docs", { status: "failed", reason: "not found" }));
+  assert.ok(!bad.labels.includes("infra:yaadgaar-writeback"));
+  assert.equal(bad.result.ledger_status, "failed");
+  assert.match(bad.result.write_back.ledger[0].reason, /not found/);
 });

@@ -61,14 +61,22 @@ changed; the new page text and the optional `symbol` key are additions, guarded 
   are definitions. Lines that only close a block, appended brace-language functions and renamed
   files give no needless stop. **Known limit:** a new method in an existing class records nothing,
   even when it overrides an inherited method.
+- **Caller-check attribution (PR #36 review 4).** An Allman brace on its own line is stepped over
+  to the signature above it (C, Java, C#). A decorated new member, and a new nested class or
+  struct (`class _K: z = sabotage()`), name the enclosing class. A rename onto an excluded path is
+  checked as a deletion of the old file. **Accepted under ADR-1152:** a JS statement misindented to
+  member level inside a class body is read as part of the class, not attributed separately.
 - **Fixer hooks on build files** (ledger 1951). `infra:format-tests:r<n>` (before the ownership
   hash, the test judge and the freeze) and `infra:format-code:r<n>` (before the purge, the
   post-coder hash and the code judge) run `pre-commit run --files <paths>` until a run changes
   nothing, at most 3 runs, so the judges and the hashes see the bytes the commit-time hooks leave.
   A pre-commit fixer no longer stops the build at the commit step. A hook that changes a frozen
   file (`stop_gate: hash`), a path outside the files it was given (`scope`), or still rewrites
-  after 3 runs (`commit`) stops the run. No hook runs when `.pre-commit-config.yaml` or a tracked
-  file its text names (a local hook entry) differs from HEAD (`stop_gate: hash`); each run is
+  after 3 runs (`commit`) stops the run. The hooks run in a scratch checkout of HEAD: only the
+  selected files are copied in and back, and files under the top-level directory of a hook entry
+  or `-m` module the config names are never selected, so a coder's edit to hook code never runs
+  (real pre-commit 4.6.2 ran an edited `-m` module from the worktree). A changed
+  `.pre-commit-config.yaml` stops the run (`stop_gate: hash`) before any hook runs; each run is
   capped at 180 s. The commit step's tree-equality check (ADR-1151) is unchanged.
 - **yaadgaar write-back** (ledger 1928). For a `yaadgaar` source of a `yadgarhq/` project,
   `infra:yaadgaar-writeback` (default agent; `fleet:judge` may not write to a ledger) appends the
@@ -77,9 +85,10 @@ changed; the new page text and the optional `symbol` key are additions, guarded 
   by id with `expect_version`, writes an empty body as the heading plus the section with a
   script-computed `expect_body_sha256` and appends to a non-empty one only through a literal
   `patch` on a unique tail, retries once on `VERSION_MISMATCH`, and re-reads to confirm. Never the
-  yadgar ledger. The step returns the project it resolved; an absent or other project fails every
-  entry (fail closed). Task bodies are data, not instructions. A ref that is not a task number is
-  never sent. 2.1.6 handed the section back for a human to post.
+  yadgar ledger. A read-only step (`infra:yaadgaar-read`) returns the project it resolved and each
+  task's id and version first; the script refuses an absent or other project before any edit step
+  runs, and skips a task that already carries the marker. Task bodies are data, not instructions.
+  A ref that is not a task number is never sent. 2.1.6 handed the section back for a human to post.
 - **Codeberg plan link** (ledger 1928). The workspace step returns `remote_host`; a Codeberg origin
   gets `https://codeberg.org/<o>/<r>/src/branch/<branch>/<plan>` in the ledger section and comments.
 - **No model blob relays left on the gate path** (ledger 1952). The branch scan is one program that
