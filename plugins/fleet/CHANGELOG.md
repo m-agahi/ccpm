@@ -7,8 +7,9 @@ Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
 ### Breaking changes
 
 - **Build-time caller check** (ledger 1956). After the code judge approves a tree and before
-  every commit, a modified existing definition that is not a symbol of the sealed
-  `changed_symbols` stops the run (`needs_human`, new `stop_gate: "callers"`). Builds that 2.1.6
+  every commit, the run stops (`needs_human`, new `stop_gate: "callers"`) on a modified existing
+  definition that `changed_symbols` does not map in the same file and line range, and on a change
+  in an unclassified file or at module level in a file the plan does not name. Builds that 2.1.6
   committed can now stop here.
 - **Branch-scan output shape** (ledger 1952). `infra:branch-scan` returns `{commits, refs, digest}`;
   each ref entry carries `task_id`, `plan_path` and `ref_ok` instead of `content`. The plan-ref
@@ -22,13 +23,20 @@ Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
   header and the README now name the file form.
 - **`infra:changed-defs:r<n>`** (ledger 1956), a read-only step (`fleet:judge`) that runs a program
   over `git diff <plan_commit> <approved tree>` for the files that existed at the plan commit and
-  lists every existing definition the tree modifies: removed or re-added definition lines, and the
-  innermost enclosing definition of every other change, read from the base blob (git's hunk header
-  names the nearest column-0 line without a `diff=` attribute, the class rather than its method).
-  New definitions, criterion test files, the plan doc, non-code files and binary diffs are not
-  listed. The relayed lists are checked against the program's digest. A ref sealed before 2.1.6
-  skips the check with a gate line. Test: the actions#211 B1 PoC (the coder changes
-  `prestop_sleep`, which the plan never mapped) stops before the commit.
+  lists every existing definition the tree modifies (`{name, at, end}`, every definition of a
+  name): removed or re-added definition lines, and the innermost enclosing definition of every
+  other change, read from the base blob (git's hunk header names the nearest column-0 line without
+  a `diff=` attribute, the class rather than its method). It also lists `excluded` (criterion test
+  files, the plan doc), `unclassified` (no definition pattern, binary) and `unattributed`
+  (module-level changes); path names are printed with non-printable characters escaped. Makefile
+  targets and variables, shell functions and shebang scripts are classified. A definition counts as
+  mapped only when its symbol has an occurrence in the same file inside its lines; an unclassified
+  file or an unattributed change passes only in a file the plan names (an occurrence path,
+  `allowed_additions.files` or a repo obligation's `files`). Every excluded or unclassified path
+  gets a gate line. The relayed lists are checked against the program's digest. A ref sealed before
+  2.1.6 skips the check with a gate line. Tests: the actions#211 B1 PoC (the coder changes
+  `prestop_sleep`, which the plan never mapped) stops before the commit; a same-named function in
+  another file is not covered by the mapped one (security review).
 - **No model blob relays left on the gate path** (ledger 1952). The branch scan is one program that
   reads each plan-ref message itself and prints `task_id`, `plan_path` and `ref_ok` (the
   `planRefProblem` checks, ported; a test checks Python and JS agree), never the message text.

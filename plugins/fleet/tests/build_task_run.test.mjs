@@ -6157,8 +6157,8 @@ const ARRAY_SITES = {
   "e.occurrences @ changedSymbolFindings": "role:scope-and-plan:changed_symbols[].occurrences",
   "r.capped @ callerCheck": "infra:capped",
   "r.defs @ buildCallerCheck": "infra:defs",
-  "r.skipped @ buildCallerCheck": "infra:skipped",
   "pf.changed_symbols @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
+  "o.files @ planScopeFiles": "parsed: repo_obligations of the sealed plan facts",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   "r.files @ commitPlanAndRef": "infra:files",
   "r.refs @ commitPlanAndRef": "infra:refs",
@@ -7559,18 +7559,21 @@ test("3.0.0 changed-defs program: the B1 PoC, an indented method, a constant, a 
     const tree = sh(wt, "git", "write-tree").trim();
     const o = runDefs(wt, base, tree, ["tests/test_guards.py", "docs/plans/x.md"]);
     assert.deepEqual(o.defs, [
-      { name: "LIMIT", at: "chart/guards.py:1" },
-      { name: "guard_verdict", at: "chart/guards.py:4" },
-      { name: "legacy", at: "chart/old.py:1" },
-      { name: "prestop_sleep", at: "chart/render.py:10" },
-      { name: "run", at: "chart/render.py:19" },
-      { name: "boot", at: "web/app.js:1" },
-      { name: "start", at: "web/app.js:6" },
+      { name: "LIMIT", at: "chart/guards.py:1", end: 1 },
+      { name: "guard_verdict", at: "chart/guards.py:4", end: 5 },
+      { name: "legacy", at: "chart/old.py:1", end: 2 },
+      { name: "prestop_sleep", at: "chart/render.py:10", end: 13 },
+      { name: "run", at: "chart/render.py:19", end: 20 },
+      { name: "boot", at: "web/app.js:1", end: 2 },
+      { name: "start", at: "web/app.js:6", end: 7 },
     ]);
-    assert.deepEqual(o.skipped, ["README.md", "data.bin", "docs/plans/x.md", "tests/test_guards.py"]);
-    assert.equal(o.digest, sha256(canon({ defs: o.defs, skipped: o.skipped })));
+    assert.deepEqual(o.excluded, ["docs/plans/x.md", "tests/test_guards.py"]);
+    assert.deepEqual(o.unclassified, ["README.md", "data.bin"]);
+    assert.deepEqual(o.unattributed, []);
+    const keep = { defs: o.defs, excluded: o.excluded, unclassified: o.unclassified, unattributed: o.unattributed };
+    assert.equal(o.digest, sha256(canon(keep)));
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
-    assert.equal(sha256(fn({ defs: o.defs, skipped: o.skipped })), o.digest);
+    assert.equal(sha256(fn(keep)), o.digest);
     // no change at all: nothing listed
     const same = runDefs(wt, base, sh(wt, "git", "rev-parse", "HEAD^{tree}").trim(), []);
     assert.deepEqual(same.defs, []);
@@ -7579,8 +7582,8 @@ test("3.0.0 changed-defs program: the B1 PoC, an indented method, a constant, a 
   }
 });
 
-function defsOut(defs, skipped) {
-  const o = { defs, skipped: skipped || [] };
+function defsOut(defs, more) {
+  const o = Object.assign({ defs, excluded: [], unclassified: [], unattributed: [] }, more || {});
   return { status: "ok", reason: "listed", ...o, digest: sha256(canon(o)) };
 }
 
@@ -7604,19 +7607,19 @@ test("3.0.0 build caller check: runs read-only after the code judge and before t
 test("3.0.0 build caller check PoC (actions#211 B1): the coder changes an existing function the plan never mapped -> stops before the commit", async () => {
   const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
   s["infra:changed-defs:r1"] = defsOut([
-    { name: "guard_verdict", at: "chart/guards.py:4" },
-    { name: "prestop_sleep", at: "chart/render.py:10" },
+    { name: "guard_verdict", at: "chart/guards.py:10", end: 12 },
+    { name: "prestop_sleep", at: "chart/render.py:70", end: 74 },
   ]);
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "callers");
-  assert.match(out.result.reason, /prestop_sleep \(chart\/render\.py:10\)/);
+  assert.match(out.result.reason, /prestop_sleep \(chart\/render\.py:70\)/);
   assert.doesNotMatch(out.result.reason, /guard_verdict \(/);
   assert.ok(!out.labels.includes("infra:commit:r1"), "nothing committed");
   // the mapped symbol alone passes
   const t = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
-  t["infra:changed-defs:r1"] = defsOut([{ name: "guard_verdict", at: "chart/guards.py:4" }]);
+  t["infra:changed-defs:r1"] = defsOut([{ name: "guard_verdict", at: "chart/guards.py:10", end: 12 }]);
   const ok = await run(t, ARGS);
   noUnscripted(ok);
   assert.equal(ok.result.status, "ok", ok.result.reason);
@@ -7624,17 +7627,17 @@ test("3.0.0 build caller check PoC (actions#211 B1): the coder changes an existi
 
 test("3.0.0 build caller check: a relay that drops a definition fails the step", async () => {
   const s = happy();
-  const good = defsOut([{ name: "prestop_sleep", at: "chart/render.py:10" }]);
+  const good = defsOut([{ name: "prestop_sleep", at: "chart/render.py:10", end: 13 }]);
   s["infra:changed-defs:r1"] = { ...good, defs: [] };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "failed");
   assert.match(out.result.reason, /infra:changed-defs:r1: the relayed lists do not match the program's digest/);
   assert.ok(!out.labels.includes("infra:commit:r1"));
   const t = happy();
-  t["infra:changed-defs:r1"] = { status: "ok", reason: "x", defs: "[]", skipped: [], digest: "0".repeat(64) };
+  t["infra:changed-defs:r1"] = { status: "ok", reason: "x", defs: "[]", excluded: [], unclassified: [], unattributed: [], digest: "0".repeat(64) };
   const o2 = await run(t, ARGS);
   assert.equal(o2.result.status, "failed");
-  assert.match(o2.result.reason, /no defs or skipped list/);
+  assert.match(o2.result.reason, /no defs, excluded, unclassified or unattributed list/);
 });
 
 test("3.0.0 build caller check: a ref sealed before 2.1.6 (changed_symbols null) skips the check with a gate line", async () => {
@@ -7881,4 +7884,143 @@ test("3.0.0 relay programs print digests the workflow accepts (iac-scan, read-st
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- 3.0.0 review of the build caller check
+
+test("3.0.0 review: a same-named function in another file is not covered by the mapped one -> stops", async () => {
+  // validate() in chart/a.py is mapped; validate() in chart/b.py changes too
+  const s = happy();
+  s["role:scope-and-plan"].changed_symbols = [{ symbol: "validate", occurrences: [{ at: "chart/a.py:3", criterion: "AC1", dont_care: null }] }];
+  s["infra:callers"] = callersOut({ validate: ["chart/a.py:3"] });
+  s["infra:changed-defs:r1"] = defsOut([
+    { name: "validate", at: "chart/a.py:3", end: 6 },
+    { name: "validate", at: "chart/b.py:8", end: 11 },
+  ]);
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "callers");
+  assert.match(out.result.reason, /validate \(chart\/b\.py:8, mapped only elsewhere\)/);
+  assert.doesNotMatch(out.result.reason, /chart\/a\.py:3/);
+  assert.ok(!out.labels.includes("infra:commit:r1"));
+  // the same file, an occurrence outside the definition's lines: not covered either
+  const t = happy();
+  t["role:scope-and-plan"].changed_symbols = [{ symbol: "validate", occurrences: [{ at: "chart/a.py:30", criterion: "AC1", dont_care: null }] }];
+  t["infra:callers"] = callersOut({ validate: ["chart/a.py:30"] });
+  t["infra:changed-defs:r1"] = defsOut([{ name: "validate", at: "chart/a.py:3", end: 6 }]);
+  const o2 = await run(t, ARGS);
+  assert.equal(o2.result.stop_gate, "callers", o2.result.reason);
+});
+
+test("3.0.0 review: the program records every definition of a name, path-aware", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-defs2-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    spawnSync("mkdir", ["-p", join(wt, "chart")]);
+    writeFileSync(join(wt, "chart/a.py"), "import os\n\n\ndef validate(x):\n    return x\n");
+    writeFileSync(join(wt, "chart/b.py"), "class A:\n    def validate(self):\n        return 1\n\n\nclass B:\n    def validate(self):\n        return 2\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "base");
+    const base = sh(wt, "git", "rev-parse", "HEAD").trim();
+    writeFileSync(join(wt, "chart/a.py"), "import os\n\n\ndef validate(x):\n    return not x\n");
+    writeFileSync(join(wt, "chart/b.py"), "class A:\n    def validate(self):\n        return 1\n\n\nclass B:\n    def validate(self):\n        return 3\n");
+    sh(wt, "git", "add", "-A");
+    const o = runDefs(wt, base, sh(wt, "git", "write-tree").trim(), []);
+    assert.deepEqual(o.defs, [
+      { name: "validate", at: "chart/a.py:4", end: 5 },
+      { name: "validate", at: "chart/b.py:7", end: 8 },
+    ]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review: path names with non-printable characters are printed escaped, so they match no plan path", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-defs3-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    const odd = "we\u0007ird\u200b.py";
+    writeFileSync(join(wt, odd), "def f():\n    return 1\n");
+    writeFileSync(join(wt, "notes\u0001.txt"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "base");
+    const base = sh(wt, "git", "rev-parse", "HEAD").trim();
+    writeFileSync(join(wt, odd), "def f():\n    return 2\n");
+    writeFileSync(join(wt, "notes\u0001.txt"), "b\n");
+    sh(wt, "git", "add", "-A");
+    const o = runDefs(wt, base, sh(wt, "git", "write-tree").trim(), []);
+    assert.deepEqual(o.defs, [{ name: "f", at: "we\\u0007ird\\u200b.py:1", end: 2 }]);
+    assert.deepEqual(o.unclassified, ["notes\\u0001.txt"]);
+    for (const x of [JSON.stringify(o.defs), JSON.stringify(o.unclassified)]) assert.ok(!/[\u0000-\u001f\u200b]/.test(JSON.parse(x).map((y) => (typeof y === "string" ? y : y.at)).join("")));
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review: Makefile targets, shell functions and shebang scripts are classified; module-level changes are unattributed", { skip: !HAVE_PY }, () => {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-defs4-"));
+  try {
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    spawnSync("mkdir", ["-p", join(wt, "bin"), join(wt, "chart")]);
+    const files = {
+      Makefile: "VERSION = 1\n\ntest:\n\tpytest -q\n\nlint:\n\truff .\n",
+      "ci.sh": "#!/bin/sh\nset -e\n\nrun_gate() {\n  echo ok\n}\n",
+      "bin/tool": "#!/usr/bin/env python3\nimport sys\n\n\ndef main():\n    return 0\n",
+      "chart/c.py": "import os\n\n\ndef f():\n    return 1\n",
+    };
+    for (const [k, v] of Object.entries(files)) writeFileSync(join(wt, k), v);
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "base");
+    const base = sh(wt, "git", "rev-parse", "HEAD").trim();
+    writeFileSync(join(wt, "Makefile"), "VERSION = 1\n\ntest:\n\tpytest -q -x\n\nlint:\n\truff .\n");
+    writeFileSync(join(wt, "ci.sh"), "#!/bin/sh\nset -e\n\nrun_gate() {\n  echo skipped\n}\n");
+    writeFileSync(join(wt, "bin/tool"), "#!/usr/bin/env python3\nimport sys\n\n\ndef main():\n    return 1\n");
+    writeFileSync(join(wt, "chart/c.py"), "import os\nimport re\n\n\ndef f():\n    return 1\n");
+    sh(wt, "git", "add", "-A");
+    const o = runDefs(wt, base, sh(wt, "git", "write-tree").trim(), []);
+    assert.deepEqual(o.defs, [
+      { name: "test", at: "Makefile:3", end: 4 },
+      { name: "main", at: "bin/tool:5", end: 6 },
+      { name: "run_gate", at: "ci.sh:4", end: 5 },
+    ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)));
+    assert.deepEqual(o.unclassified, []);
+    assert.deepEqual(o.unattributed, ["chart/c.py:1"]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review: an unclassified file or a module-level change stops unless the plan names the file; every skipped path gets a gate line", async () => {
+  const mk = (more, obligations) => {
+    const s = obligations ? withObligations(obligations) : happy();
+    s["infra:changed-defs:r1"] = defsOut([], more);
+    return s;
+  };
+  const out = await run(mk({ unclassified: ["README.md"], excluded: ["tests/test_a.py"] }), ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "callers");
+  assert.match(out.result.reason, /unclassified file README\.md/);
+  assert.ok(out.result.gate_log.some((m) => /infra:changed-defs:r1: unclassified README\.md/.test(m)));
+  assert.ok(out.result.gate_log.some((m) => /infra:changed-defs:r1: skipped tests\/test_a\.py \(frozen test or plan doc\)/.test(m)));
+  const o2 = await run(mk({ unattributed: ["chart/c.py:1"] }), ARGS);
+  assert.equal(o2.result.stop_gate, "callers", o2.result.reason);
+  assert.match(o2.result.reason, /module-level change at chart\/c\.py:1/);
+  // a docs file the plan names in a repo obligation passes
+  const ok = await run(mk({ unclassified: ["CHANGELOG.md"] }, [Object.assign({}, OB_LOG, { files: ["CHANGELOG.md"] })]), ARGS);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+  assert.ok(ok.result.gate_log.some((m) => /infra:changed-defs:r1: unclassified CHANGELOG\.md/.test(m)));
+  // a module-level change in a file whose symbol the plan maps passes
+  const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
+  s["infra:changed-defs:r1"] = defsOut([], { unattributed: ["chart/render.py:1"] });
+  const o3 = await run(s, ARGS);
+  assert.equal(o3.result.status, "ok", o3.result.reason);
 });

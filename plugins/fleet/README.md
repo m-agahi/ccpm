@@ -119,23 +119,38 @@ checked by the audit. A ref sealed before 2.1.6 builds without caller coverage (
 Build-time caller check (3.0.0, step 12b): after the code judge approves a tree and before every
 commit step, a read-only step (`infra:changed-defs:r<n>`, the `fleet:judge` agent) runs a program
 over `git diff <plan_commit> <approved tree>` (`-U0`, renames off) for the files that existed at the
-plan commit (modified, type-changed or deleted). For each hunk it reads the base blob: a removed or
-re-added definition line names that definition; any other removed line, and an insertion whose
-first line is not a definition, names the innermost definition above it with a smaller indent.
-Only names the base blob defines are listed, so a new function is an addition, not a change. The
+plan commit (modified, type-changed or deleted). For each hunk it reads the base blob: a removed
+definition line, or a re-added one (then every base definition of that name), names that
+definition; any other removed line, and an insertion whose first line is not a definition, names
+the innermost definition above it with a smaller indent. Each definition is printed as
+`{name, at: "<path>:<line>", end}` (`end` = the last line of its body), every one of a name. The
 program does this itself instead of reading git's hunk header: without a `diff=` attribute git
-names the nearest column-0 line, the class rather than its method. The criterion test files, the
-plan doc, non-code files and binary diffs are skipped. The relayed lists must match the program's
-digest. Any listed name that is not a symbol of the sealed `changed_symbols` stops the run with
-`needs_human` and `stop_gate: "callers"` before anything is committed. The script cannot tell a
-coder's scope creep from a planner's miss, so a human decides (re-plan with the symbol mapped, or
-narrow the change); a `plan_wrong` re-plan would let the coder's edit widen the plan by itself.
-Limits: indentation-based and line-based; definitions are found by keyword (`def`, `class`,
-`function`, `fn`, `func`, ...), by JS arrow, method and module-level `const`/`let`/`var` forms,
-by shell `name()` and by C-like signatures, and module-level assignments count as definitions
-(Python, JS, shell, Go, Rust, Ruby constants). A change to a decorator line or to code at module
-level that is no definition names nothing. A ref sealed before 2.1.6 (`changed_symbols: null`)
-skips the check with the gate line "build caller check skipped".
+names the nearest column-0 line, the class rather than its method. It also prints `excluded`
+(the criterion test files and the plan doc), `unclassified` (files no definition pattern covers,
+and binary diffs) and `unattributed` (`<path>:<line>` of a change with no enclosing definition,
+such as an added import). Path names are printed with non-printable characters escaped. The
+relayed lists must match the program's digest.
+
+The script then refuses, with `needs_human` and `stop_gate: "callers"` before anything is
+committed:
+
+- a definition whose name is no symbol of the sealed `changed_symbols`, or whose symbol has no
+  occurrence in the same file inside the definition's lines (a same-named function in another file
+  is not covered: "mapped only elsewhere");
+- an unclassified file, or an unattributed change, in a file the plan does not name. The plan names
+  a file through an occurrence path of `changed_symbols`, `allowed_additions.files` or a repo
+  obligation's `files`, so a CHANGELOG or docs file an obligation lists passes.
+
+Every excluded and every unclassified path gets a gate line. The script cannot tell a coder's scope
+creep from a planner's miss, so a human decides (re-plan with the symbol mapped, or narrow the
+change); a `plan_wrong` re-plan would let the coder's edit widen the plan by itself.
+Definitions are found by keyword (`def`, `class`, `function`, `fn`, `func`, ...), by JS arrow,
+method and module-level `const`/`let`/`var` forms, by shell `name()`, by Makefile targets and
+variables (`Makefile`, `*.mk`), by C-like signatures, and by module-level assignments (Python, JS,
+shell, Go, Rust and Ruby constants). Extensionless files are classified by their shebang (python,
+sh, bash, zsh, node). Limits: indentation-based and line-based; a decorator line counts as
+module-level. A ref sealed before 2.1.6 (`changed_symbols: null`) skips the check with the gate
+line "build caller check skipped".
 
 Intake classifies the input and fetches its text: a ledger task through yadgar `task_get`, a Jira
 ticket through the Atlassian MCP, an issue or PR through `gh-personal` or the Codeberg API, a plan

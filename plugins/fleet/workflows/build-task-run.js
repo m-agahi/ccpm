@@ -1177,9 +1177,11 @@ const INFRA_SCHEMA = {
     capped: { type: "array", items: STR },
     defs: {
       type: "array",
-      items: { type: "object", properties: { name: STR, at: STR }, required: ["name", "at"] },
+      items: { type: "object", properties: { name: STR, at: STR, end: { type: "integer" } }, required: ["name", "at", "end"] },
     },
-    skipped: { type: "array", items: STR },
+    excluded: { type: "array", items: STR },
+    unclassified: { type: "array", items: STR },
+    unattributed: { type: "array", items: STR },
     digest: STR,
     target: STR,
     message: STR,
@@ -2241,15 +2243,19 @@ print(json.dumps(out, sort_keys=True, ensure_ascii=False))
 // The build-time caller check (3.0.0, ledger 1956): the EXISTING definitions
 // that `git diff <base> <tree>` modifies, in the files that existed at base
 // (status M, T or D; renames off, so a moved file is a delete and an add).
-// For every hunk (-U0) the program reads the base blob itself: a removed or
-// re-added definition line names its definition; any other removed line, and
-// an insertion that does not start with a definition line, names the
-// innermost definition above it with a smaller indent. Only names defined in
-// the base blob are listed. git's own hunk header is not used: without a
-// diff= attribute it names the nearest column-0 line (a class, not its
-// method). Excluded paths (frozen tests, the plan doc), non-code files and
-// binary diffs are listed in skipped. digest: sha256 over {defs, skipped}.
-// Read only.
+// For every hunk (-U0) the program reads the base blob itself: a removed
+// definition line, or a re-added one (every base definition of that name),
+// names its definition; any other removed line, and an insertion that does
+// not start with a definition line, names the innermost definition above it
+// with a smaller indent. A def is {name, at: "<path>:<line>", end: <last line
+// of its body>}. git's own hunk header is not used: without a diff=
+// attribute it names the nearest column-0 line (a class, not its method).
+// excluded: the frozen tests and the plan doc. unclassified: files no
+// definition pattern covers (by extension, Makefile name or shebang) and
+// binary diffs. unattributed: "<path>:<line>" of a change in a classified
+// file with no definition above it (module-level code). Path names are
+// printed with non-printable characters escaped. digest: sha256 over
+// {defs, excluded, unclassified, unattributed}. Read only.
 // CHANGED_DEFS_PY_BEGIN
 const CHANGED_DEFS_PY = String.raw`
 import hashlib, json, os, re, subprocess, sys
@@ -2262,7 +2268,7 @@ def run(*a):
         sys.exit(r.stderr.decode('utf-8', 'replace'))
     return r.stdout
 LANG = {}
-for k, exts in (('py', '.py .pyi'), ('js', '.js .mjs .cjs .jsx .ts .tsx .mts .cts'), ('sh', '.sh .bash .zsh'),
+for k, exts in (('py', '.py .pyi'), ('js', '.js .mjs .cjs .jsx .ts .tsx .mts .cts'), ('sh', '.sh .bash .zsh .ksh .bats'),
                 ('kw', '.go .rs .rb .kt .kts .scala .swift .php .pl .pm .lua'), ('c', '.c .h .cc .cpp .cxx .hpp .java .cs')):
     for e in exts.split():
         LANG[e] = k
@@ -2297,22 +2303,42 @@ def defname(lang, line):
     return None
 def indent(line):
     return len(line) - len(line.lstrip(' \t'))
-def enclosing(lang, lines, start, ind):
-    # the innermost definition at or above lines[start] (0-based) with a smaller indent
-    for i in range(start, -1, -1):
-        s = lines[i]
-        if not s.strip():
-            continue
-        if indent(s) < ind:
-            n = defname(lang, s)
-            if n:
-                return n, i
-            if indent(s) == 0:
-                return None
-            ind = indent(s)
-    return None
 HUNK = re.compile(rb'^@@ -([0-9]+)(?:,([0-9]+))? \+[0-9]+(?:,[0-9]+)? @@')
-defs, skipped = set(), set()
+MAKE_TARGET = re.compile(r'^([A-Za-z_][A-Za-z0-9_.-]*)\s*::?(?!=)')
+MAKE_VAR = re.compile(r'^(?:override\s+|export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[:?+!]?=')
+def mk_defname(line):
+    m = MAKE_TARGET.match(line) or MAKE_VAR.match(line)
+    return m.group(1) if m else None
+def lang_of(path, blob):
+    base_name = path.rsplit('/', 1)[-1]
+    if base_name in ('Makefile', 'makefile', 'GNUmakefile') or base_name.endswith('.mk'):
+        return 'mk'
+    ext = os.path.splitext(base_name)[1].lower()
+    if ext:
+        return LANG.get(ext)
+    first = blob.split(b'\n', 1)[0]
+    if first.startswith(b'#!'):
+        if b'python' in first:
+            return 'py'
+        if b'node' in first:
+            return 'js'
+        if re.search(rb'\b(ba|z|da|k)?sh\b', first):
+            return 'sh'
+    return None
+def esc(p):
+    # a path name is printed with every non-printable character escaped
+    return ''.join(c if c.isprintable() else '\\u%04x' % ord(c) for c in p)
+def span(lines, i):
+    # 1-based last line of the definition at lines[i]: deeper-indented lines after it
+    d, end = indent(lines[i]), i
+    for k in range(i + 1, len(lines)):
+        if not lines[k].strip():
+            continue
+        if indent(lines[k]) <= d:
+            break
+        end = k
+    return end + 1
+defs, excluded, unclassified, unattributed = {}, set(), set(), set()
 st = run('diff', '--name-status', '-z', '--no-renames', base, tree, '--').split(b'\0')
 i = 0
 while i + 1 < len(st):
@@ -2320,26 +2346,44 @@ while i + 1 < len(st):
     i += 2
     if status[:1] not in ('M', 'T', 'D'):
         continue
-    lang = LANG.get(os.path.splitext(path)[1].lower())
-    if path in excl or lang is None:
-        skipped.add(path)
+    if path in excl:
+        excluded.add(esc(path))
         continue
     blob = run('cat-file', 'blob', base + ':' + path)
-    if b'\0' in blob:
-        skipped.add(path)
+    lang = lang_of(path, blob)
+    if lang is None or b'\0' in blob:
+        unclassified.add(esc(path))
         continue
+    dn = mk_defname if lang == 'mk' else (lambda x, _l=lang: defname(_l, x))
     lines = blob.decode('utf-8', 'replace').split('\n')
-    at_base = {}
+    by_name = {}
     for n, s in enumerate(lines):
-        d = defname(lang, s)
-        if d and IDENT.match(d) and d not in at_base:
-            at_base[d] = n
-    def add(found):
-        if found and IDENT.match(found[0]) and found[0] in at_base:
-            defs.add((found[0], path + ':' + str(found[1] + 1)))
+        d = dn(s)
+        if d and IDENT.match(d):
+            by_name.setdefault(d, []).append(n)
+    def record(name, n):
+        defs[(name, esc(path) + ':' + str(n + 1))] = span(lines, n)
+    def attribute(L, ind, at_line):
+        # the innermost definition above lines[L] with a smaller indent, else unattributed
+        for k in range(L, -1, -1):
+            s = lines[k]
+            if not s.strip():
+                continue
+            if indent(s) < ind:
+                d = dn(s)
+                if d:
+                    if IDENT.match(d):
+                        record(d, k)
+                    else:
+                        unattributed.add(esc(path) + ':' + str(at_line))
+                    return
+                if indent(s) == 0:
+                    break
+                ind = indent(s)
+        unattributed.add(esc(path) + ':' + str(at_line))
     out = run('diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', base, tree, '--', path)
     if b'\nBinary files ' in out or out.startswith(b'Binary files '):
-        skipped.add(path)
+        unclassified.add(esc(path))
         continue
     hunks = []
     for raw in out.split(b'\n'):
@@ -2353,17 +2397,28 @@ while i + 1 < len(st):
             s = lines[L] if L < len(lines) else ''
             if not s.strip():
                 continue
-            d = defname(lang, s)
-            add((d, at_base[d]) if d and d in at_base else enclosing(lang, lines, L - 1, indent(s)))
+            d = dn(s)
+            if d and IDENT.match(d):
+                record(d, L)
+            elif d:
+                unattributed.add(esc(path) + ':' + str(L + 1))
+            else:
+                attribute(L - 1, indent(s), L + 1)
         for s in added:
-            d = defname(lang, s)
-            if d and d in at_base:
-                add((d, at_base[d]))
+            d = dn(s)
+            # a re-added or duplicated definition line: every base definition of that name
+            for n in by_name.get(d, []) if d else []:
+                record(d, n)
         if b == 0:
             first = next((s for s in added if s.strip()), None)
-            if first is not None and not defname(lang, first):
-                add(enclosing(lang, lines, a - 1, indent(first)))
-o = {'defs': [{'name': n, 'at': p} for n, p in sorted(defs, key=lambda x: (x[1], x[0]))], 'skipped': sorted(skipped)}
+            if first is not None and not dn(first):
+                attribute(a - 1, indent(first), max(a, 1))
+o = {
+    'defs': [{'name': n, 'at': at, 'end': e} for (n, at), e in sorted(defs.items(), key=lambda x: (x[0][1], x[0][0]))],
+    'excluded': sorted(excluded),
+    'unclassified': sorted(unclassified),
+    'unattributed': sorted(unattributed),
+}
 o['digest'] = hashlib.sha256(json.dumps(o, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(o, sort_keys=True, ensure_ascii=False))
 `;
@@ -2651,7 +2706,7 @@ function changedDefsPrompt(inputs) {
     "Run this one command exactly as written, unmodified:\n" +
     "python3 -I -c " + shQuote(CHANGED_DEFS_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.base) + " " + shQuote(inputs.tree) + " " + shQuote(JSON.stringify(inputs.exclude)) +
     "\n" +
-    'It prints one JSON object {defs, skipped, digest}. Return {status: "ok", reason, defs, skipped, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'It prints one JSON object {defs, excluded, unclassified, unattributed, digest}. Return {status: "ok", reason, defs, excluded, unclassified, unattributed, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -3825,29 +3880,79 @@ async function callerCheck(label, symbols, worktree, planPath) {
   return { findings, occurrences: occ };
 }
 
-// The build-time caller check (3.0.0, ledger 1956): every existing definition
-// the approved tree modifies (base: the plan commit) must be a symbol of the
-// sealed changed_symbols. One that is not stops the run before the commit:
+// The build-time caller check (3.0.0, ledger 1956). The approved tree
+// (base: the plan commit) may modify an existing definition only where the
+// sealed changed_symbols maps it: a symbol of that name with an occurrence in
+// the same file inside the definition's lines (a same-named function in
+// another file is not covered). A change in a file no definition pattern
+// covers, or a module-level change in a classified file, passes only when
+// the plan names that file (an occurrence path, allowed_additions.files or a
+// repo obligation's files). Anything else stops the run before the commit:
 // the script cannot tell a coder's scope creep from a planner's miss, and the
 // actions#211 B1 weakening was exactly such an unmodelled definition.
-async function buildCallerCheck(label, symbols, worktree, base, tree, exclude) {
+function buildCallerFindings(relayed, symbols, scopeFiles) {
+  const occ = {};
+  for (const sy of symbols) for (const o of sy.occurrences || []) {
+    const k = occurrenceKey(o.at);
+    if (k) (occ[sy.symbol] = occ[sy.symbol] || []).push(k);
+  }
+  const scope = {};
+  for (const sy of symbols) for (const k of occ[sy.symbol] || []) scope[k.slice(0, k.lastIndexOf(":"))] = true;
+  for (const f of scopeFiles) scope[normPath(String(f))] = true;
+  const out = [];
+  for (const d of relayed.defs) {
+    const at = occurrenceKey(d.at);
+    const path = at ? at.slice(0, at.lastIndexOf(":")) : null;
+    const start = at ? Number(at.slice(at.lastIndexOf(":") + 1)) : 0;
+    const end = typeof d.end === "number" && d.end >= start ? d.end : start;
+    const hit = (occ[d.name] || []).some((k) => {
+      const n = Number(k.slice(k.lastIndexOf(":") + 1));
+      return path !== null && k.slice(0, k.lastIndexOf(":")) === path && n >= start && n <= end;
+    });
+    if (!hit) out.push(d.name + " (" + d.at + (occ[d.name] ? ", mapped only elsewhere" : "") + ")");
+  }
+  for (const p of relayed.unclassified) if (!scope[normPath(p)]) out.push("unclassified file " + p + " (no definition pattern; not named by the plan)");
+  for (const a of relayed.unattributed) {
+    const p = a.slice(0, a.lastIndexOf(":"));
+    if (!scope[normPath(p)]) out.push("module-level change at " + a + " (no enclosing definition; file not named by the plan)");
+  }
+  return out;
+}
+
+async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, scopeFiles) {
   const r = await infra(label, changedDefsPrompt({ worktree, base, tree, exclude }), "Code", JUDGE_AGENT);
-  if (!Array.isArray(r.defs) || !Array.isArray(r.skipped) || !r.defs.every((d) => d && typeof d.name === "string" && typeof d.at === "string"))
-    halt("failed", label + " returned no defs or skipped list");
-  const relayed = { defs: r.defs.map((d) => ({ name: d.name, at: d.at })), skipped: r.skipped };
+  const lists = ["excluded", "unclassified", "unattributed"];
+  if (
+    !Array.isArray(r.defs) ||
+    !lists.every((k) => Array.isArray(r[k]) && r[k].every((x) => typeof x === "string")) ||
+    !r.defs.every((d) => d && typeof d.name === "string" && typeof d.at === "string" && typeof d.end === "number")
+  )
+    halt("failed", label + " returned no defs, excluded, unclassified or unattributed list");
+  const relayed = { defs: r.defs.map((d) => ({ name: d.name, at: d.at, end: d.end })), excluded: r.excluded, unclassified: r.unclassified, unattributed: r.unattributed };
   if (typeof r.digest !== "string" || sha256Hex(canonical(relayed)) !== r.digest)
     halt("failed", label + ": the relayed lists do not match the program's digest (a definition was dropped or changed in the copy)");
-  const mapped = symbols.map((x) => x.symbol);
-  const extra = relayed.defs.filter((d) => mapped.indexOf(d.name) < 0);
-  if (extra.length)
+  for (const p of relayed.excluded) gate(label + ": skipped " + p + " (frozen test or plan doc)");
+  for (const p of relayed.unclassified) gate(label + ": unclassified " + p + " (no definition pattern; checked against the plan's files)");
+  const bad = buildCallerFindings(relayed, symbols, scopeFiles);
+  if (bad.length)
     halt(
       "needs_human",
-      "build caller check " + label + ": the approved tree " + tree + " modifies existing definition(s) not in the sealed changed_symbols: " +
-        extra.map((d) => d.name + " (" + d.at + ")").join(", ") +
+      "build caller check " + label + ": the approved tree " + tree + " changes code the sealed changed_symbols does not map: " +
+        bad.join(", ") +
         "; nothing committed. Re-plan with these symbols mapped (every caller to a criterion or dont_care), or keep the change inside the planned symbols",
       "callers",
     );
   return relayed;
+}
+
+// The files a plan names outside changed_symbols: allowed_additions.files and
+// every repo obligation's files.
+function planScopeFiles(pf) {
+  const out = [];
+  const aa = pf && pf.allowed_additions && Array.isArray(pf.allowed_additions.files) ? pf.allowed_additions.files : [];
+  for (const f of aa) if (typeof f === "string") out.push(f);
+  for (const o of (pf && pf.repo_obligations) || []) for (const f of (o && Array.isArray(o.files) ? o.files : [])) if (typeof f === "string") out.push(f);
+  return out;
 }
 
 // A stop or the one confirm-auto re-plan round for plan findings.
@@ -5308,10 +5413,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         ref.plan_commit,
         codeTree,
         frozenFiles.concat([ref.plan_path]),
+        planScopeFiles(planFacts),
       );
       gate(
         "build caller check r" + m + ": no existing definition outside changed_symbols (" + bc.defs.length + " modified: " +
-          (bc.defs.map((d) => d.name).join(", ") || "none") + "; skipped " + bc.skipped.length + " non-code or excluded path(s))",
+          (bc.defs.map((d) => d.name).join(", ") || "none") + "; " + bc.excluded.length + " excluded, " + bc.unclassified.length + " unclassified, " +
+          bc.unattributed.length + " module-level change(s), each in a file the plan names)",
       );
     }
 
