@@ -167,8 +167,13 @@ not hook code and is formatted. The config is read only with PyYAML (`yaml.safe_
 subprocess that prints JSON: `entry`, `args` and `language` of every hook of every repo, any YAML
 form). The interpreter is pre-commit's own, which ships PyYAML: the program follows the
 `pre-commit` executable's shebang, and a shell wrapper's `exec` target (pipx, nix), to that Python;
-then it tries its own `python3`. No interpreter with PyYAML: the step is refused (the surface is
-unknown); there is no line parser. When a surface path differs from HEAD, or a selected path goes
+then it tries its own `python3`. A nix wrapped script adds its site-packages to `sys.path` itself;
+the program reads those `/nix/store/.../site-packages` paths from the script and adds exactly
+them, so the nix pre-commit's own Python finds PyYAML. The loader runs as `<python> -I -c` with
+cwd `/`, so a `yaml.py` or `json.py` in the worktree is never imported. No interpreter with PyYAML:
+the step is refused (the surface is unknown); there is no line parser. Every embedded program of
+the workflow runs as `python3 -I` (no cwd on `sys.path`, no `PYTHON*` environment, no user site)
+and takes the worktree as an argument; a test checks each invocation. When a surface path differs from HEAD, or a selected path goes
 through a symlink (HEAD mode 120000, a symlinked parent at HEAD or in the worktree, or a realpath
 outside either checkout), nothing runs (`refused`, `stop_gate: hash`). A helper that a hook entry
 imports without the config naming it is a residual (ADR-1152). A scratch checkout a killed run left

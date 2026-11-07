@@ -88,7 +88,15 @@ changed; the new page text and the optional `symbol` key are additions, guarded 
   interpreter (its shebang, or a pipx/nix wrapper's `exec` target, followed to the Python), else the
   program's `python3` if it has PyYAML; any YAML form works, flow maps and folded scalars included.
   No interpreter with PyYAML refuses the step; there is no line-parser fallback (reviews 6 and 7).
-  The wrapper test uses bash, as nix wrappers do (`exec -a` is not in dash). **Accepted under ADR-1152:** a helper that a hook entry imports without
+  The wrapper test uses bash, as nix wrappers do (`exec -a` is not in dash).
+- **No program imports from the worktree** (PR #36 review 8). The YAML loader ran without `-I`
+  and with the worktree as cwd, so a coder-written `yaml.py` shadowed PyYAML and emptied the hook
+  surface (PoC with real pre-commit 4.6.2). It now runs as `<python> -I -c` with cwd `/`. Every
+  embedded program already ran as `python3 -I`; a test now checks each invocation, that a
+  `yaml.py` or `json.py` in the cwd changes nothing, and that no program needs a third-party import
+  (PyYAML only where it fails closed, `tomli` only as the `tomllib` fallback). The nix pre-commit's
+  own interpreter now finds PyYAML: the program adds the `/nix/store/.../site-packages` paths its
+  wrapped script names, and only such paths. **Accepted under ADR-1152:** a helper that a hook entry imports without
   the config naming it still runs from the scratch checkout of HEAD unless it is itself a selected
   file.
 - **yaadgaar write-back** (ledger 1928). For a `yaadgaar` source of a `yadgarhq/` project,

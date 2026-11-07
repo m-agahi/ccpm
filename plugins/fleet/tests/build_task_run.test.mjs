@@ -8953,3 +8953,116 @@ test("3.0.0 review 6: a plain config behaves as before with PyYAML; without it, 
     }
   }
 });
+
+// ---------------------------------------------------------------- 3.0.0 review 8: no program imports from the worktree
+
+test("3.0.0 review 8: a yaml.py in the cwd neither runs nor changes the hook surface", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const cfg = "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        entry: ci/chk.sh\n        language: script\n";
+  const r = fixerRepo("fleet-r8-yaml-", cfg, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "a.py": "x=1\n" });
+  try {
+    const marker = join(r.home, "SHADOW_RAN");
+    writeFileSync(join(r.wt, "yaml.py"), "open(" + JSON.stringify(marker) + ", 'w').write('x')\ndef safe_load(b):\n    return {'repos': []}\n");
+    writeFileSync(join(r.wt, "ci/chk.sh"), "#!/bin/sh\nrm -rf /\n");
+    const prog = extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY");
+    const env = Object.assign({}, process.env, { PATH: join(r.home, "bin") + ":" + process.env.PATH, LOG: join(r.home, "log") });
+    // the agent's shell sits in the worktree
+    const x = spawnSync("python3", ["-I", "-", r.wt, JSON.stringify({ dirty: true }), "[]", join(r.home, "scratch"), "180"], { input: prog, encoding: "utf8", env, cwd: r.wt });
+    assert.equal(x.status, 0, x.stderr);
+    const o = JSON.parse(x.stdout);
+    assert.ok(!existsSync(marker), "the coder's yaml.py never ran");
+    assert.deepEqual(o.refused, ["ci/chk.sh"], o.reason);
+    assert.ok(!existsSync(join(r.home, "log")), "no hook ran");
+  } finally {
+    r.done();
+  }
+});
+
+test("3.0.0 review 8: every embedded program runs isolated (-I), the YAML loader with cwd /", () => {
+  const calls = SOURCE.match(/["'`]python3 [^"'`]*/g) || [];
+  assert.ok(calls.length >= 12, "found the invocations: " + calls.length);
+  for (const c of calls) assert.match(c, /^.python3 -I /, c);
+  assert.match(SOURCE, /subprocess\.run\(\[c, '-I', '-c', LOADER\] \+ sites,/);
+  assert.match(SOURCE, /cwd='\/'/);
+  // no program uses a third-party import (the YAML loader runs under pre-commit's interpreter)
+  const progs = SOURCE.match(/const [A-Z_]+_PY = String\.raw`[\s\S]*?`;/g) || [];
+  assert.ok(progs.length >= 10);
+  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs"]);
+  for (const p of progs) {
+    const name = /const ([A-Z_]+_PY)/.exec(p)[1];
+    for (const m of p.matchAll(/^\s*import ([A-Za-z0-9_, .]+)$/gm))
+      for (const mod of m[1].split(",").map((x) => x.trim().split(" ")[0].split(".")[0]))
+        // PRECOMMIT_IDS_PY: PyYAML, failing closed when absent; HASHER_PY: tomli only
+        // as the guarded fallback for python < 3.11 (tomllib), failing closed too
+        // (the hasher's optional PyYAML read of local hooks predates 3.0.0); with -I
+        // each comes from site-packages, never from the cwd
+        if (!(name === "PRECOMMIT_IDS_PY" && mod === "yaml") && !(name === "HASHER_PY" && (mod === "tomli" || mod === "yaml")))
+          assert.ok(stdlib.has(mod), name + " imports " + mod);
+  }
+});
+
+test("3.0.0 review 8: a json.py in the cwd does not reach an isolated program run", { skip: !HAVE_PY }, () => {
+  const wt = gitRepo("fleet-r8-json-", { "a.py": "def f():\n    return 1\n" });
+  try {
+    const marker = join(wt, "..", "JSON_RAN_" + Date.now.name);
+    writeFileSync(join(wt, "json.py"), "open(" + JSON.stringify(marker) + ", 'w').write('x')\ndef dumps(*a, **k):\n    return '{}'\n");
+    const prog = extractPy("REVIEW_PATHS_PY_BEGIN", "REVIEW_PATHS_PY_END", "REVIEW_PATHS_PY");
+    const head = sh(wt, "git", "rev-parse", "HEAD").trim();
+    const r = spawnSync("python3", ["-I", "-c", prog, wt, head, head], { encoding: "utf8", cwd: wt });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(!existsSync(marker), "json.py never ran");
+    assert.deepEqual(JSON.parse(r.stdout).changed_paths, []);
+    rmSync(marker, { force: true });
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review 8 s_link_head: a path that is a symlink at HEAD but a regular file in the worktree is refused", { skip: !HAVE_PY }, () => {
+  const r = fixerRepo("fleet-r8-link-", "repos: []\n", { "a.py": "x=1\n" });
+  try {
+    spawnSync("ln", ["-s", "a.py", join(r.wt, "b.py")]);
+    sh(r.wt, "git", "add", "b.py");
+    sh(r.wt, "git", "commit", "-qm", "b");
+    rmSync(join(r.wt, "b.py"));
+    writeFileSync(join(r.wt, "b.py"), "y=1\n");
+    const o = r.runF();
+    assert.ok(o.refused.includes("b.py"), JSON.stringify(o));
+    assert.equal(o.ran, false);
+  } finally {
+    r.done();
+  }
+});
+
+test("3.0.0 review 8 s_realpath_in: a selected path whose realpath leaves the checkout is refused; nothing is written outside", { skip: !HAVE_PY }, () => {
+  const r = fixerRepo("fleet-r8-real-", "repos: []\n", { "sub/a.py": "x=1\n" });
+  try {
+    const escape = join(r.home, "escape.py");
+    writeFileSync(escape, "e=1\n");
+    const prog = extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY");
+    const env = Object.assign({}, process.env, { PATH: join(r.home, "bin") + ":" + process.env.PATH, LOG: join(r.home, "log") });
+    const x = spawnSync("python3", ["-I", "-", r.wt, JSON.stringify({ paths: ["sub/../../escape.py"] }), "[]", join(r.home, "scratch"), "180"], { input: prog, encoding: "utf8", env });
+    assert.equal(x.status, 0, x.stderr);
+    const o = JSON.parse(x.stdout);
+    assert.deepEqual(o.refused, ["sub/../../escape.py"], JSON.stringify(o));
+    assert.equal(o.ran, false);
+    assert.equal(readFileSync(escape, "utf8"), "e=1\n");
+    assert.ok(!existsSync(join(r.home, "log")), "no hook ran");
+  } finally {
+    r.done();
+  }
+});
+
+test("3.0.0 review 8: the nix pre-commit's own interpreter reads the config through its wrapped sys.path", { skip: !HAVE_PY || !/^\/nix\/store\//.test(spawnSync("sh", ["-c", "readlink -f \"$(command -v pre-commit)\""], { encoding: "utf8" }).stdout || "") }, () => {
+  const cfg = "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        entry: ci/chk.sh\n        language: script\n";
+  const r = fixerRepo("fleet-r8-nix-", cfg, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "a.py": "x=1\n" });
+  try {
+    writeFileSync(join(r.wt, "ci/chk.sh"), "#!/bin/sh\nrm -rf /\n");
+    const prog = extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY");
+    // the real nix pre-commit on PATH; this python3's own PyYAML is switched off
+    const x = spawnSync("python3", ["-I", "-", r.wt, JSON.stringify({ dirty: true }), "[]", join(r.home, "scratch"), "180", "no-local-yaml"], { input: prog, encoding: "utf8" });
+    assert.equal(x.status, 0, x.stderr);
+    assert.deepEqual(JSON.parse(x.stdout).refused, ["ci/chk.sh"], x.stdout);
+  } finally {
+    r.done();
+  }
+});

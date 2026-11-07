@@ -2780,8 +2780,10 @@ const FORMAT_FILES_PY = String.raw`
 import glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile
 wt, sel, frozen = sys.argv[1], json.loads(sys.argv[2]), set(json.loads(sys.argv[3]))
 scratch_root, tmo = sys.argv[4], int(sys.argv[5])
-# argv[6] == 'no-yaml' (tests only): behave as if no Python had PyYAML
+# argv[6] (tests only): 'no-yaml' behaves as if no Python had PyYAML;
+# 'no-local-yaml' skips only this python3 as a fallback
 no_yaml = len(sys.argv) > 6 and sys.argv[6] == 'no-yaml'
+no_local_yaml = len(sys.argv) > 6 and sys.argv[6] == 'no-local-yaml'
 G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false']
 def git(cwd, *a, env=None, check=True):
     r = subprocess.run(G + ['-C', cwd] + list(a), capture_output=True, env=env)
@@ -2834,7 +2836,10 @@ surface = {'.pre-commit-config.yaml'}
 # executable's shebang, and a shell wrapper's exec target (pipx, nix), to that
 # Python; then this python3 if it has PyYAML. None found: nothing runs.
 LOADER = (
-    "import json, sys\n"
+    "import json, site, sys\n"
+    "for p in sys.argv[1:]:\n"
+    "    if p.startswith('/nix/store/'):\n"
+    "        site.addsitedir(p)\n"
     "try:\n    import yaml\nexcept ImportError:\n    sys.exit(3)\n"
     "d = yaml.safe_load(sys.stdin.buffer.read())\n"
     "out = []\n"
@@ -2845,10 +2850,13 @@ LOADER = (
     "print(json.dumps(out, default=str))\n"
 )
 SHELLS = ('sh', 'bash', 'dash', 'zsh', 'ksh')
+NIX_SITE = re.compile(r"'(/nix/store/[^'\s]+/site-packages)'")
 def interpreters(path, depth=0):
+    # [(interpreter, site dirs)]: a script's shebang interpreter, with the
+    # /nix/store site-packages a nix wrapped script adds to sys.path itself
     try:
         with open(path, 'rb') as fh:
-            head = fh.read(65536)
+            head = fh.read(262144)
     except OSError:
         return []
     if not head.startswith(b'#!'):
@@ -2860,7 +2868,9 @@ def interpreters(path, depth=0):
     if os.path.basename(interp) == 'env':
         prog = next((w for w in words[1:] if not w.startswith('-') and '=' not in w), None)
         interp = shutil.which(prog) if prog else None
-    out = [interp] if interp else []
+    text = head.decode('utf-8', 'replace')
+    sites = [m for line in text.splitlines()[:12] if 'site.addsitedir' in line or 'sys.path' in line for m in NIX_SITE.findall(line)]
+    out = [(interp, sites)] if interp else []
     if interp and os.path.basename(interp) in SHELLS and depth < 3:
         for t in re.findall(rb'exec\s+(?:-a\s+\S+\s+)?["\']?(/[^\s"\']+)', head):
             t = t.decode('utf-8', 'replace')
@@ -2872,25 +2882,27 @@ def interpreters(path, depth=0):
             if script:
                 out.extend(interpreters(t, depth + 1))
             else:
-                out.append(t)
+                out.append((t, []))
     return out
 def hook_values():
-    # (values, None) or (None, why)
+    # (values, None) or (None, why). The loader runs isolated (-I) from /, so
+    # no yaml.py, json.py or site.py in the worktree can shadow a module.
     cands = []
     pc = shutil.which('pre-commit')
     if pc:
         cands.extend(interpreters(os.path.realpath(pc)))
         cands.extend(interpreters(pc))
-    cands.append(sys.executable)
+    if not no_local_yaml:
+        cands.append((sys.executable, []))
     seen = set()
-    for c in cands:
-        if not c or c in seen or os.path.basename(c) in SHELLS or os.path.basename(c) == 'env':
+    for c, sites in cands:
+        if not c or (c, tuple(sites)) in seen or os.path.basename(c) in SHELLS or os.path.basename(c) == 'env':
             continue
-        seen.add(c)
+        seen.add((c, tuple(sites)))
         if no_yaml:
             continue
         try:
-            r = subprocess.run([c, '-c', LOADER], input=head_cfg.stdout, capture_output=True, timeout=60)
+            r = subprocess.run([c, '-I', '-c', LOADER] + sites, input=head_cfg.stdout, capture_output=True, timeout=60, cwd='/')
         except (OSError, subprocess.TimeoutExpired):
             continue
         if r.returncode == 3 or (r.returncode != 0 and b'No module named' in r.stderr):
@@ -2910,7 +2922,7 @@ def hook_values():
                 for x in a if isinstance(a, list) else ([a] if a is not None else []):
                     vals.append(str(x))
         return vals, None
-    return None, 'no Python with PyYAML found (tried pre-commit\'s interpreter and ' + sys.executable + ')'
+    return None, 'no Python with PyYAML found (tried pre-commit\'s interpreter' + ('' if no_local_yaml else ' and ' + sys.executable) + ')'
 vals = []
 if head_cfg.returncode == 0 and shutil.which('pre-commit') is not None:
     vals, why = hook_values()
