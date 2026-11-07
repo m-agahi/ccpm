@@ -8901,7 +8901,8 @@ test("3.0.0 review 7: the config is read by pre-commit's own interpreter, throug
     writeFileSync(shim, "#!/bin/sh\necho used >> " + JSON.stringify(join(r.home, "pylog")) + "\nexec " + JSON.stringify(py) + " \"$@\"\n", { mode: 0o755 });
     const wrapped = join(libexec, ".pre-commit-wrapped");
     writeFileSync(wrapped, "#!" + shim + "\nimport os, sys\nfiles = sys.argv[3:]\nopen(os.environ['LOG'], 'a').write(' '.join(files) + '\\n')\nfor f in files:\n    t = open(f).read()\n    if 'fmt' not in t:\n        open(f, 'a').write('# fmt\\n')\n", { mode: 0o755 });
-    writeFileSync(join(r.home, "bin", "pre-commit"), "#!/bin/sh\nexec -a \"$0\" " + JSON.stringify(wrapped) + " \"$@\"\n", { mode: 0o755 });
+    // bash, as nix wrappers are: dash (the CI /bin/sh) has no exec -a
+    writeFileSync(join(r.home, "bin", "pre-commit"), "#!/usr/bin/env bash\nexec -a \"$0\" " + JSON.stringify(wrapped) + " \"$@\"\n", { mode: 0o755 });
     writeFileSync(join(r.wt, "a.py"), "x=2\n");
     writeFileSync(join(r.wt, "ci/chk.sh"), "#!/bin/sh\nrm -rf /\n");
     const o = r.runF();

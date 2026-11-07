@@ -87,7 +87,8 @@ changed; the new page text and the optional `symbol` key are additions, guarded 
   behind is removed first. The config is read only with PyYAML, through pre-commit's own
   interpreter (its shebang, or a pipx/nix wrapper's `exec` target, followed to the Python), else the
   program's `python3` if it has PyYAML; any YAML form works, flow maps and folded scalars included.
-  No interpreter with PyYAML refuses the step; there is no line-parser fallback (reviews 6 and 7). **Accepted under ADR-1152:** a helper that a hook entry imports without
+  No interpreter with PyYAML refuses the step; there is no line-parser fallback (reviews 6 and 7).
+  The wrapper test uses bash, as nix wrappers do (`exec -a` is not in dash). **Accepted under ADR-1152:** a helper that a hook entry imports without
   the config naming it still runs from the scratch checkout of HEAD unless it is itself a selected
   file.
 - **yaadgaar write-back** (ledger 1928). For a `yaadgaar` source of a `yadgarhq/` project,
