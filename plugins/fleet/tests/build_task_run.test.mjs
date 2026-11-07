@@ -125,7 +125,7 @@ const RELAY_KEYS = [
   [/^infra:commit-plan/, ["head", "files", "args"]],
   // 3.1.0 (ledger 1935c)
   [/^infra:push(:p\d+)?$/, ["push_result", "exit_code", "hook_tail", "args"]],
-  [/^infra:hook-surface:/, ["surface", "error", "args"]],
+  [/^infra:hook-surface:/, ["surface", "make_paths", "error", "args"]],
 ];
 function relayDigestOf(r, keys) {
   const o = {};
@@ -165,7 +165,7 @@ function fillArgs(label, r, prompt) {
     const i = inputsOf(prompt);
     r.args = [i.main_worktree, i.plan_commit, i.plan_path];
   } else if (/^infra:commit-plan/.test(label)) r.args = [inputsOf(prompt).worktree];
-  else if (/^infra:hook-surface:/.test(label)) r.args = [inputsOf(prompt).worktree, inputsOf(prompt).rev];
+  else if (/^infra:hook-surface:/.test(label)) r.args = [inputsOf(prompt).worktree, inputsOf(prompt).rev, JSON.stringify(inputsOf(prompt).targets)];
   else if (/^infra:push(:p\d+)?$/.test(label) && r.push_result === "hook_rejected") r.args = ["/tmp/fleet-push.out", String(r.exit_code)];
   return r;
 }
@@ -207,7 +207,7 @@ async function runOne(script, args0) {
     }
     // 3.1.0: unscripted hook-surface reads find no hook entry file
     if (!(label in script) && /^infra:hook-surface:/.test(label))
-      return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], error: null }, prompt));
+      return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: {}, error: null }, prompt));
     // 3.1.0: unscripted ledger reads find a task with a body page
     if (!(label in script) && /^infra:ledger-read:pre$/.test(label))
       return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
@@ -4953,7 +4953,6 @@ test("2.1.0 G3 scope fence: infra, CI, secrets, rulesets and a foreign repo are 
     fence(["deploy/kustomization.yml"]),
     fence(["charts/app/templates/svc.yaml"]),
     fence(["manifests/a.yml"]),
-    fence([".github/CODEOWNERS"]),
     fence(["config/rulesets/main.json"]),
     fence([".env.local"]),
     fence(["src/db_secret.py"]),
@@ -4961,16 +4960,17 @@ test("2.1.0 G3 scope fence: infra, CI, secrets, rulesets and a foreign repo are 
     fence(["keys/deploy.key"]),
     fence(["home/id_rsa.pub"]),
     fence(["aws_credentials.json"]),
-    { criteria: [{ id: "AC1", text: "a", test_files: [".github/tests/test_a.py"] }] },
     { repo_obligations: [{ id: "o", kind: "other", instruction: "x", files: ["deploy/x.tf"] }] },
   ]) {
     const out = await runOne(planWith(o), AUTO);
     autoFail(out, "scope");
   }
   // 3.1.0: a CI workflow is hook surface: Max's rule stops the plan earlier, before the audit
-  const wf = await runOne(planWith(fence([".github/workflows/ci.yml"])), AUTO);
-  assert.equal(wf.result.status, "needs_human");
-  assert.equal(wf.result.stop_gate, "hooks");
+  for (const o of [fence([".github/workflows/ci.yml"]), fence([".github/CODEOWNERS"]), { criteria: [{ id: "AC1", text: "a", test_files: [".github/tests/test_a.py"] }] }]) {
+    const wf = await runOne(planWith(o), AUTO);
+    assert.equal(wf.result.status, "needs_human");
+    assert.equal(wf.result.stop_gate, "hooks");
+  }
   // the work repo must be the caller's repo
   const out = await runOne(autoHappy({ brief: { ...BRIEF, repo: "/other" } }), AUTO);
   autoFail(out, "scope");
@@ -5237,7 +5237,8 @@ test("2.1.0 scope fence on the REAL changes: a coder that writes CI, IaC or a se
   // writers' changed paths are fenced too (limited to test files, so it does not fire in practice)
   const w = await run(happy({ criteria: [{ id: "AC1", text: "a", test_files: [".github/tests/test_a.py"] }] }), ARGS);
   assert.equal(w.result.status, "needs_human");
-  assert.equal(w.result.stop_gate, "scope");
+  // 3.1.0: .github/ is hook surface, and a plan's test files are in its scope: Max's rule stops the plan first
+  assert.equal(w.result.stop_gate, "hooks");
 });
 
 test("2.1.0 the hook surface is frozen: .pre-commit-config.yaml, local hook entries, core.hooksPath and the hooks dir", { skip: !HAVE_PY }, () => {
@@ -6256,6 +6257,7 @@ const ARRAY_SITES = {
   "r.surface @ hookSurface": "infra:surface",
   "pf.changed_symbols @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "e.occurrences @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
+  "c.test_files @ planScopePaths": "parsed: normalised criteria",
 };
 
 function arraySites() {
@@ -9054,7 +9056,7 @@ test("3.0.0 review 8: every embedded program runs isolated (-I), the YAML loader
   // no program uses a third-party import (the YAML loader runs under pre-commit's interpreter)
   const progs = SOURCE.match(/const [A-Z_]+_PY = String\.raw`[\s\S]*?`;/g) || [];
   assert.ok(progs.length >= 10);
-  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "resource"]);
+  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "resource", "ast"]);
   for (const p of progs) {
     const name = /const ([A-Z_]+_PY)/.exec(p)[1];
     for (const m of p.matchAll(/^\s*import ([A-Za-z0-9_, .]+)$/gm))
@@ -9946,7 +9948,8 @@ test("3.1.0 1960: docs, manifests, test data, file filters and comments are not 
     [{ ".pre-commit-config.yaml": local("  - id: t\n    name: t\n    entry: tests/run.sh\n    language: script\n"), "tests/run.sh": "#!/bin/sh\nterragrunt plan\n" }, ["tests/run.sh"]],
     [{ ".pre-commit-config.yaml": local("  - id: w\n    name: w\n    entry: python3 scripts/w.py\n    language: system\n"), "scripts/w.py": "ALLOW = ['tests/test_x.py', 'tests/fixtures/plan.yaml', 'benchmarks/golden/set.jsonl']\n", "tests/test_x.py": "assert 'terraform' in s\n", "tests/fixtures/plan.yaml": "cmd: terraform plan\n", "benchmarks/golden/set.jsonl": '{"q": "tofu"}\n' }, []],
     // a pyproject.toml the config names is read like the root one: script and task tables only
-    [{ ".pre-commit-config.yaml": local("  - id: p\n    name: p\n    entry: python3 -m x --config pyproject.toml\n    language: system\n"), "pyproject.toml": '[tool.ruff.lint.per-file-ignores]\n"src/t.py" = ["E1"]\n', "src/t.py": "x = 'terraform'\n" }, []],
+    // (delta review: a file a hook command names is traced, as in 3.0.0)
+    [{ ".pre-commit-config.yaml": local("  - id: p\n    name: p\n    entry: python3 -m x --config pyproject.toml\n    language: system\n"), "pyproject.toml": '[tool.ruff.lint.per-file-ignores]\n"src/t.py" = ["E1"]\n', "src/t.py": "x = 'terraform'\n" }, ["src/t.py"]],
     [{ "Makefile": "lint:\n\tcat sub/pyproject.toml\n", "sub/pyproject.toml": '[tool.poe.tasks]\nplan = "terragrunt plan"\n' }, ["sub/pyproject.toml"]],
     // a comment in the config names nothing
     [{ ".pre-commit-config.yaml": local("  # see ci/old.sh\n  - id: c\n    name: c\n    entry: true\n    language: system\n"), "ci/old.sh": "terraform apply\n" }, []],
@@ -10002,7 +10005,6 @@ test("3.1.0 review F2: a change to a check_cmd's script, Makefile or hook config
     ["make check", null, ["Makefile"], /OB4: the change edits Makefile, which check_cmd "make check" runs/],
     ["make check", null, ["mk/rules.mk"], /edits mk\/rules\.mk/],
     ["make check", null, ["sub/GNUmakefile"], /edits sub\/GNUmakefile/],
-    ["pre-commit run ruff --all-files", null, [".pre-commit-config.yaml"], /edits \.pre-commit-config\.yaml/],
     // listed by the plan: allowed
     ["python3 scripts/check_version_bump.py", ["src/x.py", "scripts/check_version_bump.py"], ["scripts/check_version_bump.py"], null],
     ["make check", ["Makefile"], ["Makefile"], null],
@@ -10185,15 +10187,16 @@ const CONFIRM = /hook change needs Max's confirmation/;
 
 test("3.1.0 hooks: a plan scope with the hook config, a workflow or a hook entry file stops at plan time", async () => {
   const cases = [
-    [{ files: [".pre-commit-config.yaml"] }, [], [], CONFIRM],
+    // (3.1.0 delta review: the criteria's test files are in the scope, so a hook path makes it mixed)
+    [{ files: [".pre-commit-config.yaml"] }, [], [], SEPARATE],
     [{ files: [".pre-commit-config.yaml", "src/a.py"] }, [], [], SEPARATE],
     [{ files: ["src/a.py"] }, [".github/workflows/ci.yml"], [], SEPARATE],
-    [{ files: [".gitlab-ci.yml"] }, [], [], CONFIRM],
+    [{ files: [".gitlab-ci.yml"] }, [], [], SEPARATE],
     [{ files: [".forgejo/workflows/x.yml", "README.md"] }, [], [], SEPARATE],
     // a file a hook entry names (the program's surface)
-    [{ files: ["ci/chk.sh"] }, [], ["ci/chk.sh"], CONFIRM],
+    [{ files: ["ci/chk.sh"] }, [], ["ci/chk.sh"], SEPARATE],
     // a changed symbol whose caller is in a hook entry file
-    [{ files: [] }, [], ["ci/chk.sh"], CONFIRM, [{ symbol: "f", occurrences: [{ at: "ci/chk.sh:3", criterion: "AC1", dont_care: null }] }]],
+    [{ files: [] }, [], ["ci/chk.sh"], SEPARATE, [{ symbol: "f", occurrences: [{ at: "ci/chk.sh:3", criterion: "AC1", dont_care: null }] }]],
   ];
   for (const [aa, obFiles, surface, re, symbols] of cases) {
     const s = happy();
@@ -10251,8 +10254,8 @@ test("3.1.0 hooks: a surface that cannot be computed, or a relay that differs fr
   assert.equal(out.result.stop_gate, "hooks");
   const t = happy();
   t["infra:hook-surface:plan"] = (prompt) => {
-    const r = { status: "ok", reason: "read", surface: ["ci/chk.sh"], error: null, args: [inputsOf(prompt).worktree, inputsOf(prompt).rev] };
-    r.digest = relayDigestOf(r, ["surface", "error", "args"]);
+    const r = { status: "ok", reason: "read", surface: ["ci/chk.sh"], make_paths: {}, error: null, args: [inputsOf(prompt).worktree, inputsOf(prompt).rev, JSON.stringify(inputsOf(prompt).targets)] };
+    r.digest = relayDigestOf(r, ["surface", "make_paths", "error", "args"]);
     r.surface = [];
     return r;
   };
@@ -10267,16 +10270,16 @@ test("3.1.0 hooks: the surface program lists hook entries, args and -m modules; 
   try {
     const prog = extractPy("HOOK_SURFACE_PY_BEGIN", "HOOK_SURFACE_PY_END", "HOOK_SURFACE_PY");
     const runP = (extra) => {
-      const r = spawnSync("python3", ["-I", "-c", prog, wt, "HEAD"].concat(extra || []), { encoding: "utf8", cwd: wt });
+      const r = spawnSync("python3", ["-I", "-c", prog, wt, "HEAD", "[]"].concat(extra || []), { encoding: "utf8", cwd: wt });
       assert.equal(r.status, 0, r.stderr);
       return JSON.parse(r.stdout);
     };
     const o = runP();
     assert.equal(o.error, null);
     for (const p of ["ci/chk.sh", "tools/gen.py", "pkg/__init__.py", "pkg/fmt.py"]) assert.ok(o.surface.includes(p), p);
-    assert.deepEqual(o.args, [wt, "HEAD"]);
+    assert.deepEqual(o.args, [wt, "HEAD", "[]"]);
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
-    assert.equal(o.digest, sha256(fn({ surface: o.surface, error: o.error, args: o.args })));
+    assert.equal(o.digest, sha256(fn({ surface: o.surface, make_paths: o.make_paths, error: o.error, args: o.args })));
     assert.match(runP(["no-yaml"]).error, /no Python with PyYAML/);
     writeFileSync(join(wt, ".pre-commit-config.yaml"), LAUGHS + "repos:\n- repo: local\n  hooks:\n  - id: a\n    entry: x\n    args: *l8\n");
     assert.match(runP().error, /args is not a list of strings/);
@@ -10347,10 +10350,12 @@ test("3.1.0 delta review: tokens are still not followed out of docs, data, tests
   const hook = (entry) => ({ ".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - id: h\n    name: h\n    entry: " + entry + "\n    language: system\n" });
   try {
     for (const [files, want, err] of [
-      // a doc a script sources is matched, but a script the doc names is not followed
-      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\n. docs/env.md\n", "docs/env.md": "see scripts/x.sh\n", "scripts/x.sh": "terraform plan\n" }), [], null],
-      // a script a test file runs is not followed (the test file is a leaf)
-      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nbash tests/run.sh\n", "tests/run.sh": "bash scripts/y.sh\n", "scripts/y.sh": "tflint\n" }), [], null],
+      // security review: a doc that is sourced, or a test file that is run, is traced like any script
+      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\n. docs/env.md\n", "docs/env.md": "bash scripts/x.sh\n", "scripts/x.sh": "terraform plan\n" }), ["scripts/x.sh"], null],
+      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nbash tests/run.sh\n", "tests/run.sh": "bash scripts/y.sh\n", "scripts/y.sh": "tflint\n" }), ["scripts/y.sh"], null],
+      [Object.assign(hook("tests/entry.sh"), { "tests/entry.sh": "#!/bin/sh\nbash scripts/z.sh\n", "scripts/z.sh": "infracost diff\n" }), ["scripts/z.sh"], null],
+      // a doc a script merely mentions is not read, and nothing it names is followed
+      [Object.assign(hook("scripts/go.py"), { "scripts/go.py": "README = 'docs/notes.md'\n", "docs/notes.md": "terraform\nbash scripts/q.sh\n", "scripts/q.sh": "tflint\n" }), [], null],
       // a 2 MiB data file is matched on its first 1 MiB, no refusal
       [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nxargs < data/big.txt\n", "data/big.txt": "terraform\n" + "x".repeat(2 << 20) }), ["data/big.txt"], null],
       [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nxargs < data/big.txt\n", "data/big.txt": "x".repeat(2 << 20) + "terraform\n" }), [], null],
@@ -10362,6 +10367,10 @@ test("3.1.0 delta review: tokens are still not followed out of docs, data, tests
       [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\necho IntoFuture into_future\n" }), [], null],
       [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nrun tofu_fmt\n" }), ["scripts/go.sh"], null],
       [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nopentofu fmt\n" }), ["scripts/go.sh"], null],
+      // security review: only the known false positive is excluded; a letter-prefixed tofu is still matched
+      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nmytofu fmt\n" }), ["scripts/go.sh"], null],
+      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nrun-tofu fmt\n" }), ["scripts/go.sh"], null],
+      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nxtofu\n" }), ["scripts/go.sh"], null],
     ]) {
       const wt = repoWith("fleet-iac-leaf-", files);
       try {
@@ -10375,5 +10384,127 @@ test("3.1.0 delta review: tokens are still not followed out of docs, data, tests
     }
   } finally {
     rmSync(pc, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- 3.1.0 delta review: the hook surface is complete
+
+test("3.1.0 delta review: every CI and hook-manager path, any case, the hooksPath dir and test files are hook surface at plan time", async () => {
+  for (const [files, surface, tests] of [
+    [[".github/actions/x/action.yml"], [], null],
+    [[".gitea/workflows/a.yml"], [], null],
+    [[".woodpecker.yml"], [], null],
+    [[".woodpecker/build.yml"], [], null],
+    [[".circleci/config.yml"], [], null],
+    [[".gitlab/ci/x.yml"], [], null],
+    [["Jenkinsfile"], [], null],
+    [[".buildkite/pipeline.yml"], [], null],
+    [["azure-pipelines.yml"], [], null],
+    [["bitbucket-pipelines.yml"], [], null],
+    [[".husky/pre-commit"], [], null],
+    [[".githooks/pre-push"], [], null],
+    [["lefthook.yml"], [], null],
+    [[".pre-commit-hooks.yaml"], [], null],
+    [[".PRE-COMMIT-CONFIG.YAML"], [], null],
+    [[".GitHub/workflows/x.yml"], [], null],
+    [["myhooks/pre-commit"], ["myhooks/"], null],
+    // a criterion's test file is in the plan scope too
+    [[], ["ci/test_hook.sh"], ["ci/test_hook.sh"]],
+  ]) {
+    const s = happy();
+    s["role:scope-and-plan"].allowed_additions = { files, symbols: [], deps: [], settings: [] };
+    if (tests) s["role:scope-and-plan"].criteria = [Object.assign({}, s["role:scope-and-plan"].criteria[0], { test_files: tests })];
+    s["infra:hook-surface:plan"] = { status: "ok", reason: "read", surface, make_paths: {}, error: null };
+    // the only criterion's test files are the hook path itself: hook-only; else mixed with the test files
+    if (!tests) s["role:scope-and-plan"].criteria = [Object.assign({}, s["role:scope-and-plan"].criteria[0], { text: "[manual] checked by Max", test_files: [] })];
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(files) + " " + out.result.reason);
+    assert.match(out.result.reason, /hook change needs Max's confirmation/, JSON.stringify(files));
+    assert.equal(out.result.stop_gate, "hooks");
+  }
+});
+
+test("3.1.0 delta review: the scope fence refuses a coder's change to a hook manager path", async () => {
+  for (const p of [".husky/pre-commit", "lefthook.yml", ".gitlab-ci.yml", "Jenkinsfile", ".circleci/config.yml"]) {
+    const s = happy();
+    s["hasher:post-coder:r1"] = Object.assign({}, s["hasher:post-coder:r1"], { changed: ["src/x.py", p] });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", p + " " + out.result.reason);
+    assert.match(out.result.reason, /hook surface|separate PR/, p);
+    assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)), p);
+  }
+});
+
+test("3.1.0 delta review: F2 also covers the scripts a make check_cmd's recipe runs", async () => {
+  const ob = (files) => ({ id: "OB5", kind: "other", rule_source: "Makefile", files: files || ["src/x.py"], instruction: "lint", check_cmd: "make check" });
+  for (const [files, changed, converted] of [
+    [null, ["scripts/c.py"], true],
+    [null, ["bin/v.sh"], true],
+    [["src/x.py", "scripts/c.py"], ["scripts/c.py"], false],
+    [null, ["scripts/other.py"], false],
+  ]) {
+    const s = withObligations([ob(files)]);
+    s["hasher:post-coder:r1"] = Object.assign({}, s["hasher:post-coder:r1"], { changed });
+    s["infra:hook-surface:r1"] = (prompt) => {
+      assert.deepEqual(inputsOf(prompt).targets, ["check"]);
+      return { status: "ok", reason: "read", surface: [], make_paths: { check: ["bin/v.sh", "scripts/c.py"] }, error: null };
+    };
+    secondRoundPasses(s, [{ id: "OB5", met: true, evidence: "ok", check_exit: 0 }]);
+    s["infra:hook-surface:r2"] = { status: "ok", reason: "read", surface: [], make_paths: { check: ["bin/v.sh", "scripts/c.py"] }, error: null };
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "ok", JSON.stringify(changed) + " " + out.result.reason);
+    assert.equal(out.result.rounds.code, converted ? 2 : 1, JSON.stringify(changed));
+    if (converted) assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings.map((x) => x.finding).join("\n"), new RegExp("OB5: the change edits " + changed[0].replace(/\./g, "\\.") + ", which check_cmd \"make check\" runs"));
+  }
+});
+
+test("3.1.0 delta review: the surface program follows make, -m forms, symlinks, imports, sourced scripts, CI files and the hooksPath dir", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const cfg =
+    "repos:\n- repo: local\n  hooks:\n" +
+    "  - {id: a, name: a, entry: make lint, language: system}\n" +
+    "  - {id: b, name: b, entry: python3 -Im pkg.tool, language: system}\n" +
+    "  - {id: c, name: c, entry: python3 -mpkg2.run, language: system}\n" +
+    "  - {id: d, name: d, entry: ci/chk.sh, language: script, args: ['--config=pyproject.toml', '--hook=scripts/h.sh']}\n" +
+    "  - {id: e, name: e, entry: python3 tools/gen.py, language: system}\n" +
+    "  - {id: f, name: f, entry: python3 broken/bad.py, language: system}\n";
+  const files = {
+    ".pre-commit-config.yaml": cfg,
+    Makefile: "lint:\n\truff .\ncheck:\n\tpython3 scripts/c.py\n\t./bin/v.sh --x\nother:\n\tscripts/no.sh\n",
+    "mk/rules.mk": "x:\n\ttrue\n",
+    "pkg/__init__.py": "", "pkg/tool.py": "", "pkg2/run.py": "",
+    "scripts/real.sh": "#!/bin/sh\n. ci/lib.sh\nsource scripts/env.sh\n",
+    "ci/lib.sh": "x=1\n", "scripts/env.sh": "y=1\n", "scripts/h.sh": "#!/bin/sh\n", "pyproject.toml": "[x]\n",
+    "tools/gen.py": "from tools import helper\nimport lib.util\nfrom . import sib\n", "tools/helper.py": "", "tools/sib.py": "", "lib/util.py": "",
+    "broken/bad.py": "def (:\n",
+    ".github/workflows/ci.yml": "jobs:\n  t:\n    steps:\n    - run: bash scripts/ci.sh\n    - run: python3 tools/x.py docs/a.md\n",
+    "scripts/ci.sh": "#!/bin/sh\n", "tools/x.py": "", "docs/a.md": "x\n",
+    "scripts/c.py": "", "bin/v.sh": "#!/bin/sh\n", "scripts/no.sh": "#!/bin/sh\n",
+  };
+  const wt = repoWith("fleet-hooksurf2-", files);
+  try {
+    spawnSync("ln", ["-s", "../scripts/real.sh", join(wt, "ci", "chk.sh")]);
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "link");
+    sh(wt, "git", "config", "core.hooksPath", "myhooks");
+    const prog = extractPy("HOOK_SURFACE_PY_BEGIN", "HOOK_SURFACE_PY_END", "HOOK_SURFACE_PY");
+    const r = spawnSync("python3", ["-I", "-c", prog, wt, "HEAD", JSON.stringify(["check"])], { encoding: "utf8", cwd: wt });
+    assert.equal(r.status, 0, r.stderr);
+    const o = JSON.parse(r.stdout);
+    assert.equal(o.error, null);
+    for (const p of [
+      "Makefile", "mk/rules.mk",
+      "pkg/__init__.py", "pkg/tool.py", "pkg/tool/__main__.py", "pkg2/__init__.py", "pkg2/run.py", "pkg2/run/__main__.py",
+      "ci/chk.sh", "scripts/real.sh", "ci/lib.sh", "scripts/env.sh", "scripts/h.sh",
+      "tools/gen.py", "tools/helper.py", "tools/sib.py", "lib/util.py",
+      "broken/",
+      "scripts/ci.sh", "tools/x.py",
+      "myhooks/",
+    ])
+      assert.ok(o.surface.includes(p), p + " in " + JSON.stringify(o.surface));
+    for (const p of ["pyproject.toml", "docs/a.md", "scripts/no.sh"]) assert.ok(!o.surface.includes(p), p + " not in the surface");
+    assert.deepEqual(o.make_paths, { check: ["bin/v.sh", "scripts/c.py"] });
+    assert.deepEqual(o.args, [wt, "HEAD", JSON.stringify(["check"])]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
   }
 });

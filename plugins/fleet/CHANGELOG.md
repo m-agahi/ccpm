@@ -35,7 +35,23 @@ contract marker stays `fleet-v3`.
   `needs_human` and `stop_gate: "hooks"`: "hook changes must be a separate PR (Max's rule)" when
   they touch the surface and anything else, "hook change needs Max's confirmation" when they touch
   only the surface. There is no automatic path, not even under `confirm: "auto"`. A surface that
-  cannot be computed (no PyYAML, a parse error, a capped value) refuses. The `scope-and-plan` page
+  cannot be computed (no PyYAML, a parse error, a capped value) refuses. Delta review: the static
+  part is every hook-manager and CI path, in any case: `.pre-commit-config.yaml`,
+  `.pre-commit-hooks.yaml`, `.github/**`, `.gitea/**`, `.forgejo/**`, `.woodpecker*`,
+  `.circleci/**`, `.gitlab-ci.yml`, `.gitlab/**`, `Jenkinsfile`, `.buildkite/**`,
+  `azure-pipelines.yml`, `bitbucket-pipelines.yml`, `.husky/**`, `.githooks/**`, `lefthook*.yml`,
+  `.lefthook*` (the scope fence refuses the same set in a coder's changes). `Makefile`,
+  `package.json` and `pyproject.toml` are not hook surface by themselves: they are task runners,
+  and every version bump touches them; a hook that runs `make` puts every Makefile and `*.mk` in
+  the surface. The program also adds `-m pkg.mod` as `pkg/mod.py` and `pkg/mod/__main__.py` (any
+  `-m` form, `-Im` included), the in-repo target of every surface symlink, one level of what the
+  hook scripts load (repo-local Python imports, resolved from the repo root and from the script's
+  directory; shell `source`/`.` of repo paths; a Python script that does not parse puts its whole
+  directory in the surface), the scripts CI files name, and the `core.hooksPath` directory. A
+  `--flag=value` counts only when the value is an executable script, so
+  `--config=pyproject.toml` is not surface. The plan scope also includes `criteria[].test_files`.
+  F2 also covers the repo paths a `make <target>` check_cmd's recipe names; modules a check script
+  imports are still not traced. The `scope-and-plan` page
   gets one sentence telling the planner so (prepared, not written; the pin stays 27, because the
   rule lives in script code).
 - A verify, commit-plan or `hook_rejected` push relay that does not match its program's digest,
@@ -136,8 +152,10 @@ StrictHostKeyChecking=yes`). The user's git config and credential helper stay, s
   leaf files, and a followed `pyproject.toml` or `package.json` (read raw), are matched but never
   followed out of. A leaf over 1 MiB is matched on its first 1 MiB instead of refused; an
   executable over 1 MiB is still refused. `INSTALL_PYTHON` is stripped only when its directory is
-  the `bin` of a venv whose site-packages holds `pre_commit`. `tofu` needs no letter before it
-  (`IntoFuture` no longer matches; `tofu_fmt` and `opentofu` still do).
+  the `bin` of a venv whose site-packages holds `pre_commit`. `tofu` is matched everywhere except
+  after `in` (`IntoFuture` no longer matches; `tofu_fmt`, `opentofu`, `mytofu` and `run-tofu`
+  still do). A doc, data, test or Dockerfile in an execution context (sourced, run, a hook entry)
+  is traced like any script; only one that is merely mentioned is a leaf.
 - **Resource caps on every embedded program** (security review). Every embedded Python program
   (and both YAML loaders) sets `RLIMIT_AS` (1 GiB; the loaders too) and `RLIMIT_CPU` (300 s; the
   loaders 60 s) before it does anything, and tunes git's children to stay inside them

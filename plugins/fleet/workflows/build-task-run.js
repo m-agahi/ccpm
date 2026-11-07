@@ -165,7 +165,7 @@ const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\
 // fleet does not run in a repo with IaC files or IaC tooling in its hooks or
 // task runners (IAC_SCAN_PY lists the places). IAC_SCAN_PY spells this
 // pattern in pieces (the local Bash guard), and a test keeps the two equal.
-const IAC_RE = /terraform|(?<![a-z])tofu|opentofu|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger/i;
+const IAC_RE = /terraform|(?<!in)tofu|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger/i;
 const IAC_REFUSAL = "repo contains IaC files or IaC tooling in hooks; the fleet does not run here";
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 // The ledger body write (3.1.0): MCP only; no shell, no file tools, no yaadgaar writes.
@@ -1191,6 +1191,7 @@ const INFRA_SCHEMA = {
     exit_code: { type: "integer" },
     args: { type: "array", items: STR },
     surface: { type: "array", items: STR },
+    make_paths: { type: "object" },
     hook_tail: STR,
     checks: { type: "object" },
     purged: { type: "number" },
@@ -1790,7 +1791,7 @@ function demote(o, reason) {
 // (ledger 1935b) every allowlisted check_cmd there needs check_exit 0, or a
 // gates_not_run entry "check_cmd:<id>" (the PR body states it). The script
 // never runs the command. Returns routed code findings.
-function obligationFailures(obligations, check, judged, notRun, changed) {
+function obligationFailures(obligations, check, judged, notRun, changed, makePaths) {
   const out = [];
   const list = Array.isArray(check) ? check : [];
   for (const o of obligations || []) {
@@ -1828,9 +1829,11 @@ function obligationFailures(obligations, check, judged, notRun, changed) {
     const script = parseCheckCmd(o.check_cmd).script || null;
     for (const p of touched) {
       const b = p.split("/").pop();
+      // make: the Makefiles, and the repo paths the target's recipe names
+      const recipe = words[0] === "make" && makePaths && Array.isArray(makePaths[words[1]]) ? makePaths[words[1]] : [];
       const runs =
         (script && p === normPath(script)) ||
-        (words[0] === "make" && (/^(GNUmakefile|makefile|Makefile)$/.test(b) || /\.mk$/.test(b))) ||
+        (words[0] === "make" && (/^(GNUmakefile|makefile|Makefile)$/.test(b) || /\.mk$/.test(b) || recipe.indexOf(p) >= 0)) ||
         (words[0] === "pre-commit" && b === ".pre-commit-config.yaml");
       if (runs && listed.indexOf(p) < 0)
         out.push(o.id + ": the change edits " + p + ", which check_cmd " + JSON.stringify(o.check_cmd) + " runs; restore it (only a file the obligation lists may change)");
@@ -3653,10 +3656,11 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
-import hashlib, json, os, re, shutil, subprocess, sys
-wt, rev = sys.argv[1], sys.argv[2]
-# argv[3] == 'no-yaml' (tests only): behave as if no Python had PyYAML
-no_yaml = len(sys.argv) > 3 and sys.argv[3] == 'no-yaml'
+import ast, hashlib, json, os, re, shutil, subprocess, sys
+wt, rev, targets_arg = sys.argv[1], sys.argv[2], sys.argv[3]
+targets = [t for t in json.loads(targets_arg) if isinstance(t, str)]
+# argv[4] == 'no-yaml' (tests only): behave as if no Python had PyYAML
+no_yaml = len(sys.argv) > 4 and sys.argv[4] == 'no-yaml'
 os.chdir('/')
 LOADER = (
     "import json, site, sys\n"
@@ -3765,22 +3769,147 @@ p = os.path.join(wt, '.pre-commit-config.yaml')
 if os.path.isfile(p):
     with open(p, 'rb') as fh:
         configs.append(fh.read(262145))
+ls = subprocess.run(['git', '-C', wt, 'ls-files', '-z'], capture_output=True)
+tracked = set(x.decode('utf-8', 'replace') for x in ls.stdout.split(b'\0') if x)
+SCRIPT_EXT = ('.py', '.sh', '.bash', '.zsh', '.js', '.mjs', '.cjs', '.ts', '.rb', '.pl')
+FILE_CAP = 1 << 20
+MAX_FILES = 500
+def norm(tok):
+    q = os.path.normpath(tok)
+    return None if q in ('.', '') or q == '..' or q.startswith('../') or q.startswith('/') else q
+def read(rel):
+    # bounded; None when absent or over FILE_CAP
+    try:
+        with open(os.path.join(wt, rel), 'rb') as fh:
+            data = fh.read(FILE_CAP + 1)
+    except OSError:
+        return None
+    return None if len(data) > FILE_CAP else data.decode('utf-8', 'replace')
+def is_script(rel):
+    if rel.lower().endswith(SCRIPT_EXT):
+        return True
+    t = read(rel)
+    return t is not None and t.startswith('#!')
+def makefiles():
+    return [x for x in tracked if x.split('/')[-1] in ('Makefile', 'makefile', 'GNUmakefile') or x.endswith('.mk')]
 surface, error = set(), None
+def add_command(v):
+    # every name in a hook command; a --flag=value only when the value is a script
+    for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./=-]*', v):
+        if '=' in tok:
+            q = norm(tok.split('=', 1)[1])
+            if q and is_script(q):
+                surface.add(q)
+            continue
+        q = norm(tok)
+        if q:
+            surface.add(q)
+    for mod in re.findall(r'(?:^|\s)-[A-Za-z]*m\s*([A-Za-z_][A-Za-z0-9_.]*)', v):
+        parts = mod.split('.')
+        for k in range(1, len(parts) + 1):
+            surface.add('/'.join(parts[:k]) + '/__init__.py')
+        surface.add('/'.join(parts) + '.py')
+        surface.add('/'.join(parts) + '/__main__.py')
+    if re.search(r'(?:^|[\s;&|(])make(?:\s|$)', v):
+        surface.update(makefiles())
 for raw in configs:
     names, error = values(raw)
     if error:
         break
     for v in names:
-        for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', v):
-            q = os.path.normpath(tok)
-            if q != '.' and not q.startswith('..'):
-                surface.add(q)
-        for mod in re.findall(r'-m\s+([A-Za-z_][A-Za-z0-9_.]*)', v):
-            parts = mod.split('.')
-            for k in range(1, len(parts) + 1):
-                surface.add('/'.join(parts[:k]) + '/__init__.py')
-            surface.add('/'.join(parts) + '.py')
-out = {'surface': [] if error else sorted(surface), 'error': error, 'args': [wt, rev]}
+        add_command(v)
+# CI files: the repo scripts their steps name
+CI = re.compile(r'^(\.github/workflows/.*\.ya?ml|\.gitea/workflows/.*|\.forgejo/workflows/.*|\.gitlab-ci\.yml|\.gitlab/.*\.ya?ml|\.circleci/.*|\.woodpecker.*|Jenkinsfile|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml|\.buildkite/.*)$', re.I)
+for c in sorted(x for x in tracked if CI.match(x)):
+    t = read(c)
+    if t is None:
+        error = error or ('CI file ' + c + ' is over 1 MiB or unreadable')
+        continue
+    for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', t):
+        q = norm(tok)
+        if q and q in tracked and is_script(q):
+            surface.add(q)
+# symlinks in the surface: their targets inside the repo too
+for q in list(surface):
+    fp = os.path.join(wt, q)
+    if os.path.islink(fp):
+        tgt = os.path.relpath(os.path.realpath(fp), os.path.realpath(wt))
+        if not tgt.startswith('..'):
+            surface.add(tgt)
+# one level of what the hook scripts load: repo-local Python imports (from the
+# repo root and from the script's own dir) and shell source/. of repo paths.
+# A Python script that does not parse puts its whole directory in the surface.
+def resolve(cands):
+    for c in cands:
+        q = norm(c)
+        if q and q in tracked:
+            surface.add(q)
+level1 = sorted(q for q in surface if q in tracked)
+if len(level1) > MAX_FILES:
+    error = error or ('more than ' + str(MAX_FILES) + ' hook files')
+for q in level1[:MAX_FILES]:
+    t = read(q)
+    if t is None:
+        error = error or ('hook file ' + q + ' is over 1 MiB or unreadable')
+        continue
+    d = os.path.dirname(q)
+    if q.endswith('.py'):
+        try:
+            tree = ast.parse(t)
+        except (SyntaxError, ValueError, RecursionError, MemoryError):
+            surface.add((d + '/') if d else './')
+            continue
+        for node in ast.walk(tree):
+            mods = []
+            if isinstance(node, ast.Import):
+                mods = [(a.name, 0) for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                mods = [(node.module or '', node.level)] + [((node.module + '.' if node.module else '') + a.name, node.level) for a in node.names]
+            for m, lvl in mods:
+                path = m.replace('.', '/')
+                bases = [d] if lvl else ['', d]
+                if lvl > 1:
+                    bases = ['/'.join(d.split('/')[:max(0, len(d.split('/')) - (lvl - 1))])]
+                for b in bases:
+                    stem = os.path.join(b, path) if path else b
+                    resolve([stem + '.py', os.path.join(stem, '__init__.py')])
+    elif t.startswith('#!') and re.match(r'#!\S*(?:/|env\s+)(?:ba|z|da|k)?sh\b', t) or q.endswith(('.sh', '.bash')):
+        for m in re.findall(r'(?:^|[;&|][ \t]*)(?:source|\.)[ \t]+([^\s;&|]+)', t, re.M):
+            resolve([m, os.path.join(d, m)])
+# core.hooksPath inside the repo: the whole dir
+hp = subprocess.run(['git', '-C', wt, 'config', 'core.hooksPath'], capture_output=True).stdout.decode('utf-8', 'replace').strip()
+if hp and not os.path.isabs(os.path.expanduser(hp)):
+    q = norm(hp)
+    if q:
+        surface.add(q.rstrip('/') + '/')
+elif hp:
+    rel = os.path.relpath(os.path.realpath(os.path.expanduser(hp)), os.path.realpath(wt))
+    if not rel.startswith('..'):
+        surface.add(rel.rstrip('/') + '/')
+# F2: the repo paths each make target's recipe names, in the root Makefile at <rev>
+make_paths = {}
+mk = None
+for name in ('GNUmakefile', 'makefile', 'Makefile'):
+    r = subprocess.run(['git', '-C', wt, 'show', rev + ':' + name], capture_output=True)
+    if r.returncode == 0:
+        mk = r.stdout[:FILE_CAP].decode('utf-8', 'replace')
+        break
+for tgt in targets:
+    paths = set()
+    if mk is not None:
+        lines = mk.splitlines()
+        for i, line in enumerate(lines):
+            m = re.match(r'^([^:=#\t][^:=#]*):(?!=)', line)
+            if m and tgt in m.group(1).split():
+                for rl in lines[i + 1:]:
+                    if not rl.startswith('\t'):
+                        break
+                    for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', rl):
+                        q = norm(tok)
+                        if q and q in tracked:
+                            paths.add(q)
+    make_paths[tgt] = sorted(paths)
+out = {'surface': [] if error else sorted(surface), 'make_paths': {} if error else make_paths, 'error': error, 'args': [wt, rev, targets_arg]}
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, ensure_ascii=False))
 `;
@@ -3965,7 +4094,7 @@ wt, rev = sys.argv[1], sys.argv[2]
 # argv[3] == 'no-yaml' (tests only): behave as if no Python had PyYAML
 no_yaml = len(sys.argv) > 3 and sys.argv[3] == 'no-yaml'
 os.chdir('/')
-PAT = re.compile('terra' + 'form|(?<![a-z])to' + 'fu|opento' + 'fu|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|atlan' + 'tis|dig' + 'ger', re.I)
+PAT = re.compile('terra' + 'form|(?<!in)to' + 'fu|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|atlan' + 'tis|dig' + 'ger', re.I)
 DIRS = {'.terra' + 'form', 'terra' + 'form'}
 T = '.to' + 'fu'
 EXTS = ('.tf', '.tfvars', '.tf.json', '.tfvars.json', '.hcl', T, T + 'vars', T + '.json', T + 'vars.json')
@@ -4116,8 +4245,11 @@ def hit(name, data, depth=0, root=None, label=None, leaf=False):
         p = os.path.normpath(tok)
         if p == '..' or p.startswith('../'):
             continue
-        lf = leafy(p)
-        if lf and p not in ex and (inert(p) or depth + 1 >= 2):
+        # a name in an execution context is traced like any script; a doc,
+        # data, test or Dockerfile that is merely mentioned is matched only
+        # when a surface names it directly (a doc or data file never)
+        lf = leafy(p) and p not in ex
+        if lf and (inert(p) or depth + 1 >= 2):
             continue
         if root is not None:
             if (label, p) not in followed and root_has(root, p):
@@ -4137,6 +4269,21 @@ def disk(fp, leaf=False):
     except OSError as e:
         fail('cannot read ' + fp + ': ' + str(e))
     return charge(data[:FILE_CAP] if leaf else data, fp)
+def over(kind, p, root):
+    if kind == 'git':
+        r = subprocess.run(['git', '-C', wt, 'cat-file', '-s', rev + ':' + p], capture_output=True)
+        return r.returncode == 0 and int(r.stdout.strip() or 0) > FILE_CAP
+    if kind == 'disk':
+        fp = os.path.join(top, p)
+    elif isinstance(root, str):
+        fp = os.path.join(root, p)
+    else:
+        r = subprocess.run(['git', '-C', root[1], 'cat-file', '-s', 'FETCH_HEAD:' + p], capture_output=True)
+        return r.returncode == 0 and int(r.stdout.strip() or 0) > FILE_CAP
+    try:
+        return os.path.getsize(fp) > FILE_CAP
+    except OSError:
+        return False
 def head(g, obj):
     # the first FILE_CAP bytes of a blob, never more in memory
     pr = subprocess.Popen(g + ['cat-file', 'blob', obj], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -4397,6 +4544,10 @@ while queue:
         fail('more than ' + str(MAX_REFS) + ' referenced files')
     if d > MAX_DEPTH:
         continue
+    # a doc or data file over FILE_CAP is matched on its first FILE_CAP bytes
+    # and not followed; anything else over the cap refuses
+    if not lf and inert(p) and over(kind, p, root):
+        lf = True
     if kind == 'git':
         hit(p, head(['git', '-C', wt], rev + ':' + p) if lf else blob(p), d, leaf=lf)
     elif kind == 'disk':
@@ -5376,9 +5527,14 @@ async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, s
 }
 
 // Hook-surface separation (3.1.0, Max's rule): a change to the hook surface is
-// never built with other changes, and never without Max. The surface is
-// .pre-commit-config.yaml, the CI workflow files and every file the program
-// HOOK_SURFACE_PY finds a hook entry or args naming (its -m modules too).
+// never built with other changes, and never without Max. The surface is every
+// hook-manager and CI path (HOOK_PATH_RE, any case) and every repo path the
+// program HOOK_SURFACE_PY finds: hook entry and args files, -m modules, the
+// Makefiles of a `make` hook, symlink targets, one level of Python imports and
+// shell `source`/`.`, the scripts CI files name, the core.hooksPath dir. An
+// entry ending "/" is a directory prefix. targets: make targets whose recipe
+// paths the program also returns (make_paths, for F2).
+const HOOK_PATH_RE = /^(\.pre-commit-config\.yaml|\.pre-commit-hooks\.yaml|\.gitlab-ci\.yml|jenkinsfile|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml|\.woodpecker[^/]*|(\.github|\.gitea|\.forgejo|\.circleci|\.gitlab|\.buildkite|\.husky|\.githooks|\.woodpecker)\/.*|(.*\/)?lefthook[^/]*\.ya?ml|\.lefthook[^/]*(\/.*)?)$/i;
 function hookSurfacePrompt(inputs) {
   return (
     "Infra step of the fleet workflow: list the hook surface. READ ONLY: no edits, no commits; run nothing but the one command below. Never run a hook.\n" +
@@ -5386,25 +5542,32 @@ function hookSurfacePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(HOOK_SURFACE_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.rev) +
+    "python3 -I -c " + shQuote(HOOK_SURFACE_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.rev) + " " + shQuote(JSON.stringify(inputs.targets)) +
     "\n" +
-    "It prints one JSON object {surface, error, args, digest}. Copy every value unchanged, error null included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, surface, error, args, digest}."
+    "It prints one JSON object {surface, make_paths, error, args, digest}. Copy every value unchanged, error null included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, surface, make_paths, error, args, digest}."
   );
 }
 
-async function hookSurface(label, worktree, rev, phaseName) {
-  const r = await infra(label, hookSurfacePrompt({ worktree, rev }), phaseName, JUDGE_AGENT);
-  if (!Array.isArray(r.surface) || !relayDigestOk(r, ["surface", "error", "args"]))
+async function hookSurface(label, worktree, rev, targets, phaseName) {
+  const r = await infra(label, hookSurfacePrompt({ worktree, rev, targets }), phaseName, JUDGE_AGENT);
+  if (!Array.isArray(r.surface) || !relayDigestOk(r, ["surface", "make_paths", "error", "args"]))
     halt("failed", label + ": the relayed surface does not match the program's digest");
-  if (canonical(r.args) !== canonical([worktree, rev])) halt("failed", label + ": the program ran on other arguments");
+  if (canonical(r.args) !== canonical([worktree, rev, JSON.stringify(targets)])) halt("failed", label + ": the program ran on other arguments");
   if (r.error !== null)
     halt("needs_human", "hook surface cannot be computed (" + r.error + "); hook change needs Max's confirmation", "hooks");
-  return r.surface.map((x) => normPath(String(x)));
+  const mp = {};
+  for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x))) : [];
+  return { surface: r.surface.map((x) => (/\/$/.test(String(x)) ? (String(x) === "./" ? "./" : normPath(String(x)) + "/") : normPath(String(x)))), make_paths: mp };
 }
 
 function isHookPath(p, surface) {
-  return p === ".pre-commit-config.yaml" || p.indexOf(".github/workflows/") === 0 || p === ".gitlab-ci.yml" || p.indexOf(".forgejo/") === 0 || surface.indexOf(p) >= 0;
+  if (HOOK_PATH_RE.test(p)) return true;
+  for (const s of surface) {
+    if (s === "./") return true;
+    if (/\/$/.test(s) ? p.indexOf(s) === 0 : p === s) return true;
+  }
+  return false;
 }
 
 // Stops (needs_human, stop_gate hooks) when paths touch the hook surface:
@@ -5419,16 +5582,27 @@ function hookGate(what, paths, surface) {
   gate(what + ": no hook-surface path");
 }
 
-// A plan's scope: the files it names and the paths of the caller occurrences
-// it maps to a criterion (the callers the change alters).
-function planScopePaths(pf) {
+// A plan's scope: the files it names, its criteria's test files and the paths
+// of the caller occurrences it maps to a criterion (the callers it alters).
+function planScopePaths(pf, criteria) {
   const out = planScopeFiles(pf);
+  for (const c of criteria || []) for (const f of (c && Array.isArray(c.test_files) ? c.test_files : [])) if (typeof f === "string") out.push(f);
   for (const e of (pf && Array.isArray(pf.changed_symbols) ? pf.changed_symbols : []))
     for (const o of (e && Array.isArray(e.occurrences) ? e.occurrences : []))
       if (o && o.criterion && typeof o.at === "string") {
         const m = OCCURRENCE_RE.exec(o.at);
         if (m) out.push(m[1]);
       }
+  return out;
+}
+
+// The make targets of the allowlisted `make <target>` check_cmds (F2).
+function makeTargets(obligations) {
+  const out = [];
+  for (const o of obligations || []) {
+    const w = o && typeof o.check_cmd === "string" ? o.check_cmd.trim().split(/[ \t]+/) : [];
+    if (w[0] === "make" && w[1] && out.indexOf(w[1]) < 0) out.push(w[1]);
+  }
   return out;
 }
 
@@ -5549,7 +5723,7 @@ async function planAndAudit(ctx) {
   );
 
   // Max's rule (3.1.0): a plan that touches the hook surface stops here
-  hookGate("the plan scope", planScopePaths(planFacts), await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", "Plan"));
+  hookGate("the plan scope", planScopePaths(planFacts, criteria), (await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", [], "Plan")).surface);
 
   // the repo's fixers run on the plan now, so the audit sees the bytes the
   // plan commit will hold (2.1.4: prettier rewrote the plan in the commit)
@@ -5732,6 +5906,7 @@ function fencePathProblem(p) {
   if (/\.ya?ml$/.test(base) && (dirs.indexOf("k8s") >= 0 || dirs.indexOf("manifests") >= 0)) return "kubernetes manifest";
   if (/(^|\/)charts\/[^/]+\/templates\//i.test(q)) return "helm chart template";
   if (segs.some((x) => x.toLowerCase() === ".github")) return ".github/ (CI, settings, rulesets)";
+  if (HOOK_PATH_RE.test(q)) return "hook surface (a CI or hook-manager path)";
   if (q.toLowerCase().indexOf("rulesets") >= 0) return "rulesets";
   if (base.indexOf(".env") === 0 || base.indexOf("secret") >= 0 || /\.(pem|key)$/.test(base) || base.indexOf("id_rsa") === 0 || base.indexOf("credentials") >= 0)
     return "secret-like path";
@@ -6916,7 +7091,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       continue;
     }
     if (cj.verdict !== "approve") halt("failed", "code-judge returned no verdict");
-    const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check, judgeObligations, cj.gates_not_run, h.changed);
+    // the hook surface and the recipe paths of make check_cmds (3.1.0), read once per approve
+    const hs = await hookSurface("infra:hook-surface:r" + m, mainWt, ref.plan_commit, makeTargets(judgeObligations), "Code");
+    const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check, judgeObligations, cj.gates_not_run, h.changed, hs.make_paths);
     if (obFail.length) {
       coderFindings = obFail;
       lastRoundGate = "obligations";
@@ -6929,7 +7106,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("code-judge r" + m + ": approve of tree " + codeTree);
 
     // Max's rule (3.1.0): the approved diff never touches the hook surface
-    hookGate("the approved tree " + codeTree, h.changed || [], await hookSurface("infra:hook-surface:r" + m, mainWt, ref.plan_commit, "Code"));
+    hookGate("the approved tree " + codeTree, h.changed || [], hs.surface);
 
     // the build-time caller check, on every tree before it is committed
     if (planFacts.changed_symbols) {
