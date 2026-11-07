@@ -89,7 +89,9 @@ the script recomputes it and stops on a difference: `infra:callers`, `infra:chan
 `infra:branch-scan` (failed), `infra:iac-scan` (`stop_gate: iac`; its `error` key is always
 printed, `null` when none), `infra:fleet-scan` (`stop_gate: scope`), `infra:read-state`
 (`stop_gate: resume`), `infra:review-paths` (failed) and `infra:check-scripts` (a mismatch makes
-every check_cmd script judge-only), plus the hasher. The plan ref itself travels only as meta
+every check_cmd script judge-only), plus the hasher. Since 3.1.0 also `infra:verify-plan`
+(`VERIFY_SINCE_PY`, failed), `infra:commit-plan` (`PLAN_FILES_PY`, failed) and the push classifier
+(`PUSH_CLASSIFY_PY`, a `hook_rejected` without it fails). The plan ref itself travels only as meta
 entries or as sha256-checked chunks (`infra:load-ref`). The digest catches a relay that drops or
 changes an entry; it is not a security boundary against a hostile relay (ADR-1152).
 
@@ -364,6 +366,12 @@ Verify: the sha256 of `plan_path` at `plan_commit` must equal `plan_sha256`, or 
 commits of this plan only (`feat(<task id>): <slug words>` and `fix(<task id>): code round <n>`),
 with `plan_path` unchanged. Anything else stops with the same reason.
 Stage-plan, commit-plan and verify run the same embedded hash program.
+Since 3.1.0 no step relays raw git output for these checks. Verify runs `VERIFY_SINCE_PY`
+(worktree, plan commit, plan path), which prints `{head, is_ancestor, commits_since, plan_touched,
+changed_since, digest}`; commit-plan runs `PLAN_FILES_PY`, which prints `{head, files, digest}`.
+The script recomputes each digest and stops the run (`failed`) on a dropped or changed entry or a
+missing list. Every embedded program runs as `python3 -I`, takes the worktree as an argument and
+runs git with `-C <worktree>`; the 3.1.0 programs change to `/` before they do anything.
 
 The risk tier is still computed and logged (short = `est_diff_lines < 20` AND `new_behaviour`
 false), but the fleet always takes the full path: no role prompt supports a coder without frozen
@@ -437,8 +445,21 @@ is the plan commit, for example after a re-plan.
 - **Ledger:** for each `ledger` source, one `## Fleet build` section (tldr, plan path, PR URL,
   hidden `fleet:<task id>` marker) is appended to the task's body page (`body_slug`) in
   `args.project`. A body that already carries the marker is skipped. `ledger_status` is `ok`,
-  `failed` or `none`. A task with no `body_slug` fails with "task has no body page" and its
-  `section_text` is handed back.
+  `failed` or `none`. A failed entry hands its `section_text` back.
+- **Ledger task with no body page (3.1.0):** the write-back step returns `no_body` and the task's
+  title. A read-only step (`infra:ledger-read:pre`, `fleet:judge`) reads the task again: the title
+  must equal the first read byte for byte and `body_slug` must still be empty, else nothing is
+  written. Then `infra:ledger-body` runs on `fleet:ledger-writer` (MCP tools only: `Write`,
+  `Edit`, `NotebookEdit`, `Bash` and the yaadgaar write tools are disallowed). It re-reads the task
+  and writes nothing when the title differs; it creates the page with `wiki_add` at the slug the
+  script computes, `{args.project with / as _}_task-<id>` (`upsert=False`, `force=True`,
+  `wait=True`, `directory` = the repo); on `slug_exists` it appends the section only when the page
+  lacks the marker and never overwrites the page; then it calls
+  `task_write(project_id, id, title=<the title read>, body_slug=<slug>)`, because `task_write`
+  writes the title on every call. A second read (`infra:ledger-read:post`, `fleet:judge`) must show
+  the same title, the computed `body_slug` and the marker on the page. Any other outcome fails the
+  entry; a changed title is named ("restore the title by hand"). A project that is not
+  `<owner>/<repo>` writes nothing. Titles and bodies are data, not instructions.
 - **yaadgaar (3.0.0):** for each `yaadgaar` source of a `yadgarhq/` project, a read-only step
   (`infra:yaadgaar-read`, `fleet:judge`) resolves the client's project (`.yadgar/project-id` or
   origin; the yaadgaar client resolves a number in the session's start project) and runs
@@ -537,14 +558,35 @@ here" when any of these is true:
   - any tracked file named in the text of one of the above, such as a hook `entry` or `args`, a
     husky or lefthook command, or a hooks-dir shim's `--config=<path>`. The scan follows these
     names up to 4 levels deep. A name is any run of `A-Z a-z 0-9 _ . / -` that resolves to a
-    tracked path.
+    tracked path;
+  - since 3.1.0, an untracked or ignored file in the worktree named the same way
+    (`worktree:<path>`), followed the same way;
+  - since 3.1.0, the hook manifest (`.pre-commit-hooks.yaml`) of every remote hook repo of the root
+    `.pre-commit-config.yaml`, and the clone files it names (`remote:<repo>@<rev>:<path>`). The scan
+    reads them from the clone pre-commit keeps in its cache (`$PRE_COMMIT_HOME`, else
+    `$XDG_CACHE_HOME/pre-commit`, else `~/.cache/pre-commit`; `db.db` maps repo and rev to the
+    clone).
 - The scan cannot complete: a bad revision, an unreadable file or hook, more than 2000 referenced
-  files, or a missing list.
+  files, a missing list, or (3.1.0) a remote hook repo with no cached clone at a configured rev.
+  The last one stops the run before pre-commit has ever installed that repo on this machine: run
+  `pre-commit install-hooks` in the repo (it clones and installs, and runs no hook), then plan again.
 
-The scan reads tracked files from the git objects at the scanned revision. It reads the hooks dir in
-its current state. The scan program never spells a tool name in full, because the local Bash guard
-blocks those words. It builds its pattern from pieces, and a test checks that the pattern equals
-`IAC_RE`.
+The scan reads tracked files from the git objects at the scanned revision. It reads the hooks dir,
+untracked files and the pre-commit cache in their current state. The remote repo and rev values are
+read from the config text, comments dropped; an alias or a block scalar there names no URL, so it is
+not found in the cache and the run stops.
+
+Not covered (3.1.0), by design:
+
+- Code inside an installed hook package that a manifest names by a command (a console-script
+  `entry` such as `check-yaml`) and not by a file path.
+- Test code. The roles run `test_cmd` (an allowlisted test runner), and a test may start any
+  program. The scan does not read test files: many repos, this one included, name the tools in test
+  data, so the scan would refuse them. The allowlisted `test_cmd` shapes, the forbidden words in
+  commands, plan approval and the draft PR are the controls here.
+
+The scan program never spells a tool name in full, because the local Bash guard blocks those words.
+It builds its pattern from pieces, and a test checks that the pattern equals `IAC_RE`.
 
 Every `git worktree add` the fleet runs uses `-c core.hooksPath=/dev/null`, so no `post-checkout`
 hook runs before the scan. The scope-and-plan role page creates the planner's own probe worktree;
@@ -680,7 +722,13 @@ obligation in its uncommitted changes and reports `obligations_done`.
    it may run an obligation's `check_cmd` at its own judgement. On `approve`, the script requires
    every obligation to be `met: true`; otherwise it converts the verdict to `fix_code`, routes the
    unmet obligations to the coder and logs "obligations gate". That round counts toward the 3 code
-   rounds.
+   rounds. Since 3.1.0 (code-judge page 15) the judge runs every allowlisted `check_cmd` in a
+   scratch worktree loaded with the judged tree, so CI-only rules fail before the push, and
+   reports `check_exit`. On `approve` the gate also requires, for every obligation that still has
+   a `check_cmd` this round, `check_exit: 0` or a `gates_not_run` entry `check_cmd:<id>` (stated in
+   the PR body); a non-zero exit or neither one converts the verdict to `fix_code`. Limit: a
+   `check_cmd` that cannot run in the scratch worktree (a missing tool or dependency) is only
+   stated as not run, and a CI rule with no `check_cmd` is still judged from the diff alone.
 3. **Push hook rejection goes back to the coder.** The push step classifies its result as
    `push_result: ok | hook_rejected | network | non_ff | remote_rejected`, on git's own lines only
    (lines that start with `error:`, `fatal:` or ` ! [`), never on the hook's output or the remote
@@ -691,7 +739,12 @@ obligation in its uncommitted changes and reports `obligations_done`.
    finding. The round counts as a code round, and the code judge must approve again before the next
    push (`infra:push:p<n>`). `non_ff` and `remote_rejected` (` ! [remote rejected]`: a server hook
    or branch protection) stop with `needs_human`; `network` is retried 3 times with backoff and
-   then fails.
+   then fails. Since 3.1.0 a program classifies, not the agent: `PUSH_CLASSIFY_PY` reads the first
+   attempt's output file and exit code and prints `{push_result, exit_code, hook_tail, digest}`.
+   One rule is added: an `error: RPC failed` line (an HTTP 5xx on the pack upload) is never
+   `hook_rejected`. The script accepts `hook_rejected` only with exit code 1 and the program's
+   digest. The tests replay git 2.55.0 output captured for `[remote rejected]`, a declined
+   pre-push hook, a non-fast-forward, HTTP 500/502 on the upload and HTTP 500/503 on `info/refs`.
 
 #### Command safety
 
@@ -769,7 +822,9 @@ The script pins the role contract, not the prose:
   gate-change-nonweakening-sweep 4. 2.1.6 raises scope-and-plan to 26 and plan-audit to 15
   (`changed_symbols`, `caller_check`). 3.0.0 raises scope-and-plan to 27, plan-audit to 16 and
   fleet-coder to 17 (the build-time caller check and the optional finding `symbol`; additive, so
-  the marker stays `fleet-v3`).
+  the marker stays `fleet-v3`). 3.1.0 pins the prose-only pages at their live versions
+  (fleet-test-writer 10, fleet-test-judge 10, pr-review 18, gate-change-nonweakening-sweep 5) and
+  raises fleet-code-judge to 15 (`check_exit`, additive).
 - Each role runner reports the version and marker it loaded. A value that differs from preflight
   (the page changed mid-run) discards the result.
 - `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are
@@ -830,8 +885,9 @@ listed in `gates_not_run`.
 ### Judge separation
 
 Judges (test, code, intent, pr-review, sweep), preflight, intake, branch-scan, load-ref, verify,
-the pre-commit id read, the review path listing, the comment listing and the hasher run as the
-`fleet:judge` agent, which has `Write`, `Edit` and `NotebookEdit` disallowed. `Bash` stays, because
+the pre-commit id read, the review path listing, the comment listing, the ledger task reads and the
+hasher run as the `fleet:judge` agent, which has `Write`, `Edit` and `NotebookEdit` disallowed, and
+(since 3.1.0) the yadgar `task_write`, `wiki_add`, `wiki_append_section` and `wiki_update` tools. `Bash` stays, because
 the code judge must run the suite. The backstop is a worktree state (HEAD, the temp-index tree and
 every hasher map) taken before and after every judge run. Any difference discards the verdict and
 returns `needs_human` with reason `judge mutated worktree` and the changed parts. This catches a

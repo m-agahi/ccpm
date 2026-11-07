@@ -6023,8 +6023,10 @@ test("2.1.2 IaC scan program: files, hook dirs, hook managers, Makefile, package
   // the pieced Python pattern is the script's IAC_RE
   const pyPat = Function("return " + /PAT = re\.compile\((.*), re\.I\)/.exec(body)[1])();
   assert.equal(pyPat, /const IAC_RE = \/(.*)\/i;/.exec(SOURCE)[1]);
+  // 3.1.0: an empty pre-commit cache, so a remote hook repo is never found in the user's own
+  const pcHome = mkdtempSync(join(tmpdir(), "fleet-iac-pchome-"));
   const scan = (wt, rev) => {
-    const r = spawnSync("python3", ["-I", "-", wt, rev], { input: body, encoding: "utf8" });
+    const r = spawnSync("python3", ["-I", "-", wt, rev], { input: body, encoding: "utf8", env: Object.assign({}, process.env, { PRE_COMMIT_HOME: pcHome }) });
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout);
   };
@@ -6091,7 +6093,9 @@ test("2.1.2 IaC scan program: files, hook dirs, hook managers, Makefile, package
     const wt = fresh(files);
     try {
       const got = scan(wt, "HEAD");
-      assert.ok(!got.error, got.error);
+      // 3.1.0: a remote hook repo that is not in the pre-commit cache cannot be scanned (refused too)
+      if (/repo: https:/.test(files[".pre-commit-config.yaml"] || "")) assert.match(got.error, /not in the pre-commit cache/);
+      else assert.ok(!got.error, got.error);
       assert.deepEqual(got.iac_files, wantFiles, JSON.stringify(files));
       assert.deepEqual(got.iac_text, wantText, JSON.stringify(files));
     } finally {
@@ -9003,7 +9007,7 @@ test("3.0.0 review 8: every embedded program runs isolated (-I), the YAML loader
   // no program uses a third-party import (the YAML loader runs under pre-commit's interpreter)
   const progs = SOURCE.match(/const [A-Z_]+_PY = String\.raw`[\s\S]*?`;/g) || [];
   assert.ok(progs.length >= 10);
-  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs"]);
+  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3"]);
   for (const p of progs) {
     const name = /const ([A-Z_]+_PY)/.exec(p)[1];
     for (const m of p.matchAll(/^\s*import ([A-Za-z0-9_, .]+)$/gm))
@@ -9562,4 +9566,95 @@ test("3.1.0 1958: fleet:judge cannot write a ledger task or a wiki page; fleet:l
   const writer = tools("ledger-writer.md");
   for (const t of ["Write", "Edit", "NotebookEdit", "Bash", "mcp__yaadgaar__edit_task", "mcp__yaadgaar__create_task", "mcp__yaadgaar__transition_task"]) assert.ok(writer.includes(t), t);
   assert.match(readFileSync(join(HERE, "..", "agents", "ledger-writer.md"), "utf8"), /^name: ledger-writer$/m);
+});
+
+// ---------------------------------------------------------------- 3.1.0 (ledger 1941b): IaC scan of remote hook manifests and untracked hook scripts
+
+// A pre-commit cache as pre-commit keeps it: db.db maps (repo, ref) to a clone dir.
+function preCommitCache(home, rows) {
+  const db = join(home, "db.db");
+  const vals = [];
+  rows.forEach(([repo, ref, files], i) => {
+    const dir = join(home, "repo" + i);
+    for (const [p, c] of Object.entries(files)) {
+      spawnSync("mkdir", ["-p", dirname(join(dir, p))]);
+      writeFileSync(join(dir, p), c);
+    }
+    vals.push([repo, ref, dir]);
+  });
+  const py = "import json, sqlite3, sys\nc = sqlite3.connect(sys.argv[1])\nc.execute('CREATE TABLE repos (repo TEXT NOT NULL, ref TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY (repo, ref))')\nc.executemany('INSERT INTO repos VALUES (?, ?, ?)', json.loads(sys.argv[2]))\nc.commit()\n";
+  const r = spawnSync("python3", ["-I", "-c", py, db, JSON.stringify(vals)], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+}
+
+test("3.1.0 1941b: the IaC scan reads remote hook manifests from the pre-commit cache, and untracked files hooks name", { skip: !HAVE_PY }, () => {
+  const body = extractPy("IAC_SCAN_PY_BEGIN", "IAC_SCAN_PY_END", "IAC_SCAN_PY");
+  assert.doesNotMatch(body, /terraform|tofu|tflint|terragrunt|\btfp\b|digger|atlantis/i, "the Bash guard blocks these words");
+  const scan = (wt, home) => {
+    const r = spawnSync("python3", ["-I", "-c", body, wt, "HEAD"], { encoding: "utf8", cwd: wt, env: Object.assign({}, process.env, { PRE_COMMIT_HOME: home }) });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  const U = "https://example.com/acme/hooks";
+  const cfg = (extra) => "repos:\n- repo: " + U + "\n  rev: v1.2.0\n  hooks:\n  - id: fmt\n" + (extra || "");
+  const clean = { ".pre-commit-hooks.yaml": "- id: fmt\n  name: fmt\n  entry: hooks/fmt.sh\n  language: script\n", "hooks/fmt.sh": "#!/bin/sh\nprettier --write \"$@\"\n" };
+  const cases = [
+    // [config, cache rows, untracked files, iac_text, error]
+    [cfg(), [[U, "v1.2.0", clean]], {}, [], null],
+    [cfg(), [[U, "v1.2.0", { ".pre-commit-hooks.yaml": "- id: fmt\n  name: fmt\n  entry: tflint --recursive\n  language: system\n" }]], {}, ["remote:" + U + "@v1.2.0:.pre-commit-hooks.yaml"], null],
+    [cfg(), [[U, "v1.2.0", Object.assign({}, clean, { "hooks/fmt.sh": "#!/bin/sh\nterragrunt hclfmt\n" })]], {}, ["remote:" + U + "@v1.2.0:hooks/fmt.sh"], null],
+    // additional_dependencies: pre-commit keys the clone as <repo>:<deps>
+    [cfg(), [[U + ":pyyaml", "v1.2.0", Object.assign({}, clean, { "hooks/fmt.sh": "digger plan\n" })]], {}, ["remote:" + U + ":pyyaml@v1.2.0:hooks/fmt.sh"], null],
+    // not cached, or cached at another rev: the manifest cannot be scanned
+    [cfg(), [], {}, [], /remote hook repo https:\/\/example\.com\/acme\/hooks is not in the pre-commit cache/],
+    [cfg(), [[U, "v1.1.0", clean]], {}, [], /not in the pre-commit cache/],
+    // flow style is read too; a commented-out repo is not
+    ["repos:\n- {repo: '" + U + "', rev: \"v1.2.0\", hooks: [{id: fmt}]}\n", [[U, "v1.2.0", { ".pre-commit-hooks.yaml": "- id: fmt\n  entry: infracost diff\n" }]], {}, ["remote:" + U + "@v1.2.0:.pre-commit-hooks.yaml"], null],
+    ["repos:\n# - repo: " + U + "\n#   rev: v9\n- repo: local\n  hooks:\n  - id: a\n    entry: true\n    language: system\n", [], {}, [], null],
+    // an alias or a block scalar for repo: no plain URL to look up -> not in the cache
+    ["x: &u " + U + "\nrepos:\n- repo: *u\n  rev: v1.2.0\n", [[U, "v1.2.0", clean]], {}, [], /\*u is not in the pre-commit cache/],
+    // local and meta repos need no cache
+    ["repos:\n- repo: meta\n  hooks:\n  - id: check-useless-excludes\n- repo: local\n  hooks:\n  - id: a\n    entry: true\n    language: system\n", [], {}, [], null],
+    // an untracked (ignored) script a local hook names is read from the worktree
+    [
+      "repos:\n- repo: local\n  hooks:\n  - id: chk\n    entry: scripts/local-check.sh\n    language: script\n",
+      [],
+      { "scripts/local-check.sh": "#!/bin/sh\ntofu validate\n" },
+      ["worktree:scripts/local-check.sh"],
+      null,
+    ],
+    // and followed one level further, to another untracked file
+    [
+      "repos:\n- repo: local\n  hooks:\n  - id: chk\n    entry: bash\n    args: [tools/run.sh]\n    language: system\n",
+      [],
+      { "tools/run.sh": "#!/bin/sh\nexec tools/inner.sh\n", "tools/inner.sh": "atlantis plan\n" },
+      ["worktree:tools/inner.sh"],
+      null,
+    ],
+    // an untracked file with no IaC tooling is fine
+    ["repos:\n- repo: local\n  hooks:\n  - id: chk\n    entry: scripts/ok.sh\n    language: script\n", [], { "scripts/ok.sh": "ruff check .\n" }, [], null],
+  ];
+  for (const [config, rows, untracked, wantText, wantErr] of cases) {
+    const home = mkdtempSync(join(tmpdir(), "fleet-iac-pc-"));
+    const wt = scratchRepo("fleet-iac-remote-");
+    try {
+      writeFileSync(join(wt, ".pre-commit-config.yaml"), config);
+      writeFileSync(join(wt, ".gitignore"), "scripts/\ntools/\n");
+      sh(wt, "git", "add", "-A");
+      sh(wt, "git", "commit", "-qm", "i");
+      for (const [p, c] of Object.entries(untracked)) {
+        spawnSync("mkdir", ["-p", dirname(join(wt, p))]);
+        writeFileSync(join(wt, p), c);
+      }
+      if (rows.length) preCommitCache(home, rows);
+      const got = scan(wt, home);
+      if (wantErr) assert.match(String(got.error), wantErr, config);
+      else assert.equal(got.error, null, config + " " + got.error);
+      assert.deepEqual(got.iac_text, wantText, config);
+      assert.deepEqual(got.iac_files, []);
+    } finally {
+      rmSync(wt, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
 });

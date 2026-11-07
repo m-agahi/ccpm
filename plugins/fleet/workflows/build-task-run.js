@@ -3558,7 +3558,7 @@ function precommitIdsPrompt(inputs) {
 // {iac_files, iac_text, error?}.
 // IAC_SCAN_PY_BEGIN
 const IAC_SCAN_PY = String.raw`
-import fnmatch, hashlib, json, os, re, subprocess, sys
+import fnmatch, hashlib, json, os, re, sqlite3, subprocess, sys
 wt, rev = sys.argv[1], sys.argv[2]
 PAT = re.compile('terra' + 'form|to' + 'fu|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|atlan' + 'tis|dig' + 'ger', re.I)
 DIRS = {'.terra' + 'form', 'terra' + 'form'}
@@ -3580,19 +3580,39 @@ if ls.returncode != 0:
     done(iac_files=[], iac_text=[], error='bad rev ' + rev + ': ' + ls.stderr.decode('utf-8', 'replace').strip())
 paths = [x.decode('utf-8', 'replace') for x in ls.stdout.split(b'\x00') if x]
 tracked = set(paths)
+top = git('rev-parse', '--show-toplevel').stdout.decode('utf-8', 'replace').strip() or wt
 files, text = [], []
 # repo files named in scanned text (hook entries and args, hook-manager
-# commands, a shim's --config=<path>, task-runner scripts): scanned too
+# commands, a shim's --config=<path>, task-runner scripts): scanned too. A
+# tracked name is read at <rev>; an untracked (or ignored) file in the
+# worktree is read from disk ("worktree:<path>"); inside a remote hook repo's
+# clone (root), a file of that clone ("<label>:<path>").
 seen, queue = set(), []
-def hit(name, data, depth=0):
+def hit(name, data, depth=0, root=None, label=None):
     s = data if isinstance(data, str) else data.decode('utf-8', 'replace')
     if PAT.search(s) and name not in text:
         text.append(name)
     for tok in TOKEN.findall(s):
         p = os.path.normpath(tok)
-        if p in tracked and p not in seen:
-            seen.add(p)
-            queue.append((p, depth + 1))
+        if p == '..' or p.startswith('../'):
+            continue
+        if root is not None:
+            if (label, p) not in seen and os.path.isfile(os.path.join(root, p)):
+                seen.add((label, p))
+                queue.append(('clone', p, depth + 1, root, label))
+        elif p in tracked:
+            if p not in seen:
+                seen.add(p)
+                queue.append(('git', p, depth + 1, None, None))
+        elif ('disk', p) not in seen and os.path.isfile(os.path.join(top, p)):
+            seen.add(('disk', p))
+            queue.append(('disk', p, depth + 1, None, None))
+def disk(fp):
+    try:
+        with open(fp, 'rb') as fh:
+            return fh.read()
+    except OSError as e:
+        done(iac_files=files[:CAP], iac_text=text[:CAP], error='cannot read ' + fp + ': ' + str(e))
 def blob(p):
     b = git('cat-file', 'blob', rev + ':' + p)
     if b.returncode != 0:
@@ -3633,6 +3653,38 @@ for p in paths:
             hit(p, json.dumps(tables(tomllib.loads(raw.decode('utf-8'))), default=str))
         except Exception:
             hit(p, raw)
+# remote hook repos of the root .pre-commit-config.yaml (3.1.0): their hook
+# manifest (.pre-commit-hooks.yaml) and the clone files it names, read from
+# the clone pre-commit keeps in its cache. The repo and rev values are read
+# from the text (comments dropped), so an alias or a block scalar names no URL
+# and is not found. A remote repo with no cached clone at a configured rev
+# cannot be scanned: an error, so the run stops.
+if '.pre-commit-config.yaml' in tracked:
+    cfg = '\n'.join(re.sub(r'(^|\s)#.*$', '', x) for x in blob('.pre-commit-config.yaml').decode('utf-8', 'replace').splitlines())
+    val = lambda v: v.strip().strip('\'"')
+    remote = [val(v) for v in re.findall(r'\brepo\s*:\s*([^\s,}\]]+)', cfg)]
+    remote = [r for r in remote if r not in ('local', 'meta')]
+    revs = set(val(v) for v in re.findall(r'\brev\s*:\s*([^\s,}\]]+)', cfg))
+    if remote:
+        pc_home = os.environ.get('PRE_COMMIT_HOME') or os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache'), 'pre-commit')
+        db = os.path.join(pc_home, 'db.db')
+        rows = []
+        if os.path.isfile(db):
+            try:
+                con = sqlite3.connect(db)
+                rows = con.execute('SELECT repo, ref, path FROM repos').fetchall()
+                con.close()
+            except sqlite3.Error as e:
+                done(iac_files=files[:CAP], iac_text=text[:CAP], error='pre-commit cache ' + db + ': ' + str(e))
+        for url in remote:
+            got = [(r, ref, path) for (r, ref, path) in rows if (r == url or r.startswith(url + ':')) and ref in revs]
+            if not got or not all(os.path.isdir(path) for (_, _, path) in got):
+                done(iac_files=files[:CAP], iac_text=text[:CAP], error='remote hook repo ' + url + ' is not in the pre-commit cache ' + pc_home +
+                     ' at a configured rev (' + ', '.join(sorted(revs)) + '): its hook manifest cannot be scanned')
+            for (r, ref, path) in got:
+                label = 'remote:' + r + '@' + ref
+                seen.add((label, '.pre-commit-hooks.yaml'))
+                hit(label + ':.pre-commit-hooks.yaml', disk(os.path.join(path, '.pre-commit-hooks.yaml')), 0, path, label)
 hp = git('config', 'core.hooksPath').stdout.decode('utf-8', 'replace').strip()
 if hp:
     hd = os.path.expanduser(hp)
@@ -3654,12 +3706,18 @@ if os.path.isdir(hd):
                 done(iac_files=files[:CAP], iac_text=text[:CAP], error='cannot read hook ' + fp + ': ' + str(e))
 n = 0
 while queue:
-    p, d = queue.pop(0)
+    kind, p, d, root, label = queue.pop(0)
     n += 1
     if n > MAX_REFS:
         done(iac_files=files[:CAP], iac_text=text[:CAP], error='more than ' + str(MAX_REFS) + ' referenced files')
-    if d <= MAX_DEPTH:
+    if d > MAX_DEPTH:
+        continue
+    if kind == 'git':
         hit(p, blob(p), d)
+    elif kind == 'disk':
+        hit('worktree:' + p, disk(os.path.join(top, p)), d)
+    else:
+        hit(label + ':' + p, disk(os.path.join(root, p)), d, root, label)
 done(iac_files=files[:CAP], iac_text=text[:CAP])
 `;
 // IAC_SCAN_PY_END

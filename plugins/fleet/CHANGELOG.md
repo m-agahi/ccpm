@@ -11,6 +11,15 @@ and logs "prose-only changes assumed". 3.1.0 pins `fleet-code-judge` 15: an olde
 run in preflight ("... must be >= 15; update that page in place; see CHANGELOG 3.1.0 deploy
 order"). The contract marker stays `fleet-v3`.
 
+### New stops (fail-closed additions; no key renamed or removed)
+
+- A remote hook repo with no cached pre-commit clone at a configured rev stops plan and build
+  (`stop_gate: iac`) until `pre-commit install-hooks` has run in the repo.
+- A code-judge `approve` with an allowlisted `check_cmd` that exited non-zero, or that has no
+  `check_exit` and no `gates_not_run` entry `check_cmd:<id>`, becomes a `fix_code` round.
+- A verify, commit-plan or `hook_rejected` push relay that does not match its program's digest
+  fails the run.
+
 ### Changed
 
 - **Role-page pins at the live versions** (ledger 1941a). `fleet-test-writer` 10,
@@ -51,6 +60,15 @@ order"). The contract marker stays `fleet-v3`.
   the title by hand"). A project that is not `<owner>/<repo>` writes nothing. The yaadgaar path is
   unchanged. `fleet:judge` can no longer call `task_write`, `wiki_add`, `wiki_append_section` or
   `wiki_update`.
+- **IaC scan: remote hook manifests and untracked hook scripts** (ledger 1941b). For every remote
+  hook repo of the root `.pre-commit-config.yaml`, the scan reads `.pre-commit-hooks.yaml` and the
+  clone files it names from the pre-commit cache (`db.db` maps repo and rev to the clone; a key
+  with `additional_dependencies` counts too). A remote repo with no cached clone at a configured
+  rev is an error, so the run stops (fail-closed): run `pre-commit install-hooks`, then plan again.
+  The scan also reads an untracked or ignored worktree file that a scanned hook text names
+  (`worktree:<path>`), and follows it like a tracked one. Not closed, and documented: code inside
+  an installed hook package named by a command, and test code (the scan does not read tests: many
+  repos name the tools in test data, so it would refuse them).
 - **Writers and the test judge get the plan's env** (ledger 1935a): already true in 3.0.0 (they get
   the whole `test_cmd`, `env` included, plus `test_env`); a regression test now pins it.
 
