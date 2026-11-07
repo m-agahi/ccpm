@@ -99,6 +99,27 @@ through an alias, a re-export under another name, a name built at runtime, submo
 treats as binary and other repos are not searched or not found. An empty `changed_symbols` is only
 checked by the audit. A ref sealed before 2.1.6 builds without caller coverage (gate line).
 
+Build-time caller check (3.0.0, step 12b): after the code judge approves a tree and before every
+commit step, a read-only step (`infra:changed-defs:r<n>`, the `fleet:judge` agent) runs a program
+over `git diff <plan_commit> <approved tree>` (`-U0`, renames off) for the files that existed at the
+plan commit (modified, type-changed or deleted). For each hunk it reads the base blob: a removed or
+re-added definition line names that definition; any other removed line, and an insertion whose
+first line is not a definition, names the innermost definition above it with a smaller indent.
+Only names the base blob defines are listed, so a new function is an addition, not a change. The
+program does this itself instead of reading git's hunk header: without a `diff=` attribute git
+names the nearest column-0 line, the class rather than its method. The criterion test files, the
+plan doc, non-code files and binary diffs are skipped. The relayed lists must match the program's
+digest. Any listed name that is not a symbol of the sealed `changed_symbols` stops the run with
+`needs_human` and `stop_gate: "callers"` before anything is committed. The script cannot tell a
+coder's scope creep from a planner's miss, so a human decides (re-plan with the symbol mapped, or
+narrow the change); a `plan_wrong` re-plan would let the coder's edit widen the plan by itself.
+Limits: indentation-based and line-based; definitions are found by keyword (`def`, `class`,
+`function`, `fn`, `func`, ...), by JS arrow, method and module-level `const`/`let`/`var` forms,
+by shell `name()` and by C-like signatures, and module-level assignments count as definitions
+(Python, JS, shell, Go, Rust, Ruby constants). A change to a decorator line or to code at module
+level that is no definition names nothing. A ref sealed before 2.1.6 (`changed_symbols: null`)
+skips the check with the gate line "build caller check skipped".
+
 Intake classifies the input and fetches its text: a ledger task through yadgar `task_get`, a Jira
 ticket through the Atlassian MCP, an issue or PR through `gh-personal` or the Codeberg API, a plan
 file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body}],
@@ -192,6 +213,7 @@ args: `{mode: "build", plan_ref, date, run_nonce, project?, confirm?}`.
 | 11   | hasher             | HEAD moved -> stop; any changed, new or removed hash key -> round rejected |
 | 12   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan    |
 | 12a  | -                  | `approve` with an unmet obligation -> `fix_code` (counts as a round)       |
+| 12b  | changed-defs (r/o) | a modified existing definition outside `changed_symbols` -> stop (below)   |
 | 13   | commit (infra)     | `git add -A`, staged tree = `code_tree`, ONE commit WITH hooks (below)     |
 | 14   | push (infra)       | `.fleet/` check first; pushes; a hook rejection -> coder (`fix_code`)      |
 | 15   | pr-opener          | `.fleet/` check first; draft PR at `approved_sha` (the commit step's HEAD) |
@@ -649,7 +671,7 @@ The script pins the role contract, not the prose:
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
   `commands`, `contract`, `role`, `cap`, `ownership`, `commit`, `review`, `intent`, `scope`,
-  `resume` or `iac` (`null` when the run did not stop at one of them). A cap stop names the gate that rejected the
+  `resume`, `iac` or `callers` (`null` when the run did not stop at one of them). A cap stop names the gate that rejected the
   last round (hash, obligations gate, commit hook, push hook or review).
 
 ### Models

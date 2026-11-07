@@ -6,12 +6,26 @@ Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
 
 ### Breaking changes
 
+- **Build-time caller check** (ledger 1956). After the code judge approves a tree and before
+  every commit, a modified existing definition that is not a symbol of the sealed
+  `changed_symbols` stops the run (`needs_human`, new `stop_gate: "callers"`). Builds that 2.1.6
+  committed can now stop here.
+
 ### Added
 
 - **CI runs the node suite** (ledger 1926). `validate.yaml` sets up Node 24 (`actions/setup-node`
   pinned by SHA) and runs every `plugins/*/tests/*.test.mjs`, with the file list expanded by the
   shell. `node --test <dir>` runs a directory as one file on Node 22 and later and fails; the test
   header and the README now name the file form.
+- **`infra:changed-defs:r<n>`** (ledger 1956), a read-only step (`fleet:judge`) that runs a program
+  over `git diff <plan_commit> <approved tree>` for the files that existed at the plan commit and
+  lists every existing definition the tree modifies: removed or re-added definition lines, and the
+  innermost enclosing definition of every other change, read from the base blob (git's hunk header
+  names the nearest column-0 line without a `diff=` attribute, the class rather than its method).
+  New definitions, criterion test files, the plan doc, non-code files and binary diffs are not
+  listed. The relayed lists are checked against the program's digest. A ref sealed before 2.1.6
+  skips the check with a gate line. Test: the actions#211 B1 PoC (the coder changes
+  `prestop_sleep`, which the plan never mapped) stops before the commit.
 
 ### Changed
 

@@ -121,6 +121,8 @@ async function runOne(script, args0) {
     if (!(label in script) && /^infra:park-plan/.test(label)) return { status: "ok", reason: "parked", target: inputsOf(prompt).dest, clean: true };
     // unscripted plan formatting changes nothing (the hooks found nothing to fix)
     if (!(label in script) && /^infra:format-plan/.test(label)) return { status: "ok", reason: "formatted", changed_paths: [] };
+    // unscripted build caller checks find no modified existing definition
+    if (!(label in script) && /^infra:changed-defs:/.test(label)) return defsOut([]);
     // unscripted fleet-internal scans find no .fleet/ path in the PR diff
     if (!(label in script) && /^infra:fleet-scan:/.test(label)) return { status: "ok", reason: "scanned", diff: [], commits: [] };
     // run-state writes are mechanical too: the ref lands on the expected head
@@ -6092,6 +6094,8 @@ const ARRAY_SITES = {
   "plan.changed_symbols @ planAndAudit": "role:scope-and-plan:changed_symbols",
   "e.occurrences @ changedSymbolFindings": "role:scope-and-plan:changed_symbols[].occurrences",
   "r.capped @ callerCheck": "infra:capped",
+  "r.defs @ buildCallerCheck": "infra:defs",
+  "r.skipped @ buildCallerCheck": "infra:skipped",
   "pf.changed_symbols @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   "r.files @ commitPlanAndRef": "infra:files",
@@ -7422,4 +7426,161 @@ test("3.0.0 preflight: a page below its pin names the agent_prompt_get wiki vers
   assert.match(out.result.reason, /agent_prompt_get\(plan-audit, project m-agahi\/yadgar\) wiki version 14/);
   assert.match(out.result.reason, /see CHANGELOG 3\.0\.0 deploy order/);
   assert.doesNotMatch(out.result.reason, /update agent-prompt-plan-audit \(project/);
+});
+
+// ---------------------------------------------------------------- 3.0.0 build-time caller check (ledger 1956)
+
+// The PoC of the actions#211 B1 class at build time: the plan maps
+// guard_verdict, and the coder also changes prestop_sleep, an existing
+// function the plan never modelled. The program lists both; the script
+// refuses prestop_sleep.
+function defsRepo() {
+  const wt = mkdtempSync(join(tmpdir(), "fleet-defs-"));
+  sh(wt, "git", "init", "-q");
+  sh(wt, "git", "config", "user.email", "t@example.com");
+  sh(wt, "git", "config", "user.name", "t");
+  sh(wt, "git", "config", "commit.gpgsign", "false");
+  spawnSync("mkdir", ["-p", join(wt, "chart"), join(wt, "tests"), join(wt, "docs", "plans"), join(wt, "web")]);
+  const files = {
+    "chart/guards.py": "LIMIT = 5\n\n\ndef guard_verdict(x):\n    return x > LIMIT\n\n\ndef untouched(y):\n    return y\n",
+    "chart/render.py":
+      "from chart.guards import guard_verdict\n\n\ndef render(v):\n    if guard_verdict(v):\n        return 1\n    return 0\n\n\n" +
+      "def prestop_sleep(v):\n    if guard_verdict(v):\n        return 10\n    return 0\n\n\n" +
+      "class Pod:\n    kind = 'pod'\n\n    def run(self, v):\n        return render(v)\n\n    def stop(self):\n        return 0\n",
+    "chart/old.py": "def legacy():\n    return 1\n",
+    "tests/test_guards.py": "def test_old():\n    assert True\n",
+    "docs/plans/x.md": "plan\n",
+    "README.md": "readme\n",
+    "web/app.js": "export function boot(a) {\n  return a;\n}\n\nclass App {\n  start(x) {\n    return x;\n  }\n}\n",
+    "data.bin": "\0\x01",
+  };
+  for (const [k, v] of Object.entries(files)) writeFileSync(join(wt, k), v);
+  sh(wt, "git", "add", "-A");
+  sh(wt, "git", "commit", "-qm", "base");
+  return wt;
+}
+
+function runDefs(wt, base, tree, excl) {
+  const prog = extractPy("CHANGED_DEFS_PY_BEGIN", "CHANGED_DEFS_PY_END", "CHANGED_DEFS_PY");
+  const r = spawnSync("python3", ["-I", "-", wt, base, tree, JSON.stringify(excl || [])], { input: prog, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+}
+
+test("3.0.0 changed-defs program: the B1 PoC, an indented method, a constant, a deleted file; new definitions and excluded paths are not listed", { skip: !HAVE_PY }, () => {
+  const wt = defsRepo();
+  try {
+    const base = sh(wt, "git", "rev-parse", "HEAD").trim();
+    const w = (k, v) => writeFileSync(join(wt, k), v);
+    // in the map: guard_verdict; the constant it reads changes too
+    w("chart/guards.py", "LIMIT = 7\n\n\ndef guard_verdict(x):\n    return x >= LIMIT\n\n\ndef untouched(y):\n    return y\n\n\ndef helper(z):\n    return z\n");
+    // B1: prestop_sleep's own guard changes; Pod.run (indented) changes; a new method is added to Pod
+    w(
+      "chart/render.py",
+      "from chart.guards import guard_verdict\n\n\ndef render(v):\n    if guard_verdict(v):\n        return 1\n    return 0\n\n\n" +
+        "def prestop_sleep(v):\n    if guard_verdict(v) and v:\n        return 10\n    return 0\n\n\n" +
+        "class Pod:\n    kind = 'pod'\n\n    def run(self, v):\n        return render(v) + 1\n\n    def stop(self):\n        return 0\n\n    def fresh(self):\n        return 2\n",
+    );
+    spawnSync("rm", [join(wt, "chart/old.py")]);
+    w("chart/new.py", "def brand_new():\n    return 1\n");
+    w("tests/test_guards.py", "def test_old():\n    assert 1\n");
+    w("docs/plans/x.md", "plan v2\n");
+    w("README.md", "readme v2\n");
+    w("web/app.js", "export function boot(a) {\n  return a + 1;\n}\n\nclass App {\n  start(x) {\n    return x * 2;\n  }\n}\n");
+    w("data.bin", "\0\x02");
+    sh(wt, "git", "add", "-A");
+    const tree = sh(wt, "git", "write-tree").trim();
+    const o = runDefs(wt, base, tree, ["tests/test_guards.py", "docs/plans/x.md"]);
+    assert.deepEqual(o.defs, [
+      { name: "LIMIT", at: "chart/guards.py:1" },
+      { name: "guard_verdict", at: "chart/guards.py:4" },
+      { name: "legacy", at: "chart/old.py:1" },
+      { name: "prestop_sleep", at: "chart/render.py:10" },
+      { name: "run", at: "chart/render.py:19" },
+      { name: "boot", at: "web/app.js:1" },
+      { name: "start", at: "web/app.js:6" },
+    ]);
+    assert.deepEqual(o.skipped, ["README.md", "data.bin", "docs/plans/x.md", "tests/test_guards.py"]);
+    assert.equal(o.digest, sha256(canon({ defs: o.defs, skipped: o.skipped })));
+    const fn = new Function(extractCanonical() + "\nreturn canonical;")();
+    assert.equal(sha256(fn({ defs: o.defs, skipped: o.skipped })), o.digest);
+    // no change at all: nothing listed
+    const same = runDefs(wt, base, sh(wt, "git", "rev-parse", "HEAD^{tree}").trim(), []);
+    assert.deepEqual(same.defs, []);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+function defsOut(defs, skipped) {
+  const o = { defs, skipped: skipped || [] };
+  return { status: "ok", reason: "listed", ...o, digest: sha256(canon(o)) };
+}
+
+test("3.0.0 build caller check: runs read-only after the code judge and before the commit, on the plan commit and the approved tree", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const c = call(out, "infra:changed-defs:r1");
+  assert.equal(c.opts.agentType, "fleet:judge");
+  const i = inputsOf(c.prompt);
+  assert.equal(i.base, PC);
+  assert.equal(i.tree, call(out, "infra:commit:r1") && inputsOf(call(out, "infra:commit:r1").prompt).code_tree);
+  assert.deepEqual(i.exclude, ["tests/test_a.py", "tests/test_b.py", "docs/plans/x.md"]);
+  assert.match(c.prompt, /python3 -I -c /);
+  const l = out.labels;
+  assert.ok(l.indexOf("role:fleet-code-judge:r1") < l.indexOf("infra:changed-defs:r1"));
+  assert.ok(l.indexOf("infra:changed-defs:r1") < l.indexOf("infra:commit:r1"));
+  assert.ok(out.result.gate_log.some((m) => /build caller check r1: no existing definition outside changed_symbols/.test(m)));
+});
+
+test("3.0.0 build caller check PoC (actions#211 B1): the coder changes an existing function the plan never mapped -> stops before the commit", async () => {
+  const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
+  s["infra:changed-defs:r1"] = defsOut([
+    { name: "guard_verdict", at: "chart/guards.py:4" },
+    { name: "prestop_sleep", at: "chart/render.py:10" },
+  ]);
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "callers");
+  assert.match(out.result.reason, /prestop_sleep \(chart\/render\.py:10\)/);
+  assert.doesNotMatch(out.result.reason, /guard_verdict \(/);
+  assert.ok(!out.labels.includes("infra:commit:r1"), "nothing committed");
+  // the mapped symbol alone passes
+  const t = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
+  t["infra:changed-defs:r1"] = defsOut([{ name: "guard_verdict", at: "chart/guards.py:4" }]);
+  const ok = await run(t, ARGS);
+  noUnscripted(ok);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+});
+
+test("3.0.0 build caller check: a relay that drops a definition fails the step", async () => {
+  const s = happy();
+  const good = defsOut([{ name: "prestop_sleep", at: "chart/render.py:10" }]);
+  s["infra:changed-defs:r1"] = { ...good, defs: [] };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /infra:changed-defs:r1: the relayed lists do not match the program's digest/);
+  assert.ok(!out.labels.includes("infra:commit:r1"));
+  const t = happy();
+  t["infra:changed-defs:r1"] = { status: "ok", reason: "x", defs: "[]", skipped: [], digest: "0".repeat(64) };
+  const o2 = await run(t, ARGS);
+  assert.equal(o2.result.status, "failed");
+  assert.match(o2.result.reason, /no defs or skipped list/);
+});
+
+test("3.0.0 build caller check: a ref sealed before 2.1.6 (changed_symbols null) skips the check with a gate line", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const ref = JSON.parse(s.__store[tiny.plan_commit]);
+  delete ref.plan_facts.changed_symbols;
+  delete ref.seal;
+  ref.seal = sha256(canon(ref));
+  s.__store[tiny.plan_commit] = JSON.stringify(ref) + "\n";
+  const out = await runOne(s, buildArgs({ ...tiny, ref_sha256: sha256(s.__store[tiny.plan_commit]) }));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(!out.labels.some((x) => x.startsWith("infra:changed-defs")));
+  assert.ok(out.result.gate_log.some((m) => /build caller check skipped: plan ref sealed before 2\.1\.6/.test(m)));
 });

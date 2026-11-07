@@ -146,7 +146,7 @@ const CALLER_LIMITS = [
 // The plan doc's path, character by character (2.1.6): it reaches git and shell commands.
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
 // stop_gate values: which gate ended a stopped run (null when none applies).
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "callers"];
 // Run-state milestones, in order, and the step a resumed build runs next.
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "done" };
 const CONFIRMS = ["ask", "auto"];
@@ -1170,6 +1170,11 @@ const INFRA_SCHEMA = {
     exists: { type: "boolean" },
     occurrences: { type: "object", additionalProperties: { type: "array", items: STR } },
     capped: { type: "array", items: STR },
+    defs: {
+      type: "array",
+      items: { type: "object", properties: { name: STR, at: STR }, required: ["name", "at"] },
+    },
+    skipped: { type: "array", items: STR },
     digest: STR,
     target: STR,
     message: STR,
@@ -2094,6 +2099,137 @@ print(json.dumps(out, sort_keys=True, ensure_ascii=False))
 `;
 // CALLERS_PY_END
 
+// The build-time caller check (3.0.0, ledger 1956): the EXISTING definitions
+// that `git diff <base> <tree>` modifies, in the files that existed at base
+// (status M, T or D; renames off, so a moved file is a delete and an add).
+// For every hunk (-U0) the program reads the base blob itself: a removed or
+// re-added definition line names its definition; any other removed line, and
+// an insertion that does not start with a definition line, names the
+// innermost definition above it with a smaller indent. Only names defined in
+// the base blob are listed. git's own hunk header is not used: without a
+// diff= attribute it names the nearest column-0 line (a class, not its
+// method). Excluded paths (frozen tests, the plan doc), non-code files and
+// binary diffs are listed in skipped. digest: sha256 over {defs, skipped}.
+// Read only.
+// CHANGED_DEFS_PY_BEGIN
+const CHANGED_DEFS_PY = String.raw`
+import hashlib, json, os, re, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+wt, base, tree, excl = sys.argv[1], sys.argv[2], sys.argv[3], set(json.loads(sys.argv[4]))
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
+def run(*a):
+    r = subprocess.run(G + list(a), capture_output=True)
+    if r.returncode != 0:
+        sys.exit(r.stderr.decode('utf-8', 'replace'))
+    return r.stdout
+LANG = {}
+for k, exts in (('py', '.py .pyi'), ('js', '.js .mjs .cjs .jsx .ts .tsx .mts .cts'), ('sh', '.sh .bash .zsh'),
+                ('kw', '.go .rs .rb .kt .kts .scala .swift .php .pl .pm .lua'), ('c', '.c .h .cc .cpp .cxx .hpp .java .cs')):
+    for e in exts.split():
+        LANG[e] = k
+IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,127}$')
+KW = {'if', 'for', 'while', 'switch', 'catch', 'return', 'else', 'elif', 'new', 'sizeof', 'function', 'do', 'try', 'with', 'match', 'when', 'until', 'unless', 'case', 'throw', 'await', 'yield', 'typeof', 'delete', 'void',
+      'and', 'or', 'not', 'in', 'is', 'as', 'goto', 'puts', 'print', 'echo', 'defer', 'go', 'raise', 'assert', 'pass'}
+KEYWORD_DEF = re.compile(r'^\s*(?:(?:export|default|pub(?:\([^)]*\))?|public|private|protected|internal|static|async|unsafe|extern|override|abstract|final|open|inline|suspend|local)\s+)*'
+                         r'(?:def|fn|func|fun|function|sub|proc|class|struct|enum|trait|interface|impl|module|type|object|record|union)\b\s*\*?\s*'
+                         r'(?:\([^)]*\)\s*)?(?:self\.)?([A-Za-z_][A-Za-z0-9_]*)')
+TOP_ASSIGN = {
+    'py': re.compile(r'^([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]*)?=(?!=)'),
+    'js': re.compile(r'^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*[=:]'),
+    'sh': re.compile(r'^(?:readonly\s+|export\s+|declare\s+(?:-\w+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)='),
+    'kw': re.compile(r'^(?:pub\s+)?(?:const|var|let|static|val)\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)|^([A-Z][A-Za-z0-9_]*)\s*=(?!=)'),
+    'c': re.compile(r'^(?:(?:static|const|extern|public|private|protected|final|readonly)\s+)+[A-Za-z_][\w<>\[\],.*&:?]*\s+\*?([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|;|\[)'),
+}
+JS_METHOD = re.compile(r'^\s+(?:(?:static|async|get|set|public|private|protected|readonly|override)\s+)*\*?([A-Za-z_$][A-Za-z0-9_$]*)\s*\([^;]*\)\s*(?::[^{;]*)?\{\s*$')
+JS_ARROW = re.compile(r'^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][A-Za-z0-9_$]*\s*=>)')
+SH_FUNC = re.compile(r'^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)')
+C_FUNC = re.compile(r'^\s*(?:[A-Za-z_][\w<>\[\],.*&:?]*\s+)+[*&]?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*$')
+def defname(lang, line):
+    first = line.split()[0] if line.strip() else ''
+    for rx in ([KEYWORD_DEF, JS_ARROW, JS_METHOD] if lang == 'js' else [SH_FUNC, KEYWORD_DEF] if lang == 'sh'
+               else [KEYWORD_DEF, C_FUNC] if lang == 'c' else [KEYWORD_DEF]):
+        m = rx.match(line)
+        if m and m.group(1) not in KW and (rx is not C_FUNC or first not in KW):
+            return m.group(1)
+    m = TOP_ASSIGN[lang].match(line)
+    n = m and next((g for g in m.groups() if g), None)
+    if n and n not in KW:
+        return n
+    return None
+def indent(line):
+    return len(line) - len(line.lstrip(' \t'))
+def enclosing(lang, lines, start, ind):
+    # the innermost definition at or above lines[start] (0-based) with a smaller indent
+    for i in range(start, -1, -1):
+        s = lines[i]
+        if not s.strip():
+            continue
+        if indent(s) < ind:
+            n = defname(lang, s)
+            if n:
+                return n, i
+            if indent(s) == 0:
+                return None
+            ind = indent(s)
+    return None
+HUNK = re.compile(rb'^@@ -([0-9]+)(?:,([0-9]+))? \+[0-9]+(?:,[0-9]+)? @@')
+defs, skipped = set(), set()
+st = run('diff', '--name-status', '-z', '--no-renames', base, tree, '--').split(b'\0')
+i = 0
+while i + 1 < len(st):
+    status, path = st[i].decode(), st[i + 1].decode('utf-8', 'replace')
+    i += 2
+    if status[:1] not in ('M', 'T', 'D'):
+        continue
+    lang = LANG.get(os.path.splitext(path)[1].lower())
+    if path in excl or lang is None:
+        skipped.add(path)
+        continue
+    blob = run('cat-file', 'blob', base + ':' + path)
+    if b'\0' in blob:
+        skipped.add(path)
+        continue
+    lines = blob.decode('utf-8', 'replace').split('\n')
+    at_base = {}
+    for n, s in enumerate(lines):
+        d = defname(lang, s)
+        if d and IDENT.match(d) and d not in at_base:
+            at_base[d] = n
+    def add(found):
+        if found and IDENT.match(found[0]) and found[0] in at_base:
+            defs.add((found[0], path + ':' + str(found[1] + 1)))
+    out = run('diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', base, tree, '--', path)
+    if b'\nBinary files ' in out or out.startswith(b'Binary files '):
+        skipped.add(path)
+        continue
+    hunks = []
+    for raw in out.split(b'\n'):
+        m = HUNK.match(raw)
+        if m:
+            hunks.append([int(m.group(1)), 1 if m.group(2) is None else int(m.group(2)), []])
+        elif hunks and raw.startswith(b'+') and not raw.startswith(b'+++ '):
+            hunks[-1][2].append(raw[1:].decode('utf-8', 'replace'))
+    for a, b, added in hunks:
+        for L in range(a - 1, a - 1 + b):
+            s = lines[L] if L < len(lines) else ''
+            if not s.strip():
+                continue
+            d = defname(lang, s)
+            add((d, at_base[d]) if d and d in at_base else enclosing(lang, lines, L - 1, indent(s)))
+        for s in added:
+            d = defname(lang, s)
+            if d and d in at_base:
+                add((d, at_base[d]))
+        if b == 0:
+            first = next((s for s in added if s.strip()), None)
+            if first is not None and not defname(lang, first):
+                add(enclosing(lang, lines, a - 1, indent(first)))
+o = {'defs': [{'name': n, 'at': p} for n, p in sorted(defs, key=lambda x: (x[1], x[0]))], 'skipped': sorted(skipped)}
+o['digest'] = hashlib.sha256(json.dumps(o, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(o, sort_keys=True, ensure_ascii=False))
+`;
+// CHANGED_DEFS_PY_END
+
 // Paths with a .fleet/ directory segment: fleet-internal, never in a PR.
 function fleetInternalPaths(paths) {
   return (paths || []).map((p) => normPath(String(p))).filter((q) => q.split("/").slice(0, -1).some((x) => x.toLowerCase() === ".fleet"));
@@ -2365,6 +2501,20 @@ function callersPrompt(inputs) {
     "python3 -I -c " + shQuote(CALLERS_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.plan_path) + " " + shQuote(JSON.stringify(inputs.symbols)) + " " + shQuote(String(inputs.cap)) +
     "\n" +
     'It prints one JSON object {occurrences, capped, digest}. Return {status: "ok", reason, occurrences, capped, digest} with those values copied exactly: every key, every list entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
+  );
+}
+
+function changedDefsPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: list the existing definitions the approved tree modifies. Read only: no edits, no commits, no checkout, no fetch, no push; run nothing but the one command below.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified:\n" +
+    "python3 -I -c " + shQuote(CHANGED_DEFS_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.base) + " " + shQuote(inputs.tree) + " " + shQuote(JSON.stringify(inputs.exclude)) +
+    "\n" +
+    'It prints one JSON object {defs, skipped, digest}. Return {status: "ok", reason, defs, skipped, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -3529,6 +3679,31 @@ async function callerCheck(label, symbols, worktree, planPath) {
   return { findings, occurrences: occ };
 }
 
+// The build-time caller check (3.0.0, ledger 1956): every existing definition
+// the approved tree modifies (base: the plan commit) must be a symbol of the
+// sealed changed_symbols. One that is not stops the run before the commit:
+// the script cannot tell a coder's scope creep from a planner's miss, and the
+// actions#211 B1 weakening was exactly such an unmodelled definition.
+async function buildCallerCheck(label, symbols, worktree, base, tree, exclude) {
+  const r = await infra(label, changedDefsPrompt({ worktree, base, tree, exclude }), "Code", JUDGE_AGENT);
+  if (!Array.isArray(r.defs) || !Array.isArray(r.skipped) || !r.defs.every((d) => d && typeof d.name === "string" && typeof d.at === "string"))
+    halt("failed", label + " returned no defs or skipped list");
+  const relayed = { defs: r.defs.map((d) => ({ name: d.name, at: d.at })), skipped: r.skipped };
+  if (typeof r.digest !== "string" || sha256Hex(canonical(relayed)) !== r.digest)
+    halt("failed", label + ": the relayed lists do not match the program's digest (a definition was dropped or changed in the copy)");
+  const mapped = symbols.map((x) => x.symbol);
+  const extra = relayed.defs.filter((d) => mapped.indexOf(d.name) < 0);
+  if (extra.length)
+    halt(
+      "needs_human",
+      "build caller check " + label + ": the approved tree " + tree + " modifies existing definition(s) not in the sealed changed_symbols: " +
+        extra.map((d) => d.name + " (" + d.at + ")").join(", ") +
+        "; nothing committed. Re-plan with these symbols mapped (every caller to a criterion or dont_care), or keep the change inside the planned symbols",
+      "callers",
+    );
+  return relayed;
+}
+
 // A stop or the one confirm-auto re-plan round for plan findings.
 function planFindingsStop(ctx, planPath, what, findings, rawMap) {
   if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, findings, what, rawMap);
@@ -4336,7 +4511,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // the approved caller map (2.1.6); null in a ref sealed before 2.1.6
     changed_symbols: Array.isArray(pf.changed_symbols) ? pf.changed_symbols : null,
   };
-  if (!planFacts.changed_symbols) gate("plan ref sealed before 2.1.6: no changed_symbols; this build runs without caller coverage");
+  if (!planFacts.changed_symbols) {
+    gate("plan ref sealed before 2.1.6: no changed_symbols; this build runs without caller coverage");
+    gate("build caller check skipped: plan ref sealed before 2.1.6 (changed_symbols null)");
+  }
   state.path = "full";
   const testable = testableOf(criteria);
   const frozenFiles = [];
@@ -4838,8 +5016,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     state.rounds.code++;
     const m = state.rounds.code;
     lastRoundGate = null;
-    // coder, purge, hasher, script check, judge, fingerprint, commit, push
-    reserve(7 + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
+    // coder, purge, hasher, script check, judge, fingerprint, caller check, commit, push
+    reserve(7 + (planFacts.changed_symbols ? 1 : 0) + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
     const codeInputs = Object.assign({}, common, planCtx, planFacts, {
       criteria,
       frozen_tests: testFilesView(frozen, frozenFiles),
@@ -4971,6 +5149,22 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       continue;
     }
     gate("code-judge r" + m + ": approve of tree " + codeTree);
+
+    // the build-time caller check, on every tree before it is committed
+    if (planFacts.changed_symbols) {
+      const bc = await buildCallerCheck(
+        "infra:changed-defs:r" + m,
+        planFacts.changed_symbols,
+        mainWt,
+        ref.plan_commit,
+        codeTree,
+        frozenFiles.concat([ref.plan_path]),
+      );
+      gate(
+        "build caller check r" + m + ": no existing definition outside changed_symbols (" + bc.defs.length + " modified: " +
+          (bc.defs.map((d) => d.name).join(", ") || "none") + "; skipped " + bc.skipped.length + " non-code or excluded path(s))",
+      );
+    }
 
     // the commit step: the first commit of this build, with the repo's hooks
     const subject = commitsMade ? fixSubject(names.taskId, m) : commitSubject(names.taskId, names.slug);
