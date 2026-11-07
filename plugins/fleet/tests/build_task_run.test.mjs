@@ -3778,7 +3778,8 @@ function withObligations(obs, over) {
   const s = happy(over);
   s["role:scope-and-plan"].repo_obligations = obs;
   s["role:scope-and-plan"].test_cmd = TEST_CMD;
-  s["role:fleet-code-judge:r1"].obligations_check = obs.map((o) => ({ id: o.id, met: true, evidence: "diff" }));
+  // 3.1.0 (ledger 1935b): the judge reports the exit code of every check_cmd it ran
+  s["role:fleet-code-judge:r1"].obligations_check = obs.map((o) => Object.assign({ id: o.id, met: true, evidence: "diff" }, typeof o.check_cmd === "string" ? { check_exit: 0 } : {}));
   s["infra:check-scripts"] = checkScriptsAll({});
   for (const m of [1, 2, 3]) s["infra:check-scripts:r" + m] = checkScriptsAll({});
   return s;
@@ -4057,7 +4058,7 @@ test("2.0.3 awaiting_confirmation lists every command verbatim with env, tools, 
   const cmds = out.result.commands;
   assert.deepEqual(cmds.map((c) => c.command), [TEST_CMD.command, OB_BUMP.check_cmd, "python -c x"]);
   assert.deepEqual(cmds.map((c) => c.rule_source), ["test_cmd", OB_BUMP.rule_source, OB_LOG.rule_source]);
-  assert.deepEqual(cmds.map((c) => c.run_by), ["roles", "code-judge (optional)", "nobody"]);
+  assert.deepEqual(cmds.map((c) => c.run_by), ["roles", "code-judge (required)", "nobody"]);
   assert.deepEqual(cmds[0].env, {});
   assert.deepEqual(cmds[0].tools, ["mypy"]);
   assert.match(cmds[2].note, /^refused: /);
@@ -4097,7 +4098,7 @@ test("2.0.3 approve without met:true for every obligation is converted to fix_co
   for (const check of [[], [{ id: "OB1", met: true, evidence: "x" }], [{ id: "OB1", met: true }, { id: "OB2", met: false, evidence: "no line" }]]) {
     const s = withObligations([OB_BUMP, OB_LOG]);
     s["role:fleet-code-judge:r1"].obligations_check = check;
-    secondRoundPasses(s, [{ id: "OB1", met: true, evidence: "ok" }, { id: "OB2", met: true, evidence: "ok" }]);
+    secondRoundPasses(s, [{ id: "OB1", met: true, evidence: "ok", check_exit: 0 }, { id: "OB2", met: true, evidence: "ok" }]);
     const out = await run(s, ARGS);
     noUnscripted(out);
     assert.equal(out.result.status, "ok", JSON.stringify(check) + " " + out.result.reason);
@@ -4881,7 +4882,7 @@ test("2.1.0 G2 commands: only test_cmd and `pre-commit run <id>` hooks that exis
           "role:scope-and-plan": Object.assign({}, happy()["role:scope-and-plan"], {
             repo_obligations: [{ id: "fmt", kind: "other", instruction: "format", check_cmd: cmd }],
           }),
-          "role:fleet-code-judge:r1": Object.assign({}, happy()["role:fleet-code-judge:r1"], { obligations_check: [{ id: "fmt", met: true, evidence: "ran" }] }),
+          "role:fleet-code-judge:r1": Object.assign({}, happy()["role:fleet-code-judge:r1"], { obligations_check: [{ id: "fmt", met: true, evidence: "ran", check_exit: 0 }] }),
         },
         extra || {},
       ),
@@ -9347,4 +9348,86 @@ test("3.1.0 1935c: a gh error string in remote_head never passes as the pushed s
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /push: origin\/fleet\/l42-add-thing is at gh: HTTP 502/);
+});
+
+// ---------------------------------------------------------------- 3.1.0 (ledger 1935a): writers and the test judge get the plan's env
+
+test("3.1.0 1935a: the writers and the test judge get test_cmd with its env, and test_env on top", async () => {
+  // already true at ae273d6 (3.0.0): a regression test, no code change
+  const tc = { command: "uv run --extra test pytest <paths> -n0", paths_placeholder: "<paths>", env: { TZ: "UTC", DJANGO_SETTINGS_MODULE: "app.settings", CI: "1" }, tools: [] };
+  const s = happy();
+  s["role:scope-and-plan"].test_cmd = tc;
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  for (const l of ["role:fleet-test-writer:AC1:r1", "role:fleet-test-writer:AC2:r1", "role:fleet-test-judge:r1", "role:fleet-coder:r1", "role:fleet-code-judge:r1"]) {
+    const i = inputsOf(call(out, l).prompt);
+    assert.deepEqual(i.test_cmd.env, tc.env, l);
+    assert.deepEqual(i.test_env, { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" }, l);
+  }
+});
+
+// ---------------------------------------------------------------- 3.1.0 (ledger 1935b): an allowlisted check_cmd is run by the code judge before the push
+
+const OB_PRE = {
+  id: "OB3",
+  kind: "other",
+  rule_source: ".github/workflows/validate.yaml:lint",
+  files: ["src/x.py"],
+  instruction: "keep the CI lint green",
+  check_cmd: "pre-commit run ruff --all-files",
+};
+
+test("3.1.0 1935b: approve needs check_exit 0 for every allowlisted check_cmd, or the gate listed as not run", async () => {
+  const cases = [
+    // [check entry for OB3, gates_not_run, converted?, finding]
+    [{ id: "OB3", met: true, evidence: "diff", check_exit: 0 }, [], false, null],
+    [{ id: "OB3", met: true, evidence: "diff", check_exit: 1 }, [], true, /OB3: check_cmd "pre-commit run ruff --all-files" exited 1/],
+    [{ id: "OB3", met: true, evidence: "diff", check_exit: 2 }, [], true, /exited 2/],
+    [{ id: "OB3", met: true, evidence: "diff" }, [], true, /OB3: code-judge neither ran check_cmd "pre-commit run ruff --all-files" \(no check_exit\) nor listed gates_not_run check_cmd:OB3/],
+    [{ id: "OB3", met: true, evidence: "diff", check_exit: "0" }, [], true, /neither ran/],
+    [{ id: "OB3", met: true, evidence: "diff", check_exit: null }, [{ gate: "check_cmd:OB3", reason: "pre-commit is not installed" }], false, null],
+    [{ id: "OB3", met: true, evidence: "diff" }, [{ gate: "check_cmd:OB9", reason: "x" }], true, /neither ran/],
+  ];
+  for (const [entry, notRun, converted, finding] of cases) {
+    const s = withObligations([OB_PRE]);
+    s["role:fleet-code-judge:r1"].obligations_check = [entry];
+    s["role:fleet-code-judge:r1"].gates_not_run = notRun;
+    if (notRun.length) s["role:fleet-code-judge:r1"].reason = "approved with gates not run: " + notRun.map((g) => g.gate).join(", ");
+    secondRoundPasses(s, [{ id: "OB3", met: true, evidence: "ok", check_exit: 0 }]);
+    const out = await run(s, ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "ok", JSON.stringify(entry) + " " + out.result.reason);
+    assert.equal(out.result.rounds.code, converted ? 2 : 1, JSON.stringify(entry));
+    if (converted) {
+      assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings.map((x) => x.finding).join("\n"), finding);
+      assert.ok(out.logs.some((l) => /obligations gate/.test(l)));
+    } else if (notRun.length) assert.ok(out.result.gates_not_run.some((g) => g.gate === "check_cmd:OB3"), "the PR states the check_cmd that did not run");
+  }
+});
+
+test("3.1.0 1935b: a met:false obligation and a check_cmd failure each count once; a demoted check_cmd needs no exit", async () => {
+  // met false: the 3.0.0 finding only
+  let s = withObligations([OB_PRE]);
+  s["role:fleet-code-judge:r1"].obligations_check = [{ id: "OB3", met: false, evidence: "lint fails", check_exit: 1 }];
+  secondRoundPasses(s, [{ id: "OB3", met: true, evidence: "ok", check_exit: 0 }]);
+  let out = await run(s, ARGS);
+  const f = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings.map((x) => x.finding);
+  assert.equal(f.length, 1, f.join("\n"));
+  assert.match(f[0], /OB3: code-judge did not confirm the obligation met/);
+  // a check_cmd the script check demoted this round: judged from the diff, no exit needed
+  s = withObligations([OB_BUMP]);
+  s["infra:check-scripts:r1"] = checkScriptsAll({ "scripts/check_version_bump.py": "not a tracked regular file" });
+  s["role:fleet-code-judge:r1"].obligations_check = [{ id: "OB1", met: true, evidence: "diff" }];
+  out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.rounds.code, 1);
+  // a plan-time refused check_cmd (check_cmd_rejected) needs no exit either
+  s = withObligations([Object.assign({}, OB_PRE, { check_cmd: "pre-commit install" })]);
+  s["role:fleet-code-judge:r1"].obligations_check = [{ id: "OB3", met: true, evidence: "diff" }];
+  out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.rounds.code, 1);
 });

@@ -29,6 +29,16 @@ order"). The contract marker stays `fleet-v3`.
   The rules are the 3.0.0 rules, plus one: an `error: RPC failed` line is never `hook_rejected`
   (a transport failure, retried as `network`). The script accepts `hook_rejected`, the one result
   that does not stop the run, only with exit code 1 and the program's digest.
+- **CI-only obligations are checked before the push** (ledger 1935b). The code judge (page 15)
+  runs every allowlisted `check_cmd` in a scratch worktree loaded with the judged tree and reports
+  `check_exit` in the obligation's `obligations_check` entry. On `approve`, the obligations gate
+  also converts the verdict to `fix_code` for an obligation whose `check_cmd` exited non-zero, or
+  that has neither `check_exit: 0` nor a `gates_not_run` entry `check_cmd:<id>` (which the PR body
+  states). An obligation whose `check_cmd` the script check demoted that round needs no exit. The
+  workflow script still runs no planner command. In `commands`, a check_cmd now shows
+  `code-judge (required)` as its `run_by`.
+- **Writers and the test judge get the plan's env** (ledger 1935a): already true in 3.0.0 (they get
+  the whole `test_cmd`, `env` included, plus `test_env`); a regression test now pins it.
 
 ### Tests
 

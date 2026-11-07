@@ -99,7 +99,8 @@ runs `/build-task` explicitly, always use the fleet.
    - `commands`: EVERY entry, its `command` VERBATIM in a code span (never paraphrased, shortened
      or summarised), with its `env` (every name and value, verbatim; `{}` when empty) and `tools`
      (test_cmd), its `rule_source` and `run_by` (`roles` = the test command the agents run,
-     `code-judge (optional)` = a check the code judge may run, `nobody` = refused, with its
+     `code-judge (required)` = a check the code judge runs before the push, or states in the PR
+     as not run, `nobody` = refused, with its
      `note`). These are the only commands the roles run; approving the plan approves them. Say so
      in the question.
 

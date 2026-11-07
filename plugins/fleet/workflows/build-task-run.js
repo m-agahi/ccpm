@@ -1038,7 +1038,7 @@ const SCHEMAS = {
     },
     obligations_check: {
       type: "array",
-      items: { type: "object", properties: { id: STR, met: { type: "boolean" }, evidence: STR }, required: ["id", "met"] },
+      items: { type: "object", properties: { id: STR, met: { type: "boolean" }, evidence: STR, check_exit: { type: ["integer", "null"] } }, required: ["id", "met"] },
     },
   }),
   "fleet-pr-opener": roleSchema({
@@ -1717,7 +1717,7 @@ function commandsOf(testCmd, obligations) {
   ];
   for (const o of obligations) {
     if (typeof o.check_cmd === "string")
-      out.push({ kind: "check_cmd", id: o.id, command: o.check_cmd, rule_source: o.rule_source || null, run_by: "code-judge (optional)" });
+      out.push({ kind: "check_cmd", id: o.id, command: o.check_cmd, rule_source: o.rule_source || null, run_by: "code-judge (required)" });
     else if (typeof o.check_cmd_rejected === "string")
       out.push({
         kind: "check_cmd",
@@ -1740,8 +1740,12 @@ function demote(o, reason) {
 }
 
 // The script gate on a code-judge approve: every obligation is met:true in
-// obligations_check. Returns routed code findings.
-function obligationFailures(obligations, check) {
+// obligations_check. judged: the obligations as the judge got them this
+// round (a check_cmd the script check demoted carries none). Since 3.1.0
+// (ledger 1935b) every allowlisted check_cmd there needs check_exit 0, or a
+// gates_not_run entry "check_cmd:<id>" (the PR body states it). The script
+// never runs the command. Returns routed code findings.
+function obligationFailures(obligations, check, judged, notRun) {
   const out = [];
   const list = Array.isArray(check) ? check : [];
   for (const o of obligations || []) {
@@ -1750,6 +1754,21 @@ function obligationFailures(obligations, check) {
       out.push(
         o.id + ": code-judge did not confirm the obligation met" + (e && e.evidence ? " (" + e.evidence + ")" : "") +
           " -- " + String(o.instruction || ""),
+      );
+  }
+  const skipped = Array.isArray(notRun) ? notRun : [];
+  for (const o of judged || []) {
+    if (!o || typeof o.check_cmd !== "string") continue;
+    const e = list.find((x) => x && x.id === o.id);
+    // an unmet obligation already has its finding above
+    if (!e || e.met !== true) continue;
+    if (Number.isInteger(e.check_exit)) {
+      if (e.check_exit !== 0)
+        out.push(o.id + ": check_cmd " + JSON.stringify(o.check_cmd) + " exited " + e.check_exit + " (CI would refuse the push) -- " + String(o.instruction || ""));
+    } else if (!skipped.some((g) => g && g.gate === "check_cmd:" + o.id))
+      out.push(
+        o.id + ": code-judge neither ran check_cmd " + JSON.stringify(o.check_cmd) + " (no check_exit) nor listed gates_not_run check_cmd:" + o.id +
+          " -- run it in a scratch worktree of code_tree and report check_exit",
       );
   }
   return out.map((f) => ({ target: "code", criterion: null, finding: f }));
@@ -6037,7 +6056,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       continue;
     }
     if (cj.verdict !== "approve") halt("failed", "code-judge returned no verdict");
-    const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check);
+    const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check, judgeObligations, cj.gates_not_run);
     if (obFail.length) {
       coderFindings = obFail;
       lastRoundGate = "obligations";
