@@ -7196,3 +7196,45 @@ test("2.1.6 a plan_path with a character outside [A-Za-z0-9._/-] stops before an
   const ok = await runOne(s, ARGS);
   assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
 });
+
+test("2.1.6 plan_wrong re-plan greps the detached re-plan worktree at the old plan commit, not the fleet worktree", async () => {
+  const s = planWrong([{ target: "plan", criterion: "AC2", finding: "x — Proposed plan change: y" }]);
+  s["role:scope-and-plan:replan"].changed_symbols = [{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] }];
+  s["infra:callers:replan"] = callersOut(GV_HITS);
+  const ref = await planRefFor(s);
+  const out = await runOne(s, buildArgs(ref));
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const g = inputsOf(call(out, "infra:callers:replan").prompt);
+  assert.equal(g.worktree, inputsOf(call(out, "infra:replan-worktree").prompt).worktree);
+  assert.match(g.worktree, /\/replan-1$/);
+  const l = out.labels;
+  assert.ok(l.indexOf("role:scope-and-plan:replan") < l.indexOf("infra:callers:replan"));
+  assert.ok(l.indexOf("infra:callers:replan") < l.indexOf("role:plan-audit:replan"));
+});
+
+// Gate non-weakening: every code point the 2.1.5 predicate refused is still refused.
+test("2.1.6 confusableCp refuses every code point 2.1.5 refused", () => {
+  const old = (c) =>
+    (c < 0x20 && c !== 9 && c !== 10) ||
+    (c >= 0x7f && c <= 0x9f) ||
+    c === 0xa0 ||
+    c === 0x61c ||
+    (c >= 0x2000 && c <= 0x200f) ||
+    (c >= 0x2028 && c <= 0x202f) ||
+    c === 0x205f ||
+    (c >= 0x2066 && c <= 0x2069) ||
+    c === 0x3000 ||
+    c === 0xfeff;
+  const grab = (name) => {
+    const i = SOURCE.indexOf("\nfunction " + name + "(");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  };
+  const consts = SOURCE.split("\n").filter((l) => /^const (CONFUSABLE_CAT_RE|CONFUSABLE_EXTRA) = /.test(l)).join("\n");
+  const now = new Function(consts + "\n" + grab("confusableCp") + "\nreturn confusableCp;")();
+  const lost = [];
+  for (let c = 0; c <= 0x10ffff; c++) if (old(c) && !now(c)) lost.push(c.toString(16));
+  assert.deepEqual(lost, []);
+  for (const c of [0x20, 9, 10, 0x2014, 0x201c, 0x2192, 0x41]) assert.equal(now(c), false, c.toString(16));
+});

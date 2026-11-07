@@ -41,7 +41,9 @@ page stops the run in preflight. The contract marker stays `fleet-v3`.
   (Zs) and line or paragraph separator (Zl, Zp) is refused except the plain space, tab and newline;
   also U+FE00-U+FE0F, U+E0000-U+E007F, U+115F, U+1160, U+3164, U+FFA0, U+034F, U+180E and U+00AD.
   Visible typography (em dash, smart quotes, arrows) still passes. Emoji built with U+200D or
-  U+FE0F are now refused.
+  U+FE0F are now refused. A test checks every code point: all that 2.1.5 refused are still
+  refused.
+- The `fleet:judge` agent description names the caller grep step.
 - **plan_path characters.** A planner `plan_path` must use only `[A-Za-z0-9._/-]`.
 
 ### Fixed
