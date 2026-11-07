@@ -111,7 +111,7 @@ const RELAY_KEYS = [
   [/^infra:review-paths:/, ["changed_paths"]],
   [/^infra:check-scripts/, ["checks"]],
   [/^infra:branch-scan$/, ["commits", "refs"]],
-  [/^infra:format-(tests|code):/, ["ran", "reason", "runs", "stable", "files", "changed"]],
+  [/^infra:format-(tests|code):/, ["ran", "reason", "runs", "stable", "files", "changed", "refused"]],
 ];
 function relayDigestOf(r, keys) {
   const o = {};
@@ -177,7 +177,7 @@ async function runOne(script, args0) {
     // unscripted fixer-hook runs change nothing (3.0.0)
     if (!(label in script) && /^infra:format-(tests|code):/.test(label)) {
       const sel = inputsOf(prompt).select;
-      return withRelayDigest(label, { status: "ok", reason: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [] });
+      return withRelayDigest(label, { status: "ok", reason: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [] });
     }
     // unscripted build caller checks find no modified existing definition
     if (!(label in script) && /^infra:changed-defs:/.test(label)) return defsOut([]);
@@ -6167,6 +6167,7 @@ const ARRAY_SITES = {
   "o.files @ planScopeFiles": "parsed: repo_obligations of the sealed plan facts",
   "r.files @ formatFiles": "infra:files",
   "r.changed @ formatFiles": "infra:changed",
+  "r.refused @ formatFiles": "infra:refused",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   "r.files @ commitPlanAndRef": "infra:files",
   "r.refs @ commitPlanAndRef": "infra:refs",
@@ -6660,7 +6661,7 @@ test("2.1.5 yaadgaar: build re-reads the yaadgaar task, never L<N>", async () =>
   s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
   s["role:fleet-intent-judge:rerun"] = { status: "ok", reason: "fine", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } };
   s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
-  s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
+  s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", project: inputsOf(p).project, results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
   const build = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs", confirm: "auto" });
   noUnscripted(build);
   assert.equal(build.result.status, "ok", build.result.reason);
@@ -7749,8 +7750,9 @@ test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; P
       assert.equal(e.target, head);
       assert.equal(e.sha256, sha256(msg + "\n"));
       assert.equal(e.ref_ok, problem(JSON.parse(msg)) === null, what + ": python " + e.ref_ok + ", js " + problem(JSON.parse(msg)));
-      assert.equal(e.task_id, "l42");
-      assert.equal(e.plan_path, "docs/plans/x.md");
+      // names only from an ok ref (review 3)
+      assert.equal(e.task_id, e.ref_ok ? "l42" : null);
+      assert.equal(e.plan_path, e.ref_ok ? "docs/plans/x.md" : null);
       assert.deepEqual(o.commits, [{ sha: head, subject: "plan(l42): add-thing", files: ["docs/plans/x.md"] }]);
       assert.equal(o.digest, sha256(canon({ commits: o.commits, refs: o.refs })));
     }
@@ -8035,8 +8037,8 @@ test("3.0.0 review: an unclassified file or a module-level change stops unless t
 // ---------------------------------------------------------------- 3.0.0 fixer hooks on build files (ledger 1951)
 
 function formatOut(over) {
-  const o = Object.assign({ ran: true, reason: "ran pre-commit run --files", runs: 1, stable: true, files: [], changed: [] }, over || {});
-  const keys = ["ran", "reason", "runs", "stable", "files", "changed"];
+  const o = Object.assign({ ran: true, reason: "ran pre-commit run --files", runs: 1, stable: true, files: [], changed: [], refused: [] }, over || {});
+  const keys = ["ran", "reason", "runs", "stable", "files", "changed", "refused"];
   const d = {};
   for (const k of keys) d[k] = o[k];
   return Object.assign({ status: "ok" }, o, { digest: sha256(canon(d)) });
@@ -8146,7 +8148,7 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
     assert.deepEqual(o.changed, ["a.py"]);
     assert.equal(readFileSync(join(home, "log"), "utf8").trim().split("\n")[0], "a.py", "the frozen test is never passed");
     const d = {};
-    for (const k of ["ran", "reason", "runs", "stable", "files", "changed"]) d[k] = o[k];
+    for (const k of ["ran", "reason", "runs", "stable", "files", "changed", "refused"]) d[k] = o[k];
     assert.equal(o.digest, sha256(canon(d)));
     // a hook that touches another path: reported, and never settles
     const o2 = runF({ paths: ["a.py"] }, [], { TOUCH_OTHER: "1" });
@@ -8265,7 +8267,7 @@ async function yaadgaarBuild(writeback, buildOver) {
 }
 
 test("3.0.0 yaadgaar write-back: an agent step edits the task through mcp__yaadgaar__ tools, never the yadgar ledger", async () => {
-  const out = await yaadgaarBuild((p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) }));
+  const out = await yaadgaarBuild((p) => ({ status: "ok", reason: "ok", project: inputsOf(p).project, results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) }));
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.ok(!out.labels.includes("infra:ledger-writeback"));
@@ -8288,7 +8290,7 @@ test("3.0.0 yaadgaar write-back: an agent step edits the task through mcp__yaadg
 });
 
 test("3.0.0 yaadgaar write-back: a failed or missing result hands the section back; no project writes nothing", async () => {
-  const out = await yaadgaarBuild({ status: "ok", reason: "x", results: [{ key: "s0", status: "failed", reason: "VERSION_MISMATCH twice" }] });
+  const out = await yaadgaarBuild({ status: "ok", reason: "x", project: "yadgarhq/docs", results: [{ key: "s0", status: "failed", reason: "VERSION_MISMATCH twice" }] });
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.result.ledger_status, "failed");
   assert.match(out.result.write_back.ledger[0].reason, /VERSION_MISMATCH twice/);
@@ -8296,7 +8298,7 @@ test("3.0.0 yaadgaar write-back: a failed or missing result hands the section ba
   const dead = await yaadgaarBuild(null);
   assert.equal(dead.result.ledger_status, "failed");
   assert.match(dead.result.write_back.ledger[0].section_text, /fleet:y622/);
-  const skipped = await yaadgaarBuild({ status: "ok", reason: "x", results: [{ key: "s0", status: "skipped", reason: "marker present" }] });
+  const skipped = await yaadgaarBuild({ status: "ok", reason: "x", project: "yadgarhq/docs", results: [{ key: "s0", status: "skipped", reason: "marker present" }] });
   assert.equal(skipped.result.ledger_status, "ok");
 });
 
@@ -8310,4 +8312,225 @@ test("3.0.0 write-back: a Codeberg origin gets a Codeberg plan link", async () =
   const g = await run(happy(), ARGS);
   assert.match(inputsOf(call(g, "infra:ledger-writeback").prompt).section_text, /\(https:\/\/github\.com\/o\/r\/blob\/fleet\/l42-add-thing\/docs\/plans\/x\.md\)/);
   assert.match(call(g, "workspace").prompt, /remote_host/);
+});
+
+// ---------------------------------------------------------------- 3.0.0 review 3 (PR #36 FIX-FIRST)
+
+// One base -> new change of one file through the changed-defs program.
+function defsOf(path, before, after, excl) {
+  const wt = gitRepo("fleet-r3-", { [path]: before });
+  try {
+    const base = sh(wt, "git", "rev-parse", "HEAD").trim();
+    return runDefs(wt, base, treeAfter(wt, { [path]: after }), excl || []);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+}
+const PY_BASE = "from x import check\n\n\ndef validate(v):\n    return check(v)\n";
+const PY_VALIDATE = [{ name: "validate", at: "m.py:4", end: 5 }];
+
+test("3.0.0 review 3 HIGH: a definition nested in an existing unmapped function names that function (Python PoCs)", { skip: !HAVE_PY }, () => {
+  for (const [what, after] of [
+    ["nested def check shadowing the import", "from x import check\n\n\ndef validate(v):\n    def check(v):\n        return True\n    return check(v)\n"],
+    ["@sabotage on a nested def", "from x import check\n\n\ndef validate(v):\n    @sabotage\n    def inner():\n        return 1\n    return check(v)\n"],
+    ["class _K: z = sabotage()", "from x import check\n\n\ndef validate(v):\n    class _K: z = sabotage()\n    return check(v)\n"],
+    ["def _h(a=sabotage())", "from x import check\n\n\ndef validate(v):\n    def _h(a=sabotage()): pass\n    return check(v)\n"],
+  ]) {
+    const o = defsOf("m.py", PY_BASE, after);
+    assert.deepEqual(o.defs, PY_VALIDATE, what);
+  }
+});
+
+test("3.0.0 review 3 HIGH: JS and Rust one-line definitions inside an existing function name that function", { skip: !HAVE_PY }, () => {
+  const JS = "export function run(x) {\n  return x;\n}\n";
+  const RUN = [{ name: "run", at: "a.js:1", end: 2 }];
+  assert.deepEqual(defsOf("a.js", JS, "export function run(x) {\n  const noop = () => 0, z = sabotage();\n  return x;\n}\n").defs, RUN);
+  assert.deepEqual(defsOf("a.js", JS, "export function run(x) {\n  const noop = () => 0;\n      sabotage();\n  return x;\n}\n").defs, RUN);
+  const RS = "fn run() -> i32 {\n    1\n}\n";
+  assert.deepEqual(defsOf("a.rs", RS, "fn run() -> i32 {\n    fn _h() {} sabotage();\n    1\n}\n").defs, [{ name: "run", at: "a.rs:1", end: 2 }]);
+});
+
+test("3.0.0 review 3 HIGH: a new method in an existing class does not record the class", { skip: !HAVE_PY }, () => {
+  const o = defsOf("k.py", "class A:\n    def x(self):\n        return 1\n", "class A:\n    def x(self):\n        return 1\n\n    @property\n    def y(self):\n        return 2\n");
+  assert.deepEqual(o.defs, []);
+  assert.deepEqual(o.unattributed, []);
+  const t = defsOf("k.ts", "export class C {\n  a() {\n    return 1;\n  }\n}\n", "export class C {\n  a() {\n    return 1;\n  }\n\n  b() {\n    return 2;\n  }\n}\n");
+  assert.deepEqual(t.defs, []);
+  assert.deepEqual(t.unattributed, []);
+});
+
+test("3.0.0 review 3 MED-HIGH: multi-line signatures (black-style Python, Go, TS method) attribute a body change to the definition", { skip: !HAVE_PY }, () => {
+  const o = defsOf("v.py", "import os\n\n\ndef validate(\n    x,\n) -> bool:\n    return check(x)\n", "import os\nimport sys\n\n\ndef validate(\n    x,\n) -> bool:\n    return True\n");
+  assert.deepEqual(o.defs, [{ name: "validate", at: "v.py:4", end: 7 }]);
+  assert.deepEqual(o.unattributed, ["v.py:1"]);
+  const g = defsOf("f.go", "package m\n\nfunc F(\n\ta int,\n) int {\n\treturn a\n}\n", "package m\n\nfunc F(\n\ta int,\n) int {\n\treturn a + 1\n}\n");
+  assert.deepEqual(g.defs, [{ name: "F", at: "f.go:3", end: 6 }]);
+  assert.deepEqual(g.unattributed, []);
+  const t = defsOf("c.ts", "export class C {\n  run(\n    a: number,\n  ): number {\n    return a;\n  }\n}\n", "export class C {\n  run(\n    a: number,\n  ): number {\n    return a + 1;\n  }\n}\n");
+  assert.deepEqual(t.defs, [{ name: "run", at: "c.ts:2", end: 5 }]);
+});
+
+test("3.0.0 review 3 MED-HIGH: a black-style body change in a listed file is still refused", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].allowed_additions = { files: ["v.py"], symbols: [], deps: [], settings: [] };
+  s["infra:changed-defs:r1"] = defsOut([{ name: "validate", at: "v.py:4", end: 7 }], { unattributed: ["v.py:1"] });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "callers", out.result.reason);
+  assert.match(out.result.reason, /validate \(v\.py:4\)/);
+});
+
+test("3.0.0 review 3 MED: appended brace-language functions, X.y = function, and renames give no needless stop", { skip: !HAVE_PY }, () => {
+  const a = defsOf("a.js", "export function a() {\n  return 1;\n}\n", "export function a() {\n  return 1;\n}\n\nexport function b() {\n  return 2;\n}\n");
+  assert.deepEqual([a.defs, a.unattributed], [[], []]);
+  const g = defsOf("a.go", "package m\n\nfunc A() int {\n\treturn 1\n}\n", "package m\n\nfunc A() int {\n\treturn 1\n}\n\nfunc B() int {\n\treturn 2\n}\n");
+  assert.deepEqual([g.defs, g.unattributed], [[], []]);
+  const x = defsOf("x.js", "var X = {};\nX.y = function (a) {\n  return a;\n};\nX.z = (a) => {\n  return a;\n};\n", "var X = {};\nX.y = function (a) {\n  return a + 1;\n};\nX.z = (a) => {\n  return a + 2;\n};\n");
+  assert.deepEqual(x.defs, [{ name: "y", at: "x.js:2", end: 3 }, { name: "z", at: "x.js:5", end: 6 }]);
+  assert.deepEqual(x.unattributed, []);
+  // a renamed file: only the real change counts, at the base path
+  const wt = gitRepo("fleet-r3-mv-", { "chart/a.py": "import os\n\n\ndef f():\n    return 1\n\n\ndef g():\n    return 2\n" });
+  try {
+    const base = sh(wt, "git", "rev-parse", "HEAD").trim();
+    sh(wt, "git", "mv", "chart/a.py", "chart/b.py");
+    const o = runDefs(wt, base, treeAfter(wt, { "chart/b.py": "import os\n\n\ndef f():\n    return 1\n\n\ndef g():\n    return 3\n" }), []);
+    assert.deepEqual(o.defs, [{ name: "g", at: "chart/a.py:8", end: 9 }]);
+    assert.deepEqual(o.unattributed, []);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review 3 mutants: a removed guard line, a decorator-only change, a same-name redefinition, a NUL byte", { skip: !HAVE_PY }, () => {
+  // py_cd_removed_attr: a pure deletion inside an unmapped function
+  const r = defsOf("g.py", "def guard(v):\n    if v is None:\n        return False\n    return True\n", "def guard(v):\n    return True\n");
+  assert.deepEqual(r.defs, [{ name: "guard", at: "g.py:1", end: 4 }]);
+  // py_cd_pending_tail: only a decorator added to an existing function
+  const d = defsOf("d.py", "import functools\n\n\ndef f():\n    return 1\n", "import functools\n\n\n@functools.cache\ndef f():\n    return 1\n");
+  assert.deepEqual(d.defs, [{ name: "f", at: "d.py:4", end: 5 }]);
+  // py_cd_readded: a same-name redefinition later in the file shadows the base one
+  const s = defsOf("s.py", "def f():\n    return 1\n\n\ndef g():\n    return 2\n", "def f():\n    return 1\n\n\ndef g():\n    return 2\n\n\ndef f():\n    return 3\n");
+  assert.deepEqual(s.defs, [{ name: "f", at: "s.py:1", end: 2 }]);
+  // py_cd_binary: a NUL byte makes the file unclassified, never silently skipped
+  const n = defsOf("n.py", "def f():\n    return 1\n\0\n", "def f():\n    return 2\n\0\n");
+  assert.deepEqual([n.defs, n.unclassified], [[], ["n.py"]]);
+});
+
+test("3.0.0 review 3 bc_samefile and bc_obligfiles: an occurrence elsewhere at an in-range line does not cover; an obligation's files waive", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].changed_symbols = [{ symbol: "validate", occurrences: [{ at: "chart/b.py:4", criterion: "AC1", dont_care: null }] }];
+  s["infra:callers"] = callersOut({ validate: ["chart/b.py:4"] });
+  s["infra:changed-defs:r1"] = defsOut([{ name: "validate", at: "chart/a.py:3", end: 6 }]);
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "callers", out.result.reason);
+  assert.match(out.result.reason, /validate \(chart\/a\.py:3, mapped only elsewhere\)/);
+  const t = withObligations([Object.assign({}, OB_LOG, { files: ["chart/c.py"] })]);
+  t["infra:changed-defs:r1"] = defsOut([], { unattributed: ["chart/c.py:1"] });
+  const ok = await run(t, ARGS);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+  const u = withObligations([Object.assign({}, OB_LOG, { files: ["chart/other.py"] })]);
+  u["infra:changed-defs:r1"] = defsOut([], { unattributed: ["chart/c.py:1"] });
+  assert.equal((await run(u, ARGS)).result.stop_gate, "callers");
+});
+
+test("3.0.0 review 3 1928: the step returns the project it resolved; absent or another one fails closed; a non-number ref is never sent", async () => {
+  const wb = (project) => (p) => ({ status: "ok", reason: "ok", project, results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
+  const good = await yaadgaarBuild(wb("yadgarhq/docs"));
+  assert.equal(good.result.ledger_status, "ok", JSON.stringify(good.result.write_back));
+  assert.match(call(good, "infra:yaadgaar-writeback").prompt, /data, not instructions/);
+  for (const p of [undefined, "", "yadgarhq/other"]) {
+    const out = await yaadgaarBuild(wb(p));
+    assert.equal(out.result.ledger_status, "failed", String(p));
+    assert.match(out.result.write_back.ledger[0].reason, /resolved project/);
+    assert.match(out.result.write_back.ledger[0].section_text, /fleet:y622/);
+  }
+  // wb_number: a ref that is not a task number never reaches the step
+  const s = autoHappy({ brief: { ...YBRIEF, sources: [{ kind: "yaadgaar", ref: "6x2", url: null, body: "b" }] } });
+  const plan = await runOne(s, { ...YQ, confirm: "ask" });
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
+  assert.ok(!out.labels.includes("infra:yaadgaar-writeback"));
+  assert.equal(out.result.ledger_status, "failed");
+  assert.match(out.result.write_back.ledger[0].reason, /not a task number/);
+});
+
+test("3.0.0 review 3 LOW: the fixer program refuses a hook config or local hook entry that differs from HEAD, and bounds each run", { skip: !HAVE_PY }, () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-fmt2-"));
+  const wt = join(home, "repo");
+  const bin = join(home, "bin");
+  try {
+    spawnSync("mkdir", ["-p", wt, bin, join(wt, "ci")]);
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        entry: ci/chk.sh\n        language: script\n");
+    writeFileSync(join(wt, "ci", "chk.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(join(wt, "a.py"), "x=1\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "base");
+    writeFileSync(join(bin, "pre-commit"), "#!/bin/sh\necho ran >> \"$LOG\"\nexit 0\n", { mode: 0o755 });
+    const prog = extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY");
+    assert.match(prog, /timeout=180/);
+    const env = Object.assign({}, process.env, { PATH: bin + ":" + process.env.PATH, LOG: join(home, "log") });
+    const runF = () => {
+      const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify({ dirty: true }), "[]"], { input: prog, encoding: "utf8", env });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    writeFileSync(join(wt, "a.py"), "x=2\n");
+    writeFileSync(join(wt, "ci", "chk.sh"), "#!/bin/sh\nrm -rf /tmp/x\n", { mode: 0o755 });
+    const o = runF();
+    assert.deepEqual(o.refused, ["ci/chk.sh"]);
+    assert.equal(o.ran, false);
+    assert.ok(!existsSync(join(home, "log")), "pre-commit never ran");
+    sh(wt, "git", "checkout", "--", "ci/chk.sh");
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), "repos: []\n");
+    assert.deepEqual(runF().refused, [".pre-commit-config.yaml"]);
+    sh(wt, "git", "checkout", "--", ".pre-commit-config.yaml");
+    const ok = runF();
+    assert.deepEqual(ok.refused, []);
+    assert.equal(ok.ran, true);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review 3 LOW: a refused fixer run stops the build (hook surface changed)", async () => {
+  const s = happy();
+  s["infra:format-code:r1"] = formatOut({ ran: false, reason: "refused", runs: 0, files: ["src/x.py"], refused: [".pre-commit-config.yaml"] });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "hash");
+  assert.match(out.result.reason, /hook config or a local hook entry differs from HEAD: \.pre-commit-config\.yaml/);
+});
+
+test("3.0.0 review 3 LOW: branch-scan prints task_id and plan_path only for an ok ref", { skip: !HAVE_PY }, () => {
+  const prog = extractPy("BRANCH_SCAN_PY_BEGIN", "BRANCH_SCAN_PY_END", "BRANCH_SCAN_PY");
+  assert.match(prog, /if e\['ref_ok'\]/);
+  const home = mkdtempSync(join(tmpdir(), "fleet-bscan2-"));
+  try {
+    const cfg = join(home, "gitconfig");
+    writeFileSync(cfg, "[user]\n\temail = t@example.com\n\tname = t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = master\n");
+    const env = gitEnv(home, cfg);
+    const { wt } = scanRepo(home, env);
+    const writeCmd = extractFn("WRITE_PLAN_REF_SH_BEGIN", "WRITE_PLAN_REF_SH_END", "writePlanRefCmd");
+    const bad = JSON.parse(priorRef("docs/plans/x.md"));
+    bad.tldr = "changed after the seal";
+    const w = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(bad))], { encoding: "utf8", env });
+    assert.equal(w.status, 0, w.stderr);
+    const kinds = JSON.stringify(["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]);
+    const r = spawnSync("python3", ["-I", "-", wt, "master", "l42", kinds], { input: prog, encoding: "utf8", env });
+    const e = JSON.parse(r.stdout).refs[0];
+    assert.equal(e.ref_ok, false);
+    assert.equal(e.task_id, null);
+    assert.equal(e.plan_path, null);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review 3 LOW: no dead checks left (isPlanCommit self-compare, PLAN_REF_PY leftovers)", () => {
+  assert.doesNotMatch(SOURCE, /planRefMetaProblem\(e, c\.sha, e\.sha256\)/);
+  const m = /PLAN_REF_PY_BEGIN([\s\S]*?)PLAN_REF_PY_END/.exec(SOURCE);
+  assert.doesNotMatch(m[1], /if True:/);
 });

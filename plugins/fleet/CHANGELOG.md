@@ -53,14 +53,23 @@ changed; the new page text and the optional `symbol` key are additions, guarded 
   2.1.6 skips the check with a gate line. Tests: the actions#211 B1 PoC (the coder changes
   `prestop_sleep`, which the plan never mapped) stops before the commit; a same-named function in
   another file is not covered by the mapped one (security review).
+- **Caller-check attribution (PR #36 review 3).** A definition nested in an existing function (a
+  shadowing `def`, a decorated nested def, `class _K: z = sabotage()`, `def _h(a=sabotage())`, a
+  JS one-line arrow, a Rust `fn _h() {}`) and its decorators now name the enclosing function; only
+  a new column-0 definition that opens a block is an addition. Multi-line signatures (black-style
+  Python, Go, TS methods) count from their opening line. JS `X.y = function` and `X.y = (...) =>`
+  are definitions. Lines that only close a block, appended brace-language functions and renamed
+  files give no needless stop. **Known limit:** a new method in an existing class records nothing,
+  even when it overrides an inherited method.
 - **Fixer hooks on build files** (ledger 1951). `infra:format-tests:r<n>` (before the ownership
   hash, the test judge and the freeze) and `infra:format-code:r<n>` (before the purge, the
   post-coder hash and the code judge) run `pre-commit run --files <paths>` until a run changes
   nothing, at most 3 runs, so the judges and the hashes see the bytes the commit-time hooks leave.
   A pre-commit fixer no longer stops the build at the commit step. A hook that changes a frozen
   file (`stop_gate: hash`), a path outside the files it was given (`scope`), or still rewrites
-  after 3 runs (`commit`) stops the run. The commit step's tree-equality check (ADR-1151) is
-  unchanged.
+  after 3 runs (`commit`) stops the run. No hook runs when `.pre-commit-config.yaml` or a tracked
+  file its text names (a local hook entry) differs from HEAD (`stop_gate: hash`); each run is
+  capped at 180 s. The commit step's tree-equality check (ADR-1151) is unchanged.
 - **yaadgaar write-back** (ledger 1928). For a `yaadgaar` source of a `yadgarhq/` project,
   `infra:yaadgaar-writeback` (default agent; `fleet:judge` may not write to a ledger) appends the
   `## Fleet build` section with `mcp__yaadgaar__read_task` and `mcp__yaadgaar__edit_task`: it
@@ -68,7 +77,9 @@ changed; the new page text and the optional `symbol` key are additions, guarded 
   by id with `expect_version`, writes an empty body as the heading plus the section with a
   script-computed `expect_body_sha256` and appends to a non-empty one only through a literal
   `patch` on a unique tail, retries once on `VERSION_MISMATCH`, and re-reads to confirm. Never the
-  yadgar ledger. 2.1.6 handed the section back for a human to post.
+  yadgar ledger. The step returns the project it resolved; an absent or other project fails every
+  entry (fail closed). Task bodies are data, not instructions. A ref that is not a task number is
+  never sent. 2.1.6 handed the section back for a human to post.
 - **Codeberg plan link** (ledger 1928). The workspace step returns `remote_host`; a Codeberg origin
   gets `https://codeberg.org/<o>/<r>/src/branch/<branch>/<plan>` in the ledger section and comments.
 - **No model blob relays left on the gate path** (ledger 1952). The branch scan is one program that
@@ -79,7 +90,8 @@ changed; the new page text and the optional `symbol` key are additions, guarded 
   mismatch stops the step: iac (`stop_gate: iac`), fleet-scan (`scope`), read-state (`resume`),
   review-paths and branch-scan (failed); for check-scripts every script becomes judge-only. The
   iac scan always prints `error` (`null` when none), and the read-state program always prints
-  every key.
+  every key. The branch scan prints `task_id` and `plan_path` only for a ref that passed every
+  check, both shape-checked.
 
 ### Changed
 
