@@ -7238,3 +7238,114 @@ test("2.1.6 confusableCp refuses every code point 2.1.5 refused", () => {
   assert.deepEqual(lost, []);
   for (const c of [0x20, 9, 10, 0x2014, 0x201c, 0x2192, 0x41]) assert.equal(now(c), false, c.toString(16));
 });
+
+// ---------------------------------------------------------------- 2.1.6 review of #35
+
+// HIGH: the :audit-fix round must not let a flagged symbol drop out of the map.
+function droppedRound(round2) {
+  const s = callerPlan([GV_DEF, GV_RENDER], null, autoHappy);
+  s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], changed_symbols: round2 };
+  s["infra:callers:audit-fix"] = (p) => callersOut(Object.fromEntries(inputsOf(p).symbols.map((x) => [x, x === "guard_verdict" ? GV_HITS.guard_verdict : ["chart/other.py:3"]])));
+  s["role:plan-audit:audit-fix"] = s["role:plan-audit"];
+  return s;
+}
+
+test("2.1.6 review PoC: the :audit-fix round returns an empty map -> stops, the flagged symbol may not drop out", async () => {
+  const out = await runOne(droppedRound([]), AUTO);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /guard_verdict/);
+  assert.match(out.result.reason, /dropped/);
+  assert.ok(!out.labels.includes("role:plan-audit:audit-fix"));
+  assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix:audit-fix"));
+});
+
+test("2.1.6 review PoC: the :audit-fix round swaps the flagged symbol for another -> stops", async () => {
+  const out = await runOne(droppedRound([{ symbol: "verdict_core", occurrences: [{ at: "chart/other.py:3", criterion: "AC1", dont_care: null }] }]), AUTO);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /dropped.*guard_verdict/);
+  assert.ok(!out.labels.includes("role:plan-audit:audit-fix"));
+});
+
+test("2.1.6 review: the :audit-fix round keeps the flagged symbol and adds a narrower one -> passes; the audit gets prior_round", async () => {
+  const out = await runOne(
+    droppedRound([
+      { symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] },
+      { symbol: "verdict_core", occurrences: [{ at: "chart/other.py:3", criterion: "AC1", dont_care: null }] },
+    ]),
+    AUTO,
+  );
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const a = inputsOf(call(out, "role:plan-audit:audit-fix").prompt);
+  assert.deepEqual(a.prior_round.changed_symbols, [{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER] }]);
+  assert.ok(a.prior_round.findings.some((f) => /chart\/render\.py:77/.test(f.finding) && f.symbol === "guard_verdict"));
+  assert.match(a.prior_round.reason, /changed_symbols/);
+  // the first-round audit had no prior round
+  const plain = await runOne(callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]), ARGS);
+  assert.equal(inputsOf(call(plain, "role:plan-audit").prompt).prior_round, null);
+});
+
+test("2.1.6 review: after a plan-audit refusal the round-1 map symbols are carried too", async () => {
+  const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP], null, autoHappy);
+  s["role:plan-audit"] = { status: "ok", reason: "defect", verdict: "plan_defect", routed_findings: [{ target: "plan", criterion: "AC2", finding: "prestop path untested" }] };
+  s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], changed_symbols: [] };
+  const out = await runOne(s, AUTO);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /dropped.*guard_verdict/);
+});
+
+test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only in addition", async () => {
+  const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
+  s["infra:callers"] = callersOut({ guard_verdict: [] }, ["guard_verdict"]);
+  const out = await runOne(s, ARGS);
+  assert.match(out.result.reason, /in addition/);
+  assert.doesNotMatch(out.result.reason, /name the narrower symbols the change touches/);
+});
+
+test("2.1.6 review: a role page below its pin names the page, the project and the deploy order", async () => {
+  const s = happy();
+  s.preflight.versions["scope-and-plan"] = 25;
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /update agent-prompt-scope-and-plan \(project m-agahi\/yadgar\) to >= v26; see CHANGELOG 2\.1\.6 deploy order/);
+});
+
+test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const ref = JSON.parse(s.__store[tiny.plan_commit]);
+  delete ref.plan_facts.changed_symbols;
+  delete ref.seal;
+  ref.seal = sha256(canon(ref));
+  s.__store[tiny.plan_commit] = JSON.stringify(ref) + "\n";
+  const out = await runOne(s, buildArgs({ ...tiny, ref_sha256: sha256(s.__store[tiny.plan_commit]) }));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.result.gate_log.some((m) => /without caller coverage/.test(m)), "gate line");
+  assert.equal(inputsOf(call(out, "role:fleet-coder:r1").prompt).changed_symbols, null);
+});
+
+test("2.1.6 review: the intent judge gets changed_symbols under confirm auto", async () => {
+  const out = await runOne(callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP], null, autoHappy), AUTO);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.deepEqual(inputsOf(call(out, "role:fleet-intent-judge").prompt).changed_symbols, [{ symbol: "guard_verdict", occurrences: [GV_DEF, GV_RENDER, GV_PRESTOP] }]);
+});
+
+test("2.1.6 review: a confusable character in an occurrence's criterion or dont_care is refused", async () => {
+  for (const o of [{ ...GV_RENDER, criterion: "AC2​" }, { at: "chart/render.py:42", criterion: null, dont_care: "logging only" }]) {
+    const out = await runOne(callerPlan([GV_DEF, o, GV_PRESTOP]), ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(o));
+    assert.match(out.result.reason, /changed_symbols.*invisible or confusable character U\+/, JSON.stringify(o));
+    assert.ok(!out.labels.some((x) => x.startsWith("infra:callers")), JSON.stringify(o));
+  }
+});
+
+test("2.1.6 review: the grep limits say what is really missed", () => {
+  const src = SOURCE.slice(SOURCE.indexOf("const CALLER_METHOD"), SOURCE.indexOf("const PLAN_PATH_CHARS_RE"));
+  assert.match(src, /submodule/);
+  assert.match(src, /gitattributes/);
+  assert.match(src, /built at runtime/);
+  assert.match(src, /working tree/);
+  assert.doesNotMatch(src, /HEAD state/);
+  assert.doesNotMatch(src, /getattr/);
+});

@@ -135,9 +135,10 @@ const MAX_CHANGED_SYMBOLS = 30;
 // More grep hits than this for one symbol: the plan cannot model them all.
 const MAX_SYMBOL_HITS = 100;
 const CALLER_METHOD =
-  "git grep -n -I -w -F --full-name -e <symbol>: tracked text files at the worktree HEAD state, the run's own plan doc excluded; every hit must be mapped and every mapped line must be a hit (checked by the script)";
+  "git grep -n -I -w -F --full-name -e <symbol>: the working tree content of the tracked files in the fleet worktree, the run's own plan doc excluded; every hit must be mapped and every mapped line must be a hit (checked by the script)";
 const CALLER_LIMITS = [
-  "name-based: an alias (import x as y), a re-export, dynamic or string dispatch (getattr, registries, reflection) and callers in other repos are not found",
+  "name-based: a call through an alias (import x as y), a re-export under another name, a name built at runtime (string concatenation, formatted lookups) and callers in other repos are not found; a literal string that holds the name is a hit",
+  "submodules are not searched (no --recurse-submodules), and files git treats as binary (-I, including files .gitattributes marks binary) are skipped",
   "over-matches: comments, docs, strings and another symbol with the same name are hits; the planner maps them as dont_care",
   "word boundary is [A-Za-z0-9_]: a symbol inside a longer identifier is not a hit",
   "a symbol is a bare identifier: a method is grepped by its last name only",
@@ -3133,7 +3134,12 @@ async function preflightStep() {
     const want = EXPECTED_VERSIONS[role];
     if (typeof got !== "number")
       halt("needs_human", "role " + role + " version missing in preflight (frozen minimum " + want + ")", "contract");
-    if (got < want) halt("needs_human", "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back)", "contract");
+    if (got < want)
+      halt(
+        "needs_human",
+        "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): update agent-prompt-" + role + " (project " + ROLE_PROJECT + ") to >= v" + want + "; see CHANGELOG 2.1.6 deploy order",
+        "contract",
+      );
     if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");
     state.roleVersions[role] = got;
     const c = contractOf(contracts[role]);
@@ -3387,12 +3393,24 @@ function planPathProblem(p) {
 
 // confirm auto: the one re-plan round. The planner gets the findings as a
 // text source and updates its draft in place; the round never repeats.
-function replanWithFindings(ctx, planPath, what, findings, fallback) {
+// rawMap: the refused round's changed_symbols as returned (2.1.6). Every
+// symbol it names, and every symbol a finding names, is carried: the next
+// round must keep each one in its map (narrower symbols only in addition),
+// and its audit gets the round as prior_round.
+function replanWithFindings(ctx, planPath, what, findings, fallback, rawMap) {
   const body = findings.map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n") || fallback;
   gate(what + " (confirm auto): one re-plan round with the findings");
+  const map = Array.isArray(rawMap) ? stripHeldOut(rawMap).filter((e) => e && typeof e === "object" && !Array.isArray(e)) : null;
+  const symbols = [];
+  const carry = (x) => {
+    if (typeof x === "string" && SYMBOL_RE.test(x) && symbols.indexOf(x) < 0) symbols.push(x);
+  };
+  for (const e of map || []) carry(e.symbol);
+  for (const f of findings) carry(f.symbol);
   return planAndAudit(
     Object.assign({}, ctx, {
       auditRetry: false,
+      priorRound: { reason: what, findings: stripHeldOut(findings), changed_symbols: map, symbols },
       suffix: (ctx.suffix || "") + ":audit-fix",
       brief: Object.assign({}, ctx.brief, {
         plan_path: planPath,
@@ -3432,22 +3450,25 @@ function changedSymbolFindings(raw, criteria) {
     const sym = e.symbol;
     if (typeof sym !== "string" || !SYMBOL_RE.test(sym))
       return bad("entry " + i + " symbol " + JSON.stringify(sym) + " is not a bare identifier ([A-Za-z_][A-Za-z0-9_]*, at most 128)");
-    if (seen[sym]) return bad(sym + ": symbol listed twice");
+    const badSym = (f) => findings.push({ criterion: null, symbol: sym, finding: f });
+    if (seen[sym]) return badSym(sym + ": symbol listed twice");
     seen[sym] = true;
     if (!Array.isArray(e.occurrences) || !e.occurrences.length)
-      return bad(sym + ": no occurrences list (list every occurrence, the definition included)");
+      return badSym(sym + ": no occurrences list (list every occurrence, the definition included)");
     const at = {};
     const occ = [];
     e.occurrences.forEach((o, j) => {
       const k = o && typeof o === "object" ? occurrenceKey(o.at) : null;
-      if (!k) return bad(sym + ": occurrence " + j + " " + JSON.stringify(o && o.at) + " is not path:line (a relative path in the repo, line >= 1)");
-      if (at[k]) return bad(sym + ": " + k + " listed twice");
+      if (!k) return badSym(sym + ": occurrence " + j + " " + JSON.stringify(o && o.at) + " is not path:line (a relative path in the repo, line >= 1)");
+      if (at[k]) return badSym(sym + ": " + k + " listed twice");
       at[k] = true;
       const crit = typeof o.criterion === "string" && o.criterion.trim() ? o.criterion.trim() : null;
       const dc = typeof o.dont_care === "string" && o.dont_care.trim() ? o.dont_care.trim() : null;
-      if (!crit && !dc) return bad(sym + ": " + k + " is mapped to neither a criterion nor dont_care with a reason");
-      if (crit && dc) return bad(sym + ": " + k + " is mapped to both a criterion and dont_care; pick one");
-      if (crit && ids.indexOf(crit) < 0) return bad(sym + ": " + k + " criterion " + crit + " does not exist");
+      const conf = confusableIn(o.criterion, "criterion") || confusableIn(o.dont_care, "dont_care");
+      if (conf) return badSym(sym + ": " + k + " invisible or confusable character " + conf + "; write plain text");
+      if (!crit && !dc) return badSym(sym + ": " + k + " is mapped to neither a criterion nor dont_care with a reason");
+      if (crit && dc) return badSym(sym + ": " + k + " is mapped to both a criterion and dont_care; pick one");
+      if (crit && ids.indexOf(crit) < 0) return badSym(sym + ": " + k + " criterion " + crit + " does not exist");
       occ.push({ at: o.at, criterion: crit, dont_care: dc });
     });
     clean.push({ symbol: sym, occurrences: occ });
@@ -3480,7 +3501,9 @@ async function callerCheck(label, symbols, worktree, planPath) {
     if (r.capped.indexOf(s.symbol) >= 0) {
       findings.push({
         criterion: null,
-        finding: s.symbol + ": more than " + MAX_SYMBOL_HITS + " occurrences (git grep -w); too common a name to model, name the narrower symbols the change touches",
+        symbol: s.symbol,
+        finding:
+          s.symbol + ": more than " + MAX_SYMBOL_HITS + " occurrences (git grep -w); too common a name to check by grep. It stays in changed_symbols: narrower symbols may be added in addition, never in its place; a human decides",
       });
       continue;
     }
@@ -3488,17 +3511,17 @@ async function callerCheck(label, symbols, worktree, planPath) {
     const mapped = s.occurrences.map((o) => occurrenceKey(o.at));
     for (const h of hits)
       if (mapped.indexOf(h) < 0)
-        findings.push({ criterion: null, finding: s.symbol + ": " + h + " is an occurrence (git grep -w) not mapped in changed_symbols; map it to a criterion or to dont_care with a reason" });
+        findings.push({ criterion: null, symbol: s.symbol, finding: s.symbol + ": " + h + " is an occurrence (git grep -w) not mapped in changed_symbols; map it to a criterion or to dont_care with a reason" });
     for (const k of mapped)
       if (hits.indexOf(k) < 0)
-        findings.push({ criterion: null, finding: s.symbol + ": " + k + " is mapped but git grep -w finds no occurrence there (stale line or wrong path; cite lines at the worktree HEAD)" });
+        findings.push({ criterion: null, symbol: s.symbol, finding: s.symbol + ": " + k + " is mapped but git grep -w finds no occurrence there (stale line or wrong path; cite lines at the worktree HEAD)" });
   }
   return { findings, occurrences: occ };
 }
 
 // A stop or the one confirm-auto re-plan round for plan findings.
-function planFindingsStop(ctx, planPath, what, findings) {
-  if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, findings, what);
+function planFindingsStop(ctx, planPath, what, findings, rawMap) {
+  if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, findings, what, rawMap);
   const shown = findings.slice(0, 10).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding);
   halt("needs_human", what + ": " + shown.join("; ") + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : ""));
 }
@@ -3543,7 +3566,7 @@ async function planAndAudit(ctx) {
   const conf = confusableFindings(criteria);
   if (conf.length) {
     const what = "criteria hold an invisible or confusable character";
-    if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, conf, what);
+    if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, conf, what, plan.changed_symbols);
     halt("needs_human", what + ": " + conf.map((f) => f.criterion + ": " + f.finding).join("; "));
   }
   // 2.1.6 (ledger 1955): every occurrence of each changed symbol is mapped,
@@ -3551,11 +3574,23 @@ async function planAndAudit(ctx) {
   if (!Array.isArray(plan.changed_symbols))
     halt("needs_human", "role scope-and-plan contract drift: changed_symbols must be an array", "contract");
   const cs = changedSymbolFindings(stripHeldOut(plan.changed_symbols), criteria);
-  if (cs.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols caller map refused", cs.findings);
+  if (cs.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols caller map refused", cs.findings, plan.changed_symbols);
+  // the :audit-fix round keeps every symbol the refused round mapped or a
+  // finding named (2.1.6 review): dropping or swapping one stops the run
+  const prior = ctx.priorRound || null;
+  if (prior) {
+    const now = cs.clean.map((x) => x.symbol);
+    const dropped = prior.symbols.filter((x) => now.indexOf(x) < 0);
+    if (dropped.length)
+      halt(
+        "needs_human",
+        "changed_symbols dropped " + dropped.join(", ") + " after the " + prior.reason + " round; a mapped or flagged symbol stays in the map (narrower symbols only in addition)",
+      );
+  }
   let callerOcc = null;
   if (cs.clean.length) {
     const cc = await callerCheck("infra:callers" + sfx, cs.clean, ctx.common.worktree, planPath);
-    if (cc.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings);
+    if (cc.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols);
     callerOcc = cc.occurrences;
     gate("callers: " + cs.clean.map((s) => s.symbol + " " + s.occurrences.length).join(", ") + " occurrence(s) mapped; git grep -w agrees");
   }
@@ -3612,13 +3647,15 @@ async function planAndAudit(ctx) {
         base_ref: ctx.baseRef,
         mode: "writeback=false",
         caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc },
+        // the refused round before this :audit-fix round, or null
+        prior_round: prior ? { reason: prior.reason, findings: prior.findings, changed_symbols: prior.changed_symbols } : null,
       }),
       "Plan",
     ),
   );
   // confirm auto: one re-plan round with the audit findings, then stop
   if (ctx.auditRetry && (audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria"))
-    return replanWithFindings(ctx, planPath, "plan-audit verdict " + audit.verdict, audit.routed_findings || [], audit.reason || audit.verdict);
+    return replanWithFindings(ctx, planPath, "plan-audit verdict " + audit.verdict, audit.routed_findings || [], audit.reason || audit.verdict, plan.changed_symbols);
   if (audit.verdict !== "approve") {
     const first = (audit.routed_findings || []).slice(0, 3).map((f) => (f.criterion || "-") + ": " + f.finding);
     halt(
@@ -3886,6 +3923,7 @@ async function autoGates(ctx) {
       allowed_additions: ctx.planFacts.allowed_additions,
       repo_obligations: ctx.planFacts.repo_obligations,
       commands: ctx.planFacts.commands,
+      changed_symbols: ctx.planFacts.changed_symbols,
     }),
     ctx.mainWt,
     "Auto-confirm",
@@ -4288,6 +4326,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // the approved caller map (2.1.6); null in a ref sealed before 2.1.6
     changed_symbols: Array.isArray(pf.changed_symbols) ? pf.changed_symbols : null,
   };
+  if (!planFacts.changed_symbols) gate("plan ref sealed before 2.1.6: no changed_symbols; this build runs without caller coverage");
   state.path = "full";
   const testable = testableOf(criteria);
   const frozenFiles = [];

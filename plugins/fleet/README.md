@@ -88,9 +88,14 @@ criterion, dont_care}]}`; each occurrence maps to exactly one of an existing cri
 doc excluded; the relayed lists are checked against the program's digest). A malformed map, a hit
 the map leaves out, a mapped line that is no hit, more than 100 hits for one symbol or more than 30
 symbols stop the run with `needs_human`, or go to the one `:audit-fix` round under confirm auto.
-plan-audit gets the map and `caller_check` (`{method, limits, occurrences}`). The grep is
-name-based: aliases, re-exports, dynamic dispatch and other repos are not found, and an empty
-`changed_symbols` is only checked by the audit.
+The `:audit-fix` round must keep every symbol the refused round mapped or a finding named
+(narrower symbols only in addition); a dropped or swapped symbol stops the run. plan-audit gets
+the map, `caller_check` (`{method, limits, occurrences}`) and, in the `:audit-fix` round,
+`prior_round` (`{reason, findings, changed_symbols}`); the intent judge gets the map under confirm
+auto. The grep reads the working tree content of the tracked files and is name-based: a call
+through an alias, a re-export under another name, a name built at runtime, submodules, files git
+treats as binary and other repos are not searched or not found. An empty `changed_symbols` is only
+checked by the audit. A ref sealed before 2.1.6 builds without caller coverage (gate line).
 
 Intake classifies the input and fetches its text: a ledger task through yadgar `task_get`, a Jira
 ticket through the Atlassian MCP, an issue or PR through `gh-personal` or the Codeberg API, a plan

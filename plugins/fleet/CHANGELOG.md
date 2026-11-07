@@ -7,7 +7,8 @@ Caller coverage for changed symbols (ledger 1955) and the minor findings of the 
 
 **Deploy order:** update the role pages `scope-and-plan` (to version 26 or later) and `plan-audit`
 (to version 15 or later) BEFORE installing 2.1.6. This release pins those minimums, so an older
-page stops the run in preflight. The contract marker stays `fleet-v3`.
+page stops the run in preflight with "update agent-prompt-<role> (project m-agahi/yadgar) to >= v<N>;
+see CHANGELOG 2.1.6 deploy order". The contract marker stays `fleet-v3`.
 
 ### Added
 
@@ -24,13 +25,23 @@ page stops the run in preflight. The contract marker stays `fleet-v3`.
   excluded. The script diffs the hits against the map: a hit the map leaves out, a mapped line that
   is no hit, and a symbol with more than 100 hits are refused. The program prints a digest over its
   lists, and the script recomputes it, so a hit the relay drops fails the step. Limits: the grep is
-  name-based (aliases, re-exports, dynamic dispatch and other repos are missed) and over-matches
-  comments, docs and same-named symbols (the planner maps those as `dont_care`).
+  name-based: a call through an alias, a re-export under another name, a name built at runtime
+  and callers in other repos are missed (a literal string holding the name is a hit). Submodules
+  are not searched, and files git treats as binary (`-I`, `.gitattributes` included) are skipped.
+  It reads the working tree content of the tracked files. It over-matches comments, docs and
+  same-named symbols (the planner maps those as `dont_care`). An occurrence's `criterion` and
+  `dont_care` must hold no invisible or confusable character.
 - These refusals stop the run with `needs_human`; under confirm auto they go to the one
-  `:audit-fix` re-plan round (the one-round total is unchanged).
+  `:audit-fix` re-plan round (the one-round total is unchanged). That round must keep every symbol
+  the refused round mapped or a finding named; a dropped or swapped symbol stops the run (narrower
+  symbols only in addition). A symbol over the grep cap therefore always ends with a human.
 - **The audit gets the map.** plan-audit receives `changed_symbols` and `caller_check`
   (`{method, limits, occurrences}`) to judge whether each mapping is right. The map is sealed in
-  `plan_facts` and reaches the coder and the code judge (`null` for a ref sealed before 2.1.6).
+  `plan_facts` and reaches the coder, the code judge and, under confirm auto, the intent judge. In
+  the `:audit-fix` round the audit also gets `prior_round` (`{reason, findings, changed_symbols}`
+  of the refused round; `null` otherwise).
+- A ref sealed before 2.1.6 still builds, with `changed_symbols: null` and the gate line "this
+  build runs without caller coverage".
 
 ### Changed
 
