@@ -6065,8 +6065,8 @@ test("2.1.2 IaC scan program: files, hook dirs, hook managers, Makefile, package
   const pcHome = mkdtempSync(join(tmpdir(), "fleet-iac-pchome-"));
   const scan = (wt, rev) => {
     // a remote hook repo is fetched from a URL the test maps to an empty dir: no network, and the fetch fails
-    const env = Object.assign({}, process.env, { PRE_COMMIT_HOME: pcHome, FLEET_IAC_TEST_INSTEADOF: JSON.stringify({ "https://github.com/": "file://" + pcHome + "/" }) });
-    const r = spawnSync("python3", ["-I", "-", wt, rev], { input: body, encoding: "utf8", env });
+    const env = Object.assign({}, process.env, { PRE_COMMIT_HOME: pcHome });
+    const r = spawnSync("python3", ["-I", "-", wt, rev, "--test-instead-of=" + JSON.stringify({ "https://github.com/": "file://" + pcHome + "/" })], { input: body, encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout);
   };
@@ -6258,6 +6258,7 @@ const ARRAY_SITES = {
   "pf.changed_symbols @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "e.occurrences @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "c.test_files @ planScopePaths": "parsed: normalised criteria",
+  "h.page_tags @ writeBodies": "infra:results[].page_tags",
 };
 
 function arraySites() {
@@ -9341,7 +9342,7 @@ const PUSH_FIXTURES = {
   // DERIVED: a pre-push hook that prints a line-start `fatal:` (3.0.0: network, so the retries re-ran the hook)
   hook_fatal: [1, "fatal: version not bumped\nerror: failed to push some refs to 'github.com:o/r.git'\n", "ambiguous"],
   // DERIVED from git-lfs's pre-push output shape: a network failure inside the lfs hook is the hook's verdict
-  lfs_network: [1, "batch response: Post \"https://github.com/o/r.git/info/lfs/objects/batch\": dial tcp: lookup github.com: no such host\nerror: failed to push some refs to 'github.com:o/r.git'\n", "hook_rejected"],
+  lfs_network: [1, "batch response: Post \"https://github.com/o/r.git/info/lfs/objects/batch\": dial tcp: lookup github.com: no such host\nerror: failed to push some refs to 'github.com:o/r.git'\n", "ambiguous"],
 };
 
 function classifyPush(code, output) {
@@ -9525,7 +9526,7 @@ function noBody(over) {
   s["infra:ledger-read:post"] = (prompt) => ({
     status: "ok",
     reason: "read",
-    results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: T42, body_slug: "o_r_task-42", has_marker: true })),
+    results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: T42, body_slug: "o_r_task-42", has_marker: true, page_project: "o/r", page_tags: ["task-body", "fleet", "ledger-42"] })),
   });
   return Object.assign(s, over || {});
 }
@@ -9594,7 +9595,7 @@ test("3.1.0 1958: a title of 1..200 code points is used as read; an empty, missi
   ]) {
     const s = noBody({
       "infra:ledger-read:pre": (prompt) => ({ status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title, body_slug: null })) }),
-      "infra:ledger-read:post": (prompt) => ({ status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title, body_slug: "o_r_task-42", has_marker: true })) }),
+      "infra:ledger-read:post": (prompt) => ({ status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title, body_slug: "o_r_task-42", has_marker: true, page_project: "o/r", page_tags: ["ledger-42"] })) }),
     });
     const out = await run(s, ARGS);
     noUnscripted(out);
@@ -9610,7 +9611,7 @@ test("3.1.0 1958: a title of 1..200 code points is used as read; an empty, missi
 
 test("3.1.0 1958: a changed or truncated title after the write, a wrong body_slug or no marker fails closed", async () => {
   const post = (r) => ({
-    "infra:ledger-read:post": (prompt) => ({ status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => Object.assign({ key: t.key, status: "ok", title: T42, body_slug: "o_r_task-42", has_marker: true }, r)) }),
+    "infra:ledger-read:post": (prompt) => ({ status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => Object.assign({ key: t.key, status: "ok", title: T42, body_slug: "o_r_task-42", has_marker: true, page_project: "o/r", page_tags: ["ledger-42"] }, r)) }),
   });
   for (const [over, re] of [
     [post({ title: T42.slice(0, 30) }), /title changed by the write-back/],
@@ -9706,8 +9707,8 @@ test("3.1.0 1941b: the IaC scan reads remote hook manifests from the pre-commit 
   assert.doesNotMatch(body, /terraform|tofu|tflint|terragrunt|\btfp\b|digger|atlantis/i, "the Bash guard blocks these words");
   const empty = mkdtempSync(join(tmpdir(), "fleet-iac-nofetch-"));
   const scan = (wt, home) => {
-    const env = Object.assign({}, process.env, { PRE_COMMIT_HOME: home, FLEET_IAC_TEST_INSTEADOF: JSON.stringify({ "https://github.com/": "file://" + empty + "/" }) });
-    const r = spawnSync("python3", ["-I", "-c", body, wt, "HEAD"], { encoding: "utf8", cwd: wt, env });
+    const env = Object.assign({}, process.env, { PRE_COMMIT_HOME: home });
+    const r = spawnSync("python3", ["-I", "-c", body, wt, "HEAD", "--test-instead-of=" + JSON.stringify({ "https://github.com/": "file://" + empty + "/" })], { encoding: "utf8", cwd: wt, env });
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout);
   };
@@ -9780,7 +9781,12 @@ test("3.1.0 1941b: the IaC scan reads remote hook manifests from the pre-commit 
 
 function iacScan(wt, env) {
   const body = extractPy("IAC_SCAN_PY_BEGIN", "IAC_SCAN_PY_END", "IAC_SCAN_PY");
-  const r = spawnSync("python3", ["-I", "-c", body, wt, "HEAD"], { encoding: "utf8", cwd: wt, env: Object.assign({}, process.env, env) });
+  // the test-only URL rewrite goes on argv (3.1.0 delta review), never in the environment
+  const e = Object.assign({}, env || {});
+  const argv = ["-I", "-c", body, wt, "HEAD"];
+  if (e.FLEET_IAC_TEST_INSTEADOF) argv.push("--test-instead-of=" + e.FLEET_IAC_TEST_INSTEADOF);
+  delete e.FLEET_IAC_TEST_INSTEADOF;
+  const r = spawnSync("python3", argv, { encoding: "utf8", cwd: wt, env: Object.assign({}, process.env, e) });
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);
 }
@@ -10356,9 +10362,8 @@ test("3.1.0 delta review: tokens are still not followed out of docs, data, tests
       [Object.assign(hook("tests/entry.sh"), { "tests/entry.sh": "#!/bin/sh\nbash scripts/z.sh\n", "scripts/z.sh": "infracost diff\n" }), ["scripts/z.sh"], null],
       // a doc a script merely mentions is not read, and nothing it names is followed
       [Object.assign(hook("scripts/go.py"), { "scripts/go.py": "README = 'docs/notes.md'\n", "docs/notes.md": "terraform\nbash scripts/q.sh\n", "scripts/q.sh": "tflint\n" }), [], null],
-      // a 2 MiB data file is matched on its first 1 MiB, no refusal
-      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nxargs < data/big.txt\n", "data/big.txt": "terraform\n" + "x".repeat(2 << 20) }), ["data/big.txt"], null],
-      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nxargs < data/big.txt\n", "data/big.txt": "x".repeat(2 << 20) + "terraform\n" }), [], null],
+      // (security review: a 2 MiB data file in an execution context refuses; see the exec-flag test)
+      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nxargs < data/big.txt\n", "data/big.txt": "terraform\n" + "x".repeat(2 << 20) }), [], /data\/big\.txt is over 1048576 bytes/],
       // an executable over 1 MiB is still refused
       [Object.assign(hook("scripts/big.sh"), { "scripts/big.sh": "#!/bin/sh\n" + "# x\n".repeat(300000) }), [], /scripts\/big\.sh is over 1048576 bytes/],
       // a shebang's interpreter names nothing on the next line (the ccpm shape: a docstring naming README.md)
@@ -10504,6 +10509,127 @@ test("3.1.0 delta review: the surface program follows make, -m forms, symlinks, 
     for (const p of ["pyproject.toml", "docs/a.md", "scripts/no.sh"]) assert.ok(!o.surface.includes(p), p + " not in the surface");
     assert.deepEqual(o.make_paths, { check: ["bin/v.sh", "scripts/c.py"] });
     assert.deepEqual(o.args, [wt, "HEAD", JSON.stringify(["check"])]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- 3.1.0 delta review: LOW items
+
+test("3.1.0 delta review LOW: the fetch follows no redirect and takes its test URL rewrite from argv, never the environment", () => {
+  const p = extractPy("IAC_SCAN_PY_BEGIN", "IAC_SCAN_PY_END", "IAC_SCAN_PY");
+  assert.match(p, /'-c', 'http\.followRedirects=false'/);
+  assert.doesNotMatch(p, /environ\.get\('FLEET_IAC_TEST_INSTEADOF'\)/);
+  assert.match(p, /--test-instead-of=/);
+});
+
+test("3.1.0 delta review LOW: the caps test covers every embedded YAML loader", () => {
+  const loaders = SOURCE.match(/\n(?:CFG_)?LOADER = \(\n[\s\S]*?\n\)\n/g) || [];
+  assert.equal(loaders.length, 3, "FORMAT_FILES_PY, IAC_SCAN_PY and HOOK_SURFACE_PY each embed one");
+  for (const l of loaders) {
+    assert.match(l, /resource\.RLIMIT_AS, 1 << 30\), \(resource\.RLIMIT_CPU, 60\)/);
+    assert.match(l, /sys\.stdin\.buffer\.read\(262145\)/);
+    assert.doesNotMatch(l, /default=str/);
+  }
+});
+
+test("3.1.0 delta review LOW: a git-lfs batch line next to a declined push is ambiguous, not a hook verdict", { skip: !HAVE_PY }, () => {
+  for (const line of ["batch response: Post \"https://github.com/o/r.git/info/lfs/objects/batch\": dial tcp: lookup github.com: no such host", "batch request: missing protocol: \"\"", "LFS: Client error: 500"])
+    assert.equal(classifyPush(1, line + "\nerror: failed to push some refs to 'github.com:o/r.git'\n").push_result, "ambiguous", line);
+  // a plain hook rejection stays a hook verdict
+  assert.equal(classifyPush(1, "version not bumped\nerror: failed to push some refs to 'x'\n").push_result, "hook_rejected");
+});
+
+test("3.1.0 delta review LOW: the slug-collision check runs in code on the page's project and tags", async () => {
+  for (const [page, ok] of [
+    [{ page_project: "o/r", page_tags: ["task-body", "fleet", "ledger-42"] }, true],
+    [{ page_project: "o/other", page_tags: ["task-body", "fleet", "ledger-42"] }, false],
+    [{ page_project: "o/r", page_tags: ["task-body", "fleet", "ledger-43"] }, false],
+    [{ page_project: "o/r" }, false],
+    [{}, false],
+  ]) {
+    const s = noBody({
+      "infra:ledger-read:post": (prompt) => ({
+        status: "ok",
+        reason: "read",
+        results: inputsOf(prompt).tasks.map((t) => Object.assign({ key: t.key, status: "ok", title: T42, body_slug: "o_r_task-42", has_marker: true }, page)),
+      }),
+    });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.ledger_status, ok ? "ok" : "failed", JSON.stringify(page));
+    if (!ok) assert.match(out.result.write_back.ledger[0].reason, /slug collision/);
+  }
+  assert.match(call(await run(noBody(), ARGS), "infra:ledger-read:post").prompt, /page_project.*page_tags/);
+});
+
+test("3.1.0 delta review LOW: fleet:judge denies every remaining yadgar writer", () => {
+  const deny = frontmatter("judge.md").disallowedTools.split(/,\s*/);
+  for (const t of [
+    "add_rule", "anchor_renew", "archive_purge", "backup_restore", "bookmark_add", "bookmark_remove", "bookmark_reorder", "bootstrap_project",
+    "checkpoint", "config_delete", "consolidate_now", "de_anchor", "discipline_save", "dlq_dismiss", "dlq_requeue", "install_hooks",
+    "project_register", "project_seed", "reembed_all", "seed_agent_prompts", "seed_project", "sync_instructions", "update_active_work",
+    "vacuum_checkpoints", "vacuum_now", "wiki_autolink", "wiki_write_task_list", "task_write",
+  ])
+    assert.ok(deny.includes("mcp__yadgar__" + t), t);
+});
+
+// ---------------------------------------------------------------- 3.1.0 security review: the last two findings
+
+test("3.1.0 security review: an oversized doc or data file in an execution context refuses; only a merely-mentioned leaf is head-scanned", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const pc = mkdtempSync(join(tmpdir(), "fleet-iac-exec-"));
+  const hook = (entry) => ({ ".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - id: h\n    name: h\n    entry: " + entry + "\n    language: system\n" });
+  try {
+    for (const [files, want, err] of [
+      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nxargs < data/big.txt\n", "data/big.txt": "x".repeat(2 << 20) }), [], /data\/big\.txt is over 1048576 bytes/],
+      [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\n. docs/big.md\n", "docs/big.md": "x".repeat(2 << 20) }), [], /docs\/big\.md is over 1048576 bytes/],
+      // a test file a Makefile merely mentions is a leaf: its first 1 MiB is matched, no refusal
+      [{ Makefile: "lint:\n\techo tests/huge_test.py\n", "tests/huge_test.py": "terraform\n" + "x".repeat(2 << 20) }, ["tests/huge_test.py"], null],
+    ]) {
+      const wt = repoWith("fleet-iac-exec-", files);
+      try {
+        const got = iacScan(wt, { PRE_COMMIT_HOME: pc });
+        if (err) assert.match(String(got.error), err);
+        else assert.equal(got.error, null, got.error);
+        assert.deepEqual(got.iac_text, want);
+      } finally {
+        rmSync(wt, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    rmSync(pc, { recursive: true, force: true });
+  }
+});
+
+test("3.1.0 security review: the hook surface traces hook-manager files and scripts a hook script runs directly", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const files = {
+    ".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - {id: a, name: a, entry: scripts/hook.sh, language: script}\n",
+    "scripts/hook.sh": "#!/bin/sh\nbash scripts/run2.sh\n./scripts/run3.sh\npython3 tools/p.py\n",
+    "scripts/run2.sh": "#!/bin/sh\n", "scripts/run3.sh": "#!/bin/sh\n", "tools/p.py": "",
+    ".husky/pre-commit": "npx lint-staged\nbash scripts/hk.sh\n", "scripts/hk.sh": "#!/bin/sh\n",
+    ".github/actions/a/action.yml": "runs:\n  using: composite\n  steps:\n  - run: ./scripts/act.sh\n    shell: bash\n", "scripts/act.sh": "#!/bin/sh\n",
+    "package.json": JSON.stringify({ scripts: { pre: "node tools/pre.js" } }), "tools/pre.js": "",
+    "lefthook.yml": "pre-commit:\n  commands:\n    x:\n      run: python3 tools/lh.py\n", "tools/lh.py": "",
+    "myhooks/pre-push": "#!/bin/sh\nsh scripts/pp.sh\n", "scripts/pp.sh": "#!/bin/sh\n",
+    "scripts/unrelated.sh": "#!/bin/sh\n",
+  };
+  const wt = repoWith("fleet-hooksurf3-", files);
+  const prog = extractPy("HOOK_SURFACE_PY_BEGIN", "HOOK_SURFACE_PY_END", "HOOK_SURFACE_PY");
+  const runP = () => {
+    const r = spawnSync("python3", ["-I", "-c", prog, wt, "HEAD", "[]"], { encoding: "utf8", cwd: wt });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  try {
+    sh(wt, "git", "config", "core.hooksPath", "myhooks");
+    const o = runP();
+    assert.equal(o.error, null);
+    for (const p of ["scripts/run2.sh", "scripts/run3.sh", "tools/p.py", "scripts/hk.sh", "scripts/act.sh", "tools/pre.js", "tools/lh.py", "scripts/pp.sh"])
+      assert.ok(o.surface.includes(p), p + " in " + JSON.stringify(o.surface));
+    assert.ok(!o.surface.includes("scripts/unrelated.sh"));
+    // a hook-manager file that does not parse fails closed
+    writeFileSync(join(wt, "package.json"), "{ not json");
+    sh(wt, "git", "commit", "-qam", "broken");
+    assert.match(String(runP().error), /package\.json does not parse/);
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }

@@ -51,7 +51,23 @@ contract marker stays `fleet-v3`.
   `--flag=value` counts only when the value is an executable script, so
   `--config=pyproject.toml` is not surface. The plan scope also includes `criteria[].test_files`.
   F2 also covers the repo paths a `make <target>` check_cmd's recipe names; modules a check script
-  imports are still not traced. The `scope-and-plan` page
+  imports are still not traced. Security review: hook-manager files (`.github/actions/**`,
+  `.husky/**`, `.githooks/**`, lefthook configs, the `core.hooksPath` directory, `package.json`
+  scripts) are traced like CI files for the scripts they name, and a hook shell script's directly
+  run scripts (`bash`/`sh`/`python`/`node X`, `./X`) join the surface; a hook-manager file that
+  does not parse (a `package.json` that is not JSON) or is over 1 MiB refuses.
+- **Delta review LOW.** The hook-repo fetch adds `http.followRedirects=false`, and its test-only URL
+  rewrite moved from the environment to argv (`--test-instead-of=`). A git-lfs `batch request:`,
+  `batch response:` or `LFS:` line next to a declined push is `ambiguous`, not `hook_rejected`.
+  The slug-collision check runs in code: the judge's read after the write returns the page's
+  `page_project` and `page_tags`, and the script requires this project and the tag
+  `ledger-<id>`. `fleet:judge` denies the remaining yadgar writers (`add_rule`, `anchor_renew`,
+  `archive_purge`, `backup_restore`, the bookmark writers, `bootstrap_project`, `checkpoint`,
+  `config_delete`, `consolidate_now`, `de_anchor`, `discipline_save`, the DLQ writers,
+  `install_hooks`, `project_register`, `project_seed`, `reembed_all`, the seed tools,
+  `sync_instructions`, `update_active_work`, the vacuum tools, `wiki_autolink`,
+  `wiki_write_task_list`). An oversized doc or data file in an execution context now refuses;
+  only a merely-mentioned leaf is matched on its first 1 MiB. The `scope-and-plan` page
   gets one sentence telling the planner so (prepared, not written; the pin stays 27, because the
   rule lives in script code).
 - A verify, commit-plan or `hook_rejected` push relay that does not match its program's digest,
