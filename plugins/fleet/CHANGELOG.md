@@ -11,6 +11,8 @@ Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
   definition that `changed_symbols` does not map in the same file and line range, and on a change
   in an unclassified file or at module level in a file the plan does not name. Builds that 2.1.6
   committed can now stop here.
+- **yaadgaar write-back writes** (ledger 1928). A build of a yaadgaar task now edits that task's
+  body; 2.1.6 only returned the section text.
 - **Branch-scan output shape** (ledger 1952). `infra:branch-scan` returns `{commits, refs, digest}`;
   each ref entry carries `task_id`, `plan_path` and `ref_ok` instead of `content`. The plan-ref
   reader has no full-content mode any more (`meta` or `chunks:<ref>` only).
@@ -48,6 +50,15 @@ Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.
   file (`stop_gate: hash`), a path outside the files it was given (`scope`), or still rewrites
   after 3 runs (`commit`) stops the run. The commit step's tree-equality check (ADR-1151) is
   unchanged.
+- **yaadgaar write-back** (ledger 1928). For a `yaadgaar` source of a `yadgarhq/` project,
+  `infra:yaadgaar-writeback` (default agent; `fleet:judge` may not write to a ledger) appends the
+  `## Fleet build` section with `mcp__yaadgaar__read_task` and `mcp__yaadgaar__edit_task`: it
+  checks the task's project, edits by id with `expect_version`, sends an empty body whole with a
+  script-computed `expect_body_sha256` and appends to a non-empty one only through a literal
+  `patch` on a unique tail, retries once on `VERSION_MISMATCH`, and re-reads to confirm. Never the
+  yadgar ledger. 2.1.6 handed the section back for a human to post.
+- **Codeberg plan link** (ledger 1928). The workspace step returns `remote_host`; a Codeberg origin
+  gets `https://codeberg.org/<o>/<r>/src/branch/<branch>/<plan>` in the ledger section and comments.
 - **No model blob relays left on the gate path** (ledger 1952). The branch scan is one program that
   reads each plan-ref message itself and prints `task_id`, `plan_path` and `ref_ok` (the
   `planRefProblem` checks, ported; a test checks Python and JS agree), never the message text.

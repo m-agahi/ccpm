@@ -6660,6 +6660,7 @@ test("2.1.5 yaadgaar: build re-reads the yaadgaar task, never L<N>", async () =>
   s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
   s["role:fleet-intent-judge:rerun"] = { status: "ok", reason: "fine", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } };
   s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
+  s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
   const build = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs", confirm: "auto" });
   noUnscripted(build);
   assert.equal(build.result.status, "ok", build.result.reason);
@@ -6667,11 +6668,9 @@ test("2.1.5 yaadgaar: build re-reads the yaadgaar task, never L<N>", async () =>
   assert.equal(rr.input, "yaadgaar #622");
   assert.equal(rr.ledger, "yaadgaar");
   assert.equal(inputsOf(call(build, "role:fleet-intent-judge:rerun").prompt).ledger_task.ref, "622");
-  // write-back to yaadgaar is not wired yet (task 1928): no yadgar write, the section is handed back
+  // 3.0.0 (ledger 1928): the yaadgaar step writes; never the yadgar ledger
   assert.ok(!build.labels.includes("infra:ledger-writeback"));
-  assert.equal(build.result.ledger_status, "failed");
-  assert.match(build.result.write_back.ledger[0].reason, /yaadgaar/);
-  assert.match(build.result.write_back.ledger[0].section_text, /fleet:y622/);
+  assert.ok(build.labels.includes("infra:yaadgaar-writeback"));
 });
 
 test("2.1.5 yaadgaar: a sealed legacy ledger source on a yadgarhq/ project stops the build", async () => {
@@ -8253,4 +8252,59 @@ test("3.0.0 review 2: a definition changed_symbols cannot name (no identifier) p
   t["infra:changed-defs:r1"] = defsOut([{ name: "build-x", at: "Makefile:1", end: 2 }]);
   const o2 = await run(t, ARGS);
   assert.equal(o2.result.status, "ok", o2.result.reason);
+});
+
+// ---------------------------------------------------------------- 3.0.0 yaadgaar write-back (ledger 1928)
+
+async function yaadgaarBuild(writeback, buildOver) {
+  const s = autoHappy({ brief: YBRIEF });
+  const plan = await runOne(s, { ...YQ, confirm: "ask" });
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  if (writeback !== undefined) s["infra:yaadgaar-writeback"] = writeback;
+  return runOne(s, Object.assign({ mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" }, buildOver || {}));
+}
+
+test("3.0.0 yaadgaar write-back: an agent step edits the task through mcp__yaadgaar__ tools, never the yadgar ledger", async () => {
+  const out = await yaadgaarBuild((p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) }));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(!out.labels.includes("infra:ledger-writeback"));
+  const c = call(out, "infra:yaadgaar-writeback");
+  assert.equal(c.opts.agentType, undefined, "default agent: fleet:judge must never write to a ledger");
+  const i = inputsOf(c.prompt);
+  assert.equal(i.project, "yadgarhq/docs");
+  assert.deepEqual(i.tasks, [{ key: "s0", number: 622 }]);
+  assert.equal(i.marker, "fleet:y622");
+  assert.equal(i.section_heading, "Fleet build");
+  assert.match(i.section_text, /<!-- fleet:y622 -->/);
+  assert.equal(i.section_sha256, sha256(i.section_text));
+  for (const re of [/mcp__yaadgaar__read_task/, /mcp__yaadgaar__edit_task/, /expect_version/, /VERSION_MISMATCH/, /patch/, /expect_count/, /expect_body_sha256/, /never mcp__yadgar__task_/i, /id=<the task's id/])
+    assert.match(c.prompt, re);
+  assert.equal(out.result.ledger_status, "ok");
+  assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["yaadgaar #622", "written"]]);
+});
+
+test("3.0.0 yaadgaar write-back: a failed or missing result hands the section back; no project writes nothing", async () => {
+  const out = await yaadgaarBuild({ status: "ok", reason: "x", results: [{ key: "s0", status: "failed", reason: "VERSION_MISMATCH twice" }] });
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.ledger_status, "failed");
+  assert.match(out.result.write_back.ledger[0].reason, /VERSION_MISMATCH twice/);
+  assert.match(out.result.write_back.ledger[0].section_text, /fleet:y622/);
+  const dead = await yaadgaarBuild(null);
+  assert.equal(dead.result.ledger_status, "failed");
+  assert.match(dead.result.write_back.ledger[0].section_text, /fleet:y622/);
+  const skipped = await yaadgaarBuild({ status: "ok", reason: "x", results: [{ key: "s0", status: "skipped", reason: "marker present" }] });
+  assert.equal(skipped.result.ledger_status, "ok");
+});
+
+test("3.0.0 write-back: a Codeberg origin gets a Codeberg plan link", async () => {
+  const s = happy();
+  s.workspace = { ...s.workspace, remote_host: "codeberg.org" };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const i = inputsOf(call(out, "infra:ledger-writeback").prompt);
+  assert.match(i.section_text, /\(https:\/\/codeberg\.org\/o\/r\/src\/branch\/fleet\/l42-add-thing\/docs\/plans\/x\.md\)/);
+  const g = await run(happy(), ARGS);
+  assert.match(inputsOf(call(g, "infra:ledger-writeback").prompt).section_text, /\(https:\/\/github\.com\/o\/r\/blob\/fleet\/l42-add-thing\/docs\/plans\/x\.md\)/);
+  assert.match(call(g, "workspace").prompt, /remote_host/);
 });

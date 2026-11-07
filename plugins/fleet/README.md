@@ -406,7 +406,21 @@ is the plan commit, for example after a re-plan.
 - **Ledger:** for each `ledger` source, one `## Fleet build` section (tldr, plan path, PR URL,
   hidden `fleet:<task id>` marker) is appended to the task's body page (`body_slug`) in
   `args.project`. A body that already carries the marker is skipped. `ledger_status` is `ok`,
-  `failed` or `none`.
+  `failed` or `none`. A task with no `body_slug` fails with "task has no body page" and its
+  `section_text` is handed back.
+- **yaadgaar (3.0.0):** for each `yaadgaar` source of a `yadgarhq/` project, the step
+  `infra:yaadgaar-writeback` (the default agent: `fleet:judge` may never write to a ledger) loads
+  `mcp__yaadgaar__read_task` and `mcp__yaadgaar__edit_task`. It reads the task by number, checks
+  that it belongs to `args.project` (the yaadgaar client resolves a number in the session's start
+  project) and then edits it by id with `expect_version`: an empty body gets `body` =
+  `section_text` with `expect_body_sha256` (computed by the script); a non-empty body is never
+  re-sent, the section is appended with a literal `patch` on a unique tail of the body
+  (`expect_count: 1`). On `VERSION_MISMATCH` it re-reads and retries once; any other refusal fails
+  the entry. It re-reads after the edit to confirm the marker landed and nothing was cut. The yadgar
+  ledger is never used for these tasks. A failed entry carries `section_text` to add by hand.
+- **Plan link:** `https://github.com/<o>/<r>/blob/<branch>/<plan>`, or
+  `https://codeberg.org/<o>/<r>/src/branch/<branch>/<plan>` when the origin's configured URL names
+  Codeberg (`remote_host` from the workspace step).
 - **Comments:** one comment on each `jira`, `github` and `codeberg` source: tldr, plan link, PR
   link and the marker `fleet:<task id>` (an HTML comment on GitHub and Codeberg, a plain last line
   on Jira). A read-only step lists the existing comments first; a source that already has the

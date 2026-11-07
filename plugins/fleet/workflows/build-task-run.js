@@ -1107,6 +1107,7 @@ const INFRA_SCHEMA = {
     default_branch: STR,
     base_ref: STR,
     remote_slug: STR,
+    remote_host: STR,
     created: { type: "boolean" },
     reused: { type: "boolean" },
     merged: ANY_ARRAY,
@@ -1920,6 +1921,13 @@ function proposedChanges(findings, note) {
   });
 }
 
+// The plan doc on the pushed branch: a Codeberg origin gets a Codeberg link
+// (3.0.0, ledger 1928); anything else, github.com.
+function planLinkFor(host, slug, branch, planPath) {
+  if (/codeberg/i.test(String(host || ""))) return "https://codeberg.org/" + slug + "/src/branch/" + branch + "/" + planPath;
+  return "https://github.com/" + slug + "/blob/" + branch + "/" + planPath;
+}
+
 function commentText(kind, taskId, tldr, planLink, prUrl) {
   const body = String(tldr || "").trim() + "\n\nPlan: " + planLink + "\nPR: " + prUrl;
   const marker = "fleet:" + taskId;
@@ -2527,8 +2535,8 @@ function workspacePrompt(inputs) {
     "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths.\n" +
     "7. `mkdir -p <scratch_dir>`.\n" +
     "8. base_ref = `git -C <main_worktree> merge-base HEAD origin/<default_branch>`.\n" +
-    "9. remote_slug = <owner>/<name> parsed from `git -C <repo> remote get-url origin`.\n" +
-    "Return {status, reason, default_branch, base_ref, remote_slug, created}."
+    "9. remote_slug = <owner>/<name> parsed from `git -C <repo> remote get-url origin`. remote_host = the host part of `git -C <repo> config --get remote.origin.url` (the configured URL, before any insteadOf rewrite; for an ssh alias such as `github-personal:o/r.git`, the alias).\n" +
+    "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, created}."
   );
 }
 
@@ -3326,6 +3334,29 @@ function ledgerWritebackPrompt(inputs) {
   );
 }
 
+// The yaadgaar write-back (3.0.0, ledger 1928). The yaadgaar client takes its
+// project from the session's start directory and resolves a number there,
+// so the step checks the project read_task names, then edits by id. A
+// non-empty body is never re-sent: a literal patch on a unique tail of it
+// appends the section (bug #10 class: a model copy of a long body is cut).
+function yaadgaarWritebackPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: append ONE section to each yaadgaar task's body. Change nothing else on the task: not its title, never its status. Use the mcp__yaadgaar__ tools only; never mcp__yadgar__task_get, mcp__yadgar__task_write or any yadgar ledger or wiki tool (the yadgar ledger is frozen history for this project).\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Load mcp__yaadgaar__read_task and mcp__yaadgaar__edit_task via ToolSearch; read their schemas first. Tools absent -> every entry failed. For each entry of `tasks` (key, number):\n" +
+    "1. read_task(number=<number>). Refused or absent -> that entry failed with the error. The task must belong to <project> (its project id, or the project its id names); any other project -> failed (\"task #<number> resolves in project <x>, not <project>\"), and write nothing. Note the task's id (URN), version and body.\n" +
+    "2. If the body already contains <marker> -> skipped.\n" +
+    "3. Edit by id=<the task's id URN> (never by number), with expect_version = the version you read:\n" +
+    "   - empty body: edit_task(id, expect_version, body = <section_text> exactly, expect_body_sha256 = <section_sha256>).\n" +
+    "   - otherwise never send the whole body. tail = the body's last line (with the newline before it when there is one); while tail does not occur exactly once in the body, extend it backwards one line. Send edit_task(id, expect_version, patch = {old: tail, new: tail + \"\\n\\n## \" + <section_heading> + \"\\n\\n\" + <section_text>, expect_count: 1}). Copy tail byte for byte from the body you read.\n" +
+    "4. A refusal starting with VERSION_MISMATCH: read_task again, repeat steps 2 and 3 once with the new version and body. A second refusal, or any other refusal (PATCH_COUNT_MISMATCH, BODY_SHA256_MISMATCH, ...) -> that entry failed with the refusal text; do not retry.\n" +
+    "5. After an edit: read_task again; the body must contain <marker> and still start with the body you read before the edit (nothing cut). Else failed (\"edit did not land as an append\").\n" +
+    "Return {status: \"ok\", reason, results: [{key, status: written|skipped|failed, reason}]}."
+  );
+}
+
 function commentsListPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: LIST existing comments. Read only: never post, edit or delete anything.\n" +
@@ -3682,7 +3713,7 @@ async function workspaceStep(repo, lay) {
   if (!ws.remote_slug) halt("needs_human", "workspace found no origin remote owner/name (remote_slug)");
   if (ws.default_branch === lay.branch) halt("needs_human", "fleet branch equals the default branch " + ws.default_branch);
   gate("workspace: " + (ws.created ? "created " : "reused ") + lay.mainWt + " off " + ws.default_branch + " @ " + ws.base_ref);
-  return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: ws.remote_slug };
+  return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: ws.remote_slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "" };
 }
 
 // Brief from intake, or from a plan_ref: shape checked in code.
@@ -5158,7 +5189,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         await saveState("reviewed", "infra:state:reviewed:v" + reviews);
       } else {
         phase("Write-back");
-        wb = await writeBack({ ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr ? pr.pr_url : null });
+        wb = await writeBack({ ref, brief, project: input.project || null, remoteSlug, remoteHost: ws.remoteHost, branch, prUrl: pr ? pr.pr_url : null });
         await saveState("written_back", "infra:state:written_back");
       }
     }
@@ -5840,7 +5871,7 @@ async function replan(ctx) {
 // Never stops the run: every failure is reported in the result.
 async function writeBack(ctx) {
   const { ref, brief, project, remoteSlug, branch, prUrl } = ctx;
-  const planLink = "https://github.com/" + remoteSlug + "/blob/" + branch + "/" + ref.plan_path;
+  const planLink = planLinkFor(ctx.remoteHost, remoteSlug, branch, ref.plan_path);
   const marker = "fleet:" + ref.task_id;
   const out = { write_back: { ledger: [], comments: [] }, ledger_status: "none", comment_status: "none", comment_text: null };
 
@@ -5876,20 +5907,42 @@ async function writeBack(ctx) {
     out.ledger_status = out.write_back.ledger.some((e) => e.status === "failed") ? "failed" : "ok";
     gate("write-back ledger: " + out.write_back.ledger.map((e) => e.ref + "=" + e.status).join(", "));
   }
-  // yaadgaar tasks: the write path is not wired yet; never write the section
-  // to the yadgar ledger (its L<N> is another, frozen task). Hand it back.
-  const yq = brief.sources.filter((s) => s.kind === "yaadgaar");
+  // yaadgaar tasks (3.0.0, ledger 1928): an agent step with the
+  // mcp__yaadgaar__ tools; never the yadgar ledger (its L<N> is another,
+  // frozen task). A failed entry hands section_text back.
+  const yq = brief.sources.map((s, i) => Object.assign({ key: "s" + i }, s)).filter((s) => s.kind === "yaadgaar");
   if (yq.length) {
     const sectionText = "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
-    for (const s of yq)
-      out.write_back.ledger.push({
-        ref: "yaadgaar #" + s.ref,
-        status: "failed",
-        reason: "yaadgaar write-back is not supported yet (ccpm task 1928); add section_text to the task by hand",
-        section_text: sectionText,
-      });
-    out.ledger_status = "failed";
-    gate("write-back ledger: " + yq.map((s) => "yaadgaar #" + s.ref + "=failed (not supported yet)").join(", "));
+    let results = null;
+    let why = null;
+    const tasks = yq.map((s) => ({ key: s.key, number: /^[1-9][0-9]*$/.test(String(s.ref)) ? Number(s.ref) : null }));
+    if (!project || ledgerFor(project) !== "yaadgaar") why = "no yadgarhq/ project to write to (args.project " + JSON.stringify(project) + ")";
+    else if (tasks.some((t) => t.number === null)) why = "a yaadgaar ref is not a task number";
+    else {
+      const r = await softDispatch(
+        "infra:yaadgaar-writeback",
+        yaadgaarWritebackPrompt({
+          project,
+          tasks,
+          section_heading: LEDGER_SECTION,
+          section_text: sectionText,
+          section_sha256: sha256Hex(sectionText),
+          marker,
+        }),
+        { schema: INFRA_SCHEMA, phase: "Write-back" },
+      );
+      if (r && Array.isArray(r.results)) results = r.results;
+      else why = (r && r.reason) || "yaadgaar write-back agent returned no result";
+    }
+    for (const s of yq) {
+      const hit = results && results.find((x) => x.key === s.key);
+      const st = hit && ["written", "skipped"].indexOf(hit.status) >= 0 ? hit.status : "failed";
+      const e = { ref: "yaadgaar #" + s.ref, status: st, reason: hit ? hit.reason || null : why };
+      if (st === "failed") e.section_text = sectionText;
+      out.write_back.ledger.push(e);
+    }
+    out.ledger_status = out.write_back.ledger.some((e) => e.status === "failed") ? "failed" : "ok";
+    gate("write-back yaadgaar: " + yq.map((s) => "#" + s.ref + "=" + out.write_back.ledger.find((e) => e.ref === "yaadgaar #" + s.ref).status).join(", "));
   }
 
   // (b) one marked comment per external source
