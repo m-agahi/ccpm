@@ -165,7 +165,7 @@ const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\
 // fleet does not run in a repo with IaC files or IaC tooling in its hooks or
 // task runners (IAC_SCAN_PY lists the places). IAC_SCAN_PY spells this
 // pattern in pieces (the local Bash guard), and a test keeps the two equal.
-const IAC_RE = /terraform|tofu|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger/i;
+const IAC_RE = /terraform|(?<![a-z])tofu|opentofu|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger/i;
 const IAC_REFUSAL = "repo contains IaC files or IaC tooling in hooks; the fleet does not run here";
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 // The ledger body write (3.1.0): MCP only; no shell, no file tools, no yaadgaar writes.
@@ -3960,12 +3960,12 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
-import atexit, fnmatch, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, tempfile, time
+import atexit, fnmatch, glob, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, tempfile, time
 wt, rev = sys.argv[1], sys.argv[2]
 # argv[3] == 'no-yaml' (tests only): behave as if no Python had PyYAML
 no_yaml = len(sys.argv) > 3 and sys.argv[3] == 'no-yaml'
 os.chdir('/')
-PAT = re.compile('terra' + 'form|to' + 'fu|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|atlan' + 'tis|dig' + 'ger', re.I)
+PAT = re.compile('terra' + 'form|(?<![a-z])to' + 'fu|opento' + 'fu|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|atlan' + 'tis|dig' + 'ger', re.I)
 DIRS = {'.terra' + 'form', 'terra' + 'form'}
 T = '.to' + 'fu'
 EXTS = ('.tf', '.tfvars', '.tf.json', '.tfvars.json', '.hcl', T, T + 'vars', T + '.json', T + 'vars.json')
@@ -4011,12 +4011,23 @@ def inert(p):
 def testpath(p):
     segs = p.split('/')
     return any(s.lower() in TEST_DIRS for s in segs[:-1]) or bool(TEST_BASE.match(segs[-1]))
-def follows(p, depth):
-    if inert(p):
-        return False
-    if depth >= 2 and (testpath(p) or DOCKER_BASE.match(base(p))):
-        return False
-    return True
+def leafy(p):
+    # matched, never followed out of: docs, data, tests, Dockerfiles and the
+    # task-runner manifests (read raw when a hook text names them)
+    b = base(p)
+    return inert(p) or testpath(p) or bool(DOCKER_BASE.match(b)) or b in ('pyproject.toml', 'package.json')
+# a file in an execution context: given to an interpreter or exec, sourced,
+# read through a redirect or named by -f, in a hook's command text
+# (the context never crosses a line: a shebang's interpreter names nothing)
+EXEC_CTX = re.compile(r'(?:^|[\s;&|(\x60])(?:bash|sh|zsh|dash|ksh|node|deno|bun|python[0-9.]*|ruby|perl|exec|source|xargs|env|cat)[ \t]+([^;&|\n\x60)]*)'
+                      r'|(?:^|[;&|][ \t]*)\.[ \t]+([^;&|\n]*)|<[ \t]*([^\s;&|)]+)|(?:^|[ \t])-f[ \t]+([^\s;&|)]+)', re.M)
+def exec_tokens(s):
+    out = set()
+    for m in EXEC_CTX.finditer(s):
+        for g in m.groups():
+            for tok in TOKEN.findall(g or ''):
+                out.add(os.path.normpath(tok))
+    return out
 def tok_text(name, s):
     # the text names are taken from: a YAML file without its comments and
     # its file filters, names and descriptions
@@ -4053,15 +4064,17 @@ def view(p, raw):
 # read at <rev>; an untracked (or ignored) file in the worktree is read from
 # disk ("worktree:<path>"); inside a remote hook repo (root: its cached clone
 # dir, or a fetched scratch repo), a file of that repo ("<label>:<path>").
-seen, queue = set(), []
+seen, queue, followed = set(), [], set()
 def root_has(root, p):
     if isinstance(root, str):
         return os.path.isfile(os.path.join(root, p))
     r = subprocess.run(['git', '-C', root[1], 'cat-file', '-t', 'FETCH_HEAD:' + p], capture_output=True)
     return r.returncode == 0 and r.stdout.strip() == b'blob'
-def root_read(root, p):
+def root_read(root, p, leaf=False):
     if isinstance(root, str):
-        return disk(os.path.join(root, p))
+        return disk(os.path.join(root, p), leaf)
+    if leaf:
+        return head(['git', '-C', root[1]], 'FETCH_HEAD:' + p)
     sized('FETCH_HEAD:' + p, ['git', '-C', root[1]])
     r = subprocess.run(['git', '-C', root[1], 'show', 'FETCH_HEAD:' + p], capture_output=True)
     if r.returncode != 0:
@@ -4086,34 +4099,52 @@ def sized(obj, g):
         fail('cannot read ' + obj + ': ' + r.stderr.decode('utf-8', 'replace').strip())
     if int(r.stdout.strip() or 0) > FILE_CAP:
         fail(obj + ' is over ' + str(FILE_CAP) + ' bytes; the scan cannot read it whole')
-def hit(name, data, depth=0, root=None, label=None):
+def hit(name, data, depth=0, root=None, label=None, leaf=False):
     s = data if isinstance(data, str) else data.decode('utf-8', 'replace')
     if PAT.search(s) and name not in text:
         text.append(name)
-    toks = TOKEN.findall(tok_text(name, s))
+    if leaf:
+        return
+    t = tok_text(name, s)
+    toks = TOKEN.findall(t)
+    # a YAML hook config's surviving lines (entry, args, run) are commands
+    ex = set(os.path.normpath(x) for x in toks) if base(name).lower().endswith(('.yaml', '.yml')) else exec_tokens(t)
     if base(name).endswith('.yaml') and DOCKER_LANG.search(s):
         toks.append('Dockerfile')
+        ex.add('Dockerfile')
     for tok in toks:
         p = os.path.normpath(tok)
-        if p == '..' or p.startswith('../') or not follows(p, depth + 1):
+        if p == '..' or p.startswith('../'):
+            continue
+        lf = leafy(p)
+        if lf and p not in ex and (inert(p) or depth + 1 >= 2):
             continue
         if root is not None:
-            if (label, p) not in seen and root_has(root, p):
-                seen.add((label, p))
-                queue.append(('clone', p, depth + 1, root, label))
+            if (label, p) not in followed and root_has(root, p):
+                followed.add((label, p))
+                queue.append(('clone', p, depth + 1, root, label, lf))
         elif p in tracked:
-            if p not in seen:
-                seen.add(p)
-                queue.append(('git', p, depth + 1, None, None))
-        elif ('disk', p) not in seen and os.path.isfile(os.path.join(top, p)):
-            seen.add(('disk', p))
-            queue.append(('disk', p, depth + 1, None, None))
-def disk(fp):
+            if p not in followed:
+                followed.add(p)
+                queue.append(('git', p, depth + 1, None, None, lf))
+        elif ('disk', p) not in followed and os.path.isfile(os.path.join(top, p)):
+            followed.add(('disk', p))
+            queue.append(('disk', p, depth + 1, None, None, lf))
+def disk(fp, leaf=False):
     try:
         with open(fp, 'rb') as fh:
-            return charge(fh.read(FILE_CAP + 1), fp)
+            data = fh.read(FILE_CAP + 1)
     except OSError as e:
         fail('cannot read ' + fp + ': ' + str(e))
+    return charge(data[:FILE_CAP] if leaf else data, fp)
+def head(g, obj):
+    # the first FILE_CAP bytes of a blob, never more in memory
+    pr = subprocess.Popen(g + ['cat-file', 'blob', obj], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    data = pr.stdout.read(FILE_CAP)
+    pr.stdout.close()
+    pr.kill()
+    pr.wait()
+    return charge(data, obj)
 def blob(p):
     sized(rev + ':' + p, ['git', '-C', wt])
     b = git('cat-file', 'blob', rev + ':' + p)
@@ -4342,7 +4373,13 @@ def shim(data):
     s = data.decode('utf-8', 'replace')
     if '# File generated by pre-commit' not in s:
         return s
-    return re.sub(r'(?m)^INSTALL_PYTHON=(\S+)$', lambda m: '' if re.match(r'python[0-9.]*$', os.path.basename(m.group(1))) else m.group(0), s)
+    def keep(m):
+        py = m.group(1)
+        venv = os.path.dirname(os.path.dirname(py))
+        ok = re.match(r'python[0-9.]*$', os.path.basename(py)) and os.path.basename(os.path.dirname(py)) == 'bin' \
+            and any(os.path.isdir(x) for x in glob.glob(os.path.join(glob.escape(venv), 'lib', 'python*', 'site-packages', 'pre_commit')))
+        return '' if ok else m.group(0)
+    return re.sub(r'(?m)^INSTALL_PYTHON=(\S+)$', keep, s)
 if os.path.isdir(hd):
     for root, ds, fs in os.walk(hd):
         for f in sorted(fs):
@@ -4354,18 +4391,18 @@ if os.path.isdir(hd):
                 fail('cannot read hook ' + fp + ': ' + str(e))
 n = 0
 while queue:
-    kind, p, d, root, label = queue.pop(0)
+    kind, p, d, root, label, lf = queue.pop(0)
     n += 1
     if n > MAX_REFS:
         fail('more than ' + str(MAX_REFS) + ' referenced files')
     if d > MAX_DEPTH:
         continue
     if kind == 'git':
-        hit(p, view(p, blob(p)), d)
+        hit(p, head(['git', '-C', wt], rev + ':' + p) if lf else blob(p), d, leaf=lf)
     elif kind == 'disk':
-        hit('worktree:' + p, view(p, disk(os.path.join(top, p))), d)
+        hit('worktree:' + p, disk(os.path.join(top, p), lf), d, leaf=lf)
     else:
-        hit(label + ':' + p, view(p, root_read(root, p)), d, root, label)
+        hit(label + ':' + p, root_read(root, p, lf), d, root, label, leaf=lf)
 done(iac_files=files[:CAP], iac_text=text[:CAP])
 `;
 // IAC_SCAN_PY_END

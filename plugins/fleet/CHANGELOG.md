@@ -129,6 +129,15 @@ StrictHostKeyChecking=yes`). The user's git config and credential helper stay, s
   `package.json` or `pyproject.toml` is read like a root one (scripts and task tables only).
   `language: docker` now scans the repo's `Dockerfile`. A pre-commit shim's `INSTALL_PYTHON`
   python path is not matched. The text of every surface is still matched in full, comments too.
+  **Delta review (restores every 3.0.0 refusal):** a file a hook's command text puts in an
+  execution context (given to `bash`/`sh`/`node`/`python`/`ruby`/`perl`/`exec`/`xargs`/`env`/`cat`,
+  sourced with `source` or `.`, read through `<`, or named by `-f`; never across a line, so a
+  shebang names nothing) is matched at any depth, docs, data, tests and Dockerfiles included. Such
+  leaf files, and a followed `pyproject.toml` or `package.json` (read raw), are matched but never
+  followed out of. A leaf over 1 MiB is matched on its first 1 MiB instead of refused; an
+  executable over 1 MiB is still refused. `INSTALL_PYTHON` is stripped only when its directory is
+  the `bin` of a venv whose site-packages holds `pre_commit`. `tofu` needs no letter before it
+  (`IntoFuture` no longer matches; `tofu_fmt` and `opentofu` still do).
 - **Resource caps on every embedded program** (security review). Every embedded Python program
   (and both YAML loaders) sets `RLIMIT_AS` (1 GiB; the loaders too) and `RLIMIT_CPU` (300 s; the
   loaders 60 s) before it does anything, and tunes git's children to stay inside them
