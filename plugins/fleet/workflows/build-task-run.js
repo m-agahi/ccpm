@@ -3551,15 +3551,24 @@ function precommitIdsPrompt(inputs) {
 // - iac_text: where IAC_RE matches the text of .pre-commit-config.yaml, every
 //   file in the hooks dir ("hooks:<name>"), .husky/**, lefthook*.y*ml,
 //   .lefthook*, .githooks/**, Makefile, package.json scripts, the script and
-//   task tables of pyproject.toml, or any tracked file one of these names (a
-//   hook entry or arg, a hook-manager command, a shim's --config=<path>),
-//   followed up to MAX_DEPTH levels deep.
+//   task tables of pyproject.toml, or any file one of these names (a hook
+//   entry or arg, a hook-manager command, a shim's --config=<path>), followed
+//   up to MAX_DEPTH levels deep; and the hook manifest of every remote hook
+//   repo of the root config (3.1.0).
+// 3.1.0 (ledger 1960) follows only names that can run: never prose, docs or
+// data (*.md, *.txt, CHANGELOG, *.json other than package.json and hook
+// configs, ...), never a name on a files/exclude/name/description/id line of
+// a YAML file or in a YAML comment, and test paths and Dockerfiles only when a
+// hook surface names them directly (depth 1). A followed package.json or
+// pyproject.toml is read like a root one. A pre-commit shim's INSTALL_PYTHON
+// (a python interpreter path) is not matched.
 // The script refuses on any hit, an error, or a missing list. Prints
 // {iac_files, iac_text, error?}.
 // IAC_SCAN_PY_BEGIN
 const IAC_SCAN_PY = String.raw`
-import fnmatch, hashlib, json, os, re, sqlite3, subprocess, sys
+import atexit, fnmatch, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, tempfile
 wt, rev = sys.argv[1], sys.argv[2]
+os.chdir('/')
 PAT = re.compile('terra' + 'form|to' + 'fu|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|atlan' + 'tis|dig' + 'ger', re.I)
 DIRS = {'.terra' + 'form', 'terra' + 'form'}
 T = '.to' + 'fu'
@@ -3568,6 +3577,18 @@ TOKEN = re.compile(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*')
 CAP = 50
 MAX_DEPTH = 4
 MAX_REFS = 2000
+FETCH_TIMEOUT = 120
+# 3.1.0 (ledger 1960): what is followed
+INERT_EXT = ('.md', '.markdown', '.rst', '.txt', '.adoc', '.jsonl', '.ndjson', '.csv', '.tsv', '.lock', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.html', '.htm')
+INERT_BASE = re.compile(r'^(changelog|changes|history|news|license|licence|notice|authors|readme)$', re.I)
+JSON_RUNS = re.compile(r'^(package\.json|\.lintstagedrc.*|lefthook.*|.*hook.*\.json)$', re.I)
+TEST_DIRS = {'tests', 'test', 'testdata', 'test_data', 'fixtures', '__tests__', '__fixtures__', 'golden', 'snapshots', '__snapshots__', 'spec'}
+TEST_BASE = re.compile(r'^(test_.*\.py|.*_test\.[A-Za-z0-9]+|.*\.(test|spec)\.[A-Za-z0-9]+|conftest\.py)$')
+DOCKER_BASE = re.compile(r'^((Dockerfile|Containerfile)(\..*)?|.*\.(dockerfile|containerfile))$', re.I)
+YAML_SKIP = re.compile(r'^\s*(-\s*)?(files|exclude|name|description|id|alias|types|types_or|exclude_types)\s*:', re.I)
+DOCKER_LANG = re.compile(r'\blanguage\s*:\s*[\'"]?docker[\'"]?\s*(,|}|$)', re.M)
+URL_OK = re.compile(r'^(https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~-]+)+/?|git@[A-Za-z0-9.-]+:[A-Za-z0-9._~-]+(/[A-Za-z0-9._~-]+)*)$')
+REV_OK = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9._/-]*$')
 def done(iac_files, iac_text, error=None):
     out = {'iac_files': iac_files, 'iac_text': iac_text, 'error': error}
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
@@ -3582,22 +3603,86 @@ paths = [x.decode('utf-8', 'replace') for x in ls.stdout.split(b'\x00') if x]
 tracked = set(paths)
 top = git('rev-parse', '--show-toplevel').stdout.decode('utf-8', 'replace').strip() or wt
 files, text = [], []
-# repo files named in scanned text (hook entries and args, hook-manager
-# commands, a shim's --config=<path>, task-runner scripts): scanned too. A
-# tracked name is read at <rev>; an untracked (or ignored) file in the
-# worktree is read from disk ("worktree:<path>"); inside a remote hook repo's
-# clone (root), a file of that clone ("<label>:<path>").
+def fail(why):
+    done(iac_files=files[:CAP], iac_text=text[:CAP], error=why)
+def base(p):
+    return p.rsplit('/', 1)[-1]
+def inert(p):
+    b = base(p)
+    if b.lower().endswith(INERT_EXT) or INERT_BASE.match(b):
+        return True
+    return b.lower().endswith('.json') and not JSON_RUNS.match(b)
+def testpath(p):
+    segs = p.split('/')
+    return any(s.lower() in TEST_DIRS for s in segs[:-1]) or bool(TEST_BASE.match(segs[-1]))
+def follows(p, depth):
+    if inert(p):
+        return False
+    if depth >= 2 and (testpath(p) or DOCKER_BASE.match(base(p))):
+        return False
+    return True
+def tok_text(name, s):
+    # the text names are taken from: a YAML file without its comments and
+    # its file filters, names and descriptions
+    if not base(name).lower().endswith(('.yaml', '.yml')):
+        return s
+    return '\n'.join(re.sub(r'(^|\s)#.*$', '', x) for x in s.splitlines() if not YAML_SKIP.match(x))
+def tables(obj):
+    # every value under a key that names scripts or tasks, at any depth
+    out = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).lower() in ('scripts', 'gui-scripts', 'tasks', 'script'):
+                out.append(v)
+            else:
+                out.extend(tables(v))
+    return out
+def view(p, raw):
+    # package.json: its scripts; pyproject.toml: its script and task tables
+    b = base(p)
+    if b == 'package.json':
+        try:
+            return json.dumps(json.loads(raw).get('scripts'))
+        except Exception:
+            return raw
+    if b == 'pyproject.toml':
+        try:
+            import tomllib
+            return json.dumps(tables(tomllib.loads(raw.decode('utf-8'))), default=str)
+        except Exception:
+            return raw
+    return raw
+# files named in scanned text (hook entries and args, hook-manager commands, a
+# shim's --config=<path>, task-runner scripts): scanned too. A tracked name is
+# read at <rev>; an untracked (or ignored) file in the worktree is read from
+# disk ("worktree:<path>"); inside a remote hook repo (root: its cached clone
+# dir, or a fetched scratch repo), a file of that repo ("<label>:<path>").
 seen, queue = set(), []
+def root_has(root, p):
+    if isinstance(root, str):
+        return os.path.isfile(os.path.join(root, p))
+    r = subprocess.run(['git', '-C', root[1], 'cat-file', '-t', 'FETCH_HEAD:' + p], capture_output=True)
+    return r.returncode == 0 and r.stdout.strip() == b'blob'
+def root_read(root, p):
+    if isinstance(root, str):
+        return disk(os.path.join(root, p))
+    r = subprocess.run(['git', '-C', root[1], 'show', 'FETCH_HEAD:' + p], capture_output=True)
+    if r.returncode != 0:
+        fail('cannot read ' + p + ' of a fetched hook repo: ' + r.stderr.decode('utf-8', 'replace').strip())
+    return r.stdout
 def hit(name, data, depth=0, root=None, label=None):
     s = data if isinstance(data, str) else data.decode('utf-8', 'replace')
     if PAT.search(s) and name not in text:
         text.append(name)
-    for tok in TOKEN.findall(s):
+    toks = TOKEN.findall(tok_text(name, s))
+    if base(name).endswith('.yaml') and DOCKER_LANG.search(s):
+        toks.append('Dockerfile')
+    for tok in toks:
         p = os.path.normpath(tok)
-        if p == '..' or p.startswith('../'):
+        if p == '..' or p.startswith('../') or not follows(p, depth + 1):
             continue
         if root is not None:
-            if (label, p) not in seen and os.path.isfile(os.path.join(root, p)):
+            if (label, p) not in seen and root_has(root, p):
                 seen.add((label, p))
                 queue.append(('clone', p, depth + 1, root, label))
         elif p in tracked:
@@ -3612,59 +3697,77 @@ def disk(fp):
         with open(fp, 'rb') as fh:
             return fh.read()
     except OSError as e:
-        done(iac_files=files[:CAP], iac_text=text[:CAP], error='cannot read ' + fp + ': ' + str(e))
+        fail('cannot read ' + fp + ': ' + str(e))
 def blob(p):
     b = git('cat-file', 'blob', rev + ':' + p)
     if b.returncode != 0:
         done(iac_files=files, iac_text=text, error='cannot read ' + p)
     return b.stdout
-def tables(obj):
-    # every value under a key that names scripts or tasks, at any depth
-    out = []
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if str(k).lower() in ('scripts', 'gui-scripts', 'tasks', 'script'):
-                out.append(v)
-            else:
-                out.extend(tables(v))
-    return out
 for p in paths:
     segs = p.split('/')
-    base = segs[-1]
-    if base.lower().endswith(EXTS) or any(s in DIRS for s in segs[:-1]):
+    b = segs[-1]
+    if b.lower().endswith(EXTS) or any(s in DIRS for s in segs[:-1]):
         files.append(p)
-    if base == '.pre-commit-config.yaml' or base in ('Makefile', 'makefile', 'GNUmakefile') \
+    if b == '.pre-commit-config.yaml' or b in ('Makefile', 'makefile', 'GNUmakefile') \
             or segs[0] in ('.husky', '.githooks') or segs[0].startswith('.lefthook') \
-            or fnmatch.fnmatch(base, 'lefthook*.y*ml'):
+            or fnmatch.fnmatch(b, 'lefthook*.y*ml'):
         seen.add(p)
         hit(p, blob(p))
-    elif base == 'package.json' and 'node_modules' not in segs:
+    elif (b == 'package.json' and 'node_modules' not in segs) or b == 'pyproject.toml':
         seen.add(p)
-        raw = blob(p)
-        try:
-            hit(p, json.dumps(json.loads(raw).get('scripts')))
-        except Exception:
-            hit(p, raw)
-    elif base == 'pyproject.toml':
-        seen.add(p)
-        raw = blob(p)
-        try:
-            import tomllib
-            hit(p, json.dumps(tables(tomllib.loads(raw.decode('utf-8'))), default=str))
-        except Exception:
-            hit(p, raw)
+        hit(p, view(p, blob(p)))
+# a remote hook repo the scan cannot find in the cache: a shallow fetch of its
+# pinned rev into a scratch repo outside the worktree, hooks off, https and
+# ssh only (3.1.0 review). Any failure refuses. The scratch repo is removed.
+def fetch(url, rv):
+    if not URL_OK.match(url):
+        fail('remote hook repo ' + url + ': transport not allowed (only https:// and git@<host>:<path>); its hook manifest cannot be scanned')
+    if rv is None or not REV_OK.match(rv) or '..' in rv:
+        fail('remote hook repo ' + url + ' is not in the pre-commit cache and it has no usable rev (' + json.dumps(rv) + '); its hook manifest cannot be scanned')
+    tmp = tempfile.mkdtemp(prefix='fleet-iac-fetch-')
+    atexit.register(shutil.rmtree, tmp, True)
+    g = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.ssh.allow=always']
+    over = os.environ.get('FLEET_IAC_TEST_INSTEADOF')
+    if over:
+        # tests only: serve the URL from a local bare repo
+        for pre, rep in json.loads(over).items():
+            g += ['-c', 'url.' + rep + '.insteadOf=' + pre]
+        g += ['-c', 'protocol.file.allow=always']
+    env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GIT_CONFIG_NOSYSTEM='1')
+    env.setdefault('GIT_SSH_COMMAND', 'ssh -o BatchMode=yes')
+    why = None
+    try:
+        r = subprocess.run(g + ['init', '-q', '--template=', tmp], capture_output=True, env=env, timeout=FETCH_TIMEOUT)
+        if r.returncode == 0:
+            r = subprocess.run(g + ['-C', tmp, 'fetch', '-q', '--depth', '1', '--no-tags', url, rv], capture_output=True, env=env, timeout=FETCH_TIMEOUT)
+        if r.returncode != 0:
+            why = r.stderr.decode('utf-8', 'replace').strip()[-300:] or 'exit ' + str(r.returncode)
+    except subprocess.TimeoutExpired:
+        why = 'timed out after ' + str(FETCH_TIMEOUT) + 's'
+    if why is not None:
+        fail('remote hook repo ' + url + '@' + rv + ' is not in the pre-commit cache and the shallow fetch failed: ' + why)
+    root = ('fetch', tmp)
+    if not root_has(root, '.pre-commit-hooks.yaml'):
+        fail('remote hook repo ' + url + '@' + rv + ': no .pre-commit-hooks.yaml at the fetched rev')
+    return root
 # remote hook repos of the root .pre-commit-config.yaml (3.1.0): their hook
-# manifest (.pre-commit-hooks.yaml) and the clone files it names, read from
-# the clone pre-commit keeps in its cache. The repo and rev values are read
-# from the text (comments dropped), so an alias or a block scalar names no URL
-# and is not found. A remote repo with no cached clone at a configured rev
-# cannot be scanned: an error, so the run stops.
+# manifest (.pre-commit-hooks.yaml) and the repo files it names, read from the
+# clone pre-commit keeps in its cache, else fetched. The repo and rev values
+# are read from the text in order (comments dropped): each rev belongs to the
+# repo before it; a rev with no repo before it, or a second rev, cannot be
+# paired and refuses. An alias or a block scalar names no URL and refuses.
 if '.pre-commit-config.yaml' in tracked:
     cfg = '\n'.join(re.sub(r'(^|\s)#.*$', '', x) for x in blob('.pre-commit-config.yaml').decode('utf-8', 'replace').splitlines())
     val = lambda v: v.strip().strip('\'"')
-    remote = [val(v) for v in re.findall(r'\brepo\s*:\s*([^\s,}\]]+)', cfg)]
-    remote = [r for r in remote if r not in ('local', 'meta')]
-    revs = set(val(v) for v in re.findall(r'\brev\s*:\s*([^\s,}\]]+)', cfg))
+    pairs = []
+    for m in re.finditer(r'\b(repo|rev)\s*:\s*([^\s,}\]]+)', cfg):
+        if m.group(1) == 'repo':
+            pairs.append([val(m.group(2)), None])
+        elif pairs and pairs[-1][1] is None:
+            pairs[-1][1] = val(m.group(2))
+        else:
+            fail('.pre-commit-config.yaml: cannot pair rev ' + val(m.group(2)) + ' with a repo; its hook manifest cannot be scanned')
+    remote = [(u, rv) for (u, rv) in pairs if u not in ('local', 'meta')]
     if remote:
         pc_home = os.environ.get('PRE_COMMIT_HOME') or os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache'), 'pre-commit')
         db = os.path.join(pc_home, 'db.db')
@@ -3675,49 +3778,53 @@ if '.pre-commit-config.yaml' in tracked:
                 rows = con.execute('SELECT repo, ref, path FROM repos').fetchall()
                 con.close()
             except sqlite3.Error as e:
-                done(iac_files=files[:CAP], iac_text=text[:CAP], error='pre-commit cache ' + db + ': ' + str(e))
-        for url in remote:
-            got = [(r, ref, path) for (r, ref, path) in rows if (r == url or r.startswith(url + ':')) and ref in revs]
-            if not got or not all(os.path.isdir(path) for (_, _, path) in got):
-                done(iac_files=files[:CAP], iac_text=text[:CAP], error='remote hook repo ' + url + ' is not in the pre-commit cache ' + pc_home +
-                     ' at a configured rev (' + ', '.join(sorted(revs)) + '): its hook manifest cannot be scanned; run pre-commit install-hooks in the repo (it runs no hook), then plan again')
-            for (r, ref, path) in got:
-                label = 'remote:' + r + '@' + ref
+                fail('pre-commit cache ' + db + ': ' + str(e))
+        for (url, rv) in remote:
+            got = [(r, ref, path) for (r, ref, path) in rows if (r == url or r.startswith(url + ':')) and ref == rv and os.path.isdir(path)]
+            roots = [('remote:' + r + '@' + ref, path) for (r, ref, path) in got] or [('remote:' + url + '@' + str(rv), fetch(url, rv))]
+            for (label, root) in roots:
                 seen.add((label, '.pre-commit-hooks.yaml'))
-                hit(label + ':.pre-commit-hooks.yaml', disk(os.path.join(path, '.pre-commit-hooks.yaml')), 0, path, label)
+                hit(label + ':.pre-commit-hooks.yaml', root_read(root, '.pre-commit-hooks.yaml'), 0, root, label)
 hp = git('config', 'core.hooksPath').stdout.decode('utf-8', 'replace').strip()
 if hp:
     hd = os.path.expanduser(hp)
     if not os.path.isabs(hd):
-        hd = os.path.join(git('rev-parse', '--show-toplevel').stdout.decode().strip() or wt, hd)
+        hd = os.path.join(top, hd)
 else:
     g = git('rev-parse', '--path-format=absolute', '--git-path', 'hooks')
     if g.returncode != 0:
-        done(iac_files=files[:CAP], iac_text=text[:CAP], error='hooks dir: ' + g.stderr.decode('utf-8', 'replace').strip())
+        fail('hooks dir: ' + g.stderr.decode('utf-8', 'replace').strip())
     hd = g.stdout.decode().strip()
+def shim(data):
+    # a pre-commit shim's INSTALL_PYTHON names the interpreter that runs
+    # pre-commit; a python path there is not a command, whatever its dirs
+    s = data.decode('utf-8', 'replace')
+    if '# File generated by pre-commit' not in s:
+        return s
+    return re.sub(r'(?m)^INSTALL_PYTHON=(\S+)$', lambda m: '' if re.match(r'python[0-9.]*$', os.path.basename(m.group(1))) else m.group(0), s)
 if os.path.isdir(hd):
     for root, ds, fs in os.walk(hd):
         for f in sorted(fs):
             fp = os.path.join(root, f)
             try:
                 with open(fp, 'rb') as fh:
-                    hit('hooks:' + os.path.relpath(fp, hd), fh.read())
+                    hit('hooks:' + os.path.relpath(fp, hd), shim(fh.read()))
             except OSError as e:
-                done(iac_files=files[:CAP], iac_text=text[:CAP], error='cannot read hook ' + fp + ': ' + str(e))
+                fail('cannot read hook ' + fp + ': ' + str(e))
 n = 0
 while queue:
     kind, p, d, root, label = queue.pop(0)
     n += 1
     if n > MAX_REFS:
-        done(iac_files=files[:CAP], iac_text=text[:CAP], error='more than ' + str(MAX_REFS) + ' referenced files')
+        fail('more than ' + str(MAX_REFS) + ' referenced files')
     if d > MAX_DEPTH:
         continue
     if kind == 'git':
-        hit(p, blob(p), d)
+        hit(p, view(p, blob(p)), d)
     elif kind == 'disk':
-        hit('worktree:' + p, disk(os.path.join(top, p)), d)
+        hit('worktree:' + p, view(p, disk(os.path.join(top, p))), d)
     else:
-        hit(label + ':' + p, disk(os.path.join(root, p)), d, root, label)
+        hit(label + ':' + p, view(p, root_read(root, p)), d, root, label)
 done(iac_files=files[:CAP], iac_text=text[:CAP])
 `;
 // IAC_SCAN_PY_END

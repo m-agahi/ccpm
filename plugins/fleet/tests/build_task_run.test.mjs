@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -6026,7 +6026,9 @@ test("2.1.2 IaC scan program: files, hook dirs, hook managers, Makefile, package
   // 3.1.0: an empty pre-commit cache, so a remote hook repo is never found in the user's own
   const pcHome = mkdtempSync(join(tmpdir(), "fleet-iac-pchome-"));
   const scan = (wt, rev) => {
-    const r = spawnSync("python3", ["-I", "-", wt, rev], { input: body, encoding: "utf8", env: Object.assign({}, process.env, { PRE_COMMIT_HOME: pcHome }) });
+    // a remote hook repo is fetched from a URL the test maps to an empty dir: no network, and the fetch fails
+    const env = Object.assign({}, process.env, { PRE_COMMIT_HOME: pcHome, FLEET_IAC_TEST_INSTEADOF: JSON.stringify({ "https://github.com/": "file://" + pcHome + "/" }) });
+    const r = spawnSync("python3", ["-I", "-", wt, rev], { input: body, encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout);
   };
@@ -6094,7 +6096,7 @@ test("2.1.2 IaC scan program: files, hook dirs, hook managers, Makefile, package
     try {
       const got = scan(wt, "HEAD");
       // 3.1.0: a remote hook repo that is not in the pre-commit cache cannot be scanned (refused too)
-      if (/repo: https:/.test(files[".pre-commit-config.yaml"] || "")) assert.match(got.error, /not in the pre-commit cache/);
+      if (/repo: https:/.test(files[".pre-commit-config.yaml"] || "")) assert.match(got.error, /not in the pre-commit cache and (the shallow fetch failed|it has no usable rev)/);
       else assert.ok(!got.error, got.error);
       assert.deepEqual(got.iac_files, wantFiles, JSON.stringify(files));
       assert.deepEqual(got.iac_text, wantText, JSON.stringify(files));
@@ -9008,7 +9010,7 @@ test("3.0.0 review 8: every embedded program runs isolated (-I), the YAML loader
   // no program uses a third-party import (the YAML loader runs under pre-commit's interpreter)
   const progs = SOURCE.match(/const [A-Z_]+_PY = String\.raw`[\s\S]*?`;/g) || [];
   assert.ok(progs.length >= 10);
-  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3"]);
+  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit"]);
   for (const p of progs) {
     const name = /const ([A-Z_]+_PY)/.exec(p)[1];
     for (const m of p.matchAll(/^\s*import ([A-Za-z0-9_, .]+)$/gm))
@@ -9591,8 +9593,10 @@ function preCommitCache(home, rows) {
 test("3.1.0 1941b: the IaC scan reads remote hook manifests from the pre-commit cache, and untracked files hooks name", { skip: !HAVE_PY }, () => {
   const body = extractPy("IAC_SCAN_PY_BEGIN", "IAC_SCAN_PY_END", "IAC_SCAN_PY");
   assert.doesNotMatch(body, /terraform|tofu|tflint|terragrunt|\btfp\b|digger|atlantis/i, "the Bash guard blocks these words");
+  const empty = mkdtempSync(join(tmpdir(), "fleet-iac-nofetch-"));
   const scan = (wt, home) => {
-    const r = spawnSync("python3", ["-I", "-c", body, wt, "HEAD"], { encoding: "utf8", cwd: wt, env: Object.assign({}, process.env, { PRE_COMMIT_HOME: home }) });
+    const env = Object.assign({}, process.env, { PRE_COMMIT_HOME: home, FLEET_IAC_TEST_INSTEADOF: JSON.stringify({ "https://example.com/": "file://" + empty + "/" }) });
+    const r = spawnSync("python3", ["-I", "-c", body, wt, "HEAD"], { encoding: "utf8", cwd: wt, env });
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout);
   };
@@ -9606,14 +9610,14 @@ test("3.1.0 1941b: the IaC scan reads remote hook manifests from the pre-commit 
     [cfg(), [[U, "v1.2.0", Object.assign({}, clean, { "hooks/fmt.sh": "#!/bin/sh\nterragrunt hclfmt\n" })]], {}, ["remote:" + U + "@v1.2.0:hooks/fmt.sh"], null],
     // additional_dependencies: pre-commit keys the clone as <repo>:<deps>
     [cfg(), [[U + ":pyyaml", "v1.2.0", Object.assign({}, clean, { "hooks/fmt.sh": "digger plan\n" })]], {}, ["remote:" + U + ":pyyaml@v1.2.0:hooks/fmt.sh"], null],
-    // not cached, or cached at another rev: the manifest cannot be scanned
-    [cfg(), [], {}, [], /remote hook repo https:\/\/example\.com\/acme\/hooks is not in the pre-commit cache .* run pre-commit install-hooks in the repo/],
-    [cfg(), [[U, "v1.1.0", clean]], {}, [], /not in the pre-commit cache/],
+    // not cached, or cached at another rev: a shallow fetch (here of a URL the test maps to an empty dir) fails closed
+    [cfg(), [], {}, [], /remote hook repo https:\/\/example\.com\/acme\/hooks@v1\.2\.0 is not in the pre-commit cache and the shallow fetch failed/],
+    [cfg(), [[U, "v1.1.0", clean]], {}, [], /the shallow fetch failed/],
     // flow style is read too; a commented-out repo is not
     ["repos:\n- {repo: '" + U + "', rev: \"v1.2.0\", hooks: [{id: fmt}]}\n", [[U, "v1.2.0", { ".pre-commit-hooks.yaml": "- id: fmt\n  entry: infracost diff\n" }]], {}, ["remote:" + U + "@v1.2.0:.pre-commit-hooks.yaml"], null],
     ["repos:\n# - repo: " + U + "\n#   rev: v9\n- repo: local\n  hooks:\n  - id: a\n    entry: true\n    language: system\n", [], {}, [], null],
     // an alias or a block scalar for repo: no plain URL to look up -> not in the cache
-    ["x: &u " + U + "\nrepos:\n- repo: *u\n  rev: v1.2.0\n", [[U, "v1.2.0", clean]], {}, [], /\*u is not in the pre-commit cache/],
+    ["x: &u " + U + "\nrepos:\n- repo: *u\n  rev: v1.2.0\n", [[U, "v1.2.0", clean]], {}, [], /remote hook repo \*u: transport not allowed/],
     // local and meta repos need no cache
     ["repos:\n- repo: meta\n  hooks:\n  - id: check-useless-excludes\n- repo: local\n  hooks:\n  - id: a\n    entry: true\n    language: system\n", [], {}, [], null],
     // an untracked (ignored) script a local hook names is read from the worktree
@@ -9657,5 +9661,171 @@ test("3.1.0 1941b: the IaC scan reads remote hook manifests from the pre-commit 
       rmSync(wt, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
     }
+  }
+  rmSync(empty, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------- 3.1.0 review: a cache miss is fetched shallowly at the pinned rev
+
+function iacScan(wt, env) {
+  const body = extractPy("IAC_SCAN_PY_BEGIN", "IAC_SCAN_PY_END", "IAC_SCAN_PY");
+  const r = spawnSync("python3", ["-I", "-c", body, wt, "HEAD"], { encoding: "utf8", cwd: wt, env: Object.assign({}, process.env, env) });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+}
+
+function repoWith(prefix, files) {
+  const wt = scratchRepo(prefix);
+  for (const [p, c] of Object.entries(files)) {
+    spawnSync("mkdir", ["-p", dirname(join(wt, p))]);
+    writeFileSync(join(wt, p), c);
+  }
+  sh(wt, "git", "add", "-A");
+  sh(wt, "git", "commit", "-qm", "i");
+  return wt;
+}
+
+test("3.1.0 review: a remote hook repo missing from the cache is fetched at its rev; failures and other transports refuse", { skip: !HAVE_PY }, () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-iac-fetch-"));
+  try {
+    // the "server": bare repos under <home>/srv/acme/, reached through a test-only URL rewrite
+    const srv = join(home, "srv", "acme");
+    spawnSync("mkdir", ["-p", srv]);
+    const publish = (name, files) => {
+      const src = repoWith("fleet-iac-hookrepo-", files);
+      sh(src, "git", "tag", "v1.2.0");
+      spawnSync("git", ["clone", "-q", "--bare", src, join(srv, name)]);
+      rmSync(src, { recursive: true, force: true });
+    };
+    publish("clean", { ".pre-commit-hooks.yaml": "- id: fmt\n  name: fmt\n  entry: hooks/fmt.sh\n  language: script\n", "hooks/fmt.sh": "#!/bin/sh\nprettier --write \"$@\"\n" });
+    publish("iacman", { ".pre-commit-hooks.yaml": "- id: fmt\n  name: fmt\n  entry: tflint --recursive\n  language: system\n" });
+    publish("iacfile", { ".pre-commit-hooks.yaml": "- id: fmt\n  name: fmt\n  entry: hooks/fmt.sh\n  language: script\n", "hooks/fmt.sh": "#!/bin/sh\nterragrunt hclfmt\n" });
+    publish("nomanifest", { "README.md": "x\n" });
+    const pc = join(home, "pc");
+    spawnSync("mkdir", ["-p", pc]);
+    const tmp = join(home, "tmp");
+    spawnSync("mkdir", ["-p", tmp]);
+    const env = { PRE_COMMIT_HOME: pc, TMPDIR: tmp, FLEET_IAC_TEST_INSTEADOF: JSON.stringify({ "https://example.com/acme/": "file://" + srv + "/" }) };
+    const cfg = (url, rev) => "repos:\n- repo: " + url + "\n" + (rev === null ? "" : "  rev: " + rev + "\n") + "  hooks:\n  - id: fmt\n";
+    const marker = join(home, "EXT_RAN");
+    const cases = [
+      // [repo, rev, iac_text, error]
+      ["https://example.com/acme/clean", "v1.2.0", [], null],
+      ["https://example.com/acme/iacman", "v1.2.0", ["remote:https://example.com/acme/iacman@v1.2.0:.pre-commit-hooks.yaml"], null],
+      ["https://example.com/acme/iacfile", "v1.2.0", ["remote:https://example.com/acme/iacfile@v1.2.0:hooks/fmt.sh"], null],
+      // the rev cannot be resolved, the repo is not there, the manifest is missing
+      ["https://example.com/acme/clean", "v9.9.9", [], /https:\/\/example\.com\/acme\/clean@v9\.9\.9 is not in the pre-commit cache and the shallow fetch failed/],
+      ["https://example.com/acme/absent", "v1.2.0", [], /the shallow fetch failed/],
+      ["https://example.com/acme/nomanifest", "v1.2.0", [], /no \.pre-commit-hooks\.yaml at the fetched rev/],
+      ["https://example.com/acme/clean", null, [], /it has no usable rev/],
+      ["https://example.com/acme/clean", "--upload-pack=touch", [], /it has no usable rev/],
+      // only https:// and git@host:path
+      ["file://" + srv + "/clean", "v1.2.0", [], /transport not allowed/],
+      [srv + "/clean", "v1.2.0", [], /transport not allowed/],
+      ["ext::sh -c touch% " + marker, "v1.2.0", [], /transport not allowed/],
+      ["ssh://example.com/acme/clean", "v1.2.0", [], /transport not allowed/],
+      ["http://example.com/acme/clean", "v1.2.0", [], /transport not allowed/],
+      ["git://example.com/acme/clean", "v1.2.0", [], /transport not allowed/],
+    ];
+    for (const [url, rev, wantText, wantErr] of cases) {
+      const wt = repoWith("fleet-iac-fetchcfg-", { ".pre-commit-config.yaml": cfg(url, rev) });
+      try {
+        const got = iacScan(wt, env);
+        if (wantErr) assert.match(String(got.error), wantErr, url + "@" + rev);
+        else assert.equal(got.error, null, url + "@" + rev + ": " + got.error);
+        assert.deepEqual(got.iac_text, wantText, url);
+        // the scratch clone is gone
+        assert.deepEqual(readdirSync(tmp), [], url + ": scratch dir left behind");
+      } finally {
+        rmSync(wt, { recursive: true, force: true });
+      }
+    }
+    assert.ok(!existsSync(marker), "ext:: never ran");
+    // the git@host:path form passes the transport check (its fetch then fails here: no such host)
+    const wt = repoWith("fleet-iac-fetchssh-", { ".pre-commit-config.yaml": cfg("git@nonexistent.invalid:acme/clean", "v1.2.0") });
+    try {
+      const got = iacScan(wt, Object.assign({}, env, { GIT_SSH_COMMAND: "false" }));
+      assert.match(String(got.error), /the shallow fetch failed/);
+    } finally {
+      rmSync(wt, { recursive: true, force: true });
+    }
+    // a repo and rev that cannot be paired (rev before repo) refuses
+    const wt2 = repoWith("fleet-iac-pair-", { ".pre-commit-config.yaml": "repos:\n- {rev: v1.2.0, repo: https://example.com/acme/clean, hooks: [{id: fmt}]}\n" });
+    try {
+      assert.match(String(iacScan(wt2, env).error), /cannot pair/);
+    } finally {
+      rmSync(wt2, { recursive: true, force: true });
+    }
+    // a cache hit is read from the cache and fetches nothing
+    preCommitCache(pc, [["https://example.com/acme/absent", "v1.2.0", { ".pre-commit-hooks.yaml": "- id: fmt\n  entry: true\n" }]]);
+    const wt3 = repoWith("fleet-iac-hit-", { ".pre-commit-config.yaml": cfg("https://example.com/acme/absent", "v1.2.0") });
+    try {
+      assert.equal(iacScan(wt3, env).error, null);
+    } finally {
+      rmSync(wt3, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- 3.1.0 (ledger 1960): the IaC scan follows only names that can run
+
+test("3.1.0 1960: docs, manifests, test data, file filters and comments are not followed; scripts and hook Dockerfiles are", { skip: !HAVE_PY }, () => {
+  const TF = "RUN terraform init\n";
+  const pc = mkdtempSync(join(tmpdir(), "fleet-iac-1960-"));
+  const local = (lines) => "repos:\n- repo: local\n  hooks:\n" + lines;
+  const cases = [
+    // [files, iac_text] -- the ccpm shape: a files: filter names a Dockerfile, a CHANGELOG and a manifest
+    [{ ".pre-commit-config.yaml": local("  - id: v\n    name: check docker/Dockerfile version\n    entry: python3 ci/v.py\n    language: system\n    files: ^(docker/Dockerfile|CHANGELOG\\.md|plugin\\.json)$\n"), "ci/v.py": "open('docker/Dockerfile'); open('README.md'); open('plugin.json'); open('CHANGELOG.md')\n", "docker/Dockerfile": TF, "README.md": "uses terraform\n", "CHANGELOG.md": "tflint\n", "plugin.json": '{"d": "terraform"}\n' }, []],
+    // a hook entry that builds a Dockerfile: still refused
+    [{ ".pre-commit-config.yaml": local("  - id: b\n    name: b\n    entry: docker build -f docker/Dockerfile .\n    language: system\n"), "docker/Dockerfile": TF }, ["docker/Dockerfile"]],
+    // language: docker builds the repo's Dockerfile
+    [{ ".pre-commit-config.yaml": local("  - id: d\n    name: d\n    entry: lint\n    language: docker\n"), Dockerfile: "RUN apk add tflint\n" }, ["Dockerfile"]],
+    // a script a hook runs, and a script that script runs: still refused
+    [{ ".pre-commit-config.yaml": local("  - id: s\n    name: s\n    entry: scripts/a.sh\n    language: script\n"), "scripts/a.sh": "#!/bin/sh\nexec scripts/b.sh\n", "scripts/b.sh": "tofu validate\n" }, ["scripts/b.sh"]],
+    // a test path a hook names directly runs: refused; test data a script mentions: not followed
+    [{ ".pre-commit-config.yaml": local("  - id: t\n    name: t\n    entry: tests/run.sh\n    language: script\n"), "tests/run.sh": "#!/bin/sh\nterragrunt plan\n" }, ["tests/run.sh"]],
+    [{ ".pre-commit-config.yaml": local("  - id: w\n    name: w\n    entry: python3 scripts/w.py\n    language: system\n"), "scripts/w.py": "ALLOW = ['tests/test_x.py', 'tests/fixtures/plan.yaml', 'benchmarks/golden/set.jsonl']\n", "tests/test_x.py": "assert 'terraform' in s\n", "tests/fixtures/plan.yaml": "cmd: terraform plan\n", "benchmarks/golden/set.jsonl": '{"q": "tofu"}\n' }, []],
+    // a pyproject.toml the config names is read like the root one: script and task tables only
+    [{ ".pre-commit-config.yaml": local("  - id: p\n    name: p\n    entry: python3 -m x --config pyproject.toml\n    language: system\n"), "pyproject.toml": '[tool.ruff.lint.per-file-ignores]\n"src/t.py" = ["E1"]\n', "src/t.py": "x = 'terraform'\n" }, []],
+    [{ "Makefile": "lint:\n\tcat sub/pyproject.toml\n", "sub/pyproject.toml": '[tool.poe.tasks]\nplan = "terragrunt plan"\n' }, ["sub/pyproject.toml"]],
+    // a comment in the config names nothing
+    [{ ".pre-commit-config.yaml": local("  # see ci/old.sh\n  - id: c\n    name: c\n    entry: true\n    language: system\n"), "ci/old.sh": "terraform apply\n" }, []],
+    // the config's own text still counts, comments included (fail-closed)
+    [{ ".pre-commit-config.yaml": local("  # runs terraform fmt\n  - id: c\n    name: c\n    entry: true\n    language: system\n") }, [".pre-commit-config.yaml"]],
+    // a workflow file a hook names is followed, and a JSON hook config too
+    [{ ".pre-commit-config.yaml": local("  - id: g\n    name: g\n    entry: act -W .github/workflows/plan.yml\n    language: system\n"), ".github/workflows/plan.yml": "jobs:\n  p:\n    steps:\n    - run: terraform plan\n" }, [".github/workflows/plan.yml"]],
+    [{ ".husky/pre-commit": "npx lint-staged -c .lintstagedrc.json\n", ".lintstagedrc.json": '{"*.tf": "terraform fmt"}\n' }, [".lintstagedrc.json"]],
+  ];
+  try {
+    for (const [files, want] of cases) {
+      const wt = repoWith("fleet-iac-1960-", files);
+      try {
+        const got = iacScan(wt, { PRE_COMMIT_HOME: pc });
+        assert.equal(got.error, null, JSON.stringify(files) + " " + got.error);
+        assert.deepEqual(got.iac_text, want, JSON.stringify(files));
+      } finally {
+        rmSync(wt, { recursive: true, force: true });
+      }
+    }
+    // a pre-commit hook shim's INSTALL_PYTHON is an interpreter path, not a command
+    const wt = repoWith("fleet-iac-shim-", { "a.py": "x\n" });
+    try {
+      const shim = (py, tail) => "#!/usr/bin/env bash\n# File generated by pre-commit: https://pre-commit.com\nINSTALL_PYTHON=" + py + "\nARGS=(hook-impl --config=.pre-commit-config.yaml --hook-type=pre-push)\n" + (tail || "");
+      writeFileSync(join(wt, ".git", "hooks", "pre-push"), shim("/home/u/.local/pipx/venvs/tfp/bin/python"));
+      assert.deepEqual(iacScan(wt, { PRE_COMMIT_HOME: pc }).iac_text, []);
+      writeFileSync(join(wt, ".git", "hooks", "pre-push"), shim("/home/u/.local/pipx/venvs/tfp/bin/tfp"));
+      assert.deepEqual(iacScan(wt, { PRE_COMMIT_HOME: pc }).iac_text, ["hooks:pre-push"]);
+      writeFileSync(join(wt, ".git", "hooks", "pre-push"), shim("/usr/bin/python3", "exec tfp plan\n"));
+      assert.deepEqual(iacScan(wt, { PRE_COMMIT_HOME: pc }).iac_text, ["hooks:pre-push"]);
+      // a hook that is not a pre-commit shim gets no exemption
+      writeFileSync(join(wt, ".git", "hooks", "pre-push"), "#!/bin/sh\nINSTALL_PYTHON=/x/venvs/tfp/bin/python\n");
+      assert.deepEqual(iacScan(wt, { PRE_COMMIT_HOME: pc }).iac_text, ["hooks:pre-push"]);
+    } finally {
+      rmSync(wt, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(pc, { recursive: true, force: true });
   }
 });

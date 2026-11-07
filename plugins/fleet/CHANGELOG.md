@@ -13,8 +13,9 @@ order"). The contract marker stays `fleet-v3`.
 
 ### New stops (fail-closed additions; no key renamed or removed)
 
-- A remote hook repo with no cached pre-commit clone at a configured rev stops plan and build
-  (`stop_gate: iac`) until `pre-commit install-hooks` has run in the repo.
+- A remote hook repo with no cached pre-commit clone at its rev is fetched shallowly at that rev;
+  a fetch that fails or times out, a rev that does not resolve, a missing manifest, or a transport
+  other than `https://` and `git@<host>:<path>` stops plan and build (`stop_gate: iac`).
 - A code-judge `approve` with an allowlisted `check_cmd` that exited non-zero, or that has no
   `check_exit` and no `gates_not_run` entry `check_cmd:<id>`, becomes a `fix_code` round.
 - A verify, commit-plan or `hook_rejected` push relay that does not match its program's digest
@@ -63,13 +64,25 @@ order"). The contract marker stays `fleet-v3`.
 - **IaC scan: remote hook manifests and untracked hook scripts** (ledger 1941b). For every remote
   hook repo of the root `.pre-commit-config.yaml`, the scan reads `.pre-commit-hooks.yaml` and the
   clone files it names from the pre-commit cache (`db.db` maps repo and rev to the clone; a key
-  with `additional_dependencies` counts too). A remote repo with no cached clone at a configured
-  rev is an error, so the run stops (fail-closed); the error says to run `pre-commit install-hooks`
-  in the repo, then plan again. Only the root config's remote repos are read.
+  with `additional_dependencies` counts too). A remote repo with no cached clone at its rev is
+  fetched: `git init` of a scratch repo outside the worktree (hooks off), a shallow
+  `git fetch --depth 1` of the url and rev (https and ssh only, no prompt, 120 s timeout), then
+  `git show` of the manifest at `FETCH_HEAD`; the scratch repo is removed. Any failure refuses. Each rev
+  belongs to the repo before it; a rev that cannot be paired refuses. Only the root config's
+  remote repos are read.
   The scan also reads an untracked or ignored worktree file that a scanned hook text names
   (`worktree:<path>`), and follows it like a tracked one. Not closed, and documented: code inside
   an installed hook package named by a command, and test code (the scan does not read tests: many
   repos name the tools in test data, so it would refuse them).
+- **IaC scan follows only names that can run** (ledger 1960). At 3.0.0 the scan refused ccpm and
+  yadgar themselves: it followed names into README, CHANGELOG, plugin manifests, a Dockerfile named
+  only in a `files:` filter, and test data. Now it never follows prose, docs or data (`*.md`,
+  `*.txt`, `*.jsonl`, CHANGELOG, LICENSE, `*.json` other than `package.json` and hook configs), a
+  name on a `files`/`exclude`/`name`/`description`/`id` line of a YAML file or in a YAML comment,
+  and follows test paths and Dockerfiles only when a hook surface names them directly. A followed
+  `package.json` or `pyproject.toml` is read like a root one (scripts and task tables only).
+  `language: docker` now scans the repo's `Dockerfile`. A pre-commit shim's `INSTALL_PYTHON`
+  python path is not matched. The text of every surface is still matched in full, comments too.
 - **Writers and the test judge get the plan's env** (ledger 1935a): already true in 3.0.0 (they get
   the whole `test_cmd`, `env` included, plus `test_env`); a regression test now pins it.
 
