@@ -15,7 +15,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawnSync as rawSpawnSync } from "node:child_process";
+
+// 3.1.0: every python3 program a test runs is bounded in time and output, on
+// top of the program's own rlimits (a red run of an adversarial-input test
+// must fail fast, never grow).
+const PY_SPAWN_LIMITS = { timeout: 300000, maxBuffer: 16 << 20, killSignal: "SIGKILL" };
+function spawnSync(cmd, args, opts) {
+  return rawSpawnSync(cmd, args, cmd === "python3" ? Object.assign({}, PY_SPAWN_LIMITS, opts) : opts);
+}
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8892,7 +8900,9 @@ test("3.0.0 review 5 LOW: fleet:judge cannot call the yaadgaar write tools", () 
 
 const HAVE_YAML = spawnSync("python3", ["-I", "-c", "import yaml"]).status === 0;
 const FOLDED_CFG =
-  "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        entry: >-\n          ci/chk.sh\n        language: script\n      - id: lit\n        name: lit\n        entry: python3\n        args: |\n          tools/gen.py\n        language: system\n";
+  "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        entry: >-\n          ci/chk.sh\n        language: script\n      - id: lit\n        name: lit\n        entry: python3\n        args:\n          - |\n            tools/gen.py\n        language: system\n";
+// (3.1.0: args must be a list of strings, as pre-commit's own schema says; a
+// literal block is one item of that list)
 
 test("3.0.0 review 6: a folded entry or literal args naming an edited hook file is refused (PyYAML parses the config)", { skip: !HAVE_PY || !HAVE_YAML }, () => {
   const r = fixerRepo("fleet-r6-yaml-", FOLDED_CFG, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "tools/gen.py": "print(1)\n", "a.py": "x=1\n" });
@@ -9030,7 +9040,7 @@ test("3.0.0 review 8: every embedded program runs isolated (-I), the YAML loader
   // no program uses a third-party import (the YAML loader runs under pre-commit's interpreter)
   const progs = SOURCE.match(/const [A-Z_]+_PY = String\.raw`[\s\S]*?`;/g) || [];
   assert.ok(progs.length >= 10);
-  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time"]);
+  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "resource"]);
   for (const p of progs) {
     const name = /const ([A-Z_]+_PY)/.exec(p)[1];
     for (const m of p.matchAll(/^\s*import ([A-Za-z0-9_, .]+)$/gm))
@@ -10025,4 +10035,129 @@ test("3.1.0 review: the verify and commit-plan relays must echo the arguments th
   const o = await runOne(t, ARGS);
   assert.equal(o.result.status, "failed");
   assert.match(o.result.reason, /infra:commit-plan: the program ran on other arguments/);
+});
+
+// ---------------------------------------------------------------- 3.1.0 security review: the YAML loaders resist alias amplification
+
+// 9 levels of 10 aliases: 10^9 strings once expanded
+const LAUGHS = 'l0: &l0 ["lol","lol","lol","lol","lol","lol","lol","lol","lol","lol"]\n' +
+  Array.from({ length: 8 }, (_, i) => "l" + (i + 1) + ": &l" + (i + 1) + " [" + Array(10).fill("*l" + i).join(",") + "]\n").join("");
+// one 200 KB string, aliased 40 times: the input is small, the values are 8 MB
+const BIG = 's: &s "' + "A".repeat(200 * 1024) + '"\n';
+
+test("3.1.0 security review: the IaC loader refuses a billion laughs, a repo or rev that is not a string, and oversized input or output", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const pc = mkdtempSync(join(tmpdir(), "fleet-iac-laughs-"));
+  try {
+    const cases = [
+      [LAUGHS + "repos:\n- repo: *l8\n  rev: v1\n  hooks: [{id: x}]\n", /not a string/],
+      [LAUGHS + "repos:\n- repo: https://github.com/acme/x\n  rev: *l8\n  hooks: [{id: x}]\n", /not a string/],
+      ["repos:\n- repo: {a: 1}\n  rev: v1\n", /not a string/],
+      ["repos:\n- repo: [https://github.com/acme/x]\n  rev: v1\n", /not a string/],
+      ["repos:\n- repo: https://github.com/acme/x\n  rev: {v: 1}\n", /not a string/],
+      [BIG + "repos:\n" + Array.from({ length: 40 }, () => "- {repo: *s, rev: v1}\n").join(""), /output over 1 MiB/],
+      ["repos: []\n# " + "x".repeat(300 * 1024) + "\n", /over 256 KiB/],
+    ];
+    for (const [cfg, re] of cases) {
+      const wt = repoWith("fleet-iac-laughs-", { ".pre-commit-config.yaml": cfg });
+      try {
+        const t0 = process.hrtime.bigint();
+        const got = iacScan(wt, { PRE_COMMIT_HOME: pc });
+        const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+        assert.match(String(got.error), re, cfg.slice(0, 80));
+        assert.ok(ms < 20000, "refused quickly: " + ms + " ms");
+      } finally {
+        rmSync(wt, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    rmSync(pc, { recursive: true, force: true });
+  }
+});
+
+test("3.1.0 security review: the fixer loader refuses a billion laughs in args, a non-string entry, and oversized input or output", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const hook = (fields) => "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n" + fields + "        language: system\n";
+  const cases = [
+    [LAUGHS + hook("        entry: ci/chk.sh\n        args: *l8\n"), /args is not a list of strings/],
+    [hook("        entry: ci/chk.sh\n        args: [1, 2]\n"), /args is not a list of strings/],
+    [hook("        entry: ci/chk.sh\n        args: --fix\n"), /args is not a list of strings/],
+    [hook("        entry: {a: 1}\n"), /not a string/],
+    [hook("        entry: ci/chk.sh\n        language: [system]\n").replace("        language: system\n", ""), /not a string/],
+    [BIG + "repos:\n  - repo: local\n    hooks:\n" + Array.from({ length: 40 }, (_, i) => "      - {id: h" + i + ", name: h, entry: *s, language: system}\n").join(""), /output over 1 MiB/],
+    [hook("        entry: ci/chk.sh\n") + "# " + "x".repeat(300 * 1024) + "\n", /over 256 KiB/],
+  ];
+  for (const [cfg, re] of cases) {
+    const r = fixerRepo("fleet-laughs-fix-", cfg, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "a.py": "x=1\n" });
+    try {
+      writeFileSync(join(r.wt, "a.py"), "x=2\n");
+      const t0 = process.hrtime.bigint();
+      const o = r.runF();
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+      assert.equal(o.ran, false, cfg.slice(0, 80));
+      assert.deepEqual(o.refused, [".pre-commit-config.yaml"]);
+      assert.match(o.reason, re, cfg.slice(0, 80));
+      assert.ok(ms < 20000, "refused quickly: " + ms + " ms");
+      assert.ok(!existsSync(join(r.home, "log")), "no hook ran");
+    } finally {
+      r.done();
+    }
+  }
+  // the source: no default=str in either loader
+  assert.doesNotMatch(SOURCE, /default=str\)\\n"/);
+});
+
+// ---------------------------------------------------------------- 3.1.0: every embedded program caps its own memory and CPU
+
+test("3.1.0 caps: every embedded Python program and both YAML loaders set RLIMIT_AS and RLIMIT_CPU first", () => {
+  const progs = SOURCE.match(/const [A-Z_]+_PY = String\.raw`[\s\S]*?`;/g) || [];
+  assert.ok(progs.length >= 15, "found " + progs.length);
+  for (const p of progs) {
+    const name = /const ([A-Z_]+_PY)/.exec(p)[1];
+    const body = p.replace(/^const [A-Z_]+_PY = String\.raw`\n/, "");
+    // the caps come before anything else runs
+    assert.match(body, /^# resource caps \(3\.1\.0\)[^\n]*\n[^\n]*\nimport os as _o, resource as _r\nfor _k, _v in \(\(_r\.RLIMIT_AS, 1 << 30\), \(_r\.RLIMIT_CPU, 300\)\):\n/, name);
+  }
+  const ph = /const PLAN_HASH_PY =([\s\S]*?);\n/.exec(SOURCE)[1];
+  assert.match(ph, /RLIMIT_AS, 1 << 30/);
+  assert.ok(ph.indexOf("RLIMIT_AS") < ph.indexOf("import hashlib"), "PLAN_HASH_PY caps first");
+  for (const n of ["LOADER", "CFG_LOADER"]) {
+    const m = new RegExp("\\n" + n + " = \\(\\n([\\s\\S]*?)\\n\\)\\n").exec(SOURCE);
+    assert.ok(m, n);
+    assert.match(m[1], /resource\.RLIMIT_AS, 1 << 30\), \(resource\.RLIMIT_CPU, 60\)/, n);
+    assert.match(m[1], /sys\.stdin\.buffer\.read\(262145\)/, n);
+    assert.doesNotMatch(m[1], /default=str/, n);
+  }
+  // the repo's own hooks are not bound by the fixer's caps
+  assert.match(SOURCE, /\['pre-commit', 'run', '--files'\] \+ files, cwd=scratch, capture_output=True, timeout=tmo, env=env, preexec_fn=lift\)/);
+});
+
+test("3.1.0 caps: a program that allocates past its cap dies quickly instead of growing", { skip: !HAVE_PY }, () => {
+  const prog = extractPy("PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY");
+  const prelude = prog.slice(0, prog.indexOf("import hashlib"));
+  const r = spawnSync("python3", ["-I", "-c", prelude + "x = bytearray(3 << 30)\nprint('grew')\n"], { encoding: "utf8", timeout: 60000, maxBuffer: 1 << 20 });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /MemoryError/);
+  assert.doesNotMatch(r.stdout, /grew/);
+});
+
+test("3.1.0 caps: the IaC scan refuses a file over 1 MiB a hook names, and deep YAML nesting, quickly", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const pc = mkdtempSync(join(tmpdir(), "fleet-iac-caps-"));
+  try {
+    const local = "repos:\n- repo: local\n  hooks:\n  - id: s\n    name: s\n    entry: scripts/big.sh\n    language: script\n";
+    for (const [files, re] of [
+      [{ ".pre-commit-config.yaml": local, "scripts/big.sh": "#!/bin/sh\n" + "# x\n".repeat(300000) }, /scripts\/big\.sh is over 1048576 bytes/],
+      [{ ".pre-commit-config.yaml": "repos: " + "[".repeat(20000) + "]".repeat(20000) + "\n" }, /does not parse|repos is not a list/],
+    ]) {
+      const wt = repoWith("fleet-iac-caps-", files);
+      try {
+        const t0 = process.hrtime.bigint();
+        const got = iacScan(wt, { PRE_COMMIT_HOME: pc });
+        assert.match(String(got.error), re);
+        assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 30000);
+      } finally {
+        rmSync(wt, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    rmSync(pc, { recursive: true, force: true });
+  }
 });

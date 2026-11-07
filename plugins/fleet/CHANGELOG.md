@@ -17,7 +17,10 @@ contract marker stays `fleet-v3`.
   A fetch that fails or times out, a rev that does not resolve, a missing manifest, a transport
   other than `https://` and `git@<host>:<path>`, a host off the allowlist, more than 20 fetches or
   more than 120 s of fetching stops plan and build (`stop_gate: iac`). A root
-  `.pre-commit-config.yaml` that PyYAML cannot read (or no PyYAML at all) stops them too.
+  `.pre-commit-config.yaml` that PyYAML cannot read (or no PyYAML at all, a config over 256 KiB or
+  a non-string repo or rev), a scanned file over 1 MiB, or more than 64 MiB scanned stops them too.
+- The fixer step refuses a hook config over 256 KiB, a non-string `entry` or `language`, or `args`
+  that is not a list of strings (pre-commit's own schema requires a list).
 - A code-judge `approve` becomes a `fix_code` round when an allowlisted `check_cmd` exited
   non-zero, has no `check_exit` and no `gates_not_run` entry `check_cmd:<id>`, or when the change
   edits what that `check_cmd` runs and the obligation does not list the file.
@@ -113,6 +116,20 @@ StrictHostKeyChecking=yes`). The user's git config and credential helper stay, s
   `package.json` or `pyproject.toml` is read like a root one (scripts and task tables only).
   `language: docker` now scans the repo's `Dockerfile`. A pre-commit shim's `INSTALL_PYTHON`
   python path is not matched. The text of every surface is still matched in full, comments too.
+- **Resource caps on every embedded program** (security review). Every embedded Python program
+  (and both YAML loaders) sets `RLIMIT_AS` (1 GiB; the loaders too) and `RLIMIT_CPU` (300 s; the
+  loaders 60 s) before it does anything, and tunes git's children to stay inside them
+  (`core.packedGitWindowSize`, `core.packedGitLimit`, `core.bigFileThreshold`, `pack.threads`,
+  `MALLOC_ARENA_MAX`, through `GIT_CONFIG_COUNT`). The repo's own hooks, which the fixer program
+  runs through pre-commit, get the soft limits lifted back. Both YAML loaders read at most
+  256 KiB, emit only string values (`repo`, `rev`, `entry`, `language`; `args` must be a list of
+  strings), have no `default=str`, and stop past 1 MiB of output; a timeout, a non-string value or
+  an oversized config is a refusal. The hasher reads only strings from the config too, and hashes
+  files 1 MiB at a time. The IaC scan reads no file over 1 MiB (it refuses: such a file cannot be
+  scanned whole) and at most 64 MiB in all; its token regex only runs over text read that way. The
+  push classifier reads the last 1 MiB of the push output. A 2026-11-07 test of a billion-laughs
+  config against the 3.1.0 draft loader, which had none of these caps, grew without bound on the
+  development machine; the same test now refuses in about a second.
 - **Writers and the test judge get the plan's env** (ledger 1935a): already true in 3.0.0 (they get
   the whole `test_cmd`, `env` included, plus `test_env`); a regression test now pins it.
 

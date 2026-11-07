@@ -297,6 +297,17 @@ const RUNNER_CONFIG_SECTIONS = [
 // script, never in an agent.
 // HASHER_PY_BEGIN
 const HASHER_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import fnmatch, hashlib, json, os, re, shlex, shutil, subprocess, sys, tempfile
 try:
     import tomllib
@@ -354,18 +365,25 @@ def work_tree():
 def canon(obj):
     return json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str).encode()
 
+def sha_stream(fh):
+    # bounded reads: 1 MiB at a time, whatever the file's size (3.1.0)
+    h = hashlib.sha256()
+    for chunk in iter(lambda: fh.read(1 << 20), b''):
+        h.update(chunk)
+    return h.hexdigest()
+
 def file_hash(rel):
     p = os.path.join(wt, rel)
     if not os.path.isfile(p):
         return 'MISSING'
     with open(p, 'rb') as fh:
-        return sha(fh.read())
+        return sha_stream(fh)
 
 def abs_hash(path):
     if not path or not os.path.isfile(path):
         return 'MISSING'
     with open(path, 'rb') as fh:
-        return sha(fh.read())
+        return sha_stream(fh)
 
 LINKS = {}
 SUSPICIOUS = []
@@ -573,7 +591,9 @@ def local_hooks():
     if not os.path.isfile(p):
         return [], []
     with open(p, 'rb') as fh:
-        raw = fh.read()
+        raw = fh.read(262145)
+    if len(raw) > 262144:
+        return [], ['unresolvable local hook *: .pre-commit-config.yaml is over 256 KiB']
     out = []
     try:
         import yaml
@@ -584,13 +604,18 @@ def local_hooks():
             data = yaml.safe_load(raw)
         except Exception:
             return [], ['unresolvable local hook *: .pre-commit-config.yaml does not parse']
+        # only strings are read: an alias is never stringified (3.1.0)
         for repo in (data.get('repos') or []) if isinstance(data, dict) else []:
             if isinstance(repo, dict) and repo.get('repo') == 'local':
                 for h in repo.get('hooks') or []:
                     if isinstance(h, dict):
-                        args = h.get('args') if isinstance(h.get('args'), list) else []
-                        out.append((str(h.get('id')), h.get('entry') if isinstance(h.get('entry'), str) else '',
-                                    [str(x) for x in args]))
+                        hid = h.get('id') if isinstance(h.get('id'), str) else '?'
+                        args = h.get('args')
+                        if args is not None and not (isinstance(args, list) and all(isinstance(x, str) for x in args)):
+                            return [], ['unresolvable local hook ' + hid + ': args is not a list of strings']
+                        if h.get('entry') is not None and not isinstance(h.get('entry'), str):
+                            return [], ['unresolvable local hook ' + hid + ': entry is not a string']
+                        out.append((hid, h.get('entry') or '', list(args or [])))
         return out, []
     # no PyYAML: every entry: and inline args: [..] line, under the last id: line
     hid, cur = '?', None
@@ -854,6 +879,17 @@ print(json.dumps(out, sort_keys=True))
 // metadata only and never runs the script. Prints {<path>: {ok, reason}}.
 // SCRIPT_CHECK_PY_BEGIN
 const SCRIPT_CHECK_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import hashlib, json, os, subprocess, sys
 wt, paths = sys.argv[1], json.loads(sys.argv[2])
 real_wt = os.path.realpath(wt)
@@ -1987,6 +2023,17 @@ function commentText(kind, taskId, tldr, planLink, prUrl) {
 // The plan file's sha256 as git stores it at a commit. Plan mode and build
 // mode run this exact program, so the two hashes are comparable.
 const PLAN_HASH_PY =
+  "# resource caps (3.1.0): every embedded program bounds its own address space\n" +
+  "# and CPU time, and git's children are tuned to stay inside them\n" +
+  "import os as _o, resource as _r\n" +
+  "for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):\n" +
+  "    _h = _r.getrlimit(_k)[1]\n" +
+  "    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))\n" +
+  "_o.environ['MALLOC_ARENA_MAX'] = '2'\n" +
+  "_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)\n" +
+  "for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):\n" +
+  "    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv\n" +
+  "_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)\n" +
   "import hashlib, subprocess, sys\n" +
   "d = subprocess.run(['git', '-C', sys.argv[1], 'show', sys.argv[2] + ':' + sys.argv[3]], capture_output=True, check=True).stdout\n" +
   "print(hashlib.sha256(d).hexdigest())";
@@ -2020,6 +2067,17 @@ function writePlanRefCmd(worktree, taskId, json) {
 // A ref that is not an annotated tag has content null.
 // PLAN_REF_PY_BEGIN
 const PLAN_REF_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 if len(sys.argv) != 4:
@@ -2120,6 +2178,17 @@ function relayDigestOk(r, keys) {
 // origin/<default>..<sha>. Read only.
 // FLEET_SCAN_PY_BEGIN
 const FLEET_SCAN_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, default, sha = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2154,6 +2223,17 @@ print(json.dumps(out, ensure_ascii=False))
 // build commit and the run stops (fail-closed). Read only.
 // BRANCH_SCAN_PY_BEGIN
 const BRANCH_SCAN_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, default, tid, kinds = sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
@@ -2255,6 +2335,17 @@ print(json.dumps(out, ensure_ascii=False))
 // The paths base_ref..head_sha changes (review), with a digest. Read only.
 // REVIEW_PATHS_PY_BEGIN
 const REVIEW_PATHS_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2277,6 +2368,17 @@ print(json.dumps(out, ensure_ascii=False))
 // git runs from /, never from the worktree.
 // VERIFY_SINCE_PY_BEGIN
 const VERIFY_SINCE_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, plan_path = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2311,6 +2413,17 @@ const VERIFY_SINCE_KEYS = ["head", "is_ancestor", "commits_since", "plan_touched
 // from /.
 // PLAN_FILES_PY_BEGIN
 const PLAN_FILES_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt = sys.argv[1]
@@ -2336,6 +2449,17 @@ print(json.dumps(out, ensure_ascii=False))
 // the script can tell when the relay dropped or changed a hit. Read only.
 // CALLERS_PY_BEGIN
 const CALLERS_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, plan_path, syms, cap = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), int(sys.argv[4])
@@ -2383,6 +2507,17 @@ print(json.dumps(out, sort_keys=True, ensure_ascii=False))
 // {defs, excluded, unclassified, unattributed}. Read only.
 // CHANGED_DEFS_PY_BEGIN
 const CHANGED_DEFS_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, tree, excl = sys.argv[1], sys.argv[2], sys.argv[3], set(json.loads(sys.argv[4]))
@@ -2887,6 +3022,17 @@ function parkPlanPrompt(inputs) {
 // then nothing runs. Each run is capped at FIX_RUN_TIMEOUT seconds.
 // FORMAT_FILES_PY_BEGIN
 const FORMAT_FILES_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile
 wt, sel, frozen = sys.argv[1], json.loads(sys.argv[2]), set(json.loads(sys.argv[3]))
 scratch_root, tmo = sys.argv[4], int(sys.argv[5])
@@ -2894,6 +3040,10 @@ scratch_root, tmo = sys.argv[4], int(sys.argv[5])
 # 'no-local-yaml' skips only this python3 as a fallback
 no_yaml = len(sys.argv) > 6 and sys.argv[6] == 'no-yaml'
 no_local_yaml = len(sys.argv) > 6 and sys.argv[6] == 'no-local-yaml'
+def lift():
+    # the repo's own hooks (node, linters) are not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false']
 def git(cwd, *a, env=None, check=True):
     r = subprocess.run(G + ['-C', cwd] + list(a), capture_output=True, env=env)
@@ -2947,18 +3097,34 @@ surface = {'.pre-commit-config.yaml'}
 # Python; then this python3 if it has PyYAML. None found: nothing runs.
 LOADER = (
     "import json, site, sys\n"
+    "import resource\n"
+    "for k, v in ((resource.RLIMIT_AS, 1 << 30), (resource.RLIMIT_CPU, 60)):\n"
+    "    h = resource.getrlimit(k)[1]\n"
+    "    resource.setrlimit(k, (v if h == resource.RLIM_INFINITY else min(v, h), h))\n"
     "for p in sys.argv[1:]:\n"
     "    if p.startswith('/nix/store/'):\n"
     "        site.addsitedir(p)\n"
     "try:\n    import yaml\nexcept ImportError:\n    sys.exit(3)\n"
-    "d = yaml.safe_load(sys.stdin.buffer.read())\n"
+    # 3.1.0 security review: alias amplification. At most 256 KiB in, only
+    # strings out (an alias is never walked or stringified), at most 1 MiB out.
+    "raw = sys.stdin.buffer.read(262145)\n"
+    "if len(raw) > 262144:\n    sys.exit(5)\n"
+    "d = yaml.safe_load(raw)\n"
+    "n = [0]\n"
+    "def grow(k):\n    n[0] += k\n    if n[0] > 1048576:\n        sys.exit(4)\n"
+    "def s(h, k):\n    v = h.get(k)\n    if v is None:\n        return None\n    if not isinstance(v, str):\n        sys.exit(6)\n    grow(len(v))\n    return v\n"
     "out = []\n"
     "for r in (d.get('repos') if isinstance(d, dict) else None) or []:\n"
     "    for h in (r.get('hooks') if isinstance(r, dict) else None) or []:\n"
     "        if isinstance(h, dict):\n"
-    "            out.append({'entry': h.get('entry'), 'args': h.get('args'), 'language': h.get('language')})\n"
-    "print(json.dumps(out, default=str))\n"
+    "            a = h.get('args')\n"
+    "            if a is not None and not (isinstance(a, list) and all(isinstance(x, str) for x in a)):\n"
+    "                sys.exit(7)\n"
+    "            for x in a or []:\n                grow(len(x))\n"
+    "            out.append({'entry': s(h, 'entry'), 'args': a or [], 'language': s(h, 'language')})\n"
+    "print(json.dumps(out))\n"
 )
+LOADER_EXITS = {4: 'the loader output over 1 MiB', 5: 'the config is over 256 KiB', 6: 'a hook entry or language is not a string', 7: 'a hook args is not a list of strings'}
 SHELLS = ('sh', 'bash', 'dash', 'zsh', 'ksh')
 NIX_SITE = re.compile(r"'(/nix/store/[^'\s]+/site-packages)'")
 def interpreters(path, depth=0):
@@ -3005,6 +3171,8 @@ def hook_values():
     if not no_local_yaml:
         cands.append((sys.executable, []))
     seen = set()
+    if len(head_cfg.stdout) > 262144:
+        return None, 'the config is over 256 KiB'
     for c, sites in cands:
         if not c or (c, tuple(sites)) in seen or os.path.basename(c) in SHELLS or os.path.basename(c) == 'env':
             continue
@@ -3013,8 +3181,12 @@ def hook_values():
             continue
         try:
             r = subprocess.run([c, '-I', '-c', LOADER] + sites, input=head_cfg.stdout, capture_output=True, timeout=60, cwd='/')
-        except (OSError, subprocess.TimeoutExpired):
+        except OSError:
             continue
+        except subprocess.TimeoutExpired:
+            return None, 'the YAML loader timed out (' + c + ')'
+        if r.returncode in LOADER_EXITS:
+            return None, LOADER_EXITS[r.returncode]
         if r.returncode == 3 or (r.returncode != 0 and b'No module named' in r.stderr):
             continue
         if r.returncode != 0:
@@ -3028,9 +3200,8 @@ def hook_values():
             if isinstance(h, dict):
                 if isinstance(h.get('entry'), str):
                     vals.append(h['entry'])
-                a = h.get('args')
-                for x in a if isinstance(a, list) else ([a] if a is not None else []):
-                    vals.append(str(x))
+                for x in h.get('args') or []:
+                    vals.append(x)
         return vals, None
     return None, 'no Python with PyYAML found (tried pre-commit\'s interpreter' + ('' if no_local_yaml else ' and ' + sys.executable) + ')'
 vals = []
@@ -3114,7 +3285,7 @@ try:
     while runs < 3:
         runs += 1
         try:
-            subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=env)
+            subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=env, preexec_fn=lift)
         except subprocess.TimeoutExpired:
             prev = delta()
             break
@@ -3421,11 +3592,24 @@ function checkScriptsPrompt(inputs) {
 // {push_result, exit_code, hook_tail, args, digest}. Runs nothing.
 // PUSH_CLASSIFY_PY_BEGIN
 const PUSH_CLASSIFY_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import hashlib, json, os, sys
 path, code = sys.argv[1], int(sys.argv[2])
 os.chdir('/')
 with open(path, 'rb') as fh:
-    lines = fh.read().decode('utf-8', 'replace').splitlines()
+    # bounded: git's own lines come last, so the last 1 MiB is read
+    fh.seek(max(0, os.fstat(fh.fileno()).st_size - (1 << 20)))
+    lines = fh.read(1 << 20).decode('utf-8', 'replace').splitlines()
 own = [x for x in lines if x.startswith(('error:', 'fatal:', ' ! ['))]
 def has(p):
     return any(x.startswith(p) for x in own)
@@ -3534,6 +3718,17 @@ function reviewCleanupPrompt(inputs) {
 // no ids. Prints {present, ids, parser, error?}.
 // PRECOMMIT_IDS_PY_BEGIN
 const PRECOMMIT_IDS_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import json, subprocess, sys
 wt, rev = sys.argv[1], sys.argv[2]
 r = subprocess.run(['git', '-C', wt, 'show', rev + ':.pre-commit-config.yaml'], capture_output=True)
@@ -3544,6 +3739,9 @@ try:
     import yaml
 except ImportError:
     print(json.dumps({'present': True, 'ids': [], 'parser': None, 'error': 'PyYAML unavailable'}))
+    sys.exit(0)
+if len(r.stdout) > 262144:
+    print(json.dumps({'present': True, 'ids': [], 'parser': None, 'error': 'the config is over 256 KiB'}))
     sys.exit(0)
 try:
     data = yaml.safe_load(r.stdout)
@@ -3598,6 +3796,17 @@ function precommitIdsPrompt(inputs) {
 // {iac_files, iac_text, error?}.
 // IAC_SCAN_PY_BEGIN
 const IAC_SCAN_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import atexit, fnmatch, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, tempfile, time
 wt, rev = sys.argv[1], sys.argv[2]
 # argv[3] == 'no-yaml' (tests only): behave as if no Python had PyYAML
@@ -3700,10 +3909,30 @@ def root_has(root, p):
 def root_read(root, p):
     if isinstance(root, str):
         return disk(os.path.join(root, p))
+    sized('FETCH_HEAD:' + p, ['git', '-C', root[1]])
     r = subprocess.run(['git', '-C', root[1], 'show', 'FETCH_HEAD:' + p], capture_output=True)
     if r.returncode != 0:
         fail('cannot read ' + p + ' of a fetched hook repo: ' + r.stderr.decode('utf-8', 'replace').strip())
-    return r.stdout
+    return charge(r.stdout, p)
+# bounded reads (3.1.0): no file over FILE_CAP is read (the scan refuses
+# it: it cannot be scanned whole), and the scan reads at most BYTE_BUDGET in
+# all; the token regex only ever runs over text read this way
+FILE_CAP = 1 << 20
+BYTE_BUDGET = 64 << 20
+read_total = [0]
+def charge(data, name):
+    if len(data) > FILE_CAP:
+        fail(name + ' is over ' + str(FILE_CAP) + ' bytes; the scan cannot read it whole')
+    read_total[0] += len(data)
+    if read_total[0] > BYTE_BUDGET:
+        fail('the scan read more than ' + str(BYTE_BUDGET) + ' bytes in all')
+    return data
+def sized(obj, g):
+    r = subprocess.run(g + ['cat-file', '-s', obj], capture_output=True)
+    if r.returncode != 0:
+        fail('cannot read ' + obj + ': ' + r.stderr.decode('utf-8', 'replace').strip())
+    if int(r.stdout.strip() or 0) > FILE_CAP:
+        fail(obj + ' is over ' + str(FILE_CAP) + ' bytes; the scan cannot read it whole')
 def hit(name, data, depth=0, root=None, label=None):
     s = data if isinstance(data, str) else data.decode('utf-8', 'replace')
     if PAT.search(s) and name not in text:
@@ -3729,14 +3958,15 @@ def hit(name, data, depth=0, root=None, label=None):
 def disk(fp):
     try:
         with open(fp, 'rb') as fh:
-            return fh.read()
+            return charge(fh.read(FILE_CAP + 1), fp)
     except OSError as e:
         fail('cannot read ' + fp + ': ' + str(e))
 def blob(p):
+    sized(rev + ':' + p, ['git', '-C', wt])
     b = git('cat-file', 'blob', rev + ':' + p)
     if b.returncode != 0:
         done(iac_files=files, iac_text=text, error='cannot read ' + p)
-    return b.stdout
+    return charge(b.stdout, p)
 for p in paths:
     segs = p.split('/')
     b = segs[-1]
@@ -3826,18 +4056,28 @@ def fetch(url, rv):
 # with no repo refuses. Each repo is paired with its own rev.
 CFG_LOADER = (
     "import json, site, sys\n"
+    "import resource\n"
+    "for k, v in ((resource.RLIMIT_AS, 1 << 30), (resource.RLIMIT_CPU, 60)):\n"
+    "    h = resource.getrlimit(k)[1]\n"
+    "    resource.setrlimit(k, (v if h == resource.RLIM_INFINITY else min(v, h), h))\n"
     "for p in sys.argv[1:]:\n"
     "    if p.startswith('/nix/store/'):\n"
     "        site.addsitedir(p)\n"
     "try:\n    import yaml\nexcept ImportError:\n    sys.exit(3)\n"
-    "d = yaml.safe_load(sys.stdin.buffer.read())\n"
+    # alias amplification: at most 256 KiB in, only strings out, at most 1 MiB out
+    "raw = sys.stdin.buffer.read(262145)\n"
+    "if len(raw) > 262144:\n    sys.exit(5)\n"
+    "d = yaml.safe_load(raw)\n"
+    "n = [0]\n"
+    "def s(h, k):\n    v = h.get(k)\n    if v is None:\n        return None\n    if not isinstance(v, str):\n        sys.exit(6)\n    n[0] += len(v)\n    if n[0] > 1048576:\n        sys.exit(4)\n    return v\n"
     "if not isinstance(d, dict) or 'repos' not in d:\n"
     "    print(json.dumps({'repos': None}))\n"
     "elif not isinstance(d['repos'], list):\n"
     "    print(json.dumps({'repos': 'not a list'}))\n"
     "else:\n"
-    "    print(json.dumps({'repos': [{'repo': r.get('repo'), 'rev': r.get('rev')} if isinstance(r, dict) else {'repo': None, 'rev': None} for r in d['repos']]}, default=str))\n"
+    "    print(json.dumps({'repos': [{'repo': s(r, 'repo'), 'rev': s(r, 'rev')} if isinstance(r, dict) else {'repo': None, 'rev': None} for r in d['repos']]}))\n"
 )
+CFG_EXITS = {4: 'the loader output over 1 MiB', 5: 'the config is over 256 KiB', 6: 'a repo or rev is not a string'}
 SHELLS = ('sh', 'bash', 'dash', 'zsh', 'ksh')
 NIX_SITE = re.compile(r"'(/nix/store/[^'\s]+/site-packages)'")
 def interpreters(path, depth=0):
@@ -3881,14 +4121,20 @@ def config_repos(raw):
         cands.extend(interpreters(pc))
     cands.append((sys.executable, []))
     tried = set()
+    if len(raw) > 262144:
+        fail('.pre-commit-config.yaml: the config is over 256 KiB; its hook manifests cannot be scanned')
     for c, sites in cands:
         if not c or (c, tuple(sites)) in tried or os.path.basename(c) in SHELLS or os.path.basename(c) == 'env' or no_yaml:
             continue
         tried.add((c, tuple(sites)))
         try:
             r = subprocess.run([c, '-I', '-c', CFG_LOADER] + sites, input=raw, capture_output=True, timeout=60, cwd='/')
-        except (OSError, subprocess.TimeoutExpired):
+        except OSError:
             continue
+        except subprocess.TimeoutExpired:
+            fail('.pre-commit-config.yaml: the YAML loader timed out (' + c + ')')
+        if r.returncode in CFG_EXITS:
+            fail('.pre-commit-config.yaml: ' + CFG_EXITS[r.returncode] + '; its hook manifests cannot be scanned')
         if r.returncode == 3 or (r.returncode != 0 and b'No module named' in r.stderr):
             continue
         if r.returncode != 0:
@@ -3950,7 +4196,7 @@ if os.path.isdir(hd):
             fp = os.path.join(root, f)
             try:
                 with open(fp, 'rb') as fh:
-                    hit('hooks:' + os.path.relpath(fp, hd), shim(fh.read()))
+                    hit('hooks:' + os.path.relpath(fp, hd), shim(charge(fh.read(FILE_CAP + 1), fp)))
             except OSError as e:
                 fail('cannot read hook ' + fp + ': ' + str(e))
 n = 0
@@ -4029,6 +4275,17 @@ function writeStatePrompt(inputs, json) {
 // Reads the run-state ref: {exists, target, message, head, head_tree, clean}.
 // READ_STATE_PY_BEGIN
 const READ_STATE_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, ref = sys.argv[1], sys.argv[2]

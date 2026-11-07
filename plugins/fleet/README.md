@@ -598,7 +598,14 @@ python>` line is not matched (it names the interpreter, not a command); every ot
   package installs, not hooks); afterwards the scan reads the cache.
 
 The scan reads tracked files from the git objects at the scanned revision. It reads the hooks dir,
-untracked files and the pre-commit cache in their current state.
+untracked files and the pre-commit cache in their current state. It reads no file over 1 MiB (it
+refuses: such a file cannot be scanned whole) and at most 64 MiB in all.
+
+**Resource caps (3.1.0).** Every embedded Python program sets `RLIMIT_AS` 1 GiB and `RLIMIT_CPU`
+300 s before anything else, and tunes git's children to stay inside them; the repo's own hooks
+that the fixer runs get the limits lifted back. The YAML loaders (60 s, 1 GiB) read at most
+256 KiB of config, emit only string values (`args` a list of strings) and stop past 1 MiB of
+output, so an alias bomb ("billion laughs") is refused, not expanded.
 
 Not covered (3.1.0), by design:
 
