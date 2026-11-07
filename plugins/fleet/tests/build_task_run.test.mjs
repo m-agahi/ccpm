@@ -8269,7 +8269,7 @@ function yaadgaarRead(project, over) {
     status: "ok",
     reason: "read",
     project,
-    results: inputsOf(p).tasks.map((t) => Object.assign({ key: t.key, status: "ok", id: "yadgar:task:0192", version: 3, has_marker: false }, over || {})),
+    results: inputsOf(p).tasks.map((t) => Object.assign({ key: t.key, status: "ok", id: "yadgar:task:0192", number: t.number, project, version: 3, has_marker: false }, over || {})),
   });
 }
 
@@ -8290,7 +8290,7 @@ test("3.0.0 yaadgaar write-back: an agent step edits the task through mcp__yaadg
   const c = call(out, "infra:yaadgaar-writeback");
   assert.equal(c.opts.agentType, undefined, "default agent: fleet:judge must never write to a ledger");
   const i = inputsOf(c.prompt);
-  assert.deepEqual(i.tasks, [{ key: "s0", id: "yadgar:task:0192", version: 3 }]);
+  assert.deepEqual(i.tasks, [{ key: "s0", id: "yadgar:task:0192", number: 622, project: "yadgarhq/docs", version: 3 }]);
   assert.equal(i.marker, "fleet:y622");
   assert.equal(i.section_heading, "Fleet build");
   assert.match(i.section_text, /<!-- fleet:y622 -->/);
@@ -8479,7 +8479,7 @@ test("3.0.0 review 3 1928: the step returns the project it resolved; absent or a
   assert.match(out.result.write_back.ledger[0].reason, /not a task number/);
 });
 
-test("3.0.0 review 4 LOW: the fixers run in a scratch checkout of HEAD: an edited hook entry or helper never runs; a changed config is refused; each run is bounded", { skip: !HAVE_PY }, () => {
+test("3.0.0 review 4 LOW: the fixers run in a scratch checkout of HEAD: an edited hook entry or -m module is refused; a changed config is refused; each run is bounded", { skip: !HAVE_PY }, () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-fmt2-"));
   const wt = join(home, "repo");
   const bin = join(home, "bin");
@@ -8512,13 +8512,19 @@ test("3.0.0 review 4 LOW: the fixers run in a scratch checkout of HEAD: an edite
     writeFileSync(join(wt, "a.py"), "x=2\n");
     writeFileSync(join(wt, "hooklib", "fmt.py"), "import os\nopen(os.environ['LOG'], 'a').write('edited-py\\n')\n");
     writeFileSync(join(wt, "ci", "chk.sh"), "#!/bin/sh\necho edited-entry >> \"$LOG\"\n", { mode: 0o755 });
+    // review 5: an edited hook entry or -m module is refused before any hook runs
     const o = runF(180);
-    assert.equal(o.ran, true, o.reason);
-    assert.deepEqual(o.refused, []);
-    assert.deepEqual(readFileSync(join(home, "log"), "utf8").trim().split("\n"), ["head", "head-py"], "HEAD's hook code ran, never the edited one");
+    assert.equal(o.ran, false, o.reason);
+    assert.deepEqual(o.refused, ["ci/chk.sh", "hooklib/fmt.py"]);
+    assert.ok(!existsSync(join(home, "log")), "no hook ran");
     assert.equal(readFileSync(join(wt, "ci", "chk.sh"), "utf8"), "#!/bin/sh\necho edited-entry >> \"$LOG\"\n", "the coder's files stay as they were");
-    assert.deepEqual(o.files, ["a.py"], "only non-frozen, non-hook-surface files are passed");
-    assert.ok(!existsSync(join(home, "scratch", "fmt")) || spawnSync("ls", [join(home, "scratch")]).stdout.toString().trim() === "", "the scratch checkout is removed");
+    // with the hook surface at HEAD, HEAD's hook code runs in the scratch checkout
+    sh(wt, "git", "checkout", "--", "ci/chk.sh", "hooklib/fmt.py");
+    const h = runF(180);
+    assert.equal(h.ran, true, h.reason);
+    assert.deepEqual(readFileSync(join(home, "log"), "utf8").trim().split("\n"), ["head", "head-py"]);
+    assert.deepEqual(h.files, ["a.py"]);
+    assert.equal(spawnSync("ls", [join(home, "scratch")]).stdout.toString().trim(), "", "the scratch checkout is removed");
     assert.equal(sh(wt, "git", "worktree", "list").trim().split("\n").length, 1, "no scratch worktree left registered");
     // n_ff_timeout: a run over its time budget ends the loop, unsettled
     const t = runF(1, { SLEEP: "3" });
@@ -8527,7 +8533,6 @@ test("3.0.0 review 4 LOW: the fixers run in a scratch checkout of HEAD: an edite
     assert.equal(t.stable, false);
     assert.match(prog, /timeout=tmo/);
     // a changed hook config is refused; nothing runs
-    sh(wt, "git", "checkout", "--", "ci/chk.sh", "hooklib/fmt.py");
     writeFileSync(join(wt, ".pre-commit-config.yaml"), "repos: []\n");
     rmSync(join(home, "log"), { force: true });
     const c = runF(180);
@@ -8545,7 +8550,7 @@ test("3.0.0 review 3 LOW: a refused fixer run stops the build (hook surface chan
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "hash");
-  assert.match(out.result.reason, /hook config differs from HEAD: \.pre-commit-config\.yaml/);
+  assert.match(out.result.reason, /hook config, a hook entry or a symlinked path differs from HEAD: \.pre-commit-config\.yaml/);
 });
 
 test("3.0.0 review 3 LOW: branch-scan prints task_id and plan_path only for an ok ref", { skip: !HAVE_PY }, () => {
@@ -8685,4 +8690,155 @@ test("3.0.0 review 4 1928: a task that already carries the marker is skipped wit
   assert.ok(!bad.labels.includes("infra:yaadgaar-writeback"));
   assert.equal(bad.result.ledger_status, "failed");
   assert.match(bad.result.write_back.ledger[0].reason, /not found/);
+});
+
+// ---------------------------------------------------------------- 3.0.0 review 5 (PR #36 final batch)
+
+// A repo with a pre-commit config and a fake pre-commit that appends "# fmt"
+// to every file it is given (once), logging its args. Returns helpers.
+function fixerRepo(prefix, cfg, files) {
+  const home = mkdtempSync(join(tmpdir(), prefix));
+  const wt = join(home, "repo");
+  const bin = join(home, "bin");
+  spawnSync("mkdir", ["-p", wt, bin]);
+  sh(wt, "git", "init", "-q");
+  sh(wt, "git", "config", "user.email", "t@example.com");
+  sh(wt, "git", "config", "user.name", "t");
+  sh(wt, "git", "config", "commit.gpgsign", "false");
+  writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg);
+  for (const [k, v] of Object.entries(files)) {
+    spawnSync("mkdir", ["-p", dirname(join(wt, k))]);
+    writeFileSync(join(wt, k), v);
+  }
+  sh(wt, "git", "add", "-A");
+  sh(wt, "git", "commit", "-qm", "base");
+  writeFileSync(
+    join(bin, "pre-commit"),
+    "#!/bin/sh\nshift 2\necho \"$@\" >> \"$LOG\"\nfor f in \"$@\"; do grep -q fmt \"$f\" || echo '# fmt' >> \"$f\"; done\n[ -n \"$SLEEP\" ] && sleep \"$SLEEP\"\nexit 0\n",
+    { mode: 0o755 },
+  );
+  const prog = extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY");
+  const runF = (extra, timeout) => {
+    const env = Object.assign({}, process.env, { PATH: bin + ":" + process.env.PATH, LOG: join(home, "log") }, extra || {});
+    const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify({ dirty: true }), "[]", join(home, "scratch"), String(timeout || 180)], { input: prog, encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  return { home, wt, runF, done: () => rmSync(home, { recursive: true, force: true }) };
+}
+
+test("3.0.0 review 5 HIGH: a files: regex naming a non-hook file does not take it out of formatting; an edited -m module is refused", { skip: !HAVE_PY }, () => {
+  const cfg =
+    "repos:\n  - repo: local\n    hooks:\n      - id: fmt\n        name: fmt\n        entry: python3 -m tools.fmt\n        language: system\n        files: ^common/util.py$\n        exclude: ^docs/\n";
+  const r = fixerRepo("fleet-r5-surface-", cfg, { "common/util.py": "x=1\n", "common/other.py": "y=1\n", "tools/__init__.py": "", "tools/fmt.py": "print(1)\n", "docs/a.md": "a\n" });
+  try {
+    writeFileSync(join(r.wt, "common/util.py"), "x=2\n");
+    writeFileSync(join(r.wt, "common/other.py"), "y=2\n");
+    const o = r.runF();
+    assert.equal(o.ran, true, o.reason);
+    assert.deepEqual(o.refused, []);
+    assert.deepEqual(o.files, ["common/other.py", "common/util.py"], "a path named only in files: is formatted");
+    assert.deepEqual(o.changed, ["common/other.py", "common/util.py"]);
+    assert.equal(readFileSync(join(r.wt, "common/util.py"), "utf8"), "x=2\n# fmt\n", "the fixed bytes come back");
+    // the -m module (and its package files) are the hook surface: an edit is refused
+    writeFileSync(join(r.wt, "tools/fmt.py"), "import os\nos.system('evil')\n");
+    const m = r.runF();
+    assert.equal(m.ran, false);
+    assert.deepEqual(m.refused, ["tools/fmt.py"]);
+    sh(r.wt, "git", "checkout", "--", "tools/fmt.py");
+    writeFileSync(join(r.wt, "tools/__init__.py"), "import os\n");
+    assert.deepEqual(r.runF().refused, ["tools/__init__.py"]);
+  } finally {
+    r.done();
+  }
+});
+
+test("3.0.0 review 5 MED: a selected path under a symlinked directory is refused and nothing is written outside", { skip: !HAVE_PY }, () => {
+  const r = fixerRepo("fleet-r5-link-", "repos: []\n", { "a.py": "x=1\n" });
+  const outside = mkdtempSync(join(tmpdir(), "fleet-r5-out-"));
+  try {
+    writeFileSync(join(outside, "t.py"), "o=1\n");
+    // HEAD has a symlinked dir pointing outside, with a file under it the coder changes
+    spawnSync("ln", ["-s", outside, join(r.wt, "linked")]);
+    sh(r.wt, "git", "add", "-A");
+    sh(r.wt, "git", "commit", "-qm", "link");
+    writeFileSync(join(outside, "t.py"), "o=2\n");
+    writeFileSync(join(r.wt, "a.py"), "x=2\n");
+    // a symlinked file at HEAD too
+    spawnSync("ln", ["-s", "a.py", join(r.wt, "b.py")]);
+    sh(r.wt, "git", "add", "b.py");
+    sh(r.wt, "git", "commit", "-qm", "b");
+    // the dirty selection never reaches through a symlink
+    const sel = r.runF();
+    assert.deepEqual(sel.files, ["a.py"], JSON.stringify(sel));
+    assert.equal(readFileSync(join(outside, "t.py"), "utf8"), "o=2\n", "nothing written outside");
+    // the explicit refusal: a selected path whose parent is a symlinked dir
+    const prog = extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY");
+    const env = Object.assign({}, process.env, { LOG: join(r.home, "log") });
+    const x = spawnSync("python3", ["-I", "-", r.wt, JSON.stringify({ paths: ["linked/t.py", "a.py"] }), "[]", join(r.home, "scratch"), "180"], { input: prog, encoding: "utf8", env });
+    assert.equal(x.status, 0, x.stderr);
+    const ox = JSON.parse(x.stdout);
+    assert.ok(ox.refused.includes("linked/t.py"), JSON.stringify(ox));
+    assert.equal(ox.ran, false);
+    assert.equal(readFileSync(join(outside, "t.py"), "utf8"), "o=2\n");
+    const y = spawnSync("python3", ["-I", "-", r.wt, JSON.stringify({ paths: ["b.py"] }), "[]", join(r.home, "scratch"), "180"], { input: prog, encoding: "utf8", env });
+    assert.ok(JSON.parse(y.stdout).refused.includes("b.py"));
+  } finally {
+    r.done();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("3.0.0 review 5 LOW: a leftover scratch worktree is cleaned; the scratch add runs no hook; a timed-out run still reports its change", { skip: !HAVE_PY }, () => {
+  const r = fixerRepo("fleet-r5-left-", "repos: []\n", { "a.py": "x=1\n" });
+  try {
+    // a leftover from a killed run, still registered
+    spawnSync("mkdir", ["-p", join(r.home, "scratch")]);
+    sh(r.wt, "git", "worktree", "add", "--detach", join(r.home, "scratch", "fmt-old"), "HEAD");
+    assert.equal(sh(r.wt, "git", "worktree", "list").trim().split("\n").length, 2);
+    // f_hooks_off: a post-checkout hook must not run for the scratch checkout
+    const hook = join(r.wt, ".git", "hooks", "post-checkout");
+    writeFileSync(hook, "#!/bin/sh\ntouch " + JSON.stringify(join(r.home, "HOOK_RAN")) + "\n", { mode: 0o755 });
+    writeFileSync(join(r.wt, "a.py"), "x=2\n");
+    const o = r.runF();
+    assert.equal(o.ran, true, o.reason);
+    assert.ok(!existsSync(join(r.home, "HOOK_RAN")), "no hook ran on the scratch worktree add");
+    assert.equal(sh(r.wt, "git", "worktree", "list").trim().split("\n").length, 1, "the leftover is gone");
+    assert.ok(!existsSync(join(r.home, "scratch", "fmt-old")));
+    // f_timeout_prev: the hook rewrote the file, then ran over budget
+    sh(r.wt, "git", "checkout", "--", "a.py");
+    writeFileSync(join(r.wt, "a.py"), "x=3\n");
+    const t = r.runF({ SLEEP: "3" }, 1);
+    assert.equal(t.stable, false);
+    assert.deepEqual(t.changed, ["a.py"], "the change made before the timeout is reported");
+  } finally {
+    r.done();
+  }
+});
+
+test("3.0.0 review 5 MED: the yaadgaar id must belong to the requested number and project; version is an integer", async () => {
+  for (const [what, over, re] of [
+    ["another number", { number: 623 }, /number 623, not 622/],
+    ["another project", { project: "yadgarhq/other" }, /project "yadgarhq\/other", not yadgarhq\/docs/],
+    ["no number", { number: undefined }, /number/],
+    ["version not an integer", { version: "3" }, /no id\/version/],
+    ["version a float", { version: 3.5 }, /no id\/version/],
+  ]) {
+    const out = await yaadgaarBuild(() => ({ status: "ok", reason: "x", results: [] }), undefined, yaadgaarRead("yadgarhq/docs", over));
+    assert.ok(!out.labels.includes("infra:yaadgaar-writeback"), what);
+    assert.equal(out.result.ledger_status, "failed", what);
+    assert.match(out.result.write_back.ledger[0].reason, re, what);
+  }
+  const ok = await yaadgaarBuild((p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) }));
+  const w = call(ok, "infra:yaadgaar-writeback").prompt;
+  assert.match(w, /number.*project.*fail/i);
+  assert.match(w, /read_task\(id=<id>\)/);
+});
+
+test("3.0.0 review 5 LOW: fleet:judge cannot call the yaadgaar write tools", () => {
+  const judge = readFileSync(join(HERE, "..", "agents", "judge.md"), "utf8");
+  const m = /^disallowedTools: (.*)$/m.exec(judge);
+  assert.ok(m, "disallowedTools line");
+  for (const tool of ["Write", "Edit", "NotebookEdit", "mcp__yaadgaar__edit_task", "mcp__yaadgaar__create_task", "mcp__yaadgaar__transition_task"])
+    assert.ok(m[1].split(/,\s*/).includes(tool), tool);
 });

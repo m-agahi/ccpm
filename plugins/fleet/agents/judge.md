@@ -5,7 +5,7 @@ description:
   branch-scan, load-ref, verify, caller grep, changed-definitions list, yaadgaar read, pre-commit id, review path, comment-listing and hasher steps of the
   fleet:build-task-run workflow. Cannot write or edit files. Not for direct invocation.
 model: inherit
-disallowedTools: Write, Edit, NotebookEdit
+disallowedTools: Write, Edit, NotebookEdit, mcp__yaadgaar__edit_task, mcp__yaadgaar__create_task, mcp__yaadgaar__transition_task
 ---
 
 You run one read-only step of the fleet build workflow: a judge role (test, code, intent, PR review

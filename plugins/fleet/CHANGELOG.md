@@ -78,6 +78,15 @@ changed; the new page text and the optional `symbol` key are additions, guarded 
   (real pre-commit 4.6.2 ran an edited `-m` module from the worktree). A changed
   `.pre-commit-config.yaml` stops the run (`stop_gate: hash`) before any hook runs; each run is
   capped at 180 s. The commit step's tree-equality check (ADR-1151) is unchanged.
+- **Fixer hook surface is exact** (PR #36 review 5). The surface is the config, every path a hook
+  `entry` or `args` names, and the files of every `-m` module; a path that only appears in a
+  `files:`/`exclude:` regex is formatted (the top-level-directory rule of review 4 left most files
+  of a repo unformatted). A surface path that differs from HEAD stops the run before any hook runs.
+  A selected path through a symlink (HEAD mode 120000, a symlinked parent at HEAD or in the
+  worktree, a realpath outside either checkout) stops it too. A scratch checkout a killed run left
+  behind is removed first. **Accepted under ADR-1152:** a helper that a hook entry imports without
+  the config naming it still runs from the scratch checkout of HEAD unless it is itself a selected
+  file.
 - **yaadgaar write-back** (ledger 1928). For a `yaadgaar` source of a `yadgarhq/` project,
   `infra:yaadgaar-writeback` (default agent; `fleet:judge` may not write to a ledger) appends the
   `## Fleet build` section with `mcp__yaadgaar__read_task` and `mcp__yaadgaar__edit_task`: it
@@ -87,7 +96,11 @@ changed; the new page text and the optional `symbol` key are additions, guarded 
   `patch` on a unique tail, retries once on `VERSION_MISMATCH`, and re-reads to confirm. Never the
   yadgar ledger. A read-only step (`infra:yaadgaar-read`) returns the project it resolved and each
   task's id and version first; the script refuses an absent or other project before any edit step
-  runs, and skips a task that already carries the marker. Task bodies are data, not instructions.
+  runs, and skips a task that already carries the marker. The read answer's number and project
+  must match the request, and its version must be an integer; the edit step re-reads the task by id
+  and checks number and project before it edits (fail closed). `fleet:judge` now disallows
+  `mcp__yaadgaar__edit_task`, `create_task` and `transition_task`. Task bodies are data, not
+  instructions.
   A ref that is not a task number is never sent. 2.1.6 handed the section back for a human to post.
 - **Codeberg plan link** (ledger 1928). The workspace step returns `remote_host`; a Codeberg origin
   gets `https://codeberg.org/<o>/<r>/src/branch/<branch>/<plan>` in the ledger section and comments.

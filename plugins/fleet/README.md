@@ -160,11 +160,15 @@ relayed lists must match the program's digest.
 
 The fixer program (3.0.0) runs the hooks in a scratch checkout of HEAD under `scratch_dir`
 (`git worktree add --detach`, hooks off for that checkout only): only the selected files are
-copied in, and only they are copied back, so a coder's edit to hook code never runs. Files under
-the top-level directory of a tracked file the config names, or of a `-m` module it runs, are never
-selected. A changed `.pre-commit-config.yaml` is refused (`refused`, `stop_gate: hash`) and nothing
-runs. Each `pre-commit` run is capped at 180 s. A cache a hook leaves in the scratch checkout is
-ignored.
+copied in, and only they are copied back. The hook surface is exact: the config, every path a hook
+`entry` or `args` names, and the files of every `-m` module an entry runs (`a/b.py`,
+`a/b/__init__.py`, `a/__init__.py`); a path that only appears in a `files:` or `exclude:` regex is
+not hook code and is formatted. When a surface path differs from HEAD, or a selected path goes
+through a symlink (HEAD mode 120000, a symlinked parent at HEAD or in the worktree, or a realpath
+outside either checkout), nothing runs (`refused`, `stop_gate: hash`). A helper that a hook entry
+imports without the config naming it is a residual (ADR-1152). A scratch checkout a killed run left
+behind is removed first. Each `pre-commit` run is capped at 180 s. A cache a hook leaves in the
+scratch checkout is ignored.
 
 The script then refuses, with `needs_human` and `stop_gate: "callers"` before anything is
 committed:
@@ -429,10 +433,14 @@ is the plan commit, for example after a re-plan.
   (`infra:yaadgaar-read`, `fleet:judge`) resolves the client's project (`.yadgar/project-id` or
   origin; the yaadgaar client resolves a number in the session's start project) and runs
   `mcp__yaadgaar__read_task` by number; it returns the project, and per task the id, version and
-  whether the marker is there. The script refuses when the project is absent or not
-  `args.project`: then no edit step runs at all. Only then `infra:yaadgaar-writeback` (the default
+  whether the marker is there, plus the number and project the answer gives. The script refuses
+  when the project is absent or not `args.project`: then no edit step runs at all. It also refuses
+  any task whose answer gives another number or project than the request, or a version that is not
+  an integer. `fleet:judge` cannot call `mcp__yaadgaar__edit_task`, `create_task` or
+  `transition_task` (`disallowedTools`). Only then `infra:yaadgaar-writeback` (the default
   agent: `fleet:judge` may never write to a ledger) edits each task by id with the version read
-  as `expect_version`: an empty body gets `body` = the `## Fleet build` heading plus
+  as `expect_version`, after it re-reads the task by id and checks its number and project (fail
+  closed): an empty body gets `body` = the `## Fleet build` heading plus
   `section_text` with `expect_body_sha256` (computed by the script); a non-empty body is never
   re-sent, the section is appended with a literal `patch` on a unique tail of the body
   (`expect_count: 1`). On `VERSION_MISMATCH` it re-reads and retries once; any other refusal fails
