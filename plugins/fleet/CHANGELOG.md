@@ -73,7 +73,15 @@ contract marker stays `fleet-v3`.
   is run (an interpreter's first operand, a sourced file, a `<` redirect, a `-f` file, a hook
   `entry`'s program, `./X`: traced like a script) from the other operands of that command (data a
   script is given: matched, never followed out of). A baseline JSON passed to a check script is
-  therefore matched, but the modules it names are not scanned.
+  therefore matched, but the modules it names are not scanned. **Security review, final rule:**
+  there is no first-operand split. Every name on a command line (any operand of an interpreter,
+  `exec`, `env`, `xargs` or `cat`, a sourced file, a `<` redirect, a `-f` file, `./X`), on a hook
+  config's surviving lines, or in a hook-manager, hooks-dir or Makefile text (comment lines
+  dropped) may run and is followed: test scripts, Dockerfiles, `pyproject.toml` and
+  `package.json` (read raw) included. Only inert data (`.json` other than `package.json`, `.txt`,
+  `.md`, `.csv`, `.jsonl`, `.rst`, images, ...) may be a leaf: matched, never followed, and only
+  when it is an operand; a sourced, redirected, `-f` or `./` data file is followed like a script;
+  inert data merely mentioned in a script is not read.
 - A verify, commit-plan or `hook_rejected` push relay that does not match its program's digest,
   or whose program ran on other arguments, fails the run.
 

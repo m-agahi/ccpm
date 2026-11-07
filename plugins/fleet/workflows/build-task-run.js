@@ -4167,39 +4167,46 @@ def inert(p):
 def testpath(p):
     segs = p.split('/')
     return any(s.lower() in TEST_DIRS for s in segs[:-1]) or bool(TEST_BASE.match(segs[-1]))
-def leafy(p):
-    # matched, never followed out of: docs, data, tests, Dockerfiles and the
-    # task-runner manifests (read raw when a hook text names them)
-    b = base(p)
-    return inert(p) or testpath(p) or bool(DOCKER_BASE.match(b)) or b in ('pyproject.toml', 'package.json')
+def mentioned_only(p):
+    # a test path or Dockerfile that a script merely mentions (not on a command
+    # line) is not followed past the first level
+    return testpath(p) or bool(DOCKER_BASE.match(base(p)))
 # a file in an execution context: given to an interpreter or exec, sourced,
 # read through a redirect or named by -f, in a hook's command text
 # (the context never crosses a line: a shebang's interpreter names nothing)
 EXEC_CTX = re.compile(r'(?:^|[\s;&|(\x60])(?:bash|sh|zsh|dash|ksh|node|deno|bun|python[0-9.]*|ruby|perl|exec|source|xargs|env|cat)[ \t]+([^;&|\n\x60)]*)'
                       r'|(?:^|[;&|][ \t]*)\.[ \t]+([^;&|\n]*)|<[ \t]*([^\s;&|)]+)|(?:^|[ \t])-f[ \t]+([^\s;&|)]+)', re.M)
-def exec_sets(s):
-    # (run, args): run = what is executed (the first operand of an interpreter
-    # or exec, a sourced file, a < redirect, a -f file); args = the other
-    # operands of that command (data a script is given)
-    run, args = set(), set()
+def command_names(s):
+    # every name on a command line: every operand of an interpreter, exec,
+    # env, xargs or cat (no first-operand split: options with values, env
+    # VAR=..., -c strings and -m make the operand ambiguous), a sourced file,
+    # a < redirect, a -f file, ./X
+    # returns (names, ran): ran = what is executed whatever its format (a
+    # sourced file, a < redirect, a -f file, ./X)
+    out, ran = set(), set()
     for m in EXEC_CTX.finditer(s):
-        g1, g2, g3, g4 = m.groups()
-        if g1 is not None:
-            toks = [t for t in g1.split() if t]
-            first = next((t for t in toks if not t.startswith('-')), None)
-            for t in toks:
-                for tok in TOKEN.findall(t):
-                    (run if t == first else args).add(os.path.normpath(tok))
-        for g in (g2, g3, g4):
+        for i, g in enumerate(m.groups()):
             for tok in TOKEN.findall(g or ''):
-                run.add(os.path.normpath(tok))
+                out.add(os.path.normpath(tok))
+                if i > 0:
+                    ran.add(os.path.normpath(tok))
     for m in re.finditer(r'(?:^|[\s;&|(])(\./[^\s;&|)]+)', s, re.M):
-        run.add(os.path.normpath(m.group(1)))
-    return run, args
+        out.add(os.path.normpath(m.group(1)))
+        ran.add(os.path.normpath(m.group(1)))
+    return out, ran
+# a text whose every line is a command: a hook config's entry/args/run lines,
+# the hooks dir, husky, githooks, lefthook, a Makefile, package.json scripts
+def all_commands(name):
+    b = base(name).lower()
+    return b.endswith(('.yaml', '.yml')) or name.startswith('hooks:') or name.split(':')[-1].split('/')[0] in ('.husky', '.githooks') \
+        or b.startswith(('lefthook', '.lefthook')) or b in ('makefile', 'gnumakefile', 'package.json')
 def tok_text(name, s):
     # the text names are taken from: a YAML file without its comments and
-    # its file filters, names and descriptions
+    # its file filters, names and descriptions; a shell or make text without
+    # its comment lines (a comment runs nothing)
     if not base(name).lower().endswith(('.yaml', '.yml')):
+        if all_commands(name):
+            return '\n'.join(x for x in s.splitlines() if not x.lstrip().startswith('#') or x.startswith('#!'))
         return s
     return '\n'.join(re.sub(r'(^|\s)#.*$', '', x) for x in s.splitlines() if not YAML_SKIP.match(x))
 def tables(obj):
@@ -4276,26 +4283,25 @@ def hit(name, data, depth=0, root=None, label=None, leaf=False):
     t = tok_text(name, s)
     toks = TOKEN.findall(t)
     # a YAML hook config's surviving lines (entry, args, run) are commands
-    run, args = exec_sets(t)
-    if base(name).lower().endswith(('.yaml', '.yml')):
-        # a hook config: each entry's program is run, every other name is an argument
-        for m in re.finditer(r'\bentry\s*:\s*[\'"]?([A-Za-z0-9_.][A-Za-z0-9_./-]*)', t):
-            run.add(os.path.normpath(m.group(1)))
-        args.update(os.path.normpath(x) for x in toks)
+    cmd, ran = command_names(t)
+    if all_commands(name):
+        cmd.update(os.path.normpath(x) for x in toks)
     if base(name).endswith('.yaml') and DOCKER_LANG.search(s):
         toks.append('Dockerfile')
-        run.add('Dockerfile')
+        cmd.add('Dockerfile')
     for tok in toks:
         p = os.path.normpath(tok)
         if p == '..' or p.startswith('../'):
             continue
-        # what is run is traced like any script; a doc, data, test or Dockerfile
-        # given as an argument is matched only (a leaf); one merely mentioned
-        # is matched only when a surface names it directly (a doc or data
-        # file never)
-        x = p in run or (leafy(p) and p in args)
-        lf = leafy(p) and p not in run
-        if lf and not x and (inert(p) or depth + 1 >= 2):
+        # anything on a command line may run and is followed, except inert
+        # data (docs, json, txt, ...), which is only matched there (a leaf);
+        # inert data merely mentioned is not read, and a test path or
+        # Dockerfile merely mentioned past the first level is not followed
+        x = p in cmd
+        lf = inert(p) and p not in ran
+        if lf and not x:
+            continue
+        if not x and mentioned_only(p) and depth + 1 >= 2:
             continue
         if root is not None:
             if (label, p) not in followed and root_has(root, p):

@@ -9954,8 +9954,8 @@ test("3.1.0 1960: docs, manifests, test data, file filters and comments are not 
     [{ ".pre-commit-config.yaml": local("  - id: t\n    name: t\n    entry: tests/run.sh\n    language: script\n"), "tests/run.sh": "#!/bin/sh\nterragrunt plan\n" }, ["tests/run.sh"]],
     [{ ".pre-commit-config.yaml": local("  - id: w\n    name: w\n    entry: python3 scripts/w.py\n    language: system\n"), "scripts/w.py": "ALLOW = ['tests/test_x.py', 'tests/fixtures/plan.yaml', 'benchmarks/golden/set.jsonl']\n", "tests/test_x.py": "assert 'terraform' in s\n", "tests/fixtures/plan.yaml": "cmd: terraform plan\n", "benchmarks/golden/set.jsonl": '{"q": "tofu"}\n' }, []],
     // a pyproject.toml the config names is read like the root one: script and task tables only
-    // (a file given to a hook command as an argument is matched, not followed out of)
-    [{ ".pre-commit-config.yaml": local("  - id: p\n    name: p\n    entry: python3 -m x --config pyproject.toml\n    language: system\n"), "pyproject.toml": '[tool.ruff.lint.per-file-ignores]\n"src/t.py" = ["E1"]\n', "src/t.py": "x = 'terraform'\n" }, []],
+    // (security review: a pyproject.toml on a command line may run tasks: it is followed, raw)
+    [{ ".pre-commit-config.yaml": local("  - id: p\n    name: p\n    entry: python3 -m x --config pyproject.toml\n    language: system\n"), "pyproject.toml": '[tool.ruff.lint.per-file-ignores]\n"src/t.py" = ["E1"]\n', "src/t.py": "x = 'terraform'\n" }, ["src/t.py"]],
     // the yadgar shape: a baseline JSON given to a check script names a module that mentions the tool
     [{ ".pre-commit-config.yaml": local("  - id: c\n    name: c\n    entry: python scripts/cc.py --baseline .baseline.json\n    language: system\n"), "scripts/cc.py": "print(1)\n", ".baseline.json": '{"src/m.py": 3}\n', "src/m.py": "# no terraform here\n" }, []],
     [{ ".pre-commit-config.yaml": local("  - id: c\n    name: c\n    entry: python scripts/cc.py --baseline .baseline.json\n    language: system\n"), "scripts/cc.py": "print(1)\n", ".baseline.json": '{"cmd": "terraform fmt"}\n' }, [".baseline.json"]],
@@ -10585,8 +10585,10 @@ test("3.1.0 security review: an oversized doc or data file in an execution conte
     for (const [files, want, err] of [
       [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\nxargs < data/big.txt\n", "data/big.txt": "x".repeat(2 << 20) }), [], /data\/big\.txt is over 1048576 bytes/],
       [Object.assign(hook("scripts/go.sh"), { "scripts/go.sh": "#!/bin/sh\n. docs/big.md\n", "docs/big.md": "x".repeat(2 << 20) }), [], /docs\/big\.md is over 1048576 bytes/],
-      // a test file a Makefile merely mentions is a leaf: its first 1 MiB is matched, no refusal
-      [{ Makefile: "lint:\n\techo tests/huge_test.py\n", "tests/huge_test.py": "terraform\n" + "x".repeat(2 << 20) }, ["tests/huge_test.py"], null],
+      // a test file on a Makefile command line may run: over 1 MiB it refuses
+      [{ Makefile: "lint:\n\techo tests/huge_test.py\n", "tests/huge_test.py": "terraform\n" + "x".repeat(2 << 20) }, [], /tests\/huge_test\.py is over 1048576 bytes/],
+      // a data file a script merely mentions is not read at all
+      [Object.assign(hook("scripts/go.py"), { "scripts/go.py": "DATA = 'data/huge.txt'\n", "data/huge.txt": "terraform\n" + "x".repeat(2 << 20) }), [], null],
     ]) {
       const wt = repoWith("fleet-iac-exec-", files);
       try {
@@ -10635,5 +10637,43 @@ test("3.1.0 security review: the hook surface traces hook-manager files and scri
     assert.match(String(runP().error), /package\.json does not parse/);
   } finally {
     rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- 3.1.0 security review: everything on a command line is followed; only inert data is a leaf
+
+test("3.1.0 security review: a test script, Dockerfile or package.json on a command line is followed, whatever its operand position", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const pc = mkdtempSync(join(tmpdir(), "fleet-iac-cmd-"));
+  const yaml = (fields) => ({ ".pre-commit-config.yaml": "repos:\n- repo: local\n  hooks:\n  - id: h\n    name: h\n" + fields + "    language: system\n" });
+  const runner = { "tests/run.sh": "#!/bin/sh\nbash scripts/w.sh\n", "scripts/w.sh": "tflint --recursive\n" };
+  try {
+    for (const [files, want] of [
+      // a test script given as a YAML arg
+      [Object.assign(yaml("    entry: bash\n    args: [tests/run.sh]\n"), runner), ["scripts/w.sh"]],
+      // bash -c and env X=1 sh
+      [Object.assign(yaml("    entry: scripts/go.sh\n"), runner, { "scripts/go.sh": "#!/bin/sh\nbash -c \"sh tests/run.sh\"\n" }), ["scripts/w.sh"]],
+      [Object.assign(yaml("    entry: scripts/go.sh\n"), runner, { "scripts/go.sh": "#!/bin/sh\nenv X=1 sh tests/run.sh\n" }), ["scripts/w.sh"]],
+      // python -m with a script after an option that takes a value
+      [Object.assign(yaml("    entry: scripts/go.sh\n"), runner, { "scripts/go.sh": "#!/bin/sh\npython3 -W ignore tests/run.sh\n" }), ["scripts/w.sh"]],
+      // a Dockerfile given as an arg is followed: the script it copies in is scanned
+      [Object.assign(yaml("    entry: docker\n    args: [build, -f, build/Dockerfile, .]\n"), { "build/Dockerfile": "COPY scripts/s.sh /s.sh\nRUN sh /s.sh\n", "scripts/s.sh": "infracost diff\n" }), ["scripts/s.sh"]],
+      // a package.json given as an arg is read raw and followed
+      [Object.assign(yaml("    entry: node\n    args: [tools/run.js, sub/package.json]\n"), { "tools/run.js": "x\n", "sub/package.json": JSON.stringify({ config: { cmd: "bash scripts/p.sh" } }), "scripts/p.sh": "digger plan\n" }), ["scripts/p.sh"]],
+      // a comment line in a Makefile runs nothing
+      [{ Makefile: "## see scripts/x.sh\nlint:\n\t# bash scripts/x.sh\n\ttrue\n", "scripts/x.sh": "tflint\n" }, []],
+      // inert data on a command line is matched, never followed
+      [Object.assign(yaml("    entry: python scripts/cc.py --baseline .baseline.json\n"), { "scripts/cc.py": "print(1)\n", ".baseline.json": '{"x": "bash scripts/q.sh"}\n', "scripts/q.sh": "tflint\n" }), []],
+    ]) {
+      const wt = repoWith("fleet-iac-cmd-", files);
+      try {
+        const got = iacScan(wt, { PRE_COMMIT_HOME: pc });
+        assert.equal(got.error, null, got.error);
+        assert.deepEqual(got.iac_text, want, JSON.stringify(Object.keys(files)));
+      } finally {
+        rmSync(wt, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    rmSync(pc, { recursive: true, force: true });
   }
 });
