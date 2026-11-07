@@ -2780,6 +2780,13 @@ const FORMAT_FILES_PY = String.raw`
 import glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile
 wt, sel, frozen = sys.argv[1], json.loads(sys.argv[2]), set(json.loads(sys.argv[3]))
 scratch_root, tmo = sys.argv[4], int(sys.argv[5])
+# argv[6] == 'no-yaml' (tests only): behave as if PyYAML were missing
+try:
+    if len(sys.argv) > 6 and sys.argv[6] == 'no-yaml':
+        raise ImportError
+    import yaml
+except ImportError:
+    yaml = None
 G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false']
 def git(cwd, *a, env=None, check=True):
     r = subprocess.run(G + ['-C', cwd] + list(a), capture_output=True, env=env)
@@ -2827,9 +2834,35 @@ def differs(p):
 # files:/exclude: regex are not hook code and stay formattable)
 head_cfg = git(wt, 'show', 'HEAD:.pre-commit-config.yaml', check=False)
 surface = {'.pre-commit-config.yaml'}
-if head_cfg.returncode == 0:
-    lines = head_cfg.stdout.decode('utf-8', 'replace').split('\n')
-    vals = []
+unreadable = None
+vals = []
+if head_cfg.returncode == 0 and yaml is not None:
+    # PyYAML reads every scalar form: entry and args of every hook of every repo
+    try:
+        data = yaml.safe_load(head_cfg.stdout)
+    except Exception as e:
+        data, unreadable = None, 'the config does not parse: ' + str(e).splitlines()[0]
+    for repo in (data.get('repos') if isinstance(data, dict) else None) or []:
+        for h in (repo.get('hooks') if isinstance(repo, dict) else None) or []:
+            if not isinstance(h, dict):
+                continue
+            if isinstance(h.get('entry'), str):
+                vals.append(h['entry'])
+            a = h.get('args')
+            for x in a if isinstance(a, list) else ([a] if a is not None else []):
+                vals.append(str(x))
+elif head_cfg.returncode == 0:
+    # no PyYAML: the line parser reads plain scalars only; anything else is refused, never guessed
+    text = head_cfg.stdout.decode('utf-8', 'replace')
+    if re.search(r'^\s*(?:-\s+)?(?:entry|args)\s*:\s*[|>]', text, re.M):
+        unreadable = 'a block or folded scalar for entry or args'
+    elif re.search(r'^\s*(?:-\s+)?(?:entry|args)\s*:\s*(?:\[[^\]]*|"[^"]*|\'[^\']*)\s*(?:#.*)?$', text, re.M):
+        unreadable = 'an entry or args value continued on the next line'
+    elif re.search(r'(?:^|[\s\[{,:-])[&*][A-Za-z0-9_-]+', re.sub(r'#.*', '', re.sub(r'"[^"]*"|\'[^\']*\'', '', text))):
+        unreadable = 'an anchor or alias'
+    elif re.findall(r'^(?:---|\.\.\.)(?:\s.*)?$', text, re.M)[1 if text.startswith('---') else 0:]:
+        unreadable = 'more than one YAML document'
+    lines = text.split('\n')
     for n, line in enumerate(lines):
         m = re.match(r'^(\s*)(?:-\s+)?(entry|args)\s*:\s*(.*)$', line)
         if not m:
@@ -2844,16 +2877,18 @@ if head_cfg.returncode == 0:
                     vals.append(mm.group(2))
                     continue
                 break
-    for v in vals:
-        for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', v):
-            q = os.path.normpath(tok)
-            if q != '.' and not q.startswith('..'):
-                surface.add(q)
-        for mod in re.findall(r'-m\s+([A-Za-z_][A-Za-z0-9_.]*)', v):
-            parts = mod.split('.')
-            for k in range(1, len(parts) + 1):
-                surface.add('/'.join(parts[:k]) + '/__init__.py')
-            surface.add('/'.join(parts) + '.py')
+if unreadable:
+    done(reason='hook surface unknown: ' + unreadable + ('' if yaml is not None else ' and PyYAML is unavailable') + '; no hook was run', refused=['.pre-commit-config.yaml'])
+for v in vals:
+    for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', v):
+        q = os.path.normpath(tok)
+        if q != '.' and not q.startswith('..'):
+            surface.add(q)
+    for mod in re.findall(r'-m\s+([A-Za-z_][A-Za-z0-9_.]*)', v):
+        parts = mod.split('.')
+        for k in range(1, len(parts) + 1):
+            surface.add('/'.join(parts[:k]) + '/__init__.py')
+        surface.add('/'.join(parts) + '.py')
 refused = sorted(p for p in surface if (p == '.pre-commit-config.yaml' and head_cfg.returncode != 0 and os.path.lexists(os.path.join(wt, p)))
                  or (p in tracked or os.path.lexists(os.path.join(wt, p))) and differs(p))
 # a selected path through a symlink (at HEAD or in the worktree) is refused
@@ -2972,7 +3007,7 @@ async function formatFiles(label, worktree, select, frozenList, allowed, phaseNa
     halt("failed", label + " returned no ran/stable/files/changed/refused");
   if (!relayDigestOk(r, keys)) halt("failed", label + ": the relayed result does not match the program's digest");
   if (r.refused.length)
-    halt("needs_human", label + ": hook config, a hook entry or a symlinked path differs from HEAD: " + r.refused.join(", ") + "; no hook was run", "hash");
+    halt("needs_human", label + ": hook config, a hook entry or a symlinked path differs from HEAD: " + r.refused.join(", ") + "; no hook was run (" + r.reason + ")", "hash");
   if (!r.ran) {
     gate(label + ": fixer hooks not run (" + r.reason + ")");
     return r;

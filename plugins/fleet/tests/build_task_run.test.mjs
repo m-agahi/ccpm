@@ -8718,9 +8718,10 @@ function fixerRepo(prefix, cfg, files) {
     { mode: 0o755 },
   );
   const prog = extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY");
-  const runF = (extra, timeout) => {
+  const runF = (extra, timeout, noYaml) => {
     const env = Object.assign({}, process.env, { PATH: bin + ":" + process.env.PATH, LOG: join(home, "log") }, extra || {});
-    const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify({ dirty: true }), "[]", join(home, "scratch"), String(timeout || 180)], { input: prog, encoding: "utf8", env });
+    const argv = ["-I", "-", wt, JSON.stringify({ dirty: true }), "[]", join(home, "scratch"), String(timeout || 180)].concat(noYaml ? ["no-yaml"] : []);
+    const r = spawnSync("python3", argv, { input: prog, encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout);
   };
@@ -8841,4 +8842,70 @@ test("3.0.0 review 5 LOW: fleet:judge cannot call the yaadgaar write tools", () 
   assert.ok(m, "disallowedTools line");
   for (const tool of ["Write", "Edit", "NotebookEdit", "mcp__yaadgaar__edit_task", "mcp__yaadgaar__create_task", "mcp__yaadgaar__transition_task"])
     assert.ok(m[1].split(/,\s*/).includes(tool), tool);
+});
+
+// ---------------------------------------------------------------- 3.0.0 review 6: block and folded scalars in the hook config
+
+const HAVE_YAML = spawnSync("python3", ["-I", "-c", "import yaml"]).status === 0;
+const FOLDED_CFG =
+  "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        entry: >-\n          ci/chk.sh\n        language: script\n      - id: lit\n        name: lit\n        entry: python3\n        args: |\n          tools/gen.py\n        language: system\n";
+
+test("3.0.0 review 6: a folded entry or literal args naming an edited hook file is refused (PyYAML parses the config)", { skip: !HAVE_PY || !HAVE_YAML }, () => {
+  const r = fixerRepo("fleet-r6-yaml-", FOLDED_CFG, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "tools/gen.py": "print(1)\n", "a.py": "x=1\n" });
+  try {
+    writeFileSync(join(r.wt, "a.py"), "x=2\n");
+    writeFileSync(join(r.wt, "ci/chk.sh"), "#!/bin/sh\nrm -rf /\n");
+    const o = r.runF();
+    assert.equal(o.ran, false);
+    assert.deepEqual(o.refused, ["ci/chk.sh"]);
+    sh(r.wt, "git", "checkout", "--", "ci/chk.sh");
+    writeFileSync(join(r.wt, "tools/gen.py"), "print(2)\n");
+    assert.deepEqual(r.runF().refused, ["tools/gen.py"]);
+    sh(r.wt, "git", "checkout", "--", "tools/gen.py");
+    const ok = r.runF();
+    assert.equal(ok.ran, true, ok.reason);
+    assert.deepEqual(ok.files, ["a.py"]);
+  } finally {
+    r.done();
+  }
+});
+
+test("3.0.0 review 6: without PyYAML a block or folded scalar, an anchor, an alias or a second document is refused, never guessed", { skip: !HAVE_PY }, () => {
+  for (const [what, cfg] of [
+    ["folded entry", FOLDED_CFG],
+    ["literal args", "repos:\n  - repo: local\n    hooks:\n      - id: x\n        name: x\n        entry: python3\n        args: |-\n          tools/gen.py\n        language: system\n"],
+    ["anchor and alias", "repos:\n  - repo: local\n    hooks:\n      - &h\n        id: x\n        name: x\n        entry: ci/chk.sh\n        language: script\n      - *h\n"],
+    ["second document", "repos: []\n---\nrepos: []\n"],
+    ["multi-line flow list", "repos:\n  - repo: local\n    hooks:\n      - id: x\n        name: x\n        entry: python3\n        args: [\n          tools/gen.py]\n        language: system\n"],
+  ]) {
+    const r = fixerRepo("fleet-r6-noyaml-", cfg, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "tools/gen.py": "print(1)\n", "a.py": "x=1\n" });
+    try {
+      writeFileSync(join(r.wt, "a.py"), "x=2\n");
+      const o = r.runF(null, 180, true);
+      assert.equal(o.ran, false, what);
+      assert.deepEqual(o.refused, [".pre-commit-config.yaml"], what);
+      assert.match(o.reason, /PyYAML is unavailable/, what);
+      assert.ok(!existsSync(join(r.home, "log")), what + ": no hook ran");
+    } finally {
+      r.done();
+    }
+  }
+});
+
+test("3.0.0 review 6: a plain config behaves as before, with and without PyYAML", { skip: !HAVE_PY }, () => {
+  const cfg = "repos:\n  - repo: local\n    hooks:\n      - id: chk\n        name: chk\n        entry: ci/chk.sh\n        language: script\n        args: [--fix, tools/gen.py]\n        files: ^common/\n";
+  for (const noYaml of HAVE_YAML ? [false, true] : [true]) {
+    const r = fixerRepo("fleet-r6-plain-", cfg, { "ci/chk.sh": "#!/bin/sh\nexit 0\n", "tools/gen.py": "print(1)\n", "common/a.py": "x=1\n" });
+    try {
+      writeFileSync(join(r.wt, "common/a.py"), "x=2\n");
+      const o = r.runF(null, 180, noYaml);
+      assert.equal(o.ran, true, String(noYaml) + " " + o.reason);
+      assert.deepEqual(o.files, ["common/a.py"]);
+      assert.deepEqual(o.refused, []);
+      writeFileSync(join(r.wt, "tools/gen.py"), "print(2)\n");
+      assert.deepEqual(r.runF(null, 180, noYaml).refused, ["tools/gen.py"], String(noYaml));
+    } finally {
+      r.done();
+    }
+  }
 });

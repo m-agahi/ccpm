@@ -84,7 +84,10 @@ changed; the new page text and the optional `symbol` key are additions, guarded 
   of a repo unformatted). A surface path that differs from HEAD stops the run before any hook runs.
   A selected path through a symlink (HEAD mode 120000, a symlinked parent at HEAD or in the
   worktree, a realpath outside either checkout) stops it too. A scratch checkout a killed run left
-  behind is removed first. **Accepted under ADR-1152:** a helper that a hook entry imports without
+  behind is removed first. The config is parsed with PyYAML when the program's `python3` has it
+  (`entry`/`args` of every hook, folded and block scalars included); without it, a block or folded
+  scalar, a continued value, an anchor or alias, or a second document refuses the step (fail
+  closed, review 6). **Accepted under ADR-1152:** a helper that a hook entry imports without
   the config naming it still runs from the scratch checkout of HEAD unless it is itself a selected
   file.
 - **yaadgaar write-back** (ledger 1928). For a `yaadgaar` source of a `yadgarhq/` project,
