@@ -47,11 +47,20 @@ agent PATH. A name that resolves passes only when its real path is under `/nix/s
 role can write) and its first 64 KiB hold `FLEET_SHIM_MARKER` = `fleet-agent-shim: hard-rules`.
 Anything else stops the run before any other step: `needs_human`, `stop_gate: "iac"`, "terraform
 tooling on PATH is not shimmed; install the agent PATH shims (nix) before using the fleet". No name
-resolving at all passes. A missing or tampered result (no `path_check`, a wrong digest, any program
-argument) stops the same way.
+resolving at all passes. The program gets the repo as its argument and reads the raw agent PATH:
+an empty or relative entry (the agent's shell resolves it against the worktree, the program would
+against `/`) or an entry inside the repo (the worktree, the scratch dir) stops the run as well
+("PATH has entries the agent shell resolves differently"). A missing or tampered result stops the
+same way: no `path_check`, a wrong digest, tool keys other than exactly the five names, an entry
+whose `path` is not absolute or whose `shim` is not a boolean, or a program argument other than
+the repo; a found entry passes only with `shim` exactly `true`. The relay trust model stays
+ADR-1152 (an unkeyed digest). Every embedded program gives its children a PATH without empty or
+relative entries, and the fixer gives pre-commit and its hooks one without the worktree's and the
+scratch dir's entries.
 
-**Accepted residual:** an absolute path to a real binary, and a container image built to run
-terraform. Max's hard rules and the settings.json denies are the controls there.
+**Accepted residual (ADR-1172):** a hook's or a test's call by absolute path to a real binary,
+and a container image built to run terraform. Max's hard rules and the settings.json denies are the
+controls there; no content scan stands in for them.
 
 **Unchanged, and open for Max:** the scope fence still refuses IaC paths (`*.tf`, `terraform/`,
 Kubernetes and Helm manifests) in planned paths under `confirm: "auto"` and in a coder's changes in

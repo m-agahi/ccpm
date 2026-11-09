@@ -556,11 +556,19 @@ digger on the agent's PATH. A name that resolves is a shim only when its real pa
 `fleet-agent-shim: hard-rules` (the constant `FLEET_SHIM_MARKER`). A name that resolves to
 anything else stops the run before any other step, with `needs_human`, `stop_gate: "iac"` and
 "terraform tooling on PATH is not shimmed; install the agent PATH shims (nix) before using the
-fleet". No name resolving at all passes. A missing or tampered result (no `path_check`, a wrong
-digest, any program argument) stops the same way. The program spells the names in pieces, because
+fleet". No name resolving at all passes. The program gets the repo as its argument and reads the raw
+agent PATH: an empty or relative PATH entry (the agent's shell would resolve it against the
+worktree) and an entry inside the repo (the fleet worktree, the scratch dir, a role's own `bin/`)
+stop the run too ("PATH has entries the agent shell resolves differently"). A missing or tampered
+result stops the same way: no `path_check`, a wrong digest, tool keys other than exactly those
+five names, an entry whose `path` is not absolute or whose `shim` is not a boolean, or a program
+argument other than the repo. A found entry passes only with `shim` exactly `true`. Every embedded
+program also gives its children a PATH without empty or relative entries, and the fixer gives
+pre-commit and its hooks one without the worktree's and the scratch dir's entries. The program spells the names in pieces, because
 the agent's Bash guard blocks them.
 
-**Accepted residual.** The PATH check and the shims do not stop an absolute path to a real binary
+**Accepted residual (ADR-1172; no content scan stands in for it).** The PATH check and the shims
+do not stop a hook's or a test's call by absolute path to a real binary
 (for example `/opt/terraform/bin/terraform`, or a binary a test downloads), nor a container image
 built to run terraform. Max's hard rules and the settings.json denies are the controls there.
 

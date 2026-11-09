@@ -302,6 +302,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import fnmatch, hashlib, json, os, re, shlex, shutil, subprocess, sys, tempfile
 try:
     import tomllib
@@ -884,6 +897,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, subprocess, sys
 wt, paths = sys.argv[1], json.loads(sys.argv[2])
 real_wt = os.path.realpath(wt)
@@ -2031,6 +2057,19 @@ const PLAN_HASH_PY =
   "for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):\n" +
   "    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv\n" +
   "_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)\n" +
+  "_RAW_PATH = _o.environ.get('PATH', '')\n" +
+  "def clean_path(inside=()):\n" +
+  "    # PATH for children: absolute entries only, none inside the given dirs\n" +
+  "    keep = []\n" +
+  "    for e in _RAW_PATH.split(':'):\n" +
+  "        if not e or not _o.path.isabs(e):\n" +
+  "            continue\n" +
+  "        r = _o.path.realpath(e)\n" +
+  "        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):\n" +
+  "            continue\n" +
+  "        keep.append(e)\n" +
+  "    return ':'.join(keep)\n" +
+  "_o.environ['PATH'] = clean_path()\n" +
   "import hashlib, subprocess, sys\n" +
   "d = subprocess.run(['git', '-C', sys.argv[1], 'show', sys.argv[2] + ':' + sys.argv[3]], capture_output=True, check=True).stdout\n" +
   "print(hashlib.sha256(d).hexdigest())";
@@ -2075,6 +2114,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 if len(sys.argv) != 4:
@@ -2186,6 +2238,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, default, sha = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2231,6 +2296,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, default, tid, kinds = sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
@@ -2343,6 +2421,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2376,6 +2467,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, plan_path = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2421,6 +2525,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt = sys.argv[1]
@@ -2457,6 +2574,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, plan_path, syms, cap = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), int(sys.argv[4])
@@ -2515,6 +2645,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, tree, excl = sys.argv[1], sys.argv[2], sys.argv[3], set(json.loads(sys.argv[4]))
@@ -2858,8 +3001,8 @@ function preflightPrompt(inputs) {
     "contract maps each found pattern to the first line of its `content` that starts with `CONTRACT:`, copied raw; null when none. " +
     "`content` often has no trailing newline: its last line counts as a line like any other. " +
     "Then run this one command exactly as written, unmodified, as one Bash call: " +
-    "python3 -I -c " + shQuote(PATH_CHECK_PY) +
-    "\nIt prints one JSON object {tools, args, digest}: return it as path_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n" +
+    "python3 -I -c " + shQuote(PATH_CHECK_PY) + " " + shQuote(inputs.repo) +
+    "\nIt prints one JSON object {tools, args, path_problems, digest}: return it as path_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n" +
     "Return {reachable, missing, versions, dispatch, contract, path_check, reason}."
   );
 }
@@ -3033,9 +3176,25 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile
 wt, sel, frozen = sys.argv[1], json.loads(sys.argv[2]), set(json.loads(sys.argv[3]))
 scratch_root, tmo = sys.argv[4], int(sys.argv[5])
+# no PATH entry inside the worktree or the scratch dir: pre-commit and the
+# hooks it runs resolve their tools as the agent's shell would, minus the repo
+os.environ['PATH'] = clean_path([wt, scratch_root])
 # argv[6] (tests only): 'no-yaml' behaves as if no Python had PyYAML;
 # 'no-local-yaml' skips only this python3 as a fallback
 no_yaml = len(sys.argv) > 6 and sys.argv[6] == 'no-yaml'
@@ -3285,7 +3444,7 @@ try:
     while runs < 3:
         runs += 1
         try:
-            subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=env, preexec_fn=lift)
+            subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=dict(env, PATH=clean_path([wt, scratch_root])), preexec_fn=lift)
         except subprocess.TimeoutExpired:
             prev = delta()
             break
@@ -3603,6 +3762,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, re, sys
 path, code = sys.argv[1], int(sys.argv[2])
 os.chdir('/')
@@ -3654,6 +3826,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import ast, hashlib, json, os, re, shutil, subprocess, sys
 wt, rev, targets_arg = sys.argv[1], sys.argv[2], sys.argv[3]
 targets = [t for t in json.loads(targets_arg) if isinstance(t, str)]
@@ -4031,6 +4216,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import json, subprocess, sys
 wt, rev = sys.argv[1], sys.argv[2]
 r = subprocess.run(['git', '-C', wt, 'show', rev + ':.pre-commit-config.yaml'], capture_output=True)
@@ -4098,17 +4296,44 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, shutil, sys
 os.chdir('/')
 MARKER = b'fleet-agent-shim: hard-rules'
 NAMES = ('terra' + 'form', 'to' + 'fu', 't' + 'fp', 'terra' + 'grunt', 'dig' + 'ger')
 store = '/nix/store/'
+repo = None
 for a in sys.argv[1:]:
     if a.startswith('--store-prefix='):
         store = a[len('--store-prefix='):]
+    elif repo is None:
+        repo = a
+# the agent's shell resolves an empty or relative PATH entry against its cwd
+# (the worktree), and an entry inside the repo is a role's own dir: refuse both
+problems = []
+rr = os.path.realpath(repo) if repo else None
+for e in _RAW_PATH.split(':'):
+    if e == '':
+        problems.append('empty PATH entry')
+    elif not os.path.isabs(e):
+        problems.append('relative PATH entry ' + json.dumps(e))
+    elif rr and (os.path.realpath(e) == rr or os.path.realpath(e).startswith(rr.rstrip('/') + '/')):
+        problems.append('PATH entry ' + json.dumps(e) + ' is inside the repo ' + json.dumps(repo))
 tools = {}
 for name in NAMES:
-    p = shutil.which(name)
+    p = shutil.which(name, path=':'.join(e for e in _RAW_PATH.split(':') if e and os.path.isabs(e)))
     if p is None:
         tools[name] = None
         continue
@@ -4119,24 +4344,34 @@ for name in NAMES:
     except OSError:
         head = b''
     tools[name] = {'path': p, 'real': real, 'shim': real.startswith(store) and MARKER in head}
-out = {'tools': tools, 'args': sys.argv[1:]}
+out = {'tools': tools, 'args': sys.argv[1:], 'path_problems': problems}
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, ensure_ascii=False))
 `;
 // PATH_CHECK_PY_END
-const PATH_TOOL_COUNT = 5;
+const PATH_TOOLS = ["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt", "dig" + "ger"];
 const NOT_SHIMMED = "terraform tooling on PATH is not shimmed; install the agent PATH shims (nix) before using the fleet";
 
 // Stops the run unless every IaC tool on the agent PATH is a nix shim.
-function pathCheck(pc) {
-  const tools = pc && typeof pc.tools === "object" && pc.tools ? pc.tools : null;
-  if (!tools || Object.keys(tools).length !== PATH_TOOL_COUNT || !Array.isArray(pc.args) || pc.args.length || !relayDigestOk(pc, ["tools", "args"]))
+function pathCheck(pc, repo) {
+  const tools = pc && typeof pc.tools === "object" && pc.tools && !Array.isArray(pc.tools) ? pc.tools : null;
+  const keys = tools ? Object.keys(tools).sort() : [];
+  const shapeOk =
+    tools &&
+    canonical(keys) === canonical(PATH_TOOLS.slice().sort()) &&
+    keys.every((k) => {
+      const t = tools[k];
+      return t === null || (t && typeof t === "object" && !Array.isArray(t) && typeof t.path === "string" && t.path.charAt(0) === "/" && typeof t.shim === "boolean");
+    });
+  if (!shapeOk || canonical(pc.args) !== canonical([repo]) || !Array.isArray(pc.path_problems) || !relayDigestOk(pc, ["tools", "args", "path_problems"]))
     halt("needs_human", NOT_SHIMMED + " (the PATH check could not complete: preflight returned no usable path_check)", "iac");
+  if (pc.path_problems.length)
+    halt("needs_human", NOT_SHIMMED + " (PATH has entries the agent shell resolves differently: " + pc.path_problems.map(String).join("; ") + ")", "iac");
   const real = [];
-  for (const k of Object.keys(tools)) {
+  for (const k of keys) {
     const t = tools[k];
     if (t === null) continue;
-    if (!t || typeof t !== "object" || t.shim !== true) real.push(k + " at " + (t && t.path ? t.path : "?"));
+    if (t.shim !== true) real.push(k + " at " + t.path);
   }
   if (real.length) halt("needs_human", NOT_SHIMMED + " (" + real.join(", ") + ")", "iac");
   gate("PATH check: every IaC tool on the agent PATH is a nix shim, or absent");
@@ -4184,6 +4419,19 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, ref = sys.argv[1], sys.argv[2]
@@ -4604,15 +4852,15 @@ function layoutKey(key, repo) {
   return { key, branch: "fleet/" + key, root, mainWt: root + "/main", scratch: root + "/scratch" };
 }
 
-async function preflightStep() {
+async function preflightStep(repo) {
   phase("Preflight");
-  const pre = await dispatch("preflight", preflightPrompt({ roles: ROLES, role_project: ROLE_PROJECT }), {
+  const pre = await dispatch("preflight", preflightPrompt({ roles: ROLES, role_project: ROLE_PROJECT, repo }), {
     schema: PREFLIGHT_SCHEMA,
     agentType: JUDGE_AGENT,
     phase: "Preflight",
   });
   // Max's ruling (2026-11-09): IaC tooling may only be reachable through the nix shims
-  pathCheck(pre.path_check);
+  pathCheck(pre.path_check, repo);
   if (!pre.reachable) halt("needs_human", "yadgar unavailable: " + (pre.reason || "role library unreachable"));
   const missing = pre.missing || [];
   if (missing.length) halt("needs_human", "role missing in yadgar: " + missing.join(", "));
@@ -5652,7 +5900,7 @@ async function planMode(input, date) {
   if (!raw) stop("needs_human", "args.input missing: run /build-task <ledger id | Jira key | issue or PR URL | plan path | text>");
   if (!repo) stop("needs_human", "args.repo must be the absolute path of the caller's git toplevel");
 
-  await preflightStep();
+  await preflightStep(repo);
 
   phase("Intake");
   const it = await dispatch("intake", intakePrompt({ input: raw, repo, project: input.project || null, ledger: ledgerFor(input.project) }), {
@@ -5849,7 +6097,7 @@ async function buildMode(input, date) {
   const lay = layoutKey(tiny.branch.slice("fleet/".length), repo);
   state.branch = lay.branch;
 
-  await preflightStep();
+  await preflightStep(repo);
   const ws = await workspaceStep(repo, lay);
   return buildFromRef(input, date, tiny, lay, ws, { rerunGates: input.confirm === "auto", intent: null, agentsBase: 0 });
 }

@@ -192,7 +192,7 @@ async function runOne(script, args0) {
     calls.push({ label, prompt, opts });
     // 3.1.0: preflight returns the PATH check program's output (no IaC tool on PATH)
     if (label === "preflight" && script.preflight && typeof script.preflight === "object" && !("path_check" in script.preflight) && !script.preflight.__raw_path_check) {
-      const pc = { tools: { ["terra" + "form"]: null, ["to" + "fu"]: null, ["t" + "fp"]: null, ["terra" + "grunt"]: null, ["dig" + "ger"]: null }, args: [] };
+      const pc = { tools: { ["terra" + "form"]: null, ["to" + "fu"]: null, ["t" + "fp"]: null, ["terra" + "grunt"]: null, ["dig" + "ger"]: null }, args: [inputsOf(prompt).repo], path_problems: [] };
       pc.digest = sha256(canon(pc));
       return Object.assign(JSON.parse(JSON.stringify(script.preflight)), { path_check: pc });
     }
@@ -6069,7 +6069,8 @@ const ARRAY_SITES = {
   "pre.results @ writeBack": "infra:results",
   "o.files @ obligationFailures": "parsed: repo_obligations of the sealed plan facts",
   "r.surface @ hookSurface": "infra:surface",
-  "pc.args @ pathCheck": "parsed: preflight path_check (digest-checked)",
+  "pc.tools @ pathCheck": "parsed: preflight path_check (digest-checked, keys and shapes checked)",
+  "pc.path_problems @ pathCheck": "parsed: preflight path_check (digest-checked)",
   "pf.changed_symbols @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "e.occurrences @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "c.test_files @ planScopePaths": "parsed: normalised criteria",
@@ -9612,7 +9613,7 @@ test("3.1.0 caps: every embedded Python program and both YAML loaders set RLIMIT
     assert.doesNotMatch(m[1], /default=str/, n);
   }
   // the repo's own hooks are not bound by the fixer's caps
-  assert.match(SOURCE, /\['pre-commit', 'run', '--files'\] \+ files, cwd=scratch, capture_output=True, timeout=tmo, env=env, preexec_fn=lift\)/);
+  assert.match(SOURCE, /\['pre-commit', 'run', '--files'\] \+ files, cwd=scratch, capture_output=True, timeout=tmo, env=dict\(env, PATH=clean_path\(\[wt, scratch_root\]\)\), preexec_fn=lift\)/);
 });
 
 test("3.1.0 caps: a program that allocates past its cap dies quickly instead of growing", { skip: !HAVE_PY }, () => {
@@ -9954,7 +9955,7 @@ const NOT_SHIMMED = /terraform tooling on PATH is not shimmed; install the agent
 
 // a preflight result whose path_check is the program's output for `tools`
 function preflightWith(tools, args) {
-  const pc = { tools: Object.assign(Object.fromEntries(TF_TOOLS.map((t) => [t, null])), tools || {}), args: args || [] };
+  const pc = { tools: Object.assign(Object.fromEntries(TF_TOOLS.map((t) => [t, null])), tools || {}), args: args || ["/r"], path_problems: [] };
   pc.digest = sha256(canon(pc));
   return pc;
 }
@@ -9993,7 +9994,7 @@ test("3.1.0 PATH check: a missing, tampered or test-overridden result refuses", 
   for (const [pc, re] of [
     [undefined, /PATH check could not complete/],
     [Object.assign(preflightWith({}), { tools: {} }), /PATH check could not complete/],
-    [preflightWith({}, ["--store-prefix=/tmp/x"]), /PATH check could not complete/],
+    [preflightWith({}, ["/r", "--store-prefix=/tmp/x"]), /PATH check could not complete/],
   ]) {
     const s = happy();
     s.preflight = Object.assign({}, s.preflight, { path_check: pc, __raw_path_check: true });
@@ -10028,7 +10029,7 @@ test("3.1.0 PATH check program: resolves each tool on PATH; a shim is a /nix/sto
     spawnSync("mkdir", ["-p", bin, join(store, "abc-shim", "bin"), join(store, "def-real", "bin")]);
     const mk = (p, text) => writeFileSync(p, text, { mode: 0o755 });
     const run = (extra) => {
-      const r = spawnSync(PY3, ["-I", "-c", prog].concat(extra || []), { encoding: "utf8", env: { PATH: bin }, cwd: home, timeout: 60000, maxBuffer: 1 << 20 });
+      const r = spawnSync(PY3, ["-I", "-c", prog, join(home, "repo")].concat(extra || []), { encoding: "utf8", env: { PATH: bin }, cwd: home, timeout: 60000, maxBuffer: 1 << 20 });
       assert.equal(r.status, 0, r.stderr);
       return JSON.parse(r.stdout);
     };
@@ -10036,8 +10037,9 @@ test("3.1.0 PATH check program: resolves each tool on PATH; a shim is a /nix/sto
     // nothing on PATH
     let o = run();
     assert.deepEqual(o.tools, Object.fromEntries(TF_TOOLS.map((t) => [t, null])));
-    assert.deepEqual(o.args, []);
-    assert.equal(o.digest, sha256(fn({ tools: o.tools, args: o.args })));
+    assert.deepEqual(o.args, [join(home, "repo")]);
+    assert.deepEqual(o.path_problems, []);
+    assert.equal(o.digest, sha256(fn({ tools: o.tools, args: o.args, path_problems: o.path_problems })));
     // a real tool outside the store
     mk(join(bin, TF_TOOLS[0]), "#!/bin/sh\necho real\n");
     o = run(["--store-prefix=" + store]);
@@ -10119,4 +10121,78 @@ test("3.1.0 survivor N7: a script a hook's args name is hook surface; editing it
     assert.match(out.result.reason, re);
     assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)));
   }
+});
+
+// ---------------------------------------------------------------- 3.1.0 security review: the PATH check matches the agent's shell
+
+test("3.1.0 PATH review: the program refuses an empty, relative or in-repo PATH entry; it gets the repo as its argument", { skip: !HAVE_PY }, () => {
+  const prog = extractPy("PATH_CHECK_PY_BEGIN", "PATH_CHECK_PY_END", "PATH_CHECK_PY");
+  const home = mkdtempSync(join(tmpdir(), "fleet-pathcheck2-"));
+  try {
+    const repo = join(home, "repo");
+    const bin = join(home, "bin");
+    spawnSync("mkdir", ["-p", join(repo, "bin"), join(repo, ".claude", "worktrees", "fleet-x", "scratch"), bin]);
+    const run = (path) => {
+      const r = spawnSync(PY3, ["-I", "-c", prog, repo], { encoding: "utf8", env: { PATH: path }, cwd: home, timeout: 60000, maxBuffer: 1 << 20 });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    assert.deepEqual(run(bin).path_problems, []);
+    assert.deepEqual(run(bin).args, [repo]);
+    for (const [path, re] of [
+      [bin + "::/usr/bin", /empty PATH entry/],
+      [".:" + bin, /relative PATH entry "\."/],
+      ["bin:" + bin, /relative PATH entry "bin"/],
+      [bin + ":", /empty PATH entry/],
+      [join(repo, "bin") + ":" + bin, /PATH entry .* is inside the repo/],
+      [join(repo, ".claude", "worktrees", "fleet-x", "scratch") + ":" + bin, /inside the repo/],
+    ])
+      assert.match(run(path).path_problems.join("; "), re, path);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("3.1.0 PATH review: the workflow refuses PATH problems, a wrong repo argument, wrong tool keys or a malformed entry", async () => {
+  const base = (over) => {
+    const pc = Object.assign({ tools: Object.fromEntries(TF_TOOLS.map((t) => [t, null])), args: ["/r"], path_problems: [] }, over);
+    if (!("digest" in pc)) pc.digest = sha256(canon(pc));
+    return pc;
+  };
+  const shim = { path: "/home/u/.nix-profile/bin/x", real: "/nix/store/abc/bin/x", shim: true };
+  for (const [pc, re] of [
+    [base({ path_problems: ['relative PATH entry "."'] }), /PATH has entries the agent shell resolves differently: relative PATH entry "\."/],
+    [base({ args: ["/other"] }), /could not complete/],
+    [base({ args: [] }), /could not complete/],
+    // the exact key set, not just the count
+    [base({ tools: Object.assign(Object.fromEntries(TF_TOOLS.slice(1).map((t) => [t, null])), { other: null }) }), /could not complete/],
+    // entry shapes
+    [base({ tools: Object.assign(Object.fromEntries(TF_TOOLS.map((t) => [t, null])), { [TF_TOOLS[0]]: { path: "/x", real: "/x", shim: "true" } }) }), /not shimmed/],
+    [base({ tools: Object.assign(Object.fromEntries(TF_TOOLS.map((t) => [t, null])), { [TF_TOOLS[0]]: { path: "bin/x", real: "/nix/store/a/x", shim: true } }) }), /could not complete/],
+    [base({ tools: Object.assign(Object.fromEntries(TF_TOOLS.map((t) => [t, null])), { [TF_TOOLS[0]]: { real: "/nix/store/a/x", shim: true } }) }), /could not complete/],
+    [base({ tools: Object.assign(Object.fromEntries(TF_TOOLS.map((t) => [t, null])), { [TF_TOOLS[0]]: "x" }) }), /could not complete/],
+  ]) {
+    const s = happy();
+    s.preflight = Object.assign({}, s.preflight, { path_check: pc });
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(pc));
+    assert.match(out.result.reason, re, JSON.stringify(pc));
+    assert.deepEqual(out.labels, ["preflight"]);
+  }
+  // a well-formed shim passes; the preflight prompt passes the repo to the program
+  const s = happy();
+  s.preflight = Object.assign({}, s.preflight, { path_check: base({ tools: Object.assign(Object.fromEntries(TF_TOOLS.map((t) => [t, null])), { [TF_TOOLS[0]]: shim }) }) });
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.match(call(out, "preflight").prompt, /' '\/r'\n/);
+});
+
+test("3.1.0 PATH review: every embedded program drops empty, relative and in-worktree PATH entries for its children", { skip: !HAVE_PY }, () => {
+  const prog = extractPy("PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY");
+  const prelude = prog.slice(0, prog.indexOf("import hashlib"));
+  const r = spawnSync(PY3, ["-I", "-c", prelude + "import os\nprint(os.environ['PATH'])\nprint(_RAW_PATH)\n"], { encoding: "utf8", env: { PATH: ".::bin:/usr/bin:" }, timeout: 60000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.trim().split("\n"), ["/usr/bin", ".::bin:/usr/bin:"]);
+  // the fixer hands pre-commit a PATH without the worktree's own dirs
+  assert.match(extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY"), /PATH=clean_path\(\[wt, scratch_root\]\)/);
 });
