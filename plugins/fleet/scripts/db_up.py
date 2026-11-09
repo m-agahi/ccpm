@@ -54,37 +54,50 @@ def pm(*a, timeout=120):
     return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
 def tail(r):
     return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
-# usage: db_up.py up <name> <image> <ttl> <nonce> <dbs json> <password>
-#        db_up.py add <name> <dbs json> <password>
+# usage: db_up.py up <name> <image> <ttl> <nonce> <dbs json>
+#        db_up.py add <name> <dbs json>
+# One MariaDB user per database, granted on that database only, with a random
+# password from this program. The root password is random too, lives only in
+# the container, and is never printed.
+import secrets
 argv = sys.argv[1:]
 mode = argv[0] if argv else ''
-if mode not in ('up', 'add') or len(argv) != (7 if mode == 'up' else 4):
-    fail(2, 'usage: db_up.py up <name> <image> <ttl> <nonce> <dbs> <password> | add <name> <dbs> <password>')
-name, pw = argv[1], argv[-1]
+if mode not in ('up', 'add') or len(argv) != (6 if mode == 'up' else 3):
+    fail(2, 'usage: db_up.py up <name> <image> <ttl> <nonce> <dbs> | add <name> <dbs>')
+name = argv[1]
 if not name_ok(name):
     fail(2, 'container name refused: ' + name)
-if not re.fullmatch(r'[0-9a-f]{24}', pw):
-    fail(2, 'password refused')
 try:
-    dbs = json.loads(argv[-2])
+    dbs = json.loads(argv[-1])
 except ValueError:
     dbs = None
 if not isinstance(dbs, list) or not 1 <= len(dbs) <= 64 or len(set(map(str, dbs))) != len(dbs) or not all(isinstance(d, str) and re.fullmatch(r'fleet_[a-z0-9_]{1,48}', d) for d in dbs):
     fail(2, 'database names refused')
 if not PM:
     fail(4, 'no podman on PATH: no container started')
-out = {'name': name, 'port': None, 'dbs': dbs, 'expiry': None, 'args': argv[:-1]}
-def sql(stmt):
-    return pm('exec', '-e', 'MYSQL_PWD=' + pw, name, 'mariadb', '--protocol=tcp', '-h127.0.0.1', '-uroot', '-e', stmt, timeout=60)
-def create():
-    return sql(' '.join('CREATE DATABASE IF NOT EXISTS ' + d + ';' for d in dbs))
+users = {d: secrets.token_hex(16) for d in dbs}
+out = {'name': name, 'port': None, 'dbs': dbs, 'users': None, 'expiry': None, 'args': argv}
+def sql(root, stmt):
+    return pm('exec', '-e', 'MYSQL_PWD=' + root, name, 'mariadb', '--protocol=tcp', '-h127.0.0.1', '-uroot', '-e', stmt, timeout=60)
+def create(root):
+    st = []
+    for d in dbs:
+        st.append('CREATE DATABASE IF NOT EXISTS ' + d + ';')
+        st.append("CREATE OR REPLACE USER '" + d + "'@'%' IDENTIFIED BY '" + users[d] + "';")
+        st.append("GRANT ALL PRIVILEGES ON " + d + ".* TO '" + d + "'@'%';")
+    return sql(root, ' '.join(st))
 if mode == 'add':
     i = pm('container', 'inspect', '--format', '{{index .Config.Labels "fleet.db"}}', name)
     if i.returncode != 0 or i.stdout.strip() != b'1':
         fail(5, 'no fleet test database container ' + name)
-    c = create()
+    rp = pm('exec', name, 'printenv', 'MARIADB_ROOT_PASSWORD')
+    root = rp.stdout.decode('utf-8', 'replace').strip()
+    if rp.returncode != 0 or not re.fullmatch(r'[0-9a-f]{32}', root):
+        fail(5, 'no root password in container ' + name)
+    c = create(root)
     if c.returncode != 0:
         fail(6, 'CREATE DATABASE failed: ' + tail(c))
+    out['users'] = users
     done(out)
 image, ttl_s, nonce = argv[2], argv[3], argv[4]
 if not re.fullmatch(r'[a-z0-9][a-z0-9./_-]{0,200}@sha256:[0-9a-f]{64}', image):
@@ -94,6 +107,7 @@ if not re.fullmatch(r'[0-9]{2,5}', ttl_s) or not 60 <= int(ttl_s) <= 86400:
 if not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', nonce):
     fail(2, 'nonce refused')
 ttl = int(ttl_s)
+root = secrets.token_hex(16)
 # self-expiry first: podman run --timeout, else a systemd-run timer; neither -> no container
 h = pm('run', '--help')
 SR = shutil.which('systemd-run')
@@ -106,7 +120,7 @@ else:
 expires = int(time.time()) + ttl
 cmd = ['run', '-d', '--rm', '--name', name, '--label', 'fleet.db=1', '--label', 'fleet.nonce=' + nonce, '--label', 'fleet.expires=' + str(expires),
        '-p', '127.0.0.1::3306', '--tmpfs', '/var/lib/mysql:size=1g', '--memory', '1g', '--cpus', '2', '--pids-limit', '512',
-       '-e', 'MARIADB_ROOT_PASSWORD=' + pw]
+       '-e', 'MARIADB_ROOT_PASSWORD=' + root]
 if mech == 'podman-timeout':
     cmd += ['--timeout', str(ttl)]
 r = pm(*(cmd + [image]), timeout=900)
@@ -128,15 +142,16 @@ if p.returncode != 0 or not ports or not all(ports) or len(set(m.group(1) for m 
 port = int(ports[0].group(1))
 deadline = time.time() + 60
 while True:
-    k = pm('exec', '-e', 'MYSQL_PWD=' + pw, name, 'mariadb-admin', '--protocol=tcp', '-h127.0.0.1', '-uroot', 'ping', timeout=30)
+    k = pm('exec', '-e', 'MYSQL_PWD=' + root, name, 'mariadb-admin', '--protocol=tcp', '-h127.0.0.1', '-uroot', 'ping', timeout=30)
     if k.returncode == 0:
         break
     if time.time() > deadline:
         gone(6, 'the database did not answer within 60 s: ' + tail(k))
     time.sleep(2)
-c = create()
+c = create(root)
 if c.returncode != 0:
     gone(6, 'CREATE DATABASE failed: ' + tail(c))
 out['port'] = port
+out['users'] = users
 out['expiry'] = {'mechanism': mech, 'expires': expires}
 done(out)

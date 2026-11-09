@@ -6441,8 +6441,10 @@ const state = {
   // 4.0.0 (1987): the digest of the last freeze and its plan_ref (returned on a stop)
   freezeDigest: null,
   freezePlanRef: null,
-  // 4.0.0 (1981): the run's test database {name, pw, port, env, image, dbs, expires, mechanism}
+  // 4.0.0 (1981): the run's test database {name, users, port, env, image, dbs, expires, mechanism}
   db: null,
+  // the container main's finally removes (set before db-up starts it)
+  dbTarget: null,
 };
 
 function gate(msg) {
@@ -10352,7 +10354,9 @@ if PM:
 done(out)`;
 // DB_SWEEP_PY_END
 
-// Starts the run's test database, or adds databases to it: {name, port, dbs, expiry, args}.
+// Starts the run's test database, or adds databases to it, with one user per
+// database (random passwords; the root password never leaves the container):
+// {name, port, dbs, users, expiry, args}.
 // DB_UP_PY_BEGIN
 const DB_UP_PY = String.raw`
 # resource caps (3.1.0): every embedded program bounds its own address space
@@ -10410,37 +10414,50 @@ def pm(*a, timeout=120):
     return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
 def tail(r):
     return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
-# usage: db_up.py up <name> <image> <ttl> <nonce> <dbs json> <password>
-#        db_up.py add <name> <dbs json> <password>
+# usage: db_up.py up <name> <image> <ttl> <nonce> <dbs json>
+#        db_up.py add <name> <dbs json>
+# One MariaDB user per database, granted on that database only, with a random
+# password from this program. The root password is random too, lives only in
+# the container, and is never printed.
+import secrets
 argv = sys.argv[1:]
 mode = argv[0] if argv else ''
-if mode not in ('up', 'add') or len(argv) != (7 if mode == 'up' else 4):
-    fail(2, 'usage: db_up.py up <name> <image> <ttl> <nonce> <dbs> <password> | add <name> <dbs> <password>')
-name, pw = argv[1], argv[-1]
+if mode not in ('up', 'add') or len(argv) != (6 if mode == 'up' else 3):
+    fail(2, 'usage: db_up.py up <name> <image> <ttl> <nonce> <dbs> | add <name> <dbs>')
+name = argv[1]
 if not name_ok(name):
     fail(2, 'container name refused: ' + name)
-if not re.fullmatch(r'[0-9a-f]{24}', pw):
-    fail(2, 'password refused')
 try:
-    dbs = json.loads(argv[-2])
+    dbs = json.loads(argv[-1])
 except ValueError:
     dbs = None
 if not isinstance(dbs, list) or not 1 <= len(dbs) <= 64 or len(set(map(str, dbs))) != len(dbs) or not all(isinstance(d, str) and re.fullmatch(r'fleet_[a-z0-9_]{1,48}', d) for d in dbs):
     fail(2, 'database names refused')
 if not PM:
     fail(4, 'no podman on PATH: no container started')
-out = {'name': name, 'port': None, 'dbs': dbs, 'expiry': None, 'args': argv[:-1]}
-def sql(stmt):
-    return pm('exec', '-e', 'MYSQL_PWD=' + pw, name, 'mariadb', '--protocol=tcp', '-h127.0.0.1', '-uroot', '-e', stmt, timeout=60)
-def create():
-    return sql(' '.join('CREATE DATABASE IF NOT EXISTS ' + d + ';' for d in dbs))
+users = {d: secrets.token_hex(16) for d in dbs}
+out = {'name': name, 'port': None, 'dbs': dbs, 'users': None, 'expiry': None, 'args': argv}
+def sql(root, stmt):
+    return pm('exec', '-e', 'MYSQL_PWD=' + root, name, 'mariadb', '--protocol=tcp', '-h127.0.0.1', '-uroot', '-e', stmt, timeout=60)
+def create(root):
+    st = []
+    for d in dbs:
+        st.append('CREATE DATABASE IF NOT EXISTS ' + d + ';')
+        st.append("CREATE OR REPLACE USER '" + d + "'@'%' IDENTIFIED BY '" + users[d] + "';")
+        st.append("GRANT ALL PRIVILEGES ON " + d + ".* TO '" + d + "'@'%';")
+    return sql(root, ' '.join(st))
 if mode == 'add':
     i = pm('container', 'inspect', '--format', '{{index .Config.Labels "fleet.db"}}', name)
     if i.returncode != 0 or i.stdout.strip() != b'1':
         fail(5, 'no fleet test database container ' + name)
-    c = create()
+    rp = pm('exec', name, 'printenv', 'MARIADB_ROOT_PASSWORD')
+    root = rp.stdout.decode('utf-8', 'replace').strip()
+    if rp.returncode != 0 or not re.fullmatch(r'[0-9a-f]{32}', root):
+        fail(5, 'no root password in container ' + name)
+    c = create(root)
     if c.returncode != 0:
         fail(6, 'CREATE DATABASE failed: ' + tail(c))
+    out['users'] = users
     done(out)
 image, ttl_s, nonce = argv[2], argv[3], argv[4]
 if not re.fullmatch(r'[a-z0-9][a-z0-9./_-]{0,200}@sha256:[0-9a-f]{64}', image):
@@ -10450,6 +10467,7 @@ if not re.fullmatch(r'[0-9]{2,5}', ttl_s) or not 60 <= int(ttl_s) <= 86400:
 if not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', nonce):
     fail(2, 'nonce refused')
 ttl = int(ttl_s)
+root = secrets.token_hex(16)
 # self-expiry first: podman run --timeout, else a systemd-run timer; neither -> no container
 h = pm('run', '--help')
 SR = shutil.which('systemd-run')
@@ -10462,7 +10480,7 @@ else:
 expires = int(time.time()) + ttl
 cmd = ['run', '-d', '--rm', '--name', name, '--label', 'fleet.db=1', '--label', 'fleet.nonce=' + nonce, '--label', 'fleet.expires=' + str(expires),
        '-p', '127.0.0.1::3306', '--tmpfs', '/var/lib/mysql:size=1g', '--memory', '1g', '--cpus', '2', '--pids-limit', '512',
-       '-e', 'MARIADB_ROOT_PASSWORD=' + pw]
+       '-e', 'MARIADB_ROOT_PASSWORD=' + root]
 if mech == 'podman-timeout':
     cmd += ['--timeout', str(ttl)]
 r = pm(*(cmd + [image]), timeout=900)
@@ -10484,16 +10502,17 @@ if p.returncode != 0 or not ports or not all(ports) or len(set(m.group(1) for m 
 port = int(ports[0].group(1))
 deadline = time.time() + 60
 while True:
-    k = pm('exec', '-e', 'MYSQL_PWD=' + pw, name, 'mariadb-admin', '--protocol=tcp', '-h127.0.0.1', '-uroot', 'ping', timeout=30)
+    k = pm('exec', '-e', 'MYSQL_PWD=' + root, name, 'mariadb-admin', '--protocol=tcp', '-h127.0.0.1', '-uroot', 'ping', timeout=30)
     if k.returncode == 0:
         break
     if time.time() > deadline:
         gone(6, 'the database did not answer within 60 s: ' + tail(k))
     time.sleep(2)
-c = create()
+c = create(root)
 if c.returncode != 0:
     gone(6, 'CREATE DATABASE failed: ' + tail(c))
 out['port'] = port
+out['users'] = users
 out['expiry'] = {'mechanism': mech, 'expires': expires}
 done(out)`;
 // DB_UP_PY_END
@@ -10598,8 +10617,9 @@ const DB_DECL_FILE = ".fleet-test-db.json";
 const DB_TTL_SECONDS = 6 * 3600;
 const DB_NAME_RE = /^fleet-db-[a-z0-9-]{1,80}$/;
 const DB_ENV_RE = /^[A-Z][A-Z0-9_]{0,40}_TEST_DSN$/;
+const DB_UP_KEYS = ["name", "port", "dbs", "users", "expiry", "args"];
 const DB_DSN_NOTE =
-  "is this run's throwaway MariaDB on 127.0.0.1, with one database for this role only: use it for the database-backed tests and never point a test at any other database. The workflow removes it at the end of the run.";
+  "is this run's throwaway MariaDB on 127.0.0.1: a user of its own, granted on one database for this role only. Use it for the database-backed tests and never point a test at any other database. The workflow removes it at the end of the run.";
 
 // Why a declaration is refused (null: it is fine). The program checks the same.
 function testDbDeclProblem(d) {
@@ -10621,10 +10641,17 @@ function dbContainerName(taskId, nonce) {
 function dbOf(consumer) {
   return "fleet_" + String(consumer).toLowerCase().replace(/[^a-z0-9_]+/g, "_").slice(0, 40);
 }
+// a consumer's DSN: its own user, granted on its own database only (never root)
 function dbDsn(consumer) {
   const db = dbOf(consumer);
-  if (state.db.dbs.indexOf(db) < 0) halt("failed", "internal: no test database " + db + " in " + state.db.name, "db");
-  return "mysql://root:" + state.db.pw + "@127.0.0.1:" + state.db.port + "/" + db;
+  if (state.db.dbs.indexOf(db) < 0 || !state.db.users[db]) halt("failed", "internal: no test database " + db + " in " + state.db.name, "db");
+  return "mysql://" + db + ":" + state.db.users[db] + "@127.0.0.1:" + state.db.port + "/" + db;
+}
+// the relayed users: exactly one per database, each a 32-hex password
+function dbUsersOk(users, dbs) {
+  if (!users || typeof users !== "object" || Array.isArray(users)) return false;
+  if (canonical(Object.keys(users).sort()) !== canonical(dbs.slice().sort())) return false;
+  return dbs.every((d) => typeof users[d] === "string" && /^[0-9a-f]{32}$/.test(users[d]));
 }
 // test_env for one consumer: TEST_ENV, plus the DSN of its own database when
 // the run has a test database. Never the shared object (one DSN per role).
@@ -10664,7 +10691,7 @@ function dbUpPrompt(inputs, cmdArgs) {
       : "") +
     "Run this one command as one Bash call with timeout 900000 ms:\n" +
     progCmd("db_up", cmdArgs) +
-    "\nIt prints one JSON object {name, port, dbs, expiry, args, program, digest}: return it as up, every value copied unchanged (the script recomputes the digest). Non-zero exit -> status needs_human with its stderr (the program left no container running).\n" +
+    "\nIt prints one JSON object {name, port, dbs, users, expiry, args, program, digest}: return it as up, every value copied unchanged (the script recomputes the digest). Non-zero exit -> status needs_human with its stderr (the program left no container running).\n" +
     "Return {status, reason, " + (inputs.mode === "up" ? "sweep, " : "") + "up}."
   );
 }
@@ -10711,45 +10738,51 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
     if (!missing.length) return;
     const al = "infra:db-up:add";
     await pathRecheck("db-up:add", phaseName);
-    const ra = await dbDispatch(al, dbUpPrompt({ mode: "add", name: state.db.name, dbs: missing }, ["add", state.db.name, JSON.stringify(missing), state.db.pw]), phaseName);
+    const ra = await dbDispatch(al, dbUpPrompt({ mode: "add", name: state.db.name, dbs: missing }, ["add", state.db.name, JSON.stringify(missing)]), phaseName);
     const ua = ra.up;
     requireProgram(ua, "db_up", al, "failed", "db");
-    if (!relayDigestOk(ua, ["name", "port", "dbs", "expiry", "args"], "db_up") || ua.name !== state.db.name || canonical(ua.dbs) !== canonical(missing) || canonical(ua.args) !== canonical(["add", state.db.name, JSON.stringify(missing)]))
+    if (!relayDigestOk(ua, DB_UP_KEYS, "db_up") || ua.name !== state.db.name || canonical(ua.dbs) !== canonical(missing) || canonical(ua.args) !== canonical(["add", state.db.name, JSON.stringify(missing)]) || !dbUsersOk(ua.users, missing))
       halt("failed", al + ": the relayed result does not match the program's digest or arguments", "db");
     state.db.dbs = state.db.dbs.concat(missing);
+    Object.assign(state.db.users, ua.users);
     gate("test database " + state.db.name + ": added " + missing.join(", "));
     return;
   }
   const name = dbContainerName(taskId, state.nonce);
   if (!DB_NAME_RE.test(name) || /tf-local/.test(name)) halt("failed", "internal: test database name " + JSON.stringify(name) + " refused", "db");
-  // the throwaway password: visible in transcripts (accepted: a localhost database of this run)
-  const pw = sha256Hex(state.nonce + ":db").slice(0, 24);
+  // the passwords are random, made by the program: one user per database; the
+  // root password never leaves the container (it is in no prompt and no DSN)
   const args = ["up", name, image, String(DB_TTL_SECONDS), state.nonce, JSON.stringify(want)];
   await pathRecheck("db-up", phaseName);
-  const r = await dbDispatch("infra:db-up", dbUpPrompt({ mode: "up", name, image, ttl: DB_TTL_SECONDS, nonce: state.nonce, dbs: want }, args.concat([pw])), phaseName);
+  // from here main's finally removes the container, even when a relay check below stops the run
+  state.dbTarget = { name, mechanism: "podman --timeout or systemd-run", expires: "in " + DB_TTL_SECONDS + " s" };
+  const r = await dbDispatch("infra:db-up", dbUpPrompt({ mode: "up", name, image, ttl: DB_TTL_SECONDS, nonce: state.nonce, dbs: want }, args), phaseName);
   const sw = r.sweep;
   if (sw && relayDigestOk(sw, ["podman", "removed", "kept", "errors"], "db_sweep"))
     gate("test database sweep: removed " + (Array.isArray(sw.removed) && sw.removed.length ? sw.removed.join(", ") : "none") + (Array.isArray(sw.errors) && sw.errors.length ? "; errors: " + sw.errors.join("; ") : ""));
   else gate("test database sweep: no usable result (it removes expired fleet-db-* containers only; the next run sweeps again)");
   const u = r.up;
   requireProgram(u, "db_up", "infra:db-up", "failed", "db");
-  if (!relayDigestOk(u, ["name", "port", "dbs", "expiry", "args"], "db_up") || canonical(u.args) !== canonical(args))
+  if (!relayDigestOk(u, DB_UP_KEYS, "db_up") || canonical(u.args) !== canonical(args))
     halt("failed", "infra:db-up: the relayed result does not match the program's digest or arguments", "db");
+  if (!dbUsersOk(u.users, want)) halt("failed", "infra:db-up: the program did not return one user per database", "db");
   if (u.name !== name || canonical(u.dbs) !== canonical(want)) halt("failed", "infra:db-up: the program started " + JSON.stringify(u.name) + ", not " + name, "db");
   if (!Number.isInteger(u.port) || u.port < 1 || u.port > 65535) halt("failed", "infra:db-up: no usable port " + JSON.stringify(u.port === undefined ? null : u.port), "db");
   const ex = u.expiry;
   if (!ex || typeof ex !== "object" || ["podman-timeout", "systemd-run"].indexOf(ex.mechanism) < 0 || !Number.isInteger(ex.expires))
     halt("failed", "infra:db-up: no self-expiry recorded", "db");
-  state.db = { name, pw, port: u.port, env: t.decl.env, image, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
+  state.db = { name, users: Object.assign({}, u.users), port: u.port, env: t.decl.env, image, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
+  state.dbTarget = { name, mechanism: ex.mechanism, expires: ex.expires };
   gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + "; " + t.decl.env + " goes to each role's test_env");
 }
 
 // main's finally: remove the run's test database. Outside the agent cap;
 // never throws (a stop here would replace the run's own result).
 async function dbTeardown() {
-  const db = state.db;
-  if (!db) return;
+  const db = state.dbTarget;
   state.db = null;
+  state.dbTarget = null;
+  if (!db) return;
   const later = "; it ends by itself (" + db.mechanism + ", fleet.expires " + db.expires + ")";
   try {
     state.agents++;

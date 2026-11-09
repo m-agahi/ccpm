@@ -26,6 +26,9 @@ import {
   canon,
   gitEnv,
   SCRIPTS_SRC,
+  scratchRepo,
+  runHasherRaw,
+  sh,
 } from "./harness.mjs";
 
 // ---------------------------------------------------------------- short path (1991)
@@ -306,7 +309,8 @@ test("AC-1987-5: no prompt asks for a commit before the code judge approves", as
 // ---------------------------------------------------------------- throwaway test DB (1981)
 
 const DECL = { version: 1, engine: "mariadb", major: "11.4", env: "YADGAR_TEST_DSN" };
-const DSN_RE = /^mysql:\/\/root:[0-9a-f]{24}@127\.0\.0\.1:[0-9]+\/fleet_[a-z0-9_]+$/;
+// a role's own user, granted on its own database only: never root
+const DSN_RE = /^mysql:\/\/(fleet_[a-z0-9_]+):[0-9a-f]{32}@127\.0\.0\.1:[0-9]+\/\1$/;
 // the read steps relay a declaration (the program's output; the harness adds the self-hash)
 function withDecl(s, decl, over) {
   const td = (prompt) => Object.assign({ decl: decl === undefined ? DECL : decl, error: null, args: [inputsOf(prompt).main_worktree, inputsOf(prompt).default_branch] }, over || {});
@@ -351,12 +355,17 @@ test("AC-1981-1: with a declaration the database is up before the planner; every
   assert.equal(w1env.PYTHONDONTWRITEBYTECODE, "1");
   assert.ok(!JSON.stringify(w1env).includes("fleet_w_ac2"));
   // the repo's hooks get their own database in the commit step and the push
-  assert.match(call(out.build, "infra:commit:r1").prompt, /env GIT_CONFIG_NOSYSTEM=1 YADGAR_TEST_DSN='mysql:\/\/root:[0-9a-f]{24}@127\.0\.0\.1:40000\/fleet_hooks' git /);
+  assert.match(call(out.build, "infra:commit:r1").prompt, /env GIT_CONFIG_NOSYSTEM=1 YADGAR_TEST_DSN='mysql:\/\/fleet_hooks:[0-9a-f]{32}@127\.0\.0\.1:40000\/fleet_hooks' git /);
   assert.match(call(out.build, "infra:push").prompt, /`env YADGAR_TEST_DSN='mysql:\/\/[^']+\/fleet_hooks' git -C <main_worktree> push -u origin <branch>`/);
   // each run removes its own database at the end
   assert.equal(out.plan.labels[out.plan.labels.length - 1], "infra:db-down");
   assert.equal(out.build.labels[out.build.labels.length - 1], "infra:db-down");
   assert.ok(out.result.gate_log.some((g) => /test database fleet-db-.* removed/.test(g)));
+  // no prompt carries a root DSN; the root password is in no prompt (the program keeps it in the container)
+  for (const c of out.calls) {
+    assert.ok(!/root:/.test(c.prompt), c.label + " holds root:");
+    assert.ok(!/MARIADB_ROOT_PASSWORD/.test(c.prompt), c.label);
+  }
   // never sealed: the plan ref holds no DSN
   const s2 = withDecl(happy());
   const o2 = await run(s2, ARGS);
@@ -437,25 +446,31 @@ test("AC-1981-7: a db-up that started nothing (no expiry mechanism) halts; nothi
   assert.equal(out.result.stop_gate, "db");
   assert.match(out.result.reason, /no expiry mechanism/);
   assert.ok(!out.labels.includes("role:scope-and-plan"));
-  assert.ok(!out.labels.includes("infra:db-down"));
+  // the teardown still runs on the name (db_down finds nothing: absent)
+  assert.equal(out.labels[out.labels.length - 1], "infra:db-down");
 });
 
 for (const [name, mut] of [
   ["another container name", (u) => Object.assign(u, { name: "fleet-db-other" })],
   ["a port that is not a number", (u) => Object.assign(u, { port: "3306" })],
   ["no expiry", (u) => Object.assign(u, { expiry: null })],
+  ["a missing user", (u) => Object.assign(u, { users: { fleet_plan: "b".repeat(32) } })],
+  ["a root user", (u) => Object.assign(u, { users: Object.assign({}, u.users, { root: "b".repeat(32) }) })],
+  ["a short password", (u) => Object.assign(u, { users: Object.assign({}, u.users, { fleet_plan: "abc" }) })],
 ]) {
   test("1981: a db-up relay with " + name + " halts", async () => {
     const s = withDecl(happy());
     s["infra:db-up"] = (prompt) => {
       const i = inputsOf(prompt);
-      const up = mut({ name: i.name, port: 40000, dbs: i.dbs, expiry: { mechanism: "podman-timeout", expires: 1 }, args: ["up", i.name, i.image, String(i.ttl), i.nonce, JSON.stringify(i.dbs)] });
+      const up = mut({ name: i.name, port: 40000, dbs: i.dbs, users: Object.fromEntries(i.dbs.map((d) => [d, "b".repeat(32)])), expiry: { mechanism: "podman-timeout", expires: 1 }, args: ["up", i.name, i.image, String(i.ttl), i.nonce, JSON.stringify(i.dbs)] });
       return { status: "ok", reason: "up", up };
     };
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "failed");
     assert.equal(out.result.stop_gate, "db");
     assert.ok(!out.labels.includes("role:scope-and-plan"));
+    // a started container never outlives a relay stop
+    assert.equal(out.labels[out.labels.length - 1], "infra:db-down");
   });
 }
 
@@ -499,7 +514,7 @@ test("1981: an add relay that does not match the build's databases halts", async
     "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
     "infra:db-up:add": (prompt) => {
       const i = inputsOf(prompt);
-      return { status: "ok", reason: "added", up: { name: i.name, port: null, dbs: i.dbs.slice(1), expiry: null, args: ["add", i.name, JSON.stringify(i.dbs.slice(1))] } };
+      return { status: "ok", reason: "added", up: { name: i.name, port: null, dbs: i.dbs.slice(1), users: Object.fromEntries(i.dbs.slice(1).map((d) => [d, "c".repeat(32)])), expiry: null, args: ["add", i.name, JSON.stringify(i.dbs.slice(1))] } };
     },
   });
   const out = await runOne(s, Object.assign({}, ARGS, { confirm: "auto" }));
@@ -586,8 +601,7 @@ function runProg(name, args, st) {
   return rawSpawnSync(PY3, ["-I", join(SCRIPTS_SRC, name + ".py")].concat(args), { encoding: "utf8", env: st.env, timeout: 60000 });
 }
 const IMG = "docker.io/library/mariadb@sha256:" + "d".repeat(64);
-const PW = "a".repeat(24);
-const UP_ARGS = (name) => ["up", name, IMG, "21600", "n1-0000001", JSON.stringify(["fleet_plan", "fleet_audit"]), PW];
+const UP_ARGS = (name) => ["up", name, IMG, "21600", "n1-0000001", JSON.stringify(["fleet_plan", "fleet_audit"])];
 function digestOk(o) {
   const c = Object.assign({}, o);
   delete c.digest;
@@ -608,8 +622,16 @@ test("AC-1981-6 (stub podman): db_up starts a capped, self-expiring container bo
   assert.equal(o.port, 40001);
   assert.deepEqual(o.dbs, ["fleet_plan", "fleet_audit"]);
   assert.equal(o.expiry.mechanism, "podman-timeout");
-  assert.deepEqual(o.args, UP_ARGS("fleet-db-l42-1").slice(0, -1));
-  assert.ok(!JSON.stringify(o).includes(PW), "the output holds no password");
+  assert.deepEqual(o.args, UP_ARGS("fleet-db-l42-1"));
+  // one user per database, random 32-hex passwords; the root password is never printed
+  assert.deepEqual(Object.keys(o.users).sort(), ["fleet_audit", "fleet_plan"]);
+  for (const v of Object.values(o.users)) assert.match(v, /^[0-9a-f]{32}$/);
+  assert.notEqual(o.users.fleet_plan, o.users.fleet_audit);
+  const rootPw = /MARIADB_ROOT_PASSWORD=([0-9a-f]+)/.exec(st.log().find((l) => l.startsWith("run -d")))[1];
+  assert.match(rootPw, /^[0-9a-f]{32}$/);
+  assert.ok(!r.stdout.includes(rootPw), "the output holds no root password");
+  const again = JSON.parse(runProg("db_up", UP_ARGS("fleet-db-l42-1"), stubDir()).stdout);
+  assert.notEqual(again.users.fleet_plan, o.users.fleet_plan, "passwords are random per run");
   assert.equal(o.program.name, "db_up");
   assert.ok(digestOk(o), "the digest covers the printed object");
   const runLine = st.log().find((l) => l.startsWith("run -d"));
@@ -618,7 +640,10 @@ test("AC-1981-6 (stub podman): db_up starts a capped, self-expiring container bo
     assert.ok(runLine.includes(want), want + " in " + runLine);
   assert.ok(runLine.endsWith(IMG));
   assert.ok(st.log().some((l) => /^exec .*mariadb-admin --protocol=tcp -h127\.0\.0\.1 -uroot ping$/.test(l)));
-  assert.ok(st.log().some((l) => /CREATE DATABASE IF NOT EXISTS fleet_plan; CREATE DATABASE IF NOT EXISTS fleet_audit;/.test(l)));
+  const sqlLine = st.log().find((l) => l.includes("CREATE DATABASE"));
+  assert.match(sqlLine, /CREATE DATABASE IF NOT EXISTS fleet_plan; CREATE OR REPLACE USER 'fleet_plan'@'%' IDENTIFIED BY '[0-9a-f]{32}'; GRANT ALL PRIVILEGES ON fleet_plan\.\* TO 'fleet_plan'@'%';/);
+  assert.match(sqlLine, /GRANT ALL PRIVILEGES ON fleet_audit\.\* TO 'fleet_audit'@'%';/);
+  assert.ok(!/GRANT[^;]*\*\.\*/.test(sqlLine), "no global grant");
 });
 
 test("AC-1981-6 (stub podman): a tf-local name, or any name off fleet-db-*, exits 2 and runs no podman", { skip: !PY3 }, () => {
@@ -750,4 +775,19 @@ test("1981 (real git): test_db_decl reads the declaration at origin/<default>, n
   assert.equal(bad.decl, null);
   assert.match(bad.error, /env must match/);
   assert.deepEqual(bad.args, [wt, "master"]);
+});
+
+test("1987 (real git): the hasher reports a ref to the freeze tree object, and the ref does not change the tree", { skip: !PY3 }, () => {
+  const wt = scratchRepo("fleet-freeze-ref-");
+  writeFileSync(join(wt, "a.txt"), "a\n");
+  sh(wt, "git", "add", "a.txt");
+  sh(wt, "git", "commit", "-q", "-m", "a");
+  writeFileSync(join(wt, "test_new.py"), "def test_x():\n    assert False\n");
+  const h1 = runHasherRaw(wt, "hash", ["test_new.py"]);
+  const tree = h1.fingerprint.tree;
+  sh(wt, "git", "-c", "core.hooksPath=/dev/null", "update-ref", "refs/fleet/t/freeze", tree);
+  const h2 = runHasherRaw(wt, "hash", ["test_new.py"]);
+  assert.equal(h2.hashes.git["fleetref:refs/fleet/t/freeze"], tree);
+  assert.equal(h2.fingerprint.tree, tree);
+  assert.equal(sh(wt, "git", "cat-file", "-t", "refs/fleet/t/freeze").trim(), "tree");
 });

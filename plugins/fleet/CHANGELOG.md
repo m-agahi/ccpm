@@ -373,16 +373,25 @@ its notes to this entry.
   self-expiry after 6 h: `podman run --timeout` first, else a `systemd-run --user --on-active`
   timer; with neither it exits non-zero, starts no container, and the run stops. The program
   checks that the port is published on 127.0.0.1 only, waits up to 60 s for the server over TCP,
-  and creates one database per consumer; on any failure it removes the container.
+  and creates one database per consumer, each with its own MariaDB user granted on that database
+  only (`GRANT ALL PRIVILEGES ON fleet_<consumer>.*`). On any failure it removes the container.
+- Passwords (security review): the workflow runtime has no randomness (`Math.random` throws and
+  there is no `crypto`), so `db_up.py` makes them with Python's `secrets` module: a random root
+  password, which it passes only to the container and never prints, and one random 32-hex
+  password per user, which it prints inside its digest. The add step reads the root password
+  from the container. No role and no prompt ever gets root or the root password.
 - One database per consumer: the planner, plan-audit, each test writer (one per criterion, or
   one for the short path's writer), the test judge, the coder, the code judge, pr-review, and the
   repo's hooks in the commit step and the push. The script builds
-  `mysql://root:<pw>@127.0.0.1:<port>/fleet_<consumer>` and puts it under the declared `env` name
-  into that role's `test_env` only, never into `test_cmd.env`. `TEST_ENV` itself is frozen; a role
-  gets a copy. The DSN is never sealed in the plan ref and never written to the run-state.
+  `mysql://fleet_<consumer>:<password>@127.0.0.1:<port>/fleet_<consumer>` and puts it under the
+  declared `env` name into that role's `test_env` only, never into `test_cmd.env`. A role cannot
+  reach another role's database. `TEST_ENV` itself is frozen; a role gets a copy. The DSN is never
+  sealed in the plan ref and never written to the run-state.
 - Plan mode starts the database after the branch scan, before the planner. Build mode starts it
   after the verify step. A plan run under `confirm: "auto"` (or `default`) that goes on into the
   build adds the build's databases to the same container (`infra:db-up:add`).
+- The container name is the teardown target from the moment `infra:db-up` is dispatched, so a
+  stop on a bad db-up relay still removes a container the program started.
 - `main` removes the database in a `try/finally` (`infra:db-down`, `db_down.py`), whatever the
   result. The step runs outside the agent cap and never throws: a failed teardown is a gate line
   that names the self-expiry, and the run's own result stays. `db_down.py` removes the container
@@ -391,9 +400,9 @@ its notes to this entry.
   `^fleet-db-[a-z0-9-]+$` (no `tf-local`) AND a `fleet.expires` time in the past. A live database
   of a concurrent run is never touched. It runs in `infra:db-up`, not in preflight: preflight
   belongs to another stream, and only hosts that start test databases can hold one.
-- Accepted residual: the throwaway password (`sha256(nonce + ":db")[:24]`) is visible in the
-  transcripts (the db-up prompt and every DSN). It guards a database on 127.0.0.1 that lives for
-  one run.
+- Accepted residual: each user password is visible in the transcripts (the db-up relay holds all
+  of them; a role prompt holds its own). It guards one database on 127.0.0.1 that lives for one
+  run.
 - Four new shipped programs: `test_db_decl`, `db_sweep`, `db_up`, `db_down` (27 in all). Each
   follows the 4.0.0 program rules: resource caps (lifted for the podman child), a clean PATH, the
   self-hash inside the digest, and the `sha256sum && python3 -I` command form.

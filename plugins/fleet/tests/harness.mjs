@@ -291,7 +291,8 @@ export async function runOne(script, args0) {
     // 4.0.0 (1981): an unscripted test database starts (podman stubbed out)
     if (!(label in script) && /^infra:db-up/.test(label)) {
       const i = inputsOf(prompt);
-      const up = { name: i.name, port: 40000, dbs: i.dbs, expiry: i.mode === "up" ? { mechanism: "podman-timeout", expires: 1700000000 } : null, args: i.mode === "up" ? ["up", i.name, i.image, String(i.ttl), i.nonce, JSON.stringify(i.dbs)] : ["add", i.name, JSON.stringify(i.dbs)] };
+      const users = Object.fromEntries(i.dbs.map((d) => [d, sha256(d).slice(0, 32)]));
+      const up = { name: i.name, port: 40000, dbs: i.dbs, users, expiry: i.mode === "up" ? { mechanism: "podman-timeout", expires: 1700000000 } : null, args: i.mode === "up" ? ["up", i.name, i.image, String(i.ttl), i.nonce, JSON.stringify(i.dbs)] : ["add", i.name, JSON.stringify(i.dbs)] };
       if (i.mode !== "up") up.port = null;
       return Object.assign({ status: "ok", reason: "up", up }, i.mode === "up" ? { sweep: { podman: true, removed: [], kept: [], errors: [] } } : {});
     }
@@ -708,7 +709,7 @@ export const PROGRAM_LABELS = [
   [/^infra:precommit-ids/, [[null, "precommit_ids", null]]],
   [/^infra:check-scripts/, [[null, "script_check", ["checks"]]]],
   // 4.0.0 (1981)
-  [/^infra:db-up/, [["sweep", "db_sweep", ["podman", "removed", "kept", "errors"]], ["up", "db_up", ["name", "port", "dbs", "expiry", "args"]]]],
+  [/^infra:db-up/, [["sweep", "db_sweep", ["podman", "removed", "kept", "errors"]], ["up", "db_up", ["name", "port", "dbs", "users", "expiry", "args"]]]],
   [/^infra:db-down$/, [["down", "db_down", ["removed", "absent", "error", "args"]]]],
 ];
 function pick(o, keys) {
