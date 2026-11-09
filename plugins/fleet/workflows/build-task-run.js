@@ -233,7 +233,9 @@ const TITLE_MAX = 200;
 const MAX_AGENTS = 100;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
 const MAX_CODE_ROUNDS = 3; // total coder rounds; a fix_tests detour counts as one
-const SHORT_PATH_MAX_DIFF = 20; // tier is computed and logged; the short path is disabled
+// 4.0.0 (1991): a sealed est_diff_lines below this, with new_behaviour false,
+// takes the short path (one test writer for every criterion; every gate kept)
+const SHORT_PATH_MAX_DIFF = 20;
 
 const MODES = ["plan", "build"];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;

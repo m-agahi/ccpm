@@ -13,7 +13,8 @@ its notes to this entry.
 
 ### S1: programs ship as files (ledger 1993)
 
-- Every embedded Python program ships as `scripts/<name>.py`, 22 in all. The bytes are the JS
+- Every embedded Python program ships as `scripts/<name>.py`, 28 in all in 4.0.0 (22 from S1; S3,
+  S4 and S5 add the rest). The bytes are the JS
   constant plus a newline. The constants stay the source of truth. `scripts/gen.mjs` writes the
   files, and `gen.mjs --check` fails on a changed, missing or extra file.
 - Agents run `python3 -I <scripts_dir>/<name>.py <args>`. No prompt pastes a program with
@@ -194,8 +195,8 @@ its notes to this entry.
   `classification` with both values `approve` and a non-empty `quote`. G1 fails on a missing
   object, a missing or non-`approve` value, or an empty quote, in every confirm mode.
 - `isShortPath(plan_facts)` (`est_diff_lines` < 20 and `new_behaviour` false) and
-  `MAX_SHORT_TEST_ROUNDS = 2` are ready for the short path. The build still runs the full path
-  until stream S5 splits the one writer per criterion.
+  `MAX_SHORT_TEST_ROUNDS = 2` select the short path, which S5 turns on (see "S5: the short path
+  is on").
 - SKILL.md passes `confirm: "default"` unless the user named a mode, shows `confirm_reason`, and
   explains `ledger_source`.
 
@@ -348,7 +349,8 @@ its notes to this entry.
   needs_human: its tree is not the freeze tree, so a human cleans or stashes the worktree.
 - A build that stopped after a fix_tests re-freeze does not resume, even on an untouched
   re-freeze tree: the resume halts with `stop_gate: "resume"` ("re-frozen after fix_tests"). A
-  resume would restart the round and re-freeze counts. Re-run the build without `freeze_digest`.
+  resume would restart the round and re-freeze counts. A human cleans or stashes the worktree,
+  then the build runs again without `freeze_digest`.
 - A run-state ref (a build that got past its commit) wins: `freeze_digest` is then not used.
 - The red tests are still committed only with the green code, by the one hook-run commit after
   the code judge approves.
@@ -457,6 +459,10 @@ commit]`) before G2. A mismatch stops the run with `failed` and `stop_gate: "con
   `plan_ref` when that list is not empty. What is guaranteed: the committed plan doc holds no
   `mysql://`. Findings, the PR body, review comments and commit messages are covered by the
   prompt text only, not by a script check.
+- Docs: the README describes `default`, the short path, `INFRA_TIER`, the re-plan rounds, the
+  push probe, `freeze_digest`, the preflight cache and the test database. SKILL.md step 9 relays
+  `freeze_digest` and `plan_ref` of a build that stopped after the freeze, also in the same run
+  as the plan. The marketplace entry names `default`. The S1 program count reads 28.
 
 ## [3.1.3] - 2026-11-09
 

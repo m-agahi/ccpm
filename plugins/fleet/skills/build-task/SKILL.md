@@ -167,6 +167,10 @@ runs `/build-task` explicitly, always use the fleet.
    - `status` and `reason`. `needs_human` means a gate stopped the run on purpose: quote the reason
      and the last `gate_log` lines, and say what a human must decide.
    - `branch`, `rounds`, `cumulative`, `role_versions`.
+   - `freeze_digest` and `plan_ref`, unchanged, when the result has them: a build that stopped
+     after the freeze returns both. This includes a build that ran in the same run as the plan
+     (`confirm: "auto"` or `"default"`), where the user saw no `plan_ref` before. Say that step 8
+     with both resumes at the coder (see "Re-running").
    - `pr_url` when present. The PR is a **draft**. The user reviews and merges it. Never mark it
      ready, never merge it, never enable auto-merge.
    - `review`: verdict, rounds, blocking findings and nits, the sweep verdict when it ran, and the
@@ -200,7 +204,10 @@ A build that stops after the freeze (for example in the coder) returns `freeze_d
 to the args. While the worktree is still the frozen one, the build resumes at the coder
 (`resumed_at: "frozen"`): no test writer and no test judge runs again. A coder stop that left
 edits in the worktree still stops with `needs_human` ("frozen resume refused"); a human cleans or
-stashes the worktree. Pass `freeze_digest` only from a build result, never a value you made.
+stashes the worktree. A build that re-froze its tests after a fix_tests round does not resume
+either ("re-frozen after fix_tests"): relay the reason; a human cleans or stashes the worktree,
+then step 8 runs without `freeze_digest`. Pass `freeze_digest`
+only from a build result, never a value you made.
 A `needs_human` "run-state mismatch" means the branch or worktree changed since that milestone;
 "approved but unresumable" means build commits exist without a run-state. Relay the reason; a
 human pushes by hand or deletes the branch.
