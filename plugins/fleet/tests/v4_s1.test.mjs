@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync, cpSync } from "node:fs";
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync, cpSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -37,6 +37,9 @@ import {
   programConst,
   verifyStub,
   chunkedContentOf,
+  redigest,
+  scriptsProbe,
+  PREFLIGHT_PROBE,
 } from "./harness.mjs";
 
 const GEN = join(SCRIPTS_SRC, "gen.mjs");
@@ -190,17 +193,29 @@ test("4.0.0 1993: a wrong program at every program-running step stops the run (t
     }
   }
   assert.ok(cases.length >= 20, "cases " + cases.length);
-  for (const [label, path, name] of cases) {
-    const s = happy();
+  // the steps a plain plan and build does not run: the caller grep and, under
+  // confirm auto, the pre-commit hook ids
+  for (const [label, path, name, mk, args] of [
+    ["infra:callers", null, "callers", callersScript, ARGS],
+    ["infra:precommit-ids", null, "precommit_ids", precommitScript, { ...ARGS, confirm: "auto" }],
+  ]) {
+    const ok = await run(mk(), args);
+    assert.equal(ok.result.status, "ok", label + ": " + ok.result.reason);
+    assert.ok(ok.labels.includes(label), label);
+    cases.push([label, path, name, mk, args]);
+  }
+  for (const [label, path, name, mk, args] of cases) {
+    const s = (mk || happy)();
     const orig = s[label];
-    // the harness fills the program; this wraps the harness output instead
-    s.__mutate = { label, fn: (r) => {
+    // after the harness filled the program: a wrong self-hash under a digest
+    // that still matches, so only the program check can stop it
+    s.__mutate = { label, fn: (r, prompt) => {
       const o = at(r, path);
       if (o && typeof o === "object") o.program = { name, sha256: "0".repeat(64) };
-      return r;
+      return redigest(label, r, prompt);
     } };
     if (orig === undefined) delete s[label];
-    const out = await run(s, ARGS);
+    const out = await run(s, args || ARGS);
     const okish = out.result && (out.result.status === "ok" || out.result.status === "awaiting_confirmation");
     if (/^workspace$/.test(label)) {
       // the origin URL relay is soft: unusable, so the IaC push gate refuses later
@@ -210,6 +225,33 @@ test("4.0.0 1993: a wrong program at every program-running step stops the run (t
     assert.ok(!okish, label + " " + (path || "") + " (" + name + "): a zero program sha256 did not stop the run");
   }
 });
+
+// A plan whose changed symbol has callers: the caller grep runs.
+function callersScript() {
+  const s = happy();
+  s["role:scope-and-plan"].changed_symbols = [{ symbol: "guard_verdict", occurrences: [{ at: "chart/guards.py:10", criterion: "AC1", dont_care: null }] }];
+  s["infra:callers"] = { status: "ok", reason: "grepped", occurrences: { guard_verdict: ["chart/guards.py:10"] }, capped: [] };
+  return s;
+}
+// confirm auto with a pre-commit check_cmd: the hook ids are read.
+function precommitScript() {
+  const s = happy();
+  Object.assign(s, {
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "role:fleet-intent-judge": {
+      status: "ok",
+      reason: "matches the task",
+      verdict: "approve",
+      deviations: [{ item: "adds f()", allowed_by: "task body: 'add f'", source_ref: "L42", fails_closed: true, verdict: "approve", reason: "asked for" }],
+      coverage: { covered: true, missing: [] },
+    },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" },
+  });
+  s["role:scope-and-plan"] = Object.assign({}, s["role:scope-and-plan"], { repo_obligations: [{ id: "fmt", kind: "other", instruction: "format", check_cmd: "pre-commit run prettier --all-files" }] });
+  s["role:fleet-code-judge:r1"] = Object.assign({}, s["role:fleet-code-judge:r1"], { obligations_check: [{ id: "fmt", met: true, evidence: "ran", check_exit: 0 }] });
+  return s;
+}
 
 // ---------------------------------------------------------------- AC-1993-4: scripts_dir per run, shape-checked
 
@@ -221,6 +263,12 @@ test("4.0.0 1993 AC-4: a scripts_dir outside the plugin cache halts at the first
     ["/home/u/../x/fleet/4.0.0/scripts", ["/home/u/../x/fleet/4.0.0/scripts"]],
     ["/home/u//fleet/4.0.0/scripts", ["/home/u//fleet/4.0.0/scripts"]],
     ["/home/u/a b/fleet/4.0.0/scripts", ["/home/u/a b/fleet/4.0.0/scripts"]],
+    // security review: exactly $HOME/.claude/plugins/cache/<marketplace>/fleet/<version>/scripts
+    ["/home/u/x/fleet/4.0.0/scripts", ["/home/u/x/fleet/4.0.0/scripts"]],
+    ["/home/v/.claude/plugins/cache/m/fleet/4.0.0/scripts", ["/home/v/.claude/plugins/cache/m/fleet/4.0.0/scripts"]],
+    ["/home/u/.claude/plugins/cache/a/b/fleet/4.0.0/scripts", ["/home/u/.claude/plugins/cache/a/b/fleet/4.0.0/scripts"]],
+    ["/home/u/.claude/plugins/cache/../fleet/4.0.0/scripts", ["/home/u/.claude/plugins/cache/../fleet/4.0.0/scripts"]],
+    ["/home/u/.claude/plugins/cache/.x/fleet/4.0.0/scripts", ["/home/u/.claude/plugins/cache/.x/fleet/4.0.0/scripts"]],
     // two hits: never guess
     [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/fleet/4.0.0/scripts"]],
     // no hit
@@ -230,7 +278,7 @@ test("4.0.0 1993 AC-4: a scripts_dir outside the plugin cache halts at the first
   ];
   for (const [dir, hits] of bad) {
     const s = happy();
-    s.preflight = Object.assign({}, s.preflight, { scripts_dir: dir, scripts_hits: hits });
+    s.preflight = Object.assign({}, s.preflight, { scripts_dir: dir, scripts_probe: scriptsProbe({ hits: hits.map((h) => ({ hit: h })) }) });
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human", JSON.stringify(dir));
     assert.equal(out.result.stop_gate, "contract", JSON.stringify(dir));
@@ -247,8 +295,8 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   assert.equal(second.result.status, "awaiting_confirmation", second.result.reason);
   for (const o of [first, second]) {
     assert.equal(o.labels[0], "preflight");
-    assert.match(o.calls[0].prompt, /ls -d "\$HOME"\/\.claude\/plugins\/cache\/\*\/fleet\/4\.0\.0\/scripts/);
-    assert.match(o.calls[0].prompt, /python3 -I <scripts_dir>\/path_check\.py/);
+    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/fleet/4.0.0/scripts;'));
+    assert.ok(o.calls[0].prompt.includes("sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py"));
   }
   const ref = s.__store[PC];
   assert.ok(typeof ref === "string" && ref.length > 0);
@@ -317,6 +365,16 @@ test("4.0.0 1993 AC-5: a verify relay with a bad digest is retried once; the run
 });
 
 test("4.0.0 1993: a verify relay that fails twice halts stop_gate commit with the unverified plan_ref", async () => {
+  // a step that says failed although its programs printed a good result, and
+  // a step whose plan-ref list is gone
+  for (const fn of [(r) => Object.assign(r, { status: "failed", reason: "flaky" }), (r) => ((r.plan_ref.refs = null), r)]) {
+    const s = happy();
+    s.__mutate = { label: "infra:verify-plan-commit", fn };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.stop_gate, "commit");
+    assert.equal(out.result.plan_ref_verified, false);
+    assert.equal(out.labels.filter((l) => l === "infra:verify-plan-commit").length, 2);
+  }
   const s = happy();
   const base = s["infra:verify-plan-commit"];
   s["infra:verify-plan-commit"] = (prompt) => Object.assign(base(prompt), { status: "failed", reason: "flaky" });
@@ -335,6 +393,7 @@ test("4.0.0 1993: a verify result that names other files, another plan hash or a
     [(r) => (r.plan_hash.plan_sha256 = "e".repeat(64)), /the committed plan hashes/],
     [(r) => (r.plan_ref.refs = []), /differs from the sealed ref/],
     [(r) => (r.plan_files.head = "9".repeat(40)), /head/],
+    [(r) => (r.plan_ref.refs[0].tag_sha = "8".repeat(40)), /is not the one written/],
   ];
   for (const [mut, re] of cases) {
     const s = happy();
@@ -480,8 +539,14 @@ test("4.0.0 1993: the run-state writer writes from chunks and the reader reads i
     const rr = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "read_state.py"), wt, "refs/fleet/l42/state"], { encoding: "utf8", env, cwd: home });
     assert.equal(rr.status, 0, rr.stderr);
     assert.deepEqual(JSON.parse(JSON.parse(rr.stdout).message), st);
-    const bad = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "state_write.py"), wt, "refs/heads/master", dir, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    // a ref outside refs/fleet/<task>/state is refused before anything is read
+    const shas2 = writeChunks(dir, Buffer.from(msg, "utf8").toString("base64"), 4000);
+    const before = g("rev-parse", "refs/heads/master").trim();
+    const bad = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "state_write.py"), wt, "refs/heads/master", dir, String(shas2.length), sha256(msg), JSON.stringify(shas2)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(bad.status, 0);
+    assert.notEqual(bad.status, 3);
+    assert.match(bad.stderr, /bad state ref/);
+    assert.equal(g("rev-parse", "refs/heads/master").trim(), before);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -498,4 +563,150 @@ test("4.0.0 1993: the run-state write step carries its JSON as checked chunks, r
   assert.equal(st.last_gate, "committed");
   states.push(st);
   assert.equal(states.length, 1);
+});
+
+// ---------------------------------------------------------------- 4.0.0 security review: a persistent tamper surface is detected
+
+test("4.0.0 security 1: scripts_dir must be its own realpath and no symlink; the probe hashes must be the shipped programs", async () => {
+  const cases = [
+    [{ hits: [{ hit: SCRIPTS_DIR, real: "/srv/elsewhere/scripts" }] }, /resolves to/],
+    [{ hits: [{ hit: SCRIPTS_DIR, real: null }] }, /resolves to/],
+    [{ hits: [{ hit: SCRIPTS_DIR, symlink: "yes" }] }, /is a symlink/],
+    [{ home: "/home/u/../v" }, /HOME/],
+    [{ sums: { plan_files: "0".repeat(64) } }, /plan_files\.py hashes 0{64}/],
+    [{ sums: { hasher: undefined } }, /hasher\.py is missing/],
+    [{ sums: { evil: "1".repeat(64) } }, /evil\.py is not a shipped program/],
+    [{ extra: ["2".repeat(64) + "  /tmp/plan_files.py"] }, /outside/],
+  ];
+  for (const [over, re] of cases) {
+    const s = happy();
+    s.preflight = Object.assign({}, s.preflight, { scripts_probe: scriptsProbe(over) });
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(over));
+    assert.equal(out.result.stop_gate, "contract", JSON.stringify(over));
+    assert.match(out.result.reason, re, JSON.stringify(over));
+    assert.deepEqual(out.labels, ["preflight"]);
+  }
+  // the probe is one bash command: realpath, the symlink test and sha256sum of every program
+  const p = call(await runOne(happy(), ARGS), "preflight").prompt;
+  for (const w of ["realpath -e --", '[ -L "$d" ]', 'sha256sum -- "$d"/*.py', "shopt -s nullglob", "scripts_probe"]) assert.ok(p.includes(w), w);
+});
+
+test("4.0.0 security 1: the probe command, run for real, reports a symlinked scripts dir and the program hashes", { skip: !HAVE_PY }, async () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-probe-"));
+  try {
+    const real = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.0", "scripts");
+    mkdirSync(real, { recursive: true });
+    for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(real, n + ".py"));
+    const cmd = await PREFLIGHT_PROBE();
+    const run1 = () => {
+      const r = spawnSync("bash", ["-c", cmd], { encoding: "utf8", env: Object.assign({}, process.env, { HOME: home }) });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.split("\n");
+    };
+    let lines = run1();
+    assert.ok(lines.includes("hit=" + real) && lines.includes("real=" + real) && lines.includes("symlink=no"), lines.join("\n"));
+    for (const [n] of PROGRAMS) assert.ok(lines.includes(programSha(n) + "  " + real + "/" + n + ".py"), n);
+    // the version dir replaced by a symlink to a copy elsewhere
+    const other = join(home, "other");
+    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.0"), other, { recursive: true });
+    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.0"), { recursive: true });
+    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.0"));
+    lines = run1();
+    assert.ok(lines.includes("real=" + join(other, "scripts")), lines.join("\n"));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("4.0.0 security 2: every fingerprint hashes the shipped programs; a change by a role halts naming the file", async () => {
+  const all = Object.fromEntries(PROGRAMS.map(([n]) => [n, programSha(n)]));
+  for (const label of ["hasher:pre-writers:r1", "hasher:post-writers:r1", "hasher:freeze:f1", "hasher:post-coder:r1", "hasher:fp-post:code-judge:r1"]) {
+    const s = happy();
+    const base = s[label];
+    s[label] = (prompt, opts) => Object.assign({}, typeof base === "function" ? base(prompt, opts) : base, { scripts: Object.assign({}, all, { plan_ref_write: "f".repeat(64) }) });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", label);
+    assert.equal(out.result.stop_gate, "hash", label);
+    assert.match(out.result.reason, new RegExp("hasher " + label + ": the shipped fleet programs were changed: " + SCRIPTS_DIR.replace(/\./g, "\\.") + "/plan_ref_write\\.py hashes f{64}"), label);
+  }
+  for (const scripts of [null, {}, Object.assign({}, all, { extra: "1".repeat(64) })]) {
+    const s = happy();
+    s["hasher:pre-writers:r1"] = Object.assign({}, s["hasher:pre-writers:r1"], { scripts });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(scripts));
+    assert.equal(out.result.stop_gate, "hash");
+  }
+});
+
+test("4.0.0 security 2: the shipped hasher hashes every program beside it; a tampered copy shows", { skip: !HAVE_PY }, () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-hscripts-"));
+  try {
+    const dir = join(home, "scripts");
+    mkdirSync(dir);
+    for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(dir, n + ".py"));
+    const wt = join(home, "wt");
+    sh(home, "git", "init", "-q", wt);
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    writeFileSync(join(wt, "a.py"), "a\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "i");
+    const hash = () => {
+      const r = spawnSync("python3", ["-I", join(dir, "hasher.py"), wt, "[]"], { encoding: "utf8", cwd: home });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    let o = hash();
+    assert.deepEqual(o.scripts, Object.fromEntries(PROGRAMS.map(([n]) => [n, programSha(n)])));
+    const d = Object.assign({}, o);
+    delete d.digest;
+    assert.equal(o.digest, sha256(canon(d)), "the digest covers the scripts map");
+    writeFileSync(join(dir, "plan_files.py"), readFileSync(join(dir, "plan_files.py"), "utf8") + "# x\n");
+    o = hash();
+    assert.notEqual(o.scripts.plan_files, programSha("plan_files"));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("4.0.0 security 3: each program step runs sha256sum on the file first; a sha256sum line that is not the shipped one halts", async () => {
+  const out = await run(happy(), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  let n = 0;
+  for (const c of out.calls) {
+    for (const m of c.prompt.matchAll(/python3 -I ('[^']+\.py')/g)) {
+      n++;
+      assert.ok(c.prompt.includes("sha256sum -- " + m[1] + " && python3 -I " + m[1]), c.label + ": " + m[1]);
+      assert.match(c.prompt, /as `file_sha256`/, c.label);
+    }
+  }
+  assert.ok(n >= 15);
+  // the self-hash is right, the sha256sum line is not: two observations, both required
+  for (const [label, slot, name] of [["infra:verify-plan-commit", "plan_files", "plan_files"], ["infra:branch-scan", null, "branch_scan"], ["infra:path-check:commit-plan", null, "path_check"]]) {
+    const s = happy();
+    s.__mutate = { label, fn: (r) => ((slot ? r[slot] : r).file_sha256 = "3".repeat(64), r) };
+    const o = await runOne(s, ARGS);
+    assert.notEqual(o.result.status, "awaiting_confirmation", label);
+    assert.match(o.result.reason, new RegExp("did not run the shipped program " + name + " \\(its file's sha256sum line reads \"3{64}\""), label);
+  }
+});
+
+test("4.0.0 1993: a run-state relay whose head or state object differs from the program's digest halts", async () => {
+  const s = happy();
+  s.__mutate = { label: "infra:state:committed:r1", fn: (r) => ((r.state_sha = "e".repeat(40)), r) };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /infra:state:committed:r1: the relayed head and state object do not match the program's digest/);
+});
+
+test("4.0.0 1993: the script's base64 matches Buffer for every padding case and non-ASCII text", () => {
+  const grab = (name) => {
+    const i = SOURCE.indexOf("\nfunction " + name + "(");
+    return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  };
+  const i = SOURCE.indexOf("\nconst B64_CHARS = ");
+  const fn = new Function(SOURCE.slice(i, SOURCE.indexOf(";\n", i) + 2) + grab("utf8Bytes") + grab("base64Of") + "\nreturn base64Of;")();
+  for (const t of ["", "a", "ab", "abc", "abcd", "abcde", "ünï — 🚀", "x".repeat(4001)]) assert.equal(fn(t), Buffer.from(t, "utf8").toString("base64"), JSON.stringify(t.slice(0, 20)));
 });

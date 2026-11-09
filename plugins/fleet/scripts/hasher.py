@@ -586,6 +586,22 @@ for rel in sorted(set(f.decode() for f in listed if f)):
 for rel in explicit:
     rel = norm(rel)
     files[rel] = file_hash(rel)
+# fleet 4.0.0: the sha256 of every program in this program's own directory
+# (the shipped scripts); the workflow compares them with its constants
+_sd = _o.path.dirname(_o.path.abspath(_fh.name)) if _PROG['name'] is not None else None
+scripts = None
+if _sd is not None:
+    scripts = {}
+    for fn in sorted(os.listdir(_sd))[:200]:
+        if not fn.endswith('.py'):
+            continue
+        fp = os.path.join(_sd, fn)
+        if os.path.islink(fp) or not os.path.isfile(fp):
+            scripts[fn[:-3]] = None
+            continue
+        with open(fp, 'rb') as fh:
+            scripts[fn[:-3]] = hashlib.sha256(fh.read(1 << 22)).hexdigest()
+out['scripts'] = scripts
 out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
                  'ignored': ignored_files(),
                  'suspicious': sorted(set(SUSPICIOUS))}

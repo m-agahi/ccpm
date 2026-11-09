@@ -134,6 +134,8 @@ export function pathRecheckOut(tools, args) {
     program: programOf("path_check"),
   };
   pc.digest = sha256(canon(pc));
+  // the sha256sum line before it (outside the digest)
+  pc.file_sha256 = programSha("path_check");
   return Object.assign({ status: "ok", reason: "checked" }, pc);
 }
 // 3.1.1: the origin URL program's output
@@ -577,6 +579,48 @@ export function stateWriteCmd(wt, stateRef, json) {
 export function programOf(name) {
   return { name, sha256: programSha(name) };
 }
+// 4.0.0 security review: the preflight probe's output lines for a scripts dir.
+// over: {home, hits: [{hit, real, symlink}], sums: {name: sha|undefined}, extra: [lines]}
+export function scriptsProbe(over = {}) {
+  const home = "home" in over ? over.home : "/home/u";
+  const hits = over.hits || [{ hit: SCRIPTS_DIR }];
+  const lines = ["home=" + home];
+  for (const h of hits) {
+    lines.push("hit=" + h.hit);
+    if (h.real !== null) lines.push("real=" + ("real" in h ? h.real : h.hit));
+    lines.push("symlink=" + (h.symlink || "no"));
+  }
+  if (hits.length === 1) {
+    const sums = Object.assign(Object.fromEntries(PROGRAMS.map(([n]) => [n, programSha(n)])), over.sums || {});
+    for (const [n, v] of Object.entries(sums)) if (v !== undefined) lines.push(v + "  " + hits[0].hit + "/" + n + ".py");
+  }
+  return lines.concat(over.extra || []);
+}
+// the probe command a preflight prompt carries
+export async function PREFLIGHT_PROBE() {
+  const o = await runOne(happy(), ARGS);
+  const m = /as one Bash call: (bash -c '[^\n]*')\n/.exec(o.calls[0].prompt);
+  assert.ok(m, "the preflight prompt carries the probe");
+  return m[1];
+}
+// Recomputes every program slot's digest of a result as the program would
+// have printed it (a test that forges one field keeps the digest valid, so
+// only the check under test can catch it).
+export function redigest(label, r, prompt) {
+  const hit = PROGRAM_LABELS.find(([re]) => re.test(label));
+  for (const [slot, , keys0] of hit ? hit[1] : []) {
+    const o = slot ? r[slot] : r;
+    if (!o || typeof o !== "object" || !keys0) continue;
+    const keys = keys0 === "hasher" ? ["fingerprint", "hashes"].concat(inputsOf(prompt).base_tree ? ["changed"] : []) : keys0;
+    const extra = keys0 === "hasher" ? { scripts: o.scripts === undefined ? null : o.scripts } : {};
+    o.digest = sha256(canon(Object.assign(pick(o, keys), extra, { program: o.program })));
+  }
+  return r;
+}
+// the sha256 of every shipped program: what a hasher run prints as scripts
+export function allScripts() {
+  return Object.fromEntries(PROGRAMS.map(([n]) => [n, programSha(n)]));
+}
 const PC_KEYS = ["tools", "args", "path_problems"];
 // [label, [[slot (null: the result itself), program, digest keys (null: no digest)]]]
 export const PROGRAM_LABELS = [
@@ -618,7 +662,7 @@ export function fillPrograms(label, r, prompt) {
   if (!isPre && r.status !== "ok") return r;
   if (isPre) {
     if (!("scripts_dir" in r)) r.scripts_dir = SCRIPTS_DIR;
-    if (!("scripts_hits" in r)) r.scripts_hits = [r.scripts_dir];
+    if (!("scripts_probe" in r)) r.scripts_probe = scriptsProbe();
   }
   // flat 3.x stub fields become the program outputs the prompt asks for
   if (/^infra:stage-plan/.test(label) && !("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256 };
@@ -635,7 +679,11 @@ export function fillPrograms(label, r, prompt) {
     const was = keys && typeof o.digest === "string" ? o.digest : null;
     const valid3 = was !== null && was === sha256(canon(pick(o, keys)));
     o.program = programOf(name);
-    if (keys && (was === null || valid3)) o.digest = sha256(canon(Object.assign(pick(o, keys), { program: o.program })));
+    // the sha256sum line the same Bash call printed (4.0.0 security review)
+    if (!("file_sha256" in o)) o.file_sha256 = programSha(name);
+    // every hasher run hashes the shipped programs beside it
+    const extra = keys0 === "hasher" ? { scripts: "scripts" in o ? o.scripts : (o.scripts = allScripts()) } : {};
+    if (keys && (was === null || valid3)) o.digest = sha256(canon(Object.assign(pick(o, keys), extra, { program: o.program })));
   }
   return r;
 }

@@ -97,6 +97,7 @@ import {
   programOf,
   chunkedContentOf,
   verifyStub,
+  allScripts,
   planRefWriteCmd,
   stateWriteCmd,
 } from "./harness.mjs";
@@ -3872,7 +3873,8 @@ test("2.0.4 plan-time script check: realpath, regular file, tracked; a failure i
   assert.equal(c.opts.agentType, "fleet:judge");
   const ci = inputsOf(c.prompt);
   assert.deepEqual(ci.paths, ["scripts/check_version_bump.py"]);
-  assert.ok(ci.run.startsWith("python3 -I '" + SCRIPTS_DIR + "/script_check.py' "), ci.run);
+  const f = "'" + SCRIPTS_DIR + "/script_check.py'";
+  assert.ok(ci.run.startsWith("sha256sum -- " + f + " && python3 -I " + f + " "), ci.run);
   assert.ok(out.labels.indexOf("infra:check-scripts") < out.labels.indexOf("role:plan-audit"));
   // no script path -> no step
   const n = withObligations([Object.assign({}, OB_LOG, { check_cmd: "make check" })]);
@@ -5865,8 +5867,9 @@ test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebui
 // key fails the hasher step instead of reading as "nothing there".
 function hasherDigest(r, withChanged) {
   const o = { fingerprint: r.fingerprint, hashes: r.hashes };
-  // 4.0.0: the digest covers the program's self-hash
+  // 4.0.0: the digest covers the program's self-hash and the scripts map
   if (r.program !== undefined) o.program = r.program;
+  if (r.scripts !== undefined) o.scripts = r.scripts;
   if (withChanged) o.changed = r.changed;
   return sha256(canon(o));
 }
@@ -5902,10 +5905,10 @@ test("2.1.5 a hasher result whose relayed maps do not match the digest fails", a
   const s = happy();
   const h = H({ ...HASHES_FLAT });
   h.ignored = { ".claude/settings.local.json": "s1" };
-  const good = { status: "ok", fingerprint: FP_PRE, hashes: h, program: programOf("hasher") };
+  const good = { status: "ok", fingerprint: FP_PRE, hashes: h, program: programOf("hasher"), scripts: allScripts() };
   const digest = hasherDigest(good, false);
   // the relay dropped the ignored key
-  s["hasher:pre-writers:r1"] = { __raw: true, status: "ok", fingerprint: FP_PRE, hashes: { ...h, ignored: {} }, program: programOf("hasher"), digest };
+  s["hasher:pre-writers:r1"] = { __raw: true, status: "ok", fingerprint: FP_PRE, hashes: { ...h, ignored: {} }, program: programOf("hasher"), file_sha256: programSha("hasher"), scripts: allScripts(), digest };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "failed");
   assert.match(out.result.reason, /hasher hasher:pre-writers:r1 failed: .*digest/);
@@ -6177,7 +6180,7 @@ test("2.1.5 canonical JSON sorts keys by code point, as Python sort_keys does", 
     const out = runHasherRaw(wt, "hash", files);
     // the workflow accepts the program's digest for these keys
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
-    const o = { fingerprint: out.fingerprint, hashes: out.hashes, program: out.program };
+    const o = { fingerprint: out.fingerprint, hashes: out.hashes, program: out.program, scripts: out.scripts };
     assert.equal(sha256(fn(o)), out.digest);
   } finally {
     rmSync(wt, { recursive: true, force: true });
@@ -8255,11 +8258,12 @@ test("3.0.0 review 8: a yaml.py in the cwd neither runs nor changes the hook sur
 });
 
 test("3.0.0 review 8: every embedded program runs isolated (-I), the YAML loader with cwd /", () => {
-  const calls = SOURCE.match(/["'`]python3 [^"'`]*/g) || [];
-  assert.ok(calls.length >= 3, "found the invocations: " + calls.length);
+  // 4.0.0: programs run as `sha256sum -- <file> && python3 -I <file>`
+  const calls = (SOURCE.match(/["'`][^"'`\n]*python3 [^"'`]*/g) || []).filter((c) => !/python3 as /.test(c)).map((c) => c.slice(c.indexOf("python3") - 1));
+  assert.ok(calls.length >= 4, "found the invocations: " + calls.length);
   for (const c of calls) assert.match(c, /^.python3 -I /, c);
   // 4.0.0: one runner for every shipped program, by path from scripts_dir
-  assert.match(SOURCE, /return "python3 -I " \+ shQuote\(state\.scriptsDir \+ "\/" \+ name \+ "\.py"\)/);
+  assert.match(SOURCE, /const f = shQuote\(state\.scriptsDir \+ "\/" \+ name \+ "\.py"\);\n  return "sha256sum -- " \+ f \+ " && python3 -I " \+ f \+/);
   assert.match(SOURCE, /subprocess\.run\(\[c, '-I', '-c', LOADER\] \+ sites,/);
   assert.match(SOURCE, /cwd='\/'/);
   // no program uses a third-party import (the YAML loader runs under pre-commit's interpreter)

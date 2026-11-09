@@ -36,6 +36,24 @@ into the 4.0.0 entry.
   at once.
 - `plan_hash.py` prints JSON `{plan_sha256, program}`.
 
+### S1: shipped programs are a tamper surface, so it is watched (security review)
+
+- `scripts_dir` must be exactly `$HOME/.claude/plugins/cache/<marketplace>/fleet/4.0.0/scripts`.
+  Its `realpath -e` must be itself, so no path component is a symlink, and `[ -L ]` must be false.
+  The preflight probe also runs `sha256sum` on every `scripts/*.py`. Each must be its constant's
+  sha256, and no other program may be there.
+- Every hasher run (each fingerprint before and after the writers, the coder and every judge, and
+  the freeze) prints the sha256 of every program in its own directory inside its digest. A
+  mismatch stops the run with `needs_human` and `stop_gate: "hash"`, naming the file.
+- Every program step runs `sha256sum -- <file> && python3 -I <file> ...` in one Bash call. The
+  script requires the relayed `file_sha256` and the program's self-hash to both equal the
+  constant's sha256.
+- Residual: all three observations are relayed by an agent. Per step, the trust level equals the
+  old inline `python3 -I -c` relay, which ADR-1152 accepts: it catches relay loss and a stale or
+  re-typed program, not a forging agent. Across steps it adds tamper detection: a file that any
+  role changes in the plugin cache shows up at the next fingerprint, in a step separate from the
+  program that ran.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker

@@ -882,6 +882,22 @@ for rel in sorted(set(f.decode() for f in listed if f)):
 for rel in explicit:
     rel = norm(rel)
     files[rel] = file_hash(rel)
+# fleet 4.0.0: the sha256 of every program in this program's own directory
+# (the shipped scripts); the workflow compares them with its constants
+_sd = _o.path.dirname(_o.path.abspath(_fh.name)) if _PROG['name'] is not None else None
+scripts = None
+if _sd is not None:
+    scripts = {}
+    for fn in sorted(os.listdir(_sd))[:200]:
+        if not fn.endswith('.py'):
+            continue
+        fp = os.path.join(_sd, fn)
+        if os.path.islink(fp) or not os.path.isfile(fp):
+            scripts[fn[:-3]] = None
+            continue
+        with open(fp, 'rb') as fh:
+            scripts[fn[:-3]] = hashlib.sha256(fh.read(1 << 22)).hexdigest()
+out['scripts'] = scripts
 out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
                  'ignored': ignored_files(),
                  'suspicious': sorted(set(SUSPICIOUS))}
@@ -1170,7 +1186,7 @@ const SCHEMAS = {
 // 4.0.0 (1993): the self-hash every shipped program prints
 const PROGRAM_PROP = { type: ["object", "null"], properties: { name: STR_OR_NULL, sha256: STR_OR_NULL } };
 // a shipped program's JSON output relayed whole under one key
-const PROGRAM_OUTPUT = { type: ["object", "null"], properties: { program: PROGRAM_PROP } };
+const PROGRAM_OUTPUT = { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } };
 
 const PREFLIGHT_SCHEMA = {
   type: "object",
@@ -1181,9 +1197,9 @@ const PREFLIGHT_SCHEMA = {
     versions: { type: "object" },
     dispatch: { type: "object", additionalProperties: { type: ["string", "null"] } },
     contract: { type: "object", additionalProperties: { type: ["string", "null"] } },
-    scripts_hits: { type: "array", items: STR },
+    scripts_probe: { type: "array", items: STR },
     scripts_dir: STR_OR_NULL,
-    path_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP } },
+    path_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
     reason: STR,
   },
 };
@@ -1200,7 +1216,7 @@ const INFRA_SCHEMA = {
     remote_slug: STR,
     remote_host: STR,
     remote_url: STR,
-    remote_url_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP } },
+    remote_url_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
     project: STR,
     created: { type: "boolean" },
     reused: { type: "boolean" },
@@ -1290,11 +1306,12 @@ const INFRA_SCHEMA = {
     unattributed: { type: "array", items: STR },
     digest: STR,
     program: PROGRAM_PROP,
+    file_sha256: STR,
     tag_sha: STR,
     plan_hash: PROGRAM_OUTPUT,
     plan_hash_head: PROGRAM_OUTPUT,
-    plan_files: { type: ["object", "null"], properties: { head: STR, files: { type: "array", items: STR }, args: { type: "array", items: STR }, program: PROGRAM_PROP, digest: STR } },
-    plan_ref: { type: ["object", "null"], properties: { refs: { type: "array", items: { type: "object" } }, program: PROGRAM_PROP } },
+    plan_files: { type: ["object", "null"], properties: { head: STR, files: { type: "array", items: STR }, args: { type: "array", items: STR }, program: PROGRAM_PROP, file_sha256: STR, digest: STR } },
+    plan_ref: { type: ["object", "null"], properties: { refs: { type: "array", items: { type: "object" } }, program: PROGRAM_PROP, file_sha256: STR } },
     target: STR,
     message: STR,
     clean: { type: "boolean" },
@@ -1352,6 +1369,8 @@ const HASHER_SCHEMA = {
     fingerprint: FINGERPRINT,
     changed: { type: "array", items: STR },
     program: PROGRAM_PROP,
+    file_sha256: STR,
+    scripts: { type: ["object", "null"], additionalProperties: STR_OR_NULL },
     digest: STR,
     hashes: {
       type: "object",
@@ -2440,12 +2459,19 @@ function programSha(name) {
   return PROGRAM_SHA[name];
 }
 
-// Why a relayed program output did not come from the shipped program `name` (null: it did).
+// Why a relayed program output did not come from the shipped program `name`
+// (null: it did). Two observations, both agent-relayed: the sha256sum line the
+// same Bash call printed before the program ran (file_sha256), and the
+// program's own self-hash (program). Both must be the constant's sha256.
 function programProblem(r, name) {
   const p = r && typeof r === "object" && r.program && typeof r.program === "object" && !Array.isArray(r.program) ? r.program : null;
   const got = p && typeof p.sha256 === "string" ? p.sha256 : null;
-  if (p && p.name === name && got === programSha(name)) return null;
-  return "did not run the shipped program " + name + " (got " + (p ? JSON.stringify(p.name === undefined ? null : p.name) + " " + (got || "no sha256") : "no program key") + ")";
+  const want = programSha(name);
+  if (!p || p.name !== name || got !== want)
+    return "did not run the shipped program " + name + " (got " + (p ? JSON.stringify(p.name === undefined ? null : p.name) + " " + (got || "no sha256") : "no program key") + ")";
+  const fs = r.file_sha256;
+  if (fs !== want) return "did not run the shipped program " + name + " (its file's sha256sum line reads " + JSON.stringify(fs === undefined ? null : fs) + ", not " + want + ")";
+  return null;
 }
 
 // Halts unless `r` came from the shipped program `name`.
@@ -2454,22 +2480,69 @@ function requireProgram(r, name, label, status, stopGate) {
   if (p) halt(status || "failed", label + ": " + p, stopGate || "contract");
 }
 
-// The one command form a prompt uses to run a shipped program.
+// The one command form a prompt uses to run a shipped program: the file's
+// sha256sum first, then the program, in one Bash call.
 function progCmd(name, args) {
   if (!state.scriptsDir) throw new Error("scripts_dir is not resolved; program " + name + " cannot run");
   programSha(name);
-  return "python3 -I " + shQuote(state.scriptsDir + "/" + name + ".py") + (args || []).map((a) => " " + shQuote(a)).join("");
+  const f = shQuote(state.scriptsDir + "/" + name + ".py");
+  return "sha256sum -- " + f + " && python3 -I " + f + (args || []).map((a) => " " + shQuote(a)).join("");
+}
+// appended to every prompt that runs a shipped program (see nonced)
+const FILE_SHA_MARK = "sha256sum -- ";
+const FILE_SHA_RULE =
+  "Shipped programs: each command that starts with `sha256sum -- <file> && python3 -I <file>` prints one sha256sum line (`<hex>  <file>`) before the program's JSON. Put that <hex> into the program's JSON object you return as `file_sha256`, next to its `program` key; change nothing else in the object. The script checks both against the shipped program.";
+
+// scripts_dir (4.0.0 security review): the preflight probe's lines, parsed.
+// The directory must be exactly $HOME/.claude/plugins/cache/<marketplace>/
+// fleet/<FLEET_VERSION>/scripts, its realpath must be itself (no symlink in
+// any component) and it must not be a symlink; every shipped program in it
+// must hash to its constant, and it holds no other program.
+// Returns {problem} or {dir}.
+function scriptsProbeOf(probe, dir) {
+  const bad = (m) => ({ problem: m });
+  if (!Array.isArray(probe) || probe.some((x) => typeof x !== "string")) return bad("the scripts directory probe returned no list of lines");
+  const lines = probe.map((x) => x.replace(/\r$/, "")).filter((x) => x !== "");
+  const homes = lines.filter((x) => x.startsWith("home=")).map((x) => x.slice(5));
+  const hits = lines.filter((x) => x.startsWith("hit=")).map((x) => x.slice(4));
+  const reals = lines.filter((x) => x.startsWith("real=")).map((x) => x.slice(5));
+  const links = lines.filter((x) => x.startsWith("symlink=")).map((x) => x.slice(8));
+  if (homes.length !== 1) return bad("the scripts directory probe printed no single home= line");
+  const home = homes[0];
+  if (!/^\/[A-Za-z0-9._\/-]+$/.test(home) || home.split("/").slice(1).some((x) => x === "" || x === "." || x === ".."))
+    return bad("HOME " + JSON.stringify(home) + " is not a plain absolute path");
+  if (hits.length !== 1) return bad("the scripts directory search found " + hits.length + " copies of fleet " + FLEET_VERSION + " (" + hits.slice(0, 4).join(", ") + "); exactly one is needed");
+  const hit = hits[0];
+  const pre = home + "/.claude/plugins/cache/";
+  const tail = "/fleet/" + FLEET_VERSION + "/scripts";
+  const mkt = hit.startsWith(pre) && hit.endsWith(tail) ? hit.slice(pre.length, hit.length - tail.length) : null;
+  if (mkt === null || !/^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/.test(mkt))
+    return bad("scripts_dir " + JSON.stringify(hit) + " is not " + pre + "<marketplace>" + tail);
+  if (!SCRIPTS_DIR_RE.test(hit)) return bad("scripts_dir " + JSON.stringify(hit) + " is not a plugin cache directory of fleet " + FLEET_VERSION);
+  if (reals.length !== 1 || reals[0] !== hit) return bad("scripts_dir " + hit + " resolves to " + JSON.stringify(reals.length === 1 ? reals[0] : null) + " (a symlink in its path)");
+  if (links.length !== 1 || links[0] !== "no") return bad("scripts_dir " + hit + " is a symlink");
+  if (typeof dir !== "string" || dir !== hit) return bad("scripts_dir " + JSON.stringify(dir === undefined ? null : dir) + " is not the one directory found (" + hit + ")");
+  // the sha256sum lines of <dir>/*.py: exactly the shipped programs, each its constant
+  const sums = {};
+  for (const x of lines) {
+    const m = /^([0-9a-f]{64}) [ *](.+)$/.exec(x);
+    if (!m) continue;
+    if (m[2].slice(0, hit.length + 1) !== hit + "/" || !/^[A-Za-z0-9_.-]+\.py$/.test(m[2].slice(hit.length + 1))) return bad("the probe hashed " + m[2] + ", outside " + hit);
+    sums[m[2].slice(hit.length + 1, -3)] = m[1];
+  }
+  const p = scriptsMapProblem(sums, hit);
+  return p ? bad(p) : { dir: hit };
 }
 
-// scripts_dir: the plugin cache copy of this fleet version (the plugin root
-// is not set in an agent's Bash). No `.` or `..` segment, no empty segment.
-function scriptsDirProblem(dir, hits) {
-  if (!Array.isArray(hits) || hits.some((h) => typeof h !== "string")) return "the scripts directory search returned no list";
-  if (hits.length !== 1) return "the scripts directory search found " + hits.length + " copies of fleet " + FLEET_VERSION + " (" + hits.slice(0, 4).join(", ") + "); exactly one is needed";
-  if (typeof dir !== "string" || dir !== hits[0]) return "scripts_dir " + JSON.stringify(dir === undefined ? null : dir) + " is not the one directory found (" + hits[0] + ")";
-  if (!SCRIPTS_DIR_RE.test(dir) || dir.split("/").slice(1).some((x) => x === "" || x === "." || x === ".."))
-    return "scripts_dir " + JSON.stringify(dir) + " is not a plugin cache directory of fleet " + FLEET_VERSION + " (<...>/fleet/" + FLEET_VERSION + "/scripts)";
-  return null;
+// Why a map {<program name>: sha256} of a scripts dir is not exactly the
+// shipped programs (null: it is). Names every file that differs.
+function scriptsMapProblem(map, dir) {
+  if (!map || typeof map !== "object" || Array.isArray(map)) return "no sha256 map of the scripts in " + dir;
+  const out = [];
+  for (const n of Object.keys(programTable()).sort())
+    if (map[n] !== programSha(n)) out.push(dir + "/" + n + ".py " + (map[n] === undefined ? "is missing" : "hashes " + map[n] + ", not " + programSha(n)));
+  for (const n of Object.keys(map).sort()) if (!Object.prototype.hasOwnProperty.call(programTable(), n)) out.push(dir + "/" + n + ".py is not a shipped program");
+  return out.length ? "the shipped fleet programs were changed: " + out.join("; ") : null;
 }
 
 // base64 of the UTF-8 bytes of `str` (the script has no Buffer or btoa).
@@ -3319,7 +3392,10 @@ function planHashCmd(worktree, rev, planPath) {
 }
 
 // 4.0.0 (1993): the search for this version's scripts directory in the plugin cache
-const SCRIPTS_FIND = 'ls -d "$HOME"/.claude/plugins/cache/*/fleet/' + FLEET_VERSION + "/scripts";
+const SCRIPTS_GLOB = '"$HOME"/.claude/plugins/cache/*/fleet/' + FLEET_VERSION + "/scripts";
+const SCRIPTS_PROBE =
+  "bash -c 'shopt -s nullglob; printf \"home=%s\\n\" \"$HOME\"; for d in " + SCRIPTS_GLOB + "; do printf \"hit=%s\\n\" \"$d\"; printf \"real=%s\\n\" \"$(realpath -e -- \"$d\")\"; " +
+  "if [ -L \"$d\" ]; then echo symlink=yes; else echo symlink=no; fi; done; for d in " + SCRIPTS_GLOB + "; do sha256sum -- \"$d\"/*.py; done'";
 
 // ---------------------------------------------------------------- prompts
 
@@ -3355,13 +3431,15 @@ function preflightPrompt(inputs) {
     "dispatch maps each found pattern to the first line of its `content` that matches `DISPATCH: model=<tier> (fallback=<tier>)` (the fallback part is optional), copied raw; null when no line matches. " +
     "contract maps each found pattern to the first line of its `content` that starts with `CONTRACT:`, copied raw; null when none. " +
     "`content` often has no trailing newline: its last line counts as a line like any other. " +
-    "Then find the fleet scripts directory (4.0.0): run `" + SCRIPTS_FIND + "` as one Bash call. scripts_hits = its output lines, in order (an empty list when it prints nothing or `no matches found`). " +
-    "When there is exactly one line, scripts_dir = that line; otherwise scripts_dir = null, path_check = null, and skip the next command. " +
+    "Then find the fleet scripts directory (4.0.0): run this one command exactly as written, unmodified, as one Bash call: " +
+    SCRIPTS_PROBE +
+    "\nscripts_probe = its output lines, every line in order, copied unchanged. " +
+    "When exactly one line starts with `hit=`, scripts_dir = the rest of that line; otherwise scripts_dir = null, path_check = null, and skip the next command. " +
     "Then run this one command as one Bash call, with <scripts_dir> replaced by scripts_dir and nothing else changed: " +
-    "python3 -I <scripts_dir>/path_check.py " +
+    "sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py " +
     shQuote(inputs.repo) +
     "\nIt prints one JSON object {tools, args, path_problems, program, digest}: return it as path_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n" +
-    "Return {reachable, missing, versions, dispatch, contract, scripts_hits, scripts_dir, path_check, reason}."
+    "Return {reachable, missing, versions, dispatch, contract, scripts_probe, scripts_dir, path_check, reason}."
   );
 }
 
@@ -5279,6 +5357,7 @@ const PATH_RECHECK_SCHEMA = {
     args: { type: ["array", "null"], items: STR },
     path_problems: { type: ["array", "null"], items: STR },
     program: PROGRAM_PROP,
+    file_sha256: STR,
     digest: STR,
   },
 };
@@ -5695,7 +5774,7 @@ function reserve(n, what) {
 // must never return the verdict of an earlier worktree. A new invocation has
 // a new nonce, so no infra call replays, and no role call after one does.
 function nonced(prompt) {
-  return prompt + "\nRun nonce: " + state.nonce + " (keys the workflow cache to this invocation; ignore it).";
+  return prompt + (prompt.indexOf(FILE_SHA_MARK) >= 0 ? "\n" + FILE_SHA_RULE : "") + "\nRun nonce: " + state.nonce + " (keys the workflow cache to this invocation; ignore it).";
 }
 
 // Infra agents: always INFRA_MODEL.
@@ -5829,10 +5908,14 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
     halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
   requireProgram(r, "hasher", "hasher " + label);
   // the maps travel through a model: recompute the program's digest over them
-  const relayed = { fingerprint: fp, hashes: h, program: r.program };
+  const relayed = { fingerprint: fp, hashes: h, program: r.program, scripts: r.scripts === undefined ? null : r.scripts };
   if (baseTree) relayed.changed = r.changed;
   if (typeof r.digest !== "string" || sha256Hex(canonical(relayed)) !== r.digest)
     halt("failed", "hasher " + label + " failed: the relayed maps do not match the program's digest (a key was dropped or changed in the copy)");
+  // 4.0.0 (security review): every fingerprint also hashes the shipped
+  // programs; a change by any role shows up at the next one
+  const sm = scriptsMapProblem(r.scripts, state.scriptsDir);
+  if (sm) halt("needs_human", "hasher " + label + ": " + sm, "hash");
   return r;
 }
 
@@ -5925,9 +6008,9 @@ async function preflightStep(repo) {
   // 4.0.0 (1993): the shipped programs' directory, found by this run's first
   // agent (never cached, never sealed); the PATH check below ran from it, and
   // its self-hash proves the directory holds this version's programs
-  const sp = scriptsDirProblem(pre.scripts_dir, pre.scripts_hits);
-  if (sp) halt("needs_human", "preflight: scripts_dir unusable: " + sp + "; install fleet " + FLEET_VERSION + " from the marketplace, then run /reload-plugins" + RELOAD_HINT, "contract");
-  state.scriptsDir = pre.scripts_dir;
+  const sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
+  if (sp.problem) halt("needs_human", "preflight: scripts_dir unusable: " + sp.problem + "; install fleet " + FLEET_VERSION + " from the marketplace, then run /reload-plugins" + RELOAD_HINT, "contract");
+  state.scriptsDir = sp.dir;
   gate("scripts_dir: " + state.scriptsDir);
   // Max's ruling (2026-11-09): IaC tooling may only be reachable through the nix shims
   pathCheck(pre.path_check, repo);
