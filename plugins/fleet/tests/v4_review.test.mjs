@@ -123,6 +123,42 @@ test("review fix 1 (real git): precommit_ids.py prints every key and a digest on
   assert.equal(typeof seen.bad.error, "string");
 });
 
+// ---------------------------------------------------------------- fix 5: the short-path writer keeps its halt
+
+// A small, no-new-behaviour plan: the short path, one writer for every criterion.
+function shortScript() {
+  const s = happy();
+  s["role:scope-and-plan"].est_diff_lines = 10;
+  s["role:scope-and-plan"].new_behaviour = false;
+  delete s["role:fleet-test-writer:AC1:r1"];
+  delete s["role:fleet-test-writer:AC2:r1"];
+  s["role:fleet-test-writer:short:r1"] = {
+    status: "ok",
+    reason: "red",
+    criterion_id: "short",
+    tests: [{ name: "test_a1", covers: "AC1: x" }, { name: "test_b1", covers: "AC2: y" }],
+    files: ["tests/test_a.py", "tests/test_b.py"],
+  };
+  return s;
+}
+
+test("review fix 5: a halt inside the short-path writer's role call keeps its stop_gate (contract)", async () => {
+  // fault injection: the role table loses the writer's tier for the short
+  // writer only, so roleAgent halts at contract; no stub can reach that halt
+  const at = "  const tier = state.models[role];\n";
+  assert.equal(SOURCE.split(at).length, 2, "the injection point is unique");
+  const s = shortScript();
+  s.__source = SOURCE.replace(at, "  const tier = /:short:/.test(label) ? null : state.models[role];\n");
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "contract");
+  assert.match(out.result.reason, /role fleet-test-writer has no DISPATCH tier/);
+  // the control: the same script without the fault takes the short path
+  const ok = await run(shortScript(), ARGS);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+  assert.equal(ok.result.path, "short");
+});
+
 test("review fix 1: precommit_ids routes every print through one emit with the digest", () => {
   const m = /\/\/ PRECOMMIT_IDS_PY_BEGIN\n([\s\S]*?)\n\/\/ PRECOMMIT_IDS_PY_END/.exec(SOURCE);
   assert.ok(m);

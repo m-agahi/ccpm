@@ -27,8 +27,9 @@ export const SOURCE = readFileSync(SCRIPT_PATH, "utf8");
 
 export const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
-export function compile() {
-  const body = SOURCE.replace(/^export const meta/m, "const meta");
+// src: a fault-injected copy of the script (tests only); default the script
+export function compile(src) {
+  const body = (src || SOURCE).replace(/^export const meta/m, "const meta");
   return new AsyncFunction(
     "agent",
     "parallel",
@@ -399,7 +400,8 @@ export async function runOne(script, args0) {
         }
       }),
     );
-  const fn = compile();
+  // script.__source: a fault-injected script text, for a halt no stub can reach
+  const fn = compile(script.__source);
   // a crashed run rethrows; its logs travel on the error (2.1.6)
   const crashed = (e) => {
     if (e && typeof e === "object") e.__logs = logs;

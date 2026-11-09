@@ -9196,8 +9196,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       codeFindings ? { code_judge_findings: codeFindings.filter((f) => ids.indexOf(f.criterion) >= 0) } : {}),
     );
     const opts = { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" };
-    // the same order as the full path: the round, then a retry on drift
-    let r = (await parallel([() => roleAgent("fleet-test-writer", label, prompt, opts)]))[0];
+    // the same order as the full path: the round, then a retry on drift. A
+    // direct call: parallel() would swallow a halt and lose its stop_gate.
+    let r = await roleAgent("fleet-test-writer", label, prompt, opts);
     if (r == null) halt("failed", "test writer short r" + n + " returned no result");
     r = await retryOnDrift("fleet-test-writer", label, prompt, opts, r);
     checkRole("fleet-test-writer", r);

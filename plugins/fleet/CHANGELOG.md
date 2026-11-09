@@ -423,6 +423,9 @@ commit]`) before G2. A mismatch stops the run with `failed` and `stop_gate: "con
   `infra:precommit-ids*` runs on sonnet.
 - `workspace` runs on sonnet. Its `default_branch` and `base_ref` are not digest-checked, and they
   set the diff base of the IaC gate and the fleet scan.
+- The short-path writer is called directly, not through a one-item `parallel()`. `parallel()`
+  turned a halt in the role call into "returned no result" (`failed`, no `stop_gate`); the halt now
+  keeps its own status and `stop_gate`.
 
 ## [3.1.3] - 2026-11-09
 
