@@ -888,9 +888,13 @@ _sd = _o.path.dirname(_o.path.abspath(_fh.name)) if _PROG['name'] is not None el
 scripts = None
 if _sd is not None:
     scripts = {}
-    for fn in sorted(os.listdir(_sd))[:200]:
-        if not fn.endswith('.py'):
-            continue
+    # filter first, then cap: other files never push a program out; too many
+    # programs give a sentinel the workflow refuses, never a cut list
+    pys = sorted(fn for fn in os.listdir(_sd) if fn.endswith('.py'))
+    if len(pys) > 200:
+        scripts = {'__too_many_programs__': None}
+        pys = []
+    for fn in pys:
         fp = os.path.join(_sd, fn)
         if os.path.islink(fp) or not os.path.isfile(fp):
             scripts[fn[:-3]] = None

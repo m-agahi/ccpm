@@ -44,7 +44,10 @@ into the 4.0.0 entry.
   sha256, and no other program may be there.
 - Every hasher run (each fingerprint before and after the writers, the coder and every judge, and
   the freeze) prints the sha256 of every program in its own directory inside its digest. A
-  mismatch stops the run with `needs_human` and `stop_gate: "hash"`, naming the file.
+  mismatch stops the run with `needs_human` and `stop_gate: "hash"`, naming the file. The hasher
+  filters to `.py` files before it caps the count at 200, so other files cannot push a program out.
+  More than 200 programs give a sentinel that the script refuses. Every program must be present,
+  and an extra `.py` file is refused.
 - Every program step runs `sha256sum -- <file> && python3 -I <file> ...` in one Bash call. The
   script requires the relayed `file_sha256` and the program's self-hash to both equal the
   constant's sha256.

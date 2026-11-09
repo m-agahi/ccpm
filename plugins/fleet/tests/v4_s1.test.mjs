@@ -630,7 +630,10 @@ test("4.0.0 security 2: every fingerprint hashes the shipped programs; a change 
     assert.equal(out.result.stop_gate, "hash", label);
     assert.match(out.result.reason, new RegExp("hasher " + label + ": the shipped fleet programs were changed: " + SCRIPTS_DIR.replace(/\./g, "\\.") + "/plan_ref_write\\.py hashes f{64}"), label);
   }
-  for (const scripts of [null, {}, Object.assign({}, all, { extra: "1".repeat(64) })]) {
+  // every program must be present and match; an unknown extra or the overflow sentinel is refused
+  const missingOne = Object.assign({}, all);
+  delete missingOne.state_write;
+  for (const scripts of [null, {}, missingOne, Object.assign({}, all, { extra: "1".repeat(64) }), Object.assign({}, all, { __too_many_programs__: null })]) {
     const s = happy();
     s["hasher:pre-writers:r1"] = Object.assign({}, s["hasher:pre-writers:r1"], { scripts });
     const out = await run(s, ARGS);
@@ -663,6 +666,20 @@ test("4.0.0 security 2: the shipped hasher hashes every program beside it; a tam
     const d = Object.assign({}, o);
     delete d.digest;
     assert.equal(o.digest, sha256(canon(d)), "the digest covers the scripts map");
+    // padding the dir with other files never pushes a program out of the hashed set
+    for (let i = 0; i < 250; i++) writeFileSync(join(dir, "a" + String(i).padStart(3, "0") + ".txt"), "x");
+    o = hash();
+    assert.deepEqual(o.scripts, Object.fromEntries(PROGRAMS.map(([n]) => [n, programSha(n)])), "padding with non-.py files");
+    // an extra .py is listed, so the workflow refuses it
+    writeFileSync(join(dir, "evil.py"), "print(1)\n");
+    o = hash();
+    assert.equal(o.scripts.evil, sha256("print(1)\n"));
+    rmSync(join(dir, "evil.py"));
+    // more .py files than the cap: a sentinel the workflow refuses, never a cut list
+    for (let i = 0; i < 200; i++) writeFileSync(join(dir, "z" + String(i).padStart(3, "0") + ".py"), "");
+    o = hash();
+    assert.deepEqual(Object.keys(o.scripts), ["__too_many_programs__"]);
+    for (let i = 0; i < 200; i++) rmSync(join(dir, "z" + String(i).padStart(3, "0") + ".py"));
     writeFileSync(join(dir, "plan_files.py"), readFileSync(join(dir, "plan_files.py"), "utf8") + "# x\n");
     o = hash();
     assert.notEqual(o.scripts.plan_files, programSha("plan_files"));
