@@ -70,10 +70,16 @@ still refuses `.github/`, the hook-manager and CI paths, rulesets and secret-lik
 **New: the IaC push gate (ADR-1172 and ADR-1175).** Terraform diffs never
 push automatically; the fleet stops and hands the push to Max. Content checks are hints only.
 Before every push, `infra:tf-gate:push` (`TF_GATE_PY`, read only, `python3 -I`, caps, digest and
-argument checked) reads the PR diff (`merge-base..<approved sha>`). When it touches any IaC file
+argument checked) reads the PR diff (`merge-base..<approved sha>`). The base comes from origin
+itself: the program reads `refs/heads/<default>` with `git ls-remote` (never the local
+`refs/remotes/origin/<default>`, which a role's shell can move) and fetches that one sha when the
+repo lacks it (a full fetch: `--depth` would mark a full clone shallow once origin is further
+ahead). Either failing stops the run. When it touches any IaC file
 (`*.tf`, `*.tofu`, `*.tf.json`, `*.tofu.json`, `*.tfvars`, `*.tfvars.json`, `*.tofuvars`,
-`*.tofuvars.json`, `.terraform.lock.hcl`, `terragrunt.hcl`, `digger.y*ml`, a terraform CLI config file, or
-a path with a `.terraform`, `terraform.d` or `.terraform.d` segment), the run stops before the push in every confirm mode, `auto` included:
+`*.tofuvars.json`, any `*.hcl` or `*.hcl.json` (the lock file and the grunt configs included), `*.tfbackend`,
+`.terraform-version`, `.opentofu-version`, `.tofu-version`, `atlantis.y*ml`, `digger.y*ml`, a
+terraform CLI config file, anything under `.spacelift/`, or a path with a `.terraform`, `terraform.d` or
+`.terraform.d` segment; names match in any case), the run stops before the push in every confirm mode, `auto` included:
 `needs_human`, `stop_gate: "iac-push"`. The message names the branch, the commit sha, the IaC files
 and the exact push command (`git -C <worktree> push -u origin <branch>`) for Max to run himself.
 The fleet never pushes an IaC diff, in any path. After Max pushes it himself, a build run of the
@@ -113,7 +119,7 @@ Three checks still stop the run (`stop_gate: "iac"`), fail-closed:
   hook-manager and CI path, in any case: `.pre-commit-config.yaml`, `.pre-commit-hooks.yaml`,
   `.github/**`, `.gitea/**`, `.forgejo/**`, `.woodpecker*`, `.circleci/**`, `.gitlab-ci.yml`,
   `.gitlab/**`, `Jenkinsfile`, `.buildkite/**`, `azure-pipelines.yml`, `bitbucket-pipelines.yml`,
-  `.husky/**`, `.githooks/**`, `lefthook*.yml`, `.lefthook*` (the scope fence refuses the same set
+  `.husky/**`, `.githooks/**`, `lefthook*.yml`, `.lefthook*`, `atlantis.y*ml` (the scope fence refuses the same set
   in a coder's changes). The read-only program `HOOK_SURFACE_PY` (the fixer's isolated PyYAML
   loader, at the base and in the worktree) adds every file a hook `entry` or `args` names (a
   `--flag=value` only when the value is an executable script, so `--config=pyproject.toml` is not

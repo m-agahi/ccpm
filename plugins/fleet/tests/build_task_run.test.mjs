@@ -9761,6 +9761,8 @@ test("3.1.0 delta review: every CI and hook-manager path, any case, the hooksPat
     [[".husky/pre-commit"], [], null],
     [[".githooks/pre-push"], [], null],
     [["lefthook.yml"], [], null],
+    [["atlan" + "tis.yaml"], [], null],
+    [["sub/ATLAN" + "TIS.yml"], [], null],
     [[".pre-commit-hooks.yaml"], [], null],
     [[".PRE-COMMIT-CONFIG.YAML"], [], null],
     [[".GitHub/workflows/x.yml"], [], null],
@@ -10239,7 +10241,7 @@ const LOCK = "." + TFW + ".lock.hcl";
 const TG = "terra" + "grunt.hcl";
 const DG = "dig" + "ger.yml";
 
-function tfGateRun(base, change, del) {
+function tfGateRun(base, change, del, opts = {}) {
   const home = mkdtempSync(join(tmpdir(), "fleet-tfgate-"));
   const wt = join(home, "repo");
   try {
@@ -10255,14 +10257,34 @@ function tfGateRun(base, change, del) {
     put(Object.assign({ "README.md": "x\n" }, base));
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "base");
+    if (!opts.noRemote) {
+      // the program reads origin's default head itself (git ls-remote), never the local ref
+      const bare = join(home, "origin.git");
+      spawnSync("git", ["init", "-q", "--bare", bare]);
+      sh(wt, "git", "remote", "add", "origin", bare);
+      sh(wt, "git", "push", "-q", "origin", "HEAD:refs/heads/master");
+    }
     sh(wt, "git", "update-ref", "refs/remotes/origin/master", "HEAD");
     put(change);
     for (const p of del || []) rmSync(join(wt, p));
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "change");
     const head = sh(wt, "git", "rev-parse", "HEAD").trim();
+    // a role's shell moves the local origin ref onto the branch head
+    if (opts.moveLocal) sh(wt, "git", "update-ref", "refs/remotes/origin/master", head);
+    if (opts.advance) {
+      // origin's default moves on with a commit the local repo does not have
+      const c = join(home, "other");
+      spawnSync("git", ["clone", "-q", join(home, "origin.git"), c]);
+      for (const [k, v] of [["user.email", "t@example.com"], ["user.name", "t"], ["commit.gpgsign", "false"]]) sh(c, "git", "config", k, v);
+      writeFileSync(join(c, "later.txt"), "x\n");
+      sh(c, "git", "add", "-A");
+      sh(c, "git", "commit", "-qm", "later");
+      sh(c, "git", "push", "-q", "origin", "HEAD:refs/heads/master");
+    }
     const prog = extractPy("TF_GATE_PY_BEGIN", "TF_GATE_PY_END", "TF_GATE_PY");
     const r = spawnSync("python3", ["-I", "-c", prog, wt, "master", head], { encoding: "utf8", cwd: home });
+    if (opts.raw) return r;
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout);
   } finally {
@@ -10517,6 +10539,116 @@ test("3.1.0 ADR-1175: the fleet never dispatches a push for an IaC diff, in any 
       assert.ok(!pushed(out), args.confirm + " " + String(head));
       assert.ok(!out.calls.some((c) => /push -u origin/.test(c.prompt) && !/To push it yourself/.test(c.prompt) && /^infra:push/.test(c.label || "")));
     }
+});
+
+// ---------------------------------------------------------------- 3.1.0 final review of PR #38
+const AT = "atlan" + "tis";
+const TOFU = "to" + "fu";
+// every IaC name the final review added, in Python (iac) and JS (isIacPath), any case
+const IAC_ADDED = [
+  ["root.hcl", 'locals {\n  x = run_cmd("id")\n}\n'],
+  ["live/ROOT.HCL", "locals {}\n"],
+  [AT + ".yaml", "version: 3\n"],
+  [AT + ".yml", "version: 3\n"],
+  ["Ops/" + AT.toUpperCase() + ".YAML", "version: 3\n"],
+  ["backend/prod.tfbackend", 'bucket = "b"\n'],
+  ["." + TFW + "-version", "1.9.0\n"],
+  [".open" + TOFU + "-version", "1.8.0\n"],
+  ["." + TOFU + "-version", "1.8.0\n"],
+  [".spacelift/config.yml", "version: 1\n"],
+  ["stacks/.SPACELIFT/hooks.yml", "x: 1\n"],
+  ["terra" + "grunt.hcl.json", "{}\n"],
+  ["live/env.hcl.json", "{}\n"],
+  ["infra/MAIN.TF", "locals {}\n"],
+];
+for (const [p, body] of IAC_ADDED) {
+  test("3.1.0 final review HIGH (python): " + p + " is an IaC file", { skip: !HAVE_PY }, () => {
+    const o = tfGateRun({}, { [p]: body });
+    assert.equal(o.touched, true, p);
+    assert.deepEqual(o.iac_files, [p]);
+  });
+  test("3.1.0 final review HIGH (js): " + p + " in the fleet scan's diff must be in the relay's IaC files", async () => {
+    const s = happy({ script: { "infra:fleet-scan:push": { status: "ok", reason: "scanned", diff: ["src/x.py", p], commits: [] } } });
+    s["infra:tf-gate:push"] = gateFor({});
+    const out = await run(s, ARGS);
+    assert.equal(out.result.stop_gate, "iac", p);
+    assert.match(out.result.reason, /could not complete/);
+    assert.ok(!pushed(out));
+  });
+}
+
+test("3.1.0 final review HIGH PoC: root.hcl with run_cmd plus the orchestrator yaml is touched and never pushes", { skip: !HAVE_PY }, async () => {
+  const change = { "root.hcl": 'locals {\n  x = run_cmd("id")\n}\n', [AT + ".yaml"]: "version: 3\n" };
+  const o = tfGateRun({}, change);
+  assert.equal(o.touched, true);
+  assert.deepEqual(o.iac_files, [AT + ".yaml", "root.hcl"]);
+  const s = happy({ script: { "infra:fleet-scan:push": { status: "ok", reason: "scanned", diff: Object.keys(change), commits: [] } } });
+  s["infra:tf-gate:push"] = gateFor({ touched: true, iac_files: o.iac_files });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "iac-push");
+  assert.ok(!pushed(out));
+});
+
+test("3.1.0 final review MED: a moved local origin ref does not empty the diff; the base comes from origin itself", { skip: !HAVE_PY }, () => {
+  const o = tfGateRun({ "infra/main.tf": MAIN }, { "infra/main.tf": MAIN.replace('"x"', '"y"') }, [], { moveLocal: true });
+  assert.equal(o.touched, true);
+  assert.deepEqual(o.iac_files, ["infra/main.tf"]);
+});
+
+test("3.1.0 final review MED: origin's default ahead with a commit the repo lacks is fetched; the diff stays the branch's own", { skip: !HAVE_PY }, () => {
+  const o = tfGateRun({ "infra/main.tf": MAIN }, { "infra/main.tf": MAIN.replace('"x"', '"y"') }, [], { advance: true });
+  assert.deepEqual(o.iac_files, ["infra/main.tf"]);
+  const p = tfGateRun({}, { "src/a.py": "x = 1\n" }, [], { advance: true });
+  assert.deepEqual([p.touched, p.iac_files], [false, []]);
+});
+
+test("3.1.0 final review MED: no readable origin refuses (fail closed)", { skip: !HAVE_PY }, () => {
+  const r = tfGateRun({ "infra/main.tf": MAIN }, { "src/a.py": "x = 1\n" }, [], { noRemote: true, raw: true });
+  assert.notEqual(r.status, 0);
+  assert.equal(r.stdout, "");
+});
+
+test("3.1.0 final review P7: a remote-head relay with other args (digest recomputed) stops at iac-push", async () => {
+  const s = iacScript(() => happy(), "approved");
+  const inner = s["infra:remote-head:push"];
+  s["infra:remote-head:push"] = (prompt) => {
+    const r = inner(prompt);
+    r.args = [r.args[0], "fleet/other"];
+    r.digest = sha256(canon({ head: r.head, args: r.args }));
+    return r;
+  };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "iac-push");
+  assert.match(out.result.reason, /could not be read/);
+  assert.ok(!pushed(out));
+});
+
+test("3.1.0 final review P8: a remote-head relay with a wrong digest (args right) stops at iac-push", async () => {
+  const s = iacScript(() => happy(), "approved");
+  const inner = s["infra:remote-head:push"];
+  s["infra:remote-head:push"] = (prompt) => Object.assign(inner(prompt), { digest: "0".repeat(64) });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "iac-push");
+  assert.match(out.result.reason, /could not be read/);
+  assert.ok(!pushed(out));
+});
+
+test("3.1.0 final review P10: a scan diff with only the provider lock file needs the relay to list it", async () => {
+  for (const p of ["." + TFW + ".lock.hcl", "infra/." + TFW + ".lock.hcl"]) {
+    const s = happy({ script: { "infra:fleet-scan:push": { status: "ok", reason: "scanned", diff: [p], commits: [] } } });
+    s["infra:tf-gate:push"] = gateFor({});
+    const out = await run(s, ARGS);
+    assert.equal(out.result.stop_gate, "iac", p);
+  }
+});
+
+test("3.1.0 final review: the orchestrator yaml is hook surface for the scope fence", async () => {
+  for (const p of [AT + ".yaml", "sub/" + AT + ".yml"]) {
+    const s = happy({ script: { "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES, changed: ["src/x.py", p] } } });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.stop_gate, "scope", p);
+    assert.match(out.result.reason, /hook surface/, p);
+  }
 });
 
 test("3.1.0 IaC push gate: a problem (exec stack, plugin dir, symlink) stops at iac with the problem named", async () => {

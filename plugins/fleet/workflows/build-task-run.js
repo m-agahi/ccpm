@@ -3625,9 +3625,9 @@ TF = 'terra' + 'form'
 TO = 'to' + 'fu'
 LOCK = '.' + TF + '.lock.hcl'
 GRUNT = 'terra' + 'grunt.hcl'
-ORCH = re.compile(r'(^|/)' + 'dig' + r'ger\.ya?ml$')
-CLI = re.compile(r'(^|/)(\.' + TF + r'rc|[^/]*\.tfrc)$')
-PLUGIN_DIR = re.compile(r'(^|/)(\.' + TF + r'|\.?' + TF + r'\.d)(/|$)')
+ORCH = re.compile(r'(^|/)' + 'dig' + r'ger\.ya?ml$', re.I)
+CLI = re.compile(r'(^|/)(\.' + TF + r'rc|[^/]*\.tfrc)$', re.I)
+PLUGIN_DIR = re.compile(r'(^|/)(\.' + TF + r'|\.?' + TF + r'\.d)(/|$)', re.I)
 HCL_EXT = ('.tf', '.' + TO)
 JSON_EXT = ('.tf.json', '.' + TO + '.json')
 VARS_EXT = ('.tfvars', '.tfvars.json', '.' + TO + 'vars', '.' + TO + 'vars.json')
@@ -3640,9 +3640,15 @@ def run(*a):
     if r.returncode != 0:
         sys.exit(r.stderr.decode('utf-8', 'replace'))
     return r.stdout
+# any .hcl (the lock file and the grunt configs included), backend and version
+# files, the orchestrator config and spacelift's dir; names compared lower-cased
+MORE_EXT = ('.hcl', '.hcl.json', '.tfbackend')
+NAMES = ('.' + TF + '-version', '.open' + TO + '-version', '.' + TO + '-version', 'atlan' + 'tis.yaml', 'atlan' + 'tis.yml', LOCK, GRUNT)
 def iac(p):
-    b = p.rsplit('/', 1)[-1]
-    return b.endswith(HCL_EXT + JSON_EXT + VARS_EXT) or b == LOCK or b == GRUNT or bool(ORCH.search(p)) or bool(CLI.search(p)) or bool(PLUGIN_DIR.search(p))
+    segs = p.lower().split('/')
+    b = segs[-1]
+    return (b.endswith(HCL_EXT + JSON_EXT + VARS_EXT + MORE_EXT) or b in NAMES or '.spacelift' in segs[:-1]
+            or bool(ORCH.search(p)) or bool(CLI.search(p)) or bool(PLUGIN_DIR.search(p)))
 def code_file(p):
     return p.endswith(HCL_EXT + JSON_EXT)
 spent = [0]
@@ -3656,7 +3662,27 @@ def blob(rev, p):
     if n > FILE_CAP or spent[0] > BUDGET:
         return False
     return run('cat-file', 'blob', rev + ':' + p).decode('utf-8', 'replace')
-base = run('merge-base', 'refs/remotes/origin/' + default, sha).decode().strip()
+# the base comes from origin itself (git ls-remote), never from the local
+# refs/remotes/origin/<default>, which any role's shell can move; a commit the
+# repo lacks is fetched by its sha. Either failing refuses (fail closed).
+if not re.match(r'^[A-Za-z0-9._/-]+$', default) or default.startswith('-'):
+    sys.exit('bad default branch name')
+lr = subprocess.run(G + ['ls-remote', '--exit-code', 'origin', 'refs/heads/' + default], capture_output=True)
+if lr.returncode != 0:
+    sys.exit('cannot read origin/' + default + ': ' + lr.stderr.decode('utf-8', 'replace'))
+rows = [l.split('\t') for l in lr.stdout.decode('utf-8', 'replace').splitlines() if l.strip()]
+if len(rows) != 1 or len(rows[0]) != 2 or rows[0][1] != 'refs/heads/' + default or not re.match(r'^[0-9a-f]{40}$', rows[0][0]):
+    sys.exit('unexpected ls-remote output for origin/' + default)
+remote = rows[0][0]
+have = lambda: subprocess.run(G + ['cat-file', '-e', remote + '^{commit}'], capture_output=True).returncode == 0
+if not have():
+    # a full fetch of that one sha: --depth into a full clone marks it shallow
+    # once origin is further ahead than the depth, and merge-base then fails
+    fr = subprocess.run(G[:1] + ['-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'fetch.recurseSubmodules=false'] + G[1:] +
+                        ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', remote], capture_output=True)
+    if fr.returncode != 0 or not have():
+        sys.exit('cannot fetch origin/' + default + ' at ' + remote + ': ' + fr.stderr.decode('utf-8', 'replace'))
+base = run('merge-base', remote, sha).decode().strip()
 rng = base + '..' + sha
 paths = [x.decode('utf-8', 'replace') for x in run('diff', '--name-only', '-z', '--no-renames', rng, '--').split(b'\0') if x]
 iac_files = sorted(p for p in paths if iac(p))
@@ -3886,7 +3912,7 @@ function remoteHeadPrompt(inputs) {
 
 function tfGatePrompt(inputs) {
   return (
-    "Infra step of the fleet build workflow: list the PR diff's IaC files. Read only: no edits, no commits, no checkout, no fetch, no push; run nothing but the one command below.\n" +
+    "Infra step of the fleet build workflow: list the PR diff's IaC files. No edits, no commits, no checkout, no push; run nothing but the one command below (it reads origin's default head itself and fetches that one commit when the repo lacks it).\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
@@ -5660,7 +5686,7 @@ async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, s
 // shell `source`/`.`, the scripts CI files name, the core.hooksPath dir. An
 // entry ending "/" is a directory prefix. targets: make targets whose recipe
 // paths the program also returns (make_paths, for F2).
-const HOOK_PATH_RE = /^(\.pre-commit-config\.yaml|\.pre-commit-hooks\.yaml|\.gitlab-ci\.yml|jenkinsfile|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml|\.woodpecker[^/]*|(\.github|\.gitea|\.forgejo|\.circleci|\.gitlab|\.buildkite|\.husky|\.githooks|\.woodpecker)\/.*|(.*\/)?lefthook[^/]*\.ya?ml|\.lefthook[^/]*(\/.*)?)$/i;
+const HOOK_PATH_RE = /^(\.pre-commit-config\.yaml|\.pre-commit-hooks\.yaml|\.gitlab-ci\.yml|jenkinsfile|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml|\.woodpecker[^/]*|(\.github|\.gitea|\.forgejo|\.circleci|\.gitlab|\.buildkite|\.husky|\.githooks|\.woodpecker)\/.*|(.*\/)?lefthook[^/]*\.ya?ml|\.lefthook[^/]*(\/.*)?|(.*\/)?atlantis\.ya?ml)$/i;
 function hookSurfacePrompt(inputs) {
   return (
     "Infra step of the fleet workflow: list the hook surface. READ ONLY: no edits, no commits; run nothing but the one command below. Never run a hook.\n" +
@@ -6024,12 +6050,13 @@ function buildCommitsOf(commits, taskId, refs) {
 // Bash guard blocks them).
 const IAC_TF = "terra" + "form";
 function isIacPath(p) {
-  const q = normPath(String(p));
-  const segs = q.split("/");
+  const segs = normPath(String(p)).toLowerCase().split("/");
   const b = segs[segs.length - 1];
   if (segs.some((x) => x === "." + IAC_TF || x === IAC_TF + ".d" || x === "." + IAC_TF + ".d")) return true;
-  if (/\.(tf|tofu|tf\.json|tofu\.json|tfvars|tfvars\.json|tofuvars|tofuvars\.json)$/.test(b)) return true;
-  if (b === "." + IAC_TF + ".lock.hcl" || b === "terra" + "grunt.hcl" || b === "." + IAC_TF + "rc" || /\.tfrc$/.test(b)) return true;
+  if (segs.slice(0, -1).indexOf(".spacelift") >= 0) return true;
+  if (/\.(tf|tofu|tf\.json|tofu\.json|tfvars|tfvars\.json|tofuvars|tofuvars\.json|hcl|hcl\.json|tfbackend)$/.test(b)) return true;
+  const names = ["." + IAC_TF + "rc", "." + IAC_TF + "-version", ".open" + "to" + "fu-version", "." + "to" + "fu-version", "atlan" + "tis.yaml", "atlan" + "tis.yml"];
+  if (names.indexOf(b) >= 0 || /\.tfrc$/.test(b)) return true;
   return new RegExp("^" + "dig" + "ger\\.ya?ml$").test(b);
 }
 

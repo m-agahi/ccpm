@@ -578,10 +578,14 @@ rulesets and secret-like paths.
 
 **The IaC push gate (ADR-1172 and ADR-1175).** Terraform diffs never push
 automatically; the fleet stops and hands the push to Max. Content checks are hints only. Before
-every push, `infra:tf-gate:push` runs `TF_GATE_PY` (read only, `python3 -I`, caps) on the PR diff.
+every push, `infra:tf-gate:push` runs `TF_GATE_PY` (`python3 -I`, caps) on the PR diff. Its base
+comes from origin itself (`git ls-remote`, then a fetch of that sha when the repo lacks it), never
+from the local origin ref; either failing stops the run.
 When the diff touches any IaC file (`*.tf`, `*.tofu`, `*.tf.json`, `*.tofu.json`, `*.tfvars`, `*.tfvars.json`, `*.tofuvars`,
-`*.tofuvars.json`, `.terraform.lock.hcl`, `terragrunt.hcl`, `digger.y*ml`, a terraform CLI config file, or
-a path with a `.terraform`, `terraform.d` or `.terraform.d` segment), the run stops before the push in every
+`*.tofuvars.json`, any `*.hcl` or `*.hcl.json` (the lock file and the grunt configs included), `*.tfbackend`,
+`.terraform-version`, `.opentofu-version`, `.tofu-version`, `atlantis.y*ml`, `digger.y*ml`, a
+terraform CLI config file, anything under `.spacelift/`, or a path with a `.terraform`, `terraform.d` or
+`.terraform.d` segment; names match in any case), the run stops before the push in every
 confirm mode with `needs_human`, `stop_gate: "iac-push"`. The message gives the branch, the commit
 sha, the IaC files, the push command for Max, and the content findings under "hints (not a
 security check)". The fleet never pushes an IaC diff. After Max pushes it himself, a build run of the same
@@ -600,7 +604,7 @@ The hook surface is every hook-manager and CI path, in any case (`.pre-commit-co
 `.pre-commit-hooks.yaml`, `.github/**`, `.gitea/**`, `.forgejo/**`, `.woodpecker*`,
 `.circleci/**`, `.gitlab-ci.yml`, `.gitlab/**`, `Jenkinsfile`, `.buildkite/**`,
 `azure-pipelines.yml`, `bitbucket-pipelines.yml`, `.husky/**`, `.githooks/**`, `lefthook*.yml`,
-`.lefthook*`), plus what the read-only program `HOOK_SURFACE_PY` finds with the fixer's isolated
+`.lefthook*`, `atlantis.y*ml`), plus what the read-only program `HOOK_SURFACE_PY` finds with the fixer's isolated
 PyYAML loader: every file a hook `entry` or `args` names (a `--flag=value` only when the value is
 an executable script), `-m` modules and their `__main__.py`, every Makefile and `*.mk` for a hook
 that runs `make`, the in-repo target of a surface symlink, one level of what the hook scripts load
