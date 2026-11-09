@@ -96,28 +96,59 @@ test("4.0.2 1997: every shipped program a prompt can run has a PROGRAM_SLOTS ent
   const table = new Function(grabTable("PROGRAM_SLOTS") + "\nreturn PROGRAM_SLOTS;")();
   const slotted = new Set(table.flatMap(([, slots]) => slots.map(([, n]) => n)));
   for (const n of names) assert.ok(slotted.has(n), n + " has no PROGRAM_SLOTS entry");
+  // 4.0.2 review: every builder of a program command records it (emitProg)
+  const builders = SOURCE.split("\n").filter((l) => l.includes('"sha256sum -- '));
+  assert.equal(builders.length, 2, builders.join("\n"));
+  for (const l of builders) assert.match(l, /emitProg\(/, l);
 });
 
 test("4.0.2 1997: PROGRAM_SLOTS puts file_sha256 where the script's checks read it, for every program-running label", () => {
   const slotsOf = programSlots();
+  // the commands the run emitted (progCmd records each one): command text -> program
+  const cmd = (n) => "sha256sum -- '/s/" + n + ".py' && python3 -I '/s/" + n + ".py'";
+  const emitted = new Map(PROGRAMS.map(([n]) => [cmd(n), n]));
   const covered = new Set();
   for (const label of SAMPLES) {
     const want = harnessSlots(label);
     assert.ok(want, label + " matches exactly one harness PROGRAM_LABELS entry");
     covered.add(PROGRAM_LABELS.findIndex(([re]) => re.test(label)));
-    const prompt = [...new Set(want.map(([, n]) => n))].map((n) => "sha256sum -- '/s/" + n + ".py' && python3 -I '/s/" + n + ".py'").join("\n");
-    const got = slotsOf(label, prompt);
+    const prompt = [...new Set(want.map(([, n]) => n))].map(cmd).join("\n");
+    const got = slotsOf(label, prompt, emitted);
     assert.deepEqual(got.missing, [], label);
     assert.deepEqual(key(got.used), key(want), label);
   }
   assert.equal(covered.size, PROGRAM_LABELS.length, "every harness entry is sampled");
   // a slot applies only when its program runs (db-up add mode has no sweep)
-  const add = slotsOf("infra:db-up:add", "sha256sum -- '/s/db_up.py' && python3 -I '/s/db_up.py'");
+  const add = slotsOf("infra:db-up:add", cmd("db_up"), emitted);
   assert.deepEqual(key(add.used), ["up=db_up"]);
-  // a program the label's entry does not name, or a label with no entry, is reported
-  assert.deepEqual(slotsOf("infra:branch-scan", "sha256sum -- '/s/hasher.py'").missing, ["hasher"]);
-  assert.deepEqual(slotsOf("infra:no-such-step", "sha256sum -- '/s/hasher.py'").missing, ["hasher"]);
-  assert.deepEqual(slotsOf("infra:format-plan", "no program here"), { used: [], missing: [] });
+  // an emitted program the label's entry does not name is reported
+  assert.deepEqual(slotsOf("infra:branch-scan", cmd("hasher"), emitted).missing, ["hasher"]);
+  // a label with no entry runs no program: an exact command in its prompt is quoted text
+  for (const label of ["intake", "intake:rulings", "infra:ledger-body", "infra:ledger-writeback", "infra:comments-post"])
+    assert.deepEqual(slotsOf(label, "Inputs: " + JSON.stringify({ tldr: cmd("path_check") }), emitted), { used: [], missing: [] }, label);
+  assert.deepEqual(slotsOf("infra:format-plan", "no program here", emitted), { used: [], missing: [] });
+  // 4.0.2 review: text that only looks like a program command (untrusted input) counts for nothing
+  for (const fake of ["sha256sum -- <scripts_dir>/path_check.py", "sha256sum -- '/s/hasher.py'", "sha256sum -- /x/branch_scan.py && python3 -I /x/branch_scan.py"])
+    for (const label of ["intake", "intake:rulings", "infra:ledger-body", "infra:branch-scan"])
+      assert.deepEqual(slotsOf(label, "Inputs: " + JSON.stringify({ input: fake, tldr: fake }), emitted), { used: [], missing: [] }, label + ": " + fake);
+});
+
+// 4.0.2 review: untrusted text (the task input, the planner's tldr) that quotes a
+// program command neither adds a slot nor stops the run
+test("4.0.2 1997 review: an intake input and a tldr quoting `sha256sum -- <scripts_dir>/path_check.py` add no slot and do not halt", async () => {
+  const quote = "sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py '/r'";
+  const s = happy();
+  s["role:scope-and-plan"] = Object.assign({}, s["role:scope-and-plan"], { tldr: "fix: " + quote });
+  const out = await run(s, Object.assign({}, ARGS, { input: "fleet bug: the preflight runs " + quote }));
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const carriers = out.calls.filter((c) => c.prompt.includes("sha256sum -- <scripts_dir>/path_check.py") && !/^preflight/.test(c.label));
+  assert.ok(carriers.some((c) => /^intake/.test(c.label)), "the input reached intake");
+  assert.ok(carriers.some((c) => /^infra:(ledger|comments|yaadgaar)-/.test(c.label)), "the tldr reached a write-back step: " + carriers.map((c) => c.label).join(", "));
+  for (const c of carriers) {
+    if (harnessSlots(c.label)) continue;
+    assert.ok(!(c.opts.schema && (c.opts.schema.required || []).includes("file_sha256")), c.label + ": no file_sha256 slot");
+    assert.ok(!c.prompt.includes("Shipped programs:"), c.label + ": no file_sha256 rule");
+  }
 });
 
 test("4.0.2 1997: every program-running dispatch gets a schema that requires file_sha256 at each slot, and a prompt that names it", async () => {
@@ -135,6 +166,10 @@ test("4.0.2 1997: every program-running dispatch gets a schema that requires fil
       n++;
       seen.add(PROGRAM_LABELS.findIndex(([re]) => re.test(c.label)) + "|" + slot);
       assert.ok(requiredAt(c.opts.schema, slot), c.label + ": schema does not require file_sha256 at " + (slot || "top level"));
+      // 4.0.2 review: a failed or needs_human result can always satisfy the schema with nulls
+      const nullable = (p) => !!p && [].concat(p.type).includes("null");
+      const P = c.opts.schema.properties;
+      assert.ok(slot === null ? nullable(P.file_sha256) && nullable(P.program) : nullable(P[slot]), c.label + ": " + (slot || "top level") + " accepts null");
       assert.ok(c.prompt.includes("`" + name + ".py` -> " + (slot === null ? "the top level of your result" : "inside `" + slot + "`")), c.label + ": rule names " + name + " at " + slot);
       if (slot === null) {
         const rets = [...c.prompt.matchAll(/Return \{[^}]*\}/g)].map((m) => m[0]).filter((x) => /\bprogram\b/.test(x));

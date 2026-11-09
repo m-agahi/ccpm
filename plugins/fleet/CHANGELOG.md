@@ -21,7 +21,10 @@
   - the rule text appended to the prompt, which now names each slot.
 - Every explicit `Return {...}` list and every nested relay sentence names `file_sha256`. Word
   counts that a third key contradicts ("both values", "all four", "all six") are gone.
-- A prompt that runs a shipped program its label has no slot for stops the run (`contract`).
+- A prompt counts as running a program only when it holds a command that `progCmd` (or the
+  preflight builder) recorded through `emitProg`. Text that merely quotes such a command (the
+  task input, a tldr) adds no slot. A step with no `PROGRAM_SLOTS` entry runs no program. A
+  program step whose prompt runs a program its entry does not place stops the run (`contract`).
   The PATH re-check and db-down calls, which call `agent()` directly, go through the same path.
 - The check does not change: a missing or wrong `file_sha256` still stops the step.
 - The preflight prompt names the scripts directory version from `FLEET_VERSION` (it said 4.0.0).

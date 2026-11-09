@@ -1797,7 +1797,16 @@ function progCmd(name, args) {
   if (!state.scriptsDir) throw new Error("scripts_dir is not resolved; program " + name + " cannot run");
   programSha(name);
   const f = shQuote(state.scriptsDir + "/" + name + ".py");
-  return "sha256sum -- " + f + " && python3 -I " + f + (args || []).map((a) => " " + shQuote(a)).join("");
+  return emitProg(name, "sha256sum -- " + f + " && python3 -I " + f + (args || []).map((a) => " " + shQuote(a)).join(""));
+}
+// 4.0.2 review: every program command this run built, command text -> program
+// name. infraCall counts a program as run by a prompt only when the prompt
+// holds a command recorded here, never text that merely looks like one (task
+// input, a tldr or a ticket body can quote `sha256sum -- .../<name>.py`).
+const EMITTED_CMDS = new Map();
+function emitProg(name, cmd) {
+  EMITTED_CMDS.set(cmd, name);
+  return cmd;
 }
 // 4.0.2 (ledger 1997): where each step returns each shipped program's output
 // (null: the top level of the result; else that key), as programProblem reads
@@ -1837,12 +1846,16 @@ const PROGRAM_SLOTS = [
   [/^infra:db-down$/, [["down", "db_down"]]],
 ];
 // {used: the label's [slot, program] pairs whose program the prompt runs,
-// missing: programs the prompt runs that no pair of the label names}
-function programSlots(label, prompt) {
-  const names = [];
-  for (const m of String(prompt).matchAll(/sha256sum -- '?[^\s'"]*\/([a-z_]+)\.py/g)) if (names.indexOf(m[1]) < 0) names.push(m[1]);
+// missing: programs the prompt runs that no pair of the label names}. A
+// prompt runs a program when it holds a command `emitted` recorded for it.
+function programSlots(label, prompt, emitted) {
   const hit = PROGRAM_SLOTS.find((e) => e[0].test(label));
-  const pairs = hit ? hit[1] : [];
+  // a step with no entry runs no program: a command its prompt holds is quoted
+  // text (the task input, a tldr), never a slot and never a stop
+  if (!hit) return { used: [], missing: [] };
+  const names = [];
+  for (const [cmd, name] of emitted) if (names.indexOf(name) < 0 && String(prompt).indexOf(cmd) >= 0) names.push(name);
+  const pairs = hit[1];
   return { used: pairs.filter((p) => names.indexOf(p[1]) >= 0), missing: names.filter((n) => !pairs.some((p) => p[1] === n)) };
 }
 // A per-call copy of `schema` that requires program and file_sha256 at every
@@ -2127,8 +2140,7 @@ function preflightScriptsText(repo, after) {
     "\nscripts_probe = its output lines, every line in order, copied unchanged. " +
     "When exactly one line starts with `hit=`, scripts_dir = the rest of that line; otherwise scripts_dir = null, path_check = null, and skip the next command. " +
     "Then run this one command as one Bash call, with <scripts_dir> replaced by scripts_dir and nothing else changed: " +
-    "sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py " +
-    shQuote(repo) +
+    emitProg("path_check", "sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py " + shQuote(repo)) +
     "\nIt prints one JSON object {tools, args, path_problems, program, digest}: " + relayAs("path_check") + " (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n"
   );
 }
@@ -3265,7 +3277,7 @@ function nonced(prompt, rule) {
 // that requires file_sha256 there; one that runs a program its label has no
 // slot for stops the run.
 function infraCall(label, prompt, opts) {
-  const ps = programSlots(label, prompt);
+  const ps = programSlots(label, prompt, EMITTED_CMDS);
   if (ps.missing.length) halt("failed", label + ": the prompt runs shipped program(s) " + ps.missing.join(", ") + " that PROGRAM_SLOTS does not place for this label", "contract");
   if (!ps.used.length) return { prompt: nonced(prompt), opts };
   return { prompt: nonced(prompt, fileShaRule(ps.used)), opts: Object.assign({}, opts, { schema: programSchema(opts.schema || { type: "object" }, ps.used) }) };
