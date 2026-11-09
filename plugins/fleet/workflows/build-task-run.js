@@ -1171,6 +1171,7 @@ const INFRA_SCHEMA = {
     remote_slug: STR,
     remote_host: STR,
     remote_url: STR,
+    remote_url_check: { type: ["object", "null"] },
     project: STR,
     created: { type: "boolean" },
     reused: { type: "boolean" },
@@ -3029,8 +3030,11 @@ function workspacePrompt(inputs) {
     "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths.\n" +
     "7. `mkdir -p <scratch_dir>`.\n" +
     "8. base_ref = `git -C <main_worktree> merge-base HEAD origin/<default_branch>`.\n" +
-    "9. remote_slug = <owner>/<name> parsed from `git -C <repo> remote get-url origin`. remote_host = the host part of `git -C <repo> config --get remote.origin.url` (the configured URL, before any insteadOf rewrite; for an ssh alias such as `github-personal:o/r.git`, the alias). remote_url = that configured URL, unchanged.\n" +
-    "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url, created}."
+    "9. remote_slug = <owner>/<name> parsed from `git -C <repo> remote get-url origin`. remote_host = the host part of `git -C <repo> config --get remote.origin.url` (the configured URL, before any insteadOf rewrite; for an ssh alias such as `github-personal:o/r.git`, the alias).\n" +
+    "10. Run this one command exactly as written, unmodified, as one Bash call:\n" +
+    "python3 -I -c " + shQuote(REMOTE_URL_PY) + " " + shQuote(inputs.repo) +
+    "\nIt prints one JSON object {url, args, digest}: return it as remote_url_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> remote_url_check null.\n" +
+    "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url_check, created}."
   );
 }
 
@@ -3669,6 +3673,8 @@ def run(*a):
 # files, the orchestrator config and spacelift's dir; names compared lower-cased
 MORE_EXT = ('.hcl', '.hcl.json', '.tfbackend')
 NAMES = ('.' + TF + '-version', '.open' + TO + '-version', '.' + TO + '-version', 'atlan' + 'tis.yaml', 'atlan' + 'tis.yml', LOCK, GRUNT)
+ORCH_NAMES = ('atlan' + 'tis.yaml', 'atlan' + 'tis.yml')
+VERSION_NAMES = ('.' + TF + '-version', '.open' + TO + '-version', '.' + TO + '-version')
 def iac(p):
     segs = p.lower().split('/')
     b = segs[-1]
@@ -3818,6 +3824,13 @@ if touched:
         if CLI.search(p):
             hints.append('CLI config change in ' + p)
             continue
+        # non-HCL IaC files (3.1.1): their own hint, never the HCL text scan
+        if b.lower() in ORCH_NAMES or '.spacelift' in p.lower().split('/')[:-1]:
+            hints.append('orchestrator config change in ' + p)
+            continue
+        if b.lower() in VERSION_NAMES:
+            hints.append('IaC tool version file change in ' + p)
+            continue
         if b == LOCK:
             hints.append('provider lock file change in ' + p)
             continue
@@ -3932,6 +3945,54 @@ out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', 
 print(json.dumps(out, ensure_ascii=False))
 `;
 // REMOTE_HEAD_PY_END
+
+// The origin URL read (3.1.1, ledger 1970b): the workspace step relays this
+// program's output, so the URL the plan seals and the build compares comes
+// with a digest the script recomputes. It prints {url, args, digest}: url is
+// `git config --get remote.origin.url` (the configured URL, before any
+// insteadOf rewrite), null when origin has none. Read only.
+// REMOTE_URL_PY_BEGIN
+const REMOTE_URL_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+import hashlib, json, os, subprocess, sys
+repo = sys.argv[1]
+os.chdir('/')
+os.environ['GIT_TERMINAL_PROMPT'] = '0'
+r = subprocess.run(['git', '-c', 'core.fsmonitor=', '-C', repo, 'config', '--get', 'remote.origin.url'], capture_output=True, timeout=60)
+if r.returncode == 1 and not r.stdout:
+    url = None
+elif r.returncode == 0 and len(r.stdout) <= 4096:
+    url = r.stdout.decode('utf-8').rstrip('\n')
+else:
+    sys.exit(r.stderr.decode('utf-8', 'replace')[-2000:] or 'cannot read remote.origin.url')
+out = {'url': url, 'args': [repo]}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
+`;
+// REMOTE_URL_PY_END
 
 function remoteHeadPrompt(inputs) {
   return (
@@ -4735,7 +4796,10 @@ const PATH_TOOLS = ["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt"
 const NOT_SHIMMED = "terraform tooling on PATH is not shimmed; install the agent PATH shims (nix) before using the fleet";
 
 // Stops the run unless every IaC tool on the agent PATH is a nix shim.
-function pathCheck(pc, repo) {
+// recheck: {label, args} for a re-check (3.1.1); preflight passes none and
+// its program got [repo] only.
+function pathCheck(pc, repo, recheck) {
+  const what = recheck ? "the PATH re-check " + recheck.label + " could not complete: it returned no usable result" : "the PATH check could not complete: preflight returned no usable path_check";
   const tools = pc && typeof pc.tools === "object" && pc.tools && !Array.isArray(pc.tools) ? pc.tools : null;
   const keys = tools ? Object.keys(tools).sort() : [];
   const shapeOk =
@@ -4745,18 +4809,68 @@ function pathCheck(pc, repo) {
       const t = tools[k];
       return t === null || (t && typeof t === "object" && !Array.isArray(t) && typeof t.path === "string" && t.path.charAt(0) === "/" && typeof t.shim === "boolean");
     });
-  if (!shapeOk || canonical(pc.args) !== canonical([repo]) || !Array.isArray(pc.path_problems) || !relayDigestOk(pc, ["tools", "args", "path_problems"]))
-    halt("needs_human", NOT_SHIMMED + " (the PATH check could not complete: preflight returned no usable path_check)", "iac");
+  if (!shapeOk || canonical(pc.args) !== canonical(recheck ? recheck.args : [repo]) || !Array.isArray(pc.path_problems) || !relayDigestOk(pc, ["tools", "args", "path_problems"]))
+    halt("needs_human", NOT_SHIMMED + " (" + what + ")", "iac");
+  const at = recheck ? recheck.label + ": " : "";
   if (pc.path_problems.length)
-    halt("needs_human", NOT_SHIMMED + " (PATH has entries the agent shell resolves differently: " + pc.path_problems.map(String).join("; ") + ")", "iac");
+    halt("needs_human", NOT_SHIMMED + " (" + at + "PATH has entries the agent shell resolves differently: " + pc.path_problems.map(String).join("; ") + ")", "iac");
   const real = [];
   for (const k of keys) {
     const t = tools[k];
     if (t === null) continue;
     if (t.shim !== true) real.push(k + " at " + t.path);
   }
-  if (real.length) halt("needs_human", NOT_SHIMMED + " (" + real.join(", ") + ")", "iac");
-  gate("PATH check: every IaC tool on the agent PATH is a nix shim, or absent");
+  if (real.length) halt("needs_human", NOT_SHIMMED + " (" + at + real.join(", ") + ")", "iac");
+  gate((recheck ? recheck.label : "PATH check") + ": every IaC tool on the agent PATH is a nix shim, or absent");
+}
+
+// 3.1.1 (ledger 1969): the PATH check again, right before every step that
+// runs repo code (writers, fixers, judges, coder, commits, push). A tool
+// planted after preflight in a writable PATH dir is caught at the next one.
+// Each check passes the program a token of its own (a counter, the run nonce
+// and the site), which it echoes in args: a result recorded for another
+// check, another run or the preflight never passes. Nothing is cached.
+const PATH_RECHECK_SCHEMA = {
+  type: "object",
+  additionalProperties: true,
+  required: ["status", "reason"],
+  properties: {
+    status: { type: "string", enum: ["ok", "needs_human", "failed"] },
+    reason: STR,
+    tools: { type: ["object", "null"] },
+    args: { type: ["array", "null"], items: STR },
+    path_problems: { type: ["array", "null"], items: STR },
+    digest: STR,
+  },
+};
+
+function pathRecheckPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: the PATH check, again. Read only; no edits, no commits; run nothing but the one command below.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified, as one Bash call:\n" +
+    "python3 -I -c " + shQuote(PATH_CHECK_PY) + " " + shQuote(inputs.repo) + " " + shQuote(inputs.token) +
+    "\n" +
+    "It prints one JSON object {tools, args, path_problems, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, tools, args, path_problems, digest}."
+  );
+}
+
+async function pathRecheck(site, phaseName) {
+  state.pathChecks++;
+  const label = "infra:path-check:" + site;
+  const token = "recheck-" + state.pathChecks + ":" + state.nonce + ":" + site;
+  // its own dispatch: re-checks are counted in state.agents but never against
+  // the agent cap (bounded by the sites and rounds), so the cap refuses
+  // exactly the runs it refused in 3.1.0
+  state.agents++;
+  const r = await agent(nonced(pathRecheckPrompt({ repo: state.repo, token })), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, label, model: INFRA_MODEL });
+  if (r == null) halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned no result)", "iac");
+  if (r.status !== "ok")
+    halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned " + r.status + ": " + (r.reason || "no reason") + ")", "iac");
+  pathCheck(r, state.repo, { label, args: [state.repo, token] });
 }
 
 // The run-state ref: refs/fleet/<task id>/state points at an annotated tag
@@ -4999,6 +5113,9 @@ const state = {
   refreezeLog: [],
   stopGate: null,
   review: null,
+  // 3.1.1: the repo the PATH re-checks name, and their count
+  repo: null,
+  pathChecks: 0,
 };
 
 function gate(msg) {
@@ -5013,11 +5130,16 @@ function halt(status, msg, stopGate) {
   stop(status, msg);
 }
 
+// the agents the cap counts: every dispatch but the PATH re-checks (3.1.1)
+function capped() {
+  return state.agents - state.pathChecks;
+}
+
 function reserve(n, what) {
-  if (state.agents + n > MAX_AGENTS)
+  if (capped() + n > MAX_AGENTS)
     halt(
       "needs_human",
-      "agent cap " + MAX_AGENTS + " reached: " + state.agents + " dispatched, " + n + " more needed for " + what,
+      "agent cap " + MAX_AGENTS + " reached: " + capped() + " dispatched, " + n + " more needed for " + what,
       "cap",
     );
 }
@@ -5043,7 +5165,7 @@ async function dispatch(label, prompt, opts) {
 // Infra agents whose failure must not stop the run (write-back). Returns null
 // when the cap is reached or the agent dies.
 async function softDispatch(label, prompt, opts) {
-  if (state.agents + 1 > MAX_AGENTS) {
+  if (capped() + 1 > MAX_AGENTS) {
     gate("agent cap " + MAX_AGENTS + " reached: " + label + " not run");
     return null;
   }
@@ -5062,7 +5184,7 @@ async function roleAgent(role, label, prompt, opts) {
   gate("model used: " + label + " -> " + tier.model);
   const r = await agent(prompt, Object.assign({}, opts, { label, model: tier.model }));
   if (r != null || !tier.fallback) return r;
-  if (state.agents + 1 > MAX_AGENTS) {
+  if (capped() + 1 > MAX_AGENTS) {
     gate("agent cap " + MAX_AGENTS + " reached: no fallback retry for " + label);
     return null;
   }
@@ -5243,6 +5365,7 @@ async function preflightStep(repo) {
   });
   // Max's ruling (2026-11-09): IaC tooling may only be reachable through the nix shims
   pathCheck(pre.path_check, repo);
+  state.repo = repo;
   if (!pre.reachable) halt("needs_human", "yadgar unavailable: " + (pre.reason || "role library unreachable"));
   const missing = pre.missing || [];
   if (missing.length) halt("needs_human", "role missing in yadgar: " + missing.join(", "));
@@ -5298,7 +5421,13 @@ async function workspaceStep(repo, lay) {
   if (!ws.remote_slug) halt("needs_human", "workspace found no origin remote owner/name (remote_slug)");
   if (ws.default_branch === lay.branch) halt("needs_human", "fleet branch equals the default branch " + ws.default_branch);
   gate("workspace: " + (ws.created ? "created " : "reused ") + lay.mainWt + " off " + ws.default_branch + " @ " + ws.base_ref);
-  return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: ws.remote_slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: typeof ws.remote_url === "string" ? ws.remote_url : "" };
+  // 3.1.1: origin's URL only from the program's digest-checked output; an
+  // unusable relay leaves it empty, which the IaC push gate refuses
+  const uc = ws.remote_url_check;
+  const urlOk =
+    !!uc && typeof uc === "object" && (uc.url === null || typeof uc.url === "string") && canonical(uc.args) === canonical([repo]) && relayDigestOk(uc, ["url", "args"]);
+  if (!urlOk) gate("workspace: origin URL relay unusable (no digest-checked remote_url_check); no URL sealed or compared");
+  return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: ws.remote_slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "" };
 }
 
 // Brief from intake, or from a plan_ref: shape checked in code.
@@ -5920,6 +6049,7 @@ async function planAndAudit(ctx) {
   // the repo's fixers run on the plan now, so the audit sees the bytes the
   // plan commit will hold (2.1.4: prettier rewrote the plan in the commit)
   const fmtLabel = "infra:format-plan" + sfx;
+  await pathRecheck("format-plan" + sfx, "Plan");
   const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath }), "Plan");
   if (!Array.isArray(fmt.changed_paths)) halt("failed", fmtLabel + " returned no changed_paths list");
   const fmtOther = fmt.changed_paths.map((x) => normPath(String(x))).filter((x) => x !== planPath);
@@ -5989,9 +6119,11 @@ async function commitPlanAndRef(ctx) {
   const st = await infra("infra:stage-plan" + sfx, stagePlanPrompt(base), ctx.phaseName);
   if (typeof st.plan_sha256 !== "string" || !SHA256_RE.test(st.plan_sha256))
     halt("failed", "infra:stage-plan" + sfx + " returned no usable plan_sha256");
-  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after });
+  // + 1: the PATH re-check before the commit (3.1.1)
+  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 1 });
   const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: st.plan_sha256, history }));
   const label = "infra:commit-plan" + sfx;
+  await pathRecheck("commit-plan" + sfx, ctx.phaseName);
   const r = await infra(
     label,
     commitPlanPrompt(Object.assign({}, base, { task_id: full.task_id, slug: full.slug, reuse_head: ctx.reuseHead || null }), JSON.stringify(full)),
@@ -6882,6 +7014,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           continue;
         }
         const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
+        await pathRecheck("push" + (pushes > 1 ? ":p" + pushes : ""), "PR");
         const push = await infra(
           pushLabel,
           pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug }),
@@ -7023,6 +7156,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // writer's `files`, and no writer reports another criterion's file.
   async function writerRound(n, pending, codeFindings) {
     const pre = last || (await hasher("hasher:pre-writers:r" + n, mainWt, hashedFiles, "Tests"));
+    await pathRecheck("writers:r" + n, "Tests");
     state.agents += pending.length;
     const results = await parallel(
       pending.map((p) => () => {
@@ -7064,6 +7198,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         const nf = normPath(f);
         if (p.criterion.test_files.indexOf(nf) >= 0 && wrote.indexOf(nf) < 0) wrote.push(nf);
       }
+    await pathRecheck("format-tests:r" + n, "Tests");
     await formatFiles("infra:format-tests:r" + n, mainWt, { paths: wrote }, [], wrote, "Tests", lay.scratch);
     const post = await hasher("hasher:post-writers:r" + n, mainWt, hashedFiles, "Tests", pre.fingerprint.tree);
     if (post.fingerprint.head !== pre.fingerprint.head)
@@ -7126,6 +7261,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       });
       // every round of a fix_tests re-entry carries the code-judge context
       if (codeFindings) judgeInputs.code_judge_findings = codeFindings;
+      await pathRecheck("test-judge:r" + n, "Tests");
       const jt = await judged("fleet-test-judge", "role:fleet-test-judge:r" + n, "test-judge:r" + n, judgeInputs, mainWt, "Tests", last, hashedFiles);
       const tj = jt.r;
       last = jt.state;
@@ -7243,6 +7379,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     });
     // the role check runs after the hash check: a hash violation is reported
     // even when the coder's output is also malformed or not ok
+    await pathRecheck("coder:r" + m, "Code");
     const coder = await callRole(
       "fleet-coder",
       "role:fleet-coder:r" + m,
@@ -7254,6 +7391,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // the repo's fixers on every non-frozen path the worktree changes, before
     // the hash check and the judge (3.0.0, ledger 1951); a hook that touches
     // a frozen file or another path stops the run
+    await pathRecheck("format-code:r" + m, "Code");
     await formatFiles("infra:format-code:r" + m, mainWt, { dirty: true }, Object.keys(frozen.files).map(normPath), null, "Code", lay.scratch);
     // purge before the check and the judge; the judge's "before" state is the
     // post-purge hasher state
@@ -7299,6 +7437,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // judge-only for this round. The check is read-only: the judge's
     // fingerprint (taken at the post-coder hash) catches any change.
     const judgeObligations = await checkScripts("infra:check-scripts:r" + m, planFacts.repo_obligations, mainWt, "Code");
+    await pathRecheck("code-judge:r" + m, "Code");
     const jc = await judged(
       "fleet-code-judge",
       "role:fleet-code-judge:r" + m,
@@ -7389,6 +7528,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
 
     // the commit step: the first commit of this build, with the repo's hooks
     const subject = commitsMade ? fixSubject(names.taskId, m) : commitSubject(names.taskId, names.slug);
+    await pathRecheck("commit:r" + m, "Code");
     const cs = await infra(
       "infra:commit:r" + m,
       commitStepPrompt({

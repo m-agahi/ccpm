@@ -132,6 +132,22 @@ function tfGateRelay(over) {
   r.digest = sha256(canon({ touched: r.touched, iac_files: r.iac_files, problems: r.problems, hints: r.hints, args: r.args }));
   return r;
 }
+// 3.1.1: a PATH re-check relay (the PATH check program's output plus status)
+function pathRecheckOut(tools, args) {
+  const pc = {
+    tools: Object.assign(Object.fromEntries(["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt", "dig" + "ger", "atlan" + "tis"].map((t) => [t, null])), tools || {}),
+    args,
+    path_problems: [],
+  };
+  pc.digest = sha256(canon(pc));
+  return Object.assign({ status: "ok", reason: "checked" }, pc);
+}
+// 3.1.1: the origin URL program's output
+function remoteUrlOut(url, repo) {
+  const o = { url: url === undefined ? null : url, args: [repo] };
+  o.digest = sha256(canon(o));
+  return o;
+}
 function relayDigestOf(r, keys) {
   const o = {};
   for (const k of keys) o[k] = r[k] === undefined ? null : r[k];
@@ -225,6 +241,11 @@ async function runOne(script, args0) {
       r.digest = sha256(canon({ head: r.head, args: r.args }));
       return r;
     }
+    // 3.1.1: unscripted PATH re-checks find no IaC tool on PATH
+    if (!(label in script) && /^infra:path-check:/.test(label)) {
+      const i = inputsOf(prompt);
+      return pathRecheckOut({}, [i.repo, i.token]);
+    }
     // 3.1.0: unscripted hook-surface reads find no hook entry file
     if (!(label in script) && /^infra:hook-surface:/.test(label))
       return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: {}, error: null }, prompt));
@@ -256,6 +277,9 @@ async function runOne(script, args0) {
     const raw = r.__raw === true;
     delete r.__raw;
     if (!raw) withRelayDigest(label, fillArgs(label, r, prompt));
+    // 3.1.1: the workspace step relays the origin URL program's output; a stub
+    // that gives only remote_url gets that program's output for it
+    if (label === "workspace" && !raw && r.status === "ok" && !("remote_url_check" in r)) r.remote_url_check = remoteUrlOut(r.remote_url, inputsOf(prompt).repo);
     // hasher stubs that give only a fingerprint carry the maps of the last
     // hasher result forward (nothing changed; the judge fingerprint compares
     // the maps too) and list no changed paths
@@ -1121,9 +1145,12 @@ test("agent cap stops the run with needs_human before exceeding 100 agents", asy
   noUnscripted(out);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /agent cap/);
-  // the cap is per run: the build run alone stays within it
-  assert.ok(out.build.calls.length <= 100, "dispatched " + out.build.calls.length);
-  assert.ok(out.build.calls.length > 60, "the old cap of 60 would have stopped earlier");
+  // the cap is per run: the build run alone stays within it; the PATH
+  // re-checks (3.1.1) are not counted against it
+  const work = out.build.calls.filter((c) => !/^infra:path-check:/.test(c.label));
+  assert.ok(out.build.calls.length > work.length, "the re-checks ran");
+  assert.ok(work.length <= 100, "dispatched " + work.length);
+  assert.ok(work.length > 60, "the old cap of 60 would have stopped earlier");
   assert.ok(out.logs.some((l) => /agent cap/.test(l)));
 });
 
@@ -2297,9 +2324,11 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:branch-scan",
     "role:scope-and-plan",
     "infra:hook-surface:plan",
+    "infra:path-check:format-plan",
     "infra:format-plan",
     "role:plan-audit",
     "infra:stage-plan",
+    "infra:path-check:commit-plan",
     "infra:commit-plan",
   ]);
   const cp = call(out, "infra:commit-plan").prompt;
@@ -3181,9 +3210,11 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
     "infra:replan-worktree",
     "role:scope-and-plan:replan",
     "infra:hook-surface:plan:replan",
+    "infra:path-check:format-plan:replan",
     "infra:format-plan:replan",
     "role:plan-audit:replan",
     "infra:stage-plan:replan",
+    "infra:path-check:commit-plan:replan",
     "infra:commit-plan:replan",
     "infra:replan-reset",
   ]);
@@ -5359,8 +5390,11 @@ test("2.1.0 agent cap 100: an auto run with a revise round and a review fix roun
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.result.review.rounds, 2);
-  assert.ok(out.calls.length > 60, "dispatched " + out.calls.length);
-  assert.ok(out.calls.length <= 100);
+  // the PATH re-checks (3.1.1) are counted in agents but not against the cap
+  const work = out.calls.filter((c) => !/^infra:path-check:/.test(c.label));
+  assert.ok(out.calls.length > work.length, "the re-checks ran");
+  assert.ok(work.length > 60, "dispatched " + work.length);
+  assert.ok(work.length <= 100);
   assert.equal(out.result.agents, out.calls.length);
 });
 
@@ -10874,5 +10908,248 @@ test("3.1.0 IaC gate review 3: a change to code an existing exec stack runs at p
     const o = tfGateRun(base, change);
     const hit = o.problems.some((p) => /changes code that existing IaC runs at plan time/.test(p));
     assert.equal(hit, stops, JSON.stringify(change) + " " + o.problems.join("; "));
+  }
+});
+
+// ---------------------------------------------------------------- 3.1.1 (ledger 1969): the PATH check runs again before every step that runs repo code
+
+// each re-check site and the step it guards: plan mode, then build mode
+const RECHECK_SITES = [
+  ["format-plan", "infra:format-plan"],
+  ["commit-plan", "infra:commit-plan"],
+  ["writers:r1", "role:fleet-test-writer:AC1:r1"],
+  ["format-tests:r1", "infra:format-tests:r1"],
+  ["test-judge:r1", "role:fleet-test-judge:r1"],
+  ["coder:r1", "role:fleet-coder:r1"],
+  ["format-code:r1", "infra:format-code:r1"],
+  ["code-judge:r1", "role:fleet-code-judge:r1"],
+  ["commit:r1", "infra:commit:r1"],
+  ["push", "infra:push"],
+];
+const REAL_TOOL = { path: "/home/u/.local/bin/x", real: "/home/u/.local/bin/x", shim: false };
+const recheckPlanted = (prompt) => {
+  const i = inputsOf(prompt);
+  return pathRecheckOut({ [TF_TOOLS[0]]: REAL_TOOL }, [i.repo, i.token]);
+};
+
+test("3.1.1 PATH re-check: every guarded step is preceded by its own re-check (hashers aside)", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  for (const [site, step] of RECHECK_SITES) {
+    const at = out.labels.indexOf(step);
+    assert.ok(at > 0, step);
+    const before = out.labels.slice(0, at).filter((l) => !/^hasher:/.test(l));
+    assert.equal(before[before.length - 1], "infra:path-check:" + site, step + " is guarded");
+  }
+});
+
+test("3.1.1 PATH re-check: a tool planted after preflight is caught at the next check; the guarded step never runs", async () => {
+  for (const [site, step] of RECHECK_SITES) {
+    const s = happy();
+    s["infra:path-check:" + site] = recheckPlanted;
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", site);
+    assert.equal(out.result.stop_gate, "iac", site);
+    assert.match(out.result.reason, NOT_SHIMMED, site);
+    assert.ok(out.result.reason.includes("infra:path-check:" + site), site);
+    assert.ok(!out.labels.includes(step), site + ": " + step + " never runs");
+  }
+  // the coder case in words: preflight and every earlier re-check pass, the coder's re-check finds the tool
+  const s = happy();
+  s["infra:path-check:coder:r1"] = recheckPlanted;
+  const out = await run(s, ARGS);
+  assert.ok(out.labels.includes("role:fleet-test-judge:r1"));
+  assert.ok(!out.labels.some((l) => l.startsWith("role:fleet-coder")));
+});
+
+test("3.1.1 PATH re-check: a failed, tampered, path-problem or other-step result stops at iac", async () => {
+  const site = "code-judge:r1";
+  const cases = [
+    () => null,
+    () => ({ status: "failed", reason: "python3 exited 1" }),
+    () => ({ status: "needs_human", reason: "x" }),
+    (p) => Object.assign(recheckPlanted(p), { tools: {} }),
+    (p) => {
+      const i = inputsOf(p);
+      return Object.assign(pathRecheckOut({}, [i.repo, i.token]), { digest: "0".repeat(64) });
+    },
+    (p) => {
+      const i = inputsOf(p);
+      const r = pathRecheckOut({}, [i.repo, i.token]);
+      r.path_problems = ['relative PATH entry "bin"'];
+      r.digest = sha256(canon({ tools: r.tools, args: r.args, path_problems: r.path_problems }));
+      return r;
+    },
+    // the preflight's own result (args [repo]): never a re-check's pass
+    (p) => pathRecheckOut({}, [inputsOf(p).repo]),
+    // another step's re-check result (its token)
+    (p) => {
+      const i = inputsOf(p);
+      return pathRecheckOut({}, [i.repo, i.token.replace(site, "coder:r1")]);
+    },
+    // a test-overridden store prefix
+    (p) => {
+      const i = inputsOf(p);
+      return pathRecheckOut({}, [i.repo, i.token, "--store-prefix=/tmp/x"]);
+    },
+  ];
+  for (const [k, f] of cases.entries()) {
+    const s = happy();
+    s["infra:path-check:" + site] = (p) => (f(p) === null ? null : Object.assign(f(p), { __raw: true }));
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", String(k));
+    assert.equal(out.result.stop_gate, "iac", String(k) + " " + out.result.reason);
+    assert.ok(!out.labels.includes("role:fleet-code-judge:r1"), String(k));
+  }
+});
+
+test("3.1.1 PATH re-check: each check runs the same program with a fresh token; a resumed run never replays a cached pass", async () => {
+  const out = await run(happy(), ARGS);
+  const prog = extractPy("PATH_CHECK_PY_BEGIN", "PATH_CHECK_PY_END", "PATH_CHECK_PY");
+  const checks = out.calls.filter((c) => /^infra:path-check:/.test(c.label));
+  assert.ok(checks.length >= RECHECK_SITES.length);
+  const tokens = checks.map((c) => inputsOf(c.prompt).token);
+  assert.equal(new Set(tokens).size, tokens.length, "no two checks share a token");
+  for (const c of checks) {
+    const i = inputsOf(c.prompt);
+    assert.equal(i.repo, "/r");
+    assert.ok(i.token.includes(NONCE), "the token carries the run nonce");
+    assert.ok(!i.token.startsWith("-"), "the token is never an option");
+    assert.ok(c.prompt.includes("python3 -I -c " + shQuoteTest("\n" + prog) + " " + shQuoteTest(i.repo) + " " + shQuoteTest(i.token)), c.label);
+    assert.doesNotMatch(c.prompt, /terraform|tofu|tflint|terragrunt|\btfp\b|digger|atlantis/i);
+  }
+  // run 1 stops at the coder (no result); its recorded re-check passes are
+  // returned to the resumed run (a new nonce): none is accepted
+  const s1 = happy();
+  s1["role:fleet-coder:r1"] = null;
+  const first = await run(s1, ARGS);
+  assert.equal(first.result.status, "failed", first.result.reason);
+  const recorded = {};
+  for (const c of first.calls.filter((x) => /^infra:path-check:/.test(x.label))) {
+    const i = inputsOf(c.prompt);
+    recorded[c.label] = pathRecheckOut({}, [i.repo, i.token]);
+  }
+  assert.ok(recorded["infra:path-check:coder:r1"], "run 1 checked before the coder");
+  const s2 = happy();
+  for (const [label, r] of Object.entries(recorded)) s2[label] = Object.assign({}, r, { __raw: true });
+  const second = await run(s2, Object.assign({}, ARGS, { run_nonce: "n2-0000002" }));
+  assert.equal(second.result.status, "needs_human");
+  assert.equal(second.result.stop_gate, "iac");
+  assert.match(second.result.reason, /PATH re-check infra:path-check:format-plan could not complete/);
+});
+
+test("3.1.1 PATH re-check program: a token argument is echoed in args and the digest; a planted tool is seen", { skip: !HAVE_PY }, () => {
+  const prog = extractPy("PATH_CHECK_PY_BEGIN", "PATH_CHECK_PY_END", "PATH_CHECK_PY");
+  const home = mkdtempSync(join(tmpdir(), "fleet-recheck-"));
+  try {
+    const bin = join(home, "bin");
+    spawnSync("mkdir", ["-p", bin]);
+    const tok = "recheck-3:" + NONCE + ":coder:r1";
+    const go = () => spawnSync(PY3, ["-I", "-c", prog, join(home, "repo"), tok], { encoding: "utf8", env: { PATH: bin }, cwd: home, timeout: 60000, maxBuffer: 1 << 20 });
+    let r = go();
+    assert.equal(r.status, 0, r.stderr);
+    const o = JSON.parse(r.stdout);
+    assert.deepEqual(o.args, [join(home, "repo"), tok]);
+    const fn = new Function(extractCanonical() + "\nreturn canonical;")();
+    assert.equal(o.digest, sha256(fn({ tools: o.tools, args: o.args, path_problems: o.path_problems })));
+    // a tool planted in a writable PATH dir after the first check is seen by the next one
+    writeFileSync(join(bin, TF_TOOLS[1]), "#!/bin/sh\necho real\n", { mode: 0o755 });
+    r = go();
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).tools[TF_TOOLS[1]].shim, false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- 3.1.1 (ledger 1970a): non-HCL IaC files get their own hint
+
+test("3.1.1 IaC hint text: orchestrator, spacelift and version files get their own hint, never a provider hint; the gate result is unchanged", { skip: !HAVE_PY }, () => {
+  for (const [p, before, after, re] of [
+    [AT + ".yaml", "version: 3\nprojects: []\n", "version: 3\nprojects:\n- dir: infra\n", /^orchestrator config change in /],
+    ["sub/" + AT + ".yml", "version: 3\n", "version: 4\n", /^orchestrator config change in /],
+    [".spacelift/config.yml", "version: 1\n", "version: 2\n", /^orchestrator config change in /],
+    ["." + TFW + "-version", "1.5.0\n", "1.6.0\n", /^IaC tool version file change in /],
+    [".open" + "to" + "fu-version", "1.6.0\n", "1.7.0\n", /^IaC tool version file change in /],
+  ]) {
+    const o = tfGateRun({ "infra/main.tf": MAIN, [p]: before }, { [p]: after });
+    assert.equal(o.touched, true, p);
+    assert.deepEqual(o.iac_files, [p], p);
+    assert.deepEqual(o.problems, [], p);
+    assert.ok(!o.hints.some((h) => /provider source or version change/.test(h)), p + ": " + o.hints.join("; "));
+    assert.ok(o.hints.some((h) => re.test(h) && h.endsWith(" " + p)), p + ": " + o.hints.join("; "));
+  }
+  // a .tf provider change keeps its hint
+  const o = tfGateRun({ "infra/versions.tf": PROV }, { "infra/versions.tf": PROV.replace("~> 5.0", "~> 6.0") });
+  assert.ok(o.hints.some((h) => /provider source or version change in infra\/versions\.tf/.test(h)), o.hints.join("; "));
+});
+
+// ---------------------------------------------------------------- 3.1.1 (ledger 1970b): the origin URL comes from a program, digest-checked
+
+test("3.1.1 origin URL: the workspace step relays a program's output; the script recomputes its digest and checks its args", async () => {
+  const prog = extractPy("REMOTE_URL_PY_BEGIN", "REMOTE_URL_PY_END", "REMOTE_URL_PY");
+  const out = await run(happy(), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const wp = call(out, "workspace").prompt;
+  assert.ok(wp.includes("python3 -I -c " + shQuoteTest("\n" + prog) + " " + shQuoteTest("/r")), "the workspace prompt runs the program");
+  assert.match(prog, /'config', '--get', 'remote\.origin\.url'/);
+  // the plan seals the program's URL, never a free-text remote_url
+  const s = iacScript(() => happy(), "approved");
+  s.workspace = Object.assign({}, s.workspace, { remote_url: "git@evil.example:o/r.git", remote_url_check: remoteUrlOut("git@github.com:o/r.git", "/r") });
+  const ok = await run(s, ARGS);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+  assert.equal(inputsOf(call(ok, "infra:remote-head:push").prompt).remote_url, "git@github.com:o/r.git");
+  // an unusable relay (bad digest, other args, a changed url, missing) seals no URL: an IaC diff stops at iac
+  for (const bad of [
+    Object.assign(remoteUrlOut("git@github.com:o/r.git", "/r"), { digest: "0".repeat(64) }),
+    remoteUrlOut("git@github.com:o/r.git", "/other"),
+    Object.assign(remoteUrlOut("git@github.com:o/r.git", "/r"), { url: "git@evil.example:o/r.git" }),
+    null,
+  ]) {
+    const t = iacScript(() => happy(), "approved");
+    t.workspace = Object.assign({}, t.workspace, { remote_url_check: bad });
+    const o = await run(t, ARGS);
+    assert.equal(o.result.stop_gate, "iac", JSON.stringify(bad));
+    assert.match(o.result.reason, /no sealed origin URL/, JSON.stringify(bad));
+    assert.ok(!pushed(o));
+  }
+  // at build time the program's URL is compared with the sealed one
+  const u = iacScript(() => happy(), "approved");
+  let n = 0;
+  const w0 = u.workspace;
+  u.workspace = () => Object.assign({}, w0, { remote_url: "git@github.com:o/r.git", remote_url_check: remoteUrlOut(n++ === 0 ? "git@github.com:o/r.git" : "git@evil.example:o/r.git", "/r") });
+  const o = await run(u, ARGS);
+  assert.equal(o.result.stop_gate, "iac");
+  assert.match(o.result.reason, /URL changed since the plan/);
+});
+
+test("3.1.1 origin URL program: prints the configured URL (before insteadOf) with a digest; caps first", { skip: !HAVE_PY }, () => {
+  const prog = extractPy("REMOTE_URL_PY_BEGIN", "REMOTE_URL_PY_END", "REMOTE_URL_PY");
+  assert.match(prog, /^# resource caps \(3\.1\.0\)/);
+  const home = mkdtempSync(join(tmpdir(), "fleet-remoteurl-"));
+  try {
+    const repo = join(home, "repo");
+    const cfg = join(home, "gitconfig");
+    writeFileSync(cfg, '[url "git@evil.example:"]\n\tinsteadOf = git@github.com:\n');
+    const env = { PATH: process.env.PATH, HOME: home, GIT_CONFIG_GLOBAL: cfg, GIT_CONFIG_NOSYSTEM: "1" };
+    assert.equal(rawSpawnSync("git", ["init", "-q", repo], { env }).status, 0);
+    const go = () => spawnSync(PY3, ["-I", "-c", prog, repo], { encoding: "utf8", env, cwd: home, timeout: 60000, maxBuffer: 1 << 20 });
+    const fn = new Function(extractCanonical() + "\nreturn canonical;")();
+    // no origin: url null
+    let r = go();
+    assert.equal(r.status, 0, r.stderr);
+    let o = JSON.parse(r.stdout);
+    assert.equal(o.url, null);
+    assert.deepEqual(o.args, [repo]);
+    assert.equal(o.digest, sha256(fn({ url: o.url, args: o.args })));
+    assert.equal(rawSpawnSync("git", ["-C", repo, "remote", "add", "origin", "git@github.com:o/r.git"], { env }).status, 0);
+    r = go();
+    assert.equal(r.status, 0, r.stderr);
+    o = JSON.parse(r.stdout);
+    assert.equal(o.url, "git@github.com:o/r.git", "the configured URL, before insteadOf");
+    assert.equal(o.digest, sha256(fn({ url: o.url, args: o.args })));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });

@@ -131,7 +131,7 @@
       "name": "fleet",
       "description": "Role fleet for one non-trivial change: /build-task <anything> resolves the input, plans and audits, asks for confirmation (or, opt-in, runs intent, command and scope gates instead), then writes tests per acceptance criterion, judges and hash-freezes them, codes against them, judges the code, commits once with the repo's hooks, opens a draft PR, has it reviewed independently and writes back to the sources. Role prompts load from yadgar; every gate runs in workflow script code.",
       "source": "./plugins/fleet",
-      "version": "3.1.0",
+      "version": "3.1.1",
       "author": {
         "name": "Max Agahi"
       },
