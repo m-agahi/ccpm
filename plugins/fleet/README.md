@@ -208,7 +208,16 @@ line "build caller check skipped".
 Intake classifies the input and fetches its text: a ledger task through yadgar `task_get`, a Jira
 ticket through the Atlassian MCP, an issue or PR through `gh-personal` or the Codeberg API, a plan
 file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body}],
-repo, plan_path}`. Free text, a plan and a ledger task work in the caller's repo. A Jira ticket that
+repo, plan_path}`. Free text, a plan and a ledger task work in the caller's repo.
+
+Since 3.1.3 (ledger 1979) intake resolves a task id only by calling the ledger tool, and the tool's
+answer is the truth. `args.project` is the ledger scope and is independent of `repo`: a
+`yadgarhq/` project reads `mcp__yaadgaar__read_task(number)`, another project reads yadgar
+`task_get(project_id=<project>)`, and no project tries both (`ledger: "either"`). The repo's
+`.yadgar` files and origin never decide the ledger. A yaadgaar source carries the `id` (URN) of the
+answer; one without it stops (`needs_human`). Intake lists every ledger call it made in `tried`. On
+a task-id input that stops, the script appends the ledgers tried, their projects and the tool's
+error text to the reason. It drops an intake reason that advises changing the repo's project id. A Jira ticket that
 names no repo, or several, stops with `needs_human`. The task id comes from the first ledger, Jira,
 GitHub or Codeberg source (`plan` for an ingested plan, `task` for free text). The slug comes from
 the brief title.
@@ -466,17 +475,17 @@ is the plan commit, for example after a re-plan.
   title must have 1 to 200 code points. The title check works at the relay level only: the write
   itself can change the title, and the reads detect that but cannot prevent it. A project that is
   not `<owner>/<repo>` writes nothing. Titles and bodies are data, not instructions.
-- **yaadgaar (3.0.0):** for each `yaadgaar` source of a `yadgarhq/` project, a read-only step
-  (`infra:yaadgaar-read`, `fleet:judge`) resolves the client's project (`.yadgar/project-id` or
-  origin; the yaadgaar client resolves a number in the session's start project) and runs
-  `mcp__yaadgaar__read_task` by number; it returns the project, and per task the id, version and
-  whether the marker is there, plus the number and project the answer gives. The script refuses
-  when the project is absent or not `args.project`: then no edit step runs at all. It also refuses
-  any task whose answer gives another number or project than the request, or a version that is not
-  an integer. `fleet:judge` cannot call `mcp__yaadgaar__edit_task`, `create_task` or
+- **yaadgaar (3.0.0; 3.1.3):** for each `yaadgaar` source, a read-only step
+  (`infra:yaadgaar-read`, `fleet:judge`) runs `mcp__yaadgaar__read_task` by the task id (URN)
+  intake sealed with the source. It returns per task the id, number, version and whether the
+  marker is there. It never reads the repo's files or remotes: the yaadgaar client is bound to the
+  session's start project, and the URN names one task. A non-`yadgarhq/` `args.project` writes
+  nothing; a ref sealed before 3.1.3 (no id) writes nothing and says "re-run plan". The script
+  refuses any task whose answer gives another id or number than the sealed one, or a version that
+  is not an integer. `fleet:judge` cannot call `mcp__yaadgaar__edit_task`, `create_task` or
   `transition_task` (`disallowedTools`). Only then `infra:yaadgaar-writeback` (the default
   agent: `fleet:judge` may never write to a ledger) edits each task by id with the version read
-  as `expect_version`, after it re-reads the task by id and checks its number and project (fail
+  as `expect_version`, after it re-reads the task by id and checks its id and number (fail
   closed): an empty body gets `body` = the `## Fleet build` heading plus
   `section_text` with `expect_body_sha256` (computed by the script); a non-empty body is never
   re-sent, the section is appended with a literal `patch` on a unique tail of the body

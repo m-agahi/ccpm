@@ -54,7 +54,9 @@ runs `/build-task` explicitly, always use the fleet.
    workflow again with a new nonce; build mode resumes from its own run-state ref.
 
 4. **Project (optional).** Use the `<owner>/<repo>` project key from the session banner, if one is
-   shown, as `project`. It scopes ledger reads and the ledger write-back. Otherwise omit it.
+   shown, as `project`. It scopes ledger reads and the ledger write-back, and it is independent of
+   `repo`: a task from the session's project can be built in another repo. Otherwise omit it; then
+   intake tries both ledgers.
    On a `yadgarhq/` project a task id (`#622`, `622`, `yaadgaar #622`) is a yaadgaar task, never
    the legacy `L622`; the workflow needs `project` to tell them apart.
 

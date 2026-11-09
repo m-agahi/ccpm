@@ -1,5 +1,34 @@
 # Changelog
 
+## [3.1.3] - 2026-11-09
+
+Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker
+stays `fleet-v3`.
+
+### Intake resolves a task id through the ledger tool
+
+- The fault was in the workflow's own intake prompt, not in a role page. It told intake to check
+  the yaadgaar project from the repo's `.yadgar/project-id` or origin. A docs session that built
+  `yaadgaar #671` in repo iam-db stopped there, never called `read_task`, and advised writing
+  `yadgarhq/docs` into iam-db.
+- Intake now resolves a task id only by calling the ledger tool and takes the answer as the truth.
+  `args.project` is the ledger scope, independent of `repo`. `yadgarhq/` projects use yaadgaar,
+  others yadgar `task_get(project_id=<project>)`; no project gives `ledger: "either"` (try both).
+- A yaadgaar source carries the `id` (URN) of the `read_task` answer. A source without it stops
+  plan mode with `needs_human`: intake did not call the tool. The intent re-read must return the
+  same id.
+- Intake returns `tried` (ledger, project, call, error). On a task-id input that stops, the script
+  appends the ledgers tried and the tool's error text to the reason, or "ledgers tried: none". It
+  drops an intake reason that advises changing the repo's project id.
+- Build mode checks the sealed sources against `args.project`, not the origin slug.
+
+### yaadgaar write-back reads by the sealed id
+
+- `infra:yaadgaar-read` reads each task by the sealed URN. It no longer resolves a project from the
+  repo (`read_task` answers carry no project). The script requires the sealed id and number before
+  any edit. A ref sealed before 3.1.3 has no id: write-back edits nothing, hands the section back
+  and says "re-run plan". With no `args.project` the write-back still runs by id.
+
 ## [3.1.2] - 2026-11-09
 
 Ledger task 1974. No role page changes; install 3.1.2, then `/reload-plugins`. The contract marker
