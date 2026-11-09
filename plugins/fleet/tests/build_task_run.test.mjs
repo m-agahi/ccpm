@@ -11106,6 +11106,28 @@ test("3.1.2 PATH re-check: a tool planted right before the intent judge or the s
     assert.ok(out.result.reason.includes("infra:path-check:" + site), site);
     assert.ok(!out.labels.includes(step), site + ": " + step + " never runs");
   }
+  // build mode with confirm auto re-runs the intent judge: intent:rerun guards it
+  const s = autoHappy();
+  const plan = await runOne(s, ARGS);
+  assert.equal(plan.result.status, "awaiting_confirmation");
+  Object.assign(s, {
+    "intake:rulings": { status: "ok", reason: "re-read", brief: BRIEF },
+    "hasher:pre-intent:rerun": { status: "ok", fingerprint: FP_PLAN },
+    "role:fleet-intent-judge:rerun": { status: "ok", reason: "fine", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } },
+    "hasher:fp-post:intent:rerun": { status: "ok", fingerprint: FP_PLAN },
+  });
+  const bargs = { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r", confirm: "auto" };
+  const ok = await runOne(s, bargs);
+  noUnscripted(ok);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+  const at = ok.labels.indexOf("role:fleet-intent-judge:rerun");
+  assert.equal(ok.labels.slice(0, at).filter((l) => !/^hasher:/.test(l)).pop(), "infra:path-check:intent:rerun");
+  s["infra:path-check:intent:rerun"] = recheckPlanted;
+  const out = await runOne(s, bargs);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "iac", out.result.reason);
+  assert.ok(out.result.reason.includes("infra:path-check:intent:rerun"));
+  assert.ok(!out.labels.includes("role:fleet-intent-judge:rerun"));
 });
 
 // mutant R6: the status check dropped. A re-check that returns failed or

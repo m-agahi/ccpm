@@ -12,6 +12,7 @@ stays `fleet-v3`.
   worktree), the intent judge under `confirm: "auto"` (`intent`, `intent:rerun`), and each review
   round's `pr-review:v<k>` and gate sweep `sweep:v<k>` (both run repo tests after the push). A
   tool planted right before one of them stops the run at `iac`; the guarded step never runs.
+  Tests cover `plan-audit`, `intent`, `intent:rerun`, `pr-review:v1` and `sweep:v1`.
 - The plan ref's cumulative agent count with `confirm: "auto"` includes the intent re-check. The
   agent cap is unchanged: re-checks do not count against it.
 
