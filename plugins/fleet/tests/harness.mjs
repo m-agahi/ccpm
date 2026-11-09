@@ -594,7 +594,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/4.0.1/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/4.0.2/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));

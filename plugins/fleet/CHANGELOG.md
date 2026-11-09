@@ -1,5 +1,34 @@
 # Changelog
 
+## [4.0.2] - 2026-11-09
+
+### Fixed
+
+- Plan runs stopped at `infra:branch-scan` (ledger 1997, run wf_87a99806-757) with:
+  `did not run the shipped program branch_scan (its file's sha256sum line reads null, ...)`.
+  The agent ran the program correctly but returned no `file_sha256`. The prompt ended with an explicit
+  `Return {...}` list that did not name `file_sha256`, and the agent followed that list instead of
+  the appended rule. The same conflict was in every prompt that runs a shipped program, top level
+  and nested (`test_db`, `plan_hash`, `plan_hash_head`, `plan_files`, `plan_ref`, `path_check`,
+  `remote_url_check`, `findings_write`, `sweep`, `up`, `down`). 4.0.0 had the same bug.
+
+### Changed
+
+- New `PROGRAM_SLOTS` table: for each program-running step label, where each shipped program's
+  output goes in the result (top level or a key). One table feeds both:
+  - the schema the agent gets: a per-call copy that requires `program` and `file_sha256` at every
+    slot (`file_sha256` a string; nullable at the top level only, for a failed step);
+  - the rule text appended to the prompt, which now names each slot.
+- Every explicit `Return {...}` list and every nested relay sentence names `file_sha256`. Word
+  counts that a third key contradicts ("both values", "all four", "all six") are gone.
+- A prompt counts as running a program only when it holds a command that `progCmd` (or the
+  preflight builder) recorded through `emitProg`. Text that merely quotes such a command (the
+  task input, a tldr) adds no slot. A step with no `PROGRAM_SLOTS` entry runs no program. A
+  program step whose prompt runs a program its entry does not place stops the run (`contract`).
+  The PATH re-check and db-down calls, which call `agent()` directly, go through the same path.
+- The check does not change: a missing or wrong `file_sha256` still stops the step.
+- The preflight prompt names the scripts directory version from `FLEET_VERSION` (it said 4.0.0).
+
 ## [4.0.1] - 2026-11-09
 
 ### Fixed
