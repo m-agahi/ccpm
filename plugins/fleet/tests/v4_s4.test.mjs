@@ -28,6 +28,7 @@ import {
   sh,
   gitEnv,
   SCRIPTS_SRC,
+  FROZEN_VERSIONS,
 } from "./harness.mjs";
 
 // A sealed ref message (the shape priorRef in build_task_run.test.mjs makes).
@@ -326,4 +327,315 @@ test("4.0.0 1989 AC-1/3/4 (real git): callers.py classifies doc, lock and doctes
     assert.deepEqual(py.auto_dont_care.foo, ["Cargo.lock:2"], f);
     assert.deepEqual(py.doctest_md, ["README.md", "docs/g.rst"], f);
   }
+});
+
+// ---------------------------------------------------------------- 1983: re-plan rounds in every mode, at most 2
+
+const AUTO = { ...ARGS, confirm: "auto" };
+const DEFAULT = { ...ARGS, confirm: "default" };
+const REFUSE = (finding, criterion) => ({ status: "ok", reason: "defect", verdict: "plan_defect", routed_findings: [{ target: "plan", criterion: criterion || "AC1", finding }] });
+const APPROVE = { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] };
+
+// happy plus the auto-confirm stubs (intent judge, its hashers, the hook ids)
+function gated(over = {}) {
+  const s = happy(over);
+  Object.assign(s, {
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "role:fleet-intent-judge": {
+      status: "ok",
+      reason: "matches the task",
+      verdict: "approve",
+      deviations: [],
+      coverage: { covered: true, missing: [] },
+      classification: { change_kind: "approve", new_behaviour: "approve", quote: "the parser drops NBSP (a regression)" },
+    },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+  });
+  return Object.assign(s, over.script || {});
+}
+
+// a planner round's output: the round-0 stub with `over`
+function planRound(s, over) {
+  return Object.assign({}, s["role:scope-and-plan"], over);
+}
+
+test("4.0.0 1983 AC-1: confirm ask re-plans an untestable_criteria refusal and asks after round 1 approves", async () => {
+  const s = happy();
+  s["role:plan-audit"] = { status: "ok", reason: "no", verdict: "untestable_criteria", routed_findings: [{ target: "plan", criterion: "AC2", finding: "not observable" }] };
+  s["role:plan-audit:audit-fix"] = APPROVE;
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.ok(out.labels.includes("role:scope-and-plan:audit-fix"));
+  assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix-2"));
+  assert.ok(out.logs.some((l) => /plan-audit verdict untestable_criteria: re-plan round 1 of 2/.test(l)));
+});
+
+test("4.0.0 1983 AC-2: three audit refusals stop after :audit-fix-2", async () => {
+  for (const args of [ARGS, AUTO, DEFAULT]) {
+    const s = gated();
+    s["role:plan-audit"] = REFUSE("r0");
+    s["role:plan-audit:audit-fix"] = REFUSE("r1");
+    s["role:plan-audit:audit-fix-2"] = REFUSE("r2");
+    const out = await runOne(s, args);
+    assert.equal(out.result.status, "needs_human", args.confirm);
+    assert.equal(out.result.stop_gate, "role");
+    assert.match(out.result.reason, /^plan-audit verdict plan_defect: AC1: r2 \(after 2 re-plan rounds\)/);
+    assert.deepEqual(out.labels.filter((l) => l.startsWith("role:scope-and-plan")), ["role:scope-and-plan", "role:scope-and-plan:audit-fix", "role:scope-and-plan:audit-fix-2"]);
+    assert.ok(!out.labels.includes("infra:commit-plan"));
+  }
+});
+
+test("4.0.0 1983 AC-3: script-side re-plans count toward the 2 rounds", async () => {
+  const crit = criteria(2);
+  crit[1].examples = ["a b"];
+  const s = happy({ criteria: crit });
+  s["role:scope-and-plan:audit-fix"] = planRound(s, { criteria: criteria(2) });
+  s["role:scope-and-plan:audit-fix-2"] = planRound(s, { criteria: criteria(2) });
+  s["role:plan-audit:audit-fix"] = REFUSE("r1");
+  s["role:plan-audit:audit-fix-2"] = REFUSE("r2");
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /plan-audit verdict plan_defect: AC1: r2 \(after 2 re-plan rounds\)/);
+  assert.ok(!out.labels.includes("role:plan-audit"), "round 0 never reached the audit");
+  assert.ok(out.logs.some((l) => /confusable character: re-plan round 1 of 2/.test(l)));
+  assert.ok(!out.labels.some((l) => /audit-fix-3/.test(l)));
+});
+
+test("4.0.0 1983 AC-4: a symbol named in round 1 and dropped in round 2 stops", async () => {
+  const s = happy();
+  const occ = (sym) => [{ at: "src/" + sym + ".py:1", criterion: "AC1", dont_care: null }];
+  const map = (...syms) => syms.map((x) => ({ symbol: x, occurrences: occ(x) }));
+  const grep = (p) => ({ status: "ok", reason: "grepped", occurrences: Object.fromEntries(inputsOf(p).symbols.map((x) => [x, ["src/" + x + ".py:1"]])), capped: [], auto_dont_care: {}, doctest_md: [] });
+  s["role:scope-and-plan"].changed_symbols = map("foo");
+  s["role:scope-and-plan:audit-fix"] = planRound(s, { changed_symbols: map("foo", "bar") });
+  s["role:scope-and-plan:audit-fix-2"] = planRound(s, { changed_symbols: map("foo") });
+  for (const sfx of ["", ":audit-fix", ":audit-fix-2"]) s["infra:callers" + sfx] = grep;
+  s["role:plan-audit"] = REFUSE("r0");
+  s["role:plan-audit:audit-fix"] = REFUSE("r1");
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /changed_symbols dropped bar/);
+  assert.ok(!out.labels.includes("role:plan-audit:audit-fix-2"));
+});
+
+test("4.0.0 1983 AC-6: the round-2 audit and planner see every earlier round's findings and criteria", async () => {
+  const s = happy();
+  s["role:plan-audit"] = REFUSE("r0 finding", "AC1");
+  s["role:plan-audit:audit-fix"] = REFUSE("r1 finding", "AC2");
+  s["role:plan-audit:audit-fix-2"] = APPROVE;
+  s["role:scope-and-plan:audit-fix"] = planRound(s, { criteria: criteria(3) });
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const a = inputsOf(call(out, "role:plan-audit:audit-fix-2").prompt).prior_round;
+  assert.deepEqual(a.findings.map((f) => [f.round, f.criterion, f.finding]), [[0, "AC1", "r0 finding"], [1, "AC2", "r1 finding"]]);
+  assert.equal(a.criteria_by_round.length, 2);
+  assert.deepEqual(a.criteria_by_round[0].map((c) => c.id), ["AC1", "AC2"]);
+  assert.deepEqual(a.criteria_by_round[1].map((c) => c.id), ["AC1", "AC2", "AC3"]);
+  assert.deepEqual(a.round0, { change_kind: "feature", new_behaviour: true, criteria: criteria(2).map((c) => ({ id: c.id, text: c.text })) });
+  // the planner gets the same accumulated prior_round; round 0 gets none
+  assert.deepEqual(inputsOf(call(out, "role:scope-and-plan:audit-fix-2").prompt).prior_round, a);
+  assert.ok(!("prior_round" in inputsOf(call(out, "role:scope-and-plan").prompt)));
+  assert.equal(inputsOf(call(out, "role:plan-audit").prompt).prior_round, null);
+  // never sealed
+  assert.ok(!s.__store[PC].includes("r1 finding"));
+});
+
+test("4.0.0 1983 AC-5: a round that relaxes round 0 is never auto-eligible", async () => {
+  const mk = (round1) => {
+    const s = gated();
+    s["role:scope-and-plan"] = planRound(s, { change_kind: "feature", new_behaviour: true });
+    s["role:plan-audit"] = REFUSE("r0", "AC2");
+    s["role:scope-and-plan:audit-fix"] = planRound(s, Object.assign({ change_kind: "bug_fix", new_behaviour: false }, round1));
+    s["role:plan-audit:audit-fix"] = APPROVE;
+    return s;
+  };
+  const d = await runOne(mk({}), DEFAULT);
+  noUnscripted(d);
+  assert.equal(d.result.status, "awaiting_confirmation", d.result.reason);
+  assert.match(d.result.confirm_reason, /re-plan relaxed: change_kind feature→bug_fix; new_behaviour true→false/);
+  assert.ok(!d.labels.includes("role:fleet-intent-judge"));
+  // explicit auto: stops for Max with the plan committed
+  const a = await runOne(mk({}), AUTO);
+  assert.equal(a.result.status, "needs_human");
+  assert.equal(a.result.failed_check, "intent");
+  assert.equal(a.result.stop_gate, "intent");
+  assert.match(a.result.reason, /re-plan relaxed: change_kind feature→bug_fix/);
+  assert.equal(a.result.plan_ref.plan_commit, PC);
+  assert.match(a.result.needs_max_section, /re-plan relaxed/);
+  assert.ok(!a.labels.includes("role:fleet-intent-judge"));
+  // each condition alone (round 0 is a bug fix without new behaviour, so only the named one fires)
+  const base = (round1, r0) => {
+    const s = gated();
+    s["role:scope-and-plan"] = planRound(s, Object.assign({ change_kind: "bug_fix", new_behaviour: false }, r0 || {}));
+    s["role:plan-audit"] = REFUSE("r0", "AC1");
+    s["role:scope-and-plan:audit-fix"] = planRound(s, Object.assign({ change_kind: "bug_fix", new_behaviour: false }, round1));
+    s["role:plan-audit:audit-fix"] = APPROVE;
+    return s;
+  };
+  const shorter = criteria(2).map((c) => (c.id === "AC2" ? Object.assign({}, c, { text: "b" }) : c));
+  for (const [r1, r0, want] of [
+    [{ new_behaviour: false }, { new_behaviour: true }, /new_behaviour true→false/],
+    [{ criteria: criteria(1) }, {}, /criterion AC2 dropped/],
+    [{ criteria: shorter }, {}, /criterion AC2 text shortened with no finding naming it/],
+    [{}, { change_kind: "refactor" }, /change_kind refactor→bug_fix/],
+  ]) {
+    const o = await runOne(base(r1, r0), DEFAULT);
+    assert.equal(o.result.status, "awaiting_confirmation", String(want));
+    assert.match(o.result.confirm_reason, want);
+  }
+  // a shorter text the findings asked for, a longer text and an added criterion are not relaxed
+  for (const r1 of [
+    { criteria: criteria(2).map((c) => (c.id === "AC1" ? Object.assign({}, c, { text: "b" }) : c)) },
+    { criteria: criteria(2).map((c) => Object.assign({}, c, { text: c.text + " exactly" })) },
+    { criteria: criteria(3) },
+  ]) {
+    const o = await runOne(base(r1), DEFAULT);
+    // eligible: the auto gates ran (the build after them is not this test's business)
+    assert.ok(o.labels.includes("role:fleet-intent-judge"), JSON.stringify(r1) + " " + o.result.reason);
+    assert.ok(!o.logs.some((l) => /re-plan relaxed/.test(l)), JSON.stringify(r1));
+  }
+});
+
+// ---------------------------------------------------------------- 1991: confirm "default" (ADR-1186)
+
+function defaultHappy(over = {}) {
+  const s = gated(over);
+  s["role:scope-and-plan"] = planRound(s, { change_kind: "bug_fix", new_behaviour: false, est_diff_lines: 80 });
+  return Object.assign(s, over.script || {});
+}
+
+test("4.0.0 1991: CONFIRMS has ask, auto and default; anything else stops before any agent", async () => {
+  assert.match(SOURCE, /\nconst CONFIRMS = \["ask", "auto", "default"\];\n/);
+  for (const c of ["yes", "Default", ""]) {
+    const out = await runOne(happy(), { ...ARGS, confirm: c });
+    assert.equal(out.result.status, "needs_human", c);
+    assert.match(out.result.reason, /"ask", "auto" or "default"/);
+    assert.equal(out.calls.length, 0);
+  }
+});
+
+test("4.0.0 1991 AC-1: default + bug_fix + new_behaviour false + no IaC builds through the auto gates", async () => {
+  const s = defaultHappy();
+  const out = await runOne(s, DEFAULT);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.auto_confirmed, true);
+  const ij = inputsOf(call(out, "role:fleet-intent-judge").prompt);
+  assert.equal(ij.change_kind, "bug_fix");
+  assert.equal(ij.new_behaviour, false);
+  assert.ok(out.logs.some((l) => /confirm default: eligible/.test(l)));
+  const ref = JSON.parse(s.__store[PC]);
+  assert.equal(ref.plan_facts.change_kind, "bug_fix");
+  assert.equal(ref.plan_facts.new_behaviour, false);
+});
+
+test("4.0.0 1991 AC-1: a classification that is missing, refused or has no quote fails G1 in default and auto", async () => {
+  const cl = (o) => Object.assign({ change_kind: "approve", new_behaviour: "approve", quote: "the parser drops NBSP" }, o);
+  for (const [c, want] of [
+    [undefined, /no classification/],
+    [null, /no classification/],
+    [[], /no classification/],
+    [cl({ change_kind: "refuse" }), /classification change_kind "refuse"/],
+    [cl({ new_behaviour: "refuse" }), /classification new_behaviour "refuse"/],
+    [cl({ change_kind: undefined }), /classification change_kind null/],
+    [cl({ new_behaviour: "approved" }), /classification new_behaviour "approved"/],
+    [cl({ quote: "" }), /classification quote is empty/],
+    [cl({ quote: "   " }), /classification quote is empty/],
+    [cl({ quote: undefined }), /classification quote is empty/],
+  ]) {
+    for (const args of [DEFAULT, AUTO]) {
+      const s = defaultHappy();
+      const j = Object.assign({}, s["role:fleet-intent-judge"], { __raw: true, role_version: FROZEN_VERSIONS["fleet-intent-judge"], role_contract: "CONTRACT: " + /\nconst CONTRACT = "([^"]+)";/.exec(SOURCE)[1] });
+      if (c === undefined) delete j.classification;
+      else j.classification = c;
+      s["role:fleet-intent-judge"] = j;
+      const out = await runOne(s, args);
+      assert.equal(out.result.status, "needs_human", JSON.stringify(c));
+      if (out.result.failed_check) {
+        assert.equal(out.result.failed_check, "intent", JSON.stringify(c));
+        assert.match(out.result.reason, want, JSON.stringify(c));
+      } else assert.equal(out.result.stop_gate, "contract", JSON.stringify(c) + " " + out.result.reason);
+      assert.ok(!out.labels.some((l) => l.startsWith("role:fleet-test-writer")), JSON.stringify(c));
+    }
+  }
+});
+
+test("4.0.0 1991 AC-2/3/4: default asks for IaC paths, other change kinds, new behaviour, and a task id with no project", async () => {
+  const cases = [
+    [(s) => (s["role:scope-and-plan"].allowed_additions = { files: ["src/main.tf"], symbols: [], deps: [], settings: [] }), {}, /plan touches IaC path src\/main\.tf/],
+    [(s) => (s["role:scope-and-plan"].change_kind = "feature"), {}, /change_kind feature \(only bug_fix skips the confirmation\)/],
+    [(s) => (s["role:scope-and-plan"].change_kind = "refactor"), {}, /change_kind refactor/],
+    [(s) => (s["role:scope-and-plan"].new_behaviour = true), {}, /new_behaviour true \(only false skips the confirmation\)/],
+    [() => {}, { input: "#622", project: undefined }, /task id "#622" with no args\.project/],
+    [() => {}, { input: "L42", project: undefined }, /task id "L42" with no args\.project/],
+  ];
+  for (const [mut, argOver, want] of cases) {
+    const s = defaultHappy();
+    mut(s);
+    const args = Object.assign({}, DEFAULT, argOver);
+    if (argOver.project === undefined && "project" in argOver) delete args.project;
+    const out = await runOne(s, args);
+    assert.equal(out.result.status, "awaiting_confirmation", String(want) + " " + out.result.reason);
+    assert.match(out.result.confirm_reason, want);
+    assert.ok("ledger_source" in out.result);
+    assert.ok(!out.labels.includes("role:fleet-intent-judge"), String(want));
+    assert.ok(out.logs.some((l) => /confirm default: asking Max/.test(l)));
+  }
+  // a test file under an IaC-looking dir in a mapped occurrence counts too
+  const s = defaultHappy();
+  s["role:scope-and-plan"].changed_symbols = [{ symbol: "foo", occurrences: [{ at: "infra/vars.tfvars:3", criterion: "AC1", dont_care: null }] }];
+  s["infra:callers"] = { status: "ok", reason: "grepped", occurrences: { foo: ["infra/vars.tfvars:3"] }, capped: [], auto_dont_care: { foo: [] }, doctest_md: [] };
+  const o = await runOne(s, DEFAULT);
+  assert.equal(o.result.status, "awaiting_confirmation", o.result.reason);
+  assert.match(o.result.confirm_reason, /plan touches IaC path infra\/vars\.tfvars/);
+});
+
+test("4.0.0 1991: ask never runs the gates for an eligible plan; build mode default re-runs no gates", async () => {
+  const out = await run(defaultHappy(), ARGS, { confirm: "default" });
+  assert.equal(out.planResult.status, "awaiting_confirmation");
+  assert.ok(!("confirm_reason" in out.planResult));
+  assert.ok(!out.labels.includes("role:fleet-intent-judge"));
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(!out.build.labels.some((l) => /intent/.test(l)));
+});
+
+test("4.0.0 1991: the agent count sealed in the ref covers the gate agents only when they run", async () => {
+  const yes = defaultHappy();
+  await runOne(yes, DEFAULT);
+  const no = defaultHappy();
+  no["role:scope-and-plan"].change_kind = "chore";
+  await runOne(no, DEFAULT);
+  const ask = defaultHappy();
+  await runOne(ask, ARGS);
+  const n = (s) => JSON.parse(s.__store[PC]).history.agents;
+  assert.equal(n(no), n(ask));
+  assert.equal(n(yes) - n(no), 4);
+});
+
+test("4.0.0 1991: isShortPath reads the sealed plan facts (S5 switches the build to it)", () => {
+  const { isShortPath, MAX_SHORT_TEST_ROUNDS } = defsOf(["SHORT_PATH_MAX_DIFF", "MAX_SHORT_TEST_ROUNDS", "isShortPath"]);
+  assert.equal(MAX_SHORT_TEST_ROUNDS, 2);
+  assert.equal(isShortPath({ est_diff_lines: 19, new_behaviour: false }), true);
+  assert.equal(isShortPath({ est_diff_lines: 20, new_behaviour: false }), false);
+  assert.equal(isShortPath({ est_diff_lines: 5, new_behaviour: true }), false);
+  assert.equal(isShortPath({ est_diff_lines: 5, new_behaviour: null }), false);
+  assert.equal(isShortPath({ est_diff_lines: null, new_behaviour: false }), false);
+  assert.equal(isShortPath(null), false);
+});
+
+
+test("4.0.0 1991: intentProblems (G1) refuses every classification defect on its own", () => {
+  const { intentProblems } = defsOf(["intentProblems"]);
+  const ok = { status: "ok", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] }, classification: { change_kind: "approve", new_behaviour: "approve", quote: "q" } };
+  assert.deepEqual(intentProblems(ok), []);
+  const w = (c) => intentProblems(Object.assign({}, ok, { classification: c }));
+  for (const c of [undefined, null, [], "approve"]) assert.deepEqual(w(c), ["no classification of change_kind and new_behaviour"], JSON.stringify(c));
+  assert.deepEqual(w({ change_kind: "refuse", new_behaviour: "approve", quote: "q" }), ['classification change_kind "refuse" (needs approve)']);
+  assert.deepEqual(w({ new_behaviour: "approve", quote: "q" }), ["classification change_kind null (needs approve)"]);
+  assert.deepEqual(w({ change_kind: "approve", new_behaviour: "refuse", quote: "q" }), ['classification new_behaviour "refuse" (needs approve)']);
+  assert.deepEqual(w({ change_kind: "approve", new_behaviour: "approve" }), ["classification quote is empty (needs a verbatim quote from the task)"]);
+  assert.deepEqual(w({ change_kind: "approve", new_behaviour: "approve", quote: " " }), ["classification quote is empty (needs a verbatim quote from the task)"]);
+  assert.deepEqual(w({ change_kind: "approve", new_behaviour: "approve", quote: 7 }), ["classification quote is empty (needs a verbatim quote from the task)"]);
 });

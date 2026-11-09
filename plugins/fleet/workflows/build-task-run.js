@@ -158,7 +158,10 @@ const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
 const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks"];
 // Run-state milestones, in order, and the step a resumed build runs next.
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "done" };
-const CONFIRMS = ["ask", "auto"];
+// 4.0.0 (1991, ADR-1186): "default" runs the auto gates only for an eligible
+// plan (declared bug_fix, no new behaviour, no IaC path, no relaxed re-plan,
+// a task id with project), else it asks as "ask" does
+const CONFIRMS = ["ask", "auto", "default"];
 // Review (2.1.0): at most one review round after the first.
 const MAX_REVIEWS = 2;
 const FINDING_SEVERITIES = ["blocking", "nit"];
@@ -6570,33 +6573,112 @@ function planPathProblem(p) {
   return null;
 }
 
-// confirm auto: the one re-plan round. The planner gets the findings as a
-// text source and updates its draft in place; the round never repeats.
-// rawMap: the refused round's changed_symbols as returned (2.1.6). Every
-// symbol it names, and every symbol a finding names, is carried: the next
-// round must keep each one in its map (narrower symbols only in addition),
-// and its audit gets the round as prior_round.
-function replanWithFindings(ctx, planPath, what, findings, fallback, rawMap) {
+// 4.0.0 (1983): up to MAX_AUDIT_ROUNDS re-plan rounds in every confirm mode;
+// the script-side refusals (confusables, the caller map, the grep diff) and
+// the plan-audit refusals count toward the same rounds.
+const MAX_AUDIT_ROUNDS = 2;
+
+// The suffix of re-plan round n of a planAndAudit call whose round 0 has
+// suffix `base`: "", ":audit-fix", ":audit-fix-2", ...
+function roundSuffix(base, n) {
+  return (base || "") + (n === 0 ? "" : n === 1 ? ":audit-fix" : ":audit-fix-" + n);
+}
+
+// What a planner round declared: {change_kind, new_behaviour, criteria:
+// [{id, text}]}; a value of another type reads as null.
+function roundSnapshot(plan) {
+  const crit = plan && Array.isArray(plan.criteria) ? plan.criteria : [];
+  return {
+    change_kind: plan && CHANGE_KINDS.indexOf(plan.change_kind) >= 0 ? plan.change_kind : null,
+    new_behaviour: plan && typeof plan.new_behaviour === "boolean" ? plan.new_behaviour : null,
+    criteria: crit.filter((c) => c && typeof c === "object" && !Array.isArray(c)).map((c) => ({ id: String(c.id || ""), text: String(c.text || "") })),
+  };
+}
+
+// 4.0.0 (1983, ADR-1186): how a re-plan round relaxed round 0 (empty: it did
+// not). A prior round with no usable round0 counts as relaxed (fail closed).
+function relaxedReasons(prior, now) {
+  const r0 = prior ? prior.round0 : null;
+  if (!r0 || typeof r0 !== "object" || Array.isArray(r0) || !Array.isArray(r0.criteria)) return ["no round0 (fail closed)"];
+  const out = [];
+  if (now.change_kind === "bug_fix" && r0.change_kind !== "bug_fix") out.push("change_kind " + r0.change_kind + "\u2192bug_fix");
+  if (r0.new_behaviour !== false && now.new_behaviour === false) out.push("new_behaviour " + r0.new_behaviour + "\u2192false");
+  const named = {};
+  for (const f of Array.isArray(prior.findings) ? prior.findings : []) if (f && typeof f.criterion === "string") named[f.criterion.trim()] = true;
+  for (const c0 of r0.criteria) {
+    if (!c0 || typeof c0 !== "object") continue;
+    const c = now.criteria.find((x) => x.id === c0.id);
+    if (!c) out.push("criterion " + c0.id + " dropped");
+    else if (c.text.length < String(c0.text || "").length && !named[c0.id]) out.push("criterion " + c0.id + " text shortened with no finding naming it");
+  }
+  return out;
+}
+
+// The prior_round a planner or plan-audit sees: every finding of every earlier
+// round, the last map, round 0 and every earlier round's criteria.
+function priorRoundView(prior) {
+  if (!prior) return null;
+  return {
+    reason: prior.reason,
+    findings: prior.findings,
+    symbols: prior.symbols,
+    changed_symbols: prior.changed_symbols,
+    round0: prior.round0 || null,
+    criteria_by_round: prior.criteria_by_round || [],
+  };
+}
+
+// A re-plan round (4.0.0: any confirm mode, up to MAX_AUDIT_ROUNDS). The
+// planner gets the findings as a text source and as prior_round, and updates
+// its draft in place. rawMap: the refused round's changed_symbols as returned
+// (2.1.6). Every symbol any earlier round mapped, and every symbol a finding
+// named, is carried: the next round must keep each one in its map (narrower
+// symbols only in addition), and its audit gets the accumulated prior_round.
+// plan: the refused round's planner output (its snapshot joins the rounds).
+function replanWithFindings(ctx, planPath, what, findings, fallback, rawMap, plan) {
+  const round = ctx.auditRound || 0;
   const body = findings.map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n") || fallback;
-  gate(what + " (confirm auto): one re-plan round with the findings");
+  gate(what + ": re-plan round " + (round + 1) + " of " + ctx.maxRounds + " with the findings");
   const map = Array.isArray(rawMap) ? stripHeldOut(rawMap).filter((e) => e && typeof e === "object" && !Array.isArray(e)) : null;
-  const symbols = [];
+  const prior = ctx.priorRound || null;
+  const symbols = prior && Array.isArray(prior.symbols) ? prior.symbols.slice() : [];
   const carry = (x) => {
     if (typeof x === "string" && SYMBOL_RE.test(x) && symbols.indexOf(x) < 0) symbols.push(x);
   };
   for (const e of map || []) carry(e.symbol);
   for (const f of findings) carry(f.symbol);
+  const snap = roundSnapshot(plan);
+  const tagged = stripHeldOut(findings).map((f) => Object.assign({}, f, { round }));
+  const next = {
+    reason: what,
+    findings: (prior && Array.isArray(prior.findings) ? prior.findings : []).concat(tagged),
+    changed_symbols: map,
+    symbols,
+    // a seeded prior keeps its own round 0 (or none: relaxed, fail closed)
+    round0: prior ? prior.round0 || null : snap,
+    criteria_by_round: (prior && Array.isArray(prior.criteria_by_round) ? prior.criteria_by_round : []).concat([snap.criteria]),
+    relaxed: ctx.relaxed || [],
+  };
+  noteRound(round, what, tagged, snap, symbols);
   return planAndAudit(
     Object.assign({}, ctx, {
-      auditRetry: false,
-      priorRound: { reason: what, findings: stripHeldOut(findings), changed_symbols: map, symbols },
-      suffix: (ctx.suffix || "") + ":audit-fix",
+      auditRound: round + 1,
+      priorRound: next,
+      suffix: roundSuffix(ctx.baseSuffix, round + 1),
       brief: Object.assign({}, ctx.brief, {
         plan_path: planPath,
         sources: ctx.brief.sources.concat([{ kind: "text", ref: "plan findings (" + what + ")", url: null, body }]),
       }),
     }),
   );
+}
+
+// 4.0.0 (1986): the refused rounds of this run, for the park step's
+// findings.json ({reason, rounds, symbols}).
+function noteRound(round, what, findings, snap, symbols) {
+  const rounds = state.planRounds || (state.planRounds = []);
+  rounds.push({ round, findings, criteria: snap.criteria, change_kind: snap.change_kind, new_behaviour: snap.new_behaviour });
+  state.lastPlanStop = { reason: what, rounds: rounds.slice(), symbols: symbols.slice() };
 }
 
 // "<path>:<line>" with the path normalised (no ./, no empty or . segments),
@@ -6892,30 +6974,39 @@ function planScopeFiles(pf) {
   return out;
 }
 
-// A stop or the one confirm-auto re-plan round for plan findings.
-function planFindingsStop(ctx, planPath, what, findings, rawMap) {
-  if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, findings, what, rawMap);
-  const shown = findings.slice(0, 10).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding);
-  halt("needs_human", what + ": " + shown.join("; ") + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : ""));
+// " (after <n> re-plan rounds)" once a round ran, else "".
+function afterRounds(ctx) {
+  const n = ctx.auditRound || 0;
+  return n ? " (after " + n + " re-plan round" + (n === 1 ? "" : "s") + ")" : "";
 }
 
-async function planAndAudit(ctx) {
+// A re-plan round for plan findings while rounds are left, else a stop.
+function planFindingsStop(ctx, planPath, what, findings, rawMap, plan) {
+  if ((ctx.auditRound || 0) < ctx.maxRounds) return replanWithFindings(ctx, planPath, what, findings, what, rawMap, plan);
+  noteRound(ctx.auditRound || 0, what, stripHeldOut(findings), roundSnapshot(plan), (ctx.priorRound && ctx.priorRound.symbols) || []);
+  const shown = findings.slice(0, 10).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding);
+  halt("needs_human", what + ": " + shown.join("; ") + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : "") + afterRounds(ctx));
+}
+
+// ctx: {common, brief, date, baseRef, remoteSlug, remoteUrl, suffix,
+// maxRounds, auditRound, baseSuffix, priorRound, priorDraft, onPlanPath}.
+// priorRound and priorDraft (4.0.0, 1983 and 1986) are planner inputs only:
+// never in common, never in brief.sources, never sealed; plan-audit alone
+// also gets prior_round.
+async function planAndAudit(ctx0) {
+  let ctx = Object.assign({ maxRounds: MAX_AUDIT_ROUNDS, auditRound: 0 }, ctx0);
+  if (ctx.baseSuffix === undefined) ctx.baseSuffix = ctx.suffix || "";
   const sfx = ctx.suffix || "";
-  const plan = requireOk(
-    "scope-and-plan",
-    await callRole(
-      "scope-and-plan",
-      "role:scope-and-plan" + sfx,
-      Object.assign({}, ctx.common, {
-        brief: ctx.brief,
-        date: ctx.date,
-        repo: ctx.remoteSlug,
-        base_ref: ctx.baseRef,
-        mode: "commit=false",
-      }),
-      "Plan",
-    ),
-  );
+  const plannerIn = Object.assign({}, ctx.common, {
+    brief: ctx.brief,
+    date: ctx.date,
+    repo: ctx.remoteSlug,
+    base_ref: ctx.baseRef,
+    mode: "commit=false",
+  });
+  if (ctx.priorDraft) plannerIn.prior_draft = ctx.priorDraft;
+  if (ctx.priorRound) plannerIn.prior_round = priorRoundView(ctx.priorRound);
+  const plan = requireOk("scope-and-plan", await callRole("scope-and-plan", "role:scope-and-plan" + sfx, plannerIn, "Plan"));
   if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
     halt("failed", "scope-and-plan returned no plan_path/criteria");
   const ppBad = planPathProblem(plan.plan_path);
@@ -6935,22 +7026,26 @@ async function planAndAudit(ctx) {
   if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
     halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
   const criteria = normCriteria(plan.criteria, plan.test_cmd);
+  // 4.0.0 (1983): a round after a refusal (this run's or a parked run's) that
+  // relaxed round 0 is never auto-eligible; carried into every later round
+  const prior = ctx.priorRound || null;
+  if (prior) {
+    const rx = (prior.relaxed || []).slice();
+    for (const x of relaxedReasons(prior, roundSnapshot(plan))) if (rx.indexOf(x) < 0) rx.push(x);
+    if (rx.length) gate("re-plan relaxed round 0: " + rx.join("; "));
+    ctx = Object.assign({}, ctx, { relaxed: rx });
+  }
   // 2.1.4 #7: an invisible or confusable character in examples or property
   const conf = confusableFindings(criteria);
-  if (conf.length) {
-    const what = "criteria hold an invisible or confusable character";
-    if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, conf, what, plan.changed_symbols);
-    halt("needs_human", what + ": " + conf.map((f) => f.criterion + ": " + f.finding).join("; "));
-  }
+  if (conf.length) return planFindingsStop(ctx, planPath, "criteria hold an invisible or confusable character", conf, plan.changed_symbols, plan);
   // 2.1.6 (ledger 1955): every occurrence of each changed symbol is mapped,
   // and a word-boundary grep finds no occurrence the map leaves out
   if (!Array.isArray(plan.changed_symbols))
     halt("needs_human", "role scope-and-plan contract drift: changed_symbols must be an array", "contract");
   const cs = changedSymbolFindings(stripHeldOut(plan.changed_symbols), criteria);
-  if (cs.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols caller map refused", cs.findings, plan.changed_symbols);
-  // the :audit-fix round keeps every symbol the refused round mapped or a
-  // finding named (2.1.6 review): dropping or swapping one stops the run
-  const prior = ctx.priorRound || null;
+  if (cs.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols caller map refused", cs.findings, plan.changed_symbols, plan);
+  // a re-plan round keeps every symbol any earlier round mapped or a finding
+  // named (2.1.6 review): dropping or swapping one stops the run
   if (prior) {
     const now = cs.clean.map((x) => x.symbol);
     const dropped = prior.symbols.filter((x) => now.indexOf(x) < 0);
@@ -6965,7 +7060,7 @@ async function planAndAudit(ctx) {
   let symbolMap = cs.clean;
   if (cs.clean.length) {
     const cc = await callerCheck("infra:callers" + sfx, cs.clean, ctx.common.worktree, planPath);
-    if (cc.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols);
+    if (cc.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols, plan);
     callerOcc = cc.occurrences;
     autoDontCare = cc.auto;
     // 4.0.0 (1989): the unmapped doc and lock hits join the sealed map as dont_care
@@ -7000,10 +7095,10 @@ async function planAndAudit(ctx) {
     gate("planner emitted held_out_examples: dropped, never returned or forwarded");
   gate("plan: " + planPath + ", " + criteria.length + " criteria, test files disjoint");
 
-  // risk tier: computed and logged; the short path is disabled because no
-  // role prompt supports a coder without frozen criterion tests
-  const wouldBeShort =
-    typeof plan.est_diff_lines === "number" && plan.est_diff_lines < SHORT_PATH_MAX_DIFF && plan.new_behaviour === false;
+  // risk tier: computed and logged. 4.0.0 (1991): isShortPath decides it from
+  // the sealed plan facts; the build switches to one writer only once
+  // writerRound splits that writer per criterion (stream S5)
+  const wouldBeShort = isShortPath(planFacts);
   state.path = "full";
   gate(
     "risk tier (short = est_diff_lines < 20 AND new_behaviour false): est_diff_lines=" +
@@ -7043,20 +7138,22 @@ async function planAndAudit(ctx) {
         base_ref: ctx.baseRef,
         mode: "writeback=false",
         caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc, auto_dont_care: autoDontCare },
-        // the refused round before this :audit-fix round, or null
-        prior_round: prior ? { reason: prior.reason, findings: prior.findings, changed_symbols: prior.changed_symbols } : null,
+        // every refused round before this one (4.0.0: accumulated), or null
+        prior_round: priorRoundView(prior),
       }),
       "Plan",
     ),
   );
-  // confirm auto: one re-plan round with the audit findings, then stop
-  if (ctx.auditRetry && (audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria"))
-    return replanWithFindings(ctx, planPath, "plan-audit verdict " + audit.verdict, audit.routed_findings || [], audit.reason || audit.verdict, plan.changed_symbols);
+  // 4.0.0 (1983): a re-plan round with the audit findings while rounds are left
+  const refusal = audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria";
+  if (refusal && ctx.auditRound < ctx.maxRounds)
+    return replanWithFindings(ctx, planPath, "plan-audit verdict " + audit.verdict, audit.routed_findings || [], audit.reason || audit.verdict, plan.changed_symbols, plan);
   if (audit.verdict !== "approve") {
+    if (refusal) noteRound(ctx.auditRound, "plan-audit verdict " + audit.verdict, stripHeldOut(audit.routed_findings || []), roundSnapshot(plan), (prior && prior.symbols) || []);
     const first = (audit.routed_findings || []).slice(0, 3).map((f) => (f.criterion || "-") + ": " + f.finding);
     halt(
       audit.verdict ? "needs_human" : "failed",
-      "plan-audit verdict " + (audit.verdict || "missing") + (first.length ? ": " + first.join("; ") : ""),
+      "plan-audit verdict " + (audit.verdict || "missing") + (first.length ? ": " + first.join("; ") : "") + afterRounds(ctx),
       "role",
     );
   }
@@ -7077,7 +7174,17 @@ async function planAndAudit(ctx) {
       est_agents: typeof est.agents === "number" ? est.agents : null,
       est_rounds: typeof est.rounds === "number" ? est.rounds : null,
     },
+    // 4.0.0 (1983): how a re-plan round relaxed round 0 (empty: none)
+    relaxed: ctx.relaxed || [],
   };
+}
+
+// 4.0.0 (1991): the short path (one test writer for every criterion, at most
+// MAX_SHORT_TEST_ROUNDS test rounds; every gate still runs) applies when the
+// sealed plan facts say est_diff_lines < 20 and new_behaviour false.
+const MAX_SHORT_TEST_ROUNDS = 2;
+function isShortPath(pf) {
+  return !!pf && typeof pf.est_diff_lines === "number" && pf.est_diff_lines < SHORT_PATH_MAX_DIFF && pf.new_behaviour === false;
 }
 
 // Stage the plan, seal the full ref with the staged plan hash, commit the
@@ -7384,6 +7491,15 @@ function intentProblems(r) {
   }
   if (!r.coverage || r.coverage.covered !== true)
     out.push("coverage incomplete: " + ((r.coverage && (r.coverage.missing || []).join("; ")) || "covered is not true"));
+  // 4.0.0 (1991): the judge's check of the planner's change_kind and
+  // new_behaviour, in every confirm mode
+  const cl = r.classification;
+  if (!cl || typeof cl !== "object" || Array.isArray(cl)) out.push("no classification of change_kind and new_behaviour");
+  else {
+    for (const k of ["change_kind", "new_behaviour"])
+      if (cl[k] !== "approve") out.push("classification " + k + " " + JSON.stringify(cl[k] === undefined ? null : cl[k]) + " (needs approve)");
+    if (typeof cl.quote !== "string" || !cl.quote.trim()) out.push("classification quote is empty (needs a verbatim quote from the task)");
+  }
   return out;
 }
 
@@ -7427,6 +7543,9 @@ async function autoGates(ctx) {
       repo_obligations: ctx.planFacts.repo_obligations,
       commands: ctx.planFacts.commands,
       changed_symbols: ctx.planFacts.changed_symbols,
+      // 4.0.0 (1991): the planner's claims, checked by the judge (null in an older ref)
+      change_kind: ctx.planFacts.change_kind === undefined ? null : ctx.planFacts.change_kind,
+      new_behaviour: ctx.planFacts.new_behaviour === undefined ? null : ctx.planFacts.new_behaviour,
     }),
     ctx.mainWt,
     "Auto-confirm",
@@ -7441,6 +7560,7 @@ async function autoGates(ctx) {
     reason: r.reason || null,
     deviations: Array.isArray(r.deviations) ? r.deviations : [],
     coverage: r.coverage || null,
+    classification: r.classification && typeof r.classification === "object" ? r.classification : null,
   });
   const fail = (failedCheck, reasons) => {
     gate("auto-confirm: " + failedCheck + " check failed: " + reasons.join("; "));
@@ -7488,6 +7608,21 @@ function autoFailResult(g, planPath, tiny) {
 }
 
 // ---------------------------------------------------------------- plan mode
+
+// 4.0.0 (1991, ADR-1186): why confirm "default" must ask Max for this plan
+// (empty: the auto gates run). change_kind and new_behaviour are planner
+// claims from untrusted task text, not a boundary: they only narrow which runs
+// skip the human yes; G1-G3, the IaC push stop and the hook gate still hold.
+function defaultBlockers(p, input, raw) {
+  const pf = p.planFacts;
+  const out = [];
+  if (pf.change_kind !== "bug_fix") out.push("change_kind " + pf.change_kind + " (only bug_fix skips the confirmation)");
+  if (pf.new_behaviour !== false) out.push("new_behaviour " + pf.new_behaviour + " (only false skips the confirmation)");
+  for (const x of Array.from(new Set(planScopePaths(pf, p.criteria).map((q) => normPath(String(q)))))) if (isIacPath(x)) out.push("plan touches IaC path " + x);
+  if (p.relaxed.length) out.push("re-plan relaxed: " + p.relaxed.join("; "));
+  if (ledgerFor(input.project) === "either" && TASK_ID_INPUT_RE.test(raw)) out.push("task id " + JSON.stringify(raw) + " with no args.project");
+  return out;
+}
 
 async function planMode(input, date) {
   const raw = typeof input.input === "string" ? input.input.trim() : "";
@@ -7578,16 +7713,20 @@ async function planMode(input, date) {
     gate("park-plan" + note);
     throw new Stop(e.status, e.reason + note);
   };
-  const auto = input.confirm === "auto";
-  let p, pc;
+  const confirm = input.confirm === undefined ? "ask" : input.confirm;
+  const auto = confirm === "auto";
+  let p, pc, blockers, runGates;
   try {
-    p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, remoteUrl: ws.remoteUrl, onPlanPath: (x) => (draft = x), auditRetry: auto });
+    p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, remoteUrl: ws.remoteUrl, onPlanPath: (x) => (draft = x) });
+    // 4.0.0 (1991): decided before the seal (the gate agents count into it)
+    blockers = confirm === "default" ? defaultBlockers(p, input, raw) : [];
+    runGates = auto ? !p.relaxed.length : confirm === "default" && !blockers.length;
     pc = await commitPlanAndRef({
       worktree: lay.mainWt,
       branch: lay.branch,
       phaseName: "Plan",
-      // the commit-plan step itself, and with confirm auto the gate agents
-      after: 1 + (auto ? autoGateAgents(p.planFacts.commands) : 0),
+      // the commit-plan step itself, and when the auto gates run their agents
+      after: 1 + (runGates ? autoGateAgents(p.planFacts.commands) : 0),
       reuseHead,
       fields: {
         branch: lay.branch,
@@ -7607,9 +7746,21 @@ async function planMode(input, date) {
     await parkOnStop(e);
   }
   const ls = ledgerSourceOf(brief, input.project);
-  if (!auto) return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, { ledger_source: ls });
+  // 4.0.0 (1983): a relaxed re-plan never reaches the auto gates; under an
+  // explicit "auto" it stops for Max (the plan stays committed for a ruling)
+  if (auto && p.relaxed.length)
+    return autoFailResult({ failedCheck: "intent", reasons: ["re-plan relaxed: " + p.relaxed.join("; ")], intent: null }, p.planPath, pc.tiny);
+  if (!runGates) {
+    const extra = { ledger_source: ls };
+    if (confirm === "default") {
+      extra.confirm_reason = blockers.join("; ");
+      gate("confirm default: asking Max (" + extra.confirm_reason + ")");
+    }
+    return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, extra);
+  }
+  if (confirm === "default") gate("confirm default: eligible (bug_fix, new_behaviour false, no IaC path, no relaxed re-plan); running the auto gates");
 
-  // confirm "auto": G1-G3 instead of the question; never ask
+  // confirm "auto", or an eligible "default": G1-G3 instead of the question; never ask
   phase("Auto-confirm");
   const g = await autoGates({
     sfx: "",
@@ -8850,6 +9001,8 @@ async function replan(ctx) {
     remoteSlug,
     remoteUrl,
     suffix: ":replan",
+    // a plan_wrong re-plan always ends at awaiting_confirmation: no extra rounds
+    maxRounds: 0,
   });
   const pc = await commitPlanAndRef({
     worktree: replanWt,
@@ -9176,7 +9329,7 @@ async function main(input) {
     stop("needs_human", "args.mode must be \"plan\" or \"build\", got " + JSON.stringify(mode === undefined ? null : mode) + ": run /build-task <task>");
   state.mode = mode;
   if (input.confirm !== undefined && CONFIRMS.indexOf(input.confirm) < 0)
-    stop("needs_human", "args.confirm must be \"ask\" or \"auto\", got " + JSON.stringify(input.confirm));
+    stop("needs_human", "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm));
   if (typeof input.date !== "string" || !DATE_RE.test(input.date))
     stop("needs_human", "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)");
   if (typeof input.run_nonce !== "string" || !NONCE_RE.test(input.run_nonce))

@@ -5485,6 +5485,13 @@ const ARRAY_SITES = {
   "r.capped @ callerCheck": "infra:capped",
   "r.doctest_md @ callerCheck": "infra:doctest_md",
   "r.auto_dont_care @ callerCheck": "parsed: a program map; Array.isArray only refuses an array there",
+  // 4.0.0 (1983): the script's own round record, or a parked findings.json (digest-checked)
+  "plan.criteria @ roundSnapshot": "role:scope-and-plan:criteria",
+  "r0.criteria @ relaxedReasons": "parsed: the round-0 snapshot (the script's own, or a parked findings.json)",
+  "prior.findings @ relaxedReasons": "parsed: the script's round record (or a parked findings.json)",
+  "prior.symbols @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
+  "prior.findings @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
+  "prior.criteria_by_round @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
   "r.defs @ buildCallerCheck": "infra:defs",
   "p.enum @ roleSchema": "parsed: a role schema property (the 1984 STRICT loop), not an agent result",
   "pf.changed_symbols @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
@@ -6080,17 +6087,18 @@ test("2.1.5 confirm auto: a confusable character in the criteria goes to the one
   assert.ok(!l.includes("infra:format-plan") && !l.includes("role:plan-audit"), "no format or audit for the refused plan");
   const b = inputsOf(call(out, "role:scope-and-plan:audit-fix").prompt).brief;
   assert.ok(b.sources.some((x) => x.kind === "text" && /AC2: .*U\+00A0/.test(x.body)));
-  // still bad after the round: stop, no second round
+  // still bad after the rounds: 4.0.0 (1983) stops after round 2, never a third
   const t = autoHappy({ criteria: crit });
   t["role:scope-and-plan:audit-fix"] = t["role:scope-and-plan"];
   const o2 = await runOne(t, AUTO);
   assert.equal(o2.result.status, "needs_human");
-  assert.match(o2.result.reason, /invisible or confusable/);
-  assert.ok(!o2.labels.includes("role:scope-and-plan:audit-fix:audit-fix"));
-  // confirm ask stops at once
+  assert.match(o2.result.reason, /invisible or confusable.*\(after 2 re-plan rounds\)/);
+  assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix-2"));
+  assert.ok(!o2.labels.some((x) => /audit-fix-3|audit-fix:audit-fix/.test(x)));
+  // 4.0.0 (1983): confirm ask gets the same rounds
   const o3 = await runOne(happy({ criteria: crit }), ARGS);
   assert.equal(o3.result.status, "needs_human");
-  assert.ok(!o3.labels.includes("role:scope-and-plan:audit-fix"));
+  assert.ok(o3.labels.includes("role:scope-and-plan:audit-fix-2"));
 });
 
 // 2.1.4 trial bug #3: under confirm auto a plan-audit refusal stopped the run
@@ -6114,19 +6122,22 @@ test("2.1.5 confirm auto: a plan-audit refusal gets one re-plan round with the f
   assert.ok(!JSON.stringify(inputsOf(call(out, "role:fleet-intent-judge").prompt).brief).includes("NBSP example lost"));
 });
 
-test("2.1.5 confirm auto: a second plan-audit refusal stops; confirm ask never re-plans", async () => {
+test("2.1.5 confirm auto: a third plan-audit refusal stops (4.0.0: 2 rounds); confirm ask re-plans too", async () => {
   const s = autoHappy();
   s["role:plan-audit"] = { status: "ok", reason: "defect", verdict: "plan_defect", routed_findings: [] };
   s["role:plan-audit:audit-fix"] = { status: "ok", reason: "still", verdict: "untestable_criteria", routed_findings: [] };
+  s["role:plan-audit:audit-fix-2"] = s["role:plan-audit:audit-fix"];
   s["role:scope-and-plan:audit-fix"] = s["role:scope-and-plan"];
   const out = await runOne(s, AUTO);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /plan-audit verdict untestable_criteria/);
-  assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix:audit-fix"));
+  assert.match(out.result.reason, /plan-audit verdict untestable_criteria.*\(after 2 re-plan rounds\)/);
+  assert.ok(out.labels.includes("role:plan-audit:audit-fix-2"));
+  assert.ok(!out.labels.some((x) => /audit-fix-3|audit-fix:audit-fix/.test(x)));
   const a = happy({ script: { "role:plan-audit": { status: "ok", verdict: "plan_defect" } } });
   const o2 = await runOne(a, ARGS);
   assert.equal(o2.result.status, "needs_human");
-  assert.ok(!o2.labels.includes("role:scope-and-plan:audit-fix"));
+  assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix"));
+  assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix-2"));
 });
 
 // 2.1.4 trial bug #6: a free-text task took its slug from the model-written

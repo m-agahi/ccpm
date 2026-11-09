@@ -279,6 +279,11 @@ export async function runOne(script, args0) {
     // (the role makes the same mistake twice); script "<label>:retry" to differ
     let key = label;
     if (!(label in script) && /^role:.+:retry$/.test(label) && label.slice(0, -":retry".length) in script) key = label.slice(0, -":retry".length);
+    // 4.0.0 (1983): every confirm mode gets up to 2 re-plan rounds; an
+    // unscripted round step (":audit-fix", ":audit-fix-2") repeats the
+    // round-0 stub, so a plan the stubs refuse is refused in every round
+    const rb = /^(.*?)(:audit-fix(?:-[0-9]+)?)$/.exec(label);
+    if (!(label in script) && rb && !script.__noRoundFallback && rb[1] in script) key = rb[1];
     if (!(key in script)) {
       unscripted.push(label);
       return null;

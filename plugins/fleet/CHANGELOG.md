@@ -162,6 +162,41 @@ its notes to this entry.
   `changed_symbols` as `dont_care: "auto: non-code file"`, and plan-audit gets them as
   `caller_check.auto_dont_care`.
 
+### S4: re-plan rounds in every confirm mode (ledger 1983)
+
+- Every confirm mode gets up to 2 re-plan rounds (`MAX_AUDIT_ROUNDS`), labelled `:audit-fix` and
+  `:audit-fix-2`. The script-side refusals (a confusable character, the caller map, the grep
+  diff) and the plan-audit refusals count toward the same 2 rounds. After the last round the run
+  stops with "(after 2 re-plan rounds)". A code-judge `plan_wrong` re-plan gets no extra rounds.
+- `prior_round` accumulates over all earlier rounds: every finding, tagged with its `round`; the
+  union of the symbols; the last map; `round0` (`change_kind`, `new_behaviour` and the criteria of
+  round 0, unchanged); and `criteria_by_round`. The planner and plan-audit both get it. It is
+  never sealed and never reaches a judge.
+- A round is `relaxed` when, against round 0, `change_kind` moved to `bug_fix`,
+  `new_behaviour` moved from true to false, a criterion is gone, or a criterion text got shorter
+  with no finding naming it. A `prior_round` without `round0` counts as relaxed (fail closed). A
+  relaxed run never reaches the auto gates: under `default` it asks with
+  `confirm_reason: "re-plan relaxed: ..."`; under `auto` it stops `needs_human` with
+  `failed_check: "intent"` after the plan commit, so Max can rule on the plan.
+
+### S4: confirm `default` (ledger 1991, ADR-1186)
+
+- `confirm` takes `ask`, `auto` or `default`. With no value the workflow still asks.
+- Under `default`, after plan-audit approves, the auto gates (G1 intent judge, G2 commands, G3
+  scope fence) run only when the planner declared `change_kind: bug_fix` and
+  `new_behaviour: false`, no planned path is an IaC path, no re-plan relaxed round 0, and a task
+  id input carries `project`. Otherwise the result is `awaiting_confirmation` with
+  `confirm_reason`. A failed gate is `needs_human`, as under `auto`; the run never falls back to
+  asking. Build mode with `default` re-runs no gate (the human confirmed).
+- The two declared values are claims from untrusted task text, not a boundary. The boundary stays
+  G2, G3, the IaC push stop, the hook-surface gate and the draft PR with review.
+- `plan_facts` seals `change_kind` and `new_behaviour`. The intent judge gets both and must return
+  `classification` with both values `approve` and a non-empty `quote`. G1 fails on a missing
+  object, a missing or non-`approve` value, or an empty quote, in every confirm mode.
+- `isShortPath(plan_facts)` (`est_diff_lines` < 20 and `new_behaviour` false) and
+  `MAX_SHORT_TEST_ROUNDS = 2` are ready for the short path. The build still runs the full path
+  until stream S5 splits the one writer per criterion.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker
