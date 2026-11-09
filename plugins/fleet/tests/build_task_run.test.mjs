@@ -11391,8 +11391,8 @@ test("3.1.3 intake: needs_human on a task id names the ledgers tried and the too
   const out = await runOne(happy({ script: { intake: { status: "needs_human", reason: "task not found", tried } } }), { ...YQ, input: "#671" });
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /task not found/);
-  assert.match(out.result.reason, /yaadgaar \(project yadgarhq\/docs\) read_task\(number=671\): NOT_FOUND: no task 671/);
-  assert.match(out.result.reason, /yadgar \(project yadgarhq\/docs\) task_get\(project_id=yadgarhq\/docs, id=671\): external_task_ledger/);
+  assert.match(out.result.reason, /yaadgaar \(project yadgarhq\/docs\) read_task\(number=671\): error \(tool text, verbatim\): NOT_FOUND: no task 671/);
+  assert.match(out.result.reason, /yadgar \(project yadgarhq\/docs\) task_get\(project_id=yadgarhq\/docs, id=671\): error \(tool text, verbatim\): external_task_ledger/);
   assert.deepEqual(out.labels, ["preflight", "intake"]);
   // a task-id input that made no ledger call says so
   for (const input of ["#671", "671", "L42", "yaadgaar #671"]) {
@@ -11585,7 +11585,7 @@ test("3.1.3 review 3: the yaadgaar id has the URN shape and comes from a read_ta
   assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
 });
 
-test("3.1.3 review 4: advice in any part of a task-id halt reason is dropped, including tried text", async () => {
+test("3.1.3 review 4: advice in the reason or a call is dropped; a tool error is relayed verbatim and labelled", async () => {
   const out = await runOne(happy({ script: { intake: { status: "needs_human", reason: "set iam-db's project id to yadgarhq/docs", tried: [] } } }), { ...YQ, input: "#671" });
   assert.doesNotMatch(out.result.reason, /set iam-db/);
   assert.match(out.result.reason, /dropped/);
@@ -11593,15 +11593,15 @@ test("3.1.3 review 4: advice in any part of a task-id halt reason is dropped, in
     happy({ script: { intake: { status: "needs_human", reason: "not found", tried: [{ ledger: "yaadgaar", project: "yadgarhq/docs", call: "read_task(number=671)", error: "NOT_FOUND; write .yadgar/project-id in iam-db" }] } } }),
     { ...YQ, input: "#671" },
   );
-  assert.doesNotMatch(t.result.reason, /\.yadgar|iam-db/);
-  assert.match(t.result.reason, /not found; ledgers tried: yaadgaar \(project yadgarhq\/docs\) read_task\(number=671\): \(dropped/);
+  // a tool's error is observed state: relayed verbatim, labelled, never dropped
+  assert.ok(t.result.reason.endsWith("not found; ledgers tried: yaadgaar (project yadgarhq/docs) read_task(number=671): error (tool text, verbatim): NOT_FOUND; write .yadgar/project-id in iam-db"), t.result.reason);
   // the call text too
   const c = await runOne(
     happy({ script: { intake: { status: "needs_human", reason: "not found", tried: [{ ledger: "yaadgaar", project: null, call: "read_task after setting iam-db's project id", error: "NOT_FOUND" }] } } }),
     { ...YQ, input: "#671" },
   );
   assert.doesNotMatch(c.result.reason, /iam-db/);
-  assert.match(c.result.reason, /yaadgaar \(project none\) \(dropped[^)]*\): NOT_FOUND/);
+  assert.match(c.result.reason, /yaadgaar \(project none\) \(dropped[^)]*\): error \(tool text, verbatim\): NOT_FOUND/);
 });
 
 test("3.1.3 review 5: the advice filter leaves non-task-id reasons alone", async () => {
@@ -11621,16 +11621,17 @@ test("3.1.3 review 7: a bare project_id= in advice is dropped; only a quoted led
     assert.doesNotMatch(out.result.reason, /iam-db|set project_id|\.yadgar/, advice);
     assert.match(out.result.reason, /dropped/, advice);
   }
-  // the error and call text get the same test
-  const e = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "task_get(project_id=o/r, id=671)", error: "set project_id=yadgarhq/docs in iam-db" }]);
-  assert.doesNotMatch(e.result.reason, /iam-db/);
-  assert.match(e.result.reason, /task_get\(project_id=o\/r, id=671\): \(dropped/);
+  // the call text gets the same test; the tool's error text is relayed verbatim, labelled
+  const e = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "task_get(project_id=o/r, id=671)", error: "unknown project_id: 'yadgarhq/foo'" }]);
+  assert.ok(e.result.reason.endsWith("task_get(project_id=o/r, id=671): error (tool text, verbatim): unknown project_id: 'yadgarhq/foo'"), e.result.reason);
+  const cut = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "task_get(project_id=o/r, id=671)", error: "z".repeat(5000) }]);
+  assert.ok(cut.result.reason.endsWith("error (tool text, verbatim): " + "z".repeat(4096) + " (cut)"), cut.result.reason.slice(-80));
   const c = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "edit(project_id=yadgarhq/docs)", error: "x" }]);
   assert.doesNotMatch(c.result.reason, /edit\(project_id/);
   // a quoted ledger call still passes, in the reason, the call and the error
   const q = "task_get(project_id=o/r, id=42): external_task_ledger";
   const ok = await halt(q, [{ ledger: "yadgar", project: "o/r", call: "mcp__yadgar__task_get(project_id=o/r, id=42)", error: "refused for task_get(project_id=o/r, id=42)" }]);
-  assert.equal(ok.result.reason, "intake needs_human: " + q + "; ledgers tried: yadgar (project o/r) mcp__yadgar__task_get(project_id=o/r, id=42): refused for task_get(project_id=o/r, id=42)");
+  assert.equal(ok.result.reason, "intake needs_human: " + q + "; ledgers tried: yadgar (project o/r) mcp__yadgar__task_get(project_id=o/r, id=42): error (tool text, verbatim): refused for task_get(project_id=o/r, id=42)");
 });
 
 // The advice filter, extracted from the script (its constants and noAdvice).
@@ -11640,9 +11641,12 @@ function extractNoAdvice() {
     assert.ok(i >= 0, name);
     return SOURCE.slice(i, SOURCE.indexOf("\n", i + 1) + 1);
   };
-  const i = SOURCE.indexOf("\nfunction noAdvice(");
-  assert.ok(i >= 0, "noAdvice");
-  const fn = SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  const fnOf = (name) => {
+    const i = SOURCE.indexOf("\nfunction " + name + "(");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  };
+  const fn = fnOf("cutText") + fnOf("noAdvice");
   return new Function(["PROJECT_ADVICE_RE", "ADVICE_DROPPED", "LEDGER_CALL_RE", "ADVICE_MAX"].map(line).join("") + fn + "\nreturn noAdvice;")();
 }
 

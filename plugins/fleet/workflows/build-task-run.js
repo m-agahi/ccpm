@@ -5491,8 +5491,13 @@ const ADVICE_DROPPED = "(dropped: it advised changing the repo's project identit
 // ADVICE_MAX first.
 const LEDGER_CALL_RE = /\b(?:mcp__\w+__)?(?:task_get|task_list|read_task|find_tasks)\((?:\s*\w+=(?![^,()\s]*\.yadgar)[^,()\s=]*\s*(?:,(?=\s*\w+=)|(?=\))))*\)/g;
 const ADVICE_MAX = 4096;
+function cutText(text) {
+  return text.length > ADVICE_MAX ? text.slice(0, ADVICE_MAX) + " (cut)" : text;
+}
+// Agent-written prose (the reason, a call) only. A tool's error text is
+// observed state: it is relayed verbatim and labelled, never dropped.
 function noAdvice(text) {
-  const t = text.length > ADVICE_MAX ? text.slice(0, ADVICE_MAX) + " (cut)" : text;
+  const t = cutText(text);
   return PROJECT_ADVICE_RE.test(t.replace(LEDGER_CALL_RE, "")) ? ADVICE_DROPPED : t;
 }
 function intakeHaltReason(it, raw) {
@@ -5514,7 +5519,7 @@ function intakeHaltReason(it, raw) {
           ") " +
           noAdvice(show(t.call)) +
           ": " +
-          noAdvice(typeof t.error === "string" && t.error ? t.error : "returned no task"),
+          (typeof t.error === "string" && t.error ? "error (tool text, verbatim): " + cutText(t.error) : "returned no task"),
       )
       .join("; ")
   );

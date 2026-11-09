@@ -218,8 +218,9 @@ answer is the truth. `args.project` is the ledger scope and is independent of `r
 answer (`yadgar:task:<uuid>`), and `tried` must hold the `read_task` call that returned it; else it
 stops (`needs_human`), and so does an answer that names a project other than `args.project`.
 Intake lists every ledger call it made in `tried`. On a task-id input that stops, the script
-appends the ledgers tried, their projects and the tool's error text to the reason, and drops each
-part that advises changing the repo's project id. `confirm: "auto"` with no `args.project` and a
+appends the ledgers tried, their projects and the tool's error text (verbatim, labelled
+`error (tool text, verbatim):`) to the reason. It drops the agent-written reason or call when it
+advises changing the repo's project id. `confirm: "auto"` with no `args.project` and a
 task-id input stops before intake. Under `confirm: "ask"` the result carries `ledger_source`
 (`ledger`, `ref`, `id`, `project`), and the reason names it. A Jira ticket that
 names no repo, or several, stops with `needs_human`. The task id comes from the first ledger, Jira,
