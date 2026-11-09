@@ -54,18 +54,18 @@ agent runs. `run_nonce` (2.1.5) is a fresh value per invocation (the skill passe
 every infra prompt carries it, so `resumeFromRunId` never replays a stale git or worktree check.
 A missing nonce returns `needs_human` before any agent runs.
 
-| Step | Agent              | Gate in script code                                                       |
-| ---- | ------------------ | ------------------------------------------------------------------------- |
-| 1    | preflight          | yadgar unreachable, a role missing, a low version or a wrong marker       |
-| 2    | intake (read only) | `needs_human` (ambiguous repo or ticket) stops before any other step      |
-| 3    | workspace (infra)  | creates or reuses branch `fleet/<task id>-<slug>` and its worktree        |
-| 4    | branch-scan (r/o)  | any commit beyond origin/<default> that is not a plan commit -> stop      |
-| 5    | scope-and-plan     | criterion ids; disjoint test files; `tldr`; `plan_diff` is a string array |
-| 5a   | callers (r/o)      | `changed_symbols` map well formed; `git grep -w` hits equal the map       |
-| 6    | -                  | risk tier logged; short path disabled (always full)                       |
-| 7    | plan-audit         | verdict other than `approve` -> `needs_human`                             |
-| 8    | stage-plan         | stages the plan doc; returns the sha256 of the staged bytes               |
-| 9    | commit-plan        | commits the plan doc only, LOCALLY; writes the sealed ref as a git object |
+| Step | Agent              | Gate in script code                                                                                |
+| ---- | ------------------ | -------------------------------------------------------------------------------------------------- |
+| 1    | preflight          | yadgar unreachable, a role missing, a low version or a wrong marker; an unshimmed IaC tool on PATH |
+| 2    | intake (read only) | `needs_human` (ambiguous repo or ticket) stops before any other step                               |
+| 3    | workspace (infra)  | creates or reuses branch `fleet/<task id>-<slug>` and its worktree                                 |
+| 4    | branch-scan (r/o)  | any commit beyond origin/<default> that is not a plan commit -> stop                               |
+| 5    | scope-and-plan     | criterion ids; disjoint test files; `tldr`; `plan_diff` is a string array                          |
+| 5a   | callers (r/o)      | `changed_symbols` map well formed; `git grep -w` hits equal the map                                |
+| 6    | -                  | risk tier logged; short path disabled (always full)                                                |
+| 7    | plan-audit         | verdict other than `approve` -> `needs_human`                                                      |
+| 8    | stage-plan         | stages the plan doc; returns the sha256 of the staged bytes                                        |
+| 9    | commit-plan        | commits the plan doc only, LOCALLY; writes the sealed ref as a git object                          |
 
 Branch-scan: a plan commit has the subject `plan(<task id>): <slug>`, and its file set is exactly
 `{plan_path}`. The scan reads `plan_path` from a sealed plan ref of the task
@@ -86,8 +86,7 @@ reads as not ok, so its commit counts as a build commit and the run stops (fail-
 **Program digests on relays (3.0.0).** Every read-only infra step whose output reaches a gate runs
 one program and relays its output with the program's digest (sha256 over its canonical JSON);
 the script recomputes it and stops on a difference: `infra:callers`, `infra:changed-defs`,
-`infra:branch-scan` (failed), `infra:iac-scan` (`stop_gate: iac`; its `error` key is always
-printed, `null` when none), `infra:fleet-scan` (`stop_gate: scope`), `infra:read-state`
+`infra:branch-scan` (failed), `infra:fleet-scan` (`stop_gate: scope`), `infra:read-state`
 (`stop_gate: resume`), `infra:review-paths` (failed) and `infra:check-scripts` (a mismatch makes
 every check_cmd script judge-only), plus the hasher. Since 3.1.0 also `infra:verify-plan`
 (`VERIFY_SINCE_PY`, failed), `infra:commit-plan` (`PLAN_FILES_PY`, failed) and the push classifier
@@ -532,81 +531,61 @@ Not defended:
   `core.sshCommand`), virtualenv and `node_modules` internals beyond the startup hooks, and
   anything else that runs code without changing a frozen key.
 
-#### IaC repos: refused
+#### IaC tooling: Max's hard rules and the PATH shims (3.1.0)
 
-The user rule forbids any agent to cause IaC tooling (terraform, tofu, tfp and their kin) to run.
-The fleet runs the repo's own hooks at its commits and its push. So it does not run in any repo
-that could reach that tooling. There is no hook classifier, no stage parsing and no exemption. The
-check is blunt and fails closed.
+Max ruled on 2026-11-09: the fleet may work on terraform and other IaC code like any other code.
+What keeps IaC tooling (terraform, tofu, tfp, terragrunt, digger) from running is not a text scan
+in this workflow but four layers outside and inside it:
 
-A read-only infra step (`fleet:judge`) scans the repo twice:
+1. **Max's hard rules** (no terraform by any mechanism, no tf-local-plan container exec), which
+   every role inherits.
+2. **settings.json denies** on those commands.
+3. **Agent PATH shims** that nix installs for terraform, tofu, tfp, terragrunt and digger, and for
+   docker/podman exec into tf-local-plan containers: on the agent PATH the tool names reach a shim
+   that refuses.
+4. **The hook gate** (below): a change to anything the repo's hooks or CI run needs its own PR
+   and Max's confirmation, so a role cannot make a hook run IaC tooling at the commit or the push.
 
-- in plan mode, right after the workspace step (`infra:iac-scan:plan`, at `HEAD`);
-- in build mode, after verify (`infra:iac-scan:verify`, at the branch HEAD), on every build and
-  every resume.
+ADR-1152 still frames the rest: the fleet's gates defend against reward hacking, not a hostile
+agent with a shell.
 
-Both scans run before anything is committed or pushed. The run stops with `needs_human`,
-`stop_gate: "iac"` and "repo contains IaC files or IaC tooling in hooks; the fleet does not run
-here" when any of these is true:
+**The PATH check (preflight, plan and build mode).** The preflight step runs one embedded program
+(`PATH_CHECK_PY`, `python3 -I`, resource caps). It resolves terraform, tofu, tfp, terragrunt and
+digger on the agent's PATH. A name that resolves is a shim only when its real path is under
+`/nix/store/` (which no role can write) and its first 64 KiB hold the marker
+`fleet-agent-shim: hard-rules` (the constant `FLEET_SHIM_MARKER`). A name that resolves to
+anything else stops the run before any other step, with `needs_human`, `stop_gate: "iac"` and
+"terraform tooling on PATH is not shimmed; install the agent PATH shims (nix) before using the
+fleet". No name resolving at all passes. A missing or tampered result (no `path_check`, a wrong
+digest, any program argument) stops the same way. The program spells the names in pieces, because
+the agent's Bash guard blocks them.
 
-- A tracked file ends in `.tf`, `.tfvars`, `.tf.json`, `.tfvars.json`, `.hcl`, `.tofu`,
-  `.tofuvars`, `.tofu.json` or `.tofuvars.json`. This covers `.terraform.lock.hcl`,
-  `terragrunt.hcl` and `.tflint.hcl`.
-- A tracked file sits under a `.terraform/` or `terraform/` dir.
-- `IAC_RE` (`terraform|tofu|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger`, any
-  case) matches anywhere in one of these:
-  - `.pre-commit-config.yaml`;
-  - every file in the hooks dir git uses (`core.hooksPath`, else `git rev-parse --git-path hooks`),
-    with any file name;
-  - `.husky/**`, `lefthook*.y*ml`, `.lefthook*` or `.githooks/**`;
-  - any `Makefile`;
-  - the `scripts` of any `package.json`;
-  - the script and task tables of any `pyproject.toml`;
-  - any file named in the text of one of the above, such as a hook `entry` or `args`, a husky or
-    lefthook command, or a hooks-dir shim's `--config=<path>`. The scan follows these names up to 4
-    levels deep. A name is any run of `A-Z a-z 0-9 _ . / -` that resolves to a tracked path or,
-    since 3.1.0, to an untracked or ignored file in the worktree (`worktree:<path>`). Since 3.1.0
-    (ledger 1960) only names that can run are followed: never prose, docs or data (`*.md`, `*.txt`,
-    `*.rst`, `*.jsonl`, `*.csv`, CHANGELOG, LICENSE, README, `*.json` other than `package.json` and
-    hook configs such as `.lintstagedrc*`), never a name on a `files`, `exclude`, `name`,
-    `description` or `id` line of a YAML file or in a YAML comment, and a test path (under `tests/`,
-    `fixtures/`, `golden/`, ..., or `test_*.py`, `*.test.*`, ...) or a Dockerfile only when a hook
-    surface names it directly. A followed `package.json` or `pyproject.toml` is read like a root one.
-    `language: docker` scans the repo's `Dockerfile`. A pre-commit shim's `INSTALL_PYTHON=<path to
-python>` line is not matched (it names the interpreter, not a command); every other line of every
-    surface, comments included, is;
-  - since 3.1.0, the hook manifest (`.pre-commit-hooks.yaml`) of every remote hook repo of the root
-    `.pre-commit-config.yaml`, and the repo files it names (`remote:<repo>@<rev>:<path>`). The config
-    is parsed with PyYAML, run as in the fixer program (pre-commit's own interpreter, else
-    `python3`, `-I`, from `/`), and each repo is paired with its own rev. The scan reads the clone
-    pre-commit keeps in its cache at that rev (`$PRE_COMMIT_HOME`, else `$XDG_CACHE_HOME/pre-commit`,
-    else `~/.cache/pre-commit`; `db.db` maps repo and rev to the clone). With no cached clone it
-    fetches the rev shallowly into a scratch repo outside the worktree (hooks off), reads the
-    manifest from `FETCH_HEAD` with `git show`, and removes the scratch repo. The fetch allows only
-    `https://` and `git@<host>:<path>`, only the hosts `github.com`, `gitlab.com`, `codeberg.org` and
-    the host of the repo's own `origin` (never an IP literal, `localhost`, `*.local` or
-    `*.internal`), at most 20 fetches and 120 s in all, and never prompts (`GIT_TERMINAL_PROMPT=0`,
-    an empty `GIT_ASKPASS`, ssh in batch mode with strict host keys). It keeps the user's git config
-    and credential helper, so a private hook repo on an allowed host works. These are the hosts
-    pre-commit itself reaches for the same config at install time.
-- The scan cannot complete: a bad revision, an unreadable file or hook, more than 2000 referenced
-  files, a missing list, or (3.1.0) a root config that PyYAML cannot read (or no PyYAML), a repos
-  entry with no repo, or a remote hook repo the scan can neither find in the cache nor fetch (a
-  transport or host not allowed, a rev that does not resolve, a missing manifest, a failed or
-  timed-out fetch, the fetch caps). A refused host names itself and suggests
-  `pre-commit install-hooks`, which clones the repo and installs its hook environments (that runs
-  package installs, not hooks); afterwards the scan reads the cache.
+**Accepted residual.** The PATH check and the shims do not stop an absolute path to a real binary
+(for example `/opt/terraform/bin/terraform`, or a binary a test downloads), nor a container image
+built to run terraform. Max's hard rules and the settings.json denies are the controls there.
 
-The scan reads tracked files from the git objects at the scanned revision. It reads the hooks dir,
-untracked files and the pre-commit cache in their current state. It reads no file over 1 MiB (it
-refuses: such a file cannot be scanned whole) and at most 64 MiB in all.
+**The scope fence is unchanged.** With `confirm: "auto"` and on every coder round, a path the fence
+refuses (IaC files, Kubernetes and Helm manifests, `.github/`, rulesets, secret-like paths) still
+stops the run for a human. Max's ruling lets the fleet work on IaC code; whether the fence's IaC
+path refusal should go too is an open question for Max.
 
 #### Hook changes: their own PR, with Max (3.1.0)
 
-The hook surface is `.pre-commit-config.yaml`, every file a hook `entry` or `args` names and its
-`-m` module files (`HOOK_SURFACE_PY`, read-only, the fixer's isolated PyYAML loader), and
-`.github/workflows/**`, `.gitlab-ci.yml` and `.forgejo/**`. The plan scope is checked before the
-audit and the approved diff right before the commit. Touching the surface and anything else stops
+The hook surface is every hook-manager and CI path, in any case (`.pre-commit-config.yaml`,
+`.pre-commit-hooks.yaml`, `.github/**`, `.gitea/**`, `.forgejo/**`, `.woodpecker*`,
+`.circleci/**`, `.gitlab-ci.yml`, `.gitlab/**`, `Jenkinsfile`, `.buildkite/**`,
+`azure-pipelines.yml`, `bitbucket-pipelines.yml`, `.husky/**`, `.githooks/**`, `lefthook*.yml`,
+`.lefthook*`), plus what the read-only program `HOOK_SURFACE_PY` finds with the fixer's isolated
+PyYAML loader: every file a hook `entry` or `args` names (a `--flag=value` only when the value is
+an executable script), `-m` modules and their `__main__.py`, every Makefile and `*.mk` for a hook
+that runs `make`, the in-repo target of a surface symlink, one level of what the hook scripts load
+(repo-local Python imports; shell `source`/`.`; scripts they run directly; a Python script that
+does not parse puts its directory in the surface), the scripts CI and hook-manager files name
+(`.github/actions`, husky, githooks, lefthook, the hooks dir, `package.json` scripts; one that does
+not parse refuses) and the `core.hooksPath` directory. `Makefile`, `package.json` and
+`pyproject.toml` alone are not surface: they are task runners every version bump touches. The plan
+scope (files, obligation files, criterion test files, mapped callers) is checked before the audit
+and the approved diff right before the commit. Touching the surface and anything else stops
 with "hook changes must be a separate PR (Max's rule)"; touching only the surface stops with "hook
 change needs Max's confirmation". Both are `needs_human`, `stop_gate: "hooks"`, in every confirm
 mode. A surface that cannot be computed refuses.
@@ -617,23 +596,8 @@ that the fixer runs get the limits lifted back. The YAML loaders (60 s, 1 GiB) r
 256 KiB of config, emit only string values (`args` a list of strings) and stop past 1 MiB of
 output, so an alias bomb ("billion laughs") is refused, not expanded.
 
-Not covered (3.1.0), by design:
-
-- Code inside an installed hook package that a manifest names by a command (a console-script
-  `entry` such as `check-yaml`) and not by a file path.
-- Remote hook repos of any config other than the root `.pre-commit-config.yaml` (for example one
-  that only a hooks-dir shim names with `--config=<path>`): that config's text is scanned, its
-  remote manifests are not.
-- Test code. The roles run `test_cmd` (an allowlisted test runner), and a test may start any
-  program. The scan does not read test files: many repos, this one included, name the tools in test
-  data, so the scan would refuse them. The allowlisted `test_cmd` shapes, the forbidden words in
-  commands, plan approval and the draft PR are the controls here.
-
-The scan program never spells a tool name in full, because the local Bash guard blocks those words.
-It builds its pattern from pieces, and a test checks that the pattern equals `IAC_RE`.
-
 Every `git worktree add` the fleet runs uses `-c core.hooksPath=/dev/null`, so no `post-checkout`
-hook runs before the scan. The scope-and-plan role page creates the planner's own probe worktree;
+hook runs in a fleet worktree. The scope-and-plan role page creates the planner's own probe worktree;
 the script does not create it.
 
 ### Frozen set

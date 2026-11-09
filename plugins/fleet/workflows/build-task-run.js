@@ -161,12 +161,6 @@ const GATE_PATH_RE = /(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\
 const PRECOMMIT_CMD_RE = /^pre-commit run ([A-Za-z0-9_.:-]+)( --all-files)?( --hook-stage ([A-Za-z0-9_-]+))?$/;
 // confirm "auto" G3 scope fence over every planned path and command.
 const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\b/i;
-// IaC refusal (2.1.2, a HARD user rule: never cause IaC tooling to run). The
-// fleet does not run in a repo with IaC files or IaC tooling in its hooks or
-// task runners (IAC_SCAN_PY lists the places). IAC_SCAN_PY spells this
-// pattern in pieces (the local Bash guard), and a test keeps the two equal.
-const IAC_RE = /terraform|(?<!in)tofu|\btfp\b|tflint|terragrunt|tfsec|infracost|atlantis|digger/i;
-const IAC_REFUSAL = "repo contains IaC files or IaC tooling in hooks; the fleet does not run here";
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 // The ledger body write (3.1.0): MCP only; no shell, no file tools, no yaadgaar writes.
 const WRITER_AGENT = "fleet:ledger-writer";
@@ -1134,6 +1128,7 @@ const PREFLIGHT_SCHEMA = {
     versions: { type: "object" },
     dispatch: { type: "object", additionalProperties: { type: ["string", "null"] } },
     contract: { type: "object", additionalProperties: { type: ["string", "null"] } },
+    path_check: { type: ["object", "null"] },
     reason: STR,
   },
 };
@@ -1153,8 +1148,6 @@ const INFRA_SCHEMA = {
     created: { type: "boolean" },
     reused: { type: "boolean" },
     merged: ANY_ARRAY,
-    iac_files: { type: "array", items: STR },
-    iac_text: { type: "array", items: STR },
     files: { type: "array", items: STR },
     diff: { type: "array", items: STR },
     chunks: { type: "array", items: STR },
@@ -2864,7 +2857,10 @@ function preflightPrompt(inputs) {
     "dispatch maps each found pattern to the first line of its `content` that matches `DISPATCH: model=<tier> (fallback=<tier>)` (the fallback part is optional), copied raw; null when no line matches. " +
     "contract maps each found pattern to the first line of its `content` that starts with `CONTRACT:`, copied raw; null when none. " +
     "`content` often has no trailing newline: its last line counts as a line like any other. " +
-    "Return {reachable, missing, versions, dispatch, contract, reason}."
+    "Then run this one command exactly as written, unmodified, as one Bash call: " +
+    "python3 -I -c " + shQuote(PATH_CHECK_PY) +
+    "\nIt prints one JSON object {tools, args, digest}: return it as path_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n" +
+    "Return {reachable, missing, versions, dispatch, contract, path_check, reason}."
   );
 }
 
@@ -4079,29 +4075,18 @@ function precommitIdsPrompt(inputs) {
   );
 }
 
-// IaC refusal scan of <rev> (git objects, so uncommitted edits do not count)
-// and of the hooks dir git uses now (core.hooksPath, else the hooks dir):
-// - iac_files: tracked paths ending .tf, .tfvars, .tf.json, .tfvars.json,
-//   .hcl, or the same four with .tofu for .tf, or under a .terraform/ or
-//   terraform/ dir;
-// - iac_text: where IAC_RE matches the text of .pre-commit-config.yaml, every
-//   file in the hooks dir ("hooks:<name>"), .husky/**, lefthook*.y*ml,
-//   .lefthook*, .githooks/**, Makefile, package.json scripts, the script and
-//   task tables of pyproject.toml, or any file one of these names (a hook
-//   entry or arg, a hook-manager command, a shim's --config=<path>), followed
-//   up to MAX_DEPTH levels deep; and the hook manifest of every remote hook
-//   repo of the root config (3.1.0).
-// 3.1.0 (ledger 1960) follows only names that can run: never prose, docs or
-// data (*.md, *.txt, CHANGELOG, *.json other than package.json and hook
-// configs, ...), never a name on a files/exclude/name/description/id line of
-// a YAML file or in a YAML comment, and test paths and Dockerfiles only when a
-// hook surface names them directly (depth 1). A followed package.json or
-// pyproject.toml is read like a root one. A pre-commit shim's INSTALL_PYTHON
-// (a python interpreter path) is not matched.
-// The script refuses on any hit, an error, or a missing list. Prints
-// {iac_files, iac_text, error?}.
-// IAC_SCAN_PY_BEGIN
-const IAC_SCAN_PY = String.raw`
+// The PATH check (3.1.0, Max's ruling of 2026-11-09). The fleet may change IaC
+// code like any other code; what keeps IaC tooling from running is Max's
+// hard rules, the settings.json denies and the agent PATH shims nix
+// installs. This program resolves each IaC tool name on the agent's PATH and
+// says whether it is such a shim: its real path is under /nix/store/ (which
+// no role can write) and its first 64 KiB hold FLEET_SHIM_MARKER. It prints
+// {tools: {<name>: null | {path, real, shim}}, args, digest}. The names are
+// spelled in pieces because the agent's Bash guard blocks them. argv
+// --store-prefix=<dir> is for tests only; the script refuses any argument.
+const FLEET_SHIM_MARKER = "fleet-agent-shim: hard-rules";
+// PATH_CHECK_PY_BEGIN
+const PATH_CHECK_PY = String.raw`
 # resource caps (3.1.0): every embedded program bounds its own address space
 # and CPU time, and git's children are tuned to stay inside them
 import os as _o, resource as _r
@@ -4113,532 +4098,48 @@ _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
 _o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
-import atexit, fnmatch, glob, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, tempfile, time
-wt, rev = sys.argv[1], sys.argv[2]
-# argv[3] == 'no-yaml' (tests only): behave as if no Python had PyYAML
-no_yaml = len(sys.argv) > 3 and sys.argv[3] == 'no-yaml'
-# --test-instead-of=<json> (tests only, on argv, never the environment): serve
-# hook repo URLs from local bare repos
-test_instead = next((a[len('--test-instead-of='):] for a in sys.argv[3:] if a.startswith('--test-instead-of=')), None)
+import hashlib, json, os, shutil, sys
 os.chdir('/')
-PAT = re.compile('terra' + 'form|(?<!in)to' + 'fu|\\bt' + 'fp\\b|tf' + 'lint|terra' + 'grunt|tfsec|infracost|atlan' + 'tis|dig' + 'ger', re.I)
-DIRS = {'.terra' + 'form', 'terra' + 'form'}
-T = '.to' + 'fu'
-EXTS = ('.tf', '.tfvars', '.tf.json', '.tfvars.json', '.hcl', T, T + 'vars', T + '.json', T + 'vars.json')
-TOKEN = re.compile(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*')
-CAP = 50
-MAX_DEPTH = 4
-MAX_REFS = 2000
-FETCH_TIMEOUT = 120
-# 3.1.0 (ledger 1960): what is followed
-INERT_EXT = ('.md', '.markdown', '.rst', '.txt', '.adoc', '.jsonl', '.ndjson', '.csv', '.tsv', '.lock', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.html', '.htm')
-INERT_BASE = re.compile(r'^(changelog|changes|history|news|license|licence|notice|authors|readme)$', re.I)
-JSON_RUNS = re.compile(r'^(package\.json|\.lintstagedrc.*|lefthook.*|.*hook.*\.json)$', re.I)
-TEST_DIRS = {'tests', 'test', 'testdata', 'test_data', 'fixtures', '__tests__', '__fixtures__', 'golden', 'snapshots', '__snapshots__', 'spec'}
-TEST_BASE = re.compile(r'^(test_.*\.py|.*_test\.[A-Za-z0-9]+|.*\.(test|spec)\.[A-Za-z0-9]+|conftest\.py)$')
-DOCKER_BASE = re.compile(r'^((Dockerfile|Containerfile)(\..*)?|.*\.(dockerfile|containerfile))$', re.I)
-YAML_SKIP = re.compile(r'^\s*(-\s*)?(files|exclude|name|description|id|alias|types|types_or|exclude_types)\s*:', re.I)
-DOCKER_LANG = re.compile(r'\blanguage\s*:\s*[\'"]?docker[\'"]?\s*(,|}|$)', re.M)
-URL_OK = re.compile(r'^(https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~-]+)+/?|git@[A-Za-z0-9.-]+:[A-Za-z0-9._~-]+(/[A-Za-z0-9._~-]+)*)$')
-REV_OK = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9._/-]*$')
-def done(iac_files, iac_text, error=None):
-    out = {'iac_files': iac_files, 'iac_text': iac_text, 'error': error}
-    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-    print(json.dumps(out, ensure_ascii=False))
-    sys.exit(0)
-def git(*a):
-    return subprocess.run(['git', '-C', wt] + list(a), capture_output=True)
-ls = git('ls-tree', '-r', '-z', '--name-only', rev + '^{commit}')
-if ls.returncode != 0:
-    done(iac_files=[], iac_text=[], error='bad rev ' + rev + ': ' + ls.stderr.decode('utf-8', 'replace').strip())
-paths = [x.decode('utf-8', 'replace') for x in ls.stdout.split(b'\x00') if x]
-tracked = set(paths)
-top = git('rev-parse', '--show-toplevel').stdout.decode('utf-8', 'replace').strip() or wt
-files, text = [], []
-def fail(why):
-    done(iac_files=files[:CAP], iac_text=text[:CAP], error=why)
-def base(p):
-    return p.rsplit('/', 1)[-1]
-def inert(p):
-    b = base(p)
-    if b.lower().endswith(INERT_EXT) or INERT_BASE.match(b):
-        return True
-    return b.lower().endswith('.json') and not JSON_RUNS.match(b)
-def testpath(p):
-    segs = p.split('/')
-    return any(s.lower() in TEST_DIRS for s in segs[:-1]) or bool(TEST_BASE.match(segs[-1]))
-def mentioned_only(p):
-    # a test path or Dockerfile that a script merely mentions (not on a command
-    # line) is not followed past the first level
-    return testpath(p) or bool(DOCKER_BASE.match(base(p)))
-# a file in an execution context: given to an interpreter or exec, sourced,
-# read through a redirect or named by -f, in a hook's command text
-# (the context never crosses a line: a shebang's interpreter names nothing)
-EXEC_CTX = re.compile(r'(?:^|[\s;&|(\x60])(?:bash|sh|zsh|dash|ksh|node|deno|bun|python[0-9.]*|ruby|perl|exec|source|xargs|env|cat)[ \t]+([^;&|\n\x60)]*)'
-                      r'|(?:^|[;&|][ \t]*)\.[ \t]+([^;&|\n]*)|<[ \t]*([^\s;&|)]+)|(?:^|[ \t])-f[ \t]+([^\s;&|)]+)', re.M)
-def command_names(s):
-    # every name on a command line: every operand of an interpreter, exec,
-    # env, xargs or cat (no first-operand split: options with values, env
-    # VAR=..., -c strings and -m make the operand ambiguous), a sourced file,
-    # a < redirect, a -f file, ./X
-    # returns (names, ran): ran = what is executed whatever its format (a
-    # sourced file, a < redirect, a -f file, ./X)
-    out, ran = set(), set()
-    for m in EXEC_CTX.finditer(s):
-        for i, g in enumerate(m.groups()):
-            for tok in TOKEN.findall(g or ''):
-                out.add(os.path.normpath(tok))
-                if i > 0:
-                    ran.add(os.path.normpath(tok))
-    for m in re.finditer(r'(?:^|[\s;&|(])(\./[^\s;&|)]+)', s, re.M):
-        out.add(os.path.normpath(m.group(1)))
-        ran.add(os.path.normpath(m.group(1)))
-    return out, ran
-# a text whose every line is a command: a hook config's entry/args/run lines,
-# the hooks dir, husky, githooks, lefthook, a Makefile, package.json scripts
-def all_commands(name):
-    b = base(name).lower()
-    return b.endswith(('.yaml', '.yml')) or name.startswith('hooks:') or name.split(':')[-1].split('/')[0] in ('.husky', '.githooks') \
-        or b.startswith(('lefthook', '.lefthook')) or b in ('makefile', 'gnumakefile', 'package.json')
-def tok_text(name, s):
-    # the text names are taken from: a YAML file without its comments and
-    # its file filters, names and descriptions; a shell or make text without
-    # its comment lines (a comment runs nothing)
-    if not base(name).lower().endswith(('.yaml', '.yml')):
-        if all_commands(name):
-            return '\n'.join(x for x in s.splitlines() if not x.lstrip().startswith('#') or x.startswith('#!'))
-        return s
-    return '\n'.join(re.sub(r'(^|\s)#.*$', '', x) for x in s.splitlines() if not YAML_SKIP.match(x))
-def tables(obj):
-    # every value under a key that names scripts or tasks, at any depth
-    out = []
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if str(k).lower() in ('scripts', 'gui-scripts', 'tasks', 'script'):
-                out.append(v)
-            else:
-                out.extend(tables(v))
-    return out
-def view(p, raw):
-    # package.json: its scripts; pyproject.toml: its script and task tables
-    b = base(p)
-    if b == 'package.json':
-        try:
-            return json.dumps(json.loads(raw).get('scripts'))
-        except Exception:
-            return raw
-    if b == 'pyproject.toml':
-        try:
-            import tomllib
-            return json.dumps(tables(tomllib.loads(raw.decode('utf-8'))), default=str)
-        except Exception:
-            return raw
-    return raw
-# files named in scanned text (hook entries and args, hook-manager commands, a
-# shim's --config=<path>, task-runner scripts): scanned too. A tracked name is
-# read at <rev>; an untracked (or ignored) file in the worktree is read from
-# disk ("worktree:<path>"); inside a remote hook repo (root: its cached clone
-# dir, or a fetched scratch repo), a file of that repo ("<label>:<path>").
-seen, queue, followed = set(), [], set()
-def root_has(root, p):
-    if isinstance(root, str):
-        return os.path.isfile(os.path.join(root, p))
-    r = subprocess.run(['git', '-C', root[1], 'cat-file', '-t', 'FETCH_HEAD:' + p], capture_output=True)
-    return r.returncode == 0 and r.stdout.strip() == b'blob'
-def root_read(root, p, leaf=False):
-    if isinstance(root, str):
-        return disk(os.path.join(root, p), leaf)
-    if leaf:
-        return head(['git', '-C', root[1]], 'FETCH_HEAD:' + p)
-    sized('FETCH_HEAD:' + p, ['git', '-C', root[1]])
-    r = subprocess.run(['git', '-C', root[1], 'show', 'FETCH_HEAD:' + p], capture_output=True)
-    if r.returncode != 0:
-        fail('cannot read ' + p + ' of a fetched hook repo: ' + r.stderr.decode('utf-8', 'replace').strip())
-    return charge(r.stdout, p)
-# bounded reads (3.1.0): no file over FILE_CAP is read (the scan refuses
-# it: it cannot be scanned whole), and the scan reads at most BYTE_BUDGET in
-# all; the token regex only ever runs over text read this way
-FILE_CAP = 1 << 20
-BYTE_BUDGET = 64 << 20
-read_total = [0]
-def charge(data, name):
-    if len(data) > FILE_CAP:
-        fail(name + ' is over ' + str(FILE_CAP) + ' bytes; the scan cannot read it whole')
-    read_total[0] += len(data)
-    if read_total[0] > BYTE_BUDGET:
-        fail('the scan read more than ' + str(BYTE_BUDGET) + ' bytes in all')
-    return data
-def sized(obj, g):
-    r = subprocess.run(g + ['cat-file', '-s', obj], capture_output=True)
-    if r.returncode != 0:
-        fail('cannot read ' + obj + ': ' + r.stderr.decode('utf-8', 'replace').strip())
-    if int(r.stdout.strip() or 0) > FILE_CAP:
-        fail(obj + ' is over ' + str(FILE_CAP) + ' bytes; the scan cannot read it whole')
-def hit(name, data, depth=0, root=None, label=None, leaf=False):
-    s = data if isinstance(data, str) else data.decode('utf-8', 'replace')
-    if PAT.search(s) and name not in text:
-        text.append(name)
-    if leaf:
-        return
-    t = tok_text(name, s)
-    toks = TOKEN.findall(t)
-    # a YAML hook config's surviving lines (entry, args, run) are commands
-    cmd, ran = command_names(t)
-    if all_commands(name):
-        cmd.update(os.path.normpath(x) for x in toks)
-    if base(name).endswith('.yaml') and DOCKER_LANG.search(s):
-        toks.append('Dockerfile')
-        cmd.add('Dockerfile')
-    for tok in toks:
-        p = os.path.normpath(tok)
-        if p == '..' or p.startswith('../'):
-            continue
-        # anything on a command line may run and is followed, except inert
-        # data (docs, json, txt, ...), which is only matched there (a leaf);
-        # inert data merely mentioned is not read, and a test path or
-        # Dockerfile merely mentioned past the first level is not followed
-        x = p in cmd
-        lf = inert(p) and p not in ran
-        if lf and not x:
-            continue
-        if not x and mentioned_only(p) and depth + 1 >= 2:
-            continue
-        if root is not None:
-            if (label, p) not in followed and root_has(root, p):
-                followed.add((label, p))
-                queue.append(('clone', p, depth + 1, root, label, lf, x))
-        elif p in tracked:
-            if p not in followed:
-                followed.add(p)
-                queue.append(('git', p, depth + 1, None, None, lf, x))
-        elif ('disk', p) not in followed and os.path.isfile(os.path.join(top, p)):
-            followed.add(('disk', p))
-            queue.append(('disk', p, depth + 1, None, None, lf, x))
-def disk(fp, leaf=False):
-    try:
-        with open(fp, 'rb') as fh:
-            data = fh.read(FILE_CAP + 1)
-    except OSError as e:
-        fail('cannot read ' + fp + ': ' + str(e))
-    return charge(data[:FILE_CAP] if leaf else data, fp)
-def over(kind, p, root):
-    if kind == 'git':
-        r = subprocess.run(['git', '-C', wt, 'cat-file', '-s', rev + ':' + p], capture_output=True)
-        return r.returncode == 0 and int(r.stdout.strip() or 0) > FILE_CAP
-    if kind == 'disk':
-        fp = os.path.join(top, p)
-    elif isinstance(root, str):
-        fp = os.path.join(root, p)
-    else:
-        r = subprocess.run(['git', '-C', root[1], 'cat-file', '-s', 'FETCH_HEAD:' + p], capture_output=True)
-        return r.returncode == 0 and int(r.stdout.strip() or 0) > FILE_CAP
-    try:
-        return os.path.getsize(fp) > FILE_CAP
-    except OSError:
-        return False
-def head(g, obj):
-    # the first FILE_CAP bytes of a blob, never more in memory
-    pr = subprocess.Popen(g + ['cat-file', 'blob', obj], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    data = pr.stdout.read(FILE_CAP)
-    pr.stdout.close()
-    pr.kill()
-    pr.wait()
-    return charge(data, obj)
-def blob(p):
-    sized(rev + ':' + p, ['git', '-C', wt])
-    b = git('cat-file', 'blob', rev + ':' + p)
-    if b.returncode != 0:
-        done(iac_files=files, iac_text=text, error='cannot read ' + p)
-    return charge(b.stdout, p)
-for p in paths:
-    segs = p.split('/')
-    b = segs[-1]
-    if b.lower().endswith(EXTS) or any(s in DIRS for s in segs[:-1]):
-        files.append(p)
-    if b == '.pre-commit-config.yaml' or b in ('Makefile', 'makefile', 'GNUmakefile') \
-            or segs[0] in ('.husky', '.githooks') or segs[0].startswith('.lefthook') \
-            or fnmatch.fnmatch(b, 'lefthook*.y*ml'):
-        seen.add(p)
-        hit(p, blob(p))
-    elif (b == 'package.json' and 'node_modules' not in segs) or b == 'pyproject.toml':
-        seen.add(p)
-        hit(p, view(p, blob(p)))
-# a remote hook repo the scan cannot find in the cache: a shallow fetch of its
-# pinned rev into a scratch repo outside the worktree, hooks off, https and
-# ssh only, to github.com, gitlab.com, codeberg.org or the host of the repo's
-# own origin (the hosts pre-commit itself would reach for this config), no
-# prompt, at most MAX_FETCHES fetches and FETCH_BUDGET seconds in all (3.1.0
-# review). Any failure refuses. The scratch repo is removed.
-FETCH_HOSTS = {'github.com', 'gitlab.com', 'codeberg.org'}
-MAX_FETCHES = 20
-FETCH_BUDGET = 120.0
-fetch_state = {'n': 0, 'left': FETCH_BUDGET}
-def host_of(url):
-    m = re.match(r'^https://([^/:]+)', url) or re.match(r'^git@([^:]+):', url) or re.match(r'^ssh://(?:[^@/]+@)?([^/:]+)', url) or re.match(r'^([^@/:]+@)?([A-Za-z0-9.-]+):(?!//)', url)
-    if not m:
-        return None
-    return (m.group(m.lastindex) or '').lower()
-def origin_host():
-    r = git('remote', 'get-url', 'origin')
-    return host_of(r.stdout.decode('utf-8', 'replace').strip()) if r.returncode == 0 else None
-def host_ok(h):
-    if not h or h == 'localhost' or h.endswith(('.local', '.internal', '.localhost')):
-        return False
-    if re.match(r'^[0-9.]+$', h) or ':' in h or h.startswith('['):
-        return False
-    return h in FETCH_HOSTS or h == origin_host()
-def fetch(url, rv):
-    if url.startswith(('https://', 'git@')):
-        h = host_of(url)
-        if not host_ok(h):
-            fail('remote hook repo host not allowed: ' + str(h) + '; run pre-commit install-hooks')
-    if not URL_OK.match(url):
-        fail('remote hook repo ' + url + ': transport not allowed (only https:// and git@<host>:<path>); its hook manifest cannot be scanned')
-    if rv is None or not REV_OK.match(rv) or '..' in rv:
-        fail('remote hook repo ' + url + ' is not in the pre-commit cache and it has no usable rev (' + json.dumps(rv) + '); its hook manifest cannot be scanned')
-    fetch_state['n'] += 1
-    if fetch_state['n'] > MAX_FETCHES:
-        fail('more than ' + str(MAX_FETCHES) + ' remote hook repo fetches in one scan; run pre-commit install-hooks')
-    tmp = tempfile.mkdtemp(prefix='fleet-iac-fetch-')
-    atexit.register(shutil.rmtree, tmp, True)
-    g = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.ssh.allow=always', '-c', 'http.followRedirects=false']
-    if test_instead:
-        # tests only: serve the URL from a local bare repo
-        for pre, rep in json.loads(test_instead).items():
-            g += ['-c', 'url.' + rep + '.insteadOf=' + pre]
-        g += ['-c', 'protocol.file.allow=always']
-    # the user's git config and credential helper stay (a private hook repo on
-    # an allowed host works); nothing may prompt
-    env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GIT_ASKPASS='', SSH_ASKPASS='', GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=yes')
-    why = None
-    for step in (['init', '-q', '--template=', tmp], ['-C', tmp, 'fetch', '-q', '--depth', '1', '--no-tags', url, rv]):
-        if fetch_state['left'] <= 0:
-            fail('remote hook repo fetches took more than ' + str(int(FETCH_BUDGET)) + 's in all; run pre-commit install-hooks')
-        t0 = time.monotonic()
-        try:
-            r = subprocess.run(g + step, capture_output=True, env=env, timeout=fetch_state['left'])
-        except subprocess.TimeoutExpired:
-            fetch_state['left'] = 0
-            why = 'timed out (' + str(int(FETCH_BUDGET)) + 's for all fetches)'
-            break
-        fetch_state['left'] -= time.monotonic() - t0
-        if r.returncode != 0:
-            why = r.stderr.decode('utf-8', 'replace').strip()[-300:] or 'exit ' + str(r.returncode)
-            break
-    if why is not None:
-        fail('remote hook repo ' + url + '@' + rv + ' is not in the pre-commit cache and the shallow fetch failed: ' + why)
-    root = ('fetch', tmp)
-    if not root_has(root, '.pre-commit-hooks.yaml'):
-        fail('remote hook repo ' + url + '@' + rv + ': no .pre-commit-hooks.yaml at the fetched rev')
-    return root
-# The root .pre-commit-config.yaml is parsed with PyYAML (3.1.0 review F3),
-# run as in the fixer program: pre-commit's own interpreter (or this python3)
-# with -I from /, so nothing in the worktree shadows a module. No PyYAML, a
-# config that does not parse, a repos value that is not a list or an entry
-# with no repo refuses. Each repo is paired with its own rev.
-CFG_LOADER = (
-    "import json, site, sys\n"
-    "import resource\n"
-    "for k, v in ((resource.RLIMIT_AS, 1 << 30), (resource.RLIMIT_CPU, 60)):\n"
-    "    h = resource.getrlimit(k)[1]\n"
-    "    resource.setrlimit(k, (v if h == resource.RLIM_INFINITY else min(v, h), h))\n"
-    "for p in sys.argv[1:]:\n"
-    "    if p.startswith('/nix/store/'):\n"
-    "        site.addsitedir(p)\n"
-    "try:\n    import yaml\nexcept ImportError:\n    sys.exit(3)\n"
-    # alias amplification: at most 256 KiB in, only strings out, at most 1 MiB out
-    "raw = sys.stdin.buffer.read(262145)\n"
-    "if len(raw) > 262144:\n    sys.exit(5)\n"
-    "d = yaml.safe_load(raw)\n"
-    "n = [0]\n"
-    "def s(h, k):\n    v = h.get(k)\n    if v is None:\n        return None\n    if not isinstance(v, str):\n        sys.exit(6)\n    n[0] += len(v)\n    if n[0] > 1048576:\n        sys.exit(4)\n    return v\n"
-    "if not isinstance(d, dict) or 'repos' not in d:\n"
-    "    print(json.dumps({'repos': None}))\n"
-    "elif not isinstance(d['repos'], list):\n"
-    "    print(json.dumps({'repos': 'not a list'}))\n"
-    "else:\n"
-    "    print(json.dumps({'repos': [{'repo': s(r, 'repo'), 'rev': s(r, 'rev')} if isinstance(r, dict) else {'repo': None, 'rev': None} for r in d['repos']]}))\n"
-)
-CFG_EXITS = {4: 'the loader output over 1 MiB', 5: 'the config is over 256 KiB', 6: 'a repo or rev is not a string'}
-SHELLS = ('sh', 'bash', 'dash', 'zsh', 'ksh')
-NIX_SITE = re.compile(r"'(/nix/store/[^'\s]+/site-packages)'")
-def interpreters(path, depth=0):
-    # [(interpreter, site dirs)]: a script's shebang interpreter, with the
-    # /nix/store site-packages a nix wrapped script adds to sys.path itself
-    try:
-        with open(path, 'rb') as fh:
-            head = fh.read(262144)
-    except OSError:
-        return []
-    if not head.startswith(b'#!'):
-        return []
-    words = head.split(b'\n', 1)[0][2:].decode('utf-8', 'replace').split()
-    if not words:
-        return []
-    interp = words[0]
-    if os.path.basename(interp) == 'env':
-        prog = next((w for w in words[1:] if not w.startswith('-') and '=' not in w), None)
-        interp = shutil.which(prog) if prog else None
-    text = head.decode('utf-8', 'replace')
-    sites = [m for line in text.splitlines()[:12] if 'site.addsitedir' in line or 'sys.path' in line for m in NIX_SITE.findall(line)]
-    out = [(interp, sites)] if interp else []
-    if interp and os.path.basename(interp) in SHELLS and depth < 3:
-        for t in re.findall(rb'exec\s+(?:-a\s+\S+\s+)?["\']?(/[^\s"\']+)', head):
-            t = t.decode('utf-8', 'replace')
-            if not os.path.isfile(t):
-                continue
-            with open(t, 'rb') as fh:
-                script = fh.read(2) == b'#!'
-            if script:
-                out.extend(interpreters(t, depth + 1))
-            else:
-                out.append((t, []))
-    return out
-def config_repos(raw):
-    # [(repo, rev)] or a refusal
-    cands = []
-    pc = shutil.which('pre-commit')
-    if pc:
-        cands.extend(interpreters(os.path.realpath(pc)))
-        cands.extend(interpreters(pc))
-    cands.append((sys.executable, []))
-    tried = set()
-    if len(raw) > 262144:
-        fail('.pre-commit-config.yaml: the config is over 256 KiB; its hook manifests cannot be scanned')
-    for c, sites in cands:
-        if not c or (c, tuple(sites)) in tried or os.path.basename(c) in SHELLS or os.path.basename(c) == 'env' or no_yaml:
-            continue
-        tried.add((c, tuple(sites)))
-        try:
-            r = subprocess.run([c, '-I', '-c', CFG_LOADER] + sites, input=raw, capture_output=True, timeout=60, cwd='/')
-        except OSError:
-            continue
-        except subprocess.TimeoutExpired:
-            fail('.pre-commit-config.yaml: the YAML loader timed out (' + c + ')')
-        if r.returncode in CFG_EXITS:
-            fail('.pre-commit-config.yaml: ' + CFG_EXITS[r.returncode] + '; its hook manifests cannot be scanned')
-        if r.returncode == 3 or (r.returncode != 0 and b'No module named' in r.stderr):
-            continue
-        if r.returncode != 0:
-            fail('.pre-commit-config.yaml does not parse with PyYAML (' + c + '): ' + (r.stderr.decode('utf-8', 'replace').strip().splitlines() or [''])[-1])
-        repos = json.loads(r.stdout)['repos']
-        if repos is None:
-            return []
-        if repos == 'not a list':
-            fail('.pre-commit-config.yaml: repos is not a list; its hook manifests cannot be scanned')
-        out = []
-        for e in repos:
-            if not isinstance(e.get('repo'), str) or not e['repo']:
-                fail('.pre-commit-config.yaml: a repos entry has no repo; its hook manifests cannot be scanned')
-            out.append((e['repo'], e['rev'] if isinstance(e.get('rev'), str) else None))
-        return out
-    fail('.pre-commit-config.yaml: no PyYAML (neither pre-commit\'s interpreter nor python3 has it); its hook manifests cannot be scanned')
-# remote hook repos of the root .pre-commit-config.yaml (3.1.0): their hook
-# manifest (.pre-commit-hooks.yaml) and the repo files it names, read from the
-# clone pre-commit keeps in its cache at that repo's own rev, else fetched.
-if '.pre-commit-config.yaml' in tracked:
-    remote = [(u, rv) for (u, rv) in config_repos(blob('.pre-commit-config.yaml')) if u not in ('local', 'meta')]
-    if remote:
-        pc_home = os.environ.get('PRE_COMMIT_HOME') or os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache'), 'pre-commit')
-        db = os.path.join(pc_home, 'db.db')
-        rows = []
-        if os.path.isfile(db):
-            try:
-                con = sqlite3.connect(db)
-                rows = con.execute('SELECT repo, ref, path FROM repos').fetchall()
-                con.close()
-            except sqlite3.Error as e:
-                fail('pre-commit cache ' + db + ': ' + str(e))
-        for (url, rv) in remote:
-            got = [(r, ref, path) for (r, ref, path) in rows if (r == url or r.startswith(url + ':')) and ref == rv and os.path.isdir(path)]
-            roots = [('remote:' + r + '@' + ref, path) for (r, ref, path) in got] or [('remote:' + url + '@' + str(rv), fetch(url, rv))]
-            for (label, root) in roots:
-                seen.add((label, '.pre-commit-hooks.yaml'))
-                hit(label + ':.pre-commit-hooks.yaml', root_read(root, '.pre-commit-hooks.yaml'), 0, root, label)
-hp = git('config', 'core.hooksPath').stdout.decode('utf-8', 'replace').strip()
-if hp:
-    hd = os.path.expanduser(hp)
-    if not os.path.isabs(hd):
-        hd = os.path.join(top, hd)
-else:
-    g = git('rev-parse', '--path-format=absolute', '--git-path', 'hooks')
-    if g.returncode != 0:
-        fail('hooks dir: ' + g.stderr.decode('utf-8', 'replace').strip())
-    hd = g.stdout.decode().strip()
-def shim(data):
-    # a pre-commit shim's INSTALL_PYTHON names the interpreter that runs
-    # pre-commit; a python path there is not a command, whatever its dirs
-    s = data.decode('utf-8', 'replace')
-    if '# File generated by pre-commit' not in s:
-        return s
-    def keep(m):
-        py = m.group(1)
-        venv = os.path.dirname(os.path.dirname(py))
-        ok = re.match(r'python[0-9.]*$', os.path.basename(py)) and os.path.basename(os.path.dirname(py)) == 'bin' \
-            and any(os.path.isdir(x) for x in glob.glob(os.path.join(glob.escape(venv), 'lib', 'python*', 'site-packages', 'pre_commit')))
-        return '' if ok else m.group(0)
-    return re.sub(r'(?m)^INSTALL_PYTHON=(\S+)$', keep, s)
-if os.path.isdir(hd):
-    for root, ds, fs in os.walk(hd):
-        for f in sorted(fs):
-            fp = os.path.join(root, f)
-            try:
-                with open(fp, 'rb') as fh:
-                    hit('hooks:' + os.path.relpath(fp, hd), shim(charge(fh.read(FILE_CAP + 1), fp)))
-            except OSError as e:
-                fail('cannot read hook ' + fp + ': ' + str(e))
-n = 0
-while queue:
-    kind, p, d, root, label, lf, run = queue.pop(0)
-    n += 1
-    if n > MAX_REFS:
-        fail('more than ' + str(MAX_REFS) + ' referenced files')
-    if d > MAX_DEPTH:
+MARKER = b'fleet-agent-shim: hard-rules'
+NAMES = ('terra' + 'form', 'to' + 'fu', 't' + 'fp', 'terra' + 'grunt', 'dig' + 'ger')
+store = '/nix/store/'
+for a in sys.argv[1:]:
+    if a.startswith('--store-prefix='):
+        store = a[len('--store-prefix='):]
+tools = {}
+for name in NAMES:
+    p = shutil.which(name)
+    if p is None:
+        tools[name] = None
         continue
-    # over FILE_CAP: a file in an execution context (run or given to a
-    # command) refuses; a leaf or a doc or data file merely mentioned is
-    # matched on its first FILE_CAP bytes and not followed; anything else
-    # refuses when it is read whole
-    if over(kind, p, root):
-        if run:
-            fail(p + ' is over ' + str(FILE_CAP) + ' bytes; the scan cannot read it whole')
-        if lf or inert(p):
-            lf = True
-    if kind == 'git':
-        hit(p, head(['git', '-C', wt], rev + ':' + p) if lf else blob(p), d, leaf=lf)
-    elif kind == 'disk':
-        hit('worktree:' + p, disk(os.path.join(top, p), lf), d, leaf=lf)
-    else:
-        hit(label + ':' + p, root_read(root, p, lf), d, root, label, leaf=lf)
-done(iac_files=files[:CAP], iac_text=text[:CAP])
+    real = os.path.realpath(p)
+    try:
+        with open(real, 'rb') as fh:
+            head = fh.read(65536)
+    except OSError:
+        head = b''
+    tools[name] = {'path': p, 'real': real, 'shim': real.startswith(store) and MARKER in head}
+out = {'tools': tools, 'args': sys.argv[1:]}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
 `;
-// IAC_SCAN_PY_END
+// PATH_CHECK_PY_END
+const PATH_TOOL_COUNT = 5;
+const NOT_SHIMMED = "terraform tooling on PATH is not shimmed; install the agent PATH shims (nix) before using the fleet";
 
-function iacScanPrompt(inputs) {
-  return (
-    "Infra step of the fleet workflow: scan the repo for IaC files and IaC tooling in its hooks. READ ONLY: no edits, no commits; run nothing but the one command below. Never run a hook.\n" +
-    "Inputs: " +
-    JSON.stringify(inputs) +
-    "\n" +
-    "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(IAC_SCAN_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.rev) +
-    "\n" +
-    "It prints one JSON object {iac_files, iac_text, error, digest}. Copy every value unchanged, error null included; never drop a path (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, iac_files, iac_text, error, digest}."
-  );
-}
-
-// Runs the IaC scan and stops the run on any hit, an error or a missing list.
-async function iacRefuse(label, worktree, rev, phaseName) {
-  const r = await infra(label, iacScanPrompt({ worktree, rev }), phaseName, JUDGE_AGENT);
-  if (r.error || !Array.isArray(r.iac_files) || !Array.isArray(r.iac_text))
-    halt("needs_human", IAC_REFUSAL + " (the scan could not complete: " + (r.error || "no iac_files/iac_text lists") + ")", "iac");
-  // no error here: a dropped or emptied error key is the program's null
-  if (!relayDigestOk(Object.assign({}, r, { error: null }), ["iac_files", "iac_text", "error"]))
-    halt("needs_human", IAC_REFUSAL + " (the scan could not complete: the relayed lists do not match the program's digest)", "iac");
-  const hits = r.iac_files.concat(r.iac_text);
-  if (hits.length) halt("needs_human", IAC_REFUSAL + " (" + hits.map(String).join(", ") + ")", "iac");
-  gate(label + ": no IaC files and no IaC tooling in hooks at " + rev);
+// Stops the run unless every IaC tool on the agent PATH is a nix shim.
+function pathCheck(pc) {
+  const tools = pc && typeof pc.tools === "object" && pc.tools ? pc.tools : null;
+  if (!tools || Object.keys(tools).length !== PATH_TOOL_COUNT || !Array.isArray(pc.args) || pc.args.length || !relayDigestOk(pc, ["tools", "args"]))
+    halt("needs_human", NOT_SHIMMED + " (the PATH check could not complete: preflight returned no usable path_check)", "iac");
+  const real = [];
+  for (const k of Object.keys(tools)) {
+    const t = tools[k];
+    if (t === null) continue;
+    if (!t || typeof t !== "object" || t.shim !== true) real.push(k + " at " + (t && t.path ? t.path : "?"));
+  }
+  if (real.length) halt("needs_human", NOT_SHIMMED + " (" + real.join(", ") + ")", "iac");
+  gate("PATH check: every IaC tool on the agent PATH is a nix shim, or absent");
 }
 
 // The run-state ref: refs/fleet/<task id>/state points at an annotated tag
@@ -5110,6 +4611,8 @@ async function preflightStep() {
     agentType: JUDGE_AGENT,
     phase: "Preflight",
   });
+  // Max's ruling (2026-11-09): IaC tooling may only be reachable through the nix shims
+  pathCheck(pre.path_check);
   if (!pre.reachable) halt("needs_human", "yadgar unavailable: " + (pre.reason || "role library unreachable"));
   const missing = pre.missing || [];
   if (missing.length) halt("needs_human", "role missing in yadgar: " + missing.join(", "));
@@ -6173,8 +5676,6 @@ async function planMode(input, date) {
   );
 
   const ws = await workspaceStep(brief.repo, lay);
-  // the IaC refusal: before any role runs or anything is committed
-  await iacRefuse("infra:iac-scan:plan", lay.mainWt, "HEAD", "Workspace");
   const project = input.project || ws.remoteSlug;
   const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
 
@@ -6481,9 +5982,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     fenceChanged("verify (commits since the plan commit)", v.changed_since || []);
     gate("verify: HEAD " + v.head + " descends from plan_commit by " + (v.commits_since || []).length + " fleet commit(s)");
   } else gate("verify: HEAD is plan_commit " + ref.plan_commit + "; plan hash matches");
-  // the IaC refusal again, at the branch HEAD (the plan commit or later), on
-  // every build and resume, before anything is committed or pushed
-  await iacRefuse("infra:iac-scan:verify", mainWt, v.head, "Verify");
 
   const common = { project, worktree: mainWt, branch, default_branch: defaultBranch, scratch_dir: lay.scratch };
   const planCtx = { plan_path: ref.plan_path };

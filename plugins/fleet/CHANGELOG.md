@@ -1,87 +1,97 @@
 # Changelog
 
-## [3.1.0] - 2026-11-07
+## [3.1.0] - 2026-11-09
 
-Ledger tasks 1959, 1958, 1935, 1941 and 1960, plus the review rounds of PR #38.
+Ledger tasks 1959, 1958, 1935 and 1941, the review rounds of PR #38, and Max's ruling of
+2026-11-09 on IaC tooling (task 1960 is moot: the IaC text scan it tuned is removed).
 
-**Deploy order:** update the role page `fleet-code-judge` in place to version 15 BEFORE installing
-3.1.0. Version 15 makes the `check_cmd` run required and adds the optional `check_exit` key to
-`obligations_check` entries; no key is renamed or removed, so 3.0.0 keeps running on it and logs
-"prose-only changes assumed". 3.1.0 pins `fleet-code-judge` 15: an older page stops the run in
-preflight ("... must be >= 15; update that page in place; see CHANGELOG 3.1.0 deploy order"). The
-contract marker stays `fleet-v3`.
+**Deploy order:**
+
+1. Install the nix agent PATH shims for terraform, tofu, tfp, terragrunt and digger (and the
+   docker/podman exec shims for tf-local-plan) FIRST. Each shim must live under `/nix/store/` and
+   hold the marker `fleet-agent-shim: hard-rules`. Without them, any of these tools that is on the
+   agent PATH stops every 3.1.0 run at preflight ("terraform tooling on PATH is not shimmed;
+   install the agent PATH shims (nix) before using the fleet").
+2. Update the role page `fleet-code-judge` in place to version 15. Version 15 makes the
+   `check_cmd` run required and adds the optional `check_exit` key to `obligations_check` entries;
+   no key is renamed or removed, so 3.0.0 keeps running on it and logs "prose-only changes
+   assumed". 3.1.0 pins `fleet-code-judge` 15: an older page stops the run in preflight ("... must
+   be >= 15; update that page in place; see CHANGELOG 3.1.0 deploy order").
+3. Optionally write `scope-and-plan` v28 (the hook-rule sentence; the pin stays 27).
+4. Install 3.1.0, then `/reload-plugins`.
+
+The contract marker stays `fleet-v3`.
+
+### IaC tooling: a new trust model (Max, 2026-11-09)
+
+The fleet may work on terraform and other IaC code like any other code. **Removed:** the IaC
+refusal scan of 2.1.2–3.0.0 (`IAC_SCAN_PY`, `iacRefuse`, `infra:iac-scan:plan`,
+`infra:iac-scan:verify`, the `IAC_RE` text match over hooks, task runners and the files they name)
+and everything this release had added to it (the remote hook manifest read from the pre-commit
+cache, the shallow fetch with its host allowlist and caps, the follow and leaf rules). A repo with
+IaC files or IaC tooling in its hooks no longer stops the run.
+
+What keeps IaC tooling from running now:
+
+- Max's hard rules (no terraform by any mechanism, no tf-local-plan container exec), which every
+  role inherits, and the settings.json denies on those commands;
+- the agent PATH shims nix installs: on the agent PATH, terraform, tofu, tfp, terragrunt and
+  digger reach a shim that refuses;
+- the hook gate (below): a change to anything the repo's hooks or CI run needs its own PR and
+  Max's confirmation;
+- ADR-1152 still frames the gates: they defend against reward hacking, not a hostile agent.
+
+**New: the PATH check (preflight, plan and build mode).** Preflight runs `PATH_CHECK_PY`
+(`python3 -I`, resource caps), which resolves terraform, tofu, tfp, terragrunt and digger on the
+agent PATH. A name that resolves passes only when its real path is under `/nix/store/` (which no
+role can write) and its first 64 KiB hold `FLEET_SHIM_MARKER` = `fleet-agent-shim: hard-rules`.
+Anything else stops the run before any other step: `needs_human`, `stop_gate: "iac"`, "terraform
+tooling on PATH is not shimmed; install the agent PATH shims (nix) before using the fleet". No name
+resolving at all passes. A missing or tampered result (no `path_check`, a wrong digest, any program
+argument) stops the same way.
+
+**Accepted residual:** an absolute path to a real binary, and a container image built to run
+terraform. Max's hard rules and the settings.json denies are the controls there.
+
+**Unchanged, and open for Max:** the scope fence still refuses IaC paths (`*.tf`, `terraform/`,
+Kubernetes and Helm manifests) in planned paths under `confirm: "auto"` and in a coder's changes in
+every mode. The ruling lets the fleet work on IaC code; whether that fence line should go too was
+not part of the instruction.
 
 ### New stops (fail-closed additions; no key renamed or removed)
 
-- A remote hook repo with no cached pre-commit clone at its rev is fetched shallowly at that rev.
-  A fetch that fails or times out, a rev that does not resolve, a missing manifest, a transport
-  other than `https://` and `git@<host>:<path>`, a host off the allowlist, more than 20 fetches or
-  more than 120 s of fetching stops plan and build (`stop_gate: iac`). A root
-  `.pre-commit-config.yaml` that PyYAML cannot read (or no PyYAML at all, a config over 256 KiB or
-  a non-string repo or rev), a scanned file over 1 MiB, or more than 64 MiB scanned stops them too.
+- **The PATH check** above.
+- **Hook changes are their own PR, and need Max (Max's rule).** The hook surface is every
+  hook-manager and CI path, in any case: `.pre-commit-config.yaml`, `.pre-commit-hooks.yaml`,
+  `.github/**`, `.gitea/**`, `.forgejo/**`, `.woodpecker*`, `.circleci/**`, `.gitlab-ci.yml`,
+  `.gitlab/**`, `Jenkinsfile`, `.buildkite/**`, `azure-pipelines.yml`, `bitbucket-pipelines.yml`,
+  `.husky/**`, `.githooks/**`, `lefthook*.yml`, `.lefthook*` (the scope fence refuses the same set
+  in a coder's changes). The read-only program `HOOK_SURFACE_PY` (the fixer's isolated PyYAML
+  loader, at the base and in the worktree) adds every file a hook `entry` or `args` names (a
+  `--flag=value` only when the value is an executable script, so `--config=pyproject.toml` is not
+  surface), `-m pkg.mod` as `pkg/mod.py` and `pkg/mod/__main__.py` (any `-m` form, `-Im`
+  included), every Makefile and `*.mk` for a hook that runs `make`, the in-repo target of every
+  surface symlink, one level of what the hook scripts load (repo-local Python imports, from the
+  repo root and the script's directory; shell `source`/`.`; scripts they run directly with
+  `bash`/`sh`/`python`/`node` or `./X`; a Python script that does not parse puts its directory in
+  the surface), the scripts CI and hook-manager files name (`.github/actions`, husky, githooks,
+  lefthook, the hooks dir, `package.json` scripts; one that does not parse or is over 1 MiB
+  refuses), and the `core.hooksPath` directory. `Makefile`, `package.json` and `pyproject.toml`
+  alone are not surface: they are task runners every version bump touches. The plan scope
+  (`allowed_additions.files`, obligation files, criterion test files, caller occurrences mapped to
+  a criterion) is checked before the audit (`infra:hook-surface:plan`), and the approved tree's
+  diff from the plan commit right before the commit (`infra:hook-surface:r<n>`). Surface and
+  anything else stop with "hook changes must be a separate PR (Max's rule)"; surface only stops
+  with "hook change needs Max's confirmation". Both are `needs_human`, `stop_gate: "hooks"`, in
+  every confirm mode. A surface that cannot be computed (no PyYAML, a parse error, a capped value)
+  refuses. The `scope-and-plan` page gets one sentence telling the planner so (prepared, not
+  written; the pin stays 27, because the rule lives in script code).
 - The fixer step refuses a hook config over 256 KiB, a non-string `entry` or `language`, or `args`
   that is not a list of strings (pre-commit's own schema requires a list).
-- A code-judge `approve` becomes a `fix_code` round when an allowlisted `check_cmd` exited
-  non-zero, has no `check_exit` and no `gates_not_run` entry `check_cmd:<id>`, or when the change
-  edits what that `check_cmd` runs and the obligation does not list the file.
+- A code-judge `approve` becomes a `fix_code` round when an allowlisted `check_cmd` exited with
+  anything but the integer 0, has no `check_exit` and no `gates_not_run` entry `check_cmd:<id>`,
+  or when the change edits what that `check_cmd` runs and the obligation does not list the file.
 - A push whose output mixes the hook's lines with git's (`ambiguous`) stops for a human.
-- **Hook changes are their own PR, and need Max (Max's rule).** The hook surface is
-  `.pre-commit-config.yaml`, every file a hook `entry` or `args` names (and its `-m` module
-  files; the program `HOOK_SURFACE_PY` computes them with the fixer's isolated PyYAML loader, at
-  the base and in the worktree), `.github/workflows/**`, `.gitlab-ci.yml` and `.forgejo/**`. A
-  plan scope (`allowed_additions.files`, obligation files, the paths of caller occurrences mapped to
-  a criterion) checked before the audit (`infra:hook-surface:plan`), and the approved tree's diff
-  from the plan commit checked right before the commit (`infra:hook-surface:r<n>`), stop with
-  `needs_human` and `stop_gate: "hooks"`: "hook changes must be a separate PR (Max's rule)" when
-  they touch the surface and anything else, "hook change needs Max's confirmation" when they touch
-  only the surface. There is no automatic path, not even under `confirm: "auto"`. A surface that
-  cannot be computed (no PyYAML, a parse error, a capped value) refuses. Delta review: the static
-  part is every hook-manager and CI path, in any case: `.pre-commit-config.yaml`,
-  `.pre-commit-hooks.yaml`, `.github/**`, `.gitea/**`, `.forgejo/**`, `.woodpecker*`,
-  `.circleci/**`, `.gitlab-ci.yml`, `.gitlab/**`, `Jenkinsfile`, `.buildkite/**`,
-  `azure-pipelines.yml`, `bitbucket-pipelines.yml`, `.husky/**`, `.githooks/**`, `lefthook*.yml`,
-  `.lefthook*` (the scope fence refuses the same set in a coder's changes). `Makefile`,
-  `package.json` and `pyproject.toml` are not hook surface by themselves: they are task runners,
-  and every version bump touches them; a hook that runs `make` puts every Makefile and `*.mk` in
-  the surface. The program also adds `-m pkg.mod` as `pkg/mod.py` and `pkg/mod/__main__.py` (any
-  `-m` form, `-Im` included), the in-repo target of every surface symlink, one level of what the
-  hook scripts load (repo-local Python imports, resolved from the repo root and from the script's
-  directory; shell `source`/`.` of repo paths; a Python script that does not parse puts its whole
-  directory in the surface), the scripts CI files name, and the `core.hooksPath` directory. A
-  `--flag=value` counts only when the value is an executable script, so
-  `--config=pyproject.toml` is not surface. The plan scope also includes `criteria[].test_files`.
-  F2 also covers the repo paths a `make <target>` check_cmd's recipe names; modules a check script
-  imports are still not traced. Security review: hook-manager files (`.github/actions/**`,
-  `.husky/**`, `.githooks/**`, lefthook configs, the `core.hooksPath` directory, `package.json`
-  scripts) are traced like CI files for the scripts they name, and a hook shell script's directly
-  run scripts (`bash`/`sh`/`python`/`node X`, `./X`) join the surface; a hook-manager file that
-  does not parse (a `package.json` that is not JSON) or is over 1 MiB refuses. The
-  `scope-and-plan` page gets one sentence telling the planner so, with the full path list
-  (prepared, not written; the pin stays 27, because the rule lives in script code).
-- **Delta review LOW.** The hook-repo fetch adds `http.followRedirects=false`, and its test-only URL
-  rewrite moved from the environment to argv (`--test-instead-of=`). A git-lfs `batch request:`,
-  `batch response:` or `LFS:` line next to a declined push is `ambiguous`, not `hook_rejected`.
-  The slug-collision check runs in code: the judge's read after the write returns the page's
-  `page_project` and `page_tags`, and the script requires this project and the tag
-  `ledger-<id>`. `fleet:judge` denies the remaining yadgar writers (`add_rule`, `anchor_renew`,
-  `archive_purge`, `backup_restore`, the bookmark writers, `bootstrap_project`, `checkpoint`,
-  `config_delete`, `consolidate_now`, `de_anchor`, `discipline_save`, the DLQ writers,
-  `install_hooks`, `project_register`, `project_seed`, `reembed_all`, the seed tools,
-  `sync_instructions`, `update_active_work`, the vacuum tools, `wiki_autolink`,
-  `wiki_write_task_list`). An oversized doc or data file in an execution context now refuses;
-  only a merely-mentioned leaf is matched on its first 1 MiB. The execution context separates what
-  is run (an interpreter's first operand, a sourced file, a `<` redirect, a `-f` file, a hook
-  `entry`'s program, `./X`: traced like a script) from the other operands of that command (data a
-  script is given: matched, never followed out of). A baseline JSON passed to a check script is
-  therefore matched, but the modules it names are not scanned. **Security review, final rule:**
-  there is no first-operand split. Every name on a command line (any operand of an interpreter,
-  `exec`, `env`, `xargs` or `cat`, a sourced file, a `<` redirect, a `-f` file, `./X`), on a hook
-  config's surviving lines, or in a hook-manager, hooks-dir or Makefile text (comment lines
-  dropped) may run and is followed: test scripts, Dockerfiles, `pyproject.toml` and
-  `package.json` (read raw) included. Only inert data (`.json` other than `package.json`, `.txt`,
-  `.md`, `.csv`, `.jsonl`, `.rst`, images, ...) may be a leaf: matched, never followed, and only
-  when it is an operand; a sourced, redirected, `-f` or `./` data file is followed like a script;
-  inert data merely mentioned in a script is not read.
 - A verify, commit-plan or `hook_rejected` push relay that does not match its program's digest,
   or whose program ran on other arguments, fails the run.
 
@@ -100,15 +110,15 @@ contract marker stays `fleet-v3`.
   passed, and stops the run (`failed`) on any difference or a missing list. Both programs run with
   `python3 -I`, take the worktree as an argument and change to `/` before they run git.
 - **The push classifier is a program** (ledger 1935c). `infra:push` runs `PUSH_CLASSIFY_PY` on the
-  first attempt's output and exit code; it prints `{push_result, exit_code, hook_tail, args,
-digest}`. It reads line-start prefixes only, and a pre-push hook can print the same prefixes, so
-  no rule retries what may be a hook's verdict (a retry re-runs the hook): `error: failed to push
-  some refs` (git's line for a declined pre-push hook) with exit 1 and no ` ! [` is
-  `hook_rejected`, unless a `fatal:` or `error: RPC failed` line is there too, which is the new
-  `ambiguous` (a stop for a human). A git-lfs pre-push network failure is `hook_rejected`. Only an
-  output with no hook verdict is `network` and retried. The script accepts `hook_rejected` only
-  with exit code 1, the program's digest and `args` that name a file outside the worktree and that
-  exit code.
+  first attempt's output (its last 1 MiB) and exit code; it prints
+  `{push_result, exit_code, hook_tail, args, digest}`. It reads line-start prefixes only, and a
+  pre-push hook can print the same prefixes, so no rule retries what may be a hook's verdict (a
+  retry re-runs the hook): `error: failed to push some refs` (git's line for a declined pre-push
+  hook) with exit 1 and no ` ! [` is `hook_rejected`; with another exit code, or with a `fatal:`,
+  `error: RPC failed` or git-lfs line (`batch request:`, `batch response:`, `LFS:`), it is the new
+  `ambiguous` (a stop for a human). Only an output with no hook verdict is `network` and retried.
+  The script accepts `hook_rejected` only with exit code 1, the program's digest and `args` that
+  name a file outside the worktree and that exit code.
 - **CI-only obligations are checked before the push** (ledger 1935b). The code judge (page 15)
   runs every allowlisted `check_cmd` in a scratch worktree loaded with the judged tree and reports
   `check_exit`. On `approve`, the obligations gate converts the verdict to `fix_code` for an
@@ -118,86 +128,48 @@ digest}`. It reads line-start prefixes only, and a pre-push hook can print the s
   workflow script still runs no planner command. In `commands`, a check_cmd shows
   `code-judge (required)` as its `run_by`.
 - **The coder may not edit what a check_cmd runs** (review F2). On `approve`, a change from the
-  plan commit to the judged tree that touches the check_cmd's script, a Makefile or `*.mk` (for
-  `make <target>`) or `.pre-commit-config.yaml` (for `pre-commit run <id>`) is a `fix_code` round,
-  unless the obligation's `files` list that path. A local hook's entry file was already refused by
-  the fixer step (`infra:format-code`). Limit: a module that a check script imports is not traced.
+  plan commit to the judged tree that touches the check_cmd's script, a Makefile or `*.mk` or a
+  repo path the `make <target>` recipe names (for `make`), or `.pre-commit-config.yaml` (for
+  `pre-commit run <id>`) is a `fix_code` round, unless the obligation's `files` list that path. A
+  local hook's entry file was already refused by the fixer step. Limit: a module that a check
+  script imports is not traced.
 - **`gates_not_run` is a union** (review). The PR states every gate the code judge lists plus every
-  gate the script knows did not run; the judge's list no longer replaces the script's.
+  gate the script knows did not run.
 - **Write-back to a yadgar ledger task without a body page** (ledger 1958). A read-only judge step
   (`infra:ledger-read:pre`, `fleet:judge`) reads every ledger task first. A task with a body page
   goes to the append step (`infra:ledger-writeback`, as in 3.0.0). For a task with none,
   `infra:ledger-body` runs on the new `fleet:ledger-writer` agent: it re-reads the task (title byte
   for byte, else it writes nothing), creates the page with `wiki_add` at the slug the script
-  computes, `{project with / as _}_task-<id>` (`upsert=False`, `wait=True`; on `slug_exists` the
-  page must carry this project and the tag `ledger-<id>`, else "slug collision" and nothing is
-  written; it is appended to only when it lacks the marker, never overwritten), and links it with
-  `task_write(project_id, id, title=<the title the judge read>, body_slug=<slug>)`. A second judge
-  read (`infra:ledger-read:post`) must show the same title, the computed `body_slug` and the
-  marker; otherwise the entry fails and hands `section_text` back, and a changed title is named
-  ("restore the title by hand"). The title must have 1 to 200 code points. **The title check
-  works at the relay level only:** `task_write` requires a title on every update, so the write
-  itself can change it; the reads before and after detect that, they cannot prevent it. A project
-  that is not `<owner>/<repo>` writes nothing. The yaadgaar path is unchanged.
+  computes, `{project with / as _}_task-<id>` (`upsert=False`, `wait=True`; it never overwrites an
+  existing page and appends to one only when it lacks the marker), and links it with
+  `task_write(project_id, id, title=<the title the judge read>, body_slug=<slug>)`. Any status
+  other than `written` fails the entry before any further read. A second judge read
+  (`infra:ledger-read:post`) must show the same title, the computed `body_slug`, the marker, and the
+  page's `page_project` and `page_tags` must be this project and include `ledger-<id>` (a slug
+  collision check in code: `a_b/c` and `a/b_c` share a slug); otherwise the entry fails and hands
+  `section_text` back, and a changed title is named ("restore the title by hand"). The title must
+  have 1 to 200 code points. **The title check works at the relay level only:** `task_write`
+  requires a title on every update, so the write itself can change it; the reads before and after
+  detect that, they cannot prevent it. A project that is not `<owner>/<repo>` writes nothing. The
+  yaadgaar path is unchanged.
 - **Agent tools** (review F1). `fleet:ledger-writer` has a `tools:` allowlist: `ToolSearch`,
   `StructuredOutput` and `mcp__yadgar__task_get`, `wiki_read`, `wiki_add`, `wiki_append_section`
-  and `task_write`; nothing else (no shell, no files, no other agent, no other MCP server).
-  `fleet:judge` keeps its denylist (it needs `Bash` and many read tools), extended to every yadgar
-  writer: `task_write`, the `wiki_*` writers, `memorize`, `forget`, `memory_update`, `anchor`, the
-  `block_*` writers, `adr_add`, `agent_prompt_save` and `config_set`. For the judge this is hygiene
-  only: it has `Bash`.
-- **IaC scan: remote hook manifests and untracked hook scripts** (ledger 1941b). The root
-  `.pre-commit-config.yaml` is parsed with PyYAML, run as in the fixer program (pre-commit's own
-  interpreter, else `python3`, `-I`, from `/`); each repo is paired with its own rev. For every
-  remote hook repo the scan reads `.pre-commit-hooks.yaml` and the files it names from the
-  pre-commit cache clone at that rev (`db.db`; a key with `additional_dependencies` counts too).
-  With no cached clone, it fetches: `git init` of a scratch repo outside the worktree (hooks off),
-  a shallow `git fetch --depth 1` of the url and rev, then `git show` of the manifest at
-  `FETCH_HEAD`; the scratch repo is removed. The fetch is limited to `https://` and
-  `git@<host>:<path>` (`protocol.allow=never` plus https and ssh), to the hosts `github.com`,
-  `gitlab.com`, `codeberg.org` and the host of the repo's own `origin` (never an IP literal,
-  `localhost`, `*.local` or `*.internal`), to 20 fetches and 120 s in all, with no prompt
-  (`GIT_TERMINAL_PROMPT=0`, an empty `GIT_ASKPASS`, `ssh -o BatchMode=yes -o
-StrictHostKeyChecking=yes`). The user's git config and credential helper stay, so a private hook
-  repo on an allowed host works; the helper sends a host's credentials only to that host. These
-  are the hosts pre-commit itself reaches for the same config at install time. The scan also reads
-  an untracked or ignored worktree file that a scanned hook text names (`worktree:<path>`). Not
-  closed, and documented: code inside an installed hook package named by a command, test code, and
-  remote manifests of configs other than the root one.
-- **IaC scan follows only names that can run** (ledger 1960). At 3.0.0 the scan refused ccpm and
-  yadgar themselves: it followed names into README, CHANGELOG, plugin manifests, a Dockerfile named
-  only in a `files:` filter, and test data. Now it never follows prose, docs or data (`*.md`,
-  `*.txt`, `*.jsonl`, CHANGELOG, LICENSE, `*.json` other than `package.json` and hook configs), a
-  name on a `files`/`exclude`/`name`/`description`/`id` line of a YAML file or in a YAML comment,
-  and follows test paths and Dockerfiles only when a hook surface names them directly. A followed
-  `package.json` or `pyproject.toml` is read like a root one (scripts and task tables only).
-  `language: docker` now scans the repo's `Dockerfile`. A pre-commit shim's `INSTALL_PYTHON`
-  python path is not matched. The text of every surface is still matched in full, comments too.
-  **Delta review (restores every 3.0.0 refusal):** a file a hook's command text puts in an
-  execution context (given to `bash`/`sh`/`node`/`python`/`ruby`/`perl`/`exec`/`xargs`/`env`/`cat`,
-  sourced with `source` or `.`, read through `<`, or named by `-f`; never across a line, so a
-  shebang names nothing) is matched at any depth, docs, data, tests and Dockerfiles included. Such
-  leaf files, and a followed `pyproject.toml` or `package.json` (read raw), are matched but never
-  followed out of. A leaf over 1 MiB is matched on its first 1 MiB instead of refused; an
-  executable over 1 MiB is still refused. `INSTALL_PYTHON` is stripped only when its directory is
-  the `bin` of a venv whose site-packages holds `pre_commit`. `tofu` is matched everywhere except
-  after `in` (`IntoFuture` no longer matches; `tofu_fmt`, `opentofu`, `mytofu` and `run-tofu`
-  still do). A doc, data, test or Dockerfile in an execution context (sourced, run, a hook entry)
-  is traced like any script; only one that is merely mentioned is a leaf.
+  and `task_write`; nothing else. Not verified: whether the allowlist also governs MCP tools loaded
+  later through ToolSearch. `fleet:judge` keeps its denylist (it needs `Bash` and many read
+  tools), extended to every yadgar writer; for the judge this is hygiene only, because it has
+  `Bash`.
 - **Resource caps on every embedded program** (security review). Every embedded Python program
-  (and both YAML loaders) sets `RLIMIT_AS` (1 GiB; the loaders too) and `RLIMIT_CPU` (300 s; the
-  loaders 60 s) before it does anything, and tunes git's children to stay inside them
-  (`core.packedGitWindowSize`, `core.packedGitLimit`, `core.bigFileThreshold`, `pack.threads`,
-  `MALLOC_ARENA_MAX`, through `GIT_CONFIG_COUNT`). The repo's own hooks, which the fixer program
-  runs through pre-commit, get the soft limits lifted back. Both YAML loaders read at most
-  256 KiB, emit only string values (`repo`, `rev`, `entry`, `language`; `args` must be a list of
-  strings), have no `default=str`, and stop past 1 MiB of output; a timeout, a non-string value or
-  an oversized config is a refusal. The hasher reads only strings from the config too, and hashes
-  files 1 MiB at a time. The IaC scan reads no file over 1 MiB (it refuses: such a file cannot be
-  scanned whole) and at most 64 MiB in all; its token regex only runs over text read that way. The
-  push classifier reads the last 1 MiB of the push output. A 2026-11-07 test of a billion-laughs
-  config against the 3.1.0 draft loader, which had none of these caps, grew without bound on the
-  development machine; the same test now refuses in about a second.
+  (and both YAML loaders) sets `RLIMIT_AS` (1 GiB) and `RLIMIT_CPU` (300 s; the loaders 60 s)
+  before it does anything, and tunes git's children to stay inside them (`core.packedGitWindowSize`,
+  `core.packedGitLimit`, `core.bigFileThreshold`, `pack.threads`, `MALLOC_ARENA_MAX`, through
+  `GIT_CONFIG_COUNT`). The repo's own hooks, which the fixer program runs through pre-commit, get
+  the soft limits lifted back. Both YAML loaders read at most 256 KiB, emit only string values
+  (`entry`, `language`; `args` must be a list of strings), have no `default=str`, and stop past
+  1 MiB of output; a timeout, a non-string value or an oversized config is a refusal. The hasher
+  reads only strings from the config too, and hashes files 1 MiB at a time. A 2026-11-07 test of a
+  billion-laughs config against a draft loader without these caps grew without bound on the
+  development machine (`json.dumps` walked the shared alias references); the same test now refuses
+  in about a second.
 - **Writers and the test judge get the plan's env** (ledger 1935a): already true in 3.0.0 (they get
   the whole `test_cmd`, `env` included, plus `test_env`); a regression test now pins it.
 
@@ -208,8 +180,11 @@ StrictHostKeyChecking=yes`). The user's git config and credential helper stay, s
   and 503 on `info/refs`. Derived (not observed): an RPC failure without its `fatal:` line, a hook
   that prints a line-start `fatal:`, a git-lfs pre-push network failure, and a gh 5xx error string
   in `remote_head`.
-- IaC fetch tests serve hook repos from local bare repos through a test-only URL rewrite
-  (`FLEET_IAC_TEST_INSTEADOF`), so CI needs no network.
+- Every `python3` a test starts is bounded by a timeout and an output cap; the suite is run under
+  `systemd-run --user --scope -p MemoryMax=4G -p MemorySwapMax=0`.
+- Survivor tests M11c (exit code other than 1 is never `hook_rejected`), M20 (a ledger-writer
+  status other than `written` fails before the post-read) and N7 (a script a hook's args name is
+  hook surface).
 
 ## [3.0.0] - 2026-11-07
 
