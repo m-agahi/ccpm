@@ -128,7 +128,7 @@ const RELAY_KEYS = [
 ];
 // 3.1.0: the IaC push gate program's output, with its digest
 function tfGateRelay(over) {
-  const r = Object.assign({ status: "ok", reason: "scanned", touched: false, iac_files: [], problems: [], hints: [], args: ["/r/.claude/worktrees/fleet-l42-add-thing/main", "master", "0".repeat(40)] }, over);
+  const r = Object.assign({ status: "ok", reason: "scanned", touched: false, iac_files: [], problems: [], hints: [], args: ["/r/.claude/worktrees/fleet-l42-add-thing/main", "master", "0".repeat(40), "git@github.com:o/r.git"] }, over);
   r.digest = sha256(canon({ touched: r.touched, iac_files: r.iac_files, problems: r.problems, hints: r.hints, args: r.args }));
   return r;
 }
@@ -216,12 +216,12 @@ async function runOne(script, args0) {
     // 3.1.0: unscripted IaC pre-push gates find no IaC file in the PR diff
     if (!(label in script) && /^infra:tf-gate:/.test(label)) {
       const i = inputsOf(prompt);
-      return tfGateRelay({ args: [i.main_worktree, i.default_branch, i.approved_sha] });
+      return tfGateRelay({ args: [i.main_worktree, i.default_branch, i.approved_sha, i.remote_url] });
     }
     // 3.1.0: unscripted remote-head reads find no remote branch
     if (!(label in script) && /^infra:remote-head:/.test(label)) {
       const i = inputsOf(prompt);
-      const r = { status: "ok", reason: "read", head: null, args: [i.main_worktree, i.branch] };
+      const r = { status: "ok", reason: "read", head: null, args: [i.main_worktree, i.branch, i.remote_url] };
       r.digest = sha256(canon({ head: r.head, args: r.args }));
       return r;
     }
@@ -547,6 +547,7 @@ function happy(over = {}) {
       default_branch: "master",
       base_ref: "B0",
       remote_slug: "o/r",
+      remote_url: "git@github.com:o/r.git",
     },
     "role:scope-and-plan": {
       status: "ok",
@@ -10241,6 +10242,22 @@ const LOCK = "." + TFW + ".lock.hcl";
 const TG = "terra" + "grunt.hcl";
 const DG = "dig" + "ger.yml";
 
+// The sealed URL the tests pass, and a global git config (the user's own,
+// outside the threat model) that maps it to the test origin.
+const TEST_URL = "https://example.invalid/o/r.git";
+function testGitEnv(home) {
+  const cfg = join(home, "global.gitconfig");
+  writeFileSync(cfg, "[url \"" + join(home, "origin.git") + "\"]\n\tinsteadOf = " + TEST_URL + "\n[protocol \"file\"]\n\tallow = always\n");
+  return Object.assign({}, process.env, { GIT_CONFIG_GLOBAL: cfg });
+}
+function markerScript(home, name) {
+  const marker = join(home, name + ".ran");
+  const script = join(home, name + ".sh");
+  writeFileSync(script, "#!/bin/sh\ntouch " + JSON.stringify(marker) + "\nexit 1\n");
+  spawnSync("chmod", ["+x", script]);
+  return { script, marker };
+}
+
 function tfGateRun(base, change, del, opts = {}) {
   const home = mkdtempSync(join(tmpdir(), "fleet-tfgate-"));
   const wt = join(home, "repo");
@@ -10282,8 +10299,17 @@ function tfGateRun(base, change, del, opts = {}) {
       sh(c, "git", "commit", "-qm", "later");
       sh(c, "git", "push", "-q", "origin", "HEAD:refs/heads/master");
     }
+    // a role edits the repo config: none of it may reach the program's git
+    for (const [k, v] of opts.repoConfig || []) sh(wt, "git", "config", k, v);
+    if (opts.evil) {
+      // a decoy origin whose default is the branch head (an empty diff if used)
+      const evil = join(home, "evil.git");
+      spawnSync("git", ["init", "-q", "--bare", evil]);
+      sh(wt, "git", "push", "-q", evil, "HEAD:refs/heads/master");
+      sh(wt, "git", "config", "url." + evil + ".insteadOf", "https://example.invalid/");
+    }
     const prog = extractPy("TF_GATE_PY_BEGIN", "TF_GATE_PY_END", "TF_GATE_PY");
-    const r = spawnSync("python3", ["-I", "-c", prog, wt, "master", head], { encoding: "utf8", cwd: home });
+    const r = spawnSync("python3", ["-I", "-c", prog, wt, "master", head, opts.url || TEST_URL], { encoding: "utf8", cwd: home, env: testGitEnv(home) });
     if (opts.raw) return r;
     assert.equal(r.status, 0, r.stderr);
     return JSON.parse(r.stdout);
@@ -10367,7 +10393,7 @@ test("3.1.0 IaC pre-push gate hint 4 and 5: any digger config change, or a CI fi
 // ADR-1175: every IaC diff stops before the push; content checks are hints only
 const gateFor = (over) => (prompt) => {
   const i = inputsOf(prompt);
-  return tfGateRelay(Object.assign({ args: [i.main_worktree, i.default_branch, i.approved_sha] }, over));
+  return tfGateRelay(Object.assign({ args: [i.main_worktree, i.default_branch, i.approved_sha, i.remote_url] }, over));
 };
 
 test("3.1.0 IaC push gate: a plain .tf change stops at iac-push before the push, under confirm ask and auto; the stop names branch, sha, files and the push command", async () => {
@@ -10463,7 +10489,7 @@ function iacScript(mk, head) {
   };
   s["infra:remote-head:push"] = (prompt) => {
     const i = inputsOf(prompt);
-    const r = { status: "ok", reason: "read", head: head === "approved" ? sha : head, args: [i.main_worktree, i.branch] };
+    const r = { status: "ok", reason: "read", head: head === "approved" ? sha : head, args: [i.main_worktree, i.branch, i.remote_url] };
     r.digest = sha256(canon({ head: r.head, args: r.args }));
     return r;
   };
@@ -10515,13 +10541,24 @@ test("3.1.0 ADR-1175: the remote head program reads origin's branch head, null w
     sh(wt, "git", "remote", "add", "origin", bare);
     sh(wt, "git", "push", "-q", "origin", "HEAD:refs/heads/fleet/l42-x");
     const head = sh(wt, "git", "rev-parse", "HEAD").trim();
+    // a role's repo config edits: a marker sshCommand and uploadpack, and an insteadOf decoy
+    const m1 = markerScript(home, "ssh");
+    const m2 = markerScript(home, "upload");
+    const evil = join(home, "evil.git");
+    spawnSync("git", ["init", "-q", "--bare", evil]);
+    sh(wt, "git", "config", "core.sshCommand", m1.script);
+    sh(wt, "git", "config", "remote.origin.uploadpack", m2.script);
+    sh(wt, "git", "config", "url." + evil + ".insteadOf", "https://example.invalid/");
     const prog = extractPy("REMOTE_HEAD_PY_BEGIN", "REMOTE_HEAD_PY_END", "REMOTE_HEAD_PY");
-    const go = (branch) => spawnSync("python3", ["-I", "-c", prog, wt, branch], { encoding: "utf8", cwd: home });
+    const env = testGitEnv(home);
+    const go = (branch, url) => spawnSync("python3", ["-I", "-c", prog, wt, branch, url || TEST_URL], { encoding: "utf8", cwd: home, env });
     let r = go("fleet/l42-x");
     assert.equal(r.status, 0, r.stderr);
     let o = JSON.parse(r.stdout);
-    assert.equal(o.head, head);
-    assert.deepEqual(o.args, [wt, "fleet/l42-x"]);
+    assert.equal(o.head, head, "the decoy origin was not used");
+    assert.deepEqual(o.args, [wt, "fleet/l42-x", TEST_URL]);
+    assert.ok(!existsSync(m1.marker) && !existsSync(m2.marker), "no repo-config command ran");
+    for (const bad of [bare, "file://" + bare, "ext::sh -c x", "-u", "ssh://h/x"]) assert.notEqual(go("fleet/l42-x", bad).status, 0, bad);
     assert.equal(o.digest, sha256(canon({ head: o.head, args: o.args })));
     o = JSON.parse(go("fleet/l42-gone").stdout);
     assert.equal(o.head, null);
@@ -10608,12 +10645,71 @@ test("3.1.0 final review MED: no readable origin refuses (fail closed)", { skip:
   assert.equal(r.stdout, "");
 });
 
+test("3.1.0 URL review: the gate's network git ignores a repo config sshCommand, uploadpack and insteadOf", { skip: !HAVE_PY }, () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-urlrev-"));
+  try {
+    const m1 = markerScript(home, "ssh");
+    const m2 = markerScript(home, "upload");
+    const o = tfGateRun({ "infra/main.tf": MAIN }, { "infra/main.tf": MAIN.replace('"x"', '"y"') }, [], {
+      moveLocal: true,
+      advance: true,
+      evil: true,
+      repoConfig: [["core.sshCommand", m1.script], ["remote.origin.uploadpack", m2.script], ["credential.helper", "!" + m1.script]],
+    });
+    assert.deepEqual(o.iac_files, ["infra/main.tf"], "the decoy origin was not used");
+    assert.deepEqual(o.args.slice(3), [TEST_URL]);
+    assert.ok(!existsSync(m1.marker), "sshCommand or helper never ran");
+    assert.ok(!existsSync(m2.marker), "uploadpack never ran");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("3.1.0 URL review: the gate refuses a URL that is not https or git@host:", { skip: !HAVE_PY }, () => {
+  for (const url of ["/srv/o.git", "file:///srv/o.git", "ext::sh -c id", "--upload-pack=x", "ssh://h/o.git", "https://h/o.git x"]) {
+    const r = tfGateRun({ "infra/main.tf": MAIN }, { "src/a.py": "x = 1\n" }, [], { url, raw: true });
+    assert.notEqual(r.status, 0, url);
+  }
+});
+
+test("3.1.0 URL review: the plan seals origin's URL; no sealed URL, or a URL changed since the plan, stops the push gate", async () => {
+  // sealed and used
+  let s = happy();
+  let seen = null;
+  s["infra:tf-gate:push"] = (prompt) => {
+    seen = inputsOf(prompt);
+    return gateFor({})(prompt);
+  };
+  let out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(seen.remote_url, "git@github.com:o/r.git");
+  assert.ok(call(out, "infra:tf-gate:push").prompt.includes("'" + "git@github.com:o/r.git" + "'"));
+  // a URL that is not https or git@host: is never sealed
+  for (const bad of ["/srv/o.git", "github-personal:o/r.git", "ext::sh -c id"]) {
+    s = happy();
+    s.workspace = Object.assign({}, s.workspace, { remote_url: bad });
+    out = await run(s, ARGS);
+    assert.equal(out.result.stop_gate, "iac", bad);
+    assert.match(out.result.reason, /no sealed origin URL/, bad);
+    assert.ok(!pushed(out));
+  }
+  // the URL changed between the plan and the build
+  s = happy();
+  let n = 0;
+  const ws = s.workspace;
+  s.workspace = () => Object.assign({}, ws, { remote_url: n++ === 0 ? "git@github.com:o/r.git" : "git@evil.example:o/r.git" });
+  out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "iac");
+  assert.match(out.result.reason, /URL changed since the plan/);
+  assert.ok(!pushed(out));
+});
+
 test("3.1.0 final review P7: a remote-head relay with other args (digest recomputed) stops at iac-push", async () => {
   const s = iacScript(() => happy(), "approved");
   const inner = s["infra:remote-head:push"];
   s["infra:remote-head:push"] = (prompt) => {
     const r = inner(prompt);
-    r.args = [r.args[0], "fleet/other"];
+    r.args = [r.args[0], "fleet/other", r.args[2]];
     r.digest = sha256(canon({ head: r.head, args: r.args }));
     return r;
   };

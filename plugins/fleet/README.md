@@ -580,7 +580,11 @@ rulesets and secret-like paths.
 automatically; the fleet stops and hands the push to Max. Content checks are hints only. Before
 every push, `infra:tf-gate:push` runs `TF_GATE_PY` (`python3 -I`, caps) on the PR diff. Its base
 comes from origin itself (`git ls-remote`, then a fetch of that sha when the repo lacks it), never
-from the local origin ref; either failing stops the run.
+from the local origin ref; either failing stops the run. The URL is origin's configured URL sealed
+in the plan ref (https or `git@host:` only); the network reads run in a bare scratch repo with
+command-line overrides, so no repo config (`sshCommand`, `uploadpack`, `insteadOf`, helpers) reaches
+them. No sealed URL, or a URL changed since the plan, stops at `iac`. Residual (ADR-1152): edits to
+the user's global git config or environment.
 When the diff touches any IaC file (`*.tf`, `*.tofu`, `*.tf.json`, `*.tofu.json`, `*.tfvars`, `*.tfvars.json`, `*.tofuvars`,
 `*.tofuvars.json`, any `*.hcl` or `*.hcl.json` (the lock file and the grunt configs included), `*.tfbackend`,
 `.terraform-version`, `.opentofu-version`, `.tofu-version`, `atlantis.y*ml`, `digger.y*ml`, a

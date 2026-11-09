@@ -74,7 +74,19 @@ argument checked) reads the PR diff (`merge-base..<approved sha>`). The base com
 itself: the program reads `refs/heads/<default>` with `git ls-remote` (never the local
 `refs/remotes/origin/<default>`, which a role's shell can move) and fetches that one sha when the
 repo lacks it (a full fetch: `--depth` would mark a full clone shallow once origin is further
-ahead). Either failing stops the run. When it touches any IaC file
+ahead). Either failing stops the run.
+
+The network reads never go through the repo's own config, which a role can edit (`core.sshCommand`,
+`remote.origin.uploadpack`, `insteadOf`, credential helpers). The plan seals origin's configured URL
+(`plan_facts.remote_url`, https or `git@host:` form only) before any role runs; the programs pass
+that URL straight to `ls-remote` and `fetch`, read in a fresh bare scratch repo that borrows the
+repo's objects (alternates), and override `core.sshCommand` (`ssh -o BatchMode=yes`),
+`core.askPass`, `core.fsmonitor`, `core.hooksPath`, the upload-pack and the allowed protocols (https
+and ssh only) on the command line, with `GIT_TERMINAL_PROMPT=0` and `GIT_CONFIG_NOSYSTEM=1`. A plan
+ref without a sealed URL, a URL in another form (a local path, an ssh alias without `git@`), or a
+configured URL that changed since the plan stops the push gate (`stop_gate: "iac"`; re-run plan).
+Residual (ADR-1152): a role that edits the user's global git config or environment stays outside
+the threat model. When it touches any IaC file
 (`*.tf`, `*.tofu`, `*.tf.json`, `*.tofu.json`, `*.tfvars`, `*.tfvars.json`, `*.tofuvars`,
 `*.tofuvars.json`, any `*.hcl` or `*.hcl.json` (the lock file and the grunt configs included), `*.tfbackend`,
 `.terraform-version`, `.opentofu-version`, `.tofu-version`, `atlantis.y*ml`, `digger.y*ml`, a

@@ -175,7 +175,8 @@ yourself, re-run the build to open the PR: run step 8 again with the same `plan_
 goes on to the draft PR, the review and the write-back without a push, and only when the remote
 branch head is exactly the approved sha; any other remote state stops at `iac-push` again. The hints in it are
 not a security check. `stop_gate: "iac"` from the push gate names a provider plugin directory, a
-symlink or code that existing IaC runs at plan time; relay it.
+symlink or code that existing IaC runs at plan time, or says the plan ref holds no sealed origin URL
+or origin's URL changed since the plan (re-run plan); relay it.
 
 `stop_gate: "hooks"` means the change touches the hook surface (hook config, a file a hook or CI
 runs, a CI or hook-manager path). Hook changes need their own PR and Max's confirmation; relay the

@@ -1170,6 +1170,7 @@ const INFRA_SCHEMA = {
     base_ref: STR,
     remote_slug: STR,
     remote_host: STR,
+    remote_url: STR,
     project: STR,
     created: { type: "boolean" },
     reused: { type: "boolean" },
@@ -3028,8 +3029,8 @@ function workspacePrompt(inputs) {
     "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths.\n" +
     "7. `mkdir -p <scratch_dir>`.\n" +
     "8. base_ref = `git -C <main_worktree> merge-base HEAD origin/<default_branch>`.\n" +
-    "9. remote_slug = <owner>/<name> parsed from `git -C <repo> remote get-url origin`. remote_host = the host part of `git -C <repo> config --get remote.origin.url` (the configured URL, before any insteadOf rewrite; for an ssh alias such as `github-personal:o/r.git`, the alias).\n" +
-    "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, created}."
+    "9. remote_slug = <owner>/<name> parsed from `git -C <repo> remote get-url origin`. remote_host = the host part of `git -C <repo> config --get remote.origin.url` (the configured URL, before any insteadOf rewrite; for an ssh alias such as `github-personal:o/r.git`, the alias). remote_url = that configured URL, unchanged.\n" +
+    "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url, created}."
   );
 }
 
@@ -3619,8 +3620,21 @@ def clean_path(inside=()):
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
 import hashlib, json, os, re, subprocess, sys
-wt, default, sha = sys.argv[1], sys.argv[2], sys.argv[3]
+wt, default, sha, url = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 os.chdir('/')
+import atexit, shutil, tempfile
+URL_OK = re.compile(r'^(https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+)$')
+if not URL_OK.match(url):
+    sys.exit('the sealed origin URL is not an https or git@host: URL')
+# network git and every read run outside the repo's own config: a role can
+# edit .git/config (sshCommand, uploadpack, insteadOf, helpers), so the URL is
+# the one sealed at plan time and the command line overrides the rest; the
+# user's global config and environment stay trusted (ADR-1152)
+os.environ['GIT_TERMINAL_PROMPT'] = '0'
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+HARD = ['git', '-c', 'core.fsmonitor=', '-c', 'core.hooksPath=/dev/null', '-c', 'core.sshCommand=ssh -o BatchMode=yes', '-c', 'core.askPass=',
+        '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.ssh.allow=always', '-c', 'fetch.recurseSubmodules=false',
+        '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'core.quotePath=false', '-c', 'remote.origin.uploadpack=git-upload-pack']
 TF = 'terra' + 'form'
 TO = 'to' + 'fu'
 LOCK = '.' + TF + '.lock.hcl'
@@ -3634,7 +3648,18 @@ VARS_EXT = ('.tfvars', '.tfvars.json', '.' + TO + 'vars', '.' + TO + 'vars.json'
 CI = re.compile(r'^(\.github/|\.gitea/|\.forgejo/|\.circleci/|\.gitlab/|\.gitlab-ci\.yml$|\.buildkite/|\.woodpecker|Jenkinsfile$|azure-pipelines\.ya?ml$|bitbucket-pipelines\.ya?ml$)', re.I)
 FILE_CAP = 1 << 20
 BUDGET = 64 << 20
-G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
+# reads run in a fresh bare repo that borrows the repo's objects (alternates):
+# its config is empty, and a fetched commit never lands in the repo itself
+cd = subprocess.run(HARD + ['-C', wt, 'rev-parse', '--path-format=absolute', '--git-common-dir'], capture_output=True)
+if cd.returncode != 0:
+    sys.exit(cd.stderr.decode('utf-8', 'replace'))
+objects = os.path.join(cd.stdout.decode('utf-8', 'replace').strip(), 'objects')
+scratch = tempfile.mkdtemp(prefix='fleet-tfgate-')
+atexit.register(shutil.rmtree, scratch, True)
+if subprocess.run(HARD + ['init', '-q', '--bare', scratch], capture_output=True).returncode != 0:
+    sys.exit('cannot make the scratch repo')
+open(os.path.join(scratch, 'objects', 'info', 'alternates'), 'w').write(objects + '\n')
+G = HARD + ['--git-dir=' + scratch]
 def run(*a):
     r = subprocess.run(G + list(a), capture_output=True)
     if r.returncode != 0:
@@ -3667,7 +3692,7 @@ def blob(rev, p):
 # repo lacks is fetched by its sha. Either failing refuses (fail closed).
 if not re.match(r'^[A-Za-z0-9._/-]+$', default) or default.startswith('-'):
     sys.exit('bad default branch name')
-lr = subprocess.run(G + ['ls-remote', '--exit-code', 'origin', 'refs/heads/' + default], capture_output=True)
+lr = subprocess.run(G + ['ls-remote', '--exit-code', '--upload-pack=git-upload-pack', url, 'refs/heads/' + default], capture_output=True)
 if lr.returncode != 0:
     sys.exit('cannot read origin/' + default + ': ' + lr.stderr.decode('utf-8', 'replace'))
 rows = [l.split('\t') for l in lr.stdout.decode('utf-8', 'replace').splitlines() if l.strip()]
@@ -3676,10 +3701,9 @@ if len(rows) != 1 or len(rows[0]) != 2 or rows[0][1] != 'refs/heads/' + default 
 remote = rows[0][0]
 have = lambda: subprocess.run(G + ['cat-file', '-e', remote + '^{commit}'], capture_output=True).returncode == 0
 if not have():
-    # a full fetch of that one sha: --depth into a full clone marks it shallow
-    # once origin is further ahead than the depth, and merge-base then fails
-    fr = subprocess.run(G[:1] + ['-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'fetch.recurseSubmodules=false'] + G[1:] +
-                        ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', remote], capture_output=True)
+    # a full fetch of that one sha into the scratch repo (the repo's own
+    # commits count as haves): --depth would leave a shallow history there
+    fr = subprocess.run(G + ['fetch', '--no-tags', '--no-write-fetch-head', '--upload-pack=git-upload-pack', url, remote], capture_output=True)
     if fr.returncode != 0 or not have():
         sys.exit('cannot fetch origin/' + default + ' at ' + remote + ': ' + fr.stderr.decode('utf-8', 'replace'))
 base = run('merge-base', remote, sha).decode().strip()
@@ -3814,7 +3838,7 @@ if touched:
             if required_providers(nd) != required_providers(od):
                 hints.append('provider source or version change in ' + p)
             continue
-        diff = run('diff', '-U0', '--no-renames', rng, '--', p)
+        diff = run('diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', rng, '--', p)
         if len(diff) > (8 << 20):
             hints.append('diff of ' + p + ' is too large to check')
             continue
@@ -3838,7 +3862,7 @@ if touched:
             if BANNED.search(body):
                 hints.append('external, local or null provider or local_/null_ resource change in ' + p)
 problems, hints = sorted(set(problems)), sorted(set(hints))
-out = {'touched': touched, 'iac_files': iac_files, 'problems': problems, 'hints': hints, 'args': [wt, default, sha]}
+out = {'touched': touched, 'iac_files': iac_files, 'problems': problems, 'hints': hints, 'args': [wt, default, sha, url]}
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, ensure_ascii=False))
 `;
@@ -3876,11 +3900,24 @@ def clean_path(inside=()):
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
 import hashlib, json, os, re, subprocess, sys
-wt, branch = sys.argv[1], sys.argv[2]
+wt, branch, url = sys.argv[1], sys.argv[2], sys.argv[3]
 os.chdir('/')
+URL_OK = re.compile(r'^(https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+)$')
+if not URL_OK.match(url):
+    sys.exit('the sealed origin URL is not an https or git@host: URL')
+# network git and every read run outside the repo's own config: a role can
+# edit .git/config (sshCommand, uploadpack, insteadOf, helpers), so the URL is
+# the one sealed at plan time and the command line overrides the rest; the
+# user's global config and environment stay trusted (ADR-1152)
+os.environ['GIT_TERMINAL_PROMPT'] = '0'
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+HARD = ['git', '-c', 'core.fsmonitor=', '-c', 'core.hooksPath=/dev/null', '-c', 'core.sshCommand=ssh -o BatchMode=yes', '-c', 'core.askPass=',
+        '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.ssh.allow=always', '-c', 'fetch.recurseSubmodules=false',
+        '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'core.quotePath=false', '-c', 'remote.origin.uploadpack=git-upload-pack']
 if not re.match(r'^[A-Za-z0-9._/-]+$', branch) or branch.startswith('-'):
     sys.exit('bad branch name')
-r = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-C', wt, 'ls-remote', '--exit-code', 'origin', 'refs/heads/' + branch], capture_output=True)
+# no repo at all: ls-remote needs none, so no repo config is read
+r = subprocess.run(HARD + ['ls-remote', '--exit-code', '--upload-pack=git-upload-pack', url, 'refs/heads/' + branch], capture_output=True)
 if r.returncode == 2:
     head = None
 elif r.returncode == 0:
@@ -3890,7 +3927,7 @@ elif r.returncode == 0:
     head = lines[0][0]
 else:
     sys.exit(r.stderr.decode('utf-8', 'replace') or 'ls-remote failed')
-out = {'head': head, 'args': [wt, branch]}
+out = {'head': head, 'args': [wt, branch, url]}
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, ensure_ascii=False))
 `;
@@ -3903,7 +3940,7 @@ function remoteHeadPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified (on a non-zero exit, retry it up to 3 times with 5, 15 and 45 s waits):\n" +
-    "python3 -I -c " + shQuote(REMOTE_HEAD_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.branch) +
+    "python3 -I -c " + shQuote(REMOTE_HEAD_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.branch) + " " + shQuote(inputs.remote_url) +
     "\n" +
     "It prints one JSON object {head, args, digest}. Copy every value unchanged (the script recomputes the digest). Still non-zero after the retries -> failed with its stderr.\n" +
     "Return {status, reason, head, args, digest}."
@@ -3912,12 +3949,12 @@ function remoteHeadPrompt(inputs) {
 
 function tfGatePrompt(inputs) {
   return (
-    "Infra step of the fleet build workflow: list the PR diff's IaC files. No edits, no commits, no checkout, no push; run nothing but the one command below (it reads origin's default head itself and fetches that one commit when the repo lacks it).\n" +
+    "Infra step of the fleet build workflow: list the PR diff's IaC files. No edits, no commits, no checkout, no push; run nothing but the one command below (it reads the default branch head from the sealed remote URL and fetches that one commit into a scratch repo when the repo lacks it).\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(TF_GATE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.default_branch) + " " + shQuote(inputs.approved_sha) +
+    "python3 -I -c " + shQuote(TF_GATE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.default_branch) + " " + shQuote(inputs.approved_sha) + " " + shQuote(inputs.remote_url) +
     "\n" +
     "It prints one JSON object {touched, iac_files, problems, hints, args, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
     "Return {status, reason, touched, iac_files, problems, hints, args, digest}."
@@ -5261,7 +5298,7 @@ async function workspaceStep(repo, lay) {
   if (!ws.remote_slug) halt("needs_human", "workspace found no origin remote owner/name (remote_slug)");
   if (ws.default_branch === lay.branch) halt("needs_human", "fleet branch equals the default branch " + ws.default_branch);
   gate("workspace: " + (ws.created ? "created " : "reused ") + lay.mainWt + " off " + ws.default_branch + " @ " + ws.base_ref);
-  return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: ws.remote_slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "" };
+  return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: ws.remote_slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: typeof ws.remote_url === "string" ? ws.remote_url : "" };
 }
 
 // Brief from intake, or from a plan_ref: shape checked in code.
@@ -5850,6 +5887,9 @@ async function planAndAudit(ctx) {
     repo_obligations: stripHeldOut(obligations),
     commands: commandsOf(plan.test_cmd, obligations),
     changed_symbols: cs.clean,
+    // 3.1.0: origin's configured URL at plan time, before any role ran; the
+    // IaC push gate's network reads use it, never the repo config
+    remote_url: validRemoteUrl(ctx.remoteUrl) ? ctx.remoteUrl : null,
   };
   gate(
     "plan: test_cmd " + JSON.stringify(plan.test_cmd.command) + ", " + obligations.length + " repo obligation(s)" +
@@ -6044,6 +6084,12 @@ function buildCommitsOf(commits, taskId, refs) {
 }
 
 // ---------------------------------------------------------------- confirm "auto"
+
+// A sealed origin URL: https or git@host: form only (no local path, no
+// transport helper, no option-like value).
+function validRemoteUrl(u) {
+  return typeof u === "string" && /^(https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?\/[A-Za-z0-9._~\/-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-9._~\/-]+)$/.test(u);
+}
 
 // The JS mirror of TF_GATE_PY's iac(): an IaC file, a provider plugin dir at
 // any segment, or an IaC tool's config (words spelled in pieces: the agent's
@@ -6340,7 +6386,7 @@ async function planMode(input, date) {
   const auto = input.confirm === "auto";
   let p, pc;
   try {
-    p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, onPlanPath: (x) => (draft = x), auditRetry: auto });
+    p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, remoteUrl: ws.remoteUrl, onPlanPath: (x) => (draft = x), auditRetry: auto });
     pc = await commitPlanAndRef({
       worktree: lay.mainWt,
       branch: lay.branch,
@@ -6555,6 +6601,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   if (lpb) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + lpb + "; re-run plan");
   const defaultBranch = ws.defaultBranch;
   const remoteSlug = ws.remoteSlug;
+  // the origin URL sealed in the plan ref (3.1.0); null in an older ref
+  const remoteUrl = typeof pf.remote_url === "string" ? pf.remote_url : null;
   const mainWt = lay.mainWt;
   const branch = lay.branch;
 
@@ -6700,12 +6748,16 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // and decide nothing. scanDiff: the fleet scan's digest-checked PR diff, a
   // second source the relay must agree with.
   async function tfGate(label, scanDiff) {
-    const r = await infra(label, tfGatePrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha }), "PR", JUDGE_AGENT);
+    if (!validRemoteUrl(remoteUrl))
+      halt("needs_human", "IaC pre-push check could not complete: the plan ref holds no sealed origin URL (https or git@host: form); re-run plan", "iac");
+    if (ws.remoteUrl !== remoteUrl)
+      halt("needs_human", "IaC pre-push check could not complete: origin's configured URL changed since the plan was sealed (" + remoteUrl + " -> " + ws.remoteUrl + ")", "iac");
+    const r = await infra(label, tfGatePrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha, remote_url: remoteUrl }), "PR", JUDGE_AGENT);
     const strs = (a) => Array.isArray(a) && a.every((x) => typeof x === "string");
     const scanIac = (scanDiff || []).filter(isIacPath);
     if (
       typeof r.touched !== "boolean" || !strs(r.iac_files) || !strs(r.problems) || !strs(r.hints) ||
-      !relayDigestOk(r, ["touched", "iac_files", "problems", "hints", "args"]) || canonical(r.args) !== canonical([mainWt, defaultBranch, approvedSha]) ||
+      !relayDigestOk(r, ["touched", "iac_files", "problems", "hints", "args"]) || canonical(r.args) !== canonical([mainWt, defaultBranch, approvedSha, remoteUrl]) ||
       r.touched !== r.iac_files.length > 0 || scanIac.some((p) => r.iac_files.indexOf(p) < 0)
     )
       halt("needs_human", "IaC pre-push check could not complete: " + label + " returned no usable result (the relayed result does not match the program's digest, arguments or the PR diff)", "iac");
@@ -6719,9 +6771,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // himself (origin's head is exactly the approved sha), the run goes on
     // without a push; any other remote state stops here.
     const rhLabel = label.replace("tf-gate", "remote-head");
-    const rh = await infra(rhLabel, remoteHeadPrompt({ main_worktree: mainWt, branch }), "PR", JUDGE_AGENT);
+    const rh = await infra(rhLabel, remoteHeadPrompt({ main_worktree: mainWt, branch, remote_url: remoteUrl }), "PR", JUDGE_AGENT);
     const rhOk =
-      rh && (rh.head === null || typeof rh.head === "string") && relayDigestOk(rh, ["head", "args"]) && canonical(rh.args) === canonical([mainWt, branch]);
+      rh && (rh.head === null || typeof rh.head === "string") && relayDigestOk(rh, ["head", "args"]) && canonical(rh.args) === canonical([mainWt, branch, remoteUrl]);
     if (rhOk && rh.head === approvedSha) {
       gate(rhLabel + ": origin/" + branch + " is at the approved " + approvedSha + " (pushed by Max); going on without a push");
       return true;
@@ -7270,7 +7322,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const routed = cj.routed_findings || [];
     if (cj.verdict === "plan_wrong")
       return replan({
-        ref, brief, names, lay, common, date, history, remoteSlug,
+        ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl,
         findings: routed.filter((f) => f.target === "plan"),
         expectedHead: jc.state.fingerprint.head,
         expectedTree: codeTree,
@@ -7496,7 +7548,7 @@ async function reviewStep(k, ctx) {
 // plan_wrong: re-plan from the approved plan in a detached worktree, commit
 // the new plan there, save the old head, then move the branch to the new plan.
 async function replan(ctx) {
-  const { ref, brief, names, lay, common, date, history, remoteSlug } = ctx;
+  const { ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl } = ctx;
   if (!ctx.findings.length) halt("needs_human", "code-judge verdict plan_wrong without a plan finding");
   const proposed = proposedChanges(ctx.findings, gate);
   gate("code-judge verdict plan_wrong: " + proposed.join("; "));
@@ -7529,6 +7581,7 @@ async function replan(ctx) {
     date,
     baseRef: ref.plan_commit,
     remoteSlug,
+    remoteUrl,
     suffix: ":replan",
   });
   const pc = await commitPlanAndRef({
