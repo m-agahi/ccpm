@@ -11391,8 +11391,8 @@ test("3.1.3 intake: needs_human on a task id names the ledgers tried and the too
   const out = await runOne(happy({ script: { intake: { status: "needs_human", reason: "task not found", tried } } }), { ...YQ, input: "#671" });
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /task not found/);
-  assert.match(out.result.reason, /yaadgaar \(project yadgarhq\/docs\) read_task\(number=671\): error \(tool text, verbatim\): NOT_FOUND: no task 671/);
-  assert.match(out.result.reason, /yadgar \(project yadgarhq\/docs\) task_get\(project_id=yadgarhq\/docs, id=671\): error \(tool text, verbatim\): external_task_ledger/);
+  assert.match(out.result.reason, /yaadgaar \(project yadgarhq\/docs\) read_task\(number=671\): error \(as reported by intake agent\): NOT_FOUND: no task 671/);
+  assert.match(out.result.reason, /yadgar \(project yadgarhq\/docs\) task_get\(project_id=yadgarhq\/docs, id=671\): error \(as reported by intake agent\): external_task_ledger/);
   assert.deepEqual(out.labels, ["preflight", "intake"]);
   // a task-id input that made no ledger call says so
   for (const input of ["#671", "671", "L42", "yaadgaar #671"]) {
@@ -11594,14 +11594,14 @@ test("3.1.3 review 4: advice in the reason or a call is dropped; a tool error is
     { ...YQ, input: "#671" },
   );
   // a tool's error is observed state: relayed verbatim, labelled, never dropped
-  assert.ok(t.result.reason.endsWith("not found; ledgers tried: yaadgaar (project yadgarhq/docs) read_task(number=671): error (tool text, verbatim): NOT_FOUND; write .yadgar/project-id in iam-db"), t.result.reason);
+  assert.ok(t.result.reason.endsWith("not found; ledgers tried: yaadgaar (project yadgarhq/docs) read_task(number=671): error (as reported by intake agent): NOT_FOUND; write .yadgar/project-id in iam-db"), t.result.reason);
   // the call text too
   const c = await runOne(
     happy({ script: { intake: { status: "needs_human", reason: "not found", tried: [{ ledger: "yaadgaar", project: null, call: "read_task after setting iam-db's project id", error: "NOT_FOUND" }] } } }),
     { ...YQ, input: "#671" },
   );
   assert.doesNotMatch(c.result.reason, /iam-db/);
-  assert.match(c.result.reason, /yaadgaar \(project none\) \(dropped[^)]*\): error \(tool text, verbatim\): NOT_FOUND/);
+  assert.match(c.result.reason, /yaadgaar \(project none\) \(dropped[^)]*\): error \(as reported by intake agent\): NOT_FOUND/);
 });
 
 test("3.1.3 review 5: the advice filter leaves non-task-id reasons alone", async () => {
@@ -11623,15 +11623,15 @@ test("3.1.3 review 7: a bare project_id= in advice is dropped; only a quoted led
   }
   // the call text gets the same test; the tool's error text is relayed verbatim, labelled
   const e = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "task_get(project_id=o/r, id=671)", error: "unknown project_id: 'yadgarhq/foo'" }]);
-  assert.ok(e.result.reason.endsWith("task_get(project_id=o/r, id=671): error (tool text, verbatim): unknown project_id: 'yadgarhq/foo'"), e.result.reason);
+  assert.ok(e.result.reason.endsWith("task_get(project_id=o/r, id=671): error (as reported by intake agent): unknown project_id: 'yadgarhq/foo'"), e.result.reason);
   const cut = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "task_get(project_id=o/r, id=671)", error: "z".repeat(5000) }]);
-  assert.ok(cut.result.reason.endsWith("error (tool text, verbatim): " + "z".repeat(4096) + " (cut)"), cut.result.reason.slice(-80));
+  assert.ok(cut.result.reason.endsWith("error (as reported by intake agent): " + "z".repeat(4096) + " (cut)"), cut.result.reason.slice(-80));
   const c = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "edit(project_id=yadgarhq/docs)", error: "x" }]);
   assert.doesNotMatch(c.result.reason, /edit\(project_id/);
   // a quoted ledger call still passes, in the reason, the call and the error
   const q = "task_get(project_id=o/r, id=42): external_task_ledger";
   const ok = await halt(q, [{ ledger: "yadgar", project: "o/r", call: "mcp__yadgar__task_get(project_id=o/r, id=42)", error: "refused for task_get(project_id=o/r, id=42)" }]);
-  assert.equal(ok.result.reason, "intake needs_human: " + q + "; ledgers tried: yadgar (project o/r) mcp__yadgar__task_get(project_id=o/r, id=42): error (tool text, verbatim): refused for task_get(project_id=o/r, id=42)");
+  assert.equal(ok.result.reason, "intake needs_human: " + q + "; ledgers tried: yadgar (project o/r) mcp__yadgar__task_get(project_id=o/r, id=42): error (as reported by intake agent): refused for task_get(project_id=o/r, id=42)");
 });
 
 // The advice filter, extracted from the script (its constants and noAdvice).

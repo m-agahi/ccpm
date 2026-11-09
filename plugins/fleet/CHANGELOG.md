@@ -23,9 +23,10 @@ stays `fleet-v3`.
 "ask"` the result carries `ledger_source` (`ledger`, `ref`, `id`, `project`) and the reason names
   the ledger, task and project, so Max sees what the id resolved to.
 - Intake returns `tried` (ledger, project, call, error). On a task-id input that stops, the script
-  appends the ledgers tried and the tool's error text to the reason, or "ledgers tried: none". The
-  tool's error text is observed state: it is relayed verbatim as `error (tool text, verbatim):
-...`, cut to 4 KiB, and never dropped. The agent-written parts (the reason, a call) are dropped
+  appends the ledgers tried and the error text intake reports for each call to the reason, or
+  "ledgers tried: none". That error text is relayed unfiltered as `error (as reported by intake
+agent): ...`, cut to 4 KiB, and never dropped: it carries clues such as "unknown project_id",
+  but the script cannot prove it is the tool's own text. The other agent-written parts (the reason, a call) are dropped
   when they mention `.yadgar` or a project id. Only a quoted ledger tool call (`task_get`, `task_list`, `read_task` or
   `find_tasks` with plain `key=value` arguments and no `.yadgar` path) is exempt, so
   `task_get(project_id=o/r, id=42)` passes and a bare "set project_id=..." is dropped. Each part is

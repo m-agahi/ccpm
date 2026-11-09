@@ -5494,8 +5494,9 @@ const ADVICE_MAX = 4096;
 function cutText(text) {
   return text.length > ADVICE_MAX ? text.slice(0, ADVICE_MAX) + " (cut)" : text;
 }
-// Agent-written prose (the reason, a call) only. A tool's error text is
-// observed state: it is relayed verbatim and labelled, never dropped.
+// Agent-written prose (the reason, a call) only. tried[].error is the error
+// text intake reports for a tool call; the script cannot prove it is the
+// tool's own text, so it is relayed unfiltered, cut and labelled as intake's.
 function noAdvice(text) {
   const t = cutText(text);
   return PROJECT_ADVICE_RE.test(t.replace(LEDGER_CALL_RE, "")) ? ADVICE_DROPPED : t;
@@ -5519,7 +5520,7 @@ function intakeHaltReason(it, raw) {
           ") " +
           noAdvice(show(t.call)) +
           ": " +
-          (typeof t.error === "string" && t.error ? "error (tool text, verbatim): " + cutText(t.error) : "returned no task"),
+          (typeof t.error === "string" && t.error ? "error (as reported by intake agent): " + cutText(t.error) : "returned no task"),
       )
       .join("; ")
   );
