@@ -333,8 +333,9 @@ its notes to this entry.
   script checks the ref lands on the freeze tree and keeps it in the frozen maps, so a role that
   moves it is a hash violation.
 - `freeze_digest` = sha256 of canonical `{ref_sha256, tree, mapsDigest}`: the plan ref's sha256,
-  the freeze tree and the digest of the frozen hasher maps. Every `needs_human` or `failed` result
-  after a freeze returns it, with the `plan_ref`.
+  the freeze tree and the digest of the frozen hasher maps. After a fix_tests re-freeze the object
+  also holds `refrozen: true` (review fix). Every `needs_human` or `failed` result after a freeze
+  returns it, with the `plan_ref`.
 - New build arg `freeze_digest` (64 hex; build mode only; another shape stops before any agent).
   The skill passes it back unchanged. With it, the workspace step lets the frozen worktree's
   uncommitted paths through, the bytecode is purged, and `hasher:resume-frozen` reads the
@@ -342,9 +343,12 @@ its notes to this entry.
   commit, the freeze ref present, the worktree tree = the freeze ref's tree, and the digest equal
   to the arg. The build then resumes at the coder with `resumed_at: "frozen"`: no test writer and
   no test judge runs again. Any mismatch stops with `stop_gate: "resume"`.
-- A build that stopped after the freeze and before the coder changed anything resumes at the
-  coder with `freeze_digest`. A coder stop with edits in the worktree still halts with
+- A build that stopped after the first freeze and before the coder changed anything resumes at
+  the coder with `freeze_digest`. A coder stop with edits in the worktree still halts with
   needs_human: its tree is not the freeze tree, so a human cleans or stashes the worktree.
+- A build that stopped after a fix_tests re-freeze does not resume, even on an untouched
+  re-freeze tree: the resume halts with `stop_gate: "resume"` ("re-frozen after fix_tests"). A
+  resume would restart the round and re-freeze counts. Re-run the build without `freeze_digest`.
 - A run-state ref (a build that got past its commit) wins: `freeze_digest` is then not used.
 - The red tests are still committed only with the green code, by the one hook-run commit after
   the code judge approves.
@@ -433,6 +437,9 @@ commit]`) before G2. A mismatch stops the run with `failed` and `stop_gate: "con
   `awaiting_confirmation`. Under `auto` the run stops `needs_human` with `failed_check: "intent"`
   after the plan commit, as a relaxed re-plan does. Under `ask` the parked data is still ignored
   with a gate line. A draft whose findings do not parse is still a planner input.
+- A frozen resume is refused after a fix_tests re-freeze. `freeze_digest` binds `refrozen: true`
+  once the build re-froze, and the resume halts with `stop_gate: "resume"` when the caller's digest
+  is the re-frozen form. The S5 notes above are corrected.
 
 ## [3.1.3] - 2026-11-09
 

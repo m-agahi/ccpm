@@ -6768,8 +6768,14 @@ function finishStop(status, reason) {
 // 4.0.0 (1987): sha256 over the plan ref's sha256, the freeze tree and the
 // frozen maps' digest. The caller holds it; the script recomputes it from git
 // (the freeze ref, the worktree tree) and the hasher maps.
-function freezeDigestOf(refSha256, tree, hashes) {
-  return sha256Hex(canonical({ ref_sha256: refSha256, tree, mapsDigest: mapsDigest(hashes) }));
+// 4.0.0 review: a freeze after a fix_tests re-freeze binds `refrozen: true`
+// (absent otherwise, so an untouched freeze keeps its digest). A frozen resume
+// restarts the round and re-freeze counts, so it is refused for a re-frozen
+// state.
+function freezeDigestOf(refSha256, tree, hashes, refrozen) {
+  const o = { ref_sha256: refSha256, tree, mapsDigest: mapsDigest(hashes) };
+  if (refrozen) o.refrozen = true;
+  return sha256Hex(canonical(o));
 }
 
 // ---------------------------------------------------------------- shared steps
@@ -8842,6 +8848,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (typeof refTree !== "string" || !refTree) mis("no freeze ref");
     if (hz.fingerprint.tree !== refTree) mis("the worktree tree " + hz.fingerprint.tree + " is not the freeze tree " + refTree + " (changed since the freeze)");
     if (hz.hashes.suspicious.length) mis("suspicious paths: " + hz.hashes.suspicious.join(", "));
+    if (freezeDigestOf(tiny.ref_sha256, hz.fingerprint.tree, hz.hashes, true) === input.freeze_digest)
+      mis("the freeze was re-frozen after fix_tests; a frozen resume would restart its round and re-freeze counts");
     if (freezeDigestOf(tiny.ref_sha256, hz.fingerprint.tree, hz.hashes) !== input.freeze_digest)
       mis("freeze_digest does not match the plan ref, the freeze tree and the frozen maps");
     frozenResume = hz;
@@ -9441,7 +9449,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   }
 
   function setFreezeDigest() {
-    state.freezeDigest = freezeDigestOf(tiny.ref_sha256, freezeTree, frozen);
+    state.freezeDigest = freezeDigestOf(tiny.ref_sha256, freezeTree, frozen, state.refreezeLog.length > 0);
     state.freezePlanRef = tiny;
   }
 

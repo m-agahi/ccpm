@@ -25,6 +25,12 @@ import {
   relayDigestOf,
   scratchRepo,
   sh,
+  sha256,
+  canon,
+  H,
+  HASHES_FLAT,
+  FP_K1,
+  FP_M3,
 } from "./harness.mjs";
 
 // confirm auto with a pre-commit check_cmd: the hook ids are read.
@@ -257,6 +263,59 @@ test("review fix 3: the sealed agent count does not include gate agents an unrea
   await runOne(ask, ARGS);
   const n = (s) => JSON.parse(s.__store[PC]).history.agents;
   assert.equal(n(bad), n(ask));
+});
+
+// ---------------------------------------------------------------- fix 4: no frozen resume after a re-freeze
+
+// A build whose code judge routes fix_tests, the tests are re-frozen (f2 at
+// tree M3), and the coder then stops in round 2.
+function refrozenCoderStop() {
+  const f = { target: "tests", criterion: "AC1", finding: "wrong expectation" };
+  const after = H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" });
+  const s = happy({
+    script: {
+      "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_tests", routed_findings: [f] },
+      "role:fleet-test-judge:r2": { status: "ok", verdict: "revise", routed_findings: [f] },
+      "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
+      "role:fleet-test-writer:AC1:r3": { status: "ok", criterion_id: "AC1" },
+      "hasher:post-writers:r3": { status: "ok", fingerprint: FP_M3, changed: ["tests/test_a.py"], hashes: after },
+      "role:fleet-test-judge:r3": { status: "ok", verdict: "approve", routed_findings: [] },
+      "hasher:fp-post:test-judge:r3": { status: "ok", fingerprint: FP_M3 },
+      "hasher:freeze:f2": { status: "ok", fingerprint: FP_M3, hashes: after },
+      "role:fleet-coder:r2": { status: "needs_human", reason: "coder stuck" },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: FP_M3, hashes: after },
+    },
+  });
+  return { s, after };
+}
+function mapsDigestOf(h) {
+  const o = {};
+  for (const m of ["files", "sections", "git", "symlinks", "ignored"]) o[m] = Object.assign({}, h[m] || {});
+  for (const k of Object.keys(o.git)) if (k.startsWith("fleetref:")) delete o.git[k];
+  return sha256(canon(o));
+}
+
+test("review fix 4: a stop after a fix_tests re-freeze binds the re-freeze into freeze_digest, and a resume with it halts resume", async () => {
+  const { s, after } = refrozenCoderStop();
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.refreeze_log.length, 1);
+  const planRef = out.planResult.plan_ref;
+  assert.match(out.result.freeze_digest, /^[0-9a-f]{64}$/);
+  // the digest is not the one an untouched freeze of the same tree and maps gives
+  assert.notEqual(out.result.freeze_digest, sha256(canon({ ref_sha256: planRef.ref_sha256, tree: "M3", mapsDigest: mapsDigestOf(after) })));
+  // the worktree is the re-freeze tree, untouched: still no resume
+  const h = H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" });
+  h.git["fleetref:" + planRef.plan_ref.replace(/\/plan$/, "/freeze")] = "M3";
+  s["hasher:resume-frozen"] = { status: "ok", fingerprint: { head: PC, tree: "M3" }, hashes: h };
+  s["role:fleet-coder:r1"] = happy()["role:fleet-coder:r1"];
+  const b = Object.assign({}, ARGS, { mode: "build", plan_ref: planRef, freeze_digest: out.result.freeze_digest });
+  delete b.input;
+  const r = await runOne(s, b);
+  assert.equal(r.result.status, "needs_human", r.result.reason);
+  assert.equal(r.result.stop_gate, "resume");
+  assert.match(r.result.reason, /re-frozen after fix_tests/);
+  assert.ok(!r.labels.some((l) => /^role:/.test(l)), r.labels.join(", "));
 });
 
 test("review fix 1: precommit_ids routes every print through one emit with the digest", () => {
