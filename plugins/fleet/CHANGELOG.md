@@ -219,6 +219,9 @@ its notes to this entry.
 - After a plan commit that used a parked folder, the commit step moves it to `parked/used/`.
 - Mutant tests: every S4 check was hand-mutated; each mutant fails a test, except one equivalent
   mutant (the symbol union across rounds is implied by the per-round keep-every-symbol stop).
+- A contract-drift retry (`<label>:retry`) is not a re-plan round: a test proves round 2 is still
+  reached after a retry in round 0 or in a round. The test harness repeats the round-0 stub for
+  an unscripted round step, also for an unscripted retry inside a round.
 
 ## [3.1.3] - 2026-11-09
 

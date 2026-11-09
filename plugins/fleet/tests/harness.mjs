@@ -280,15 +280,17 @@ export async function runOne(script, args0) {
     }
     // 4.0.0: unscripted verify steps read what the commit-plan stubs wrote
     if (!(label in script) && /^infra:verify-plan-commit/.test(label)) return verifyStub(script.__store || {})(prompt);
-    // 4.0.0 (1984): an unscripted drift retry repeats the role's first answer
-    // (the role makes the same mistake twice); script "<label>:retry" to differ
-    let key = label;
-    if (!(label in script) && /^role:.+:retry$/.test(label) && label.slice(0, -":retry".length) in script) key = label.slice(0, -":retry".length);
     // 4.0.0 (1983): every confirm mode gets up to 2 re-plan rounds; an
     // unscripted round step (":audit-fix", ":audit-fix-2") repeats the
     // round-0 stub, so a plan the stubs refuse is refused in every round
-    const rb = /^(.*?)(:audit-fix(?:-[0-9]+)?)$/.exec(label);
-    if (!(label in script) && rb && !script.__noRoundFallback && rb[1] in script) key = rb[1];
+    const roundBase = (k) => {
+      const rb = /^(.*?)(:audit-fix(?:-[0-9]+)?)$/.exec(k);
+      return !(k in script) && rb && !script.__noRoundFallback && rb[1] in script ? rb[1] : k;
+    };
+    let key = roundBase(label);
+    // 4.0.0 (1984): an unscripted drift retry repeats the role's answer for
+    // that label (or its round-0 stub); script "<label>:retry" to differ
+    if (!(key in script) && /^role:.+:retry$/.test(label)) key = roundBase(label.slice(0, -":retry".length));
     if (!(key in script)) {
       unscripted.push(label);
       return null;

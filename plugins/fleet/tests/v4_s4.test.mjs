@@ -924,3 +924,33 @@ test("4.0.0 1991: SKILL.md passes confirm default and documents confirm_reason a
   assert.match(skill, /`ledger_source`, when it is not null: the ledger \(`ledger` or `yaadgaar`\)/);
   assert.match(skill, /not a security boundary/);
 });
+
+test("4.0.0 1983: a contract-drift retry is not a re-plan round", async () => {
+  const drift = (s) => Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: CONTRACT_LINE });
+  const s = happy();
+  const good = s["role:scope-and-plan"];
+  s["role:scope-and-plan"] = drift(s);
+  s["role:scope-and-plan:retry"] = good;
+  s["role:scope-and-plan:audit-fix"] = good;
+  s["role:scope-and-plan:audit-fix-2"] = good;
+  s["role:plan-audit"] = REFUSE("r0");
+  s["role:plan-audit:audit-fix"] = REFUSE("r1");
+  s["role:plan-audit:audit-fix-2"] = APPROVE;
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.ok(out.labels.includes("role:scope-and-plan:retry"), out.labels.join(", "));
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.ok(out.labels.includes("role:plan-audit:audit-fix-2"));
+  // a drift inside a round retries that round's step; the round count is unchanged
+  const t = happy();
+  t["role:scope-and-plan:audit-fix"] = drift(t);
+  t["role:scope-and-plan:audit-fix:retry"] = t["role:scope-and-plan"];
+  t["role:plan-audit"] = REFUSE("r0");
+  t["role:plan-audit:audit-fix"] = REFUSE("r1");
+  t["role:plan-audit:audit-fix-2"] = APPROVE;
+  const o2 = await runOne(t, ARGS);
+  noUnscripted(o2);
+  assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix:retry"), o2.labels.join(", "));
+  assert.equal(o2.result.status, "awaiting_confirmation", o2.result.reason);
+  assert.ok(o2.labels.includes("role:plan-audit:audit-fix-2"));
+});
