@@ -572,10 +572,20 @@ do not stop a hook's or a test's call by absolute path to a real binary
 (for example `/opt/terraform/bin/terraform`, or a binary a test downloads), nor a container image
 built to run terraform. Max's hard rules and the settings.json denies are the controls there.
 
-**The scope fence is unchanged.** With `confirm: "auto"` and on every coder round, a path the fence
-refuses (IaC files, Kubernetes and Helm manifests, `.github/`, rulesets, secret-like paths) still
-stops the run for a human. Max's ruling lets the fleet work on IaC code; whether the fence's IaC
-path refusal should go too is an open question for Max.
+**IaC paths are fleet work (ADR-1172).** The scope fence no longer refuses IaC files or
+Kubernetes and Helm manifests; it still refuses `.github/`, the hook-manager and CI paths,
+rulesets and secret-like paths.
+
+**The pre-push IaC gate.** Pushing an IaC change makes CI auto-plan it, which Max's hard rules
+allow only under conditions. Before every push, `infra:tf-gate:push` runs `TF_GATE_PY` (read only,
+`python3 -I`, caps) on the PR diff. When the diff touches `*.tf`, `*.tfvars`, `*.tf.json`, the
+provider lock file, `terragrunt.hcl`, `digger.y*ml` or a CLI config file, it stops with
+`needs_human`, `stop_gate: "iac"`, "IaC change does not meet the CI auto-plan exemption; hand it to
+Max" on: an added `data "external"`, provisioner, `local-exec`, `remote-exec`, `dev_overrides` or
+`provider_installation`, or a CLI config change; a provider `source`/`version` change or a lock file
+change; the external, local or null provider or a `local_*`/`null_*` resource; any `digger.y*ml`
+change; a CI or workflow file in the same diff. Only lines that changed beyond whitespace count, so
+`fmt` never stops a push.
 
 #### Hook changes: their own PR, with Max (3.1.0)
 

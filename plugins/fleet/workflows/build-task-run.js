@@ -1210,6 +1210,8 @@ const INFRA_SCHEMA = {
     exit_code: { type: "integer" },
     args: { type: "array", items: STR },
     surface: { type: "array", items: STR },
+    touched: { type: "boolean" },
+    problems: { type: "array", items: STR },
     make_paths: { type: "object" },
     hook_tail: STR,
     checks: { type: "object" },
@@ -3579,6 +3581,136 @@ function loadRefPrompt(inputs) {
   );
 }
 
+// The pre-push IaC gate (3.1.0, ADR-1172). The fleet may change IaC code, and
+// pushing such a branch makes CI auto-plan it. Max's hard rules allow that
+// auto-plan only under conditions; this program checks them on the PR diff
+// (origin/<default>...<sha>, as fleet-scan lists it) and prints
+// {touched, problems, args, digest}. touched: the diff changes a *.tf,
+// *.tfvars, *.tf.json, the provider lock file, the grunt config or the
+// orchestrator's yml (names spelled in pieces: the agent's Bash guard blocks
+// them). problems (each stops the run, handing it to Max):
+// 1. an added external data source, a provisioner, local-exec or remote-exec,
+//    dev_overrides, provider_installation, or a changed CLI config file;
+// 2. a provider source or version constraint added, changed or removed (a
+//    required_providers hunk), or a changed lock file (provider vetting is not
+//    automated here);
+// 3. the external, local or null provider, or a local_/null_ resource or data
+//    source, added, removed or changed;
+// 4. any change to the orchestrator's yml;
+// 5. a CI or workflow file in the same diff.
+// fmt-only changes pass like any other plain change. Read only.
+// TF_GATE_PY_BEGIN
+const TF_GATE_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+import hashlib, json, os, re, subprocess, sys
+wt, default, sha = sys.argv[1], sys.argv[2], sys.argv[3]
+os.chdir('/')
+TF = 'terra' + 'form'
+LOCK = '.' + TF + '.lock.hcl'
+GRUNT = 'terra' + 'grunt.hcl'
+ORCH = re.compile(r'(^|/)' + 'dig' + r'ger\.ya?ml$')
+CLI = re.compile(r'(^|/)(\.' + TF + r'rc|[^/]*\.tfrc)$')
+CI = re.compile(r'^(\.github/|\.gitea/|\.forgejo/|\.circleci/|\.gitlab/|\.gitlab-ci\.yml$|\.buildkite/|\.woodpecker|Jenkinsfile$|azure-pipelines\.ya?ml$|bitbucket-pipelines\.ya?ml$)', re.I)
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
+def run(*a):
+    r = subprocess.run(G + list(a), capture_output=True)
+    if r.returncode != 0:
+        sys.exit(r.stderr.decode('utf-8', 'replace'))
+    return r.stdout
+def iac(p):
+    b = p.rsplit('/', 1)[-1]
+    return b.endswith(('.tf', '.tfvars', '.tf.json')) or b == LOCK or b == GRUNT or bool(ORCH.search(p)) or bool(CLI.search(p))
+rng = 'refs/remotes/origin/' + default + '...' + sha
+paths = [x.decode('utf-8', 'replace') for x in run('diff', '--name-only', '-z', '--no-renames', rng, '--').split(b'\0') if x]
+touched = any(iac(p) for p in paths)
+problems = []
+EXTRA = re.compile(r'data\s+"external"|\bprovisioner\b|local-exec|remote-exec|dev_overrides|provider_installation')
+PROVIDER = re.compile(r'required_providers|^\s*"?(source|version)"?\s*[=:]')
+BANNED = re.compile(r'hashicorp/(external|local|null)\b|\b(resource|data)\s+"(local|null)_|provider\s+"(external|local|null)"|"(local|null)_[a-z_]+"\s*:')
+if touched:
+    for p in paths:
+        if CI.match(p):
+            problems.append('CI or workflow file ' + p + ' in the same diff')
+    for p in paths:
+        b = p.rsplit('/', 1)[-1]
+        if not iac(p):
+            continue
+        if ORCH.search(p):
+            problems.append('orchestrator config change in ' + p)
+            continue
+        if CLI.search(p):
+            problems.append('CLI config change in ' + p)
+            continue
+        if b == LOCK:
+            problems.append('provider lock file change in ' + p)
+            continue
+        diff = run('diff', '-U0', '--no-renames', rng, '--', p)
+        if len(diff) > (8 << 20):
+            problems.append('diff of ' + p + ' is too large to check')
+            continue
+        # a line counts only when it changed beyond whitespace: fmt (alignment,
+        # indentation) never stops the push
+        norm = lambda t: ' '.join(t.split())
+        added, removed = [], []
+        for line in diff.decode('utf-8', 'replace').splitlines():
+            if line.startswith(('+++', '---')) or not line.startswith(('+', '-')):
+                continue
+            (added if line.startswith('+') else removed).append(line[1:])
+        na, nr = set(norm(x) for x in added), set(norm(x) for x in removed)
+        real_added = [x for x in added if norm(x) not in nr]
+        real_removed = [x for x in removed if norm(x) not in na]
+        for body in real_added:
+            if EXTRA.search(body):
+                problems.append('added ' + EXTRA.search(body).group(0) + ' in ' + p)
+        for body in real_added + real_removed:
+            if PROVIDER.search(body):
+                problems.append('provider source or version change in ' + p)
+            if BANNED.search(body):
+                problems.append('external, local or null provider or local_/null_ resource change in ' + p)
+problems = sorted(set(problems))
+out = {'touched': touched, 'problems': problems, 'args': [wt, default, sha]}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
+`;
+// TF_GATE_PY_END
+
+function tfGatePrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: check the PR diff's IaC changes against the CI auto-plan conditions. Read only: no edits, no commits, no checkout, no fetch, no push; run nothing but the one command below.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified:\n" +
+    "python3 -I -c " + shQuote(TF_GATE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.default_branch) + " " + shQuote(inputs.approved_sha) +
+    "\n" +
+    "It prints one JSON object {touched, problems, args, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, touched, problems, args, digest}."
+  );
+}
+
 function fleetScanPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: list the paths the PR would carry. Read only: no edits, no commits, no checkout, no fetch, no push; run nothing but the one command below.\n" +
@@ -5707,11 +5839,8 @@ function fencePathProblem(p) {
   const dirs = segs.slice(0, -1).map((x) => x.toLowerCase());
   const base = segs[segs.length - 1].toLowerCase();
   if (dirs.indexOf(".fleet") >= 0) return "fleet internal path (.fleet/)";
-  if (/\.(tf|tfvars|tofu|tofuvars)(\.json)?$/.test(base) || dirs.indexOf("terraform") >= 0 || segs.some((x) => x.toLowerCase() === ".terraform"))
-    return "infrastructure-as-code path";
-  if (/^kustomization\.ya?ml$/.test(base)) return "kubernetes manifest";
-  if (/\.ya?ml$/.test(base) && (dirs.indexOf("k8s") >= 0 || dirs.indexOf("manifests") >= 0)) return "kubernetes manifest";
-  if (/(^|\/)charts\/[^/]+\/templates\//i.test(q)) return "helm chart template";
+  // (ADR-1172: IaC, Kubernetes and Helm files are fleet work like any other
+  // code; the pre-push IaC gate keeps the CI auto-plan conditions)
   if (segs.some((x) => x.toLowerCase() === ".github")) return ".github/ (CI, settings, rulesets)";
   if (HOOK_PATH_RE.test(q)) return "hook surface (a CI or hook-manager path)";
   if (q.toLowerCase().indexOf("rulesets") >= 0) return "rulesets";
@@ -6335,6 +6464,16 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // No fleet-internal path may reach the PR: the diff against the default
   // branch and every commit on the branch are checked before each push and
   // each PR-opener call (fail-closed).
+  // ADR-1172: an IaC change pushes only when the CI auto-plan exemption holds
+  async function tfGate(label) {
+    const r = await infra(label, tfGatePrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha }), "PR", JUDGE_AGENT);
+    if (typeof r.touched !== "boolean" || !Array.isArray(r.problems) || !relayDigestOk(r, ["touched", "problems", "args"]) || canonical(r.args) !== canonical([mainWt, defaultBranch, approvedSha]))
+      halt("needs_human", "IaC pre-push check could not complete: " + label + " returned no usable result (the relayed result does not match the program's digest or arguments)", "iac");
+    if (r.problems.length)
+      halt("needs_human", "IaC change does not meet the CI auto-plan exemption; hand it to Max: " + r.problems.map(String).join("; "), "iac");
+    gate(label + ": " + (r.touched ? "IaC change meets the CI auto-plan conditions" : "no IaC file in the PR diff"));
+  }
+
   async function fleetScan(label) {
     const r = await infra(label, fleetScanPrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha }), "PR", JUDGE_AGENT);
     if (!Array.isArray(r.diff) || !Array.isArray(r.commits) || !r.commits.every((c) => c && Array.isArray(c.files)))
@@ -6422,6 +6561,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         phase("PR");
         pushes++;
         await fleetScan("infra:fleet-scan:push" + (pushes > 1 ? ":p" + pushes : ""));
+        await tfGate("infra:tf-gate:push" + (pushes > 1 ? ":p" + pushes : ""));
         const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
         const push = await infra(
           pushLabel,

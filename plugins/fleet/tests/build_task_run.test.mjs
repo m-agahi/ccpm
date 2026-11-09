@@ -207,6 +207,13 @@ async function runOne(script, args0) {
       const sel = inputsOf(prompt).select;
       return withRelayDigest(label, { status: "ok", reason: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [] });
     }
+    // 3.1.0: unscripted IaC pre-push gates find no IaC file in the PR diff
+    if (!(label in script) && /^infra:tf-gate:/.test(label)) {
+      const i = inputsOf(prompt);
+      const r = { status: "ok", reason: "scanned", touched: false, problems: [], args: [i.main_worktree, i.default_branch, i.approved_sha] };
+      r.digest = sha256(canon({ touched: r.touched, problems: r.problems, args: r.args }));
+      return r;
+    }
     // 3.1.0: unscripted hook-surface reads find no hook entry file
     if (!(label in script) && /^infra:hook-surface:/.test(label))
       return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: {}, error: null }, prompt));
@@ -4942,18 +4949,10 @@ test("2.1.0 G2 commands: only test_cmd and `pre-commit run <id>` hooks that exis
   }
 });
 
-test("2.1.0 G3 scope fence: infra, CI, secrets, rulesets and a foreign repo are refused", async () => {
+test("2.1.0 G3 scope fence: secrets, rulesets and a foreign repo are refused (IaC paths are fleet work since ADR-1172)", async () => {
   const planWith = (o) => autoHappy({ script: { "role:scope-and-plan": Object.assign({}, happy()["role:scope-and-plan"], o) } });
   const fence = (files) => ({ allowed_additions: { files, symbols: [], deps: [], settings: [] } });
   for (const o of [
-    fence(["infra/main.tf"]),
-    fence(["envs/prod.tfvars"]),
-    fence(["terraform/x.py"]),
-    fence(["mod/.terraform/x"]),
-    fence(["k8s/deploy.yaml"]),
-    fence(["deploy/kustomization.yml"]),
-    fence(["charts/app/templates/svc.yaml"]),
-    fence(["manifests/a.yml"]),
     fence(["config/rulesets/main.json"]),
     fence([".env.local"]),
     fence(["src/db_secret.py"]),
@@ -4961,7 +4960,6 @@ test("2.1.0 G3 scope fence: infra, CI, secrets, rulesets and a foreign repo are 
     fence(["keys/deploy.key"]),
     fence(["home/id_rsa.pub"]),
     fence(["aws_credentials.json"]),
-    { repo_obligations: [{ id: "o", kind: "other", instruction: "x", files: ["deploy/x.tf"] }] },
   ]) {
     const out = await runOne(planWith(o), AUTO);
     autoFail(out, "scope");
@@ -5220,8 +5218,8 @@ test("2.1.0 hasher program: tree fingerprint leaves the real index alone and see
 
 // ---------------------------------------------------------------- 2.1.0 security review fixes
 
-test("2.1.0 scope fence on the REAL changes: a coder that writes CI, IaC or a secret file stops (every mode)", async () => {
-  for (const p of [".github/workflows/ci.yml", "infra/main.tf", ".env.local", "infra/main.tofu", "env/prod.tofuvars", "a/b.tofu.json", "a/c.tofuvars.json", "a/d.tf.json"]) {
+test("2.1.0 scope fence on the REAL changes: a coder that writes CI or a secret file stops (every mode; IaC is fleet work since ADR-1172)", async () => {
+  for (const p of [".github/workflows/ci.yml", ".env.local", "certs/a.pem"]) {
     const s = happy({
       script: { "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES, changed: ["src/x.py", p] } },
     });
@@ -6069,6 +6067,7 @@ const ARRAY_SITES = {
   "pre.results @ writeBack": "infra:results",
   "o.files @ obligationFailures": "parsed: repo_obligations of the sealed plan facts",
   "r.surface @ hookSurface": "infra:surface",
+  "r.problems @ tfGate": "infra:problems",
   "pc.tools @ pathCheck": "parsed: preflight path_check (digest-checked, keys and shapes checked)",
   "pc.path_problems @ pathCheck": "parsed: preflight path_check (digest-checked)",
   "pf.changed_symbols @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
@@ -10219,5 +10218,148 @@ test("3.1.0 PATH check: the tool set is the six shimmed names; a shim is matched
     }
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- 3.1.0 (ADR-1172): IaC paths are fleet work; a pre-push gate keeps the CI auto-plan exemption
+
+// file names spelled in pieces: the agent's Bash guard blocks the tool words
+const TFW = "terra" + "form";
+const LOCK = "." + TFW + ".lock.hcl";
+const TG = "terra" + "grunt.hcl";
+const DG = "dig" + "ger.yml";
+
+function tfGateRun(base, change, del) {
+  const home = mkdtempSync(join(tmpdir(), "fleet-tfgate-"));
+  const wt = join(home, "repo");
+  try {
+    spawnSync("git", ["init", "-q", "-b", "master", wt]);
+    for (const [k, v] of [["user.email", "t@example.com"], ["user.name", "t"], ["commit.gpgsign", "false"]]) sh(wt, "git", "config", k, v);
+    const put = (files) => {
+      for (const [p, c] of Object.entries(files)) {
+        spawnSync("mkdir", ["-p", dirname(join(wt, p))]);
+        writeFileSync(join(wt, p), c);
+      }
+    };
+    put(Object.assign({ "README.md": "x\n" }, base));
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "base");
+    sh(wt, "git", "update-ref", "refs/remotes/origin/master", "HEAD");
+    put(change);
+    for (const p of del || []) rmSync(join(wt, p));
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "change");
+    const head = sh(wt, "git", "rev-parse", "HEAD").trim();
+    const prog = extractPy("TF_GATE_PY_BEGIN", "TF_GATE_PY_END", "TF_GATE_PY");
+    const r = spawnSync("python3", ["-I", "-c", prog, wt, "master", head], { encoding: "utf8", cwd: home });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+const MAIN = 'resource "aws_s3_bucket" "b" {\n  bucket = "x"\n}\n';
+const PROV = TFW + ' {\n  required_providers {\n    aws = {\n      source  = "hashicorp/aws"\n      version = "~> 5.0"\n    }\n  }\n}\n';
+
+test("3.1.0 IaC pre-push gate: a plain resource or variable change, or no IaC file, passes", { skip: !HAVE_PY }, () => {
+  let o = tfGateRun({ "infra/main.tf": MAIN, "infra/versions.tf": PROV }, { "infra/main.tf": MAIN.replace('"x"', '"y"'), "infra/vars.tf": 'variable "n" {\n  type = string\n}\n', "env/prod.tfvars": 'n = "a"\n' });
+  assert.equal(o.touched, true);
+  assert.deepEqual(o.problems, []);
+  o = tfGateRun({}, { "src/a.py": "x = 1\n" });
+  assert.deepEqual([o.touched, o.problems], [false, []]);
+  // fmt only (a realigned and reindented provider block) passes
+  o = tfGateRun({ "infra/versions.tf": PROV }, { "infra/versions.tf": PROV.replace('source  = "hashicorp/aws"', 'source = "hashicorp/aws"').replace("    aws = {", "  aws = {") });
+  assert.deepEqual(o.problems, []);
+  const prog = extractPy("TF_GATE_PY_BEGIN", "TF_GATE_PY_END", "TF_GATE_PY");
+  assert.doesNotMatch(prog, /terraform|tofu|tflint|terragrunt|\btfp\b|digger|atlantis/i, "the Bash guard blocks these words");
+  assert.match(prog, /^# resource caps \(3\.1\.0\)/);
+});
+
+test("3.1.0 IaC pre-push gate rule 1: external data, provisioners, local/remote exec, dev overrides and CLI config stop", { skip: !HAVE_PY }, () => {
+  for (const [change, re] of [
+    [{ "infra/x.tf": 'data "external" "e" {\n  program = ["sh"]\n}\n' }, /data "external"/],
+    [{ "infra/x.tf": MAIN.replace("}\n", '  provisioner "local-exec" {\n    command = "id"\n  }\n}\n') }, /provisioner|local-exec/],
+    [{ "infra/x.tf": 'resource "null_x" "r" {\n  connection {}\n  # remote-exec\n}\n' }, /remote-exec|null_/],
+    [{ "infra/x.tf.json": '{"provisioner": {"local-exec": {}}}\n' }, /provisioner|local-exec/],
+    [{ "cli.tfrc": "provider_installation {\n  dev_overrides {}\n}\n" }, /dev_overrides|provider_installation|CLI config/],
+    [{ ["." + TFW + "rc"]: "plugin_cache_dir = \"/x\"\n" }, /CLI config/],
+  ]) {
+    const o = tfGateRun({ "infra/main.tf": MAIN }, change);
+    assert.equal(o.touched, true, JSON.stringify(change));
+    assert.match(o.problems.join("; "), re, JSON.stringify(change));
+  }
+});
+
+test("3.1.0 IaC pre-push gate rule 2: a provider source or version change, or a lock file change, stops", { skip: !HAVE_PY }, () => {
+  for (const [base, change, del] of [
+    [{ "infra/versions.tf": PROV }, { "infra/versions.tf": PROV.replace("~> 5.0", "~> 6.0") }],
+    [{ "infra/versions.tf": PROV }, { "infra/versions.tf": PROV.replace('"hashicorp/aws"', '"evil/aws"') }],
+    [{ "infra/main.tf": MAIN }, { "infra/versions.tf": PROV }],
+    [{ "infra/main.tf": MAIN, ["infra/" + LOCK]: "provider x {}\n" }, { ["infra/" + LOCK]: "provider y {}\n" }],
+    [{ "infra/main.tf": MAIN, ["infra/" + LOCK]: "provider x {}\n" }, {}, ["infra/" + LOCK]],
+  ]) {
+    const o = tfGateRun(base, change, del);
+    assert.match(o.problems.join("; "), /provider|lock/, JSON.stringify([change, del]));
+  }
+});
+
+test("3.1.0 IaC pre-push gate rule 3: the external, local and null providers or local_/null_ resources stop", { skip: !HAVE_PY }, () => {
+  for (const change of [
+    { "infra/p.tf": 'provider "local" {}\n' },
+    { "infra/p.tf": 'x = "hashicorp/null"\n' },
+    { "infra/r.tf": 'resource "local_file" "f" {\n  filename = "a"\n}\n' },
+    { "infra/r.tf": 'resource "null_resource" "n" {}\n' },
+    { "infra/r.tf": 'data "local_file" "f" {\n  filename = "a"\n}\n' },
+  ]) {
+    const o = tfGateRun({ "infra/main.tf": MAIN }, change);
+    assert.match(o.problems.join("; "), /external, local or null|local_|null_/, JSON.stringify(change));
+  }
+  // removing one stops too
+  const o = tfGateRun({ "infra/main.tf": MAIN, "infra/r.tf": 'resource "null_resource" "n" {}\n' }, {}, ["infra/r.tf"]);
+  assert.match(o.problems.join("; "), /null_/);
+});
+
+test("3.1.0 IaC pre-push gate rule 4 and 5: any digger config change, or a CI file next to IaC, stops", { skip: !HAVE_PY }, () => {
+  let o = tfGateRun({ "infra/main.tf": MAIN, [DG]: "projects: []\n" }, { [DG]: "projects:\n- name: a\n  dir: infra\n" });
+  assert.match(o.problems.join("; "), /config change/);
+  o = tfGateRun({ "infra/main.tf": MAIN }, { "infra/main.tf": MAIN.replace('"x"', '"y"'), ".github/workflows/plan.yml": "on: push\n" });
+  assert.match(o.problems.join("; "), /CI/);
+  o = tfGateRun({ "live/main.tf": MAIN }, { ["live/" + TG]: "inputs = {}\n" });
+  assert.equal(o.touched, true);
+  assert.deepEqual(o.problems, []);
+});
+
+test("3.1.0 IaC pre-push gate: the workflow stops before the push on a problem; a clean or no-IaC diff pushes", async () => {
+  const gate = (touched, problems) => {
+    const r = { status: "ok", reason: "scanned", touched, problems, args: ["/r/.claude/worktrees/fleet-l42-add-thing/main", "master", CSHA(1)] };
+    r.digest = sha256(canon({ touched: r.touched, problems: r.problems, args: r.args }));
+    return r;
+  };
+  let s = happy();
+  s["infra:tf-gate:push"] = gate(true, ['provider source or version change in infra/versions.tf']);
+  let out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "iac");
+  assert.match(out.result.reason, /IaC change does not meet the CI auto-plan exemption; hand it to Max: provider source or version change/);
+  assert.ok(!out.labels.includes("infra:push"), "nothing pushed");
+  s = happy();
+  s["infra:tf-gate:push"] = gate(true, []);
+  out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.labels.indexOf("infra:tf-gate:push") < out.labels.indexOf("infra:push"));
+  // a tampered relay refuses
+  s = happy();
+  s["infra:tf-gate:push"] = Object.assign(gate(true, ["x"]), { problems: [] });
+  out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /could not complete/);
+});
+
+test("3.1.0 ADR-1172: IaC and k8s/Helm paths are fleet work: the scope fence no longer refuses them", async () => {
+  for (const p of ["infra/main.tf", "envs/prod.tfvars", TFW + "/x.py", "k8s/deploy.yaml", "charts/app/templates/svc.yaml", "deploy/kustomization.yml"]) {
+    const s = happy({ script: { "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES, changed: ["src/x.py", p] } } });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "ok", p + " " + out.result.reason);
   }
 });

@@ -63,10 +63,30 @@ scratch dir's entries.
 and a container image built to run terraform. Max's hard rules and the settings.json denies are the
 controls there; no content scan stands in for them.
 
-**Unchanged, and open for Max:** the scope fence still refuses IaC paths (`*.tf`, `terraform/`,
-Kubernetes and Helm manifests) in planned paths under `confirm: "auto"` and in a coder's changes in
-every mode. The ruling lets the fleet work on IaC code; whether that fence line should go too was
-not part of the instruction.
+**IaC paths are fleet work (ADR-1172).** The scope fence no longer refuses IaC paths (`*.tf`,
+`*.tfvars`, `terraform/`, Kubernetes and Helm manifests), at plan time or in a coder's changes. It
+still refuses `.github/`, the hook-manager and CI paths, rulesets and secret-like paths.
+
+**New: the pre-push IaC gate.** Terraform changes push only when the CI auto-plan exemption
+conditions hold; anything else hands back to Max. Before every push, `infra:tf-gate:push`
+(`TF_GATE_PY`, read only, `python3 -I`, caps, digest and argument checked) reads the PR diff
+(`origin/<default>...<approved sha>`). Only when it touches `*.tf`, `*.tfvars`, `*.tf.json`,
+`.terraform.lock.hcl`, `terragrunt.hcl`, `digger.y*ml` or a terraform CLI config file does it
+check, and it stops (`needs_human`, `stop_gate: "iac"`, "IaC change does not meet the CI
+auto-plan exemption; hand it to Max: ...") on:
+
+1. an added `data "external"`, `provisioner` block, `local-exec` or `remote-exec`, a
+   `dev_overrides` or `provider_installation` change, or a changed `.terraformrc` / `*.tfrc`;
+2. a provider `source` or `version` constraint added, changed or removed (a `required_providers`
+   hunk; module `version` lines are caught too, fail-closed), or a changed `.terraform.lock.hcl`:
+   provider vetting (`tf-provider-vet` plus an online review) is not automated here;
+3. the `hashicorp/external`, `hashicorp/local` or `hashicorp/null` provider, or a `local_*` /
+   `null_*` resource or data source, added, removed or changed;
+4. any `digger.y*ml` change;
+5. a CI or workflow file in the same diff (the hook gate also stops it before the commit).
+
+A line counts only when it changed beyond whitespace, so `fmt` never stops a push. A plain
+resource, variable or `.tfvars` change, or a diff with no IaC file, pushes.
 
 ### New stops (fail-closed additions; no key renamed or removed)
 
