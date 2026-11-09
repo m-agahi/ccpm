@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SOURCE, ARGS, happy, run, call, inputsOf } from "./harness.mjs";
+import { SOURCE, ARGS, happy, run, runOne, call, inputsOf, planRefFor, buildArgs, sha256, canon } from "./harness.mjs";
 
 // REQUIRED_ON_OK as written in the script source
 function requiredOf() {
@@ -273,4 +273,116 @@ test("1984: coder drift in every round ends at the code round cap", async () => 
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /code rounds exhausted/);
   assert.ok(!out.labels.includes("role:fleet-coder:r4"));
+});
+
+// ---------------------------------------------------------------- 1992 sealed project
+
+// the sealed ref the plan run wrote, and a re-sealed variant
+function sealedRef(s, tiny) {
+  return JSON.parse(s.__store[tiny.plan_commit]);
+}
+function reseal(s, tiny, edit) {
+  const ref = sealedRef(s, tiny);
+  edit(ref);
+  delete ref.seal;
+  ref.seal = sha256(canon(ref));
+  s.__store[tiny.plan_commit] = JSON.stringify(ref) + "\n";
+  return { ...tiny, ref_sha256: sha256(s.__store[tiny.plan_commit]) };
+}
+
+test("AC-1992: the plan ref seals project and plan_facts change_kind/new_behaviour", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const ref = sealedRef(s, tiny);
+  assert.equal(ref.project, "o/r");
+  assert.equal(ref.plan_facts.change_kind, "feature");
+  assert.equal(ref.plan_facts.new_behaviour, true);
+  // no args.project: sealed null
+  const s3 = happy();
+  const out3 = await runOne(s3, { ...ARGS, project: undefined });
+  assert.equal(out3.result.status, "awaiting_confirmation", out3.result.reason);
+  assert.equal(sealedRef(s3, out3.result.plan_ref).project, null);
+});
+
+test("AC-1992: a build without project uses the sealed project for the ledger and write-back", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const out = await runOne(s, buildArgs(tiny, { project: undefined }));
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(inputsOf(call(out, "infra:ledger-writeback").prompt).project, "o/r");
+  assert.ok(out.result.gate_log.some((g) => /project o\/r from the sealed plan ref/.test(g)));
+});
+
+test("AC-1992: a build with a different project halts with project mismatch", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const out = await runOne(s, buildArgs(tiny, { project: "x/y" }));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /project mismatch: args\.project "x\/y" but plan ref refs\/fleet\/[^ ]+ sealed "o\/r"/);
+  assert.ok(!out.labels.some((l) => l.startsWith("role:")), out.labels.join(", "));
+});
+
+test("AC-1992: an old ref with no project keeps the 3.1.3 behaviour", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const old = reseal(s, tiny, (r) => {
+    delete r.project;
+    delete r.plan_facts.change_kind;
+    delete r.plan_facts.new_behaviour;
+  });
+  let out = await runOne(s, buildArgs(old));
+  assert.equal(out.result.status, "ok", out.result.reason);
+  // no project anywhere: the 3.1.3 halt for a yadgar ledger source
+  out = await runOne(s, buildArgs(old, { project: undefined }));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /needs args\.project/);
+});
+
+test("1992: a sealed project that is not a non-empty string or null is a changed ref", async () => {
+  for (const bad of [42, "", ["o/r"]]) {
+    const s = happy();
+    const tiny = await planRefFor(s);
+    const t = reseal(s, tiny, (r) => {
+      r.project = bad;
+    });
+    const out = await runOne(s, buildArgs(t));
+    assert.equal(out.result.status, "needs_human", JSON.stringify(bad));
+    assert.match(out.result.reason, /plan ref missing or changed.*project/);
+  }
+});
+
+// ---------------------------------------------------------------- history.preflight shape (S2 owns the field)
+
+test("4.0.0: history.preflight is optional; when present it is {fleet_version, versions, dispatch, contract}", async () => {
+  const good = { fleet_version: "4.0.0", versions: { "plan-audit": 17 }, dispatch: { "plan-audit": "DISPATCH: model=opus" }, contract: { "plan-audit": "CONTRACT: fleet-v4" } };
+  for (const [pf, ok] of [
+    [undefined, true],
+    [null, true],
+    [good, true],
+    [{ ...good, fleet_version: 4 }, false],
+    [{ ...good, versions: null }, false],
+    [{ ...good, dispatch: [] }, false],
+    [{ fleet_version: "4.0.0", versions: {}, dispatch: {} }, false],
+    ["4.0.0", false],
+  ]) {
+    const s = happy();
+    const tiny = await planRefFor(s);
+    const t = reseal(s, tiny, (r) => {
+      if (pf === undefined) delete r.history.preflight;
+      else r.history.preflight = pf;
+    });
+    const out = await runOne(s, buildArgs(t));
+    if (ok) assert.equal(out.result.status, "ok", JSON.stringify(pf) + ": " + out.result.reason);
+    else {
+      assert.equal(out.result.status, "needs_human", JSON.stringify(pf));
+      assert.match(out.result.reason, /plan ref missing or changed.*history\.preflight/);
+    }
+  }
+});
+
+test("4.0.0: makePlanRef carries history.preflight through to the seal", async () => {
+  const m = /function makePlanRef\(f\) \{[\s\S]*?\n\}/.exec(SOURCE);
+  assert.ok(m);
+  assert.match(m[0], /history: f\.history/);
+  assert.match(m[0], /project: typeof f\.project === "string" && f\.project \? f\.project : null/);
 });

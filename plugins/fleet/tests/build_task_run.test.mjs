@@ -2576,6 +2576,8 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.equal(r.plan_ref.branch, "fleet/l42-add-thing");
   assert.equal(r.plan_ref.ref_sha256, sha256(s.__store[PC2]));
   assert.equal(JSON.parse(s.__store[PC2]).history.replans, 1);
+  // 4.0.0 (1992): the re-plan's ref seals the build's project too
+  assert.equal(JSON.parse(s.__store[PC2]).project, "o/r");
   assert.ok(!JSON.stringify(r).includes(SECRET));
   // no PR, no push, no write-back on a plan_wrong stop
   for (const l of ["infra:push", "role:fleet-pr-opener", "infra:ledger-writeback", "infra:comments-list", "infra:comments-post"])
@@ -2765,7 +2767,8 @@ test("write-back: a ledger failure is reported and never stops the run", async (
   assert.equal(out.result.ledger_status, "failed");
   assert.match(out.result.write_back.ledger[0].section_text, /fleet:l42/);
   // 3.1.3 (PR #41 review 2): a legacy ledger source with no project stops the build before any role
-  const noProject = await run(happy(), ARGS, { project: undefined });
+  // (4.0.0, 1992: only when the plan run sealed no project either)
+  const noProject = await run(happy(), { ...ARGS, project: undefined });
   assert.equal(noProject.result.status, "needs_human");
   assert.match(noProject.result.reason, /needs args\.project.*re-run plan/);
   assert.ok(!noProject.build.labels.includes("infra:ledger-writeback"));
@@ -6004,7 +6007,8 @@ test("2.1.5 yaadgaar: build re-reads the yaadgaar task, never L<N>", async () =>
 
 test("2.1.5 yaadgaar: a sealed legacy ledger source on a yadgarhq/ project stops the build", async () => {
   const s = happy();
-  const plan = await runOne(s, ARGS);
+  // 4.0.0 (1992): planned without project, so the build's project is not a mismatch
+  const plan = await runOne(s, { ...ARGS, project: undefined });
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /yaadgaar.*re-run plan/);
@@ -7003,7 +7007,7 @@ function jsPlanRefProblem() {
     JSON.stringify(["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]) +
     ";\n";
   assert.match(SOURCE, /const SOURCE_KINDS = \["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"\];/);
-  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "sealOf", "normPath", "cleanRepo", "briefProblem", "planRefProblem"].map(grab).join("\n");
+  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "sealOf", "normPath", "cleanRepo", "briefProblem", "preflightRecordProblem", "planRefProblem"].map(grab).join("\n");
   return new Function(consts + fns + "\nreturn planRefProblem;")();
 }
 
@@ -8871,7 +8875,8 @@ test("3.1.0 1958: a changed or truncated title after the write, a wrong body_slu
 });
 
 test("3.1.0 1958: a project that is not owner/repo writes nothing", async () => {
-  const out = await run(noBody(), ARGS, { project: "o/r/x" });
+  // 4.0.0 (1992): planned without project, so o/r/x is not a sealed-project mismatch
+  const out = await run(noBody(), { ...ARGS, project: undefined }, { project: "o/r/x" });
   assert.ok(!out.build.labels.includes("infra:ledger-body"));
   assert.equal(out.result.ledger_status, "failed");
 });
@@ -10813,23 +10818,32 @@ test("3.1.3 build: args.project, never the origin slug, decides the ledger check
   assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
   s["infra:yaadgaar-read"] = yaadgaarRead();
   s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
-  // no project at build: the origin slug o/r must not stand in for the ledger
-  // scope; the build runs, and the write-back refuses (fail closed)
+  // 4.0.0 (1992, AC-1992): no project at build: the project sealed at plan
+  // time (yadgarhq/docs) is the ledger scope, never the origin slug o/r
   const none = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date });
   assert.equal(none.result.status, "ok", none.result.reason);
-  assert.ok(!none.labels.includes("infra:yaadgaar-read"));
-  assert.ok(!none.labels.includes("infra:yaadgaar-writeback"));
-  assert.equal(none.result.ledger_status, "failed");
-  assert.match(none.result.write_back.ledger[0].reason, /no yadgarhq\/ project/);
-  assert.match(none.result.write_back.ledger[0].section_text, /fleet:y622/);
+  assert.ok(none.labels.includes("infra:yaadgaar-read"));
+  assert.deepEqual(none.result.write_back.ledger.map((e) => [e.ref, e.status]), [["yaadgaar #622", "written"]]);
+  // a ref sealed with no project and no project at build: the write-back refuses (fail closed)
+  const s0 = autoHappy({ brief: YBRIEF });
+  const plan0 = await runOne(s0, { ...YQ, confirm: "ask", project: undefined });
+  assert.equal(plan0.result.status, "awaiting_confirmation", plan0.result.reason);
+  s0["infra:yaadgaar-read"] = yaadgaarRead();
+  const none0 = await runOne(s0, { mode: "build", plan_ref: plan0.result.plan_ref, date: ARGS.date });
+  assert.equal(none0.result.status, "ok", none0.result.reason);
+  assert.ok(!none0.labels.includes("infra:yaadgaar-read"));
+  assert.ok(!none0.labels.includes("infra:yaadgaar-writeback"));
+  assert.equal(none0.result.ledger_status, "failed");
+  assert.match(none0.result.write_back.ledger[0].reason, /no yadgarhq\/ project/);
+  assert.match(none0.result.write_back.ledger[0].section_text, /fleet:y622/);
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.deepEqual(inputsOf(call(out, "infra:yaadgaar-read").prompt).tasks, [{ key: "s0", number: 622, id: YURN }]);
   assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["yaadgaar #622", "written"]]);
-  // another ledger's project at build still stops
+  // another ledger's project at build still stops (4.0.0: as a sealed-project mismatch)
   const o = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "m-agahi/ccpm" });
   assert.equal(o.result.status, "needs_human");
-  assert.match(o.result.reason, /yaadgaar.*re-run plan/);
+  assert.match(o.result.reason, /project mismatch.*re-run plan/);
 });
 
 test("3.1.3 intake: project reaches intake independent of the repo", async () => {
@@ -10948,7 +10962,8 @@ test("3.1.3 review 1: the confirmation names the resolved ledger and project", a
 
 test("3.1.3 review 2: build with no project stops on a legacy ledger source", async () => {
   const s = happy();
-  const plan = await runOne(s, ARGS);
+  // 4.0.0 (1992): a plan run with no project seals none
+  const plan = await runOne(s, { ...ARGS, project: undefined });
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date });
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /source ledger:42 needs args\.project.*re-run plan/);

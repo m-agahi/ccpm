@@ -6851,6 +6851,10 @@ async function planAndAudit(ctx) {
   const planFacts = {
     allowed_additions: plan.allowed_additions ? stripHeldOut(plan.allowed_additions) : null,
     est_diff_lines: typeof plan.est_diff_lines === "number" ? plan.est_diff_lines : null,
+    // 4.0.0 (1991): sealed so a build-mode :rerun of the auto gates sees the
+    // values the plan run judged
+    change_kind: CHANGE_KINDS.indexOf(plan.change_kind) >= 0 ? plan.change_kind : null,
+    new_behaviour: typeof plan.new_behaviour === "boolean" ? plan.new_behaviour : null,
     test_cmd: stripHeldOut(plan.test_cmd),
     repo_obligations: stripHeldOut(obligations),
     commands: commandsOf(plan.test_cmd, obligations),
@@ -7071,10 +7075,26 @@ function makePlanRef(f) {
     tldr: f.tldr,
     plan_diff: f.planDiff,
     plan_facts: f.planFacts,
+    // 4.0.0: history.preflight (optional, see preflightRecordProblem) rides
+    // in history; S3 fills it in plan mode and reads it in build mode
     history: f.history,
+    // 4.0.0 (1992): the ledger scope of the plan run (args.project), or null
+    project: typeof f.project === "string" && f.project ? f.project : null,
   });
   ref.seal = sealOf(ref);
   return ref;
+}
+
+// 4.0.0: the preflight record a plan run may seal in history.preflight:
+// {fleet_version, versions, dispatch, contract}, each map keyed by role. The
+// field is optional (absent or null in older refs and when not recorded).
+function preflightRecordProblem(p) {
+  if (p === undefined || p === null) return null;
+  if (typeof p !== "object" || Array.isArray(p)) return "history.preflight is not an object";
+  if (typeof p.fleet_version !== "string" || !p.fleet_version) return "history.preflight.fleet_version missing";
+  for (const k of ["versions", "dispatch", "contract"])
+    if (!p[k] || typeof p[k] !== "object" || Array.isArray(p[k])) return "history.preflight." + k + " is not an object";
+  return null;
 }
 
 function awaiting(reason, p, tiny, full, extra) {
@@ -7445,6 +7465,7 @@ async function planMode(input, date) {
         planDiff: p.planDiff,
         planFacts: p.planFacts,
         history: { runs: 1, replans: 0, agents: 0 },
+        project: input.project || null,
       },
     });
   } catch (e) {
@@ -7502,6 +7523,10 @@ function planRefProblem(r) {
   if (b) return b;
   if (r.branch !== "fleet/" + r.task_id + "-" + r.slug) return "branch does not match task_id and slug";
   if (!r.history || typeof r.history !== "object") return "history missing";
+  const pre = preflightRecordProblem(r.history.preflight);
+  if (pre) return pre;
+  // 4.0.0 (1992): absent in a ref sealed before 4.0.0
+  if ("project" in r && r.project !== null && (typeof r.project !== "string" || !r.project)) return "project is not a non-empty string or null";
   return null;
 }
 
@@ -7617,6 +7642,17 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   if (lp) changed(lp);
   if (loaded.branch !== tiny.branch || cleanRepo(loaded.brief.repo) !== repo || planRefName(loaded.task_id) !== tiny.plan_ref)
     changed("does not match plan_ref (branch, repo or task id)");
+  // 4.0.0 (1992): the ledger scope sealed at plan time. A build without
+  // args.project uses it; a different args.project stops. A ref sealed
+  // before 4.0.0 (or by a plan run without project) has none: args.project
+  // alone, as in 3.1.3.
+  const sealedProject = typeof loaded.project === "string" ? loaded.project : null;
+  if (sealedProject && input.project && input.project !== sealedProject)
+    halt("needs_human", "project mismatch: args.project " + JSON.stringify(input.project) + " but plan ref " + tiny.plan_ref + " sealed " + JSON.stringify(sealedProject) + "; build with the plan's project, or re-run plan");
+  if (sealedProject && !input.project) {
+    input = Object.assign({}, input, { project: sealedProject });
+    gate("project " + sealedProject + " from the sealed plan ref");
+  }
   const pf = loaded.plan_facts;
   if (!pf || typeof pf !== "object" || !("test_cmd" in pf) || !("repo_obligations" in pf) || !Array.isArray(pf.commands))
     halt("needs_human", "plan_ref predates 2.0.3; re-run plan (" + tiny.plan_ref + " has no plan_facts.test_cmd/repo_obligations/commands)");
@@ -7696,6 +7732,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const planFacts = {
     allowed_additions: ref.plan_facts.allowed_additions,
     est_diff_lines: typeof ref.plan_facts.est_diff_lines === "number" ? ref.plan_facts.est_diff_lines : null,
+    // 4.0.0 (1991): null in a ref sealed before 4.0.0
+    change_kind: CHANGE_KINDS.indexOf(pf.change_kind) >= 0 ? pf.change_kind : null,
+    new_behaviour: typeof pf.new_behaviour === "boolean" ? pf.new_behaviour : null,
     test_cmd: ref.plan_facts.test_cmd,
     repo_obligations: ref.plan_facts.repo_obligations,
     // the approved caller map (2.1.6); null in a ref sealed before 2.1.6
@@ -8410,6 +8449,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (cj.verdict === "plan_wrong")
       return replan({
         ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl,
+        project: input.project || null,
         findings: routed.filter((f) => f.target === "plan"),
         expectedHead: jc.state.fingerprint.head,
         expectedTree: codeTree,
@@ -8696,6 +8736,7 @@ async function replan(ctx) {
       planDiff: p.planDiff,
       planFacts: p.planFacts,
       history: { runs: history.runs, replans: n, agents: history.agents },
+      project: ctx.project,
     },
   });
   const newHead = pc.tiny.plan_commit;

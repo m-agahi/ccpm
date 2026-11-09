@@ -89,6 +89,18 @@ into the 4.0.0 entry.
   tool validates the schema and the model retries on a mismatch. The script-side retry and the
   strict type check work either way.
 
+### S2: the plan ref seals project (ledger 1992)
+
+- The sealed plan ref holds `project`: `args.project` of the plan run, or null. A re-plan seals
+  the build's project.
+- A build without `args.project` uses the sealed project for the ledger checks, the brief re-read
+  and the write-back. The gate log says "project <p> from the sealed plan ref".
+- A build whose `args.project` differs from the sealed one stops with "project mismatch".
+- A ref sealed before 4.0.0 has no `project`. Such a build uses `args.project` alone, as in 3.1.3.
+- `plan_facts` also seals `change_kind` and `new_behaviour`, null in an older ref.
+- `history.preflight` is optional. When present it is `{fleet_version, versions, dispatch,
+contract}`, with each map keyed by role. Any other shape is a changed ref.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker
