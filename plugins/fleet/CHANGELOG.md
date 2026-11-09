@@ -98,8 +98,15 @@ into the 4.0.0 entry.
 - A build whose `args.project` differs from the sealed one stops with "project mismatch".
 - A ref sealed before 4.0.0 has no `project`. Such a build uses `args.project` alone, as in 3.1.3.
 - `plan_facts` also seals `change_kind` and `new_behaviour`, null in an older ref.
-- `history.preflight` is optional. When present it is `{fleet_version, versions, dispatch,
-contract}`, with each map keyed by role. Any other shape is a changed ref.
+- `history.preflight` is optional. When present it is an object with a string `fleet_version` and
+  the maps `versions`, `dispatch` and `contract`, each keyed by role. Any other shape is a changed
+  ref.
+
+### S2: brief schema in the docs (ledger 1982)
+
+- The README states the brief source shape as `{kind, ref, url, body, id, project}`, with `kind`
+  `yaadgaar` included. The intake schema already had these keys in 3.1.3; the role pages carry the
+  same text.
 
 ## [3.1.3] - 2026-11-09
 

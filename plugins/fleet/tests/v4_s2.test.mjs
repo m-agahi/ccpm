@@ -6,6 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { SOURCE, ARGS, happy, run, runOne, call, inputsOf, planRefFor, buildArgs, sha256, canon } from "./harness.mjs";
 
 // REQUIRED_ON_OK as written in the script source
@@ -385,4 +386,16 @@ test("4.0.0: makePlanRef carries history.preflight through to the seal", async (
   assert.ok(m);
   assert.match(m[0], /history: f\.history/);
   assert.match(m[0], /project: typeof f\.project === "string" && f\.project \? f\.project : null/);
+});
+
+// ---------------------------------------------------------------- 1982 brief schema
+
+test("1982: the intake source schema and the README agree on {kind, ref, url, body, id, project}", async () => {
+  const out = await run(happy(), ARGS);
+  const src = call(out, "intake").opts.schema.properties.brief.properties.sources.items;
+  assert.deepEqual(Object.keys(src.properties).sort(), ["body", "id", "kind", "project", "ref", "url"]);
+  assert.deepEqual(src.properties.kind.enum, ["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]);
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /sources: \[\{kind, ref, url, body, id,\s+project\}\]/);
+  assert.match(readme, /`kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,\s+`plan` and `text`/);
 });

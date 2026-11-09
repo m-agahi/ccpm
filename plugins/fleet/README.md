@@ -207,8 +207,10 @@ line "build caller check skipped".
 
 Intake classifies the input and fetches its text: a ledger task through yadgar `task_get`, a Jira
 ticket through the Atlassian MCP, an issue or PR through `gh-personal` or the Codeberg API, a plan
-file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body}],
-repo, plan_path}`. Free text, a plan and a ledger task work in the caller's repo.
+file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body, id,
+project}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,
+`plan` and `text`. `id` and `project` are null except on a `yaadgaar` source. `url` and
+`plan_path` may be null. Free text, a plan and a ledger task work in the caller's repo.
 
 Since 3.1.3 (ledger 1979) intake resolves a task id only by calling the ledger tool, and the tool's
 answer is the truth. `args.project` is the ledger scope and is independent of `repo`: a
@@ -236,10 +238,12 @@ plan-only commit of the task and the staged plan doc is byte-identical to HEAD's
 no commit (never `--allow-empty`) and the new ref targets HEAD. The plan commit holds `plan_path` only; nothing under
 `.fleet/` is written, staged or committed, so a global `.fleet/` gitignore changes nothing. It
 holds `branch`, `plan_path`, `plan_sha256`, `criteria`, `brief`, `task_id`, `slug`, `tldr`,
-`plan_diff` (2.1.0), `plan_facts` (scope fence, estimate, `test_cmd` and `repo_obligations`),
-`history` (cumulative
-runs, re-plans and agents) and
-`seal`, the sha256 of the canonical JSON of the rest. It holds no held-out example. Commit-plan
+`plan_diff` (2.1.0), `plan_facts` (scope fence, estimate, `test_cmd`, `repo_obligations` and,
+since 4.0.0, `change_kind` and `new_behaviour`), `history` (cumulative runs, re-plans and agents,
+and since 4.0.0 an optional `preflight` record), `project` (4.0.0, ledger 1992: the plan run's
+`args.project`, or null) and `seal`, the sha256 of the canonical JSON of the rest. A build without
+`args.project` uses the sealed `project`. A build whose `args.project` differs from it stops with
+"project mismatch". It holds no held-out example. Commit-plan
 reads the ref back with `git cat-file tag`; the script checks that the commit holds exactly
 `plan_path`, that the tag targets the plan commit, and that the message parses to the sealed ref.
 
