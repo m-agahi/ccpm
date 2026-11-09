@@ -217,6 +217,8 @@ its notes to this entry.
   argument or shape problem ignores the parked data with the gate line "parked draft ignored";
   it never stops the run.
 - After a plan commit that used a parked folder, the commit step moves it to `parked/used/`.
+- Mutant tests: every S4 check was hand-mutated; each mutant fails a test, except one equivalent
+  mutant (the symbol union across rounds is implied by the per-round keep-every-symbol stop).
 
 ## [3.1.3] - 2026-11-09
 

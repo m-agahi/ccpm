@@ -29,6 +29,7 @@ import {
   gitEnv,
   SCRIPTS_SRC,
   FROZEN_VERSIONS,
+  CONTRACT_LINE,
   chunkedContentOf,
   redigest,
 } from "./harness.mjs";
@@ -168,6 +169,9 @@ test("4.0.0 1980: build mode re-checks every sealed criterion's test_args at loa
   assert.ok(!bad.labels.includes("infra:verify-plan"));
   const paths = await buildFrom(sealedRef({ plan_facts: Object.assign({}, facts, { test_cmd: { command: "pytest <paths>" } }), criteria: [Object.assign(criteria(1)[0], { test_args: "-k x" })] }));
   assert.equal(paths.result.stop_gate, "commands");
+  // a valid sealed test_args passes the load check
+  const ok = await buildFrom(sealedRef({ plan_facts: facts, criteria: [Object.assign(criteria(1)[0], { test_args: "--test token_store -- a::b --exact" })] }));
+  assert.ok(ok.labels.includes("infra:verify-plan"), ok.result.reason);
 });
 
 // ---------------------------------------------------------------- FENCED_FILES (S4 creates it, S5 fills it)
@@ -402,6 +406,31 @@ test("4.0.0 1983 AC-3: script-side re-plans count toward the 2 rounds", async ()
   assert.ok(!out.labels.includes("role:plan-audit"), "round 0 never reached the audit");
   assert.ok(out.logs.some((l) => /confusable character: re-plan round 1 of 2/.test(l)));
   assert.ok(!out.labels.some((l) => /audit-fix-3/.test(l)));
+  assert.deepEqual(out.labels.filter((l) => l.startsWith("role:scope-and-plan")), ["role:scope-and-plan", "role:scope-and-plan:audit-fix", "role:scope-and-plan:audit-fix-2"]);
+});
+
+test("4.0.0 1983: script-side refusals in every round stop after round 2, never a third", async () => {
+  const s = happy();
+  s["role:scope-and-plan"].changed_symbols = [{ symbol: "foo", occurrences: [{ at: "src/x.py:1", criterion: "AC1", dont_care: null }] }];
+  s["infra:callers"] = { status: "ok", reason: "grepped", occurrences: { foo: ["src/x.py:1", "src/y.py:2"] }, capped: [], auto_dont_care: { foo: [] }, doctest_md: [] };
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /src\/y\.py:2 is an occurrence.*\(after 2 re-plan rounds\)/);
+  assert.deepEqual(out.labels.filter((l) => l.startsWith("role:scope-and-plan")), ["role:scope-and-plan", "role:scope-and-plan:audit-fix", "role:scope-and-plan:audit-fix-2"]);
+  assert.ok(!out.labels.some((l) => l.startsWith("role:plan-audit")));
+});
+
+test("4.0.0 1983: a relaxed round stays relaxed when a later round restores round 0", async () => {
+  const s = gated();
+  s["role:scope-and-plan"] = planRound(s, { change_kind: "bug_fix", new_behaviour: false });
+  s["role:plan-audit"] = REFUSE("r0", "AC1");
+  s["role:scope-and-plan:audit-fix"] = planRound(s, { change_kind: "bug_fix", new_behaviour: false, criteria: criteria(1) });
+  s["role:plan-audit:audit-fix"] = REFUSE("r1", "AC1");
+  s["role:scope-and-plan:audit-fix-2"] = planRound(s, { change_kind: "bug_fix", new_behaviour: false });
+  s["role:plan-audit:audit-fix-2"] = APPROVE;
+  const out = await runOne(s, DEFAULT);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.match(out.result.confirm_reason, /re-plan relaxed: criterion AC2 dropped/);
 });
 
 test("4.0.0 1983 AC-4: a symbol named in round 1 and dropped in round 2 stops", async () => {
@@ -467,6 +496,12 @@ test("4.0.0 1983 AC-5: a round that relaxes round 0 is never auto-eligible", asy
   assert.equal(a.result.plan_ref.plan_commit, PC);
   assert.match(a.result.needs_max_section, /re-plan relaxed/);
   assert.ok(!a.labels.includes("role:fleet-intent-judge"));
+  // no gate agents are counted into the seal when the gates never run
+  const sa = mk({});
+  await runOne(sa, AUTO);
+  const sd = mk({});
+  await runOne(sd, DEFAULT);
+  assert.equal(JSON.parse(sa.__store[PC]).history.agents, JSON.parse(sd.__store[PC]).history.agents);
   // each condition alone (round 0 is a bug fix without new behaviour, so only the named one fires)
   const base = (round1, r0) => {
     const s = gated();
@@ -549,16 +584,20 @@ test("4.0.0 1991 AC-1: a classification that is missing, refused or has no quote
   ]) {
     for (const args of [DEFAULT, AUTO]) {
       const s = defaultHappy();
-      const j = Object.assign({}, s["role:fleet-intent-judge"], { __raw: true, role_version: FROZEN_VERSIONS["fleet-intent-judge"], role_contract: "CONTRACT: " + /\nconst CONTRACT = "([^"]+)";/.exec(SOURCE)[1] });
+      const j = Object.assign({}, s["role:fleet-intent-judge"], { __raw: true, role_version: FROZEN_VERSIONS["fleet-intent-judge"], role_contract: CONTRACT_LINE });
       if (c === undefined) delete j.classification;
       else j.classification = c;
       s["role:fleet-intent-judge"] = j;
       const out = await runOne(s, args);
       assert.equal(out.result.status, "needs_human", JSON.stringify(c));
-      if (out.result.failed_check) {
-        assert.equal(out.result.failed_check, "intent", JSON.stringify(c));
+      if (/no classification/.test(String(want))) {
+        // REQUIRED_ON_OK (S2): a missing or mistyped classification is contract drift
+        assert.equal(out.result.stop_gate, "contract", JSON.stringify(c) + " " + out.result.reason);
+        assert.ok(!out.result.failed_check, JSON.stringify(c));
+      } else {
+        assert.equal(out.result.failed_check, "intent", JSON.stringify(c) + " " + out.result.reason);
         assert.match(out.result.reason, want, JSON.stringify(c));
-      } else assert.equal(out.result.stop_gate, "contract", JSON.stringify(c) + " " + out.result.reason);
+      }
       assert.ok(!out.labels.some((l) => l.startsWith("role:fleet-test-writer")), JSON.stringify(c));
     }
   }
