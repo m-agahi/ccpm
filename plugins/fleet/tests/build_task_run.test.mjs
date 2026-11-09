@@ -11632,3 +11632,37 @@ test("3.1.3 review 7: a bare project_id= in advice is dropped; only a quoted led
   const ok = await halt(q, [{ ledger: "yadgar", project: "o/r", call: "mcp__yadgar__task_get(project_id=o/r, id=42)", error: "refused for task_get(project_id=o/r, id=42)" }]);
   assert.equal(ok.result.reason, "intake needs_human: " + q + "; ledgers tried: yadgar (project o/r) mcp__yadgar__task_get(project_id=o/r, id=42): refused for task_get(project_id=o/r, id=42)");
 });
+
+// The advice filter, extracted from the script (its constants and noAdvice).
+function extractNoAdvice() {
+  const line = (name) => {
+    const i = SOURCE.indexOf("\nconst " + name + " = ");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n", i + 1) + 1);
+  };
+  const i = SOURCE.indexOf("\nfunction noAdvice(");
+  assert.ok(i >= 0, "noAdvice");
+  const fn = SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  return new Function(["PROJECT_ADVICE_RE", "ADVICE_DROPPED", "LEDGER_CALL_RE", "ADVICE_MAX"].map(line).join("") + fn + "\nreturn noAdvice;")();
+}
+
+test("3.1.3 review 8: the advice filter runs in linear time on hostile text and caps its input", () => {
+  const noAdvice = extractNoAdvice();
+  for (const bad of ["read_task(" + "a=".repeat(5000), "task_get(" + "a=a,".repeat(3000), "find_tasks(" + "a= ".repeat(5000) + "x"]) {
+    const t0 = performance.now();
+    noAdvice(bad);
+    const ms = performance.now() - t0;
+    assert.ok(ms < 100, bad.slice(0, 12) + " took " + ms.toFixed(1) + " ms");
+  }
+  // over 4 KiB: cut, then tested; advice past the cut is never relayed
+  const long = "x".repeat(5000) + " set project_id=yadgarhq/docs in iam-db";
+  const out = noAdvice(long);
+  assert.ok(out.length <= 4096 + 40, String(out.length));
+  assert.doesNotMatch(out, /iam-db/);
+  const plain = noAdvice("y".repeat(5000));
+  assert.equal(plain, "y".repeat(4096) + " (cut)");
+  // the quoted call still passes; an unambiguous grammar keeps it exempt
+  assert.equal(noAdvice("task_get(project_id=o/r, id=42): external_task_ledger"), "task_get(project_id=o/r, id=42): external_task_ledger");
+  assert.equal(noAdvice("read_task(number=671)"), "read_task(number=671)");
+  assert.match(noAdvice("task_get(project_id=o/r id=42)"), /dropped/);
+});

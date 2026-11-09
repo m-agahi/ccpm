@@ -5486,9 +5486,14 @@ const ADVICE_DROPPED = "(dropped: it advised changing the repo's project identit
 // A quoted ledger tool call, e.g. task_get(project_id=o/r, id=42): plain
 // key=value arguments only, none naming a .yadgar path. Only such a call is
 // exempt; a bare project_id= anywhere else is tested like any other text.
-const LEDGER_CALL_RE = /\b(?:mcp__\w+__)?(?:task_get|task_list|read_task|find_tasks)\((?:\s*\w+=(?![^,()\s]*\.yadgar)[^,()\s]*\s*,?)*\)/g;
+// The grammar is unambiguous (no "=" in a value, a comma between arguments),
+// so a match fails in linear time on agent text; the text is cut to
+// ADVICE_MAX first.
+const LEDGER_CALL_RE = /\b(?:mcp__\w+__)?(?:task_get|task_list|read_task|find_tasks)\((?:\s*\w+=(?![^,()\s]*\.yadgar)[^,()\s=]*\s*(?:,(?=\s*\w+=)|(?=\))))*\)/g;
+const ADVICE_MAX = 4096;
 function noAdvice(text) {
-  return PROJECT_ADVICE_RE.test(text.replace(LEDGER_CALL_RE, "")) ? ADVICE_DROPPED : text;
+  const t = text.length > ADVICE_MAX ? text.slice(0, ADVICE_MAX) + " (cut)" : text;
+  return PROJECT_ADVICE_RE.test(t.replace(LEDGER_CALL_RE, "")) ? ADVICE_DROPPED : t;
 }
 function intakeHaltReason(it, raw) {
   const why = typeof it.reason === "string" && it.reason ? it.reason : "no reason";

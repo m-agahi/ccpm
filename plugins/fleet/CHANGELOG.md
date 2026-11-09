@@ -27,8 +27,10 @@ stays `fleet-v3`.
   that reason it drops each part (the reason, a call, an error) that mentions `.yadgar` or a
   project id. Only a quoted ledger tool call (`task_get`, `task_list`, `read_task` or
   `find_tasks` with plain `key=value` arguments and no `.yadgar` path) is exempt, so
-  `task_get(project_id=o/r, id=42)` passes and a bare "set project_id=..." is dropped. Reasons for
-  other inputs (Jira, issues, plans, text) are relayed as they are.
+  `task_get(project_id=o/r, id=42)` passes and a bare "set project_id=..." is dropped. Each part is
+  cut to 4 KiB before the test, and the call grammar is unambiguous (no `=` in a value, a comma
+  between arguments), so hostile text fails the match in linear time. Reasons for other inputs
+  (Jira, issues, plans, text) are relayed as they are.
 - Build mode checks the sealed sources against `args.project`, not the origin slug. With no
   `args.project`, a legacy yadgar ledger source stops the build ("re-run plan with project").
 
