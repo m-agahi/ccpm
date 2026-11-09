@@ -1,5 +1,36 @@
 # Changelog
 
+## [3.1.2] - 2026-11-09
+
+Ledger task 1974. No role page changes; install 3.1.2, then `/reload-plugins`. The contract marker
+stays `fleet-v3`.
+
+### More PATH re-check sites
+
+- `infra:path-check:<site>` now also runs right before the plan audit (`plan-audit`, with the
+  `:replan` and `:audit-fix` forms; the audit runs the planner's `test_cmd` in a scratch
+  worktree), the intent judge under `confirm: "auto"` (`intent`, `intent:rerun`), and each review
+  round's `pr-review:v<k>` and gate sweep `sweep:v<k>` (both run repo tests after the push). A
+  tool planted right before one of them stops the run at `iac`; the guarded step never runs.
+  Tests cover `plan-audit`, `intent`, `intent:rerun`, `pr-review:v1` and `sweep:v1`.
+- The plan ref's cumulative agent count with `confirm: "auto"` includes the intent re-check. The
+  agent cap is unchanged: re-checks do not count against it.
+
+### Mutant tests
+
+- R6: a re-check that returns `failed` or `needs_human` together with a digest-valid, well-shaped
+  program output. The 3.1.1 code already stopped the run; no test killed the mutant that drops the
+  status check. A test now does. No code change.
+- R7: the token without the counter. A test calls the workflow's `pathRecheck` twice at the same
+  site: the tokens differ, and the first result replayed at the second check is refused. No code
+  change.
+
+### Docs
+
+- README and SKILL.md: a `resumeFromRunId` call with the same args replays the earlier re-check
+  results, the same as every infra check. Never resume with the same args; call the workflow
+  again with a new `run_nonce` and let build mode continue from its run-state ref.
+
 ## [3.1.1] - 2026-11-09
 
 Ledger tasks 1969 and 1970. No role page changes; install 3.1.1, then `/reload-plugins`. The

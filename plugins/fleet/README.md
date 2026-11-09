@@ -569,17 +569,26 @@ the agent's Bash guard blocks them.
 
 **The PATH re-checks (3.1.1).** `~/.local/bin` is writable and early on PATH, so a tool planted
 after preflight would pass. The same program therefore runs again (`infra:path-check:<site>`)
-right before every step that runs repo code: `format-plan` and `commit-plan` in plan mode (and
-their `:replan` forms), and in build mode the test writers, the test fixers and the test judge of
+right before every step that runs repo code: `format-plan`, `plan-audit` (3.1.2: the audit runs
+the planner's `test_cmd` in a scratch worktree) and `commit-plan` in plan mode (and their
+`:replan` and `:audit-fix` forms), the intent judge under `confirm: "auto"` (`intent`,
+`intent:rerun`), and in build mode the test writers, the test fixers and the test judge of
 each test round, then the coder, the code fixers, the code judge and the commit of each code round,
-and each push. Each re-check passes the program a token of its own (a counter, the run nonce and
+each push, and the review of each review round and its gate sweep (`pr-review:v<k>`,
+`sweep:v<k>`, 3.1.2: both run repo tests after the push). Each re-check passes the program a token of its own (a counter, the run nonce and
 the site) after the repo; the program echoes it in `args`. The script accepts a result only when
 `args` is exactly `[repo, token]`, so the preflight's result, another site's result or a result
-recorded in an earlier run never passes, and nothing is cached. A failed, missing or tampered
-re-check, a path problem or an unshimmed tool stops with `needs_human`, `stop_gate: "iac"` and the
+recorded in an earlier run never passes. Two re-checks at the same site get different tokens
+(the counter). A failed, missing or tampered re-check, a not-ok status next to a clean output, a
+path problem or an unshimmed tool stops with `needs_human`, `stop_gate: "iac"` and the
 site's label, before the guarded step runs. The re-checks count in `agents` but not against the
 agent cap: the cap refuses exactly the runs it refused in 3.1.0. Not re-checked: the
-`check_cmd` scripts and the review probes.
+`check_cmd` scripts.
+
+**Resume replays re-checks.** A `resumeFromRunId` call with the same args (the same `run_nonce`)
+gets the same re-check prompts, so the runtime replays the earlier re-check results, the same as
+every other infra check. A tool planted since then is not seen. Never resume with the same args:
+call the workflow again with a new `run_nonce`, and build mode continues from its run-state ref.
 
 **Accepted residual (ADR-1172; no content scan stands in for it).** The PATH check and the shims
 do not stop a hook's or a test's call by absolute path to a real binary

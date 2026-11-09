@@ -2326,6 +2326,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:hook-surface:plan",
     "infra:path-check:format-plan",
     "infra:format-plan",
+    "infra:path-check:plan-audit",
     "role:plan-audit",
     "infra:stage-plan",
     "infra:path-check:commit-plan",
@@ -3212,6 +3213,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
     "infra:hook-surface:plan:replan",
     "infra:path-check:format-plan:replan",
     "infra:format-plan:replan",
+    "infra:path-check:plan-audit:replan",
     "role:plan-audit:replan",
     "infra:stage-plan:replan",
     "infra:path-check:commit-plan:replan",
@@ -10916,6 +10918,8 @@ test("3.1.0 IaC gate review 3: a change to code an existing exec stack runs at p
 // each re-check site and the step it guards: plan mode, then build mode
 const RECHECK_SITES = [
   ["format-plan", "infra:format-plan"],
+  // 3.1.2 (ledger 1974): the plan-audit runs the planner's test_cmd
+  ["plan-audit", "role:plan-audit"],
   ["commit-plan", "infra:commit-plan"],
   ["writers:r1", "role:fleet-test-writer:AC1:r1"],
   ["format-tests:r1", "infra:format-tests:r1"],
@@ -10925,6 +10929,8 @@ const RECHECK_SITES = [
   ["code-judge:r1", "role:fleet-code-judge:r1"],
   ["commit:r1", "infra:commit:r1"],
   ["push", "infra:push"],
+  // 3.1.2 (ledger 1974): the review runs repo tests after the push
+  ["pr-review:v1", "role:pr-review:v1"],
 ];
 const REAL_TOOL = { path: "/home/u/.local/bin/x", real: "/home/u/.local/bin/x", shim: false };
 const recheckPlanted = (prompt) => {
@@ -11061,6 +11067,141 @@ test("3.1.1 PATH re-check program: a token argument is echoed in args and the di
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- 3.1.2 (ledger 1974): more re-check sites; mutants R6 and R7
+
+// the guarded steps outside the happy run: the intent judge (confirm auto)
+// and the gate sweep (the review flags a gate)
+const sweepOn = () => ({
+  "role:pr-review:v1": { status: "ok", reason: "x", verdict: "approve", findings: [], touches_gate: true, checked: [] },
+  "role:gate-change-nonweakening-sweep:v1": { status: "ok", reason: "s", verdict: "non_weakening", units: [], findings: [] },
+  "hasher:fp-post:sweep:v1": { status: "ok", fingerprint: { head: CSHA(1), tree: "K1" } },
+});
+const EXTRA_SITES = [
+  ["intent", "role:fleet-intent-judge", () => autoHappy(), AUTO],
+  ["sweep:v1", "role:gate-change-nonweakening-sweep:v1", () => happy({ script: sweepOn() }), ARGS],
+];
+
+test("3.1.2 PATH re-check: the intent judge and the gate sweep are each preceded by their own re-check (hashers aside)", async () => {
+  for (const [site, step, mk, args] of EXTRA_SITES) {
+    const out = await run(mk(), args);
+    noUnscripted(out);
+    assert.equal(out.result.status, "ok", site + ": " + out.result.reason);
+    const at = out.labels.indexOf(step);
+    assert.ok(at > 0, step);
+    const before = out.labels.slice(0, at).filter((l) => !/^hasher:/.test(l));
+    assert.equal(before[before.length - 1], "infra:path-check:" + site, step + " is guarded");
+  }
+});
+
+test("3.1.2 PATH re-check: a tool planted right before the intent judge or the sweep stops the run; the step never runs", async () => {
+  for (const [site, step, mk, args] of EXTRA_SITES) {
+    const s = mk();
+    s["infra:path-check:" + site] = recheckPlanted;
+    const out = await run(s, args);
+    assert.equal(out.result.status, "needs_human", site);
+    assert.equal(out.result.stop_gate, "iac", site);
+    assert.match(out.result.reason, NOT_SHIMMED, site);
+    assert.ok(out.result.reason.includes("infra:path-check:" + site), site);
+    assert.ok(!out.labels.includes(step), site + ": " + step + " never runs");
+  }
+  // build mode with confirm auto re-runs the intent judge: intent:rerun guards it
+  const s = autoHappy();
+  const plan = await runOne(s, ARGS);
+  assert.equal(plan.result.status, "awaiting_confirmation");
+  Object.assign(s, {
+    "intake:rulings": { status: "ok", reason: "re-read", brief: BRIEF },
+    "hasher:pre-intent:rerun": { status: "ok", fingerprint: FP_PLAN },
+    "role:fleet-intent-judge:rerun": { status: "ok", reason: "fine", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } },
+    "hasher:fp-post:intent:rerun": { status: "ok", fingerprint: FP_PLAN },
+  });
+  const bargs = { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r", confirm: "auto" };
+  const ok = await runOne(s, bargs);
+  noUnscripted(ok);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+  const at = ok.labels.indexOf("role:fleet-intent-judge:rerun");
+  assert.equal(ok.labels.slice(0, at).filter((l) => !/^hasher:/.test(l)).pop(), "infra:path-check:intent:rerun");
+  s["infra:path-check:intent:rerun"] = recheckPlanted;
+  const out = await runOne(s, bargs);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "iac", out.result.reason);
+  assert.ok(out.result.reason.includes("infra:path-check:intent:rerun"));
+  assert.ok(!out.labels.includes("role:fleet-intent-judge:rerun"));
+});
+
+// mutant R6: the status check dropped. A re-check that returns failed or
+// needs_human next to a clean, digest-valid program output still stops.
+test("3.1.2 PATH re-check (mutant R6): a not-ok status with a valid digest and shape stops at iac", async () => {
+  for (const site of ["plan-audit", "code-judge:r1", "pr-review:v1"]) {
+    for (const status of ["failed", "needs_human"]) {
+      const s = happy();
+      s["infra:path-check:" + site] = (p) => {
+        const i = inputsOf(p);
+        return Object.assign(pathRecheckOut({}, [i.repo, i.token]), { status, reason: "x", __raw: true });
+      };
+      const out = await run(s, ARGS);
+      assert.equal(out.result.status, "needs_human", site + " " + status);
+      assert.equal(out.result.stop_gate, "iac", site + " " + status + ": " + out.result.reason);
+      assert.ok(out.result.reason.includes("infra:path-check:" + site + " could not complete: it returned " + status), out.result.reason);
+    }
+  }
+});
+
+// The workflow's pathRecheck and everything it calls, with a stubbed agent.
+function jsPathRecheck(agentStub) {
+  const grab = (name, kw) => {
+    const i = SOURCE.indexOf("\n" + (kw || "function ") + name + "(");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  };
+  const constBlock = (name, end) => {
+    const i = SOURCE.indexOf("\nconst " + name + " = ");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf(end, i) + end.length);
+  };
+  const consts =
+    'const STR = { type: "string" };' +
+    constBlock("K256", "];") +
+    constBlock("PATH_CHECK_PY", "`;") +
+    constBlock("PATH_TOOLS", "];") +
+    constBlock("NOT_SHIMMED", '";') +
+    constBlock("PATH_RECHECK_SCHEMA", "\n};") +
+    '\nconst SHA256_RE = /^[0-9a-f]{64}$/;\nconst JUDGE_AGENT = "fleet:judge";\nconst INFRA_MODEL = "sonnet";\n' +
+    'const state = { repo: "/r", nonce: "' + NONCE + '", pathChecks: 0, agents: 0 };\n' +
+    "function gate() {}\nfunction halt(status, msg, stopGate) { const e = new Error(msg); e.halt = { status, stopGate }; throw e; }\n" +
+    'function nonced(p) { return p + "\\nRun nonce: " + state.nonce; }\n';
+  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "shQuote", "pathCheck", "pathRecheckPrompt"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
+  return new Function("agent", consts + fns + "\nreturn pathRecheck;")(agentStub);
+}
+
+// mutant R7: a token without the counter. Two re-checks at the SAME site in
+// one run must get different tokens, and the first one's result replayed at
+// the second must be refused.
+test("3.1.2 PATH re-check (mutant R7): two re-checks at the same site get different tokens; a replay of the first is refused", async () => {
+  const seen = [];
+  let replay = null;
+  const recheck = jsPathRecheck(async (prompt, opts) => {
+    const i = inputsOf(prompt);
+    seen.push({ label: opts.label, token: i.token });
+    return replay || pathRecheckOut({}, [i.repo, i.token]);
+  });
+  await recheck("same", "Code");
+  assert.equal(seen.length, 1);
+  replay = pathRecheckOut({}, ["/r", seen[0].token]);
+  await assert.rejects(recheck("same", "Code"), (e) => {
+    assert.equal(e.halt.status, "needs_human");
+    assert.equal(e.halt.stopGate, "iac");
+    assert.match(e.message, /infra:path-check:same could not complete/);
+    return true;
+  });
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0].label, seen[1].label, "the same site");
+  assert.notEqual(seen[0].token, seen[1].token, "a token per check, not per site");
+  // a fresh result at a third check at the same site passes
+  replay = null;
+  await recheck("same", "Code");
+  assert.equal(new Set(seen.map((x) => x.token)).size, 3);
 });
 
 // ---------------------------------------------------------------- 3.1.1 (ledger 1970a): non-HCL IaC files get their own hint
