@@ -1479,7 +1479,9 @@ test("contract marker: a v1 marker in build-mode preflight halts before any buil
   const plan = await runOne(s, ARGS);
   assert.equal(plan.result.status, "awaiting_confirmation");
   s.preflight.contract["fleet-coder"] = "CONTRACT: fleet-v1";
-  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  // 4.0.0 (1990): a build loads the role pages in preflight only with
+  // fresh_preflight (else they come from the plan ref; v4_s3 covers that path)
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r", fresh_preflight: true });
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /contract fleet-v1 != fleet-v4/);
   assert.deepEqual(out.labels, ["preflight"]);

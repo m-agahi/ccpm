@@ -267,14 +267,45 @@ its notes to this entry.
   adds no option, sets no config and never skips a hook.
 - New shipped program `push_probe.py` (24 in all) classifies the output. `ok`, `hook_rejected`
   (git reached the remote before the hook declined), `non_ff` and `fetch_first` (a porcelain
-  `[rejected]` line: the remote branch exists) are access ok. An auth line (`Permission to .*
-denied`, `Authentication failed`, `Could not read from remote repository`,
-  `Repository not found`) is `denied`: the run stops with `needs_human` before any role runs, and
-  the reason quotes the line. A timeout (exit 124) or anything else logs "push access unknown" and
-  the run goes on; the real push is still gated later.
+  `[rejected]` line: the remote branch exists) are access ok.
+- An auth line is `denied`: the run stops with `needs_human` before any role runs, and the reason
+  quotes the line. The auth lines match one of these:
+  - `Permission to .* denied`
+  - `Authentication failed`
+  - `Could not read from remote repository`
+  - `Repository not found`
+- A timeout (exit 124) or anything else logs "push access unknown" and the run goes on; the real
+  push is still gated later.
 - The probe is advisory: a relay that is not the program's own (program, digest, or args not
   equal to its exit code) is "push access unknown", never a stop and never an access verdict.
 - Build mode runs no probe.
+
+### S3: preflight cache (ledger 1990)
+
+- Plan mode seals the role table it loaded in the plan ref as
+  `history.preflight = {fleet_version, versions, dispatch, contract}` (the raw DISPATCH and
+  CONTRACT lines, by role). `scripts_dir` and the PATH check are never sealed. The caller's
+  `cumulative` keeps the counts only.
+- A build's first agent is still `preflight` (haiku). It runs the full scripts directory probe
+  (`scripts_probe`, `scripts_dir`, the `path_check.py` run with its `file_sha256`) through the same
+  checks, and the PATH check, every time. It loads no role page.
+- After `infra:load-ref`, before any role: a record that this fleet version sealed and that passes
+  the same frozen checks as a page load (EXPECTED_VERSIONS minimum, the `fleet-v4` marker, a
+  usable DISPATCH line for every role) is the run's role table. No role page is loaded.
+- A record of another fleet version (3.1.3), no record, or a record that fails a check: the gate
+  line "the sealed role table is not usable", and `preflight:roles` (haiku) loads the pages, with
+  every check of a fresh preflight (reachable, none missing, frozen checks).
+- `fresh_preflight: true` (build mode, a boolean; anything else stops before any agent): the first
+  agent loads the pages as in 3.1.3.
+- A page bumped after the plan shows at the first role call (the runner's version or marker
+  differs). The stop then says "re-run build with fresh_preflight: true", and the skill does that
+  once.
+- A confirm-auto plan run builds with the table it loaded: no second load.
+- A build-mode re-plan (`plan_wrong`) seals no record. That fails safe: the next build loads the
+  pages.
+- Agent counts on the happy path (confirm ask): plan 15 -> 17 (the push probe and its PATH
+  re-check), build 49 -> 49 (the first agent no longer loads pages). A build with no usable record
+  dispatches 50. The saving is in model cost and page loads, not in agent count.
 
 ## [3.1.3] - 2026-11-09
 

@@ -147,6 +147,11 @@ runs `/build-task` explicitly, always use the fleet.
    `confirm: "auto"`: the workflow re-reads the task and runs its gates again before it builds. On `needs_human` with `needs_max_section`,
    show it verbatim and stop.
 
+   A build takes the role table (page versions, models, contract) from the plan ref. When a build
+   stops with a reason that says `re-run build with fresh_preflight: true` (a role page changed
+   after the plan), run step 8 once more with the same `plan_ref` and `fresh_preflight: true`
+   added to the args. Do this once only; if that run stops too, report it as in step 9.
+
    `plan_ref` is small: `{branch, plan_commit, plan_ref, ref_sha256, repo}`. Pass it exactly as the
    workflow returned it. The full plan ref is a local git object at `refs/fleet/<task id>/plan`
    (never a file, never pushed); the workflow checks it against `ref_sha256` and refuses a

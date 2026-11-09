@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import {
   spawnSync,
   canon,
+  commitStub,
+  FROZEN_VERSIONS,
   redigest,
   HAVE_PY,
   SCRIPTS_SRC,
@@ -438,4 +440,207 @@ test("4.0.0 1985 (real python): push_probe.py classifies the dry-run output", { 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- 1990 preflight cache
+
+// Rewrites the sealed plan ref in the store (resealed), and returns the tiny
+// ref for it.
+function reseal(s, tiny, fn) {
+  const content = s.__store[tiny.plan_commit];
+  const o = JSON.parse(content);
+  fn(o);
+  delete o.seal;
+  o.seal = sha256(canon(o));
+  const next = JSON.stringify(o) + (content.endsWith("\n") ? "\n" : "");
+  s.__store[tiny.plan_commit] = next;
+  return Object.assign({}, tiny, { ref_sha256: sha256(next) });
+}
+const BUILD = (tiny, over) => Object.assign({ mode: "build", plan_ref: tiny, date: "2026-11-04", project: "o/r" }, over || {});
+const ROLE_LOAD = /agent_prompt_get/;
+// an infra agent that loads role pages (role runners load their own page)
+const pageLoad = (c) => !c.label.startsWith("role:") && ROLE_LOAD.test(c.prompt);
+
+test("4.0.0 1990 AC-1990-1: absolute agent counts; a build with a cached preflight dispatches no more agents than before", async () => {
+  // measured on e6d1dcc (before S3): plan 15, build 49 (confirm ask happy path)
+  const out = await run(happy(), Object.assign({}, ARGS, { confirm: "ask" }));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  // plan: + infra:path-check:push-probe + infra:push-probe (1985)
+  assert.equal(out.plan.calls.length, 17, out.plan.labels.join(", "));
+  assert.equal(out.planResult.agents, 17);
+  // build: the role-page load is replaced by a scripts and PATH check (still the first agent)
+  assert.equal(out.build.calls.length, 49, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 49);
+  const first = out.build.calls[0];
+  assert.equal(first.label, "preflight");
+  assert.equal(first.opts.model, "haiku");
+  assert.doesNotMatch(first.prompt, ROLE_LOAD);
+  assert.match(first.prompt, /path_check\.py/);
+  assert.match(first.prompt, /as one Bash call: bash -c '/, "the scripts directory probe runs in every build");
+  assert.ok(!out.build.labels.includes("preflight:roles"));
+  // the plan run loaded the role pages once
+  assert.match(out.plan.calls[0].prompt, ROLE_LOAD);
+  assert.equal(out.plan.calls.filter(pageLoad).length, 1);
+  // the role versions the build reports are the sealed ones
+  assert.deepEqual(out.result.role_versions, FROZEN_VERSIONS);
+});
+
+test("4.0.0 1990: plan mode seals history.preflight {fleet_version, versions, dispatch, contract}; never scripts_dir or the PATH check", async () => {
+  const s = happy();
+  s.preflight.dispatch["fleet-coder"] = "DISPATCH: model=opus (fallback=sonnet)";
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
+  const p = ref.history.preflight;
+  assert.deepEqual(Object.keys(p).sort(), ["contract", "dispatch", "fleet_version", "versions"]);
+  assert.equal(p.fleet_version, "4.0.0");
+  assert.deepEqual(p.versions, FROZEN_VERSIONS);
+  assert.equal(p.dispatch["fleet-coder"], "DISPATCH: model=opus (fallback=sonnet)");
+  assert.deepEqual(Object.keys(p.contract).sort(), Object.keys(FROZEN_VERSIONS).sort());
+  const text = JSON.stringify(ref);
+  assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/4.0.0/scripts"), "no scripts dir or PATH check sealed");
+  // the caller's cumulative carries the counts only
+  assert.deepEqual(Object.keys(out.result.cumulative).sort(), ["agents", "replans", "runs"]);
+  // the build uses the sealed tier
+  const b = await runOne(s, BUILD(out.result.plan_ref));
+  assert.equal(b.result.status, "ok", b.result.reason);
+  assert.equal(call(b, "role:fleet-coder:r1").opts.model, "opus");
+});
+
+test("4.0.0 1990 AC-1990-3: a 3.1.3 record, no record, or fresh_preflight loads the role pages; a 4.0.0 record does not", async () => {
+  // a record of another fleet version, or none: the build loads the pages after load-ref
+  for (const fix of [(o) => (o.history.preflight.fleet_version = "3.1.3"), (o) => delete o.history.preflight]) {
+    const s = happy();
+    const plan = await runOne(s, ARGS);
+    const tiny = reseal(s, plan.result.plan_ref, fix);
+    const b = await runOne(s, BUILD(tiny));
+    noUnscripted(b);
+    assert.equal(b.result.status, "ok", b.result.reason);
+    assert.doesNotMatch(b.calls[0].prompt, ROLE_LOAD);
+    const L = b.labels;
+    assert.equal(L.indexOf("preflight:roles"), L.indexOf("infra:load-ref") + 1, L.join(", "));
+    assert.match(call(b, "preflight:roles").prompt, ROLE_LOAD);
+    assert.equal(call(b, "preflight:roles").opts.model, "haiku");
+    assert.equal(b.calls.length, 50);
+    assert.equal(b.calls.filter(pageLoad).length, 1);
+  }
+  // fresh_preflight: the first agent loads them (one agent, as in 3.1.3)
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  const b = await runOne(s, BUILD(plan.result.plan_ref, { fresh_preflight: true }));
+  noUnscripted(b);
+  assert.equal(b.result.status, "ok", b.result.reason);
+  assert.match(b.calls[0].prompt, ROLE_LOAD);
+  assert.ok(!b.labels.includes("preflight:roles"));
+  assert.equal(b.calls.length, 49);
+  // a 4.0.0 record: no role-page load in the whole build
+  const s2 = happy();
+  const p2 = await runOne(s2, ARGS);
+  const b2 = await runOne(s2, BUILD(p2.result.plan_ref));
+  assert.equal(b2.calls.filter(pageLoad).length, 0);
+});
+
+test("4.0.0 1990: a sealed record that fails the frozen checks is never used; the build loads the role pages", async () => {
+  for (const [name, fix] of [
+    ["stale version", (o) => (o.history.preflight.versions["fleet-coder"] = 17)],
+    ["missing version", (o) => delete o.history.preflight.versions["pr-review"]],
+    ["old contract", (o) => (o.history.preflight.contract["plan-audit"] = "CONTRACT: fleet-v3")],
+    ["no dispatch", (o) => (o.history.preflight.dispatch["fleet-coder"] = null)],
+  ]) {
+    const s = happy();
+    const plan = await runOne(s, ARGS);
+    const tiny = reseal(s, plan.result.plan_ref, fix);
+    const b = await runOne(s, BUILD(tiny));
+    assert.equal(b.result.status, "ok", name + ": " + b.result.reason);
+    assert.ok(b.labels.includes("preflight:roles"), name);
+    assert.ok(b.result.gate_log.some((g) => g.startsWith("preflight: the sealed role table is not usable")), name);
+  }
+  // the pages the build loads still pass every frozen check
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  const tiny = reseal(s, plan.result.plan_ref, (o) => delete o.history.preflight);
+  s["preflight:roles"] = Object.assign(JSON.parse(JSON.stringify(s.preflight)), { versions: Object.assign({}, FROZEN_VERSIONS, { "fleet-coder": 17 }) });
+  const b = await runOne(s, BUILD(tiny));
+  assert.equal(b.result.status, "needs_human");
+  assert.equal(b.result.stop_gate, "contract");
+  assert.match(b.result.reason, /role fleet-coder version 17 < frozen 18/);
+  assert.ok(!b.labels.some((l) => l.startsWith("role:")));
+  // and an unreachable library stops it
+  const s3 = happy();
+  const p3 = await runOne(s3, ARGS);
+  const t3 = reseal(s3, p3.result.plan_ref, (o) => delete o.history.preflight);
+  s3["preflight:roles"] = { reachable: false, missing: [], reason: "transport error" };
+  const b3 = await runOne(s3, BUILD(t3));
+  assert.equal(b3.result.status, "needs_human");
+  assert.match(b3.result.reason, /yadgar unavailable/);
+});
+
+test("4.0.0 1990: a page bumped after the plan shows at the first role call; the stop says re-run with fresh_preflight", async () => {
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  // the runner loaded v12 of the test judge; the sealed record says v11
+  s["role:fleet-test-judge:r1"].role_version = FROZEN_VERSIONS["fleet-test-judge"] + 1;
+  const b = await runOne(s, BUILD(plan.result.plan_ref));
+  assert.equal(b.result.status, "needs_human");
+  assert.equal(b.result.stop_gate, "contract");
+  assert.match(b.result.reason, /role fleet-test-judge runner loaded version 12 but preflight saw 11/);
+  assert.ok(b.result.reason.includes("fresh_preflight: true"), b.result.reason);
+  // a fresh load says nothing of the cache
+  const b2 = await runOne(s, BUILD(plan.result.plan_ref, { fresh_preflight: true }));
+  assert.equal(b2.result.status, "needs_human");
+  assert.ok(!b2.result.reason.includes("fresh_preflight"), b2.result.reason);
+  // the contract marker too
+  const s3 = happy();
+  const p3 = await runOne(s3, ARGS);
+  s3["role:fleet-test-judge:r1"].role_contract = "CONTRACT: fleet-v5";
+  const b3 = await runOne(s3, BUILD(p3.result.plan_ref));
+  assert.equal(b3.result.stop_gate, "contract");
+  assert.ok(b3.result.reason.includes("fresh_preflight: true"), b3.result.reason);
+});
+
+test("4.0.0 1990: args.fresh_preflight must be a boolean; checked before any agent", async () => {
+  for (const v of ["yes", 1, null]) {
+    const out = await runOne(happy(), Object.assign({}, ARGS, { fresh_preflight: v }));
+    assert.equal(out.result.status, "needs_human");
+    assert.match(out.result.reason, /args\.fresh_preflight must be true or false/);
+    assert.equal(out.calls.length, 0);
+  }
+  const ok = await runOne(happy(), Object.assign({}, ARGS, { fresh_preflight: false }));
+  assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+});
+
+test("4.0.0 1990: confirm auto builds in the plan run with the role table it loaded; no second load", async () => {
+  // the auto gates' stubs (as autoHappy in build_task_run.test.mjs)
+  const s = happy();
+  Object.assign(s, {
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: "abc1234def0", tree: "P0" } },
+    "role:fleet-intent-judge": { status: "ok", reason: "matches", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: "abc1234def0", tree: "P0" } },
+  });
+  const out = await runOne(s, Object.assign({}, ARGS, { confirm: "auto" }));
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.calls.filter(pageLoad).length, 1);
+  assert.ok(!out.labels.includes("preflight:roles"));
+  assert.equal(out.labels.filter((l) => l === "preflight").length, 1);
+});
+
+test("4.0.0 1990: a build-mode re-plan seals no preflight record (the next build loads the pages)", async () => {
+  const PC2 = "0123456789ab";
+  const s = happy();
+  Object.assign(s, {
+    "role:fleet-code-judge:r1": { status: "ok", reason: "plan wrong", verdict: "plan_wrong", routed_findings: [{ target: "plan", criterion: "AC2", finding: "x — Proposed plan change: split AC2" }] },
+    "infra:replan-worktree": { status: "ok", reason: "ok", head: "abc1234def0" },
+    "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
+    "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
+    "infra:replan-reset": { status: "ok", reason: "reset", head: PC2, superseded_head: "5555555" },
+  });
+  s["role:scope-and-plan:replan"] = s["role:scope-and-plan"];
+  s["infra:commit-plan:replan"] = commitStub(s.__store, PC2, "d".repeat(64));
+  const plan = await runOne(s, ARGS);
+  const b = await runOne(s, BUILD(plan.result.plan_ref));
+  assert.equal(b.result.status, "awaiting_confirmation", b.result.reason);
+  const ref = JSON.parse(s.__store[PC2]);
+  assert.equal(ref.history.replans, 1);
+  assert.ok(!("preflight" in ref.history), JSON.stringify(ref.history));
 });

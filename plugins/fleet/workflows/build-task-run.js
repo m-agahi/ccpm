@@ -1314,6 +1314,16 @@ const PUSH_PROBE_SCHEMA = {
     digest: STR,
   },
 };
+// 4.0.0 (1990): a build's first agent when the role pages may come from the plan ref
+const PREFLIGHT_SCRIPTS_SCHEMA = {
+  type: "object",
+  properties: {
+    scripts_probe: { type: "array", items: STR },
+    scripts_dir: STR_OR_NULL,
+    path_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
+    reason: STR,
+  },
+};
 const INFRA_SCHEMA = {
   type: "object",
   additionalProperties: true,
@@ -3830,28 +3840,53 @@ function rolePrompt(role, inputs) {
   );
 }
 
-function preflightPrompt(inputs) {
+// 4.0.0 (1990): part "all" (plan mode, fresh_preflight) loads the role pages
+// and finds the scripts directory in one agent; "scripts" (a build's first
+// agent) only finds the scripts directory and runs the PATH check; "roles" (a
+// build whose plan ref holds no usable role table) only loads the pages.
+function preflightPrompt(inputs, part) {
+  const which = part || "all";
+  const roles = which !== "scripts";
+  const scripts = which !== "roles";
   return (
-    "Infra step of the fleet build workflow: check that the yadgar role library is reachable. Read only; do nothing else.\n" +
+    (roles
+      ? "Infra step of the fleet build workflow: check that the yadgar role library is reachable. Read only; do nothing else.\n"
+      : "Infra step of the fleet build workflow: find the fleet scripts directory and check the agent PATH. Read only; do nothing else.\n") +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
+    (roles ? preflightRolesText() : "") +
+    (scripts ? preflightScriptsText(inputs.repo, roles) : "") +
+    (which === "all"
+      ? "Return {reachable, missing, versions, dispatch, contract, scripts_probe, scripts_dir, path_check, reason}."
+      : which === "roles"
+        ? "Return {reachable, missing, versions, dispatch, contract, reason}."
+        : "Return {scripts_probe, scripts_dir, path_check, reason}.")
+  );
+}
+
+function preflightRolesText() {
+  return (
     "Load mcp__yadgar__agent_prompt_get via ToolSearch. Call it once per pattern in `roles`, with project=`role_project`. " +
     "A pattern is missing when the call returns an error such as not_found, or empty content. " +
     "reachable=false when the tool is absent or every call fails with a transport, auth or connection error. " +
     "versions maps each found pattern to its `version`. " +
     "dispatch maps each found pattern to the first line of its `content` that matches `DISPATCH: model=<tier> (fallback=<tier>)` (the fallback part is optional), copied raw; null when no line matches. " +
     "contract maps each found pattern to the first line of its `content` that starts with `CONTRACT:`, copied raw; null when none. " +
-    "`content` often has no trailing newline: its last line counts as a line like any other. " +
-    "Then find the fleet scripts directory (4.0.0): run this one command exactly as written, unmodified, as one Bash call: " +
+    "`content` often has no trailing newline: its last line counts as a line like any other. "
+  );
+}
+
+function preflightScriptsText(repo, after) {
+  return (
+    (after ? "Then find" : "Find") + " the fleet scripts directory (4.0.0): run this one command exactly as written, unmodified, as one Bash call: " +
     SCRIPTS_PROBE +
     "\nscripts_probe = its output lines, every line in order, copied unchanged. " +
     "When exactly one line starts with `hit=`, scripts_dir = the rest of that line; otherwise scripts_dir = null, path_check = null, and skip the next command. " +
     "Then run this one command as one Bash call, with <scripts_dir> replaced by scripts_dir and nothing else changed: " +
     "sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py " +
-    shQuote(inputs.repo) +
-    "\nIt prints one JSON object {tools, args, path_problems, program, digest}: return it as path_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n" +
-    "Return {reachable, missing, versions, dispatch, contract, scripts_probe, scripts_dir, path_check, reason}."
+    shQuote(repo) +
+    "\nIt prints one JSON object {tools, args, path_problems, program, digest}: return it as path_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n"
   );
 }
 
@@ -6354,6 +6389,11 @@ const state = {
   scriptsDir: null,
   // 4.0.0 (1993): a plan ref committed but not verified (returned on a halt)
   unverifiedPlanRef: null,
+  // 4.0.0 (1990): the role table is set (roleVersions, models); it came from
+  // the sealed plan ref (cached); the record a plan run seals
+  rolesLoaded: false,
+  preflightCached: false,
+  preflightRecord: null,
 };
 
 function gate(msg) {
@@ -6477,10 +6517,12 @@ function contractProblem(role, r) {
 // The runner loaded another page version or contract marker than preflight
 // saw. Never retried.
 function versionProblem(role, r) {
+  // 4.0.0 (1990): the table came from the plan ref; the page may have moved since
+  const fresh = state.preflightCached ? "; the role table came from the plan ref: re-run build with fresh_preflight: true" : "";
   if (r.role_version !== state.roleVersions[role])
-    return "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded";
+    return "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded" + fresh;
   const c = contractOf(r.role_contract);
-  if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded" + RELOAD_HINT;
+  if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded" + fresh + RELOAD_HINT;
   return null;
 }
 
@@ -6664,13 +6706,19 @@ function layoutKey(key, repo) {
   return { key, branch: "fleet/" + key, root, mainWt: root + "/main", scratch: root + "/scratch" };
 }
 
-async function preflightStep(repo) {
+// scriptsOnly (4.0.0, 1990): a build that may take the role table from its
+// plan ref; the scripts directory and the PATH check are never cached.
+async function preflightStep(repo, scriptsOnly) {
   phase("Preflight");
-  const pre = await dispatch("preflight", preflightPrompt({ roles: ROLES, role_project: ROLE_PROJECT, repo }), {
-    schema: PREFLIGHT_SCHEMA,
-    agentType: JUDGE_AGENT,
-    phase: "Preflight",
-  });
+  const pre = await dispatch(
+    "preflight",
+    scriptsOnly ? preflightPrompt({ repo }, "scripts") : preflightPrompt({ roles: ROLES, role_project: ROLE_PROJECT, repo }),
+    {
+      schema: scriptsOnly ? PREFLIGHT_SCRIPTS_SCHEMA : PREFLIGHT_SCHEMA,
+      agentType: JUDGE_AGENT,
+      phase: "Preflight",
+    },
+  );
   // 4.0.0 (1993): the shipped programs' directory, found by this run's first
   // agent (never cached, never sealed); the PATH check below ran from it, and
   // its self-hash proves the directory holds this version's programs
@@ -6681,40 +6729,92 @@ async function preflightStep(repo) {
   // Max's ruling (2026-11-09): IaC tooling may only be reachable through the nix shims
   pathCheck(pre.path_check, repo);
   state.repo = repo;
+  if (scriptsOnly) {
+    gate("preflight: role pages not loaded yet (the plan ref may hold the role table)");
+    return;
+  }
+  rolesFrom(pre);
+}
+
+// A role-page load's result: the library reachable, every role found, and
+// the frozen checks on the table.
+function rolesFrom(pre) {
   if (!pre.reachable) halt("needs_human", "yadgar unavailable: " + (pre.reason || "role library unreachable"));
   const missing = pre.missing || [];
   if (missing.length) halt("needs_human", "role missing in yadgar: " + missing.join(", "));
   gate("preflight: all " + ROLES.length + " roles loadable");
-  const versions = pre.versions || {};
-  const contracts = pre.contract || {};
+  applyRoleTable(pre.versions || {}, pre.contract || {}, pre.dispatch || {});
+}
+
+// 4.0.0 (1990): why a role table (versions, CONTRACT lines, DISPATCH lines,
+// each keyed by role) fails the frozen checks, or null. The same checks run
+// on a fresh page load and on the table a plan ref sealed.
+function roleTableProblem(versions, contracts, dispatchLines) {
+  const v = versions && typeof versions === "object" ? versions : {};
+  const c0 = contracts && typeof contracts === "object" ? contracts : {};
+  const d = dispatchLines && typeof dispatchLines === "object" ? dispatchLines : {};
+  for (const role of ROLES) {
+    const got = v[role];
+    const want = EXPECTED_VERSIONS[role];
+    if (typeof got !== "number") return "role " + role + " version missing in preflight (frozen minimum " + want + ")";
+    if (got < want)
+      return "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): the agent_prompt_get(" + role + ", project " + ROLE_PROJECT + ") wiki version " + got + " must be >= " + want + "; update that page in place; see CHANGELOG 4.0.0 deploy order";
+    const c = contractOf(c0[role]);
+    if (c !== CONTRACT) return "role " + role + " contract " + c + " != " + CONTRACT + RELOAD_HINT;
+  }
+  for (const role of ROLES)
+    if (!parseDispatch(d[role])) return "role " + role + " has no usable DISPATCH line (" + JSON.stringify(d[role] || null) + "); no tier is hardcoded";
+  return null;
+}
+
+// Sets the run's role table, or stops at contract. Keeps the record a plan
+// run seals: {fleet_version, versions, dispatch, contract}, the raw lines.
+function applyRoleTable(versions, contracts, dispatchLines) {
+  const p = roleTableProblem(versions, contracts, dispatchLines);
+  if (p) halt("needs_human", p, "contract");
+  const rec = { fleet_version: FLEET_VERSION, versions: {}, dispatch: {}, contract: {} };
   for (const role of ROLES) {
     const got = versions[role];
     const want = EXPECTED_VERSIONS[role];
-    if (typeof got !== "number")
-      halt("needs_human", "role " + role + " version missing in preflight (frozen minimum " + want + ")", "contract");
-    if (got < want)
-      halt(
-        "needs_human",
-        "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): the agent_prompt_get(" + role + ", project " + ROLE_PROJECT + ") wiki version " + got + " must be >= " + want + "; update that page in place; see CHANGELOG 4.0.0 deploy order",
-        "contract",
-      );
     if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");
     state.roleVersions[role] = got;
-    const c = contractOf(contracts[role]);
-    if (c !== CONTRACT) halt("needs_human", "role " + role + " contract " + c + " != " + CONTRACT + RELOAD_HINT, "contract");
+    rec.versions[role] = got;
+    rec.contract[role] = contracts[role];
   }
-  const dispatchLines = pre.dispatch || {};
   for (const role of ROLES) {
     const t = parseDispatch(dispatchLines[role]);
-    if (!t)
-      halt(
-        "needs_human",
-        "role " + role + " has no usable DISPATCH line (" + JSON.stringify(dispatchLines[role] || null) + "); no tier is hardcoded",
-        "contract",
-      );
     state.models[role] = t;
+    rec.dispatch[role] = dispatchLines[role];
     gate("model: " + role + " -> " + t.model + (t.fallback ? " (fallback " + t.fallback + ")" : ""));
   }
+  state.preflightRecord = rec;
+  state.rolesLoaded = true;
+}
+
+// 4.0.0 (1990): a build's role table. The plan ref's record when this fleet
+// version sealed it and it passes the frozen checks; else the pages are
+// loaded now. A page bumped after the plan shows at the first role call
+// (versionProblem), and that stop says to re-run with fresh_preflight.
+async function rolesFromRef(rec) {
+  const why =
+    !rec || typeof rec !== "object"
+      ? "the plan ref holds no role table"
+      : rec.fleet_version !== FLEET_VERSION
+        ? "sealed by fleet " + rec.fleet_version + ", not " + FLEET_VERSION
+        : roleTableProblem(rec.versions, rec.contract, rec.dispatch);
+  if (!why) {
+    applyRoleTable(rec.versions, rec.contract, rec.dispatch);
+    state.preflightCached = true;
+    gate("preflight: role table from the plan ref (fleet " + FLEET_VERSION + ", " + CONTRACT + "); no role page loaded");
+    return;
+  }
+  gate("preflight: the sealed role table is not usable (" + why + "); loading the role pages");
+  const pre = await dispatch("preflight:roles", preflightPrompt({ roles: ROLES, role_project: ROLE_PROJECT }, "roles"), {
+    schema: PREFLIGHT_SCHEMA,
+    agentType: JUDGE_AGENT,
+    phase: "Verify",
+  });
+  rolesFrom(pre);
 }
 
 // 4.0.0 (1985): plan mode only, before the planner. A fresh PATH re-check,
@@ -7845,6 +7945,13 @@ function preflightRecordProblem(p) {
   return null;
 }
 
+// 4.0.0 (1990): the history counts the caller sees (not the sealed role table)
+function countsOf(h) {
+  const o = Object.assign({}, h);
+  delete o.preflight;
+  return o;
+}
+
 function awaiting(reason, p, tiny, full, extra) {
   return stripHeldOut(
     Object.assign(finish("awaiting_confirmation", reason), {
@@ -7854,7 +7961,7 @@ function awaiting(reason, p, tiny, full, extra) {
       plan_path: p.planPath,
       commands: p.planFacts.commands,
       plan_ref: tiny,
-      cumulative: full.history,
+      cumulative: countsOf(full.history),
     }, extra || {}),
   );
 }
@@ -8269,7 +8376,8 @@ async function planMode(input, date) {
         tldr: p.tldr,
         planDiff: p.planDiff,
         planFacts: p.planFacts,
-        history: { runs: 1, replans: 0, agents: 0 },
+        // 4.0.0 (1990): the role table this run loaded, for the build
+        history: { runs: 1, replans: 0, agents: 0, preflight: state.preflightRecord },
         project: input.project || null,
       },
     });
@@ -8385,7 +8493,8 @@ async function buildMode(input, date) {
   const lay = layoutKey(tiny.branch.slice("fleet/".length), repo);
   state.branch = lay.branch;
 
-  await preflightStep(repo);
+  // 4.0.0 (1990): the role pages come from the plan ref unless fresh_preflight
+  await preflightStep(repo, input.fresh_preflight !== true);
   const ws = await workspaceStep(repo, lay);
   return buildFromRef(input, date, tiny, lay, ws, { rerunGates: input.confirm === "auto", intent: null, agentsBase: 0 });
 }
@@ -8459,6 +8568,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   if (lp) changed(lp);
   if (loaded.branch !== tiny.branch || cleanRepo(loaded.brief.repo) !== repo || planRefName(loaded.task_id) !== tiny.plan_ref)
     changed("does not match plan_ref (branch, repo or task id)");
+  // 4.0.0 (1990): before any role runs
+  if (!state.rolesLoaded) await rolesFromRef(loaded.history.preflight);
   // 4.0.0 (1992): the ledger scope sealed at plan time. A build without
   // args.project uses it; a different args.project stops. A ref sealed
   // before 4.0.0 (or by a plan run without project) has none: args.project
@@ -9861,6 +9972,9 @@ async function main(input) {
   state.mode = mode;
   if (input.confirm !== undefined && CONFIRMS.indexOf(input.confirm) < 0)
     stop("needs_human", "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm));
+  // 4.0.0 (1990, S3): build mode loads the role pages again when true
+  if (input.fresh_preflight !== undefined && typeof input.fresh_preflight !== "boolean")
+    stop("needs_human", "args.fresh_preflight must be true or false, got " + JSON.stringify(input.fresh_preflight));
   if (typeof input.date !== "string" || !DATE_RE.test(input.date))
     stop("needs_human", "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)");
   if (typeof input.run_nonce !== "string" || !NONCE_RE.test(input.run_nonce))

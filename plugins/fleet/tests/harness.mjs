@@ -237,6 +237,13 @@ export async function runOne(script, args0) {
       const i = inputsOf(prompt);
       return { status: "ok", reason: "read", parked: null, args: [i.scratch, i.plan_tip_time === null ? "null" : String(i.plan_tip_time)] };
     }
+    // 4.0.0 (1990, S3): an unscripted role-page load (build mode, no usable
+    // sealed preflight record) reads what the plan run's preflight read
+    if (!(label in script) && label === "preflight:roles" && script.preflight && typeof script.preflight === "object" && !Array.isArray(script.preflight)) {
+      const r = JSON.parse(JSON.stringify(script.preflight));
+      for (const k of ["path_check", "scripts_probe", "scripts_dir", "__raw_path_check"]) delete r[k];
+      return r;
+    }
     // 4.0.0 (1985, S3): unscripted push-access probes find access (a new branch)
     if (!(label in script) && /^infra:push-probe$/.test(label))
       return { status: "ok", reason: "probed", access: "ok", result: "ok", exit_code: 0, auth_line: null, args: ["/tmp/fleet-probe.out", "0"] };
