@@ -149,6 +149,18 @@ test("4.0.2 1997: every program-running dispatch gets a schema that requires fil
   assert.ok(seen.size >= 21, "distinct steps: " + seen.size);
 });
 
+// the steps the happy run never reaches (park-plan with findings, remote-head,
+// callers, precommit-ids, check-scripts, db-up, db-down) are held here, on the source
+test("4.0.2 1997: every Return line that names program names file_sha256, and every nested slot is relayed with it (source)", () => {
+  const rets = [...SOURCE.matchAll(/Return \{[^}]*\}/g)].map((m) => m[0]).filter((x) => /\bprogram\b/.test(x));
+  assert.ok(rets.length >= 22, "Return lines with program: " + rets.length);
+  for (const x of rets) assert.match(x, /\bfile_sha256\b/, x);
+  const table = new Function(grabTable("PROGRAM_SLOTS") + "\nreturn PROGRAM_SLOTS;")();
+  for (const slot of new Set(table.flatMap(([, s]) => s.map(([k]) => k)).filter((k) => k !== null)))
+    assert.ok(SOURCE.includes('relayAs("' + slot + '")'), slot + " is relayed through relayAs");
+  assert.doesNotMatch(SOURCE, /return it as \w+, every value copied unchanged|return it unchanged as \w+|copy all \w+ unchanged|Copy (both|all \w+) unchanged/);
+});
+
 test("4.0.2 1997 repro (wf_87a99806-757): branch-scan with the right program but no file_sha256 still stops the run, and its schema requires the key", async () => {
   const s = happy();
   s.__mutate = { label: "infra:branch-scan", fn: (r) => (delete r.file_sha256, r) };

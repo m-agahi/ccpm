@@ -1848,8 +1848,9 @@ function programSlots(label, prompt) {
 // A per-call copy of `schema` that requires program and file_sha256 at every
 // slot. Top level: nullable (a failed step may print no sha256sum line; null
 // fails programProblem). A slot key: required, null allowed (the step did not
-// run it), and an object there must hold both, file_sha256 as 64 hex.
-const FILE_SHA_HEX = { type: "string", pattern: "^[0-9a-f]{64}$" };
+// run it), and an object there must hold both, file_sha256 a string.
+// programProblem compares the value with the table, so no pattern here.
+const FILE_SHA_HEX = { type: "string" };
 function programSchema(schema, slots) {
   const s = JSON.parse(JSON.stringify(schema));
   s.properties = s.properties || {};
@@ -1859,7 +1860,7 @@ function programSchema(schema, slots) {
   for (const [slot] of slots) {
     if (slot === null) {
       s.properties.program = PROGRAM_PROP;
-      s.properties.file_sha256 = { type: ["string", "null"], pattern: FILE_SHA_HEX.pattern };
+      s.properties.file_sha256 = { type: ["string", "null"] };
       req(s, ["program", "file_sha256"]);
       continue;
     }

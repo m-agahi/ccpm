@@ -17,7 +17,7 @@
 - New `PROGRAM_SLOTS` table: for each program-running step label, where each shipped program's
   output goes in the result (top level or a key). One table feeds both:
   - the schema the agent gets: a per-call copy that requires `program` and `file_sha256` at every
-    slot (`file_sha256` 64 hex; nullable at the top level only, for a failed step);
+    slot (`file_sha256` a string; nullable at the top level only, for a failed step);
   - the rule text appended to the prompt, which now names each slot.
 - Every explicit `Return {...}` list and every nested relay sentence names `file_sha256`. Word
   counts that a third key contradicts ("both values", "all four", "all six") are gone.
