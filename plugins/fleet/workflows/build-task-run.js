@@ -7714,18 +7714,16 @@ async function planAndAudit(ctx0) {
   gate("plan: " + planPath + ", " + criteria.length + " criteria, test files disjoint");
 
   // risk tier: computed and logged. 4.0.0 (1991): isShortPath decides it from
-  // the sealed plan facts; the build switches to one writer only once
-  // writerRound splits that writer per criterion (stream S5)
+  // the sealed plan facts; the build re-decides it from the sealed ref
   const wouldBeShort = isShortPath(planFacts);
-  state.path = "full";
+  state.path = wouldBeShort ? "short" : "full";
   gate(
     "risk tier (short = est_diff_lines < 20 AND new_behaviour false): est_diff_lines=" +
       plan.est_diff_lines +
       ", new_behaviour=" +
       plan.new_behaviour +
       " -> " +
-      (wouldBeShort ? "short" : "full") +
-      "; short path disabled -> full path",
+      (wouldBeShort ? "short (one test writer for every criterion, at most " + MAX_SHORT_TEST_ROUNDS + " test rounds; every gate runs)" : "full"),
   );
 
   // Max's rule (3.1.0): a plan that touches the hook surface stops here
@@ -7801,6 +7799,8 @@ async function planAndAudit(ctx0) {
 // MAX_SHORT_TEST_ROUNDS test rounds; every gate still runs) applies when the
 // sealed plan facts say est_diff_lines < 20 and new_behaviour false.
 const MAX_SHORT_TEST_ROUNDS = 2;
+const SHORT_WRITER_NOTE =
+  "Short path (4.0.0): you are the ONE test writer for every criterion in `criteria`; each criterion lists its own test_files. Write each criterion's tests only in its own test files. Start every tests[].covers with the criterion id and a colon, e.g. \"AC1: <what it covers>\": the workflow splits your tests per criterion by that prefix and stops the run on any other prefix. Return criterion_id \"short\" and every file you wrote in files.";
 function isShortPath(pf) {
   return !!pf && typeof pf.est_diff_lines === "number" && pf.est_diff_lines < SHORT_PATH_MAX_DIFF && pf.new_behaviour === false;
 }
@@ -8678,7 +8678,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("plan ref sealed before 2.1.6: no changed_symbols; this build runs without caller coverage");
     gate("build caller check skipped: plan ref sealed before 2.1.6 (changed_symbols null)");
   }
-  state.path = "full";
+  // 4.0.0 (1991): the short path from the sealed plan facts: one test writer
+  // for every criterion, split per criterion by the covers prefix; at most
+  // MAX_SHORT_TEST_ROUNDS test rounds. Every gate still runs.
+  const shortPath = isShortPath(planFacts);
+  state.path = shortPath ? "short" : "full";
+  const maxTestRounds = shortPath ? MAX_SHORT_TEST_ROUNDS : MAX_TEST_ROUNDS;
   const testable = testableOf(criteria);
   const frozenFiles = [];
   for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
@@ -9059,6 +9064,75 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   async function writerRound(n, pending, codeFindings) {
     const pre = last || (await hasher("hasher:pre-writers:r" + n, mainWt, hashedFiles, "Tests"));
     await pathRecheck("writers:r" + n, "Tests");
+    if (shortPath) await shortWriter(n, pending, codeFindings);
+    else await fullWriters(n, pending, codeFindings);
+    return afterWriters(n, pending, pre);
+  }
+
+  // 4.0.0 (1991): the short path's one writer for every pending criterion.
+  // The script splits its tests per criterion by the covers prefix "<cid>:";
+  // a prefix that names no pending criterion, or a reported file outside
+  // every pending criterion's test files, stops the run.
+  async function shortWriter(n, pending, codeFindings) {
+    state.agents += 1;
+    const ids = pending.map((p) => p.criterion.id);
+    const files = [];
+    for (const p of pending) for (const f of p.criterion.test_files) if (files.indexOf(f) < 0) files.push(f);
+    const label = "role:fleet-test-writer:short:r" + n;
+    const prompt = rolePrompt(
+      "fleet-test-writer",
+      Object.assign({}, common, planCtx, {
+        criteria: pending.map((p) => Object.assign(writerCriterion(p.criterion), { test_files: p.criterion.test_files })),
+        test_files: files,
+        short_path_note: SHORT_WRITER_NOTE,
+        test_cmd: planFacts.test_cmd,
+        test_env: TEST_ENV,
+        test_env_note: TEST_ENV_NOTE,
+        routed_findings: pending.flatMap((p) => p.findings),
+      },
+      codeFindings ? { code_judge_findings: codeFindings.filter((f) => ids.indexOf(f.criterion) >= 0) } : {}),
+    );
+    const opts = { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" };
+    // the same order as the full path: the round, then a retry on drift
+    let r = (await parallel([() => roleAgent("fleet-test-writer", label, prompt, opts)]))[0];
+    if (r == null) halt("failed", "test writer short r" + n + " returned no result");
+    r = await retryOnDrift("fleet-test-writer", label, prompt, opts, r);
+    checkRole("fleet-test-writer", r);
+    collect("fleet-test-writer", r);
+    requireOk("fleet-test-writer short", r);
+    const out = stripHeldOut(r);
+    const owner = {};
+    for (const p of pending) for (const f of p.criterion.test_files) owner[f] = p.criterion.id;
+    for (const f of out.files) {
+      const nf = normPath(f);
+      if (!owner[nf]) halt("needs_human", "short-path writer touched " + nf + " in test round " + n + " (not a test file of " + ids.join(", ") + ")", "ownership");
+    }
+    const split = {};
+    for (const id of ids) split[id] = [];
+    for (const t of out.tests) {
+      const cv = t && typeof t === "object" && typeof t.covers === "string" ? t.covers : null;
+      const cid = cv !== null && cv.indexOf(":") > 0 ? cv.slice(0, cv.indexOf(":")) : null;
+      if (cid === null || !Object.prototype.hasOwnProperty.call(split, cid))
+        halt(
+          "needs_human",
+          "short-path writer test " + JSON.stringify(t && t.name !== undefined ? t.name : null) + " in test round " + n + " has covers " + JSON.stringify(cv) +
+            ", not \"<criterion id>: ...\" of a pending criterion (" + ids.join(", ") + ")",
+          "ownership",
+        );
+      split[cid].push(t);
+    }
+    for (const p of pending) {
+      const cid = p.criterion.id;
+      writerOut[cid] = Object.assign({}, out, {
+        criterion_id: cid,
+        tests: split[cid],
+        files: out.files.filter((f) => p.criterion.test_files.indexOf(normPath(f)) >= 0),
+      });
+    }
+    gate("short path: one writer for " + ids.join(", ") + " in test round " + n + "; tests split by covers prefix (" + ids.map((id) => id + ":" + split[id].length).join(", ") + ")");
+  }
+
+  async function fullWriters(n, pending, codeFindings) {
     state.agents += pending.length;
     const wcalls = pending.map((p) => {
         const c = p.criterion;
@@ -9080,7 +9154,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         ];
       });
     const results = await parallel(wcalls.map(([l, pr, o]) => () => roleAgent("fleet-test-writer", l, pr, o)));
-    const roundOut = [];
     for (let idx = 0; idx < results.length; idx++) {
       const cid = pending[idx].criterion.id;
       let r = results[idx];
@@ -9092,8 +9165,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       collect("fleet-test-writer", r);
       requireOk("fleet-test-writer " + cid, r);
       writerOut[cid] = stripHeldOut(r);
-      roundOut.push(writerOut[cid]);
     }
+  }
+
+  // After the writers: the fixers, the ownership hash and the checks.
+  async function afterWriters(n, pending, pre) {
+    const roundOut = pending.map((p) => writerOut[p.criterion.id]);
     // the repo's fixers on this round's test files, before the ownership hash,
     // the test judge and the freeze (3.0.0, ledger 1951)
     const wrote = [];
@@ -9138,14 +9215,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // pending: [{criterion, findings}] to (re)write this round.
   // codeFindings: set on a fix_tests re-entry; the judge then runs first.
   async function testLoop(pending, codeFindings) {
-    for (let i = 0; i < MAX_TEST_ROUNDS; i++) {
+    for (let i = 0; i < maxTestRounds; i++) {
       state.rounds.tests++;
       const n = state.rounds.tests;
       const judgeFirst = !!codeFindings && i === 0;
       let roundOut = [];
       if (!judgeFirst) {
         // (pre-hasher), writers, fixers, post-hasher, judge, post-judge hasher
-        reserve(pending.length + 4 + (last ? 0 : 1), "test round " + n);
+        reserve((shortPath ? 1 : pending.length) + 4 + (last ? 0 : 1), "test round " + n);
         roundOut = await writerRound(n, pending, codeFindings);
       } else {
         reserve(2, "test round " + n);
@@ -9189,7 +9266,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (!pending.length) halt("needs_human", "test-judge revise r" + n + " routed no finding to a known criterion");
       gate("test-judge r" + n + ": revise -> " + pending.map((p) => p.criterion.id).join(", "));
     }
-    halt("needs_human", "test rounds exhausted (" + MAX_TEST_ROUNDS + ") without test-judge approval", "cap");
+    halt("needs_human", "test rounds exhausted (" + maxTestRounds + ") without test-judge approval", "cap");
   }
 
   // freeze

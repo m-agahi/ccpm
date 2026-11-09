@@ -239,17 +239,24 @@ test("judges run as the read-only fleet:judge agent", async () => {
   for (const c of out.calls) assert.notEqual(c.opts.isolation, "worktree", c.label);
 });
 
-test("short path is disabled: a small no-new-behaviour plan still takes the full path", async () => {
+test("4.0.0 short path: a small no-new-behaviour plan runs one writer and keeps every gate", async () => {
   const s = happy();
   s["role:scope-and-plan"].est_diff_lines = 10;
   s["role:scope-and-plan"].new_behaviour = false;
+  s["role:fleet-test-writer:short:r1"] = {
+    status: "ok",
+    reason: "red",
+    criterion_id: "short",
+    tests: [{ name: "a", covers: "AC1: a" }, { name: "b", covers: "AC2: b" }],
+    files: ["tests/test_a.py", "tests/test_b.py"],
+  };
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.equal(out.result.path, "full");
+  assert.equal(out.result.path, "short");
   assert.ok(out.labels.includes("role:plan-audit"));
-  assert.ok(out.labels.includes("role:fleet-test-writer:AC1:r1"));
-  assert.ok(out.logs.some((l) => /short path disabled/.test(l)));
+  assert.ok(out.labels.includes("role:fleet-test-judge:r1"));
+  assert.ok(!out.labels.includes("role:fleet-test-writer:AC1:r1"));
   assert.ok(out.logs.some((l) => /est_diff_lines < 20 AND new_behaviour false/.test(l)));
 });
 

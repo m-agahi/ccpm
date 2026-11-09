@@ -309,6 +309,23 @@ its notes to this entry.
   re-check), build 49 -> 49 (the first agent no longer loads pages). A build with no usable record
   dispatches 50. The saving is in model cost and page loads, not in agent count.
 
+### S5: the short path is on (ledger 1991)
+
+- A plan with `est_diff_lines` < 20 and `new_behaviour: false` (from the sealed plan facts) takes
+  the short path: `path: "short"`. One test writer, `role:fleet-test-writer:short:r<n>`, gets every
+  pending criterion with its own test files. Every gate still runs: plan-audit, the test judge,
+  the freeze, the code judge, the IaC push stop, the hook gate and the review.
+- The writer starts each `tests[].covers` with `<criterion id>:`. The script splits the tests per
+  criterion by that exact prefix. A prefix that names no pending criterion (`AC10:` is not `AC1:`),
+  a test with no `covers` string, or a reported file outside every pending criterion's test
+  files stops the run with `stop_gate: "ownership"`. Each criterion's writer output holds only its
+  own tests and the reported files among its own test files; the test judge gets them per
+  criterion. The per-file ownership check after the writers is unchanged.
+- At most `MAX_SHORT_TEST_ROUNDS` (2) test rounds. A revise round rewrites only the routed
+  criteria, again with one writer.
+- A drifting short-path writer retries once as `role:fleet-test-writer:short:r<n>:retry`, after the
+  round, as on the full path.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker
