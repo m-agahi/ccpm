@@ -237,6 +237,9 @@ export async function runOne(script, args0) {
       const i = inputsOf(prompt);
       return { status: "ok", reason: "read", parked: null, args: [i.scratch, i.plan_tip_time === null ? "null" : String(i.plan_tip_time)] };
     }
+    // 4.0.0 (1985, S3): unscripted push-access probes find access (a new branch)
+    if (!(label in script) && /^infra:push-probe$/.test(label))
+      return { status: "ok", reason: "probed", access: "ok", result: "ok", exit_code: 0, auth_line: null, args: ["/tmp/fleet-probe.out", "0"] };
     // unscripted plan parks move the draft and leave the worktree clean
     if (!(label in script) && /^infra:park-plan/.test(label)) return { status: "ok", reason: "parked", target: inputsOf(prompt).dest, clean: true };
     // unscripted plan formatting changes nothing (the hooks found nothing to fix)
@@ -665,6 +668,8 @@ export const PROGRAM_LABELS = [
   [/^infra:callers/, [[null, "callers", ["occurrences", "capped", "auto_dont_care", "doctest_md"]]]],
   [/^infra:changed-defs:/, [[null, "changed_defs", ["defs", "excluded", "unclassified", "unattributed"]]]],
   [/^infra:push(:p\d+)?$/, [[null, "push_classify", ["push_result", "exit_code", "hook_tail", "args"]]]],
+  // 4.0.0 (1985, S3)
+  [/^infra:push-probe$/, [[null, "push_probe", ["access", "result", "exit_code", "auth_line", "args"]]]],
   [/^infra:hook-surface:/, [[null, "hook_surface", ["surface", "make_paths", "error", "args"]]]],
   [/^infra:review-paths:/, [[null, "review_paths", ["changed_paths"]]]],
   [/^infra:precommit-ids/, [[null, "precommit_ids", null]]],

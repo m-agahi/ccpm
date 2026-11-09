@@ -258,6 +258,24 @@ its notes to this entry.
   `(not the fleet's own settings: before <sha|absent>, after <sha|absent>, the fleet's own <sha>; the harness or a role rewrote it)`.
   If the harness rewrote the file, the exemption does not fire; the stop names the cause.
 
+### S3: push-access probe in plan mode (ledger 1985)
+
+- Plan mode only, right after the workspace step and before the planner: a PATH re-check
+  `infra:path-check:push-probe`, then `infra:push-probe` (sonnet) runs
+  `timeout 120 git -C <main_worktree> push --dry-run --porcelain origin <base_ref>:refs/heads/<branch>`.
+  The dry run sends nothing and creates no ref, but it runs the repo's pre-push hook. The prompt
+  adds no option, sets no config and never skips a hook.
+- New shipped program `push_probe.py` (24 in all) classifies the output. `ok`, `hook_rejected`
+  (git reached the remote before the hook declined), `non_ff` and `fetch_first` (a porcelain
+  `[rejected]` line: the remote branch exists) are access ok. An auth line (`Permission to .*
+denied`, `Authentication failed`, `Could not read from remote repository`,
+  `Repository not found`) is `denied`: the run stops with `needs_human` before any role runs, and
+  the reason quotes the line. A timeout (exit 124) or anything else logs "push access unknown" and
+  the run goes on; the real push is still gated later.
+- The probe is advisory: a relay that is not the program's own (program, digest, or args not
+  equal to its exit code) is "push access unknown", never a stop and never an access verdict.
+- Build mode runs no probe.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker

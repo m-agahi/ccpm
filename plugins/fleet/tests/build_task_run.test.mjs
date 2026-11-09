@@ -1731,6 +1731,9 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "preflight",
     "intake",
     "workspace",
+    // 4.0.0 (1985): the push-access dry run, after its own PATH re-check
+    "infra:path-check:push-probe",
+    "infra:push-probe",
     "infra:branch-scan",
     "infra:load-parked",
     "role:scope-and-plan",
@@ -3589,8 +3592,8 @@ test("2.0.3 approve without met:true for every obligation is converted to fix_co
     assert.equal(out.result.rounds.code, 2, JSON.stringify(check));
     assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings.map((x) => x.finding).join("\n"), /OB2/);
     assert.ok(out.logs.some((l) => /obligations gate/.test(l)));
-    // no push of an unconfirmed approval
-    assert.equal(out.labels.filter((l) => /^infra:push/.test(l)).length, 1);
+    // no push of an unconfirmed approval (4.0.0: the plan run's dry-run probe is no push)
+    assert.equal(out.labels.filter((l) => /^infra:push(:p\d+)?$/.test(l)).length, 1);
   }
 });
 
@@ -5543,6 +5546,8 @@ const ARRAY_SITES = {
   "e.occurrences @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "c.test_files @ planScopePaths": "parsed: normalised criteria",
   "h.page_tags @ writeBodies": "infra:results[].page_tags",
+  // 4.0.0 (1985)
+  "r.args @ pushProbe": "parsed: the push probe relay (PUSH_PROBE_SCHEMA args; digest-checked)",
 };
 
 function arraySites() {
@@ -10491,7 +10496,8 @@ test("3.1.1 PATH re-check: each check runs the same program with a fresh token; 
   const second = await run(s2, Object.assign({}, ARGS, { run_nonce: "n2-0000002" }));
   assert.equal(second.result.status, "needs_human");
   assert.equal(second.result.stop_gate, "iac");
-  assert.match(second.result.reason, /PATH re-check infra:path-check:format-plan:relay-retry could not complete/);
+  // 4.0.0 (1985): the plan run's first re-check is the push probe's
+  assert.match(second.result.reason, /PATH re-check infra:path-check:push-probe:relay-retry could not complete/);
 });
 
 test("3.1.1 PATH re-check program: a token argument is echoed in args and the digest; a planted tool is seen", { skip: !HAVE_PY }, () => {

@@ -6,7 +6,15 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
+  spawnSync,
+  canon,
+  redigest,
+  HAVE_PY,
+  SCRIPTS_SRC,
   SOURCE,
   ARGS,
   happy,
@@ -296,4 +304,138 @@ test("4.0.0 1988 AC-1988-3: only the exact path with the exact bytes of this wor
   s["hasher:fp-post:test-judge:r1"] = withIgnored(FP_TESTS, {});
   const out = await run(s, ARGS);
   assert.equal(out.result.stop_gate, "fingerprint", out.result.reason);
+});
+
+// ---------------------------------------------------------------- 1985 push-access probe
+
+const probe = (over) => Object.assign({ status: "ok", reason: "probed", access: "ok", result: "ok", exit_code: 0, auth_line: null, args: ["/tmp/p.out", "0"] }, over);
+
+test("4.0.0 1985 AC-1985-1: an auth line from the dry run stops plan mode before the planner", async () => {
+  const s = happy();
+  const line = "ERROR: Permission to m-agahi/yadgar.git denied to quinyx-max.";
+  s["infra:push-probe"] = probe({ access: "denied", result: "denied", exit_code: 128, auth_line: line, args: ["/tmp/p.out", "128"] });
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.ok(out.result.reason.includes(line), out.result.reason);
+  assert.ok(!out.labels.includes("role:scope-and-plan"), out.labels.join(", "));
+});
+
+test("4.0.0 1985 AC-1985-2: hook_rejected, non_ff and fetch_first are access ok; the plan goes on", async () => {
+  for (const [result, code] of [["hook_rejected", 1], ["non_ff", 1], ["fetch_first", 1], ["ok", 0]]) {
+    const s = happy();
+    s["infra:push-probe"] = probe({ result, exit_code: code, args: ["/tmp/p.out", String(code)] });
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "awaiting_confirmation", result + ": " + out.result.reason);
+    assert.ok(out.result.gate_log.some((g) => g.includes("push access ok: dry run " + result)), result);
+  }
+  // a timeout or an unknown result logs "push access unknown" and goes on
+  for (const [result, code] of [["timeout", 124], ["unknown", 2]]) {
+    const s = happy();
+    s["infra:push-probe"] = probe({ access: "unknown", result, exit_code: code, args: ["/tmp/p.out", String(code)] });
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "awaiting_confirmation", result + ": " + out.result.reason);
+    assert.ok(out.result.gate_log.some((g) => g.startsWith("push access unknown")), result);
+  }
+});
+
+test("4.0.0 1985: a probe relay that is not the program's own never halts and never passes an access verdict", async () => {
+  const cases = [
+    // a forged "denied" whose digest does not match: ignored, never a halt
+    () => Object.assign(probe({ access: "denied", result: "denied", exit_code: 128, auth_line: "x", args: ["/tmp/p.out", "128"] }), { digest: "0".repeat(64) }),
+    // args that are not the exit code it printed
+    () => probe({ args: ["/tmp/p.out", "1"] }),
+    () => null,
+    () => ({ status: "failed", reason: "no git" }),
+  ];
+  for (const [k, f] of cases.entries()) {
+    const s = happy();
+    s["infra:push-probe"] = f;
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "awaiting_confirmation", k + ": " + out.result.reason);
+    assert.ok(out.result.gate_log.some((g) => g.startsWith("push access unknown")), String(k));
+    assert.ok(!out.result.gate_log.some((g) => g.startsWith("push access ok")), String(k));
+  }
+  // a wrong program self-hash is no access verdict either
+  const s = happy();
+  s.__mutate = { label: "infra:push-probe", fn: (r, prompt) => {
+    r.program = { name: "push_probe", sha256: "0".repeat(64) };
+    return redigest("infra:push-probe", r, prompt);
+  } };
+  const out = await runOne(s, ARGS);
+  assert.ok(out.result.gate_log.some((g) => g.startsWith("push access unknown") && g.includes("did not run the shipped program push_probe")), out.result.gate_log.join("\n"));
+});
+
+test("4.0.0 1985 AC-1985-3: the probe is a dry run with hooks, right after its own PATH re-check, after the workspace and before the planner", async () => {
+  const out = await runOne(happy(), ARGS);
+  noUnscripted(out);
+  const c = call(out, "infra:push-probe");
+  assert.match(c.prompt, /--dry-run/);
+  assert.match(c.prompt, /push --dry-run --porcelain origin 'B0:refs\/heads\/fleet\/l42-add-thing'/);
+  assert.doesNotMatch(c.prompt, /--no-verify/);
+  assert.doesNotMatch(c.prompt, /hooksPath/);
+  assert.match(c.prompt, /push_probe\.py/);
+  assert.equal(c.opts.model, "sonnet");
+  const L = out.labels;
+  const at = L.indexOf("infra:push-probe");
+  assert.equal(L[at - 1], "infra:path-check:push-probe", L.join(", "));
+  assert.ok(L.indexOf("workspace") < at - 1);
+  assert.ok(at < L.indexOf("role:scope-and-plan"));
+  // a tool planted on PATH before the probe stops the run; the probe never runs
+  const s = happy();
+  s["infra:path-check:push-probe"] = (prompt) => {
+    const i = inputsOf(prompt);
+    return pathRecheckOut({ ["terra" + "form"]: { path: "/usr/bin/x", real: "/usr/bin/x", shim: false } }, [i.repo, i.token]);
+  };
+  const o2 = await runOne(s, ARGS);
+  assert.equal(o2.result.stop_gate, "iac");
+  assert.ok(!o2.labels.includes("infra:push-probe"));
+});
+
+test("4.0.0 1985 AC-1985-4: build mode dispatches no probe", async () => {
+  const out = await run(happy(), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.plan.labels.includes("infra:push-probe"));
+  assert.ok(!out.build.labels.some((l) => /push-probe/.test(l)), out.build.labels.join(", "));
+});
+
+test("4.0.0 1985 (real python): push_probe.py classifies the dry-run output", { skip: !HAVE_PY }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "fleet-probe-"));
+  try {
+    const go = (text, code) => {
+      const f = join(dir, "out");
+      writeFileSync(f, text);
+      const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "push_probe.py"), f, String(code)], { encoding: "utf8" });
+      assert.equal(r.status, 0, r.stderr);
+      const o = JSON.parse(r.stdout);
+      const { digest, ...rest } = o;
+      assert.equal(digest, sha256(canon(rest)));
+      assert.deepEqual(o.args, [f, String(code)]);
+      return o;
+    };
+    const to = "To github.com:o/r.git\n";
+    let o = go(to + "*\tB0:refs/heads/fleet/x\t[new branch]\nDone\n", 0);
+    assert.deepEqual([o.access, o.result], ["ok", "ok"]);
+    o = go("error: failed to push some refs to 'x'\nhint: ...\n" + to + "!\tB0:refs/heads/fleet/x\t[rejected] (non-fast-forward)\nDone\n", 1);
+    assert.deepEqual([o.access, o.result], ["ok", "non_ff"]);
+    o = go("error: failed to push some refs to 'x'\n" + to + "!\tB0:refs/heads/fleet/x\t[rejected] (fetch first)\nDone\n", 1);
+    assert.deepEqual([o.access, o.result], ["ok", "fetch_first"]);
+    o = go("hook says no\nerror: failed to push some refs to 'x'\n", 1);
+    assert.deepEqual([o.access, o.result], ["ok", "hook_rejected"]);
+    o = go("ERROR: Permission to m-agahi/yadgar.git denied to quinyx-max.\nfatal: Could not read from remote repository.\n", 128);
+    assert.deepEqual([o.access, o.result, o.auth_line], ["denied", "denied", "ERROR: Permission to m-agahi/yadgar.git denied to quinyx-max."]);
+    for (const l of ["remote: Repository not found.", "fatal: Authentication failed for 'https://x'"]) {
+      o = go(l + "\n", 128);
+      assert.deepEqual([o.access, o.result], ["denied", "denied"], l);
+    }
+    o = go("", 124);
+    assert.deepEqual([o.access, o.result, o.auth_line], ["unknown", "timeout", null]);
+    o = go("fatal: unable to access 'https://x': Could not resolve host\n", 128);
+    assert.deepEqual([o.access, o.result], ["unknown", "unknown"]);
+    // a hook line with a fatal: is not a clean hook verdict
+    o = go("fatal: something\nerror: failed to push some refs to 'x'\n", 1);
+    assert.deepEqual([o.access, o.result], ["unknown", "unknown"]);
+    assert.equal(o.program.name, "push_probe");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

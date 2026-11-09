@@ -1296,6 +1296,24 @@ const PREFLIGHT_SCHEMA = {
     reason: STR,
   },
 };
+// 4.0.0 (1985): the push-access probe relay
+const PUSH_PROBE_SCHEMA = {
+  type: "object",
+  additionalProperties: true,
+  required: ["status", "reason"],
+  properties: {
+    status: { type: "string", enum: ["ok", "needs_human", "failed"] },
+    reason: STR,
+    access: { type: ["string", "null"] },
+    result: { type: ["string", "null"] },
+    exit_code: { type: ["integer", "null"] },
+    auth_line: { type: ["string", "null"] },
+    args: { type: ["array", "null"], items: STR },
+    program: PROGRAM_PROP,
+    file_sha256: STR,
+    digest: STR,
+  },
+};
 const INFRA_SCHEMA = {
   type: "object",
   additionalProperties: true,
@@ -2610,6 +2628,7 @@ function programTable() {
       remote_head: REMOTE_HEAD_PY,
       remote_url: REMOTE_URL_PY,
       push_classify: PUSH_CLASSIFY_PY,
+      push_probe: PUSH_PROBE_PY,
       hook_surface: HOOK_SURFACE_PY,
       precommit_ids: PRECOMMIT_IDS_PY,
       path_check: PATH_CHECK_PY,
@@ -5217,6 +5236,83 @@ out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', 
 print(json.dumps(out, ensure_ascii=False))`;
 // PUSH_CLASSIFY_PY_END
 
+// 4.0.0 (1985): the push-access probe's classifier. Args: <file> <exit>, the
+// output file and exit code of `git push --dry-run --porcelain` (timeout
+// 120 s). In order: exit 0 -> ok; exit 124 -> timeout; a porcelain
+// `!<TAB>..<TAB>[rejected] (non-fast-forward|fetch first)` line -> non_ff or
+// fetch_first (the remote branch exists; access ok); an auth line
+// (Permission to .. denied, Authentication failed, Could not read from remote
+// repository, Repository not found) -> denied; `error: failed to push some
+// refs` with exit 1 and no `fatal:` line -> hook_rejected (git reached the
+// remote before the pre-push hook ran; access ok); else unknown. Prints
+// {access, result, exit_code, auth_line, args, program, digest}. Runs nothing.
+// PUSH_PROBE_PY_BEGIN
+const PUSH_PROBE_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, os, re, sys
+path, code = sys.argv[1], int(sys.argv[2])
+os.chdir('/')
+with open(path, 'rb') as fh:
+    # bounded: git's own lines come last, so the last 1 MiB is read
+    fh.seek(max(0, os.fstat(fh.fileno()).st_size - (1 << 20)))
+    lines = fh.read(1 << 20).decode('utf-8', 'replace').splitlines()
+# a porcelain ref line git prints for a remote branch that exists and moved on
+REJ = re.compile(r'^!\t[^\t]*\t\[rejected\] \((non-fast-forward|fetch first)\)$')
+AUTH = re.compile(r'(Permission to .* denied|Authentication failed|Could not read from remote repository|Repository not found)')
+auth = [x for x in lines if AUTH.search(x)]
+rej = [REJ.match(x) for x in lines]
+rej = [m.group(1) for m in rej if m]
+if code == 0:
+    res = 'ok'
+elif code == 124:
+    res = 'timeout'
+elif rej:
+    res = 'non_ff' if rej[0] == 'non-fast-forward' else 'fetch_first'
+elif auth:
+    res = 'denied'
+elif code == 1 and any(x.startswith('error: failed to push some refs') for x in lines) and not any(x.startswith('fatal:') for x in lines):
+    res = 'hook_rejected'
+else:
+    res = 'unknown'
+access = 'ok' if res in ('ok', 'non_ff', 'fetch_first', 'hook_rejected') else 'denied' if res == 'denied' else 'unknown'
+out = {'access': access, 'result': res, 'exit_code': code, 'auth_line': auth[0][:300] if res == 'denied' else None, 'args': [path, sys.argv[2]]}
+out['program'] = _PROG
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))`;
+// PUSH_PROBE_PY_END
+
 // The hook surface (3.1.0, Max's rule): .pre-commit-config.yaml (at <rev> and
 // in the worktree), read with the fixer's isolated PyYAML loader; every name
 // a hook entry or args holds, and the files of every -m module. Args:
@@ -5562,6 +5658,25 @@ function pushPrompt(inputs) {
     RETRY_SHELL("<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha") +
     " Only when neither gh nor gh-personal is installed: remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints, with the same backoff. remote_head must be the full 40-hex sha.\n" +
     "Return {status, reason, push_result, exit_code, hook_tail, args, program, digest, remote_head}."
+  );
+}
+
+// 4.0.0 (1985): the push-access probe (plan mode only). The dry run sends no
+// objects and creates no ref, but it runs the repo's pre-push hook: a PATH
+// re-check runs right before it.
+function pushProbePrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: probe push access with a dry run. No edits, no commits, no real push.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. Run this one command exactly as written, unmodified, as one Bash call with timeout 180000 ms. <file> is a new temp file outside <main_worktree> (`mktemp`): " +
+    "timeout 120 git -C " + shQuote(inputs.main_worktree) + " push --dry-run --porcelain origin " + shQuote(inputs.base_ref + ":refs/heads/" + inputs.branch) + " > <file> 2>&1; echo $?\n" +
+    "   The repo's pre-push hook runs here; let it. Add no option, change no git config and no hook, never push for real, never retry.\n" +
+    "2. Run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code step 1 printed:\n" +
+    progCmd("push_probe", []) + " <file> <exit>\n" +
+    "   It prints one JSON object {access, result, exit_code, auth_line, args, program, digest}. Copy every value unchanged (the script recomputes the digest). Never classify the output yourself. Delete the temp file.\n" +
+    "Return {status, reason, access, result, exit_code, auth_line, args, program, digest}; status ok whenever the classifier ran, whatever it printed."
   );
 }
 
@@ -6600,6 +6715,33 @@ async function preflightStep(repo) {
     state.models[role] = t;
     gate("model: " + role + " -> " + t.model + (t.fallback ? " (fallback " + t.fallback + ")" : ""));
   }
+}
+
+// 4.0.0 (1985): plan mode only, before the planner. A fresh PATH re-check,
+// then the dry run (it runs the repo's pre-push hook). Access ok: ok,
+// hook_rejected, non_ff, fetch_first. An auth line stops the run before any
+// role; anything else (a timeout, no usable relay) logs "push access
+// unknown" and the run goes on: the real push is still gated later.
+const PUSH_PROBE_KEYS = ["access", "result", "exit_code", "auth_line", "args"];
+async function pushProbe(lay, ws) {
+  await pathRecheck("push-probe", "Workspace");
+  const label = "infra:push-probe";
+  const r = await softDispatch(label, pushProbePrompt({ main_worktree: lay.mainWt, branch: lay.branch, base_ref: ws.baseRef }), {
+    schema: PUSH_PROBE_SCHEMA,
+    agentType: JUDGE_AGENT,
+    phase: "Workspace",
+  });
+  const unknown = (why) => gate("push access unknown: " + why + "; the real push is still gated");
+  if (!r) return unknown("the probe returned no result");
+  if (r.status !== "ok") return unknown("the probe returned " + r.status + ": " + (r.reason || "no reason"));
+  const pp = programProblem(r, "push_probe");
+  if (pp) return unknown(label + ": " + pp);
+  if (!relayDigestOk(r, PUSH_PROBE_KEYS, "push_probe") || !Array.isArray(r.args) || r.args.length !== 2 || r.args[1] !== String(r.exit_code))
+    return unknown(label + ": the relayed result does not match the program's digest or args");
+  if (r.access === "denied")
+    halt("needs_human", "no push access to origin for " + lay.branch + ": " + JSON.stringify(r.auth_line || r.result) + " (git push --dry-run); fix the credentials or the remote, then run plan again");
+  if (r.access !== "ok") return unknown("dry run " + r.result + " (exit " + r.exit_code + ")");
+  gate("push access ok: dry run " + r.result + " (exit " + r.exit_code + ")");
 }
 
 async function workspaceStep(repo, lay) {
@@ -8028,6 +8170,7 @@ async function planMode(input, date) {
   );
 
   const ws = await workspaceStep(brief.repo, lay);
+  await pushProbe(lay, ws);
   const project = input.project || ws.remoteSlug;
   const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
 
