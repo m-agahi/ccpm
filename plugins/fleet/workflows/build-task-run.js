@@ -2792,7 +2792,18 @@ def ref_ok(r):
         return False
     if not brief_ok(r.get('brief')) or r['branch'] != 'fleet/' + r['task_id'] + '-' + r['slug']:
         return False
-    return isinstance(r.get('history'), (dict, list))
+    h = r.get('history')
+    if not isinstance(h, (dict, list)):
+        return False
+    # 4.0.0: the sealed project and the optional history.preflight record
+    if 'project' in r and r['project'] is not None and not (isinstance(r['project'], str) and r['project']):
+        return False
+    p = h.get('preflight') if isinstance(h, dict) else None
+    if p is None:
+        return True
+    if not isinstance(p, dict) or not (isinstance(p.get('fleet_version'), str) and p['fleet_version']):
+        return False
+    return all(isinstance(p.get(k), dict) for k in ('versions', 'dispatch', 'contract'))
 base = 'refs/remotes/origin/' + default
 commits = []
 for line in run('log', '--format=%H%x00%s', base + '..HEAD').stdout.decode('utf-8', 'replace').splitlines():

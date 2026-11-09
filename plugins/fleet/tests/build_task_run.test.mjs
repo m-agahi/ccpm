@@ -7068,6 +7068,17 @@ test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; P
       ["brief repo relative", sealed(Object.assign({}, base, { brief: { ...BRIEF, repo: "r" } }))],
       ["brief plan_path ..", sealed(Object.assign({}, base, { brief: { ...BRIEF, plan_path: "../x.md" } }))],
       ["history null", sealed(Object.assign({}, base, { history: null }))],
+      // 4.0.0 (1992, history.preflight): the same checks on both sides
+      ["project null", sealed(Object.assign({}, base, { project: null }))],
+      ["project o/r", sealed(Object.assign({}, base, { project: "o/r" }))],
+      ["project 42", sealed(Object.assign({}, base, { project: 42 }))],
+      ["project empty", sealed(Object.assign({}, base, { project: "" }))],
+      ["preflight ok", sealed(Object.assign({}, base, { history: { runs: 1, preflight: { fleet_version: "4.0.0", versions: {}, dispatch: {}, contract: {} } } }))],
+      ["preflight null", sealed(Object.assign({}, base, { history: { runs: 1, preflight: null } }))],
+      ["preflight string", sealed(Object.assign({}, base, { history: { runs: 1, preflight: "4.0.0" } }))],
+      ["preflight no contract", sealed(Object.assign({}, base, { history: { runs: 1, preflight: { fleet_version: "4.0.0", versions: {}, dispatch: {} } } }))],
+      ["preflight list map", sealed(Object.assign({}, base, { history: { runs: 1, preflight: { fleet_version: "4.0.0", versions: [], dispatch: {}, contract: {} } } }))],
+      ["preflight empty version", sealed(Object.assign({}, base, { history: { runs: 1, preflight: { fleet_version: "", versions: {}, dispatch: {}, contract: {} } } }))],
     ];
     for (const [what, ref] of cases) {
       const msg = JSON.stringify(ref);

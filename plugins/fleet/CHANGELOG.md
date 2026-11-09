@@ -102,6 +102,8 @@ its notes to this entry.
 - `history.preflight` is optional. When present it is an object with a string `fleet_version` and
   the maps `versions`, `dispatch` and `contract`, each keyed by role. Any other shape is a changed
   ref.
+- `branch_scan.py` makes the same two checks (the `project` shape and the `history.preflight`
+  shape), so its `ref_ok` still agrees with `planRefProblem`.
 
 ### S2: contract marker fleet-v4 and the deploy order (D1)
 
