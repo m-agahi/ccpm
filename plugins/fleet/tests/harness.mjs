@@ -114,7 +114,6 @@ export const RELAY_KEYS = [
   [/^infra:format-(tests|code):/, ["ran", "reason", "runs", "stable", "files", "changed", "refused"]],
   // 3.1.0 (ledger 1959)
   [/^infra:verify-plan$/, ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"]],
-  [/^infra:commit-plan/, ["head", "files", "args"]],
   // 3.1.0 (ledger 1935c)
   [/^infra:push(:p\d+)?$/, ["push_result", "exit_code", "hook_tail", "args"]],
   [/^infra:hook-surface:/, ["surface", "make_paths", "error", "args"]],
@@ -131,6 +130,8 @@ export function pathRecheckOut(tools, args) {
     tools: Object.assign(Object.fromEntries(["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt", "dig" + "ger", "atlan" + "tis"].map((t) => [t, null])), tools || {}),
     args,
     path_problems: [],
+    // 4.0.0: the shipped program's self-hash, inside the digest
+    program: programOf("path_check"),
   };
   pc.digest = sha256(canon(pc));
   return Object.assign({ status: "ok", reason: "checked" }, pc);
@@ -143,6 +144,8 @@ export function remoteUrlOut(url, repo) {
 }
 export function relayDigestOf(r, keys) {
   const o = {};
+  // 4.0.0 (1993): the programs' digest covers their self-hash
+  if (r && r.program !== undefined) o.program = r.program;
   for (const k of keys) o[k] = r[k] === undefined ? null : r[k];
   return sha256(canon(o));
 }
@@ -178,8 +181,7 @@ export function fillArgs(label, r, prompt) {
   if (/^infra:verify-plan$/.test(label)) {
     const i = inputsOf(prompt);
     r.args = [i.main_worktree, i.plan_commit, i.plan_path];
-  } else if (/^infra:commit-plan/.test(label)) r.args = [inputsOf(prompt).worktree];
-  else if (/^infra:hook-surface:/.test(label)) r.args = [inputsOf(prompt).worktree, inputsOf(prompt).rev, JSON.stringify(inputsOf(prompt).targets)];
+  } else if (/^infra:hook-surface:/.test(label)) r.args = [inputsOf(prompt).worktree, inputsOf(prompt).rev, JSON.stringify(inputsOf(prompt).targets)];
   else if (/^infra:push(:p\d+)?$/.test(label) && r.push_result === "hook_rejected") r.args = ["/tmp/fleet-push.out", String(r.exit_code)];
   return r;
 }
@@ -202,7 +204,19 @@ export async function runOne(script, args0) {
   const f1 = script["hasher:freeze:f1"];
   let lastHashes = f1 && typeof f1 === "object" && !Array.isArray(f1) && f1.hashes ? f1.hashes : null;
   const fleetRefs = {};
+  const rawResults = new WeakSet();
+  // 4.0.0 (1993): every prompt runs shipped programs by path; none pastes one
   const agent = async (prompt, opts = {}) => {
+    const label = opts.label;
+    if (typeof prompt === "string" && (prompt.includes("python3 -I -c") || prompt.includes("<<'FLEET_") || prompt.includes("python3 -I - ")))
+      throw new Error("AC-1993-1: prompt " + label + " pastes a program");
+    let r = await agentInner(prompt, opts);
+    if (r && typeof r === "object" && !rawResults.has(r)) r = fillPrograms(label, r, prompt);
+    const mut = script.__mutate;
+    if (mut && r && typeof r === "object" && (mut.label instanceof RegExp ? mut.label.test(label) : mut.label === label)) r = mut.fn(r, prompt);
+    return r;
+  };
+  const agentInner = async (prompt, opts = {}) => {
     const label = opts.label;
     calls.push({ label, prompt, opts });
     // 3.1.0: preflight returns the PATH check program's output (no IaC tool on PATH)
@@ -254,6 +268,8 @@ export async function runOne(script, args0) {
       fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = "f".repeat(40);
       return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
     }
+    // 4.0.0: unscripted verify steps read what the commit-plan stubs wrote
+    if (!(label in script) && /^infra:verify-plan-commit/.test(label)) return verifyStub(script.__store || {})(prompt);
     if (!(label in script)) {
       unscripted.push(label);
       return null;
@@ -269,6 +285,7 @@ export async function runOne(script, args0) {
     r = JSON.parse(JSON.stringify(r));
     const raw = r.__raw === true;
     delete r.__raw;
+    if (raw) rawResults.add(r);
     if (!raw) withRelayDigest(label, fillArgs(label, r, prompt));
     // 3.1.1: the workspace step relays the origin URL program's output; a stub
     // that gives only remote_url gets that program's output for it
@@ -441,9 +458,16 @@ export const sha256 = (t) => createHash("sha256").update(t, "utf8").digest("hex"
 
 // The sealed ref the commit-plan prompt writes as the tag message (heredoc
 // body + newline).
+// 4.0.0 (1993): the message a chunk-writer prompt carries as base64 chunks
+// ("chunk <i> sha256 <hex>:" then the text), decoded; null when it has none.
+export function chunkedContentOf(prompt) {
+  const parts = [...String(prompt).matchAll(/^chunk (\d+) sha256 ([0-9a-f]{64}):\n([A-Za-z0-9+/=]*)$/gm)];
+  if (!parts.length) return null;
+  parts.forEach((m, i) => assert.equal(Number(m[1]), i, "chunks in order"));
+  return Buffer.from(parts.map((m) => m[3]).join(""), "base64").toString("utf8");
+}
 export function refContentOf(prompt) {
-  const m = /<<'FLEET_PLAN_JSON'\n([\s\S]*?)\nFLEET_PLAN_JSON/.exec(prompt);
-  return m ? m[1] + "\n" : null;
+  return chunkedContentOf(prompt);
 }
 
 // One entry of the plan-ref reader's output, as the real program prints it.
@@ -475,8 +499,145 @@ export function commitStub(store, head, planSha) {
     store[head] = c;
     store.__planHead = head;
     store.__task = inputsOf(prompt).task_id;
-    return { status: "ok", reason: "committed", head, files: [inputsOf(prompt).plan_path], plan_sha256: planSha, refs: planRefsOf(store) };
+    // 4.0.0: what the verify step reads back
+    store.__commit = { head, planSha, planPath: inputsOf(prompt).plan_path, worktree: inputsOf(prompt).worktree };
+    return { status: "ok", reason: "committed", head, tag_sha: "7".repeat(40) };
   };
+}
+
+// 4.0.0 (1993): the read-only verify step after commit-plan: the three
+// programs' outputs over the store the commit stub wrote.
+export function verifyStub(store) {
+  return (prompt) => {
+    const i = inputsOf(prompt);
+    const c = store.__commit || {};
+    const refs = planRefsOf(store, i.task_id).map((e) => {
+      const o = { ...e };
+      delete o.content;
+      return o;
+    });
+    return {
+      status: "ok",
+      reason: "verified",
+      plan_files: { head: c.head || null, files: [i.plan_path], args: [i.worktree] },
+      plan_hash: { plan_sha256: c.planSha || null },
+      plan_ref: { refs },
+    };
+  };
+}
+
+// ---------------------------------------------------------------- 4.0.0 (1993): shipped programs
+//
+// The programs ship as files under plugins/fleet/scripts/; the harness gives
+// each stubbed program output the self-hash the shipped file prints, so the
+// script's own check (the constant's sha256) meets the file's. A stub that
+// names a program, or a __raw stub, is left alone.
+export const SCRIPTS_SRC = join(HERE, "..", "scripts");
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/4.0.0/scripts";
+const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
+// [[file name, constant name]]
+export const PROGRAMS = GEN.programs(SOURCE).map(([n, c]) => [n, c]);
+const PROGRAM_VALUES = Object.fromEntries(GEN.programs(SOURCE).map(([, c, v]) => [c, v]));
+export function programConst(c) {
+  assert.ok(c in PROGRAM_VALUES, c);
+  return PROGRAM_VALUES[c];
+}
+// the sha256 of the shipped FILE (not of the constant): the cross-check
+export function programSha(name) {
+  return sha256(readFileSync(join(SCRIPTS_SRC, name + ".py"), "utf8"));
+}
+// A shell-quoted word.
+export function shq(v) {
+  return "'" + String(v).replace(/'/g, "'\\''") + "'";
+}
+// 4.0.0: the shell command a test runs to write a sealed plan ref (or a run
+// state) for real, through the shipped chunk writer, as the agents do (chunks
+// in <dirname(wt)>/scratch). It prints `<head> <tag object>` like the 3.x command.
+let refWrites = 0;
+function chunkWriteCmd(program, wt, target, json, outKey) {
+  const msg = json + "\n";
+  const b64 = Buffer.from(msg, "utf8").toString("base64");
+  const dir = join(dirname(wt), "scratch", "chunks-test-" + process.pid + "-" + ++refWrites);
+  const chunks = [];
+  for (let i = 0; i < b64.length; i += 4000) chunks.push(b64.slice(i, i + 4000));
+  const shas = chunks.map((c, i) => ({ i, sha256: sha256(c) }));
+  return (
+    "set -o pipefail; mkdir -p " + shq(dir) + " && " +
+    chunks.map((c, i) => "printf '%s' " + shq(c) + " > " + shq(dir + "/" + i + ".b64")).join(" && ") +
+    " && python3 -I " + [join(SCRIPTS_SRC, program + ".py"), wt, target, dir, String(chunks.length), sha256(msg), JSON.stringify(shas)].map(shq).join(" ") +
+    " | python3 -I -c 'import json, sys; o = json.load(sys.stdin); print(o[\"head\"], o[\"" + outKey + "\"])'"
+  );
+}
+export function planRefWriteCmd(wt, taskId, json) {
+  return chunkWriteCmd("plan_ref_write", wt, taskId, json, "tag_sha");
+}
+export function stateWriteCmd(wt, stateRef, json) {
+  return chunkWriteCmd("state_write", wt, stateRef, json, "state_sha");
+}
+export function programOf(name) {
+  return { name, sha256: programSha(name) };
+}
+const PC_KEYS = ["tools", "args", "path_problems"];
+// [label, [[slot (null: the result itself), program, digest keys (null: no digest)]]]
+export const PROGRAM_LABELS = [
+  [/^preflight$/, [["path_check", "path_check", PC_KEYS]]],
+  [/^infra:path-check:/, [[null, "path_check", PC_KEYS]]],
+  [/^workspace$/, [["remote_url_check", "remote_url", ["url", "args"]]]],
+  [/^hasher:/, [[null, "hasher", "hasher"]]],
+  [/^infra:branch-scan$/, [[null, "branch_scan", ["commits", "refs"]]]],
+  [/^infra:stage-plan/, [["plan_hash", "plan_hash", null]]],
+  [/^infra:format-(tests|code):/, [[null, "format_files", ["ran", "reason", "runs", "stable", "files", "changed", "refused"]]]],
+  [/^infra:commit-plan/, [[null, "plan_ref_write", ["head", "tag_sha"]]]],
+  [/^infra:verify-plan-commit/, [["plan_files", "plan_files", ["head", "files", "args"]], ["plan_hash", "plan_hash", null], ["plan_ref", "plan_ref", null]]],
+  [/^infra:load-ref/, [[null, "plan_ref", null]]],
+  [/^infra:verify-plan$/, [[null, "verify_since", ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"]], ["plan_hash", "plan_hash", null], ["plan_hash_head", "plan_hash", null]]],
+  [/^infra:read-state$/, [[null, "read_state", ["exists", "target", "message", "head", "head_tree", "clean"]]]],
+  [/^infra:state:/, [[null, "state_write", ["head", "state_sha"]]]],
+  [/^infra:tf-gate:/, [[null, "tf_gate", ["touched", "iac_files", "problems", "hints", "args"]]]],
+  [/^infra:remote-head:/, [[null, "remote_head", ["head", "args"]]]],
+  [/^infra:fleet-scan:/, [[null, "fleet_scan", ["diff", "commits"]]]],
+  [/^infra:callers/, [[null, "callers", ["occurrences", "capped"]]]],
+  [/^infra:changed-defs:/, [[null, "changed_defs", ["defs", "excluded", "unclassified", "unattributed"]]]],
+  [/^infra:push(:p\d+)?$/, [[null, "push_classify", ["push_result", "exit_code", "hook_tail", "args"]]]],
+  [/^infra:hook-surface:/, [[null, "hook_surface", ["surface", "make_paths", "error", "args"]]]],
+  [/^infra:review-paths:/, [[null, "review_paths", ["changed_paths"]]]],
+  [/^infra:precommit-ids/, [[null, "precommit_ids", null]]],
+  [/^infra:check-scripts/, [[null, "script_check", ["checks"]]]],
+];
+function pick(o, keys) {
+  const x = {};
+  for (const k of keys) x[k] = o[k] === undefined ? null : o[k];
+  return x;
+}
+// Gives each program output of a stub result its self-hash. A digest the stub
+// computed without one (a valid 3.x digest) is recomputed with it; a digest
+// that was wrong stays wrong; a missing one is computed.
+export function fillPrograms(label, r, prompt) {
+  if (!r || typeof r !== "object") return r;
+  const isPre = label === "preflight";
+  if (!isPre && r.status !== "ok") return r;
+  if (isPre) {
+    if (!("scripts_dir" in r)) r.scripts_dir = SCRIPTS_DIR;
+    if (!("scripts_hits" in r)) r.scripts_hits = [r.scripts_dir];
+  }
+  // flat 3.x stub fields become the program outputs the prompt asks for
+  if (/^infra:stage-plan/.test(label) && !("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256 };
+  if (/^infra:verify-plan$/.test(label)) {
+    if (!("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256 };
+    if (!("plan_hash_head" in r) && "plan_sha256_head" in r) r.plan_hash_head = { plan_sha256: r.plan_sha256_head };
+  }
+  const hit = PROGRAM_LABELS.find(([re]) => re.test(label));
+  if (!hit) return r;
+  for (const [slot, name, keys0] of hit[1]) {
+    const o = slot ? r[slot] : r;
+    if (!o || typeof o !== "object" || "program" in o) continue;
+    const keys = keys0 === "hasher" ? ["fingerprint", "hashes"].concat(inputsOf(prompt).base_tree ? ["changed"] : []) : keys0;
+    const was = keys && typeof o.digest === "string" ? o.digest : null;
+    const valid3 = was !== null && was === sha256(canon(pick(o, keys)));
+    o.program = programOf(name);
+    if (keys && (was === null || valid3)) o.digest = sha256(canon(Object.assign(pick(o, keys), { program: o.program })));
+  }
+  return r;
 }
 
 // load-ref stub: the plan-ref reader over the store, in the prompt's mode
@@ -544,6 +705,7 @@ export function happy(over = {}) {
     "infra:branch-scan": { status: "ok", reason: "scanned", commits: [], refs: [] },
     "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
     "infra:commit-plan": commitStub(store, PC, PSHA),
+    "infra:verify-plan-commit": verifyStub(store),
     "infra:load-ref": loadStub(store),
     "infra:read-state": { status: "ok", reason: "no run-state", exists: false },
     "infra:verify-plan": {
@@ -753,8 +915,8 @@ export function scriptCheckPy() {
 
 // The state JSON a run-state write step carries (quoted heredoc body).
 export function stateJsonOf(prompt) {
-  const m = /<<'FLEET_STATE_JSON'\n([\s\S]*?)\nFLEET_STATE_JSON/.exec(prompt);
-  return m ? JSON.parse(m[1]) : null;
+  const c = chunkedContentOf(prompt);
+  return c === null ? null : JSON.parse(c);
 }
 
 export const CHUNK = 1000;

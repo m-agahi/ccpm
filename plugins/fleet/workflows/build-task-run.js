@@ -60,6 +60,10 @@ const EXPECTED_VERSIONS = {
   "pr-review": 18,
   "gate-change-nonweakening-sweep": 5,
 };
+// 4.0.0 (1993): the plugin version this script ships with; the shipped
+// programs are read from its plugin cache directory only.
+const FLEET_VERSION = "4.0.0";
+const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
 const CONTRACT = "fleet-v3";
 const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
@@ -315,6 +319,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import fnmatch, hashlib, json, os, re, shlex, shutil, subprocess, sys, tempfile
 try:
     import tomllib
@@ -873,10 +886,10 @@ out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks'
                  'ignored': ignored_files(),
                  'suspicious': sorted(set(SUSPICIOUS))}
 # the script recomputes this over the relayed values: a dropped key fails
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 
-print(json.dumps(out, sort_keys=True))
-`;
+print(json.dumps(out, sort_keys=True))`;
 // HASHER_PY_END
 
 
@@ -910,6 +923,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 wt, paths = sys.argv[1], json.loads(sys.argv[2])
 real_wt = os.path.realpath(wt)
@@ -928,9 +950,9 @@ for p in paths:
     else:
         out[p] = {'ok': True, 'reason': 'ok'}
 out = {'checks': out}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, sort_keys=True, ensure_ascii=False))
-`;
+print(json.dumps(out, sort_keys=True, ensure_ascii=False))`;
 // SCRIPT_CHECK_PY_END
 
 // ---------------------------------------------------------------- schemas
@@ -1145,6 +1167,11 @@ const SCHEMAS = {
   }),
 };
 
+// 4.0.0 (1993): the self-hash every shipped program prints
+const PROGRAM_PROP = { type: ["object", "null"], properties: { name: STR_OR_NULL, sha256: STR_OR_NULL } };
+// a shipped program's JSON output relayed whole under one key
+const PROGRAM_OUTPUT = { type: ["object", "null"], properties: { program: PROGRAM_PROP } };
+
 const PREFLIGHT_SCHEMA = {
   type: "object",
   required: ["reachable", "missing"],
@@ -1154,7 +1181,9 @@ const PREFLIGHT_SCHEMA = {
     versions: { type: "object" },
     dispatch: { type: "object", additionalProperties: { type: ["string", "null"] } },
     contract: { type: "object", additionalProperties: { type: ["string", "null"] } },
-    path_check: { type: ["object", "null"] },
+    scripts_hits: { type: "array", items: STR },
+    scripts_dir: STR_OR_NULL,
+    path_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP } },
     reason: STR,
   },
 };
@@ -1171,7 +1200,7 @@ const INFRA_SCHEMA = {
     remote_slug: STR,
     remote_host: STR,
     remote_url: STR,
-    remote_url_check: { type: ["object", "null"] },
+    remote_url_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP } },
     project: STR,
     created: { type: "boolean" },
     reused: { type: "boolean" },
@@ -1260,6 +1289,12 @@ const INFRA_SCHEMA = {
     unclassified: { type: "array", items: STR },
     unattributed: { type: "array", items: STR },
     digest: STR,
+    program: PROGRAM_PROP,
+    tag_sha: STR,
+    plan_hash: PROGRAM_OUTPUT,
+    plan_hash_head: PROGRAM_OUTPUT,
+    plan_files: { type: ["object", "null"], properties: { head: STR, files: { type: "array", items: STR }, args: { type: "array", items: STR }, program: PROGRAM_PROP, digest: STR } },
+    plan_ref: { type: ["object", "null"], properties: { refs: { type: "array", items: { type: "object" } }, program: PROGRAM_PROP } },
     target: STR,
     message: STR,
     clean: { type: "boolean" },
@@ -1316,6 +1351,7 @@ const HASHER_SCHEMA = {
     reason: STR,
     fingerprint: FINGERPRINT,
     changed: { type: "array", items: STR },
+    program: PROGRAM_PROP,
     digest: STR,
     hashes: {
       type: "object",
@@ -2056,34 +2092,45 @@ function commentText(kind, taskId, tldr, planLink, prUrl) {
 
 // The plan file's sha256 as git stores it at a commit. Plan mode and build
 // mode run this exact program, so the two hashes are comparable.
-const PLAN_HASH_PY =
-  "# resource caps (3.1.0): every embedded program bounds its own address space\n" +
-  "# and CPU time, and git's children are tuned to stay inside them\n" +
-  "import os as _o, resource as _r\n" +
-  "for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):\n" +
-  "    _h = _r.getrlimit(_k)[1]\n" +
-  "    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))\n" +
-  "_o.environ['MALLOC_ARENA_MAX'] = '2'\n" +
-  "_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)\n" +
-  "for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):\n" +
-  "    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv\n" +
-  "_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)\n" +
-  "_RAW_PATH = _o.environ.get('PATH', '')\n" +
-  "def clean_path(inside=()):\n" +
-  "    # PATH for children: absolute entries only, none inside the given dirs\n" +
-  "    keep = []\n" +
-  "    for e in _RAW_PATH.split(':'):\n" +
-  "        if not e or not _o.path.isabs(e):\n" +
-  "            continue\n" +
-  "        r = _o.path.realpath(e)\n" +
-  "        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):\n" +
-  "            continue\n" +
-  "        keep.append(e)\n" +
-  "    return ':'.join(keep)\n" +
-  "_o.environ['PATH'] = clean_path()\n" +
-  "import hashlib, subprocess, sys\n" +
-  "d = subprocess.run(['git', '-C', sys.argv[1], 'show', sys.argv[2] + ':' + sys.argv[3]], capture_output=True, check=True).stdout\n" +
-  "print(hashlib.sha256(d).hexdigest())";
+// PLAN_HASH_PY_BEGIN
+const PLAN_HASH_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, subprocess, sys
+d = subprocess.run(['git', '-C', sys.argv[1], 'show', sys.argv[2] + ':' + sys.argv[3]], capture_output=True, check=True).stdout
+print(json.dumps({'plan_sha256': hashlib.sha256(d).hexdigest(), 'program': _PROG}))`;
+// PLAN_HASH_PY_END
 
 function planRefName(taskId) {
   return "refs/fleet/" + taskId + "/plan";
@@ -2094,19 +2141,119 @@ function planRefName(taskId) {
 // sealed JSON, at refs/fleet/<task id>/plan. A different earlier value is
 // kept as refs/fleet/<task id>/plan-<n> first. No hook runs (hooksPath
 // /dev/null also stops reference-transaction). Local only, never pushed.
-// WRITE_PLAN_REF_SH_BEGIN
-function writePlanRefCmd(worktree, taskId, json) {
-  const g = "GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C " + shQuote(worktree);
-  const ref = shQuote("refs/fleet/" + taskId + "/plan");
-  return (
-    "c=$(" + g + " rev-parse HEAD) && t=$( { printf 'object %s\\ntype commit\\ntag fleet-plan\\ntagger fleet <fleet@localhost> 0 +0000\\n\\n' \"$c\"; cat <<'FLEET_PLAN_JSON'\n" +
-    json +
-    "\nFLEET_PLAN_JSON\n} | " + g + " mktag) && if o=$(" + g + " rev-parse -q --verify " + ref + ") && [ \"$o\" != \"$t\" ]; then n=1; while " +
-    g + " rev-parse -q --verify " + ref + "-$n >/dev/null; do n=$((n+1)); done; " + g + " update-ref " + ref + "-$n \"$o\"; fi && " +
-    g + " update-ref " + ref + " \"$t\" && echo \"$c $t\""
-  );
-}
-// WRITE_PLAN_REF_SH_END
+// The chunks are the base64 of the sealed ref's tag message, written by the
+// agent one file each (<chunk dir>/<i>.b64). Exit 3 with {bad_chunks} when a
+// chunk file does not hash to its listed sha256; then nothing is written.
+// Prints {head, tag_sha, program, digest}.
+// PLAN_REF_WRITE_PY_BEGIN
+const PLAN_REF_WRITE_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import base64, hashlib, json, os, re, shutil, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+if len(sys.argv) != 7:
+    sys.exit('usage: <worktree> <task id> <chunk dir> <n> <expected sha256> <chunk sha256 list>')
+wt, target, cdir, n_arg, expected, shas_arg = sys.argv[1:]
+if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', target):
+    sys.exit('bad task id: ' + target)
+if not re.fullmatch(r'[1-9][0-9]{0,2}', n_arg):
+    sys.exit('bad chunk count: ' + n_arg)
+n = int(n_arg)
+if not re.fullmatch(r'[0-9a-f]{64}', expected):
+    sys.exit('bad expected sha256: ' + expected)
+try:
+    shas = json.loads(shas_arg)
+except ValueError:
+    sys.exit('bad chunk sha256 list')
+if not isinstance(shas, list) or len(shas) != n or any(not isinstance(e, dict) or e.get('i') != k or not isinstance(e.get('sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', e['sha256']) for k, e in enumerate(shas)):
+    sys.exit('bad chunk sha256 list: ' + shas_arg[:200])
+# the chunks live in a directory of the run's scratch dir (a sibling of the worktree)
+scratch = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(wt)), 'scratch'))
+real = os.path.realpath(cdir)
+if not real.startswith(scratch + '/'):
+    sys.exit('chunk dir ' + cdir + ' is not under ' + scratch)
+bad, parts = [], []
+for e in shas:
+    p = os.path.join(real, '%d.b64' % e['i'])
+    b = None
+    try:
+        if os.path.isfile(p) and not os.path.islink(p) and os.path.getsize(p) <= 8192:
+            with open(p, 'rb') as f:
+                b = f.read(8193)
+    except OSError:
+        b = None
+    if b is None or len(b) > 8192 or hashlib.sha256(b).hexdigest() != e['sha256']:
+        bad.append(e['i'])
+    else:
+        parts.append(b)
+if bad:
+    # exit 3: rewrite only these chunks; nothing was written
+    print(json.dumps({'bad_chunks': bad}))
+    sys.exit(3)
+try:
+    msg = base64.b64decode(b''.join(parts), validate=True)
+except ValueError:
+    sys.exit('the chunks do not decode as base64')
+if hashlib.sha256(msg).hexdigest() != expected:
+    sys.exit('the decoded message hashes ' + hashlib.sha256(msg).hexdigest() + ', not ' + expected)
+# no hook runs (hooksPath /dev/null also stops reference-transaction)
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', wt]
+def git(*a, inp=None):
+    r = subprocess.run(G + list(a), input=inp, capture_output=True)
+    if r.returncode != 0:
+        sys.exit(r.stderr.decode('utf-8', 'replace')[-2000:] or 'git ' + a[0] + ' failed')
+    return r.stdout.decode().strip()
+def has(ref):
+    r = subprocess.run(G + ['rev-parse', '-q', '--verify', ref], capture_output=True)
+    return r.stdout.decode().strip() if r.returncode == 0 else None
+head = git('rev-parse', '--verify', 'HEAD^{commit}')
+tag = git('mktag', inp=b'object ' + head.encode() + b'\ntype commit\ntag fleet-plan\ntagger fleet <fleet@localhost> 0 +0000\n\n' + msg)
+ref = 'refs/fleet/' + target + '/plan'
+old = has(ref)
+if old and old != tag:
+    # a different earlier value is kept as refs/fleet/<task id>/plan-<n>
+    k = 1
+    while has(ref + '-%d' % k):
+        k += 1
+    git('update-ref', ref + '-%d' % k, old)
+git('update-ref', ref, tag)
+shutil.rmtree(real, ignore_errors=True)
+out = {'head': head, 'tag_sha': tag}
+out['program'] = _PROG
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))`;
+// PLAN_REF_WRITE_PY_END
 
 // Lists every plan ref of a task (refs/fleet/<task id>/plan and plan-<n>):
 // {refs: [{name, tag_sha, type, target, target_type, sha256, content}]}.
@@ -2138,6 +2285,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 if len(sys.argv) != 4:
@@ -2192,12 +2348,12 @@ for e in out:
     c = e.pop('content')
     if want is not None and e['name'] == want and c is not None:
         res['chunks'] = [c[i:i + 1000] for i in range(0, len(c), 1000)]
-print(json.dumps(res, ensure_ascii=False))
-`;
+res['program'] = _PROG
+print(json.dumps(res, ensure_ascii=False))`;
 // PLAN_REF_PY_END
 
 function planRefsCmd(worktree, taskId, mode) {
-  return "python3 -I -c " + shQuote(PLAN_REF_PY) + " " + shQuote(worktree) + " " + shQuote(taskId) + (mode ? " " + shQuote(mode) : "");
+  return progCmd("plan_ref", [worktree, taskId]) + (mode ? " " + shQuote(mode) : "");
 }
 
 // Why a plan-ref entry read without content (meta or chunks mode) is not the
@@ -2210,7 +2366,7 @@ function planRefMetaProblem(e, target, sha) {
   return null;
 }
 
-// The exact tag message writePlanRefCmd stores for a sealed ref (heredoc + newline).
+// The exact tag message plan_ref_write.py stores for a sealed ref (JSON + newline).
 function refMessage(full) {
   return JSON.stringify(full) + "\n";
 }
@@ -2227,10 +2383,131 @@ function planRefEntryProblem(e, target) {
 
 // The relayed keys of a program's output match the digest it printed (3.0.0,
 // ledger 1952). A key the relay dropped counts as null.
-function relayDigestOk(r, keys) {
-  const o = {};
+// 4.0.0 (1993): the digest covers the program's self-hash too, and that
+// self-hash must name the shipped program `name`.
+function relayDigestOk(r, keys, name) {
+  if (!r || typeof r !== "object" || programProblem(r, name)) return false;
+  const o = { program: r.program };
   for (const k of keys) o[k] = r[k] === undefined ? null : r[k];
   return typeof r.digest === "string" && SHA256_RE.test(r.digest) && sha256Hex(canonical(o)) === r.digest;
+}
+
+// ---------------------------------------------------------------- 4.0.0 (1993): programs as files
+//
+// Every embedded program ships as plugins/fleet/scripts/<name>.py, whose bytes
+// are the constant plus "\n" (scripts/gen.mjs writes them; a test checks the
+// bytes). The constants stay the source of truth: the script cannot read files.
+// Agents run `python3 -I <scripts_dir>/<name>.py <args>`; no prompt pastes a
+// program. Each program prints program: {name, sha256} (the sha256 of its own
+// file) inside its digest, and the script compares both with the constant it
+// holds: a re-typed program, a stale plugin version or a wrong directory stops
+// the step. scripts_dir is resolved in the first agent of every run.
+let PROGRAM_TABLE = null;
+function programTable() {
+  if (!PROGRAM_TABLE)
+    PROGRAM_TABLE = {
+      hasher: HASHER_PY,
+      script_check: SCRIPT_CHECK_PY,
+      plan_hash: PLAN_HASH_PY,
+      plan_ref: PLAN_REF_PY,
+      plan_ref_write: PLAN_REF_WRITE_PY,
+      fleet_scan: FLEET_SCAN_PY,
+      branch_scan: BRANCH_SCAN_PY,
+      review_paths: REVIEW_PATHS_PY,
+      verify_since: VERIFY_SINCE_PY,
+      plan_files: PLAN_FILES_PY,
+      callers: CALLERS_PY,
+      changed_defs: CHANGED_DEFS_PY,
+      format_files: FORMAT_FILES_PY,
+      tf_gate: TF_GATE_PY,
+      remote_head: REMOTE_HEAD_PY,
+      remote_url: REMOTE_URL_PY,
+      push_classify: PUSH_CLASSIFY_PY,
+      hook_surface: HOOK_SURFACE_PY,
+      precommit_ids: PRECOMMIT_IDS_PY,
+      path_check: PATH_CHECK_PY,
+      read_state: READ_STATE_PY,
+      state_write: STATE_WRITE_PY,
+    };
+  return PROGRAM_TABLE;
+}
+
+// sha256 of the shipped file of program `name` (computed once per run)
+const PROGRAM_SHA = {};
+function programSha(name) {
+  if (!Object.prototype.hasOwnProperty.call(programTable(), name)) throw new Error("unknown program " + name);
+  if (!(name in PROGRAM_SHA)) PROGRAM_SHA[name] = sha256Hex(programTable()[name] + "\n");
+  return PROGRAM_SHA[name];
+}
+
+// Why a relayed program output did not come from the shipped program `name` (null: it did).
+function programProblem(r, name) {
+  const p = r && typeof r === "object" && r.program && typeof r.program === "object" && !Array.isArray(r.program) ? r.program : null;
+  const got = p && typeof p.sha256 === "string" ? p.sha256 : null;
+  if (p && p.name === name && got === programSha(name)) return null;
+  return "did not run the shipped program " + name + " (got " + (p ? JSON.stringify(p.name === undefined ? null : p.name) + " " + (got || "no sha256") : "no program key") + ")";
+}
+
+// Halts unless `r` came from the shipped program `name`.
+function requireProgram(r, name, label, status, stopGate) {
+  const p = programProblem(r, name);
+  if (p) halt(status || "failed", label + ": " + p, stopGate || "contract");
+}
+
+// The one command form a prompt uses to run a shipped program.
+function progCmd(name, args) {
+  if (!state.scriptsDir) throw new Error("scripts_dir is not resolved; program " + name + " cannot run");
+  programSha(name);
+  return "python3 -I " + shQuote(state.scriptsDir + "/" + name + ".py") + (args || []).map((a) => " " + shQuote(a)).join("");
+}
+
+// scripts_dir: the plugin cache copy of this fleet version (the plugin root
+// is not set in an agent's Bash). No `.` or `..` segment, no empty segment.
+function scriptsDirProblem(dir, hits) {
+  if (!Array.isArray(hits) || hits.some((h) => typeof h !== "string")) return "the scripts directory search returned no list";
+  if (hits.length !== 1) return "the scripts directory search found " + hits.length + " copies of fleet " + FLEET_VERSION + " (" + hits.slice(0, 4).join(", ") + "); exactly one is needed";
+  if (typeof dir !== "string" || dir !== hits[0]) return "scripts_dir " + JSON.stringify(dir === undefined ? null : dir) + " is not the one directory found (" + hits[0] + ")";
+  if (!SCRIPTS_DIR_RE.test(dir) || dir.split("/").slice(1).some((x) => x === "" || x === "." || x === ".."))
+    return "scripts_dir " + JSON.stringify(dir) + " is not a plugin cache directory of fleet " + FLEET_VERSION + " (<...>/fleet/" + FLEET_VERSION + "/scripts)";
+  return null;
+}
+
+// base64 of the UTF-8 bytes of `str` (the script has no Buffer or btoa).
+const B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+function base64Of(str) {
+  const b = utf8Bytes(str);
+  let out = "";
+  for (let i = 0; i < b.length; i += 3) {
+    const n = (b[i] << 16) | ((i + 1 < b.length ? b[i + 1] : 0) << 8) | (i + 2 < b.length ? b[i + 2] : 0);
+    out += B64_CHARS[(n >> 18) & 63] + B64_CHARS[(n >> 12) & 63];
+    out += i + 1 < b.length ? B64_CHARS[(n >> 6) & 63] : "=";
+    out += i + 2 < b.length ? B64_CHARS[n & 63] : "=";
+  }
+  return out;
+}
+
+// A message the agent writes to files in checked base64 chunks, and the
+// prompt text for it: write each chunk, then run `cmd` (a chunk writer
+// program), rewriting only the chunks it lists as bad, at most 2 times.
+const CHUNK_CHARS = 4000;
+const MAX_CHUNK_RETRIES = 2;
+function chunked(message) {
+  const b64 = base64Of(message);
+  const chunks = [];
+  for (let i = 0; i < b64.length; i += CHUNK_CHARS) chunks.push(b64.slice(i, i + CHUNK_CHARS));
+  return { expected: sha256Hex(message), chunks, shas: chunks.map((c, i) => ({ i, sha256: sha256Hex(c) })) };
+}
+function chunkSteps(dir, c, cmd) {
+  return (
+    "a. `mkdir -p " + shQuote(dir) + "`.\n" +
+    "b. For each chunk below, one Bash call: `printf '%s' '<the chunk text>' > " + shQuote(dir) + "/<i>.b64`, with the chunk text copied exactly, byte for byte, in place of <the chunk text> (base64 holds no quote; printf adds no newline). Never shorten, merge, reflow or skip a chunk.\n" +
+    "c. Run this command exactly as written, unmodified:\n" +
+    cmd +
+    "\n" +
+    "   Exit 3 prints {\"bad_chunks\": [<i>, ...]}: the files of those chunks do not hash to their sha256 and nothing was written. Rewrite only those chunks as in step b, then run the command again; at most " + MAX_CHUNK_RETRIES + " such retries, then return failed with the last output. Any other non-zero exit -> failed with its stderr.\n" +
+    "The " + c.chunks.length + " chunk(s) (" + CHUNK_CHARS + " characters each at most):\n" +
+    c.chunks.map((x, i) => "chunk " + i + " sha256 " + c.shas[i].sha256 + ":\n" + x + "\n").join("")
+  );
 }
 
 // The PR-diff check for fleet-internal paths: the paths of
@@ -2262,6 +2539,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, default, sha = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2280,9 +2566,9 @@ for c in run('rev-list', base + '..' + sha).decode().split():
     files = names(run('diff-tree', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c))
     commits.append({'sha': c, 'files': sorted(set(files))})
 out = {'diff': diff, 'commits': commits}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // FLEET_SCAN_PY_END
 
 // The branch scan (3.0.0, ledger 1952): the commits origin/<default>..HEAD
@@ -2320,6 +2606,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, default, tid, kinds = sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
@@ -2413,9 +2708,9 @@ for name in run('for-each-ref', '--format=%(refname)', pre).stdout.decode().spli
     refs.append(e)
 refs.sort(key=lambda x: x['name'])
 out = {'commits': commits, 'refs': refs}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // BRANCH_SCAN_PY_END
 
 // The paths base_ref..head_sha changes (review), with a digest. Read only.
@@ -2445,6 +2740,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2452,9 +2756,9 @@ r = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=f
 if r.returncode != 0:
     sys.exit(r.stderr.decode('utf-8', 'replace'))
 out = {'changed_paths': [x.decode('utf-8', 'replace') for x in r.stdout.split(b'\0') if x]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // REVIEW_PATHS_PY_END
 
 // Verify (3.1.0, ledger 1959): what the branch did since the plan commit, from
@@ -2491,6 +2795,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, plan_path = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2514,9 +2827,9 @@ if anc and head != pc:
     touched = z(run('log', '-z', '--format=%H', pc + '..' + head, '--', ':(literal)' + plan_path).stdout)
     changed = z(run('diff', '--name-only', '-z', '--no-renames', pc + '..' + head, '--').stdout)
 out = {'head': head, 'is_ancestor': anc, 'commits_since': commits, 'plan_touched': touched, 'changed_since': changed, 'args': [wt, base, plan_path]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // VERIFY_SINCE_PY_END
 const VERIFY_SINCE_KEYS = ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"];
 
@@ -2549,6 +2862,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt = sys.argv[1]
@@ -2562,9 +2884,9 @@ def run(*a):
 head = run('rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
 files = [x.decode('utf-8', 'replace') for x in run('diff-tree', '-r', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', head).split(b'\0') if x]
 out = {'head': head, 'files': files, 'args': [wt]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // PLAN_FILES_PY_END
 
 // The caller grep (2.1.6): every word-boundary occurrence of each changed
@@ -2598,6 +2920,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, plan_path, syms, cap = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), int(sys.argv[4])
@@ -2622,9 +2953,9 @@ for s in syms:
     else:
         occ[s] = sorted(hits)
 out = {'occurrences': occ, 'capped': sorted(capped)}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, sort_keys=True, ensure_ascii=False))
-`;
+print(json.dumps(out, sort_keys=True, ensure_ascii=False))`;
 // CALLERS_PY_END
 
 // The build-time caller check (3.0.0, ledger 1956): the EXISTING definitions
@@ -2669,6 +3000,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, tree, excl = sys.argv[1], sys.argv[2], sys.argv[3], set(json.loads(sys.argv[4]))
@@ -2963,9 +3303,9 @@ o = {
     'unclassified': sorted(unclassified),
     'unattributed': sorted(unattributed),
 }
+o['program'] = _PROG
 o['digest'] = hashlib.sha256(json.dumps(o, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(o, sort_keys=True, ensure_ascii=False))
-`;
+print(json.dumps(o, sort_keys=True, ensure_ascii=False))`;
 // CHANGED_DEFS_PY_END
 
 // Paths with a .fleet/ directory segment: fleet-internal, never in a PR.
@@ -2973,9 +3313,13 @@ function fleetInternalPaths(paths) {
   return (paths || []).map((p) => normPath(String(p))).filter((q) => q.split("/").slice(0, -1).some((x) => x.toLowerCase() === ".fleet"));
 }
 
+// It prints {plan_sha256, program} (4.0.0: JSON, so the script sees which program ran).
 function planHashCmd(worktree, rev, planPath) {
-  return "python3 -I -c " + shQuote(PLAN_HASH_PY) + " " + shQuote(worktree) + " " + shQuote(rev) + " " + shQuote(planPath);
+  return progCmd("plan_hash", [worktree, rev, planPath]);
 }
+
+// 4.0.0 (1993): the search for this version's scripts directory in the plugin cache
+const SCRIPTS_FIND = 'ls -d "$HOME"/.claude/plugins/cache/*/fleet/' + FLEET_VERSION + "/scripts";
 
 // ---------------------------------------------------------------- prompts
 
@@ -3011,10 +3355,13 @@ function preflightPrompt(inputs) {
     "dispatch maps each found pattern to the first line of its `content` that matches `DISPATCH: model=<tier> (fallback=<tier>)` (the fallback part is optional), copied raw; null when no line matches. " +
     "contract maps each found pattern to the first line of its `content` that starts with `CONTRACT:`, copied raw; null when none. " +
     "`content` often has no trailing newline: its last line counts as a line like any other. " +
-    "Then run this one command exactly as written, unmodified, as one Bash call: " +
-    "python3 -I -c " + shQuote(PATH_CHECK_PY) + " " + shQuote(inputs.repo) +
-    "\nIt prints one JSON object {tools, args, path_problems, digest}: return it as path_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n" +
-    "Return {reachable, missing, versions, dispatch, contract, path_check, reason}."
+    "Then find the fleet scripts directory (4.0.0): run `" + SCRIPTS_FIND + "` as one Bash call. scripts_hits = its output lines, in order (an empty list when it prints nothing or `no matches found`). " +
+    "When there is exactly one line, scripts_dir = that line; otherwise scripts_dir = null, path_check = null, and skip the next command. " +
+    "Then run this one command as one Bash call, with <scripts_dir> replaced by scripts_dir and nothing else changed: " +
+    "python3 -I <scripts_dir>/path_check.py " +
+    shQuote(inputs.repo) +
+    "\nIt prints one JSON object {tools, args, path_problems, program, digest}: return it as path_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n" +
+    "Return {reachable, missing, versions, dispatch, contract, scripts_hits, scripts_dir, path_check, reason}."
   );
 }
 
@@ -3037,22 +3384,14 @@ function workspacePrompt(inputs) {
     "8. base_ref = `git -C <main_worktree> merge-base HEAD origin/<default_branch>`.\n" +
     "9. remote_slug = <owner>/<name> parsed from `git -C <repo> remote get-url origin`. remote_host = the host part of `git -C <repo> config --get remote.origin.url` (the configured URL, before any insteadOf rewrite; for an ssh alias such as `github-personal:o/r.git`, the alias).\n" +
     "10. Run this one command exactly as written, unmodified, as one Bash call:\n" +
-    "python3 -I -c " + shQuote(REMOTE_URL_PY) + " " + shQuote(inputs.repo) +
-    "\nIt prints one JSON object {url, args, digest}: return it as remote_url_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> remote_url_check null.\n" +
+    progCmd("remote_url", [inputs.repo]) +
+    "\nIt prints one JSON object {url, args, program, digest}: return it as remote_url_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> remote_url_check null.\n" +
     "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url_check, created}."
   );
 }
 
 function hasherPrompt(inputs) {
-  const cmd =
-    "python3 -I - " +
-    shQuote(inputs.worktree) +
-    " " +
-    shQuote(JSON.stringify(inputs.test_files)) +
-    (inputs.base_tree ? " " + shQuote(inputs.base_tree) : "") +
-    " <<'FLEET_HASHER_PY'\n" +
-    HASHER_PY.trim() +
-    "\nFLEET_HASHER_PY";
+  const cmd = progCmd("hasher", [inputs.worktree, JSON.stringify(inputs.test_files)].concat(inputs.base_tree ? [inputs.base_tree] : []));
   const rules =
     "runner-config files hashed whole: " +
     RUNNER_CONFIG_FILES.join(", ") +
@@ -3075,7 +3414,7 @@ function hasherPrompt(inputs) {
     "Run this one Bash command exactly as written, unmodified, in the foreground:\n" +
     cmd +
     "\n" +
-    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored, suspicious} and, when a base tree is given, `changed` (the paths that differ from it), plus `digest` (a sha256 over all of them). Return {status: "ok", fingerprint, hashes, changed, digest} with those values copied exactly: every key of every map, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored, suspicious} and, when a base tree is given, `changed` (the paths that differ from it), plus `program` and `digest` (a sha256 over all of them). Return {status: "ok", fingerprint, hashes, changed, program, digest} with those values copied exactly: every key of every map, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     "The tree is built in a temporary index (GIT_INDEX_FILE=<temp file>: git read-tree HEAD, git add -A, git write-tree); the real index is never touched and no hook runs. " +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>, fingerprint: {head: "", tree: ""}}. Run no other command.\n' +
     "Extraction rules (the program implements them): " +
@@ -3118,9 +3457,9 @@ function branchScanPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified; run nothing else:\n" +
-    "python3 -I -c " + shQuote(BRANCH_SCAN_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.default_branch) + " " + shQuote(inputs.task_id) + " " + shQuote(JSON.stringify(SOURCE_KINDS)) +
+    progCmd("branch_scan", [inputs.main_worktree, inputs.default_branch, inputs.task_id, JSON.stringify(SOURCE_KINDS)]) +
     "\n" +
-    'It prints one JSON object {commits, refs, digest} (names, hashes and checks only; no message text). Return {status: "ok", reason, commits, refs, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Non-zero exit -> failed with its stderr.'
+    'It prints one JSON object {commits, refs, program, digest} (names, hashes and checks only; no message text). Return {status: "ok", reason, commits, refs, program, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Non-zero exit -> failed with its stderr.'
   );
 }
 
@@ -3137,10 +3476,11 @@ function stagePlanPrompt(inputs) {
     "\n" +
     "2. `git -C <worktree> status --porcelain`: any dirty path other than <plan_path> -> needs_human with the paths.\n" +
     "3. `git -C <worktree> add -- <plan_path>`.\n" +
-    "4. plan_sha256 = the output of this one command (it hashes the staged copy), run exactly as written:\n" +
+    "4. Run this one command exactly as written, unmodified (it hashes the staged copy):\n" +
     planHashCmd(inputs.worktree, "", inputs.plan_path) +
     "\n" +
-    "Return {status, reason, plan_sha256}."
+    "It prints one JSON object {plan_sha256, program}: return it as plan_hash, both values copied unchanged. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, plan_hash}."
   );
 }
 
@@ -3205,6 +3545,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile
 wt, sel, frozen = sys.argv[1], json.loads(sys.argv[2]), set(json.loads(sys.argv[3]))
 scratch_root, tmo = sys.argv[4], int(sys.argv[5])
@@ -3240,6 +3589,7 @@ def names(b):
 def done(**k):
     out = {'ran': False, 'reason': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': []}
     out.update(k)
+    out['program'] = _PROG
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
     print(json.dumps(out, sort_keys=True, ensure_ascii=False))
     sys.exit(0)
@@ -3483,8 +3833,7 @@ finally:
     git(wt, 'worktree', 'prune', check=False)
 if refused:
     done(reason='a selected path resolves outside the checkout', files=files, refused=sorted(set(refused)))
-done(ran=True, reason='ran pre-commit run --files in a scratch checkout of HEAD', runs=runs, stable=stable, files=files, changed=changed)
-`;
+done(ran=True, reason='ran pre-commit run --files in a scratch checkout of HEAD', runs=runs, stable=stable, files=files, changed=changed)`;
 // FORMAT_FILES_PY_END
 
 function formatFilesPrompt(inputs) {
@@ -3494,9 +3843,9 @@ function formatFilesPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified, as one Bash call with timeout 600000 ms:\n" +
-    "python3 -I -c " + shQuote(FORMAT_FILES_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(JSON.stringify(inputs.select)) + " " + shQuote(JSON.stringify(inputs.frozen)) + " " + shQuote(inputs.scratch_dir) + " " + shQuote(String(FIX_RUN_TIMEOUT)) +
+    progCmd("format_files", [inputs.worktree, JSON.stringify(inputs.select), JSON.stringify(inputs.frozen), inputs.scratch_dir, String(FIX_RUN_TIMEOUT)]) +
     "\n" +
-    'It prints one JSON object {ran, reason, runs, stable, files, changed, refused, digest}. Return {status: "ok", reason, ran, runs, stable, files, changed, refused, digest} with those values copied exactly (the script recomputes the digest). ' +
+    'It prints one JSON object {ran, reason, runs, stable, files, changed, refused, program, digest}. Return {status: "ok", reason, ran, runs, stable, files, changed, refused, program, digest} with those values copied exactly (the script recomputes the digest). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -3510,7 +3859,8 @@ async function formatFiles(label, worktree, select, frozenList, allowed, phaseNa
   const keys = ["ran", "reason", "runs", "stable", "files", "changed", "refused"];
   if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed) || !Array.isArray(r.refused))
     halt("failed", label + " returned no ran/stable/files/changed/refused");
-  if (!relayDigestOk(r, keys)) halt("failed", label + ": the relayed result does not match the program's digest");
+  requireProgram(r, "format_files", label);
+  if (!relayDigestOk(r, keys, "format_files")) halt("failed", label + ": the relayed result does not match the program's digest");
   if (r.refused.length)
     halt("needs_human", label + ": hook config, a hook entry or a symlinked path differs from HEAD: " + r.refused.join(", ") + "; no hook was run (" + r.reason + ")", "hash");
   if (!r.ran) {
@@ -3546,9 +3896,11 @@ function formatPlanPrompt(inputs) {
   );
 }
 
-function commitPlanPrompt(inputs, refContent) {
+// message: the exact tag message, refMessage(full).
+function commitPlanPrompt(inputs, message) {
+  const c = chunked(message);
   return (
-    "Infra step of the fleet build workflow: commit the plan doc LOCALLY, in ONE commit that holds <plan_path> only, then record the sealed plan ref as a local git object. No other edits. Never push. Never --no-verify or any hook bypass; no Co-Authored-By trailer. No ledger, ticket or comment writes. Never stage, force-add or write any other path.\n" +
+    "Infra step of the fleet build workflow: commit the plan doc LOCALLY, in ONE commit that holds <plan_path> only, then record the sealed plan ref as a local git object. No other edits (the chunk files under <chunk_dir> excepted). Never push. Never --no-verify or any hook bypass; no Co-Authored-By trailer. No ledger, ticket or comment writes. Never stage, force-add or write any other path.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
@@ -3562,20 +3914,35 @@ function commitPlanPrompt(inputs, refContent) {
     shQuote("plan(" + inputs.task_id + "): " + inputs.slug) +
     "`. Never --allow-empty. If a hook rewrites the plan, do not re-add it and do not commit again: return needs_human with the hook output (the plan ran through the hooks before the audit; a rewrite now would commit bytes the audit never saw). Any other hook failure: fix the cause and retry once; a second failure -> failed.\n" +
     "4. `git -C <worktree> ls-files --error-unmatch -- <plan_path>` must succeed and `git -C <worktree> status --porcelain` must be empty; else needs_human.\n" +
-    "5. Run this command exactly as written, unmodified: " +
-    "python3 -I -c " + shQuote(PLAN_FILES_PY) + " " + shQuote(inputs.worktree) +
+    "5. Write the plan ref (4.0.0): its tag message travels as base64 chunks you write to files under <chunk_dir>; the program checks every chunk against its sha256, then makes the tag object (git mktag: no tag name, no index change, no hook) and moves refs/fleet/<task_id>/plan. Write no other file.\n" +
+    chunkSteps(inputs.chunk_dir, c, progCmd("plan_ref_write", [inputs.worktree, inputs.task_id, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)])) +
+    "On success it prints one JSON object {head, tag_sha, program, digest}: copy all four unchanged (the script recomputes the digest).\n" +
+    "Return {status, reason, reused, head, tag_sha, program, digest}. The script verifies the commit and the ref in a separate read-only step."
+  );
+}
+
+// 4.0.0 (1993): the read-only check of the commit-plan step. It runs the
+// three programs; only this step retries (once) when a relay or a digest is wrong.
+function verifyPlanCommitPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: VERIFY the plan commit and the plan ref. Read only: no edits, no commits, no checkout, no reset, no push; run nothing but the three commands below.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
     "\n" +
-    "It prints one JSON object {head, files, digest}: copy all three unchanged, every path in order (the script recomputes the digest). Never list the files with git yourself. Non-zero exit -> failed with its stderr.\n" +
-    "6. plan_sha256 = the output of this command, run exactly as written:\n" +
+    "1. Run this command exactly as written, unmodified:\n" +
+    progCmd("plan_files", [inputs.worktree]) +
+    "\n" +
+    "It prints one JSON object {head, files, args, program, digest}: return it as plan_files, every value copied unchanged, every path in order (the script recomputes the digest). Never list the files with git yourself.\n" +
+    "2. Run this command exactly as written, unmodified:\n" +
     planHashCmd(inputs.worktree, "HEAD", inputs.plan_path) +
     "\n" +
-    "7. Write the plan ref: run this one Bash command exactly as written, unmodified (it makes no commit, no tag name and no index change, and runs no hook). It prints `<head> <tag_sha>`; non-zero exit -> failed with its stderr:\n" +
-    writePlanRefCmd(inputs.worktree, inputs.task_id, refContent) +
-    "\n" +
-    "8. Run this command exactly as written; it prints {refs} (names, targets and hashes; no message text). Copy refs unchanged, byte for byte:\n" +
+    "It prints one JSON object {plan_sha256, program}: return it as plan_hash, both values copied unchanged.\n" +
+    "3. Run this command exactly as written, unmodified:\n" +
     planRefsCmd(inputs.worktree, inputs.task_id, "meta") +
     "\n" +
-    "Return {status, reason, reused, head, files, digest, plan_sha256, refs}."
+    "It prints one JSON object {refs, program} (names, targets and hashes; no message text): return it as plan_ref, copied unchanged, byte for byte.\n" +
+    "Any non-zero exit -> failed with its stderr.\n" +
+    'Return {status: "ok", reason, plan_files, plan_hash, plan_ref}.'
   );
 }
 
@@ -3589,8 +3956,8 @@ function loadRefPrompt(inputs) {
     planRefsCmd(inputs.main_worktree, inputs.task_id, inputs.mode === "chunks" ? "chunks:" + inputs.plan_ref : "meta") +
     "\n" +
     (inputs.mode === "chunks"
-      ? 'It prints one JSON object {refs, chunks}. Return {status: "ok", reason, refs, chunks} with both copied exactly, byte for byte: every chunk in full and in order. NEVER shorten, summarise, elide, merge or drop a chunk, and never write an ellipsis or a placeholder such as [truncated ...]; the script checks the joined chunks against a sha256 and stops the run on any change. '
-      : 'It prints one JSON object {refs}. Return {status: "ok", reason, refs} with refs copied exactly, byte for byte. ') +
+      ? 'It prints one JSON object {refs, chunks, program}. Return {status: "ok", reason, refs, chunks, program} with all three copied exactly, byte for byte: every chunk in full and in order. NEVER shorten, summarise, elide, merge or drop a chunk, and never write an ellipsis or a placeholder such as [truncated ...]; the script checks the joined chunks against a sha256 and stops the run on any change. '
+      : 'It prints one JSON object {refs, program}. Return {status: "ok", reason, refs, program} with both copied exactly, byte for byte. ') +
     'If the command exits non-zero, return {status: "needs_human", reason: <its stderr>}. Run no other command.'
   );
 }
@@ -3630,6 +3997,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
 wt, default, sha, url = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 os.chdir('/')
@@ -3883,9 +4259,9 @@ if touched:
                 hints.append('external, local or null provider or local_/null_ resource change in ' + p)
 problems, hints = sorted(set(problems)), sorted(set(hints))
 out = {'touched': touched, 'iac_files': iac_files, 'problems': problems, 'hints': hints, 'args': [wt, default, sha, url]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // TF_GATE_PY_END
 
 // The remote head read (3.1.0, ADR-1175): after Max pushed an IaC diff
@@ -3919,6 +4295,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
 wt, branch, url = sys.argv[1], sys.argv[2], sys.argv[3]
 os.chdir('/')
@@ -3948,9 +4333,9 @@ elif r.returncode == 0:
 else:
     sys.exit(r.stderr.decode('utf-8', 'replace') or 'ls-remote failed')
 out = {'head': head, 'args': [wt, branch, url]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // REMOTE_HEAD_PY_END
 
 // The origin URL read (3.1.1, ledger 1970b): the workspace step relays this
@@ -3984,6 +4369,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 repo = sys.argv[1]
 os.chdir('/')
@@ -3996,9 +4390,9 @@ elif r.returncode == 0 and len(r.stdout) <= 4096:
 else:
     sys.exit(r.stderr.decode('utf-8', 'replace')[-2000:] or 'cannot read remote.origin.url')
 out = {'url': url, 'args': [repo]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // REMOTE_URL_PY_END
 
 function remoteHeadPrompt(inputs) {
@@ -4008,10 +4402,10 @@ function remoteHeadPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified (on a non-zero exit, retry it up to 3 times with 5, 15 and 45 s waits):\n" +
-    "python3 -I -c " + shQuote(REMOTE_HEAD_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.branch) + " " + shQuote(inputs.remote_url) +
+    progCmd("remote_head", [inputs.main_worktree, inputs.branch, inputs.remote_url]) +
     "\n" +
-    "It prints one JSON object {head, args, digest}. Copy every value unchanged (the script recomputes the digest). Still non-zero after the retries -> failed with its stderr.\n" +
-    "Return {status, reason, head, args, digest}."
+    "It prints one JSON object {head, args, program, digest}. Copy every value unchanged (the script recomputes the digest). Still non-zero after the retries -> failed with its stderr.\n" +
+    "Return {status, reason, head, args, program, digest}."
   );
 }
 
@@ -4022,10 +4416,10 @@ function tfGatePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(TF_GATE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.default_branch) + " " + shQuote(inputs.approved_sha) + " " + shQuote(inputs.remote_url) +
+    progCmd("tf_gate", [inputs.main_worktree, inputs.default_branch, inputs.approved_sha, inputs.remote_url]) +
     "\n" +
-    "It prints one JSON object {touched, iac_files, problems, hints, args, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, touched, iac_files, problems, hints, args, digest}."
+    "It prints one JSON object {touched, iac_files, problems, hints, args, program, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, touched, iac_files, problems, hints, args, program, digest}."
   );
 }
 
@@ -4036,10 +4430,10 @@ function fleetScanPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(FLEET_SCAN_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.default_branch) + " " + shQuote(inputs.approved_sha) +
+    progCmd("fleet_scan", [inputs.main_worktree, inputs.default_branch, inputs.approved_sha]) +
     "\n" +
-    "It prints one JSON object {diff, commits, digest}. Copy every value unchanged; never drop a path (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, diff, commits, digest}."
+    "It prints one JSON object {diff, commits, program, digest}. Copy every value unchanged; never drop a path (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, diff, commits, program, digest}."
   );
 }
 
@@ -4050,9 +4444,9 @@ function callersPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(CALLERS_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.plan_path) + " " + shQuote(JSON.stringify(inputs.symbols)) + " " + shQuote(String(inputs.cap)) +
+    progCmd("callers", [inputs.worktree, inputs.plan_path, JSON.stringify(inputs.symbols), String(inputs.cap)]) +
     "\n" +
-    'It prints one JSON object {occurrences, capped, digest}. Return {status: "ok", reason, occurrences, capped, digest} with those values copied exactly: every key, every list entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'It prints one JSON object {occurrences, capped, program, digest}. Return {status: "ok", reason, occurrences, capped, program, digest} with those values copied exactly: every key, every list entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -4064,9 +4458,9 @@ function changedDefsPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(CHANGED_DEFS_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.base) + " " + shQuote(inputs.tree) + " " + shQuote(JSON.stringify(inputs.exclude)) +
+    progCmd("changed_defs", [inputs.worktree, inputs.base, inputs.tree, JSON.stringify(inputs.exclude)]) +
     "\n" +
-    'It prints one JSON object {defs, excluded, unclassified, unattributed, digest}. Return {status: "ok", reason, defs, excluded, unclassified, unattributed, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'It prints one JSON object {defs, excluded, unclassified, unattributed, program, digest}. Return {status: "ok", reason, defs, excluded, unclassified, unattributed, program, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -4079,17 +4473,17 @@ function verifyPlanPrompt(inputs) {
     "\n" +
     "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> status --porcelain` must be empty; else needs_human.\n" +
     "2. `git -C <main_worktree> cat-file -e '<plan_commit>^{commit}'` (keep the quotes: zsh globs `^`) must succeed; else needs_human.\n" +
-    "3. plan_sha256 = the output of this command, run exactly as written:\n" +
+    "3. Run this command exactly as written; it prints one JSON object {plan_sha256, program}: return it as plan_hash, both values copied unchanged:\n" +
     planHashCmd(inputs.main_worktree, inputs.plan_commit, inputs.plan_path) +
     "\n" +
-    "4. plan_sha256_head = the output of this command, run exactly as written:\n" +
+    "4. Run this command exactly as written; it prints one JSON object {plan_sha256, program}: return it as plan_hash_head, both values copied unchanged:\n" +
     planHashCmd(inputs.main_worktree, "HEAD", inputs.plan_path) +
     "\n" +
     "5. Run this command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(VERIFY_SINCE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.plan_commit) + " " + shQuote(inputs.plan_path) +
+    progCmd("verify_since", [inputs.main_worktree, inputs.plan_commit, inputs.plan_path]) +
     "\n" +
-    "It prints one JSON object {head, is_ancestor, commits_since, plan_touched, changed_since, digest}. Copy every value unchanged: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Never run git log or git diff yourself for these values. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, head, plan_sha256, plan_sha256_head, is_ancestor, commits_since, plan_touched, changed_since, digest}."
+    "It prints one JSON object {head, is_ancestor, commits_since, plan_touched, changed_since, program, digest}. Copy every value unchanged: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Never run git log or git diff yourself for these values. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, head, plan_hash, plan_hash_head, is_ancestor, commits_since, plan_touched, changed_since, args, program, digest}."
   );
 }
 
@@ -4180,8 +4574,8 @@ function checkScriptsPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "Run `run` exactly as written, unmodified, as one Bash call in the foreground. It prints one JSON object {checks: {<path>: {ok, reason}}, digest}. Copy both unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, checks, digest}."
+    "Run `run` exactly as written, unmodified, as one Bash call in the foreground. It prints one JSON object {checks: {<path>: {ok, reason}}, program, digest}. Copy both unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, checks, program, digest}."
   );
 }
 
@@ -4225,6 +4619,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, sys
 path, code = sys.argv[1], int(sys.argv[2])
 os.chdir('/')
@@ -4253,9 +4656,9 @@ elif has('error: failed to push some refs'):
 else:
     res = 'network'
 out = {'push_result': res, 'exit_code': code, 'hook_tail': tail, 'args': [path, sys.argv[2]]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // PUSH_CLASSIFY_PY_END
 
 // The hook surface (3.1.0, Max's rule): .pre-commit-config.yaml (at <rev> and
@@ -4289,6 +4692,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import ast, hashlib, json, os, re, shutil, subprocess, sys
 wt, rev, targets_arg = sys.argv[1], sys.argv[2], sys.argv[3]
 targets = [t for t in json.loads(targets_arg) if isinstance(t, str)]
@@ -4565,9 +4977,9 @@ for tgt in targets:
                             paths.add(q)
     make_paths[tgt] = sorted(paths)
 out = {'surface': [] if error else sorted(surface), 'make_paths': {} if error else make_paths, 'error': error, 'args': [wt, rev, targets_arg]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // HOOK_SURFACE_PY_END
 
 
@@ -4579,8 +4991,8 @@ function pushPrompt(inputs) {
     "\n" +
     "1. <branch> must differ from <default_branch>; `git -C <main_worktree> branch --show-current` must equal <branch>; `git -C <main_worktree> rev-parse HEAD` must equal <approved_sha>; `git -C <main_worktree> status --porcelain` must be empty. Any mismatch -> needs_human.\n" +
     "2. Push ONCE: `git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Never classify the output yourself: run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code:\n" +
-    "python3 -I -c " + shQuote(PUSH_CLASSIFY_PY) + " <file> <exit>\n" +
-    "   It prints one JSON object {push_result, exit_code, hook_tail, args, digest}. Copy all five unchanged (the script recomputes the digest). Then, by push_result:\n" +
+    progCmd("push_classify", []) + " <file> <exit>\n" +
+    "   It prints one JSON object {push_result, exit_code, hook_tail, args, program, digest}. Copy all six unchanged (the script recomputes the digest). Then, by push_result:\n" +
     "   - `ok` -> step 3.\n" +
     "   - `non_ff` or `remote_rejected` -> return status needs_human at once with the git line, no retry.\n" +
     "   - `ambiguous` (git's lines cannot be told from a hook's) -> return status needs_human at once with the last 60 lines of the temp file, no retry.\n" +
@@ -4593,7 +5005,7 @@ function pushPrompt(inputs) {
     "remote_head = the output of `<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha` (the branch name goes in the path as is, slashes included), retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha") +
     " Only when neither gh nor gh-personal is installed: remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints, with the same backoff. remote_head must be the full 40-hex sha.\n" +
-    "Return {status, reason, push_result, exit_code, hook_tail, args, digest, remote_head}."
+    "Return {status, reason, push_result, exit_code, hook_tail, args, program, digest, remote_head}."
   );
 }
 
@@ -4631,10 +5043,10 @@ function reviewPathsPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified; run nothing else:\n" +
-    "python3 -I -c " + shQuote(REVIEW_PATHS_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.base_ref) + " " + shQuote(inputs.head_sha) +
+    progCmd("review_paths", [inputs.main_worktree, inputs.base_ref, inputs.head_sha]) +
     "\n" +
-    "It prints one JSON object {changed_paths, digest}. Copy both unchanged, every path in order (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, changed_paths, digest}."
+    "It prints one JSON object {changed_paths, program, digest}. Copy both unchanged, every path in order (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, changed_paths, program, digest}."
   );
 }
 
@@ -4679,24 +5091,33 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import json, subprocess, sys
 wt, rev = sys.argv[1], sys.argv[2]
 r = subprocess.run(['git', '-C', wt, 'show', rev + ':.pre-commit-config.yaml'], capture_output=True)
 if r.returncode != 0:
-    print(json.dumps({'present': False, 'ids': [], 'parser': None}))
+    print(json.dumps({'program': _PROG, 'present': False, 'ids': [], 'parser': None}))
     sys.exit(0)
 try:
     import yaml
 except ImportError:
-    print(json.dumps({'present': True, 'ids': [], 'parser': None, 'error': 'PyYAML unavailable'}))
+    print(json.dumps({'program': _PROG, 'present': True, 'ids': [], 'parser': None, 'error': 'PyYAML unavailable'}))
     sys.exit(0)
 if len(r.stdout) > 262144:
-    print(json.dumps({'present': True, 'ids': [], 'parser': None, 'error': 'the config is over 256 KiB'}))
+    print(json.dumps({'program': _PROG, 'present': True, 'ids': [], 'parser': None, 'error': 'the config is over 256 KiB'}))
     sys.exit(0)
 try:
     data = yaml.safe_load(r.stdout)
 except Exception as e:
-    print(json.dumps({'present': True, 'ids': [], 'parser': 'yaml', 'error': 'unparseable: ' + str(e)}))
+    print(json.dumps({'program': _PROG, 'present': True, 'ids': [], 'parser': 'yaml', 'error': 'unparseable: ' + str(e)}))
     sys.exit(0)
 ids = []
 repos = data.get('repos') if isinstance(data, dict) else None
@@ -4705,8 +5126,7 @@ for repo in repos if isinstance(repos, list) else []:
     for h in hooks if isinstance(hooks, list) else []:
         if isinstance(h, dict) and isinstance(h.get('id'), str):
             ids.append(h['id'])
-print(json.dumps({'present': True, 'ids': ids, 'parser': 'yaml'}))
-`;
+print(json.dumps({'program': _PROG, 'present': True, 'ids': ids, 'parser': 'yaml'}))`;
 // PRECOMMIT_IDS_PY_END
 
 function precommitIdsPrompt(inputs) {
@@ -4716,10 +5136,10 @@ function precommitIdsPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(PRECOMMIT_IDS_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.plan_commit) +
+    progCmd("precommit_ids", [inputs.main_worktree, inputs.plan_commit]) +
     "\n" +
-    "It prints one JSON object {present, ids, parser, error?}. Copy every value unchanged. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, present, ids, parser, error}."
+    "It prints one JSON object {present, ids, parser, error?, program}. Copy every value unchanged. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, present, ids, parser, error, program}."
   );
 }
 
@@ -4759,6 +5179,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, shutil, sys
 os.chdir('/')
 MARKER = b'fleet-agent-shim: hard-rules'
@@ -4795,9 +5224,9 @@ for name in NAMES:
         head = b''
     tools[name] = {'path': p, 'real': real, 'shim': real.startswith(store) and MARKER in head}
 out = {'tools': tools, 'args': sys.argv[1:], 'path_problems': problems}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // PATH_CHECK_PY_END
 const PATH_TOOLS = ["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt", "dig" + "ger", "atlan" + "tis"];
 const NOT_SHIMMED = "terraform tooling on PATH is not shimmed; install the agent PATH shims (nix) before using the fleet";
@@ -4816,7 +5245,9 @@ function pathCheck(pc, repo, recheck) {
       const t = tools[k];
       return t === null || (t && typeof t === "object" && !Array.isArray(t) && typeof t.path === "string" && t.path.charAt(0) === "/" && typeof t.shim === "boolean");
     });
-  if (!shapeOk || canonical(pc.args) !== canonical(recheck ? recheck.args : [repo]) || !Array.isArray(pc.path_problems) || !relayDigestOk(pc, ["tools", "args", "path_problems"]))
+  const pp = programProblem(pc, "path_check");
+  if (pp) halt("needs_human", NOT_SHIMMED + " (" + what + ": " + pp + ")", "iac");
+  if (!shapeOk || canonical(pc.args) !== canonical(recheck ? recheck.args : [repo]) || !Array.isArray(pc.path_problems) || !relayDigestOk(pc, ["tools", "args", "path_problems"], "path_check"))
     halt("needs_human", NOT_SHIMMED + " (" + what + ")", "iac");
   const at = recheck ? recheck.label + ": " : "";
   if (pc.path_problems.length)
@@ -4847,6 +5278,7 @@ const PATH_RECHECK_SCHEMA = {
     tools: { type: ["object", "null"] },
     args: { type: ["array", "null"], items: STR },
     path_problems: { type: ["array", "null"], items: STR },
+    program: PROGRAM_PROP,
     digest: STR,
   },
 };
@@ -4858,10 +5290,10 @@ function pathRecheckPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified, as one Bash call:\n" +
-    "python3 -I -c " + shQuote(PATH_CHECK_PY) + " " + shQuote(inputs.repo) + " " + shQuote(inputs.token) +
+    progCmd("path_check", [inputs.repo, inputs.token]) +
     "\n" +
-    "It prints one JSON object {tools, args, path_problems, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, tools, args, path_problems, digest}."
+    "It prints one JSON object {tools, args, path_problems, program, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, tools, args, path_problems, program, digest}."
   );
 }
 
@@ -4883,28 +5315,121 @@ async function pathRecheck(site, phaseName) {
 // The run-state ref: refs/fleet/<task id>/state points at an annotated tag
 // object (git mktag, no tag name, no hook, index untouched) whose target is
 // HEAD and whose message is the state JSON. Local only, never pushed.
-// WRITE_STATE_SH_BEGIN
-function writeStateCmd(worktree, stateRef, json) {
-  const g = "GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C " + shQuote(worktree);
-  return (
-    "c=$(" + g + " rev-parse HEAD) && t=$( { printf 'object %s\\ntype commit\\ntag fleet-state\\ntagger fleet <fleet@localhost> 0 +0000\\n\\n' \"$c\"; cat <<'FLEET_STATE_JSON'\n" +
-    json +
-    "\nFLEET_STATE_JSON\n} | " + g + " mktag) && " + g + " update-ref " + shQuote(stateRef) + " \"$t\" && echo \"$c $t\""
-  );
-}
-// WRITE_STATE_SH_END
+// The chunks are the base64 of the state JSON (see PLAN_REF_WRITE_PY). Prints
+// {head, state_sha, program, digest}.
+// STATE_WRITE_PY_BEGIN
+const STATE_WRITE_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import base64, hashlib, json, os, re, shutil, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+if len(sys.argv) != 7:
+    sys.exit('usage: <worktree> <state ref> <chunk dir> <n> <expected sha256> <chunk sha256 list>')
+wt, target, cdir, n_arg, expected, shas_arg = sys.argv[1:]
+if not re.fullmatch(r'refs/fleet/[a-z0-9][a-z0-9-]*/state', target):
+    sys.exit('bad state ref: ' + target)
+if not re.fullmatch(r'[1-9][0-9]{0,2}', n_arg):
+    sys.exit('bad chunk count: ' + n_arg)
+n = int(n_arg)
+if not re.fullmatch(r'[0-9a-f]{64}', expected):
+    sys.exit('bad expected sha256: ' + expected)
+try:
+    shas = json.loads(shas_arg)
+except ValueError:
+    sys.exit('bad chunk sha256 list')
+if not isinstance(shas, list) or len(shas) != n or any(not isinstance(e, dict) or e.get('i') != k or not isinstance(e.get('sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', e['sha256']) for k, e in enumerate(shas)):
+    sys.exit('bad chunk sha256 list: ' + shas_arg[:200])
+# the chunks live in a directory of the run's scratch dir (a sibling of the worktree)
+scratch = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(wt)), 'scratch'))
+real = os.path.realpath(cdir)
+if not real.startswith(scratch + '/'):
+    sys.exit('chunk dir ' + cdir + ' is not under ' + scratch)
+bad, parts = [], []
+for e in shas:
+    p = os.path.join(real, '%d.b64' % e['i'])
+    b = None
+    try:
+        if os.path.isfile(p) and not os.path.islink(p) and os.path.getsize(p) <= 8192:
+            with open(p, 'rb') as f:
+                b = f.read(8193)
+    except OSError:
+        b = None
+    if b is None or len(b) > 8192 or hashlib.sha256(b).hexdigest() != e['sha256']:
+        bad.append(e['i'])
+    else:
+        parts.append(b)
+if bad:
+    # exit 3: rewrite only these chunks; nothing was written
+    print(json.dumps({'bad_chunks': bad}))
+    sys.exit(3)
+try:
+    msg = base64.b64decode(b''.join(parts), validate=True)
+except ValueError:
+    sys.exit('the chunks do not decode as base64')
+if hashlib.sha256(msg).hexdigest() != expected:
+    sys.exit('the decoded message hashes ' + hashlib.sha256(msg).hexdigest() + ', not ' + expected)
+# no hook runs (hooksPath /dev/null also stops reference-transaction)
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', wt]
+def git(*a, inp=None):
+    r = subprocess.run(G + list(a), input=inp, capture_output=True)
+    if r.returncode != 0:
+        sys.exit(r.stderr.decode('utf-8', 'replace')[-2000:] or 'git ' + a[0] + ' failed')
+    return r.stdout.decode().strip()
+def has(ref):
+    r = subprocess.run(G + ['rev-parse', '-q', '--verify', ref], capture_output=True)
+    return r.stdout.decode().strip() if r.returncode == 0 else None
+head = git('rev-parse', '--verify', 'HEAD^{commit}')
+tag = git('mktag', inp=b'object ' + head.encode() + b'\ntype commit\ntag fleet-state\ntagger fleet <fleet@localhost> 0 +0000\n\n' + msg)
+git('update-ref', target, tag)
+shutil.rmtree(real, ignore_errors=True)
+out = {'head': head, 'state_sha': tag}
+out['program'] = _PROG
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))`;
+// STATE_WRITE_PY_END
 
 function writeStatePrompt(inputs, json) {
+  const c = chunked(json + "\n");
   return (
-    "Infra step of the fleet build workflow: record the run-state. Local only: never push, never create a tag name, never commit, never touch the index or any file.\n" +
+    "Infra step of the fleet build workflow: record the run-state. Local only: never push, never create a tag name, never commit, never touch the index or any file but the chunk files under <chunk_dir>.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "Run this one Bash command exactly as written, unmodified:\n" +
-    writeStateCmd(inputs.main_worktree, inputs.state_ref, json) +
-    "\n" +
-    "It prints `<head> <state_sha>`. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, head, state_sha}."
+    "The state JSON travels as base64 chunks you write to files; the program checks every chunk against its sha256, then makes the tag object (git mktag: no tag name, no hook) and moves <state_ref>.\n" +
+    chunkSteps(inputs.chunk_dir, c, progCmd("state_write", [inputs.main_worktree, inputs.state_ref, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)])) +
+    "On success it prints one JSON object {head, state_sha, program, digest}: copy all four unchanged (the script recomputes the digest).\n" +
+    "Return {status, reason, head, state_sha, program, digest}."
   );
 }
 
@@ -4935,6 +5460,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, ref = sys.argv[1], sys.argv[2]
@@ -4953,9 +5487,9 @@ if t.returncode == 0:
 out['head'] = run('rev-parse', 'HEAD').stdout.decode().strip()
 out['head_tree'] = run('rev-parse', 'HEAD^{tree}').stdout.decode().strip()
 out['clean'] = run('status', '--porcelain').stdout == b''
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // READ_STATE_PY_END
 
 function readStatePrompt(inputs) {
@@ -4965,10 +5499,10 @@ function readStatePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(READ_STATE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.state_ref) +
+    progCmd("read_state", [inputs.main_worktree, inputs.state_ref]) +
     "\n" +
-    "It prints one JSON object {exists, target, message, head, head_tree, clean, digest}. Copy every value unchanged, byte for byte, empty strings included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, exists, target, message, head, head_tree, clean, digest}."
+    "It prints one JSON object {exists, target, message, head, head_tree, clean, program, digest}. Copy every value unchanged, byte for byte, empty strings included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, exists, target, message, head, head_tree, clean, program, digest}."
   );
 }
 
@@ -5123,6 +5657,10 @@ const state = {
   // 3.1.1: the repo the PATH re-checks name, and their count
   repo: null,
   pathChecks: 0,
+  // 4.0.0 (1993): the shipped programs' directory, resolved in this run's first agent
+  scriptsDir: null,
+  // 4.0.0 (1993): a plan ref committed but not verified (returned on a halt)
+  unverifiedPlanRef: null,
 };
 
 function gate(msg) {
@@ -5289,8 +5827,9 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
   const fp = r.fingerprint;
   if (r.status !== "ok" || !fp || !fp.head || !fp.tree || !mapsOk || (baseTree && !Array.isArray(r.changed)))
     halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
+  requireProgram(r, "hasher", "hasher " + label);
   // the maps travel through a model: recompute the program's digest over them
-  const relayed = { fingerprint: fp, hashes: h };
+  const relayed = { fingerprint: fp, hashes: h, program: r.program };
   if (baseTree) relayed.changed = r.changed;
   if (typeof r.digest !== "string" || sha256Hex(canonical(relayed)) !== r.digest)
     halt("failed", "hasher " + label + " failed: the relayed maps do not match the program's digest (a key was dropped or changed in the copy)");
@@ -5347,6 +5886,19 @@ function finish(status, reason) {
   };
 }
 
+// 4.0.0 (1993): a stop after the plan commit and before its check passed
+// returns that plan_ref, marked unverified (build mode re-verifies everything
+// at load-ref).
+function finishStop(status, reason) {
+  const out = finish(status, reason);
+  if (state.unverifiedPlanRef && status !== "ok" && status !== "awaiting_confirmation") {
+    out.plan_ref = state.unverifiedPlanRef;
+    out.plan_ref_verified = false;
+    out.reason = reason + " (plan_ref " + state.unverifiedPlanRef.plan_ref + " at " + state.unverifiedPlanRef.plan_commit + " returned unverified)";
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- shared steps
 
 function cleanRepo(r) {
@@ -5370,6 +5922,13 @@ async function preflightStep(repo) {
     agentType: JUDGE_AGENT,
     phase: "Preflight",
   });
+  // 4.0.0 (1993): the shipped programs' directory, found by this run's first
+  // agent (never cached, never sealed); the PATH check below ran from it, and
+  // its self-hash proves the directory holds this version's programs
+  const sp = scriptsDirProblem(pre.scripts_dir, pre.scripts_hits);
+  if (sp) halt("needs_human", "preflight: scripts_dir unusable: " + sp + "; install fleet " + FLEET_VERSION + " from the marketplace, then run /reload-plugins" + RELOAD_HINT, "contract");
+  state.scriptsDir = pre.scripts_dir;
+  gate("scripts_dir: " + state.scriptsDir);
   // Max's ruling (2026-11-09): IaC tooling may only be reachable through the nix shims
   pathCheck(pre.path_check, repo);
   state.repo = repo;
@@ -5432,7 +5991,7 @@ async function workspaceStep(repo, lay) {
   // unusable relay leaves it empty, which the IaC push gate refuses
   const uc = ws.remote_url_check;
   const urlOk =
-    !!uc && typeof uc === "object" && (uc.url === null || typeof uc.url === "string") && canonical(uc.args) === canonical([repo]) && relayDigestOk(uc, ["url", "args"]);
+    !!uc && typeof uc === "object" && (uc.url === null || typeof uc.url === "string") && canonical(uc.args) === canonical([repo]) && relayDigestOk(uc, ["url", "args"], "remote_url");
   if (!urlOk) gate("workspace: origin URL relay unusable (no digest-checked remote_url_check); no URL sealed or compared");
   return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: ws.remote_slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "" };
 }
@@ -5713,13 +6272,14 @@ async function checkScripts(label, obligations, worktree, phaseName) {
   if (!paths.length) return obligations;
   const r = await infra(
     label,
-    checkScriptsPrompt({ worktree, paths, run: "python3 -I -c " + shQuote(SCRIPT_CHECK_PY) + " " + shQuote(worktree) + " " + shQuote(JSON.stringify(paths)) }),
+    checkScriptsPrompt({ worktree, paths, run: progCmd("script_check", [worktree, JSON.stringify(paths)]) }),
     phaseName,
     JUDGE_AGENT,
   );
   // a relay that changed a verdict: every script stays judge-only
-  const checks = r.checks && typeof r.checks === "object" && relayDigestOk(r, ["checks"]) ? r.checks : {};
-  if (r.checks && !relayDigestOk(r, ["checks"])) gate(label + ": the relayed checks do not match the program's digest; every check_cmd script is judge-only");
+  const checks = r.checks && typeof r.checks === "object" && relayDigestOk(r, ["checks"], "script_check") ? r.checks : {};
+  if (r.checks && !relayDigestOk(r, ["checks"], "script_check"))
+    gate(label + ": the relayed checks do not match the program's digest" + (programProblem(r, "script_check") ? " (" + programProblem(r, "script_check") + ")" : "") + "; every check_cmd script is judge-only");
   return obligations.map((o) => {
     const sp = typeof o.check_cmd === "string" ? parseCheckCmd(o.check_cmd).script : null;
     if (!sp) return o;
@@ -5846,7 +6406,8 @@ async function callerCheck(label, symbols, worktree, planPath) {
   for (const n of names)
     if (!Array.isArray(occ[n]) || !occ[n].every((x) => typeof x === "string"))
       halt("failed", label + " returned no occurrence list for " + n);
-  if (typeof r.digest !== "string" || sha256Hex(canonical({ occurrences: occ, capped: r.capped })) !== r.digest)
+  requireProgram(r, "callers", label);
+  if (typeof r.digest !== "string" || sha256Hex(canonical({ occurrences: occ, capped: r.capped, program: r.program })) !== r.digest)
     halt("failed", label + ": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
   const findings = [];
   for (const s of symbols) {
@@ -5929,7 +6490,8 @@ async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, s
   )
     halt("failed", label + " returned no defs, excluded, unclassified or unattributed list");
   const relayed = { defs: r.defs.map((d) => ({ name: d.name, at: d.at, end: d.end })), excluded: r.excluded, unclassified: r.unclassified, unattributed: r.unattributed };
-  if (typeof r.digest !== "string" || sha256Hex(canonical(relayed)) !== r.digest)
+  requireProgram(r, "changed_defs", label);
+  if (typeof r.digest !== "string" || sha256Hex(canonical(Object.assign({ program: r.program }, relayed))) !== r.digest)
     halt("failed", label + ": the relayed lists do not match the program's digest (a definition was dropped or changed in the copy)");
   for (const p of relayed.excluded) gate(label + ": skipped " + p + " (frozen test or plan doc)");
   for (const p of relayed.unclassified) gate(label + ": unclassified " + p + " (no definition pattern; checked against the plan's files)");
@@ -5961,16 +6523,17 @@ function hookSurfacePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(HOOK_SURFACE_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.rev) + " " + shQuote(JSON.stringify(inputs.targets)) +
+    progCmd("hook_surface", [inputs.worktree, inputs.rev, JSON.stringify(inputs.targets)]) +
     "\n" +
-    "It prints one JSON object {surface, make_paths, error, args, digest}. Copy every value unchanged, error null included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, surface, make_paths, error, args, digest}."
+    "It prints one JSON object {surface, make_paths, error, args, program, digest}. Copy every value unchanged, error null included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, surface, make_paths, error, args, program, digest}."
   );
 }
 
 async function hookSurface(label, worktree, rev, targets, phaseName) {
   const r = await infra(label, hookSurfacePrompt({ worktree, rev, targets }), phaseName, JUDGE_AGENT);
-  if (!Array.isArray(r.surface) || !relayDigestOk(r, ["surface", "make_paths", "error", "args"]))
+  requireProgram(r, "hook_surface", label, "needs_human", "hooks");
+  if (!Array.isArray(r.surface) || !relayDigestOk(r, ["surface", "make_paths", "error", "args"], "hook_surface"))
     halt("failed", label + ": the relayed surface does not match the program's digest");
   if (canonical(r.args) !== canonical([worktree, rev, JSON.stringify(targets)])) halt("failed", label + ": the program ran on other arguments");
   if (r.error !== null)
@@ -6212,6 +6775,9 @@ async function planAndAudit(ctx) {
 // Stage the plan, seal the full ref with the staged plan hash, commit the
 // plan doc alone in ONE local commit, then write the sealed ref as a tag
 // object at refs/fleet/<task id>/plan (never a file, never pushed).
+// 4.0.0 (1993): the commit step writes the ref from checked base64 chunks and
+// is never retried; a separate read-only step verifies the commit and the ref,
+// and only that step retries, once, when a relay or a digest is wrong.
 // ctx.after: agents this run still dispatches after the ref is sealed
 // (counted into its history). ctx.onRefs: called with the plan refs the
 // step wrote (the build's frozen snapshot follows the script's own write).
@@ -6219,46 +6785,102 @@ async function commitPlanAndRef(ctx) {
   const sfx = ctx.suffix || "";
   const refName = planRefName(ctx.fields.taskId);
   const base = { worktree: ctx.worktree, branch: ctx.branch, plan_path: ctx.fields.planPath };
-  const st = await infra("infra:stage-plan" + sfx, stagePlanPrompt(base), ctx.phaseName);
-  if (typeof st.plan_sha256 !== "string" || !SHA256_RE.test(st.plan_sha256))
-    halt("failed", "infra:stage-plan" + sfx + " returned no usable plan_sha256");
-  // + 1: the PATH re-check before the commit (3.1.1)
-  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 1 });
-  const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: st.plan_sha256, history }));
+  const stLabel = "infra:stage-plan" + sfx;
+  const st = await infra(stLabel, stagePlanPrompt(base), ctx.phaseName);
+  requireProgram(st.plan_hash, "plan_hash", stLabel);
+  const stagedSha = st.plan_hash.plan_sha256;
+  if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("failed", stLabel + " returned no usable plan_sha256");
+  // + 2: the PATH re-check before the commit (3.1.1) and the verify step (4.0.0)
+  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2 });
+  const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: stagedSha, history }));
+  const msgSha = sha256Hex(refMessage(full));
   const label = "infra:commit-plan" + sfx;
   await pathRecheck("commit-plan" + sfx, ctx.phaseName);
+  const chunkDir = scratchOf(ctx.worktree) + "/plan-ref-" + safeName(state.nonce + sfx);
   const r = await infra(
     label,
-    commitPlanPrompt(Object.assign({}, base, { task_id: full.task_id, slug: full.slug, reuse_head: ctx.reuseHead || null }), JSON.stringify(full)),
+    commitPlanPrompt(Object.assign({}, base, { task_id: full.task_id, slug: full.slug, reuse_head: ctx.reuseHead || null, chunk_dir: chunkDir }), refMessage(full)),
     ctx.phaseName,
   );
-  if (typeof r.head !== "string" || !SHA_RE.test(r.head)) halt("failed", label + " returned no usable head sha: " + JSON.stringify(r.head));
-  // head and files come from a program (3.1.0, ledger 1959), not from a copy of git's output
-  if (!Array.isArray(r.files) || !relayDigestOk(r, ["head", "files", "args"]))
-    halt("failed", label + ": the relayed head and files do not match the program's digest (a path was dropped or changed in the copy)");
-  if (canonical(r.args) !== canonical([ctx.worktree]))
-    halt("failed", label + ": the program ran on other arguments (" + JSON.stringify(r.args === undefined ? null : r.args) + ")");
+  // the ref write comes from the shipped program (head and tag object, digest-checked)
+  requireProgram(r, "plan_ref_write", label, "failed", "commit");
+  if (typeof r.head !== "string" || !SHA_RE.test(r.head) || typeof r.tag_sha !== "string" || !SHA_RE.test(r.tag_sha) || !relayDigestOk(r, ["head", "tag_sha"], "plan_ref_write"))
+    halt("failed", label + ": the relayed head and tag object do not match the program's digest (" + JSON.stringify(r.head === undefined ? null : r.head) + ")", "commit");
   // identical re-plan: an unchanged plan doc on a plan-only HEAD reuses that commit
   if (r.reused === true) {
     if (!ctx.reuseHead) halt("failed", label + " claimed a reuse of HEAD, but no plan-only HEAD was offered for reuse");
     if (r.head !== ctx.reuseHead) halt("failed", label + " claimed a reuse, but HEAD " + r.head + " is not the offered reuse head " + ctx.reuseHead);
     gate("reused plan commit " + r.head + ": the plan doc is unchanged; no new commit");
   }
-  if (r.plan_sha256 !== st.plan_sha256)
-    halt("failed", label + ": the committed plan hashes " + r.plan_sha256 + ", the staged plan " + st.plan_sha256);
-  const files = Array.isArray(r.files) ? Array.from(new Set(r.files.map((f) => normPath(String(f))))) : null;
-  if (!files || files.length !== 1 || files[0] !== normPath(full.plan_path))
-    halt("needs_human", label + ": the plan commit holds " + JSON.stringify(r.files || null) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
-  // the script wrote these bytes itself: it hashes them, the step relays no content
-  const e = Array.isArray(r.refs) ? r.refs.find((x) => x && x.name === refName) : null;
-  const ep = planRefMetaProblem(e, r.head, sha256Hex(refMessage(full)));
-  if (ep) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref (" + ep + ")");
-  if (ctx.onRefs) ctx.onRefs(r.refs);
-  gate("plan committed locally at " + r.head + " (" + full.plan_path + " sha256 " + full.plan_sha256 + "); sealed ref at " + refName + " (sha256 " + e.sha256 + "); not pushed");
-  return {
-    full,
-    tiny: { branch: full.branch, plan_commit: r.head, plan_ref: refName, ref_sha256: e.sha256, repo: full.brief.repo },
+  const tiny = { branch: full.branch, plan_commit: r.head, plan_ref: refName, ref_sha256: msgSha, repo: full.brief.repo };
+  const v = await verifyPlanCommit(ctx, sfx, r, full, stagedSha, msgSha, tiny);
+  if (ctx.onRefs) ctx.onRefs(v.plan_ref.refs);
+  gate("plan committed locally at " + r.head + " (" + full.plan_path + " sha256 " + full.plan_sha256 + "); sealed ref at " + refName + " (sha256 " + msgSha + "); not pushed");
+  return { full, tiny };
+}
+
+// The read-only check of the plan commit and its ref. A relay problem (a
+// program that is not the shipped one, a digest, an argument or a shape that
+// does not match) is asked once more; two -> stop_gate commit, with the plan
+// ref returned as unverified. A wrong fact (other files, another plan hash,
+// another ref) stops at once.
+async function verifyPlanCommit(ctx, sfx, w, full, stagedSha, msgSha, tiny) {
+  const label = "infra:verify-plan-commit" + sfx;
+  const refName = tiny.plan_ref;
+  const relayProblem = (v) => {
+    if (!v || v.status !== "ok") return "returned " + (v ? v.status : "nothing") + ": " + ((v && v.reason) || "no reason");
+    const pf = v.plan_files;
+    const ph = v.plan_hash;
+    const pr = v.plan_ref;
+    for (const [o, n] of [[pf, "plan_files"], [ph, "plan_hash"], [pr, "plan_ref"]]) {
+      const pp = programProblem(o, n);
+      if (pp) return pp;
+    }
+    if (typeof pf.head !== "string" || !SHA_RE.test(pf.head) || !Array.isArray(pf.files) || !relayDigestOk(pf, ["head", "files", "args"], "plan_files"))
+      return "the relayed head and files do not match the program's digest (a path was dropped or changed in the copy)";
+    if (canonical(pf.args) !== canonical([ctx.worktree])) return "the program ran on other arguments (" + JSON.stringify(pf.args === undefined ? null : pf.args) + ")";
+    if (typeof ph.plan_sha256 !== "string" || !SHA256_RE.test(ph.plan_sha256)) return "no usable plan_sha256";
+    if (!Array.isArray(pr.refs)) return "no plan ref list";
+    return null;
   };
+  const inputs = { worktree: ctx.worktree, plan_path: full.plan_path, task_id: full.task_id };
+  let v = null;
+  let problem = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    v = await dispatch(label, verifyPlanCommitPrompt(inputs), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: ctx.phaseName });
+    problem = relayProblem(v);
+    if (!problem) {
+      if (attempt) gate("verify-plan-commit: retried once (" + label + ")");
+      break;
+    }
+    gate(label + ": " + problem + (attempt ? "" : "; asking once more"));
+  }
+  if (problem) {
+    // only this stop returns the plan_ref, marked unverified; a wrong fact below returns none
+    state.unverifiedPlanRef = tiny;
+    halt("failed", label + ": " + problem + "; the plan commit " + w.head + " and ref " + refName + " stay unverified (build mode re-verifies them at load-ref)", "commit");
+  }
+  const pf = v.plan_files;
+  if (pf.head !== w.head) halt("failed", label + ": HEAD is " + pf.head + ", not the head " + w.head + " the ref was written on", "commit");
+  if (v.plan_hash.plan_sha256 !== stagedSha)
+    halt("failed", label + ": the committed plan hashes " + v.plan_hash.plan_sha256 + ", the staged plan " + stagedSha);
+  const files = Array.from(new Set(pf.files.map((f) => normPath(String(f)))));
+  if (files.length !== 1 || files[0] !== normPath(full.plan_path))
+    halt("needs_human", label + ": the plan commit holds " + JSON.stringify(pf.files) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
+  // the script wrote these bytes itself: it hashes them, the step relays no content
+  const e = v.plan_ref.refs.find((x) => x && x.name === refName);
+  const ep = planRefMetaProblem(e, w.head, msgSha) || (e.tag_sha !== w.tag_sha ? "tag object " + e.tag_sha + " is not the one written (" + w.tag_sha + ")" : null);
+  if (ep) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref (" + ep + ")");
+  return v;
+}
+
+// 4.0.0 (1993): the run's scratch dir, a sibling of its worktrees
+function scratchOf(worktree) {
+  return String(worktree).replace(/\/+[^/]+\/*$/, "") + "/scratch";
+}
+
+function safeName(s) {
+  return String(s).replace(/[^A-Za-z0-9_.-]/g, "-");
 }
 
 // The full ref, sealed. It has no plan_commit: it is committed in that commit.
@@ -6506,6 +7128,7 @@ async function autoGates(ctx) {
       "Auto-confirm",
       JUDGE_AGENT,
     );
+    requireProgram(cfg, "precommit_ids", "infra:precommit-ids" + sfx);
     const g2 = hookIdProblems(shape.hookIds, cfg);
     if (g2.length) return fail("commands", g2);
   }
@@ -6581,7 +7204,8 @@ async function planMode(input, date) {
     JUDGE_AGENT,
   );
   if (!Array.isArray(scan.commits) || !Array.isArray(scan.refs)) halt("failed", "infra:branch-scan returned no commit or plan-ref list");
-  if (!relayDigestOk(scan, ["commits", "refs"]))
+  requireProgram(scan, "branch_scan", "infra:branch-scan");
+  if (!relayDigestOk(scan, ["commits", "refs"], "branch_scan"))
     halt("failed", "infra:branch-scan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
   const built = buildCommitsOf(scan.commits, names.taskId, scan.refs);
   if (built.length)
@@ -6791,6 +7415,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const load = (label) =>
     infra(label, loadRefPrompt({ main_worktree: lay.mainWt, task_id: refTask, plan_ref: tiny.plan_ref, mode: mem ? "meta" : "chunks" }), "Verify", JUDGE_AGENT);
   let ld = await load("infra:load-ref");
+  requireProgram(ld, "plan_ref", "infra:load-ref");
   const entryOf = (r) => (Array.isArray(r.refs) ? r.refs.find((x) => x && x.name === tiny.plan_ref) : null);
   const joined = (r) => (Array.isArray(r.chunks) && r.chunks.length && r.chunks.every((c) => typeof c === "string") ? r.chunks.join("") : null);
   let entry = entryOf(ld);
@@ -6800,6 +7425,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   if (!mem && content !== null && sha256Hex(content) !== tiny.ref_sha256) {
     gate("infra:load-ref: the copied chunks do not match ref_sha256; reading once more");
     ld = await load("infra:load-ref:retry");
+    requireProgram(ld, "plan_ref", "infra:load-ref:retry");
     entry = entryOf(ld);
     const ep2 = planRefMetaProblem(entry, tiny.plan_commit, tiny.ref_sha256);
     if (ep2) changed(ep2);
@@ -6866,7 +7492,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // present, and all of them equal to what the program printed
   if (typeof v.is_ancestor !== "boolean" || !Array.isArray(v.commits_since) || !Array.isArray(v.plan_touched) || !Array.isArray(v.changed_since))
     halt("failed", "infra:verify-plan: the relayed result has no is_ancestor, commits_since, plan_touched or changed_since list");
-  if (!relayDigestOk(v, VERIFY_SINCE_KEYS))
+  requireProgram(v, "verify_since", "infra:verify-plan");
+  requireProgram(v.plan_hash, "plan_hash", "infra:verify-plan (plan_hash)");
+  requireProgram(v.plan_hash_head, "plan_hash", "infra:verify-plan (plan_hash_head)");
+  v.plan_sha256 = v.plan_hash.plan_sha256;
+  v.plan_sha256_head = v.plan_hash_head.plan_sha256;
+  if (!relayDigestOk(v, VERIFY_SINCE_KEYS, "verify_since"))
     halt("failed", "infra:verify-plan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
   if (canonical(v.args) !== canonical([mainWt, ref.plan_commit, ref.plan_path]))
     halt("failed", "infra:verify-plan: the program ran on other arguments (" + JSON.stringify(v.args === undefined ? null : v.args) + ")");
@@ -6913,7 +7544,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // committed fleet branch
   const stateRef = "refs/fleet/" + names.taskId + "/state";
   const rs = await infra("infra:read-state", readStatePrompt({ main_worktree: mainWt, state_ref: stateRef }), "Verify", JUDGE_AGENT);
-  if (!relayDigestOk(rs, ["exists", "target", "message", "head", "head_tree", "clean"]))
+  requireProgram(rs, "read_state", "infra:read-state", "needs_human", "resume");
+  if (!relayDigestOk(rs, ["exists", "target", "message", "head", "head_tree", "clean"], "read_state"))
     halt("needs_human", "run-state read did not complete: the relayed state does not match the program's digest (" + stateRef + ")", "resume");
   let resume = null;
   if (rs.exists === true) {
@@ -7004,7 +7636,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const scanIac = (scanDiff || []).filter(isIacPath);
     if (
       typeof r.touched !== "boolean" || !strs(r.iac_files) || !strs(r.problems) || !strs(r.hints) ||
-      !relayDigestOk(r, ["touched", "iac_files", "problems", "hints", "args"]) || canonical(r.args) !== canonical([mainWt, defaultBranch, approvedSha, remoteUrl]) ||
+      !relayDigestOk(r, ["touched", "iac_files", "problems", "hints", "args"], "tf_gate") || canonical(r.args) !== canonical([mainWt, defaultBranch, approvedSha, remoteUrl]) ||
       r.touched !== r.iac_files.length > 0 || scanIac.some((p) => r.iac_files.indexOf(p) < 0)
     )
       halt("needs_human", "IaC pre-push check could not complete: " + label + " returned no usable result (the relayed result does not match the program's digest, arguments or the PR diff)", "iac");
@@ -7020,7 +7652,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const rhLabel = label.replace("tf-gate", "remote-head");
     const rh = await infra(rhLabel, remoteHeadPrompt({ main_worktree: mainWt, branch, remote_url: remoteUrl }), "PR", JUDGE_AGENT);
     const rhOk =
-      rh && (rh.head === null || typeof rh.head === "string") && relayDigestOk(rh, ["head", "args"]) && canonical(rh.args) === canonical([mainWt, branch, remoteUrl]);
+      rh && (rh.head === null || typeof rh.head === "string") && relayDigestOk(rh, ["head", "args"], "remote_head") && canonical(rh.args) === canonical([mainWt, branch, remoteUrl]);
     if (rhOk && rh.head === approvedSha) {
       gate(rhLabel + ": origin/" + branch + " is at the approved " + approvedSha + " (pushed by Max); going on without a push");
       return true;
@@ -7039,7 +7671,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const r = await infra(label, fleetScanPrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha }), "PR", JUDGE_AGENT);
     if (!Array.isArray(r.diff) || !Array.isArray(r.commits) || !r.commits.every((c) => c && Array.isArray(c.files)))
       halt("needs_human", "fleet internal files check did not complete: " + label + " returned no diff/commits lists", "scope");
-    if (!relayDigestOk(r, ["diff", "commits"]))
+    if (!relayDigestOk(r, ["diff", "commits"], "fleet_scan"))
       halt("needs_human", "fleet internal files check did not complete: " + label + ": the relayed lists do not match the program's digest", "scope");
     const bad = fleetInternalPaths(r.diff);
     for (const c of r.commits) for (const q of fleetInternalPaths(c.files)) bad.push(q + " (commit " + c.sha + ")");
@@ -7103,7 +7735,13 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         wb ? { write_back: wb.write_back, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
       ),
     );
-    const r = await infra(label, writeStatePrompt({ main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha }, JSON.stringify(st)), "PR");
+    const r = await infra(
+      label,
+      writeStatePrompt({ main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha, chunk_dir: scratchOf(mainWt) + "/state-" + safeName(state.nonce + "-" + label) }, JSON.stringify(st)),
+      "PR",
+    );
+    requireProgram(r, "state_write", label);
+    if (!relayDigestOk(r, ["head", "state_sha"], "state_write")) halt("failed", label + ": the relayed head and state object do not match the program's digest");
     if (r.head !== approvedSha) halt("failed", label + ": the run-state landed on " + r.head + ", not " + approvedSha);
     if (typeof r.state_sha !== "string" || !/^[0-9a-f]{40}$/.test(r.state_sha)) halt("failed", label + " returned no usable state_sha");
     // the script's own write: the next comparison starts from the new value
@@ -7142,7 +7780,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           const argsOk =
             Array.isArray(pa) && pa.length === 2 && typeof pa[0] === "string" && pa[0].charAt(0) === "/" &&
             normPath(pa[0]).indexOf(normPath(mainWt) + "/") !== 0 && pa[1] === String(push.exit_code);
-          if (push.exit_code !== 1 || typeof push.hook_tail !== "string" || !relayDigestOk(push, ["push_result", "exit_code", "hook_tail", "args"]) || !argsOk)
+          if (push.exit_code !== 1 || typeof push.hook_tail !== "string" || !relayDigestOk(push, ["push_result", "exit_code", "hook_tail", "args"], "push_classify") || !argsOk)
             halt("failed", pushLabel + ": the relayed hook_rejected result does not match the classifier program's digest (exit_code " + JSON.stringify(push.exit_code === undefined ? null : push.exit_code) + ")");
           const tail = String(push.hook_tail || "").trim();
           gate("push of " + approvedSha + " rejected by a repo hook -> coder (fix_code)");
@@ -7161,6 +7799,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         }
         if (push.push_result !== "ok")
           halt("failed", pushLabel + " returned push_result " + JSON.stringify(push.push_result || null) + " with status ok");
+        requireProgram(push, "push_classify", pushLabel);
         if (push.remote_head !== approvedSha)
           halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha);
         gate("pushed " + branch + " at " + approvedSha);
@@ -7726,7 +8365,8 @@ async function reviewStep(k, ctx) {
       JUDGE_AGENT,
     );
     if (!Array.isArray(rp.changed_paths)) halt("failed", "infra:review-paths:v" + k + " returned no changed_paths");
-    if (!relayDigestOk(rp, ["changed_paths"]))
+    requireProgram(rp, "review_paths", "infra:review-paths:v" + k);
+    if (!relayDigestOk(rp, ["changed_paths"], "review_paths"))
       halt("failed", "infra:review-paths:v" + k + ": the relayed paths do not match the program's digest (a path was dropped or changed in the copy)");
     const changedPaths = rp.changed_paths.map(normPath).filter(Boolean);
     const inputs = {
@@ -8201,6 +8841,6 @@ if (badArgs || input == null || typeof input !== "object" || Object.keys(input).
 try {
   return await main(input);
 } catch (e) {
-  if (e instanceof Stop) return finish(e.status, e.reason);
+  if (e instanceof Stop) return finishStop(e.status, e.reason);
   throw e;
 }

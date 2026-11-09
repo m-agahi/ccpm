@@ -10,6 +10,32 @@ into the 4.0.0 entry.
 - The shared scenario-test harness moves to `tests/harness.mjs`. Test files import it. No test
   behaviour changes.
 
+### S1: programs ship as files (ledger 1993)
+
+- Every embedded Python program ships as `scripts/<name>.py`, 22 in all. The bytes are the JS
+  constant plus a newline. The constants stay the source of truth. `scripts/gen.mjs` writes the
+  files, and `gen.mjs --check` fails on a changed, missing or extra file.
+- Agents run `python3 -I <scripts_dir>/<name>.py <args>`. No prompt pastes a program with
+  `python3 -I -c` or a `<<'FLEET_` heredoc.
+- Each program prints `program: {name, sha256}` inside its digest. The sha256 is of its own file.
+  The script compares both with the constant it holds. A re-typed program, a stale plugin or a
+  wrong directory stops the step with "did not run the shipped program <name>".
+- The first agent of every run (preflight) finds `scripts_dir` with
+  `ls -d "$HOME"/.claude/plugins/cache/*/fleet/4.0.0/scripts`. The script needs exactly one hit of
+  the shape `<...>/fleet/4.0.0/scripts`, with no `.`, `..` or empty segment. The same agent then
+  runs `path_check.py` from it, and the self-hash proves the directory. It is never cached and
+  never sealed.
+- The plan ref and the run-state travel as base64 chunks of at most 4000 characters, each with its
+  sha256. `plan_ref_write.py` and `state_write.py` check every chunk, exit 3 with
+  `{"bad_chunks": [...]}` and write nothing on a bad one. The agent rewrites only those chunks, at
+  most 2 times.
+- `infra:commit-plan` commits and writes the ref, and is never retried. The new read-only step
+  `infra:verify-plan-commit` runs `plan_files.py`, `plan_hash.py` and `plan_ref.py`. It retries
+  once on a relay or digest problem. Two failures stop the run with `stop_gate: "commit"` and
+  return the plan_ref marked `plan_ref_verified: false`. A wrong file set, plan hash or ref stops
+  at once.
+- `plan_hash.py` prints JSON `{plan_sha256, program}`.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker
