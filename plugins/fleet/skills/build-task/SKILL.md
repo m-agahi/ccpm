@@ -54,7 +54,10 @@ runs `/build-task` explicitly, always use the fleet.
    workflow again with a new nonce; build mode resumes from its own run-state ref.
 
 4. **Project (optional).** Use the `<owner>/<repo>` project key from the session banner, if one is
-   shown, as `project`. It scopes ledger reads and the ledger write-back. Otherwise omit it.
+   shown, as `project`. It scopes ledger reads and the ledger write-back, and it is independent of
+   `repo`: a task from the session's project can be built in another repo. Otherwise omit it; then
+   intake tries both ledgers. With `confirm: "auto"`, a task id needs `project`: without it the
+   workflow stops before intake.
    On a `yadgarhq/` project a task id (`#622`, `622`, `yaadgaar #622`) is a yaadgaar task, never
    the legacy `L622`; the workflow needs `project` to tell them apart.
 
@@ -97,6 +100,8 @@ runs `/build-task` explicitly, always use the fleet.
    - fleet size: `fleet_size.criteria` criteria, about `fleet_size.est_agents` agents, about
      `fleet_size.est_rounds` fix rounds;
    - `plan_path` and the branch (`plan_ref.branch`). The plan is committed locally only.
+   - `ledger_source`, when it is not null: the ledger, the task (`ref`, and `id` for yaadgaar) and
+     the project it resolved in (`null` = the session's yaadgaar project, no `project` given).
    - `commands`: EVERY entry, its `command` VERBATIM in a code span (never paraphrased, shortened
      or summarised), with its `env` (every name and value, verbatim; `{}` when empty) and `tools`
      (test_cmd), its `rule_source` and `run_by` (`roles` = the test command the agents run,

@@ -527,6 +527,11 @@ function commitStepStub(m, live) {
   };
 }
 
+// The ledger call intake reports for a brief: read_task for each yaadgaar source.
+function triedFor(brief) {
+  return (brief.sources || []).filter((x) => x.kind === "yaadgaar").map((x) => ({ ledger: "yaadgaar", project: null, call: "read_task(number=" + x.ref + ")", error: null }));
+}
+
 function happy(over = {}) {
   const crit = over.criteria || criteria(2);
   const store = {};
@@ -542,7 +547,7 @@ function happy(over = {}) {
       contract: Object.fromEntries(ROLE_NAMES.map((k) => [k, "CONTRACT: fleet-v3"])),
       dispatch: Object.fromEntries(ROLE_NAMES.map((k) => [k, "DISPATCH: model=sonnet"])),
     },
-    intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF },
+    intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF, tried: over.tried || triedFor(over.brief || BRIEF) },
     "infra:branch-scan": { status: "ok", reason: "scanned", commits: [], refs: [] },
     "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
     "infra:commit-plan": commitStub(store, PC, PSHA),
@@ -3388,10 +3393,11 @@ test("write-back: a ledger failure is reported and never stops the run", async (
   assert.equal(out.result.status, "ok");
   assert.equal(out.result.ledger_status, "failed");
   assert.match(out.result.write_back.ledger[0].section_text, /fleet:l42/);
+  // 3.1.3 (PR #41 review 2): a legacy ledger source with no project stops the build before any role
   const noProject = await run(happy(), ARGS, { project: undefined });
-  assert.equal(noProject.result.status, "ok");
+  assert.equal(noProject.result.status, "needs_human");
+  assert.match(noProject.result.reason, /needs args\.project.*re-run plan/);
   assert.ok(!noProject.build.labels.includes("infra:ledger-writeback"));
-  assert.equal(noProject.result.ledger_status, "failed");
 });
 
 test("write-back: comment text with a line starting with a terraform-bot word is refused in code", async () => {
@@ -6074,6 +6080,7 @@ const ARRAY_SITES = {
   "h.suspicious @ hasher": "hasher:hashes.suspicious",
   "r.changed @ hasher": "hasher:changed",
   "b.sources @ briefProblem": "intake:brief.sources",
+  "it.tried @ intakeHaltReason": "intake:tried",
   "plan.criteria @ planAndAudit": "role:scope-and-plan:criteria",
   "plan.plan_diff @ planAndAudit": "role:scope-and-plan:plan_diff",
   "plan.changed_symbols @ planAndAudit": "role:scope-and-plan:changed_symbols",
@@ -6547,7 +6554,8 @@ test("2.1.5 a hasher result whose relayed maps do not match the digest fails", a
 // which ledger to use, a "#N" there is a yaadgaar task, and the sealed source
 // names the ledger.
 const YQ = { ...ARGS, input: "yaadgaar #622", project: "yadgarhq/docs" };
-const YBRIEF = { ...BRIEF, title: "Mark plain scalars", sources: [{ kind: "yaadgaar", ref: "622", url: null, body: "yaadgaar task body" }] };
+const YURN = "yadgar:task:0192";
+const YBRIEF = { ...BRIEF, title: "Mark plain scalars", sources: [{ kind: "yaadgaar", ref: "622", url: null, body: "yaadgaar task body", id: YURN }] };
 
 test("2.1.5 yaadgaar: intake is told the ledger by project; the task id and the sealed source name yaadgaar", async () => {
   const s = happy({ brief: YBRIEF });
@@ -6592,7 +6600,7 @@ test("2.1.5 yaadgaar: build re-reads the yaadgaar task, never L<N>", async () =>
   s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
   s["role:fleet-intent-judge:rerun"] = { status: "ok", reason: "fine", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } };
   s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
-  s["infra:yaadgaar-read"] = yaadgaarRead("yadgarhq/docs");
+  s["infra:yaadgaar-read"] = yaadgaarRead();
   s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
   const build = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs", confirm: "auto" });
   noUnscripted(build);
@@ -8166,13 +8174,13 @@ test("3.0.0 review 2: a definition changed_symbols cannot name (no identifier) p
 
 // ---------------------------------------------------------------- 3.0.0 yaadgaar write-back (ledger 1928)
 
-// The read-only step's answer: the project it resolved and each task's id and version.
-function yaadgaarRead(project, over) {
+// The read-only step's answer: each task's id, number and version, read by
+// the sealed id (3.1.3: no project resolution from the repo).
+function yaadgaarRead(over) {
   return (p) => ({
     status: "ok",
     reason: "read",
-    project,
-    results: inputsOf(p).tasks.map((t) => Object.assign({ key: t.key, status: "ok", id: "yadgar:task:0192", number: t.number, project, version: 3, has_marker: false }, over || {})),
+    results: inputsOf(p).tasks.map((t) => Object.assign({ key: t.key, status: "ok", id: t.id, number: t.number, version: 3, has_marker: false }, over || {})),
   });
 }
 
@@ -8180,7 +8188,7 @@ async function yaadgaarBuild(writeback, buildOver, read) {
   const s = autoHappy({ brief: YBRIEF });
   const plan = await runOne(s, { ...YQ, confirm: "ask" });
   assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
-  s["infra:yaadgaar-read"] = read || yaadgaarRead("yadgarhq/docs");
+  s["infra:yaadgaar-read"] = read || yaadgaarRead();
   if (writeback !== undefined) s["infra:yaadgaar-writeback"] = writeback;
   return runOne(s, Object.assign({ mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" }, buildOver || {}));
 }
@@ -8193,7 +8201,7 @@ test("3.0.0 yaadgaar write-back: an agent step edits the task through mcp__yaadg
   const c = call(out, "infra:yaadgaar-writeback");
   assert.equal(c.opts.agentType, undefined, "default agent: fleet:judge must never write to a ledger");
   const i = inputsOf(c.prompt);
-  assert.deepEqual(i.tasks, [{ key: "s0", id: "yadgar:task:0192", number: 622, project: "yadgarhq/docs", version: 3 }]);
+  assert.deepEqual(i.tasks, [{ key: "s0", id: YURN, number: 622, version: 3 }]);
   assert.equal(i.marker, "fleet:y622");
   assert.equal(i.section_heading, "Fleet build");
   assert.match(i.section_text, /<!-- fleet:y622 -->/);
@@ -8202,10 +8210,14 @@ test("3.0.0 yaadgaar write-back: an agent step edits the task through mcp__yaadg
   const r = call(out, "infra:yaadgaar-read");
   assert.equal(r.opts.agentType, "fleet:judge", "the read step is read-only");
   const ri = inputsOf(r.prompt);
+  // 3.1.3: args.project is passed through; the read goes by id and never resolves a project from the repo
   assert.equal(ri.project, "yadgarhq/docs");
-  assert.deepEqual(ri.tasks, [{ key: "s0", number: 622 }]);
-  assert.equal(ri.repo, "/r");
-  assert.match(r.prompt, /\.yadgar\/project-id/);
+  assert.equal(i.project, "yadgarhq/docs");
+  assert.deepEqual(ri.tasks, [{ key: "s0", number: 622, id: YURN }]);
+  // 3.1.3 (ledger 1979): the read goes by the sealed id; the repo never names the project
+  assert.equal(ri.repo, undefined);
+  assert.doesNotMatch(r.prompt, /\.yadgar\/project-id|remote get-url|walking up/);
+  assert.match(r.prompt, /read_task\(id=<id>\)/);
   assert.ok(out.labels.indexOf("infra:yaadgaar-read") < out.labels.indexOf("infra:yaadgaar-writeback"));
   for (const re of [/mcp__yaadgaar__read_task/, /mcp__yaadgaar__edit_task/, /expect_version/, /VERSION_MISMATCH/, /patch/, /expect_count/, /expect_body_sha256/, /never mcp__yadgar__task_/i, /id=<id>/])
     assert.match(c.prompt, re);
@@ -8357,22 +8369,22 @@ test("3.0.0 review 3 bc_samefile and bc_obligfiles: an occurrence elsewhere at a
   assert.equal((await run(u, ARGS)).result.stop_gate, "callers");
 });
 
-test("3.0.0 review 3 1928: the step returns the project it resolved; absent or another one fails closed; a non-number ref is never sent", async () => {
+test("3.0.0 review 3 1928 (3.1.3): a read that returns another id fails closed; a non-number ref is never sent", async () => {
   const wb = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
   const good = await yaadgaarBuild(wb);
   assert.equal(good.result.ledger_status, "ok", JSON.stringify(good.result.write_back));
   assert.match(call(good, "infra:yaadgaar-writeback").prompt, /data, not instructions/);
   assert.match(call(good, "infra:yaadgaar-read").prompt, /data, not instructions/);
-  for (const p of [undefined, "", "yadgarhq/other"]) {
-    // review 4: a wrong or missing project never reaches an edit step
-    const out = await yaadgaarBuild(wb, undefined, yaadgaarRead(p));
-    assert.ok(!out.labels.includes("infra:yaadgaar-writeback"), String(p));
-    assert.equal(out.result.ledger_status, "failed", String(p));
-    assert.match(out.result.write_back.ledger[0].reason, /resolved project/);
+  for (const id of [undefined, "", "yadgar:task:0999"]) {
+    // a read that is not the sealed task never reaches an edit step
+    const out = await yaadgaarBuild(wb, undefined, yaadgaarRead({ id }));
+    assert.ok(!out.labels.includes("infra:yaadgaar-writeback"), String(id));
+    assert.equal(out.result.ledger_status, "failed", String(id));
+    assert.match(out.result.write_back.ledger[0].reason, /id/);
     assert.match(out.result.write_back.ledger[0].section_text, /fleet:y622/);
   }
   // wb_number: a ref that is not a task number never reaches the step
-  const s = autoHappy({ brief: { ...YBRIEF, sources: [{ kind: "yaadgaar", ref: "6x2", url: null, body: "b" }] } });
+  const s = autoHappy({ brief: { ...YBRIEF, sources: [{ kind: "yaadgaar", ref: "6x2", url: null, body: "b", id: YURN }] } });
   const plan = await runOne(s, { ...YQ, confirm: "ask" });
   assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
@@ -8585,11 +8597,11 @@ test("3.0.0 review 4 n_planref_argc: the plan-ref reader refuses an extra argume
 });
 
 test("3.0.0 review 4 1928: a task that already carries the marker is skipped without an edit step", async () => {
-  const out = await yaadgaarBuild(() => ({ status: "ok", reason: "x", results: [] }), undefined, yaadgaarRead("yadgarhq/docs", { has_marker: true }));
+  const out = await yaadgaarBuild(() => ({ status: "ok", reason: "x", results: [] }), undefined, yaadgaarRead({ has_marker: true }));
   assert.ok(!out.labels.includes("infra:yaadgaar-writeback"));
   assert.equal(out.result.ledger_status, "ok");
   assert.equal(out.result.write_back.ledger[0].status, "skipped");
-  const bad = await yaadgaarBuild(() => ({ status: "ok", reason: "x", results: [] }), undefined, yaadgaarRead("yadgarhq/docs", { status: "failed", reason: "not found" }));
+  const bad = await yaadgaarBuild(() => ({ status: "ok", reason: "x", results: [] }), undefined, yaadgaarRead({ status: "failed", reason: "not found" }));
   assert.ok(!bad.labels.includes("infra:yaadgaar-writeback"));
   assert.equal(bad.result.ledger_status, "failed");
   assert.match(bad.result.write_back.ledger[0].reason, /not found/);
@@ -8720,22 +8732,23 @@ test("3.0.0 review 5 LOW: a leftover scratch worktree is cleaned; the scratch ad
   }
 });
 
-test("3.0.0 review 5 MED: the yaadgaar id must belong to the requested number and project; version is an integer", async () => {
+test("3.0.0 review 5 MED (3.1.3): the yaadgaar id must be the sealed task's id and number; version is an integer", async () => {
   for (const [what, over, re] of [
     ["another number", { number: 623 }, /number 623, not 622/],
-    ["another project", { project: "yadgarhq/other" }, /project "yadgarhq\/other", not yadgarhq\/docs/],
+    ["another id", { id: "yadgar:task:0999" }, /yadgar:task:0999.*not the sealed yadgar:task:0192/],
+    ["another project", { project: "yadgarhq/other" }, /project "yadgarhq\/other", not args\.project yadgarhq\/docs/],
     ["no number", { number: undefined }, /number/],
     ["version not an integer", { version: "3" }, /no id\/version/],
     ["version a float", { version: 3.5 }, /no id\/version/],
   ]) {
-    const out = await yaadgaarBuild(() => ({ status: "ok", reason: "x", results: [] }), undefined, yaadgaarRead("yadgarhq/docs", over));
+    const out = await yaadgaarBuild(() => ({ status: "ok", reason: "x", results: [] }), undefined, yaadgaarRead(over));
     assert.ok(!out.labels.includes("infra:yaadgaar-writeback"), what);
     assert.equal(out.result.ledger_status, "failed", what);
     assert.match(out.result.write_back.ledger[0].reason, re, what);
   }
   const ok = await yaadgaarBuild((p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) }));
   const w = call(ok, "infra:yaadgaar-writeback").prompt;
-  assert.match(w, /number.*project.*fail/i);
+  assert.match(w, /id.*number.*fail/i);
   assert.match(w, /read_task\(id=<id>\)/);
 });
 
@@ -11293,4 +11306,367 @@ test("3.1.1 origin URL program: prints the configured URL (before insteadOf) wit
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- 3.1.3 intake ledger resolution (ledger 1979)
+// A docs session ran "yaadgaar #671" against repo iam-db with project
+// yadgarhq/docs. Intake walked up iam-db for .yadgar/project-id, read its
+// origin, never called read_task, and advised writing yadgarhq/docs into
+// iam-db. The ledger scope is args.project; the repo never decides it, and
+// the ledger tool's answer is the truth.
+
+// The task-id rules of the intake prompt (rule 1, up to the Jira rule).
+function intakeIdRules(prompt) {
+  const m = /\n1\. Task id[\s\S]*?\n2\. Jira key/.exec(prompt);
+  assert.ok(m, "intake prompt has a task-id rule:\n" + prompt);
+  return m[0];
+}
+
+test("3.1.3 intake: a task id resolves only through the ledger tool; the repo's project-id or origin never decides the ledger", async () => {
+  const s = happy({ brief: YBRIEF });
+  const out = await runOne(s, { ...YQ, input: "yaadgaar #671", repo: "/home/max/git/yadgarhq/iam-db" });
+  const c = call(out, "intake");
+  const inp = inputsOf(c.prompt);
+  // project is the ledger scope, passed as given and independent of repo
+  assert.equal(inp.project, "yadgarhq/docs");
+  assert.equal(inp.repo, "/home/max/git/yadgarhq/iam-db");
+  assert.equal(inp.ledger, "yaadgaar");
+  const rules = intakeIdRules(c.prompt);
+  assert.doesNotMatch(rules, /walking up|remote get-url|first `\.yadgar\/project-id` found/);
+  assert.match(rules, /mcp__yaadgaar__read_task/);
+  assert.match(rules, /number=<the number>/);
+  assert.match(rules, /only by calling the ledger tool/i);
+  assert.match(rules, /independent of <repo>/);
+  assert.match(rules, /never advise/i);
+  assert.match(rules, /`tried`/);
+});
+
+test("3.1.3 intake: the URN from the read_task answer is sealed with the yaadgaar source", async () => {
+  const s = happy({ brief: YBRIEF });
+  const out = await runOne(s, YQ);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
+  assert.equal(ref.brief.sources[0].id, YURN);
+});
+
+test("3.1.3 intake: a yaadgaar source without the task id from the read_task answer stops before the workspace", async () => {
+  for (const id of [undefined, null, "", 42]) {
+    const out = await runOne(happy({ brief: { ...YBRIEF, sources: [{ kind: "yaadgaar", ref: "622", url: null, body: "b", id }] } }), YQ);
+    assert.equal(out.result.status, "needs_human", String(id));
+    assert.match(out.result.reason, /read_task/, String(id));
+    assert.ok(!out.labels.includes("workspace"), String(id));
+  }
+});
+
+test("3.1.3 intake: ledger routing by project prefix; no project tries both", async () => {
+  for (const [project, ledger] of [
+    ["yadgarhq/docs", "yaadgaar"],
+    ["yadgarhq/iam-db", "yaadgaar"],
+    ["m-agahi/ccpm", "yadgar"],
+    ["o/yadgarhq", "yadgar"],
+    ["xyadgarhq/docs", "yadgar"],
+    [undefined, "either"],
+    ["", "either"],
+  ]) {
+    const a = { ...ARGS };
+    if (project === undefined) delete a.project;
+    else a.project = project;
+    const out = await runOne(happy(), a);
+    assert.equal(inputsOf(call(out, "intake").prompt).ledger, ledger, String(project));
+  }
+  const rules = intakeIdRules(call(await runOne(happy(), ARGS), "intake").prompt);
+  assert.match(rules, /ledger `either`[\s\S]*mcp__yaadgaar__read_task[\s\S]*mcp__yadgar__task_get/);
+  // no project: the yaadgaar task the session's client returned is used
+  const a = { ...YQ };
+  delete a.project;
+  const out = await runOne(happy({ brief: YBRIEF }), a);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+});
+
+test("3.1.3 intake: needs_human on a task id names the ledgers tried and the tool error text", async () => {
+  const tried = [
+    { ledger: "yaadgaar", project: "yadgarhq/docs", call: "read_task(number=671)", error: "NOT_FOUND: no task 671" },
+    { ledger: "yadgar", project: "yadgarhq/docs", call: "task_get(project_id=yadgarhq/docs, id=671)", error: "external_task_ledger" },
+  ];
+  const out = await runOne(happy({ script: { intake: { status: "needs_human", reason: "task not found", tried } } }), { ...YQ, input: "#671" });
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /task not found/);
+  assert.match(out.result.reason, /yaadgaar \(project yadgarhq\/docs\) read_task\(number=671\): error \(as reported by intake agent\): NOT_FOUND: no task 671/);
+  assert.match(out.result.reason, /yadgar \(project yadgarhq\/docs\) task_get\(project_id=yadgarhq\/docs, id=671\): error \(as reported by intake agent\): external_task_ledger/);
+  assert.deepEqual(out.labels, ["preflight", "intake"]);
+  // a task-id input that made no ledger call says so
+  for (const input of ["#671", "671", "L42", "yaadgaar #671"]) {
+    const o = await runOne(happy({ script: { intake: { status: "needs_human", reason: "unsure" } } }), { ...YQ, input });
+    assert.match(o.result.reason, /ledgers tried: none \(intake made no ledger tool call\)/, input);
+  }
+  // other inputs carry no ledger list
+  const j = await runOne(happy({ script: { intake: { status: "needs_human", reason: "ABC-1 names two repos" } } }), { ...ARGS, input: "ABC-1" });
+  assert.doesNotMatch(j.result.reason, /ledgers tried/);
+});
+
+test("3.1.3 intake: a reason that advises a repo project-id file is never relayed", async () => {
+  const advice = "Yaadgaar does not resolve to project yadgarhq/docs. iam-db needs a .yadgar/project-id file with yadgarhq/docs.";
+  const out = await runOne(
+    happy({ script: { intake: { status: "needs_human", reason: advice, tried: [{ ledger: "yaadgaar", project: "yadgarhq/docs", call: "read_task(number=671)", error: "NOT_FOUND" }] } } }),
+    { ...YQ, input: "yaadgaar #671" },
+  );
+  assert.equal(out.result.status, "needs_human");
+  assert.doesNotMatch(out.result.reason, /project-id/);
+  assert.match(out.result.reason, /dropped/);
+  assert.match(out.result.reason, /NOT_FOUND/);
+});
+
+test("3.1.3 build: args.project, never the origin slug, decides the ledger check; the yaadgaar write-back reads by the sealed id", async () => {
+  const s = autoHappy({ brief: YBRIEF });
+  const plan = await runOne(s, { ...YQ, confirm: "ask" });
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  s["infra:yaadgaar-read"] = yaadgaarRead();
+  s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
+  // no project at build: the origin slug o/r must not stand in for the ledger
+  // scope; the build runs, and the write-back refuses (fail closed)
+  const none = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date });
+  assert.equal(none.result.status, "ok", none.result.reason);
+  assert.ok(!none.labels.includes("infra:yaadgaar-read"));
+  assert.ok(!none.labels.includes("infra:yaadgaar-writeback"));
+  assert.equal(none.result.ledger_status, "failed");
+  assert.match(none.result.write_back.ledger[0].reason, /no yadgarhq\/ project/);
+  assert.match(none.result.write_back.ledger[0].section_text, /fleet:y622/);
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.deepEqual(inputsOf(call(out, "infra:yaadgaar-read").prompt).tasks, [{ key: "s0", number: 622, id: YURN }]);
+  assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["yaadgaar #622", "written"]]);
+  // another ledger's project at build still stops
+  const o = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "m-agahi/ccpm" });
+  assert.equal(o.result.status, "needs_human");
+  assert.match(o.result.reason, /yaadgaar.*re-run plan/);
+});
+
+test("3.1.3 intake: project reaches intake independent of the repo", async () => {
+  const out = await runOne(happy(), { ...ARGS, project: "m-agahi/yadgar" });
+  assert.equal(inputsOf(call(out, "intake").prompt).project, "m-agahi/yadgar");
+  assert.equal(inputsOf(call(out, "intake").prompt).repo, "/r");
+});
+
+test("3.1.3 build: a plan ref sealed without the yaadgaar task id (before 3.1.3) edits nothing and says re-run plan", async () => {
+  const s = autoHappy({ brief: YBRIEF });
+  const plan = await runOne(s, { ...YQ, confirm: "ask" });
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  // a 3.1.2 ref: the same seal over a source with no id
+  const tiny = plan.result.plan_ref;
+  const canonical = new Function(extractCanonical() + "\nreturn canonical;")();
+  const raw = s.__store[tiny.plan_commit];
+  const ref = JSON.parse(raw);
+  delete ref.brief.sources[0].id;
+  delete ref.seal;
+  ref.seal = sha256(canonical(ref));
+  s.__store[tiny.plan_commit] = JSON.stringify(ref) + (raw.endsWith("\n") ? "\n" : "");
+  s["infra:yaadgaar-read"] = yaadgaarRead();
+  s["infra:yaadgaar-writeback"] = () => ({ status: "ok", reason: "x", results: [] });
+  const out = await runOne(s, { mode: "build", plan_ref: { ...tiny, ref_sha256: sha256(s.__store[tiny.plan_commit]) }, date: ARGS.date, project: "yadgarhq/docs" });
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(!out.labels.includes("infra:yaadgaar-read"));
+  assert.ok(!out.labels.includes("infra:yaadgaar-writeback"));
+  assert.equal(out.result.ledger_status, "failed");
+  assert.match(out.result.write_back.ledger[0].reason, /no task id.*re-run plan/);
+  assert.match(out.result.write_back.ledger[0].section_text, /fleet:y622/);
+});
+
+test("3.1.3 intake: a yaadgaar answer that names another project than args.project stops before the seal", async () => {
+  const brief = { ...YBRIEF, sources: [{ ...YBRIEF.sources[0], project: "yadgarhq/other" }] };
+  const out = await runOne(happy({ brief }), YQ);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /project yadgarhq\/other, not args\.project yadgarhq\/docs/);
+  assert.ok(!out.labels.includes("workspace"));
+  // the same project, or none named, passes; the project is never sealed
+  const s = happy({ brief: { ...YBRIEF, sources: [{ ...YBRIEF.sources[0], project: "yadgarhq/docs" }] } });
+  const ok = await runOne(s, YQ);
+  assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+  assert.equal(JSON.parse(s.__store[ok.result.plan_ref.plan_commit]).brief.sources[0].project, undefined);
+  // the intent re-read checks it too
+  const a = autoHappy({ brief: YBRIEF });
+  const plan = await runOne(a, { ...YQ, confirm: "ask" });
+  a["intake:rulings"] = { status: "ok", reason: "re-read", brief };
+  const b = await runOne(a, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs", confirm: "auto" });
+  assert.equal(b.result.status, "needs_human");
+  assert.match(b.result.reason, /re-read of yaadgaar:622: .*yadgarhq\/other, not args\.project yadgarhq\/docs/);
+});
+
+test("3.1.3 intake: the intent re-read must return the sealed yaadgaar id", async () => {
+  const a = autoHappy({ brief: YBRIEF });
+  const plan = await runOne(a, { ...YQ, confirm: "ask" });
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  a["intake:rulings"] = { status: "ok", reason: "re-read", brief: { ...YBRIEF, sources: [{ ...YBRIEF.sources[0], id: "yadgar:task:0999" }] } };
+  const b = await runOne(a, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs", confirm: "auto" });
+  assert.equal(b.result.status, "needs_human");
+  assert.match(b.result.reason, /not the sealed task/);
+  assert.ok(!b.labels.some((l) => /fleet-intent-judge/.test(l)));
+});
+
+test("3.1.3 intake: a yadgar reason that echoes task_get(project_id=...) is relayed intact", async () => {
+  const reason = "task_get(project_id=o/r, id=42): external_task_ledger";
+  const out = await runOne(happy({ script: { intake: { status: "needs_human", reason, tried: [{ ledger: "yadgar", project: "o/r", call: "task_get(project_id=o/r, id=42)", error: "external_task_ledger" }] } } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.ok(out.result.reason.startsWith("intake needs_human: " + reason + "; ledgers tried: "), out.result.reason);
+  assert.doesNotMatch(out.result.reason, /dropped/);
+});
+
+test("3.1.3 build: the yadgar ledger write-back takes args.project, independent of the origin slug", async () => {
+  const out = await run(happy(), { ...ARGS, project: "m-agahi/yadgar" });
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(inputsOf(call(out, "intake").prompt).project, "m-agahi/yadgar");
+  assert.equal(inputsOf(call(out, "infra:ledger-read:pre").prompt).project, "m-agahi/yadgar");
+  assert.equal(inputsOf(call(out, "infra:ledger-writeback").prompt).project, "m-agahi/yadgar");
+});
+
+// ---------------------------------------------------------------- 3.1.3 review of PR #41
+
+test("3.1.3 review 1: confirm auto with no project and a task-id input stops before intake", async () => {
+  for (const input of ["#42", "42", "L42", "yaadgaar #42"]) {
+    const a = { ...ARGS, input, confirm: "auto" };
+    delete a.project;
+    const out = await runOne(autoHappy(), a);
+    assert.equal(out.result.status, "needs_human", input);
+    assert.match(out.result.reason, /args\.project/, input);
+    assert.match(out.result.reason, /confirm "ask"/, input);
+    assert.ok(!out.labels.includes("intake"), input);
+  }
+  // a project, or a non-task input, passes this gate
+  const j = { ...ARGS, input: "ABC-1", confirm: "auto" };
+  delete j.project;
+  assert.ok((await runOne(autoHappy(), j)).labels.includes("intake"));
+  assert.ok((await runOne(autoHappy(), { ...ARGS, confirm: "auto" })).labels.includes("intake"));
+});
+
+test("3.1.3 review 1: the confirmation names the resolved ledger and project", async () => {
+  const out = await runOne(happy({ brief: YBRIEF }), YQ);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.deepEqual(out.result.ledger_source, { ledger: "yaadgaar", ref: "622", id: YURN, project: "yadgarhq/docs" });
+  assert.match(out.result.reason, /yaadgaar #622 \(yadgar:task:0192\) of project yadgarhq\/docs/);
+  const a = { ...YQ };
+  delete a.project;
+  const n = await runOne(happy({ brief: YBRIEF }), a);
+  assert.equal(n.result.status, "awaiting_confirmation", n.result.reason);
+  assert.equal(n.result.ledger_source.project, null);
+  assert.match(n.result.reason, /yaadgaar #622 .* of the session's yaadgaar project \(no args\.project\)/);
+  const l = await runOne(happy(), ARGS);
+  assert.deepEqual(l.result.ledger_source, { ledger: "yadgar", ref: "42", id: null, project: "o/r" });
+  assert.match(l.result.reason, /yadgar L42 of project o\/r/);
+  const t = await runOne(happy({ brief: { ...BRIEF, sources: [{ kind: "text", ref: "text", url: null, body: "x" }] } }), { ...ARGS, input: "do x" });
+  assert.equal(t.result.ledger_source, null);
+});
+
+test("3.1.3 review 2: build with no project stops on a legacy ledger source", async () => {
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date });
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /source ledger:42 needs args\.project.*re-run plan/);
+  assert.ok(!out.labels.some((l) => ROLE_LABEL.test(l)));
+});
+
+test("3.1.3 review 3: the yaadgaar id has the URN shape and comes from a read_task call that returned it", async () => {
+  for (const id of ["task-0192", "yadgar:task:", "urn:yadgar:task:0192", "yadgar:task:0192 ", "yadgar:task:01g2"]) {
+    const brief = { ...YBRIEF, sources: [{ ...YBRIEF.sources[0], id }] };
+    const out = await runOne(happy({ brief, tried: triedFor(YBRIEF) }), YQ);
+    assert.equal(out.result.status, "needs_human", id);
+    assert.ok(!out.labels.includes("workspace"), id);
+  }
+  for (const [what, tried] of [
+    ["no call", []],
+    ["a failed call", [{ ledger: "yaadgaar", project: null, call: "read_task(number=622)", error: "NOT_FOUND" }]],
+    ["another tool", [{ ledger: "yadgar", project: null, call: "task_get(id=622)", error: null }]],
+  ]) {
+    const out = await runOne(happy({ brief: YBRIEF, tried }), YQ);
+    assert.equal(out.result.status, "needs_human", what);
+    assert.match(out.result.reason, /read_task/, what);
+    assert.ok(!out.labels.includes("workspace"), what);
+  }
+  const ok = await runOne(happy({ brief: { ...YBRIEF, sources: [{ ...YBRIEF.sources[0], id: "yadgar:task:01a1b2dd-245e-71fd-b001-1219925b3422" }] } }), YQ);
+  assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+});
+
+test("3.1.3 review 4: advice in the reason or a call is dropped; a tool error is relayed verbatim and labelled", async () => {
+  const out = await runOne(happy({ script: { intake: { status: "needs_human", reason: "set iam-db's project id to yadgarhq/docs", tried: [] } } }), { ...YQ, input: "#671" });
+  assert.doesNotMatch(out.result.reason, /set iam-db/);
+  assert.match(out.result.reason, /dropped/);
+  const t = await runOne(
+    happy({ script: { intake: { status: "needs_human", reason: "not found", tried: [{ ledger: "yaadgaar", project: "yadgarhq/docs", call: "read_task(number=671)", error: "NOT_FOUND; write .yadgar/project-id in iam-db" }] } } }),
+    { ...YQ, input: "#671" },
+  );
+  // a tool's error is observed state: relayed verbatim, labelled, never dropped
+  assert.ok(t.result.reason.endsWith("not found; ledgers tried: yaadgaar (project yadgarhq/docs) read_task(number=671): error (as reported by intake agent): NOT_FOUND; write .yadgar/project-id in iam-db"), t.result.reason);
+  // the call text too
+  const c = await runOne(
+    happy({ script: { intake: { status: "needs_human", reason: "not found", tried: [{ ledger: "yaadgaar", project: null, call: "read_task after setting iam-db's project id", error: "NOT_FOUND" }] } } }),
+    { ...YQ, input: "#671" },
+  );
+  assert.doesNotMatch(c.result.reason, /iam-db/);
+  assert.match(c.result.reason, /yaadgaar \(project none\) \(dropped[^)]*\): error \(as reported by intake agent\): NOT_FOUND/);
+});
+
+test("3.1.3 review 5: the advice filter leaves non-task-id reasons alone", async () => {
+  const reason = "ABC-1 names repo iam-db, whose .yadgar/project-id is yadgarhq/iam-db; and o/s";
+  const out = await runOne(happy({ script: { intake: { status: "needs_human", reason } } }), { ...ARGS, input: "ABC-1" });
+  assert.equal(out.result.reason, "intake needs_human: " + reason);
+});
+
+test("3.1.3 review 7: a bare project_id= in advice is dropped; only a quoted ledger tool call is exempt", async () => {
+  const halt = (reason, tried) => runOne(happy({ script: { intake: { status: "needs_human", reason, tried: tried || [] } } }), { ...YQ, input: "#671" });
+  for (const advice of [
+    "set project_id=yadgarhq/docs in iam-db's config",
+    "task_get(project_id=o/r, id=42) failed; set project_id=yadgarhq/docs in iam-db",
+    "read_task(path=.yadgar/project-id) shows the wrong project",
+  ]) {
+    const out = await halt(advice);
+    assert.doesNotMatch(out.result.reason, /iam-db|set project_id|\.yadgar/, advice);
+    assert.match(out.result.reason, /dropped/, advice);
+  }
+  // the call text gets the same test; the tool's error text is relayed verbatim, labelled
+  const e = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "task_get(project_id=o/r, id=671)", error: "unknown project_id: 'yadgarhq/foo'" }]);
+  assert.ok(e.result.reason.endsWith("task_get(project_id=o/r, id=671): error (as reported by intake agent): unknown project_id: 'yadgarhq/foo'"), e.result.reason);
+  const cut = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "task_get(project_id=o/r, id=671)", error: "z".repeat(5000) }]);
+  assert.ok(cut.result.reason.endsWith("error (as reported by intake agent): " + "z".repeat(4096) + " (cut)"), cut.result.reason.slice(-80));
+  const c = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "edit(project_id=yadgarhq/docs)", error: "x" }]);
+  assert.doesNotMatch(c.result.reason, /edit\(project_id/);
+  // a quoted ledger call still passes, in the reason, the call and the error
+  const q = "task_get(project_id=o/r, id=42): external_task_ledger";
+  const ok = await halt(q, [{ ledger: "yadgar", project: "o/r", call: "mcp__yadgar__task_get(project_id=o/r, id=42)", error: "refused for task_get(project_id=o/r, id=42)" }]);
+  assert.equal(ok.result.reason, "intake needs_human: " + q + "; ledgers tried: yadgar (project o/r) mcp__yadgar__task_get(project_id=o/r, id=42): error (as reported by intake agent): refused for task_get(project_id=o/r, id=42)");
+});
+
+// The advice filter, extracted from the script (its constants and noAdvice).
+function extractNoAdvice() {
+  const line = (name) => {
+    const i = SOURCE.indexOf("\nconst " + name + " = ");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n", i + 1) + 1);
+  };
+  const fnOf = (name) => {
+    const i = SOURCE.indexOf("\nfunction " + name + "(");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  };
+  const fn = fnOf("cutText") + fnOf("noAdvice");
+  return new Function(["PROJECT_ADVICE_RE", "ADVICE_DROPPED", "LEDGER_CALL_RE", "ADVICE_MAX"].map(line).join("") + fn + "\nreturn noAdvice;")();
+}
+
+test("3.1.3 review 8: the advice filter runs in linear time on hostile text and caps its input", () => {
+  const noAdvice = extractNoAdvice();
+  for (const bad of ["read_task(" + "a=".repeat(5000), "task_get(" + "a=a,".repeat(3000), "find_tasks(" + "a= ".repeat(5000) + "x"]) {
+    const t0 = performance.now();
+    noAdvice(bad);
+    const ms = performance.now() - t0;
+    assert.ok(ms < 100, bad.slice(0, 12) + " took " + ms.toFixed(1) + " ms");
+  }
+  // over 4 KiB: cut, then tested; advice past the cut is never relayed
+  const long = "x".repeat(5000) + " set project_id=yadgarhq/docs in iam-db";
+  const out = noAdvice(long);
+  assert.ok(out.length <= 4096 + 40, String(out.length));
+  assert.doesNotMatch(out, /iam-db/);
+  const plain = noAdvice("y".repeat(5000));
+  assert.equal(plain, "y".repeat(4096) + " (cut)");
+  // the quoted call still passes; an unambiguous grammar keeps it exempt
+  assert.equal(noAdvice("task_get(project_id=o/r, id=42): external_task_ledger"), "task_get(project_id=o/r, id=42): external_task_ledger");
+  assert.equal(noAdvice("read_task(number=671)"), "read_task(number=671)");
+  assert.match(noAdvice("task_get(project_id=o/r id=42)"), /dropped/);
 });

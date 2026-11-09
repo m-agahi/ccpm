@@ -1,5 +1,58 @@
 # Changelog
 
+## [3.1.3] - 2026-11-09
+
+Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker
+stays `fleet-v3`.
+
+### Intake resolves a task id through the ledger tool
+
+- The fault was in the workflow's own intake prompt, not in a role page. It told intake to check
+  the yaadgaar project from the repo's `.yadgar/project-id` or origin. A docs session that built
+  `yaadgaar #671` in repo iam-db stopped there, never called `read_task`, and advised writing
+  `yadgarhq/docs` into iam-db.
+- Intake now resolves a task id only by calling the ledger tool and takes the answer as the truth.
+  `args.project` is the ledger scope, independent of `repo`. `yadgarhq/` projects use yaadgaar,
+  others yadgar `task_get(project_id=<project>)`; no project gives `ledger: "either"` (try both).
+- A yaadgaar source carries the `id` (URN) of the `read_task` answer, in the form
+  `yadgar:task:<uuid>`, and `tried` must hold a `read_task` call with `error: null`. Otherwise plan
+  mode stops with `needs_human`: intake did not call the tool. The intent re-read must return the
+  same id.
+- `confirm: "auto"` with no `args.project` and a task-id input stops before intake: the id would
+  resolve in whatever project the session is bound to, and nobody confirms it. Under `confirm:
+"ask"` the result carries `ledger_source` (`ledger`, `ref`, `id`, `project`) and the reason names
+  the ledger, task and project, so Max sees what the id resolved to.
+- Intake returns `tried` (ledger, project, call, error). On a task-id input that stops, the script
+  appends the ledgers tried and the error text intake reports for each call to the reason, or
+  "ledgers tried: none". That error text is relayed unfiltered as `error (as reported by intake
+agent): ...`, cut to 4 KiB, and never dropped: it carries clues such as "unknown project_id",
+  but the script cannot prove it is the tool's own text. The other agent-written parts (the reason, a call) are dropped
+  when they mention `.yadgar` or a project id. Only a quoted ledger tool call (`task_get`, `task_list`, `read_task` or
+  `find_tasks` with plain `key=value` arguments and no `.yadgar` path) is exempt, so
+  `task_get(project_id=o/r, id=42)` passes and a bare "set project_id=..." is dropped. Each part is
+  cut to 4 KiB before the test, and the call grammar is unambiguous (no `=` in a value, a comma
+  between arguments), so hostile text fails the match in linear time. Reasons for other inputs
+  (Jira, issues, plans, text) are relayed as they are.
+- Build mode checks the sealed sources against `args.project`, not the origin slug. With no
+  `args.project`, a legacy yadgar ledger source stops the build ("re-run plan with project").
+
+### yaadgaar write-back reads by the sealed id
+
+- `infra:yaadgaar-read` reads each task by the sealed URN. It no longer resolves a project from the
+  repo (`read_task` answers carry no project). The script requires the sealed id and number before
+  any edit, and a project the answer names (a `project_id` or `project` field) must be
+  `args.project`. No `args.project`, or a non-`yadgarhq/` one, writes nothing. A ref sealed before
+  3.1.3 has no id: write-back edits nothing, hands the section back and says "re-run plan".
+- Intake and the intent re-read stop when a yaadgaar answer names a project other than
+  `args.project`, with both projects in the reason. The named project is checked, never sealed.
+- Scope: the yaadgaar client is bound to the session's project. A `read_task` answer has the keys
+  `body, id, links, number, status, tags, title, version` and never names a project. A
+  well-formed URN outside the session's scope is refused with "no such task in this scope" (gRPC
+  NOT_FOUND), the same answer as for a missing task. So a sealed URN resolves only in that scope,
+  and the write-back cannot edit another project's task. The project checks above are defensive
+  and do not fire today. `args.project` must be the session's project (the skill takes it from the
+  session banner).
+
 ## [3.1.2] - 2026-11-09
 
 Ledger task 1974. No role page changes; install 3.1.2, then `/reload-plugins`. The contract marker
