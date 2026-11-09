@@ -4312,7 +4312,7 @@ _o.environ['PATH'] = clean_path()
 import hashlib, json, os, shutil, sys
 os.chdir('/')
 MARKER = b'fleet-agent-shim: hard-rules'
-NAMES = ('terra' + 'form', 'to' + 'fu', 't' + 'fp', 'terra' + 'grunt', 'dig' + 'ger')
+NAMES = ('terra' + 'form', 'to' + 'fu', 't' + 'fp', 'terra' + 'grunt', 'dig' + 'ger', 'atlan' + 'tis')
 store = '/nix/store/'
 repo = None
 for a in sys.argv[1:]:
@@ -4349,7 +4349,7 @@ out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', 
 print(json.dumps(out, ensure_ascii=False))
 `;
 // PATH_CHECK_PY_END
-const PATH_TOOLS = ["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt", "dig" + "ger"];
+const PATH_TOOLS = ["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt", "dig" + "ger", "atlan" + "tis"];
 const NOT_SHIMMED = "terraform tooling on PATH is not shimmed; install the agent PATH shims (nix) before using the fleet";
 
 // Stops the run unless every IaC tool on the agent PATH is a nix shim.

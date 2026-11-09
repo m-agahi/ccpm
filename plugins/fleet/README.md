@@ -534,13 +534,13 @@ Not defended:
 #### IaC tooling: Max's hard rules and the PATH shims (3.1.0)
 
 Max ruled on 2026-11-09: the fleet may work on terraform and other IaC code like any other code.
-What keeps IaC tooling (terraform, tofu, tfp, terragrunt, digger) from running is not a text scan
+What keeps IaC tooling (terraform, tofu, tfp, terragrunt, digger, atlantis) from running is not a text scan
 in this workflow but four layers outside and inside it:
 
 1. **Max's hard rules** (no terraform by any mechanism, no tf-local-plan container exec), which
    every role inherits.
 2. **settings.json denies** on those commands.
-3. **Agent PATH shims** that nix installs for terraform, tofu, tfp, terragrunt and digger, and for
+3. **Agent PATH shims** that nix installs for terraform, tofu, tfp, terragrunt, digger and atlantis, and for
    docker/podman exec into tf-local-plan containers: on the agent PATH the tool names reach a shim
    that refuses.
 4. **The hook gate** (below): a change to anything the repo's hooks or CI run needs its own PR
@@ -550,8 +550,8 @@ ADR-1152 still frames the rest: the fleet's gates defend against reward hacking,
 agent with a shell.
 
 **The PATH check (preflight, plan and build mode).** The preflight step runs one embedded program
-(`PATH_CHECK_PY`, `python3 -I`, resource caps). It resolves terraform, tofu, tfp, terragrunt and
-digger on the agent's PATH. A name that resolves is a shim only when its real path is under
+(`PATH_CHECK_PY`, `python3 -I`, resource caps). It resolves terraform, tofu, tfp, terragrunt,
+digger and atlantis on the agent's PATH. A name that resolves is a shim only when its real path is under
 `/nix/store/` (which no role can write) and its first 64 KiB hold the marker
 `fleet-agent-shim: hard-rules` (the constant `FLEET_SHIM_MARKER`). A name that resolves to
 anything else stops the run before any other step, with `needs_human`, `stop_gate: "iac"` and
@@ -561,7 +561,7 @@ agent PATH: an empty or relative PATH entry (the agent's shell would resolve it 
 worktree) and an entry inside the repo (the fleet worktree, the scratch dir, a role's own `bin/`)
 stop the run too ("PATH has entries the agent shell resolves differently"). A missing or tampered
 result stops the same way: no `path_check`, a wrong digest, tool keys other than exactly those
-five names, an entry whose `path` is not absolute or whose `shim` is not a boolean, or a program
+six names, an entry whose `path` is not absolute or whose `shim` is not a boolean, or a program
 argument other than the repo. A found entry passes only with `shim` exactly `true`. Every embedded
 program also gives its children a PATH without empty or relative entries, and the fixer gives
 pre-commit and its hooks one without the worktree's and the scratch dir's entries. The program spells the names in pieces, because

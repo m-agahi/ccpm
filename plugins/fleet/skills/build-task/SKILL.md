@@ -164,7 +164,7 @@ A `needs_human` "run-state mismatch" means the branch or worktree changed since 
 "approved but unresumable" means build commits exist without a run-state. Relay the reason; a
 human pushes by hand or deletes the branch.
 
-`stop_gate: "iac"` means an IaC tool (terraform, tofu, tfp, terragrunt, digger) on the agent PATH
+`stop_gate: "iac"` means an IaC tool (terraform, tofu, tfp, terragrunt, digger, atlantis) on the agent PATH
 is not one of the nix shims (3.1.0). Relay the reason to the user: the agent PATH shims must be
 installed before the fleet runs. Do not retry, and never change PATH or run the tool for the user.
 

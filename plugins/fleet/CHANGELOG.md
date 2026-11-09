@@ -7,7 +7,7 @@ Ledger tasks 1959, 1958, 1935 and 1941, the review rounds of PR #38, and Max's r
 
 **Deploy order:**
 
-1. Install the nix agent PATH shims for terraform, tofu, tfp, terragrunt and digger (and the
+1. Install the nix agent PATH shims for terraform, tofu, tfp, terragrunt, digger and atlantis (and the
    docker/podman exec shims for tf-local-plan) FIRST. Each shim must live under `/nix/store/` and
    hold the marker `fleet-agent-shim: hard-rules`. Without them, any of these tools that is on the
    agent PATH stops every 3.1.0 run at preflight ("terraform tooling on PATH is not shimmed;
@@ -35,14 +35,15 @@ What keeps IaC tooling from running now:
 
 - Max's hard rules (no terraform by any mechanism, no tf-local-plan container exec), which every
   role inherits, and the settings.json denies on those commands;
-- the agent PATH shims nix installs: on the agent PATH, terraform, tofu, tfp, terragrunt and
-  digger reach a shim that refuses;
+- the agent PATH shims nix installs: on the agent PATH, terraform, tofu, tfp, terragrunt, digger
+  and atlantis reach a shim that refuses (each shim holds the line
+  `# fleet-agent-shim: hard-rules`; the check matches the substring, comment prefix optional);
 - the hook gate (below): a change to anything the repo's hooks or CI run needs its own PR and
   Max's confirmation;
 - ADR-1152 still frames the gates: they defend against reward hacking, not a hostile agent.
 
 **New: the PATH check (preflight, plan and build mode).** Preflight runs `PATH_CHECK_PY`
-(`python3 -I`, resource caps), which resolves terraform, tofu, tfp, terragrunt and digger on the
+(`python3 -I`, resource caps), which resolves terraform, tofu, tfp, terragrunt, digger and atlantis on the
 agent PATH. A name that resolves passes only when its real path is under `/nix/store/` (which no
 role can write) and its first 64 KiB hold `FLEET_SHIM_MARKER` = `fleet-agent-shim: hard-rules`.
 Anything else stops the run before any other step: `needs_human`, `stop_gate: "iac"`, "terraform
@@ -51,7 +52,7 @@ resolving at all passes. The program gets the repo as its argument and reads the
 an empty or relative entry (the agent's shell resolves it against the worktree, the program would
 against `/`) or an entry inside the repo (the worktree, the scratch dir) stops the run as well
 ("PATH has entries the agent shell resolves differently"). A missing or tampered result stops the
-same way: no `path_check`, a wrong digest, tool keys other than exactly the five names, an entry
+same way: no `path_check`, a wrong digest, tool keys other than exactly the six names, an entry
 whose `path` is not absolute or whose `shim` is not a boolean, or a program argument other than
 the repo; a found entry passes only with `shim` exactly `true`. The relay trust model stays
 ADR-1152 (an unkeyed digest). Every embedded program gives its children a PATH without empty or

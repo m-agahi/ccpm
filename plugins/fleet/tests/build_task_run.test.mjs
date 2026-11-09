@@ -192,7 +192,7 @@ async function runOne(script, args0) {
     calls.push({ label, prompt, opts });
     // 3.1.0: preflight returns the PATH check program's output (no IaC tool on PATH)
     if (label === "preflight" && script.preflight && typeof script.preflight === "object" && !("path_check" in script.preflight) && !script.preflight.__raw_path_check) {
-      const pc = { tools: { ["terra" + "form"]: null, ["to" + "fu"]: null, ["t" + "fp"]: null, ["terra" + "grunt"]: null, ["dig" + "ger"]: null }, args: [inputsOf(prompt).repo], path_problems: [] };
+      const pc = { tools: { ["terra" + "form"]: null, ["to" + "fu"]: null, ["t" + "fp"]: null, ["terra" + "grunt"]: null, ["dig" + "ger"]: null, ["atlan" + "tis"]: null }, args: [inputsOf(prompt).repo], path_problems: [] };
       pc.digest = sha256(canon(pc));
       return Object.assign(JSON.parse(JSON.stringify(script.preflight)), { path_check: pc });
     }
@@ -9950,7 +9950,7 @@ test("3.1.0 security review: the hook surface traces hook-manager files and scri
 
 // ---------------------------------------------------------------- 3.1.0 (Max, 2026-11-09): a PATH check replaces the IaC scan
 
-const TF_TOOLS = ["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt", "dig" + "ger"];
+const TF_TOOLS = ["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt", "dig" + "ger", "atlan" + "tis"];
 const NOT_SHIMMED = /terraform tooling on PATH is not shimmed; install the agent PATH shims \(nix\) before using the fleet/;
 
 // a preflight result whose path_check is the program's output for `tools`
@@ -10195,4 +10195,29 @@ test("3.1.0 PATH review: every embedded program drops empty, relative and in-wor
   assert.deepEqual(r.stdout.trim().split("\n"), ["/usr/bin", ".::bin:/usr/bin:"]);
   // the fixer hands pre-commit a PATH without the worktree's own dirs
   assert.match(extractPy("FORMAT_FILES_PY_BEGIN", "FORMAT_FILES_PY_END", "FORMAT_FILES_PY"), /PATH=clean_path\(\[wt, scratch_root\]\)/);
+});
+
+test("3.1.0 PATH check: the tool set is the six shimmed names; a shim is matched by the marker substring, comment prefix optional", { skip: !HAVE_PY }, () => {
+  assert.deepEqual(TF_TOOLS.length, 6);
+  const prog = extractPy("PATH_CHECK_PY_BEGIN", "PATH_CHECK_PY_END", "PATH_CHECK_PY");
+  assert.ok(prog.includes("'atlan' + 'tis'"), "atlantis is checked");
+  const home = mkdtempSync(join(tmpdir(), "fleet-pathcheck3-"));
+  try {
+    const bin = join(home, "bin");
+    const store = join(home, "store") + "/";
+    spawnSync("mkdir", ["-p", bin, join(store, "s", "bin")]);
+    const at = TF_TOOLS[5];
+    for (const [text, shim] of [["#!/bin/sh\n# fleet-agent-shim: hard-rules\nexit 1\n", true], ["#!/bin/sh\necho 'fleet-agent-shim: hard-rules'\n", true], ["#!/bin/sh\n# fleet-agent-shim: soft\n", false]]) {
+      writeFileSync(join(store, "s", "bin", at), text, { mode: 0o755 });
+      rmSync(join(bin, at), { force: true });
+      spawnSync("ln", ["-s", join(store, "s", "bin", at), join(bin, at)]);
+      const r = spawnSync(PY3, ["-I", "-c", prog, join(home, "repo"), "--store-prefix=" + store], { encoding: "utf8", env: { PATH: bin }, cwd: home, timeout: 60000 });
+      assert.equal(r.status, 0, r.stderr);
+      const o = JSON.parse(r.stdout);
+      assert.deepEqual(Object.keys(o.tools).sort(), TF_TOOLS.slice().sort());
+      assert.equal(o.tools[at].shim, shim, text);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
