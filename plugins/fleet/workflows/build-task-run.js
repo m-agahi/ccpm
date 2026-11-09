@@ -8883,6 +8883,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     phase("Auto-confirm");
     if (!Array.isArray(ref.plan_diff))
       halt("needs_human", "plan_ref predates 2.1.0 (no plan_diff in " + tiny.plan_ref + "): re-run plan to use confirm auto");
+    // 4.0.0 review: G1's classification checks the planner's change_kind and
+    // new_behaviour; a ref sealed before 4.0.0 has neither, so the script
+    // refuses it here (fail closed) instead of trusting the judge with nulls
+    if (planFacts.change_kind === null || planFacts.new_behaviour === null)
+      return autoFailResult(
+        { failedCheck: "intent", reasons: ["plan_ref sealed before 4.0.0 (no plan_facts change_kind/new_behaviour in " + tiny.plan_ref + "): re-plan to build under confirm auto"], intent: null },
+        ref.plan_path,
+        tiny,
+      );
     const fresh = await rereadBrief(brief, input.project, repo);
     const g = await autoGates({
       sfx: ":rerun",

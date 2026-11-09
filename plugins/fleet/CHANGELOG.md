@@ -442,6 +442,12 @@ commit]`) before G2. A mismatch stops the run with `failed` and `stop_gate: "con
 - A frozen resume is refused after a fix_tests re-freeze. `freeze_digest` binds `refrozen: true`
   once the build re-froze, and the resume halts with `stop_gate: "resume"` when the caller's digest
   is the re-frozen form. The S5 notes above are corrected.
+- 3.1.3 refs under build `confirm: "auto"` need a re-plan. A ref sealed before 4.0.0 has no
+  `plan_facts.change_kind` or `new_behaviour`, so it cannot pass the G1 classification of the
+  `:rerun` gates. This stays fail closed, and the script now enforces it before the intent judge
+  runs: the build stops `needs_human` with `failed_check: "intent"` and "re-plan to build under
+  confirm auto". Before this fix, a judge that approved the null claims let such a ref through.
+  Build mode with `ask` or `default` re-runs no gate and still takes such a ref.
 - Test DSN in what roles write. The planner, plan-audit and pr-review still get their DSN (the
   planner may probe the database). Every role that gets a DSN also gets this script text in
   `test_env_note`: never write a test_env value into the plan doc, a finding, a commit message or

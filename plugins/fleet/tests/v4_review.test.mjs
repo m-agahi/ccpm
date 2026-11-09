@@ -394,6 +394,40 @@ test("review fix 7 (real git): plan_files.py lists the HEAD files that hold mysq
   assert.equal(o.digest, relayDigestOf(o, ["head", "files", "args", "dsn_paths"]));
 });
 
+// ---------------------------------------------------------------- fix 6: old refs under build auto fail closed
+
+test("review fix 6: a ref sealed before 4.0.0 (no change_kind/new_behaviour) cannot pass the :rerun gates under build auto", async () => {
+  const s = defaultHappy();
+  const plan = await runOne(s, ARGS);
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  const tiny = plan.result.plan_ref;
+  const ref = JSON.parse(s.__store[tiny.plan_commit]);
+  delete ref.plan_facts.change_kind;
+  delete ref.plan_facts.new_behaviour;
+  delete ref.seal;
+  ref.seal = sha256(canon(ref));
+  s.__store[tiny.plan_commit] = JSON.stringify(ref) + "\n";
+  const old = { ...tiny, ref_sha256: sha256(s.__store[tiny.plan_commit]) };
+  const BR = { status: "ok", reason: "re-read", brief: JSON.parse(JSON.stringify(ref.brief)) };
+  s["intake:rulings"] = BR;
+  s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: { head: PC, tree: "P0" } };
+  // even a judge that approves the classification of the null claims
+  s["role:fleet-intent-judge:rerun"] = s["role:fleet-intent-judge"];
+  s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: { head: PC, tree: "P0" } };
+  const b = { mode: "build", plan_ref: old, date: ARGS.date, project: "o/r", confirm: "auto" };
+  const out = await runOne(s, b);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.failed_check, "intent");
+  assert.match(out.result.reason, /sealed before 4\.0\.0.*re-plan/);
+  assert.ok(!out.labels.some((l) => /test-writer/.test(l)), out.labels.join(", "));
+  // control: the same ref with its 4.0.0 plan facts passes the re-run gates
+  const s2 = defaultHappy();
+  const p2 = await runOne(s2, ARGS);
+  Object.assign(s2, { "intake:rulings": BR, "hasher:pre-intent:rerun": s["hasher:pre-intent:rerun"], "role:fleet-intent-judge:rerun": s["role:fleet-intent-judge"], "hasher:fp-post:intent:rerun": s["hasher:fp-post:intent:rerun"] });
+  const ok = await runOne(s2, { ...b, plan_ref: p2.result.plan_ref });
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+});
+
 test("review fix 1: precommit_ids routes every print through one emit with the digest", () => {
   const m = /\/\/ PRECOMMIT_IDS_PY_BEGIN\n([\s\S]*?)\n\/\/ PRECOMMIT_IDS_PY_END/.exec(SOURCE);
   assert.ok(m);
