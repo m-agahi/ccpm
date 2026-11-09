@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+Fleet 4.0.0 work in progress (integration branch `feat/fleet-4.0.0`). Stream S2 folds these notes
+into the 4.0.0 entry.
+
+### S1: test harness
+
+- The shared scenario-test harness moves to `tests/harness.mjs`. Test files import it. No test
+  behaviour changes.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker

@@ -16,645 +16,82 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync as rawSpawnSync } from "node:child_process";
-
-// 3.1.0: every python3 program a test runs is bounded in time and output, on
-// top of the program's own rlimits (a red run of an adversarial-input test
-// must fail fast, never grow).
-const PY_SPAWN_LIMITS = { timeout: 300000, maxBuffer: 16 << 20, killSignal: "SIGKILL" };
-function spawnSync(cmd, args, opts) {
-  return rawSpawnSync(cmd, args, cmd === "python3" ? Object.assign({}, PY_SPAWN_LIMITS, opts) : opts);
-}
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  PY_SPAWN_LIMITS,
+  spawnSync,
+  HERE,
+  SCRIPT_PATH,
+  SOURCE,
+  AsyncFunction,
+  compile,
+  ThrowingDate,
+  SafeMath,
+  inputsOf,
+  FROZEN_VERSIONS,
+  ROLE_NAMES,
+  REQUIRED_DEFAULTS,
+  NONCE,
+  withNonce,
+  RELAY_KEYS,
+  tfGateRelay,
+  pathRecheckOut,
+  remoteUrlOut,
+  relayDigestOf,
+  scanEntry,
+  fillArgs,
+  withRelayDigest,
+  runOne,
+  run,
+  call,
+  noUnscripted,
+  ARGS,
+  PC,
+  PSHA,
+  BRIEF,
+  FP_PRE,
+  FP_TESTS,
+  FP_PLAN,
+  FP_K1,
+  FP_K2,
+  FP_M3,
+  CSHA,
+  H,
+  HASHES_FLAT,
+  HASHES,
+  DEFAULT_HASHES,
+  CONFIG_ONLY,
+  criteria,
+  sha256,
+  refContentOf,
+  refEntry,
+  planRefsOf,
+  commitStub,
+  loadStub,
+  commitStepStub,
+  triedFor,
+  happy,
+  hasherPy,
+  sh,
+  runHasherRaw,
+  runHasher,
+  py,
+  HAVE_PY,
+  scratchRepo,
+  canon,
+  planRefFor,
+  buildArgs,
+  gitEnv,
+  extractFn,
+  extractPy,
+  scriptCheckPy,
+  stateJsonOf,
+  CHUNK,
+  chunksOf,
+  defsOut,
+} from "./harness.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SCRIPT_PATH = join(HERE, "..", "workflows", "build-task-run.js");
-const SOURCE = readFileSync(SCRIPT_PATH, "utf8");
-
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-
-function compile() {
-  const body = SOURCE.replace(/^export const meta/m, "const meta");
-  return new AsyncFunction(
-    "agent",
-    "parallel",
-    "pipeline",
-    "phase",
-    "log",
-    "args",
-    "budget",
-    "workflow",
-    "Date",
-    "Math",
-    body,
-  );
-}
-
-const ThrowingDate = function () {
-  throw new Error("Date is unavailable in workflow scripts");
-};
-ThrowingDate.now = () => {
-  throw new Error("Date.now is unavailable in workflow scripts");
-};
-const SafeMath = Object.create(Math);
-SafeMath.random = () => {
-  throw new Error("Math.random is unavailable in workflow scripts");
-};
-
-// Extract the JSON inputs a role-runner or infra prompt carries.
-function inputsOf(prompt) {
-  const m = /^Inputs: (.*)$/m.exec(prompt);
-  assert.ok(m, "prompt has an Inputs: line:\n" + prompt);
-  return JSON.parse(m[1]);
-}
-
-// The minimum role versions the workflow was built against.
-const FROZEN_VERSIONS = {
-  "scope-and-plan": 27,
-  "plan-audit": 16,
-  "fleet-test-writer": 10,
-  "fleet-test-judge": 10,
-  "fleet-coder": 17,
-  "fleet-code-judge": 15,
-  "fleet-pr-opener": 10,
-  "fleet-intent-judge": 2,
-  "pr-review": 18,
-  "gate-change-nonweakening-sweep": 5,
-};
-const ROLE_NAMES = Object.keys(FROZEN_VERSIONS);
-
-// Keys each role must return on status ok (the frozen fleet-v3 contract).
-// The harness fills missing ones with neutral defaults for terse override
-// stubs; a stub with __raw: true is returned as written (drift tests).
-const REQUIRED_DEFAULTS = {
-  "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [], tldr: "adds a thing", plan_diff: ["new plan"], repo_obligations: [], test_cmd: { command: "pytest <paths>", paths_placeholder: "<paths>", env: {}, tools: [] }, changed_symbols: [] },
-  "plan-audit": { verdict: "approve", routed_findings: [] },
-  "fleet-test-writer": { criterion_id: "AC1", tests: [], files: [] },
-  "fleet-test-judge": { verdict: "approve", routed_findings: [], checked: [] },
-  "fleet-coder": { changed_paths: [], suite_result: { command: "pytest", exit_code: 0 }, added_symbols: [], frozen_tests_red_at_start: true, obligations_done: [] },
-  "fleet-code-judge": { verdict: "approve", routed_findings: [], suite_result: { command: "pytest", exit_code: 0 }, hash_check: { match: true, mismatched: [] }, gates_not_run: [], obligations_check: [] },
-  "fleet-pr-opener": { pr_url: null, pr_number: null, created: true, template_used: null, gates_not_run_stated: true },
-  "fleet-intent-judge": { verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } },
-  "pr-review": { verdict: "approve", findings: [], touches_gate: false, checked: [] },
-  "gate-change-nonweakening-sweep": { verdict: "non_weakening", units: [], findings: [] },
-};
-
-// The skill passes a fresh run_nonce on every invocation; scenario args that
-// do not name one get the default (null means "no nonce" in a test).
-const NONCE = "n1-0000001";
-function withNonce(args) {
-  if (!args || typeof args !== "object" || !args.mode || "run_nonce" in args) return args;
-  return Object.assign({}, args, { run_nonce: NONCE });
-}
-
-// 3.0.0 (ledger 1952): the relayed infra programs print a digest over these
-// keys. Stubs that give none get the program's digest (a key absent counts as
-// null, as in the script); branch-scan stubs written with message text are
-// turned into the program's metadata entries first.
-const RELAY_KEYS = [
-  [/^infra:fleet-scan:/, ["diff", "commits"]],
-  [/^infra:read-state$/, ["exists", "target", "message", "head", "head_tree", "clean"]],
-  [/^infra:review-paths:/, ["changed_paths"]],
-  [/^infra:check-scripts/, ["checks"]],
-  [/^infra:branch-scan$/, ["commits", "refs"]],
-  [/^infra:format-(tests|code):/, ["ran", "reason", "runs", "stable", "files", "changed", "refused"]],
-  // 3.1.0 (ledger 1959)
-  [/^infra:verify-plan$/, ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"]],
-  [/^infra:commit-plan/, ["head", "files", "args"]],
-  // 3.1.0 (ledger 1935c)
-  [/^infra:push(:p\d+)?$/, ["push_result", "exit_code", "hook_tail", "args"]],
-  [/^infra:hook-surface:/, ["surface", "make_paths", "error", "args"]],
-];
-// 3.1.0: the IaC push gate program's output, with its digest
-function tfGateRelay(over) {
-  const r = Object.assign({ status: "ok", reason: "scanned", touched: false, iac_files: [], problems: [], hints: [], args: ["/r/.claude/worktrees/fleet-l42-add-thing/main", "master", "0".repeat(40), "git@github.com:o/r.git"] }, over);
-  r.digest = sha256(canon({ touched: r.touched, iac_files: r.iac_files, problems: r.problems, hints: r.hints, args: r.args }));
-  return r;
-}
-// 3.1.1: a PATH re-check relay (the PATH check program's output plus status)
-function pathRecheckOut(tools, args) {
-  const pc = {
-    tools: Object.assign(Object.fromEntries(["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt", "dig" + "ger", "atlan" + "tis"].map((t) => [t, null])), tools || {}),
-    args,
-    path_problems: [],
-  };
-  pc.digest = sha256(canon(pc));
-  return Object.assign({ status: "ok", reason: "checked" }, pc);
-}
-// 3.1.1: the origin URL program's output
-function remoteUrlOut(url, repo) {
-  const o = { url: url === undefined ? null : url, args: [repo] };
-  o.digest = sha256(canon(o));
-  return o;
-}
-function relayDigestOf(r, keys) {
-  const o = {};
-  for (const k of keys) o[k] = r[k] === undefined ? null : r[k];
-  return sha256(canon(o));
-}
-// One plan-ref entry as the branch-scan program prints it: no content; the
-// program's own task_id, plan_path and ref_ok.
-function scanEntry(e) {
-  if (!e || typeof e !== "object" || !("content" in e)) return e;
-  const out = Object.assign({}, e);
-  delete out.content;
-  let r = null;
-  try {
-    r = typeof e.content === "string" ? JSON.parse(e.content) : null;
-  } catch (err) {
-    r = null;
-  }
-  const obj = r && typeof r === "object" && !Array.isArray(r) ? r : null;
-  out.task_id = obj && typeof obj.task_id === "string" ? obj.task_id : null;
-  out.plan_path = obj && typeof obj.plan_path === "string" ? obj.plan_path : null;
-  let ok = !!obj && typeof e.content === "string" && sha256(e.content) === e.sha256 && typeof obj.seal === "string";
-  if (ok) {
-    const o = Object.assign({}, obj);
-    delete o.seal;
-    ok = obj.seal === sha256(canon(o)) && obj.branch === "fleet/" + obj.task_id + "-" + obj.slug;
-  }
-  out.ref_ok = ok;
-  // the program hashes the bytes it read: a stub's mismatched sha256 is a broken ref
-  return out;
-}
-// 3.1.0 review: the programs echo their arguments; a stub that gives none
-// echoes what the prompt passed (the push stub: a temp file and its exit code).
-function fillArgs(label, r, prompt) {
-  if (!r || typeof r !== "object" || r.status !== "ok" || "args" in r || "digest" in r) return r;
-  if (/^infra:verify-plan$/.test(label)) {
-    const i = inputsOf(prompt);
-    r.args = [i.main_worktree, i.plan_commit, i.plan_path];
-  } else if (/^infra:commit-plan/.test(label)) r.args = [inputsOf(prompt).worktree];
-  else if (/^infra:hook-surface:/.test(label)) r.args = [inputsOf(prompt).worktree, inputsOf(prompt).rev, JSON.stringify(inputsOf(prompt).targets)];
-  else if (/^infra:push(:p\d+)?$/.test(label) && r.push_result === "hook_rejected") r.args = ["/tmp/fleet-push.out", String(r.exit_code)];
-  return r;
-}
-function withRelayDigest(label, r) {
-  if (!r || typeof r !== "object" || r.status !== "ok" || "digest" in r) return r;
-  const hit = RELAY_KEYS.find(([re]) => re.test(label));
-  if (!hit) return r;
-  if (/^infra:branch-scan$/.test(label) && Array.isArray(r.refs)) r.refs = r.refs.map(scanEntry);
-  r.digest = relayDigestOf(r, hit[1]);
-  return r;
-}
-
-async function runOne(script, args0) {
-  const args = withNonce(args0);
-  const calls = [];
-  const unscripted = [];
-  const logs = [];
-  const counters = {};
-  // before the freeze, the worktree holds what the first freeze will hash
-  const f1 = script["hasher:freeze:f1"];
-  let lastHashes = f1 && typeof f1 === "object" && !Array.isArray(f1) && f1.hashes ? f1.hashes : null;
-  const fleetRefs = {};
-  const agent = async (prompt, opts = {}) => {
-    const label = opts.label;
-    calls.push({ label, prompt, opts });
-    // 3.1.0: preflight returns the PATH check program's output (no IaC tool on PATH)
-    if (label === "preflight" && script.preflight && typeof script.preflight === "object" && !("path_check" in script.preflight) && !script.preflight.__raw_path_check) {
-      const pc = { tools: { ["terra" + "form"]: null, ["to" + "fu"]: null, ["t" + "fp"]: null, ["terra" + "grunt"]: null, ["dig" + "ger"]: null, ["atlan" + "tis"]: null }, args: [inputsOf(prompt).repo], path_problems: [] };
-      pc.digest = sha256(canon(pc));
-      return Object.assign(JSON.parse(JSON.stringify(script.preflight)), { path_check: pc });
-    }
-    // the bytecode purge is mechanical; unscripted purges succeed by default
-    if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
-    // unscripted plan parks move the draft and leave the worktree clean
-    if (!(label in script) && /^infra:park-plan/.test(label)) return { status: "ok", reason: "parked", target: inputsOf(prompt).dest, clean: true };
-    // unscripted plan formatting changes nothing (the hooks found nothing to fix)
-    if (!(label in script) && /^infra:format-plan/.test(label)) return { status: "ok", reason: "formatted", changed_paths: [] };
-    // unscripted fixer-hook runs change nothing (3.0.0)
-    if (!(label in script) && /^infra:format-(tests|code):/.test(label)) {
-      const sel = inputsOf(prompt).select;
-      return withRelayDigest(label, { status: "ok", reason: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [] });
-    }
-    // 3.1.0: unscripted IaC pre-push gates find no IaC file in the PR diff
-    if (!(label in script) && /^infra:tf-gate:/.test(label)) {
-      const i = inputsOf(prompt);
-      return tfGateRelay({ args: [i.main_worktree, i.default_branch, i.approved_sha, i.remote_url] });
-    }
-    // 3.1.0: unscripted remote-head reads find no remote branch
-    if (!(label in script) && /^infra:remote-head:/.test(label)) {
-      const i = inputsOf(prompt);
-      const r = { status: "ok", reason: "read", head: null, args: [i.main_worktree, i.branch, i.remote_url] };
-      r.digest = sha256(canon({ head: r.head, args: r.args }));
-      return r;
-    }
-    // 3.1.1: unscripted PATH re-checks find no IaC tool on PATH
-    if (!(label in script) && /^infra:path-check:/.test(label)) {
-      const i = inputsOf(prompt);
-      return pathRecheckOut({}, [i.repo, i.token]);
-    }
-    // 3.1.0: unscripted hook-surface reads find no hook entry file
-    if (!(label in script) && /^infra:hook-surface:/.test(label))
-      return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: {}, error: null }, prompt));
-    // 3.1.0: unscripted ledger reads find a task with a body page
-    if (!(label in script) && /^infra:ledger-read:pre$/.test(label))
-      return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
-    // unscripted build caller checks find no modified existing definition
-    if (!(label in script) && /^infra:changed-defs:/.test(label)) return defsOut([]);
-    // unscripted fleet-internal scans find no .fleet/ path in the PR diff
-    if (!(label in script) && /^infra:fleet-scan:/.test(label)) return withRelayDigest(label, { status: "ok", reason: "scanned", diff: [], commits: [] });
-    // run-state writes are mechanical too: the ref lands on the expected head
-    if (!(label in script) && /^infra:state:/.test(label)) {
-      fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = "f".repeat(40);
-      return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
-    }
-    if (!(label in script)) {
-      unscripted.push(label);
-      return null;
-    }
-    let r = script[label];
-    if (Array.isArray(r)) {
-      const i = counters[label] || 0;
-      counters[label] = i + 1;
-      r = r[Math.min(i, r.length - 1)];
-    }
-    if (typeof r === "function") r = r(prompt, opts);
-    if (r === undefined || r === null) return null;
-    r = JSON.parse(JSON.stringify(r));
-    const raw = r.__raw === true;
-    delete r.__raw;
-    if (!raw) withRelayDigest(label, fillArgs(label, r, prompt));
-    // 3.1.1: the workspace step relays the origin URL program's output; a stub
-    // that gives only remote_url gets that program's output for it
-    if (label === "workspace" && !raw && r.status === "ok" && !("remote_url_check" in r)) r.remote_url_check = remoteUrlOut(r.remote_url, inputsOf(prompt).repo);
-    // hasher stubs that give only a fingerprint carry the maps of the last
-    // hasher result forward (nothing changed; the judge fingerprint compares
-    // the maps too) and list no changed paths
-    if (label.startsWith("hasher:") && !raw && r.status === "ok") {
-      if (!("hashes" in r)) r.hashes = JSON.parse(JSON.stringify(lastHashes || DEFAULT_HASHES));
-      if (!("changed" in r)) r.changed = [];
-      // the real hasher sees the run-state refs the workflow's own state writes made
-      const g = r.hashes.git || (r.hashes.git = {});
-      if (!Object.keys(g).some((k) => k.startsWith("fleetref:"))) Object.assign(g, fleetRefs);
-      lastHashes = r.hashes;
-      // the program's digest over what it printed (2.1.5)
-      if (!("digest" in r)) {
-        const o = { fingerprint: r.fingerprint, hashes: r.hashes };
-        if (inputsOf(prompt).base_tree) o.changed = r.changed;
-        r.digest = sha256(canon(o));
-      }
-    }
-    // a run-state write moves its ref
-    if (label.startsWith("infra:state:") && !raw && r.status === "ok" && typeof r.state_sha === "string")
-      fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = r.state_sha;
-    // a terse writer stub reports exactly its criterion's test files
-    if (label.startsWith("role:fleet-test-writer:") && !raw && r.status === "ok" && !("files" in r))
-      r.files = inputsOf(prompt).test_files;
-    if (label.startsWith("role:") && !raw) {
-      const role = label.split(":")[1];
-      // role runners report the version and contract marker they loaded
-      if (!("role_version" in r)) {
-        const pv = script.preflight && script.preflight.versions ? script.preflight.versions[role] : undefined;
-        r.role_version = pv !== undefined ? pv : FROZEN_VERSIONS[role];
-      }
-      if (!("role_contract" in r)) r.role_contract = "CONTRACT: fleet-v3";
-      if (r.status === "ok")
-        for (const [k, v] of Object.entries(REQUIRED_DEFAULTS[role] || {})) if (!(k in r)) r[k] = v;
-    }
-    return r;
-  };
-  const parallel = async (thunks) =>
-    Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));
-  const pipeline = async (items, ...stages) =>
-    Promise.all(
-      items.map(async (item, idx) => {
-        let prev = item;
-        try {
-          for (const s of stages) prev = await s(prev, item, idx);
-          return prev;
-        } catch {
-          return null;
-        }
-      }),
-    );
-  const fn = compile();
-  // a crashed run rethrows; its logs travel on the error (2.1.6)
-  const crashed = (e) => {
-    if (e && typeof e === "object") e.__logs = logs;
-    throw e;
-  };
-  const result = await fn(
-    agent,
-    parallel,
-    pipeline,
-    () => {},
-    (m) => logs.push(m),
-    args,
-    { total: null, spent: () => 0, remaining: () => Infinity },
-    async () => {
-      throw new Error("nested workflow not expected");
-    },
-    ThrowingDate,
-    SafeMath,
-  ).catch(crashed);
-  return { result, calls, unscripted, logs, labels: calls.map((c) => c.label) };
-}
-
-// Plan mode, then (when it returns awaiting_confirmation) build mode with the
-// returned plan_ref, as the skill does after Max confirms. The merged view
-// holds both runs' calls; .plan and .build hold each run alone.
-async function run(script, args, buildOver) {
-  const plan = await runOne(script, args);
-  if (!plan.result || plan.result.status !== "awaiting_confirmation" || !args || typeof args !== "object" || args.mode !== "plan")
-    return Object.assign({}, plan, { plan, build: null });
-  const bargs = Object.assign({}, args, { mode: "build", plan_ref: plan.result.plan_ref }, buildOver || {});
-  delete bargs.input;
-  const build = await runOne(script, bargs);
-  return {
-    result: build.result,
-    planResult: plan.result,
-    calls: plan.calls.concat(build.calls),
-    unscripted: plan.unscripted.concat(build.unscripted),
-    logs: plan.logs.concat(build.logs),
-    labels: plan.labels.concat(build.labels),
-    plan,
-    build,
-  };
-}
-
-function call(out, label) {
-  const c = out.calls.find((x) => x.label === label);
-  assert.ok(c, "expected a call labelled " + label + "; got " + out.labels.join(", "));
-  return c;
-}
-
-function noUnscripted(out) {
-  assert.deepEqual(out.unscripted, [], "unscripted agent labels");
-}
-
-const ARGS = {
-  mode: "plan",
-  input: "L42",
-  repo: "/r",
-  project: "o/r",
-  date: "2026-11-04",
-  run_nonce: NONCE,
-};
-const PC ="abc1234def0";
-const PSHA = "a".repeat(64);
-const BRIEF = {
-  title: "Add Thing!",
-  description: "add a thing",
-  sources: [{ kind: "ledger", ref: "42", url: null, body: "task body" }],
-  repo: "/r",
-  plan_path: null,
-};
-// Fingerprints are {head, tree}. Writers and the coder never commit, so the
-// head stays at the plan commit until the commit step; only the tree moves.
-// FP_PRE: the plan commit before the writers; FP_PLAN (= FP_TESTS): the
-// worktree holding the approved tests.
-const FP_PRE = { head: PC, tree: "T0" };
-const FP_TESTS = { head: PC, tree: "T1" };
-const FP_PLAN = FP_TESTS;
-const FP_K1 = { head: PC, tree: "K1" };
-const FP_K2 = { head: PC, tree: "K2" };
-const FP_M3 = { head: PC, tree: "M3" };
-// the commit step's head for code round m
-const CSHA = (m) => "c00000" + m;
-// Hasher output is four maps plus a suspicious list. Fixtures are written as
-// flat prefixed keys and converted: "git:<k>" -> git, "symlink:<k>" ->
-// symlinks, a key with "#" -> sections, anything else -> files.
-function H(flat, suspicious) {
-  const h = { files: {}, sections: {}, git: {}, symlinks: {}, ignored: {}, suspicious: suspicious || [] };
-  for (const [k, v] of Object.entries(flat)) {
-    if (k.startsWith("git:")) h.git[k.slice(4)] = v;
-    else if (k.startsWith("symlink:")) h.symlinks[k.slice(8)] = v;
-    else if (k.includes("#")) h.sections[k] = v;
-    else h.files[k] = v;
-  }
-  return h;
-}
-const HASHES_FLAT = {
-  "tests/test_a.py": "ha",
-  "tests/test_b.py": "hb",
-  "pyproject.toml#tool.pytest": "hp",
-};
-const HASHES = H(HASHES_FLAT);
-const DEFAULT_HASHES = HASHES;
-const CONFIG_ONLY = H({ "pyproject.toml#tool.pytest": "hp" });
-
-function criteria(n = 2) {
-  return Array.from({ length: n }, (_, i) => ({
-    id: "AC" + (i + 1),
-    text: "behaviour " + (i + 1),
-    test_files: ["tests/test_" + String.fromCharCode(97 + i) + ".py"],
-  }));
-}
-
-const sha256 = (t) => createHash("sha256").update(t, "utf8").digest("hex");
-
-// The sealed ref the commit-plan prompt writes as the tag message (heredoc
-// body + newline).
-function refContentOf(prompt) {
-  const m = /<<'FLEET_PLAN_JSON'\n([\s\S]*?)\nFLEET_PLAN_JSON/.exec(prompt);
-  return m ? m[1] + "\n" : null;
-}
-
-// One entry of the plan-ref reader's output, as the real program prints it.
-function refEntry(name, target, content) {
-  return { name, tag_sha: "7".repeat(40), type: "tag", target, target_type: "commit", sha256: sha256(content), content };
-}
-
-// The plan refs of task l42 in the store: refs/fleet/l42/plan targets
-// store.__planHead (PC when unset; null means no ref), and every earlier
-// plan ref is kept as refs/fleet/l42/plan-<n>. store[<commit>] is the tag
-// message whose target is that commit.
-function planRefsOf(store, taskId) {
-  const out = [];
-  const t = taskId || store.__task || "l42";
-  const head = "__planHead" in store ? store.__planHead : PC;
-  if (head && store[head] !== undefined) out.push(refEntry("refs/fleet/" + t + "/plan", head, store[head]));
-  (store.__archived || []).forEach((h, i) => out.push(refEntry("refs/fleet/" + t + "/plan-" + (i + 1), h, store[h])));
-  return out;
-}
-
-// commit-plan stub: the commit holds only plan_path; the sealed ref becomes
-// the tag message at refs/fleet/l42/plan (an earlier one is archived).
-function commitStub(store, head, planSha) {
-  return (prompt) => {
-    const c = refContentOf(prompt);
-    if (c == null) return { status: "failed", reason: "no ref content in the prompt" };
-    const prev = "__planHead" in store ? store.__planHead : null;
-    if (prev && prev !== head) (store.__archived || (store.__archived = [])).push(prev);
-    store[head] = c;
-    store.__planHead = head;
-    store.__task = inputsOf(prompt).task_id;
-    return { status: "ok", reason: "committed", head, files: [inputsOf(prompt).plan_path], plan_sha256: planSha, refs: planRefsOf(store) };
-  };
-}
-
-// load-ref stub: the plan-ref reader over the store, in the prompt's mode
-// (2.1.5): no content in the entries; "chunks" adds the plan ref's message
-// in pieces of at most 1000 characters.
-function loadStub(store) {
-  return (prompt) => {
-    const inp = inputsOf(prompt);
-    const all = planRefsOf(store, inp.task_id);
-    const refs = all.map((e) => {
-      const o = { ...e };
-      delete o.content;
-      return o;
-    });
-    const r = { status: "ok", reason: "read", refs };
-    if (inp.mode === "chunks") {
-      const e = all.find((x) => x.name === inp.plan_ref);
-      if (e && typeof e.content === "string") {
-        r.chunks = [];
-        for (let i = 0; i < e.content.length; i += 1000) r.chunks.push(e.content.slice(i, i + 1000));
-      }
-    }
-    return r;
-  };
-}
-
-// commit-step stub: hooks pass; the commit holds exactly the judged tree.
-function commitStepStub(m, live) {
-  return (prompt) => {
-    const code = inputsOf(prompt).code_tree;
-    if (live) Object.assign(live, { head: CSHA(m), tree: code });
-    return {
-      status: "ok",
-      reason: "committed",
-      commit_result: "committed",
-      staged_tree: code,
-      worktree_tree: code,
-      head: CSHA(m),
-      head_tree: code,
-    };
-  };
-}
-
-// The ledger call intake reports for a brief: read_task for each yaadgaar source.
-function triedFor(brief) {
-  return (brief.sources || []).filter((x) => x.kind === "yaadgaar").map((x) => ({ ledger: "yaadgaar", project: null, call: "read_task(number=" + x.ref + ")", error: null }));
-}
-
-function happy(over = {}) {
-  const crit = over.criteria || criteria(2);
-  const store = {};
-  // the last commit the commit step made: the review's worktree state
-  const live = {};
-  const reviewState = () => ({ status: "ok", fingerprint: { head: live.head, tree: live.tree } });
-  const s = {
-    __store: store,
-    preflight: {
-      reachable: true,
-      missing: [],
-      versions: { ...FROZEN_VERSIONS },
-      contract: Object.fromEntries(ROLE_NAMES.map((k) => [k, "CONTRACT: fleet-v3"])),
-      dispatch: Object.fromEntries(ROLE_NAMES.map((k) => [k, "DISPATCH: model=sonnet"])),
-    },
-    intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF, tried: over.tried || triedFor(over.brief || BRIEF) },
-    "infra:branch-scan": { status: "ok", reason: "scanned", commits: [], refs: [] },
-    "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
-    "infra:commit-plan": commitStub(store, PC, PSHA),
-    "infra:load-ref": loadStub(store),
-    "infra:read-state": { status: "ok", reason: "no run-state", exists: false },
-    "infra:verify-plan": {
-      status: "ok",
-      reason: "verified",
-      head: PC,
-      plan_sha256: PSHA,
-      plan_sha256_head: PSHA,
-      is_ancestor: true,
-      commits_since: [],
-      plan_touched: [],
-      changed_since: [],
-    },
-    "infra:push": (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha }),
-    "infra:ledger-writeback": (prompt) => ({
-      status: "ok",
-      reason: "ok",
-      results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "written" })),
-    }),
-    workspace: {
-      status: "ok",
-      reason: "created",
-      default_branch: "master",
-      base_ref: "B0",
-      remote_slug: "o/r",
-      remote_url: "git@github.com:o/r.git",
-    },
-    "role:scope-and-plan": {
-      status: "ok",
-      reason: "planned",
-      artefacts: ["docs/plans/x.md"],
-      plan_path: "docs/plans/x.md",
-      criteria: crit,
-      est_diff_lines: 80,
-      new_behaviour: true,
-      tldr: "adds a thing",
-      plan_diff: ["new plan"],
-      fleet_estimate: { criteria: crit.length, agents: 20, rounds: 1 },
-      yadgar_findings: ["planner fact"],
-    },
-    "role:plan-audit": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
-    "hasher:pre-writers:r1": { status: "ok", fingerprint: FP_PRE },
-    "hasher:post-writers:r1": (prompt) => ({
-      status: "ok",
-      fingerprint: FP_TESTS,
-      changed: crit.flatMap((c) => c.test_files),
-    }),
-    "role:fleet-test-judge:r1": {
-      status: "ok",
-      reason: "good",
-      verdict: "approve",
-      routed_findings: [],
-      checked: [],
-      yadgar_findings: ["judge fact"],
-    },
-    "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: FP_TESTS },
-    "hasher:freeze:f1": { status: "ok", fingerprint: FP_TESTS, hashes: HASHES },
-    "role:fleet-coder:r1": {
-      status: "ok",
-      reason: "done",
-      changed_paths: ["src/x.py"],
-      frozen_tests_red_at_start: true,
-      suite_result: { command: "pytest", exit_code: 0 },
-    },
-    "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES },
-    "role:fleet-code-judge:r1": {
-      status: "ok",
-      reason: "good",
-      verdict: "approve",
-      routed_findings: [],
-      hash_check: { match: true, mismatched: [] },
-      suite_result: { command: "pytest", exit_code: 0 },
-    },
-    "hasher:fp-post:code-judge:r1": { status: "ok", fingerprint: FP_K1 },
-    "infra:commit:r1": commitStepStub(1, live),
-    "infra:commit:r2": commitStepStub(2, live),
-    "infra:commit:r3": commitStepStub(3, live),
-    "infra:review-paths:v1": { status: "ok", reason: "listed", changed_paths: ["src/x.py", "tests/test_a.py"] },
-    "hasher:pre-review:v1": reviewState,
-    "role:pr-review:v1": { status: "ok", reason: "clean", verdict: "approve", findings: [], touches_gate: false, checked: ["diff"] },
-    "hasher:fp-post:pr-review:v1": reviewState,
-    "infra:review-cleanup:v1": { status: "ok", reason: "clean" },
-    "role:fleet-pr-opener": {
-      status: "ok",
-      reason: "opened",
-      pr_url: "https://github.com/o/r/pull/7",
-      pr_number: 7,
-      created: true,
-      template_used: ".github/pull_request_template.md",
-      gates_not_run_stated: true,
-      yadgar_findings: ["pr fact"],
-    },
-  };
-  for (const c of crit) {
-    s["role:fleet-test-writer:" + c.id + ":r1"] = {
-      status: "ok",
-      reason: "red",
-      criterion_id: c.id,
-      tests: [],
-      files: c.test_files.slice(),
-    };
-  }
-  return Object.assign(s, over.script || {});
-}
 
 // ---------------------------------------------------------------- args
 
@@ -1203,45 +640,6 @@ test("hasher prompt carries the extraction rules and the config list", async () 
   assert.ok(!("mode" in h));
 });
 
-// The hasher's Python program is embedded in the workflow between markers.
-// Run it for real against a scratch git repo.
-function hasherPy() {
-  const m = /HASHER_PY_BEGIN\n([\s\S]*?)\n\/\/ HASHER_PY_END/.exec(SOURCE);
-  assert.ok(m, "HASHER_PY markers present");
-  // the block is a String.raw template literal: strip the JS wrapper lines
-  const body = m[1].replace(/^const HASHER_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
-  return body;
-}
-
-function sh(cwd, ...cmd) {
-  const r = spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: "utf8" });
-  if (r.status !== 0) throw new Error(cmd.join(" ") + ": " + r.stderr);
-  return r.stdout;
-}
-
-// mode is kept for the older call sites; the program always hashes.
-function runHasherRaw(wt, mode, files, baseTree) {
-  const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify(files)].concat(baseTree ? [baseTree] : []), {
-    input: hasherPy(),
-    encoding: "utf8",
-  });
-  if (r.status !== 0) throw new Error("hasher failed: " + r.stderr);
-  return JSON.parse(r.stdout);
-}
-
-// Flatten the four maps to prefixed keys for the older assertions.
-function runHasher(wt, mode, files) {
-  const out = runHasherRaw(wt, mode, files);
-  if (!out.hashes) return out;
-  const h = out.hashes;
-  const flat = Object.assign({}, h.files, h.sections);
-  for (const [k, v] of Object.entries(h.git)) flat["git:" + k] = v;
-  for (const [k, v] of Object.entries(h.symlinks)) flat["symlink:" + k] = v;
-  return { fingerprint: out.fingerprint, hashes: flat, suspicious: h.suspicious };
-}
-
-const py = spawnSync("python3", ["-c", "import tomllib"]);
-const HAVE_PY = py.status === 0;
 
 test("hasher program: sections, config files, fingerprint", { skip: !HAVE_PY }, () => {
   const wt = mkdtempSync(join(tmpdir(), "fleet-hasher-"));
@@ -1746,14 +1144,6 @@ test("a dead role with no fallback tier fails without a retry", async () => {
 
 // ---------------------------------------------------------------- synthetic key collisions
 
-function scratchRepo(prefix) {
-  const wt = mkdtempSync(join(tmpdir(), prefix));
-  sh(wt, "git", "init", "-q");
-  sh(wt, "git", "config", "user.email", "t@example.com");
-  sh(wt, "git", "config", "user.name", "t");
-  sh(wt, "git", "config", "commit.gpgsign", "false");
-  return wt;
-}
 
 test("hasher program: a file named like a synthetic key cannot mask one", { skip: !HAVE_PY }, () => {
   const wt = scratchRepo("fleet-hasher-collide-");
@@ -2512,30 +1902,6 @@ test("a commit-plan step that returns no sha fails before a plan_ref exists", as
 
 // ---------------------------------------------------------------- v2: plan_ref seal
 
-function canon(v) {
-  if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
-  if (v && typeof v === "object")
-    return (
-      "{" +
-      Object.keys(v)
-        .sort()
-        .filter((k) => v[k] !== undefined)
-        .map((k) => JSON.stringify(k) + ":" + canon(v[k]))
-        .join(",") +
-      "}"
-    );
-  return JSON.stringify(v === undefined ? null : v);
-}
-
-async function planRefFor(s) {
-  const out = await runOne(s, ARGS);
-  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  return out.result.plan_ref;
-}
-
-function buildArgs(ref, over) {
-  return Object.assign({ mode: "build", plan_ref: ref, date: "2026-11-04", repo: "/r", project: "o/r" }, over || {});
-}
 
 test("plan ref seal is the sha256 of its canonical JSON (utf-8, non-ASCII included)", async () => {
   const s = happy({ brief: { ...BRIEF, title: "Add Thing — ünïcode 🚀", description: "em — dash" } });
@@ -2965,27 +2331,6 @@ test("2.1.4 a coder round that creates a .fleet/ path stops at the scope fence",
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-// A hermetic git env for real-repo tests: own HOME and global config.
-function gitEnv(dir, globalCfg) {
-  const env = Object.assign({}, process.env, { HOME: dir, XDG_CONFIG_HOME: join(dir, ".config"), GIT_CONFIG_GLOBAL: globalCfg, GIT_CONFIG_NOSYSTEM: "1" });
-  delete env.GIT_DIR;
-  delete env.GIT_WORK_TREE;
-  delete env.GIT_INDEX_FILE;
-  return env;
-}
-
-function extractFn(begin, end, name) {
-  const m = new RegExp(begin + "\\n([\\s\\S]*?)\\n\\/\\/ " + end).exec(SOURCE);
-  assert.ok(m, begin + " markers");
-  const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
-  return Function("q", "return (" + m[1].trim().replace(new RegExp("^function " + name), "function").replace(/shQuote/g, "q") + ")")(q);
-}
-
-function extractPy(begin, end, constName) {
-  const m = new RegExp(begin + "\\n([\\s\\S]*?)\\n\\/\\/ " + end).exec(SOURCE);
-  assert.ok(m, begin + " markers");
-  return m[1].replace(new RegExp("^const " + constName + " = String\\.raw`\\n?"), "").replace(/`;?\s*$/, "");
-}
 
 test("2.1.4 plan ref object: write and read round-trip in a real repo whose global gitignore holds .fleet/", { skip: !HAVE_PY }, () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-home-"));
@@ -4517,11 +3862,6 @@ test("2.0.4 plan-time script check: realpath, regular file, tracked; a failure i
   }
 });
 
-function scriptCheckPy() {
-  const m = /SCRIPT_CHECK_PY_BEGIN\n([\s\S]*?)\n\/\/ SCRIPT_CHECK_PY_END/.exec(SOURCE);
-  assert.ok(m, "SCRIPT_CHECK_PY markers present");
-  return m[1].replace(/^const SCRIPT_CHECK_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
-}
 
 test("script check program: regular tracked file whose realpath stays under its root", { skip: !HAVE_PY }, () => {
   const wt = mkdtempSync(join(tmpdir(), "fleet-scriptcheck-"));
@@ -5719,11 +5059,6 @@ test("2.1.0 a coder that edits package.json scripts (a launcher hook's table) is
 
 // ---------------------------------------------------------------- 2.1.0 run-state resume
 
-// The state JSON a run-state write step carries (quoted heredoc body).
-function stateJsonOf(prompt) {
-  const m = /<<'FLEET_STATE_JSON'\n([\s\S]*?)\nFLEET_STATE_JSON/.exec(prompt);
-  return m ? JSON.parse(m[1]) : null;
-}
 
 // A build run that records every run-state write into `states` (gate -> JSON).
 function recording(s, states) {
@@ -6377,12 +5712,6 @@ test("2.1.5 a stop before the planner returns parks nothing; an ok plan run park
 // the auto path no longer relay ref content at all (the script hashes the
 // bytes it wrote); a standalone build reads the content in short chunks,
 // checks them against ref_sha256 and asks once more on a mismatch.
-const CHUNK = 1000;
-function chunksOf(c) {
-  const out = [];
-  for (let i = 0; i < c.length; i += CHUNK) out.push(c.slice(i, i + CHUNK));
-  return out;
-}
 
 test("2.1.5 commit-plan relays no ref content: the script hashes the bytes it sealed", async () => {
   const s = happy({ brief: { ...BRIEF, title: "Add Thing — ünï 🚀", description: "nbsp here" } });
@@ -7530,10 +6859,6 @@ test("3.0.0 changed-defs program: the B1 PoC, an indented method, a constant, a 
   }
 });
 
-function defsOut(defs, more) {
-  const o = Object.assign({ defs, excluded: [], unclassified: [], unattributed: [] }, more || {});
-  return { status: "ok", reason: "listed", ...o, digest: sha256(canon(o)) };
-}
 
 test("3.0.0 build caller check: runs read-only after the code judge and before the commit, on the plan commit and the approved tree", async () => {
   const out = await run(happy(), ARGS);
