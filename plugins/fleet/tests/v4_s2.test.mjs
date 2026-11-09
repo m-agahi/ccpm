@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { SOURCE, ARGS, happy, run, runOne, call, inputsOf, planRefFor, buildArgs, sha256, canon } from "./harness.mjs";
+import { SOURCE, ARGS, happy, run, runOne, call, inputsOf, planRefFor, buildArgs, sha256, canon, FROZEN_VERSIONS, CONTRACT_LINE } from "./harness.mjs";
 
 // REQUIRED_ON_OK as written in the script source
 function requiredOf() {
@@ -398,4 +398,43 @@ test("1982: the intake source schema and the README agree on {kind, ref, url, bo
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
   assert.match(readme, /sources: \[\{kind, ref, url, body, id,\s+project\}\]/);
   assert.match(readme, /`kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,\s+`plan` and `text`/);
+});
+
+// ---------------------------------------------------------------- contract fleet-v4 (D1, plan §2 rev 3)
+
+const V4_VERSIONS = {
+  "scope-and-plan": 29,
+  "plan-audit": 17,
+  "fleet-test-writer": 11,
+  "fleet-test-judge": 11,
+  "fleet-coder": 18,
+  "fleet-code-judge": 16,
+  "fleet-pr-opener": 11,
+  "fleet-intent-judge": 3,
+  "pr-review": 19,
+  "gate-change-nonweakening-sweep": 6,
+};
+
+test("4.0.0 D1: CONTRACT is fleet-v4 and EXPECTED_VERSIONS are the rev-3 pins", () => {
+  assert.match(SOURCE, /^const CONTRACT = "fleet-v4";$/m);
+  const m = /const EXPECTED_VERSIONS = (\{[\s\S]*?\n\});/.exec(SOURCE);
+  assert.ok(m);
+  assert.deepEqual(Function("return " + m[1])(), V4_VERSIONS);
+  assert.deepEqual(FROZEN_VERSIONS, V4_VERSIONS, "the harness mirrors the pins");
+  assert.equal(CONTRACT_LINE, "CONTRACT: fleet-v4");
+});
+
+test("4.0.0 D1: a fleet-v3 page halts preflight with the reload hint; a page below its pin halts", async () => {
+  const s = happy();
+  s.preflight.contract["plan-audit"] = "CONTRACT: fleet-v3";
+  let out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "contract");
+  assert.match(out.result.reason, /role plan-audit contract fleet-v3 != fleet-v4.*reload-plugins/);
+  const t = happy();
+  t.preflight.versions["scope-and-plan"] = 28;
+  out = await runOne(t, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /scope-and-plan/);
+  assert.ok(!out.labels.includes("role:scope-and-plan"));
 });

@@ -102,6 +102,26 @@ into the 4.0.0 entry.
   the maps `versions`, `dispatch` and `contract`, each keyed by role. Any other shape is a changed
   ref.
 
+### S2: contract marker fleet-v4 and the deploy order (D1)
+
+- `CONTRACT` is `fleet-v4`. All ten role pages bump once. The minimum versions are scope-and-plan
+  29, plan-audit 17, fleet-test-writer 11, fleet-test-judge 11, fleet-coder 18, fleet-code-judge 16,
+  fleet-pr-opener 11, fleet-intent-judge 3, pr-review 19 and gate-change-nonweakening-sweep 6.
+- Why a marker bump and not additive keys: 3.1.3 keeps unknown criterion keys and its role schemas
+  allow extra properties. A 3.1.3 role would run a v29 planner's `criteria[].test_args` unvalidated.
+- A page below its pin stops preflight with "see CHANGELOG 4.0.0 deploy order".
+- Tests use `CONTRACT_LINE` from `tests/harness.mjs`, never a literal marker.
+
+#### Deploy order
+
+1. Write the ten role pages (project m-agahi/yadgar) in place, one write each, with
+   `CONTRACT: fleet-v4`. From then until step 2, a 3.1.3 install stops every run in preflight with
+   `role <r> contract fleet-v4 != fleet-v3` and the reload hint. No 3.1.3 role runs against a v4
+   page.
+2. Release fleet 4.0.0. A 4.0.0 install with v3 pages stops the same way.
+3. Plan refs sealed by 3.1.3 stay loadable: the seal does not hold the marker. They have no
+   `project` and no `test_args`, so the 3.1.3 behaviour applies.
+
 ### S2: brief schema in the docs (ledger 1982)
 
 - The README states the brief source shape as `{kind, ref, url, body, id, project}`, with `kind`

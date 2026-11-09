@@ -48,24 +48,25 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // Minimum role-page versions this script was built against. Names and enums
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
+// 4.0.0 (D1): every page bumps once with the fleet-v4 marker.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 27,
-  "plan-audit": 16,
-  "fleet-test-writer": 10,
-  "fleet-test-judge": 10,
-  "fleet-coder": 17,
-  "fleet-code-judge": 15,
-  "fleet-pr-opener": 10,
-  "fleet-intent-judge": 2,
-  "pr-review": 18,
-  "gate-change-nonweakening-sweep": 5,
+  "scope-and-plan": 29,
+  "plan-audit": 17,
+  "fleet-test-writer": 11,
+  "fleet-test-judge": 11,
+  "fleet-coder": 18,
+  "fleet-code-judge": 16,
+  "fleet-pr-opener": 11,
+  "fleet-intent-judge": 3,
+  "pr-review": 19,
+  "gate-change-nonweakening-sweep": 6,
 };
 // 4.0.0 (1993): the plugin version this script ships with; the shipped
 // programs are read from its plugin cache directory only.
 const FLEET_VERSION = "4.0.0";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
-const CONTRACT = "fleet-v3";
+const CONTRACT = "fleet-v4";
 const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
 // A session keeps the plugin version it started with; a mismatch after an
 // update usually means this script is the stale one.
@@ -6121,7 +6122,7 @@ async function preflightStep(repo) {
     if (got < want)
       halt(
         "needs_human",
-        "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): the agent_prompt_get(" + role + ", project " + ROLE_PROJECT + ") wiki version " + got + " must be >= " + want + "; update that page in place; see CHANGELOG 3.1.0 deploy order",
+        "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): the agent_prompt_get(" + role + ", project " + ROLE_PROJECT + ") wiki version " + got + " must be >= " + want + "; update that page in place; see CHANGELOG 4.0.0 deploy order",
         "contract",
       );
     if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");

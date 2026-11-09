@@ -912,7 +912,8 @@ The script pins the role contract, not the prose:
 - `EXPECTED_VERSIONS` holds the minimum role-page versions. Preflight reads each page's version. A
   lower version (stale or rolled back) stops the run; a higher one is logged as "prose-only changes
   assumed" and returned as `role_versions`.
-- Every role page carries `CONTRACT: fleet-v3` under its DISPATCH line. Preflight and every role
+- Every role page carries `CONTRACT: fleet-v4` (since 4.0.0; `fleet-v3` before) under its
+  DISPATCH line. Preflight and every role
   runner report the marker; any other value stops the run. `agent_prompt_save` strips a page's
   final newline, so the parsing never needs one: the last line counts like any other.
 - 2.1.1 pins: scope-and-plan 24, plan-audit 13, fleet-test-writer 9, fleet-test-judge 9,
@@ -922,7 +923,11 @@ The script pins the role contract, not the prose:
   fleet-coder to 17 (the build-time caller check and the optional finding `symbol`; additive, so
   the marker stays `fleet-v3`). 3.1.0 pins the prose-only pages at their live versions
   (fleet-test-writer 10, fleet-test-judge 10, pr-review 18, gate-change-nonweakening-sweep 5) and
-  raises fleet-code-judge to 15 (`check_exit`, additive).
+  raises fleet-code-judge to 15 (`check_exit`, additive). 4.0.0 bumps the marker to `fleet-v4`
+  on all ten pages, because a 3.1.3 role would run a new planner key (`criteria[].test_args`)
+  unvalidated: scope-and-plan 29, plan-audit 17, fleet-test-writer 11, fleet-test-judge 11,
+  fleet-coder 18, fleet-code-judge 16, fleet-pr-opener 11, fleet-intent-judge 3, pr-review 19,
+  gate-change-nonweakening-sweep 6.
 - Each role runner reports the version and marker it loaded. A value that differs from preflight
   (the page changed mid-run) discards the result.
 - `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are
@@ -930,8 +935,14 @@ The script pins the role contract, not the prose:
   coder `changed_paths, suite_result, added_symbols, frozen_tests_red_at_start, obligations_done`
   (no `commit`/`commits` key any more); the intent judge `verdict, deviations, coverage`;
   pr-review `verdict, findings, touches_gate, checked`; the sweep `verdict, units, findings`;
-  since 2.1.6 the planner also `changed_symbols`. A missing key or an unknown verdict is contract drift and stops
-  the run.
+  since 2.1.6 the planner also `changed_symbols`. fleet-v4 adds the planner's `change_kind` and the
+  intent judge's `classification`. Since 4.0.0 (ledger 1984) every such key is also in the role
+  schema's `required`, widened with null, so a `needs_human` or `failed` result sets what it lacks
+  to null. On `ok` the script checks each value against the frozen type: null only where that type
+  allows it. A missing key, a wrong type or value, or an unknown verdict is contract drift. The
+  role is sent back once with the drift quoted, after a fresh PATH re-check; a second drift stops
+  the run. A version or marker mismatch never retries. The coder is never re-run: its drift is the
+  `fix_code` finding of the next code round.
 - Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint

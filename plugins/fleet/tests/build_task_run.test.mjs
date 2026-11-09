@@ -30,6 +30,7 @@ import {
   SafeMath,
   inputsOf,
   FROZEN_VERSIONS,
+  CONTRACT_LINE,
   ROLE_NAMES,
   REQUIRED_DEFAULTS,
   NONCE,
@@ -1357,22 +1358,23 @@ test("S-2: roles get only criterion test files in frozen_tests; config files go 
 
 test("S-8: a role version lower than the frozen minimum stops in preflight", async () => {
   const s = happy();
-  s.preflight.versions["fleet-coder"] = 16;
+  s.preflight.versions["fleet-coder"] = FROZEN_VERSIONS["fleet-coder"] - 1;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder version 16 < frozen 17/);
+  assert.match(out.result.reason, new RegExp("role fleet-coder version " + (FROZEN_VERSIONS["fleet-coder"] - 1) + " < frozen " + FROZEN_VERSIONS["fleet-coder"]));
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
 test("S-8: a higher role version is logged as prose-only and recorded", async () => {
   const s = happy();
-  s.preflight.versions["fleet-code-judge"] = 16;
+  const cj = FROZEN_VERSIONS["fleet-code-judge"];
+  s.preflight.versions["fleet-code-judge"] = cj + 1;
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v16 > frozen v15: prose-only changes assumed/.test(l)));
-  assert.equal(out.result.role_versions["fleet-code-judge"], 16);
-  assert.equal(out.result.role_versions["fleet-coder"], 17);
+  assert.ok(out.result.gate_log.some((l) => l.includes("role fleet-code-judge v" + (cj + 1) + " > frozen v" + cj + ": prose-only changes assumed")));
+  assert.equal(out.result.role_versions["fleet-code-judge"], cj + 1);
+  assert.equal(out.result.role_versions["fleet-coder"], FROZEN_VERSIONS["fleet-coder"]);
 });
 
 test("S-8: a role runner that loaded a different version than preflight is discarded", async () => {
@@ -1451,19 +1453,19 @@ test("manual criteria: no writer, no frozen entry, still listed for the PR opene
 
 // ---------------------------------------------------------------- contract marker + output asserts
 
-test("contract marker: missing or fleet-v1 in preflight halts; fleet-v3 passes", async () => {
+test("contract marker: missing or fleet-v1 in preflight halts; fleet-v4 passes", async () => {
   const missing = happy();
   missing.preflight.contract["fleet-coder"] = null;
   let out = await run(missing, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder contract null != fleet-v3/);
+  assert.match(out.result.reason, /role fleet-coder contract null != fleet-v4/);
   assert.deepEqual(out.labels, ["preflight"]);
 
   const v1 = happy();
   v1.preflight.contract["plan-audit"] = "CONTRACT: fleet-v1";
   out = await run(v1, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role plan-audit contract fleet-v1 != fleet-v3/);
+  assert.match(out.result.reason, /role plan-audit contract fleet-v1 != fleet-v4/);
   assert.deepEqual(out.labels, ["preflight"]);
 
   out = await run(happy(), ARGS);
@@ -1477,7 +1479,7 @@ test("contract marker: a v1 marker in build-mode preflight halts before any buil
   s.preflight.contract["fleet-coder"] = "CONTRACT: fleet-v1";
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /contract fleet-v1 != fleet-v3/);
+  assert.match(out.result.reason, /contract fleet-v1 != fleet-v4/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -1487,13 +1489,13 @@ test("contract marker: a role runner that loaded another contract is discarded",
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-test-judge/);
-  assert.match(out.result.reason, /contract fleet-v1 != fleet-v3/);
+  assert.match(out.result.reason, /contract fleet-v1 != fleet-v4/);
   assert.ok(!out.labels.includes("hasher:freeze:f1"));
 });
 
 test("contract drift: planner ok output missing a required key stops", async () => {
   const s = happy();
-  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: "CONTRACT: fleet-v3" });
+  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: CONTRACT_LINE });
   delete p.allowed_additions;
   delete p.held_out_examples;
   s["role:scope-and-plan"] = p;
@@ -1507,7 +1509,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
   s["role:fleet-code-judge:r1"] = {
     __raw: true,
     role_version: FROZEN_VERSIONS["fleet-code-judge"],
-    role_contract: "CONTRACT: fleet-v3",
+    role_contract: CONTRACT_LINE,
     status: "ok",
     reason: "approved with gates not run: coverage",
     verdict: "approve",
@@ -1523,7 +1525,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
 
 test("contract drift: pr-opener ok output missing a required key stops", async () => {
   const s = happy();
-  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: FROZEN_VERSIONS["fleet-pr-opener"], role_contract: "CONTRACT: fleet-v3" });
+  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: FROZEN_VERSIONS["fleet-pr-opener"], role_contract: CONTRACT_LINE });
   delete pr.template_used;
   s["role:fleet-pr-opener"] = pr;
   const out = await run(s, ARGS);
@@ -1542,7 +1544,7 @@ test("contract drift: null/empty values are fine where allowed", async () => {
 
 test("contract drift: a needs_human output may lack the role fields", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"] = { __raw: true, role_version: FROZEN_VERSIONS["fleet-coder"], role_contract: "CONTRACT: fleet-v3", status: "needs_human", reason: "test AC1 wrong" };
+  s["role:fleet-coder:r1"] = { __raw: true, role_version: FROZEN_VERSIONS["fleet-coder"], role_contract: CONTRACT_LINE, status: "needs_human", reason: "test AC1 wrong" };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /test AC1 wrong/);
@@ -1902,7 +1904,7 @@ test("REQUIRED_ON_OK: a planner ok output without tldr or plan_diff stops", asyn
     const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], {
       __raw: true,
       role_version: FROZEN_VERSIONS["scope-and-plan"],
-      role_contract: "CONTRACT: fleet-v3",
+      role_contract: CONTRACT_LINE,
     });
     delete p[k];
     s["role:scope-and-plan"] = p;
@@ -3052,7 +3054,7 @@ test("contract drift: a coder ok output missing added_symbols is still rejected"
   const c = Object.assign({}, REQUIRED_DEFAULTS["fleet-coder"], s["role:fleet-coder:r1"], {
     __raw: true,
     role_version: FROZEN_VERSIONS["fleet-coder"],
-    role_contract: "CONTRACT: fleet-v3",
+    role_contract: CONTRACT_LINE,
     status: "ok",
     reason: "done",
   });
@@ -3223,8 +3225,8 @@ test("a stale-bytecode suspicious entry after the coder rejects the round", asyn
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-test("role versions: scope-and-plan 27, plan-audit 16, coder 17 and code-judge 15 are the minimums (3.1.0)", async () => {
-  for (const [role, v] of [["scope-and-plan", 26], ["plan-audit", 15], ["fleet-coder", 16], ["fleet-code-judge", 14], ["fleet-test-writer", 9], ["fleet-test-judge", 9], ["pr-review", 17], ["gate-change-nonweakening-sweep", 4]]) {
+test("role versions: every page one below its pin stops (4.0.0 pins)", async () => {
+  for (const [role, v] of Object.entries(FROZEN_VERSIONS).map(([r, n]) => [r, n - 1])) {
     const s = happy();
     s.preflight.versions[role] = v;
     const out = await runOne(s, ARGS);
@@ -3305,7 +3307,7 @@ test("2.0.3 scope-and-plan: repo_obligations and test_cmd are required on ok", a
     const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], {
       __raw: true,
       role_version: FROZEN_VERSIONS["scope-and-plan"],
-      role_contract: "CONTRACT: fleet-v3",
+      role_contract: CONTRACT_LINE,
     });
     delete p[k];
     s["role:scope-and-plan"] = p;
@@ -3687,7 +3689,7 @@ test("2.0.3 coder and code-judge: obligations_done and obligations_check are req
     const r = Object.assign({}, REQUIRED_DEFAULTS[role], s[label], {
       __raw: true,
       role_version: FROZEN_VERSIONS[role],
-      role_contract: "CONTRACT: fleet-v3",
+      role_contract: CONTRACT_LINE,
     });
     delete r[key];
     s[label] = r;
@@ -3712,7 +3714,7 @@ test("2.0.3 B3: a coder output missing a key AND a hash violation reports the ha
   const c = Object.assign({}, REQUIRED_DEFAULTS["fleet-coder"], s["role:fleet-coder:r1"], {
     __raw: true,
     role_version: FROZEN_VERSIONS["fleet-coder"],
-    role_contract: "CONTRACT: fleet-v3",
+    role_contract: CONTRACT_LINE,
   });
   delete c.added_symbols;
   s["role:fleet-coder:r1"] = c;
@@ -4258,7 +4260,7 @@ function REQUIRED_OF(src) {
 }
 
 test("2.1.0 REQUIRED_ON_OK: writer files and coder changed_paths are required arrays; commit keys are gone", async () => {
-  let out = await run(happy({ script: { "role:fleet-test-writer:AC1:r1": { __raw: true, status: "ok", reason: "x", role_version: FROZEN_VERSIONS["fleet-test-writer"], role_contract: "CONTRACT: fleet-v3", criterion_id: "AC1", tests: [] } } }), ARGS);
+  let out = await run(happy({ script: { "role:fleet-test-writer:AC1:r1": { __raw: true, status: "ok", reason: "x", role_version: FROZEN_VERSIONS["fleet-test-writer"], role_contract: CONTRACT_LINE, criterion_id: "AC1", tests: [] } } }), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-test-writer contract drift: missing files/);
   assert.match(await coderDriftFinding(happy({ script: { "role:fleet-coder:r1": { status: "ok", changed_paths: "src/x.py" } } })), /fleet-coder changed_paths type/);
@@ -4605,7 +4607,7 @@ test("2.1.0 review skipped when no PR exists: listed in gates_not_run", async ()
 
 // ---------------------------------------------------------------- 2.1.0 contract
 
-test("2.1.0 contract fleet-v3: preflight loads ten roles; fleet-v2 pages halt", async () => {
+test("2.1.0 contract (fleet-v4 since 4.0.0): preflight loads ten roles; fleet-v2 pages halt", async () => {
   let out = await run(happy(), ARGS);
   const pf = inputsOf(call(out, "preflight").prompt);
   assert.deepEqual(pf.roles.slice().sort(), ROLE_NAMES.slice().sort());
@@ -4613,7 +4615,7 @@ test("2.1.0 contract fleet-v3: preflight loads ten roles; fleet-v2 pages halt", 
   s.preflight.contract["pr-review"] = "CONTRACT: fleet-v2";
   out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /pr-review contract fleet-v2 != fleet-v3/);
+  assert.match(out.result.reason, /pr-review contract fleet-v2 != fleet-v4/);
 });
 
 test("2.1.0 models: a role without a usable DISPATCH line halts (no hardcoded tier); the tier used is logged", async () => {
@@ -5387,7 +5389,7 @@ test("2.1.0 the resume digest ignores the run-state ref itself", async () => {
 test("2.1.1 a live-shaped role page with no trailing newline parses: DISPATCH tier and CONTRACT on the last line", async () => {
   // agent_prompt_save strips the final newline: the CONTRACT line can be the
   // page's last line, and the DISPATCH value carries the rest of the page
-  const page = "DISPATCH: model=opus (fallback=sonnet) — review depth scales with blast radius\nCONTRACT: fleet-v3";
+  const page = "DISPATCH: model=opus (fallback=sonnet) — review depth scales with blast radius\n" + CONTRACT_LINE;
   assert.ok(!page.endsWith("\n"));
   const s = withDispatch(
     happy({
@@ -6019,12 +6021,12 @@ test("2.1.5 yaadgaar: a sealed legacy ledger source on a yadgarhq/ project stops
 // workflow; the contract stop now says how to load the new one.
 test("2.1.5 a contract mismatch tells the user to reload the plugins", async () => {
   const s = happy();
-  s.preflight = { ...s.preflight, contract: { ...s.preflight.contract, "scope-and-plan": "CONTRACT: fleet-v4" } };
+  s.preflight = { ...s.preflight, contract: { ...s.preflight.contract, "scope-and-plan": "CONTRACT: fleet-v3" } };
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /contract fleet-v4 != fleet-v3/);
+  assert.match(out.result.reason, /contract fleet-v3 != fleet-v4/);
   assert.match(out.result.reason, /\/reload-plugins or start a new session/);
-  const r = happy({ script: { "role:scope-and-plan": { status: "ok", role_contract: "CONTRACT: fleet-v4" } } });
+  const r = happy({ script: { "role:scope-and-plan": { status: "ok", role_contract: "CONTRACT: fleet-v3" } } });
   const o2 = await runOne(r, ARGS);
   assert.match(o2.result.reason, /\/reload-plugins or start a new session/);
 });
@@ -6328,7 +6330,7 @@ test("2.1.6 no changed symbols: no grep step, and the audit is told the map is e
 
 test("2.1.6 a planner ok output without changed_symbols is contract drift", async () => {
   const s = happy();
-  const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: "CONTRACT: fleet-v3" });
+  const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: CONTRACT_LINE });
   delete p.changed_symbols;
   s["role:scope-and-plan"] = p;
   const out = await runOne(s, ARGS);
@@ -6719,7 +6721,7 @@ test("2.1.6 review: a role page below its pin names the page, the project and th
   s.preflight.versions["scope-and-plan"] = 25;
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /agent_prompt_get\(scope-and-plan, project m-agahi\/yadgar\) wiki version 25 must be >= 27; update that page in place; see CHANGELOG 3\.1\.0 deploy order/);
+  assert.match(out.result.reason, /agent_prompt_get\(scope-and-plan, project m-agahi\/yadgar\) wiki version 25 must be >= 29; update that page in place; see CHANGELOG 4\.0\.0 deploy order/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -6831,7 +6833,7 @@ test("3.0.0 preflight: a page below its pin names the agent_prompt_get wiki vers
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /agent_prompt_get\(plan-audit, project m-agahi\/yadgar\) wiki version 14/);
-  assert.match(out.result.reason, /see CHANGELOG 3\.1\.0 deploy order/);
+  assert.match(out.result.reason, /see CHANGELOG 4\.0\.0 deploy order/);
   assert.doesNotMatch(out.result.reason, /update agent-prompt-plan-audit \(project/);
 });
 
@@ -8378,31 +8380,31 @@ test("3.0.0 review 8: the nix pre-commit's own interpreter reads the config thro
 
 // ---------------------------------------------------------------- 3.1.0 (ledger 1941a): prose-only pages pinned at their live versions
 
-test("3.1.0 pins: every role page at its live version (fleet-code-judge at the 3.1.0 write)", () => {
+test("4.0.0 pins: every role page at its fleet-v4 version", () => {
   const m = /const EXPECTED_VERSIONS = (\{[\s\S]*?\});/.exec(SOURCE);
   assert.ok(m, "EXPECTED_VERSIONS");
   const got = Function("return " + m[1])();
   assert.deepEqual(got, {
-    "scope-and-plan": 27,
-    "plan-audit": 16,
-    "fleet-test-writer": 10,
-    "fleet-test-judge": 10,
-    "fleet-coder": 17,
-    "fleet-code-judge": 15,
-    "fleet-pr-opener": 10,
-    "fleet-intent-judge": 2,
-    "pr-review": 18,
-    "gate-change-nonweakening-sweep": 5,
+    "scope-and-plan": 29,
+    "plan-audit": 17,
+    "fleet-test-writer": 11,
+    "fleet-test-judge": 11,
+    "fleet-coder": 18,
+    "fleet-code-judge": 16,
+    "fleet-pr-opener": 11,
+    "fleet-intent-judge": 3,
+    "pr-review": 19,
+    "gate-change-nonweakening-sweep": 6,
   });
   assert.deepEqual(got, FROZEN_VERSIONS, "the harness pins follow the script");
 });
 
-test("3.1.0 pins: a page below its pin names the 3.1.0 deploy order", async () => {
+test("4.0.0 pins: a page below its pin names the 4.0.0 deploy order", async () => {
   const s = happy();
-  s.preflight.versions["fleet-code-judge"] = 14;
+  s.preflight.versions["fleet-code-judge"] = 15;
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /agent_prompt_get\(fleet-code-judge, project m-agahi\/yadgar\) wiki version 14 must be >= 15; update that page in place; see CHANGELOG 3\.1\.0 deploy order/);
+  assert.match(out.result.reason, /agent_prompt_get\(fleet-code-judge, project m-agahi\/yadgar\) wiki version 15 must be >= 16; update that page in place; see CHANGELOG 4\.0\.0 deploy order/);
 });
 
 // ---------------------------------------------------------------- 3.1.0 (ledger 1959): verify-plan and commit-plan relay program output, not raw git

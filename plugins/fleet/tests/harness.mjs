@@ -64,20 +64,23 @@ export function inputsOf(prompt) {
 
 // The minimum role versions the workflow was built against.
 export const FROZEN_VERSIONS = {
-  "scope-and-plan": 27,
-  "plan-audit": 16,
-  "fleet-test-writer": 10,
-  "fleet-test-judge": 10,
-  "fleet-coder": 17,
-  "fleet-code-judge": 15,
-  "fleet-pr-opener": 10,
-  "fleet-intent-judge": 2,
-  "pr-review": 18,
-  "gate-change-nonweakening-sweep": 5,
+  "scope-and-plan": 29,
+  "plan-audit": 17,
+  "fleet-test-writer": 11,
+  "fleet-test-judge": 11,
+  "fleet-coder": 18,
+  "fleet-code-judge": 16,
+  "fleet-pr-opener": 11,
+  "fleet-intent-judge": 3,
+  "pr-review": 19,
+  "gate-change-nonweakening-sweep": 6,
 };
+// The contract marker line every role page and role result carries. Streams
+// use this, never a literal, so a marker bump is one edit.
+export const CONTRACT_LINE = "CONTRACT: fleet-v4";
 export const ROLE_NAMES = Object.keys(FROZEN_VERSIONS);
 
-// Keys each role must return on status ok (the frozen fleet-v3 contract).
+// Keys each role must return on status ok (the frozen fleet-v4 contract).
 // The harness fills missing ones with neutral defaults for terse override
 // stubs; a stub with __raw: true is returned as written (drift tests).
 export const REQUIRED_DEFAULTS = {
@@ -326,7 +329,7 @@ export async function runOne(script, args0) {
         const pv = script.preflight && script.preflight.versions ? script.preflight.versions[role] : undefined;
         r.role_version = pv !== undefined ? pv : FROZEN_VERSIONS[role];
       }
-      if (!("role_contract" in r)) r.role_contract = "CONTRACT: fleet-v3";
+      if (!("role_contract" in r)) r.role_contract = CONTRACT_LINE;
       if (r.status === "ok")
         for (const [k, v] of Object.entries(REQUIRED_DEFAULTS[role] || {})) if (!(k in r)) r[k] = v;
     }
@@ -750,7 +753,7 @@ export function happy(over = {}) {
       reachable: true,
       missing: [],
       versions: { ...FROZEN_VERSIONS },
-      contract: Object.fromEntries(ROLE_NAMES.map((k) => [k, "CONTRACT: fleet-v3"])),
+      contract: Object.fromEntries(ROLE_NAMES.map((k) => [k, CONTRACT_LINE])),
       dispatch: Object.fromEntries(ROLE_NAMES.map((k) => [k, "DISPATCH: model=sonnet"])),
     },
     intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF, tried: over.tried || triedFor(over.brief || BRIEF) },
