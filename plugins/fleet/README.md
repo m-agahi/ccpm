@@ -215,7 +215,8 @@ answer is the truth. `args.project` is the ledger scope and is independent of `r
 `yadgarhq/` project reads `mcp__yaadgaar__read_task(number)`, another project reads yadgar
 `task_get(project_id=<project>)`, and no project tries both (`ledger: "either"`). The repo's
 `.yadgar` files and origin never decide the ledger. A yaadgaar source carries the `id` (URN) of the
-answer; one without it stops (`needs_human`). Intake lists every ledger call it made in `tried`. On
+answer; one without it stops (`needs_human`), and so does an answer that names a project other than
+`args.project`. Intake lists every ledger call it made in `tried`. On
 a task-id input that stops, the script appends the ledgers tried, their projects and the tool's
 error text to the reason. It drops an intake reason that advises changing the repo's project id. A Jira ticket that
 names no repo, or several, stops with `needs_human`. The task id comes from the first ledger, Jira,
@@ -479,10 +480,10 @@ is the plan commit, for example after a re-plan.
   (`infra:yaadgaar-read`, `fleet:judge`) runs `mcp__yaadgaar__read_task` by the task id (URN)
   intake sealed with the source. It returns per task the id, number, version and whether the
   marker is there. It never reads the repo's files or remotes: the yaadgaar client is bound to the
-  session's start project, and the URN names one task. A non-`yadgarhq/` `args.project` writes
-  nothing; a ref sealed before 3.1.3 (no id) writes nothing and says "re-run plan". The script
-  refuses any task whose answer gives another id or number than the sealed one, or a version that
-  is not an integer. `fleet:judge` cannot call `mcp__yaadgaar__edit_task`, `create_task` or
+  session's start project, and the URN names one task. No `args.project`, or a non-`yadgarhq/`
+  one, writes nothing; a ref sealed before 3.1.3 (no id) writes nothing and says "re-run plan".
+  The script refuses any task whose answer gives another id or number than the sealed one, names a
+  project other than `args.project`, or gives a version that is not an integer. `fleet:judge` cannot call `mcp__yaadgaar__edit_task`, `create_task` or
   `transition_task` (`disallowedTools`). Only then `infra:yaadgaar-writeback` (the default
   agent: `fleet:judge` may never write to a ledger) edits each task by id with the version read
   as `expect_version`, after it re-reads the task by id and checks its id and number (fail

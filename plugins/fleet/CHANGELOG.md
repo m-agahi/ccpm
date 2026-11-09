@@ -26,8 +26,14 @@ stays `fleet-v3`.
 
 - `infra:yaadgaar-read` reads each task by the sealed URN. It no longer resolves a project from the
   repo (`read_task` answers carry no project). The script requires the sealed id and number before
-  any edit. A ref sealed before 3.1.3 has no id: write-back edits nothing, hands the section back
-  and says "re-run plan". With no `args.project` the write-back still runs by id.
+  any edit, and a project the answer names (a `project_id` or `project` field) must be
+  `args.project`. No `args.project`, or a non-`yadgarhq/` one, writes nothing. A ref sealed before
+  3.1.3 has no id: write-back edits nothing, hands the section back and says "re-run plan".
+- Intake and the intent re-read stop when a yaadgaar answer names a project other than
+  `args.project`, with both projects in the reason. The named project is checked, never sealed.
+- Limit: a `read_task` answer for a task in the client's own project names no project, and the
+  URN carries none. The fleet cannot observe which project the session's yaadgaar client is bound
+  to; `args.project` must be the session's project (the skill takes it from the session banner).
 
 ## [3.1.2] - 2026-11-09
 
