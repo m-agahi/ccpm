@@ -177,6 +177,12 @@ test("4.0.0 1993 AC-3: a relayed plan_files program sha256 of zeros, or no progr
   }
 });
 
+// 4.0.0 (1990, S3): a PATH check whose relay is broken runs once more on
+// sonnet; a mutation of the check's result applies to that retry too.
+function relayRetried(label) {
+  return /^infra:path-check:/.test(label) ? new RegExp("^" + label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(:relay-retry)?$") : label;
+}
+
 test("4.0.0 1993: a wrong program at every program-running step stops the run (table over the labels)", async () => {
   const full = await run(happy(), ARGS);
   assert.equal(full.result.status, "ok", full.result.reason);
@@ -210,7 +216,7 @@ test("4.0.0 1993: a wrong program at every program-running step stops the run (t
     const orig = s[label];
     // after the harness filled the program: a wrong self-hash under a digest
     // that still matches, so only the program check can stop it
-    s.__mutate = { label, fn: (r, prompt) => {
+    s.__mutate = { label: relayRetried(label), fn: (r, prompt) => {
       const o = at(r, path);
       if (o && typeof o === "object") o.program = { name, sha256: "0".repeat(64) };
       return redigest(label, r, prompt);
@@ -709,7 +715,7 @@ test("4.0.0 security 3: each program step runs sha256sum on the file first; a sh
   // the self-hash is right, the sha256sum line is not: two observations, both required
   for (const [label, slot, name] of [["infra:verify-plan-commit", "plan_files", "plan_files"], ["infra:branch-scan", null, "branch_scan"], ["infra:path-check:commit-plan", null, "path_check"]]) {
     const s = happy();
-    s.__mutate = { label, fn: (r) => ((slot ? r[slot] : r).file_sha256 = "3".repeat(64), r) };
+    s.__mutate = { label: relayRetried(label), fn: (r) => ((slot ? r[slot] : r).file_sha256 = "3".repeat(64), r) };
     const o = await runOne(s, ARGS);
     assert.notEqual(o.result.status, "awaiting_confirmation", label);
     assert.match(o.result.reason, new RegExp("did not run the shipped program " + name + " \\(its file's sha256sum line reads \"3{64}\""), label);

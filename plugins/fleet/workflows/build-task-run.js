@@ -40,7 +40,50 @@ const ROLES = [
 // line, fetched by preflight. No role->model map and no default tier live
 // here: a role with no usable DISPATCH line stops the run in preflight.
 const TIERS = ["fable", "opus", "sonnet", "haiku"];
-const INFRA_MODEL = "sonnet";
+// 4.0.0 (1990): the model of each infra agent, by label prefix; the first
+// matching prefix wins. haiku: read-only steps whose output a program digest
+// checks, and the mechanical workspace setup. sonnet: long bodies or chunks
+// (intake, hasher maps, plan-ref load and commit, the park), the steps that
+// write, push, classify a push or run hooks, and every label the plan did not
+// name. A label with no entry stops the run (no default tier).
+// INFRA_TIER_BEGIN
+const INFRA_TIER = [
+  ["infra:path-check:", "haiku"],
+  ["preflight", "haiku"],
+  ["workspace", "haiku"],
+  ["infra:branch-scan", "haiku"],
+  ["infra:stage-plan", "haiku"],
+  ["infra:verify-plan", "haiku"],
+  ["infra:read-state", "haiku"],
+  ["infra:callers", "haiku"],
+  ["infra:check-scripts", "haiku"],
+  ["infra:precommit-ids", "haiku"],
+  ["infra:review-paths", "haiku"],
+  ["infra:remote-head", "haiku"],
+  ["infra:load-parked", "haiku"],
+  ["intake", "sonnet"],
+  ["hasher:", "sonnet"],
+  ["infra:load-ref", "sonnet"],
+  ["infra:commit-plan", "sonnet"],
+  ["infra:park-plan", "sonnet"],
+  ["infra:format-", "sonnet"],
+  ["infra:commit:", "sonnet"],
+  ["infra:push", "sonnet"],
+  ["infra:tf-gate", "sonnet"],
+  ["infra:hook-surface", "sonnet"],
+  ["infra:changed-defs", "sonnet"],
+  ["infra:replan-", "sonnet"],
+  ["infra:state:", "sonnet"],
+  ["infra:fleet-scan", "sonnet"],
+  ["infra:purge-bytecode", "sonnet"],
+  ["infra:review-cleanup", "sonnet"],
+  ["infra:ledger-", "sonnet"],
+  ["infra:yaadgaar-", "sonnet"],
+  ["infra:comments-", "sonnet"],
+];
+// INFRA_TIER_END
+// A haiku PATH check whose relay is broken runs once more on this tier.
+const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 // "ignored": ignored files outside tool caches (inside venvs only startup hooks,
 // egg-links and dist-info/egg-info entry_points.txt)
@@ -5719,8 +5762,10 @@ const NOT_SHIMMED = "terraform tooling on PATH is not shimmed; install the agent
 // Stops the run unless every IaC tool on the agent PATH is a nix shim.
 // recheck: {label, args} for a re-check (3.1.1); preflight passes none and
 // its program got [repo] only.
-function pathCheck(pc, repo, recheck) {
-  const what = recheck ? "the PATH re-check " + recheck.label + " could not complete: it returned no usable result" : "the PATH check could not complete: preflight returned no usable path_check";
+// 4.0.0 (1990): why a PATH check output is not the program's own output for
+// these args (a relay problem: no program, a wrong shape or args, a digest
+// mismatch); "" when it is. A finding in a sound output is not a relay problem.
+function pathRelayProblem(pc, args) {
   const tools = pc && typeof pc.tools === "object" && pc.tools && !Array.isArray(pc.tools) ? pc.tools : null;
   const keys = tools ? Object.keys(tools).sort() : [];
   const shapeOk =
@@ -5731,9 +5776,18 @@ function pathCheck(pc, repo, recheck) {
       return t === null || (t && typeof t === "object" && !Array.isArray(t) && typeof t.path === "string" && t.path.charAt(0) === "/" && typeof t.shim === "boolean");
     });
   const pp = programProblem(pc, "path_check");
-  if (pp) halt("needs_human", NOT_SHIMMED + " (" + what + ": " + pp + ")", "iac");
-  if (!shapeOk || canonical(pc.args) !== canonical(recheck ? recheck.args : [repo]) || !Array.isArray(pc.path_problems) || !relayDigestOk(pc, ["tools", "args", "path_problems"], "path_check"))
-    halt("needs_human", NOT_SHIMMED + " (" + what + ")", "iac");
+  if (pp) return ": " + pp;
+  if (!shapeOk || canonical(pc.args) !== canonical(args) || !Array.isArray(pc.path_problems) || !relayDigestOk(pc, ["tools", "args", "path_problems"], "path_check"))
+    return "-";
+  return "";
+}
+
+function pathCheck(pc, repo, recheck) {
+  const what = recheck ? "the PATH re-check " + recheck.label + " could not complete: it returned no usable result" : "the PATH check could not complete: preflight returned no usable path_check";
+  const rp = pathRelayProblem(pc, recheck ? recheck.args : [repo]);
+  if (rp) halt("needs_human", NOT_SHIMMED + " (" + what + (rp === "-" ? "" : rp) + ")", "iac");
+  const tools = pc.tools;
+  const keys = Object.keys(tools).sort();
   const at = recheck ? recheck.label + ": " : "";
   if (pc.path_problems.length)
     halt("needs_human", NOT_SHIMMED + " (" + at + "PATH has entries the agent shell resolves differently: " + pc.path_problems.map(String).join("; ") + ")", "iac");
@@ -5784,14 +5838,24 @@ function pathRecheckPrompt(inputs) {
 }
 
 async function pathRecheck(site, phaseName) {
-  state.pathChecks++;
-  const label = "infra:path-check:" + site;
-  const token = "recheck-" + state.pathChecks + ":" + state.nonce + ":" + site;
-  // its own dispatch: re-checks are counted in state.agents but never against
-  // the agent cap (bounded by the sites and rounds), so the cap refuses
-  // exactly the runs it refused in 3.1.0
-  state.agents++;
-  const r = await agent(nonced(pathRecheckPrompt({ repo: state.repo, token })), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, label, model: INFRA_MODEL });
+  const one = async (label, model) => {
+    state.pathChecks++;
+    const token = "recheck-" + state.pathChecks + ":" + state.nonce + ":" + site;
+    // its own dispatch: re-checks are counted in state.agents but never against
+    // the agent cap (bounded by the sites and rounds), so the cap refuses
+    // exactly the runs it refused in 3.1.0
+    state.agents++;
+    const r = await agent(nonced(pathRecheckPrompt({ repo: state.repo, token })), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, label, model });
+    return { r, label, token };
+  };
+  // 4.0.0 (1990): the check runs on haiku; a broken relay (no result, not ok,
+  // or not the program's output for its token) runs once more on sonnet with
+  // a fresh token. A finding in a sound output stops at once, as before.
+  let { r, label, token } = await one("infra:path-check:" + site, infraModel("infra:path-check:" + site));
+  if (r == null || r.status !== "ok" || pathRelayProblem(r, [state.repo, token])) {
+    gate("infra:path-check:" + site + ": no usable result on " + infraModel("infra:path-check:" + site) + "; checking once more on " + RELAY_RETRY_MODEL);
+    ({ r, label, token } = await one("infra:path-check:" + site + ":relay-retry", RELAY_RETRY_MODEL));
+  }
   if (r == null) halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned no result)", "iac");
   if (r.status !== "ok")
     halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned " + r.status + ": " + (r.reason || "no reason") + ")", "iac");
@@ -6184,11 +6248,19 @@ function nonced(prompt) {
   return prompt + (prompt.indexOf(FILE_SHA_MARK) >= 0 ? "\n" + FILE_SHA_RULE : "") + "\nRun nonce: " + state.nonce + " (keys the workflow cache to this invocation; ignore it).";
 }
 
-// Infra agents: always INFRA_MODEL.
+// 4.0.0 (1990): the INFRA_TIER model of an infra label; none stops the run.
+function infraModel(label) {
+  const hit = INFRA_TIER.find((e) => label.indexOf(e[0]) === 0);
+  if (!hit) halt("failed", "no INFRA_TIER entry for agent label " + label);
+  return hit[1];
+}
+
+// Infra agents: the INFRA_TIER model of their label.
 async function dispatch(label, prompt, opts) {
+  const model = infraModel(label);
   reserve(1, label);
   state.agents++;
-  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model: INFRA_MODEL }));
+  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model }));
   if (r == null) halt("failed", "agent " + label + " returned no result");
   return r;
 }
@@ -6196,12 +6268,13 @@ async function dispatch(label, prompt, opts) {
 // Infra agents whose failure must not stop the run (write-back). Returns null
 // when the cap is reached or the agent dies.
 async function softDispatch(label, prompt, opts) {
+  const model = infraModel(label);
   if (capped() + 1 > MAX_AGENTS) {
     gate("agent cap " + MAX_AGENTS + " reached: " + label + " not run");
     return null;
   }
   state.agents++;
-  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model: INFRA_MODEL }));
+  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model }));
   if (r == null) gate(label + " returned no result");
   return r;
 }

@@ -1110,10 +1110,12 @@ test("each role runs on the tier its DISPATCH line names; a bad or missing line 
   }
 });
 
-test("infra agents run on sonnet explicitly", async () => {
+// 4.0.0 (1990): an explicit tier on every infra agent, haiku or sonnet by
+// INFRA_TIER (v4_s3 checks each label's tier)
+test("infra agents run on an explicit tier", async () => {
   const out = await run(withDispatch(happy(), DISPATCH), ARGS);
   for (const c of out.calls)
-    if (!c.label.startsWith("role:")) assert.equal(c.opts.model, "sonnet", c.label);
+    if (!c.label.startsWith("role:")) assert.ok(c.opts.model === "sonnet" || c.opts.model === "haiku", c.label + " " + c.opts.model);
 });
 
 test("preflight asks for each role's DISPATCH line", async () => {
@@ -5535,8 +5537,8 @@ const ARRAY_SITES = {
   "pre.results @ writeBack": "infra:results",
   "o.files @ obligationFailures": "parsed: repo_obligations of the sealed plan facts",
   "r.surface @ hookSurface": "infra:surface",
-  "pc.tools @ pathCheck": "parsed: preflight path_check (digest-checked, keys and shapes checked)",
-  "pc.path_problems @ pathCheck": "parsed: preflight path_check (digest-checked)",
+  "pc.tools @ pathRelayProblem": "parsed: preflight path_check (digest-checked, keys and shapes checked)",
+  "pc.path_problems @ pathRelayProblem": "parsed: preflight path_check (digest-checked)",
   "pf.changed_symbols @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "e.occurrences @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "c.test_files @ planScopePaths": "parsed: normalised criteria",
@@ -10444,6 +10446,8 @@ test("3.1.1 PATH re-check: a failed, tampered, path-problem or other-step result
   for (const [k, f] of cases.entries()) {
     const s = happy();
     s["infra:path-check:" + site] = (p) => (f(p) === null ? null : Object.assign(f(p), { __raw: true }));
+    // 4.0.0 (1990): a broken relay is checked once more on sonnet; it is broken there too
+    s["infra:path-check:" + site + ":relay-retry"] = s["infra:path-check:" + site];
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "needs_human", String(k));
     assert.equal(out.result.stop_gate, "iac", String(k) + " " + out.result.reason);
@@ -10479,11 +10483,15 @@ test("3.1.1 PATH re-check: each check runs the same program with a fresh token; 
   }
   assert.ok(recorded["infra:path-check:coder:r1"], "run 1 checked before the coder");
   const s2 = happy();
-  for (const [label, r] of Object.entries(recorded)) s2[label] = Object.assign({}, r, { __raw: true });
+  for (const [label, r] of Object.entries(recorded)) {
+    s2[label] = Object.assign({}, r, { __raw: true });
+    // 4.0.0 (1990): and at the sonnet relay retry of each check
+    s2[label + ":relay-retry"] = s2[label];
+  }
   const second = await run(s2, Object.assign({}, ARGS, { run_nonce: "n2-0000002" }));
   assert.equal(second.result.status, "needs_human");
   assert.equal(second.result.stop_gate, "iac");
-  assert.match(second.result.reason, /PATH re-check infra:path-check:format-plan could not complete/);
+  assert.match(second.result.reason, /PATH re-check infra:path-check:format-plan:relay-retry could not complete/);
 });
 
 test("3.1.1 PATH re-check program: a token argument is echoed in args and the digest; a planted tool is seen", { skip: !HAVE_PY }, () => {
@@ -10581,10 +10589,12 @@ test("3.1.2 PATH re-check (mutant R6): a not-ok status with a valid digest and s
         const i = inputsOf(p);
         return Object.assign(pathRecheckOut({}, [i.repo, i.token]), { status, reason: "x", __raw: true });
       };
+      // 4.0.0 (1990): the sonnet relay retry says the same
+      s["infra:path-check:" + site + ":relay-retry"] = s["infra:path-check:" + site];
       const out = await run(s, ARGS);
       assert.equal(out.result.status, "needs_human", site + " " + status);
       assert.equal(out.result.stop_gate, "iac", site + " " + status + ": " + out.result.reason);
-      assert.ok(out.result.reason.includes("infra:path-check:" + site + " could not complete: it returned " + status), out.result.reason);
+      assert.ok(out.result.reason.includes("infra:path-check:" + site + ":relay-retry could not complete: it returned " + status), out.result.reason);
     }
   }
 });
@@ -10609,13 +10619,16 @@ function jsPathRecheck(agentStub) {
     constBlock("PATH_TOOLS", "];") +
     constBlock("NOT_SHIMMED", '";') +
     constBlock("PATH_RECHECK_SCHEMA", "\n};") +
-    '\nconst SHA256_RE = /^[0-9a-f]{64}$/;\nconst JUDGE_AGENT = "fleet:judge";\nconst INFRA_MODEL = "sonnet";\n' +
+    '\nconst SHA256_RE = /^[0-9a-f]{64}$/;\nconst JUDGE_AGENT = "fleet:judge";\n' +
+    // 4.0.0 (1990): the PATH check's tier and its relay retry
+    constBlock("INFRA_TIER", "];") +
+    constBlock("RELAY_RETRY_MODEL", '";') +
     'const state = { repo: "/r", nonce: "' + NONCE + '", pathChecks: 0, agents: 0, scriptsDir: "' + SCRIPTS_DIR + '" };\n' +
     // 4.0.0: the one program this runtime runs
     "function programTable() { return { path_check: PATH_CHECK_PY }; }\nconst PROGRAM_SHA = {};\n" +
     "function gate() {}\nfunction halt(status, msg, stopGate) { const e = new Error(msg); e.halt = { status, stopGate }; throw e; }\n" +
     'function nonced(p) { return p + "\\nRun nonce: " + state.nonce; }\n';
-  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "programSha", "programProblem", "progCmd", "shQuote", "pathCheck", "pathRecheckPrompt"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
+  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
   return new Function("agent", consts + fns + "\nreturn pathRecheck;")(agentStub);
 }
 
@@ -10636,16 +10649,19 @@ test("3.1.2 PATH re-check (mutant R7): two re-checks at the same site get differ
   await assert.rejects(recheck("same", "Code"), (e) => {
     assert.equal(e.halt.status, "needs_human");
     assert.equal(e.halt.stopGate, "iac");
-    assert.match(e.message, /infra:path-check:same could not complete/);
+    assert.match(e.message, /infra:path-check:same:relay-retry could not complete/);
     return true;
   });
-  assert.equal(seen.length, 2);
+  // 4.0.0 (1990): the refused replay is checked once more on sonnet (refused again)
+  assert.equal(seen.length, 3);
   assert.equal(seen[0].label, seen[1].label, "the same site");
+  assert.equal(seen[2].label, "infra:path-check:same:relay-retry");
   assert.notEqual(seen[0].token, seen[1].token, "a token per check, not per site");
+  assert.notEqual(seen[1].token, seen[2].token, "the relay retry has a token of its own");
   // a fresh result at a third check at the same site passes
   replay = null;
   await recheck("same", "Code");
-  assert.equal(new Set(seen.map((x) => x.token)).size, 3);
+  assert.equal(new Set(seen.map((x) => x.token)).size, 4);
 });
 
 // ---------------------------------------------------------------- 3.1.1 (ledger 1970a): non-HCL IaC files get their own hint

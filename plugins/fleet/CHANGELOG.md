@@ -223,6 +223,28 @@ its notes to this entry.
   reached after a retry in round 0 or in a round. The test harness repeats the round-0 stub for
   an unscripted round step, also for an unscripted retry inside a round.
 
+### S3: infra model tiers (ledger 1990)
+
+- `INFRA_TIER` maps each infra agent label prefix to a model. The first matching prefix wins. A
+  label with no entry stops the run with `failed`; there is no default tier.
+- haiku: every `infra:path-check:*`, `preflight`, `workspace`, `infra:branch-scan`,
+  `infra:stage-plan`, `infra:verify-plan*`, `infra:read-state`, `infra:callers*`,
+  `infra:check-scripts*`, `infra:precommit-ids*`, `infra:review-paths*`, `infra:remote-head*` and
+  `infra:load-parked`. These are read-only steps that a program digest checks, plus the
+  mechanical workspace setup.
+- sonnet: `intake*`, `hasher:*`, `infra:load-ref*`, `infra:commit-plan*`, `infra:park-plan`
+  (base64 chunks), `infra:format-*`, `infra:commit:*`, `infra:push*` (the push and its classifier),
+  `infra:tf-gate*`, `infra:hook-surface*`, `infra:changed-defs*`, `infra:replan-*`,
+  `infra:state:*`, and the labels the plan did not name: `infra:fleet-scan*`,
+  `infra:purge-bytecode*`, `infra:review-cleanup*`, ledger, yaadgaar and comment steps.
+- Every PATH re-check is still its own agent, right before each step that runs repo code, with a
+  token per check. Only the model changes. A haiku check with no result, a not-ok status, or an
+  output that is not the program's own for its token (program, shape, args or digest) runs once
+  more as `infra:path-check:<site>:relay-retry` on sonnet, with a new token. A second failure
+  stops at `iac` as before. A finding in a sound output (a tool that is not a shim, a PATH
+  problem) stops at once, with no retry.
+- The other haiku steps have no sonnet retry: a relay problem there stops the run as before.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker
