@@ -318,6 +318,82 @@ test("review fix 4: a stop after a fix_tests re-freeze binds the re-freeze into 
   assert.ok(!r.labels.some((l) => /^role:/.test(l)), r.labels.join(", "));
 });
 
+// ---------------------------------------------------------------- fix 7: no test DSN in the committed plan
+
+const DECL = { version: 1, engine: "mariadb", major: "11.4", env: "YADGAR_TEST_DSN" };
+function withDecl(s) {
+  const td = (prompt) => ({ decl: DECL, error: null, args: [inputsOf(prompt).main_worktree, inputsOf(prompt).default_branch] });
+  const bs = s["infra:branch-scan"];
+  const vp = s["infra:verify-plan"];
+  s["infra:branch-scan"] = (prompt) => Object.assign(JSON.parse(JSON.stringify(bs)), { test_db: td(prompt) });
+  s["infra:verify-plan"] = (prompt) => Object.assign(JSON.parse(JSON.stringify(vp)), { test_db: td(prompt) });
+  return s;
+}
+
+test("review fix 7: the planner, plan-audit and pr-review are told never to write a test_env value into the plan, a finding or a PR", async () => {
+  const out = await run(withDecl(happy()), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  for (const [o, l] of [[out.plan, "role:scope-and-plan"], [out.plan, "role:plan-audit"], [out.build, "role:pr-review:v1"]]) {
+    const i = inputsOf(call(o, l).prompt);
+    assert.match(i.test_env.YADGAR_TEST_DSN, /^mysql:\/\//, l + " gets its DSN");
+    assert.match(i.test_env_note, /Never write a test_env value \(a DSN, its user or its password\) into the plan doc, a finding, a commit message or a PR/, l);
+  }
+});
+
+test("review fix 7: a committed plan doc that holds mysql:// stops at verify-plan-commit, with no plan_ref", async () => {
+  const s = withDecl(happy());
+  s.__mutate = {
+    label: "infra:verify-plan-commit",
+    fn: (r, prompt) => {
+      r.plan_files.dsn_paths = [r.plan_files.files[0]];
+      return redigest("infra:verify-plan-commit", r, prompt);
+    },
+  };
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "db");
+  assert.match(out.result.reason, /verify-plan-commit: the committed plan .* holds mysql:\/\//);
+  assert.equal(out.result.plan_ref, undefined);
+  assert.ok(!out.labels.some((l) => /^role:fleet-intent-judge/.test(l)));
+});
+
+test("review fix 7: a verify-plan-commit relay without dsn_paths is a relay problem (fail closed)", async () => {
+  const s = happy();
+  s.__mutate = {
+    label: /^infra:verify-plan-commit/,
+    fn: (r, prompt) => {
+      delete r.plan_files.dsn_paths;
+      return redigest("infra:verify-plan-commit", r, prompt);
+    },
+  };
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "failed", out.result.reason);
+  assert.equal(out.result.stop_gate, "commit");
+  assert.match(out.result.reason, /dsn_paths/);
+});
+
+test("review fix 7 (real git): plan_files.py lists the HEAD files that hold mysql://, inside its digest", () => {
+  const wt = scratchRepo("fleet-pf-");
+  writeFileSync(join(wt, "a.txt"), "a\n");
+  sh(wt, "git", "add", "a.txt");
+  sh(wt, "git", "commit", "-q", "-m", "a");
+  const clean = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "plan_files.py"), wt], { encoding: "utf8" });
+  assert.equal(clean.status, 0, clean.stderr);
+  const c = JSON.parse(clean.stdout);
+  assert.deepEqual(c.dsn_paths, []);
+  sh(wt, "mkdir", "-p", "docs/plans");
+  writeFileSync(join(wt, "docs/plans/p.md"), "# plan\nrun with YADGAR_TEST_DSN=mysql://fleet_plan:abc@127.0.0.1:4000/fleet_plan\n");
+  writeFileSync(join(wt, "b.txt"), "b\n");
+  sh(wt, "git", "add", "docs/plans/p.md", "b.txt");
+  sh(wt, "git", "commit", "-q", "-m", "p");
+  const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "plan_files.py"), wt], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  const o = JSON.parse(r.stdout);
+  assert.deepEqual(o.files.slice().sort(), ["b.txt", "docs/plans/p.md"]);
+  assert.deepEqual(o.dsn_paths, ["docs/plans/p.md"]);
+  assert.equal(o.digest, relayDigestOf(o, ["head", "files", "args", "dsn_paths"]));
+});
+
 test("review fix 1: precommit_ids routes every print through one emit with the digest", () => {
   const m = /\/\/ PRECOMMIT_IDS_PY_BEGIN\n([\s\S]*?)\n\/\/ PRECOMMIT_IDS_PY_END/.exec(SOURCE);
   assert.ok(m);

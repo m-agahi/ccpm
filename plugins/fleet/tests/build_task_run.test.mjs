@@ -5527,6 +5527,7 @@ const ARRAY_SITES = {
   "rd.results @ writeBack": "infra:results",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   "pf.files @ verifyPlanCommit": "infra:plan_files.files",
+  "pf.dsn_paths @ verifyPlanCommit": "infra:plan_files.dsn_paths",
   "pr.refs @ verifyPlanCommit": "infra:plan_ref.refs",
   "r.program @ programProblem": "parsed: a program self-hash; Array.isArray only refuses an array there",
   "c.files @ isPlanCommit": "infra:commits[].files",
@@ -8490,7 +8491,9 @@ test("3.1.0 1959: the verify and plan-files programs print what git says, with a
     const pf = runP("PLAN_FILES_PY_BEGIN", "PLAN_FILES_PY_END", "PLAN_FILES_PY", []);
     assert.deepEqual([pf.head, pf.files], [pc, ["docs/plans/x.md"]]);
     assert.deepEqual(pf.args, [wt]);
-    check(pf, ["head", "files", "args"]);
+    // 4.0.0 review: no test DSN in the plan doc
+    assert.deepEqual(pf.dsn_paths, []);
+    check(pf, ["head", "files", "args", "dsn_paths"]);
     // head = plan commit: nothing since
     let v = runP("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY", [pc, "docs/plans/x.md"]);
     assert.deepEqual(v, Object.assign({ head: pc, is_ancestor: true, commits_since: [], plan_touched: [], changed_since: [], args: [wt, pc, "docs/plans/x.md"] }, { program: { name: null, sha256: null }, digest: v.digest }));

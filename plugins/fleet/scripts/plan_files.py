@@ -43,8 +43,23 @@ def run(*a):
         sys.exit(r.stderr.decode('utf-8', 'replace') or 'git ' + a[0] + ' exited ' + str(r.returncode))
     return r.stdout
 head = run('rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
-files = [x.decode('utf-8', 'replace') for x in run('diff-tree', '-r', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', head).split(b'\0') if x]
-out = {'head': head, 'files': files, 'args': [wt]}
+raw = [x for x in run('diff-tree', '-r', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', head).split(b'\0') if x]
+files = [x.decode('utf-8', 'replace') for x in raw]
+# fleet 4.0.0 review: the committed files that hold a test DSN (mysql://,
+# any case); a blob over 8 MiB is listed unread (fail closed); a path the
+# commit deletes has no blob and is skipped
+dsn_paths = []
+for b, f in zip(raw, files):
+    s = subprocess.run(G + ['cat-file', '-s', head + ':' + b.decode('utf-8', 'surrogateescape')], capture_output=True)
+    if s.returncode != 0:
+        continue
+    if int(s.stdout.strip() or 0) > (8 << 20):
+        dsn_paths.append(f)
+        continue
+    d = subprocess.run(G + ['cat-file', 'blob', head + ':' + b.decode('utf-8', 'surrogateescape')], capture_output=True)
+    if d.returncode != 0 or b'mysql://' in d.stdout.lower():
+        dsn_paths.append(f)
+out = {'head': head, 'files': files, 'args': [wt], 'dsn_paths': dsn_paths}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, ensure_ascii=False))

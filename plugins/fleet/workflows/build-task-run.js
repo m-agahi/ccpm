@@ -1451,7 +1451,7 @@ const INFRA_SCHEMA = {
     tag_sha: STR,
     plan_hash: PROGRAM_OUTPUT,
     plan_hash_head: PROGRAM_OUTPUT,
-    plan_files: { type: ["object", "null"], properties: { head: STR, files: { type: "array", items: STR }, args: { type: "array", items: STR }, program: PROGRAM_PROP, file_sha256: STR, digest: STR } },
+    plan_files: { type: ["object", "null"], properties: { head: STR, files: { type: "array", items: STR }, args: { type: "array", items: STR }, dsn_paths: { type: "array", items: STR }, program: PROGRAM_PROP, file_sha256: STR, digest: STR } },
     plan_ref: { type: ["object", "null"], properties: { refs: { type: "array", items: { type: "object" } }, program: PROGRAM_PROP, file_sha256: STR } },
     target: STR,
     message: STR,
@@ -3141,8 +3141,9 @@ print(json.dumps(out, ensure_ascii=False))`;
 const VERIFY_SINCE_KEYS = ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"];
 
 // Commit-plan (3.1.0, ledger 1959): HEAD and the paths the HEAD commit
-// changes. Arg: worktree. Prints {head, files, digest}. Read only; git runs
-// from /.
+// changes. Arg: worktree. Prints {head, files, args, dsn_paths, program,
+// digest}; dsn_paths (4.0.0 review): the files among them whose HEAD blob
+// holds mysql://. Read only; git runs from /.
 // PLAN_FILES_PY_BEGIN
 const PLAN_FILES_PY = String.raw`
 # resource caps (3.1.0): every embedded program bounds its own address space
@@ -3189,8 +3190,23 @@ def run(*a):
         sys.exit(r.stderr.decode('utf-8', 'replace') or 'git ' + a[0] + ' exited ' + str(r.returncode))
     return r.stdout
 head = run('rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
-files = [x.decode('utf-8', 'replace') for x in run('diff-tree', '-r', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', head).split(b'\0') if x]
-out = {'head': head, 'files': files, 'args': [wt]}
+raw = [x for x in run('diff-tree', '-r', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', head).split(b'\0') if x]
+files = [x.decode('utf-8', 'replace') for x in raw]
+# fleet 4.0.0 review: the committed files that hold a test DSN (mysql://,
+# any case); a blob over 8 MiB is listed unread (fail closed); a path the
+# commit deletes has no blob and is skipped
+dsn_paths = []
+for b, f in zip(raw, files):
+    s = subprocess.run(G + ['cat-file', '-s', head + ':' + b.decode('utf-8', 'surrogateescape')], capture_output=True)
+    if s.returncode != 0:
+        continue
+    if int(s.stdout.strip() or 0) > (8 << 20):
+        dsn_paths.append(f)
+        continue
+    d = subprocess.run(G + ['cat-file', 'blob', head + ':' + b.decode('utf-8', 'surrogateescape')], capture_output=True)
+    if d.returncode != 0 or b'mysql://' in d.stdout.lower():
+        dsn_paths.append(f)
+out = {'head': head, 'files': files, 'args': [wt], 'dsn_paths': dsn_paths}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, ensure_ascii=False))`;
@@ -4578,7 +4594,7 @@ function verifyPlanCommitPrompt(inputs) {
     "1. Run this command exactly as written, unmodified:\n" +
     progCmd("plan_files", [inputs.worktree]) +
     "\n" +
-    "It prints one JSON object {head, files, args, program, digest}: return it as plan_files, every value copied unchanged, every path in order (the script recomputes the digest). Never list the files with git yourself.\n" +
+    "It prints one JSON object {head, files, args, dsn_paths, program, digest}: return it as plan_files, every value copied unchanged, every path in order (the script recomputes the digest). Never list the files with git yourself.\n" +
     "2. Run this command exactly as written, unmodified:\n" +
     planHashCmd(inputs.worktree, "HEAD", inputs.plan_path) +
     "\n" +
@@ -7951,8 +7967,9 @@ async function verifyPlanCommit(ctx, sfx, w, full, stagedSha, msgSha, tiny) {
       const pp = programProblem(o, n);
       if (pp) return pp;
     }
-    if (typeof pf.head !== "string" || !SHA_RE.test(pf.head) || !Array.isArray(pf.files) || !relayDigestOk(pf, ["head", "files", "args"], "plan_files"))
+    if (typeof pf.head !== "string" || !SHA_RE.test(pf.head) || !Array.isArray(pf.files) || !relayDigestOk(pf, ["head", "files", "args", "dsn_paths"], "plan_files"))
       return "the relayed head and files do not match the program's digest (a path was dropped or changed in the copy)";
+    if (!Array.isArray(pf.dsn_paths)) return "no dsn_paths list in the plan_files output";
     if (canonical(pf.args) !== canonical([ctx.worktree])) return "the program ran on other arguments (" + JSON.stringify(pf.args === undefined ? null : pf.args) + ")";
     if (typeof ph.plan_sha256 !== "string" || !SHA256_RE.test(ph.plan_sha256)) return "no usable plan_sha256";
     if (!Array.isArray(pr.refs)) return "no plan ref list";
@@ -7982,6 +7999,9 @@ async function verifyPlanCommit(ctx, sfx, w, full, stagedSha, msgSha, tiny) {
   const files = Array.from(new Set(pf.files.map((f) => normPath(String(f)))));
   if (files.length !== 1 || files[0] !== normPath(full.plan_path))
     halt("needs_human", label + ": the plan commit holds " + JSON.stringify(pf.files) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
+  // 4.0.0 review: a test DSN never reaches a commit (a wrong fact: no plan_ref returned)
+  if (pf.dsn_paths.length)
+    halt("needs_human", label + ": the committed plan " + JSON.stringify(pf.dsn_paths) + " holds mysql:// (a test DSN); remove it from the plan doc, delete the local plan commit " + pf.head + " and re-run plan", "db");
   // the script wrote these bytes itself: it hashes them, the step relays no content
   const e = v.plan_ref.refs.find((x) => x && x.name === refName);
   const ep = planRefMetaProblem(e, w.head, msgSha) || (e.tag_sha !== w.tag_sha ? "tag object " + e.tag_sha + " is not the one written (" + w.tag_sha + ")" : null);
@@ -10657,7 +10677,7 @@ const DB_NAME_RE = /^fleet-db-[a-z0-9-]{1,80}$/;
 const DB_ENV_RE = /^[A-Z][A-Z0-9_]{0,40}_TEST_DSN$/;
 const DB_UP_KEYS = ["name", "port", "dbs", "users", "expiry", "args"];
 const DB_DSN_NOTE =
-  "is this run's throwaway MariaDB on 127.0.0.1: a user of its own, granted on one database for this role only. Use it for the database-backed tests and never point a test at any other database. The workflow removes it at the end of the run.";
+  "is this run's throwaway MariaDB on 127.0.0.1: a user of its own, granted on one database for this role only. Use it for the database-backed tests and never point a test at any other database. The workflow removes it at the end of the run. Never write a test_env value (a DSN, its user or its password) into the plan doc, a finding, a commit message or a PR: name the variable only. The workflow refuses a committed plan doc that holds mysql://.";
 
 // Why a declaration is refused (null: it is fine). The program checks the same.
 function testDbDeclProblem(d) {

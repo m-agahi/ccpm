@@ -391,8 +391,10 @@ its notes to this entry.
   repo's hooks in the commit step and the push. The script builds
   `mysql://fleet_<consumer>:<password>@127.0.0.1:<port>/fleet_<consumer>` and puts it under the
   declared `env` name into that role's `test_env` only, never into `test_cmd.env`. A role cannot
-  reach another role's database. `TEST_ENV` itself is frozen; a role gets a copy. The DSN is never
-  sealed in the plan ref and never written to the run-state.
+  reach another role's database. `TEST_ENV` itself is frozen; a role gets a copy. The script
+  itself never seals the DSN in the plan ref and never writes it to the run-state. A role that
+  gets a DSN can still copy it into what it writes; see the review fix below for exactly what
+  is checked.
 - Plan mode starts the database after the branch scan, before the planner. Build mode starts it
   after the verify step. A plan run under `confirm: "auto"` (or `default`) that goes on into the
   build adds the build's databases to the same container (`infra:db-up:add`).
@@ -440,6 +442,15 @@ commit]`) before G2. A mismatch stops the run with `failed` and `stop_gate: "con
 - A frozen resume is refused after a fix_tests re-freeze. `freeze_digest` binds `refrozen: true`
   once the build re-froze, and the resume halts with `stop_gate: "resume"` when the caller's digest
   is the re-frozen form. The S5 notes above are corrected.
+- Test DSN in what roles write. The planner, plan-audit and pr-review still get their DSN (the
+  planner may probe the database). Every role that gets a DSN also gets this script text in
+  `test_env_note`: never write a test_env value into the plan doc, a finding, a commit message or
+  a PR. One script check backs it: `plan_files.py` lists the files of the plan commit whose
+  blob holds `mysql://` (any case; a blob over 8 MiB is listed unread) as `dsn_paths`, inside its
+  digest. `infra:verify-plan-commit` stops with `needs_human`, `stop_gate: "db"` and no
+  `plan_ref` when that list is not empty. What is guaranteed: the committed plan doc holds no
+  `mysql://`. Findings, the PR body, review comments and commit messages are covered by the
+  prompt text only, not by a script check.
 
 ## [3.1.3] - 2026-11-09
 

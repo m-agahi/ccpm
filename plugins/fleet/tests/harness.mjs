@@ -580,7 +580,7 @@ export function verifyStub(store) {
     return {
       status: "ok",
       reason: "verified",
-      plan_files: { head: c.head || null, files: [i.plan_path], args: [i.worktree] },
+      plan_files: { head: c.head || null, files: [i.plan_path], args: [i.worktree], dsn_paths: [] },
       plan_hash: { plan_sha256: c.planSha || null },
       plan_ref: { refs },
     };
@@ -694,7 +694,8 @@ export const PROGRAM_LABELS = [
   [/^infra:stage-plan/, [["plan_hash", "plan_hash", null]]],
   [/^infra:format-(tests|code):/, [[null, "format_files", ["ran", "reason", "runs", "stable", "files", "changed", "refused"]]]],
   [/^infra:commit-plan/, [[null, "plan_ref_write", ["head", "tag_sha"]]]],
-  [/^infra:verify-plan-commit/, [["plan_files", "plan_files", ["head", "files", "args"]], ["plan_hash", "plan_hash", null], ["plan_ref", "plan_ref", null]]],
+  // 4.0.0 review: dsn_paths, the committed files that hold mysql://
+  [/^infra:verify-plan-commit/, [["plan_files", "plan_files", ["head", "files", "args", "dsn_paths"]], ["plan_hash", "plan_hash", null], ["plan_ref", "plan_ref", null]]],
   [/^infra:load-ref/, [[null, "plan_ref", null]]],
   [/^infra:verify-plan$/, [[null, "verify_since", ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"]], ["plan_hash", "plan_hash", null], ["plan_hash_head", "plan_hash", null], ["test_db", "test_db_decl", ["decl", "error", "args"]]]],
   [/^infra:read-state$/, [[null, "read_state", ["exists", "target", "message", "head", "head_tree", "clean"]]]],
