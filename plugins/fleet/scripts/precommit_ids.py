@@ -32,25 +32,29 @@ try:
         _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
 except Exception:
     _PROG = {'name': None, 'sha256': None}
-import json, subprocess, sys
+import hashlib, json, subprocess, sys
 wt, rev = sys.argv[1], sys.argv[2]
+# fleet 4.0.0 review: the hook ids feed the auto gate G2, so every path
+# prints every key, the args and a digest the workflow checks
+def emit(present, ids, parser, error):
+    out = {'present': present, 'ids': ids, 'parser': parser, 'error': error, 'args': [wt, rev]}
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
 r = subprocess.run(['git', '-C', wt, 'show', rev + ':.pre-commit-config.yaml'], capture_output=True)
 if r.returncode != 0:
-    print(json.dumps({'program': _PROG, 'present': False, 'ids': [], 'parser': None}))
-    sys.exit(0)
+    emit(False, [], None, None)
 try:
     import yaml
 except ImportError:
-    print(json.dumps({'program': _PROG, 'present': True, 'ids': [], 'parser': None, 'error': 'PyYAML unavailable'}))
-    sys.exit(0)
+    emit(True, [], None, 'PyYAML unavailable')
 if len(r.stdout) > 262144:
-    print(json.dumps({'program': _PROG, 'present': True, 'ids': [], 'parser': None, 'error': 'the config is over 256 KiB'}))
-    sys.exit(0)
+    emit(True, [], None, 'the config is over 256 KiB')
 try:
     data = yaml.safe_load(r.stdout)
 except Exception as e:
-    print(json.dumps({'program': _PROG, 'present': True, 'ids': [], 'parser': 'yaml', 'error': 'unparseable: ' + str(e)}))
-    sys.exit(0)
+    emit(True, [], 'yaml', 'unparseable: ' + str(e)[:2000])
 ids = []
 repos = data.get('repos') if isinstance(data, dict) else None
 for repo in repos if isinstance(repos, list) else []:
@@ -58,4 +62,4 @@ for repo in repos if isinstance(repos, list) else []:
     for h in hooks if isinstance(hooks, list) else []:
         if isinstance(h, dict) and isinstance(h.get('id'), str):
             ids.append(h['id'])
-print(json.dumps({'program': _PROG, 'present': True, 'ids': ids, 'parser': 'yaml'}))
+emit(True, ids, 'yaml', None)

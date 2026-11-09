@@ -188,6 +188,7 @@ export function fillArgs(label, r, prompt) {
     r.args = [i.main_worktree, i.plan_commit, i.plan_path];
   } else if (/^infra:hook-surface:/.test(label)) r.args = [inputsOf(prompt).worktree, inputsOf(prompt).rev, JSON.stringify(inputsOf(prompt).targets)];
   else if (/^infra:push(:p\d+)?$/.test(label) && r.push_result === "hook_rejected") r.args = ["/tmp/fleet-push.out", String(r.exit_code)];
+  else if (/^infra:precommit-ids/.test(label)) r.args = [inputsOf(prompt).main_worktree, inputsOf(prompt).plan_commit];
   return r;
 }
 export function withRelayDigest(label, r) {
@@ -706,7 +707,8 @@ export const PROGRAM_LABELS = [
   [/^infra:push-probe$/, [[null, "push_probe", ["access", "result", "exit_code", "auth_line", "args"]]]],
   [/^infra:hook-surface:/, [[null, "hook_surface", ["surface", "make_paths", "error", "args"]]]],
   [/^infra:review-paths:/, [[null, "review_paths", ["changed_paths"]]]],
-  [/^infra:precommit-ids/, [[null, "precommit_ids", null]]],
+  // 4.0.0 review: the hook ids feed G2 and carry a digest
+  [/^infra:precommit-ids/, [[null, "precommit_ids", ["present", "ids", "parser", "error", "args"]]]],
   [/^infra:check-scripts/, [[null, "script_check", ["checks"]]]],
   // 4.0.0 (1981)
   [/^infra:db-up/, [["sweep", "db_sweep", ["podman", "removed", "kept", "errors"]], ["up", "db_up", ["name", "port", "dbs", "users", "expiry", "args"]]]],

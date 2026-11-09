@@ -53,14 +53,15 @@ function tierOf(table, label) {
 const WANT = [
   [/^infra:path-check:/, "haiku"],
   [/^preflight/, "haiku"],
-  [/^workspace$/, "haiku"],
+  // 4.0.0 review (Max): workspace and precommit-ids moved to sonnet
+  [/^workspace$/, "sonnet"],
   [/^infra:branch-scan$/, "haiku"],
   [/^infra:stage-plan/, "haiku"],
   [/^infra:verify-plan/, "haiku"],
   [/^infra:read-state$/, "haiku"],
   [/^infra:callers/, "haiku"],
   [/^infra:check-scripts/, "haiku"],
-  [/^infra:precommit-ids/, "haiku"],
+  [/^infra:precommit-ids/, "sonnet"],
   [/^infra:review-paths/, "haiku"],
   [/^infra:remote-head/, "haiku"],
   [/^infra:load-parked$/, "haiku"],

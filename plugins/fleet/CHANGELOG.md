@@ -227,13 +227,13 @@ its notes to this entry.
 
 - `INFRA_TIER` maps each infra agent label prefix to a model. The first matching prefix wins. A
   label with no entry stops the run with `failed`; there is no default tier.
-- haiku: every `infra:path-check:*`, `preflight`, `workspace`, `infra:branch-scan`,
+- haiku: every `infra:path-check:*`, `preflight`, `infra:branch-scan`,
   `infra:stage-plan`, `infra:verify-plan*`, `infra:read-state`, `infra:callers*`,
-  `infra:check-scripts*`, `infra:precommit-ids*`, `infra:review-paths*`, `infra:remote-head*`,
+  `infra:check-scripts*`, `infra:review-paths*`, `infra:remote-head*`,
   `infra:load-parked`, and the plan's test-DB steps `infra:db-up`, `infra:db-down`,
-  `infra:db-sweep`. These are read-only steps that a program digest checks, plus the mechanical
-  workspace and DB setup.
-- sonnet: `intake*`, `hasher:*`, `infra:load-ref*`, `infra:commit-plan*`, `infra:park-plan`
+  `infra:db-sweep`. These are read-only steps that a program digest checks, plus the DB setup.
+- sonnet: `workspace` and `infra:precommit-ids*` (moved from haiku by the review, see below),
+  `intake*`, `hasher:*`, `infra:load-ref*`, `infra:commit-plan*`, `infra:park-plan`
   (base64 chunks), `infra:format-*`, `infra:commit:*`, `infra:push*` (the push and its classifier),
   `infra:tf-gate*`, `infra:hook-surface*`, `infra:changed-defs*`, `infra:replan-*`,
   `infra:state:*`, and the labels the plan did not name: `infra:fleet-scan*`,
@@ -414,6 +414,15 @@ its notes to this entry.
 - Since S4, `go test` refuses the `<paths>` token (cargo and go target a criterion with
   `test_args`). A plan ref sealed by 3.1.3 with a `go test ... <paths>` command now stops when build
   mode loads it (`stop_gate: "commands"`). Re-plan to get a 4.0.0 command.
+
+### Whole-branch review fixes
+
+- `precommit_ids.py` prints `{present, ids, parser, error, args, program, digest}` on every path.
+  The hook ids feed G2, so the auto gates check the digest and the args (`[main worktree, plan
+commit]`) before G2. A mismatch stops the run with `failed` and `stop_gate: "contract"`.
+  `infra:precommit-ids*` runs on sonnet.
+- `workspace` runs on sonnet. Its `default_branch` and `base_ref` are not digest-checked, and they
+  set the diff base of the IaC gate and the fleet scan.
 
 ## [3.1.3] - 2026-11-09
 

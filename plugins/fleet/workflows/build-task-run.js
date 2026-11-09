@@ -42,22 +42,24 @@ const ROLES = [
 const TIERS = ["fable", "opus", "sonnet", "haiku"];
 // 4.0.0 (1990): the model of each infra agent, by label prefix; the first
 // matching prefix wins. haiku: read-only steps whose output a program digest
-// checks, and the mechanical workspace setup. sonnet: long bodies or chunks
-// (intake, hasher maps, plan-ref load and commit, the park), the steps that
-// write, push, classify a push or run hooks, and every label the plan did not
-// name. A label with no entry stops the run (no default tier).
+// checks. sonnet: long bodies or chunks (intake, hasher maps, plan-ref load
+// and commit, the park), the steps that write, push, classify a push or run
+// hooks, the workspace setup (its default_branch and base_ref are not
+// digest-checked and feed the IaC gate's diff base), the pre-commit hook ids
+// (they feed the auto gate G2), and every label the plan did not name. A
+// label with no entry stops the run (no default tier).
 // INFRA_TIER_BEGIN
 const INFRA_TIER = [
   ["infra:path-check:", "haiku"],
   ["preflight", "haiku"],
-  ["workspace", "haiku"],
+  ["workspace", "sonnet"],
   ["infra:branch-scan", "haiku"],
   ["infra:stage-plan", "haiku"],
   ["infra:verify-plan", "haiku"],
   ["infra:read-state", "haiku"],
   ["infra:callers", "haiku"],
   ["infra:check-scripts", "haiku"],
-  ["infra:precommit-ids", "haiku"],
+  ["infra:precommit-ids", "sonnet"],
   ["infra:review-paths", "haiku"],
   ["infra:remote-head", "haiku"],
   ["infra:load-parked", "haiku"],
@@ -5852,25 +5854,29 @@ try:
         _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
 except Exception:
     _PROG = {'name': None, 'sha256': None}
-import json, subprocess, sys
+import hashlib, json, subprocess, sys
 wt, rev = sys.argv[1], sys.argv[2]
+# fleet 4.0.0 review: the hook ids feed the auto gate G2, so every path
+# prints every key, the args and a digest the workflow checks
+def emit(present, ids, parser, error):
+    out = {'present': present, 'ids': ids, 'parser': parser, 'error': error, 'args': [wt, rev]}
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
 r = subprocess.run(['git', '-C', wt, 'show', rev + ':.pre-commit-config.yaml'], capture_output=True)
 if r.returncode != 0:
-    print(json.dumps({'program': _PROG, 'present': False, 'ids': [], 'parser': None}))
-    sys.exit(0)
+    emit(False, [], None, None)
 try:
     import yaml
 except ImportError:
-    print(json.dumps({'program': _PROG, 'present': True, 'ids': [], 'parser': None, 'error': 'PyYAML unavailable'}))
-    sys.exit(0)
+    emit(True, [], None, 'PyYAML unavailable')
 if len(r.stdout) > 262144:
-    print(json.dumps({'program': _PROG, 'present': True, 'ids': [], 'parser': None, 'error': 'the config is over 256 KiB'}))
-    sys.exit(0)
+    emit(True, [], None, 'the config is over 256 KiB')
 try:
     data = yaml.safe_load(r.stdout)
 except Exception as e:
-    print(json.dumps({'program': _PROG, 'present': True, 'ids': [], 'parser': 'yaml', 'error': 'unparseable: ' + str(e)}))
-    sys.exit(0)
+    emit(True, [], 'yaml', 'unparseable: ' + str(e)[:2000])
 ids = []
 repos = data.get('repos') if isinstance(data, dict) else None
 for repo in repos if isinstance(repos, list) else []:
@@ -5878,7 +5884,7 @@ for repo in repos if isinstance(repos, list) else []:
     for h in hooks if isinstance(hooks, list) else []:
         if isinstance(h, dict) and isinstance(h.get('id'), str):
             ids.append(h['id'])
-print(json.dumps({'program': _PROG, 'present': True, 'ids': ids, 'parser': 'yaml'}))`;
+emit(True, ids, 'yaml', None)`;
 // PRECOMMIT_IDS_PY_END
 
 function precommitIdsPrompt(inputs) {
@@ -5890,8 +5896,8 @@ function precommitIdsPrompt(inputs) {
     "Run this one command exactly as written, unmodified:\n" +
     progCmd("precommit_ids", [inputs.main_worktree, inputs.plan_commit]) +
     "\n" +
-    "It prints one JSON object {present, ids, parser, error?, program}. Copy every value unchanged. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, present, ids, parser, error, program}."
+    "It prints one JSON object {present, ids, parser, error, args, program, digest}. Copy every value unchanged, every id in order (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, present, ids, parser, error, args, program, digest}."
   );
 }
 
@@ -8264,6 +8270,11 @@ async function autoGates(ctx) {
       JUDGE_AGENT,
     );
     requireProgram(cfg, "precommit_ids", "infra:precommit-ids" + sfx);
+    // 4.0.0 review: the ids feed G2, so the relay is digest-checked (fail closed)
+    if (!relayDigestOk(cfg, ["present", "ids", "parser", "error", "args"], "precommit_ids"))
+      halt("failed", "infra:precommit-ids" + sfx + ": the relayed hook ids do not match the program's digest", "contract");
+    if (canonical(cfg.args) !== canonical([ctx.mainWt, ctx.planCommit]))
+      halt("failed", "infra:precommit-ids" + sfx + ": the program ran on other arguments (" + JSON.stringify(cfg.args === undefined ? null : cfg.args) + ")", "contract");
     const g2 = hookIdProblems(shape.hookIds, cfg);
     if (g2.length) return fail("commands", g2);
   }
