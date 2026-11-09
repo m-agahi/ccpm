@@ -1,5 +1,44 @@
 # Changelog
 
+## [3.1.1] - 2026-11-09
+
+Ledger tasks 1969 and 1970. No role page changes; install 3.1.1, then `/reload-plugins`. The
+contract marker stays `fleet-v3`.
+
+### PATH re-checks (task 1969)
+
+- The preflight PATH check (`PATH_CHECK_PY`, unchanged) now runs again as
+  `infra:path-check:<site>` right before every step that runs repo code: `format-plan` and
+  `commit-plan` (and their `:replan` forms), the test writers, test fixers and test judge of each
+  test round, and the coder, code fixers, code judge and commit of each code round, and each push.
+  A tool planted after preflight (for example in a writable `~/.local/bin`) stops the run there
+  with `needs_human`, `stop_gate: "iac"`, before the guarded step.
+- Each re-check passes the program a token of its own (a counter, the run nonce and the site),
+  which it echoes in `args`; the script accepts only `[repo, token]`. The preflight's result,
+  another site's result or a result recorded in an earlier run never passes. A failed, missing or
+  tampered re-check stops at `iac` as well.
+- **Agent cap:** the re-checks count in `agents` (and in the plan ref's cumulative history) but
+  not against the 100-agent cap. The cap counts the same agents as in 3.1.0, so it refuses
+  exactly the runs it refused before (checked against 3.1.0 on the 15-criteria cap run: same
+  stop, same reason, same non-re-check steps).
+- Not re-checked: the `check_cmd` scripts and the review probes.
+
+### Smaller fixes (task 1970)
+
+- IaC push gate hints: `atlantis.y*ml` and `.spacelift/` files get "orchestrator config change",
+  the version files (`.terraform-version`, `.opentofu-version`, `.tofu-version`) get "IaC tool
+  version file change". Before, a `version:` line in an orchestrator file was hinted as a
+  "provider source or version change". Hints only: `touched`, `iac_files` and `problems` are
+  unchanged.
+- Origin URL: the workspace step runs `REMOTE_URL_PY` (`python3 -I`, caps,
+  `git config --get remote.origin.url`) and relays `remote_url_check` `{url, args, digest}`. The script recomputes
+  the digest and checks the args, at plan time for the seal and at build time for the
+  comparison; a free-text `remote_url` is no longer read. An unusable relay leaves the URL empty,
+  which the IaC push gate refuses as before.
+- Mutants P7 (remote-head args check dropped), P8 (remote-head digest check dropped) and P10
+  (`isIacPath` without the provider lock file) were applied and run: the 3.1.0 suite kills each
+  one. No test was added for them.
+
 ## [3.1.0] - 2026-11-09
 
 Ledger tasks 1959, 1958, 1935 and 1941, the review rounds of PR #38, and Max's ruling of

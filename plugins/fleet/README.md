@@ -567,6 +567,20 @@ program also gives its children a PATH without empty or relative entries, and th
 pre-commit and its hooks one without the worktree's and the scratch dir's entries. The program spells the names in pieces, because
 the agent's Bash guard blocks them.
 
+**The PATH re-checks (3.1.1).** `~/.local/bin` is writable and early on PATH, so a tool planted
+after preflight would pass. The same program therefore runs again (`infra:path-check:<site>`)
+right before every step that runs repo code: `format-plan` and `commit-plan` in plan mode (and
+their `:replan` forms), and in build mode the test writers, the test fixers and the test judge of
+each test round, then the coder, the code fixers, the code judge and the commit of each code round,
+and each push. Each re-check passes the program a token of its own (a counter, the run nonce and
+the site) after the repo; the program echoes it in `args`. The script accepts a result only when
+`args` is exactly `[repo, token]`, so the preflight's result, another site's result or a result
+recorded in an earlier run never passes, and nothing is cached. A failed, missing or tampered
+re-check, a path problem or an unshimmed tool stops with `needs_human`, `stop_gate: "iac"` and the
+site's label, before the guarded step runs. The re-checks count in `agents` but not against the
+agent cap: the cap refuses exactly the runs it refused in 3.1.0. Not re-checked: the
+`check_cmd` scripts and the review probes.
+
 **Accepted residual (ADR-1172; no content scan stands in for it).** The PATH check and the shims
 do not stop a hook's or a test's call by absolute path to a real binary
 (for example `/opt/terraform/bin/terraform`, or a binary a test downloads), nor a container image
@@ -581,7 +595,11 @@ automatically; the fleet stops and hands the push to Max. Content checks are hin
 every push, `infra:tf-gate:push` runs `TF_GATE_PY` (`python3 -I`, caps) on the PR diff. Its base
 comes from origin itself (`git ls-remote`, then a fetch of that sha when the repo lacks it), never
 from the local origin ref; either failing stops the run. The URL is origin's configured URL sealed
-in the plan ref (https or `git@host:` only); the network reads run in a bare scratch repo with
+in the plan ref (https or `git@host:` only). Since 3.1.1 the workspace step reads it with
+`REMOTE_URL_PY` (`python3 -I`, caps; `git config --get remote.origin.url`, before any `insteadOf`)
+and relays `remote_url_check` `{url, args, digest}`; the script recomputes the digest and checks the
+args, at plan time for the seal and at build time for the comparison. An unusable relay leaves the
+URL empty, which stops an IaC diff at `iac`; the network reads run in a bare scratch repo with
 command-line overrides, so no repo config (`sshCommand`, `uploadpack`, `insteadOf`, helpers) reaches
 them. No sealed URL, or a URL changed since the plan, stops at `iac`. Residual (ADR-1152): edits to
 the user's global git config or environment.
@@ -592,7 +610,9 @@ terraform CLI config file, anything under `.spacelift/`, or a path with a `.terr
 `.terraform.d` segment; names match in any case), the run stops before the push in every
 confirm mode with `needs_human`, `stop_gate: "iac-push"`. The message gives the branch, the commit
 sha, the IaC files, the push command for Max, and the content findings under "hints (not a
-security check)". The fleet never pushes an IaC diff. After Max pushes it himself, a build run of the same
+security check)". The orchestrator files (`atlantis.y*ml`, `digger.y*ml`, `.spacelift/`) get
+"orchestrator config change" and the version files "IaC tool version file change" (3.1.1); the
+text scan's hints are for the other IaC files. The fleet never pushes an IaC diff. After Max pushes it himself, a build run of the same
 `plan_ref` reads origin's branch head (`REMOTE_HEAD_PY`, `git ls-remote`) and goes on to the PR,
 the review and the write-back without a push, only when the head is exactly the approved sha; any
 other remote state stops at `iac-push`. An IaC path in the fleet scan's PR diff that the relay does
