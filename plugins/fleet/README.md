@@ -282,6 +282,8 @@ The first failure stops the run:
    `.pre-commit-config.yaml` at `plan_commit`. A read-only infra step (`infra:precommit-ids`) runs a
    fixed program: `git show <plan_commit>:.pre-commit-config.yaml`, parsed with PyYAML. No config,
    no PyYAML or a parse error fails the gate. A refused command (`run_by: nobody`) fails it.
+   Since 4.0.0 the step runs on sonnet, and its output carries args and a digest the script
+   checks before the gate; a mismatch stops the run (`stop_gate: contract`).
 3. **G3 scope fence**, pure script code over every planned path (criteria `test_files`,
    `allowed_additions.files`, obligation `files`) and every command. It refuses `*.tf`, `*.tfvars`,
    a `terraform/` or `.terraform` dir, `kustomization.y*ml`, YAML under `k8s/` or `manifests/`,
@@ -572,8 +574,9 @@ at `origin/<default branch>` only. It then starts one local MariaDB container pe
 pinned by digest, bound to 127.0.0.1, self-expiring after 6 h) and gives each role its own
 database and user. The DSN goes into that role's `test_env` under the declared name, with a
 note never to write it into the plan, a finding, a commit message or a PR.
-`infra:verify-plan-commit` refuses a committed plan doc that holds `mysql://`. Findings and PR
-text rely on the note alone. The workflow removes the container at the end of every run;
+`infra:verify-plan-commit` refuses a plan commit whose plan doc holds `mysql://` (no `plan_ref`);
+reset the fleet branch past that commit before the next plan run, which does not re-check
+earlier plan commits. Findings and PR text rely on the note alone. The workflow removes the container at the end of every run;
 `db_sweep.py` removes expired ones of earlier runs. Any declaration or relay problem stops with
 `stop_gate: "db"`.
 

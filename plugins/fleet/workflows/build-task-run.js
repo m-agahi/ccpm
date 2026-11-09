@@ -8003,7 +8003,7 @@ async function verifyPlanCommit(ctx, sfx, w, full, stagedSha, msgSha, tiny) {
     halt("needs_human", label + ": the plan commit holds " + JSON.stringify(pf.files) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
   // 4.0.0 review: a test DSN never reaches a commit (a wrong fact: no plan_ref returned)
   if (pf.dsn_paths.length)
-    halt("needs_human", label + ": the committed plan " + JSON.stringify(pf.dsn_paths) + " holds mysql:// (a test DSN); remove it from the plan doc, delete the local plan commit " + pf.head + " and re-run plan", "db");
+    halt("needs_human", label + ": the committed plan " + JSON.stringify(pf.dsn_paths) + " holds mysql:// (a test DSN); reset the fleet branch past the plan commit " + pf.head + " before re-running plan (a later plan run does not re-check earlier plan commits, and the build pushes them)", "db");
   // the script wrote these bytes itself: it hashes them, the step relays no content
   const e = v.plan_ref.refs.find((x) => x && x.name === refName);
   const ep = planRefMetaProblem(e, w.head, msgSha) || (e.tag_sha !== w.tag_sha ? "tag object " + e.tag_sha + " is not the one written (" + w.tag_sha + ")" : null);

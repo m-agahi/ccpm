@@ -185,8 +185,8 @@ its notes to this entry.
 - `confirm` takes `ask`, `auto` or `default`. With no value the workflow still asks.
 - Under `default`, after plan-audit approves, the auto gates (G1 intent judge, G2 commands, G3
   scope fence) run only when the planner declared `change_kind: bug_fix` and
-  `new_behaviour: false`, no planned path is an IaC path, no re-plan relaxed round 0, and a task
-  id input carries `project`. Otherwise the result is `awaiting_confirmation` with
+  `new_behaviour: false`, no planned path is an IaC path, no re-plan relaxed round 0, no parked
+  prior was unreadable (review fix), and a task id input carries `project`. Otherwise the result is `awaiting_confirmation` with
   `confirm_reason`. A failed gate is `needs_human`, as under `auto`; the run never falls back to
   asking. Build mode with `default` re-runs no gate (the human confirmed).
 - The two declared values are claims from untrusted task text, not a boundary. The boundary stays
@@ -456,8 +456,11 @@ commit]`) before G2. A mismatch stops the run with `failed` and `stop_gate: "con
   a PR. One script check backs it: `plan_files.py` lists the files of the plan commit whose
   blob holds `mysql://` (any case; a blob over 8 MiB is listed unread) as `dsn_paths`, inside its
   digest. `infra:verify-plan-commit` stops with `needs_human`, `stop_gate: "db"` and no
-  `plan_ref` when that list is not empty. What is guaranteed: the committed plan doc holds no
-  `mysql://`. Findings, the PR body, review comments and commit messages are covered by the
+  `plan_ref` when that list is not empty. What is guaranteed: each plan commit is checked at its
+  own verify step, and a plan commit whose plan doc holds `mysql://` returns no `plan_ref`. The
+  refused commit stays on the local fleet branch until a human resets the branch past it (the
+  stop says so). A later plan run does not re-check earlier plan commits, and a build pushes the
+  whole branch. Findings, the PR body, review comments and commit messages are covered by the
   prompt text only, not by a script check.
 - Docs: the README describes `default`, the short path, `INFRA_TIER`, the re-plan rounds, the
   push probe, `freeze_digest`, the preflight cache and the test database. SKILL.md step 9 relays
