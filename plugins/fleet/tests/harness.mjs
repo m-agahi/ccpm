@@ -113,7 +113,7 @@ export const RELAY_KEYS = [
   [/^infra:read-state$/, ["exists", "target", "message", "head", "head_tree", "clean"]],
   [/^infra:review-paths:/, ["changed_paths"]],
   [/^infra:check-scripts/, ["checks"]],
-  [/^infra:branch-scan$/, ["commits", "refs"]],
+  [/^infra:branch-scan$/, ["commits", "refs", "plan_tip_time"]],
   [/^infra:format-(tests|code):/, ["ran", "reason", "runs", "stable", "files", "changed", "refused"]],
   // 3.1.0 (ledger 1959)
   [/^infra:verify-plan$/, ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"]],
@@ -232,6 +232,11 @@ export async function runOne(script, args0) {
     }
     // the bytecode purge is mechanical; unscripted purges succeed by default
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
+    // 4.0.0 (1986): unscripted parked-run reads find no parked draft
+    if (!(label in script) && /^infra:load-parked$/.test(label)) {
+      const i = inputsOf(prompt);
+      return { status: "ok", reason: "read", parked: null, args: [i.scratch, i.plan_tip_time === null ? "null" : String(i.plan_tip_time)] };
+    }
     // unscripted plan parks move the draft and leave the worktree clean
     if (!(label in script) && /^infra:park-plan/.test(label)) return { status: "ok", reason: "parked", target: inputsOf(prompt).dest, clean: true };
     // unscripted plan formatting changes nothing (the hooks found nothing to fix)
@@ -640,7 +645,10 @@ export const PROGRAM_LABELS = [
   [/^infra:path-check:/, [[null, "path_check", PC_KEYS]]],
   [/^workspace$/, [["remote_url_check", "remote_url", ["url", "args"]]]],
   [/^hasher:/, [[null, "hasher", "hasher"]]],
-  [/^infra:branch-scan$/, [[null, "branch_scan", ["commits", "refs"]]]],
+  [/^infra:branch-scan$/, [[null, "branch_scan", ["commits", "refs", "plan_tip_time"]]]],
+  // 4.0.0 (1986)
+  [/^infra:load-parked$/, [[null, "parked", ["parked", "args"]]]],
+  [/^infra:park-plan/, [["findings_write", "parked", ["written", "sha256", "args"]]]],
   [/^infra:stage-plan/, [["plan_hash", "plan_hash", null]]],
   [/^infra:format-(tests|code):/, [[null, "format_files", ["ran", "reason", "runs", "stable", "files", "changed", "refused"]]]],
   [/^infra:commit-plan/, [[null, "plan_ref_write", ["head", "tag_sha"]]]],

@@ -29,6 +29,8 @@ import {
   gitEnv,
   SCRIPTS_SRC,
   FROZEN_VERSIONS,
+  chunkedContentOf,
+  redigest,
 } from "./harness.mjs";
 
 // A sealed ref message (the shape priorRef in build_task_run.test.mjs makes).
@@ -638,4 +640,248 @@ test("4.0.0 1991: intentProblems (G1) refuses every classification defect on its
   assert.deepEqual(w({ change_kind: "approve", new_behaviour: "approve" }), ["classification quote is empty (needs a verbatim quote from the task)"]);
   assert.deepEqual(w({ change_kind: "approve", new_behaviour: "approve", quote: " " }), ["classification quote is empty (needs a verbatim quote from the task)"]);
   assert.deepEqual(w({ change_kind: "approve", new_behaviour: "approve", quote: 7 }), ["classification quote is empty (needs a verbatim quote from the task)"]);
+});
+
+
+// ---------------------------------------------------------------- 1986: parked draft and findings as planner inputs
+
+const PRUN = "n0-1234567";
+// a load-parked stub: the draft and findings of run PRUN
+function parkedOut(findings, over) {
+  const p = Object.assign({ run: PRUN, plan_path: "docs/plans/x.md", draft_chunks: ["# draft plan\n", "more"], findings_chunks: findings === null ? [] : chunksOf(JSON.stringify(findings)) }, over || {});
+  return (prompt) => {
+    const i = inputsOf(prompt);
+    return { status: "ok", reason: "read", parked: p, args: [i.scratch, i.plan_tip_time === null ? "null" : String(i.plan_tip_time)] };
+  };
+}
+function chunksOf(t) {
+  const out = [];
+  for (let i = 0; i < t.length; i += 1000) out.push(t.slice(i, i + 1000));
+  return out;
+}
+const R0 = { round: 0, findings: [{ criterion: "AC1", finding: "parked f0" }], criteria: criteria(2).map((c) => ({ id: c.id, text: c.text })), change_kind: "feature", new_behaviour: true };
+
+test("4.0.0 1986 AC-1: a parked draft and findings reach the planner as inputs only; never sources, never sealed", async () => {
+  const s = happy();
+  s["infra:load-parked"] = parkedOut({ reason: "plan-audit verdict plan_defect", rounds: [R0], symbols: [], plan_path: "docs/plans/x.md" });
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const l = out.labels;
+  assert.ok(l.indexOf("infra:branch-scan") < l.indexOf("infra:load-parked") && l.indexOf("infra:load-parked") < l.indexOf("role:scope-and-plan"));
+  const pin = inputsOf(call(out, "role:scope-and-plan").prompt);
+  assert.deepEqual(pin.prior_draft, { run: PRUN, plan_path: "docs/plans/x.md", text: "# draft plan\nmore" });
+  assert.deepEqual(pin.brief.sources, BRIEF.sources, "brief.sources unchanged");
+  assert.deepEqual(pin.prior_round.findings, [{ criterion: "AC1", finding: "parked f0", round: 0 }]);
+  assert.deepEqual(pin.prior_round.round0, { change_kind: "feature", new_behaviour: true, criteria: R0.criteria });
+  assert.deepEqual(pin.prior_round.criteria_by_round, [R0.criteria]);
+  assert.match(pin.prior_round.reason, /parked run n0-1234567: plan-audit verdict plan_defect/);
+  // the audit gets prior_round; neither reaches the seal
+  assert.deepEqual(inputsOf(call(out, "role:plan-audit").prompt).prior_round.findings, pin.prior_round.findings);
+  assert.ok(!("prior_draft" in inputsOf(call(out, "role:plan-audit").prompt)));
+  const sealed = s.__store[PC];
+  for (const x of ["prior_draft", "prior_round", "parked", "draft plan", "parked f0"]) assert.ok(!sealed.includes(x), x);
+  // the used folder moves to parked/used/ after the commit (in the commit step)
+  const cp = call(out, "infra:commit-plan").prompt;
+  assert.match(cp, /mkdir -p '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch\/parked\/used' && mv -n -- '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch\/parked\/n0-1234567'/);
+  assert.ok(out.logs.some((l) => /parked draft of run n0-1234567 loaded \(docs\/plans\/x\.md\), 1 finding\(s\): planner inputs only/.test(l)));
+});
+
+test("4.0.0 1986 AC-2: no judge gets prior_draft or prior_round", async () => {
+  const s = defaultHappy();
+  s["infra:load-parked"] = parkedOut({ reason: "x", rounds: [Object.assign({}, R0, { change_kind: "bug_fix", new_behaviour: false })], symbols: [] });
+  const out = await runOne(s, DEFAULT);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  for (const c of out.calls.filter((x) => /^role:(fleet-intent-judge|fleet-test-judge|fleet-code-judge|pr-review|fleet-test-writer|fleet-coder|fleet-pr-opener)/.test(x.label))) {
+    const i = inputsOf(c.prompt);
+    assert.ok(!("prior_draft" in i) && !("prior_round" in i), c.label);
+    assert.ok(!c.prompt.includes("parked f0") && !c.prompt.includes("# draft plan"), c.label);
+  }
+  assert.ok(out.labels.includes("role:fleet-intent-judge"));
+});
+
+test("4.0.0 1986 AC-3: no parked folder -> no extra planner input; the reader gets the scan's plan tip time", async () => {
+  const s = happy();
+  s["infra:branch-scan"] = { status: "ok", reason: "scanned", commits: [], refs: [], plan_tip_time: 1700000123 };
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const pin = inputsOf(call(out, "role:scope-and-plan").prompt);
+  assert.ok(!("prior_draft" in pin) && !("prior_round" in pin));
+  const lp = call(out, "infra:load-parked");
+  assert.equal(inputsOf(lp.prompt).plan_tip_time, 1700000123);
+  assert.match(lp.prompt, /parked\.py' 'read' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch' '1700000123'/);
+  assert.equal(lp.opts.agentType, "fleet:judge");
+  // a relayed tip time that is not the program's stops at the scan
+  const t = happy();
+  t["infra:branch-scan"] = { status: "ok", reason: "scanned", commits: [], refs: [], plan_tip_time: 5 };
+  t.__mutate = { label: "infra:branch-scan", fn: (r) => Object.assign(r, { plan_tip_time: 9999999999 }) };
+  const o2 = await runOne(t, ARGS);
+  assert.equal(o2.result.status, "failed");
+  assert.match(o2.result.reason, /infra:branch-scan: the relayed lists do not match the program's digest/);
+  assert.ok(!o2.labels.includes("infra:load-parked"));
+  // no plan commit: null
+  const n = await runOne(happy(), ARGS);
+  assert.equal(inputsOf(call(n, "infra:load-parked").prompt).plan_tip_time, null);
+  assert.match(call(n, "infra:load-parked").prompt, /scratch' 'null'/);
+});
+
+test("4.0.0 1986 AC-4: a parked read that is unusable is ignored with a gate line; the run goes on", async () => {
+  const good = parkedOut({ reason: "x", rounds: [R0], symbols: [] });
+  const cases = [
+    ["digest", (r) => Object.assign(r, { parked: Object.assign({}, r.parked, { draft_chunks: ["# other"] }) }), /the relay does not match the program's digest/],
+    ["program", (r) => Object.assign(r, { program: { name: "parked", sha256: "0".repeat(64) } }), /did not run the shipped program parked/],
+    ["args", (r, p) => redigest("infra:load-parked", Object.assign(r, { args: ["/elsewhere", "null"] }), p), /ran on other arguments/],
+    ["failed", () => ({ status: "failed", reason: "boom" }), /returned failed/],
+    ["dead", () => null, /returned nothing/],
+    ["run", (r, p) => redigest("infra:load-parked", Object.assign(r, { parked: Object.assign({}, r.parked, { run: "../x" }) }), p), /unusable shape/],
+    ["chunk", (r, p) => redigest("infra:load-parked", Object.assign(r, { parked: Object.assign({}, r.parked, { draft_chunks: ["x".repeat(1001)] }) }), p), /unusable shape/],
+    ["path", (r, p) => redigest("infra:load-parked", Object.assign(r, { parked: Object.assign({}, r.parked, { plan_path: "/etc/x.md" }) }), p), /plan_path/],
+  ];
+  for (const [what, fn, want] of cases) {
+    const s = happy();
+    s["infra:load-parked"] = good;
+    s.__mutate = { label: "infra:load-parked", fn };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "awaiting_confirmation", what + " " + out.result.reason);
+    assert.ok(out.logs.some((l) => /^parked draft ignored \(/.test(l) && want.test(l)), what + ": " + out.logs.filter((l) => /parked/.test(l)).join(" | "));
+    const pin = inputsOf(call(out, "role:scope-and-plan").prompt);
+    assert.ok(!("prior_draft" in pin) && !("prior_round" in pin), what);
+    assert.ok(!call(out, "infra:commit-plan").prompt.includes("parked/used"), what);
+  }
+  // unparseable findings: the draft alone is used
+  const s = happy();
+  s["infra:load-parked"] = parkedOut(null, { findings_chunks: ["{not json"] });
+  const out = await runOne(s, ARGS);
+  const pin = inputsOf(call(out, "role:scope-and-plan").prompt);
+  assert.equal(pin.prior_draft.run, PRUN);
+  assert.ok(!("prior_round" in pin));
+});
+
+test("4.0.0 1983 AC-7: a parked prior_round with no round 0 is relaxed (fail closed) under default", async () => {
+  const s = defaultHappy();
+  s["infra:load-parked"] = parkedOut({ reason: "x", rounds: [Object.assign({}, R0, { round: 1, change_kind: "bug_fix", new_behaviour: false })], symbols: [] });
+  const out = await runOne(s, DEFAULT);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.equal(out.result.confirm_reason, "re-plan relaxed: no round0 (fail closed)");
+  assert.ok(!out.labels.includes("role:fleet-intent-judge"));
+  // a parked round 0 that was a feature: the new run's bug_fix is relaxed across runs
+  const t = defaultHappy();
+  t["infra:load-parked"] = parkedOut({ reason: "x", rounds: [R0], symbols: [] });
+  const o2 = await runOne(t, DEFAULT);
+  assert.match(o2.result.confirm_reason, /re-plan relaxed: change_kind feature→bug_fix; new_behaviour true→false/);
+  // a parked round 0 that matches: eligible
+  const u = defaultHappy();
+  u["infra:load-parked"] = parkedOut({ reason: "x", rounds: [Object.assign({}, R0, { change_kind: "bug_fix", new_behaviour: false })], symbols: [] });
+  const o3 = await runOne(u, DEFAULT);
+  assert.equal(o3.result.status, "ok", o3.result.reason);
+  // the parked symbols are carried: dropping one stops
+  const v = happy();
+  v["infra:load-parked"] = parkedOut({ reason: "x", rounds: [R0], symbols: ["guard_verdict"] });
+  const o4 = await runOne(v, ARGS);
+  assert.equal(o4.result.status, "needs_human");
+  assert.match(o4.result.reason, /changed_symbols dropped guard_verdict after the parked run n0-1234567/);
+});
+
+test("4.0.0 1986: a plan stop parks the draft with findings.json of every refused round", async () => {
+  const s = happy();
+  s["role:plan-audit"] = REFUSE("r0");
+  s["role:plan-audit:audit-fix"] = REFUSE("r1", "AC2");
+  s["role:plan-audit:audit-fix-2"] = REFUSE("r2");
+  s["role:scope-and-plan:audit-fix"] = planRound(s, { change_kind: "bug_fix" });
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  const pk = call(out, "infra:park-plan").prompt;
+  assert.match(pk, /parked\.py' 'write' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch' 'n1-0000001' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch\/park-chunks-n1-0000001'/);
+  const f = JSON.parse(chunkedContentOf(pk));
+  assert.equal(f.plan_path, "docs/plans/x.md");
+  assert.match(f.reason, /^plan-audit verdict plan_defect: AC1: r2 \(after 2 re-plan rounds\)/);
+  assert.deepEqual(f.rounds.map((r) => [r.round, r.change_kind, r.findings.map((x) => x.finding)]), [[0, "feature", ["r0"]], [1, "bug_fix", ["r1"]], [2, "feature", ["r2"]]]);
+  assert.deepEqual(f.rounds[0].criteria, criteria(2).map((c) => ({ id: c.id, text: c.text })));
+  assert.ok(!("findings" in inputsOf(pk)), "the chunks are not repeated in the inputs");
+  // a stop before any refused round still parks the draft, with no rounds
+  const t = happy();
+  t["role:scope-and-plan"].plan_diff = [];
+  const o2 = await runOne(t, ARGS);
+  const f2 = JSON.parse(chunkedContentOf(call(o2, "infra:park-plan").prompt));
+  assert.deepEqual(f2.rounds, []);
+});
+
+// Real python: parked.py write then read.
+test("4.0.0 1986 (real python): parked.py writes findings from checked chunks and reads the newest folder past the tip", () => {
+  const d = mkdtempSync(join(tmpdir(), "fleet-parked-"));
+  const prog = join(SCRIPTS_SRC, "parked.py");
+  const py = (...a) => spawnSync("python3", ["-I", prog].concat(a), { encoding: "utf8" });
+  try {
+    const scratch = join(d, "scratch");
+    mkdirSync(join(scratch, "parked", "r-000001", "docs", "plans"), { recursive: true });
+    writeFileSync(join(scratch, "parked", "r-000001", "docs", "plans", "x.md"), "# old draft\n");
+    const msg = JSON.stringify({ reason: "why", rounds: [R0], symbols: [], plan_path: "docs/plans/x.md" });
+    const b64 = Buffer.from(msg, "utf8").toString("base64");
+    const cdir = join(scratch, "pc");
+    mkdirSync(cdir);
+    const parts = [b64.slice(0, 40), b64.slice(40)];
+    parts.forEach((x, i) => writeFileSync(join(cdir, i + ".b64"), i === 1 ? x.replace(/^./, (c) => (c === "A" ? "B" : "A")) : x));
+    const shas = JSON.stringify(parts.map((x, i) => ({ i, sha256: sha256(x) })));
+    let w = py("write", scratch, "r-000001", cdir, "2", sha256(msg), shas);
+    assert.equal(w.status, 3, w.stderr);
+    assert.deepEqual(JSON.parse(w.stdout), { bad_chunks: [1] });
+    assert.ok(!existsSync(join(scratch, "parked", "r-000001", "findings.json")));
+    writeFileSync(join(cdir, "1.b64"), parts[1]);
+    w = py("write", scratch, "r-000001", cdir, "2", sha256(msg), shas);
+    assert.equal(w.status, 0, w.stderr);
+    assert.equal(readFileSync(join(scratch, "parked", "r-000001", "findings.json"), "utf8"), msg);
+    assert.ok(!existsSync(cdir), "the chunk dir is removed");
+    // a chunk dir outside the scratch dir and a bad run name are refused
+    assert.notEqual(py("write", scratch, "r-000001", d, "2", sha256(msg), shas).status, 0);
+    assert.notEqual(py("write", scratch, "../x", join(scratch, "q"), "2", sha256(msg), shas).status, 0);
+    assert.notEqual(py("write", scratch, "used", join(scratch, "q"), "2", sha256(msg), shas).status, 0);
+    // read: the folder and its files are newer than tip 1000
+    const now = Math.floor(Date.now() / 1000);
+    let r = py("read", scratch, "1000");
+    assert.equal(r.status, 0, r.stderr);
+    let o = JSON.parse(r.stdout);
+    assert.deepEqual(o.args, [scratch, "1000"]);
+    assert.equal(o.parked.run, "r-000001");
+    assert.equal(o.parked.plan_path, "docs/plans/x.md");
+    assert.equal(o.parked.draft_chunks.join(""), "# old draft\n");
+    assert.equal(o.parked.findings_chunks.join(""), msg);
+    assert.ok(o.parked.findings_chunks.every((x) => x.length <= 1000));
+    assert.equal(o.program.name, "parked");
+    const dg = Object.assign({}, o);
+    delete dg.digest;
+    assert.equal(o.digest, sha256(canon(dg)));
+    // older than the plan tip: ignored
+    o = JSON.parse(py("read", scratch, String(now + 100)).stdout);
+    assert.equal(o.parked, null);
+    // the newest folder wins; used/ and a symlinked folder are skipped
+    mkdirSync(join(scratch, "parked", "r-000002"));
+    writeFileSync(join(scratch, "parked", "r-000002", "p.md"), "# newer\n");
+    utimesSync(join(scratch, "parked", "r-000002", "p.md"), now + 50, now + 50);
+    mkdirSync(join(scratch, "parked", "used", "r-000009"), { recursive: true });
+    writeFileSync(join(scratch, "parked", "used", "r-000009", "z.md"), "# used\n");
+    utimesSync(join(scratch, "parked", "used", "r-000009", "z.md"), now + 90, now + 90);
+    o = JSON.parse(py("read", scratch, "null").stdout);
+    assert.equal(o.parked.run, "r-000002");
+    assert.equal(o.parked.plan_path, "p.md");
+    assert.deepEqual(o.parked.findings_chunks, []);
+    assert.deepEqual(o.args, [scratch, "null"]);
+    // bad tip
+    assert.notEqual(py("read", scratch, "-1").status, 0);
+    // no parked dir
+    o = JSON.parse(py("read", join(d, "none"), "null").stdout);
+    assert.equal(o.parked, null);
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("4.0.0 1991: SKILL.md passes confirm default and documents confirm_reason and ledger_source", () => {
+  const skill = readFileSync(join(SCRIPTS_SRC, "..", "skills", "build-task", "SKILL.md"), "utf8");
+  assert.match(skill, /Pass `confirm: "default"` unless the user named a mode \(ADR-1186\)/);
+  assert.match(skill, /confirm: "<default \| ask \| auto>"/);
+  assert.match(skill, /`confirm: "default"`: the result is one of three/);
+  assert.match(skill, /show\s+`confirm_reason`/);
+  assert.match(skill, /`ledger_source`, when it is not null: the ledger \(`ledger` or `yaadgaar`\)/);
+  assert.match(skill, /not a security boundary/);
 });

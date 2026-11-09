@@ -53,7 +53,8 @@ function at(obj, path) {
 test("4.0.0 1993 AC-2: every *_PY constant ships as scripts/<name>.py, byte-equal to the constant + newline", () => {
   const consts = (SOURCE.match(/^const ([A-Z_]+_PY) = String\.raw`/gm) || []).map((l) => /const ([A-Z_]+_PY)/.exec(l)[1]).sort();
   assert.deepEqual(consts, PROGRAMS.map(([, c]) => c).sort(), "the program table names every embedded program");
-  assert.equal(PROGRAMS.length, 22);
+  // 22 in S1; S4 adds parked (1986)
+  assert.equal(PROGRAMS.length, 23);
   const files = readdirSync(SCRIPTS_SRC).filter((f) => f.endsWith(".py")).sort();
   assert.deepEqual(files, PROGRAMS.map(([n]) => n + ".py").sort(), "no extra and no missing file");
   for (const [name, c] of PROGRAMS) {
@@ -220,6 +221,11 @@ test("4.0.0 1993: a wrong program at every program-running step stops the run (t
     if (/^workspace$/.test(label)) {
       // the origin URL relay is soft: unusable, so the IaC push gate refuses later
       assert.ok(out.logs.some((l) => /origin URL relay unusable/.test(l)), label);
+      continue;
+    }
+    if (/^infra:load-parked$/.test(label)) {
+      // 4.0.0 (1986, S4): the parked-run read is soft: its data is ignored, never used
+      assert.ok(out.logs.some((l) => /parked draft ignored \(did not run the shipped program parked/.test(l)), label);
       continue;
     }
     assert.ok(!okish, label + " " + (path || "") + " (" + name + "): a zero program sha256 did not stop the run");

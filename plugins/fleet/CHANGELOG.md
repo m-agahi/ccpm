@@ -196,6 +196,27 @@ its notes to this entry.
 - `isShortPath(plan_facts)` (`est_diff_lines` < 20 and `new_behaviour` false) and
   `MAX_SHORT_TEST_ROUNDS = 2` are ready for the short path. The build still runs the full path
   until stream S5 splits the one writer per criterion.
+- SKILL.md passes `confirm: "default"` unless the user named a mode, shows `confirm_reason`, and
+  explains `ledger_source`.
+
+### S4: parked draft and findings as planner inputs (ledger 1986)
+
+- New shipped program `parked.py` (23 in all). `write` puts `parked/<run>/findings.json` from
+  checked base64 chunks (exit 3 with `bad_chunks`, nothing written). `read` prints the newest
+  `parked/<run>/` folder newer than the last plan commit, in chunks of at most 1000 characters,
+  inside its digest; `parked/used/` and symlinks are skipped.
+- `branch_scan.py` prints `plan_tip_time`, the committer time of HEAD (the newest plan commit:
+  plan mode stops on any build commit first), inside its digest. The script passes that value to
+  the reader, never an agent-typed one.
+- The park step also writes `findings.json`: the stop reason, every refused round
+  (`{round, findings, criteria, change_kind, new_behaviour}`) and the carried symbols.
+- New read-only step `infra:load-parked` after the branch scan. The draft goes to the planner as
+  `prior_draft: {run, plan_path, text}`, the findings as `prior_round` (round 0 from the parked
+  run, so the relax check spans runs; no round 0 counts as relaxed). Neither is a brief source,
+  neither is sealed, and no judge gets them; plan-audit gets `prior_round`. A digest, program,
+  argument or shape problem ignores the parked data with the gate line "parked draft ignored";
+  it never stops the run.
+- After a plan commit that used a parked folder, the commit step moves it to `parked/used/`.
 
 ## [3.1.3] - 2026-11-09
 

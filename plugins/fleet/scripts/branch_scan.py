@@ -100,8 +100,13 @@ def ref_ok(r):
     return all(isinstance(p.get(k), dict) for k in ('versions', 'dispatch', 'contract'))
 base = 'refs/remotes/origin/' + default
 commits = []
-for line in run('log', '--format=%H%x00%s', base + '..HEAD').stdout.decode('utf-8', 'replace').splitlines():
-    c, _, subj = line.partition('\0')
+plan_tip_time = None
+for line in run('log', '--format=%H%x00%ct%x00%s', base + '..HEAD').stdout.decode('utf-8', 'replace').splitlines():
+    c, _, rest = line.partition('\0')
+    ct, _, subj = rest.partition('\0')
+    # 4.0.0 (1986): the committer time of the newest commit (HEAD)
+    if plan_tip_time is None and ct.isdigit():
+        plan_tip_time = int(ct)
     files = names(run('diff-tree', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c).stdout)
     commits.append({'sha': c, 'subject': subj, 'files': sorted(set(files))})
 pre = 'refs/fleet/' + tid + '/'
@@ -135,7 +140,7 @@ for name in run('for-each-ref', '--format=%(refname)', pre).stdout.decode().spli
                 e['task_id'], e['plan_path'] = r['task_id'], r['plan_path']
     refs.append(e)
 refs.sort(key=lambda x: x['name'])
-out = {'commits': commits, 'refs': refs}
+out = {'commits': commits, 'refs': refs, 'plan_tip_time': plan_tip_time}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, ensure_ascii=False))

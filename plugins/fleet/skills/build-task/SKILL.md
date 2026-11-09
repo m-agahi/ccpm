@@ -61,10 +61,20 @@ runs `/build-task` explicitly, always use the fleet.
    On a `yadgarhq/` project a task id (`#622`, `622`, `yaadgaar #622`) is a yaadgaar task, never
    the legacy `L622`; the workflow needs `project` to tell them apart.
 
-   **Confirm mode.** `confirm` is `"ask"` by default: the interactive confirmation in step 7. Use
-   `"auto"` only when the user asked for an unattended or goal run (for example "build L42
-   unattended", "run the fleet on L42 without asking", or a goal/loop that runs without the user).
-   Never pick `"auto"` on your own for an interactive request.
+   **Confirm mode.** Pass `confirm: "default"` unless the user named a mode (ADR-1186):
+
+   - `"default"`: after the plan audit approves, the workflow skips the confirmation and runs its
+     intent, command and scope gates only when the planner declared a bug fix
+     (`change_kind: "bug_fix"`) with no new behaviour, no planned path is an IaC path, no re-plan
+     round relaxed the plan, and a task id carries `project`. Otherwise it asks, as `"ask"` does,
+     and the result says why in `confirm_reason`. The declared values come from the ticket text and
+     are not a security boundary: the gates, the IaC push stop, the hook-surface stop and the draft
+     PR with review are.
+   - `"ask"`: when the user asks to confirm the plan first (for example "show me the plan
+     first"): always the interactive confirmation in step 7.
+   - `"auto"`: only when the user asked for an unattended or goal run (for example "build L42
+     unattended", "run the fleet on L42 without asking", or a goal/loop that runs without the
+     user). Never pick `"auto"` on your own for an interactive request.
 
 5. **Workflow tool.** Check that `Workflow` is among the tools you can call now. If it is not, say
    "the fleet needs the Workflow tool, which this session does not have" and stop. Never run the
@@ -74,7 +84,7 @@ runs `/build-task` explicitly, always use the fleet.
    ```
    Workflow({ name: "fleet:build-task-run",
               args: { mode: "plan", input: "<input>", repo: "<repo>", date: "<date>",
-                      project: "<project, if any>", confirm: "<ask | auto>",
+                      project: "<project, if any>", confirm: "<default | ask | auto>",
                       run_nonce: "<fresh date +%s%N output>" } })
    ```
 
@@ -82,6 +92,12 @@ runs `/build-task` explicitly, always use the fleet.
 
    - `confirm: "ask"`: any status other than `awaiting_confirmation` -> report it as in step 9 and
      stop.
+   - `confirm: "default"`: the result is one of three. `awaiting_confirmation` -> show
+     `confirm_reason` (why the workflow asks), then go on with step 7. The build result
+     (`auto_confirmed: true`) -> the gates passed and the same run built; report it as in step 9
+     and skip steps 7 and 8. `needs_human` with `failed_check` and `needs_max_section` -> a gate
+     failed: show `needs_max_section` verbatim and stop; do not ask, do not retry, do not switch
+     to `"ask"`. Any other status -> report it as in step 9 and stop.
    - `confirm: "auto"`: the workflow does not ask. It runs its intent, command and scope gates and,
      when they pass, builds in the same run: the result is the build result
      (`auto_confirmed: true`); report it as in step 9 and skip steps 7 and 8. When a gate fails, the result is
@@ -100,8 +116,11 @@ runs `/build-task` explicitly, always use the fleet.
    - fleet size: `fleet_size.criteria` criteria, about `fleet_size.est_agents` agents, about
      `fleet_size.est_rounds` fix rounds;
    - `plan_path` and the branch (`plan_ref.branch`). The plan is committed locally only.
-   - `ledger_source`, when it is not null: the ledger, the task (`ref`, and `id` for yaadgaar) and
-     the project it resolved in (`null` = the session's yaadgaar project, no `project` given).
+   - `ledger_source`, when it is not null: the ledger (`ledger` or `yaadgaar`), the task (`ref`,
+     and `id` for yaadgaar) and the project it resolved in (`null` = the session's yaadgaar
+     project, no `project` given). Show it so the user sees which task in which ledger the plan
+     builds before they confirm.
+   - `confirm_reason`, when present (`confirm: "default"`): why the workflow asks.
    - `commands`: EVERY entry, its `command` VERBATIM in a code span (never paraphrased, shortened
      or summarised), with its `env` (every name and value, verbatim; `{}` when empty) and `tools`
      (test_cmd), its `rule_source` and `run_by` (`roles` = the test command the agents run,
@@ -123,8 +142,9 @@ runs `/build-task` explicitly, always use the fleet.
                       run_nonce: "<fresh date +%s%N output>" } })
    ```
 
-   For a repeat after a ruling on an auto-mode stop, add `confirm: "auto"`: the workflow re-reads
-   the task and runs its gates again before it builds. On `needs_human` with `needs_max_section`,
+   Build mode needs no confirm mode after the user's "Build": `default` and `ask` build at once.
+   For a repeat after a ruling on an auto-mode stop (also one under `default`), add
+   `confirm: "auto"`: the workflow re-reads the task and runs its gates again before it builds. On `needs_human` with `needs_max_section`,
    show it verbatim and stop.
 
    `plan_ref` is small: `{branch, plan_commit, plan_ref, ref_sha256, repo}`. Pass it exactly as the
@@ -155,9 +175,13 @@ runs `/build-task` explicitly, always use the fleet.
 
 A second plan run for the same input reuses the branch and worktree under
 `<repo>/.claude/worktrees/fleet-<task id>-<slug>/` and updates the plan in place, with a new plan
-commit. A plan run that stops before its plan commit (for example on a plan-audit refusal) moves
-its own draft plan to `<repo>/.claude/worktrees/fleet-<task id>-<slug>/scratch/parked/` so the
-next run starts on a clean worktree; the reason names the path. If the branch already has build
+commit. The plan audit can refuse a plan up to 2 times in a run; the planner re-plans with the
+findings each time (in every confirm mode). A plan run that stops before its plan commit (for
+example on a third plan-audit refusal) moves its own draft plan and its findings to
+`<repo>/.claude/worktrees/fleet-<task id>-<slug>/scratch/parked/` so the next run starts on a
+clean worktree; the reason names the path. The next plan run gives that draft and those findings
+to the planner as inputs (never as task sources), and moves the folder to `parked/used/` after its
+plan commit. If the branch already has build
 commits, plan mode stops: run build, or delete the branch.
 Writers and the coder never commit: the only build commits are made by the workflow's commit step
 after the code judge approves.

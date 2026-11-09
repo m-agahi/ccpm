@@ -1730,6 +1730,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "intake",
     "workspace",
     "infra:branch-scan",
+    "infra:load-parked",
     "role:scope-and-plan",
     "infra:hook-surface:plan",
     "infra:path-check:format-plan",
@@ -5485,6 +5486,10 @@ const ARRAY_SITES = {
   "r.capped @ callerCheck": "infra:capped",
   "r.doctest_md @ callerCheck": "infra:doctest_md",
   "r.auto_dont_care @ callerCheck": "parsed: a program map; Array.isArray only refuses an array there",
+  // 4.0.0 (1986): a parked findings.json (digest-checked relay, JSON.parse)
+  "f.rounds @ loadParked": "parsed: a parked findings.json",
+  "x.findings @ loadParked": "parsed: a parked findings.json",
+  "f.symbols @ loadParked": "parsed: a parked findings.json",
   // 4.0.0 (1983): the script's own round record, or a parked findings.json (digest-checked)
   "plan.criteria @ roundSnapshot": "role:scope-and-plan:criteria",
   "r0.criteria @ relaxedReasons": "parsed: the round-0 snapshot (the script's own, or a parked findings.json)",
@@ -7110,7 +7115,9 @@ test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; P
       assert.equal(e.task_id, e.ref_ok ? "l42" : null);
       assert.equal(e.plan_path, e.ref_ok ? "docs/plans/x.md" : null);
       assert.deepEqual(o.commits, [{ sha: head, subject: "plan(l42): add-thing", files: ["docs/plans/x.md"] }]);
-      assert.equal(o.digest, sha256(canon({ commits: o.commits, refs: o.refs, program: o.program })));
+      // 4.0.0 (1986): HEAD's committer time, inside the digest
+      assert.ok(Number.isInteger(o.plan_tip_time) && o.plan_tip_time > 0, String(o.plan_tip_time));
+      assert.equal(o.digest, sha256(canon({ commits: o.commits, refs: o.refs, plan_tip_time: o.plan_tip_time, program: o.program })));
     }
     assert.equal(scan().refs.filter((x) => x.ref_ok).length >= 0, true);
     // the first case is the real shape: ok in both
