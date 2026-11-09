@@ -405,7 +405,7 @@ its notes to this entry.
 - Accepted residual: each user password is visible in the transcripts (the db-up relay holds all
   of them; a role prompt holds its own). It guards one database on 127.0.0.1 that lives for one
   run.
-- Four new shipped programs: `test_db_decl`, `db_sweep`, `db_up`, `db_down` (27 in all). Each
+- Four new shipped programs: `test_db_decl`, `db_sweep`, `db_up`, `db_down` (28 in all, with S3's `push_probe`). Each
   follows the 4.0.0 program rules: resource caps (lifted for the podman child), a clean PATH, the
   self-hash inside the digest, and the `sha256sum && python3 -I` command form.
 

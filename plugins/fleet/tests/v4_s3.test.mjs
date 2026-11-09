@@ -79,7 +79,7 @@ const WANT = [
   [/^infra:state:/, "sonnet"],
   [/^infra:(fleet-scan|purge-bytecode|review-cleanup|ledger-|yaadgaar-|comments-)/, "sonnet"],
   // 4.0.0 S5 (1987, 1981): writes with digest-checked relays
-  [/^infra:(freeze-ref|db-up|db-down)/, "sonnet"],
+  [/^infra:freeze-ref/, "sonnet"],
 ];
 function wantTier(label) {
   const w = WANT.find(([re]) => re.test(label));

@@ -84,10 +84,8 @@ const INFRA_TIER = [
   ["infra:ledger-", "sonnet"],
   ["infra:yaadgaar-", "sonnet"],
   ["infra:comments-", "sonnet"],
-  // 4.0.0 (1987, 1981): writes (a ref; a container) with digest-checked relays
+  // 4.0.0 (1987): the freeze ref write
   ["infra:freeze-ref", "sonnet"],
-  ["infra:db-up", "sonnet"],
-  ["infra:db-down", "sonnet"],
 ];
 // INFRA_TIER_END
 // A haiku PATH check whose relay is broken runs once more on this tier.
