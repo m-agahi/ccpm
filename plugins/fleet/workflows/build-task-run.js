@@ -1344,8 +1344,8 @@ const INFRA_SCHEMA = {
     exists: { type: "boolean" },
     occurrences: { type: "object", additionalProperties: { type: "array", items: STR } },
     capped: { type: "array", items: STR },
-    // 4.0.0 (1989): callers.py maps doc and lock file hits as dont_care itself
-    auto_dont_care: { type: "array", items: STR },
+    // 4.0.0 (1989): the caller grep's auto dont_care hits and doctest-collected docs
+    auto_dont_care: { type: "object", additionalProperties: { type: "array", items: STR } },
     doctest_md: { type: "array", items: STR },
     defs: {
       type: "array",
@@ -1765,6 +1765,8 @@ function goPackageArg(x) {
   return !!m && testPathArg(m[1]);
 }
 
+// a cargo --test target or -p/--package crate name (4.0.0, ledger 1980)
+const CARGO_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const PYTEST_FLAGS = ["-q", "-v", "-vv", "-x", "-s", "-n0", "-ra", "-rA", "--no-header"];
 const PYTEST_FLAG_RE = /^(-n[0-9]+|--maxfail=[0-9]+|--tb=(short|line|no|long)|--durations=[0-9]+|--timeout=[0-9]+)$/;
 
@@ -1779,13 +1781,23 @@ function testArgsProblem(kind, a) {
   }
   if (kind === "cargo") {
     let i = 0;
-    for (; i < a.length && a[i] !== "--"; i++)
-      if (["--lib", "--tests", "--all-features", "--workspace", "-q"].indexOf(a[i]) < 0) return a[i];
-    for (i += 1; i < a.length; i++) if (!/^[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*$/.test(a[i])) return a[i];
+    for (; i < a.length && a[i] !== "--"; i++) {
+      if (["--lib", "--tests", "--all-features", "--workspace", "-q"].indexOf(a[i]) >= 0) continue;
+      // 4.0.0 (1980): one test target or one package, by plain name
+      if (["--test", "-p", "--package"].indexOf(a[i]) >= 0) {
+        if (!CARGO_NAME_RE.test(a[i + 1] || "")) return a[i] + " " + (a[i + 1] || "");
+        i++;
+        continue;
+      }
+      return a[i];
+    }
+    for (i += 1; i < a.length; i++) if (a[i] !== "--exact" && !/^[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*$/.test(a[i])) return a[i];
     return null;
   }
   for (let i = 0; i < a.length; i++) {
     const x = a[i];
+    // 4.0.0 (1980): go targets a criterion with test_args, never <paths>
+    if (kind === "go" && x === PATHS_TOKEN) return x;
     if (kind === "pytest") {
       if (PYTEST_FLAGS.indexOf(x) >= 0 || PYTEST_FLAG_RE.test(x)) continue;
       if (x === "-k" || x === "-m") {
@@ -1882,9 +1894,33 @@ function testCmdProblem(tc) {
   return null;
 }
 
+// 4.0.0 (1980): why a criterion's test_args is unusable (null: ok or absent).
+// Only for a cargo or go test_cmd without <paths>; test_cmd.command + " " +
+// test_args must pass the whole test_cmd allowlist as one command.
+function criterionTestArgsProblem(testCmd, c) {
+  if (!c || c.test_args === undefined || c.test_args === null) return null;
+  const ta = c.test_args;
+  if (typeof ta !== "string" || !ta.trim()) return "test_args must be a non-empty string, got " + JSON.stringify(ta);
+  const cmd = testCmd && typeof testCmd.command === "string" ? testCmd.command : "";
+  const split = splitTestCmd(cmd);
+  const t = split.tokens || [];
+  if (t.indexOf(PATHS_TOKEN) >= 0) return "test_args is not allowed when test_cmd holds " + PATHS_TOKEN + " (the paths target the run)";
+  const pre = testRunnerPrefix(t);
+  if (!pre || (pre.kind !== "cargo" && pre.kind !== "go"))
+    return "test_args is allowed only for cargo test and go test" + (pre && pre.kind === "make" ? " (make test is full-suite only)" : "");
+  const why = testCmdProblem(Object.assign({}, testCmd, { command: cmd + " " + ta }));
+  return why ? "test_args " + JSON.stringify(ta) + " refused: " + why : null;
+}
+
+// The command a criterion's targeted runs use (test_args appended), or null.
+function criterionCommand(testCmd, c) {
+  return c && typeof c.test_args === "string" ? testCmd.command + " " + c.test_args : null;
+}
+
 // What Max confirms: every command, verbatim, with its source and who runs
-// it, and the test_cmd's env and tools.
-function commandsOf(testCmd, obligations) {
+// it, and the test_cmd's env and tools. 4.0.0 (1980): one more test_cmd entry
+// per criterion with test_args, holding the whole command it runs.
+function commandsOf(testCmd, obligations, criteria) {
   const out = [
     {
       kind: "test_cmd",
@@ -1896,6 +1932,11 @@ function commandsOf(testCmd, obligations) {
       run_by: "roles",
     },
   ];
+  for (const c of criteria || []) {
+    const cmd = criterionCommand(testCmd, c);
+    if (cmd !== null)
+      out.push({ kind: "test_cmd", id: c.id, command: cmd, env: testCmd.env || {}, tools: testCmd.tools || [], rule_source: "test_cmd + criteria " + c.id + " test_args", run_by: "roles" });
+  }
   for (const o of obligations) {
     if (typeof o.check_cmd === "string")
       out.push({ kind: "check_cmd", id: o.id, command: o.check_cmd, rule_source: o.rule_source || null, run_by: "code-judge (required)" });
@@ -3063,7 +3104,7 @@ try:
         _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
 except Exception:
     _PROG = {'name': None, 'sha256': None}
-import hashlib, json, os, subprocess, sys
+import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, plan_path, syms, cap = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), int(sys.argv[4])
 G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
@@ -3086,7 +3127,40 @@ for s in syms:
         occ[s] = []
     else:
         occ[s] = sorted(hits)
-out = {'occurrences': occ, 'capped': sorted(capped)}
+# fleet 4.0.0 (1989, ADR-1185): hits in doc and lock files are auto
+# dont_care, unless the doc is collected as a doctest: (a) a pytest config or
+# conftest.py names --doctest-glob or doctest_optionflags (every doc stays
+# mapped), (b) a tracked .rs file include_str!s a file of that basename.
+DOC_RE = re.compile(r'.*\.(md|rst|adoc)', re.I)
+NOTE_RE = re.compile(r'(CHANGELOG|LICENSE)([-_][A-Za-z0-9-]+)*(\.[0-9]+)*(\.(md|rst|adoc|txt))?', re.I)
+LOCKS = ('Cargo.lock', 'uv.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'Gemfile.lock', 'go.sum')
+def base(p):
+    return p.rsplit('/', 1)[-1]
+def doc_or_lock(p):
+    b = base(p)
+    return bool(DOC_RE.fullmatch(b) or NOTE_RE.fullmatch(b)) or b in LOCKS
+def grep(args):
+    r = subprocess.run(G + ['grep', '-I', '--no-color'] + args, capture_output=True)
+    if r.returncode not in (0, 1):
+        sys.exit(r.stderr.decode('utf-8', 'replace'))
+    return r.stdout.decode('utf-8', 'replace')
+cfg = grep(['-l', '--full-name', '-F', '-e', '--doctest-glob', '-e', 'doctest_optionflags', '--', ':(top,literal)pyproject.toml', ':(top,literal)pytest.ini', ':(top,literal)setup.cfg', ':(top,literal)tox.ini', ':(top,glob)**/conftest.py'])
+all_docs = bool(cfg.strip())
+included = set()
+for line in grep(['-h', '-o', '-E', '-e', 'include_str![[:space:]]*\\([[:space:]]*"[^"]*"', '--', ':(top,glob)**/*.rs']).splitlines():
+    for m in re.findall(r'"([^"]*)"', line):
+        included.add(base(m))
+doctest = set()
+auto = {}
+for s in syms:
+    auto[s] = []
+    for h in occ[s]:
+        p = h.rsplit(':', 1)[0]
+        if DOC_RE.fullmatch(base(p)) and (all_docs or base(p) in included):
+            doctest.add(p)
+        elif doc_or_lock(p):
+            auto[s].append(h)
+out = {'occurrences': occ, 'capped': sorted(capped), 'auto_dont_care': auto, 'doctest_md': sorted(doctest)}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, sort_keys=True, ensure_ascii=False))`;
@@ -6394,7 +6468,9 @@ function confusableFindings(criteria) {
   return out;
 }
 
-function normCriteria(raw) {
+// testCmd: the plan's test_cmd; every criterion's test_args is checked
+// against it (4.0.0, ledger 1980) and kept only when it passes.
+function normCriteria(raw, testCmd) {
   const seen = {};
   const criteria = raw.map((c) => {
     const id = String((c && c.id) || "");
@@ -6402,7 +6478,11 @@ function normCriteria(raw) {
       halt("needs_human", "criterion id not usable in a branch name: " + JSON.stringify(id));
     if (seen[id]) halt("needs_human", "duplicate criterion id " + id);
     seen[id] = true;
-    return Object.assign(stripHeldOut(c), {
+    const ta = criterionTestArgsProblem(testCmd, c);
+    if (ta) halt("needs_human", "criterion " + id + " " + ta, "commands");
+    const kept = stripHeldOut(c);
+    if (kept.test_args === null) delete kept.test_args;
+    return Object.assign(kept, {
       id,
       text: String(c.text || ""),
       test_files: (c.test_files || []).map(normPath).filter(Boolean),
@@ -6575,6 +6655,18 @@ function changedSymbolFindings(raw, criteria) {
   return { findings, clean };
 }
 
+// 4.0.0 (1989, ADR-1185): the doc and lock files whose grep hits the caller
+// check maps itself as dont_care. The JS mirror of CALLERS_PY's doc_or_lock();
+// config, manifest, .txt, .csv and .svg files stay planner-mapped.
+const AUTO_DONT_CARE = "auto: non-code file";
+const DOC_FILE_RE = /^.*\.(md|rst|adoc)$/i;
+const NOTE_FILE_RE = /^(CHANGELOG|LICENSE)([-_][A-Za-z0-9-]+)*(\.[0-9]+)*(\.(md|rst|adoc|txt))?$/i;
+const LOCK_FILES = ["Cargo.lock", "uv.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "Gemfile.lock", "go.sum"];
+function docOrLockFile(p) {
+  const b = String(p).split("/").pop();
+  return DOC_FILE_RE.test(b) || NOTE_FILE_RE.test(b) || LOCK_FILES.indexOf(b) >= 0;
+}
+
 // The caller grep and its diff against the planner's map: a hit the map does
 // not list, a mapped line that is no hit, and a symbol over the cap are
 // findings. Returns {findings, occurrences}. The relayed lists must match the
@@ -6594,8 +6686,23 @@ async function callerCheck(label, symbols, worktree, planPath) {
     if (!Array.isArray(occ[n]) || !occ[n].every((x) => typeof x === "string"))
       halt("failed", label + " returned no occurrence list for " + n);
   requireProgram(r, "callers", label);
-  if (typeof r.digest !== "string" || sha256Hex(canonical({ occurrences: occ, capped: r.capped, program: r.program })) !== r.digest)
+  if (!relayDigestOk(r, ["occurrences", "capped", "auto_dont_care", "doctest_md"], "callers"))
     halt("failed", label + ": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
+  // 4.0.0 (1989, ADR-1185): a hit is auto dont_care only when the program
+  // lists it AND the script's own file list agrees (a doc or lock file that
+  // is not collected as a doctest); a missing list maps nothing
+  const doctest = Array.isArray(r.doctest_md) ? r.doctest_md.filter((x) => typeof x === "string").map(normPath) : null;
+  const adc = doctest && r.auto_dont_care && typeof r.auto_dont_care === "object" && !Array.isArray(r.auto_dont_care) ? r.auto_dont_care : {};
+  const auto = {};
+  for (const n of names) {
+    auto[n] = [];
+    for (const h of Array.isArray(adc[n]) ? adc[n] : []) {
+      const p = typeof h === "string" ? h.slice(0, h.lastIndexOf(":")) : "";
+      if (typeof h !== "string" || occ[n].indexOf(h) < 0 || !docOrLockFile(p) || doctest.indexOf(normPath(p)) >= 0)
+        halt("failed", label + ": the program listed " + JSON.stringify(h) + " as auto dont_care for " + n + ", which the script's doc and lock file list refuses");
+      auto[n].push(h);
+    }
+  }
   const findings = [];
   for (const s of symbols) {
     if (r.capped.indexOf(s.symbol) >= 0) {
@@ -6610,13 +6717,13 @@ async function callerCheck(label, symbols, worktree, planPath) {
     const hits = occ[s.symbol];
     const mapped = s.occurrences.map((o) => occurrenceKey(o.at));
     for (const h of hits)
-      if (mapped.indexOf(h) < 0)
+      if (mapped.indexOf(h) < 0 && auto[s.symbol].indexOf(h) < 0)
         findings.push({ criterion: null, symbol: s.symbol, finding: s.symbol + ": " + h + " is an occurrence (git grep -w) not mapped in changed_symbols; map it to a criterion or to dont_care with a reason" });
     for (const k of mapped)
       if (hits.indexOf(k) < 0)
         findings.push({ criterion: null, symbol: s.symbol, finding: s.symbol + ": " + k + " is mapped but git grep -w finds no occurrence there (stale line or wrong path; cite lines at the worktree HEAD)" });
   }
-  return { findings, occurrences: occ };
+  return { findings, occurrences: occ, auto };
 }
 
 // The build-time caller check (3.0.0, ledger 1956). The approved tree
@@ -6827,7 +6934,7 @@ async function planAndAudit(ctx) {
   const planPath = normPath(plan.plan_path);
   if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
     halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
-  const criteria = normCriteria(plan.criteria);
+  const criteria = normCriteria(plan.criteria, plan.test_cmd);
   // 2.1.4 #7: an invisible or confusable character in examples or property
   const conf = confusableFindings(criteria);
   if (conf.length) {
@@ -6854,11 +6961,21 @@ async function planAndAudit(ctx) {
       );
   }
   let callerOcc = null;
+  let autoDontCare = null;
+  let symbolMap = cs.clean;
   if (cs.clean.length) {
     const cc = await callerCheck("infra:callers" + sfx, cs.clean, ctx.common.worktree, planPath);
     if (cc.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols);
     callerOcc = cc.occurrences;
-    gate("callers: " + cs.clean.map((s) => s.symbol + " " + s.occurrences.length).join(", ") + " occurrence(s) mapped; git grep -w agrees");
+    autoDontCare = cc.auto;
+    // 4.0.0 (1989): the unmapped doc and lock hits join the sealed map as dont_care
+    symbolMap = cs.clean.map((s) => {
+      const have = s.occurrences.map((o) => occurrenceKey(o.at));
+      const add = cc.auto[s.symbol].filter((h) => have.indexOf(h) < 0).map((h) => ({ at: h, criterion: null, dont_care: AUTO_DONT_CARE }));
+      return add.length ? { symbol: s.symbol, occurrences: s.occurrences.concat(add) } : s;
+    });
+    const nAuto = symbolMap.reduce((a, s, i) => a + s.occurrences.length - cs.clean[i].occurrences.length, 0);
+    gate("callers: " + cs.clean.map((s) => s.symbol + " " + s.occurrences.length).join(", ") + " occurrence(s) mapped; git grep -w agrees" + (nAuto ? "; " + nAuto + " doc or lock hit(s) mapped " + JSON.stringify(AUTO_DONT_CARE) : ""));
   }
   const planFacts = {
     allowed_additions: plan.allowed_additions ? stripHeldOut(plan.allowed_additions) : null,
@@ -6869,8 +6986,8 @@ async function planAndAudit(ctx) {
     new_behaviour: typeof plan.new_behaviour === "boolean" ? plan.new_behaviour : null,
     test_cmd: stripHeldOut(plan.test_cmd),
     repo_obligations: stripHeldOut(obligations),
-    commands: commandsOf(plan.test_cmd, obligations),
-    changed_symbols: cs.clean,
+    commands: commandsOf(plan.test_cmd, obligations, criteria),
+    changed_symbols: symbolMap,
     // 3.1.0: origin's configured URL at plan time, before any role ran; the
     // IaC push gate's network reads use it, never the repo config
     remote_url: validRemoteUrl(ctx.remoteUrl) ? ctx.remoteUrl : null,
@@ -6925,7 +7042,7 @@ async function planAndAudit(ctx) {
         plan_diff: plan.plan_diff.slice(),
         base_ref: ctx.baseRef,
         mode: "writeback=false",
-        caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc },
+        caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc, auto_dont_care: autoDontCare },
         // the refused round before this :audit-fix round, or null
         prior_round: prior ? { reason: prior.reason, findings: prior.findings, changed_symbols: prior.changed_symbols } : null,
       }),
@@ -7170,6 +7287,11 @@ function isIacPath(p) {
   return new RegExp("^" + "dig" + "ger\\.ya?ml$").test(b);
 }
 
+// 4.0.0: repo files only the fleet's own config may hold (exact repo paths,
+// compared case-insensitively); a change to one is fenced in every mode.
+// Stream S5 adds the throwaway-DB declaration here.
+const FENCED_FILES = [];
+
 // G3: why a planned path is outside the scope fence (null when inside).
 function fencePathProblem(p) {
   const q = normPath(p);
@@ -7177,6 +7299,7 @@ function fencePathProblem(p) {
   const dirs = segs.slice(0, -1).map((x) => x.toLowerCase());
   const base = segs[segs.length - 1].toLowerCase();
   if (dirs.indexOf(".fleet") >= 0) return "fleet internal path (.fleet/)";
+  if (FENCED_FILES.some((f) => f.toLowerCase() === q.toLowerCase())) return "fleet-fenced file " + q;
   // (ADR-1172: IaC, Kubernetes and Helm files are fleet work like any other
   // code; IaC diffs never push automatically: the IaC push gate stops them)
   // provider plugin dirs (a local .terraform/ or terraform.d/) never belong in a change
@@ -7703,7 +7826,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const branch = lay.branch;
 
   // verify the approved plan
-  const criteria = normCriteria(ref.criteria);
+  const criteria = normCriteria(ref.criteria, pf.test_cmd);
   const v = await infra(
     "infra:verify-plan",
     verifyPlanPrompt({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_path: ref.plan_path }),

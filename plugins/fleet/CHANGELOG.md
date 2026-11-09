@@ -131,6 +131,37 @@ its notes to this entry.
   `yaadgaar` included. The intake schema already had these keys in 3.1.3; the role pages carry the
   same text.
 
+### S4: cargo and go targeting with test_args (ledger 1980)
+
+- The cargo allowlist gains `--test <name>`, `-p <crate>` and `--package <crate>` (names
+  `[A-Za-z][A-Za-z0-9_-]{0,63}`), and `--exact` after `--`. `--manifest-path`, `--config`, `-Z`,
+  `--target-dir`, any path and `<paths>` stay refused.
+- `go test` refuses `<paths>`: cargo and go target a criterion with `test_args`.
+- New optional `criteria[].test_args`, for cargo and go only, and only when `test_cmd.command` has
+  no `<paths>`. `command + " " + test_args` must pass the whole test_cmd allowlist, at plan time
+  and again when build mode loads the sealed ref. A refused value stops the run with
+  `stop_gate: "commands"`. `make test` takes no `test_args`.
+- `commands` lists one more `test_cmd` entry per criterion with `test_args`, holding the whole
+  command verbatim (`id` is the criterion id).
+- New constant `FENCED_FILES` (empty): a repo path in it is outside the scope fence. Stream S5
+  fills it.
+
+### S4: caller-grep noise (ledger 1989, ADR-1185)
+
+- `callers.py` also prints `auto_dont_care` (per symbol, the hits in doc and lock files) and
+  `doctest_md` (doc files collected as doctests), both inside its digest.
+- Auto `dont_care` covers only `.md`, `.rst`, `.adoc`, `CHANGELOG*` and `LICENSE*` notes (by a
+  fixed name pattern: `changelog_gen.py` is code), and the lock files `Cargo.lock`, `uv.lock`,
+  `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `poetry.lock`, `Gemfile.lock`, `go.sum`.
+  `.txt`, `.csv`, `.svg` and every config or manifest file stay planner-mapped.
+- A doc stays mapped when a pytest config or `conftest.py` names `--doctest-glob` or
+  `doctest_optionflags` (then every doc stays mapped), or when a tracked `.rs` file
+  `include_str!`s a file of its basename. Detection is by grep, so it is best effort.
+- A hit is auto-mapped only when the program lists it AND the script's own file list agrees. A
+  program list the script refuses stops the run. The auto-mapped hits join the sealed
+  `changed_symbols` as `dont_care: "auto: non-code file"`, and plan-audit gets them as
+  `caller_check.auto_dont_care`.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker

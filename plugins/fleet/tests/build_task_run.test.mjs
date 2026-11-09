@@ -5483,6 +5483,8 @@ const ARRAY_SITES = {
   "plan.changed_symbols @ planAndAudit": "role:scope-and-plan:changed_symbols",
   "e.occurrences @ changedSymbolFindings": "role:scope-and-plan:changed_symbols[].occurrences",
   "r.capped @ callerCheck": "infra:capped",
+  "r.doctest_md @ callerCheck": "infra:doctest_md",
+  "r.auto_dont_care @ callerCheck": "parsed: a program map; Array.isArray only refuses an array there",
   "r.defs @ buildCallerCheck": "infra:defs",
   "p.enum @ roleSchema": "parsed: a role schema property (the 1984 STRICT loop), not an agent result",
   "pf.changed_symbols @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
@@ -6246,7 +6248,7 @@ function extractCanonical() {
 
 // The caller-grep program's output for {symbol: ["<path>:<line>", ...]}, with its digest.
 function callersOut(occ, capped) {
-  const o = { occurrences: occ, capped: capped || [] };
+  const o = { occurrences: occ, capped: capped || [], auto_dont_care: {}, doctest_md: [] };
   return { status: "ok", reason: "grepped", ...o, digest: sha256(canon(o)) };
 }
 
@@ -6480,10 +6482,12 @@ test("2.1.6 caller grep program: word-boundary hits in tracked text files, the p
     // "z" is a word on more than 5 lines: capped, its list left empty; guard_verdict (5) is not
     assert.deepEqual(o.capped, ["z"]);
     assert.deepEqual(o.occurrences.z, []);
-    assert.equal(o.digest, sha256(canon({ occurrences: o.occurrences, capped: o.capped, program: o.program })));
+    // 4.0.0 (1989): the digest covers the auto dont_care map and the doctest list too
+    const dig = { occurrences: o.occurrences, capped: o.capped, auto_dont_care: o.auto_dont_care, doctest_md: o.doctest_md, program: o.program };
+    assert.equal(o.digest, sha256(canon(dig)));
     // the workflow accepts this digest
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
-    assert.equal(sha256(fn({ occurrences: o.occurrences, capped: o.capped, program: o.program })), o.digest);
+    assert.equal(sha256(fn(dig)), o.digest);
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }

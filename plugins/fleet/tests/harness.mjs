@@ -647,7 +647,7 @@ export const PROGRAM_LABELS = [
   [/^infra:tf-gate:/, [[null, "tf_gate", ["touched", "iac_files", "problems", "hints", "args"]]]],
   [/^infra:remote-head:/, [[null, "remote_head", ["head", "args"]]]],
   [/^infra:fleet-scan:/, [[null, "fleet_scan", ["diff", "commits"]]]],
-  [/^infra:callers/, [[null, "callers", ["occurrences", "capped"]]]],
+  [/^infra:callers/, [[null, "callers", ["occurrences", "capped", "auto_dont_care", "doctest_md"]]]],
   [/^infra:changed-defs:/, [[null, "changed_defs", ["defs", "excluded", "unclassified", "unattributed"]]]],
   [/^infra:push(:p\d+)?$/, [[null, "push_classify", ["push_result", "exit_code", "hook_tail", "args"]]]],
   [/^infra:hook-surface:/, [[null, "hook_surface", ["surface", "make_paths", "error", "args"]]]],
