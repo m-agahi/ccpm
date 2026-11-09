@@ -1,9 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [4.0.0] - 2026-11-09
 
-Fleet 4.0.0 work in progress (integration branch `feat/fleet-4.0.0`). Stream S2 folds these notes
-into the 4.0.0 entry.
+Fleet 4.0.0 (ledger 1980–1993), built in streams on the integration branch `feat/fleet-4.0.0`. The
+contract marker moves to `fleet-v4`; see "Deploy order" below before installing. Each stream adds
+its notes to this entry.
 
 ### S1: test harness
 

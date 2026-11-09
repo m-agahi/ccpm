@@ -400,6 +400,23 @@ test("1982: the intake source schema and the README agree on {kind, ref, url, bo
   assert.match(readme, /`kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,\s+`plan` and `text`/);
 });
 
+// ---------------------------------------------------------------- integration: version 4.0.0
+
+test("4.0.0: FLEET_VERSION equals the fleet version in marketplace.json, the root README and the CHANGELOG", () => {
+  const fv = /^const FLEET_VERSION = "(\d+\.\d+\.\d+)";$/m.exec(SOURCE);
+  assert.ok(fv, "FLEET_VERSION constant");
+  const mk = JSON.parse(readFileSync(new URL("../../../.claude-plugin/marketplace.json", import.meta.url), "utf8"));
+  const fleet = mk.plugins.filter((p) => p.name === "fleet");
+  assert.equal(fleet.length, 1);
+  assert.equal(fleet[0].version, fv[1]);
+  const readme = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+  assert.match(readme, new RegExp("^### fleet \\(v" + fv[1].replace(/\./g, "\\.") + "\\)$", "m"));
+  const cl = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
+  const top = /^## \[([^\]]+)\]/m.exec(cl);
+  assert.equal(top[1], fv[1], "the newest CHANGELOG entry is this version");
+  assert.ok(!/^## \[Unreleased\]/m.test(cl), "no [Unreleased] section left");
+});
+
 // ---------------------------------------------------------------- contract fleet-v4 (D1, plan §2 rev 3)
 
 const V4_VERSIONS = {
