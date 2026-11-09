@@ -66,6 +66,29 @@ into the 4.0.0 entry.
   is `approve` or `refuse`. The key is required on `ok`.
 - The caller grep relay schema carries `auto_dont_care` and `doctest_md`.
 
+### S2: role output contract at the schema; one retry on drift (ledger 1984)
+
+- Each role schema lists every `REQUIRED_ON_OK` key in `required`, on every status. The schema
+  widens the type (and the enum) of each such key with `null`. A `needs_human` or `failed` result
+  sets each key it has no value for to null. The shared type constants stay unchanged.
+- On `ok`, the script checks each required value against the frozen type. `null` passes only where
+  the frozen type allows it. Every JSON type is checked now, so `est_diff_lines: null`,
+  `change_kind: null` or `plan_path: null` is contract drift. Before, only array, object and
+  boolean were checked.
+- An `ok` result with drift (a missing key, a wrong type or value, an unknown verdict) is sent
+  back to the same role once, after a fresh PATH re-check. The prompt quotes the drift: "Your
+  previous result was refused: <drift>. Return the whole object again." The retry counts toward
+  the agent cap, and the gate log reads "<role>: contract drift (<detail>); retried once". A
+  second drift stops the run with `stop_gate: "contract"`, as before.
+- A judge retries inside its fingerprint bracket, so a judge that changes the worktree is still
+  reported before its drift. Only a drifting test writer retries, after the parallel round.
+- A version or contract marker mismatch never retries.
+- `fleet-coder` is never re-run. Its drift on `ok` becomes the one `fix_code` finding of the next
+  code round, bounded by `MAX_CODE_ROUNDS`. A hash violation is still reported first.
+- Not probed: no workflow probe ran in this stream. The workflow docs say the StructuredOutput
+  tool validates the schema and the model retries on a mismatch. The script-side retry and the
+  strict type check work either way.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker

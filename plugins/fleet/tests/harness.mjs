@@ -272,14 +272,18 @@ export async function runOne(script, args0) {
     }
     // 4.0.0: unscripted verify steps read what the commit-plan stubs wrote
     if (!(label in script) && /^infra:verify-plan-commit/.test(label)) return verifyStub(script.__store || {})(prompt);
-    if (!(label in script)) {
+    // 4.0.0 (1984): an unscripted drift retry repeats the role's first answer
+    // (the role makes the same mistake twice); script "<label>:retry" to differ
+    let key = label;
+    if (!(label in script) && /^role:.+:retry$/.test(label) && label.slice(0, -":retry".length) in script) key = label.slice(0, -":retry".length);
+    if (!(key in script)) {
       unscripted.push(label);
       return null;
     }
-    let r = script[label];
+    let r = script[key];
     if (Array.isArray(r)) {
-      const i = counters[label] || 0;
-      counters[label] = i + 1;
+      const i = counters[key] || 0;
+      counters[key] = i + 1;
       r = r[Math.min(i, r.length - 1)];
     }
     if (typeof r === "function") r = r(prompt, opts);

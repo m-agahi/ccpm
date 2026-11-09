@@ -2986,7 +2986,10 @@ function schemaTypeOk(prop, v) {
   );
 }
 
-test("role schemas type every array field and still do not require it", async () => {
+// 4.0.0 (1984): a REQUIRED_ON_OK array is schema-required and nullable; the
+// code still rejects null and a string on ok
+test("role schemas type every array field; only REQUIRED_ON_OK ones are required, nullable", async () => {
+  const req = REQUIRED_OF(SOURCE);
   const out = await run(happy(), ARGS);
   const seen = {};
   for (const c of out.calls.concat(out.build ? out.build.calls : [])) {
@@ -2998,27 +3001,36 @@ test("role schemas type every array field and still do not require it", async ()
     assert.ok(sc, "saw schema for " + role);
     for (const k of keys) {
       assert.ok(sc.properties[k], role + " types " + k);
-      assert.equal(sc.properties[k].type, "array", role + " " + k);
+      const onOk = req[role].includes(k);
+      assert.deepEqual(sc.properties[k].type, onOk ? ["array", "null"] : "array", role + " " + k);
       assert.ok(sc.properties[k].items, role + " " + k + " has items");
       assert.equal(schemaTypeOk(sc.properties[k], "[]"), false, role + " " + k + " rejects the string []");
-      assert.ok(!sc.required.includes(k), role + " " + k + " not schema-required");
+      assert.equal(sc.required.includes(k), onOk, role + " " + k + " schema-required iff required on ok");
     }
   }
 });
 
+// 4.0.0 (1984): coder drift on ok is never re-run; it is the one routed
+// finding of coder round 2 (no judge on the drifted round). Returns it.
+async function coderDriftFinding(s) {
+  const out = await run(s, ARGS);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"), "no judge on a drifted coder round");
+  assert.ok(!out.labels.includes("role:fleet-coder:r1:retry"), "the coder is never retried");
+  const f = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings;
+  assert.equal(f.length, 1);
+  assert.equal(f[0].target, "code");
+  return f[0].finding;
+}
+
 test("contract drift: a string \"[]\" for a required array key is rejected in code", async () => {
   const s = happy();
   s["role:fleet-coder:r1"].added_symbols = "[]";
-  const out = await run(s, ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /contract drift: fleet-coder added_symbols type/);
-  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+  assert.match(await coderDriftFinding(s), /contract drift: fleet-coder added_symbols type/);
 });
 
 test("contract drift: wrong object and boolean types are rejected in code", async () => {
   for (const [label, key, val, role] of [
     ["role:fleet-code-judge:r1", "hash_check", "{}", "fleet-code-judge"],
-    ["role:fleet-coder:r1", "frozen_tests_red_at_start", "true", "fleet-coder"],
     ["role:fleet-test-judge:r1", "checked", "[]", "fleet-test-judge"],
   ]) {
     const s = happy();
@@ -3027,6 +3039,9 @@ test("contract drift: wrong object and boolean types are rejected in code", asyn
     assert.equal(out.result.status, "needs_human", label);
     assert.match(out.result.reason, new RegExp("contract drift: " + role + " " + key + " type"), label);
   }
+  const s = happy();
+  s["role:fleet-coder:r1"].frozen_tests_red_at_start = "true";
+  assert.match(await coderDriftFinding(s), /contract drift: fleet-coder frozen_tests_red_at_start type/);
 });
 
 test("contract drift: a coder ok output missing added_symbols is still rejected", async () => {
@@ -3040,9 +3055,7 @@ test("contract drift: a coder ok output missing added_symbols is still rejected"
   });
   delete c.added_symbols;
   s["role:fleet-coder:r1"] = c;
-  const out = await run(s, ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder contract drift: missing added_symbols/);
+  assert.match(await coderDriftFinding(s), /role fleet-coder contract drift: missing added_symbols/);
 });
 
 // ---------------------------------------------------------------- 2.0.2: push / fetch robustness
@@ -3675,11 +3688,17 @@ test("2.0.3 coder and code-judge: obligations_done and obligations_check are req
     });
     delete r[key];
     s[label] = r;
+    const t = happy();
+    t[label][key] = "[]";
+    // 4.0.0 (1984): coder drift is a round-2 finding; judge drift stops
+    if (role === "fleet-coder") {
+      assert.match(await coderDriftFinding(s), new RegExp("role " + role + " contract drift: missing " + key));
+      assert.match(await coderDriftFinding(t), new RegExp("contract drift: " + role + " " + key + " type"));
+      continue;
+    }
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "needs_human", key);
     assert.match(out.result.reason, new RegExp("role " + role + " contract drift: missing " + key));
-    const t = happy();
-    t[label][key] = "[]";
     const outT = await run(t, ARGS);
     assert.match(outT.result.reason, new RegExp("contract drift: " + role + " " + key + " type"));
   }
@@ -3721,10 +3740,14 @@ test("2.0.3 B3: a clean coder needs_human reports the role's reason; contract dr
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /test AC1 contradicts the plan/);
   assert.equal(out.result.stop_gate, "role");
+  // 4.0.0 (1984): coder drift alone is a finding each round; the cap names the contract gate
   const t = happy();
-  t["role:fleet-coder:r1"].added_symbols = "[]";
+  for (const m of [1, 2, 3]) t["role:fleet-coder:r" + m] = Object.assign({}, t["role:fleet-coder:r1"], { added_symbols: "[]" });
+  t["hasher:post-coder:r2"] = { status: "ok", fingerprint: FP_K2 };
+  t["hasher:post-coder:r3"] = { status: "ok", fingerprint: FP_M3 };
   const outT = await run(t, ARGS);
-  assert.equal(outT.result.stop_gate, "contract");
+  assert.equal(outT.result.stop_gate, "cap");
+  assert.match(outT.result.reason, /last round rejected by the contract gate/);
 });
 
 test("2.0.3 B3: a role's needs_human beats a version mismatch (contract drift is last)", async () => {
@@ -4235,9 +4258,7 @@ test("2.1.0 REQUIRED_ON_OK: writer files and coder changed_paths are required ar
   let out = await run(happy({ script: { "role:fleet-test-writer:AC1:r1": { __raw: true, status: "ok", reason: "x", role_version: FROZEN_VERSIONS["fleet-test-writer"], role_contract: "CONTRACT: fleet-v3", criterion_id: "AC1", tests: [] } } }), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-test-writer contract drift: missing files/);
-  out = await run(happy({ script: { "role:fleet-coder:r1": { status: "ok", changed_paths: "src/x.py" } } }), ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-coder changed_paths type/);
+  assert.match(await coderDriftFinding(happy({ script: { "role:fleet-coder:r1": { status: "ok", changed_paths: "src/x.py" } } })), /fleet-coder changed_paths type/);
   const req = REQUIRED_OF(SOURCE);
   assert.ok(!/"commits?"/.test(JSON.stringify(req)));
   assert.deepEqual(req["fleet-test-writer"], ["criterion_id", "tests", "files"]);
@@ -5458,6 +5479,7 @@ const ARRAY_SITES = {
   "e.occurrences @ changedSymbolFindings": "role:scope-and-plan:changed_symbols[].occurrences",
   "r.capped @ callerCheck": "infra:capped",
   "r.defs @ buildCallerCheck": "infra:defs",
+  "p.enum @ roleSchema": "parsed: a role schema property (the 1984 STRICT loop), not an agent result",
   "pf.changed_symbols @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
   "o.files @ planScopeFiles": "parsed: repo_obligations of the sealed plan facts",
   "r.files @ formatFiles": "infra:files",

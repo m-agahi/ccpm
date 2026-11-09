@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SOURCE, ARGS, happy, run, call } from "./harness.mjs";
+import { SOURCE, ARGS, happy, run, call, inputsOf } from "./harness.mjs";
 
 // REQUIRED_ON_OK as written in the script source
 function requiredOf() {
@@ -54,10 +54,12 @@ test("4.0.0 S2 keys: the caller grep relay carries auto_dont_care and doctest_md
 });
 
 test("4.0.0 S2 keys: an ok planner without change_kind, or with a bad one, is contract drift", async () => {
-  let out = await run(happy({ script: { "role:scope-and-plan": { __raw: true, ...happyPlanner(), change_kind: undefined } } }), ARGS);
+  const noKind = { __raw: true, ...happyPlanner(), change_kind: undefined };
+  let out = await run(happy({ script: { "role:scope-and-plan": noKind, "role:scope-and-plan:retry": noKind } }), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /scope-and-plan contract drift: missing change_kind/);
-  out = await run(happy({ script: { "role:scope-and-plan": { __raw: true, ...happyPlanner(), change_kind: "hotfix" } } }), ARGS);
+  const hotfix = { __raw: true, ...happyPlanner(), change_kind: "hotfix" };
+  out = await run(happy({ script: { "role:scope-and-plan": hotfix, "role:scope-and-plan:retry": hotfix } }), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /contract drift: scope-and-plan change_kind/);
 });
@@ -81,3 +83,194 @@ export function happyPlanner(over = {}) {
     over,
   );
 }
+
+// ---------------------------------------------------------------- 1984 contract at the schema
+
+const ROLE_LABEL = {
+  "scope-and-plan": "role:scope-and-plan",
+  "plan-audit": "role:plan-audit",
+  "fleet-test-writer": "role:fleet-test-writer:AC1:r1",
+  "fleet-test-judge": "role:fleet-test-judge:r1",
+  "fleet-coder": "role:fleet-coder:r1",
+  "fleet-code-judge": "role:fleet-code-judge:r1",
+  "fleet-pr-opener": "role:fleet-pr-opener",
+  "pr-review": "role:pr-review:v1",
+};
+
+// raw role stubs carry what the runner loaded
+function rawRole(role, fields) {
+  const s = happy();
+  return { __raw: true, status: "ok", reason: "x", role_version: s.preflight.versions[role], role_contract: s.preflight.contract[role], ...fields };
+}
+
+test("AC-1984-1: the coder schema requires its 5 keys; added_symbols is array or null", async () => {
+  const out = await run(happy(), ARGS);
+  const sch = call(out, "role:fleet-coder:r1").opts.schema;
+  for (const k of ["changed_paths", "suite_result", "added_symbols", "frozen_tests_red_at_start", "obligations_done"]) assert.ok(sch.required.includes(k), k);
+  assert.deepEqual(sch.properties.added_symbols.type, ["array", "null"]);
+});
+
+test("1984: every role schema requires its REQUIRED_ON_OK keys, nullable, and each one has a property", async () => {
+  const req = requiredOf();
+  const out = await run(happy(), ARGS);
+  for (const [role, label] of Object.entries(ROLE_LABEL)) {
+    const sch = call(out, label).opts.schema;
+    for (const k of sch.required) assert.ok(k in sch.properties, role + " required " + k + " has no property");
+    for (const k of req[role]) {
+      assert.ok(sch.required.includes(k), role + " requires " + k);
+      const p = sch.properties[k];
+      assert.ok([].concat(p.type).includes("null"), role + " " + k + " nullable");
+      if (p.enum) assert.ok(p.enum.includes(null), role + " " + k + " enum allows null");
+    }
+    // shared type constants are not widened in place
+    assert.equal(sch.properties.reason.type, "string", role + " reason stays a string");
+    assert.equal(sch.properties.status.enum.includes(null), false);
+  }
+});
+
+test("AC-1984-2: plan-audit drops routed_findings once; the retry is complete and the run continues", async () => {
+  const s = happy({
+    script: {
+      "role:plan-audit": rawRole("plan-audit", { verdict: "approve" }),
+      "role:plan-audit:retry": rawRole("plan-audit", { verdict: "approve", routed_findings: [] }),
+    },
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const gl = out.planResult.gate_log;
+  assert.ok(gl.some((g) => /plan-audit: contract drift \(missing routed_findings\); retried once/.test(g)), gl.join("\n"));
+  const rp = call(out, "role:plan-audit:retry").prompt;
+  assert.match(rp, /Your previous result was refused: role plan-audit contract drift: missing routed_findings\. Return the whole object again\./);
+  // a fresh PATH re-check right before the retry
+  const i = out.labels.indexOf("role:plan-audit:retry");
+  assert.equal(out.labels[i - 1], "infra:path-check:plan-audit:retry");
+});
+
+test("AC-1984-2: two drifts halt with stop_gate contract", async () => {
+  const s = happy({
+    script: {
+      "role:plan-audit": rawRole("plan-audit", { verdict: "approve" }),
+      "role:plan-audit:retry": rawRole("plan-audit", { verdict: "approve" }),
+    },
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "contract");
+  assert.match(out.result.reason, /plan-audit contract drift: missing routed_findings/);
+  assert.ok(!out.labels.includes("role:plan-audit:retry:retry"));
+});
+
+test("1984: a version or contract mismatch never retries", async () => {
+  let out = await run(happy({ script: { "role:plan-audit": rawRole("plan-audit", { verdict: "approve", routed_findings: [], role_version: 1 }) } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /runner loaded version 1/);
+  assert.ok(!out.labels.some((l) => /:retry$/.test(l)), out.labels.join(", "));
+  out = await run(happy({ script: { "role:plan-audit": rawRole("plan-audit", { verdict: "approve", routed_findings: [], role_contract: "CONTRACT: fleet-v1" }) } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.ok(!out.labels.some((l) => /:retry$/.test(l)));
+  // a version mismatch that also drifts still never retries
+  out = await run(happy({ script: { "role:plan-audit": rawRole("plan-audit", { verdict: "approve", role_version: 1 }) } }), ARGS);
+  assert.match(out.result.reason, /runner loaded version 1/);
+  assert.ok(!out.labels.some((l) => /:retry$/.test(l)), out.labels.join(", "));
+});
+
+test("1984: null on ok for a key whose frozen type has no null is drift (est_diff_lines, change_kind, plan_path, tldr)", async () => {
+  for (const [k, re] of [
+    ["est_diff_lines", /scope-and-plan est_diff_lines type: got null/],
+    ["change_kind", /scope-and-plan change_kind type: got null/],
+    ["plan_path", /scope-and-plan plan_path type: got null/],
+    ["tldr", /scope-and-plan tldr type: got null/],
+  ]) {
+    const bad = { __raw: true, ...happyPlanner({ [k]: null }) };
+    const out = await run(happy({ script: { "role:scope-and-plan": bad, "role:scope-and-plan:retry": bad } }), ARGS);
+    assert.equal(out.result.status, "needs_human", k);
+    assert.equal(out.result.stop_gate, "contract", k);
+    assert.match(out.result.reason, re);
+  }
+  // a string where the frozen type is a number is drift too
+  const s = { __raw: true, ...happyPlanner({ est_diff_lines: "10" }) };
+  const out = await run(happy({ script: { "role:scope-and-plan": s, "role:scope-and-plan:retry": s } }), ARGS);
+  assert.match(out.result.reason, /est_diff_lines type: got string/);
+});
+
+test("1984: null stays allowed where the frozen type allows it (pr-opener template_used)", async () => {
+  const out = await run(happy({ script: { "role:fleet-pr-opener": { status: "ok", reason: "opened", pr_url: "https://github.com/o/r/pull/7", pr_number: 7, created: true, template_used: null, gates_not_run_stated: true } } }), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(!out.labels.includes("role:fleet-pr-opener:retry"), out.labels.join(", "));
+});
+
+test("1984: a judge retries inside its fingerprint bracket", async () => {
+  const s = happy({
+    script: {
+      "role:fleet-test-judge:r1": rawRole("fleet-test-judge", { verdict: "approve", routed_findings: [] }),
+      "role:fleet-test-judge:r1:retry": rawRole("fleet-test-judge", { verdict: "approve", routed_findings: [], checked: [] }),
+    },
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const L = out.labels;
+  const a = L.indexOf("role:fleet-test-judge:r1"), b = L.indexOf("role:fleet-test-judge:r1:retry"), c = L.indexOf("hasher:fp-post:test-judge:r1");
+  assert.ok(a >= 0 && a < b && b < c, L.join(", "));
+});
+
+test("1984: a judge that mutates the worktree is reported before its drift", async () => {
+  const s = happy({
+    script: {
+      "role:fleet-test-judge:r1": rawRole("fleet-test-judge", { verdict: "approve", routed_findings: [] }),
+      "role:fleet-test-judge:r1:retry": rawRole("fleet-test-judge", { verdict: "approve", routed_findings: [] }),
+      "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: { head: "abc1234def0", tree: "CHANGED" } },
+    },
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "fingerprint");
+});
+
+test("1984: only the drifting writer retries", async () => {
+  const s = happy({
+    script: {
+      "role:fleet-test-writer:AC1:r1": rawRole("fleet-test-writer", { criterion_id: "AC1", tests: [] }),
+      "role:fleet-test-writer:AC1:r1:retry": rawRole("fleet-test-writer", { criterion_id: "AC1", tests: [], files: ["tests/test_a.py"] }),
+    },
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.labels.includes("role:fleet-test-writer:AC1:r1:retry"));
+  assert.ok(!out.labels.includes("role:fleet-test-writer:AC2:r1:retry"));
+});
+
+test("AC-1984-3: the coder is never re-run on drift; round 2 gets the drift as a finding", async () => {
+  const s = happy({
+    script: {
+      "role:fleet-coder:r1": { status: "ok", reason: "done", changed_paths: ["src/x.py"], added_symbols: null, frozen_tests_red_at_start: true, suite_result: { command: "pytest", exit_code: 0 } },
+      "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: { head: "abc1234def0", tree: "K2" } },
+      "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
+      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: { head: "abc1234def0", tree: "K2" } },
+    },
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(!out.labels.includes("role:fleet-coder:r1:retry"));
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"), "no judge on a drifted coder round");
+  const f = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings;
+  assert.equal(f.length, 1);
+  assert.equal(f[0].target, "code");
+  assert.match(f[0].finding, /contract drift: fleet-coder added_symbols type: got null/);
+});
+
+test("1984: coder drift in every round ends at the code round cap", async () => {
+  const bad = { status: "ok", reason: "done", changed_paths: ["src/x.py"], added_symbols: null, frozen_tests_red_at_start: true, suite_result: { command: "pytest", exit_code: 0 } };
+  const s = happy({
+    script: {
+      "role:fleet-coder:r1": bad,
+      "role:fleet-coder:r2": bad,
+      "role:fleet-coder:r3": bad,
+      "hasher:post-coder:r2": { status: "ok", fingerprint: { head: "abc1234def0", tree: "K2" } },
+      "hasher:post-coder:r3": { status: "ok", fingerprint: { head: "abc1234def0", tree: "K3" } },
+    },
+  });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /code rounds exhausted/);
+  assert.ok(!out.labels.includes("role:fleet-coder:r4"));
+});

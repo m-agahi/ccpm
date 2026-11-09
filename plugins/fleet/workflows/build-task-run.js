@@ -1086,6 +1086,8 @@ const SCHEMAS = {
       properties: { command: STR, paths_placeholder: STR, env: { type: "object" }, tools: { type: "array", items: STR } },
       required: ["command"],
     },
+    // stripped on receipt (HELD_OUT_KEY); typed so the schema can require it
+    held_out_examples: ANY_ARRAY,
     tldr: STR,
     plan_diff: { type: "array", items: STR },
     // every occurrence of each existing function, guard or symbol the plan
@@ -1203,6 +1205,29 @@ const SCHEMAS = {
     findings: REVIEW_FINDINGS,
   }),
 };
+
+// 4.0.0 (1984): every REQUIRED_ON_OK key is in the role schema's `required`
+// on every status, its type (and enum) widened with null: a needs_human or
+// failed result sets each key it has no value for to null. STRICT keeps the
+// frozen property; on ok a value must match it (driftOf). Widened copies
+// only: the shared type constants stay as they are.
+const STRICT = {};
+for (const role of Object.keys(SCHEMAS)) {
+  const sch = SCHEMAS[role];
+  const props = Object.assign({}, sch.properties);
+  STRICT[role] = {};
+  for (const k of REQUIRED_ON_OK[role] || []) {
+    const p = props[k];
+    if (!p || p.type === undefined) throw new Error("schema " + role + " has no typed property for required key " + k);
+    STRICT[role][k] = p;
+    const types = [].concat(p.type);
+    const w = Object.assign({}, p, { type: types.indexOf("null") >= 0 ? types : types.concat("null") });
+    if (Array.isArray(p.enum) && p.enum.indexOf(null) < 0) w.enum = p.enum.concat(null);
+    props[k] = w;
+    if (sch.required.indexOf(k) < 0) sch.required = sch.required.concat(k);
+  }
+  sch.properties = props;
+}
 
 // 4.0.0 (1993): the self-hash every shipped program prints
 const PROGRAM_PROP = { type: ["object", "null"], properties: { name: STR_OR_NULL, sha256: STR_OR_NULL } };
@@ -5849,13 +5874,16 @@ function collect(role, r) {
 
 // deferCheck: the caller runs its script gates (hash, fingerprint) first and
 // calls checkRole after them, so a gate violation is reported before drift.
-async function callRole(role, label, inputs, phaseName, agentType, deferCheck) {
+// noRetry: the caller handles drift itself (the coder: drift is a finding).
+async function callRole(role, label, inputs, phaseName, agentType, deferCheck, noRetry) {
   const opts = { schema: SCHEMAS[role], phase: phaseName };
   if (agentType) opts.agentType = agentType;
   reserve(1, label);
   state.agents++;
-  const r = await roleAgent(role, label, rolePrompt(role, inputs), opts);
+  const prompt = rolePrompt(role, inputs);
+  let r = await roleAgent(role, label, prompt, opts);
   if (r == null) halt("failed", "agent " + label + " returned no result");
+  if (!noRetry) r = await retryOnDrift(role, label, prompt, opts, r);
   if (deferCheck) return r;
   checkRole(role, r);
   collect(role, r);
@@ -5866,20 +5894,58 @@ async function callRole(role, label, inputs, phaseName, agentType, deferCheck) {
 // runner loaded the same version and contract marker that preflight saw, and
 // an ok result carries every required key and a known verdict.
 function contractProblem(role, r) {
+  const v = versionProblem(role, r);
+  if (v) return v;
+  const d = driftOf(role, r);
+  return d ? d.msg : null;
+}
+
+// The runner loaded another page version or contract marker than preflight
+// saw. Never retried.
+function versionProblem(role, r) {
   if (r.role_version !== state.roleVersions[role])
     return "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded";
   const c = contractOf(r.role_contract);
   if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded" + RELOAD_HINT;
-  if (r.status !== "ok") return null;
-  for (const k of REQUIRED_ON_OK[role] || []) {
-    if (!(k in r)) return "role " + role + " contract drift: missing " + k;
-    if (!typeMatches(SCHEMAS[role] && SCHEMAS[role].properties[k], r[k]))
-      return "contract drift: " + role + " " + k + " type: got " + jsType(r[k]);
-    const en = SCHEMAS[role] && SCHEMAS[role].properties[k] && SCHEMAS[role].properties[k].enum;
-    if (en && k !== "verdict" && r[k] !== null && en.indexOf(r[k]) < 0) return "contract drift: " + role + " " + k + " value " + JSON.stringify(r[k]);
-  }
-  if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0) return "contract drift: " + role + " verdict " + r.verdict;
   return null;
+}
+
+// Drift in an ok result, against the frozen (STRICT) types: {msg, detail}
+// or null. 4.0.0 (1984): null passes only where the frozen type allows it,
+// and every type is checked (est_diff_lines: null must never reach a gate).
+function driftOf(role, r) {
+  if (r.status !== "ok") return null;
+  const strict = STRICT[role] || {};
+  for (const k of REQUIRED_ON_OK[role] || []) {
+    if (!(k in r)) return { msg: "role " + role + " contract drift: missing " + k, detail: "missing " + k };
+    if (!typeMatches(strict[k], r[k]))
+      return { msg: "contract drift: " + role + " " + k + " type: got " + jsType(r[k]), detail: k + " type: got " + jsType(r[k]) };
+    const en = strict[k] && strict[k].enum;
+    if (en && k !== "verdict" && r[k] !== null && en.indexOf(r[k]) < 0)
+      return { msg: "contract drift: " + role + " " + k + " value " + JSON.stringify(r[k]), detail: k + " value " + JSON.stringify(r[k]) };
+  }
+  if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0)
+    return { msg: "contract drift: " + role + " verdict " + r.verdict, detail: "verdict " + r.verdict };
+  return null;
+}
+
+// 4.0.0 (1984): an ok result that drifts (a missing key, a wrong type or
+// value, an unknown verdict) is re-dispatched once with the drift quoted,
+// after a fresh PATH re-check. A version or marker mismatch never retries;
+// a second drift stops the run at checkRole as before. The retry counts
+// toward the agent cap.
+async function retryOnDrift(role, label, prompt, opts, r) {
+  if (r == null || r.status !== "ok" || versionProblem(role, r)) return r;
+  const d = driftOf(role, r);
+  if (!d) return r;
+  const rl = label + ":retry";
+  reserve(1, rl);
+  await pathRecheck(rl.replace(/^role:/, ""), opts.phase);
+  state.agents++;
+  const r2 = await roleAgent(role, rl, prompt + "\nYour previous result was refused: " + d.msg + ". Return the whole object again.", opts);
+  if (r2 == null) halt("failed", "agent " + rl + " returned no result");
+  gate(role + ": contract drift (" + d.detail + "); retried once");
+  return r2;
 }
 
 // A role's own needs_human/failed reason wins over contract drift; drift is
@@ -5900,14 +5966,14 @@ function jsType(v) {
   return v === null ? "null" : Array.isArray(v) ? "array" : typeof v;
 }
 
-// Only array, object and boolean are checked; any other schema type passes.
+// 4.0.0 (1984): every JSON type is checked against the frozen schema type;
+// null only where that type lists it.
 function typeMatches(prop, v) {
   if (!prop || prop.type === undefined) return true;
   const types = [].concat(prop.type);
-  const checked = types.filter((t) => t === "array" || t === "object" || t === "boolean");
-  if (!checked.length) return true;
   if (v === null) return types.indexOf("null") >= 0;
-  return checked.indexOf(jsType(v)) >= 0 || types.some((t) => checked.indexOf(t) < 0 && t !== "null" && jsType(v) === t);
+  const t = jsType(v);
+  return types.some((x) => x === t || (x === "integer" && t === "number" && Number.isInteger(v)));
 }
 
 function requireOk(who, r) {
@@ -8021,11 +8087,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const pre = last || (await hasher("hasher:pre-writers:r" + n, mainWt, hashedFiles, "Tests"));
     await pathRecheck("writers:r" + n, "Tests");
     state.agents += pending.length;
-    const results = await parallel(
-      pending.map((p) => () => {
+    const wcalls = pending.map((p) => {
         const c = p.criterion;
-        return roleAgent(
-          "fleet-test-writer",
+        return [
           "role:fleet-test-writer:" + c.id + ":r" + n,
           rolePrompt(
             "fleet-test-writer",
@@ -8040,19 +8104,23 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             codeFindings ? { code_judge_findings: codeFindings.filter((f) => f.criterion === c.id) } : {}),
           ),
           { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" },
-        );
-      }),
-    );
+        ];
+      });
+    const results = await parallel(wcalls.map(([l, pr, o]) => () => roleAgent("fleet-test-writer", l, pr, o)));
     const roundOut = [];
-    results.forEach((r, idx) => {
+    for (let idx = 0; idx < results.length; idx++) {
       const cid = pending[idx].criterion.id;
+      let r = results[idx];
       if (r == null) halt("failed", "test writer " + cid + " r" + n + " returned no result");
+      // 4.0.0 (1984): only a drifting writer retries, after the parallel
+      // round, so a stop in its PATH re-check is not lost in parallel()
+      r = await retryOnDrift("fleet-test-writer", wcalls[idx][0], wcalls[idx][1], wcalls[idx][2], r);
       checkRole("fleet-test-writer", r);
       collect("fleet-test-writer", r);
       requireOk("fleet-test-writer " + cid, r);
       writerOut[cid] = stripHeldOut(r);
       roundOut.push(writerOut[cid]);
-    });
+    }
     // the repo's fixers on this round's test files, before the ownership hash,
     // the test judge and the freeze (3.0.0, ledger 1951)
     const wrote = [];
@@ -8250,6 +8318,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       "Code",
       null,
       true,
+      true,
     );
     // the repo's fixers on every non-frozen path the worktree changes, before
     // the hash check and the judge (3.0.0, ledger 1951); a hook that touches
@@ -8273,12 +8342,28 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           " (role output also: " + (coder.status !== "ok" ? roleStatusText("fleet-coder", coder) : coderDrift) + ")",
         "hash",
       );
-    if (!viol.length) {
+    // 4.0.0 (1984): the coder is never re-run on drift; drift on an ok result
+    // is a fix_code finding for the next round (bounded by MAX_CODE_ROUNDS).
+    // A version or marker mismatch and a not-ok status still stop here.
+    const coderDriftOk = !viol.length && coder.status === "ok" && !versionProblem("fleet-coder", coder) ? driftOf("fleet-coder", coder) : null;
+    if (!viol.length && !coderDriftOk) {
       checkRole("fleet-coder", coder);
       requireOk("fleet-coder", coder);
     }
     collect("fleet-coder", coder);
     last = h;
+    if (coderDriftOk) {
+      lastRoundGate = "contract";
+      coderFindings = [
+        {
+          target: "code",
+          criterion: null,
+          finding: coderDriftOk.msg + " -- return every required key with its frozen type; fix the report, not the code",
+        },
+      ];
+      gate("code round " + m + ": " + coderDriftOk.msg + " -> coder output rejected; routed as a finding");
+      continue;
+    }
     if (viol.length) {
       lastRoundGate = "hash";
       coderFindings = [
