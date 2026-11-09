@@ -40,7 +40,58 @@ const ROLES = [
 // line, fetched by preflight. No role->model map and no default tier live
 // here: a role with no usable DISPATCH line stops the run in preflight.
 const TIERS = ["fable", "opus", "sonnet", "haiku"];
-const INFRA_MODEL = "sonnet";
+// 4.0.0 (1990): the model of each infra agent, by label prefix; the first
+// matching prefix wins. haiku: read-only steps whose output a program digest
+// checks. sonnet: long bodies or chunks (intake, hasher maps, plan-ref load
+// and commit, the park), the steps that write, push, classify a push or run
+// hooks, the workspace setup (its default_branch and base_ref are not
+// digest-checked and feed the IaC gate's diff base), the pre-commit hook ids
+// (they feed the auto gate G2), and every label the plan did not name. A
+// label with no entry stops the run (no default tier).
+// INFRA_TIER_BEGIN
+const INFRA_TIER = [
+  ["infra:path-check:", "haiku"],
+  ["preflight", "haiku"],
+  ["workspace", "sonnet"],
+  ["infra:branch-scan", "haiku"],
+  ["infra:stage-plan", "haiku"],
+  ["infra:verify-plan", "haiku"],
+  ["infra:read-state", "haiku"],
+  ["infra:callers", "haiku"],
+  ["infra:check-scripts", "haiku"],
+  ["infra:precommit-ids", "sonnet"],
+  ["infra:review-paths", "haiku"],
+  ["infra:remote-head", "haiku"],
+  ["infra:load-parked", "haiku"],
+  // the plan's tier for S5's throwaway test DB steps (ledger 1981)
+  ["infra:db-up", "haiku"],
+  ["infra:db-down", "haiku"],
+  ["infra:db-sweep", "haiku"],
+  ["intake", "sonnet"],
+  ["hasher:", "sonnet"],
+  ["infra:load-ref", "sonnet"],
+  ["infra:commit-plan", "sonnet"],
+  ["infra:park-plan", "sonnet"],
+  ["infra:format-", "sonnet"],
+  ["infra:commit:", "sonnet"],
+  ["infra:push", "sonnet"],
+  ["infra:tf-gate", "sonnet"],
+  ["infra:hook-surface", "sonnet"],
+  ["infra:changed-defs", "sonnet"],
+  ["infra:replan-", "sonnet"],
+  ["infra:state:", "sonnet"],
+  ["infra:fleet-scan", "sonnet"],
+  ["infra:purge-bytecode", "sonnet"],
+  ["infra:review-cleanup", "sonnet"],
+  ["infra:ledger-", "sonnet"],
+  ["infra:yaadgaar-", "sonnet"],
+  ["infra:comments-", "sonnet"],
+  // 4.0.0 (1987): the freeze ref write
+  ["infra:freeze-ref", "sonnet"],
+];
+// INFRA_TIER_END
+// A haiku PATH check whose relay is broken runs once more on this tier.
+const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 // "ignored": ignored files outside tool caches (inside venvs only startup hooks,
 // egg-links and dist-info/egg-info entry_points.txt)
@@ -48,20 +99,25 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // Minimum role-page versions this script was built against. Names and enums
 // are frozen at these versions; a higher version is assumed to change prose
 // only and is logged; a lower one (stale or rolled back) stops the run.
+// 4.0.0 (D1): every page bumps once with the fleet-v4 marker.
 const EXPECTED_VERSIONS = {
-  "scope-and-plan": 27,
-  "plan-audit": 16,
-  "fleet-test-writer": 10,
-  "fleet-test-judge": 10,
-  "fleet-coder": 17,
-  "fleet-code-judge": 15,
-  "fleet-pr-opener": 10,
-  "fleet-intent-judge": 2,
-  "pr-review": 18,
-  "gate-change-nonweakening-sweep": 5,
+  "scope-and-plan": 29,
+  "plan-audit": 17,
+  "fleet-test-writer": 11,
+  "fleet-test-judge": 11,
+  "fleet-coder": 18,
+  "fleet-code-judge": 16,
+  "fleet-pr-opener": 11,
+  "fleet-intent-judge": 3,
+  "pr-review": 19,
+  "gate-change-nonweakening-sweep": 6,
 };
+// 4.0.0 (1993): the plugin version this script ships with; the shipped
+// programs are read from its plugin cache directory only.
+const FLEET_VERSION = "4.0.0";
+const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
-const CONTRACT = "fleet-v3";
+const CONTRACT = "fleet-v4";
 const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
 // A session keeps the plugin version it started with; a mismatch after an
 // update usually means this script is the stale one.
@@ -73,17 +129,21 @@ const RELOAD_HINT =
 // also have that JS type (null only where the schema allows it); a wrong type
 // is contract drift too ("contract drift: <role> <key> type").
 const REQUIRED_ON_OK = {
-  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff", "repo_obligations", "test_cmd", "changed_symbols"],
+  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff", "repo_obligations", "test_cmd", "changed_symbols", "change_kind"],
   "plan-audit": ["verdict", "routed_findings"],
   "fleet-test-writer": ["criterion_id", "tests", "files"],
   "fleet-test-judge": ["verdict", "routed_findings", "checked"],
   "fleet-coder": ["changed_paths", "suite_result", "added_symbols", "frozen_tests_red_at_start", "obligations_done"],
   "fleet-code-judge": ["verdict", "routed_findings", "suite_result", "hash_check", "gates_not_run", "obligations_check"],
   "fleet-pr-opener": ["pr_url", "pr_number", "created", "template_used", "gates_not_run_stated"],
-  "fleet-intent-judge": ["verdict", "deviations", "coverage"],
+  "fleet-intent-judge": ["verdict", "deviations", "coverage", "classification"],
   "pr-review": ["verdict", "findings", "touches_gate", "checked"],
   "gate-change-nonweakening-sweep": ["verdict", "units", "findings"],
 };
+// 4.0.0 (1991): the planner's kind of change; confirm "default" builds without
+// Max only for bug_fix with new_behaviour false (both checked by the intent judge)
+const CHANGE_KINDS = ["bug_fix", "feature", "refactor", "chore"];
+const CLASSIFICATION_VERDICTS = ["approve", "refuse"];
 const VERDICTS = {
   "plan-audit": ["approve", "untestable_criteria", "plan_defect"],
   "fleet-test-judge": ["approve", "revise"],
@@ -146,10 +206,13 @@ const CALLER_LIMITS = [
 // The plan doc's path, character by character (2.1.6): it reaches git and shell commands.
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
 // stop_gate values: which gate ended a stopped run (null when none applies).
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db"];
 // Run-state milestones, in order, and the step a resumed build runs next.
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "done" };
-const CONFIRMS = ["ask", "auto"];
+// 4.0.0 (1991, ADR-1186): "default" runs the auto gates only for an eligible
+// plan (declared bug_fix, no new behaviour, no IaC path, no relaxed re-plan,
+// a task id with project), else it asks as "ask" does
+const CONFIRMS = ["ask", "auto", "default"];
 // Review (2.1.0): at most one review round after the first.
 const MAX_REVIEWS = 2;
 const FINDING_SEVERITIES = ["blocking", "nit"];
@@ -170,7 +233,9 @@ const TITLE_MAX = 200;
 const MAX_AGENTS = 100;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
 const MAX_CODE_ROUNDS = 3; // total coder rounds; a fix_tests detour counts as one
-const SHORT_PATH_MAX_DIFF = 20; // tier is computed and logged; the short path is disabled
+// 4.0.0 (1991): a sealed est_diff_lines below this, with new_behaviour false,
+// takes the short path (one test writer for every criterion; every gate kept)
+const SHORT_PATH_MAX_DIFF = 20;
 
 const MODES = ["plan", "build"];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -315,6 +380,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import fnmatch, hashlib, json, os, re, shlex, shutil, subprocess, sys, tempfile
 try:
     import tomllib
@@ -869,14 +943,34 @@ for rel in sorted(set(f.decode() for f in listed if f)):
 for rel in explicit:
     rel = norm(rel)
     files[rel] = file_hash(rel)
+# fleet 4.0.0: the sha256 of every program in this program's own directory
+# (the shipped scripts); the workflow compares them with its constants
+_sd = _o.path.dirname(_o.path.abspath(_fh.name)) if _PROG['name'] is not None else None
+scripts = None
+if _sd is not None:
+    scripts = {}
+    # filter first, then cap: other files never push a program out; too many
+    # programs give a sentinel the workflow refuses, never a cut list
+    pys = sorted(fn for fn in os.listdir(_sd) if fn.endswith('.py'))
+    if len(pys) > 200:
+        scripts = {'__too_many_programs__': None}
+        pys = []
+    for fn in pys:
+        fp = os.path.join(_sd, fn)
+        if os.path.islink(fp) or not os.path.isfile(fp):
+            scripts[fn[:-3]] = None
+            continue
+        with open(fp, 'rb') as fh:
+            scripts[fn[:-3]] = hashlib.sha256(fh.read(1 << 22)).hexdigest()
+out['scripts'] = scripts
 out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
                  'ignored': ignored_files(),
                  'suspicious': sorted(set(SUSPICIOUS))}
 # the script recomputes this over the relayed values: a dropped key fails
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 
-print(json.dumps(out, sort_keys=True))
-`;
+print(json.dumps(out, sort_keys=True))`;
 // HASHER_PY_END
 
 
@@ -910,6 +1004,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 wt, paths = sys.argv[1], json.loads(sys.argv[2])
 real_wt = os.path.realpath(wt)
@@ -928,9 +1031,9 @@ for p in paths:
     else:
         out[p] = {'ok': True, 'reason': 'ok'}
 out = {'checks': out}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, sort_keys=True, ensure_ascii=False))
-`;
+print(json.dumps(out, sort_keys=True, ensure_ascii=False))`;
 // SCRIPT_CHECK_PY_END
 
 // ---------------------------------------------------------------- schemas
@@ -1003,12 +1106,14 @@ const SCHEMAS = {
       type: "array",
       items: {
         type: "object",
-        properties: { id: STR, text: STR, test_files: { type: "array", items: STR } },
+        // 4.0.0 (1980): test_args, cargo and go only; validated by the script
+        properties: { id: STR, text: STR, test_files: { type: "array", items: STR }, test_args: STR_OR_NULL },
         required: ["id", "text", "test_files"],
       },
     },
     est_diff_lines: { type: "number" },
     new_behaviour: { type: "boolean" },
+    change_kind: { type: "string", enum: CHANGE_KINDS },
     allowed_additions: {
       type: ["object", "null"],
       properties: {
@@ -1038,6 +1143,8 @@ const SCHEMAS = {
       properties: { command: STR, paths_placeholder: STR, env: { type: "object" }, tools: { type: "array", items: STR } },
       required: ["command"],
     },
+    // stripped on receipt (HELD_OUT_KEY); typed so the schema can require it
+    held_out_examples: ANY_ARRAY,
     tldr: STR,
     plan_diff: { type: "array", items: STR },
     // every occurrence of each existing function, guard or symbol the plan
@@ -1131,6 +1238,17 @@ const SCHEMAS = {
       properties: { covered: { type: "boolean" }, missing: { type: "array", items: STR } },
       required: ["covered"],
     },
+    // 4.0.0 (1991): the judge's check of the planner's change_kind and
+    // new_behaviour, with a verbatim quote from the task
+    classification: {
+      type: "object",
+      properties: {
+        change_kind: { type: "string", enum: CLASSIFICATION_VERDICTS },
+        new_behaviour: { type: "string", enum: CLASSIFICATION_VERDICTS },
+        quote: STR,
+      },
+      required: ["change_kind", "new_behaviour", "quote"],
+    },
   }),
   "pr-review": roleSchema({
     verdict: { type: "string", enum: VERDICTS["pr-review"] },
@@ -1145,6 +1263,34 @@ const SCHEMAS = {
   }),
 };
 
+// 4.0.0 (1984): every REQUIRED_ON_OK key is in the role schema's `required`
+// on every status, its type (and enum) widened with null: a needs_human or
+// failed result sets each key it has no value for to null. STRICT keeps the
+// frozen property; on ok a value must match it (driftOf). Widened copies
+// only: the shared type constants stay as they are.
+const STRICT = {};
+for (const role of Object.keys(SCHEMAS)) {
+  const sch = SCHEMAS[role];
+  const props = Object.assign({}, sch.properties);
+  STRICT[role] = {};
+  for (const k of REQUIRED_ON_OK[role] || []) {
+    const p = props[k];
+    if (!p || p.type === undefined) throw new Error("schema " + role + " has no typed property for required key " + k);
+    STRICT[role][k] = p;
+    const types = [].concat(p.type);
+    const w = Object.assign({}, p, { type: types.indexOf("null") >= 0 ? types : types.concat("null") });
+    if (Array.isArray(p.enum) && p.enum.indexOf(null) < 0) w.enum = p.enum.concat(null);
+    props[k] = w;
+    if (sch.required.indexOf(k) < 0) sch.required = sch.required.concat(k);
+  }
+  sch.properties = props;
+}
+
+// 4.0.0 (1993): the self-hash every shipped program prints
+const PROGRAM_PROP = { type: ["object", "null"], properties: { name: STR_OR_NULL, sha256: STR_OR_NULL } };
+// a shipped program's JSON output relayed whole under one key
+const PROGRAM_OUTPUT = { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } };
+
 const PREFLIGHT_SCHEMA = {
   type: "object",
   required: ["reachable", "missing"],
@@ -1154,7 +1300,37 @@ const PREFLIGHT_SCHEMA = {
     versions: { type: "object" },
     dispatch: { type: "object", additionalProperties: { type: ["string", "null"] } },
     contract: { type: "object", additionalProperties: { type: ["string", "null"] } },
-    path_check: { type: ["object", "null"] },
+    scripts_probe: { type: "array", items: STR },
+    scripts_dir: STR_OR_NULL,
+    path_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
+    reason: STR,
+  },
+};
+// 4.0.0 (1985): the push-access probe relay
+const PUSH_PROBE_SCHEMA = {
+  type: "object",
+  additionalProperties: true,
+  required: ["status", "reason"],
+  properties: {
+    status: { type: "string", enum: ["ok", "needs_human", "failed"] },
+    reason: STR,
+    access: { type: ["string", "null"] },
+    result: { type: ["string", "null"] },
+    exit_code: { type: ["integer", "null"] },
+    auth_line: { type: ["string", "null"] },
+    args: { type: ["array", "null"], items: STR },
+    program: PROGRAM_PROP,
+    file_sha256: STR,
+    digest: STR,
+  },
+};
+// 4.0.0 (1990): a build's first agent when the role pages may come from the plan ref
+const PREFLIGHT_SCRIPTS_SCHEMA = {
+  type: "object",
+  properties: {
+    scripts_probe: { type: "array", items: STR },
+    scripts_dir: STR_OR_NULL,
+    path_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
     reason: STR,
   },
 };
@@ -1171,7 +1347,13 @@ const INFRA_SCHEMA = {
     remote_slug: STR,
     remote_host: STR,
     remote_url: STR,
-    remote_url_check: { type: ["object", "null"] },
+    remote_url_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
+    // 4.0.0 (1987, 1981)
+    ref_target: STR,
+    test_db: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
+    sweep: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
+    up: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
+    down: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
     project: STR,
     created: { type: "boolean" },
     reused: { type: "boolean" },
@@ -1252,6 +1434,12 @@ const INFRA_SCHEMA = {
     exists: { type: "boolean" },
     occurrences: { type: "object", additionalProperties: { type: "array", items: STR } },
     capped: { type: "array", items: STR },
+    // 4.0.0 (1989): the caller grep's auto dont_care hits and doctest-collected docs
+    auto_dont_care: { type: "object", additionalProperties: { type: "array", items: STR } },
+    doctest_md: { type: "array", items: STR },
+    // 4.0.0 (1986): the branch scan's plan tip time and the parked-run reader
+    plan_tip_time: { type: ["integer", "null"] },
+    parked: { type: ["object", "null"] },
     defs: {
       type: "array",
       items: { type: "object", properties: { name: STR, at: STR, end: { type: "integer" } }, required: ["name", "at", "end"] },
@@ -1260,6 +1448,13 @@ const INFRA_SCHEMA = {
     unclassified: { type: "array", items: STR },
     unattributed: { type: "array", items: STR },
     digest: STR,
+    program: PROGRAM_PROP,
+    file_sha256: STR,
+    tag_sha: STR,
+    plan_hash: PROGRAM_OUTPUT,
+    plan_hash_head: PROGRAM_OUTPUT,
+    plan_files: { type: ["object", "null"], properties: { head: STR, files: { type: "array", items: STR }, args: { type: "array", items: STR }, dsn_paths: { type: "array", items: STR }, program: PROGRAM_PROP, file_sha256: STR, digest: STR } },
+    plan_ref: { type: ["object", "null"], properties: { refs: { type: "array", items: { type: "object" } }, program: PROGRAM_PROP, file_sha256: STR } },
     target: STR,
     message: STR,
     clean: { type: "boolean" },
@@ -1316,6 +1511,9 @@ const HASHER_SCHEMA = {
     reason: STR,
     fingerprint: FINGERPRINT,
     changed: { type: "array", items: STR },
+    program: PROGRAM_PROP,
+    file_sha256: STR,
+    scripts: { type: ["object", "null"], additionalProperties: STR_OR_NULL },
     digest: STR,
     hashes: {
       type: "object",
@@ -1404,8 +1602,10 @@ function findOverlaps(criteria) {
 }
 
 // Keys whose value differs, compared map by map, including keys only one side
-// has: [{map, key, name}].
-function changedKeys(a0, b0) {
+// has: [{map, key, name}]. wt (4.0.0, 1988): the hashed worktree; the
+// fleet's own settings file there is no change (fleetOwnFile), and any other
+// change of that file carries its before and after hashes for the stop text.
+function changedKeys(a0, b0, wt) {
   const out = [];
   for (const m of HASH_MAPS) {
     const a = (a0 && a0[m]) || {};
@@ -1416,15 +1616,40 @@ function changedKeys(a0, b0) {
     for (const k of Object.keys(keys).sort()) {
       const va = k in a ? a[k] : "<new>";
       const vb = k in b ? b[k] : "<removed>";
-      if (va !== vb) out.push({ map: m, key: k, name: keyName(m, k) });
+      if (va === vb) continue;
+      const x = { map: m, key: k, name: keyName(m, k) };
+      if (wt && fleetOwnFile(x, b0, wt)) continue;
+      if (wt && m === "ignored" && k === SETTINGS_LOCAL) x.settings = { before: k in a ? a[k] : null, after: k in b ? b[k] : null, own: sha256Hex(settingsFor(wt)) };
+      out.push(x);
     }
   }
   return out;
 }
 
+// 4.0.0 (1988): the settings file the workspace step writes into a fleet
+// worktree. It is exempt from a fingerprint only at this exact path (the
+// ignored map), and only when its bytes after the step are exactly the
+// fleet's own (settingsFor of that worktree). The maps and digests keep it.
+const SETTINGS_LOCAL = ".claude/settings.local.json";
+function fleetOwnFile(k, after, wt) {
+  return (
+    k.map === "ignored" &&
+    k.key === SETTINGS_LOCAL &&
+    !!after &&
+    !!after.ignored &&
+    Object.prototype.hasOwnProperty.call(after.ignored, k.key) &&
+    after.ignored[k.key] === sha256Hex(settingsFor(wt))
+  );
+}
+
 // The violation text for a changed key.
 const FLEETREF = "fleetref:";
 function violationName(x) {
+  if (x.map === "ignored" && x.settings)
+    return (
+      "ignored path written: " + x.key + " (not the fleet's own settings: before " + (x.settings.before === null ? "absent" : x.settings.before) +
+      ", after " + (x.settings.after === null ? "absent" : x.settings.after) + ", the fleet's own " + x.settings.own + "; the harness or a role rewrote it)"
+    );
   if (x.map === "ignored") return "ignored path written: " + x.key;
   if (x.map === "git" && x.key.indexOf(FLEETREF) === 0) return "run-state ref touched by role: " + x.key.slice(FLEETREF.length);
   return x.name;
@@ -1432,8 +1657,8 @@ function violationName(x) {
 
 // changedKeys by violation text, plus every suspicious entry: a non-empty
 // suspicious list is always a violation.
-function diffHashes(frozen, now) {
-  const out = changedKeys(frozen, now).map(violationName);
+function diffHashes(frozen, now, wt) {
+  const out = changedKeys(frozen, now, wt).map(violationName);
   for (const p of (now && now.suspicious) || [])
     out.push(SUSPICIOUS_PREFIXES.some((x) => p.indexOf(x) === 0) ? "suspicious " + p : "suspicious path name " + p);
   return out;
@@ -1463,7 +1688,8 @@ function mapsDigest(h) {
 
 // For the code judge: {"<map>/<key>": {frozen, current, match}}, plus the
 // suspicious list when non-empty. Report only; diffHashes stays authoritative.
-function hashRecheck(frozen, now) {
+// wt (4.0.0, 1988): a change diffHashes exempts (fleetOwnFile) is not listed.
+function hashRecheck(frozen, now, wt) {
   const out = {};
   for (const m of HASH_MAPS) {
     const a = (frozen && frozen[m]) || {};
@@ -1474,6 +1700,7 @@ function hashRecheck(frozen, now) {
     for (const k of Object.keys(keys).sort()) {
       const fa = k in a ? a[k] : null;
       const cb = k in b ? b[k] : null;
+      if (wt && fa !== cb && fleetOwnFile({ map: m, key: k }, now, wt)) continue;
       out[m + "/" + k] = { frozen: fa, current: cb, match: fa !== null && cb !== null && fa === cb };
     }
   }
@@ -1504,8 +1731,9 @@ function countKeys(h) {
 // Two states match when HEAD, the tree (tracked plus untracked-not-ignored
 // files) and every hasher map (ignored runner config, ignore rules, symlinks)
 // match. The suspicious list is left out: a test run may leave bytecode, which
-// the purge removes before every freeze and post-coder check.
-function sameState(a, b) {
+// the purge removes before every freeze and post-coder check. wt: the hashed
+// worktree (see fleetOwnFile).
+function sameState(a, b, wt) {
   return (
     !!a &&
     !!b &&
@@ -1513,7 +1741,7 @@ function sameState(a, b) {
     !!b.fingerprint &&
     a.fingerprint.head === b.fingerprint.head &&
     a.fingerprint.tree === b.fingerprint.tree &&
-    changedKeys(a.hashes, b.hashes).length === 0
+    changedKeys(a.hashes, b.hashes, wt).length === 0
   );
 }
 
@@ -1660,6 +1888,8 @@ function goPackageArg(x) {
   return !!m && testPathArg(m[1]);
 }
 
+// a cargo --test target or -p/--package crate name (4.0.0, ledger 1980)
+const CARGO_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const PYTEST_FLAGS = ["-q", "-v", "-vv", "-x", "-s", "-n0", "-ra", "-rA", "--no-header"];
 const PYTEST_FLAG_RE = /^(-n[0-9]+|--maxfail=[0-9]+|--tb=(short|line|no|long)|--durations=[0-9]+|--timeout=[0-9]+)$/;
 
@@ -1674,13 +1904,23 @@ function testArgsProblem(kind, a) {
   }
   if (kind === "cargo") {
     let i = 0;
-    for (; i < a.length && a[i] !== "--"; i++)
-      if (["--lib", "--tests", "--all-features", "--workspace", "-q"].indexOf(a[i]) < 0) return a[i];
-    for (i += 1; i < a.length; i++) if (!/^[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*$/.test(a[i])) return a[i];
+    for (; i < a.length && a[i] !== "--"; i++) {
+      if (["--lib", "--tests", "--all-features", "--workspace", "-q"].indexOf(a[i]) >= 0) continue;
+      // 4.0.0 (1980): one test target or one package, by plain name
+      if (["--test", "-p", "--package"].indexOf(a[i]) >= 0) {
+        if (!CARGO_NAME_RE.test(a[i + 1] || "")) return a[i] + " " + (a[i + 1] || "");
+        i++;
+        continue;
+      }
+      return a[i];
+    }
+    for (i += 1; i < a.length; i++) if (a[i] !== "--exact" && !/^[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*$/.test(a[i])) return a[i];
     return null;
   }
   for (let i = 0; i < a.length; i++) {
     const x = a[i];
+    // 4.0.0 (1980): go targets a criterion with test_args, never <paths>
+    if (kind === "go" && x === PATHS_TOKEN) return x;
     if (kind === "pytest") {
       if (PYTEST_FLAGS.indexOf(x) >= 0 || PYTEST_FLAG_RE.test(x)) continue;
       if (x === "-k" || x === "-m") {
@@ -1777,9 +2017,33 @@ function testCmdProblem(tc) {
   return null;
 }
 
+// 4.0.0 (1980): why a criterion's test_args is unusable (null: ok or absent).
+// Only for a cargo or go test_cmd without <paths>; test_cmd.command + " " +
+// test_args must pass the whole test_cmd allowlist as one command.
+function criterionTestArgsProblem(testCmd, c) {
+  if (!c || c.test_args === undefined || c.test_args === null) return null;
+  const ta = c.test_args;
+  if (typeof ta !== "string" || !ta.trim()) return "test_args must be a non-empty string, got " + JSON.stringify(ta);
+  const cmd = testCmd && typeof testCmd.command === "string" ? testCmd.command : "";
+  const split = splitTestCmd(cmd);
+  const t = split.tokens || [];
+  if (t.indexOf(PATHS_TOKEN) >= 0) return "test_args is not allowed when test_cmd holds " + PATHS_TOKEN + " (the paths target the run)";
+  const pre = testRunnerPrefix(t);
+  if (!pre || (pre.kind !== "cargo" && pre.kind !== "go"))
+    return "test_args is allowed only for cargo test and go test" + (pre && pre.kind === "make" ? " (make test is full-suite only)" : "");
+  const why = testCmdProblem(Object.assign({}, testCmd, { command: cmd + " " + ta }));
+  return why ? "test_args " + JSON.stringify(ta) + " refused: " + why : null;
+}
+
+// The command a criterion's targeted runs use (test_args appended), or null.
+function criterionCommand(testCmd, c) {
+  return c && typeof c.test_args === "string" ? testCmd.command + " " + c.test_args : null;
+}
+
 // What Max confirms: every command, verbatim, with its source and who runs
-// it, and the test_cmd's env and tools.
-function commandsOf(testCmd, obligations) {
+// it, and the test_cmd's env and tools. 4.0.0 (1980): one more test_cmd entry
+// per criterion with test_args, holding the whole command it runs.
+function commandsOf(testCmd, obligations, criteria) {
   const out = [
     {
       kind: "test_cmd",
@@ -1791,6 +2055,11 @@ function commandsOf(testCmd, obligations) {
       run_by: "roles",
     },
   ];
+  for (const c of criteria || []) {
+    const cmd = criterionCommand(testCmd, c);
+    if (cmd !== null)
+      out.push({ kind: "test_cmd", id: c.id, command: cmd, env: testCmd.env || {}, tools: testCmd.tools || [], rule_source: "test_cmd + criteria " + c.id + " test_args", run_by: "roles" });
+  }
   for (const o of obligations) {
     if (typeof o.check_cmd === "string")
       out.push({ kind: "check_cmd", id: o.id, command: o.check_cmd, rule_source: o.rule_source || null, run_by: "code-judge (required)" });
@@ -2056,34 +2325,45 @@ function commentText(kind, taskId, tldr, planLink, prUrl) {
 
 // The plan file's sha256 as git stores it at a commit. Plan mode and build
 // mode run this exact program, so the two hashes are comparable.
-const PLAN_HASH_PY =
-  "# resource caps (3.1.0): every embedded program bounds its own address space\n" +
-  "# and CPU time, and git's children are tuned to stay inside them\n" +
-  "import os as _o, resource as _r\n" +
-  "for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):\n" +
-  "    _h = _r.getrlimit(_k)[1]\n" +
-  "    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))\n" +
-  "_o.environ['MALLOC_ARENA_MAX'] = '2'\n" +
-  "_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)\n" +
-  "for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):\n" +
-  "    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv\n" +
-  "_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)\n" +
-  "_RAW_PATH = _o.environ.get('PATH', '')\n" +
-  "def clean_path(inside=()):\n" +
-  "    # PATH for children: absolute entries only, none inside the given dirs\n" +
-  "    keep = []\n" +
-  "    for e in _RAW_PATH.split(':'):\n" +
-  "        if not e or not _o.path.isabs(e):\n" +
-  "            continue\n" +
-  "        r = _o.path.realpath(e)\n" +
-  "        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):\n" +
-  "            continue\n" +
-  "        keep.append(e)\n" +
-  "    return ':'.join(keep)\n" +
-  "_o.environ['PATH'] = clean_path()\n" +
-  "import hashlib, subprocess, sys\n" +
-  "d = subprocess.run(['git', '-C', sys.argv[1], 'show', sys.argv[2] + ':' + sys.argv[3]], capture_output=True, check=True).stdout\n" +
-  "print(hashlib.sha256(d).hexdigest())";
+// PLAN_HASH_PY_BEGIN
+const PLAN_HASH_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, subprocess, sys
+d = subprocess.run(['git', '-C', sys.argv[1], 'show', sys.argv[2] + ':' + sys.argv[3]], capture_output=True, check=True).stdout
+print(json.dumps({'plan_sha256': hashlib.sha256(d).hexdigest(), 'program': _PROG}))`;
+// PLAN_HASH_PY_END
 
 function planRefName(taskId) {
   return "refs/fleet/" + taskId + "/plan";
@@ -2094,19 +2374,119 @@ function planRefName(taskId) {
 // sealed JSON, at refs/fleet/<task id>/plan. A different earlier value is
 // kept as refs/fleet/<task id>/plan-<n> first. No hook runs (hooksPath
 // /dev/null also stops reference-transaction). Local only, never pushed.
-// WRITE_PLAN_REF_SH_BEGIN
-function writePlanRefCmd(worktree, taskId, json) {
-  const g = "GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C " + shQuote(worktree);
-  const ref = shQuote("refs/fleet/" + taskId + "/plan");
-  return (
-    "c=$(" + g + " rev-parse HEAD) && t=$( { printf 'object %s\\ntype commit\\ntag fleet-plan\\ntagger fleet <fleet@localhost> 0 +0000\\n\\n' \"$c\"; cat <<'FLEET_PLAN_JSON'\n" +
-    json +
-    "\nFLEET_PLAN_JSON\n} | " + g + " mktag) && if o=$(" + g + " rev-parse -q --verify " + ref + ") && [ \"$o\" != \"$t\" ]; then n=1; while " +
-    g + " rev-parse -q --verify " + ref + "-$n >/dev/null; do n=$((n+1)); done; " + g + " update-ref " + ref + "-$n \"$o\"; fi && " +
-    g + " update-ref " + ref + " \"$t\" && echo \"$c $t\""
-  );
-}
-// WRITE_PLAN_REF_SH_END
+// The chunks are the base64 of the sealed ref's tag message, written by the
+// agent one file each (<chunk dir>/<i>.b64). Exit 3 with {bad_chunks} when a
+// chunk file does not hash to its listed sha256; then nothing is written.
+// Prints {head, tag_sha, program, digest}.
+// PLAN_REF_WRITE_PY_BEGIN
+const PLAN_REF_WRITE_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import base64, hashlib, json, os, re, shutil, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+if len(sys.argv) != 7:
+    sys.exit('usage: <worktree> <task id> <chunk dir> <n> <expected sha256> <chunk sha256 list>')
+wt, target, cdir, n_arg, expected, shas_arg = sys.argv[1:]
+if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', target):
+    sys.exit('bad task id: ' + target)
+if not re.fullmatch(r'[1-9][0-9]{0,2}', n_arg):
+    sys.exit('bad chunk count: ' + n_arg)
+n = int(n_arg)
+if not re.fullmatch(r'[0-9a-f]{64}', expected):
+    sys.exit('bad expected sha256: ' + expected)
+try:
+    shas = json.loads(shas_arg)
+except ValueError:
+    sys.exit('bad chunk sha256 list')
+if not isinstance(shas, list) or len(shas) != n or any(not isinstance(e, dict) or e.get('i') != k or not isinstance(e.get('sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', e['sha256']) for k, e in enumerate(shas)):
+    sys.exit('bad chunk sha256 list: ' + shas_arg[:200])
+# the chunks live in a directory of the run's scratch dir (a sibling of the worktree)
+scratch = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(wt)), 'scratch'))
+real = os.path.realpath(cdir)
+if not real.startswith(scratch + '/'):
+    sys.exit('chunk dir ' + cdir + ' is not under ' + scratch)
+bad, parts = [], []
+for e in shas:
+    p = os.path.join(real, '%d.b64' % e['i'])
+    b = None
+    try:
+        if os.path.isfile(p) and not os.path.islink(p) and os.path.getsize(p) <= 8192:
+            with open(p, 'rb') as f:
+                b = f.read(8193)
+    except OSError:
+        b = None
+    if b is None or len(b) > 8192 or hashlib.sha256(b).hexdigest() != e['sha256']:
+        bad.append(e['i'])
+    else:
+        parts.append(b)
+if bad:
+    # exit 3: rewrite only these chunks; nothing was written
+    print(json.dumps({'bad_chunks': bad}))
+    sys.exit(3)
+try:
+    msg = base64.b64decode(b''.join(parts), validate=True)
+except ValueError:
+    sys.exit('the chunks do not decode as base64')
+if hashlib.sha256(msg).hexdigest() != expected:
+    sys.exit('the decoded message hashes ' + hashlib.sha256(msg).hexdigest() + ', not ' + expected)
+# no hook runs (hooksPath /dev/null also stops reference-transaction)
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', wt]
+def git(*a, inp=None):
+    r = subprocess.run(G + list(a), input=inp, capture_output=True)
+    if r.returncode != 0:
+        sys.exit(r.stderr.decode('utf-8', 'replace')[-2000:] or 'git ' + a[0] + ' failed')
+    return r.stdout.decode().strip()
+def has(ref):
+    r = subprocess.run(G + ['rev-parse', '-q', '--verify', ref], capture_output=True)
+    return r.stdout.decode().strip() if r.returncode == 0 else None
+head = git('rev-parse', '--verify', 'HEAD^{commit}')
+tag = git('mktag', inp=b'object ' + head.encode() + b'\ntype commit\ntag fleet-plan\ntagger fleet <fleet@localhost> 0 +0000\n\n' + msg)
+ref = 'refs/fleet/' + target + '/plan'
+old = has(ref)
+if old and old != tag:
+    # a different earlier value is kept as refs/fleet/<task id>/plan-<n>
+    k = 1
+    while has(ref + '-%d' % k):
+        k += 1
+    git('update-ref', ref + '-%d' % k, old)
+git('update-ref', ref, tag)
+shutil.rmtree(real, ignore_errors=True)
+out = {'head': head, 'tag_sha': tag}
+out['program'] = _PROG
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))`;
+// PLAN_REF_WRITE_PY_END
 
 // Lists every plan ref of a task (refs/fleet/<task id>/plan and plan-<n>):
 // {refs: [{name, tag_sha, type, target, target_type, sha256, content}]}.
@@ -2138,6 +2518,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 if len(sys.argv) != 4:
@@ -2192,12 +2581,12 @@ for e in out:
     c = e.pop('content')
     if want is not None and e['name'] == want and c is not None:
         res['chunks'] = [c[i:i + 1000] for i in range(0, len(c), 1000)]
-print(json.dumps(res, ensure_ascii=False))
-`;
+res['program'] = _PROG
+print(json.dumps(res, ensure_ascii=False))`;
 // PLAN_REF_PY_END
 
 function planRefsCmd(worktree, taskId, mode) {
-  return "python3 -I -c " + shQuote(PLAN_REF_PY) + " " + shQuote(worktree) + " " + shQuote(taskId) + (mode ? " " + shQuote(mode) : "");
+  return progCmd("plan_ref", [worktree, taskId]) + (mode ? " " + shQuote(mode) : "");
 }
 
 // Why a plan-ref entry read without content (meta or chunks mode) is not the
@@ -2210,7 +2599,7 @@ function planRefMetaProblem(e, target, sha) {
   return null;
 }
 
-// The exact tag message writePlanRefCmd stores for a sealed ref (heredoc + newline).
+// The exact tag message plan_ref_write.py stores for a sealed ref (JSON + newline).
 function refMessage(full) {
   return JSON.stringify(full) + "\n";
 }
@@ -2227,10 +2616,191 @@ function planRefEntryProblem(e, target) {
 
 // The relayed keys of a program's output match the digest it printed (3.0.0,
 // ledger 1952). A key the relay dropped counts as null.
-function relayDigestOk(r, keys) {
-  const o = {};
+// 4.0.0 (1993): the digest covers the program's self-hash too, and that
+// self-hash must name the shipped program `name`.
+function relayDigestOk(r, keys, name) {
+  if (!r || typeof r !== "object" || programProblem(r, name)) return false;
+  const o = { program: r.program };
   for (const k of keys) o[k] = r[k] === undefined ? null : r[k];
   return typeof r.digest === "string" && SHA256_RE.test(r.digest) && sha256Hex(canonical(o)) === r.digest;
+}
+
+// ---------------------------------------------------------------- 4.0.0 (1993): programs as files
+//
+// Every embedded program ships as plugins/fleet/scripts/<name>.py, whose bytes
+// are the constant plus "\n" (scripts/gen.mjs writes them; a test checks the
+// bytes). The constants stay the source of truth: the script cannot read files.
+// Agents run `python3 -I <scripts_dir>/<name>.py <args>`; no prompt pastes a
+// program. Each program prints program: {name, sha256} (the sha256 of its own
+// file) inside its digest, and the script compares both with the constant it
+// holds: a re-typed program, a stale plugin version or a wrong directory stops
+// the step. scripts_dir is resolved in the first agent of every run.
+let PROGRAM_TABLE = null;
+function programTable() {
+  if (!PROGRAM_TABLE)
+    PROGRAM_TABLE = {
+      hasher: HASHER_PY,
+      script_check: SCRIPT_CHECK_PY,
+      plan_hash: PLAN_HASH_PY,
+      plan_ref: PLAN_REF_PY,
+      plan_ref_write: PLAN_REF_WRITE_PY,
+      fleet_scan: FLEET_SCAN_PY,
+      branch_scan: BRANCH_SCAN_PY,
+      review_paths: REVIEW_PATHS_PY,
+      verify_since: VERIFY_SINCE_PY,
+      plan_files: PLAN_FILES_PY,
+      callers: CALLERS_PY,
+      changed_defs: CHANGED_DEFS_PY,
+      format_files: FORMAT_FILES_PY,
+      tf_gate: TF_GATE_PY,
+      remote_head: REMOTE_HEAD_PY,
+      remote_url: REMOTE_URL_PY,
+      push_classify: PUSH_CLASSIFY_PY,
+      push_probe: PUSH_PROBE_PY,
+      hook_surface: HOOK_SURFACE_PY,
+      precommit_ids: PRECOMMIT_IDS_PY,
+      path_check: PATH_CHECK_PY,
+      read_state: READ_STATE_PY,
+      state_write: STATE_WRITE_PY,
+      parked: PARKED_PY,
+      test_db_decl: TEST_DB_DECL_PY,
+      db_sweep: DB_SWEEP_PY,
+      db_up: DB_UP_PY,
+      db_down: DB_DOWN_PY,
+    };
+  return PROGRAM_TABLE;
+}
+
+// sha256 of the shipped file of program `name` (computed once per run)
+const PROGRAM_SHA = {};
+function programSha(name) {
+  if (!Object.prototype.hasOwnProperty.call(programTable(), name)) throw new Error("unknown program " + name);
+  if (!(name in PROGRAM_SHA)) PROGRAM_SHA[name] = sha256Hex(programTable()[name] + "\n");
+  return PROGRAM_SHA[name];
+}
+
+// Why a relayed program output did not come from the shipped program `name`
+// (null: it did). Two observations, both agent-relayed: the sha256sum line the
+// same Bash call printed before the program ran (file_sha256), and the
+// program's own self-hash (program). Both must be the constant's sha256.
+function programProblem(r, name) {
+  const p = r && typeof r === "object" && r.program && typeof r.program === "object" && !Array.isArray(r.program) ? r.program : null;
+  const got = p && typeof p.sha256 === "string" ? p.sha256 : null;
+  const want = programSha(name);
+  if (!p || p.name !== name || got !== want)
+    return "did not run the shipped program " + name + " (got " + (p ? JSON.stringify(p.name === undefined ? null : p.name) + " " + (got || "no sha256") : "no program key") + ")";
+  const fs = r.file_sha256;
+  if (fs !== want) return "did not run the shipped program " + name + " (its file's sha256sum line reads " + JSON.stringify(fs === undefined ? null : fs) + ", not " + want + ")";
+  return null;
+}
+
+// Halts unless `r` came from the shipped program `name`.
+function requireProgram(r, name, label, status, stopGate) {
+  const p = programProblem(r, name);
+  if (p) halt(status || "failed", label + ": " + p, stopGate || "contract");
+}
+
+// The one command form a prompt uses to run a shipped program: the file's
+// sha256sum first, then the program, in one Bash call.
+function progCmd(name, args) {
+  if (!state.scriptsDir) throw new Error("scripts_dir is not resolved; program " + name + " cannot run");
+  programSha(name);
+  const f = shQuote(state.scriptsDir + "/" + name + ".py");
+  return "sha256sum -- " + f + " && python3 -I " + f + (args || []).map((a) => " " + shQuote(a)).join("");
+}
+// appended to every prompt that runs a shipped program (see nonced)
+const FILE_SHA_MARK = "sha256sum -- ";
+const FILE_SHA_RULE =
+  "Shipped programs: each command that starts with `sha256sum -- <file> && python3 -I <file>` prints one sha256sum line (`<hex>  <file>`) before the program's JSON. Put that <hex> into the program's JSON object you return as `file_sha256`, next to its `program` key; change nothing else in the object. The script checks both against the shipped program.";
+
+// scripts_dir (4.0.0 security review): the preflight probe's lines, parsed.
+// The directory must be exactly $HOME/.claude/plugins/cache/<marketplace>/
+// fleet/<FLEET_VERSION>/scripts, its realpath must be itself (no symlink in
+// any component) and it must not be a symlink; every shipped program in it
+// must hash to its constant, and it holds no other program.
+// Returns {problem} or {dir}.
+function scriptsProbeOf(probe, dir) {
+  const bad = (m) => ({ problem: m });
+  if (!Array.isArray(probe) || probe.some((x) => typeof x !== "string")) return bad("the scripts directory probe returned no list of lines");
+  const lines = probe.map((x) => x.replace(/\r$/, "")).filter((x) => x !== "");
+  const homes = lines.filter((x) => x.startsWith("home=")).map((x) => x.slice(5));
+  const hits = lines.filter((x) => x.startsWith("hit=")).map((x) => x.slice(4));
+  const reals = lines.filter((x) => x.startsWith("real=")).map((x) => x.slice(5));
+  const links = lines.filter((x) => x.startsWith("symlink=")).map((x) => x.slice(8));
+  if (homes.length !== 1) return bad("the scripts directory probe printed no single home= line");
+  const home = homes[0];
+  if (!/^\/[A-Za-z0-9._\/-]+$/.test(home) || home.split("/").slice(1).some((x) => x === "" || x === "." || x === ".."))
+    return bad("HOME " + JSON.stringify(home) + " is not a plain absolute path");
+  if (hits.length !== 1) return bad("the scripts directory search found " + hits.length + " copies of fleet " + FLEET_VERSION + " (" + hits.slice(0, 4).join(", ") + "); exactly one is needed");
+  const hit = hits[0];
+  const pre = home + "/.claude/plugins/cache/";
+  const tail = "/fleet/" + FLEET_VERSION + "/scripts";
+  const mkt = hit.startsWith(pre) && hit.endsWith(tail) ? hit.slice(pre.length, hit.length - tail.length) : null;
+  if (mkt === null || !/^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/.test(mkt))
+    return bad("scripts_dir " + JSON.stringify(hit) + " is not " + pre + "<marketplace>" + tail);
+  if (!SCRIPTS_DIR_RE.test(hit)) return bad("scripts_dir " + JSON.stringify(hit) + " is not a plugin cache directory of fleet " + FLEET_VERSION);
+  if (reals.length !== 1 || reals[0] !== hit) return bad("scripts_dir " + hit + " resolves to " + JSON.stringify(reals.length === 1 ? reals[0] : null) + " (a symlink in its path)");
+  if (links.length !== 1 || links[0] !== "no") return bad("scripts_dir " + hit + " is a symlink");
+  if (typeof dir !== "string" || dir !== hit) return bad("scripts_dir " + JSON.stringify(dir === undefined ? null : dir) + " is not the one directory found (" + hit + ")");
+  // the sha256sum lines of <dir>/*.py: exactly the shipped programs, each its constant
+  const sums = {};
+  for (const x of lines) {
+    const m = /^([0-9a-f]{64}) [ *](.+)$/.exec(x);
+    if (!m) continue;
+    if (m[2].slice(0, hit.length + 1) !== hit + "/" || !/^[A-Za-z0-9_.-]+\.py$/.test(m[2].slice(hit.length + 1))) return bad("the probe hashed " + m[2] + ", outside " + hit);
+    sums[m[2].slice(hit.length + 1, -3)] = m[1];
+  }
+  const p = scriptsMapProblem(sums, hit);
+  return p ? bad(p) : { dir: hit };
+}
+
+// Why a map {<program name>: sha256} of a scripts dir is not exactly the
+// shipped programs (null: it is). Names every file that differs.
+function scriptsMapProblem(map, dir) {
+  if (!map || typeof map !== "object" || Array.isArray(map)) return "no sha256 map of the scripts in " + dir;
+  const out = [];
+  for (const n of Object.keys(programTable()).sort())
+    if (map[n] !== programSha(n)) out.push(dir + "/" + n + ".py " + (map[n] === undefined ? "is missing" : "hashes " + map[n] + ", not " + programSha(n)));
+  for (const n of Object.keys(map).sort()) if (!Object.prototype.hasOwnProperty.call(programTable(), n)) out.push(dir + "/" + n + ".py is not a shipped program");
+  return out.length ? "the shipped fleet programs were changed: " + out.join("; ") : null;
+}
+
+// base64 of the UTF-8 bytes of `str` (the script has no Buffer or btoa).
+const B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+function base64Of(str) {
+  const b = utf8Bytes(str);
+  let out = "";
+  for (let i = 0; i < b.length; i += 3) {
+    const n = (b[i] << 16) | ((i + 1 < b.length ? b[i + 1] : 0) << 8) | (i + 2 < b.length ? b[i + 2] : 0);
+    out += B64_CHARS[(n >> 18) & 63] + B64_CHARS[(n >> 12) & 63];
+    out += i + 1 < b.length ? B64_CHARS[(n >> 6) & 63] : "=";
+    out += i + 2 < b.length ? B64_CHARS[n & 63] : "=";
+  }
+  return out;
+}
+
+// A message the agent writes to files in checked base64 chunks, and the
+// prompt text for it: write each chunk, then run `cmd` (a chunk writer
+// program), rewriting only the chunks it lists as bad, at most 2 times.
+const CHUNK_CHARS = 4000;
+const MAX_CHUNK_RETRIES = 2;
+function chunked(message) {
+  const b64 = base64Of(message);
+  const chunks = [];
+  for (let i = 0; i < b64.length; i += CHUNK_CHARS) chunks.push(b64.slice(i, i + CHUNK_CHARS));
+  return { expected: sha256Hex(message), chunks, shas: chunks.map((c, i) => ({ i, sha256: sha256Hex(c) })) };
+}
+function chunkSteps(dir, c, cmd) {
+  return (
+    "a. `mkdir -p " + shQuote(dir) + "`.\n" +
+    "b. For each chunk below, one Bash call: `printf '%s' '<the chunk text>' > " + shQuote(dir) + "/<i>.b64`, with the chunk text copied exactly, byte for byte, in place of <the chunk text> (base64 holds no quote; printf adds no newline). Never shorten, merge, reflow or skip a chunk.\n" +
+    "c. Run this command exactly as written, unmodified:\n" +
+    cmd +
+    "\n" +
+    "   Exit 3 prints {\"bad_chunks\": [<i>, ...]}: the files of those chunks do not hash to their sha256 and nothing was written. Rewrite only those chunks as in step b, then run the command again; at most " + MAX_CHUNK_RETRIES + " such retries, then return failed with the last output. Any other non-zero exit -> failed with its stderr.\n" +
+    "The " + c.chunks.length + " chunk(s) (" + CHUNK_CHARS + " characters each at most):\n" +
+    c.chunks.map((x, i) => "chunk " + i + " sha256 " + c.shas[i].sha256 + ":\n" + x + "\n").join("")
+  );
 }
 
 // The PR-diff check for fleet-internal paths: the paths of
@@ -2262,6 +2832,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, default, sha = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2280,9 +2859,9 @@ for c in run('rev-list', base + '..' + sha).decode().split():
     files = names(run('diff-tree', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c))
     commits.append({'sha': c, 'files': sorted(set(files))})
 out = {'diff': diff, 'commits': commits}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // FLEET_SCAN_PY_END
 
 // The branch scan (3.0.0, ledger 1952): the commits origin/<default>..HEAD
@@ -2320,6 +2899,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, default, tid, kinds = sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
@@ -2374,11 +2962,27 @@ def ref_ok(r):
         return False
     if not brief_ok(r.get('brief')) or r['branch'] != 'fleet/' + r['task_id'] + '-' + r['slug']:
         return False
-    return isinstance(r.get('history'), (dict, list))
+    h = r.get('history')
+    if not isinstance(h, (dict, list)):
+        return False
+    # 4.0.0: the sealed project and the optional history.preflight record
+    if 'project' in r and r['project'] is not None and not (isinstance(r['project'], str) and r['project']):
+        return False
+    p = h.get('preflight') if isinstance(h, dict) else None
+    if p is None:
+        return True
+    if not isinstance(p, dict) or not (isinstance(p.get('fleet_version'), str) and p['fleet_version']):
+        return False
+    return all(isinstance(p.get(k), dict) for k in ('versions', 'dispatch', 'contract'))
 base = 'refs/remotes/origin/' + default
 commits = []
-for line in run('log', '--format=%H%x00%s', base + '..HEAD').stdout.decode('utf-8', 'replace').splitlines():
-    c, _, subj = line.partition('\0')
+plan_tip_time = None
+for line in run('log', '--format=%H%x00%ct%x00%s', base + '..HEAD').stdout.decode('utf-8', 'replace').splitlines():
+    c, _, rest = line.partition('\0')
+    ct, _, subj = rest.partition('\0')
+    # 4.0.0 (1986): the committer time of the newest commit (HEAD)
+    if plan_tip_time is None and ct.isdigit():
+        plan_tip_time = int(ct)
     files = names(run('diff-tree', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c).stdout)
     commits.append({'sha': c, 'subject': subj, 'files': sorted(set(files))})
 pre = 'refs/fleet/' + tid + '/'
@@ -2412,10 +3016,10 @@ for name in run('for-each-ref', '--format=%(refname)', pre).stdout.decode().spli
                 e['task_id'], e['plan_path'] = r['task_id'], r['plan_path']
     refs.append(e)
 refs.sort(key=lambda x: x['name'])
-out = {'commits': commits, 'refs': refs}
+out = {'commits': commits, 'refs': refs, 'plan_tip_time': plan_tip_time}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // BRANCH_SCAN_PY_END
 
 // The paths base_ref..head_sha changes (review), with a digest. Read only.
@@ -2445,6 +3049,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2452,9 +3065,9 @@ r = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=f
 if r.returncode != 0:
     sys.exit(r.stderr.decode('utf-8', 'replace'))
 out = {'changed_paths': [x.decode('utf-8', 'replace') for x in r.stdout.split(b'\0') if x]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // REVIEW_PATHS_PY_END
 
 // Verify (3.1.0, ledger 1959): what the branch did since the plan commit, from
@@ -2491,6 +3104,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, plan_path = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -2514,15 +3136,16 @@ if anc and head != pc:
     touched = z(run('log', '-z', '--format=%H', pc + '..' + head, '--', ':(literal)' + plan_path).stdout)
     changed = z(run('diff', '--name-only', '-z', '--no-renames', pc + '..' + head, '--').stdout)
 out = {'head': head, 'is_ancestor': anc, 'commits_since': commits, 'plan_touched': touched, 'changed_since': changed, 'args': [wt, base, plan_path]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // VERIFY_SINCE_PY_END
 const VERIFY_SINCE_KEYS = ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"];
 
 // Commit-plan (3.1.0, ledger 1959): HEAD and the paths the HEAD commit
-// changes. Arg: worktree. Prints {head, files, digest}. Read only; git runs
-// from /.
+// changes. Arg: worktree. Prints {head, files, args, dsn_paths, program,
+// digest}; dsn_paths (4.0.0 review): the files among them whose HEAD blob
+// holds mysql://. Read only; git runs from /.
 // PLAN_FILES_PY_BEGIN
 const PLAN_FILES_PY = String.raw`
 # resource caps (3.1.0): every embedded program bounds its own address space
@@ -2549,6 +3172,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt = sys.argv[1]
@@ -2560,11 +3192,26 @@ def run(*a):
         sys.exit(r.stderr.decode('utf-8', 'replace') or 'git ' + a[0] + ' exited ' + str(r.returncode))
     return r.stdout
 head = run('rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
-files = [x.decode('utf-8', 'replace') for x in run('diff-tree', '-r', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', head).split(b'\0') if x]
-out = {'head': head, 'files': files, 'args': [wt]}
+raw = [x for x in run('diff-tree', '-r', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', head).split(b'\0') if x]
+files = [x.decode('utf-8', 'replace') for x in raw]
+# fleet 4.0.0 review: the committed files that hold a test DSN (mysql://,
+# any case); a blob over 8 MiB is listed unread (fail closed); a path the
+# commit deletes has no blob and is skipped
+dsn_paths = []
+for b, f in zip(raw, files):
+    s = subprocess.run(G + ['cat-file', '-s', head + ':' + b.decode('utf-8', 'surrogateescape')], capture_output=True)
+    if s.returncode != 0:
+        continue
+    if int(s.stdout.strip() or 0) > (8 << 20):
+        dsn_paths.append(f)
+        continue
+    d = subprocess.run(G + ['cat-file', 'blob', head + ':' + b.decode('utf-8', 'surrogateescape')], capture_output=True)
+    if d.returncode != 0 or b'mysql://' in d.stdout.lower():
+        dsn_paths.append(f)
+out = {'head': head, 'files': files, 'args': [wt], 'dsn_paths': dsn_paths}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // PLAN_FILES_PY_END
 
 // The caller grep (2.1.6): every word-boundary occurrence of each changed
@@ -2598,7 +3245,16 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
-import hashlib, json, os, subprocess, sys
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, plan_path, syms, cap = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), int(sys.argv[4])
 G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
@@ -2621,11 +3277,219 @@ for s in syms:
         occ[s] = []
     else:
         occ[s] = sorted(hits)
-out = {'occurrences': occ, 'capped': sorted(capped)}
+# fleet 4.0.0 (1989, ADR-1185): hits in doc and lock files are auto
+# dont_care, unless the doc is collected as a doctest: (a) a pytest config or
+# conftest.py names --doctest-glob or doctest_optionflags (every doc stays
+# mapped), (b) a tracked .rs file include_str!s a file of that basename.
+DOC_RE = re.compile(r'.*\.(md|rst|adoc)', re.I)
+NOTE_RE = re.compile(r'(CHANGELOG|LICENSE)([-_][A-Za-z0-9-]+)*(\.[0-9]+)*(\.(md|rst|adoc|txt))?', re.I)
+LOCKS = ('Cargo.lock', 'uv.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'Gemfile.lock', 'go.sum')
+def base(p):
+    return p.rsplit('/', 1)[-1]
+def doc_or_lock(p):
+    b = base(p)
+    return bool(DOC_RE.fullmatch(b) or NOTE_RE.fullmatch(b)) or b in LOCKS
+def grep(args):
+    r = subprocess.run(G + ['grep', '-I', '--no-color'] + args, capture_output=True)
+    if r.returncode not in (0, 1):
+        sys.exit(r.stderr.decode('utf-8', 'replace'))
+    return r.stdout.decode('utf-8', 'replace')
+cfg = grep(['-l', '--full-name', '-F', '-e', '--doctest-glob', '-e', 'doctest_optionflags', '--', ':(top,literal)pyproject.toml', ':(top,literal)pytest.ini', ':(top,literal)setup.cfg', ':(top,literal)tox.ini', ':(top,glob)**/conftest.py'])
+all_docs = bool(cfg.strip())
+included = set()
+for line in grep(['-h', '-o', '-E', '-e', 'include_str![[:space:]]*\\([[:space:]]*"[^"]*"', '--', ':(top,glob)**/*.rs']).splitlines():
+    for m in re.findall(r'"([^"]*)"', line):
+        included.add(base(m))
+doctest = set()
+auto = {}
+for s in syms:
+    auto[s] = []
+    for h in occ[s]:
+        p = h.rsplit(':', 1)[0]
+        if DOC_RE.fullmatch(base(p)) and (all_docs or base(p) in included):
+            doctest.add(p)
+        elif doc_or_lock(p):
+            auto[s].append(h)
+out = {'occurrences': occ, 'capped': sorted(capped), 'auto_dont_care': auto, 'doctest_md': sorted(doctest)}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, sort_keys=True, ensure_ascii=False))
-`;
+print(json.dumps(out, sort_keys=True, ensure_ascii=False))`;
 // CALLERS_PY_END
+
+// 4.0.0 (1986): the parked draft and findings of a plan run that stopped
+// before its plan commit. `read <scratch> <plan tip time|null>` prints the
+// newest parked/<run>/ folder newer than the last plan commit: {parked: null
+// | {run, plan_path, draft_chunks, findings_chunks} (<= 1000 characters
+// each), args, program, digest}. `write <scratch> <run> <chunk dir> <n>
+// <expected> <shas>` writes parked/<run>/findings.json from checked base64
+// chunks (exit 3 with {bad_chunks} and nothing written on a bad one) and
+// prints {written, sha256, args, program, digest}.
+// PARKED_PY_BEGIN
+const PARKED_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import base64, hashlib, json, os, re, shutil, sys
+NAME_RE = re.compile(r'[A-Za-z0-9_.:-]{1,64}')
+CHUNK = 1000
+CAP = 1 << 20
+def emit(out):
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+def read_text(p):
+    # a regular file (no symlink), at most CAP bytes of UTF-8, else None
+    try:
+        if os.path.islink(p) or not os.path.isfile(p) or os.path.getsize(p) > CAP:
+            return None
+        with open(p, 'rb') as f:
+            b = f.read(CAP + 1)
+        return b.decode('utf-8') if len(b) <= CAP else None
+    except (OSError, UnicodeDecodeError):
+        return None
+def pieces(t):
+    return [t[i:i + CHUNK] for i in range(0, len(t), CHUNK)]
+mode = sys.argv[1] if len(sys.argv) > 1 else ''
+if mode == 'read':
+    # read <scratch> <plan tip time|null>: the newest parked/<run>/ folder
+    # newer than the last plan commit (its newest file's mtime); parked/used/
+    # and symlinks are skipped
+    if len(sys.argv) != 4:
+        sys.exit('usage: read <scratch> <plan tip time|null>')
+    scratch, tip_arg = sys.argv[2], sys.argv[3]
+    if tip_arg != 'null' and not re.fullmatch(r'[0-9]{1,12}', tip_arg):
+        sys.exit('bad plan tip time: ' + tip_arg)
+    tip = None if tip_arg == 'null' else int(tip_arg)
+    root = os.path.join(scratch, 'parked')
+    best = None
+    if os.path.isdir(root) and not os.path.islink(root):
+        for name in sorted(os.listdir(root)):
+            d = os.path.join(root, name)
+            if name == 'used' or not NAME_RE.fullmatch(name) or os.path.islink(d) or not os.path.isdir(d):
+                continue
+            files = []
+            for dp, dns, fns in os.walk(d):
+                dns[:] = sorted(x for x in dns if not os.path.islink(os.path.join(dp, x)))
+                for fn in sorted(fns):
+                    fp = os.path.join(dp, fn)
+                    if not os.path.islink(fp) and os.path.isfile(fp):
+                        files.append(os.path.relpath(fp, d))
+            if not files:
+                continue
+            t = max(os.path.getmtime(os.path.join(d, f)) for f in files)
+            if tip is not None and t <= tip:
+                continue
+            if best is None or (t, name) > (best[0], best[1]):
+                best = (t, name, files)
+    parked = None
+    if best:
+        t, name, files = best
+        d = os.path.join(root, name)
+        findings = read_text(os.path.join(d, 'findings.json')) if 'findings.json' in files else None
+        pp = None
+        if findings is not None:
+            try:
+                fj = json.loads(findings)
+                pp = fj.get('plan_path') if isinstance(fj, dict) else None
+            except ValueError:
+                pp = None
+        mds = [f for f in files if f.endswith('.md')]
+        if not (isinstance(pp, str) and pp in mds):
+            pp = mds[0] if len(mds) == 1 else None
+        draft = read_text(os.path.join(d, pp)) if pp else None
+        if draft is not None or findings is not None:
+            parked = {'run': name, 'plan_path': pp if draft is not None else None,
+                      'draft_chunks': pieces(draft) if draft is not None else [],
+                      'findings_chunks': pieces(findings) if findings is not None else []}
+    emit({'parked': parked, 'args': [scratch, tip_arg]})
+elif mode == 'write':
+    # write <scratch> <run> <chunk dir> <n> <expected sha256> <chunk sha256 list>:
+    # parked/<run>/findings.json from checked base64 chunks (exit 3 + bad_chunks)
+    if len(sys.argv) != 8:
+        sys.exit('usage: write <scratch> <run> <chunk dir> <n> <expected sha256> <chunk sha256 list>')
+    scratch, run, cdir, n_arg, expected, shas_arg = sys.argv[2:]
+    if not NAME_RE.fullmatch(run) or run == 'used':
+        sys.exit('bad run name: ' + run)
+    if not re.fullmatch(r'[1-9][0-9]{0,2}', n_arg):
+        sys.exit('bad chunk count: ' + n_arg)
+    n = int(n_arg)
+    if not re.fullmatch(r'[0-9a-f]{64}', expected):
+        sys.exit('bad expected sha256: ' + expected)
+    try:
+        shas = json.loads(shas_arg)
+    except ValueError:
+        sys.exit('bad chunk sha256 list')
+    if not isinstance(shas, list) or len(shas) != n or any(not isinstance(e, dict) or e.get('i') != k or not isinstance(e.get('sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', e['sha256']) for k, e in enumerate(shas)):
+        sys.exit('bad chunk sha256 list: ' + shas_arg[:200])
+    sreal = os.path.realpath(scratch)
+    real = os.path.realpath(cdir)
+    if not real.startswith(sreal + '/'):
+        sys.exit('chunk dir ' + cdir + ' is not under ' + sreal)
+    bad, parts = [], []
+    for e in shas:
+        p = os.path.join(real, '%d.b64' % e['i'])
+        b = None
+        try:
+            if os.path.isfile(p) and not os.path.islink(p) and os.path.getsize(p) <= 8192:
+                with open(p, 'rb') as f:
+                    b = f.read(8193)
+        except OSError:
+            b = None
+        if b is None or len(b) > 8192 or hashlib.sha256(b).hexdigest() != e['sha256']:
+            bad.append(e['i'])
+        else:
+            parts.append(b)
+    if bad:
+        print(json.dumps({'bad_chunks': bad}))
+        sys.exit(3)
+    try:
+        msg = base64.b64decode(b''.join(parts), validate=True)
+    except ValueError:
+        sys.exit('the chunks do not decode as base64')
+    if hashlib.sha256(msg).hexdigest() != expected:
+        sys.exit('the decoded findings hash ' + hashlib.sha256(msg).hexdigest() + ', not ' + expected)
+    folder = os.path.join(sreal, 'parked', run)
+    os.makedirs(folder, exist_ok=True)
+    dest = os.path.join(folder, 'findings.json')
+    if os.path.islink(dest) or os.path.islink(folder):
+        sys.exit('refusing a symlink at ' + dest)
+    with open(dest, 'wb') as f:
+        f.write(msg)
+    shutil.rmtree(real, ignore_errors=True)
+    emit({'written': dest, 'sha256': expected, 'args': [scratch, run]})
+else:
+    sys.exit('usage: read <scratch> <tip> | write <scratch> <run> <chunk dir> <n> <expected> <shas>')`;
+// PARKED_PY_END
 
 // The build-time caller check (3.0.0, ledger 1956): the EXISTING definitions
 // that `git diff <base> <tree>` modifies, in the files that existed at base
@@ -2669,6 +3533,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, tree, excl = sys.argv[1], sys.argv[2], sys.argv[3], set(json.loads(sys.argv[4]))
@@ -2963,9 +3836,9 @@ o = {
     'unclassified': sorted(unclassified),
     'unattributed': sorted(unattributed),
 }
+o['program'] = _PROG
 o['digest'] = hashlib.sha256(json.dumps(o, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(o, sort_keys=True, ensure_ascii=False))
-`;
+print(json.dumps(o, sort_keys=True, ensure_ascii=False))`;
 // CHANGED_DEFS_PY_END
 
 // Paths with a .fleet/ directory segment: fleet-internal, never in a PR.
@@ -2973,9 +3846,16 @@ function fleetInternalPaths(paths) {
   return (paths || []).map((p) => normPath(String(p))).filter((q) => q.split("/").slice(0, -1).some((x) => x.toLowerCase() === ".fleet"));
 }
 
+// It prints {plan_sha256, program} (4.0.0: JSON, so the script sees which program ran).
 function planHashCmd(worktree, rev, planPath) {
-  return "python3 -I -c " + shQuote(PLAN_HASH_PY) + " " + shQuote(worktree) + " " + shQuote(rev) + " " + shQuote(planPath);
+  return progCmd("plan_hash", [worktree, rev, planPath]);
 }
+
+// 4.0.0 (1993): the search for this version's scripts directory in the plugin cache
+const SCRIPTS_GLOB = '"$HOME"/.claude/plugins/cache/*/fleet/' + FLEET_VERSION + "/scripts";
+const SCRIPTS_PROBE =
+  "bash -c 'shopt -s nullglob; printf \"home=%s\\n\" \"$HOME\"; for d in " + SCRIPTS_GLOB + "; do printf \"hit=%s\\n\" \"$d\"; printf \"real=%s\\n\" \"$(realpath -e -- \"$d\")\"; " +
+  "if [ -L \"$d\" ]; then echo symlink=yes; else echo symlink=no; fi; done; for d in " + SCRIPTS_GLOB + "; do sha256sum -- \"$d\"/*.py; done'";
 
 // ---------------------------------------------------------------- prompts
 
@@ -2998,23 +3878,53 @@ function rolePrompt(role, inputs) {
   );
 }
 
-function preflightPrompt(inputs) {
+// 4.0.0 (1990): part "all" (plan mode, fresh_preflight) loads the role pages
+// and finds the scripts directory in one agent; "scripts" (a build's first
+// agent) only finds the scripts directory and runs the PATH check; "roles" (a
+// build whose plan ref holds no usable role table) only loads the pages.
+function preflightPrompt(inputs, part) {
+  const which = part || "all";
+  const roles = which !== "scripts";
+  const scripts = which !== "roles";
   return (
-    "Infra step of the fleet build workflow: check that the yadgar role library is reachable. Read only; do nothing else.\n" +
+    (roles
+      ? "Infra step of the fleet build workflow: check that the yadgar role library is reachable. Read only; do nothing else.\n"
+      : "Infra step of the fleet build workflow: find the fleet scripts directory and check the agent PATH. Read only; do nothing else.\n") +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
+    (roles ? preflightRolesText() : "") +
+    (scripts ? preflightScriptsText(inputs.repo, roles) : "") +
+    (which === "all"
+      ? "Return {reachable, missing, versions, dispatch, contract, scripts_probe, scripts_dir, path_check, reason}."
+      : which === "roles"
+        ? "Return {reachable, missing, versions, dispatch, contract, reason}."
+        : "Return {scripts_probe, scripts_dir, path_check, reason}.")
+  );
+}
+
+function preflightRolesText() {
+  return (
     "Load mcp__yadgar__agent_prompt_get via ToolSearch. Call it once per pattern in `roles`, with project=`role_project`. " +
     "A pattern is missing when the call returns an error such as not_found, or empty content. " +
     "reachable=false when the tool is absent or every call fails with a transport, auth or connection error. " +
     "versions maps each found pattern to its `version`. " +
     "dispatch maps each found pattern to the first line of its `content` that matches `DISPATCH: model=<tier> (fallback=<tier>)` (the fallback part is optional), copied raw; null when no line matches. " +
     "contract maps each found pattern to the first line of its `content` that starts with `CONTRACT:`, copied raw; null when none. " +
-    "`content` often has no trailing newline: its last line counts as a line like any other. " +
-    "Then run this one command exactly as written, unmodified, as one Bash call: " +
-    "python3 -I -c " + shQuote(PATH_CHECK_PY) + " " + shQuote(inputs.repo) +
-    "\nIt prints one JSON object {tools, args, path_problems, digest}: return it as path_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n" +
-    "Return {reachable, missing, versions, dispatch, contract, path_check, reason}."
+    "`content` often has no trailing newline: its last line counts as a line like any other. "
+  );
+}
+
+function preflightScriptsText(repo, after) {
+  return (
+    (after ? "Then find" : "Find") + " the fleet scripts directory (4.0.0): run this one command exactly as written, unmodified, as one Bash call: " +
+    SCRIPTS_PROBE +
+    "\nscripts_probe = its output lines, every line in order, copied unchanged. " +
+    "When exactly one line starts with `hit=`, scripts_dir = the rest of that line; otherwise scripts_dir = null, path_check = null, and skip the next command. " +
+    "Then run this one command as one Bash call, with <scripts_dir> replaced by scripts_dir and nothing else changed: " +
+    "sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py " +
+    shQuote(repo) +
+    "\nIt prints one JSON object {tools, args, path_problems, program, digest}: return it as path_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n"
   );
 }
 
@@ -3032,27 +3942,21 @@ function workspacePrompt(inputs) {
     "3. Keep fleet files out of git status: if `git -C <repo> check-ignore -q .claude/worktrees/probe` fails, append the line `.claude/worktrees/` to `$(git -C <repo> rev-parse --path-format=absolute --git-common-dir)/info/exclude`. Do the same for `.claude/settings.local.json` (probe that path), and for the test caches `__pycache__/`, `.pytest_cache/`, `.coverage`, `.hypothesis/` (a judge's test run must not leave untracked noise). Never edit a tracked .gitignore.\n" +
     "4. Branch state: `gh pr list --head <branch> --state all --json number,state` in <repo>. MERGED or CLOSED -> status needs_human.\n" +
     "5. main_worktree: if it exists and `git -C <main_worktree> branch --show-current` equals <branch>, reuse it (created=false). If the path exists otherwise -> needs_human. If absent: local branch <branch> exists -> `git -C <repo> -c core.hooksPath=/dev/null worktree add <main_worktree> <branch>`; else remote branch exists (`git -C <repo> ls-remote --exit-code --heads origin <branch>`: exit code 0 = exists, exit code 2 = absent; any other exit code is a network/auth error -> retry with the same 5 15 45 backoff, and still erroring after the 3 retries -> failed; never treat an error as absent) -> `git -C <repo> -c core.hooksPath=/dev/null worktree add -b <branch> <main_worktree> origin/<branch>`; else `git -C <repo> -c core.hooksPath=/dev/null worktree add --no-track -b <branch> <main_worktree> origin/<default_branch>` (created=true).\n" +
-    "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths.\n" +
+    "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths." +
+    (inputs.frozen_resume ? " Exception (frozen_resume is true): the uncommitted paths of a frozen build are expected; list them in reason and go on (the workflow checks the worktree tree itself). Never stash, reset, clean or change them." : "") +
+    "\n" +
     "7. `mkdir -p <scratch_dir>`.\n" +
     "8. base_ref = `git -C <main_worktree> merge-base HEAD origin/<default_branch>`.\n" +
     "9. remote_slug = <owner>/<name> parsed from `git -C <repo> remote get-url origin`. remote_host = the host part of `git -C <repo> config --get remote.origin.url` (the configured URL, before any insteadOf rewrite; for an ssh alias such as `github-personal:o/r.git`, the alias).\n" +
     "10. Run this one command exactly as written, unmodified, as one Bash call:\n" +
-    "python3 -I -c " + shQuote(REMOTE_URL_PY) + " " + shQuote(inputs.repo) +
-    "\nIt prints one JSON object {url, args, digest}: return it as remote_url_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> remote_url_check null.\n" +
+    progCmd("remote_url", [inputs.repo]) +
+    "\nIt prints one JSON object {url, args, program, digest}: return it as remote_url_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> remote_url_check null.\n" +
     "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url_check, created}."
   );
 }
 
 function hasherPrompt(inputs) {
-  const cmd =
-    "python3 -I - " +
-    shQuote(inputs.worktree) +
-    " " +
-    shQuote(JSON.stringify(inputs.test_files)) +
-    (inputs.base_tree ? " " + shQuote(inputs.base_tree) : "") +
-    " <<'FLEET_HASHER_PY'\n" +
-    HASHER_PY.trim() +
-    "\nFLEET_HASHER_PY";
+  const cmd = progCmd("hasher", [inputs.worktree, JSON.stringify(inputs.test_files)].concat(inputs.base_tree ? [inputs.base_tree] : []));
   const rules =
     "runner-config files hashed whole: " +
     RUNNER_CONFIG_FILES.join(", ") +
@@ -3075,7 +3979,7 @@ function hasherPrompt(inputs) {
     "Run this one Bash command exactly as written, unmodified, in the foreground:\n" +
     cmd +
     "\n" +
-    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored, suspicious} and, when a base tree is given, `changed` (the paths that differ from it), plus `digest` (a sha256 over all of them). Return {status: "ok", fingerprint, hashes, changed, digest} with those values copied exactly: every key of every map, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored, suspicious} and, when a base tree is given, `changed` (the paths that differ from it), plus `program` and `digest` (a sha256 over all of them). Return {status: "ok", fingerprint, hashes, changed, program, digest} with those values copied exactly: every key of every map, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     "The tree is built in a temporary index (GIT_INDEX_FILE=<temp file>: git read-tree HEAD, git add -A, git write-tree); the real index is never touched and no hook runs. " +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>, fingerprint: {head: "", tree: ""}}. Run no other command.\n' +
     "Extraction rules (the program implements them): " +
@@ -3118,9 +4022,13 @@ function branchScanPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified; run nothing else:\n" +
-    "python3 -I -c " + shQuote(BRANCH_SCAN_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.default_branch) + " " + shQuote(inputs.task_id) + " " + shQuote(JSON.stringify(SOURCE_KINDS)) +
+    progCmd("branch_scan", [inputs.main_worktree, inputs.default_branch, inputs.task_id, JSON.stringify(SOURCE_KINDS)]) +
     "\n" +
-    'It prints one JSON object {commits, refs, digest} (names, hashes and checks only; no message text). Return {status: "ok", reason, commits, refs, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Non-zero exit -> failed with its stderr.'
+    'It prints one JSON object {commits, refs, plan_tip_time, program, digest} (names, hashes and checks only; no message text). Copy those values exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Non-zero exit -> failed with its stderr.\n' +
+    "Then run this one command exactly as written, unmodified:\n" +
+    progCmd("test_db_decl", [inputs.main_worktree, inputs.default_branch]) +
+    "\nIt prints one JSON object {decl, error, args, program, digest}: return it as test_db, every value copied unchanged. Non-zero exit -> failed with its stderr.\n" +
+    'Return {status: "ok", reason, commits, refs, plan_tip_time, program, digest, test_db}.'
   );
 }
 
@@ -3137,16 +4045,19 @@ function stagePlanPrompt(inputs) {
     "\n" +
     "2. `git -C <worktree> status --porcelain`: any dirty path other than <plan_path> -> needs_human with the paths.\n" +
     "3. `git -C <worktree> add -- <plan_path>`.\n" +
-    "4. plan_sha256 = the output of this one command (it hashes the staged copy), run exactly as written:\n" +
+    "4. Run this one command exactly as written, unmodified (it hashes the staged copy):\n" +
     planHashCmd(inputs.worktree, "", inputs.plan_path) +
     "\n" +
-    "Return {status, reason, plan_sha256}."
+    "It prints one JSON object {plan_sha256, program}: return it as plan_hash, both values copied unchanged. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, plan_hash}."
   );
 }
 
 // Moves the stopped run's own draft plan out of the fleet worktree, so the
 // next plan run's workspace step finds a clean tree.
-function parkPlanPrompt(inputs) {
+// findings (4.0.0, 1986): {scratch, run, chunk_dir, c: chunked(findings JSON)}
+// for parked/<run>/findings.json, or null.
+function parkPlanPrompt(inputs, findings) {
   return (
     "Infra step of the fleet build workflow: move this run's draft plan doc out of the worktree. Touch <plan_path> only. No commit, no push, no reset of the branch; never touch any other path.\n" +
     "Inputs: " +
@@ -3156,8 +4067,98 @@ function parkPlanPrompt(inputs) {
     "2. `mkdir -p \"$(dirname <dest>)\"` and `cp -p <worktree>/<plan_path> <dest>` (skip the copy when the file is absent).\n" +
     "3. If `git -C <worktree> cat-file -e 'HEAD:<plan_path>'` succeeds (keep the quotes), run `git -C <worktree> restore --staged --worktree --source=HEAD -- <plan_path>`; else run `git -C <worktree> rm -q --cached --ignore-unmatch -- <plan_path>` and then `rm -f <worktree>/<plan_path>`.\n" +
     "4. clean = whether `git -C <worktree> status --porcelain --untracked-files=all` is now empty.\n" +
-    "Return {status, reason, target: <dest>, clean}."
+    (findings
+      ? "5. Write this run's findings (4.0.0): they travel as base64 chunks you write to files under " + findings.chunk_dir + "; the program checks every chunk and writes " + findings.scratch + "/parked/" + findings.run + "/findings.json. Write no other file.\n" +
+        chunkSteps(findings.chunk_dir, findings.c, progCmd("parked", ["write", findings.scratch, findings.run, findings.chunk_dir, String(findings.c.chunks.length), findings.c.expected, JSON.stringify(findings.c.shas)])) +
+        "On success it prints one JSON object {written, sha256, args, program, digest}: return it unchanged as findings_write. A failure here does not undo steps 1-4: return findings_write null.\n"
+      : "") +
+    "Return {status, reason, target: <dest>, clean" + (findings ? ", findings_write" : "") + "}."
   );
+}
+
+// 4.0.0 (1986): read the newest parked draft and findings. Read only.
+function loadParkedPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: read the parked draft plan of an earlier stopped run. READ ONLY: no edits, no moves, no commits; run nothing but the one command below.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified:\n" +
+    progCmd("parked", ["read", inputs.scratch, inputs.plan_tip_time === null ? "null" : String(inputs.plan_tip_time)]) +
+    "\n" +
+    'It prints one JSON object {parked, args, program, digest}. Return {status: "ok", reason, parked, args, program, digest} with those values copied exactly: every chunk in order, byte for byte, nothing dropped, shortened or reflowed (the script recomputes the digest). Non-zero exit -> failed with its stderr.'
+  );
+}
+
+// 4.0.0 (1986): the parked draft and findings as planner inputs, or null (no
+// parked folder). Any relay or shape problem ignores the parked data with a
+// gate line and returns {unreadable: <why>}: the read cannot prove there is no
+// parked prior, so the caller fails closed (4.0.0 review): confirm "default"
+// asks Max, "auto" stops after the plan commit, "ask" goes on (Max is asked
+// anyway). Returns {run, priorDraft, priorRound, unreadable?}.
+const PARKED_UNREADABLE = "parked prior unreadable (fail closed)";
+async function loadParked(scratch, tip) {
+  const label = "infra:load-parked";
+  const ignore = (why) => {
+    gate("parked draft ignored (" + why + ")");
+    return { run: null, priorDraft: null, priorRound: null, unreadable: why };
+  };
+  let r = null;
+  try {
+    r = await softDispatch(label, loadParkedPrompt({ scratch, plan_tip_time: tip }), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Workspace" });
+  } catch (e) {
+    if (e instanceof Stop) throw e;
+    return ignore("the read step crashed");
+  }
+  if (!r || r.status !== "ok") return ignore(label + " returned " + (r ? r.status : "nothing"));
+  const pp = programProblem(r, "parked");
+  if (pp) return ignore(pp);
+  if (!relayDigestOk(r, ["parked", "args"], "parked")) return ignore("the relay does not match the program's digest");
+  if (canonical(r.args) !== canonical([scratch, tip === null ? "null" : String(tip)])) return ignore("the program ran on other arguments");
+  const k = r.parked;
+  if (k === null) {
+    gate("no parked draft newer than the last plan commit");
+    return null;
+  }
+  const strs = (a) => Array.isArray(a) && a.every((x) => typeof x === "string" && x.length <= 1000);
+  if (!k || typeof k !== "object" || typeof k.run !== "string" || !NONCE_RE.test(k.run) || !strs(k.draft_chunks) || !strs(k.findings_chunks))
+    return ignore("unusable shape");
+  const out = { run: k.run, priorDraft: null, priorRound: null };
+  if (k.draft_chunks.length) {
+    if (typeof k.plan_path !== "string" || planPathProblem(k.plan_path)) return ignore("plan_path " + JSON.stringify(k.plan_path));
+    out.priorDraft = { run: k.run, plan_path: normPath(k.plan_path), text: k.draft_chunks.join("") };
+  }
+  if (k.findings_chunks.length) {
+    let f = null;
+    try {
+      f = JSON.parse(k.findings_chunks.join(""));
+    } catch (e) {
+      f = null;
+    }
+    // findings that do not parse (or hold no rounds list) lose round 0: the
+    // draft is still a planner input, but the prior is unreadable (fail closed)
+    if (!f || typeof f !== "object" || Array.isArray(f) || !Array.isArray(f.rounds)) {
+      out.unreadable = "findings of run " + k.run + " unparseable";
+      gate("parked findings ignored (" + out.unreadable + ")");
+    }
+    const rounds = f && typeof f === "object" && Array.isArray(f.rounds) ? f.rounds.filter((x) => x && typeof x === "object" && !Array.isArray(x)) : [];
+    if (rounds.length) {
+      const crit = (c) => (Array.isArray(c) ? c.filter((x) => x && typeof x === "object").map((x) => ({ id: String(x.id || ""), text: String(x.text || "") })) : []);
+      const r0 = rounds.find((x) => x.round === 0);
+      out.priorRound = {
+        reason: "parked run " + k.run + ": " + (typeof f.reason === "string" ? f.reason : "stopped"),
+        findings: rounds.reduce((a, x) => a.concat((Array.isArray(x.findings) ? x.findings : []).filter((y) => y && typeof y === "object").map((y) => Object.assign({}, y, { round: x.round }))), []),
+        symbols: (Array.isArray(f.symbols) ? f.symbols : []).filter((x) => typeof x === "string" && SYMBOL_RE.test(x)),
+        changed_symbols: null,
+        // no round 0 in the parked rounds: relaxed (fail closed)
+        round0: r0 ? { change_kind: CHANGE_KINDS.indexOf(r0.change_kind) >= 0 ? r0.change_kind : null, new_behaviour: typeof r0.new_behaviour === "boolean" ? r0.new_behaviour : null, criteria: crit(r0.criteria) } : null,
+        criteria_by_round: rounds.map((x) => crit(x.criteria)),
+        relaxed: [],
+      };
+    }
+  }
+  gate("parked draft of run " + k.run + " loaded" + (out.priorDraft ? " (" + out.priorDraft.plan_path + ")" : "") + (out.priorRound ? ", " + out.priorRound.findings.length + " finding(s)" : "") + ": planner inputs only");
+  return out.priorDraft || out.priorRound || out.unreadable ? out : null;
 }
 
 // The repo's fixer hooks on build-phase files (3.0.0, ledger 1951): runs
@@ -3205,6 +4206,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile
 wt, sel, frozen = sys.argv[1], json.loads(sys.argv[2]), set(json.loads(sys.argv[3]))
 scratch_root, tmo = sys.argv[4], int(sys.argv[5])
@@ -3240,6 +4250,7 @@ def names(b):
 def done(**k):
     out = {'ran': False, 'reason': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': []}
     out.update(k)
+    out['program'] = _PROG
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
     print(json.dumps(out, sort_keys=True, ensure_ascii=False))
     sys.exit(0)
@@ -3483,8 +4494,7 @@ finally:
     git(wt, 'worktree', 'prune', check=False)
 if refused:
     done(reason='a selected path resolves outside the checkout', files=files, refused=sorted(set(refused)))
-done(ran=True, reason='ran pre-commit run --files in a scratch checkout of HEAD', runs=runs, stable=stable, files=files, changed=changed)
-`;
+done(ran=True, reason='ran pre-commit run --files in a scratch checkout of HEAD', runs=runs, stable=stable, files=files, changed=changed)`;
 // FORMAT_FILES_PY_END
 
 function formatFilesPrompt(inputs) {
@@ -3494,9 +4504,9 @@ function formatFilesPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified, as one Bash call with timeout 600000 ms:\n" +
-    "python3 -I -c " + shQuote(FORMAT_FILES_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(JSON.stringify(inputs.select)) + " " + shQuote(JSON.stringify(inputs.frozen)) + " " + shQuote(inputs.scratch_dir) + " " + shQuote(String(FIX_RUN_TIMEOUT)) +
+    progCmd("format_files", [inputs.worktree, JSON.stringify(inputs.select), JSON.stringify(inputs.frozen), inputs.scratch_dir, String(FIX_RUN_TIMEOUT)]) +
     "\n" +
-    'It prints one JSON object {ran, reason, runs, stable, files, changed, refused, digest}. Return {status: "ok", reason, ran, runs, stable, files, changed, refused, digest} with those values copied exactly (the script recomputes the digest). ' +
+    'It prints one JSON object {ran, reason, runs, stable, files, changed, refused, program, digest}. Return {status: "ok", reason, ran, runs, stable, files, changed, refused, program, digest} with those values copied exactly (the script recomputes the digest). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -3510,7 +4520,8 @@ async function formatFiles(label, worktree, select, frozenList, allowed, phaseNa
   const keys = ["ran", "reason", "runs", "stable", "files", "changed", "refused"];
   if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed) || !Array.isArray(r.refused))
     halt("failed", label + " returned no ran/stable/files/changed/refused");
-  if (!relayDigestOk(r, keys)) halt("failed", label + ": the relayed result does not match the program's digest");
+  requireProgram(r, "format_files", label);
+  if (!relayDigestOk(r, keys, "format_files")) halt("failed", label + ": the relayed result does not match the program's digest");
   if (r.refused.length)
     halt("needs_human", label + ": hook config, a hook entry or a symlinked path differs from HEAD: " + r.refused.join(", ") + "; no hook was run (" + r.reason + ")", "hash");
   if (!r.ran) {
@@ -3546,9 +4557,11 @@ function formatPlanPrompt(inputs) {
   );
 }
 
-function commitPlanPrompt(inputs, refContent) {
+// message: the exact tag message, refMessage(full).
+function commitPlanPrompt(inputs, message) {
+  const c = chunked(message);
   return (
-    "Infra step of the fleet build workflow: commit the plan doc LOCALLY, in ONE commit that holds <plan_path> only, then record the sealed plan ref as a local git object. No other edits. Never push. Never --no-verify or any hook bypass; no Co-Authored-By trailer. No ledger, ticket or comment writes. Never stage, force-add or write any other path.\n" +
+    "Infra step of the fleet build workflow: commit the plan doc LOCALLY, in ONE commit that holds <plan_path> only, then record the sealed plan ref as a local git object. No other edits (the chunk files under <chunk_dir> excepted). Never push. Never --no-verify or any hook bypass; no Co-Authored-By trailer. No ledger, ticket or comment writes. Never stage, force-add or write any other path.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
@@ -3562,20 +4575,38 @@ function commitPlanPrompt(inputs, refContent) {
     shQuote("plan(" + inputs.task_id + "): " + inputs.slug) +
     "`. Never --allow-empty. If a hook rewrites the plan, do not re-add it and do not commit again: return needs_human with the hook output (the plan ran through the hooks before the audit; a rewrite now would commit bytes the audit never saw). Any other hook failure: fix the cause and retry once; a second failure -> failed.\n" +
     "4. `git -C <worktree> ls-files --error-unmatch -- <plan_path>` must succeed and `git -C <worktree> status --porcelain` must be empty; else needs_human.\n" +
-    "5. Run this command exactly as written, unmodified: " +
-    "python3 -I -c " + shQuote(PLAN_FILES_PY) + " " + shQuote(inputs.worktree) +
+    "5. Write the plan ref (4.0.0): its tag message travels as base64 chunks you write to files under <chunk_dir>; the program checks every chunk against its sha256, then makes the tag object (git mktag: no tag name, no index change, no hook) and moves refs/fleet/<task_id>/plan. Write no other file.\n" +
+    chunkSteps(inputs.chunk_dir, c, progCmd("plan_ref_write", [inputs.worktree, inputs.task_id, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)])) +
+    "On success it prints one JSON object {head, tag_sha, program, digest}: copy all four unchanged (the script recomputes the digest).\n" +
+    (inputs.retire
+      ? "6. Housekeeping (4.0.0): `mkdir -p " + shQuote(inputs.retire.used) + " && mv -n -- " + shQuote(inputs.retire.dir) + " " + shQuote(inputs.retire.used) + "/`. An error here changes nothing above and does not fail the step.\n"
+      : "") +
+    "Return {status, reason, reused, head, tag_sha, program, digest}. The script verifies the commit and the ref in a separate read-only step."
+  );
+}
+
+// 4.0.0 (1993): the read-only check of the commit-plan step. It runs the
+// three programs; only this step retries (once) when a relay or a digest is wrong.
+function verifyPlanCommitPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: VERIFY the plan commit and the plan ref. Read only: no edits, no commits, no checkout, no reset, no push; run nothing but the three commands below.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
     "\n" +
-    "It prints one JSON object {head, files, digest}: copy all three unchanged, every path in order (the script recomputes the digest). Never list the files with git yourself. Non-zero exit -> failed with its stderr.\n" +
-    "6. plan_sha256 = the output of this command, run exactly as written:\n" +
+    "1. Run this command exactly as written, unmodified:\n" +
+    progCmd("plan_files", [inputs.worktree]) +
+    "\n" +
+    "It prints one JSON object {head, files, args, dsn_paths, program, digest}: return it as plan_files, every value copied unchanged, every path in order (the script recomputes the digest). Never list the files with git yourself.\n" +
+    "2. Run this command exactly as written, unmodified:\n" +
     planHashCmd(inputs.worktree, "HEAD", inputs.plan_path) +
     "\n" +
-    "7. Write the plan ref: run this one Bash command exactly as written, unmodified (it makes no commit, no tag name and no index change, and runs no hook). It prints `<head> <tag_sha>`; non-zero exit -> failed with its stderr:\n" +
-    writePlanRefCmd(inputs.worktree, inputs.task_id, refContent) +
-    "\n" +
-    "8. Run this command exactly as written; it prints {refs} (names, targets and hashes; no message text). Copy refs unchanged, byte for byte:\n" +
+    "It prints one JSON object {plan_sha256, program}: return it as plan_hash, both values copied unchanged.\n" +
+    "3. Run this command exactly as written, unmodified:\n" +
     planRefsCmd(inputs.worktree, inputs.task_id, "meta") +
     "\n" +
-    "Return {status, reason, reused, head, files, digest, plan_sha256, refs}."
+    "It prints one JSON object {refs, program} (names, targets and hashes; no message text): return it as plan_ref, copied unchanged, byte for byte.\n" +
+    "Any non-zero exit -> failed with its stderr.\n" +
+    'Return {status: "ok", reason, plan_files, plan_hash, plan_ref}.'
   );
 }
 
@@ -3589,8 +4620,8 @@ function loadRefPrompt(inputs) {
     planRefsCmd(inputs.main_worktree, inputs.task_id, inputs.mode === "chunks" ? "chunks:" + inputs.plan_ref : "meta") +
     "\n" +
     (inputs.mode === "chunks"
-      ? 'It prints one JSON object {refs, chunks}. Return {status: "ok", reason, refs, chunks} with both copied exactly, byte for byte: every chunk in full and in order. NEVER shorten, summarise, elide, merge or drop a chunk, and never write an ellipsis or a placeholder such as [truncated ...]; the script checks the joined chunks against a sha256 and stops the run on any change. '
-      : 'It prints one JSON object {refs}. Return {status: "ok", reason, refs} with refs copied exactly, byte for byte. ') +
+      ? 'It prints one JSON object {refs, chunks, program}. Return {status: "ok", reason, refs, chunks, program} with all three copied exactly, byte for byte: every chunk in full and in order. NEVER shorten, summarise, elide, merge or drop a chunk, and never write an ellipsis or a placeholder such as [truncated ...]; the script checks the joined chunks against a sha256 and stops the run on any change. '
+      : 'It prints one JSON object {refs, program}. Return {status: "ok", reason, refs, program} with both copied exactly, byte for byte. ') +
     'If the command exits non-zero, return {status: "needs_human", reason: <its stderr>}. Run no other command.'
   );
 }
@@ -3630,6 +4661,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
 wt, default, sha, url = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 os.chdir('/')
@@ -3883,9 +4923,9 @@ if touched:
                 hints.append('external, local or null provider or local_/null_ resource change in ' + p)
 problems, hints = sorted(set(problems)), sorted(set(hints))
 out = {'touched': touched, 'iac_files': iac_files, 'problems': problems, 'hints': hints, 'args': [wt, default, sha, url]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // TF_GATE_PY_END
 
 // The remote head read (3.1.0, ADR-1175): after Max pushed an IaC diff
@@ -3919,6 +4959,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
 wt, branch, url = sys.argv[1], sys.argv[2], sys.argv[3]
 os.chdir('/')
@@ -3948,9 +4997,9 @@ elif r.returncode == 0:
 else:
     sys.exit(r.stderr.decode('utf-8', 'replace') or 'ls-remote failed')
 out = {'head': head, 'args': [wt, branch, url]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // REMOTE_HEAD_PY_END
 
 // The origin URL read (3.1.1, ledger 1970b): the workspace step relays this
@@ -3984,6 +5033,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 repo = sys.argv[1]
 os.chdir('/')
@@ -3996,9 +5054,9 @@ elif r.returncode == 0 and len(r.stdout) <= 4096:
 else:
     sys.exit(r.stderr.decode('utf-8', 'replace')[-2000:] or 'cannot read remote.origin.url')
 out = {'url': url, 'args': [repo]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // REMOTE_URL_PY_END
 
 function remoteHeadPrompt(inputs) {
@@ -4008,10 +5066,10 @@ function remoteHeadPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified (on a non-zero exit, retry it up to 3 times with 5, 15 and 45 s waits):\n" +
-    "python3 -I -c " + shQuote(REMOTE_HEAD_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.branch) + " " + shQuote(inputs.remote_url) +
+    progCmd("remote_head", [inputs.main_worktree, inputs.branch, inputs.remote_url]) +
     "\n" +
-    "It prints one JSON object {head, args, digest}. Copy every value unchanged (the script recomputes the digest). Still non-zero after the retries -> failed with its stderr.\n" +
-    "Return {status, reason, head, args, digest}."
+    "It prints one JSON object {head, args, program, digest}. Copy every value unchanged (the script recomputes the digest). Still non-zero after the retries -> failed with its stderr.\n" +
+    "Return {status, reason, head, args, program, digest}."
   );
 }
 
@@ -4022,10 +5080,10 @@ function tfGatePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(TF_GATE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.default_branch) + " " + shQuote(inputs.approved_sha) + " " + shQuote(inputs.remote_url) +
+    progCmd("tf_gate", [inputs.main_worktree, inputs.default_branch, inputs.approved_sha, inputs.remote_url]) +
     "\n" +
-    "It prints one JSON object {touched, iac_files, problems, hints, args, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, touched, iac_files, problems, hints, args, digest}."
+    "It prints one JSON object {touched, iac_files, problems, hints, args, program, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, touched, iac_files, problems, hints, args, program, digest}."
   );
 }
 
@@ -4036,10 +5094,10 @@ function fleetScanPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(FLEET_SCAN_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.default_branch) + " " + shQuote(inputs.approved_sha) +
+    progCmd("fleet_scan", [inputs.main_worktree, inputs.default_branch, inputs.approved_sha]) +
     "\n" +
-    "It prints one JSON object {diff, commits, digest}. Copy every value unchanged; never drop a path (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, diff, commits, digest}."
+    "It prints one JSON object {diff, commits, program, digest}. Copy every value unchanged; never drop a path (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, diff, commits, program, digest}."
   );
 }
 
@@ -4050,9 +5108,9 @@ function callersPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(CALLERS_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.plan_path) + " " + shQuote(JSON.stringify(inputs.symbols)) + " " + shQuote(String(inputs.cap)) +
+    progCmd("callers", [inputs.worktree, inputs.plan_path, JSON.stringify(inputs.symbols), String(inputs.cap)]) +
     "\n" +
-    'It prints one JSON object {occurrences, capped, digest}. Return {status: "ok", reason, occurrences, capped, digest} with those values copied exactly: every key, every list entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'It prints one JSON object {occurrences, capped, program, digest}. Return {status: "ok", reason, occurrences, capped, program, digest} with those values copied exactly: every key, every list entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -4064,9 +5122,9 @@ function changedDefsPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(CHANGED_DEFS_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.base) + " " + shQuote(inputs.tree) + " " + shQuote(JSON.stringify(inputs.exclude)) +
+    progCmd("changed_defs", [inputs.worktree, inputs.base, inputs.tree, JSON.stringify(inputs.exclude)]) +
     "\n" +
-    'It prints one JSON object {defs, excluded, unclassified, unattributed, digest}. Return {status: "ok", reason, defs, excluded, unclassified, unattributed, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'It prints one JSON object {defs, excluded, unclassified, unattributed, program, digest}. Return {status: "ok", reason, defs, excluded, unclassified, unattributed, program, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -4077,19 +5135,24 @@ function verifyPlanPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> status --porcelain` must be empty; else needs_human.\n" +
+    "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> status --porcelain` must be empty; else needs_human." +
+    (inputs.frozen_resume ? " Exception (frozen_resume is true): the uncommitted paths of a frozen build are expected; list them in reason and go on (the workflow checks the worktree tree itself)." : "") +
+    "\n" +
     "2. `git -C <main_worktree> cat-file -e '<plan_commit>^{commit}'` (keep the quotes: zsh globs `^`) must succeed; else needs_human.\n" +
-    "3. plan_sha256 = the output of this command, run exactly as written:\n" +
+    "3. Run this command exactly as written; it prints one JSON object {plan_sha256, program}: return it as plan_hash, both values copied unchanged:\n" +
     planHashCmd(inputs.main_worktree, inputs.plan_commit, inputs.plan_path) +
     "\n" +
-    "4. plan_sha256_head = the output of this command, run exactly as written:\n" +
+    "4. Run this command exactly as written; it prints one JSON object {plan_sha256, program}: return it as plan_hash_head, both values copied unchanged:\n" +
     planHashCmd(inputs.main_worktree, "HEAD", inputs.plan_path) +
     "\n" +
     "5. Run this command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(VERIFY_SINCE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.plan_commit) + " " + shQuote(inputs.plan_path) +
+    progCmd("verify_since", [inputs.main_worktree, inputs.plan_commit, inputs.plan_path]) +
     "\n" +
-    "It prints one JSON object {head, is_ancestor, commits_since, plan_touched, changed_since, digest}. Copy every value unchanged: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Never run git log or git diff yourself for these values. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, head, plan_sha256, plan_sha256_head, is_ancestor, commits_since, plan_touched, changed_since, digest}."
+    "It prints one JSON object {head, is_ancestor, commits_since, plan_touched, changed_since, program, digest}. Copy every value unchanged: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Never run git log or git diff yourself for these values. Non-zero exit -> failed with its stderr.\n" +
+    "6. Run this command exactly as written, unmodified:\n" +
+    progCmd("test_db_decl", [inputs.main_worktree, inputs.default_branch]) +
+    "\nIt prints one JSON object {decl, error, args, program, digest}: return it as test_db, every value copied unchanged. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, head, plan_hash, plan_hash_head, is_ancestor, commits_since, plan_touched, changed_since, args, program, digest, test_db}."
   );
 }
 
@@ -4103,6 +5166,20 @@ function replanWorktreePrompt(inputs) {
     "2. Else `git -C <main_worktree> -c core.hooksPath=/dev/null worktree add --detach <worktree> <plan_commit>`, then write `<worktree>/.claude/settings.local.json` with exactly `settings_local_json`.\n" +
     "3. head = `git -C <worktree> rev-parse HEAD`.\n" +
     "Return {status, reason, head}."
+  );
+}
+
+// 4.0.0 (1987): a ref to the freeze tree object, hooks off, no commit object.
+function freezeRefPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: record the freeze tree under a local ref. Change nothing else: no staging, no new commit object, no checkout, no reset, no push; the worktree stays exactly as it is.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. `git -C " + shQuote(inputs.main_worktree) + " cat-file -t " + shQuote(inputs.tree) + "` must print `tree`; else failed.\n" +
+    "2. Run this one command exactly as written: `git -C " + shQuote(inputs.main_worktree) + " -c core.hooksPath=/dev/null update-ref " + inputs.ref + " " + inputs.tree + "`.\n" +
+    "3. ref_target = the output of `git -C " + shQuote(inputs.main_worktree) + " rev-parse " + shQuote(inputs.ref) + "`.\n" +
+    "Return {status, reason, ref_target}."
   );
 }
 
@@ -4148,7 +5225,8 @@ const PURGE_CMD =
   "n=$(" + PURGE_FIND + " | tr -cd '\\0' | wc -c) && " + PURGE_FIND + " | xargs -0 -r rm -rf -- && echo purged=$n";
 // The env every suite run of the frozen tests uses: no bytecode written, no
 // pytest cache (so no stale or planted cache is read either).
-const TEST_ENV = { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" };
+// frozen (4.0.0, 1981): a role DSN goes into a copy, never into this object
+const TEST_ENV = Object.freeze({ PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" });
 const TEST_ENV_NOTE =
   "test_env: set these environment variables for every run of the frozen tests and the suite (frozen-test red check included), so no bytecode or pytest cache is written or read. The workflow deletes all bytecode before every hash check and code-judge run.";
 
@@ -4180,8 +5258,8 @@ function checkScriptsPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "Run `run` exactly as written, unmodified, as one Bash call in the foreground. It prints one JSON object {checks: {<path>: {ok, reason}}, digest}. Copy both unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, checks, digest}."
+    "Run `run` exactly as written, unmodified, as one Bash call in the foreground. It prints one JSON object {checks: {<path>: {ok, reason}}, program, digest}. Copy both unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, checks, program, digest}."
   );
 }
 
@@ -4225,6 +5303,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, sys
 path, code = sys.argv[1], int(sys.argv[2])
 os.chdir('/')
@@ -4253,10 +5340,87 @@ elif has('error: failed to push some refs'):
 else:
     res = 'network'
 out = {'push_result': res, 'exit_code': code, 'hook_tail': tail, 'args': [path, sys.argv[2]]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // PUSH_CLASSIFY_PY_END
+
+// 4.0.0 (1985): the push-access probe's classifier. Args: <file> <exit>, the
+// output file and exit code of `git push --dry-run --porcelain` (timeout
+// 120 s). In order: exit 0 -> ok; exit 124 -> timeout; a porcelain
+// `!<TAB>..<TAB>[rejected] (non-fast-forward|fetch first)` line -> non_ff or
+// fetch_first (the remote branch exists; access ok); an auth line
+// (Permission to .. denied, Authentication failed, Could not read from remote
+// repository, Repository not found) -> denied; `error: failed to push some
+// refs` with exit 1 and no `fatal:` line -> hook_rejected (git reached the
+// remote before the pre-push hook ran; access ok); else unknown. Prints
+// {access, result, exit_code, auth_line, args, program, digest}. Runs nothing.
+// PUSH_PROBE_PY_BEGIN
+const PUSH_PROBE_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, os, re, sys
+path, code = sys.argv[1], int(sys.argv[2])
+os.chdir('/')
+with open(path, 'rb') as fh:
+    # bounded: git's own lines come last, so the last 1 MiB is read
+    fh.seek(max(0, os.fstat(fh.fileno()).st_size - (1 << 20)))
+    lines = fh.read(1 << 20).decode('utf-8', 'replace').splitlines()
+# a porcelain ref line git prints for a remote branch that exists and moved on
+REJ = re.compile(r'^!\t[^\t]*\t\[rejected\] \((non-fast-forward|fetch first)\)$')
+AUTH = re.compile(r'(Permission to .* denied|Authentication failed|Could not read from remote repository|Repository not found)')
+auth = [x for x in lines if AUTH.search(x)]
+rej = [REJ.match(x) for x in lines]
+rej = [m.group(1) for m in rej if m]
+if code == 0:
+    res = 'ok'
+elif code == 124:
+    res = 'timeout'
+elif rej:
+    res = 'non_ff' if rej[0] == 'non-fast-forward' else 'fetch_first'
+elif auth:
+    res = 'denied'
+elif code == 1 and any(x.startswith('error: failed to push some refs') for x in lines) and not any(x.startswith('fatal:') for x in lines):
+    res = 'hook_rejected'
+else:
+    res = 'unknown'
+access = 'ok' if res in ('ok', 'non_ff', 'fetch_first', 'hook_rejected') else 'denied' if res == 'denied' else 'unknown'
+out = {'access': access, 'result': res, 'exit_code': code, 'auth_line': auth[0][:300] if res == 'denied' else None, 'args': [path, sys.argv[2]]}
+out['program'] = _PROG
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))`;
+// PUSH_PROBE_PY_END
 
 // The hook surface (3.1.0, Max's rule): .pre-commit-config.yaml (at <rev> and
 // in the worktree), read with the fixer's isolated PyYAML loader; every name
@@ -4289,6 +5453,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import ast, hashlib, json, os, re, shutil, subprocess, sys
 wt, rev, targets_arg = sys.argv[1], sys.argv[2], sys.argv[3]
 targets = [t for t in json.loads(targets_arg) if isinstance(t, str)]
@@ -4565,35 +5738,56 @@ for tgt in targets:
                             paths.add(q)
     make_paths[tgt] = sorted(paths)
 out = {'surface': [] if error else sorted(surface), 'make_paths': {} if error else make_paths, 'error': error, 'args': [wt, rev, targets_arg]}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // HOOK_SURFACE_PY_END
 
 
 function pushPrompt(inputs) {
+  // 4.0.0 (1981): the repo's pre-push hooks see the run's test database
+  const pg = inputs.hook_env ? "env " + hookEnvPrefix(inputs.hook_env) : "";
   return (
     "Infra step of the fleet build workflow: push the approved fleet branch. No edits, no commits.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
     "1. <branch> must differ from <default_branch>; `git -C <main_worktree> branch --show-current` must equal <branch>; `git -C <main_worktree> rev-parse HEAD` must equal <approved_sha>; `git -C <main_worktree> status --porcelain` must be empty. Any mismatch -> needs_human.\n" +
-    "2. Push ONCE: `git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Never classify the output yourself: run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code:\n" +
-    "python3 -I -c " + shQuote(PUSH_CLASSIFY_PY) + " <file> <exit>\n" +
-    "   It prints one JSON object {push_result, exit_code, hook_tail, args, digest}. Copy all five unchanged (the script recomputes the digest). Then, by push_result:\n" +
+    "2. Push ONCE: `" + pg + "git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Never classify the output yourself: run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code:\n" +
+    progCmd("push_classify", []) + " <file> <exit>\n" +
+    "   It prints one JSON object {push_result, exit_code, hook_tail, args, program, digest}. Copy all six unchanged (the script recomputes the digest). Then, by push_result:\n" +
     "   - `ok` -> step 3.\n" +
     "   - `non_ff` or `remote_rejected` -> return status needs_human at once with the git line, no retry.\n" +
     "   - `ambiguous` (git's lines cannot be told from a hook's) -> return status needs_human at once with the last 60 lines of the temp file, no retry.\n" +
     "   - `hook_rejected` (a local pre-push hook declined the push) -> no retry. Return status ok with the program's push_result, exit_code, hook_tail, args and digest.\n" +
     "   - `network` (auth, network, 5xx) -> retry up to 3 times with backoff 5 15 45 (seconds): " +
-    RETRY_SHELL("git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
+    RETRY_SHELL(pg + "git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
     " Exit 0 now -> `ok`. Still failing after the 3 retries -> status failed with the last error.\n" +
     "   Delete the temp file. Step 3 runs only when push_result is `ok`.\n" +
     "3. remote_head through the GitHub API, not git over the network: <owner>/<name> = <remote_slug>. <gh> = `gh-personal` when `command -v gh-personal` succeeds and `gh-personal api user --jq .login` equals <owner>; else `gh`. " +
     "remote_head = the output of `<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha` (the branch name goes in the path as is, slashes included), retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha") +
     " Only when neither gh nor gh-personal is installed: remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints, with the same backoff. remote_head must be the full 40-hex sha.\n" +
-    "Return {status, reason, push_result, exit_code, hook_tail, args, digest, remote_head}."
+    "Return {status, reason, push_result, exit_code, hook_tail, args, program, digest, remote_head}."
+  );
+}
+
+// 4.0.0 (1985): the push-access probe (plan mode only). The dry run sends no
+// objects and creates no ref, but it runs the repo's pre-push hook: a PATH
+// re-check runs right before it.
+function pushProbePrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: probe push access with a dry run. No edits, no commits, no real push.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. Run this one command exactly as written, unmodified, as one Bash call with timeout 180000 ms. <file> is a new temp file outside <main_worktree> (`mktemp`): " +
+    "timeout 120 git -C " + shQuote(inputs.main_worktree) + " push --dry-run --porcelain origin " + shQuote(inputs.base_ref + ":refs/heads/" + inputs.branch) + " > <file> 2>&1; echo $?\n" +
+    "   The repo's pre-push hook runs here; let it. Add no option, change no git config and no hook, never push for real, never retry.\n" +
+    "2. Run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code step 1 printed:\n" +
+    progCmd("push_probe", []) + " <file> <exit>\n" +
+    "   It prints one JSON object {access, result, exit_code, auth_line, args, program, digest}. Copy every value unchanged (the script recomputes the digest). Never classify the output yourself. Delete the temp file.\n" +
+    "Return {status, reason, access, result, exit_code, auth_line, args, program, digest}; status ok whenever the classifier ran, whatever it printed."
   );
 }
 
@@ -4610,7 +5804,7 @@ function commitStepPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "Every git command below runs as <git> = `env GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -c core.hooksPath=<H> -C <main_worktree>`, where <H> is <hooks_path> when it is not null, else the output of `git -C <main_worktree> rev-parse --path-format=absolute --git-common-dir` followed by `/hooks`. Never drop or change these options.\n" +
+    "Every git command below runs as <git> = `env GIT_CONFIG_NOSYSTEM=1 " + hookEnvPrefix(inputs.hook_env) + "git -c core.fsmonitor=false -c core.hooksPath=<H> -C <main_worktree>`, where <H> is <hooks_path> when it is not null, else the output of `git -C <main_worktree> rev-parse --path-format=absolute --git-common-dir` followed by `/hooks`. Never drop or change these options.\n" +
     "1. `<git> branch --show-current` must equal <branch> and `<git> rev-parse HEAD` must equal <expected_head>; else needs_human.\n" +
     "2. `<git> add -A`.\n" +
     "3. staged_tree = the output of `<git> write-tree`. If it differs from <code_tree>: commit_result = `tree_mismatch`; do NOT commit; go to step 5.\n" +
@@ -4631,10 +5825,10 @@ function reviewPathsPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified; run nothing else:\n" +
-    "python3 -I -c " + shQuote(REVIEW_PATHS_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.base_ref) + " " + shQuote(inputs.head_sha) +
+    progCmd("review_paths", [inputs.main_worktree, inputs.base_ref, inputs.head_sha]) +
     "\n" +
-    "It prints one JSON object {changed_paths, digest}. Copy both unchanged, every path in order (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, changed_paths, digest}."
+    "It prints one JSON object {changed_paths, program, digest}. Copy both unchanged, every path in order (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, changed_paths, program, digest}."
   );
 }
 
@@ -4679,25 +5873,38 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
-import json, subprocess, sys
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, subprocess, sys
 wt, rev = sys.argv[1], sys.argv[2]
+# fleet 4.0.0 review: the hook ids feed the auto gate G2, so every path
+# prints every key, the args and a digest the workflow checks
+def emit(present, ids, parser, error):
+    out = {'present': present, 'ids': ids, 'parser': parser, 'error': error, 'args': [wt, rev]}
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
 r = subprocess.run(['git', '-C', wt, 'show', rev + ':.pre-commit-config.yaml'], capture_output=True)
 if r.returncode != 0:
-    print(json.dumps({'present': False, 'ids': [], 'parser': None}))
-    sys.exit(0)
+    emit(False, [], None, None)
 try:
     import yaml
 except ImportError:
-    print(json.dumps({'present': True, 'ids': [], 'parser': None, 'error': 'PyYAML unavailable'}))
-    sys.exit(0)
+    emit(True, [], None, 'PyYAML unavailable')
 if len(r.stdout) > 262144:
-    print(json.dumps({'present': True, 'ids': [], 'parser': None, 'error': 'the config is over 256 KiB'}))
-    sys.exit(0)
+    emit(True, [], None, 'the config is over 256 KiB')
 try:
     data = yaml.safe_load(r.stdout)
 except Exception as e:
-    print(json.dumps({'present': True, 'ids': [], 'parser': 'yaml', 'error': 'unparseable: ' + str(e)}))
-    sys.exit(0)
+    emit(True, [], 'yaml', 'unparseable: ' + str(e)[:2000])
 ids = []
 repos = data.get('repos') if isinstance(data, dict) else None
 for repo in repos if isinstance(repos, list) else []:
@@ -4705,8 +5912,7 @@ for repo in repos if isinstance(repos, list) else []:
     for h in hooks if isinstance(hooks, list) else []:
         if isinstance(h, dict) and isinstance(h.get('id'), str):
             ids.append(h['id'])
-print(json.dumps({'present': True, 'ids': ids, 'parser': 'yaml'}))
-`;
+emit(True, ids, 'yaml', None)`;
 // PRECOMMIT_IDS_PY_END
 
 function precommitIdsPrompt(inputs) {
@@ -4716,10 +5922,10 @@ function precommitIdsPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(PRECOMMIT_IDS_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.plan_commit) +
+    progCmd("precommit_ids", [inputs.main_worktree, inputs.plan_commit]) +
     "\n" +
-    "It prints one JSON object {present, ids, parser, error?}. Copy every value unchanged. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, present, ids, parser, error}."
+    "It prints one JSON object {present, ids, parser, error, args, program, digest}. Copy every value unchanged, every id in order (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, present, ids, parser, error, args, program, digest}."
   );
 }
 
@@ -4759,6 +5965,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, shutil, sys
 os.chdir('/')
 MARKER = b'fleet-agent-shim: hard-rules'
@@ -4795,9 +6010,9 @@ for name in NAMES:
         head = b''
     tools[name] = {'path': p, 'real': real, 'shim': real.startswith(store) and MARKER in head}
 out = {'tools': tools, 'args': sys.argv[1:], 'path_problems': problems}
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // PATH_CHECK_PY_END
 const PATH_TOOLS = ["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt", "dig" + "ger", "atlan" + "tis"];
 const NOT_SHIMMED = "terraform tooling on PATH is not shimmed; install the agent PATH shims (nix) before using the fleet";
@@ -4805,8 +6020,10 @@ const NOT_SHIMMED = "terraform tooling on PATH is not shimmed; install the agent
 // Stops the run unless every IaC tool on the agent PATH is a nix shim.
 // recheck: {label, args} for a re-check (3.1.1); preflight passes none and
 // its program got [repo] only.
-function pathCheck(pc, repo, recheck) {
-  const what = recheck ? "the PATH re-check " + recheck.label + " could not complete: it returned no usable result" : "the PATH check could not complete: preflight returned no usable path_check";
+// 4.0.0 (1990): why a PATH check output is not the program's own output for
+// these args (a relay problem: no program, a wrong shape or args, a digest
+// mismatch); "" when it is. A finding in a sound output is not a relay problem.
+function pathRelayProblem(pc, args) {
   const tools = pc && typeof pc.tools === "object" && pc.tools && !Array.isArray(pc.tools) ? pc.tools : null;
   const keys = tools ? Object.keys(tools).sort() : [];
   const shapeOk =
@@ -4816,8 +6033,19 @@ function pathCheck(pc, repo, recheck) {
       const t = tools[k];
       return t === null || (t && typeof t === "object" && !Array.isArray(t) && typeof t.path === "string" && t.path.charAt(0) === "/" && typeof t.shim === "boolean");
     });
-  if (!shapeOk || canonical(pc.args) !== canonical(recheck ? recheck.args : [repo]) || !Array.isArray(pc.path_problems) || !relayDigestOk(pc, ["tools", "args", "path_problems"]))
-    halt("needs_human", NOT_SHIMMED + " (" + what + ")", "iac");
+  const pp = programProblem(pc, "path_check");
+  if (pp) return ": " + pp;
+  if (!shapeOk || canonical(pc.args) !== canonical(args) || !Array.isArray(pc.path_problems) || !relayDigestOk(pc, ["tools", "args", "path_problems"], "path_check"))
+    return "-";
+  return "";
+}
+
+function pathCheck(pc, repo, recheck) {
+  const what = recheck ? "the PATH re-check " + recheck.label + " could not complete: it returned no usable result" : "the PATH check could not complete: preflight returned no usable path_check";
+  const rp = pathRelayProblem(pc, recheck ? recheck.args : [repo]);
+  if (rp) halt("needs_human", NOT_SHIMMED + " (" + what + (rp === "-" ? "" : rp) + ")", "iac");
+  const tools = pc.tools;
+  const keys = Object.keys(tools).sort();
   const at = recheck ? recheck.label + ": " : "";
   if (pc.path_problems.length)
     halt("needs_human", NOT_SHIMMED + " (" + at + "PATH has entries the agent shell resolves differently: " + pc.path_problems.map(String).join("; ") + ")", "iac");
@@ -4847,6 +6075,8 @@ const PATH_RECHECK_SCHEMA = {
     tools: { type: ["object", "null"] },
     args: { type: ["array", "null"], items: STR },
     path_problems: { type: ["array", "null"], items: STR },
+    program: PROGRAM_PROP,
+    file_sha256: STR,
     digest: STR,
   },
 };
@@ -4858,22 +6088,32 @@ function pathRecheckPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified, as one Bash call:\n" +
-    "python3 -I -c " + shQuote(PATH_CHECK_PY) + " " + shQuote(inputs.repo) + " " + shQuote(inputs.token) +
+    progCmd("path_check", [inputs.repo, inputs.token]) +
     "\n" +
-    "It prints one JSON object {tools, args, path_problems, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, tools, args, path_problems, digest}."
+    "It prints one JSON object {tools, args, path_problems, program, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, tools, args, path_problems, program, digest}."
   );
 }
 
 async function pathRecheck(site, phaseName) {
-  state.pathChecks++;
-  const label = "infra:path-check:" + site;
-  const token = "recheck-" + state.pathChecks + ":" + state.nonce + ":" + site;
-  // its own dispatch: re-checks are counted in state.agents but never against
-  // the agent cap (bounded by the sites and rounds), so the cap refuses
-  // exactly the runs it refused in 3.1.0
-  state.agents++;
-  const r = await agent(nonced(pathRecheckPrompt({ repo: state.repo, token })), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, label, model: INFRA_MODEL });
+  const one = async (label, model) => {
+    state.pathChecks++;
+    const token = "recheck-" + state.pathChecks + ":" + state.nonce + ":" + site;
+    // its own dispatch: re-checks are counted in state.agents but never against
+    // the agent cap (bounded by the sites and rounds), so the cap refuses
+    // exactly the runs it refused in 3.1.0
+    state.agents++;
+    const r = await agent(nonced(pathRecheckPrompt({ repo: state.repo, token })), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, label, model });
+    return { r, label, token };
+  };
+  // 4.0.0 (1990): the check runs on haiku; a broken relay (no result, not ok,
+  // or not the program's output for its token) runs once more on sonnet with
+  // a fresh token. A finding in a sound output stops at once, as before.
+  let { r, label, token } = await one("infra:path-check:" + site, infraModel("infra:path-check:" + site));
+  if (r == null || r.status !== "ok" || pathRelayProblem(r, [state.repo, token])) {
+    gate("infra:path-check:" + site + ": no usable result on " + infraModel("infra:path-check:" + site) + "; checking once more on " + RELAY_RETRY_MODEL);
+    ({ r, label, token } = await one("infra:path-check:" + site + ":relay-retry", RELAY_RETRY_MODEL));
+  }
   if (r == null) halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned no result)", "iac");
   if (r.status !== "ok")
     halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned " + r.status + ": " + (r.reason || "no reason") + ")", "iac");
@@ -4883,28 +6123,121 @@ async function pathRecheck(site, phaseName) {
 // The run-state ref: refs/fleet/<task id>/state points at an annotated tag
 // object (git mktag, no tag name, no hook, index untouched) whose target is
 // HEAD and whose message is the state JSON. Local only, never pushed.
-// WRITE_STATE_SH_BEGIN
-function writeStateCmd(worktree, stateRef, json) {
-  const g = "GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C " + shQuote(worktree);
-  return (
-    "c=$(" + g + " rev-parse HEAD) && t=$( { printf 'object %s\\ntype commit\\ntag fleet-state\\ntagger fleet <fleet@localhost> 0 +0000\\n\\n' \"$c\"; cat <<'FLEET_STATE_JSON'\n" +
-    json +
-    "\nFLEET_STATE_JSON\n} | " + g + " mktag) && " + g + " update-ref " + shQuote(stateRef) + " \"$t\" && echo \"$c $t\""
-  );
-}
-// WRITE_STATE_SH_END
+// The chunks are the base64 of the state JSON (see PLAN_REF_WRITE_PY). Prints
+// {head, state_sha, program, digest}.
+// STATE_WRITE_PY_BEGIN
+const STATE_WRITE_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import base64, hashlib, json, os, re, shutil, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+if len(sys.argv) != 7:
+    sys.exit('usage: <worktree> <state ref> <chunk dir> <n> <expected sha256> <chunk sha256 list>')
+wt, target, cdir, n_arg, expected, shas_arg = sys.argv[1:]
+if not re.fullmatch(r'refs/fleet/[a-z0-9][a-z0-9-]*/state', target):
+    sys.exit('bad state ref: ' + target)
+if not re.fullmatch(r'[1-9][0-9]{0,2}', n_arg):
+    sys.exit('bad chunk count: ' + n_arg)
+n = int(n_arg)
+if not re.fullmatch(r'[0-9a-f]{64}', expected):
+    sys.exit('bad expected sha256: ' + expected)
+try:
+    shas = json.loads(shas_arg)
+except ValueError:
+    sys.exit('bad chunk sha256 list')
+if not isinstance(shas, list) or len(shas) != n or any(not isinstance(e, dict) or e.get('i') != k or not isinstance(e.get('sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', e['sha256']) for k, e in enumerate(shas)):
+    sys.exit('bad chunk sha256 list: ' + shas_arg[:200])
+# the chunks live in a directory of the run's scratch dir (a sibling of the worktree)
+scratch = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(wt)), 'scratch'))
+real = os.path.realpath(cdir)
+if not real.startswith(scratch + '/'):
+    sys.exit('chunk dir ' + cdir + ' is not under ' + scratch)
+bad, parts = [], []
+for e in shas:
+    p = os.path.join(real, '%d.b64' % e['i'])
+    b = None
+    try:
+        if os.path.isfile(p) and not os.path.islink(p) and os.path.getsize(p) <= 8192:
+            with open(p, 'rb') as f:
+                b = f.read(8193)
+    except OSError:
+        b = None
+    if b is None or len(b) > 8192 or hashlib.sha256(b).hexdigest() != e['sha256']:
+        bad.append(e['i'])
+    else:
+        parts.append(b)
+if bad:
+    # exit 3: rewrite only these chunks; nothing was written
+    print(json.dumps({'bad_chunks': bad}))
+    sys.exit(3)
+try:
+    msg = base64.b64decode(b''.join(parts), validate=True)
+except ValueError:
+    sys.exit('the chunks do not decode as base64')
+if hashlib.sha256(msg).hexdigest() != expected:
+    sys.exit('the decoded message hashes ' + hashlib.sha256(msg).hexdigest() + ', not ' + expected)
+# no hook runs (hooksPath /dev/null also stops reference-transaction)
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', wt]
+def git(*a, inp=None):
+    r = subprocess.run(G + list(a), input=inp, capture_output=True)
+    if r.returncode != 0:
+        sys.exit(r.stderr.decode('utf-8', 'replace')[-2000:] or 'git ' + a[0] + ' failed')
+    return r.stdout.decode().strip()
+def has(ref):
+    r = subprocess.run(G + ['rev-parse', '-q', '--verify', ref], capture_output=True)
+    return r.stdout.decode().strip() if r.returncode == 0 else None
+head = git('rev-parse', '--verify', 'HEAD^{commit}')
+tag = git('mktag', inp=b'object ' + head.encode() + b'\ntype commit\ntag fleet-state\ntagger fleet <fleet@localhost> 0 +0000\n\n' + msg)
+git('update-ref', target, tag)
+shutil.rmtree(real, ignore_errors=True)
+out = {'head': head, 'state_sha': tag}
+out['program'] = _PROG
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))`;
+// STATE_WRITE_PY_END
 
 function writeStatePrompt(inputs, json) {
+  const c = chunked(json + "\n");
   return (
-    "Infra step of the fleet build workflow: record the run-state. Local only: never push, never create a tag name, never commit, never touch the index or any file.\n" +
+    "Infra step of the fleet build workflow: record the run-state. Local only: never push, never create a tag name, never commit, never touch the index or any file but the chunk files under <chunk_dir>.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "Run this one Bash command exactly as written, unmodified:\n" +
-    writeStateCmd(inputs.main_worktree, inputs.state_ref, json) +
-    "\n" +
-    "It prints `<head> <state_sha>`. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, head, state_sha}."
+    "The state JSON travels as base64 chunks you write to files; the program checks every chunk against its sha256, then makes the tag object (git mktag: no tag name, no hook) and moves <state_ref>.\n" +
+    chunkSteps(inputs.chunk_dir, c, progCmd("state_write", [inputs.main_worktree, inputs.state_ref, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)])) +
+    "On success it prints one JSON object {head, state_sha, program, digest}: copy all four unchanged (the script recomputes the digest).\n" +
+    "Return {status, reason, head, state_sha, program, digest}."
   );
 }
 
@@ -4935,6 +6268,15 @@ def clean_path(inside=()):
         keep.append(e)
     return ':'.join(keep)
 _o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, ref = sys.argv[1], sys.argv[2]
@@ -4953,9 +6295,9 @@ if t.returncode == 0:
 out['head'] = run('rev-parse', 'HEAD').stdout.decode().strip()
 out['head_tree'] = run('rev-parse', 'HEAD^{tree}').stdout.decode().strip()
 out['clean'] = run('status', '--porcelain').stdout == b''
+out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, ensure_ascii=False))
-`;
+print(json.dumps(out, ensure_ascii=False))`;
 // READ_STATE_PY_END
 
 function readStatePrompt(inputs) {
@@ -4965,10 +6307,10 @@ function readStatePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(READ_STATE_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.state_ref) +
+    progCmd("read_state", [inputs.main_worktree, inputs.state_ref]) +
     "\n" +
-    "It prints one JSON object {exists, target, message, head, head_tree, clean, digest}. Copy every value unchanged, byte for byte, empty strings included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, exists, target, message, head, head_tree, clean, digest}."
+    "It prints one JSON object {exists, target, message, head, head_tree, clean, program, digest}. Copy every value unchanged, byte for byte, empty strings included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, exists, target, message, head, head_tree, clean, program, digest}."
   );
 }
 
@@ -5123,6 +6465,22 @@ const state = {
   // 3.1.1: the repo the PATH re-checks name, and their count
   repo: null,
   pathChecks: 0,
+  // 4.0.0 (1993): the shipped programs' directory, resolved in this run's first agent
+  scriptsDir: null,
+  // 4.0.0 (1993): a plan ref committed but not verified (returned on a halt)
+  unverifiedPlanRef: null,
+  // 4.0.0 (1990): the role table is set (roleVersions, models); it came from
+  // the sealed plan ref (cached); the record a plan run seals
+  rolesLoaded: false,
+  preflightCached: false,
+  preflightRecord: null,
+  // 4.0.0 (1987): the digest of the last freeze and its plan_ref (returned on a stop)
+  freezeDigest: null,
+  freezePlanRef: null,
+  // 4.0.0 (1981): the run's test database {name, users, port, env, image, dbs, expires, mechanism}
+  db: null,
+  // the container main's finally removes (set before db-up starts it)
+  dbTarget: null,
 };
 
 function gate(msg) {
@@ -5157,14 +6515,22 @@ function reserve(n, what) {
 // must never return the verdict of an earlier worktree. A new invocation has
 // a new nonce, so no infra call replays, and no role call after one does.
 function nonced(prompt) {
-  return prompt + "\nRun nonce: " + state.nonce + " (keys the workflow cache to this invocation; ignore it).";
+  return prompt + (prompt.indexOf(FILE_SHA_MARK) >= 0 ? "\n" + FILE_SHA_RULE : "") + "\nRun nonce: " + state.nonce + " (keys the workflow cache to this invocation; ignore it).";
 }
 
-// Infra agents: always INFRA_MODEL.
+// 4.0.0 (1990): the INFRA_TIER model of an infra label; none stops the run.
+function infraModel(label) {
+  const hit = INFRA_TIER.find((e) => label.indexOf(e[0]) === 0);
+  if (!hit) halt("failed", "no INFRA_TIER entry for agent label " + label);
+  return hit[1];
+}
+
+// Infra agents: the INFRA_TIER model of their label.
 async function dispatch(label, prompt, opts) {
+  const model = infraModel(label);
   reserve(1, label);
   state.agents++;
-  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model: INFRA_MODEL }));
+  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model }));
   if (r == null) halt("failed", "agent " + label + " returned no result");
   return r;
 }
@@ -5172,12 +6538,13 @@ async function dispatch(label, prompt, opts) {
 // Infra agents whose failure must not stop the run (write-back). Returns null
 // when the cap is reached or the agent dies.
 async function softDispatch(label, prompt, opts) {
+  const model = infraModel(label);
   if (capped() + 1 > MAX_AGENTS) {
     gate("agent cap " + MAX_AGENTS + " reached: " + label + " not run");
     return null;
   }
   state.agents++;
-  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model: INFRA_MODEL }));
+  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model }));
   if (r == null) gate(label + " returned no result");
   return r;
 }
@@ -5208,13 +6575,16 @@ function collect(role, r) {
 
 // deferCheck: the caller runs its script gates (hash, fingerprint) first and
 // calls checkRole after them, so a gate violation is reported before drift.
-async function callRole(role, label, inputs, phaseName, agentType, deferCheck) {
+// noRetry: the caller handles drift itself (the coder: drift is a finding).
+async function callRole(role, label, inputs, phaseName, agentType, deferCheck, noRetry) {
   const opts = { schema: SCHEMAS[role], phase: phaseName };
   if (agentType) opts.agentType = agentType;
   reserve(1, label);
   state.agents++;
-  const r = await roleAgent(role, label, rolePrompt(role, inputs), opts);
+  const prompt = rolePrompt(role, inputs);
+  let r = await roleAgent(role, label, prompt, opts);
   if (r == null) halt("failed", "agent " + label + " returned no result");
+  if (!noRetry) r = await retryOnDrift(role, label, prompt, opts, r);
   if (deferCheck) return r;
   checkRole(role, r);
   collect(role, r);
@@ -5225,18 +6595,60 @@ async function callRole(role, label, inputs, phaseName, agentType, deferCheck) {
 // runner loaded the same version and contract marker that preflight saw, and
 // an ok result carries every required key and a known verdict.
 function contractProblem(role, r) {
+  const v = versionProblem(role, r);
+  if (v) return v;
+  const d = driftOf(role, r);
+  return d ? d.msg : null;
+}
+
+// The runner loaded another page version or contract marker than preflight
+// saw. Never retried.
+function versionProblem(role, r) {
+  // 4.0.0 (1990): the table came from the plan ref; the page may have moved since
+  const fresh = state.preflightCached ? "; the role table came from the plan ref: re-run build with fresh_preflight: true" : "";
   if (r.role_version !== state.roleVersions[role])
-    return "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded";
+    return "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded" + fresh;
   const c = contractOf(r.role_contract);
-  if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded" + RELOAD_HINT;
-  if (r.status !== "ok") return null;
-  for (const k of REQUIRED_ON_OK[role] || []) {
-    if (!(k in r)) return "role " + role + " contract drift: missing " + k;
-    if (!typeMatches(SCHEMAS[role] && SCHEMAS[role].properties[k], r[k]))
-      return "contract drift: " + role + " " + k + " type: got " + jsType(r[k]);
-  }
-  if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0) return "contract drift: " + role + " verdict " + r.verdict;
+  if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded" + fresh + RELOAD_HINT;
   return null;
+}
+
+// Drift in an ok result, against the frozen (STRICT) types: {msg, detail}
+// or null. 4.0.0 (1984): null passes only where the frozen type allows it,
+// and every type is checked (est_diff_lines: null must never reach a gate).
+function driftOf(role, r) {
+  if (r.status !== "ok") return null;
+  const strict = STRICT[role] || {};
+  for (const k of REQUIRED_ON_OK[role] || []) {
+    if (!(k in r)) return { msg: "role " + role + " contract drift: missing " + k, detail: "missing " + k };
+    if (!typeMatches(strict[k], r[k]))
+      return { msg: "contract drift: " + role + " " + k + " type: got " + jsType(r[k]), detail: k + " type: got " + jsType(r[k]) };
+    const en = strict[k] && strict[k].enum;
+    if (en && k !== "verdict" && r[k] !== null && en.indexOf(r[k]) < 0)
+      return { msg: "contract drift: " + role + " " + k + " value " + JSON.stringify(r[k]), detail: k + " value " + JSON.stringify(r[k]) };
+  }
+  if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0)
+    return { msg: "contract drift: " + role + " verdict " + r.verdict, detail: "verdict " + r.verdict };
+  return null;
+}
+
+// 4.0.0 (1984): an ok result that drifts (a missing key, a wrong type or
+// value, an unknown verdict) is re-dispatched once with the drift quoted,
+// after a fresh PATH re-check. A version or marker mismatch never retries;
+// a second drift stops the run at checkRole as before. The retry counts
+// toward the agent cap.
+async function retryOnDrift(role, label, prompt, opts, r) {
+  if (r == null || r.status !== "ok" || versionProblem(role, r)) return r;
+  const d = driftOf(role, r);
+  if (!d) return r;
+  const rl = label + ":retry";
+  reserve(1, rl);
+  await pathRecheck(rl.replace(/^role:/, ""), opts.phase);
+  state.agents++;
+  const r2 = await roleAgent(role, rl, prompt + "\nYour previous result was refused: " + d.msg + ". Return the whole object again.", opts);
+  if (r2 == null) halt("failed", "agent " + rl + " returned no result");
+  gate(role + ": contract drift (" + d.detail + "); retried once");
+  return r2;
 }
 
 // A role's own needs_human/failed reason wins over contract drift; drift is
@@ -5257,14 +6669,14 @@ function jsType(v) {
   return v === null ? "null" : Array.isArray(v) ? "array" : typeof v;
 }
 
-// Only array, object and boolean are checked; any other schema type passes.
+// 4.0.0 (1984): every JSON type is checked against the frozen schema type;
+// null only where that type lists it.
 function typeMatches(prop, v) {
   if (!prop || prop.type === undefined) return true;
   const types = [].concat(prop.type);
-  const checked = types.filter((t) => t === "array" || t === "object" || t === "boolean");
-  if (!checked.length) return true;
   if (v === null) return types.indexOf("null") >= 0;
-  return checked.indexOf(jsType(v)) >= 0 || types.some((t) => checked.indexOf(t) < 0 && t !== "null" && jsType(v) === t);
+  const t = jsType(v);
+  return types.some((x) => x === t || (x === "integer" && t === "number" && Number.isInteger(v)));
 }
 
 function requireOk(who, r) {
@@ -5289,11 +6701,16 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
   const fp = r.fingerprint;
   if (r.status !== "ok" || !fp || !fp.head || !fp.tree || !mapsOk || (baseTree && !Array.isArray(r.changed)))
     halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
+  requireProgram(r, "hasher", "hasher " + label);
   // the maps travel through a model: recompute the program's digest over them
-  const relayed = { fingerprint: fp, hashes: h };
+  const relayed = { fingerprint: fp, hashes: h, program: r.program, scripts: r.scripts === undefined ? null : r.scripts };
   if (baseTree) relayed.changed = r.changed;
   if (typeof r.digest !== "string" || sha256Hex(canonical(relayed)) !== r.digest)
     halt("failed", "hasher " + label + " failed: the relayed maps do not match the program's digest (a key was dropped or changed in the copy)");
+  // 4.0.0 (security review): every fingerprint also hashes the shipped
+  // programs; a change by any role shows up at the next one
+  const sm = scriptsMapProblem(r.scripts, state.scriptsDir);
+  if (sm) halt("needs_human", "hasher " + label + ": " + sm, "hash");
   return r;
 }
 
@@ -5313,11 +6730,11 @@ async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, f
   const before = pre || (await hasher(opts && opts.preLabel ? opts.preLabel : "hasher:fp-pre:" + roundTag, worktree, files, phaseName));
   const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT, true);
   const after = await hasher("hasher:fp-post:" + roundTag, worktree, files, phaseName);
-  if (!sameState(before, after)) {
+  if (!sameState(before, after, worktree)) {
     const what = [];
     if (before.fingerprint.head !== after.fingerprint.head) what.push("HEAD");
     if (before.fingerprint.tree !== after.fingerprint.tree) what.push("tree");
-    for (const k of changedKeys(before.hashes, after.hashes)) what.push(violationName(k));
+    for (const k of changedKeys(before.hashes, after.hashes, worktree)) what.push(violationName(k));
     halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") changed " + what.join(", ") + "; verdict discarded", "fingerprint");
   }
   checkRole(role, r);
@@ -5347,6 +6764,38 @@ function finish(status, reason) {
   };
 }
 
+// 4.0.0 (1993): a stop after the plan commit and before its check passed
+// returns that plan_ref, marked unverified (build mode re-verifies everything
+// at load-ref).
+function finishStop(status, reason) {
+  const out = finish(status, reason);
+  if (state.unverifiedPlanRef && status !== "ok" && status !== "awaiting_confirmation") {
+    out.plan_ref = state.unverifiedPlanRef;
+    out.plan_ref_verified = false;
+    out.reason = reason + " (plan_ref " + state.unverifiedPlanRef.plan_ref + " at " + state.unverifiedPlanRef.plan_commit + " returned unverified)";
+  }
+  // 4.0.0 (1987): a stop after a freeze returns its digest; a build re-run
+  // with it resumes at the coder while the worktree is still the freeze tree
+  if (state.freezeDigest && status !== "ok" && status !== "awaiting_confirmation") {
+    out.freeze_digest = state.freezeDigest;
+    if (!out.plan_ref && state.freezePlanRef) out.plan_ref = state.freezePlanRef;
+  }
+  return out;
+}
+
+// 4.0.0 (1987): sha256 over the plan ref's sha256, the freeze tree and the
+// frozen maps' digest. The caller holds it; the script recomputes it from git
+// (the freeze ref, the worktree tree) and the hasher maps.
+// 4.0.0 review: a freeze after a fix_tests re-freeze binds `refrozen: true`
+// (absent otherwise, so an untouched freeze keeps its digest). A frozen resume
+// restarts the round and re-freeze counts, so it is refused for a re-frozen
+// state.
+function freezeDigestOf(refSha256, tree, hashes, refrozen) {
+  const o = { ref_sha256: refSha256, tree, mapsDigest: mapsDigest(hashes) };
+  if (refrozen) o.refrozen = true;
+  return sha256Hex(canonical(o));
+}
+
 // ---------------------------------------------------------------- shared steps
 
 function cleanRepo(r) {
@@ -5363,63 +6812,155 @@ function layoutKey(key, repo) {
   return { key, branch: "fleet/" + key, root, mainWt: root + "/main", scratch: root + "/scratch" };
 }
 
-async function preflightStep(repo) {
+// scriptsOnly (4.0.0, 1990): a build that may take the role table from its
+// plan ref; the scripts directory and the PATH check are never cached.
+async function preflightStep(repo, scriptsOnly) {
   phase("Preflight");
-  const pre = await dispatch("preflight", preflightPrompt({ roles: ROLES, role_project: ROLE_PROJECT, repo }), {
-    schema: PREFLIGHT_SCHEMA,
-    agentType: JUDGE_AGENT,
-    phase: "Preflight",
-  });
+  const pre = await dispatch(
+    "preflight",
+    scriptsOnly ? preflightPrompt({ repo }, "scripts") : preflightPrompt({ roles: ROLES, role_project: ROLE_PROJECT, repo }),
+    {
+      schema: scriptsOnly ? PREFLIGHT_SCRIPTS_SCHEMA : PREFLIGHT_SCHEMA,
+      agentType: JUDGE_AGENT,
+      phase: "Preflight",
+    },
+  );
+  // 4.0.0 (1993): the shipped programs' directory, found by this run's first
+  // agent (never cached, never sealed); the PATH check below ran from it, and
+  // its self-hash proves the directory holds this version's programs
+  const sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
+  if (sp.problem) halt("needs_human", "preflight: scripts_dir unusable: " + sp.problem + "; install fleet " + FLEET_VERSION + " from the marketplace, then run /reload-plugins" + RELOAD_HINT, "contract");
+  state.scriptsDir = sp.dir;
+  gate("scripts_dir: " + state.scriptsDir);
   // Max's ruling (2026-11-09): IaC tooling may only be reachable through the nix shims
   pathCheck(pre.path_check, repo);
   state.repo = repo;
+  if (scriptsOnly) {
+    gate("preflight: role pages not loaded yet (the plan ref may hold the role table)");
+    return;
+  }
+  rolesFrom(pre);
+}
+
+// A role-page load's result: the library reachable, every role found, and
+// the frozen checks on the table.
+function rolesFrom(pre) {
   if (!pre.reachable) halt("needs_human", "yadgar unavailable: " + (pre.reason || "role library unreachable"));
   const missing = pre.missing || [];
   if (missing.length) halt("needs_human", "role missing in yadgar: " + missing.join(", "));
   gate("preflight: all " + ROLES.length + " roles loadable");
-  const versions = pre.versions || {};
-  const contracts = pre.contract || {};
+  applyRoleTable(pre.versions || {}, pre.contract || {}, pre.dispatch || {});
+}
+
+// 4.0.0 (1990): why a role table (versions, CONTRACT lines, DISPATCH lines,
+// each keyed by role) fails the frozen checks, or null. The same checks run
+// on a fresh page load and on the table a plan ref sealed.
+function roleTableProblem(versions, contracts, dispatchLines) {
+  const v = versions && typeof versions === "object" ? versions : {};
+  const c0 = contracts && typeof contracts === "object" ? contracts : {};
+  const d = dispatchLines && typeof dispatchLines === "object" ? dispatchLines : {};
+  for (const role of ROLES) {
+    const got = v[role];
+    const want = EXPECTED_VERSIONS[role];
+    if (typeof got !== "number") return "role " + role + " version missing in preflight (frozen minimum " + want + ")";
+    if (got < want)
+      return "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): the agent_prompt_get(" + role + ", project " + ROLE_PROJECT + ") wiki version " + got + " must be >= " + want + "; update that page in place; see CHANGELOG 4.0.0 deploy order";
+    const c = contractOf(c0[role]);
+    if (c !== CONTRACT) return "role " + role + " contract " + c + " != " + CONTRACT + RELOAD_HINT;
+  }
+  for (const role of ROLES)
+    if (!parseDispatch(d[role])) return "role " + role + " has no usable DISPATCH line (" + JSON.stringify(d[role] || null) + "); no tier is hardcoded";
+  return null;
+}
+
+// Sets the run's role table, or stops at contract. Keeps the record a plan
+// run seals: {fleet_version, versions, dispatch, contract}, the raw lines.
+function applyRoleTable(versions, contracts, dispatchLines) {
+  const p = roleTableProblem(versions, contracts, dispatchLines);
+  if (p) halt("needs_human", p, "contract");
+  const rec = { fleet_version: FLEET_VERSION, versions: {}, dispatch: {}, contract: {} };
   for (const role of ROLES) {
     const got = versions[role];
     const want = EXPECTED_VERSIONS[role];
-    if (typeof got !== "number")
-      halt("needs_human", "role " + role + " version missing in preflight (frozen minimum " + want + ")", "contract");
-    if (got < want)
-      halt(
-        "needs_human",
-        "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): the agent_prompt_get(" + role + ", project " + ROLE_PROJECT + ") wiki version " + got + " must be >= " + want + "; update that page in place; see CHANGELOG 3.1.0 deploy order",
-        "contract",
-      );
     if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");
     state.roleVersions[role] = got;
-    const c = contractOf(contracts[role]);
-    if (c !== CONTRACT) halt("needs_human", "role " + role + " contract " + c + " != " + CONTRACT + RELOAD_HINT, "contract");
+    rec.versions[role] = got;
+    rec.contract[role] = contracts[role];
   }
-  const dispatchLines = pre.dispatch || {};
   for (const role of ROLES) {
     const t = parseDispatch(dispatchLines[role]);
-    if (!t)
-      halt(
-        "needs_human",
-        "role " + role + " has no usable DISPATCH line (" + JSON.stringify(dispatchLines[role] || null) + "); no tier is hardcoded",
-        "contract",
-      );
     state.models[role] = t;
+    rec.dispatch[role] = dispatchLines[role];
     gate("model: " + role + " -> " + t.model + (t.fallback ? " (fallback " + t.fallback + ")" : ""));
   }
+  state.preflightRecord = rec;
+  state.rolesLoaded = true;
 }
 
-async function workspaceStep(repo, lay) {
+// 4.0.0 (1990): a build's role table. The plan ref's record when this fleet
+// version sealed it and it passes the frozen checks; else the pages are
+// loaded now. A page bumped after the plan shows at the first role call
+// (versionProblem), and that stop says to re-run with fresh_preflight.
+async function rolesFromRef(rec) {
+  const why =
+    !rec || typeof rec !== "object"
+      ? "the plan ref holds no role table"
+      : rec.fleet_version !== FLEET_VERSION
+        ? "sealed by fleet " + rec.fleet_version + ", not " + FLEET_VERSION
+        : roleTableProblem(rec.versions, rec.contract, rec.dispatch);
+  if (!why) {
+    applyRoleTable(rec.versions, rec.contract, rec.dispatch);
+    state.preflightCached = true;
+    gate("preflight: role table from the plan ref (fleet " + FLEET_VERSION + ", " + CONTRACT + "); no role page loaded");
+    return;
+  }
+  gate("preflight: the sealed role table is not usable (" + why + "); loading the role pages");
+  const pre = await dispatch("preflight:roles", preflightPrompt({ roles: ROLES, role_project: ROLE_PROJECT }, "roles"), {
+    schema: PREFLIGHT_SCHEMA,
+    agentType: JUDGE_AGENT,
+    phase: "Verify",
+  });
+  rolesFrom(pre);
+}
+
+// 4.0.0 (1985): plan mode only, before the planner. A fresh PATH re-check,
+// then the dry run (it runs the repo's pre-push hook). Access ok: ok,
+// hook_rejected, non_ff, fetch_first. An auth line stops the run before any
+// role; anything else (a timeout, no usable relay) logs "push access
+// unknown" and the run goes on: the real push is still gated later.
+const PUSH_PROBE_KEYS = ["access", "result", "exit_code", "auth_line", "args"];
+async function pushProbe(lay, ws) {
+  await pathRecheck("push-probe", "Workspace");
+  const label = "infra:push-probe";
+  const r = await softDispatch(label, pushProbePrompt({ main_worktree: lay.mainWt, branch: lay.branch, base_ref: ws.baseRef }), {
+    schema: PUSH_PROBE_SCHEMA,
+    agentType: JUDGE_AGENT,
+    phase: "Workspace",
+  });
+  const unknown = (why) => gate("push access unknown: " + why + "; the real push is still gated");
+  if (!r) return unknown("the probe returned no result");
+  if (r.status !== "ok") return unknown("the probe returned " + r.status + ": " + (r.reason || "no reason"));
+  const pp = programProblem(r, "push_probe");
+  if (pp) return unknown(label + ": " + pp);
+  if (!relayDigestOk(r, PUSH_PROBE_KEYS, "push_probe") || !Array.isArray(r.args) || r.args.length !== 2 || r.args[1] !== String(r.exit_code))
+    return unknown(label + ": the relayed result does not match the program's digest or args");
+  if (r.access === "denied")
+    halt("needs_human", "no push access to origin for " + lay.branch + ": " + JSON.stringify(r.auth_line || r.result) + " (git push --dry-run); fix the credentials or the remote, then run plan again");
+  if (r.access !== "ok") return unknown("dry run " + r.result + " (exit " + r.exit_code + ")");
+  gate("push access ok: dry run " + r.result + " (exit " + r.exit_code + ")");
+}
+
+async function workspaceStep(repo, lay, wopt) {
   phase("Workspace");
   const ws = await infra(
     "workspace",
-    workspacePrompt({
+    workspacePrompt(Object.assign({
       repo,
       branch: lay.branch,
       main_worktree: lay.mainWt,
       scratch_dir: lay.scratch,
       settings_local_json: settingsFor(lay.mainWt),
-    }),
+    }, wopt && wopt.frozenResume ? { frozen_resume: true } : {})),
     "Workspace",
   );
   if (!ws.default_branch || !ws.base_ref) halt("failed", "workspace returned no default_branch/base_ref");
@@ -5432,7 +6973,7 @@ async function workspaceStep(repo, lay) {
   // unusable relay leaves it empty, which the IaC push gate refuses
   const uc = ws.remote_url_check;
   const urlOk =
-    !!uc && typeof uc === "object" && (uc.url === null || typeof uc.url === "string") && canonical(uc.args) === canonical([repo]) && relayDigestOk(uc, ["url", "args"]);
+    !!uc && typeof uc === "object" && (uc.url === null || typeof uc.url === "string") && canonical(uc.args) === canonical([repo]) && relayDigestOk(uc, ["url", "args"], "remote_url");
   if (!urlOk) gate("workspace: origin URL relay unusable (no digest-checked remote_url_check); no URL sealed or compared");
   return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: ws.remote_slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "" };
 }
@@ -5648,7 +7189,9 @@ function confusableFindings(criteria) {
   return out;
 }
 
-function normCriteria(raw) {
+// testCmd: the plan's test_cmd; every criterion's test_args is checked
+// against it (4.0.0, ledger 1980) and kept only when it passes.
+function normCriteria(raw, testCmd) {
   const seen = {};
   const criteria = raw.map((c) => {
     const id = String((c && c.id) || "");
@@ -5656,7 +7199,11 @@ function normCriteria(raw) {
       halt("needs_human", "criterion id not usable in a branch name: " + JSON.stringify(id));
     if (seen[id]) halt("needs_human", "duplicate criterion id " + id);
     seen[id] = true;
-    return Object.assign(stripHeldOut(c), {
+    const ta = criterionTestArgsProblem(testCmd, c);
+    if (ta) halt("needs_human", "criterion " + id + " " + ta, "commands");
+    const kept = stripHeldOut(c);
+    if (kept.test_args === null) delete kept.test_args;
+    return Object.assign(kept, {
       id,
       text: String(c.text || ""),
       test_files: (c.test_files || []).map(normPath).filter(Boolean),
@@ -5713,13 +7260,14 @@ async function checkScripts(label, obligations, worktree, phaseName) {
   if (!paths.length) return obligations;
   const r = await infra(
     label,
-    checkScriptsPrompt({ worktree, paths, run: "python3 -I -c " + shQuote(SCRIPT_CHECK_PY) + " " + shQuote(worktree) + " " + shQuote(JSON.stringify(paths)) }),
+    checkScriptsPrompt({ worktree, paths, run: progCmd("script_check", [worktree, JSON.stringify(paths)]) }),
     phaseName,
     JUDGE_AGENT,
   );
   // a relay that changed a verdict: every script stays judge-only
-  const checks = r.checks && typeof r.checks === "object" && relayDigestOk(r, ["checks"]) ? r.checks : {};
-  if (r.checks && !relayDigestOk(r, ["checks"])) gate(label + ": the relayed checks do not match the program's digest; every check_cmd script is judge-only");
+  const checks = r.checks && typeof r.checks === "object" && relayDigestOk(r, ["checks"], "script_check") ? r.checks : {};
+  if (r.checks && !relayDigestOk(r, ["checks"], "script_check"))
+    gate(label + ": the relayed checks do not match the program's digest" + (programProblem(r, "script_check") ? " (" + programProblem(r, "script_check") + ")" : "") + "; every check_cmd script is judge-only");
   return obligations.map((o) => {
     const sp = typeof o.check_cmd === "string" ? parseCheckCmd(o.check_cmd).script : null;
     if (!sp) return o;
@@ -5743,33 +7291,112 @@ function planPathProblem(p) {
   return null;
 }
 
-// confirm auto: the one re-plan round. The planner gets the findings as a
-// text source and updates its draft in place; the round never repeats.
-// rawMap: the refused round's changed_symbols as returned (2.1.6). Every
-// symbol it names, and every symbol a finding names, is carried: the next
-// round must keep each one in its map (narrower symbols only in addition),
-// and its audit gets the round as prior_round.
-function replanWithFindings(ctx, planPath, what, findings, fallback, rawMap) {
+// 4.0.0 (1983): up to MAX_AUDIT_ROUNDS re-plan rounds in every confirm mode;
+// the script-side refusals (confusables, the caller map, the grep diff) and
+// the plan-audit refusals count toward the same rounds.
+const MAX_AUDIT_ROUNDS = 2;
+
+// The suffix of re-plan round n of a planAndAudit call whose round 0 has
+// suffix `base`: "", ":audit-fix", ":audit-fix-2", ...
+function roundSuffix(base, n) {
+  return (base || "") + (n === 0 ? "" : n === 1 ? ":audit-fix" : ":audit-fix-" + n);
+}
+
+// What a planner round declared: {change_kind, new_behaviour, criteria:
+// [{id, text}]}; a value of another type reads as null.
+function roundSnapshot(plan) {
+  const crit = plan && Array.isArray(plan.criteria) ? plan.criteria : [];
+  return {
+    change_kind: plan && CHANGE_KINDS.indexOf(plan.change_kind) >= 0 ? plan.change_kind : null,
+    new_behaviour: plan && typeof plan.new_behaviour === "boolean" ? plan.new_behaviour : null,
+    criteria: crit.filter((c) => c && typeof c === "object" && !Array.isArray(c)).map((c) => ({ id: String(c.id || ""), text: String(c.text || "") })),
+  };
+}
+
+// 4.0.0 (1983, ADR-1186): how a re-plan round relaxed round 0 (empty: it did
+// not). A prior round with no usable round0 counts as relaxed (fail closed).
+function relaxedReasons(prior, now) {
+  const r0 = prior ? prior.round0 : null;
+  if (!r0 || typeof r0 !== "object" || Array.isArray(r0) || !Array.isArray(r0.criteria)) return ["no round0 (fail closed)"];
+  const out = [];
+  if (now.change_kind === "bug_fix" && r0.change_kind !== "bug_fix") out.push("change_kind " + r0.change_kind + "\u2192bug_fix");
+  if (r0.new_behaviour !== false && now.new_behaviour === false) out.push("new_behaviour " + r0.new_behaviour + "\u2192false");
+  const named = {};
+  for (const f of Array.isArray(prior.findings) ? prior.findings : []) if (f && typeof f.criterion === "string") named[f.criterion.trim()] = true;
+  for (const c0 of r0.criteria) {
+    if (!c0 || typeof c0 !== "object") continue;
+    const c = now.criteria.find((x) => x.id === c0.id);
+    if (!c) out.push("criterion " + c0.id + " dropped");
+    else if (c.text.length < String(c0.text || "").length && !named[c0.id]) out.push("criterion " + c0.id + " text shortened with no finding naming it");
+  }
+  return out;
+}
+
+// The prior_round a planner or plan-audit sees: every finding of every earlier
+// round, the last map, round 0 and every earlier round's criteria.
+function priorRoundView(prior) {
+  if (!prior) return null;
+  return {
+    reason: prior.reason,
+    findings: prior.findings,
+    symbols: prior.symbols,
+    changed_symbols: prior.changed_symbols,
+    round0: prior.round0 || null,
+    criteria_by_round: prior.criteria_by_round || [],
+  };
+}
+
+// A re-plan round (4.0.0: any confirm mode, up to MAX_AUDIT_ROUNDS). The
+// planner gets the findings as a text source and as prior_round, and updates
+// its draft in place. rawMap: the refused round's changed_symbols as returned
+// (2.1.6). Every symbol any earlier round mapped, and every symbol a finding
+// named, is carried: the next round must keep each one in its map (narrower
+// symbols only in addition), and its audit gets the accumulated prior_round.
+// plan: the refused round's planner output (its snapshot joins the rounds).
+function replanWithFindings(ctx, planPath, what, findings, fallback, rawMap, plan) {
+  const round = ctx.auditRound || 0;
   const body = findings.map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n") || fallback;
-  gate(what + " (confirm auto): one re-plan round with the findings");
+  gate(what + ": re-plan round " + (round + 1) + " of " + ctx.maxRounds + " with the findings");
   const map = Array.isArray(rawMap) ? stripHeldOut(rawMap).filter((e) => e && typeof e === "object" && !Array.isArray(e)) : null;
-  const symbols = [];
+  const prior = ctx.priorRound || null;
+  const symbols = prior && Array.isArray(prior.symbols) ? prior.symbols.slice() : [];
   const carry = (x) => {
     if (typeof x === "string" && SYMBOL_RE.test(x) && symbols.indexOf(x) < 0) symbols.push(x);
   };
   for (const e of map || []) carry(e.symbol);
   for (const f of findings) carry(f.symbol);
+  const snap = roundSnapshot(plan);
+  const tagged = stripHeldOut(findings).map((f) => Object.assign({}, f, { round }));
+  const next = {
+    reason: what,
+    findings: (prior && Array.isArray(prior.findings) ? prior.findings : []).concat(tagged),
+    changed_symbols: map,
+    symbols,
+    // a seeded prior keeps its own round 0 (or none: relaxed, fail closed)
+    round0: prior ? prior.round0 || null : snap,
+    criteria_by_round: (prior && Array.isArray(prior.criteria_by_round) ? prior.criteria_by_round : []).concat([snap.criteria]),
+    relaxed: ctx.relaxed || [],
+  };
+  noteRound(round, what, tagged, snap, symbols);
   return planAndAudit(
     Object.assign({}, ctx, {
-      auditRetry: false,
-      priorRound: { reason: what, findings: stripHeldOut(findings), changed_symbols: map, symbols },
-      suffix: (ctx.suffix || "") + ":audit-fix",
+      auditRound: round + 1,
+      priorRound: next,
+      suffix: roundSuffix(ctx.baseSuffix, round + 1),
       brief: Object.assign({}, ctx.brief, {
         plan_path: planPath,
         sources: ctx.brief.sources.concat([{ kind: "text", ref: "plan findings (" + what + ")", url: null, body }]),
       }),
     }),
   );
+}
+
+// 4.0.0 (1986): the refused rounds of this run, for the park step's
+// findings.json ({reason, rounds, symbols}).
+function noteRound(round, what, findings, snap, symbols) {
+  const rounds = state.planRounds || (state.planRounds = []);
+  rounds.push({ round, findings, criteria: snap.criteria, change_kind: snap.change_kind, new_behaviour: snap.new_behaviour });
+  state.lastPlanStop = { reason: what, rounds: rounds.slice(), symbols: symbols.slice() };
 }
 
 // "<path>:<line>" with the path normalised (no ./, no empty or . segments),
@@ -5828,6 +7455,18 @@ function changedSymbolFindings(raw, criteria) {
   return { findings, clean };
 }
 
+// 4.0.0 (1989, ADR-1185): the doc and lock files whose grep hits the caller
+// check maps itself as dont_care. The JS mirror of CALLERS_PY's doc_or_lock();
+// config, manifest, .txt, .csv and .svg files stay planner-mapped.
+const AUTO_DONT_CARE = "auto: non-code file";
+const DOC_FILE_RE = /^.*\.(md|rst|adoc)$/i;
+const NOTE_FILE_RE = /^(CHANGELOG|LICENSE)([-_][A-Za-z0-9-]+)*(\.[0-9]+)*(\.(md|rst|adoc|txt))?$/i;
+const LOCK_FILES = ["Cargo.lock", "uv.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "Gemfile.lock", "go.sum"];
+function docOrLockFile(p) {
+  const b = String(p).split("/").pop();
+  return DOC_FILE_RE.test(b) || NOTE_FILE_RE.test(b) || LOCK_FILES.indexOf(b) >= 0;
+}
+
 // The caller grep and its diff against the planner's map: a hit the map does
 // not list, a mapped line that is no hit, and a symbol over the cap are
 // findings. Returns {findings, occurrences}. The relayed lists must match the
@@ -5846,8 +7485,24 @@ async function callerCheck(label, symbols, worktree, planPath) {
   for (const n of names)
     if (!Array.isArray(occ[n]) || !occ[n].every((x) => typeof x === "string"))
       halt("failed", label + " returned no occurrence list for " + n);
-  if (typeof r.digest !== "string" || sha256Hex(canonical({ occurrences: occ, capped: r.capped })) !== r.digest)
+  requireProgram(r, "callers", label);
+  if (!relayDigestOk(r, ["occurrences", "capped", "auto_dont_care", "doctest_md"], "callers"))
     halt("failed", label + ": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
+  // 4.0.0 (1989, ADR-1185): a hit is auto dont_care only when the program
+  // lists it AND the script's own file list agrees (a doc or lock file that
+  // is not collected as a doctest); a missing list maps nothing
+  const doctest = Array.isArray(r.doctest_md) ? r.doctest_md.filter((x) => typeof x === "string").map(normPath) : null;
+  const adc = doctest && r.auto_dont_care && typeof r.auto_dont_care === "object" && !Array.isArray(r.auto_dont_care) ? r.auto_dont_care : {};
+  const auto = {};
+  for (const n of names) {
+    auto[n] = [];
+    for (const h of Array.isArray(adc[n]) ? adc[n] : []) {
+      const p = typeof h === "string" ? h.slice(0, h.lastIndexOf(":")) : "";
+      if (typeof h !== "string" || occ[n].indexOf(h) < 0 || !docOrLockFile(p) || doctest.indexOf(normPath(p)) >= 0)
+        halt("failed", label + ": the program listed " + JSON.stringify(h) + " as auto dont_care for " + n + ", which the script's doc and lock file list refuses");
+      auto[n].push(h);
+    }
+  }
   const findings = [];
   for (const s of symbols) {
     if (r.capped.indexOf(s.symbol) >= 0) {
@@ -5862,13 +7517,13 @@ async function callerCheck(label, symbols, worktree, planPath) {
     const hits = occ[s.symbol];
     const mapped = s.occurrences.map((o) => occurrenceKey(o.at));
     for (const h of hits)
-      if (mapped.indexOf(h) < 0)
+      if (mapped.indexOf(h) < 0 && auto[s.symbol].indexOf(h) < 0)
         findings.push({ criterion: null, symbol: s.symbol, finding: s.symbol + ": " + h + " is an occurrence (git grep -w) not mapped in changed_symbols; map it to a criterion or to dont_care with a reason" });
     for (const k of mapped)
       if (hits.indexOf(k) < 0)
         findings.push({ criterion: null, symbol: s.symbol, finding: s.symbol + ": " + k + " is mapped but git grep -w finds no occurrence there (stale line or wrong path; cite lines at the worktree HEAD)" });
   }
-  return { findings, occurrences: occ };
+  return { findings, occurrences: occ, auto };
 }
 
 // The build-time caller check (3.0.0, ledger 1956). The approved tree
@@ -5929,7 +7584,8 @@ async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, s
   )
     halt("failed", label + " returned no defs, excluded, unclassified or unattributed list");
   const relayed = { defs: r.defs.map((d) => ({ name: d.name, at: d.at, end: d.end })), excluded: r.excluded, unclassified: r.unclassified, unattributed: r.unattributed };
-  if (typeof r.digest !== "string" || sha256Hex(canonical(relayed)) !== r.digest)
+  requireProgram(r, "changed_defs", label);
+  if (typeof r.digest !== "string" || sha256Hex(canonical(Object.assign({ program: r.program }, relayed))) !== r.digest)
     halt("failed", label + ": the relayed lists do not match the program's digest (a definition was dropped or changed in the copy)");
   for (const p of relayed.excluded) gate(label + ": skipped " + p + " (frozen test or plan doc)");
   for (const p of relayed.unclassified) gate(label + ": unclassified " + p + " (no definition pattern; checked against the plan's files)");
@@ -5961,16 +7617,17 @@ function hookSurfacePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Run this one command exactly as written, unmodified:\n" +
-    "python3 -I -c " + shQuote(HOOK_SURFACE_PY) + " " + shQuote(inputs.worktree) + " " + shQuote(inputs.rev) + " " + shQuote(JSON.stringify(inputs.targets)) +
+    progCmd("hook_surface", [inputs.worktree, inputs.rev, JSON.stringify(inputs.targets)]) +
     "\n" +
-    "It prints one JSON object {surface, make_paths, error, args, digest}. Copy every value unchanged, error null included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, surface, make_paths, error, args, digest}."
+    "It prints one JSON object {surface, make_paths, error, args, program, digest}. Copy every value unchanged, error null included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, surface, make_paths, error, args, program, digest}."
   );
 }
 
 async function hookSurface(label, worktree, rev, targets, phaseName) {
   const r = await infra(label, hookSurfacePrompt({ worktree, rev, targets }), phaseName, JUDGE_AGENT);
-  if (!Array.isArray(r.surface) || !relayDigestOk(r, ["surface", "make_paths", "error", "args"]))
+  requireProgram(r, "hook_surface", label, "needs_human", "hooks");
+  if (!Array.isArray(r.surface) || !relayDigestOk(r, ["surface", "make_paths", "error", "args"], "hook_surface"))
     halt("failed", label + ": the relayed surface does not match the program's digest");
   if (canonical(r.args) !== canonical([worktree, rev, JSON.stringify(targets)])) halt("failed", label + ": the program ran on other arguments");
   if (r.error !== null)
@@ -6035,30 +7692,39 @@ function planScopeFiles(pf) {
   return out;
 }
 
-// A stop or the one confirm-auto re-plan round for plan findings.
-function planFindingsStop(ctx, planPath, what, findings, rawMap) {
-  if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, findings, what, rawMap);
-  const shown = findings.slice(0, 10).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding);
-  halt("needs_human", what + ": " + shown.join("; ") + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : ""));
+// " (after <n> re-plan rounds)" once a round ran, else "".
+function afterRounds(ctx) {
+  const n = ctx.auditRound || 0;
+  return n ? " (after " + n + " re-plan round" + (n === 1 ? "" : "s") + ")" : "";
 }
 
-async function planAndAudit(ctx) {
+// A re-plan round for plan findings while rounds are left, else a stop.
+function planFindingsStop(ctx, planPath, what, findings, rawMap, plan) {
+  if ((ctx.auditRound || 0) < ctx.maxRounds) return replanWithFindings(ctx, planPath, what, findings, what, rawMap, plan);
+  noteRound(ctx.auditRound || 0, what, stripHeldOut(findings), roundSnapshot(plan), (ctx.priorRound && ctx.priorRound.symbols) || []);
+  const shown = findings.slice(0, 10).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding);
+  halt("needs_human", what + ": " + shown.join("; ") + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : "") + afterRounds(ctx));
+}
+
+// ctx: {common, brief, date, baseRef, remoteSlug, remoteUrl, suffix,
+// maxRounds, auditRound, baseSuffix, priorRound, priorDraft, onPlanPath}.
+// priorRound and priorDraft (4.0.0, 1983 and 1986) are planner inputs only:
+// never in common, never in brief.sources, never sealed; plan-audit alone
+// also gets prior_round.
+async function planAndAudit(ctx0) {
+  let ctx = Object.assign({ maxRounds: MAX_AUDIT_ROUNDS, auditRound: 0 }, ctx0);
+  if (ctx.baseSuffix === undefined) ctx.baseSuffix = ctx.suffix || "";
   const sfx = ctx.suffix || "";
-  const plan = requireOk(
-    "scope-and-plan",
-    await callRole(
-      "scope-and-plan",
-      "role:scope-and-plan" + sfx,
-      Object.assign({}, ctx.common, {
-        brief: ctx.brief,
-        date: ctx.date,
-        repo: ctx.remoteSlug,
-        base_ref: ctx.baseRef,
-        mode: "commit=false",
-      }),
-      "Plan",
-    ),
-  );
+  const plannerIn = Object.assign({}, ctx.common, {
+    brief: ctx.brief,
+    date: ctx.date,
+    repo: ctx.remoteSlug,
+    base_ref: ctx.baseRef,
+    mode: "commit=false",
+  }, dbInputs("plan"));
+  if (ctx.priorDraft) plannerIn.prior_draft = ctx.priorDraft;
+  if (ctx.priorRound) plannerIn.prior_round = priorRoundView(ctx.priorRound);
+  const plan = requireOk("scope-and-plan", await callRole("scope-and-plan", "role:scope-and-plan" + sfx, plannerIn, "Plan"));
   if (typeof plan.plan_path !== "string" || !normPath(plan.plan_path) || !Array.isArray(plan.criteria))
     halt("failed", "scope-and-plan returned no plan_path/criteria");
   const ppBad = planPathProblem(plan.plan_path);
@@ -6077,23 +7743,27 @@ async function planAndAudit(ctx) {
   const planPath = normPath(plan.plan_path);
   if (ctx.brief.plan_path && planPath !== ctx.brief.plan_path)
     halt("needs_human", "planner wrote " + planPath + " but the ingested plan is " + ctx.brief.plan_path + " (an existing plan is updated in place)");
-  const criteria = normCriteria(plan.criteria);
+  const criteria = normCriteria(plan.criteria, plan.test_cmd);
+  // 4.0.0 (1983): a round after a refusal (this run's or a parked run's) that
+  // relaxed round 0 is never auto-eligible; carried into every later round
+  const prior = ctx.priorRound || null;
+  if (prior) {
+    const rx = (prior.relaxed || []).slice();
+    for (const x of relaxedReasons(prior, roundSnapshot(plan))) if (rx.indexOf(x) < 0) rx.push(x);
+    if (rx.length) gate("re-plan relaxed round 0: " + rx.join("; "));
+    ctx = Object.assign({}, ctx, { relaxed: rx });
+  }
   // 2.1.4 #7: an invisible or confusable character in examples or property
   const conf = confusableFindings(criteria);
-  if (conf.length) {
-    const what = "criteria hold an invisible or confusable character";
-    if (ctx.auditRetry) return replanWithFindings(ctx, planPath, what, conf, what, plan.changed_symbols);
-    halt("needs_human", what + ": " + conf.map((f) => f.criterion + ": " + f.finding).join("; "));
-  }
+  if (conf.length) return planFindingsStop(ctx, planPath, "criteria hold an invisible or confusable character", conf, plan.changed_symbols, plan);
   // 2.1.6 (ledger 1955): every occurrence of each changed symbol is mapped,
   // and a word-boundary grep finds no occurrence the map leaves out
   if (!Array.isArray(plan.changed_symbols))
     halt("needs_human", "role scope-and-plan contract drift: changed_symbols must be an array", "contract");
   const cs = changedSymbolFindings(stripHeldOut(plan.changed_symbols), criteria);
-  if (cs.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols caller map refused", cs.findings, plan.changed_symbols);
-  // the :audit-fix round keeps every symbol the refused round mapped or a
-  // finding named (2.1.6 review): dropping or swapping one stops the run
-  const prior = ctx.priorRound || null;
+  if (cs.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols caller map refused", cs.findings, plan.changed_symbols, plan);
+  // a re-plan round keeps every symbol any earlier round mapped or a finding
+  // named (2.1.6 review): dropping or swapping one stops the run
   if (prior) {
     const now = cs.clean.map((x) => x.symbol);
     const dropped = prior.symbols.filter((x) => now.indexOf(x) < 0);
@@ -6104,19 +7774,33 @@ async function planAndAudit(ctx) {
       );
   }
   let callerOcc = null;
+  let autoDontCare = null;
+  let symbolMap = cs.clean;
   if (cs.clean.length) {
     const cc = await callerCheck("infra:callers" + sfx, cs.clean, ctx.common.worktree, planPath);
-    if (cc.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols);
+    if (cc.findings.length) return planFindingsStop(ctx, planPath, "changed_symbols misses or misplaces occurrences", cc.findings, plan.changed_symbols, plan);
     callerOcc = cc.occurrences;
-    gate("callers: " + cs.clean.map((s) => s.symbol + " " + s.occurrences.length).join(", ") + " occurrence(s) mapped; git grep -w agrees");
+    autoDontCare = cc.auto;
+    // 4.0.0 (1989): the unmapped doc and lock hits join the sealed map as dont_care
+    symbolMap = cs.clean.map((s) => {
+      const have = s.occurrences.map((o) => occurrenceKey(o.at));
+      const add = cc.auto[s.symbol].filter((h) => have.indexOf(h) < 0).map((h) => ({ at: h, criterion: null, dont_care: AUTO_DONT_CARE }));
+      return add.length ? { symbol: s.symbol, occurrences: s.occurrences.concat(add) } : s;
+    });
+    const nAuto = symbolMap.reduce((a, s, i) => a + s.occurrences.length - cs.clean[i].occurrences.length, 0);
+    gate("callers: " + cs.clean.map((s) => s.symbol + " " + s.occurrences.length).join(", ") + " occurrence(s) mapped; git grep -w agrees" + (nAuto ? "; " + nAuto + " doc or lock hit(s) mapped " + JSON.stringify(AUTO_DONT_CARE) : ""));
   }
   const planFacts = {
     allowed_additions: plan.allowed_additions ? stripHeldOut(plan.allowed_additions) : null,
     est_diff_lines: typeof plan.est_diff_lines === "number" ? plan.est_diff_lines : null,
+    // 4.0.0 (1991): sealed so a build-mode :rerun of the auto gates sees the
+    // values the plan run judged
+    change_kind: CHANGE_KINDS.indexOf(plan.change_kind) >= 0 ? plan.change_kind : null,
+    new_behaviour: typeof plan.new_behaviour === "boolean" ? plan.new_behaviour : null,
     test_cmd: stripHeldOut(plan.test_cmd),
     repo_obligations: stripHeldOut(obligations),
-    commands: commandsOf(plan.test_cmd, obligations),
-    changed_symbols: cs.clean,
+    commands: commandsOf(plan.test_cmd, obligations, criteria),
+    changed_symbols: symbolMap,
     // 3.1.0: origin's configured URL at plan time, before any role ran; the
     // IaC push gate's network reads use it, never the repo config
     remote_url: validRemoteUrl(ctx.remoteUrl) ? ctx.remoteUrl : null,
@@ -6129,19 +7813,17 @@ async function planAndAudit(ctx) {
     gate("planner emitted held_out_examples: dropped, never returned or forwarded");
   gate("plan: " + planPath + ", " + criteria.length + " criteria, test files disjoint");
 
-  // risk tier: computed and logged; the short path is disabled because no
-  // role prompt supports a coder without frozen criterion tests
-  const wouldBeShort =
-    typeof plan.est_diff_lines === "number" && plan.est_diff_lines < SHORT_PATH_MAX_DIFF && plan.new_behaviour === false;
-  state.path = "full";
+  // risk tier: computed and logged. 4.0.0 (1991): isShortPath decides it from
+  // the sealed plan facts; the build re-decides it from the sealed ref
+  const wouldBeShort = isShortPath(planFacts);
+  state.path = wouldBeShort ? "short" : "full";
   gate(
     "risk tier (short = est_diff_lines < 20 AND new_behaviour false): est_diff_lines=" +
       plan.est_diff_lines +
       ", new_behaviour=" +
       plan.new_behaviour +
       " -> " +
-      (wouldBeShort ? "short" : "full") +
-      "; short path disabled -> full path",
+      (wouldBeShort ? "short (one test writer for every criterion, at most " + MAX_SHORT_TEST_ROUNDS + " test rounds; every gate runs)" : "full"),
   );
 
   // Max's rule (3.1.0): a plan that touches the hook surface stops here
@@ -6171,21 +7853,23 @@ async function planAndAudit(ctx) {
         plan_diff: plan.plan_diff.slice(),
         base_ref: ctx.baseRef,
         mode: "writeback=false",
-        caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc },
-        // the refused round before this :audit-fix round, or null
-        prior_round: prior ? { reason: prior.reason, findings: prior.findings, changed_symbols: prior.changed_symbols } : null,
-      }),
+        caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc, auto_dont_care: autoDontCare },
+        // every refused round before this one (4.0.0: accumulated), or null
+        prior_round: priorRoundView(prior),
+      }, dbInputs("audit")),
       "Plan",
     ),
   );
-  // confirm auto: one re-plan round with the audit findings, then stop
-  if (ctx.auditRetry && (audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria"))
-    return replanWithFindings(ctx, planPath, "plan-audit verdict " + audit.verdict, audit.routed_findings || [], audit.reason || audit.verdict, plan.changed_symbols);
+  // 4.0.0 (1983): a re-plan round with the audit findings while rounds are left
+  const refusal = audit.verdict === "plan_defect" || audit.verdict === "untestable_criteria";
+  if (refusal && ctx.auditRound < ctx.maxRounds)
+    return replanWithFindings(ctx, planPath, "plan-audit verdict " + audit.verdict, audit.routed_findings || [], audit.reason || audit.verdict, plan.changed_symbols, plan);
   if (audit.verdict !== "approve") {
+    if (refusal) noteRound(ctx.auditRound, "plan-audit verdict " + audit.verdict, stripHeldOut(audit.routed_findings || []), roundSnapshot(plan), (prior && prior.symbols) || []);
     const first = (audit.routed_findings || []).slice(0, 3).map((f) => (f.criterion || "-") + ": " + f.finding);
     halt(
       audit.verdict ? "needs_human" : "failed",
-      "plan-audit verdict " + (audit.verdict || "missing") + (first.length ? ": " + first.join("; ") : ""),
+      "plan-audit verdict " + (audit.verdict || "missing") + (first.length ? ": " + first.join("; ") : "") + afterRounds(ctx),
       "role",
     );
   }
@@ -6206,12 +7890,27 @@ async function planAndAudit(ctx) {
       est_agents: typeof est.agents === "number" ? est.agents : null,
       est_rounds: typeof est.rounds === "number" ? est.rounds : null,
     },
+    // 4.0.0 (1983): how a re-plan round relaxed round 0 (empty: none)
+    relaxed: ctx.relaxed || [],
   };
+}
+
+// 4.0.0 (1991): the short path (one test writer for every criterion, at most
+// MAX_SHORT_TEST_ROUNDS test rounds; every gate still runs) applies when the
+// sealed plan facts say est_diff_lines < 20 and new_behaviour false.
+const MAX_SHORT_TEST_ROUNDS = 2;
+const SHORT_WRITER_NOTE =
+  "Short path (4.0.0): you are the ONE test writer for every criterion in `criteria`; each criterion lists its own test_files. Write each criterion's tests only in its own test files. Start every tests[].covers with the criterion id and a colon, e.g. \"AC1: <what it covers>\": the workflow splits your tests per criterion by that prefix and stops the run on any other prefix. Return criterion_id \"short\" and every file you wrote in files.";
+function isShortPath(pf) {
+  return !!pf && typeof pf.est_diff_lines === "number" && pf.est_diff_lines < SHORT_PATH_MAX_DIFF && pf.new_behaviour === false;
 }
 
 // Stage the plan, seal the full ref with the staged plan hash, commit the
 // plan doc alone in ONE local commit, then write the sealed ref as a tag
 // object at refs/fleet/<task id>/plan (never a file, never pushed).
+// 4.0.0 (1993): the commit step writes the ref from checked base64 chunks and
+// is never retried; a separate read-only step verifies the commit and the ref,
+// and only that step retries, once, when a relay or a digest is wrong.
 // ctx.after: agents this run still dispatches after the ref is sealed
 // (counted into its history). ctx.onRefs: called with the plan refs the
 // step wrote (the build's frozen snapshot follows the script's own write).
@@ -6219,46 +7918,106 @@ async function commitPlanAndRef(ctx) {
   const sfx = ctx.suffix || "";
   const refName = planRefName(ctx.fields.taskId);
   const base = { worktree: ctx.worktree, branch: ctx.branch, plan_path: ctx.fields.planPath };
-  const st = await infra("infra:stage-plan" + sfx, stagePlanPrompt(base), ctx.phaseName);
-  if (typeof st.plan_sha256 !== "string" || !SHA256_RE.test(st.plan_sha256))
-    halt("failed", "infra:stage-plan" + sfx + " returned no usable plan_sha256");
-  // + 1: the PATH re-check before the commit (3.1.1)
-  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 1 });
-  const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: st.plan_sha256, history }));
+  const stLabel = "infra:stage-plan" + sfx;
+  const st = await infra(stLabel, stagePlanPrompt(base), ctx.phaseName);
+  requireProgram(st.plan_hash, "plan_hash", stLabel);
+  const stagedSha = st.plan_hash.plan_sha256;
+  if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("failed", stLabel + " returned no usable plan_sha256");
+  // + 2: the PATH re-check before the commit (3.1.1) and the verify step (4.0.0)
+  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2 });
+  const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: stagedSha, history }));
+  const msgSha = sha256Hex(refMessage(full));
   const label = "infra:commit-plan" + sfx;
   await pathRecheck("commit-plan" + sfx, ctx.phaseName);
+  const chunkDir = scratchOf(ctx.worktree) + "/plan-ref-" + safeName(state.nonce + sfx);
   const r = await infra(
     label,
-    commitPlanPrompt(Object.assign({}, base, { task_id: full.task_id, slug: full.slug, reuse_head: ctx.reuseHead || null }), JSON.stringify(full)),
+    commitPlanPrompt(Object.assign({}, base, { task_id: full.task_id, slug: full.slug, reuse_head: ctx.reuseHead || null, chunk_dir: chunkDir }, ctx.retire ? { retire: ctx.retire } : {}), refMessage(full)),
     ctx.phaseName,
   );
-  if (typeof r.head !== "string" || !SHA_RE.test(r.head)) halt("failed", label + " returned no usable head sha: " + JSON.stringify(r.head));
-  // head and files come from a program (3.1.0, ledger 1959), not from a copy of git's output
-  if (!Array.isArray(r.files) || !relayDigestOk(r, ["head", "files", "args"]))
-    halt("failed", label + ": the relayed head and files do not match the program's digest (a path was dropped or changed in the copy)");
-  if (canonical(r.args) !== canonical([ctx.worktree]))
-    halt("failed", label + ": the program ran on other arguments (" + JSON.stringify(r.args === undefined ? null : r.args) + ")");
+  // the ref write comes from the shipped program (head and tag object, digest-checked)
+  requireProgram(r, "plan_ref_write", label, "failed", "commit");
+  if (typeof r.head !== "string" || !SHA_RE.test(r.head) || typeof r.tag_sha !== "string" || !SHA_RE.test(r.tag_sha) || !relayDigestOk(r, ["head", "tag_sha"], "plan_ref_write"))
+    halt("failed", label + ": the relayed head and tag object do not match the program's digest (" + JSON.stringify(r.head === undefined ? null : r.head) + ")", "commit");
   // identical re-plan: an unchanged plan doc on a plan-only HEAD reuses that commit
   if (r.reused === true) {
     if (!ctx.reuseHead) halt("failed", label + " claimed a reuse of HEAD, but no plan-only HEAD was offered for reuse");
     if (r.head !== ctx.reuseHead) halt("failed", label + " claimed a reuse, but HEAD " + r.head + " is not the offered reuse head " + ctx.reuseHead);
     gate("reused plan commit " + r.head + ": the plan doc is unchanged; no new commit");
   }
-  if (r.plan_sha256 !== st.plan_sha256)
-    halt("failed", label + ": the committed plan hashes " + r.plan_sha256 + ", the staged plan " + st.plan_sha256);
-  const files = Array.isArray(r.files) ? Array.from(new Set(r.files.map((f) => normPath(String(f))))) : null;
-  if (!files || files.length !== 1 || files[0] !== normPath(full.plan_path))
-    halt("needs_human", label + ": the plan commit holds " + JSON.stringify(r.files || null) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
-  // the script wrote these bytes itself: it hashes them, the step relays no content
-  const e = Array.isArray(r.refs) ? r.refs.find((x) => x && x.name === refName) : null;
-  const ep = planRefMetaProblem(e, r.head, sha256Hex(refMessage(full)));
-  if (ep) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref (" + ep + ")");
-  if (ctx.onRefs) ctx.onRefs(r.refs);
-  gate("plan committed locally at " + r.head + " (" + full.plan_path + " sha256 " + full.plan_sha256 + "); sealed ref at " + refName + " (sha256 " + e.sha256 + "); not pushed");
-  return {
-    full,
-    tiny: { branch: full.branch, plan_commit: r.head, plan_ref: refName, ref_sha256: e.sha256, repo: full.brief.repo },
+  const tiny = { branch: full.branch, plan_commit: r.head, plan_ref: refName, ref_sha256: msgSha, repo: full.brief.repo };
+  const v = await verifyPlanCommit(ctx, sfx, r, full, stagedSha, msgSha, tiny);
+  if (ctx.onRefs) ctx.onRefs(v.plan_ref.refs);
+  gate("plan committed locally at " + r.head + " (" + full.plan_path + " sha256 " + full.plan_sha256 + "); sealed ref at " + refName + " (sha256 " + msgSha + "); not pushed");
+  return { full, tiny };
+}
+
+// The read-only check of the plan commit and its ref. A relay problem (a
+// program that is not the shipped one, a digest, an argument or a shape that
+// does not match) is asked once more; two -> stop_gate commit, with the plan
+// ref returned as unverified. A wrong fact (other files, another plan hash,
+// another ref) stops at once.
+async function verifyPlanCommit(ctx, sfx, w, full, stagedSha, msgSha, tiny) {
+  const label = "infra:verify-plan-commit" + sfx;
+  const refName = tiny.plan_ref;
+  const relayProblem = (v) => {
+    if (!v || v.status !== "ok") return "returned " + (v ? v.status : "nothing") + ": " + ((v && v.reason) || "no reason");
+    const pf = v.plan_files;
+    const ph = v.plan_hash;
+    const pr = v.plan_ref;
+    for (const [o, n] of [[pf, "plan_files"], [ph, "plan_hash"], [pr, "plan_ref"]]) {
+      const pp = programProblem(o, n);
+      if (pp) return pp;
+    }
+    if (typeof pf.head !== "string" || !SHA_RE.test(pf.head) || !Array.isArray(pf.files) || !relayDigestOk(pf, ["head", "files", "args", "dsn_paths"], "plan_files"))
+      return "the relayed head and files do not match the program's digest (a path was dropped or changed in the copy)";
+    if (!Array.isArray(pf.dsn_paths)) return "no dsn_paths list in the plan_files output";
+    if (canonical(pf.args) !== canonical([ctx.worktree])) return "the program ran on other arguments (" + JSON.stringify(pf.args === undefined ? null : pf.args) + ")";
+    if (typeof ph.plan_sha256 !== "string" || !SHA256_RE.test(ph.plan_sha256)) return "no usable plan_sha256";
+    if (!Array.isArray(pr.refs)) return "no plan ref list";
+    return null;
   };
+  const inputs = { worktree: ctx.worktree, plan_path: full.plan_path, task_id: full.task_id };
+  let v = null;
+  let problem = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    v = await dispatch(label, verifyPlanCommitPrompt(inputs), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: ctx.phaseName });
+    problem = relayProblem(v);
+    if (!problem) {
+      if (attempt) gate("verify-plan-commit: retried once (" + label + ")");
+      break;
+    }
+    gate(label + ": " + problem + (attempt ? "" : "; asking once more"));
+  }
+  if (problem) {
+    // only this stop returns the plan_ref, marked unverified; a wrong fact below returns none
+    state.unverifiedPlanRef = tiny;
+    halt("failed", label + ": " + problem + "; the plan commit " + w.head + " and ref " + refName + " stay unverified (build mode re-verifies them at load-ref)", "commit");
+  }
+  const pf = v.plan_files;
+  if (pf.head !== w.head) halt("failed", label + ": HEAD is " + pf.head + ", not the head " + w.head + " the ref was written on", "commit");
+  if (v.plan_hash.plan_sha256 !== stagedSha)
+    halt("failed", label + ": the committed plan hashes " + v.plan_hash.plan_sha256 + ", the staged plan " + stagedSha);
+  const files = Array.from(new Set(pf.files.map((f) => normPath(String(f)))));
+  if (files.length !== 1 || files[0] !== normPath(full.plan_path))
+    halt("needs_human", label + ": the plan commit holds " + JSON.stringify(pf.files) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
+  // 4.0.0 review: a test DSN never reaches a commit (a wrong fact: no plan_ref returned)
+  if (pf.dsn_paths.length)
+    halt("needs_human", label + ": the committed plan " + JSON.stringify(pf.dsn_paths) + " holds mysql:// (a test DSN); reset the fleet branch past the plan commit " + pf.head + " before re-running plan (a later plan run does not re-check earlier plan commits, and the build pushes them)", "db");
+  // the script wrote these bytes itself: it hashes them, the step relays no content
+  const e = v.plan_ref.refs.find((x) => x && x.name === refName);
+  const ep = planRefMetaProblem(e, w.head, msgSha) || (e.tag_sha !== w.tag_sha ? "tag object " + e.tag_sha + " is not the one written (" + w.tag_sha + ")" : null);
+  if (ep) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref (" + ep + ")");
+  return v;
+}
+
+// 4.0.0 (1993): the run's scratch dir, a sibling of its worktrees
+function scratchOf(worktree) {
+  return String(worktree).replace(/\/+[^/]+\/*$/, "") + "/scratch";
+}
+
+function safeName(s) {
+  return String(s).replace(/[^A-Za-z0-9_.-]/g, "-");
 }
 
 // The full ref, sealed. It has no plan_commit: it is committed in that commit.
@@ -6274,10 +8033,33 @@ function makePlanRef(f) {
     tldr: f.tldr,
     plan_diff: f.planDiff,
     plan_facts: f.planFacts,
+    // 4.0.0: history.preflight (optional, see preflightRecordProblem) rides
+    // in history; S3 fills it in plan mode and reads it in build mode
     history: f.history,
+    // 4.0.0 (1992): the ledger scope of the plan run (args.project), or null
+    project: typeof f.project === "string" && f.project ? f.project : null,
   });
   ref.seal = sealOf(ref);
   return ref;
+}
+
+// 4.0.0: the preflight record a plan run may seal in history.preflight:
+// {fleet_version, versions, dispatch, contract}, each map keyed by role. The
+// field is optional (absent or null in older refs and when not recorded).
+function preflightRecordProblem(p) {
+  if (p === undefined || p === null) return null;
+  if (typeof p !== "object" || Array.isArray(p)) return "history.preflight is not an object";
+  if (typeof p.fleet_version !== "string" || !p.fleet_version) return "history.preflight.fleet_version missing";
+  for (const k of ["versions", "dispatch", "contract"])
+    if (!p[k] || typeof p[k] !== "object" || Array.isArray(p[k])) return "history.preflight." + k + " is not an object";
+  return null;
+}
+
+// 4.0.0 (1990): the history counts the caller sees (not the sealed role table)
+function countsOf(h) {
+  const o = Object.assign({}, h);
+  delete o.preflight;
+  return o;
 }
 
 function awaiting(reason, p, tiny, full, extra) {
@@ -6289,7 +8071,7 @@ function awaiting(reason, p, tiny, full, extra) {
       plan_path: p.planPath,
       commands: p.planFacts.commands,
       plan_ref: tiny,
-      cumulative: full.history,
+      cumulative: countsOf(full.history),
     }, extra || {}),
   );
 }
@@ -6341,6 +8123,11 @@ function isIacPath(p) {
   return new RegExp("^" + "dig" + "ger\\.ya?ml$").test(b);
 }
 
+// 4.0.0: repo files only the fleet's own config may hold (exact repo paths,
+// compared case-insensitively); a change to one is fenced in every mode.
+// Stream S5 adds the throwaway-DB declaration here.
+const FENCED_FILES = [".fleet-test-db.json"];
+
 // G3: why a planned path is outside the scope fence (null when inside).
 function fencePathProblem(p) {
   const q = normPath(p);
@@ -6348,6 +8135,7 @@ function fencePathProblem(p) {
   const dirs = segs.slice(0, -1).map((x) => x.toLowerCase());
   const base = segs[segs.length - 1].toLowerCase();
   if (dirs.indexOf(".fleet") >= 0) return "fleet internal path (.fleet/)";
+  if (FENCED_FILES.some((f) => f.toLowerCase() === q.toLowerCase())) return "fleet-fenced file " + q;
   // (ADR-1172: IaC, Kubernetes and Helm files are fleet work like any other
   // code; IaC diffs never push automatically: the IaC push gate stops them)
   // provider plugin dirs (a local .terraform/ or terraform.d/) never belong in a change
@@ -6432,6 +8220,15 @@ function intentProblems(r) {
   }
   if (!r.coverage || r.coverage.covered !== true)
     out.push("coverage incomplete: " + ((r.coverage && (r.coverage.missing || []).join("; ")) || "covered is not true"));
+  // 4.0.0 (1991): the judge's check of the planner's change_kind and
+  // new_behaviour, in every confirm mode
+  const cl = r.classification;
+  if (!cl || typeof cl !== "object" || Array.isArray(cl)) out.push("no classification of change_kind and new_behaviour");
+  else {
+    for (const k of ["change_kind", "new_behaviour"])
+      if (cl[k] !== "approve") out.push("classification " + k + " " + JSON.stringify(cl[k] === undefined ? null : cl[k]) + " (needs approve)");
+    if (typeof cl.quote !== "string" || !cl.quote.trim()) out.push("classification quote is empty (needs a verbatim quote from the task)");
+  }
   return out;
 }
 
@@ -6475,6 +8272,9 @@ async function autoGates(ctx) {
       repo_obligations: ctx.planFacts.repo_obligations,
       commands: ctx.planFacts.commands,
       changed_symbols: ctx.planFacts.changed_symbols,
+      // 4.0.0 (1991): the planner's claims, checked by the judge (null in an older ref)
+      change_kind: ctx.planFacts.change_kind === undefined ? null : ctx.planFacts.change_kind,
+      new_behaviour: ctx.planFacts.new_behaviour === undefined ? null : ctx.planFacts.new_behaviour,
     }),
     ctx.mainWt,
     "Auto-confirm",
@@ -6489,6 +8289,7 @@ async function autoGates(ctx) {
     reason: r.reason || null,
     deviations: Array.isArray(r.deviations) ? r.deviations : [],
     coverage: r.coverage || null,
+    classification: r.classification && typeof r.classification === "object" ? r.classification : null,
   });
   const fail = (failedCheck, reasons) => {
     gate("auto-confirm: " + failedCheck + " check failed: " + reasons.join("; "));
@@ -6506,6 +8307,12 @@ async function autoGates(ctx) {
       "Auto-confirm",
       JUDGE_AGENT,
     );
+    requireProgram(cfg, "precommit_ids", "infra:precommit-ids" + sfx);
+    // 4.0.0 review: the ids feed G2, so the relay is digest-checked (fail closed)
+    if (!relayDigestOk(cfg, ["present", "ids", "parser", "error", "args"], "precommit_ids"))
+      halt("failed", "infra:precommit-ids" + sfx + ": the relayed hook ids do not match the program's digest", "contract");
+    if (canonical(cfg.args) !== canonical([ctx.mainWt, ctx.planCommit]))
+      halt("failed", "infra:precommit-ids" + sfx + ": the program ran on other arguments (" + JSON.stringify(cfg.args === undefined ? null : cfg.args) + ")", "contract");
     const g2 = hookIdProblems(shape.hookIds, cfg);
     if (g2.length) return fail("commands", g2);
   }
@@ -6535,6 +8342,21 @@ function autoFailResult(g, planPath, tiny) {
 }
 
 // ---------------------------------------------------------------- plan mode
+
+// 4.0.0 (1991, ADR-1186): why confirm "default" must ask Max for this plan
+// (empty: the auto gates run). change_kind and new_behaviour are planner
+// claims from untrusted task text, not a boundary: they only narrow which runs
+// skip the human yes; G1-G3, the IaC push stop and the hook gate still hold.
+function defaultBlockers(p, input, raw) {
+  const pf = p.planFacts;
+  const out = [];
+  if (pf.change_kind !== "bug_fix") out.push("change_kind " + pf.change_kind + " (only bug_fix skips the confirmation)");
+  if (pf.new_behaviour !== false) out.push("new_behaviour " + pf.new_behaviour + " (only false skips the confirmation)");
+  for (const x of Array.from(new Set(planScopePaths(pf, p.criteria).map((q) => normPath(String(q)))))) if (isIacPath(x)) out.push("plan touches IaC path " + x);
+  if (p.relaxed.length) out.push("re-plan relaxed: " + p.relaxed.join("; "));
+  if (ledgerFor(input.project) === "either" && TASK_ID_INPUT_RE.test(raw)) out.push("task id " + JSON.stringify(raw) + " with no args.project");
+  return out;
+}
 
 async function planMode(input, date) {
   const raw = typeof input.input === "string" ? input.input.trim() : "";
@@ -6570,6 +8392,7 @@ async function planMode(input, date) {
   );
 
   const ws = await workspaceStep(brief.repo, lay);
+  await pushProbe(lay, ws);
   const project = input.project || ws.remoteSlug;
   const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
 
@@ -6581,7 +8404,8 @@ async function planMode(input, date) {
     JUDGE_AGENT,
   );
   if (!Array.isArray(scan.commits) || !Array.isArray(scan.refs)) halt("failed", "infra:branch-scan returned no commit or plan-ref list");
-  if (!relayDigestOk(scan, ["commits", "refs"]))
+  requireProgram(scan, "branch_scan", "infra:branch-scan");
+  if (!relayDigestOk(scan, ["commits", "refs", "plan_tip_time"], "branch_scan"))
     halt("failed", "infra:branch-scan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
   const built = buildCommitsOf(scan.commits, names.taskId, scan.refs);
   if (built.length)
@@ -6592,6 +8416,13 @@ async function planMode(input, date) {
   if (scan.commits.length) gate("branch-scan: " + scan.commits.length + " earlier plan commit(s); re-planning on top");
   // newest first: HEAD, a plan-only commit of this task (no build commit is there)
   const reuseHead = scan.commits.length ? String(scan.commits[0].sha) : null;
+  // 4.0.0 (1986): the draft and findings of a stopped run newer than the last
+  // plan commit, as planner-only inputs; the tip time is the scan program's
+  const tip = scan.plan_tip_time === null || scan.plan_tip_time === undefined ? null : scan.plan_tip_time;
+  const parked = await loadParked(lay.scratch, Number.isInteger(tip) && tip >= 0 ? tip : null);
+  const parkedBad = !!(parked && parked.unreadable);
+  // 4.0.0 (1981): the throwaway test database, up through plan-audit
+  await testDbStep(scan.test_db, "infra:branch-scan", lay.mainWt, ws.defaultBranch, "Workspace", ["plan", "audit"], names.taskId);
 
   phase("Plan");
   // a stop between the planner and the plan commit parks the draft (2.1.4: the
@@ -6600,9 +8431,17 @@ async function planMode(input, date) {
   const parkOnStop = async (e) => {
     if (!draft) throw e;
     const dest = lay.scratch + "/parked/" + state.nonce + "/" + draft;
+    // 4.0.0 (1986): the refused rounds go with the draft, for the next run's planner
+    const ls = state.lastPlanStop || { rounds: [], symbols: [] };
+    const findings = {
+      scratch: lay.scratch,
+      run: state.nonce,
+      chunk_dir: lay.scratch + "/park-chunks-" + safeName(state.nonce),
+      c: chunked(JSON.stringify(stripHeldOut({ reason: e instanceof Stop ? e.reason : "stopped", rounds: ls.rounds, symbols: ls.symbols, plan_path: draft }))),
+    };
     let pk = null;
     try {
-      pk = await softDispatch("infra:park-plan", parkPlanPrompt({ worktree: lay.mainWt, plan_path: draft, dest }), {
+      pk = await softDispatch("infra:park-plan", parkPlanPrompt({ worktree: lay.mainWt, plan_path: draft, dest }, findings), {
         schema: INFRA_SCHEMA,
         phase: "Plan",
       });
@@ -6624,17 +8463,29 @@ async function planMode(input, date) {
     gate("park-plan" + note);
     throw new Stop(e.status, e.reason + note);
   };
-  const auto = input.confirm === "auto";
-  let p, pc;
+  const confirm = input.confirm === undefined ? "ask" : input.confirm;
+  const auto = confirm === "auto";
+  let p, pc, blockers, runGates;
   try {
-    p = await planAndAudit({ common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, remoteUrl: ws.remoteUrl, onPlanPath: (x) => (draft = x), auditRetry: auto });
+    p = await planAndAudit({
+      common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, remoteUrl: ws.remoteUrl, onPlanPath: (x) => (draft = x),
+      priorDraft: parked ? parked.priorDraft : null,
+      priorRound: parked ? parked.priorRound : null,
+    });
+    // 4.0.0 (1991): decided before the seal (the gate agents count into it)
+    blockers = confirm === "default" ? defaultBlockers(p, input, raw) : [];
+    // 4.0.0 review: a parked prior the read could not use fails closed
+    if (parkedBad && confirm === "default") blockers.push(PARKED_UNREADABLE);
+    runGates = auto ? !p.relaxed.length && !parkedBad : confirm === "default" && !blockers.length;
     pc = await commitPlanAndRef({
       worktree: lay.mainWt,
       branch: lay.branch,
       phaseName: "Plan",
-      // the commit-plan step itself, and with confirm auto the gate agents
-      after: 1 + (auto ? autoGateAgents(p.planFacts.commands) : 0),
+      // the commit-plan step itself, and when the auto gates run their agents
+      after: 1 + (runGates ? autoGateAgents(p.planFacts.commands) : 0),
       reuseHead,
+      // 4.0.0 (1986): the used parked folder moves to parked/used/ after the commit
+      retire: parked && parked.run ? { dir: lay.scratch + "/parked/" + parked.run, used: lay.scratch + "/parked/used" } : null,
       fields: {
         branch: lay.branch,
         planPath: p.planPath,
@@ -6645,16 +8496,33 @@ async function planMode(input, date) {
         tldr: p.tldr,
         planDiff: p.planDiff,
         planFacts: p.planFacts,
-        history: { runs: 1, replans: 0, agents: 0 },
+        // 4.0.0 (1990): the role table this run loaded, for the build
+        history: { runs: 1, replans: 0, agents: 0, preflight: state.preflightRecord },
+        project: input.project || null,
       },
     });
   } catch (e) {
     await parkOnStop(e);
   }
   const ls = ledgerSourceOf(brief, input.project);
-  if (!auto) return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, { ledger_source: ls });
+  // 4.0.0 (1983): a relaxed re-plan never reaches the auto gates; under an
+  // explicit "auto" it stops for Max (the plan stays committed for a ruling)
+  if (auto && p.relaxed.length)
+    return autoFailResult({ failedCheck: "intent", reasons: ["re-plan relaxed: " + p.relaxed.join("; ")], intent: null }, p.planPath, pc.tiny);
+  // 4.0.0 review: so does a parked prior the read could not use (fail closed)
+  if (auto && parkedBad)
+    return autoFailResult({ failedCheck: "intent", reasons: [PARKED_UNREADABLE + ": " + parked.unreadable], intent: null }, p.planPath, pc.tiny);
+  if (!runGates) {
+    const extra = { ledger_source: ls };
+    if (confirm === "default") {
+      extra.confirm_reason = blockers.join("; ");
+      gate("confirm default: asking Max (" + extra.confirm_reason + ")");
+    }
+    return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, extra);
+  }
+  if (confirm === "default") gate("confirm default: eligible (bug_fix, new_behaviour false, no IaC path, no relaxed re-plan, no unreadable parked prior); running the auto gates");
 
-  // confirm "auto": G1-G3 instead of the question; never ask
+  // confirm "auto", or an eligible "default": G1-G3 instead of the question; never ask
   phase("Auto-confirm");
   const g = await autoGates({
     sfx: "",
@@ -6703,6 +8571,10 @@ function planRefProblem(r) {
   if (b) return b;
   if (r.branch !== "fleet/" + r.task_id + "-" + r.slug) return "branch does not match task_id and slug";
   if (!r.history || typeof r.history !== "object") return "history missing";
+  const pre = preflightRecordProblem(r.history.preflight);
+  if (pre) return pre;
+  // 4.0.0 (1992): absent in a ref sealed before 4.0.0
+  if ("project" in r && r.project !== null && (typeof r.project !== "string" || !r.project)) return "project is not a non-empty string or null";
   return null;
 }
 
@@ -6744,8 +8616,9 @@ async function buildMode(input, date) {
   const lay = layoutKey(tiny.branch.slice("fleet/".length), repo);
   state.branch = lay.branch;
 
-  await preflightStep(repo);
-  const ws = await workspaceStep(repo, lay);
+  // 4.0.0 (1990): the role pages come from the plan ref unless fresh_preflight
+  await preflightStep(repo, input.fresh_preflight !== true);
+  const ws = await workspaceStep(repo, lay, { frozenResume: typeof input.freeze_digest === "string" });
   return buildFromRef(input, date, tiny, lay, ws, { rerunGates: input.confirm === "auto", intent: null, agentsBase: 0 });
 }
 
@@ -6791,6 +8664,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const load = (label) =>
     infra(label, loadRefPrompt({ main_worktree: lay.mainWt, task_id: refTask, plan_ref: tiny.plan_ref, mode: mem ? "meta" : "chunks" }), "Verify", JUDGE_AGENT);
   let ld = await load("infra:load-ref");
+  requireProgram(ld, "plan_ref", "infra:load-ref");
   const entryOf = (r) => (Array.isArray(r.refs) ? r.refs.find((x) => x && x.name === tiny.plan_ref) : null);
   const joined = (r) => (Array.isArray(r.chunks) && r.chunks.length && r.chunks.every((c) => typeof c === "string") ? r.chunks.join("") : null);
   let entry = entryOf(ld);
@@ -6800,6 +8674,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   if (!mem && content !== null && sha256Hex(content) !== tiny.ref_sha256) {
     gate("infra:load-ref: the copied chunks do not match ref_sha256; reading once more");
     ld = await load("infra:load-ref:retry");
+    requireProgram(ld, "plan_ref", "infra:load-ref:retry");
     entry = entryOf(ld);
     const ep2 = planRefMetaProblem(entry, tiny.plan_commit, tiny.ref_sha256);
     if (ep2) changed(ep2);
@@ -6816,6 +8691,19 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   if (lp) changed(lp);
   if (loaded.branch !== tiny.branch || cleanRepo(loaded.brief.repo) !== repo || planRefName(loaded.task_id) !== tiny.plan_ref)
     changed("does not match plan_ref (branch, repo or task id)");
+  // 4.0.0 (1990): before any role runs
+  if (!state.rolesLoaded) await rolesFromRef(loaded.history.preflight);
+  // 4.0.0 (1992): the ledger scope sealed at plan time. A build without
+  // args.project uses it; a different args.project stops. A ref sealed
+  // before 4.0.0 (or by a plan run without project) has none: args.project
+  // alone, as in 3.1.3.
+  const sealedProject = typeof loaded.project === "string" ? loaded.project : null;
+  if (sealedProject && input.project && input.project !== sealedProject)
+    halt("needs_human", "project mismatch: args.project " + JSON.stringify(input.project) + " but plan ref " + tiny.plan_ref + " sealed " + JSON.stringify(sealedProject) + "; build with the plan's project, or re-run plan");
+  if (sealedProject && !input.project) {
+    input = Object.assign({}, input, { project: sealedProject });
+    gate("project " + sealedProject + " from the sealed plan ref");
+  }
   const pf = loaded.plan_facts;
   if (!pf || typeof pf !== "object" || !("test_cmd" in pf) || !("repo_obligations" in pf) || !Array.isArray(pf.commands))
     halt("needs_human", "plan_ref predates 2.0.3; re-run plan (" + tiny.plan_ref + " has no plan_facts.test_cmd/repo_obligations/commands)");
@@ -6854,10 +8742,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const branch = lay.branch;
 
   // verify the approved plan
-  const criteria = normCriteria(ref.criteria);
+  const criteria = normCriteria(ref.criteria, pf.test_cmd);
   const v = await infra(
     "infra:verify-plan",
-    verifyPlanPrompt({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_path: ref.plan_path }),
+    verifyPlanPrompt(Object.assign({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_path: ref.plan_path, default_branch: defaultBranch }, typeof input.freeze_digest === "string" ? { frozen_resume: true } : {})),
     "Verify",
     JUDGE_AGENT,
   );
@@ -6866,7 +8754,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // present, and all of them equal to what the program printed
   if (typeof v.is_ancestor !== "boolean" || !Array.isArray(v.commits_since) || !Array.isArray(v.plan_touched) || !Array.isArray(v.changed_since))
     halt("failed", "infra:verify-plan: the relayed result has no is_ancestor, commits_since, plan_touched or changed_since list");
-  if (!relayDigestOk(v, VERIFY_SINCE_KEYS))
+  requireProgram(v, "verify_since", "infra:verify-plan");
+  requireProgram(v.plan_hash, "plan_hash", "infra:verify-plan (plan_hash)");
+  requireProgram(v.plan_hash_head, "plan_hash", "infra:verify-plan (plan_hash_head)");
+  v.plan_sha256 = v.plan_hash.plan_sha256;
+  v.plan_sha256_head = v.plan_hash_head.plan_sha256;
+  if (!relayDigestOk(v, VERIFY_SINCE_KEYS, "verify_since"))
     halt("failed", "infra:verify-plan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
   if (canonical(v.args) !== canonical([mainWt, ref.plan_commit, ref.plan_path]))
     halt("failed", "infra:verify-plan: the program ran on other arguments (" + JSON.stringify(v.args === undefined ? null : v.args) + ")");
@@ -6890,6 +8783,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const planFacts = {
     allowed_additions: ref.plan_facts.allowed_additions,
     est_diff_lines: typeof ref.plan_facts.est_diff_lines === "number" ? ref.plan_facts.est_diff_lines : null,
+    // 4.0.0 (1991): null in a ref sealed before 4.0.0
+    change_kind: CHANGE_KINDS.indexOf(pf.change_kind) >= 0 ? pf.change_kind : null,
+    new_behaviour: typeof pf.new_behaviour === "boolean" ? pf.new_behaviour : null,
     test_cmd: ref.plan_facts.test_cmd,
     repo_obligations: ref.plan_facts.repo_obligations,
     // the approved caller map (2.1.6); null in a ref sealed before 2.1.6
@@ -6899,8 +8795,16 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("plan ref sealed before 2.1.6: no changed_symbols; this build runs without caller coverage");
     gate("build caller check skipped: plan ref sealed before 2.1.6 (changed_symbols null)");
   }
-  state.path = "full";
+  // 4.0.0 (1991): the short path from the sealed plan facts: one test writer
+  // for every criterion, split per criterion by the covers prefix; at most
+  // MAX_SHORT_TEST_ROUNDS test rounds. Every gate still runs.
+  const shortPath = isShortPath(planFacts);
+  state.path = shortPath ? "short" : "full";
+  const maxTestRounds = shortPath ? MAX_SHORT_TEST_ROUNDS : MAX_TEST_ROUNDS;
   const testable = testableOf(criteria);
+  // 4.0.0 (1981): the throwaway test database, one database per consumer
+  const writerDbs = shortPath ? ["w_short"] : testable.map((c) => "w_" + c.id);
+  await testDbStep(v.test_db, "infra:verify-plan", mainWt, defaultBranch, "Verify", writerDbs.concat(["plan", "audit", "tjudge", "coder", "cjudge", "review", "hooks"]), names.taskId);
   const frozenFiles = [];
   for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
   // the plan ref is a git object: the hasher's refs/fleet/* snapshot freezes it
@@ -6913,7 +8817,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // committed fleet branch
   const stateRef = "refs/fleet/" + names.taskId + "/state";
   const rs = await infra("infra:read-state", readStatePrompt({ main_worktree: mainWt, state_ref: stateRef }), "Verify", JUDGE_AGENT);
-  if (!relayDigestOk(rs, ["exists", "target", "message", "head", "head_tree", "clean"]))
+  requireProgram(rs, "read_state", "infra:read-state", "needs_human", "resume");
+  if (!relayDigestOk(rs, ["exists", "target", "message", "head", "head_tree", "clean"], "read_state"))
     halt("needs_human", "run-state read did not complete: the relayed state does not match the program's digest (" + stateRef + ")", "resume");
   let resume = null;
   if (rs.exists === true) {
@@ -6944,6 +8849,35 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   } else if (v.head !== ref.plan_commit)
     halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
 
+  // 4.0.0 (1987): a frozen resume. The caller passes the freeze_digest a stop
+  // after the freeze returned; the script recomputes it from git (HEAD, the
+  // worktree tree, refs/fleet/<task>/freeze) and the hasher maps. Only an
+  // untouched freeze tree resumes, at the coder; anything else stops.
+  const freezeRefName = "refs/fleet/" + names.taskId + "/freeze";
+  let frozenResume = null;
+  if (typeof input.freeze_digest === "string" && resume) gate("freeze_digest not used: the run-state at " + resume.last_gate + " resumes this build");
+  else if (typeof input.freeze_digest === "string") {
+    const mis = (what) =>
+      halt(
+        "needs_human",
+        "frozen resume refused: " + what + " (" + freezeRefName + "); clean or stash the worktree by hand and build without freeze_digest, or re-plan",
+        "resume",
+      );
+    await purgeBytecode("infra:purge-bytecode:resume-frozen", mainWt, "Verify");
+    const hz = await hasher("hasher:resume-frozen", mainWt, hashedFiles, "Verify");
+    const refTree = hz.hashes.git[FLEETREF + freezeRefName];
+    if (hz.fingerprint.head !== ref.plan_commit) mis("HEAD " + hz.fingerprint.head + " is not plan_commit " + ref.plan_commit);
+    if (typeof refTree !== "string" || !refTree) mis("no freeze ref");
+    if (hz.fingerprint.tree !== refTree) mis("the worktree tree " + hz.fingerprint.tree + " is not the freeze tree " + refTree + " (changed since the freeze)");
+    if (hz.hashes.suspicious.length) mis("suspicious paths: " + hz.hashes.suspicious.join(", "));
+    if (freezeDigestOf(tiny.ref_sha256, hz.fingerprint.tree, hz.hashes, true) === input.freeze_digest)
+      mis("the freeze was re-frozen after fix_tests; a frozen resume would restart its round and re-freeze counts");
+    if (freezeDigestOf(tiny.ref_sha256, hz.fingerprint.tree, hz.hashes) !== input.freeze_digest)
+      mis("freeze_digest does not match the plan ref, the freeze tree and the frozen maps");
+    frozenResume = hz;
+    gate("frozen resume: worktree is the freeze tree " + refTree + " of " + freezeRefName + " and freeze_digest matches");
+  }
+
   // confirm "auto" in build mode: re-run G1-G3 against the current rulings
   // (a resumed build was approved already)
   let intent = resume ? resume.intent || null : opt.intent;
@@ -6951,6 +8885,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     phase("Auto-confirm");
     if (!Array.isArray(ref.plan_diff))
       halt("needs_human", "plan_ref predates 2.1.0 (no plan_diff in " + tiny.plan_ref + "): re-run plan to use confirm auto");
+    // 4.0.0 review: G1's classification checks the planner's change_kind and
+    // new_behaviour; a ref sealed before 4.0.0 has neither, so the script
+    // refuses it here (fail closed) instead of trusting the judge with nulls
+    if (planFacts.change_kind === null || planFacts.new_behaviour === null)
+      return autoFailResult(
+        { failedCheck: "intent", reasons: ["plan_ref sealed before 4.0.0 (no plan_facts change_kind/new_behaviour in " + tiny.plan_ref + "): re-plan to build under confirm auto"], intent: null },
+        ref.plan_path,
+        tiny,
+      );
     const fresh = await rereadBrief(brief, input.project, repo);
     const g = await autoGates({
       sfx: ":rerun",
@@ -7004,7 +8947,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const scanIac = (scanDiff || []).filter(isIacPath);
     if (
       typeof r.touched !== "boolean" || !strs(r.iac_files) || !strs(r.problems) || !strs(r.hints) ||
-      !relayDigestOk(r, ["touched", "iac_files", "problems", "hints", "args"]) || canonical(r.args) !== canonical([mainWt, defaultBranch, approvedSha, remoteUrl]) ||
+      !relayDigestOk(r, ["touched", "iac_files", "problems", "hints", "args"], "tf_gate") || canonical(r.args) !== canonical([mainWt, defaultBranch, approvedSha, remoteUrl]) ||
       r.touched !== r.iac_files.length > 0 || scanIac.some((p) => r.iac_files.indexOf(p) < 0)
     )
       halt("needs_human", "IaC pre-push check could not complete: " + label + " returned no usable result (the relayed result does not match the program's digest, arguments or the PR diff)", "iac");
@@ -7020,7 +8963,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const rhLabel = label.replace("tf-gate", "remote-head");
     const rh = await infra(rhLabel, remoteHeadPrompt({ main_worktree: mainWt, branch, remote_url: remoteUrl }), "PR", JUDGE_AGENT);
     const rhOk =
-      rh && (rh.head === null || typeof rh.head === "string") && relayDigestOk(rh, ["head", "args"]) && canonical(rh.args) === canonical([mainWt, branch, remoteUrl]);
+      rh && (rh.head === null || typeof rh.head === "string") && relayDigestOk(rh, ["head", "args"], "remote_head") && canonical(rh.args) === canonical([mainWt, branch, remoteUrl]);
     if (rhOk && rh.head === approvedSha) {
       gate(rhLabel + ": origin/" + branch + " is at the approved " + approvedSha + " (pushed by Max); going on without a push");
       return true;
@@ -7039,7 +8982,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const r = await infra(label, fleetScanPrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha }), "PR", JUDGE_AGENT);
     if (!Array.isArray(r.diff) || !Array.isArray(r.commits) || !r.commits.every((c) => c && Array.isArray(c.files)))
       halt("needs_human", "fleet internal files check did not complete: " + label + " returned no diff/commits lists", "scope");
-    if (!relayDigestOk(r, ["diff", "commits"]))
+    if (!relayDigestOk(r, ["diff", "commits"], "fleet_scan"))
       halt("needs_human", "fleet internal files check did not complete: " + label + ": the relayed lists do not match the program's digest", "scope");
     const bad = fleetInternalPaths(r.diff);
     for (const c of r.commits) for (const q of fleetInternalPaths(c.files)) bad.push(q + " (commit " + c.sha + ")");
@@ -7103,7 +9046,13 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         wb ? { write_back: wb.write_back, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
       ),
     );
-    const r = await infra(label, writeStatePrompt({ main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha }, JSON.stringify(st)), "PR");
+    const r = await infra(
+      label,
+      writeStatePrompt({ main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha, chunk_dir: scratchOf(mainWt) + "/state-" + safeName(state.nonce + "-" + label) }, JSON.stringify(st)),
+      "PR",
+    );
+    requireProgram(r, "state_write", label);
+    if (!relayDigestOk(r, ["head", "state_sha"], "state_write")) halt("failed", label + ": the relayed head and state object do not match the program's digest");
     if (r.head !== approvedSha) halt("failed", label + ": the run-state landed on " + r.head + ", not " + approvedSha);
     if (typeof r.state_sha !== "string" || !/^[0-9a-f]{40}$/.test(r.state_sha)) halt("failed", label + " returned no usable state_sha");
     // the script's own write: the next comparison starts from the new value
@@ -7132,7 +9081,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         await pathRecheck("push" + (pushes > 1 ? ":p" + pushes : ""), "PR");
         const push = await infra(
           pushLabel,
-          pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug }),
+          pushPrompt(Object.assign({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug }, hookEnv() ? { hook_env: hookEnv() } : {})),
           "PR",
         );
         if (push.push_result === "hook_rejected") {
@@ -7142,7 +9091,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           const argsOk =
             Array.isArray(pa) && pa.length === 2 && typeof pa[0] === "string" && pa[0].charAt(0) === "/" &&
             normPath(pa[0]).indexOf(normPath(mainWt) + "/") !== 0 && pa[1] === String(push.exit_code);
-          if (push.exit_code !== 1 || typeof push.hook_tail !== "string" || !relayDigestOk(push, ["push_result", "exit_code", "hook_tail", "args"]) || !argsOk)
+          if (push.exit_code !== 1 || typeof push.hook_tail !== "string" || !relayDigestOk(push, ["push_result", "exit_code", "hook_tail", "args"], "push_classify") || !argsOk)
             halt("failed", pushLabel + ": the relayed hook_rejected result does not match the classifier program's digest (exit_code " + JSON.stringify(push.exit_code === undefined ? null : push.exit_code) + ")");
           const tail = String(push.hook_tail || "").trim();
           gate("push of " + approvedSha + " rejected by a repo hook -> coder (fix_code)");
@@ -7161,6 +9110,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         }
         if (push.push_result !== "ok")
           halt("failed", pushLabel + " returned push_result " + JSON.stringify(push.push_result || null) + " with status ok");
+        requireProgram(push, "push_classify", pushLabel);
         if (push.remote_head !== approvedSha)
           halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha);
         gate("pushed " + branch + " at " + approvedSha);
@@ -7272,12 +9222,80 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   async function writerRound(n, pending, codeFindings) {
     const pre = last || (await hasher("hasher:pre-writers:r" + n, mainWt, hashedFiles, "Tests"));
     await pathRecheck("writers:r" + n, "Tests");
+    if (shortPath) await shortWriter(n, pending, codeFindings);
+    else await fullWriters(n, pending, codeFindings);
+    return afterWriters(n, pending, pre);
+  }
+
+  // 4.0.0 (1991): the short path's one writer for every pending criterion.
+  // The script splits its tests per criterion by the covers prefix "<cid>:";
+  // a prefix that names no pending criterion, or a reported file outside
+  // every pending criterion's test files, stops the run.
+  async function shortWriter(n, pending, codeFindings) {
+    state.agents += 1;
+    const ids = pending.map((p) => p.criterion.id);
+    const files = [];
+    for (const p of pending) for (const f of p.criterion.test_files) if (files.indexOf(f) < 0) files.push(f);
+    const label = "role:fleet-test-writer:short:r" + n;
+    const prompt = rolePrompt(
+      "fleet-test-writer",
+      Object.assign({}, common, planCtx, {
+        criteria: pending.map((p) => Object.assign(writerCriterion(p.criterion), { test_files: p.criterion.test_files })),
+        test_files: files,
+        short_path_note: SHORT_WRITER_NOTE,
+        test_cmd: planFacts.test_cmd,
+        test_env: testEnvFor("w_short"),
+        test_env_note: testEnvNote(),
+        routed_findings: pending.flatMap((p) => p.findings),
+      },
+      codeFindings ? { code_judge_findings: codeFindings.filter((f) => ids.indexOf(f.criterion) >= 0) } : {}),
+    );
+    const opts = { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" };
+    // the same order as the full path: the round, then a retry on drift. A
+    // direct call: parallel() would swallow a halt and lose its stop_gate.
+    let r = await roleAgent("fleet-test-writer", label, prompt, opts);
+    if (r == null) halt("failed", "test writer short r" + n + " returned no result");
+    r = await retryOnDrift("fleet-test-writer", label, prompt, opts, r);
+    checkRole("fleet-test-writer", r);
+    collect("fleet-test-writer", r);
+    requireOk("fleet-test-writer short", r);
+    const out = stripHeldOut(r);
+    const owner = {};
+    for (const p of pending) for (const f of p.criterion.test_files) owner[f] = p.criterion.id;
+    for (const f of out.files) {
+      const nf = normPath(f);
+      if (!owner[nf]) halt("needs_human", "short-path writer touched " + nf + " in test round " + n + " (not a test file of " + ids.join(", ") + ")", "ownership");
+    }
+    const split = {};
+    for (const id of ids) split[id] = [];
+    for (const t of out.tests) {
+      const cv = t && typeof t === "object" && typeof t.covers === "string" ? t.covers : null;
+      const cid = cv !== null && cv.indexOf(":") > 0 ? cv.slice(0, cv.indexOf(":")) : null;
+      if (cid === null || !Object.prototype.hasOwnProperty.call(split, cid))
+        halt(
+          "needs_human",
+          "short-path writer test " + JSON.stringify(t && t.name !== undefined ? t.name : null) + " in test round " + n + " has covers " + JSON.stringify(cv) +
+            ", not \"<criterion id>: ...\" of a pending criterion (" + ids.join(", ") + ")",
+          "ownership",
+        );
+      split[cid].push(t);
+    }
+    for (const p of pending) {
+      const cid = p.criterion.id;
+      writerOut[cid] = Object.assign({}, out, {
+        criterion_id: cid,
+        tests: split[cid],
+        files: out.files.filter((f) => p.criterion.test_files.indexOf(normPath(f)) >= 0),
+      });
+    }
+    gate("short path: one writer for " + ids.join(", ") + " in test round " + n + "; tests split by covers prefix (" + ids.map((id) => id + ":" + split[id].length).join(", ") + ")");
+  }
+
+  async function fullWriters(n, pending, codeFindings) {
     state.agents += pending.length;
-    const results = await parallel(
-      pending.map((p) => () => {
+    const wcalls = pending.map((p) => {
         const c = p.criterion;
-        return roleAgent(
-          "fleet-test-writer",
+        return [
           "role:fleet-test-writer:" + c.id + ":r" + n,
           rolePrompt(
             "fleet-test-writer",
@@ -7285,26 +9303,33 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
               criterion: writerCriterion(c),
               test_files: c.test_files,
               test_cmd: planFacts.test_cmd,
-              test_env: TEST_ENV,
-              test_env_note: TEST_ENV_NOTE,
+              test_env: testEnvFor("w_" + c.id),
+              test_env_note: testEnvNote(),
               routed_findings: p.findings,
             },
             codeFindings ? { code_judge_findings: codeFindings.filter((f) => f.criterion === c.id) } : {}),
           ),
           { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" },
-        );
-      }),
-    );
-    const roundOut = [];
-    results.forEach((r, idx) => {
+        ];
+      });
+    const results = await parallel(wcalls.map(([l, pr, o]) => () => roleAgent("fleet-test-writer", l, pr, o)));
+    for (let idx = 0; idx < results.length; idx++) {
       const cid = pending[idx].criterion.id;
+      let r = results[idx];
       if (r == null) halt("failed", "test writer " + cid + " r" + n + " returned no result");
+      // 4.0.0 (1984): only a drifting writer retries, after the parallel
+      // round, so a stop in its PATH re-check is not lost in parallel()
+      r = await retryOnDrift("fleet-test-writer", wcalls[idx][0], wcalls[idx][1], wcalls[idx][2], r);
       checkRole("fleet-test-writer", r);
       collect("fleet-test-writer", r);
       requireOk("fleet-test-writer " + cid, r);
       writerOut[cid] = stripHeldOut(r);
-      roundOut.push(writerOut[cid]);
-    });
+    }
+  }
+
+  // After the writers: the fixers, the ownership hash and the checks.
+  async function afterWriters(n, pending, pre) {
+    const roundOut = pending.map((p) => writerOut[p.criterion.id]);
     // the repo's fixers on this round's test files, before the ownership hash,
     // the test judge and the freeze (3.0.0, ledger 1951)
     const wrote = [];
@@ -7331,7 +9356,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     }
     fenceChanged("test round " + n, post.changed);
     const changed = post.changed.map(normPath);
-    for (const k of changedKeys(pre.hashes, post.hashes)) {
+    for (const k of changedKeys(pre.hashes, post.hashes, mainWt)) {
       if (k.map === "ignored" || (k.map === "git" && k.key.indexOf(FLEETREF) === 0))
         halt("needs_human", violationName(k) + " in test round " + n, "ownership");
       if (!(k.map === "files" && owner[k.key])) changed.push(k.name);
@@ -7349,14 +9374,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // pending: [{criterion, findings}] to (re)write this round.
   // codeFindings: set on a fix_tests re-entry; the judge then runs first.
   async function testLoop(pending, codeFindings) {
-    for (let i = 0; i < MAX_TEST_ROUNDS; i++) {
+    for (let i = 0; i < maxTestRounds; i++) {
       state.rounds.tests++;
       const n = state.rounds.tests;
       const judgeFirst = !!codeFindings && i === 0;
       let roundOut = [];
       if (!judgeFirst) {
         // (pre-hasher), writers, fixers, post-hasher, judge, post-judge hasher
-        reserve(pending.length + 4 + (last ? 0 : 1), "test round " + n);
+        reserve((shortPath ? 1 : pending.length) + 4 + (last ? 0 : 1), "test round " + n);
         roundOut = await writerRound(n, pending, codeFindings);
       } else {
         reserve(2, "test round " + n);
@@ -7371,8 +9396,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         code_tree: codeTree,
         writer_outputs: judgeFirst ? testable.map((c) => writerOut[c.id]).filter(Boolean) : roundOut,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
-        test_env: TEST_ENV,
-        test_env_note: TEST_ENV_NOTE,
+        test_env: testEnvFor("tjudge"),
+        test_env_note: testEnvNote(),
       });
       // every round of a fix_tests re-entry carries the code-judge context
       if (codeFindings) judgeInputs.code_judge_findings = codeFindings;
@@ -7400,7 +9425,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (!pending.length) halt("needs_human", "test-judge revise r" + n + " routed no finding to a known criterion");
       gate("test-judge r" + n + ": revise -> " + pending.map((p) => p.criterion.id).join(", "));
     }
-    halt("needs_human", "test rounds exhausted (" + MAX_TEST_ROUNDS + ") without test-judge approval", "cap");
+    halt("needs_human", "test rounds exhausted (" + maxTestRounds + ") without test-judge approval", "cap");
   }
 
   // freeze
@@ -7415,7 +9440,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     freezes++;
     await purgeBytecode("infra:purge-bytecode:freeze-f" + freezes, mainWt, "Freeze");
     const h = await hasher("hasher:freeze:f" + freezes, mainWt, hashedFiles, "Freeze");
-    if (last && !sameState(last, h))
+    if (last && !sameState(last, h, mainWt))
       halt("needs_human", "worktree changed between test approval and freeze", "fingerprint");
     if (h.hashes.suspicious.length)
       halt(
@@ -7428,7 +9453,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const allowed = {};
       for (const c of testable) if (refreeze.criteria.indexOf(c.id) >= 0) for (const f of c.test_files) allowed[f] = true;
       const changed = [];
-      for (const k of changedKeys(frozen, h.hashes)) {
+      for (const k of changedKeys(frozen, h.hashes, mainWt)) {
         if (k.map !== "files" || !allowed[k.key]) halt("needs_human", "re-freeze touched unrouted path " + k.name, "hash");
         changed.push({ path: k.name, before: k.key in frozen.files ? frozen.files[k.key] : null, after: k.key in h.hashes.files ? h.hashes.files[k.key] : null });
       }
@@ -7446,15 +9471,38 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (!codeBaseRef) codeBaseRef = freezeRef;
     last = h;
     gate("freeze f" + freezes + " at tree " + freezeTree + " (HEAD " + freezeRef + "): " + countKeys(frozen) + " hashed keys");
+    // 4.0.0 (1987): the freeze tree under refs/fleet/<task>/freeze (no commit)
+    const fr = await infra("infra:freeze-ref:f" + freezes, freezeRefPrompt({ main_worktree: mainWt, ref: freezeRefName, tree: freezeTree }), "Freeze");
+    if (fr.ref_target !== freezeTree) halt("failed", "infra:freeze-ref:f" + freezes + ": the freeze ref " + freezeRefName + " is at " + JSON.stringify(fr.ref_target === undefined ? null : fr.ref_target) + ", not the freeze tree " + freezeTree);
+    // the script's own write: the next comparison starts from the new value
+    frozen.git[FLEETREF + freezeRefName] = freezeTree;
+    setFreezeDigest();
   }
 
-  phase("Tests");
-  await testLoop(
-    testable.map((c) => ({ criterion: c, findings: [] })),
-    null,
-  );
-  phase("Freeze");
-  await freeze();
+  function setFreezeDigest() {
+    state.freezeDigest = freezeDigestOf(tiny.ref_sha256, freezeTree, frozen, state.refreezeLog.length > 0);
+    state.freezePlanRef = tiny;
+  }
+
+  if (frozenResume) {
+    // 4.0.0 (1987): the tests were approved and frozen in an earlier run
+    freezes = 1;
+    frozen = frozenResume.hashes;
+    freezeRef = frozenResume.fingerprint.head;
+    freezeTree = frozenResume.fingerprint.tree;
+    codeBaseRef = freezeRef;
+    last = frozenResume;
+    setFreezeDigest();
+    gate("resuming at the coder (frozen): no writer and no test judge runs; freeze tree " + freezeTree);
+  } else {
+    phase("Tests");
+    await testLoop(
+      testable.map((c) => ({ criterion: c, findings: [] })),
+      null,
+    );
+    phase("Freeze");
+    await freeze();
+  }
 
   // code
   phase("Code");
@@ -7489,8 +9537,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       code_tree: codeTree,
       plan_commit: ref.plan_commit,
       code_base_ref: codeBaseRef,
-      test_env: TEST_ENV,
-      test_env_note: TEST_ENV_NOTE,
+      test_env: testEnvFor("coder"),
+      test_env_note: testEnvNote(),
     });
     // the role check runs after the hash check: a hash violation is reported
     // even when the coder's output is also malformed or not ok
@@ -7501,6 +9549,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       Object.assign({}, codeInputs, { routed_findings: coderFindings }),
       "Code",
       null,
+      true,
       true,
     );
     // the repo's fixers on every non-frozen path the worktree changes, before
@@ -7516,7 +9565,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (h.fingerprint.head !== expectedHead)
       halt("needs_human", "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + "; the coder works uncommitted", "ownership");
     fenceChanged("code round " + m, h.changed);
-    const viol = diffHashes(frozen, h.hashes);
+    const viol = diffHashes(frozen, h.hashes, mainWt);
     const coderDrift = contractProblem("fleet-coder", coder);
     if (viol.length && (coderDrift || coder.status !== "ok"))
       halt(
@@ -7525,12 +9574,28 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           " (role output also: " + (coder.status !== "ok" ? roleStatusText("fleet-coder", coder) : coderDrift) + ")",
         "hash",
       );
-    if (!viol.length) {
+    // 4.0.0 (1984): the coder is never re-run on drift; drift on an ok result
+    // is a fix_code finding for the next round (bounded by MAX_CODE_ROUNDS).
+    // A version or marker mismatch and a not-ok status still stop here.
+    const coderDriftOk = !viol.length && coder.status === "ok" && !versionProblem("fleet-coder", coder) ? driftOf("fleet-coder", coder) : null;
+    if (!viol.length && !coderDriftOk) {
       checkRole("fleet-coder", coder);
       requireOk("fleet-coder", coder);
     }
     collect("fleet-coder", coder);
     last = h;
+    if (coderDriftOk) {
+      lastRoundGate = "contract";
+      coderFindings = [
+        {
+          target: "code",
+          criterion: null,
+          finding: coderDriftOk.msg + " -- return every required key with its frozen type; fix the report, not the code",
+        },
+      ];
+      gate("code round " + m + ": " + coderDriftOk.msg + " -> coder output rejected; routed as a finding");
+      continue;
+    }
     if (viol.length) {
       lastRoundGate = "hash";
       coderFindings = [
@@ -7560,10 +9625,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       Object.assign({}, codeInputs, {
         code_tree: h.fingerprint.tree,
         coder_output: stripHeldOut(coder),
-        hash_recheck: hashRecheck(frozen, h.hashes),
+        hash_recheck: hashRecheck(frozen, h.hashes, mainWt),
         held_out_results: HELD_OUT_NOT_RUN,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
         repo_obligations: judgeObligations,
+        test_env: testEnvFor("cjudge"),
       }),
       mainWt,
       "Code",
@@ -7577,6 +9643,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (cj.verdict === "plan_wrong")
       return replan({
         ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl,
+        project: input.project || null,
         findings: routed.filter((f) => f.target === "plan"),
         expectedHead: jc.state.fingerprint.head,
         expectedTree: codeTree,
@@ -7646,7 +9713,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     await pathRecheck("commit:r" + m, "Code");
     const cs = await infra(
       "infra:commit:r" + m,
-      commitStepPrompt({
+      commitStepPrompt(Object.assign({
         main_worktree: mainWt,
         branch,
         expected_head: expectedHead,
@@ -7654,7 +9721,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         subject,
         // the hooks path frozen at freeze (null: git's default hooks dir)
         hooks_path: frozen.git["core.hooksPath"] && frozen.git["core.hooksPath"] !== "UNSET" ? frozen.git["core.hooksPath"] : null,
-      }),
+      }, hookEnv() ? { hook_env: hookEnv() } : {})),
       "Code",
     );
     if (cs.staged_tree !== codeTree)
@@ -7700,7 +9767,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     phase("Code");
   }
 
-  return finishOk(null);
+  return finishOk(frozenResume ? "frozen" : null);
 }
 
 function reviewFindingText(f) {
@@ -7726,7 +9793,8 @@ async function reviewStep(k, ctx) {
       JUDGE_AGENT,
     );
     if (!Array.isArray(rp.changed_paths)) halt("failed", "infra:review-paths:v" + k + " returned no changed_paths");
-    if (!relayDigestOk(rp, ["changed_paths"]))
+    requireProgram(rp, "review_paths", "infra:review-paths:v" + k);
+    if (!relayDigestOk(rp, ["changed_paths"], "review_paths"))
       halt("failed", "infra:review-paths:v" + k + ": the relayed paths do not match the program's digest (a path was dropped or changed in the copy)");
     const changedPaths = rp.changed_paths.map(normPath).filter(Boolean);
     const inputs = {
@@ -7743,6 +9811,8 @@ async function reviewStep(k, ctx) {
       mode: "self-authored",
       fleet: true,
     };
+    // 4.0.0 (1981): the review runs repo tests against its own database
+    Object.assign(inputs, dbInputs("review"));
     const pre = await hasher("hasher:pre-review:v" + k, ctx.mainWt, ctx.hashedFiles, "Review");
     if (pre.fingerprint.head !== ctx.approvedSha)
       halt("needs_human", "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha, "review");
@@ -7841,6 +9911,8 @@ async function replan(ctx) {
     remoteSlug,
     remoteUrl,
     suffix: ":replan",
+    // a plan_wrong re-plan always ends at awaiting_confirmation: no extra rounds
+    maxRounds: 0,
   });
   const pc = await commitPlanAndRef({
     worktree: replanWt,
@@ -7862,6 +9934,7 @@ async function replan(ctx) {
       planDiff: p.planDiff,
       planFacts: p.planFacts,
       history: { runs: history.runs, replans: n, agents: history.agents },
+      project: ctx.project,
     },
   });
   const newHead = pc.tiny.plan_commit;
@@ -8158,6 +10231,640 @@ async function writeBack(ctx) {
   return out;
 }
 
+// ---------------------------------------------------------------- 4.0.0 (1981): throwaway test database
+//
+// A repo opts in with .fleet-test-db.json, read at origin/<default branch>.
+// One podman container per run, bound to 127.0.0.1, with resource caps and
+// self-expiry; one database per role; the role gets the DSN in its test_env.
+// The name is fleet-db-*; every program refuses any other name and any
+// tf-local name itself (on a host with no podman shim it is the only guard).
+
+// Reads and checks .fleet-test-db.json at origin/<default branch>: {decl, error, args}.
+// TEST_DB_DECL_PY_BEGIN
+const TEST_DB_DECL_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, os, re, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+# fleet 4.0.0 (1981): the throwaway test database declaration, read at
+# origin/<default branch> (never the worktree: a role cannot declare it)
+wt, branch = sys.argv[1], sys.argv[2]
+out = {'decl': None, 'error': None, 'args': [wt, branch]}
+def done():
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
+def problem(d):
+    if not isinstance(d, dict):
+        return 'not a JSON object'
+    if sorted(d) != ['engine', 'env', 'major', 'version']:
+        return 'keys must be exactly version, engine, major, env'
+    if isinstance(d['version'], bool) or d['version'] != 1:
+        return 'version must be 1'
+    if d['engine'] != 'mariadb':
+        return 'engine must be mariadb'
+    if not isinstance(d['major'], str) or not re.fullmatch(r'[0-9]{1,3}\.[0-9]{1,3}', d['major']):
+        return 'major must be a string like 11.4'
+    if not isinstance(d['env'], str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,40}_TEST_DSN', d['env']):
+        return 'env must match ^[A-Z][A-Z0-9_]{0,40}_TEST_DSN$'
+    return None
+if not re.fullmatch(r'[A-Za-z0-9._/-]{1,200}', branch) or '..' in branch or branch.startswith(('-', '/')):
+    out['error'] = 'default branch name refused'
+    done()
+G = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
+base = 'refs/remotes/origin/' + branch
+if subprocess.run(G + ['rev-parse', '--verify', '-q', base + '^{commit}'], capture_output=True).returncode != 0:
+    out['error'] = 'origin/' + branch + ' not found'
+    done()
+spec = base + ':.fleet-test-db.json'
+t = subprocess.run(G + ['cat-file', '-t', spec], capture_output=True)
+if t.returncode != 0:
+    done()
+if t.stdout.strip() != b'blob':
+    out['error'] = '.fleet-test-db.json is not a file'
+    done()
+raw = subprocess.run(G + ['cat-file', 'blob', spec], capture_output=True).stdout
+if len(raw) > 4096:
+    out['error'] = '.fleet-test-db.json is larger than 4096 bytes'
+    done()
+try:
+    d = json.loads(raw.decode('utf-8'))
+except ValueError:
+    out['error'] = '.fleet-test-db.json is not JSON'
+    done()
+p = problem(d)
+if p:
+    out['error'] = p
+else:
+    out['decl'] = d
+done()`;
+// TEST_DB_DECL_PY_END
+
+// Removes expired fleet test database containers only: {podman, removed, kept, errors}.
+// DB_SWEEP_PY_BEGIN
+const DB_SWEEP_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, os, re, shutil, subprocess, sys, time
+def lift():
+    # podman (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
+# fleet 4.0.0 (1981): the only containers these programs touch
+NAME = re.compile(r'fleet-db-[a-z0-9-]{1,80}')
+def name_ok(n):
+    return isinstance(n, str) and NAME.fullmatch(n) is not None and 'tf-local' not in n
+def done(out):
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
+def fail(code, msg):
+    sys.stderr.write(msg + '\n')
+    sys.exit(code)
+PM = shutil.which('podman')
+def pm(*a, timeout=120):
+    return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
+def tail(r):
+    return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
+# Removes only containers with the label fleet.db=1, a name fleet-db-*, and
+# a fleet.expires time in the past. Any other container is never touched.
+out = {'podman': PM is not None, 'removed': [], 'kept': [], 'errors': []}
+if PM:
+    r = pm('ps', '-a', '--filter', 'label=fleet.db=1', '--format', 'json')
+    rows = None
+    if r.returncode == 0:
+        try:
+            rows = json.loads(r.stdout.decode('utf-8') or '[]') or []
+        except ValueError:
+            rows = None
+    if not isinstance(rows, list):
+        out['errors'].append('podman ps: ' + tail(r))
+        rows = []
+    now = int(time.time())
+    for c in rows:
+        names = c.get('Names') if isinstance(c, dict) else None
+        n = names[0] if isinstance(names, list) and names and isinstance(names[0], str) else ''
+        labels = c.get('Labels') if isinstance(c, dict) and isinstance(c.get('Labels'), dict) else {}
+        exp = labels.get('fleet.expires')
+        expired = isinstance(exp, str) and re.fullmatch(r'[0-9]{1,12}', exp) is not None and int(exp) < now
+        if labels.get('fleet.db') != '1' or not name_ok(n) or not expired:
+            if n:
+                out['kept'].append(n)
+            continue
+        rr = pm('rm', '-f', n)
+        if rr.returncode == 0:
+            out['removed'].append(n)
+        else:
+            out['errors'].append(n + ': ' + tail(rr))
+done(out)`;
+// DB_SWEEP_PY_END
+
+// Starts the run's test database, or adds databases to it, with one user per
+// database (random passwords; the root password never leaves the container):
+// {name, port, dbs, users, expiry, args}.
+// DB_UP_PY_BEGIN
+const DB_UP_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, os, re, shutil, subprocess, sys, time
+def lift():
+    # podman (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
+# fleet 4.0.0 (1981): the only containers these programs touch
+NAME = re.compile(r'fleet-db-[a-z0-9-]{1,80}')
+def name_ok(n):
+    return isinstance(n, str) and NAME.fullmatch(n) is not None and 'tf-local' not in n
+def done(out):
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
+def fail(code, msg):
+    sys.stderr.write(msg + '\n')
+    sys.exit(code)
+PM = shutil.which('podman')
+def pm(*a, timeout=120):
+    return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
+def tail(r):
+    return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
+# usage: db_up.py up <name> <image> <ttl> <nonce> <dbs json>
+#        db_up.py add <name> <dbs json>
+# One MariaDB user per database, granted on that database only, with a random
+# password from this program. The root password is random too, lives only in
+# the container, and is never printed.
+import secrets
+argv = sys.argv[1:]
+mode = argv[0] if argv else ''
+if mode not in ('up', 'add') or len(argv) != (6 if mode == 'up' else 3):
+    fail(2, 'usage: db_up.py up <name> <image> <ttl> <nonce> <dbs> | add <name> <dbs>')
+name = argv[1]
+if not name_ok(name):
+    fail(2, 'container name refused: ' + name)
+try:
+    dbs = json.loads(argv[-1])
+except ValueError:
+    dbs = None
+if not isinstance(dbs, list) or not 1 <= len(dbs) <= 64 or len(set(map(str, dbs))) != len(dbs) or not all(isinstance(d, str) and re.fullmatch(r'fleet_[a-z0-9_]{1,48}', d) for d in dbs):
+    fail(2, 'database names refused')
+if not PM:
+    fail(4, 'no podman on PATH: no container started')
+users = {d: secrets.token_hex(16) for d in dbs}
+out = {'name': name, 'port': None, 'dbs': dbs, 'users': None, 'expiry': None, 'args': argv}
+def sql(root, stmt):
+    return pm('exec', '-e', 'MYSQL_PWD=' + root, name, 'mariadb', '--protocol=tcp', '-h127.0.0.1', '-uroot', '-e', stmt, timeout=60)
+def create(root):
+    st = []
+    for d in dbs:
+        st.append('CREATE DATABASE IF NOT EXISTS ' + d + ';')
+        st.append("CREATE OR REPLACE USER '" + d + "'@'%' IDENTIFIED BY '" + users[d] + "';")
+        st.append("GRANT ALL PRIVILEGES ON " + d + ".* TO '" + d + "'@'%';")
+    return sql(root, ' '.join(st))
+if mode == 'add':
+    i = pm('container', 'inspect', '--format', '{{index .Config.Labels "fleet.db"}}', name)
+    if i.returncode != 0 or i.stdout.strip() != b'1':
+        fail(5, 'no fleet test database container ' + name)
+    rp = pm('exec', name, 'printenv', 'MARIADB_ROOT_PASSWORD')
+    root = rp.stdout.decode('utf-8', 'replace').strip()
+    if rp.returncode != 0 or not re.fullmatch(r'[0-9a-f]{32}', root):
+        fail(5, 'no root password in container ' + name)
+    c = create(root)
+    if c.returncode != 0:
+        fail(6, 'CREATE DATABASE failed: ' + tail(c))
+    out['users'] = users
+    done(out)
+image, ttl_s, nonce = argv[2], argv[3], argv[4]
+if not re.fullmatch(r'[a-z0-9][a-z0-9./_-]{0,200}@sha256:[0-9a-f]{64}', image):
+    fail(2, 'the image must be pinned by digest: ' + image)
+if not re.fullmatch(r'[0-9]{2,5}', ttl_s) or not 60 <= int(ttl_s) <= 86400:
+    fail(2, 'ttl refused')
+if not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', nonce):
+    fail(2, 'nonce refused')
+ttl = int(ttl_s)
+root = secrets.token_hex(16)
+# self-expiry first: podman run --timeout, else a systemd-run timer; neither -> no container
+h = pm('run', '--help')
+SR = shutil.which('systemd-run')
+if h.returncode == 0 and b'--timeout' in h.stdout:
+    mech = 'podman-timeout'
+elif SR:
+    mech = 'systemd-run'
+else:
+    fail(4, 'no expiry mechanism (podman run --timeout or systemd-run): no container started')
+expires = int(time.time()) + ttl
+cmd = ['run', '-d', '--rm', '--name', name, '--label', 'fleet.db=1', '--label', 'fleet.nonce=' + nonce, '--label', 'fleet.expires=' + str(expires),
+       '-p', '127.0.0.1::3306', '--tmpfs', '/var/lib/mysql:size=1g', '--memory', '1g', '--cpus', '2', '--pids-limit', '512',
+       '-e', 'MARIADB_ROOT_PASSWORD=' + root]
+if mech == 'podman-timeout':
+    cmd += ['--timeout', str(ttl)]
+r = pm(*(cmd + [image]), timeout=900)
+if r.returncode != 0:
+    pm('rm', '-f', name)
+    fail(5, 'podman run failed: ' + tail(r))
+def gone(code, msg):
+    pm('rm', '-f', name)
+    fail(code, msg + '; container removed')
+if mech == 'systemd-run':
+    s = subprocess.run([SR, '--user', '--on-active=' + str(ttl) + 's', '--unit=' + name + '-expire', PM, 'rm', '-f', name], capture_output=True, timeout=60, preexec_fn=lift)
+    if s.returncode != 0:
+        gone(4, 'systemd-run expiry timer failed: ' + tail(s))
+p = pm('port', name, '3306/tcp')
+lines = [l.strip() for l in p.stdout.decode('utf-8', 'replace').splitlines() if l.strip()]
+ports = [re.fullmatch(r'127\.0\.0\.1:([0-9]{1,5})', l) for l in lines]
+if p.returncode != 0 or not ports or not all(ports) or len(set(m.group(1) for m in ports)) != 1:
+    gone(5, 'port 3306 is not published on 127.0.0.1 only: ' + repr(lines))
+port = int(ports[0].group(1))
+deadline = time.time() + 60
+while True:
+    k = pm('exec', '-e', 'MYSQL_PWD=' + root, name, 'mariadb-admin', '--protocol=tcp', '-h127.0.0.1', '-uroot', 'ping', timeout=30)
+    if k.returncode == 0:
+        break
+    if time.time() > deadline:
+        gone(6, 'the database did not answer within 60 s: ' + tail(k))
+    time.sleep(2)
+c = create(root)
+if c.returncode != 0:
+    gone(6, 'CREATE DATABASE failed: ' + tail(c))
+out['port'] = port
+out['users'] = users
+out['expiry'] = {'mechanism': mech, 'expires': expires}
+done(out)`;
+// DB_UP_PY_END
+
+// Removes the run's test database container: {removed, absent, error, args}.
+// DB_DOWN_PY_BEGIN
+const DB_DOWN_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, os, re, shutil, subprocess, sys, time
+def lift():
+    # podman (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
+# fleet 4.0.0 (1981): the only containers these programs touch
+NAME = re.compile(r'fleet-db-[a-z0-9-]{1,80}')
+def name_ok(n):
+    return isinstance(n, str) and NAME.fullmatch(n) is not None and 'tf-local' not in n
+def done(out):
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
+def fail(code, msg):
+    sys.stderr.write(msg + '\n')
+    sys.exit(code)
+PM = shutil.which('podman')
+def pm(*a, timeout=120):
+    return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
+def tail(r):
+    return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
+# usage: db_down.py <name> <nonce>. Removes the container only when it
+# carries fleet.db=1 and this run's fleet.nonce.
+argv = sys.argv[1:]
+if len(argv) != 2:
+    fail(2, 'usage: db_down.py <name> <nonce>')
+name, nonce = argv
+if not name_ok(name):
+    fail(2, 'container name refused: ' + name)
+out = {'removed': False, 'absent': False, 'error': None, 'args': argv}
+if not PM:
+    out['error'] = 'no podman on PATH'
+    done(out)
+i = pm('container', 'inspect', name)
+if i.returncode != 0:
+    out['absent'] = True
+    done(out)
+try:
+    info = json.loads(i.stdout.decode('utf-8'))
+    labels = info[0]['Config']['Labels'] or {}
+except (ValueError, LookupError, TypeError):
+    labels = {}
+if labels.get('fleet.db') != '1' or labels.get('fleet.nonce') != nonce:
+    out['error'] = 'not this run\'s fleet test database (labels fleet.db, fleet.nonce)'
+    done(out)
+r = pm('rm', '-f', name)
+if r.returncode == 0:
+    out['removed'] = True
+else:
+    out['error'] = 'podman rm: ' + tail(r)
+done(out)`;
+// DB_DOWN_PY_END
+
+// engine:major -> the image, pinned by digest (an index digest, checked with
+// skopeo inspect --raw | sha256sum on 2026-11-09: mariadb 11.4.13)
+const DB_IMAGES = {
+  "mariadb:11.4": "docker.io/library/mariadb@sha256:d1891ede5a559f1086f55053bb8cc1569b0298338c4d72d71725a7f74f6ba620",
+};
+const DB_DECL_FILE = ".fleet-test-db.json";
+// the podman --timeout (or the systemd-run timer): a crashed workflow's container ends
+const DB_TTL_SECONDS = 6 * 3600;
+const DB_NAME_RE = /^fleet-db-[a-z0-9-]{1,80}$/;
+const DB_ENV_RE = /^[A-Z][A-Z0-9_]{0,40}_TEST_DSN$/;
+const DB_UP_KEYS = ["name", "port", "dbs", "users", "expiry", "args"];
+const DB_DSN_NOTE =
+  "is this run's throwaway MariaDB on 127.0.0.1: a user of its own, granted on one database for this role only. Use it for the database-backed tests and never point a test at any other database. The workflow removes it at the end of the run. Never write a test_env value (a DSN, its user or its password) into the plan doc, a finding, a commit message or a PR: name the variable only. The workflow refuses a committed plan doc that holds mysql://.";
+
+// Why a declaration is refused (null: it is fine). The program checks the same.
+function testDbDeclProblem(d) {
+  if (!d || typeof d !== "object" || Array.isArray(d)) return "not a JSON object";
+  if (canonical(Object.keys(d).sort()) !== canonical(["engine", "env", "major", "version"])) return "keys must be exactly version, engine, major, env";
+  if (d.version !== 1) return "version must be 1";
+  if (d.engine !== "mariadb") return "engine must be mariadb";
+  if (typeof d.major !== "string" || !/^[0-9]{1,3}\.[0-9]{1,3}$/.test(d.major)) return "major must be a string like 11.4";
+  if (typeof d.env !== "string" || !DB_ENV_RE.test(d.env)) return "env " + JSON.stringify(d.env) + " must match " + String(DB_ENV_RE);
+  return null;
+}
+
+function dbContainerName(taskId, nonce) {
+  const t = String(taskId).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "task";
+  const n = String(nonce).toLowerCase().replace(/[^a-z0-9]+/g, "").slice(-12) || "0";
+  return "fleet-db-" + t + "-" + n;
+}
+// the database of a consumer (a role, or a writer per criterion)
+function dbOf(consumer) {
+  return "fleet_" + String(consumer).toLowerCase().replace(/[^a-z0-9_]+/g, "_").slice(0, 40);
+}
+// a consumer's DSN: its own user, granted on its own database only (never root)
+function dbDsn(consumer) {
+  const db = dbOf(consumer);
+  if (state.db.dbs.indexOf(db) < 0 || !state.db.users[db]) halt("failed", "internal: no test database " + db + " in " + state.db.name, "db");
+  return "mysql://" + db + ":" + state.db.users[db] + "@127.0.0.1:" + state.db.port + "/" + db;
+}
+// the relayed users: exactly one per database, each a 32-hex password
+function dbUsersOk(users, dbs) {
+  if (!users || typeof users !== "object" || Array.isArray(users)) return false;
+  if (canonical(Object.keys(users).sort()) !== canonical(dbs.slice().sort())) return false;
+  return dbs.every((d) => typeof users[d] === "string" && /^[0-9a-f]{32}$/.test(users[d]));
+}
+// test_env for one consumer: TEST_ENV, plus the DSN of its own database when
+// the run has a test database. Never the shared object (one DSN per role).
+function testEnvFor(consumer) {
+  if (!state.db) return TEST_ENV;
+  const o = Object.assign({}, TEST_ENV);
+  o[state.db.env] = dbDsn(consumer);
+  return o;
+}
+function testEnvNote() {
+  return state.db ? TEST_ENV_NOTE + " " + state.db.env + " " + DB_DSN_NOTE : TEST_ENV_NOTE;
+}
+// for roles that get test_env only when the run has a test database
+function dbInputs(consumer) {
+  return state.db ? { test_env: testEnvFor(consumer), test_env_note: testEnvNote() } : {};
+}
+// the env the repo's hooks get in the commit step and the push
+function hookEnv() {
+  if (!state.db) return null;
+  const o = {};
+  o[state.db.env] = dbDsn("hooks");
+  return o;
+}
+function hookEnvPrefix(he) {
+  return he ? Object.keys(he).map((k) => k + "=" + shQuote(he[k])).join(" ") + " " : "";
+}
+
+function dbUpPrompt(inputs, cmdArgs) {
+  return (
+    "Infra step of the fleet build workflow: " + (inputs.mode === "up" ? "start this run's throwaway test database (a local podman container bound to 127.0.0.1)" : "add databases to this run's throwaway test database") +
+    ". Run only the command(s) below, each exactly as written. Never start, stop, exec into or remove any other container; never run anything named tf-local*; no git command; change no repo file.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    (inputs.mode === "up"
+      ? "1. Run this one command:\n" + progCmd("db_sweep", []) + "\nIt prints one JSON object {podman, removed, kept, errors, program, digest}: return it as sweep, every value copied unchanged (the script recomputes the digest). Non-zero exit -> sweep null; go on.\n2. "
+      : "") +
+    "Run this one command as one Bash call with timeout 900000 ms:\n" +
+    progCmd("db_up", cmdArgs) +
+    "\nIt prints one JSON object {name, port, dbs, users, expiry, args, program, digest}: return it as up, every value copied unchanged (the script recomputes the digest). Non-zero exit -> status needs_human with its stderr (the program left no container running).\n" +
+    "Return {status, reason, " + (inputs.mode === "up" ? "sweep, " : "") + "up}."
+  );
+}
+
+function dbDownPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: remove this run's throwaway test database container. Run only this one command, exactly as written; touch no other container and run nothing named tf-local*:\n" +
+    progCmd("db_down", [inputs.name, inputs.nonce]) +
+    "\nIt prints one JSON object {removed, absent, error, args, program, digest}: return it as down, every value copied unchanged (the script recomputes the digest). Non-zero exit -> down null and the stderr in reason.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\nReturn {status, reason, down}."
+  );
+}
+
+async function dbDispatch(label, prompt, phaseName) {
+  const r = await dispatch(label, prompt, { schema: INFRA_SCHEMA, phase: phaseName });
+  if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"), "db");
+  return r;
+}
+
+// The declaration relay of a read step (`test_db`), then the database:
+// started on the first call, extended with the missing databases later.
+// consumers: the roles (and writers) that get a DSN in this mode.
+async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, taskId) {
+  if (!t || typeof t !== "object") halt("failed", label + ": no test_db relay (the " + DB_DECL_FILE + " read)", "db");
+  requireProgram(t, "test_db_decl", label + " (test_db)", "failed", "db");
+  if (!relayDigestOk(t, ["decl", "error", "args"], "test_db_decl") || canonical(t.args) !== canonical([wt, defaultBranch]))
+    halt("failed", label + ": the relayed " + DB_DECL_FILE + " read does not match the program's digest or arguments", "db");
+  if (t.error !== null) halt("needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + t.error, "db");
+  if (t.decl === null) {
+    if (state.db) halt("needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " is gone, but this run started a test database", "db");
+    return;
+  }
+  const dp = testDbDeclProblem(t.decl);
+  if (dp) halt("needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + dp, "db");
+  const image = DB_IMAGES[t.decl.engine + ":" + t.decl.major];
+  if (!image) halt("needs_human", DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IMAGES).join(", ") + ")", "db");
+  const want = [];
+  for (const c of consumers) if (want.indexOf(dbOf(c)) < 0) want.push(dbOf(c));
+  if (state.db) {
+    if (state.db.env !== t.decl.env || state.db.image !== image) halt("needs_human", DB_DECL_FILE + " changed during the run", "db");
+    const missing = want.filter((d) => state.db.dbs.indexOf(d) < 0);
+    if (!missing.length) return;
+    const al = "infra:db-up:add";
+    await pathRecheck("db-up:add", phaseName);
+    const ra = await dbDispatch(al, dbUpPrompt({ mode: "add", name: state.db.name, dbs: missing }, ["add", state.db.name, JSON.stringify(missing)]), phaseName);
+    const ua = ra.up;
+    requireProgram(ua, "db_up", al, "failed", "db");
+    if (!relayDigestOk(ua, DB_UP_KEYS, "db_up") || ua.name !== state.db.name || canonical(ua.dbs) !== canonical(missing) || canonical(ua.args) !== canonical(["add", state.db.name, JSON.stringify(missing)]) || !dbUsersOk(ua.users, missing))
+      halt("failed", al + ": the relayed result does not match the program's digest or arguments", "db");
+    state.db.dbs = state.db.dbs.concat(missing);
+    Object.assign(state.db.users, ua.users);
+    gate("test database " + state.db.name + ": added " + missing.join(", "));
+    return;
+  }
+  const name = dbContainerName(taskId, state.nonce);
+  if (!DB_NAME_RE.test(name) || /tf-local/.test(name)) halt("failed", "internal: test database name " + JSON.stringify(name) + " refused", "db");
+  // the passwords are random, made by the program: one user per database; the
+  // root password never leaves the container (it is in no prompt and no DSN)
+  const args = ["up", name, image, String(DB_TTL_SECONDS), state.nonce, JSON.stringify(want)];
+  await pathRecheck("db-up", phaseName);
+  // from here main's finally removes the container, even when a relay check below stops the run
+  state.dbTarget = { name, mechanism: "podman --timeout or systemd-run", expires: "in " + DB_TTL_SECONDS + " s" };
+  const r = await dbDispatch("infra:db-up", dbUpPrompt({ mode: "up", name, image, ttl: DB_TTL_SECONDS, nonce: state.nonce, dbs: want }, args), phaseName);
+  const sw = r.sweep;
+  if (sw && relayDigestOk(sw, ["podman", "removed", "kept", "errors"], "db_sweep"))
+    gate("test database sweep: removed " + (Array.isArray(sw.removed) && sw.removed.length ? sw.removed.join(", ") : "none") + (Array.isArray(sw.errors) && sw.errors.length ? "; errors: " + sw.errors.join("; ") : ""));
+  else gate("test database sweep: no usable result (it removes expired fleet-db-* containers only; the next run sweeps again)");
+  const u = r.up;
+  requireProgram(u, "db_up", "infra:db-up", "failed", "db");
+  if (!relayDigestOk(u, DB_UP_KEYS, "db_up") || canonical(u.args) !== canonical(args))
+    halt("failed", "infra:db-up: the relayed result does not match the program's digest or arguments", "db");
+  if (!dbUsersOk(u.users, want)) halt("failed", "infra:db-up: the program did not return one user per database", "db");
+  if (u.name !== name || canonical(u.dbs) !== canonical(want)) halt("failed", "infra:db-up: the program started " + JSON.stringify(u.name) + ", not " + name, "db");
+  if (!Number.isInteger(u.port) || u.port < 1 || u.port > 65535) halt("failed", "infra:db-up: no usable port " + JSON.stringify(u.port === undefined ? null : u.port), "db");
+  const ex = u.expiry;
+  if (!ex || typeof ex !== "object" || ["podman-timeout", "systemd-run"].indexOf(ex.mechanism) < 0 || !Number.isInteger(ex.expires))
+    halt("failed", "infra:db-up: no self-expiry recorded", "db");
+  state.db = { name, users: Object.assign({}, u.users), port: u.port, env: t.decl.env, image, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
+  state.dbTarget = { name, mechanism: ex.mechanism, expires: ex.expires };
+  gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + "; " + t.decl.env + " goes to each role's test_env");
+}
+
+// main's finally: remove the run's test database. Outside the agent cap;
+// never throws (a stop here would replace the run's own result).
+async function dbTeardown() {
+  const db = state.dbTarget;
+  state.db = null;
+  state.dbTarget = null;
+  if (!db) return;
+  const later = "; it ends by itself (" + db.mechanism + ", fleet.expires " + db.expires + ")";
+  try {
+    state.agents++;
+    const r = await agent(nonced(dbDownPrompt({ name: db.name, nonce: state.nonce })), { label: "infra:db-down", model: infraModel("infra:db-down"), schema: INFRA_SCHEMA, phase: "Cleanup" });
+    const d = r && typeof r === "object" ? r.down : null;
+    if (r && r.status === "ok" && d && relayDigestOk(d, ["removed", "absent", "error", "args"], "db_down") && canonical(d.args) === canonical([db.name, state.nonce]) && (d.removed === true || d.absent === true))
+      gate("test database " + db.name + (d.removed ? " removed" : " already gone"));
+    else gate("test database " + db.name + " not confirmed removed" + (d && typeof d.error === "string" ? " (" + d.error + ")" : "") + later);
+  } catch (e) {
+    gate("test database " + db.name + " teardown failed (" + String((e && e.message) || e) + ")" + later);
+  }
+}
+
 // ---------------------------------------------------------------- main
 
 async function main(input) {
@@ -8166,7 +10873,10 @@ async function main(input) {
     stop("needs_human", "args.mode must be \"plan\" or \"build\", got " + JSON.stringify(mode === undefined ? null : mode) + ": run /build-task <task>");
   state.mode = mode;
   if (input.confirm !== undefined && CONFIRMS.indexOf(input.confirm) < 0)
-    stop("needs_human", "args.confirm must be \"ask\" or \"auto\", got " + JSON.stringify(input.confirm));
+    stop("needs_human", "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm));
+  // 4.0.0 (1990, S3): build mode loads the role pages again when true
+  if (input.fresh_preflight !== undefined && typeof input.fresh_preflight !== "boolean")
+    stop("needs_human", "args.fresh_preflight must be true or false, got " + JSON.stringify(input.fresh_preflight));
   if (typeof input.date !== "string" || !DATE_RE.test(input.date))
     stop("needs_human", "args.date must be YYYY-MM-DD (the skill supplies it; workflows cannot read the clock)");
   if (typeof input.run_nonce !== "string" || !NONCE_RE.test(input.run_nonce))
@@ -8175,7 +10885,15 @@ async function main(input) {
       "args.run_nonce missing or malformed: the skill passes a fresh value (date +%s%N) on every invocation; run /build-task again, never resumeFromRunId (it would replay stale worktree checks)",
     );
   state.nonce = input.run_nonce;
-  return mode === "plan" ? planMode(input, input.date) : buildMode(input, input.date);
+  // 4.0.0 (1987): the caller-held digest of a freeze, for a frozen resume
+  if (input.freeze_digest !== undefined && (mode !== "build" || typeof input.freeze_digest !== "string" || !/^[0-9a-f]{64}$/.test(input.freeze_digest)))
+    stop("needs_human", "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JSON.stringify(input.freeze_digest));
+  // 4.0.0 (1981): the run's test database goes, whatever the result
+  try {
+    return await (mode === "plan" ? planMode(input, input.date) : buildMode(input, input.date));
+  } finally {
+    await dbTeardown();
+  }
 }
 
 // ---------------------------------------------------------------- entry
@@ -8201,6 +10919,6 @@ if (badArgs || input == null || typeof input !== "object" || Object.keys(input).
 try {
   return await main(input);
 } catch (e) {
-  if (e instanceof Stop) return finish(e.status, e.reason);
+  if (e instanceof Stop) return finishStop(e.status, e.reason);
   throw e;
 }

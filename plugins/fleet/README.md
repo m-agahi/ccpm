@@ -15,6 +15,13 @@ With `confirm: "auto"` (opt-in, for goal or unattended runs) plan mode does not 
 gates (intent, commands, scope) and, when they pass, builds in the same run. When one fails it
 stops with `needs_human` and a ready `needs_max_section`.
 
+`confirm: "default"` (4.0.0, ADR-1186; the skill passes it unless the user names a mode) runs the
+same three gates only for an eligible plan. A plan is eligible when the planner declared
+`change_kind: bug_fix` and `new_behaviour: false`, no planned path is an IaC path, no re-plan
+relaxed round 0, no parked prior was unreadable, and a task id input carries `project`. Any other
+plan returns `awaiting_confirmation` with `confirm_reason`, as `ask` does. A failed gate is
+`needs_human`, as under `auto`. With no `confirm` value the workflow asks.
+
 The input is any of: a yadgar ledger id, a Jira key, a GitHub or Codeberg issue or PR URL, a plan
 path, or free text.
 
@@ -62,7 +69,7 @@ A missing nonce returns `needs_human` before any agent runs.
 | 4    | branch-scan (r/o)  | any commit beyond origin/<default> that is not a plan commit -> stop                               |
 | 5    | scope-and-plan     | criterion ids; disjoint test files; `tldr`; `plan_diff` is a string array                          |
 | 5a   | callers (r/o)      | `changed_symbols` map well formed; `git grep -w` hits equal the map                                |
-| 6    | -                  | risk tier logged; short path disabled (always full)                                                |
+| 6    | -                  | short path when `est_diff_lines` < 20 and `new_behaviour` false: one test writer, every gate kept  |
 | 7    | plan-audit         | verdict other than `approve` -> `needs_human`                                                      |
 | 8    | stage-plan         | stages the plan doc; returns the sha256 of the staged bytes                                        |
 | 9    | commit-plan        | commits the plan doc only, LOCALLY; writes the sealed ref as a git object                          |
@@ -207,8 +214,10 @@ line "build caller check skipped".
 
 Intake classifies the input and fetches its text: a ledger task through yadgar `task_get`, a Jira
 ticket through the Atlassian MCP, an issue or PR through `gh-personal` or the Codeberg API, a plan
-file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body}],
-repo, plan_path}`. Free text, a plan and a ledger task work in the caller's repo.
+file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body, id,
+project}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,
+`plan` and `text`. `id` and `project` are null except on a `yaadgaar` source. `url` and
+`plan_path` may be null. Free text, a plan and a ledger task work in the caller's repo.
 
 Since 3.1.3 (ledger 1979) intake resolves a task id only by calling the ledger tool, and the tool's
 answer is the truth. `args.project` is the ledger scope and is independent of `repo`: a
@@ -236,10 +245,12 @@ plan-only commit of the task and the staged plan doc is byte-identical to HEAD's
 no commit (never `--allow-empty`) and the new ref targets HEAD. The plan commit holds `plan_path` only; nothing under
 `.fleet/` is written, staged or committed, so a global `.fleet/` gitignore changes nothing. It
 holds `branch`, `plan_path`, `plan_sha256`, `criteria`, `brief`, `task_id`, `slug`, `tldr`,
-`plan_diff` (2.1.0), `plan_facts` (scope fence, estimate, `test_cmd` and `repo_obligations`),
-`history` (cumulative
-runs, re-plans and agents) and
-`seal`, the sha256 of the canonical JSON of the rest. It holds no held-out example. Commit-plan
+`plan_diff` (2.1.0), `plan_facts` (scope fence, estimate, `test_cmd`, `repo_obligations` and,
+since 4.0.0, `change_kind` and `new_behaviour`), `history` (cumulative runs, re-plans and agents,
+and since 4.0.0 an optional `preflight` record), `project` (4.0.0, ledger 1992: the plan run's
+`args.project`, or null) and `seal`, the sha256 of the canonical JSON of the rest. A build without
+`args.project` uses the sealed `project`. A build whose `args.project` differs from it stops with
+"project mismatch". It holds no held-out example. Commit-plan
 reads the ref back with `git cat-file tag`; the script checks that the commit holds exactly
 `plan_path`, that the tag targets the plan commit, and that the message parses to the sealed ref.
 
@@ -271,6 +282,8 @@ The first failure stops the run:
    `.pre-commit-config.yaml` at `plan_commit`. A read-only infra step (`infra:precommit-ids`) runs a
    fixed program: `git show <plan_commit>:.pre-commit-config.yaml`, parsed with PyYAML. No config,
    no PyYAML or a parse error fails the gate. A refused command (`run_by: nobody`) fails it.
+   Since 4.0.0 the step runs on sonnet, and its output carries args and a digest the script
+   checks before the gate; a mismatch stops the run (`stop_gate: contract`).
 3. **G3 scope fence**, pure script code over every planned path (criteria `test_files`,
    `allowed_additions.files`, obligation `files`) and every command. It refuses `*.tf`, `*.tfvars`,
    a `terraform/` or `.terraform` dir, `kustomization.y*ml`, YAML under `k8s/` or `manifests/`,
@@ -510,6 +523,62 @@ is the plan commit, for example after a re-plan.
   marker is skipped. The script refuses, in code, any comment with a line that starts with `digger`
   or `atlantis`. Ticket and issue bodies are never edited. `comment_status` is `posted`, `skipped`,
   `failed` or `none`; on `failed`, `comment_text` holds the text to post by hand.
+
+### Re-plan rounds (4.0.0, ledger 1983)
+
+Every confirm mode gets up to 2 re-plan rounds (`:audit-fix`, `:audit-fix-2`). A plan-audit
+refusal or a script-side refusal (a confusable character, the caller map, the grep diff) sends
+the findings back to the planner, and plan-audit gates each round. After the second round the run
+stops with "(after 2 re-plan rounds)". A round that relaxed round 0 (`change_kind` moved to
+`bug_fix`, `new_behaviour` moved to false, a criterion dropped or shortened with no finding) never
+reaches the auto gates. Under `default` the run asks; under `auto` it stops `needs_human` after
+the plan commit. A run that stops before its plan commit parks its draft and findings; the next
+plan run gives them to the planner as inputs only. A parked read that is unusable fails closed
+under `default` and `auto` ("parked prior unreadable (fail closed)").
+
+### Push-access probe (4.0.0, ledger 1985)
+
+Plan mode only, right after the workspace step: a PATH re-check, then `infra:push-probe` runs
+`git push --dry-run --porcelain origin <base_ref>:refs/heads/<branch>` (with a 120 s timeout).
+The dry run sends nothing, but it runs the repo's pre-push hook. `push_probe.py` classifies the
+output. An auth failure stops the run with `needs_human` before any role runs. Anything the
+program cannot classify, or a relay that is not the program's own, logs "push access unknown"
+and the run goes on: the real push is still gated later.
+
+### Frozen resume: freeze_digest (4.0.0, ledger 1987)
+
+Each freeze writes `refs/fleet/<task id>/freeze`, a local ref to the freeze tree (no commit). A
+`needs_human` or `failed` result after a freeze returns `freeze_digest` (sha256 over the plan
+ref's sha256, the freeze tree and the frozen hasher maps) with the `plan_ref`. A build re-run
+with that `freeze_digest` resumes at the coder (`resumed_at: "frozen"`), but only when HEAD is
+the plan commit, the freeze ref is present and the worktree tree is the freeze tree. Any
+mismatch stops with `stop_gate: "resume"`. A build that re-froze its tests after a fix_tests
+round binds `refrozen: true` into the digest and never resumes this way. A run-state ref (a
+build past its commit) wins over `freeze_digest`.
+
+### Preflight cache and fresh_preflight (4.0.0, ledger 1990)
+
+Plan mode seals the role table it loaded (versions, raw DISPATCH and CONTRACT lines) in the plan
+ref as `history.preflight`. A build still runs `preflight` (the scripts directory probe and the
+PATH check) but loads no role page when the sealed record is of this fleet version and passes
+the frozen checks. Another version, no record or a failed check loads the pages in
+`preflight:roles`. `fresh_preflight: true` (build mode only) loads the pages in the first agent.
+A role page bumped after the plan shows at the first role call, and the stop says "re-run build
+with fresh_preflight: true".
+
+### Throwaway test database (4.0.0, ledger 1981)
+
+Opt-in: a repo commits `.fleet-test-db.json`, for example
+`{"version":1,"engine":"mariadb","major":"11.4","env":"YADGAR_TEST_DSN"}`. The workflow reads it
+at `origin/<default branch>` only. It then starts one local MariaDB container per run (image
+pinned by digest, bound to 127.0.0.1, self-expiring after 6 h) and gives each role its own
+database and user. The DSN goes into that role's `test_env` under the declared name, with a
+note never to write it into the plan, a finding, a commit message or a PR.
+`infra:verify-plan-commit` refuses a plan commit whose plan doc holds `mysql://` (no `plan_ref`);
+reset the fleet branch past that commit before the next plan run, which does not re-check
+earlier plan commits. Findings and PR text rely on the note alone. The workflow removes the container at the end of every run;
+`db_sweep.py` removes expired ones of earlier runs. Any declaration or relay problem stops with
+`stop_gate: "db"`.
 
 ### Threat model
 
@@ -908,7 +977,8 @@ The script pins the role contract, not the prose:
 - `EXPECTED_VERSIONS` holds the minimum role-page versions. Preflight reads each page's version. A
   lower version (stale or rolled back) stops the run; a higher one is logged as "prose-only changes
   assumed" and returned as `role_versions`.
-- Every role page carries `CONTRACT: fleet-v3` under its DISPATCH line. Preflight and every role
+- Every role page carries `CONTRACT: fleet-v4` (since 4.0.0; `fleet-v3` before) under its
+  DISPATCH line. Preflight and every role
   runner report the marker; any other value stops the run. `agent_prompt_save` strips a page's
   final newline, so the parsing never needs one: the last line counts like any other.
 - 2.1.1 pins: scope-and-plan 24, plan-audit 13, fleet-test-writer 9, fleet-test-judge 9,
@@ -918,7 +988,11 @@ The script pins the role contract, not the prose:
   fleet-coder to 17 (the build-time caller check and the optional finding `symbol`; additive, so
   the marker stays `fleet-v3`). 3.1.0 pins the prose-only pages at their live versions
   (fleet-test-writer 10, fleet-test-judge 10, pr-review 18, gate-change-nonweakening-sweep 5) and
-  raises fleet-code-judge to 15 (`check_exit`, additive).
+  raises fleet-code-judge to 15 (`check_exit`, additive). 4.0.0 bumps the marker to `fleet-v4`
+  on all ten pages, because a 3.1.3 role would run a new planner key (`criteria[].test_args`)
+  unvalidated: scope-and-plan 29, plan-audit 17, fleet-test-writer 11, fleet-test-judge 11,
+  fleet-coder 18, fleet-code-judge 16, fleet-pr-opener 11, fleet-intent-judge 3, pr-review 19,
+  gate-change-nonweakening-sweep 6.
 - Each role runner reports the version and marker it loaded. A value that differs from preflight
   (the page changed mid-run) discards the result.
 - `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are
@@ -926,8 +1000,14 @@ The script pins the role contract, not the prose:
   coder `changed_paths, suite_result, added_symbols, frozen_tests_red_at_start, obligations_done`
   (no `commit`/`commits` key any more); the intent judge `verdict, deviations, coverage`;
   pr-review `verdict, findings, touches_gate, checked`; the sweep `verdict, units, findings`;
-  since 2.1.6 the planner also `changed_symbols`. A missing key or an unknown verdict is contract drift and stops
-  the run.
+  since 2.1.6 the planner also `changed_symbols`. fleet-v4 adds the planner's `change_kind` and the
+  intent judge's `classification`. Since 4.0.0 (ledger 1984) every such key is also in the role
+  schema's `required`, widened with null, so a `needs_human` or `failed` result sets what it lacks
+  to null. On `ok` the script checks each value against the frozen type: null only where that type
+  allows it. A missing key, a wrong type or value, or an unknown verdict is contract drift. The
+  role is sent back once with the drift quoted, after a fresh PATH re-check; a second drift stops
+  the run. A version or marker mismatch never retries. The coder is never re-run: its drift is the
+  `fix_code` finding of the next code round.
 - Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
@@ -944,9 +1024,17 @@ lines; the script parses them. Accepted tiers: `fable`, `opus`, `sonnet`, `haiku
 hardcoded: a missing, unparseable or unknown line stops the run in preflight (`stop_gate:
 contract`). A role agent that dies is retried once on the page's fallback tier, when one is set,
 never on any other; the retry counts toward the agent cap. Every role dispatch logs
-`model used: <label> -> <tier>`. Infra agents (preflight, intake, workspace, branch-scan,
-stage-plan, commit-plan, load-ref, verify, hasher, commit, push, review paths and cleanup,
-write-back) run on `sonnet`.
+`model used: <label> -> <tier>`.
+
+Infra agents (4.0.0, ledger 1990) run on the model that `INFRA_TIER` names for their label. The
+first matching label prefix wins, and a label with no entry stops the run (there is no default
+tier). `haiku` runs the read-only steps whose output a program digest checks: the PATH checks,
+preflight, branch-scan, stage-plan, verify, read-state, callers, check-scripts, review-paths,
+remote-head, load-parked and the test-DB steps. `sonnet` runs everything else: intake, the
+hasher, load-ref, commit-plan, the park, workspace (its `default_branch` and `base_ref` are not
+digest-checked), precommit-ids (it feeds G2), format, commit, push, the IaC gate, hook-surface,
+changed-defs, the re-plan, state, freeze-ref and write-back steps. A haiku PATH check whose relay
+is broken runs once more on sonnet.
 
 ### Independent review
 

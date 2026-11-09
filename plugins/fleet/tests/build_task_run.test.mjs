@@ -16,645 +16,93 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync as rawSpawnSync } from "node:child_process";
-
-// 3.1.0: every python3 program a test runs is bounded in time and output, on
-// top of the program's own rlimits (a red run of an adversarial-input test
-// must fail fast, never grow).
-const PY_SPAWN_LIMITS = { timeout: 300000, maxBuffer: 16 << 20, killSignal: "SIGKILL" };
-function spawnSync(cmd, args, opts) {
-  return rawSpawnSync(cmd, args, cmd === "python3" ? Object.assign({}, PY_SPAWN_LIMITS, opts) : opts);
-}
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  PY_SPAWN_LIMITS,
+  spawnSync,
+  HERE,
+  SCRIPT_PATH,
+  SOURCE,
+  AsyncFunction,
+  compile,
+  ThrowingDate,
+  SafeMath,
+  inputsOf,
+  FROZEN_VERSIONS,
+  CONTRACT_LINE,
+  ROLE_NAMES,
+  REQUIRED_DEFAULTS,
+  NONCE,
+  withNonce,
+  RELAY_KEYS,
+  tfGateRelay,
+  pathRecheckOut,
+  remoteUrlOut,
+  relayDigestOf,
+  scanEntry,
+  fillArgs,
+  withRelayDigest,
+  runOne,
+  run,
+  call,
+  noUnscripted,
+  ARGS,
+  PC,
+  PSHA,
+  BRIEF,
+  FP_PRE,
+  FP_TESTS,
+  FP_PLAN,
+  FP_K1,
+  FP_K2,
+  FP_M3,
+  CSHA,
+  H,
+  HASHES_FLAT,
+  HASHES,
+  DEFAULT_HASHES,
+  CONFIG_ONLY,
+  criteria,
+  sha256,
+  refContentOf,
+  refEntry,
+  planRefsOf,
+  commitStub,
+  loadStub,
+  commitStepStub,
+  triedFor,
+  happy,
+  hasherPy,
+  sh,
+  runHasherRaw,
+  runHasher,
+  py,
+  HAVE_PY,
+  scratchRepo,
+  canon,
+  planRefFor,
+  buildArgs,
+  gitEnv,
+  extractFn,
+  extractPy,
+  scriptCheckPy,
+  stateJsonOf,
+  CHUNK,
+  chunksOf,
+  defsOut,
+  SCRIPTS_DIR,
+  SCRIPTS_SRC,
+  PROGRAMS,
+  programSha,
+  programOf,
+  chunkedContentOf,
+  verifyStub,
+  allScripts,
+  planRefWriteCmd,
+  stateWriteCmd,
+} from "./harness.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SCRIPT_PATH = join(HERE, "..", "workflows", "build-task-run.js");
-const SOURCE = readFileSync(SCRIPT_PATH, "utf8");
-
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-
-function compile() {
-  const body = SOURCE.replace(/^export const meta/m, "const meta");
-  return new AsyncFunction(
-    "agent",
-    "parallel",
-    "pipeline",
-    "phase",
-    "log",
-    "args",
-    "budget",
-    "workflow",
-    "Date",
-    "Math",
-    body,
-  );
-}
-
-const ThrowingDate = function () {
-  throw new Error("Date is unavailable in workflow scripts");
-};
-ThrowingDate.now = () => {
-  throw new Error("Date.now is unavailable in workflow scripts");
-};
-const SafeMath = Object.create(Math);
-SafeMath.random = () => {
-  throw new Error("Math.random is unavailable in workflow scripts");
-};
-
-// Extract the JSON inputs a role-runner or infra prompt carries.
-function inputsOf(prompt) {
-  const m = /^Inputs: (.*)$/m.exec(prompt);
-  assert.ok(m, "prompt has an Inputs: line:\n" + prompt);
-  return JSON.parse(m[1]);
-}
-
-// The minimum role versions the workflow was built against.
-const FROZEN_VERSIONS = {
-  "scope-and-plan": 27,
-  "plan-audit": 16,
-  "fleet-test-writer": 10,
-  "fleet-test-judge": 10,
-  "fleet-coder": 17,
-  "fleet-code-judge": 15,
-  "fleet-pr-opener": 10,
-  "fleet-intent-judge": 2,
-  "pr-review": 18,
-  "gate-change-nonweakening-sweep": 5,
-};
-const ROLE_NAMES = Object.keys(FROZEN_VERSIONS);
-
-// Keys each role must return on status ok (the frozen fleet-v3 contract).
-// The harness fills missing ones with neutral defaults for terse override
-// stubs; a stub with __raw: true is returned as written (drift tests).
-const REQUIRED_DEFAULTS = {
-  "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [], tldr: "adds a thing", plan_diff: ["new plan"], repo_obligations: [], test_cmd: { command: "pytest <paths>", paths_placeholder: "<paths>", env: {}, tools: [] }, changed_symbols: [] },
-  "plan-audit": { verdict: "approve", routed_findings: [] },
-  "fleet-test-writer": { criterion_id: "AC1", tests: [], files: [] },
-  "fleet-test-judge": { verdict: "approve", routed_findings: [], checked: [] },
-  "fleet-coder": { changed_paths: [], suite_result: { command: "pytest", exit_code: 0 }, added_symbols: [], frozen_tests_red_at_start: true, obligations_done: [] },
-  "fleet-code-judge": { verdict: "approve", routed_findings: [], suite_result: { command: "pytest", exit_code: 0 }, hash_check: { match: true, mismatched: [] }, gates_not_run: [], obligations_check: [] },
-  "fleet-pr-opener": { pr_url: null, pr_number: null, created: true, template_used: null, gates_not_run_stated: true },
-  "fleet-intent-judge": { verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } },
-  "pr-review": { verdict: "approve", findings: [], touches_gate: false, checked: [] },
-  "gate-change-nonweakening-sweep": { verdict: "non_weakening", units: [], findings: [] },
-};
-
-// The skill passes a fresh run_nonce on every invocation; scenario args that
-// do not name one get the default (null means "no nonce" in a test).
-const NONCE = "n1-0000001";
-function withNonce(args) {
-  if (!args || typeof args !== "object" || !args.mode || "run_nonce" in args) return args;
-  return Object.assign({}, args, { run_nonce: NONCE });
-}
-
-// 3.0.0 (ledger 1952): the relayed infra programs print a digest over these
-// keys. Stubs that give none get the program's digest (a key absent counts as
-// null, as in the script); branch-scan stubs written with message text are
-// turned into the program's metadata entries first.
-const RELAY_KEYS = [
-  [/^infra:fleet-scan:/, ["diff", "commits"]],
-  [/^infra:read-state$/, ["exists", "target", "message", "head", "head_tree", "clean"]],
-  [/^infra:review-paths:/, ["changed_paths"]],
-  [/^infra:check-scripts/, ["checks"]],
-  [/^infra:branch-scan$/, ["commits", "refs"]],
-  [/^infra:format-(tests|code):/, ["ran", "reason", "runs", "stable", "files", "changed", "refused"]],
-  // 3.1.0 (ledger 1959)
-  [/^infra:verify-plan$/, ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"]],
-  [/^infra:commit-plan/, ["head", "files", "args"]],
-  // 3.1.0 (ledger 1935c)
-  [/^infra:push(:p\d+)?$/, ["push_result", "exit_code", "hook_tail", "args"]],
-  [/^infra:hook-surface:/, ["surface", "make_paths", "error", "args"]],
-];
-// 3.1.0: the IaC push gate program's output, with its digest
-function tfGateRelay(over) {
-  const r = Object.assign({ status: "ok", reason: "scanned", touched: false, iac_files: [], problems: [], hints: [], args: ["/r/.claude/worktrees/fleet-l42-add-thing/main", "master", "0".repeat(40), "git@github.com:o/r.git"] }, over);
-  r.digest = sha256(canon({ touched: r.touched, iac_files: r.iac_files, problems: r.problems, hints: r.hints, args: r.args }));
-  return r;
-}
-// 3.1.1: a PATH re-check relay (the PATH check program's output plus status)
-function pathRecheckOut(tools, args) {
-  const pc = {
-    tools: Object.assign(Object.fromEntries(["terra" + "form", "to" + "fu", "t" + "fp", "terra" + "grunt", "dig" + "ger", "atlan" + "tis"].map((t) => [t, null])), tools || {}),
-    args,
-    path_problems: [],
-  };
-  pc.digest = sha256(canon(pc));
-  return Object.assign({ status: "ok", reason: "checked" }, pc);
-}
-// 3.1.1: the origin URL program's output
-function remoteUrlOut(url, repo) {
-  const o = { url: url === undefined ? null : url, args: [repo] };
-  o.digest = sha256(canon(o));
-  return o;
-}
-function relayDigestOf(r, keys) {
-  const o = {};
-  for (const k of keys) o[k] = r[k] === undefined ? null : r[k];
-  return sha256(canon(o));
-}
-// One plan-ref entry as the branch-scan program prints it: no content; the
-// program's own task_id, plan_path and ref_ok.
-function scanEntry(e) {
-  if (!e || typeof e !== "object" || !("content" in e)) return e;
-  const out = Object.assign({}, e);
-  delete out.content;
-  let r = null;
-  try {
-    r = typeof e.content === "string" ? JSON.parse(e.content) : null;
-  } catch (err) {
-    r = null;
-  }
-  const obj = r && typeof r === "object" && !Array.isArray(r) ? r : null;
-  out.task_id = obj && typeof obj.task_id === "string" ? obj.task_id : null;
-  out.plan_path = obj && typeof obj.plan_path === "string" ? obj.plan_path : null;
-  let ok = !!obj && typeof e.content === "string" && sha256(e.content) === e.sha256 && typeof obj.seal === "string";
-  if (ok) {
-    const o = Object.assign({}, obj);
-    delete o.seal;
-    ok = obj.seal === sha256(canon(o)) && obj.branch === "fleet/" + obj.task_id + "-" + obj.slug;
-  }
-  out.ref_ok = ok;
-  // the program hashes the bytes it read: a stub's mismatched sha256 is a broken ref
-  return out;
-}
-// 3.1.0 review: the programs echo their arguments; a stub that gives none
-// echoes what the prompt passed (the push stub: a temp file and its exit code).
-function fillArgs(label, r, prompt) {
-  if (!r || typeof r !== "object" || r.status !== "ok" || "args" in r || "digest" in r) return r;
-  if (/^infra:verify-plan$/.test(label)) {
-    const i = inputsOf(prompt);
-    r.args = [i.main_worktree, i.plan_commit, i.plan_path];
-  } else if (/^infra:commit-plan/.test(label)) r.args = [inputsOf(prompt).worktree];
-  else if (/^infra:hook-surface:/.test(label)) r.args = [inputsOf(prompt).worktree, inputsOf(prompt).rev, JSON.stringify(inputsOf(prompt).targets)];
-  else if (/^infra:push(:p\d+)?$/.test(label) && r.push_result === "hook_rejected") r.args = ["/tmp/fleet-push.out", String(r.exit_code)];
-  return r;
-}
-function withRelayDigest(label, r) {
-  if (!r || typeof r !== "object" || r.status !== "ok" || "digest" in r) return r;
-  const hit = RELAY_KEYS.find(([re]) => re.test(label));
-  if (!hit) return r;
-  if (/^infra:branch-scan$/.test(label) && Array.isArray(r.refs)) r.refs = r.refs.map(scanEntry);
-  r.digest = relayDigestOf(r, hit[1]);
-  return r;
-}
-
-async function runOne(script, args0) {
-  const args = withNonce(args0);
-  const calls = [];
-  const unscripted = [];
-  const logs = [];
-  const counters = {};
-  // before the freeze, the worktree holds what the first freeze will hash
-  const f1 = script["hasher:freeze:f1"];
-  let lastHashes = f1 && typeof f1 === "object" && !Array.isArray(f1) && f1.hashes ? f1.hashes : null;
-  const fleetRefs = {};
-  const agent = async (prompt, opts = {}) => {
-    const label = opts.label;
-    calls.push({ label, prompt, opts });
-    // 3.1.0: preflight returns the PATH check program's output (no IaC tool on PATH)
-    if (label === "preflight" && script.preflight && typeof script.preflight === "object" && !("path_check" in script.preflight) && !script.preflight.__raw_path_check) {
-      const pc = { tools: { ["terra" + "form"]: null, ["to" + "fu"]: null, ["t" + "fp"]: null, ["terra" + "grunt"]: null, ["dig" + "ger"]: null, ["atlan" + "tis"]: null }, args: [inputsOf(prompt).repo], path_problems: [] };
-      pc.digest = sha256(canon(pc));
-      return Object.assign(JSON.parse(JSON.stringify(script.preflight)), { path_check: pc });
-    }
-    // the bytecode purge is mechanical; unscripted purges succeed by default
-    if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
-    // unscripted plan parks move the draft and leave the worktree clean
-    if (!(label in script) && /^infra:park-plan/.test(label)) return { status: "ok", reason: "parked", target: inputsOf(prompt).dest, clean: true };
-    // unscripted plan formatting changes nothing (the hooks found nothing to fix)
-    if (!(label in script) && /^infra:format-plan/.test(label)) return { status: "ok", reason: "formatted", changed_paths: [] };
-    // unscripted fixer-hook runs change nothing (3.0.0)
-    if (!(label in script) && /^infra:format-(tests|code):/.test(label)) {
-      const sel = inputsOf(prompt).select;
-      return withRelayDigest(label, { status: "ok", reason: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [] });
-    }
-    // 3.1.0: unscripted IaC pre-push gates find no IaC file in the PR diff
-    if (!(label in script) && /^infra:tf-gate:/.test(label)) {
-      const i = inputsOf(prompt);
-      return tfGateRelay({ args: [i.main_worktree, i.default_branch, i.approved_sha, i.remote_url] });
-    }
-    // 3.1.0: unscripted remote-head reads find no remote branch
-    if (!(label in script) && /^infra:remote-head:/.test(label)) {
-      const i = inputsOf(prompt);
-      const r = { status: "ok", reason: "read", head: null, args: [i.main_worktree, i.branch, i.remote_url] };
-      r.digest = sha256(canon({ head: r.head, args: r.args }));
-      return r;
-    }
-    // 3.1.1: unscripted PATH re-checks find no IaC tool on PATH
-    if (!(label in script) && /^infra:path-check:/.test(label)) {
-      const i = inputsOf(prompt);
-      return pathRecheckOut({}, [i.repo, i.token]);
-    }
-    // 3.1.0: unscripted hook-surface reads find no hook entry file
-    if (!(label in script) && /^infra:hook-surface:/.test(label))
-      return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: {}, error: null }, prompt));
-    // 3.1.0: unscripted ledger reads find a task with a body page
-    if (!(label in script) && /^infra:ledger-read:pre$/.test(label))
-      return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
-    // unscripted build caller checks find no modified existing definition
-    if (!(label in script) && /^infra:changed-defs:/.test(label)) return defsOut([]);
-    // unscripted fleet-internal scans find no .fleet/ path in the PR diff
-    if (!(label in script) && /^infra:fleet-scan:/.test(label)) return withRelayDigest(label, { status: "ok", reason: "scanned", diff: [], commits: [] });
-    // run-state writes are mechanical too: the ref lands on the expected head
-    if (!(label in script) && /^infra:state:/.test(label)) {
-      fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = "f".repeat(40);
-      return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
-    }
-    if (!(label in script)) {
-      unscripted.push(label);
-      return null;
-    }
-    let r = script[label];
-    if (Array.isArray(r)) {
-      const i = counters[label] || 0;
-      counters[label] = i + 1;
-      r = r[Math.min(i, r.length - 1)];
-    }
-    if (typeof r === "function") r = r(prompt, opts);
-    if (r === undefined || r === null) return null;
-    r = JSON.parse(JSON.stringify(r));
-    const raw = r.__raw === true;
-    delete r.__raw;
-    if (!raw) withRelayDigest(label, fillArgs(label, r, prompt));
-    // 3.1.1: the workspace step relays the origin URL program's output; a stub
-    // that gives only remote_url gets that program's output for it
-    if (label === "workspace" && !raw && r.status === "ok" && !("remote_url_check" in r)) r.remote_url_check = remoteUrlOut(r.remote_url, inputsOf(prompt).repo);
-    // hasher stubs that give only a fingerprint carry the maps of the last
-    // hasher result forward (nothing changed; the judge fingerprint compares
-    // the maps too) and list no changed paths
-    if (label.startsWith("hasher:") && !raw && r.status === "ok") {
-      if (!("hashes" in r)) r.hashes = JSON.parse(JSON.stringify(lastHashes || DEFAULT_HASHES));
-      if (!("changed" in r)) r.changed = [];
-      // the real hasher sees the run-state refs the workflow's own state writes made
-      const g = r.hashes.git || (r.hashes.git = {});
-      if (!Object.keys(g).some((k) => k.startsWith("fleetref:"))) Object.assign(g, fleetRefs);
-      lastHashes = r.hashes;
-      // the program's digest over what it printed (2.1.5)
-      if (!("digest" in r)) {
-        const o = { fingerprint: r.fingerprint, hashes: r.hashes };
-        if (inputsOf(prompt).base_tree) o.changed = r.changed;
-        r.digest = sha256(canon(o));
-      }
-    }
-    // a run-state write moves its ref
-    if (label.startsWith("infra:state:") && !raw && r.status === "ok" && typeof r.state_sha === "string")
-      fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = r.state_sha;
-    // a terse writer stub reports exactly its criterion's test files
-    if (label.startsWith("role:fleet-test-writer:") && !raw && r.status === "ok" && !("files" in r))
-      r.files = inputsOf(prompt).test_files;
-    if (label.startsWith("role:") && !raw) {
-      const role = label.split(":")[1];
-      // role runners report the version and contract marker they loaded
-      if (!("role_version" in r)) {
-        const pv = script.preflight && script.preflight.versions ? script.preflight.versions[role] : undefined;
-        r.role_version = pv !== undefined ? pv : FROZEN_VERSIONS[role];
-      }
-      if (!("role_contract" in r)) r.role_contract = "CONTRACT: fleet-v3";
-      if (r.status === "ok")
-        for (const [k, v] of Object.entries(REQUIRED_DEFAULTS[role] || {})) if (!(k in r)) r[k] = v;
-    }
-    return r;
-  };
-  const parallel = async (thunks) =>
-    Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));
-  const pipeline = async (items, ...stages) =>
-    Promise.all(
-      items.map(async (item, idx) => {
-        let prev = item;
-        try {
-          for (const s of stages) prev = await s(prev, item, idx);
-          return prev;
-        } catch {
-          return null;
-        }
-      }),
-    );
-  const fn = compile();
-  // a crashed run rethrows; its logs travel on the error (2.1.6)
-  const crashed = (e) => {
-    if (e && typeof e === "object") e.__logs = logs;
-    throw e;
-  };
-  const result = await fn(
-    agent,
-    parallel,
-    pipeline,
-    () => {},
-    (m) => logs.push(m),
-    args,
-    { total: null, spent: () => 0, remaining: () => Infinity },
-    async () => {
-      throw new Error("nested workflow not expected");
-    },
-    ThrowingDate,
-    SafeMath,
-  ).catch(crashed);
-  return { result, calls, unscripted, logs, labels: calls.map((c) => c.label) };
-}
-
-// Plan mode, then (when it returns awaiting_confirmation) build mode with the
-// returned plan_ref, as the skill does after Max confirms. The merged view
-// holds both runs' calls; .plan and .build hold each run alone.
-async function run(script, args, buildOver) {
-  const plan = await runOne(script, args);
-  if (!plan.result || plan.result.status !== "awaiting_confirmation" || !args || typeof args !== "object" || args.mode !== "plan")
-    return Object.assign({}, plan, { plan, build: null });
-  const bargs = Object.assign({}, args, { mode: "build", plan_ref: plan.result.plan_ref }, buildOver || {});
-  delete bargs.input;
-  const build = await runOne(script, bargs);
-  return {
-    result: build.result,
-    planResult: plan.result,
-    calls: plan.calls.concat(build.calls),
-    unscripted: plan.unscripted.concat(build.unscripted),
-    logs: plan.logs.concat(build.logs),
-    labels: plan.labels.concat(build.labels),
-    plan,
-    build,
-  };
-}
-
-function call(out, label) {
-  const c = out.calls.find((x) => x.label === label);
-  assert.ok(c, "expected a call labelled " + label + "; got " + out.labels.join(", "));
-  return c;
-}
-
-function noUnscripted(out) {
-  assert.deepEqual(out.unscripted, [], "unscripted agent labels");
-}
-
-const ARGS = {
-  mode: "plan",
-  input: "L42",
-  repo: "/r",
-  project: "o/r",
-  date: "2026-11-04",
-  run_nonce: NONCE,
-};
-const PC ="abc1234def0";
-const PSHA = "a".repeat(64);
-const BRIEF = {
-  title: "Add Thing!",
-  description: "add a thing",
-  sources: [{ kind: "ledger", ref: "42", url: null, body: "task body" }],
-  repo: "/r",
-  plan_path: null,
-};
-// Fingerprints are {head, tree}. Writers and the coder never commit, so the
-// head stays at the plan commit until the commit step; only the tree moves.
-// FP_PRE: the plan commit before the writers; FP_PLAN (= FP_TESTS): the
-// worktree holding the approved tests.
-const FP_PRE = { head: PC, tree: "T0" };
-const FP_TESTS = { head: PC, tree: "T1" };
-const FP_PLAN = FP_TESTS;
-const FP_K1 = { head: PC, tree: "K1" };
-const FP_K2 = { head: PC, tree: "K2" };
-const FP_M3 = { head: PC, tree: "M3" };
-// the commit step's head for code round m
-const CSHA = (m) => "c00000" + m;
-// Hasher output is four maps plus a suspicious list. Fixtures are written as
-// flat prefixed keys and converted: "git:<k>" -> git, "symlink:<k>" ->
-// symlinks, a key with "#" -> sections, anything else -> files.
-function H(flat, suspicious) {
-  const h = { files: {}, sections: {}, git: {}, symlinks: {}, ignored: {}, suspicious: suspicious || [] };
-  for (const [k, v] of Object.entries(flat)) {
-    if (k.startsWith("git:")) h.git[k.slice(4)] = v;
-    else if (k.startsWith("symlink:")) h.symlinks[k.slice(8)] = v;
-    else if (k.includes("#")) h.sections[k] = v;
-    else h.files[k] = v;
-  }
-  return h;
-}
-const HASHES_FLAT = {
-  "tests/test_a.py": "ha",
-  "tests/test_b.py": "hb",
-  "pyproject.toml#tool.pytest": "hp",
-};
-const HASHES = H(HASHES_FLAT);
-const DEFAULT_HASHES = HASHES;
-const CONFIG_ONLY = H({ "pyproject.toml#tool.pytest": "hp" });
-
-function criteria(n = 2) {
-  return Array.from({ length: n }, (_, i) => ({
-    id: "AC" + (i + 1),
-    text: "behaviour " + (i + 1),
-    test_files: ["tests/test_" + String.fromCharCode(97 + i) + ".py"],
-  }));
-}
-
-const sha256 = (t) => createHash("sha256").update(t, "utf8").digest("hex");
-
-// The sealed ref the commit-plan prompt writes as the tag message (heredoc
-// body + newline).
-function refContentOf(prompt) {
-  const m = /<<'FLEET_PLAN_JSON'\n([\s\S]*?)\nFLEET_PLAN_JSON/.exec(prompt);
-  return m ? m[1] + "\n" : null;
-}
-
-// One entry of the plan-ref reader's output, as the real program prints it.
-function refEntry(name, target, content) {
-  return { name, tag_sha: "7".repeat(40), type: "tag", target, target_type: "commit", sha256: sha256(content), content };
-}
-
-// The plan refs of task l42 in the store: refs/fleet/l42/plan targets
-// store.__planHead (PC when unset; null means no ref), and every earlier
-// plan ref is kept as refs/fleet/l42/plan-<n>. store[<commit>] is the tag
-// message whose target is that commit.
-function planRefsOf(store, taskId) {
-  const out = [];
-  const t = taskId || store.__task || "l42";
-  const head = "__planHead" in store ? store.__planHead : PC;
-  if (head && store[head] !== undefined) out.push(refEntry("refs/fleet/" + t + "/plan", head, store[head]));
-  (store.__archived || []).forEach((h, i) => out.push(refEntry("refs/fleet/" + t + "/plan-" + (i + 1), h, store[h])));
-  return out;
-}
-
-// commit-plan stub: the commit holds only plan_path; the sealed ref becomes
-// the tag message at refs/fleet/l42/plan (an earlier one is archived).
-function commitStub(store, head, planSha) {
-  return (prompt) => {
-    const c = refContentOf(prompt);
-    if (c == null) return { status: "failed", reason: "no ref content in the prompt" };
-    const prev = "__planHead" in store ? store.__planHead : null;
-    if (prev && prev !== head) (store.__archived || (store.__archived = [])).push(prev);
-    store[head] = c;
-    store.__planHead = head;
-    store.__task = inputsOf(prompt).task_id;
-    return { status: "ok", reason: "committed", head, files: [inputsOf(prompt).plan_path], plan_sha256: planSha, refs: planRefsOf(store) };
-  };
-}
-
-// load-ref stub: the plan-ref reader over the store, in the prompt's mode
-// (2.1.5): no content in the entries; "chunks" adds the plan ref's message
-// in pieces of at most 1000 characters.
-function loadStub(store) {
-  return (prompt) => {
-    const inp = inputsOf(prompt);
-    const all = planRefsOf(store, inp.task_id);
-    const refs = all.map((e) => {
-      const o = { ...e };
-      delete o.content;
-      return o;
-    });
-    const r = { status: "ok", reason: "read", refs };
-    if (inp.mode === "chunks") {
-      const e = all.find((x) => x.name === inp.plan_ref);
-      if (e && typeof e.content === "string") {
-        r.chunks = [];
-        for (let i = 0; i < e.content.length; i += 1000) r.chunks.push(e.content.slice(i, i + 1000));
-      }
-    }
-    return r;
-  };
-}
-
-// commit-step stub: hooks pass; the commit holds exactly the judged tree.
-function commitStepStub(m, live) {
-  return (prompt) => {
-    const code = inputsOf(prompt).code_tree;
-    if (live) Object.assign(live, { head: CSHA(m), tree: code });
-    return {
-      status: "ok",
-      reason: "committed",
-      commit_result: "committed",
-      staged_tree: code,
-      worktree_tree: code,
-      head: CSHA(m),
-      head_tree: code,
-    };
-  };
-}
-
-// The ledger call intake reports for a brief: read_task for each yaadgaar source.
-function triedFor(brief) {
-  return (brief.sources || []).filter((x) => x.kind === "yaadgaar").map((x) => ({ ledger: "yaadgaar", project: null, call: "read_task(number=" + x.ref + ")", error: null }));
-}
-
-function happy(over = {}) {
-  const crit = over.criteria || criteria(2);
-  const store = {};
-  // the last commit the commit step made: the review's worktree state
-  const live = {};
-  const reviewState = () => ({ status: "ok", fingerprint: { head: live.head, tree: live.tree } });
-  const s = {
-    __store: store,
-    preflight: {
-      reachable: true,
-      missing: [],
-      versions: { ...FROZEN_VERSIONS },
-      contract: Object.fromEntries(ROLE_NAMES.map((k) => [k, "CONTRACT: fleet-v3"])),
-      dispatch: Object.fromEntries(ROLE_NAMES.map((k) => [k, "DISPATCH: model=sonnet"])),
-    },
-    intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF, tried: over.tried || triedFor(over.brief || BRIEF) },
-    "infra:branch-scan": { status: "ok", reason: "scanned", commits: [], refs: [] },
-    "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
-    "infra:commit-plan": commitStub(store, PC, PSHA),
-    "infra:load-ref": loadStub(store),
-    "infra:read-state": { status: "ok", reason: "no run-state", exists: false },
-    "infra:verify-plan": {
-      status: "ok",
-      reason: "verified",
-      head: PC,
-      plan_sha256: PSHA,
-      plan_sha256_head: PSHA,
-      is_ancestor: true,
-      commits_since: [],
-      plan_touched: [],
-      changed_since: [],
-    },
-    "infra:push": (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha }),
-    "infra:ledger-writeback": (prompt) => ({
-      status: "ok",
-      reason: "ok",
-      results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "written" })),
-    }),
-    workspace: {
-      status: "ok",
-      reason: "created",
-      default_branch: "master",
-      base_ref: "B0",
-      remote_slug: "o/r",
-      remote_url: "git@github.com:o/r.git",
-    },
-    "role:scope-and-plan": {
-      status: "ok",
-      reason: "planned",
-      artefacts: ["docs/plans/x.md"],
-      plan_path: "docs/plans/x.md",
-      criteria: crit,
-      est_diff_lines: 80,
-      new_behaviour: true,
-      tldr: "adds a thing",
-      plan_diff: ["new plan"],
-      fleet_estimate: { criteria: crit.length, agents: 20, rounds: 1 },
-      yadgar_findings: ["planner fact"],
-    },
-    "role:plan-audit": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
-    "hasher:pre-writers:r1": { status: "ok", fingerprint: FP_PRE },
-    "hasher:post-writers:r1": (prompt) => ({
-      status: "ok",
-      fingerprint: FP_TESTS,
-      changed: crit.flatMap((c) => c.test_files),
-    }),
-    "role:fleet-test-judge:r1": {
-      status: "ok",
-      reason: "good",
-      verdict: "approve",
-      routed_findings: [],
-      checked: [],
-      yadgar_findings: ["judge fact"],
-    },
-    "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: FP_TESTS },
-    "hasher:freeze:f1": { status: "ok", fingerprint: FP_TESTS, hashes: HASHES },
-    "role:fleet-coder:r1": {
-      status: "ok",
-      reason: "done",
-      changed_paths: ["src/x.py"],
-      frozen_tests_red_at_start: true,
-      suite_result: { command: "pytest", exit_code: 0 },
-    },
-    "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES },
-    "role:fleet-code-judge:r1": {
-      status: "ok",
-      reason: "good",
-      verdict: "approve",
-      routed_findings: [],
-      hash_check: { match: true, mismatched: [] },
-      suite_result: { command: "pytest", exit_code: 0 },
-    },
-    "hasher:fp-post:code-judge:r1": { status: "ok", fingerprint: FP_K1 },
-    "infra:commit:r1": commitStepStub(1, live),
-    "infra:commit:r2": commitStepStub(2, live),
-    "infra:commit:r3": commitStepStub(3, live),
-    "infra:review-paths:v1": { status: "ok", reason: "listed", changed_paths: ["src/x.py", "tests/test_a.py"] },
-    "hasher:pre-review:v1": reviewState,
-    "role:pr-review:v1": { status: "ok", reason: "clean", verdict: "approve", findings: [], touches_gate: false, checked: ["diff"] },
-    "hasher:fp-post:pr-review:v1": reviewState,
-    "infra:review-cleanup:v1": { status: "ok", reason: "clean" },
-    "role:fleet-pr-opener": {
-      status: "ok",
-      reason: "opened",
-      pr_url: "https://github.com/o/r/pull/7",
-      pr_number: 7,
-      created: true,
-      template_used: ".github/pull_request_template.md",
-      gates_not_run_stated: true,
-      yadgar_findings: ["pr fact"],
-    },
-  };
-  for (const c of crit) {
-    s["role:fleet-test-writer:" + c.id + ":r1"] = {
-      status: "ok",
-      reason: "red",
-      criterion_id: c.id,
-      tests: [],
-      files: c.test_files.slice(),
-    };
-  }
-  return Object.assign(s, over.script || {});
-}
 
 // ---------------------------------------------------------------- args
 
@@ -753,7 +201,8 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
   // roles get plain files in frozen_tests and synthetic section keys apart
   assert.deepEqual(coder.frozen_tests, { "tests/test_a.py": "ha", "tests/test_b.py": "hb" });
   // role view: flat keys path#section, git:<k>, symlink:<rel>
-  assert.deepEqual(coder.frozen_config_sections, { "pyproject.toml#tool.pytest": "hp" });
+  // 4.0.0 (1987): the freeze ref is frozen too (read-only for the coder)
+  assert.deepEqual(coder.frozen_config_sections, { "pyproject.toml#tool.pytest": "hp", "git:fleetref:refs/fleet/l42/freeze": "T1" });
   const cjIn = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
   assert.deepEqual(cjIn.frozen_tests, coder.frozen_tests);
   assert.equal(cjIn.code_base_ref, PC);
@@ -791,17 +240,24 @@ test("judges run as the read-only fleet:judge agent", async () => {
   for (const c of out.calls) assert.notEqual(c.opts.isolation, "worktree", c.label);
 });
 
-test("short path is disabled: a small no-new-behaviour plan still takes the full path", async () => {
+test("4.0.0 short path: a small no-new-behaviour plan runs one writer and keeps every gate", async () => {
   const s = happy();
   s["role:scope-and-plan"].est_diff_lines = 10;
   s["role:scope-and-plan"].new_behaviour = false;
+  s["role:fleet-test-writer:short:r1"] = {
+    status: "ok",
+    reason: "red",
+    criterion_id: "short",
+    tests: [{ name: "a", covers: "AC1: a" }, { name: "b", covers: "AC2: b" }],
+    files: ["tests/test_a.py", "tests/test_b.py"],
+  };
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.equal(out.result.path, "full");
+  assert.equal(out.result.path, "short");
   assert.ok(out.labels.includes("role:plan-audit"));
-  assert.ok(out.labels.includes("role:fleet-test-writer:AC1:r1"));
-  assert.ok(out.logs.some((l) => /short path disabled/.test(l)));
+  assert.ok(out.labels.includes("role:fleet-test-judge:r1"));
+  assert.ok(!out.labels.includes("role:fleet-test-writer:AC1:r1"));
   assert.ok(out.logs.some((l) => /est_diff_lines < 20 AND new_behaviour false/.test(l)));
 });
 
@@ -1191,57 +647,19 @@ test("hasher prompt carries the extraction rules and the config list", async () 
     '"mocha"',
     "sort_keys=True",
     "GIT_INDEX_FILE",
-    "'read-tree', 'HEAD'",
-    "'add', '-A'",
-    "write-tree",
   ]) {
     assert.ok(p.includes(needle), "hasher prompt mentions " + needle);
   }
+  // 4.0.0: the program runs from the shipped file, which builds the temp-index tree
+  assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/hasher.py'"));
+  const prog = readFileSync(join(SCRIPTS_SRC, "hasher.py"), "utf8");
+  for (const needle of ["'read-tree', 'HEAD'", "'add', '-A'", "write-tree"]) assert.ok(prog.includes(needle), "hasher.py has " + needle);
   const h = inputsOf(p);
   // 2.1.4: the plan ref is a git object (frozen as a fleetref), not a file
   assert.deepEqual(h.test_files.sort(), ["tests/test_a.py", "tests/test_b.py"]);
   assert.ok(!("mode" in h));
 });
 
-// The hasher's Python program is embedded in the workflow between markers.
-// Run it for real against a scratch git repo.
-function hasherPy() {
-  const m = /HASHER_PY_BEGIN\n([\s\S]*?)\n\/\/ HASHER_PY_END/.exec(SOURCE);
-  assert.ok(m, "HASHER_PY markers present");
-  // the block is a String.raw template literal: strip the JS wrapper lines
-  const body = m[1].replace(/^const HASHER_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
-  return body;
-}
-
-function sh(cwd, ...cmd) {
-  const r = spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: "utf8" });
-  if (r.status !== 0) throw new Error(cmd.join(" ") + ": " + r.stderr);
-  return r.stdout;
-}
-
-// mode is kept for the older call sites; the program always hashes.
-function runHasherRaw(wt, mode, files, baseTree) {
-  const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify(files)].concat(baseTree ? [baseTree] : []), {
-    input: hasherPy(),
-    encoding: "utf8",
-  });
-  if (r.status !== 0) throw new Error("hasher failed: " + r.stderr);
-  return JSON.parse(r.stdout);
-}
-
-// Flatten the four maps to prefixed keys for the older assertions.
-function runHasher(wt, mode, files) {
-  const out = runHasherRaw(wt, mode, files);
-  if (!out.hashes) return out;
-  const h = out.hashes;
-  const flat = Object.assign({}, h.files, h.sections);
-  for (const [k, v] of Object.entries(h.git)) flat["git:" + k] = v;
-  for (const [k, v] of Object.entries(h.symlinks)) flat["symlink:" + k] = v;
-  return { fingerprint: out.fingerprint, hashes: flat, suspicious: h.suspicious };
-}
-
-const py = spawnSync("python3", ["-c", "import tomllib"]);
-const HAVE_PY = py.status === 0;
 
 test("hasher program: sections, config files, fingerprint", { skip: !HAVE_PY }, () => {
   const wt = mkdtempSync(join(tmpdir(), "fleet-hasher-"));
@@ -1700,10 +1118,12 @@ test("each role runs on the tier its DISPATCH line names; a bad or missing line 
   }
 });
 
-test("infra agents run on sonnet explicitly", async () => {
+// 4.0.0 (1990): an explicit tier on every infra agent, haiku or sonnet by
+// INFRA_TIER (v4_s3 checks each label's tier)
+test("infra agents run on an explicit tier", async () => {
   const out = await run(withDispatch(happy(), DISPATCH), ARGS);
   for (const c of out.calls)
-    if (!c.label.startsWith("role:")) assert.equal(c.opts.model, "sonnet", c.label);
+    if (!c.label.startsWith("role:")) assert.ok(c.opts.model === "sonnet" || c.opts.model === "haiku", c.label + " " + c.opts.model);
 });
 
 test("preflight asks for each role's DISPATCH line", async () => {
@@ -1746,14 +1166,6 @@ test("a dead role with no fallback tier fails without a retry", async () => {
 
 // ---------------------------------------------------------------- synthetic key collisions
 
-function scratchRepo(prefix) {
-  const wt = mkdtempSync(join(tmpdir(), prefix));
-  sh(wt, "git", "init", "-q");
-  sh(wt, "git", "config", "user.email", "t@example.com");
-  sh(wt, "git", "config", "user.name", "t");
-  sh(wt, "git", "config", "commit.gpgsign", "false");
-  return wt;
-}
 
 test("hasher program: a file named like a synthetic key cannot mask one", { skip: !HAVE_PY }, () => {
   const wt = scratchRepo("fleet-hasher-collide-");
@@ -1956,22 +1368,23 @@ test("S-2: roles get only criterion test files in frozen_tests; config files go 
 
 test("S-8: a role version lower than the frozen minimum stops in preflight", async () => {
   const s = happy();
-  s.preflight.versions["fleet-coder"] = 16;
+  s.preflight.versions["fleet-coder"] = FROZEN_VERSIONS["fleet-coder"] - 1;
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder version 16 < frozen 17/);
+  assert.match(out.result.reason, new RegExp("role fleet-coder version " + (FROZEN_VERSIONS["fleet-coder"] - 1) + " < frozen " + FROZEN_VERSIONS["fleet-coder"]));
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
 test("S-8: a higher role version is logged as prose-only and recorded", async () => {
   const s = happy();
-  s.preflight.versions["fleet-code-judge"] = 16;
+  const cj = FROZEN_VERSIONS["fleet-code-judge"];
+  s.preflight.versions["fleet-code-judge"] = cj + 1;
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.ok(out.result.gate_log.some((l) => /role fleet-code-judge v16 > frozen v15: prose-only changes assumed/.test(l)));
-  assert.equal(out.result.role_versions["fleet-code-judge"], 16);
-  assert.equal(out.result.role_versions["fleet-coder"], 17);
+  assert.ok(out.result.gate_log.some((l) => l.includes("role fleet-code-judge v" + (cj + 1) + " > frozen v" + cj + ": prose-only changes assumed")));
+  assert.equal(out.result.role_versions["fleet-code-judge"], cj + 1);
+  assert.equal(out.result.role_versions["fleet-coder"], FROZEN_VERSIONS["fleet-coder"]);
 });
 
 test("S-8: a role runner that loaded a different version than preflight is discarded", async () => {
@@ -2050,19 +1463,19 @@ test("manual criteria: no writer, no frozen entry, still listed for the PR opene
 
 // ---------------------------------------------------------------- contract marker + output asserts
 
-test("contract marker: missing or fleet-v1 in preflight halts; fleet-v3 passes", async () => {
+test("contract marker: missing or fleet-v1 in preflight halts; fleet-v4 passes", async () => {
   const missing = happy();
   missing.preflight.contract["fleet-coder"] = null;
   let out = await run(missing, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder contract null != fleet-v3/);
+  assert.match(out.result.reason, /role fleet-coder contract null != fleet-v4/);
   assert.deepEqual(out.labels, ["preflight"]);
 
   const v1 = happy();
   v1.preflight.contract["plan-audit"] = "CONTRACT: fleet-v1";
   out = await run(v1, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role plan-audit contract fleet-v1 != fleet-v3/);
+  assert.match(out.result.reason, /role plan-audit contract fleet-v1 != fleet-v4/);
   assert.deepEqual(out.labels, ["preflight"]);
 
   out = await run(happy(), ARGS);
@@ -2074,9 +1487,11 @@ test("contract marker: a v1 marker in build-mode preflight halts before any buil
   const plan = await runOne(s, ARGS);
   assert.equal(plan.result.status, "awaiting_confirmation");
   s.preflight.contract["fleet-coder"] = "CONTRACT: fleet-v1";
-  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  // 4.0.0 (1990): a build loads the role pages in preflight only with
+  // fresh_preflight (else they come from the plan ref; v4_s3 covers that path)
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r", fresh_preflight: true });
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /contract fleet-v1 != fleet-v3/);
+  assert.match(out.result.reason, /contract fleet-v1 != fleet-v4/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -2086,13 +1501,13 @@ test("contract marker: a role runner that loaded another contract is discarded",
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-test-judge/);
-  assert.match(out.result.reason, /contract fleet-v1 != fleet-v3/);
+  assert.match(out.result.reason, /contract fleet-v1 != fleet-v4/);
   assert.ok(!out.labels.includes("hasher:freeze:f1"));
 });
 
 test("contract drift: planner ok output missing a required key stops", async () => {
   const s = happy();
-  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: "CONTRACT: fleet-v3" });
+  const p = Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: CONTRACT_LINE });
   delete p.allowed_additions;
   delete p.held_out_examples;
   s["role:scope-and-plan"] = p;
@@ -2106,7 +1521,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
   s["role:fleet-code-judge:r1"] = {
     __raw: true,
     role_version: FROZEN_VERSIONS["fleet-code-judge"],
-    role_contract: "CONTRACT: fleet-v3",
+    role_contract: CONTRACT_LINE,
     status: "ok",
     reason: "approved with gates not run: coverage",
     verdict: "approve",
@@ -2122,7 +1537,7 @@ test("contract drift: judge ok output missing a required key stops", async () =>
 
 test("contract drift: pr-opener ok output missing a required key stops", async () => {
   const s = happy();
-  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: FROZEN_VERSIONS["fleet-pr-opener"], role_contract: "CONTRACT: fleet-v3" });
+  const pr = Object.assign({}, s["role:fleet-pr-opener"], { __raw: true, role_version: FROZEN_VERSIONS["fleet-pr-opener"], role_contract: CONTRACT_LINE });
   delete pr.template_used;
   s["role:fleet-pr-opener"] = pr;
   const out = await run(s, ARGS);
@@ -2141,7 +1556,7 @@ test("contract drift: null/empty values are fine where allowed", async () => {
 
 test("contract drift: a needs_human output may lack the role fields", async () => {
   const s = happy();
-  s["role:fleet-coder:r1"] = { __raw: true, role_version: FROZEN_VERSIONS["fleet-coder"], role_contract: "CONTRACT: fleet-v3", status: "needs_human", reason: "test AC1 wrong" };
+  s["role:fleet-coder:r1"] = { __raw: true, role_version: FROZEN_VERSIONS["fleet-coder"], role_contract: CONTRACT_LINE, status: "needs_human", reason: "test AC1 wrong" };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /test AC1 wrong/);
@@ -2326,7 +1741,11 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "preflight",
     "intake",
     "workspace",
+    // 4.0.0 (1985): the push-access dry run, after its own PATH re-check
+    "infra:path-check:push-probe",
+    "infra:push-probe",
     "infra:branch-scan",
+    "infra:load-parked",
     "role:scope-and-plan",
     "infra:hook-surface:plan",
     "infra:path-check:format-plan",
@@ -2336,6 +1755,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:stage-plan",
     "infra:path-check:commit-plan",
     "infra:commit-plan",
+    "infra:verify-plan-commit",
   ]);
   const cp = call(out, "infra:commit-plan").prompt;
   assert.match(cp, /LOCALLY/);
@@ -2348,22 +1768,30 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     task_id: "l42",
     slug: "add-thing",
     reuse_head: null,
+    chunk_dir: "/r/.claude/worktrees/fleet-l42-add-thing/scratch/plan-ref-n1-0000001",
   });
   // 2.1.4: the commit holds the plan doc only; the sealed ref is a tag object
   // (git mktag, no hook) at refs/fleet/l42/plan; nothing under .fleet/ is written
   assert.ok(!cp.includes(".fleet/"), "commit-plan names no .fleet/ path");
   assert.ok(!/add -f|add --force/.test(cp));
   assert.match(cp, /mktag/);
-  assert.match(cp, /'refs\/fleet\/l42\/plan'/);
-  assert.match(cp, /core\.hooksPath=\/dev\/null/);
+  // 4.0.0: the shipped writer program makes the tag object, hooks off
+  assert.ok(cp.includes("python3 -I '" + SCRIPTS_DIR + "/plan_ref_write.py' '/r/.claude/worktrees/fleet-l42-add-thing/main' 'l42'"));
+  const w = readFileSync(join(SCRIPTS_SRC, "plan_ref_write.py"), "utf8");
+  assert.match(w, /'core\.hooksPath=\/dev\/null'/);
+  assert.match(w, /ref = 'refs\/fleet\/' \+ target \+ '\/plan'/);
   assert.match(cp, /add -- <plan_path>`/);
 });
 
 test("2.1.4 plan mode: a plan commit that holds anything but plan_path fails, no plan_ref", async () => {
   for (const files of [["docs/plans/x.md", ".fleet/l42/plan_ref.json"], [".fleet/l42/plan_ref.json"], [], ["docs/plans/x.md", "src/x.py"]]) {
     const s = happy();
-    const base = s["infra:commit-plan"];
-    s["infra:commit-plan"] = (prompt) => Object.assign(base(prompt), { files });
+    const base = s["infra:verify-plan-commit"];
+    s["infra:verify-plan-commit"] = (prompt) => {
+      const r = base(prompt);
+      r.plan_files.files = files;
+      return r;
+    };
     const out = await runOne(s, ARGS);
     assert.ok(out.result.status === "failed" || out.result.status === "needs_human", JSON.stringify(files));
     assert.match(out.result.reason, /plan commit holds/);
@@ -2379,7 +1807,8 @@ test("2.1.4 identical re-plan: an unchanged plan doc on a plan-only HEAD reuses 
     const c = refContentOf(prompt);
     s.__store[PC] = c;
     s.__store.__planHead = PC;
-    return { status: "ok", reason: "reused", reused: true, head: i.reuse_head, files: [i.plan_path], plan_sha256: PSHA, refs: planRefsOf(s.__store) };
+    s.__store.__commit = { head: i.reuse_head, planSha: PSHA };
+    return { status: "ok", reason: "reused", reused: true, head: i.reuse_head, tag_sha: "7".repeat(40) };
   };
   const out = await runOne(s, ARGS);
   noUnscripted(out);
@@ -2420,11 +1849,11 @@ test("2.1.4 re-plan in build (plan_wrong) offers the approved plan commit for re
 });
 
 test("2.1.4 run-state write: update-ref runs with core.hooksPath=/dev/null (no reference-transaction hook)", () => {
-  const m = /WRITE_STATE_SH_BEGIN\n([\s\S]*?)\n\/\/ WRITE_STATE_SH_END/.exec(SOURCE);
-  assert.ok(m);
-  const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
-  const cmd = Function("q", "return (" + m[1].trim().replace(/^function writeStateCmd/, "function").replace(/shQuote/g, "q") + ")")(q)("/wt", "refs/fleet/l42/state", "{}");
-  assert.match(cmd, /-c core\.hooksPath=\/dev\/null[^&|]* update-ref /);
+  // 4.0.0: the shipped writer program runs every git call with hooks off
+  const w = readFileSync(join(SCRIPTS_SRC, "state_write.py"), "utf8");
+  assert.match(w, /^G = \['git', '-c', 'core\.fsmonitor=false', '-c', 'core\.hooksPath=\/dev\/null', '-C', wt\]$/m);
+  assert.match(w, /^git\('update-ref', target, tag\)$/m);
+  assert.doesNotMatch(w, /subprocess\.run\(\['git'/);
 });
 
 test("2.1.4 plan mode: the written plan ref must target the plan commit and read back as the sealed ref", async () => {
@@ -2433,18 +1862,25 @@ test("2.1.4 plan mode: the written plan ref must target the plan commit and read
     (r) => Object.assign(r, { refs: [] }),
     (r) => Object.assign(r, { refs: r.refs.map((e) => Object.assign(e, { type: "commit" })) }),
     (r) => Object.assign(r, { refs: r.refs.map((e) => Object.assign(e, { sha256: "e".repeat(64) })) }),
-    (r) => {
-      const o = JSON.parse(r.refs[0].content);
+    (r, store) => {
+      const o = JSON.parse(store[PC]);
       o.tldr = "changed";
       const c = JSON.stringify(o) + "\n";
-      r.refs[0] = refEntry("refs/fleet/l42/plan", r.head, c);
+      r.refs[0] = refEntry("refs/fleet/l42/plan", PC, c);
+      delete r.refs[0].content;
       return r;
     },
+    // 4.0.0: a ref that is not the tag object the writer printed
+    (r) => Object.assign(r, { refs: r.refs.map((e) => Object.assign(e, { tag_sha: "8".repeat(40) })) }),
   ];
   for (const f of cases) {
     const s = happy();
-    const base = s["infra:commit-plan"];
-    s["infra:commit-plan"] = (prompt) => f(base(prompt));
+    const base = s["infra:verify-plan-commit"];
+    s["infra:verify-plan-commit"] = (prompt) => {
+      const r = base(prompt);
+      f(r.plan_ref, s.__store);
+      return r;
+    };
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "failed", f.toString());
     assert.ok(!("plan_ref" in out.result) || out.result.plan_ref == null);
@@ -2484,7 +1920,7 @@ test("REQUIRED_ON_OK: a planner ok output without tldr or plan_diff stops", asyn
     const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], {
       __raw: true,
       role_version: FROZEN_VERSIONS["scope-and-plan"],
-      role_contract: "CONTRACT: fleet-v3",
+      role_contract: CONTRACT_LINE,
     });
     delete p[k];
     s["role:scope-and-plan"] = p;
@@ -2512,30 +1948,6 @@ test("a commit-plan step that returns no sha fails before a plan_ref exists", as
 
 // ---------------------------------------------------------------- v2: plan_ref seal
 
-function canon(v) {
-  if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
-  if (v && typeof v === "object")
-    return (
-      "{" +
-      Object.keys(v)
-        .sort()
-        .filter((k) => v[k] !== undefined)
-        .map((k) => JSON.stringify(k) + ":" + canon(v[k]))
-        .join(",") +
-      "}"
-    );
-  return JSON.stringify(v === undefined ? null : v);
-}
-
-async function planRefFor(s) {
-  const out = await runOne(s, ARGS);
-  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  return out.result.plan_ref;
-}
-
-function buildArgs(ref, over) {
-  return Object.assign({ mode: "build", plan_ref: ref, date: "2026-11-04", repo: "/r", project: "o/r" }, over || {});
-}
 
 test("plan ref seal is the sha256 of its canonical JSON (utf-8, non-ASCII included)", async () => {
   const s = happy({ brief: { ...BRIEF, title: "Add Thing — ünïcode 🚀", description: "em — dash" } });
@@ -2562,7 +1974,7 @@ test("tiny plan_ref round trip: build mode loads the plan ref object and uses it
     mode: "chunks",
   });
   // the reader program runs read-only: cat-file, never a checkout or a write
-  assert.match(load.prompt, /python3 -I -c/);
+  assert.ok(load.prompt.includes("python3 -I '" + SCRIPTS_DIR + "/plan_ref.py'"));
   assert.match(load.prompt, /cat-file/);
   assert.ok(out.labels.indexOf("infra:load-ref") < out.labels.indexOf("infra:verify-plan"));
   assert.deepEqual(inputsOf(call(out, "role:fleet-coder:r1").prompt).criteria.map((c) => c.id), ["AC1", "AC2"]);
@@ -2814,7 +2226,7 @@ test("2.1.4 plan mode on a plan-only branch: the classifier accepts plan commits
     task_id: "l42",
   });
   // the same plan-ref reader program lists every refs/fleet/<id>/plan* ref
-  assert.ok(scan.prompt.includes("python3 -I -c") && scan.prompt.includes("'l42'"));
+  assert.ok(scan.prompt.includes("python3 -I '" + SCRIPTS_DIR + "/branch_scan.py'") && scan.prompt.includes("'l42'"));
   assert.ok(!scan.prompt.includes(".fleet/"));
 });
 
@@ -2832,6 +2244,8 @@ test("build mode: preflight first, then workspace, verify, then the writers' bas
     branch: "fleet/l42-add-thing",
     plan_commit: PC,
     plan_path: "docs/plans/x.md",
+    // 4.0.0 (1981): the test database declaration is read at origin/<default>
+    default_branch: "master",
   });
   assert.ok(!call(out, "infra:verify-plan").prompt.includes(".fleet/"));
   assert.equal(call(out, "infra:verify-plan").opts.agentType, "fleet:judge");
@@ -2965,27 +2379,6 @@ test("2.1.4 a coder round that creates a .fleet/ path stops at the scope fence",
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-// A hermetic git env for real-repo tests: own HOME and global config.
-function gitEnv(dir, globalCfg) {
-  const env = Object.assign({}, process.env, { HOME: dir, XDG_CONFIG_HOME: join(dir, ".config"), GIT_CONFIG_GLOBAL: globalCfg, GIT_CONFIG_NOSYSTEM: "1" });
-  delete env.GIT_DIR;
-  delete env.GIT_WORK_TREE;
-  delete env.GIT_INDEX_FILE;
-  return env;
-}
-
-function extractFn(begin, end, name) {
-  const m = new RegExp(begin + "\\n([\\s\\S]*?)\\n\\/\\/ " + end).exec(SOURCE);
-  assert.ok(m, begin + " markers");
-  const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
-  return Function("q", "return (" + m[1].trim().replace(new RegExp("^function " + name), "function").replace(/shQuote/g, "q") + ")")(q);
-}
-
-function extractPy(begin, end, constName) {
-  const m = new RegExp(begin + "\\n([\\s\\S]*?)\\n\\/\\/ " + end).exec(SOURCE);
-  assert.ok(m, begin + " markers");
-  return m[1].replace(new RegExp("^const " + constName + " = String\\.raw`\\n?"), "").replace(/`;?\s*$/, "");
-}
 
 test("2.1.4 plan ref object: write and read round-trip in a real repo whose global gitignore holds .fleet/", { skip: !HAVE_PY }, () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-home-"));
@@ -3013,7 +2406,7 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
     g("commit", "-qm", "plan(l42): add-thing");
     rmSync(join(home, "HOOK_RAN"), { force: true });
     const head = g("rev-parse", "HEAD").trim();
-    const writeCmd = extractFn("WRITE_PLAN_REF_SH_BEGIN", "WRITE_PLAN_REF_SH_END", "writePlanRefCmd");
+    const writeCmd = planRefWriteCmd;
     const reader = extractPy("PLAN_REF_PY_BEGIN", "PLAN_REF_PY_END", "PLAN_REF_PY");
     // 3.0.0: no mode prints message text whole; meta lists, chunks rebuild it
     const read = () => {
@@ -3132,13 +2525,10 @@ test("plan hash: stage and verify steps embed the same program, and it hashes th
   const s = happy();
   const plan = await runOne(s, ARGS);
   const build = await runOne(s, buildArgs(plan.result.plan_ref));
-  const progs = [call(plan, "infra:stage-plan").prompt, call(build, "infra:verify-plan").prompt].map((p) => {
-    const m = p.match(/python3 -I -c ('(?:[^']|'\\'')*')/);
-    assert.ok(m, "prompt embeds the plan hash program");
-    return m[1];
-  });
-  assert.equal(progs[0], progs[1]);
-  const prog = progs[0].slice(1, -1).replace(/'\\''/g, "'");
+  // 4.0.0: both run the one shipped plan_hash.py
+  for (const p of [call(plan, "infra:stage-plan").prompt, call(build, "infra:verify-plan").prompt])
+    assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/plan_hash.py'"), "the prompt runs the shipped plan hash program");
+  const prog = join(SCRIPTS_SRC, "plan_hash.py");
   const wt = scratchRepo("fleet-planhash-");
   try {
     const text = "# plan — ü\n";
@@ -3147,9 +2537,9 @@ test("plan hash: stage and verify steps embed the same program, and it hashes th
     sh(wt, "git", "add", ".");
     sh(wt, "git", "commit", "-q", "-m", "plan");
     const head = sh(wt, "git", "rev-parse", "HEAD").trim();
-    const got = sh(wt, "python3", "-I", "-c", prog, wt, head, "docs/p.md").trim();
+    const got = JSON.parse(sh(wt, "python3", "-I", prog, wt, head, "docs/p.md")).plan_sha256;
     assert.equal(got, createHash("sha256").update(text, "utf8").digest("hex"));
-    assert.equal(sh(wt, "python3", "-I", "-c", prog, wt, "HEAD", "docs/p.md").trim(), got);
+    assert.equal(JSON.parse(sh(wt, "python3", "-I", prog, wt, "HEAD", "docs/p.md")).plan_sha256, got);
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }
@@ -3206,6 +2596,8 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.equal(r.plan_ref.branch, "fleet/l42-add-thing");
   assert.equal(r.plan_ref.ref_sha256, sha256(s.__store[PC2]));
   assert.equal(JSON.parse(s.__store[PC2]).history.replans, 1);
+  // 4.0.0 (1992): the re-plan's ref seals the build's project too
+  assert.equal(JSON.parse(s.__store[PC2]).project, "o/r");
   assert.ok(!JSON.stringify(r).includes(SECRET));
   // no PR, no push, no write-back on a plan_wrong stop
   for (const l of ["infra:push", "role:fleet-pr-opener", "infra:ledger-writeback", "infra:comments-list", "infra:comments-post"])
@@ -3223,6 +2615,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
     "infra:stage-plan:replan",
     "infra:path-check:commit-plan:replan",
     "infra:commit-plan:replan",
+    "infra:verify-plan-commit:replan",
     "infra:replan-reset",
   ]);
   const rw = inputsOf(call(out, "infra:replan-worktree").prompt);
@@ -3394,7 +2787,8 @@ test("write-back: a ledger failure is reported and never stops the run", async (
   assert.equal(out.result.ledger_status, "failed");
   assert.match(out.result.write_back.ledger[0].section_text, /fleet:l42/);
   // 3.1.3 (PR #41 review 2): a legacy ledger source with no project stops the build before any role
-  const noProject = await run(happy(), ARGS, { project: undefined });
+  // (4.0.0, 1992: only when the plan run sealed no project either)
+  const noProject = await run(happy(), { ...ARGS, project: undefined });
   assert.equal(noProject.result.status, "needs_human");
   assert.match(noProject.result.reason, /needs args\.project.*re-run plan/);
   assert.ok(!noProject.build.labels.includes("infra:ledger-writeback"));
@@ -3615,7 +3009,10 @@ function schemaTypeOk(prop, v) {
   );
 }
 
-test("role schemas type every array field and still do not require it", async () => {
+// 4.0.0 (1984): a REQUIRED_ON_OK array is schema-required and nullable; the
+// code still rejects null and a string on ok
+test("role schemas type every array field; only REQUIRED_ON_OK ones are required, nullable", async () => {
+  const req = REQUIRED_OF(SOURCE);
   const out = await run(happy(), ARGS);
   const seen = {};
   for (const c of out.calls.concat(out.build ? out.build.calls : [])) {
@@ -3627,27 +3024,36 @@ test("role schemas type every array field and still do not require it", async ()
     assert.ok(sc, "saw schema for " + role);
     for (const k of keys) {
       assert.ok(sc.properties[k], role + " types " + k);
-      assert.equal(sc.properties[k].type, "array", role + " " + k);
+      const onOk = req[role].includes(k);
+      assert.deepEqual(sc.properties[k].type, onOk ? ["array", "null"] : "array", role + " " + k);
       assert.ok(sc.properties[k].items, role + " " + k + " has items");
       assert.equal(schemaTypeOk(sc.properties[k], "[]"), false, role + " " + k + " rejects the string []");
-      assert.ok(!sc.required.includes(k), role + " " + k + " not schema-required");
+      assert.equal(sc.required.includes(k), onOk, role + " " + k + " schema-required iff required on ok");
     }
   }
 });
 
+// 4.0.0 (1984): coder drift on ok is never re-run; it is the one routed
+// finding of coder round 2 (no judge on the drifted round). Returns it.
+async function coderDriftFinding(s) {
+  const out = await run(s, ARGS);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"), "no judge on a drifted coder round");
+  assert.ok(!out.labels.includes("role:fleet-coder:r1:retry"), "the coder is never retried");
+  const f = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings;
+  assert.equal(f.length, 1);
+  assert.equal(f[0].target, "code");
+  return f[0].finding;
+}
+
 test("contract drift: a string \"[]\" for a required array key is rejected in code", async () => {
   const s = happy();
   s["role:fleet-coder:r1"].added_symbols = "[]";
-  const out = await run(s, ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /contract drift: fleet-coder added_symbols type/);
-  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
+  assert.match(await coderDriftFinding(s), /contract drift: fleet-coder added_symbols type/);
 });
 
 test("contract drift: wrong object and boolean types are rejected in code", async () => {
   for (const [label, key, val, role] of [
     ["role:fleet-code-judge:r1", "hash_check", "{}", "fleet-code-judge"],
-    ["role:fleet-coder:r1", "frozen_tests_red_at_start", "true", "fleet-coder"],
     ["role:fleet-test-judge:r1", "checked", "[]", "fleet-test-judge"],
   ]) {
     const s = happy();
@@ -3656,6 +3062,9 @@ test("contract drift: wrong object and boolean types are rejected in code", asyn
     assert.equal(out.result.status, "needs_human", label);
     assert.match(out.result.reason, new RegExp("contract drift: " + role + " " + key + " type"), label);
   }
+  const s = happy();
+  s["role:fleet-coder:r1"].frozen_tests_red_at_start = "true";
+  assert.match(await coderDriftFinding(s), /contract drift: fleet-coder frozen_tests_red_at_start type/);
 });
 
 test("contract drift: a coder ok output missing added_symbols is still rejected", async () => {
@@ -3663,15 +3072,13 @@ test("contract drift: a coder ok output missing added_symbols is still rejected"
   const c = Object.assign({}, REQUIRED_DEFAULTS["fleet-coder"], s["role:fleet-coder:r1"], {
     __raw: true,
     role_version: FROZEN_VERSIONS["fleet-coder"],
-    role_contract: "CONTRACT: fleet-v3",
+    role_contract: CONTRACT_LINE,
     status: "ok",
     reason: "done",
   });
   delete c.added_symbols;
   s["role:fleet-coder:r1"] = c;
-  const out = await run(s, ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role fleet-coder contract drift: missing added_symbols/);
+  assert.match(await coderDriftFinding(s), /role fleet-coder contract drift: missing added_symbols/);
 });
 
 // ---------------------------------------------------------------- 2.0.2: push / fetch robustness
@@ -3836,8 +3243,8 @@ test("a stale-bytecode suspicious entry after the coder rejects the round", asyn
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-test("role versions: scope-and-plan 27, plan-audit 16, coder 17 and code-judge 15 are the minimums (3.1.0)", async () => {
-  for (const [role, v] of [["scope-and-plan", 26], ["plan-audit", 15], ["fleet-coder", 16], ["fleet-code-judge", 14], ["fleet-test-writer", 9], ["fleet-test-judge", 9], ["pr-review", 17], ["gate-change-nonweakening-sweep", 4]]) {
+test("role versions: every page one below its pin stops (4.0.0 pins)", async () => {
+  for (const [role, v] of Object.entries(FROZEN_VERSIONS).map(([r, n]) => [r, n - 1])) {
     const s = happy();
     s.preflight.versions[role] = v;
     const out = await runOne(s, ARGS);
@@ -3918,7 +3325,7 @@ test("2.0.3 scope-and-plan: repo_obligations and test_cmd are required on ok", a
     const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], {
       __raw: true,
       role_version: FROZEN_VERSIONS["scope-and-plan"],
-      role_contract: "CONTRACT: fleet-v3",
+      role_contract: CONTRACT_LINE,
     });
     delete p[k];
     s["role:scope-and-plan"] = p;
@@ -4197,8 +3604,8 @@ test("2.0.3 approve without met:true for every obligation is converted to fix_co
     assert.equal(out.result.rounds.code, 2, JSON.stringify(check));
     assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings.map((x) => x.finding).join("\n"), /OB2/);
     assert.ok(out.logs.some((l) => /obligations gate/.test(l)));
-    // no push of an unconfirmed approval
-    assert.equal(out.labels.filter((l) => /^infra:push/.test(l)).length, 1);
+    // no push of an unconfirmed approval (4.0.0: the plan run's dry-run probe is no push)
+    assert.equal(out.labels.filter((l) => /^infra:push(:p\d+)?$/.test(l)).length, 1);
   }
 });
 
@@ -4276,8 +3683,11 @@ test("2.0.3 push: non-fast-forward stops for a human, network exhaustion fails, 
 test("2.0.3 push prompt classifies hook_rejected, non_ff and network, and never bypasses hooks", async () => {
   const out = await run(happy(), ARGS);
   const p = call(out, "infra:push").prompt;
+  // 4.0.0: the classifier's own text ships as a file the prompt runs
+  const shipped = readFileSync(join(SCRIPTS_SRC, "push_classify.py"), "utf8");
+  assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/push_classify.py'"));
   for (const w of ["hook_rejected", "non_ff", "network", "failed to push some refs", "hook_tail", "push_result", "never --no-verify"])
-    assert.ok(p.toLowerCase().indexOf(w.toLowerCase()) >= 0, w);
+    assert.ok((p + shipped).toLowerCase().indexOf(w.toLowerCase()) >= 0, w);
   // classification reads git's own lines only, never the hook's output or the
   // URL; since 3.1.0 a program classifies (ledger 1935c), never the agent
   assert.ok(p.indexOf("Never classify the output yourself") >= 0);
@@ -4297,15 +3707,21 @@ test("2.0.3 coder and code-judge: obligations_done and obligations_check are req
     const r = Object.assign({}, REQUIRED_DEFAULTS[role], s[label], {
       __raw: true,
       role_version: FROZEN_VERSIONS[role],
-      role_contract: "CONTRACT: fleet-v3",
+      role_contract: CONTRACT_LINE,
     });
     delete r[key];
     s[label] = r;
+    const t = happy();
+    t[label][key] = "[]";
+    // 4.0.0 (1984): coder drift is a round-2 finding; judge drift stops
+    if (role === "fleet-coder") {
+      assert.match(await coderDriftFinding(s), new RegExp("role " + role + " contract drift: missing " + key));
+      assert.match(await coderDriftFinding(t), new RegExp("contract drift: " + role + " " + key + " type"));
+      continue;
+    }
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "needs_human", key);
     assert.match(out.result.reason, new RegExp("role " + role + " contract drift: missing " + key));
-    const t = happy();
-    t[label][key] = "[]";
     const outT = await run(t, ARGS);
     assert.match(outT.result.reason, new RegExp("contract drift: " + role + " " + key + " type"));
   }
@@ -4316,7 +3732,7 @@ test("2.0.3 B3: a coder output missing a key AND a hash violation reports the ha
   const c = Object.assign({}, REQUIRED_DEFAULTS["fleet-coder"], s["role:fleet-coder:r1"], {
     __raw: true,
     role_version: FROZEN_VERSIONS["fleet-coder"],
-    role_contract: "CONTRACT: fleet-v3",
+    role_contract: CONTRACT_LINE,
   });
   delete c.added_symbols;
   s["role:fleet-coder:r1"] = c;
@@ -4347,10 +3763,14 @@ test("2.0.3 B3: a clean coder needs_human reports the role's reason; contract dr
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /test AC1 contradicts the plan/);
   assert.equal(out.result.stop_gate, "role");
+  // 4.0.0 (1984): coder drift alone is a finding each round; the cap names the contract gate
   const t = happy();
-  t["role:fleet-coder:r1"].added_symbols = "[]";
+  for (const m of [1, 2, 3]) t["role:fleet-coder:r" + m] = Object.assign({}, t["role:fleet-coder:r1"], { added_symbols: "[]" });
+  t["hasher:post-coder:r2"] = { status: "ok", fingerprint: FP_K2 };
+  t["hasher:post-coder:r3"] = { status: "ok", fingerprint: FP_M3 };
   const outT = await run(t, ARGS);
-  assert.equal(outT.result.stop_gate, "contract");
+  assert.equal(outT.result.stop_gate, "cap");
+  assert.match(outT.result.reason, /last round rejected by the contract gate/);
 });
 
 test("2.0.3 B3: a role's needs_human beats a version mismatch (contract drift is last)", async () => {
@@ -4499,7 +3919,8 @@ test("2.0.4 plan-time script check: realpath, regular file, tracked; a failure i
   assert.equal(c.opts.agentType, "fleet:judge");
   const ci = inputsOf(c.prompt);
   assert.deepEqual(ci.paths, ["scripts/check_version_bump.py"]);
-  assert.match(ci.run, /^python3 -I -c /);
+  const f = "'" + SCRIPTS_DIR + "/script_check.py'";
+  assert.ok(ci.run.startsWith("sha256sum -- " + f + " && python3 -I " + f + " "), ci.run);
   assert.ok(out.labels.indexOf("infra:check-scripts") < out.labels.indexOf("role:plan-audit"));
   // no script path -> no step
   const n = withObligations([Object.assign({}, OB_LOG, { check_cmd: "make check" })]);
@@ -4517,11 +3938,6 @@ test("2.0.4 plan-time script check: realpath, regular file, tracked; a failure i
   }
 });
 
-function scriptCheckPy() {
-  const m = /SCRIPT_CHECK_PY_BEGIN\n([\s\S]*?)\n\/\/ SCRIPT_CHECK_PY_END/.exec(SOURCE);
-  assert.ok(m, "SCRIPT_CHECK_PY markers present");
-  return m[1].replace(/^const SCRIPT_CHECK_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
-}
 
 test("script check program: regular tracked file whose realpath stays under its root", { skip: !HAVE_PY }, () => {
   const wt = mkdtempSync(join(tmpdir(), "fleet-scriptcheck-"));
@@ -4545,7 +3961,7 @@ test("script check program: regular tracked file whose realpath stays under its 
     assert.equal(r.status, 0, r.stderr);
     const printed = JSON.parse(r.stdout);
     const out = printed.checks;
-    assert.equal(printed.digest, sha256(canon({ checks: out })));
+    assert.equal(printed.digest, sha256(canon({ checks: out, program: printed.program })));
     assert.deepEqual(
       Object.fromEntries(paths.map((x) => [x, out[x].ok])),
       { "scripts/ok.py": true, "scripts/link.py": false, "scripts/cross.sh": false, "bin/out/evil.sh": false, "scripts/new.py": false, "scripts/missing.py": false },
@@ -4862,16 +4278,14 @@ function REQUIRED_OF(src) {
 }
 
 test("2.1.0 REQUIRED_ON_OK: writer files and coder changed_paths are required arrays; commit keys are gone", async () => {
-  let out = await run(happy({ script: { "role:fleet-test-writer:AC1:r1": { __raw: true, status: "ok", reason: "x", role_version: FROZEN_VERSIONS["fleet-test-writer"], role_contract: "CONTRACT: fleet-v3", criterion_id: "AC1", tests: [] } } }), ARGS);
+  let out = await run(happy({ script: { "role:fleet-test-writer:AC1:r1": { __raw: true, status: "ok", reason: "x", role_version: FROZEN_VERSIONS["fleet-test-writer"], role_contract: CONTRACT_LINE, criterion_id: "AC1", tests: [] } } }), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /fleet-test-writer contract drift: missing files/);
-  out = await run(happy({ script: { "role:fleet-coder:r1": { status: "ok", changed_paths: "src/x.py" } } }), ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-coder changed_paths type/);
+  assert.match(await coderDriftFinding(happy({ script: { "role:fleet-coder:r1": { status: "ok", changed_paths: "src/x.py" } } })), /fleet-coder changed_paths type/);
   const req = REQUIRED_OF(SOURCE);
   assert.ok(!/"commits?"/.test(JSON.stringify(req)));
   assert.deepEqual(req["fleet-test-writer"], ["criterion_id", "tests", "files"]);
-  assert.deepEqual(req["fleet-intent-judge"], ["verdict", "deviations", "coverage"]);
+  assert.deepEqual(req["fleet-intent-judge"], ["verdict", "deviations", "coverage", "classification"]);
   assert.deepEqual(req["pr-review"], ["verdict", "findings", "touches_gate", "checked"]);
   assert.deepEqual(req["gate-change-nonweakening-sweep"], ["verdict", "units", "findings"]);
 });
@@ -5211,7 +4625,7 @@ test("2.1.0 review skipped when no PR exists: listed in gates_not_run", async ()
 
 // ---------------------------------------------------------------- 2.1.0 contract
 
-test("2.1.0 contract fleet-v3: preflight loads ten roles; fleet-v2 pages halt", async () => {
+test("2.1.0 contract (fleet-v4 since 4.0.0): preflight loads ten roles; fleet-v2 pages halt", async () => {
   let out = await run(happy(), ARGS);
   const pf = inputsOf(call(out, "preflight").prompt);
   assert.deepEqual(pf.roles.slice().sort(), ROLE_NAMES.slice().sort());
@@ -5219,7 +4633,7 @@ test("2.1.0 contract fleet-v3: preflight loads ten roles; fleet-v2 pages halt", 
   s.preflight.contract["pr-review"] = "CONTRACT: fleet-v2";
   out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /pr-review contract fleet-v2 != fleet-v3/);
+  assert.match(out.result.reason, /pr-review contract fleet-v2 != fleet-v4/);
 });
 
 test("2.1.0 models: a role without a usable DISPATCH line halts (no hardcoded tier); the tier used is logged", async () => {
@@ -5481,8 +4895,10 @@ test("2.1.0 the commit step and the tree command run git with fsmonitor off, no 
   assert.ok(!/git -C <main_worktree> commit -m/.test(cp), "the commit runs through the hardened git prefix");
   assert.equal(inputsOf(cp).hooks_path, null);
   const hp = call(out, "hasher:freeze:f1").prompt;
-  assert.match(hp, /core\.fsmonitor=false/);
-  assert.match(hp, /GIT_CONFIG_NOSYSTEM/);
+  assert.ok(hp.includes("python3 -I '" + SCRIPTS_DIR + "/hasher.py'"));
+  const hpy = readFileSync(join(SCRIPTS_SRC, "hasher.py"), "utf8");
+  assert.match(hpy, /core\.fsmonitor=false/);
+  assert.match(hpy, /GIT_CONFIG_NOSYSTEM/);
 });
 
 test("2.1.0 ignored paths are listed: a .pth in a venv is frozen, tool caches are not", { skip: !HAVE_PY }, () => {
@@ -5576,7 +4992,7 @@ test("2.1.0 base-ref differential: the fence and the review diff from plan_commi
   assert.match(out.result.reason, /\.github\/x\.yml/);
   assert.ok(!out.labels.some((l) => /^role:/.test(l)), "stops before any role");
   // 3.1.0 (ledger 1959): the program lists plan_commit..HEAD
-  assert.ok(call(out, "infra:verify-plan").prompt.includes(extractPy("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY").replace(/'/g, "'\\''")));
+  assert.ok(call(out, "infra:verify-plan").prompt.includes("python3 -I '" + SCRIPTS_DIR + "/verify_since.py'"));
   assert.match(extractPy("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY"), /run\('diff', '--name-only', '-z', '--no-renames', pc \+ '\.\.' \+ head, '--'\)/);
   // the post-coder listing and the review paths diff from plan_commit, not HEAD at the first freeze
   const ok = await run(happy(), ARGS);
@@ -5719,11 +5135,6 @@ test("2.1.0 a coder that edits package.json scripts (a launcher hook's table) is
 
 // ---------------------------------------------------------------- 2.1.0 run-state resume
 
-// The state JSON a run-state write step carries (quoted heredoc body).
-function stateJsonOf(prompt) {
-  const m = /<<'FLEET_STATE_JSON'\n([\s\S]*?)\nFLEET_STATE_JSON/.exec(prompt);
-  return m ? JSON.parse(m[1]) : null;
-}
 
 // A build run that records every run-state write into `states` (gate -> JSON).
 function recording(s, states) {
@@ -5764,8 +5175,10 @@ test("2.1.0 run-state: every milestone writes the state ref, in order, with a mk
   for (let i = 1; i < order.length; i++) assert.ok(out.labels.indexOf(order[i]) > out.labels.indexOf(order[i - 1]), order[i]);
   const p = call(out, "infra:state:committed:r1").prompt;
   assert.match(p, /mktag/);
-  assert.match(p, /update-ref 'refs\/fleet\/l42\/state'/);
-  assert.match(p, /GIT_CONFIG_NOSYSTEM=1/);
+  // 4.0.0: the shipped writer program moves the ref, hooks off, no system config
+  assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/state_write.py' '/r/.claude/worktrees/fleet-l42-add-thing/main' 'refs/fleet/l42/state'"));
+  const sw = readFileSync(join(SCRIPTS_SRC, "state_write.py"), "utf8");
+  assert.match(sw, /os\.environ\['GIT_CONFIG_NOSYSTEM'\] = '1'/);
   assert.equal(states.committed.plan_commit, PC);
   assert.equal(states.committed.approved_sha, CSHA(1));
   assert.equal(states.committed.code_tree, "K1");
@@ -5872,17 +5285,19 @@ test("2.1.0 resume: a stale run-state of another plan is ignored when HEAD is th
 });
 
 test("2.1.0 run-state program: the write command and the read program round-trip in a real repo", { skip: !HAVE_PY }, () => {
-  const wt = scratchRepo("fleet-state-");
+  // 4.0.0: the worktree sits next to the run's scratch dir, where the chunks go
+  const home = mkdtempSync(join(tmpdir(), "fleet-state-"));
+  const wt = join(home, "main");
   try {
+    sh(home, "git", "init", "-q", wt);
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
     writeFileSync(join(wt, "a.py"), "a\n");
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "i");
-    const m = /WRITE_STATE_SH_BEGIN\n([\s\S]*?)\n\/\/ WRITE_STATE_SH_END/.exec(SOURCE);
-    assert.ok(m, "WRITE_STATE_SH markers");
-    const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
-    const writeStateCmd = Function("q", "return (" + m[1].trim().replace(/^function writeStateCmd/, "function").replace(/shQuote/g, "q") + ")")(q);
     const st = { plan_commit: "abc", last_gate: "committed", note: "it's \"quoted\"" };
-    const cmd = writeStateCmd(wt, "refs/fleet/l42/state", JSON.stringify(st));
+    const cmd = stateWriteCmd(wt, "refs/fleet/l42/state", JSON.stringify(st));
     const r = spawnSync("bash", ["-c", cmd], { encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     const head = sh(wt, "git", "rev-parse", "HEAD").trim();
@@ -5901,7 +5316,7 @@ test("2.1.0 run-state program: the write command and the read program round-trip
     const none = JSON.parse(spawnSync("python3", ["-I", "-", wt, "refs/fleet/l43/state"], { input: body, encoding: "utf8" }).stdout);
     assert.equal(none.exists, false);
   } finally {
-    rmSync(wt, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
@@ -5992,7 +5407,7 @@ test("2.1.0 the resume digest ignores the run-state ref itself", async () => {
 test("2.1.1 a live-shaped role page with no trailing newline parses: DISPATCH tier and CONTRACT on the last line", async () => {
   // agent_prompt_save strips the final newline: the CONTRACT line can be the
   // page's last line, and the DISPATCH value carries the rest of the page
-  const page = "DISPATCH: model=opus (fallback=sonnet) — review depth scales with blast radius\nCONTRACT: fleet-v3";
+  const page = "DISPATCH: model=opus (fallback=sonnet) — review depth scales with blast radius\n" + CONTRACT_LINE;
   assert.ok(!page.endsWith("\n"));
   const s = withDispatch(
     happy({
@@ -6086,7 +5501,24 @@ const ARRAY_SITES = {
   "plan.changed_symbols @ planAndAudit": "role:scope-and-plan:changed_symbols",
   "e.occurrences @ changedSymbolFindings": "role:scope-and-plan:changed_symbols[].occurrences",
   "r.capped @ callerCheck": "infra:capped",
+  "r.doctest_md @ callerCheck": "infra:doctest_md",
+  "r.auto_dont_care @ callerCheck": "parsed: a program map; Array.isArray only refuses an array there",
+  // 4.0.0 (1986): a parked findings.json (digest-checked relay, JSON.parse)
+  "f.rounds @ loadParked": "parsed: a parked findings.json",
+  "x.findings @ loadParked": "parsed: a parked findings.json",
+  "f.symbols @ loadParked": "parsed: a parked findings.json",
+  // 4.0.0 (1981): the sweep program's digest-checked output (a gate line only)
+  "sw.removed @ testDbStep": "parsed: a db_sweep program output",
+  "sw.errors @ testDbStep": "parsed: a db_sweep program output",
+  // 4.0.0 (1983): the script's own round record, or a parked findings.json (digest-checked)
+  "plan.criteria @ roundSnapshot": "role:scope-and-plan:criteria",
+  "r0.criteria @ relaxedReasons": "parsed: the round-0 snapshot (the script's own, or a parked findings.json)",
+  "prior.findings @ relaxedReasons": "parsed: the script's round record (or a parked findings.json)",
+  "prior.symbols @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
+  "prior.findings @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
+  "prior.criteria_by_round @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
   "r.defs @ buildCallerCheck": "infra:defs",
+  "p.enum @ roleSchema": "parsed: a role schema property (the 1984 STRICT loop), not an agent result",
   "pf.changed_symbols @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
   "o.files @ planScopeFiles": "parsed: repo_obligations of the sealed plan facts",
   "r.files @ formatFiles": "infra:files",
@@ -6094,8 +5526,10 @@ const ARRAY_SITES = {
   "r.refused @ formatFiles": "infra:refused",
   "rd.results @ writeBack": "infra:results",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
-  "r.files @ commitPlanAndRef": "infra:files",
-  "r.refs @ commitPlanAndRef": "infra:refs",
+  "pf.files @ verifyPlanCommit": "infra:plan_files.files",
+  "pf.dsn_paths @ verifyPlanCommit": "infra:plan_files.dsn_paths",
+  "pr.refs @ verifyPlanCommit": "infra:plan_ref.refs",
+  "r.program @ programProblem": "parsed: a program self-hash; Array.isArray only refuses an array there",
   "c.files @ isPlanCommit": "infra:commits[].files",
   "aa.files @ scopeProblems": "role:scope-and-plan:allowed_additions.files",
   "cfg.ids @ hookIdProblems": "infra:ids",
@@ -6122,12 +5556,14 @@ const ARRAY_SITES = {
   "pre.results @ writeBack": "infra:results",
   "o.files @ obligationFailures": "parsed: repo_obligations of the sealed plan facts",
   "r.surface @ hookSurface": "infra:surface",
-  "pc.tools @ pathCheck": "parsed: preflight path_check (digest-checked, keys and shapes checked)",
-  "pc.path_problems @ pathCheck": "parsed: preflight path_check (digest-checked)",
+  "pc.tools @ pathRelayProblem": "parsed: preflight path_check (digest-checked, keys and shapes checked)",
+  "pc.path_problems @ pathRelayProblem": "parsed: preflight path_check (digest-checked)",
   "pf.changed_symbols @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "e.occurrences @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "c.test_files @ planScopePaths": "parsed: normalised criteria",
   "h.page_tags @ writeBodies": "infra:results[].page_tags",
+  // 4.0.0 (1985)
+  "r.args @ pushProbe": "parsed: the push probe relay (PUSH_PROBE_SCHEMA args; digest-checked)",
 };
 
 function arraySites() {
@@ -6377,35 +5813,26 @@ test("2.1.5 a stop before the planner returns parks nothing; an ok plan run park
 // the auto path no longer relay ref content at all (the script hashes the
 // bytes it wrote); a standalone build reads the content in short chunks,
 // checks them against ref_sha256 and asks once more on a mismatch.
-const CHUNK = 1000;
-function chunksOf(c) {
-  const out = [];
-  for (let i = 0; i < c.length; i += CHUNK) out.push(c.slice(i, i + CHUNK));
-  return out;
-}
 
 test("2.1.5 commit-plan relays no ref content: the script hashes the bytes it sealed", async () => {
   const s = happy({ brief: { ...BRIEF, title: "Add Thing — ünï 🚀", description: "nbsp here" } });
-  s["infra:commit-plan"] = ((inner) => (p) => {
-    const r = inner(p);
-    r.refs = r.refs.map((e) => { const o = { ...e }; delete o.content; return o; });
-    return r;
-  })(commitStub(s.__store, PC, PSHA));
   const out = await runOne(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  const cp = call(out, "infra:commit-plan").prompt;
-  assert.match(cp, / 'meta'\n/, "the reader runs in meta mode");
+  // 4.0.0: the verify step reads the refs in meta mode; no step relays the content
+  const vp = call(out, "infra:verify-plan-commit").prompt;
+  assert.match(vp, / 'meta'\n/, "the reader runs in meta mode");
+  assert.equal(chunkedContentOf(call(out, "infra:commit-plan").prompt), s.__store[PC], "the chunks are the sealed bytes");
   assert.equal(out.result.plan_ref.ref_sha256, sha256(s.__store[PC]));
 });
 
 test("2.1.5 commit-plan: a ref whose sha256 is not the sealed bytes' stops", async () => {
   const s = happy();
-  s["infra:commit-plan"] = ((inner) => (p) => {
+  s["infra:verify-plan-commit"] = ((inner) => (p) => {
     const r = inner(p);
-    r.refs[0].sha256 = "e".repeat(64);
+    r.plan_ref.refs[0].sha256 = "e".repeat(64);
     return r;
-  })(commitStub(s.__store, PC, PSHA));
+  })(verifyStub(s.__store));
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "failed");
   assert.match(out.result.reason, /differs from the sealed ref/);
@@ -6465,7 +5892,7 @@ test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebui
     writeFileSync(join(wt, "a.py"), "a\n");
     spawnSync("git", ["-C", wt, "add", "-A"], { env });
     spawnSync("git", ["-C", wt, "commit", "-qm", "i"], { env });
-    const writeCmd = extractFn("WRITE_PLAN_REF_SH_BEGIN", "WRITE_PLAN_REF_SH_END", "writePlanRefCmd");
+    const writeCmd = planRefWriteCmd;
     const reader = extractPy("PLAN_REF_PY_BEGIN", "PLAN_REF_PY_END", "PLAN_REF_PY");
     const big = { task_id: "l42", body: "x y — ü 🚀 ".repeat(400) };
     const w = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(big))], { encoding: "utf8", env });
@@ -6504,6 +5931,9 @@ test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebui
 // key fails the hasher step instead of reading as "nothing there".
 function hasherDigest(r, withChanged) {
   const o = { fingerprint: r.fingerprint, hashes: r.hashes };
+  // 4.0.0: the digest covers the program's self-hash and the scripts map
+  if (r.program !== undefined) o.program = r.program;
+  if (r.scripts !== undefined) o.scripts = r.scripts;
   if (withChanged) o.changed = r.changed;
   return sha256(canon(o));
 }
@@ -6539,10 +5969,10 @@ test("2.1.5 a hasher result whose relayed maps do not match the digest fails", a
   const s = happy();
   const h = H({ ...HASHES_FLAT });
   h.ignored = { ".claude/settings.local.json": "s1" };
-  const good = { status: "ok", fingerprint: FP_PRE, hashes: h };
+  const good = { status: "ok", fingerprint: FP_PRE, hashes: h, program: programOf("hasher"), scripts: allScripts() };
   const digest = hasherDigest(good, false);
   // the relay dropped the ignored key
-  s["hasher:pre-writers:r1"] = { __raw: true, status: "ok", fingerprint: FP_PRE, hashes: { ...h, ignored: {} }, digest };
+  s["hasher:pre-writers:r1"] = { __raw: true, status: "ok", fingerprint: FP_PRE, hashes: { ...h, ignored: {} }, program: programOf("hasher"), file_sha256: programSha("hasher"), scripts: allScripts(), digest };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "failed");
   assert.match(out.result.reason, /hasher hasher:pre-writers:r1 failed: .*digest/);
@@ -6616,7 +6046,8 @@ test("2.1.5 yaadgaar: build re-reads the yaadgaar task, never L<N>", async () =>
 
 test("2.1.5 yaadgaar: a sealed legacy ledger source on a yadgarhq/ project stops the build", async () => {
   const s = happy();
-  const plan = await runOne(s, ARGS);
+  // 4.0.0 (1992): planned without project, so the build's project is not a mismatch
+  const plan = await runOne(s, { ...ARGS, project: undefined });
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /yaadgaar.*re-run plan/);
@@ -6627,12 +6058,12 @@ test("2.1.5 yaadgaar: a sealed legacy ledger source on a yadgarhq/ project stops
 // workflow; the contract stop now says how to load the new one.
 test("2.1.5 a contract mismatch tells the user to reload the plugins", async () => {
   const s = happy();
-  s.preflight = { ...s.preflight, contract: { ...s.preflight.contract, "scope-and-plan": "CONTRACT: fleet-v4" } };
+  s.preflight = { ...s.preflight, contract: { ...s.preflight.contract, "scope-and-plan": "CONTRACT: fleet-v3" } };
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /contract fleet-v4 != fleet-v3/);
+  assert.match(out.result.reason, /contract fleet-v3 != fleet-v4/);
   assert.match(out.result.reason, /\/reload-plugins or start a new session/);
-  const r = happy({ script: { "role:scope-and-plan": { status: "ok", role_contract: "CONTRACT: fleet-v4" } } });
+  const r = happy({ script: { "role:scope-and-plan": { status: "ok", role_contract: "CONTRACT: fleet-v3" } } });
   const o2 = await runOne(r, ARGS);
   assert.match(o2.result.reason, /\/reload-plugins or start a new session/);
 });
@@ -6684,17 +6115,18 @@ test("2.1.5 confirm auto: a confusable character in the criteria goes to the one
   assert.ok(!l.includes("infra:format-plan") && !l.includes("role:plan-audit"), "no format or audit for the refused plan");
   const b = inputsOf(call(out, "role:scope-and-plan:audit-fix").prompt).brief;
   assert.ok(b.sources.some((x) => x.kind === "text" && /AC2: .*U\+00A0/.test(x.body)));
-  // still bad after the round: stop, no second round
+  // still bad after the rounds: 4.0.0 (1983) stops after round 2, never a third
   const t = autoHappy({ criteria: crit });
   t["role:scope-and-plan:audit-fix"] = t["role:scope-and-plan"];
   const o2 = await runOne(t, AUTO);
   assert.equal(o2.result.status, "needs_human");
-  assert.match(o2.result.reason, /invisible or confusable/);
-  assert.ok(!o2.labels.includes("role:scope-and-plan:audit-fix:audit-fix"));
-  // confirm ask stops at once
+  assert.match(o2.result.reason, /invisible or confusable.*\(after 2 re-plan rounds\)/);
+  assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix-2"));
+  assert.ok(!o2.labels.some((x) => /audit-fix-3|audit-fix:audit-fix/.test(x)));
+  // 4.0.0 (1983): confirm ask gets the same rounds
   const o3 = await runOne(happy({ criteria: crit }), ARGS);
   assert.equal(o3.result.status, "needs_human");
-  assert.ok(!o3.labels.includes("role:scope-and-plan:audit-fix"));
+  assert.ok(o3.labels.includes("role:scope-and-plan:audit-fix-2"));
 });
 
 // 2.1.4 trial bug #3: under confirm auto a plan-audit refusal stopped the run
@@ -6718,19 +6150,22 @@ test("2.1.5 confirm auto: a plan-audit refusal gets one re-plan round with the f
   assert.ok(!JSON.stringify(inputsOf(call(out, "role:fleet-intent-judge").prompt).brief).includes("NBSP example lost"));
 });
 
-test("2.1.5 confirm auto: a second plan-audit refusal stops; confirm ask never re-plans", async () => {
+test("2.1.5 confirm auto: a third plan-audit refusal stops (4.0.0: 2 rounds); confirm ask re-plans too", async () => {
   const s = autoHappy();
   s["role:plan-audit"] = { status: "ok", reason: "defect", verdict: "plan_defect", routed_findings: [] };
   s["role:plan-audit:audit-fix"] = { status: "ok", reason: "still", verdict: "untestable_criteria", routed_findings: [] };
+  s["role:plan-audit:audit-fix-2"] = s["role:plan-audit:audit-fix"];
   s["role:scope-and-plan:audit-fix"] = s["role:scope-and-plan"];
   const out = await runOne(s, AUTO);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /plan-audit verdict untestable_criteria/);
-  assert.ok(!out.labels.includes("role:scope-and-plan:audit-fix:audit-fix"));
+  assert.match(out.result.reason, /plan-audit verdict untestable_criteria.*\(after 2 re-plan rounds\)/);
+  assert.ok(out.labels.includes("role:plan-audit:audit-fix-2"));
+  assert.ok(!out.labels.some((x) => /audit-fix-3|audit-fix:audit-fix/.test(x)));
   const a = happy({ script: { "role:plan-audit": { status: "ok", verdict: "plan_defect" } } });
   const o2 = await runOne(a, ARGS);
   assert.equal(o2.result.status, "needs_human");
-  assert.ok(!o2.labels.includes("role:scope-and-plan:audit-fix"));
+  assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix"));
+  assert.ok(o2.labels.includes("role:scope-and-plan:audit-fix-2"));
 });
 
 // 2.1.4 trial bug #6: a free-text task took its slug from the model-written
@@ -6814,7 +6249,7 @@ test("2.1.5 canonical JSON sorts keys by code point, as Python sort_keys does", 
     const out = runHasherRaw(wt, "hash", files);
     // the workflow accepts the program's digest for these keys
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
-    const o = { fingerprint: out.fingerprint, hashes: out.hashes };
+    const o = { fingerprint: out.fingerprint, hashes: out.hashes, program: out.program, scripts: out.scripts };
     assert.equal(sha256(fn(o)), out.digest);
   } finally {
     rmSync(wt, { recursive: true, force: true });
@@ -6852,7 +6287,7 @@ function extractCanonical() {
 
 // The caller-grep program's output for {symbol: ["<path>:<line>", ...]}, with its digest.
 function callersOut(occ, capped) {
-  const o = { occurrences: occ, capped: capped || [] };
+  const o = { occurrences: occ, capped: capped || [], auto_dont_care: {}, doctest_md: [] };
   return { status: "ok", reason: "grepped", ...o, digest: sha256(canon(o)) };
 }
 
@@ -6912,7 +6347,7 @@ test("2.1.6 a full caller map passes; the audit gets the map and the grep result
   const gi = inputsOf(g.prompt);
   assert.deepEqual(gi.symbols, ["guard_verdict"]);
   assert.equal(gi.plan_path, "docs/plans/x.md");
-  assert.match(g.prompt, /python3 -I -c /);
+  assert.ok(g.prompt.includes("python3 -I '" + SCRIPTS_DIR + "/callers.py'"));
   assert.match(g.prompt, /'\["guard_verdict"\]'/);
   assert.match(g.prompt, /Run nonce: /);
   const l = out.labels;
@@ -6936,7 +6371,7 @@ test("2.1.6 no changed symbols: no grep step, and the audit is told the map is e
 
 test("2.1.6 a planner ok output without changed_symbols is contract drift", async () => {
   const s = happy();
-  const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: "CONTRACT: fleet-v3" });
+  const p = Object.assign({}, REQUIRED_DEFAULTS["scope-and-plan"], s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: CONTRACT_LINE });
   delete p.changed_symbols;
   s["role:scope-and-plan"] = p;
   const out = await runOne(s, ARGS);
@@ -7086,10 +6521,12 @@ test("2.1.6 caller grep program: word-boundary hits in tracked text files, the p
     // "z" is a word on more than 5 lines: capped, its list left empty; guard_verdict (5) is not
     assert.deepEqual(o.capped, ["z"]);
     assert.deepEqual(o.occurrences.z, []);
-    assert.equal(o.digest, sha256(canon({ occurrences: o.occurrences, capped: o.capped })));
+    // 4.0.0 (1989): the digest covers the auto dont_care map and the doctest list too
+    const dig = { occurrences: o.occurrences, capped: o.capped, auto_dont_care: o.auto_dont_care, doctest_md: o.doctest_md, program: o.program };
+    assert.equal(o.digest, sha256(canon(dig)));
     // the workflow accepts this digest
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
-    assert.equal(sha256(fn({ occurrences: o.occurrences, capped: o.capped })), o.digest);
+    assert.equal(sha256(fn(dig)), o.digest);
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }
@@ -7327,7 +6764,7 @@ test("2.1.6 review: a role page below its pin names the page, the project and th
   s.preflight.versions["scope-and-plan"] = 25;
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /agent_prompt_get\(scope-and-plan, project m-agahi\/yadgar\) wiki version 25 must be >= 27; update that page in place; see CHANGELOG 3\.1\.0 deploy order/);
+  assert.match(out.result.reason, /agent_prompt_get\(scope-and-plan, project m-agahi\/yadgar\) wiki version 25 must be >= 29; update that page in place; see CHANGELOG 4\.0\.0 deploy order/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -7439,7 +6876,7 @@ test("3.0.0 preflight: a page below its pin names the agent_prompt_get wiki vers
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /agent_prompt_get\(plan-audit, project m-agahi\/yadgar\) wiki version 14/);
-  assert.match(out.result.reason, /see CHANGELOG 3\.1\.0 deploy order/);
+  assert.match(out.result.reason, /see CHANGELOG 4\.0\.0 deploy order/);
   assert.doesNotMatch(out.result.reason, /update agent-prompt-plan-audit \(project/);
 });
 
@@ -7518,7 +6955,7 @@ test("3.0.0 changed-defs program: the B1 PoC, an indented method, a constant, a 
     assert.deepEqual(o.excluded, ["docs/plans/x.md", "tests/test_guards.py"]);
     assert.deepEqual(o.unclassified, ["README.md", "data.bin"]);
     assert.deepEqual(o.unattributed, []);
-    const keep = { defs: o.defs, excluded: o.excluded, unclassified: o.unclassified, unattributed: o.unattributed };
+    const keep = { defs: o.defs, excluded: o.excluded, unclassified: o.unclassified, unattributed: o.unattributed, program: o.program };
     assert.equal(o.digest, sha256(canon(keep)));
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
     assert.equal(sha256(fn(keep)), o.digest);
@@ -7530,10 +6967,6 @@ test("3.0.0 changed-defs program: the B1 PoC, an indented method, a constant, a 
   }
 });
 
-function defsOut(defs, more) {
-  const o = Object.assign({ defs, excluded: [], unclassified: [], unattributed: [] }, more || {});
-  return { status: "ok", reason: "listed", ...o, digest: sha256(canon(o)) };
-}
 
 test("3.0.0 build caller check: runs read-only after the code judge and before the commit, on the plan commit and the approved tree", async () => {
   const out = await run(happy(), ARGS);
@@ -7545,7 +6978,7 @@ test("3.0.0 build caller check: runs read-only after the code judge and before t
   assert.equal(i.base, PC);
   assert.equal(i.tree, call(out, "infra:commit:r1") && inputsOf(call(out, "infra:commit:r1").prompt).code_tree);
   assert.deepEqual(i.exclude, ["tests/test_a.py", "tests/test_b.py", "docs/plans/x.md"]);
-  assert.match(c.prompt, /python3 -I -c /);
+  assert.ok(c.prompt.includes("python3 -I '" + SCRIPTS_DIR + "/changed_defs.py'"));
   const l = out.labels;
   assert.ok(l.indexOf("role:fleet-code-judge:r1") < l.indexOf("infra:changed-defs:r1"));
   assert.ok(l.indexOf("infra:changed-defs:r1") < l.indexOf("infra:commit:r1"));
@@ -7619,7 +7052,7 @@ function jsPlanRefProblem() {
     JSON.stringify(["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]) +
     ";\n";
   assert.match(SOURCE, /const SOURCE_KINDS = \["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"\];/);
-  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "sealOf", "normPath", "cleanRepo", "briefProblem", "planRefProblem"].map(grab).join("\n");
+  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "sealOf", "normPath", "cleanRepo", "briefProblem", "preflightRecordProblem", "planRefProblem"].map(grab).join("\n");
   return new Function(consts + fns + "\nreturn planRefProblem;")();
 }
 
@@ -7651,7 +7084,7 @@ test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; P
     const env = gitEnv(home, cfg);
     const { wt, g } = scanRepo(home, env);
     const head = g("rev-parse", "HEAD").trim();
-    const writeCmd = extractFn("WRITE_PLAN_REF_SH_BEGIN", "WRITE_PLAN_REF_SH_END", "writePlanRefCmd");
+    const writeCmd = planRefWriteCmd;
     const prog = extractPy("BRANCH_SCAN_PY_BEGIN", "BRANCH_SCAN_PY_END", "BRANCH_SCAN_PY");
     const kinds = JSON.stringify(["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]);
     const scan = () => {
@@ -7678,6 +7111,17 @@ test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; P
       ["brief repo relative", sealed(Object.assign({}, base, { brief: { ...BRIEF, repo: "r" } }))],
       ["brief plan_path ..", sealed(Object.assign({}, base, { brief: { ...BRIEF, plan_path: "../x.md" } }))],
       ["history null", sealed(Object.assign({}, base, { history: null }))],
+      // 4.0.0 (1992, history.preflight): the same checks on both sides
+      ["project null", sealed(Object.assign({}, base, { project: null }))],
+      ["project o/r", sealed(Object.assign({}, base, { project: "o/r" }))],
+      ["project 42", sealed(Object.assign({}, base, { project: 42 }))],
+      ["project empty", sealed(Object.assign({}, base, { project: "" }))],
+      ["preflight ok", sealed(Object.assign({}, base, { history: { runs: 1, preflight: { fleet_version: "4.0.0", versions: {}, dispatch: {}, contract: {} } } }))],
+      ["preflight null", sealed(Object.assign({}, base, { history: { runs: 1, preflight: null } }))],
+      ["preflight string", sealed(Object.assign({}, base, { history: { runs: 1, preflight: "4.0.0" } }))],
+      ["preflight no contract", sealed(Object.assign({}, base, { history: { runs: 1, preflight: { fleet_version: "4.0.0", versions: {}, dispatch: {} } } }))],
+      ["preflight list map", sealed(Object.assign({}, base, { history: { runs: 1, preflight: { fleet_version: "4.0.0", versions: [], dispatch: {}, contract: {} } } }))],
+      ["preflight empty version", sealed(Object.assign({}, base, { history: { runs: 1, preflight: { fleet_version: "", versions: {}, dispatch: {}, contract: {} } } }))],
     ];
     for (const [what, ref] of cases) {
       const msg = JSON.stringify(ref);
@@ -7694,7 +7138,9 @@ test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; P
       assert.equal(e.task_id, e.ref_ok ? "l42" : null);
       assert.equal(e.plan_path, e.ref_ok ? "docs/plans/x.md" : null);
       assert.deepEqual(o.commits, [{ sha: head, subject: "plan(l42): add-thing", files: ["docs/plans/x.md"] }]);
-      assert.equal(o.digest, sha256(canon({ commits: o.commits, refs: o.refs })));
+      // 4.0.0 (1986): HEAD's committer time, inside the digest
+      assert.ok(Number.isInteger(o.plan_tip_time) && o.plan_tip_time > 0, String(o.plan_tip_time));
+      assert.equal(o.digest, sha256(canon({ commits: o.commits, refs: o.refs, plan_tip_time: o.plan_tip_time, program: o.program })));
     }
     assert.equal(scan().refs.filter((x) => x.ref_ok).length >= 0, true);
     // the first case is the real shape: ok in both
@@ -7707,7 +7153,7 @@ test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; P
 test("3.0.0 branch-scan: the prompt carries the program, not a copy-the-text step; a broken relay fails; ref_ok false is a build commit", async () => {
   const out = await runOne(happy(), ARGS);
   const p = call(out, "infra:branch-scan").prompt;
-  assert.match(p, /python3 -I -c /);
+  assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/branch_scan.py'"));
   assert.doesNotMatch(p, /byte for byte/);
   assert.doesNotMatch(p, /git -C <main_worktree> log/);
   // a dropped entry
@@ -7761,7 +7207,7 @@ test("3.0.0 relays carry program digests: fleet-scan, read-state, review-paths, 
     assert.equal(out.result.status, "failed");
     assert.match(out.result.reason, /infra:review-paths:v1: the relayed paths do not match the program's digest/);
     const p = call(out, "infra:review-paths:v1").prompt;
-    assert.match(p, /python3 -I -c /);
+    assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/review_paths.py'"));
     assert.doesNotMatch(p, /changed_paths = the lines of `git -C/);
   }
 });
@@ -7773,7 +7219,7 @@ test("3.0.0 check-scripts: a relay that flips a verdict makes every script judge
   const out = await runOne(s, ARGS);
   assert.ok(!("check_cmd" in JSON.parse(s.__store[PC]).plan_facts.repo_obligations[0]), "demoted to judge-only");
   assert.ok(out.result.gate_log.some((m) => /infra:check-scripts: the relayed checks do not match the program's digest; every check_cmd script is judge-only/.test(m)), out.result.gate_log.join("\n"));
-  assert.match(call(out, "infra:check-scripts").prompt, /\{checks: \{<path>: \{ok, reason\}\}, digest\}/);
+  assert.match(call(out, "infra:check-scripts").prompt, /\{checks: \{<path>: \{ok, reason\}\}, program, digest\}/);
 });
 
 test("3.0.0 relay programs print digests the workflow accepts (read-state, review-paths, fleet-scan)", { skip: !HAVE_PY }, () => {
@@ -7791,7 +7237,7 @@ test("3.0.0 relay programs print digests the workflow accepts (read-state, revie
       return JSON.parse(r.stdout);
     };
     const check = (o, keys) => {
-      const x = {};
+      const x = { program: o.program };
       for (const k of keys) x[k] = o[k] === undefined ? null : o[k];
       assert.equal(sha256(fn(x)), o.digest, keys.join(","));
     };
@@ -7975,7 +7421,7 @@ test("3.0.0 fixers: writers' test files are formatted before the ownership hash 
   assert.ok(l.indexOf("role:fleet-coder:r1") < l.indexOf("infra:format-code:r1"));
   assert.ok(l.indexOf("infra:format-code:r1") < l.indexOf("infra:purge-bytecode:code-r1"));
   assert.ok(l.indexOf("infra:format-code:r1") < l.indexOf("hasher:post-coder:r1"));
-  assert.match(fc.prompt, /python3 -I -c /);
+  assert.ok(fc.prompt.includes("python3 -I '" + SCRIPTS_DIR + "/format_files.py'"));
 });
 
 test("3.0.0 fixers: a hook that changes a frozen test after freeze, or a path outside its files, stops the run; unsettled hooks stop too", async () => {
@@ -8062,7 +7508,7 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
     assert.deepEqual(o.files, ["a.py"]);
     assert.deepEqual(o.changed, ["a.py"]);
     assert.equal(readFileSync(join(home, "log"), "utf8").trim().split("\n")[0], "a.py", "the frozen test is never passed");
-    const d = {};
+    const d = { program: o.program };
     for (const k of ["ran", "reason", "runs", "stable", "files", "changed", "refused"]) d[k] = o[k];
     assert.equal(o.digest, sha256(canon(d)));
     // a hook that touches another path: reported, never settles, and never copied back
@@ -8477,7 +7923,7 @@ test("3.0.0 review 3 LOW: branch-scan prints task_id and plan_path only for an o
     writeFileSync(cfg, "[user]\n\temail = t@example.com\n\tname = t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = master\n");
     const env = gitEnv(home, cfg);
     const { wt } = scanRepo(home, env);
-    const writeCmd = extractFn("WRITE_PLAN_REF_SH_BEGIN", "WRITE_PLAN_REF_SH_END", "writePlanRefCmd");
+    const writeCmd = planRefWriteCmd;
     const bad = JSON.parse(priorRef("docs/plans/x.md"));
     bad.tldr = "changed after the seal";
     const w = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(bad))], { encoding: "utf8", env });
@@ -8558,7 +8004,7 @@ test("3.0.0 review 4 n_opens_block: a one-line column-0 definition has no body; 
 test("3.0.0 review 4 n_bs_refok_regex: a sealed ref whose task_id or plan_path fails the shape check is not ok", { skip: !HAVE_PY }, () => {
   const prog = extractPy("BRANCH_SCAN_PY_BEGIN", "BRANCH_SCAN_PY_END", "BRANCH_SCAN_PY");
   const kinds = JSON.stringify(["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]);
-  const writeCmd = extractFn("WRITE_PLAN_REF_SH_BEGIN", "WRITE_PLAN_REF_SH_END", "writePlanRefCmd");
+  const writeCmd = planRefWriteCmd;
   for (const over of [{ plan_path: "docs/plans/x y.md" }, { plan_path: "docs/plans/x;.md" }]) {
     const home = mkdtempSync(join(tmpdir(), "fleet-bscan3-"));
     try {
@@ -8896,15 +8342,18 @@ test("3.0.0 review 8: a yaml.py in the cwd neither runs nor changes the hook sur
 });
 
 test("3.0.0 review 8: every embedded program runs isolated (-I), the YAML loader with cwd /", () => {
-  const calls = SOURCE.match(/["'`]python3 [^"'`]*/g) || [];
-  assert.ok(calls.length >= 12, "found the invocations: " + calls.length);
+  // 4.0.0: programs run as `sha256sum -- <file> && python3 -I <file>`
+  const calls = (SOURCE.match(/["'`][^"'`\n]*python3 [^"'`]*/g) || []).filter((c) => !/python3 as /.test(c)).map((c) => c.slice(c.indexOf("python3") - 1));
+  assert.ok(calls.length >= 4, "found the invocations: " + calls.length);
   for (const c of calls) assert.match(c, /^.python3 -I /, c);
+  // 4.0.0: one runner for every shipped program, by path from scripts_dir
+  assert.match(SOURCE, /const f = shQuote\(state\.scriptsDir \+ "\/" \+ name \+ "\.py"\);\n  return "sha256sum -- " \+ f \+ " && python3 -I " \+ f \+/);
   assert.match(SOURCE, /subprocess\.run\(\[c, '-I', '-c', LOADER\] \+ sites,/);
   assert.match(SOURCE, /cwd='\/'/);
   // no program uses a third-party import (the YAML loader runs under pre-commit's interpreter)
   const progs = SOURCE.match(/const [A-Z_]+_PY = String\.raw`[\s\S]*?`;/g) || [];
   assert.ok(progs.length >= 10);
-  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "resource", "ast"]);
+  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "resource", "ast", "base64", "secrets"]);
   for (const p of progs) {
     const name = /const ([A-Z_]+_PY)/.exec(p)[1];
     for (const m of p.matchAll(/^\s*import ([A-Za-z0-9_, .]+)$/gm))
@@ -8987,31 +8436,31 @@ test("3.0.0 review 8: the nix pre-commit's own interpreter reads the config thro
 
 // ---------------------------------------------------------------- 3.1.0 (ledger 1941a): prose-only pages pinned at their live versions
 
-test("3.1.0 pins: every role page at its live version (fleet-code-judge at the 3.1.0 write)", () => {
+test("4.0.0 pins: every role page at its fleet-v4 version", () => {
   const m = /const EXPECTED_VERSIONS = (\{[\s\S]*?\});/.exec(SOURCE);
   assert.ok(m, "EXPECTED_VERSIONS");
   const got = Function("return " + m[1])();
   assert.deepEqual(got, {
-    "scope-and-plan": 27,
-    "plan-audit": 16,
-    "fleet-test-writer": 10,
-    "fleet-test-judge": 10,
-    "fleet-coder": 17,
-    "fleet-code-judge": 15,
-    "fleet-pr-opener": 10,
-    "fleet-intent-judge": 2,
-    "pr-review": 18,
-    "gate-change-nonweakening-sweep": 5,
+    "scope-and-plan": 29,
+    "plan-audit": 17,
+    "fleet-test-writer": 11,
+    "fleet-test-judge": 11,
+    "fleet-coder": 18,
+    "fleet-code-judge": 16,
+    "fleet-pr-opener": 11,
+    "fleet-intent-judge": 3,
+    "pr-review": 19,
+    "gate-change-nonweakening-sweep": 6,
   });
   assert.deepEqual(got, FROZEN_VERSIONS, "the harness pins follow the script");
 });
 
-test("3.1.0 pins: a page below its pin names the 3.1.0 deploy order", async () => {
+test("4.0.0 pins: a page below its pin names the 4.0.0 deploy order", async () => {
   const s = happy();
-  s.preflight.versions["fleet-code-judge"] = 14;
+  s.preflight.versions["fleet-code-judge"] = 15;
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /agent_prompt_get\(fleet-code-judge, project m-agahi\/yadgar\) wiki version 14 must be >= 15; update that page in place; see CHANGELOG 3\.1\.0 deploy order/);
+  assert.match(out.result.reason, /agent_prompt_get\(fleet-code-judge, project m-agahi\/yadgar\) wiki version 15 must be >= 16; update that page in place; see CHANGELOG 4\.0\.0 deploy order/);
 });
 
 // ---------------------------------------------------------------- 3.1.0 (ledger 1959): verify-plan and commit-plan relay program output, not raw git
@@ -9027,7 +8476,7 @@ test("3.1.0 1959: the verify and plan-files programs print what git says, with a
     const { wt, g } = scanRepo(home, env);
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
     const check = (o, keys) => {
-      const x = {};
+      const x = { program: o.program };
       for (const k of keys) x[k] = o[k] === undefined ? null : o[k];
       assert.equal(sha256(fn(x)), o.digest, keys.join(","));
     };
@@ -9042,10 +8491,12 @@ test("3.1.0 1959: the verify and plan-files programs print what git says, with a
     const pf = runP("PLAN_FILES_PY_BEGIN", "PLAN_FILES_PY_END", "PLAN_FILES_PY", []);
     assert.deepEqual([pf.head, pf.files], [pc, ["docs/plans/x.md"]]);
     assert.deepEqual(pf.args, [wt]);
-    check(pf, ["head", "files", "args"]);
+    // 4.0.0 review: no test DSN in the plan doc
+    assert.deepEqual(pf.dsn_paths, []);
+    check(pf, ["head", "files", "args", "dsn_paths"]);
     // head = plan commit: nothing since
     let v = runP("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY", [pc, "docs/plans/x.md"]);
-    assert.deepEqual(v, Object.assign({ head: pc, is_ancestor: true, commits_since: [], plan_touched: [], changed_since: [], args: [wt, pc, "docs/plans/x.md"] }, { digest: v.digest }));
+    assert.deepEqual(v, Object.assign({ head: pc, is_ancestor: true, commits_since: [], plan_touched: [], changed_since: [], args: [wt, pc, "docs/plans/x.md"] }, { program: { name: null, sha256: null }, digest: v.digest }));
     check(v, VERIFY_KEYS);
     // two commits after it: a non-ASCII subject with a tab and a control character, and one that touches the plan
     writeFileSync(join(wt, "a.py"), "b\n");
@@ -9085,15 +8536,17 @@ test("3.1.0 1959: the verify and commit-plan prompts run the programs, not raw g
   const plan = await runOne(s, ARGS);
   const build = await runOne(s, buildArgs(plan.result.plan_ref));
   const vp = call(build, "infra:verify-plan").prompt;
-  const cp = call(plan, "infra:commit-plan").prompt;
-  const q = (b, e, c) => "python3 -I -c '\n" + extractPy(b, e, c).replace(/'/g, "'\\''");
-  assert.ok(vp.includes(q("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY")));
-  assert.ok(cp.includes(q("PLAN_FILES_PY_BEGIN", "PLAN_FILES_PY_END", "PLAN_FILES_PY")));
+  // 4.0.0: the plan files are listed by the read-only verify step after the commit
+  const cp = call(plan, "infra:verify-plan-commit").prompt;
+  const q = (n) => "python3 -I '" + SCRIPTS_DIR + "/" + n + ".py'";
+  assert.ok(vp.includes(q("verify_since")));
+  assert.ok(cp.includes(q("plan_files")));
   assert.doesNotMatch(vp, /log --format=%H%x09%s/);
   assert.doesNotMatch(vp, /diff --name-only <plan_commit>\.\.HEAD/);
   assert.doesNotMatch(cp, /show --name-only --format= HEAD/);
+  assert.doesNotMatch(call(plan, "infra:commit-plan").prompt, /show --name-only --format= HEAD/);
   // the plan hash program stays the first one in the verify prompt
-  assert.ok(vp.indexOf(extractPy("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY").slice(0, 40)) > vp.indexOf("python3 -I -c "));
+  assert.ok(vp.indexOf(q("verify_since")) > vp.indexOf(q("plan_hash")));
 });
 
 test("3.1.0 1959: a verify relay that drops or changes an entry stops the run", async () => {
@@ -9133,24 +8586,23 @@ test("3.1.0 1959: a verify relay that drops or changes an entry stops the run", 
 });
 
 test("3.1.0 1959: a commit-plan relay whose files or head differ from the program's digest stops the run", async () => {
-  for (const mut of [(r) => ({ ...r, files: [] }), (r) => ({ ...r, files: r.files.concat(["x.py"]) }), (r) => ({ ...r, head: "abc1234def1" })]) {
+  // 4.0.0: the plan files are relayed by the read-only verify step; a relay
+  // changed after the program printed it is asked once more, then stops
+  for (const mut of [(r) => (r.files = []), (r) => (r.files = r.files.concat(["x.py"])), (r) => (r.head = "abc1234def1"), (r) => delete r.digest]) {
     const s = happy();
-    const inner = commitStub(s.__store, PC, PSHA);
-    s["infra:commit-plan"] = (prompt) => {
-      const r = inner(prompt);
-      r.digest = relayDigestOf(r, ["head", "files"]);
-      return mut(r);
-    };
+    s.__mutate = { label: "infra:verify-plan-commit", fn: (r) => (mut(r.plan_files), r) };
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "failed", out.result.reason);
-    assert.match(out.result.reason, /infra:commit-plan: the relayed head and files do not match the program's digest/);
+    assert.equal(out.result.stop_gate, "commit");
+    assert.match(out.result.reason, /infra:verify-plan-commit: the relayed head and files do not match the program's digest/);
+    assert.equal(out.labels.filter((l) => l === "infra:verify-plan-commit").length, 2);
   }
-  // no digest at all (an agent that ran git itself) stops too
+  // the commit step's own relay (head and tag object) is digest-checked too
   const s = happy();
-  const inner = commitStub(s.__store, PC, PSHA);
-  s["infra:commit-plan"] = (prompt) => Object.assign(inner(prompt), { __raw: true });
+  s.__mutate = { label: "infra:commit-plan", fn: (r) => ((r.head = "abc1234def1"), r) };
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /infra:commit-plan: the relayed head and tag object do not match the program's digest/);
 });
 
 test("3.1.0 1959: every embedded program takes the worktree as an argument and runs git from /", () => {
@@ -9216,7 +8668,7 @@ test("3.1.0 1935c: the push classifier routes real git push output", { skip: !HA
     assert.equal(o.args.length, 2, name);
     assert.ok(o.args[0].endsWith("/out.txt"), name);
     assert.equal(o.args[1], String(code), name);
-    assert.equal(o.digest, sha256(fn({ push_result: o.push_result, exit_code: o.exit_code, hook_tail: o.hook_tail, args: o.args })), name);
+    assert.equal(o.digest, sha256(fn({ push_result: o.push_result, exit_code: o.exit_code, hook_tail: o.hook_tail, args: o.args, program: o.program })), name);
   }
   // only line-start prefixes count: a hook that prints rejected-looking text mid-line stays a hook
   const o = classifyPush(1, "hook: ! [rejected] is what you get\nsee fatal: nothing\nerror: failed to push some refs to 'x'\n");
@@ -9232,8 +8684,8 @@ test("3.1.0 1935c: the push step runs the classifier program; a hook_rejected th
   const s = happy();
   const out = await run(s, ARGS);
   const p = call(out, "infra:push").prompt;
-  assert.ok(p.includes("python3 -I -c '\n" + extractPy("PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY").replace(/'/g, "'\\''")));
-  assert.match(p, /\{push_result, exit_code, hook_tail, args, digest\}/);
+  assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/push_classify.py' <file> <exit>"));
+  assert.match(p, /\{push_result, exit_code, hook_tail, args, program, digest\}/);
   // an ambiguous result stops for a human, never a network retry
   assert.match(p, /`ambiguous`[^\n]*needs_human[^\n]*no retry/);
   // a relayed hook_rejected whose tail or result was changed in the copy, or
@@ -9483,7 +8935,8 @@ test("3.1.0 1958: a changed or truncated title after the write, a wrong body_slu
 });
 
 test("3.1.0 1958: a project that is not owner/repo writes nothing", async () => {
-  const out = await run(noBody(), ARGS, { project: "o/r/x" });
+  // 4.0.0 (1992): planned without project, so o/r/x is not a sealed-project mismatch
+  const out = await run(noBody(), { ...ARGS, project: undefined }, { project: "o/r/x" });
   assert.ok(!out.build.labels.includes("infra:ledger-body"));
   assert.equal(out.result.ledger_status, "failed");
 });
@@ -9598,16 +9051,15 @@ test("3.1.0 review: the verify and commit-plan relays must echo the arguments th
   assert.equal(out.result.status, "failed");
   assert.match(out.result.reason, /infra:verify-plan: the program ran on other arguments/);
   const t = happy();
-  const inner = commitStub(t.__store, PC, PSHA);
-  t["infra:commit-plan"] = (prompt) => {
+  const inner = verifyStub(t.__store);
+  t["infra:verify-plan-commit"] = (prompt) => {
     const x = inner(prompt);
-    x.args = ["/other/worktree"];
-    x.digest = relayDigestOf(x, ["head", "files", "args"]);
+    x.plan_files.args = ["/other/worktree"];
     return x;
   };
   const o = await runOne(t, ARGS);
   assert.equal(o.result.status, "failed");
-  assert.match(o.result.reason, /infra:commit-plan: the program ran on other arguments/);
+  assert.match(o.result.reason, /infra:verify-plan-commit: the program ran on other arguments/);
 });
 
 // ---------------------------------------------------------------- 3.1.0 security review: the YAML loaders resist alias amplification
@@ -9783,7 +9235,7 @@ test("3.1.0 hooks: the surface program lists hook entries, args and -m modules; 
     for (const p of ["ci/chk.sh", "tools/gen.py", "pkg/__init__.py", "pkg/fmt.py"]) assert.ok(o.surface.includes(p), p);
     assert.deepEqual(o.args, [wt, "HEAD", "[]"]);
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
-    assert.equal(o.digest, sha256(fn({ surface: o.surface, make_paths: o.make_paths, error: o.error, args: o.args })));
+    assert.equal(o.digest, sha256(fn({ surface: o.surface, make_paths: o.make_paths, error: o.error, args: o.args, program: o.program })));
     assert.match(runP(["no-yaml"]).error, /no Python with PyYAML/);
     writeFileSync(join(wt, ".pre-commit-config.yaml"), LAUGHS + "repos:\n- repo: local\n  hooks:\n  - id: a\n    entry: x\n    args: *l8\n");
     assert.match(runP().error, /args is not a list of strings/);
@@ -10064,7 +9516,8 @@ test("3.1.0 PATH check: a missing, tampered or test-overridden result refuses", 
     assert.match(out.result.reason, re);
   }
   const p = call(await runOne(happy(), ARGS), "preflight").prompt;
-  assert.ok(p.includes("python3 -I -c " + shQuoteTest("\n" + extractPy("PATH_CHECK_PY_BEGIN", "PATH_CHECK_PY_END", "PATH_CHECK_PY"))));
+  // 4.0.0: run from the scripts_dir the same agent found
+  assert.ok(p.includes("python3 -I <scripts_dir>/path_check.py '/r'"));
   // the agent's Bash guard blocks the tool names: the prompt never spells them
   assert.doesNotMatch(p, /terraform|tofu|tflint|terragrunt|\btfp\b|digger|atlantis/i);
 });
@@ -10100,7 +9553,7 @@ test("3.1.0 PATH check program: resolves each tool on PATH; a shim is a /nix/sto
     assert.deepEqual(o.tools, Object.fromEntries(TF_TOOLS.map((t) => [t, null])));
     assert.deepEqual(o.args, [join(home, "repo")]);
     assert.deepEqual(o.path_problems, []);
-    assert.equal(o.digest, sha256(fn({ tools: o.tools, args: o.args, path_problems: o.path_problems })));
+    assert.equal(o.digest, sha256(fn({ tools: o.tools, args: o.args, path_problems: o.path_problems, program: o.program })));
     // a real tool outside the store
     mk(join(bin, TF_TOOLS[0]), "#!/bin/sh\necho real\n");
     o = run(["--store-prefix=" + store]);
@@ -10245,7 +9698,7 @@ test("3.1.0 PATH review: the workflow refuses PATH problems, a wrong repo argume
   s.preflight = Object.assign({}, s.preflight, { path_check: base({ tools: Object.assign(Object.fromEntries(TF_TOOLS.map((t) => [t, null])), { [TF_TOOLS[0]]: shim }) }) });
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  assert.match(call(out, "preflight").prompt, /' '\/r'\n/);
+  assert.match(call(out, "preflight").prompt, /path_check\.py '\/r'\n/);
 });
 
 test("3.1.0 PATH review: every embedded program drops empty, relative and in-worktree PATH entries for its children", { skip: !HAVE_PY }, () => {
@@ -10608,7 +10061,7 @@ test("3.1.0 ADR-1175: the remote head program reads origin's branch head, null w
     assert.deepEqual(o.args, [wt, "fleet/l42-x", TEST_URL]);
     assert.ok(!existsSync(m1.marker) && !existsSync(m2.marker), "no repo-config command ran");
     for (const bad of [bare, "file://" + bare, "ext::sh -c x", "-u", "ssh://h/x"]) assert.notEqual(go("fleet/l42-x", bad).status, 0, bad);
-    assert.equal(o.digest, sha256(canon({ head: o.head, args: o.args })));
+    assert.equal(o.digest, sha256(canon({ head: o.head, args: o.args, program: o.program })));
     o = JSON.parse(go("fleet/l42-gone").stdout);
     assert.equal(o.head, null);
     assert.notEqual(go("--upload-pack=x").status, 0);
@@ -11016,6 +10469,8 @@ test("3.1.1 PATH re-check: a failed, tampered, path-problem or other-step result
   for (const [k, f] of cases.entries()) {
     const s = happy();
     s["infra:path-check:" + site] = (p) => (f(p) === null ? null : Object.assign(f(p), { __raw: true }));
+    // 4.0.0 (1990): a broken relay is checked once more on sonnet; it is broken there too
+    s["infra:path-check:" + site + ":relay-retry"] = s["infra:path-check:" + site];
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "needs_human", String(k));
     assert.equal(out.result.stop_gate, "iac", String(k) + " " + out.result.reason);
@@ -11035,7 +10490,7 @@ test("3.1.1 PATH re-check: each check runs the same program with a fresh token; 
     assert.equal(i.repo, "/r");
     assert.ok(i.token.includes(NONCE), "the token carries the run nonce");
     assert.ok(!i.token.startsWith("-"), "the token is never an option");
-    assert.ok(c.prompt.includes("python3 -I -c " + shQuoteTest("\n" + prog) + " " + shQuoteTest(i.repo) + " " + shQuoteTest(i.token)), c.label);
+    assert.ok(c.prompt.includes("python3 -I " + shQuoteTest(SCRIPTS_DIR + "/path_check.py") + " " + shQuoteTest(i.repo) + " " + shQuoteTest(i.token)), c.label);
     assert.doesNotMatch(c.prompt, /terraform|tofu|tflint|terragrunt|\btfp\b|digger|atlantis/i);
   }
   // run 1 stops at the coder (no result); its recorded re-check passes are
@@ -11051,11 +10506,16 @@ test("3.1.1 PATH re-check: each check runs the same program with a fresh token; 
   }
   assert.ok(recorded["infra:path-check:coder:r1"], "run 1 checked before the coder");
   const s2 = happy();
-  for (const [label, r] of Object.entries(recorded)) s2[label] = Object.assign({}, r, { __raw: true });
+  for (const [label, r] of Object.entries(recorded)) {
+    s2[label] = Object.assign({}, r, { __raw: true });
+    // 4.0.0 (1990): and at the sonnet relay retry of each check
+    s2[label + ":relay-retry"] = s2[label];
+  }
   const second = await run(s2, Object.assign({}, ARGS, { run_nonce: "n2-0000002" }));
   assert.equal(second.result.status, "needs_human");
   assert.equal(second.result.stop_gate, "iac");
-  assert.match(second.result.reason, /PATH re-check infra:path-check:format-plan could not complete/);
+  // 4.0.0 (1985): the plan run's first re-check is the push probe's
+  assert.match(second.result.reason, /PATH re-check infra:path-check:push-probe:relay-retry could not complete/);
 });
 
 test("3.1.1 PATH re-check program: a token argument is echoed in args and the digest; a planted tool is seen", { skip: !HAVE_PY }, () => {
@@ -11071,7 +10531,7 @@ test("3.1.1 PATH re-check program: a token argument is echoed in args and the di
     const o = JSON.parse(r.stdout);
     assert.deepEqual(o.args, [join(home, "repo"), tok]);
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
-    assert.equal(o.digest, sha256(fn({ tools: o.tools, args: o.args, path_problems: o.path_problems })));
+    assert.equal(o.digest, sha256(fn({ tools: o.tools, args: o.args, path_problems: o.path_problems, program: o.program })));
     // a tool planted in a writable PATH dir after the first check is seen by the next one
     writeFileSync(join(bin, TF_TOOLS[1]), "#!/bin/sh\necho real\n", { mode: 0o755 });
     r = go();
@@ -11153,10 +10613,12 @@ test("3.1.2 PATH re-check (mutant R6): a not-ok status with a valid digest and s
         const i = inputsOf(p);
         return Object.assign(pathRecheckOut({}, [i.repo, i.token]), { status, reason: "x", __raw: true });
       };
+      // 4.0.0 (1990): the sonnet relay retry says the same
+      s["infra:path-check:" + site + ":relay-retry"] = s["infra:path-check:" + site];
       const out = await run(s, ARGS);
       assert.equal(out.result.status, "needs_human", site + " " + status);
       assert.equal(out.result.stop_gate, "iac", site + " " + status + ": " + out.result.reason);
-      assert.ok(out.result.reason.includes("infra:path-check:" + site + " could not complete: it returned " + status), out.result.reason);
+      assert.ok(out.result.reason.includes("infra:path-check:" + site + ":relay-retry could not complete: it returned " + status), out.result.reason);
     }
   }
 });
@@ -11174,17 +10636,23 @@ function jsPathRecheck(agentStub) {
     return SOURCE.slice(i, SOURCE.indexOf(end, i) + end.length);
   };
   const consts =
-    'const STR = { type: "string" };' +
+    'const STR = { type: "string" };\nconst STR_OR_NULL = { type: ["string", "null"] };' +
+    constBlock("PROGRAM_PROP", ";\n") +
     constBlock("K256", "];") +
     constBlock("PATH_CHECK_PY", "`;") +
     constBlock("PATH_TOOLS", "];") +
     constBlock("NOT_SHIMMED", '";') +
     constBlock("PATH_RECHECK_SCHEMA", "\n};") +
-    '\nconst SHA256_RE = /^[0-9a-f]{64}$/;\nconst JUDGE_AGENT = "fleet:judge";\nconst INFRA_MODEL = "sonnet";\n' +
-    'const state = { repo: "/r", nonce: "' + NONCE + '", pathChecks: 0, agents: 0 };\n' +
+    '\nconst SHA256_RE = /^[0-9a-f]{64}$/;\nconst JUDGE_AGENT = "fleet:judge";\n' +
+    // 4.0.0 (1990): the PATH check's tier and its relay retry
+    constBlock("INFRA_TIER", "];") +
+    constBlock("RELAY_RETRY_MODEL", '";') +
+    'const state = { repo: "/r", nonce: "' + NONCE + '", pathChecks: 0, agents: 0, scriptsDir: "' + SCRIPTS_DIR + '" };\n' +
+    // 4.0.0: the one program this runtime runs
+    "function programTable() { return { path_check: PATH_CHECK_PY }; }\nconst PROGRAM_SHA = {};\n" +
     "function gate() {}\nfunction halt(status, msg, stopGate) { const e = new Error(msg); e.halt = { status, stopGate }; throw e; }\n" +
     'function nonced(p) { return p + "\\nRun nonce: " + state.nonce; }\n';
-  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "shQuote", "pathCheck", "pathRecheckPrompt"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
+  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
   return new Function("agent", consts + fns + "\nreturn pathRecheck;")(agentStub);
 }
 
@@ -11205,16 +10673,19 @@ test("3.1.2 PATH re-check (mutant R7): two re-checks at the same site get differ
   await assert.rejects(recheck("same", "Code"), (e) => {
     assert.equal(e.halt.status, "needs_human");
     assert.equal(e.halt.stopGate, "iac");
-    assert.match(e.message, /infra:path-check:same could not complete/);
+    assert.match(e.message, /infra:path-check:same:relay-retry could not complete/);
     return true;
   });
-  assert.equal(seen.length, 2);
+  // 4.0.0 (1990): the refused replay is checked once more on sonnet (refused again)
+  assert.equal(seen.length, 3);
   assert.equal(seen[0].label, seen[1].label, "the same site");
+  assert.equal(seen[2].label, "infra:path-check:same:relay-retry");
   assert.notEqual(seen[0].token, seen[1].token, "a token per check, not per site");
+  assert.notEqual(seen[1].token, seen[2].token, "the relay retry has a token of its own");
   // a fresh result at a third check at the same site passes
   replay = null;
   await recheck("same", "Code");
-  assert.equal(new Set(seen.map((x) => x.token)).size, 3);
+  assert.equal(new Set(seen.map((x) => x.token)).size, 4);
 });
 
 // ---------------------------------------------------------------- 3.1.1 (ledger 1970a): non-HCL IaC files get their own hint
@@ -11246,7 +10717,7 @@ test("3.1.1 origin URL: the workspace step relays a program's output; the script
   const out = await run(happy(), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
   const wp = call(out, "workspace").prompt;
-  assert.ok(wp.includes("python3 -I -c " + shQuoteTest("\n" + prog) + " " + shQuoteTest("/r")), "the workspace prompt runs the program");
+  assert.ok(wp.includes("python3 -I " + shQuoteTest(SCRIPTS_DIR + "/remote_url.py") + " " + shQuoteTest("/r")), "the workspace prompt runs the program");
   assert.match(prog, /'config', '--get', 'remote\.origin\.url'/);
   // the plan seals the program's URL, never a free-text remote_url
   const s = iacScript(() => happy(), "approved");
@@ -11296,13 +10767,13 @@ test("3.1.1 origin URL program: prints the configured URL (before insteadOf) wit
     let o = JSON.parse(r.stdout);
     assert.equal(o.url, null);
     assert.deepEqual(o.args, [repo]);
-    assert.equal(o.digest, sha256(fn({ url: o.url, args: o.args })));
+    assert.equal(o.digest, sha256(fn({ url: o.url, args: o.args, program: o.program })));
     assert.equal(rawSpawnSync("git", ["-C", repo, "remote", "add", "origin", "git@github.com:o/r.git"], { env }).status, 0);
     r = go();
     assert.equal(r.status, 0, r.stderr);
     o = JSON.parse(r.stdout);
     assert.equal(o.url, "git@github.com:o/r.git", "the configured URL, before insteadOf");
-    assert.equal(o.digest, sha256(fn({ url: o.url, args: o.args })));
+    assert.equal(o.digest, sha256(fn({ url: o.url, args: o.args, program: o.program })));
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -11422,23 +10893,32 @@ test("3.1.3 build: args.project, never the origin slug, decides the ledger check
   assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
   s["infra:yaadgaar-read"] = yaadgaarRead();
   s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
-  // no project at build: the origin slug o/r must not stand in for the ledger
-  // scope; the build runs, and the write-back refuses (fail closed)
+  // 4.0.0 (1992, AC-1992): no project at build: the project sealed at plan
+  // time (yadgarhq/docs) is the ledger scope, never the origin slug o/r
   const none = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date });
   assert.equal(none.result.status, "ok", none.result.reason);
-  assert.ok(!none.labels.includes("infra:yaadgaar-read"));
-  assert.ok(!none.labels.includes("infra:yaadgaar-writeback"));
-  assert.equal(none.result.ledger_status, "failed");
-  assert.match(none.result.write_back.ledger[0].reason, /no yadgarhq\/ project/);
-  assert.match(none.result.write_back.ledger[0].section_text, /fleet:y622/);
+  assert.ok(none.labels.includes("infra:yaadgaar-read"));
+  assert.deepEqual(none.result.write_back.ledger.map((e) => [e.ref, e.status]), [["yaadgaar #622", "written"]]);
+  // a ref sealed with no project and no project at build: the write-back refuses (fail closed)
+  const s0 = autoHappy({ brief: YBRIEF });
+  const plan0 = await runOne(s0, { ...YQ, confirm: "ask", project: undefined });
+  assert.equal(plan0.result.status, "awaiting_confirmation", plan0.result.reason);
+  s0["infra:yaadgaar-read"] = yaadgaarRead();
+  const none0 = await runOne(s0, { mode: "build", plan_ref: plan0.result.plan_ref, date: ARGS.date });
+  assert.equal(none0.result.status, "ok", none0.result.reason);
+  assert.ok(!none0.labels.includes("infra:yaadgaar-read"));
+  assert.ok(!none0.labels.includes("infra:yaadgaar-writeback"));
+  assert.equal(none0.result.ledger_status, "failed");
+  assert.match(none0.result.write_back.ledger[0].reason, /no yadgarhq\/ project/);
+  assert.match(none0.result.write_back.ledger[0].section_text, /fleet:y622/);
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.deepEqual(inputsOf(call(out, "infra:yaadgaar-read").prompt).tasks, [{ key: "s0", number: 622, id: YURN }]);
   assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["yaadgaar #622", "written"]]);
-  // another ledger's project at build still stops
+  // another ledger's project at build still stops (4.0.0: as a sealed-project mismatch)
   const o = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "m-agahi/ccpm" });
   assert.equal(o.result.status, "needs_human");
-  assert.match(o.result.reason, /yaadgaar.*re-run plan/);
+  assert.match(o.result.reason, /project mismatch.*re-run plan/);
 });
 
 test("3.1.3 intake: project reaches intake independent of the repo", async () => {
@@ -11557,7 +11037,8 @@ test("3.1.3 review 1: the confirmation names the resolved ledger and project", a
 
 test("3.1.3 review 2: build with no project stops on a legacy ledger source", async () => {
   const s = happy();
-  const plan = await runOne(s, ARGS);
+  // 4.0.0 (1992): a plan run with no project seals none
+  const plan = await runOne(s, { ...ARGS, project: undefined });
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date });
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /source ledger:42 needs args\.project.*re-run plan/);
