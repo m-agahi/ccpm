@@ -214,8 +214,8 @@ its notes to this entry.
   `prior_draft: {run, plan_path, text}`, the findings as `prior_round` (round 0 from the parked
   run, so the relax check spans runs; no round 0 counts as relaxed). Neither is a brief source,
   neither is sealed, and no judge gets them; plan-audit gets `prior_round`. A digest, program,
-  argument or shape problem ignores the parked data with the gate line "parked draft ignored";
-  it never stops the run.
+  argument or shape problem ignores the parked data with the gate line "parked draft ignored".
+  The review made that fail closed outside `ask`; see "Whole-branch review fixes" below.
 - After a plan commit that used a parked folder, the commit step moves it to `parked/used/`.
 - Mutant tests: every S4 check was hand-mutated; each mutant fails a test, except one equivalent
   mutant (the symbol union across rounds is implied by the per-round keep-every-symbol stop).
@@ -426,6 +426,13 @@ commit]`) before G2. A mismatch stops the run with `failed` and `stop_gate: "con
 - The short-path writer is called directly, not through a one-item `parallel()`. `parallel()`
   turned a halt in the role call into "returned no result" (`failed`, no `stop_gate`); the halt now
   keeps its own status and `stop_gate`.
+- An unusable parked read fails closed. That is a read step that crashed, died or was not ok, a
+  program, digest or argument mismatch, an unusable shape or `plan_path`, or findings that do not
+  parse. The read cannot prove that no parked prior exists, so round 0 may be lost. Under
+  `default` the auto-eligibility blocker "parked prior unreadable (fail closed)" ends the run at
+  `awaiting_confirmation`. Under `auto` the run stops `needs_human` with `failed_check: "intent"`
+  after the plan commit, as a relaxed re-plan does. Under `ask` the parked data is still ignored
+  with a gate line. A draft whose findings do not parse is still a planner input.
 
 ## [3.1.3] - 2026-11-09
 

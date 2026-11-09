@@ -159,6 +159,106 @@ test("review fix 5: a halt inside the short-path writer's role call keeps its st
   assert.equal(ok.result.path, "short");
 });
 
+// ---------------------------------------------------------------- fix 3: an unreadable parked prior fails closed
+
+// an eligible confirm "default" plan (bug_fix, no new behaviour) with the intent judge
+function defaultHappy() {
+  const s = happy();
+  Object.assign(s, {
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "role:fleet-intent-judge": {
+      status: "ok",
+      reason: "matches the task",
+      verdict: "approve",
+      deviations: [],
+      coverage: { covered: true, missing: [] },
+      classification: { change_kind: "approve", new_behaviour: "approve", quote: "the parser drops NBSP (a regression)" },
+    },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+  });
+  s["role:scope-and-plan"] = Object.assign({}, s["role:scope-and-plan"], { change_kind: "bug_fix", new_behaviour: false, est_diff_lines: 80 });
+  return s;
+}
+const DEFAULT = { ...ARGS, confirm: "default" };
+const PRUN = "n0-1234567";
+const R0 = { round: 0, findings: [], criteria: [{ id: "AC1", text: "behaviour 1" }], change_kind: "bug_fix", new_behaviour: false };
+function parkedOut(over) {
+  const p = Object.assign({ run: PRUN, plan_path: "docs/plans/x.md", draft_chunks: ["# draft plan\n"], findings_chunks: [JSON.stringify({ reason: "x", rounds: [R0], symbols: [] })] }, over || {});
+  return (prompt) => {
+    const i = inputsOf(prompt);
+    return { status: "ok", reason: "read", parked: p, args: [i.scratch, i.plan_tip_time === null ? "null" : String(i.plan_tip_time)] };
+  };
+}
+const UNREADABLE = [
+  ["digest", (r) => Object.assign(r, { parked: Object.assign({}, r.parked, { draft_chunks: ["# other"] }) })],
+  ["program", (r) => Object.assign(r, { program: { name: "parked", sha256: "0".repeat(64) } })],
+  ["args", (r, p) => redigest("infra:load-parked", Object.assign(r, { args: ["/elsewhere", "null"] }), p)],
+  ["failed", () => ({ status: "failed", reason: "boom" })],
+  ["dead", () => null],
+  ["shape", (r, p) => redigest("infra:load-parked", Object.assign(r, { parked: Object.assign({}, r.parked, { run: "../x" }) }), p)],
+  ["plan_path", (r, p) => redigest("infra:load-parked", Object.assign(r, { parked: Object.assign({}, r.parked, { plan_path: "/etc/x.md" }) }), p)],
+  ["findings", (r, p) => redigest("infra:load-parked", Object.assign(r, { parked: Object.assign({}, r.parked, { findings_chunks: ["{not json"] }) }), p)],
+];
+
+test("review fix 3: under default an unreadable parked prior is a blocker (fail closed): Max is asked", async () => {
+  for (const [what, fn] of UNREADABLE) {
+    const s = defaultHappy();
+    s["infra:load-parked"] = parkedOut();
+    s.__mutate = { label: "infra:load-parked", fn };
+    const out = await runOne(s, DEFAULT);
+    assert.equal(out.result.status, "awaiting_confirmation", what + ": " + out.result.reason);
+    assert.match(out.result.confirm_reason, /parked prior unreadable \(fail closed\)/, what);
+    assert.ok(!out.labels.includes("role:fleet-intent-judge"), what);
+  }
+  // control: a readable parked prior of the same plan stays eligible
+  const s = defaultHappy();
+  s["infra:load-parked"] = parkedOut();
+  const ok = await runOne(s, DEFAULT);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+  // no parked folder at all is not unreadable
+  const n = await runOne(defaultHappy(), DEFAULT);
+  assert.equal(n.result.status, "ok", n.result.reason);
+});
+
+test("review fix 3: under auto an unreadable parked prior stops for Max after the plan commit, as a relaxed re-plan does", async () => {
+  for (const [what, fn] of UNREADABLE) {
+    const s = defaultHappy();
+    s["infra:load-parked"] = parkedOut();
+    s.__mutate = { label: "infra:load-parked", fn };
+    const out = await runOne(s, AUTO);
+    assert.equal(out.result.status, "needs_human", what + ": " + out.result.reason);
+    assert.equal(out.result.failed_check, "intent", what);
+    assert.match(out.result.reason, /parked prior unreadable \(fail closed\)/, what);
+    assert.ok(out.result.plan_ref && out.result.plan_ref.plan_commit, what + ": the plan stays committed for a ruling");
+    assert.ok(!out.labels.includes("role:fleet-intent-judge"), what);
+  }
+});
+
+test("review fix 3: under ask an unreadable parked prior is still ignored with a gate line", async () => {
+  for (const [what, fn] of UNREADABLE) {
+    const s = happy();
+    s["infra:load-parked"] = parkedOut();
+    s.__mutate = { label: "infra:load-parked", fn };
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "awaiting_confirmation", what + ": " + out.result.reason);
+    assert.ok(!("confirm_reason" in out.result), what);
+    assert.ok(out.logs.some((l) => /^parked (draft|findings) ignored \(/.test(l)), what);
+  }
+});
+
+test("review fix 3: the sealed agent count does not include gate agents an unreadable prior keeps from running", async () => {
+  const bad = defaultHappy();
+  bad["infra:load-parked"] = parkedOut();
+  bad.__mutate = { label: "infra:load-parked", fn: UNREADABLE[0][1] };
+  await runOne(bad, AUTO);
+  const ask = defaultHappy();
+  ask["infra:load-parked"] = parkedOut();
+  ask.__mutate = { label: "infra:load-parked", fn: UNREADABLE[0][1] };
+  await runOne(ask, ARGS);
+  const n = (s) => JSON.parse(s.__store[PC]).history.agents;
+  assert.equal(n(bad), n(ask));
+});
+
 test("review fix 1: precommit_ids routes every print through one emit with the digest", () => {
   const m = /\/\/ PRECOMMIT_IDS_PY_BEGIN\n([\s\S]*?)\n\/\/ PRECOMMIT_IDS_PY_END/.exec(SOURCE);
   assert.ok(m);

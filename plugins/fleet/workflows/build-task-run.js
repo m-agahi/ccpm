@@ -4072,14 +4072,18 @@ function loadParkedPrompt(inputs) {
   );
 }
 
-// 4.0.0 (1986): the parked draft and findings as planner inputs, or null.
-// Never blocks the run: any relay or shape problem ignores the parked data
-// with a gate line. Returns {run, priorDraft, priorRound}.
+// 4.0.0 (1986): the parked draft and findings as planner inputs, or null (no
+// parked folder). Any relay or shape problem ignores the parked data with a
+// gate line and returns {unreadable: <why>}: the read cannot prove there is no
+// parked prior, so the caller fails closed (4.0.0 review): confirm "default"
+// asks Max, "auto" stops after the plan commit, "ask" goes on (Max is asked
+// anyway). Returns {run, priorDraft, priorRound, unreadable?}.
+const PARKED_UNREADABLE = "parked prior unreadable (fail closed)";
 async function loadParked(scratch, tip) {
   const label = "infra:load-parked";
   const ignore = (why) => {
     gate("parked draft ignored (" + why + ")");
-    return null;
+    return { run: null, priorDraft: null, priorRound: null, unreadable: why };
   };
   let r = null;
   try {
@@ -4113,6 +4117,12 @@ async function loadParked(scratch, tip) {
     } catch (e) {
       f = null;
     }
+    // findings that do not parse (or hold no rounds list) lose round 0: the
+    // draft is still a planner input, but the prior is unreadable (fail closed)
+    if (!f || typeof f !== "object" || Array.isArray(f) || !Array.isArray(f.rounds)) {
+      out.unreadable = "findings of run " + k.run + " unparseable";
+      gate("parked findings ignored (" + out.unreadable + ")");
+    }
     const rounds = f && typeof f === "object" && Array.isArray(f.rounds) ? f.rounds.filter((x) => x && typeof x === "object" && !Array.isArray(x)) : [];
     if (rounds.length) {
       const crit = (c) => (Array.isArray(c) ? c.filter((x) => x && typeof x === "object").map((x) => ({ id: String(x.id || ""), text: String(x.text || "") })) : []);
@@ -4130,7 +4140,7 @@ async function loadParked(scratch, tip) {
     }
   }
   gate("parked draft of run " + k.run + " loaded" + (out.priorDraft ? " (" + out.priorDraft.plan_path + ")" : "") + (out.priorRound ? ", " + out.priorRound.findings.length + " finding(s)" : "") + ": planner inputs only");
-  return out.priorDraft || out.priorRound ? out : null;
+  return out.priorDraft || out.priorRound || out.unreadable ? out : null;
 }
 
 // The repo's fixer hooks on build-phase files (3.0.0, ledger 1951): runs
@@ -8382,6 +8392,7 @@ async function planMode(input, date) {
   // plan commit, as planner-only inputs; the tip time is the scan program's
   const tip = scan.plan_tip_time === null || scan.plan_tip_time === undefined ? null : scan.plan_tip_time;
   const parked = await loadParked(lay.scratch, Number.isInteger(tip) && tip >= 0 ? tip : null);
+  const parkedBad = !!(parked && parked.unreadable);
   // 4.0.0 (1981): the throwaway test database, up through plan-audit
   await testDbStep(scan.test_db, "infra:branch-scan", lay.mainWt, ws.defaultBranch, "Workspace", ["plan", "audit"], names.taskId);
 
@@ -8435,7 +8446,9 @@ async function planMode(input, date) {
     });
     // 4.0.0 (1991): decided before the seal (the gate agents count into it)
     blockers = confirm === "default" ? defaultBlockers(p, input, raw) : [];
-    runGates = auto ? !p.relaxed.length : confirm === "default" && !blockers.length;
+    // 4.0.0 review: a parked prior the read could not use fails closed
+    if (parkedBad && confirm === "default") blockers.push(PARKED_UNREADABLE);
+    runGates = auto ? !p.relaxed.length && !parkedBad : confirm === "default" && !blockers.length;
     pc = await commitPlanAndRef({
       worktree: lay.mainWt,
       branch: lay.branch,
@@ -8444,7 +8457,7 @@ async function planMode(input, date) {
       after: 1 + (runGates ? autoGateAgents(p.planFacts.commands) : 0),
       reuseHead,
       // 4.0.0 (1986): the used parked folder moves to parked/used/ after the commit
-      retire: parked ? { dir: lay.scratch + "/parked/" + parked.run, used: lay.scratch + "/parked/used" } : null,
+      retire: parked && parked.run ? { dir: lay.scratch + "/parked/" + parked.run, used: lay.scratch + "/parked/used" } : null,
       fields: {
         branch: lay.branch,
         planPath: p.planPath,
@@ -8468,6 +8481,9 @@ async function planMode(input, date) {
   // explicit "auto" it stops for Max (the plan stays committed for a ruling)
   if (auto && p.relaxed.length)
     return autoFailResult({ failedCheck: "intent", reasons: ["re-plan relaxed: " + p.relaxed.join("; ")], intent: null }, p.planPath, pc.tiny);
+  // 4.0.0 review: so does a parked prior the read could not use (fail closed)
+  if (auto && parkedBad)
+    return autoFailResult({ failedCheck: "intent", reasons: [PARKED_UNREADABLE + ": " + parked.unreadable], intent: null }, p.planPath, pc.tiny);
   if (!runGates) {
     const extra = { ledger_source: ls };
     if (confirm === "default") {
@@ -8476,7 +8492,7 @@ async function planMode(input, date) {
     }
     return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, extra);
   }
-  if (confirm === "default") gate("confirm default: eligible (bug_fix, new_behaviour false, no IaC path, no relaxed re-plan); running the auto gates");
+  if (confirm === "default") gate("confirm default: eligible (bug_fix, new_behaviour false, no IaC path, no relaxed re-plan, no unreadable parked prior); running the auto gates");
 
   // confirm "auto", or an eligible "default": G1-G3 instead of the question; never ask
   phase("Auto-confirm");
