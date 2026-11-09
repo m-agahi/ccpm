@@ -3910,7 +3910,9 @@ function workspacePrompt(inputs) {
     "3. Keep fleet files out of git status: if `git -C <repo> check-ignore -q .claude/worktrees/probe` fails, append the line `.claude/worktrees/` to `$(git -C <repo> rev-parse --path-format=absolute --git-common-dir)/info/exclude`. Do the same for `.claude/settings.local.json` (probe that path), and for the test caches `__pycache__/`, `.pytest_cache/`, `.coverage`, `.hypothesis/` (a judge's test run must not leave untracked noise). Never edit a tracked .gitignore.\n" +
     "4. Branch state: `gh pr list --head <branch> --state all --json number,state` in <repo>. MERGED or CLOSED -> status needs_human.\n" +
     "5. main_worktree: if it exists and `git -C <main_worktree> branch --show-current` equals <branch>, reuse it (created=false). If the path exists otherwise -> needs_human. If absent: local branch <branch> exists -> `git -C <repo> -c core.hooksPath=/dev/null worktree add <main_worktree> <branch>`; else remote branch exists (`git -C <repo> ls-remote --exit-code --heads origin <branch>`: exit code 0 = exists, exit code 2 = absent; any other exit code is a network/auth error -> retry with the same 5 15 45 backoff, and still erroring after the 3 retries -> failed; never treat an error as absent) -> `git -C <repo> -c core.hooksPath=/dev/null worktree add -b <branch> <main_worktree> origin/<branch>`; else `git -C <repo> -c core.hooksPath=/dev/null worktree add --no-track -b <branch> <main_worktree> origin/<default_branch>` (created=true).\n" +
-    "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths.\n" +
+    "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths." +
+    (inputs.frozen_resume ? " Exception (frozen_resume is true): the uncommitted paths of a frozen build are expected; list them in reason and go on (the workflow checks the worktree tree itself). Never stash, reset, clean or change them." : "") +
+    "\n" +
     "7. `mkdir -p <scratch_dir>`.\n" +
     "8. base_ref = `git -C <main_worktree> merge-base HEAD origin/<default_branch>`.\n" +
     "9. remote_slug = <owner>/<name> parsed from `git -C <repo> remote get-url origin`. remote_host = the host part of `git -C <repo> config --get remote.origin.url` (the configured URL, before any insteadOf rewrite; for an ssh alias such as `github-personal:o/r.git`, the alias).\n" +
@@ -5113,6 +5115,20 @@ function replanWorktreePrompt(inputs) {
     "2. Else `git -C <main_worktree> -c core.hooksPath=/dev/null worktree add --detach <worktree> <plan_commit>`, then write `<worktree>/.claude/settings.local.json` with exactly `settings_local_json`.\n" +
     "3. head = `git -C <worktree> rev-parse HEAD`.\n" +
     "Return {status, reason, head}."
+  );
+}
+
+// 4.0.0 (1987): a ref to the freeze tree object, hooks off, no commit object.
+function freezeRefPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: record the freeze tree under a local ref. Change nothing else: no staging, no new commit object, no checkout, no reset, no push; the worktree stays exactly as it is.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "1. `git -C " + shQuote(inputs.main_worktree) + " cat-file -t " + shQuote(inputs.tree) + "` must print `tree`; else failed.\n" +
+    "2. Run this one command exactly as written: `git -C " + shQuote(inputs.main_worktree) + " -c core.hooksPath=/dev/null update-ref " + inputs.ref + " " + inputs.tree + "`.\n" +
+    "3. ref_target = the output of `git -C " + shQuote(inputs.main_worktree) + " rev-parse " + shQuote(inputs.ref) + "`.\n" +
+    "Return {status, reason, ref_target}."
   );
 }
 
@@ -6400,6 +6416,9 @@ const state = {
   rolesLoaded: false,
   preflightCached: false,
   preflightRecord: null,
+  // 4.0.0 (1987): the digest of the last freeze and its plan_ref (returned on a stop)
+  freezeDigest: null,
+  freezePlanRef: null,
 };
 
 function gate(msg) {
@@ -6693,7 +6712,20 @@ function finishStop(status, reason) {
     out.plan_ref_verified = false;
     out.reason = reason + " (plan_ref " + state.unverifiedPlanRef.plan_ref + " at " + state.unverifiedPlanRef.plan_commit + " returned unverified)";
   }
+  // 4.0.0 (1987): a stop after a freeze returns its digest; a build re-run
+  // with it resumes at the coder while the worktree is still the freeze tree
+  if (state.freezeDigest && status !== "ok" && status !== "awaiting_confirmation") {
+    out.freeze_digest = state.freezeDigest;
+    if (!out.plan_ref && state.freezePlanRef) out.plan_ref = state.freezePlanRef;
+  }
   return out;
+}
+
+// 4.0.0 (1987): sha256 over the plan ref's sha256, the freeze tree and the
+// frozen maps' digest. The caller holds it; the script recomputes it from git
+// (the freeze ref, the worktree tree) and the hasher maps.
+function freezeDigestOf(refSha256, tree, hashes) {
+  return sha256Hex(canonical({ ref_sha256: refSha256, tree, mapsDigest: mapsDigest(hashes) }));
 }
 
 // ---------------------------------------------------------------- shared steps
@@ -6850,17 +6882,17 @@ async function pushProbe(lay, ws) {
   gate("push access ok: dry run " + r.result + " (exit " + r.exit_code + ")");
 }
 
-async function workspaceStep(repo, lay) {
+async function workspaceStep(repo, lay, wopt) {
   phase("Workspace");
   const ws = await infra(
     "workspace",
-    workspacePrompt({
+    workspacePrompt(Object.assign({
       repo,
       branch: lay.branch,
       main_worktree: lay.mainWt,
       scratch_dir: lay.scratch,
       settings_local_json: settingsFor(lay.mainWt),
-    }),
+    }, wopt && wopt.frozenResume ? { frozen_resume: true } : {})),
     "Workspace",
   );
   if (!ws.default_branch || !ws.base_ref) halt("failed", "workspace returned no default_branch/base_ref");
@@ -8501,7 +8533,7 @@ async function buildMode(input, date) {
 
   // 4.0.0 (1990): the role pages come from the plan ref unless fresh_preflight
   await preflightStep(repo, input.fresh_preflight !== true);
-  const ws = await workspaceStep(repo, lay);
+  const ws = await workspaceStep(repo, lay, { frozenResume: typeof input.freeze_digest === "string" });
   return buildFromRef(input, date, tiny, lay, ws, { rerunGates: input.confirm === "auto", intent: null, agentsBase: 0 });
 }
 
@@ -8728,6 +8760,33 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     }
   } else if (v.head !== ref.plan_commit)
     halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
+
+  // 4.0.0 (1987): a frozen resume. The caller passes the freeze_digest a stop
+  // after the freeze returned; the script recomputes it from git (HEAD, the
+  // worktree tree, refs/fleet/<task>/freeze) and the hasher maps. Only an
+  // untouched freeze tree resumes, at the coder; anything else stops.
+  const freezeRefName = "refs/fleet/" + names.taskId + "/freeze";
+  let frozenResume = null;
+  if (typeof input.freeze_digest === "string" && resume) gate("freeze_digest not used: the run-state at " + resume.last_gate + " resumes this build");
+  else if (typeof input.freeze_digest === "string") {
+    const mis = (what) =>
+      halt(
+        "needs_human",
+        "frozen resume refused: " + what + " (" + freezeRefName + "); clean or stash the worktree by hand and build without freeze_digest, or re-plan",
+        "resume",
+      );
+    await purgeBytecode("infra:purge-bytecode:resume-frozen", mainWt, "Verify");
+    const hz = await hasher("hasher:resume-frozen", mainWt, hashedFiles, "Verify");
+    const refTree = hz.hashes.git[FLEETREF + freezeRefName];
+    if (hz.fingerprint.head !== ref.plan_commit) mis("HEAD " + hz.fingerprint.head + " is not plan_commit " + ref.plan_commit);
+    if (typeof refTree !== "string" || !refTree) mis("no freeze ref");
+    if (hz.fingerprint.tree !== refTree) mis("the worktree tree " + hz.fingerprint.tree + " is not the freeze tree " + refTree + " (changed since the freeze)");
+    if (hz.hashes.suspicious.length) mis("suspicious paths: " + hz.hashes.suspicious.join(", "));
+    if (freezeDigestOf(tiny.ref_sha256, hz.fingerprint.tree, hz.hashes) !== input.freeze_digest)
+      mis("freeze_digest does not match the plan ref, the freeze tree and the frozen maps");
+    frozenResume = hz;
+    gate("frozen resume: worktree is the freeze tree " + refTree + " of " + freezeRefName + " and freeze_digest matches");
+  }
 
   // confirm "auto" in build mode: re-run G1-G3 against the current rulings
   // (a resumed build was approved already)
@@ -9312,15 +9371,38 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (!codeBaseRef) codeBaseRef = freezeRef;
     last = h;
     gate("freeze f" + freezes + " at tree " + freezeTree + " (HEAD " + freezeRef + "): " + countKeys(frozen) + " hashed keys");
+    // 4.0.0 (1987): the freeze tree under refs/fleet/<task>/freeze (no commit)
+    const fr = await infra("infra:freeze-ref:f" + freezes, freezeRefPrompt({ main_worktree: mainWt, ref: freezeRefName, tree: freezeTree }), "Freeze");
+    if (fr.ref_target !== freezeTree) halt("failed", "infra:freeze-ref:f" + freezes + ": the freeze ref " + freezeRefName + " is at " + JSON.stringify(fr.ref_target === undefined ? null : fr.ref_target) + ", not the freeze tree " + freezeTree);
+    // the script's own write: the next comparison starts from the new value
+    frozen.git[FLEETREF + freezeRefName] = freezeTree;
+    setFreezeDigest();
   }
 
-  phase("Tests");
-  await testLoop(
-    testable.map((c) => ({ criterion: c, findings: [] })),
-    null,
-  );
-  phase("Freeze");
-  await freeze();
+  function setFreezeDigest() {
+    state.freezeDigest = freezeDigestOf(tiny.ref_sha256, freezeTree, frozen);
+    state.freezePlanRef = tiny;
+  }
+
+  if (frozenResume) {
+    // 4.0.0 (1987): the tests were approved and frozen in an earlier run
+    freezes = 1;
+    frozen = frozenResume.hashes;
+    freezeRef = frozenResume.fingerprint.head;
+    freezeTree = frozenResume.fingerprint.tree;
+    codeBaseRef = freezeRef;
+    last = frozenResume;
+    setFreezeDigest();
+    gate("resuming at the coder (frozen): no writer and no test judge runs; freeze tree " + freezeTree);
+  } else {
+    phase("Tests");
+    await testLoop(
+      testable.map((c) => ({ criterion: c, findings: [] })),
+      null,
+    );
+    phase("Freeze");
+    await freeze();
+  }
 
   // code
   phase("Code");
@@ -9584,7 +9666,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     phase("Code");
   }
 
-  return finishOk(null);
+  return finishOk(frozenResume ? "frozen" : null);
 }
 
 function reviewFindingText(f) {
@@ -10066,6 +10148,9 @@ async function main(input) {
       "args.run_nonce missing or malformed: the skill passes a fresh value (date +%s%N) on every invocation; run /build-task again, never resumeFromRunId (it would replay stale worktree checks)",
     );
   state.nonce = input.run_nonce;
+  // 4.0.0 (1987): the caller-held digest of a freeze, for a frozen resume
+  if (input.freeze_digest !== undefined && (mode !== "build" || typeof input.freeze_digest !== "string" || !/^[0-9a-f]{64}$/.test(input.freeze_digest)))
+    stop("needs_human", "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JSON.stringify(input.freeze_digest));
   return mode === "plan" ? planMode(input, input.date) : buildMode(input, input.date);
 }
 

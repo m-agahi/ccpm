@@ -288,6 +288,12 @@ export async function runOne(script, args0) {
       fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = "f".repeat(40);
       return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
     }
+    // 4.0.0 (1987): unscripted freeze-ref writes land on the freeze tree
+    if (!(label in script) && /^infra:freeze-ref:/.test(label)) {
+      const i = inputsOf(prompt);
+      fleetRefs["fleetref:" + i.ref] = i.tree;
+      return { status: "ok", reason: "written", ref_target: i.tree };
+    }
     // 4.0.0: unscripted verify steps read what the commit-plan stubs wrote
     if (!(label in script) && /^infra:verify-plan-commit/.test(label)) return verifyStub(script.__store || {})(prompt);
     // 4.0.0 (1983): every confirm mode gets up to 2 re-plan rounds; an
@@ -330,6 +336,10 @@ export async function runOne(script, args0) {
       // the real hasher sees the run-state refs the workflow's own state writes made
       const g = r.hashes.git || (r.hashes.git = {});
       if (!Object.keys(g).some((k) => k.startsWith("fleetref:"))) Object.assign(g, fleetRefs);
+      // 4.0.0 (1987): a scripted freeze ref is in the repo from then on
+      else for (const k of Object.keys(g)) if (/^fleetref:refs\/fleet\/[^/]+\/freeze$/.test(k) && !(k in fleetRefs)) fleetRefs[k] = g[k];
+      // a stub that models other refs only still sees the freeze ref
+      for (const [k, v] of Object.entries(fleetRefs)) if (/\/freeze$/.test(k) && !(k in g)) g[k] = v;
       lastHashes = r.hashes;
       // the program's digest over what it printed (2.1.5)
       if (!("digest" in r)) {

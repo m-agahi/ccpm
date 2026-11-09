@@ -195,6 +195,12 @@ A build re-run with the same `plan_ref` resumes at the last completed gate. Afte
 push, the PR, the review and the write-back, the workflow records a local run-state ref. When a
 later step failed (for example the push, on an SSH identity), fix the cause and run step 8 again
 with the same `plan_ref`: the result says `resumed_at`, and no writer, coder or judge runs again.
+A build that stops after the freeze (for example in the coder) returns `freeze_digest`. Run step
+8 again with the same `plan_ref` and add `freeze_digest: <the value from that result, unchanged>`
+to the args. While the worktree is still the frozen one, the build resumes at the coder
+(`resumed_at: "frozen"`): no test writer and no test judge runs again. A coder stop that left
+edits in the worktree still stops with `needs_human` ("frozen resume refused"); a human cleans or
+stashes the worktree. Pass `freeze_digest` only from a build result, never a value you made.
 A `needs_human` "run-state mismatch" means the branch or worktree changed since that milestone;
 "approved but unresumable" means build commits exist without a run-state. Relay the reason; a
 human pushes by hand or deletes the branch.

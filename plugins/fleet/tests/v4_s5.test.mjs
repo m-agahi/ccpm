@@ -8,11 +8,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   ARGS,
+  PC,
+  HASHES,
+  H,
+  HASHES_FLAT,
   happy,
   run,
+  runOne,
   call,
   inputsOf,
   noUnscripted,
+  sha256,
+  canon,
 } from "./harness.mjs";
 
 // ---------------------------------------------------------------- short path (1991)
@@ -151,4 +158,141 @@ test("1991: a full-path plan keeps one writer per criterion", async () => {
   assert.ok(out.labels.includes("role:fleet-test-writer:AC1:r1"));
   assert.ok(out.labels.includes("role:fleet-test-writer:AC2:r1"));
   assert.ok(!out.labels.some((l) => /:short:/.test(l)));
+});
+
+// ---------------------------------------------------------------- frozen resume (1987)
+
+const HEX64 = /^[0-9a-f]{64}$/;
+function mapsDigestOf(h) {
+  const o = {};
+  for (const m of ["files", "sections", "git", "symlinks", "ignored"]) o[m] = Object.assign({}, h[m] || {});
+  for (const k of Object.keys(o.git)) if (k.startsWith("fleetref:")) delete o.git[k];
+  return sha256(canon(o));
+}
+const freezeRefOf = (planRef) => planRef.plan_ref.replace(/\/plan$/, "/freeze");
+function buildArgsOf(planRef, over) {
+  const b = Object.assign({}, ARGS, { mode: "build", plan_ref: planRef }, over || {});
+  delete b.input;
+  return b;
+}
+// A build whose coder stops after the freeze, with the plan run before it.
+async function coderStop() {
+  const s = happy({ script: { "role:fleet-coder:r1": { status: "needs_human", reason: "coder stuck" } } });
+  const out = await run(s, ARGS);
+  return { s, out, planRef: out.planResult.plan_ref };
+}
+// The resume run's worktree as the frozen hasher reads it.
+function frozenState(planRef, over) {
+  const o = Object.assign({ tree: "T1", flat: HASHES_FLAT, ref: "T1", head: PC }, over || {});
+  const h = H(o.flat);
+  if (o.ref !== null) h.git["fleetref:" + freezeRefOf(planRef)] = o.ref;
+  return { status: "ok", fingerprint: { head: o.head, tree: o.tree }, hashes: h };
+}
+
+test("1987: each freeze writes refs/fleet/<id>/freeze to the freeze tree, with hooks off and no commit", async () => {
+  const out = await run(happy(), ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const c = call(out, "infra:freeze-ref:f1");
+  const i = inputsOf(c.prompt);
+  assert.equal(i.ref, freezeRefOf(out.planResult.plan_ref));
+  assert.equal(i.tree, "T1");
+  assert.match(c.prompt, /core\.hooksPath=\/dev\/null update-ref/);
+  assert.ok(!/git commit|commit -m/.test(c.prompt));
+  assert.ok(out.labels.indexOf("infra:freeze-ref:f1") > out.labels.indexOf("hasher:freeze:f1"));
+  assert.ok(out.labels.indexOf("infra:freeze-ref:f1") < out.labels.indexOf("role:fleet-coder:r1"));
+});
+
+test("1987: a freeze-ref write that lands elsewhere halts", async () => {
+  const s = happy({ script: { "infra:freeze-ref:f1": { status: "ok", reason: "written", ref_target: "T9" } } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /freeze ref/);
+  assert.ok(!out.labels.includes("role:fleet-coder:r1"));
+});
+
+test("AC-1987-1: a coder stop returns a 64-hex freeze_digest over the ref sha256, the freeze tree and the maps", async () => {
+  const { out, planRef } = await coderStop();
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.freeze_digest, HEX64);
+  assert.equal(out.result.freeze_digest, sha256(canon({ ref_sha256: planRef.ref_sha256, tree: "T1", mapsDigest: mapsDigestOf(HASHES) })));
+  assert.deepEqual(out.result.plan_ref, planRef);
+  // a stop before the freeze carries none
+  const early = await run(happy({ script: { "role:fleet-test-judge:r1": { status: "needs_human", reason: "x" } } }), ARGS);
+  assert.equal(early.result.status, "needs_human");
+  assert.equal(early.result.freeze_digest, undefined);
+});
+
+test("AC-1987-2: a re-run with the freeze_digest and the frozen tree resumes at the coder", async () => {
+  const { s, out, planRef } = await coderStop();
+  s["role:fleet-coder:r1"] = happy()["role:fleet-coder:r1"];
+  s["hasher:resume-frozen"] = frozenState(planRef);
+  const r = await runOne(s, buildArgsOf(planRef, { freeze_digest: out.result.freeze_digest }));
+  assert.equal(r.result.status, "ok", r.result.reason);
+  assert.equal(r.result.resumed_at, "frozen");
+  assert.ok(!r.labels.some((l) => /^role:fleet-test-(writer|judge)/.test(l)), r.labels.join(", "));
+  assert.ok(!r.labels.includes("infra:freeze-ref:f1"));
+  assert.ok(r.labels.includes("role:fleet-coder:r1"));
+  assert.ok(r.labels.includes("role:fleet-code-judge:r1"));
+  // the workspace step allows the frozen worktree's dirty paths
+  assert.equal(inputsOf(call(r, "workspace").prompt).frozen_resume, true);
+  // bytecode is purged before the frozen state is read
+  const pi = r.labels.indexOf("infra:purge-bytecode:resume-frozen");
+  assert.ok(pi >= 0 && pi < r.labels.indexOf("hasher:resume-frozen"), r.labels.join(", "));
+  // the coder gets the frozen tree
+  assert.equal(inputsOf(call(r, "role:fleet-coder:r1").prompt).freeze_tree, "T1");
+});
+
+for (const [name, over] of [
+  ["one test file edited (another tree, another hash)", { tree: "T9", ref: "T1", flat: Object.assign({}, HASHES_FLAT, { "tests/test_a.py": "hX" }) }],
+  ["the maps changed under the same tree", { flat: Object.assign({}, HASHES_FLAT, { "tests/test_b.py": "hX" }) }],
+  ["coder edits in the worktree (tree != freeze tree)", { tree: "K1" }],
+  ["no freeze ref", { ref: null }],
+  ["a freeze ref at another tree", { ref: "T7" }],
+  ["HEAD moved off the plan commit", { head: "d".repeat(40) }],
+]) {
+  test("AC-1987-3/4: frozen resume with " + name + " halts resume", async () => {
+    const { s, out, planRef } = await coderStop();
+    s["hasher:resume-frozen"] = frozenState(planRef, over);
+    const r = await runOne(s, buildArgsOf(planRef, { freeze_digest: out.result.freeze_digest }));
+    assert.equal(r.result.status, "needs_human");
+    assert.equal(r.result.stop_gate, "resume");
+    assert.ok(!r.labels.some((l) => /^role:/.test(l)), r.labels.join(", "));
+  });
+}
+
+test("AC-1987-3: another digest on the frozen tree halts resume", async () => {
+  const { s, planRef } = await coderStop();
+  s["hasher:resume-frozen"] = frozenState(planRef);
+  const r = await runOne(s, buildArgsOf(planRef, { freeze_digest: "0".repeat(64) }));
+  assert.equal(r.result.stop_gate, "resume");
+  assert.match(r.result.reason, /freeze_digest/);
+});
+
+test("AC-1987-4: no digest keeps the clean-worktree workspace rule", async () => {
+  const { s, planRef } = await coderStop();
+  const r = await runOne(s, buildArgsOf(planRef));
+  assert.equal(inputsOf(call(r, "workspace").prompt).frozen_resume, undefined);
+  assert.match(call(r, "workspace").prompt, /status --porcelain` must be empty/);
+  assert.ok(!r.labels.includes("hasher:resume-frozen"));
+});
+
+test("1987: a malformed freeze_digest stops before any agent", async () => {
+  const { planRef } = await coderStop();
+  const r = await runOne(happy(), buildArgsOf(planRef, { freeze_digest: "abc" }));
+  assert.equal(r.result.status, "needs_human");
+  assert.match(r.result.reason, /freeze_digest/);
+  assert.deepEqual(r.labels, []);
+});
+
+test("AC-1987-5: no prompt asks for a commit before the code judge approves", async () => {
+  const { s, out, planRef } = await coderStop();
+  s["role:fleet-coder:r1"] = happy()["role:fleet-coder:r1"];
+  s["hasher:resume-frozen"] = frozenState(planRef);
+  const r = await runOne(s, buildArgsOf(planRef, { freeze_digest: out.result.freeze_digest }));
+  for (const o of [out.build, r]) {
+    const j = o.labels.indexOf("role:fleet-code-judge:r1");
+    const upto = j < 0 ? o.calls : o.calls.slice(0, j);
+    for (const c of upto) assert.ok(!/git commit|commit -m/.test(c.prompt), c.label);
+  }
 });

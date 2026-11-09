@@ -201,7 +201,8 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
   // roles get plain files in frozen_tests and synthetic section keys apart
   assert.deepEqual(coder.frozen_tests, { "tests/test_a.py": "ha", "tests/test_b.py": "hb" });
   // role view: flat keys path#section, git:<k>, symlink:<rel>
-  assert.deepEqual(coder.frozen_config_sections, { "pyproject.toml#tool.pytest": "hp" });
+  // 4.0.0 (1987): the freeze ref is frozen too (read-only for the coder)
+  assert.deepEqual(coder.frozen_config_sections, { "pyproject.toml#tool.pytest": "hp", "git:fleetref:refs/fleet/l42/freeze": "T1" });
   const cjIn = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
   assert.deepEqual(cjIn.frozen_tests, coder.frozen_tests);
   assert.equal(cjIn.code_base_ref, PC);

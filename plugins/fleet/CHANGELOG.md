@@ -326,6 +326,29 @@ its notes to this entry.
 - A drifting short-path writer retries once as `role:fleet-test-writer:short:r<n>:retry`, after the
   round, as on the full path.
 
+### S5: frozen resume with a caller-held digest (ledger 1987)
+
+- Each freeze writes `refs/fleet/<task id>/freeze`, a local ref to the freeze tree object
+  (`update-ref` with hooks off, step `infra:freeze-ref:f<n>`). No commit object is made. The
+  script checks the ref lands on the freeze tree and keeps it in the frozen maps, so a role that
+  moves it is a hash violation.
+- `freeze_digest` = sha256 of canonical `{ref_sha256, tree, mapsDigest}`: the plan ref's sha256,
+  the freeze tree and the digest of the frozen hasher maps. Every `needs_human` or `failed` result
+  after a freeze returns it, with the `plan_ref`.
+- New build arg `freeze_digest` (64 hex; build mode only; another shape stops before any agent).
+  The skill passes it back unchanged. With it, the workspace step lets the frozen worktree's
+  uncommitted paths through, the bytecode is purged, and `hasher:resume-frozen` reads the
+  worktree. The script recomputes the digest from that hasher output and requires HEAD = the plan
+  commit, the freeze ref present, the worktree tree = the freeze ref's tree, and the digest equal
+  to the arg. The build then resumes at the coder with `resumed_at: "frozen"`: no test writer and
+  no test judge runs again. Any mismatch stops with `stop_gate: "resume"`.
+- A build that stopped after the freeze and before the coder changed anything resumes at the
+  coder with `freeze_digest`. A coder stop with edits in the worktree still halts with
+  needs_human: its tree is not the freeze tree, so a human cleans or stashes the worktree.
+- A run-state ref (a build that got past its commit) wins: `freeze_digest` is then not used.
+- The red tests are still committed only with the green code, by the one hook-run commit after
+  the code judge approves.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker
