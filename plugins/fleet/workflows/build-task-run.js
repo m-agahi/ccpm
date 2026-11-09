@@ -6057,6 +6057,8 @@ async function planAndAudit(ctx) {
     halt("needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + fmtOther.join(", ") + " (never committed; clean the worktree)", "scope");
   gate(fmtLabel + ": " + (fmt.reason || "hooks run on " + planPath));
 
+  // 3.1.2: the audit runs the planner's test_cmd in a scratch worktree
+  await pathRecheck("plan-audit" + sfx, "Plan");
   const audit = requireOk(
     "plan-audit",
     await callRole(
@@ -6356,6 +6358,7 @@ function needsMaxSection(check, reasons, intent, planPath, tiny) {
 async function autoGates(ctx) {
   const sfx = ctx.sfx || "";
   const ledger = ctx.brief.sources.find((x) => LEDGER_KINDS.indexOf(x.kind) >= 0);
+  await pathRecheck("intent" + sfx, "Auto-confirm");
   const jr = await judged(
     "fleet-intent-judge",
     "role:fleet-intent-judge" + sfx,
@@ -6415,7 +6418,8 @@ async function autoGates(ctx) {
 // How many agents autoGates dispatches after the plan ref is sealed (all
 // gates pass): intent pre-hasher, judge, post-hasher, and the config read.
 function autoGateAgents(commands) {
-  return 3 + (commandShapeProblems(commands).hookIds.length ? 1 : 0);
+  // + 1: the PATH re-check before the intent judge (3.1.2)
+  return 4 + (commandShapeProblems(commands).hookIds.length ? 1 : 0);
 }
 
 function autoFailResult(g, planPath, tiny) {
@@ -7631,6 +7635,8 @@ async function reviewStep(k, ctx) {
     const pre = await hasher("hasher:pre-review:v" + k, ctx.mainWt, ctx.hashedFiles, "Review");
     if (pre.fingerprint.head !== ctx.approvedSha)
       halt("needs_human", "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha, "review");
+    // 3.1.2: the review and the sweep run repo tests
+    await pathRecheck("pr-review:v" + k, "Review");
     const jr = await judged("pr-review", "role:pr-review:v" + k, "pr-review:v" + k, inputs, ctx.mainWt, "Review", pre, ctx.hashedFiles);
     const r = jr.r;
     const blocking = r.findings.filter((f) => f && f.severity === "blocking");
@@ -7641,6 +7647,7 @@ async function reviewStep(k, ctx) {
     const triggers = changedPaths.filter((p) => GATE_PATH_RE.test(p));
     if (r.touches_gate === true || triggers.length) {
       gate("review v" + k + ": sweep triggered (" + (r.touches_gate === true ? "touches_gate" : "") + (triggers.length ? " paths " + triggers.join(", ") : "") + ")");
+      await pathRecheck("sweep:v" + k, "Review");
       const js = await judged(
         "gate-change-nonweakening-sweep",
         "role:gate-change-nonweakening-sweep:v" + k,

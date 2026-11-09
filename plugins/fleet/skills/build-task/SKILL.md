@@ -49,8 +49,9 @@ runs `/build-task` explicitly, always use the fleet.
    **Run nonce.** Before EVERY Workflow call below (plan, build, each repeat), run `date +%s%N`
    and pass the output as `run_nonce`. Never reuse one, and never restart a run with
    `resumeFromRunId`: a resume replays the cached results of git and worktree checks that no longer
-   hold. To continue a stopped run, call the workflow again with a new nonce; build mode resumes
-   from its own run-state ref.
+   hold. A resume with the same args also replays the earlier PATH re-check results, the same as
+   every infra check, so a tool planted since then is not seen. To continue a stopped run, call the
+   workflow again with a new nonce; build mode resumes from its own run-state ref.
 
 4. **Project (optional).** Use the `<owner>/<repo>` project key from the session banner, if one is
    shown, as `project`. It scopes ledger reads and the ledger write-back. Otherwise omit it.
