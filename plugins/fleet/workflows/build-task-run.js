@@ -5479,19 +5479,34 @@ function ledgerProblem(brief, project) {
 // repo's project-id file: the ledger scope is args.project, never the
 // repo), then every ledger call intake made with the tool's error text.
 const TASK_ID_INPUT_RE = /^(?:L|#|yaadgaar\s*#)?\s*[0-9]+$/i;
+// Advice to change a repo's project identity. A tool call's own
+// `project_id=<project>` argument is not advice: it is removed before the test.
+const PROJECT_ADVICE_RE = /\.yadgar\b|project[-_ ]?id/i;
+const ADVICE_DROPPED = "(dropped: it advised changing the repo's project identity; the ledger scope is args.project, never the repo)";
+function noAdvice(text) {
+  return PROJECT_ADVICE_RE.test(text.replace(/project_id=/g, "")) ? ADVICE_DROPPED : text;
+}
 function intakeHaltReason(it, raw) {
-  let why = typeof it.reason === "string" && it.reason ? it.reason : "no reason";
-  if (/\.yadgar\b|project[-_ ]id file/i.test(why))
-    why = "(intake's reason dropped: it advised changing the repo's project identity; the ledger scope is args.project, never the repo)";
+  const why = typeof it.reason === "string" && it.reason ? it.reason : "no reason";
+  // a Jira, issue, plan or text input: the reason is relayed as is
   if (!TASK_ID_INPUT_RE.test(String(raw).trim())) return why;
   const tried = (Array.isArray(it.tried) ? it.tried : []).filter((t) => t && typeof t === "object");
-  if (!tried.length) return why + "; ledgers tried: none (intake made no ledger tool call)";
+  if (!tried.length) return noAdvice(why) + "; ledgers tried: none (intake made no ledger tool call)";
   const show = (v) => (typeof v === "string" && v ? v : "?");
   return (
-    why +
+    noAdvice(why) +
     "; ledgers tried: " +
     tried
-      .map((t) => show(t.ledger) + " (project " + (typeof t.project === "string" && t.project ? t.project : "none") + ") " + show(t.call) + ": " + (typeof t.error === "string" && t.error ? t.error : "returned no task"))
+      .map(
+        (t) =>
+          show(t.ledger) +
+          " (project " +
+          (typeof t.project === "string" && t.project ? t.project : "none") +
+          ") " +
+          noAdvice(show(t.call)) +
+          ": " +
+          noAdvice(typeof t.error === "string" && t.error ? t.error : "returned no task"),
+      )
       .join("; ")
   );
 }
@@ -5506,13 +5521,33 @@ function yaadgaarProjectProblem(sources, project) {
   return null;
 }
 
-// 3.1.3: a yaadgaar source carries the URN from the read_task answer; without
-// it intake never called the tool (null: ok).
-function yaadgaarIdProblem(brief) {
-  for (const s of brief.sources)
-    if (s.kind === "yaadgaar" && !s.id)
-      return "source yaadgaar:" + s.ref + " has no task id: intake must call mcp__yaadgaar__read_task and copy the id (URN) of its answer";
+// 3.1.3: a yaadgaar source carries the URN from the read_task answer, and
+// intake reports the read_task call that returned it; else intake never
+// called the tool (null: ok).
+const YAADGAAR_URN_RE = /^yadgar:task:[0-9a-f-]+$/i;
+function yaadgaarIdProblem(brief, tried) {
+  const calls = (Array.isArray(tried) ? tried : []).filter((t) => t && typeof t.call === "string" && /read_task/.test(t.call) && t.error === null);
+  for (const s of brief.sources) {
+    if (s.kind !== "yaadgaar") continue;
+    if (typeof s.id !== "string" || !YAADGAAR_URN_RE.test(s.id))
+      return "source yaadgaar:" + s.ref + " has no task id of the form yadgar:task:<uuid> (" + JSON.stringify(s.id) + "): intake must call mcp__yaadgaar__read_task and copy the id (URN) of its answer";
+    if (!calls.length) return "source yaadgaar:" + s.ref + ": intake reports no mcp__yaadgaar__read_task call that returned the task (tried)";
+  }
   return null;
+}
+
+// 3.1.3: the ledger task the plan was made from, with its ledger and project,
+// for the confirmation (null: no ledger source).
+function ledgerSourceOf(brief, project) {
+  const s = brief.sources.find((x) => LEDGER_KINDS.indexOf(x.kind) >= 0);
+  if (!s) return null;
+  const y = s.kind === "yaadgaar";
+  return { ledger: y ? "yaadgaar" : "yadgar", ref: s.ref, id: y ? s.id || null : null, project: project || null };
+}
+function ledgerSourceText(ls) {
+  if (!ls) return "";
+  const name = ls.ledger === "yaadgaar" ? "yaadgaar #" + ls.ref + (ls.id ? " (" + ls.id + ")" : "") : "yadgar L" + ls.ref;
+  return "; task " + name + " of " + (ls.project ? "project " + ls.project : ls.ledger === "yaadgaar" ? "the session's yaadgaar project (no args.project)" : "no project (no args.project)");
 }
 
 function cleanBrief(b) {
@@ -6491,6 +6526,10 @@ async function planMode(input, date) {
   const repo = cleanRepo(input.repo);
   if (!raw) stop("needs_human", "args.input missing: run /build-task <ledger id | Jira key | issue or PR URL | plan path | text>");
   if (!repo) stop("needs_human", "args.repo must be the absolute path of the caller's git toplevel");
+  // 3.1.3: with no project a task id resolves in whatever project the
+  // session's ledger client is bound to; never build that unconfirmed
+  if (input.confirm === "auto" && ledgerFor(input.project) === "either" && TASK_ID_INPUT_RE.test(raw))
+    stop("needs_human", "task id " + JSON.stringify(raw) + " with no args.project under confirm \"auto\": pass project, or run with confirm \"ask\" so Max sees which ledger and project it resolved to");
 
   await preflightStep(repo);
 
@@ -6504,7 +6543,7 @@ async function planMode(input, date) {
   const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, input.project || null);
   if (problem) halt("needs_human", "intake: " + problem);
   const brief = cleanBrief(it.brief);
-  const lp = ledgerProblem(brief, input.project) || yaadgaarIdProblem(brief);
+  const lp = ledgerProblem(brief, input.project) || yaadgaarIdProblem(brief, it.tried);
   if (lp) halt("needs_human", "intake: " + lp);
   const names = namesFor(brief, raw);
   if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
@@ -6597,7 +6636,8 @@ async function planMode(input, date) {
   } catch (e) {
     await parkOnStop(e);
   }
-  if (!auto) return awaiting("plan ready: confirm, then run mode build with plan_ref", p, pc.tiny, pc.full);
+  const ls = ledgerSourceOf(brief, input.project);
+  if (!auto) return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, { ledger_source: ls });
 
   // confirm "auto": G1-G3 instead of the question; never ask
   phase("Auto-confirm");
@@ -6785,7 +6825,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const project = input.project || ws.remoteSlug;
   // a ref sealed before 2.1.5 may hold a legacy ledger source of a yaadgaar
   // project; 3.1.3: the ledger scope is args.project, never the origin slug
-  const lpb = ledgerProblem(brief, input.project);
+  const lpb =
+    ledgerProblem(brief, input.project) ||
+    (!input.project && brief.sources.some((x) => x.kind === "ledger")
+      ? "source ledger:" + brief.sources.find((x) => x.kind === "ledger").ref + " needs args.project (the yadgar ledger scope); re-run plan with project"
+      : null);
   if (lpb) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + lpb + "; re-run plan");
   const defaultBranch = ws.defaultBranch;
   const remoteSlug = ws.remoteSlug;

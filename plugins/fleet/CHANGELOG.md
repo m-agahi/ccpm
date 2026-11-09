@@ -14,13 +14,21 @@ stays `fleet-v3`.
 - Intake now resolves a task id only by calling the ledger tool and takes the answer as the truth.
   `args.project` is the ledger scope, independent of `repo`. `yadgarhq/` projects use yaadgaar,
   others yadgar `task_get(project_id=<project>)`; no project gives `ledger: "either"` (try both).
-- A yaadgaar source carries the `id` (URN) of the `read_task` answer. A source without it stops
-  plan mode with `needs_human`: intake did not call the tool. The intent re-read must return the
+- A yaadgaar source carries the `id` (URN) of the `read_task` answer, in the form
+  `yadgar:task:<uuid>`, and `tried` must hold a `read_task` call with `error: null`. Otherwise plan
+  mode stops with `needs_human`: intake did not call the tool. The intent re-read must return the
   same id.
+- `confirm: "auto"` with no `args.project` and a task-id input stops before intake: the id would
+  resolve in whatever project the session is bound to, and nobody confirms it. Under `confirm:
+"ask"` the result carries `ledger_source` (`ledger`, `ref`, `id`, `project`) and the reason names
+  the ledger, task and project, so Max sees what the id resolved to.
 - Intake returns `tried` (ledger, project, call, error). On a task-id input that stops, the script
-  appends the ledgers tried and the tool's error text to the reason, or "ledgers tried: none". It
-  drops an intake reason that advises changing the repo's project id.
-- Build mode checks the sealed sources against `args.project`, not the origin slug.
+  appends the ledgers tried and the tool's error text to the reason, or "ledgers tried: none". In
+  that reason it drops each part (the reason, a call, an error) that mentions `.yadgar` or a
+  project id; a tool call's own `project_id=` argument does not count. Reasons for other inputs
+  (Jira, issues, plans, text) are relayed as they are.
+- Build mode checks the sealed sources against `args.project`, not the origin slug. With no
+  `args.project`, a legacy yadgar ledger source stops the build ("re-run plan with project").
 
 ### yaadgaar write-back reads by the sealed id
 
@@ -31,9 +39,13 @@ stays `fleet-v3`.
   3.1.3 has no id: write-back edits nothing, hands the section back and says "re-run plan".
 - Intake and the intent re-read stop when a yaadgaar answer names a project other than
   `args.project`, with both projects in the reason. The named project is checked, never sealed.
-- Limit: a `read_task` answer for a task in the client's own project names no project, and the
-  URN carries none. The fleet cannot observe which project the session's yaadgaar client is bound
-  to; `args.project` must be the session's project (the skill takes it from the session banner).
+- Scope: the yaadgaar client is bound to the session's project. A `read_task` answer has the keys
+  `body, id, links, number, status, tags, title, version` and never names a project. A
+  well-formed URN outside the session's scope is refused with "no such task in this scope" (gRPC
+  NOT_FOUND), the same answer as for a missing task. So a sealed URN resolves only in that scope,
+  and the write-back cannot edit another project's task. The project checks above are defensive
+  and do not fire today. `args.project` must be the session's project (the skill takes it from the
+  session banner).
 
 ## [3.1.2] - 2026-11-09
 

@@ -215,10 +215,13 @@ answer is the truth. `args.project` is the ledger scope and is independent of `r
 `yadgarhq/` project reads `mcp__yaadgaar__read_task(number)`, another project reads yadgar
 `task_get(project_id=<project>)`, and no project tries both (`ledger: "either"`). The repo's
 `.yadgar` files and origin never decide the ledger. A yaadgaar source carries the `id` (URN) of the
-answer; one without it stops (`needs_human`), and so does an answer that names a project other than
-`args.project`. Intake lists every ledger call it made in `tried`. On
-a task-id input that stops, the script appends the ledgers tried, their projects and the tool's
-error text to the reason. It drops an intake reason that advises changing the repo's project id. A Jira ticket that
+answer (`yadgar:task:<uuid>`), and `tried` must hold the `read_task` call that returned it; else it
+stops (`needs_human`), and so does an answer that names a project other than `args.project`.
+Intake lists every ledger call it made in `tried`. On a task-id input that stops, the script
+appends the ledgers tried, their projects and the tool's error text to the reason, and drops each
+part that advises changing the repo's project id. `confirm: "auto"` with no `args.project` and a
+task-id input stops before intake. Under `confirm: "ask"` the result carries `ledger_source`
+(`ledger`, `ref`, `id`, `project`), and the reason names it. A Jira ticket that
 names no repo, or several, stops with `needs_human`. The task id comes from the first ledger, Jira,
 GitHub or Codeberg source (`plan` for an ingested plan, `task` for free text). The slug comes from
 the brief title.
