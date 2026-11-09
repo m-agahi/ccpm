@@ -578,13 +578,18 @@ rulesets and secret-like paths.
 
 **The pre-push IaC gate.** Pushing an IaC change makes CI auto-plan it, which Max's hard rules
 allow only under conditions. Before every push, `infra:tf-gate:push` runs `TF_GATE_PY` (read only,
-`python3 -I`, caps) on the PR diff. When the diff touches `*.tf`, `*.tfvars`, `*.tf.json`, the
-provider lock file, `terragrunt.hcl`, `digger.y*ml` or a CLI config file, it stops with
+`python3 -I`, caps) on the PR diff. When the diff touches `*.tf`, `*.tofu`, `*.tf.json`, `*.tofu.json`,
+every vars file form (`*.tfvars`, `*.tfvars.json`, `*.tofuvars`, `*.tofuvars.json`), the provider lock file, `terragrunt.hcl`, `digger.y*ml` or a CLI config file, it stops with
 `needs_human`, `stop_gate: "iac"`, "IaC change does not meet the CI auto-plan exemption; hand it to
 Max" on: an added `data "external"`, provisioner, `local-exec`, `remote-exec`, `dev_overrides` or
 `provider_installation`, or a CLI config change; a provider `source`/`version` change or a lock file
 change; the external, local or null provider or a `local_*`/`null_*` resource; any `digger.y*ml`
-change; a CI or workflow file in the same diff. Only lines that changed beyond whitespace count, so
+change; a CI or workflow file in the same diff; any path under `.terraform/` or `terraform.d/` (the scope
+fence refuses those too); a change to code that existing IaC runs at plan time (a non-IaC file in
+a directory whose base IaC holds `data "external"`, a provisioner or the local, null or external
+provider, or a file such a stack names in `program`, `command` or `file(...)`). HCL labels match
+with or without quotes; a changed `.tf.json` / `.tofu.json` is parsed as JSON (bounded), and JSON
+that does not parse stops. Only lines that changed beyond whitespace count, so
 `fmt` never stops a push.
 
 #### Hook changes: their own PR, with Max (3.1.0)

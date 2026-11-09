@@ -70,9 +70,10 @@ still refuses `.github/`, the hook-manager and CI paths, rulesets and secret-lik
 **New: the pre-push IaC gate.** Terraform changes push only when the CI auto-plan exemption
 conditions hold; anything else hands back to Max. Before every push, `infra:tf-gate:push`
 (`TF_GATE_PY`, read only, `python3 -I`, caps, digest and argument checked) reads the PR diff
-(`origin/<default>...<approved sha>`). Only when it touches `*.tf`, `*.tfvars`, `*.tf.json`,
-`.terraform.lock.hcl`, `terragrunt.hcl`, `digger.y*ml` or a terraform CLI config file does it
-check, and it stops (`needs_human`, `stop_gate: "iac"`, "IaC change does not meet the CI
+(`origin/<default>...<approved sha>`). Only when it touches `*.tf`, `*.tofu`, `*.tf.json`,
+`*.tofu.json`, `*.tfvars`, `*.tfvars.json`, `*.tofuvars`, `*.tofuvars.json`,
+`.terraform.lock.hcl`, `terragrunt.hcl`, `digger.y*ml`, a terraform CLI config file or a
+path under `.terraform/` or `terraform.d/` does it check, and it stops (`needs_human`, `stop_gate: "iac"`, "IaC change does not meet the CI
 auto-plan exemption; hand it to Max: ...") on:
 
 1. an added `data "external"`, `provisioner` block, `local-exec` or `remote-exec`, a
@@ -83,9 +84,21 @@ auto-plan exemption; hand it to Max: ...") on:
 3. the `hashicorp/external`, `hashicorp/local` or `hashicorp/null` provider, or a `local_*` /
    `null_*` resource or data source, added, removed or changed;
 4. any `digger.y*ml` change;
-5. a CI or workflow file in the same diff (the hook gate also stops it before the commit).
+5. a CI or workflow file in the same diff (the hook gate also stops it before the commit);
+6. any path under `.terraform/` or `terraform.d/` (provider plugin directories; the scope fence
+   refuses them too, `stop_gate: "scope"`);
+7. a change to code that existing IaC runs at plan time: at the base, every directory with a
+   `.tf`, `.tofu`, `.tf.json` or `.tofu.json` file that holds `data "external"`, a provisioner,
+   `local-exec`, `remote-exec` or the local, null or external provider is an exec stack; a
+   changed non-IaC file under such a directory, or a repo file an exec stack names in
+   `program = [...]`, `command = "..."` or `file(...)` (with `${path.module}` resolved), stops
+   ("changes code that existing IaC runs at plan time"). A plain stack's code is unaffected.
 
-A line counts only when it changed beyond whitespace, so `fmt` never stops a push. A plain
+HCL labels match with or without quotes (`data external e`), and a bare `provisioner` line
+stops. A changed `.tf.json` / `.tofu.json` is parsed as JSON (1 MiB per file, 64 MiB in all):
+a `data.external`, any `provisioner`, `local-exec` or `remote-exec` key, a `local_*` / `null_*`
+resource or data source, an external, local or null `provider` key, or a changed
+`terraform.required_providers` stops; JSON that does not parse stops. A line counts only when it changed beyond whitespace, so `fmt` never stops a push. A plain
 resource, variable or `.tfvars` change, or a diff with no IaC file, pushes.
 
 ### New stops (fail-closed additions; no key renamed or removed)

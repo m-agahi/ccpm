@@ -10363,3 +10363,91 @@ test("3.1.0 ADR-1172: IaC and k8s/Helm paths are fleet work: the scope fence no 
     assert.equal(out.result.status, "ok", p + " " + out.result.reason);
   }
 });
+
+// ---------------------------------------------------------------- 3.1.0 security review of the pre-push IaC gate
+
+test("3.1.0 IaC gate review 1: unquoted HCL labels and multi-line provisioner blocks stop", { skip: !HAVE_PY }, () => {
+  for (const change of [
+    { "infra/x.tf": "data external e {\n  program = [\"sh\"]\n}\n" },
+    { "infra/x.tf": "resource null_resource n {}\n" },
+    { "infra/x.tf": "data local_file f {\n  filename = \"a\"\n}\n" },
+    { "infra/x.tf": "provider local {}\n" },
+    { "infra/x.tf": 'resource "aws_instance" "i" {\n  provisioner\n  "file" {\n    source = "a"\n  }\n}\n' },
+  ]) {
+    const o = tfGateRun({ "infra/main.tf": MAIN }, change);
+    assert.ok(o.problems.length, JSON.stringify(change));
+  }
+});
+
+test("3.1.0 IaC gate review 1: a changed .tf.json is parsed as JSON; each banned shape stops, unparseable JSON stops, a plain resource passes", { skip: !HAVE_PY }, () => {
+  const J = (o) => JSON.stringify(o) + "\n";
+  for (const [doc, ok] of [
+    [{ resource: { aws_s3_bucket: { b: { bucket: "x" } } } }, true],
+    [{ data: { external: { e: { program: ["sh"] } } } }, false],
+    [{ resource: { aws_instance: { i: { provisioner: [{ file: { source: "a" } }] } } } }, false],
+    [{ resource: { local_file: { f: { filename: "a" } } } }, false],
+    [{ data: { null_data_source: { n: {} } } }, false],
+    [{ provider: { null: {} } }, false],
+    [{ terraform: { required_providers: { aws: { source: "hashicorp/aws", version: "6.0" } } } }, false],
+    [{ resource: { aws_instance: { i: { "local-exec": {} } } } }, false],
+  ]) {
+    const o = tfGateRun({ "infra/main.tf": MAIN }, { "infra/x.tf.json": J(doc) });
+    assert.equal(o.problems.length === 0, ok, JSON.stringify(doc) + " " + o.problems.join("; "));
+  }
+  const bad = tfGateRun({ "infra/main.tf": MAIN }, { "infra/x.tf.json": "{ not json" });
+  assert.match(bad.problems.join("; "), /does not parse/);
+  // a required_providers block already there and unchanged passes
+  const base = J({ terraform: { required_providers: { aws: { source: "hashicorp/aws", version: "5.0" } } }, resource: { aws_s3_bucket: { b: { bucket: "x" } } } });
+  const o = tfGateRun({ "infra/v.tf.json": base }, { "infra/v.tf.json": base.replace('"bucket":"x"', '"bucket":"y"') });
+  assert.deepEqual(o.problems, []);
+});
+
+test("3.1.0 IaC gate review 2: every IaC extension and provider dir is checked; the fence refuses provider plugin dirs", { skip: !HAVE_PY }, async () => {
+  const EXT = 'data "external" "e" {\n  program = ["sh"]\n}\n';
+  for (const name of ["infra/main.tofu", "infra/a.tofuvars", "infra/a.tfvars.json", "infra/a.tofuvars.json"]) {
+    const o = tfGateRun({ "infra/main.tf": MAIN }, { [name]: name.endsWith(".json") ? '{"a": 1}\n' : 'a = "b"\n' });
+    assert.equal(o.touched, true, name);
+  }
+  let o = tfGateRun({ "infra/main.tf": MAIN }, { "infra/main.tofu": EXT });
+  assert.match(o.problems.join("; "), /external/);
+  o = tfGateRun({ "infra/main.tf": MAIN }, { "infra/x.tofu.json": '{"data": {"external": {"e": {}}}}\n' });
+  assert.match(o.problems.join("; "), /external/);
+  for (const p of ["infra/." + TFW + "/providers/x", TFW + ".d/plugins/x"]) {
+    o = tfGateRun({ "infra/main.tf": MAIN }, { [p]: "bin\n" });
+    assert.equal(o.touched, true, p);
+    assert.match(o.problems.join("; "), /provider plugin directory/, p);
+    const s = happy({ script: { "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES, changed: ["src/x.py", p] } } });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", p);
+    assert.equal(out.result.stop_gate, "scope", p);
+  }
+});
+
+test("3.1.0 IaC gate review 3: a change to code an existing exec stack runs at plan time stops; a plain stack's code passes", { skip: !HAVE_PY }, () => {
+  const EXEC = 'data "external" "e" {\n  program = ["python3", "${path.module}/scripts/get.py"]\n}\n';
+  const base = {
+    "infra/main.tf": EXEC,
+    "infra/scripts/get.py": "print('{}')\n",
+    "infra/other.py": "x = 1\n",
+    "ops/main.tf": 'resource "null_resource" "n" {\n  provisioner "local-exec" {\n    command = "bash tools/run.sh"\n  }\n}\n',
+    "tools/run.sh": "echo hi\n",
+    "web/main.tf": 'locals {\n  t = file("${path.module}/../shared/t.json")\n}\nresource "aws_s3_bucket" "b" {}\n',
+    "shared/t.json": "{}\n",
+    "plain/main.tf": MAIN,
+    "plain/helper.py": "x = 1\n",
+    "src/app.py": "x = 1\n",
+  };
+  for (const [change, stops] of [
+    [{ "infra/scripts/get.py": "print('{\"a\": 1}')\n" }, true],
+    [{ "infra/other.py": "x = 2\n" }, true],
+    [{ "tools/run.sh": "echo bye\n" }, true],
+    [{ "plain/helper.py": "x = 2\n" }, false],
+    [{ "src/app.py": "x = 2\n" }, false],
+    // web/ uses no external, provisioner or local/null: its file() target is not code that runs
+    [{ "shared/t.json": '{"a": 1}\n' }, false],
+  ]) {
+    const o = tfGateRun(base, change);
+    const hit = o.problems.some((p) => /changes code that existing IaC runs at plan time/.test(p));
+    assert.equal(hit, stops, JSON.stringify(change) + " " + o.problems.join("; "));
+  }
+});

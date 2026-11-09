@@ -3629,11 +3629,18 @@ import hashlib, json, os, re, subprocess, sys
 wt, default, sha = sys.argv[1], sys.argv[2], sys.argv[3]
 os.chdir('/')
 TF = 'terra' + 'form'
+TO = 'to' + 'fu'
 LOCK = '.' + TF + '.lock.hcl'
 GRUNT = 'terra' + 'grunt.hcl'
 ORCH = re.compile(r'(^|/)' + 'dig' + r'ger\.ya?ml$')
 CLI = re.compile(r'(^|/)(\.' + TF + r'rc|[^/]*\.tfrc)$')
+PLUGIN_DIR = re.compile(r'(^|/)(\.' + TF + '|' + TF + r'\.d)/')
+HCL_EXT = ('.tf', '.' + TO)
+JSON_EXT = ('.tf.json', '.' + TO + '.json')
+VARS_EXT = ('.tfvars', '.tfvars.json', '.' + TO + 'vars', '.' + TO + 'vars.json')
 CI = re.compile(r'^(\.github/|\.gitea/|\.forgejo/|\.circleci/|\.gitlab/|\.gitlab-ci\.yml$|\.buildkite/|\.woodpecker|Jenkinsfile$|azure-pipelines\.ya?ml$|bitbucket-pipelines\.ya?ml$)', re.I)
+FILE_CAP = 1 << 20
+BUDGET = 64 << 20
 G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
 def run(*a):
     r = subprocess.run(G + list(a), capture_output=True)
@@ -3642,14 +3649,97 @@ def run(*a):
     return r.stdout
 def iac(p):
     b = p.rsplit('/', 1)[-1]
-    return b.endswith(('.tf', '.tfvars', '.tf.json')) or b == LOCK or b == GRUNT or bool(ORCH.search(p)) or bool(CLI.search(p))
-rng = 'refs/remotes/origin/' + default + '...' + sha
+    return b.endswith(HCL_EXT + JSON_EXT + VARS_EXT) or b == LOCK or b == GRUNT or bool(ORCH.search(p)) or bool(CLI.search(p)) or bool(PLUGIN_DIR.search(p))
+def code_file(p):
+    return p.endswith(HCL_EXT + JSON_EXT)
+spent = [0]
+def blob(rev, p):
+    # bounded: a blob over FILE_CAP, or past the budget, cannot be checked
+    s = subprocess.run(G + ['cat-file', '-s', rev + ':' + p], capture_output=True)
+    if s.returncode != 0:
+        return None
+    n = int(s.stdout.strip() or 0)
+    spent[0] += n
+    if n > FILE_CAP or spent[0] > BUDGET:
+        return False
+    return run('cat-file', 'blob', rev + ':' + p).decode('utf-8', 'replace')
+base = run('merge-base', 'refs/remotes/origin/' + default, sha).decode().strip()
+rng = base + '..' + sha
 paths = [x.decode('utf-8', 'replace') for x in run('diff', '--name-only', '-z', '--no-renames', rng, '--').split(b'\0') if x]
 touched = any(iac(p) for p in paths)
 problems = []
-EXTRA = re.compile(r'data\s+"external"|\bprovisioner\b|local-exec|remote-exec|dev_overrides|provider_installation')
+# HCL: quotes around labels are optional; a bare provisioner line opens a block
+EXTRA = re.compile(r'data\s+"?external"?|\bprovisioner\b|local-exec|remote-exec|dev_overrides|provider_installation')
 PROVIDER = re.compile(r'required_providers|^\s*"?(source|version)"?\s*[=:]')
-BANNED = re.compile(r'hashicorp/(external|local|null)\b|\b(resource|data)\s+"(local|null)_|provider\s+"(external|local|null)"|"(local|null)_[a-z_]+"\s*:')
+BANNED = re.compile(r'hashicorp/(external|local|null)\b|\b(resource|data)\s+"?(local|null)_|\bprovider\s+"?(external|local|null)"?(\s|\{|$)')
+def json_findings(doc):
+    out = []
+    def walk(o, path):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k == 'provisioner':
+                    out.append('provisioner')
+                if k in ('local-exec', 'remote-exec'):
+                    out.append(k)
+                walk(v, path + [k])
+        elif isinstance(o, list):
+            for v in o:
+                walk(v, path)
+    walk(doc, [])
+    if isinstance(doc, dict):
+        for kind in ('resource', 'data'):
+            blk = doc.get(kind)
+            if isinstance(blk, dict):
+                if kind == 'data' and 'external' in blk:
+                    out.append('data external')
+                for t in blk:
+                    if str(t).startswith(('local_', 'null_')):
+                        out.append(kind + ' ' + str(t))
+        pv = doc.get('provider')
+        names = list(pv.keys()) if isinstance(pv, dict) else [k for x in pv for k in x] if isinstance(pv, list) and all(isinstance(x, dict) for x in pv) else []
+        for n in names:
+            if n in ('external', 'local', 'null'):
+                out.append('provider ' + n)
+    return out
+def required_providers(doc):
+    t = doc.get(TF) if isinstance(doc, dict) else None
+    blocks = t if isinstance(t, list) else [t]
+    return json.dumps([b.get('required_providers') for b in blocks if isinstance(b, dict)], sort_keys=True)
+# code that existing IaC runs at plan time: the "exec stacks" at the base
+EXEC_HINT = re.compile(r'data\s+"?external"?|\bprovisioner\b|local-exec|remote-exec|hashicorp/(local|null)\b|\b(resource|data)\s+"?(local|null)_|\bprovider\s+"?(local|null|external)"?')
+REF = re.compile(r'(?:program\s*=\s*\[([^\]]*)\]|command\s*=\s*"([^"]*)"|(?:file|templatefile|filebase64|filemd5|filesha256)\(\s*"([^"]*)")', re.S)
+STR = re.compile(r'"([^"]*)"')
+exec_dirs, exec_refs = set(), set()
+if touched or paths:
+    tree = [x.decode('utf-8', 'replace') for x in run('ls-tree', '-r', '-z', '--name-only', base).split(b'\0') if x]
+    tracked_base = set(tree)
+    for p in tree:
+        if not code_file(p):
+            continue
+        t = blob(base, p)
+        if t is False:
+            problems.append('IaC file ' + p + ' at the base is too large to check')
+            continue
+        if not t or not EXEC_HINT.search(t):
+            continue
+        d = os.path.dirname(p)
+        exec_dirs.add(d)
+        for m in REF.finditer(t):
+            for chunk in m.groups():
+                if not chunk:
+                    continue
+                for s in (STR.findall(chunk) if '"' in chunk else [chunk]):
+                    for tok in s.split():
+                        tok = re.sub(r'\$\{path\.(module|root|cwd)\}/?', '', tok)
+                        for cand in (os.path.normpath(os.path.join(d, tok)), os.path.normpath(tok)):
+                            if cand in tracked_base:
+                                exec_refs.add(cand)
+    for p in paths:
+        if iac(p):
+            continue
+        inside = any(d == '' or p.startswith(d + '/') for d in exec_dirs)
+        if inside or p in exec_refs:
+            problems.append('changes code that existing IaC runs at plan time: ' + p)
 if touched:
     for p in paths:
         if CI.match(p):
@@ -3657,6 +3747,9 @@ if touched:
     for p in paths:
         b = p.rsplit('/', 1)[-1]
         if not iac(p):
+            continue
+        if PLUGIN_DIR.search(p):
+            problems.append('provider plugin directory change in ' + p)
             continue
         if ORCH.search(p):
             problems.append('orchestrator config change in ' + p)
@@ -3666,6 +3759,23 @@ if touched:
             continue
         if b == LOCK:
             problems.append('provider lock file change in ' + p)
+            continue
+        if p.endswith(JSON_EXT):
+            new, old = blob(sha, p), blob(base, p)
+            if new is False or old is False:
+                problems.append(p + ' is too large to check')
+                continue
+            try:
+                nd = json.loads(new) if new is not None else {}
+                od = json.loads(old) if old is not None else {}
+            except ValueError:
+                problems.append(p + ' does not parse as JSON')
+                continue
+            for f in sorted(set(json_findings(nd)) | set(json_findings(od))):
+                if json_findings(nd).count(f) != json_findings(od).count(f) or f in json_findings(nd):
+                    problems.append(f + ' in ' + p)
+            if required_providers(nd) != required_providers(od):
+                problems.append('provider source or version change in ' + p)
             continue
         diff = run('diff', '-U0', '--no-renames', rng, '--', p)
         if len(diff) > (8 << 20):
@@ -5841,6 +5951,8 @@ function fencePathProblem(p) {
   if (dirs.indexOf(".fleet") >= 0) return "fleet internal path (.fleet/)";
   // (ADR-1172: IaC, Kubernetes and Helm files are fleet work like any other
   // code; the pre-push IaC gate keeps the CI auto-plan conditions)
+  // provider plugin dirs (a local .terraform/ or terraform.d/) never belong in a change
+  if (segs.slice(0, -1).some((x) => x.toLowerCase() === "." + "terra" + "form" || x.toLowerCase() === "terra" + "form.d")) return "provider plugin directory";
   if (segs.some((x) => x.toLowerCase() === ".github")) return ".github/ (CI, settings, rulesets)";
   if (HOOK_PATH_RE.test(q)) return "hook surface (a CI or hook-manager path)";
   if (q.toLowerCase().indexOf("rulesets") >= 0) return "rulesets";
