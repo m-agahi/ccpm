@@ -4241,7 +4241,7 @@ test("2.1.0 REQUIRED_ON_OK: writer files and coder changed_paths are required ar
   const req = REQUIRED_OF(SOURCE);
   assert.ok(!/"commits?"/.test(JSON.stringify(req)));
   assert.deepEqual(req["fleet-test-writer"], ["criterion_id", "tests", "files"]);
-  assert.deepEqual(req["fleet-intent-judge"], ["verdict", "deviations", "coverage"]);
+  assert.deepEqual(req["fleet-intent-judge"], ["verdict", "deviations", "coverage", "classification"]);
   assert.deepEqual(req["pr-review"], ["verdict", "findings", "touches_gate", "checked"]);
   assert.deepEqual(req["gate-change-nonweakening-sweep"], ["verdict", "units", "findings"]);
 });

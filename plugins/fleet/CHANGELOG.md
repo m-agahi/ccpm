@@ -57,6 +57,15 @@ into the 4.0.0 entry.
   role changes in the plugin cache shows up at the next fingerprint, in a step separate from the
   program that ran.
 
+### S2: new role output keys (ledger 1980, 1989, 1991)
+
+- `scope-and-plan` returns `change_kind` (`bug_fix`, `feature`, `refactor` or `chore`). It is
+  required on `ok`. A missing key or an unknown value is contract drift.
+- `criteria[].test_args` is an optional string in the planner schema.
+- `fleet-intent-judge` returns `classification: {change_kind, new_behaviour, quote}`. Each verdict
+  is `approve` or `refuse`. The key is required on `ok`.
+- The caller grep relay schema carries `auto_dont_care` and `doctest_md`.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker

@@ -77,17 +77,21 @@ const RELOAD_HINT =
 // also have that JS type (null only where the schema allows it); a wrong type
 // is contract drift too ("contract drift: <role> <key> type").
 const REQUIRED_ON_OK = {
-  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff", "repo_obligations", "test_cmd", "changed_symbols"],
+  "scope-and-plan": ["plan_path", "criteria", "est_diff_lines", "new_behaviour", "allowed_additions", "held_out_examples", "tldr", "plan_diff", "repo_obligations", "test_cmd", "changed_symbols", "change_kind"],
   "plan-audit": ["verdict", "routed_findings"],
   "fleet-test-writer": ["criterion_id", "tests", "files"],
   "fleet-test-judge": ["verdict", "routed_findings", "checked"],
   "fleet-coder": ["changed_paths", "suite_result", "added_symbols", "frozen_tests_red_at_start", "obligations_done"],
   "fleet-code-judge": ["verdict", "routed_findings", "suite_result", "hash_check", "gates_not_run", "obligations_check"],
   "fleet-pr-opener": ["pr_url", "pr_number", "created", "template_used", "gates_not_run_stated"],
-  "fleet-intent-judge": ["verdict", "deviations", "coverage"],
+  "fleet-intent-judge": ["verdict", "deviations", "coverage", "classification"],
   "pr-review": ["verdict", "findings", "touches_gate", "checked"],
   "gate-change-nonweakening-sweep": ["verdict", "units", "findings"],
 };
+// 4.0.0 (1991): the planner's kind of change; confirm "default" builds without
+// Max only for bug_fix with new_behaviour false (both checked by the intent judge)
+const CHANGE_KINDS = ["bug_fix", "feature", "refactor", "chore"];
+const CLASSIFICATION_VERDICTS = ["approve", "refuse"];
 const VERDICTS = {
   "plan-audit": ["approve", "untestable_criteria", "plan_defect"],
   "fleet-test-judge": ["approve", "revise"],
@@ -1045,12 +1049,14 @@ const SCHEMAS = {
       type: "array",
       items: {
         type: "object",
-        properties: { id: STR, text: STR, test_files: { type: "array", items: STR } },
+        // 4.0.0 (1980): test_args, cargo and go only; validated by the script
+        properties: { id: STR, text: STR, test_files: { type: "array", items: STR }, test_args: STR_OR_NULL },
         required: ["id", "text", "test_files"],
       },
     },
     est_diff_lines: { type: "number" },
     new_behaviour: { type: "boolean" },
+    change_kind: { type: "string", enum: CHANGE_KINDS },
     allowed_additions: {
       type: ["object", "null"],
       properties: {
@@ -1172,6 +1178,17 @@ const SCHEMAS = {
       type: "object",
       properties: { covered: { type: "boolean" }, missing: { type: "array", items: STR } },
       required: ["covered"],
+    },
+    // 4.0.0 (1991): the judge's check of the planner's change_kind and
+    // new_behaviour, with a verbatim quote from the task
+    classification: {
+      type: "object",
+      properties: {
+        change_kind: { type: "string", enum: CLASSIFICATION_VERDICTS },
+        new_behaviour: { type: "string", enum: CLASSIFICATION_VERDICTS },
+        quote: STR,
+      },
+      required: ["change_kind", "new_behaviour", "quote"],
     },
   }),
   "pr-review": roleSchema({
@@ -1301,6 +1318,9 @@ const INFRA_SCHEMA = {
     exists: { type: "boolean" },
     occurrences: { type: "object", additionalProperties: { type: "array", items: STR } },
     capped: { type: "array", items: STR },
+    // 4.0.0 (1989): callers.py maps doc and lock file hits as dont_care itself
+    auto_dont_care: { type: "array", items: STR },
+    doctest_md: { type: "array", items: STR },
     defs: {
       type: "array",
       items: { type: "object", properties: { name: STR, at: STR, end: { type: "integer" } }, required: ["name", "at", "end"] },
@@ -5855,6 +5875,8 @@ function contractProblem(role, r) {
     if (!(k in r)) return "role " + role + " contract drift: missing " + k;
     if (!typeMatches(SCHEMAS[role] && SCHEMAS[role].properties[k], r[k]))
       return "contract drift: " + role + " " + k + " type: got " + jsType(r[k]);
+    const en = SCHEMAS[role] && SCHEMAS[role].properties[k] && SCHEMAS[role].properties[k].enum;
+    if (en && k !== "verdict" && r[k] !== null && en.indexOf(r[k]) < 0) return "contract drift: " + role + " " + k + " value " + JSON.stringify(r[k]);
   }
   if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0) return "contract drift: " + role + " verdict " + r.verdict;
   return null;
