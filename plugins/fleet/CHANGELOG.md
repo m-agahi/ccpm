@@ -1,5 +1,257 @@
 # Changelog
 
+## [3.1.0] - 2026-11-09
+
+Ledger tasks 1959, 1958, 1935 and 1941, the review rounds of PR #38, and Max's ruling of
+2026-11-09 on IaC tooling (task 1960 is moot: the IaC text scan it tuned is removed).
+
+**Deploy order:**
+
+1. Install the nix agent PATH shims for terraform, tofu, tfp, terragrunt, digger and atlantis (and the
+   docker/podman exec shims for tf-local-plan) FIRST. Each shim must live under `/nix/store/` and
+   hold the marker `fleet-agent-shim: hard-rules`. Without them, any of these tools that is on the
+   agent PATH stops every 3.1.0 run at preflight ("terraform tooling on PATH is not shimmed;
+   install the agent PATH shims (nix) before using the fleet").
+2. Update the role page `fleet-code-judge` in place to version 15. Version 15 makes the
+   `check_cmd` run required and adds the optional `check_exit` key to `obligations_check` entries;
+   no key is renamed or removed, so 3.0.0 keeps running on it and logs "prose-only changes
+   assumed". 3.1.0 pins `fleet-code-judge` 15: an older page stops the run in preflight ("... must
+   be >= 15; update that page in place; see CHANGELOG 3.1.0 deploy order").
+3. Optionally write `scope-and-plan` v28 (the hook-rule sentence; the pin stays 27).
+4. Install 3.1.0, then `/reload-plugins`.
+
+The contract marker stays `fleet-v3`.
+
+### IaC tooling: a new trust model (Max, 2026-11-09)
+
+The fleet may work on terraform and other IaC code like any other code. **Removed:** the IaC
+refusal scan of 2.1.2–3.0.0 (`IAC_SCAN_PY`, `iacRefuse`, `infra:iac-scan:plan`,
+`infra:iac-scan:verify`, the `IAC_RE` text match over hooks, task runners and the files they name)
+and everything this release had added to it (the remote hook manifest read from the pre-commit
+cache, the shallow fetch with its host allowlist and caps, the follow and leaf rules). A repo with
+IaC files or IaC tooling in its hooks no longer stops the run.
+
+What keeps IaC tooling from running now:
+
+- Max's hard rules (no terraform by any mechanism, no tf-local-plan container exec), which every
+  role inherits, and the settings.json denies on those commands;
+- the agent PATH shims nix installs: on the agent PATH, terraform, tofu, tfp, terragrunt, digger
+  and atlantis reach a shim that refuses (each shim holds the line
+  `# fleet-agent-shim: hard-rules`; the check matches the substring, comment prefix optional);
+- the hook gate (below): a change to anything the repo's hooks or CI run needs its own PR and
+  Max's confirmation;
+- ADR-1152 still frames the gates: they defend against reward hacking, not a hostile agent.
+
+**New: the PATH check (preflight, plan and build mode).** Preflight runs `PATH_CHECK_PY`
+(`python3 -I`, resource caps), which resolves terraform, tofu, tfp, terragrunt, digger and atlantis on the
+agent PATH. A name that resolves passes only when its real path is under `/nix/store/` (which no
+role can write) and its first 64 KiB hold `FLEET_SHIM_MARKER` = `fleet-agent-shim: hard-rules`.
+Anything else stops the run before any other step: `needs_human`, `stop_gate: "iac"`, "terraform
+tooling on PATH is not shimmed; install the agent PATH shims (nix) before using the fleet". No name
+resolving at all passes. The program gets the repo as its argument and reads the raw agent PATH:
+an empty or relative entry (the agent's shell resolves it against the worktree, the program would
+against `/`) or an entry inside the repo (the worktree, the scratch dir) stops the run as well
+("PATH has entries the agent shell resolves differently"). A missing or tampered result stops the
+same way: no `path_check`, a wrong digest, tool keys other than exactly the six names, an entry
+whose `path` is not absolute or whose `shim` is not a boolean, or a program argument other than
+the repo; a found entry passes only with `shim` exactly `true`. The relay trust model stays
+ADR-1152 (an unkeyed digest). Every embedded program gives its children a PATH without empty or
+relative entries, and the fixer gives pre-commit and its hooks one without the worktree's and the
+scratch dir's entries.
+
+**Accepted residual (ADR-1172):** a hook's or a test's call by absolute path to a real binary,
+and a container image built to run terraform. Max's hard rules and the settings.json denies are the
+controls there; no content scan stands in for them.
+
+**IaC paths are fleet work (ADR-1172).** The scope fence no longer refuses IaC paths (`*.tf`,
+`*.tfvars`, `terraform/`, Kubernetes and Helm manifests), at plan time or in a coder's changes. It
+still refuses `.github/`, the hook-manager and CI paths, rulesets and secret-like paths.
+
+**New: the IaC push gate (ADR-1172 and ADR-1175).** Terraform diffs never
+push automatically; the fleet stops and hands the push to Max. Content checks are hints only.
+Before every push, `infra:tf-gate:push` (`TF_GATE_PY`, read only, `python3 -I`, caps, digest and
+argument checked) reads the PR diff (`merge-base..<approved sha>`). The base comes from origin
+itself: the program reads `refs/heads/<default>` with `git ls-remote` (never the local
+`refs/remotes/origin/<default>`, which a role's shell can move) and fetches that one sha when the
+repo lacks it (a full fetch: `--depth` would mark a full clone shallow once origin is further
+ahead). Either failing stops the run.
+
+The network reads never go through the repo's own config, which a role can edit (`core.sshCommand`,
+`remote.origin.uploadpack`, `insteadOf`, credential helpers). The plan seals origin's configured URL
+(`plan_facts.remote_url`, https or `git@host:` form only) before any role runs; the programs pass
+that URL straight to `ls-remote` and `fetch`, read in a fresh bare scratch repo that borrows the
+repo's objects (alternates), and override `core.sshCommand` (`ssh -o BatchMode=yes`),
+`core.askPass`, `core.fsmonitor`, `core.hooksPath`, the upload-pack and the allowed protocols (https
+and ssh only) on the command line, with `GIT_TERMINAL_PROMPT=0` and `GIT_CONFIG_NOSYSTEM=1`. A plan
+ref without a sealed URL, a URL in another form (a local path, an ssh alias without `git@`), or a
+configured URL that changed since the plan stops the push gate (`stop_gate: "iac"`; re-run plan).
+Residual (ADR-1152): a role that edits the user's global git config or environment stays outside
+the threat model. When it touches any IaC file
+(`*.tf`, `*.tofu`, `*.tf.json`, `*.tofu.json`, `*.tfvars`, `*.tfvars.json`, `*.tofuvars`,
+`*.tofuvars.json`, any `*.hcl` or `*.hcl.json` (the lock file and the grunt configs included), `*.tfbackend`,
+`.terraform-version`, `.opentofu-version`, `.tofu-version`, `atlantis.y*ml`, `digger.y*ml`, a
+terraform CLI config file, anything under `.spacelift/`, or a path with a `.terraform`, `terraform.d` or
+`.terraform.d` segment; names match in any case), the run stops before the push in every confirm mode, `auto` included:
+`needs_human`, `stop_gate: "iac-push"`. The message names the branch, the commit sha, the IaC files
+and the exact push command (`git -C <worktree> push -u origin <branch>`) for Max to run himself.
+The fleet never pushes an IaC diff, in any path. After Max pushes it himself, a build run of the
+same `plan_ref` reads the remote branch head (`REMOTE_HEAD_PY`, `git ls-remote`, read only,
+digest and argument checked) and goes on to the draft PR, the review and the write-back without a
+push, only when that head is exactly the approved sha. A missing branch, another sha, or a head
+ahead of or behind the approved sha stops at `iac-push` as before. No argument opts into a push:
+an agent could pass one, so it would not prove that Max confirmed.
+The workflow also checks the relay against the fleet scan's digest-checked PR diff: an IaC path
+there that the relay does not list stops the run (`stop_gate: "iac"`).
+
+The content checks stay only as hints in that message, under "hints (not a security check)": an
+external data source, a provisioner, `local-exec` or `remote-exec`, `dev_overrides` or
+`provider_installation`, a CLI config, provider `source`/`version` or lock file change, the
+external, local or null provider or a `local_*`/`null_*` resource, a `digger.y*ml` change, a CI
+file in the same diff, and a `.tf.json` that does not parse. They decide nothing.
+
+Three checks still stop the run (`stop_gate: "iac"`), fail-closed:
+
+1. a path with a `.terraform`, `terraform.d` or `.terraform.d` segment, the final segment included
+   (provider plugin directories; the scope fence refuses them too, `stop_gate: "scope"`);
+2. a symlink (mode 120000 in `git diff --raw`) at an IaC path, or whose target lies in such a
+   directory;
+3. a change to code that existing IaC runs at plan time: at the base, every directory with a
+   `.tf`, `.tofu`, `.tf.json` or `.tofu.json` file that holds `data "external"`, a provisioner,
+   `local-exec`, `remote-exec` or the local, null or external provider is an exec stack; a changed
+   non-IaC file under such a directory, or a repo file an exec stack names as a literal in
+   `program = [...]`, `command = "..."` or `file(...)`, stops ("changes code that existing IaC runs
+   at plan time"). Accepted over-reach: an exec stack at the repo root stops every non-IaC change,
+   and a base IaC file over 1 MiB stops every push. Accepted residual: an exec reference that is not
+   a literal (a variable, a `local`, an interpolation) and points outside the stack directory.
+
+### New stops (fail-closed additions; no key renamed or removed)
+
+- **The PATH check** above.
+- **Hook changes are their own PR, and need Max (Max's rule).** The hook surface is every
+  hook-manager and CI path, in any case: `.pre-commit-config.yaml`, `.pre-commit-hooks.yaml`,
+  `.github/**`, `.gitea/**`, `.forgejo/**`, `.woodpecker*`, `.circleci/**`, `.gitlab-ci.yml`,
+  `.gitlab/**`, `Jenkinsfile`, `.buildkite/**`, `azure-pipelines.yml`, `bitbucket-pipelines.yml`,
+  `.husky/**`, `.githooks/**`, `lefthook*.yml`, `.lefthook*`, `atlantis.y*ml` (the scope fence refuses the same set
+  in a coder's changes). The read-only program `HOOK_SURFACE_PY` (the fixer's isolated PyYAML
+  loader, at the base and in the worktree) adds every file a hook `entry` or `args` names (a
+  `--flag=value` only when the value is an executable script, so `--config=pyproject.toml` is not
+  surface), `-m pkg.mod` as `pkg/mod.py` and `pkg/mod/__main__.py` (any `-m` form, `-Im`
+  included), every Makefile and `*.mk` for a hook that runs `make`, the in-repo target of every
+  surface symlink, one level of what the hook scripts load (repo-local Python imports, from the
+  repo root and the script's directory; shell `source`/`.`; scripts they run directly with
+  `bash`/`sh`/`python`/`node` or `./X`; a Python script that does not parse puts its directory in
+  the surface), the scripts CI and hook-manager files name (`.github/actions`, husky, githooks,
+  lefthook, the hooks dir, `package.json` scripts; one that does not parse or is over 1 MiB
+  refuses), and the `core.hooksPath` directory. `Makefile`, `package.json` and `pyproject.toml`
+  alone are not surface: they are task runners every version bump touches. The plan scope
+  (`allowed_additions.files`, obligation files, criterion test files, caller occurrences mapped to
+  a criterion) is checked before the audit (`infra:hook-surface:plan`), and the approved tree's
+  diff from the plan commit right before the commit (`infra:hook-surface:r<n>`). Surface and
+  anything else stop with "hook changes must be a separate PR (Max's rule)"; surface only stops
+  with "hook change needs Max's confirmation". Both are `needs_human`, `stop_gate: "hooks"`, in
+  every confirm mode. A surface that cannot be computed (no PyYAML, a parse error, a capped value)
+  refuses. The `scope-and-plan` page gets one sentence telling the planner so (prepared, not
+  written; the pin stays 27, because the rule lives in script code).
+- The fixer step refuses a hook config over 256 KiB, a non-string `entry` or `language`, or `args`
+  that is not a list of strings (pre-commit's own schema requires a list).
+- A code-judge `approve` becomes a `fix_code` round when an allowlisted `check_cmd` exited with
+  anything but the integer 0, has no `check_exit` and no `gates_not_run` entry `check_cmd:<id>`,
+  or when the change edits what that `check_cmd` runs and the obligation does not list the file.
+- A push whose output mixes the hook's lines with git's (`ambiguous`) stops for a human.
+- A verify, commit-plan or `hook_rejected` push relay that does not match its program's digest,
+  or whose program ran on other arguments, fails the run.
+
+### Changed
+
+- **Role-page pins at the live versions** (ledger 1941a). `fleet-test-writer` 10,
+  `fleet-test-judge` 10, `pr-review` 18 and `gate-change-nonweakening-sweep` 5 (each read with
+  `agent_prompt_get(<role>, project="m-agahi/yadgar")` on 2026-11-07), and `fleet-code-judge` 15
+  (the 3.1.0 page write). `scope-and-plan` 27, `plan-audit` 16, `fleet-coder` 17, `fleet-pr-opener`
+  10 and `fleet-intent-judge` 2 are unchanged.
+- **verify-plan and commit-plan relay programs, not git output** (ledger 1959). `infra:verify-plan`
+  runs `VERIFY_SINCE_PY`, which prints
+  `{head, is_ancestor, commits_since, plan_touched, changed_since, args, digest}`;
+  `infra:commit-plan` runs `PLAN_FILES_PY`, which prints `{head, files, args, digest}`. `args`
+  echoes the program's arguments. The script recomputes each digest, compares `args` with what it
+  passed, and stops the run (`failed`) on any difference or a missing list. Both programs run with
+  `python3 -I`, take the worktree as an argument and change to `/` before they run git.
+- **The push classifier is a program** (ledger 1935c). `infra:push` runs `PUSH_CLASSIFY_PY` on the
+  first attempt's output (its last 1 MiB) and exit code; it prints
+  `{push_result, exit_code, hook_tail, args, digest}`. It reads line-start prefixes only, and a
+  pre-push hook can print the same prefixes, so no rule retries what may be a hook's verdict (a
+  retry re-runs the hook): `error: failed to push some refs` (git's line for a declined pre-push
+  hook) with exit 1 and no ` ! [` is `hook_rejected`; with another exit code, or with a `fatal:`,
+  `error: RPC failed` or git-lfs line (`batch request:`, `batch response:`, `LFS:`), it is the new
+  `ambiguous` (a stop for a human). Only an output with no hook verdict is `network` and retried.
+  The script accepts `hook_rejected` only with exit code 1, the program's digest and `args` that
+  name a file outside the worktree and that exit code.
+- **CI-only obligations are checked before the push** (ledger 1935b). The code judge (page 15)
+  runs every allowlisted `check_cmd` in a scratch worktree loaded with the judged tree and reports
+  `check_exit`. On `approve`, the obligations gate converts the verdict to `fix_code` for an
+  obligation whose `check_cmd` exited with anything but the integer 0 (disclosed or not), or that
+  has neither `check_exit: 0` nor a `gates_not_run` entry `check_cmd:<id>` (stated in the PR
+  body). An obligation whose `check_cmd` the script check demoted that round needs no exit. The
+  workflow script still runs no planner command. In `commands`, a check_cmd shows
+  `code-judge (required)` as its `run_by`.
+- **The coder may not edit what a check_cmd runs** (review F2). On `approve`, a change from the
+  plan commit to the judged tree that touches the check_cmd's script, a Makefile or `*.mk` or a
+  repo path the `make <target>` recipe names (for `make`), or `.pre-commit-config.yaml` (for
+  `pre-commit run <id>`) is a `fix_code` round, unless the obligation's `files` list that path. A
+  local hook's entry file was already refused by the fixer step. Limit: a module that a check
+  script imports is not traced.
+- **`gates_not_run` is a union** (review). The PR states every gate the code judge lists plus every
+  gate the script knows did not run.
+- **Write-back to a yadgar ledger task without a body page** (ledger 1958). A read-only judge step
+  (`infra:ledger-read:pre`, `fleet:judge`) reads every ledger task first. A task with a body page
+  goes to the append step (`infra:ledger-writeback`, as in 3.0.0). For a task with none,
+  `infra:ledger-body` runs on the new `fleet:ledger-writer` agent: it re-reads the task (title byte
+  for byte, else it writes nothing), creates the page with `wiki_add` at the slug the script
+  computes, `{project with / as _}_task-<id>` (`upsert=False`, `wait=True`; it never overwrites an
+  existing page and appends to one only when it lacks the marker), and links it with
+  `task_write(project_id, id, title=<the title the judge read>, body_slug=<slug>)`. Any status
+  other than `written` fails the entry before any further read. A second judge read
+  (`infra:ledger-read:post`) must show the same title, the computed `body_slug`, the marker, and the
+  page's `page_project` and `page_tags` must be this project and include `ledger-<id>` (a slug
+  collision check in code: `a_b/c` and `a/b_c` share a slug); otherwise the entry fails and hands
+  `section_text` back, and a changed title is named ("restore the title by hand"). The title must
+  have 1 to 200 code points. **The title check works at the relay level only:** `task_write`
+  requires a title on every update, so the write itself can change it; the reads before and after
+  detect that, they cannot prevent it. A project that is not `<owner>/<repo>` writes nothing. The
+  yaadgaar path is unchanged.
+- **Agent tools** (review F1). `fleet:ledger-writer` has a `tools:` allowlist: `ToolSearch`,
+  `StructuredOutput` and `mcp__yadgar__task_get`, `wiki_read`, `wiki_add`, `wiki_append_section`
+  and `task_write`; nothing else. Not verified: whether the allowlist also governs MCP tools loaded
+  later through ToolSearch. `fleet:judge` keeps its denylist (it needs `Bash` and many read
+  tools), extended to every yadgar writer; for the judge this is hygiene only, because it has
+  `Bash`.
+- **Resource caps on every embedded program** (security review). Every embedded Python program
+  (and both YAML loaders) sets `RLIMIT_AS` (1 GiB) and `RLIMIT_CPU` (300 s; the loaders 60 s)
+  before it does anything, and tunes git's children to stay inside them (`core.packedGitWindowSize`,
+  `core.packedGitLimit`, `core.bigFileThreshold`, `pack.threads`, `MALLOC_ARENA_MAX`, through
+  `GIT_CONFIG_COUNT`). The repo's own hooks, which the fixer program runs through pre-commit, get
+  the soft limits lifted back. Both YAML loaders read at most 256 KiB, emit only string values
+  (`entry`, `language`; `args` must be a list of strings), have no `default=str`, and stop past
+  1 MiB of output; a timeout, a non-string value or an oversized config is a refusal. The hasher
+  reads only strings from the config too, and hashes files 1 MiB at a time. A 2026-11-07 test of a
+  billion-laughs config against a draft loader without these caps grew without bound on the
+  development machine (`json.dumps` walked the shared alias references); the same test now refuses
+  in about a second.
+- **Writers and the test judge get the plan's env** (ledger 1935a): already true in 3.0.0 (they get
+  the whole `test_cmd`, `env` included, plus `test_env`); a regression test now pins it.
+
+### Tests
+
+- Push fixtures captured from git 2.55.0: `[remote rejected]` from a pre-receive hook, a declined
+  local pre-push hook, a non-fast-forward, HTTP 500 and 502 on the receive-pack POST, and HTTP 500
+  and 503 on `info/refs`. Derived (not observed): an RPC failure without its `fatal:` line, a hook
+  that prints a line-start `fatal:`, a git-lfs pre-push network failure, and a gh 5xx error string
+  in `remote_head`.
+- Every `python3` a test starts is bounded by a timeout and an output cap; the suite is run under
+  `systemd-run --user --scope -p MemoryMax=4G -p MemorySwapMax=0`.
+- Survivor tests M11c (exit code other than 1 is never `hook_rejected`), M20 (a ledger-writer
+  status other than `written` fails before the post-read) and N7 (a script a hook's args name is
+  hook surface).
+
 ## [3.0.0] - 2026-11-07
 
 Ledger tasks 1926, 1957, 1956, 1952, 1951 and 1928.

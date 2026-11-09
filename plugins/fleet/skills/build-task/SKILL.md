@@ -99,7 +99,8 @@ runs `/build-task` explicitly, always use the fleet.
    - `commands`: EVERY entry, its `command` VERBATIM in a code span (never paraphrased, shortened
      or summarised), with its `env` (every name and value, verbatim; `{}` when empty) and `tools`
      (test_cmd), its `rule_source` and `run_by` (`roles` = the test command the agents run,
-     `code-judge (optional)` = a check the code judge may run, `nobody` = refused, with its
+     `code-judge (required)` = a check the code judge runs before the push, or states in the PR
+     as not run, `nobody` = refused, with its
      `note`). These are the only commands the roles run; approving the plan approves them. Say so
      in the question.
 
@@ -163,9 +164,23 @@ A `needs_human` "run-state mismatch" means the branch or worktree changed since 
 "approved but unresumable" means build commits exist without a run-state. Relay the reason; a
 human pushes by hand or deletes the branch.
 
-`stop_gate: "iac"` means the repo contains IaC files, or IaC tooling in its hooks or task runners.
-The fleet refuses such a repo before any commit or push. Relay the reason to the user. The fleet
-does not run there: do not retry, and never commit, push or bypass a hook for the user.
+`stop_gate: "iac"` means an IaC tool (terraform, tofu, tfp, terragrunt, digger, atlantis) on the agent PATH
+is not one of the nix shims (3.1.0). Relay the reason to the user: the agent PATH shims must be
+installed before the fleet runs. Do not retry, and never change PATH or run the tool for the user.
+
+`stop_gate: "iac-push"` means the approved diff changes IaC files. IaC diffs never push automatically
+(ADR-1172 and ADR-1175). Relay the reason: it names the branch, the commit, the
+IaC files and the push command for Max to run himself. Never push it yourself. After pushing
+yourself, re-run the build to open the PR: run step 8 again with the same `plan_ref`. That run
+goes on to the draft PR, the review and the write-back without a push, and only when the remote
+branch head is exactly the approved sha; any other remote state stops at `iac-push` again. The hints in it are
+not a security check. `stop_gate: "iac"` from the push gate names a provider plugin directory, a
+symlink or code that existing IaC runs at plan time, or says the plan ref holds no sealed origin URL
+or origin's URL changed since the plan (re-run plan); relay it.
+
+`stop_gate: "hooks"` means the change touches the hook surface (hook config, a file a hook or CI
+runs, a CI or hook-manager path). Hook changes need their own PR and Max's confirmation; relay the
+reason and never split or push the change yourself.
 
 A build that stopped before its commit step leaves uncommitted tests and code in the fleet
 worktree, and a build started again with the same `plan_ref` stops with `needs_human` on the dirty
