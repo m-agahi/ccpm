@@ -112,9 +112,9 @@ const EXPECTED_VERSIONS = {
   "pr-review": 19,
   "gate-change-nonweakening-sweep": 6,
 };
-// 4.0.0 (1993): the plugin version this script ships with; the shipped
-// programs are read from its plugin cache directory only.
-const FLEET_VERSION = "4.0.1";
+// The plugin version this script ships with (bumped every release; since
+// 4.0.0, 1993, the shipped programs are read from its plugin cache directory only).
+const FLEET_VERSION = "4.0.2";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
 const CONTRACT = "fleet-v4";
@@ -1799,10 +1799,90 @@ function progCmd(name, args) {
   const f = shQuote(state.scriptsDir + "/" + name + ".py");
   return "sha256sum -- " + f + " && python3 -I " + f + (args || []).map((a) => " " + shQuote(a)).join("");
 }
-// appended to every prompt that runs a shipped program (see nonced)
-const FILE_SHA_MARK = "sha256sum -- ";
-const FILE_SHA_RULE =
-  "Shipped programs: each command that starts with `sha256sum -- <file> && python3 -I <file>` prints one sha256sum line (`<hex>  <file>`) before the program's JSON. Put that <hex> into the program's JSON object you return as `file_sha256`, next to its `program` key; change nothing else in the object. The script checks both against the shipped program.";
+// 4.0.2 (ledger 1997): where each step returns each shipped program's output
+// (null: the top level of the result; else that key), as programProblem reads
+// it. One table feeds the schema the agent gets (file_sha256 and program
+// required at every slot) and the rule text that names the slots, so a
+// prompt's explicit Return list can no longer leave file_sha256 out. A slot
+// applies when the prompt runs its program; a prompt that runs a program its
+// label's entry does not name stops the run (infraCall).
+const PROGRAM_SLOTS = [
+  [/^preflight$/, [["path_check", "path_check"]]],
+  [/^infra:path-check:/, [[null, "path_check"]]],
+  [/^workspace$/, [["remote_url_check", "remote_url"]]],
+  [/^hasher:/, [[null, "hasher"]]],
+  [/^infra:branch-scan$/, [[null, "branch_scan"], ["test_db", "test_db_decl"]]],
+  [/^infra:load-parked$/, [[null, "parked"]]],
+  [/^infra:park-plan/, [["findings_write", "parked"]]],
+  [/^infra:stage-plan/, [["plan_hash", "plan_hash"]]],
+  [/^infra:format-(tests|code):/, [[null, "format_files"]]],
+  [/^infra:commit-plan/, [[null, "plan_ref_write"]]],
+  [/^infra:verify-plan-commit/, [["plan_files", "plan_files"], ["plan_hash", "plan_hash"], ["plan_ref", "plan_ref"]]],
+  [/^infra:load-ref/, [[null, "plan_ref"]]],
+  [/^infra:verify-plan(?!-commit)/, [[null, "verify_since"], ["plan_hash", "plan_hash"], ["plan_hash_head", "plan_hash"], ["test_db", "test_db_decl"]]],
+  [/^infra:read-state$/, [[null, "read_state"]]],
+  [/^infra:state:/, [[null, "state_write"]]],
+  [/^infra:tf-gate:/, [[null, "tf_gate"]]],
+  [/^infra:remote-head:/, [[null, "remote_head"]]],
+  [/^infra:fleet-scan:/, [[null, "fleet_scan"]]],
+  [/^infra:callers/, [[null, "callers"]]],
+  [/^infra:changed-defs:/, [[null, "changed_defs"]]],
+  [/^infra:push(?!-probe)/, [[null, "push_classify"]]],
+  [/^infra:push-probe$/, [[null, "push_probe"]]],
+  [/^infra:hook-surface:/, [[null, "hook_surface"]]],
+  [/^infra:review-paths:/, [[null, "review_paths"]]],
+  [/^infra:precommit-ids/, [[null, "precommit_ids"]]],
+  [/^infra:check-scripts/, [[null, "script_check"]]],
+  [/^infra:db-up/, [["sweep", "db_sweep"], ["up", "db_up"]]],
+  [/^infra:db-down$/, [["down", "db_down"]]],
+];
+// {used: the label's [slot, program] pairs whose program the prompt runs,
+// missing: programs the prompt runs that no pair of the label names}
+function programSlots(label, prompt) {
+  const names = [];
+  for (const m of String(prompt).matchAll(/sha256sum -- '?[^\s'"]*\/([a-z_]+)\.py/g)) if (names.indexOf(m[1]) < 0) names.push(m[1]);
+  const hit = PROGRAM_SLOTS.find((e) => e[0].test(label));
+  const pairs = hit ? hit[1] : [];
+  return { used: pairs.filter((p) => names.indexOf(p[1]) >= 0), missing: names.filter((n) => !pairs.some((p) => p[1] === n)) };
+}
+// A per-call copy of `schema` that requires program and file_sha256 at every
+// slot. Top level: nullable (a failed step may print no sha256sum line; null
+// fails programProblem). A slot key: required, null allowed (the step did not
+// run it), and an object there must hold both, file_sha256 as 64 hex.
+const FILE_SHA_HEX = { type: "string", pattern: "^[0-9a-f]{64}$" };
+function programSchema(schema, slots) {
+  const s = JSON.parse(JSON.stringify(schema));
+  s.properties = s.properties || {};
+  const req = (o, ks) => {
+    o.required = (o.required || []).concat(ks.filter((k) => (o.required || []).indexOf(k) < 0));
+  };
+  for (const [slot] of slots) {
+    if (slot === null) {
+      s.properties.program = PROGRAM_PROP;
+      s.properties.file_sha256 = { type: ["string", "null"], pattern: FILE_SHA_HEX.pattern };
+      req(s, ["program", "file_sha256"]);
+      continue;
+    }
+    const o = Object.assign({ type: ["object", "null"] }, s.properties[slot] || {});
+    o.properties = Object.assign({}, o.properties, { program: PROGRAM_PROP, file_sha256: FILE_SHA_HEX });
+    req(o, ["program", "file_sha256"]);
+    s.properties[slot] = o;
+    req(s, [slot]);
+  }
+  return s;
+}
+// appended to every prompt that runs a shipped program (see infraCall)
+function fileShaRule(slots) {
+  return (
+    "Shipped programs: each command that starts with `sha256sum -- <file> && python3 -I <file>` prints one sha256sum line (`<hex>  <file>`) before the program's JSON. Put that <hex> into the program's JSON object you return as `file_sha256`, next to its `program` key; change nothing else in the object. Where: " +
+    slots.map(([slot, name]) => "`" + name + ".py` -> " + (slot === null ? "the top level of your result" : "inside `" + slot + "`")).join("; ") +
+    ". `file_sha256` is a required key there; never omit it, even where a Return line above does not list it. The script checks both against the shipped program."
+  );
+}
+// the relay of a program's output under a result key (4.0.2)
+function relayAs(slot) {
+  return "return it as " + slot + " with `file_sha256` added next to its `program` key, every other value copied unchanged";
+}
 
 // scripts_dir (4.0.0 security review): the preflight probe's lines, parsed.
 // The directory must be exactly $HOME/.claude/plugins/cache/<marketplace>/
@@ -2041,14 +2121,14 @@ function preflightRolesText() {
 
 function preflightScriptsText(repo, after) {
   return (
-    (after ? "Then find" : "Find") + " the fleet scripts directory (4.0.0): run this one command exactly as written, unmodified, as one Bash call: " +
+    (after ? "Then find" : "Find") + " the fleet scripts directory (" + FLEET_VERSION + "): run this one command exactly as written, unmodified, as one Bash call: " +
     SCRIPTS_PROBE +
     "\nscripts_probe = its output lines, every line in order, copied unchanged. " +
     "When exactly one line starts with `hit=`, scripts_dir = the rest of that line; otherwise scripts_dir = null, path_check = null, and skip the next command. " +
     "Then run this one command as one Bash call, with <scripts_dir> replaced by scripts_dir and nothing else changed: " +
     "sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py " +
     shQuote(repo) +
-    "\nIt prints one JSON object {tools, args, path_problems, program, digest}: return it as path_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n"
+    "\nIt prints one JSON object {tools, args, path_problems, program, digest}: " + relayAs("path_check") + " (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n"
   );
 }
 
@@ -2074,7 +2154,7 @@ function workspacePrompt(inputs) {
     "9. remote_slug = <owner>/<name> parsed from `git -C <repo> remote get-url origin`. remote_host = the host part of `git -C <repo> config --get remote.origin.url` (the configured URL, before any insteadOf rewrite; for an ssh alias such as `github-personal:o/r.git`, the alias).\n" +
     "10. Run this one command exactly as written, unmodified, as one Bash call:\n" +
     progCmd("remote_url", [inputs.repo]) +
-    "\nIt prints one JSON object {url, args, program, digest}: return it as remote_url_check, every value copied unchanged (the script recomputes the digest). Non-zero exit -> remote_url_check null.\n" +
+    "\nIt prints one JSON object {url, args, program, digest}: " + relayAs("remote_url_check") + " (the script recomputes the digest). Non-zero exit -> remote_url_check null.\n" +
     "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url_check, created}."
   );
 }
@@ -2103,7 +2183,7 @@ function hasherPrompt(inputs) {
     "Run this one Bash command exactly as written, unmodified, in the foreground:\n" +
     cmd +
     "\n" +
-    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored, suspicious} and, when a base tree is given, `changed` (the paths that differ from it), plus `program` and `digest` (a sha256 over all of them). Return {status: "ok", fingerprint, hashes, changed, program, digest} with those values copied exactly: every key of every map, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'It prints one JSON object with `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored, suspicious} and, when a base tree is given, `changed` (the paths that differ from it), plus `program` and `digest` (a sha256 over all of them). Return {status: "ok", fingerprint, hashes, changed, program, file_sha256, digest} with those values copied exactly: every key of every map, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     "The tree is built in a temporary index (GIT_INDEX_FILE=<temp file>: git read-tree HEAD, git add -A, git write-tree); the real index is never touched and no hook runs. " +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>, fingerprint: {head: "", tree: ""}}. Run no other command.\n' +
     "Extraction rules (the program implements them): " +
@@ -2151,8 +2231,8 @@ function branchScanPrompt(inputs) {
     'It prints one JSON object {commits, refs, plan_tip_time, program, digest} (names, hashes and checks only; no message text). Copy those values exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Non-zero exit -> failed with its stderr.\n' +
     "Then run this one command exactly as written, unmodified:\n" +
     progCmd("test_db_decl", [inputs.main_worktree, inputs.default_branch]) +
-    "\nIt prints one JSON object {decl, error, args, program, digest}: return it as test_db, every value copied unchanged. Non-zero exit -> failed with its stderr.\n" +
-    'Return {status: "ok", reason, commits, refs, plan_tip_time, program, digest, test_db}.'
+    "\nIt prints one JSON object {decl, error, args, program, digest}: " + relayAs("test_db") + ". Non-zero exit -> failed with its stderr.\n" +
+    'Return {status: "ok", reason, commits, refs, plan_tip_time, program, file_sha256, digest, test_db}.'
   );
 }
 
@@ -2172,7 +2252,7 @@ function stagePlanPrompt(inputs) {
     "4. Run this one command exactly as written, unmodified (it hashes the staged copy):\n" +
     planHashCmd(inputs.worktree, "", inputs.plan_path) +
     "\n" +
-    "It prints one JSON object {plan_sha256, program}: return it as plan_hash, both values copied unchanged. Non-zero exit -> failed with its stderr.\n" +
+    "It prints one JSON object {plan_sha256, program}: " + relayAs("plan_hash") + ". Non-zero exit -> failed with its stderr.\n" +
     "Return {status, reason, plan_hash}."
   );
 }
@@ -2194,7 +2274,7 @@ function parkPlanPrompt(inputs, findings) {
     (findings
       ? "5. Write this run's findings (4.0.0): they travel as base64 chunks you write to files under " + findings.chunk_dir + "; the program checks every chunk and writes " + findings.scratch + "/parked/" + findings.run + "/findings.json. Write no other file.\n" +
         chunkSteps(findings.chunk_dir, findings.c, progCmd("parked", ["write", findings.scratch, findings.run, findings.chunk_dir, String(findings.c.chunks.length), findings.c.expected, JSON.stringify(findings.c.shas)])) +
-        "On success it prints one JSON object {written, sha256, args, program, digest}: return it unchanged as findings_write. A failure here does not undo steps 1-4: return findings_write null.\n"
+        "On success it prints one JSON object {written, sha256, args, program, digest}: " + relayAs("findings_write") + ". A failure here does not undo steps 1-4: return findings_write null.\n"
       : "") +
     "Return {status, reason, target: <dest>, clean" + (findings ? ", findings_write" : "") + "}."
   );
@@ -2210,7 +2290,7 @@ function loadParkedPrompt(inputs) {
     "Run this one command exactly as written, unmodified:\n" +
     progCmd("parked", ["read", inputs.scratch, inputs.plan_tip_time === null ? "null" : String(inputs.plan_tip_time)]) +
     "\n" +
-    'It prints one JSON object {parked, args, program, digest}. Return {status: "ok", reason, parked, args, program, digest} with those values copied exactly: every chunk in order, byte for byte, nothing dropped, shortened or reflowed (the script recomputes the digest). Non-zero exit -> failed with its stderr.'
+    'It prints one JSON object {parked, args, program, digest}. Return {status: "ok", reason, parked, args, program, file_sha256, digest} with those values copied exactly: every chunk in order, byte for byte, nothing dropped, shortened or reflowed (the script recomputes the digest). Non-zero exit -> failed with its stderr.'
   );
 }
 
@@ -2315,7 +2395,7 @@ function formatFilesPrompt(inputs) {
     "Run this one command exactly as written, unmodified, as one Bash call with timeout 600000 ms:\n" +
     progCmd("format_files", [inputs.worktree, JSON.stringify(inputs.select), JSON.stringify(inputs.frozen), inputs.scratch_dir, String(FIX_RUN_TIMEOUT)]) +
     "\n" +
-    'It prints one JSON object {ran, reason, runs, stable, files, changed, refused, program, digest}. Return {status: "ok", reason, ran, runs, stable, files, changed, refused, program, digest} with those values copied exactly (the script recomputes the digest). ' +
+    'It prints one JSON object {ran, reason, runs, stable, files, changed, refused, program, digest}. Return {status: "ok", reason, ran, runs, stable, files, changed, refused, program, file_sha256, digest} with those values copied exactly (the script recomputes the digest). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -2386,11 +2466,11 @@ function commitPlanPrompt(inputs, message) {
     "4. `git -C <worktree> ls-files --error-unmatch -- <plan_path>` must succeed and `git -C <worktree> status --porcelain` must be empty; else needs_human.\n" +
     "5. Write the plan ref (4.0.0): its tag message travels as base64 chunks you write to files under <chunk_dir>; the program checks every chunk against its sha256, then makes the tag object (git mktag: no tag name, no index change, no hook) and moves refs/fleet/<task_id>/plan. Write no other file.\n" +
     chunkSteps(inputs.chunk_dir, c, progCmd("plan_ref_write", [inputs.worktree, inputs.task_id, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)])) +
-    "On success it prints one JSON object {head, tag_sha, program, digest}: copy all four unchanged (the script recomputes the digest).\n" +
+    "On success it prints one JSON object {head, tag_sha, program, digest}: copy every value unchanged and add `file_sha256` (the script recomputes the digest).\n" +
     (inputs.retire
       ? "6. Housekeeping (4.0.0): `mkdir -p " + shQuote(inputs.retire.used) + " && mv -n -- " + shQuote(inputs.retire.dir) + " " + shQuote(inputs.retire.used) + "/`. An error here changes nothing above and does not fail the step.\n"
       : "") +
-    "Return {status, reason, reused, head, tag_sha, program, digest}. The script verifies the commit and the ref in a separate read-only step."
+    "Return {status, reason, reused, head, tag_sha, program, file_sha256, digest}. The script verifies the commit and the ref in a separate read-only step."
   );
 }
 
@@ -2405,15 +2485,15 @@ function verifyPlanCommitPrompt(inputs) {
     "1. Run this command exactly as written, unmodified:\n" +
     progCmd("plan_files", [inputs.worktree]) +
     "\n" +
-    "It prints one JSON object {head, files, args, dsn_paths, program, digest}: return it as plan_files, every value copied unchanged, every path in order (the script recomputes the digest). Never list the files with git yourself.\n" +
+    "It prints one JSON object {head, files, args, dsn_paths, program, digest}: " + relayAs("plan_files") + ", every path in order (the script recomputes the digest). Never list the files with git yourself.\n" +
     "2. Run this command exactly as written, unmodified:\n" +
     planHashCmd(inputs.worktree, "HEAD", inputs.plan_path) +
     "\n" +
-    "It prints one JSON object {plan_sha256, program}: return it as plan_hash, both values copied unchanged.\n" +
+    "It prints one JSON object {plan_sha256, program}: " + relayAs("plan_hash") + ".\n" +
     "3. Run this command exactly as written, unmodified:\n" +
     planRefsCmd(inputs.worktree, inputs.task_id, "meta") +
     "\n" +
-    "It prints one JSON object {refs, program} (names, targets and hashes; no message text): return it as plan_ref, copied unchanged, byte for byte.\n" +
+    "It prints one JSON object {refs, program} (names, targets and hashes; no message text): " + relayAs("plan_ref") + ", byte for byte.\n" +
     "Any non-zero exit -> failed with its stderr.\n" +
     'Return {status: "ok", reason, plan_files, plan_hash, plan_ref}.'
   );
@@ -2429,8 +2509,8 @@ function loadRefPrompt(inputs) {
     planRefsCmd(inputs.main_worktree, inputs.task_id, inputs.mode === "chunks" ? "chunks:" + inputs.plan_ref : "meta") +
     "\n" +
     (inputs.mode === "chunks"
-      ? 'It prints one JSON object {refs, chunks, program}. Return {status: "ok", reason, refs, chunks, program} with all three copied exactly, byte for byte: every chunk in full and in order. NEVER shorten, summarise, elide, merge or drop a chunk, and never write an ellipsis or a placeholder such as [truncated ...]; the script checks the joined chunks against a sha256 and stops the run on any change. '
-      : 'It prints one JSON object {refs, program}. Return {status: "ok", reason, refs, program} with both copied exactly, byte for byte. ') +
+      ? 'It prints one JSON object {refs, chunks, program}. Return {status: "ok", reason, refs, chunks, program, file_sha256} with refs, chunks and program copied exactly, byte for byte: every chunk in full and in order. NEVER shorten, summarise, elide, merge or drop a chunk, and never write an ellipsis or a placeholder such as [truncated ...]; the script checks the joined chunks against a sha256 and stops the run on any change. '
+      : 'It prints one JSON object {refs, program}. Return {status: "ok", reason, refs, program, file_sha256} with refs and program copied exactly, byte for byte. ') +
     'If the command exits non-zero, return {status: "needs_human", reason: <its stderr>}. Run no other command.'
   );
 }
@@ -2470,7 +2550,7 @@ function remoteHeadPrompt(inputs) {
     progCmd("remote_head", [inputs.main_worktree, inputs.branch, inputs.remote_url]) +
     "\n" +
     "It prints one JSON object {head, args, program, digest}. Copy every value unchanged (the script recomputes the digest). Still non-zero after the retries -> failed with its stderr.\n" +
-    "Return {status, reason, head, args, program, digest}."
+    "Return {status, reason, head, args, program, file_sha256, digest}."
   );
 }
 
@@ -2484,7 +2564,7 @@ function tfGatePrompt(inputs) {
     progCmd("tf_gate", [inputs.main_worktree, inputs.default_branch, inputs.approved_sha, inputs.remote_url]) +
     "\n" +
     "It prints one JSON object {touched, iac_files, problems, hints, args, program, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, touched, iac_files, problems, hints, args, program, digest}."
+    "Return {status, reason, touched, iac_files, problems, hints, args, program, file_sha256, digest}."
   );
 }
 
@@ -2498,7 +2578,7 @@ function fleetScanPrompt(inputs) {
     progCmd("fleet_scan", [inputs.main_worktree, inputs.default_branch, inputs.approved_sha]) +
     "\n" +
     "It prints one JSON object {diff, commits, program, digest}. Copy every value unchanged; never drop a path (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, diff, commits, program, digest}."
+    "Return {status, reason, diff, commits, program, file_sha256, digest}."
   );
 }
 
@@ -2511,7 +2591,7 @@ function callersPrompt(inputs) {
     "Run this one command exactly as written, unmodified:\n" +
     progCmd("callers", [inputs.worktree, inputs.plan_path, JSON.stringify(inputs.symbols), String(inputs.cap)]) +
     "\n" +
-    'It prints one JSON object {occurrences, capped, program, digest}. Return {status: "ok", reason, occurrences, capped, program, digest} with those values copied exactly: every key, every list entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'It prints one JSON object {occurrences, capped, program, digest}. Return {status: "ok", reason, occurrences, capped, program, file_sha256, digest} with those values copied exactly: every key, every list entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -2525,7 +2605,7 @@ function changedDefsPrompt(inputs) {
     "Run this one command exactly as written, unmodified:\n" +
     progCmd("changed_defs", [inputs.worktree, inputs.base, inputs.tree, JSON.stringify(inputs.exclude)]) +
     "\n" +
-    'It prints one JSON object {defs, excluded, unclassified, unattributed, program, digest}. Return {status: "ok", reason, defs, excluded, unclassified, unattributed, program, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'It prints one JSON object {defs, excluded, unclassified, unattributed, program, digest}. Return {status: "ok", reason, defs, excluded, unclassified, unattributed, program, file_sha256, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -2540,10 +2620,10 @@ function verifyPlanPrompt(inputs) {
     (inputs.frozen_resume ? " Exception (frozen_resume is true): the uncommitted paths of a frozen build are expected; list them in reason and go on (the workflow checks the worktree tree itself)." : "") +
     "\n" +
     "2. `git -C <main_worktree> cat-file -e '<plan_commit>^{commit}'` (keep the quotes: zsh globs `^`) must succeed; else needs_human.\n" +
-    "3. Run this command exactly as written; it prints one JSON object {plan_sha256, program}: return it as plan_hash, both values copied unchanged:\n" +
+    "3. Run this command exactly as written; it prints one JSON object {plan_sha256, program}: " + relayAs("plan_hash") + ":\n" +
     planHashCmd(inputs.main_worktree, inputs.plan_commit, inputs.plan_path) +
     "\n" +
-    "4. Run this command exactly as written; it prints one JSON object {plan_sha256, program}: return it as plan_hash_head, both values copied unchanged:\n" +
+    "4. Run this command exactly as written; it prints one JSON object {plan_sha256, program}: " + relayAs("plan_hash_head") + ":\n" +
     planHashCmd(inputs.main_worktree, "HEAD", inputs.plan_path) +
     "\n" +
     "5. Run this command exactly as written, unmodified:\n" +
@@ -2552,8 +2632,8 @@ function verifyPlanPrompt(inputs) {
     "It prints one JSON object {head, is_ancestor, commits_since, plan_touched, changed_since, program, digest}. Copy every value unchanged: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Never run git log or git diff yourself for these values. Non-zero exit -> failed with its stderr.\n" +
     "6. Run this command exactly as written, unmodified:\n" +
     progCmd("test_db_decl", [inputs.main_worktree, inputs.default_branch]) +
-    "\nIt prints one JSON object {decl, error, args, program, digest}: return it as test_db, every value copied unchanged. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, head, plan_hash, plan_hash_head, is_ancestor, commits_since, plan_touched, changed_since, args, program, digest, test_db}."
+    "\nIt prints one JSON object {decl, error, args, program, digest}: " + relayAs("test_db") + ". Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, head, plan_hash, plan_hash_head, is_ancestor, commits_since, plan_touched, changed_since, args, program, file_sha256, digest, test_db}."
   );
 }
 
@@ -2659,8 +2739,8 @@ function checkScriptsPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "Run `run` exactly as written, unmodified, as one Bash call in the foreground. It prints one JSON object {checks: {<path>: {ok, reason}}, program, digest}. Copy both unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, checks, program, digest}."
+    "Run `run` exactly as written, unmodified, as one Bash call in the foreground. It prints one JSON object {checks: {<path>: {ok, reason}}, program, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, checks, program, file_sha256, digest}."
   );
 }
 
@@ -2711,11 +2791,11 @@ function pushPrompt(inputs) {
     "1. <branch> must differ from <default_branch>; `git -C <main_worktree> branch --show-current` must equal <branch>; `git -C <main_worktree> rev-parse HEAD` must equal <approved_sha>; `git -C <main_worktree> status --porcelain` must be empty. Any mismatch -> needs_human.\n" +
     "2. Push ONCE: `" + pg + "git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Never classify the output yourself: run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code:\n" +
     progCmd("push_classify", []) + " <file> <exit>\n" +
-    "   It prints one JSON object {push_result, exit_code, hook_tail, args, program, digest}. Copy all six unchanged (the script recomputes the digest). Then, by push_result:\n" +
+    "   It prints one JSON object {push_result, exit_code, hook_tail, args, program, digest}. Copy every value unchanged and add `file_sha256` (the script recomputes the digest). Then, by push_result:\n" +
     "   - `ok` -> step 3.\n" +
     "   - `non_ff` or `remote_rejected` -> return status needs_human at once with the git line, no retry.\n" +
     "   - `ambiguous` (git's lines cannot be told from a hook's) -> return status needs_human at once with the last 60 lines of the temp file, no retry.\n" +
-    "   - `hook_rejected` (a local pre-push hook declined the push) -> no retry. Return status ok with the program's push_result, exit_code, hook_tail, args and digest.\n" +
+    "   - `hook_rejected` (a local pre-push hook declined the push) -> no retry. Return status ok with the program's push_result, exit_code, hook_tail, args, program and digest, and file_sha256.\n" +
     "   - `network` (auth, network, 5xx) -> retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL(pg + "git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
     " Exit 0 now -> `ok`. Still failing after the 3 retries -> status failed with the last error.\n" +
@@ -2724,7 +2804,7 @@ function pushPrompt(inputs) {
     "remote_head = the output of `<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha` (the branch name goes in the path as is, slashes included), retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha") +
     " Only when neither gh nor gh-personal is installed: remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints, with the same backoff. remote_head must be the full 40-hex sha.\n" +
-    "Return {status, reason, push_result, exit_code, hook_tail, args, program, digest, remote_head}."
+    "Return {status, reason, push_result, exit_code, hook_tail, args, program, file_sha256, digest, remote_head}."
   );
 }
 
@@ -2743,7 +2823,7 @@ function pushProbePrompt(inputs) {
     "2. Run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code step 1 printed:\n" +
     progCmd("push_probe", []) + " <file> <exit>\n" +
     "   It prints one JSON object {access, result, exit_code, auth_line, args, program, digest}. Copy every value unchanged (the script recomputes the digest). Never classify the output yourself. Delete the temp file.\n" +
-    "Return {status, reason, access, result, exit_code, auth_line, args, program, digest}; status ok whenever the classifier ran, whatever it printed."
+    "Return {status, reason, access, result, exit_code, auth_line, args, program, file_sha256, digest}; status ok whenever the classifier ran, whatever it printed."
   );
 }
 
@@ -2783,8 +2863,8 @@ function reviewPathsPrompt(inputs) {
     "Run this one command exactly as written, unmodified; run nothing else:\n" +
     progCmd("review_paths", [inputs.main_worktree, inputs.base_ref, inputs.head_sha]) +
     "\n" +
-    "It prints one JSON object {changed_paths, program, digest}. Copy both unchanged, every path in order (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, changed_paths, program, digest}."
+    "It prints one JSON object {changed_paths, program, digest}. Copy every value unchanged, every path in order (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, changed_paths, program, file_sha256, digest}."
   );
 }
 
@@ -2815,7 +2895,7 @@ function precommitIdsPrompt(inputs) {
     progCmd("precommit_ids", [inputs.main_worktree, inputs.plan_commit]) +
     "\n" +
     "It prints one JSON object {present, ids, parser, error, args, program, digest}. Copy every value unchanged, every id in order (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, present, ids, parser, error, args, program, digest}."
+    "Return {status, reason, present, ids, parser, error, args, program, file_sha256, digest}."
   );
 }
 
@@ -2907,7 +2987,7 @@ function pathRecheckPrompt(inputs) {
     progCmd("path_check", [inputs.repo, inputs.token]) +
     "\n" +
     "It prints one JSON object {tools, args, path_problems, program, digest}. Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, tools, args, path_problems, program, digest}."
+    "Return {status, reason, tools, args, path_problems, program, file_sha256, digest}."
   );
 }
 
@@ -2919,7 +2999,8 @@ async function pathRecheck(site, phaseName) {
     // the agent cap (bounded by the sites and rounds), so the cap refuses
     // exactly the runs it refused in 3.1.0
     state.agents++;
-    const r = await agent(nonced(pathRecheckPrompt({ repo: state.repo, token })), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, label, model });
+    const ic = infraCall(label, pathRecheckPrompt({ repo: state.repo, token }), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName });
+    const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model }));
     return { r, label, token };
   };
   // 4.0.0 (1990): the check runs on haiku; a broken relay (no result, not ok,
@@ -2952,8 +3033,8 @@ function writeStatePrompt(inputs, json) {
     "\n" +
     "The state JSON travels as base64 chunks you write to files; the program checks every chunk against its sha256, then makes the tag object (git mktag: no tag name, no hook) and moves <state_ref>.\n" +
     chunkSteps(inputs.chunk_dir, c, progCmd("state_write", [inputs.main_worktree, inputs.state_ref, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)])) +
-    "On success it prints one JSON object {head, state_sha, program, digest}: copy all four unchanged (the script recomputes the digest).\n" +
-    "Return {status, reason, head, state_sha, program, digest}."
+    "On success it prints one JSON object {head, state_sha, program, digest}: copy every value unchanged and add `file_sha256` (the script recomputes the digest).\n" +
+    "Return {status, reason, head, state_sha, program, file_sha256, digest}."
   );
 }
 
@@ -2970,7 +3051,7 @@ function readStatePrompt(inputs) {
     progCmd("read_state", [inputs.main_worktree, inputs.state_ref]) +
     "\n" +
     "It prints one JSON object {exists, target, message, head, head_tree, clean, program, digest}. Copy every value unchanged, byte for byte, empty strings included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, exists, target, message, head, head_tree, clean, program, digest}."
+    "Return {status, reason, exists, target, message, head, head_tree, clean, program, file_sha256, digest}."
   );
 }
 
@@ -3174,8 +3255,19 @@ function reserve(n, what) {
 // (resumeFromRunId); a stateful check (workspace, hasher, branch-scan, ...)
 // must never return the verdict of an earlier worktree. A new invocation has
 // a new nonce, so no infra call replays, and no role call after one does.
-function nonced(prompt) {
-  return prompt + (prompt.indexOf(FILE_SHA_MARK) >= 0 ? "\n" + FILE_SHA_RULE : "") + "\nRun nonce: " + state.nonce + " (keys the workflow cache to this invocation; ignore it).";
+function nonced(prompt, rule) {
+  return prompt + (rule ? "\n" + rule : "") + "\nRun nonce: " + state.nonce + " (keys the workflow cache to this invocation; ignore it).";
+}
+
+// 4.0.2 (ledger 1997): an infra agent's prompt and opts. A prompt that runs
+// shipped programs gets the file_sha256 rule for its slots and a schema copy
+// that requires file_sha256 there; one that runs a program its label has no
+// slot for stops the run.
+function infraCall(label, prompt, opts) {
+  const ps = programSlots(label, prompt);
+  if (ps.missing.length) halt("failed", label + ": the prompt runs shipped program(s) " + ps.missing.join(", ") + " that PROGRAM_SLOTS does not place for this label", "contract");
+  if (!ps.used.length) return { prompt: nonced(prompt), opts };
+  return { prompt: nonced(prompt, fileShaRule(ps.used)), opts: Object.assign({}, opts, { schema: programSchema(opts.schema || { type: "object" }, ps.used) }) };
 }
 
 // 4.0.0 (1990): the INFRA_TIER model of an infra label; none stops the run.
@@ -3188,9 +3280,10 @@ function infraModel(label) {
 // Infra agents: the INFRA_TIER model of their label.
 async function dispatch(label, prompt, opts) {
   const model = infraModel(label);
+  const ic = infraCall(label, prompt, opts);
   reserve(1, label);
   state.agents++;
-  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model }));
+  const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model }));
   if (r == null) halt("failed", "agent " + label + " returned no result");
   return r;
 }
@@ -3199,12 +3292,13 @@ async function dispatch(label, prompt, opts) {
 // when the cap is reached or the agent dies.
 async function softDispatch(label, prompt, opts) {
   const model = infraModel(label);
+  const ic = infraCall(label, prompt, opts);
   if (capped() + 1 > MAX_AGENTS) {
     gate("agent cap " + MAX_AGENTS + " reached: " + label + " not run");
     return null;
   }
   state.agents++;
-  const r = await agent(nonced(prompt), Object.assign({}, opts, { label, model }));
+  const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model }));
   if (r == null) gate(label + " returned no result");
   return r;
 }
@@ -4280,7 +4374,7 @@ function hookSurfacePrompt(inputs) {
     progCmd("hook_surface", [inputs.worktree, inputs.rev, JSON.stringify(inputs.targets)]) +
     "\n" +
     "It prints one JSON object {surface, make_paths, error, args, program, digest}. Copy every value unchanged, error null included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, surface, make_paths, error, args, program, digest}."
+    "Return {status, reason, surface, make_paths, error, args, program, file_sha256, digest}."
   );
 }
 
@@ -6993,11 +7087,11 @@ function dbUpPrompt(inputs, cmdArgs) {
     JSON.stringify(inputs) +
     "\n" +
     (inputs.mode === "up"
-      ? "1. Run this one command:\n" + progCmd("db_sweep", []) + "\nIt prints one JSON object {podman, removed, kept, errors, program, digest}: return it as sweep, every value copied unchanged (the script recomputes the digest). Non-zero exit -> sweep null; go on.\n2. "
+      ? "1. Run this one command:\n" + progCmd("db_sweep", []) + "\nIt prints one JSON object {podman, removed, kept, errors, program, digest}: " + relayAs("sweep") + " (the script recomputes the digest). Non-zero exit -> sweep null; go on.\n2. "
       : "") +
     "Run this one command as one Bash call with timeout 900000 ms:\n" +
     progCmd("db_up", cmdArgs) +
-    "\nIt prints one JSON object {name, port, dbs, users, expiry, args, program, digest}: return it as up, every value copied unchanged (the script recomputes the digest). Non-zero exit -> status needs_human with its stderr (the program left no container running).\n" +
+    "\nIt prints one JSON object {name, port, dbs, users, expiry, args, program, digest}: " + relayAs("up") + " (the script recomputes the digest). Non-zero exit -> status needs_human with its stderr (the program left no container running).\n" +
     "Return {status, reason, " + (inputs.mode === "up" ? "sweep, " : "") + "up}."
   );
 }
@@ -7006,7 +7100,7 @@ function dbDownPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: remove this run's throwaway test database container. Run only this one command, exactly as written; touch no other container and run nothing named tf-local*:\n" +
     progCmd("db_down", [inputs.name, inputs.nonce]) +
-    "\nIt prints one JSON object {removed, absent, error, args, program, digest}: return it as down, every value copied unchanged (the script recomputes the digest). Non-zero exit -> down null and the stderr in reason.\n" +
+    "\nIt prints one JSON object {removed, absent, error, args, program, digest}: " + relayAs("down") + " (the script recomputes the digest). Non-zero exit -> down null and the stderr in reason.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\nReturn {status, reason, down}."
@@ -7092,7 +7186,8 @@ async function dbTeardown() {
   const later = "; it ends by itself (" + db.mechanism + ", fleet.expires " + db.expires + ")";
   try {
     state.agents++;
-    const r = await agent(nonced(dbDownPrompt({ name: db.name, nonce: state.nonce })), { label: "infra:db-down", model: infraModel("infra:db-down"), schema: INFRA_SCHEMA, phase: "Cleanup" });
+    const ic = infraCall("infra:db-down", dbDownPrompt({ name: db.name, nonce: state.nonce }), { schema: INFRA_SCHEMA, phase: "Cleanup" });
+    const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label: "infra:db-down", model: infraModel("infra:db-down") }));
     const d = r && typeof r === "object" ? r.down : null;
     if (r && r.status === "ok" && d && relayDigestOk(d, ["removed", "absent", "error", "args"], "db_down") && canonical(d.args) === canonical([db.name, state.nonce]) && (d.removed === true || d.absent === true))
       gate("test database " + db.name + (d.removed ? " removed" : " already gone"));

@@ -10650,13 +10650,16 @@ function jsPathRecheck(agentStub) {
     // 4.0.0 (1990): the PATH check's tier and its relay retry
     constBlock("INFRA_TIER", "];") +
     constBlock("RELAY_RETRY_MODEL", '";') +
+    // 4.0.2 (1997): the PATH re-check goes through infraCall (schema and file_sha256 rule)
+    constBlock("PROGRAM_SLOTS", "\n];") +
+    constBlock("FILE_SHA_HEX", ";\n") +
     'const state = { repo: "/r", nonce: "' + NONCE + '", pathChecks: 0, agents: 0, scriptsDir: "' + SCRIPTS_DIR + '" };\n' +
     // 4.0.0: the one program this runtime runs
     // 4.0.1: its sha256 from the workflow's PROGRAM_SHA256 table
     "function programTable() { return { path_check: PROGRAM_SHA256.path_check }; }\n" +
     "function gate() {}\nfunction halt(status, msg, stopGate) { const e = new Error(msg); e.halt = { status, stopGate }; throw e; }\n" +
     'function nonced(p) { return p + "\\nRun nonce: " + state.nonce; }\n';
-  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
+  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel", "programSlots", "programSchema", "fileShaRule", "infraCall"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
   return new Function("agent", consts + fns + "\nreturn pathRecheck;")(agentStub);
 }
 
