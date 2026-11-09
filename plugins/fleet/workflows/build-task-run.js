@@ -61,6 +61,10 @@ const INFRA_TIER = [
   ["infra:review-paths", "haiku"],
   ["infra:remote-head", "haiku"],
   ["infra:load-parked", "haiku"],
+  // the plan's tier for S5's throwaway test DB steps (ledger 1981)
+  ["infra:db-up", "haiku"],
+  ["infra:db-down", "haiku"],
+  ["infra:db-sweep", "haiku"],
   ["intake", "sonnet"],
   ["hasher:", "sonnet"],
   ["infra:load-ref", "sonnet"],
@@ -1672,7 +1676,8 @@ function mapsDigest(h) {
 
 // For the code judge: {"<map>/<key>": {frozen, current, match}}, plus the
 // suspicious list when non-empty. Report only; diffHashes stays authoritative.
-function hashRecheck(frozen, now) {
+// wt (4.0.0, 1988): a change diffHashes exempts (fleetOwnFile) is not listed.
+function hashRecheck(frozen, now, wt) {
   const out = {};
   for (const m of HASH_MAPS) {
     const a = (frozen && frozen[m]) || {};
@@ -1683,6 +1688,7 @@ function hashRecheck(frozen, now) {
     for (const k of Object.keys(keys).sort()) {
       const fa = k in a ? a[k] : null;
       const cb = k in b ? b[k] : null;
+      if (wt && fa !== cb && fleetOwnFile({ map: m, key: k }, now, wt)) continue;
       out[m + "/" + k] = { frozen: fa, current: cb, match: fa !== null && cb !== null && fa === cb };
     }
   }
@@ -9360,7 +9366,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       Object.assign({}, codeInputs, {
         code_tree: h.fingerprint.tree,
         coder_output: stripHeldOut(coder),
-        hash_recheck: hashRecheck(frozen, h.hashes),
+        hash_recheck: hashRecheck(frozen, h.hashes, mainWt),
         held_out_results: HELD_OUT_NOT_RUN,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
         repo_obligations: judgeObligations,

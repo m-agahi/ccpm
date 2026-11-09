@@ -229,9 +229,10 @@ its notes to this entry.
   label with no entry stops the run with `failed`; there is no default tier.
 - haiku: every `infra:path-check:*`, `preflight`, `workspace`, `infra:branch-scan`,
   `infra:stage-plan`, `infra:verify-plan*`, `infra:read-state`, `infra:callers*`,
-  `infra:check-scripts*`, `infra:precommit-ids*`, `infra:review-paths*`, `infra:remote-head*` and
-  `infra:load-parked`. These are read-only steps that a program digest checks, plus the
-  mechanical workspace setup.
+  `infra:check-scripts*`, `infra:precommit-ids*`, `infra:review-paths*`, `infra:remote-head*`,
+  `infra:load-parked`, and the plan's test-DB steps `infra:db-up`, `infra:db-down`,
+  `infra:db-sweep`. These are read-only steps that a program digest checks, plus the mechanical
+  workspace and DB setup.
 - sonnet: `intake*`, `hasher:*`, `infra:load-ref*`, `infra:commit-plan*`, `infra:park-plan`
   (base64 chunks), `infra:format-*`, `infra:commit:*`, `infra:push*` (the push and its classifier),
   `infra:tf-gate*`, `infra:hook-surface*`, `infra:changed-defs*`, `infra:replan-*`,
@@ -253,7 +254,8 @@ its notes to this entry.
   other bytes (one added newline is enough), another worktree's bytes, or the file removed still
   stop the run. The maps and the digests keep the key.
 - It applies to the judge fingerprint (`judged`), the writer-round ownership check, the
-  test-approval-to-freeze compare, the re-freeze check and the code-round hash check.
+  test-approval-to-freeze compare, the re-freeze check and the code-round hash check. The code
+  judge's `hash_recheck` does not list the exempt change either.
 - Diagnostic: a stop on that file now says
   `(not the fleet's own settings: before <sha|absent>, after <sha|absent>, the fleet's own <sha>; the harness or a role rewrote it)`.
   If the harness rewrote the file, the exemption does not fire; the stop names the cause.

@@ -126,6 +126,25 @@ test("4.0.0 1990: every agent label in the script resolves in INFRA_TIER, and th
   }
 });
 
+test("4.0.0 1990: a label with no INFRA_TIER entry stops the run (no default tier)", () => {
+  const grab = (name) => {
+    const i = SOURCE.indexOf("\nfunction " + name + "(");
+    assert.ok(i >= 0, name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  };
+  const m = /\/\/ INFRA_TIER_BEGIN\n([\s\S]*?)\n\/\/ INFRA_TIER_END/.exec(SOURCE);
+  const halt = (status, msg) => {
+    const e = new Error(msg);
+    e.status = status;
+    throw e;
+  };
+  const infraModel = Function("halt", m[1] + "\n" + grab("infraModel") + "\nreturn infraModel;")(halt);
+  assert.equal(infraModel("infra:path-check:coder:r1"), "haiku");
+  assert.equal(infraModel("infra:push"), "sonnet");
+  for (const bad of ["infra:bogus", "role:fleet-coder", "", "Preflight"])
+    assert.throws(() => infraModel(bad), (e) => e.status === "failed" && /no INFRA_TIER entry for agent label/.test(e.message), JSON.stringify(bad));
+});
+
 test("4.0.0 1990: a haiku PATH check whose relay is broken is retried once on sonnet; a real finding is not", async () => {
   // relay drift: the digest does not match the relayed values
   const s = happy();
@@ -211,6 +230,10 @@ test("4.0.0 1988 AC-1988-1: the fleet's own settings.local.json appearing during
   s["hasher:post-coder:r1"] = withIgnored(FP_K1, { [SETTINGS]: OWN });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
+  // the code judge's hash_recheck does not list the exempt change either
+  const hr = inputsOf(call(out, "role:fleet-code-judge:r1").prompt).hash_recheck;
+  assert.ok(!("ignored/" + SETTINGS in hr), JSON.stringify(hr));
+  assert.ok(Object.values(hr).every((x) => x.match === true), JSON.stringify(hr));
   // between test approval and the freeze
   const s2 = happy();
   s2["hasher:pre-writers:r1"] = withIgnored(FP_PRE, {});
@@ -590,6 +613,16 @@ test("4.0.0 1990: a page bumped after the plan shows at the first role call; the
   const b2 = await runOne(s, BUILD(plan.result.plan_ref, { fresh_preflight: true }));
   assert.equal(b2.result.status, "needs_human");
   assert.ok(!b2.result.reason.includes("fresh_preflight"), b2.result.reason);
+  // the build's first role calls are the test writers (one per criterion)
+  for (const [k, v] of [["role_version", FROZEN_VERSIONS["fleet-test-writer"] + 1], ["role_contract", "CONTRACT: fleet-v5"]]) {
+    const sw = happy();
+    const pw = await runOne(sw, ARGS);
+    sw["role:fleet-test-writer:AC1:r1"][k] = v;
+    const bw = await runOne(sw, BUILD(pw.result.plan_ref));
+    assert.equal(bw.result.status, "needs_human", k + ": " + bw.result.reason);
+    assert.equal(bw.result.stop_gate, "contract", k + ": " + bw.result.reason);
+    assert.ok(bw.result.reason.includes("fresh_preflight: true"), k + ": " + bw.result.reason);
+  }
   // the contract marker too
   const s3 = happy();
   const p3 = await runOne(s3, ARGS);
