@@ -1558,8 +1558,10 @@ function findOverlaps(criteria) {
 }
 
 // Keys whose value differs, compared map by map, including keys only one side
-// has: [{map, key, name}].
-function changedKeys(a0, b0) {
+// has: [{map, key, name}]. wt (4.0.0, 1988): the hashed worktree; the
+// fleet's own settings file there is no change (fleetOwnFile), and any other
+// change of that file carries its before and after hashes for the stop text.
+function changedKeys(a0, b0, wt) {
   const out = [];
   for (const m of HASH_MAPS) {
     const a = (a0 && a0[m]) || {};
@@ -1570,15 +1572,40 @@ function changedKeys(a0, b0) {
     for (const k of Object.keys(keys).sort()) {
       const va = k in a ? a[k] : "<new>";
       const vb = k in b ? b[k] : "<removed>";
-      if (va !== vb) out.push({ map: m, key: k, name: keyName(m, k) });
+      if (va === vb) continue;
+      const x = { map: m, key: k, name: keyName(m, k) };
+      if (wt && fleetOwnFile(x, b0, wt)) continue;
+      if (wt && m === "ignored" && k === SETTINGS_LOCAL) x.settings = { before: k in a ? a[k] : null, after: k in b ? b[k] : null, own: sha256Hex(settingsFor(wt)) };
+      out.push(x);
     }
   }
   return out;
 }
 
+// 4.0.0 (1988): the settings file the workspace step writes into a fleet
+// worktree. It is exempt from a fingerprint only at this exact path (the
+// ignored map), and only when its bytes after the step are exactly the
+// fleet's own (settingsFor of that worktree). The maps and digests keep it.
+const SETTINGS_LOCAL = ".claude/settings.local.json";
+function fleetOwnFile(k, after, wt) {
+  return (
+    k.map === "ignored" &&
+    k.key === SETTINGS_LOCAL &&
+    !!after &&
+    !!after.ignored &&
+    Object.prototype.hasOwnProperty.call(after.ignored, k.key) &&
+    after.ignored[k.key] === sha256Hex(settingsFor(wt))
+  );
+}
+
 // The violation text for a changed key.
 const FLEETREF = "fleetref:";
 function violationName(x) {
+  if (x.map === "ignored" && x.settings)
+    return (
+      "ignored path written: " + x.key + " (not the fleet's own settings: before " + (x.settings.before === null ? "absent" : x.settings.before) +
+      ", after " + (x.settings.after === null ? "absent" : x.settings.after) + ", the fleet's own " + x.settings.own + "; the harness or a role rewrote it)"
+    );
   if (x.map === "ignored") return "ignored path written: " + x.key;
   if (x.map === "git" && x.key.indexOf(FLEETREF) === 0) return "run-state ref touched by role: " + x.key.slice(FLEETREF.length);
   return x.name;
@@ -1586,8 +1613,8 @@ function violationName(x) {
 
 // changedKeys by violation text, plus every suspicious entry: a non-empty
 // suspicious list is always a violation.
-function diffHashes(frozen, now) {
-  const out = changedKeys(frozen, now).map(violationName);
+function diffHashes(frozen, now, wt) {
+  const out = changedKeys(frozen, now, wt).map(violationName);
   for (const p of (now && now.suspicious) || [])
     out.push(SUSPICIOUS_PREFIXES.some((x) => p.indexOf(x) === 0) ? "suspicious " + p : "suspicious path name " + p);
   return out;
@@ -1658,8 +1685,9 @@ function countKeys(h) {
 // Two states match when HEAD, the tree (tracked plus untracked-not-ignored
 // files) and every hasher map (ignored runner config, ignore rules, symlinks)
 // match. The suspicious list is left out: a test run may leave bytecode, which
-// the purge removes before every freeze and post-coder check.
-function sameState(a, b) {
+// the purge removes before every freeze and post-coder check. wt: the hashed
+// worktree (see fleetOwnFile).
+function sameState(a, b, wt) {
   return (
     !!a &&
     !!b &&
@@ -1667,7 +1695,7 @@ function sameState(a, b) {
     !!b.fingerprint &&
     a.fingerprint.head === b.fingerprint.head &&
     a.fingerprint.tree === b.fingerprint.tree &&
-    changedKeys(a.hashes, b.hashes).length === 0
+    changedKeys(a.hashes, b.hashes, wt).length === 0
   );
 }
 
@@ -6458,11 +6486,11 @@ async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, f
   const before = pre || (await hasher(opts && opts.preLabel ? opts.preLabel : "hasher:fp-pre:" + roundTag, worktree, files, phaseName));
   const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT, true);
   const after = await hasher("hasher:fp-post:" + roundTag, worktree, files, phaseName);
-  if (!sameState(before, after)) {
+  if (!sameState(before, after, worktree)) {
     const what = [];
     if (before.fingerprint.head !== after.fingerprint.head) what.push("HEAD");
     if (before.fingerprint.tree !== after.fingerprint.tree) what.push("tree");
-    for (const k of changedKeys(before.hashes, after.hashes)) what.push(violationName(k));
+    for (const k of changedKeys(before.hashes, after.hashes, worktree)) what.push(violationName(k));
     halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") changed " + what.join(", ") + "; verdict discarded", "fingerprint");
   }
   checkRole(role, r);
@@ -8832,7 +8860,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     }
     fenceChanged("test round " + n, post.changed);
     const changed = post.changed.map(normPath);
-    for (const k of changedKeys(pre.hashes, post.hashes)) {
+    for (const k of changedKeys(pre.hashes, post.hashes, mainWt)) {
       if (k.map === "ignored" || (k.map === "git" && k.key.indexOf(FLEETREF) === 0))
         halt("needs_human", violationName(k) + " in test round " + n, "ownership");
       if (!(k.map === "files" && owner[k.key])) changed.push(k.name);
@@ -8916,7 +8944,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     freezes++;
     await purgeBytecode("infra:purge-bytecode:freeze-f" + freezes, mainWt, "Freeze");
     const h = await hasher("hasher:freeze:f" + freezes, mainWt, hashedFiles, "Freeze");
-    if (last && !sameState(last, h))
+    if (last && !sameState(last, h, mainWt))
       halt("needs_human", "worktree changed between test approval and freeze", "fingerprint");
     if (h.hashes.suspicious.length)
       halt(
@@ -8929,7 +8957,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const allowed = {};
       for (const c of testable) if (refreeze.criteria.indexOf(c.id) >= 0) for (const f of c.test_files) allowed[f] = true;
       const changed = [];
-      for (const k of changedKeys(frozen, h.hashes)) {
+      for (const k of changedKeys(frozen, h.hashes, mainWt)) {
         if (k.map !== "files" || !allowed[k.key]) halt("needs_human", "re-freeze touched unrouted path " + k.name, "hash");
         changed.push({ path: k.name, before: k.key in frozen.files ? frozen.files[k.key] : null, after: k.key in h.hashes.files ? h.hashes.files[k.key] : null });
       }
@@ -9018,7 +9046,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (h.fingerprint.head !== expectedHead)
       halt("needs_human", "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + "; the coder works uncommitted", "ownership");
     fenceChanged("code round " + m, h.changed);
-    const viol = diffHashes(frozen, h.hashes);
+    const viol = diffHashes(frozen, h.hashes, mainWt);
     const coderDrift = contractProblem("fleet-coder", coder);
     if (viol.length && (coderDrift || coder.status !== "ok"))
       halt(

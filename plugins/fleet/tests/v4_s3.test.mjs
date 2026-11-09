@@ -16,6 +16,12 @@ import {
   inputsOf,
   noUnscripted,
   pathRecheckOut,
+  sha256,
+  H,
+  HASHES_FLAT,
+  FP_TESTS,
+  FP_K1,
+  FP_PRE,
 } from "./harness.mjs";
 
 // ---------------------------------------------------------------- 1990 tiers
@@ -154,4 +160,140 @@ test("4.0.0 1990: a haiku PATH check whose relay is broken is retried once on so
   const o4 = await runOne(s4, ARGS);
   assert.equal(o4.result.status, "awaiting_confirmation", o4.result.reason);
   assert.ok(o4.labels.includes("infra:path-check:plan-audit:relay-retry"));
+});
+
+// ---------------------------------------------------------------- 1988 settings.local.json
+
+const MAIN_WT = "/r/.claude/worktrees/fleet-l42-add-thing/main";
+const SETTINGS = ".claude/settings.local.json";
+// the bytes the workspace step writes (settingsFor in the script)
+const settingsFor = (wt) => JSON.stringify({ permissions: { allow: ["Edit(/" + wt + "/**)", "Write(/" + wt + "/**)"] } });
+const OWN = sha256(settingsFor(MAIN_WT));
+function withIgnored(fp, ignored) {
+  const h = H({ ...HASHES_FLAT });
+  h.ignored = ignored;
+  return { status: "ok", fingerprint: fp, hashes: h };
+}
+
+test("4.0.0 1988 AC-1988-1: the fleet's own settings.local.json appearing during a judge, a writer round or the coder is no stop", async () => {
+  // a judge run and a writer round: absent before, the fleet's exact bytes after
+  for (const label of ["hasher:fp-post:test-judge:r1", "hasher:post-writers:r1"]) {
+    const s = happy();
+    const orig = s[label];
+    s[label] = (prompt) => {
+      const r = typeof orig === "function" ? orig(prompt) : JSON.parse(JSON.stringify(orig));
+      return Object.assign(r, { hashes: withIgnored(FP_TESTS, { [SETTINGS]: OWN }).hashes });
+    };
+    // absent before (explicit: the harness seeds earlier states from the freeze stub)
+    s["hasher:pre-writers:r1"] = withIgnored(FP_PRE, {});
+    // the file stays: every later state holds it
+    s["hasher:freeze:f1"] = withIgnored(FP_TESTS, { [SETTINGS]: OWN });
+    s["hasher:post-coder:r1"] = withIgnored(FP_K1, { [SETTINGS]: OWN });
+    const out = await run(s, ARGS);
+    noUnscripted(out);
+    assert.equal(out.result.status, "ok", label + ": " + out.result.reason);
+    // it was absent before the step under test
+    const at = out.build.labels.indexOf(label);
+    assert.ok(at > 0, label);
+  }
+  // the coder round: the frozen maps lack it, the post-coder maps have it
+  const s = happy();
+  s["hasher:post-coder:r1"] = withIgnored(FP_K1, { [SETTINGS]: OWN });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  // between test approval and the freeze
+  const s2 = happy();
+  s2["hasher:pre-writers:r1"] = withIgnored(FP_PRE, {});
+  s2["hasher:freeze:f1"] = withIgnored(FP_TESTS, { [SETTINGS]: OWN });
+  s2["hasher:post-coder:r1"] = withIgnored(FP_K1, { [SETTINGS]: OWN });
+  const o2 = await run(s2, ARGS);
+  assert.equal(o2.result.status, "ok", o2.result.reason);
+});
+
+// A fix_tests re-entry (as fixTestsReentry in build_task_run.test.mjs) where
+// the fleet's settings file appears in the writer round and stays.
+test("4.0.0 1988: the fleet's own settings file appearing in a fix_tests round passes the re-freeze; the log lists only the test file", async () => {
+  const testFinding = { target: "tests", criterion: "AC1", finding: "wrong expectation" };
+  const h = H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" });
+  h.ignored = { [SETTINGS]: OWN };
+  const M3 = { head: "abc1234def0", tree: "M3" };
+  const K2 = { head: "abc1234def0", tree: "K2" };
+  const s = happy({
+    script: {
+      "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_tests", routed_findings: [testFinding] },
+      "role:fleet-test-judge:r2": { status: "ok", verdict: "revise", routed_findings: [testFinding] },
+      "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_K1 },
+      "role:fleet-test-writer:AC1:r3": { status: "ok", criterion_id: "AC1" },
+      "hasher:post-writers:r3": { status: "ok", fingerprint: M3, changed: ["tests/test_a.py"], hashes: h },
+      "role:fleet-test-judge:r3": { status: "ok", verdict: "approve", routed_findings: [] },
+      "hasher:fp-post:test-judge:r3": { status: "ok", fingerprint: M3 },
+      "hasher:freeze:f2": { status: "ok", fingerprint: M3, hashes: h },
+      "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: K2, hashes: h },
+      "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
+      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: K2 },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.deepEqual(out.result.refreeze_log[0].changed, [{ path: "tests/test_a.py", before: "ha", after: "ha2" }]);
+});
+
+test("4.0.0 1988 AC-1988-2: other bytes (the fleet's plus a newline) stop, and the reason names the before and after hashes", async () => {
+  const other = sha256(settingsFor(MAIN_WT) + "\n");
+  const s = happy();
+  s["hasher:fp-post:test-judge:r1"] = withIgnored(FP_TESTS, { [SETTINGS]: other });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "fingerprint");
+  const why = out.result.reason;
+  assert.match(why, /ignored path written: \.claude\/settings\.local\.json/);
+  assert.ok(why.includes("not the fleet's own settings"), why);
+  assert.ok(why.includes("before absent"), why);
+  assert.ok(why.includes("after " + other), why);
+  assert.ok(why.includes("the fleet's own " + OWN), why);
+  assert.ok(why.includes("the harness or a role rewrote it"), why);
+  // the code round names it too (as a finding or a stop)
+  const s2 = happy();
+  s2["hasher:post-coder:r1"] = withIgnored(FP_K1, { [SETTINGS]: other });
+  const o2 = await run(s2, ARGS);
+  assert.notEqual(o2.result.status, "ok");
+  const seen = o2.calls.map((c) => c.prompt).concat([o2.result.reason]);
+  assert.ok(seen.some((t) => t.includes("not the fleet's own settings") && t.includes("after " + other)), o2.result.reason);
+});
+
+test("4.0.0 1988 AC-1988-3: only the exact path with the exact bytes of this worktree is exempt", async () => {
+  for (const [key, val] of [
+    [".claude/settings.json", OWN],
+    ["sub/.claude/settings.local.json", OWN],
+    [".claude/settings.local.json.bak", OWN],
+    ["./.claude/settings.local.json", OWN],
+    // another worktree's settings bytes
+    [SETTINGS, sha256(settingsFor("/r/.claude/worktrees/fleet-l42-add-thing/replan-1"))],
+    [SETTINGS, "MISSING"],
+  ]) {
+    const s = happy();
+    s["hasher:fp-post:test-judge:r1"] = withIgnored(FP_TESTS, { [key]: val });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", key + " " + val);
+    assert.equal(out.result.stop_gate, "fingerprint", key);
+    // the judge's own fingerprint stops it, not a later check
+    assert.match(out.result.reason, /^judge mutated worktree: fleet-test-judge/, key);
+  }
+  // the same path in another map (a file git does not ignore) is never exempt
+  const sf = happy();
+  const hf = H({ ...HASHES_FLAT, [SETTINGS]: OWN });
+  hf.ignored = { [SETTINGS]: OWN };
+  sf["hasher:fp-post:test-judge:r1"] = { status: "ok", fingerprint: FP_TESTS, hashes: hf };
+  const of = await run(sf, ARGS);
+  assert.equal(of.result.stop_gate, "fingerprint", of.result.reason);
+  assert.match(of.result.reason, /^judge mutated worktree: fleet-test-judge/);
+  // the fleet's own file removed during a judge run is a stop
+  const s = happy();
+  s["hasher:pre-writers:r1"] = withIgnored({ head: "abc1234def0", tree: "T0" }, { [SETTINGS]: OWN });
+  s["hasher:freeze:f1"] = withIgnored(FP_TESTS, { [SETTINGS]: OWN });
+  s["hasher:fp-post:test-judge:r1"] = withIgnored(FP_TESTS, {});
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "fingerprint", out.result.reason);
 });

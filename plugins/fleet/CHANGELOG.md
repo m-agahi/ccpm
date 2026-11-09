@@ -245,6 +245,19 @@ its notes to this entry.
   problem) stops at once, with no retry.
 - The other haiku steps have no sonnet retry: a relay problem there stops the run as before.
 
+### S3: the fleet's own settings.local.json in the fingerprint (ledger 1988)
+
+- `fleetOwnFile(k, after, wt)` exempts one change only: the key `.claude/settings.local.json`,
+  exactly, in the `ignored` map, when its hash after the step is the sha256 of the exact bytes the
+  workspace step writes for that worktree (`settingsFor(wt)`). Any other path, any other map,
+  other bytes (one added newline is enough), another worktree's bytes, or the file removed still
+  stop the run. The maps and the digests keep the key.
+- It applies to the judge fingerprint (`judged`), the writer-round ownership check, the
+  test-approval-to-freeze compare, the re-freeze check and the code-round hash check.
+- Diagnostic: a stop on that file now says
+  `(not the fleet's own settings: before <sha|absent>, after <sha|absent>, the fleet's own <sha>; the harness or a role rewrote it)`.
+  If the harness rewrote the file, the exemption does not fire; the stop names the cause.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker
