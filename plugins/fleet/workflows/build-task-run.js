@@ -202,7 +202,7 @@ const CALLER_LIMITS = [
 // The plan doc's path, character by character (2.1.6): it reaches git and shell commands.
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
 // stop_gate values: which gate ended a stopped run (null when none applies).
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db"];
 // Run-state milestones, in order, and the step a resumed build runs next.
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "done" };
 // 4.0.0 (1991, ADR-1186): "default" runs the auto gates only for an eligible
@@ -1342,6 +1342,12 @@ const INFRA_SCHEMA = {
     remote_host: STR,
     remote_url: STR,
     remote_url_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
+    // 4.0.0 (1987, 1981)
+    ref_target: STR,
+    test_db: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
+    sweep: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
+    up: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
+    down: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
     project: STR,
     created: { type: "boolean" },
     reused: { type: "boolean" },
@@ -2651,6 +2657,10 @@ function programTable() {
       read_state: READ_STATE_PY,
       state_write: STATE_WRITE_PY,
       parked: PARKED_PY,
+      test_db_decl: TEST_DB_DECL_PY,
+      db_sweep: DB_SWEEP_PY,
+      db_up: DB_UP_PY,
+      db_down: DB_DOWN_PY,
     };
   return PROGRAM_TABLE;
 }
@@ -3992,7 +4002,11 @@ function branchScanPrompt(inputs) {
     "Run this one command exactly as written, unmodified; run nothing else:\n" +
     progCmd("branch_scan", [inputs.main_worktree, inputs.default_branch, inputs.task_id, JSON.stringify(SOURCE_KINDS)]) +
     "\n" +
-    'It prints one JSON object {commits, refs, plan_tip_time, program, digest} (names, hashes and checks only; no message text). Return {status: "ok", reason, commits, refs, plan_tip_time, program, digest} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Non-zero exit -> failed with its stderr.'
+    'It prints one JSON object {commits, refs, plan_tip_time, program, digest} (names, hashes and checks only; no message text). Copy those values exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Non-zero exit -> failed with its stderr.\n' +
+    "Then run this one command exactly as written, unmodified:\n" +
+    progCmd("test_db_decl", [inputs.main_worktree, inputs.default_branch]) +
+    "\nIt prints one JSON object {decl, error, args, program, digest}: return it as test_db, every value copied unchanged. Non-zero exit -> failed with its stderr.\n" +
+    'Return {status: "ok", reason, commits, refs, plan_tip_time, program, digest, test_db}.'
   );
 }
 
@@ -5089,7 +5103,9 @@ function verifyPlanPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> status --porcelain` must be empty; else needs_human.\n" +
+    "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> status --porcelain` must be empty; else needs_human." +
+    (inputs.frozen_resume ? " Exception (frozen_resume is true): the uncommitted paths of a frozen build are expected; list them in reason and go on (the workflow checks the worktree tree itself)." : "") +
+    "\n" +
     "2. `git -C <main_worktree> cat-file -e '<plan_commit>^{commit}'` (keep the quotes: zsh globs `^`) must succeed; else needs_human.\n" +
     "3. Run this command exactly as written; it prints one JSON object {plan_sha256, program}: return it as plan_hash, both values copied unchanged:\n" +
     planHashCmd(inputs.main_worktree, inputs.plan_commit, inputs.plan_path) +
@@ -5101,7 +5117,10 @@ function verifyPlanPrompt(inputs) {
     progCmd("verify_since", [inputs.main_worktree, inputs.plan_commit, inputs.plan_path]) +
     "\n" +
     "It prints one JSON object {head, is_ancestor, commits_since, plan_touched, changed_since, program, digest}. Copy every value unchanged: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Never run git log or git diff yourself for these values. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, head, plan_hash, plan_hash_head, is_ancestor, commits_since, plan_touched, changed_since, args, program, digest}."
+    "6. Run this command exactly as written, unmodified:\n" +
+    progCmd("test_db_decl", [inputs.main_worktree, inputs.default_branch]) +
+    "\nIt prints one JSON object {decl, error, args, program, digest}: return it as test_db, every value copied unchanged. Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, head, plan_hash, plan_hash_head, is_ancestor, commits_since, plan_touched, changed_since, args, program, digest, test_db}."
   );
 }
 
@@ -5174,7 +5193,8 @@ const PURGE_CMD =
   "n=$(" + PURGE_FIND + " | tr -cd '\\0' | wc -c) && " + PURGE_FIND + " | xargs -0 -r rm -rf -- && echo purged=$n";
 // The env every suite run of the frozen tests uses: no bytecode written, no
 // pytest cache (so no stale or planted cache is read either).
-const TEST_ENV = { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" };
+// frozen (4.0.0, 1981): a role DSN goes into a copy, never into this object
+const TEST_ENV = Object.freeze({ PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" });
 const TEST_ENV_NOTE =
   "test_env: set these environment variables for every run of the frozen tests and the suite (frozen-test red check included), so no bytecode or pytest cache is written or read. The workflow deletes all bytecode before every hash check and code-judge run.";
 
@@ -5693,13 +5713,15 @@ print(json.dumps(out, ensure_ascii=False))`;
 
 
 function pushPrompt(inputs) {
+  // 4.0.0 (1981): the repo's pre-push hooks see the run's test database
+  const pg = inputs.hook_env ? "env " + hookEnvPrefix(inputs.hook_env) : "";
   return (
     "Infra step of the fleet build workflow: push the approved fleet branch. No edits, no commits.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
     "1. <branch> must differ from <default_branch>; `git -C <main_worktree> branch --show-current` must equal <branch>; `git -C <main_worktree> rev-parse HEAD` must equal <approved_sha>; `git -C <main_worktree> status --porcelain` must be empty. Any mismatch -> needs_human.\n" +
-    "2. Push ONCE: `git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Never classify the output yourself: run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code:\n" +
+    "2. Push ONCE: `" + pg + "git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Never classify the output yourself: run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code:\n" +
     progCmd("push_classify", []) + " <file> <exit>\n" +
     "   It prints one JSON object {push_result, exit_code, hook_tail, args, program, digest}. Copy all six unchanged (the script recomputes the digest). Then, by push_result:\n" +
     "   - `ok` -> step 3.\n" +
@@ -5707,7 +5729,7 @@ function pushPrompt(inputs) {
     "   - `ambiguous` (git's lines cannot be told from a hook's) -> return status needs_human at once with the last 60 lines of the temp file, no retry.\n" +
     "   - `hook_rejected` (a local pre-push hook declined the push) -> no retry. Return status ok with the program's push_result, exit_code, hook_tail, args and digest.\n" +
     "   - `network` (auth, network, 5xx) -> retry up to 3 times with backoff 5 15 45 (seconds): " +
-    RETRY_SHELL("git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
+    RETRY_SHELL(pg + "git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
     " Exit 0 now -> `ok`. Still failing after the 3 retries -> status failed with the last error.\n" +
     "   Delete the temp file. Step 3 runs only when push_result is `ok`.\n" +
     "3. remote_head through the GitHub API, not git over the network: <owner>/<name> = <remote_slug>. <gh> = `gh-personal` when `command -v gh-personal` succeeds and `gh-personal api user --jq .login` equals <owner>; else `gh`. " +
@@ -5750,7 +5772,7 @@ function commitStepPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "Every git command below runs as <git> = `env GIT_CONFIG_NOSYSTEM=1 git -c core.fsmonitor=false -c core.hooksPath=<H> -C <main_worktree>`, where <H> is <hooks_path> when it is not null, else the output of `git -C <main_worktree> rev-parse --path-format=absolute --git-common-dir` followed by `/hooks`. Never drop or change these options.\n" +
+    "Every git command below runs as <git> = `env GIT_CONFIG_NOSYSTEM=1 " + hookEnvPrefix(inputs.hook_env) + "git -c core.fsmonitor=false -c core.hooksPath=<H> -C <main_worktree>`, where <H> is <hooks_path> when it is not null, else the output of `git -C <main_worktree> rev-parse --path-format=absolute --git-common-dir` followed by `/hooks`. Never drop or change these options.\n" +
     "1. `<git> branch --show-current` must equal <branch> and `<git> rev-parse HEAD` must equal <expected_head>; else needs_human.\n" +
     "2. `<git> add -A`.\n" +
     "3. staged_tree = the output of `<git> write-tree`. If it differs from <code_tree>: commit_result = `tree_mismatch`; do NOT commit; go to step 5.\n" +
@@ -6419,6 +6441,8 @@ const state = {
   // 4.0.0 (1987): the digest of the last freeze and its plan_ref (returned on a stop)
   freezeDigest: null,
   freezePlanRef: null,
+  // 4.0.0 (1981): the run's test database {name, pw, port, env, image, dbs, expires, mechanism}
+  db: null,
 };
 
 function gate(msg) {
@@ -7653,7 +7677,7 @@ async function planAndAudit(ctx0) {
     repo: ctx.remoteSlug,
     base_ref: ctx.baseRef,
     mode: "commit=false",
-  });
+  }, dbInputs("plan"));
   if (ctx.priorDraft) plannerIn.prior_draft = ctx.priorDraft;
   if (ctx.priorRound) plannerIn.prior_round = priorRoundView(ctx.priorRound);
   const plan = requireOk("scope-and-plan", await callRole("scope-and-plan", "role:scope-and-plan" + sfx, plannerIn, "Plan"));
@@ -7788,7 +7812,7 @@ async function planAndAudit(ctx0) {
         caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc, auto_dont_care: autoDontCare },
         // every refused round before this one (4.0.0: accumulated), or null
         prior_round: priorRoundView(prior),
-      }),
+      }, dbInputs("audit")),
       "Plan",
     ),
   );
@@ -8054,7 +8078,7 @@ function isIacPath(p) {
 // 4.0.0: repo files only the fleet's own config may hold (exact repo paths,
 // compared case-insensitively); a change to one is fenced in every mode.
 // Stream S5 adds the throwaway-DB declaration here.
-const FENCED_FILES = [];
+const FENCED_FILES = [".fleet-test-db.json"];
 
 // G3: why a planned path is outside the scope fence (null when inside).
 function fencePathProblem(p) {
@@ -8343,6 +8367,8 @@ async function planMode(input, date) {
   // plan commit, as planner-only inputs; the tip time is the scan program's
   const tip = scan.plan_tip_time === null || scan.plan_tip_time === undefined ? null : scan.plan_tip_time;
   const parked = await loadParked(lay.scratch, Number.isInteger(tip) && tip >= 0 ? tip : null);
+  // 4.0.0 (1981): the throwaway test database, up through plan-audit
+  await testDbStep(scan.test_db, "infra:branch-scan", lay.mainWt, ws.defaultBranch, "Workspace", ["plan", "audit"], names.taskId);
 
   phase("Plan");
   // a stop between the planner and the plan commit parks the draft (2.1.4: the
@@ -8660,7 +8686,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const criteria = normCriteria(ref.criteria, pf.test_cmd);
   const v = await infra(
     "infra:verify-plan",
-    verifyPlanPrompt({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_path: ref.plan_path }),
+    verifyPlanPrompt(Object.assign({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_path: ref.plan_path, default_branch: defaultBranch }, typeof input.freeze_digest === "string" ? { frozen_resume: true } : {})),
     "Verify",
     JUDGE_AGENT,
   );
@@ -8717,6 +8743,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   state.path = shortPath ? "short" : "full";
   const maxTestRounds = shortPath ? MAX_SHORT_TEST_ROUNDS : MAX_TEST_ROUNDS;
   const testable = testableOf(criteria);
+  // 4.0.0 (1981): the throwaway test database, one database per consumer
+  const writerDbs = shortPath ? ["w_short"] : testable.map((c) => "w_" + c.id);
+  await testDbStep(v.test_db, "infra:verify-plan", mainWt, defaultBranch, "Verify", writerDbs.concat(["plan", "audit", "tjudge", "coder", "cjudge", "review", "hooks"]), names.taskId);
   const frozenFiles = [];
   for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
   // the plan ref is a git object: the hasher's refs/fleet/* snapshot freezes it
@@ -8982,7 +9011,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         await pathRecheck("push" + (pushes > 1 ? ":p" + pushes : ""), "PR");
         const push = await infra(
           pushLabel,
-          pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug }),
+          pushPrompt(Object.assign({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug }, hookEnv() ? { hook_env: hookEnv() } : {})),
           "PR",
         );
         if (push.push_result === "hook_rejected") {
@@ -9145,8 +9174,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         test_files: files,
         short_path_note: SHORT_WRITER_NOTE,
         test_cmd: planFacts.test_cmd,
-        test_env: TEST_ENV,
-        test_env_note: TEST_ENV_NOTE,
+        test_env: testEnvFor("w_short"),
+        test_env_note: testEnvNote(),
         routed_findings: pending.flatMap((p) => p.findings),
       },
       codeFindings ? { code_judge_findings: codeFindings.filter((f) => ids.indexOf(f.criterion) >= 0) } : {}),
@@ -9203,8 +9232,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
               criterion: writerCriterion(c),
               test_files: c.test_files,
               test_cmd: planFacts.test_cmd,
-              test_env: TEST_ENV,
-              test_env_note: TEST_ENV_NOTE,
+              test_env: testEnvFor("w_" + c.id),
+              test_env_note: testEnvNote(),
               routed_findings: p.findings,
             },
             codeFindings ? { code_judge_findings: codeFindings.filter((f) => f.criterion === c.id) } : {}),
@@ -9296,8 +9325,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         code_tree: codeTree,
         writer_outputs: judgeFirst ? testable.map((c) => writerOut[c.id]).filter(Boolean) : roundOut,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
-        test_env: TEST_ENV,
-        test_env_note: TEST_ENV_NOTE,
+        test_env: testEnvFor("tjudge"),
+        test_env_note: testEnvNote(),
       });
       // every round of a fix_tests re-entry carries the code-judge context
       if (codeFindings) judgeInputs.code_judge_findings = codeFindings;
@@ -9437,8 +9466,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       code_tree: codeTree,
       plan_commit: ref.plan_commit,
       code_base_ref: codeBaseRef,
-      test_env: TEST_ENV,
-      test_env_note: TEST_ENV_NOTE,
+      test_env: testEnvFor("coder"),
+      test_env_note: testEnvNote(),
     });
     // the role check runs after the hash check: a hash violation is reported
     // even when the coder's output is also malformed or not ok
@@ -9529,6 +9558,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         held_out_results: HELD_OUT_NOT_RUN,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
         repo_obligations: judgeObligations,
+        test_env: testEnvFor("cjudge"),
       }),
       mainWt,
       "Code",
@@ -9612,7 +9642,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     await pathRecheck("commit:r" + m, "Code");
     const cs = await infra(
       "infra:commit:r" + m,
-      commitStepPrompt({
+      commitStepPrompt(Object.assign({
         main_worktree: mainWt,
         branch,
         expected_head: expectedHead,
@@ -9620,7 +9650,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         subject,
         // the hooks path frozen at freeze (null: git's default hooks dir)
         hooks_path: frozen.git["core.hooksPath"] && frozen.git["core.hooksPath"] !== "UNSET" ? frozen.git["core.hooksPath"] : null,
-      }),
+      }, hookEnv() ? { hook_env: hookEnv() } : {})),
       "Code",
     );
     if (cs.staged_tree !== codeTree)
@@ -9710,6 +9740,8 @@ async function reviewStep(k, ctx) {
       mode: "self-authored",
       fleet: true,
     };
+    // 4.0.0 (1981): the review runs repo tests against its own database
+    Object.assign(inputs, dbInputs("review"));
     const pre = await hasher("hasher:pre-review:v" + k, ctx.mainWt, ctx.hashedFiles, "Review");
     if (pre.fingerprint.head !== ctx.approvedSha)
       halt("needs_human", "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha, "review");
@@ -10128,6 +10160,609 @@ async function writeBack(ctx) {
   return out;
 }
 
+// ---------------------------------------------------------------- 4.0.0 (1981): throwaway test database
+//
+// A repo opts in with .fleet-test-db.json, read at origin/<default branch>.
+// One podman container per run, bound to 127.0.0.1, with resource caps and
+// self-expiry; one database per role; the role gets the DSN in its test_env.
+// The name is fleet-db-*; every program refuses any other name and any
+// tf-local name itself (on a host with no podman shim it is the only guard).
+
+// Reads and checks .fleet-test-db.json at origin/<default branch>: {decl, error, args}.
+// TEST_DB_DECL_PY_BEGIN
+const TEST_DB_DECL_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, os, re, subprocess, sys
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+# fleet 4.0.0 (1981): the throwaway test database declaration, read at
+# origin/<default branch> (never the worktree: a role cannot declare it)
+wt, branch = sys.argv[1], sys.argv[2]
+out = {'decl': None, 'error': None, 'args': [wt, branch]}
+def done():
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
+def problem(d):
+    if not isinstance(d, dict):
+        return 'not a JSON object'
+    if sorted(d) != ['engine', 'env', 'major', 'version']:
+        return 'keys must be exactly version, engine, major, env'
+    if isinstance(d['version'], bool) or d['version'] != 1:
+        return 'version must be 1'
+    if d['engine'] != 'mariadb':
+        return 'engine must be mariadb'
+    if not isinstance(d['major'], str) or not re.fullmatch(r'[0-9]{1,3}\.[0-9]{1,3}', d['major']):
+        return 'major must be a string like 11.4'
+    if not isinstance(d['env'], str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,40}_TEST_DSN', d['env']):
+        return 'env must match ^[A-Z][A-Z0-9_]{0,40}_TEST_DSN$'
+    return None
+if not re.fullmatch(r'[A-Za-z0-9._/-]{1,200}', branch) or '..' in branch or branch.startswith(('-', '/')):
+    out['error'] = 'default branch name refused'
+    done()
+G = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
+base = 'refs/remotes/origin/' + branch
+if subprocess.run(G + ['rev-parse', '--verify', '-q', base + '^{commit}'], capture_output=True).returncode != 0:
+    out['error'] = 'origin/' + branch + ' not found'
+    done()
+spec = base + ':.fleet-test-db.json'
+t = subprocess.run(G + ['cat-file', '-t', spec], capture_output=True)
+if t.returncode != 0:
+    done()
+if t.stdout.strip() != b'blob':
+    out['error'] = '.fleet-test-db.json is not a file'
+    done()
+raw = subprocess.run(G + ['cat-file', 'blob', spec], capture_output=True).stdout
+if len(raw) > 4096:
+    out['error'] = '.fleet-test-db.json is larger than 4096 bytes'
+    done()
+try:
+    d = json.loads(raw.decode('utf-8'))
+except ValueError:
+    out['error'] = '.fleet-test-db.json is not JSON'
+    done()
+p = problem(d)
+if p:
+    out['error'] = p
+else:
+    out['decl'] = d
+done()`;
+// TEST_DB_DECL_PY_END
+
+// Removes expired fleet test database containers only: {podman, removed, kept, errors}.
+// DB_SWEEP_PY_BEGIN
+const DB_SWEEP_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, os, re, shutil, subprocess, sys, time
+def lift():
+    # podman (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
+# fleet 4.0.0 (1981): the only containers these programs touch
+NAME = re.compile(r'fleet-db-[a-z0-9-]{1,80}')
+def name_ok(n):
+    return isinstance(n, str) and NAME.fullmatch(n) is not None and 'tf-local' not in n
+def done(out):
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
+def fail(code, msg):
+    sys.stderr.write(msg + '\n')
+    sys.exit(code)
+PM = shutil.which('podman')
+def pm(*a, timeout=120):
+    return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
+def tail(r):
+    return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
+# Removes only containers with the label fleet.db=1, a name fleet-db-*, and
+# a fleet.expires time in the past. Any other container is never touched.
+out = {'podman': PM is not None, 'removed': [], 'kept': [], 'errors': []}
+if PM:
+    r = pm('ps', '-a', '--filter', 'label=fleet.db=1', '--format', 'json')
+    rows = None
+    if r.returncode == 0:
+        try:
+            rows = json.loads(r.stdout.decode('utf-8') or '[]') or []
+        except ValueError:
+            rows = None
+    if not isinstance(rows, list):
+        out['errors'].append('podman ps: ' + tail(r))
+        rows = []
+    now = int(time.time())
+    for c in rows:
+        names = c.get('Names') if isinstance(c, dict) else None
+        n = names[0] if isinstance(names, list) and names and isinstance(names[0], str) else ''
+        labels = c.get('Labels') if isinstance(c, dict) and isinstance(c.get('Labels'), dict) else {}
+        exp = labels.get('fleet.expires')
+        expired = isinstance(exp, str) and re.fullmatch(r'[0-9]{1,12}', exp) is not None and int(exp) < now
+        if labels.get('fleet.db') != '1' or not name_ok(n) or not expired:
+            if n:
+                out['kept'].append(n)
+            continue
+        rr = pm('rm', '-f', n)
+        if rr.returncode == 0:
+            out['removed'].append(n)
+        else:
+            out['errors'].append(n + ': ' + tail(rr))
+done(out)`;
+// DB_SWEEP_PY_END
+
+// Starts the run's test database, or adds databases to it: {name, port, dbs, expiry, args}.
+// DB_UP_PY_BEGIN
+const DB_UP_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, os, re, shutil, subprocess, sys, time
+def lift():
+    # podman (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
+# fleet 4.0.0 (1981): the only containers these programs touch
+NAME = re.compile(r'fleet-db-[a-z0-9-]{1,80}')
+def name_ok(n):
+    return isinstance(n, str) and NAME.fullmatch(n) is not None and 'tf-local' not in n
+def done(out):
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
+def fail(code, msg):
+    sys.stderr.write(msg + '\n')
+    sys.exit(code)
+PM = shutil.which('podman')
+def pm(*a, timeout=120):
+    return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
+def tail(r):
+    return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
+# usage: db_up.py up <name> <image> <ttl> <nonce> <dbs json> <password>
+#        db_up.py add <name> <dbs json> <password>
+argv = sys.argv[1:]
+mode = argv[0] if argv else ''
+if mode not in ('up', 'add') or len(argv) != (7 if mode == 'up' else 4):
+    fail(2, 'usage: db_up.py up <name> <image> <ttl> <nonce> <dbs> <password> | add <name> <dbs> <password>')
+name, pw = argv[1], argv[-1]
+if not name_ok(name):
+    fail(2, 'container name refused: ' + name)
+if not re.fullmatch(r'[0-9a-f]{24}', pw):
+    fail(2, 'password refused')
+try:
+    dbs = json.loads(argv[-2])
+except ValueError:
+    dbs = None
+if not isinstance(dbs, list) or not 1 <= len(dbs) <= 64 or len(set(map(str, dbs))) != len(dbs) or not all(isinstance(d, str) and re.fullmatch(r'fleet_[a-z0-9_]{1,48}', d) for d in dbs):
+    fail(2, 'database names refused')
+if not PM:
+    fail(4, 'no podman on PATH: no container started')
+out = {'name': name, 'port': None, 'dbs': dbs, 'expiry': None, 'args': argv[:-1]}
+def sql(stmt):
+    return pm('exec', '-e', 'MYSQL_PWD=' + pw, name, 'mariadb', '--protocol=tcp', '-h127.0.0.1', '-uroot', '-e', stmt, timeout=60)
+def create():
+    return sql(' '.join('CREATE DATABASE IF NOT EXISTS ' + d + ';' for d in dbs))
+if mode == 'add':
+    i = pm('container', 'inspect', '--format', '{{index .Config.Labels "fleet.db"}}', name)
+    if i.returncode != 0 or i.stdout.strip() != b'1':
+        fail(5, 'no fleet test database container ' + name)
+    c = create()
+    if c.returncode != 0:
+        fail(6, 'CREATE DATABASE failed: ' + tail(c))
+    done(out)
+image, ttl_s, nonce = argv[2], argv[3], argv[4]
+if not re.fullmatch(r'[a-z0-9][a-z0-9./_-]{0,200}@sha256:[0-9a-f]{64}', image):
+    fail(2, 'the image must be pinned by digest: ' + image)
+if not re.fullmatch(r'[0-9]{2,5}', ttl_s) or not 60 <= int(ttl_s) <= 86400:
+    fail(2, 'ttl refused')
+if not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', nonce):
+    fail(2, 'nonce refused')
+ttl = int(ttl_s)
+# self-expiry first: podman run --timeout, else a systemd-run timer; neither -> no container
+h = pm('run', '--help')
+SR = shutil.which('systemd-run')
+if h.returncode == 0 and b'--timeout' in h.stdout:
+    mech = 'podman-timeout'
+elif SR:
+    mech = 'systemd-run'
+else:
+    fail(4, 'no expiry mechanism (podman run --timeout or systemd-run): no container started')
+expires = int(time.time()) + ttl
+cmd = ['run', '-d', '--rm', '--name', name, '--label', 'fleet.db=1', '--label', 'fleet.nonce=' + nonce, '--label', 'fleet.expires=' + str(expires),
+       '-p', '127.0.0.1::3306', '--tmpfs', '/var/lib/mysql:size=1g', '--memory', '1g', '--cpus', '2', '--pids-limit', '512',
+       '-e', 'MARIADB_ROOT_PASSWORD=' + pw]
+if mech == 'podman-timeout':
+    cmd += ['--timeout', str(ttl)]
+r = pm(*(cmd + [image]), timeout=900)
+if r.returncode != 0:
+    pm('rm', '-f', name)
+    fail(5, 'podman run failed: ' + tail(r))
+def gone(code, msg):
+    pm('rm', '-f', name)
+    fail(code, msg + '; container removed')
+if mech == 'systemd-run':
+    s = subprocess.run([SR, '--user', '--on-active=' + str(ttl) + 's', '--unit=' + name + '-expire', PM, 'rm', '-f', name], capture_output=True, timeout=60, preexec_fn=lift)
+    if s.returncode != 0:
+        gone(4, 'systemd-run expiry timer failed: ' + tail(s))
+p = pm('port', name, '3306/tcp')
+lines = [l.strip() for l in p.stdout.decode('utf-8', 'replace').splitlines() if l.strip()]
+ports = [re.fullmatch(r'127\.0\.0\.1:([0-9]{1,5})', l) for l in lines]
+if p.returncode != 0 or not ports or not all(ports) or len(set(m.group(1) for m in ports)) != 1:
+    gone(5, 'port 3306 is not published on 127.0.0.1 only: ' + repr(lines))
+port = int(ports[0].group(1))
+deadline = time.time() + 60
+while True:
+    k = pm('exec', '-e', 'MYSQL_PWD=' + pw, name, 'mariadb-admin', '--protocol=tcp', '-h127.0.0.1', '-uroot', 'ping', timeout=30)
+    if k.returncode == 0:
+        break
+    if time.time() > deadline:
+        gone(6, 'the database did not answer within 60 s: ' + tail(k))
+    time.sleep(2)
+c = create()
+if c.returncode != 0:
+    gone(6, 'CREATE DATABASE failed: ' + tail(c))
+out['port'] = port
+out['expiry'] = {'mechanism': mech, 'expires': expires}
+done(out)`;
+// DB_UP_PY_END
+
+// Removes the run's test database container: {removed, absent, error, args}.
+// DB_DOWN_PY_BEGIN
+const DB_DOWN_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+import hashlib, json, os, re, shutil, subprocess, sys, time
+def lift():
+    # podman (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
+# fleet 4.0.0 (1981): the only containers these programs touch
+NAME = re.compile(r'fleet-db-[a-z0-9-]{1,80}')
+def name_ok(n):
+    return isinstance(n, str) and NAME.fullmatch(n) is not None and 'tf-local' not in n
+def done(out):
+    out['program'] = _PROG
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
+def fail(code, msg):
+    sys.stderr.write(msg + '\n')
+    sys.exit(code)
+PM = shutil.which('podman')
+def pm(*a, timeout=120):
+    return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
+def tail(r):
+    return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
+# usage: db_down.py <name> <nonce>. Removes the container only when it
+# carries fleet.db=1 and this run's fleet.nonce.
+argv = sys.argv[1:]
+if len(argv) != 2:
+    fail(2, 'usage: db_down.py <name> <nonce>')
+name, nonce = argv
+if not name_ok(name):
+    fail(2, 'container name refused: ' + name)
+out = {'removed': False, 'absent': False, 'error': None, 'args': argv}
+if not PM:
+    out['error'] = 'no podman on PATH'
+    done(out)
+i = pm('container', 'inspect', name)
+if i.returncode != 0:
+    out['absent'] = True
+    done(out)
+try:
+    info = json.loads(i.stdout.decode('utf-8'))
+    labels = info[0]['Config']['Labels'] or {}
+except (ValueError, LookupError, TypeError):
+    labels = {}
+if labels.get('fleet.db') != '1' or labels.get('fleet.nonce') != nonce:
+    out['error'] = 'not this run\'s fleet test database (labels fleet.db, fleet.nonce)'
+    done(out)
+r = pm('rm', '-f', name)
+if r.returncode == 0:
+    out['removed'] = True
+else:
+    out['error'] = 'podman rm: ' + tail(r)
+done(out)`;
+// DB_DOWN_PY_END
+
+// engine:major -> the image, pinned by digest (an index digest, checked with
+// skopeo inspect --raw | sha256sum on 2026-11-09: mariadb 11.4.13)
+const DB_IMAGES = {
+  "mariadb:11.4": "docker.io/library/mariadb@sha256:d1891ede5a559f1086f55053bb8cc1569b0298338c4d72d71725a7f74f6ba620",
+};
+const DB_DECL_FILE = ".fleet-test-db.json";
+// the podman --timeout (or the systemd-run timer): a crashed workflow's container ends
+const DB_TTL_SECONDS = 6 * 3600;
+const DB_NAME_RE = /^fleet-db-[a-z0-9-]{1,80}$/;
+const DB_ENV_RE = /^[A-Z][A-Z0-9_]{0,40}_TEST_DSN$/;
+const DB_DSN_NOTE =
+  "is this run's throwaway MariaDB on 127.0.0.1, with one database for this role only: use it for the database-backed tests and never point a test at any other database. The workflow removes it at the end of the run.";
+
+// Why a declaration is refused (null: it is fine). The program checks the same.
+function testDbDeclProblem(d) {
+  if (!d || typeof d !== "object" || Array.isArray(d)) return "not a JSON object";
+  if (canonical(Object.keys(d).sort()) !== canonical(["engine", "env", "major", "version"])) return "keys must be exactly version, engine, major, env";
+  if (d.version !== 1) return "version must be 1";
+  if (d.engine !== "mariadb") return "engine must be mariadb";
+  if (typeof d.major !== "string" || !/^[0-9]{1,3}\.[0-9]{1,3}$/.test(d.major)) return "major must be a string like 11.4";
+  if (typeof d.env !== "string" || !DB_ENV_RE.test(d.env)) return "env " + JSON.stringify(d.env) + " must match " + String(DB_ENV_RE);
+  return null;
+}
+
+function dbContainerName(taskId, nonce) {
+  const t = String(taskId).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "task";
+  const n = String(nonce).toLowerCase().replace(/[^a-z0-9]+/g, "").slice(-12) || "0";
+  return "fleet-db-" + t + "-" + n;
+}
+// the database of a consumer (a role, or a writer per criterion)
+function dbOf(consumer) {
+  return "fleet_" + String(consumer).toLowerCase().replace(/[^a-z0-9_]+/g, "_").slice(0, 40);
+}
+function dbDsn(consumer) {
+  const db = dbOf(consumer);
+  if (state.db.dbs.indexOf(db) < 0) halt("failed", "internal: no test database " + db + " in " + state.db.name, "db");
+  return "mysql://root:" + state.db.pw + "@127.0.0.1:" + state.db.port + "/" + db;
+}
+// test_env for one consumer: TEST_ENV, plus the DSN of its own database when
+// the run has a test database. Never the shared object (one DSN per role).
+function testEnvFor(consumer) {
+  if (!state.db) return TEST_ENV;
+  const o = Object.assign({}, TEST_ENV);
+  o[state.db.env] = dbDsn(consumer);
+  return o;
+}
+function testEnvNote() {
+  return state.db ? TEST_ENV_NOTE + " " + state.db.env + " " + DB_DSN_NOTE : TEST_ENV_NOTE;
+}
+// for roles that get test_env only when the run has a test database
+function dbInputs(consumer) {
+  return state.db ? { test_env: testEnvFor(consumer), test_env_note: testEnvNote() } : {};
+}
+// the env the repo's hooks get in the commit step and the push
+function hookEnv() {
+  if (!state.db) return null;
+  const o = {};
+  o[state.db.env] = dbDsn("hooks");
+  return o;
+}
+function hookEnvPrefix(he) {
+  return he ? Object.keys(he).map((k) => k + "=" + shQuote(he[k])).join(" ") + " " : "";
+}
+
+function dbUpPrompt(inputs, cmdArgs) {
+  return (
+    "Infra step of the fleet build workflow: " + (inputs.mode === "up" ? "start this run's throwaway test database (a local podman container bound to 127.0.0.1)" : "add databases to this run's throwaway test database") +
+    ". Run only the command(s) below, each exactly as written. Never start, stop, exec into or remove any other container; never run anything named tf-local*; no git command; change no repo file.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    (inputs.mode === "up"
+      ? "1. Run this one command:\n" + progCmd("db_sweep", []) + "\nIt prints one JSON object {podman, removed, kept, errors, program, digest}: return it as sweep, every value copied unchanged (the script recomputes the digest). Non-zero exit -> sweep null; go on.\n2. "
+      : "") +
+    "Run this one command as one Bash call with timeout 900000 ms:\n" +
+    progCmd("db_up", cmdArgs) +
+    "\nIt prints one JSON object {name, port, dbs, expiry, args, program, digest}: return it as up, every value copied unchanged (the script recomputes the digest). Non-zero exit -> status needs_human with its stderr (the program left no container running).\n" +
+    "Return {status, reason, " + (inputs.mode === "up" ? "sweep, " : "") + "up}."
+  );
+}
+
+function dbDownPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: remove this run's throwaway test database container. Run only this one command, exactly as written; touch no other container and run nothing named tf-local*:\n" +
+    progCmd("db_down", [inputs.name, inputs.nonce]) +
+    "\nIt prints one JSON object {removed, absent, error, args, program, digest}: return it as down, every value copied unchanged (the script recomputes the digest). Non-zero exit -> down null and the stderr in reason.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\nReturn {status, reason, down}."
+  );
+}
+
+async function dbDispatch(label, prompt, phaseName) {
+  const r = await dispatch(label, prompt, { schema: INFRA_SCHEMA, phase: phaseName });
+  if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"), "db");
+  return r;
+}
+
+// The declaration relay of a read step (`test_db`), then the database:
+// started on the first call, extended with the missing databases later.
+// consumers: the roles (and writers) that get a DSN in this mode.
+async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, taskId) {
+  if (!t || typeof t !== "object") halt("failed", label + ": no test_db relay (the " + DB_DECL_FILE + " read)", "db");
+  requireProgram(t, "test_db_decl", label + " (test_db)", "failed", "db");
+  if (!relayDigestOk(t, ["decl", "error", "args"], "test_db_decl") || canonical(t.args) !== canonical([wt, defaultBranch]))
+    halt("failed", label + ": the relayed " + DB_DECL_FILE + " read does not match the program's digest or arguments", "db");
+  if (t.error !== null) halt("needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + t.error, "db");
+  if (t.decl === null) {
+    if (state.db) halt("needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " is gone, but this run started a test database", "db");
+    return;
+  }
+  const dp = testDbDeclProblem(t.decl);
+  if (dp) halt("needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + dp, "db");
+  const image = DB_IMAGES[t.decl.engine + ":" + t.decl.major];
+  if (!image) halt("needs_human", DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IMAGES).join(", ") + ")", "db");
+  const want = [];
+  for (const c of consumers) if (want.indexOf(dbOf(c)) < 0) want.push(dbOf(c));
+  if (state.db) {
+    if (state.db.env !== t.decl.env || state.db.image !== image) halt("needs_human", DB_DECL_FILE + " changed during the run", "db");
+    const missing = want.filter((d) => state.db.dbs.indexOf(d) < 0);
+    if (!missing.length) return;
+    const al = "infra:db-up:add";
+    await pathRecheck("db-up:add", phaseName);
+    const ra = await dbDispatch(al, dbUpPrompt({ mode: "add", name: state.db.name, dbs: missing }, ["add", state.db.name, JSON.stringify(missing), state.db.pw]), phaseName);
+    const ua = ra.up;
+    requireProgram(ua, "db_up", al, "failed", "db");
+    if (!relayDigestOk(ua, ["name", "port", "dbs", "expiry", "args"], "db_up") || ua.name !== state.db.name || canonical(ua.dbs) !== canonical(missing) || canonical(ua.args) !== canonical(["add", state.db.name, JSON.stringify(missing)]))
+      halt("failed", al + ": the relayed result does not match the program's digest or arguments", "db");
+    state.db.dbs = state.db.dbs.concat(missing);
+    gate("test database " + state.db.name + ": added " + missing.join(", "));
+    return;
+  }
+  const name = dbContainerName(taskId, state.nonce);
+  if (!DB_NAME_RE.test(name) || /tf-local/.test(name)) halt("failed", "internal: test database name " + JSON.stringify(name) + " refused", "db");
+  // the throwaway password: visible in transcripts (accepted: a localhost database of this run)
+  const pw = sha256Hex(state.nonce + ":db").slice(0, 24);
+  const args = ["up", name, image, String(DB_TTL_SECONDS), state.nonce, JSON.stringify(want)];
+  await pathRecheck("db-up", phaseName);
+  const r = await dbDispatch("infra:db-up", dbUpPrompt({ mode: "up", name, image, ttl: DB_TTL_SECONDS, nonce: state.nonce, dbs: want }, args.concat([pw])), phaseName);
+  const sw = r.sweep;
+  if (sw && relayDigestOk(sw, ["podman", "removed", "kept", "errors"], "db_sweep"))
+    gate("test database sweep: removed " + (Array.isArray(sw.removed) && sw.removed.length ? sw.removed.join(", ") : "none") + (Array.isArray(sw.errors) && sw.errors.length ? "; errors: " + sw.errors.join("; ") : ""));
+  else gate("test database sweep: no usable result (it removes expired fleet-db-* containers only; the next run sweeps again)");
+  const u = r.up;
+  requireProgram(u, "db_up", "infra:db-up", "failed", "db");
+  if (!relayDigestOk(u, ["name", "port", "dbs", "expiry", "args"], "db_up") || canonical(u.args) !== canonical(args))
+    halt("failed", "infra:db-up: the relayed result does not match the program's digest or arguments", "db");
+  if (u.name !== name || canonical(u.dbs) !== canonical(want)) halt("failed", "infra:db-up: the program started " + JSON.stringify(u.name) + ", not " + name, "db");
+  if (!Number.isInteger(u.port) || u.port < 1 || u.port > 65535) halt("failed", "infra:db-up: no usable port " + JSON.stringify(u.port === undefined ? null : u.port), "db");
+  const ex = u.expiry;
+  if (!ex || typeof ex !== "object" || ["podman-timeout", "systemd-run"].indexOf(ex.mechanism) < 0 || !Number.isInteger(ex.expires))
+    halt("failed", "infra:db-up: no self-expiry recorded", "db");
+  state.db = { name, pw, port: u.port, env: t.decl.env, image, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
+  gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + "; " + t.decl.env + " goes to each role's test_env");
+}
+
+// main's finally: remove the run's test database. Outside the agent cap;
+// never throws (a stop here would replace the run's own result).
+async function dbTeardown() {
+  const db = state.db;
+  if (!db) return;
+  state.db = null;
+  const later = "; it ends by itself (" + db.mechanism + ", fleet.expires " + db.expires + ")";
+  try {
+    state.agents++;
+    const r = await agent(nonced(dbDownPrompt({ name: db.name, nonce: state.nonce })), { label: "infra:db-down", model: INFRA_MODEL, schema: INFRA_SCHEMA, phase: "Cleanup" });
+    const d = r && typeof r === "object" ? r.down : null;
+    if (r && r.status === "ok" && d && relayDigestOk(d, ["removed", "absent", "error", "args"], "db_down") && canonical(d.args) === canonical([db.name, state.nonce]) && (d.removed === true || d.absent === true))
+      gate("test database " + db.name + (d.removed ? " removed" : " already gone"));
+    else gate("test database " + db.name + " not confirmed removed" + (d && typeof d.error === "string" ? " (" + d.error + ")" : "") + later);
+  } catch (e) {
+    gate("test database " + db.name + " teardown failed (" + String((e && e.message) || e) + ")" + later);
+  }
+}
+
 // ---------------------------------------------------------------- main
 
 async function main(input) {
@@ -10151,7 +10786,12 @@ async function main(input) {
   // 4.0.0 (1987): the caller-held digest of a freeze, for a frozen resume
   if (input.freeze_digest !== undefined && (mode !== "build" || typeof input.freeze_digest !== "string" || !/^[0-9a-f]{64}$/.test(input.freeze_digest)))
     stop("needs_human", "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JSON.stringify(input.freeze_digest));
-  return mode === "plan" ? planMode(input, input.date) : buildMode(input, input.date);
+  // 4.0.0 (1981): the run's test database goes, whatever the result
+  try {
+    return await (mode === "plan" ? planMode(input, input.date) : buildMode(input, input.date));
+  } finally {
+    await dbTeardown();
+  }
 }
 
 // ---------------------------------------------------------------- entry

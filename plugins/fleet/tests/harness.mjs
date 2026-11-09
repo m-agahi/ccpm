@@ -288,6 +288,17 @@ export async function runOne(script, args0) {
       fleetRefs["fleetref:" + inputsOf(prompt).state_ref] = "f".repeat(40);
       return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
     }
+    // 4.0.0 (1981): an unscripted test database starts (podman stubbed out)
+    if (!(label in script) && /^infra:db-up/.test(label)) {
+      const i = inputsOf(prompt);
+      const up = { name: i.name, port: 40000, dbs: i.dbs, expiry: i.mode === "up" ? { mechanism: "podman-timeout", expires: 1700000000 } : null, args: i.mode === "up" ? ["up", i.name, i.image, String(i.ttl), i.nonce, JSON.stringify(i.dbs)] : ["add", i.name, JSON.stringify(i.dbs)] };
+      if (i.mode !== "up") up.port = null;
+      return Object.assign({ status: "ok", reason: "up", up }, i.mode === "up" ? { sweep: { podman: true, removed: [], kept: [], errors: [] } } : {});
+    }
+    if (!(label in script) && /^infra:db-down$/.test(label)) {
+      const i = inputsOf(prompt);
+      return { status: "ok", reason: "removed", down: { removed: true, absent: false, error: null, args: [i.name, i.nonce] } };
+    }
     // 4.0.0 (1987): unscripted freeze-ref writes land on the freeze tree
     if (!(label in script) && /^infra:freeze-ref:/.test(label)) {
       const i = inputsOf(prompt);
@@ -347,6 +358,11 @@ export async function runOne(script, args0) {
         if (inputsOf(prompt).base_tree) o.changed = r.changed;
         r.digest = sha256(canon(o));
       }
+    }
+    // 4.0.0 (1981): a read step's stub with no test_db finds no declaration
+    if (/^infra:(branch-scan|verify-plan)$/.test(label) && !raw && r.status === "ok" && !("test_db" in r)) {
+      const i = inputsOf(prompt);
+      r.test_db = { decl: null, error: null, args: [i.main_worktree, i.default_branch] };
     }
     // a run-state write moves its ref
     if (label.startsWith("infra:state:") && !raw && r.status === "ok" && typeof r.state_sha === "string")
@@ -667,7 +683,7 @@ export const PROGRAM_LABELS = [
   [/^infra:path-check:/, [[null, "path_check", PC_KEYS]]],
   [/^workspace$/, [["remote_url_check", "remote_url", ["url", "args"]]]],
   [/^hasher:/, [[null, "hasher", "hasher"]]],
-  [/^infra:branch-scan$/, [[null, "branch_scan", ["commits", "refs", "plan_tip_time"]]]],
+  [/^infra:branch-scan$/, [[null, "branch_scan", ["commits", "refs", "plan_tip_time"]], ["test_db", "test_db_decl", ["decl", "error", "args"]]]],
   // 4.0.0 (1986)
   [/^infra:load-parked$/, [[null, "parked", ["parked", "args"]]]],
   [/^infra:park-plan/, [["findings_write", "parked", ["written", "sha256", "args"]]]],
@@ -676,7 +692,7 @@ export const PROGRAM_LABELS = [
   [/^infra:commit-plan/, [[null, "plan_ref_write", ["head", "tag_sha"]]]],
   [/^infra:verify-plan-commit/, [["plan_files", "plan_files", ["head", "files", "args"]], ["plan_hash", "plan_hash", null], ["plan_ref", "plan_ref", null]]],
   [/^infra:load-ref/, [[null, "plan_ref", null]]],
-  [/^infra:verify-plan$/, [[null, "verify_since", ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"]], ["plan_hash", "plan_hash", null], ["plan_hash_head", "plan_hash", null]]],
+  [/^infra:verify-plan$/, [[null, "verify_since", ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"]], ["plan_hash", "plan_hash", null], ["plan_hash_head", "plan_hash", null], ["test_db", "test_db_decl", ["decl", "error", "args"]]]],
   [/^infra:read-state$/, [[null, "read_state", ["exists", "target", "message", "head", "head_tree", "clean"]]]],
   [/^infra:state:/, [[null, "state_write", ["head", "state_sha"]]]],
   [/^infra:tf-gate:/, [[null, "tf_gate", ["touched", "iac_files", "problems", "hints", "args"]]]],
@@ -691,6 +707,9 @@ export const PROGRAM_LABELS = [
   [/^infra:review-paths:/, [[null, "review_paths", ["changed_paths"]]]],
   [/^infra:precommit-ids/, [[null, "precommit_ids", null]]],
   [/^infra:check-scripts/, [[null, "script_check", ["checks"]]]],
+  // 4.0.0 (1981)
+  [/^infra:db-up/, [["sweep", "db_sweep", ["podman", "removed", "kept", "errors"]], ["up", "db_up", ["name", "port", "dbs", "expiry", "args"]]]],
+  [/^infra:db-down$/, [["down", "db_down", ["removed", "absent", "error", "args"]]]],
 ];
 function pick(o, keys) {
   const x = {};

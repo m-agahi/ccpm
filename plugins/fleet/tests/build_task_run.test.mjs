@@ -2244,6 +2244,8 @@ test("build mode: preflight first, then workspace, verify, then the writers' bas
     branch: "fleet/l42-add-thing",
     plan_commit: PC,
     plan_path: "docs/plans/x.md",
+    // 4.0.0 (1981): the test database declaration is read at origin/<default>
+    default_branch: "master",
   });
   assert.ok(!call(out, "infra:verify-plan").prompt.includes(".fleet/"));
   assert.equal(call(out, "infra:verify-plan").opts.agentType, "fleet:judge");
@@ -5505,6 +5507,9 @@ const ARRAY_SITES = {
   "f.rounds @ loadParked": "parsed: a parked findings.json",
   "x.findings @ loadParked": "parsed: a parked findings.json",
   "f.symbols @ loadParked": "parsed: a parked findings.json",
+  // 4.0.0 (1981): the sweep program's digest-checked output (a gate line only)
+  "sw.removed @ testDbStep": "parsed: a db_sweep program output",
+  "sw.errors @ testDbStep": "parsed: a db_sweep program output",
   // 4.0.0 (1983): the script's own round record, or a parked findings.json (digest-checked)
   "plan.criteria @ roundSnapshot": "role:scope-and-plan:criteria",
   "r0.criteria @ relaxedReasons": "parsed: the round-0 snapshot (the script's own, or a parked findings.json)",

@@ -349,6 +349,61 @@ its notes to this entry.
 - The red tests are still committed only with the green code, by the one hook-run commit after
   the code judge approves.
 
+### S5: a throwaway test database per run (ledger 1981)
+
+- Opt-in: a repo commits `.fleet-test-db.json`, for example
+  `{"version":1,"engine":"mariadb","major":"11.4","env":"YADGAR_TEST_DSN"}`. New shipped program
+  `test_db_decl.py` reads it at `origin/<default branch>` (never the worktree), checks it and
+  prints `{decl, error, args}` inside its digest. The plan run reads it in `infra:branch-scan`, the
+  build in `infra:verify-plan`: no extra agent when a repo has no declaration. The script checks
+  the digest, the arguments and the shape again: exactly the four keys, version 1, engine
+  `mariadb`, `env` matching `^[A-Z][A-Z0-9_]{0,40}_TEST_DSN$`. Any problem stops the run with
+  `stop_gate: "db"` (a new stop gate).
+- `.fleet-test-db.json` is in `FENCED_FILES`: a diff that touches it stops with `stop_gate:
+"scope"`.
+- The image is pinned by digest: `mariadb:11.4` is
+  `docker.io/library/mariadb@sha256:d1891ede5a559f1086f55053bb8cc1569b0298338c4d72d71725a7f74f6ba620`
+  (the index digest of 11.4.13, read with `skopeo inspect`; `skopeo inspect --raw | sha256sum`
+  agrees). An engine and major with no pinned image stops the run.
+- `infra:db-up` (after a fresh PATH re-check) runs `db_sweep.py`, then `db_up.py`. The container
+  is `fleet-db-<task>-<nonce tail>`; every program refuses any other name and any name holding
+  `tf-local` itself, because on a host whose podman has no shim the program is the only guard.
+  `podman run -d --rm` with `-p 127.0.0.1::3306`, `--tmpfs /var/lib/mysql:size=1g`, `--memory 1g
+--cpus 2 --pids-limit 512`, the labels `fleet.db=1`, `fleet.nonce`, `fleet.expires`, and
+  self-expiry after 6 h: `podman run --timeout` first, else a `systemd-run --user --on-active`
+  timer; with neither it exits non-zero, starts no container, and the run stops. The program
+  checks that the port is published on 127.0.0.1 only, waits up to 60 s for the server over TCP,
+  and creates one database per consumer; on any failure it removes the container.
+- One database per consumer: the planner, plan-audit, each test writer (one per criterion, or
+  one for the short path's writer), the test judge, the coder, the code judge, pr-review, and the
+  repo's hooks in the commit step and the push. The script builds
+  `mysql://root:<pw>@127.0.0.1:<port>/fleet_<consumer>` and puts it under the declared `env` name
+  into that role's `test_env` only, never into `test_cmd.env`. `TEST_ENV` itself is frozen; a role
+  gets a copy. The DSN is never sealed in the plan ref and never written to the run-state.
+- Plan mode starts the database after the branch scan, before the planner. Build mode starts it
+  after the verify step. A plan run under `confirm: "auto"` (or `default`) that goes on into the
+  build adds the build's databases to the same container (`infra:db-up:add`).
+- `main` removes the database in a `try/finally` (`infra:db-down`, `db_down.py`), whatever the
+  result. The step runs outside the agent cap and never throws: a failed teardown is a gate line
+  that names the self-expiry, and the run's own result stays. `db_down.py` removes the container
+  only when its labels carry `fleet.db=1` and this run's nonce.
+- `db_sweep.py` removes only containers that carry the label `fleet.db=1`, a name matching
+  `^fleet-db-[a-z0-9-]+$` (no `tf-local`) AND a `fleet.expires` time in the past. A live database
+  of a concurrent run is never touched. It runs in `infra:db-up`, not in preflight: preflight
+  belongs to another stream, and only hosts that start test databases can hold one.
+- Accepted residual: the throwaway password (`sha256(nonce + ":db")[:24]`) is visible in the
+  transcripts (the db-up prompt and every DSN). It guards a database on 127.0.0.1 that lives for
+  one run.
+- Four new shipped programs: `test_db_decl`, `db_sweep`, `db_up`, `db_down` (27 in all). Each
+  follows the 4.0.0 program rules: resource caps (lifted for the podman child), a clean PATH, the
+  self-hash inside the digest, and the `sha256sum && python3 -I` command form.
+
+### S4 follow-up: `go test <paths>` is refused
+
+- Since S4, `go test` refuses the `<paths>` token (cargo and go target a criterion with
+  `test_args`). A plan ref sealed by 3.1.3 with a `go test ... <paths>` command now stops when build
+  mode loads it (`stop_gate: "commands"`). Re-plan to get a 4.0.0 command.
+
 ## [3.1.3] - 2026-11-09
 
 Ledger task 1979. No role page changes; install 3.1.3, then `/reload-plugins`. The contract marker

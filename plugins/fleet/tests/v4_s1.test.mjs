@@ -53,9 +53,9 @@ function at(obj, path) {
 test("4.0.0 1993 AC-2: every *_PY constant ships as scripts/<name>.py, byte-equal to the constant + newline", () => {
   const consts = (SOURCE.match(/^const ([A-Z_]+_PY) = String\.raw`/gm) || []).map((l) => /const ([A-Z_]+_PY)/.exec(l)[1]).sort();
   assert.deepEqual(consts, PROGRAMS.map(([, c]) => c).sort(), "the program table names every embedded program");
-  // 22 in S1; S4 adds parked (1986)
-  // 4.0.0 (1985, S3): push_probe
-  assert.equal(PROGRAMS.length, 24);
+  // 22 in S1; S4 adds parked (1986); S3 adds push_probe (1985);
+  // S5 adds test_db_decl, db_sweep, db_up, db_down (1981)
+  assert.equal(PROGRAMS.length, 28);
   const files = readdirSync(SCRIPTS_SRC).filter((f) => f.endsWith(".py")).sort();
   assert.deepEqual(files, PROGRAMS.map(([n]) => n + ".py").sort(), "no extra and no missing file");
   for (const [name, c] of PROGRAMS) {
