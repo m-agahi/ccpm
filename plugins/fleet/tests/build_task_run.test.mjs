@@ -218,6 +218,13 @@ async function runOne(script, args0) {
       const i = inputsOf(prompt);
       return tfGateRelay({ args: [i.main_worktree, i.default_branch, i.approved_sha] });
     }
+    // 3.1.0: unscripted remote-head reads find no remote branch
+    if (!(label in script) && /^infra:remote-head:/.test(label)) {
+      const i = inputsOf(prompt);
+      const r = { status: "ok", reason: "read", head: null, args: [i.main_worktree, i.branch] };
+      r.digest = sha256(canon({ head: r.head, args: r.args }));
+      return r;
+    }
     // 3.1.0: unscripted hook-surface reads find no hook entry file
     if (!(label in script) && /^infra:hook-surface:/.test(label))
       return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: {}, error: null }, prompt));
@@ -10224,7 +10231,7 @@ test("3.1.0 PATH check: the tool set is the six shimmed names; a shim is matched
   }
 });
 
-// ---------------------------------------------------------------- 3.1.0 (ADR-1172): IaC paths are fleet work; IaC diffs never push automatically (Max, 2026-11-09)
+// ---------------------------------------------------------------- 3.1.0 (ADR-1172): IaC paths are fleet work; IaC diffs never push automatically (ADR-1175)
 
 // file names spelled in pieces: the agent's Bash guard blocks the tool words
 const TFW = "terra" + "form";
@@ -10335,7 +10342,7 @@ test("3.1.0 IaC pre-push gate hint 4 and 5: any digger config change, or a CI fi
   assert.deepEqual(o.hints, []);
 });
 
-// Max, 2026-11-09: every IaC diff stops before the push; content checks are hints only
+// ADR-1175: every IaC diff stops before the push; content checks are hints only
 const gateFor = (over) => (prompt) => {
   const i = inputsOf(prompt);
   return tfGateRelay(Object.assign({ args: [i.main_worktree, i.default_branch, i.approved_sha] }, over));
@@ -10421,6 +10428,95 @@ test("3.1.0 IaC push gate: the content checks never let an IaC diff through", { 
   assert.match(out.result.reason, /could not complete/);
   // no code path reports an IaC diff as passing
   assert.doesNotMatch(SOURCE, /meets the CI auto-plan/);
+});
+
+// ADR-1175: after Max pushes an IaC diff himself, a build run of the same plan
+// continues to the PR without pushing, only when the remote head is exactly the approved sha
+function iacScript(mk, head) {
+  const s = mk();
+  let sha = null;
+  s["infra:tf-gate:push"] = (prompt) => {
+    sha = inputsOf(prompt).approved_sha;
+    return gateFor({ touched: true, iac_files: ["infra/main.tf"] })(prompt);
+  };
+  s["infra:remote-head:push"] = (prompt) => {
+    const i = inputsOf(prompt);
+    const r = { status: "ok", reason: "read", head: head === "approved" ? sha : head, args: [i.main_worktree, i.branch] };
+    r.digest = sha256(canon({ head: r.head, args: r.args }));
+    return r;
+  };
+  return s;
+}
+const MODES = [[() => happy(), ARGS, run], [() => autoHappy(), AUTO, runOne]];
+const pushed = (out) => out.labels.some((l) => /^infra:push(:p\d+)?$/.test(l));
+
+test("3.1.0 ADR-1175: remote head == approved sha: the run continues to the PR, the review and the write-back without a push", async () => {
+  for (const [mk, args, go] of MODES) {
+    const out = await go(iacScript(mk, "approved"), args);
+    assert.equal(out.result.status, "ok", args.confirm + " " + out.result.reason);
+    assert.ok(!pushed(out), "push never dispatched");
+    assert.ok(out.labels.includes("infra:remote-head:push"));
+    assert.ok(out.labels.indexOf("infra:remote-head:push") < out.labels.indexOf("role:fleet-pr-opener"));
+    assert.ok(out.labels.some((l) => /^infra:state:pushed/.test(l)));
+  }
+});
+
+test("3.1.0 ADR-1175: remote head missing, different or unreadable stops at iac-push", async () => {
+  for (const head of [null, "f".repeat(40), "approved-but-short"]) {
+    const out = await run(iacScript(() => happy(), head === "approved-but-short" ? "abc" : head), ARGS);
+    assert.equal(out.result.status, "needs_human", String(head));
+    assert.equal(out.result.stop_gate, "iac-push", String(head));
+    assert.match(out.result.reason, /re-run the build/);
+    assert.ok(!pushed(out));
+    assert.ok(!out.labels.includes("role:fleet-pr-opener"));
+  }
+  // a tampered remote-head relay stops too
+  const s = iacScript(() => happy(), "approved");
+  const inner = s["infra:remote-head:push"];
+  s["infra:remote-head:push"] = (prompt) => Object.assign(inner(prompt), { args: ["/elsewhere", "x"] });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "iac-push");
+  assert.ok(!pushed(out));
+});
+
+test("3.1.0 ADR-1175: the remote head program reads origin's branch head, null when absent, and refuses a bad branch name", { skip: !HAVE_PY }, () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-rh-"));
+  try {
+    const bare = join(home, "origin.git");
+    const wt = join(home, "repo");
+    spawnSync("git", ["init", "-q", "--bare", bare]);
+    spawnSync("git", ["init", "-q", "-b", "master", wt]);
+    for (const [k, v] of [["user.email", "t@example.com"], ["user.name", "t"], ["commit.gpgsign", "false"]]) sh(wt, "git", "config", k, v);
+    writeFileSync(join(wt, "a.txt"), "x\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "a");
+    sh(wt, "git", "remote", "add", "origin", bare);
+    sh(wt, "git", "push", "-q", "origin", "HEAD:refs/heads/fleet/l42-x");
+    const head = sh(wt, "git", "rev-parse", "HEAD").trim();
+    const prog = extractPy("REMOTE_HEAD_PY_BEGIN", "REMOTE_HEAD_PY_END", "REMOTE_HEAD_PY");
+    const go = (branch) => spawnSync("python3", ["-I", "-c", prog, wt, branch], { encoding: "utf8", cwd: home });
+    let r = go("fleet/l42-x");
+    assert.equal(r.status, 0, r.stderr);
+    let o = JSON.parse(r.stdout);
+    assert.equal(o.head, head);
+    assert.deepEqual(o.args, [wt, "fleet/l42-x"]);
+    assert.equal(o.digest, sha256(canon({ head: o.head, args: o.args })));
+    o = JSON.parse(go("fleet/l42-gone").stdout);
+    assert.equal(o.head, null);
+    assert.notEqual(go("--upload-pack=x").status, 0);
+    assert.doesNotMatch(prog, /terraform|tofu|digger|atlantis/i);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("3.1.0 ADR-1175: the fleet never dispatches a push for an IaC diff, in any mode or remote state", async () => {
+  for (const [mk, args, go] of MODES)
+    for (const head of [null, "f".repeat(40), "approved"]) {
+      const out = await go(iacScript(mk, head), args);
+      assert.ok(!pushed(out), args.confirm + " " + String(head));
+      assert.ok(!out.calls.some((c) => /push -u origin/.test(c.prompt) && !/To push it yourself/.test(c.prompt) && /^infra:push/.test(c.label || "")));
+    }
 });
 
 test("3.1.0 IaC push gate: a problem (exec stack, plugin dir, symlink) stops at iac with the problem named", async () => {

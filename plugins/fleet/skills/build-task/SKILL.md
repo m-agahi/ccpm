@@ -169,8 +169,11 @@ is not one of the nix shims (3.1.0). Relay the reason to the user: the agent PAT
 installed before the fleet runs. Do not retry, and never change PATH or run the tool for the user.
 
 `stop_gate: "iac-push"` means the approved diff changes IaC files. IaC diffs never push automatically
-(ADR-1172 and Max's decision of 2026-11-09). Relay the reason: it names the branch, the commit, the
-IaC files and the push command for Max to run himself. Never push it yourself. The hints in it are
+(ADR-1172 and ADR-1175). Relay the reason: it names the branch, the commit, the
+IaC files and the push command for Max to run himself. Never push it yourself. After pushing
+yourself, re-run the build to open the PR: run step 8 again with the same `plan_ref`. That run
+goes on to the draft PR, the review and the write-back without a push, and only when the remote
+branch head is exactly the approved sha; any other remote state stops at `iac-push` again. The hints in it are
 not a security check. `stop_gate: "iac"` from the push gate names a provider plugin directory, a
 symlink or code that existing IaC runs at plan time; relay it.
 

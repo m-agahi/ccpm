@@ -3583,7 +3583,7 @@ function loadRefPrompt(inputs) {
   );
 }
 
-// The IaC push gate (3.1.0, ADR-1172 and Max's decision of 2026-11-09). The
+// The IaC push gate (3.1.0, ADR-1172 and ADR-1175). The
 // fleet may change IaC code, but IaC diffs never push automatically: any IaC
 // file in the PR diff (merge-base..<sha>) stops the run before the push, and
 // Max pushes himself. The program prints {touched, iac_files, problems, hints,
@@ -3662,7 +3662,7 @@ paths = [x.decode('utf-8', 'replace') for x in run('diff', '--name-only', '-z', 
 iac_files = sorted(p for p in paths if iac(p))
 touched = bool(iac_files)
 # problems stop the run at iac; hints only inform Max at iac-push and never
-# decide anything (Max, 2026-11-09: every IaC diff stops before the push)
+# decide anything (ADR-1175: every IaC diff stops before the push)
 problems, hints = [], []
 # symlinks: a link at an IaC path, or one whose target lies in a provider
 # plugin dir, is refused (modes from git diff --raw)
@@ -3817,6 +3817,72 @@ out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', 
 print(json.dumps(out, ensure_ascii=False))
 `;
 // TF_GATE_PY_END
+
+// The remote head read (3.1.0, ADR-1175): after Max pushed an IaC diff
+// himself, a build run of the same plan goes on to the PR without pushing,
+// only when origin's branch head is exactly the approved sha. The program
+// prints {head, args, digest}; head is null when the remote branch is absent.
+// A network or auth error exits non-zero (never read as absent). Read only.
+// REMOTE_HEAD_PY_BEGIN
+const REMOTE_HEAD_PY = String.raw`
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+import hashlib, json, os, re, subprocess, sys
+wt, branch = sys.argv[1], sys.argv[2]
+os.chdir('/')
+if not re.match(r'^[A-Za-z0-9._/-]+$', branch) or branch.startswith('-'):
+    sys.exit('bad branch name')
+r = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-C', wt, 'ls-remote', '--exit-code', 'origin', 'refs/heads/' + branch], capture_output=True)
+if r.returncode == 2:
+    head = None
+elif r.returncode == 0:
+    lines = [l.split('\t') for l in r.stdout.decode('utf-8', 'replace').splitlines() if l.strip()]
+    if len(lines) != 1 or len(lines[0]) != 2 or lines[0][1] != 'refs/heads/' + branch or not re.match(r'^[0-9a-f]{40}$', lines[0][0]):
+        sys.exit('unexpected ls-remote output')
+    head = lines[0][0]
+else:
+    sys.exit(r.stderr.decode('utf-8', 'replace') or 'ls-remote failed')
+out = {'head': head, 'args': [wt, branch]}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
+`;
+// REMOTE_HEAD_PY_END
+
+function remoteHeadPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: read the remote branch head. Read only: no edits, no commits, no checkout, no fetch, no push; run nothing but the one command below.\n" +
+    "Inputs: " +
+    JSON.stringify(inputs) +
+    "\n" +
+    "Run this one command exactly as written, unmodified (on a non-zero exit, retry it up to 3 times with 5, 15 and 45 s waits):\n" +
+    "python3 -I -c " + shQuote(REMOTE_HEAD_PY) + " " + shQuote(inputs.main_worktree) + " " + shQuote(inputs.branch) +
+    "\n" +
+    "It prints one JSON object {head, args, digest}. Copy every value unchanged (the script recomputes the digest). Still non-zero after the retries -> failed with its stderr.\n" +
+    "Return {status, reason, head, args, digest}."
+  );
+}
 
 function tfGatePrompt(inputs) {
   return (
@@ -6601,7 +6667,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // No fleet-internal path may reach the PR: the diff against the default
   // branch and every commit on the branch are checked before each push and
   // each PR-opener call (fail-closed).
-  // ADR-1172 and Max's 2026-11-09 decision: IaC diffs never push automatically.
+  // ADR-1172 and ADR-1175: IaC diffs never push automatically.
   // Any IaC file in the PR diff stops the run before the push, in every confirm
   // mode; Max pushes himself. The content checks are hints in the stop message
   // and decide nothing. scanDiff: the fleet scan's digest-checked PR diff, a
@@ -6618,14 +6684,29 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       halt("needs_human", "IaC pre-push check could not complete: " + label + " returned no usable result (the relayed result does not match the program's digest, arguments or the PR diff)", "iac");
     const hints = "hints (not a security check): " + (r.hints.length ? r.hints.join("; ") : "none");
     if (r.problems.length) halt("needs_human", "IaC pre-push check stops: " + r.problems.join("; ") + ". " + hints, "iac");
-    if (r.touched)
-      halt(
-        "needs_human",
-        "IaC diffs never push automatically; the fleet hands the push to Max. Branch " + branch + ", commit " + approvedSha + ", IaC files: " + r.iac_files.join(", ") +
-          ". To push it yourself: git -C " + shQuote(mainWt) + " push -u origin " + branch + " . " + hints,
-        "iac-push",
-      );
-    gate(label + ": no IaC file in the PR diff");
+    if (!r.touched) {
+      gate(label + ": no IaC file in the PR diff");
+      return false;
+    }
+    // ADR-1175: the fleet never pushes an IaC diff. When Max has pushed it
+    // himself (origin's head is exactly the approved sha), the run goes on
+    // without a push; any other remote state stops here.
+    const rhLabel = label.replace("tf-gate", "remote-head");
+    const rh = await infra(rhLabel, remoteHeadPrompt({ main_worktree: mainWt, branch }), "PR", JUDGE_AGENT);
+    const rhOk =
+      rh && (rh.head === null || typeof rh.head === "string") && relayDigestOk(rh, ["head", "args"]) && canonical(rh.args) === canonical([mainWt, branch]);
+    if (rhOk && rh.head === approvedSha) {
+      gate(rhLabel + ": origin/" + branch + " is at the approved " + approvedSha + " (pushed by Max); going on without a push");
+      return true;
+    }
+    const remote = !rhOk ? "could not be read" : rh.head === null ? "is absent" : "is at " + rh.head;
+    halt(
+      "needs_human",
+      "IaC diffs never push automatically; the fleet hands the push to Max. Branch " + branch + ", commit " + approvedSha + ", IaC files: " + r.iac_files.join(", ") +
+        ". To push it yourself: git -C " + shQuote(mainWt) + " push -u origin " + branch + " ; then re-run the build with the same plan_ref to open the PR (it goes on only when origin/" +
+        branch + " is exactly " + approvedSha + "; it " + remote + "). " + hints,
+      "iac-push",
+    );
   }
 
   async function fleetScan(label) {
@@ -6716,7 +6797,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         phase("PR");
         pushes++;
         const scanDiff = await fleetScan("infra:fleet-scan:push" + (pushes > 1 ? ":p" + pushes : ""));
-        await tfGate("infra:tf-gate:push" + (pushes > 1 ? ":p" + pushes : ""), scanDiff);
+        if (await tfGate("infra:tf-gate:push" + (pushes > 1 ? ":p" + pushes : ""), scanDiff)) {
+          // ADR-1175: Max pushed this IaC diff himself; no push here
+          await saveState("pushed", "infra:state:pushed:p" + pushes);
+          continue;
+        }
         const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
         const push = await infra(
           pushLabel,

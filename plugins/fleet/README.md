@@ -576,7 +576,7 @@ built to run terraform. Max's hard rules and the settings.json denies are the co
 Kubernetes and Helm manifests; it refuses provider plugin directories and still refuses `.github/`, the hook-manager and CI paths,
 rulesets and secret-like paths.
 
-**The IaC push gate (ADR-1172 and Max's decision of 2026-11-09).** Terraform diffs never push
+**The IaC push gate (ADR-1172 and ADR-1175).** Terraform diffs never push
 automatically; the fleet stops and hands the push to Max. Content checks are hints only. Before
 every push, `infra:tf-gate:push` runs `TF_GATE_PY` (read only, `python3 -I`, caps) on the PR diff.
 When the diff touches any IaC file (`*.tf`, `*.tofu`, `*.tf.json`, `*.tofu.json`, `*.tfvars`, `*.tfvars.json`, `*.tofuvars`,
@@ -584,8 +584,11 @@ When the diff touches any IaC file (`*.tf`, `*.tofu`, `*.tf.json`, `*.tofu.json`
 a path with a `.terraform`, `terraform.d` or `.terraform.d` segment), the run stops before the push in every
 confirm mode with `needs_human`, `stop_gate: "iac-push"`. The message gives the branch, the commit
 sha, the IaC files, the push command for Max, and the content findings under "hints (not a
-security check)". An IaC path in the fleet scan's PR diff that the relay does not list stops with
-`stop_gate: "iac"`. Three checks stop with `stop_gate: "iac"`: a provider plugin directory segment
+security check)". The fleet never pushes an IaC diff. After Max pushes it himself, a build run of the same
+`plan_ref` reads origin's branch head (`REMOTE_HEAD_PY`, `git ls-remote`) and goes on to the PR,
+the review and the write-back without a push, only when the head is exactly the approved sha; any
+other remote state stops at `iac-push`. An IaC path in the fleet scan's PR diff that the relay does
+not list stops with `stop_gate: "iac"`. Three checks stop with `stop_gate: "iac"`: a provider plugin directory segment
 (the scope fence refuses it too), a symlink at an IaC path or into a plugin directory, and a change
 to code that existing IaC runs at plan time (a non-IaC file in an exec stack's directory, or a file
 an exec stack names as a literal in `program`, `command` or `file(...)`). Residual: an exec

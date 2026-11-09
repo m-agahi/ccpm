@@ -67,7 +67,7 @@ controls there; no content scan stands in for them.
 `*.tfvars`, `terraform/`, Kubernetes and Helm manifests), at plan time or in a coder's changes. It
 still refuses `.github/`, the hook-manager and CI paths, rulesets and secret-like paths.
 
-**New: the IaC push gate (ADR-1172 and Max's decision of 2026-11-09).** Terraform diffs never
+**New: the IaC push gate (ADR-1172 and ADR-1175).** Terraform diffs never
 push automatically; the fleet stops and hands the push to Max. Content checks are hints only.
 Before every push, `infra:tf-gate:push` (`TF_GATE_PY`, read only, `python3 -I`, caps, digest and
 argument checked) reads the PR diff (`merge-base..<approved sha>`). When it touches any IaC file
@@ -76,7 +76,12 @@ argument checked) reads the PR diff (`merge-base..<approved sha>`). When it touc
 a path with a `.terraform`, `terraform.d` or `.terraform.d` segment), the run stops before the push in every confirm mode, `auto` included:
 `needs_human`, `stop_gate: "iac-push"`. The message names the branch, the commit sha, the IaC files
 and the exact push command (`git -C <worktree> push -u origin <branch>`) for Max to run himself.
-Max confirms by pushing himself or by a later explicit build run; no path pushes automatically.
+The fleet never pushes an IaC diff, in any path. After Max pushes it himself, a build run of the
+same `plan_ref` reads the remote branch head (`REMOTE_HEAD_PY`, `git ls-remote`, read only,
+digest and argument checked) and goes on to the draft PR, the review and the write-back without a
+push, only when that head is exactly the approved sha. A missing branch, another sha, or a head
+ahead of or behind the approved sha stops at `iac-push` as before. No argument opts into a push:
+an agent could pass one, so it would not prove that Max confirmed.
 The workflow also checks the relay against the fleet scan's digest-checked PR diff: an IaC path
 there that the relay does not list stops the run (`stop_gate: "iac"`).
 
