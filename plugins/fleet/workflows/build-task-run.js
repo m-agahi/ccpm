@@ -84,6 +84,10 @@ const INFRA_TIER = [
   ["infra:ledger-", "sonnet"],
   ["infra:yaadgaar-", "sonnet"],
   ["infra:comments-", "sonnet"],
+  // 4.0.0 (1987, 1981): writes (a ref; a container) with digest-checked relays
+  ["infra:freeze-ref", "sonnet"],
+  ["infra:db-up", "sonnet"],
+  ["infra:db-down", "sonnet"],
 ];
 // INFRA_TIER_END
 // A haiku PATH check whose relay is broken runs once more on this tier.
@@ -10786,7 +10790,7 @@ async function dbTeardown() {
   const later = "; it ends by itself (" + db.mechanism + ", fleet.expires " + db.expires + ")";
   try {
     state.agents++;
-    const r = await agent(nonced(dbDownPrompt({ name: db.name, nonce: state.nonce })), { label: "infra:db-down", model: INFRA_MODEL, schema: INFRA_SCHEMA, phase: "Cleanup" });
+    const r = await agent(nonced(dbDownPrompt({ name: db.name, nonce: state.nonce })), { label: "infra:db-down", model: infraModel("infra:db-down"), schema: INFRA_SCHEMA, phase: "Cleanup" });
     const d = r && typeof r === "object" ? r.down : null;
     if (r && r.status === "ok" && d && relayDigestOk(d, ["removed", "absent", "error", "args"], "db_down") && canonical(d.args) === canonical([db.name, state.nonce]) && (d.removed === true || d.absent === true))
       gate("test database " + db.name + (d.removed ? " removed" : " already gone"));

@@ -78,6 +78,8 @@ const WANT = [
   [/^infra:replan-/, "sonnet"],
   [/^infra:state:/, "sonnet"],
   [/^infra:(fleet-scan|purge-bytecode|review-cleanup|ledger-|yaadgaar-|comments-)/, "sonnet"],
+  // 4.0.0 S5 (1987, 1981): writes with digest-checked relays
+  [/^infra:(freeze-ref|db-up|db-down)/, "sonnet"],
 ];
 function wantTier(label) {
   const w = WANT.find(([re]) => re.test(label));
@@ -492,9 +494,10 @@ test("4.0.0 1990 AC-1990-1: absolute agent counts; a build with a cached preflig
   // plan: + infra:path-check:push-probe + infra:push-probe (1985)
   assert.equal(out.plan.calls.length, 17, out.plan.labels.join(", "));
   assert.equal(out.planResult.agents, 17);
-  // build: the role-page load is replaced by a scripts and PATH check (still the first agent)
-  assert.equal(out.build.calls.length, 49, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 49);
+  // build: the role-page load is replaced by a scripts and PATH check (still the first agent);
+  // S5 (1987) adds infra:freeze-ref:f1, the freeze ref write: 50
+  assert.equal(out.build.calls.length, 50, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 50);
   const first = out.build.calls[0];
   assert.equal(first.label, "preflight");
   assert.equal(first.opts.model, "haiku");
@@ -545,7 +548,8 @@ test("4.0.0 1990 AC-1990-3: a 3.1.3 record, no record, or fresh_preflight loads 
     assert.equal(L.indexOf("preflight:roles"), L.indexOf("infra:load-ref") + 1, L.join(", "));
     assert.match(call(b, "preflight:roles").prompt, ROLE_LOAD);
     assert.equal(call(b, "preflight:roles").opts.model, "haiku");
-    assert.equal(b.calls.length, 50);
+    // + infra:freeze-ref:f1 (S5, 1987)
+    assert.equal(b.calls.length, 51);
     assert.equal(b.calls.filter(pageLoad).length, 1);
   }
   // fresh_preflight: the first agent loads them (one agent, as in 3.1.3)
@@ -556,7 +560,8 @@ test("4.0.0 1990 AC-1990-3: a 3.1.3 record, no record, or fresh_preflight loads 
   assert.equal(b.result.status, "ok", b.result.reason);
   assert.match(b.calls[0].prompt, ROLE_LOAD);
   assert.ok(!b.labels.includes("preflight:roles"));
-  assert.equal(b.calls.length, 49);
+  // + infra:freeze-ref:f1 (S5, 1987)
+  assert.equal(b.calls.length, 50);
   // a 4.0.0 record: no role-page load in the whole build
   const s2 = happy();
   const p2 = await runOne(s2, ARGS);

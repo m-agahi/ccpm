@@ -348,6 +348,8 @@ its notes to this entry.
 - A run-state ref (a build that got past its commit) wins: `freeze_digest` is then not used.
 - The red tests are still committed only with the green code, by the one hook-run commit after
   the code judge approves.
+- Agent count: every build dispatches one more infra agent, `infra:freeze-ref:f1` (sonnet), so the
+  confirm-ask happy build is 50, not 49 (51 with no usable preflight record).
 
 ### S5: a throwaway test database per run (ledger 1981)
 
