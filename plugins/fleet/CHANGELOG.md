@@ -359,8 +359,8 @@ its notes to this entry.
   the digest, the arguments and the shape again: exactly the four keys, version 1, engine
   `mariadb`, `env` matching `^[A-Z][A-Z0-9_]{0,40}_TEST_DSN$`. Any problem stops the run with
   `stop_gate: "db"` (a new stop gate).
-- `.fleet-test-db.json` is in `FENCED_FILES`: a diff that touches it stops with `stop_gate:
-"scope"`.
+- `.fleet-test-db.json` is in `FENCED_FILES`: a diff that touches it stops with
+  `stop_gate: "scope"`.
 - The image is pinned by digest: `mariadb:11.4` is
   `docker.io/library/mariadb@sha256:d1891ede5a559f1086f55053bb8cc1569b0298338c4d72d71725a7f74f6ba620`
   (the index digest of 11.4.13, read with `skopeo inspect`; `skopeo inspect --raw | sha256sum`
