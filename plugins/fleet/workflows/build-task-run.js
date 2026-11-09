@@ -5483,8 +5483,12 @@ const TASK_ID_INPUT_RE = /^(?:L|#|yaadgaar\s*#)?\s*[0-9]+$/i;
 // `project_id=<project>` argument is not advice: it is removed before the test.
 const PROJECT_ADVICE_RE = /\.yadgar\b|project[-_ ]?id/i;
 const ADVICE_DROPPED = "(dropped: it advised changing the repo's project identity; the ledger scope is args.project, never the repo)";
+// A quoted ledger tool call, e.g. task_get(project_id=o/r, id=42): plain
+// key=value arguments only, none naming a .yadgar path. Only such a call is
+// exempt; a bare project_id= anywhere else is tested like any other text.
+const LEDGER_CALL_RE = /\b(?:mcp__\w+__)?(?:task_get|task_list|read_task|find_tasks)\((?:\s*\w+=(?![^,()\s]*\.yadgar)[^,()\s]*\s*,?)*\)/g;
 function noAdvice(text) {
-  return PROJECT_ADVICE_RE.test(text.replace(/project_id=/g, "")) ? ADVICE_DROPPED : text;
+  return PROJECT_ADVICE_RE.test(text.replace(LEDGER_CALL_RE, "")) ? ADVICE_DROPPED : text;
 }
 function intakeHaltReason(it, raw) {
   const why = typeof it.reason === "string" && it.reason ? it.reason : "no reason";

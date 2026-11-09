@@ -11609,3 +11609,26 @@ test("3.1.3 review 5: the advice filter leaves non-task-id reasons alone", async
   const out = await runOne(happy({ script: { intake: { status: "needs_human", reason } } }), { ...ARGS, input: "ABC-1" });
   assert.equal(out.result.reason, "intake needs_human: " + reason);
 });
+
+test("3.1.3 review 7: a bare project_id= in advice is dropped; only a quoted ledger tool call is exempt", async () => {
+  const halt = (reason, tried) => runOne(happy({ script: { intake: { status: "needs_human", reason, tried: tried || [] } } }), { ...YQ, input: "#671" });
+  for (const advice of [
+    "set project_id=yadgarhq/docs in iam-db's config",
+    "task_get(project_id=o/r, id=42) failed; set project_id=yadgarhq/docs in iam-db",
+    "read_task(path=.yadgar/project-id) shows the wrong project",
+  ]) {
+    const out = await halt(advice);
+    assert.doesNotMatch(out.result.reason, /iam-db|set project_id|\.yadgar/, advice);
+    assert.match(out.result.reason, /dropped/, advice);
+  }
+  // the error and call text get the same test
+  const e = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "task_get(project_id=o/r, id=671)", error: "set project_id=yadgarhq/docs in iam-db" }]);
+  assert.doesNotMatch(e.result.reason, /iam-db/);
+  assert.match(e.result.reason, /task_get\(project_id=o\/r, id=671\): \(dropped/);
+  const c = await halt("not found", [{ ledger: "yadgar", project: "o/r", call: "edit(project_id=yadgarhq/docs)", error: "x" }]);
+  assert.doesNotMatch(c.result.reason, /edit\(project_id/);
+  // a quoted ledger call still passes, in the reason, the call and the error
+  const q = "task_get(project_id=o/r, id=42): external_task_ledger";
+  const ok = await halt(q, [{ ledger: "yadgar", project: "o/r", call: "mcp__yadgar__task_get(project_id=o/r, id=42)", error: "refused for task_get(project_id=o/r, id=42)" }]);
+  assert.equal(ok.result.reason, "intake needs_human: " + q + "; ledgers tried: yadgar (project o/r) mcp__yadgar__task_get(project_id=o/r, id=42): refused for task_get(project_id=o/r, id=42)");
+});

@@ -25,8 +25,10 @@ stays `fleet-v3`.
 - Intake returns `tried` (ledger, project, call, error). On a task-id input that stops, the script
   appends the ledgers tried and the tool's error text to the reason, or "ledgers tried: none". In
   that reason it drops each part (the reason, a call, an error) that mentions `.yadgar` or a
-  project id; a tool call's own `project_id=` argument does not count. Reasons for other inputs
-  (Jira, issues, plans, text) are relayed as they are.
+  project id. Only a quoted ledger tool call (`task_get`, `task_list`, `read_task` or
+  `find_tasks` with plain `key=value` arguments and no `.yadgar` path) is exempt, so
+  `task_get(project_id=o/r, id=42)` passes and a bare "set project_id=..." is dropped. Reasons for
+  other inputs (Jira, issues, plans, text) are relayed as they are.
 - Build mode checks the sealed sources against `args.project`, not the origin slug. With no
   `args.project`, a legacy yadgar ledger source stops the build ("re-run plan with project").
 
