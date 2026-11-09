@@ -168,6 +168,12 @@ human pushes by hand or deletes the branch.
 is not one of the nix shims (3.1.0). Relay the reason to the user: the agent PATH shims must be
 installed before the fleet runs. Do not retry, and never change PATH or run the tool for the user.
 
+`stop_gate: "iac-push"` means the approved diff changes IaC files. IaC diffs never push automatically
+(ADR-1172 and Max's decision of 2026-11-09). Relay the reason: it names the branch, the commit, the
+IaC files and the push command for Max to run himself. Never push it yourself. The hints in it are
+not a security check. `stop_gate: "iac"` from the push gate names a provider plugin directory, a
+symlink or code that existing IaC runs at plan time; relay it.
+
 `stop_gate: "hooks"` means the change touches the hook surface (hook config, a file a hook or CI
 runs, a CI or hook-manager path). Hook changes need their own PR and Max's confirmation; relay the
 reason and never split or push the change yourself.

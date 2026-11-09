@@ -67,39 +67,39 @@ controls there; no content scan stands in for them.
 `*.tfvars`, `terraform/`, Kubernetes and Helm manifests), at plan time or in a coder's changes. It
 still refuses `.github/`, the hook-manager and CI paths, rulesets and secret-like paths.
 
-**New: the pre-push IaC gate.** Terraform changes push only when the CI auto-plan exemption
-conditions hold; anything else hands back to Max. Before every push, `infra:tf-gate:push`
-(`TF_GATE_PY`, read only, `python3 -I`, caps, digest and argument checked) reads the PR diff
-(`origin/<default>...<approved sha>`). Only when it touches `*.tf`, `*.tofu`, `*.tf.json`,
-`*.tofu.json`, `*.tfvars`, `*.tfvars.json`, `*.tofuvars`, `*.tofuvars.json`,
-`.terraform.lock.hcl`, `terragrunt.hcl`, `digger.y*ml`, a terraform CLI config file or a
-path under `.terraform/` or `terraform.d/` does it check, and it stops (`needs_human`, `stop_gate: "iac"`, "IaC change does not meet the CI
-auto-plan exemption; hand it to Max: ...") on:
+**New: the IaC push gate (ADR-1172 and Max's decision of 2026-11-09).** Terraform diffs never
+push automatically; the fleet stops and hands the push to Max. Content checks are hints only.
+Before every push, `infra:tf-gate:push` (`TF_GATE_PY`, read only, `python3 -I`, caps, digest and
+argument checked) reads the PR diff (`merge-base..<approved sha>`). When it touches any IaC file
+(`*.tf`, `*.tofu`, `*.tf.json`, `*.tofu.json`, `*.tfvars`, `*.tfvars.json`, `*.tofuvars`,
+`*.tofuvars.json`, `.terraform.lock.hcl`, `terragrunt.hcl`, `digger.y*ml`, a terraform CLI config file, or
+a path with a `.terraform`, `terraform.d` or `.terraform.d` segment), the run stops before the push in every confirm mode, `auto` included:
+`needs_human`, `stop_gate: "iac-push"`. The message names the branch, the commit sha, the IaC files
+and the exact push command (`git -C <worktree> push -u origin <branch>`) for Max to run himself.
+Max confirms by pushing himself or by a later explicit build run; no path pushes automatically.
+The workflow also checks the relay against the fleet scan's digest-checked PR diff: an IaC path
+there that the relay does not list stops the run (`stop_gate: "iac"`).
 
-1. an added `data "external"`, `provisioner` block, `local-exec` or `remote-exec`, a
-   `dev_overrides` or `provider_installation` change, or a changed `.terraformrc` / `*.tfrc`;
-2. a provider `source` or `version` constraint added, changed or removed (a `required_providers`
-   hunk; module `version` lines are caught too, fail-closed), or a changed `.terraform.lock.hcl`:
-   provider vetting (`tf-provider-vet` plus an online review) is not automated here;
-3. the `hashicorp/external`, `hashicorp/local` or `hashicorp/null` provider, or a `local_*` /
-   `null_*` resource or data source, added, removed or changed;
-4. any `digger.y*ml` change;
-5. a CI or workflow file in the same diff (the hook gate also stops it before the commit);
-6. any path under `.terraform/` or `terraform.d/` (provider plugin directories; the scope fence
-   refuses them too, `stop_gate: "scope"`);
-7. a change to code that existing IaC runs at plan time: at the base, every directory with a
+The content checks stay only as hints in that message, under "hints (not a security check)": an
+external data source, a provisioner, `local-exec` or `remote-exec`, `dev_overrides` or
+`provider_installation`, a CLI config, provider `source`/`version` or lock file change, the
+external, local or null provider or a `local_*`/`null_*` resource, a `digger.y*ml` change, a CI
+file in the same diff, and a `.tf.json` that does not parse. They decide nothing.
+
+Three checks still stop the run (`stop_gate: "iac"`), fail-closed:
+
+1. a path with a `.terraform`, `terraform.d` or `.terraform.d` segment, the final segment included
+   (provider plugin directories; the scope fence refuses them too, `stop_gate: "scope"`);
+2. a symlink (mode 120000 in `git diff --raw`) at an IaC path, or whose target lies in such a
+   directory;
+3. a change to code that existing IaC runs at plan time: at the base, every directory with a
    `.tf`, `.tofu`, `.tf.json` or `.tofu.json` file that holds `data "external"`, a provisioner,
-   `local-exec`, `remote-exec` or the local, null or external provider is an exec stack; a
-   changed non-IaC file under such a directory, or a repo file an exec stack names in
-   `program = [...]`, `command = "..."` or `file(...)` (with `${path.module}` resolved), stops
-   ("changes code that existing IaC runs at plan time"). A plain stack's code is unaffected.
-
-HCL labels match with or without quotes (`data external e`), and a bare `provisioner` line
-stops. A changed `.tf.json` / `.tofu.json` is parsed as JSON (1 MiB per file, 64 MiB in all):
-a `data.external`, any `provisioner`, `local-exec` or `remote-exec` key, a `local_*` / `null_*`
-resource or data source, an external, local or null `provider` key, or a changed
-`terraform.required_providers` stops; JSON that does not parse stops. A line counts only when it changed beyond whitespace, so `fmt` never stops a push. A plain
-resource, variable or `.tfvars` change, or a diff with no IaC file, pushes.
+   `local-exec`, `remote-exec` or the local, null or external provider is an exec stack; a changed
+   non-IaC file under such a directory, or a repo file an exec stack names as a literal in
+   `program = [...]`, `command = "..."` or `file(...)`, stops ("changes code that existing IaC runs
+   at plan time"). Accepted over-reach: an exec stack at the repo root stops every non-IaC change,
+   and a base IaC file over 1 MiB stops every push. Accepted residual: an exec reference that is not
+   a literal (a variable, a `local`, an interpolation) and points outside the stack directory.
 
 ### New stops (fail-closed additions; no key renamed or removed)
 

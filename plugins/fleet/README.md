@@ -573,24 +573,23 @@ do not stop a hook's or a test's call by absolute path to a real binary
 built to run terraform. Max's hard rules and the settings.json denies are the controls there.
 
 **IaC paths are fleet work (ADR-1172).** The scope fence no longer refuses IaC files or
-Kubernetes and Helm manifests; it still refuses `.github/`, the hook-manager and CI paths,
+Kubernetes and Helm manifests; it refuses provider plugin directories and still refuses `.github/`, the hook-manager and CI paths,
 rulesets and secret-like paths.
 
-**The pre-push IaC gate.** Pushing an IaC change makes CI auto-plan it, which Max's hard rules
-allow only under conditions. Before every push, `infra:tf-gate:push` runs `TF_GATE_PY` (read only,
-`python3 -I`, caps) on the PR diff. When the diff touches `*.tf`, `*.tofu`, `*.tf.json`, `*.tofu.json`,
-every vars file form (`*.tfvars`, `*.tfvars.json`, `*.tofuvars`, `*.tofuvars.json`), the provider lock file, `terragrunt.hcl`, `digger.y*ml` or a CLI config file, it stops with
-`needs_human`, `stop_gate: "iac"`, "IaC change does not meet the CI auto-plan exemption; hand it to
-Max" on: an added `data "external"`, provisioner, `local-exec`, `remote-exec`, `dev_overrides` or
-`provider_installation`, or a CLI config change; a provider `source`/`version` change or a lock file
-change; the external, local or null provider or a `local_*`/`null_*` resource; any `digger.y*ml`
-change; a CI or workflow file in the same diff; any path under `.terraform/` or `terraform.d/` (the scope
-fence refuses those too); a change to code that existing IaC runs at plan time (a non-IaC file in
-a directory whose base IaC holds `data "external"`, a provisioner or the local, null or external
-provider, or a file such a stack names in `program`, `command` or `file(...)`). HCL labels match
-with or without quotes; a changed `.tf.json` / `.tofu.json` is parsed as JSON (bounded), and JSON
-that does not parse stops. Only lines that changed beyond whitespace count, so
-`fmt` never stops a push.
+**The IaC push gate (ADR-1172 and Max's decision of 2026-11-09).** Terraform diffs never push
+automatically; the fleet stops and hands the push to Max. Content checks are hints only. Before
+every push, `infra:tf-gate:push` runs `TF_GATE_PY` (read only, `python3 -I`, caps) on the PR diff.
+When the diff touches any IaC file (`*.tf`, `*.tofu`, `*.tf.json`, `*.tofu.json`, `*.tfvars`, `*.tfvars.json`, `*.tofuvars`,
+`*.tofuvars.json`, `.terraform.lock.hcl`, `terragrunt.hcl`, `digger.y*ml`, a terraform CLI config file, or
+a path with a `.terraform`, `terraform.d` or `.terraform.d` segment), the run stops before the push in every
+confirm mode with `needs_human`, `stop_gate: "iac-push"`. The message gives the branch, the commit
+sha, the IaC files, the push command for Max, and the content findings under "hints (not a
+security check)". An IaC path in the fleet scan's PR diff that the relay does not list stops with
+`stop_gate: "iac"`. Three checks stop with `stop_gate: "iac"`: a provider plugin directory segment
+(the scope fence refuses it too), a symlink at an IaC path or into a plugin directory, and a change
+to code that existing IaC runs at plan time (a non-IaC file in an exec stack's directory, or a file
+an exec stack names as a literal in `program`, `command` or `file(...)`). Residual: an exec
+reference that is not a literal and points outside the stack directory.
 
 #### Hook changes: their own PR, with Max (3.1.0)
 
@@ -880,7 +879,7 @@ The script pins the role contract, not the prose:
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
   `commands`, `contract`, `role`, `cap`, `ownership`, `commit`, `review`, `intent`, `scope`,
-  `resume`, `iac` or `callers` (`null` when the run did not stop at one of them). A cap stop names the gate that rejected the
+  `resume`, `iac`, `iac-push` or `callers` (`null` when the run did not stop at one of them). A cap stop names the gate that rejected the
   last round (hash, obligations gate, commit hook, push hook or review).
 
 ### Models
