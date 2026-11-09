@@ -31,6 +31,7 @@ import {
   HASHES_FLAT,
   FP_K1,
   FP_M3,
+  programText,
 } from "./harness.mjs";
 
 // confirm auto with a pre-commit check_cmd: the hook ids are read.
@@ -429,8 +430,9 @@ test("review fix 6: a ref sealed before 4.0.0 (no change_kind/new_behaviour) can
 });
 
 test("review fix 1: precommit_ids routes every print through one emit with the digest", () => {
-  const m = /\/\/ PRECOMMIT_IDS_PY_BEGIN\n([\s\S]*?)\n\/\/ PRECOMMIT_IDS_PY_END/.exec(SOURCE);
-  assert.ok(m);
-  const prints = m[1].split("\n").filter((l) => /\bprint\(/.test(l));
+  // 4.0.1: the program text lives in scripts/precommit_ids.py only
+  const body = programText("precommit_ids");
+  assert.ok(body);
+  const prints = body.split("\n").filter((l) => /\bprint\(/.test(l));
   assert.equal(prints.length, 1, prints.join("\n"));
 });

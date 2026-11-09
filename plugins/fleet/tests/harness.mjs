@@ -591,19 +591,35 @@ export function verifyStub(store) {
 //
 // The programs ship as files under plugins/fleet/scripts/; the harness gives
 // each stubbed program output the self-hash the shipped file prints, so the
-// script's own check (the constant's sha256) meets the file's. A stub that
+// script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/4.0.0/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/4.0.1/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
-// [[file name, constant name]]
-export const PROGRAMS = GEN.programs(SOURCE).map(([n, c]) => [n, c]);
-const PROGRAM_VALUES = Object.fromEntries(GEN.programs(SOURCE).map(([, c, v]) => [c, v]));
-export function programConst(c) {
-  assert.ok(c in PROGRAM_VALUES, c);
-  return PROGRAM_VALUES[c];
+// [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
+export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
+export function programTableSha(name) {
+  const hit = PROGRAMS.find(([n]) => n === name);
+  assert.ok(hit, name);
+  return hit[1];
 }
-// the sha256 of the shipped FILE (not of the constant): the cross-check
+// the text of the shipped program scripts/<name>.py, without its final newline
+// (4.0.1: the files are the source; the workflow embeds no program text)
+export function programText(name) {
+  const body = readFileSync(join(SCRIPTS_SRC, name + ".py"), "utf8");
+  assert.ok(body.endsWith("\n"), name + ".py ends with a newline");
+  return body.slice(0, -1);
+}
+// the program as the 4.0.0 marker extraction returned it: no leading newline
+function programBody(name) {
+  return programText(name).replace(/^\n/, "");
+}
+// [[the 4.0.0 constant name, program body]] of every shipped program, and
+// their text one after another: what tests searched the workflow source for
+// before 4.0.1 moved the programs out of it
+export const PROGRAM_BODIES = PROGRAMS.map(([n]) => [n.toUpperCase() + "_PY", programBody(n)]);
+export const PROGRAMS_TEXT = PROGRAM_BODIES.map(([, b]) => b).join("\n");
+// the sha256 of the shipped FILE (not of the table entry): the cross-check
 export function programSha(name) {
   return sha256(readFileSync(join(SCRIPTS_SRC, name + ".py"), "utf8"));
 }
@@ -928,14 +944,10 @@ export function happy(over = {}) {
   return Object.assign(s, over.script || {});
 }
 
-// The hasher's Python program is embedded in the workflow between markers.
-// Run it for real against a scratch git repo.
+// The hasher's Python program ships as scripts/hasher.py (4.0.1: no longer
+// embedded in the workflow). Run it for real against a scratch git repo.
 export function hasherPy() {
-  const m = /HASHER_PY_BEGIN\n([\s\S]*?)\n\/\/ HASHER_PY_END/.exec(SOURCE);
-  assert.ok(m, "HASHER_PY markers present");
-  // the block is a String.raw template literal: strip the JS wrapper lines
-  const body = m[1].replace(/^const HASHER_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
-  return body;
+  return programBody("hasher");
 }
 
 export function sh(cwd, ...cmd) {
@@ -1018,16 +1030,17 @@ export function extractFn(begin, end, name) {
   return Function("q", "return (" + m[1].trim().replace(new RegExp("^function " + name), "function").replace(/shQuote/g, "q") + ")")(q);
 }
 
+// The program a 4.0.0 <NAME>_PY constant held, read from scripts/<name>.py
+// (4.0.1). begin and end stay for the callers; the name comes from constName.
 export function extractPy(begin, end, constName) {
-  const m = new RegExp(begin + "\\n([\\s\\S]*?)\\n\\/\\/ " + end).exec(SOURCE);
-  assert.ok(m, begin + " markers");
-  return m[1].replace(new RegExp("^const " + constName + " = String\\.raw`\\n?"), "").replace(/`;?\s*$/, "");
+  assert.match(constName, /^[A-Z_]+_PY$/, constName);
+  assert.equal(begin, constName + "_BEGIN");
+  assert.equal(end, constName + "_END");
+  return programBody(constName.slice(0, -3).toLowerCase());
 }
 
 export function scriptCheckPy() {
-  const m = /SCRIPT_CHECK_PY_BEGIN\n([\s\S]*?)\n\/\/ SCRIPT_CHECK_PY_END/.exec(SOURCE);
-  assert.ok(m, "SCRIPT_CHECK_PY markers present");
-  return m[1].replace(/^const SCRIPT_CHECK_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
+  return programBody("script_check");
 }
 
 // The state JSON a run-state write step carries (quoted heredoc body).

@@ -1,5 +1,30 @@
 # Changelog
 
+## [4.0.1] - 2026-11-09
+
+### Fixed
+
+- The workflow did not register (ledger 1996). `/build-task` failed with
+  `Workflow "fleet:build-task-run" not found`. Claude Code skips a plugin workflow file over
+  524288 bytes and logs only a warning. The 4.0.0 `workflows/build-task-run.js` was 573925 bytes.
+  It is now 395711 bytes.
+
+### Changed
+
+- `scripts/*.py` are the source of truth for the 28 shipped programs. The workflow no longer
+  embeds the program text (the 28 `*_PY` constants and their markers are gone). It holds a
+  `PROGRAM_SHA256` table with the sha256 of each file's exact bytes. The runtime check does not
+  change: the relayed `program.sha256` and the `sha256sum` line of the file must both equal the
+  table entry.
+- `scripts/gen.mjs` now reads `scripts/*.py` and writes the table between the
+  `PROGRAM_SHA256_BEGIN` and `PROGRAM_SHA256_END` markers. `gen.mjs --check` fails when the table
+  and the files differ, or when the count is not 28. `--scripts <dir>` and `--workflow <file>`
+  replace `--out <dir>`.
+- `scripts_dir` is now `$HOME/.claude/plugins/cache/<marketplace>/fleet/4.0.1/scripts`
+  (`FLEET_VERSION`).
+- A new test keeps every `plugins/*/workflows/*.js` at 480000 bytes or less.
+- The contract marker stays `fleet-v4`. No role page changes.
+
 ## [4.0.0] - 2026-11-09
 
 Fleet 4.0.0 (ledger 1980–1993), built in streams on the integration branch `feat/fleet-4.0.0`. The

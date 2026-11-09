@@ -32,6 +32,7 @@ import {
   CONTRACT_LINE,
   chunkedContentOf,
   redigest,
+  PROGRAMS_TEXT,
 } from "./harness.mjs";
 
 // A sealed ref message (the shape priorRef in build_task_run.test.mjs makes).
@@ -279,7 +280,8 @@ test("4.0.0 1989: the JS and Python doc/lock classifiers agree", () => {
   const want = names.map((n) => js(n));
   assert.deepEqual(want.slice(0, 18), Array(18).fill(true));
   assert.deepEqual(want.slice(18), Array(names.length - 18).fill(false));
-  const py = SOURCE.match(/\nDOC_RE = [\s\S]*?\ndef doc_or_lock\(p\):\n(?: {4}.*\n)+/)[0];
+  // 4.0.1: the Python side lives in scripts/callers.py
+  const py = PROGRAMS_TEXT.match(/\nDOC_RE =[\s\S]*?\ndef doc_or_lock\(p\):\n(?: {4}.*\n)+/)[0];
   const r = spawnSync("python3", ["-I", "-c", "import re, json, sys\n" + py + "\nprint(json.dumps([doc_or_lock(p) for p in json.loads(sys.argv[1])]))", JSON.stringify(names)], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), want);

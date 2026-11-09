@@ -94,6 +94,8 @@ import {
   SCRIPTS_DIR,
   SCRIPTS_SRC,
   PROGRAMS,
+  PROGRAM_BODIES,
+  PROGRAMS_TEXT,
   programSha,
   programOf,
   chunkedContentOf,
@@ -5303,8 +5305,8 @@ test("2.1.0 run-state program: the write command and the read program round-trip
     const head = sh(wt, "git", "rev-parse", "HEAD").trim();
     assert.equal(sh(wt, "git", "cat-file", "-t", "refs/fleet/l42/state").trim(), "tag");
     assert.equal(sh(wt, "git", "tag", "-l").trim(), "", "no tag name left");
-    const rm = /READ_STATE_PY_BEGIN\n([\s\S]*?)\n\/\/ READ_STATE_PY_END/.exec(SOURCE);
-    const body = rm[1].replace(/^const READ_STATE_PY = String\.raw`\n?/, "").replace(/`;?\s*$/, "");
+    // 4.0.1: the program lives in scripts/read_state.py only
+    const body = extractPy("READ_STATE_PY_BEGIN", "READ_STATE_PY_END", "READ_STATE_PY");
     const rr = spawnSync("python3", ["-I", "-", wt, "refs/fleet/l42/state"], { input: body, encoding: "utf8" });
     assert.equal(rr.status, 0, rr.stderr);
     const got = JSON.parse(rr.stdout);
@@ -7941,8 +7943,8 @@ test("3.0.0 review 3 LOW: branch-scan prints task_id and plan_path only for an o
 
 test("3.0.0 review 3 LOW: no dead checks left (isPlanCommit self-compare, PLAN_REF_PY leftovers)", () => {
   assert.doesNotMatch(SOURCE, /planRefMetaProblem\(e, c\.sha, e\.sha256\)/);
-  const m = /PLAN_REF_PY_BEGIN([\s\S]*?)PLAN_REF_PY_END/.exec(SOURCE);
-  assert.doesNotMatch(m[1], /if True:/);
+  // 4.0.1: the program lives in scripts/plan_ref.py only
+  assert.doesNotMatch(extractPy("PLAN_REF_PY_BEGIN", "PLAN_REF_PY_END", "PLAN_REF_PY"), /if True:/);
 });
 
 // ---------------------------------------------------------------- 3.0.0 review 4 (PR #36 delta)
@@ -8343,19 +8345,20 @@ test("3.0.0 review 8: a yaml.py in the cwd neither runs nor changes the hook sur
 
 test("3.0.0 review 8: every embedded program runs isolated (-I), the YAML loader with cwd /", () => {
   // 4.0.0: programs run as `sha256sum -- <file> && python3 -I <file>`
-  const calls = (SOURCE.match(/["'`][^"'`\n]*python3 [^"'`]*/g) || []).filter((c) => !/python3 as /.test(c)).map((c) => c.slice(c.indexOf("python3") - 1));
+  // 4.0.1: the workflow and the shipped programs (scripts/*.py)
+  const all = SOURCE + "\n" + PROGRAMS_TEXT;
+  const calls = (all.match(/["'`][^"'`\n]*python3 [^"'`]*/g) || []).filter((c) => !/python3 as /.test(c)).map((c) => c.slice(c.indexOf("python3") - 1));
   assert.ok(calls.length >= 4, "found the invocations: " + calls.length);
   for (const c of calls) assert.match(c, /^.python3 -I /, c);
   // 4.0.0: one runner for every shipped program, by path from scripts_dir
   assert.match(SOURCE, /const f = shQuote\(state\.scriptsDir \+ "\/" \+ name \+ "\.py"\);\n  return "sha256sum -- " \+ f \+ " && python3 -I " \+ f \+/);
-  assert.match(SOURCE, /subprocess\.run\(\[c, '-I', '-c', LOADER\] \+ sites,/);
-  assert.match(SOURCE, /cwd='\/'/);
+  assert.match(PROGRAMS_TEXT, /subprocess\.run\(\[c, '-I', '-c', LOADER\] \+ sites,/);
+  assert.match(PROGRAMS_TEXT, /cwd='\/'/);
   // no program uses a third-party import (the YAML loader runs under pre-commit's interpreter)
-  const progs = SOURCE.match(/const [A-Z_]+_PY = String\.raw`[\s\S]*?`;/g) || [];
+  const progs = PROGRAM_BODIES;
   assert.ok(progs.length >= 10);
   const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "resource", "ast", "base64", "secrets"]);
-  for (const p of progs) {
-    const name = /const ([A-Z_]+_PY)/.exec(p)[1];
+  for (const [name, p] of progs) {
     for (const m of p.matchAll(/^\s*import ([A-Za-z0-9_, .]+)$/gm))
       for (const mod of m[1].split(",").map((x) => x.trim().split(" ")[0].split(".")[0]))
         // PRECOMMIT_IDS_PY: PyYAML, failing closed when absent; HASHER_PY: tomli only
@@ -9104,27 +9107,26 @@ test("3.1.0 security review: the fixer loader refuses a billion laughs in args, 
 // ---------------------------------------------------------------- 3.1.0: every embedded program caps its own memory and CPU
 
 test("3.1.0 caps: every embedded Python program and both YAML loaders set RLIMIT_AS and RLIMIT_CPU first", () => {
-  const progs = SOURCE.match(/const [A-Z_]+_PY = String\.raw`[\s\S]*?`;/g) || [];
+  // 4.0.1: the programs are scripts/*.py
+  const progs = PROGRAM_BODIES;
   assert.ok(progs.length >= 15, "found " + progs.length);
-  for (const p of progs) {
-    const name = /const ([A-Z_]+_PY)/.exec(p)[1];
-    const body = p.replace(/^const [A-Z_]+_PY = String\.raw`\n/, "");
+  for (const [name, body] of progs) {
     // the caps come before anything else runs
     assert.match(body, /^# resource caps \(3\.1\.0\)[^\n]*\n[^\n]*\nimport os as _o, resource as _r\nfor _k, _v in \(\(_r\.RLIMIT_AS, 1 << 30\), \(_r\.RLIMIT_CPU, 300\)\):\n/, name);
   }
-  const ph = /const PLAN_HASH_PY =([\s\S]*?);\n/.exec(SOURCE)[1];
+  const ph = extractPy("PLAN_HASH_PY_BEGIN", "PLAN_HASH_PY_END", "PLAN_HASH_PY");
   assert.match(ph, /RLIMIT_AS, 1 << 30/);
   assert.ok(ph.indexOf("RLIMIT_AS") < ph.indexOf("import hashlib"), "PLAN_HASH_PY caps first");
   // (3.1.0: CFG_LOADER went with the IaC scan; the other loaders are covered by the LOW caps test)
   for (const n of ["LOADER"]) {
-    const m = new RegExp("\\n" + n + " = \\(\\n([\\s\\S]*?)\\n\\)\\n").exec(SOURCE);
+    const m = new RegExp("\\n" + n + " = \\(\\n([\\s\\S]*?)\\n\\)\\n").exec(PROGRAMS_TEXT);
     assert.ok(m, n);
     assert.match(m[1], /resource\.RLIMIT_AS, 1 << 30\), \(resource\.RLIMIT_CPU, 60\)/, n);
     assert.match(m[1], /sys\.stdin\.buffer\.read\(262145\)/, n);
     assert.doesNotMatch(m[1], /default=str/, n);
   }
   // the repo's own hooks are not bound by the fixer's caps
-  assert.match(SOURCE, /\['pre-commit', 'run', '--files'\] \+ files, cwd=scratch, capture_output=True, timeout=tmo, env=dict\(env, PATH=clean_path\(\[wt, scratch_root\]\)\), preexec_fn=lift\)/);
+  assert.match(PROGRAMS_TEXT, /\['pre-commit', 'run', '--files'\] \+ files, cwd=scratch, capture_output=True, timeout=tmo, env=dict\(env, PATH=clean_path\(\[wt, scratch_root\]\)\), preexec_fn=lift\)/);
 });
 
 test("3.1.0 caps: a program that allocates past its cap dies quickly instead of growing", { skip: !HAVE_PY }, () => {
@@ -9373,7 +9375,8 @@ test("3.1.0 delta review: the surface program follows make, -m forms, symlinks, 
 // ---------------------------------------------------------------- 3.1.0 delta review: LOW items
 
 test("3.1.0 delta review LOW: the caps test covers every embedded YAML loader", () => {
-  const loaders = SOURCE.match(/\n(?:CFG_)?LOADER = \(\n[\s\S]*?\n\)\n/g) || [];
+  // 4.0.1: the loaders live in scripts/format_files.py and scripts/hook_surface.py
+  const loaders = PROGRAMS_TEXT.match(/\n(?:CFG_)?LOADER = \(\n[\s\S]*?\n\)\n/g) || [];
   assert.equal(loaders.length, 2, "FORMAT_FILES_PY and HOOK_SURFACE_PY each embed one");
   for (const l of loaders) {
     assert.match(l, /resource\.RLIMIT_AS, 1 << 30\), \(resource\.RLIMIT_CPU, 60\)/);
@@ -10639,7 +10642,7 @@ function jsPathRecheck(agentStub) {
     'const STR = { type: "string" };\nconst STR_OR_NULL = { type: ["string", "null"] };' +
     constBlock("PROGRAM_PROP", ";\n") +
     constBlock("K256", "];") +
-    constBlock("PATH_CHECK_PY", "`;") +
+    constBlock("PROGRAM_SHA256", "\n};") +
     constBlock("PATH_TOOLS", "];") +
     constBlock("NOT_SHIMMED", '";') +
     constBlock("PATH_RECHECK_SCHEMA", "\n};") +
@@ -10649,7 +10652,8 @@ function jsPathRecheck(agentStub) {
     constBlock("RELAY_RETRY_MODEL", '";') +
     'const state = { repo: "/r", nonce: "' + NONCE + '", pathChecks: 0, agents: 0, scriptsDir: "' + SCRIPTS_DIR + '" };\n' +
     // 4.0.0: the one program this runtime runs
-    "function programTable() { return { path_check: PATH_CHECK_PY }; }\nconst PROGRAM_SHA = {};\n" +
+    // 4.0.1: its sha256 from the workflow's PROGRAM_SHA256 table
+    "function programTable() { return { path_check: PROGRAM_SHA256.path_check }; }\n" +
     "function gate() {}\nfunction halt(status, msg, stopGate) { const e = new Error(msg); e.halt = { status, stopGate }; throw e; }\n" +
     'function nonced(p) { return p + "\\nRun nonce: " + state.nonce; }\n';
   const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");

@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync, cpSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import {
   spawnSync,
   SOURCE,
@@ -34,7 +35,7 @@ import {
   PROGRAMS,
   PROGRAM_LABELS,
   programSha,
-  programConst,
+  programTableSha,
   verifyStub,
   chunkedContentOf,
   redigest,
@@ -50,42 +51,63 @@ function at(obj, path) {
 
 // ---------------------------------------------------------------- AC-1993-2: the files are the constants
 
-test("4.0.0 1993 AC-2: every *_PY constant ships as scripts/<name>.py, byte-equal to the constant + newline", () => {
-  const consts = (SOURCE.match(/^const ([A-Z_]+_PY) = String\.raw`/gm) || []).map((l) => /const ([A-Z_]+_PY)/.exec(l)[1]).sort();
-  assert.deepEqual(consts, PROGRAMS.map(([, c]) => c).sort(), "the program table names every embedded program");
+// 4.0.1 (1996): the files are the source; the workflow holds only their sha256
+test("4.0.0 1993 AC-2 (4.0.1): every program ships as scripts/<name>.py and the PROGRAM_SHA256 table holds its exact sha256", () => {
+  // no program text is embedded any more
+  assert.equal((SOURCE.match(/^const ([A-Z_]+_PY) = String\.raw`/gm) || []).length, 0, "no *_PY constant left in the workflow");
+  assert.ok(!/_PY_BEGIN|_PY_END/.test(SOURCE), "no *_PY markers left in the workflow");
   // 22 in S1; S4 adds parked (1986); S3 adds push_probe (1985);
   // S5 adds test_db_decl, db_sweep, db_up, db_down (1981)
   assert.equal(PROGRAMS.length, 28);
   const files = readdirSync(SCRIPTS_SRC).filter((f) => f.endsWith(".py")).sort();
   assert.deepEqual(files, PROGRAMS.map(([n]) => n + ".py").sort(), "no extra and no missing file");
-  for (const [name, c] of PROGRAMS) {
-    const value = programConst(c);
-    // the raw literal is the runtime value: no ${ and no backtick inside
-    assert.ok(!value.includes("${") && !value.includes("`"), c);
-    assert.equal(Function("return String.raw`" + value + "`")(), value, c);
-    assert.equal(readFileSync(join(SCRIPTS_SRC, name + ".py"), "utf8"), value + "\n", name);
-    assert.equal(programSha(name), sha256(value + "\n"), name);
+  for (const [name, sha] of PROGRAMS) {
+    // byte-exact: the sha256 of the file's bytes, as sha256sum prints it
+    assert.equal(createHash("sha256").update(readFileSync(join(SCRIPTS_SRC, name + ".py"))).digest("hex"), sha, name);
+    assert.equal(programSha(name), sha, name);
+    assert.equal(programTableSha(name), sha, name);
   }
 });
 
 test("4.0.0 1993: gen.mjs --check passes on the shipped files and fails on a changed, missing or extra file", () => {
   const ok = spawnSync("node", [GEN, "--check"], { encoding: "utf8" });
   assert.equal(ok.status, 0, ok.stderr);
+  // 4.0.1: a copy of the scripts dir and the workflow; gen writes the table from the files
   const tmp = mkdtempSync(join(tmpdir(), "fleet-gen-"));
+  const dir = join(tmp, "scripts");
+  const wf = join(tmp, "build-task-run.js");
+  const chk = () => spawnSync("node", [GEN, "--check", "--scripts", dir, "--workflow", wf], { encoding: "utf8" });
+  const gen = () => spawnSync("node", [GEN, "--scripts", dir, "--workflow", wf], { encoding: "utf8" });
   try {
-    const w = spawnSync("node", [GEN, "--out", tmp], { encoding: "utf8" });
+    mkdirSync(dir);
+    for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(dir, n + ".py"));
+    writeFileSync(wf, SOURCE);
+    assert.equal(chk().status, 0, chk().stderr);
+    const w = gen();
     assert.equal(w.status, 0, w.stderr);
-    assert.equal(spawnSync("node", [GEN, "--check", "--out", tmp], { encoding: "utf8" }).status, 0);
-    writeFileSync(join(tmp, "plan_files.py"), readFileSync(join(tmp, "plan_files.py"), "utf8") + "# x\n");
-    const changed = spawnSync("node", [GEN, "--check", "--out", tmp], { encoding: "utf8" });
+    assert.equal(readFileSync(wf, "utf8"), SOURCE, "gen is deterministic: the shipped table is its output");
+    writeFileSync(join(dir, "plan_files.py"), readFileSync(join(dir, "plan_files.py"), "utf8") + "# x\n");
+    const changed = chk();
     assert.notEqual(changed.status, 0);
     assert.match(changed.stderr, /plan_files\.py/);
-    spawnSync("node", [GEN, "--out", tmp]);
-    writeFileSync(join(tmp, "extra.py"), "print(1)\n");
-    assert.notEqual(spawnSync("node", [GEN, "--check", "--out", tmp], { encoding: "utf8" }).status, 0);
-    rmSync(join(tmp, "extra.py"));
-    rmSync(join(tmp, "hasher.py"));
-    assert.notEqual(spawnSync("node", [GEN, "--check", "--out", tmp], { encoding: "utf8" }).status, 0);
+    cpSync(join(SCRIPTS_SRC, "plan_files.py"), join(dir, "plan_files.py"));
+    assert.equal(chk().status, 0);
+    writeFileSync(join(dir, "extra.py"), "print(1)\n");
+    const extra = chk();
+    assert.notEqual(extra.status, 0);
+    assert.match(extra.stderr, /extra\.py/);
+    assert.notEqual(gen().status, 0, "gen refuses a 29th program");
+    rmSync(join(dir, "extra.py"));
+    rmSync(join(dir, "hasher.py"));
+    const missing = chk();
+    assert.notEqual(missing.status, 0);
+    assert.match(missing.stderr, /hasher\.py/);
+    cpSync(join(SCRIPTS_SRC, "hasher.py"), join(dir, "hasher.py"));
+    // a tampered table entry fails too
+    writeFileSync(wf, SOURCE.replace(PROGRAMS[0][1], "0".repeat(64)));
+    const table = chk();
+    assert.notEqual(table.status, 0);
+    assert.match(table.stderr, new RegExp(PROGRAMS[0][0] + "\\.py"));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -94,7 +116,7 @@ test("4.0.0 1993: gen.mjs --check passes on the shipped files and fails on a cha
 test("4.0.0 1993: FLEET_VERSION is a semver string and the scripts_dir shape names it", () => {
   const m = /^const FLEET_VERSION = "(\d+\.\d+\.\d+)";$/m.exec(SOURCE);
   assert.ok(m, "FLEET_VERSION constant");
-  assert.equal(m[1], "4.0.0");
+  assert.equal(m[1], "4.0.1");
   assert.match(SCRIPTS_DIR, new RegExp("/fleet/" + m[1].replace(/\./g, "\\.") + "/scripts$"));
 });
 
@@ -277,23 +299,23 @@ function precommitScript() {
 test("4.0.0 1993 AC-4: a scripts_dir outside the plugin cache halts at the first agent with stop_gate contract", async () => {
   const bad = [
     ["/tmp/x", ["/tmp/x"]],
-    ["fleet/4.0.0/scripts", ["fleet/4.0.0/scripts"]],
+    ["fleet/4.0.1/scripts", ["fleet/4.0.1/scripts"]],
     ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts", ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts"]],
-    ["/home/u/../x/fleet/4.0.0/scripts", ["/home/u/../x/fleet/4.0.0/scripts"]],
-    ["/home/u//fleet/4.0.0/scripts", ["/home/u//fleet/4.0.0/scripts"]],
-    ["/home/u/a b/fleet/4.0.0/scripts", ["/home/u/a b/fleet/4.0.0/scripts"]],
+    ["/home/u/../x/fleet/4.0.1/scripts", ["/home/u/../x/fleet/4.0.1/scripts"]],
+    ["/home/u//fleet/4.0.1/scripts", ["/home/u//fleet/4.0.1/scripts"]],
+    ["/home/u/a b/fleet/4.0.1/scripts", ["/home/u/a b/fleet/4.0.1/scripts"]],
     // security review: exactly $HOME/.claude/plugins/cache/<marketplace>/fleet/<version>/scripts
-    ["/home/u/x/fleet/4.0.0/scripts", ["/home/u/x/fleet/4.0.0/scripts"]],
-    ["/home/v/.claude/plugins/cache/m/fleet/4.0.0/scripts", ["/home/v/.claude/plugins/cache/m/fleet/4.0.0/scripts"]],
-    ["/home/u/.claude/plugins/cache/a/b/fleet/4.0.0/scripts", ["/home/u/.claude/plugins/cache/a/b/fleet/4.0.0/scripts"]],
-    ["/home/u/.claude/plugins/cache/../fleet/4.0.0/scripts", ["/home/u/.claude/plugins/cache/../fleet/4.0.0/scripts"]],
-    ["/home/u/.claude/plugins/cache/.x/fleet/4.0.0/scripts", ["/home/u/.claude/plugins/cache/.x/fleet/4.0.0/scripts"]],
+    ["/home/u/x/fleet/4.0.1/scripts", ["/home/u/x/fleet/4.0.1/scripts"]],
+    ["/home/v/.claude/plugins/cache/m/fleet/4.0.1/scripts", ["/home/v/.claude/plugins/cache/m/fleet/4.0.1/scripts"]],
+    ["/home/u/.claude/plugins/cache/a/b/fleet/4.0.1/scripts", ["/home/u/.claude/plugins/cache/a/b/fleet/4.0.1/scripts"]],
+    ["/home/u/.claude/plugins/cache/../fleet/4.0.1/scripts", ["/home/u/.claude/plugins/cache/../fleet/4.0.1/scripts"]],
+    ["/home/u/.claude/plugins/cache/.x/fleet/4.0.1/scripts", ["/home/u/.claude/plugins/cache/.x/fleet/4.0.1/scripts"]],
     // two hits: never guess
-    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/fleet/4.0.0/scripts"]],
+    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/fleet/4.0.1/scripts"]],
     // no hit
     [null, []],
     // the directory used is not the hit
-    ["/home/v/.claude/plugins/cache/n/fleet/4.0.0/scripts", [SCRIPTS_DIR]],
+    ["/home/v/.claude/plugins/cache/n/fleet/4.0.1/scripts", [SCRIPTS_DIR]],
   ];
   for (const [dir, hits] of bad) {
     const s = happy();
@@ -314,7 +336,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   assert.equal(second.result.status, "awaiting_confirmation", second.result.reason);
   for (const o of [first, second]) {
     assert.equal(o.labels[0], "preflight");
-    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/fleet/4.0.0/scripts;'));
+    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/fleet/4.0.1/scripts;'));
     assert.ok(o.calls[0].prompt.includes("sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py"));
   }
   const ref = s.__store[PC];
@@ -323,7 +345,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   // build mode resolves it again in its own first agent
   const b = await run(happy(), ARGS);
   assert.equal(b.build.labels[0], "preflight");
-  assert.match(b.build.calls[0].prompt, /fleet\/4\.0\.0\/scripts/);
+  assert.match(b.build.calls[0].prompt, /fleet\/4\.0\.1\/scripts/);
 });
 
 test("4.0.0 1993 AC-4: a path_check run from another directory (wrong self-hash) halts at preflight", async () => {
@@ -614,7 +636,7 @@ test("4.0.0 security 1: scripts_dir must be its own realpath and no symlink; the
 test("4.0.0 security 1: the probe command, run for real, reports a symlinked scripts dir and the program hashes", { skip: !HAVE_PY }, async () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-probe-"));
   try {
-    const real = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.0", "scripts");
+    const real = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.1", "scripts");
     mkdirSync(real, { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(real, n + ".py"));
     const cmd = await PREFLIGHT_PROBE();
@@ -628,9 +650,9 @@ test("4.0.0 security 1: the probe command, run for real, reports a symlinked scr
     for (const [n] of PROGRAMS) assert.ok(lines.includes(programSha(n) + "  " + real + "/" + n + ".py"), n);
     // the version dir replaced by a symlink to a copy elsewhere
     const other = join(home, "other");
-    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.0"), other, { recursive: true });
-    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.0"), { recursive: true });
-    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.0"));
+    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.1"), other, { recursive: true });
+    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.1"), { recursive: true });
+    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "fleet", "4.0.1"));
     lines = run1();
     assert.ok(lines.includes("real=" + join(other, "scripts")), lines.join("\n"));
   } finally {
