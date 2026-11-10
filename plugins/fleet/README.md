@@ -22,8 +22,8 @@ relaxed round 0, no parked prior was unreadable, and a task id input carries `pr
 plan returns `awaiting_confirmation` with `confirm_reason`, as `ask` does. A failed gate is
 `needs_human`, as under `auto`. With no `confirm` value the workflow asks.
 
-The input is any of: a yadgar ledger id, a Jira key, a GitHub or Codeberg issue or PR URL, a plan
-path, or free text.
+The input is any of: a ledger task id (yadgar or yaadgaar, when that MCP server is present), a Jira
+key, a GitHub or Codeberg issue or PR URL, a plan path, or free text.
 
 ## Install
 
@@ -38,8 +38,12 @@ path, or free text.
 - Nothing for the role prompts (5.0.0, R1): the ten role prompts ship in the plugin as
   `roles/<role>.md`: `scope-and-plan`, `plan-audit`, `fleet-test-writer`, `fleet-test-judge`,
   `fleet-coder`, `fleet-code-judge`, `fleet-pr-opener`, `fleet-intent-judge`, `pr-review` and
-  `gate-change-nonweakening-sweep`. See "Role files" below. The memory and ledger steps still use
-  the `yadgar` / `yaadgaar` MCP servers in this release (R2 makes them optional).
+  `gate-change-nonweakening-sweep`. See "Role files" below.
+- No MCP server is required (5.0.0, R2). Optional: `yadgar` (ledger tasks `L<N>`), `yaadgaar`
+  (ledger tasks of `yadgarhq/` projects), the Atlassian MCP (Jira input and comments), `gh` /
+  `gh-personal` (GitHub input and comments) and `$CODEBERG_TOKEN` (Codeberg comments). Preflight
+  takes a census of the ledger read tools; a step whose tool is absent is skipped or reported,
+  never a stop (see "Ledger adapters" below). Only a task-id input needs a ledger tool.
 - `git`, `gh` (authenticated), and `python3` >= 3.11 (or `tomli`) in the target repo's environment.
 - For Jira input or write-back: the Atlassian MCP server. For GitHub write-back: `gh-personal`. For
   Codeberg write-back: `$CODEBERG_TOKEN`. A missing tool makes intake stop, or makes that comment
@@ -58,18 +62,18 @@ agent runs. `run_nonce` (2.1.5) is a fresh value per invocation (the skill passe
 every infra prompt carries it, so `resumeFromRunId` never replays a stale git or worktree check.
 A missing nonce returns `needs_human` before any agent runs.
 
-| Step | Agent              | Gate in script code                                                                                |
-| ---- | ------------------ | -------------------------------------------------------------------------------------------------- |
-| 1    | preflight          | yadgar unreachable, a role missing, a low version or a wrong marker; an unshimmed IaC tool on PATH |
-| 2    | intake (read only) | `needs_human` (ambiguous repo or ticket) stops before any other step                               |
-| 3    | workspace (infra)  | creates or reuses branch `fleet/<task id>-<slug>` and its worktree                                 |
-| 4    | branch-scan (r/o)  | any commit beyond origin/<default> that is not a plan commit -> stop                               |
-| 5    | scope-and-plan     | criterion ids; disjoint test files; `tldr`; `plan_diff` is a string array                          |
-| 5a   | callers (r/o)      | `changed_symbols` map well formed; `git grep -w` hits equal the map                                |
-| 6    | -                  | short path when `est_diff_lines` < 20 and `new_behaviour` false: one test writer, every gate kept  |
-| 7    | plan-audit         | verdict other than `approve` -> `needs_human`                                                      |
-| 8    | stage-plan         | stages the plan doc; returns the sha256 of the staged bytes                                        |
-| 9    | commit-plan        | commits the plan doc only, LOCALLY; writes the sealed ref as a git object                          |
+| Step | Agent              | Gate in script code                                                                               |
+| ---- | ------------------ | ------------------------------------------------------------------------------------------------- |
+| 1    | preflight          | a role file changed or missing; an unshimmed IaC tool on PATH; no ledger tool census              |
+| 2    | intake (read only) | `needs_human` (ambiguous repo or ticket) stops before any other step                              |
+| 3    | workspace (infra)  | creates or reuses branch `fleet/<task id>-<slug>` and its worktree                                |
+| 4    | branch-scan (r/o)  | any commit beyond origin/<default> that is not a plan commit -> stop                              |
+| 5    | scope-and-plan     | criterion ids; disjoint test files; `tldr`; `plan_diff` is a string array                         |
+| 5a   | callers (r/o)      | `changed_symbols` map well formed; `git grep -w` hits equal the map                               |
+| 6    | -                  | short path when `est_diff_lines` < 20 and `new_behaviour` false: one test writer, every gate kept |
+| 7    | plan-audit         | verdict other than `approve` -> `needs_human`                                                     |
+| 8    | stage-plan         | stages the plan doc; returns the sha256 of the staged bytes                                       |
+| 9    | commit-plan        | commits the plan doc only, LOCALLY; writes the sealed ref as a git object                         |
 
 Branch-scan: a plan commit has the subject `plan(<task id>): <slug>`, and its file set is exactly
 `{plan_path}`. The scan reads `plan_path` from a sealed plan ref of the task
@@ -209,12 +213,38 @@ sh, bash, zsh, node). Limits: indentation-based and line-based; a decorator line
 module-level. A ref sealed before 2.1.6 (`changed_symbols: null`) skips the check with the gate
 line "build caller check skipped".
 
-Intake classifies the input and fetches its text: a ledger task through yadgar `task_get`, a Jira
+Intake classifies the input and fetches its text: a ledger task through yadgar `task_get` (when present), a Jira
 ticket through the Atlassian MCP, an issue or PR through `gh-personal` or the Codeberg API, a plan
 file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body, id,
 project}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,
 `plan` and `text`. `id` and `project` are null except on a `yaadgaar` source. `url` and
 `plan_path` may be null. Free text, a plan and a ledger task work in the caller's repo.
+
+### Ledger adapters (5.0.0, R2)
+
+Preflight's last action is a tool census: one `ToolSearch` select of `mcp__yaadgaar__read_task`
+and `mcp__yadgar__task_get`, relayed as `ledger_tools` (a list of names; required). An MCP server
+that is not configured or not connected has no tools, so its names are absent. `fleet:judge`
+cannot see the ledger write tools (`disallowedTools`), so a read tool stands for its server. A
+preflight with no list of names stops (`needs_human`); a census is never assumed.
+
+- Intake gets `ledger_tools` and a `ledger` it may use: the project's ledger when its read tool is
+  present, `either` (no project, any tool), else `none`. A ledger whose tool is absent is never
+  called; intake records it in `tried` with `error: "absent"`. A task-id input (`L123`, `123`,
+  `#123`, `yaadgaar #123`) with ledger `none` stops before intake: "no task ledger available;
+  give a URL, Jira key or text".
+- The write-back adapter (`ledgerAdapter(project, sources, tools)`, pure, from the build run's own
+  census): `yaadgaar` (a yaadgaar source and its read tool), `yadgar` (a ledger source, its read
+  tool, not a `yadgarhq/` project), `tracker` (a GitHub, Codeberg or Jira source: the one marked
+  comment is the whole write-back; no second comment), else `none`. The result carries
+  `ledger_adapter` and `ledger_reason`.
+- A ledger source whose read tool is absent at build time writes nothing: each entry is
+  `unavailable` with its `section_text`, and `ledger_status` is `unavailable`. A present tool that
+  fails at call time stays `failed`. Neither stops the run. `ledger_status` is `none` when no
+  ledger entry exists.
+- The intent judge gets `ledger_task` only through a ledger adapter, and never reads tracker
+  comments as rulings. A build with `confirm: "auto"` whose sealed ledger task cannot be re-read
+  (tool absent) stops with the same sentence; run it with `confirm: "ask"`.
 
 Since 3.1.3 (ledger 1979) intake resolves a task id only by calling the ledger tool, and the tool's
 answer is the truth. `args.project` is the ledger scope and is independent of `repo`: a
@@ -471,7 +501,8 @@ is the plan commit, for example after a re-plan.
 - **Ledger:** for each `ledger` source, one `## Fleet build` section (tldr, plan path, PR URL,
   hidden `fleet:<task id>` marker) is appended to the task's body page (`body_slug`) in
   `args.project`. A body that already carries the marker is skipped. `ledger_status` is `ok`,
-  `failed` or `none`. A failed entry hands its `section_text` back.
+  `failed`, `unavailable` (5.0.0: the ledger's read tool is absent) or `none`. A failed or
+  unavailable entry hands its `section_text` back.
 - **Ledger task with no body page (3.1.0):** a read-only step (`infra:ledger-read:pre`,
   `fleet:judge`) reads every ledger task first: its title, `body_slug` and marker. A task with a
   body page goes to the append step above. For a task with none, `infra:ledger-body` runs on
@@ -1108,7 +1139,10 @@ the pre-commit id read, the review path listing, the comment listing, the ledger
 hasher run as the `fleet:judge` agent, which has `Write`, `Edit` and `NotebookEdit` disallowed, and
 (since 3.1.0) every yadgar writer (`task_write`, the `wiki_*` writers, `memorize`, `forget`,
 `memory_update`, `anchor`, the `block_*` writers, `adr_add`, `agent_prompt_save`, `config_set`);
-a denylist, hygiene only, because the judge has `Bash`. `Bash` stays, because
+a denylist, hygiene only, because the judge has `Bash`. The Claude Code docs do not say what a
+`disallowedTools` name of an absent MCP server does; they document no error for it, so the list is
+kept as is (5.0.0, R2). `fleet:ledger-writer` runs only when the yadgar ledger tool is present.
+`Bash` stays, because
 the code judge must run the suite. The backstop is a worktree state (HEAD, the temp-index tree and
 every hasher map) taken before and after every judge run. Any difference discards the verdict and
 returns `needs_human` with reason `judge mutated worktree` and the changed parts. This catches a
@@ -1214,11 +1248,13 @@ Build mode, `status: "ok"`:
     "ledger": [{ "ref": "42", "status": "written" }],
     "comments": []
   },
+  "ledger_adapter": "yadgar",
+  "ledger_reason": null,
   "ledger_status": "ok",
   "comment_status": "none",
   "comment_text": null,
   "gate_log": ["..."],
-  "yadgar_findings": [{ "role": "fleet-coder", "findings": ["..."] }]
+  "memory_notes": [{ "role": "fleet-coder", "notes": ["..."] }]
 }
 ```
 

@@ -417,6 +417,9 @@ function roleSchema(extra) {
         reason: STR,
         role_file: ROLE_FILE_PROP,
         artefacts: ANY_ARRAY,
+        // 5.0.0 (R2): optional notes for a memory tool, if the caller has one
+        memory_notes: ANY_ARRAY,
+        // the role files' name for them until the R3 prompt revision
         yadgar_findings: ANY_ARRAY,
       },
       extra,
@@ -622,7 +625,10 @@ const PROGRAM_OUTPUT = { type: ["object", "null"], properties: { program: PROGRA
 // directories, hashes every file in them, and runs the PATH check
 const PREFLIGHT_SCHEMA = {
   type: "object",
+  // 5.0.0 (R2): the ledger tool census; a correct preflight always has it
+  required: ["ledger_tools"],
   properties: {
+    ledger_tools: { type: "array", items: STR },
     scripts_probe: { type: "array", items: STR },
     scripts_dir: STR_OR_NULL,
     path_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
@@ -2320,7 +2326,19 @@ function preflightPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     preflightScriptsText(inputs.repo, false) +
-    "Return {scripts_probe, scripts_dir, path_check, reason}."
+    censusText() +
+    "Return {ledger_tools, scripts_probe, scripts_dir, path_check, reason}."
+  );
+}
+
+// 5.0.0 (R2): the ledger tool census. A ToolSearch select returns only the
+// names the session has; an absent MCP server (not configured, or not
+// connected) returns none of its names.
+function censusText() {
+  return (
+    "Then the ledger tool census: call ToolSearch once with the query `select:" + LEDGER_TOOLS.join(",") + "` (max_results " + LEDGER_TOOLS.length + "). " +
+    "ledger_tools = every one of these names that ToolSearch returned a schema for, or that is already in your tool list; [] when none. " +
+    "A name of an MCP server that is not configured or not connected is absent: leave it out, and never guess. Never call any of these tools.\n"
   );
 }
 
@@ -2402,10 +2420,11 @@ function intakePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Resolve `input` into ONE work item and fetch its text. Classify it in this order:\n" +
-    "1. Task id (`L42`, `42`, `#42`, `yaadgaar #42`). The ledger scope is <project>, as the caller gave it; it is independent of <repo>. A repo's `.yadgar` files, its git remotes and its config never decide the ledger or the project. Resolve the id only by calling the ledger tool, and take its answer as the truth. Record EVERY ledger tool call in `tried`: {ledger, project, call (the tool and its arguments), error (the tool's error text, exactly; null when it returned the task)}. The ledger is fixed by `ledger`; never choose it yourself:\n" +
+    "1. Task id (`L42`, `42`, `#42`, `yaadgaar #42`). The ledger scope is <project>, as the caller gave it; it is independent of <repo>. A repo's `.yadgar` files, its git remotes and its config never decide the ledger or the project. Resolve the id only by calling the ledger tool, and take its answer as the truth. Record EVERY ledger tool call in `tried`: {ledger, project, call (the tool and its arguments), error (the tool's error text, exactly; null when it returned the task)}. `ledger_tools` lists the ledger tools this session has; never call a ledger tool that is not in it: for such a ledger record {ledger, project, call: <the tool name>, error \"absent\"} instead. The ledger is fixed by `ledger`; never choose it yourself:\n" +
+    "   - ledger `none` (no ledger tool in this session): call no ledger tool; a task id -> needs_human with reason \"" + NO_LEDGER_REASON + "\".\n" +
     "   - ledger `yaadgaar` (the project's tasks live in yaadgaar): `42`, `#42` and `yaadgaar #42` are yaadgaar task 42; never map them to the yadgar ledger or to L<N>, and never call mcp__yadgar__task_get (that ledger is frozen history for this project). An `L42` input -> needs_human (a legacy id; this project builds from yaadgaar tasks only). Load mcp__yaadgaar__read_task via ToolSearch and call it with number=<the number>. The yaadgaar client is bound to the session's project and takes no project argument; never check or guess which project it is bound to. A refusal or no task -> needs_human. kind yaadgaar; ref = the number; id = the `id` (URN) of the answer, copied exactly; project = the project the answer names (a `project_id` or `project` field), copied exactly, else null. An answer that names a project other than <project> -> needs_human naming both.\n" +
     "   - ledger `yadgar`: kind ledger. Load mcp__yadgar__task_get via ToolSearch; call it with project_id=<project> and id=<the number>. A `yaadgaar #42` input, or a refusal with external_task_ledger -> needs_human. ref = the number.\n" +
-    "   - ledger `either` (no project given): try both ledgers and use the one that returns the task. A `yaadgaar #42`, `#42` or `42` input: call mcp__yaadgaar__read_task(number=<the number>) first; a task -> kind yaadgaar as above. Else, and for an `L42` input, call mcp__yadgar__task_get only when you can name its project_id; with none, record it in `tried` with error \"no project given\". A task -> kind ledger. Neither returns it -> needs_human.\n" +
+    "   - ledger `either` (no project given): try each ledger whose tool is in `ledger_tools` and use the one that returns the task. A `yaadgaar #42`, `#42` or `42` input: call mcp__yaadgaar__read_task(number=<the number>) first; a task -> kind yaadgaar as above. Else, and for an `L42` input, call mcp__yadgar__task_get only when you can name its project_id; with none, record it in `tried` with error \"no project given\". A task -> kind ledger. Neither returns it -> needs_human.\n" +
     "   Never advise creating, editing or changing a repo's `.yadgar` file, project id or origin: the ledger scope is <project>, not the repo.\n" +
     "   body = the title, status and full body. If the task names a plan path that exists in the repo, also set plan_path and add a `plan` source for it.\n" +
     "2. Jira key (`ABC-123`): kind jira. Load the Atlassian MCP tools via ToolSearch: getAccessibleAtlassianResources for the cloudId, then getJiraIssue(issueIdOrKey, responseContentFormat=\"markdown\"). Tools absent -> needs_human. ref = the key; url = the browse URL; body = summary + description.\n" +
@@ -3415,6 +3434,8 @@ const state = {
   scriptsDir: null,
   // 5.0.0 (R1): its sibling roles dir
   rolesDir: null,
+  // 5.0.0 (R2): the ledger read tools preflight found in this run's session
+  ledgerTools: [],
   // 4.0.0 (1993): a plan ref committed but not verified (returned on a halt)
   unverifiedPlanRef: null,
   // 5.0.0 (R1): the role files are pinned (models set); the log-only record a
@@ -3528,9 +3549,11 @@ async function roleAgent(role, label, prompt, opts) {
   return agent(prompt, Object.assign({}, opts, { label: label + ":fallback", model: tier.fallback }));
 }
 
+// 5.0.0 (R2): optional memory notes; never required, never written by the workflow
 function collect(role, r) {
-  if (r && Array.isArray(r.yadgar_findings) && r.yadgar_findings.length)
-    state.findings.push({ role, findings: r.yadgar_findings });
+  if (!r) return;
+  const notes = (Array.isArray(r.memory_notes) ? r.memory_notes : []).concat(Array.isArray(r.yadgar_findings) ? r.yadgar_findings : []);
+  if (notes.length) state.findings.push({ role, notes });
 }
 
 // deferCheck: the caller runs its script gates (hash, fingerprint) first and
@@ -3726,7 +3749,7 @@ function finish(status, reason) {
     role_sha256: state.roleSha,
     refreeze_log: state.refreezeLog,
     gate_log: state.gateLog,
-    yadgar_findings: state.findings,
+    memory_notes: state.findings,
   };
 }
 
@@ -3800,6 +3823,11 @@ async function preflightStep(repo) {
   gate("roles_dir: " + state.rolesDir);
   // Max's ruling (2026-11-09): IaC tooling may only be reachable through the nix shims
   pathCheck(pre.path_check, repo);
+  // 5.0.0 (R2): the ledger tools this run may use; never assumed present
+  if (!Array.isArray(pre.ledger_tools) || pre.ledger_tools.some((x) => typeof x !== "string"))
+    halt("needs_human", "preflight: no ledger tool census (ledger_tools " + JSON.stringify(pre.ledger_tools === undefined ? null : pre.ledger_tools) + " is not a list of tool names)", "contract");
+  state.ledgerTools = LEDGER_TOOLS.filter((n) => pre.ledger_tools.indexOf(n) >= 0);
+  gate("ledger tools: " + (state.ledgerTools.length ? state.ledgerTools.join(", ") : "none"));
   state.repo = repo;
   for (const role of ROLES) {
     const line = ROLE_DISPATCH[role];
@@ -3893,6 +3921,44 @@ function ledgerFor(project) {
   if (typeof project !== "string" || !project) return "either";
   return YAADGAAR_PROJECT_RE.test(project) ? "yaadgaar" : "yadgar";
 }
+
+// 5.0.0 (R2): yadgar and yaadgaar are optional. Preflight reports which of
+// these read tools the session has (fleet:judge cannot see the write tools);
+// a read tool stands for its server. An MCP server that is not configured or
+// not connected has no tools, so its names are not in the census.
+// LEDGER_ADAPTER_BEGIN
+const LEDGER_TOOLS = ["mcp__yaadgaar__read_task", "mcp__yadgar__task_get"];
+// The write-back adapter for a task's sources (pure): "yaadgaar" or "yadgar"
+// for a ledger source whose read tool is present; else "tracker" when a
+// GitHub, Codeberg or Jira source exists (the marked comment is the whole
+// write-back, Max's ruling 2026-11-10); else "none". A yadgarhq/ project
+// never uses the yadgar ledger (ADR-0994). Project problems of a present
+// ledger stay the write-back's own `failed` entries.
+function ledgerAdapter(project, sources, tools) {
+  const kinds = (Array.isArray(sources) ? sources : []).map((s) => (s && s.kind) || "?");
+  const has = (n) => Array.isArray(tools) && tools.indexOf(n) >= 0;
+  const yq = typeof project === "string" && YAADGAAR_PROJECT_RE.test(project);
+  if (kinds.indexOf("yaadgaar") >= 0 && has(LEDGER_TOOLS[0])) return { adapter: "yaadgaar", reason: null };
+  if (kinds.indexOf("ledger") >= 0 && !yq && has(LEDGER_TOOLS[1])) return { adapter: "yadgar", reason: null };
+  const why = [];
+  if (kinds.indexOf("yaadgaar") >= 0) why.push("yaadgaar task: " + LEDGER_TOOLS[0] + " absent");
+  if (kinds.indexOf("ledger") >= 0) why.push(yq ? "ledger task on a yadgarhq/ project (its tasks are in yaadgaar)" : "ledger task: " + LEDGER_TOOLS[1] + " absent");
+  if (kinds.some((k) => EXTERNAL_KINDS.indexOf(k) >= 0)) return { adapter: "tracker", reason: ["the marked tracker comment is the write-back"].concat(why).join("; ") };
+  return { adapter: "none", reason: why.length ? why.join("; ") : "no ledger task and no tracker source (" + kinds.join(", ") + "): nothing to write back" };
+}
+// LEDGER_ADAPTER_END
+
+// The ledger intake may use (5.0.0, R2): the project's ledger when its read
+// tool is present, "either" with no project and any tool, else "none".
+function intakeLedger(project, tools) {
+  const l = ledgerFor(project);
+  const y = tools.indexOf(LEDGER_TOOLS[0]) >= 0;
+  const g = tools.indexOf(LEDGER_TOOLS[1]) >= 0;
+  if (l === "yaadgaar") return y ? l : "none";
+  if (l === "yadgar") return g ? l : "none";
+  return y || g ? "either" : "none";
+}
+const NO_LEDGER_REASON = "no task ledger available; give a URL, Jira key or text";
 
 // A source from the wrong ledger for the project (null: ok).
 function ledgerProblem(brief, project) {
@@ -5148,7 +5214,12 @@ function needsMaxSection(check, reasons, intent, planPath, tiny) {
 // planDiff, planFacts, files}. Returns {ok, failedCheck, reasons, intent}.
 async function autoGates(ctx) {
   const sfx = ctx.sfx || "";
-  const ledger = ctx.brief.sources.find((x) => LEDGER_KINDS.indexOf(x.kind) >= 0);
+  // 5.0.0 (R2): the ledger task only through a ledger adapter; tracker
+  // comments are never rulings (Max default, 2026-11-10). The project is not
+  // passed: intake already refused a ledger source of the wrong ledger, and
+  // common.project may be the remote slug, not the ledger scope.
+  const ad = ledgerAdapter(null, ctx.brief.sources, state.ledgerTools).adapter;
+  const ledger = ad === "yadgar" || ad === "yaadgaar" ? ctx.brief.sources.find((x) => LEDGER_KINDS.indexOf(x.kind) >= 0) : null;
   await pathRecheck("intent" + sfx, "Auto-confirm");
   const jr = await judged(
     "fleet-intent-judge",
@@ -5263,8 +5334,13 @@ async function planMode(input, date) {
 
   await preflightStep(repo);
 
+  // 5.0.0 (R2): a task id needs a ledger tool; say so before any intake agent
+  const ledger = intakeLedger(input.project, state.ledgerTools);
+  if (ledger === "none" && TASK_ID_INPUT_RE.test(raw))
+    halt("needs_human", NO_LEDGER_REASON + " (task id " + JSON.stringify(raw) + "; ledger tools in this session: none" + (input.project ? " for project " + input.project : "") + ")");
+
   phase("Intake");
-  const it = await dispatch("intake", intakePrompt({ input: raw, repo, project: input.project || null, ledger: ledgerFor(input.project) }), {
+  const it = await dispatch("intake", intakePrompt({ input: raw, repo, project: input.project || null, ledger, ledger_tools: state.ledgerTools }), {
     schema: INTAKE_SCHEMA,
     agentType: JUDGE_AGENT,
     phase: "Intake",
@@ -5523,7 +5599,11 @@ async function rereadBrief(brief, project, repo) {
   const src = brief.sources.find((x) => ID_KINDS.indexOf(x.kind) >= 0);
   if (!src) return brief;
   const input = src.kind === "ledger" ? "L" + src.ref : src.kind === "yaadgaar" ? "yaadgaar #" + src.ref : src.url || src.ref;
-  const it = await dispatch("intake:rulings", intakePrompt({ input, repo, project: project || null, ledger: ledgerFor(project) }), {
+  // 5.0.0 (R2): this build's census; a sealed ledger task with its tool gone cannot be re-read
+  const ledger = intakeLedger(project, state.ledgerTools);
+  if (LEDGER_KINDS.indexOf(src.kind) >= 0 && ledger === "none")
+    halt("needs_human", "re-read of " + src.kind + ":" + src.ref + " for current rulings: " + NO_LEDGER_REASON + " (no ledger tool in this session); run build with confirm \"ask\"");
+  const it = await dispatch("intake:rulings", intakePrompt({ input, repo, project: project || null, ledger, ledger_tools: state.ledgerTools }), {
     schema: INTAKE_SCHEMA,
     agentType: JUDGE_AGENT,
     phase: "Auto-confirm",
@@ -5944,7 +6024,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           auto_confirmed: autoConfirmed,
           intent: intentForPr,
         },
-        wb ? { write_back: wb.write_back, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
+        wb ? { write_back: wb.write_back, ledger_adapter: wb.ledger_adapter, ledger_reason: wb.ledger_reason, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
       ),
     );
     const r = await infra(
@@ -6084,7 +6164,16 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       state.pr = pr;
       prOpens = 1;
     }
-    if (resume.write_back) wb = { write_back: resume.write_back, ledger_status: resume.ledger_status, comment_status: resume.comment_status, comment_text: resume.comment_text };
+    if (resume.write_back)
+      wb = {
+        write_back: resume.write_back,
+        // 5.0.0 (R2): null in a run-state written before 5.0.0
+        ledger_adapter: resume.ledger_adapter === undefined ? null : resume.ledger_adapter,
+        ledger_reason: resume.ledger_reason === undefined ? null : resume.ledger_reason,
+        ledger_status: resume.ledger_status,
+        comment_status: resume.comment_status,
+        comment_text: resume.comment_text,
+      };
     const next = RESUME_NEXT[resume.last_gate];
     if (next === "done") {
       gate("resuming at done: run-state written_back at " + approvedSha + "; returning the recorded result");
@@ -6965,12 +7054,28 @@ async function writeBack(ctx) {
   const { ref, brief, project, remoteSlug, branch, prUrl } = ctx;
   const planLink = planLinkFor(ctx.remoteHost, remoteSlug, branch, ref.plan_path);
   const marker = "fleet:" + ref.task_id;
-  const out = { write_back: { ledger: [], comments: [] }, ledger_status: "none", comment_status: "none", comment_text: null };
+  // 5.0.0 (R2): the adapter from this run's census; a ledger whose read tool
+  // is absent writes nothing and hands its section back (status unavailable)
+  const ad = ledgerAdapter(project, brief.sources, state.ledgerTools);
+  const out = {
+    write_back: { ledger: [], comments: [] },
+    ledger_adapter: ad.adapter,
+    ledger_reason: ad.reason,
+    ledger_status: "none",
+    comment_status: "none",
+    comment_text: null,
+  };
+  const sectionFor = () => "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
+  const unavailable = (sources, name, tool) => {
+    for (const s of sources) out.write_back.ledger.push({ ref: name(s), status: "unavailable", reason: tool + " absent in this session: nothing written", section_text: sectionFor() });
+    gate("write-back " + tool + " absent: " + sources.map(name).join(", ") + " unavailable");
+  };
 
   // (a) ledger. 3.1.0: a judge reads every task first; a task with a body
   // page goes to the append step, one without to writeBodies.
   const ledger = brief.sources.map((s, i) => Object.assign({ key: "s" + i }, s)).filter((s) => s.kind === "ledger");
-  if (ledger.length) {
+  if (ledger.length && state.ledgerTools.indexOf(LEDGER_TOOLS[1]) < 0) unavailable(ledger, (s) => s.ref, LEDGER_TOOLS[1]);
+  else if (ledger.length) {
     const sectionText = "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
     const res = {};
     let why = null;
@@ -7019,14 +7124,14 @@ async function writeBack(ctx) {
       if (st === "failed") e.section_text = sectionText;
       out.write_back.ledger.push(e);
     }
-    out.ledger_status = out.write_back.ledger.some((e) => e.status === "failed") ? "failed" : "ok";
     gate("write-back ledger: " + out.write_back.ledger.map((e) => e.ref + "=" + e.status).join(", "));
   }
   // yaadgaar tasks (3.0.0, ledger 1928): an agent step with the
   // mcp__yaadgaar__ tools; never the yadgar ledger (its L<N> is another,
   // frozen task). A failed entry hands section_text back.
   const yq = brief.sources.map((s, i) => Object.assign({ key: "s" + i }, s)).filter((s) => s.kind === "yaadgaar");
-  if (yq.length) {
+  if (yq.length && state.ledgerTools.indexOf(LEDGER_TOOLS[0]) < 0) unavailable(yq, (s) => "yaadgaar #" + s.ref, LEDGER_TOOLS[0]);
+  else if (yq.length) {
     const sectionText = "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
     let results = null;
     let why = null;
@@ -7091,9 +7196,13 @@ async function writeBack(ctx) {
       if (st === "failed") e.section_text = sectionText;
       out.write_back.ledger.push(e);
     }
-    out.ledger_status = out.write_back.ledger.some((e) => e.status === "failed") ? "failed" : "ok";
     gate("write-back yaadgaar: " + yq.map((s) => "#" + s.ref + "=" + out.write_back.ledger.find((e) => e.ref === "yaadgaar #" + s.ref).status).join(", "));
   }
+
+  // 5.0.0 (R2): none (no ledger entry), failed, unavailable, else ok
+  const st = out.write_back.ledger.map((e) => e.status);
+  out.ledger_status = !st.length ? "none" : st.indexOf("failed") >= 0 ? "failed" : st.indexOf("unavailable") >= 0 ? "unavailable" : "ok";
+  gate("write-back adapter: " + ad.adapter + (ad.reason ? " (" + ad.reason + ")" : ""));
 
   // (b) one marked comment per external source
   const ext = brief.sources

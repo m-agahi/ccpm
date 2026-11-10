@@ -126,6 +126,10 @@ export const REQUIRED_DEFAULTS = {
 // The skill passes a fresh run_nonce on every invocation; scenario args that
 // do not name one get the default (null means "no nonce" in a test).
 export const NONCE = "n1-0000001";
+
+// 5.0.0 (R2): a preflight stub with no ledger_tools reports every ledger read
+// tool (a session with yadgar and yaadgaar); v5_adapters scripts the others.
+export const LEDGER_TOOLS_ALL = ["mcp__yaadgaar__read_task", "mcp__yadgar__task_get"];
 export function withNonce(args) {
   if (!args || typeof args !== "object" || !args.mode || "run_nonce" in args) return args;
   return Object.assign({}, args, { run_nonce: NONCE });
@@ -256,7 +260,7 @@ export async function runOne(script, args0) {
     if (label === "preflight" && script.preflight && typeof script.preflight === "object" && !("path_check" in script.preflight) && !script.preflight.__raw_path_check) {
       const pc = { tools: { ["terra" + "form"]: null, ["to" + "fu"]: null, ["t" + "fp"]: null, ["terra" + "grunt"]: null, ["dig" + "ger"]: null, ["atlan" + "tis"]: null }, args: [inputsOf(prompt).repo], path_problems: [] };
       pc.digest = sha256(canon(pc));
-      return Object.assign(JSON.parse(JSON.stringify(script.preflight)), { path_check: pc });
+      return Object.assign({ ledger_tools: LEDGER_TOOLS_ALL.slice() }, JSON.parse(JSON.stringify(script.preflight)), { path_check: pc });
     }
     // 5.0.0 (review of d8df90b): an unscripted probe role-read reads the scenario's file
     if (!(label in script) && /^infra:role-read:/.test(label)) {
@@ -361,6 +365,8 @@ export async function runOne(script, args0) {
     const raw = r.__raw === true;
     delete r.__raw;
     if (raw) rawResults.add(r);
+    // 5.0.0 (R2): a preflight stub with its own path_check still gets the full census
+    if (label === "preflight" && !raw && !("ledger_tools" in r)) r.ledger_tools = LEDGER_TOOLS_ALL.slice();
     if (!raw) withRelayDigest(label, fillArgs(label, r, prompt));
     // 3.1.1: the workspace step relays the origin URL program's output; a stub
     // that gives only remote_url gets that program's output for it

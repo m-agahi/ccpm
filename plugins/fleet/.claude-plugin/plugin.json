@@ -1,10 +1,10 @@
 {
   "name": "fleet",
-  "description": "Role fleet for one task: /build-task plans, audits, writes tests per acceptance criterion, judges them, freezes them by hash, codes against them, judges the code and opens a draft PR. Role prompts load from yadgar; every gate runs in workflow script code.",
+  "description": "Role fleet for one task: /build-task plans, audits, writes tests per acceptance criterion, judges them, freezes them by hash, codes against them, judges the code and opens a draft PR. Role prompts ship in the plugin; no MCP server is required; every gate runs in workflow script code.",
   "author": {
     "name": "Max Agahi"
   },
   "repository": "https://github.com/m-agahi/ccpm",
   "license": "Apache-2.0",
-  "keywords": ["workflow", "tdd", "agents", "fleet", "yadgar", "pr"]
+  "keywords": ["workflow", "tdd", "agents", "fleet", "pr"]
 }

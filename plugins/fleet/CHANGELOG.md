@@ -4,6 +4,37 @@
 
 Fleet 5.0.0, part 1 of 3 (ledger 1999, R1). The version stays 4.0.3 until the last part.
 
+### Changed (part 2 of 3, R2: yadgar and yaadgaar are never required)
+
+- No MCP server is required. Preflight ends with a ledger tool census: one `ToolSearch` select
+  of `mcp__yaadgaar__read_task` and `mcp__yadgar__task_get`, relayed as `ledger_tools` (required,
+  a list of strings). An absent MCP server (not configured or not connected) has none of its
+  names. A preflight with no list stops (`needs_human`): the census is never assumed. The read
+  tools stand for their servers, because `fleet:judge` cannot see the write tools.
+- New pure `ledgerAdapter(project, sources, tools)`: `yaadgaar`, `yadgar` (never for a
+  `yadgarhq/` project), `tracker` (a GitHub, Codeberg or Jira source: the existing marked comment
+  is the whole write-back, Max's ruling; no second comment) or `none`. The result carries
+  `ledger_adapter` and `ledger_reason` (also on a resumed build).
+- Intake gets `ledger_tools`, and `ledger` is `none` when no usable ledger tool exists. A ledger
+  whose tool is absent is never called; intake records it in `tried` with `error: "absent"`. A
+  task-id input with no ledger tool stops before intake: "no task ledger available; give a URL,
+  Jira key or text".
+- Write-back uses the build run's own census. A ledger or yaadgaar source whose read tool is
+  absent writes nothing: the entry is `unavailable` with its `section_text`, and `ledger_status`
+  is `unavailable`. A present tool that fails at call time stays `failed`. Neither stops the run.
+- The intent judge gets `ledger_task` only through a ledger adapter and never reads tracker
+  comments as rulings. A `confirm: "auto"` build whose sealed ledger task cannot be re-read (tool
+  absent) stops with the no-ledger sentence.
+- The result key `yadgar_findings` is renamed `memory_notes` (`[{role, notes}]`, optional, never
+  required). Role results may carry `memory_notes`; the role files' `yadgar_findings` is still
+  read until the R3 prompt revision. The skill offers to store the notes when the session has a
+  memory tool, and shows them otherwise.
+- Docs and metadata: README requirements and the ledger adapter section; SKILL.md ledger and
+  project wording; `plugin.json` and the marketplace entry drop the `yadgar` keyword and "Role
+  prompts load from yadgar". `agents/judge.md` keeps its denylist of yadgar tool names: the
+  Claude Code docs document no error for a `disallowedTools` name of an absent server, and do not
+  say it is ignored either.
+
 ### Changed
 
 - The ten role prompts ship in the plugin as `roles/<role>.md`, pinned by a new `ROLE_SHA256`
