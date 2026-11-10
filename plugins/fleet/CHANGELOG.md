@@ -3,7 +3,7 @@
 ## [5.0.3] - 2026-11-10
 
 Fleet 5.0.3 (ledger 2010): a plan doc that holds `mysql://` gets a re-plan finding before the plan
-commit.
+commit. Ledger 2011: an optional `test_db_prefix` in `.fleet-test-db.json`.
 
 ### Deploy
 
@@ -29,6 +29,24 @@ commit.
 - The post-commit gate at `infra:verify-plan-commit` is unchanged (`plan_files.py` is
   byte-identical) and stays the backstop.
 
+### Added
+
+- 2011: yadgarhq/iam-db's tests run `DROP DATABASE IF EXISTS iam_db_<x>` and `CREATE DATABASE
+iam_db_<x>`. Each role user had ALL on its own `fleet_*` database only, so those failed with
+  ERROR 1044. New optional key `test_db_prefix` in `.fleet-test-db.json` (for example
+  `"test_db_prefix":"iam_db_"`). With it, `db_up.py` also grants each role user
+  ``ALL PRIVILEGES ON `iam\_db\_%`.*`` (each `_` escaped as `\_`, so the LIKE pattern matches the
+  literal prefix only), in the up and the add step. The own-database grant stays.
+- The value must match `^[a-z][a-z0-9_]{0,30}_$`, must not start with `fleet_`, and must not be,
+  start with, start or LIKE-match `mysql`, `sys`, `information_schema` or `performance_schema`.
+  `test_db_decl.py`, the workflow (`dbPrefixProblem`) and `db_up.py` each refuse a bad value; the
+  declaration is then refused as a whole (`stop_gate: "db"`). It is the only optional key.
+- `db_up.py` takes the prefix as an optional last argument. Without the key the argv, the
+  printed keys and the SQL are the same as 5.0.2, byte for byte. A prefix that changes during a
+  run stops it. The roles' `test_env` note names the prefix.
+- Scope: the grant exists only in the run's own container, published on 127.0.0.1, removed at
+  the end of the run (or by its self-expiry). It reaches no other server.
+
 ### Tests
 
 - `v503_dsn_precheck.test.mjs`: `plan_dsn.py` in real repos (placeholder and uppercase hits, a
@@ -37,6 +55,11 @@ commit.
   hit routed to a re-plan round with no audit and no commit before it, the spent budget stopping
   at stop_gate `db`, relay and argument mismatches failing closed, the role text, the unchanged
   backstop and the workflow size.
+- `v503_db_prefix.test.mjs`: `db_up.py` against a podman stub (the exact SQL for `iam_db_` in
+  the up and the add mode, the 5.0.2 SQL without the key, every bad value exits 2 with no podman
+  call), `test_db_decl.py` in a real repo (good and bad values), and the workflow (the prefix in
+  both db_up commands and the roles' note, the commands unchanged without it, each bad value
+  halting before any role, a prefix change during the run halting).
 
 ## [5.0.2] - 2026-11-10
 

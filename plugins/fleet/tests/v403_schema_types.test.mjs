@@ -658,6 +658,8 @@ const READS = {
     "d.env string": "parsed: the repo's declaration file (test_db_decl decl)",
     "d.env string-re": "parsed: the repo's declaration file (test_db_decl decl)",
   },
+  // 5.0.3 (2011): the optional test_db_prefix of the same file; this check IS its refusal
+  dbPrefixProblem: { "p string": "parsed: the repo's declaration file (test_db_decl decl.test_db_prefix)" },
   dbUsersOk: { "users object": "prog:db_up:users", "users array": "!prog:db_up:users", "users[d] string": "prog:db_up:users.*" },
   testDbStep: {
     "t object": "infra:test_db",

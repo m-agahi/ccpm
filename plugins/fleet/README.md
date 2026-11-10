@@ -673,6 +673,18 @@ Findings and PR text rely on the note alone. The workflow removes the container 
 `db_sweep.py` removes expired ones of earlier runs. Any declaration or relay problem stops with
 `stop_gate: "db"`.
 
+Optional since 5.0.3 (ledger 2011): `"test_db_prefix": "iam_db_"`, for tests that create and drop
+their own databases. `db_up.py` then also grants each role user
+``ALL PRIVILEGES ON `iam\_db\_%`.*`` (the prefix as a LIKE pattern, each `_` escaped, so it
+matches only databases that start with the literal prefix). The grant lives in the run's own
+container on 127.0.0.1 only, which the run removes. The value must match
+`^[a-z][a-z0-9_]{0,30}_$`, must not start with `fleet_` (the role databases), and must not be,
+start with, start, or LIKE-match a system schema (`mysql`, `sys`, `information_schema`,
+`performance_schema`). A bad value refuses the whole declaration (`test_db_decl.py`, the workflow
+and `db_up.py` check the same). Without the key, the SQL is the same as before. Every role user
+gets the same pattern grant in the one container, so two roles that run at the same time can
+see each other's prefixed databases: tests should use unique names.
+
 ### Threat model
 
 The freeze guards against **reward hacking**: a writer or coder that weakens tests or gates to get

@@ -1733,7 +1733,7 @@ const PROGRAM_SHA256 = {
   "changed_defs": "1a30e9ca3202f6a434911aa2ecb3e5b446194f95e414b6caa4a4c3279f96c4d4",
   "db_down": "1a9cd8302f54116e1c9691ed6a86a6f19e132458da55f062286fd03e63a07cd3",
   "db_sweep": "3f86d621cc27259e006fff0d7910c621d11f955b138db3b18e9337139437d6c5",
-  "db_up": "304614a75d0aa5c43871e0219ee52d71b467e943b8d3798f92d924a881cd323a",
+  "db_up": "287f00df3f12543a7ffed8445fda9ba9823f58dcb37a90301ed05b245d49d913",
   "fleet_scan": "5140d5020bee7cae61994b753e8ee100fc6cdcc1389d3a3559ef5fec5fbe2a3b",
   "format_files": "9263e27def7990aa080085ab2409025b295519aa34e2a3ee0db2cf11668ebc4b",
   "hasher": "360f14f44c2a036d80304a19cc8d2afcaace826d2b7b17419f6ee6792ee5e4cd",
@@ -1754,7 +1754,7 @@ const PROGRAM_SHA256 = {
   "review_paths": "2904f382a5273ed64d7f0416533f45be9f6f3893892badd632dccd10fb360493",
   "script_check": "bd5eb9be1833d6746a8910f6a8bfc1194f980321b598a835ebd198b8a525d17d",
   "state_write": "428bbdc40ec4973d6e2c314a1a7c91be6f8e54c5aeb079af840623b5ee27ad78",
-  "test_db_decl": "4e23c4a0b85ccfd12f91bb71ee659a6a49f80a5f1c93a336280ee8399ab69ae5",
+  "test_db_decl": "71798f3bdc71e0a73c880a9620b4b6fd6e669fbd396a4ed1282918a554e8c765",
   "tf_gate": "7ca27ecbca19dd989f8d6a8108f9bfe7655d48f1ebb371060146fade61cc0bfd",
   "verify_since": "840c0f167c93ea225342c1036c58d67e6634a74712700bad58d2977390a8d9d2"
 };
@@ -7534,11 +7534,23 @@ const DB_DSN_NOTE =
 // Why a declaration is refused (null: it is fine). The program checks the same.
 function testDbDeclProblem(d) {
   if (!d || typeof d !== "object" || Array.isArray(d)) return "not a JSON object";
-  if (canonical(Object.keys(d).sort()) !== canonical(["engine", "env", "major", "version"])) return "keys must be exactly version, engine, major, env";
+  if (canonical(Object.keys(d).filter((k) => k !== "test_db_prefix").sort()) !== canonical(["engine", "env", "major", "version"])) return "keys must be exactly version, engine, major, env (and optionally test_db_prefix)";
   if (d.version !== 1) return "version must be 1";
   if (d.engine !== "mariadb") return "engine must be mariadb";
   if (typeof d.major !== "string" || !/^[0-9]{1,3}\.[0-9]{1,3}$/.test(d.major)) return "major must be a string like 11.4";
   if (typeof d.env !== "string" || !DB_ENV_RE.test(d.env)) return "env " + JSON.stringify(d.env) + " must match " + String(DB_ENV_RE);
+  if ("test_db_prefix" in d) return dbPrefixProblem(d.test_db_prefix);
+  return null;
+}
+// 5.0.3 (2011): the optional test_db_prefix. db_up grants each role user ALL
+// on `<prefix, _ escaped>%`.* in the run's container. test_db_decl.py and
+// db_up.py check the same: not fleet_*, and no system schema it could reach.
+const DB_SYSTEM_SCHEMAS = ["mysql", "sys", "information_schema", "performance_schema"];
+function dbPrefixProblem(p) {
+  if (typeof p !== "string" || !/^[a-z][a-z0-9_]{0,30}_$/.test(p)) return "test_db_prefix must be a string matching ^[a-z][a-z0-9_]{0,30}_$";
+  if (p.startsWith("fleet_")) return "test_db_prefix must not start with fleet_ (the role databases)";
+  const like = new RegExp("^" + p.replace(/_/g, ".") + ".*$");
+  if (DB_SYSTEM_SCHEMAS.some((s) => s.startsWith(p) || p.startsWith(s) || like.test(s))) return "test_db_prefix must not match or start a system schema (" + DB_SYSTEM_SCHEMAS.join(", ") + ")";
   return null;
 }
 
@@ -7572,7 +7584,9 @@ function testEnvFor(consumer) {
   return o;
 }
 function testEnvNote() {
-  return state.db ? TEST_ENV_NOTE + " " + state.db.env + " " + DB_DSN_NOTE : TEST_ENV_NOTE;
+  if (!state.db) return TEST_ENV_NOTE;
+  const p = state.db.prefix ? " The user may also create and drop databases named " + state.db.prefix + "* there (the repo's test_db_prefix)." : "";
+  return TEST_ENV_NOTE + " " + state.db.env + " " + DB_DSN_NOTE + p;
 }
 // for roles that get test_env only when the run has a test database
 function dbInputs(consumer) {
@@ -7639,19 +7653,24 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
   const dp = testDbDeclProblem(t.decl);
   if (dp) halt("needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + dp, "db");
   const image = DB_IMAGES[t.decl.engine + ":" + t.decl.major];
+  // 5.0.3 (2011): db_up's optional last argument; none -> the 5.0.2 command
+  const prefix = t.decl.test_db_prefix === undefined ? null : t.decl.test_db_prefix;
+  const pa = prefix ? [prefix] : [];
+  const pi = prefix ? { test_db_prefix: prefix } : {};
   if (!image) halt("needs_human", DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IMAGES).join(", ") + ")", "db");
   const want = [];
   for (const c of consumers) if (want.indexOf(dbOf(c)) < 0) want.push(dbOf(c));
   if (state.db) {
-    if (state.db.env !== t.decl.env || state.db.image !== image) halt("needs_human", DB_DECL_FILE + " changed during the run", "db");
+    if (state.db.env !== t.decl.env || state.db.image !== image || state.db.prefix !== prefix) halt("needs_human", DB_DECL_FILE + " changed during the run", "db");
     const missing = want.filter((d) => state.db.dbs.indexOf(d) < 0);
     if (!missing.length) return;
     const al = "infra:db-up:add";
     await pathRecheck("db-up:add", phaseName);
-    const ra = await dbDispatch(al, dbUpPrompt({ mode: "add", name: state.db.name, dbs: missing }, ["add", state.db.name, JSON.stringify(missing)]), phaseName);
+    const aa = ["add", state.db.name, JSON.stringify(missing)].concat(pa);
+    const ra = await dbDispatch(al, dbUpPrompt(Object.assign({ mode: "add", name: state.db.name, dbs: missing }, pi), aa), phaseName);
     const ua = ra.up;
     requireProgram(ua, "db_up", al, "failed", "db");
-    if (!relayDigestOk(ua, progKeys("db_up"), "db_up") || ua.name !== state.db.name || canonical(ua.dbs) !== canonical(missing) || canonical(ua.args) !== canonical(["add", state.db.name, JSON.stringify(missing)]) || !dbUsersOk(ua.users, missing))
+    if (!relayDigestOk(ua, progKeys("db_up"), "db_up") || ua.name !== state.db.name || canonical(ua.dbs) !== canonical(missing) || canonical(ua.args) !== canonical(aa) || !dbUsersOk(ua.users, missing))
       halt("failed", al + ": the relayed result does not match the program's digest or arguments", "db");
     state.db.dbs = state.db.dbs.concat(missing);
     Object.assign(state.db.users, ua.users);
@@ -7662,11 +7681,11 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
   if (!DB_NAME_RE.test(name) || /tf-local/.test(name)) halt("failed", "internal: test database name " + JSON.stringify(name) + " refused", "db");
   // the passwords are random, made by the program: one user per database; the
   // root password never leaves the container (it is in no prompt and no DSN)
-  const args = ["up", name, image, String(DB_TTL_SECONDS), state.nonce, JSON.stringify(want)];
+  const args = ["up", name, image, String(DB_TTL_SECONDS), state.nonce, JSON.stringify(want)].concat(pa);
   await pathRecheck("db-up", phaseName);
   // from here main's finally removes the container, even when a relay check below stops the run
   state.dbTarget = { name, mechanism: "podman --timeout or systemd-run", expires: "in " + DB_TTL_SECONDS + " s" };
-  const r = await dbDispatch("infra:db-up", dbUpPrompt({ mode: "up", name, image, ttl: DB_TTL_SECONDS, nonce: state.nonce, dbs: want }, args), phaseName);
+  const r = await dbDispatch("infra:db-up", dbUpPrompt(Object.assign({ mode: "up", name, image, ttl: DB_TTL_SECONDS, nonce: state.nonce, dbs: want }, pi), args), phaseName);
   const sw = r.sweep;
   if (sw && relayDigestOk(sw, progKeys("db_sweep"), "db_sweep"))
     gate("test database sweep: removed " + (Array.isArray(sw.removed) && sw.removed.length ? sw.removed.join(", ") : "none") + (Array.isArray(sw.errors) && sw.errors.length ? "; errors: " + sw.errors.join("; ") : ""));
@@ -7681,9 +7700,9 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
   const ex = u.expiry;
   if (!ex || typeof ex !== "object" || ["podman-timeout", "systemd-run"].indexOf(ex.mechanism) < 0 || !Number.isInteger(ex.expires))
     halt("failed", "infra:db-up: no self-expiry recorded", "db");
-  state.db = { name, users: Object.assign({}, u.users), port: u.port, env: t.decl.env, image, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
+  state.db = { name, users: Object.assign({}, u.users), port: u.port, env: t.decl.env, image, prefix, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
   state.dbTarget = { name, mechanism: ex.mechanism, expires: ex.expires };
-  gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + "; " + t.decl.env + " goes to each role's test_env");
+  gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + (prefix ? " (each user also on " + prefix + "*)" : "") + "; " + t.decl.env + " goes to each role's test_env");
 }
 
 // main's finally: remove the run's test database. Outside the agent cap;

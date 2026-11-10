@@ -54,21 +54,37 @@ def pm(*a, timeout=120):
     return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
 def tail(r):
     return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
-# usage: db_up.py up <name> <image> <ttl> <nonce> <dbs json>
-#        db_up.py add <name> <dbs json>
+# usage: db_up.py up <name> <image> <ttl> <nonce> <dbs json> [<test_db_prefix>]
+#        db_up.py add <name> <dbs json> [<test_db_prefix>]
 # One MariaDB user per database, granted on that database only, with a random
 # password from this program. The root password is random too, lives only in
 # the container, and is never printed.
 import secrets
 argv = sys.argv[1:]
 mode = argv[0] if argv else ''
-if mode not in ('up', 'add') or len(argv) != (6 if mode == 'up' else 3):
-    fail(2, 'usage: db_up.py up <name> <image> <ttl> <nonce> <dbs> | add <name> <dbs>')
+if mode not in ('up', 'add') or len(argv) - (6 if mode == 'up' else 3) not in (0, 1):
+    fail(2, 'usage: db_up.py up <name> <image> <ttl> <nonce> <dbs> [<test_db_prefix>] | add <name> <dbs> [<test_db_prefix>]')
 name = argv[1]
 if not name_ok(name):
     fail(2, 'container name refused: ' + name)
+# fleet 5.0.3 (2011): the optional test_db_prefix of .fleet-test-db.json. Each
+# role user also gets ALL on the databases the prefix starts, in this container
+# only. The same check as test_db_decl.py and the workflow's testDbDeclProblem.
+SYSTEM_SCHEMAS = ('mysql', 'sys', 'information_schema', 'performance_schema')
+def prefix_problem(p):
+    if not isinstance(p, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,30}_', p):
+        return 'test_db_prefix must be a string matching ^[a-z][a-z0-9_]{0,30}_$'
+    if p.startswith('fleet_'):
+        return 'test_db_prefix must not start with fleet_ (the role databases)'
+    like = re.compile(re.escape(p).replace('_', '.') + '.*')
+    if any(s.startswith(p) or p.startswith(s) or like.fullmatch(s) for s in SYSTEM_SCHEMAS):
+        return 'test_db_prefix must not match or start a system schema (' + ', '.join(SYSTEM_SCHEMAS) + ')'
+    return None
+prefix = argv[6 if mode == 'up' else 3] if len(argv) == (7 if mode == 'up' else 4) else None
+if prefix is not None and prefix_problem(prefix):
+    fail(2, prefix_problem(prefix))
 try:
-    dbs = json.loads(argv[-1])
+    dbs = json.loads(argv[5 if mode == 'up' else 2])
 except ValueError:
     dbs = None
 if not isinstance(dbs, list) or not 1 <= len(dbs) <= 64 or len(set(map(str, dbs))) != len(dbs) or not all(isinstance(d, str) and re.fullmatch(r'fleet_[a-z0-9_]{1,48}', d) for d in dbs):
@@ -85,6 +101,9 @@ def create(root):
         st.append('CREATE DATABASE IF NOT EXISTS ' + d + ';')
         st.append("CREATE OR REPLACE USER '" + d + "'@'%' IDENTIFIED BY '" + users[d] + "';")
         st.append("GRANT ALL PRIVILEGES ON " + d + ".* TO '" + d + "'@'%';")
+        if prefix is not None:
+            # a LIKE pattern in a backtick identifier: _ escaped as \_ is a literal _
+            st.append("GRANT ALL PRIVILEGES ON `" + prefix.replace('_', '\\_') + "%`.* TO '" + d + "'@'%';")
     return sql(root, ' '.join(st))
 if mode == 'add':
     i = pm('container', 'inspect', '--format', '{{index .Config.Labels "fleet.db"}}', name)
