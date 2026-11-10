@@ -18,9 +18,11 @@ and Python caches under a hook path are purged before the hook-surface compariso
   `pytest scripts/tests/ -q`. `format_files.py` built its tracked set from blob paths only, so a
   directory a hook names was never in it and `differs()` returned "exists": every existing hook
   directory was refused, with or without a cache in it.
-- A directory hook path now differs from HEAD when a tracked path under it differs
-  (`git diff HEAD`), or any untracked or ignored path is under it (`git ls-files --others`, no
-  exclude rules). Selected paths are not exempt: a `conftest.py`, a module or a test file under a
+- A directory hook path now differs from HEAD when a path under it differs between HEAD and a
+  snapshot of the worktree in a temporary index (`git diff-tree HEAD^{tree} <snapshot>`, so no
+  `assume-unchanged` or `skip-worktree` bit hides an edit), or any untracked or ignored path is
+  under it (`git ls-files --others`, no exclude rules), or a gitlink (mode 160000) is under it at
+  HEAD or in the snapshot (git cannot see untracked content inside it). Selected paths are not exempt: a `conftest.py`, a module or a test file under a
   hook directory runs inside the hook, so a writer or coder file there stops the run (stop_gate
   `hash`). A symlinked directory (itself or a parent), or a directory that is now a file,
   differs.

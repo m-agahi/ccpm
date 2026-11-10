@@ -103,15 +103,29 @@ def is_dir_path(p):
 def others(p):
     # untracked paths under p, ignored ones included; git never descends a symlink
     return names(git(wt, 'ls-files', '-z', '--others', '--', p).stdout)
+SNAP = []
+def snap():
+    # the worktree in a temporary index, taken once after the purge: no
+    # assume-unchanged or skip-worktree bit hides an edit (review S1)
+    if not SNAP:
+        SNAP.append(snapshot(wt))
+    return SNAP[0]
+def gitlinks(tree, p):
+    out = git(wt, 'ls-tree', '-r', '-z', tree, '--', p).stdout.split(b'\0')
+    return [r.partition(b'\t')[2].decode('utf-8', 'replace') for r in out if r.split(b' ')[0] == b'160000']
 def dir_offenders(p):
-    # what under directory hook path p is not HEAD's: a tracked path that
-    # differs, any untracked or ignored path (selected paths included: a
-    # conftest.py or module there runs inside the hook). A symlinked or
-    # replaced directory is itself the offender.
+    # what under directory hook path p is not HEAD's: a path that differs
+    # between HEAD and the snapshot, any untracked or ignored path (selected
+    # paths included: a conftest.py or module there runs inside the hook). A
+    # symlinked or replaced directory, or a gitlink under p at HEAD or in the
+    # snapshot (its untracked content is invisible here), is the offender.
     fp = os.path.join(wt, p)
     if linked(p) or not os.path.isdir(fp):
         return [p]
-    out = names(git(wt, 'diff', '--name-only', '-z', '--no-renames', 'HEAD', '--', p).stdout) + others(p)
+    links = gitlinks('HEAD', p) + gitlinks(snap(), p)
+    if links:
+        return sorted(set(links))
+    out = names(git(wt, 'diff-tree', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', snap(), '--', p).stdout) + others(p)
     return sorted(set(out))
 OFFENDERS = []
 def differs(p):

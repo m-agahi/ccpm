@@ -15,9 +15,11 @@
 // the directory hook paths only, the untracked or ignored __pycache__ dirs,
 // *.pyc / *.pyo files and .pytest_cache dirs (never a tracked file, never
 // through a symlink), and reports them; then the comparison runs. A directory
-// hook path differs when a tracked path under it differs from HEAD or an
-// untracked or ignored path is under it, the selected paths aside. Any other
-// ignored or untracked file there still stops the run.
+// hook path differs when a path under it differs between HEAD and a snapshot
+// of the worktree in a temporary index (no assume-unchanged or skip-worktree
+// bits), when an untracked or ignored path is under it, or when a gitlink is
+// under it; selected paths count too. Any other ignored or untracked file
+// there still stops the run.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -272,6 +274,49 @@ test("5.0.4 2013 non-weakening, dirty mode (format-code): an untracked or a modi
     } finally {
       r.done();
     }
+  }
+});
+
+test("5.0.4 2013 review S1: an edit hidden by assume-unchanged or skip-worktree under a hook dir stops the run (dirty mode)", () => {
+  for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+    const r = iamDb();
+    try {
+      sh(r.wt, "git", "update-index", flag, "scripts/tests/test_a.py");
+      r.put("scripts/tests/test_a.py", "import os\n");
+      r.put("src/x.py", "x = 2\n");
+      const o = r.runF({ dirty: true });
+      assert.deepEqual(o.refused, ["scripts/tests"], flag);
+      assert.equal(o.ran, false, flag);
+      assert.match(o.note, /scripts\/tests\/test_a\.py/, flag);
+    } finally {
+      r.done();
+    }
+  }
+});
+
+test("5.0.4 2013 review S2: a gitlink under a hook dir stops the run (its untracked content is invisible to git)", () => {
+  const r = iamDb();
+  try {
+    const sm = join(r.wt, "scripts/tests/sm");
+    mkdirSync(sm);
+    sh(sm, "git", "init", "-q");
+    sh(sm, "git", "config", "user.email", "t@example.com");
+    sh(sm, "git", "config", "user.name", "t");
+    sh(sm, "git", "config", "commit.gpgsign", "false");
+    writeFileSync(join(sm, "a.txt"), "a\n");
+    sh(sm, "git", "add", "a.txt");
+    sh(sm, "git", "commit", "-qm", "sm");
+    sh(r.wt, "git", "add", "scripts/tests/sm");
+    sh(r.wt, "git", "commit", "-qm", "gitlink");
+    writeFileSync(join(sm, "conftest.py"), "import os\n");
+    r.put("src/x.py", "x = 2\n");
+    for (const sel of [undefined, { dirty: true }]) {
+      const o = r.runF(sel);
+      assert.deepEqual(o.refused, ["scripts/tests"], JSON.stringify(sel));
+      assert.equal(o.ran, false);
+    }
+  } finally {
+    r.done();
   }
 });
 
