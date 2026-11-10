@@ -34,6 +34,7 @@ import {
   BUILD_SCRATCH,
   buildEnvOf,
   roleTestEnv,
+  buildEnvSites,
 } from "./harness.mjs";
 
 const PROG = join(SCRIPTS_SRC, "build_dir.py");
@@ -50,7 +51,7 @@ function tmp(prefix) {
 
 // ---------------------------------------------------------------- build_dir.py
 
-test("5.0.6 2019: build_dir reset empties each role dir and leaves only tmp/; clean deletes the build root", () => {
+test("5.0.6 2019: build_dir reset deletes the build root and creates the step's dirs empty; clean deletes the root", () => {
   const home = tmp("fleet-506-bd-");
   try {
     const sc = join(home, "scratch");
@@ -65,13 +66,15 @@ test("5.0.6 2019: build_dir reset empties each role dir and leaves only tmp/; cl
     writeFileSync(join(d1, "pycache", "x", "m.cpython-313.pyc"), "planted");
     mkdirSync(join(d1, "cargo-target", "debug"), { recursive: true });
     writeFileSync(join(d1, "cargo-target", "debug", "t"), "12345");
+    // an earlier run's dir too
+    mkdirSync(join(sc, "build", "n0-old", "coder-r1"), { recursive: true });
     r = prog(["reset", sc, NONCE, "w-AC1-r1"]);
     assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(readdirSync(d1), ["tmp"]);
-    assert.deepEqual(readdirSync(join(d1, "tmp")), []);
-    // the other writer's dir is not touched by a reset that does not name it
-    assert.ok(existsSync(join(sc, "build", NONCE, "w-AC2-r1", "tmp")));
-    writeFileSync(join(sc, "build", NONCE, "w-AC2-r1", "tmp", "f"), "abc");
+    assert.deepEqual(readdirSync(d1), []);
+    // every earlier step's dir goes: one step's build output at a time
+    assert.deepEqual(readdirSync(join(sc, "build")), [NONCE]);
+    assert.deepEqual(readdirSync(join(sc, "build", NONCE)), ["w-AC1-r1"]);
+    writeFileSync(join(d1, "f"), "abc");
     r = prog(["clean", sc]);
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.out.removed, true);
@@ -101,7 +104,7 @@ test("5.0.6 2019: build_dir fails closed: bad args, a repeated key, a symlinked 
       const r = prog(args);
       assert.notEqual(r.status, 0, JSON.stringify(args));
     }
-    // a symlinked build dir, or a link at a role dir's place, is refused, never followed
+    // a symlinked build root is refused; a link below it is deleted, never followed
     const outside = join(home, "outside");
     mkdirSync(join(outside, "keep"), { recursive: true });
     writeFileSync(join(outside, "keep", "f"), "x");
@@ -114,9 +117,9 @@ test("5.0.6 2019: build_dir fails closed: bad args, a repeated key, a symlinked 
     mkdirSync(join(sc, "build", NONCE), { recursive: true });
     symlinkSync(join(outside, "keep"), join(sc, "build", NONCE, "k"));
     const r = prog(["reset", sc, NONCE, "k"]);
-    assert.notEqual(r.status, 0);
-    assert.match(r.stderr, /symlinked path component/);
-    assert.ok(existsSync(join(outside, "keep", "f")), "the link's target is kept");
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(readdirSync(join(sc, "build", NONCE, "k")), []);
+    assert.ok(existsSync(join(outside, "keep", "f")), "the link is deleted with the root (shutil.rmtree), its target kept");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -130,87 +133,20 @@ test("5.0.6 2019: BUILD_ENV_ROWS is one data table; every role env is built from
   const rows = new Function("return " + m[1].replace(/\/\/[^\n]*/g, ""))();
   assert.deepEqual(rows, BUILD_ROWS);
   // no var the 5.0.4 ruling keeps away from the repo's hooks, and no clash with TEST_ENV
-  for (const [k] of rows) assert.ok(!["PYTEST_ADDOPTS", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE"].includes(k), k);
+  // not TMPDIR: the scratch dir is inside the user's checkout (git, cargo,
+  // pytest and node would find it from a temp dir there)
+  for (const [k] of rows) assert.ok(!["PYTEST_ADDOPTS", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "TMPDIR", "TMP", "TEMP"].includes(k), k);
   // every value lives under the role's own dir
   for (const [k, v] of Object.entries(buildEnvOf("coder-r1"))) assert.ok(v.startsWith(BUILD_SCRATCH + "/build/" + NONCE + "/coder-r1/"), k);
 });
 
 // ---------------------------------------------------------------- every emit site
 
-// The steps that run commands in the worktree without the build vars, and why.
-const EXEMPT = {
-  // plan mode: probes run in a scratch worktree, never in the worktree itself, before the build's first hasher
-  "role:scope-and-plan": "plan mode",
-  "role:plan-audit": "plan mode",
-  // plan mode, before the build's first hasher: its output is part of the baseline
-  "infra:format-plan": "plan mode",
-};
-const HOOKS_IN_WORKTREE = /^infra:(commit:r\d+|push(:p\d+)?)$/;
-const FORMAT_IN_SCRATCH = /^infra:format-(tests|code):/;
-
-function prefixOf(env) {
-  return "env " + Object.entries(env).map(([k, v]) => k + "='" + String(v).replace(/'/g, "'\\''") + "'").join(" ") + " ";
-}
-
-// Every prompt that carries a test command, a test_env or runs the repo's
-// hooks in the worktree carries the exact prefix of a dir that a reset
-// emptied after the previous role and before it. A new site without it fails.
-function checkSites(out) {
-  const keysSeen = new Map();
-  let lastReset = null;
-  let checked = 0;
-  for (const c of out.calls) {
-    if (/^infra:build-reset:/.test(c.label)) {
-      lastReset = inputsOf(c.prompt).args.slice(3);
-      continue;
-    }
-    if (FORMAT_IN_SCRATCH.test(c.label)) {
-      // the fixer program runs pre-commit in a scratch checkout under scratch_dir
-      assert.match(c.prompt, /format_files\.py/, c.label);
-      continue;
-    }
-    if (!/^(role:|infra:)/.test(c.label) || /:fallback$|:retry$/.test(c.label)) continue;
-    const base = c.label.replace(/:replan$/, "");
-    let i = null;
-    try {
-      i = inputsOf(c.prompt);
-    } catch (e) {
-      continue;
-    }
-    const runsTests = i && ("test_cmd" in i || "test_env" in i);
-    const runsHooks = HOOKS_IN_WORKTREE.test(c.label);
-    if (!runsTests && !runsHooks) continue;
-    if (base in EXEMPT || /^infra:format-plan/.test(base)) {
-      assert.ok(!("test_env_prefix" in i), c.label + " is exempt and gets no prefix");
-      continue;
-    }
-    if (c.label.startsWith("role:fleet-pr-opener")) continue;
-    const env = runsHooks ? i.hook_env : i.test_env;
-    assert.ok(env && typeof env === "object", c.label + " has its env");
-    const m = /\/build\/[^/]+\/([^/]+)\/cargo-target$/.exec(env.CARGO_TARGET_DIR || "");
-    assert.ok(m, c.label + ": no build dir in " + JSON.stringify(env));
-    const key = m[1];
-    assert.deepEqual(Object.fromEntries(Object.entries(env).filter(([k]) => BUILD_ROWS.some((r) => r[0] === k))), buildEnvOf(key, i.scratch_dir || BUILD_SCRATCH), c.label);
-    if (runsHooks) assert.ok(c.prompt.includes(prefixOf(env).slice(4)), c.label + " runs its hooks with the prefix");
-    else {
-      assert.equal(i.test_env_prefix, prefixOf(env), c.label);
-      assert.match(i.test_env_note, /test_env_prefix/, c.label);
-    }
-    assert.ok(lastReset && lastReset.includes(key), c.label + ": no reset of " + key + " right before it");
-    if (!runsHooks || !keysSeen.has(key)) {
-      assert.ok(!keysSeen.has(key) || keysSeen.get(key) === base, c.label + " shares " + key + " with " + keysSeen.get(key));
-      keysSeen.set(key, base);
-    }
-    checked++;
-  }
-  return checked;
-}
-
 test("5.0.6 2019: every emitted build, test or hook step carries the exact prefix of its own, freshly reset dir", async () => {
   const out = await run(happy(), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
   // writers AC1, AC2, test judge, coder, code judge, commit, push, pr-review
-  assert.equal(checkSites(out), 8);
+  assert.equal(buildEnvSites(out), 8);
   // the sweep too, when it runs
   const s = happy();
   s["role:pr-review:v1"] = Object.assign({}, s["role:pr-review:v1"], { touches_gate: true });
@@ -218,7 +154,7 @@ test("5.0.6 2019: every emitted build, test or hook step carries the exact prefi
   s["hasher:fp-post:sweep:v1"] = s["hasher:fp-post:pr-review:v1"];
   const o2 = await run(s, ARGS);
   assert.equal(o2.result.status, "ok", o2.result.reason);
-  assert.equal(checkSites(o2), 9);
+  assert.equal(buildEnvSites(o2), 9);
   assert.equal(inputsOf(call(o2, "role:gate-change-nonweakening-sweep:v1").prompt).test_env.CARGO_TARGET_DIR, buildEnvOf("sweep-v1").CARGO_TARGET_DIR);
 });
 

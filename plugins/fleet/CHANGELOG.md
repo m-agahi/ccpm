@@ -24,7 +24,9 @@ a Rust, Python or Node run no longer stops at the next hasher because a test run
   the build output moves out of the worktree. One table, `BUILD_ENV_ROWS` in the workflow, gives
   each tool's env var and its path under the role's own dir
   `<scratch>/build/<nonce>/<key>/`: `CARGO_TARGET_DIR`, `PYTHONPYCACHEPREFIX`, `MYPY_CACHE_DIR`,
-  `RUFF_CACHE_DIR`, `COVERAGE_FILE`, `TURBO_CACHE_DIR` and `TMPDIR`. Adding a tool is one row.
+  `RUFF_CACHE_DIR`, `COVERAGE_FILE` and `TURBO_CACHE_DIR`. Adding a tool is one row. `TMPDIR` is
+  not set: the scratch dir is inside the user's checkout, so git, cargo, pytest and node would find
+  that checkout from a temp dir there; `/tmp` is outside the worktree already.
 - Every role that builds or tests in the worktree gets these vars in its `test_env`, and the
   same vars as `test_env_prefix`, the exact shell prefix (`env K='v' ... `) it puts in front of
   every build, test or hook command: the test writers (key `w-<criterion>-r<round>`, or
@@ -34,8 +36,9 @@ a Rust, Python or Node run no longer stops at the next hasher because a test run
   The repo's hooks in the commit step (`commit-r<m>`) and the push (`push`, `push-p<n>`) get them
   in their hook env by script (never `PYTEST_ADDOPTS`, as in 5.0.4). The role files that run
   commands say: run every build, test or hook command with exactly that prefix.
-- New program `build_dir.py` (31 programs). `reset` deletes and recreates each role's dir, with
-  only an empty `tmp/`, right before the role runs (`infra:build-reset:<step>`, counted in the
+- New program `build_dir.py` (31 programs). `reset` deletes `<scratch>/build` (every earlier
+  step's dirs, and any a killed run left) and creates each role's dir empty, right before the role
+  runs, so a run holds one step's build output at a time (`infra:build-reset:<step>`, counted in the
   agents but not against the cap, like the PATH re-checks; each comes before its role's PATH
   re-check). The paths are predictable, so this is what keeps a role from reading output another
   role or an earlier run left there, such as a planted pyc under the bytecode prefix

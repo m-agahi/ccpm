@@ -10,7 +10,7 @@ import { spawnSync as rawSpawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ignoredView, buildAssignsRe, roleTestEnv } from "./harness.mjs";
+import { ignoredView, buildAssignsRe, roleTestEnv, buildEnvSites } from "./harness.mjs";
 import {
   ARGS,
   PC,
@@ -375,6 +375,8 @@ test("AC-1981-1: with a declaration the database is up before the planner; every
   const o2 = await run(s2, ARGS);
   assert.ok(!JSON.stringify(s2.__store).includes("mysql://"));
   assert.ok(!JSON.stringify(o2.planResult.plan_ref).includes("mysql://"));
+  // 5.0.6 (ledger 2019): with a database each role keeps its build dir too
+  assert.equal(buildEnvSites(out), 8);
 });
 
 test("1981: no declaration starts no database and changes no role input", async () => {

@@ -107,6 +107,7 @@ import {
   ignoredView,
   countedCalls,
   roleTestEnv,
+  buildEnvSites,
 } from "./harness.mjs";
 
 
@@ -638,6 +639,8 @@ test("agent cap stops the run with needs_human before exceeding 100 agents", asy
   assert.ok(work.length <= 100, "dispatched " + work.length);
   assert.ok(work.length > 60, "the old cap of 60 would have stopped earlier");
   assert.ok(out.logs.some((l) => /agent cap/.test(l)));
+  // 5.0.6 (ledger 2019): the judge-first re-entry rounds included
+  assert.ok(buildEnvSites(out.build) > 60);
 });
 
 // ---------------------------------------------------------------- hasher
@@ -4847,6 +4850,9 @@ test("2.1.0 agent cap 100: an auto run with a revise round and a review fix roun
   assert.ok(work.length > 60, "dispatched " + work.length);
   assert.ok(work.length <= 100);
   assert.equal(out.result.agents, countedCalls(out.calls).length);
+  // 5.0.6 (ledger 2019): every round's writers, judges, coder, commit, push
+  // and review carry their own build dir, intent judge and test r2 included
+  assert.ok(buildEnvSites(out) >= 14);
 });
 
 test("2.1.0 every agent cap hit is logged", () => {

@@ -614,7 +614,6 @@ export const BUILD_ROWS = [
   ["RUFF_CACHE_DIR", "ruff-cache"],
   ["COVERAGE_FILE", "coverage"],
   ["TURBO_CACHE_DIR", "turbo-cache"],
-  ["TMPDIR", "tmp"],
 ];
 // the happy run's scratch dir (repo /r, task l42-add-thing)
 export const BUILD_SCRATCH = "/r/.claude/worktrees/fleet-l42-add-thing/scratch";
@@ -636,6 +635,77 @@ export function roleTestEnv(key, extra) {
 export function countedCalls(calls) {
   return calls.filter((c) => c.label !== "infra:build-clean");
 }
+// 5.0.6 (ledger 2019): the emit-site check (v506_build_env and the
+// multi-round, auto and database scenarios run it).
+// The steps that run commands in the worktree without the build vars, and why.
+const EXEMPT = {
+  // plan mode: probes run in a scratch worktree, never in the worktree itself, before the build's first hasher
+  "role:scope-and-plan": "plan mode",
+  "role:plan-audit": "plan mode",
+  // plan mode, before the build's first hasher: its output is part of the baseline
+  "infra:format-plan": "plan mode",
+};
+const HOOKS_IN_WORKTREE = /^infra:(commit:r\d+|push(:p\d+)?)$/;
+const FORMAT_IN_SCRATCH = /^infra:format-(tests|code):/;
+
+export function prefixOf(env) {
+  return "env " + Object.entries(env).map(([k, v]) => k + "='" + String(v).replace(/'/g, "'\\''") + "'").join(" ") + " ";
+}
+
+// Every prompt that carries a test command, a test_env or runs the repo's
+// hooks in the worktree carries the exact prefix of a dir that a reset
+// emptied after the previous role and before it. A new site without it fails.
+export function buildEnvSites(out) {
+  const keysSeen = new Map();
+  let lastReset = null;
+  let checked = 0;
+  for (const c of out.calls) {
+    if (/^infra:build-reset:/.test(c.label)) {
+      lastReset = inputsOf(c.prompt).args.slice(3);
+      continue;
+    }
+    if (FORMAT_IN_SCRATCH.test(c.label)) {
+      // the fixer program runs pre-commit in a scratch checkout under scratch_dir
+      assert.match(c.prompt, /format_files\.py/, c.label);
+      continue;
+    }
+    if (!/^(role:|infra:)/.test(c.label) || /:fallback$|:retry$/.test(c.label)) continue;
+    const base = c.label.replace(/:replan$/, "");
+    let i = null;
+    try {
+      i = inputsOf(c.prompt);
+    } catch (e) {
+      continue;
+    }
+    const runsTests = i && ("test_cmd" in i || "test_env" in i);
+    const runsHooks = HOOKS_IN_WORKTREE.test(c.label);
+    if (!runsTests && !runsHooks) continue;
+    if (base in EXEMPT || /^infra:format-plan/.test(base)) {
+      assert.ok(!("test_env_prefix" in i), c.label + " is exempt and gets no prefix");
+      continue;
+    }
+    if (c.label.startsWith("role:fleet-pr-opener")) continue;
+    const env = runsHooks ? i.hook_env : i.test_env;
+    assert.ok(env && typeof env === "object", c.label + " has its env");
+    const m = /\/build\/[^/]+\/([^/]+)\/cargo-target$/.exec(env.CARGO_TARGET_DIR || "");
+    assert.ok(m, c.label + ": no build dir in " + JSON.stringify(env));
+    const key = m[1];
+    assert.deepEqual(Object.fromEntries(Object.entries(env).filter(([k]) => BUILD_ROWS.some((r) => r[0] === k))), buildEnvOf(key, i.scratch_dir || BUILD_SCRATCH), c.label);
+    if (runsHooks) assert.ok(c.prompt.includes(prefixOf(env).slice(4)), c.label + " runs its hooks with the prefix");
+    else {
+      assert.equal(i.test_env_prefix, prefixOf(env), c.label);
+      assert.match(i.test_env_note, /test_env_prefix/, c.label);
+    }
+    assert.ok(lastReset && lastReset.includes(key), c.label + ": no reset of " + key + " right before it");
+    if (!runsHooks || !keysSeen.has(key)) {
+      assert.ok(!keysSeen.has(key) || keysSeen.get(key) === base, c.label + " shares " + key + " with " + keysSeen.get(key));
+      keysSeen.set(key, base);
+    }
+    checked++;
+  }
+  return checked;
+}
+
 // 5.0.6 (ledger 2019): build_dir.py's output for its args, as a stub relays it
 export function buildDirOut(args) {
   const r = { status: "ok", reason: args[0] === "reset" ? "reset" : "cleaned", args: args.slice() };

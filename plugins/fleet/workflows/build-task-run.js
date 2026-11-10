@@ -1751,7 +1751,7 @@ function relayDigestOk(r, keys, name) {
 // PROGRAM_SHA256_BEGIN
 const PROGRAM_SHA256 = {
   "branch_scan": "fdf128542f76e119afa892f74316746ae761ccdf10d096f5274042da52d473b5",
-  "build_dir": "d1164d78d80ce3579eae61d1c37ea8f9776809ff8ce9569c0f075301d596c87e",
+  "build_dir": "7406264beafd58145a4035296636e7ab94dd4e339c58aaabf84584d7df111866",
   "callers": "dc5b924775246e16dc8d3d8c6e913e77463ce342b5054cacebc298d394001575",
   "changed_defs": "1a30e9ca3202f6a434911aa2ecb3e5b446194f95e414b6caa4a4c3279f96c4d4",
   "db_down": "1a9cd8302f54116e1c9691ed6a86a6f19e132458da55f062286fd03e63a07cd3",
@@ -3129,7 +3129,7 @@ const TEST_ENV_NOTE =
 // builds, tests or runs hooks in the worktree gets these vars (in test_env, or
 // in the hook env of the commit step and the push), each role and round its
 // own dir <scratch>/build/<nonce>/<key>, emptied by build_dir.py right before
-// it runs. The hasher check is unchanged: a command run without them writes
+// it runs (with every earlier step's dir: one step's output at a time). The hasher check is unchanged: a command run without them writes
 // in the worktree and stops the run as in 5.0.5. Adding a tool is one row.
 const BUILD_ENV_ROWS = Object.freeze([
   ["CARGO_TARGET_DIR", "cargo-target"], // cargo: target/
@@ -3138,11 +3138,13 @@ const BUILD_ENV_ROWS = Object.freeze([
   ["RUFF_CACHE_DIR", "ruff-cache"], // ruff: .ruff_cache/
   ["COVERAGE_FILE", "coverage"], // coverage.py: .coverage (a file in the role dir)
   ["TURBO_CACHE_DIR", "turbo-cache"], // turborepo: .turbo/cache/
-  ["TMPDIR", "tmp"], // temp files (build_dir.py creates it)
 ]);
+// Not TMPDIR: the scratch dir is inside the user's checkout, so a temp dir
+// there would make git, cargo, pytest and node find that checkout from a
+// test's temp files; /tmp is outside the worktree already.
 const BUILD_ENV_NOTE =
   "test_env_prefix: test_env as a shell prefix. Its build vars (" + BUILD_ENV_ROWS.map((r) => r[0]).join(", ") +
-  ") point build output, caches and temp files at this role's own dir outside the worktree, emptied right before you started. Run EVERY build, test or hook command in the worktree as <test_env_prefix><command> (with a non-empty test_cmd.env: `env <test_cmd.env> ` in front of it); a command run without it writes target/, __pycache__ or a cache in the worktree, and the workflow stops the run there.";
+  ") point build output and caches at this role's own dir outside the worktree, emptied right before you started. Run EVERY build, test or hook command in the worktree as <test_env_prefix><command> (with a non-empty test_cmd.env: `env <test_cmd.env> ` in front of it); a command run without it writes target/, __pycache__ or a cache in the worktree, and the workflow stops the run there.";
 function buildDirOf(key) {
   return state.buildScratch + "/build/" + safeName(state.nonce) + "/" + key;
 }

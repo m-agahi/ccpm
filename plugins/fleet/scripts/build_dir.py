@@ -37,12 +37,14 @@ import hashlib, json, os, re, shutil, stat, sys
 # Every role that builds or tests in the worktree gets env vars (the workflow's
 # BUILD_ENV_ROWS) that point build output and caches at
 # <scratch>/build/<nonce>/<key>/..., so the worktree's ignored files do not
-# change. The paths are predictable, so a dir is emptied right before its
-# role runs: no role reads output another role (or an earlier run) left there,
-# such as a planted pyc under the bytecode prefix.
+# change. The paths are predictable, so the dirs are emptied right before
+# their role runs: no role reads output another role (or an earlier run) left
+# there, such as a planted pyc under the bytecode prefix. A reset deletes the
+# whole build root first (every earlier step has finished; parallel writers
+# share one reset), so a run holds one step's build output at a time.
 # usage:
-#   build_dir.py reset <scratch> <nonce> <key>...  delete and recreate each
-#     <scratch>/build/<nonce>/<key> with only an empty tmp/ in it; prints
+#   build_dir.py reset <scratch> <nonce> <key>...  delete <scratch>/build,
+#     then create each <scratch>/build/<nonce>/<key> empty; prints
 #     {dirs, args}
 #   build_dir.py clean <scratch>  delete <scratch>/build; prints
 #     {removed, bytes, args} (bytes: the size of the files it held)
@@ -130,6 +132,9 @@ def mkdir(parts):
 try:
     if mode == 'reset':
         nonce, keys = names[0], names[1:]
+        root = no_link(REST + ['build'])
+        if os.path.lexists(root):
+            remove(root)
         mkdir(REST + ['build', nonce])
         dirs = []
         for key in keys:
@@ -140,8 +145,6 @@ try:
             mkdir(parts)
             if os.listdir(real):
                 fail('not empty after reset: ' + real)
-            # the role's TMPDIR must exist before its first command
-            mkdir(parts + ['tmp'])
             dirs.append(os.path.join(scratch, 'build', nonce, key))
         done({'dirs': dirs, 'args': argv})
     real = no_link(REST + ['build'])
