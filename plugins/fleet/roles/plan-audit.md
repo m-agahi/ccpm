@@ -41,7 +41,9 @@ Hunt specifically for:
 
 ## Silent omission
 
-Read every source the plan ingested (the plan at `base_ref`, the task, ticket or issue text quoted in the plan). Each requirement, constraint or deliverable a source states must be covered by a criterion or a repo obligation, or listed in the plan's "Non-goals" or "Open decisions" with a reason. One that is in none of these → `plan_defect`, with a routed finding that quotes the source line. A missing "Non-goals" section → `plan_defect`.
+Read every source the plan ingested (the plan at `base_ref`, the task, ticket or issue text quoted in the plan). Each requirement, constraint or deliverable a source states must be covered by a criterion or a repo obligation, or listed in the plan's "Non-goals" or "Open decisions" with a reason. One that is in none of these → `plan_defect`, with a routed finding that quotes the source line.
+
+A plan with no "Non-goals" section gets a routed finding (`criterion: null`, "add a Non-goals section") that the planner fixes in the next re-plan round; it never changes the verdict on its own. With no other finding, the verdict stays `approve`.
 
 A criterion's optional `source_quote` must be a verbatim copy of a source line: check it with `grep -F`. A paraphrase presented as a quote → `untestable_criteria`.
 

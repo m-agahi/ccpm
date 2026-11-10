@@ -818,10 +818,17 @@ const ints = (n) => Object.fromEntries(S.ROLES.map((r, i) => [r, n + i]));
 test("5.0.0 R1 (was 4.0.3 1998 repro wf_d6901710-32d): the preflight and role schemas refuse mistyped values", async () => {
   const out = await run(happy(), ARGS);
   const pre = out.calls.find((c) => c.label === "preflight").opts.schema;
-  // 5.0.0 (R2): the census ledger_tools is required, a list of strings
+  // 5.0.0 (R2): the census ledger_tools is a list of strings; PR #48 ruling 1:
+  // advisory, so optional and nullable (was: required)
   assert.deepEqual(validate(pre, { ledger_tools: [], scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }), []);
   assert.ok(validate(pre, { ledger_tools: [], scripts_probe: [1], scripts_dir: null, path_check: null, reason: "ok" }).length);
-  assert.ok(validate(pre, { scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }).length, "no census");
+  assert.deepEqual(validate(pre, { scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }), [], "no census");
+  assert.deepEqual(validate(pre, { ledger_tools: null, scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }), [], "a null census");
+  // PR #48 ruling 1: a null memory_notes / follow_ups fits the coder schema
+  const coderSch = out.calls.find((c) => c.label === "role:fleet-coder:r1").opts.schema;
+  const coderOk = { status: "ok", reason: "x", role_file: { name: "fleet-coder", sha256: "a".repeat(64) }, changed_paths: [], suite_result: {}, added_symbols: [], frozen_tests_red_at_start: true, obligations_done: [] };
+  assert.deepEqual(validate(coderSch, Object.assign({}, coderOk, { memory_notes: null, follow_ups: null })), []);
+  assert.deepEqual(validate(coderSch, coderOk), [], "both absent");
   assert.ok(validate(pre, { ledger_tools: [7], scripts_probe: [], scripts_dir: null, path_check: null, reason: "ok" }).length, "a numeric tool name");
   const sch = out.calls.find((c) => c.label === "role:plan-audit").opts.schema;
   // 5.0.0 R3: plan-audit also carries the shared_file it read

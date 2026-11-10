@@ -1085,7 +1085,17 @@ The script pins the role contract, not the prose:
 - Inputs added in 5.0.0 R3: the code judge's `prior_findings` (the findings that round's coder was
   sent, `[]` in round 1) and pr-review's `prior_findings` and `allowed_additions`. Both judges rule
   each prior finding `resolved`, `still_present` or `regressed`; a finding resolved only by the
-  coder's claim is still present.
+  coder's claim is still present. No new output key carries the rulings:
+  - the code judge routes each still-present or regressed prior finding again as a `code`
+    finding whose text starts with `prior still_present: ` or `prior regressed: `, quotes the
+    original and gives the new evidence; a resolved one gets no entry;
+  - pr-review records every ruling in `checked` as
+    `"prior <id>: resolved|still_present|regressed — <evidence>"`, and reports each still-present
+    or regressed one again in `findings`, blocking, with its original `id`.
+- Optional fields are nullable (PR #48): `memory_notes` (every role), `follow_ups` (coder) and the
+  preflight's `ledger_tools` census are never required and accept null, so a model's null never
+  stops a build. `role_file` and `shared_file` stay required (null allowed by the schema, refused
+  by the script's check on an ok result).
 - Gates this release does not run (held-out examples, coverage, mutation, security scan) reach
   the judges as `{status: "not_run", reason}` and the PR body as `gates_not_run`; the role files
   call them not run, never run.

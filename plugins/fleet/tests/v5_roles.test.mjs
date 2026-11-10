@@ -434,7 +434,7 @@ test("review 2: a coder with role_file AND another problem is not retried; it st
 test("review 3: probe dispatches one haiku role-read agent for plan-audit and checks its role_file", async () => {
   const s = happy();
   delete s.__dispatch;
-  s["infra:role-read:plan-audit"] = { status: "ok", reason: "read", role_file: { name: "plan-audit", sha256: PIN["plan-audit"] } };
+  s["infra:role-read:plan-audit"] = { status: "ok", reason: "read", role_file: { name: "plan-audit", sha256: PIN["plan-audit"] }, shared_file: { name: "test-cmd-allowlist", sha256: GEN.shared(SOURCE)["test-cmd-allowlist"] } }; // PR #48 ruling 3
   const out = await runOne(s, { mode: "probe", repo: "/r", date: ARGS.date });
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.deepEqual(out.labels, ["preflight", "infra:role-read:plan-audit"]);
@@ -443,7 +443,7 @@ test("review 3: probe dispatches one haiku role-read agent for plan-audit and ch
   assert.equal(c.opts.agentType, "fleet:judge");
   assert.ok(c.prompt.includes("sha256sum -- '" + fileOf("plan-audit") + "'") && c.prompt.includes("Read tool"));
   assert.ok(c.opts.schema.required.includes("role_file"));
-  assert.deepEqual(out.result.probe.role_read, { role: "plan-audit", sha256: PIN["plan-audit"], ok: true });
+  assert.deepEqual(out.result.probe.role_read, { role: "plan-audit", sha256: PIN["plan-audit"], ok: true, shared_file: { name: "test-cmd-allowlist", sha256: GEN.shared(SOURCE)["test-cmd-allowlist"], ok: true } }); // PR #48 ruling 3
   for (const bad of [null, { status: "ok", reason: "x", role_file: { name: "plan-audit", sha256: "0".repeat(64) } }, { status: "ok", reason: "x", role_file: null }]) {
     const t = happy();
     delete t.__dispatch;

@@ -53,7 +53,7 @@ follow in 5.1.0, mutation testing in 5.2.0.
 - Non-fleet modes are split out: the planner's `commit=true`, `advisor`, `measure_first` and
   `perf-lever`, the audit's `writeback=true`, and pr-review's non-fleet modes and k8s/Flux
   essays. `roles/pr-review.md` is fleet mode only (the yadgar page keeps every mode). Sizes
-  (characters, before → after): scope-and-plan 34750 → 24938, plan-audit 19636 → 16472,
+  (characters, before → after): scope-and-plan 34750 → 24938, plan-audit 19636 → 16671,
   pr-review 23540 → 13026, code-judge 17923 → 16118, coder 15954 → 16035, test-writer 13464 →
   12632, test-judge 10787 → 11363, intent-judge 9437 → 9345, pr-opener 8994 → 9168, sweep 7485
   → 7219.
@@ -63,6 +63,19 @@ follow in 5.1.0, mutation testing in 5.2.0.
 - Write-back: a ledger write step that finds no tool reports every entry `unavailable` (was
   `failed`), like the read steps.
 - `meta.whenToUse` names confirm `"default"`.
+
+- Review of #48 (Max's rulings): every 5.0.0 field the script does not require is optional and
+  nullable: `memory_notes` (every role), `follow_ups` (coder) and the preflight's advisory
+  `ledger_tools` census (was required, non-null). A model's null there never stops a build.
+  `role_file` and `shared_file` stay required (null fits the schema; the script's check refuses
+  it on an ok result).
+- Review of #48: a plan with no "Non-goals" section is a routed finding the planner fixes in the
+  next re-plan round, never a `plan_defect` on its own.
+- Review of #48: the probe mode's role-read (`plan-audit`) also hashes and reads
+  `_shared/test-cmd-allowlist.md` and returns `shared_file`, which the script checks;
+  `probe.role_read.shared_file` reports it.
+- The prior-finding rulings are documented in the README: the code judge's `prior still_present:`
+  and `prior regressed:` routed findings, pr-review's `checked` entries.
 
 ### Added (part 3 of 3)
 

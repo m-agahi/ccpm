@@ -73,12 +73,13 @@ test("5.0.0 R2: ledgerAdapter picks yaadgaar | yadgar | tracker | none from sour
   assert.deepEqual(tools, [YGET]);
 });
 
-test("5.0.0 R2: the preflight census is typed and required; the prompt names the candidate tools and how an absent server shows", async () => {
+// PR #48 ruling 1: was "typed and required"; the census is advisory, so optional and nullable
+test("5.0.0 R2: the preflight census is typed, optional and nullable; the prompt names the candidate tools and how an absent server shows", async () => {
   const out = await run(happy(), ARGS);
   const pre = call(out, "preflight");
   const sch = pre.opts.schema;
-  assert.ok((sch.required || []).includes("ledger_tools"), "ledger_tools is required");
-  assert.deepEqual(sch.properties.ledger_tools, { type: "array", items: { type: "string" } });
+  assert.ok(!(sch.required || []).includes("ledger_tools"), "ledger_tools is not required");
+  assert.deepEqual(sch.properties.ledger_tools, { type: ["array", "null"], items: { type: "string" } });
   assert.match(pre.prompt, /ToolSearch/);
   assert.match(pre.prompt, /select:mcp__yaadgaar__read_task,mcp__yadgar__task_get/);
   assert.match(pre.prompt, /absent|not configured|disconnected/);
@@ -297,7 +298,7 @@ test("5.0.0 R2: memory_notes replaces yadgar_findings in the result; optional on
   // never required by any role schema
   for (const c of out.calls.filter((x) => x.label.startsWith("role:"))) {
     assert.ok(!c.opts.schema.required.includes("memory_notes"), c.label);
-    assert.deepEqual(c.opts.schema.properties.memory_notes.type, "array", c.label);
+    assert.deepEqual(c.opts.schema.properties.memory_notes.type, ["array", "null"], c.label); // PR #48 ruling 1: nullable
   }
 });
 

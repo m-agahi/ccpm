@@ -265,7 +265,10 @@ export async function runOne(script, args0) {
     // 5.0.0 (review of d8df90b): an unscripted probe role-read reads the scenario's file
     if (!(label in script) && /^infra:role-read:/.test(label)) {
       const role = inputsOf(prompt).role;
-      return { status: "ok", reason: "read", role_file: { name: role, sha256: roleTable[role] } };
+      const r = { status: "ok", reason: "read", role_file: { name: role, sha256: roleTable[role] } };
+      // PR #48 ruling 3: and the role's shared file
+      if (SHARED_FOR_ROLE[role]) r.shared_file = { name: SHARED_FOR_ROLE[role], sha256: SHARED_PIN[SHARED_FOR_ROLE[role]] };
+      return r;
     }
     // the bytecode purge is mechanical; unscripted purges succeed by default
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };

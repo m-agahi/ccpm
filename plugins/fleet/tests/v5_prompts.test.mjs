@@ -324,7 +324,89 @@ test("5.0.0 R3: the coder's follow_ups pass through to the run result; absent ->
   assert.deepEqual(bare.result.follow_ups, []);
   const sc = call(out, "role:fleet-coder:r1").opts.schema;
   assert.ok(!sc.required.includes("follow_ups"));
-  assert.deepEqual(sc.properties.follow_ups.type, "array");
+  // PR #48 ruling 1: optional and nullable
+  assert.deepEqual(sc.properties.follow_ups.type, ["array", "null"]);
+});
+
+// ---------------------------------------------------------------- PR #48 rulings
+
+// Ruling 1 (the 4.0.3 lesson): a field the script does not require is never
+// required and always accepts null, so a model's null never stops a build.
+// The 5.0.0 fields (PR-1 to PR-3) and their status:
+//   role_file, shared_file  required, object|null (the script checks them)
+//   memory_notes            optional, array|null (every role)
+//   follow_ups              optional, array|null (coder)
+//   ledger_tools            optional, array|null (preflight census, advisory)
+test("PR #48 ruling 1: every 5.0.0 field the script does not require is optional and nullable", async () => {
+  const out = await run(happy(), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const nullable = (p) => [].concat(p.type).includes("null");
+  for (const c of out.calls.filter((x) => x.label.startsWith("role:"))) {
+    const s = c.opts.schema;
+    assert.ok(!s.required.includes("memory_notes"), c.label);
+    assert.deepEqual(s.properties.memory_notes.type, ["array", "null"], c.label + " memory_notes");
+    assert.ok(s.required.includes("role_file") && nullable(s.properties.role_file), c.label + " role_file");
+    if (s.properties.shared_file) assert.ok(s.required.includes("shared_file") && nullable(s.properties.shared_file), c.label + " shared_file");
+  }
+  const pre = call(out, "preflight").opts.schema;
+  assert.ok(!pre.required.includes("ledger_tools"), "ledger_tools is advisory: not required");
+  assert.deepEqual(pre.properties.ledger_tools.type, ["array", "null"]);
+});
+
+test("PR #48 ruling 1: null memory_notes and follow_ups from the coder, and a null census, never stop a build", async () => {
+  const s = happy();
+  s.preflight = { ledger_tools: null };
+  s["role:fleet-coder:r1"] = Object.assign({}, s["role:fleet-coder:r1"], { follow_ups: null, memory_notes: null });
+  s["role:scope-and-plan"] = Object.assign({}, s["role:scope-and-plan"], { memory_notes: null });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.deepEqual(out.result.follow_ups, []);
+  assert.ok(!out.result.memory_notes.some((x) => x.role === "fleet-coder"));
+});
+
+// Ruling 2: a missing Non-goals section is a routed finding the planner fixes
+// in a re-plan round; it never changes the verdict on its own.
+test("PR #48 ruling 2: plan-audit routes a missing Non-goals section as a finding, never as plan_defect on its own", () => {
+  const t = readFileSync(join(ROLES_SRC, "plan-audit.md"), "utf8");
+  assert.doesNotMatch(t, /missing "Non-goals" section → `plan_defect`/i);
+  assert.match(t, /no "Non-goals" section[^\n]*routed finding[^\n]*never changes the verdict on its own/i);
+});
+
+// Ruling 3: probe mode also reads the shared file the way the planner does.
+test("PR #48 ruling 3: the probe role-read also hashes and reads _shared/test-cmd-allowlist.md and returns shared_file, checked by the script", async () => {
+  const pin = GEN.shared(SOURCE)["test-cmd-allowlist"];
+  const ok = happy();
+  delete ok.__dispatch;
+  const out = await runOne(ok, { mode: "probe", repo: "/r", date: ARGS.date });
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const c = out.calls[1];
+  assert.ok(c.prompt.includes(SHARED_STEP("test-cmd-allowlist")), "the shared sha256sum step");
+  assert.ok(c.prompt.includes("Read " + ROLES_DIR + "/_shared/test-cmd-allowlist.md with the Read tool"), "the shared Read step");
+  assert.ok(c.opts.schema.required.includes("shared_file"));
+  assert.deepEqual(out.result.probe.role_read.shared_file, { name: "test-cmd-allowlist", sha256: pin, ok: true });
+  for (const sf of [null, { name: "test-cmd-allowlist", sha256: "0".repeat(64) }, { name: "x", sha256: pin }]) {
+    const t = happy();
+    delete t.__dispatch;
+    t["infra:role-read:plan-audit"] = { status: "ok", reason: "read", role_file: { name: "plan-audit", sha256: GEN.roles(SOURCE)["plan-audit"] }, shared_file: sf };
+    const o = await runOne(t, { mode: "probe", repo: "/r", date: ARGS.date });
+    assert.equal(o.result.status, "needs_human", JSON.stringify(sf));
+    assert.equal(o.result.stop_gate, "contract");
+    assert.match(o.result.reason, /probe: the role-read agent .*did not read the shipped shared file test-cmd-allowlist/);
+  }
+});
+
+// Ruling 4: the prior-finding rulings are documented where they live.
+test("PR #48 ruling 4: the prior-finding rulings (routed_findings prefixes, checked entries) are documented in the role files and the README", () => {
+  const cj = readFileSync(join(ROLES_SRC, "fleet-code-judge.md"), "utf8");
+  assert.match(cj, /`prior still_present: `/);
+  assert.match(cj, /`prior regressed: `/);
+  const pr = readFileSync(join(ROLES_SRC, "pr-review.md"), "utf8");
+  assert.match(pr, /"prior <id>: resolved\|still_present\|regressed — <evidence>"/);
+  const readme = readFileSync(join(ROLES_SRC, "..", "README.md"), "utf8");
+  assert.match(readme, /`prior still_present: `/);
+  assert.match(readme, /`prior regressed: `/);
+  assert.match(readme, /`"prior <id>: resolved\|still_present\|regressed — <evidence>"`/);
 });
 
 test("5.0.0 R3: role schemas carry memory_notes only (no yadgar_findings); notes from the roles reach the result", async () => {
