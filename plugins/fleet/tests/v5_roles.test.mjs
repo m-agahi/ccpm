@@ -28,8 +28,8 @@ async function realProbe(mutate) {
     cpSync(ROLES_SRC, join(ver, "roles"), { recursive: true });
     if (mutate) mutate(join(ver, "roles"));
     const p = spawnSync("bash", ["-c", await PREFLIGHT_PROBE()], { encoding: "utf8", env: Object.assign({}, process.env, { HOME: home }) });
-    // a directory in roles makes sha256sum exit 1; the lines still go to the workflow
-    assert.ok(p.status === 0 || /Is a directory/.test(p.stderr), p.stderr);
+    // 5.0.0 R3: only regular files are hashed; a directory is a roles_odd line
+    assert.equal(p.status, 0, p.stderr);
     const s = happy();
     delete s.__dispatch;
     s.preflight = { scripts_probe: p.stdout.split("\n"), scripts_dir: join(ver, "scripts") };
@@ -50,7 +50,8 @@ const readCmd = (role) => "sha256sum -- '" + ROLES_DIR + "/" + role + ".md'\n2. 
 const withFile = (r, rf) => Object.assign({}, r, { role_file: rf });
 
 test("5.0.0 R1: ten role files ship, each pinned by ROLE_SHA256; gen.mjs --check passes", () => {
-  assert.deepEqual(readdirSync(ROLES_SRC).sort(), ROLE_NAMES.map((r) => r + ".md").sort());
+  // 5.0.0 R3: plus the _shared dir (pinned by SHARED_SHA256; v5_prompts)
+  assert.deepEqual(readdirSync(ROLES_SRC).sort(), ROLE_NAMES.map((r) => r + ".md").concat(["_shared"]).sort());
   assert.deepEqual(Object.keys(PIN).sort(), ROLE_NAMES.slice().sort());
   for (const r of ROLE_NAMES) {
     assert.equal(fileSha(join(ROLES_SRC, r + ".md")), PIN[r], r);
@@ -289,6 +290,19 @@ test("5.0.0 R1 real execution: the probe, run by bash over a real plugin cache, 
     [(d) => writeFileSync(join(d, ".hidden"), "x"), /\.hidden is not a shipped role file/],
     [(d) => rmSync(join(d, "pr-review.md")), /pr-review\.md is missing/],
     [(d) => mkdirSync(join(d, "sub")), /not regular files: sub/],
+    // 5.0.0 R3: the _shared dir: a changed, extra, missing or nested entry, or a symlinked dir
+    [(d) => writeFileSync(join(d, "_shared", "test-cmd-allowlist.md"), "x"), /_shared\/test-cmd-allowlist\.md hashes [0-9a-f]{64}, not /],
+    [(d) => writeFileSync(join(d, "_shared", "extra.md"), "x"), /_shared\/extra\.md is not a shipped role file/],
+    [(d) => rmSync(join(d, "_shared", "test-cmd-allowlist.md")), /_shared\/test-cmd-allowlist\.md is missing/],
+    [(d) => mkdirSync(join(d, "_shared", "deeper")), /not regular files: _shared\/deeper/],
+    [
+      (d) => {
+        cpSync(join(d, "_shared"), join(d, "..", "shared-elsewhere"), { recursive: true });
+        rmSync(join(d, "_shared"), { recursive: true });
+        symlinkSync(join(d, "..", "shared-elsewhere"), join(d, "_shared"));
+      },
+      /not regular files: _shared(,|;|$)/,
+    ],
     [
       (d) => {
         writeFileSync(join(d, "..", "elsewhere.md"), ROLE_TEXT["fleet-coder"]);

@@ -277,7 +277,7 @@ test("5.0.0 R2 (review of 88eb9b0): a malformed census counts as [] and never bl
 });
 
 test("5.0.0 R2: memory_notes replaces yadgar_findings in the result; optional on every role", async () => {
-  // the harness's happy roles return yadgar_findings (the role files until PR-3) and memory_notes both work
+  // 5.0.0 R3: the harness's happy roles return memory_notes (yadgar_findings is gone)
   const s = happy();
   s["role:fleet-coder:r1"] = Object.assign({}, s["role:fleet-coder:r1"], { memory_notes: ["coder note"] });
   const out = await run(s, { ...ARGS, confirm: "ask" });
@@ -290,7 +290,7 @@ test("5.0.0 R2: memory_notes replaces yadgar_findings in the result; optional on
   assert.deepEqual(out.result.memory_notes.find((x) => x.role === "fleet-coder").notes, ["coder note"]);
   // absent everywhere: an empty list, run ok
   const bare = happy();
-  for (const k of Object.keys(bare)) if (k.startsWith("role:") && bare[k] && typeof bare[k] === "object") delete bare[k].yadgar_findings;
+  for (const k of Object.keys(bare)) if (k.startsWith("role:") && bare[k] && typeof bare[k] === "object") delete bare[k].memory_notes;
   const o2 = await run(bare, { ...ARGS, confirm: "ask" });
   assert.equal(o2.result.status, "ok", o2.result.reason);
   assert.deepEqual(o2.result.memory_notes, []);

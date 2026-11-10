@@ -301,8 +301,21 @@ const READS = {
     "pc.path_problems array": "prog:path_check:path_problems",
   },
   pathCheck: { "t.shim boolean": "prog:path_check:tools.*.shim" },
-  // 5.0.0 (R2): memory_notes, and the role files' yadgar_findings until R3
-  collect: { "r.yadgar_findings array": SP + "yadgar_findings", "r.memory_notes array": SP + "memory_notes" },
+  // 5.0.0 (R2, R3): memory_notes only (yadgar_findings is gone)
+  collect: { "r.memory_notes array": SP + "memory_notes" },
+  // 5.0.0 (R3): the coder's optional follow_ups
+  followUpsOf: {
+    "r.follow_ups array": "role:fleet-coder:follow_ups",
+    "x object": "role:fleet-coder:follow_ups[]",
+    "x.summary string": "role:fleet-coder:follow_ups[].summary",
+    "x.path string": "role:fleet-coder:follow_ups[].path",
+  },
+  // 5.0.0 (R3): the shared_file the planner and the audit carry
+  sharedFileProblem: {
+    "r.shared_file object": "role:scope-and-plan:shared_file",
+    "r.shared_file array": "!role:scope-and-plan:shared_file",
+    "f.sha256 string": "role:scope-and-plan:shared_file.sha256",
+  },
   preflightStep: { "pre.ledger_tools array": "preflight:ledger_tools", "x string": "preflight:ledger_tools[]" },
   ledgerAdapter: {
     "sources array": "parsed: a cleanBrief source list (intake:brief.sources or the sealed plan ref)",
@@ -540,6 +553,8 @@ const READS = {
   // 5.0.0 (R1): buildMode no longer reads fresh_preflight (main still type-checks it)
   buildMode: { "input.plan_ref object": PARSED_ARGS, "input.freeze_digest string": PARSED_ARGS },
   buildFromRef: {
+    // 5.0.0 (R3): the previous review round's blocking list (reviewStep's own)
+    "state.review.blocking array": PARSED_LOCAL,
     "r.refs array": "prog:plan_ref:refs",
     "c string": "prog:plan_ref:chunks[]",
     "r.chunks array": "prog:plan_ref:chunks",
@@ -809,14 +824,15 @@ test("5.0.0 R1 (was 4.0.3 1998 repro wf_d6901710-32d): the preflight and role sc
   assert.ok(validate(pre, { scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }).length, "no census");
   assert.ok(validate(pre, { ledger_tools: [7], scripts_probe: [], scripts_dir: null, path_check: null, reason: "ok" }).length, "a numeric tool name");
   const sch = out.calls.find((c) => c.label === "role:plan-audit").opts.schema;
-  const good = { status: "ok", reason: "x", verdict: "approve", routed_findings: [], role_file: { name: "plan-audit", sha256: "a".repeat(64) } };
+  // 5.0.0 R3: plan-audit also carries the shared_file it read
+  const good = { status: "ok", reason: "x", verdict: "approve", routed_findings: [], role_file: { name: "plan-audit", sha256: "a".repeat(64) }, shared_file: { name: "test-cmd-allowlist", sha256: "b".repeat(64) } };
   assert.deepEqual(validate(sch, good), []);
   assert.ok(validate(sch, Object.assign({}, good, { role_file: "plan-audit" })).length, "role_file as a string");
   assert.ok(validate(sch, Object.assign({}, good, { role_file: { name: "plan-audit", sha256: 7 } })).length, "a numeric sha256");
   const { role_file, ...none } = good;
   assert.deepEqual(validate(sch, none), ["$.role_file: required"]);
   // a failed role may give null (it fails the script's check)
-  assert.deepEqual(validate(sch, { status: "failed", reason: "cat failed", verdict: null, routed_findings: null, role_file: null }), []);
+  assert.deepEqual(validate(sch, { status: "failed", reason: "cat failed", verdict: null, routed_findings: null, role_file: null, shared_file: null }), []);
 });
 
 // 5.0.0 (R1): was "the run still stops on a string version that reaches the

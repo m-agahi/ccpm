@@ -2,8 +2,72 @@
 
 ## [Unreleased]
 
-Fleet 5.0.0, parts 1 and 2 of 3 (ledger 1999, R1 and R2). The version stays 4.0.3 until the last
-part.
+Fleet 5.0.0, parts 1 to 3 of 3 (ledger 1999, R1, R2 and R3). The version stays 4.0.3 until the
+last part.
+
+### Changed (part 3 of 3, R3: the role prompt revision)
+
+- The role files are rewritten for a runtime with no memory server. Removed: the `op read` PAT
+  instruction in `pr-review.md` (roles use the `gh` already authenticated and never read a
+  secret), every required `recall`/`memorize` call and the `## Yadgar findings` footer, the
+  trailing fenced-json output rule (the StructuredOutput tool is the only output channel, with
+  `role_file` in it), `CONTRACT` / `fleet-vN` / page-version text, per-version annotations, wiki
+  links and decision-record numbers, and the `yadgar/_shared` repo section in `plan-audit.md`
+  (which prettier escaped). A memory tool is optional: a role may consult one when present and
+  never writes one; roles emit optional `memory_notes`.
+- `yadgar_findings` is gone from the role schemas and from `collect`.
+- Truthful gates: held-out examples, coverage, mutation and the security scan do not run in
+  this release. The coder's "gates that run on your diff (by script)" list, the planner's "the
+  workflow runs them against the finished code" and the code judge's coverage/mutant/held-out
+  checks are reworded: the code judge lists them under `gates_not_run` by their gate ids and runs
+  its fallback checks. The planner still emits `held_out_examples` (5.1 consumes them), and the
+  no-special-casing rule stays. The test writer's mutation-augmentation section is marked
+  inactive until mutation testing ships.
+- Dead output keys removed from the prose: the code judge's `hunk_rulings`, `mutant_rulings`
+  and `exemptions` (the script never read them). The writer keeps `red_kind` and
+  `failure_excerpt`: the test judge receives them in `writer_outputs`.
+- Real inputs documented: the code judge's `hash_recheck`; the coder's `frozen_tests_note` and
+  `code_tree`; the intent judge's `brief` and `ledger_task` (not `task_body`/`rulings`).
+- One test_cmd/check_cmd allowlist: `roles/_shared/test-cmd-allowlist.md`, pinned by a new
+  `SHARED_SHA256` table (`gen.mjs` writes and checks it; `SHARED_COUNT` 1; the Read-tool size
+  limits apply). The planner and the plan audit hash and read it as steps 3 and 4 of their prompt
+  and return `shared_file: {name, sha256}`, which the script checks (one retry, then a contract
+  stop). Preflight pins `roles/_shared` (a real dir, exactly the shared files). The grammar matches
+  the script's validators: `-n auto` is refused (the old prose allowed it), `uv run` takes any
+  number of `--frozen`, `--no-sync` and `--extra <x>`, and its examples are run through the
+  validators by a test.
+- Writers and the coder no longer run branch-state checks or `git fetch --prune` (the workspace
+  step owns them; parallel writers risked ref-lock collisions).
+- Non-fleet modes are split out: the planner's `commit=true`, `advisor`, `measure_first` and
+  `perf-lever`, the audit's `writeback=true`, and pr-review's non-fleet modes and k8s/Flux
+  essays. `roles/pr-review.md` is fleet mode only (the yadgar page keeps every mode). Sizes
+  (characters, before → after): scope-and-plan 34750 → 24899, plan-audit 19636 → 16472,
+  pr-review 23540 → 13026, code-judge 17923 → 16118, coder 15954 → 16035, test-writer 13464 →
+  12632, test-judge 10787 → 11363, intent-judge 9437 → 9345, pr-opener 8994 → 9168, sweep 7485
+  → 7219.
+- pr-review: no "≤40 lines / Task list"; no confidence threshold that could hide a `security` or
+  `fail_open` finding (an unreproduced one is reported as an `unverified:` nit); CI counts as
+  evidence only once `gh pr checks` reports success for `head_sha`.
+- Write-back: a ledger write step that finds no tool reports every entry `unavailable` (was
+  `failed`), like the read steps.
+- `meta.whenToUse` names confirm `"default"`.
+
+### Added (part 3 of 3)
+
+- `prior_findings` input: the code judge gets the findings that round's coder was sent (`[]` in
+  round 1); pr-review gets the previous review round's blocking findings. Both rule each one
+  `resolved`, `still_present` or `regressed` with evidence; a finding resolved only by the
+  coder's claim is still present. pr-review also gets `allowed_additions`. The sweep gets
+  neither.
+- The coder's optional `follow_ups: [{summary, path}]`, passed through to the run result's
+  `follow_ups` (the last accepted coder result; `[]` when none). Nothing files them.
+- Prompt additions: secret redaction in evidence (type, file:line, first 4 characters) in
+  pr-review, the code judge and the pr-opener; tests own their data (temp dirs, no fixed ports,
+  no shared files or order reliance); flaky/retry markers flagged by both judges; the test judge
+  runs each file once in reverse order; the planner's optional per-criterion `source_quote`, a
+  "Non-goals" section, failure-path cases (timeout, partial, concurrent) for I/O criteria or a
+  `dont_care` reason, and STRIDE refusal criteria at trust boundaries; the audit rejects silent
+  omission; the code judge's duplicate-helper check.
 
 ### Changed (part 2 of 3, R2: yadgar and yaadgaar are never required)
 

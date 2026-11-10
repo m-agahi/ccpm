@@ -487,7 +487,8 @@ function reseal(s, tiny, fn) {
 const BUILD = (tiny, over) => Object.assign({ mode: "build", plan_ref: tiny, date: "2026-11-04", project: "o/r" }, over || {});
 const ROLE_LOAD = /agent_prompt_get/;
 // 5.0.0 (R1): the preflight probe hashes every role file
-const ROLE_PROBE = /sha256sum -- "\$d"\/\*\.py "\$\{d%\/scripts\}\/roles"\/\*/;
+// (5.0.0 R3: and the files of its _shared dir, one regular file at a time)
+const ROLE_PROBE = /sha256sum -- "\$d"\/\*\.py; for f in "\$\{d%\/scripts\}\/roles"\/\* "\$\{d%\/scripts\}\/roles"\/_shared\/\*; do if \[ -f "\$f" \] && \[ ! -L "\$f" \]; then sha256sum -- "\$f"/;
 
 // 5.0.0 (R1): was "a build with a cached preflight dispatches no more agents
 // than before" (plan 17, build 50). The role pages are gone; every run's one

@@ -241,7 +241,9 @@ test("5.0.0 R1 (was role prompts load the role from yadgar): role prompts embed 
   for (const c of out.calls.filter((x) => x.label.startsWith("role:"))) {
     const role = c.label.split(":")[1];
     const f = "'" + SCRIPTS_DIR.replace(/scripts$/, "roles/") + role + ".md'";
-    assert.ok(c.prompt.startsWith("You are the fleet role " + role + ". Do these two steps first, in order:\n1. Run this one command exactly as written, unmodified, as one Bash call: sha256sum -- " + f + "\n2. Read " + f.slice(1, -1) + " with the Read tool"), c.label);
+    // 5.0.0 R3: the planner and the audit also read the shared allowlist (steps 3 and 4)
+    const steps = role === "scope-and-plan" || role === "plan-audit" ? "four" : "two";
+    assert.ok(c.prompt.startsWith("You are the fleet role " + role + ". Do these " + steps + " steps first, in order:\n1. Run this one command exactly as written, unmodified, as one Bash call: sha256sum -- " + f + "\n2. Read " + f.slice(1, -1) + " with the Read tool"), c.label);
     assert.ok(!c.prompt.includes("agent_prompt_get"), c.label);
     assert.ok(c.prompt.length - JSON.stringify(inputsOf(c.prompt)).length < 2000, c.label + " wrapper too long");
     assert.ok(c.opts.schema, c.label + " has a schema");
@@ -1150,7 +1152,8 @@ test("infra agents run on an explicit tier", async () => {
 test("5.0.0 R1 (was preflight asks for each DISPATCH line): preflight hashes every role file; the tier comes from ROLE_DISPATCH", async () => {
   const out = await run(happy(), ARGS);
   const c = call(out, "preflight");
-  assert.ok(c.prompt.includes('sha256sum -- "$d"/*.py "${d%/scripts}/roles"/*'), "the probe hashes every role file");
+  // 5.0.0 R3: every regular file of the roles dir and of its _shared dir
+  assert.ok(c.prompt.includes('sha256sum -- "$d"/*.py; for f in "${d%/scripts}/roles"/* "${d%/scripts}/roles"/_shared/*; do if [ -f "$f" ] && [ ! -L "$f" ]; then sha256sum -- "$f"'), "the probe hashes every role file");
   assert.doesNotMatch(c.prompt, /DISPATCH: model=/);
   assert.ok(out.logs.includes("model: fleet-coder -> sonnet"));
 });
@@ -5509,10 +5512,11 @@ const ARRAY_SITES = {
   "p.role_sha256 @ preflightRecordProblem": "parsed: the sealed plan ref (log-only record)",
   "o.files @ planFactsProblem": "role:scope-and-plan:repo_obligations[].files",
   "tc.tools @ testCmdProblem": "role:scope-and-plan:test_cmd.tools",
-  "r.yadgar_findings @ collect": "role:scope-and-plan:yadgar_findings",
-  // 5.0.0 (R2)
+  // 5.0.0 (R2; R3: yadgar_findings is gone)
   "r.memory_notes @ collect": "role:scope-and-plan:memory_notes",
-  "pre.ledger_tools @ preflightStep": "preflight:ledger_tools",
+  // 5.0.0 (R3)
+  "r.follow_ups @ followUpsOf": "role:fleet-coder:follow_ups",
+  "r.shared_file @ sharedFileProblem": "parsed: a guard (shared_file is typed object or null in the planner and audit schemas; an array is refused)",  "pre.ledger_tools @ preflightStep": "preflight:ledger_tools",
   "it.tried @ noLedgerStop": "intake:tried",
   "h.suspicious @ hasher": "hasher:hashes.suspicious",
   "r.changed @ hasher": "hasher:changed",
