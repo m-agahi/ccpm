@@ -53,7 +53,7 @@ follow in 5.1.0, mutation testing in 5.2.0.
 - Non-fleet modes are split out: the planner's `commit=true`, `advisor`, `measure_first` and
   `perf-lever`, the audit's `writeback=true`, and pr-review's non-fleet modes and k8s/Flux
   essays. `roles/pr-review.md` is fleet mode only (the yadgar page keeps every mode). Sizes
-  (characters, before → after): scope-and-plan 34750 → 24899, plan-audit 19636 → 16472,
+  (characters, before → after): scope-and-plan 34750 → 24938, plan-audit 19636 → 16472,
   pr-review 23540 → 13026, code-judge 17923 → 16118, coder 15954 → 16035, test-writer 13464 →
   12632, test-judge 10787 → 11363, intent-judge 9437 → 9345, pr-opener 8994 → 9168, sweep 7485
   → 7219.
@@ -110,9 +110,9 @@ follow in 5.1.0, mutation testing in 5.2.0.
   absent stops with the no-ledger sentence (fails closed: the current rulings are unknown). Only
   plans that used a ledger can reach this stop; `confirm: "ask"` builds on.
 - The result key `yadgar_findings` is renamed `memory_notes` (`[{role, notes}]`, optional, never
-  required). Role results may carry `memory_notes`; the role files' `yadgar_findings` is still
-  read until the R3 prompt revision. The skill offers to store the notes when the session has a
-  memory tool, and shows them otherwise.
+  required). Role results may carry `memory_notes` (part 2 still read the old `yadgar_findings`
+  too; part 3 removed it). The skill offers to store the notes when the session has a memory
+  tool, and shows them otherwise.
 - Docs and metadata: README requirements and the ledger adapter section; SKILL.md ledger and
   project wording; `plugin.json` and the marketplace entry drop the `yadgar` keyword and "Role
   prompts load from yadgar". `agents/judge.md` keeps its denylist of yadgar tool names: the
@@ -123,8 +123,8 @@ follow in 5.1.0, mutation testing in 5.2.0.
 
 - The ten role prompts ship in the plugin as `roles/<role>.md`, pinned by a new `ROLE_SHA256`
   table in the workflow (`gen.mjs` writes it and `--check` checks it, next to
-  `PROGRAM_SHA256`). The files are the yadgar pages `agent-prompt-<role>` as of 4.0.3 with the
-  `CONTRACT:` line removed and the repo's markdown formatting applied.
+  `PROGRAM_SHA256`). Part 1 copied them from the yadgar pages `agent-prompt-<role>` as of 4.0.3,
+  with the `CONTRACT:` line removed; part 3 revised them (see above).
 - Same trust model as the shipped programs (Max's ruling on #46): each role prompt is a short
   wrapper with no role text. The role agent first runs `sha256sum -- <roles dir>/<role>.md`,
   then reads the whole file with the Read tool (never `cat`, which the Bash tool cuts near
