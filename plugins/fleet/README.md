@@ -173,7 +173,14 @@ The fixer program (3.0.0) runs the hooks in a scratch checkout of HEAD under `sc
 copied in, and only they are copied back. The hook surface is exact: the config, every path a hook
 `entry` or `args` names, and the files of every `-m` module an entry runs (`a/b.py`,
 `a/b/__init__.py`, `a/__init__.py`); a path that only appears in a `files:` or `exclude:` regex is
-not hook code and is formatted. The config is read only with PyYAML (`yaml.safe_load`, in a
+not hook code and is formatted. A hook path that is a directory (`pytest scripts/tests/`, 5.0.4)
+differs from HEAD when a tracked path under it differs or an untracked or ignored path is under it,
+the selected paths aside; a symlinked or replaced directory differs too. Before that comparison the
+program deletes, under the directory hook paths only, the untracked or ignored `__pycache__` and
+`.pytest_cache` contents and `*.pyc`/`*.pyo` files (never a tracked file, never a selected path,
+never through a symlink: a link is left for the comparison, which refuses it) and relays them as
+`purged` and `purged_paths`. format-plan and the commit step run the hooks with
+`PYTHONDONTWRITEBYTECODE=1`. The config is read only with PyYAML (`yaml.safe_load`, in a
 subprocess that prints JSON: `entry`, `args` and `language` of every hook of every repo, any YAML
 form). The interpreter is pre-commit's own, which ships PyYAML: the program follows the
 `pre-commit` executable's shebang, and a shell wrapper's `exec` target (pipx, nix), to that Python;

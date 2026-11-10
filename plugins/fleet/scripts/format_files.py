@@ -32,7 +32,7 @@ try:
         _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
 except Exception:
     _PROG = {'name': None, 'sha256': None}
-import glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile
+import glob, hashlib, json, os, re, shutil, stat, subprocess, sys, tempfile
 wt, sel, frozen = sys.argv[1], json.loads(sys.argv[2]), set(json.loads(sys.argv[3]))
 scratch_root, tmo = sys.argv[4], int(sys.argv[5])
 # no PATH entry inside the worktree or the scratch dir: pre-commit and the
@@ -64,8 +64,11 @@ def snapshot(cwd):
         os.unlink(idx)
 def names(b):
     return [x.decode('utf-8', 'replace') for x in b.split(b'\0') if x]
+# the caches purge_caches() deleted (5.0.4), printed with every result
+PURGED = []
+PURGED_CAP = 50
 def done(**k):
-    out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': []}
+    out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': [], 'purged': len(PURGED), 'purged_paths': sorted(PURGED)[:PURGED_CAP]}
     out.update(k)
     out['program'] = _PROG
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
@@ -85,10 +88,78 @@ for rec in git(wt, 'ls-tree', '-r', '-z', 'HEAD').stdout.split(b'\0'):
     tracked.add(path)
     if meta.split()[0] == b'120000':
         links.add(path)
+sel_set = set(cand)
+def linked(p):
+    # a symlink at p or at any parent of p (lstat, never followed)
+    segs = p.split('/')
+    return any(os.path.islink(os.path.join(wt, *segs[:k])) for k in range(1, len(segs) + 1))
+def head_tree(p):
+    r = git(wt, 'cat-file', '-t', 'HEAD:' + p, check=False)
+    return r.returncode == 0 and r.stdout.strip() == b'tree'
+def is_dir_path(p):
+    # 5.0.4 (ledger 2013): a directory a hook entry names (pytest tests/)
+    fp = os.path.join(wt, p)
+    return p not in tracked and (head_tree(p) or (os.path.isdir(fp) and not os.path.islink(fp)))
+def others(p):
+    # untracked paths under p, ignored ones included; git never descends a symlink
+    return names(git(wt, 'ls-files', '-z', '--others', '--', p).stdout)
+def dir_offenders(p):
+    # what under directory hook path p is not HEAD's: a tracked path that
+    # differs, any untracked or ignored path, the selected paths aside. A
+    # symlinked or replaced directory is itself the offender.
+    fp = os.path.join(wt, p)
+    if linked(p) or not os.path.isdir(fp):
+        return [p]
+    out = names(git(wt, 'diff', '--name-only', '-z', '--no-renames', 'HEAD', '--', p).stdout) + others(p)
+    return sorted(set(x for x in out if x not in sel_set))
+OFFENDERS = []
 def differs(p):
     if p not in tracked:
+        if is_dir_path(p):
+            hit = dir_offenders(p)
+            OFFENDERS.extend(hit)
+            return bool(hit)
         return os.path.lexists(os.path.join(wt, p))
     return git(wt, 'diff', '--quiet', 'HEAD', '--', p, check=False).returncode != 0
+CACHE_DIRS = ('__pycache__', '.pytest_cache')
+def purge_caches():
+    # 5.0.4 (ledger 2013): a hook run in the worktree (format-plan, the commit
+    # step) leaves __pycache__ / .pytest_cache under a hook directory such as
+    # `pytest scripts/tests/`. Under the directory hook paths only, delete the
+    # untracked or ignored cache files: a path under a __pycache__ or
+    # .pytest_cache dir, or a *.pyc / *.pyo file. Never a tracked file (git
+    # lists only untracked ones), never a selected path, never through a
+    # symlink (every component lstat'ed; a link is left for the check, which
+    # refuses it), never outside the worktree. Emptied cache dirs go too.
+    rw = os.path.realpath(wt)
+    for p in sorted(surface):
+        if not is_dir_path(p) or linked(p) or not os.path.isdir(os.path.join(wt, p)):
+            continue
+        for q in others(p):
+            segs = q.split('/')
+            if q in sel_set or not (any(x in CACHE_DIRS for x in segs[:-1]) or segs[-1].endswith(('.pyc', '.pyo'))):
+                continue
+            if linked(q):
+                continue
+            full = os.path.join(wt, q)
+            try:
+                if not stat.S_ISREG(os.lstat(full).st_mode):
+                    continue
+            except OSError:
+                continue
+            if not os.path.realpath(full).startswith(rw + os.sep):
+                continue
+            os.unlink(full)
+            PURGED.append(q)
+            # the emptied cache dirs (a cache dir or a dir inside one), deepest
+            # first, never p itself or a dir above it
+            top = len(p.split('/'))
+            for k in range(len(segs) - 1, top, -1):
+                if any(x in CACHE_DIRS for x in segs[top:k]):
+                    try:
+                        os.rmdir(os.path.join(wt, *segs[:k]))
+                    except OSError:
+                        pass
 # the hook surface: the config, every path its hook entries and args name
 # exactly, and the module files of every -m module an entry runs (paths in a
 # files:/exclude: regex are not hook code and stay formattable)
@@ -222,6 +293,7 @@ for v in vals:
         for k in range(1, len(parts) + 1):
             surface.add('/'.join(parts[:k]) + '/__init__.py')
         surface.add('/'.join(parts) + '.py')
+purge_caches()
 refused = sorted(p for p in surface if (p == '.pre-commit-config.yaml' and head_cfg.returncode != 0 and os.path.lexists(os.path.join(wt, p)))
                  or (p in tracked or os.path.lexists(os.path.join(wt, p))) and differs(p))
 # a selected path through a symlink (at HEAD or in the worktree) is refused
@@ -242,7 +314,7 @@ for p in sorted(set(cand)):
     if os.path.isfile(os.path.join(wt, p)):
         files.append(p)
 if refused:
-    done(note='hook surface differs from HEAD, or a selected path goes through a symlink', files=files, refused=sorted(set(refused)))
+    done(note='hook surface differs from HEAD, or a selected path goes through a symlink' + (': ' + ', '.join(sorted(set(OFFENDERS))[:20]) if OFFENDERS else ''), files=files, refused=sorted(set(refused)))
 if head_cfg.returncode != 0:
     done(note='no .pre-commit-config.yaml', files=files)
 if not files:
