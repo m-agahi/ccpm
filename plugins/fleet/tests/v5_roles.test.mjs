@@ -2,8 +2,8 @@
 // ship in the plugin as roles/<role>.md, pinned by ROLE_SHA256, with the same
 // trust model as the shipped programs. Preflight pins the roles dir (realpath,
 // no symlink, exactly the ten files, each its sha256). Each role agent's first
-// action is `sha256sum -- <roles_dir>/<role>.md && cat <roles_dir>/<role>.md`;
-// it follows that file and returns role_file {name, sha256}; the script checks
+// action is `sha256sum -- <roles_dir>/<role>.md`, then it reads that file with
+// the Read tool (review of d8df90b: never cat) and follows it and returns role_file {name, sha256}; the script checks
 // both against the dispatched role and ROLE_SHA256. No prompt carries role
 // text, and no prompt loads a yadgar page.
 //
@@ -45,7 +45,7 @@ const ROLES_DIR = SCRIPTS_DIR.replace(/\/scripts$/, "/roles");
 const fileSha = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
 const firstDispatch = (t) => /^DISPATCH:.*$/m.exec(t)[0];
 // the role read command a role prompt carries
-const readCmd = (role) => "sha256sum -- '" + ROLES_DIR + "/" + role + ".md' && cat '" + ROLES_DIR + "/" + role + ".md'";
+const readCmd = (role) => "sha256sum -- '" + ROLES_DIR + "/" + role + ".md'\n2. Read " + ROLES_DIR + "/" + role + ".md with the Read tool";
 // a scripted role result with an explicit role_file
 const withFile = (r, rf) => Object.assign({}, r, { role_file: rf });
 
@@ -162,7 +162,8 @@ test("5.0.0 R1: a wrong role_file.sha256 stops at contract (after the one contra
   assert.notEqual(ok.result.stop_gate, "contract", ok.result.reason);
 });
 
-test("5.0.0 R1: a missing role_file (null) stops at contract, also on a not-ok result", async () => {
+// review of d8df90b, item 6: a not-ok coder with no role_file stops at "role"
+test("5.0.0 R1: a missing role_file (null) stops: at contract on ok (after its one retry), at role on a not-ok coder", async () => {
   for (const status of ["ok", "needs_human"]) {
     const s = happy();
     const r = withFile(Object.assign({}, s["role:fleet-coder:r1"], status === "ok" ? {} : { status, reason: "blocked" }), null);
@@ -170,8 +171,9 @@ test("5.0.0 R1: a missing role_file (null) stops at contract, also on a not-ok r
     s["role:fleet-coder:r1:retry"] = r;
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "needs_human", status);
-    assert.equal(out.result.stop_gate, "contract", status + ": " + out.result.reason);
+    assert.equal(out.result.stop_gate, status === "ok" ? "contract" : "role", status + ": " + out.result.reason);
     assert.match(out.result.reason, /role fleet-coder did not run the shipped role file \(no role_file\)/);
+    assert.equal(out.labels.includes("role:fleet-coder:r1:retry"), status === "ok", status + ": the ok coder retries once");
     assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
   }
 });
@@ -263,7 +265,8 @@ test("5.0.0 probe mode: preflight only on the given repo; returns the table and 
   const out = await runOne(s, { mode: "probe", repo: "/r", date: ARGS.date });
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.result.mode, "probe");
-  assert.deepEqual(out.labels, ["preflight"]);
+  // review 3: plus one role-read agent
+  assert.deepEqual(out.labels, ["preflight", "infra:role-read:plan-audit"]);
   const p = out.result.probe;
   assert.equal(p.scripts_dir, SCRIPTS_DIR);
   assert.equal(p.roles_dir, ROLES_DIR);
@@ -302,4 +305,150 @@ test("5.0.0 R1 real execution: the probe, run by bash over a real plugin cache, 
     assert.match(out.result.reason, re);
     assert.deepEqual(out.labels, ["preflight"]);
   }
+});
+
+// ---------------------------------------------------------------- review of d8df90b
+
+const fileOf = (role) => ROLES_DIR + "/" + role + ".md";
+
+// item 1 (HIGH): the Bash tool cuts output near 30000 characters, so `cat` can
+// truncate a role file while the sha256sum line still passes. The agent hashes
+// with sha256sum in Bash and reads the whole file with the Read tool.
+test("review 1: a role prompt hashes with sha256sum, reads the file with the Read tool (no cat), and every role agent type can Read", async () => {
+  const out = await run(happy(), ARGS);
+  const roleCalls = out.calls.filter((c) => c.label.startsWith("role:"));
+  // every role dispatch in the source names fleet:judge or no agent type (the default agent)
+  for (const m of SOURCE.matchAll(/callRole\([^;]*?\)/gs)) assert.doesNotMatch(m[0], /WRITER_AGENT|ledger-writer/, m[0]);
+  assert.ok(roleCalls.length >= 6);
+  const judge = readFileSync(join(SCRIPTS_SRC, "..", "agents", "judge.md"), "utf8");
+  const denied = (/^disallowedTools: (.*)$/m.exec(judge) || [, ""])[1].split(",").map((x) => x.trim());
+  assert.ok(!denied.includes("Read") && !/^tools:/m.test(judge), "fleet:judge can use Read");
+  for (const c of roleCalls) {
+    const role = c.label.split(":")[1];
+    assert.ok(c.prompt.includes("sha256sum -- '" + fileOf(role) + "'"), c.label);
+    assert.doesNotMatch(c.prompt, /&& cat |\bcat '/, c.label + ": no cat");
+    assert.ok(c.prompt.includes("Read tool") && c.prompt.includes(fileOf(role)), c.label + ": reads with the Read tool");
+    assert.match(c.prompt, /no offset and no limit/, c.label);
+    assert.ok([undefined, "fleet:judge"].includes(c.opts.agentType), c.label + " runs as " + c.opts.agentType);
+  }
+});
+
+function genCheckWith(mutate) {
+  const tmp = mkdtempSync(join(tmpdir(), "fleet-roles-gen2-"));
+  const dir = join(tmp, "roles");
+  const wf = join(tmp, "build-task-run.js");
+  try {
+    cpSync(ROLES_SRC, dir, { recursive: true });
+    mutate(dir);
+    // the tables follow the changed files, so only the new checks can fail
+    writeFileSync(wf, SOURCE);
+    const w = spawnSync("node", [join(SCRIPTS_SRC, "gen.mjs"), "--roles", dir, "--workflow", wf], { encoding: "utf8" });
+    const c = spawnSync("node", [join(SCRIPTS_SRC, "gen.mjs"), "--check", "--roles", dir, "--workflow", wf], { encoding: "utf8" });
+    return { write: w, check: c };
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+test("review 1: gen.mjs refuses a role file the Read tool would cut: over 2000 lines, a line over 2000 characters, or over 40000 characters", () => {
+  const base = ROLE_TEXT["fleet-pr-opener"];
+  for (const [what, text, re] of [
+    ["2001 lines", base + "\n".repeat(2001 - base.split("\n").length + 1), /fleet-pr-opener\.md: 20\d\d lines, over 2000/],
+    ["a 2001-character line", base + "\n" + "x".repeat(2001), /fleet-pr-opener\.md: line \d+ has 2001 characters, over 2000/],
+    ["40001 characters", base + "\n" + ("y".repeat(1000) + "\n").repeat(Math.ceil((40001 - base.length) / 1001)), /fleet-pr-opener\.md: \d+ characters, over 40000/],
+  ]) {
+    const r = genCheckWith((d) => writeFileSync(join(d, "fleet-pr-opener.md"), text));
+    assert.notEqual(r.write.status, 0, what + ": gen refuses to write");
+    assert.match(r.write.stderr, re, what);
+    assert.notEqual(r.check.status, 0, what);
+    assert.match(r.check.stderr, re, what);
+  }
+  assert.equal(genCheckWith(() => {}).check.status, 0, "the shipped files pass");
+});
+
+// item 4 (LOW)
+test("review 4: gen.mjs refuses a role file whose DISPATCH line is missing or names an unknown tier", () => {
+  for (const [what, fix, re] of [
+    ["unknown tier", (t) => t.replace(/^DISPATCH: model=[a-z]+/m, "DISPATCH: model=gpt5"), /plan-audit\.md: no DISPATCH line with a tier in fable, opus, sonnet, haiku/],
+    ["deleted line", (t) => t.replace(/^DISPATCH:.*\n/m, ""), /plan-audit\.md: no DISPATCH line with a tier in fable, opus, sonnet, haiku/],
+  ]) {
+    const r = genCheckWith((d) => writeFileSync(join(d, "plan-audit.md"), fix(ROLE_TEXT["plan-audit"])));
+    assert.notEqual(r.write.status, 0, what);
+    assert.match(r.write.stderr, re, what);
+    assert.notEqual(r.check.status, 0, what);
+  }
+});
+
+// item 2 (MEDIUM): the role_file rule is repeated after the inputs
+test("review 2: the role prompt ends with a reminder to put role_file in the final StructuredOutput", async () => {
+  const out = await run(happy(), ARGS);
+  for (const c of out.calls.filter((x) => x.label.startsWith("role:"))) {
+    const role = c.label.split(":")[1];
+    const tail = c.prompt.slice(c.prompt.lastIndexOf("\nInputs: "));
+    assert.ok(tail.includes('role_file: {name: "' + role + '", sha256: <the hex sha256sum printed in step 1>}'), c.label);
+    assert.match(tail, /even when the role file's output section does not list it/, c.label);
+  }
+});
+
+test("review 2: a coder whose ONLY problem is role_file is retried once; the good retry goes on", async () => {
+  const s = happy();
+  s["role:fleet-coder:r1:retry"] = s["role:fleet-coder:r1"];
+  s["role:fleet-coder:r1"] = withFile(s["role:fleet-coder:r1"], null);
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const retry = out.calls.find((c) => c.label === "role:fleet-coder:r1:retry");
+  assert.ok(retry, "one retry");
+  assert.match(retry.prompt, /Your previous result was refused: role fleet-coder did not run the shipped role file \(no role_file\)/);
+  assert.match(retry.prompt, /change no file/);
+  // the retry runs before the post-coder hash: its changes are checked too
+  assert.ok(out.labels.indexOf("role:fleet-coder:r1:retry") < out.labels.indexOf("hasher:post-coder:r1"));
+});
+
+test("review 2: a coder with role_file AND another problem is not retried; it stops", async () => {
+  const s = happy();
+  const r = withFile(Object.assign({}, s["role:fleet-coder:r1"], { __raw: true, status: "ok", reason: "x" }), { name: "fleet-coder", sha256: "0".repeat(64) });
+  delete r.changed_paths;
+  s["role:fleet-coder:r1"] = r;
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "contract");
+  assert.ok(!out.labels.includes("role:fleet-coder:r1:retry"), out.labels.join(", "));
+});
+
+// item 3 (MEDIUM): probe runs one cheap role-read agent the way a role reads
+test("review 3: probe dispatches one haiku role-read agent for plan-audit and checks its role_file", async () => {
+  const s = happy();
+  delete s.__dispatch;
+  s["infra:role-read:plan-audit"] = { status: "ok", reason: "read", role_file: { name: "plan-audit", sha256: PIN["plan-audit"] } };
+  const out = await runOne(s, { mode: "probe", repo: "/r", date: ARGS.date });
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.deepEqual(out.labels, ["preflight", "infra:role-read:plan-audit"]);
+  const c = out.calls[1];
+  assert.equal(c.opts.model, "haiku");
+  assert.equal(c.opts.agentType, "fleet:judge");
+  assert.ok(c.prompt.includes("sha256sum -- '" + fileOf("plan-audit") + "'") && c.prompt.includes("Read tool"));
+  assert.ok(c.opts.schema.required.includes("role_file"));
+  assert.deepEqual(out.result.probe.role_read, { role: "plan-audit", sha256: PIN["plan-audit"], ok: true });
+  for (const bad of [null, { status: "ok", reason: "x", role_file: { name: "plan-audit", sha256: "0".repeat(64) } }, { status: "ok", reason: "x", role_file: null }]) {
+    const t = happy();
+    delete t.__dispatch;
+    t["infra:role-read:plan-audit"] = bad;
+    const o = await runOne(t, { mode: "probe", repo: "/r", date: ARGS.date });
+    assert.equal(o.result.status, "needs_human", JSON.stringify(bad));
+    assert.equal(o.result.stop_gate, "contract");
+    assert.match(o.result.reason, /probe: the role-read agent/);
+  }
+});
+
+// item 5 (LOW)
+test("review 5: a sealed role_sha256 that differs from this install's pins is gate-logged; the build goes on", async () => {
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  const tiny = reseal(s, plan.result.plan_ref, (o) => (o.history.preflight.role_sha256["plan-audit"] = "f".repeat(64)));
+  const b = await runOne(s, { mode: "build", plan_ref: tiny, date: ARGS.date, project: "o/r" });
+  assert.equal(b.result.status, "ok", b.result.reason);
+  assert.ok(b.result.gate_log.some((l) => /^plan ref sealed other role pins than this install's: plan-audit$/.test(l)), b.result.gate_log.join("\n"));
+  const same = await run(happy(), ARGS);
+  assert.ok(!same.result.gate_log.some((l) => /other role pins/.test(l)));
 });

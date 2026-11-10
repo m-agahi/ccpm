@@ -11,6 +11,9 @@
 //   node plugins/fleet/scripts/gen.mjs --check    exit 1 when a table and the files differ,
 //                                                 a count is not PROGRAM_COUNT / ROLE_COUNT,
 //                                                 or the roles dir holds a file that is not a role
+// Both modes refuse a role file the Read tool would cut (over ROLE_MAX_LINES
+// lines, a line over ROLE_MAX_LINE characters, over ROLE_MAX_CHARS characters)
+// and one with no DISPATCH line whose tier is in the workflow's TIERS.
 //   --scripts <dir>  --roles <dir>  --workflow <file>   other paths (tests)
 
 import { readFileSync, writeFileSync, readdirSync, lstatSync } from "node:fs";
@@ -26,6 +29,12 @@ export const ROLES_DIR = join(HERE, "..", "roles");
 export const PROGRAM_COUNT = 28;
 // the number of shipped role prompts (5.0.0)
 export const ROLE_COUNT = 10;
+// 5.0.0 (review of d8df90b): a role agent reads its file with the Read tool,
+// which returns 2000 lines by default and cuts a longer line at 2000
+// characters; 40000 characters in all until R3 shrinks the files
+export const ROLE_MAX_LINES = 2000;
+export const ROLE_MAX_LINE = 2000;
+export const ROLE_MAX_CHARS = 40000;
 
 const TABLE_RE = /\n\/\/ PROGRAM_SHA256_BEGIN\nconst PROGRAM_SHA256 = (\{[^`]*?\});\n\/\/ PROGRAM_SHA256_END\n/;
 const ROLE_TABLE_RE = /\n\/\/ ROLE_SHA256_BEGIN\nconst ROLE_SHA256 = (\{[^`]*?\});\n\/\/ ROLE_SHA256_END\n/;
@@ -71,6 +80,31 @@ export function dispatchTable(dir = ROLES_DIR) {
   for (const n of Object.keys(roleFileTable(dir).table)) {
     const m = /^DISPATCH:.*$/m.exec(readFileSync(join(dir, n + ".md"), "utf8"));
     out[n] = m ? m[0] : null;
+  }
+  return out;
+}
+
+// Why the role files in `dir` do not fit the Read tool or name no known tier,
+// one line each ([] when they all pass). The tiers and the DISPATCH pattern are
+// the workflow's own (const TIERS, const DISPATCH_RE).
+export function roleFileProblems(dir, source) {
+  const tm = /^const TIERS = (\[[^\]]*\]);$/m.exec(source);
+  const dm = /^const DISPATCH_RE = \/(.*)\/;$/m.exec(source);
+  if (!tm || !dm) return ["the workflow has no const TIERS or const DISPATCH_RE"];
+  const tiers = JSON.parse(tm[1]);
+  const re = new RegExp(dm[1]);
+  const out = [];
+  for (const n of Object.keys(roleFileTable(dir).table)) {
+    const t = readFileSync(join(dir, n + ".md"), "utf8");
+    const lines = t.split("\n");
+    if (t.endsWith("\n")) lines.pop();
+    if (lines.length > ROLE_MAX_LINES) out.push(n + ".md: " + lines.length + " lines, over " + ROLE_MAX_LINES + " (the Read tool's default)");
+    const long = lines.findIndex((l) => l.length > ROLE_MAX_LINE);
+    if (long >= 0) out.push(n + ".md: line " + (long + 1) + " has " + lines[long].length + " characters, over " + ROLE_MAX_LINE + " (the Read tool cuts it)");
+    if (t.length > ROLE_MAX_CHARS) out.push(n + ".md: " + t.length + " characters, over " + ROLE_MAX_CHARS);
+    const d = /^DISPATCH:.*$/m.exec(t);
+    const m = d ? re.exec(d[0]) : null;
+    if (!m || tiers.indexOf(m[1]) < 0) out.push(n + ".md: no DISPATCH line with a tier in " + tiers.join(", ") + " (got " + JSON.stringify(d ? d[0] : null) + ")");
   }
   return out;
 }
@@ -136,6 +170,7 @@ function main(argv) {
   if (n !== PROGRAM_COUNT) countBad.push(dir + " holds " + n + " programs, not " + PROGRAM_COUNT + " (change PROGRAM_COUNT when a program is added or removed)");
   if (rn !== ROLE_COUNT) countBad.push(rdir + " holds " + rn + " role files, not " + ROLE_COUNT + " (change ROLE_COUNT when a role is added or removed)");
   for (const f of extra) countBad.push(rdir + "/" + f + ": not a role file (only regular <role>.md files may be in the roles dir)");
+  for (const p of roleFileProblems(rdir, source)) countBad.push(rdir + "/" + p);
   if (!check) {
     if (countBad.length) {
       console.error(countBad.join("\n"));

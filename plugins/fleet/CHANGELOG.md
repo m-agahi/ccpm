@@ -11,10 +11,17 @@ Fleet 5.0.0, part 1 of 3 (ledger 1999, R1). The version stays 4.0.3 until the la
   `PROGRAM_SHA256`). The files are the yadgar pages `agent-prompt-<role>` as of 4.0.3 with the
   `CONTRACT:` line removed and the repo's markdown formatting applied.
 - Same trust model as the shipped programs (Max's ruling on #46): each role prompt is a short
-  wrapper with no role text. The role agent's first action is `sha256sum -- <roles dir>/<role>.md
-&& cat <roles dir>/<role>.md`; it follows that file. Every role result carries `role_file:
-{name, sha256}`; the script checks both against the dispatched role and `ROLE_SHA256`. A
-  wrong or missing value is a contract stop (after the one contract retry on an ok result).
+  wrapper with no role text. The role agent first runs `sha256sum -- <roles dir>/<role>.md`,
+  then reads the whole file with the Read tool (never `cat`, which the Bash tool cuts near
+  30000 characters), and follows it. The prompt ends with a reminder to return `role_file`.
+  Every role result carries `role_file: {name, sha256}`; the script checks both against the
+  dispatched role and `ROLE_SHA256`. A wrong or missing value is a contract stop (after the
+  one contract retry on an ok result; an ok coder whose only problem is `role_file` is asked
+  once more; a not-ok coder with no `role_file` stops at `role`).
+- `gen.mjs` refuses a role file over 2000 lines, with a line over 2000 characters or over
+  40000 characters (what the Read tool returns by default), or whose DISPATCH line is missing
+  or names a tier outside `TIERS`.
+- A sealed `role_sha256` that differs from the install's pins is logged; the build goes on.
 - The role tiers come from a new `ROLE_DISPATCH` table, which `gen.mjs` writes from each file's
   first `DISPATCH:` line.
 - The preflight probe also pins the sibling `roles` dir: its own realpath, no symlink, exactly
@@ -32,7 +39,9 @@ Fleet 5.0.0, part 1 of 3 (ledger 1999, R1). The version stays 4.0.3 until the la
 ### Added
 
 - `mode: "probe"` (`/build-task probe`): the preflight only on a given repo (scripts and roles
-  dirs and the sha256 of every file in them, PATH check). It returns the table and stops.
+  dirs and the sha256 of every file in them, PATH check), then one haiku role-read agent that
+  hashes and reads `plan-audit.md` as a role does and returns `role_file`, checked by the
+  script. It returns the table and stops.
 
 ## [4.0.3] - 2026-11-10
 

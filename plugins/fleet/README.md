@@ -567,14 +567,24 @@ holds any other file. Nothing is cached; every run (plan, build, probe) checks t
    regular files (no extra file, no subdirectory, no symlink), and the sha256sum lines of its
    files must equal `ROLE_SHA256`. Any other value stops the run (`stop_gate: contract`).
 2. Each role's tier comes from `ROLE_DISPATCH`.
-3. Each role prompt is a short wrapper with no role text. The role agent's first action is
-   `sha256sum -- <roles dir>/<role>.md && cat <roles dir>/<role>.md`, and it follows the printed
-   file as its instructions. The prompt also carries the inputs and the StructuredOutput rule.
+3. Each role prompt is a short wrapper with no role text. The role agent first runs
+   `sha256sum -- <roles dir>/<role>.md` in Bash, then reads the whole file with the Read tool
+   (never `cat`: the Bash tool cuts output near 30000 characters, and a cut file would still
+   match its sha256sum line). It follows the file. The wrapper also carries the inputs, the
+   StructuredOutput rule and, last, a reminder to put `role_file` in the final output. Every
+   role runs as `fleet:judge` or the default agent; both can use Read. `gen.mjs` refuses a role
+   file the Read tool would cut: over 2000 lines, a line over 2000 characters, or over 40000
+   characters in all (until R3 shrinks the files). It also refuses a file whose DISPATCH line is
+   missing or names a tier outside `TIERS`.
 4. Every role result carries `role_file: {name, sha256}`, required on every status (null fits the
    schema). The script checks that `name` is the dispatched role and that `sha256` is
    `ROLE_SHA256[name]`. A wrong or missing value takes the program-check path: a contract stop,
    after the one contract retry on an ok result: "role <role> did not run the shipped role file
-   (...)". A coder result never becomes a finding for this; it stops.
+   (...)". An ok coder whose only problem is `role_file` is asked once more for its report,
+   before the post-coder hash; any other coder problem stops. A not-ok coder with no
+   `role_file` stops with `stop_gate: "role"`.
+5. A build whose plan ref sealed other `role_sha256` pins than this install's logs "plan ref
+   sealed other role pins than this install's: <roles>" and goes on with the installed files.
 
 Plan mode seals `history.preflight: {fleet_version, role_sha256}` in the plan ref, log only. A
 build never reads a role table from it. A 4.x plan ref (`{fleet_version, versions, dispatch,
@@ -588,10 +598,12 @@ fleet 4.0.3, with the `CONTRACT:` line removed and the repo's markdown formattin
 ### Probe mode (5.0.0)
 
 `{mode: "probe", repo, date, run_nonce}` runs the preflight only on `repo`: the scripts and
-roles dirs, the sha256 of every program and role file, and the PATH check. It returns
-`status: "ok"` with `probe: {fleet_version, scripts_dir, roles_dir, roles: {<role>: {sha256,
-model, fallback}}}` and stops: no worktree, no role agent, no write. Use it after an install or
-update.
+roles dirs, the sha256 of every program and role file, and the PATH check. Then one haiku
+agent (`infra:role-read:plan-audit`, as `fleet:judge`) hashes and reads `plan-audit.md` the way a
+role does and returns only `role_file`, which the script checks. That proves the role read path
+on the real runtime. It returns `status: "ok"` with `probe: {fleet_version, scripts_dir,
+roles_dir, roles: {<role>: {sha256, model, fallback}}, role_read: {role, sha256, ok}}` and
+stops: no worktree, no role agent, no write. Use it after an install or update.
 
 ### Throwaway test database (4.0.0, ledger 1981)
 

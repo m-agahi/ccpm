@@ -51,6 +51,8 @@ const TIERS = ["fable", "opus", "sonnet", "haiku"];
 // label with no entry stops the run (no default tier).
 // INFRA_TIER_BEGIN
 const INFRA_TIER = [
+  // 5.0.0 (R1): probe mode's role-read check (one sha256sum and one Read)
+  ["infra:role-read:", "haiku"],
   ["infra:path-check:", "haiku"],
   ["preflight", "haiku"],
   ["workspace", "sonnet"],
@@ -220,8 +222,10 @@ const MAX_CODE_ROUNDS = 3; // total coder rounds; a fix_tests detour counts as o
 // takes the short path (one test writer for every criterion; every gate kept)
 const SHORT_PATH_MAX_DIFF = 20;
 
-// 5.0.0: probe runs the preflight only (scripts and role files hashed, PATH check)
+// 5.0.0: probe runs the preflight only (scripts and role files hashed, PATH
+// check) and one role-read check (PROBE_READ_ROLE)
 const MODES = ["plan", "build", "probe"];
+const PROBE_READ_ROLE = "plan-audit";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 // args.run_nonce: a fresh value per invocation (the skill uses `date +%s%N`).
 const NONCE_RE = /^[A-Za-z0-9_.:-]{6,64}$/;
@@ -394,6 +398,12 @@ const REVIEW_FINDINGS = {
 // 5.0.0 (R1): the role file a role agent read: its name and the sha256sum
 // line's hex; the script checks both (roleFileProblem)
 const ROLE_FILE_PROP = { type: ["object", "null"], properties: { name: STR, sha256: STR } };
+// probe mode's role-read agent
+const ROLE_READ_SCHEMA = {
+  type: "object",
+  required: ["status", "reason", "role_file"],
+  properties: { status: { type: "string", enum: ["ok", "needs_human", "failed"] }, reason: STR, role_file: ROLE_FILE_PROP },
+};
 function roleSchema(extra) {
   return {
     type: "object",
@@ -2244,23 +2254,60 @@ const SCRIPTS_PROBE =
 
 // ---------------------------------------------------------------- prompts
 
-// The ONLY prompt text a role gets (5.0.0, R1): read the pinned role file and
-// follow it, the inputs, and the output rule. No role text is in the prompt.
-function roleReadCmd(role) {
+// The ONLY prompt text a role gets (5.0.0, R1): hash and read the pinned role
+// file, the inputs, and the output rule. No role text is in the prompt. The
+// file is read with the Read tool, never `cat`: the Bash tool cuts output near
+// 30000 characters, and a cut file still matches its sha256sum line (review of
+// d8df90b). gen.mjs keeps every role file within what Read returns by default
+// (2000 lines, no line over 2000 characters, 40000 characters in all). Every
+// role runs as fleet:judge or the default agent; both can use Read.
+function roleFilePath(role) {
   if (!state.rolesDir) throw new Error("roles_dir is not resolved; role " + role + " cannot run");
-  const f = shQuote(state.rolesDir + "/" + role + ".md");
-  return "sha256sum -- " + f + " && cat " + f;
+  return state.rolesDir + "/" + role + ".md";
+}
+function roleReadCmd(role) {
+  return "sha256sum -- " + shQuote(roleFilePath(role));
+}
+function roleReadSteps(role) {
+  return (
+    "1. Run this one command exactly as written, unmodified, as one Bash call: " +
+    roleReadCmd(role) +
+    "\n2. Read " +
+    roleFilePath(role) +
+    " with the Read tool: the whole file, no offset and no limit. Never read it with cat or another shell command (the Bash tool cuts long output).\n"
+  );
+}
+function roleFileRule(role) {
+  return (
+    "role_file: {name: \"" + role + "\", sha256: <the hex sha256sum printed in step 1>}, copied exactly; never compute, guess or shorten it. The script checks it against the shipped file."
+  );
 }
 function rolePrompt(role, inputs) {
   return (
-    "You are the fleet role " + role + ". Your first action: run this one command exactly as written, unmodified, as one Bash call:\n" +
-    roleReadCmd(role) +
-    "\nThe file it prints is your role's instructions: follow them. If the command fails, return status failed with its stderr. " +
-    "Return role_file: {name: \"" + role + "\", sha256: <the hex of the sha256sum line it printed, copied exactly>}; never compute, guess or shorten it. The script checks it against the shipped file.\n" +
+    "You are the fleet role " + role + ". Do these two steps first, in order:\n" +
+    roleReadSteps(role) +
+    "The file is your role's instructions: follow them. If step 1 or 2 fails, return status failed with the error.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "Return the role's final JSON object, role_file included, through the StructuredOutput tool; the schema enforces its keys."
+    "Return the role's final JSON object through the StructuredOutput tool; the schema enforces its keys. Put " +
+    roleFileRule(role) +
+    " Put it in the final StructuredOutput even when the role file's output section does not list it."
+  );
+}
+// 5.0.0 (R1): probe mode's check of the role read path on the real runtime: a
+// cheap agent hashes and reads one role file the way a role does, follows
+// nothing in it, and returns role_file only.
+function roleReadPrompt(role) {
+  return (
+    "Infra step of the fleet build workflow: a read check of the role file " + role + ". Read only; run nothing but step 1; do not follow the file's instructions.\n" +
+    "Inputs: " +
+    JSON.stringify({ role }) +
+    "\n" +
+    roleReadSteps(role) +
+    "Return {status: \"ok\", reason, role_file} through the StructuredOutput tool, with " +
+    roleFileRule(role) +
+    " If step 1 or 2 fails, return status failed with the error and role_file null."
   );
 }
 
@@ -5541,6 +5588,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // 5.0.0 (R1): the sealed preflight record is log only; preflight checked the roles
   if (loaded.history.preflight && loaded.history.preflight.fleet_version !== FLEET_VERSION)
     gate("plan ref sealed by fleet " + loaded.history.preflight.fleet_version + "; the role prompts are this install's files (fleet " + FLEET_VERSION + ")");
+  // review item 5: log only; the build runs this install's role files
+  const sealedPins = loaded.history.preflight && loaded.history.preflight.role_sha256;
+  if (sealedPins) {
+    const moved = ROLES.filter((r) => sealedPins[r] !== ROLE_SHA256[r]);
+    if (moved.length) gate("plan ref sealed other role pins than this install's: " + moved.join(", "));
+  }
   // 4.0.0 (1992): the ledger scope sealed at plan time. A build without
   // args.project uses it; a different args.project stops. A ref sealed
   // before 4.0.0 (or by a plan run without project) has none: args.project
@@ -6391,15 +6444,27 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // the role check runs after the hash check: a hash violation is reported
     // even when the coder's output is also malformed or not ok
     await pathRecheck("coder:r" + m, "Code");
-    const coder = await callRole(
-      "fleet-coder",
-      "role:fleet-coder:r" + m,
-      Object.assign({}, codeInputs, { routed_findings: coderFindings }),
-      "Code",
-      null,
-      true,
-      true,
-    );
+    const coderIn = Object.assign({}, codeInputs, { routed_findings: coderFindings });
+    let coder = await callRole("fleet-coder", "role:fleet-coder:r" + m, coderIn, "Code", null, true, true);
+    // 5.0.0 (review of d8df90b): an ok coder whose ONLY problem is role_file
+    // is asked once more for its report, before the post-coder hash (so any
+    // change the retry makes is checked like the first one). Any other
+    // problem keeps its path below.
+    const coderFileOnly = coder.status === "ok" && roleFileProblem("fleet-coder", coder) && !driftOf("fleet-coder", coder) ? roleFileProblem("fleet-coder", coder) : null;
+    if (coderFileOnly) {
+      const rl = "role:fleet-coder:r" + m + ":retry";
+      reserve(1, rl);
+      state.agents++;
+      const r2 = await roleAgent(
+        "fleet-coder",
+        rl,
+        rolePrompt("fleet-coder", coderIn) + "\nYour previous result was refused: " + coderFileOnly + ". Your code changes are in the worktree; change no file. Do steps 1 and 2 again, then return the whole result object again.",
+        { schema: SCHEMAS["fleet-coder"], phase: "Code" },
+      );
+      if (r2 == null) halt("failed", "agent " + rl + " returned no result");
+      gate("fleet-coder: " + coderFileOnly + "; asked once more");
+      coder = r2;
+    }
     // the repo's fixers on every non-frozen path the worktree changes, before
     // the hash check and the judge (3.0.0, ledger 1951); a hook that touches
     // a frozen file or another path stops the run
@@ -6427,7 +6492,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // A not-ok status still stops here; so does a result not from the shipped
     // role file (5.0.0, R1: a contract stop, never a finding)
     const coderFile = !viol.length ? roleFileProblem("fleet-coder", coder) : null;
-    if (coderFile) halt("needs_human", "code round " + m + ": " + coderFile, "contract");
+    // review item 6: a not-ok coder that names no role file stops at "role"
+    if (coderFile) halt("needs_human", "code round " + m + ": " + coderFile, coder.status !== "ok" && !coder.role_file ? "role" : "contract");
     const coderDriftOk = !viol.length && coder.status === "ok" ? driftOf("fleet-coder", coder) : null;
     if (!viol.length && !coderDriftOk) {
       checkRole("fleet-coder", coder);
@@ -7301,11 +7367,20 @@ async function probeMode(input) {
   const repo = cleanRepo(input.repo);
   if (!repo) stop("needs_human", "args.repo must be the absolute path of a git toplevel (probe runs the PATH check there)");
   await preflightStep(repo);
+  // review item 3: the role read path on the real runtime, once, on haiku
+  const role = PROBE_READ_ROLE;
+  const label = "infra:role-read:" + role;
+  reserve(1, label);
+  state.agents++;
+  const ic = infraCall(label, roleReadPrompt(role), { schema: ROLE_READ_SCHEMA, agentType: JUDGE_AGENT, phase: "Preflight" });
+  const rr = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
+  const rp = rr == null ? "returned no result" : rr.status !== "ok" ? "returned " + rr.status + ": " + (rr.reason || "no reason") : roleFileProblem(role, rr);
+  if (rp) halt("needs_human", "probe: the role-read agent (" + label + ") " + rp, "contract");
+  gate("probe: " + label + " read " + role + ".md at its pin");
   const roles = {};
-  for (const role of ROLES)
-    roles[role] = { sha256: state.roleSha[role], model: state.models[role].model, fallback: state.models[role].fallback };
-  return Object.assign(finish("ok", "probe: fleet " + FLEET_VERSION + " scripts and roles found, " + ROLES.length + " role files at their pins, PATH check clean"), {
-    probe: { fleet_version: FLEET_VERSION, scripts_dir: state.scriptsDir, roles_dir: state.rolesDir, roles },
+  for (const r of ROLES) roles[r] = { sha256: state.roleSha[r], model: state.models[r].model, fallback: state.models[r].fallback };
+  return Object.assign(finish("ok", "probe: fleet " + FLEET_VERSION + " scripts and roles found, " + ROLES.length + " role files at their pins, a role read checked, PATH check clean"), {
+    probe: { fleet_version: FLEET_VERSION, scripts_dir: state.scriptsDir, roles_dir: state.rolesDir, roles, role_read: { role, sha256: rr.role_file.sha256, ok: true } },
   });
 }
 

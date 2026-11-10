@@ -49,8 +49,8 @@ Workflow({ name: "fleet:build-task-run",
                    run_nonce: "<fresh date +%s%N output>" } })
 ```
 
-It finds the plugin's scripts and roles dirs, checks the sha256 of every program and role file, and runs the
-PATH check on `<repo>`. It makes no worktree, runs no role and writes nothing. Report `status`,
+It finds the plugin's scripts and roles dirs, checks the sha256 of every program and role file, runs the
+PATH check on `<repo>`, and has one cheap agent read one role file the way a role does. It makes no worktree, runs no role and writes nothing. Report `status`,
 `reason`, and the `probe` table (`scripts_dir`, `roles_dir`, and per role `sha256` and `model`). A `needs_human` reason that names a role file or the scripts dir means the install is
 stale or changed: tell the user to reinstall the fleet plugin and run `/reload-plugins`.
 

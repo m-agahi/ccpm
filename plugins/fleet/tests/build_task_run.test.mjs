@@ -241,7 +241,7 @@ test("5.0.0 R1 (was role prompts load the role from yadgar): role prompts embed 
   for (const c of out.calls.filter((x) => x.label.startsWith("role:"))) {
     const role = c.label.split(":")[1];
     const f = "'" + SCRIPTS_DIR.replace(/scripts$/, "roles/") + role + ".md'";
-    assert.ok(c.prompt.startsWith("You are the fleet role " + role + ". Your first action: run this one command exactly as written, unmodified, as one Bash call:\nsha256sum -- " + f + " && cat " + f + "\n"), c.label);
+    assert.ok(c.prompt.startsWith("You are the fleet role " + role + ". Do these two steps first, in order:\n1. Run this one command exactly as written, unmodified, as one Bash call: sha256sum -- " + f + "\n2. Read " + f.slice(1, -1) + " with the Read tool"), c.label);
     assert.ok(!c.prompt.includes("agent_prompt_get"), c.label);
     assert.ok(c.prompt.length - JSON.stringify(inputsOf(c.prompt)).length < 2000, c.label + " wrapper too long");
     assert.ok(c.opts.schema, c.label + " has a schema");
