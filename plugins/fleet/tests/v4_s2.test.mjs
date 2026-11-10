@@ -417,13 +417,10 @@ test("4.0.0: FLEET_VERSION equals the fleet version in marketplace.json, the roo
   const readme = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
   assert.match(readme, new RegExp("^### fleet \\(v" + fv[1].replace(/\./g, "\\.") + "\\)$", "m"));
   const cl = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
-  // 5.0.0 (ledger 1999): the release ships in three PRs; PR-1 and PR-2 keep
-  // FLEET_VERSION and log under [Unreleased], which the last PR turns into the
-  // 5.0.0 entry. The newest versioned entry is this version.
-  const top = /^## \[(\d[^\]]*)\]/m.exec(cl);
-  assert.equal(top[1], fv[1], "the newest versioned CHANGELOG entry is this version");
-  const un = cl.indexOf("## [Unreleased]");
-  assert.ok(un < 0 || un < cl.indexOf("## [" + fv[1] + "]"), "an [Unreleased] section sits above the newest version only");
+  // 5.0.0 (ledger 1999, PR-3): the release is cut; the pre-5.0.0 form again
+  const top = /^## \[([^\]]+)\]/m.exec(cl);
+  assert.equal(top[1], fv[1], "the newest CHANGELOG entry is this version");
+  assert.ok(!/^## \[Unreleased\]/m.test(cl), "no [Unreleased] section left");
 });
 
 // ---------------------------------------------------------------- contract fleet-v4 (D1, plan §2 rev 3)

@@ -593,17 +593,21 @@ build past its commit) wins over `freeze_digest`.
 
 ### Role files (5.0.0, R1, ledger 1999)
 
-The ten role prompts ship as `plugins/fleet/roles/<role>.md`, under the same trust model as the
-shipped programs. `scripts/gen.mjs` writes two tables into the workflow from the files:
-`ROLE_SHA256` (the sha256 of each file's exact bytes) and `ROLE_DISPATCH` (each file's first
-`DISPATCH:` line). `gen.mjs --check` fails when a role file differs, is missing, or the roles dir
-holds any other file. Nothing is cached; every run (plan, build, probe) checks the files again:
+The ten role prompts ship as `plugins/fleet/roles/<role>.md`, and the shared prompt files as
+`plugins/fleet/roles/_shared/<name>.md` (5.0.0 R3: one, `test-cmd-allowlist.md`), under the same
+trust model as the shipped programs. `scripts/gen.mjs` writes three tables into the workflow
+from the files: `ROLE_SHA256` (the sha256 of each role file's exact bytes), `ROLE_DISPATCH`
+(each role file's first `DISPATCH:` line) and `SHARED_SHA256` (each shared file's sha256).
+`gen.mjs --check` fails when a file differs, is missing, or the roles dir (or `_shared`) holds
+any other entry. Nothing is cached; every run (plan, build, probe) checks the files again:
 
 1. `preflight` (haiku, the run's first agent) finds
    `$HOME/.claude/plugins/cache/<marketplace>/fleet/<version>/scripts` and its sibling `roles`
    dir. Both must be their own realpath and no symlink. The roles dir must hold exactly the ten
-   regular files (no extra file, no subdirectory, no symlink), and the sha256sum lines of its
-   files must equal `ROLE_SHA256`. Any other value stops the run (`stop_gate: contract`).
+   regular role files and one subdirectory, `_shared` (a real directory, no symlink), which holds
+   exactly the shared files (no extra file, no other subdirectory, no symlink). The sha256sum
+   lines of the regular files must equal `ROLE_SHA256` and `SHARED_SHA256`. Any other value stops
+   the run (`stop_gate: contract`).
 2. Each role's tier comes from `ROLE_DISPATCH`.
 3. Each role prompt is a short wrapper with no role text. The role agent first runs
    `sha256sum -- <roles dir>/<role>.md` in Bash, then reads the whole file with the Read tool
@@ -611,9 +615,14 @@ holds any other file. Nothing is cached; every run (plan, build, probe) checks t
    match its sha256sum line). It follows the file. The wrapper also carries the inputs, the
    StructuredOutput rule and, last, a reminder to put `role_file` in the final output. Every
    role runs as `fleet:judge` or the default agent; both can use Read. `gen.mjs` refuses a role
-   file the Read tool would cut: over 2000 lines, a line over 2000 characters, or over 40000
-   characters in all (until R3 shrinks the files). It also refuses a file whose DISPATCH line is
-   missing or names a tier outside `TIERS`.
+   or shared file the Read tool would cut: over 2000 lines, a line over 2000 characters, or over
+   40000 characters in all. It also refuses a role file whose DISPATCH line is missing or names a
+   tier outside `TIERS`.
+   The planner and the plan audit (`SHARED_FOR`) also run `sha256sum -- <roles dir>/_shared/test-cmd-allowlist.md`
+   and read that file with the Read tool (steps 3 and 4 of their prompt), and return
+   `shared_file: {name, sha256}`. On an ok result the script checks it against `SHARED_SHA256`; a
+   wrong or missing value takes the same one retry, then a contract stop: "role <role> did not read
+   the shipped shared file test-cmd-allowlist (...)".
 4. Every role result carries `role_file: {name, sha256}`, required on every status (null fits the
    schema). The script checks that `name` is the dispatched role and that `sha256` is
    `ROLE_SHA256[name]`. A wrong or missing value takes the program-check path: a contract stop,
@@ -629,9 +638,13 @@ build never reads a role table from it. A 4.x plan ref (`{fleet_version, version
 contract}`) still builds, with this install's role files. `fresh_preflight` is accepted and
 changes nothing. The result carries `role_sha256` (was `role_versions`).
 
-The role files are the yadgar pages `agent-prompt-<role>` (project `m-agahi/yadgar`) as of
-fleet 4.0.3, with the `CONTRACT:` line removed and the repo's markdown formatting applied. The
-`pr-review` page stays in yadgar for use outside the fleet; `roles/pr-review.md` is the fleet copy.
+PR-1 copied the role files from the yadgar pages `agent-prompt-<role>` as of fleet 4.0.3. The
+5.0.0 R3 revision rewrote them for a runtime with no memory server: no recall or memorize call,
+no wiki links or decision-record numbers, no `CONTRACT` or page-version text, no 1Password
+instruction, and the StructuredOutput tool as the only output channel. The non-fleet modes are
+gone (the planner's `commit=true`, `advisor`, `measure_first` and `perf-lever`, the audit's
+`writeback=true`, pr-review's non-fleet modes); `roles/pr-review.md` is fleet mode only. The
+`pr-review` page stays in yadgar, all modes, for use outside the fleet.
 
 ### Probe mode (5.0.0)
 
@@ -1051,45 +1064,56 @@ rules on it from the diff.
 
 The script pins the role contract, not the prose:
 
-- 5.0.0 (R1): `ROLE_SHA256` pins each shipped role file (see "Role files"). The page versions
-  (`EXPECTED_VERSIONS`) and the `CONTRACT:` marker below are history: 5.0.0 deleted both. A role
+- `ROLE_SHA256` and `SHARED_SHA256` pin the shipped role and shared files (see "Role files").
+  The page versions (`EXPECTED_VERSIONS`) and the `CONTRACT:` marker of 4.x are gone; a role
   result carries no `role_version` or `role_contract`.
-- Until 4.0.3: `EXPECTED_VERSIONS` held the minimum role-page versions, and every role page
-  carried `CONTRACT: fleet-v4` under its DISPATCH line.
-- 2.1.1 pins: scope-and-plan 24, plan-audit 13, fleet-test-writer 9, fleet-test-judge 9,
-  fleet-coder 16, fleet-code-judge 13, fleet-pr-opener 10, fleet-intent-judge 2, pr-review 17,
-  gate-change-nonweakening-sweep 4. 2.1.6 raises scope-and-plan to 26 and plan-audit to 15
-  (`changed_symbols`, `caller_check`). 3.0.0 raises scope-and-plan to 27, plan-audit to 16 and
-  fleet-coder to 17 (the build-time caller check and the optional finding `symbol`; additive, so
-  the marker stays `fleet-v3`). 3.1.0 pins the prose-only pages at their live versions
-  (fleet-test-writer 10, fleet-test-judge 10, pr-review 18, gate-change-nonweakening-sweep 5) and
-  raises fleet-code-judge to 15 (`check_exit`, additive). 4.0.0 bumps the marker to `fleet-v4`
-  on all ten pages, because a 3.1.3 role would run a new planner key (`criteria[].test_args`)
-  unvalidated: scope-and-plan 29, plan-audit 17, fleet-test-writer 11, fleet-test-judge 11,
-  fleet-coder 18, fleet-code-judge 16, fleet-pr-opener 11, fleet-intent-judge 3, pr-review 19,
-  gate-change-nonweakening-sweep 6.
-- Each role runner reports the version and marker it loaded. A value that differs from preflight
-  (the page changed mid-run) discards the result.
+- One output channel: every role returns its result through the StructuredOutput tool, with
+  `role_file` (and, for the planner and the audit, `shared_file`). The schema enforces the keys;
+  the workflow reads nothing else from the agent's message.
 - `REQUIRED_ON_OK` lists the keys each role must return with `status: ok`, and verdicts are
-  checked against the frozen enums. fleet-v3: the writer returns `criterion_id, tests, files`; the
-  coder `changed_paths, suite_result, added_symbols, frozen_tests_red_at_start, obligations_done`
-  (no `commit`/`commits` key any more); the intent judge `verdict, deviations, coverage`;
-  pr-review `verdict, findings, touches_gate, checked`; the sweep `verdict, units, findings`;
-  since 2.1.6 the planner also `changed_symbols`. fleet-v4 adds the planner's `change_kind` and the
-  intent judge's `classification`. Since 4.0.0 (ledger 1984) every such key is also in the role
-  schema's `required`, widened with null, so a `needs_human` or `failed` result sets what it lacks
-  to null. On `ok` the script checks each value against the frozen type: null only where that type
-  allows it. A missing key, a wrong type or value, or an unknown verdict is contract drift. The
-  role is sent back once with the drift quoted, after a fresh PATH re-check; a second drift stops
-  the run. A version or marker mismatch never retries. The coder is never re-run: its drift is the
+  checked against the frozen enums (the table is in the workflow; the role files list the same
+  keys in their Output sections). Every such key is also in the role schema's `required`, widened with null, so a `needs_human`
+  or `failed` result sets what it lacks to null. On `ok` the script checks each value against the
+  frozen type: null only where that type allows it. A missing key, a wrong type or value, or an
+  unknown verdict is contract drift. The role is sent back once with the drift quoted, after a
+  fresh PATH re-check; a second drift stops the run. The coder is never re-run: its drift is the
   `fix_code` finding of the next code round.
+- Optional keys, never required: `memory_notes` on every role (collected into the result's
+  `memory_notes`; nothing writes them to a memory store) and the coder's `follow_ups`
+  (`[{summary, path}]`, passed through to the result's `follow_ups`; nothing files them). The
+  schemas type only the keys the script reads.
+- Plan-audit gets `brief` (every source body) for its silent-omission and `source_quote` checks.
+  Its new 5.0.0 rules (a "Non-goals" section, I/O failure paths, STRIDE refusal criteria,
+  verbatim `source_quote`) are advisory: each failure is a routed finding the planner fixes in
+  the next re-plan round, never a refusal on its own. When the audit approves, the script writes
+  each advisory finding to the gate log (`plan-audit advisory finding (approve): ...`).
+- Inputs added in 5.0.0 R3: the code judge's `prior_findings` (the findings still pending from
+  the last judge, review, obligations or hook step, `[]` in round 1; a contract-drift or
+  hash-rejection round in between appends its message instead of replacing them) and pr-review's
+  `prior_findings` and `allowed_additions`. Both judges rule
+  each prior finding `resolved`, `still_present` or `regressed`; a finding resolved only by the
+  coder's claim is still present. No new output key carries the rulings:
+  - the code judge routes each still-present or regressed prior finding again as a `code`
+    finding whose text starts with `prior still_present: ` or `prior regressed: `, quotes the
+    original and gives the new evidence; a resolved one gets no entry;
+  - pr-review records every ruling in `checked` as
+    `"prior <id>: resolved|still_present|regressed — <evidence>"`, and reports each still-present
+    or regressed one again in `findings`, blocking, with its original `id`.
+- Optional fields are nullable (PR #48): `memory_notes` (every role), `follow_ups` (coder) and the
+  preflight's `ledger_tools` census are never required and accept null, so a model's null never
+  stops a build. `role_file` and `shared_file` stay required (null allowed by the schema, refused
+  by the script's check on an ok result).
+- Gates this release does not run (held-out examples, coverage, mutation, security scan) reach
+  the judges as `{status: "not_run", reason}` and the PR body as `gates_not_run`; the role files
+  call them not run, never run.
 - Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
   `commands`, `contract`, `role`, `cap`, `ownership`, `commit`, `review`, `intent`, `scope`,
-  `resume`, `iac`, `iac-push` or `callers` (`null` when the run did not stop at one of them). A cap stop names the gate that rejected the
-  last round (hash, obligations gate, commit hook, push hook or review).
+  `resume`, `iac`, `iac-push` or `callers` (`null` when the run did not stop at one of them). A
+  cap stop names the gate that rejected the last round (hash, obligations gate, commit hook, push
+  hook or review).
 
 ### Models
 
@@ -1117,14 +1141,21 @@ After the commit step, the push and the pr-opener (draft PR open):
 
 1. `infra:review-paths:v<n>` (read only) runs a program that lists `changed_paths` =
    `git diff --name-only <plan_commit>..<approved_sha>`, with its digest.
-2. `pr-review` (library pattern, `fleet:judge`, fingerprinted on the fleet worktree) gets
-   `pr_url`, `pr_number`, `repo`, `base_ref`, `head_sha`, `worktree`, `scratch_dir`, `criteria`
-   (`[{id, text}]`), `repo_obligations`, `changed_paths`, `mode: "self-authored"` and
-   `fleet: true`, and no tldr or plan reasoning. It returns `verdict`, `findings` (each
+2. `pr-review` (`roles/pr-review.md`, fleet mode only; `fleet:judge`, fingerprinted on the fleet
+   worktree) gets `pr_url`, `pr_number`, `repo`, `base_ref`, `head_sha`, `worktree`,
+   `scratch_dir`, `criteria` (`[{id, text}]`), `repo_obligations`, `changed_paths`,
+   `allowed_additions`, `prior_findings` (the previous review round's blocking findings, `[]` in
+   the first), `mode: "self-authored"` and `fleet: true`, and no tldr or plan reasoning. It rules
+   each prior finding `resolved`, `still_present` or `regressed`; one resolved only by the
+   coder's claim is still present. CI counts as evidence only from the check runs of the
+   reviewed commit (`gh api repos/<repo>/commits/<head_sha>/check-runs`, conclusion `success`).
+   A finding whose fix needs something outside `allowed_additions` is a `nit` marked
+   `needs plan change:`, never blocking. It returns `verdict`, `findings` (each
    `{id, severity, category, file, line, summary, evidence}`, severity `blocking` or `nit`),
    `touches_gate` and `checked`. Any blocking finding makes it `changes_requested`, whatever the
    stated verdict.
-3. The non-weakening sweep (`gate-change-nonweakening-sweep`, same inputs) runs when
+3. The non-weakening sweep (`gate-change-nonweakening-sweep`, the same inputs without
+   `allowed_additions` and `prior_findings`) runs when
    `touches_gate` is true or a changed path names a hook, gate, guard, validator, policy, auth rule,
    check or CI file, `.github/`, `.pre-commit-config*` or a `Makefile`. A `weakening` verdict is a
    blocking finding.
@@ -1261,9 +1292,14 @@ Build mode, `status: "ok"`:
   "comment_status": "none",
   "comment_text": null,
   "gate_log": ["..."],
-  "memory_notes": [{ "role": "fleet-coder", "notes": ["..."] }]
+  "memory_notes": [{ "role": "fleet-coder", "notes": ["..."] }],
+  "follow_ups": [{ "summary": "...", "path": "src/x.py" }]
 }
 ```
+
+`memory_notes` collects each role's optional notes; `follow_ups` is the last accepted coder
+result's optional list of work it saw and left (`[]` when none). The workflow writes neither
+anywhere: they are for the caller.
 
 `status: "awaiting_confirmation"` (plan mode, or build mode after `plan_wrong`) adds `tldr`,
 `plan_diff`, `fleet_size`, `plan_path`, `commands`, `plan_ref` and `cumulative`; after `plan_wrong` also

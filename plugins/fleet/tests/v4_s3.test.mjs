@@ -487,7 +487,8 @@ function reseal(s, tiny, fn) {
 const BUILD = (tiny, over) => Object.assign({ mode: "build", plan_ref: tiny, date: "2026-11-04", project: "o/r" }, over || {});
 const ROLE_LOAD = /agent_prompt_get/;
 // 5.0.0 (R1): the preflight probe hashes every role file
-const ROLE_PROBE = /sha256sum -- "\$d"\/\*\.py "\$\{d%\/scripts\}\/roles"\/\*/;
+// (5.0.0 R3: and the files of its _shared dir, one regular file at a time)
+const ROLE_PROBE = /sha256sum -- "\$d"\/\*\.py; for f in "\$\{d%\/scripts\}\/roles"\/\* "\$\{d%\/scripts\}\/roles"\/_shared\/\*; do if \[ -f "\$f" \] && \[ ! -L "\$f" \]; then sha256sum -- "\$f"/;
 
 // 5.0.0 (R1): was "a build with a cached preflight dispatches no more agents
 // than before" (plan 17, build 50). The role pages are gone; every run's one
@@ -525,10 +526,10 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "4.0.3");
+  assert.equal(p.fleet_version, "5.0.0");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
-  assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/4.0.3/scripts"), "no scripts dir or PATH check sealed");
+  assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/5.0.0/scripts"), "no scripts dir or PATH check sealed");
   assert.ok(!text.includes("DISPATCH"), "no role text or tier sealed");
   assert.deepEqual(Object.keys(out.result.cumulative).sort(), ["agents", "replans", "runs"]);
   const b = await runOne(s, BUILD(out.result.plan_ref));
@@ -582,7 +583,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 4\.0\.3/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 5\.0\.0/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });

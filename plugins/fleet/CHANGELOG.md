@@ -1,9 +1,117 @@
 # Changelog
 
-## [Unreleased]
+## [5.0.0] - 2026-11-10
 
-Fleet 5.0.0, parts 1 and 2 of 3 (ledger 1999, R1 and R2). The version stays 4.0.3 until the last
-part.
+Fleet 5.0.0 (ledger 1999): the role prompts ship in the plugin (R1), yadgar and yaadgaar are
+never required (R2), and the role prompts are revised (R3). Held-out examples and coverage
+follow in 5.1.0, mutation testing in 5.2.0.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.0), then start a NEW session: a session
+  keeps the workflow it started with, and a 4.x workflow looks for its own `fleet/4.x/scripts`
+  dir. Then run the probe mode (`/build-task probe`) once: it checks the scripts, the role files,
+  the shared file and the PATH without building.
+- No deploy order and no yadgar page writes: the release is the plugin.
+- A plan ref sealed by 4.x still builds, with the 5.0.0 role files (its role record is log only).
+  Its plan doc has no "Non-goals" section and its criteria no failure-path cases: to get the
+  5.0.0 planner and audit rules, re-plan instead of building the old ref.
+
+### Changed (part 3 of 3, R3: the role prompt revision)
+
+- The role files are rewritten for a runtime with no memory server. Removed: the `op read` PAT
+  instruction in `pr-review.md` (roles use the `gh` already authenticated and never read a
+  secret), every required `recall`/`memorize` call and the `## Yadgar findings` footer, the
+  trailing fenced-json output rule (the StructuredOutput tool is the only output channel, with
+  `role_file` in it), `CONTRACT` / `fleet-vN` / page-version text, per-version annotations, wiki
+  links and decision-record numbers, and the `yadgar/_shared` repo section in `plan-audit.md`
+  (which prettier escaped). A memory tool is optional: a role may consult one when present and
+  never writes one; roles emit optional `memory_notes`.
+- `yadgar_findings` is gone from the role schemas and from `collect`.
+- Truthful gates: held-out examples, coverage, mutation and the security scan do not run in
+  this release. The coder's "gates that run on your diff (by script)" list, the planner's "the
+  workflow runs them against the finished code" and the code judge's coverage/mutant/held-out
+  checks are reworded: the code judge lists them under `gates_not_run` by their gate ids and runs
+  its fallback checks. The planner still emits `held_out_examples` (5.1 consumes them), and the
+  no-special-casing rule stays. The test writer's mutation-augmentation section is marked
+  inactive until mutation testing ships.
+- Dead output keys removed from the prose: the code judge's `hunk_rulings`, `mutant_rulings`
+  and `exemptions` (the script never read them). The writer keeps `red_kind` and
+  `failure_excerpt`: the test judge receives them in `writer_outputs`.
+- Real inputs documented: the code judge's `hash_recheck`; the coder's `frozen_tests_note` and
+  `code_tree`; the intent judge's `brief` and `ledger_task` (not `task_body`/`rulings`).
+- One test_cmd/check_cmd allowlist: `roles/_shared/test-cmd-allowlist.md`, pinned by a new
+  `SHARED_SHA256` table (`gen.mjs` writes and checks it; `SHARED_COUNT` 1; the Read-tool size
+  limits apply). The planner and the plan audit hash and read it as steps 3 and 4 of their prompt
+  and return `shared_file: {name, sha256}`, which the script checks (one retry, then a contract
+  stop). Preflight pins `roles/_shared` (a real dir, exactly the shared files). The grammar matches
+  the script's validators: `-n auto` is refused (the old prose allowed it), `uv run` takes any
+  number of `--frozen`, `--no-sync` and `--extra <x>`, and its examples are run through the
+  validators by a test.
+- Writers and the coder no longer run branch-state checks or `git fetch --prune` (the workspace
+  step owns them; parallel writers risked ref-lock collisions).
+- Non-fleet modes are split out: the planner's `commit=true`, `advisor`, `measure_first` and
+  `perf-lever`, the audit's `writeback=true`, and pr-review's non-fleet modes and k8s/Flux
+  essays. `roles/pr-review.md` is fleet mode only (the yadgar page keeps every mode). Sizes
+  (characters, before → after): scope-and-plan 34750 → 25119, plan-audit 19636 → 17368,
+  pr-review 23540 → 13486, code-judge 17923 → 16293, coder 15954 → 16035, test-writer 13464 →
+  12772, test-judge 10787 → 11538, intent-judge 9437 → 9345, pr-opener 8994 → 9168, sweep 7485
+  → 7432.
+- pr-review: no "≤40 lines / Task list"; no confidence threshold that could hide a `security` or
+  `fail_open` finding (an unreproduced one is reported as an `unverified:` nit); CI counts as
+  evidence only from `gh api repos/<repo>/commits/<head_sha>/check-runs` (conclusion
+  `success`), so a lagging PR head is never read; a fix that needs a file, symbol or dependency
+  outside `allowed_additions` is a `nit` marked `needs plan change:`, never blocking.
+- Write-back: a ledger write step that finds no tool reports every entry `unavailable` (was
+  `failed`), like the read steps.
+- `meta.whenToUse` names confirm `"default"`.
+
+- Review of #48 (Max's rulings): every 5.0.0 field the script does not require is optional and
+  nullable: `memory_notes` (every role), `follow_ups` (coder) and the preflight's advisory
+  `ledger_tools` census (was required, non-null). A model's null there never stops a build.
+  `role_file` and `shared_file` stay required (null fits the schema; the script's check refuses
+  it on an ok result).
+- Review of #48: plan-audit's new 5.0.0 rules are advisory: a missing "Non-goals" section, a
+  missing I/O failure path, a missing STRIDE refusal criterion and a `source_quote` that is not
+  verbatim are routed findings the planner fixes in the next re-plan round; none changes the
+  verdict on its own. An approving audit's advisory findings are written to the gate log
+  (`plan-audit advisory finding (approve): ...`); before, the script dropped them. The
+  existing gating rules are unchanged.
+- Review of #48 (fail closed): a `non_weakening` sweep with a unit whose `shipped_refuses` or
+  `new_refuses` is null or missing stops the run `needs_human` at review: "sweep unit <unit> not
+  measured (<mutation>)", which closes a gap present since 4.0.3: an unmeasured unit passed as
+  proven non-weakening.
+- Review of #48: plan-audit gets `brief` (every source body) as an input, the text its
+  silent-omission and `source_quote` checks read.
+- Review of #48: the code judge's `prior_findings` keep the last judge, review, obligations or
+  hook findings across a contract-drift or hash-rejection round (no judge ran) and append that
+  round's message, instead of replacing them.
+- Review of #48: the allowlist states the pre-commit option order (`--all-files` before
+  `--hook-stage`), which the auto command gate requires; cargo and go criteria skip the
+  reverse-order run (writer and test judge); the sweep's `shipped_refuses` / `new_refuses` may
+  be null when the instrument is broken.
+- Review of #48: the probe mode's role-read (`plan-audit`) also hashes and reads
+  `_shared/test-cmd-allowlist.md` and returns `shared_file`, which the script checks;
+  `probe.role_read.shared_file` reports it.
+- The prior-finding rulings are documented in the README: the code judge's `prior still_present:`
+  and `prior regressed:` routed findings, pr-review's `checked` entries.
+
+### Added (part 3 of 3)
+
+- `prior_findings` input: the code judge gets the findings that round's coder was sent (`[]` in
+  round 1); pr-review gets the previous review round's blocking findings. Both rule each one
+  `resolved`, `still_present` or `regressed` with evidence; a finding resolved only by the
+  coder's claim is still present. pr-review also gets `allowed_additions`. The sweep gets
+  neither.
+- The coder's optional `follow_ups: [{summary, path}]`, passed through to the run result's
+  `follow_ups` (the last accepted coder result; `[]` when none). Nothing files them.
+- Prompt additions: secret redaction in evidence (type, file:line, first 4 characters) in
+  pr-review, the code judge and the pr-opener; tests own their data (temp dirs, no fixed ports,
+  no shared files or order reliance); flaky/retry markers flagged by both judges; the test judge
+  runs each file once in reverse order; the planner's optional per-criterion `source_quote`, a
+  "Non-goals" section, failure-path cases (timeout, partial, concurrent) for I/O criteria or a
+  `dont_care` reason, and STRIDE refusal criteria at trust boundaries (advisory in the audit); the
+  audit rejects silent omission; the code judge's duplicate-helper check.
 
 ### Changed (part 2 of 3, R2: yadgar and yaadgaar are never required)
 
@@ -34,9 +142,9 @@ part.
   absent stops with the no-ledger sentence (fails closed: the current rulings are unknown). Only
   plans that used a ledger can reach this stop; `confirm: "ask"` builds on.
 - The result key `yadgar_findings` is renamed `memory_notes` (`[{role, notes}]`, optional, never
-  required). Role results may carry `memory_notes`; the role files' `yadgar_findings` is still
-  read until the R3 prompt revision. The skill offers to store the notes when the session has a
-  memory tool, and shows them otherwise.
+  required). Role results may carry `memory_notes` (part 2 still read the old `yadgar_findings`
+  too; part 3 removed it). The skill offers to store the notes when the session has a memory
+  tool, and shows them otherwise.
 - Docs and metadata: README requirements and the ledger adapter section; SKILL.md ledger and
   project wording; `plugin.json` and the marketplace entry drop the `yadgar` keyword and "Role
   prompts load from yadgar". `agents/judge.md` keeps its denylist of yadgar tool names: the
@@ -47,8 +155,8 @@ part.
 
 - The ten role prompts ship in the plugin as `roles/<role>.md`, pinned by a new `ROLE_SHA256`
   table in the workflow (`gen.mjs` writes it and `--check` checks it, next to
-  `PROGRAM_SHA256`). The files are the yadgar pages `agent-prompt-<role>` as of 4.0.3 with the
-  `CONTRACT:` line removed and the repo's markdown formatting applied.
+  `PROGRAM_SHA256`). Part 1 copied them from the yadgar pages `agent-prompt-<role>` as of 4.0.3,
+  with the `CONTRACT:` line removed; part 3 revised them (see above).
 - Same trust model as the shipped programs (Max's ruling on #46): each role prompt is a short
   wrapper with no role text. The role agent first runs `sha256sum -- <roles dir>/<role>.md`,
   then reads the whole file with the Read tool (never `cat`, which the Bash tool cuts near

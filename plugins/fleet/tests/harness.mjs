@@ -265,7 +265,10 @@ export async function runOne(script, args0) {
     // 5.0.0 (review of d8df90b): an unscripted probe role-read reads the scenario's file
     if (!(label in script) && /^infra:role-read:/.test(label)) {
       const role = inputsOf(prompt).role;
-      return { status: "ok", reason: "read", role_file: { name: role, sha256: roleTable[role] } };
+      const r = { status: "ok", reason: "read", role_file: { name: role, sha256: roleTable[role] } };
+      // PR #48 ruling 3: and the role's shared file
+      if (SHARED_FOR_ROLE[role]) r.shared_file = { name: SHARED_FOR_ROLE[role], sha256: SHARED_PIN[SHARED_FOR_ROLE[role]] };
+      return r;
     }
     // the bytecode purge is mechanical; unscripted purges succeed by default
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
@@ -408,6 +411,11 @@ export async function runOne(script, args0) {
     if (label.startsWith("role:") && !("role_file" in r)) {
       const role = label.split(":")[1];
       r.role_file = { name: role, sha256: roleTable[role] };
+    }
+    // 5.0.0 (R3): the planner and the audit report the shared file they read
+    if (label.startsWith("role:") && !("shared_file" in r)) {
+      const name = SHARED_FOR_ROLE[label.split(":")[1]];
+      if (name) r.shared_file = { name, sha256: SHARED_PIN[name] };
     }
     if (label.startsWith("role:") && !raw) {
       const role = label.split(":")[1];
@@ -633,10 +641,13 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/4.0.3/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
+// 5.0.0 (R3): the shared prompt files (roles/_shared/<name>.md) and the roles that read them
+export const SHARED_PIN = GEN.shared(SOURCE);
+export const SHARED_FOR_ROLE = { "scope-and-plan": "test-cmd-allowlist", "plan-audit": "test-cmd-allowlist" };
 export function programTableSha(name) {
   const hit = PROGRAMS.find(([n]) => n === name);
   assert.ok(hit, name);
@@ -701,7 +712,9 @@ export function programOf(name) {
 export const CUR_ROLES = { table: null };
 export function roleFileSums() {
   const t = CUR_ROLES.table || Object.fromEntries(ROLE_NAMES.map((r) => [r, sha256(ROLE_TEXT[r])]));
-  return Object.fromEntries(Object.entries(t).map(([r, v]) => [r + ".md", v]));
+  const out = Object.fromEntries(Object.entries(t).map(([r, v]) => [r + ".md", v]));
+  for (const [n, v] of Object.entries(SHARED_PIN)) out["_shared/" + n + ".md"] = v;
+  return out;
 }
 export function scriptsProbe(over = {}) {
   const home = "home" in over ? over.home : "/home/u";
@@ -927,7 +940,7 @@ export function happy(over = {}) {
       tldr: "adds a thing",
       plan_diff: ["new plan"],
       fleet_estimate: { criteria: crit.length, agents: 20, rounds: 1 },
-      yadgar_findings: ["planner fact"],
+      memory_notes: ["planner fact"],
     },
     "role:plan-audit": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
     "hasher:pre-writers:r1": { status: "ok", fingerprint: FP_PRE },
@@ -942,7 +955,7 @@ export function happy(over = {}) {
       verdict: "approve",
       routed_findings: [],
       checked: [],
-      yadgar_findings: ["judge fact"],
+      memory_notes: ["judge fact"],
     },
     "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: FP_TESTS },
     "hasher:freeze:f1": { status: "ok", fingerprint: FP_TESTS, hashes: HASHES },
@@ -979,7 +992,7 @@ export function happy(over = {}) {
       created: true,
       template_used: ".github/pull_request_template.md",
       gates_not_run_stated: true,
-      yadgar_findings: ["pr fact"],
+      memory_notes: ["pr fact"],
     },
   };
   for (const c of crit) {

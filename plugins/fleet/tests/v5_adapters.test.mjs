@@ -73,12 +73,13 @@ test("5.0.0 R2: ledgerAdapter picks yaadgaar | yadgar | tracker | none from sour
   assert.deepEqual(tools, [YGET]);
 });
 
-test("5.0.0 R2: the preflight census is typed and required; the prompt names the candidate tools and how an absent server shows", async () => {
+// PR #48 ruling 1: was "typed and required"; the census is advisory, so optional and nullable
+test("5.0.0 R2: the preflight census is typed, optional and nullable; the prompt names the candidate tools and how an absent server shows", async () => {
   const out = await run(happy(), ARGS);
   const pre = call(out, "preflight");
   const sch = pre.opts.schema;
-  assert.ok((sch.required || []).includes("ledger_tools"), "ledger_tools is required");
-  assert.deepEqual(sch.properties.ledger_tools, { type: "array", items: { type: "string" } });
+  assert.ok(!(sch.required || []).includes("ledger_tools"), "ledger_tools is not required");
+  assert.deepEqual(sch.properties.ledger_tools, { type: ["array", "null"], items: { type: "string" } });
   assert.match(pre.prompt, /ToolSearch/);
   assert.match(pre.prompt, /select:mcp__yaadgaar__read_task,mcp__yadgar__task_get/);
   assert.match(pre.prompt, /absent|not configured|disconnected/);
@@ -277,7 +278,7 @@ test("5.0.0 R2 (review of 88eb9b0): a malformed census counts as [] and never bl
 });
 
 test("5.0.0 R2: memory_notes replaces yadgar_findings in the result; optional on every role", async () => {
-  // the harness's happy roles return yadgar_findings (the role files until PR-3) and memory_notes both work
+  // 5.0.0 R3: the harness's happy roles return memory_notes (yadgar_findings is gone)
   const s = happy();
   s["role:fleet-coder:r1"] = Object.assign({}, s["role:fleet-coder:r1"], { memory_notes: ["coder note"] });
   const out = await run(s, { ...ARGS, confirm: "ask" });
@@ -290,14 +291,14 @@ test("5.0.0 R2: memory_notes replaces yadgar_findings in the result; optional on
   assert.deepEqual(out.result.memory_notes.find((x) => x.role === "fleet-coder").notes, ["coder note"]);
   // absent everywhere: an empty list, run ok
   const bare = happy();
-  for (const k of Object.keys(bare)) if (k.startsWith("role:") && bare[k] && typeof bare[k] === "object") delete bare[k].yadgar_findings;
+  for (const k of Object.keys(bare)) if (k.startsWith("role:") && bare[k] && typeof bare[k] === "object") delete bare[k].memory_notes;
   const o2 = await run(bare, { ...ARGS, confirm: "ask" });
   assert.equal(o2.result.status, "ok", o2.result.reason);
   assert.deepEqual(o2.result.memory_notes, []);
   // never required by any role schema
   for (const c of out.calls.filter((x) => x.label.startsWith("role:"))) {
     assert.ok(!c.opts.schema.required.includes("memory_notes"), c.label);
-    assert.deepEqual(c.opts.schema.properties.memory_notes.type, "array", c.label);
+    assert.deepEqual(c.opts.schema.properties.memory_notes.type, ["array", "null"], c.label); // PR #48 ruling 1: nullable
   }
 });
 

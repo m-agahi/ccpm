@@ -195,7 +195,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 4\.0\.3 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.0 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -241,7 +241,9 @@ test("5.0.0 R1 (was role prompts load the role from yadgar): role prompts embed 
   for (const c of out.calls.filter((x) => x.label.startsWith("role:"))) {
     const role = c.label.split(":")[1];
     const f = "'" + SCRIPTS_DIR.replace(/scripts$/, "roles/") + role + ".md'";
-    assert.ok(c.prompt.startsWith("You are the fleet role " + role + ". Do these two steps first, in order:\n1. Run this one command exactly as written, unmodified, as one Bash call: sha256sum -- " + f + "\n2. Read " + f.slice(1, -1) + " with the Read tool"), c.label);
+    // 5.0.0 R3: the planner and the audit also read the shared allowlist (steps 3 and 4)
+    const steps = role === "scope-and-plan" || role === "plan-audit" ? "four" : "two";
+    assert.ok(c.prompt.startsWith("You are the fleet role " + role + ". Do these " + steps + " steps first, in order:\n1. Run this one command exactly as written, unmodified, as one Bash call: sha256sum -- " + f + "\n2. Read " + f.slice(1, -1) + " with the Read tool"), c.label);
     assert.ok(!c.prompt.includes("agent_prompt_get"), c.label);
     assert.ok(c.prompt.length - JSON.stringify(inputsOf(c.prompt)).length < 2000, c.label + " wrapper too long");
     assert.ok(c.opts.schema, c.label + " has a schema");
@@ -1150,7 +1152,8 @@ test("infra agents run on an explicit tier", async () => {
 test("5.0.0 R1 (was preflight asks for each DISPATCH line): preflight hashes every role file; the tier comes from ROLE_DISPATCH", async () => {
   const out = await run(happy(), ARGS);
   const c = call(out, "preflight");
-  assert.ok(c.prompt.includes('sha256sum -- "$d"/*.py "${d%/scripts}/roles"/*'), "the probe hashes every role file");
+  // 5.0.0 R3: every regular file of the roles dir and of its _shared dir
+  assert.ok(c.prompt.includes('sha256sum -- "$d"/*.py; for f in "${d%/scripts}/roles"/* "${d%/scripts}/roles"/_shared/*; do if [ -f "$f" ] && [ ! -L "$f" ]; then sha256sum -- "$f"'), "the probe hashes every role file");
   assert.doesNotMatch(c.prompt, /DISPATCH: model=/);
   assert.ok(out.logs.includes("model: fleet-coder -> sonnet"));
 });
@@ -5509,10 +5512,11 @@ const ARRAY_SITES = {
   "p.role_sha256 @ preflightRecordProblem": "parsed: the sealed plan ref (log-only record)",
   "o.files @ planFactsProblem": "role:scope-and-plan:repo_obligations[].files",
   "tc.tools @ testCmdProblem": "role:scope-and-plan:test_cmd.tools",
-  "r.yadgar_findings @ collect": "role:scope-and-plan:yadgar_findings",
-  // 5.0.0 (R2)
+  // 5.0.0 (R2; R3: yadgar_findings is gone)
   "r.memory_notes @ collect": "role:scope-and-plan:memory_notes",
-  "pre.ledger_tools @ preflightStep": "preflight:ledger_tools",
+  // 5.0.0 (R3)
+  "r.follow_ups @ followUpsOf": "role:fleet-coder:follow_ups",
+  "r.shared_file @ sharedFileProblem": "parsed: a guard (shared_file is typed object or null in the planner and audit schemas; an array is refused)",  "pre.ledger_tools @ preflightStep": "preflight:ledger_tools",
   "it.tried @ noLedgerStop": "intake:tried",
   "h.suspicious @ hasher": "hasher:hashes.suspicious",
   "r.changed @ hasher": "hasher:changed",
@@ -6088,7 +6092,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 4\.0\.3; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6787,7 +6791,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/4\.0\.3\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 4\.0\.3 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.0 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8476,7 +8480,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 4\.0\.3/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.0/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
