@@ -105,9 +105,6 @@ import {
   stateWriteCmd,
 } from "./harness.mjs";
 
-// 5.0.0 (R1): every run relays the ten role files right after the preflight probe
-const RELAYS = ROLE_NAMES.map((r) => "infra:role-relay:" + r);
-
 
 // ---------------------------------------------------------------- args
 
@@ -169,35 +166,37 @@ test("an ingested plan: task id p<sha256(plan path)[:8]>, slug from the brief ti
 // ---------------------------------------------------------------- preflight
 
 
-// 5.0.0 (R1): a relay of `role` whose joined text is not the pinned file
-// (every attempt, the retry included)
-function corruptRelay(s, role, extra) {
-  s.__mutate = { label: new RegExp("^infra:role-relay:" + role + "(:retry)?$"), fn: (r) => Object.assign(r, { chunks: r.chunks.concat([extra || "\nCONTRACT: fleet-v1"]) }) };
+// 5.0.0 (R1): the preflight probe finds `role`'s file off its ROLE_SHA256 pin
+function offPin(s, role, sum) {
+  s.preflight = { scripts_probe: scriptsProbe({ roleSums: { [role + ".md"]: sum === undefined ? "1".repeat(64) : sum } }), scripts_dir: SCRIPTS_DIR };
+  return s;
+}
+// 5.0.0 (R1): every result of `role` reports another file's sha256 (the retry too)
+function wrongFile(s, role) {
+  s.__mutate = { label: new RegExp("^role:" + role + "(:|$)"), fn: (r) => Object.assign(r, { role_file: { name: role, sha256: "0".repeat(64) } }) };
   return s;
 }
 
 // 5.0.0 (R1): was "preflight missing role stops with needs_human naming the
-// role" (a yadgar page not found). A role the relay does not return stops,
-// after one retry, naming the role, before intake.
-test("5.0.0 R1 (was preflight missing role): a role file the relay does not return stops with needs_human naming the role", async () => {
-  const s = happy({ script: { "infra:role-relay:fleet-coder": null, "infra:role-relay:fleet-coder:retry": null } });
-  const out = await run(s, ARGS);
+// role" (a yadgar page not found). A role file missing from the install stops
+// in preflight, naming the file.
+test("5.0.0 R1 (was preflight missing role): a missing role file stops in preflight naming it", async () => {
+  const out = await run(offPin(happy(), "fleet-coder", null), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /^role file fleet-coder hash mismatch \(relay or tampered\); reinstall fleet 4\.0\.3 \(relay returned no result\)/);
-  assert.deepEqual(out.labels, ["preflight", ...RELAYS, "infra:role-relay:fleet-coder:retry"]);
+  assert.match(out.result.reason, /fleet-coder\.md is missing/);
+  assert.deepEqual(out.labels, ["preflight"]);
 });
 
 // 5.0.0 (R1): was "preflight unreachable yadgar stops with needs_human". The
-// roles no longer come from yadgar; the equivalent outage is role_files.py
-// failing (no roles dir in the install): the relay fails twice and the run
-// stops with the reinstall text.
-test("5.0.0 R1 (was preflight unreachable yadgar): a relay whose program fails twice stops with the reinstall text", async () => {
-  const failed = { status: "failed", reason: "roles dir does not hold exactly the role files" };
-  const s = happy({ script: { "infra:role-relay:plan-audit": failed, "infra:role-relay:plan-audit:retry": failed } });
+// roles no longer come from yadgar; the equivalent outage is a roles dir the
+// install lacks: preflight stops with the install text.
+test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in preflight with the install text", async () => {
+  const s = happy();
+  s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role file plan-audit .*reinstall fleet 4\.0\.3 \(relay returned failed: roles dir does not hold exactly the role files\)/);
-  assert.ok(!out.labels.includes("intake"));
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 4\.0\.3 from the marketplace/);
+  assert.deepEqual(out.labels, ["preflight"]);
 });
 
 // ---------------------------------------------------------------- happy paths
@@ -235,16 +234,16 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
 });
 
 // 5.0.0 (R1): was "role prompts embed no role text: they load the role from
-// yadgar" (prompt < 4000 characters, starting with agent_prompt_get). The
-// prompt now starts with the hashed role file text and ends with the inputs.
-test("5.0.0 R1 (was role prompts load the role from yadgar): role prompts start with the role file text, then the inputs", async () => {
+// yadgar" (prompt starts with agent_prompt_get). Still no role text: the
+// prompt starts with the read command of the pinned role file.
+test("5.0.0 R1 (was role prompts load the role from yadgar): role prompts embed no role text; they read the pinned role file", async () => {
   const out = await run(happy(), ARGS);
   for (const c of out.calls.filter((x) => x.label.startsWith("role:"))) {
     const role = c.label.split(":")[1];
-    const text = ROLE_TEXT[role].replace(/^DISPATCH:.*$/m, "DISPATCH: model=sonnet");
-    assert.ok(c.prompt.startsWith(text + "\n\n---\n"), c.label);
+    const f = "'" + SCRIPTS_DIR.replace(/scripts$/, "roles/") + role + ".md'";
+    assert.ok(c.prompt.startsWith("You are the fleet role " + role + ". Your first action: run this one command exactly as written, unmodified, as one Bash call:\nsha256sum -- " + f + " && cat " + f + "\n"), c.label);
     assert.ok(!c.prompt.includes("agent_prompt_get"), c.label);
-    assert.ok(c.prompt.length > text.length, c.label);
+    assert.ok(c.prompt.length - JSON.stringify(inputsOf(c.prompt)).length < 2000, c.label + " wrapper too long");
     assert.ok(c.opts.schema, c.label + " has a schema");
   }
 });
@@ -625,8 +624,8 @@ test("agent cap stops the run with needs_human before exceeding 100 agents", asy
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /agent cap/);
   // the cap is per run: the build run alone stays within it; the PATH
-  // re-checks (3.1.1) and the role file relays (5.0.0) are not counted against it
-  const work = out.build.calls.filter((c) => !/^infra:(path-check|role-relay):/.test(c.label));
+  // re-checks (3.1.1) are not counted against it
+  const work = out.build.calls.filter((c) => !/^infra:path-check:/.test(c.label));
   assert.ok(out.build.calls.length > work.length, "the re-checks ran");
   assert.ok(work.length <= 100, "dispatched " + work.length);
   assert.ok(work.length > 60, "the old cap of 60 would have stopped earlier");
@@ -1146,14 +1145,14 @@ test("infra agents run on an explicit tier", async () => {
 });
 
 // 5.0.0 (R1): was "preflight asks for each role's DISPATCH line". The tier
-// comes from the DISPATCH line of the relayed text the script hashed; the
-// relay schema types the chunks it joins.
-test("5.0.0 R1 (was preflight asks for each DISPATCH line): the relay returns the role text as typed chunks; the DISPATCH line comes from that text", async () => {
+// comes from ROLE_DISPATCH, generated from the pinned files; preflight asks
+// for the sha256sum of every role file instead.
+test("5.0.0 R1 (was preflight asks for each DISPATCH line): preflight hashes every role file; the tier comes from ROLE_DISPATCH", async () => {
   const out = await run(happy(), ARGS);
-  const c = call(out, "infra:role-relay:fleet-coder");
-  assert.deepEqual(c.opts.schema.properties.chunks.items, { type: "string" });
+  const c = call(out, "preflight");
+  assert.ok(c.prompt.includes('sha256sum -- "$d"/*.py "${d%/scripts}/roles"/*'), "the probe hashes every role file");
+  assert.doesNotMatch(c.prompt, /DISPATCH: model=/);
   assert.ok(out.logs.includes("model: fleet-coder -> sonnet"));
-  assert.doesNotMatch(call(out, "preflight").prompt, /DISPATCH: model=/);
 });
 
 test("a role agent that dies is retried once on its fallback tier", async () => {
@@ -1391,38 +1390,38 @@ test("S-2: roles get only criterion test files in frozen_tests; config files go 
 
 // 5.0.0 (R1): the four S-8 version tests become ROLE_SHA256 checks.
 // was "a role version lower than the frozen minimum stops in preflight"
-test("5.0.0 R1 (was S-8 version below minimum): a role text that is not its pin stops in preflight", async () => {
-  const out = await run(corruptRelay(happy(), "fleet-coder"), ARGS);
+test("5.0.0 R1 (was S-8 version below minimum): a role file off its pin stops in preflight", async () => {
+  const out = await run(offPin(happy(), "fleet-coder"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /^role file fleet-coder hash mismatch \(relay or tampered\)/);
-  assert.deepEqual(out.labels, ["preflight", ...RELAYS, "infra:role-relay:fleet-coder:retry"]);
+  assert.equal(out.result.stop_gate, "contract");
+  assert.match(out.result.reason, /fleet-coder\.md hashes 1{64}, not [0-9a-f]{64}/);
+  assert.deepEqual(out.labels, ["preflight"]);
 });
 
 // was "a higher role version is logged as prose-only and recorded"
-test("5.0.0 R1 (was S-8 higher version recorded): the result records the ROLE_SHA256 entry each role text hashed to", async () => {
+test("5.0.0 R1 (was S-8 higher version recorded): the result records the ROLE_SHA256 pin of every role", async () => {
   const out = await run(happy(), ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
   assert.deepEqual(Object.keys(out.result.role_sha256).sort(), ROLE_NAMES.slice().sort());
   for (const r of ROLE_NAMES) assert.match(out.result.role_sha256[r], /^[0-9a-f]{64}$/);
-  assert.ok(out.result.gate_log.some((l) => /all 10 role files relayed and hashed/.test(l)));
+  assert.ok(out.result.gate_log.some((l) => /all 10 role files at their ROLE_SHA256 pins/.test(l)));
 });
 
 // was "a role runner that loaded a different version than preflight is discarded"
-test("5.0.0 R1 (was S-8 runner version mismatch): a role result's role_version is not read; the run goes on", async () => {
-  const s = happy();
-  s["role:fleet-coder:r1"].role_version = 12;
-  const out = await run(s, ARGS);
-  assert.equal(out.result.status, "ok", out.result.reason);
-  assert.ok(out.labels.includes("role:fleet-code-judge:r1"));
+test("5.0.0 R1 (was S-8 runner version mismatch): a role runner that read another file is discarded", async () => {
+  const out = await run(wrongFile(happy(), "fleet-coder"), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "contract");
+  assert.match(out.result.reason, /role fleet-coder did not run the shipped role file \(role_file sha256 0{64}/);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
 // was "preflight with no version for a role stops"
-test("5.0.0 R1 (was S-8 no version for a role): a relay with no chunks for a role stops", async () => {
-  const bad = { status: "ok", reason: "x", role: "plan-audit", chunks: [] };
-  const out = await run(happy({ script: { "infra:role-relay:plan-audit": bad, "infra:role-relay:plan-audit:retry": bad } }), ARGS);
+test("5.0.0 R1 (was S-8 no version for a role): preflight with no sha256sum line for a role file stops", async () => {
+  const out = await run(offPin(happy(), "plan-audit", null), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /plan-audit.*relay returned no chunks/);
+  assert.match(out.result.reason, /plan-audit\.md is missing/);
 });
 
 test("S-5: gates not stated in the PR body -> needs_human with the PR url", async () => {
@@ -1450,7 +1449,7 @@ test("an intake brief without a title stops before any role", async () => {
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human");
     assert.match(out.result.reason, /title/);
-    assert.deepEqual(out.labels, ["preflight", ...RELAYS, "intake"]);
+    assert.deepEqual(out.labels, ["preflight", "intake"]);
   }
 });
 
@@ -1482,37 +1481,41 @@ test("manual criteria: no writer, no frozen entry, still listed for the PR opene
 // ---------------------------------------------------------------- contract marker + output asserts
 
 // 5.0.0 (R1): the three CONTRACT-marker tests become pin checks: the marker
-// is gone (stripped from the files); a text that is not its pin halts.
+// is gone (stripped from the files); a file off its pin, or a runner that read
+// another file, halts.
 // was "missing or fleet-v1 in preflight halts; fleet-v4 passes"
-test("5.0.0 R1 (was contract marker in preflight): a role text with an extra CONTRACT line halts at preflight; the shipped text passes", async () => {
-  let out = await run(corruptRelay(happy(), "plan-audit"), ARGS);
+test("5.0.0 R1 (was contract marker in preflight): a role file off its pin halts at preflight; the shipped files pass", async () => {
+  let out = await run(offPin(happy(), "plan-audit"), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "contract");
-  assert.match(out.result.reason, /role file plan-audit hash mismatch/);
-  assert.ok(!out.labels.includes("intake"));
+  assert.match(out.result.reason, /plan-audit\.md hashes/);
+  assert.deepEqual(out.labels, ["preflight"]);
   out = await run(happy(), ARGS);
   assert.equal(out.result.status, "ok");
 });
 
 // was "a v1 marker in build-mode preflight halts before any build step"
-test("5.0.0 R1 (was contract marker in build preflight): a role text that is not its pin halts a build before any build step", async () => {
+test("5.0.0 R1 (was contract marker in build preflight): a role file off its pin halts a build before any build step", async () => {
   const s = happy();
   const plan = await runOne(s, ARGS);
   assert.equal(plan.result.status, "awaiting_confirmation");
-  corruptRelay(s, "fleet-coder");
+  offPin(s, "fleet-coder");
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role file fleet-coder hash mismatch/);
-  assert.deepEqual(out.labels, ["preflight", ...RELAYS, "infra:role-relay:fleet-coder:retry"]);
+  assert.match(out.result.reason, /fleet-coder\.md hashes/);
+  assert.deepEqual(out.labels, ["preflight"]);
 });
 
 // was "a role runner that loaded another contract is discarded"
-test("5.0.0 R1 (was runner contract mismatch): a role result's role_contract is not read; the run goes on", async () => {
+test("5.0.0 R1 (was runner contract mismatch): a role runner that read another file is discarded; role_contract is not read", async () => {
   const s = happy();
   s["role:fleet-test-judge:r1"].role_contract = "CONTRACT: fleet-v1";
-  const out = await run(s, ARGS);
+  let out = await run(s, ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.ok(out.labels.includes("hasher:freeze:f1"));
+  out = await run(wrongFile(happy(), "fleet-test-judge"), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /role fleet-test-judge did not run the shipped role file/);
+  assert.ok(!out.labels.includes("hasher:freeze:f1"));
 });
 
 test("contract drift: planner ok output missing a required key stops", async () => {
@@ -1672,7 +1675,7 @@ test("intake ambiguity stops before any role or workspace step", async () => {
   const out = await runOne(s, { ...ARGS, input: "ABC-1" });
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /two repos/);
-  assert.deepEqual(out.labels, ["preflight", ...RELAYS, "intake"]);
+  assert.deepEqual(out.labels, ["preflight", "intake"]);
 });
 
 test("intake runs read-only, gets input, repo and project", async () => {
@@ -1694,7 +1697,7 @@ test("intake brief with an unknown source kind or a relative repo stops", async 
   ]) {
     const out = await runOne(happy({ brief }), ARGS);
     assert.equal(out.result.status, "needs_human", JSON.stringify(brief));
-    assert.deepEqual(out.labels, ["preflight", ...RELAYS, "intake"]);
+    assert.deepEqual(out.labels, ["preflight", "intake"]);
   }
 });
 
@@ -1747,7 +1750,6 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
   // the plan is committed locally; nothing is pushed, opened or posted
   assert.deepEqual(out.labels, [
     "preflight",
-    ...RELAYS,
     "intake",
     "workspace",
     // 4.0.0 (1985): the push-access dry run, after its own PATH re-check
@@ -2023,7 +2025,7 @@ test("2.1.4 a missing plan ref stops after the load, before any role", async () 
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan/);
-  assert.deepEqual(out.labels, ["preflight", ...RELAYS, "workspace", "infra:load-ref"]);
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
 });
 
 test("2.1.4 a plan ref that targets another commit stops after the load, before any role", async () => {
@@ -2034,7 +2036,7 @@ test("2.1.4 a plan ref that targets another commit stops after the load, before 
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan/);
-  assert.deepEqual(out.labels, ["preflight", ...RELAYS, "workspace", "infra:load-ref"]);
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
   // a ref that is not an annotated tag (a plain commit ref) is refused too
   const t = happy();
   const tiny2 = await planRefFor(t);
@@ -2050,7 +2052,7 @@ test("a wrong ref_sha256 stops after the load, before any role", async () => {
   const out = await runOne(s, buildArgs({ ...tiny, ref_sha256: "e".repeat(64) }));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan/);
-  assert.deepEqual(out.labels, ["preflight", ...RELAYS, "workspace", "infra:load-ref"]);
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
 });
 
 test("a tampered plan ref tag message stops before any role", async () => {
@@ -2068,7 +2070,7 @@ test("a tampered plan ref tag message stops before any role", async () => {
   out = await runOne(s, buildArgs({ ...tiny, ref_sha256: sha256(s.__store[PC]) }));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan.*seal mismatch/);
-  assert.deepEqual(out.labels, ["preflight", ...RELAYS, "workspace", "infra:load-ref"]);
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
 });
 
 test("a plan ref for another branch or repo stops before any role", async () => {
@@ -2078,7 +2080,7 @@ test("a plan ref for another branch or repo stops before any role", async () => 
     const out = await runOne(s, buildArgs({ ...tiny, ...over }));
     assert.equal(out.result.status, "needs_human", JSON.stringify(over));
     assert.match(out.result.reason, /plan ref missing or changed; re-run plan.*does not match plan_ref/);
-    assert.deepEqual(out.labels, ["preflight", ...RELAYS, "workspace", "infra:load-ref"]);
+    assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
   }
 });
 
@@ -2091,7 +2093,7 @@ test("a load step that copies the right sha256 but changed content stops", async
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan/);
-  assert.deepEqual(out.labels, ["preflight", ...RELAYS, "workspace", "infra:load-ref"]);
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
 });
 
 test("a load step that returns content not matching its own sha256 stops", async () => {
@@ -2100,7 +2102,7 @@ test("a load step that returns content not matching its own sha256 stops", async
   s["infra:load-ref"] = { status: "ok", reason: "read", refs: [Object.assign(refEntry("refs/fleet/l42/plan", PC, s.__store[PC]), { sha256: "f".repeat(64) })] };
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "needs_human");
-  assert.deepEqual(out.labels, ["preflight", ...RELAYS, "workspace", "infra:load-ref"]);
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
 });
 
 test("commit-plan: a plan hash that differs from the staged one fails", async () => {
@@ -2243,7 +2245,7 @@ test("build mode: preflight first, then workspace, verify, then the writers' bas
   const out = await runOne(s, buildArgs(ref));
   noUnscripted(out);
   assert.equal(out.result.status, "ok");
-  assert.deepEqual(out.labels.slice(0, 16), ["preflight", ...RELAYS, "workspace", "infra:load-ref", "infra:verify-plan", "infra:read-state", "hasher:pre-writers:r1"]);
+  assert.deepEqual(out.labels.slice(0, 6), ["preflight", "workspace", "infra:load-ref", "infra:verify-plan", "infra:read-state", "hasher:pre-writers:r1"]);
   assert.ok(!out.labels.some((l) => l.startsWith("role:scope-and-plan") || l.startsWith("role:plan-audit")));
   const v = inputsOf(call(out, "infra:verify-plan").prompt);
   assert.deepEqual(v, {
@@ -3249,11 +3251,11 @@ test("a stale-bytecode suspicious entry after the coder rejects the round", asyn
 });
 
 // 5.0.0 (R1): was "every page one below its pin stops (4.0.0 pins)"
-test("5.0.0 R1 (was every page below its pin): every role: a text one character off its pin stops", async () => {
+test("5.0.0 R1 (was every page below its pin): every role file off its pin stops in preflight", async () => {
   for (const role of ROLE_NAMES) {
-    const out = await runOne(corruptRelay(happy(), role, "x"), ARGS);
+    const out = await runOne(offPin(happy(), role), ARGS);
     assert.equal(out.result.status, "needs_human", role);
-    assert.match(out.result.reason, new RegExp("^role file " + role + " hash mismatch"));
+    assert.match(out.result.reason, new RegExp(role + "\\.md hashes 1{64}"));
   }
 });
 
@@ -4319,7 +4321,7 @@ test("2.1.0 confirm: a value other than ask or auto is refused before any agent"
 test("2.1.0 confirm ask (default) stays interactive: no intent judge", async () => {
   const out = await runOne(happy(), ARGS);
   assert.equal(out.result.status, "awaiting_confirmation");
-  assert.ok(!out.labels.some((l) => /intent|precommit-ids/.test(l) && !/^infra:role-relay:/.test(l)));
+  assert.ok(!out.labels.some((l) => /intent|precommit-ids/.test(l)));
 });
 
 test("2.1.0 confirm auto: gates pass, the same run builds through the shared verify path", async () => {
@@ -4495,7 +4497,7 @@ test("2.1.0 review: after the draft PR, pr-review gets the PR, the diff paths an
   assert.match(call(out, "infra:review-cleanup:v1").prompt, /worktree remove --force/);
   assert.match(call(out, "infra:review-cleanup:v1").prompt, /worktree prune/);
   assert.deepEqual(out.result.review, { verdict: "approve", blocking: [], nits: [], rounds: 1, sweep: null, model: "sonnet" });
-  assert.ok(!out.labels.some((l) => /sweep/.test(l) && !/^infra:role-relay:/.test(l)));
+  assert.ok(!out.labels.some((l) => /sweep/.test(l)));
 });
 
 function blockingReview(extra) {
@@ -4624,13 +4626,12 @@ test("2.1.0 review skipped when no PR exists: listed in gates_not_run", async ()
 // ---------------------------------------------------------------- 2.1.0 contract
 
 // 5.0.0 (R1): was "preflight loads ten roles; fleet-v2 pages halt"
-test("5.0.0 R1 (was 2.1.0 contract): preflight relays ten role files; a changed one halts", async () => {
+test("5.0.0 R1 (was 2.1.0 contract): preflight pins ten role files; a changed one halts", async () => {
   let out = await run(happy(), ARGS);
-  assert.deepEqual(out.plan.labels.slice(1, 11).map((l) => l.slice("infra:role-relay:".length)).sort(), ROLE_NAMES.slice().sort());
-  assert.deepEqual(new Set(out.plan.calls.filter((c) => c.label.startsWith("infra:role-relay:")).map((c) => inputsOf(c.prompt).role)).size, 10);
-  out = await runOne(corruptRelay(happy(), "pr-review"), ARGS);
+  assert.equal(Object.keys(out.result.role_sha256).length, 10);
+  out = await runOne(offPin(happy(), "pr-review"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role file pr-review hash mismatch/);
+  assert.match(out.result.reason, /pr-review\.md hashes/);
 });
 
 test("2.1.0 models: a role without a usable DISPATCH line halts (no hardcoded tier); the tier used is logged", async () => {
@@ -4810,8 +4811,8 @@ test("2.1.0 agent cap 100: an auto run with a revise round and a review fix roun
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.result.review.rounds, 2);
-  // the PATH re-checks (3.1.1) and the role file relays (5.0.0) are counted in agents but not against the cap
-  const work = out.calls.filter((c) => !/^infra:(path-check|role-relay):/.test(c.label));
+  // the PATH re-checks (3.1.1) are counted in agents but not against the cap
+  const work = out.calls.filter((c) => !/^infra:path-check:/.test(c.label));
   assert.ok(out.calls.length > work.length, "the re-checks ran");
   assert.ok(work.length > 60, "dispatched " + work.length);
   assert.ok(work.length <= 100);
@@ -5421,7 +5422,6 @@ test("5.0.0 R1 (was 2.1.1 live-shaped page): a role file whose last line is its 
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(call(out, "role:fleet-code-judge:r1").opts.model, "opus");
   assert.equal(call(out, "role:fleet-code-judge:r1:fallback").opts.model, "sonnet");
-  assert.ok(call(out, "role:fleet-code-judge:r1").prompt.startsWith(text + "\n\n---\n"));
 });
 
 test("2.1.1 tflint and terragrunt are forbidden words in a check_cmd", async () => {
@@ -5460,8 +5460,7 @@ async function schemasByKind() {
   const by = {};
   for (const c of out.calls.concat(auto.calls)) {
     const l = c.label;
-    // 5.0.0 (R1): the role relays have their own schema
-    const kind = l.startsWith("role:") ? "role:" + l.split(":")[1] : l.startsWith("hasher:") ? "hasher" : l.startsWith("infra:role-relay:") ? "role-relay" : l.startsWith("infra:") || l === "workspace" ? "infra" : l;
+    const kind = l.startsWith("role:") ? "role:" + l.split(":")[1] : l.startsWith("hasher:") ? "hasher" : l.startsWith("infra:") || l === "workspace" ? "infra" : l;
     if (c.opts && c.opts.schema && !(kind in by)) by[kind] = c.opts.schema;
   }
   return by;
@@ -5488,7 +5487,7 @@ function schemaAt(by, spec) {
 // undeclared field came back as the string "[]").
 const ARRAY_SITES = {
   // 5.0.0 (R1)
-  "r.chunks @ roleRelayProblem": "role-relay:chunks",
+  "r.role_file @ roleFileProblem": "parsed: a guard (role_file is typed object or null in every role schema; an array is refused)",
   "p.role_sha256 @ preflightRecordProblem": "parsed: the sealed plan ref (log-only record)",
   "o.files @ planFactsProblem": "role:scope-and-plan:repo_obligations[].files",
   "tc.tools @ testCmdProblem": "role:scope-and-plan:test_cmd.tools",
@@ -6762,11 +6761,11 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 });
 
 // 5.0.0 (R1): was "a role page below its pin names the page, the project and
-// the deploy order". The stop names the role file, the cause and the fix.
-test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the cause and the reinstall", async () => {
-  const out = await runOne(corruptRelay(happy(), "scope-and-plan"), ARGS);
+// the deploy order". The stop names the role file, its hash and the install.
+test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
+  const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /^role file scope-and-plan hash mismatch \(relay or tampered\); reinstall fleet 4\.0\.3 \(hash mismatch \(relay or tampered\): the relayed text hashes [0-9a-f]{64}, the pin is [0-9a-f]{64}\)$/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/4\.0\.3\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 4\.0\.3 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -6875,10 +6874,12 @@ test("3.0.0 plan-audit routed_findings declare an optional symbol; a symbol an a
 // 5.0.0 (R1): was "a page below its pin names the agent_prompt_get wiki
 // version, not a page in that project". No stop names a yadgar page now.
 test("5.0.0 R1 (was 3.0.0 page below pin wording): a role file stop names no yadgar page, project or wiki version", async () => {
-  const out = await runOne(corruptRelay(happy(), "plan-audit"), ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role file plan-audit/);
-  assert.doesNotMatch(out.result.reason, /agent_prompt_get|wiki version|agent-prompt-plan-audit|m-agahi\/yadgar/);
+  for (const s of [offPin(happy(), "plan-audit"), wrongFile(happy(), "plan-audit")]) {
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human");
+    assert.match(out.result.reason, /plan-audit/);
+    assert.doesNotMatch(out.result.reason, /agent_prompt_get|wiki version|agent-prompt-plan-audit|m-agahi\/yadgar/);
+  }
 });
 
 // ---------------------------------------------------------------- 3.0.0 build-time caller check (ledger 1956)
@@ -8449,11 +8450,11 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 });
 
 // 5.0.0 (R1): was "a page below its pin names the 4.0.0 deploy order". There
-// is no deploy order: a role file that is not its pin names the reinstall.
-test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the reinstall, not a deploy order", async () => {
-  const out = await runOne(corruptRelay(happy(), "fleet-code-judge"), ARGS);
+// is no deploy order: a role file off its pin names the install.
+test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
+  const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /role file fleet-code-judge hash mismatch \(relay or tampered\); reinstall fleet 4\.0\.3/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 4\.0\.3/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
@@ -10869,7 +10870,7 @@ test("3.1.3 intake: needs_human on a task id names the ledgers tried and the too
   assert.match(out.result.reason, /task not found/);
   assert.match(out.result.reason, /yaadgaar \(project yadgarhq\/docs\) read_task\(number=671\): error \(as reported by intake agent\): NOT_FOUND: no task 671/);
   assert.match(out.result.reason, /yadgar \(project yadgarhq\/docs\) task_get\(project_id=yadgarhq\/docs, id=671\): error \(as reported by intake agent\): external_task_ledger/);
-  assert.deepEqual(out.labels, ["preflight", ...RELAYS, "intake"]);
+  assert.deepEqual(out.labels, ["preflight", "intake"]);
   // a task-id input that made no ledger call says so
   for (const input of ["#671", "671", "L42", "yaadgaar #671"]) {
     const o = await runOne(happy({ script: { intake: { status: "needs_human", reason: "unsure" } } }), { ...YQ, input });

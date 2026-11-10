@@ -32,6 +32,8 @@ import {
   FP_TESTS,
   FP_K1,
   FP_PRE,
+  scriptsProbe,
+  SCRIPTS_DIR,
 } from "./harness.mjs";
 
 // ---------------------------------------------------------------- 1990 tiers
@@ -51,8 +53,6 @@ function tierOf(table, label) {
 // overrides: park-plan on sonnet, load-parked on haiku; labels the plan does
 // not name stay on sonnet).
 const WANT = [
-  // 5.0.0 (R1): the role file relay, a long exact copy, on sonnet
-  [/^infra:role-relay:/, "sonnet"],
   [/^infra:path-check:/, "haiku"],
   [/^preflight/, "haiku"],
   // 4.0.0 review (Max): workspace and precommit-ids moved to sonnet
@@ -486,39 +486,38 @@ function reseal(s, tiny, fn) {
 }
 const BUILD = (tiny, over) => Object.assign({ mode: "build", plan_ref: tiny, date: "2026-11-04", project: "o/r" }, over || {});
 const ROLE_LOAD = /agent_prompt_get/;
-const RELAY = (l) => /^infra:role-relay:[a-z-]+$/.test(l);
+// 5.0.0 (R1): the preflight probe hashes every role file
+const ROLE_PROBE = /sha256sum -- "\$d"\/\*\.py "\$\{d%\/scripts\}\/roles"\/\*/;
 
 // 5.0.0 (R1): was "a build with a cached preflight dispatches no more agents
-// than before" (plan 17, build 50). The role pages are gone; every run's
-// preflight relays the ten role files (ten sonnet agents, counted): plan 27,
-// build 60. No agent loads a yadgar page.
-test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts; every run relays the ten role files after the preflight probe", async () => {
+// than before" (plan 17, build 50). The role pages are gone; every run's one
+// preflight agent hashes the role files, so the counts are 4.0.3's: plan 17,
+// build 50. No agent loads a yadgar page.
+test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; every run's preflight hashes the role files", async () => {
   const out = await run(happy(), Object.assign({}, ARGS, { confirm: "ask" }));
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  // plan: 17 (4.0.3) + 10 relays
-  assert.equal(out.plan.calls.length, 27, out.plan.labels.join(", "));
-  assert.equal(out.planResult.agents, 27);
-  // build: 50 (4.0.3) + 10 relays
-  assert.equal(out.build.calls.length, 60, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 60);
+  assert.equal(out.plan.calls.length, 17, out.plan.labels.join(", "));
+  assert.equal(out.planResult.agents, 17);
+  assert.equal(out.build.calls.length, 50, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 50);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
     assert.equal(first.opts.model, "haiku");
     assert.match(first.prompt, /path_check\.py/);
     assert.match(first.prompt, /as one Bash call: bash -c '/, "the scripts directory probe runs in every run");
-    assert.deepEqual(o.labels.slice(1, 11), ROLE_NAMES.map((r) => "infra:role-relay:" + r));
+    assert.match(first.prompt, ROLE_PROBE, "the role files are hashed in every run");
     assert.equal(o.calls.filter((c) => ROLE_LOAD.test(c.prompt)).length, 0, "no agent loads a role page");
   }
   assert.ok(!out.labels.includes("preflight:roles"));
-  // the build reports the pins its role texts hashed to (the scenario's, all-sonnet)
+  // the build reports the role pins (the scenario's, all-sonnet)
   assert.deepEqual(Object.keys(out.result.role_sha256).sort(), ROLE_NAMES.slice().sort());
 });
 
 // 5.0.0 (R1): was "plan mode seals history.preflight {fleet_version, versions,
 // dispatch, contract}; the build uses the sealed tier". The record is log only.
-test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_version, role_sha256}; never scripts_dir or the PATH check; the build's tier is its own relay's", async () => {
+test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_version, role_sha256}; never scripts_dir or the PATH check; the build's tier is its own install's", async () => {
   const s = happy();
   s.__dispatch["fleet-coder"] = "DISPATCH: model=opus (fallback=sonnet)";
   const out = await runOne(s, ARGS);
@@ -545,8 +544,8 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
 });
 
 // 5.0.0 (R1): was "a 3.1.3 record, no record, or fresh_preflight loads the
-// role pages; a 4.0.0 record does not". Now every build relays the files.
-test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_preflight true or false: every build relays the ten files once", async () => {
+// role pages; a 4.0.0 record does not". Now every build hashes the files.
+test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_preflight true or false: every build hashes the role files in its one preflight", async () => {
   const fixes = [
     (o) => (o.history.preflight = { fleet_version: "3.1.3", versions: {}, dispatch: {}, contract: {} }),
     (o) => (o.history.preflight = { fleet_version: "4.0.0", versions: { "plan-audit": 17 }, dispatch: { "plan-audit": "DISPATCH: model=fable" }, contract: { "plan-audit": "CONTRACT: fleet-v4" } }),
@@ -559,7 +558,7 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     const b = await runOne(s, BUILD(tiny));
     noUnscripted(b);
     assert.equal(b.result.status, "ok", b.result.reason);
-    assert.equal(b.calls.filter((c) => RELAY(c.label)).length, 10);
+    assert.match(b.calls[0].prompt, ROLE_PROBE);
     assert.equal(call(b, "role:fleet-coder:r1").opts.model, "sonnet", "the scenario files decide, never the sealed record");
   }
   for (const fresh of [true, false]) {
@@ -568,8 +567,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     const b = await runOne(s, BUILD(plan.result.plan_ref, { fresh_preflight: fresh }));
     noUnscripted(b);
     assert.equal(b.result.status, "ok", b.result.reason);
-    assert.equal(b.calls.length, 60);
-    assert.equal(b.calls.filter((c) => RELAY(c.label)).length, 10);
+    assert.equal(b.calls.length, 50);
+    assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });
 
@@ -579,13 +578,12 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
 test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at build time stops the build at preflight, before any role", async () => {
   const s = happy();
   const plan = await runOne(s, ARGS);
-  s.__mutate = { label: /^infra:role-relay:fleet-test-judge/, fn: (r) => Object.assign(r, { chunks: r.chunks.concat(["\nedited after the plan"]) }) };
+  s.preflight = { scripts_probe: scriptsProbe({ roleSums: { "fleet-test-judge.md": "e".repeat(64) } }), scripts_dir: SCRIPTS_DIR };
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /^role file fleet-test-judge hash mismatch \(relay or tampered\); reinstall fleet 4\.0\.3/);
-  assert.ok(!b.labels.some((l) => l.startsWith("role:")), b.labels.join(", "));
-  assert.ok(b.labels.includes("infra:role-relay:fleet-test-judge:retry"));
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 4\.0\.3/);
+  assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });
 
@@ -601,7 +599,7 @@ test("4.0.0 1990: args.fresh_preflight must be a boolean; checked before any age
 });
 
 // 5.0.0 (R1): was "... with the role table it loaded; no second load"
-test("5.0.0 R1 (was 4.0.0 1990 confirm auto): confirm auto builds in the plan run with the role texts it relayed; no second relay", async () => {
+test("5.0.0 R1 (was 4.0.0 1990 confirm auto): confirm auto builds in the plan run with the roles its one preflight pinned; no second preflight", async () => {
   // the auto gates' stubs (as autoHappy in build_task_run.test.mjs)
   const s = happy();
   Object.assign(s, {
@@ -611,7 +609,6 @@ test("5.0.0 R1 (was 4.0.0 1990 confirm auto): confirm auto builds in the plan ru
   });
   const out = await runOne(s, Object.assign({}, ARGS, { confirm: "auto" }));
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.equal(out.calls.filter((c) => RELAY(c.label)).length, 10);
   assert.equal(out.calls.filter((c) => ROLE_LOAD.test(c.prompt)).length, 0);
   assert.ok(!out.labels.includes("preflight:roles"));
   assert.equal(out.labels.filter((l) => l === "preflight").length, 1);

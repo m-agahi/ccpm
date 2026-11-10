@@ -555,25 +555,26 @@ build past its commit) wins over `freeze_digest`.
 
 ### Role files (5.0.0, R1, ledger 1999)
 
-The ten role prompts ship as `plugins/fleet/roles/<role>.md`. `ROLE_SHA256` in the workflow
-holds the sha256 of each file's exact bytes; `scripts/gen.mjs` writes it next to
-`PROGRAM_SHA256`, and `gen.mjs --check` fails when a role file differs, is missing, or the roles
-dir holds any other file. Every run (plan, build, probe) relays the files again; nothing is
-cached:
+The ten role prompts ship as `plugins/fleet/roles/<role>.md`, under the same trust model as the
+shipped programs. `scripts/gen.mjs` writes two tables into the workflow from the files:
+`ROLE_SHA256` (the sha256 of each file's exact bytes) and `ROLE_DISPATCH` (each file's first
+`DISPATCH:` line). `gen.mjs --check` fails when a role file differs, is missing, or the roles dir
+holds any other file. Nothing is cached; every run (plan, build, probe) checks the files again:
 
-1. `preflight` (haiku) finds `$HOME/.claude/plugins/cache/<marketplace>/fleet/<version>/scripts`
-   and its sibling `roles` dir. Both must be their own realpath and no symlink; the roles dir
-   must hold exactly the ten files, each hashing to its pin (the agent's relayed sha256sum lines:
-   an early stop for a stale install).
-2. `infra:role-relay:<role>` (sonnet, one agent per role, in parallel) runs `role_files.py
-<roles dir> <role> <part>` for each part and returns the text as chunks of 1000 characters
-   (12 chunks per part, so one call prints under 20000 characters, below the Bash output cap).
-   The script joins the chunks and hashes the text itself; it never takes a hash an agent
-   reports. A relay that does not match runs once more on `RELAY_RETRY_MODEL` (sonnet); a second
-   miss stops: "role file <role> hash mismatch (relay or tampered); reinstall fleet <version>".
-   The relays count in `agents`, never against the agent cap (like the PATH re-checks).
-3. Each role's tier comes from the first `DISPATCH:` line of its hashed text. Each role prompt is
-   that text, then the inputs.
+1. `preflight` (haiku, the run's first agent) finds
+   `$HOME/.claude/plugins/cache/<marketplace>/fleet/<version>/scripts` and its sibling `roles`
+   dir. Both must be their own realpath and no symlink. The roles dir must hold exactly the ten
+   regular files (no extra file, no subdirectory, no symlink), and the sha256sum lines of its
+   files must equal `ROLE_SHA256`. Any other value stops the run (`stop_gate: contract`).
+2. Each role's tier comes from `ROLE_DISPATCH`.
+3. Each role prompt is a short wrapper with no role text. The role agent's first action is
+   `sha256sum -- <roles dir>/<role>.md && cat <roles dir>/<role>.md`, and it follows the printed
+   file as its instructions. The prompt also carries the inputs and the StructuredOutput rule.
+4. Every role result carries `role_file: {name, sha256}`, required on every status (null fits the
+   schema). The script checks that `name` is the dispatched role and that `sha256` is
+   `ROLE_SHA256[name]`. A wrong or missing value takes the program-check path: a contract stop,
+   after the one contract retry on an ok result: "role <role> did not run the shipped role file
+   (...)". A coder result never becomes a finding for this; it stops.
 
 Plan mode seals `history.preflight: {fleet_version, role_sha256}` in the plan ref, log only. A
 build never reads a role table from it. A 4.x plan ref (`{fleet_version, versions, dispatch,
@@ -587,10 +588,10 @@ fleet 4.0.3, with the `CONTRACT:` line removed and the repo's markdown formattin
 ### Probe mode (5.0.0)
 
 `{mode: "probe", repo, date, run_nonce}` runs the preflight only on `repo`: the scripts and
-roles dirs, the relay and hash of every role file, and the PATH check. It returns `status: "ok"`
-with `probe: {fleet_version, scripts_dir, roles_dir, roles: {<role>: {sha256, chars, model,
-fallback}}}` and stops: no worktree, no role agent, no write. Use it after an install or update
-to prove the runtime can relay the roles before a real run.
+roles dirs, the sha256 of every program and role file, and the PATH check. It returns
+`status: "ok"` with `probe: {fleet_version, scripts_dir, roles_dir, roles: {<role>: {sha256,
+model, fallback}}}` and stops: no worktree, no role agent, no write. Use it after an install or
+update.
 
 ### Throwaway test database (4.0.0, ledger 1981)
 
@@ -1043,8 +1044,8 @@ The script pins the role contract, not the prose:
 ### Models
 
 Each role, the reviewer and the sweep included, runs on the tier named by the first
-`DISPATCH: model=<tier> (fallback=<tier> ...)` line of its role file (5.0.0: of the relayed text
-the script hashed); the script parses it. Accepted tiers: `fable`, `opus`, `sonnet`, `haiku`. No tier is
+`DISPATCH: model=<tier> (fallback=<tier> ...)` line of its role file (5.0.0: copied into `ROLE_DISPATCH` by
+`gen.mjs`); the script parses it. Accepted tiers: `fable`, `opus`, `sonnet`, `haiku`. No tier is
 hardcoded: a missing, unparseable or unknown line stops the run in preflight (`stop_gate:
 contract`). A role agent that dies is retried once on the page's fallback tier, when one is set,
 never on any other; the retry counts toward the agent cap. Every role dispatch logs

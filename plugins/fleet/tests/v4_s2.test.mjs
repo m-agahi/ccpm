@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { SOURCE, ARGS, happy, run, runOne, call, inputsOf, planRefFor, buildArgs, sha256, canon, ROLE_NAMES, ROLE_TEXT } from "./harness.mjs";
+import { SOURCE, ARGS, happy, run, runOne, call, inputsOf, planRefFor, buildArgs, sha256, canon, ROLE_NAMES, ROLE_TEXT, scriptsProbe, SCRIPTS_DIR } from "./harness.mjs";
 
 // REQUIRED_ON_OK as written in the script source
 function requiredOf() {
@@ -353,7 +353,7 @@ test("1992: a sealed project that is not a non-empty string or null is a changed
 
 // 5.0.0 (R1): the record is log only, {fleet_version, role_sha256}; a 4.x
 // record ({fleet_version, versions, dispatch, contract}) is accepted, its maps
-// ignored (the build relays the role files again). Was: versions, dispatch and
+// ignored (the build checks the role files again). Was: versions, dispatch and
 // contract required as objects.
 test("5.0.0 R1: history.preflight is optional; when present it has a fleet_version, role_sha256 an object if given; 4.x records pass", async () => {
   const good = { fleet_version: "4.0.3", role_sha256: { "plan-audit": "a".repeat(64) } };
@@ -441,14 +441,21 @@ test("5.0.0 R1 (was 4.0.0 D1 pins): no CONTRACT, EXPECTED_VERSIONS or ROLE_PROJE
 });
 
 // 5.0.0 (R1): was "a fleet-v3 page halts preflight with the reload hint; a
-// page below its pin halts". The equivalent stale input is a role text that
-// is not its pin: preflight halts at contract before any role runs.
-test("5.0.0 R1 (was 4.0.0 D1 stale page): a relayed role text that is not its pin halts preflight before any role", async () => {
+// page below its pin halts". The equivalent stale input is a role file off its
+// pin (preflight halts at contract, with the reload hint) or a role runner
+// that read another file (that role's result halts at contract).
+test("5.0.0 R1 (was 4.0.0 D1 stale page): a role file off its pin halts preflight with the reload hint; a runner that read another file halts", async () => {
   const s = happy();
-  s.__mutate = { label: /^infra:role-relay:plan-audit/, fn: (r) => Object.assign(r, { chunks: r.chunks.concat(["\nCONTRACT: fleet-v3"]) }) };
-  const out = await runOne(s, ARGS);
+  s.preflight = { scripts_probe: scriptsProbe({ roleSums: { "plan-audit.md": "3".repeat(64) } }), scripts_dir: SCRIPTS_DIR };
+  let out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "contract");
-  assert.match(out.result.reason, /role file plan-audit hash mismatch \(relay or tampered\); reinstall fleet/);
+  assert.match(out.result.reason, /plan-audit\.md hashes 3{64}.*reload-plugins/);
   assert.ok(!out.labels.some((l) => l.startsWith("role:")));
+  const t = happy();
+  t.__mutate = { label: /^role:scope-and-plan/, fn: (r) => Object.assign(r, { role_file: { name: "scope-and-plan", sha256: "3".repeat(64) } }) };
+  out = await runOne(t, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "contract");
+  assert.match(out.result.reason, /role scope-and-plan did not run the shipped role file/);
 });

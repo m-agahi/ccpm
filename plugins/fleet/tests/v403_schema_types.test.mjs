@@ -34,7 +34,7 @@ function loadSchemas() {
     constBlock("PATH_RECHECK_SCHEMA", "\n};");
   return new Function(
     body +
-      "\nreturn { SCHEMAS, INFRA_SCHEMA, INTAKE_SCHEMA, HASHER_SCHEMA, PREFLIGHT_SCHEMA, ROLE_RELAY_SCHEMA, PUSH_PROBE_SCHEMA, PATH_RECHECK_SCHEMA, PROGRAM_OUT, ROLES };",
+      "\nreturn { SCHEMAS, INFRA_SCHEMA, INTAKE_SCHEMA, HASHER_SCHEMA, PREFLIGHT_SCHEMA, PUSH_PROBE_SCHEMA, PATH_RECHECK_SCHEMA, PROGRAM_OUT, ROLES };",
   )();
 }
 const S = loadSchemas();
@@ -50,7 +50,6 @@ function schemaOf(id) {
     intake: S.INTAKE_SCHEMA,
     hasher: S.HASHER_SCHEMA,
     preflight: S.PREFLIGHT_SCHEMA,
-    role_relay: S.ROLE_RELAY_SCHEMA,
     push_probe: S.PUSH_PROBE_SCHEMA,
     path_recheck: S.PATH_RECHECK_SCHEMA,
   }[id];
@@ -175,8 +174,8 @@ const READS = {
   STRICT: { "p.enum array": "parsed: a schema property, not an agent result" },
   stripHeldOut: { "v array": PARSED_LOCAL, "v object": PARSED_LOCAL },
   gatesNotRun: { "g object": CJ + "gates_not_run[]", "judgeList array": CJ + "gates_not_run" },
-  // 5.0.0 (R1): the DISPATCH line comes from the relayed role text the script hashed
-  parseDispatch: { "line string": "parsed: a line of the role text the script hashed against ROLE_SHA256" },
+  // 5.0.0 (R1): the DISPATCH line comes from ROLE_DISPATCH (gen.mjs, from the pinned files)
+  parseDispatch: { "line string": "parsed: ROLE_DISPATCH, generated from the role files (gen.mjs --check)" },
   sameState: { "length number-literal": PARSED_LOCAL },
   planFactsProblem: {
     "testCmd object": SP + "test_cmd",
@@ -312,9 +311,13 @@ const READS = {
     "r.digest string": "hasher:digest",
   },
   cleanRepo: { "r string": "intake:brief.repo" },
-  // 5.0.0 (R1): the role file relay (roleTableProblem and rolesFromRef are gone)
-  rolePrompt: { "text string": PARSED_LOCAL },
-  roleRelayProblem: { "r.chunks array": "prog:role_files:chunks", "c string": "prog:role_files:chunks[]" },
+  // 5.0.0 (R1): the role_file every role result carries (roleTableProblem and rolesFromRef are gone)
+  roleFileProblem: {
+    "r object": "role:scope-and-plan:",
+    "r.role_file object": "role:scope-and-plan:role_file",
+    "r.role_file array": "!role:scope-and-plan:role_file",
+    "f.sha256 string": "role:scope-and-plan:role_file.sha256",
+  },
   pushProbe: { "r.args array": "push_probe:args", "r.args.length number-literal": PARSED_LOCAL },
   workspaceStep: { "uc object": "infra:remote_url_check", "uc.url string": ["prog:remote_url:url", 2], "ws.remote_host string": "infra:remote_host" },
   briefProblem: {
@@ -664,16 +667,17 @@ test("4.0.3 1998: every type-sensitive read in the workflow has a READS entry, a
 });
 
 // 5.0.0 (R1): the 4.0.2 preflight versions map is gone; the same check on the
-// relay's chunks (an array with no item type is untyped for a string read)
-test("4.0.3 1998: the READS check catches an untyped path (5.0.0: a relay chunks array with no item type fails it)", () => {
-  const old = S.PROGRAM_OUT.role_files.chunks;
-  S.PROGRAM_OUT.role_files.chunks = { type: "array" };
+// role_file every role result carries (untyped sha256 fails a string read)
+test("4.0.3 1998: the READS check catches an untyped path (5.0.0: role_file.sha256 with no type fails it)", () => {
+  const rf = S.SCHEMAS["plan-audit"].properties.role_file;
+  const old = rf.properties.sha256;
+  rf.properties.sha256 = {};
   try {
-    assert.equal(specProblem("prog:role_files:chunks[]", "string"), "untyped path (a step has no schema)");
+    assert.equal(specProblem("role:plan-audit:role_file.sha256", "string"), "untyped node");
   } finally {
-    S.PROGRAM_OUT.role_files.chunks = old;
+    rf.properties.sha256 = old;
   }
-  assert.equal(specProblem("prog:role_files:chunks[]", "string"), null);
+  assert.equal(specProblem("role:plan-audit:role_file.sha256", "string"), null);
   // a string-typed path read as a number fails; a guard and a union pass
   assert.match(specProblem("preflight:scripts_dir", "number"), /typed \["string","null"\], read as number/);
   assert.equal(specProblem("!prog:callers:auto_dont_care", "array"), null);
@@ -684,7 +688,7 @@ test("4.0.3 1998: the READS check catches an untyped path (5.0.0: a relay chunks
 
 // the keys each program prints (PROGRAM_LABELS' digest keys; the hasher's are
 // HASHER_SCHEMA's), plus the keys the script reads from a digest-less program
-const UNDIGESTED = { plan_hash: ["plan_sha256"], plan_ref: ["refs", "chunks"], role_files: ["role", "chunks"] };
+const UNDIGESTED = { plan_hash: ["plan_sha256"], plan_ref: ["refs", "chunks"] };
 
 function fullyTyped(n, at, out) {
   if (!n || typeof n !== "object" || n.type === undefined) return out.push(at + ": untyped");
@@ -781,37 +785,35 @@ function validate(s, v, at = "$", out = []) {
 const ints = (n) => Object.fromEntries(S.ROLES.map((r, i) => [r, n + i]));
 
 // 5.0.0 (R1): was "a preflight with string versions fails its schema; integer
-// versions pass". The preflight relays no role table now; the typed relay is
-// the role file relay. Its per-call schema refuses chunks that are not a list
-// of strings, and the probe lines must be strings.
-test("5.0.0 R1 (was 4.0.3 1998 repro wf_d6901710-32d): the preflight and role relay schemas refuse mistyped values", async () => {
+// versions pass". The preflight carries no role table now; the typed value is
+// role_file on every role result: {name, sha256} strings, or null.
+test("5.0.0 R1 (was 4.0.3 1998 repro wf_d6901710-32d): the preflight and role schemas refuse mistyped values", async () => {
   const out = await run(happy(), ARGS);
   const pre = out.calls.find((c) => c.label === "preflight").opts.schema;
   assert.deepEqual(validate(pre, { scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }), []);
   assert.ok(validate(pre, { scripts_probe: [1], scripts_dir: null, path_check: null, reason: "ok" }).length);
-  assert.ok(validate(pre, { scripts_probe: "home=/h", scripts_dir: null, path_check: null, reason: "ok" }).length);
-  const sch = out.calls.find((c) => c.label === "infra:role-relay:plan-audit").opts.schema;
-  const prog = { name: "role_files", sha256: "a".repeat(64) };
-  const good = { status: "ok", reason: "relayed", role: "plan-audit", chunks: ["# x", "y"], program: prog, file_sha256: "a".repeat(64) };
+  const sch = out.calls.find((c) => c.label === "role:plan-audit").opts.schema;
+  const good = { status: "ok", reason: "x", verdict: "approve", routed_findings: [], role_file: { name: "plan-audit", sha256: "a".repeat(64) } };
   assert.deepEqual(validate(sch, good), []);
-  assert.ok(validate(sch, Object.assign({}, good, { chunks: "# x y" })).length, "chunks as one string");
-  assert.ok(validate(sch, Object.assign({}, good, { chunks: ["# x", 2] })).length, "a non-string chunk");
-  assert.ok(validate(sch, Object.assign({}, good, { role: 3 })).length);
-  const { program, ...noProgram } = good;
-  assert.deepEqual(validate(sch, noProgram), ["$.program: required"]);
-  // a failed relay may give null
-  assert.deepEqual(validate(sch, { status: "failed", reason: "exit 1", role: null, chunks: null, program: null, file_sha256: null }), []);
+  assert.ok(validate(sch, Object.assign({}, good, { role_file: "plan-audit" })).length, "role_file as a string");
+  assert.ok(validate(sch, Object.assign({}, good, { role_file: { name: "plan-audit", sha256: 7 } })).length, "a numeric sha256");
+  const { role_file, ...none } = good;
+  assert.deepEqual(validate(sch, none), ["$.role_file: required"]);
+  // a failed role may give null (it fails the script's check)
+  assert.deepEqual(validate(sch, { status: "failed", reason: "cat failed", verdict: null, routed_findings: null, role_file: null }), []);
 });
 
 // 5.0.0 (R1): was "the run still stops on a string version that reaches the
-// script". A mistyped chunk that reaches the script still stops the run.
-test("5.0.0 R1 (was 4.0.3 1998 string version reaches the script): a non-string chunk that reaches the script stops the run (the check is not loosened)", async () => {
-  const s = happy();
-  s.__mutate = { label: /^infra:role-relay:scope-and-plan/, fn: (r) => Object.assign(r, { chunks: r.chunks.concat([29]) }) };
-  const out = await run(s, ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.equal(out.result.stop_gate, "contract");
-  assert.match(out.result.reason, /role file scope-and-plan hash mismatch .*relay returned no chunks/);
+// script". A mistyped role_file that reaches the script still stops the run.
+test("5.0.0 R1 (was 4.0.3 1998 string version reaches the script): a mistyped role_file that reaches the script stops the run (the check is not loosened)", async () => {
+  for (const rf of [{ name: "scope-and-plan", sha256: 29 }, ["scope-and-plan"], "scope-and-plan"]) {
+    const s = happy();
+    s.__mutate = { label: /^role:scope-and-plan/, fn: (r) => Object.assign(r, { role_file: rf }) };
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(rf));
+    assert.equal(out.result.stop_gate, "contract");
+    assert.match(out.result.reason, /role scope-and-plan did not run the shipped role file/);
+  }
 });
 
 test("4.0.3 1998: every result the happy run's agents return fits the schema they were given", async () => {
@@ -834,14 +836,12 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 });
 
 // 5.0.0 (R1): was "the preflight prompt asks for every role key and integer
-// versions". The relay prompt asks for every part, in order, copied exactly.
-test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the relay prompt runs every part in order and asks for the chunks copied exactly", async () => {
+// versions". The role prompt asks for role_file, copied from the sha256sum line.
+test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
-  const p = out.calls.find((c) => c.label === "infra:role-relay:plan-audit").prompt;
-  assert.match(p, /role_files\.py' '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/4\.0\.3\/roles' 'plan-audit' '0'/);
-  assert.match(p, /part 7: sha256sum -- /);
-  assert.match(p, /chunks = every chunk of part 0, then every chunk of part 1, and so on, in order, each one copied exactly, byte for byte/);
-  assert.match(p, /NEVER shorten, summarise/);
+  const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
+  assert.match(p, /sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/4\.0\.3\/roles\/plan-audit\.md' && cat '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/4\.0\.3\/roles\/plan-audit\.md'/);
+  assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex of the sha256sum line it printed, copied exactly>\}/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);
   assert.match(pre, /Return \{scripts_probe, scripts_dir, path_check, reason\}\./);

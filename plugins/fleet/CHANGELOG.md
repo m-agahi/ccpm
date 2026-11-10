@@ -10,15 +10,17 @@ Fleet 5.0.0, part 1 of 3 (ledger 1999, R1). The version stays 4.0.3 until the la
   table in the workflow (`gen.mjs` writes it and `--check` checks it, next to
   `PROGRAM_SHA256`). The files are the yadgar pages `agent-prompt-<role>` as of 4.0.3 with the
   `CONTRACT:` line removed and the repo's markdown formatting applied.
-- Preflight relays every role file through the new program `role_files.py` (one sonnet agent
-  per role, in parallel; raw text in chunks of 1000 characters). The script joins the chunks
-  and hashes the text itself. A mismatch runs once more on `RELAY_RETRY_MODEL`; a second one
-  stops: "role file <role> hash mismatch (relay or tampered); reinstall fleet <version>". The
-  relays count in `agents`, not against the agent cap.
+- Same trust model as the shipped programs (Max's ruling on #46): each role prompt is a short
+  wrapper with no role text. The role agent's first action is `sha256sum -- <roles dir>/<role>.md
+&& cat <roles dir>/<role>.md`; it follows that file. Every role result carries `role_file:
+{name, sha256}`; the script checks both against the dispatched role and `ROLE_SHA256`. A
+  wrong or missing value is a contract stop (after the one contract retry on an ok result).
+- The role tiers come from a new `ROLE_DISPATCH` table, which `gen.mjs` writes from each file's
+  first `DISPATCH:` line.
 - The preflight probe also pins the sibling `roles` dir: its own realpath, no symlink, exactly
-  the ten files, each its pin.
-- Each role prompt is the hashed role text, then the inputs. No prompt calls
-  `agent_prompt_get`. The role tier comes from the text's `DISPATCH:` line.
+  the ten regular files, each at its `ROLE_SHA256` pin. No new program and no new agent: a happy
+  run dispatches what 4.0.3 dispatched (plan 17, build 50).
+- No prompt calls `agent_prompt_get`.
 - Removed: `ROLE_PROJECT`, `EXPECTED_VERSIONS`, `CONTRACT` and its checks, the role-table cache
   in the plan ref and `preflight:roles`, and `role_version` / `role_contract` in the role
   schemas. There is no deploy order: a release is the plugin.
@@ -30,7 +32,7 @@ Fleet 5.0.0, part 1 of 3 (ledger 1999, R1). The version stays 4.0.3 until the la
 ### Added
 
 - `mode: "probe"` (`/build-task probe`): the preflight only on a given repo (scripts and roles
-  dirs, role relay and hash, PATH check). It returns the table and stops.
+  dirs and the sha256 of every file in them, PATH check). It returns the table and stops.
 
 ## [4.0.3] - 2026-11-10
 

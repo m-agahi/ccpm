@@ -92,7 +92,8 @@ export const ROLE_TEXT = Object.fromEntries(ROLE_NAMES.map((r) => [r, readFileSy
 // script.__dispatch[role] in place of the first DISPATCH line (null: no
 // DISPATCH line) and script.__roleText[role] in place of the whole text. A
 // scenario that changes a text runs on a copy of the workflow whose
-// ROLE_SHA256 pins the changed texts (the files stay the source of truth).
+// ROLE_SHA256 and ROLE_DISPATCH pin the changed texts (the files stay the
+// source of truth). Role stubs return the role_file the scenario's file hashes to.
 export function scenarioRoles(script) {
   const out = {};
   for (const r of ROLE_NAMES) {
@@ -103,12 +104,6 @@ export function scenarioRoles(script) {
     if (rt && Object.prototype.hasOwnProperty.call(rt, r)) t = rt[r];
     out[r] = t;
   }
-  return out;
-}
-// the relay chunks of a role text, as role_files.py joins them (1000 characters)
-export function roleChunks(text) {
-  const out = [];
-  for (let i = 0; i < text.length; i += 1000) out.push(text.slice(i, i + 1000));
   return out;
 }
 
@@ -270,11 +265,6 @@ export async function runOne(script, args0) {
       const i = inputsOf(prompt);
       return { status: "ok", reason: "read", parked: null, args: [i.scratch, i.plan_tip_time === null ? "null" : String(i.plan_tip_time)] };
     }
-    // 5.0.0 (R1): an unscripted role file relay relays the scenario's role text
-    if (!(label in script) && /^infra:role-relay:/.test(label)) {
-      const role = inputsOf(prompt).role;
-      return { status: "ok", reason: "relayed", role, chunks: roleChunks(roleText[role]) };
-    }
     // 4.0.0 (1985, S3): unscripted push-access probes find access (a new branch)
     if (!(label in script) && /^infra:push-probe$/.test(label))
       return { status: "ok", reason: "probed", access: "ok", result: "ok", exit_code: 0, auth_line: null, args: ["/tmp/fleet-probe.out", "0"] };
@@ -402,6 +392,12 @@ export async function runOne(script, args0) {
     // a terse writer stub reports exactly its criterion's test files
     if (label.startsWith("role:fleet-test-writer:") && !raw && r.status === "ok" && !("files" in r))
       r.files = inputsOf(prompt).test_files;
+    // 5.0.0 (R1): a role agent reports the role file it read (raw stubs too,
+    // unless they name role_file themselves)
+    if (label.startsWith("role:") && !("role_file" in r)) {
+      const role = label.split(":")[1];
+      r.role_file = { name: role, sha256: roleTable[role] };
+    }
     if (label.startsWith("role:") && !raw) {
       const role = label.split(":")[1];
       if (r.status === "ok")
@@ -428,7 +424,10 @@ export async function runOne(script, args0) {
   const roleText = scenarioRoles(script);
   const roleTable = Object.fromEntries(ROLE_NAMES.map((r) => [r, sha256(roleText[r])]));
   let src = script.__source || SOURCE;
-  if (ROLE_NAMES.some((r) => roleText[r] !== ROLE_TEXT[r])) src = GEN.withRoleTable(src, roleTable);
+  if (ROLE_NAMES.some((r) => roleText[r] !== ROLE_TEXT[r])) {
+    const disp = Object.fromEntries(ROLE_NAMES.map((r) => [r, (/^DISPATCH:.*$/m.exec(roleText[r]) || [null])[0]]));
+    src = GEN.withDispatchTable(GEN.withRoleTable(src, roleTable), disp);
+  }
   CUR_ROLES.table = roleTable;
   const fn = compile(src);
   // a crashed run rethrows; its logs travel on the error (2.1.6)
@@ -775,8 +774,6 @@ export const PROGRAM_LABELS = [
   // 4.0.0 (1981)
   [/^infra:db-up/, [["sweep", "db_sweep", ["podman", "removed", "kept", "errors"]], ["up", "db_up", ["name", "port", "dbs", "users", "expiry", "args"]]]],
   [/^infra:db-down$/, [["down", "db_down", ["removed", "absent", "error", "args"]]]],
-  // 5.0.0 (R1): the relay joins the parts; no digest is relayed
-  [/^infra:role-relay:/, [[null, "role_files", null]]],
 ];
 function pick(o, keys) {
   const x = {};

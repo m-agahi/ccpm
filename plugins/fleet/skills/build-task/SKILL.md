@@ -49,10 +49,9 @@ Workflow({ name: "fleet:build-task-run",
                    run_nonce: "<fresh date +%s%N output>" } })
 ```
 
-It finds the plugin's scripts and roles dirs, relays and hashes the ten role files, and runs the
+It finds the plugin's scripts and roles dirs, checks the sha256 of every program and role file, and runs the
 PATH check on `<repo>`. It makes no worktree, runs no role and writes nothing. Report `status`,
-`reason`, and the `probe` table (`scripts_dir`, `roles_dir`, and per role `sha256`, `chars` and
-`model`). A `needs_human` reason that names a role file or the scripts dir means the install is
+`reason`, and the `probe` table (`scripts_dir`, `roles_dir`, and per role `sha256` and `model`). A `needs_human` reason that names a role file or the scripts dir means the install is
 stale or changed: tell the user to reinstall the fleet plugin and run `/reload-plugins`.
 
 ## Steps
@@ -165,10 +164,10 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
    `confirm: "auto"`: the workflow re-reads the task and runs its gates again before it builds. On `needs_human` with `needs_max_section`,
    show it verbatim and stop.
 
-   Every run relays and hashes the plugin's role files again (5.0.0); `fresh_preflight` is not
-   needed and changes nothing. A stop that says `role file <role> hash mismatch (relay or
-tampered); reinstall fleet <version>` is not retried: report it as in step 9, and tell the user
-   to reinstall the fleet plugin and run `/reload-plugins`.
+   Every run checks the plugin's role files again (5.0.0); `fresh_preflight` is not needed and
+   changes nothing. A stop that names a role file (`... role files were changed: ...` or `role
+<role> did not run the shipped role file`) is not retried: report it as in step 9, and tell
+   the user to reinstall the fleet plugin and run `/reload-plugins`.
 
    `plan_ref` is small: `{branch, plan_commit, plan_ref, ref_sha256, repo}`. Pass it exactly as the
    workflow returned it. The full plan ref is a local git object at `refs/fleet/<task id>/plan`

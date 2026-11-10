@@ -57,8 +57,8 @@ test("4.0.0 1993 AC-2 (4.0.1): every program ships as scripts/<name>.py and the 
   assert.equal((SOURCE.match(/^const ([A-Z_]+_PY) = String\.raw`/gm) || []).length, 0, "no *_PY constant left in the workflow");
   assert.ok(!/_PY_BEGIN|_PY_END/.test(SOURCE), "no *_PY markers left in the workflow");
   // 22 in S1; S4 adds parked (1986); S3 adds push_probe (1985);
-  // S5 adds test_db_decl, db_sweep, db_up, db_down (1981); 5.0.0 (R1) adds role_files
-  assert.equal(PROGRAMS.length, 29);
+  // S5 adds test_db_decl, db_sweep, db_up, db_down (1981)
+  assert.equal(PROGRAMS.length, 28);
   const files = readdirSync(SCRIPTS_SRC).filter((f) => f.endsWith(".py")).sort();
   assert.deepEqual(files, PROGRAMS.map(([n]) => n + ".py").sort(), "no extra and no missing file");
   for (const [name, sha] of PROGRAMS) {
@@ -205,8 +205,6 @@ test("4.0.0 1993 AC-3: a relayed plan_files program sha256 of zeros, or no progr
 function relayRetried(label) {
   const esc = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (/^infra:path-check:/.test(label)) return new RegExp("^" + esc + "(:relay-retry)?$");
-  // 5.0.0 (R1): a role file relay that fails its check runs once more (":retry")
-  if (/^infra:role-relay:/.test(label)) return new RegExp("^" + esc + "(:retry)?$");
   return label;
 }
 
