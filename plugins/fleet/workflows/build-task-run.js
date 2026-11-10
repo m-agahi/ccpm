@@ -96,6 +96,8 @@ const INFRA_TIER = [
   ["infra:hash-diff:", "sonnet"],
   // 5.0.6 (ledger 2019): the per-role build dirs (reset; clean at teardown)
   ["infra:build-", "haiku"],
+  // 5.0.8 (ledger 2030): the GitHub command of a repo
+  ["infra:gh-identity:", "haiku"],
 ];
 // INFRA_TIER_END
 // A haiku PATH check whose relay is broken runs once more on this tier.
@@ -110,7 +112,7 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with (bumped every release; since
 // 4.0.0, 1993, the shipped programs are read from its plugin cache directory
 // only; since 5.0.0, R1, the role files too).
-const FLEET_VERSION = "5.0.7";
+const FLEET_VERSION = "5.0.8";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with; a mismatch after an
 // update usually means this script is the stale one.
@@ -1773,6 +1775,7 @@ const PROGRAM_SHA256 = {
   "db_up": "287f00df3f12543a7ffed8445fda9ba9823f58dcb37a90301ed05b245d49d913",
   "fleet_scan": "5140d5020bee7cae61994b753e8ee100fc6cdcc1389d3a3559ef5fec5fbe2a3b",
   "format_files": "41fa33d348944dd704583568fd6a5d95e4f8a7ce47bd8a75dd736a61d0afc714",
+  "gh_identity": "20d4a4de37e586bda4c3f24c45aebf791b356ca7647a2cc60fdfd7b34f758ffd",
   "hash_diff": "9ff52aea4895f751d39ab062d446078820bc1990eb8e7cfdc91083af1a413722",
   "hasher": "e96807e4a8a376285f0b30a0bdf3529185986b473e8e9e01146df27140dd67dd",
   "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
@@ -1814,12 +1817,12 @@ const ROLE_SHA256 = {
   "fleet-code-judge": "0f9af94bf2ccd40ea9f26613f94f55a186abd63a183b348acf1c684c75958f49",
   "fleet-coder": "ba59027bfc8e81c997c39897b43c1ba9caa0aff39c20b16eae686d8161422d05",
   "fleet-intent-judge": "03283fc805f57bcf22a6448fc43b8ead05983e94de1b05563f3e50c4a7837a1e",
-  "fleet-pr-opener": "8c15b83cea3191649e0f15f577fa76cfaff13f00dfb3f3884aa05438d7fcbb75",
+  "fleet-pr-opener": "dca776ef1385239fdfcf62058fdd9546903b5f428ee763ff031cacbc483e24d9",
   "fleet-test-judge": "0b288f9221703e5534ba13b8ba31d242ecdd3663ceca12dba0d63fd57c4a301a",
   "fleet-test-writer": "ea3a3490bd986a1bf90bf01a8494620b819959d1bb4f1247d914e8b1d495914d",
   "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
   "plan-audit": "084fe730cc8ecb5cf8712b164bb763cb9bbe97e18bc3cc04e82480ba158de984",
-  "pr-review": "d7e615a662a9a25fa7cf3b7d87146ac784bf5f0a7282ecc4bb649d0486103859",
+  "pr-review": "728800a005a54026eb345d5b9784bdde50cdafd5d918f9faa8d2cec7c091142d",
   "scope-and-plan": "f035add6611148ac4167f293f2340b9247efc77a590a5977ea4f9d99ac6da90a"
 };
 // ROLE_SHA256_END
@@ -1917,7 +1920,10 @@ function emitProg(name, cmd) {
 const PROGRAM_SLOTS = [
   [/^preflight$/, [["path_check", "path_check"]]],
   [/^infra:path-check:/, [[null, "path_check"]]],
-  [/^workspace$/, [["remote_url_check", "remote_url"]]],
+  [/^workspace$/, [["remote_url_check", "remote_url"], ["gh_check", "gh_identity"]]],
+  // 5.0.8 (ledger 2030): a repo the workspace step did not check (intake's
+  // GitHub URL, a comment's repo); never run inside a step that holds task text
+  [/^infra:gh-identity:/, [[null, "gh_identity"]]],
   [/^hasher:/, [[null, "hasher"]]],
   [/^infra:branch-scan$/, [[null, "branch_scan"], ["test_db", "test_db_decl"]]],
   [/^infra:load-parked$/, [[null, "parked"]]],
@@ -1959,6 +1965,8 @@ const PROGRAM_SLOTS = [
 const PROGRAM_KEYS = {
   "path_check": ["tools", "args", "path_problems"],
   "remote_url": ["url", "args"],
+  // 5.0.8 (ledger 2030)
+  "gh_identity": ["origin", "repos", "args"],
   "hasher": ["fingerprint", "hashes", "scripts"],
   "hasher:base": ["fingerprint", "hashes", "changed", "scripts"],
   "branch_scan": ["commits", "refs", "plan_tip_time"],
@@ -2077,6 +2085,13 @@ const PROGRAM_OUT = {
   state_write: { head: STR, state_sha: STR, digest: STR },
   tf_gate: { touched: BOOL, iac_files: STRS, problems: STRS, hints: STRS, args: STRS, digest: STR },
   remote_head: { head: STR_OR_NULL, args: STRS, digest: STR },
+  // 5.0.8 (ledger 2030)
+  gh_identity: {
+    origin: STR_OR_NULL,
+    repos: { type: "object", additionalProperties: { type: "object", properties: { gh_cmd: STR_OR_NULL, push: BOOL, tried: { type: "array", items: { type: "object", properties: { cmd: STR, installed: BOOL, push: { type: ["boolean", "null"] } } } } } } },
+    args: STRS,
+    digest: STR,
+  },
   fleet_scan: { diff: STRS, commits: { type: "array", items: { type: "object", properties: { sha: STR, files: STRS } } }, digest: STR },
   callers: { occurrences: STR_LISTS, capped: STRS, auto_dont_care: STR_LISTS, doctest_md: STRS, digest: STR },
   changed_defs: {
@@ -2564,12 +2579,14 @@ function workspacePrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "Steps (use `git -C`):\n" +
+    "0. " + ghRun(inputs.gh_args) +
+    "   <gh> below = its repos[<its origin>].gh_cmd; origin or that gh_cmd null -> skip each <gh> command below and say so in reason.\n" +
     "1. `git -C <repo> fetch origin --prune`, retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("git -C <repo> fetch origin --prune") +
     " Still failing after the 3 retries -> failed with the last error.\n" +
-    "2. default_branch = `git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD` without the `origin/` prefix; if that fails, `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` run in <repo>.\n" +
+    "2. default_branch = `git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD` without the `origin/` prefix; if that fails, `<gh> repo view --json defaultBranchRef -q .defaultBranchRef.name` run in <repo>.\n" +
     "3. Keep fleet files out of git status: if `git -C <repo> check-ignore -q .claude/worktrees/probe` fails, append the line `.claude/worktrees/` to `$(git -C <repo> rev-parse --path-format=absolute --git-common-dir)/info/exclude`. Do the same for `.claude/settings.local.json` (probe that path), and for the test caches `__pycache__/`, `.pytest_cache/`, `.coverage`, `.hypothesis/` (a judge's test run must not leave untracked noise). Never edit a tracked .gitignore.\n" +
-    "4. Branch state: `gh pr list --head <branch> --state all --json number,state` in <repo>. MERGED or CLOSED -> status needs_human.\n" +
+    "4. Branch state: `<gh> pr list --head <branch> --state all --json number,state` in <repo>. MERGED or CLOSED -> status needs_human.\n" +
     "5. main_worktree: if it exists and `git -C <main_worktree> branch --show-current` equals <branch>, reuse it (created=false). If the path exists otherwise -> needs_human. If absent: local branch <branch> exists -> `git -C <repo> -c core.hooksPath=/dev/null worktree add <main_worktree> <branch>`; else remote branch exists (`git -C <repo> ls-remote --exit-code --heads origin <branch>`: exit code 0 = exists, exit code 2 = absent; any other exit code is a network/auth error -> retry with the same 5 15 45 backoff, and still erroring after the 3 retries -> failed; never treat an error as absent) -> `git -C <repo> -c core.hooksPath=/dev/null worktree add -b <branch> <main_worktree> origin/<branch>`; else `git -C <repo> -c core.hooksPath=/dev/null worktree add --no-track -b <branch> <main_worktree> origin/<default_branch>` (created=true).\n" +
     "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths." +
     (inputs.frozen_resume ? " Exception (frozen_resume is true): the uncommitted paths of a frozen build are expected; list them in reason and go on (the workflow checks the worktree tree itself). Never stash, reset, clean or change them." : "") +
@@ -2580,7 +2597,7 @@ function workspacePrompt(inputs) {
     "10. Run this one command exactly as written, unmodified, as one Bash call:\n" +
     progCmd("remote_url", [inputs.repo]) +
     "\nIt prints one JSON object " + printsKeys("remote_url") + ": " + relayAs("remote_url_check") + " (the script recomputes the digest). Non-zero exit -> remote_url_check null.\n" +
-    "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url_check, created}."
+    "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url_check, gh_check, created}."
   );
 }
 
@@ -2634,7 +2651,9 @@ function intakePrompt(inputs) {
     "   Never advise creating, editing or changing a repo's `.yadgar` file, project id or origin: the ledger scope is <project>, not the repo.\n" +
     "   body = the title, status and full body. If the task names a plan path that exists in the repo, also set plan_path and add a `plan` source for it.\n" +
     "2. Jira key (`ABC-123`): kind jira. Load the Atlassian MCP tools via ToolSearch: getAccessibleAtlassianResources for the cloudId, then getJiraIssue(issueIdOrKey, responseContentFormat=\"markdown\"). Tools absent -> needs_human. ref = the key; url = the browse URL; body = summary + description.\n" +
-    "3. GitHub issue or PR URL (`https://github.com/<o>/<r>/issues/<n>` or `/pull/<n>`): kind github. `gh-personal issue view <url> --json title,body,url` (or `pr view`); use `gh` only when gh-personal is not installed. ref = `<o>/<r>#<n>`.\n" +
+    "3. GitHub issue or PR URL (`https://github.com/<o>/<r>/issues/<n>` or `/pull/<n>`): kind github. " +
+    ("gh_cmd" in inputs ? "`<gh_cmd> issue view <url> --json title,body,url` (or `pr view`), with exactly <gh_cmd>, the command the workflow checked for <o>/<r>; gh_cmd null -> needs_human. " : "The workflow found no GitHub issue or PR URL in `input` -> needs_human. ") +
+    "ref = `<o>/<r>#<n>`.\n" +
     "4. Codeberg issue or PR URL (`https://codeberg.org/<o>/<r>/issues/<n>` or `/pulls/<n>`): kind codeberg. `curl -sf https://codeberg.org/api/v1/repos/<o>/<r>/issues/<n>`. ref = `<o>/<r>#<n>`.\n" +
     "5. A path to an existing `.md` file inside <repo>: kind plan. ref and plan_path = the path relative to <repo>; body = the file text.\n" +
     "6. Anything else: kind text; ref = \"text\"; body = `input` verbatim.\n" +
@@ -2987,6 +3006,82 @@ function loadRefPrompt(inputs) {
 // insteadOf rewrite), null when origin has none. Read only.
 // program: scripts/remote_url.py (PROGRAM_SHA256 holds its sha256)
 
+// 5.0.8 (ledger 2030): the GitHub command for each repo, picked by a program
+// and checked here, never by an agent (5.0.7 asked each agent to compare
+// `gh-personal api user` with the owner, which fails for an org repo: run
+// wf_aea3186a-4e1 opened its PR with the work login and stopped). For each
+// repo, [gh-personal if installed, gh] run `api repos/<o>/<n> --jq
+// .permissions.push`: the first with push, else the first that reads, else
+// none. Args: <repo|-> [<o>/<n> ...]. Not sealed and not in any digest of the
+// plan or run-state: every run computes it again (a resume too).
+// program: scripts/gh_identity.py (PROGRAM_SHA256 holds its sha256)
+const GH_CMDS = ["gh-personal", "gh"];
+function ghPick(tried) {
+  const t = (tried || []).find((x) => x.push === true) || (tried || []).find((x) => x.push === false);
+  return { gh_cmd: t ? t.cmd : null, push: !!t && t.push === true };
+}
+// why a relayed gh_check is unusable (null: usable)
+function ghCheckProblem(gc, args) {
+  if (!gc || typeof gc !== "object" || !gc.repos || typeof gc.repos !== "object" || Array.isArray(gc.repos)) return "no gh_check";
+  if (!relayDigestOk(gc, progKeys("gh_identity"), "gh_identity")) return programProblem(gc, "gh_identity") || "the relay does not match the program's digest";
+  if (canonical(gc.args) !== canonical(args)) return "the program ran on other arguments (" + JSON.stringify(gc.args === undefined ? null : gc.args) + ")";
+  for (const [k, e] of Object.entries(gc.repos)) {
+    const tr = e && Array.isArray(e.tried) ? e.tried : null;
+    if (!tr || canonical(tr.map((x) => x && x.cmd)) !== canonical(GH_CMDS) || canonical(ghPick(tr)) !== canonical({ gh_cmd: e.gh_cmd, push: e.push }))
+      return "repo " + k + ": gh_cmd and push are not the pick of its tried list";
+  }
+  return null;
+}
+function ghRun(args, how) {
+  return (
+    "Run this one command exactly as written, unmodified, as one Bash call:\n" + progCmd("gh_identity", args) +
+    "\nIt prints one JSON object " + printsKeys("gh_identity") + ": " + (how || relayAs("gh_check")) + ". Never pick a GitHub command yourself (never compare logins with owners): use the gh_cmd it names for that repo.\n"
+  );
+}
+// the <o>/<r> of a GitHub issue or PR URL input (else null)
+function ghUrlSlug(raw) {
+  const m = /^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9._-]+)\/(?:issues|pull)\/[0-9]+\/?$/.exec(String(raw || "").trim());
+  return m && !/\.git$/.test(m[1]) ? m[1] : null;
+}
+// intake's {gh_cmd} for a GitHub URL input ({} otherwise)
+async function intakeGh(raw, sfx, phaseName) {
+  const slug = ghUrlSlug(raw);
+  if (!slug) return {};
+  await ghEnsure([slug], "infra:gh-identity:" + sfx, phaseName, false);
+  return { gh_cmd: ghFor(slug).gh_cmd };
+}
+function ghIdentityPrompt(inputs) {
+  return "Infra step of the fleet workflow: check which GitHub command can read and push each repo. Read only; run nothing else.\nInputs: " + JSON.stringify(inputs) + "\n" + ghRun(inputs.args, "copy every value unchanged (the script recomputes the digest); non-zero exit -> failed with its stderr") + "Return {status, reason, " + returnKeys("gh_identity") + "}.";
+}
+// Checks the repos in `slugs` that no earlier check covered, in one step
+// (soft: write-back; an unusable relay leaves them unchecked). Returns the
+// checked {gh_cmd, push, tried} per slug that has one.
+async function ghEnsure(slugs, label, phaseName, soft) {
+  const todo = slugs.filter((x, i) => slugs.indexOf(x) === i && !ghFor(x));
+  if (todo.length) {
+    const args = ["-"].concat(todo);
+    const opts = { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, digest: "gh_identity", args };
+    const r = soft ? await softDispatch(label, ghIdentityPrompt({ args }), opts) : await infra(label, ghIdentityPrompt({ args }), phaseName, JUDGE_AGENT, "gh_identity", args);
+    const gp = r && r.status === "ok" ? ghCheckProblem(r, args) : "the step returned " + (r ? r.status + ": " + (r.reason || "no reason") : "no result");
+    if (gp && !soft) halt("failed", label + ": gh check unusable: " + gp, "contract");
+    if (gp) gate(label + ": gh check unusable: " + gp);
+    else {
+      state.gh = state.gh || { origin: null, repos: {} };
+      state.gh.repos = Object.assign({}, state.gh.repos, r.repos);
+      for (const x of todo) gate(label + ": GitHub command for " + x + ": " + (ghFor(x) && ghFor(x).gh_cmd || "none") + "; tried " + ghTried(x));
+    }
+  }
+  return slugs.filter((x) => ghFor(x));
+}
+// the checked {gh_cmd, push, tried} of a repo, or null
+function ghFor(slug) {
+  return (state.gh && state.gh.repos && state.gh.repos[slug]) || null;
+}
+function ghTried(slug) {
+  const g = ghFor(slug);
+  return g ? g.tried.map((t) => t.cmd + "=" + (t.installed ? JSON.stringify(t.push) : "not installed")).join(", ") : "no gh check";
+}
+
 function remoteHeadPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: read the remote branch head. Read only: no edits, no commits, no checkout, no fetch, no push; run nothing but the one command below.\n" +
@@ -3334,10 +3429,10 @@ function pushPrompt(inputs) {
     RETRY_SHELL(pg + "git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
     " Exit 0 now -> `ok`. Still failing after the 3 retries -> status failed with the last error.\n" +
     "   Delete the temp file. Step 3 runs only when push_result is `ok`.\n" +
-    "3. remote_head through the GitHub API, not git over the network: <owner>/<name> = <remote_slug>. <gh> = `gh-personal` when `command -v gh-personal` succeeds and `gh-personal api user --jq .login` equals <owner>; else `gh`. " +
+    "3. remote_head through the GitHub API, not git over the network: <owner>/<name> = <remote_slug>. <gh> = <gh_cmd>, exactly. " +
     "remote_head = the output of `<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha` (the branch name goes in the path as is, slashes included), retry up to 3 times with backoff 5 15 45 (seconds): " +
     RETRY_SHELL("<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha") +
-    " Only when neither gh nor gh-personal is installed: remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints, with the same backoff. remote_head must be the full 40-hex sha.\n" +
+    " Only when gh_cmd is null: remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints, with the same backoff. remote_head must be the full 40-hex sha.\n" +
     "Return {status, reason, " + returnKeys("push_classify") + ", remote_head}."
   );
 }
@@ -3699,8 +3794,8 @@ function commentsListPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "For each entry of `sources` (key, kind, ref, url), read every comment (all pages) and set has_marker = whether any comment body contains <marker>:\n" +
-    "- github: `gh-personal api --paginate repos/<o>/<r>/issues/<n>/comments --jq '.[].body'` (PR conversation comments are issue comments too).\n" +
+    "For each entry of `sources` (key, kind, ref, url, gh_cmd), read every comment (all pages) and set has_marker = whether any comment body contains <marker>:\n" +
+    "- github: `<gh_cmd> api --paginate repos/<o>/<r>/issues/<n>/comments --jq '.[].body'`, with the entry's gh_cmd exactly (PR conversation comments are issue comments too).\n" +
     "- codeberg: `curl -sf 'https://codeberg.org/api/v1/repos/<o>/<r>/issues/<n>/comments'`.\n" +
     "- jira: load the Atlassian MCP tools via ToolSearch; getJiraIssue(issueIdOrKey=<ref>, fields=[\"comment\"], responseContentFormat=\"markdown\").\n" +
     "A source you cannot read -> that entry gets status failed with the error and no has_marker.\n" +
@@ -3714,8 +3809,8 @@ function commentsPostPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "For each entry of `posts` (key, kind, ref, url, text):\n" +
-    "- github: write text to a temp file outside every worktree, then `gh-personal issue comment <url> --body-file <file>` (for a `/pull/` url: `gh-personal pr comment <url> --body-file <file>`); delete the file.\n" +
+    "For each entry of `posts` (key, kind, ref, url, text, gh_cmd):\n" +
+    "- github: write text to a temp file outside every worktree, then `<gh_cmd> issue comment <url> --body-file <file>` (for a `/pull/` url: `<gh_cmd> pr comment <url> --body-file <file>`), with the entry's gh_cmd exactly; delete the file.\n" +
     "- codeberg: POST `https://codeberg.org/api/v1/repos/<o>/<r>/issues/<n>/comments` with JSON `{\"body\": text}` and header `Authorization: token $CODEBERG_TOKEN` (the bot identity). No token -> failed.\n" +
     "- jira: load the Atlassian MCP tools via ToolSearch; getAccessibleAtlassianResources for the cloudId, then addCommentToJiraIssue(cloudId, issueIdOrKey=<ref>, commentBody=<text>, contentFormat=\"markdown\"). Never pass commentId.\n" +
     "Tool absent or the post fails -> that entry failed with the error. Do not retry a post that may have landed.\n" +
@@ -3776,6 +3871,8 @@ const state = {
   preflightRecord: null,
   // 4.0.0 (1987): the digest of the last freeze and its plan_ref (returned on a stop)
   freezeDigest: null,
+  // 5.0.8 (ledger 2030): the workspace step's checked gh_check
+  gh: null,
   freezePlanRef: null,
   // 4.0.0 (1981): the run's test database {name, users, port, env, image, dbs, expires, mechanism}
   db: null,
@@ -4372,6 +4469,7 @@ async function workspaceStep(repo, lay, wopt) {
       main_worktree: lay.mainWt,
       scratch_dir: lay.scratch,
       settings_local_json: settingsFor(lay.mainWt),
+      gh_args: [repo],
     }, wopt && wopt.frozenResume ? { frozen_resume: true } : {})),
     "Workspace",
   );
@@ -4387,6 +4485,12 @@ async function workspaceStep(repo, lay, wopt) {
   const urlOk =
     !!uc && typeof uc === "object" && (uc.url === null || typeof uc.url === "string") && canonical(uc.args) === canonical([repo]) && relayDigestOk(uc, progKeys("remote_url"), "remote_url");
   if (!urlOk) gate("workspace: origin URL relay unusable (no digest-checked remote_url_check); no URL sealed or compared");
+  // 5.0.8 (ledger 2030)
+  const gp = ghCheckProblem(ws.gh_check, [repo]);
+  if (gp) halt("failed", "workspace: gh check unusable: " + gp, "contract");
+  if (ws.gh_check.origin !== ws.remote_slug) halt("needs_human", "workspace: the gh check read origin " + JSON.stringify(ws.gh_check.origin) + ", not remote_slug " + ws.remote_slug, "contract");
+  state.gh = { origin: ws.gh_check.origin, repos: Object.assign({}, state.gh && state.gh.repos, ws.gh_check.repos) };
+  gate("workspace: GitHub command for " + ws.remote_slug + ": " + (ghFor(ws.remote_slug).gh_cmd || "none") + (ghFor(ws.remote_slug).push ? " (push)" : " (no push)") + "; tried " + ghTried(ws.remote_slug));
   return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: ws.remote_slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "" };
 }
 
@@ -5859,7 +5963,7 @@ async function planMode(input, date) {
 
   // 5.0.0 (R2): the census is a hint; intake tries the ledger tool itself
   phase("Intake");
-  const it = await dispatch("intake", intakePrompt({ input: raw, repo, project: input.project || null, ledger: ledgerFor(input.project), ledger_tools: state.ledgerTools }), {
+  const it = await dispatch("intake", intakePrompt(Object.assign({ input: raw, repo, project: input.project || null, ledger: ledgerFor(input.project), ledger_tools: state.ledgerTools }, await intakeGh(raw, "intake", "Intake"))), {
     schema: INTAKE_SCHEMA,
     agentType: JUDGE_AGENT,
     phase: "Intake",
@@ -6126,7 +6230,7 @@ async function rereadBrief(brief, project, repo) {
   const src = brief.sources.find((x) => ID_KINDS.indexOf(x.kind) >= 0);
   if (!src) return brief;
   const input = src.kind === "ledger" ? "L" + src.ref : src.kind === "yaadgaar" ? "yaadgaar #" + src.ref : src.url || src.ref;
-  const it = await dispatch("intake:rulings", intakePrompt({ input, repo, project: project || null, ledger: ledgerFor(project), ledger_tools: state.ledgerTools }), {
+  const it = await dispatch("intake:rulings", intakePrompt(Object.assign({ input, repo, project: project || null, ledger: ledgerFor(project), ledger_tools: state.ledgerTools }, await intakeGh(input, "rulings", "Auto-confirm"))), {
     schema: INTAKE_SCHEMA,
     agentType: JUDGE_AGENT,
     phase: "Auto-confirm",
@@ -6503,6 +6607,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   }
 
   async function openPr(label, extra) {
+    // 5.0.8 (ledger 2030): no agent call without a gh command that can push
+    const g = ghFor(remoteSlug);
+    if (!g || !g.push)
+      halt("needs_human", "PR step: no GitHub command with push access to " + remoteSlug + " (" + ghTried(remoteSlug) + "); authorise gh-personal or gh for it, then re-run the build with the same plan_ref (it resumes at the PR)", "role");
     await fleetScan("infra:fleet-scan:" + label.replace(/^role:/, ""));
     const r = requireOk(
       "fleet-pr-opener",
@@ -6511,6 +6619,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         label,
         Object.assign({}, common, planCtx, {
           repo: remoteSlug,
+          gh_cmd: g.gh_cmd,
           approved_sha: approvedSha,
           criteria,
           suite_result: suiteResult,
@@ -6594,7 +6703,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         await pathRecheck("push" + (pushes > 1 ? ":p" + pushes : ""), "PR");
         const push = await infra(
           pushLabel,
-          pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug, hook_env: hookEnv(pushKey) }),
+          pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug, gh_cmd: ghFor(remoteSlug) ? ghFor(remoteSlug).gh_cmd : null, hook_env: hookEnv(pushKey) }),
           "PR",
         );
         if (push.push_result === "hook_rejected") {
@@ -7357,6 +7466,9 @@ function reviewFindingText(f) {
 // worktrees under scratch_dir; the cleanup step always runs, even when the
 // review stops the run. Returns {verdict, blocking, nits, sweep, model}.
 async function reviewStep(k, ctx) {
+  // 5.0.8 (ledger 2030): pr-review reads the PR with the checked gh command
+  const g = ghFor(ctx.remoteSlug);
+  if (!g || !g.gh_cmd) halt("needs_human", "review v" + k + ": no GitHub command can read " + ctx.remoteSlug + " (" + ghTried(ctx.remoteSlug) + ")", "review");
   // paths, pre-hasher, review, post-hasher, sweep, post-hasher, cleanup
   reserve(7, "review " + k);
   phase("Review");
@@ -7400,6 +7512,7 @@ async function reviewStep(k, ctx) {
     const reviewIn = Object.assign({}, inputs, roleEnv("review", "review-v" + k), {
       allowed_additions: stripHeldOut(ctx.allowedAdditions === undefined ? null : ctx.allowedAdditions),
       prior_findings: stripHeldOut(ctx.priorFindings || []),
+      gh_cmd: g.gh_cmd,
     });
     const jr = await judged("pr-review", "role:pr-review:v" + k, "pr-review:v" + k, reviewIn, ctx.mainWt, "Review", pre, ctx.hashedFiles);
     const r = jr.r;
@@ -7807,24 +7920,35 @@ async function writeBack(ctx) {
       else listable.push(s);
     }
     let toPost = [];
-    if (listable.length) {
+    // 5.0.8 (ledger 2030): the GitHub command per source repo, from the
+    // program the list step runs; a post needs one with push access
+    const ghSlug = (s) => String(s.ref).split("#")[0];
+    const ghSrc = listable.filter((s) => s.kind === "github");
+    if (ghSrc.length) await ghEnsure(ghSrc.map(ghSlug), "infra:gh-identity:comments", "Write-back", true);
+    for (const s of ghSrc)
+      if (!ghFor(ghSlug(s)) || !ghFor(ghSlug(s)).gh_cmd) res[s.key] = { status: "failed", reason: "no GitHub command can read " + ghSlug(s) + " (" + ghTried(ghSlug(s)) + ")" };
+    const listed = listable.filter((s) => !res[s.key]);
+    if (listed.length) {
       const l = await softDispatch(
         "infra:comments-list",
-        commentsListPrompt({ sources: listable.map((s) => ({ key: s.key, kind: s.kind, ref: s.ref, url: s.url })), marker }),
+        commentsListPrompt({ sources: listed.map((s) => Object.assign({ key: s.key, kind: s.kind, ref: s.ref, url: s.url }, s.kind === "github" ? { gh_cmd: ghFor(ghSlug(s)).gh_cmd } : {})), marker }),
         { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Write-back" },
       );
-      for (const s of listable) {
+      for (const s of listed) {
         const hit = l && Array.isArray(l.results) ? l.results.find((x) => x.key === s.key) : null;
+        const g = s.kind === "github" ? ghFor(ghSlug(s)) : null;
         if (!hit || hit.status === "failed" || typeof hit.has_marker !== "boolean")
           res[s.key] = { status: "failed", reason: "could not list existing comments: " + ((hit && hit.reason) || (l && l.reason) || "no result") };
         else if (hit.has_marker) res[s.key] = { status: "skipped", reason: "a comment with " + marker + " exists" };
+        else if (s.kind === "github" && !(g && g.push))
+          res[s.key] = { status: "failed", reason: "no GitHub command with push access to " + ghSlug(s) + " (" + ghTried(ghSlug(s)) + ")" };
         else toPost.push(s);
       }
     }
     if (toPost.length) {
       const p = await softDispatch(
         "infra:comments-post",
-        commentsPostPrompt({ posts: toPost.map((s) => ({ key: s.key, kind: s.kind, ref: s.ref, url: s.url, text: s.text })) }),
+        commentsPostPrompt({ posts: toPost.map((s) => Object.assign({ key: s.key, kind: s.kind, ref: s.ref, url: s.url, text: s.text }, s.kind === "github" ? { gh_cmd: ghFor(ghSlug(s)).gh_cmd } : {})) }),
         { schema: INFRA_SCHEMA, phase: "Write-back" },
       );
       for (const s of toPost) {

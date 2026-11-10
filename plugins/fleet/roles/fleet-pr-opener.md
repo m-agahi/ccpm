@@ -12,6 +12,7 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 ## Inputs
 
 - `repo` (`<owner>/<name>`), `worktree`, `branch`, `default_branch`, `approved_sha`, `scratch_dir`, `project`.
+- `gh_cmd`: the GitHub command the workflow checked for `repo` (it has push access there). Call it `<gh>` below. Use exactly it for every GitHub call; never choose another one yourself.
 - `plan_path`, `criteria`, `suite_result` (from the code judge).
 - `gates_not_run` (optional): `[{gate, reason}]` — quality gates that did not run for this change. In this release it always lists at least `held_out`, `coverage`, `mutation` and `security_scan`.
 - `review_notes` (optional; absent → `[]`): `[{id, severity, category, file, line, summary, evidence}]` — review findings to show the human reader. See "Review notes" below.
@@ -30,7 +31,7 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 
 1. `git rev-parse --show-toplevel` = worktree, `git branch --show-current` = branch, `git status` clean, `git rev-parse HEAD` = `approved_sha`. Any mismatch → `needs_human` (unjudged code must not ship).
 2. `branch` is not `default_branch`.
-3. Auth: `gh auth status`, with the `gh` already authenticated in this session (or the host's gh wrapper for the repo's owner when the session has one; call it `<gh>` below). Never read a secret from a secret manager or a file, and never set a token yourself. A 401 with a stale `GH_TOKEN`/`GITHUB_TOKEN` in the environment → `unset GH_TOKEN GITHUB_TOKEN; <gh> ...` in the same call. Still failing → `needs_human` with the error.
+3. Auth: `<gh> auth status`. Never read a secret from a secret manager or a file, and never set a token yourself. A 401 with a stale `GH_TOKEN`/`GITHUB_TOKEN` in the environment → `unset GH_TOKEN GITHUB_TOKEN; <gh> ...` in the same call. Still failing → `needs_human` with the error.
 
 ## Remote check — the workflow pushed already
 

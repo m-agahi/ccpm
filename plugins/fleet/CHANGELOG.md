@@ -1,5 +1,46 @@
 # Changelog
 
+## [5.0.8] - 2026-11-11
+
+Fleet 5.0.8 (ledger 2030): one GitHub identity rule, decided by a program. Every gh call of a run
+uses the command that program picked for the repo.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.8), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.8/scripts` dir.
+- A 5.0.7 plan ref, run-state and `freeze_digest` stay valid: the GitHub command is not sealed and
+  is in no digest. Every run computes it again in its workspace step, a resume too. A 5.0.7 build
+  stopped at the PR step resumes at the PR when you re-run it with the same `plan_ref`.
+
+### Fixed
+
+- 2030: run wf_aea3186a-4e1 (yadgarhq/iam-db, 5.0.7) passed every gate, committed and pushed,
+  then stopped at the PR step (`role`, needs_human). `fleet-pr-opener` used `gh` (the work login)
+  and got "GraphQL: must be a collaborator". Each prompt asked the agent to use `gh-personal` only
+  when `gh-personal api user --jq .login` equals the repo owner. For an org repo (`yadgarhq/*`)
+  the owner is an org, not a login, so the rule picked `gh`.
+- New program `gh_identity.py <repo|-> [<owner>/<name> ...]`. For each repo (the checkout's origin,
+  read with `git remote get-url origin` as the workspace step reads `remote_slug`, then each slug),
+  it runs `<cand> api repos/<o>/<n> --jq .permissions.push` for each candidate in order
+  [`gh-personal` if installed, `gh`]. The first that answers true is `gh_cmd` (push true). Else the
+  first that read the repo is `gh_cmd` (push false). Else `gh_cmd` is null. It prints
+  `{origin, repos: {<slug>: {gh_cmd, push, tried}}, args, program, digest}`. No token is read,
+  passed or printed. The script checks the digest and the args, and computes the pick again from
+  `tried`.
+- The workspace step runs it first (`gh_check`, args `[<repo>]`) and uses its `gh_cmd` for
+  `repo view` and `pr list`. The script stops when the relay is unusable (`contract`) or its
+  origin is not `remote_slug`.
+- `gh_cmd` goes to every step that calls GitHub: the push step's `remote_head` read, the
+  `fleet-pr-opener` and `pr-review` roles (input `gh_cmd`, used as `<gh>`), intake of a GitHub URL
+  (it runs the program on `["-", <o>/<r>]`), and the comment write-back (the list step runs the
+  program on the GitHub sources' repos; each post entry carries its `gh_cmd`).
+- The PR step stops before any agent (`role`, needs_human) when no command has push access to the
+  repo. The stop names what each candidate answered. The review stops before any agent (`review`)
+  when no command can read the repo. A GitHub comment with no push-capable command is not posted;
+  write-back records it as failed with the reason and makes no agent call (write-back stays soft).
+- No prompt or role holds the login-equals-owner rule or a hard-coded `gh-personal` any more.
+
 ## [5.0.7] - 2026-11-10
 
 Fleet 5.0.7 (ledger 2020): no relayed program output carries a per-file hash. Every hasher map

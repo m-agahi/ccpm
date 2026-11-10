@@ -197,6 +197,25 @@ export function remoteUrlOut(url, repo) {
   o.digest = sha256(canon(o));
   return o;
 }
+// 5.0.8 (ledger 2030): gh_identity.py's output for its args. over: {<slug>:
+// tried list} (default: gh-personal not installed, gh with push)
+export const GH_DEFAULT_TRIED = [{ cmd: "gh-personal", installed: false, push: null }, { cmd: "gh", installed: true, push: true }];
+export function ghPickOf(tried) {
+  const t = tried.find((x) => x.push === true) || tried.find((x) => x.push === false);
+  return { gh_cmd: t ? t.cmd : null, push: !!t && t.push === true };
+}
+export function ghIdOut(args, origin, over) {
+  const slugs = [];
+  for (const x of (args[0] !== "-" && origin ? [origin] : []).concat(args.slice(1))) if (slugs.indexOf(x) < 0) slugs.push(x);
+  const repos = {};
+  for (const x of slugs) {
+    const tried = JSON.parse(JSON.stringify((over && over[x]) || GH_DEFAULT_TRIED));
+    repos[x] = Object.assign(ghPickOf(tried), { tried });
+  }
+  const o = { origin: args[0] !== "-" ? origin || null : null, repos, args };
+  o.digest = sha256(canon(o));
+  return o;
+}
 export function relayDigestOf(r, keys) {
   const o = {};
   // 4.0.0 (1993): the programs' digest covers their self-hash
@@ -335,6 +354,8 @@ export async function runOne(script, args0) {
     // 3.1.0: unscripted ledger reads find a task with a body page
     if (!(label in script) && /^infra:ledger-read:pre$/.test(label))
       return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
+    // 5.0.8 (ledger 2030): an unscripted gh check reads the scenario's answers
+    if (!(label in script) && /^infra:gh-identity:/.test(label)) return Object.assign({ status: "ok", reason: "checked" }, ghIdOut(inputsOf(prompt).args, null, script.__gh));
     // 5.0.6 (ledger 2019): unscripted build-dir resets and the teardown succeed
     if (!(label in script) && /^infra:build-(reset:|clean$)/.test(label)) return buildDirOut(inputsOf(prompt).args);
     // 5.0.7 (ledger 2020): an unscripted comparison reads the registered maps
@@ -417,6 +438,9 @@ export async function runOne(script, args0) {
     // 3.1.1: the workspace step relays the origin URL program's output; a stub
     // that gives only remote_url gets that program's output for it
     if (label === "workspace" && !raw && r.status === "ok" && !("remote_url_check" in r)) r.remote_url_check = remoteUrlOut(r.remote_url, inputsOf(prompt).repo);
+    // 5.0.8 (ledger 2030): a stub with no gh_check gets the program's output
+    // for the args the prompt sent (script.__gh: {<slug>: tried list})
+    if (label === "workspace" && !raw && r.status === "ok" && !("gh_check" in r)) r.gh_check = ghIdOut(inputsOf(prompt).gh_args, r.remote_slug, script.__gh);
     // hasher stubs that give only a fingerprint carry the maps of the last
     // hasher result forward (nothing changed; the judge fingerprint compares
     // the maps too) and list no changed paths
@@ -888,7 +912,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.7/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.8/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1016,7 +1040,9 @@ export function allScripts() {
 export const PROGRAM_LABELS = [
   [/^preflight$/, [["path_check", "path_check", K("path_check")]]],
   [/^infra:path-check:/, [[null, "path_check", K("path_check")]]],
-  [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")]]],
+  [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")], ["gh_check", "gh_identity", K("gh_identity")]]],
+  // 5.0.8 (ledger 2030): a repo the workspace step did not check
+  [/^infra:gh-identity:/, [[null, "gh_identity", K("gh_identity")]]],
   [/^hasher:/, [[null, "hasher", "hasher"]]],
   [/^infra:branch-scan$/, [[null, "branch_scan", K("branch_scan")], ["test_db", "test_db_decl", K("test_db_decl")]]],
   // 4.0.0 (1986)

@@ -46,7 +46,17 @@ key, a GitHub or Codeberg issue or PR URL, a plan path, or free text.
   absent one, never a stop (see "Ledger adapters" below). Only a task-id input needs a ledger
   tool.
 - `git`, `gh` (authenticated), and `python3` >= 3.11 (or `tomli`) in the target repo's environment.
-- For Jira input or write-back: the Atlassian MCP server. For GitHub write-back: `gh-personal`. For
+- GitHub command (5.0.8, ledger 2030): `gh_identity.py` picks it per repo, never an agent. For each
+  candidate in order [`gh-personal` if installed, `gh`] it runs
+  `<cand> api repos/<o>/<n> --jq .permissions.push`: the first that answers true is `gh_cmd`;
+  else the first that read the repo (push false); else none. The workspace step runs it on the origin repo (`gh_check`, digest- and
+  pick-checked by the script, its origin equal to `remote_slug`); a GitHub URL input and a comment
+  on another repo get their own `infra:gh-identity:*` step. Every gh prompt and role (`push`,
+  `fleet-pr-opener`, `pr-review`, intake, the comment steps) gets that command as `gh_cmd`. The PR
+  step stops before any agent (`role`) when no command can push; the review stops (`review`) when
+  none can read. `gh_cmd` is in no seal and no digest: every run, a resume too, computes it again.
+- For Jira input or write-back: the Atlassian MCP server. For GitHub write-back: a gh command with
+  push access to the issue's repo (see above). For
   Codeberg write-back: `$CODEBERG_TOKEN`. A missing tool makes intake stop, or makes that comment
   fail (reported in the result, the run stays ok).
 
@@ -223,7 +233,7 @@ module-level. A ref sealed before 2.1.6 (`changed_symbols: null`) skips the chec
 line "build caller check skipped".
 
 Intake classifies the input and fetches its text: a ledger task through yadgar `task_get` (when present), a Jira
-ticket through the Atlassian MCP, an issue or PR through `gh-personal` or the Codeberg API, a plan
+ticket through the Atlassian MCP, an issue or PR through the checked `gh_cmd` (5.0.8) or the Codeberg API, a plan
 file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body, id,
 project}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,
 `plan` and `text`. `id` and `project` are null except on a `yaadgaar` source. `url` and
@@ -1204,7 +1214,7 @@ After the commit step, the push and the pr-opener (draft PR open):
    the first), `mode: "self-authored"` and `fleet: true`, and no tldr or plan reasoning. It rules
    each prior finding `resolved`, `still_present` or `regressed`; one resolved only by the
    coder's claim is still present. CI counts as evidence only from the check runs of the
-   reviewed commit (`gh api repos/<repo>/commits/<head_sha>/check-runs`, conclusion `success`).
+   reviewed commit (`<gh_cmd> api repos/<repo>/commits/<head_sha>/check-runs`, conclusion `success`).
    A finding whose fix needs something outside `allowed_additions` is a `nit` marked
    `needs plan change:`, never blocking. It returns `verdict`, `findings` (each
    `{id, severity, category, file, line, summary, evidence}`, severity `blocking` or `nit`),

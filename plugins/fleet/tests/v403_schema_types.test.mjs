@@ -386,6 +386,14 @@ const READS = {
     "f.sha256 string": "role:scope-and-plan:role_file.sha256",
   },
   pushProbe: { "r.args array": "push_probe:args", "r.args.length number-literal": PARSED_LOCAL },
+  // 5.0.8 (ledger 2030)
+  ghPick: { "x.push boolean": ["prog:gh_identity:repos.*.tried[].push", 2], "t.push boolean": "prog:gh_identity:repos.*.tried[].push" },
+  ghCheckProblem: {
+    "gc object": "parsed: a gh_identity relay (the workspace gh_check or a gh-identity step's result), typed by PROGRAM_OUT",
+    "gc.repos object": "prog:gh_identity:repos",
+    "gc.repos array": "!prog:gh_identity:repos",
+    "e.tried array": "prog:gh_identity:repos.*.tried",
+  },
   workspaceStep: { "uc object": "infra:remote_url_check", "uc.url string": ["prog:remote_url:url", 2], "ws.remote_host string": "infra:remote_host" },
   briefProblem: {
     "b object": "intake:brief",
@@ -937,7 +945,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.7\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.7\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.8\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.8\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);
