@@ -105,6 +105,9 @@ import {
   stateWriteCmd,
   parkOut,
   ignoredView,
+  countedCalls,
+  roleTestEnv,
+  buildEnvSites,
 } from "./harness.mjs";
 
 
@@ -197,7 +200,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.5 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.6 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -629,12 +632,15 @@ test("agent cap stops the run with needs_human before exceeding 100 agents", asy
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /agent cap/);
   // the cap is per run: the build run alone stays within it; the PATH
-  // re-checks (3.1.1) are not counted against it
-  const work = out.build.calls.filter((c) => !/^infra:path-check:/.test(c.label));
+  // re-checks (3.1.1) and the build-dir resets and teardown (5.0.6) are not
+  // counted against it
+  const work = out.build.calls.filter((c) => !/^infra:(path-check:|build-)/.test(c.label));
   assert.ok(out.build.calls.length > work.length, "the re-checks ran");
   assert.ok(work.length <= 100, "dispatched " + work.length);
   assert.ok(work.length > 60, "the old cap of 60 would have stopped earlier");
   assert.ok(out.logs.some((l) => /agent cap/.test(l)));
+  // 5.0.6 (ledger 2019): the judge-first re-entry rounds included
+  assert.ok(buildEnvSites(out.build) > 60);
 });
 
 // ---------------------------------------------------------------- hasher
@@ -1181,7 +1187,7 @@ test("a role agent that dies is retried once on its fallback tier", async () => 
   assert.ok(out.logs.some((l) => /fallback/.test(l) && /plan-audit/.test(l)));
   // caps reset per run: each run counts its own dispatches
   assert.equal(out.planResult.agents, out.plan.calls.length, "retries count toward the agent cap");
-  assert.equal(out.result.agents, out.build.calls.length, "retries count toward the agent cap");
+  assert.equal(out.result.agents, countedCalls(out.build.calls).length, "retries count toward the agent cap");
 });
 
 test("a dead role with no fallback tier fails without a retry", async () => {
@@ -2633,6 +2639,8 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
     "infra:commit-plan:replan",
     "infra:verify-plan-commit:replan",
     "infra:replan-reset",
+    // 5.0.6 (ledger 2019): the run's build dirs, at the end of every build run
+    "infra:build-clean",
   ]);
   const rw = inputsOf(call(out, "infra:replan-worktree").prompt);
   assert.equal(rw.plan_commit, PC);
@@ -2691,7 +2699,7 @@ test("plan_wrong: the next build starts fresh from the new plan with new criteri
   // 2.1.4: three criterion files; the plan ref is a git object, not a hashed file
   assert.equal(inputsOf(call(second, "hasher:freeze:f1").prompt).test_files.length, 3);
   assert.deepEqual(second.result.rounds, { tests: 1, code: 1 });
-  assert.equal(second.result.agents, second.calls.length);
+  assert.equal(second.result.agents, countedCalls(second.calls).length);
   assert.equal(second.result.cumulative.runs, 3);
   assert.equal(second.result.cumulative.replans, 1);
   assert.equal(second.result.cumulative.agents, JSON.parse(s.__store[PC]).history.agents + first.result.agents + second.result.agents);
@@ -3196,10 +3204,10 @@ function shq(v) {
 
 test("code-judge and coder get test_env; the coder gets it as a note for frozen-test runs", async () => {
   const out = await run(happy(), ARGS);
-  const want = { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" };
-  assert.deepEqual(inputsOf(call(out, "role:fleet-code-judge:r1").prompt).test_env, want);
+  // 5.0.6 (ledger 2019): each with the build vars of its own dir
+  assert.deepEqual(inputsOf(call(out, "role:fleet-code-judge:r1").prompt).test_env, roleTestEnv("cjudge-r1"));
   const c = inputsOf(call(out, "role:fleet-coder:r1").prompt);
-  assert.deepEqual(c.test_env, want);
+  assert.deepEqual(c.test_env, roleTestEnv("coder-r1"));
   assert.match(c.test_env_note, /frozen/);
 });
 
@@ -4356,7 +4364,7 @@ test("2.1.0 confirm auto: gates pass, the same run builds through the shared ver
   // no check_cmd: the pre-commit config is not read
   assert.ok(!out.labels.includes("infra:precommit-ids"));
   // cumulative agents: no double count of the plan part
-  assert.equal(out.result.cumulative.agents, out.calls.length);
+  assert.equal(out.result.cumulative.agents, countedCalls(out.calls).length);
 });
 
 function autoFail(out, check) {
@@ -4835,12 +4843,16 @@ test("2.1.0 agent cap 100: an auto run with a revise round and a review fix roun
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.result.review.rounds, 2);
-  // the PATH re-checks (3.1.1) are counted in agents but not against the cap
-  const work = out.calls.filter((c) => !/^infra:path-check:/.test(c.label));
+  // the PATH re-checks (3.1.1) and the build-dir resets (5.0.6) are counted
+  // in agents but not against the cap
+  const work = out.calls.filter((c) => !/^infra:(path-check:|build-)/.test(c.label));
   assert.ok(out.calls.length > work.length, "the re-checks ran");
   assert.ok(work.length > 60, "dispatched " + work.length);
   assert.ok(work.length <= 100);
-  assert.equal(out.result.agents, out.calls.length);
+  assert.equal(out.result.agents, countedCalls(out.calls).length);
+  // 5.0.6 (ledger 2019): every round's writers, judges, coder, commit, push
+  // and review carry their own build dir, intent judge and test r2 included
+  assert.ok(buildEnvSites(out) >= 14);
 });
 
 test("2.1.0 every agent cap hit is logged", () => {
@@ -6106,7 +6118,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.5; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.6; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6805,7 +6817,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.5\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.5 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.6\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.6 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8495,7 +8507,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.5/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.6/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
@@ -8773,10 +8785,11 @@ test("3.1.0 1935a: the writers and the test judge get test_cmd with its env, and
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  for (const l of ["role:fleet-test-writer:AC1:r1", "role:fleet-test-writer:AC2:r1", "role:fleet-test-judge:r1", "role:fleet-coder:r1", "role:fleet-code-judge:r1"]) {
+  // 5.0.6 (ledger 2019): test_env adds each role's own build vars
+  for (const [l, key] of [["role:fleet-test-writer:AC1:r1", "w-AC1-r1"], ["role:fleet-test-writer:AC2:r1", "w-AC2-r1"], ["role:fleet-test-judge:r1", "tjudge-r1"], ["role:fleet-coder:r1", "coder-r1"], ["role:fleet-code-judge:r1", "cjudge-r1"]]) {
     const i = inputsOf(call(out, l).prompt);
     assert.deepEqual(i.test_cmd.env, tc.env, l);
-    assert.deepEqual(i.test_env, { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" }, l);
+    assert.deepEqual(i.test_env, roleTestEnv(key), l);
   }
 });
 

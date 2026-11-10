@@ -19,6 +19,7 @@ You judge the tests written for a plan BEFORE they are frozen. The coder will be
 - `allowed_additions`, `est_diff_lines`, `change_kind`, `new_behaviour`, `repo_obligations`, `changed_symbols`: the sealed plan facts, for context.
 - `test_cmd`: `{command, paths_placeholder, env, tools}` — the exact command that runs this repo's tests.
 - `test_env`, `test_env_note`: env vars for EVERY test run.
+- `test_env_prefix`: `test_env` as a shell prefix (`env K='v' ... `). Run EVERY build, test or hook command in the worktree as `<test_env_prefix><command>`; a non-empty `test_cmd.env` goes in front (`env <test_cmd.env> <test_env_prefix><command>`). Its build vars point `target/`, `__pycache__` and the other caches at your own dir outside the worktree; a command run without it writes them in the worktree, and the workflow stops the run.
 - `script_findings`: `{status: "not_run", reason}` in this release; nothing in it is evidence.
 - On a `fix_tests` re-entry only: `code_judge_findings` (the code judge's `tests` findings).
 

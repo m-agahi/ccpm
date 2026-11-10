@@ -331,6 +331,8 @@ export async function runOne(script, args0) {
     // 3.1.0: unscripted ledger reads find a task with a body page
     if (!(label in script) && /^infra:ledger-read:pre$/.test(label))
       return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
+    // 5.0.6 (ledger 2019): unscripted build-dir resets and the teardown succeed
+    if (!(label in script) && /^infra:build-(reset:|clean$)/.test(label)) return buildDirOut(inputsOf(prompt).args);
     // 5.0.5 (ledger 2018): an unscripted comparison reads the registered maps
     if (!(label in script) && /^infra:ignored-diff:/.test(label))
       return fillPrograms(label, Object.assign({ status: "ok", reason: "compared" }, ignoredDiffOut(inputsOf(prompt).args)), prompt);
@@ -603,6 +605,114 @@ export function ignoredDiffOut(args) {
   const keys = [...new Set(Object.keys(ra).concat(Object.keys(rb)))].sort().filter((k) => ra[k] !== rb[k]);
   return { paths: keys.slice(0, 20), total: keys.length, error: null, args };
 }
+// 5.0.6 (ledger 2019): the build vars a role gets, one row per tool (kept
+// here apart from the workflow's BUILD_ENV_ROWS, so a drift there fails)
+export const BUILD_ROWS = [
+  ["CARGO_TARGET_DIR", "cargo-target"],
+  ["PYTHONPYCACHEPREFIX", "pycache"],
+  ["MYPY_CACHE_DIR", "mypy-cache"],
+  ["RUFF_CACHE_DIR", "ruff-cache"],
+  ["COVERAGE_FILE", "coverage"],
+  ["TURBO_CACHE_DIR", "turbo-cache"],
+];
+// the happy run's scratch dir (repo /r, task l42-add-thing)
+export const BUILD_SCRATCH = "/r/.claude/worktrees/fleet-l42-add-thing/scratch";
+export function buildEnvOf(key, scratch = BUILD_SCRATCH, nonce = NONCE) {
+  return Object.fromEntries(BUILD_ROWS.map(([k, sub]) => [k, scratch + "/build/" + nonce + "/" + key + "/" + sub]));
+}
+// the build vars as the shell assignments of a prefix (K='v' K='v'), as a
+// regex source
+export function buildAssignsRe(key) {
+  return Object.entries(buildEnvOf(key)).map(([k, v]) => (k + "='" + v + "'").replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")).join(" ");
+}
+export const TEST_ENV0 = { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" };
+// a role's test_env: TEST_ENV, its build vars, then any DSN
+export function roleTestEnv(key, extra) {
+  return Object.assign({}, TEST_ENV0, buildEnvOf(key), extra || {});
+}
+// the calls result.agents counts: the build-dir teardown runs after the
+// result is made (in main's finally, as the database teardown does)
+export function countedCalls(calls) {
+  return calls.filter((c) => c.label !== "infra:build-clean");
+}
+// 5.0.6 (ledger 2019): the emit-site check (v506_build_env and the
+// multi-round, auto and database scenarios run it).
+// The steps that run commands in the worktree without the build vars, and why.
+const EXEMPT = {
+  // plan mode: probes run in a scratch worktree, never in the worktree itself, before the build's first hasher
+  "role:scope-and-plan": "plan mode",
+  "role:plan-audit": "plan mode",
+  // plan mode, before the build's first hasher: its output is part of the baseline
+  "infra:format-plan": "plan mode",
+};
+const HOOKS_IN_WORKTREE = /^infra:(commit:r\d+|push(:p\d+)?)$/;
+const FORMAT_IN_SCRATCH = /^infra:format-(tests|code):/;
+
+export function prefixOf(env) {
+  return "env " + Object.entries(env).map(([k, v]) => k + "='" + String(v).replace(/'/g, "'\\''") + "'").join(" ") + " ";
+}
+
+// Every prompt that carries a test command, a test_env or runs the repo's
+// hooks in the worktree carries the exact prefix of a dir that a reset
+// emptied after the previous role and before it. A new site without it fails.
+export function buildEnvSites(out) {
+  const keysSeen = new Map();
+  let lastReset = null;
+  let checked = 0;
+  for (const c of out.calls) {
+    if (/^infra:build-reset:/.test(c.label)) {
+      lastReset = inputsOf(c.prompt).args.slice(3);
+      continue;
+    }
+    if (FORMAT_IN_SCRATCH.test(c.label)) {
+      // the fixer program runs pre-commit in a scratch checkout under scratch_dir
+      assert.match(c.prompt, /format_files\.py/, c.label);
+      continue;
+    }
+    if (!/^(role:|infra:)/.test(c.label) || /:fallback$|:retry$/.test(c.label)) continue;
+    const base = c.label.replace(/:replan$/, "");
+    let i = null;
+    try {
+      i = inputsOf(c.prompt);
+    } catch (e) {
+      continue;
+    }
+    const runsTests = i && ("test_cmd" in i || "test_env" in i);
+    const runsHooks = HOOKS_IN_WORKTREE.test(c.label);
+    if (!runsTests && !runsHooks) continue;
+    if (base in EXEMPT || /^infra:format-plan/.test(base)) {
+      assert.ok(!("test_env_prefix" in i), c.label + " is exempt and gets no prefix");
+      continue;
+    }
+    if (c.label.startsWith("role:fleet-pr-opener")) continue;
+    const env = runsHooks ? i.hook_env : i.test_env;
+    assert.ok(env && typeof env === "object", c.label + " has its env");
+    const m = /\/build\/[^/]+\/([^/]+)\/cargo-target$/.exec(env.CARGO_TARGET_DIR || "");
+    assert.ok(m, c.label + ": no build dir in " + JSON.stringify(env));
+    const key = m[1];
+    assert.deepEqual(Object.fromEntries(Object.entries(env).filter(([k]) => BUILD_ROWS.some((r) => r[0] === k))), buildEnvOf(key, i.scratch_dir || BUILD_SCRATCH), c.label);
+    if (runsHooks) assert.ok(c.prompt.includes(prefixOf(env).slice(4)), c.label + " runs its hooks with the prefix");
+    else {
+      assert.equal(i.test_env_prefix, prefixOf(env), c.label);
+      assert.match(i.test_env_note, /test_env_prefix/, c.label);
+    }
+    assert.ok(lastReset && lastReset.includes(key), c.label + ": no reset of " + key + " right before it");
+    if (!runsHooks || !keysSeen.has(key)) {
+      assert.ok(!keysSeen.has(key) || keysSeen.get(key) === base, c.label + " shares " + key + " with " + keysSeen.get(key));
+      keysSeen.set(key, base);
+    }
+    checked++;
+  }
+  return checked;
+}
+
+// 5.0.6 (ledger 2019): build_dir.py's output for its args, as a stub relays it
+export function buildDirOut(args) {
+  const r = { status: "ok", reason: args[0] === "reset" ? "reset" : "cleaned", args: args.slice() };
+  if (args[0] === "reset") r.dirs = args.slice(3).map((k) => args[1] + "/build/" + args[2] + "/" + k);
+  else Object.assign(r, { removed: true, bytes: 0 });
+  return r;
+}
 export function H(flat, suspicious) {
   const h = { files: {}, sections: {}, git: {}, symlinks: {}, ignored: {}, suspicious: suspicious || [] };
   for (const [k, v] of Object.entries(flat)) {
@@ -709,7 +819,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.5/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.6/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -869,6 +979,9 @@ export const PROGRAM_LABELS = [
   [/^infra:db-down$/, [["down", "db_down", K("db_down")]]],
   // 5.0.5 (ledger 2018): the capped list of changed ignored paths
   [/^infra:ignored-diff:/, [[null, "ignored_diff", K("ignored_diff")]]],
+  // 5.0.6 (ledger 2019): the per-role build dirs
+  [/^infra:build-reset:/, [[null, "build_dir", K("build_dir:reset")]]],
+  [/^infra:build-clean$/, [[null, "build_dir", K("build_dir:clean")]]],
 ];
 function pick(o, keys) {
   const x = {};

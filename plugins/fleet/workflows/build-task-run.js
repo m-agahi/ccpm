@@ -93,6 +93,8 @@ const INFRA_TIER = [
   ["infra:freeze-ref", "sonnet"],
   // 5.0.5 (ledger 2018)
   ["infra:ignored-diff:", "haiku"],
+  // 5.0.6 (ledger 2019): the per-role build dirs (reset; clean at teardown)
+  ["infra:build-", "haiku"],
 ];
 // INFRA_TIER_END
 // A haiku PATH check whose relay is broken runs once more on this tier.
@@ -106,7 +108,7 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with (bumped every release; since
 // 4.0.0, 1993, the shipped programs are read from its plugin cache directory
 // only; since 5.0.0, R1, the role files too).
-const FLEET_VERSION = "5.0.5";
+const FLEET_VERSION = "5.0.6";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with; a mismatch after an
 // update usually means this script is the stale one.
@@ -1749,6 +1751,7 @@ function relayDigestOk(r, keys, name) {
 // PROGRAM_SHA256_BEGIN
 const PROGRAM_SHA256 = {
   "branch_scan": "fdf128542f76e119afa892f74316746ae761ccdf10d096f5274042da52d473b5",
+  "build_dir": "7406264beafd58145a4035296636e7ab94dd4e339c58aaabf84584d7df111866",
   "callers": "dc5b924775246e16dc8d3d8c6e913e77463ce342b5054cacebc298d394001575",
   "changed_defs": "1a30e9ca3202f6a434911aa2ecb3e5b446194f95e414b6caa4a4c3279f96c4d4",
   "db_down": "1a9cd8302f54116e1c9691ed6a86a6f19e132458da55f062286fd03e63a07cd3",
@@ -1794,15 +1797,15 @@ function programTable() {
 // against the dispatched role and this table (roleFileProblem).
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
-  "fleet-code-judge": "ef70e362d62eee492cc5fbc6c029b95059c604a28836dbdf25ce15dd497acebe",
-  "fleet-coder": "77695df59e32ce33c9fddb201ac705c3313c3a0e17f80aa0b14a673df6e5065d",
+  "fleet-code-judge": "6f1bcc8e2be3e31791e2a2323d7c745ba48cb548a9d5289a419f1fe79014540a",
+  "fleet-coder": "eb3fcee6f2514e610bc29e9832945105dbf61fc4265c90cdf92dc60d48995bbf",
   "fleet-intent-judge": "03283fc805f57bcf22a6448fc43b8ead05983e94de1b05563f3e50c4a7837a1e",
   "fleet-pr-opener": "8c15b83cea3191649e0f15f577fa76cfaff13f00dfb3f3884aa05438d7fcbb75",
-  "fleet-test-judge": "a6e5814eeba434ca95e08d0c21c9b516da23fcd8ff84c2fc2447a7fc57c93b2e",
-  "fleet-test-writer": "e048fefa56638821a25e0d748de6bd8d6976c8dff2c66798b5856a9c086cf8b2",
-  "gate-change-nonweakening-sweep": "f22759af37de2d5df1cc47fa532197ef42ed37bd31f13c9fc52cc142a37040b5",
+  "fleet-test-judge": "0b288f9221703e5534ba13b8ba31d242ecdd3663ceca12dba0d63fd57c4a301a",
+  "fleet-test-writer": "ea3a3490bd986a1bf90bf01a8494620b819959d1bb4f1247d914e8b1d495914d",
+  "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
   "plan-audit": "7578a832d1c69147dbb467dab40721af5105c14a704f989acf89cc03a6c7f8cf",
-  "pr-review": "0fc7353562f4c0555bc69b116988dbac1343da80ff260f6c5cab14637c1715e9",
+  "pr-review": "d7e615a662a9a25fa7cf3b7d87146ac784bf5f0a7282ecc4bb649d0486103859",
   "scope-and-plan": "b2c8c6a24e1157e0f6217fc5c3af185d3e9d6928ee3091cbfd5611eb66048143"
 };
 // ROLE_SHA256_END
@@ -1929,6 +1932,8 @@ const PROGRAM_SLOTS = [
   [/^infra:db-down$/, [["down", "db_down"]]],
   // 5.0.5 (ledger 2018)
   [/^infra:ignored-diff:/, [[null, "ignored_diff"]]],
+  // 5.0.6 (ledger 2019)
+  [/^infra:build-/, [[null, "build_dir"]]],
 ];
 // 5.0.2 (ledger 2006): the keys each shipped program prints, bar program and
 // digest, as "<name>" or "<name>:<mode>" where the printed keys depend on the
@@ -1973,6 +1978,9 @@ const PROGRAM_KEYS = {
   "db_down": ["removed", "absent", "error", "args"],
   // 5.0.5 (ledger 2018)
   "ignored_diff": ["paths", "total", "error", "args"],
+  // 5.0.6 (ledger 2019)
+  "build_dir:reset": ["dirs", "args"],
+  "build_dir:clean": ["removed", "bytes", "args"],
 };
 // plan_hash and plan_ref print no digest (the script checks them against the plan)
 const NO_DIGEST_PROGRAMS = ["plan_hash", "plan_ref"];
@@ -2088,6 +2096,8 @@ const PROGRAM_OUT = {
   },
   db_down: { removed: BOOL, absent: BOOL, error: STR_OR_NULL, args: STRS, digest: STR },
   ignored_diff: { paths: STRS, total: { type: ["integer", "null"] }, error: STR_OR_NULL, args: STRS, digest: STR },
+  // 5.0.6 (ledger 2019)
+  build_dir: { dirs: STRS, removed: BOOL, bytes: INT, args: STRS, digest: STR },
   hasher: {},
 };
 // {used: the label's [slot, program] pairs whose program the prompt runs,
@@ -3113,6 +3123,93 @@ const TEST_ENV = Object.freeze({ PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "
 const TEST_ENV_NOTE =
   "test_env: set these environment variables for every run of the frozen tests and the suite (frozen-test red check included), so no bytecode or pytest cache is written or read. The workflow deletes all bytecode before every hash check and code-judge run.";
 
+// 5.0.6 (ledger 2019): build output and caches outside the worktree. One row
+// per tool that writes ignored build output or a cache into the repo by
+// default: [env var, path under the role's own build dir]. Every role that
+// builds, tests or runs hooks in the worktree gets these vars (in test_env, or
+// in the hook env of the commit step and the push), each role and round its
+// own dir <scratch>/build/<nonce>/<key>, emptied by build_dir.py right before
+// it runs (with every earlier step's dir: one step's output at a time). The hasher check is unchanged: a command run without them writes
+// in the worktree and stops the run as in 5.0.5. Adding a tool is one row.
+const BUILD_ENV_ROWS = Object.freeze([
+  ["CARGO_TARGET_DIR", "cargo-target"], // cargo: target/
+  ["PYTHONPYCACHEPREFIX", "pycache"], // CPython >= 3.8: every __pycache__ (read from there too)
+  ["MYPY_CACHE_DIR", "mypy-cache"], // mypy: .mypy_cache/
+  ["RUFF_CACHE_DIR", "ruff-cache"], // ruff: .ruff_cache/
+  ["COVERAGE_FILE", "coverage"], // coverage.py: .coverage (a file in the role dir)
+  ["TURBO_CACHE_DIR", "turbo-cache"], // turborepo: .turbo/cache/
+]);
+// Not TMPDIR: the scratch dir is inside the user's checkout, so a temp dir
+// there would make git, cargo, pytest and node find that checkout from a
+// test's temp files; /tmp is outside the worktree already.
+const BUILD_ENV_NOTE =
+  "test_env_prefix: test_env as a shell prefix. Its build vars (" + BUILD_ENV_ROWS.map((r) => r[0]).join(", ") +
+  ") point build output and caches at this role's own dir outside the worktree, emptied right before you started. Run EVERY build, test or hook command in the worktree as <test_env_prefix><command> (with a non-empty test_cmd.env: `env <test_cmd.env> ` in front of it); a command run without it writes target/, __pycache__ or a cache in the worktree, and the workflow stops the run there.";
+function buildDirOf(key) {
+  return state.buildScratch + "/build/" + safeName(state.nonce) + "/" + key;
+}
+function buildEnv(key) {
+  const o = {};
+  for (const [k, sub] of BUILD_ENV_ROWS) o[k] = buildDirOf(key) + "/" + sub;
+  return o;
+}
+// the exact prefix a role puts in front of every command: env K='v' ... + space
+function envPrefix(env) {
+  return "env " + hookEnvPrefix(env);
+}
+// a role's test_env, its prefix and the note: TEST_ENV, the build vars of
+// `key` (its own dir), the DSN of its database when the run has one
+function roleEnv(consumer, key) {
+  const e = testEnvFor(consumer, key);
+  return { test_env: e, test_env_prefix: envPrefix(e), test_env_note: testEnvNote() + " " + BUILD_ENV_NOTE };
+}
+function buildDirPrompt(inputs) {
+  const mode = inputs.args[0];
+  return (
+    "Infra step of the fleet build workflow: " + (mode === "reset" ? "empty this run's per-role build dirs (outside the worktree) before the role runs" : "delete this run's build dirs (outside the worktree)") +
+    ". No other change: never touch the worktree, never commit.\n" +
+    "Inputs: " + JSON.stringify(inputs) + "\n" +
+    "Run this one command exactly as written, unmodified; run nothing else:\n" +
+    progCmd("build_dir", inputs.args) + "\n" +
+    "It prints one JSON object " + printsKeys("build_dir:" + mode) + ". Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, " + returnKeys("build_dir:" + mode) + "}."
+  );
+}
+// Empty the build dirs of `keys` right before their role runs. Counted in
+// state.agents, never against the cap (bounded by the role dispatches). Any
+// failure stops the run: a dir that may hold old output is never handed out.
+async function resetBuild(tag, keys, phaseName) {
+  const label = "infra:build-reset:" + tag;
+  const args = ["reset", state.buildScratch, safeName(state.nonce)].concat(keys);
+  state.buildResets++;
+  state.agents++;
+  const ic = infraCall(label, buildDirPrompt({ args }), { schema: INFRA_SCHEMA, phase: phaseName });
+  const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
+  if (!r || r.status !== "ok") halt("failed", label + " returned " + (r ? r.status + ": " + (r.reason || "no reason") : "no result") + "; the build dirs were not emptied");
+  requireProgram(r, "build_dir", label);
+  if (!relayDigestOk(r, progKeys("build_dir:reset"), "build_dir") || canonical(r.args) !== canonical(args) || canonical(r.dirs) !== canonical(keys.map(buildDirOf)))
+    halt("failed", label + ": the relayed result does not match the program's digest or its arguments");
+}
+// At the end of every run that reset a build dir: delete <scratch>/build
+// (all runs' dirs of this worktree). Soft: a failure is logged, never a stop.
+async function buildTeardown() {
+  const sc = state.buildScratch;
+  state.buildScratch = null;
+  if (!sc || !state.buildResets) return;
+  const label = "infra:build-clean";
+  const args = ["clean", sc];
+  try {
+    state.agents++;
+    const ic = infraCall(label, buildDirPrompt({ args }), { schema: INFRA_SCHEMA, phase: "Cleanup" });
+    const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
+    if (r && r.status === "ok" && relayDigestOk(r, progKeys("build_dir:clean"), "build_dir") && canonical(r.args) === canonical(args) && Number.isInteger(r.bytes))
+      gate("build dirs " + sc + "/build " + (r.removed ? "removed (" + r.bytes + " bytes)" : "already gone"));
+    else gate("build dirs " + sc + "/build not confirmed removed" + (r && r.reason ? " (" + r.reason + ")" : ""));
+  } catch (e) {
+    gate("build dirs " + sc + "/build: cleanup failed (" + String((e && e.message) || e) + ")");
+  }
+}
+
 function purgePrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: delete Python bytecode and pytest caches. No other change: never touch tracked files, never commit.\n" +
@@ -3626,6 +3723,10 @@ const state = {
   // 3.1.1: the repo the PATH re-checks name, and their count
   repo: null,
   pathChecks: 0,
+  // 5.0.6 (ledger 2019): build-dir resets, outside the cap like path checks
+  buildResets: 0,
+  // the run's scratch dir once the layout is known (its build dirs; teardown)
+  buildScratch: null,
   // 4.0.0 (1993): the shipped programs' directory, resolved in this run's first agent
   scriptsDir: null,
   // 5.0.0 (R1): its sibling roles dir
@@ -3661,7 +3762,7 @@ function halt(status, msg, stopGate) {
 
 // the agents the cap counts: every dispatch but the PATH re-checks (3.1.1)
 function capped() {
-  return state.agents - state.pathChecks;
+  return state.agents - state.pathChecks - state.buildResets;
 }
 
 function reserve(n, what) {
@@ -3938,6 +4039,10 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
   return Object.assign({}, r, { hashes: Object.assign({}, h, { ignored: pseudo }) });
 }
 
+// 5.0.6 (ledger 2019): the likely cause, after the last ignored path named.
+// Text only: the stop and its gate are the 5.0.5 ones.
+const BUILD_ENV_HINT =
+  " (likely cause: a build or test command ran without the fleet build env, test_env_prefix, so build output or a cache such as target/ or __pycache__ changed in the worktree)";
 // 5.0.5 (ledger 2018): `list` (violation texts) with IGNORED_CHANGED replaced
 // by one "ignored path written: <path>" per path ignored_diff.py lists between
 // the hasher maps a and b (capped). The stop is decided already: a comparison
@@ -3958,11 +4063,12 @@ async function explainIgnored(list, a, b, tag, phaseName) {
     if (ok) {
       const names = r.paths.map((p) => "ignored path written: " + p);
       if (r.total > r.paths.length) names.push("ignored path written: (" + (r.total - r.paths.length) + " more)");
+      names[names.length - 1] += BUILD_ENV_HINT;
       return list.slice(0, i).concat(names, list.slice(i + 1));
     }
     why = !r ? "no result" : !relayed ? "the relay does not match the program's digest" : typeof r.error === "string" && r.error ? r.error : "no path listed";
   }
-  return list.slice(0, i).concat(["ignored path written: (the ignored files changed: " + va.split("/")[1] + " -> " + vb.split("/")[1] + " files; the path list is unavailable: " + why + ")"], list.slice(i + 1));
+  return list.slice(0, i).concat(["ignored path written: (the ignored files changed: " + va.split("/")[1] + " -> " + vb.split("/")[1] + " files; the path list is unavailable: " + why + ")" + BUILD_ENV_HINT], list.slice(i + 1));
 }
 
 async function infra(label, prompt, phaseName, agentType) {
@@ -6053,6 +6159,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   } else gate("verify: HEAD is plan_commit " + ref.plan_commit + "; plan hash matches");
 
   const common = { project, worktree: mainWt, branch, default_branch: defaultBranch, scratch_dir: lay.scratch };
+  // 5.0.6 (ledger 2019): the per-role build dirs live under this scratch dir
+  state.buildScratch = lay.scratch;
   const planCtx = { plan_path: ref.plan_path };
   const planFacts = {
     allowed_additions: ref.plan_facts.allowed_additions,
@@ -6352,10 +6460,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           continue;
         }
         const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
+        const pushKey = "push" + (pushes > 1 ? "-p" + pushes : "");
+        await resetBuild("push" + (pushes > 1 ? ":p" + pushes : ""), [pushKey], "PR");
         await pathRecheck("push" + (pushes > 1 ? ":p" + pushes : ""), "PR");
         const push = await infra(
           pushLabel,
-          pushPrompt(Object.assign({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug }, hookEnv() ? { hook_env: hookEnv() } : {})),
+          pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug, hook_env: hookEnv(pushKey) }),
           "PR",
         );
         if (push.push_result === "hook_rejected") {
@@ -6501,12 +6611,21 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   let freezeTree = null;
   let codeTree = null;
 
+  // 5.0.6 (ledger 2019): a writer's build-dir key (null: the short path's one
+  // writer); parallel writers never share one
+  function writerKey(c, n) {
+    return "w-" + (c ? safeName(c.id) : "short") + "-r" + n;
+  }
+
   // One writer round, then the ownership check: HEAD did not move, every
   // changed path (tree delta from the round start, plus any hasher-map key)
   // is a test file of a criterion pending this round and was reported in its
   // writer's `files`, and no writer reports another criterion's file.
   async function writerRound(n, pending, codeFindings) {
     const pre = last || (await hasher("hasher:pre-writers:r" + n, mainWt, hashedFiles, "Tests"));
+    // 5.0.6 (ledger 2019): each writer's own build dir, emptied first; every
+    // reset comes before its role's PATH re-check, which stays right before it
+    await resetBuild("writers:r" + n, shortPath ? [writerKey(null, n)] : pending.map((p) => writerKey(p.criterion, n)), "Tests");
     await pathRecheck("writers:r" + n, "Tests");
     if (shortPath) await shortWriter(n, pending, codeFindings);
     else await fullWriters(n, pending, codeFindings);
@@ -6530,8 +6649,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         test_files: files,
         short_path_note: SHORT_WRITER_NOTE,
         test_cmd: planFacts.test_cmd,
-        test_env: testEnvFor("w_short"),
-        test_env_note: testEnvNote(),
+        ...roleEnv("w_short", writerKey(null, n)),
         routed_findings: pending.flatMap((p) => p.findings),
       },
       codeFindings ? { code_judge_findings: codeFindings.filter((f) => ids.indexOf(f.criterion) >= 0) } : {}),
@@ -6589,8 +6707,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
               criterion: writerCriterion(c),
               test_files: c.test_files,
               test_cmd: planFacts.test_cmd,
-              test_env: testEnvFor("w_" + c.id),
-              test_env_note: testEnvNote(),
+              ...roleEnv("w_" + c.id, writerKey(c, n)),
               routed_findings: p.findings,
             },
             codeFindings ? { code_judge_findings: codeFindings.filter((f) => f.criterion === c.id) } : {}),
@@ -6682,11 +6799,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         code_tree: codeTree,
         writer_outputs: judgeFirst ? testable.map((c) => writerOut[c.id]).filter(Boolean) : roundOut,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
-        test_env: testEnvFor("tjudge"),
-        test_env_note: testEnvNote(),
+        ...roleEnv("tjudge", "tjudge-r" + n),
       });
       // every round of a fix_tests re-entry carries the code-judge context
       if (codeFindings) judgeInputs.code_judge_findings = codeFindings;
+      await resetBuild("test-judge:r" + n, ["tjudge-r" + n], "Tests");
       await pathRecheck("test-judge:r" + n, "Tests");
       const jt = await judged("fleet-test-judge", "role:fleet-test-judge:r" + n, "test-judge:r" + n, judgeInputs, mainWt, "Tests", last, hashedFiles);
       const tj = jt.r;
@@ -6828,11 +6945,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       code_tree: codeTree,
       plan_commit: ref.plan_commit,
       code_base_ref: codeBaseRef,
-      test_env: testEnvFor("coder"),
-      test_env_note: testEnvNote(),
+      ...roleEnv("coder", "coder-r" + m),
     });
     // the role check runs after the hash check: a hash violation is reported
     // even when the coder's output is also malformed or not ok
+    await resetBuild("coder:r" + m, ["coder-r" + m], "Code");
     await pathRecheck("coder:r" + m, "Code");
     const coderIn = Object.assign({}, codeInputs, { routed_findings: coderFindings });
     let coder = await callRole("fleet-coder", "role:fleet-coder:r" + m, coderIn, "Code", null, true, true);
@@ -6927,6 +7044,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // judge-only for this round. The check is read-only: the judge's
     // fingerprint (taken at the post-coder hash) catches any change.
     const judgeObligations = await checkScripts("infra:check-scripts:r" + m, planFacts.repo_obligations, mainWt, "Code");
+    await resetBuild("code-judge:r" + m, ["cjudge-r" + m], "Code");
     await pathRecheck("code-judge:r" + m, "Code");
     const jc = await judged(
       "fleet-code-judge",
@@ -6941,7 +7059,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         held_out_results: HELD_OUT_NOT_RUN,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
         repo_obligations: judgeObligations,
-        test_env: testEnvFor("cjudge"),
+        ...roleEnv("cjudge", "cjudge-r" + m),
       }),
       mainWt,
       "Code",
@@ -7025,10 +7143,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
 
     // the commit step: the first commit of this build, with the repo's hooks
     const subject = commitsMade ? fixSubject(names.taskId, m) : commitSubject(names.taskId, names.slug);
+    await resetBuild("commit:r" + m, ["commit-r" + m], "Code");
     await pathRecheck("commit:r" + m, "Code");
     const cs = await infra(
       "infra:commit:r" + m,
-      commitStepPrompt(Object.assign({
+      commitStepPrompt({
         main_worktree: mainWt,
         branch,
         expected_head: expectedHead,
@@ -7036,7 +7155,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         subject,
         // the hooks path frozen at freeze (null: git's default hooks dir)
         hooks_path: frozen.git["core.hooksPath"] && frozen.git["core.hooksPath"] !== "UNSET" ? frozen.git["core.hooksPath"] : null,
-      }, hookEnv() ? { hook_env: hookEnv() } : {})),
+        // 5.0.6 (ledger 2019): the build vars of this commit's own dir (and the DSN)
+        hook_env: hookEnv("commit-r" + m),
+      }),
       "Code",
     );
     if (cs.staged_tree !== codeTree)
@@ -7128,15 +7249,17 @@ async function reviewStep(k, ctx) {
       mode: "self-authored",
       fleet: true,
     };
-    // 4.0.0 (1981): the review runs repo tests against its own database
-    Object.assign(inputs, dbInputs("review"));
+    // 4.0.0 (1981): the review runs repo tests against its own database;
+    // 5.0.6 (ledger 2019): the review and the sweep each get their own build
+    // dir (test_env and its prefix), with or without a database
     const pre = await hasher("hasher:pre-review:v" + k, ctx.mainWt, ctx.hashedFiles, "Review");
     if (pre.fingerprint.head !== ctx.approvedSha)
       halt("needs_human", "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha, "review");
     // 3.1.2: the review and the sweep run repo tests
+    await resetBuild("pr-review:v" + k, ["review-v" + k], "Review");
     await pathRecheck("pr-review:v" + k, "Review");
     // 5.0.0 (R3): pr-review only (the sweep keeps the shared inputs)
-    const reviewIn = Object.assign({}, inputs, {
+    const reviewIn = Object.assign({}, inputs, roleEnv("review", "review-v" + k), {
       allowed_additions: stripHeldOut(ctx.allowedAdditions === undefined ? null : ctx.allowedAdditions),
       prior_findings: stripHeldOut(ctx.priorFindings || []),
     });
@@ -7150,12 +7273,13 @@ async function reviewStep(k, ctx) {
     const triggers = changedPaths.filter((p) => GATE_PATH_RE.test(p));
     if (r.touches_gate === true || triggers.length) {
       gate("review v" + k + ": sweep triggered (" + (r.touches_gate === true ? "touches_gate" : "") + (triggers.length ? " paths " + triggers.join(", ") : "") + ")");
+      await resetBuild("sweep:v" + k, ["sweep-v" + k], "Review");
       await pathRecheck("sweep:v" + k, "Review");
       const js = await judged(
         "gate-change-nonweakening-sweep",
         "role:gate-change-nonweakening-sweep:v" + k,
         "sweep:v" + k,
-        inputs,
+        Object.assign({}, inputs, roleEnv("review", "sweep-v" + k)),
         ctx.mainWt,
         "Review",
         jr.state,
@@ -7667,10 +7791,11 @@ function dbUsersOk(users, dbs) {
 }
 // test_env for one consumer: TEST_ENV, plus the DSN of its own database when
 // the run has a test database. Never the shared object (one DSN per role).
-function testEnvFor(consumer) {
-  if (!state.db) return TEST_ENV;
-  const o = Object.assign({}, TEST_ENV);
-  o[state.db.env] = dbDsn(consumer);
+// 5.0.6 (ledger 2019): with `key`, the build vars of that role's own dir too
+function testEnvFor(consumer, key) {
+  if (!state.db && !key) return TEST_ENV;
+  const o = Object.assign({}, TEST_ENV, key ? buildEnv(key) : {});
+  if (state.db) o[state.db.env] = dbDsn(consumer);
   return o;
 }
 function testEnvNote() {
@@ -7682,11 +7807,11 @@ function testEnvNote() {
 function dbInputs(consumer) {
   return state.db ? { test_env: testEnvFor(consumer), test_env_note: testEnvNote() } : {};
 }
-// the env the repo's hooks get in the commit step and the push
-function hookEnv() {
-  if (!state.db) return null;
-  const o = {};
-  o[state.db.env] = dbDsn("hooks");
+// the env the repo's hooks get in the commit step and the push: the build
+// vars of `key` (5.0.6; never PYTEST_ADDOPTS, see 5.0.4) and the run's DSN
+function hookEnv(key) {
+  const o = buildEnv(key);
+  if (state.db) o[state.db.env] = dbDsn("hooks");
   return o;
 }
 function hookEnvPrefix(he) {
@@ -7869,6 +7994,8 @@ async function main(input) {
   try {
     return await (mode === "plan" ? planMode(input, input.date) : mode === "probe" ? probeMode(input) : buildMode(input, input.date));
   } finally {
+    // 5.0.6 (ledger 2019): the per-role build dirs (only when one was reset)
+    await buildTeardown();
     await dbTeardown();
   }
 }

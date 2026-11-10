@@ -58,8 +58,8 @@ test("4.0.0 1993 AC-2 (4.0.1): every program ships as scripts/<name>.py and the 
   assert.ok(!/_PY_BEGIN|_PY_END/.test(SOURCE), "no *_PY markers left in the workflow");
   // 22 in S1; S4 adds parked (1986); S3 adds push_probe (1985);
   // S5 adds test_db_decl, db_sweep, db_up, db_down (1981); 5.0.3 adds plan_dsn (2010);
-  // 5.0.5 adds ignored_diff (2018)
-  assert.equal(PROGRAMS.length, 30);
+  // 5.0.5 adds ignored_diff (2018); 5.0.6 adds build_dir (2019)
+  assert.equal(PROGRAMS.length, 31);
   const files = readdirSync(SCRIPTS_SRC).filter((f) => f.endsWith(".py")).sort();
   assert.deepEqual(files, PROGRAMS.map(([n]) => n + ".py").sort(), "no extra and no missing file");
   for (const [name, sha] of PROGRAMS) {
@@ -117,7 +117,7 @@ test("4.0.0 1993: gen.mjs --check passes on the shipped files and fails on a cha
 test("4.0.0 1993: FLEET_VERSION is a semver string and the scripts_dir shape names it", () => {
   const m = /^const FLEET_VERSION = "(\d+\.\d+\.\d+)";$/m.exec(SOURCE);
   assert.ok(m, "FLEET_VERSION constant");
-  assert.equal(m[1], "5.0.5");
+  assert.equal(m[1], "5.0.6");
   assert.match(SCRIPTS_DIR, new RegExp("/fleet/" + m[1].replace(/\./g, "\\.") + "/scripts$"));
 });
 
@@ -261,6 +261,12 @@ test("4.0.0 1993: a wrong program at every program-running step stops the run (t
       assert.ok(out.plan.result.gate_log.some((l) => /^push access unknown: infra:push-probe: did not run the shipped program push_probe/.test(l)), label);
       continue;
     }
+    if (/^infra:build-clean$/.test(label)) {
+      // 5.0.6 (ledger 2019): the build-dir teardown is soft: logged, never a stop
+      assert.ok(okish, label + ": " + out.result.reason);
+      assert.ok(out.result.gate_log.some((l) => /build dirs .*\/build not confirmed removed/.test(l)), label);
+      continue;
+    }
     if (/^infra:load-parked$/.test(label)) {
       // 4.0.0 (1986, S4): the parked-run read is soft: its data is ignored, never used
       assert.ok(out.logs.some((l) => /parked draft ignored \(did not run the shipped program parked/.test(l)), label);
@@ -302,23 +308,23 @@ function precommitScript() {
 test("4.0.0 1993 AC-4: a scripts_dir outside the plugin cache halts at the first agent with stop_gate contract", async () => {
   const bad = [
     ["/tmp/x", ["/tmp/x"]],
-    ["fleet/5.0.5/scripts", ["fleet/5.0.5/scripts"]],
+    ["fleet/5.0.6/scripts", ["fleet/5.0.6/scripts"]],
     ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts", ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts"]],
-    ["/home/u/../x/fleet/5.0.5/scripts", ["/home/u/../x/fleet/5.0.5/scripts"]],
-    ["/home/u//fleet/5.0.5/scripts", ["/home/u//fleet/5.0.5/scripts"]],
-    ["/home/u/a b/fleet/5.0.5/scripts", ["/home/u/a b/fleet/5.0.5/scripts"]],
+    ["/home/u/../x/fleet/5.0.6/scripts", ["/home/u/../x/fleet/5.0.6/scripts"]],
+    ["/home/u//fleet/5.0.6/scripts", ["/home/u//fleet/5.0.6/scripts"]],
+    ["/home/u/a b/fleet/5.0.6/scripts", ["/home/u/a b/fleet/5.0.6/scripts"]],
     // security review: exactly $HOME/.claude/plugins/cache/<marketplace>/fleet/<version>/scripts
-    ["/home/u/x/fleet/5.0.5/scripts", ["/home/u/x/fleet/5.0.5/scripts"]],
-    ["/home/v/.claude/plugins/cache/m/fleet/5.0.5/scripts", ["/home/v/.claude/plugins/cache/m/fleet/5.0.5/scripts"]],
-    ["/home/u/.claude/plugins/cache/a/b/fleet/5.0.5/scripts", ["/home/u/.claude/plugins/cache/a/b/fleet/5.0.5/scripts"]],
-    ["/home/u/.claude/plugins/cache/../fleet/5.0.5/scripts", ["/home/u/.claude/plugins/cache/../fleet/5.0.5/scripts"]],
-    ["/home/u/.claude/plugins/cache/.x/fleet/5.0.5/scripts", ["/home/u/.claude/plugins/cache/.x/fleet/5.0.5/scripts"]],
+    ["/home/u/x/fleet/5.0.6/scripts", ["/home/u/x/fleet/5.0.6/scripts"]],
+    ["/home/v/.claude/plugins/cache/m/fleet/5.0.6/scripts", ["/home/v/.claude/plugins/cache/m/fleet/5.0.6/scripts"]],
+    ["/home/u/.claude/plugins/cache/a/b/fleet/5.0.6/scripts", ["/home/u/.claude/plugins/cache/a/b/fleet/5.0.6/scripts"]],
+    ["/home/u/.claude/plugins/cache/../fleet/5.0.6/scripts", ["/home/u/.claude/plugins/cache/../fleet/5.0.6/scripts"]],
+    ["/home/u/.claude/plugins/cache/.x/fleet/5.0.6/scripts", ["/home/u/.claude/plugins/cache/.x/fleet/5.0.6/scripts"]],
     // two hits: never guess
-    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/fleet/5.0.5/scripts"]],
+    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/fleet/5.0.6/scripts"]],
     // no hit
     [null, []],
     // the directory used is not the hit
-    ["/home/v/.claude/plugins/cache/n/fleet/5.0.5/scripts", [SCRIPTS_DIR]],
+    ["/home/v/.claude/plugins/cache/n/fleet/5.0.6/scripts", [SCRIPTS_DIR]],
   ];
   for (const [dir, hits] of bad) {
     const s = happy();
@@ -339,7 +345,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   assert.equal(second.result.status, "awaiting_confirmation", second.result.reason);
   for (const o of [first, second]) {
     assert.equal(o.labels[0], "preflight");
-    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/fleet/5.0.5/scripts;'));
+    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/fleet/5.0.6/scripts;'));
     assert.ok(o.calls[0].prompt.includes("sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py"));
   }
   const ref = s.__store[PC];
@@ -348,7 +354,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   // build mode resolves it again in its own first agent
   const b = await run(happy(), ARGS);
   assert.equal(b.build.labels[0], "preflight");
-  assert.match(b.build.calls[0].prompt, /fleet\/5\.0\.5\/scripts/);
+  assert.match(b.build.calls[0].prompt, /fleet\/5\.0\.6\/scripts/);
 });
 
 test("4.0.0 1993 AC-4: a path_check run from another directory (wrong self-hash) halts at preflight", async () => {
@@ -639,7 +645,7 @@ test("4.0.0 security 1: scripts_dir must be its own realpath and no symlink; the
 test("4.0.0 security 1: the probe command, run for real, reports a symlinked scripts dir and the program hashes", { skip: !HAVE_PY }, async () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-probe-"));
   try {
-    const real = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.5", "scripts");
+    const real = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.6", "scripts");
     mkdirSync(real, { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(real, n + ".py"));
     const cmd = await PREFLIGHT_PROBE();
@@ -653,9 +659,9 @@ test("4.0.0 security 1: the probe command, run for real, reports a symlinked scr
     for (const [n] of PROGRAMS) assert.ok(lines.includes(programSha(n) + "  " + real + "/" + n + ".py"), n);
     // the version dir replaced by a symlink to a copy elsewhere
     const other = join(home, "other");
-    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.5"), other, { recursive: true });
-    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.5"), { recursive: true });
-    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.5"));
+    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.6"), other, { recursive: true });
+    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.6"), { recursive: true });
+    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.6"));
     lines = run1();
     assert.ok(lines.includes("real=" + join(other, "scripts")), lines.join("\n"));
   } finally {

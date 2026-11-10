@@ -966,6 +966,21 @@ bytecode); the freeze and post-coder checks act on it. The writers, both judges 
 the frozen tests. The code judge also gets `hash_recheck`
 (`{"<map>/<key>": {frozen, current, match}}`) for its report; the script's own comparison decides.
 
+Since 5.0.6 (ledger 2019) build output and caches go to a per-role dir outside the worktree. The
+workflow's `BUILD_ENV_ROWS` table (one row per tool: `CARGO_TARGET_DIR`, `PYTHONPYCACHEPREFIX`,
+`MYPY_CACHE_DIR`, `RUFF_CACHE_DIR`, `COVERAGE_FILE`, `TURBO_CACHE_DIR`; not `TMPDIR`) points each var
+at `<scratch>/build/<nonce>/<key>/`, one key per role and round (`w-<criterion>-r<n>`,
+`w-short-r<n>`, `tjudge-r<n>`, `coder-r<m>`, `cjudge-r<m>`, `review-v<k>`, `sweep-v<k>`, and for
+the hooks `commit-r<m>`, `push`). The writers, both judges, the coder, pr-review and the sweep get
+these vars in `test_env` and as `test_env_prefix`, the exact shell prefix they put in front of every
+build, test or hook command; the commit step and the push run the repo's hooks with them by
+script. `build_dir.py reset` (`infra:build-reset:<step>`) deletes `<scratch>/build` and creates the
+step's dirs empty right before its role runs, so no role reads output another role or an earlier
+run left there, and a run holds one step's build output at a time; `build_dir.py clean`
+(`infra:build-clean`) deletes `<scratch>/build` at the end of every build run. The hasher check is
+unchanged: a command run without the prefix that writes `target/` in the worktree stops the run as
+in 5.0.5, and the stop text names the likely cause.
+
 ### Repo obligations and test_cmd
 
 The planner scans the repo's push and CI gates: `.pre-commit-config.yaml` (every stage, `pre-push`

@@ -17,7 +17,7 @@ A green tree is consistent with unlimited weakening. A suite that asserts "the g
 
 ## Inputs
 
-`{pr_number, pr_url, repo, base_ref, head_sha, worktree, scratch_dir, criteria, repo_obligations, changed_paths, mode, fleet: true}`, plus `test_env` and `test_env_note` when the repo declares a throwaway test database. `base_ref` is the shipped side, `head_sha` the candidate. Use the DSN in `test_env` as given, in the scratch worktrees too.
+`{pr_number, pr_url, repo, base_ref, head_sha, worktree, scratch_dir, criteria, repo_obligations, changed_paths, mode, fleet: true}`, plus `test_env`, `test_env_prefix` and `test_env_note` (`test_env` holds a DSN only when the repo declares a throwaway test database). `base_ref` is the shipped side, `head_sha` the candidate. Use the DSN in `test_env` as given, in the scratch worktrees too. Run EVERY build or test command, in the worktree or a scratch worktree, as `<test_env_prefix><command>` (`test_env` as a shell prefix: its build vars keep `target/`, `__pycache__` and other caches out of the worktree; a command without it that writes them there stops the run).
 
 ## Rules
 

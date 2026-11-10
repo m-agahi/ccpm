@@ -83,6 +83,8 @@ const WANT = [
   [/^infra:(fleet-scan|purge-bytecode|review-cleanup|ledger-|yaadgaar-|comments-)/, "sonnet"],
   // 4.0.0 S5 (1987, 1981): writes with digest-checked relays
   [/^infra:freeze-ref/, "sonnet"],
+  // 5.0.6 (ledger 2019): the build-dir program, mechanical
+  [/^infra:build-/, "haiku"],
 ];
 function wantTier(label) {
   const w = WANT.find(([re]) => re.test(label));
@@ -500,8 +502,11 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.plan.calls.length, 17, out.plan.labels.join(", "));
   assert.equal(out.planResult.agents, 17);
-  assert.equal(out.build.calls.length, 50, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 50);
+  // 5.0.6 (ledger 2019): + 7 build-dir resets (writers, test judge, coder,
+  // code judge, commit, push, pr-review) and the teardown, which runs after
+  // the result is made
+  assert.equal(out.build.calls.length, 58, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 57);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -526,10 +531,10 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "5.0.5");
+  assert.equal(p.fleet_version, "5.0.6");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
-  assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/5.0.5/scripts"), "no scripts dir or PATH check sealed");
+  assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/5.0.6/scripts"), "no scripts dir or PATH check sealed");
   assert.ok(!text.includes("DISPATCH"), "no role text or tier sealed");
   assert.deepEqual(Object.keys(out.result.cumulative).sort(), ["agents", "replans", "runs"]);
   const b = await runOne(s, BUILD(out.result.plan_ref));
@@ -568,7 +573,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     const b = await runOne(s, BUILD(plan.result.plan_ref, { fresh_preflight: fresh }));
     noUnscripted(b);
     assert.equal(b.result.status, "ok", b.result.reason);
-    assert.equal(b.calls.length, 50);
+    // 5.0.6 (ledger 2019): 50 + 7 build-dir resets + the teardown
+    assert.equal(b.calls.length, 58);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });
@@ -583,7 +589,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 5\.0\.5/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 5\.0\.6/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });

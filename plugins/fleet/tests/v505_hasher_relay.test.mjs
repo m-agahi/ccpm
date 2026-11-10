@@ -357,12 +357,20 @@ const V504 = {
   judge: ["needs_human", "fingerprint", "judge mutated worktree: fleet-test-judge (role:fleet-test-judge:r1) changed ignored path written: target/debug/deps/d0/f0.rlib; verdict discarded"],
 };
 
+// 5.0.6 (ledger 2019): the same stop, the same gate; the text names the likely
+// cause after the last ignored path
+const HINT = " (likely cause: a build or test command ran without the fleet build env, test_env_prefix, so build output or a cache such as target/ or __pycache__ changed in the worktree)";
+const V506 = (k) => {
+  const [st, g, r] = V504[k];
+  return [st, g, r.replace(/^(.*ignored path written: [^ ;]+)/, "$1" + HINT)];
+};
+
 test("5.0.5 2018: non-weakening: an ignored file a writer changes, inside target/ or not, or plants, stops as in 5.0.4", async () => {
   const { f, A, B, C, D } = states();
   try {
     for (const [k, post] of [["target", B], ["local", C], ["planted", D]]) {
       const out = await run(writersScript(A, post), ARGS);
-      assert.deepEqual([out.result.status, out.result.stop_gate, out.result.reason], V504[k], k);
+      assert.deepEqual([out.result.status, out.result.stop_gate, out.result.reason], V506(k), k);
     }
   } finally {
     f.done();
@@ -375,7 +383,7 @@ test("5.0.5 2018: non-weakening: a judge that rebuilds target/ is stopped as in 
     const s = writersScript(A, A);
     s["hasher:fp-post:test-judge:r1"] = (p) => ({ status: "ok", fingerprint: FP_TESTS, hashes: relayed(B, p) });
     const out = await run(s, ARGS);
-    assert.deepEqual([out.result.status, out.result.stop_gate, out.result.reason], V504.judge);
+    assert.deepEqual([out.result.status, out.result.stop_gate, out.result.reason], V506("judge"));
   } finally {
     f.done();
   }
@@ -394,7 +402,7 @@ test("5.0.5 2018: a comparison that fails (missing file, forged output, no resul
       const out = await run(s, ARGS);
       assert.equal(out.result.status, "needs_human");
       assert.equal(out.result.stop_gate, "ownership");
-      assert.match(out.result.reason, /^ignored path written: \(the ignored files changed: 3001 -> 3001 files; the path list is unavailable: [^)]+\) in test round 1$/);
+      assert.match(out.result.reason, /^ignored path written: \(the ignored files changed: 3001 -> 3001 files; the path list is unavailable: [^)]+\) \(likely cause: a build or test command ran without the fleet build env, test_env_prefix, [^)]+\) in test round 1$/);
     }
   } finally {
     f.done();
