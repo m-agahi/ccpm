@@ -91,8 +91,9 @@ const INFRA_TIER = [
   ["infra:comments-", "sonnet"],
   // 4.0.0 (1987): the freeze ref write
   ["infra:freeze-ref", "sonnet"],
-  // 5.0.7 (ledger 2020): the changed keys of the on-disk hasher maps
-  ["infra:hash-diff:", "haiku"],
+  // 5.0.7 (ledger 2020): the changed keys of the on-disk hasher maps (it
+  // routes, so the hasher's tier)
+  ["infra:hash-diff:", "sonnet"],
   // 5.0.6 (ledger 2019): the per-role build dirs (reset; clean at teardown)
   ["infra:build-", "haiku"],
 ];
@@ -3834,9 +3835,16 @@ async function dispatch(label, prompt, opts) {
   const ic = infraCall(label, prompt, opts);
   reserve(1, label);
   state.agents++;
-  const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model }));
+  const r = await agent(ic.prompt, agentOpts(ic.opts, label, model));
   if (r == null) halt("failed", "agent " + label + " returned no result");
   return digestRetry(label, prompt, opts, r, dispatch);
+}
+
+// the runtime's agent options: opts.digest is the script's own
+function agentOpts(opts, label, model) {
+  const o = Object.assign({}, opts, { label, model });
+  delete o.digest;
+  return o;
 }
 
 // 5.0.7 (ledger 2020): opts.digest names the PROGRAM_KEYS entry of a read-only
@@ -3868,7 +3876,7 @@ async function softDispatch(label, prompt, opts) {
     return null;
   }
   state.agents++;
-  const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model }));
+  const r = await agent(ic.prompt, agentOpts(ic.opts, label, model));
   if (r == null) gate(label + " returned no result");
   return digestRetry(label, prompt, opts, r, softDispatch);
 }
@@ -4118,11 +4126,12 @@ async function expandKeys(keys, a, b, tag, phaseName, errGate) {
   let r = null;
   if (!why) {
     r = await softDispatch("infra:hash-diff:" + tag, hashDiffPrompt({ args }), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, digest: "hash_diff" });
-    const relayed = !!r && r.status === "ok" && relayDigestOk(r, progKeys("hash_diff"), "hash_diff") && r.args_sha256 === sha256Hex(canonical(args));
+    const digestOk = !!r && r.status === "ok" && relayDigestOk(r, progKeys("hash_diff"), "hash_diff");
+    const relayed = digestOk && r.args_sha256 === sha256Hex(canonical(args));
     const rowsOk =
       relayed && Number.isInteger(r.total) && Array.isArray(r.changed) && r.changed.length <= r.total &&
       r.changed.every((w) => Array.isArray(w) && w.length === 3 && maps.indexOf(w[0]) >= 0 && typeof w[1] === "string" && KEY_KINDS.indexOf(w[2]) >= 0);
-    why = !r ? "no result" : !relayed ? "the relay does not match the program's digest" : typeof r.error === "string" && r.error ? r.error
+    why = !r ? "no result" : !digestOk ? "the relay does not match the program's digest" : !relayed ? "the program ran on other arguments than the workflow sent" : typeof r.error === "string" && r.error ? r.error
       : !rowsOk ? "no usable key list"
       : !maps.every((m) => canonical(r.counts && r.counts[m]) === canonical([countOf(a[m]), countOf(b[m])])) ? "a map file does not hold its relayed count"
       : r.total === 0 ? "no key listed although the digests differ" : null;

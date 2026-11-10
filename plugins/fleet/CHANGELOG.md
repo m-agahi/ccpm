@@ -53,6 +53,18 @@ goes to disk, and a relay that fails only on its digest is dispatched once more.
   review_paths, callers, hook_surface, tf_gate, remote_head, precommit_ids, script_check); a
   second miss, or any other contract failure, fails as in 5.0.6.
 
+### Known limits
+
+- `infra:hash-diff:<step>` runs the program on the map files' paths, which hold 64-hex names (two
+  per changed map). A path the agent mis-copies gives an `args_sha256` the script refuses ("the
+  program ran on other arguments than the workflow sent"). That is not a digest miss and is not
+  retried: the step stops as an unrouted key (fail closed). Real runs call it once per writer
+  round (the test files change the `files` map) and on the re-freeze; it runs on the hasher's
+  tier (sonnet).
+- A step that routes by key lists at most 50 changed keys. A writer round or a re-freeze with
+  more than 50 changed keys stops (5.0.6 let an all-owned round through).
+- The script's own `opts.digest` never reaches the runtime's agent options.
+
 ### Follow-ups
 
 - `hashes.git.inline` holds every `refs/fleet/*` ref of the repo (40-hex ids); it grows with the

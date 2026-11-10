@@ -21,7 +21,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { happy, run, ARGS, H, HASHES_FLAT, FP_PRE, FP_TESTS, FP_K1, FP_K2, FP_M3, inputsOf, call, sh, spawnSync, SCRIPTS_SRC, HASH_MAP_NAMES, sha256, canon } from "./harness.mjs";
+import { happy, run, ARGS, H, HASHES_FLAT, FP_PRE, FP_TESTS, FP_K1, FP_K2, FP_M3, inputsOf, call, sh, spawnSync, SCRIPTS_SRC, HASH_MAP_NAMES, sha256, canon, registerMap, hashDiffOut } from "./harness.mjs";
 
 const HASHER = join(SCRIPTS_SRC, "hasher.py");
 
@@ -186,6 +186,14 @@ test("5.0.7 2020: only a changed map is expanded, by one hash-diff call; unchang
   // the git map only (the stubs' test-file hashes do not change), by its two files
   assert.deepEqual(args.filter((a, i) => i % 3 === 0), ["git"]);
   assert.ok(args.slice(1).every((f) => /\/scratch\/hashes\/git-[0-9a-f]{64}\.json$/.test(f)));
+  // the per-call schema the agent's StructuredOutput is held to: rows are string arrays
+  const sch = call(out, "infra:hash-diff:writers:r1").opts.schema.properties;
+  assert.deepEqual(sch.changed.items, { type: "array", items: { type: "string" } });
+  assert.ok([].concat(sch.changed.type).includes("array"));
+  assert.deepEqual(sch.counts.additionalProperties, { type: "array", items: { type: "integer" } });
+  assert.deepEqual(sch.total.type, ["integer", "null"]);
+  assert.ok([].concat(sch.args_sha256.type).includes("string"));
+  assert.ok(!("digest" in call(out, "infra:hash-diff:writers:r1").opts), "the script's own opts never reach the runtime");
   const ok = await run(happy(), ARGS);
   assert.equal(ok.result.status, "ok", ok.result.reason);
   assert.deepEqual(ok.labels.filter((l) => l.startsWith("infra:hash-diff:")), []);
@@ -369,4 +377,44 @@ test("5.0.7 2020: the read-only program steps carry the retry; no write step doe
   const ids = [...src.matchAll(/JUDGE_AGENT,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]).concat([...src.matchAll(/digest: (?:baseTree \? "hasher:base" : )?"([a-z_]+)"/g)].map((m) => m[1]));
   const RO = ["read_state", "fleet_scan", "hook_surface", "tf_gate", "remote_head", "branch_scan", "verify_since", "review_paths", "callers", "precommit_ids", "script_check", "hasher", "hash_diff"];
   assert.deepEqual([...new Set(ids)].sort(), RO.slice().sort());
+});
+
+// ---------------------------------------------------------------- the stub is the program
+
+test("5.0.7 2020: hash_diff.py and the harness stub print the same rows, counts and args digest", () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-507-parity-"));
+  try {
+    const write = (m, map) => {
+      const text = canon(map);
+      const f = join(home, m + "-" + sha256(text) + ".json");
+      writeFileSync(f, text);
+      registerMap(f, map);
+      return f;
+    };
+    const pairs = [
+      ["files", { "a.py": "1", "b.py": "2", "c.py": "3" }, { "a.py": "1", "b.py": "9", "d.py": "4" }],
+      ["sections", { "pyproject.toml#tool.pytest": "x" }, { "pyproject.toml#tool.pytest": "y" }],
+      ["git", { "config:local": "g1", "hooks/pre-commit": "h" }, { "config:local": "g1" }],
+      ["symlinks", {}, { lib: "../x" }],
+      ["ignored", { ".claude/settings.local.json": "s1", "target/a": "t", "z ü": "1" }, { ".claude/settings.local.json": "s2", "target/a": "u", "z ü": "1" }],
+    ];
+    const args = [];
+    for (const [m, a, b] of pairs) args.push(m, write(m, a), write(m, b));
+    const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "hash_diff.py")].concat(args), { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    const real = JSON.parse(r.stdout);
+    const stub = hashDiffOut(args);
+    for (const k of ["changed", "total", "counts", "error", "args_sha256"]) assert.deepEqual(stub[k], real[k], k);
+    assert.equal(real.total, 7);
+    // one map past the cap: the same first 50 rows
+    const big = {};
+    for (let i = 0; i < 60; i++) big["f" + String(i).padStart(2, "0")] = String(i);
+    const a2 = ["files", write("files", {}), write("files", big)];
+    const r2 = JSON.parse(spawnSync("python3", ["-I", join(SCRIPTS_SRC, "hash_diff.py")].concat(a2), { encoding: "utf8" }).stdout);
+    const s2 = hashDiffOut(a2);
+    for (const k of ["changed", "total", "counts", "error"]) assert.deepEqual(s2[k], r2[k], k);
+    assert.deepEqual([r2.changed.length, r2.total], [50, 60]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
