@@ -105,13 +105,14 @@ def others(p):
     return names(git(wt, 'ls-files', '-z', '--others', '--', p).stdout)
 def dir_offenders(p):
     # what under directory hook path p is not HEAD's: a tracked path that
-    # differs, any untracked or ignored path, the selected paths aside. A
-    # symlinked or replaced directory is itself the offender.
+    # differs, any untracked or ignored path (selected paths included: a
+    # conftest.py or module there runs inside the hook). A symlinked or
+    # replaced directory is itself the offender.
     fp = os.path.join(wt, p)
     if linked(p) or not os.path.isdir(fp):
         return [p]
     out = names(git(wt, 'diff', '--name-only', '-z', '--no-renames', 'HEAD', '--', p).stdout) + others(p)
-    return sorted(set(x for x in out if x not in sel_set))
+    return sorted(set(out))
 OFFENDERS = []
 def differs(p):
     if p not in tracked:

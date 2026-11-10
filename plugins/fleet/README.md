@@ -175,7 +175,7 @@ copied in, and only they are copied back. The hook surface is exact: the config,
 `a/b/__init__.py`, `a/__init__.py`); a path that only appears in a `files:` or `exclude:` regex is
 not hook code and is formatted. A hook path that is a directory (`pytest scripts/tests/`, 5.0.4)
 differs from HEAD when a tracked path under it differs or an untracked or ignored path is under it,
-the selected paths aside; a symlinked or replaced directory differs too. Before that comparison the
+selected paths included; a symlinked or replaced directory differs too. Before that comparison the
 program deletes, under the directory hook paths only, the untracked or ignored `__pycache__` and
 `.pytest_cache` contents and `*.pyc`/`*.pyo` files (never a tracked file, never a selected path,
 never through a symlink: a link is left for the comparison, which refuses it) and relays them as

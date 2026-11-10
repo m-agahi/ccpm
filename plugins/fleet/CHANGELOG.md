@@ -20,9 +20,10 @@ and Python caches under a hook path are purged before the hook-surface compariso
   directory was refused, with or without a cache in it.
 - A directory hook path now differs from HEAD when a tracked path under it differs
   (`git diff HEAD`), or any untracked or ignored path is under it (`git ls-files --others`, no
-  exclude rules), the selected paths of the step aside. A symlinked directory (itself or a
-  parent), or a directory that is now a file, differs. An ignored or untracked `conftest.py`, or
-  any other non-cache file under a hook directory, still stops the run.
+  exclude rules). Selected paths are not exempt: a `conftest.py`, a module or a test file under a
+  hook directory runs inside the hook, so a writer or coder file there stops the run (stop_gate
+  `hash`). A symlinked directory (itself or a parent), or a directory that is now a file,
+  differs.
 - Before the comparison, `format_files.py` deletes under the directory hook paths only the
   untracked or ignored files under a `__pycache__` or `.pytest_cache` directory and the `*.pyc` /
   `*.pyo` files, then the emptied cache directories. It never deletes a tracked file (git lists

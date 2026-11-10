@@ -89,7 +89,7 @@ test("5.0.4 2013: a clean directory a hook entry names is not refused (5.0.3 ref
   }
 });
 
-test("5.0.4 2013: wf_839d4753-594: ignored caches under scripts/tests are purged, the writer's test file is kept, and the hooks run", () => {
+test("5.0.4 2013: wf_839d4753-594: ignored caches under scripts/tests are purged and the hooks run", () => {
   const r = iamDb();
   try {
     r.put("scripts/tests/__pycache__/x.cpython-312.pyc", "pyc");
@@ -99,11 +99,11 @@ test("5.0.4 2013: wf_839d4753-594: ignored caches under scripts/tests are purged
     // outside every hook path: kept (scope)
     r.put(".pytest_cache/v/cache/nodeids", "[]");
     r.put("src/__pycache__/x.cpython-312.pyc", "pyc");
-    r.put("scripts/tests/test_new.py", "def test_new():\n    pass\n");
-    const o = r.runF({ paths: ["scripts/tests/test_new.py"] });
+    r.put("src/x.py", "x = 2\n");
+    const o = r.runF();
     assert.deepEqual(o.refused, [], o.note);
     assert.equal(o.ran, true, o.note);
-    assert.deepEqual(o.files, ["scripts/tests/test_new.py"]);
+    assert.deepEqual(o.files, ["src/x.py"]);
     assert.equal(o.purged, 4);
     assert.deepEqual(o.purged_paths, [
       "scripts/tests/.pytest_cache/v/cache/nodeids",
@@ -113,9 +113,23 @@ test("5.0.4 2013: wf_839d4753-594: ignored caches under scripts/tests are purged
     ]);
     assert.ok(gone(join(r.wt, "scripts/tests/__pycache__")), "the emptied __pycache__ dir is removed");
     assert.ok(gone(join(r.wt, "scripts/tests/.pytest_cache")), "the emptied .pytest_cache dir is removed");
-    assert.ok(existsSync(join(r.wt, "scripts/tests/test_new.py")), "the selected file stays");
     assert.ok(existsSync(join(r.wt, ".pytest_cache/v/cache/nodeids")), "a cache outside the hook paths stays");
     assert.ok(existsSync(join(r.wt, "src/__pycache__/x.cpython-312.pyc")), "a pyc outside the hook paths stays");
+  } finally {
+    r.done();
+  }
+});
+
+test("5.0.4 2013 non-weakening: a selected file under a hook dir is hook code: it stops the run and is never purged", () => {
+  const r = iamDb();
+  try {
+    r.put("scripts/tests/test_new.py", "def test_new():\n    pass\n");
+    r.put("scripts/tests/__pycache__/x.cpython-312.pyc", "pyc");
+    const o = r.runF({ paths: ["scripts/tests/test_new.py"] });
+    assert.deepEqual(o.refused, ["scripts/tests"]);
+    assert.equal(o.ran, false);
+    assert.ok(existsSync(join(r.wt, "scripts/tests/test_new.py")));
+    assert.equal(o.purged, 1);
   } finally {
     r.done();
   }
@@ -231,21 +245,33 @@ test("5.0.4 2013: a tracked .pyc under a hook dir is never deleted, and counts a
   }
 });
 
-test("5.0.4 2013: dirty mode (format-code): frozen untracked tests under the hook dir are selected paths, not refused", () => {
-  const r = iamDb();
-  try {
-    r.put("scripts/tests/test_frozen.py", "def test_f():\n    pass\n");
-    r.put("scripts/tests/__pycache__/test_frozen.cpython-312.pyc", "pyc");
-    r.put("src/x.py", "x = 2\n");
-    const o = r.runF({ dirty: true }, ["scripts/tests/test_frozen.py"]);
-    assert.deepEqual(o.refused, [], o.note);
-    assert.deepEqual(o.files, ["src/x.py"]);
-    assert.equal(o.purged, 1);
-    // an ignored file is never a selected path: it stops dirty mode too
-    r.put("scripts/tests/ignored_helper.py", "x = 1\n");
-    assert.deepEqual(r.runF({ dirty: true }, ["scripts/tests/test_frozen.py"]).refused, ["scripts/tests"]);
-  } finally {
-    r.done();
+test("5.0.4 2013 non-weakening, dirty mode (format-code): an untracked or a modified conftest.py, or a frozen untracked test, under a hook dir stops the run", () => {
+  for (const [why, setup, frozen] of [
+    ["untracked conftest.py", (r) => r.put("scripts/tests/conftest.py", "import os\n"), []],
+    [
+      "modified conftest.py",
+      (r) => {
+        r.put("scripts/tests/conftest.py", "\n");
+        sh(r.wt, "git", "add", "scripts/tests/conftest.py");
+        sh(r.wt, "git", "commit", "-qm", "conftest");
+        r.put("scripts/tests/conftest.py", "import os\n");
+      },
+      [],
+    ],
+    ["frozen untracked test", (r) => r.put("scripts/tests/test_frozen.py", "def test_f():\n    pass\n"), ["scripts/tests/test_frozen.py"]],
+  ]) {
+    const r = iamDb();
+    try {
+      setup(r);
+      r.put("scripts/tests/__pycache__/x.cpython-312.pyc", "pyc");
+      r.put("src/x.py", "x = 2\n");
+      const o = r.runF({ dirty: true }, frozen);
+      assert.deepEqual(o.refused, ["scripts/tests"], why);
+      assert.equal(o.ran, false, why);
+      assert.equal(o.purged, 1, why);
+    } finally {
+      r.done();
+    }
   }
 });
 

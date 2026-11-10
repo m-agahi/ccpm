@@ -1736,7 +1736,7 @@ const PROGRAM_SHA256 = {
   "db_sweep": "3f86d621cc27259e006fff0d7910c621d11f955b138db3b18e9337139437d6c5",
   "db_up": "287f00df3f12543a7ffed8445fda9ba9823f58dcb37a90301ed05b245d49d913",
   "fleet_scan": "5140d5020bee7cae61994b753e8ee100fc6cdcc1389d3a3559ef5fec5fbe2a3b",
-  "format_files": "86e9f8d651e79fe67eba7a74087ee2982649e6a2e127758600f01faf9f25b57f",
+  "format_files": "019e27057c254008c2d275ea45da71cb87c3175f898f39b174dcffdec97e09e7",
   "hasher": "360f14f44c2a036d80304a19cc8d2afcaace826d2b7b17419f6ee6792ee5e4cd",
   "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
   "parked": "14150028c5fc657e10214efd33dd6669c83281c8a45f07410aad6e6b7520bd9b",
@@ -2749,8 +2749,8 @@ async function loadParked(scratch, tip) {
 // digest}. Before the comparison (5.0.4, ledger 2013) it deletes the untracked
 // or ignored __pycache__/.pytest_cache/*.pyc/*.pyo under the directory hook
 // paths (never tracked, never through a symlink): purged, purged_paths (first
-// 50). A directory hook path differs when a path under it is not HEAD's, the
-// selected paths aside. refused: hook
+// 50). A directory hook path differs when a path under it is not HEAD's,
+// selected paths included. refused: hook
 // surface paths that differ from HEAD and selected paths through a symlink;
 // then nothing runs. Each run is capped at FIX_RUN_TIMEOUT seconds.
 // program: scripts/format_files.py (PROGRAM_SHA256 holds its sha256)
