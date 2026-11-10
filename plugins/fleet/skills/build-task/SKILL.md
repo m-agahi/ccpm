@@ -73,7 +73,9 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
 4. **Project (optional).** Use the `<owner>/<repo>` project key from the session banner, if one is
    shown, as `project`. It scopes ledger reads and the ledger write-back, and it is independent of
    `repo`: a task from the session's project can be built in another repo. Otherwise omit it; then
-   intake tries both ledgers. With `confirm: "auto"`, a task id needs `project`: without it the
+   intake tries each ledger whose tool the session has. No ledger MCP server (yadgar, yaadgaar) is
+   required: without one, a task id stops with "no task ledger available; give a URL, Jira key or
+   text", and an issue, Jira key, plan or text builds as usual. With `confirm: "auto"`, a task id needs `project`: without it the
    workflow stops before intake.
    On a `yadgarhq/` project a task id (`#622`, `622`, `yaadgaar #622`) is a yaadgaar task, never
    the legacy `L622`; the workflow needs `project` to tell them apart.
@@ -193,9 +195,12 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
    - `review`: verdict, rounds, blocking findings and nits, the sweep verdict when it ran, and the
      model used. With `confirm: "auto"`, also `auto_confirmed` and the `intent` verdict.
    - `gates_not_run`: list every gate the run did not execute.
-   - Write-back: `ledger_status` and `comment_status`. On `failed`, show `comment_text` (and any
-     `section_text`, for a ledger or yaadgaar entry that failed) so the user can post it by hand.
-   - `yadgar_findings`, grouped by role, so the main thread can capture them.
+   - Write-back: `ledger_adapter` (`yaadgaar`, `yadgar`, `tracker` or `none`, with
+     `ledger_reason`), `ledger_status` and `comment_status`. On `failed` or `unavailable`, show
+     `comment_text` (and any `section_text`, for a ledger or yaadgaar entry that failed or was
+     unavailable) so the user can post it by hand.
+   - `memory_notes`, grouped by role, when not empty. If this session has a memory tool, offer to
+     store them; otherwise show them.
 
 ## Re-running
 

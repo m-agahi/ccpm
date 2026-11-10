@@ -2,7 +2,46 @@
 
 ## [Unreleased]
 
-Fleet 5.0.0, part 1 of 3 (ledger 1999, R1). The version stays 4.0.3 until the last part.
+Fleet 5.0.0, parts 1 and 2 of 3 (ledger 1999, R1 and R2). The version stays 4.0.3 until the last
+part.
+
+### Changed (part 2 of 3, R2: yadgar and yaadgaar are never required)
+
+- No MCP server is required. Preflight ends with a ledger tool census: one `ToolSearch` select
+  of `mcp__yaadgaar__read_task` and `mcp__yadgar__task_get`, relayed as `ledger_tools` (a list of
+  strings). An absent MCP server (not configured or not connected) has none of its names. The
+  read tools stand for their servers, because `fleet:judge` cannot see the write tools.
+- The census is advisory (review of #47): a relay of `ToolSearch` can miss a tool, so it never
+  blocks a ledger path. A malformed census counts as `[]` and is logged.
+- New pure `ledgerAdapter(project, sources, tools)`: `yaadgaar`, `yadgar` (never for a
+  `yadgarhq/` project), `tracker` (a GitHub, Codeberg or Jira source: the existing marked comment
+  is the whole write-back, Max's ruling; no second comment) or `none`. A ledger source keeps its
+  ledger path whatever the census says; the census only adds a note to the reason. The result
+  carries `ledger_adapter` and `ledger_reason` (also on a resumed build).
+- Intake gets `ledger_tools` as a hint and tries the ledger tool itself. Only when `ToolSearch`
+  finds none does it record `error: "absent"` in `tried`. A task-id input whose every ledger call
+  is `absent` stops: "no task ledger available; give a URL, Jira key or text", with the census
+  and the tool this project's ledger needs.
+- Write-back always runs the ledger or yaadgaar read step for a sealed ledger source. A read that
+  finds no tool returns `unavailable`: nothing written, the entry hands back its `section_text`,
+  `ledger_status` is `unavailable`, and the adapter falls back to `tracker` or `none`. A present
+  tool that fails at call time stays `failed`. Neither stops the run.
+- A legacy ledger source on a `yadgarhq/` project is `failed` in the write-back (as before 5.0.0;
+  intake already refuses it).
+- The intent judge gets `ledger_task` only through a ledger adapter and never reads tracker
+  comments as rulings.
+- Max's ruling on #47: a `confirm: "auto"` build whose rulings re-read reports the ledger tool
+  absent stops with the no-ledger sentence (fails closed: the current rulings are unknown). Only
+  plans that used a ledger can reach this stop; `confirm: "ask"` builds on.
+- The result key `yadgar_findings` is renamed `memory_notes` (`[{role, notes}]`, optional, never
+  required). Role results may carry `memory_notes`; the role files' `yadgar_findings` is still
+  read until the R3 prompt revision. The skill offers to store the notes when the session has a
+  memory tool, and shows them otherwise.
+- Docs and metadata: README requirements and the ledger adapter section; SKILL.md ledger and
+  project wording; `plugin.json` and the marketplace entry drop the `yadgar` keyword and "Role
+  prompts load from yadgar". `agents/judge.md` keeps its denylist of yadgar tool names: the
+  Claude Code docs document no error for a `disallowedTools` name of an absent server, and do not
+  say it is ignored either.
 
 ### Changed
 

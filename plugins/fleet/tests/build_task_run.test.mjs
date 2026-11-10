@@ -224,10 +224,10 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
   assert.deepEqual(cjIn.frozen_tests, coder.frozen_tests);
   assert.equal(cjIn.code_base_ref, PC);
   assert.equal(coder.freeze_ref, PC);
-  // every role's yadgar findings are forwarded
-  // plan-run findings come back with the plan result, build-run findings with the build result
-  assert.ok(out.planResult.yadgar_findings.some((y) => y.role === "scope-and-plan"));
-  const roles = r.yadgar_findings.map((y) => y.role);
+  // every role's memory notes are forwarded (5.0.0 R2: was yadgar_findings)
+  // plan-run notes come back with the plan result, build-run notes with the build result
+  assert.ok(out.planResult.memory_notes.some((y) => y.role === "scope-and-plan"));
+  const roles = r.memory_notes.map((y) => y.role);
   assert.ok(roles.includes("fleet-test-judge"));
   assert.ok(roles.includes("fleet-pr-opener"));
   assert.ok(Array.isArray(r.gate_log) && r.gate_log.length > 0);
@@ -1683,7 +1683,8 @@ test("intake runs read-only, gets input, repo and project", async () => {
   const c = call(out, "intake");
   assert.equal(c.opts.agentType, "fleet:judge");
   assert.equal(c.opts.model, "sonnet");
-  assert.deepEqual(inputsOf(c.prompt), { input: "L42", repo: "/r", project: "o/r", ledger: "yadgar" });
+  // 5.0.0 (R2): intake also gets the ledger tool census
+  assert.deepEqual(inputsOf(c.prompt), { input: "L42", repo: "/r", project: "o/r", ledger: "yadgar", ledger_tools: ["mcp__yaadgaar__read_task", "mcp__yadgar__task_get"] });
   assert.match(c.prompt, /Read only/);
   assert.ok(out.labels.indexOf("intake") < out.labels.indexOf("workspace"));
 });
@@ -4469,6 +4470,23 @@ test("2.1.0 build with confirm auto re-runs the gates against the current ledger
   assert.match(b2.result.reason, /re-read/);
 });
 
+// 5.0.0 (R2; review of 88eb9b0: the census is advisory, Max kept the stop):
+// the build's census has no ledger tool; the re-read is still dispatched.
+// When it reports the tool absent, the sealed ledger task's current rulings
+// cannot be read, so confirm auto stops (fails closed); confirm ask goes on.
+test("5.0.0 R2: build confirm auto: a rulings re-read that finds no ledger tool stops", async () => {
+  const s = autoHappy();
+  const plan = await runOne(s, ARGS);
+  assert.equal(plan.result.status, "awaiting_confirmation");
+  s.preflight = { ledger_tools: [] };
+  s["intake:rulings"] = { status: "needs_human", reason: "no task ledger available; give a URL, Jira key or text", tried: [{ ledger: "yadgar", project: "o/r", call: "mcp__yadgar__task_get", error: "absent" }] };
+  const build = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r", confirm: "auto" });
+  assert.equal(build.result.status, "needs_human");
+  assert.ok(build.labels.includes("intake:rulings"), "the census never skips the re-read: " + build.labels.join(", "));
+  assert.match(build.result.reason, /re-read of ledger:42 for current rulings: no task ledger available; give a URL, Jira key or text/);
+  assert.match(build.result.reason, /confirm "ask"/);
+});
+
 // ---------------------------------------------------------------- 2.1.0 review
 
 test("2.1.0 review: after the draft PR, pr-review gets the PR, the diff paths and no plan reasoning; cleanup always runs", async () => {
@@ -5492,6 +5510,10 @@ const ARRAY_SITES = {
   "o.files @ planFactsProblem": "role:scope-and-plan:repo_obligations[].files",
   "tc.tools @ testCmdProblem": "role:scope-and-plan:test_cmd.tools",
   "r.yadgar_findings @ collect": "role:scope-and-plan:yadgar_findings",
+  // 5.0.0 (R2)
+  "r.memory_notes @ collect": "role:scope-and-plan:memory_notes",
+  "pre.ledger_tools @ preflightStep": "preflight:ledger_tools",
+  "it.tried @ noLedgerStop": "intake:tried",
   "h.suspicious @ hasher": "hasher:hashes.suspicious",
   "r.changed @ hasher": "hasher:changed",
   "b.sources @ briefProblem": "intake:brief.sources",

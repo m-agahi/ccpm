@@ -301,7 +301,15 @@ const READS = {
     "pc.path_problems array": "prog:path_check:path_problems",
   },
   pathCheck: { "t.shim boolean": "prog:path_check:tools.*.shim" },
-  collect: { "r.yadgar_findings array": SP + "yadgar_findings" },
+  // 5.0.0 (R2): memory_notes, and the role files' yadgar_findings until R3
+  collect: { "r.yadgar_findings array": SP + "yadgar_findings", "r.memory_notes array": SP + "memory_notes" },
+  preflightStep: { "pre.ledger_tools array": "preflight:ledger_tools", "x string": "preflight:ledger_tools[]" },
+  ledgerAdapter: {
+    "sources array": "parsed: a cleanBrief source list (intake:brief.sources or the sealed plan ref)",
+    "tools array": "parsed: state.ledgerTools (LEDGER_TOOLS filtered by preflight:ledger_tools)",
+    "project string": PARSED_ARGS,
+    "project string-re": PARSED_ARGS,
+  },
   jsType: { "v array": "parsed: the drift check's own type helper" },
   typeMatches: { "v integer": "parsed: the drift check's own type helper" },
   hasher: {
@@ -328,6 +336,8 @@ const READS = {
     "b.plan_path string": "intake:brief.plan_path",
   },
   ledgerFor: { "project string": PARSED_ARGS, "project string-re": PARSED_ARGS },
+  // 5.0.0 (R2, review of 88eb9b0): intake's all-absent stop
+  noLedgerStop: { "t object": "intake:tried[]", "it.tried array": "intake:tried" },
   intakeHaltReason: {
     "it.reason string": "intake:reason",
     "t object": "intake:tried[]",
@@ -501,7 +511,8 @@ const READS = {
   defaultBlockers: { "pf.new_behaviour boolean": SP + "new_behaviour", "raw string-re": PARSED_ARGS },
   planMode: {
     "input.input string": PARSED_ARGS,
-    "raw string-re": PARSED_ARGS,
+    // 5.0.0 (R2): + the no-ledger stop before intake
+    "raw string-re": [PARSED_ARGS, 2],
     "scan.commits array": "prog:branch_scan:commits",
     "scan.refs array": "prog:branch_scan:refs",
     "tip integer": "prog:branch_scan:plan_tip_time",
@@ -591,6 +602,8 @@ const READS = {
     "h.has_marker boolean": "infra:results[].has_marker",
   },
   writeBack: {
+    // 5.0.0 (R2): args.project, the ledger scope
+    "project string-re": PARSED_ARGS,
     "pre.results array": "infra:results",
     "h.body_slug string": "infra:results[].body_slug",
     "r.results array": ["infra:results", 2],
@@ -790,8 +803,11 @@ const ints = (n) => Object.fromEntries(S.ROLES.map((r, i) => [r, n + i]));
 test("5.0.0 R1 (was 4.0.3 1998 repro wf_d6901710-32d): the preflight and role schemas refuse mistyped values", async () => {
   const out = await run(happy(), ARGS);
   const pre = out.calls.find((c) => c.label === "preflight").opts.schema;
-  assert.deepEqual(validate(pre, { scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }), []);
-  assert.ok(validate(pre, { scripts_probe: [1], scripts_dir: null, path_check: null, reason: "ok" }).length);
+  // 5.0.0 (R2): the census ledger_tools is required, a list of strings
+  assert.deepEqual(validate(pre, { ledger_tools: [], scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }), []);
+  assert.ok(validate(pre, { ledger_tools: [], scripts_probe: [1], scripts_dir: null, path_check: null, reason: "ok" }).length);
+  assert.ok(validate(pre, { scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }).length, "no census");
+  assert.ok(validate(pre, { ledger_tools: [7], scripts_probe: [], scripts_dir: null, path_check: null, reason: "ok" }).length, "a numeric tool name");
   const sch = out.calls.find((c) => c.label === "role:plan-audit").opts.schema;
   const good = { status: "ok", reason: "x", verdict: "approve", routed_findings: [], role_file: { name: "plan-audit", sha256: "a".repeat(64) } };
   assert.deepEqual(validate(sch, good), []);
@@ -844,7 +860,8 @@ test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);
-  assert.match(pre, /Return \{scripts_probe, scripts_dir, path_check, reason\}\./);
+  // 5.0.0 (R2): plus the ledger tool census
+  assert.match(pre, /Return \{ledger_tools, scripts_probe, scripts_dir, path_check, reason\}\./);
 });
 
 // ---------------------------------------------------------------- 4.0.3 review
