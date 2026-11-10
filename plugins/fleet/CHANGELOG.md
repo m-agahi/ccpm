@@ -1,9 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## [5.0.0] - 2026-11-10
 
-Fleet 5.0.0, parts 1 to 3 of 3 (ledger 1999, R1, R2 and R3). The version stays 4.0.3 until the
-last part.
+Fleet 5.0.0 (ledger 1999): the role prompts ship in the plugin (R1), yadgar and yaadgaar are
+never required (R2), and the role prompts are revised (R3). Held-out examples and coverage
+follow in 5.1.0, mutation testing in 5.2.0.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.0), then start a NEW session: a session
+  keeps the workflow it started with, and a 4.x workflow looks for its own `fleet/4.x/scripts`
+  dir. Then run the probe mode (`/build-task probe`) once: it checks the scripts, the role files,
+  the shared file and the PATH without building.
+- No deploy order and no yadgar page writes: the release is the plugin.
+- A plan ref sealed by 4.x still builds, with the 5.0.0 role files (its role record is log only).
+  Its plan doc has no "Non-goals" section and its criteria no failure-path cases: to get the
+  5.0.0 planner and audit rules, re-plan instead of building the old ref.
 
 ### Changed (part 3 of 3, R3: the role prompt revision)
 
