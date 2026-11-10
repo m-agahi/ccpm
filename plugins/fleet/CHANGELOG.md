@@ -33,7 +33,8 @@
 - New test `v403_schema_types.test.mjs`: it discovers every type-sensitive read in the
   workflow and requires an entry for each in a table, either the schema path the value comes
   through (which must have the read's type) or "parsed" with the reason. A new read with no
-  entry fails the test. It also checks `PROGRAM_OUT` against the programs' digest keys, the
+  entry fails the test, and so does a new read that repeats an existing key (each entry
+  holds its number of occurrences). It also checks `PROGRAM_OUT` against the programs' digest keys, the
   per-call schemas, and every happy-run result against its schema with a small validator.
 - The test `test_db_decl` `decl` stays an untyped object: it is the repo's own file, and
   `testDbDeclProblem` gives the stop text for a wrong one.

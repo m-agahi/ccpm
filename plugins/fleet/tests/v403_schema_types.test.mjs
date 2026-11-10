@@ -140,13 +140,20 @@ const PATTERNS = [
   [new RegExp(E + String.raw`\s*[!=]==\s*-?\d+\b`, "g"), () => "number-literal"],
   [new RegExp(String.raw`[A-Z_0-9]+_RE\.test\(\s*` + E + String.raw`\s*\)`, "g"), () => "string-re"],
 ];
+// Each key maps to its number of occurrences: a READS entry is a spec (one
+// occurrence) or [spec, n], so a new read that repeats an existing key (a
+// nested function shares its parent's name) changes the count and fails.
 function typedReads() {
-  const out = new Set();
+  const out = new Map();
   let fn = "(top)";
   for (const line of SOURCE.split("\n")) {
     const f = /^(?:async\s+)?function\s+(\w+)/.exec(line) || /^const\s+(\w+)\s*=/.exec(line);
     if (f) fn = f[1];
-    for (const [re, kind] of PATTERNS) for (const m of line.matchAll(re)) out.add(m[1] + " " + kind(m) + " @ " + fn);
+    for (const [re, kind] of PATTERNS)
+      for (const m of line.matchAll(re)) {
+        const k = m[1] + " " + kind(m) + " @ " + fn;
+        out.set(k, (out.get(k) || 0) + 1);
+      }
   }
   return out;
 }
@@ -199,12 +206,12 @@ const READS = {
   testCmdProblem: {
     "cmd string": SP + "test_cmd.command",
     "cmd string-re": SP + "test_cmd.command",
-    "x string-re": SP + "test_cmd.tools[]",
+    "x string-re": [SP + "test_cmd.tools[]", 2],
     "x string": SP + "test_cmd.tools[]",
     "env object": SP + "test_cmd.env",
     "env array": "!" + SP + "test_cmd.env",
     "env[k] string": SP + "test_cmd.env.*",
-    "env[k] string-re": SP + "test_cmd.env.*",
+    "env[k] string-re": [SP + "test_cmd.env.*", 2],
     "tc.tools array": SP + "test_cmd.tools",
   },
   criterionTestArgsProblem: { "ta string": SP + "criteria[].test_args", "testCmd.command string": SP + "test_cmd.command" },
@@ -212,9 +219,9 @@ const READS = {
   commandsOf: { "o.check_cmd string": OB + ".check_cmd", "o.check_cmd_rejected string": "parsed: the script's own demoted obligation" },
   obligationFailures: {
     "check array": CJ + "obligations_check",
-    "e.met boolean": CJ + "obligations_check[].met",
+    "e.met boolean": [CJ + "obligations_check[].met", 2],
     "notRun array": CJ + "gates_not_run",
-    "o.check_cmd string": OB + ".check_cmd",
+    "o.check_cmd string": [OB + ".check_cmd", 2],
     "e.check_exit integer": CJ + "obligations_check[].check_exit",
     "e.check_exit number-literal": CJ + "obligations_check[].check_exit",
     "o.files array": OB + ".files",
@@ -246,22 +253,23 @@ const READS = {
     "homes.length number-literal": PARSED_LOCAL,
     "hits.length number-literal": PARSED_LOCAL,
     "hit string-re": PARSED_TOKEN,
-    "reals.length number-literal": PARSED_LOCAL,
+    "reals.length number-literal": [PARSED_LOCAL, 2],
     "links.length number-literal": PARSED_LOCAL,
     "dir string": "preflight:scripts_dir",
   },
   scriptsMapProblem: { "map object": "hasher:scripts", "map array": "!hasher:scripts" },
   loadParked: {
-    "x string": "prog:parked:parked.draft_chunks[]",
+    // the chunk lists, and the parked findings' symbols filter (parsed)
+    "x string": ["prog:parked:parked.draft_chunks[]", 2],
     "a array": "prog:parked:parked.draft_chunks",
     "k object": "prog:parked:parked",
     "k.run string": "prog:parked:parked.run",
     "k.run string-re": "prog:parked:parked.run",
     "k.plan_path string": "prog:parked:parked.plan_path",
-    "f object": PARSED_PARK,
+    "f object": [PARSED_PARK, 2],
     "f array": PARSED_PARK,
-    "f.rounds array": PARSED_PARK,
-    "x object": PARSED_PARK,
+    "f.rounds array": [PARSED_PARK, 2],
+    "x object": [PARSED_PARK, 2],
     "x array": PARSED_PARK,
     "c array": PARSED_PARK,
     "x.round number-literal": PARSED_PARK,
@@ -309,7 +317,7 @@ const READS = {
   },
   rolesFromRef: { "rec object": PARSED_REF },
   pushProbe: { "r.args array": "push_probe:args", "r.args.length number-literal": PARSED_LOCAL },
-  workspaceStep: { "uc object": "infra:remote_url_check", "uc.url string": "prog:remote_url:url", "ws.remote_host string": "infra:remote_host" },
+  workspaceStep: { "uc object": "infra:remote_url_check", "uc.url string": ["prog:remote_url:url", 2], "ws.remote_host string": "infra:remote_host" },
   briefProblem: {
     "b object": "intake:brief",
     "b.title string": "intake:brief.title",
@@ -339,13 +347,13 @@ const READS = {
     "src.body string": "intake:brief.sources[].body",
     "src.id string": "intake:brief.sources[].id",
   },
-  confusableCp: { "c number-literal": PARSED_LOCAL },
+  confusableCp: { "c number-literal": [PARSED_LOCAL, 2] },
   confusableIn: { "v string": "parsed: walks any plan text value", "v array": "parsed: walks any plan text value", "v object": "parsed: walks any plan text value" },
   screenCheckCmds: { "o.check_cmd string": OB + ".check_cmd" },
   scriptPathsOf: { "o.check_cmd string": OB + ".check_cmd" },
   checkScripts: { "r.checks object": "prog:script_check:checks", "o.check_cmd string": OB + ".check_cmd", "c.ok boolean": "prog:script_check:checks.*.ok" },
   planPathProblem: { "s string-re": "parsed: a path the caller type-checked" },
-  roundSuffix: { "n number-literal": PARSED_LOCAL },
+  roundSuffix: { "n number-literal": [PARSED_LOCAL, 2] },
   roundSnapshot: {
     "plan.criteria array": SP + "criteria",
     "plan.new_behaviour boolean": SP + "new_behaviour",
@@ -383,18 +391,18 @@ const READS = {
     "o.criterion string": SP + "changed_symbols[].occurrences[].criterion",
     "o.dont_care string": SP + "changed_symbols[].occurrences[].dont_care",
   },
-  docOrLockFile: { "b string-re": PARSED_TOKEN },
+  docOrLockFile: { "b string-re": [PARSED_TOKEN, 2] },
   callerCheck: {
     "occ object": "prog:callers:occurrences",
     "occ array": "!prog:callers:occurrences",
     "r.capped array": "prog:callers:capped",
-    "x string": "prog:callers:occurrences.*[]",
+    "x string": ["prog:callers:occurrences.*[]", 2],
     "occ[n] array": "prog:callers:occurrences.*",
     "r.doctest_md array": "prog:callers:doctest_md",
     "r.auto_dont_care object": "prog:callers:auto_dont_care",
     "r.auto_dont_care array": "!prog:callers:auto_dont_care",
     "adc[n] array": "prog:callers:auto_dont_care.*",
-    "h string": "prog:callers:auto_dont_care.*[]",
+    "h string": ["prog:callers:auto_dont_care.*[]", 2],
   },
   buildCallerFindings: { "d.end number": "prog:changed_defs:defs[].end", "d.name string-re": "prog:changed_defs:defs[].name" },
   buildCallerCheck: {
@@ -418,7 +426,7 @@ const READS = {
   makeTargets: { "o.check_cmd string": OB + ".check_cmd" },
   planScopeFiles: {
     "pf.allowed_additions.files array": SP + "allowed_additions.files",
-    "f string": SP + "allowed_additions.files[]",
+    "f string": [SP + "allowed_additions.files[]", 2],
     "o.files array": OB + ".files",
   },
   afterRounds: { "n number-literal": PARSED_LOCAL },
@@ -476,7 +484,7 @@ const READS = {
   },
   validRemoteUrl: { "u string": "prog:remote_url:url" },
   fencePathProblem: { "q string-re": PARSED_LOCAL },
-  scopeProblems: { "f string": SP + "allowed_additions.files[]", "aa.files array": SP + "allowed_additions.files" },
+  scopeProblems: { "f string": [SP + "allowed_additions.files[]", 2], "aa.files array": SP + "allowed_additions.files" },
   hookIdProblems: { "cfg.present boolean": "prog:precommit_ids:present", "cfg.ids array": "prog:precommit_ids:ids" },
   intentProblems: {
     "d.allowed_by string": IJ + "deviations[].allowed_by",
@@ -525,10 +533,10 @@ const READS = {
     "pf.commands array": PARSED_REF,
     "o.check_cmd string": PARSED_REF,
     "pf.remote_url string": PARSED_REF,
-    "input.freeze_digest string": PARSED_ARGS,
+    "input.freeze_digest string": [PARSED_ARGS, 3],
     "v.head string": "prog:verify_since:head",
     "v.head string-re": "prog:verify_since:head",
-    "v.is_ancestor boolean": "prog:verify_since:is_ancestor",
+    "v.is_ancestor boolean": ["prog:verify_since:is_ancestor", 2],
     "v.commits_since array": "prog:verify_since:commits_since",
     "v.plan_touched array": "prog:verify_since:plan_touched",
     "v.changed_since array": "prog:verify_since:changed_since",
@@ -536,7 +544,7 @@ const READS = {
     "pf.new_behaviour boolean": PARSED_REF,
     "pf.changed_symbols array": PARSED_REF,
     "rs.exists boolean": "prog:read_state:exists",
-    "st object": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    "st object": ["parsed: JSON.parse of the run-state message (digest-checked read_state)", 2],
     "st.approved_sha string": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     "rs.clean boolean": "prog:read_state:clean",
     "refTree string": "hasher:hashes.git.*",
@@ -566,7 +574,7 @@ const READS = {
   reviewStep: {
     "rp.changed_paths array": "prog:review_paths:changed_paths",
     "p string-re": PARSED_LOCAL,
-    "r.touches_gate boolean": "role:pr-review:touches_gate",
+    "r.touches_gate boolean": ["role:pr-review:touches_gate", 2],
     "u.shipped_refuses boolean": "role:gate-change-nonweakening-sweep:units[].shipped_refuses",
     "u.new_refuses boolean": "role:gate-change-nonweakening-sweep:units[].new_refuses",
   },
@@ -581,7 +589,7 @@ const READS = {
   writeBack: {
     "pre.results array": "infra:results",
     "h.body_slug string": "infra:results[].body_slug",
-    "r.results array": "infra:results",
+    "r.results array": ["infra:results", 2],
     "s.id string": "parsed: a cleanBrief source of the sealed plan ref",
     "rd.results array": "infra:results",
     "h.id string": "infra:results[].id",
@@ -634,21 +642,23 @@ test("4.0.3 1998: every type-sensitive read in the workflow has a READS entry, a
   const found = typedReads();
   assert.ok(found.size >= 380, "reads discovered: " + found.size);
   const table = new Map();
-  for (const [fn, m] of Object.entries(READS)) for (const [k, spec] of Object.entries(m)) table.set(k + " @ " + fn, spec);
+  for (const [fn, m] of Object.entries(READS)) for (const [k, e] of Object.entries(m)) table.set(k + " @ " + fn, Array.isArray(e) ? e : [e, 1]);
   const problems = [];
-  for (const key of found) {
-    const spec = table.get(key);
-    if (spec === undefined) {
+  for (const [key, count] of found) {
+    const entry = table.get(key);
+    if (entry === undefined) {
       problems.push(key + ": no READS entry (map it to the schema path the value comes through, or mark it parsed)");
       continue;
     }
+    const [spec, n] = entry;
+    if (count !== n) problems.push(key + ": " + count + " occurrence(s), READS says " + n + " (map the new read, then set the count)");
     const kind = key.split(" @ ")[0].split(" ").pop();
     const p = specProblem(spec, kind);
     if (p) problems.push(key + " -> " + spec + ": " + p);
   }
   for (const key of table.keys()) if (!found.has(key)) problems.push(key + ": stale READS entry");
   assert.deepEqual(problems, []);
-  const agent = [...table.values()].filter((s) => !s.startsWith("parsed:")).length;
+  const agent = [...table.values()].filter(([s]) => !s.startsWith("parsed:")).length;
   assert.ok(agent >= 200, "agent-path reads checked: " + agent);
 });
 
