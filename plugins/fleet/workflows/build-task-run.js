@@ -114,7 +114,7 @@ const EXPECTED_VERSIONS = {
 };
 // The plugin version this script ships with (bumped every release; since
 // 4.0.0, 1993, the shipped programs are read from its plugin cache directory only).
-const FLEET_VERSION = "4.0.2";
+const FLEET_VERSION = "4.0.3";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
 const CONTRACT = "fleet-v4";
@@ -467,7 +467,7 @@ const SCHEMAS = {
     },
     test_cmd: {
       type: "object",
-      properties: { command: STR, paths_placeholder: STR, env: { type: "object" }, tools: { type: "array", items: STR } },
+      properties: { command: STR, paths_placeholder: STR, env: { type: "object", additionalProperties: STR }, tools: { type: "array", items: STR } },
       required: ["command"],
     },
     // stripped on receipt (HELD_OUT_KEY); typed so the schema can require it
@@ -505,7 +505,8 @@ const SCHEMAS = {
   }),
   "fleet-test-writer": roleSchema({
     criterion_id: STR,
-    tests: { type: "array", items: ANY_ITEM },
+    // 4.0.3: the short path splits tests by covers (a string); the item stays a string or an object
+    tests: { type: "array", items: { type: ["string", "object"], properties: { file: STR, name: STR, covers: STR, red_kind: STR_OR_NULL, failure_excerpt: STR_OR_NULL } } },
     files: { type: "array", items: STR },
     addressed_findings: { type: "array", items: ANY_ITEM },
   }),
@@ -585,7 +586,8 @@ const SCHEMAS = {
   }),
   "gate-change-nonweakening-sweep": roleSchema({
     verdict: { type: "string", enum: VERDICTS["gate-change-nonweakening-sweep"] },
-    units: { type: "array", items: { type: "object" } },
+    // 4.0.3: the weakening summary reads shipped_refuses/new_refuses with ===; null: no measured verdict (broken instrument)
+    units: { type: "array", items: { type: "object", properties: { unit: STR, mutation: STR, shipped_refuses: { type: ["boolean", "null"] }, new_refuses: { type: ["boolean", "null"] } } } },
     findings: REVIEW_FINDINGS,
   }),
 };
@@ -618,15 +620,24 @@ const PROGRAM_PROP = { type: ["object", "null"], properties: { name: STR_OR_NULL
 // a shipped program's JSON output relayed whole under one key
 const PROGRAM_OUTPUT = { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } };
 
+// 4.0.3 (ledger 1998): a map with one required key per role, each of type
+// `t` (null: the page was not found). Built from ROLES, so it cannot drift.
+// wf_d6901710-32d: a preflight relayed versions as "29"; roleTableProblem
+// refused it (typeof number). The schema now refuses it first.
+function roleMap(t) {
+  const properties = {};
+  for (const role of ROLES) properties[role] = { type: [t, "null"] };
+  return { type: "object", properties, required: ROLES.slice(), additionalProperties: { type: [t, "null"] } };
+}
 const PREFLIGHT_SCHEMA = {
   type: "object",
   required: ["reachable", "missing"],
   properties: {
     reachable: { type: "boolean" },
     missing: { type: "array", items: STR },
-    versions: { type: "object" },
-    dispatch: { type: "object", additionalProperties: { type: ["string", "null"] } },
-    contract: { type: "object", additionalProperties: { type: ["string", "null"] } },
+    versions: roleMap("integer"),
+    dispatch: roleMap("string"),
+    contract: roleMap("string"),
     scripts_probe: { type: "array", items: STR },
     scripts_dir: STR_OR_NULL,
     path_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
@@ -1845,6 +1856,100 @@ const PROGRAM_SLOTS = [
   [/^infra:db-up/, [["sweep", "db_sweep"], ["up", "db_up"]]],
   [/^infra:db-down$/, [["down", "db_down"]]],
 ];
+// 4.0.3 (ledger 1998): the JSON type of every key each shipped program prints
+// (the hasher's are in HASHER_SCHEMA). programSchema puts them at every slot
+// of the program, so the per-call schema types each value the script checks by
+// type or by digest: a relay that turns 1 into "1" is refused by the schema at
+// the tool call, not by a gate. test_db_decl's decl is the repo's own file,
+// checked by testDbDeclProblem: typed object only, so a wrong file still gets
+// that stop text.
+const STRS = { type: "array", items: STR };
+const BOOL = { type: "boolean" };
+const INT = { type: "integer" };
+const STR_LISTS = { type: "object", additionalProperties: STRS };
+const PROGRAM_OUT = {
+  path_check: {
+    tools: { type: "object", additionalProperties: { type: ["object", "null"], properties: { path: STR, real: STR, shim: BOOL } } },
+    args: STRS,
+    path_problems: STRS,
+    digest: STR,
+  },
+  remote_url: { url: STR_OR_NULL, args: STRS, digest: STR },
+  branch_scan: {
+    commits: { type: "array", items: { type: "object", properties: { sha: STR, subject: STR, files: STRS } } },
+    refs: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { name: STR, tag_sha: STR, type: STR, target: STR, target_type: STR, sha256: STR_OR_NULL, task_id: STR_OR_NULL, plan_path: STR_OR_NULL, ref_ok: BOOL },
+      },
+    },
+    plan_tip_time: { type: ["integer", "null"] },
+    digest: STR,
+  },
+  test_db_decl: { decl: { type: ["object", "null"] }, error: STR_OR_NULL, args: STRS, digest: STR },
+  parked: {
+    parked: { type: ["object", "null"], properties: { run: STR, plan_path: STR_OR_NULL, draft_chunks: STRS, findings_chunks: STRS } },
+    written: STR,
+    sha256: STR,
+    args: STRS,
+    digest: STR,
+  },
+  plan_hash: { plan_sha256: STR },
+  format_files: { ran: BOOL, reason: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, digest: STR },
+  plan_ref_write: { head: STR, tag_sha: STR, digest: STR },
+  plan_files: { head: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
+  plan_ref: {
+    refs: { type: "array", items: { type: "object", properties: { name: STR, tag_sha: STR, type: STR, target: STR, target_type: STR, sha256: STR_OR_NULL } } },
+    chunks: STRS,
+  },
+  verify_since: {
+    head: STR,
+    is_ancestor: BOOL,
+    commits_since: { type: "array", items: { type: "object", properties: { sha: STR, subject: STR } } },
+    plan_touched: STRS,
+    changed_since: STRS,
+    args: STRS,
+    digest: STR,
+  },
+  read_state: { exists: BOOL, target: STR, message: STR, head: STR, head_tree: STR, clean: BOOL, digest: STR },
+  state_write: { head: STR, state_sha: STR, digest: STR },
+  tf_gate: { touched: BOOL, iac_files: STRS, problems: STRS, hints: STRS, args: STRS, digest: STR },
+  remote_head: { head: STR_OR_NULL, args: STRS, digest: STR },
+  fleet_scan: { diff: STRS, commits: { type: "array", items: { type: "object", properties: { sha: STR, files: STRS } } }, digest: STR },
+  callers: { occurrences: STR_LISTS, capped: STRS, auto_dont_care: STR_LISTS, doctest_md: STRS, digest: STR },
+  changed_defs: {
+    defs: { type: "array", items: { type: "object", properties: { name: STR, at: STR, end: INT } } },
+    excluded: STRS,
+    unclassified: STRS,
+    unattributed: STRS,
+    digest: STR,
+  },
+  push_classify: {
+    push_result: { type: "string", enum: ["ok", "hook_rejected", "network", "non_ff", "remote_rejected", "ambiguous"] },
+    exit_code: INT,
+    hook_tail: STR,
+    args: STRS,
+    digest: STR,
+  },
+  push_probe: { access: STR, result: STR, exit_code: INT, auth_line: STR_OR_NULL, args: STRS, digest: STR },
+  hook_surface: { surface: STRS, make_paths: STR_LISTS, error: STR_OR_NULL, args: STRS, digest: STR },
+  review_paths: { changed_paths: STRS, digest: STR },
+  precommit_ids: { present: BOOL, ids: STRS, parser: STR_OR_NULL, error: STR_OR_NULL, args: STRS, digest: STR },
+  script_check: { checks: { type: "object", additionalProperties: { type: "object", properties: { ok: BOOL, reason: STR } } }, digest: STR },
+  db_sweep: { podman: BOOL, removed: STRS, kept: STRS, errors: STRS, digest: STR },
+  db_up: {
+    name: STR,
+    port: { type: ["integer", "null"] },
+    dbs: STRS,
+    users: { type: ["object", "null"], additionalProperties: STR },
+    expiry: { type: ["object", "null"], properties: { mechanism: STR, expires: INT } },
+    args: STRS,
+    digest: STR,
+  },
+  db_down: { removed: BOOL, absent: BOOL, error: STR_OR_NULL, args: STRS, digest: STR },
+  hasher: {},
+};
 // {used: the label's [slot, program] pairs whose program the prompt runs,
 // missing: programs the prompt runs that no pair of the label names}. A
 // prompt runs a program when it holds a command `emitted` recorded for it.
@@ -1864,21 +1969,50 @@ function programSlots(label, prompt, emitted) {
 // run it), and an object there must hold both, file_sha256 a string.
 // programProblem compares the value with the table, so no pattern here.
 const FILE_SHA_HEX = { type: "string" };
+function nullable(p) {
+  const t = [].concat(p.type);
+  const w = Object.assign({}, p, { type: t.indexOf("null") >= 0 ? t : t.concat("null") });
+  if (Array.isArray(p.enum) && p.enum.indexOf(null) < 0) w.enum = p.enum.concat(null);
+  return w;
+}
+// 4.0.3 review: the program's type of a key merged into the base schema's
+// property: the program's type wins, the base's typed keys and item
+// requirements stay. A base requirement is kept only for a key the program
+// prints at that level (fleet_scan commits carry no subject).
+function mergeProp(base, add) {
+  if (!base || typeof base !== "object") return add;
+  const m = Object.assign({}, base, add);
+  if (base.properties || add.properties) {
+    m.properties = Object.assign({}, base.properties);
+    for (const k of Object.keys(add.properties || {})) m.properties[k] = mergeProp(m.properties[k], add.properties[k]);
+  }
+  if (base.items && add.items) m.items = mergeProp(base.items, add.items);
+  if (base.required || add.required) {
+    const req = (base.required || []).filter((k) => !add.properties || k in add.properties).concat(add.required || []);
+    m.required = req.filter((k, i) => req.indexOf(k) === i);
+  }
+  return m;
+}
 function programSchema(schema, slots) {
   const s = JSON.parse(JSON.stringify(schema));
   s.properties = s.properties || {};
   const req = (o, ks) => {
     o.required = (o.required || []).concat(ks.filter((k) => (o.required || []).indexOf(k) < 0));
   };
-  for (const [slot] of slots) {
+  for (const [slot, name] of slots) {
+    const out = PROGRAM_OUT[name] || {};
     if (slot === null) {
+      // 4.0.3: a failed step may give a key null; any other value has the program's type
+      for (const k of Object.keys(out)) s.properties[k] = k === "reason" ? out[k] : nullable(mergeProp(s.properties[k], out[k]));
       s.properties.program = PROGRAM_PROP;
       s.properties.file_sha256 = { type: ["string", "null"] };
       req(s, ["program", "file_sha256"]);
       continue;
     }
     const o = Object.assign({ type: ["object", "null"] }, s.properties[slot] || {});
-    o.properties = Object.assign({}, o.properties, { program: PROGRAM_PROP, file_sha256: FILE_SHA_HEX });
+    o.properties = Object.assign({}, o.properties);
+    for (const k of Object.keys(out)) o.properties[k] = mergeProp(o.properties[k], out[k]);
+    Object.assign(o.properties, { program: PROGRAM_PROP, file_sha256: FILE_SHA_HEX });
     req(o, ["program", "file_sha256"]);
     s.properties[slot] = o;
     req(s, [slot]);
@@ -2126,7 +2260,8 @@ function preflightRolesText() {
     "Load mcp__yadgar__agent_prompt_get via ToolSearch. Call it once per pattern in `roles`, with project=`role_project`. " +
     "A pattern is missing when the call returns an error such as not_found, or empty content. " +
     "reachable=false when the tool is absent or every call fails with a transport, auth or connection error. " +
-    "versions maps each found pattern to its `version`. " +
+    "versions, dispatch and contract each hold every pattern in `roles` as a key; a missing pattern maps to null in all three. " +
+    "versions maps each found pattern to its `version`, a JSON integer (29, never \"29\"). " +
     "dispatch maps each found pattern to the first line of its `content` that matches `DISPATCH: model=<tier> (fallback=<tier>)` (the fallback part is optional), copied raw; null when no line matches. " +
     "contract maps each found pattern to the first line of its `content` that starts with `CONTRACT:`, copied raw; null when none. " +
     "`content` often has no trailing newline: its last line counts as a line like any other. "

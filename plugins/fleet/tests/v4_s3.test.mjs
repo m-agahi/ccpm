@@ -521,12 +521,12 @@ test("4.0.0 1990: plan mode seals history.preflight {fleet_version, versions, di
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["contract", "dispatch", "fleet_version", "versions"]);
-  assert.equal(p.fleet_version, "4.0.2");
+  assert.equal(p.fleet_version, "4.0.3");
   assert.deepEqual(p.versions, FROZEN_VERSIONS);
   assert.equal(p.dispatch["fleet-coder"], "DISPATCH: model=opus (fallback=sonnet)");
   assert.deepEqual(Object.keys(p.contract).sort(), Object.keys(FROZEN_VERSIONS).sort());
   const text = JSON.stringify(ref);
-  assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/4.0.2/scripts"), "no scripts dir or PATH check sealed");
+  assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/4.0.3/scripts"), "no scripts dir or PATH check sealed");
   // the caller's cumulative carries the counts only
   assert.deepEqual(Object.keys(out.result.cumulative).sort(), ["agents", "replans", "runs"]);
   // the build uses the sealed tier

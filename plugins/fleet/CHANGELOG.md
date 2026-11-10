@@ -1,5 +1,54 @@
 # Changelog
 
+## [4.0.3] - 2026-11-10
+
+### Fixed
+
+- Plan runs stopped at preflight (ledger 1998, run wf_d6901710-32d) with:
+  `role scope-and-plan version missing in preflight (frozen minimum 29)`.
+  The preflight agent returned `versions` as strings (`"29"`). `roleTableProblem` reads
+  `typeof got === "number"`, and `PREFLIGHT_SCHEMA` typed `versions` as a bare object, so the
+  schema let the strings through. 4.0.1 returned numbers for the same step: model variance.
+- The same class was open in other places: a value the script checks by type (`typeof`,
+  `Array.isArray`, `Number.isInteger`, `=== true`, a regex test, a digest over the relayed
+  value) that comes through a schema path with no type. Each one is now typed:
+  - `PREFLIGHT_SCHEMA`: `versions`, `dispatch` and `contract` require every role as a key
+    (built from `ROLES`), with `integer|null` and `string|null` values. The prompt names the
+    keys and asks for JSON integers.
+  - New `PROGRAM_OUT` table: the type of every key each shipped program prints, at every
+    depth. `programSchema` adds it at each slot of the per-call schema (top level: null
+    allowed for a failed step). Before, many relayed keys had no type, such
+    as `path_check.tools`, `branch_scan.commits/refs`, `callers.occurrences`,
+    `changed_defs.defs`, `script_check.checks`, `db_up.port/users/expiry` and the nested
+    `plan_files`, `plan_ref`, `remote_url_check`, `sweep`, `up`, `down` slots.
+  - `scope-and-plan` `test_cmd.env`: values typed string.
+  - `fleet-test-writer` `tests[]`: still a string or an object; an object's `covers`
+    (the short-path split key) and its other page keys are typed.
+  - `gate-change-nonweakening-sweep` `units[]`: the page's keys typed
+    (`shipped_refuses`, `new_refuses` boolean).
+  - At each slot, the program's type is merged into the base schema's property. The base
+    keeps its typed keys and item requirements (`commits_since[]` sha and subject, `defs[]`
+    name, at and end, `commits[].ref_content`). A base requirement for a key the program does
+    not print is dropped (`fleet_scan` commits have no subject).
+- The `remote_head` `head` field now accepts null (origin has no such branch). 4.0.2 refused
+  it: the shared schema typed `head` as a string.
+- Fields the script never reads accept null where the role page allows no value:
+  `fleet-test-writer` `tests[].red_kind` and `failure_excerpt` (a `guards_existing` test has
+  no failure), and the sweep's `units[].shipped_refuses` and `new_refuses` (a broken
+  instrument has no measured verdict). `covers` stays a string.
+- No check is loosened: a string version that reaches the script still stops the run.
+
+### Changed
+
+- New test `v403_schema_types.test.mjs`: it discovers every type-sensitive read in the
+  workflow and requires an entry for each in a table, either the schema path the value comes
+  through (which must have the read's type) or "parsed" with the reason. A new read with no
+  entry fails the test, and so does a new read that repeats an existing key (each entry
+  holds its number of occurrences). It also checks `PROGRAM_OUT` against the programs' digest keys, the
+  per-call schemas, and every happy-run result against its schema with a small validator.
+- The test `test_db_decl` `decl` stays an untyped object: it is the repo's own file, and
+  `testDbDeclProblem` gives the stop text for a wrong one.
+
 ## [4.0.2] - 2026-11-09
 
 ### Fixed
