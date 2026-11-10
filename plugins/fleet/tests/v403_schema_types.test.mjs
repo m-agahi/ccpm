@@ -245,6 +245,13 @@ const READS = {
     "r.program array": "!infra:program",
     "p.sha256 string": "infra:program.sha256",
   },
+  // 5.0.1 (ledger 2003)
+  printedProgram: {
+    "p object": "infra:program",
+    "p array": "!infra:program",
+    "r.file_sha256 string": "parsed: only compared for equality with program.file_sha256; programProblem checks it against the table",
+    "extra.length number-literal": PARSED_LOCAL,
+  },
   nullable: { "p.enum array": "parsed: a schema property, not an agent result" },
   mergeProp: { "base object": "parsed: a schema property, not an agent result" },
   scriptsProbeOf: {
@@ -883,7 +890,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.0\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.1\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.1\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);
