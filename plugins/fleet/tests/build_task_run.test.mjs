@@ -104,6 +104,7 @@ import {
   planRefWriteCmd,
   stateWriteCmd,
   parkOut,
+  ignoredView,
 } from "./harness.mjs";
 
 
@@ -196,7 +197,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.4 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.5 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -220,7 +221,8 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
   assert.deepEqual(coder.frozen_tests, { "tests/test_a.py": "ha", "tests/test_b.py": "hb" });
   // role view: flat keys path#section, git:<k>, symlink:<rel>
   // 4.0.0 (1987): the freeze ref is frozen too (read-only for the coder)
-  assert.deepEqual(coder.frozen_config_sections, { "pyproject.toml#tool.pytest": "hp", "git:fleetref:refs/fleet/l42/freeze": "T1" });
+  // 5.0.5 (ledger 2018): the ignored map as its digest and count
+  assert.deepEqual(coder.frozen_config_sections, { "pyproject.toml#tool.pytest": "hp", "git:fleetref:refs/fleet/l42/freeze": "T1", "ignored:*": ignoredView({})["*"] });
   const cjIn = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
   assert.deepEqual(cjIn.frozen_tests, coder.frozen_tests);
   assert.equal(cjIn.code_base_ref, PC);
@@ -5554,6 +5556,8 @@ const ARRAY_SITES = {
   "r.refused @ formatFiles": "infra:refused",
   // 5.0.4 (ledger 2013)
   "r.purged_paths @ formatFiles": "infra:purged_paths",
+  // 5.0.5 (ledger 2018)
+  "r.paths @ explainIgnored": "infra:paths",
   "rd.results @ writeBack": "infra:results",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   // 5.0.3 (ledger 2010)
@@ -5966,7 +5970,8 @@ test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebui
 // the script recomputes it over the relayed values, so a dropped or changed
 // key fails the hasher step instead of reading as "nothing there".
 function hasherDigest(r, withChanged) {
-  const o = { fingerprint: r.fingerprint, hashes: r.hashes };
+  // 5.0.5: the program printed the ignored summary (runHasherRaw keeps it aside)
+  const o = { fingerprint: r.fingerprint, hashes: r.ignored_summary ? Object.assign({}, r.hashes, { ignored: r.ignored_summary }) : r.hashes };
   // 4.0.0: the digest covers the program's self-hash and the scripts map
   if (r.program !== undefined) o.program = r.program;
   if (r.scripts !== undefined) o.scripts = r.scripts;
@@ -6101,7 +6106,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.4; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.5; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6285,7 +6290,7 @@ test("2.1.5 canonical JSON sorts keys by code point, as Python sort_keys does", 
     const out = runHasherRaw(wt, "hash", files);
     // the workflow accepts the program's digest for these keys
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
-    const o = { fingerprint: out.fingerprint, hashes: out.hashes, program: out.program, scripts: out.scripts };
+    const o = { fingerprint: out.fingerprint, hashes: Object.assign({}, out.hashes, { ignored: out.ignored_summary }), program: out.program, scripts: out.scripts };
     assert.equal(sha256(fn(o)), out.digest);
   } finally {
     rmSync(wt, { recursive: true, force: true });
@@ -6800,7 +6805,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.4\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.4 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.5\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.5 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8490,7 +8495,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.4/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.5/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

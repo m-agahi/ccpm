@@ -59,6 +59,42 @@ GIT = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
 explicit = json.loads(sys.argv[2]) if len(sys.argv) > 2 else []
 # a tree sha: list the paths that differ between it and the tree now
 base_tree = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+# fleet 5.0.5 (ledger 2018): the run's scratch dir, an absolute path outside
+# the worktree. The full ignored map goes to a file there; the output carries
+# its summary only, so no relayed field grows with the repo's file count.
+scratch = sys.argv[4] if len(sys.argv) > 4 else ''
+if not scratch or not os.path.isabs(scratch):
+    sys.exit('scratch dir must be an absolute path: ' + repr(scratch))
+_rs, _rw = os.path.realpath(scratch), os.path.realpath(wt)
+if _rs == _rw or _rs.startswith(_rw.rstrip('/') + '/'):
+    sys.exit('scratch dir must be outside the worktree: ' + scratch)
+
+# The run's layout is <repo>/.claude/worktrees/fleet-<key>/scratch. The repo
+# root is canonicalised once (a symlink above or at it is the user's own: a
+# symlinked ~/git, macOS /tmp); every component from <realpath repo>/.claude
+# down to the map file is lstat'ed, and a symlink there exits (fail closed).
+# A scratch dir outside that layout (tests) anchors at its parent instead.
+def _anchor(path):
+    p = os.path.normpath(path)
+    k = p.rfind('/.claude/worktrees/')
+    root, rest = (p[:k], p[k + 1:]) if k >= 0 else (os.path.dirname(p), os.path.basename(p))
+    return os.path.realpath(root or '/'), rest.split('/')
+SCRATCH_ROOT, _rest = _anchor(scratch)
+SCRATCH_REAL = os.path.join(SCRATCH_ROOT, *_rest)
+
+def no_link(parts):
+    # each component below SCRATCH_ROOT, lstat'ed
+    cur = SCRATCH_ROOT
+    for part in parts:
+        cur = os.path.join(cur, part)
+        if os.path.islink(cur):
+            sys.exit('scratch path has a symlinked component: ' + cur)
+no_link(_rest)
+# the fleet's own settings file: its hash stays inline (the workflow exempts
+# exactly the fleet's bytes there)
+SETTINGS_LOCAL = '.claude/settings.local.json'
+# the output's cap: a bigger relay cannot be copied exactly by the relay agent
+RELAY_CAP = 65536
 # module names whose bytecode could shadow a frozen file (the purge removes
 # all bytecode before every hash check, so any such pyc is planted)
 FROZEN_STEMS = set(os.path.basename(f)[:-3] for f in explicit if f.endswith('.py')) | {'conftest'}
@@ -301,6 +337,15 @@ def declared_tool(tool, tools):
             return True
     return dist_name(tool) in tools
 
+def repo_dir(tok):
+    # 5.0.5: a relative path to a directory inside the worktree (not the
+    # worktree itself), else None; `pytest scripts/tests/` names one
+    if not tok or tok.startswith('/') or '..' in tok.split('/'):
+        return None
+    full = os.path.realpath(os.path.join(wt, tok))
+    real_wt = os.path.realpath(wt)
+    return norm(tok) if full.startswith(real_wt + os.sep) and os.path.isdir(full) else None
+
 def repo_file(tok):
     # a relative path to a regular file inside the worktree, else None
     if not tok or tok.startswith('/') or '..' in tok.split('/'):
@@ -364,6 +409,7 @@ def hook_refs():
     # also freezes the script tables (see launcher_tables).
     hooks, bad = local_hooks()
     refs = set()
+    dirs = set()
     used_launcher = False
     npm_scripts, py_scripts, tools = repo_names()
     for hid, entry, args in hooks:
@@ -399,6 +445,10 @@ def hook_refs():
             elif name in py_scripts:
                 i += 1
                 lenient = True
+        # 5.0.5: in a non-lenient hook the command token (the first one after
+        # launcher handling) may be a PATH binary; every other token is an
+        # argument. A lenient hook's script or tool was taken above.
+        cmd_at = -1 if lenient else i
         while i < len(toks):
             t = toks[i]
             if t == '-c' and not lenient:
@@ -419,16 +469,22 @@ def hook_refs():
             f = repo_file(t)
             if f:
                 refs.add(f)
+            elif i == cmd_at and '/' not in t and shutil.which(t):
+                pass
+            elif not lenient and i != cmd_at and repo_dir(t):
+                # 5.0.5: an argument naming a repo directory freezes its tree,
+                # whatever binary shares its name. A lenient hook keeps 5.0.4:
+                # its directory arguments are data for the tool, not frozen.
+                dirs.add(repo_dir(t))
             elif lenient or ('/' not in t and shutil.which(t)):
                 pass
             else:
                 bad.append('unresolvable local hook ' + hid + ': ' + t)
             i += 1
-    # the whole dir tree of each referenced file (tracked and untracked-not-ignored)
-    frozen = set()
-    for f in refs:
-        frozen.add(f)
-        d = os.path.dirname(f)
+    # the whole dir tree of each referenced file, and of each referenced
+    # directory (tracked and untracked-not-ignored)
+    frozen = set(refs)
+    for d in sorted(set(os.path.dirname(f) for f in refs) | dirs):
         if d:
             for x in git('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', d).split(b'\x00'):
                 if x:
@@ -606,11 +662,45 @@ if _sd is not None:
         with open(fp, 'rb') as fh:
             scripts[fn[:-3]] = hashlib.sha256(fh.read(1 << 22)).hexdigest()
 out['scripts'] = scripts
+def ignored_summary(full):
+    # 5.0.5: the map goes to <scratch>/hashes/ignored-<sha256 of the file>.json
+    # (written whole, then renamed); the output carries {count and sha256 of
+    # every entry but the settings file, settings (its hash or null), file}
+    data = canon(full)
+    name = 'ignored-' + sha(data) + '.json'
+    d = os.path.join(SCRATCH_REAL, 'hashes')
+    no_link(_rest + ['hashes'])
+    os.makedirs(d, exist_ok=True)
+    no_link(_rest + ['hashes'])
+    if not os.path.isdir(d):
+        sys.exit('scratch hashes path is not a directory: ' + d)
+    real = os.path.join(d, name)
+    no_link(_rest + ['hashes', name])
+    fd, tmp = tempfile.mkstemp(dir=d, prefix='.ignored-')
+    with os.fdopen(fd, 'wb') as fh:
+        fh.write(data)
+    os.replace(tmp, real)
+    # the path the workflow expects (its own scratch string) must resolve to
+    # the file written
+    path = os.path.join(scratch, 'hashes', name)
+    if os.path.realpath(path) != real or os.path.realpath(real) != real:
+        sys.exit('scratch map file does not resolve to the written path: ' + path)
+    rest = dict((k, v) for k, v in full.items() if k != SETTINGS_LOCAL)
+    return {'count': len(rest), 'sha256': sha(canon(rest)), 'settings': full.get(SETTINGS_LOCAL), 'file': path}
+
 out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
-                 'ignored': ignored_files(),
+                 'ignored': ignored_summary(ignored_files()),
                  'suspicious': sorted(set(SUSPICIOUS))}
 # the script recomputes this over the relayed values: a dropped key fails
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 
-print(json.dumps(out, sort_keys=True))
+text = json.dumps(out, sort_keys=True)
+if len(text.encode('utf-8')) > RELAY_CAP:
+    sizes = sorted(((len(v), k) for k, v in out['hashes'].items() if k != 'ignored'), reverse=True)
+    if 'changed' in out:
+        sizes = sorted(sizes + [(len(out['changed']), 'changed')], reverse=True)
+    # a fixed marker: the workflow maps it to its own stop text (stop_gate hash)
+    sys.exit('FLEET_HASHER_RELAY_CAP: the hasher output is over the %d-byte relay cap (%d bytes; largest: %s)' % (
+        RELAY_CAP, len(text.encode('utf-8')), ', '.join('%s %d keys' % (k, n) for n, k in sizes[:3])))
+print(text)

@@ -395,7 +395,12 @@ hooks are never bypassed. So nothing commits until the code judge approves.
   a temporary index outside the worktree: `GIT_INDEX_FILE=<tmp> git read-tree HEAD`, `git add -A`,
   `git write-tree`. The real index is not touched and no hook runs. A judge's before and after
   states must match in HEAD, tree and every hasher map (the maps cover ignored runner config, which
-  the tree does not). `freeze_tree` is the tree at freeze; `code_tree` is the tree the code judge
+  the tree does not). Since 5.0.5 the hasher writes its ignored map to
+  `<scratch>/hashes/ignored-<sha256>.json` and relays only `{count, sha256, settings, file}`
+  (count and digest of every entry but `.claude/settings.local.json`, that file's hash inline), so
+  no relayed field grows with the repo's file count; a change of digest or count stops the run as
+  before, and `ignored_diff.py` lists the changed paths (at most 20) for the stop text. A hasher
+  output over 64 KiB exits non-zero. `freeze_tree` is the tree at freeze; `code_tree` is the tree the code judge
   judged. Test judge and code judge get `freeze_tree`, `code_tree` and `plan_commit`; diff
   production changes with `git diff <freeze_tree>`.
 - **Scope fence on the real changes** (every mode, not only `confirm: "auto"`). The post-coder

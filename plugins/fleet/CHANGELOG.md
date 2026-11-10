@@ -1,5 +1,74 @@
 # Changelog
 
+## [5.0.5] - 2026-11-10
+
+Fleet 5.0.5 (ledger 2018): the hasher relays a digest of the ignored map, never the map, and a
+local hook that names a directory freezes that directory instead of stopping every freeze.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.5), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.5/scripts` dir.
+- A `freeze_digest` or run-state `maps_digest` from 5.0.4 or earlier does not match a 5.0.5 run
+  (the ignored map is digested differently); such a resume stops at its digest check. Start the
+  build again from its plan ref.
+
+### Fixed
+
+- 2018: build run wf_651d74ec-b3b (yadgarhq/iam-db, fleet 5.0.4) failed at
+  `hasher:pre-writers:r1`: `hasher.py` exited 0 with 472 KB of JSON, `hashes.ignored` alone 3157
+  entries (Rust's `target/` and `.claude/settings.local.json`). The relay agent cannot copy that
+  through StructuredOutput, so the digest check failed. No relayed field may grow with the repo's
+  file count now:
+  - `hasher.py` takes the run's scratch dir as a fourth argument (absolute, outside the worktree,
+    else it exits non-zero), writes the full ignored map to
+    `<scratch>/hashes/ignored-<sha256 of the file>.json` and prints
+    `ignored: {count, sha256, settings, file}`: the number and the digest of every entry but
+    `.claude/settings.local.json`, that file's hash (or null), and the file path. The summary is in
+    the program's digest. The workflow checks its shape and that the file is in the run's scratch
+    dir (else the step fails), and keeps two keys of the map: `*` (`<sha256>/<count>`) and the
+    settings file. Every comparison is the same as in 5.0.4: any change of an ignored entry stops
+    the run where it stopped before (writer round: `ownership`; judge: `fingerprint`; post-coder:
+    a hash violation; re-freeze: `hash`), and the settings file keeps its 4.0.0 exemption.
+  - New program `ignored_diff.py` (30 programs): on such a stop only, it reads the two files,
+    checks each against its relayed digest and count, and prints the changed paths (at most 20)
+    and their total; the stop text names them ("ignored path written: <path>"). A missing or
+    forged file, or a comparison that fails, never reads as "no change": the stop happens anyway
+    and its text says the path list is unavailable.
+  - The coder's `frozen_config_sections` and the code judge's `hash_recheck` carry `ignored:*`
+    instead of one key per ignored file.
+  - `hasher.py` exits non-zero when its output is over 64 KiB, naming the largest maps: a clear
+    stop instead of a digest mismatch after a cut copy. The `files` and `sections` maps grow with
+    the repo's runner-config files and hook directories, not with every file; this cap bounds them.
+- 2018: a local hook token that names a directory inside the worktree (`pytest scripts/tests/ -q`,
+  with or without the slash) was "unresolvable" (only regular files resolved), a suspicious entry
+  that stops every freeze. The hasher now freezes that directory's tree (tracked and
+  untracked-not-ignored files), as it freezes the directory of a script a hook names. A directory
+  that does not exist, the worktree itself (`.`) or one outside it stays unresolvable. In a
+  non-lenient hook the PATH-binary exemption applies to the command token only: an argument
+  that names a repo directory is frozen even when a PATH binary has its name (`pytest tests`
+  with a `tests` binary). An argument that names no repo path keeps passing as before.
+- Lenient hooks (an npm script, an `npx`/`uvx` tool, a Python entry point) keep the 5.0.4
+  behaviour exactly: a regular repo file they name is frozen, a directory or any other token
+  passes. `npx eslint src` does not freeze `src/`, so a coder change there is no hash violation.
+  Known gap, tracked in ledger task 2022: a lenient tool that executes a directory's code is not
+  guarded by the freeze.
+- Review fixes: the relay-cap exit prints a fixed marker (`FLEET_HASHER_RELAY_CAP:`); the workflow
+  maps it to its own stop text with stop_gate `hash` (the sizes only when they have the
+  program's exact form). `hasher.py` canonicalises the repo root once (a symlink above or at
+  it, such as a symlinked `~/git` or macOS `/tmp`, is allowed), lstats every component from
+  `<realpath repo>/.claude` down to the map file (`.claude`, `worktrees`, `fleet-<key>`,
+  `scratch`, `hashes`, the file) and exits non-zero on a symlink there; the path the workflow
+  expects must resolve to the file written.
+
+### Not changed (decision for Max)
+
+- 5.0.4 sanctions no churn in ignored build output: `target/`, unlike the top-level `build`,
+  `dist`, `htmlcov` and `.eggs`, is frozen. A Rust run whose writers or judges run `cargo test`
+  rebuilds `target/` and stops at the first hasher after it
+  (`ignored path written: target/...`, stop_gate `ownership`). 5.0.5 keeps that; an allowance
+  is a separate decision.
+
 ## [5.0.4] - 2026-11-10
 
 Fleet 5.0.4 (ledger 2013): a hook entry that names a directory no longer stops every format step,

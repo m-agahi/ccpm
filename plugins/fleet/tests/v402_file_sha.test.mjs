@@ -65,6 +65,8 @@ const SAMPLES = [
   "infra:check-scripts:plan",
   "infra:db-up",
   "infra:db-down",
+  // 5.0.5 (ledger 2018)
+  "infra:ignored-diff:writers:r1",
 ];
 
 const harnessSlots = (label) => {

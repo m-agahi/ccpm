@@ -91,18 +91,22 @@ const INFRA_TIER = [
   ["infra:comments-", "sonnet"],
   // 4.0.0 (1987): the freeze ref write
   ["infra:freeze-ref", "sonnet"],
+  // 5.0.5 (ledger 2018)
+  ["infra:ignored-diff:", "haiku"],
 ];
 // INFRA_TIER_END
 // A haiku PATH check whose relay is broken runs once more on this tier.
 const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 // "ignored": ignored files outside tool caches (inside venvs only startup hooks,
-// egg-links and dist-info/egg-info entry_points.txt)
+// egg-links and dist-info/egg-info entry_points.txt). 5.0.5 (ledger 2018): the
+// hasher relays its summary and the script keeps two keys: IGNORED_ALL (the
+// digest and count of every entry but SETTINGS_LOCAL) and SETTINGS_LOCAL.
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with (bumped every release; since
 // 4.0.0, 1993, the shipped programs are read from its plugin cache directory
 // only; since 5.0.0, R1, the role files too).
-const FLEET_VERSION = "5.0.4";
+const FLEET_VERSION = "5.0.5";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with; a mismatch after an
 // update usually means this script is the stale one.
@@ -688,6 +692,8 @@ const INFRA_SCHEMA = {
     reused: { type: "boolean" },
     merged: ANY_ARRAY,
     files: { type: "array", items: STR },
+    // 5.0.5 (ledger 2018): ignored_diff.py
+    paths: { type: "array", items: STR },
     diff: { type: "array", items: STR },
     chunks: { type: "array", items: STR },
     refs: {
@@ -855,7 +861,12 @@ const HASHER_SCHEMA = {
         sections: { type: "object", additionalProperties: STR },
         git: { type: "object", additionalProperties: STR },
         symlinks: { type: "object", additionalProperties: STR },
-        ignored: { type: "object", additionalProperties: STR },
+        // 5.0.5 (ledger 2018): the map is in `file`, outside the worktree
+        ignored: {
+          type: "object",
+          required: ["count", "sha256", "settings", "file"],
+          properties: { count: { type: "integer" }, sha256: STR, settings: STR_OR_NULL, file: STR },
+        },
         suspicious: { type: "array", items: STR },
       },
     },
@@ -976,12 +987,20 @@ function fleetOwnFile(k, after, wt) {
 
 // The violation text for a changed key.
 const FLEETREF = "fleetref:";
+// 5.0.5 (ledger 2018): the key of every ignored entry but SETTINGS_LOCAL
+// (value "<sha256>/<count>"); its violation text until explainIgnored lists
+// the paths. IGNORED_FILES: that value -> the file of every summary relayed.
+const IGNORED_ALL = "*";
+const IGNORED_CHANGED = "ignored files changed";
+const IGNORED_FILES = {};
+const RELAY_CAP_MARK = "FLEET_HASHER_RELAY_CAP:";
 function violationName(x) {
   if (x.map === "ignored" && x.settings)
     return (
       "ignored path written: " + x.key + " (not the fleet's own settings: before " + (x.settings.before === null ? "absent" : x.settings.before) +
       ", after " + (x.settings.after === null ? "absent" : x.settings.after) + ", the fleet's own " + x.settings.own + "; the harness or a role rewrote it)"
     );
+  if (x.map === "ignored" && x.key === IGNORED_ALL) return IGNORED_CHANGED;
   if (x.map === "ignored") return "ignored path written: " + x.key;
   if (x.map === "git" && x.key.indexOf(FLEETREF) === 0) return "run-state ref touched by role: " + x.key.slice(FLEETREF.length);
   return x.name;
@@ -1737,8 +1756,9 @@ const PROGRAM_SHA256 = {
   "db_up": "287f00df3f12543a7ffed8445fda9ba9823f58dcb37a90301ed05b245d49d913",
   "fleet_scan": "5140d5020bee7cae61994b753e8ee100fc6cdcc1389d3a3559ef5fec5fbe2a3b",
   "format_files": "4aa6b21986547803065ef22d3771a1a4a4f7a1a97dae3d5ad11da1576b0a7d14",
-  "hasher": "360f14f44c2a036d80304a19cc8d2afcaace826d2b7b17419f6ee6792ee5e4cd",
+  "hasher": "dd22428b6c605b39c7786146fc9fb3f532c0f86765f40062ae80cc82334122fe",
   "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
+  "ignored_diff": "3b40bf9ee82a71b8a0284c1411ecb4d30ab2060d72f67cd4b3659455592e99a6",
   "parked": "14150028c5fc657e10214efd33dd6669c83281c8a45f07410aad6e6b7520bd9b",
   "path_check": "9a05c718892ff35b213a61fd8abeadad4dae0fa2ca7671485d670fe02b5a1596",
   "plan_dsn": "269dfac0132859fc884ef34a0032e2932f3d943100e3cbb7906466cf135a5fc6",
@@ -1907,6 +1927,8 @@ const PROGRAM_SLOTS = [
   [/^infra:check-scripts/, [[null, "script_check"]]],
   [/^infra:db-up/, [["sweep", "db_sweep"], ["up", "db_up"]]],
   [/^infra:db-down$/, [["down", "db_down"]]],
+  // 5.0.5 (ledger 2018)
+  [/^infra:ignored-diff:/, [[null, "ignored_diff"]]],
 ];
 // 5.0.2 (ledger 2006): the keys each shipped program prints, bar program and
 // digest, as "<name>" or "<name>:<mode>" where the printed keys depend on the
@@ -1949,6 +1971,8 @@ const PROGRAM_KEYS = {
   "db_sweep": ["podman", "removed", "kept", "errors"],
   "db_up": ["name", "port", "dbs", "users", "expiry", "args"],
   "db_down": ["removed", "absent", "error", "args"],
+  // 5.0.5 (ledger 2018)
+  "ignored_diff": ["paths", "total", "error", "args"],
 };
 // plan_hash and plan_ref print no digest (the script checks them against the plan)
 const NO_DIGEST_PROGRAMS = ["plan_hash", "plan_ref"];
@@ -2063,6 +2087,7 @@ const PROGRAM_OUT = {
     digest: STR,
   },
   db_down: { removed: BOOL, absent: BOOL, error: STR_OR_NULL, args: STRS, digest: STR },
+  ignored_diff: { paths: STRS, total: { type: ["integer", "null"] }, error: STR_OR_NULL, args: STRS, digest: STR },
   hasher: {},
 };
 // {used: the label's [slot, program] pairs whose program the prompt runs,
@@ -2520,7 +2545,7 @@ function workspacePrompt(inputs) {
 
 function hasherPrompt(inputs) {
   const hid = inputs.base_tree ? "hasher:base" : "hasher";
-  const cmd = progCmd("hasher", [inputs.worktree, JSON.stringify(inputs.test_files)].concat(inputs.base_tree ? [inputs.base_tree] : []));
+  const cmd = progCmd("hasher", [inputs.worktree, JSON.stringify(inputs.test_files), inputs.base_tree || "", inputs.scratch_dir]);
   const rules =
     "runner-config files hashed whole: " +
     RUNNER_CONFIG_FILES.join(", ") +
@@ -2536,7 +2561,7 @@ function hasherPrompt(inputs) {
     RUNNER_CONFIG_SECTIONS.map((s) => s.file + "#" + s.section + " = " + s.rule).join("; ") +
     ". Canonical form: json.dumps(sort_keys=True, separators=(',', ':')). Missing section = ABSENT, missing file = MISSING.";
   return (
-    "Infra step of the fleet build workflow: HASHER. Read only: do not edit, create, stage or commit anything in the worktree.\n" +
+    "Infra step of the fleet build workflow: HASHER. Read only: do not edit, create, stage or commit anything in the worktree (the program writes its ignored map to scratch_dir only).\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
@@ -2544,7 +2569,7 @@ function hasherPrompt(inputs) {
     cmd +
     "\n" +
     // 5.0.2 (ledger 2006): scripts (the shipped programs' sha256s) is digested too
-    "It prints one JSON object " + printsKeys(hid) + ": `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored, suspicious}, `scripts` = the sha256 of each shipped program" +
+    "It prints one JSON object " + printsKeys(hid) + ": `fingerprint` = {head, tree}, `hashes` = {files, sections, git, symlinks, ignored (a summary: count, sha256, settings, file), suspicious}, `scripts` = the sha256 of each shipped program" +
     (inputs.base_tree ? ", `changed` = the paths that differ from the base tree" : "") +
     ', and `digest` (a sha256 over all of them). Return {status: "ok", ' + returnKeys(hid) + "} with those values copied exactly: every key of every map, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). " +
     "The tree is built in a temporary index (GIT_INDEX_FILE=<temp file>: git read-tree HEAD, git add -A, git write-tree); the real index is never touched and no hook runs. " +
@@ -3245,6 +3270,18 @@ function reviewPathsPrompt(inputs) {
   );
 }
 
+// 5.0.5 (ledger 2018)
+function ignoredDiffPrompt(inputs) {
+  return (
+    "Infra step of the fleet build workflow: list the ignored paths that differ between two hasher states. Read only: no edits.\n" +
+    "Inputs: " + JSON.stringify(inputs) + "\n" +
+    "Run this one command exactly as written, unmodified; run nothing else:\n" +
+    progCmd("ignored_diff", inputs.args) + "\n" +
+    "It prints one JSON object " + printsKeys("ignored_diff") + ". Copy every value unchanged (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, " + returnKeys("ignored_diff") + "}."
+  );
+}
+
 function reviewCleanupPrompt(inputs) {
   return (
     "Infra step of the fleet build workflow: remove the review's scratch worktrees. Touch nothing else: never remove a worktree outside <scratch_dir>, never delete a branch, never edit a file.\n" +
@@ -3862,7 +3899,7 @@ function requireOk(who, r) {
 // A worktree state: {fingerprint: {head, tree}, hashes, changed}. baseTree:
 // also list the paths that differ from that tree (the ownership check).
 async function hasher(label, worktree, testFiles, phaseName, baseTree) {
-  const inputs = { worktree, test_files: testFiles };
+  const inputs = { worktree, test_files: testFiles, scratch_dir: scratchOf(worktree) };
   if (baseTree) inputs.base_tree = baseTree;
   const r = await dispatch(label, hasherPrompt(inputs), {
     schema: HASHER_SCHEMA,
@@ -3874,6 +3911,12 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
   const mapsOk =
     !!h && HASH_MAPS.every((m) => h[m] && typeof h[m] === "object") && Array.isArray(h.suspicious);
   const fp = r.fingerprint;
+  // 5.0.5 (review S2): hasher.py's fixed relay-cap marker; the stop text is the
+  // script's own, with the sizes only when they have the program's exact form
+  if (r.status !== "ok" && typeof r.reason === "string" && r.reason.indexOf(RELAY_CAP_MARK) >= 0) {
+    const m = /^FLEET_HASHER_RELAY_CAP: the hasher output is over the 65536-byte relay cap \(\d+ bytes; largest: ([a-z]+ \d+ keys(?:, [a-z]+ \d+ keys){0,2})\)$/.exec(r.reason.trim());
+    halt("needs_human", "hasher " + label + ": the hasher output is over the 65536-byte relay cap" + (m ? " (largest: " + m[1] + ")" : "") + "; a hashed map grows with this repo (runner config, .gitignore files or a hook directory), so the run cannot relay it", "hash");
+  }
   if (r.status !== "ok" || !fp || !fp.head || !fp.tree || !mapsOk || (baseTree && !Array.isArray(r.changed)))
     halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
   requireProgram(r, "hasher", "hasher " + label);
@@ -3884,7 +3927,42 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
   // programs; a change by any role shows up at the next one
   const sm = scriptsMapProblem(r.scripts, state.scriptsDir);
   if (sm) halt("needs_human", "hasher " + label + ": " + sm, "hash");
-  return r;
+  // 5.0.5 (ledger 2018): the ignored summary; its file is in this run's scratch dir
+  const ig = h.ignored;
+  const fileRe = new RegExp("^" + (scratchOf(worktree) + "/hashes/ignored-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[0-9a-f]{64}\\.json$");
+  if (!Number.isInteger(ig.count) || ig.count < 0 || !SHA256_RE.test(ig.sha256) || !(ig.settings === null || typeof ig.settings === "string") || typeof ig.file !== "string" || !fileRe.test(ig.file))
+    halt("failed", "hasher " + label + " failed: the ignored summary " + JSON.stringify(ig) + " is not {count, sha256, settings, file} under " + scratchOf(worktree) + "/hashes");
+  IGNORED_FILES[ig.sha256 + "/" + ig.count] = ig.file;
+  const pseudo = { [IGNORED_ALL]: ig.sha256 + "/" + ig.count };
+  if (ig.settings !== null) pseudo[SETTINGS_LOCAL] = ig.settings;
+  return Object.assign({}, r, { hashes: Object.assign({}, h, { ignored: pseudo }) });
+}
+
+// 5.0.5 (ledger 2018): `list` (violation texts) with IGNORED_CHANGED replaced
+// by one "ignored path written: <path>" per path ignored_diff.py lists between
+// the hasher maps a and b (capped). The stop is decided already: a comparison
+// that fails says the list is unavailable, never that nothing changed.
+async function explainIgnored(list, a, b, tag, phaseName) {
+  const i = list.indexOf(IGNORED_CHANGED);
+  if (i < 0) return list;
+  const va = String((a && a.ignored && a.ignored[IGNORED_ALL]) || "");
+  const vb = String((b && b.ignored && b.ignored[IGNORED_ALL]) || "");
+  const args = [IGNORED_FILES[va], va.split("/")[0], va.split("/")[1], IGNORED_FILES[vb], vb.split("/")[0], vb.split("/")[1]];
+  const label = "infra:ignored-diff:" + tag;
+  let why = "no file for a state";
+  if (args.every((x) => typeof x === "string" && x)) {
+    const r = await softDispatch(label, ignoredDiffPrompt({ args }), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName });
+    const relayed = !!r && r.status === "ok" && relayDigestOk(r, progKeys("ignored_diff"), "ignored_diff") && canonical(r.args) === canonical(args);
+    const ok =
+      relayed && r.error === null && Number.isInteger(r.total) && r.total > 0 && Array.isArray(r.paths) && r.paths.length && r.paths.length <= r.total && r.paths.every((p) => typeof p === "string");
+    if (ok) {
+      const names = r.paths.map((p) => "ignored path written: " + p);
+      if (r.total > r.paths.length) names.push("ignored path written: (" + (r.total - r.paths.length) + " more)");
+      return list.slice(0, i).concat(names, list.slice(i + 1));
+    }
+    why = !r ? "no result" : !relayed ? "the relay does not match the program's digest" : typeof r.error === "string" && r.error ? r.error : "no path listed";
+  }
+  return list.slice(0, i).concat(["ignored path written: (the ignored files changed: " + va.split("/")[1] + " -> " + vb.split("/")[1] + " files; the path list is unavailable: " + why + ")"], list.slice(i + 1));
 }
 
 async function infra(label, prompt, phaseName, agentType) {
@@ -3904,10 +3982,11 @@ async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, f
   const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT, true);
   const after = await hasher("hasher:fp-post:" + roundTag, worktree, files, phaseName);
   if (!sameState(before, after, worktree)) {
-    const what = [];
+    let what = [];
     if (before.fingerprint.head !== after.fingerprint.head) what.push("HEAD");
     if (before.fingerprint.tree !== after.fingerprint.tree) what.push("tree");
     for (const k of changedKeys(before.hashes, after.hashes, worktree)) what.push(violationName(k));
+    what = await explainIgnored(what, before.hashes, after.hashes, roundTag, phaseName);
     halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") changed " + what.join(", ") + "; verdict discarded", "fingerprint");
   }
   checkRole(role, r);
@@ -6565,7 +6644,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const changed = post.changed.map(normPath);
     for (const k of changedKeys(pre.hashes, post.hashes, mainWt)) {
       if (k.map === "ignored" || (k.map === "git" && k.key.indexOf(FLEETREF) === 0))
-        halt("needs_human", violationName(k) + " in test round " + n, "ownership");
+        halt("needs_human", (await explainIgnored([violationName(k)], pre.hashes, post.hashes, "writers:r" + n, "Tests")).join(", ") + " in test round " + n, "ownership");
       if (!(k.map === "files" && owner[k.key])) changed.push(k.name);
     }
     const ids = pending.map((p) => p.criterion.id).join(", ");
@@ -6661,7 +6740,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       for (const c of testable) if (refreeze.criteria.indexOf(c.id) >= 0) for (const f of c.test_files) allowed[f] = true;
       const changed = [];
       for (const k of changedKeys(frozen, h.hashes, mainWt)) {
-        if (k.map !== "files" || !allowed[k.key]) halt("needs_human", "re-freeze touched unrouted path " + k.name, "hash");
+        if (k.map !== "files" || !allowed[k.key])
+          halt("needs_human", "re-freeze touched unrouted path " + (k.map === "ignored" && k.key === IGNORED_ALL ? (await explainIgnored([IGNORED_CHANGED], frozen, h.hashes, "refreeze:f" + freezes, "Freeze")).join(", ") : k.name), "hash");
         changed.push({ path: k.name, before: k.key in frozen.files ? frozen.files[k.key] : null, after: k.key in h.hashes.files ? h.hashes.files[k.key] : null });
       }
       state.refreezeLog.push({
@@ -6788,7 +6868,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (h.fingerprint.head !== expectedHead)
       halt("needs_human", "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + "; the coder works uncommitted", "ownership");
     fenceChanged("code round " + m, h.changed);
-    const viol = diffHashes(frozen, h.hashes, mainWt);
+    const viol = await explainIgnored(diffHashes(frozen, h.hashes, mainWt), frozen, h.hashes, "code:r" + m, "Code");
     const coderDrift = contractProblem("fleet-coder", coder);
     if (viol.length && (coderDrift || coder.status !== "ok"))
       halt(
