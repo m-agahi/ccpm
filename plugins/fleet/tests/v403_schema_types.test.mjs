@@ -609,6 +609,8 @@ const READS = {
     "r.touches_gate boolean": ["role:pr-review:touches_gate", 2],
     "u.shipped_refuses boolean": "role:gate-change-nonweakening-sweep:units[].shipped_refuses",
     "u.new_refuses boolean": "role:gate-change-nonweakening-sweep:units[].new_refuses",
+    // release review of #48: the unmeasured-unit stop
+    "u object": "role:gate-change-nonweakening-sweep:units[]",
   },
   writeBodies: {
     "ctx.project string": PARSED_ARGS,

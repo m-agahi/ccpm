@@ -77,6 +77,10 @@ follow in 5.1.0, mutation testing in 5.2.0.
   verdict on its own. An approving audit's advisory findings are written to the gate log
   (`plan-audit advisory finding (approve): ...`); before, the script dropped them. The
   existing gating rules are unchanged.
+- Review of #48 (fail closed): a `non_weakening` sweep with a unit whose `shipped_refuses` or
+  `new_refuses` is null or missing stops the run `needs_human` at review: "sweep unit <unit> not
+  measured (<mutation>)", which closes a gap present since 4.0.3: an unmeasured unit passed as
+  proven non-weakening.
 - Review of #48: plan-audit gets `brief` (every source body) as an input, the text its
   silent-omission and `source_quote` checks read.
 - Review of #48: the code judge's `prior_findings` keep the last judge, review, obligations or

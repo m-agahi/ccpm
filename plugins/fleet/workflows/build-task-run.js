@@ -6957,6 +6957,13 @@ async function reviewStep(k, ctx) {
         ctx.hashedFiles,
       );
       const sw = js.r;
+      // release review of #48 (fail closed; a gap since 4.0.3): an unmeasured
+      // unit (a null or missing verdict on either side) never proves non_weakening
+      if (sw.verdict === "non_weakening") {
+        const um = sw.units.find((u) => !u || typeof u !== "object" || u.shipped_refuses == null || u.new_refuses == null);
+        if (um !== undefined)
+          halt("needs_human", "sweep unit " + (um && um.unit != null ? um.unit : "?") + " not measured (" + (um && um.mutation != null ? um.mutation : "no reason given") + ")", "review");
+      }
       for (const f of sw.findings) if (f && f.severity === "blocking") blocking.push(f);
       for (const f of sw.findings) if (f && f.severity !== "blocking") nits.push(f);
       if (sw.verdict === "weakening") {

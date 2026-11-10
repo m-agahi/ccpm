@@ -483,6 +483,31 @@ test("#48 release 8: test-writer and test judge skip the reverse-order run for a
   for (const r of ["fleet-test-writer", "fleet-test-judge"]) assert.match(roleText(r), /`test_args`[^.]*skip the reverse-order run/, r);
 });
 
+test("#48 release 9 (fail closed): a non_weakening sweep with an unmeasured unit stops needs_human at review", async () => {
+  const sweep = (units) =>
+    happy({
+      script: {
+        "infra:review-paths:v1": { status: "ok", reason: "listed", changed_paths: ["hooks/check.py"] },
+        "role:gate-change-nonweakening-sweep:v1": { status: "ok", reason: "x", verdict: "non_weakening", units, findings: [] },
+        "hasher:fp-post:sweep:v1": { status: "ok", fingerprint: { head: CSHA(1), tree: "K1" } },
+      },
+    });
+  for (const u of [
+    { unit: "hook-a", mutation: "0 units examined", shipped_refuses: null, new_refuses: true },
+    { unit: "hook-a", mutation: "0 units examined", shipped_refuses: true, new_refuses: null },
+    { unit: "hook-a", mutation: "0 units examined" },
+  ]) {
+    const out = await run(sweep([{ unit: "hook-b", mutation: "m", shipped_refuses: true, new_refuses: true }, u]), ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(u));
+    assert.equal(out.result.stop_gate, "review");
+    assert.match(out.result.reason, /sweep unit hook-a not measured \(0 units examined\)/);
+    assert.ok(out.labels.includes("infra:review-cleanup:v1"), "cleanup still runs");
+  }
+  const ok = await run(sweep([{ unit: "hook-b", mutation: "m", shipped_refuses: true, new_refuses: true }]), ARGS);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+  assert.match(readFileSync(join(ROLES_SRC, "..", "CHANGELOG.md"), "utf8"), /not\s+measured[^.]*since 4\.0\.3/);
+});
+
 test("#48 release 9: the sweep allows null shipped_refuses / new_refuses when the instrument is broken", () => {
   assert.match(roleText("gate-change-nonweakening-sweep"), /`shipped_refuses`[^.]*`new_refuses`[^.]*null[^.]*instrument is broken/);
 });
