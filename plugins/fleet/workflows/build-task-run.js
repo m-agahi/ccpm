@@ -1042,6 +1042,10 @@ function configView(h) {
   for (const m of HASH_MAPS) o[m] = HASH_FILES[m + ":" + h[m][MAP_ALL]] || null;
   return o;
 }
+// a map file's name hex (the sha256 of its bytes)
+function fileHex(f) {
+  return String(f).slice(-69, -5);
+}
 // "<sha256>/<count>" of a map's summary -> count (NaN: none)
 function countOf(pm) {
   return Number(String((pm && pm[MAP_ALL]) || "").split("/")[1]);
@@ -1768,8 +1772,8 @@ const PROGRAM_SHA256 = {
   "db_sweep": "3f86d621cc27259e006fff0d7910c621d11f955b138db3b18e9337139437d6c5",
   "db_up": "287f00df3f12543a7ffed8445fda9ba9823f58dcb37a90301ed05b245d49d913",
   "fleet_scan": "5140d5020bee7cae61994b753e8ee100fc6cdcc1389d3a3559ef5fec5fbe2a3b",
-  "format_files": "10f157b5fee4e599d2f244c8b625341a78a8b50df5f026a936bcf2eb622aa246",
-  "hash_diff": "4e8755480941e0d77b7a2a310499787ce29d9187e0a72ece25f60e05a98b12c0",
+  "format_files": "41fa33d348944dd704583568fd6a5d95e4f8a7ce47bd8a75dd736a61d0afc714",
+  "hash_diff": "9ff52aea4895f751d39ab062d446078820bc1990eb8e7cfdc91083af1a413722",
   "hasher": "e96807e4a8a376285f0b30a0bdf3529185986b473e8e9e01146df27140dd67dd",
   "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
   "parked": "14150028c5fc657e10214efd33dd6669c83281c8a45f07410aad6e6b7520bd9b",
@@ -1963,7 +1967,7 @@ const PROGRAM_KEYS = {
   "parked:write": ["written", "sha256", "args"],
   "parked:park": ["target", "clean", "dirty", "args"],
   "plan_hash": ["plan_sha256"],
-  "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed"],
+  "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map"],
   "plan_ref_write": ["head", "tag_sha"],
   "plan_files": ["head", "files", "args", "dsn_paths"],
   "plan_dsn": ["holds", "lines", "args"],
@@ -1987,7 +1991,7 @@ const PROGRAM_KEYS = {
   "db_up": ["name", "port", "dbs", "users", "expiry", "args"],
   "db_down": ["removed", "absent", "error", "args"],
   // 5.0.7 (ledger 2020)
-  "hash_diff": ["changed", "total", "counts", "error", "args_sha256"],
+  "hash_diff": ["changed", "total", "counts", "resolved", "error", "args"],
   // 5.0.6 (ledger 2019)
   "build_dir:reset": ["dirs", "args"],
   "build_dir:clean": ["removed", "bytes", "args"],
@@ -2052,7 +2056,7 @@ const PROGRAM_OUT = {
     digest: STR,
   },
   plan_hash: { plan_sha256: STR },
-  format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, digest: STR },
+  format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, digest: STR },
   plan_ref_write: { head: STR, tag_sha: STR, digest: STR },
   plan_files: { head: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
   plan_dsn: { holds: BOOL, lines: { type: "array", items: INT }, args: STRS, digest: STR },
@@ -2109,8 +2113,9 @@ const PROGRAM_OUT = {
     changed: { type: "array", items: { type: "array", items: STR } },
     total: { type: ["integer", "null"] },
     counts: { type: "object", additionalProperties: { type: "array", items: INT } },
+    resolved: { type: "object", additionalProperties: STRS },
     error: STR_OR_NULL,
-    args_sha256: STR,
+    args: STRS,
     digest: STR,
   },
   // 5.0.6 (ledger 2019)
@@ -2121,7 +2126,7 @@ const PROGRAM_OUT = {
 // missing: programs the prompt runs that no pair of the label names}. A
 // prompt runs a program when it holds a command `emitted` recorded for it.
 function programSlots(label, prompt, emitted) {
-  const hit = PROGRAM_SLOTS.find((e) => e[0].test(label.replace(/:digest-retry$/, "")));
+  const hit = PROGRAM_SLOTS.find((e) => e[0].test(label.replace(/:(digest|args)-retry$/, "")));
   // a step with no entry runs no program: a command its prompt holds is quoted
   // text (the task input, a tldr), never a slot and never a stop
   if (!hit) return { used: [], missing: [] };
@@ -2835,11 +2840,13 @@ function formatFilesPrompt(inputs) {
 // (scope), or hooks that still rewrite after 3 runs (commit).
 const FIX_RUN_TIMEOUT = 180;
 async function formatFiles(label, worktree, select, frozenList, allowed, phaseName, scratchDir) {
-  const r = await infra(label, formatFilesPrompt({ worktree, select, frozen: frozenList, scratch_dir: scratchDir }), phaseName);
+  // frozenList: paths, or (5.0.7) {sha}: the frozen files map, passed as a 12-hex handle
+  const r = await infra(label, formatFilesPrompt({ worktree, select, frozen: Array.isArray(frozenList) ? frozenList : "@" + frozenList.sha.slice(0, 12), scratch_dir: scratchDir }), phaseName);
   if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed) || !Array.isArray(r.refused))
     halt("failed", label + " returned no ran/stable/files/changed/refused");
   requireProgram(r, "format_files", label);
   if (!relayDigestOk(r, progKeys("format_files"), "format_files")) halt("failed", label + ": the relayed result does not match the program's digest");
+  if (!Array.isArray(frozenList) && r.frozen_map !== frozenList.sha) halt("failed", label + ": the program read the frozen map " + JSON.stringify(r.frozen_map) + ", not " + frozenList.sha, "hash");
   // 5.0.4 (ledger 2013): the cache purge before the comparison
   if (!Number.isInteger(r.purged) || r.purged < 0 || !Array.isArray(r.purged_paths) || r.purged_paths.length > r.purged || r.purged_paths.some((x) => typeof x !== "string"))
     halt("failed", label + " returned no purged/purged_paths", "contract");
@@ -2851,7 +2858,7 @@ async function formatFiles(label, worktree, select, frozenList, allowed, phaseNa
     return r;
   }
   const changed = r.changed.map((x) => normPath(String(x)));
-  // frozenList: paths, or (5.0.7) "@<frozen files map>": the program lists the hits
+  // the program lists the frozen paths a hook changed
   if (!Array.isArray(r.frozen_changed) || r.frozen_changed.some((x) => typeof x !== "string")) halt("failed", label + " returned no frozen_changed list", "contract");
   const frozenHit = changed.filter((x) => (Array.isArray(frozenList) && frozenList.indexOf(x) >= 0) || r.frozen_changed.map(normPath).indexOf(x) >= 0);
   if (frozenHit.length)
@@ -3844,6 +3851,7 @@ async function dispatch(label, prompt, opts) {
 function agentOpts(opts, label, model) {
   const o = Object.assign({}, opts, { label, model });
   delete o.digest;
+  delete o.args;
   return o;
 }
 
@@ -3859,11 +3867,20 @@ function digestOnlyMiss(r, id) {
   const name = id.split(":")[0];
   return !!r && typeof r === "object" && r.status === "ok" && !programProblem(r, name) && typeof r.digest === "string" && SHA256_RE.test(r.digest) && !relayDigestOk(r, progKeys(id), name);
 }
+// 5.0.7 review: opts.args (the args the step sent): a relay whose ONLY fault
+// is that its program ran on other args (a value mis-typed) gets the same one
+// retry, label <label>:args-retry.
+const ARGS_RETRY = ":args-retry";
+const RETRY_RE = /:(digest|args)-retry$/;
 async function digestRetry(label, prompt, opts, r, again) {
-  if (!opts || !opts.digest || label.endsWith(DIGEST_RETRY) || !digestOnlyMiss(r, opts.digest)) return r;
+  if (!opts || !opts.digest || RETRY_RE.test(label)) return r;
+  const dm = digestOnlyMiss(r, opts.digest);
+  const am = !dm && Array.isArray(opts.args) && !!r && r.status === "ok" && relayDigestOk(r, progKeys(opts.digest), opts.digest.split(":")[0]) && canonical(r.args) !== canonical(opts.args);
+  if (!dm && !am) return r;
   if (again === softDispatch && capped() + 1 > MAX_AGENTS) return r;
-  gate(label + ": the relay does not match the program's digest; dispatched once more to a fresh agent (" + label + DIGEST_RETRY + ")");
-  return again(label + DIGEST_RETRY, prompt + "\nA first relay of this step did not match the program's digest: run the command again and copy every value exactly.", opts);
+  const sfx = dm ? DIGEST_RETRY : ARGS_RETRY;
+  gate(label + ": " + (dm ? "the relay does not match the program's digest" : "the program ran on other arguments than the workflow sent") + "; dispatched once more to a fresh agent (" + label + sfx + ")");
+  return again(label + sfx, prompt + (dm ? "\nA first relay of this step did not match the program's digest: run the command again and copy every value exactly." : "\nA first run of this step used other arguments: run the command again exactly as written."), opts);
 }
 
 // Infra agents whose failure must not stop the run (write-back). Returns null
@@ -4115,23 +4132,30 @@ const BUILD_ENV_HINT =
 async function expandKeys(keys, a, b, tag, phaseName, errGate) {
   const maps = keys.filter((x) => x.key === MAP_ALL).map((x) => x.map);
   if (!maps.length) return keys;
+  // 5.0.7 review: the program gets <scratch> and 12-hex handles, never a
+  // 64-hex value; it prints the full shas, checked here against the files held
   const args = [];
+  const full = {};
   let why = null;
   for (const m of maps) {
-    const fa = HASH_FILES[m + ":" + a[m][MAP_ALL]];
-    const fb = HASH_FILES[m + ":" + b[m][MAP_ALL]];
-    if (!fa || !fb) why = "no file for a state of the " + m + " map";
-    args.push(m, fa, fb);
+    const f = [HASH_FILES[m + ":" + a[m][MAP_ALL]], HASH_FILES[m + ":" + b[m][MAP_ALL]]];
+    if (!f[0] || !f[1]) why = "no file for a state of the " + m + " map";
+    else {
+      full[m] = f.map(fileHex);
+      if (!args.length) args.push(f[0].replace(/\/hashes\/[^/]+$/, ""));
+      args.push(m, full[m][0].slice(0, 12), full[m][1].slice(0, 12));
+    }
   }
   let r = null;
   if (!why) {
-    r = await softDispatch("infra:hash-diff:" + tag, hashDiffPrompt({ args }), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, digest: "hash_diff" });
+    r = await softDispatch("infra:hash-diff:" + tag, hashDiffPrompt({ args }), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, digest: "hash_diff", args });
     const digestOk = !!r && r.status === "ok" && relayDigestOk(r, progKeys("hash_diff"), "hash_diff");
-    const relayed = digestOk && r.args_sha256 === sha256Hex(canonical(args));
+    const argsOk = digestOk && canonical(r.args) === canonical(args);
+    const relayed = argsOk && canonical(r.resolved) === canonical(full);
     const rowsOk =
       relayed && Number.isInteger(r.total) && Array.isArray(r.changed) && r.changed.length <= r.total &&
       r.changed.every((w) => Array.isArray(w) && w.length === 3 && maps.indexOf(w[0]) >= 0 && typeof w[1] === "string" && KEY_KINDS.indexOf(w[2]) >= 0);
-    why = !r ? "no result" : !digestOk ? "the relay does not match the program's digest" : !relayed ? "the program ran on other arguments than the workflow sent" : typeof r.error === "string" && r.error ? r.error
+    why = !r ? "no result" : r.status !== "ok" ? "the step returned " + r.status + ": " + String(r.reason || "no reason").slice(0, 300) : !digestOk ? "the relay does not match the program's digest" : !argsOk ? "the program ran on other arguments than the workflow sent" : !relayed ? "the program read other map files than the summaries name" : typeof r.error === "string" && r.error ? r.error
       : !rowsOk ? "no usable key list"
       : !maps.every((m) => canonical(r.counts && r.counts[m]) === canonical([countOf(a[m]), countOf(b[m])])) ? "a map file does not hold its relayed count"
       : r.total === 0 ? "no key listed although the digests differ" : null;
@@ -4163,11 +4187,13 @@ function keyNames(keys) {
   return names;
 }
 
-// digest (5.0.7): the read-only program's PROGRAM_KEYS id (digestRetry)
-async function infra(label, prompt, phaseName, agentType, digest) {
+// digest (5.0.7): the read-only program's PROGRAM_KEYS id; args: the args
+// its output echoes (digestRetry)
+async function infra(label, prompt, phaseName, agentType, digest, args) {
   const opts = { schema: INFRA_SCHEMA, phase: phaseName };
   if (agentType) opts.agentType = agentType;
   if (digest) opts.digest = digest;
+  if (args) opts.args = args;
   const r = await dispatch(label, prompt, opts);
   if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
   return r;
@@ -5053,7 +5079,7 @@ function hookSurfacePrompt(inputs) {
 }
 
 async function hookSurface(label, worktree, rev, targets, phaseName) {
-  const r = await infra(label, hookSurfacePrompt({ worktree, rev, targets }), phaseName, JUDGE_AGENT, "hook_surface");
+  const r = await infra(label, hookSurfacePrompt({ worktree, rev, targets }), phaseName, JUDGE_AGENT, "hook_surface", [worktree, rev, JSON.stringify(targets)]);
   requireProgram(r, "hook_surface", label, "needs_human", "hooks");
   if (!Array.isArray(r.surface) || !relayDigestOk(r, progKeys("hook_surface"), "hook_surface"))
     halt("failed", label + ": the relayed surface does not match the program's digest");
@@ -5762,6 +5788,7 @@ async function autoGates(ctx) {
       "Auto-confirm",
       JUDGE_AGENT,
       "precommit_ids",
+      [ctx.mainWt, ctx.planCommit],
     );
     requireProgram(cfg, "precommit_ids", "infra:precommit-ids" + sfx);
     // 4.0.0 review: the ids feed G2, so the relay is digest-checked (fail closed)
@@ -6422,7 +6449,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       halt("needs_human", "IaC pre-push check could not complete: the plan ref holds no sealed origin URL (https or git@host: form); re-run plan", "iac");
     if (ws.remoteUrl !== remoteUrl)
       halt("needs_human", "IaC pre-push check could not complete: origin's configured URL changed since the plan was sealed (" + remoteUrl + " -> " + ws.remoteUrl + ")", "iac");
-    const r = await infra(label, tfGatePrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha, remote_url: remoteUrl }), "PR", JUDGE_AGENT, "tf_gate");
+    const r = await infra(label, tfGatePrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha, remote_url: remoteUrl }), "PR", JUDGE_AGENT, "tf_gate", [mainWt, defaultBranch, approvedSha, remoteUrl]);
     const strs = (a) => Array.isArray(a) && a.every((x) => typeof x === "string");
     const scanIac = (scanDiff || []).filter(isIacPath);
     if (
@@ -6441,7 +6468,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // himself (origin's head is exactly the approved sha), the run goes on
     // without a push; any other remote state stops here.
     const rhLabel = label.replace("tf-gate", "remote-head");
-    const rh = await infra(rhLabel, remoteHeadPrompt({ main_worktree: mainWt, branch, remote_url: remoteUrl }), "PR", JUDGE_AGENT, "remote_head");
+    const rh = await infra(rhLabel, remoteHeadPrompt({ main_worktree: mainWt, branch, remote_url: remoteUrl }), "PR", JUDGE_AGENT, "remote_head", [mainWt, branch, remoteUrl]);
     const rhOk =
       rh && (rh.head === null || typeof rh.head === "string") && relayDigestOk(rh, progKeys("remote_head"), "remote_head") && canonical(rh.args) === canonical([mainWt, branch, remoteUrl]);
     if (rhOk && rh.head === approvedSha) {
@@ -7082,7 +7109,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // a frozen file or another path stops the run
     await pathRecheck("format-code:r" + m, "Code");
     // 5.0.7: the frozen paths are the keys of the frozen files map, on disk
-    await formatFiles("infra:format-code:r" + m, mainWt, { dirty: true }, "@" + configView(frozen).files, null, "Code", lay.scratch);
+    await formatFiles("infra:format-code:r" + m, mainWt, { dirty: true }, { sha: fileHex(configView(frozen).files) }, null, "Code", lay.scratch);
     // purge before the check and the judge; the judge's "before" state is the
     // post-purge hasher state
     await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");

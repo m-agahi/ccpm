@@ -38,15 +38,18 @@ import hashlib, json, os, re, sys
 # of the file>.json and relays {count, sha256, file}; the workflow compares
 # the summaries itself and runs this program only for a map whose summary
 # changed, to route by key or to name the keys in a stop.
-# args: one or more triples <map> <file a> <file b>.
-# Each file must be named <map>-<64 hex>.json and hold exactly the canonical
-# JSON of a map of strings whose sha256 is that hex; else error names why and
-# no key is listed (a missing or forged file never reads as "no change").
-# The ignored map's fleet settings file is left out (the workflow compares
-# its hash inline). Prints {changed: the first CAP [map, key, kind] rows
-# (kind added, removed or changed), sorted; total: how many differ (null on
-# error); counts: {map: [entries in a, entries in b]}; error; args_sha256:
-# the sha256 of the args as canonical JSON}. No hash value is printed.
+# args: <scratch> then one or more triples <map> <old> <new>, where <old> and
+# <new> are the first 12 hex of a map file's sha256 (no agent types a 64-hex
+# value). Each resolves to exactly one regular file
+# <scratch>/hashes/<map>-<prefix><52 hex>.json; none or more than one exits
+# non-zero. Each file must hold exactly the canonical JSON of a map of strings
+# whose sha256 is the hex in its name; else error names why and no key is
+# listed (a forged file never reads as "no change"). The ignored map's fleet
+# settings file is left out (the workflow compares its hash inline). Prints
+# {changed: the first CAP [map, key, kind] rows (kind added, removed or
+# changed), sorted; total (null on error); counts: {map: [entries a, b]};
+# resolved: {map: [full sha256 a, b]} (the workflow checks them against the
+# summaries it holds); error; args}.
 SETTINGS_LOCAL = '.claude/settings.local.json'
 MAPS = ('files', 'sections', 'git', 'symlinks', 'ignored')
 CAP = 50
@@ -57,11 +60,22 @@ os.chdir('/')
 def canon(obj):
     return json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
 
-def load(m, path):
-    name = os.path.basename(path)
-    hit = re.match(r'^([a-z]+)-([0-9a-f]{64})\.json$', name)
-    if not os.path.isabs(path) or not hit or hit.group(1) != m:
-        raise ValueError(path + ' is not an absolute ' + m + '-<sha256>.json path')
+def resolve(scratch, m, prefix):
+    # exit, not error: a handle that names no file, or two, is a broken call
+    if not re.match(r'^[0-9a-f]{12}$', prefix):
+        sys.exit('handle is not 12 lowercase hex: ' + repr(prefix))
+    d = os.path.join(scratch, 'hashes')
+    if os.path.islink(scratch) or os.path.islink(d) or not os.path.isdir(d):
+        sys.exit('no hashes dir (or a symlinked one) under ' + scratch)
+    hits = sorted(n for n in os.listdir(d) if re.match(r'^' + m + '-' + prefix + r'[0-9a-f]{52}\.json$', n))
+    if len(hits) != 1:
+        sys.exit(str(len(hits)) + ' files match ' + m + '-' + prefix + '*.json in ' + d + ': need exactly one, so a missing state never reads as no change')
+    p = os.path.join(d, hits[0])
+    if os.path.islink(p) or not os.path.isfile(p):
+        sys.exit('map file is not a regular file: ' + p)
+    return p, hits[0][len(m) + 1:-5]
+
+def load(m, path, hexname):
     try:
         with open(path, 'rb') as fh:
             data = fh.read(MAX_BYTES + 1)
@@ -69,7 +83,7 @@ def load(m, path):
         raise ValueError('cannot read ' + path + ': ' + e.strerror)
     if len(data) > MAX_BYTES:
         raise ValueError(path + ' is over ' + str(MAX_BYTES) + ' bytes')
-    if hashlib.sha256(data).hexdigest() != hit.group(2):
+    if hashlib.sha256(data).hexdigest() != hexname:
         raise ValueError(path + ' does not match its sha256')
     try:
         d = json.loads(data)
@@ -83,18 +97,22 @@ def load(m, path):
         d.pop(SETTINGS_LOCAL, None)
     return d
 
+if len(args) < 4 or (len(args) - 1) % 3 or len(args) > 1 + 3 * len(MAPS) or not os.path.isabs(args[0]):
+    sys.exit('need <absolute scratch> and 1 to 5 triples <map> <old> <new>, got ' + str(len(args)) + ' arguments')
+scratch = args[0]
+triples, seen = [], set()
+for i in range(1, len(args), 3):
+    m = args[i]
+    if m not in MAPS or m in seen:
+        sys.exit('unknown or repeated map ' + repr(m))
+    seen.add(m)
+    triples.append((m, resolve(scratch, m, args[i + 1]), resolve(scratch, m, args[i + 2])))
 out = {'changed': [], 'total': None, 'counts': {}, 'error': None,
-       'args_sha256': hashlib.sha256(canon(args)).hexdigest()}
+       'resolved': dict((m, [a[1], b[1]]) for m, a, b in triples), 'args': args}
 try:
-    if not args or len(args) % 3 or len(args) > 3 * len(MAPS):
-        raise ValueError('need 1 to 5 triples <map> <file a> <file b>, got ' + str(len(args)) + ' arguments')
-    rows, seen = [], set()
-    for i in range(0, len(args), 3):
-        m = args[i]
-        if m not in MAPS or m in seen:
-            raise ValueError('unknown or repeated map ' + repr(m))
-        seen.add(m)
-        a, b = load(m, args[i + 1]), load(m, args[i + 2])
+    rows = []
+    for m, (pa, ha), (pb, hb) in triples:
+        a, b = load(m, pa, ha), load(m, pb, hb)
         out['counts'][m] = [len(a), len(b)]
         for k in sorted(set(a) | set(b)):
             if a.get(k) != b.get(k):

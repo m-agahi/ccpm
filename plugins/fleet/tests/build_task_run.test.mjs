@@ -5578,6 +5578,7 @@ const ARRAY_SITES = {
   "r.purged_paths @ formatFiles": "infra:purged_paths",
   // 5.0.5 (ledger 2018)
   "r.changed @ expandKeys": "infra:changed",
+  "opts.args @ digestRetry": "parsed: the args the step sent (a script-built list)",
   "r.frozen_changed @ formatFiles": "infra:frozen_changed",
   "rd.results @ writeBack": "infra:results",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
@@ -7485,7 +7486,8 @@ test("3.0.0 fixers: writers' test files are formatted before the ownership hash 
   const fc = call(out, "infra:format-code:r1");
   assert.deepEqual(inputsOf(fc.prompt).select, { dirty: true });
   // 5.0.7 (ledger 2020): the frozen files map's file; the program reads its keys
-  assert.match(inputsOf(fc.prompt).frozen, /^@\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch\/hashes\/files-[0-9a-f]{64}\.json$/);
+  // 5.0.7 review: a 12-hex handle of the frozen files map under scratch_dir
+  assert.match(inputsOf(fc.prompt).frozen, /^@[0-9a-f]{12}$/);
   assert.ok(fc.prompt.includes(" '" + inputsOf(fc.prompt).frozen + "' "), "the program gets the @file argument as is");
   assert.ok(l.indexOf("role:fleet-coder:r1") < l.indexOf("infra:format-code:r1"));
   assert.ok(l.indexOf("infra:format-code:r1") < l.indexOf("infra:purge-bytecode:code-r1"));
@@ -7578,7 +7580,7 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
     assert.deepEqual(o.changed, ["a.py"]);
     assert.equal(readFileSync(join(home, "log"), "utf8").trim().split("\n")[0], "a.py", "the frozen test is never passed");
     const d = { program: o.program };
-    for (const k of ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed"]) d[k] = o[k];
+    for (const k of ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map"]) d[k] = o[k];
     assert.equal(o.digest, sha256(canon(d)));
     assert.deepEqual(o.frozen_changed, []);
     // a hook that touches another path: reported, never settles, and never copied back

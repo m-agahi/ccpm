@@ -302,11 +302,15 @@ const READS = {
     "r.purged_paths array": "prog:format_files:purged_paths",
     // 5.0.7 (ledger 2020)
     "r.frozen_changed array": "prog:format_files:frozen_changed",
-    "frozenList array": PARSED_LOCAL,
+    "frozenList array": [PARSED_LOCAL, 3],
   },
   formatFilesPrompt: { "inputs.frozen string": PARSED_LOCAL },
   // 5.0.7 (ledger 2020): the hasher's scripts summary
   scriptsSummaryProblem: { "sum object": "hasher:scripts", "sum array": "!hasher:scripts" },
+  digestRetry: {
+    "label string-re": PARSED_LOCAL,
+    "opts.args array": PARSED_LOCAL,
+  },
   digestOnlyMiss: {
     "r object": "parsed: any digest-checked program result (read by relayDigestOk)",
     "r.digest string": "parsed: any digest-checked program result (read by relayDigestOk)",

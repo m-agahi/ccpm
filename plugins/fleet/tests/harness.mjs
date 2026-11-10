@@ -268,7 +268,7 @@ export async function runOne(script, args0) {
       throw new Error("AC-1993-1: prompt " + label + " pastes a program");
     // 5.0.7 (ledger 2020): an unscripted digest retry replays its step's script
     // (a broken relay stays broken: two mismatches stop as before)
-    const base = label.replace(/:digest-retry$/, "");
+    const base = label.replace(/:(digest|args)-retry$/, "");
     const inner = base !== label && !(label in script) ? Object.assign({}, opts, { label: base, realLabel: label }) : opts;
     let r = await agentInner(prompt, inner);
     if (r && typeof r === "object" && !rawResults.has(r)) r = fillPrograms(base, r, prompt);
@@ -310,7 +310,7 @@ export async function runOne(script, args0) {
     // unscripted fixer-hook runs change nothing (3.0.0)
     if (!(label in script) && /^infra:format-(tests|code):/.test(label)) {
       const sel = inputsOf(prompt).select;
-      return withRelayDigest(label, { status: "ok", reason: "ran the fixers", note: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [] });
+      return withRelayDigest(label, { status: "ok", reason: "ran the fixers", note: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [], frozen_map: fmHandle(prompt) });
     }
     // 3.1.0: unscripted IaC pre-push gates find no IaC file in the PR diff
     if (!(label in script) && /^infra:tf-gate:/.test(label)) {
@@ -338,8 +338,11 @@ export async function runOne(script, args0) {
     // 5.0.6 (ledger 2019): unscripted build-dir resets and the teardown succeed
     if (!(label in script) && /^infra:build-(reset:|clean$)/.test(label)) return buildDirOut(inputsOf(prompt).args);
     // 5.0.7 (ledger 2020): an unscripted comparison reads the registered maps
-    if (!(label in script) && /^infra:hash-diff:/.test(label))
-      return fillPrograms(label, Object.assign({ status: "ok", reason: "compared" }, hashDiffOut(inputsOf(prompt).args)), prompt);
+    if (!(label in script) && /^infra:hash-diff:/.test(label)) {
+      const o = hashDiffOut(inputsOf(prompt).args);
+      if (o.exit) return { status: "failed", reason: o.exit };
+      return fillPrograms(label, Object.assign({ status: "ok", reason: "compared" }, o), prompt);
+    }
     // unscripted build caller checks find no modified existing definition
     if (!(label in script) && /^infra:changed-defs:/.test(label)) return defsOut([]);
     // unscripted fleet-internal scans find no .fleet/ path in the PR diff
@@ -402,10 +405,12 @@ export async function runOne(script, args0) {
     // frozen (a JSON list, or "@<files map>" read from the registry)
     if (/^infra:format-(tests|code):/.test(label) && !raw && r && r.status === "ok" && Array.isArray(r.changed) && !("frozen_changed" in r)) {
       const fz = inputsOf(prompt).frozen;
-      const keys = typeof fz === "string" && fz.startsWith("@") ? Object.keys(MAP_REG.get(fz.slice(1)) || {}) : Array.isArray(fz) ? fz : [];
+      const file = typeof fz === "string" && fz.startsWith("@") ? byHandle(inputsOf(prompt).scratch_dir, "files", fz.slice(1)) : null;
+      const keys = file ? Object.keys(MAP_REG.get(file)) : Array.isArray(fz) ? fz : [];
       r.frozen_changed = r.changed.filter((x) => keys.indexOf(x) >= 0).sort();
-      // a stub digest over the 5.0.6 keys covers the new key too
-      const k6 = K("format_files").filter((k) => k !== "frozen_changed");
+      r.frozen_map = file ? file.slice(-69, -5) : null;
+      // a stub digest over the 5.0.6 keys covers the new keys too
+      const k6 = K("format_files").filter((k) => k !== "frozen_changed" && k !== "frozen_map");
       if (typeof r.digest === "string" && r.digest === sha256(canon(pick(r, k6)))) r.digest = sha256(canon(pick(r, K("format_files"))));
     }
     if (!raw) withRelayDigest(label, fillArgs(label, r, prompt));
@@ -637,18 +642,32 @@ export function ignoredView(map) {
   if (map && SETTINGS_LOCAL in map) v[SETTINGS_LOCAL] = map[SETTINGS_LOCAL];
   return v;
 }
-// the hash-diff program over registered maps (its output, unrelayed)
+// the full sha of a format prompt's frozen map handle (null: a path list)
+function fmHandle(prompt) {
+  const fz = inputsOf(prompt).frozen;
+  const f = typeof fz === "string" && fz.startsWith("@") ? byHandle(inputsOf(prompt).scratch_dir, "files", fz.slice(1)) : null;
+  return f ? f.slice(-69, -5) : null;
+}
+// the registered map file of <scratch>/hashes/<map>-<12-hex handle>*.json
+function byHandle(scratch, m, pre) {
+  const hits = [...MAP_REG.keys()].filter((f) => f.startsWith(scratch + "/hashes/" + m + "-" + pre) && /-[0-9a-f]{64}\.json$/.test(f));
+  return hits.length === 1 ? hits[0] : null;
+}
+// the hash-diff program over registered maps (its output, unrelayed); 5.0.7
+// review: args <scratch> (<map> <old handle> <new handle>)+
 export function hashDiffOut(args) {
-  const out = { changed: [], total: null, counts: {}, error: null, args_sha256: sha256(canon(args)) };
+  const out = { changed: [], total: null, counts: {}, resolved: {}, error: null, args: args.slice() };
   const rows = [];
-  for (let i = 0; i < args.length; i += 3) {
-    const [m, fa, fb] = args.slice(i, i + 3);
-    const a0 = MAP_REG.get(fa);
-    const b0 = MAP_REG.get(fb);
-    if (!a0 || !b0) return Object.assign(out, { error: "cannot read " + (a0 ? fb : fa), counts: {} });
+  for (let i = 1; i < args.length; i += 3) {
+    const [m, pa, pb] = args.slice(i, i + 3);
+    const fa = byHandle(args[0], m, pa);
+    const fb = byHandle(args[0], m, pb);
+    // the program exits non-zero on a handle that names no file, or two
+    if (!fa || !fb) return { exit: "0 files match " + m + "-" + (fa ? pb : pa) + "*.json in " + args[0] + "/hashes: need exactly one, so a missing state never reads as no change" };
+    out.resolved[m] = [fa.slice(-69, -5), fb.slice(-69, -5)];
     const drop = (x) => Object.fromEntries(Object.entries(x).filter(([k]) => !(m === "ignored" && k === SETTINGS_LOCAL)));
-    const a = drop(a0);
-    const b = drop(b0);
+    const a = drop(MAP_REG.get(fa));
+    const b = drop(MAP_REG.get(fb));
     out.counts[m] = [Object.keys(a).length, Object.keys(b).length];
     for (const k of [...new Set(Object.keys(a).concat(Object.keys(b)))].sort())
       if (a[k] !== b[k]) rows.push([m, k, !(k in a) ? "added" : !(k in b) ? "removed" : "changed"]);

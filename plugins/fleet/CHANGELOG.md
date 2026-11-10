@@ -34,8 +34,8 @@ goes to disk, and a relay that fails only on its digest is dispatched once more.
   Where a step routes by key, `hash_diff.py` (new, replaces `ignored_diff.py`; 31 programs) runs
   as `infra:hash-diff:<step>`: it reads both states' files for the changed maps only, checks each
   file's bytes against the sha256 in its name, and prints the changed `[map, key, kind]` rows (at
-  most 50, with the total and per-map counts) and the sha256 of its args, never a hash value. The
-  script checks the counts against the relayed ones.
+  most 50, with the total and per-map counts), never a map value. The script checks the counts
+  against the relayed ones.
 - Non-weakening: the writers' ownership check, the judges' fingerprints, the re-freeze and the
   post-coder check route each changed key as 5.0.6 did; tests record the 5.0.6 outcome of one
   changed file, section, git config value and ignored file at each site. A comparison that fails
@@ -44,7 +44,7 @@ goes to disk, and a relay that fails only on its digest is dispatched once more.
   post-coder check stops at `hash` instead of routing to the coder.
 - Roles get names, not hashes: `frozen_tests` is the list of test files; `frozen_config_sections`
   names each frozen map's file, which the coder and the code judge read; `hash_recheck` has one
-  row per map summary. The fixers' frozen list is `@<files map>`: `format_files.py` reads the keys
+  row per map summary. The fixers' frozen list is the files map's handle `@<12 hex>`: `format_files.py` reads the keys
   from the file and prints `frozen_changed`. `refreeze_log` entries are `{path, change}`.
 - A program relay that fails ONLY on the digest check (status ok, the shipped program, a digest
   the relayed keys do not hash to) is dispatched once more to a fresh agent
@@ -64,12 +64,20 @@ goes to disk, and a relay that fails only on its digest is dispatched once more.
 
 ### Known limits
 
-- `infra:hash-diff:<step>` runs the program on the map files' paths, which hold 64-hex names (two
-  per changed map). A path the agent mis-copies gives an `args_sha256` the script refuses ("the
-  program ran on other arguments than the workflow sent"). That is not a digest miss and is not
-  retried: the step stops as an unrouted key (fail closed). Real runs call it once per writer
-  round (the test files change the `files` map) and on the re-freeze; it runs on the hasher's
-  tier (sonnet).
+- No agent types a 64-hex value. `hash_diff.py` takes `<scratch>` and, per map, `<map> <old>
+<new>`: the first 12 hex of each map file's sha256. It resolves each handle to exactly one
+  `<scratch>/hashes/<map>-<handle>*.json` (none or two: exit non-zero), checks the file's bytes
+  against its name, and prints the full shas (`resolved`) and its `args` inside its digest; the
+  script checks both against what it holds ("the program read other map files than the
+  summaries name" fails closed). The fixers' frozen map is `@<handle>` the same way;
+  `format_files.py` prints the full sha as `frozen_map`, checked by the script (stop_gate
+  `hash`). The coder and the code judge still get the map files' full paths, to read; they relay
+  nothing from them.
+- A read-only program relay whose only fault is that its program ran on other args than the step
+  sent (a value mis-typed) is dispatched once more as `<label>:args-retry` (hash_diff, tf_gate,
+  remote_head, hook_surface, precommit_ids), on the agent cap and gate-logged; a second one fails
+  as before. Writes are never retried. hash-diff runs on the hasher's tier (sonnet), once per
+  writer round in real runs (the test files change the `files` map) and on the re-freeze.
 - A step that routes by key lists at most 50 changed keys. A writer round or a re-freeze with
   more than 50 changed keys stops (5.0.6 let an all-owned round through).
 - The script's own `opts.digest` never reaches the runtime's agent options.

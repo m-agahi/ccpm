@@ -21,7 +21,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { happy, run, ARGS, H, HASHES_FLAT, FP_PRE, FP_TESTS, FP_K1, FP_K2, FP_M3, inputsOf, call, sh, spawnSync, SCRIPTS_SRC, HASH_MAP_NAMES, sha256, canon, registerMap, hashDiffOut } from "./harness.mjs";
+import { happy, run, ARGS, H, HASHES_FLAT, FP_PRE, FP_TESTS, FP_K1, FP_K2, FP_M3, inputsOf, call, sh, spawnSync, SCRIPTS_SRC, HASH_MAP_NAMES, sha256, canon, registerMap, hashDiffOut, tfGateRelay } from "./harness.mjs";
 
 const HASHER = join(SCRIPTS_SRC, "hasher.py");
 
@@ -184,15 +184,16 @@ test("5.0.7 2020: only a changed map is expanded, by one hash-diff call; unchang
   assert.deepEqual(diffs, ["infra:hash-diff:writers:r1"]);
   const args = inputsOf(call(out, "infra:hash-diff:writers:r1").prompt).args;
   // the git map only (the stubs' test-file hashes do not change), by its two files
-  assert.deepEqual(args.filter((a, i) => i % 3 === 0), ["git"]);
-  assert.ok(args.slice(1).every((f) => /\/scratch\/hashes\/git-[0-9a-f]{64}\.json$/.test(f)));
+  assert.deepEqual(args.filter((a, i) => i % 3 === 1), ["git"]);
+  assert.match(args[0], /\/scratch$/);
+  assert.ok(args.slice(2).every((x) => /^[0-9a-f]{12}$/.test(x)));
   // the per-call schema the agent's StructuredOutput is held to: rows are string arrays
   const sch = call(out, "infra:hash-diff:writers:r1").opts.schema.properties;
   assert.deepEqual(sch.changed.items, { type: "array", items: { type: "string" } });
   assert.ok([].concat(sch.changed.type).includes("array"));
   assert.deepEqual(sch.counts.additionalProperties, { type: "array", items: { type: "integer" } });
   assert.deepEqual(sch.total.type, ["integer", "null"]);
-  assert.ok([].concat(sch.args_sha256.type).includes("string"));
+  assert.deepEqual(sch.resolved.additionalProperties, { type: "array", items: { type: "string" } });
   assert.ok(!("digest" in call(out, "infra:hash-diff:writers:r1").opts), "the script's own opts never reach the runtime");
   const ok = await run(happy(), ARGS);
   assert.equal(ok.result.status, "ok", ok.result.reason);
@@ -248,7 +249,11 @@ test("5.0.7 2020: a 19-file frozen map: the relay holds no per-file hash, only s
 
 // ---------------------------------------------------------------- fail closed
 
-const FILES_RE = /^files-[0-9a-f]{64}\.json$/;
+// a stub's args and resolved shas, as the program prints them
+const hd = (p) => {
+  const o = hashDiffOut(inputsOf(p).args);
+  return { args: o.args, resolved: o.resolved };
+};
 // a relayed state whose files summary points at a file no step wrote
 function unwritten(h, scratch) {
   return Object.assign({}, h, { files: { count: 3, sha256: "e".repeat(64), file: scratch + "/hashes/files-" + "e".repeat(64) + ".json" } });
@@ -286,21 +291,21 @@ test("5.0.7 2020: a missing map file never reads as no change: the writers stop 
   let out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "ownership");
-  assert.match(out.result.reason, /^writer touched frozen files map changed \(\d+ -> 3 entries; the key list is unavailable: cannot read [^)]+\) in test round 1 \(not a test file of AC1, AC2\)$/);
+  assert.match(out.result.reason, /^writer touched frozen files map changed \(\d+ -> 3 entries; the key list is unavailable: the step returned failed: 0 files match files-[0-9a-f]{12}\*\.json [^)]+\) in test round 1 \(not a test file of AC1, AC2\)$/);
   s = scenario("none", "file");
   s["hasher:post-coder:r1"] = (p) => ({ status: "ok", fingerprint: FP_K1, hashes: unwritten(base(), inputsOf(p).scratch_dir) });
   out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "hash");
-  assert.match(out.result.reason, /^hasher maps code:r1: the files map\(s\) changed and the key list is unavailable: cannot read .*; a key is never routed unseen$/);
+  assert.match(out.result.reason, /^hasher maps code:r1: the files map\(s\) changed and the key list is unavailable: the step returned failed: 0 files match .*; a key is never routed unseen$/);
   assert.ok(!out.labels.includes("role:fleet-coder:r2"), "never routed to the coder");
 });
 
 test("5.0.7 2020: a comparison whose file does not match its sha256, or whose counts differ from the relay, is never routed", async () => {
   for (const diff of [
     { status: "ok", reason: "x", changed: [], total: null, counts: {}, error: "/s/hashes/git-x.json does not match its sha256" },
-    (p) => ({ status: "ok", reason: "x", changed: [["git", "config:local", "changed"]], total: 1, counts: { git: [9, 9] }, error: null, args_sha256: sha256(canon(inputsOf(p).args)) }),
-    (p) => ({ status: "ok", reason: "x", changed: [["git", "config:local", "changed"]], total: 1, counts: { git: [1, 1] }, error: null, args_sha256: "0".repeat(64) }),
+    (p) => ({ status: "ok", reason: "x", changed: [["git", "config:local", "changed"]], total: 1, counts: { git: [9, 9] }, error: null, ...hd(p) }),
+    (p) => ({ status: "ok", reason: "x", changed: [["git", "config:local", "changed"]], total: 1, counts: { git: [1, 1] }, error: null, resolved: hd(p).resolved, args: ["/elsewhere"] }),
   ]) {
     let s = scenario("writers", "git");
     s["infra:hash-diff:writers:r1"] = diff;
@@ -317,12 +322,12 @@ test("5.0.7 2020: a comparison whose file does not match its sha256, or whose co
 
 test("5.0.7 2020: a capped key list routes nothing it did not list: past the cap a writer round stops at ownership", async () => {
   const s = scenario("writers", "git");
-  s["infra:hash-diff:writers:r1"] = (p) => ({ status: "ok", reason: "x", changed: [["git", "config:local", "changed"]], total: 60, counts: { git: [1, 1] }, error: null, args_sha256: sha256(canon(inputsOf(p).args)) });
+  s["infra:hash-diff:writers:r1"] = (p) => ({ status: "ok", reason: "x", changed: [["git", "config:local", "changed"]], total: 60, counts: { git: [1, 1] }, error: null, ...hd(p) });
   const out = await run(s, ARGS);
   assert.deepEqual([out.result.status, out.result.stop_gate], ["needs_human", "ownership"]);
   assert.equal(out.result.reason, "writer touched git:config:local in test round 1 (not a test file of AC1, AC2)");
   const s2 = scenario("writers", "git");
-  s2["infra:hash-diff:writers:r1"] = (p) => ({ status: "ok", reason: "x", changed: [["files", "tests/test_a.py", "changed"]].slice(0, 0), total: 60, counts: { git: [1, 1] }, error: null, args_sha256: sha256(canon(inputsOf(p).args)) });
+  s2["infra:hash-diff:writers:r1"] = (p) => ({ status: "ok", reason: "x", changed: [["files", "tests/test_a.py", "changed"]].slice(0, 0), total: 60, counts: { git: [1, 1] }, error: null, ...hd(p) });
   const o2 = await run(s2, ARGS);
   assert.deepEqual([o2.result.status, o2.result.stop_gate], ["needs_human", "ownership"]);
   assert.match(o2.result.reason, /^writer touched git: \(60 more\) in test round 1/);
@@ -381,15 +386,16 @@ test("5.0.7 2020: the read-only program steps carry the retry; no write step doe
 
 // ---------------------------------------------------------------- the stub is the program
 
-test("5.0.7 2020: hash_diff.py and the harness stub print the same rows, counts and args digest", () => {
+test("5.0.7 2020: hash_diff.py and the harness stub print the same rows, counts and resolved shas", () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-507-parity-"));
   try {
+    mkdirSync(join(home, "hashes"));
     const write = (m, map) => {
       const text = canon(map);
-      const f = join(home, m + "-" + sha256(text) + ".json");
+      const f = join(home, "hashes", m + "-" + sha256(text) + ".json");
       writeFileSync(f, text);
       registerMap(f, map);
-      return f;
+      return sha256(text).slice(0, 12);
     };
     const pairs = [
       ["files", { "a.py": "1", "b.py": "2", "c.py": "3" }, { "a.py": "1", "b.py": "9", "d.py": "4" }],
@@ -398,23 +404,129 @@ test("5.0.7 2020: hash_diff.py and the harness stub print the same rows, counts 
       ["symlinks", {}, { lib: "../x" }],
       ["ignored", { ".claude/settings.local.json": "s1", "target/a": "t", "z ü": "1" }, { ".claude/settings.local.json": "s2", "target/a": "u", "z ü": "1" }],
     ];
-    const args = [];
+    const args = [home];
     for (const [m, a, b] of pairs) args.push(m, write(m, a), write(m, b));
     const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "hash_diff.py")].concat(args), { encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     const real = JSON.parse(r.stdout);
     const stub = hashDiffOut(args);
-    for (const k of ["changed", "total", "counts", "error", "args_sha256"]) assert.deepEqual(stub[k], real[k], k);
+    for (const k of ["changed", "total", "counts", "resolved", "error", "args"]) assert.deepEqual(stub[k], real[k], k);
     assert.equal(real.total, 7);
     // one map past the cap: the same first 50 rows
     const big = {};
     for (let i = 0; i < 60; i++) big["f" + String(i).padStart(2, "0")] = String(i);
-    const a2 = ["files", write("files", {}), write("files", big)];
+    const a2 = [home, "files", write("files", {}), write("files", big)];
     const r2 = JSON.parse(spawnSync("python3", ["-I", join(SCRIPTS_SRC, "hash_diff.py")].concat(a2), { encoding: "utf8" }).stdout);
     const s2 = hashDiffOut(a2);
-    for (const k of ["changed", "total", "counts", "error"]) assert.deepEqual(s2[k], r2[k], k);
+    for (const k of ["changed", "total", "counts", "resolved", "error"]) assert.deepEqual(s2[k], r2[k], k);
     assert.deepEqual([r2.changed.length, r2.total], [50, 60]);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- short handles (review of #55)
+// The agent types no 64-hex value: hash_diff gets <scratch> and per map
+// <map> <old-prefix> <new-prefix> (12 hex of the file's sha256), resolves each
+// to exactly one file and prints the full shas inside its digest; the
+// workflow checks them against the summaries it holds.
+
+const HEX64 = /[0-9a-f]{64}/;
+const cmdLine = (prompt, prog) => prompt.split("\n").find((l) => l.includes("/" + prog + ".py'"));
+
+test("5.0.7 review: the hash-diff and format-code commands carry no 64-hex value", async () => {
+  const out = await run(scenario("coder", "section"), ARGS);
+  for (const [label, prog] of [["infra:hash-diff:code:r1", "hash_diff"], ["infra:format-code:r1", "format_files"]]) {
+    const line = cmdLine(call(out, label).prompt, prog);
+    assert.ok(line, label);
+    assert.ok(!HEX64.test(line), label + ": " + line);
+    assert.ok(!HEX64.test(JSON.stringify(inputsOf(call(out, label).prompt))), label + " inputs");
+  }
+  const args = inputsOf(call(out, "infra:hash-diff:code:r1").prompt).args;
+  assert.match(args[0], /\/scratch$/);
+  assert.deepEqual(args.slice(1).map((a, i) => (i % 3 === 0 ? a : /^[0-9a-f]{12}$/.test(a))), ["sections", true, true]);
+});
+
+function handleDir() {
+  const home = mkdtempSync(join(tmpdir(), "fleet-507-h-"));
+  mkdirSync(join(home, "hashes"));
+  const put = (m, map) => {
+    const text = canon(map);
+    const sha = sha256(text);
+    writeFileSync(join(home, "hashes", m + "-" + sha + ".json"), text);
+    return sha;
+  };
+  const prog = (args) => spawnSync("python3", ["-I", join(SCRIPTS_SRC, "hash_diff.py")].concat(args), { encoding: "utf8" });
+  return { home, put, prog, done: () => rmSync(home, { recursive: true, force: true }) };
+}
+
+test("5.0.7 review: hash_diff resolves 12-hex prefixes and prints the full shas; a missing or ambiguous prefix exits non-zero", () => {
+  const d = handleDir();
+  try {
+    const a = d.put("git", { "config:local": "g1" });
+    const b = d.put("git", { "config:local": "g2" });
+    const r = d.prog([d.home, "git", a.slice(0, 12), b.slice(0, 12)]);
+    assert.equal(r.status, 0, r.stderr);
+    const o = JSON.parse(r.stdout);
+    assert.deepEqual(o.resolved, { git: [a, b] });
+    assert.deepEqual(o.changed, [["git", "config:local", "changed"]]);
+    assert.deepEqual(o.args, [d.home, "git", a.slice(0, 12), b.slice(0, 12)]);
+    // missing
+    let x = d.prog([d.home, "git", "0".repeat(12), b.slice(0, 12)]);
+    assert.notEqual(x.status, 0);
+    assert.match(x.stderr, /no file|0 files/);
+    // ambiguous: a second file with the same 12-hex prefix
+    writeFileSync(join(d.home, "hashes", "git-" + a.slice(0, 12) + "f".repeat(52) + ".json"), "{}");
+    x = d.prog([d.home, "git", a.slice(0, 12), b.slice(0, 12)]);
+    assert.notEqual(x.status, 0);
+    assert.match(x.stderr, /2 files/);
+    // a prefix that is not 12 lowercase hex, or a full sha
+    for (const p of [a.slice(0, 11), a, "../" + a.slice(0, 9), a.slice(0, 12).toUpperCase()]) assert.notEqual(d.prog([d.home, "git", p, b.slice(0, 12)]).status, 0, p);
+  } finally {
+    d.done();
+  }
+});
+
+test("5.0.7 review: a printed full sha that is not the summary the workflow holds fails closed", async () => {
+  const wrong = (p) => {
+    const o = hashDiffOut(inputsOf(p).args);
+    const m = Object.keys(o.resolved)[0];
+    o.resolved[m] = [o.resolved[m][0], "e".repeat(64)];
+    return Object.assign({ status: "ok", reason: "x" }, o);
+  };
+  let s = scenario("writers", "git");
+  s["infra:hash-diff:writers:r1"] = wrong;
+  let out = await run(s, ARGS);
+  assert.deepEqual([out.result.status, out.result.stop_gate], ["needs_human", "ownership"]);
+  assert.match(out.result.reason, /the key list is unavailable: the program read other map files than the summaries name/);
+  s = scenario("coder", "section");
+  s["infra:hash-diff:code:r1"] = wrong;
+  out = await run(s, ARGS);
+  assert.deepEqual([out.result.status, out.result.stop_gate], ["needs_human", "hash"]);
+  assert.ok(!out.labels.includes("role:fleet-coder:r2"));
+});
+
+test("5.0.7 review: a read-only relay whose only fault is other args is dispatched once more; two fail as before", async () => {
+  const otherArgs = (p) => {
+    const a = inputsOf(p).args.slice();
+    a[2] = "0".repeat(12);
+    return Object.assign({ status: "ok", reason: "x" }, hashDiffOut(inputsOf(p).args), { args: a });
+  };
+  let s = scenario("writers", "git");
+  s["infra:hash-diff:writers:r1"] = otherArgs;
+  s["infra:hash-diff:writers:r1:args-retry"] = (p) => Object.assign({ status: "ok", reason: "x" }, hashDiffOut(inputsOf(p).args));
+  let out = await run(s, ARGS);
+  assert.deepEqual([out.result.status, out.result.stop_gate, out.result.reason], [V506["writers/git"].status, V506["writers/git"].gate, V506["writers/git"].reason]);
+  assert.ok(out.result.gate_log.includes("infra:hash-diff:writers:r1: the program ran on other arguments than the workflow sent; dispatched once more to a fresh agent (infra:hash-diff:writers:r1:args-retry)"));
+  s = scenario("writers", "git");
+  s["infra:hash-diff:writers:r1"] = otherArgs;
+  out = await run(s, ARGS);
+  assert.equal(out.labels.filter((l) => l.endsWith(":args-retry")).length, 1);
+  assert.match(out.result.reason, /the key list is unavailable: the program ran on other arguments than the workflow sent/);
+  // tf_gate (read-only, echoes its args): one retry too
+  s = happy();
+  const tf = (p) => tfGateRelay({ args: ["/x"] });
+  s["infra:tf-gate:push"] = tf;
+  out = await run(s, ARGS);
+  assert.ok(out.labels.includes("infra:tf-gate:push:args-retry"), out.labels.filter((l) => l.startsWith("infra:tf")).join(","));
 });

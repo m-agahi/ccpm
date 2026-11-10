@@ -86,6 +86,9 @@ function diffRun(args) {
   assert.equal(r.status, 0, r.stderr);
   return { stdout: r.stdout, out: JSON.parse(r.stdout) };
 }
+// 5.0.7 review: a map file's 12-hex handle
+const H12 = (s) => s.file.match(/-([0-9a-f]{64})\.json$/)[1].slice(0, 12);
+const FULL = (s) => s.file.match(/-([0-9a-f]{64})\.json$/)[1];
 
 const fileMap = (p) => JSON.parse(readFileSync(p, "utf8"));
 const rest = (m) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== SETTINGS));
@@ -273,7 +276,7 @@ test("5.0.7 2020: hash_diff lists the changed ignored paths capped at 50, from v
     writeFileSync(join(f.wt, "target", "new.rlib"), "n");
     writeFileSync(join(f.wt, SETTINGS), '{"hooks":{}}');
     const b = hasherRun(f.wt, f.scratch).relay.hashes.ignored;
-    const args = ["ignored", a.file, b.file];
+    const args = [f.scratch, "ignored", H12(a), H12(b)];
     const d = diffRun(args);
     assert.ok(Buffer.byteLength(d.stdout) < RELAY_BOUND, "diff relay " + Buffer.byteLength(d.stdout));
     assert.equal(d.out.error, null);
@@ -282,43 +285,49 @@ test("5.0.7 2020: hash_diff lists the changed ignored paths capped at 50, from v
     assert.deepEqual(d.out.changed, d.out.changed.slice().sort());
     assert.ok(d.out.changed.every((w) => w[0] === "ignored" && (w[2] === "changed" || w[2] === "added")));
     assert.deepEqual(d.out.counts, { ignored: [a.count, b.count] });
-    assert.equal(d.out.args_sha256, sha256(canon(args)));
-    // no hash value travels: the only 64-hex strings are the args digest and the program's own
+    assert.deepEqual(d.out.args, args);
+    assert.deepEqual(d.out.resolved, { ignored: [FULL(a), FULL(b)] });
+    // no map value travels: the only 64-hex strings are the resolved file shas and the program's own
     const hex = d.stdout.match(/[0-9a-f]{64}/g);
-    assert.deepEqual(hex.sort(), [d.out.args_sha256, d.out.digest, d.out.program.sha256].sort());
+    assert.deepEqual(hex.sort(), [FULL(a), FULL(b), d.out.digest, d.out.program.sha256].sort());
     const { program, digest, ...rest0 } = d.out;
     assert.equal(digest, sha256(canon(Object.assign({}, rest0, { program }))));
     // a few changes are listed in full
     rmSync(join(f.wt, "local.txt"));
     const c = hasherRun(f.wt, f.scratch).relay.hashes.ignored;
-    const e = diffRun(["ignored", b.file, c.file]).out;
+    const e = diffRun([f.scratch, "ignored", H12(b), H12(c)]).out;
     assert.deepEqual([e.total, e.changed, e.error], [1, [["ignored", "local.txt", "removed"]], null]);
   } finally {
     f.done();
   }
 });
 
-test("5.0.7 2020: hash_diff fails closed on a missing, forged, renamed or wrong-map file", () => {
+test("5.0.7 2020: hash_diff fails closed on a missing handle, another map, a bad call or a forged file", () => {
   const f = rustRepo(20);
   try {
     const a = hasherRun(f.wt, f.scratch).relay.hashes;
     writeFileSync(join(f.wt, "local.txt"), "b");
     const b = hasherRun(f.wt, f.scratch).relay.hashes;
-    const ok = ["ignored", a.ignored.file, b.ignored.file];
+    const ok = [f.scratch, "ignored", H12(a.ignored), H12(b.ignored)];
     const bad = (args, re) => {
       const d = diffRun(args).out;
       assert.match(String(d.error), re, JSON.stringify(args));
       assert.deepEqual([d.changed, d.total, d.counts], [[], null, {}]);
     };
-    // missing
-    bad(["ignored", a.ignored.file + ".gone", b.ignored.file], /not an absolute ignored-<sha256>\.json path/);
-    bad(["ignored", a.ignored.file.replace(/[0-9a-f]{64}/, "0".repeat(64)), b.ignored.file], /cannot read/);
-    // a file of another map, a relative path, an unknown or repeated map, no triple
-    bad(["ignored", a.files.file, b.ignored.file], /not an absolute ignored-<sha256>\.json path/);
-    bad(["ignored", "hashes/" + a.ignored.file.split("/").pop(), b.ignored.file], /not an absolute/);
-    bad(["nosuch", a.ignored.file, b.ignored.file], /unknown or repeated map/);
-    bad(ok.concat(ok), /unknown or repeated map/);
-    bad(ok.slice(0, 2), /triples/);
+    // a broken call exits non-zero: no file for a handle, a file of another
+    // map, a relative scratch, an unknown or repeated map, no triple
+    const exits = (args, re) => {
+      const r = spawnSync("python3", ["-I", DIFF].concat(args), { encoding: "utf8" });
+      assert.notEqual(r.status, 0, JSON.stringify(args));
+      assert.equal(r.stdout, "");
+      assert.match(r.stderr, re, JSON.stringify(args));
+    };
+    exits([f.scratch, "ignored", "0".repeat(12), H12(b.ignored)], /0 files match/);
+    exits([f.scratch, "ignored", H12(a.files), H12(b.ignored)], /0 files match/);
+    exits(["scratch", "ignored", H12(a.ignored), H12(b.ignored)], /absolute scratch/);
+    exits([f.scratch, "nosuch", H12(a.ignored), H12(b.ignored)], /unknown or repeated map/);
+    exits(ok.concat(ok.slice(1)), /unknown or repeated map/);
+    exits(ok.slice(0, 3), /triples/);
     // forged: a file rewritten to hide the change (same name, other bytes)
     const m = fileMap(b.ignored.file);
     m["local.txt"] = fileMap(a.ignored.file)["local.txt"];

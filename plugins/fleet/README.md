@@ -405,12 +405,14 @@ hooks are never bypassed. So nothing commits until the code judge approves.
   `fleetref:refs/fleet/*`), and `{count, sha256}` of the shipped programs' map: no per-file hash is
   relayed. The script compares the summaries; where a step routes by key (the writers' ownership
   check, the re-freeze, the post-coder check) or names keys in a stop, `hash_diff.py`
-  (`infra:hash-diff:<step>`) reads both states' files, checks each against the sha256 in its name,
-  and lists the changed `[map, key, kind]` rows (at most 50, with the total), never a hash value.
+  (`infra:hash-diff:<step>`) gets `<scratch>` and 12-hex handles of both states' files (no agent
+  types a 64-hex value), resolves each to exactly one file, checks it against the sha256 in its
+  name, and lists the changed `[map, key, kind]` rows (at most 50, with the total) and the full
+  shas it read, which the script checks; never a map value.
   A comparison that fails, or lists fewer rows than changed, is never routed (fail closed). A hasher
   output over 64 KiB exits non-zero. A program relay that fails only on its digest is dispatched
-  once more to a fresh agent (`<label>:digest-retry`, on the agent cap, gate-logged); read-only
-  programs only. `freeze_tree` is the tree at freeze; `code_tree` is the tree the code judge
+  once more to a fresh agent (`<label>:digest-retry`, on the agent cap, gate-logged); one whose
+  program ran on other args than the step sent, as `<label>:args-retry`; read-only programs only. `freeze_tree` is the tree at freeze; `code_tree` is the tree the code judge
   judged. Test judge and code judge get `freeze_tree`, `code_tree` and `plan_commit`; diff
   production changes with `git diff <freeze_tree>`.
 - **Scope fence on the real changes** (every mode, not only `confirm: "auto"`). The post-coder
