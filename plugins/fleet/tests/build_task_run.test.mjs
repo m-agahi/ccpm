@@ -103,6 +103,7 @@ import {
   allScripts,
   planRefWriteCmd,
   stateWriteCmd,
+  parkOut,
 } from "./harness.mjs";
 
 
@@ -195,7 +196,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.1 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.2 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -5591,6 +5592,8 @@ const ARRAY_SITES = {
   "h.page_tags @ writeBodies": "infra:results[].page_tags",
   // 4.0.0 (1985)
   "r.args @ pushProbe": "parsed: the push probe relay (PUSH_PROBE_SCHEMA args; digest-checked)",
+  // 5.0.2 (ledger 2004)
+  "pr.dirty @ planMode": "parsed: the park program relay (digest-checked; PROGRAM_OUT types dirty)",
 };
 
 function arraySites() {
@@ -5811,9 +5814,11 @@ test("2.1.5 a plan stop after the planner parks the run's own draft plan and kee
   const inp = inputsOf(pk.prompt);
   assert.equal(inp.worktree, "/r/.claude/worktrees/fleet-l42-add-thing/main");
   assert.equal(inp.plan_path, "docs/plans/x.md");
-  assert.equal(inp.dest, "/r/.claude/worktrees/fleet-l42-add-thing/scratch/parked/" + NONCE + "/docs/plans/x.md");
-  assert.match(pk.prompt, /other than <plan_path>.*needs_human|any path other than <plan_path>/);
-  assert.ok(!/status --porcelain`/.test(pk.prompt) && /status --porcelain --untracked-files=all/.test(pk.prompt));
+  // 5.0.2 (ledger 2004): the park program checks the tree and moves the draft
+  assert.equal(inp.scratch, "/r/.claude/worktrees/fleet-l42-add-thing/scratch");
+  assert.equal(inp.run, NONCE);
+  assert.match(pk.prompt, /parked\.py' 'park' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/main' 'docs\/plans\/x\.md' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch' 'n1-0000001'/);
+  assert.match(pk.prompt, /Run only the commands given in the steps below, each as its own Bash call, exactly as written: no other command \(no git, cp, mv or rm of your own\)/);
   assert.match(out.result.reason, /draft plan moved to .*scratch\/parked/);
   assert.equal(out.result.stop_gate, "role");
 });
@@ -6092,7 +6097,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.1; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.2; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6256,7 +6261,7 @@ test("2.1.5 a crash after the planner still parks the draft and rethrows the ori
   let parked = null;
   s["infra:park-plan"] = (p) => {
     parked = inputsOf(p).plan_path;
-    return { status: "ok", reason: "parked", target: inputsOf(p).dest, clean: true };
+    return parkOut(p);
   };
   await assert.rejects(() => runOne(s, ARGS), /transport died/);
   assert.equal(parked, "docs/plans/x.md");
@@ -6636,7 +6641,7 @@ test("2.1.6 a crash after the planner logs the park outcome before it rethrows",
     throw new Error("transport died");
   };
   let logs = null;
-  s["infra:park-plan"] = (p) => ({ status: "ok", reason: "parked", target: inputsOf(p).dest, clean: true });
+  s["infra:park-plan"] = (p) => parkOut(p);
   await assert.rejects(async () => {
     try {
       await runOne(s, ARGS);
@@ -6791,7 +6796,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.1\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.1 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.2\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.2 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -7247,7 +7252,7 @@ test("3.0.0 check-scripts: a relay that flips a verdict makes every script judge
   const out = await runOne(s, ARGS);
   assert.ok(!("check_cmd" in JSON.parse(s.__store[PC]).plan_facts.repo_obligations[0]), "demoted to judge-only");
   assert.ok(out.result.gate_log.some((m) => /infra:check-scripts: the relayed checks do not match the program's digest; every check_cmd script is judge-only/.test(m)), out.result.gate_log.join("\n"));
-  assert.match(call(out, "infra:check-scripts").prompt, /\{checks: \{<path>: \{ok, reason\}\}, program, digest\}/);
+  assert.match(call(out, "infra:check-scripts").prompt, /\{checks, program, digest\} \(checks = \{<path>: \{ok, reason\}\}\)/);
 });
 
 test("3.0.0 relay programs print digests the workflow accepts (read-state, review-paths, fleet-scan)", { skip: !HAVE_PY }, () => {
@@ -7424,8 +7429,9 @@ test("3.0.0 review: an unclassified file or a module-level change stops unless t
 // ---------------------------------------------------------------- 3.0.0 fixer hooks on build files (ledger 1951)
 
 function formatOut(over) {
-  const o = Object.assign({ ran: true, reason: "ran pre-commit run --files", runs: 1, stable: true, files: [], changed: [], refused: [] }, over || {});
-  const keys = ["ran", "reason", "runs", "stable", "files", "changed", "refused"];
+  // 5.0.2 (ledger 2005): the program's own text is `note`; `reason` is the agent's
+  const o = Object.assign({ ran: true, note: "ran pre-commit run --files", runs: 1, stable: true, files: [], changed: [], refused: [] }, over || {});
+  const keys = ["ran", "note", "runs", "stable", "files", "changed", "refused"];
   const d = {};
   for (const k of keys) d[k] = o[k];
   return Object.assign({ status: "ok" }, o, { digest: sha256(canon(d)) });
@@ -7484,7 +7490,7 @@ test("3.0.0 fixers: a hook that changes a frozen test after freeze, or a path ou
 
 test("3.0.0 fixers: no pre-commit is a gate line; a relay that drops a changed path fails", async () => {
   const s = happy();
-  s["infra:format-code:r1"] = formatOut({ ran: false, reason: "pre-commit is not installed", runs: 0, files: ["src/x.py"] });
+  s["infra:format-code:r1"] = formatOut({ ran: false, note: "pre-commit is not installed", runs: 0, files: ["src/x.py"] });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.ok(out.result.gate_log.some((m) => /infra:format-code:r1: fixer hooks not run \(pre-commit is not installed\)/.test(m)));
@@ -7537,7 +7543,7 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
     assert.deepEqual(o.changed, ["a.py"]);
     assert.equal(readFileSync(join(home, "log"), "utf8").trim().split("\n")[0], "a.py", "the frozen test is never passed");
     const d = { program: o.program };
-    for (const k of ["ran", "reason", "runs", "stable", "files", "changed", "refused"]) d[k] = o[k];
+    for (const k of ["ran", "note", "runs", "stable", "files", "changed", "refused"]) d[k] = o[k];
     assert.equal(o.digest, sha256(canon(d)));
     // a hook that touches another path: reported, never settles, and never copied back
     const o2 = runF({ paths: ["a.py"] }, [], { TOUCH_OTHER: "1" });
@@ -7903,14 +7909,14 @@ test("3.0.0 review 4 LOW: the fixers run in a scratch checkout of HEAD: an edite
     writeFileSync(join(wt, "ci", "chk.sh"), "#!/bin/sh\necho edited-entry >> \"$LOG\"\n", { mode: 0o755 });
     // review 5: an edited hook entry or -m module is refused before any hook runs
     const o = runF(180);
-    assert.equal(o.ran, false, o.reason);
+    assert.equal(o.ran, false, o.note);
     assert.deepEqual(o.refused, ["ci/chk.sh", "hooklib/fmt.py"]);
     assert.ok(!existsSync(join(home, "log")), "no hook ran");
     assert.equal(readFileSync(join(wt, "ci", "chk.sh"), "utf8"), "#!/bin/sh\necho edited-entry >> \"$LOG\"\n", "the coder's files stay as they were");
     // with the hook surface at HEAD, HEAD's hook code runs in the scratch checkout
     sh(wt, "git", "checkout", "--", "ci/chk.sh", "hooklib/fmt.py");
     const h = runF(180);
-    assert.equal(h.ran, true, h.reason);
+    assert.equal(h.ran, true, h.note);
     assert.deepEqual(readFileSync(join(home, "log"), "utf8").trim().split("\n"), ["head", "head-py"]);
     assert.deepEqual(h.files, ["a.py"]);
     assert.equal(spawnSync("ls", [join(home, "scratch")]).stdout.toString().trim(), "", "the scratch checkout is removed");
@@ -7935,7 +7941,7 @@ test("3.0.0 review 4 LOW: the fixers run in a scratch checkout of HEAD: an edite
 
 test("3.0.0 review 3 LOW: a refused fixer run stops the build (hook surface changed)", async () => {
   const s = happy();
-  s["infra:format-code:r1"] = formatOut({ ran: false, reason: "refused", runs: 0, files: ["src/x.py"], refused: [".pre-commit-config.yaml"] });
+  s["infra:format-code:r1"] = formatOut({ ran: false, note: "refused", runs: 0, files: ["src/x.py"], refused: [".pre-commit-config.yaml"] });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "hash");
@@ -8125,7 +8131,7 @@ test("3.0.0 review 5 HIGH: a files: regex naming a non-hook file does not take i
     writeFileSync(join(r.wt, "common/util.py"), "x=2\n");
     writeFileSync(join(r.wt, "common/other.py"), "y=2\n");
     const o = r.runF();
-    assert.equal(o.ran, true, o.reason);
+    assert.equal(o.ran, true, o.note);
     assert.deepEqual(o.refused, []);
     assert.deepEqual(o.files, ["common/other.py", "common/util.py"], "a path named only in files: is formatted");
     assert.deepEqual(o.changed, ["common/other.py", "common/util.py"]);
@@ -8191,7 +8197,7 @@ test("3.0.0 review 5 LOW: a leftover scratch worktree is cleaned; the scratch ad
     writeFileSync(hook, "#!/bin/sh\ntouch " + JSON.stringify(join(r.home, "HOOK_RAN")) + "\n", { mode: 0o755 });
     writeFileSync(join(r.wt, "a.py"), "x=2\n");
     const o = r.runF();
-    assert.equal(o.ran, true, o.reason);
+    assert.equal(o.ran, true, o.note);
     assert.ok(!existsSync(join(r.home, "HOOK_RAN")), "no hook ran on the scratch worktree add");
     assert.equal(sh(r.wt, "git", "worktree", "list").trim().split("\n").length, 1, "the leftover is gone");
     assert.ok(!existsSync(join(r.home, "scratch", "fmt-old")));
@@ -8255,7 +8261,7 @@ test("3.0.0 review 6: a folded entry or literal args naming an edited hook file 
     assert.deepEqual(r.runF().refused, ["tools/gen.py"]);
     sh(r.wt, "git", "checkout", "--", "tools/gen.py");
     const ok = r.runF();
-    assert.equal(ok.ran, true, ok.reason);
+    assert.equal(ok.ran, true, ok.note);
     assert.deepEqual(ok.files, ["a.py"]);
   } finally {
     r.done();
@@ -8271,7 +8277,7 @@ test("3.0.0 review 7: with no Python that has PyYAML the step is refused, plain 
       const o = r.runF(null, 180, true);
       assert.equal(o.ran, false, what);
       assert.deepEqual(o.refused, [".pre-commit-config.yaml"], what);
-      assert.match(o.reason, /no Python with PyYAML found/, what);
+      assert.match(o.note, /no Python with PyYAML found/, what);
       assert.ok(!existsSync(join(r.home, "log")), what + ": no hook ran");
     } finally {
       r.done();
@@ -8302,7 +8308,7 @@ test("3.0.0 review 7: the config is read by pre-commit's own interpreter, throug
     assert.ok(existsSync(join(r.home, "pylog")), "pre-commit's interpreter parsed the config");
     sh(r.wt, "git", "checkout", "--", "ci/chk.sh");
     const ok = r.runF();
-    assert.equal(ok.ran, true, ok.reason);
+    assert.equal(ok.ran, true, ok.note);
     assert.deepEqual(ok.files, ["a.py"]);
     assert.equal(readFileSync(join(r.wt, "a.py"), "utf8"), "x=2\n# fmt\n");
   } finally {
@@ -8335,7 +8341,7 @@ test("3.0.0 review 6: a plain config behaves as before with PyYAML; without it, 
         assert.deepEqual([o.ran, o.refused], [false, [".pre-commit-config.yaml"]]);
         continue;
       }
-      assert.equal(o.ran, true, o.reason);
+      assert.equal(o.ran, true, o.note);
       assert.deepEqual(o.files, ["common/a.py"]);
       assert.deepEqual(o.refused, []);
       writeFileSync(join(r.wt, "tools/gen.py"), "print(2)\n");
@@ -8480,7 +8486,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.1/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.2/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
@@ -9111,7 +9117,7 @@ test("3.1.0 security review: the fixer loader refuses a billion laughs in args, 
       const ms = Number(process.hrtime.bigint() - t0) / 1e6;
       assert.equal(o.ran, false, cfg.slice(0, 80));
       assert.deepEqual(o.refused, [".pre-commit-config.yaml"]);
-      assert.match(o.reason, re, cfg.slice(0, 80));
+      assert.match(o.note, re, cfg.slice(0, 80));
       assert.ok(ms < 20000, "refused quickly: " + ms + " ms");
       assert.ok(!existsSync(join(r.home, "log")), "no hook ran");
     } finally {
@@ -10678,13 +10684,17 @@ function jsPathRecheck(agentStub) {
     constBlock("STR_LISTS", ";\n") +
     constBlock("PROGRAM_OUT", "\n};") +
     constBlock("EMITTED_CMDS", ";\n") +
+    // 5.0.2 (ledger 2006): the key table the prompts and the digest checks read
+    constBlock("PROGRAM_KEYS", "\n};") +
+    constBlock("NO_DIGEST_PROGRAMS", ";\n") +
+    constBlock("progTail", ";\n") +
     'const state = { repo: "/r", nonce: "' + NONCE + '", pathChecks: 0, agents: 0, scriptsDir: "' + SCRIPTS_DIR + '" };\n' +
     // 4.0.0: the one program this runtime runs
     // 4.0.1: its sha256 from the workflow's PROGRAM_SHA256 table
     "function programTable() { return { path_check: PROGRAM_SHA256.path_check }; }\n" +
     "function gate() {}\nfunction halt(status, msg, stopGate) { const e = new Error(msg); e.halt = { status, stopGate }; throw e; }\n" +
     'function nonced(p) { return p + "\\nRun nonce: " + state.nonce; }\n';
-  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "printedProgram", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel", "programSlots", "nullable", "mergeProp", "programSchema", "fileShaRule", "infraCall", "emitProg"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
+  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "printedProgram", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel", "programSlots", "nullable", "mergeProp", "programSchema", "fileShaRule", "infraCall", "emitProg", "progKeys", "printsKeys", "returnKeys"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
   return new Function("agent", consts + fns + "\nreturn pathRecheck;")(agentStub);
 }
 

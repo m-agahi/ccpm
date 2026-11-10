@@ -190,9 +190,12 @@ test("4.0.2 1997: every program-running dispatch gets a schema that requires fil
 // the steps the happy run never reaches (park-plan with findings, remote-head,
 // callers, precommit-ids, check-scripts, db-up, db-down) are held here, on the source
 test("4.0.2 1997: every Return line that names program names file_sha256, and every nested slot is relayed with it (source)", () => {
+  // 5.0.2 (ledger 2006): every Return list of a program is built by returnKeys,
+  // which ends in program, file_sha256 (and digest); none is hand-written
   const rets = [...SOURCE.matchAll(/Return \{[^}]*\}/g)].map((m) => m[0]).filter((x) => /\bprogram\b/.test(x));
-  assert.ok(rets.length >= 22, "Return lines with program: " + rets.length);
-  for (const x of rets) assert.match(x, /\bfile_sha256\b/, x);
+  assert.deepEqual(rets, [], "hand-written Return lines with program");
+  assert.ok((SOURCE.match(/returnKeys\(/g) || []).length >= 22, "Return lines built by returnKeys");
+  assert.match(SOURCE, /function returnKeys\(id\) \{\n  return progKeys\(id\)\.concat\("program", "file_sha256", progTail\(id\)\)/);
   const table = new Function(grabTable("PROGRAM_SLOTS") + "\nreturn PROGRAM_SLOTS;")();
   for (const slot of new Set(table.flatMap(([, s]) => s.map(([k]) => k)).filter((k) => k !== null)))
     assert.ok(SOURCE.includes('relayAs("' + slot + '")'), slot + " is relayed through relayAs");

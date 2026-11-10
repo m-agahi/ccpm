@@ -65,7 +65,7 @@ def snapshot(cwd):
 def names(b):
     return [x.decode('utf-8', 'replace') for x in b.split(b'\0') if x]
 def done(**k):
-    out = {'ran': False, 'reason': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': []}
+    out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': []}
     out.update(k)
     out['program'] = _PROG
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
@@ -211,7 +211,7 @@ vals = []
 if head_cfg.returncode == 0 and shutil.which('pre-commit') is not None:
     vals, why = hook_values()
     if why:
-        done(reason='hook surface unknown: ' + why + '; no hook was run', refused=['.pre-commit-config.yaml'])
+        done(note='hook surface unknown: ' + why + '; no hook was run', refused=['.pre-commit-config.yaml'])
 for v in vals:
     for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', v):
         q = os.path.normpath(tok)
@@ -242,13 +242,13 @@ for p in sorted(set(cand)):
     if os.path.isfile(os.path.join(wt, p)):
         files.append(p)
 if refused:
-    done(reason='hook surface differs from HEAD, or a selected path goes through a symlink', files=files, refused=sorted(set(refused)))
+    done(note='hook surface differs from HEAD, or a selected path goes through a symlink', files=files, refused=sorted(set(refused)))
 if head_cfg.returncode != 0:
-    done(reason='no .pre-commit-config.yaml', files=files)
+    done(note='no .pre-commit-config.yaml', files=files)
 if not files:
-    done(reason='no files to format', files=files)
+    done(note='no files to format', files=files)
 if shutil.which('pre-commit') is None:
-    done(reason='pre-commit is not installed', files=files)
+    done(note='pre-commit is not installed', files=files)
 # a scratch checkout a killed run left behind is removed first
 os.makedirs(scratch_root, exist_ok=True)
 for old in glob.glob(os.path.join(scratch_root, 'fmt-*')):
@@ -310,5 +310,5 @@ finally:
     shutil.rmtree(scratch, ignore_errors=True)
     git(wt, 'worktree', 'prune', check=False)
 if refused:
-    done(reason='a selected path resolves outside the checkout', files=files, refused=sorted(set(refused)))
-done(ran=True, reason='ran pre-commit run --files in a scratch checkout of HEAD', runs=runs, stable=stable, files=files, changed=changed)
+    done(note='a selected path resolves outside the checkout', files=files, refused=sorted(set(refused)))
+done(ran=True, note='ran pre-commit run --files in a scratch checkout of HEAD', runs=runs, stable=stable, files=files, changed=changed)

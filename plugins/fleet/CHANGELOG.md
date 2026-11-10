@@ -1,5 +1,53 @@
 # Changelog
 
+## [5.0.2] - 2026-11-10
+
+Fleet 5.0.2 (ledgers 2004, 2005, 2006, 2007): four findings of the 5.0.1 release smoke run.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.2), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.2/scripts` dir.
+
+### Fixed
+
+- 2006: release smoke plan run wf_00e4b130-011 stopped at `infra:callers` with "the relayed
+  occurrences do not match the program's digest". `callers.py` prints `auto_dont_care` and
+  `doctest_md`, and the digest check reads them, but the prompt named only `occurrences` and
+  `capped`. The agent followed the prompt; the two missing lists read as null. Latent since 4.0.0.
+  The build-mode hasher had the same defect: its prompt did not name `scripts`.
+- One table, `PROGRAM_KEYS`, now holds the keys of each program (and of each mode of `parked`,
+  `hasher` and `plan_ref`). Every digest check reads its keys there (`progKeys`). Every prompt
+  builds its "prints {...}" and "Return {...}" lists from the same entry (`printsKeys`,
+  `returnKeys`). The verify-plan prompt now names `args` in its printed list too.
+- 2005: `format_files.py` prints its own text as `note`, not `reason`. The agent's `reason` no
+  longer collides with a digested key.
+- 2004: the `infra:park-plan` agent ran a compound Bash call (`mkdir`, `cp`, `if git cat-file ...
+then git restore else git rm --cached ...; rm -f ...; fi`), which defeats the allow rules and
+  asked Max for permission. `parked.py park <worktree> <plan path> <scratch> <run>` now does the
+  status check, the copy, the restore or `rm --cached` and the unlink in Python, with fixed git
+  arguments. It follows no symlink and writes only under `<scratch>/parked/<run>/` (a re-park of
+  the same run replaces the regular file it left). The prompt forbids any command its steps do not
+  give; the findings chunk files are still written with `printf` (see Known). The script reads the
+  park outcome from the program's digest-checked output.
+
+### Known
+
+- Other prompts still ask for shell forms that an allow rule may not cover: the findings and
+  plan-ref chunk files (`printf ... > <dir>/<i>.b64`), the workspace exclude append
+  (`$(git ... rev-parse ...)`), the plan format step (`cd <worktree> && pre-commit run ...`), the
+  commit-plan housekeeping (`mkdir -p ... && mv -n ...`), the bytecode purge loop, and the push and
+  push-probe output redirect.
+
+### Tests
+
+- `v502_relay_keys.test.mjs`: the real `callers.py` output, cut to the keys the callers prompt
+  names, runs through the plan (red on 5.0.1 with the smoke run's stop text); a full plan and
+  build whose every program relay holds only the keys its prompt names; a lint that every printed
+  and Return list matches a `PROGRAM_KEYS` entry; `format_files` prints `note`; `parked.py park`
+  in real git repos (tracked, staged, untracked, another dirty path, clean).
+- The harness reads its digest key lists from the workflow's `PROGRAM_KEYS`.
+
 ## [5.0.1] - 2026-11-10
 
 Fleet 5.0.1 (ledger 2003): a PATH check relay with `file_sha256` copied into `program` no longer
