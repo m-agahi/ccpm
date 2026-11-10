@@ -147,26 +147,65 @@ test("5.0.5 2018: hasher output over 64 KiB exits non-zero with the map sizes, n
   }
 });
 
-test("5.0.5 2018 N1: a symlinked <scratch>/hashes or a symlinked scratch component fails closed", () => {
+test("5.0.5 2018 N1: a symlinked <scratch>/hashes fails closed; nothing is written through it", () => {
   const f = rustRepo(5);
   try {
     const elsewhere = join(f.home, "elsewhere");
     mkdirSync(elsewhere);
     symlinkSync(elsewhere, join(f.scratch, "hashes"));
-    let r = hasherRun(f.wt, f.scratch);
+    const r = hasherRun(f.wt, f.scratch);
     assert.notEqual(r.status, 0);
     assert.equal(r.stdout, "");
     assert.match(r.stderr, /symlink/);
     assert.deepEqual(readdirSync(elsewhere), [], "nothing written through the link");
-    // a scratch path that goes through a symlinked directory
-    const real = join(f.home, "real-scratch");
-    mkdirSync(real);
-    symlinkSync(f.home, join(f.home, "via"));
-    r = hasherRun(f.wt, join(f.home, "via", "real-scratch"));
+  } finally {
+    f.done();
+  }
+});
+
+// The run's real layout: <repo>/.claude/worktrees/fleet-<key>/{main,scratch}.
+// Symlinks above and at the repo root are allowed (a symlinked ~/git, macOS
+// /tmp); every component from <realpath repo>/.claude down is lstat'ed.
+function fleetLayout(f, wtsDir) {
+  const wts = wtsDir || join(f.wt, ".claude", "worktrees");
+  mkdirSync(join(wts, "fleet-x", "scratch"), { recursive: true });
+  sh(f.wt, "git", "worktree", "add", "-q", "--detach", join(wts, "fleet-x", "main"));
+}
+
+test("5.0.5 2018 N1: a repo reached through a symlinked parent dir is fine; the file is written", () => {
+  const f = rustRepo(5);
+  try {
+    fleetLayout(f);
+    symlinkSync(f.home, join(tmpdir(), "fleet-505-via-" + f.home.split("/").pop()));
+    const via = join(tmpdir(), "fleet-505-via-" + f.home.split("/").pop());
+    try {
+      const base = join(via, "repo", ".claude", "worktrees", "fleet-x");
+      const r = hasherRun(join(base, "main"), join(base, "scratch"));
+      assert.equal(r.status, 0, r.stderr);
+      const file = r.out.hashes.ignored.file;
+      assert.ok(file.startsWith(join(base, "scratch", "hashes", "ignored-")), file);
+      assert.ok(existsSync(join(f.wt, ".claude", "worktrees", "fleet-x", "scratch", "hashes", file.split("/").pop())));
+    } finally {
+      rmSync(via);
+    }
+  } finally {
+    f.done();
+  }
+});
+
+test("5.0.5 2018 N1: a symlinked .claude/worktrees is refused; nothing is written", () => {
+  const f = rustRepo(5);
+  try {
+    const wts = join(f.home, "wts");
+    fleetLayout(f, wts);
+    mkdirSync(join(f.wt, ".claude"), { recursive: true });
+    symlinkSync(wts, join(f.wt, ".claude", "worktrees"));
+    const base = join(f.wt, ".claude", "worktrees", "fleet-x");
+    const r = hasherRun(join(base, "main"), join(base, "scratch"));
     assert.notEqual(r.status, 0);
     assert.equal(r.stdout, "");
     assert.match(r.stderr, /symlink/);
-    assert.ok(!existsSync(join(real, "hashes")), "nothing written through the link");
+    assert.ok(!existsSync(join(wts, "fleet-x", "scratch", "hashes")), "nothing written through the link");
   } finally {
     f.done();
   }

@@ -69,16 +69,27 @@ _rs, _rw = os.path.realpath(scratch), os.path.realpath(wt)
 if _rs == _rw or _rs.startswith(_rw.rstrip('/') + '/'):
     sys.exit('scratch dir must be outside the worktree: ' + scratch)
 
-def no_link(path):
-    # every component of an absolute path, lstat'ed: a symlink exits (fail closed)
-    cur = '/'
-    for part in os.path.normpath(path).split('/'):
-        if not part:
-            continue
+# The run's layout is <repo>/.claude/worktrees/fleet-<key>/scratch. The repo
+# root is canonicalised once (a symlink above or at it is the user's own: a
+# symlinked ~/git, macOS /tmp); every component from <realpath repo>/.claude
+# down to the map file is lstat'ed, and a symlink there exits (fail closed).
+# A scratch dir outside that layout (tests) anchors at its parent instead.
+def _anchor(path):
+    p = os.path.normpath(path)
+    k = p.rfind('/.claude/worktrees/')
+    root, rest = (p[:k], p[k + 1:]) if k >= 0 else (os.path.dirname(p), os.path.basename(p))
+    return os.path.realpath(root or '/'), rest.split('/')
+SCRATCH_ROOT, _rest = _anchor(scratch)
+SCRATCH_REAL = os.path.join(SCRATCH_ROOT, *_rest)
+
+def no_link(parts):
+    # each component below SCRATCH_ROOT, lstat'ed
+    cur = SCRATCH_ROOT
+    for part in parts:
         cur = os.path.join(cur, part)
         if os.path.islink(cur):
             sys.exit('scratch path has a symlinked component: ' + cur)
-no_link(scratch)
+no_link(_rest)
 # the fleet's own settings file: its hash stays inline (the workflow exempts
 # exactly the fleet's bytes there)
 SETTINGS_LOCAL = '.claude/settings.local.json'
@@ -656,18 +667,24 @@ def ignored_summary(full):
     # (written whole, then renamed); the output carries {count and sha256 of
     # every entry but the settings file, settings (its hash or null), file}
     data = canon(full)
-    d = os.path.join(scratch, 'hashes')
-    no_link(d)
+    name = 'ignored-' + sha(data) + '.json'
+    d = os.path.join(SCRATCH_REAL, 'hashes')
+    no_link(_rest + ['hashes'])
     os.makedirs(d, exist_ok=True)
-    no_link(d)
+    no_link(_rest + ['hashes'])
     if not os.path.isdir(d):
         sys.exit('scratch hashes path is not a directory: ' + d)
-    path = os.path.join(d, 'ignored-' + sha(data) + '.json')
-    no_link(path)
+    real = os.path.join(d, name)
+    no_link(_rest + ['hashes', name])
     fd, tmp = tempfile.mkstemp(dir=d, prefix='.ignored-')
     with os.fdopen(fd, 'wb') as fh:
         fh.write(data)
-    os.replace(tmp, path)
+    os.replace(tmp, real)
+    # the path the workflow expects (its own scratch string) must resolve to
+    # the file written
+    path = os.path.join(scratch, 'hashes', name)
+    if os.path.realpath(path) != real or os.path.realpath(real) != real:
+        sys.exit('scratch map file does not resolve to the written path: ' + path)
     rest = dict((k, v) for k, v in full.items() if k != SETTINGS_LOCAL)
     return {'count': len(rest), 'sha256': sha(canon(rest)), 'settings': full.get(SETTINGS_LOCAL), 'file': path}
 

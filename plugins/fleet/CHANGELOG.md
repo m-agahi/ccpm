@@ -55,9 +55,11 @@ local hook that names a directory freezes that directory instead of stopping eve
   guarded by the freeze.
 - Review fixes: the relay-cap exit prints a fixed marker (`FLEET_HASHER_RELAY_CAP:`); the workflow
   maps it to its own stop text with stop_gate `hash` (the sizes only when they have the
-  program's exact form). `hasher.py` lstats every component of the scratch path, of
-  `<scratch>/hashes` and of the map file, and exits non-zero on a symlink: nothing is written
-  through a link.
+  program's exact form). `hasher.py` canonicalises the repo root once (a symlink above or at
+  it, such as a symlinked `~/git` or macOS `/tmp`, is allowed), lstats every component from
+  `<realpath repo>/.claude` down to the map file (`.claude`, `worktrees`, `fleet-<key>`,
+  `scratch`, `hashes`, the file) and exits non-zero on a symlink there; the path the workflow
+  expects must resolve to the file written.
 
 ### Not changed (decision for Max)
 
