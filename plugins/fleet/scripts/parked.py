@@ -160,5 +160,65 @@ elif mode == 'write':
         f.write(msg)
     shutil.rmtree(real, ignore_errors=True)
     emit({'written': dest, 'sha256': expected, 'args': [scratch, run]})
+elif mode == 'park':
+    # fleet 5.0.2 (ledger 2004): park <worktree> <plan path> <scratch> <run>:
+    # move the stopped run's draft plan to <scratch>/parked/<run>/<plan path>
+    # and leave the worktree as HEAD has it, with fixed git arguments and no
+    # shell. Any dirty path other than the plan stops before a change (dirty).
+    import subprocess
+    if len(sys.argv) != 6:
+        sys.exit('usage: park <worktree> <plan path> <scratch> <run>')
+    wt, plan, scratch, run = sys.argv[2:]
+    parts = plan.split('/')
+    if not plan or plan.startswith('/') or '\0' in plan or any(p in ('', '.', '..') for p in parts):
+        sys.exit('bad plan path: ' + plan)
+    if not NAME_RE.fullmatch(run) or run == 'used':
+        sys.exit('bad run name: ' + run)
+    G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
+    def git(*a, ok=(0,)):
+        r = subprocess.run(G + list(a), capture_output=True)
+        if r.returncode not in ok:
+            sys.exit('git ' + ' '.join(a) + ': ' + r.stderr.decode('utf-8', 'replace'))
+        return r
+    def dirty():
+        recs = git('status', '--porcelain', '-z', '--untracked-files=all').stdout.split(b'\0')
+        out, i = [], 0
+        while i < len(recs):
+            rec = recs[i].decode('utf-8', 'replace')
+            i += 1
+            if not rec:
+                continue
+            out.append(rec[3:])
+            if rec[0] in 'RC':
+                i += 1  # a rename's source path follows
+        return out
+    args = [wt, plan, scratch, run]
+    now = dirty()
+    if not now:
+        emit({'target': None, 'clean': True, 'dirty': [], 'args': args})
+        sys.exit(0)
+    other = sorted(p for p in set(now) if p != plan)
+    if other:
+        emit({'target': None, 'clean': False, 'dirty': other, 'args': args})
+        sys.exit(0)
+    src = os.path.join(wt, plan)
+    dest = os.path.join(scratch, 'parked', run, plan)
+    target = None
+    if os.path.islink(src):
+        sys.exit('refusing a symlink at ' + src)
+    if os.path.isfile(src):
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if os.path.islink(dest):
+            sys.exit('refusing a symlink at ' + dest)
+        shutil.copy2(src, dest)
+        target = dest
+    spec = ':(literal)' + plan
+    if git('cat-file', '-e', 'HEAD:' + plan, ok=(0, 1, 128)).returncode == 0:
+        git('restore', '--staged', '--worktree', '--source=HEAD', '--', spec)
+    else:
+        git('rm', '-q', '--cached', '--ignore-unmatch', '--', spec)
+        if os.path.lexists(src):
+            os.unlink(src)
+    emit({'target': target, 'clean': not dirty(), 'dirty': [], 'args': args})
 else:
-    sys.exit('usage: read <scratch> <tip> | write <scratch> <run> <chunk dir> <n> <expected> <shas>')
+    sys.exit('usage: read <scratch> <tip> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run>')

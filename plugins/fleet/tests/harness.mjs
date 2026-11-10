@@ -139,20 +139,39 @@ export function withNonce(args) {
 // keys. Stubs that give none get the program's digest (a key absent counts as
 // null, as in the script); branch-scan stubs written with message text are
 // turned into the program's metadata entries first.
+// 5.0.2 (ledger 2007): the keys every digest check reads, from the workflow's
+// own PROGRAM_KEYS table: a harness copy drifted along with the script, which
+// is how a prompt that named fewer keys than its digest stayed green.
+export const PROGRAM_KEYS = (() => {
+  const i = SOURCE.indexOf("\nconst PROGRAM_KEYS = {");
+  if (i < 0) throw new Error("no PROGRAM_KEYS table in the workflow");
+  return new Function("return " + SOURCE.slice(SOURCE.indexOf("{", i), SOURCE.indexOf("\n};\n", i) + 2))();
+})();
+export const K = (id) => {
+  if (!PROGRAM_KEYS[id]) throw new Error("no PROGRAM_KEYS entry " + id);
+  return PROGRAM_KEYS[id];
+};
 export const RELAY_KEYS = [
-  [/^infra:fleet-scan:/, ["diff", "commits"]],
-  [/^infra:read-state$/, ["exists", "target", "message", "head", "head_tree", "clean"]],
-  [/^infra:review-paths:/, ["changed_paths"]],
-  [/^infra:check-scripts/, ["checks"]],
-  [/^infra:branch-scan$/, ["commits", "refs", "plan_tip_time"]],
-  [/^infra:format-(tests|code):/, ["ran", "reason", "runs", "stable", "files", "changed", "refused"]],
+  [/^infra:fleet-scan:/, K("fleet_scan")],
+  [/^infra:read-state$/, K("read_state")],
+  [/^infra:review-paths:/, K("review_paths")],
+  [/^infra:check-scripts/, K("script_check")],
+  [/^infra:branch-scan$/, K("branch_scan")],
+  [/^infra:format-(tests|code):/, K("format_files")],
   // 3.1.0 (ledger 1959)
-  [/^infra:verify-plan$/, ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"]],
+  [/^infra:verify-plan$/, K("verify_since")],
   // 3.1.0 (ledger 1935c)
-  [/^infra:push(:p\d+)?$/, ["push_result", "exit_code", "hook_tail", "args"]],
-  [/^infra:hook-surface:/, ["surface", "make_paths", "error", "args"]],
+  [/^infra:push(:p\d+)?$/, K("push_classify")],
+  [/^infra:hook-surface:/, K("hook_surface")],
 ];
 // 3.1.0: the IaC push gate program's output, with its digest
+// 5.0.2 (ledger 2004): the park program's output for a park-plan prompt
+// (`over` replaces keys of the park object: {clean: false, dirty: [...]})
+export function parkOut(prompt, over) {
+  const i = inputsOf(prompt);
+  const park = Object.assign({ target: i.scratch + "/parked/" + i.run + "/" + i.plan_path, clean: true, dirty: [], args: [i.worktree, i.plan_path, i.scratch, i.run] }, over);
+  return { status: "ok", reason: "parked", park };
+}
 export function tfGateRelay(over) {
   const r = Object.assign({ status: "ok", reason: "scanned", touched: false, iac_files: [], problems: [], hints: [], args: ["/r/.claude/worktrees/fleet-l42-add-thing/main", "master", "0".repeat(40), "git@github.com:o/r.git"] }, over);
   r.digest = sha256(canon({ touched: r.touched, iac_files: r.iac_files, problems: r.problems, hints: r.hints, args: r.args }));
@@ -250,7 +269,7 @@ export async function runOne(script, args0) {
     let r = await agentInner(prompt, opts);
     if (r && typeof r === "object" && !rawResults.has(r)) r = fillPrograms(label, r, prompt);
     const mut = script.__mutate;
-    if (mut && r && typeof r === "object" && (mut.label instanceof RegExp ? mut.label.test(label) : mut.label === label)) r = mut.fn(r, prompt);
+    if (mut && r && typeof r === "object" && (mut.label instanceof RegExp ? mut.label.test(label) : mut.label === label)) r = mut.fn(r, prompt, label);
     return r;
   };
   const agentInner = async (prompt, opts = {}) => {
@@ -281,13 +300,13 @@ export async function runOne(script, args0) {
     if (!(label in script) && /^infra:push-probe$/.test(label))
       return { status: "ok", reason: "probed", access: "ok", result: "ok", exit_code: 0, auth_line: null, args: ["/tmp/fleet-probe.out", "0"] };
     // unscripted plan parks move the draft and leave the worktree clean
-    if (!(label in script) && /^infra:park-plan/.test(label)) return { status: "ok", reason: "parked", target: inputsOf(prompt).dest, clean: true };
+    if (!(label in script) && /^infra:park-plan/.test(label)) return parkOut(prompt);
     // unscripted plan formatting changes nothing (the hooks found nothing to fix)
     if (!(label in script) && /^infra:format-plan/.test(label)) return { status: "ok", reason: "formatted", changed_paths: [] };
     // unscripted fixer-hook runs change nothing (3.0.0)
     if (!(label in script) && /^infra:format-(tests|code):/.test(label)) {
       const sel = inputsOf(prompt).select;
-      return withRelayDigest(label, { status: "ok", reason: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [] });
+      return withRelayDigest(label, { status: "ok", reason: "ran the fixers", note: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [] });
     }
     // 3.1.0: unscripted IaC pre-push gates find no IaC file in the PR diff
     if (!(label in script) && /^infra:tf-gate:/.test(label)) {
@@ -641,7 +660,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.1/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.2/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -752,9 +771,8 @@ export function redigest(label, r, prompt) {
   for (const [slot, , keys0] of hit ? hit[1] : []) {
     const o = slot ? r[slot] : r;
     if (!o || typeof o !== "object" || !keys0) continue;
-    const keys = keys0 === "hasher" ? ["fingerprint", "hashes"].concat(inputsOf(prompt).base_tree ? ["changed"] : []) : keys0;
-    const extra = keys0 === "hasher" ? { scripts: o.scripts === undefined ? null : o.scripts } : {};
-    o.digest = sha256(canon(Object.assign(pick(o, keys), extra, { program: o.program })));
+    const keys = keys0 === "hasher" ? K(inputsOf(prompt).base_tree ? "hasher:base" : "hasher") : keys0;
+    o.digest = sha256(canon(Object.assign(pick(o, keys), { program: o.program })));
   }
   return r;
 }
@@ -762,42 +780,42 @@ export function redigest(label, r, prompt) {
 export function allScripts() {
   return Object.fromEntries(PROGRAMS.map(([n]) => [n, programSha(n)]));
 }
-const PC_KEYS = ["tools", "args", "path_problems"];
 // [label, [[slot (null: the result itself), program, digest keys (null: no digest)]]]
 export const PROGRAM_LABELS = [
-  [/^preflight$/, [["path_check", "path_check", PC_KEYS]]],
-  [/^infra:path-check:/, [[null, "path_check", PC_KEYS]]],
-  [/^workspace$/, [["remote_url_check", "remote_url", ["url", "args"]]]],
+  [/^preflight$/, [["path_check", "path_check", K("path_check")]]],
+  [/^infra:path-check:/, [[null, "path_check", K("path_check")]]],
+  [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")]]],
   [/^hasher:/, [[null, "hasher", "hasher"]]],
-  [/^infra:branch-scan$/, [[null, "branch_scan", ["commits", "refs", "plan_tip_time"]], ["test_db", "test_db_decl", ["decl", "error", "args"]]]],
+  [/^infra:branch-scan$/, [[null, "branch_scan", K("branch_scan")], ["test_db", "test_db_decl", K("test_db_decl")]]],
   // 4.0.0 (1986)
-  [/^infra:load-parked$/, [[null, "parked", ["parked", "args"]]]],
-  [/^infra:park-plan/, [["findings_write", "parked", ["written", "sha256", "args"]]]],
+  [/^infra:load-parked$/, [[null, "parked", K("parked:read")]]],
+  // 5.0.2 (ledger 2004): the park program moves the draft
+  [/^infra:park-plan/, [["park", "parked", K("parked:park")], ["findings_write", "parked", K("parked:write")]]],
   [/^infra:stage-plan/, [["plan_hash", "plan_hash", null]]],
-  [/^infra:format-(tests|code):/, [[null, "format_files", ["ran", "reason", "runs", "stable", "files", "changed", "refused"]]]],
-  [/^infra:commit-plan/, [[null, "plan_ref_write", ["head", "tag_sha"]]]],
+  [/^infra:format-(tests|code):/, [[null, "format_files", K("format_files")]]],
+  [/^infra:commit-plan/, [[null, "plan_ref_write", K("plan_ref_write")]]],
   // 4.0.0 review: dsn_paths, the committed files that hold mysql://
-  [/^infra:verify-plan-commit/, [["plan_files", "plan_files", ["head", "files", "args", "dsn_paths"]], ["plan_hash", "plan_hash", null], ["plan_ref", "plan_ref", null]]],
+  [/^infra:verify-plan-commit/, [["plan_files", "plan_files", K("plan_files")], ["plan_hash", "plan_hash", null], ["plan_ref", "plan_ref", null]]],
   [/^infra:load-ref/, [[null, "plan_ref", null]]],
-  [/^infra:verify-plan$/, [[null, "verify_since", ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"]], ["plan_hash", "plan_hash", null], ["plan_hash_head", "plan_hash", null], ["test_db", "test_db_decl", ["decl", "error", "args"]]]],
-  [/^infra:read-state$/, [[null, "read_state", ["exists", "target", "message", "head", "head_tree", "clean"]]]],
-  [/^infra:state:/, [[null, "state_write", ["head", "state_sha"]]]],
-  [/^infra:tf-gate:/, [[null, "tf_gate", ["touched", "iac_files", "problems", "hints", "args"]]]],
-  [/^infra:remote-head:/, [[null, "remote_head", ["head", "args"]]]],
-  [/^infra:fleet-scan:/, [[null, "fleet_scan", ["diff", "commits"]]]],
-  [/^infra:callers/, [[null, "callers", ["occurrences", "capped", "auto_dont_care", "doctest_md"]]]],
-  [/^infra:changed-defs:/, [[null, "changed_defs", ["defs", "excluded", "unclassified", "unattributed"]]]],
-  [/^infra:push(:p\d+)?$/, [[null, "push_classify", ["push_result", "exit_code", "hook_tail", "args"]]]],
+  [/^infra:verify-plan$/, [[null, "verify_since", K("verify_since")], ["plan_hash", "plan_hash", null], ["plan_hash_head", "plan_hash", null], ["test_db", "test_db_decl", K("test_db_decl")]]],
+  [/^infra:read-state$/, [[null, "read_state", K("read_state")]]],
+  [/^infra:state:/, [[null, "state_write", K("state_write")]]],
+  [/^infra:tf-gate:/, [[null, "tf_gate", K("tf_gate")]]],
+  [/^infra:remote-head:/, [[null, "remote_head", K("remote_head")]]],
+  [/^infra:fleet-scan:/, [[null, "fleet_scan", K("fleet_scan")]]],
+  [/^infra:callers/, [[null, "callers", K("callers")]]],
+  [/^infra:changed-defs:/, [[null, "changed_defs", K("changed_defs")]]],
+  [/^infra:push(:p\d+)?$/, [[null, "push_classify", K("push_classify")]]],
   // 4.0.0 (1985, S3)
-  [/^infra:push-probe$/, [[null, "push_probe", ["access", "result", "exit_code", "auth_line", "args"]]]],
-  [/^infra:hook-surface:/, [[null, "hook_surface", ["surface", "make_paths", "error", "args"]]]],
-  [/^infra:review-paths:/, [[null, "review_paths", ["changed_paths"]]]],
+  [/^infra:push-probe$/, [[null, "push_probe", K("push_probe")]]],
+  [/^infra:hook-surface:/, [[null, "hook_surface", K("hook_surface")]]],
+  [/^infra:review-paths:/, [[null, "review_paths", K("review_paths")]]],
   // 4.0.0 review: the hook ids feed G2 and carry a digest
-  [/^infra:precommit-ids/, [[null, "precommit_ids", ["present", "ids", "parser", "error", "args"]]]],
-  [/^infra:check-scripts/, [[null, "script_check", ["checks"]]]],
+  [/^infra:precommit-ids/, [[null, "precommit_ids", K("precommit_ids")]]],
+  [/^infra:check-scripts/, [[null, "script_check", K("script_check")]]],
   // 4.0.0 (1981)
-  [/^infra:db-up/, [["sweep", "db_sweep", ["podman", "removed", "kept", "errors"]], ["up", "db_up", ["name", "port", "dbs", "users", "expiry", "args"]]]],
-  [/^infra:db-down$/, [["down", "db_down", ["removed", "absent", "error", "args"]]]],
+  [/^infra:db-up/, [["sweep", "db_sweep", K("db_sweep")], ["up", "db_up", K("db_up")]]],
+  [/^infra:db-down$/, [["down", "db_down", K("db_down")]]],
 ];
 function pick(o, keys) {
   const x = {};
@@ -826,7 +844,8 @@ export function fillPrograms(label, r, prompt) {
   for (const [slot, name, keys0] of hit[1]) {
     const o = slot ? r[slot] : r;
     if (!o || typeof o !== "object" || "program" in o) continue;
-    const keys = keys0 === "hasher" ? ["fingerprint", "hashes"].concat(inputsOf(prompt).base_tree ? ["changed"] : []) : keys0;
+    // a 3.x stub digest covers the keys bar the hasher's scripts
+    const keys = keys0 === "hasher" ? K(inputsOf(prompt).base_tree ? "hasher:base" : "hasher").filter((k) => k !== "scripts") : keys0;
     const was = keys && typeof o.digest === "string" ? o.digest : null;
     const valid3 = was !== null && was === sha256(canon(pick(o, keys)));
     o.program = programOf(name);

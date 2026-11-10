@@ -336,7 +336,7 @@ const READS = {
     "h[m] object": "hasher:hashes.files",
     "h.suspicious array": "hasher:hashes.suspicious",
     "r.changed array": "hasher:changed",
-    "r.digest string": "hasher:digest",
+    // 5.0.2 (ledger 2006): the digest is read by relayDigestOk
   },
   cleanRepo: { "r string": "intake:brief.repo" },
   // 5.0.0 (R1): the role_file every role result carries (roleTableProblem and rolesFromRef are gone)
@@ -538,7 +538,10 @@ const READS = {
     "scan.commits array": "prog:branch_scan:commits",
     "scan.refs array": "prog:branch_scan:refs",
     "tip integer": "prog:branch_scan:plan_tip_time",
-    "pk.clean boolean": "infra:clean",
+    // 5.0.2 (ledger 2004): the park program's relay
+    "pr object": "infra:park",
+    "pr.clean boolean": "prog:parked:clean",
+    "pr.dirty array": "prog:parked:dirty",
   },
   tinyRefProblem: {
     "t object": PARSED_ARGS,
@@ -890,7 +893,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.1\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.1\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.2\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.2\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);
