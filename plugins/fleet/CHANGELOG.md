@@ -50,9 +50,9 @@ local hook that names a directory freezes that directory instead of stopping eve
 
 - 5.0.4 sanctions no churn in ignored build output: `target/`, unlike the top-level `build`,
   `dist`, `htmlcov` and `.eggs`, is frozen. A Rust run whose writers or judges run `cargo test`
-  rebuilds `target/` and stops at the first hasher after it (`ignored path written:
-target/... in test round 1`, stop_gate `ownership`). 5.0.5 keeps that; an allowance is a
-  separate decision.
+  rebuilds `target/` and stops at the first hasher after it
+  (`ignored path written: target/...`, stop_gate `ownership`). 5.0.5 keeps that; an allowance
+  is a separate decision.
 
 ## [5.0.4] - 2026-11-10
 

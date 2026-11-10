@@ -989,7 +989,7 @@ function fleetOwnFile(k, after, wt) {
 const FLEETREF = "fleetref:";
 // 5.0.5 (ledger 2018): the key of every ignored entry but SETTINGS_LOCAL
 // (value "<sha256>/<count>"); its violation text until explainIgnored lists
-// the paths. {sha256 -> {file, count}} of every summary a hasher relayed.
+// the paths. IGNORED_FILES: that value -> the file of every summary relayed.
 const IGNORED_ALL = "*";
 const IGNORED_CHANGED = "ignored files changed";
 const IGNORED_FILES = {};
