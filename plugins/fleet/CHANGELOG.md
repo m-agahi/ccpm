@@ -26,8 +26,10 @@ Fleet 5.0.2 (ledgers 2004, 2005, 2006, 2007): four findings of the 5.0.1 release
 then git restore else git rm --cached ...; rm -f ...; fi`), which defeats the allow rules and
   asked Max for permission. `parked.py park <worktree> <plan path> <scratch> <run>` now does the
   status check, the copy, the restore or `rm --cached` and the unlink in Python, with fixed git
-  arguments. The prompt runs only the standard `sha256sum -- ... && python3 -I ...` commands and
-  forbids any other. The script reads the park outcome from the program's digest-checked output.
+  arguments. It follows no symlink and writes only under `<scratch>/parked/<run>/` (a re-park of
+  the same run replaces the regular file it left). The prompt forbids any command its steps do not
+  give; the findings chunk files are still written with `printf` (see Known). The script reads the
+  park outcome from the program's digest-checked output.
 
 ### Known
 

@@ -5818,7 +5818,7 @@ test("2.1.5 a plan stop after the planner parks the run's own draft plan and kee
   assert.equal(inp.scratch, "/r/.claude/worktrees/fleet-l42-add-thing/scratch");
   assert.equal(inp.run, NONCE);
   assert.match(pk.prompt, /parked\.py' 'park' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/main' 'docs\/plans\/x\.md' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch' 'n1-0000001'/);
-  assert.match(pk.prompt, /run no other command: no git, cp, mv, rm, mkdir or redirection of your own/);
+  assert.match(pk.prompt, /Run only the commands given in the steps below, each as its own Bash call, exactly as written: no other command \(no git, cp, mv or rm of your own\)/);
   assert.match(out.result.reason, /draft plan moved to .*scratch\/parked/);
   assert.equal(out.result.stop_gate, "role");
 });

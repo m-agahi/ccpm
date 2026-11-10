@@ -111,7 +111,7 @@ elif mode == 'write':
     if len(sys.argv) != 8:
         sys.exit('usage: write <scratch> <run> <chunk dir> <n> <expected sha256> <chunk sha256 list>')
     scratch, run, cdir, n_arg, expected, shas_arg = sys.argv[2:]
-    if not NAME_RE.fullmatch(run) or run == 'used':
+    if not NAME_RE.fullmatch(run) or run in ('used', '.', '..'):
         sys.exit('bad run name: ' + run)
     if not re.fullmatch(r'[1-9][0-9]{0,2}', n_arg):
         sys.exit('bad chunk count: ' + n_arg)
@@ -172,7 +172,7 @@ elif mode == 'park':
     parts = plan.split('/')
     if not plan or plan.startswith('/') or '\0' in plan or any(p in ('', '.', '..') for p in parts):
         sys.exit('bad plan path: ' + plan)
-    if not NAME_RE.fullmatch(run) or run == 'used':
+    if not NAME_RE.fullmatch(run) or run in ('used', '.', '..'):
         sys.exit('bad run name: ' + run)
     G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
     def git(*a, ok=(0,)):
@@ -193,6 +193,32 @@ elif mode == 'park':
                 i += 1  # a rename's source path follows
         return out
     args = [wt, plan, scratch, run]
+    # security review: no symlink is followed and nothing is read, written or
+    # removed outside the worktree or <scratch>/parked/<run>/
+    def inside(path, root):
+        r = os.path.realpath(path)
+        return r == root or r.startswith(root.rstrip('/') + '/')
+    def real_dirs(root, rel, create):
+        # each directory of rel under root: a real directory, never a symlink;
+        # create: make the missing ones, one at a time
+        cur = root
+        for part in rel:
+            cur = os.path.join(cur, part)
+            if os.path.islink(cur):
+                sys.exit('refusing a symlink at ' + cur)
+            if not os.path.lexists(cur):
+                if not create:
+                    return
+                os.mkdir(cur, 0o700)
+            if not os.path.isdir(cur):
+                sys.exit('not a directory: ' + cur)
+    wreal = os.path.realpath(wt)
+    real_dirs(wt, parts[:-1], False)
+    src = os.path.join(wt, plan)
+    if os.path.islink(src):
+        sys.exit('refusing a symlink at ' + src)
+    if not inside(os.path.dirname(src), wreal):
+        sys.exit('plan path resolves outside the worktree: ' + src)
     now = dirty()
     if not now:
         emit({'target': None, 'clean': True, 'dirty': [], 'args': args})
@@ -201,16 +227,39 @@ elif mode == 'park':
     if other:
         emit({'target': None, 'clean': False, 'dirty': other, 'args': args})
         sys.exit(0)
-    src = os.path.join(wt, plan)
-    dest = os.path.join(scratch, 'parked', run, plan)
+    sreal = os.path.realpath(scratch)
+    dest = os.path.join(sreal, 'parked', run, plan)
     target = None
-    if os.path.islink(src):
-        sys.exit('refusing a symlink at ' + src)
     if os.path.isfile(src):
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        real_dirs(sreal, ['parked', run] + parts[:-1], True)
+        if not inside(os.path.dirname(dest), os.path.join(sreal, 'parked', run)):
+            sys.exit('park destination resolves outside ' + os.path.join(sreal, 'parked', run) + ': ' + dest)
+        # a re-park of the same run replaces the regular file it left; a
+        # symlink or anything else there is refused
         if os.path.islink(dest):
             sys.exit('refusing a symlink at ' + dest)
-        shutil.copy2(src, dest)
+        if os.path.lexists(dest):
+            if not os.path.isfile(dest):
+                sys.exit('not a regular file: ' + dest)
+            os.unlink(dest)
+        fi = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            st = os.fstat(fi)
+            data = b''
+            while True:
+                b = os.read(fi, 1 << 16)
+                if not b:
+                    break
+                data += b
+        finally:
+            os.close(fi)
+        fo = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fo, data)
+        finally:
+            os.close(fo)
+        # the draft's own mtime, as cp -p kept it (the read mode compares mtimes)
+        os.utime(dest, ns=(st.st_atime_ns, st.st_mtime_ns), follow_symlinks=False)
         target = dest
     spec = ':(literal)' + plan
     if git('cat-file', '-e', 'HEAD:' + plan, ok=(0, 1, 128)).returncode == 0:

@@ -12,7 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync, symlinkSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { HERE, SOURCE, ARGS, happy, run, runOne, inputsOf, programSha, spawnSync, scratchRepo, sh, PROGRAM_LABELS, PROGRAMS, planRefFor, buildArgs, parkOut, sha256, canon } from "./harness.mjs";
 
@@ -192,6 +192,19 @@ test("5.0.2 2007: every program prompt's printed and Return lists hold exactly t
 
 test("5.0.2 2007: the digest checks and the prompts read the one key table (source)", () => {
   const table = TABLE();
+  // PROGRAM_OUT types every key of every mode, and no other (the hasher's are in HASHER_SCHEMA)
+  const at = SOURCE.indexOf("\nconst PROGRAM_OUT = {");
+  const out = new Function("const STR = {}, STR_OR_NULL = {}, STRS = {}, BOOL = {}, INT = {}, STR_LISTS = {}, PROGRAM_PROP = {};\nreturn " + SOURCE.slice(SOURCE.indexOf("{", at), SOURCE.indexOf("\n};\n", at) + 2))();
+  for (const [n] of PROGRAMS) {
+    const union = [...new Set(Object.entries(table).filter(([id]) => id.split(":")[0] === n).flatMap(([, k]) => k))].sort();
+    if (n === "hasher") continue;
+    assert.deepEqual(Object.keys(out[n]).filter((k) => k !== "digest").sort(), union, n + ": PROGRAM_OUT keys are the PROGRAM_KEYS keys");
+  }
+  const hs = SOURCE.indexOf("\nconst HASHER_SCHEMA = {");
+  const hText = SOURCE.slice(hs, SOURCE.indexOf("\n};\n", hs));
+  for (const k of table.hasher.concat(table["hasher:base"])) assert.match(hText, new RegExp("\\n    " + k + ": "), "HASHER_SCHEMA types " + k);
+  // the changed-definitions digest reads the table too
+  assert.match(SOURCE, /for \(const k of progKeys\("changed_defs"\)\) relayed\[k\] =/);
   // every shipped program has keys, and every key list is the program's
   for (const [n] of PROGRAMS) assert.ok(Object.keys(table).some((id) => id.split(":")[0] === n), n + " has no PROGRAM_KEYS entry");
   // no digest check passes a hand-written key list
@@ -298,6 +311,9 @@ test("5.0.2 2004: the park-plan prompt runs only the park and write commands; th
   const out = await runOne(stop(), ARGS);
   const pk = out.calls.find((c) => c.label === "infra:park-plan").prompt;
   assert.match(pk, /never join commands with &&, ; or if/);
+  // the findings chunk steps stay: the ban covers commands the steps do not give
+  assert.match(pk, /a\. `mkdir -p '[^']*park-chunks-n1-0000001'`/);
+  assert.match(pk, /parked\.py' 'write'/);
   assert.doesNotMatch(pk, /git -C <worktree>|rm -f|cp -p|restore --staged/);
   assert.match(out.result.reason, /draft plan moved to .*scratch\/parked/);
   // another dirty path: the program's dirty list is the note
@@ -311,4 +327,70 @@ test("5.0.2 2004: the park-plan prompt runs only the park and write commands; th
   const o3 = await runOne(t, ARGS);
   assert.match(o3.result.reason, /plan-audit verdict plan_defect/);
   assert.match(o3.result.reason, /park failed: the park relay does not match the program's digest/);
+});
+
+// security review of the park mode: no write outside <scratch>/parked/<run>/,
+// no symlink followed on either side
+test("5.0.2 2004 security (real git): park refuses a symlinked scratch dir, a symlink at dest and a symlinked worktree dir", () => {
+  const PLAN = "docs/plans/x.md";
+  const parkRaw = (wt, plan, scratch) => spawnSync(PY, ["-I", PARKED, "park", wt, plan, scratch, "n1-0000001"], { encoding: "utf8" });
+  for (const kind of ["parked-link", "run-link", "inner-link", "dest-link", "wt-dir-link", "dest-file"]) {
+    const wt = scratchRepo("fleet-502-psec-");
+    const scratch = scratchRepo("fleet-502-pscr-");
+    const outside = scratchRepo("fleet-502-pout-");
+    try {
+      writeFileSync(join(wt, "README.md"), "r\n");
+      sh(wt, "git", "add", ".");
+      sh(wt, "git", "commit", "-q", "-m", "init");
+      const run = join(scratch, "parked", "n1-0000001");
+      if (kind === "wt-dir-link") {
+        // the plan's directory in the worktree is a link to a dir outside it
+        mkdirSync(join(outside, "plans"), { recursive: true });
+        writeFileSync(join(outside, "plans", "x.md"), "victim\n");
+        symlinkSync(outside, join(wt, "docs"));
+      } else {
+        mkdirSync(join(wt, "docs", "plans"), { recursive: true });
+        writeFileSync(join(wt, PLAN), "draft\n");
+      }
+      if (kind === "parked-link") symlinkSync(outside, join(scratch, "parked"));
+      if (kind === "run-link") {
+        mkdirSync(join(scratch, "parked"));
+        symlinkSync(outside, run);
+      }
+      if (kind === "inner-link") {
+        mkdirSync(join(run, "docs"), { recursive: true });
+        symlinkSync(outside, join(run, "docs", "plans"));
+      }
+      if (kind === "dest-link") {
+        mkdirSync(join(run, "docs", "plans"), { recursive: true });
+        writeFileSync(join(outside, "target"), "keep\n");
+        symlinkSync(join(outside, "target"), join(run, PLAN));
+      }
+      if (kind === "dest-file") {
+        // a re-park of the same run replaces a regular file it left
+        mkdirSync(join(run, "docs", "plans"), { recursive: true });
+        writeFileSync(join(run, PLAN), "older\n");
+        const o = park(wt, PLAN, scratch, "n1-0000001");
+        assert.equal(o.target, join(run, PLAN));
+        assert.equal(readFileSync(join(run, PLAN), "utf8"), "draft\n");
+        continue;
+      }
+      const p = parkRaw(wt, PLAN, scratch);
+      assert.notEqual(p.status, 0, kind + ": refused; " + p.stdout);
+      assert.match(p.stderr, /symlink|outside/, kind + ": " + p.stderr);
+      // nothing written outside, and the worktree is untouched
+      assert.deepEqual(readdirSync(outside).filter((f) => f !== ".git").sort(), kind === "dest-link" ? ["target"] : kind === "wt-dir-link" ? ["plans"] : [], kind);
+      if (kind === "dest-link") assert.equal(readFileSync(join(outside, "target"), "utf8"), "keep\n");
+      if (kind === "wt-dir-link") assert.equal(readFileSync(join(outside, "plans", "x.md"), "utf8"), "victim\n");
+      else assert.equal(readFileSync(join(wt, PLAN), "utf8"), "draft\n", kind + ": the draft stays");
+    } finally {
+      for (const d of [wt, scratch, outside]) rmSync(d, { recursive: true, force: true });
+    }
+  }
+  // `..` and absolute parts in the plan path or the run name
+  for (const [plan, run] of [["docs/../../x.md", "n1"], ["/abs/x.md", "n1"], ["docs/./x.md", "n1"], ["docs/x.md", ".."], ["docs/x.md", "../n1"]]) {
+    const p = spawnSync(PY, ["-I", PARKED, "park", "/nonexistent", plan, "/tmp", run], { encoding: "utf8" });
+    assert.notEqual(p.status, 0, plan + " " + run);
+    assert.match(p.stderr, /bad (plan path|run name)/, plan + " " + run);
+  }
 });

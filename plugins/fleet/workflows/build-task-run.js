@@ -1736,7 +1736,7 @@ const PROGRAM_SHA256 = {
   "format_files": "9263e27def7990aa080085ab2409025b295519aa34e2a3ee0db2cf11668ebc4b",
   "hasher": "360f14f44c2a036d80304a19cc8d2afcaace826d2b7b17419f6ee6792ee5e4cd",
   "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
-  "parked": "14d534d2751d855465630d1be95603a8b96276fa8a664e795bb241c1d24bdea0",
+  "parked": "14150028c5fc657e10214efd33dd6669c83281c8a45f07410aad6e6b7520bd9b",
   "path_check": "9a05c718892ff35b213a61fd8abeadad4dae0fa2ca7671485d670fe02b5a1596",
   "plan_files": "20f52c19db325d6b5385a443e7ad78f824f09057fd48fcd5ee5b24cf799d1670",
   "plan_hash": "5901757f34415759f587989e09b57821da8602418ecd45ba384f0366502b5b40",
@@ -2621,7 +2621,7 @@ function parkPlanPrompt(inputs, findings) {
   // 5.0.2 (ledger 2004): the move is the program's; the agent runs only the
   // commands below (a compound Bash call defeats the allow rules: a prompt)
   return (
-    "Infra step of the fleet build workflow: move this run's draft plan doc out of the worktree. Run each command below as its own Bash call, exactly as written, and run no other command: no git, cp, mv, rm, mkdir or redirection of your own, and never join commands with &&, ; or if.\n" +
+    "Infra step of the fleet build workflow: move this run's draft plan doc out of the worktree. Run only the commands given in the steps below, each as its own Bash call, exactly as written: no other command (no git, cp, mv or rm of your own), and never join commands with &&, ; or if.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
@@ -4708,7 +4708,9 @@ async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, s
     !r.defs.every((d) => d && typeof d.name === "string" && typeof d.at === "string" && typeof d.end === "number")
   )
     halt("failed", label + " returned no defs, excluded, unclassified or unattributed list");
-  const relayed = { defs: r.defs.map((d) => ({ name: d.name, at: d.at, end: d.end })), excluded: r.excluded, unclassified: r.unclassified, unattributed: r.unattributed };
+  // 5.0.2 (ledger 2006): the digested keys are the table's; defs as {name, at, end}
+  const relayed = {};
+  for (const k of progKeys("changed_defs")) relayed[k] = k === "defs" ? r.defs.map((d) => ({ name: d.name, at: d.at, end: d.end })) : r[k];
   requireProgram(r, "changed_defs", label);
   if (typeof r.digest !== "string" || sha256Hex(canonical(Object.assign({ program: printedProgram(r) }, relayed))) !== r.digest)
     halt("failed", label + ": the relayed lists do not match the program's digest (a definition was dropped or changed in the copy)");
