@@ -32,7 +32,8 @@ commit.
 ### Tests
 
 - `v503_dsn_precheck.test.mjs`: `plan_dsn.py` in real repos (placeholder and uppercase hits, a
-  clean plan, symlink and path escapes refused), parity with `plan_files.py` on the same bytes, a
+  clean plan, symlink and path escapes refused; its digest equals the workflow's recompute),
+  parity with `plan_files.py` on the same bytes, a
   hit routed to a re-plan round with no audit and no commit before it, the spent budget stopping
   at stop_gate `db`, relay and argument mismatches failing closed, the role text, the unchanged
   backstop and the workflow size.

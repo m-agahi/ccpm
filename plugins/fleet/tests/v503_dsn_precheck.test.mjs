@@ -14,7 +14,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, mkdirSync, symlinkSync, statSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { HERE, SOURCE, SCRIPTS_SRC, ARGS, happy, runOne, call, inputsOf, redigest, spawnSync, scratchRepo, sh, K, PROGRAM_LABELS, PROGRAMS } from "./harness.mjs";
+import { HERE, SOURCE, SCRIPTS_SRC, ARGS, happy, runOne, call, inputsOf, redigest, spawnSync, scratchRepo, sh, K, PROGRAM_LABELS, PROGRAMS, sha256, canon } from "./harness.mjs";
 
 const PLAN_DSN = join(SCRIPTS_SRC, "plan_dsn.py");
 const PLAN_FILES = join(SCRIPTS_SRC, "plan_files.py");
@@ -33,6 +33,9 @@ function planRepo(text) {
   writeFileSync(join(wt, "docs/plans/p.md"), text);
   return wt;
 }
+
+// the digest the workflow recomputes (relayDigestOk): the PROGRAM_KEYS keys and program
+const digestOf = (o) => sha256(canon(Object.assign(Object.fromEntries(K("plan_dsn").map((k) => [k, o[k]])), { program: o.program })));
 
 // a format-plan relay whose plan_dsn output holds (or not) mysql://
 function fmtWith(holds, lines) {
@@ -53,6 +56,7 @@ test("5.0.3 plan_dsn.py: a placeholder DSN in the plan doc holds, with its line"
   assert.deepEqual(r.out.args, [wt, "docs/plans/p.md"]);
   assert.equal(r.out.program.name, "plan_dsn");
   assert.match(r.out.digest, /^[0-9a-f]{64}$/);
+  assert.equal(r.out.digest, digestOf(r.out), "the Python digest is the one the workflow recomputes");
   rmSync(wt, { recursive: true, force: true });
 });
 
@@ -62,6 +66,7 @@ test("5.0.3 plan_dsn.py: a clean plan doc does not hold", () => {
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out.holds, false);
   assert.deepEqual(r.out.lines, []);
+  assert.equal(r.out.digest, digestOf(r.out));
   rmSync(wt, { recursive: true, force: true });
 });
 
