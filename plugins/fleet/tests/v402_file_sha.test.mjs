@@ -97,7 +97,10 @@ test("4.0.2 1997: every shipped program a prompt can run has a PROGRAM_SLOTS ent
   const slotted = new Set(table.flatMap(([, slots]) => slots.map(([, n]) => n)));
   for (const n of names) assert.ok(slotted.has(n), n + " has no PROGRAM_SLOTS entry");
   // 4.0.2 review: every builder of a program command records it (emitProg)
-  const builders = SOURCE.split("\n").filter((l) => l.includes('"sha256sum -- '));
+  // 5.0.0 (R1): the role file hash (no program; roleFileProblem checks it) is not a program command
+  const roleRead = SOURCE.split("\n").filter((l) => l.includes('"sha256sum -- ') && l.includes("roleFilePath("));
+  assert.deepEqual(roleRead, ['  return "sha256sum -- " + shQuote(roleFilePath(role));']);
+  const builders = SOURCE.split("\n").filter((l) => l.includes('"sha256sum -- ') && !l.includes("roleFilePath("));
   assert.equal(builders.length, 2, builders.join("\n"));
   for (const l of builders) assert.match(l, /emitProg\(/, l);
 });

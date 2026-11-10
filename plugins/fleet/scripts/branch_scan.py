@@ -97,7 +97,8 @@ def ref_ok(r):
         return True
     if not isinstance(p, dict) or not (isinstance(p.get('fleet_version'), str) and p['fleet_version']):
         return False
-    return all(isinstance(p.get(k), dict) for k in ('versions', 'dispatch', 'contract'))
+    # 5.0.0 (R1): log only, {fleet_version, role_sha256}; a 4.x record's maps are ignored
+    return 'role_sha256' not in p or isinstance(p['role_sha256'], dict)
 base = 'refs/remotes/origin/' + default
 commits = []
 plan_tip_time = None

@@ -203,7 +203,9 @@ test("4.0.0 1993 AC-3: a relayed plan_files program sha256 of zeros, or no progr
 // 4.0.0 (1990, S3): a PATH check whose relay is broken runs once more on
 // sonnet; a mutation of the check's result applies to that retry too.
 function relayRetried(label) {
-  return /^infra:path-check:/.test(label) ? new RegExp("^" + label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(:relay-retry)?$") : label;
+  const esc = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (/^infra:path-check:/.test(label)) return new RegExp("^" + esc + "(:relay-retry)?$");
+  return label;
 }
 
 test("4.0.0 1993: a wrong program at every program-running step stops the run (table over the labels)", async () => {

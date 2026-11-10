@@ -34,7 +34,7 @@ function loadSchemas() {
     constBlock("PATH_RECHECK_SCHEMA", "\n};");
   return new Function(
     body +
-      "\nreturn { SCHEMAS, INFRA_SCHEMA, INTAKE_SCHEMA, HASHER_SCHEMA, PREFLIGHT_SCHEMA, PREFLIGHT_SCRIPTS_SCHEMA, PUSH_PROBE_SCHEMA, PATH_RECHECK_SCHEMA, PROGRAM_OUT, ROLES };",
+      "\nreturn { SCHEMAS, INFRA_SCHEMA, INTAKE_SCHEMA, HASHER_SCHEMA, PREFLIGHT_SCHEMA, PUSH_PROBE_SCHEMA, PATH_RECHECK_SCHEMA, PROGRAM_OUT, ROLES };",
   )();
 }
 const S = loadSchemas();
@@ -50,7 +50,6 @@ function schemaOf(id) {
     intake: S.INTAKE_SCHEMA,
     hasher: S.HASHER_SCHEMA,
     preflight: S.PREFLIGHT_SCHEMA,
-    preflight_scripts: S.PREFLIGHT_SCRIPTS_SCHEMA,
     push_probe: S.PUSH_PROBE_SCHEMA,
     path_recheck: S.PATH_RECHECK_SCHEMA,
   }[id];
@@ -175,8 +174,8 @@ const READS = {
   STRICT: { "p.enum array": "parsed: a schema property, not an agent result" },
   stripHeldOut: { "v array": PARSED_LOCAL, "v object": PARSED_LOCAL },
   gatesNotRun: { "g object": CJ + "gates_not_run[]", "judgeList array": CJ + "gates_not_run" },
-  parseDispatch: { "line string": "preflight:dispatch.*" },
-  contractOf: { "line string": "preflight:contract.*" },
+  // 5.0.0 (R1): the DISPATCH line comes from ROLE_DISPATCH (gen.mjs, from the pinned files)
+  parseDispatch: { "line string": "parsed: ROLE_DISPATCH, generated from the role files (gen.mjs --check)" },
   sameState: { "length number-literal": PARSED_LOCAL },
   planFactsProblem: {
     "testCmd object": SP + "test_cmd",
@@ -256,6 +255,9 @@ const READS = {
     "hit string-re": PARSED_TOKEN,
     "reals.length number-literal": [PARSED_LOCAL, 2],
     "links.length number-literal": PARSED_LOCAL,
+    // 5.0.0 (R1): the roles dir lines
+    "rreals.length number-literal": [PARSED_LOCAL, 2],
+    "rlinks.length number-literal": PARSED_LOCAL,
     "dir string": "preflight:scripts_dir",
   },
   scriptsMapProblem: { "map object": "hasher:scripts", "map array": "!hasher:scripts" },
@@ -309,14 +311,13 @@ const READS = {
     "r.digest string": "hasher:digest",
   },
   cleanRepo: { "r string": "intake:brief.repo" },
-  roleTableProblem: {
-    "versions object": "preflight:versions",
-    "contracts object": "preflight:contract",
-    "dispatchLines object": "preflight:dispatch",
-    // wf_d6901710-32d
-    "got number": "preflight:versions.*",
+  // 5.0.0 (R1): the role_file every role result carries (roleTableProblem and rolesFromRef are gone)
+  roleFileProblem: {
+    "r object": "role:scope-and-plan:",
+    "r.role_file object": "role:scope-and-plan:role_file",
+    "r.role_file array": "!role:scope-and-plan:role_file",
+    "f.sha256 string": "role:scope-and-plan:role_file.sha256",
   },
-  rolesFromRef: { "rec object": PARSED_REF },
   pushProbe: { "r.args array": "push_probe:args", "r.args.length number-literal": PARSED_LOCAL },
   workspaceStep: { "uc object": "infra:remote_url_check", "uc.url string": ["prog:remote_url:url", 2], "ws.remote_host string": "infra:remote_host" },
   briefProblem: {
@@ -472,8 +473,9 @@ const READS = {
     "p object": PARSED_REF,
     "p array": PARSED_REF,
     "p.fleet_version string": PARSED_REF,
-    "p[k] object": PARSED_REF,
-    "p[k] array": PARSED_REF,
+    // 5.0.0 (R1): {fleet_version, role_sha256}; a 4.x record's maps are not read
+    "p.role_sha256 object": PARSED_REF,
+    "p.role_sha256 array": PARSED_REF,
   },
   isPlanCommit: {
     "c.files array": "prog:branch_scan:commits[].files",
@@ -524,7 +526,8 @@ const READS = {
     "r.history object": PARSED_REF,
     "r.project string": PARSED_REF,
   },
-  buildMode: { "input.plan_ref object": PARSED_ARGS, "input.fresh_preflight boolean": PARSED_ARGS, "input.freeze_digest string": PARSED_ARGS },
+  // 5.0.0 (R1): buildMode no longer reads fresh_preflight (main still type-checks it)
+  buildMode: { "input.plan_ref object": PARSED_ARGS, "input.freeze_digest string": PARSED_ARGS },
   buildFromRef: {
     "r.refs array": "prog:plan_ref:refs",
     "c string": "prog:plan_ref:chunks[]",
@@ -663,18 +666,20 @@ test("4.0.3 1998: every type-sensitive read in the workflow has a READS entry, a
   assert.ok(agent >= 200, "agent-path reads checked: " + agent);
 });
 
-test("4.0.3 1998: the READS check catches an untyped path (the 4.0.2 preflight schema fails it)", () => {
-  // the 4.0.2 shape of versions
-  const old = S.PREFLIGHT_SCHEMA.properties.versions;
-  S.PREFLIGHT_SCHEMA.properties.versions = { type: "object" };
+// 5.0.0 (R1): the 4.0.2 preflight versions map is gone; the same check on the
+// role_file every role result carries (untyped sha256 fails a string read)
+test("4.0.3 1998: the READS check catches an untyped path (5.0.0: role_file.sha256 with no type fails it)", () => {
+  const rf = S.SCHEMAS["plan-audit"].properties.role_file;
+  const old = rf.properties.sha256;
+  rf.properties.sha256 = {};
   try {
-    assert.equal(specProblem("preflight:versions.*", "number"), "untyped path (a step has no schema)");
+    assert.equal(specProblem("role:plan-audit:role_file.sha256", "string"), "untyped node");
   } finally {
-    S.PREFLIGHT_SCHEMA.properties.versions = old;
+    rf.properties.sha256 = old;
   }
-  assert.equal(specProblem("preflight:versions.*", "number"), null);
+  assert.equal(specProblem("role:plan-audit:role_file.sha256", "string"), null);
   // a string-typed path read as a number fails; a guard and a union pass
-  assert.match(specProblem("preflight:dispatch.*", "number"), /typed \["string","null"\], read as number/);
+  assert.match(specProblem("preflight:scripts_dir", "number"), /typed \["string","null"\], read as number/);
   assert.equal(specProblem("!prog:callers:auto_dont_care", "array"), null);
   assert.equal(specProblem("~role:fleet-test-writer:tests[]", "object"), null);
 });
@@ -779,36 +784,36 @@ function validate(s, v, at = "$", out = []) {
 
 const ints = (n) => Object.fromEntries(S.ROLES.map((r, i) => [r, n + i]));
 
-test("4.0.3 1998 repro (wf_d6901710-32d): a preflight with string versions fails its schema; integer versions pass", async () => {
+// 5.0.0 (R1): was "a preflight with string versions fails its schema; integer
+// versions pass". The preflight carries no role table now; the typed value is
+// role_file on every role result: {name, sha256} strings, or null.
+test("5.0.0 R1 (was 4.0.3 1998 repro wf_d6901710-32d): the preflight and role schemas refuse mistyped values", async () => {
   const out = await run(happy(), ARGS);
-  const pre = out.calls.find((c) => c.label === "preflight");
-  assert.ok(pre, "the preflight call");
-  const sch = pre.opts.schema;
-  const good = { reachable: true, missing: [], versions: ints(29), dispatch: Object.fromEntries(S.ROLES.map((r) => [r, "DISPATCH: model=opus"])), contract: Object.fromEntries(S.ROLES.map((r) => [r, "CONTRACT: fleet-v4"])), path_check: null, reason: "ok" };
+  const pre = out.calls.find((c) => c.label === "preflight").opts.schema;
+  assert.deepEqual(validate(pre, { scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }), []);
+  assert.ok(validate(pre, { scripts_probe: [1], scripts_dir: null, path_check: null, reason: "ok" }).length);
+  const sch = out.calls.find((c) => c.label === "role:plan-audit").opts.schema;
+  const good = { status: "ok", reason: "x", verdict: "approve", routed_findings: [], role_file: { name: "plan-audit", sha256: "a".repeat(64) } };
   assert.deepEqual(validate(sch, good), []);
-  const bad = Object.assign({}, good, { versions: Object.fromEntries(Object.entries(good.versions).map(([k, v]) => [k, String(v)])) });
-  const errs = validate(sch, bad);
-  assert.equal(errs.length, S.ROLES.length, errs.join("\n"));
-  assert.match(errs[0], /^\$\.versions\.scope-and-plan: "29" is not integer\|null$/);
-  // 29.5 is not an integer either; a missing role is refused, a null one is accepted (the page was not found)
-  assert.ok(validate(sch, Object.assign({}, good, { versions: Object.assign(ints(29), { "plan-audit": 29.5 }) })).length);
-  const missing = ints(29);
-  delete missing["pr-review"];
-  assert.deepEqual(validate(sch, Object.assign({}, good, { versions: missing })), ["$.versions.pr-review: required"]);
-  assert.deepEqual(validate(sch, Object.assign({}, good, { reachable: false, versions: Object.assign(ints(29), { "pr-review": null }) })), []);
-  // the role library unreachable: no versions map at all still fits the schema
-  assert.deepEqual(validate(sch, { reachable: false, missing: [], path_check: null, reason: "transport error" }), []);
-  // dispatch and contract values are strings or null
-  assert.ok(validate(sch, Object.assign({}, good, { dispatch: Object.assign({}, good.dispatch, { "plan-audit": 3 }) })).length);
+  assert.ok(validate(sch, Object.assign({}, good, { role_file: "plan-audit" })).length, "role_file as a string");
+  assert.ok(validate(sch, Object.assign({}, good, { role_file: { name: "plan-audit", sha256: 7 } })).length, "a numeric sha256");
+  const { role_file, ...none } = good;
+  assert.deepEqual(validate(sch, none), ["$.role_file: required"]);
+  // a failed role may give null (it fails the script's check)
+  assert.deepEqual(validate(sch, { status: "failed", reason: "cat failed", verdict: null, routed_findings: null, role_file: null }), []);
 });
 
-test("4.0.3 1998: the run still stops on a string version that reaches the script (the check is not loosened)", async () => {
-  const s = happy();
-  s.preflight = Object.assign({}, s.preflight, { versions: Object.fromEntries(Object.entries(s.preflight.versions).map(([k, v]) => [k, String(v)])) });
-  const out = await run(s, ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.equal(out.result.stop_gate, "contract");
-  assert.match(out.result.reason, /role scope-and-plan version missing in preflight \(frozen minimum 29\)/);
+// 5.0.0 (R1): was "the run still stops on a string version that reaches the
+// script". A mistyped role_file that reaches the script still stops the run.
+test("5.0.0 R1 (was 4.0.3 1998 string version reaches the script): a mistyped role_file that reaches the script stops the run (the check is not loosened)", async () => {
+  for (const rf of [{ name: "scope-and-plan", sha256: 29 }, ["scope-and-plan"], "scope-and-plan"]) {
+    const s = happy();
+    s.__mutate = { label: /^role:scope-and-plan/, fn: (r) => Object.assign(r, { role_file: rf }) };
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(rf));
+    assert.equal(out.result.stop_gate, "contract");
+    assert.match(out.result.reason, /role scope-and-plan did not run the shipped role file/);
+  }
 });
 
 test("4.0.3 1998: every result the happy run's agents return fits the schema they were given", async () => {
@@ -830,11 +835,16 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
   assert.deepEqual(problems, []);
 });
 
-test("4.0.3 1998: the preflight prompt asks for every role key and integer versions", async () => {
+// 5.0.0 (R1): was "the preflight prompt asks for every role key and integer
+// versions". The role prompt asks for role_file, copied from the sha256sum line.
+test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
-  const p = out.calls.find((c) => c.label === "preflight").prompt;
-  assert.match(p, /versions, dispatch and contract each hold every pattern in `roles` as a key; a missing pattern maps to null in all three/);
-  assert.match(p, /a JSON integer \(29, never "29"\)/);
+  const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/4\.0\.3\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/4\.0\.3\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
+  const pre = out.calls.find((c) => c.label === "preflight").prompt;
+  assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);
+  assert.match(pre, /Return \{scripts_probe, scripts_dir, path_check, reason\}\./);
 });
 
 // ---------------------------------------------------------------- 4.0.3 review

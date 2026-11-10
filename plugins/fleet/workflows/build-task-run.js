@@ -3,9 +3,9 @@ export const meta = {
   description:
     "Role fleet for one task in two modes. plan: intake, plan, audit, commit the plan locally, return for confirmation (confirm \"auto\": intent, command and scope gates, then build in the same run). build: verify the approved plan, test writers in the fleet worktree, test judge, freeze, coder, code judge, one commit step, push, draft PR, independent review, write-back. Every gate runs in script code.",
   whenToUse:
-    "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, run_nonce, project?, confirm?} or {mode: \"build\", plan_ref, date, run_nonce, project?, confirm?}; confirm is \"ask\" (default) or \"auto\". If invoked with no args, do not call Workflow again: tell the user to run /build-task <task>.",
+    "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, run_nonce, project?, confirm?} or {mode: \"build\", plan_ref, date, run_nonce, project?, confirm?} or {mode: \"probe\", repo, date, run_nonce} (preflight only: scripts and role files hashed, PATH check; returns the table); confirm is \"ask\" (default) or \"auto\". If invoked with no args, do not call Workflow again: tell the user to run /build-task <task>.",
   phases: [
-    { title: "Preflight", detail: "load all ten role prompts from yadgar" },
+    { title: "Preflight", detail: "find the plugin scripts and roles, check every file's sha256, PATH check" },
     { title: "Intake", detail: "resolve the input into a brief (plan mode)" },
     { title: "Workspace", detail: "create or reuse the fleet branch and worktree" },
     { title: "Plan", detail: "scope-and-plan, risk tier, plan-audit, local plan commit (plan mode)" },
@@ -23,7 +23,7 @@ export const meta = {
 
 // ---------------------------------------------------------------- constants
 
-const ROLE_PROJECT = "m-agahi/yadgar";
+// 5.0.0 (R1, ledger 1999): the role prompts ship as plugins/fleet/roles/<role>.md
 const ROLES = [
   "scope-and-plan",
   "plan-audit",
@@ -36,9 +36,10 @@ const ROLES = [
   "pr-review",
   "gate-change-nonweakening-sweep",
 ];
-// Model tiers come from each role page's "DISPATCH: model=<tier> (fallback=<tier> ...)"
-// line, fetched by preflight. No role->model map and no default tier live
-// here: a role with no usable DISPATCH line stops the run in preflight.
+// Model tiers come from each role file's first "DISPATCH: model=<tier>
+// (fallback=<tier> ...)" line, which gen.mjs copies into ROLE_DISPATCH next to
+// the file's ROLE_SHA256 pin. No hand-written role->model map and no default
+// tier: a role with no usable DISPATCH line stops the run in preflight.
 const TIERS = ["fable", "opus", "sonnet", "haiku"];
 // 4.0.0 (1990): the model of each infra agent, by label prefix; the first
 // matching prefix wins. haiku: read-only steps whose output a program digest
@@ -50,6 +51,8 @@ const TIERS = ["fable", "opus", "sonnet", "haiku"];
 // label with no entry stops the run (no default tier).
 // INFRA_TIER_BEGIN
 const INFRA_TIER = [
+  // 5.0.0 (R1): probe mode's role-read check (one sha256sum and one Read)
+  ["infra:role-read:", "haiku"],
   ["infra:path-check:", "haiku"],
   ["preflight", "haiku"],
   ["workspace", "sonnet"],
@@ -96,33 +99,15 @@ const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\
 // "ignored": ignored files outside tool caches (inside venvs only startup hooks,
 // egg-links and dist-info/egg-info entry_points.txt)
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-// Minimum role-page versions this script was built against. Names and enums
-// are frozen at these versions; a higher version is assumed to change prose
-// only and is logged; a lower one (stale or rolled back) stops the run.
-// 4.0.0 (D1): every page bumps once with the fleet-v4 marker.
-const EXPECTED_VERSIONS = {
-  "scope-and-plan": 29,
-  "plan-audit": 17,
-  "fleet-test-writer": 11,
-  "fleet-test-judge": 11,
-  "fleet-coder": 18,
-  "fleet-code-judge": 16,
-  "fleet-pr-opener": 11,
-  "fleet-intent-judge": 3,
-  "pr-review": 19,
-  "gate-change-nonweakening-sweep": 6,
-};
 // The plugin version this script ships with (bumped every release; since
-// 4.0.0, 1993, the shipped programs are read from its plugin cache directory only).
+// 4.0.0, 1993, the shipped programs are read from its plugin cache directory
+// only; since 5.0.0, R1, the role files too).
 const FLEET_VERSION = "4.0.3";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
-// Every role page carries "CONTRACT: <marker>" under its DISPATCH line.
-const CONTRACT = "fleet-v4";
-const CONTRACT_RE = /CONTRACT:\s*(\S+)/;
 // A session keeps the plugin version it started with; a mismatch after an
 // update usually means this script is the stale one.
 const RELOAD_HINT =
-  " (this fleet workflow expects " + CONTRACT + "; if the plugin was updated after this session started, run /reload-plugins or start a new session, then run /build-task again)";
+  " (this fleet workflow is fleet " + FLEET_VERSION + "; if the plugin was updated after this session started, run /reload-plugins or start a new session, then run /build-task again)";
 // Keys each role must return when status is "ok" (checked with `key in obj`;
 // null or empty values are allowed). A missing key is contract drift. A
 // required key whose role schema types it as array, object or boolean must
@@ -237,7 +222,10 @@ const MAX_CODE_ROUNDS = 3; // total coder rounds; a fix_tests detour counts as o
 // takes the short path (one test writer for every criterion; every gate kept)
 const SHORT_PATH_MAX_DIFF = 20;
 
-const MODES = ["plan", "build"];
+// 5.0.0: probe runs the preflight only (scripts and role files hashed, PATH
+// check) and one role-read check (PROBE_READ_ROLE)
+const MODES = ["plan", "build", "probe"];
+const PROBE_READ_ROLE = "plan-audit";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 // args.run_nonce: a fresh value per invocation (the skill uses `date +%s%N`).
 const NONCE_RE = /^[A-Za-z0-9_.:-]{6,64}$/;
@@ -368,7 +356,7 @@ const RUNNER_CONFIG_SECTIONS = [
 const STR = { type: "string" };
 const STR_OR_NULL = { type: ["string", "null"] };
 const ANY_ARRAY = { type: "array" };
-// Array items whose shape the role pages own: a path, a symbol name or a
+// Array items whose shape the role files own: a path, a symbol name or a
 // finding object. Typed loosely; the array itself is what the gates rely on.
 const ANY_ITEM = { type: ["string", "object"] };
 const FINDINGS = {
@@ -407,17 +395,27 @@ const REVIEW_FINDINGS = {
   },
 };
 
+// 5.0.0 (R1): the role file a role agent read: its name and the sha256sum
+// line's hex; the script checks both (roleFileProblem)
+const ROLE_FILE_PROP = { type: ["object", "null"], properties: { name: STR, sha256: STR } };
+// probe mode's role-read agent
+const ROLE_READ_SCHEMA = {
+  type: "object",
+  required: ["status", "reason", "role_file"],
+  properties: { status: { type: "string", enum: ["ok", "needs_human", "failed"] }, reason: STR, role_file: ROLE_FILE_PROP },
+};
 function roleSchema(extra) {
   return {
     type: "object",
     additionalProperties: true,
-    required: ["status", "reason", "role_version", "role_contract"],
+    // 5.0.0 (R1): role_file is required on every status; null fits the schema
+    // (a failed agent may not have read the file) and fails roleFileProblem
+    required: ["status", "reason", "role_file"],
     properties: Object.assign(
       {
         status: { type: "string", enum: ["ok", "needs_human", "failed"] },
         reason: STR,
-        role_version: { type: ["integer", "null"] },
-        role_contract: STR_OR_NULL,
+        role_file: ROLE_FILE_PROP,
         artefacts: ANY_ARRAY,
         yadgar_findings: ANY_ARRAY,
       },
@@ -620,24 +618,11 @@ const PROGRAM_PROP = { type: ["object", "null"], properties: { name: STR_OR_NULL
 // a shipped program's JSON output relayed whole under one key
 const PROGRAM_OUTPUT = { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } };
 
-// 4.0.3 (ledger 1998): a map with one required key per role, each of type
-// `t` (null: the page was not found). Built from ROLES, so it cannot drift.
-// wf_d6901710-32d: a preflight relayed versions as "29"; roleTableProblem
-// refused it (typeof number). The schema now refuses it first.
-function roleMap(t) {
-  const properties = {};
-  for (const role of ROLES) properties[role] = { type: [t, "null"] };
-  return { type: "object", properties, required: ROLES.slice(), additionalProperties: { type: [t, "null"] } };
-}
+// 5.0.0 (R1): the first agent of every run finds the scripts and roles
+// directories, hashes every file in them, and runs the PATH check
 const PREFLIGHT_SCHEMA = {
   type: "object",
-  required: ["reachable", "missing"],
   properties: {
-    reachable: { type: "boolean" },
-    missing: { type: "array", items: STR },
-    versions: roleMap("integer"),
-    dispatch: roleMap("string"),
-    contract: roleMap("string"),
     scripts_probe: { type: "array", items: STR },
     scripts_dir: STR_OR_NULL,
     path_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
@@ -660,16 +645,6 @@ const PUSH_PROBE_SCHEMA = {
     program: PROGRAM_PROP,
     file_sha256: STR,
     digest: STR,
-  },
-};
-// 4.0.0 (1990): a build's first agent when the role pages may come from the plan ref
-const PREFLIGHT_SCRIPTS_SCHEMA = {
-  type: "object",
-  properties: {
-    scripts_probe: { type: "array", items: STR },
-    scripts_dir: STR_OR_NULL,
-    path_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
-    reason: STR,
   },
 };
 const INFRA_SCHEMA = {
@@ -904,7 +879,7 @@ function gatesNotRun(judgeList) {
   return list.concat(defaults.filter((d) => !list.some((g) => g.gate === d.gate)));
 }
 
-// Parse a role page's DISPATCH line. null when missing, unparseable or the
+// Parse a role file's DISPATCH line. null when missing, unparseable or the
 // tier is unknown.
 function parseDispatch(line) {
   if (typeof line !== "string") return null;
@@ -1051,12 +1026,6 @@ function testFilesView(h, testFiles) {
   const o = {};
   for (const f of testFiles || []) if (h && h.files && f in h.files) o[f] = h.files[f];
   return o;
-}
-
-function contractOf(line) {
-  if (typeof line !== "string") return null;
-  const m = CONTRACT_RE.exec(line);
-  return m ? m[1] : null;
 }
 
 function countKeys(h) {
@@ -1741,7 +1710,7 @@ function relayDigestOk(r, keys, name) {
 // step. scripts_dir is resolved in the first agent of every run.
 // PROGRAM_SHA256_BEGIN
 const PROGRAM_SHA256 = {
-  "branch_scan": "1b221b2acb7f3230deafa6185f9888772a29dfc255040eba9dad46b384c87370",
+  "branch_scan": "fdf128542f76e119afa892f74316746ae761ccdf10d096f5274042da52d473b5",
   "callers": "dc5b924775246e16dc8d3d8c6e913e77463ce342b5054cacebc298d394001575",
   "changed_defs": "1a30e9ca3202f6a434911aa2ecb3e5b446194f95e414b6caa4a4c3279f96c4d4",
   "db_down": "1a9cd8302f54116e1c9691ed6a86a6f19e132458da55f062286fd03e63a07cd3",
@@ -1774,6 +1743,45 @@ const PROGRAM_SHA256 = {
 function programTable() {
   return PROGRAM_SHA256;
 }
+
+// 5.0.0 (R1, ledger 1999): the role prompts ship as plugins/fleet/roles/<role>.md.
+// ROLE_SHA256 holds the sha256 of each file's exact bytes; gen.mjs writes it
+// between the markers below from the files, and `gen.mjs --check` fails when
+// the table and the files differ. The same trust model as the programs:
+// preflight pins the roles dir (its sha256sum lines must be exactly this
+// table), and every role agent runs `sha256sum -- <file> && cat <file>` as its
+// first action and returns role_file {name, sha256}, which the script checks
+// against the dispatched role and this table (roleFileProblem).
+// ROLE_SHA256_BEGIN
+const ROLE_SHA256 = {
+  "fleet-code-judge": "a9fc3bfbf0f8a124cb1578477d475e66373e5fe9835dc0ed32f61fbce8e6a81a",
+  "fleet-coder": "888cff59587453fe41552082f2afd5ad1838a25529eea1fef62cbfa434842ce8",
+  "fleet-intent-judge": "8ac3bb6e640abea1bff4881a7bc25db2d9ca5414c4ebd30575158559ca386a99",
+  "fleet-pr-opener": "35756c6ddb53a2faf8af7f5083fd68d56330a2d59e07d60b45fd42cfa59d12c6",
+  "fleet-test-judge": "b3c97acacbfafb58b1fbb1935ad7e638cf4c3d7907be80c1a614e1ecb52fdb00",
+  "fleet-test-writer": "96e9caa5b281b46670baf18265a16287579d18f0337ad440313bb5c4d8efdd07",
+  "gate-change-nonweakening-sweep": "b52409f28f762a8b3ddb7490199c4b35305f0672e1ef8902f4da726835ffe28f",
+  "plan-audit": "14896b8124ddfac6b54fde3f332faaf9ac60dfbf3e157f3b1a4c16bc113b141b",
+  "pr-review": "d6b3e7534b7ea2f86909db794035c03cd921ab754dd1cc55336f4115fe1158dc",
+  "scope-and-plan": "40c456b4cc2eac7d86cf1f97686a67eaf85f62b849455ae7b03b200c07c87a8e"
+};
+// ROLE_SHA256_END
+// The first DISPATCH line of each role file, written by gen.mjs from the same
+// files (`--check` fails when one differs): the role's tier is pinned with its text.
+// ROLE_DISPATCH_BEGIN
+const ROLE_DISPATCH = {
+  "fleet-code-judge": "DISPATCH: model=opus (fallback=sonnet)",
+  "fleet-coder": "DISPATCH: model=sonnet (fallback=opus)",
+  "fleet-intent-judge": "DISPATCH: model=opus (fallback=sonnet)",
+  "fleet-pr-opener": "DISPATCH: model=sonnet (fallback=opus)",
+  "fleet-test-judge": "DISPATCH: model=opus (fallback=sonnet)",
+  "fleet-test-writer": "DISPATCH: model=sonnet (fallback=opus)",
+  "gate-change-nonweakening-sweep": "DISPATCH: model=opus (fallback=sonnet) — adversarial old-vs-new gate differential",
+  "plan-audit": "DISPATCH: model=fable (fallback=opus)",
+  "pr-review": "DISPATCH: model=opus (fallback=sonnet for small/mechanical PRs) — review depth scales with blast radius — canonical: model-tier-dispatch",
+  "scope-and-plan": "DISPATCH: model=opus (fallback=sonnet)"
+};
+// ROLE_DISPATCH_END
 
 // sha256 of the shipped file of program `name`
 function programSha(name) {
@@ -2037,7 +2045,12 @@ function relayAs(slot) {
 // fleet/<FLEET_VERSION>/scripts, its realpath must be itself (no symlink in
 // any component) and it must not be a symlink; every shipped program in it
 // must hash to its table entry, and it holds no other program.
-// Returns {problem} or {dir}.
+// 5.0.0 (R1): the same rules for its sibling roles dir (.../fleet/<version>/
+// roles): its realpath is itself, it is no symlink, and it holds exactly the
+// role files, each hashing to its ROLE_SHA256 entry, and no other entry (no
+// extra file, no subdirectory, no symlink). Each role agent then hashes the
+// file it reads and returns role_file; roleFileProblem checks it.
+// Returns {problem} or {dir, rolesDir}.
 function scriptsProbeOf(probe, dir) {
   const bad = (m) => ({ problem: m });
   if (!Array.isArray(probe) || probe.some((x) => typeof x !== "string")) return bad("the scripts directory probe returned no list of lines");
@@ -2046,6 +2059,9 @@ function scriptsProbeOf(probe, dir) {
   const hits = lines.filter((x) => x.startsWith("hit=")).map((x) => x.slice(4));
   const reals = lines.filter((x) => x.startsWith("real=")).map((x) => x.slice(5));
   const links = lines.filter((x) => x.startsWith("symlink=")).map((x) => x.slice(8));
+  const rreals = lines.filter((x) => x.startsWith("roles_real=")).map((x) => x.slice(11));
+  const rlinks = lines.filter((x) => x.startsWith("roles_symlink=")).map((x) => x.slice(14));
+  const rodd = lines.filter((x) => x.startsWith("roles_odd=")).map((x) => x.slice(10));
   if (homes.length !== 1) return bad("the scripts directory probe printed no single home= line");
   const home = homes[0];
   if (!/^\/[A-Za-z0-9._\/-]+$/.test(home) || home.split("/").slice(1).some((x) => x === "" || x === "." || x === ".."))
@@ -2061,16 +2077,29 @@ function scriptsProbeOf(probe, dir) {
   if (reals.length !== 1 || reals[0] !== hit) return bad("scripts_dir " + hit + " resolves to " + JSON.stringify(reals.length === 1 ? reals[0] : null) + " (a symlink in its path)");
   if (links.length !== 1 || links[0] !== "no") return bad("scripts_dir " + hit + " is a symlink");
   if (typeof dir !== "string" || dir !== hit) return bad("scripts_dir " + JSON.stringify(dir === undefined ? null : dir) + " is not the one directory found (" + hit + ")");
-  // the sha256sum lines of <dir>/*.py: exactly the shipped programs, each its table entry
+  const rolesDir = hit.slice(0, -"/scripts".length) + "/roles";
+  if (rreals.length !== 1 || rreals[0] !== rolesDir)
+    return bad("roles dir " + rolesDir + " resolves to " + JSON.stringify(rreals.length === 1 ? rreals[0] : null) + " (missing, or a symlink in its path)");
+  if (rlinks.length !== 1 || rlinks[0] !== "no") return bad("roles dir " + rolesDir + " is a symlink");
+  if (rodd.length) return bad("roles dir " + rolesDir + " holds entries that are not regular files: " + rodd.join(", "));
+  // the sha256sum lines of <dir>/*.py: exactly the shipped programs, each its
+  // table entry; of <roles dir>/*: exactly the role files, each its entry
   const sums = {};
+  const rsums = {};
   for (const x of lines) {
     const m = /^([0-9a-f]{64}) [ *](.+)$/.exec(x);
     if (!m) continue;
+    if (m[2].slice(0, rolesDir.length + 1) === rolesDir + "/") {
+      const f = m[2].slice(rolesDir.length + 1);
+      if (!/^[A-Za-z0-9_.-]+$/.test(f)) return bad("the probe hashed " + m[2] + ", outside " + rolesDir);
+      rsums[f] = m[1];
+      continue;
+    }
     if (m[2].slice(0, hit.length + 1) !== hit + "/" || !/^[A-Za-z0-9_.-]+\.py$/.test(m[2].slice(hit.length + 1))) return bad("the probe hashed " + m[2] + ", outside " + hit);
     sums[m[2].slice(hit.length + 1, -3)] = m[1];
   }
-  const p = scriptsMapProblem(sums, hit);
-  return p ? bad(p) : { dir: hit };
+  const p = scriptsMapProblem(sums, hit) || rolesMapProblem(rsums, rolesDir);
+  return p ? bad(p) : { dir: hit, rolesDir };
 }
 
 // Why a map {<program name>: sha256} of a scripts dir is not exactly the
@@ -2082,6 +2111,18 @@ function scriptsMapProblem(map, dir) {
     if (map[n] !== programSha(n)) out.push(dir + "/" + n + ".py " + (map[n] === undefined ? "is missing" : "hashes " + map[n] + ", not " + programSha(n)));
   for (const n of Object.keys(map).sort()) if (!Object.prototype.hasOwnProperty.call(programTable(), n)) out.push(dir + "/" + n + ".py is not a shipped program");
   return out.length ? "the shipped fleet programs were changed: " + out.join("; ") : null;
+}
+
+// 5.0.0 (R1): why a map {<file name>: sha256} of the roles dir is not exactly
+// the shipped role files (null: it is). Names every file that differs.
+function rolesMapProblem(map, dir) {
+  const out = [];
+  for (const n of Object.keys(ROLE_SHA256).sort()) {
+    const got = map[n + ".md"];
+    if (got !== ROLE_SHA256[n]) out.push(dir + "/" + n + ".md " + (got === undefined ? "is missing" : "hashes " + got + ", not " + ROLE_SHA256[n]));
+  }
+  for (const f of Object.keys(map).sort()) if (!/\.md$/.test(f) || !Object.prototype.hasOwnProperty.call(ROLE_SHA256, f.slice(0, -3))) out.push(dir + "/" + f + " is not a shipped role file");
+  return out.length ? "the shipped fleet role files were changed: " + out.join("; ") : null;
 }
 
 // base64 of the UTF-8 bytes of `str` (the script has no Buffer or btoa).
@@ -2205,72 +2246,87 @@ function planHashCmd(worktree, rev, planPath) {
 
 // 4.0.0 (1993): the search for this version's scripts directory in the plugin cache
 const SCRIPTS_GLOB = '"$HOME"/.claude/plugins/cache/*/fleet/' + FLEET_VERSION + "/scripts";
+// 5.0.0 (R1): and its sibling roles dir, with every file in it
 const SCRIPTS_PROBE =
-  "bash -c 'shopt -s nullglob; printf \"home=%s\\n\" \"$HOME\"; for d in " + SCRIPTS_GLOB + "; do printf \"hit=%s\\n\" \"$d\"; printf \"real=%s\\n\" \"$(realpath -e -- \"$d\")\"; " +
-  "if [ -L \"$d\" ]; then echo symlink=yes; else echo symlink=no; fi; done; for d in " + SCRIPTS_GLOB + "; do sha256sum -- \"$d\"/*.py; done'";
+  "bash -c 'shopt -s nullglob dotglob; printf \"home=%s\\n\" \"$HOME\"; for d in " + SCRIPTS_GLOB + "; do printf \"hit=%s\\n\" \"$d\"; printf \"real=%s\\n\" \"$(realpath -e -- \"$d\")\"; " +
+  "if [ -L \"$d\" ]; then echo symlink=yes; else echo symlink=no; fi; r=\"${d%/scripts}/roles\"; printf \"roles_real=%s\\n\" \"$(realpath -e -- \"$r\")\"; " +
+  "if [ -L \"$r\" ]; then echo roles_symlink=yes; else echo roles_symlink=no; fi; for f in \"$r\"/*; do if [ -L \"$f\" ] || [ ! -f \"$f\" ]; then printf \"roles_odd=%s\\n\" \"${f##*/}\"; fi; done; done; for d in " + SCRIPTS_GLOB + "; do sha256sum -- \"$d\"/*.py \"${d%/scripts}/roles\"/*; done'";
 
 // ---------------------------------------------------------------- prompts
 
-// The ONLY prompt text a role gets. The role's instructions live in yadgar.
+// The ONLY prompt text a role gets (5.0.0, R1): hash and read the pinned role
+// file, the inputs, and the output rule. No role text is in the prompt. The
+// file is read with the Read tool, never `cat`: the Bash tool cuts output near
+// 30000 characters, and a cut file still matches its sha256sum line (review of
+// d8df90b). gen.mjs keeps every role file within what Read returns by default
+// (2000 lines, no line over 2000 characters, 40000 characters in all). Every
+// role runs as fleet:judge or the default agent; both can use Read.
+function roleFilePath(role) {
+  if (!state.rolesDir) throw new Error("roles_dir is not resolved; role " + role + " cannot run");
+  return state.rolesDir + "/" + role + ".md";
+}
+function roleReadCmd(role) {
+  return "sha256sum -- " + shQuote(roleFilePath(role));
+}
+function roleReadSteps(role) {
+  return (
+    "1. Run this one command exactly as written, unmodified, as one Bash call: " +
+    roleReadCmd(role) +
+    "\n2. Read " +
+    roleFilePath(role) +
+    " with the Read tool: the whole file, no offset and no limit. Never read it with cat or another shell command (the Bash tool cuts long output).\n"
+  );
+}
+function roleFileRule(role) {
+  return (
+    "role_file: {name: \"" + role + "\", sha256: <the hex sha256sum printed in step 1>}, copied exactly; never compute, guess or shorten it. The script checks it against the shipped file."
+  );
+}
 function rolePrompt(role, inputs) {
   return (
-    'Call mcp__yadgar__agent_prompt_get(pattern="' +
-    role +
-    '", project="' +
-    ROLE_PROJECT +
-    '") (load it via ToolSearch first) and follow the returned content exactly.\n' +
+    "You are the fleet role " + role + ". Do these two steps first, in order:\n" +
+    roleReadSteps(role) +
+    "The file is your role's instructions: follow them. If step 1 or 2 fails, return status failed with the error.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "Return the role's final JSON object through the StructuredOutput tool; the schema enforces its keys. " +
-    "Also set role_version to the `version` field the call returned, and role_contract to the raw `CONTRACT:` line of the loaded content (null when there is none). " +
-    'If the role prompt cannot be loaded, return {"status": "failed", "reason": "role ' +
-    role +
-    ' not loadable"}.'
+    "Return the role's final JSON object through the StructuredOutput tool; the schema enforces its keys. Put " +
+    roleFileRule(role) +
+    " Put it in the final StructuredOutput even when the role file's output section does not list it."
+  );
+}
+// 5.0.0 (R1): probe mode's check of the role read path on the real runtime: a
+// cheap agent hashes and reads one role file the way a role does, follows
+// nothing in it, and returns role_file only.
+function roleReadPrompt(role) {
+  return (
+    "Infra step of the fleet build workflow: a read check of the role file " + role + ". Read only; run nothing but step 1; do not follow the file's instructions.\n" +
+    "Inputs: " +
+    JSON.stringify({ role }) +
+    "\n" +
+    roleReadSteps(role) +
+    "Return {status: \"ok\", reason, role_file} through the StructuredOutput tool, with " +
+    roleFileRule(role) +
+    " If step 1 or 2 fails, return status failed with the error and role_file null."
   );
 }
 
-// 4.0.0 (1990): part "all" (plan mode, fresh_preflight) loads the role pages
-// and finds the scripts directory in one agent; "scripts" (a build's first
-// agent) only finds the scripts directory and runs the PATH check; "roles" (a
-// build whose plan ref holds no usable role table) only loads the pages.
-function preflightPrompt(inputs, part) {
-  const which = part || "all";
-  const roles = which !== "scripts";
-  const scripts = which !== "roles";
+// 5.0.0 (R1): a run's first agent finds the scripts and roles directories,
+// hashes their files and runs the PATH check.
+function preflightPrompt(inputs) {
   return (
-    (roles
-      ? "Infra step of the fleet build workflow: check that the yadgar role library is reachable. Read only; do nothing else.\n"
-      : "Infra step of the fleet build workflow: find the fleet scripts directory and check the agent PATH. Read only; do nothing else.\n") +
+    "Infra step of the fleet build workflow: find the fleet scripts and roles directories and check the agent PATH. Read only; do nothing else.\n" +
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    (roles ? preflightRolesText() : "") +
-    (scripts ? preflightScriptsText(inputs.repo, roles) : "") +
-    (which === "all"
-      ? "Return {reachable, missing, versions, dispatch, contract, scripts_probe, scripts_dir, path_check, reason}."
-      : which === "roles"
-        ? "Return {reachable, missing, versions, dispatch, contract, reason}."
-        : "Return {scripts_probe, scripts_dir, path_check, reason}.")
-  );
-}
-
-function preflightRolesText() {
-  return (
-    "Load mcp__yadgar__agent_prompt_get via ToolSearch. Call it once per pattern in `roles`, with project=`role_project`. " +
-    "A pattern is missing when the call returns an error such as not_found, or empty content. " +
-    "reachable=false when the tool is absent or every call fails with a transport, auth or connection error. " +
-    "versions, dispatch and contract each hold every pattern in `roles` as a key; a missing pattern maps to null in all three. " +
-    "versions maps each found pattern to its `version`, a JSON integer (29, never \"29\"). " +
-    "dispatch maps each found pattern to the first line of its `content` that matches `DISPATCH: model=<tier> (fallback=<tier>)` (the fallback part is optional), copied raw; null when no line matches. " +
-    "contract maps each found pattern to the first line of its `content` that starts with `CONTRACT:`, copied raw; null when none. " +
-    "`content` often has no trailing newline: its last line counts as a line like any other. "
+    preflightScriptsText(inputs.repo, false) +
+    "Return {scripts_probe, scripts_dir, path_check, reason}."
   );
 }
 
 function preflightScriptsText(repo, after) {
   return (
-    (after ? "Then find" : "Find") + " the fleet scripts directory (" + FLEET_VERSION + "): run this one command exactly as written, unmodified, as one Bash call: " +
+    (after ? "Then find" : "Find") + " the fleet scripts and roles directories (" + FLEET_VERSION + "): run this one command exactly as written, unmodified, as one Bash call: " +
     SCRIPTS_PROBE +
     "\nscripts_probe = its output lines, every line in order, copied unchanged. " +
     "When exactly one line starts with `hit=`, scripts_dir = the rest of that line; otherwise scripts_dir = null, path_check = null, and skip the next command. " +
@@ -3347,7 +3403,8 @@ const state = {
   pr: null,
   gatesNotRun: null,
   models: {},
-  roleVersions: {},
+  // 5.0.0 (R1): the ROLE_SHA256 entries preflight found in the roles dir
+  roleSha: null,
   refreezeLog: [],
   stopGate: null,
   review: null,
@@ -3356,12 +3413,13 @@ const state = {
   pathChecks: 0,
   // 4.0.0 (1993): the shipped programs' directory, resolved in this run's first agent
   scriptsDir: null,
+  // 5.0.0 (R1): its sibling roles dir
+  rolesDir: null,
   // 4.0.0 (1993): a plan ref committed but not verified (returned on a halt)
   unverifiedPlanRef: null,
-  // 4.0.0 (1990): the role table is set (roleVersions, models); it came from
-  // the sealed plan ref (cached); the record a plan run seals
+  // 5.0.0 (R1): the role files are pinned (models set); the log-only record a
+  // plan run seals: {fleet_version, role_sha256}
   rolesLoaded: false,
-  preflightCached: false,
   preflightRecord: null,
   // 4.0.0 (1987): the digest of the last freeze and its plan_ref (returned on a stop)
   freezeDigest: null,
@@ -3451,7 +3509,7 @@ async function softDispatch(label, prompt, opts) {
   return r;
 }
 
-// Role agents: the tier from the role page. The caller has already counted
+// Role agents: the tier from the role file's DISPATCH line. The caller has already counted
 // the first attempt. A dead agent (null) is retried once on the fallback tier;
 // the retry counts toward the agent cap.
 async function roleAgent(role, label, prompt, opts) {
@@ -3494,25 +3552,29 @@ async function callRole(role, label, inputs, phaseName, agentType, deferCheck, n
 }
 
 // Contract checks on a role result, as a message (null when clean): the
-// runner loaded the same version and contract marker that preflight saw, and
-// an ok result carries every required key and a known verdict.
+// result came from the shipped role file (any status, 5.0.0), and an ok result
+// carries every required key and a known verdict.
 function contractProblem(role, r) {
-  const v = versionProblem(role, r);
-  if (v) return v;
+  const f = roleFileProblem(role, r);
+  if (f) return f;
   const d = driftOf(role, r);
   return d ? d.msg : null;
 }
 
-// The runner loaded another page version or contract marker than preflight
-// saw. Never retried.
-function versionProblem(role, r) {
-  // 4.0.0 (1990): the table came from the plan ref; the page may have moved since
-  const fresh = state.preflightCached ? "; the role table came from the plan ref: re-run build with fresh_preflight: true" : "";
-  if (r.role_version !== state.roleVersions[role])
-    return "role " + role + " runner loaded version " + r.role_version + " but preflight saw " + state.roleVersions[role] + " (changed mid-run); result discarded" + fresh;
-  const c = contractOf(r.role_contract);
-  if (c !== CONTRACT) return "role " + role + " runner loaded contract " + c + " != " + CONTRACT + "; result discarded" + fresh + RELOAD_HINT;
-  return null;
+// 5.0.0 (R1): why a role result did not come from the shipped role file of
+// `role` (null: it did). The agent relays the sha256sum line it printed before
+// reading the file; as with programProblem, a wrong or missing value stops.
+function roleFileProblem(role, r) {
+  const f = r && typeof r === "object" && r.role_file && typeof r.role_file === "object" && !Array.isArray(r.role_file) ? r.role_file : null;
+  const why = !f
+    ? "no role_file"
+    : f.name !== role
+      ? "role_file name " + JSON.stringify(f.name === undefined ? null : f.name)
+      : f.sha256 !== ROLE_SHA256[role]
+        ? "role_file sha256 " + (typeof f.sha256 === "string" ? f.sha256 : JSON.stringify(f.sha256 === undefined ? null : f.sha256)) + ", not " + ROLE_SHA256[role]
+        : null;
+  if (!why) return null;
+  return "role " + role + " did not run the shipped role file (" + why + ")" + (r && r.status && r.status !== "ok" ? "; its result was " + r.status + ": " + (r.reason || "no reason") : "") + "; reinstall fleet " + FLEET_VERSION + " if it repeats";
 }
 
 // Drift in an ok result, against the frozen (STRICT) types: {msg, detail}
@@ -3536,12 +3598,13 @@ function driftOf(role, r) {
 
 // 4.0.0 (1984): an ok result that drifts (a missing key, a wrong type or
 // value, an unknown verdict) is re-dispatched once with the drift quoted,
-// after a fresh PATH re-check. A version or marker mismatch never retries;
-// a second drift stops the run at checkRole as before. The retry counts
-// toward the agent cap.
+// after a fresh PATH re-check. A second drift stops the run at checkRole as
+// before. The retry counts toward the agent cap.
 async function retryOnDrift(role, label, prompt, opts, r) {
-  if (r == null || r.status !== "ok" || versionProblem(role, r)) return r;
-  const d = driftOf(role, r);
+  if (r == null || r.status !== "ok") return r;
+  // 5.0.0 (R1): a role_file problem on an ok result takes the same one retry
+  const fp = roleFileProblem(role, r);
+  const d = fp ? { msg: fp, detail: "role_file" } : driftOf(role, r);
   if (!d) return r;
   const rl = label + ":retry";
   reserve(1, rl);
@@ -3659,7 +3722,8 @@ function finish(status, reason) {
     gates_not_run: state.gatesNotRun,
     stop_gate: status === "ok" || status === "awaiting_confirmation" ? null : state.stopGate,
     review: state.review,
-    role_versions: state.roleVersions,
+    // 5.0.0 (R1): the ROLE_SHA256 pins preflight found the role files at
+    role_sha256: state.roleSha,
     refreeze_log: state.refreezeLog,
     gate_log: state.gateLog,
     yadgar_findings: state.findings,
@@ -3714,115 +3778,40 @@ function layoutKey(key, repo) {
   return { key, branch: "fleet/" + key, root, mainWt: root + "/main", scratch: root + "/scratch" };
 }
 
-// scriptsOnly (4.0.0, 1990): a build that may take the role table from its
-// plan ref; the scripts directory and the PATH check are never cached.
-async function preflightStep(repo, scriptsOnly) {
+// The first step of every run (5.0.0, R1): the scripts and roles directories,
+// their files' hashes and the PATH check, in one agent; then the role tiers
+// from ROLE_DISPATCH. Nothing is cached: a build checks the roles again.
+async function preflightStep(repo) {
   phase("Preflight");
-  const pre = await dispatch(
-    "preflight",
-    scriptsOnly ? preflightPrompt({ repo }, "scripts") : preflightPrompt({ roles: ROLES, role_project: ROLE_PROJECT, repo }),
-    {
-      schema: scriptsOnly ? PREFLIGHT_SCRIPTS_SCHEMA : PREFLIGHT_SCHEMA,
-      agentType: JUDGE_AGENT,
-      phase: "Preflight",
-    },
-  );
+  const pre = await dispatch("preflight", preflightPrompt({ repo }), {
+    schema: PREFLIGHT_SCHEMA,
+    agentType: JUDGE_AGENT,
+    phase: "Preflight",
+  });
   // 4.0.0 (1993): the shipped programs' directory, found by this run's first
   // agent (never cached, never sealed); the PATH check below ran from it, and
-  // its self-hash proves the directory holds this version's programs
+  // its self-hash proves the directory holds this version's programs.
+  // 5.0.0 (R1): its sibling roles dir, every file at its ROLE_SHA256 pin.
   const sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
   if (sp.problem) halt("needs_human", "preflight: scripts_dir unusable: " + sp.problem + "; install fleet " + FLEET_VERSION + " from the marketplace, then run /reload-plugins" + RELOAD_HINT, "contract");
   state.scriptsDir = sp.dir;
+  state.rolesDir = sp.rolesDir;
   gate("scripts_dir: " + state.scriptsDir);
+  gate("roles_dir: " + state.rolesDir);
   // Max's ruling (2026-11-09): IaC tooling may only be reachable through the nix shims
   pathCheck(pre.path_check, repo);
   state.repo = repo;
-  if (scriptsOnly) {
-    gate("preflight: role pages not loaded yet (the plan ref may hold the role table)");
-    return;
-  }
-  rolesFrom(pre);
-}
-
-// A role-page load's result: the library reachable, every role found, and
-// the frozen checks on the table.
-function rolesFrom(pre) {
-  if (!pre.reachable) halt("needs_human", "yadgar unavailable: " + (pre.reason || "role library unreachable"));
-  const missing = pre.missing || [];
-  if (missing.length) halt("needs_human", "role missing in yadgar: " + missing.join(", "));
-  gate("preflight: all " + ROLES.length + " roles loadable");
-  applyRoleTable(pre.versions || {}, pre.contract || {}, pre.dispatch || {});
-}
-
-// 4.0.0 (1990): why a role table (versions, CONTRACT lines, DISPATCH lines,
-// each keyed by role) fails the frozen checks, or null. The same checks run
-// on a fresh page load and on the table a plan ref sealed.
-function roleTableProblem(versions, contracts, dispatchLines) {
-  const v = versions && typeof versions === "object" ? versions : {};
-  const c0 = contracts && typeof contracts === "object" ? contracts : {};
-  const d = dispatchLines && typeof dispatchLines === "object" ? dispatchLines : {};
   for (const role of ROLES) {
-    const got = v[role];
-    const want = EXPECTED_VERSIONS[role];
-    if (typeof got !== "number") return "role " + role + " version missing in preflight (frozen minimum " + want + ")";
-    if (got < want)
-      return "role " + role + " version " + got + " < frozen " + want + " (stale or rolled back): the agent_prompt_get(" + role + ", project " + ROLE_PROJECT + ") wiki version " + got + " must be >= " + want + "; update that page in place; see CHANGELOG 4.0.0 deploy order";
-    const c = contractOf(c0[role]);
-    if (c !== CONTRACT) return "role " + role + " contract " + c + " != " + CONTRACT + RELOAD_HINT;
-  }
-  for (const role of ROLES)
-    if (!parseDispatch(d[role])) return "role " + role + " has no usable DISPATCH line (" + JSON.stringify(d[role] || null) + "); no tier is hardcoded";
-  return null;
-}
-
-// Sets the run's role table, or stops at contract. Keeps the record a plan
-// run seals: {fleet_version, versions, dispatch, contract}, the raw lines.
-function applyRoleTable(versions, contracts, dispatchLines) {
-  const p = roleTableProblem(versions, contracts, dispatchLines);
-  if (p) halt("needs_human", p, "contract");
-  const rec = { fleet_version: FLEET_VERSION, versions: {}, dispatch: {}, contract: {} };
-  for (const role of ROLES) {
-    const got = versions[role];
-    const want = EXPECTED_VERSIONS[role];
-    if (got > want) gate("role " + role + " v" + got + " > frozen v" + want + ": prose-only changes assumed");
-    state.roleVersions[role] = got;
-    rec.versions[role] = got;
-    rec.contract[role] = contracts[role];
-  }
-  for (const role of ROLES) {
-    const t = parseDispatch(dispatchLines[role]);
+    const line = ROLE_DISPATCH[role];
+    const t = parseDispatch(line);
+    if (!t) halt("needs_human", "role " + role + " has no usable DISPATCH line (" + JSON.stringify(line || null) + "); no tier is hardcoded", "contract");
     state.models[role] = t;
-    rec.dispatch[role] = dispatchLines[role];
     gate("model: " + role + " -> " + t.model + (t.fallback ? " (fallback " + t.fallback + ")" : ""));
   }
-  state.preflightRecord = rec;
+  state.roleSha = Object.assign({}, ROLE_SHA256);
+  state.preflightRecord = { fleet_version: FLEET_VERSION, role_sha256: Object.assign({}, ROLE_SHA256) };
   state.rolesLoaded = true;
-}
-
-// 4.0.0 (1990): a build's role table. The plan ref's record when this fleet
-// version sealed it and it passes the frozen checks; else the pages are
-// loaded now. A page bumped after the plan shows at the first role call
-// (versionProblem), and that stop says to re-run with fresh_preflight.
-async function rolesFromRef(rec) {
-  const why =
-    !rec || typeof rec !== "object"
-      ? "the plan ref holds no role table"
-      : rec.fleet_version !== FLEET_VERSION
-        ? "sealed by fleet " + rec.fleet_version + ", not " + FLEET_VERSION
-        : roleTableProblem(rec.versions, rec.contract, rec.dispatch);
-  if (!why) {
-    applyRoleTable(rec.versions, rec.contract, rec.dispatch);
-    state.preflightCached = true;
-    gate("preflight: role table from the plan ref (fleet " + FLEET_VERSION + ", " + CONTRACT + "); no role page loaded");
-    return;
-  }
-  gate("preflight: the sealed role table is not usable (" + why + "); loading the role pages");
-  const pre = await dispatch("preflight:roles", preflightPrompt({ roles: ROLES, role_project: ROLE_PROJECT }, "roles"), {
-    schema: PREFLIGHT_SCHEMA,
-    agentType: JUDGE_AGENT,
-    phase: "Verify",
-  });
-  rolesFrom(pre);
+  gate("preflight: all " + ROLES.length + " role files at their ROLE_SHA256 pins (fleet " + FLEET_VERSION + ")");
 }
 
 // 4.0.0 (1985): plan mode only, before the planner. A fresh PATH re-check,
@@ -4945,15 +4934,17 @@ function makePlanRef(f) {
   return ref;
 }
 
-// 4.0.0: the preflight record a plan run may seal in history.preflight:
-// {fleet_version, versions, dispatch, contract}, each map keyed by role. The
-// field is optional (absent or null in older refs and when not recorded).
+// The preflight record a plan run seals in history.preflight, log only (5.0.0,
+// R1): {fleet_version, role_sha256}. A build never reads a role table from it:
+// it hashes the role files again. A 4.x ref's record ({fleet_version,
+// versions, dispatch, contract}) passes too, its maps ignored, so a plan made
+// on 4.x builds on 5.0.0 with the shipped role files. Optional (absent or null
+// in older refs).
 function preflightRecordProblem(p) {
   if (p === undefined || p === null) return null;
   if (typeof p !== "object" || Array.isArray(p)) return "history.preflight is not an object";
   if (typeof p.fleet_version !== "string" || !p.fleet_version) return "history.preflight.fleet_version missing";
-  for (const k of ["versions", "dispatch", "contract"])
-    if (!p[k] || typeof p[k] !== "object" || Array.isArray(p[k])) return "history.preflight." + k + " is not an object";
+  if ("role_sha256" in p && (!p.role_sha256 || typeof p.role_sha256 !== "object" || Array.isArray(p.role_sha256))) return "history.preflight.role_sha256 is not an object";
   return null;
 }
 
@@ -5518,8 +5509,9 @@ async function buildMode(input, date) {
   const lay = layoutKey(tiny.branch.slice("fleet/".length), repo);
   state.branch = lay.branch;
 
-  // 4.0.0 (1990): the role pages come from the plan ref unless fresh_preflight
-  await preflightStep(repo, input.fresh_preflight !== true);
+  // 5.0.0 (R1): every build checks the role files again
+  // (fresh_preflight is accepted and changes nothing)
+  await preflightStep(repo);
   const ws = await workspaceStep(repo, lay, { frozenResume: typeof input.freeze_digest === "string" });
   return buildFromRef(input, date, tiny, lay, ws, { rerunGates: input.confirm === "auto", intent: null, agentsBase: 0 });
 }
@@ -5593,8 +5585,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   if (lp) changed(lp);
   if (loaded.branch !== tiny.branch || cleanRepo(loaded.brief.repo) !== repo || planRefName(loaded.task_id) !== tiny.plan_ref)
     changed("does not match plan_ref (branch, repo or task id)");
-  // 4.0.0 (1990): before any role runs
-  if (!state.rolesLoaded) await rolesFromRef(loaded.history.preflight);
+  // 5.0.0 (R1): the sealed preflight record is log only; preflight checked the roles
+  if (loaded.history.preflight && loaded.history.preflight.fleet_version !== FLEET_VERSION)
+    gate("plan ref sealed by fleet " + loaded.history.preflight.fleet_version + "; the role prompts are this install's files (fleet " + FLEET_VERSION + ")");
+  // review item 5: log only; the build runs this install's role files
+  const sealedPins = loaded.history.preflight && loaded.history.preflight.role_sha256;
+  if (sealedPins) {
+    const moved = ROLES.filter((r) => sealedPins[r] !== ROLE_SHA256[r]);
+    if (moved.length) gate("plan ref sealed other role pins than this install's: " + moved.join(", "));
+  }
   // 4.0.0 (1992): the ledger scope sealed at plan time. A build without
   // args.project uses it; a different args.project stops. A ref sealed
   // before 4.0.0 (or by a plan run without project) has none: args.project
@@ -6445,15 +6444,27 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // the role check runs after the hash check: a hash violation is reported
     // even when the coder's output is also malformed or not ok
     await pathRecheck("coder:r" + m, "Code");
-    const coder = await callRole(
-      "fleet-coder",
-      "role:fleet-coder:r" + m,
-      Object.assign({}, codeInputs, { routed_findings: coderFindings }),
-      "Code",
-      null,
-      true,
-      true,
-    );
+    const coderIn = Object.assign({}, codeInputs, { routed_findings: coderFindings });
+    let coder = await callRole("fleet-coder", "role:fleet-coder:r" + m, coderIn, "Code", null, true, true);
+    // 5.0.0 (review of d8df90b): an ok coder whose ONLY problem is role_file
+    // is asked once more for its report, before the post-coder hash (so any
+    // change the retry makes is checked like the first one). Any other
+    // problem keeps its path below.
+    const coderFileOnly = coder.status === "ok" && roleFileProblem("fleet-coder", coder) && !driftOf("fleet-coder", coder) ? roleFileProblem("fleet-coder", coder) : null;
+    if (coderFileOnly) {
+      const rl = "role:fleet-coder:r" + m + ":retry";
+      reserve(1, rl);
+      state.agents++;
+      const r2 = await roleAgent(
+        "fleet-coder",
+        rl,
+        rolePrompt("fleet-coder", coderIn) + "\nYour previous result was refused: " + coderFileOnly + ". Your code changes are in the worktree; change no file. Do steps 1 and 2 again, then return the whole result object again.",
+        { schema: SCHEMAS["fleet-coder"], phase: "Code" },
+      );
+      if (r2 == null) halt("failed", "agent " + rl + " returned no result");
+      gate("fleet-coder: " + coderFileOnly + "; asked once more");
+      coder = r2;
+    }
     // the repo's fixers on every non-frozen path the worktree changes, before
     // the hash check and the judge (3.0.0, ledger 1951); a hook that touches
     // a frozen file or another path stops the run
@@ -6478,8 +6489,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       );
     // 4.0.0 (1984): the coder is never re-run on drift; drift on an ok result
     // is a fix_code finding for the next round (bounded by MAX_CODE_ROUNDS).
-    // A version or marker mismatch and a not-ok status still stop here.
-    const coderDriftOk = !viol.length && coder.status === "ok" && !versionProblem("fleet-coder", coder) ? driftOf("fleet-coder", coder) : null;
+    // A not-ok status still stops here; so does a result not from the shipped
+    // role file (5.0.0, R1: a contract stop, never a finding)
+    const coderFile = !viol.length ? roleFileProblem("fleet-coder", coder) : null;
+    // review item 6: a not-ok coder that names no role file stops at "role"
+    if (coderFile) halt("needs_human", "code round " + m + ": " + coderFile, coder.status !== "ok" && !coder.role_file ? "role" : "contract");
+    const coderDriftOk = !viol.length && coder.status === "ok" ? driftOf("fleet-coder", coder) : null;
     if (!viol.length && !coderDriftOk) {
       checkRole("fleet-coder", coder);
       requireOk("fleet-coder", coder);
@@ -7345,16 +7360,40 @@ async function dbTeardown() {
   }
 }
 
+// 5.0.0 (R1): preflight only, on a given repo: the scripts and roles
+// directories, the hash of every program and role file, and the PATH check.
+// Returns the table and stops; no worktree, no role agent, no write.
+async function probeMode(input) {
+  const repo = cleanRepo(input.repo);
+  if (!repo) stop("needs_human", "args.repo must be the absolute path of a git toplevel (probe runs the PATH check there)");
+  await preflightStep(repo);
+  // review item 3: the role read path on the real runtime, once, on haiku
+  const role = PROBE_READ_ROLE;
+  const label = "infra:role-read:" + role;
+  reserve(1, label);
+  state.agents++;
+  const ic = infraCall(label, roleReadPrompt(role), { schema: ROLE_READ_SCHEMA, agentType: JUDGE_AGENT, phase: "Preflight" });
+  const rr = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
+  const rp = rr == null ? "returned no result" : rr.status !== "ok" ? "returned " + rr.status + ": " + (rr.reason || "no reason") : roleFileProblem(role, rr);
+  if (rp) halt("needs_human", "probe: the role-read agent (" + label + ") " + rp, "contract");
+  gate("probe: " + label + " read " + role + ".md at its pin");
+  const roles = {};
+  for (const r of ROLES) roles[r] = { sha256: state.roleSha[r], model: state.models[r].model, fallback: state.models[r].fallback };
+  return Object.assign(finish("ok", "probe: fleet " + FLEET_VERSION + " scripts and roles found, " + ROLES.length + " role files at their pins, a role read checked, PATH check clean"), {
+    probe: { fleet_version: FLEET_VERSION, scripts_dir: state.scriptsDir, roles_dir: state.rolesDir, roles, role_read: { role, sha256: rr.role_file.sha256, ok: true } },
+  });
+}
+
 // ---------------------------------------------------------------- main
 
 async function main(input) {
   const mode = input.mode;
   if (MODES.indexOf(mode) < 0)
-    stop("needs_human", "args.mode must be \"plan\" or \"build\", got " + JSON.stringify(mode === undefined ? null : mode) + ": run /build-task <task>");
+    stop("needs_human", "args.mode must be \"plan\", \"build\" or \"probe\", got " + JSON.stringify(mode === undefined ? null : mode) + ": run /build-task <task>");
   state.mode = mode;
   if (input.confirm !== undefined && CONFIRMS.indexOf(input.confirm) < 0)
     stop("needs_human", "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm));
-  // 4.0.0 (1990, S3): build mode loads the role pages again when true
+  // 4.0.0 (1990, S3); 5.0.0 (R1): accepted, a no-op (every build checks the role files)
   if (input.fresh_preflight !== undefined && typeof input.fresh_preflight !== "boolean")
     stop("needs_human", "args.fresh_preflight must be true or false, got " + JSON.stringify(input.fresh_preflight));
   if (typeof input.date !== "string" || !DATE_RE.test(input.date))
@@ -7370,7 +7409,7 @@ async function main(input) {
     stop("needs_human", "args.freeze_digest must be the 64-hex freeze_digest a build stop returned, and only in build mode; got " + JSON.stringify(input.freeze_digest));
   // 4.0.0 (1981): the run's test database goes, whatever the result
   try {
-    return await (mode === "plan" ? planMode(input, input.date) : buildMode(input, input.date));
+    return await (mode === "plan" ? planMode(input, input.date) : mode === "probe" ? probeMode(input) : buildMode(input, input.date));
   } finally {
     await dbTeardown();
   }

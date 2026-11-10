@@ -35,14 +35,11 @@ path, or free text.
 ## Requirements
 
 - Claude Code with the Workflow tool (dynamic workflows) enabled.
-- The `yadgar` MCP server, with the ten role prompts in project `m-agahi/yadgar`:
-  `scope-and-plan`, `plan-audit`, `fleet-test-writer`, `fleet-test-judge`, `fleet-coder`,
-  `fleet-code-judge`, `fleet-pr-opener`, `fleet-intent-judge`, `pr-review` and
-  `gate-change-nonweakening-sweep`. Preflight checks all ten on every run, also when a run does not
-  need the intent judge (`confirm: "ask"`) or the sweep (no gate change). The workflow embeds no
-  role text. Each role agent loads its
-  prompt with `mcp__yadgar__agent_prompt_get`. A missing role stops the run in preflight; there is no
-  local fallback.
+- Nothing for the role prompts (5.0.0, R1): the ten role prompts ship in the plugin as
+  `roles/<role>.md`: `scope-and-plan`, `plan-audit`, `fleet-test-writer`, `fleet-test-judge`,
+  `fleet-coder`, `fleet-code-judge`, `fleet-pr-opener`, `fleet-intent-judge`, `pr-review` and
+  `gate-change-nonweakening-sweep`. See "Role files" below. The memory and ledger steps still use
+  the `yadgar` / `yaadgaar` MCP servers in this release (R2 makes them optional).
 - `git`, `gh` (authenticated), and `python3` >= 3.11 (or `tomli`) in the target repo's environment.
 - For Jira input or write-back: the Atlassian MCP server. For GitHub write-back: `gh-personal`. For
   Codeberg write-back: `$CODEBERG_TOKEN`. A missing tool makes intake stop, or makes that comment
@@ -556,15 +553,57 @@ mismatch stops with `stop_gate: "resume"`. A build that re-froze its tests after
 round binds `refrozen: true` into the digest and never resumes this way. A run-state ref (a
 build past its commit) wins over `freeze_digest`.
 
-### Preflight cache and fresh_preflight (4.0.0, ledger 1990)
+### Role files (5.0.0, R1, ledger 1999)
 
-Plan mode seals the role table it loaded (versions, raw DISPATCH and CONTRACT lines) in the plan
-ref as `history.preflight`. A build still runs `preflight` (the scripts directory probe and the
-PATH check) but loads no role page when the sealed record is of this fleet version and passes
-the frozen checks. Another version, no record or a failed check loads the pages in
-`preflight:roles`. `fresh_preflight: true` (build mode only) loads the pages in the first agent.
-A role page bumped after the plan shows at the first role call, and the stop says "re-run build
-with fresh_preflight: true".
+The ten role prompts ship as `plugins/fleet/roles/<role>.md`, under the same trust model as the
+shipped programs. `scripts/gen.mjs` writes two tables into the workflow from the files:
+`ROLE_SHA256` (the sha256 of each file's exact bytes) and `ROLE_DISPATCH` (each file's first
+`DISPATCH:` line). `gen.mjs --check` fails when a role file differs, is missing, or the roles dir
+holds any other file. Nothing is cached; every run (plan, build, probe) checks the files again:
+
+1. `preflight` (haiku, the run's first agent) finds
+   `$HOME/.claude/plugins/cache/<marketplace>/fleet/<version>/scripts` and its sibling `roles`
+   dir. Both must be their own realpath and no symlink. The roles dir must hold exactly the ten
+   regular files (no extra file, no subdirectory, no symlink), and the sha256sum lines of its
+   files must equal `ROLE_SHA256`. Any other value stops the run (`stop_gate: contract`).
+2. Each role's tier comes from `ROLE_DISPATCH`.
+3. Each role prompt is a short wrapper with no role text. The role agent first runs
+   `sha256sum -- <roles dir>/<role>.md` in Bash, then reads the whole file with the Read tool
+   (never `cat`: the Bash tool cuts output near 30000 characters, and a cut file would still
+   match its sha256sum line). It follows the file. The wrapper also carries the inputs, the
+   StructuredOutput rule and, last, a reminder to put `role_file` in the final output. Every
+   role runs as `fleet:judge` or the default agent; both can use Read. `gen.mjs` refuses a role
+   file the Read tool would cut: over 2000 lines, a line over 2000 characters, or over 40000
+   characters in all (until R3 shrinks the files). It also refuses a file whose DISPATCH line is
+   missing or names a tier outside `TIERS`.
+4. Every role result carries `role_file: {name, sha256}`, required on every status (null fits the
+   schema). The script checks that `name` is the dispatched role and that `sha256` is
+   `ROLE_SHA256[name]`. A wrong or missing value takes the program-check path: a contract stop,
+   after the one contract retry on an ok result: "role <role> did not run the shipped role file
+   (...)". An ok coder whose only problem is `role_file` is asked once more for its report,
+   before the post-coder hash; any other coder problem stops. A not-ok coder with no
+   `role_file` stops with `stop_gate: "role"`.
+5. A build whose plan ref sealed other `role_sha256` pins than this install's logs "plan ref
+   sealed other role pins than this install's: <roles>" and goes on with the installed files.
+
+Plan mode seals `history.preflight: {fleet_version, role_sha256}` in the plan ref, log only. A
+build never reads a role table from it. A 4.x plan ref (`{fleet_version, versions, dispatch,
+contract}`) still builds, with this install's role files. `fresh_preflight` is accepted and
+changes nothing. The result carries `role_sha256` (was `role_versions`).
+
+The role files are the yadgar pages `agent-prompt-<role>` (project `m-agahi/yadgar`) as of
+fleet 4.0.3, with the `CONTRACT:` line removed and the repo's markdown formatting applied. The
+`pr-review` page stays in yadgar for use outside the fleet; `roles/pr-review.md` is the fleet copy.
+
+### Probe mode (5.0.0)
+
+`{mode: "probe", repo, date, run_nonce}` runs the preflight only on `repo`: the scripts and
+roles dirs, the sha256 of every program and role file, and the PATH check. Then one haiku
+agent (`infra:role-read:plan-audit`, as `fleet:judge`) hashes and reads `plan-audit.md` the way a
+role does and returns only `role_file`, which the script checks. That proves the role read path
+on the real runtime. It returns `status: "ok"` with `probe: {fleet_version, scripts_dir,
+roles_dir, roles: {<role>: {sha256, model, fallback}}, role_read: {role, sha256, ok}}` and
+stops: no worktree, no role agent, no write. Use it after an install or update.
 
 ### Throwaway test database (4.0.0, ledger 1981)
 
@@ -974,13 +1013,11 @@ rules on it from the diff.
 
 The script pins the role contract, not the prose:
 
-- `EXPECTED_VERSIONS` holds the minimum role-page versions. Preflight reads each page's version. A
-  lower version (stale or rolled back) stops the run; a higher one is logged as "prose-only changes
-  assumed" and returned as `role_versions`.
-- Every role page carries `CONTRACT: fleet-v4` (since 4.0.0; `fleet-v3` before) under its
-  DISPATCH line. Preflight and every role
-  runner report the marker; any other value stops the run. `agent_prompt_save` strips a page's
-  final newline, so the parsing never needs one: the last line counts like any other.
+- 5.0.0 (R1): `ROLE_SHA256` pins each shipped role file (see "Role files"). The page versions
+  (`EXPECTED_VERSIONS`) and the `CONTRACT:` marker below are history: 5.0.0 deleted both. A role
+  result carries no `role_version` or `role_contract`.
+- Until 4.0.3: `EXPECTED_VERSIONS` held the minimum role-page versions, and every role page
+  carried `CONTRACT: fleet-v4` under its DISPATCH line.
 - 2.1.1 pins: scope-and-plan 24, plan-audit 13, fleet-test-writer 9, fleet-test-judge 9,
   fleet-coder 16, fleet-code-judge 13, fleet-pr-opener 10, fleet-intent-judge 2, pr-review 17,
   gate-change-nonweakening-sweep 4. 2.1.6 raises scope-and-plan to 26 and plan-audit to 15
@@ -1019,8 +1056,8 @@ The script pins the role contract, not the prose:
 ### Models
 
 Each role, the reviewer and the sweep included, runs on the tier named by the first
-`DISPATCH: model=<tier> (fallback=<tier> ...)` line of its role page. Preflight returns those
-lines; the script parses them. Accepted tiers: `fable`, `opus`, `sonnet`, `haiku`. No tier is
+`DISPATCH: model=<tier> (fallback=<tier> ...)` line of its role file (5.0.0: copied into `ROLE_DISPATCH` by
+`gen.mjs`); the script parses it. Accepted tiers: `fable`, `opus`, `sonnet`, `haiku`. No tier is
 hardcoded: a missing, unparseable or unknown line stops the run in preflight (`stop_gate:
 contract`). A role agent that dies is retried once on the page's fallback tier, when one is set,
 never on any other; the retry counts toward the agent cap. Every role dispatch logs
@@ -1161,7 +1198,7 @@ Build mode, `status: "ok"`:
   "cumulative": { "runs": 2, "replans": 0, "agents": 20 },
   "gates_not_run": [{ "gate": "held_out", "reason": "..." }],
   "stop_gate": null,
-  "role_versions": { "fleet-coder": 10 },
+  "role_sha256": { "fleet-coder": "<sha256>" },
   "refreeze_log": [],
   "review": {
     "verdict": "approve",

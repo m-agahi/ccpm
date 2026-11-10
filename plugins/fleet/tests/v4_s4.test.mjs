@@ -28,8 +28,6 @@ import {
   sh,
   gitEnv,
   SCRIPTS_SRC,
-  FROZEN_VERSIONS,
-  CONTRACT_LINE,
   chunkedContentOf,
   redigest,
   PROGRAMS_TEXT,
@@ -586,7 +584,7 @@ test("4.0.0 1991 AC-1: a classification that is missing, refused or has no quote
   ]) {
     for (const args of [DEFAULT, AUTO]) {
       const s = defaultHappy();
-      const j = Object.assign({}, s["role:fleet-intent-judge"], { __raw: true, role_version: FROZEN_VERSIONS["fleet-intent-judge"], role_contract: CONTRACT_LINE });
+      const j = Object.assign({}, s["role:fleet-intent-judge"], { __raw: true });
       if (c === undefined) delete j.classification;
       else j.classification = c;
       s["role:fleet-intent-judge"] = j;
@@ -641,7 +639,7 @@ test("4.0.0 1991: ask never runs the gates for an eligible plan; build mode defa
   assert.ok(!("confirm_reason" in out.planResult));
   assert.ok(!out.labels.includes("role:fleet-intent-judge"));
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.ok(!out.build.labels.some((l) => /intent/.test(l)));
+  assert.ok(!out.build.labels.some((l) => /intent/.test(l) && !/^infra:role-relay:/.test(l)));
 });
 
 test("4.0.0 1991: the agent count sealed in the ref covers the gate agents only when they run", async () => {
@@ -928,7 +926,7 @@ test("4.0.0 1991: SKILL.md passes confirm default and documents confirm_reason a
 });
 
 test("4.0.0 1983: a contract-drift retry is not a re-plan round", async () => {
-  const drift = (s) => Object.assign({}, s["role:scope-and-plan"], { __raw: true, role_version: FROZEN_VERSIONS["scope-and-plan"], role_contract: CONTRACT_LINE });
+  const drift = (s) => Object.assign({}, s["role:scope-and-plan"], { __raw: true });
   const s = happy();
   const good = s["role:scope-and-plan"];
   s["role:scope-and-plan"] = drift(s);
