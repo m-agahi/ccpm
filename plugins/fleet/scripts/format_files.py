@@ -33,7 +33,37 @@ try:
 except Exception:
     _PROG = {'name': None, 'sha256': None}
 import glob, hashlib, json, os, re, shutil, stat, subprocess, sys, tempfile
-wt, sel, frozen = sys.argv[1], json.loads(sys.argv[2]), set(json.loads(sys.argv[3]))
+wt, sel = sys.argv[1], json.loads(sys.argv[2])
+FROZEN_SHA = None
+def frozen_of(a, scratch):
+    # 5.0.7 (ledger 2020): a JSON list of paths, or @<12 hex>: the handle of
+    # the hasher's files map <scratch>/hashes/files-<prefix><52 hex>.json
+    # (exactly one; its bytes must hash to its name), whose keys are the
+    # frozen paths. The full sha256 is printed (frozen_map) for the workflow
+    # to check; no agent types a 64-hex value.
+    global FROZEN_SHA
+    if not a.startswith('@'):
+        return set(json.loads(a))
+    pre = a[1:]
+    d = os.path.join(scratch, 'hashes')
+    if not re.match(r'^[0-9a-f]{12}$', pre) or os.path.islink(d) or not os.path.isdir(d):
+        sys.exit('frozen map handle is not 12 hex, or no hashes dir: ' + a)
+    hits = [n for n in os.listdir(d) if re.match(r'^files-' + pre + r'[0-9a-f]{52}\.json$', n)]
+    if len(hits) != 1:
+        sys.exit(str(len(hits)) + ' files match the frozen map handle ' + a)
+    p = os.path.join(d, hits[0])
+    if os.path.islink(p):
+        sys.exit('frozen map is a symlink: ' + p)
+    with open(p, 'rb') as fh:
+        data = fh.read()
+    FROZEN_SHA = hits[0][6:-5]
+    if hashlib.sha256(data).hexdigest() != FROZEN_SHA:
+        sys.exit('frozen map does not match its sha256: ' + p)
+    d = json.loads(data)
+    if not isinstance(d, dict):
+        sys.exit('frozen map is not a JSON object: ' + p)
+    return set(d)
+frozen = frozen_of(sys.argv[3], sys.argv[4])
 scratch_root, tmo = sys.argv[4], int(sys.argv[5])
 # no PATH entry inside the worktree or the scratch dir: pre-commit and the
 # hooks it runs resolve their tools as the agent's shell would, minus the repo
@@ -70,6 +100,9 @@ PURGED_CAP = 50
 def done(**k):
     out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': [], 'purged': len(PURGED), 'purged_paths': sorted(PURGED)[:PURGED_CAP]}
     out.update(k)
+    # 5.0.7: the changed paths that are frozen (the workflow stops on any)
+    out['frozen_changed'] = sorted(set(out['changed']) & frozen)
+    out['frozen_map'] = FROZEN_SHA
     out['program'] = _PROG
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
     print(json.dumps(out, sort_keys=True, ensure_ascii=False))

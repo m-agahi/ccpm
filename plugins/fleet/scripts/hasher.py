@@ -661,45 +661,65 @@ if _sd is not None:
             continue
         with open(fp, 'rb') as fh:
             scripts[fn[:-3]] = hashlib.sha256(fh.read(1 << 22)).hexdigest()
-out['scripts'] = scripts
-def ignored_summary(full):
-    # 5.0.5: the map goes to <scratch>/hashes/ignored-<sha256 of the file>.json
-    # (written whole, then renamed); the output carries {count and sha256 of
-    # every entry but the settings file, settings (its hash or null), file}
+def write_map(name, full):
+    # 5.0.5: the map goes to <scratch>/hashes/<name>-<sha256 of the file>.json
+    # (written whole, then renamed); 5.0.7 (ledger 2020): every map, not only
+    # the ignored one. Returns the path the workflow expects.
     data = canon(full)
-    name = 'ignored-' + sha(data) + '.json'
+    fn = name + '-' + sha(data) + '.json'
     d = os.path.join(SCRATCH_REAL, 'hashes')
     no_link(_rest + ['hashes'])
     os.makedirs(d, exist_ok=True)
     no_link(_rest + ['hashes'])
     if not os.path.isdir(d):
         sys.exit('scratch hashes path is not a directory: ' + d)
-    real = os.path.join(d, name)
-    no_link(_rest + ['hashes', name])
-    fd, tmp = tempfile.mkstemp(dir=d, prefix='.ignored-')
+    real = os.path.join(d, fn)
+    no_link(_rest + ['hashes', fn])
+    fd, tmp = tempfile.mkstemp(dir=d, prefix='.' + name + '-')
     with os.fdopen(fd, 'wb') as fh:
         fh.write(data)
     os.replace(tmp, real)
     # the path the workflow expects (its own scratch string) must resolve to
     # the file written
-    path = os.path.join(scratch, 'hashes', name)
+    path = os.path.join(scratch, 'hashes', fn)
     if os.path.realpath(path) != real or os.path.realpath(real) != real:
         sys.exit('scratch map file does not resolve to the written path: ' + path)
-    rest = dict((k, v) for k, v in full.items() if k != SETTINGS_LOCAL)
-    return {'count': len(rest), 'sha256': sha(canon(rest)), 'settings': full.get(SETTINGS_LOCAL), 'file': path}
+    return path
 
-out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
+def map_summary(name, full):
+    # {count, sha256, file}: no per-entry value is relayed (5.0.7, ledger 2020)
+    return {'count': len(full), 'sha256': sha(canon(full)), 'file': write_map(name, full)}
+
+def ignored_summary(full):
+    # the ignored map: {count and sha256 of every entry but the settings file,
+    # settings (its hash or null), file (sha256 of the whole map in its name)}
+    rest = dict((k, v) for k, v in full.items() if k != SETTINGS_LOCAL)
+    return {'count': len(rest), 'sha256': sha(canon(rest)), 'settings': full.get(SETTINGS_LOCAL), 'file': write_map('ignored', full)}
+
+# the git map's values the workflow reads or moves itself stay inline: the
+# hooks path and every run-state ref (refs/fleet/*, a commit or tag id)
+INLINE_GIT = lambda k: k == 'core.hooksPath' or k.startswith('fleetref:')
+gsum = map_summary('git', dict((k, v) for k, v in gitmap.items() if not INLINE_GIT(k)))
+gsum['inline'] = dict((k, v) for k, v in gitmap.items() if INLINE_GIT(k))
+out['hashes'] = {'files': map_summary('files', files), 'sections': map_summary('sections', sections), 'git': gsum,
+                 'symlinks': map_summary('symlinks', symlinks),
                  'ignored': ignored_summary(ignored_files()),
                  'suspicious': sorted(set(SUSPICIOUS))}
+# 5.0.7: the programs' sha256 map as {count, sha256}: the workflow compares
+# the sha256 with its own table's
+if scripts is not None:
+    scripts = {'count': len(scripts), 'sha256': sha(canon(scripts))}
+out['scripts'] = scripts
 # the script recomputes this over the relayed values: a dropped key fails
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 
 text = json.dumps(out, sort_keys=True)
 if len(text.encode('utf-8')) > RELAY_CAP:
-    sizes = sorted(((len(v), k) for k, v in out['hashes'].items() if k != 'ignored'), reverse=True)
+    sizes = [(len(out['hashes']['git']['inline']), 'git'), (len(out['hashes']['suspicious']), 'suspicious')]
     if 'changed' in out:
-        sizes = sorted(sizes + [(len(out['changed']), 'changed')], reverse=True)
+        sizes.append((len(out['changed']), 'changed'))
+    sizes = sorted(sizes, reverse=True)
     # a fixed marker: the workflow maps it to its own stop text (stop_gate hash)
     sys.exit('FLEET_HASHER_RELAY_CAP: the hasher output is over the %d-byte relay cap (%d bytes; largest: %s)' % (
         RELAY_CAP, len(text.encode('utf-8')), ', '.join('%s %d keys' % (k, n) for n, k in sizes[:3])))

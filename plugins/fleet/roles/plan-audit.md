@@ -81,6 +81,7 @@ Test writers take expected values only from the criteria, so a weak criterion be
 - boundaries and refusals listed, each with its own literal example; security needs written as refusal examples;
 - `dont_care` where outputs are incidental (log text, unordered order, timestamps);
 - `guards_existing: true` only with a quoted spec line;
+- no example of a `guards_existing: false` criterion that the current code already satisfies. Verify each example against the code: refusals, not-found or unknown ids, soft-deleted records and expiry often hold already. One that holds → routed finding "split guard examples into a guards_existing=true criterion", naming the criterion and the example; the verdict is `untestable_criteria` (the test judge refuses a test that already passes unless `guards_existing` is true). An example that already holds, has no spec line, and is listed under the plan's non-goals or in `dont_care` with a one-line reason is correct: no finding.
 - test file paths disjoint from every other criterion's paths;
 - consistency with the code as it is (no criterion the current interface cannot express without a design change the plan does not describe);
 - specificity: two independent test writers would test the same thing. "Works correctly", "is robust", "handles errors", or a performance claim with no number fail.

@@ -29,6 +29,8 @@ import {
   sh,
   spawnSync,
   registerIgnored,
+  registerMap,
+  HASH_MAP_NAMES,
   criteria,
   BUILD_ROWS,
   BUILD_SCRATCH,
@@ -256,9 +258,12 @@ function realHashes(f, prompt) {
   const r = spawnSync("python3", ["-I", HASHER, f.wt, JSON.stringify(inputsOf(prompt).test_files), "", f.scratch], { encoding: "utf8", env: f.env });
   assert.equal(r.status, 0, r.stderr);
   const h = JSON.parse(r.stdout).hashes;
-  const m = JSON.parse(readFileSync(h.ignored.file, "utf8"));
-  h.ignored.file = inputsOf(prompt).scratch_dir + "/hashes/" + h.ignored.file.split("/").pop();
-  registerIgnored(h.ignored, m);
+  // 5.0.7 (ledger 2020): every map, as the ignored one in 5.0.5
+  for (const k of HASH_MAP_NAMES) {
+    const m = JSON.parse(readFileSync(h[k].file, "utf8"));
+    h[k].file = inputsOf(prompt).scratch_dir + "/hashes/" + h[k].file.split("/").pop();
+    registerMap(h[k].file, m);
+  }
   return h;
 }
 

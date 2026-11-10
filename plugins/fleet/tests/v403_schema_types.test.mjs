@@ -298,8 +298,23 @@ const READS = {
     "r.refused array": "prog:format_files:refused",
     // 5.0.4 (ledger 2013)
     "r.purged integer": "prog:format_files:purged",
-    "x string": "prog:format_files:purged_paths[]",
+    "x string": ["prog:format_files:purged_paths[]", 2],
     "r.purged_paths array": "prog:format_files:purged_paths",
+    // 5.0.7 (ledger 2020)
+    "r.frozen_changed array": "prog:format_files:frozen_changed",
+    "frozenList array": [PARSED_LOCAL, 3],
+  },
+  formatFilesPrompt: { "inputs.frozen string": PARSED_LOCAL },
+  // 5.0.7 (ledger 2020): the hasher's scripts summary
+  scriptsSummaryProblem: { "sum object": "hasher:scripts", "sum array": "!hasher:scripts" },
+  digestRetry: {
+    "label string-re": PARSED_LOCAL,
+    "opts.args array": PARSED_LOCAL,
+  },
+  digestOnlyMiss: {
+    "r object": "parsed: any digest-checked program result (read by relayDigestOk)",
+    "r.digest string": "parsed: any digest-checked program result (read by relayDigestOk)",
+    "r.digest string-re": "parsed: any digest-checked program result (read by relayDigestOk)",
   },
   purgeBytecode: { "r.purged number": "infra:purged" },
   pathRelayProblem: {
@@ -341,20 +356,24 @@ const READS = {
     "h.suspicious array": "hasher:hashes.suspicious",
     "r.changed array": "hasher:changed",
     // 5.0.2 (ledger 2006): the digest is read by relayDigestOk
-    // 5.0.5 (ledger 2018): the ignored summary
-    "ig.count integer": "hasher:hashes.ignored.count",
-    "ig.settings string": "hasher:hashes.ignored.settings",
-    "ig.file string": "hasher:hashes.ignored.file",
-    "ig.sha256 string-re": "hasher:hashes.ignored.sha256",
+    // 5.0.7 (ledger 2020): every map's summary (5.0.5: the ignored one)
+    "g.count integer": "hasher:hashes.files.count",
+    "g.sha256 string-re": "hasher:hashes.files.sha256",
+    "g.file string": "hasher:hashes.files.file",
+    "g.settings string": "hasher:hashes.ignored.settings",
+    "g.inline object": "hasher:hashes.git.inline",
+    "g.inline[k] string": "hasher:hashes.git.inline.*",
     // review S2: the relay-cap marker in a failed hasher's reason
     "r.reason string": "hasher:reason",
   },
-  explainIgnored: {
-    "x string": PARSED_LOCAL,
-    "p string": "prog:ignored_diff:paths[]",
-    "r.total integer": "prog:ignored_diff:total",
-    "r.paths array": "prog:ignored_diff:paths",
-    "r.error string": "prog:ignored_diff:error",
+  expandKeys: {
+    "r.total integer": "prog:hash_diff:total",
+    "r.total number-literal": "prog:hash_diff:total",
+    "r.changed array": "prog:hash_diff:changed",
+    "w array": "prog:hash_diff:changed[]",
+    "w.length number-literal": "parsed: a hash_diff row (prog:hash_diff:changed[], typed array of strings)",
+    "w[1] string": "parsed: a hash_diff row (prog:hash_diff:changed[], typed array of strings)",
+    "r.error string": "prog:hash_diff:error",
   },
   // 5.0.6 (ledger 2019): the bytes the build-dir teardown freed (its log line)
   buildTeardown: { "r.bytes integer": "prog:build_dir:bytes" },
@@ -612,7 +631,7 @@ const READS = {
     "st object": ["parsed: JSON.parse of the run-state message (digest-checked read_state)", 2],
     "st.approved_sha string": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     "rs.clean boolean": "prog:read_state:clean",
-    "refTree string": "hasher:hashes.git.*",
+    "refTree string": "hasher:hashes.git.inline.*",
     "ref.plan_diff array": PARSED_REF,
     "x string": "prog:tf_gate:iac_files[]",
     "a array": "prog:tf_gate:iac_files",
@@ -918,7 +937,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.6\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.6\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.7\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.7\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

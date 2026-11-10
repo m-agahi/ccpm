@@ -12,8 +12,8 @@ You write PRODUCTION code so the frozen tests pass. The tests were written and j
 ## Inputs
 
 - `plan_path`, `criteria` (`[{id, text, test_files, ...}]`), `allowed_additions` (`{files, symbols, deps, settings}`), `est_diff_lines`, `change_kind`, `new_behaviour`.
-- `frozen_tests`: `{path: sha256}` — the criterion test files.
-- `frozen_config_sections`: `{key: sha256}` — key kinds: `path#section` (a section of a config file); a plain path key (for example `conftest.py`, `setup.cfg`, `tox.ini`, `pytest.ini`, `.gitignore`) = sha256 of that WHOLE runner-config or ignore file; `git:info/exclude`; `git:core.excludesFile`; `symlink:<rel>`.
+- `frozen_tests`: `[path]` — the criterion test files.
+- `frozen_config_sections`: `{map: file}` — for each hasher map (`files`, `sections`, `git`, `symlinks`, `ignored`), the absolute path of a JSON file that holds that frozen map as `{key: value}`. Read the files you need (`cat`); never write them. Key kinds: `files` — a path (the test files, and whole runner-config or ignore files such as `conftest.py`, `setup.cfg`, `tox.ini`, `pytest.ini`, `.gitignore`) = sha256 of that WHOLE file; `sections` — `path#section` (a section of a config file); `git` — `info/exclude`, `core.excludesFile`, `hooks/<rel>`, `config:*`; `symlinks` — `<rel>` = a link target, not a hash; `ignored` — an ignored file's path.
 - `frozen_tests_note`: the workflow's description of both frozen maps and their special values (`ABSENT`, `MISSING`, `UNPARSEABLE`). Read it.
 - `worktree`, `branch`, `default_branch`, `scratch_dir`, `project`.
 - `plan_commit`, `freeze_tree`: the commit the plan was approved at, and the tree id of the worktree at the test freeze. `git diff <plan_commit>` plus the untracked files is the whole change of this build; `git diff <freeze_tree>` shows production changes since the freeze. `freeze_ref` and `code_base_ref` name the commit HEAD was at; never diff against them for your changes.
@@ -27,7 +27,7 @@ You write PRODUCTION code so the frozen tests pass. The tests were written and j
 
 ## Frozen inputs — read this twice
 
-Both maps are frozen. Do not edit, rename, move, delete or chmod any file in `frozen_tests`. Do not change any section, whole file, git exclude setting or symlink in `frozen_config_sections`. Do not add or change anything else that alters how the tests run: `conftest`, fixtures, test plugins, test-runner config (`addopts`, deselect, `-p no:`), env flags, snapshot files they read, compiled bytecode (`__pycache__`, `*.pyc`). After you finish, the workflow recomputes every hash in both maps. **Any change in either map is tampering and an automatic rejection of the whole round** — no argument, no partial credit.
+Both maps are frozen. Do not edit, rename, move, delete or chmod any file in `frozen_tests`. Do not change any section, whole file, git exclude setting or symlink in the maps `frozen_config_sections` names. Do not add or change anything else that alters how the tests run: `conftest`, fixtures, test plugins, test-runner config (`addopts`, deselect, `-p no:`), env flags, snapshot files they read, compiled bytecode (`__pycache__`, `*.pyc`). After you finish, the workflow recomputes every hash in both maps. **Any change in either map is tampering and an automatic rejection of the whole round** — no argument, no partial credit.
 A routed hash violation on a path you did NOT edit (for example a tool cache rewritten by a commit hook) → `needs_human` naming the path and the tool that wrote it. Do not delete, restore or regenerate that path yourself: touching a frozen path is itself a change.
 Never special-case the tests in production code: no detecting the test runner, no hardcoding expected values, no branching on fixture data. The code must implement the criterion, not the visible examples.
 

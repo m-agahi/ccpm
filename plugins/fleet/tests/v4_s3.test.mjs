@@ -277,7 +277,7 @@ test("4.0.0 1988: the fleet's own settings file appearing in a fix_tests round p
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.deepEqual(out.result.refreeze_log[0].changed, [{ path: "tests/test_a.py", before: "ha", after: "ha2" }]);
+  assert.deepEqual(out.result.refreeze_log[0].changed, [{ path: "tests/test_a.py", change: "changed" }]);
 });
 
 test("4.0.0 1988 AC-1988-2: other bytes (the fleet's plus a newline) stop, and the reason names the before and after hashes", async () => {
@@ -531,10 +531,10 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "5.0.6");
+  assert.equal(p.fleet_version, "5.0.7");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
-  assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/5.0.6/scripts"), "no scripts dir or PATH check sealed");
+  assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/5.0.7/scripts"), "no scripts dir or PATH check sealed");
   assert.ok(!text.includes("DISPATCH"), "no role text or tier sealed");
   assert.deepEqual(Object.keys(out.result.cumulative).sort(), ["agents", "replans", "runs"]);
   const b = await runOne(s, BUILD(out.result.plan_ref));
@@ -589,7 +589,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 5\.0\.6/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 5\.0\.7/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });

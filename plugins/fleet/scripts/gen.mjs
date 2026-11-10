@@ -29,7 +29,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const WORKFLOW = join(HERE, "..", "workflows", "build-task-run.js");
 export const SCRIPTS = HERE;
 export const ROLES_DIR = join(HERE, "..", "roles");
-// the number of shipped programs (28 since 4.0.0; 29 since 5.0.3: plan_dsn; 30 since 5.0.5: ignored_diff; 31 since 5.0.6: build_dir)
+// the number of shipped programs (28 since 4.0.0; 29 since 5.0.3: plan_dsn; 30 since 5.0.5: ignored_diff; 31 since 5.0.6: build_dir; 31 in 5.0.7: hash_diff replaces ignored_diff)
 export const PROGRAM_COUNT = 31;
 // the number of shipped role prompts (5.0.0)
 export const ROLE_COUNT = 10;

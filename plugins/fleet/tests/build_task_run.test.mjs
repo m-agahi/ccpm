@@ -105,6 +105,9 @@ import {
   stateWriteCmd,
   parkOut,
   ignoredView,
+  mapView,
+  frozenMap,
+  scriptsSummary,
   countedCalls,
   roleTestEnv,
   buildEnvSites,
@@ -200,7 +203,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.6 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.7 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -220,12 +223,14 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
   assert.equal(pr.repo, "o/r");
   // coder gets the frozen map and the freeze ref
   const coder = inputsOf(call(out, "role:fleet-coder:r1").prompt);
-  // roles get plain files in frozen_tests and synthetic section keys apart
-  assert.deepEqual(coder.frozen_tests, { "tests/test_a.py": "ha", "tests/test_b.py": "hb" });
-  // role view: flat keys path#section, git:<k>, symlink:<rel>
-  // 4.0.0 (1987): the freeze ref is frozen too (read-only for the coder)
-  // 5.0.5 (ledger 2018): the ignored map as its digest and count
-  assert.deepEqual(coder.frozen_config_sections, { "pyproject.toml#tool.pytest": "hp", "git:fleetref:refs/fleet/l42/freeze": "T1", "ignored:*": ignoredView({})["*"] });
+  // 5.0.7 (ledger 2020): frozen_tests names the test files; the values are in
+  // the frozen maps' files, one per map, which frozen_config_sections names
+  assert.deepEqual(coder.frozen_tests, ["tests/test_a.py", "tests/test_b.py"]);
+  assert.deepEqual(Object.keys(coder.frozen_config_sections).sort(), ["files", "git", "ignored", "sections", "symlinks"]);
+  for (const f of Object.values(coder.frozen_config_sections)) assert.match(f, /^\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch\/hashes\/[a-z]+-[0-9a-f]{64}\.json$/);
+  assert.deepEqual(frozenMap(coder, "files"), { "tests/test_a.py": "ha", "tests/test_b.py": "hb" });
+  assert.deepEqual(frozenMap(coder, "sections"), { "pyproject.toml#tool.pytest": "hp" });
+  assert.deepEqual(frozenMap(coder, "ignored"), {});
   const cjIn = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
   assert.deepEqual(cjIn.frozen_tests, coder.frozen_tests);
   assert.equal(cjIn.code_base_ref, PC);
@@ -527,7 +532,7 @@ test("fix_tests routes to the test-judge, never the coder, then re-freezes", asy
   assert.ok(iJudge > 0 && iCoder2 > iJudge, "test-judge runs before the next coder round");
   const c2 = inputsOf(call(out, "role:fleet-coder:r2").prompt);
   assert.equal(c2.freeze_tree, "M3");
-  assert.equal(c2.frozen_tests["tests/test_a.py"], "ha2");
+  assert.equal(frozenMap(c2, "files")["tests/test_a.py"], "ha2");
   assert.ok(!c2.routed_findings.some((f) => f.target === "tests"));
 });
 
@@ -1101,8 +1106,8 @@ test("symlink keys go to frozen_config_sections, not frozen_tests", async () => 
   const out = await run(s, ARGS);
   noUnscripted(out);
   const c = inputsOf(call(out, "role:fleet-coder:r1").prompt);
-  assert.ok(!("symlink:lib" in c.frozen_tests));
-  assert.equal(c.frozen_config_sections["symlink:lib"], "../x");
+  assert.deepEqual(c.frozen_tests, ["tests/test_a.py", "tests/test_b.py"]);
+  assert.equal(frozenMap(c, "symlinks").lib, "../x");
 });
 
 // ---------------------------------------------------------------- per-role model from DISPATCH lines
@@ -1304,10 +1309,12 @@ test("code-judge gets hash_recheck built from the frozen and post-coder maps", a
   const out = await run(s, ARGS);
   noUnscripted(out);
   const rc = inputsOf(call(out, "role:fleet-code-judge:r1").prompt).hash_recheck;
-  assert.deepEqual(rc["files/tests/test_a.py"], { frozen: "ha", current: "ha", match: true });
-  assert.deepEqual(rc["sections/pyproject.toml#tool.pytest"], { frozen: "hp", current: "hp", match: true });
-  assert.deepEqual(rc["git/info/exclude"], { frozen: "g1", current: "g1", match: true });
-  assert.deepEqual(rc["symlinks/lib"], { frozen: "../x", current: "../x", match: true });
+  // 5.0.7 (ledger 2020): one row per map summary ("<sha256>/<count>")
+  for (const m of ["files", "sections", "git", "symlinks"]) {
+    const v = mapView(m, frozen[m])["*"];
+    assert.deepEqual(rc[m + "/*"], { frozen: v, current: v, match: true }, m);
+  }
+  assert.equal(rc["symlinks/*"].frozen.split("/")[1], "1");
   assert.ok(!("suspicious" in rc));
 });
 
@@ -1392,11 +1399,11 @@ test("S-2: roles get only criterion test files in frozen_tests; config files go 
   noUnscripted(out);
   for (const label of ["role:fleet-coder:r1", "role:fleet-code-judge:r1"]) {
     const i = inputsOf(call(out, label).prompt);
-    assert.deepEqual(i.frozen_tests, { "tests/test_a.py": "ha", "tests/test_b.py": "hb" }, label);
-    assert.equal(i.frozen_config_sections["conftest.py"], "hc");
-    assert.equal(i.frozen_config_sections[".gitignore"], "hg");
-    assert.equal(i.frozen_config_sections["setup.cfg"], "hs");
-    assert.equal(i.frozen_config_sections["pyproject.toml#tool.pytest"], "hp");
+    assert.deepEqual(i.frozen_tests, ["tests/test_a.py", "tests/test_b.py"], label);
+    assert.equal(frozenMap(i, "files")["conftest.py"], "hc");
+    assert.equal(frozenMap(i, "files")[".gitignore"], "hg");
+    assert.equal(frozenMap(i, "files")["setup.cfg"], "hs");
+    assert.equal(frozenMap(i, "sections")["pyproject.toml#tool.pytest"], "hp");
   }
 });
 
@@ -1469,7 +1476,7 @@ test("S-3: the frozen note explains UNPARSEABLE and symlink targets", async () =
   const out = await run(happy(), ARGS);
   const note = inputsOf(call(out, "role:fleet-coder:r1").prompt).frozen_tests_note;
   assert.match(note, /UNPARSEABLE/);
-  assert.match(note, /symlink:.*link targets?, not hashes/);
+  assert.match(note, /symlinks \(<rel>: link target, not a hash\)/);
 });
 
 test("workspace excludes the .hypothesis/ cache", async () => {
@@ -1619,11 +1626,12 @@ test("re-freeze after an approved fix_tests round updates the map and the log", 
       round: 1,
       freeze_tree_before: "T1",
       freeze_tree_after: "M3",
-      changed: [{ path: "tests/test_a.py", before: "ha", after: "ha2" }],
+      // 5.0.7 (ledger 2020): the kind of change, no hash value
+      changed: [{ path: "tests/test_a.py", change: "changed" }],
     },
   ]);
   const c2 = inputsOf(call(out, "role:fleet-coder:r2").prompt);
-  assert.equal(c2.frozen_tests["tests/test_a.py"], "ha2");
+  assert.equal(frozenMap(c2, "files")["tests/test_a.py"], "ha2");
   assert.equal(c2.freeze_tree, "M3");
   assert.equal(c2.freeze_ref, PC);
   assert.equal(c2.code_base_ref, PC);
@@ -5569,7 +5577,9 @@ const ARRAY_SITES = {
   // 5.0.4 (ledger 2013)
   "r.purged_paths @ formatFiles": "infra:purged_paths",
   // 5.0.5 (ledger 2018)
-  "r.paths @ explainIgnored": "infra:paths",
+  "r.changed @ expandKeys": "infra:changed",
+  "opts.args @ digestRetry": "parsed: the args the step sent (a script-built list)",
+  "r.frozen_changed @ formatFiles": "infra:frozen_changed",
   "rd.results @ writeBack": "infra:results",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   // 5.0.3 (ledger 2010)
@@ -5983,7 +5993,8 @@ test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebui
 // key fails the hasher step instead of reading as "nothing there".
 function hasherDigest(r, withChanged) {
   // 5.0.5: the program printed the ignored summary (runHasherRaw keeps it aside)
-  const o = { fingerprint: r.fingerprint, hashes: r.ignored_summary ? Object.assign({}, r.hashes, { ignored: r.ignored_summary }) : r.hashes };
+  // 5.0.7: every map's summary (runHasherRaw keeps them as summaries)
+  const o = { fingerprint: r.fingerprint, hashes: r.summaries ? r.summaries : r.ignored_summary ? Object.assign({}, r.hashes, { ignored: r.ignored_summary }) : r.hashes };
   // 4.0.0: the digest covers the program's self-hash and the scripts map
   if (r.program !== undefined) o.program = r.program;
   if (r.scripts !== undefined) o.scripts = r.scripts;
@@ -6118,7 +6129,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.6; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.7; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6302,8 +6313,10 @@ test("2.1.5 canonical JSON sorts keys by code point, as Python sort_keys does", 
     const out = runHasherRaw(wt, "hash", files);
     // the workflow accepts the program's digest for these keys
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
-    const o = { fingerprint: out.fingerprint, hashes: Object.assign({}, out.hashes, { ignored: out.ignored_summary }), program: out.program, scripts: out.scripts };
+    const o = { fingerprint: out.fingerprint, hashes: out.summaries, program: out.program, scripts: out.scripts };
     assert.equal(sha256(fn(o)), out.digest);
+    // 5.0.7: the keys are in the files map's file, in the same order
+    assert.equal(fn(out.hashes.files), out.mapText.files);
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }
@@ -6817,7 +6830,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.6\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.6 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.7\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.7 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -7472,7 +7485,10 @@ test("3.0.0 fixers: writers' test files are formatted before the ownership hash 
   assert.ok(l.indexOf("infra:format-tests:r1") < l.indexOf("role:fleet-test-judge:r1"));
   const fc = call(out, "infra:format-code:r1");
   assert.deepEqual(inputsOf(fc.prompt).select, { dirty: true });
-  assert.ok(inputsOf(fc.prompt).frozen.includes("tests/test_a.py"));
+  // 5.0.7 (ledger 2020): the frozen files map's file; the program reads its keys
+  // 5.0.7 review: a 12-hex handle of the frozen files map under scratch_dir
+  assert.match(inputsOf(fc.prompt).frozen, /^@[0-9a-f]{12}$/);
+  assert.ok(fc.prompt.includes(" '" + inputsOf(fc.prompt).frozen + "' "), "the program gets the @file argument as is");
   assert.ok(l.indexOf("role:fleet-coder:r1") < l.indexOf("infra:format-code:r1"));
   assert.ok(l.indexOf("infra:format-code:r1") < l.indexOf("infra:purge-bytecode:code-r1"));
   assert.ok(l.indexOf("infra:format-code:r1") < l.indexOf("hasher:post-coder:r1"));
@@ -7564,8 +7580,9 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
     assert.deepEqual(o.changed, ["a.py"]);
     assert.equal(readFileSync(join(home, "log"), "utf8").trim().split("\n")[0], "a.py", "the frozen test is never passed");
     const d = { program: o.program };
-    for (const k of ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths"]) d[k] = o[k];
+    for (const k of ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map"]) d[k] = o[k];
     assert.equal(o.digest, sha256(canon(d)));
+    assert.deepEqual(o.frozen_changed, []);
     // a hook that touches another path: reported, never settles, and never copied back
     const o2 = runF({ paths: ["a.py"] }, [], { TOUCH_OTHER: "1" });
     assert.ok(o2.changed.includes("other.txt"));
@@ -8507,7 +8524,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.6/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.7/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

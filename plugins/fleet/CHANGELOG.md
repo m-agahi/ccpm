@@ -1,5 +1,103 @@
 # Changelog
 
+## [5.0.7] - 2026-11-10
+
+Fleet 5.0.7 (ledger 2020): no relayed program output carries a per-file hash. Every hasher map
+goes to disk, and a relay that fails only on its digest is dispatched once more.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.7), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.7/scripts` dir.
+- Resume digests from 5.0.6 do not match: a `freeze_digest` a 5.0.6 stop returned, and a 5.0.6
+  run-state's `maps_digest`, are over the 5.0.6 maps. A 5.0.6 frozen resume is refused ("does not
+  match"); a 5.0.6 run-state stops at `resume` ("frozen maps changed"). Re-run the build from the
+  plan ref (`/build-task <plan_ref>`).
+
+### Fixed
+
+- 2020: run wf_108c5076-e06 (yadgarhq/iam-db, 5.0.6) failed at `hasher:fp-post:test-judge:r1`:
+  the relay agent copied the 19-entry `files` map and the `git` map of 64-hex values and
+  mis-copied one, so the digest check failed. 5.0.5 (ADR-1195) had moved only the ignored map to
+  disk. Models do not copy many 64-hex values exactly, even few of them.
+- `hasher.py` writes every map (`files`, `sections`, `git`, `symlinks`, `ignored`) to
+  `<scratch>/hashes/<map>-<sha256 of the file>.json`, with the 5.0.5 symlink anchoring, and relays
+  `{count, sha256, file}` per map. `ignored` keeps `settings`. `git` relays `inline`: the values
+  the script reads or moves itself (`core.hooksPath`, the run-state refs `fleetref:refs/fleet/*`).
+  The shipped programs' sha256 map is relayed as `{count, sha256}` and compared with the
+  workflow's own `PROGRAM_SHA256` table; a change stops at `hash` as before, but the stop names the
+  scripts dir, not the file (the preflight probe still names files). On the 19-file fixture the
+  relay went from 6615 bytes and 71 64-hex values to 1944 bytes and 13 (the summaries, the map
+  files' names, the program's self-hash, the programs' map digest and the output digest).
+- The script keeps each map as `{"*": "<sha256>/<count>"}` plus the inline keys, so every equality
+  use (judge fingerprints, freeze, `mapsDigest`, `freeze_digest`, resume) compares summaries.
+  Where a step routes by key, `hash_diff.py` (new, replaces `ignored_diff.py`; 31 programs) runs
+  as `infra:hash-diff:<step>`: it reads both states' files for the changed maps only, checks each
+  file's bytes against the sha256 in its name, and prints the changed `[map, key, kind]` rows (at
+  most 50, with the total and per-map counts), never a map value. The script checks the counts
+  against the relayed ones.
+- Non-weakening: the writers' ownership check, the judges' fingerprints, the re-freeze and the
+  post-coder check route each changed key as 5.0.6 did; tests record the 5.0.6 outcome of one
+  changed file, section, git config value and ignored file at each site. A comparison that fails
+  (missing or forged file, wrong count, no result) or lists fewer rows than changed is never
+  routed: the writers stop at `ownership`, the re-freeze at `hash` (an unrouted key), the
+  post-coder check stops at `hash` instead of routing to the coder.
+- Roles get names, not hashes: `frozen_tests` is the list of test files; `frozen_config_sections`
+  names each frozen map's file, which the coder and the code judge read; `hash_recheck` has one
+  row per map summary. The fixers' frozen list is the files map's handle `@<12 hex>`: `format_files.py` reads the keys
+  from the file and prints `frozen_changed`. `refreeze_log` entries are `{path, change}`.
+- A program relay that fails ONLY on the digest check (status ok, the shipped program, a digest
+  the relayed keys do not hash to) is dispatched once more to a fresh agent
+  (`<label>:digest-retry`), counted on the agent cap and named in the gate log. Read-only
+  programs only (hasher, hash_diff, read_state, verify_since, branch_scan, fleet_scan,
+  review_paths, callers, hook_surface, tf_gate, remote_head, precommit_ids, script_check); a
+  second miss, or any other contract failure, fails as in 5.0.6.
+
+- 2027: run wf_5cc06208-e0b stopped at test-judge check 4. Criteria with `guards_existing: false`
+  mixed new-behaviour examples with refusal or guard examples that already pass on the current
+  code (unknown id, soft-deleted record, expired token), and the test judge refuses a test that
+  already passes unless `guards_existing` is true. `scope-and-plan` now puts an example that
+  already holds in its OWN criterion with `guards_existing: true` and a `spec_quote`;
+  `plan-audit` verifies each example of a `guards_existing: false` criterion against the code and
+  returns `untestable_criteria` with the finding "split guard examples into a guards_existing=true
+  criterion" when one already holds. An example that already holds with no spec line to quote
+  is dropped from the criteria and listed under the plan's non-goals or in `dont_care` with a
+  one-line reason; the audit accepts that. `ROLE_SHA256` regenerated.
+
+- Review of #55: a comparison that lists no row for a changed map (and no overflow) fails
+  closed like any other expansion failure; a hash-diff the agent cap cannot fit stops at `cap`;
+  a `format_files` relay whose `frozen_map` is not the frozen map held stops at `hash` (tested).
+  The non-weakening table also covers a symlink change and an added and a deleted frozen file.
+
+### Known limits
+
+- No agent types a 64-hex value. `hash_diff.py` takes `<scratch>` and, per map,
+  `<map> <old> <new>`: the first 12 hex of each map file's sha256. It resolves each handle to exactly one
+  `<scratch>/hashes/<map>-<handle>*.json` (none or two: exit non-zero), checks the file's bytes
+  against its name, and prints the full shas (`resolved`) and its `args` inside its digest; the
+  script checks both against what it holds ("the program read other map files than the
+  summaries name" fails closed). The fixers' frozen map is `@<handle>` the same way;
+  `format_files.py` prints the full sha as `frozen_map`, checked by the script (stop_gate
+  `hash`). The coder and the code judge still get the map files' full paths, to read; they relay
+  nothing from them.
+- A read-only program relay whose only fault is that its program ran on other args than the step
+  sent (a value mis-typed) is dispatched once more as `<label>:args-retry` (hash_diff, tf_gate,
+  remote_head, hook_surface, precommit_ids), on the agent cap and gate-logged; a second one fails
+  as before. Writes are never retried. hash-diff runs on the hasher's tier (sonnet), once per
+  writer round in real runs (the test files change the `files` map) and on the re-freeze.
+- A step that routes by key lists at most 50 changed keys. A writer round or a re-freeze with
+  more than 50 changed keys stops (5.0.6 let an all-owned round through).
+- The script's own `opts.digest` never reaches the runtime's agent options.
+
+### Follow-ups
+
+- `hashes.git.inline` holds every `refs/fleet/*` ref of the repo (40-hex ids); it grows with the
+  number of fleet tasks in the repo. Keep only this task's refs inline and hash the rest.
+- Path lists that grow with the diff stay relayed: the hasher's `changed`, `review_paths`,
+  `fleet_scan.diff`, `verify_since`, `branch_scan`, `tf_gate.iac_files`, `changed_defs`,
+  `format_files` `files`/`changed`/`refused`, `callers`. They carry no 64-hex value; the workflow
+  routes on them path by path, so moving them needs a program per check.
+
 ## [5.0.6] - 2026-11-10
 
 Fleet 5.0.6 (ledger 2019): build output and caches go to a per-role dir outside the worktree, so
