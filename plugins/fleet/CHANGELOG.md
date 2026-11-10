@@ -28,11 +28,13 @@ commit. Ledger 2011: an optional `test_db_prefix` in `.fleet-test-db.json`.
   `needs_human` with stop_gate `db`, before any commit.
 - The post-commit gate at `infra:verify-plan-commit` is unchanged (`plan_files.py` is
   byte-identical) and stays the backstop.
+- Review nit: the planner role quotes only the scheme name; the inline DSN shape is gone, so a
+  planner cannot copy it into the plan.
 
 ### Added
 
-- 2011: yadgarhq/iam-db's tests run `DROP DATABASE IF EXISTS iam_db_<x>` and `CREATE DATABASE
-iam_db_<x>`. Each role user had ALL on its own `fleet_*` database only, so those failed with
+- 2011: yadgarhq/iam-db's tests run `DROP DATABASE IF EXISTS iam_db_<x>` and
+  `CREATE DATABASE iam_db_<x>`. Each role user had ALL on its own `fleet_*` database only, so they failed with
   ERROR 1044. New optional key `test_db_prefix` in `.fleet-test-db.json` (for example
   `"test_db_prefix":"iam_db_"`). With it, `db_up.py` also grants each role user
   ``ALL PRIVILEGES ON `iam\_db\_%`.*`` (each `_` escaped as `\_`, so the LIKE pattern matches the

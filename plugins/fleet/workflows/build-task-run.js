@@ -1782,7 +1782,7 @@ const ROLE_SHA256 = {
   "gate-change-nonweakening-sweep": "f22759af37de2d5df1cc47fa532197ef42ed37bd31f13c9fc52cc142a37040b5",
   "plan-audit": "7578a832d1c69147dbb467dab40721af5105c14a704f989acf89cc03a6c7f8cf",
   "pr-review": "0fc7353562f4c0555bc69b116988dbac1343da80ff260f6c5cab14637c1715e9",
-  "scope-and-plan": "ee40ddbc01a215005e0786de12c6c1d13d49a4573ffa727773968745c054f213"
+  "scope-and-plan": "b2c8c6a24e1157e0f6217fc5c3af185d3e9d6928ee3091cbfd5611eb66048143"
 };
 // ROLE_SHA256_END
 // The first DISPATCH line of each role file, written by gen.mjs from the same

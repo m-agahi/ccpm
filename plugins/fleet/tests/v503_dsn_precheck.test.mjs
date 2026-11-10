@@ -188,6 +188,8 @@ test("5.0.3 the planner role names the ban and the sanctioned wording", () => {
   assert.match(ROLE, /any case/i);
   assert.match(ROLE, /the YADGAR_TEST_DSN URL/);
   assert.match(ROLE, /plan commit/);
+  // review nit: the role quotes the scheme name only, never a DSN shape a planner could copy
+  assert.ok(!/mysql:\/\/[^`]/i.test(ROLE), "the role holds no mysql:// example");
 });
 
 // ---------------------------------------------------------------- non-weakening
