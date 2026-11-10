@@ -399,8 +399,18 @@ hooks are never bypassed. So nothing commits until the code judge approves.
   `<scratch>/hashes/ignored-<sha256>.json` and relays only `{count, sha256, settings, file}`
   (count and digest of every entry but `.claude/settings.local.json`, that file's hash inline), so
   no relayed field grows with the repo's file count; a change of digest or count stops the run as
-  before, and `ignored_diff.py` lists the changed paths (at most 20) for the stop text. A hasher
-  output over 64 KiB exits non-zero. `freeze_tree` is the tree at freeze; `code_tree` is the tree the code judge
+  before. Since 5.0.7 (ledger 2020) every map goes to disk the same way
+  (`<scratch>/hashes/<map>-<sha256>.json`) and the relay holds `{count, sha256, file}` per map, the
+  `git` map's `inline` values the script reads or moves itself (`core.hooksPath`, the run-state refs
+  `fleetref:refs/fleet/*`), and `{count, sha256}` of the shipped programs' map: no per-file hash is
+  relayed. The script compares the summaries; where a step routes by key (the writers' ownership
+  check, the re-freeze, the post-coder check) or names keys in a stop, `hash_diff.py`
+  (`infra:hash-diff:<step>`) reads both states' files, checks each against the sha256 in its name,
+  and lists the changed `[map, key, kind]` rows (at most 50, with the total), never a hash value.
+  A comparison that fails, or lists fewer rows than changed, is never routed (fail closed). A hasher
+  output over 64 KiB exits non-zero. A program relay that fails only on its digest is dispatched
+  once more to a fresh agent (`<label>:digest-retry`, on the agent cap, gate-logged); read-only
+  programs only. `freeze_tree` is the tree at freeze; `code_tree` is the tree the code judge
   judged. Test judge and code judge get `freeze_tree`, `code_tree` and `plan_commit`; diff
   production changes with `git diff <freeze_tree>`.
 - **Scope fence on the real changes** (every mode, not only `confirm: "auto"`). The post-coder
@@ -931,9 +941,9 @@ The hasher freezes every criterion test file, plus:
 
 The comparison runs in the script, never in an agent. A key that appears (for example a new
 `conftest.py`), disappears or changes rejects the coder round, whatever the code judge says. Roles
-receive only the criterion test files in `frozen_tests`. Everything else (whole-file runner config,
-`.gitignore` files, sections, ignore rules outside the worktree, symlinks) goes in
-`frozen_config_sections`; `symlink:` values are link targets, not hashes. Roles also receive
+receive the criterion test file names in `frozen_tests`, and in `frozen_config_sections` the path
+of each frozen map's file (`files`, `sections`, `git`, `symlinks`, `ignored`; since 5.0.7 the
+values live only there); `symlinks` values are link targets, not hashes. Roles also receive
 `freeze_ref` (HEAD at the latest freeze), `freeze_tree` and `code_base_ref` (HEAD at the first
 freeze).
 
@@ -964,7 +974,8 @@ after the purge. The judge fingerprint leaves the `suspicious` list out (a test 
 bytecode); the freeze and post-coder checks act on it. The writers, both judges and the coder get
 `test_env: {PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider"}` for every run of
 the frozen tests. The code judge also gets `hash_recheck`
-(`{"<map>/<key>": {frozen, current, match}}`) for its report; the script's own comparison decides.
+(`{"<map>/<key>": {frozen, current, match}}`, key `*` a whole map as `<sha256>/<count>`) for its
+report; the script's own comparison decides.
 
 Since 5.0.6 (ledger 2019) build output and caches go to a per-role dir outside the worktree. The
 workflow's `BUILD_ENV_ROWS` table (one row per tool: `CARGO_TARGET_DIR`, `PYTHONPYCACHEPREFIX`,

@@ -66,7 +66,7 @@ const SAMPLES = [
   "infra:db-up",
   "infra:db-down",
   // 5.0.5 (ledger 2018)
-  "infra:ignored-diff:writers:r1",
+  "infra:hash-diff:writers:r1",
   // 5.0.6 (ledger 2019)
   "infra:build-reset:writers:r1",
   "infra:build-clean",

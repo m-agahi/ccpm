@@ -266,15 +266,19 @@ export async function runOne(script, args0) {
     const label = opts.label;
     if (typeof prompt === "string" && (prompt.includes("python3 -I -c") || prompt.includes("<<'FLEET_") || prompt.includes("python3 -I - ")))
       throw new Error("AC-1993-1: prompt " + label + " pastes a program");
-    let r = await agentInner(prompt, opts);
-    if (r && typeof r === "object" && !rawResults.has(r)) r = fillPrograms(label, r, prompt);
+    // 5.0.7 (ledger 2020): an unscripted digest retry replays its step's script
+    // (a broken relay stays broken: two mismatches stop as before)
+    const base = label.replace(/:digest-retry$/, "");
+    const inner = base !== label && !(label in script) ? Object.assign({}, opts, { label: base, realLabel: label }) : opts;
+    let r = await agentInner(prompt, inner);
+    if (r && typeof r === "object" && !rawResults.has(r)) r = fillPrograms(base, r, prompt);
     const mut = script.__mutate;
-    if (mut && r && typeof r === "object" && (mut.label instanceof RegExp ? mut.label.test(label) : mut.label === label)) r = mut.fn(r, prompt, label);
+    if (mut && r && typeof r === "object" && (mut.label instanceof RegExp ? mut.label.test(base) : mut.label === base)) r = mut.fn(r, prompt, label);
     return r;
   };
   const agentInner = async (prompt, opts = {}) => {
     const label = opts.label;
-    calls.push({ label, prompt, opts });
+    calls.push({ label: opts.realLabel || label, prompt, opts });
     // 3.1.0: preflight returns the PATH check program's output (no IaC tool on PATH)
     if (label === "preflight" && script.preflight && typeof script.preflight === "object" && !("path_check" in script.preflight) && !script.preflight.__raw_path_check) {
       const pc = { tools: { ["terra" + "form"]: null, ["to" + "fu"]: null, ["t" + "fp"]: null, ["terra" + "grunt"]: null, ["dig" + "ger"]: null, ["atlan" + "tis"]: null }, args: [inputsOf(prompt).repo], path_problems: [] };
@@ -306,7 +310,7 @@ export async function runOne(script, args0) {
     // unscripted fixer-hook runs change nothing (3.0.0)
     if (!(label in script) && /^infra:format-(tests|code):/.test(label)) {
       const sel = inputsOf(prompt).select;
-      return withRelayDigest(label, { status: "ok", reason: "ran the fixers", note: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [], purged: 0, purged_paths: [] });
+      return withRelayDigest(label, { status: "ok", reason: "ran the fixers", note: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [] });
     }
     // 3.1.0: unscripted IaC pre-push gates find no IaC file in the PR diff
     if (!(label in script) && /^infra:tf-gate:/.test(label)) {
@@ -333,9 +337,9 @@ export async function runOne(script, args0) {
       return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
     // 5.0.6 (ledger 2019): unscripted build-dir resets and the teardown succeed
     if (!(label in script) && /^infra:build-(reset:|clean$)/.test(label)) return buildDirOut(inputsOf(prompt).args);
-    // 5.0.5 (ledger 2018): an unscripted comparison reads the registered maps
-    if (!(label in script) && /^infra:ignored-diff:/.test(label))
-      return fillPrograms(label, Object.assign({ status: "ok", reason: "compared" }, ignoredDiffOut(inputsOf(prompt).args)), prompt);
+    // 5.0.7 (ledger 2020): an unscripted comparison reads the registered maps
+    if (!(label in script) && /^infra:hash-diff:/.test(label))
+      return fillPrograms(label, Object.assign({ status: "ok", reason: "compared" }, hashDiffOut(inputsOf(prompt).args)), prompt);
     // unscripted build caller checks find no modified existing definition
     if (!(label in script) && /^infra:changed-defs:/.test(label)) return defsOut([]);
     // unscripted fleet-internal scans find no .fleet/ path in the PR diff
@@ -394,6 +398,16 @@ export async function runOne(script, args0) {
     if (raw) rawResults.add(r);
     // 5.0.0 (R2): a preflight stub with its own path_check still gets the full census
     if (label === "preflight" && !raw && !("ledger_tools" in r)) r.ledger_tools = LEDGER_TOOLS_ALL.slice();
+    // 5.0.7 (ledger 2020): format_files lists the changed paths that are
+    // frozen (a JSON list, or "@<files map>" read from the registry)
+    if (/^infra:format-(tests|code):/.test(label) && !raw && r && r.status === "ok" && Array.isArray(r.changed) && !("frozen_changed" in r)) {
+      const fz = inputsOf(prompt).frozen;
+      const keys = typeof fz === "string" && fz.startsWith("@") ? Object.keys(MAP_REG.get(fz.slice(1)) || {}) : Array.isArray(fz) ? fz : [];
+      r.frozen_changed = r.changed.filter((x) => keys.indexOf(x) >= 0).sort();
+      // a stub digest over the 5.0.6 keys covers the new key too
+      const k6 = K("format_files").filter((k) => k !== "frozen_changed");
+      if (typeof r.digest === "string" && r.digest === sha256(canon(pick(r, k6)))) r.digest = sha256(canon(pick(r, K("format_files"))));
+    }
     if (!raw) withRelayDigest(label, fillArgs(label, r, prompt));
     // 3.1.1: the workspace step relays the origin URL program's output; a stub
     // that gives only remote_url gets that program's output for it
@@ -403,18 +417,19 @@ export async function runOne(script, args0) {
     // the maps too) and list no changed paths
     if (label.startsWith("hasher:") && !raw && r.status === "ok") {
       if (!("hashes" in r)) r.hashes = JSON.parse(JSON.stringify(lastHashes || DEFAULT_HASHES));
-      // 5.0.5 (ledger 2018): a stub's ignored map travels as its summary
-      if (r.hashes && r.hashes.ignored && typeof r.hashes.ignored === "object" && !isSummary(r.hashes.ignored))
-        r.hashes.ignored = ignoredSummary(r.hashes.ignored, inputsOf(prompt).scratch_dir);
       if (!("changed" in r)) r.changed = [];
       // the real hasher sees the run-state refs the workflow's own state writes made
-      const g = r.hashes.git || (r.hashes.git = {});
+      // (5.0.7: in a summarised git map, its inline entries)
+      const g = r.hashes.git && isSummary(r.hashes.git) ? r.hashes.git.inline || (r.hashes.git.inline = {}) : r.hashes.git || (r.hashes.git = {});
       if (!Object.keys(g).some((k) => k.startsWith("fleetref:"))) Object.assign(g, fleetRefs);
       // 4.0.0 (1987): a scripted freeze ref is in the repo from then on
       else for (const k of Object.keys(g)) if (/^fleetref:refs\/fleet\/[^/]+\/freeze$/.test(k) && !(k in fleetRefs)) fleetRefs[k] = g[k];
       // a stub that models other refs only still sees the freeze ref
       for (const [k, v] of Object.entries(fleetRefs)) if (/\/freeze$/.test(k) && !(k in g)) g[k] = v;
-      lastHashes = r.hashes;
+      // 5.0.7 (ledger 2020): a stub's maps travel as their summaries (the
+      // maps are registered by file, as the program writes them)
+      lastHashes = JSON.parse(JSON.stringify(r.hashes));
+      r.hashes = summarizeHashes(r.hashes, inputsOf(prompt).scratch_dir);
       // the program's digest over what it printed (2.1.5)
       if (!("digest" in r)) {
         const o = { fingerprint: r.fingerprint, hashes: r.hashes };
@@ -563,13 +578,23 @@ export const CSHA = (m) => "c00000" + m;
 // flat prefixed keys and converted: "git:<k>" -> git, "symlink:<k>" ->
 // symlinks, a key with "#" -> sections, anything else -> files.
 // 5.0.5 (ledger 2018): the hasher relays a summary of the ignored map and
-// writes the map to <scratch>/hashes/ignored-<sha256 of the file>.json. A stub
-// may still give the map: the harness relays its summary, as the program
-// would, and keeps the map by file path for the ignored-diff stub.
+// writes the map to <scratch>/hashes/ignored-<sha256 of the file>.json.
+// 5.0.7 (ledger 2020): every map, as <map>-<sha256>.json. A stub may still
+// give the maps: the harness relays their summaries, as the program would, and
+// keeps each map by file path for the hash-diff stub.
 export const SETTINGS_LOCAL = ".claude/settings.local.json";
-const IGNORED_REG = new Map();
+export const HASH_MAP_NAMES = ["files", "sections", "git", "symlinks", "ignored"];
+const MAP_REG = new Map();
+export function registerMap(file, map) {
+  MAP_REG.set(file, map);
+}
+// 5.0.7: a role input's frozen map m, read from its file (as a role reads it)
+export function frozenMap(inputs, m) {
+  const f = inputs && inputs.frozen_config_sections && inputs.frozen_config_sections[m];
+  return f ? MAP_REG.get(f) : undefined;
+}
 export function registerIgnored(summary, map) {
-  IGNORED_REG.set(summary.file, map);
+  registerMap(summary.file, map);
 }
 const isSummary = (ig) => !!ig && typeof ig === "object" && typeof ig.count === "number";
 export function ignoredSummary(map, scratch) {
@@ -580,30 +605,55 @@ export function ignoredSummary(map, scratch) {
     settings: SETTINGS_LOCAL in map ? map[SETTINGS_LOCAL] : null,
     file: scratch + "/hashes/ignored-" + sha256(canon(map)) + ".json",
   };
-  registerIgnored(s, map);
+  registerMap(s.file, map);
   return s;
 }
-// the script's view of an ignored map: every entry but the settings file as
-// one key "*" ("<sha256>/<count>"), the settings file as itself
+const INLINE_GIT = (k) => k === "core.hooksPath" || k.startsWith("fleetref:");
+export function mapSummary(m, map, scratch) {
+  if (m === "ignored") return ignoredSummary(map, scratch);
+  const body = m === "git" ? Object.fromEntries(Object.entries(map).filter(([k]) => !INLINE_GIT(k))) : map;
+  const s = { count: Object.keys(body).length, sha256: sha256(canon(body)), file: scratch + "/hashes/" + m + "-" + sha256(canon(body)) + ".json" };
+  if (m === "git") s.inline = Object.fromEntries(Object.entries(map).filter(([k]) => INLINE_GIT(k)));
+  registerMap(s.file, body);
+  return s;
+}
+export function summarizeHashes(h, scratch) {
+  const o = Object.assign({}, h);
+  for (const m of HASH_MAP_NAMES) if (h[m] && typeof h[m] === "object" && !isSummary(h[m])) o[m] = mapSummary(m, h[m], scratch);
+  return o;
+}
+// the script's view of a map: the summary as one key "*" ("<sha256>/<count>")
+// plus the inline keys (ignored: the settings file; git: hooks path, refs)
+export function mapView(m, map) {
+  if (m === "ignored") return ignoredView(map);
+  const body = Object.fromEntries(Object.entries(map || {}).filter(([k]) => !(m === "git" && INLINE_GIT(k))));
+  const v = { "*": sha256(canon(body)) + "/" + Object.keys(body).length };
+  if (m === "git") for (const [k, x] of Object.entries(map || {})) if (INLINE_GIT(k)) v[k] = x;
+  return v;
+}
 export function ignoredView(map) {
   const rest = Object.fromEntries(Object.entries(map || {}).filter(([k]) => k !== SETTINGS_LOCAL));
   const v = { "*": sha256(canon(rest)) + "/" + Object.keys(rest).length };
   if (map && SETTINGS_LOCAL in map) v[SETTINGS_LOCAL] = map[SETTINGS_LOCAL];
   return v;
 }
-// the ignored-diff program over two registered maps (its output, unrelayed)
-export function ignoredDiffOut(args) {
-  const [fa, sa, ca, fb, sb, cb] = args;
-  const a = IGNORED_REG.get(fa);
-  const b = IGNORED_REG.get(fb);
-  const fail = (e) => ({ paths: [], total: null, error: e, args });
-  if (!a || !b) return fail("cannot read " + (a ? fb : fa));
-  const ra = Object.fromEntries(Object.entries(a).filter(([k]) => k !== SETTINGS_LOCAL));
-  const rb = Object.fromEntries(Object.entries(b).filter(([k]) => k !== SETTINGS_LOCAL));
-  if (sha256(canon(ra)) !== sa || sha256(canon(rb)) !== sb) return fail("a file does not match its digest");
-  if (String(Object.keys(ra).length) !== ca || String(Object.keys(rb).length) !== cb) return fail("a file does not match its count");
-  const keys = [...new Set(Object.keys(ra).concat(Object.keys(rb)))].sort().filter((k) => ra[k] !== rb[k]);
-  return { paths: keys.slice(0, 20), total: keys.length, error: null, args };
+// the hash-diff program over registered maps (its output, unrelayed)
+export function hashDiffOut(args) {
+  const out = { changed: [], total: null, counts: {}, error: null, args_sha256: sha256(canon(args)) };
+  const rows = [];
+  for (let i = 0; i < args.length; i += 3) {
+    const [m, fa, fb] = args.slice(i, i + 3);
+    const a0 = MAP_REG.get(fa);
+    const b0 = MAP_REG.get(fb);
+    if (!a0 || !b0) return Object.assign(out, { error: "cannot read " + (a0 ? fb : fa), counts: {} });
+    const drop = (x) => Object.fromEntries(Object.entries(x).filter(([k]) => !(m === "ignored" && k === SETTINGS_LOCAL)));
+    const a = drop(a0);
+    const b = drop(b0);
+    out.counts[m] = [Object.keys(a).length, Object.keys(b).length];
+    for (const k of [...new Set(Object.keys(a).concat(Object.keys(b)))].sort())
+      if (a[k] !== b[k]) rows.push([m, k, !(k in a) ? "added" : !(k in b) ? "removed" : "changed"]);
+  }
+  return Object.assign(out, { changed: rows.slice(0, 50), total: rows.length });
 }
 // 5.0.6 (ledger 2019): the build vars a role gets, one row per tool (kept
 // here apart from the workflow's BUILD_ENV_ROWS, so a drift there fails)
@@ -819,7 +869,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.6/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.7/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -936,6 +986,10 @@ export function redigest(label, r, prompt) {
   return r;
 }
 // the sha256 of every shipped program: what a hasher run prints as scripts
+// 5.0.7 (ledger 2020): the hasher relays {count, sha256} of that map
+export function scriptsSummary(map = allScripts()) {
+  return { count: Object.keys(map).length, sha256: sha256(canon(map)) };
+}
 export function allScripts() {
   return Object.fromEntries(PROGRAMS.map(([n]) => [n, programSha(n)]));
 }
@@ -977,8 +1031,8 @@ export const PROGRAM_LABELS = [
   // 4.0.0 (1981)
   [/^infra:db-up/, [["sweep", "db_sweep", K("db_sweep")], ["up", "db_up", K("db_up")]]],
   [/^infra:db-down$/, [["down", "db_down", K("db_down")]]],
-  // 5.0.5 (ledger 2018): the capped list of changed ignored paths
-  [/^infra:ignored-diff:/, [[null, "ignored_diff", K("ignored_diff")]]],
+  // 5.0.7 (ledger 2020): the capped list of changed hasher keys
+  [/^infra:hash-diff:/, [[null, "hash_diff", K("hash_diff")]]],
   // 5.0.6 (ledger 2019): the per-role build dirs
   [/^infra:build-reset:/, [[null, "build_dir", K("build_dir:reset")]]],
   [/^infra:build-clean$/, [[null, "build_dir", K("build_dir:clean")]]],
@@ -1023,7 +1077,7 @@ export function fillPrograms(label, r, prompt) {
     // the sha256sum line the same Bash call printed (4.0.0 security review)
     if (!("file_sha256" in o)) o.file_sha256 = programSha(name);
     // every hasher run hashes the shipped programs beside it
-    const extra = keys0 === "hasher" ? { scripts: "scripts" in o ? o.scripts : (o.scripts = allScripts()) } : {};
+    const extra = keys0 === "hasher" ? { scripts: "scripts" in o ? o.scripts : (o.scripts = scriptsSummary()) } : {};
     if (keys && (was === null || valid3)) o.digest = sha256(canon(Object.assign(pick(o, keys), extra, { program: o.program })));
   }
   return r;
@@ -1223,7 +1277,13 @@ export function runHasherRaw(wt, mode, files, baseTree) {
     if (r.status !== 0) throw new Error("hasher failed: " + r.stderr);
     const out = JSON.parse(r.stdout);
     out.ignored_summary = out.hashes.ignored;
-    out.hashes.ignored = JSON.parse(readFileSync(out.ignored_summary.file, "utf8"));
+    // 5.0.7: every map is on disk; the older assertions read the maps back
+    out.summaries = out.hashes;
+    out.hashes = Object.assign({}, out.hashes);
+    out.mapText = {};
+    for (const m of HASH_MAP_NAMES) out.hashes[m] = JSON.parse((out.mapText[m] = readFileSync(out.summaries[m].file, "utf8")));
+    Object.assign(out.hashes.git, out.summaries.git.inline);
+    out.stdout = r.stdout;
     return out;
   } finally {
     rmSync(scratch, { recursive: true, force: true });

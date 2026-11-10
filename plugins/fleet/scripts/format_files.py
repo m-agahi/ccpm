@@ -33,7 +33,27 @@ try:
 except Exception:
     _PROG = {'name': None, 'sha256': None}
 import glob, hashlib, json, os, re, shutil, stat, subprocess, sys, tempfile
-wt, sel, frozen = sys.argv[1], json.loads(sys.argv[2]), set(json.loads(sys.argv[3]))
+wt, sel = sys.argv[1], json.loads(sys.argv[2])
+def frozen_of(a):
+    # 5.0.7 (ledger 2020): a JSON list of paths, or @<file>: the hasher's
+    # files map (<scratch>/hashes/files-<sha256>.json; the bytes must hash to
+    # the name), whose keys are the frozen paths. The workflow holds that
+    # map's summary only.
+    if not a.startswith('@'):
+        return set(json.loads(a))
+    p = a[1:]
+    m = re.match(r'^files-([0-9a-f]{64})\.json$', os.path.basename(p))
+    if not os.path.isabs(p) or not m:
+        sys.exit('frozen map is not an absolute files-<sha256>.json path: ' + p)
+    with open(p, 'rb') as fh:
+        data = fh.read()
+    if hashlib.sha256(data).hexdigest() != m.group(1):
+        sys.exit('frozen map does not match its sha256: ' + p)
+    d = json.loads(data)
+    if not isinstance(d, dict):
+        sys.exit('frozen map is not a JSON object: ' + p)
+    return set(d)
+frozen = frozen_of(sys.argv[3])
 scratch_root, tmo = sys.argv[4], int(sys.argv[5])
 # no PATH entry inside the worktree or the scratch dir: pre-commit and the
 # hooks it runs resolve their tools as the agent's shell would, minus the repo
@@ -70,6 +90,8 @@ PURGED_CAP = 50
 def done(**k):
     out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': [], 'purged': len(PURGED), 'purged_paths': sorted(PURGED)[:PURGED_CAP]}
     out.update(k)
+    # 5.0.7: the changed paths that are frozen (the workflow stops on any)
+    out['frozen_changed'] = sorted(set(out['changed']) & frozen)
     out['program'] = _PROG
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
     print(json.dumps(out, sort_keys=True, ensure_ascii=False))

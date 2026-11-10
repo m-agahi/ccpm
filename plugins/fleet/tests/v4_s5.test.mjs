@@ -10,7 +10,7 @@ import { spawnSync as rawSpawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ignoredView, buildAssignsRe, roleTestEnv, buildEnvSites } from "./harness.mjs";
+import { mapView, ignoredView, buildAssignsRe, roleTestEnv, buildEnvSites } from "./harness.mjs";
 import {
   ARGS,
   PC,
@@ -175,10 +175,10 @@ test("1991: a full-path plan keeps one writer per criterion", async () => {
 const HEX64 = /^[0-9a-f]{64}$/;
 function mapsDigestOf(h) {
   const o = {};
-  for (const m of ["files", "sections", "git", "symlinks", "ignored"]) o[m] = Object.assign({}, h[m] || {});
+  // 5.0.7 (ledger 2020): the script keeps each map's digest and count, and
+  // the inline keys (5.0.5: ignored only)
+  for (const m of ["files", "sections", "git", "symlinks", "ignored"]) o[m] = mapView(m, h[m] || {});
   for (const k of Object.keys(o.git)) if (k.startsWith("fleetref:")) delete o.git[k];
-  // 5.0.5 (ledger 2018): the script keeps the ignored map's digest and count
-  o.ignored = ignoredView(h.ignored);
   return sha256(canon(o));
 }
 const freezeRefOf = (planRef) => planRef.plan_ref.replace(/\/plan$/, "/freeze");

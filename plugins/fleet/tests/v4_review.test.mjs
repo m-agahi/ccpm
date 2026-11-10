@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ignoredView } from "./harness.mjs";
+import { mapView, ignoredView } from "./harness.mjs";
 import {
   spawnSync,
   ARGS,
@@ -292,10 +292,10 @@ function refrozenCoderStop() {
 }
 function mapsDigestOf(h) {
   const o = {};
-  for (const m of ["files", "sections", "git", "symlinks", "ignored"]) o[m] = Object.assign({}, h[m] || {});
+  // 5.0.7 (ledger 2020): the script keeps each map's digest and count, and
+  // the inline keys (5.0.5: ignored only)
+  for (const m of ["files", "sections", "git", "symlinks", "ignored"]) o[m] = mapView(m, h[m] || {});
   for (const k of Object.keys(o.git)) if (k.startsWith("fleetref:")) delete o.git[k];
-  // 5.0.5 (ledger 2018): the script keeps the ignored map's digest and count
-  o.ignored = ignoredView(h.ignored);
   return sha256(canon(o));
 }
 
