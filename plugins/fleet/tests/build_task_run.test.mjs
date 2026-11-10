@@ -5521,6 +5521,7 @@ const ARRAY_SITES = {
   "prior.criteria_by_round @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
   "r.defs @ buildCallerCheck": "infra:defs",
   "p.enum @ roleSchema": "parsed: a role schema property (the 1984 STRICT loop), not an agent result",
+  "p.enum @ nullable": "parsed: a PROGRAM_OUT schema property (4.0.3), not an agent result",
   "pf.changed_symbols @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
   "o.files @ planScopeFiles": "parsed: repo_obligations of the sealed plan facts",
   "r.files @ formatFiles": "infra:files",
@@ -10653,6 +10654,12 @@ function jsPathRecheck(agentStub) {
     // 4.0.2 (1997): the PATH re-check goes through infraCall (schema and file_sha256 rule)
     constBlock("PROGRAM_SLOTS", "\n];") +
     constBlock("FILE_SHA_HEX", ";\n") +
+    // 4.0.3 (1998): the typed program outputs programSchema merges at each slot
+    constBlock("STRS", ";\n") +
+    constBlock("BOOL", ";\n") +
+    constBlock("INT", ";\n") +
+    constBlock("STR_LISTS", ";\n") +
+    constBlock("PROGRAM_OUT", "\n};") +
     constBlock("EMITTED_CMDS", ";\n") +
     'const state = { repo: "/r", nonce: "' + NONCE + '", pathChecks: 0, agents: 0, scriptsDir: "' + SCRIPTS_DIR + '" };\n' +
     // 4.0.0: the one program this runtime runs
@@ -10660,7 +10667,7 @@ function jsPathRecheck(agentStub) {
     "function programTable() { return { path_check: PROGRAM_SHA256.path_check }; }\n" +
     "function gate() {}\nfunction halt(status, msg, stopGate) { const e = new Error(msg); e.halt = { status, stopGate }; throw e; }\n" +
     'function nonced(p) { return p + "\\nRun nonce: " + state.nonce; }\n';
-  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel", "programSlots", "programSchema", "fileShaRule", "infraCall", "emitProg"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
+  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel", "programSlots", "nullable", "programSchema", "fileShaRule", "infraCall", "emitProg"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
   return new Function("agent", consts + fns + "\nreturn pathRecheck;")(agentStub);
 }
 
