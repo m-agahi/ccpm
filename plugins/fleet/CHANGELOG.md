@@ -53,6 +53,15 @@ goes to disk, and a relay that fails only on its digest is dispatched once more.
   review_paths, callers, hook_surface, tf_gate, remote_head, precommit_ids, script_check); a
   second miss, or any other contract failure, fails as in 5.0.6.
 
+- 2027: run wf_5cc06208-e0b stopped at test-judge check 4. Criteria with `guards_existing: false`
+  mixed new-behaviour examples with refusal or guard examples that already pass on the current
+  code (unknown id, soft-deleted record, expired token), and the test judge refuses a test that
+  already passes unless `guards_existing` is true. `scope-and-plan` now puts an example that
+  already holds in its OWN criterion with `guards_existing: true` and a `spec_quote`;
+  `plan-audit` verifies each example of a `guards_existing: false` criterion against the code and
+  returns `untestable_criteria` with the finding "split guard examples into a guards_existing=true
+  criterion" when one already holds. `ROLE_SHA256` regenerated.
+
 ### Known limits
 
 - `infra:hash-diff:<step>` runs the program on the map files' paths, which hold 64-hex names (two
