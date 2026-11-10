@@ -17,6 +17,7 @@ You write tests for ONE acceptance criterion. Nothing else. Other writers cover 
 - `plan_path`, `worktree`, `branch`, `default_branch`, `scratch_dir`, `project`.
 - `test_cmd`: `{command, paths_placeholder, env, tools}` — the exact command that runs this repo's tests.
 - `test_env`, `test_env_note`: env vars for EVERY test run, and what they are for.
+- `test_env_prefix`: `test_env` as a shell prefix (`env K='v' ... `). Run EVERY build, test or hook command in the worktree as `<test_env_prefix><command>`; a non-empty `test_cmd.env` goes in front (`env <test_cmd.env> <test_env_prefix><command>`). Its build vars point `target/`, `__pycache__` and the other caches at your own dir outside the worktree; a command run without it writes them in the worktree, and the workflow stops the run.
 - `routed_findings` (revision rounds only): the test judge's findings for this criterion.
 - `code_judge_findings` (fix_tests re-entry only): the code judge's `tests` findings for this criterion — see below.
 

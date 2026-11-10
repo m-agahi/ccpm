@@ -1,5 +1,66 @@
 # Changelog
 
+## [5.0.6] - 2026-11-10
+
+Fleet 5.0.6 (ledger 2019): build output and caches go to a per-role dir outside the worktree, so
+a Rust, Python or Node run no longer stops at the next hasher because a test run rebuilt
+`target/` or wrote a cache.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.6), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.6/scripts` dir.
+
+### Fixed
+
+- 2019: fleet 5.0.5 compares every ignored file of the worktree at each hasher point. A Rust role
+  that runs `cargo test` rebuilds `target/` in the worktree, so every Rust run stopped at the next
+  hasher (stop_gate `ownership`, "ignored path written: target/..."). Node build output outside
+  `node_modules` (`.turbo/`, `.next/`, `tsconfig.tsbuildinfo`, jest's `coverage/`) hits the same
+  class. Python's caches (`__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`) and a
+  top-level `.coverage` never did: the hasher leaves them out of the ignored map
+  (`IGNORED_CACHE`, `OUTPUT_FILES`); the new vars keep them out of the worktree all the same.
+- Max's ruling: the check stays exactly as strict (no exemption, no allowance for `target/`);
+  the build output moves out of the worktree. One table, `BUILD_ENV_ROWS` in the workflow, gives
+  each tool's env var and its path under the role's own dir
+  `<scratch>/build/<nonce>/<key>/`: `CARGO_TARGET_DIR`, `PYTHONPYCACHEPREFIX`, `MYPY_CACHE_DIR`,
+  `RUFF_CACHE_DIR`, `COVERAGE_FILE`, `TURBO_CACHE_DIR` and `TMPDIR`. Adding a tool is one row.
+- Every role that builds or tests in the worktree gets these vars in its `test_env`, and the
+  same vars as `test_env_prefix`, the exact shell prefix (`env K='v' ... `) it puts in front of
+  every build, test or hook command: the test writers (key `w-<criterion>-r<round>`, or
+  `w-short-r<round>`; parallel writers never share a dir), the test judge (`tjudge-r<n>`), the
+  coder (`coder-r<m>`), the code judge (`cjudge-r<m>`), pr-review (`review-v<k>`) and the sweep
+  (`sweep-v<k>`). pr-review and the sweep now get `test_env` with or without a test database.
+  The repo's hooks in the commit step (`commit-r<m>`) and the push (`push`, `push-p<n>`) get them
+  in their hook env by script (never `PYTEST_ADDOPTS`, as in 5.0.4). The role files that run
+  commands say: run every build, test or hook command with exactly that prefix.
+- New program `build_dir.py` (31 programs). `reset` deletes and recreates each role's dir, with
+  only an empty `tmp/`, right before the role runs (`infra:build-reset:<step>`, counted in the
+  agents but not against the cap, like the PATH re-checks; each comes before its role's PATH
+  re-check). The paths are predictable, so this is what keeps a role from reading output another
+  role or an earlier run left there, such as a planted pyc under the bytecode prefix
+  (CPython reads bytecode from `PYTHONPYCACHEPREFIX` when it is set). A symlinked component or
+  any failure exits non-zero and stops the run. `clean` deletes `<scratch>/build` at the end of
+  every build run that reset a dir (`infra:build-clean`, soft: a failure is logged), and logs the
+  bytes it freed.
+- The hasher comparison is unchanged. A command run without the prefix writes in the worktree
+  and stops the run where 5.0.5 stopped it; the stop text now names the likely cause after the
+  last ignored path ("likely cause: a build or test command ran without the fleet build env,
+  test_env_prefix, ...").
+
+### Not covered (left in the worktree)
+
+- Tools with no env var for their in-repo output: `.pytest_cache` in a hook run (roles already
+  run pytest with `-p no:cacheprovider`; `PYTEST_ADDOPTS` stays unset for hooks, see 5.0.4, and
+  `-o cache_dir=` would clobber the repo's own setting), Next.js `.next/`, `tsconfig.tsbuildinfo`,
+  jest's `coverageDirectory`, `.eslintcache`, Hypothesis's `.hypothesis/`. Vite's default cache is
+  under `node_modules/`, which the hasher skips.
+- `GOCACHE` and the npm cache are outside the repo by default and are not set: per role they would
+  only cost a cold build or download each time.
+- `infra:format-plan` (plan mode) runs the hooks in the worktree without the build vars: it runs
+  before the build's first hasher, so its output is part of the baseline and cannot stop a run.
+  `infra:format-tests` / `format-code` run the hooks in a scratch checkout outside the worktree.
+
 ## [5.0.5] - 2026-11-10
 
 Fleet 5.0.5 (ledger 2018): the hasher relays a digest of the ignored map, never the map, and a

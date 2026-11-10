@@ -23,6 +23,7 @@ You judge the coder's change. The coder's report is a CLAIM. Re-derive every res
 - `prior_findings`: the findings still pending from the last judged step: the previous code-judge round's `code` findings, a review's blocking findings, an obligations-gate finding, or a commit or push hook rejection (`[]` in round 1). When a coder round in between was rejected without a judge (contract drift or a frozen-hash change), its message is appended to them. See "Prior findings".
 - `test_cmd`: `{command, paths_placeholder, env, tools}` — the exact command that runs this repo's tests.
 - `test_env`: env vars for EVERY test run; may carry a DSN for a throwaway database, under the env name the repo declares.
+- `test_env_prefix`: `test_env` as a shell prefix (`env K='v' ... `). Run EVERY build, test or hook command in the worktree as `<test_env_prefix><command>`; a non-empty `test_cmd.env` goes in front (`env <test_cmd.env> <test_env_prefix><command>`). Its build vars point `target/`, `__pycache__` and the other caches at your own dir outside the worktree; a command run without it writes them in the worktree, and the workflow stops the run.
 - `repo_obligations` (absent → `[]`): `[{id, kind, rule_source, files, instruction, check_cmd?, check_cmd_rejected?}]`. `check_cmd` is a read-only command Max approved verbatim; the workflow script never runs it, and you run it in check 10. `check_cmd_rejected` was refused: never run it.
 - `held_out_results`, `script_findings`: in this release both arrive as `{status: "not_run", reason}`. See "Gates not run".
 

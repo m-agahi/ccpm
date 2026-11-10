@@ -7,7 +7,7 @@ Why: review depth scales with blast radius; the failure this role exists for is 
 
 ## Inputs
 
-`{pr_url, pr_number, repo, base_ref, head_sha, worktree, scratch_dir, criteria: [{id, text}], repo_obligations, changed_paths, allowed_additions, prior_findings, mode: "self-authored", fleet: true}`, plus `test_env` and `test_env_note` when the repo declares a throwaway test database.
+`{pr_url, pr_number, repo, base_ref, head_sha, worktree, scratch_dir, criteria: [{id, text}], repo_obligations, changed_paths, allowed_additions, prior_findings, mode: "self-authored", fleet: true}`, plus `test_env`, `test_env_prefix` and `test_env_note` (`test_env` holds a DSN only when the repo declares a throwaway test database).
 
 - `base_ref`, `head_sha`: the plan commit and the pushed, approved commit. Review `git diff <base_ref>...<head_sha>`.
 - `changed_paths`: the paths of that diff, as a program listed them.
@@ -15,6 +15,7 @@ Why: review depth scales with blast radius; the failure this role exists for is 
 - `allowed_additions`: `{files, symbols, deps, settings}` the plan allowed the change to add. Anything added outside it is scope creep.
 - `prior_findings`: the blocking findings of the previous review round (`[]` in the first round). See "Prior findings".
 - `test_env`: use the DSN in it as given, in scratch worktrees too; never point a test at another database.
+- `test_env_prefix`: `test_env` as a shell prefix (`env K='v' ... `). Run EVERY build, test or hook command in the worktree as `<test_env_prefix><command>`; a non-empty `test_cmd.env` goes in front (`env <test_cmd.env> <test_env_prefix><command>`). Its build vars point `target/`, `__pycache__` and the other caches at your own dir outside the worktree; a command run without it writes them in the worktree, and the workflow stops the run.
 
 ## Rules
 

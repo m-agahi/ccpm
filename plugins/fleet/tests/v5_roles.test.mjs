@@ -22,7 +22,7 @@ import { SOURCE, ARGS, happy, run, runOne, spawnSync, inputsOf, ROLE_NAMES, ROLE
 async function realProbe(mutate) {
   const home = mkdtempSync(join(tmpdir(), "fleet-roles-probe-"));
   try {
-    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.5");
+    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.6");
     mkdirSync(join(ver, "scripts"), { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(ver, "scripts", n + ".py"));
     cpSync(ROLES_SRC, join(ver, "roles"), { recursive: true });
@@ -103,14 +103,15 @@ test("5.0.0 R1: ROLE_DISPATCH is generated from each file's first DISPATCH line;
   }
 });
 
-test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what 4.0.3 dispatched (plan 17, build 50)", async () => {
+test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what 4.0.3 dispatched (plan 17, build 50; 5.0.6: 58)", async () => {
   assert.ok(!existsSync(join(SCRIPTS_SRC, "role_files.py")), "role_files.py is deleted");
   assert.doesNotMatch(SOURCE, /role_files|role-relay|roleRelay/);
   const out = await run(happy(), Object.assign({}, ARGS, { confirm: "ask" }));
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.plan.calls.length, 17, out.plan.labels.join(", "));
-  assert.equal(out.build.calls.length, 50, out.build.labels.join(", "));
+  // 5.0.6 (ledger 2019): + 7 build-dir resets and the teardown
+  assert.equal(out.build.calls.length, 58, out.build.labels.join(", "));
   for (const c of out.calls) assert.ok(!String(c.prompt).includes("agent_prompt_get"), c.label);
 });
 
@@ -237,7 +238,7 @@ test("5.0.0 R1: plan mode seals history.preflight {fleet_version, role_sha256}, 
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const p = JSON.parse(s.__store[out.result.plan_ref.plan_commit]).history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "5.0.5");
+  assert.equal(p.fleet_version, "5.0.6");
   assert.deepEqual(p.role_sha256, PIN);
 });
 

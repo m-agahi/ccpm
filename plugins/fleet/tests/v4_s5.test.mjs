@@ -10,7 +10,7 @@ import { spawnSync as rawSpawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ignoredView } from "./harness.mjs";
+import { ignoredView, buildAssignsRe, roleTestEnv } from "./harness.mjs";
 import {
   ARGS,
   PC,
@@ -358,8 +358,9 @@ test("AC-1981-1: with a declaration the database is up before the planner; every
   assert.equal(w1env.PYTHONDONTWRITEBYTECODE, "1");
   assert.ok(!JSON.stringify(w1env).includes("fleet_w_ac2"));
   // the repo's hooks get their own database in the commit step and the push
-  assert.match(call(out.build, "infra:commit:r1").prompt, /env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 YADGAR_TEST_DSN='mysql:\/\/fleet_hooks:[0-9a-f]{32}@127\.0\.0\.1:40000\/fleet_hooks' git /);
-  assert.match(call(out.build, "infra:push").prompt, /`env YADGAR_TEST_DSN='mysql:\/\/[^']+\/fleet_hooks' git -C <main_worktree> push -u origin <branch>`/);
+  // 5.0.6 (ledger 2019): after the build vars of the step's own dir
+  assert.match(call(out.build, "infra:commit:r1").prompt, new RegExp("env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 " + buildAssignsRe("commit-r1") + " YADGAR_TEST_DSN='mysql:\\/\\/fleet_hooks:[0-9a-f]{32}@127\\.0\\.0\\.1:40000\\/fleet_hooks' git "));
+  assert.match(call(out.build, "infra:push").prompt, new RegExp("`env " + buildAssignsRe("push") + " YADGAR_TEST_DSN='mysql:\\/\\/[^']+\\/fleet_hooks' git -C <main_worktree> push -u origin <branch>`"));
   // each run removes its own database at the end
   assert.equal(out.plan.labels[out.plan.labels.length - 1], "infra:db-down");
   assert.equal(out.build.labels[out.build.labels.length - 1], "infra:db-down");
@@ -380,8 +381,9 @@ test("1981: no declaration starts no database and changes no role input", async 
   const out = await run(happy(), ARGS);
   assert.ok(!out.labels.some((l) => /db-(up|down)/.test(l)), out.labels.join(", "));
   assert.equal(inputsOf(call(out, "role:scope-and-plan").prompt).test_env, undefined);
-  assert.deepEqual(inputsOf(call(out, "role:fleet-coder:r1").prompt).test_env, { PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" });
-  assert.match(call(out.build, "infra:commit:r1").prompt, /env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 git /);
+  // 5.0.6 (ledger 2019): the build vars of the role's own dir, never a DSN
+  assert.deepEqual(inputsOf(call(out, "role:fleet-coder:r1").prompt).test_env, roleTestEnv("coder-r1"));
+  assert.match(call(out.build, "infra:commit:r1").prompt, new RegExp("env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 " + buildAssignsRe("commit-r1") + " git "));
 });
 
 test("AC-1981-2: a coder halt still removes the database, and the halt reason stays", async () => {

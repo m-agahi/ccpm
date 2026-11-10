@@ -26,7 +26,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { HERE, SCRIPTS_SRC, ARGS, happy, runOne, call, spawnSync, sh, K, sha256, canon, planRefFor, buildArgs } from "./harness.mjs";
+import { HERE, SCRIPTS_SRC, ARGS, happy, runOne, call, spawnSync, sh, K, sha256, canon, planRefFor, buildArgs, buildAssignsRe } from "./harness.mjs";
 
 const FORMAT = join(SCRIPTS_SRC, "format_files.py");
 const WORKFLOW = join(HERE, "..", "workflows", "build-task-run.js");
@@ -369,7 +369,8 @@ test("5.0.4 2013: the workflow relays the purge result and fails closed on a mis
 test("5.0.4 2013: the hooks that run in the real worktree write no bytecode (format-plan and the commit step)", async () => {
   const out = await buildWith(null);
   const p = call(out, "infra:commit:r1").prompt;
-  assert.match(p, /`env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 git /);
+  // 5.0.6 (ledger 2019): the build vars of the commit's own dir follow
+  assert.match(p, new RegExp("`env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 " + buildAssignsRe("commit-r1") + " git "));
   assert.ok(!/PYTEST_ADDOPTS/.test(p), "the repo's own PYTEST_ADDOPTS is left alone");
   const plan = await runOne(happy(), ARGS);
   assert.match(call(plan, "infra:format-plan").prompt, /`cd <worktree> && PYTHONDONTWRITEBYTECODE=1 pre-commit run --files <plan_path>`/);
