@@ -1818,9 +1818,9 @@ const ROLE_SHA256 = {
   "fleet-test-judge": "0b288f9221703e5534ba13b8ba31d242ecdd3663ceca12dba0d63fd57c4a301a",
   "fleet-test-writer": "ea3a3490bd986a1bf90bf01a8494620b819959d1bb4f1247d914e8b1d495914d",
   "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
-  "plan-audit": "2c6d07597671a05e2f8ff85637a8032089bc979316e9b4bd4af4d3f430bca216",
+  "plan-audit": "084fe730cc8ecb5cf8712b164bb763cb9bbe97e18bc3cc04e82480ba158de984",
   "pr-review": "d7e615a662a9a25fa7cf3b7d87146ac784bf5f0a7282ecc4bb649d0486103859",
-  "scope-and-plan": "ed7fdaf7432def90daef6c56355045e16c470bcb0077b35214c585c15495013c"
+  "scope-and-plan": "f035add6611148ac4167f293f2340b9247efc77a590a5977ea4f9d99ac6da90a"
 };
 // ROLE_SHA256_END
 // The first DISPATCH line of each role file, written by gen.mjs from the same
@@ -4148,6 +4148,8 @@ async function expandKeys(keys, a, b, tag, phaseName, errGate) {
   }
   let r = null;
   if (!why) {
+    // a comparison the cap cannot fit stops at cap, never as a routed key
+    reserve(1, "infra:hash-diff:" + tag);
     r = await softDispatch("infra:hash-diff:" + tag, hashDiffPrompt({ args }), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, digest: "hash_diff", args });
     const digestOk = !!r && r.status === "ok" && relayDigestOk(r, progKeys("hash_diff"), "hash_diff");
     const argsOk = digestOk && canonical(r.args) === canonical(args);
@@ -4158,7 +4160,9 @@ async function expandKeys(keys, a, b, tag, phaseName, errGate) {
     why = !r ? "no result" : r.status !== "ok" ? "the step returned " + r.status + ": " + String(r.reason || "no reason").slice(0, 300) : !digestOk ? "the relay does not match the program's digest" : !argsOk ? "the program ran on other arguments than the workflow sent" : !relayed ? "the program read other map files than the summaries name" : typeof r.error === "string" && r.error ? r.error
       : !rowsOk ? "no usable key list"
       : !maps.every((m) => canonical(r.counts && r.counts[m]) === canonical([countOf(a[m]), countOf(b[m])])) ? "a map file does not hold its relayed count"
-      : r.total === 0 ? "no key listed although the digests differ" : null;
+      : r.total === 0 ? "no key listed although the digests differ"
+      // review SF2: every changed map has a row, unless the overflow row covers it
+      : r.total === r.changed.length && maps.find((m) => !r.changed.some((w) => w[0] === m)) ? "the " + maps.find((m) => !r.changed.some((w) => w[0] === m)) + " map changed but no key of it is listed" : null;
   }
   if (why && errGate) halt("needs_human", "hasher maps " + tag + ": the " + maps.join(", ") + " map(s) changed and the key list is unavailable: " + why + "; a key is never routed unseen", errGate);
   const out = [];

@@ -37,3 +37,8 @@ test("5.0.7 2027: plan-audit refuses a guards_existing=false criterion with an e
 test("5.0.7 2027: the test judge's check 4 is the rule both texts state", () => {
   assert.ok(role("fleet-test-judge").includes("A test that already PASSES is a finding unless `guards_existing` is true."));
 });
+
+test("5.0.7 review SF3: an example that holds today with no spec line is dropped to non-goals or dont_care, never a guards_existing=false criterion", () => {
+  assert.ok(role("scope-and-plan").includes("An example that already holds but has no spec or doc line to quote is dropped from the criteria: list it under the plan's non-goals or in `dont_care`, with a one-line reason. It never goes in a `guards_existing: false` criterion."));
+  assert.ok(role("plan-audit").includes("An example that already holds, has no spec line, and is listed under the plan's non-goals or in `dont_care` with a one-line reason is correct: no finding."));
+});

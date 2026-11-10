@@ -60,12 +60,19 @@ goes to disk, and a relay that fails only on its digest is dispatched once more.
   already holds in its OWN criterion with `guards_existing: true` and a `spec_quote`;
   `plan-audit` verifies each example of a `guards_existing: false` criterion against the code and
   returns `untestable_criteria` with the finding "split guard examples into a guards_existing=true
-  criterion" when one already holds. `ROLE_SHA256` regenerated.
+  criterion" when one already holds. An example that already holds with no spec line to quote
+  is dropped from the criteria and listed under the plan's non-goals or in `dont_care` with a
+  one-line reason; the audit accepts that. `ROLE_SHA256` regenerated.
+
+- Review of #55: a comparison that lists no row for a changed map (and no overflow) fails
+  closed like any other expansion failure; a hash-diff the agent cap cannot fit stops at `cap`;
+  a `format_files` relay whose `frozen_map` is not the frozen map held stops at `hash` (tested).
+  The non-weakening table also covers a symlink change and an added and a deleted frozen file.
 
 ### Known limits
 
-- No agent types a 64-hex value. `hash_diff.py` takes `<scratch>` and, per map, `<map> <old>
-<new>`: the first 12 hex of each map file's sha256. It resolves each handle to exactly one
+- No agent types a 64-hex value. `hash_diff.py` takes `<scratch>` and, per map,
+  `<map> <old> <new>`: the first 12 hex of each map file's sha256. It resolves each handle to exactly one
   `<scratch>/hashes/<map>-<handle>*.json` (none or two: exit non-zero), checks the file's bytes
   against its name, and prints the full shas (`resolved`) and its `args` inside its digest; the
   script checks both against what it holds ("the program read other map files than the

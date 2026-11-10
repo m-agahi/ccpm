@@ -29,6 +29,7 @@ export const BASE_FLAT = { ...HASHES_FLAT, "conftest.py": "hc", "git:config:loca
 export function base() {
   const h = H(BASE_FLAT);
   h.ignored = { "build.log": "i1" };
+  h.symlinks = { lib: "../x" };
   return h;
 }
 export const KINDS = {
@@ -36,6 +37,9 @@ export const KINDS = {
   section: (h) => (h.sections["pyproject.toml#tool.pytest"] = "hp2"),
   git: (h) => (h.git["config:local"] = "g2"),
   ignored: (h) => (h.ignored["build.log"] = "i2"),
+  symlink: (h) => (h.symlinks.lib = "../y"),
+  added: (h) => (h.files["tests/conftest.py"] = "hn"),
+  deleted: (h) => delete h.files["conftest.py"],
 };
 const CODER2 = { status: "ok", reason: "done", changed_paths: ["src/x.py"], frozen_tests_red_at_start: false, suite_result: { command: "pytest", exit_code: 0 } };
 const CJ = { status: "ok", reason: "good", verdict: "approve", routed_findings: [], hash_check: { match: true, mismatched: [] }, suite_result: { command: "pytest", exit_code: 0 } };
@@ -109,6 +113,21 @@ const V506 = {
     "gate": "ownership",
     "reason": "ignored path written: build.log (likely cause: a build or test command ran without the fleet build env, test_env_prefix, so build output or a cache such as target/ or __pycache__ changed in the worktree) in test round 1"
   },
+  "writers/symlink": {
+    "status": "needs_human",
+    "gate": "ownership",
+    "reason": "writer touched symlink:lib in test round 1 (not a test file of AC1, AC2)"
+  },
+  "writers/added": {
+    "status": "needs_human",
+    "gate": "ownership",
+    "reason": "writer touched tests/conftest.py in test round 1 (not a test file of AC1, AC2)"
+  },
+  "writers/deleted": {
+    "status": "needs_human",
+    "gate": "ownership",
+    "reason": "writer touched conftest.py in test round 1 (not a test file of AC1, AC2)"
+  },
   "judge/file": {
     "status": "needs_human",
     "gate": "fingerprint",
@@ -128,6 +147,21 @@ const V506 = {
     "status": "needs_human",
     "gate": "fingerprint",
     "reason": "judge mutated worktree: fleet-test-judge (role:fleet-test-judge:r1) changed ignored path written: build.log (likely cause: a build or test command ran without the fleet build env, test_env_prefix, so build output or a cache such as target/ or __pycache__ changed in the worktree); verdict discarded"
+  },
+  "judge/symlink": {
+    "status": "needs_human",
+    "gate": "fingerprint",
+    "reason": "judge mutated worktree: fleet-test-judge (role:fleet-test-judge:r1) changed symlink:lib; verdict discarded"
+  },
+  "judge/added": {
+    "status": "needs_human",
+    "gate": "fingerprint",
+    "reason": "judge mutated worktree: fleet-test-judge (role:fleet-test-judge:r1) changed tests/conftest.py; verdict discarded"
+  },
+  "judge/deleted": {
+    "status": "needs_human",
+    "gate": "fingerprint",
+    "reason": "judge mutated worktree: fleet-test-judge (role:fleet-test-judge:r1) changed conftest.py; verdict discarded"
   },
   "coder/file": {
     "status": "ok",
@@ -159,6 +193,30 @@ const V506 = {
     "reason": "draft PR ready for review",
     "coder2": [
       "frozen test or runner-config hash changed: ignored path written: build.log (likely cause: a build or test command ran without the fleet build env, test_env_prefix, so build output or a cache such as target/ or __pycache__ changed in the worktree) -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
+    ]
+  },
+  "coder/symlink": {
+    "status": "ok",
+    "gate": null,
+    "reason": "draft PR ready for review",
+    "coder2": [
+      "frozen test or runner-config hash changed: symlink:lib -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
+    ]
+  },
+  "coder/added": {
+    "status": "ok",
+    "gate": null,
+    "reason": "draft PR ready for review",
+    "coder2": [
+      "frozen test or runner-config hash changed: tests/conftest.py -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
+    ]
+  },
+  "coder/deleted": {
+    "status": "ok",
+    "gate": null,
+    "reason": "draft PR ready for review",
+    "coder2": [
+      "frozen test or runner-config hash changed: conftest.py -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
   },
   "refreeze/file": {
@@ -529,4 +587,53 @@ test("5.0.7 review: a read-only relay whose only fault is other args is dispatch
   s["infra:tf-gate:push"] = tf;
   out = await run(s, ARGS);
   assert.ok(out.labels.includes("infra:tf-gate:push:args-retry"), out.labels.filter((l) => l.startsWith("infra:tf")).join(","));
+});
+
+// ---------------------------------------------------------------- review of #55 (SF1, SF2, cap)
+
+test("5.0.7 review SF1: a format-code relay whose frozen_map is not the frozen files map the workflow holds stops at hash", async () => {
+  const s = happy();
+  s["infra:format-code:r1"] = { status: "ok", reason: "x", ran: true, note: "n", runs: 1, stable: true, files: [], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [], frozen_map: "e".repeat(64) };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "hash");
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /^infra:format-code:r1: the program read the frozen map "e{64}", not [0-9a-f]{64}$/);
+  assert.ok(!out.labels.includes("hasher:post-coder:r1"));
+});
+
+// two maps changed; the comparison lists rows for one only (total = rows)
+function oneMapListed(site, tag) {
+  const s = scenario("none", "file");
+  const mod = base();
+  mod.files["tests/test_a.py"] = "ha2";
+  mod.sections["pyproject.toml#tool.pytest"] = "hp2";
+  if (site === "writers") {
+    const pw = s["hasher:post-writers:r1"];
+    s["hasher:post-writers:r1"] = (p) => Object.assign(pw(p), { hashes: mod });
+  } else s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes: mod };
+  s["infra:hash-diff:" + tag] = (p) => {
+    const o = hashDiffOut(inputsOf(p).args);
+    o.changed = o.changed.filter((w) => w[0] === "files");
+    o.total = o.changed.length;
+    return Object.assign({ status: "ok", reason: "x" }, o);
+  };
+  return s;
+}
+
+test("5.0.7 review SF2: a changed map with no listed row and no overflow fails closed (writers: ownership; post-coder: hash)", async () => {
+  let out = await run(oneMapListed("writers", "writers:r1"), ARGS);
+  assert.deepEqual([out.result.status, out.result.stop_gate], ["needs_human", "ownership"]);
+  assert.match(out.result.reason, /^writer touched frozen files map changed \(3 -> 3 entries; the key list is unavailable: the sections map changed but no key of it is listed\) in test round 1/);
+  out = await run(oneMapListed("coder", "code:r1"), ARGS);
+  assert.deepEqual([out.result.status, out.result.stop_gate], ["needs_human", "hash"]);
+  assert.match(out.result.reason, /the key list is unavailable: the sections map changed but no key of it is listed/);
+  assert.ok(!out.labels.includes("role:fleet-coder:r2"));
+});
+
+test("5.0.7 review: a hash-diff the agent cap cannot fit stops at cap", () => {
+  const src = readFileSync(join(SCRIPTS_SRC, "..", "workflows", "build-task-run.js"), "utf8");
+  const body = src.slice(src.indexOf("async function expandKeys("), src.indexOf("function keyNames("));
+  const i = body.indexOf("reserve(1, ");
+  assert.ok(i > 0 && i < body.indexOf("softDispatch("), "expandKeys reserves its agent (stop_gate cap) before the dispatch");
+  assert.match(src, /function reserve\(n, what\) \{[\s\S]{0,200}"cap",/);
 });
