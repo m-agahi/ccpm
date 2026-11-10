@@ -1,5 +1,37 @@
 # Changelog
 
+## [5.0.1] - 2026-11-10
+
+Fleet 5.0.1 (ledger 2003): a PATH check relay with `file_sha256` copied into `program` no longer
+stops the run.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.1), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.1/scripts` dir.
+
+### Fixed
+
+- Run wf_6b4383d3-b45 (plan mode) stopped at preflight with "the PATH check could not complete:
+  preflight returned no usable path_check". The relay was the program's output. The agent put
+  `file_sha256` next to `program` and also inside `program`. `relayDigestOk` hashed the relayed
+  `program` with that extra key, so the digest did not match. Plan and probe mode run the same
+  check; the probe that passed got a relay without the extra key.
+- `relayDigestOk`, the hasher digest and the changed-definitions digest now read `program` as the
+  program printed it (`{name, sha256}`) when its one extra key is `file_sha256` and that value is
+  the sibling `file_sha256`. `programProblem` checks the sibling against the shipped program. Any
+  other extra key, or another value, still fails the digest.
+- The `file_sha256` rule and `relayAs` say that `file_sha256` is a sibling of `program`, never a
+  key inside it.
+- A PATH check that cannot complete names the failed check (tools, args, path_problems or digest).
+
+### Tests
+
+- `v501_path_relay.test.mjs` runs the real `path_check.py` with a test PATH and feeds its output
+  through preflight and every PATH re-check of a plan-mode and a probe-mode run, in both relay
+  shapes. It also covers the negative cases: a non-shim tool, a relative PATH entry, a tampered or
+  missing tool, other args, another digest, and another key or value inside `program`.
+
 ## [5.0.0] - 2026-11-10
 
 Fleet 5.0.0 (ledger 1999): the role prompts ship in the plugin (R1), yadgar and yaadgaar are

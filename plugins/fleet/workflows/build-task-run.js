@@ -102,7 +102,7 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with (bumped every release; since
 // 4.0.0, 1993, the shipped programs are read from its plugin cache directory
 // only; since 5.0.0, R1, the role files too).
-const FLEET_VERSION = "5.0.0";
+const FLEET_VERSION = "5.0.1";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with; a mismatch after an
 // update usually means this script is the stale one.
@@ -1704,7 +1704,7 @@ function planRefEntryProblem(e, target) {
 // self-hash must name the shipped program `name`.
 function relayDigestOk(r, keys, name) {
   if (!r || typeof r !== "object" || programProblem(r, name)) return false;
-  const o = { program: r.program };
+  const o = { program: printedProgram(r) };
   for (const k of keys) o[k] = r[k] === undefined ? null : r[k];
   return typeof r.digest === "string" && SHA256_RE.test(r.digest) && sha256Hex(canonical(o)) === r.digest;
 }
@@ -1826,6 +1826,19 @@ function programProblem(r, name) {
   const fs = r.file_sha256;
   if (fs !== want) return "did not run the shipped program " + name + " (its file's sha256sum line reads " + JSON.stringify(fs === undefined ? null : fs) + ", not " + want + ")";
   return null;
+}
+
+// 5.0.1 (ledger 2003): `program` as the program printed it ({name, sha256}),
+// for a digest. A relay that also copied the sibling file_sha256 into program
+// (run wf_6b4383d3-b45) is read without that key, only when it equals the
+// sibling, which programProblem checks against the table. Any other extra
+// key or value stays, so the digest refuses it.
+function printedProgram(r) {
+  const p = r.program;
+  if (!p || typeof p !== "object" || Array.isArray(p)) return p;
+  const extra = Object.keys(p).filter((k) => k !== "name" && k !== "sha256");
+  if (extra.length === 1 && extra[0] === "file_sha256" && typeof r.file_sha256 === "string" && p.file_sha256 === r.file_sha256) return { name: p.name, sha256: p.sha256 };
+  return p;
 }
 
 // Halts unless `r` came from the shipped program `name`.
@@ -2054,14 +2067,14 @@ function programSchema(schema, slots) {
 // appended to every prompt that runs a shipped program (see infraCall)
 function fileShaRule(slots) {
   return (
-    "Shipped programs: each command that starts with `sha256sum -- <file> && python3 -I <file>` prints one sha256sum line (`<hex>  <file>`) before the program's JSON. Put that <hex> into the program's JSON object you return as `file_sha256`, next to its `program` key; change nothing else in the object. Where: " +
+    "Shipped programs: each command that starts with `sha256sum -- <file> && python3 -I <file>` prints one sha256sum line (`<hex>  <file>`) before the program's JSON. Put that <hex> into the program's JSON object you return as `file_sha256`, a sibling of its `program` key: never a key inside `program`, which stays exactly as printed; change nothing else in the object. Where: " +
     slots.map(([slot, name]) => "`" + name + ".py` -> " + (slot === null ? "the top level of your result" : "inside `" + slot + "`")).join("; ") +
     ". `file_sha256` is a required key there; never omit it, even where a Return line above does not list it. The script checks both against the shipped program."
   );
 }
 // the relay of a program's output under a result key (4.0.2)
 function relayAs(slot) {
-  return "return it as " + slot + " with `file_sha256` added next to its `program` key, every other value copied unchanged";
+  return "return it as " + slot + " with `file_sha256` added as a sibling of its `program` key (never inside `program`), every other value copied unchanged";
 }
 
 // scripts_dir (4.0.0 security review): the preflight probe's lines, parsed.
@@ -3204,15 +3217,18 @@ function pathRelayProblem(pc, args) {
     });
   const pp = programProblem(pc, "path_check");
   if (pp) return ": " + pp;
-  if (!shapeOk || canonical(pc.args) !== canonical(args) || !Array.isArray(pc.path_problems) || !relayDigestOk(pc, ["tools", "args", "path_problems"], "path_check"))
-    return "-";
+  // 5.0.1 (ledger 2003): name the check that failed
+  if (!shapeOk) return ": its tools are not one null or {path, shim} entry per IaC tool";
+  if (canonical(pc.args) !== canonical(args)) return ": its args are not " + canonical(args);
+  if (!Array.isArray(pc.path_problems)) return ": it has no path_problems list";
+  if (!relayDigestOk(pc, ["tools", "args", "path_problems"], "path_check")) return ": the relayed output does not match the program's digest";
   return "";
 }
 
 function pathCheck(pc, repo, recheck) {
   const what = recheck ? "the PATH re-check " + recheck.label + " could not complete: it returned no usable result" : "the PATH check could not complete: preflight returned no usable path_check";
   const rp = pathRelayProblem(pc, recheck ? recheck.args : [repo]);
-  if (rp) halt("needs_human", NOT_SHIMMED + " (" + what + (rp === "-" ? "" : rp) + ")", "iac");
+  if (rp) halt("needs_human", NOT_SHIMMED + " (" + what + rp + ")", "iac");
   const tools = pc.tools;
   const keys = Object.keys(tools).sort();
   const at = recheck ? recheck.label + ": " : "";
@@ -3771,7 +3787,7 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
     halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
   requireProgram(r, "hasher", "hasher " + label);
   // the maps travel through a model: recompute the program's digest over them
-  const relayed = { fingerprint: fp, hashes: h, program: r.program, scripts: r.scripts === undefined ? null : r.scripts };
+  const relayed = { fingerprint: fp, hashes: h, program: printedProgram(r), scripts: r.scripts === undefined ? null : r.scripts };
   if (baseTree) relayed.changed = r.changed;
   if (typeof r.digest !== "string" || sha256Hex(canonical(relayed)) !== r.digest)
     halt("failed", "hasher " + label + " failed: the relayed maps do not match the program's digest (a key was dropped or changed in the copy)");
@@ -4627,7 +4643,7 @@ async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, s
     halt("failed", label + " returned no defs, excluded, unclassified or unattributed list");
   const relayed = { defs: r.defs.map((d) => ({ name: d.name, at: d.at, end: d.end })), excluded: r.excluded, unclassified: r.unclassified, unattributed: r.unattributed };
   requireProgram(r, "changed_defs", label);
-  if (typeof r.digest !== "string" || sha256Hex(canonical(Object.assign({ program: r.program }, relayed))) !== r.digest)
+  if (typeof r.digest !== "string" || sha256Hex(canonical(Object.assign({ program: printedProgram(r) }, relayed))) !== r.digest)
     halt("failed", label + ": the relayed lists do not match the program's digest (a definition was dropped or changed in the copy)");
   for (const p of relayed.excluded) gate(label + ": skipped " + p + " (frozen test or plan doc)");
   for (const p of relayed.unclassified) gate(label + ": unclassified " + p + " (no definition pattern; checked against the plan's files)");
