@@ -102,7 +102,7 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with (bumped every release; since
 // 4.0.0, 1993, the shipped programs are read from its plugin cache directory
 // only; since 5.0.0, R1, the role files too).
-const FLEET_VERSION = "5.0.3";
+const FLEET_VERSION = "5.0.4";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with; a mismatch after an
 // update usually means this script is the stale one.
@@ -757,6 +757,7 @@ const INFRA_SCHEMA = {
     ran: { type: "boolean" },
     changed: { type: "array", items: STR },
     refused: { type: "array", items: STR },
+    purged_paths: { type: "array", items: STR },
     runs: { type: "number" },
     stable: { type: "boolean" },
     state_sha: STR,
@@ -1735,7 +1736,7 @@ const PROGRAM_SHA256 = {
   "db_sweep": "3f86d621cc27259e006fff0d7910c621d11f955b138db3b18e9337139437d6c5",
   "db_up": "287f00df3f12543a7ffed8445fda9ba9823f58dcb37a90301ed05b245d49d913",
   "fleet_scan": "5140d5020bee7cae61994b753e8ee100fc6cdcc1389d3a3559ef5fec5fbe2a3b",
-  "format_files": "9263e27def7990aa080085ab2409025b295519aa34e2a3ee0db2cf11668ebc4b",
+  "format_files": "4aa6b21986547803065ef22d3771a1a4a4f7a1a97dae3d5ad11da1576b0a7d14",
   "hasher": "360f14f44c2a036d80304a19cc8d2afcaace826d2b7b17419f6ee6792ee5e4cd",
   "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
   "parked": "14150028c5fc657e10214efd33dd6669c83281c8a45f07410aad6e6b7520bd9b",
@@ -1925,7 +1926,7 @@ const PROGRAM_KEYS = {
   "parked:write": ["written", "sha256", "args"],
   "parked:park": ["target", "clean", "dirty", "args"],
   "plan_hash": ["plan_sha256"],
-  "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused"],
+  "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths"],
   "plan_ref_write": ["head", "tag_sha"],
   "plan_files": ["head", "files", "args", "dsn_paths"],
   "plan_dsn": ["holds", "lines", "args"],
@@ -2009,7 +2010,7 @@ const PROGRAM_OUT = {
     digest: STR,
   },
   plan_hash: { plan_sha256: STR },
-  format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, digest: STR },
+  format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, digest: STR },
   plan_ref_write: { head: STR, tag_sha: STR, digest: STR },
   plan_files: { head: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
   plan_dsn: { holds: BOOL, lines: { type: "array", items: INT }, args: STRS, digest: STR },
@@ -2744,7 +2745,12 @@ async function loadParked(scratch, tip) {
 // commit step's business; only bytes count. changed: every path that differs
 // between the worktree tree before the first run and after the last (a temp
 // index, so the real index is untouched), whatever hook changed it. Prints
-// {ran, note, runs, stable, files, changed, refused, digest}. refused: hook
+// {ran, note, runs, stable, files, changed, refused, purged, purged_paths,
+// digest}. Before the comparison (5.0.4, ledger 2013) it deletes the untracked
+// or ignored __pycache__/.pytest_cache/*.pyc/*.pyo under the directory hook
+// paths (never tracked, never through a symlink): purged, purged_paths (first
+// 50). A directory hook path differs when a path under it is not HEAD's,
+// selected paths included. refused: hook
 // surface paths that differ from HEAD and selected paths through a symlink;
 // then nothing runs. Each run is capped at FIX_RUN_TIMEOUT seconds.
 // program: scripts/format_files.py (PROGRAM_SHA256 holds its sha256)
@@ -2773,6 +2779,10 @@ async function formatFiles(label, worktree, select, frozenList, allowed, phaseNa
     halt("failed", label + " returned no ran/stable/files/changed/refused");
   requireProgram(r, "format_files", label);
   if (!relayDigestOk(r, progKeys("format_files"), "format_files")) halt("failed", label + ": the relayed result does not match the program's digest");
+  // 5.0.4 (ledger 2013): the cache purge before the comparison
+  if (!Number.isInteger(r.purged) || r.purged < 0 || !Array.isArray(r.purged_paths) || r.purged_paths.length > r.purged || r.purged_paths.some((x) => typeof x !== "string"))
+    halt("failed", label + " returned no purged/purged_paths", "contract");
+  if (r.purged) gate(label + ": purged " + r.purged + " cache path(s) under hook paths: " + r.purged_paths.slice(0, 10).join(", "));
   if (r.refused.length)
     halt("needs_human", label + ": hook config, a hook entry or a symlinked path differs from HEAD: " + r.refused.join(", ") + "; no hook was run (" + r.note + ")", "hash");
   if (!r.ran) {
@@ -2802,7 +2812,7 @@ function formatPlanPrompt(inputs) {
     JSON.stringify(inputs) +
     "\n" +
     "1. If `<worktree>/.pre-commit-config.yaml` does not exist: reason = \"no pre-commit config\"; go to step 3.\n" +
-    "2. Run `cd <worktree> && pre-commit run --files <plan_path>` as one Bash call with timeout 600000 ms. Exit 0 -> go to step 3. A non-zero exit after which `git -C <worktree> hash-object <plan_path>` differs from before the run means a fixer rewrote the plan: run the same command again, at most 3 runs in all. A non-zero exit that left the plan unchanged, `pre-commit` not installed, or a 3rd run that still fails -> return {status: \"needs_human\", reason: <the failing hook ids and the last 60 lines of output>}.\n" +
+    "2. Run `cd <worktree> && PYTHONDONTWRITEBYTECODE=1 pre-commit run --files <plan_path>` as one Bash call with timeout 600000 ms. Exit 0 -> go to step 3. A non-zero exit after which `git -C <worktree> hash-object <plan_path>` differs from before the run means a fixer rewrote the plan: run the same command again, at most 3 runs in all. A non-zero exit that left the plan unchanged, `pre-commit` not installed, or a 3rd run that still fails -> return {status: \"needs_human\", reason: <the failing hook ids and the last 60 lines of output>}.\n" +
     "3. changed_paths = the paths of `git -C <worktree> status --porcelain --untracked-files=all` (the plan doc itself is expected there).\n" +
     // 5.0.3 (ledger 2010): the DSN precheck on the bytes the plan commit will hold
     "4. Run this one command exactly as written, unmodified (it reads the plan doc, never changes it):\n" +
@@ -3207,7 +3217,7 @@ function commitStepPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "Every git command below runs as <git> = `env GIT_CONFIG_NOSYSTEM=1 " + hookEnvPrefix(inputs.hook_env) + "git -c core.fsmonitor=false -c core.hooksPath=<H> -C <main_worktree>`, where <H> is <hooks_path> when it is not null, else the output of `git -C <main_worktree> rev-parse --path-format=absolute --git-common-dir` followed by `/hooks`. Never drop or change these options.\n" +
+    "Every git command below runs as <git> = `env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 " + hookEnvPrefix(inputs.hook_env) + "git -c core.fsmonitor=false -c core.hooksPath=<H> -C <main_worktree>`, where <H> is <hooks_path> when it is not null, else the output of `git -C <main_worktree> rev-parse --path-format=absolute --git-common-dir` followed by `/hooks`. Never drop or change these options.\n" +
     "1. `<git> branch --show-current` must equal <branch> and `<git> rev-parse HEAD` must equal <expected_head>; else needs_human.\n" +
     "2. `<git> add -A`.\n" +
     "3. staged_tree = the output of `<git> write-tree`. If it differs from <code_tree>: commit_result = `tree_mismatch`; do NOT commit; go to step 5.\n" +

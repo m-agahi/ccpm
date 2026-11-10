@@ -1,5 +1,43 @@
 # Changelog
 
+## [5.0.4] - 2026-11-10
+
+Fleet 5.0.4 (ledger 2013): a hook entry that names a directory no longer stops every format step,
+and Python caches under a hook path are purged before the hook-surface comparison.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.4), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.4/scripts` dir.
+
+### Fixed
+
+- 2013: build run wf_839d4753-594 (yadgarhq/iam-db, fleet 5.0.3) stopped at
+  `infra:format-tests:r1` with stop_gate `hash`: "hook config, a hook entry or a symlinked path
+  differs from HEAD: scripts/tests; no hook was run". The repo's local hook runs
+  `pytest scripts/tests/ -q`. `format_files.py` built its tracked set from blob paths only, so a
+  directory a hook names was never in it and `differs()` returned "exists": every existing hook
+  directory was refused, with or without a cache in it.
+- A directory hook path now differs from HEAD when a path under it differs between HEAD and a
+  snapshot of the worktree in a temporary index (`git diff-tree HEAD^{tree} <snapshot>`, so no
+  `assume-unchanged` or `skip-worktree` bit hides an edit), or any untracked or ignored path is
+  under it (`git ls-files --others`, no exclude rules), or a gitlink (mode 160000) is under it at
+  HEAD or in the snapshot (git cannot see untracked content inside it). Selected paths are not exempt: a `conftest.py`, a module or a test file under a
+  hook directory runs inside the hook, so a writer or coder file there stops the run (stop_gate
+  `hash`). A symlinked directory (itself or a parent), or a directory that is now a file,
+  differs.
+- Before the comparison, `format_files.py` deletes under the directory hook paths only the
+  untracked or ignored files under a `__pycache__` or `.pytest_cache` directory and the `*.pyc` /
+  `*.pyo` files, then the emptied cache directories. It never deletes a tracked file (git lists
+  only untracked ones; a tracked `.pyc` is compared as before), a selected path, or anything
+  through a symlink (every path component is lstat'ed; a link is left in place and the
+  comparison refuses it), and nothing outside the worktree. Its output adds `purged` (the count)
+  and `purged_paths` (the first 50); both are in its digest, and the workflow fails closed when
+  either is missing, mistyped or larger than the count allows.
+- `infra:format-plan` and the commit step, the two steps that run the hooks in the real worktree,
+  run them with `PYTHONDONTWRITEBYTECODE=1`. `PYTEST_ADDOPTS` is not set for hooks: it would
+  replace the repo's own value and break a hook that passes `--lf`, `--ff` or `-p cacheprovider`.
+
 ## [5.0.3] - 2026-11-10
 
 Fleet 5.0.3 (ledger 2010): a plan doc that holds `mysql://` gets a re-plan finding before the plan
