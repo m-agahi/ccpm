@@ -41,6 +41,8 @@ const SAMPLES = [
   "infra:park-plan",
   "infra:stage-plan",
   "infra:format-tests:r1",
+  // 5.0.3 (ledger 2010)
+  "infra:format-plan",
   "infra:commit-plan",
   "infra:verify-plan-commit",
   "infra:verify-plan-commit:retry",

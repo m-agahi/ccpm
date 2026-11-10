@@ -102,7 +102,7 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with (bumped every release; since
 // 4.0.0, 1993, the shipped programs are read from its plugin cache directory
 // only; since 5.0.0, R1, the role files too).
-const FLEET_VERSION = "5.0.2";
+const FLEET_VERSION = "5.0.3";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with; a mismatch after an
 // update usually means this script is the stale one.
@@ -784,6 +784,8 @@ const INFRA_SCHEMA = {
     plan_hash_head: PROGRAM_OUTPUT,
     plan_files: { type: ["object", "null"], properties: { head: STR, files: { type: "array", items: STR }, args: { type: "array", items: STR }, dsn_paths: { type: "array", items: STR }, program: PROGRAM_PROP, file_sha256: STR, digest: STR } },
     plan_ref: { type: ["object", "null"], properties: { refs: { type: "array", items: { type: "object" } }, program: PROGRAM_PROP, file_sha256: STR } },
+    // 5.0.3 (ledger 2010): the DSN precheck of infra:format-plan
+    dsn_check: { type: ["object", "null"], properties: { holds: { type: "boolean" }, lines: { type: "array", items: { type: "integer" } }, args: { type: "array", items: STR }, program: PROGRAM_PROP, file_sha256: STR, digest: STR } },
     target: STR,
     message: STR,
     clean: { type: "boolean" },
@@ -1731,13 +1733,14 @@ const PROGRAM_SHA256 = {
   "changed_defs": "1a30e9ca3202f6a434911aa2ecb3e5b446194f95e414b6caa4a4c3279f96c4d4",
   "db_down": "1a9cd8302f54116e1c9691ed6a86a6f19e132458da55f062286fd03e63a07cd3",
   "db_sweep": "3f86d621cc27259e006fff0d7910c621d11f955b138db3b18e9337139437d6c5",
-  "db_up": "304614a75d0aa5c43871e0219ee52d71b467e943b8d3798f92d924a881cd323a",
+  "db_up": "287f00df3f12543a7ffed8445fda9ba9823f58dcb37a90301ed05b245d49d913",
   "fleet_scan": "5140d5020bee7cae61994b753e8ee100fc6cdcc1389d3a3559ef5fec5fbe2a3b",
   "format_files": "9263e27def7990aa080085ab2409025b295519aa34e2a3ee0db2cf11668ebc4b",
   "hasher": "360f14f44c2a036d80304a19cc8d2afcaace826d2b7b17419f6ee6792ee5e4cd",
   "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
   "parked": "14150028c5fc657e10214efd33dd6669c83281c8a45f07410aad6e6b7520bd9b",
   "path_check": "9a05c718892ff35b213a61fd8abeadad4dae0fa2ca7671485d670fe02b5a1596",
+  "plan_dsn": "269dfac0132859fc884ef34a0032e2932f3d943100e3cbb7906466cf135a5fc6",
   "plan_files": "20f52c19db325d6b5385a443e7ad78f824f09057fd48fcd5ee5b24cf799d1670",
   "plan_hash": "5901757f34415759f587989e09b57821da8602418ecd45ba384f0366502b5b40",
   "plan_ref": "70b82ddd6b5cd3321dd04efc6b9549b001d25b1aa0ac98ed73a5e2f75ff8841d",
@@ -1751,7 +1754,7 @@ const PROGRAM_SHA256 = {
   "review_paths": "2904f382a5273ed64d7f0416533f45be9f6f3893892badd632dccd10fb360493",
   "script_check": "bd5eb9be1833d6746a8910f6a8bfc1194f980321b598a835ebd198b8a525d17d",
   "state_write": "428bbdc40ec4973d6e2c314a1a7c91be6f8e54c5aeb079af840623b5ee27ad78",
-  "test_db_decl": "4e23c4a0b85ccfd12f91bb71ee659a6a49f80a5f1c93a336280ee8399ab69ae5",
+  "test_db_decl": "71798f3bdc71e0a73c880a9620b4b6fd6e669fbd396a4ed1282918a554e8c765",
   "tf_gate": "7ca27ecbca19dd989f8d6a8108f9bfe7655d48f1ebb371060146fade61cc0bfd",
   "verify_since": "840c0f167c93ea225342c1036c58d67e6634a74712700bad58d2977390a8d9d2"
 };
@@ -1779,7 +1782,7 @@ const ROLE_SHA256 = {
   "gate-change-nonweakening-sweep": "f22759af37de2d5df1cc47fa532197ef42ed37bd31f13c9fc52cc142a37040b5",
   "plan-audit": "7578a832d1c69147dbb467dab40721af5105c14a704f989acf89cc03a6c7f8cf",
   "pr-review": "0fc7353562f4c0555bc69b116988dbac1343da80ff260f6c5cab14637c1715e9",
-  "scope-and-plan": "299d27376bbfd50c78de9d74feb17884090b1a317fa159ccbd7cab69c1187698"
+  "scope-and-plan": "b2c8c6a24e1157e0f6217fc5c3af185d3e9d6928ee3091cbfd5611eb66048143"
 };
 // ROLE_SHA256_END
 // The first DISPATCH line of each role file, written by gen.mjs from the same
@@ -1883,6 +1886,7 @@ const PROGRAM_SLOTS = [
   [/^infra:park-plan/, [["park", "parked"], ["findings_write", "parked"]]],
   [/^infra:stage-plan/, [["plan_hash", "plan_hash"]]],
   [/^infra:format-(tests|code):/, [[null, "format_files"]]],
+  [/^infra:format-plan/, [["dsn_check", "plan_dsn"]]],
   [/^infra:commit-plan/, [[null, "plan_ref_write"]]],
   [/^infra:verify-plan-commit/, [["plan_files", "plan_files"], ["plan_hash", "plan_hash"], ["plan_ref", "plan_ref"]]],
   [/^infra:load-ref/, [[null, "plan_ref"]]],
@@ -1924,6 +1928,7 @@ const PROGRAM_KEYS = {
   "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused"],
   "plan_ref_write": ["head", "tag_sha"],
   "plan_files": ["head", "files", "args", "dsn_paths"],
+  "plan_dsn": ["holds", "lines", "args"],
   "plan_ref": ["refs"],
   "plan_ref:chunks": ["refs", "chunks"],
   "verify_since": ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"],
@@ -2007,6 +2012,7 @@ const PROGRAM_OUT = {
   format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, digest: STR },
   plan_ref_write: { head: STR, tag_sha: STR, digest: STR },
   plan_files: { head: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
+  plan_dsn: { holds: BOOL, lines: { type: "array", items: INT }, args: STRS, digest: STR },
   plan_ref: {
     refs: { type: "array", items: { type: "object", properties: { name: STR, tag_sha: STR, type: STR, target: STR, target_type: STR, sha256: STR_OR_NULL } } },
     chunks: STRS,
@@ -2795,10 +2801,15 @@ function formatPlanPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "1. If `<worktree>/.pre-commit-config.yaml` does not exist: return {status: \"ok\", reason: \"no pre-commit config\", changed_paths: <the paths of `git -C <worktree> status --porcelain --untracked-files=all`>}.\n" +
+    "1. If `<worktree>/.pre-commit-config.yaml` does not exist: reason = \"no pre-commit config\"; go to step 3.\n" +
     "2. Run `cd <worktree> && pre-commit run --files <plan_path>` as one Bash call with timeout 600000 ms. Exit 0 -> go to step 3. A non-zero exit after which `git -C <worktree> hash-object <plan_path>` differs from before the run means a fixer rewrote the plan: run the same command again, at most 3 runs in all. A non-zero exit that left the plan unchanged, `pre-commit` not installed, or a 3rd run that still fails -> return {status: \"needs_human\", reason: <the failing hook ids and the last 60 lines of output>}.\n" +
     "3. changed_paths = the paths of `git -C <worktree> status --porcelain --untracked-files=all` (the plan doc itself is expected there).\n" +
-    "Return {status, reason, changed_paths}."
+    // 5.0.3 (ledger 2010): the DSN precheck on the bytes the plan commit will hold
+    "4. Run this one command exactly as written, unmodified (it reads the plan doc, never changes it):\n" +
+    progCmd("plan_dsn", [inputs.worktree, inputs.plan_path]) +
+    "\n" +
+    "It prints one JSON object " + printsKeys("plan_dsn") + ": " + relayAs("dsn_check") + ". Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, changed_paths, dsn_check}."
   );
 }
 
@@ -4826,11 +4837,11 @@ function afterRounds(ctx) {
 }
 
 // A re-plan round for plan findings while rounds are left, else a stop.
-function planFindingsStop(ctx, planPath, what, findings, rawMap, plan) {
+function planFindingsStop(ctx, planPath, what, findings, rawMap, plan, stopGate) {
   if ((ctx.auditRound || 0) < ctx.maxRounds) return replanWithFindings(ctx, planPath, what, findings, what, rawMap, plan);
   noteRound(ctx.auditRound || 0, what, stripHeldOut(findings), roundSnapshot(plan), (ctx.priorRound && ctx.priorRound.symbols) || []);
   const shown = findings.slice(0, 10).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding);
-  halt("needs_human", what + ": " + shown.join("; ") + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : "") + afterRounds(ctx));
+  halt("needs_human", what + ": " + shown.join("; ") + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : "") + afterRounds(ctx), stopGate);
 }
 
 // ctx: {common, brief, date, baseRef, remoteSlug, remoteUrl, suffix,
@@ -4966,6 +4977,20 @@ async function planAndAudit(ctx0) {
   if (fmtOther.length)
     halt("needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + fmtOther.join(", ") + " (never committed; clean the worktree)", "scope");
   gate(fmtLabel + ": " + (fmt.reason || "hooks run on " + planPath));
+  // 5.0.3 (ledger 2010): the plan commit gate refuses any mysql:// text, any
+  // case (verify-plan-commit, plan_files.py); a hit here is a re-plan finding
+  const dc = fmt.dsn_check;
+  requireProgram(dc, "plan_dsn", fmtLabel);
+  if (typeof dc.holds !== "boolean" || !Array.isArray(dc.lines) || !relayDigestOk(dc, progKeys("plan_dsn"), "plan_dsn"))
+    halt("failed", fmtLabel + ": the relayed dsn_check does not match the program's digest", "contract");
+  if (canonical(dc.args) !== canonical([ctx.common.worktree, planPath]))
+    halt("failed", fmtLabel + ": plan_dsn ran on other arguments (" + JSON.stringify(dc.args === undefined ? null : dc.args) + ")", "contract");
+  if (dc.holds) {
+    const at = dc.lines.length ? " at line " + dc.lines.join(", ") : " (unread: over 8 MiB)";
+    // the finding never quotes the scheme: the planner may copy it into the plan
+    const finding = "the plan doc " + planPath + " holds a URL with the mysql scheme" + at + "; placeholders count too, and the plan commit is refused. Name it as \"the YADGAR_TEST_DSN URL\" (or the URL of the repo's declared *_TEST_DSN variable) or describe the DSN in words; never write the scheme, a colon and two slashes";
+    return planFindingsStop(ctx, planPath, "plan doc holds a test DSN URL", [{ criterion: null, finding }], plan.changed_symbols, plan, "db");
+  }
 
   // 3.1.2: the audit runs the planner's test_cmd in a scratch worktree
   await pathRecheck("plan-audit" + sfx, "Plan");
@@ -7509,11 +7534,23 @@ const DB_DSN_NOTE =
 // Why a declaration is refused (null: it is fine). The program checks the same.
 function testDbDeclProblem(d) {
   if (!d || typeof d !== "object" || Array.isArray(d)) return "not a JSON object";
-  if (canonical(Object.keys(d).sort()) !== canonical(["engine", "env", "major", "version"])) return "keys must be exactly version, engine, major, env";
+  if (canonical(Object.keys(d).filter((k) => k !== "test_db_prefix").sort()) !== canonical(["engine", "env", "major", "version"])) return "keys must be exactly version, engine, major, env (and optionally test_db_prefix)";
   if (d.version !== 1) return "version must be 1";
   if (d.engine !== "mariadb") return "engine must be mariadb";
   if (typeof d.major !== "string" || !/^[0-9]{1,3}\.[0-9]{1,3}$/.test(d.major)) return "major must be a string like 11.4";
   if (typeof d.env !== "string" || !DB_ENV_RE.test(d.env)) return "env " + JSON.stringify(d.env) + " must match " + String(DB_ENV_RE);
+  if ("test_db_prefix" in d) return dbPrefixProblem(d.test_db_prefix);
+  return null;
+}
+// 5.0.3 (2011): the optional test_db_prefix. db_up grants each role user ALL
+// on `<prefix, _ escaped>%`.* in the run's container. test_db_decl.py and
+// db_up.py check the same: not fleet_*, and no system schema it could reach.
+const DB_SYSTEM_SCHEMAS = ["mysql", "sys", "information_schema", "performance_schema"];
+function dbPrefixProblem(p) {
+  if (typeof p !== "string" || !/^[a-z][a-z0-9_]{0,30}_$/.test(p)) return "test_db_prefix must be a string matching ^[a-z][a-z0-9_]{0,30}_$";
+  if (p.startsWith("fleet_")) return "test_db_prefix must not start with fleet_ (the role databases)";
+  const like = new RegExp("^" + p.replace(/_/g, ".") + ".*$");
+  if (DB_SYSTEM_SCHEMAS.some((s) => s.startsWith(p) || p.startsWith(s) || like.test(s))) return "test_db_prefix must not match or start a system schema (" + DB_SYSTEM_SCHEMAS.join(", ") + ")";
   return null;
 }
 
@@ -7547,7 +7584,9 @@ function testEnvFor(consumer) {
   return o;
 }
 function testEnvNote() {
-  return state.db ? TEST_ENV_NOTE + " " + state.db.env + " " + DB_DSN_NOTE : TEST_ENV_NOTE;
+  if (!state.db) return TEST_ENV_NOTE;
+  const p = state.db.prefix ? " The user may also create and drop databases named " + state.db.prefix + "* there (the repo's test_db_prefix)." : "";
+  return TEST_ENV_NOTE + " " + state.db.env + " " + DB_DSN_NOTE + p;
 }
 // for roles that get test_env only when the run has a test database
 function dbInputs(consumer) {
@@ -7614,19 +7653,24 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
   const dp = testDbDeclProblem(t.decl);
   if (dp) halt("needs_human", DB_DECL_FILE + " at origin/" + defaultBranch + " refused: " + dp, "db");
   const image = DB_IMAGES[t.decl.engine + ":" + t.decl.major];
+  // 5.0.3 (2011): db_up's optional last argument; none -> the 5.0.2 command
+  const prefix = t.decl.test_db_prefix === undefined ? null : t.decl.test_db_prefix;
+  const pa = prefix ? [prefix] : [];
+  const pi = prefix ? { test_db_prefix: prefix } : {};
   if (!image) halt("needs_human", DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IMAGES).join(", ") + ")", "db");
   const want = [];
   for (const c of consumers) if (want.indexOf(dbOf(c)) < 0) want.push(dbOf(c));
   if (state.db) {
-    if (state.db.env !== t.decl.env || state.db.image !== image) halt("needs_human", DB_DECL_FILE + " changed during the run", "db");
+    if (state.db.env !== t.decl.env || state.db.image !== image || state.db.prefix !== prefix) halt("needs_human", DB_DECL_FILE + " changed during the run", "db");
     const missing = want.filter((d) => state.db.dbs.indexOf(d) < 0);
     if (!missing.length) return;
     const al = "infra:db-up:add";
     await pathRecheck("db-up:add", phaseName);
-    const ra = await dbDispatch(al, dbUpPrompt({ mode: "add", name: state.db.name, dbs: missing }, ["add", state.db.name, JSON.stringify(missing)]), phaseName);
+    const aa = ["add", state.db.name, JSON.stringify(missing)].concat(pa);
+    const ra = await dbDispatch(al, dbUpPrompt(Object.assign({ mode: "add", name: state.db.name, dbs: missing }, pi), aa), phaseName);
     const ua = ra.up;
     requireProgram(ua, "db_up", al, "failed", "db");
-    if (!relayDigestOk(ua, progKeys("db_up"), "db_up") || ua.name !== state.db.name || canonical(ua.dbs) !== canonical(missing) || canonical(ua.args) !== canonical(["add", state.db.name, JSON.stringify(missing)]) || !dbUsersOk(ua.users, missing))
+    if (!relayDigestOk(ua, progKeys("db_up"), "db_up") || ua.name !== state.db.name || canonical(ua.dbs) !== canonical(missing) || canonical(ua.args) !== canonical(aa) || !dbUsersOk(ua.users, missing))
       halt("failed", al + ": the relayed result does not match the program's digest or arguments", "db");
     state.db.dbs = state.db.dbs.concat(missing);
     Object.assign(state.db.users, ua.users);
@@ -7637,11 +7681,11 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
   if (!DB_NAME_RE.test(name) || /tf-local/.test(name)) halt("failed", "internal: test database name " + JSON.stringify(name) + " refused", "db");
   // the passwords are random, made by the program: one user per database; the
   // root password never leaves the container (it is in no prompt and no DSN)
-  const args = ["up", name, image, String(DB_TTL_SECONDS), state.nonce, JSON.stringify(want)];
+  const args = ["up", name, image, String(DB_TTL_SECONDS), state.nonce, JSON.stringify(want)].concat(pa);
   await pathRecheck("db-up", phaseName);
   // from here main's finally removes the container, even when a relay check below stops the run
   state.dbTarget = { name, mechanism: "podman --timeout or systemd-run", expires: "in " + DB_TTL_SECONDS + " s" };
-  const r = await dbDispatch("infra:db-up", dbUpPrompt({ mode: "up", name, image, ttl: DB_TTL_SECONDS, nonce: state.nonce, dbs: want }, args), phaseName);
+  const r = await dbDispatch("infra:db-up", dbUpPrompt(Object.assign({ mode: "up", name, image, ttl: DB_TTL_SECONDS, nonce: state.nonce, dbs: want }, pi), args), phaseName);
   const sw = r.sweep;
   if (sw && relayDigestOk(sw, progKeys("db_sweep"), "db_sweep"))
     gate("test database sweep: removed " + (Array.isArray(sw.removed) && sw.removed.length ? sw.removed.join(", ") : "none") + (Array.isArray(sw.errors) && sw.errors.length ? "; errors: " + sw.errors.join("; ") : ""));
@@ -7656,9 +7700,9 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
   const ex = u.expiry;
   if (!ex || typeof ex !== "object" || ["podman-timeout", "systemd-run"].indexOf(ex.mechanism) < 0 || !Number.isInteger(ex.expires))
     halt("failed", "infra:db-up: no self-expiry recorded", "db");
-  state.db = { name, users: Object.assign({}, u.users), port: u.port, env: t.decl.env, image, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
+  state.db = { name, users: Object.assign({}, u.users), port: u.port, env: t.decl.env, image, prefix, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
   state.dbTarget = { name, mechanism: ex.mechanism, expires: ex.expires };
-  gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + "; " + t.decl.env + " goes to each role's test_env");
+  gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + (prefix ? " (each user also on " + prefix + "*)" : "") + "; " + t.decl.env + " goes to each role's test_env");
 }
 
 // main's finally: remove the run's test database. Outside the agent cap;

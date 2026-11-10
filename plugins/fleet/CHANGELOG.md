@@ -1,5 +1,68 @@
 # Changelog
 
+## [5.0.3] - 2026-11-10
+
+Fleet 5.0.3 (ledger 2010): a plan doc that holds `mysql://` gets a re-plan finding before the plan
+commit. Ledger 2011: an optional `test_db_prefix` in `.fleet-test-db.json`.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.3), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.3/scripts` dir.
+
+### Fixed
+
+- 2010: plan run wf_9b66f476-b14 (yadgarhq/iam-db) passed plan-audit after 2 re-plans (53 minutes,
+  33 agents), then stopped at `infra:verify-plan-commit` with stop_gate `db`. The committed plan
+  held two placeholder DSNs (`mysql://<db>:<pw>@127.0.0.1:<port>/<db>`). The gate (4.0.0) refuses
+  any `mysql://` text, any case, placeholders included. No role told the planner.
+- The planner role (`scope-and-plan.md`) names the ban and the sanctioned wording: "the
+  YADGAR_TEST_DSN URL", or the DSN described in words.
+- New program `plan_dsn.py <worktree> <plan path>` (29 programs). The `infra:format-plan` step
+  runs it after the repo's hooks, on the bytes the plan commit holds, and relays its output as
+  `dsn_check`. It applies the same test as the gate (`plan_files.py`): the lowered bytes hold
+  `mysql://`, and a file over 8 MiB holds it unread. A symlink, an absolute path or a path outside
+  the worktree exits non-zero (the step fails).
+- A hit is a re-plan finding through the existing re-plan rounds, before the plan-audit runs. The
+  finding names the lines and never quotes the scheme. With the rounds spent, the run stops
+  `needs_human` with stop_gate `db`, before any commit.
+- The post-commit gate at `infra:verify-plan-commit` is unchanged (`plan_files.py` is
+  byte-identical) and stays the backstop.
+- Review nit: the planner role quotes only the scheme name; the inline DSN shape is gone, so a
+  planner cannot copy it into the plan.
+
+### Added
+
+- 2011: yadgarhq/iam-db's tests run `DROP DATABASE IF EXISTS iam_db_<x>` and
+  `CREATE DATABASE iam_db_<x>`. Each role user had ALL on its own `fleet_*` database only, so they failed with
+  ERROR 1044. New optional key `test_db_prefix` in `.fleet-test-db.json` (for example
+  `"test_db_prefix":"iam_db_"`). With it, `db_up.py` also grants each role user
+  ``ALL PRIVILEGES ON `iam\_db\_%`.*`` (each `_` escaped as `\_`, so the LIKE pattern matches the
+  literal prefix only), in the up and the add step. The own-database grant stays.
+- The value must match `^[a-z][a-z0-9_]{0,30}_$`, must not start with `fleet_`, and must not be,
+  start with, start or LIKE-match `mysql`, `sys`, `information_schema` or `performance_schema`.
+  `test_db_decl.py`, the workflow (`dbPrefixProblem`) and `db_up.py` each refuse a bad value; the
+  declaration is then refused as a whole (`stop_gate: "db"`). It is the only optional key.
+- `db_up.py` takes the prefix as an optional last argument. Without the key the argv, the
+  printed keys and the SQL are the same as 5.0.2, byte for byte. A prefix that changes during a
+  run stops it. The roles' `test_env` note names the prefix.
+- Scope: the grant exists only in the run's own container, published on 127.0.0.1, removed at
+  the end of the run (or by its self-expiry). It reaches no other server.
+
+### Tests
+
+- `v503_dsn_precheck.test.mjs`: `plan_dsn.py` in real repos (placeholder and uppercase hits, a
+  clean plan, symlink and path escapes refused; its digest equals the workflow's recompute),
+  parity with `plan_files.py` on the same bytes, a
+  hit routed to a re-plan round with no audit and no commit before it, the spent budget stopping
+  at stop_gate `db`, relay and argument mismatches failing closed, the role text, the unchanged
+  backstop and the workflow size.
+- `v503_db_prefix.test.mjs`: `db_up.py` against a podman stub (the exact SQL for `iam_db_` in
+  the up and the add mode, the 5.0.2 SQL without the key, every bad value exits 2 with no podman
+  call, every good value accepted), `test_db_decl.py` in a real repo (good and bad values), and the workflow (the prefix in
+  both db_up commands and the roles' note, the commands unchanged without it, each bad value
+  halting before any role, a prefix change during the run halting).
+
 ## [5.0.2] - 2026-11-10
 
 Fleet 5.0.2 (ledgers 2004, 2005, 2006, 2007): four findings of the 5.0.1 release smoke run.

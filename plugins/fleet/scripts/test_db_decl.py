@@ -43,11 +43,22 @@ def done():
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
     print(json.dumps(out, ensure_ascii=False))
     sys.exit(0)
+# fleet 5.0.3 (2011): the one optional key; db_up.py and the workflow check the same
+SYSTEM_SCHEMAS = ('mysql', 'sys', 'information_schema', 'performance_schema')
+def prefix_problem(p):
+    if not isinstance(p, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,30}_', p):
+        return 'test_db_prefix must be a string matching ^[a-z][a-z0-9_]{0,30}_$'
+    if p.startswith('fleet_'):
+        return 'test_db_prefix must not start with fleet_ (the role databases)'
+    like = re.compile(re.escape(p).replace('_', '.') + '.*')
+    if any(s.startswith(p) or p.startswith(s) or like.fullmatch(s) for s in SYSTEM_SCHEMAS):
+        return 'test_db_prefix must not match or start a system schema (' + ', '.join(SYSTEM_SCHEMAS) + ')'
+    return None
 def problem(d):
     if not isinstance(d, dict):
         return 'not a JSON object'
-    if sorted(d) != ['engine', 'env', 'major', 'version']:
-        return 'keys must be exactly version, engine, major, env'
+    if sorted(k for k in d if k != 'test_db_prefix') != ['engine', 'env', 'major', 'version']:
+        return 'keys must be exactly version, engine, major, env (and optionally test_db_prefix)'
     if isinstance(d['version'], bool) or d['version'] != 1:
         return 'version must be 1'
     if d['engine'] != 'mariadb':
@@ -56,6 +67,8 @@ def problem(d):
         return 'major must be a string like 11.4'
     if not isinstance(d['env'], str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,40}_TEST_DSN', d['env']):
         return 'env must match ^[A-Z][A-Z0-9_]{0,40}_TEST_DSN$'
+    if 'test_db_prefix' in d:
+        return prefix_problem(d['test_db_prefix'])
     return None
 if not re.fullmatch(r'[A-Za-z0-9._/-]{1,200}', branch) or '..' in branch or branch.startswith(('-', '/')):
     out['error'] = 'default branch name refused'
