@@ -52,9 +52,14 @@ test("5.0.0 R2: ledgerAdapter picks yaadgaar | yadgar | tracker | none from sour
   // a yadgarhq/ project never falls through to the frozen yadgar ledger (ADR-0994)
   assert.notEqual(ledgerAdapter("yadgarhq/docs", L, [YGET]).adapter, "yadgar");
   assert.equal(ledgerAdapter("yadgarhq/docs", L.concat([GH]), [YGET]).adapter, "tracker");
-  // tool absent: tracker when a tracker source exists, else none, with a reason
-  assert.equal(ledgerAdapter("m-agahi/x", L, []).adapter, "none");
-  assert.match(ledgerAdapter("m-agahi/x", L, []).reason, /mcp__yadgar__task_get absent/);
+  // review of 88eb9b0: the census is advisory: a ledger source keeps its
+  // ledger path when the census misses the tool (the writer tries it); the
+  // reason says the census did not list it
+  assert.equal(ledgerAdapter("m-agahi/x", L, []).adapter, "yadgar");
+  assert.match(ledgerAdapter("m-agahi/x", L, []).reason, /census did not list mcp__yadgar__task_get/);
+  assert.equal(ledgerAdapter("yadgarhq/docs", Y, []).adapter, "yaadgaar");
+  assert.equal(ledgerAdapter("m-agahi/x", L, [YGET]).reason, null);
+  // a non-ledger source needs no tool: tracker or none, census or not
   assert.equal(ledgerAdapter("m-agahi/x", [GH], []).adapter, "tracker");
   assert.equal(ledgerAdapter("m-agahi/x", [{ kind: "jira", ref: "ABC-1" }], [YGET, YREAD]).adapter, "tracker");
   const none = ledgerAdapter("m-agahi/x", [{ kind: "text", ref: "text" }], [YGET, YREAD]);
@@ -95,10 +100,10 @@ test("5.0.0 R2: census [] + GitHub issue: build ok, adapter tracker, ledger_stat
   assert.equal(posts.length, 1);
   assert.match(posts[0].text, /fleet:/);
   assert.ok(!out.labels.some((l) => LEDGER_LABEL.test(l)), out.labels.join(", "));
-  // intake is told no ledger tool exists
+  // intake gets the census as a hint (review of 88eb9b0: advisory, never "none")
   const it = inputsOf(call(out, "intake").prompt);
   assert.deepEqual(it.ledger_tools, []);
-  assert.equal(it.ledger, "none");
+  assert.equal(it.ledger, "yadgar");
 });
 
 test("5.0.0 R2: census [] + plain text: adapter none, ledger_status none, the reason in the result, run ok", async () => {
@@ -112,22 +117,69 @@ test("5.0.0 R2: census [] + plain text: adapter none, ledger_status none, the re
   assert.equal(out.result.comment_status, "none");
 });
 
-test("5.0.0 R2: census [] + a task id stops before intake with one plain sentence", async () => {
+// intake's answer when ToolSearch finds no ledger tool: every call absent
+function absentIntake(prompt) {
+  const i = inputsOf(prompt);
+  const tools = i.ledger === "yaadgaar" ? [YREAD] : i.ledger === "yadgar" ? [YGET] : [YREAD, YGET];
+  return {
+    status: "needs_human",
+    reason: "no task ledger available; give a URL, Jira key or text",
+    tried: tools.map((t) => ({ ledger: t === YREAD ? "yaadgaar" : "yadgar", project: i.project, call: t, error: "absent" })),
+  };
+}
+
+test("5.0.0 R2 (review of 88eb9b0): census [] + a task id still dispatches intake; intake reporting absent stops with the plain sentence", async () => {
   for (const input of ["L123", "123", "#123", "yaadgaar #123"]) {
     for (const project of ["m-agahi/x", "yadgarhq/docs", undefined]) {
       const a = { ...ARGS, input, confirm: "ask" };
       if (project === undefined) delete a.project;
       else a.project = project;
-      const out = await runOne(withCensus([]), a);
+      const s = withCensus([]);
+      s.intake = absentIntake;
+      const out = await runOne(s, a);
+      assert.ok(out.labels.includes("intake"), "intake is dispatched: " + out.labels.join(", "));
+      // the census is a hint only: intake is told to try the ledger tool
+      const it = call(out, "intake");
+      assert.notEqual(inputsOf(it.prompt).ledger, "none", input + " " + project);
+      assert.match(it.prompt, /advisory/);
       assert.equal(out.result.status, "needs_human", input + " " + project);
       assert.match(out.result.reason, NO_LEDGER, input);
-      assert.ok(!out.labels.includes("intake"), "no intake agent: " + out.labels.join(", "));
+      // the real census and the tool this project's ledger needs
+      assert.match(out.result.reason, /census: \[\]/);
+      const need = project === "m-agahi/x" ? /needs mcp__yadgar__task_get/ : project === "yadgarhq/docs" ? /needs mcp__yaadgaar__read_task/ : /needs mcp__yaadgaar__read_task or mcp__yadgar__task_get/;
+      assert.match(out.result.reason, need, input + " " + project);
     }
   }
-  // a yadgarhq/ project with only the yadgar ledger tool: no usable ledger
-  const y = await runOne(withCensus([YGET]), { ...ARGS, input: "#622", project: "yadgarhq/docs", confirm: "ask" });
+  // the census that preflight reported is printed as it is
+  const s = withCensus([YGET]);
+  s.intake = absentIntake;
+  const y = await runOne(s, { ...ARGS, input: "#622", project: "yadgarhq/docs", confirm: "ask" });
   assert.equal(y.result.status, "needs_human");
   assert.match(y.result.reason, NO_LEDGER);
+  assert.match(y.result.reason, /census: \["mcp__yadgar__task_get"\]/);
+});
+
+test("5.0.0 R2 (review of 88eb9b0): a wrong census [] for a yadgar user: intake finds the tool, the build ends ok on today's path", async () => {
+  const s = withCensus([]);
+  const out = await run(s, { ...ARGS, input: "L123", confirm: "ask" });
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(inputsOf(call(out, "intake").prompt).ledger, "yadgar");
+  // the write-back still dispatches the read and the writer, which find the tool
+  assert.ok(out.labels.includes("infra:ledger-read:pre"), out.labels.join(", "));
+  assert.ok(out.labels.includes("infra:ledger-writeback"), out.labels.join(", "));
+  assert.equal(out.result.ledger_status, "ok");
+  assert.equal(out.result.ledger_adapter, "yadgar");
+  assert.deepEqual(out.result.write_back.ledger.map((e) => e.status), ["written"]);
+});
+
+test("5.0.0 R2 (review of 88eb9b0): an intake stop that is not all-absent keeps today's reason", async () => {
+  const s = withCensus([]);
+  s.intake = { status: "needs_human", reason: "task 123 not found", tried: [{ ledger: "yadgar", project: "o/r", call: "task_get(project_id=o/r, id=123)", error: "not found" }] };
+  const out = await runOne(s, { ...ARGS, input: "L123", confirm: "ask" });
+  assert.equal(out.result.status, "needs_human");
+  assert.doesNotMatch(out.result.reason, NO_LEDGER);
+  assert.match(out.result.reason, /not found/);
 });
 
 test("5.0.0 R2: census with mcp__yadgar__task_get, project m-agahi/x: today's ledger path, adapter yadgar", async () => {
@@ -181,29 +233,47 @@ test("5.0.0 R2: a present ledger tool failing at call time stays failed; the run
   assert.match(out.result.write_back.ledger[0].section_text, /fleet:l42/);
 });
 
-test("5.0.0 R2: the build uses its own census: the ledger tool gone at build time -> unavailable, section handed back, run ok", async () => {
+test("5.0.0 R2 (review of 88eb9b0): the ledger tool gone at build time: the read is still dispatched; it reports unavailable -> section handed back, run ok", async () => {
   const s = withCensus([YGET]);
   const plan = await runOne(s, { ...ARGS, confirm: "ask" });
   assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
   s.preflight = { ledger_tools: [] };
+  s["infra:ledger-read:pre"] = (p) => ({ status: "ok", reason: "absent", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "unavailable", reason: "ToolSearch found no mcp__yadgar__task_get" })) });
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: ARGS.project });
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.ok(!out.labels.some((l) => LEDGER_LABEL.test(l)), out.labels.join(", "));
+  assert.ok(out.labels.includes("infra:ledger-read:pre"), "the census never skips the read");
+  assert.match(call(out, "infra:ledger-read:pre").prompt, /status unavailable/);
+  assert.ok(!out.labels.includes("infra:ledger-writeback"));
   assert.equal(out.result.ledger_status, "unavailable");
   assert.equal(out.result.ledger_adapter, "none");
   const e = out.result.write_back.ledger[0];
   assert.equal(e.status, "unavailable");
-  assert.match(e.reason, /mcp__yadgar__task_get absent/);
+  assert.match(e.reason, /ToolSearch found no mcp__yadgar__task_get/);
   assert.match(e.section_text, /fleet:l42/);
 });
 
-test("5.0.0 R2: a preflight with no census stops the run (never assumed present)", async () => {
+test("5.0.0 R2 (review of 88eb9b0): the yaadgaar read reports unavailable -> unavailable, run ok", async () => {
+  const s = withCensus([YREAD], { brief: YBRIEF });
+  const plan = await runOne(s, { ...ARGS, input: "yaadgaar #622", project: "yadgarhq/docs", confirm: "ask" });
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  s.preflight = { ledger_tools: [] };
+  s["infra:yaadgaar-read"] = (p) => ({ status: "ok", reason: "absent", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "unavailable", reason: "no read_task tool" })) });
+  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.labels.includes("infra:yaadgaar-read"));
+  assert.match(call(out, "infra:yaadgaar-read").prompt, /status unavailable/);
+  assert.equal(out.result.ledger_status, "unavailable");
+  assert.equal(out.result.write_back.ledger[0].status, "unavailable");
+  assert.match(out.result.write_back.ledger[0].section_text, /fleet:y622/);
+});
+
+test("5.0.0 R2 (review of 88eb9b0): a malformed census counts as [] and never blocks: the ledger path still runs", async () => {
   const s = happy();
   s.preflight = { ledger_tools: "mcp__yadgar__task_get" };
-  const out = await runOne(s, { ...ARGS, confirm: "ask" });
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /ledger_tools/);
-  assert.ok(!out.labels.includes("intake"));
+  const out = await run(s, { ...ARGS, confirm: "ask" });
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.logs.some((l) => /ledger tools: none \(census not a list/.test(l)), "logged");
+  assert.equal(out.result.ledger_status, "ok");
 });
 
 test("5.0.0 R2: memory_notes replaces yadgar_findings in the result; optional on every role", async () => {

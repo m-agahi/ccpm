@@ -4470,19 +4470,21 @@ test("2.1.0 build with confirm auto re-runs the gates against the current ledger
   assert.match(b2.result.reason, /re-read/);
 });
 
-// 5.0.0 (R2): the build's own census has no ledger tool: the sealed ledger
-// task's current rulings cannot be read, so confirm auto stops (fails closed)
-// before any re-read agent; confirm ask is the way on.
-test("5.0.0 R2: build confirm auto with the ledger tool gone stops before the rulings re-read", async () => {
+// 5.0.0 (R2; review of 88eb9b0: the census is advisory, Max kept the stop):
+// the build's census has no ledger tool; the re-read is still dispatched.
+// When it reports the tool absent, the sealed ledger task's current rulings
+// cannot be read, so confirm auto stops (fails closed); confirm ask goes on.
+test("5.0.0 R2: build confirm auto: a rulings re-read that finds no ledger tool stops", async () => {
   const s = autoHappy();
   const plan = await runOne(s, ARGS);
   assert.equal(plan.result.status, "awaiting_confirmation");
   s.preflight = { ledger_tools: [] };
+  s["intake:rulings"] = { status: "needs_human", reason: "no task ledger available; give a URL, Jira key or text", tried: [{ ledger: "yadgar", project: "o/r", call: "mcp__yadgar__task_get", error: "absent" }] };
   const build = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r", confirm: "auto" });
   assert.equal(build.result.status, "needs_human");
+  assert.ok(build.labels.includes("intake:rulings"), "the census never skips the re-read: " + build.labels.join(", "));
   assert.match(build.result.reason, /re-read of ledger:42 for current rulings: no task ledger available; give a URL, Jira key or text/);
   assert.match(build.result.reason, /confirm "ask"/);
-  assert.ok(!build.labels.includes("intake:rulings"), build.labels.join(", "));
 });
 
 // ---------------------------------------------------------------- 2.1.0 review
@@ -5511,6 +5513,7 @@ const ARRAY_SITES = {
   // 5.0.0 (R2)
   "r.memory_notes @ collect": "role:scope-and-plan:memory_notes",
   "pre.ledger_tools @ preflightStep": "preflight:ledger_tools",
+  "it.tried @ noLedgerStop": "intake:tried",
   "h.suspicious @ hasher": "hasher:hashes.suspicious",
   "r.changed @ hasher": "hasher:changed",
   "b.sources @ briefProblem": "intake:brief.sources",

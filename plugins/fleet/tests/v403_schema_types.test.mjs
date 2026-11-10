@@ -336,6 +336,8 @@ const READS = {
     "b.plan_path string": "intake:brief.plan_path",
   },
   ledgerFor: { "project string": PARSED_ARGS, "project string-re": PARSED_ARGS },
+  // 5.0.0 (R2, review of 88eb9b0): intake's all-absent stop
+  noLedgerStop: { "t object": "intake:tried[]", "it.tried array": "intake:tried" },
   intakeHaltReason: {
     "it.reason string": "intake:reason",
     "t object": "intake:tried[]",
@@ -601,7 +603,6 @@ const READS = {
   },
   writeBack: {
     // 5.0.0 (R2): args.project, the ledger scope
-    "project string": PARSED_ARGS,
     "project string-re": PARSED_ARGS,
     "pre.results array": "infra:results",
     "h.body_slug string": "infra:results[].body_slug",

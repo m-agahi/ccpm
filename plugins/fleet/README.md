@@ -42,8 +42,9 @@ key, a GitHub or Codeberg issue or PR URL, a plan path, or free text.
 - No MCP server is required (5.0.0, R2). Optional: `yadgar` (ledger tasks `L<N>`), `yaadgaar`
   (ledger tasks of `yadgarhq/` projects), the Atlassian MCP (Jira input and comments), `gh` /
   `gh-personal` (GitHub input and comments) and `$CODEBERG_TOKEN` (Codeberg comments). Preflight
-  takes a census of the ledger read tools; a step whose tool is absent is skipped or reported,
-  never a stop (see "Ledger adapters" below). Only a task-id input needs a ledger tool.
+  takes an advisory census of the ledger read tools; a ledger step tries its tool and reports an
+  absent one, never a stop (see "Ledger adapters" below). Only a task-id input needs a ledger
+  tool.
 - `git`, `gh` (authenticated), and `python3` >= 3.11 (or `tomli`) in the target repo's environment.
 - For Jira input or write-back: the Atlassian MCP server. For GitHub write-back: `gh-personal`. For
   Codeberg write-back: `$CODEBERG_TOKEN`. A missing tool makes intake stop, or makes that comment
@@ -64,7 +65,7 @@ A missing nonce returns `needs_human` before any agent runs.
 
 | Step | Agent              | Gate in script code                                                                               |
 | ---- | ------------------ | ------------------------------------------------------------------------------------------------- |
-| 1    | preflight          | a role file changed or missing; an unshimmed IaC tool on PATH; no ledger tool census              |
+| 1    | preflight          | a role file changed or missing; an unshimmed IaC tool on PATH                                     |
 | 2    | intake (read only) | `needs_human` (ambiguous repo or ticket) stops before any other step                              |
 | 3    | workspace (infra)  | creates or reuses branch `fleet/<task id>-<slug>` and its worktree                                |
 | 4    | branch-scan (r/o)  | any commit beyond origin/<default> that is not a plan commit -> stop                              |
@@ -223,28 +224,34 @@ project}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, `jira`, `gi
 ### Ledger adapters (5.0.0, R2)
 
 Preflight's last action is a tool census: one `ToolSearch` select of `mcp__yaadgaar__read_task`
-and `mcp__yadgar__task_get`, relayed as `ledger_tools` (a list of names; required). An MCP server
-that is not configured or not connected has no tools, so its names are absent. `fleet:judge`
-cannot see the ledger write tools (`disallowedTools`), so a read tool stands for its server. A
-preflight with no list of names stops (`needs_human`); a census is never assumed.
+and `mcp__yadgar__task_get`, relayed as `ledger_tools` (a list of names). An MCP server that is
+not configured or not connected has no tools, so its names are absent. `fleet:judge` cannot see
+the ledger write tools (`disallowedTools`), so a read tool stands for its server.
 
-- Intake gets `ledger_tools` and a `ledger` it may use: the project's ledger when its read tool is
-  present, `either` (no project, any tool), else `none`. A ledger whose tool is absent is never
-  called; intake records it in `tried` with `error: "absent"`. A task-id input (`L123`, `123`,
-  `#123`, `yaadgaar #123`) with ledger `none` stops before intake: "no task ledger available;
-  give a URL, Jira key or text".
-- The write-back adapter (`ledgerAdapter(project, sources, tools)`, pure, from the build run's own
-  census): `yaadgaar` (a yaadgaar source and its read tool), `yadgar` (a ledger source, its read
-  tool, not a `yadgarhq/` project), `tracker` (a GitHub, Codeberg or Jira source: the one marked
-  comment is the whole write-back; no second comment), else `none`. The result carries
-  `ledger_adapter` and `ledger_reason`.
-- A ledger source whose read tool is absent at build time writes nothing: each entry is
-  `unavailable` with its `section_text`, and `ledger_status` is `unavailable`. A present tool that
-  fails at call time stays `failed`. Neither stops the run. `ledger_status` is `none` when no
-  ledger entry exists.
+The census is advisory: a relay of `ToolSearch` can miss a tool, so it never blocks a ledger
+path. A malformed census counts as `[]` (logged). The agent that needs a ledger tool loads it
+itself and reports it absent only when `ToolSearch` finds no such tool.
+
+- Intake gets `ledger_tools` as a hint and the project's `ledger` (`either` with no project). It
+  tries the ledger tool even when the census does not list it. Only when `ToolSearch` finds none
+  does it record `{ledger, project, call: <tool>, error: "absent"}` in `tried`. A task-id input
+  (`L123`, `123`, `#123`, `yaadgaar #123`) whose every ledger call is `absent` stops: "no task
+  ledger available; give a URL, Jira key or text (census: [...]; this project's ledger needs
+  <tool>)".
+- The write-back adapter (`ledgerAdapter(project, sources, tools)`, pure): `yaadgaar` (a yaadgaar
+  source), `yadgar` (a ledger source, not a `yadgarhq/` project), `tracker` (a GitHub, Codeberg or
+  Jira source: the one marked comment is the whole write-back; no second comment), else `none`.
+  The census only adds a note to `ledger_reason`. The result carries `ledger_adapter` and
+  `ledger_reason`. A non-ledger source needs no tool call.
+- The ledger and yaadgaar read steps always run for a sealed ledger source. A read that finds no
+  tool returns `unavailable`: nothing is written, the entry hands back its `section_text`,
+  `ledger_status` is `unavailable` and the adapter falls back to `tracker` or `none`. A present
+  tool that fails at call time stays `failed`. Neither stops the run. `ledger_status` is `none`
+  when no ledger entry exists. A legacy ledger source on a `yadgarhq/` project is `failed`.
 - The intent judge gets `ledger_task` only through a ledger adapter, and never reads tracker
-  comments as rulings. A build with `confirm: "auto"` whose sealed ledger task cannot be re-read
-  (tool absent) stops with the same sentence; run it with `confirm: "ask"`.
+  comments as rulings. A build with `confirm: "auto"` whose rulings re-read reports the ledger
+  tool absent stops with the same sentence (Max's ruling: only plans that used a ledger reach
+  it); run it with `confirm: "ask"`.
 
 Since 3.1.3 (ledger 1979) intake resolves a task id only by calling the ledger tool, and the tool's
 answer is the truth. `args.project` is the ledger scope and is independent of `repo`: a
