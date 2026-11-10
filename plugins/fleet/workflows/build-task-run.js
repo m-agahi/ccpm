@@ -506,7 +506,7 @@ const SCHEMAS = {
   "fleet-test-writer": roleSchema({
     criterion_id: STR,
     // 4.0.3: the short path splits tests by covers (a string); the item stays a string or an object
-    tests: { type: "array", items: { type: ["string", "object"], properties: { file: STR, name: STR, covers: STR, red_kind: STR, failure_excerpt: STR } } },
+    tests: { type: "array", items: { type: ["string", "object"], properties: { file: STR, name: STR, covers: STR, red_kind: STR_OR_NULL, failure_excerpt: STR_OR_NULL } } },
     files: { type: "array", items: STR },
     addressed_findings: { type: "array", items: ANY_ITEM },
   }),
@@ -586,8 +586,8 @@ const SCHEMAS = {
   }),
   "gate-change-nonweakening-sweep": roleSchema({
     verdict: { type: "string", enum: VERDICTS["gate-change-nonweakening-sweep"] },
-    // 4.0.3: the weakening summary reads shipped_refuses/new_refuses with === (the page's own types)
-    units: { type: "array", items: { type: "object", properties: { unit: STR, mutation: STR, shipped_refuses: { type: "boolean" }, new_refuses: { type: "boolean" } } } },
+    // 4.0.3: the weakening summary reads shipped_refuses/new_refuses with ===; null: no measured verdict (broken instrument)
+    units: { type: "array", items: { type: "object", properties: { unit: STR, mutation: STR, shipped_refuses: { type: ["boolean", "null"] }, new_refuses: { type: ["boolean", "null"] } } } },
     findings: REVIEW_FINDINGS,
   }),
 };
@@ -1975,6 +1975,24 @@ function nullable(p) {
   if (Array.isArray(p.enum) && p.enum.indexOf(null) < 0) w.enum = p.enum.concat(null);
   return w;
 }
+// 4.0.3 review: the program's type of a key merged into the base schema's
+// property: the program's type wins, the base's typed keys and item
+// requirements stay. A base requirement is kept only for a key the program
+// prints at that level (fleet_scan commits carry no subject).
+function mergeProp(base, add) {
+  if (!base || typeof base !== "object") return add;
+  const m = Object.assign({}, base, add);
+  if (base.properties || add.properties) {
+    m.properties = Object.assign({}, base.properties);
+    for (const k of Object.keys(add.properties || {})) m.properties[k] = mergeProp(m.properties[k], add.properties[k]);
+  }
+  if (base.items && add.items) m.items = mergeProp(base.items, add.items);
+  if (base.required || add.required) {
+    const req = (base.required || []).filter((k) => !add.properties || k in add.properties).concat(add.required || []);
+    m.required = req.filter((k, i) => req.indexOf(k) === i);
+  }
+  return m;
+}
 function programSchema(schema, slots) {
   const s = JSON.parse(JSON.stringify(schema));
   s.properties = s.properties || {};
@@ -1985,14 +2003,16 @@ function programSchema(schema, slots) {
     const out = PROGRAM_OUT[name] || {};
     if (slot === null) {
       // 4.0.3: a failed step may give a key null; any other value has the program's type
-      for (const k of Object.keys(out)) s.properties[k] = k === "reason" ? out[k] : nullable(out[k]);
+      for (const k of Object.keys(out)) s.properties[k] = k === "reason" ? out[k] : nullable(mergeProp(s.properties[k], out[k]));
       s.properties.program = PROGRAM_PROP;
       s.properties.file_sha256 = { type: ["string", "null"] };
       req(s, ["program", "file_sha256"]);
       continue;
     }
     const o = Object.assign({ type: ["object", "null"] }, s.properties[slot] || {});
-    o.properties = Object.assign({}, o.properties, out, { program: PROGRAM_PROP, file_sha256: FILE_SHA_HEX });
+    o.properties = Object.assign({}, o.properties);
+    for (const k of Object.keys(out)) o.properties[k] = mergeProp(o.properties[k], out[k]);
+    Object.assign(o.properties, { program: PROGRAM_PROP, file_sha256: FILE_SHA_HEX });
     req(o, ["program", "file_sha256"]);
     s.properties[slot] = o;
     req(s, [slot]);

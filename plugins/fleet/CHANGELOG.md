@@ -26,6 +26,16 @@
     (the short-path split key) and its other page keys are typed.
   - `gate-change-nonweakening-sweep` `units[]`: the page's keys typed
     (`shipped_refuses`, `new_refuses` boolean).
+  - At each slot, the program's type is merged into the base schema's property. The base
+    keeps its typed keys and item requirements (`commits_since[]` sha and subject, `defs[]`
+    name, at and end, `commits[].ref_content`). A base requirement for a key the program does
+    not print is dropped (`fleet_scan` commits have no subject).
+- The `remote_head` `head` field now accepts null (origin has no such branch). 4.0.2 refused
+  it: the shared schema typed `head` as a string.
+- Fields the script never reads accept null where the role page allows no value:
+  `fleet-test-writer` `tests[].red_kind` and `failure_excerpt` (a `guards_existing` test has
+  no failure), and the sweep's `units[].shipped_refuses` and `new_refuses` (a broken
+  instrument has no measured verdict). `covers` stays a string.
 - No check is loosened: a string version that reaches the script still stops the run.
 
 ### Changed

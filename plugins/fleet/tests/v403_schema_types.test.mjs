@@ -247,6 +247,7 @@ const READS = {
     "p.sha256 string": "infra:program.sha256",
   },
   nullable: { "p.enum array": "parsed: a schema property, not an agent result" },
+  mergeProp: { "base object": "parsed: a schema property, not an agent result" },
   scriptsProbeOf: {
     "x string": "preflight:scripts_probe[]",
     "probe array": "preflight:scripts_probe",
@@ -731,8 +732,16 @@ test("4.0.3 1998: every program-running dispatch gets the program's typed keys a
         assert.ok(got, c.label + ": " + (slot || "top") + "." + k + " missing");
         const strip = (t) => [].concat(t).filter((x) => x !== "null").sort();
         assert.deepEqual(strip(got.type), strip(want.type), c.label + ": " + (slot || "top") + "." + k);
-        assert.deepEqual(got.items, want.items, c.label + ": " + k + " items");
-        assert.deepEqual(got.additionalProperties, want.additionalProperties, c.label + ": " + k + " values");
+        // merged into the base property (4.0.3 review): every PROGRAM_OUT type is there, the base may add keys
+        const holds = (g, w, at) => {
+          if (!w) return;
+          assert.ok(g, c.label + ": " + at + " missing");
+          assert.deepEqual(strip(g.type), strip(w.type), c.label + ": " + at);
+          holds(g.items, w.items, at + "[]");
+          holds(g.additionalProperties, w.additionalProperties, at + ".*");
+          for (const [q, v] of Object.entries(w.properties || {})) holds((g.properties || {})[q], v, at + "." + q);
+        };
+        holds(got, want, (slot || "top") + "." + k);
       }
     }
   }
@@ -826,4 +835,62 @@ test("4.0.3 1998: the preflight prompt asks for every role key and integer versi
   const p = out.calls.find((c) => c.label === "preflight").prompt;
   assert.match(p, /versions, dispatch and contract each hold every pattern in `roles` as a key; a missing pattern maps to null in all three/);
   assert.match(p, /a JSON integer \(29, never "29"\)/);
+});
+
+// ---------------------------------------------------------------- 4.0.3 review
+
+// the workflow's programSchema (and its helpers) over the loaded schemas
+function loadProgramSchema() {
+  const grab = (name) => {
+    const i = SOURCE.indexOf("\nfunction " + name + "(");
+    assert.ok(i >= 0, "function " + name);
+    return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
+  };
+  const fns = ["nullable", "mergeProp", "programSchema"].map(grab).join("");
+  return new Function("PROGRAM_OUT", "PROGRAM_PROP", constBlock("FILE_SHA_HEX", ";\n") + fns + "\nreturn programSchema;")(
+    S.PROGRAM_OUT,
+    S.INFRA_SCHEMA.properties.program,
+  );
+}
+
+test("4.0.3 review: fields the script never reads accept null where the role page allows no value", () => {
+  const tw = S.SCHEMAS["fleet-test-writer"].properties.tests;
+  // a guards_existing test passes on current code: no red_kind, no failure excerpt
+  assert.deepEqual(validate(tw, [{ file: "t.py", name: "t1", covers: "AC1: x", red_kind: null, failure_excerpt: null }]), []);
+  // covers is the short-path split key: still a string
+  assert.ok(validate(tw, [{ file: "t.py", name: "t1", covers: null }]).length);
+  const units = S.SCHEMAS["gate-change-nonweakening-sweep"].properties.units;
+  // a broken instrument: no measured verdict
+  assert.deepEqual(validate(units, [{ unit: "u", mutation: "m", shipped_refuses: null, new_refuses: null }]), []);
+  assert.ok(validate(units, [{ unit: "u", mutation: "m", shipped_refuses: "true", new_refuses: false }]).length);
+});
+
+test("4.0.3 review: PROGRAM_OUT merges into the base schema; no item requirement or typed key of INFRA_SCHEMA is lost", () => {
+  const ps = loadProgramSchema();
+  const at = (name) => ps(S.INFRA_SCHEMA, [[null, name]]).properties;
+  const vs = at("verify_since");
+  assert.deepEqual(vs.commits_since.items.required, ["sha", "subject"]);
+  assert.ok(validate(vs.commits_since, [{ sha: "a" }]).length, "commits_since[] still requires subject");
+  const cd = at("changed_defs");
+  assert.deepEqual(cd.defs.items.required, ["name", "at", "end"]);
+  assert.deepEqual(cd.defs.items.properties.end, { type: "integer" });
+  const bs = at("branch_scan");
+  assert.deepEqual(bs.commits.items.properties.ref_content, { type: ["string", "null"] });
+  assert.deepEqual(bs.commits.items.required, ["sha", "subject"]);
+  assert.deepEqual(bs.commits.items.properties.files, { type: "array", items: { type: "string" } });
+  // fleet_scan prints commits without a subject: a base requirement the program never fills is not kept
+  const fs = at("fleet_scan");
+  assert.deepEqual(fs.commits.items.required, ["sha"]);
+  assert.deepEqual(validate(fs.commits, [{ sha: "a", files: ["x"] }]), []);
+  // remote_head prints head null when origin has no branch; 4.0.2 refused it (INFRA head: string)
+  const rh = at("remote_head");
+  assert.deepEqual(validate(rh.head, null), []);
+  assert.deepEqual(validate(rh.head, "abc"), []);
+  // a nested slot keeps the base slot's typed keys too
+  const pf = ps(S.INFRA_SCHEMA, [["plan_files", "plan_files"]]).properties.plan_files;
+  assert.deepEqual(pf.properties.head, { type: "string" });
+  assert.deepEqual(pf.required.slice().sort(), ["file_sha256", "program"]);
+  // the shared schema is never changed
+  assert.deepEqual(S.INFRA_SCHEMA.properties.commits_since.items.required, ["sha", "subject"]);
+  assert.equal(S.INFRA_SCHEMA.properties.head.type, "string");
 });
