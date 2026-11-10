@@ -59,7 +59,7 @@ commit. Ledger 2011: an optional `test_db_prefix` in `.fleet-test-db.json`.
   backstop and the workflow size.
 - `v503_db_prefix.test.mjs`: `db_up.py` against a podman stub (the exact SQL for `iam_db_` in
   the up and the add mode, the 5.0.2 SQL without the key, every bad value exits 2 with no podman
-  call), `test_db_decl.py` in a real repo (good and bad values), and the workflow (the prefix in
+  call, every good value accepted), `test_db_decl.py` in a real repo (good and bad values), and the workflow (the prefix in
   both db_up commands and the roles' note, the commands unchanged without it, each bad value
   halting before any role, a prefix change during the run halting).
 

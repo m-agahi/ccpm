@@ -267,3 +267,15 @@ test("2011 workflow: the JS check and the programs name the same system schemas"
     for (const p of ["db_up.py", "test_db_decl.py"]) assert.ok(readFileSync(join(SCRIPTS_SRC, p), "utf8").includes("'" + s + "'"), p + " " + s);
   }
 });
+
+test("2011 db_up and the workflow accept every good test_db_prefix", { skip: !PY3 }, async () => {
+  for (const v of GOOD) {
+    const st = stubDir();
+    const r = runUp(UP([v]), st);
+    assert.equal(r.status, 0, v + ": " + r.stderr);
+    assert.ok(sqlLineOf(st).includes("ON `" + v.replace(/_/g, "\\_") + "%`.* TO 'fleet_plan'@'%';"), v);
+    const out = await run(withDecl(happy(), Object.assign({}, DECL, { test_db_prefix: v })), ARGS);
+    assert.equal(out.result.status, "ok", v + ": " + out.result.reason);
+    assert.equal(inputsOf(call(out.plan, "infra:db-up").prompt).test_db_prefix, v);
+  }
+});
