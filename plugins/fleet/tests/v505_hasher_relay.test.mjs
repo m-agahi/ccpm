@@ -60,8 +60,12 @@ function rustRepo(n = 3000) {
   return { home, wt, scratch, done: () => rmSync(home, { recursive: true, force: true }) };
 }
 
+// a fake `pytest` on PATH (CI has none; the hasher resolves the command token on PATH)
+const BIN = mkdtempSync(join(tmpdir(), "fleet-505-bin-"));
+writeFileSync(join(BIN, "pytest"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+const ENV = Object.assign({}, process.env, { PATH: BIN + ":" + process.env.PATH });
 function hasherRun(wt, scratch, files = ["tests/test_a.py"]) {
-  const r = spawnSync("python3", ["-I", HASHER, wt, JSON.stringify(files), "", scratch], { encoding: "utf8" });
+  const r = spawnSync("python3", ["-I", HASHER, wt, JSON.stringify(files), "", scratch], { encoding: "utf8", env: ENV });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, out: r.status === 0 ? JSON.parse(r.stdout) : null };
 }
 
@@ -405,21 +409,33 @@ test("5.0.5 2018: a local hook that names a directory (with or without a slash) 
   }
 });
 
-test("5.0.5 2018: a directory a lenient hook passes on, or a PATH binary that is also a directory, is not frozen (as in 5.0.4)", () => {
+// Security review of PR #53: the PATH-binary exemption applies to the command
+// token only. An argument token that names a repo directory is frozen, also
+// when it is the name of a PATH binary and also in a lenient (launcher) hook.
+test("5.0.5 2018: an argument naming a repo dir is frozen even when it is a PATH binary name or the hook is lenient; the command token keeps its exemption", () => {
   const f = rustRepo(0);
   try {
     mkdirSync(join(f.wt, "src"), { recursive: true });
     writeFileSync(join(f.wt, "src", "x.py"), "x = 1\n");
     writeFileSync(join(f.wt, "package.json"), JSON.stringify({ scripts: { lint: "eslint" } }));
-    // `sh` is on PATH; a repo dir of that name stays the binary
+    // `sh` is on PATH and a repo dir
     mkdirSync(join(f.wt, "sh"), { recursive: true });
     writeFileSync(join(f.wt, "sh", "y.txt"), "y\n");
-    for (const entry of ["npm run lint -- src/", "sh -e"]) {
+    const keys = (entry) => {
       writeFileSync(join(f.wt, ".pre-commit-config.yaml"), HOOK(entry));
       const o = hasherRun(f.wt, f.scratch).out;
       assert.deepEqual(o.hashes.suspicious, [], entry);
-      assert.ok(!Object.keys(o.hashes.files).some((k) => k.startsWith("src/") || k.startsWith("sh/")), entry + ": " + Object.keys(o.hashes.files).join(", "));
-    }
+      return Object.keys(o.hashes.files);
+    };
+    // an argument that is a PATH binary name and a repo dir
+    assert.ok(keys("pytest sh -q").includes("sh/y.txt"), "argument sh/ frozen");
+    // lenient: the arguments after an npm script
+    assert.ok(keys("npm run lint -- src/").includes("src/x.py"), "lenient src/ frozen");
+    assert.ok(keys("npm run lint -- sh").includes("sh/y.txt"), "lenient sh/ frozen");
+    // lenient with no `--`: the first argument is an argument too
+    assert.ok(keys("npm run lint src").includes("src/x.py"), "lenient first argument frozen");
+    // the command token stays the binary
+    assert.ok(!keys("sh -e").some((k) => k.startsWith("sh/")), "command sh is the binary");
   } finally {
     f.done();
   }

@@ -423,6 +423,10 @@ def hook_refs():
             elif name in py_scripts:
                 i += 1
                 lenient = True
+        # 5.0.5: the command token (the first one after launcher handling;
+        # none in a lenient hook, whose script or tool was taken above) may be
+        # a PATH binary; every other token is an argument
+        cmd_at = -1 if lenient else i
         while i < len(toks):
             t = toks[i]
             if t == '-c' and not lenient:
@@ -443,11 +447,14 @@ def hook_refs():
             f = repo_file(t)
             if f:
                 refs.add(f)
+            elif i == cmd_at and '/' not in t and shutil.which(t):
+                pass
+            elif i != cmd_at and repo_dir(t):
+                # 5.0.5: an argument naming a repo directory freezes its tree,
+                # in a lenient hook too, whatever binary shares its name
+                dirs.add(repo_dir(t))
             elif lenient or ('/' not in t and shutil.which(t)):
                 pass
-            elif repo_dir(t):
-                # 5.0.5: only a token that was unresolvable becomes a directory
-                dirs.add(repo_dir(t))
             else:
                 bad.append('unresolvable local hook ' + hid + ': ' + t)
             i += 1
