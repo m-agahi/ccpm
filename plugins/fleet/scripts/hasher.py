@@ -441,13 +441,13 @@ def hook_refs():
                 i += 1
                 continue
             f = repo_file(t)
-            d = None if f else repo_dir(t)
             if f:
                 refs.add(f)
-            elif d:
-                dirs.add(d)
             elif lenient or ('/' not in t and shutil.which(t)):
                 pass
+            elif repo_dir(t):
+                # 5.0.5: only a token that was unresolvable becomes a directory
+                dirs.add(repo_dir(t))
             else:
                 bad.append('unresolvable local hook ' + hid + ': ' + t)
             i += 1

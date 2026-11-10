@@ -405,6 +405,26 @@ test("5.0.5 2018: a local hook that names a directory (with or without a slash) 
   }
 });
 
+test("5.0.5 2018: a directory a lenient hook passes on, or a PATH binary that is also a directory, is not frozen (as in 5.0.4)", () => {
+  const f = rustRepo(0);
+  try {
+    mkdirSync(join(f.wt, "src"), { recursive: true });
+    writeFileSync(join(f.wt, "src", "x.py"), "x = 1\n");
+    writeFileSync(join(f.wt, "package.json"), JSON.stringify({ scripts: { lint: "eslint" } }));
+    // `sh` is on PATH; a repo dir of that name stays the binary
+    mkdirSync(join(f.wt, "sh"), { recursive: true });
+    writeFileSync(join(f.wt, "sh", "y.txt"), "y\n");
+    for (const entry of ["npm run lint -- src/", "sh -e"]) {
+      writeFileSync(join(f.wt, ".pre-commit-config.yaml"), HOOK(entry));
+      const o = hasherRun(f.wt, f.scratch).out;
+      assert.deepEqual(o.hashes.suspicious, [], entry);
+      assert.ok(!Object.keys(o.hashes.files).some((k) => k.startsWith("src/") || k.startsWith("sh/")), entry + ": " + Object.keys(o.hashes.files).join(", "));
+    }
+  } finally {
+    f.done();
+  }
+});
+
 test("5.0.5 2018: the program table names ignored_diff and the workflow runs it only through its slot", () => {
   assert.ok(PROGRAMS.some(([n]) => n === "ignored_diff"));
   assert.ok(existsSync(DIFF));

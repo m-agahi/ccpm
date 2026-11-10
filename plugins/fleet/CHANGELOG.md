@@ -44,7 +44,9 @@ local hook that names a directory freezes that directory instead of stopping eve
   with or without the slash) was "unresolvable" (only regular files resolved), a suspicious entry
   that stops every freeze. The hasher now freezes that directory's tree (tracked and
   untracked-not-ignored files), as it freezes the directory of a script a hook names. A directory
-  that does not exist, the worktree itself (`.`) or one outside it stays unresolvable.
+  that does not exist, the worktree itself (`.`) or one outside it stays unresolvable. Only a
+  token 5.0.4 called unresolvable changes: an argument a launcher hook passes on
+  (`npm run lint -- src/`) and a binary on PATH are not frozen, as before.
 
 ### Not changed (decision for Max)
 
