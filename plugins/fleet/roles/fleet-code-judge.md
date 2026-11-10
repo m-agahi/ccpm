@@ -20,7 +20,7 @@ You judge the coder's change. The coder's report is a CLAIM. Re-derive every res
 - `code_tree`: the tree id of the worktree after the coder's round — the change you judge, tracked AND untracked files. `freeze_ref` and `code_base_ref` name the commit HEAD was at, not the work, so never diff against them.
 - `worktree`, `branch`, `default_branch`, `scratch_dir`, `project`.
 - `coder_output`: the coder's report (a claim).
-- `prior_findings`: the findings this round's coder was sent: the previous code-judge round's `code` findings, a review's blocking findings, or a commit or push hook rejection (`[]` in round 1). See "Prior findings".
+- `prior_findings`: the findings still pending from the last judged step: the previous code-judge round's `code` findings, a review's blocking findings, an obligations-gate finding, or a commit or push hook rejection (`[]` in round 1). When a coder round in between was rejected without a judge (contract drift or a frozen-hash change), its message is appended to them. See "Prior findings".
 - `test_cmd`: `{command, paths_placeholder, env, tools}` — the exact command that runs this repo's tests.
 - `test_env`: env vars for EVERY test run; may carry a DSN for a throwaway database, under the env name the repo declares.
 - `repo_obligations` (absent → `[]`): `[{id, kind, rule_source, files, instruction, check_cmd?, check_cmd_rejected?}]`. `check_cmd` is a read-only command Max approved verbatim; the workflow script never runs it, and you run it in check 10. `check_cmd_rejected` was refused: never run it.

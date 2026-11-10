@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { SOURCE, ARGS, happy, run, runOne, inputsOf, call, noUnscripted, ROLE_NAMES, ROLES_SRC, SCRIPTS_SRC, SCRIPTS_DIR, HASHES, FP_K1, CSHA } from "./harness.mjs";
+import { SOURCE, ARGS, happy, run, runOne, inputsOf, call, noUnscripted, ROLE_NAMES, ROLES_SRC, SCRIPTS_SRC, SCRIPTS_DIR, HASHES, FP_K1, CSHA, H, HASHES_FLAT, BRIEF } from "./harness.mjs";
 
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 const SHARED_DIR = join(ROLES_SRC, "_shared");
@@ -116,12 +116,14 @@ test("5.0.0 R3: the real inputs are documented: hash_recheck, prior_findings, fr
   for (const r of ["fleet-code-judge", "pr-review", "fleet-pr-opener"]) assert.match(t(r), /first 4 characters/, r + ": the secret redaction rule");
 });
 
-test("5.0.0 R3: pr-review is fleet-mode only, reads no secret, and counts CI only once gh pr checks reports success", () => {
+// release review of #48, item 4: was "once gh pr checks reports success"
+test("5.0.0 R3: pr-review is fleet-mode only, reads no secret, and counts CI only from the check runs of head_sha", () => {
   const t = readFileSync(join(ROLES_SRC, "pr-review.md"), "utf8");
   assert.doesNotMatch(t, /≤ ?40 lines|## Task list/);
   assert.doesNotMatch(t, /<\s?80|>=\s?80|Drop anything/);
   assert.doesNotMatch(t, /green[^.\n]*CI[^.\n]*IS the evidence/i);
-  assert.match(t, /gh pr checks/);
+  assert.match(t, /repos\/<repo>\/commits\/<head_sha>\/check-runs/);
+  assert.doesNotMatch(t, /gh pr checks/);
   assert.doesNotMatch(t, /SELF-AUTHORED PR MODE \(use whenever|Flux|ClusterRoleBinding|kustomize|HelmRelease/);
 });
 
@@ -370,7 +372,8 @@ test("PR #48 ruling 1: null memory_notes and follow_ups from the coder, and a nu
 test("PR #48 ruling 2: plan-audit routes a missing Non-goals section as a finding, never as plan_defect on its own", () => {
   const t = readFileSync(join(ROLES_SRC, "plan-audit.md"), "utf8");
   assert.doesNotMatch(t, /missing "Non-goals" section → `plan_defect`/i);
-  assert.match(t, /no "Non-goals" section[^\n]*routed finding[^\n]*never changes the verdict on its own/i);
+  // release review of #48: the Non-goals rule now lives in the advisory section (release 2 checks its verdict rule)
+  assert.match(t, /no "Non-goals" section → finding/);
 });
 
 // Ruling 3: probe mode also reads the shared file the way the planner does.
@@ -407,6 +410,81 @@ test("PR #48 ruling 4: the prior-finding rulings (routed_findings prefixes, chec
   assert.match(readme, /`prior still_present: `/);
   assert.match(readme, /`prior regressed: `/);
   assert.match(readme, /`"prior <id>: resolved\|still_present\|regressed — <evidence>"`/);
+});
+
+// ---------------------------------------------------------------- release review of #48 (7c7523e)
+
+const roleText = (r) => readFileSync(join(ROLES_SRC, r + ".md"), "utf8");
+
+test("#48 release 1: plan-audit gets the brief with its source bodies, and the file documents it", async () => {
+  const out = await run(happy(), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const a = inputsOf(call(out, "role:plan-audit").prompt);
+  assert.deepEqual(a.brief, inputsOf(call(out, "role:scope-and-plan").prompt).brief);
+  assert.ok(Array.isArray(a.brief.sources) && a.brief.sources.length && a.brief.sources.every((s) => "body" in s));
+  assert.equal(a.brief.title, BRIEF.title);
+  assert.match(roleText("plan-audit"), /- `brief`: `\{title, description, sources: \[\{kind, ref, url, body, id, project\}\], repo, plan_path\}`/);
+});
+
+test("#48 release 2: plan-audit's new 5.0.0 rules (Non-goals, STRIDE, I/O failure paths, source_quote) never change the verdict on their own", () => {
+  const t = roleText("plan-audit");
+  const i = t.indexOf("## Planner-quality findings");
+  assert.ok(i >= 0, "a section for the soft rules");
+  const sec = t.slice(i, t.indexOf("\n## ", i + 5));
+  for (const k of ["Non-goals", "STRIDE", "failure path", "source_quote"]) assert.match(sec, new RegExp(k), k);
+  assert.match(sec, /never changes? the verdict on (its|their) own/);
+  // none of them is a gating item any more
+  const g0 = t.indexOf("## Acceptance criteria gate");
+  const gate = t.slice(g0, t.indexOf("\n## ", g0 + 5));
+  assert.doesNotMatch(gate, /STRIDE|timeout, partial|source_quote/);
+  assert.doesNotMatch(t, /paraphrase presented as a quote → `untestable_criteria`/);
+});
+
+test("#48 release 3: an approving audit's routed findings go to the gate log; README and CHANGELOG say so", async () => {
+  const f = { target: "plan", criterion: null, finding: "add a Non-goals section" };
+  const out = await run(happy({ script: { "role:plan-audit": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [f] } } }), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.planResult.gate_log.some((l) => l === "plan-audit advisory finding (approve): -: add a Non-goals section"), out.planResult.gate_log.join("\n"));
+  for (const doc of ["README.md", "CHANGELOG.md"]) assert.match(readFileSync(join(ROLES_SRC, "..", doc), "utf8"), /advisory finding[^.]*gate log/, doc);
+});
+
+test("#48 release 5: pr-review never blocks on a fix that needs a change outside allowed_additions", () => {
+  assert.match(roleText("pr-review"), /outside `allowed_additions`[^.]*`nit`[^.]*needs plan change/);
+});
+
+test("#48 release 6: the code judge's prior_findings keep the last judge findings across a hash-rejection round, with the hash message appended", async () => {
+  const f = { target: "code", criterion: "AC1", finding: "src/x.py:3 -- dead branch -- delete it" };
+  const s = happy({
+    script: {
+      "role:fleet-code-judge:r1": { status: "ok", reason: "x", verdict: "fix_code", routed_findings: [f] },
+      "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: { head: FP_K1.head, tree: "K2" }, hashes: H({ ...HASHES_FLAT, "tests/test_a.py": "TAMPERED" }) },
+      "role:fleet-coder:r3": { status: "ok", changed_paths: ["src/x.py"] },
+      "hasher:post-coder:r3": { status: "ok", fingerprint: { head: FP_K1.head, tree: "K3" }, hashes: HASHES },
+      "role:fleet-code-judge:r3": { status: "ok", verdict: "approve", routed_findings: [] },
+      "hasher:fp-post:code-judge:r3": { status: "ok", fingerprint: { head: FP_K1.head, tree: "K3" } },
+    },
+  });
+  const out = await run(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r2"));
+  const p3 = inputsOf(call(out, "role:fleet-code-judge:r3").prompt).prior_findings;
+  assert.equal(p3.length, 2, JSON.stringify(p3));
+  assert.deepEqual(p3[0], f);
+  assert.match(p3[1].finding, /frozen test or runner-config hash changed: .*tests\/test_a\.py/);
+});
+
+test("#48 release 7: the allowlist states the pre-commit option order PRECOMMIT_CMD_RE needs", () => {
+  assert.match(readFileSync(ALLOWLIST, "utf8"), /in this order[^.]*`--all-files` before `--hook-stage <stage>`/);
+});
+
+test("#48 release 8: test-writer and test judge skip the reverse-order run for a cargo or go criterion (test_args, no paths)", () => {
+  for (const r of ["fleet-test-writer", "fleet-test-judge"]) assert.match(roleText(r), /`test_args`[^.]*skip the reverse-order run/, r);
+});
+
+test("#48 release 9: the sweep allows null shipped_refuses / new_refuses when the instrument is broken", () => {
+  assert.match(roleText("gate-change-nonweakening-sweep"), /`shipped_refuses`[^.]*`new_refuses`[^.]*null[^.]*instrument is broken/);
 });
 
 test("5.0.0 R3: role schemas carry memory_notes only (no yadgar_findings); notes from the roles reach the result", async () => {

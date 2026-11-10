@@ -68,7 +68,7 @@ The production code now exists, uncommitted in the working tree. That code is EX
 8. **No weakening.** No `skip`/`skipif`/`xfail`/`importorskip`, commented-out asserts, `or True`, broad `raises(Exception)`, loose tolerances, early `return`.
 9. **No duplicates** across criteria — the same assertion in two files is a finding on the later one.
 10. **Scope.** Every path changed or untracked in the working tree relative to `plan_commit` (the scope above) is an assigned `test_files` path, except the coder's expected code on a re-entry. Production code, another criterion's file, or shared config → finding.
-11. **Determinism and isolation.** Run every file twice, then once in reverse order (pytest: the test node ids in reverse order in place of `<paths>`; other runners: the files in reverse order). Any flip → finding. Flag a flaky marker or retry (`@retry`, `flaky`, `--reruns`, a rerun loop, a `sleep` before an assert), a fixed port, a shared file or global state, and a test that relies on another test or on test order: each test must own its data.
+11. **Determinism and isolation.** Run every file twice, then once in reverse order (pytest: the test node ids in reverse order in place of `<paths>`; other path-taking runners: the files in reverse order). For a cargo or go criterion (one with `test_args` and no `<paths>`) skip the reverse-order run. Any flip → finding. Flag a flaky marker or retry (`@retry`, `flaky`, `--reruns`, a rerun loop, a `sleep` before an assert), a fixed port, a shared file or global state, and a test that relies on another test or on test order: each test must own its data.
 12. **Plan gap.** Criterion ambiguous, missing an example, untestable, or contradicted by the code → target `plan`.
 
 ## Routing
@@ -88,7 +88,7 @@ Return ONE object through the StructuredOutput tool. It is the only output chann
 - Required on `ok`: `verdict`, `routed_findings` (array, `[]` when none) and `checked` (array, one entry per criterion). On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
 - Optional: `artefacts`, `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
 
-Shape (use `null` for a stub that does not apply, and for `red_valid` on re-entry tests):
+Shape (use `null` for a stub that does not apply, for `red_valid` on re-entry tests, and for `reverse_order_stable` when the reverse-order run was skipped):
 
 ```json
 {

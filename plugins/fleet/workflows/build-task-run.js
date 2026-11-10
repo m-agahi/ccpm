@@ -1768,16 +1768,16 @@ function programTable() {
 // against the dispatched role and this table (roleFileProblem).
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
-  "fleet-code-judge": "90c230f18cd084b0278113a81bd329d07387cb7488cf8d631cbd320379e4e30a",
+  "fleet-code-judge": "ef70e362d62eee492cc5fbc6c029b95059c604a28836dbdf25ce15dd497acebe",
   "fleet-coder": "77695df59e32ce33c9fddb201ac705c3313c3a0e17f80aa0b14a673df6e5065d",
   "fleet-intent-judge": "03283fc805f57bcf22a6448fc43b8ead05983e94de1b05563f3e50c4a7837a1e",
   "fleet-pr-opener": "8c15b83cea3191649e0f15f577fa76cfaff13f00dfb3f3884aa05438d7fcbb75",
-  "fleet-test-judge": "941cc461ddce5625c6f9adcc652c3c9d8cd56885bfac63efa4c72eb8eec0fcae",
-  "fleet-test-writer": "55cbaa090de0a85a263dd0507b29908dc4df6305ac2868c6d20c31c11c8e5858",
-  "gate-change-nonweakening-sweep": "062ca3f7573d70d33b25c8a1f15fe440553cafb6a981050675e582c9b23f87da",
-  "plan-audit": "27a74a39306fbf5060e06e108d46ad44a472cb064a4e5ae66a5128046ffa892f",
-  "pr-review": "91df3cf97bd494ba6c3f911f8e0958cc091fc473c943120ac8c4409a1a7b0b4b",
-  "scope-and-plan": "5c7dbbddcb8498def9c4f751a50906286251f83edd003929e7a4b0db3af2906b"
+  "fleet-test-judge": "a6e5814eeba434ca95e08d0c21c9b516da23fcd8ff84c2fc2447a7fc57c93b2e",
+  "fleet-test-writer": "e048fefa56638821a25e0d748de6bd8d6976c8dff2c66798b5856a9c086cf8b2",
+  "gate-change-nonweakening-sweep": "f22759af37de2d5df1cc47fa532197ef42ed37bd31f13c9fc52cc142a37040b5",
+  "plan-audit": "7578a832d1c69147dbb467dab40721af5105c14a704f989acf89cc03a6c7f8cf",
+  "pr-review": "0fc7353562f4c0555bc69b116988dbac1343da80ff260f6c5cab14637c1715e9",
+  "scope-and-plan": "299d27376bbfd50c78de9d74feb17884090b1a317fa159ccbd7cab69c1187698"
 };
 // ROLE_SHA256_END
 // The first DISPATCH line of each role file, written by gen.mjs from the same
@@ -1802,7 +1802,7 @@ const ROLE_DISPATCH = {
 // and returns shared_file {name, sha256}; sharedFileProblem checks it.
 // SHARED_SHA256_BEGIN
 const SHARED_SHA256 = {
-  "test-cmd-allowlist": "2ec84d0a023b5637f6301710113889c6da65ec64754caf5c7fbd9e99c670dc42"
+  "test-cmd-allowlist": "95e52c973c5a86a1e484bbad657951643dca17b10841b4d6df5055efab4333ae"
 };
 // SHARED_SHA256_END
 const SHARED_FOR = { "scope-and-plan": "test-cmd-allowlist", "plan-audit": "test-cmd-allowlist" };
@@ -4890,6 +4890,8 @@ async function planAndAudit(ctx0) {
       "plan-audit",
       "role:plan-audit" + sfx,
       Object.assign({}, ctx.common, planFacts, {
+        // release review of #48: the task's own text, for the omission and source_quote checks
+        brief: ctx.brief,
         plan_path: planPath,
         criteria,
         plan_diff: plan.plan_diff.slice(),
@@ -4916,6 +4918,10 @@ async function planAndAudit(ctx0) {
     );
   }
   gate("plan-audit: approve");
+  // release review of #48: an approve may carry advisory findings (Non-goals,
+  // STRIDE, failure paths, source_quote); they never refuse, and go to the log
+  for (const f of audit.routed_findings || [])
+    if (f && typeof f.finding === "string") gate("plan-audit advisory finding (approve): " + (f.criterion || "-") + ": " + f.finding);
   const testable = testableOf(criteria);
   const est = plan.fleet_estimate && typeof plan.fleet_estimate === "object" ? plan.fleet_estimate : {};
   if (typeof est.criteria === "number" && est.criteria !== testable.length)
@@ -6585,6 +6591,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const frozenNote =
     "frozen_tests holds the criterion test files only (sha256 of the content). frozen_config_sections is one flat map of everything else that is frozen: whole-file runner config and the .gitignore files git reads (not those inside ignored dirs) keyed by path (sha256), <path>#<section> (sha256 of a canonicalised test-runner config section), git:info/exclude and git:core.excludesFile (sha256 of ignore-rule files outside the worktree), and symlink:<rel> whose values are link targets, not hashes. Special values: ABSENT (the section did not exist at freeze), MISSING (the file did not exist), UNPARSEABLE (the file could not be parsed at freeze). Every key is read-only. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. Nothing is committed until the code judge approves: the tests and the code stay uncommitted in the worktree. freeze_tree is the worktree tree at freeze; diff production changes with `git diff <freeze_tree>` (code_base_ref is HEAD at the first freeze).";
   let coderFindings = [];
+  // release review of #48: the code judge's prior_findings. A judge, review,
+  // obligations or hook finding replaces it; a drift or hash rejection (no
+  // judge ran) appends its message to the findings still pending.
+  let judgePrior = [];
   // the script gate that rejected the last code round, for the cap message
   let lastRoundGate = null;
   // HEAD the coder must leave alone; it moves only at the commit step
@@ -6687,6 +6697,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         },
       ];
       gate("code round " + m + ": " + coderDriftOk.msg + " -> coder output rejected; routed as a finding");
+      judgePrior = judgePrior.concat(coderFindings);
       continue;
     }
     if (viol.length) {
@@ -6704,6 +6715,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         },
       ];
       gate("code round " + m + ": hash violation on " + viol.join(", ") + " -> coder output rejected");
+      judgePrior = judgePrior.concat(coderFindings);
       continue;
     }
     // re-check check_cmd scripts in the tree the judge sees; a failure is
@@ -6719,8 +6731,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         code_tree: h.fingerprint.tree,
         coder_output: stripHeldOut(coder),
         hash_recheck: hashRecheck(frozen, h.hashes, mainWt),
-        // 5.0.0 (R3): the findings this round's coder was sent ([] in round 1)
-        prior_findings: stripHeldOut(coderFindings),
+        // 5.0.0 (R3): the findings still pending for this judge ([] in round 1)
+        prior_findings: stripHeldOut(judgePrior),
         held_out_results: HELD_OUT_NOT_RUN,
         script_findings: SCRIPT_FINDINGS_NOT_RUN,
         repo_obligations: judgeObligations,
@@ -6749,6 +6761,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       });
     if (cj.verdict === "fix_code") {
       coderFindings = routed.filter((f) => f.target === "code");
+      judgePrior = coderFindings.slice();
       gate("code-judge r" + m + ": fix_code -> coder (" + coderFindings.length + " findings)");
       continue;
     }
@@ -6765,6 +6778,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       phase("Code");
       // a fix_tests verdict may also carry code findings: keep them
       coderFindings = routed.filter((f) => f.target === "code");
+      judgePrior = coderFindings.slice();
       continue;
     }
     if (cj.verdict !== "approve") halt("failed", "code-judge returned no verdict");
@@ -6773,6 +6787,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check, judgeObligations, cj.gates_not_run, h.changed, hs.make_paths);
     if (obFail.length) {
       coderFindings = obFail;
+      judgePrior = coderFindings.slice();
       lastRoundGate = "obligations";
       gate(
         "code round " + m + ": obligations gate: code-judge approve converted to fix_code (" +
@@ -6834,6 +6849,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             (tail || "(no output captured)"),
         },
       ];
+      judgePrior = coderFindings.slice();
       lastRoundGate = "commit hook";
       gate("code round " + m + ": commit rejected by a repo hook -> coder (fix_code)");
       continue;
@@ -6858,6 +6874,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const fix = await ship("push");
     if (!fix) break;
     coderFindings = fix.findings;
+    judgePrior = coderFindings.slice();
     lastRoundGate = fix.gate;
     phase("Code");
   }

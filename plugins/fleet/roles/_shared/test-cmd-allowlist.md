@@ -68,7 +68,7 @@ Every argument is denied unless this list allows it for that runner.
 - The script splits it on spaces and tabs. Every token uses only letters, digits and `_ . / : = @ % + , -`: no quote, no shell metacharacter (`; & | $ ( ) < >` or a backquote), no glob, one line.
 - It never contains a forbidden word (the list under `test_cmd`).
 - It is exactly one of these shapes:
-  - `pre-commit run <hook-id>`, then, each at most once and in any order: `--all-files`, `--hook-stage <stage>`, `--from-ref <ref> --to-ref <ref>`;
+  - `pre-commit run <hook-id>`, then, each at most once and in this order: `--all-files` before `--hook-stage <stage>`, then `--from-ref <ref> --to-ref <ref>` (the confirm `auto`/`default` command gate accepts only the first two, in that order);
   - `make <target>` and nothing else (a target starts with a letter, digit or `_`, then letters, digits and `_ . -`);
   - `python <script>.py [args]` or `python3 <script>.py [args]`, optionally after `uv run` or `uv run --extra <name>` (one `--extra` at most; no `--frozen` or `--no-sync`);
   - `<script> [args]`, where `<script>` holds a `/`.

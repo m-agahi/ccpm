@@ -137,7 +137,7 @@ Also produce `held_out_examples`: at least one per criterion where feasible, in 
 - Return them ONLY in your StructuredOutput object.
 - NEVER write them into the plan file, any other file, a commit, a PR, or the worktree. The coder can read every file in the worktree; a held-out example written anywhere there is no longer held out. Do not mention their values in `reason` or `tldr` either.
 
-Plan-audit rejects a plan with an untestable criterion, a criterion without a literal example, no `allowed_additions`, an untruthful `plan_diff`, a missing repo obligation, an I/O criterion with no failure paths and no `dont_care` reason, or a `test_cmd` that does not run. Fix it here.
+Plan-audit rejects a plan with an untestable criterion, a criterion without a literal example, no `allowed_additions`, an untruthful `plan_diff`, a missing repo obligation, a source requirement silently omitted, or a `test_cmd` that does not run. Fix it here. A missing "Non-goals" section, missing I/O failure paths, a missing STRIDE refusal criterion or a `source_quote` that is not verbatim is an advisory finding: fix it when a re-plan round sends it back to you.
 
 ## Summary outputs — Max reads these to confirm
 

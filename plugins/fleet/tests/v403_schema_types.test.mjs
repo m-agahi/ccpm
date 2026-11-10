@@ -456,6 +456,8 @@ const READS = {
   },
   afterRounds: { "n number-literal": PARSED_LOCAL },
   planAndAudit: {
+    // release review of #48: an approving audit's advisory findings go to the gate log
+    "f.finding string": "role:plan-audit:routed_findings[].finding",
     "plan.plan_path string": SP + "plan_path",
     "plan.criteria array": SP + "criteria",
     "x string": SP + "plan_diff[]",

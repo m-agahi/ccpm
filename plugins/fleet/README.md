@@ -1082,8 +1082,15 @@ The script pins the role contract, not the prose:
   `memory_notes`; nothing writes them to a memory store) and the coder's `follow_ups`
   (`[{summary, path}]`, passed through to the result's `follow_ups`; nothing files them). The
   schemas type only the keys the script reads.
-- Inputs added in 5.0.0 R3: the code judge's `prior_findings` (the findings that round's coder was
-  sent, `[]` in round 1) and pr-review's `prior_findings` and `allowed_additions`. Both judges rule
+- Plan-audit gets `brief` (every source body) for its silent-omission and `source_quote` checks.
+  Its new 5.0.0 rules (a "Non-goals" section, I/O failure paths, STRIDE refusal criteria,
+  verbatim `source_quote`) are advisory: each failure is a routed finding the planner fixes in
+  the next re-plan round, never a refusal on its own. When the audit approves, the script writes
+  each advisory finding to the gate log (`plan-audit advisory finding (approve): ...`).
+- Inputs added in 5.0.0 R3: the code judge's `prior_findings` (the findings still pending from
+  the last judge, review, obligations or hook step, `[]` in round 1; a contract-drift or
+  hash-rejection round in between appends its message instead of replacing them) and pr-review's
+  `prior_findings` and `allowed_additions`. Both judges rule
   each prior finding `resolved`, `still_present` or `regressed`; a finding resolved only by the
   coder's claim is still present. No new output key carries the rulings:
   - the code judge routes each still-present or regressed prior finding again as a `code`
@@ -1140,8 +1147,10 @@ After the commit step, the push and the pr-opener (draft PR open):
    `allowed_additions`, `prior_findings` (the previous review round's blocking findings, `[]` in
    the first), `mode: "self-authored"` and `fleet: true`, and no tldr or plan reasoning. It rules
    each prior finding `resolved`, `still_present` or `regressed`; one resolved only by the
-   coder's claim is still present. CI counts as evidence only once `gh pr checks` reports success
-   for `head_sha`. It returns `verdict`, `findings` (each
+   coder's claim is still present. CI counts as evidence only from the check runs of the
+   reviewed commit (`gh api repos/<repo>/commits/<head_sha>/check-runs`, conclusion `success`).
+   A finding whose fix needs something outside `allowed_additions` is a `nit` marked
+   `needs plan change:`, never blocking. It returns `verdict`, `findings` (each
    `{id, severity, category, file, line, summary, evidence}`, severity `blocking` or `nit`),
    `touches_gate` and `checked`. Any blocking finding makes it `changes_requested`, whatever the
    stated verdict.

@@ -53,13 +53,15 @@ follow in 5.1.0, mutation testing in 5.2.0.
 - Non-fleet modes are split out: the planner's `commit=true`, `advisor`, `measure_first` and
   `perf-lever`, the audit's `writeback=true`, and pr-review's non-fleet modes and k8s/Flux
   essays. `roles/pr-review.md` is fleet mode only (the yadgar page keeps every mode). Sizes
-  (characters, before → after): scope-and-plan 34750 → 24938, plan-audit 19636 → 16671,
-  pr-review 23540 → 13026, code-judge 17923 → 16118, coder 15954 → 16035, test-writer 13464 →
-  12632, test-judge 10787 → 11363, intent-judge 9437 → 9345, pr-opener 8994 → 9168, sweep 7485
-  → 7219.
+  (characters, before → after): scope-and-plan 34750 → 25119, plan-audit 19636 → 17368,
+  pr-review 23540 → 13486, code-judge 17923 → 16293, coder 15954 → 16035, test-writer 13464 →
+  12772, test-judge 10787 → 11538, intent-judge 9437 → 9345, pr-opener 8994 → 9168, sweep 7485
+  → 7432.
 - pr-review: no "≤40 lines / Task list"; no confidence threshold that could hide a `security` or
   `fail_open` finding (an unreproduced one is reported as an `unverified:` nit); CI counts as
-  evidence only once `gh pr checks` reports success for `head_sha`.
+  evidence only from `gh api repos/<repo>/commits/<head_sha>/check-runs` (conclusion
+  `success`), so a lagging PR head is never read; a fix that needs a file, symbol or dependency
+  outside `allowed_additions` is a `nit` marked `needs plan change:`, never blocking.
 - Write-back: a ledger write step that finds no tool reports every entry `unavailable` (was
   `failed`), like the read steps.
 - `meta.whenToUse` names confirm `"default"`.
@@ -69,8 +71,21 @@ follow in 5.1.0, mutation testing in 5.2.0.
   `ledger_tools` census (was required, non-null). A model's null there never stops a build.
   `role_file` and `shared_file` stay required (null fits the schema; the script's check refuses
   it on an ok result).
-- Review of #48: a plan with no "Non-goals" section is a routed finding the planner fixes in the
-  next re-plan round, never a `plan_defect` on its own.
+- Review of #48: plan-audit's new 5.0.0 rules are advisory: a missing "Non-goals" section, a
+  missing I/O failure path, a missing STRIDE refusal criterion and a `source_quote` that is not
+  verbatim are routed findings the planner fixes in the next re-plan round; none changes the
+  verdict on its own. An approving audit's advisory findings are written to the gate log
+  (`plan-audit advisory finding (approve): ...`); before, the script dropped them. The
+  existing gating rules are unchanged.
+- Review of #48: plan-audit gets `brief` (every source body) as an input, the text its
+  silent-omission and `source_quote` checks read.
+- Review of #48: the code judge's `prior_findings` keep the last judge, review, obligations or
+  hook findings across a contract-drift or hash-rejection round (no judge ran) and append that
+  round's message, instead of replacing them.
+- Review of #48: the allowlist states the pre-commit option order (`--all-files` before
+  `--hook-stage`), which the auto command gate requires; cargo and go criteria skip the
+  reverse-order run (writer and test judge); the sweep's `shipped_refuses` / `new_refuses` may
+  be null when the instrument is broken.
 - Review of #48: the probe mode's role-read (`plan-audit`) also hashes and reads
   `_shared/test-cmd-allowlist.md` and returns `shared_file`, which the script checks;
   `probe.role_read.shared_file` reports it.
@@ -91,8 +106,8 @@ follow in 5.1.0, mutation testing in 5.2.0.
   no shared files or order reliance); flaky/retry markers flagged by both judges; the test judge
   runs each file once in reverse order; the planner's optional per-criterion `source_quote`, a
   "Non-goals" section, failure-path cases (timeout, partial, concurrent) for I/O criteria or a
-  `dont_care` reason, and STRIDE refusal criteria at trust boundaries; the audit rejects silent
-  omission; the code judge's duplicate-helper check.
+  `dont_care` reason, and STRIDE refusal criteria at trust boundaries (advisory in the audit); the
+  audit rejects silent omission; the code judge's duplicate-helper check.
 
 ### Changed (part 2 of 3, R2: yadgar and yaadgaar are never required)
 

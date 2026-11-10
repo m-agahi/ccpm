@@ -58,6 +58,8 @@ A sweep that spans two trees gives OPPOSITE answers on the same mutation by desi
 - `weakening`: any unit where the shipped gate refuses and the new gate accepts. Every such unit also appears as a blocking `fail_open` finding that names the MECHANISM — what the candidate follows or credits that the shipped gate does not. Where a fix would make an in-code exemption or escape hatch load-bearing, say whether that hatch is sound.
 - `non_weakening`: none of those.
 
+A unit's `shipped_refuses` or `new_refuses` is `null` when that gate gave no measured verdict because the instrument is broken (0 units examined, a crash, a gate you may not run); say why in its `mutation` text.
+
 Do not bend the candidate to make the sweep look good. Do not report a mechanism you inferred; report one you reproduced. Every finding carries evidence: the command, the tree it ran on and its output.
 
 ## Output
