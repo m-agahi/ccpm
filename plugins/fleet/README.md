@@ -666,7 +666,10 @@ database and user. The DSN goes into that role's `test_env` under the declared n
 note never to write it into the plan, a finding, a commit message or a PR.
 `infra:verify-plan-commit` refuses a plan commit whose plan doc holds `mysql://` (no `plan_ref`);
 reset the fleet branch past that commit before the next plan run, which does not re-check
-earlier plan commits. Findings and PR text rely on the note alone. The workflow removes the container at the end of every run;
+earlier plan commits. Since 5.0.3, `infra:format-plan` runs `plan_dsn.py` on the plan doc first
+(the same test, any case, placeholders included): a hit is a re-plan finding before the audit,
+and with the re-plan rounds spent the run stops with `stop_gate: "db"` before any commit.
+Findings and PR text rely on the note alone. The workflow removes the container at the end of every run;
 `db_sweep.py` removes expired ones of earlier runs. Any declaration or relay problem stops with
 `stop_gate: "db"`.
 

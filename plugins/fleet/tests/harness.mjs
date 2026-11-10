@@ -660,7 +660,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.2/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.3/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -793,6 +793,8 @@ export const PROGRAM_LABELS = [
   [/^infra:park-plan/, [["park", "parked", K("parked:park")], ["findings_write", "parked", K("parked:write")]]],
   [/^infra:stage-plan/, [["plan_hash", "plan_hash", null]]],
   [/^infra:format-(tests|code):/, [[null, "format_files", K("format_files")]]],
+  // 5.0.3 (ledger 2010): the DSN precheck after the plan hooks
+  [/^infra:format-plan/, [["dsn_check", "plan_dsn", K("plan_dsn")]]],
   [/^infra:commit-plan/, [[null, "plan_ref_write", K("plan_ref_write")]]],
   // 4.0.0 review: dsn_paths, the committed files that hold mysql://
   [/^infra:verify-plan-commit/, [["plan_files", "plan_files", K("plan_files")], ["plan_hash", "plan_hash", null], ["plan_ref", "plan_ref", null]]],
@@ -838,6 +840,11 @@ export function fillPrograms(label, r, prompt) {
   if (/^infra:verify-plan$/.test(label)) {
     if (!("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256 };
     if (!("plan_hash_head" in r) && "plan_sha256_head" in r) r.plan_hash_head = { plan_sha256: r.plan_sha256_head };
+  }
+  // 5.0.3 (ledger 2010): a format-plan stub with no dsn_check finds no DSN
+  if (/^infra:format-plan/.test(label) && !("dsn_check" in r)) {
+    const i = inputsOf(prompt);
+    r.dsn_check = { holds: false, lines: [], args: [i.worktree, i.plan_path] };
   }
   const hit = PROGRAM_LABELS.find(([re]) => re.test(label));
   if (!hit) return r;

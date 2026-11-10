@@ -102,7 +102,7 @@ const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with (bumped every release; since
 // 4.0.0, 1993, the shipped programs are read from its plugin cache directory
 // only; since 5.0.0, R1, the role files too).
-const FLEET_VERSION = "5.0.2";
+const FLEET_VERSION = "5.0.3";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with; a mismatch after an
 // update usually means this script is the stale one.
@@ -784,6 +784,8 @@ const INFRA_SCHEMA = {
     plan_hash_head: PROGRAM_OUTPUT,
     plan_files: { type: ["object", "null"], properties: { head: STR, files: { type: "array", items: STR }, args: { type: "array", items: STR }, dsn_paths: { type: "array", items: STR }, program: PROGRAM_PROP, file_sha256: STR, digest: STR } },
     plan_ref: { type: ["object", "null"], properties: { refs: { type: "array", items: { type: "object" } }, program: PROGRAM_PROP, file_sha256: STR } },
+    // 5.0.3 (ledger 2010): the DSN precheck of infra:format-plan
+    dsn_check: { type: ["object", "null"], properties: { holds: { type: "boolean" }, lines: { type: "array", items: { type: "integer" } }, args: { type: "array", items: STR }, program: PROGRAM_PROP, file_sha256: STR, digest: STR } },
     target: STR,
     message: STR,
     clean: { type: "boolean" },
@@ -1738,6 +1740,7 @@ const PROGRAM_SHA256 = {
   "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
   "parked": "14150028c5fc657e10214efd33dd6669c83281c8a45f07410aad6e6b7520bd9b",
   "path_check": "9a05c718892ff35b213a61fd8abeadad4dae0fa2ca7671485d670fe02b5a1596",
+  "plan_dsn": "269dfac0132859fc884ef34a0032e2932f3d943100e3cbb7906466cf135a5fc6",
   "plan_files": "20f52c19db325d6b5385a443e7ad78f824f09057fd48fcd5ee5b24cf799d1670",
   "plan_hash": "5901757f34415759f587989e09b57821da8602418ecd45ba384f0366502b5b40",
   "plan_ref": "70b82ddd6b5cd3321dd04efc6b9549b001d25b1aa0ac98ed73a5e2f75ff8841d",
@@ -1779,7 +1782,7 @@ const ROLE_SHA256 = {
   "gate-change-nonweakening-sweep": "f22759af37de2d5df1cc47fa532197ef42ed37bd31f13c9fc52cc142a37040b5",
   "plan-audit": "7578a832d1c69147dbb467dab40721af5105c14a704f989acf89cc03a6c7f8cf",
   "pr-review": "0fc7353562f4c0555bc69b116988dbac1343da80ff260f6c5cab14637c1715e9",
-  "scope-and-plan": "299d27376bbfd50c78de9d74feb17884090b1a317fa159ccbd7cab69c1187698"
+  "scope-and-plan": "ee40ddbc01a215005e0786de12c6c1d13d49a4573ffa727773968745c054f213"
 };
 // ROLE_SHA256_END
 // The first DISPATCH line of each role file, written by gen.mjs from the same
@@ -1883,6 +1886,7 @@ const PROGRAM_SLOTS = [
   [/^infra:park-plan/, [["park", "parked"], ["findings_write", "parked"]]],
   [/^infra:stage-plan/, [["plan_hash", "plan_hash"]]],
   [/^infra:format-(tests|code):/, [[null, "format_files"]]],
+  [/^infra:format-plan/, [["dsn_check", "plan_dsn"]]],
   [/^infra:commit-plan/, [[null, "plan_ref_write"]]],
   [/^infra:verify-plan-commit/, [["plan_files", "plan_files"], ["plan_hash", "plan_hash"], ["plan_ref", "plan_ref"]]],
   [/^infra:load-ref/, [[null, "plan_ref"]]],
@@ -1924,6 +1928,7 @@ const PROGRAM_KEYS = {
   "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused"],
   "plan_ref_write": ["head", "tag_sha"],
   "plan_files": ["head", "files", "args", "dsn_paths"],
+  "plan_dsn": ["holds", "lines", "args"],
   "plan_ref": ["refs"],
   "plan_ref:chunks": ["refs", "chunks"],
   "verify_since": ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"],
@@ -2007,6 +2012,7 @@ const PROGRAM_OUT = {
   format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, digest: STR },
   plan_ref_write: { head: STR, tag_sha: STR, digest: STR },
   plan_files: { head: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
+  plan_dsn: { holds: BOOL, lines: { type: "array", items: INT }, args: STRS, digest: STR },
   plan_ref: {
     refs: { type: "array", items: { type: "object", properties: { name: STR, tag_sha: STR, type: STR, target: STR, target_type: STR, sha256: STR_OR_NULL } } },
     chunks: STRS,
@@ -2795,10 +2801,15 @@ function formatPlanPrompt(inputs) {
     "Inputs: " +
     JSON.stringify(inputs) +
     "\n" +
-    "1. If `<worktree>/.pre-commit-config.yaml` does not exist: return {status: \"ok\", reason: \"no pre-commit config\", changed_paths: <the paths of `git -C <worktree> status --porcelain --untracked-files=all`>}.\n" +
+    "1. If `<worktree>/.pre-commit-config.yaml` does not exist: reason = \"no pre-commit config\"; go to step 3.\n" +
     "2. Run `cd <worktree> && pre-commit run --files <plan_path>` as one Bash call with timeout 600000 ms. Exit 0 -> go to step 3. A non-zero exit after which `git -C <worktree> hash-object <plan_path>` differs from before the run means a fixer rewrote the plan: run the same command again, at most 3 runs in all. A non-zero exit that left the plan unchanged, `pre-commit` not installed, or a 3rd run that still fails -> return {status: \"needs_human\", reason: <the failing hook ids and the last 60 lines of output>}.\n" +
     "3. changed_paths = the paths of `git -C <worktree> status --porcelain --untracked-files=all` (the plan doc itself is expected there).\n" +
-    "Return {status, reason, changed_paths}."
+    // 5.0.3 (ledger 2010): the DSN precheck on the bytes the plan commit will hold
+    "4. Run this one command exactly as written, unmodified (it reads the plan doc, never changes it):\n" +
+    progCmd("plan_dsn", [inputs.worktree, inputs.plan_path]) +
+    "\n" +
+    "It prints one JSON object " + printsKeys("plan_dsn") + ": " + relayAs("dsn_check") + ". Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, changed_paths, dsn_check}."
   );
 }
 
@@ -4826,11 +4837,11 @@ function afterRounds(ctx) {
 }
 
 // A re-plan round for plan findings while rounds are left, else a stop.
-function planFindingsStop(ctx, planPath, what, findings, rawMap, plan) {
+function planFindingsStop(ctx, planPath, what, findings, rawMap, plan, stopGate) {
   if ((ctx.auditRound || 0) < ctx.maxRounds) return replanWithFindings(ctx, planPath, what, findings, what, rawMap, plan);
   noteRound(ctx.auditRound || 0, what, stripHeldOut(findings), roundSnapshot(plan), (ctx.priorRound && ctx.priorRound.symbols) || []);
   const shown = findings.slice(0, 10).map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding);
-  halt("needs_human", what + ": " + shown.join("; ") + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : "") + afterRounds(ctx));
+  halt("needs_human", what + ": " + shown.join("; ") + (findings.length > shown.length ? "; and " + (findings.length - shown.length) + " more" : "") + afterRounds(ctx), stopGate);
 }
 
 // ctx: {common, brief, date, baseRef, remoteSlug, remoteUrl, suffix,
@@ -4966,6 +4977,20 @@ async function planAndAudit(ctx0) {
   if (fmtOther.length)
     halt("needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + fmtOther.join(", ") + " (never committed; clean the worktree)", "scope");
   gate(fmtLabel + ": " + (fmt.reason || "hooks run on " + planPath));
+  // 5.0.3 (ledger 2010): the plan commit gate refuses any mysql:// text, any
+  // case (verify-plan-commit, plan_files.py); a hit here is a re-plan finding
+  const dc = fmt.dsn_check;
+  requireProgram(dc, "plan_dsn", fmtLabel);
+  if (typeof dc.holds !== "boolean" || !Array.isArray(dc.lines) || !relayDigestOk(dc, progKeys("plan_dsn"), "plan_dsn"))
+    halt("failed", fmtLabel + ": the relayed dsn_check does not match the program's digest", "contract");
+  if (canonical(dc.args) !== canonical([ctx.common.worktree, planPath]))
+    halt("failed", fmtLabel + ": plan_dsn ran on other arguments (" + JSON.stringify(dc.args === undefined ? null : dc.args) + ")", "contract");
+  if (dc.holds) {
+    const at = dc.lines.length ? " at line " + dc.lines.join(", ") : " (unread: over 8 MiB)";
+    // the finding never quotes the scheme: the planner may copy it into the plan
+    const finding = "the plan doc " + planPath + " holds a URL with the mysql scheme" + at + "; placeholders count too, and the plan commit is refused. Name it as \"the YADGAR_TEST_DSN URL\" (or the URL of the repo's declared *_TEST_DSN variable) or describe the DSN in words; never write the scheme, a colon and two slashes";
+    return planFindingsStop(ctx, planPath, "plan doc holds a test DSN URL", [{ criterion: null, finding }], plan.changed_symbols, plan, "db");
+  }
 
   // 3.1.2: the audit runs the planner's test_cmd in a scratch worktree
   await pathRecheck("plan-audit" + sfx, "Plan");

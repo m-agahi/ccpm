@@ -1,5 +1,42 @@
 # Changelog
 
+## [5.0.3] - 2026-11-10
+
+Fleet 5.0.3 (ledger 2010): a plan doc that holds `mysql://` gets a re-plan finding before the plan
+commit.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.3), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.3/scripts` dir.
+
+### Fixed
+
+- 2010: plan run wf_9b66f476-b14 (yadgarhq/iam-db) passed plan-audit after 2 re-plans (53 minutes,
+  33 agents), then stopped at `infra:verify-plan-commit` with stop_gate `db`. The committed plan
+  held two placeholder DSNs (`mysql://<db>:<pw>@127.0.0.1:<port>/<db>`). The gate (4.0.0) refuses
+  any `mysql://` text, any case, placeholders included. No role told the planner.
+- The planner role (`scope-and-plan.md`) names the ban and the sanctioned wording: "the
+  YADGAR_TEST_DSN URL", or the DSN described in words.
+- New program `plan_dsn.py <worktree> <plan path>` (29 programs). The `infra:format-plan` step
+  runs it after the repo's hooks, on the bytes the plan commit holds, and relays its output as
+  `dsn_check`. It applies the same test as the gate (`plan_files.py`): the lowered bytes hold
+  `mysql://`, and a file over 8 MiB holds it unread. A symlink, an absolute path or a path outside
+  the worktree exits non-zero (the step fails).
+- A hit is a re-plan finding through the existing re-plan rounds, before the plan-audit runs. The
+  finding names the lines and never quotes the scheme. With the rounds spent, the run stops
+  `needs_human` with stop_gate `db`, before any commit.
+- The post-commit gate at `infra:verify-plan-commit` is unchanged (`plan_files.py` is
+  byte-identical) and stays the backstop.
+
+### Tests
+
+- `v503_dsn_precheck.test.mjs`: `plan_dsn.py` in real repos (placeholder and uppercase hits, a
+  clean plan, symlink and path escapes refused), parity with `plan_files.py` on the same bytes, a
+  hit routed to a re-plan round with no audit and no commit before it, the spent budget stopping
+  at stop_gate `db`, relay and argument mismatches failing closed, the role text, the unchanged
+  backstop and the workflow size.
+
 ## [5.0.2] - 2026-11-10
 
 Fleet 5.0.2 (ledgers 2004, 2005, 2006, 2007): four findings of the 5.0.1 release smoke run.
