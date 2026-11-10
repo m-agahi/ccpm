@@ -2,7 +2,8 @@
 
 ## [Unreleased]
 
-Fleet 5.0.0, part 1 of 3 (ledger 1999, R1). The version stays 4.0.3 until the last part.
+Fleet 5.0.0, parts 1 and 2 of 3 (ledger 1999, R1 and R2). The version stays 4.0.3 until the last
+part.
 
 ### Changed (part 2 of 3, R2: yadgar and yaadgaar are never required)
 
@@ -24,7 +25,9 @@ Fleet 5.0.0, part 1 of 3 (ledger 1999, R1). The version stays 4.0.3 until the la
   is `unavailable`. A present tool that fails at call time stays `failed`. Neither stops the run.
 - The intent judge gets `ledger_task` only through a ledger adapter and never reads tracker
   comments as rulings. A `confirm: "auto"` build whose sealed ledger task cannot be re-read (tool
-  absent) stops with the no-ledger sentence.
+  absent) stops with the no-ledger sentence (fails closed: the current rulings are unknown).
+- A legacy ledger source on a `yadgarhq/` project is `unavailable` in the write-back too, as in
+  `ledgerAdapter` (intake already refuses it).
 - The result key `yadgar_findings` is renamed `memory_notes` (`[{role, notes}]`, optional, never
   required). Role results may carry `memory_notes`; the role files' `yadgar_findings` is still
   read until the R3 prompt revision. The skill offers to store the notes when the session has a

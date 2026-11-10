@@ -600,6 +600,9 @@ const READS = {
     "h.has_marker boolean": "infra:results[].has_marker",
   },
   writeBack: {
+    // 5.0.0 (R2): args.project, the ledger scope
+    "project string": PARSED_ARGS,
+    "project string-re": PARSED_ARGS,
     "pre.results array": "infra:results",
     "h.body_slug string": "infra:results[].body_slug",
     "r.results array": ["infra:results", 2],

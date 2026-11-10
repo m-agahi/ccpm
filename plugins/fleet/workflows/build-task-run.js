@@ -7066,15 +7066,18 @@ async function writeBack(ctx) {
     comment_text: null,
   };
   const sectionFor = () => "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
-  const unavailable = (sources, name, tool) => {
-    for (const s of sources) out.write_back.ledger.push({ ref: name(s), status: "unavailable", reason: tool + " absent in this session: nothing written", section_text: sectionFor() });
-    gate("write-back " + tool + " absent: " + sources.map(name).join(", ") + " unavailable");
+  const unavailable = (sources, name, why) => {
+    for (const s of sources) out.write_back.ledger.push({ ref: name(s), status: "unavailable", reason: why + ": nothing written", section_text: sectionFor() });
+    gate("write-back " + why + ": " + sources.map(name).join(", ") + " unavailable");
   };
 
   // (a) ledger. 3.1.0: a judge reads every task first; a task with a body
   // page goes to the append step, one without to writeBodies.
   const ledger = brief.sources.map((s, i) => Object.assign({ key: "s" + i }, s)).filter((s) => s.kind === "ledger");
-  if (ledger.length && state.ledgerTools.indexOf(LEDGER_TOOLS[1]) < 0) unavailable(ledger, (s) => s.ref, LEDGER_TOOLS[1]);
+  // (a yadgarhq/ project never writes the yadgar ledger: as ledgerAdapter; intake refuses that source first)
+  if (ledger.length && typeof project === "string" && YAADGAAR_PROJECT_RE.test(project))
+    unavailable(ledger, (s) => s.ref, "project " + project + " keeps its tasks in yaadgaar, not the yadgar ledger");
+  else if (ledger.length && state.ledgerTools.indexOf(LEDGER_TOOLS[1]) < 0) unavailable(ledger, (s) => s.ref, LEDGER_TOOLS[1] + " absent in this session");
   else if (ledger.length) {
     const sectionText = "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
     const res = {};
@@ -7130,7 +7133,7 @@ async function writeBack(ctx) {
   // mcp__yaadgaar__ tools; never the yadgar ledger (its L<N> is another,
   // frozen task). A failed entry hands section_text back.
   const yq = brief.sources.map((s, i) => Object.assign({ key: "s" + i }, s)).filter((s) => s.kind === "yaadgaar");
-  if (yq.length && state.ledgerTools.indexOf(LEDGER_TOOLS[0]) < 0) unavailable(yq, (s) => "yaadgaar #" + s.ref, LEDGER_TOOLS[0]);
+  if (yq.length && state.ledgerTools.indexOf(LEDGER_TOOLS[0]) < 0) unavailable(yq, (s) => "yaadgaar #" + s.ref, LEDGER_TOOLS[0] + " absent in this session");
   else if (yq.length) {
     const sectionText = "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
     let results = null;

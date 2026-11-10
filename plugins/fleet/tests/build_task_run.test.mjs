@@ -4470,6 +4470,21 @@ test("2.1.0 build with confirm auto re-runs the gates against the current ledger
   assert.match(b2.result.reason, /re-read/);
 });
 
+// 5.0.0 (R2): the build's own census has no ledger tool: the sealed ledger
+// task's current rulings cannot be read, so confirm auto stops (fails closed)
+// before any re-read agent; confirm ask is the way on.
+test("5.0.0 R2: build confirm auto with the ledger tool gone stops before the rulings re-read", async () => {
+  const s = autoHappy();
+  const plan = await runOne(s, ARGS);
+  assert.equal(plan.result.status, "awaiting_confirmation");
+  s.preflight = { ledger_tools: [] };
+  const build = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r", confirm: "auto" });
+  assert.equal(build.result.status, "needs_human");
+  assert.match(build.result.reason, /re-read of ledger:42 for current rulings: no task ledger available; give a URL, Jira key or text/);
+  assert.match(build.result.reason, /confirm "ask"/);
+  assert.ok(!build.labels.includes("intake:rulings"), build.labels.join(", "));
+});
+
 // ---------------------------------------------------------------- 2.1.0 review
 
 test("2.1.0 review: after the draft PR, pr-review gets the PR, the diff paths and no plan reasoning; cleanup always runs", async () => {
