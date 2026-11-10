@@ -146,7 +146,7 @@ test("1991 short path: at most MAX_SHORT_TEST_ROUNDS (2) test rounds, each with 
 });
 
 test("1991 short path: a drifting writer retries once as <label>:retry after the round", async () => {
-  const s = shortScript({ __raw: true, status: "ok", reason: "x", role_version: 11, role_contract: "CONTRACT: fleet-v4", criterion_id: "short", tests: [] });
+  const s = shortScript({ __raw: true, status: "ok", reason: "x", criterion_id: "short", tests: [] });
   s["role:fleet-test-writer:short:r1:retry"] = {
     status: "ok",
     reason: "red",

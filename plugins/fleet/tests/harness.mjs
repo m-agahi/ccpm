@@ -56,30 +56,61 @@ SafeMath.random = () => {
   throw new Error("Math.random is unavailable in workflow scripts");
 };
 
-// Extract the JSON inputs a role-runner or infra prompt carries.
+// Extract the JSON inputs a role-runner or infra prompt carries. 5.0.0 (R1):
+// a role prompt starts with the role file's text, which may itself hold a
+// line starting "Inputs: " (documentation); the workflow's line is the last
+// one that parses as JSON.
 export function inputsOf(prompt) {
-  const m = /^Inputs: (.*)$/m.exec(prompt);
-  assert.ok(m, "prompt has an Inputs: line:\n" + prompt);
-  return JSON.parse(m[1]);
+  const all = [...String(prompt).matchAll(/^Inputs: (.*)$/gm)];
+  assert.ok(all.length, "prompt has an Inputs: line:\n" + prompt);
+  for (let i = all.length - 1; i >= 0; i--) {
+    try {
+      return JSON.parse(all[i][1]);
+    } catch (e) {
+      if (i === 0) throw e;
+    }
+  }
 }
 
-// The minimum role versions the workflow was built against.
-export const FROZEN_VERSIONS = {
-  "scope-and-plan": 29,
-  "plan-audit": 17,
-  "fleet-test-writer": 11,
-  "fleet-test-judge": 11,
-  "fleet-coder": 18,
-  "fleet-code-judge": 16,
-  "fleet-pr-opener": 11,
-  "fleet-intent-judge": 3,
-  "pr-review": 19,
-  "gate-change-nonweakening-sweep": 6,
-};
-// The contract marker line every role page and role result carries. Streams
-// use this, never a literal, so a marker bump is one edit.
-export const CONTRACT_LINE = "CONTRACT: fleet-v4";
-export const ROLE_NAMES = Object.keys(FROZEN_VERSIONS);
+// The ten fleet roles (5.0.0, R1: their prompts ship as plugins/fleet/roles/<role>.md).
+export const ROLE_NAMES = [
+  "scope-and-plan",
+  "plan-audit",
+  "fleet-test-writer",
+  "fleet-test-judge",
+  "fleet-coder",
+  "fleet-code-judge",
+  "fleet-pr-opener",
+  "fleet-intent-judge",
+  "pr-review",
+  "gate-change-nonweakening-sweep",
+];
+export const ROLES_SRC = join(HERE, "..", "roles");
+// the shipped role file text, by role
+export const ROLE_TEXT = Object.fromEntries(ROLE_NAMES.map((r) => [r, readFileSync(join(ROLES_SRC, r + ".md"), "utf8")]));
+// The role texts a scenario runs with (5.0.0): the shipped files, with
+// script.__dispatch[role] in place of the first DISPATCH line (null: no
+// DISPATCH line) and script.__roleText[role] in place of the whole text. A
+// scenario that changes a text runs on a copy of the workflow whose
+// ROLE_SHA256 pins the changed texts (the files stay the source of truth).
+export function scenarioRoles(script) {
+  const out = {};
+  for (const r of ROLE_NAMES) {
+    let t = ROLE_TEXT[r];
+    const d = script && script.__dispatch;
+    if (d && Object.prototype.hasOwnProperty.call(d, r)) t = d[r] === null ? t.replace(/^DISPATCH:.*\n/m, "") : t.replace(/^DISPATCH:.*$/m, () => d[r]);
+    const rt = script && script.__roleText;
+    if (rt && Object.prototype.hasOwnProperty.call(rt, r)) t = rt[r];
+    out[r] = t;
+  }
+  return out;
+}
+// the relay chunks of a role text, as role_files.py joins them (1000 characters)
+export function roleChunks(text) {
+  const out = [];
+  for (let i = 0; i < text.length; i += 1000) out.push(text.slice(i, i + 1000));
+  return out;
+}
 
 // Keys each role must return on status ok (the frozen fleet-v4 contract).
 // The harness fills missing ones with neutral defaults for terse override
@@ -239,12 +270,10 @@ export async function runOne(script, args0) {
       const i = inputsOf(prompt);
       return { status: "ok", reason: "read", parked: null, args: [i.scratch, i.plan_tip_time === null ? "null" : String(i.plan_tip_time)] };
     }
-    // 4.0.0 (1990, S3): an unscripted role-page load (build mode, no usable
-    // sealed preflight record) reads what the plan run's preflight read
-    if (!(label in script) && label === "preflight:roles" && script.preflight && typeof script.preflight === "object" && !Array.isArray(script.preflight)) {
-      const r = JSON.parse(JSON.stringify(script.preflight));
-      for (const k of ["path_check", "scripts_probe", "scripts_dir", "__raw_path_check"]) delete r[k];
-      return r;
+    // 5.0.0 (R1): an unscripted role file relay relays the scenario's role text
+    if (!(label in script) && /^infra:role-relay:/.test(label)) {
+      const role = inputsOf(prompt).role;
+      return { status: "ok", reason: "relayed", role, chunks: roleChunks(roleText[role]) };
     }
     // 4.0.0 (1985, S3): unscripted push-access probes find access (a new branch)
     if (!(label in script) && /^infra:push-probe$/.test(label))
@@ -375,12 +404,6 @@ export async function runOne(script, args0) {
       r.files = inputsOf(prompt).test_files;
     if (label.startsWith("role:") && !raw) {
       const role = label.split(":")[1];
-      // role runners report the version and contract marker they loaded
-      if (!("role_version" in r)) {
-        const pv = script.preflight && script.preflight.versions ? script.preflight.versions[role] : undefined;
-        r.role_version = pv !== undefined ? pv : FROZEN_VERSIONS[role];
-      }
-      if (!("role_contract" in r)) r.role_contract = CONTRACT_LINE;
       if (r.status === "ok")
         for (const [k, v] of Object.entries(REQUIRED_DEFAULTS[role] || {})) if (!(k in r)) r[k] = v;
     }
@@ -401,7 +424,13 @@ export async function runOne(script, args0) {
       }),
     );
   // script.__source: a fault-injected script text, for a halt no stub can reach
-  const fn = compile(script.__source);
+  // 5.0.0: a scenario's changed role texts are pinned in a copy of the source
+  const roleText = scenarioRoles(script);
+  const roleTable = Object.fromEntries(ROLE_NAMES.map((r) => [r, sha256(roleText[r])]));
+  let src = script.__source || SOURCE;
+  if (ROLE_NAMES.some((r) => roleText[r] !== ROLE_TEXT[r])) src = GEN.withRoleTable(src, roleTable);
+  CUR_ROLES.table = roleTable;
+  const fn = compile(src);
   // a crashed run rethrows; its logs travel on the error (2.1.6)
   const crashed = (e) => {
     if (e && typeof e === "object") e.__logs = logs;
@@ -655,7 +684,15 @@ export function programOf(name) {
   return { name, sha256: programSha(name) };
 }
 // 4.0.0 security review: the preflight probe's output lines for a scripts dir.
-// over: {home, hits: [{hit, real, symlink}], sums: {name: sha|undefined}, extra: [lines]}
+// over: {home, hits: [{hit, real, symlink, roles_real, roles_symlink}],
+// sums: {name: sha|undefined}, roleSums: {file name: sha|undefined}, extra: [lines]}
+// 5.0.0 (R1): each hit's sibling roles dir and the sha256sum of its files
+// (the scenario's ROLE_SHA256 inside runOne, the shipped files otherwise).
+export const CUR_ROLES = { table: null };
+export function roleFileSums() {
+  const t = CUR_ROLES.table || Object.fromEntries(ROLE_NAMES.map((r) => [r, sha256(ROLE_TEXT[r])]));
+  return Object.fromEntries(Object.entries(t).map(([r, v]) => [r + ".md", v]));
+}
 export function scriptsProbe(over = {}) {
   const home = "home" in over ? over.home : "/home/u";
   const hits = over.hits || [{ hit: SCRIPTS_DIR }];
@@ -664,10 +701,16 @@ export function scriptsProbe(over = {}) {
     lines.push("hit=" + h.hit);
     if (h.real !== null) lines.push("real=" + ("real" in h ? h.real : h.hit));
     lines.push("symlink=" + (h.symlink || "no"));
+    const rd = h.hit.replace(/\/scripts$/, "") + "/roles";
+    if (h.roles_real !== null) lines.push("roles_real=" + ("roles_real" in h ? h.roles_real : rd));
+    lines.push("roles_symlink=" + (h.roles_symlink || "no"));
   }
   if (hits.length === 1) {
     const sums = Object.assign(Object.fromEntries(PROGRAMS.map(([n]) => [n, programSha(n)])), over.sums || {});
     for (const [n, v] of Object.entries(sums)) if (v !== undefined) lines.push(v + "  " + hits[0].hit + "/" + n + ".py");
+    const rd = hits[0].hit.replace(/\/scripts$/, "") + "/roles";
+    const rs = Object.assign(roleFileSums(), over.roleSums || {});
+    for (const [f, v] of Object.entries(rs)) if (v !== undefined) lines.push(v + "  " + rd + "/" + f);
   }
   return lines.concat(over.extra || []);
 }
@@ -732,6 +775,8 @@ export const PROGRAM_LABELS = [
   // 4.0.0 (1981)
   [/^infra:db-up/, [["sweep", "db_sweep", ["podman", "removed", "kept", "errors"]], ["up", "db_up", ["name", "port", "dbs", "users", "expiry", "args"]]]],
   [/^infra:db-down$/, [["down", "db_down", ["removed", "absent", "error", "args"]]]],
+  // 5.0.0 (R1): the relay joins the parts; no digest is relayed
+  [/^infra:role-relay:/, [[null, "role_files", null]]],
 ];
 function pick(o, keys) {
   const x = {};
@@ -827,13 +872,10 @@ export function happy(over = {}) {
   const reviewState = () => ({ status: "ok", fingerprint: { head: live.head, tree: live.tree } });
   const s = {
     __store: store,
-    preflight: {
-      reachable: true,
-      missing: [],
-      versions: { ...FROZEN_VERSIONS },
-      contract: Object.fromEntries(ROLE_NAMES.map((k) => [k, CONTRACT_LINE])),
-      dispatch: Object.fromEntries(ROLE_NAMES.map((k) => [k, "DISPATCH: model=sonnet"])),
-    },
+    // 5.0.0 (R1): the scripts and roles probe and the PATH check are filled in
+    preflight: {},
+    // every role on sonnet (the shipped DISPATCH lines differ; v5_roles runs them)
+    __dispatch: Object.fromEntries(ROLE_NAMES.map((k) => [k, "DISPATCH: model=sonnet"])),
     intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF, tried: over.tried || triedFor(over.brief || BRIEF) },
     "infra:branch-scan": { status: "ok", reason: "scanned", commits: [], refs: [] },
     "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },

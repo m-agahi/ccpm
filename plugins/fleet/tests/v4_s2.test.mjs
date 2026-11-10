@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { SOURCE, ARGS, happy, run, runOne, call, inputsOf, planRefFor, buildArgs, sha256, canon, FROZEN_VERSIONS, CONTRACT_LINE } from "./harness.mjs";
+import { SOURCE, ARGS, happy, run, runOne, call, inputsOf, planRefFor, buildArgs, sha256, canon, ROLE_NAMES, ROLE_TEXT } from "./harness.mjs";
 
 // REQUIRED_ON_OK as written in the script source
 function requiredOf() {
@@ -73,8 +73,6 @@ export function happyPlanner(over = {}) {
   return Object.assign(
     p,
     {
-      role_version: s.preflight.versions["scope-and-plan"],
-      role_contract: s.preflight.contract["scope-and-plan"],
       allowed_additions: { files: [], symbols: [], deps: [], settings: [] },
       held_out_examples: [],
       repo_obligations: [],
@@ -100,9 +98,9 @@ const ROLE_LABEL = {
 };
 
 // raw role stubs carry what the runner loaded
+// 5.0.0 (R1): a role result carries no role_version / role_contract any more
 function rawRole(role, fields) {
-  const s = happy();
-  return { __raw: true, status: "ok", reason: "x", role_version: s.preflight.versions[role], role_contract: s.preflight.contract[role], ...fields };
+  return { __raw: true, status: "ok", reason: "x", ...fields };
 }
 
 test("AC-1984-1: the coder schema requires its 5 keys; added_symbols is array or null", async () => {
@@ -162,18 +160,16 @@ test("AC-1984-2: two drifts halt with stop_gate contract", async () => {
   assert.ok(!out.labels.includes("role:plan-audit:retry:retry"));
 });
 
-test("1984: a version or contract mismatch never retries", async () => {
-  let out = await run(happy({ script: { "role:plan-audit": rawRole("plan-audit", { verdict: "approve", routed_findings: [], role_version: 1 }) } }), ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /runner loaded version 1/);
-  assert.ok(!out.labels.some((l) => /:retry$/.test(l)), out.labels.join(", "));
-  out = await run(happy({ script: { "role:plan-audit": rawRole("plan-audit", { verdict: "approve", routed_findings: [], role_contract: "CONTRACT: fleet-v1" }) } }), ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.ok(!out.labels.some((l) => /:retry$/.test(l)));
-  // a version mismatch that also drifts still never retries
+// 5.0.0 (R1): was "a version or contract mismatch never retries". The role
+// text is the hashed file inlined in the prompt: a role result carries no page
+// version or marker, and a stale role_version/role_contract in one is ignored.
+// Drift still retries once, as before.
+test("5.0.0 R1 (was 1984 version/contract mismatch): role_version and role_contract in a result are ignored; drift still retries once", async () => {
+  let out = await run(happy({ script: { "role:plan-audit": rawRole("plan-audit", { verdict: "approve", routed_findings: [], role_version: 1, role_contract: "CONTRACT: fleet-v1" }) } }), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(!out.labels.some((l) => /^role:.*:retry$/.test(l)), out.labels.join(", "));
   out = await run(happy({ script: { "role:plan-audit": rawRole("plan-audit", { verdict: "approve", role_version: 1 }) } }), ARGS);
-  assert.match(out.result.reason, /runner loaded version 1/);
-  assert.ok(!out.labels.some((l) => /:retry$/.test(l)), out.labels.join(", "));
+  assert.ok(out.labels.includes("role:plan-audit:retry"), out.labels.join(", "));
 });
 
 test("1984: null on ok for a key whose frozen type has no null is drift (est_diff_lines, change_kind, plan_path, tldr)", async () => {
@@ -355,16 +351,24 @@ test("1992: a sealed project that is not a non-empty string or null is a changed
 
 // ---------------------------------------------------------------- history.preflight shape (S2 owns the field)
 
-test("4.0.0: history.preflight is optional; when present it is {fleet_version, versions, dispatch, contract}", async () => {
-  const good = { fleet_version: "4.0.0", versions: { "plan-audit": 17 }, dispatch: { "plan-audit": "DISPATCH: model=opus" }, contract: { "plan-audit": "CONTRACT: fleet-v4" } };
+// 5.0.0 (R1): the record is log only, {fleet_version, role_sha256}; a 4.x
+// record ({fleet_version, versions, dispatch, contract}) is accepted, its maps
+// ignored (the build relays the role files again). Was: versions, dispatch and
+// contract required as objects.
+test("5.0.0 R1: history.preflight is optional; when present it has a fleet_version, role_sha256 an object if given; 4.x records pass", async () => {
+  const good = { fleet_version: "4.0.3", role_sha256: { "plan-audit": "a".repeat(64) } };
+  const v4 = { fleet_version: "4.0.0", versions: { "plan-audit": 17 }, dispatch: { "plan-audit": "DISPATCH: model=opus" }, contract: { "plan-audit": "CONTRACT: fleet-v4" } };
   for (const [pf, ok] of [
     [undefined, true],
     [null, true],
     [good, true],
+    [v4, true],
+    [{ ...v4, versions: null }, true],
+    [{ fleet_version: "4.0.0", versions: {}, dispatch: {} }, true],
     [{ ...good, fleet_version: 4 }, false],
-    [{ ...good, versions: null }, false],
-    [{ ...good, dispatch: [] }, false],
-    [{ fleet_version: "4.0.0", versions: {}, dispatch: {} }, false],
+    [{ ...good, fleet_version: "" }, false],
+    [{ ...good, role_sha256: null }, false],
+    [{ ...good, role_sha256: [] }, false],
     ["4.0.0", false],
   ]) {
     const s = happy();
@@ -413,46 +417,38 @@ test("4.0.0: FLEET_VERSION equals the fleet version in marketplace.json, the roo
   const readme = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
   assert.match(readme, new RegExp("^### fleet \\(v" + fv[1].replace(/\./g, "\\.") + "\\)$", "m"));
   const cl = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
-  const top = /^## \[([^\]]+)\]/m.exec(cl);
-  assert.equal(top[1], fv[1], "the newest CHANGELOG entry is this version");
-  assert.ok(!/^## \[Unreleased\]/m.test(cl), "no [Unreleased] section left");
+  // 5.0.0 (ledger 1999): the release ships in three PRs; PR-1 and PR-2 keep
+  // FLEET_VERSION and log under [Unreleased], which the last PR turns into the
+  // 5.0.0 entry. The newest versioned entry is this version.
+  const top = /^## \[(\d[^\]]*)\]/m.exec(cl);
+  assert.equal(top[1], fv[1], "the newest versioned CHANGELOG entry is this version");
+  const un = cl.indexOf("## [Unreleased]");
+  assert.ok(un < 0 || un < cl.indexOf("## [" + fv[1] + "]"), "an [Unreleased] section sits above the newest version only");
 });
 
 // ---------------------------------------------------------------- contract fleet-v4 (D1, plan §2 rev 3)
 
-const V4_VERSIONS = {
-  "scope-and-plan": 29,
-  "plan-audit": 17,
-  "fleet-test-writer": 11,
-  "fleet-test-judge": 11,
-  "fleet-coder": 18,
-  "fleet-code-judge": 16,
-  "fleet-pr-opener": 11,
-  "fleet-intent-judge": 3,
-  "pr-review": 19,
-  "gate-change-nonweakening-sweep": 6,
-};
-
-test("4.0.0 D1: CONTRACT is fleet-v4 and EXPECTED_VERSIONS are the rev-3 pins", () => {
-  assert.match(SOURCE, /^const CONTRACT = "fleet-v4";$/m);
-  const m = /const EXPECTED_VERSIONS = (\{[\s\S]*?\n\});/.exec(SOURCE);
+// 5.0.0 (R1): was "CONTRACT is fleet-v4 and EXPECTED_VERSIONS are the rev-3
+// pins". The pins are now ROLE_SHA256 over the shipped role files; no page
+// version, no CONTRACT marker and no role-page project are left in the workflow.
+test("5.0.0 R1 (was 4.0.0 D1 pins): no CONTRACT, EXPECTED_VERSIONS or ROLE_PROJECT; ROLE_SHA256 pins every role, the files carry no CONTRACT line", () => {
+  assert.doesNotMatch(SOURCE, /^const (CONTRACT|CONTRACT_RE|EXPECTED_VERSIONS|ROLE_PROJECT) = /m);
+  assert.doesNotMatch(SOURCE, /agent_prompt_get|role_version|role_contract|versionProblem|roleTableProblem|applyRoleTable|rolesFromRef/);
+  const m = /\nconst ROLE_SHA256 = (\{[\s\S]*?\n\});/.exec(SOURCE);
   assert.ok(m);
-  assert.deepEqual(Function("return " + m[1])(), V4_VERSIONS);
-  assert.deepEqual(FROZEN_VERSIONS, V4_VERSIONS, "the harness mirrors the pins");
-  assert.equal(CONTRACT_LINE, "CONTRACT: fleet-v4");
+  assert.deepEqual(Object.keys(JSON.parse(m[1])).sort(), ROLE_NAMES.slice().sort());
+  for (const r of ROLE_NAMES) assert.doesNotMatch(ROLE_TEXT[r], /^CONTRACT:/m, r);
 });
 
-test("4.0.0 D1: a fleet-v3 page halts preflight with the reload hint; a page below its pin halts", async () => {
+// 5.0.0 (R1): was "a fleet-v3 page halts preflight with the reload hint; a
+// page below its pin halts". The equivalent stale input is a role text that
+// is not its pin: preflight halts at contract before any role runs.
+test("5.0.0 R1 (was 4.0.0 D1 stale page): a relayed role text that is not its pin halts preflight before any role", async () => {
   const s = happy();
-  s.preflight.contract["plan-audit"] = "CONTRACT: fleet-v3";
-  let out = await runOne(s, ARGS);
+  s.__mutate = { label: /^infra:role-relay:plan-audit/, fn: (r) => Object.assign(r, { chunks: r.chunks.concat(["\nCONTRACT: fleet-v3"]) }) };
+  const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "contract");
-  assert.match(out.result.reason, /role plan-audit contract fleet-v3 != fleet-v4.*reload-plugins/);
-  const t = happy();
-  t.preflight.versions["scope-and-plan"] = 28;
-  out = await runOne(t, ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /scope-and-plan/);
-  assert.ok(!out.labels.includes("role:scope-and-plan"));
+  assert.match(out.result.reason, /role file plan-audit hash mismatch \(relay or tampered\); reinstall fleet/);
+  assert.ok(!out.labels.some((l) => l.startsWith("role:")));
 });

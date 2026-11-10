@@ -1,5 +1,37 @@
 # Changelog
 
+## [Unreleased]
+
+Fleet 5.0.0, part 1 of 3 (ledger 1999, R1). The version stays 4.0.3 until the last part.
+
+### Changed
+
+- The ten role prompts ship in the plugin as `roles/<role>.md`, pinned by a new `ROLE_SHA256`
+  table in the workflow (`gen.mjs` writes it and `--check` checks it, next to
+  `PROGRAM_SHA256`). The files are the yadgar pages `agent-prompt-<role>` as of 4.0.3 with the
+  `CONTRACT:` line removed and the repo's markdown formatting applied.
+- Preflight relays every role file through the new program `role_files.py` (one sonnet agent
+  per role, in parallel; raw text in chunks of 1000 characters). The script joins the chunks
+  and hashes the text itself. A mismatch runs once more on `RELAY_RETRY_MODEL`; a second one
+  stops: "role file <role> hash mismatch (relay or tampered); reinstall fleet <version>". The
+  relays count in `agents`, not against the agent cap.
+- The preflight probe also pins the sibling `roles` dir: its own realpath, no symlink, exactly
+  the ten files, each its pin.
+- Each role prompt is the hashed role text, then the inputs. No prompt calls
+  `agent_prompt_get`. The role tier comes from the text's `DISPATCH:` line.
+- Removed: `ROLE_PROJECT`, `EXPECTED_VERSIONS`, `CONTRACT` and its checks, the role-table cache
+  in the plan ref and `preflight:roles`, and `role_version` / `role_contract` in the role
+  schemas. There is no deploy order: a release is the plugin.
+- The plan ref's `history.preflight` is `{fleet_version, role_sha256}`, log only. A 4.x plan
+  ref still builds (its record's maps are ignored; `branch_scan.py` accepts it too).
+  `fresh_preflight` is accepted and changes nothing. The result has `role_sha256` in place of
+  `role_versions`.
+
+### Added
+
+- `mode: "probe"` (`/build-task probe`): the preflight only on a given repo (scripts and roles
+  dirs, role relay and hash, PATH check). It returns the table and stops.
+
 ## [4.0.3] - 2026-11-10
 
 ### Fixed

@@ -35,7 +35,25 @@ runs `/build-task` explicitly, always use the fleet.
 
 ```
 /build-task <ledger id | Jira key | issue or PR URL | plan path | description>
+/build-task probe
 ```
+
+## Probe (5.0.0)
+
+When `$ARGUMENTS` is exactly `probe`, or the user asks to check that the fleet install works, do
+steps 2, 3 and 5 below, then run the preflight only and stop:
+
+```
+Workflow({ name: "fleet:build-task-run",
+           args: { mode: "probe", repo: "<repo>", date: "<date>",
+                   run_nonce: "<fresh date +%s%N output>" } })
+```
+
+It finds the plugin's scripts and roles dirs, relays and hashes the ten role files, and runs the
+PATH check on `<repo>`. It makes no worktree, runs no role and writes nothing. Report `status`,
+`reason`, and the `probe` table (`scripts_dir`, `roles_dir`, and per role `sha256`, `chars` and
+`model`). A `needs_human` reason that names a role file or the scripts dir means the install is
+stale or changed: tell the user to reinstall the fleet plugin and run `/reload-plugins`.
 
 ## Steps
 
@@ -147,10 +165,10 @@ runs `/build-task` explicitly, always use the fleet.
    `confirm: "auto"`: the workflow re-reads the task and runs its gates again before it builds. On `needs_human` with `needs_max_section`,
    show it verbatim and stop.
 
-   A build takes the role table (page versions, models, contract) from the plan ref. When a build
-   stops with a reason that says `re-run build with fresh_preflight: true` (a role page changed
-   after the plan), run step 8 once more with the same `plan_ref` and `fresh_preflight: true`
-   added to the args. Do this once only; if that run stops too, report it as in step 9.
+   Every run relays and hashes the plugin's role files again (5.0.0); `fresh_preflight` is not
+   needed and changes nothing. A stop that says `role file <role> hash mismatch (relay or
+tampered); reinstall fleet <version>` is not retried: report it as in step 9, and tell the user
+   to reinstall the fleet plugin and run `/reload-plugins`.
 
    `plan_ref` is small: `{branch, plan_commit, plan_ref, ref_sha256, repo}`. Pass it exactly as the
    workflow returned it. The full plan ref is a local git object at `refs/fleet/<task id>/plan`
@@ -166,7 +184,7 @@ runs `/build-task` explicitly, always use the fleet.
 9. **Report.** Relay, in this order:
    - `status` and `reason`. `needs_human` means a gate stopped the run on purpose: quote the reason
      and the last `gate_log` lines, and say what a human must decide.
-   - `branch`, `rounds`, `cumulative`, `role_versions`.
+   - `branch`, `rounds`, `cumulative`, `role_sha256`.
    - `freeze_digest` and `plan_ref`, unchanged, when the result has them: a build that stopped
      after the freeze returns both. This includes a build that ran in the same run as the plan
      (`confirm: "auto"` or `"default"`), where the user saw no `plan_ref` before. Say that step 8

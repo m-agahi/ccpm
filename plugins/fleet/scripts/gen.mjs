@@ -1,17 +1,19 @@
 #!/usr/bin/env node
-// Writes the PROGRAM_SHA256 table of workflows/build-task-run.js from the
-// shipped programs plugins/fleet/scripts/*.py (fleet 4.0.1, ledger 1996). The
-// .py files are the source of truth; the table holds the sha256 of each file's
-// exact bytes, sorted by program name, between the PROGRAM_SHA256_BEGIN and
-// PROGRAM_SHA256_END markers. The workflow does not embed the program text:
-// Claude Code skips a workflow file over 524288 bytes.
+// Writes the PROGRAM_SHA256 and ROLE_SHA256 tables of workflows/build-task-run.js
+// from the shipped files: the programs plugins/fleet/scripts/*.py (fleet 4.0.1,
+// ledger 1996) and the role prompts plugins/fleet/roles/*.md (fleet 5.0.0, R1,
+// ledger 1999). The files are the source of truth; each table holds the sha256
+// of each file's exact bytes, sorted by name, between its _BEGIN and _END
+// markers. The workflow does not embed the file text: Claude Code skips a
+// workflow file over 524288 bytes.
 //
-//   node plugins/fleet/scripts/gen.mjs            write the table
-//   node plugins/fleet/scripts/gen.mjs --check    exit 1 when the table and the files differ,
-//                                                 or the count is not PROGRAM_COUNT
-//   --scripts <dir>  --workflow <file>            other paths (tests)
+//   node plugins/fleet/scripts/gen.mjs            write both tables
+//   node plugins/fleet/scripts/gen.mjs --check    exit 1 when a table and the files differ,
+//                                                 a count is not PROGRAM_COUNT / ROLE_COUNT,
+//                                                 or the roles dir holds a file that is not a role
+//   --scripts <dir>  --roles <dir>  --workflow <file>   other paths (tests)
 
-import { readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, lstatSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,28 +21,55 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const WORKFLOW = join(HERE, "..", "workflows", "build-task-run.js");
 export const SCRIPTS = HERE;
-// the number of shipped programs (28 in 4.0.0 and 4.0.1)
-export const PROGRAM_COUNT = 28;
+export const ROLES_DIR = join(HERE, "..", "roles");
+// the number of shipped programs (28 in 4.0.0 to 4.0.3; 29 with role_files in 5.0.0)
+export const PROGRAM_COUNT = 29;
+// the number of shipped role prompts (5.0.0)
+export const ROLE_COUNT = 10;
 
 const TABLE_RE = /\n\/\/ PROGRAM_SHA256_BEGIN\nconst PROGRAM_SHA256 = (\{[^`]*?\});\n\/\/ PROGRAM_SHA256_END\n/;
+const ROLE_TABLE_RE = /\n\/\/ ROLE_SHA256_BEGIN\nconst ROLE_SHA256 = (\{[^`]*?\});\n\/\/ ROLE_SHA256_END\n/;
+
+function sha(file) {
+  return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
 
 // {name: sha256} of every <dir>/*.py, sorted by name
 export function fileTable(dir = SCRIPTS) {
   const out = {};
-  for (const f of readdirSync(dir).filter((f) => f.endsWith(".py")).sort())
-    out[f.slice(0, -3)] = createHash("sha256").update(readFileSync(join(dir, f))).digest("hex");
+  for (const f of readdirSync(dir).filter((f) => f.endsWith(".py")).sort()) out[f.slice(0, -3)] = sha(join(dir, f));
   return out;
+}
+
+// {name: sha256} of every <dir>/*.md, sorted by name, and the entries that are
+// not a regular .md file (extra files, symlinks, directories)
+export function roleFileTable(dir = ROLES_DIR) {
+  const out = {};
+  const extra = [];
+  for (const f of readdirSync(dir).sort()) {
+    const st = lstatSync(join(dir, f));
+    if (!f.endsWith(".md") || !st.isFile() || !/^[a-z][a-z-]*\.md$/.test(f)) extra.push(f);
+    else out[f.slice(0, -3)] = sha(join(dir, f));
+  }
+  return { table: out, extra };
+}
+
+function parseTable(source, re, what, nameRe) {
+  const m = re.exec(source);
+  if (!m) throw new Error(what + " table not found between its markers in the workflow");
+  const t = JSON.parse(m[1]);
+  if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error(what + " is not an object");
+  for (const [n, v] of Object.entries(t))
+    if (!nameRe.test(n) || typeof v !== "string" || !/^[0-9a-f]{64}$/.test(v)) throw new Error(what + " entry " + n + " is not <name>: <sha256>");
+  return t;
 }
 
 // the table the workflow source holds: {name: sha256}
 export function programs(source) {
-  const m = TABLE_RE.exec(source);
-  if (!m) throw new Error("PROGRAM_SHA256 table not found between its markers in the workflow");
-  const t = JSON.parse(m[1]);
-  if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error("PROGRAM_SHA256 is not an object");
-  for (const [n, v] of Object.entries(t))
-    if (!/^[a-z_]+$/.test(n) || typeof v !== "string" || !/^[0-9a-f]{64}$/.test(v)) throw new Error("PROGRAM_SHA256 entry " + n + " is not <name>: <sha256>");
-  return t;
+  return parseTable(source, TABLE_RE, "PROGRAM_SHA256", /^[a-z_]+$/);
+}
+export function roles(source) {
+  return parseTable(source, ROLE_TABLE_RE, "ROLE_SHA256", /^[a-z][a-z-]*$/);
 }
 
 // the table as the workflow writes it (deterministic)
@@ -54,47 +83,64 @@ export function withTable(source, table) {
   if (!TABLE_RE.test(source)) throw new Error("PROGRAM_SHA256 table not found between its markers in the workflow");
   return source.replace(TABLE_RE, () => "\n// PROGRAM_SHA256_BEGIN\nconst PROGRAM_SHA256 = " + render(table) + ";\n// PROGRAM_SHA256_END\n");
 }
+export function withRoleTable(source, table) {
+  if (!ROLE_TABLE_RE.test(source)) throw new Error("ROLE_SHA256 table not found between its markers in the workflow");
+  return source.replace(ROLE_TABLE_RE, () => "\n// ROLE_SHA256_BEGIN\nconst ROLE_SHA256 = " + render(table) + ";\n// ROLE_SHA256_END\n");
+}
 
 function opt(argv, k, d) {
   const i = argv.indexOf(k);
   return i >= 0 ? argv[i + 1] : d;
 }
 
+// the differences between the files' table `want` and the workflow's `have`
+function diff(want, have, ext, bad) {
+  for (const [k, v] of Object.entries(want))
+    if (!(k in have)) bad.push(k + ext + ": not in the table");
+    else if (have[k] !== v) bad.push(k + ext + ": hashes " + v + ", the table holds " + have[k]);
+  for (const k of Object.keys(have)) if (!(k in want)) bad.push(k + ext + ": in the table, no such file");
+}
+
 function main(argv) {
   const check = argv.includes("--check");
   const dir = opt(argv, "--scripts", SCRIPTS);
+  const rdir = opt(argv, "--roles", ROLES_DIR);
   const wf = opt(argv, "--workflow", WORKFLOW);
   const want = fileTable(dir);
   const n = Object.keys(want).length;
+  const { table: rwant, extra } = roleFileTable(rdir);
+  const rn = Object.keys(rwant).length;
   const source = readFileSync(wf, "utf8");
+  const countBad = [];
+  if (n !== PROGRAM_COUNT) countBad.push(dir + " holds " + n + " programs, not " + PROGRAM_COUNT + " (change PROGRAM_COUNT when a program is added or removed)");
+  if (rn !== ROLE_COUNT) countBad.push(rdir + " holds " + rn + " role files, not " + ROLE_COUNT + " (change ROLE_COUNT when a role is added or removed)");
+  for (const f of extra) countBad.push(rdir + "/" + f + ": not a role file (only regular <role>.md files may be in the roles dir)");
   if (!check) {
-    if (n !== PROGRAM_COUNT) {
-      console.error(dir + " holds " + n + " programs, not " + PROGRAM_COUNT + " (change PROGRAM_COUNT when a program is added or removed)");
+    if (countBad.length) {
+      console.error(countBad.join("\n"));
       return 1;
     }
-    writeFileSync(wf, withTable(source, want));
-    console.log("wrote the sha256 of " + n + " programs into " + wf);
+    writeFileSync(wf, withRoleTable(withTable(source, want), rwant));
+    console.log("wrote the sha256 of " + n + " programs and " + rn + " role files into " + wf);
     return 0;
   }
-  const bad = [];
-  let have;
+  const bad = countBad.slice();
+  let have, rhave;
   try {
     have = programs(source);
+    rhave = roles(source);
   } catch (e) {
     console.error(e.message);
     return 1;
   }
-  if (n !== PROGRAM_COUNT) bad.push(dir + " holds " + n + " programs, not " + PROGRAM_COUNT);
-  for (const [k, v] of Object.entries(want))
-    if (!(k in have)) bad.push(k + ".py: not in the table");
-    else if (have[k] !== v) bad.push(k + ".py: hashes " + v + ", the table holds " + have[k]);
-  for (const k of Object.keys(have)) if (!(k in want)) bad.push(k + ".py: in the table, no such file");
-  if (!bad.length && withTable(source, have) !== source) bad.push("the table is not in its generated form");
+  diff(want, have, ".py", bad);
+  diff(rwant, rhave, ".md", bad);
+  if (!bad.length && withRoleTable(withTable(source, have), rhave) !== source) bad.push("a table is not in its generated form");
   if (bad.length) {
-    console.error("PROGRAM_SHA256 out of date (run node plugins/fleet/scripts/gen.mjs):\n  " + bad.join("\n  "));
+    console.error("PROGRAM_SHA256 / ROLE_SHA256 out of date (run node plugins/fleet/scripts/gen.mjs):\n  " + bad.join("\n  "));
     return 1;
   }
-  console.log(n + " programs match the PROGRAM_SHA256 table");
+  console.log(n + " programs match the PROGRAM_SHA256 table; " + rn + " role files match the ROLE_SHA256 table");
   return 0;
 }
 

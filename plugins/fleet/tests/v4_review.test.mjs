@@ -420,7 +420,7 @@ test("review fix 6: a ref sealed before 4.0.0 (no change_kind/new_behaviour) can
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.failed_check, "intent");
   assert.match(out.result.reason, /sealed before 4\.0\.0.*re-plan/);
-  assert.ok(!out.labels.some((l) => /test-writer/.test(l)), out.labels.join(", "));
+  assert.ok(!out.labels.some((l) => /^role:fleet-test-writer/.test(l)), out.labels.join(", "));
   // control: the same ref with its 4.0.0 plan facts passes the re-run gates
   const s2 = defaultHappy();
   const p2 = await runOne(s2, ARGS);

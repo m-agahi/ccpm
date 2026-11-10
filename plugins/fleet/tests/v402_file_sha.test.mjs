@@ -32,6 +32,9 @@ const ran = (prompt) => new Set([...String(prompt).matchAll(RUNS)].map((m) => m[
 // script's checks read each program's output)
 const SAMPLES = [
   "preflight",
+  // 5.0.0 (R1)
+  "infra:role-relay:plan-audit",
+  "infra:role-relay:plan-audit:retry",
   "infra:path-check:commit-plan",
   "infra:path-check:commit-plan:relay-retry",
   "workspace",
