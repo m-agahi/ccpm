@@ -44,11 +44,20 @@ local hook that names a directory freezes that directory instead of stopping eve
   with or without the slash) was "unresolvable" (only regular files resolved), a suspicious entry
   that stops every freeze. The hasher now freezes that directory's tree (tracked and
   untracked-not-ignored files), as it freezes the directory of a script a hook names. A directory
-  that does not exist, the worktree itself (`.`) or one outside it stays unresolvable. The
-  PATH-binary exemption applies to the command token only: an argument that names a repo
-  directory is frozen even when a PATH binary has its name (`pytest tests` with a `tests`
-  binary), and in a launcher hook too (`npm run lint -- src/`); 5.0.4 passed both. An argument
-  that names no repo path keeps passing as before.
+  that does not exist, the worktree itself (`.`) or one outside it stays unresolvable. In a
+  non-lenient hook the PATH-binary exemption applies to the command token only: an argument
+  that names a repo directory is frozen even when a PATH binary has its name (`pytest tests`
+  with a `tests` binary). An argument that names no repo path keeps passing as before.
+- Lenient hooks (an npm script, an `npx`/`uvx` tool, a Python entry point) keep the 5.0.4
+  behaviour exactly: a regular repo file they name is frozen, a directory or any other token
+  passes. `npx eslint src` does not freeze `src/`, so a coder change there is no hash violation.
+  Known gap, tracked in ledger task 2022: a lenient tool that executes a directory's code is not
+  guarded by the freeze.
+- Review fixes: the relay-cap exit prints a fixed marker (`FLEET_HASHER_RELAY_CAP:`); the workflow
+  maps it to its own stop text with stop_gate `hash` (the sizes only when they have the
+  program's exact form). `hasher.py` lstats every component of the scratch path, of
+  `<scratch>/hashes` and of the map file, and exits non-zero on a symlink: nothing is written
+  through a link.
 
 ### Not changed (decision for Max)
 

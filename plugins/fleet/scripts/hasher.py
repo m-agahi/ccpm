@@ -68,6 +68,17 @@ if not scratch or not os.path.isabs(scratch):
 _rs, _rw = os.path.realpath(scratch), os.path.realpath(wt)
 if _rs == _rw or _rs.startswith(_rw.rstrip('/') + '/'):
     sys.exit('scratch dir must be outside the worktree: ' + scratch)
+
+def no_link(path):
+    # every component of an absolute path, lstat'ed: a symlink exits (fail closed)
+    cur = '/'
+    for part in os.path.normpath(path).split('/'):
+        if not part:
+            continue
+        cur = os.path.join(cur, part)
+        if os.path.islink(cur):
+            sys.exit('scratch path has a symlinked component: ' + cur)
+no_link(scratch)
 # the fleet's own settings file: its hash stays inline (the workflow exempts
 # exactly the fleet's bytes there)
 SETTINGS_LOCAL = '.claude/settings.local.json'
@@ -423,9 +434,9 @@ def hook_refs():
             elif name in py_scripts:
                 i += 1
                 lenient = True
-        # 5.0.5: the command token (the first one after launcher handling;
-        # none in a lenient hook, whose script or tool was taken above) may be
-        # a PATH binary; every other token is an argument
+        # 5.0.5: in a non-lenient hook the command token (the first one after
+        # launcher handling) may be a PATH binary; every other token is an
+        # argument. A lenient hook's script or tool was taken above.
         cmd_at = -1 if lenient else i
         while i < len(toks):
             t = toks[i]
@@ -449,9 +460,10 @@ def hook_refs():
                 refs.add(f)
             elif i == cmd_at and '/' not in t and shutil.which(t):
                 pass
-            elif i != cmd_at and repo_dir(t):
+            elif not lenient and i != cmd_at and repo_dir(t):
                 # 5.0.5: an argument naming a repo directory freezes its tree,
-                # in a lenient hook too, whatever binary shares its name
+                # whatever binary shares its name. A lenient hook keeps 5.0.4:
+                # its directory arguments are data for the tool, not frozen.
                 dirs.add(repo_dir(t))
             elif lenient or ('/' not in t and shutil.which(t)):
                 pass
@@ -645,8 +657,13 @@ def ignored_summary(full):
     # every entry but the settings file, settings (its hash or null), file}
     data = canon(full)
     d = os.path.join(scratch, 'hashes')
+    no_link(d)
     os.makedirs(d, exist_ok=True)
+    no_link(d)
+    if not os.path.isdir(d):
+        sys.exit('scratch hashes path is not a directory: ' + d)
     path = os.path.join(d, 'ignored-' + sha(data) + '.json')
+    no_link(path)
     fd, tmp = tempfile.mkstemp(dir=d, prefix='.ignored-')
     with os.fdopen(fd, 'wb') as fh:
         fh.write(data)
@@ -666,6 +683,7 @@ if len(text.encode('utf-8')) > RELAY_CAP:
     sizes = sorted(((len(v), k) for k, v in out['hashes'].items() if k != 'ignored'), reverse=True)
     if 'changed' in out:
         sizes = sorted(sizes + [(len(out['changed']), 'changed')], reverse=True)
-    sys.exit('hasher output is %d bytes, over the %d-byte relay cap; largest: %s' % (
-        len(text.encode('utf-8')), RELAY_CAP, ', '.join('%s %d keys' % (k, n) for n, k in sizes[:3])))
+    # a fixed marker: the workflow maps it to its own stop text (stop_gate hash)
+    sys.exit('FLEET_HASHER_RELAY_CAP: the hasher output is over the %d-byte relay cap (%d bytes; largest: %s)' % (
+        RELAY_CAP, len(text.encode('utf-8')), ', '.join('%s %d keys' % (k, n) for n, k in sizes[:3])))
 print(text)

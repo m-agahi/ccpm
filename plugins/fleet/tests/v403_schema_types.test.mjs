@@ -346,6 +346,8 @@ const READS = {
     "ig.settings string": "hasher:hashes.ignored.settings",
     "ig.file string": "hasher:hashes.ignored.file",
     "ig.sha256 string-re": "hasher:hashes.ignored.sha256",
+    // review S2: the relay-cap marker in a failed hasher's reason
+    "r.reason string": "hasher:reason",
   },
   explainIgnored: {
     "x string": PARSED_LOCAL,

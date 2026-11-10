@@ -993,6 +993,7 @@ const FLEETREF = "fleetref:";
 const IGNORED_ALL = "*";
 const IGNORED_CHANGED = "ignored files changed";
 const IGNORED_FILES = {};
+const RELAY_CAP_MARK = "FLEET_HASHER_RELAY_CAP:";
 function violationName(x) {
   if (x.map === "ignored" && x.settings)
     return (
@@ -1755,7 +1756,7 @@ const PROGRAM_SHA256 = {
   "db_up": "287f00df3f12543a7ffed8445fda9ba9823f58dcb37a90301ed05b245d49d913",
   "fleet_scan": "5140d5020bee7cae61994b753e8ee100fc6cdcc1389d3a3559ef5fec5fbe2a3b",
   "format_files": "4aa6b21986547803065ef22d3771a1a4a4f7a1a97dae3d5ad11da1576b0a7d14",
-  "hasher": "235754afda8f2be68b54ab46dbfb01d9f85dbb8eeb5a945beaf8e869d2bfcb7b",
+  "hasher": "f7d88f2bbd58113e3598e4942bdabbfa915459fabd0f87df33e8948ea265723f",
   "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
   "ignored_diff": "3b40bf9ee82a71b8a0284c1411ecb4d30ab2060d72f67cd4b3659455592e99a6",
   "parked": "14150028c5fc657e10214efd33dd6669c83281c8a45f07410aad6e6b7520bd9b",
@@ -3910,6 +3911,12 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
   const mapsOk =
     !!h && HASH_MAPS.every((m) => h[m] && typeof h[m] === "object") && Array.isArray(h.suspicious);
   const fp = r.fingerprint;
+  // 5.0.5 (review S2): hasher.py's fixed relay-cap marker; the stop text is the
+  // script's own, with the sizes only when they have the program's exact form
+  if (r.status !== "ok" && typeof r.reason === "string" && r.reason.indexOf(RELAY_CAP_MARK) >= 0) {
+    const m = /^FLEET_HASHER_RELAY_CAP: the hasher output is over the 65536-byte relay cap \(\d+ bytes; largest: ([a-z]+ \d+ keys(?:, [a-z]+ \d+ keys){0,2})\)$/.exec(r.reason.trim());
+    halt("needs_human", "hasher " + label + ": the hasher output is over the 65536-byte relay cap" + (m ? " (largest: " + m[1] + ")" : "") + "; a hashed map grows with this repo (runner config, .gitignore files or a hook directory), so the run cannot relay it", "hash");
+  }
   if (r.status !== "ok" || !fp || !fp.head || !fp.tree || !mapsOk || (baseTree && !Array.isArray(r.changed)))
     halt("failed", "hasher " + label + " failed: " + (r.reason || "incomplete output"));
   requireProgram(r, "hasher", "hasher " + label);
