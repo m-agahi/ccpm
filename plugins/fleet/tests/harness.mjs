@@ -331,6 +331,9 @@ export async function runOne(script, args0) {
     // 3.1.0: unscripted ledger reads find a task with a body page
     if (!(label in script) && /^infra:ledger-read:pre$/.test(label))
       return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
+    // 5.0.5 (ledger 2018): an unscripted comparison reads the registered maps
+    if (!(label in script) && /^infra:ignored-diff:/.test(label))
+      return fillPrograms(label, Object.assign({ status: "ok", reason: "compared" }, ignoredDiffOut(inputsOf(prompt).args)), prompt);
     // unscripted build caller checks find no modified existing definition
     if (!(label in script) && /^infra:changed-defs:/.test(label)) return defsOut([]);
     // unscripted fleet-internal scans find no .fleet/ path in the PR diff
@@ -398,6 +401,9 @@ export async function runOne(script, args0) {
     // the maps too) and list no changed paths
     if (label.startsWith("hasher:") && !raw && r.status === "ok") {
       if (!("hashes" in r)) r.hashes = JSON.parse(JSON.stringify(lastHashes || DEFAULT_HASHES));
+      // 5.0.5 (ledger 2018): a stub's ignored map travels as its summary
+      if (r.hashes && r.hashes.ignored && typeof r.hashes.ignored === "object" && !isSummary(r.hashes.ignored))
+        r.hashes.ignored = ignoredSummary(r.hashes.ignored, inputsOf(prompt).scratch_dir);
       if (!("changed" in r)) r.changed = [];
       // the real hasher sees the run-state refs the workflow's own state writes made
       const g = r.hashes.git || (r.hashes.git = {});
@@ -554,6 +560,49 @@ export const CSHA = (m) => "c00000" + m;
 // Hasher output is four maps plus a suspicious list. Fixtures are written as
 // flat prefixed keys and converted: "git:<k>" -> git, "symlink:<k>" ->
 // symlinks, a key with "#" -> sections, anything else -> files.
+// 5.0.5 (ledger 2018): the hasher relays a summary of the ignored map and
+// writes the map to <scratch>/hashes/ignored-<sha256 of the file>.json. A stub
+// may still give the map: the harness relays its summary, as the program
+// would, and keeps the map by file path for the ignored-diff stub.
+export const SETTINGS_LOCAL = ".claude/settings.local.json";
+const IGNORED_REG = new Map();
+export function registerIgnored(summary, map) {
+  IGNORED_REG.set(summary.file, map);
+}
+const isSummary = (ig) => !!ig && typeof ig === "object" && typeof ig.count === "number";
+export function ignoredSummary(map, scratch) {
+  const rest = Object.fromEntries(Object.entries(map).filter(([k]) => k !== SETTINGS_LOCAL));
+  const s = {
+    count: Object.keys(rest).length,
+    sha256: sha256(canon(rest)),
+    settings: SETTINGS_LOCAL in map ? map[SETTINGS_LOCAL] : null,
+    file: scratch + "/hashes/ignored-" + sha256(canon(map)) + ".json",
+  };
+  registerIgnored(s, map);
+  return s;
+}
+// the script's view of an ignored map: every entry but the settings file as
+// one key "*" ("<sha256>/<count>"), the settings file as itself
+export function ignoredView(map) {
+  const rest = Object.fromEntries(Object.entries(map || {}).filter(([k]) => k !== SETTINGS_LOCAL));
+  const v = { "*": sha256(canon(rest)) + "/" + Object.keys(rest).length };
+  if (map && SETTINGS_LOCAL in map) v[SETTINGS_LOCAL] = map[SETTINGS_LOCAL];
+  return v;
+}
+// the ignored-diff program over two registered maps (its output, unrelayed)
+export function ignoredDiffOut(args) {
+  const [fa, sa, ca, fb, sb, cb] = args;
+  const a = IGNORED_REG.get(fa);
+  const b = IGNORED_REG.get(fb);
+  const fail = (e) => ({ paths: [], total: null, error: e, args });
+  if (!a || !b) return fail("cannot read " + (a ? fb : fa));
+  const ra = Object.fromEntries(Object.entries(a).filter(([k]) => k !== SETTINGS_LOCAL));
+  const rb = Object.fromEntries(Object.entries(b).filter(([k]) => k !== SETTINGS_LOCAL));
+  if (sha256(canon(ra)) !== sa || sha256(canon(rb)) !== sb) return fail("a file does not match its digest");
+  if (String(Object.keys(ra).length) !== ca || String(Object.keys(rb).length) !== cb) return fail("a file does not match its count");
+  const keys = [...new Set(Object.keys(ra).concat(Object.keys(rb)))].sort().filter((k) => ra[k] !== rb[k]);
+  return { paths: keys.slice(0, 20), total: keys.length, error: null, args };
+}
 export function H(flat, suspicious) {
   const h = { files: {}, sections: {}, git: {}, symlinks: {}, ignored: {}, suspicious: suspicious || [] };
   for (const [k, v] of Object.entries(flat)) {
@@ -660,7 +709,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.4/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.5/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -818,6 +867,8 @@ export const PROGRAM_LABELS = [
   // 4.0.0 (1981)
   [/^infra:db-up/, [["sweep", "db_sweep", K("db_sweep")], ["up", "db_up", K("db_up")]]],
   [/^infra:db-down$/, [["down", "db_down", K("db_down")]]],
+  // 5.0.5 (ledger 2018): the capped list of changed ignored paths
+  [/^infra:ignored-diff:/, [[null, "ignored_diff", K("ignored_diff")]]],
 ];
 function pick(o, keys) {
   const x = {};
@@ -1046,13 +1097,24 @@ export function sh(cwd, ...cmd) {
 }
 
 // mode is kept for the older call sites; the program always hashes.
+// 5.0.5 (ledger 2018): the program writes its ignored map to a scratch dir
+// and prints a summary; for the older assertions hashes.ignored is that map
+// again (read from the file) and the printed summary is ignored_summary.
 export function runHasherRaw(wt, mode, files, baseTree) {
-  const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify(files)].concat(baseTree ? [baseTree] : []), {
-    input: hasherPy(),
-    encoding: "utf8",
-  });
-  if (r.status !== 0) throw new Error("hasher failed: " + r.stderr);
-  return JSON.parse(r.stdout);
+  const scratch = mkdtempSync(join(tmpdir(), "fleet-hasher-scratch-"));
+  try {
+    const r = spawnSync("python3", ["-I", "-", wt, JSON.stringify(files), baseTree || "", scratch], {
+      input: hasherPy(),
+      encoding: "utf8",
+    });
+    if (r.status !== 0) throw new Error("hasher failed: " + r.stderr);
+    const out = JSON.parse(r.stdout);
+    out.ignored_summary = out.hashes.ignored;
+    out.hashes.ignored = JSON.parse(readFileSync(out.ignored_summary.file, "utf8"));
+    return out;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 // Flatten the four maps to prefixed keys for the older assertions.

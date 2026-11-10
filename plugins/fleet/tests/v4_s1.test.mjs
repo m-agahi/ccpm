@@ -57,8 +57,9 @@ test("4.0.0 1993 AC-2 (4.0.1): every program ships as scripts/<name>.py and the 
   assert.equal((SOURCE.match(/^const ([A-Z_]+_PY) = String\.raw`/gm) || []).length, 0, "no *_PY constant left in the workflow");
   assert.ok(!/_PY_BEGIN|_PY_END/.test(SOURCE), "no *_PY markers left in the workflow");
   // 22 in S1; S4 adds parked (1986); S3 adds push_probe (1985);
-  // S5 adds test_db_decl, db_sweep, db_up, db_down (1981); 5.0.3 adds plan_dsn (2010)
-  assert.equal(PROGRAMS.length, 29);
+  // S5 adds test_db_decl, db_sweep, db_up, db_down (1981); 5.0.3 adds plan_dsn (2010);
+  // 5.0.5 adds ignored_diff (2018)
+  assert.equal(PROGRAMS.length, 30);
   const files = readdirSync(SCRIPTS_SRC).filter((f) => f.endsWith(".py")).sort();
   assert.deepEqual(files, PROGRAMS.map(([n]) => n + ".py").sort(), "no extra and no missing file");
   for (const [name, sha] of PROGRAMS) {
@@ -116,7 +117,7 @@ test("4.0.0 1993: gen.mjs --check passes on the shipped files and fails on a cha
 test("4.0.0 1993: FLEET_VERSION is a semver string and the scripts_dir shape names it", () => {
   const m = /^const FLEET_VERSION = "(\d+\.\d+\.\d+)";$/m.exec(SOURCE);
   assert.ok(m, "FLEET_VERSION constant");
-  assert.equal(m[1], "5.0.4");
+  assert.equal(m[1], "5.0.5");
   assert.match(SCRIPTS_DIR, new RegExp("/fleet/" + m[1].replace(/\./g, "\\.") + "/scripts$"));
 });
 
@@ -301,23 +302,23 @@ function precommitScript() {
 test("4.0.0 1993 AC-4: a scripts_dir outside the plugin cache halts at the first agent with stop_gate contract", async () => {
   const bad = [
     ["/tmp/x", ["/tmp/x"]],
-    ["fleet/5.0.4/scripts", ["fleet/5.0.4/scripts"]],
+    ["fleet/5.0.5/scripts", ["fleet/5.0.5/scripts"]],
     ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts", ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts"]],
-    ["/home/u/../x/fleet/5.0.4/scripts", ["/home/u/../x/fleet/5.0.4/scripts"]],
-    ["/home/u//fleet/5.0.4/scripts", ["/home/u//fleet/5.0.4/scripts"]],
-    ["/home/u/a b/fleet/5.0.4/scripts", ["/home/u/a b/fleet/5.0.4/scripts"]],
+    ["/home/u/../x/fleet/5.0.5/scripts", ["/home/u/../x/fleet/5.0.5/scripts"]],
+    ["/home/u//fleet/5.0.5/scripts", ["/home/u//fleet/5.0.5/scripts"]],
+    ["/home/u/a b/fleet/5.0.5/scripts", ["/home/u/a b/fleet/5.0.5/scripts"]],
     // security review: exactly $HOME/.claude/plugins/cache/<marketplace>/fleet/<version>/scripts
-    ["/home/u/x/fleet/5.0.4/scripts", ["/home/u/x/fleet/5.0.4/scripts"]],
-    ["/home/v/.claude/plugins/cache/m/fleet/5.0.4/scripts", ["/home/v/.claude/plugins/cache/m/fleet/5.0.4/scripts"]],
-    ["/home/u/.claude/plugins/cache/a/b/fleet/5.0.4/scripts", ["/home/u/.claude/plugins/cache/a/b/fleet/5.0.4/scripts"]],
-    ["/home/u/.claude/plugins/cache/../fleet/5.0.4/scripts", ["/home/u/.claude/plugins/cache/../fleet/5.0.4/scripts"]],
-    ["/home/u/.claude/plugins/cache/.x/fleet/5.0.4/scripts", ["/home/u/.claude/plugins/cache/.x/fleet/5.0.4/scripts"]],
+    ["/home/u/x/fleet/5.0.5/scripts", ["/home/u/x/fleet/5.0.5/scripts"]],
+    ["/home/v/.claude/plugins/cache/m/fleet/5.0.5/scripts", ["/home/v/.claude/plugins/cache/m/fleet/5.0.5/scripts"]],
+    ["/home/u/.claude/plugins/cache/a/b/fleet/5.0.5/scripts", ["/home/u/.claude/plugins/cache/a/b/fleet/5.0.5/scripts"]],
+    ["/home/u/.claude/plugins/cache/../fleet/5.0.5/scripts", ["/home/u/.claude/plugins/cache/../fleet/5.0.5/scripts"]],
+    ["/home/u/.claude/plugins/cache/.x/fleet/5.0.5/scripts", ["/home/u/.claude/plugins/cache/.x/fleet/5.0.5/scripts"]],
     // two hits: never guess
-    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/fleet/5.0.4/scripts"]],
+    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/fleet/5.0.5/scripts"]],
     // no hit
     [null, []],
     // the directory used is not the hit
-    ["/home/v/.claude/plugins/cache/n/fleet/5.0.4/scripts", [SCRIPTS_DIR]],
+    ["/home/v/.claude/plugins/cache/n/fleet/5.0.5/scripts", [SCRIPTS_DIR]],
   ];
   for (const [dir, hits] of bad) {
     const s = happy();
@@ -338,7 +339,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   assert.equal(second.result.status, "awaiting_confirmation", second.result.reason);
   for (const o of [first, second]) {
     assert.equal(o.labels[0], "preflight");
-    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/fleet/5.0.4/scripts;'));
+    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/fleet/5.0.5/scripts;'));
     assert.ok(o.calls[0].prompt.includes("sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py"));
   }
   const ref = s.__store[PC];
@@ -347,7 +348,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   // build mode resolves it again in its own first agent
   const b = await run(happy(), ARGS);
   assert.equal(b.build.labels[0], "preflight");
-  assert.match(b.build.calls[0].prompt, /fleet\/5\.0\.4\/scripts/);
+  assert.match(b.build.calls[0].prompt, /fleet\/5\.0\.5\/scripts/);
 });
 
 test("4.0.0 1993 AC-4: a path_check run from another directory (wrong self-hash) halts at preflight", async () => {
@@ -638,7 +639,7 @@ test("4.0.0 security 1: scripts_dir must be its own realpath and no symlink; the
 test("4.0.0 security 1: the probe command, run for real, reports a symlinked scripts dir and the program hashes", { skip: !HAVE_PY }, async () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-probe-"));
   try {
-    const real = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.4", "scripts");
+    const real = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.5", "scripts");
     mkdirSync(real, { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(real, n + ".py"));
     const cmd = await PREFLIGHT_PROBE();
@@ -652,9 +653,9 @@ test("4.0.0 security 1: the probe command, run for real, reports a symlinked scr
     for (const [n] of PROGRAMS) assert.ok(lines.includes(programSha(n) + "  " + real + "/" + n + ".py"), n);
     // the version dir replaced by a symlink to a copy elsewhere
     const other = join(home, "other");
-    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.4"), other, { recursive: true });
-    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.4"), { recursive: true });
-    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.4"));
+    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.5"), other, { recursive: true });
+    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.5"), { recursive: true });
+    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.5"));
     lines = run1();
     assert.ok(lines.includes("real=" + join(other, "scripts")), lines.join("\n"));
   } finally {
@@ -700,7 +701,7 @@ test("4.0.0 security 2: the shipped hasher hashes every program beside it; a tam
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "i");
     const hash = () => {
-      const r = spawnSync("python3", ["-I", join(dir, "hasher.py"), wt, "[]"], { encoding: "utf8", cwd: home });
+      const r = spawnSync("python3", ["-I", join(dir, "hasher.py"), wt, "[]", "", join(home, "scratch")], { encoding: "utf8", cwd: home });
       assert.equal(r.status, 0, r.stderr);
       return JSON.parse(r.stdout);
     };

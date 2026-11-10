@@ -59,6 +59,20 @@ GIT = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
 explicit = json.loads(sys.argv[2]) if len(sys.argv) > 2 else []
 # a tree sha: list the paths that differ between it and the tree now
 base_tree = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+# fleet 5.0.5 (ledger 2018): the run's scratch dir, an absolute path outside
+# the worktree. The full ignored map goes to a file there; the output carries
+# its summary only, so no relayed field grows with the repo's file count.
+scratch = sys.argv[4] if len(sys.argv) > 4 else ''
+if not scratch or not os.path.isabs(scratch):
+    sys.exit('scratch dir must be an absolute path: ' + repr(scratch))
+_rs, _rw = os.path.realpath(scratch), os.path.realpath(wt)
+if _rs == _rw or _rs.startswith(_rw.rstrip('/') + '/'):
+    sys.exit('scratch dir must be outside the worktree: ' + scratch)
+# the fleet's own settings file: its hash stays inline (the workflow exempts
+# exactly the fleet's bytes there)
+SETTINGS_LOCAL = '.claude/settings.local.json'
+# the output's cap: a bigger relay cannot be copied exactly by the relay agent
+RELAY_CAP = 65536
 # module names whose bytecode could shadow a frozen file (the purge removes
 # all bytecode before every hash check, so any such pyc is planted)
 FROZEN_STEMS = set(os.path.basename(f)[:-3] for f in explicit if f.endswith('.py')) | {'conftest'}
@@ -301,6 +315,15 @@ def declared_tool(tool, tools):
             return True
     return dist_name(tool) in tools
 
+def repo_dir(tok):
+    # 5.0.5: a relative path to a directory inside the worktree (not the
+    # worktree itself), else None; `pytest scripts/tests/` names one
+    if not tok or tok.startswith('/') or '..' in tok.split('/'):
+        return None
+    full = os.path.realpath(os.path.join(wt, tok))
+    real_wt = os.path.realpath(wt)
+    return norm(tok) if full.startswith(real_wt + os.sep) and os.path.isdir(full) else None
+
 def repo_file(tok):
     # a relative path to a regular file inside the worktree, else None
     if not tok or tok.startswith('/') or '..' in tok.split('/'):
@@ -364,6 +387,7 @@ def hook_refs():
     # also freezes the script tables (see launcher_tables).
     hooks, bad = local_hooks()
     refs = set()
+    dirs = set()
     used_launcher = False
     npm_scripts, py_scripts, tools = repo_names()
     for hid, entry, args in hooks:
@@ -417,18 +441,20 @@ def hook_refs():
                 i += 1
                 continue
             f = repo_file(t)
+            d = None if f else repo_dir(t)
             if f:
                 refs.add(f)
+            elif d:
+                dirs.add(d)
             elif lenient or ('/' not in t and shutil.which(t)):
                 pass
             else:
                 bad.append('unresolvable local hook ' + hid + ': ' + t)
             i += 1
-    # the whole dir tree of each referenced file (tracked and untracked-not-ignored)
-    frozen = set()
-    for f in refs:
-        frozen.add(f)
-        d = os.path.dirname(f)
+    # the whole dir tree of each referenced file, and of each referenced
+    # directory (tracked and untracked-not-ignored)
+    frozen = set(refs)
+    for d in sorted(set(os.path.dirname(f) for f in refs) | dirs):
         if d:
             for x in git('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', d).split(b'\x00'):
                 if x:
@@ -606,11 +632,33 @@ if _sd is not None:
         with open(fp, 'rb') as fh:
             scripts[fn[:-3]] = hashlib.sha256(fh.read(1 << 22)).hexdigest()
 out['scripts'] = scripts
+def ignored_summary(full):
+    # 5.0.5: the map goes to <scratch>/hashes/ignored-<sha256 of the file>.json
+    # (written whole, then renamed); the output carries {count and sha256 of
+    # every entry but the settings file, settings (its hash or null), file}
+    data = canon(full)
+    d = os.path.join(scratch, 'hashes')
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, 'ignored-' + sha(data) + '.json')
+    fd, tmp = tempfile.mkstemp(dir=d, prefix='.ignored-')
+    with os.fdopen(fd, 'wb') as fh:
+        fh.write(data)
+    os.replace(tmp, path)
+    rest = dict((k, v) for k, v in full.items() if k != SETTINGS_LOCAL)
+    return {'count': len(rest), 'sha256': sha(canon(rest)), 'settings': full.get(SETTINGS_LOCAL), 'file': path}
+
 out['hashes'] = {'files': files, 'sections': sections, 'git': gitmap, 'symlinks': symlinks,
-                 'ignored': ignored_files(),
+                 'ignored': ignored_summary(ignored_files()),
                  'suspicious': sorted(set(SUSPICIOUS))}
 # the script recomputes this over the relayed values: a dropped key fails
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 
-print(json.dumps(out, sort_keys=True))
+text = json.dumps(out, sort_keys=True)
+if len(text.encode('utf-8')) > RELAY_CAP:
+    sizes = sorted(((len(v), k) for k, v in out['hashes'].items() if k != 'ignored'), reverse=True)
+    if 'changed' in out:
+        sizes = sorted(sizes + [(len(out['changed']), 'changed')], reverse=True)
+    sys.exit('hasher output is %d bytes, over the %d-byte relay cap; largest: %s' % (
+        len(text.encode('utf-8')), RELAY_CAP, ', '.join('%s %d keys' % (k, n) for n, k in sizes[:3])))
+print(text)
