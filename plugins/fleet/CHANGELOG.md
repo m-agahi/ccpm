@@ -29,8 +29,9 @@ change in behaviour, so 5.1.0 has room to grow under the 480000-byte budget (ADR
 
 - `tests/v5010_prompt_snapshot.test.mjs`: for four main scenarios (plan then build, confirm auto,
   the short path, probe) it pins the sha256 of every agent call the workflow makes (label, prompt,
-  schema, model, agent type) and the final status, with the fleet version masked. The pins were
-  computed on the 5.0.9 workflow. A change to any prompt the workflow sends now fails a test.
+  schema, model, agent type) and the final status. It masks the fleet version, every sha256 and
+  every base64 run of 100 or more characters (the sealed plan ref and run-state carry the version),
+  so the pins are the same on 5.0.9 and 5.0.10. A change to any prompt the workflow sends now fails a test.
 
 ## [5.0.9] - 2026-11-11
 
