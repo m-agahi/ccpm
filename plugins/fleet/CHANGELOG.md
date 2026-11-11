@@ -10,8 +10,11 @@ reading the code.
 
 - Update the plugin (`/plugin`, update `fleet` to 6.0.1), then start a NEW session: the workflow
   looks for its own `fleet/6.0.1/scripts` dir.
-- A 6.0.0 plan ref and run-state stay valid. A 6.0.0 run-state has no `pr_updated` or `update`
-  key; it resumes as "not updated".
+- A 6.0.0 plan ref and run-state stay valid: the seal covers the ref's content only, and a ref
+  sealed by another fleet version gets a gate note, not a stop. A 6.0.0 run-state has no
+  `pr_updated` or `update` key; it resumes as "not updated".
+- Before any other session is told to update, run the ADR-1192 smoke run (probe, then plan with
+  confirm ask on a scratch repo) and record its run ids here. Status: pending.
 
 ### Fixed
 
