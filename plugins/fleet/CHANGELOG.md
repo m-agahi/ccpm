@@ -23,6 +23,19 @@ and 3 add the items marked "pending"; stream 3 finalises this entry.
   text ("push access ... still not known after a second probe"). `gh_identity.py` records
   `exit_code` and a short stderr (200 characters, token-shaped text redacted) on each unknown
   answer, and the stop text shows them. A definite no still stops at build start.
+- 2039: a nested program relay (`test_db` at `infra:branch-scan` and `infra:verify-plan`, and
+  every other nested program slot) must carry the program's keys and `digest`: `programSchema`
+  requires the keys of the program's `PROGRAM_KEYS` entry (for a program with modes, the keys
+  every mode prints) plus `digest`, where it prints one. A nested relay from the shipped program
+  whose digest is missing or wrong gets one `:digest-retry` (the dispatch layer checks each
+  nested slot of a digest-checked step); a second miss stops as before. A missing top-level
+  digest also counts as a digest miss.
+- 2040: intake treats a relayed `[Workflow harness — user request]` block that does not refer
+  to `args.input` as a mid-turn message: it returns needs_human with the reason code
+  `relayed user request does not reference args.input: ...`, and the run stops with
+  `stop_gate: "relaunch"` and `relaunch: "intake"`. The `/build-task` skill launches the
+  Workflow only in a turn whose latest human message is the build request or its confirmation,
+  and on `relaunch: "intake"` re-launches once on the next such turn.
 
 ### Pending (streams 2 and 3)
 

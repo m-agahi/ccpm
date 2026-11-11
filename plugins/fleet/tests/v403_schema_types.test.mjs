@@ -316,6 +316,11 @@ const READS = {
     "r.digest string": "parsed: any digest-checked program result (read by relayDigestOk)",
     "r.digest string-re": "parsed: any digest-checked program result (read by relayDigestOk)",
   },
+  // 6.0.0 (2039): a nested program relay's digest
+  nestedMiss: {
+    "r object": "parsed: any digest-checked program result (read by relayDigestOk)",
+    "x object": "parsed: a nested program slot (read by relayDigestOk)",
+  },
   purgeBytecode: { "r.purged number": "infra:purged" },
   pathRelayProblem: {
     "pc.tools object": "prog:path_check:tools",
@@ -596,6 +601,8 @@ const READS = {
     "pr object": "infra:park",
     "pr.clean boolean": "prog:parked:clean",
     "pr.dirty array": "prog:parked:dirty",
+    // 6.0.0 (2040): intake's relaunch reason code
+    "it.reason string": "intake:reason",
   },
   tinyRefProblem: {
     "t object": PARSED_ARGS,
@@ -966,8 +973,10 @@ function loadProgramSchema() {
     assert.ok(i >= 0, "function " + name);
     return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
   };
-  const fns = ["nullable", "mergeProp", "programSchema"].map(grab).join("");
-  return new Function("PROGRAM_OUT", "PROGRAM_PROP", constBlock("FILE_SHA_HEX", ";\n") + fns + "\nreturn programSchema;")(
+  const fns = ["nullable", "mergeProp", "slotKeys", "programSchema"].map(grab).join("");
+  // 6.0.0 (2039): nested slots require the program's keys (PROGRAM_KEYS) and digest
+  const keys = constBlock("PROGRAM_KEYS", "\n};") + constBlock("NO_DIGEST_PROGRAMS", ";\n");
+  return new Function("PROGRAM_OUT", "PROGRAM_PROP", constBlock("FILE_SHA_HEX", ";\n") + keys + fns + "\nreturn programSchema;")(
     S.PROGRAM_OUT,
     S.INFRA_SCHEMA.properties.program,
   );
@@ -1009,7 +1018,8 @@ test("4.0.3 review: PROGRAM_OUT merges into the base schema; no item requirement
   // a nested slot keeps the base slot's typed keys too
   const pf = ps(S.INFRA_SCHEMA, [["plan_files", "plan_files"]]).properties.plan_files;
   assert.deepEqual(pf.properties.head, { type: "string" });
-  assert.deepEqual(pf.required.slice().sort(), ["file_sha256", "program"]);
+  // 6.0.0 (2039): plus the program's keys and digest
+  assert.deepEqual(pf.required.slice().sort(), ["args", "digest", "dsn_paths", "file_sha256", "files", "head", "program"]);
   // the shared schema is never changed
   assert.deepEqual(S.INFRA_SCHEMA.properties.commits_since.items.required, ["sha", "subject"]);
   assert.equal(S.INFRA_SCHEMA.properties.head.type, "string");

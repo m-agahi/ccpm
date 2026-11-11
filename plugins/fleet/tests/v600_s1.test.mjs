@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, existsSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SCRIPTS_SRC, ARGS, happy, run, call, inputsOf, ghIdOut, spawnSync } from "./harness.mjs";
@@ -103,4 +103,76 @@ test("6.0.0 2038: the unknown halt shows the program's stderr", async () => {
   s.__gh = { "o/r": [{ cmd: "gh", installed: true, push: null, exit_code: 1, stderr: "HTTP 502: Bad Gateway" }, { cmd: "gh-personal", installed: false, push: null }] };
   const out = await run(s, ARGS);
   assert.match(out.result.reason, /gh=null \[exit 1: HTTP 502: Bad Gateway\]/);
+});
+
+// ---------------------------------------------------------------- 2039: nested program relays carry their digest
+
+// wf_336c49a1-0d4: the verify-plan agent relayed test_db without its digest; testDbStep stopped
+test("6.0.0 2039: nested program slots require the program's keys, args and digest", async () => {
+  const out = await run(happy(), ARGS);
+  const req = (label, slot) => call(out, label).opts.schema.properties[slot].required;
+  for (const label of ["infra:branch-scan", "infra:verify-plan"])
+    for (const k of ["decl", "error", "args", "digest", "program", "file_sha256"]) assert.ok(req(label, "test_db").indexOf(k) >= 0, label + " test_db requires " + k);
+  // a program with no digest requires none; a multi-mode program requires what every mode prints
+  assert.deepEqual(req("infra:verify-plan", "plan_hash").slice().sort(), ["file_sha256", "plan_sha256", "program"]);
+  for (const k of ["remote_url_check", "gh_check"]) assert.ok(req("workspace", k).indexOf("digest") >= 0, k);
+});
+
+for (const [label, phase] of [["infra:verify-plan", "build"], ["infra:branch-scan", "plan"]])
+  for (const [how, mut] of [["missing", (t) => delete t.digest], ["mismatched", (t) => (t.digest = "0".repeat(64))]])
+    test("6.0.0 2039: a " + how + " nested test_db digest at " + label + " gets one :digest-retry, then passes", async () => {
+      const s = happy();
+      s.__mutate = { label, fn: (r, p, real) => (real === label && r.test_db ? (mut(r.test_db), r) : r) };
+      const out = await run(s, ARGS);
+      assert.equal(out.result.status, "ok", out.result.reason);
+      const labels = out[phase].labels;
+      assert.equal(labels.filter((l) => l === label + ":digest-retry").length, 1, labels.join(", "));
+      assert.ok(out[phase].logs.some((l) => l.indexOf(label + ": the test_db relay does not match the program's digest; dispatched once more") === 0), out[phase].logs.join("\n"));
+    });
+
+test("6.0.0 2039: a nested digest that stays wrong after the retry stops as before", async () => {
+  const s = happy();
+  s.__mutate = { label: "infra:verify-plan", fn: (r) => (r.test_db && delete r.test_db.digest, r) };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.equal(out.result.stop_gate, "db");
+  assert.match(out.result.reason, /^infra:verify-plan: the relayed \.fleet-test-db\.json read does not match the program's digest/);
+  assert.equal(out.build.labels.filter((l) => l === "infra:verify-plan:digest-retry").length, 1);
+});
+
+// ---------------------------------------------------------------- 2040: a relayed mid-turn request is not the build request
+
+const RELAY = "relayed user request does not reference args.input";
+test("6.0.0 2040: the intake prompt names the harness frame and the relaunch reason code", async () => {
+  const out = await run(happy(), ARGS);
+  const p = call(out, "intake").prompt;
+  assert.ok(p.indexOf("[Workflow harness — user request]") >= 0, "names the frame");
+  assert.ok(p.indexOf('"' + RELAY + ': ') >= 0, "gives the reason code");
+});
+
+for (const input of ["L42", "add a uv entry to the flake"])
+  test("6.0.0 2040: intake's relay reason stops with stop_gate relaunch and relaunch intake (" + input + ")", async () => {
+    const s = happy();
+    s.intake = { status: "needs_human", reason: RELAY + ": and the uv entry as well", tried: [] };
+    const out = await run(s, Object.assign({}, ARGS, { input }));
+    assert.equal(out.result.status, "needs_human");
+    assert.equal(out.result.stop_gate, "relaunch");
+    assert.equal(out.result.relaunch, "intake");
+    assert.equal(out.result.reason, "intake: " + RELAY + ": and the uv entry as well; re-launch the workflow once in a turn whose latest human message is the build request");
+  });
+
+test("6.0.0 2040: any other intake stop carries no relaunch field", async () => {
+  const s = happy();
+  s.intake = { status: "needs_human", reason: "several matching tickets", tried: [] };
+  const out = await run(s, Object.assign({}, ARGS, { input: "fix the thing" }));
+  assert.equal(out.result.status, "needs_human");
+  assert.ok(!("relaunch" in out.result));
+  assert.notEqual(out.result.stop_gate, "relaunch");
+});
+
+test("6.0.0 2040: the /build-task skill launches the Workflow only from the build request's turn and re-launches once on relaunch intake", () => {
+  const t = readFileSync(join(SCRIPTS_SRC, "..", "skills", "build-task", "SKILL.md"), "utf8");
+  assert.match(t, /latest human message is the build request or its confirmation/);
+  assert.match(t, /`relaunch: "intake"`/);
+  assert.match(t, /re-launch[^.]*once[^.]*next turn/i);
 });

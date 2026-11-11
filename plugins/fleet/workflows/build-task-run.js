@@ -154,7 +154,7 @@ const CALLER_LIMITS = [
   "a symbol is a bare identifier: a method is grepped by its last name only",
 ];
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch"];
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "done" };
 const CONFIRMS = ["ask", "auto", "default"];
 const MAX_REVIEWS = 2;
@@ -1812,6 +1812,12 @@ function mergeProp(base, add) {
   }
   return m;
 }
+// 6.0.0 (2039): the keys a nested relay of `name` must carry: its PROGRAM_KEYS (the keys all its modes share) and digest
+function slotKeys(name) {
+  const ids = Object.keys(PROGRAM_KEYS).filter((k) => k === name || k.indexOf(name + ":") === 0);
+  const ks = ids.length ? ids.map((k) => PROGRAM_KEYS[k]).reduce((a, b) => a.filter((x) => b.indexOf(x) >= 0)) : [];
+  return ks.concat(NO_DIGEST_PROGRAMS.indexOf(name) >= 0 ? [] : ["digest"]);
+}
 function programSchema(schema, slots) {
   const s = JSON.parse(JSON.stringify(schema));
   s.properties = s.properties || {};
@@ -1832,7 +1838,7 @@ function programSchema(schema, slots) {
     o.properties = Object.assign({}, o.properties);
     for (const k of Object.keys(out)) o.properties[k] = mergeProp(o.properties[k], out[k]);
     Object.assign(o.properties, { program: PROGRAM_PROP, file_sha256: FILE_SHA_HEX });
-    req(o, ["program", "file_sha256"]);
+    req(o, ["program", "file_sha256"].concat(slotKeys(name)));
     s.properties[slot] = o;
     req(s, [slot]);
   }
@@ -2173,7 +2179,7 @@ function intakePrompt(inputs) {
   return (
     INFRA_STEP + "INTAKE. Read only. Never write, edit, comment, transition or post anywhere: no file edits, no git writes, no ledger, ticket, issue or PR writes.\n" +
     inputsLine(inputs) +
-    "Resolve `input` into ONE work item and fetch its text. Classify it in this order:\n" +
+    "Resolve `input` into ONE work item and fetch its text. The harness may add the launching turn's latest human message to this prompt (a `[Workflow harness — user request]` block): `input` stays the work item. When that block is present and neither names nor refers to the item `input` names, it is a message sent while the workflow launched: resolve nothing and return {status: \"needs_human\", reason: \"" + RELAUNCH_REASON + ": <that request, at most 200 characters>\", tried: []}.\nClassify `input` in this order:\n" +
     "1. Task id (`L42`, `42`, `#42`, `yaadgaar #42`). The ledger scope is <project>, as the caller gave it; it is independent of <repo>. A repo's `.yadgar` files, its git remotes and its config never decide the ledger or the project. Resolve the id only by calling the ledger tool, and take its answer as the truth. Record EVERY ledger tool call in `tried`: {ledger, project, call (the tool and its arguments), error (the tool's error text, exactly; null when it returned the task)}. `ledger_tools` is the preflight census of the ledger tools, advisory only: it can miss a tool, so load the ledger tool via ToolSearch even when it is not listed. Only when ToolSearch finds no such tool, record {ledger, project, call: <the tool name>, error \"absent\"} for that ledger and call nothing; when every ledger you may use is absent -> needs_human with reason \"" + NO_LEDGER_REASON + "\". The ledger is fixed by `ledger`; never choose it yourself:\n" +
     "   - ledger `yaadgaar` (the project's tasks live in yaadgaar): `42`, `#42` and `yaadgaar #42` are yaadgaar task 42; never map them to the yadgar ledger or to L<N>, and never call mcp__yadgar__task_get (that ledger is frozen history for this project). An `L42` input -> needs_human (a legacy id; this project builds from yaadgaar tasks only). Load mcp__yaadgaar__read_task via ToolSearch and call it with number=<the number>. The yaadgaar client is bound to the session's project and takes no project argument; never check or guess which project it is bound to. A refusal or no task -> needs_human. kind yaadgaar; ref = the number; id = the `id` (URN) of the answer, copied exactly; project = the project the answer names (a non-empty `project_id` or `project` field), copied exactly, else null (read_task names none for the client's own project). An answer that names a project other than <project> -> needs_human naming both.\n" +
     "   - ledger `yadgar`: kind ledger. Load mcp__yadgar__task_get via ToolSearch; call it with project_id=<project> and id=<the number>. A `yaadgaar #42` input, or a refusal with external_task_ledger -> needs_human. ref = the number.\n" +
@@ -3192,18 +3198,28 @@ function agentOpts(opts, label, model) {
 const DIGEST_RETRY = ":digest-retry";
 function digestOnlyMiss(r, id) {
   const name = id.split(":")[0];
-  return !!r && typeof r === "object" && r.status === "ok" && !programProblem(r, name) && typeof r.digest === "string" && SHA256_RE.test(r.digest) && !relayDigestOk(r, progKeys(id), name);
+  return !!r && typeof r === "object" && r.status === "ok" && !programProblem(r, name) && (r.digest === undefined || (typeof r.digest === "string" && SHA256_RE.test(r.digest))) && !relayDigestOk(r, progKeys(id), name);
 }
 const ARGS_RETRY = ":args-retry";
 const RETRY_RE = /:(digest|args)-retry$/;
+// 6.0.0 (2039): the first nested program slot whose relay is from the shipped program but misses its digest (null: none)
+function nestedMiss(label, r) {
+  const hit = r && typeof r === "object" && r.status === "ok" ? PROGRAM_SLOTS.find((e) => e[0].test(label)) : null;
+  for (const [slot, name] of hit ? hit[1] : []) {
+    const x = slot === null ? null : r[slot];
+    if (x && typeof x === "object" && PROGRAM_KEYS[name] && NO_DIGEST_PROGRAMS.indexOf(name) < 0 && !programProblem(x, name) && !relayDigestOk(x, progKeys(name), name)) return slot;
+  }
+  return null;
+}
 async function digestRetry(label, prompt, opts, r, again) {
   if (!opts || !opts.digest || RETRY_RE.test(label)) return r;
   const dm = digestOnlyMiss(r, opts.digest);
   const am = !dm && Array.isArray(opts.args) && !!r && r.status === "ok" && relayDigestOk(r, progKeys(opts.digest), opts.digest.split(":")[0]) && canonical(r.args) !== canonical(opts.args);
-  if (!dm && !am) return r;
+  const nm = !dm && !am ? nestedMiss(label, r) : null;
+  if (!dm && !am && !nm) return r;
   if (again === softDispatch && capped() + 1 > MAX_AGENTS) return r;
-  const sfx = dm ? DIGEST_RETRY : ARGS_RETRY;
-  gate(label + ": " + (dm ? "the relay does not match the program's digest" : "the program ran on other arguments than the workflow sent") + "; dispatched once more to a fresh agent (" + label + sfx + ")");
+  const sfx = dm || nm ? DIGEST_RETRY : ARGS_RETRY;
+  gate(label + ": " + (dm ? "the relay does not match the program's digest" : nm ? "the " + nm + " relay does not match the program's digest" : "the program ran on other arguments than the workflow sent") + "; dispatched once more to a fresh agent (" + label + sfx + ")");
   return again(label + sfx, prompt + (dm ? "\nA first relay of this step did not match the program's digest: run the command again and copy every value exactly." : "\nA first run of this step used other arguments: run the command again exactly as written."), opts);
 }
 async function softDispatch(label, prompt, opts) {
@@ -3503,6 +3519,7 @@ function finish(status, reason) {
 }
 function finishStop(status, reason) {
   const out = finish(status, reason);
+  if (state.relaunch) out.relaunch = state.relaunch;
   if (state.unverifiedPlanRef && status !== "ok" && status !== "awaiting_confirmation") {
     out.plan_ref = state.unverifiedPlanRef;
     out.plan_ref_verified = false;
@@ -3672,6 +3689,8 @@ function ledgerToolNeeded(project) {
   return l === "yaadgaar" ? LEDGER_TOOLS[0] : l === "yadgar" ? LEDGER_TOOLS[1] : LEDGER_TOOLS.join(" or ");
 }
 const NO_LEDGER_REASON = "no task ledger available; give a URL, Jira key or text";
+// 6.0.0 (2040): intake's reason code for a relayed request that is not the build request
+const RELAUNCH_REASON = "relayed user request does not reference args.input";
 function noLedgerStop(it, project) {
   const tried = Array.isArray(it.tried) ? it.tried.filter((t) => t && typeof t === "object") : [];
   if (it.status === "ok" || !tried.length || !tried.every((t) => t.error === "absent")) return null;
@@ -4846,6 +4865,10 @@ async function planMode(input, date) {
     agentType: JUDGE_AGENT,
     phase: "Intake",
   });
+  if (it.status === "needs_human" && typeof it.reason === "string" && it.reason.indexOf(RELAUNCH_REASON + ":") === 0) {
+    state.relaunch = "intake";
+    halt("needs_human", "intake: " + cutText(it.reason).slice(0, 300) + "; re-launch the workflow once in a turn whose latest human message is the build request", "relaunch");
+  }
   const nl = TASK_ID_INPUT_RE.test(raw) ? noLedgerStop(it, input.project) : null;
   if (nl) halt("needs_human", "intake: task id " + JSON.stringify(raw) + ": " + nl);
   if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", "intake " + it.status + ": " + intakeHaltReason(it, raw));
