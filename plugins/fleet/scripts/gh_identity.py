@@ -6,6 +6,8 @@ for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
     _h = _r.getrlimit(_k)[1]
     _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
 _o.environ['MALLOC_ARENA_MAX'] = '2'
+# 6.0.0 security review: git never reads refs/replace/* objects in place of sealed ids
+_o.environ['GIT_NO_REPLACE_OBJECTS'] = '1'
 _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
@@ -45,7 +47,9 @@ except Exception:
 # exit 0 with stdout exactly true or false counts; anything else is unknown.
 # Each call has 15 s; only a clearly transient error is tried once more.
 # Prints {origin, repos: {<slug>: {gh_cmd, push, tried: [{cmd, installed,
-# push}]}}, args, program, digest}. No token is read, passed or printed; the
+# push}]}}, args, program, digest}. fleet 6.0.0 (ledger 2038): an installed
+# command whose answer is unknown (push null) also carries exit_code (null on
+# a timeout) and stderr (its first 200 characters, token-shaped text redacted). No token is read, passed or printed; the
 # commands run as they are. Read only.
 import hashlib, json, os, re, shutil, subprocess, sys, time
 args = sys.argv[1:]
@@ -113,9 +117,18 @@ for s in ([origin] if origin else []) + args[1:]:
 TRANSIENT = re.compile(rb'(?i)timed? ?out|connection (reset|refused)|error connecting|temporary failure|EOF|TLS handshake|HTTP 5[0-9][0-9]|could not resolve host')
 
 
+TOKEN = re.compile(r'(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|[A-Za-z0-9_-]{40,})')
+
+
+def why(code, err):
+    # the diagnostics of an unknown answer: exit code and a short, token-free stderr
+    t = TOKEN.sub('[redacted]', ' '.join((err or b'').decode('utf-8', 'replace').split()))
+    return {'exit_code': code, 'stderr': t[:200]}
+
+
 def probe(cmd, slug):
     # {cmd, installed, push}: push True / False only on exit 0 with stdout
-    # exactly true or false; None otherwise (unknown, not readable)
+    # exactly true or false; None otherwise (unknown, not readable), with why()
     if not shutil.which(cmd):
         return {'cmd': cmd, 'installed': False, 'push': None}
     for attempt in (0, 1):
@@ -124,15 +137,17 @@ def probe(cmd, slug):
         except OSError:
             return {'cmd': cmd, 'installed': False, 'push': None}
         except subprocess.TimeoutExpired:
-            return {'cmd': cmd, 'installed': True, 'push': None}
+            return dict({'cmd': cmd, 'installed': True, 'push': None}, **why(None, b'timed out after %d s' % CALL_TIMEOUT))
         if p.returncode == 0:
             v = p.stdout.decode('utf-8', 'replace')
-            return {'cmd': cmd, 'installed': True, 'push': True if v in ('true', 'true\n') else False if v in ('false', 'false\n') else None}
+            push = True if v in ('true', 'true\n') else False if v in ('false', 'false\n') else None
+            r = {'cmd': cmd, 'installed': True, 'push': push}
+            return r if push is not None else dict(r, **why(0, p.stderr))
         if attempt == 0 and not re.search(rb'HTTP 4[0-9][0-9]', p.stderr or b'') and TRANSIENT.search(p.stderr or b''):
             time.sleep(3)
             continue
         break
-    return {'cmd': cmd, 'installed': True, 'push': None}
+    return dict({'cmd': cmd, 'installed': True, 'push': None}, **why(p.returncode, p.stderr))
 
 
 repos = {}

@@ -22,7 +22,7 @@ import { SOURCE, ARGS, happy, run, runOne, spawnSync, inputsOf, ROLE_NAMES, ROLE
 async function realProbe(mutate) {
   const home = mkdtempSync(join(tmpdir(), "fleet-roles-probe-"));
   try {
-    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.10");
+    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.0.0");
     mkdirSync(join(ver, "scripts"), { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(ver, "scripts", n + ".py"));
     cpSync(ROLES_SRC, join(ver, "roles"), { recursive: true });
@@ -49,7 +49,7 @@ const readCmd = (role) => "sha256sum -- '" + ROLES_DIR + "/" + role + ".md'\n2. 
 // a scripted role result with an explicit role_file
 const withFile = (r, rf) => Object.assign({}, r, { role_file: rf });
 
-test("5.0.0 R1: ten role files ship, each pinned by ROLE_SHA256; gen.mjs --check passes", () => {
+test("5.0.0 R1: eleven role files ship (6.0.0: + fleet-ci-classifier), each pinned by ROLE_SHA256; gen.mjs --check passes", () => {
   // 5.0.0 R3: plus the _shared dir (pinned by SHARED_SHA256; v5_prompts)
   assert.deepEqual(readdirSync(ROLES_SRC).sort(), ROLE_NAMES.map((r) => r + ".md").concat(["_shared"]).sort());
   assert.deepEqual(Object.keys(PIN).sort(), ROLE_NAMES.slice().sort());
@@ -109,9 +109,13 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   const out = await run(happy(), Object.assign({}, ARGS, { confirm: "ask" }));
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.equal(out.plan.calls.length, 17, out.plan.labels.join(", "));
+  // 6.0.0 (ledger 2041): + infra:ruleset-surface:plan
+  // 6.0.0 (ledger 2042): + infra:pr-convention:plan
+  assert.equal(out.plan.calls.length, 19, out.plan.labels.join(", "));
   // 5.0.6 (ledger 2019): + 7 build-dir resets and the teardown
-  assert.equal(out.build.calls.length, 58, out.build.labels.join(", "));
+  // 6.0.0 (ledger 2033): + infra:policy
+  // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
+  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
   for (const c of out.calls) assert.ok(!String(c.prompt).includes("agent_prompt_get"), c.label);
 });
 
@@ -238,7 +242,7 @@ test("5.0.0 R1: plan mode seals history.preflight {fleet_version, role_sha256}, 
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const p = JSON.parse(s.__store[out.result.plan_ref.plan_commit]).history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "5.0.10");
+  assert.equal(p.fleet_version, "6.0.0");
   assert.deepEqual(p.role_sha256, PIN);
 });
 
@@ -284,7 +288,7 @@ test("5.0.0 probe mode: preflight only on the given repo; returns the table and 
 test("5.0.0 R1 real execution: the probe, run by bash over a real plugin cache, passes the shipped roles and refuses a changed, extra, missing, symlinked or nested entry", async () => {
   const ok = await realProbe();
   assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
-  assert.ok(ok.logs.some((l) => /all 10 role files at their ROLE_SHA256 pins/.test(l)));
+  assert.ok(ok.logs.some((l) => /all 11 role files at their ROLE_SHA256 pins/.test(l)));
   const cases = [
     [(d) => writeFileSync(join(d, "plan-audit.md"), ROLE_TEXT["plan-audit"] + "x"), /plan-audit\.md hashes [0-9a-f]{64}, not /],
     [(d) => writeFileSync(join(d, "extra.md"), "x"), /extra\.md is not a shipped role file/],

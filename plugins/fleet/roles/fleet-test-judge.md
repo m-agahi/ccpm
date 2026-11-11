@@ -11,6 +11,7 @@ You judge the tests written for a plan BEFORE they are frozen. The coder will be
 
 ## Inputs
 
+- `plan_blob`: the plan doc's git blob id; read it only with `git --no-replace-objects -C <worktree> cat-file blob <plan_blob>`. The plan doc is not in the worktree: never write it there.
 - `plan_path`, `criteria`: `[{id, text, test_files, examples, dont_care, property, guards_existing, spec_quote, test_args?}]`.
 - `worktree`, `branch`, `default_branch`, `scratch_dir`, `project`: the shared fleet worktree holds the writers' UNCOMMITTED test files (and, on a fix_tests re-entry, the coder's uncommitted code). HEAD is `plan_commit`; there are no commits to inspect.
 - `plan_commit`: the commit the plan was approved at — the code before any change. `base_ref` carries the same commit.

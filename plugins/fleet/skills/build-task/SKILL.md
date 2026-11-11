@@ -98,6 +98,17 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
 5. **Workflow tool.** Check that `Workflow` is among the tools you can call now. If it is not, say
    "the fleet needs the Workflow tool, which this session does not have" and stop. Never run the
    roles yourself by hand: the gates exist only in the workflow script.
+
+   **Launch turn (6.0.0).** The Workflow harness relays the launching turn's latest human message
+   to the agents as the user's request, and that request wins over `args`. Call Workflow only in a
+   turn whose latest human message is the build request or its confirmation (the "Build" answer).
+   When another human message arrived in this turn after the request (a queued mid-turn message),
+   handle that message first; launch the Workflow in a later turn whose latest human message is
+   the build request or its confirmation. A result with `relaunch: "intake"` (stop gate
+   `relaunch`) means intake saw a relayed request that is not the build request: re-launch the
+   same Workflow call once, with a fresh `run_nonce`, on the next turn whose latest human message
+   is the build request or its confirmation. A second `relaunch` stop: report it as in step 9.
+
 6. **Plan.**
 
    ```

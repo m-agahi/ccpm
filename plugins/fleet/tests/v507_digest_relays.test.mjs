@@ -166,7 +166,7 @@ const V506 = {
   "coder/file": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review; CI green, ready for human merge (no merge: policy merge never)",
     "coder2": [
       "frozen test or runner-config hash changed: conftest.py -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -174,7 +174,7 @@ const V506 = {
   "coder/section": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review; CI green, ready for human merge (no merge: policy merge never)",
     "coder2": [
       "frozen test or runner-config hash changed: pyproject.toml#tool.pytest -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -182,7 +182,7 @@ const V506 = {
   "coder/git": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review; CI green, ready for human merge (no merge: policy merge never)",
     "coder2": [
       "frozen test or runner-config hash changed: git:config:local -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -190,7 +190,7 @@ const V506 = {
   "coder/ignored": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review; CI green, ready for human merge (no merge: policy merge never)",
     "coder2": [
       "frozen test or runner-config hash changed: ignored path written: build.log (likely cause: a build or test command ran without the fleet build env, test_env_prefix, so build output or a cache such as target/ or __pycache__ changed in the worktree) -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -198,7 +198,7 @@ const V506 = {
   "coder/symlink": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review; CI green, ready for human merge (no merge: policy merge never)",
     "coder2": [
       "frozen test or runner-config hash changed: symlink:lib -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -206,7 +206,7 @@ const V506 = {
   "coder/added": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review; CI green, ready for human merge (no merge: policy merge never)",
     "coder2": [
       "frozen test or runner-config hash changed: tests/conftest.py -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -214,7 +214,7 @@ const V506 = {
   "coder/deleted": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review; CI green, ready for human merge (no merge: policy merge never)",
     "coder2": [
       "frozen test or runner-config hash changed: conftest.py -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -438,7 +438,7 @@ test("5.0.7 2020: two digest misses fail as in 5.0.6; any other contract failure
 test("5.0.7 2020: the read-only program steps carry the retry; no write step does", () => {
   const src = readFileSync(join(SCRIPTS_SRC, "..", "workflows", "build-task-run.js"), "utf8");
   const ids = [...src.matchAll(/JUDGE_AGENT,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]).concat([...src.matchAll(/digest: (?:baseTree \? "hasher:base" : )?"([a-z_]+)"/g)].map((m) => m[1]));
-  const RO = ["read_state", "fleet_scan", "hook_surface", "tf_gate", "remote_head", "branch_scan", "verify_since", "review_paths", "callers", "precommit_ids", "script_check", "hasher", "hash_diff", "gh_identity"];
+  const RO = ["read_state", "fleet_scan", "hook_surface", "tf_gate", "remote_head", "branch_scan", "verify_since", "review_paths", "callers", "precommit_ids", "script_check", "hasher", "hash_diff", "gh_identity", "ruleset_surface", "policy", "pr_convention", "orch_scan", "ci_watch"];
   assert.deepEqual([...new Set(ids)].sort(), RO.slice().sort());
 });
 

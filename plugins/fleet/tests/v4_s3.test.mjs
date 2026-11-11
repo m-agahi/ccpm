@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
+import { PB,
   spawnSync,
   canon,
   commitStub,
@@ -77,6 +77,13 @@ const WANT = [
   [/^infra:push/, "sonnet"],
   [/^infra:tf-gate/, "sonnet"],
   [/^infra:hook-surface/, "sonnet"],
+  [/^infra:ruleset-surface/, "sonnet"],
+  [/^infra:policy$/, "haiku"],
+  [/^infra:pr-stats/, "sonnet"],
+  [/^infra:pr-ready/, "sonnet"],
+  [/^infra:(pr-merge|pr-update|ci-rerun|fleet-cleanup)/, "sonnet"],
+  [/^infra:(orch-scan|ci-watch)/, "haiku"],
+  [/^infra:pr-convention/, "haiku"],
   [/^infra:changed-defs/, "sonnet"],
   [/^infra:replan-/, "sonnet"],
   [/^infra:state:/, "sonnet"],
@@ -256,8 +263,8 @@ test("4.0.0 1988: the fleet's own settings file appearing in a fix_tests round p
   const testFinding = { target: "tests", criterion: "AC1", finding: "wrong expectation" };
   const h = H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" });
   h.ignored = { [SETTINGS]: OWN };
-  const M3 = { head: "abc1234def0", tree: "M3" };
-  const K2 = { head: "abc1234def0", tree: "K2" };
+  const M3 = { head: "b0de1234567", tree: "M3" };
+  const K2 = { head: "b0de1234567", tree: "K2" };
   const s = happy({
     script: {
       "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_tests", routed_findings: [testFinding] },
@@ -331,7 +338,7 @@ test("4.0.0 1988 AC-1988-3: only the exact path with the exact bytes of this wor
   assert.match(of.result.reason, /^judge mutated worktree: fleet-test-judge/);
   // the fleet's own file removed during a judge run is a stop
   const s = happy();
-  s["hasher:pre-writers:r1"] = withIgnored({ head: "abc1234def0", tree: "T0" }, { [SETTINGS]: OWN });
+  s["hasher:pre-writers:r1"] = withIgnored({ head: "b0de1234567", tree: "T0" }, { [SETTINGS]: OWN });
   s["hasher:freeze:f1"] = withIgnored(FP_TESTS, { [SETTINGS]: OWN });
   s["hasher:fp-post:test-judge:r1"] = withIgnored(FP_TESTS, {});
   const out = await run(s, ARGS);
@@ -500,13 +507,17 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   const out = await run(happy(), Object.assign({}, ARGS, { confirm: "ask" }));
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.equal(out.plan.calls.length, 17, out.plan.labels.join(", "));
-  assert.equal(out.planResult.agents, 17);
+  // 6.0.0 (ledger 2041): + infra:ruleset-surface:plan
+  // 6.0.0 (ledger 2042): + infra:pr-convention:plan
+  assert.equal(out.plan.calls.length, 19, out.plan.labels.join(", "));
+  assert.equal(out.planResult.agents, 19);
   // 5.0.6 (ledger 2019): + 7 build-dir resets (writers, test judge, coder,
   // code judge, commit, push, pr-review) and the teardown, which runs after
   // the result is made
-  assert.equal(out.build.calls.length, 58, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 57);
+  // 6.0.0 (ledger 2033): + infra:policy
+  // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
+  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 66);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -531,12 +542,13 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "5.0.10");
+  assert.equal(p.fleet_version, "6.0.0");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
   assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/5.0.8/scripts"), "no scripts dir or PATH check sealed");
   assert.ok(!text.includes("DISPATCH"), "no role text or tier sealed");
-  assert.deepEqual(Object.keys(out.result.cumulative).sort(), ["agents", "replans", "runs"]);
+  // 6.0.0 (ledger 2044): + audits
+  assert.deepEqual(Object.keys(out.result.cumulative).sort(), ["agents", "audits", "replans", "runs"]);
   const b = await runOne(s, BUILD(out.result.plan_ref));
   assert.equal(b.result.status, "ok", b.result.reason);
   assert.equal(call(b, "role:fleet-coder:r1").opts.model, "opus");
@@ -574,7 +586,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     noUnscripted(b);
     assert.equal(b.result.status, "ok", b.result.reason);
     // 5.0.6 (ledger 2019): 50 + 7 build-dir resets + the teardown
-    assert.equal(b.calls.length, 58);
+    // 6.0.0 (ledger 2033): + infra:policy; review S6, S7a: + 3
+    assert.equal(b.calls.length, 67);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });
@@ -589,7 +602,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 5\.0\.10/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 6\.0\.0/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });
@@ -610,9 +623,9 @@ test("5.0.0 R1 (was 4.0.0 1990 confirm auto): confirm auto builds in the plan ru
   // the auto gates' stubs (as autoHappy in build_task_run.test.mjs)
   const s = happy();
   Object.assign(s, {
-    "hasher:pre-intent": { status: "ok", fingerprint: { head: "abc1234def0", tree: "P0" } },
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: "b0de1234567", tree: "P0" } },
     "role:fleet-intent-judge": { status: "ok", reason: "matches", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } },
-    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: "abc1234def0", tree: "P0" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: "b0de1234567", tree: "P0" } },
   });
   const out = await runOne(s, Object.assign({}, ARGS, { confirm: "auto" }));
   assert.equal(out.result.status, "ok", out.result.reason);
@@ -629,7 +642,7 @@ test("4.0.0 1990: a build-mode re-plan seals no preflight record (the next build
     "infra:replan-worktree": { status: "ok", reason: "ok", head: "abc1234def0" },
     "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
     "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
-    "infra:replan-reset": { status: "ok", reason: "reset", head: PC2, superseded_head: "5555555" },
+    "infra:replan-reset": { status: "ok", reason: "reset", head: "b0de1234567", superseded_head: "5555555" },
   });
   s["role:scope-and-plan:replan"] = s["role:scope-and-plan"];
   s["infra:commit-plan:replan"] = commitStub(s.__store, PC2, "d".repeat(64));

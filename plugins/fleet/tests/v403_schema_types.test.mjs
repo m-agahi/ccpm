@@ -316,6 +316,11 @@ const READS = {
     "r.digest string": "parsed: any digest-checked program result (read by relayDigestOk)",
     "r.digest string-re": "parsed: any digest-checked program result (read by relayDigestOk)",
   },
+  // 6.0.0 (2039): a nested program relay's digest
+  nestedMiss: {
+    "r object": "parsed: any digest-checked program result (read by relayDigestOk)",
+    "x object": "parsed: a nested program slot (read by relayDigestOk)",
+  },
   purgeBytecode: { "r.purged number": "infra:purged" },
   pathRelayProblem: {
     "pc.tools object": "prog:path_check:tools",
@@ -498,6 +503,24 @@ const READS = {
     "r.digest string": "prog:changed_defs:digest",
   },
   hookSurface: { "r.surface array": "prog:hook_surface:surface" },
+  // 6.0.0 (ledger 2041)
+  rulesetSurface: {
+    "slug string-re": PARSED_LOCAL,
+    "r.surface array": "prog:ruleset_surface:surface",
+    "r.sources array": "prog:ruleset_surface:sources",
+    "r.read array": "prog:ruleset_surface:read",
+    "r.unreadable array": "prog:ruleset_surface:unreadable",
+  },
+  sealedRs: { "x object": PARSED_REF, "x[k] array": PARSED_REF },
+  // 6.0.0 (ledger 2042)
+  prConvention: {
+    "slug string-re": PARSED_LOCAL,
+    "t.types array": "prog:pr_convention:title.types",
+    "r.source array": "prog:pr_convention:source",
+    "r.unreadable array": "prog:pr_convention:unreadable",
+    "r.body.required_sections array": "prog:pr_convention:body.required_sections",
+  },
+  subjectsOf: { "c.types array": PARSED_REF },
   isHookPath: { "p string-re": PARSED_LOCAL },
   planScopePaths: {
     "f string": SP + "criteria[].test_files[]",
@@ -514,6 +537,8 @@ const READS = {
   },
   afterRounds: { "n number-literal": PARSED_LOCAL },
   planAndAudit: {
+    // 6.0.0 (ledger 2042): the component fallback, a slug of the remote name
+    "fb string-re": PARSED_LOCAL,
     // release review of #48: an approving audit's advisory findings go to the gate log
     "f.finding string": "role:plan-audit:routed_findings[].finding",
     "plan.plan_path string": SP + "plan_path",
@@ -538,10 +563,12 @@ const READS = {
   commitPlanAndRef: {
     "stagedSha string": "prog:plan_hash:plan_sha256",
     "stagedSha string-re": "prog:plan_hash:plan_sha256",
-    "r.head string": "prog:plan_ref_write:head",
+    // 6.0.0 (ledger 2042): the dangling plan commit
+    "r.plan_commit string": "prog:plan_ref_write:plan_commit",
     "r.tag_sha string": "prog:plan_ref_write:tag_sha",
-    "r.head string-re": "prog:plan_ref_write:head",
+    "r.plan_commit string-re": "prog:plan_ref_write:plan_commit",
     "r.tag_sha string-re": "prog:plan_ref_write:tag_sha",
+    "r.dirty array": "prog:plan_ref_write:dirty",
     "r.reused boolean": "infra:reused",
   },
   verifyPlanCommit: {
@@ -590,12 +617,17 @@ const READS = {
     // 5.0.0 (R2): + the no-ledger stop before intake
     "raw string-re": [PARSED_ARGS, 2],
     "scan.commits array": "prog:branch_scan:commits",
+    // 6.0.0 (ledger 2042)
+    "scan.head string": "prog:branch_scan:head",
+    "scan.head string-re": "prog:branch_scan:head",
     "scan.refs array": "prog:branch_scan:refs",
     "tip integer": "prog:branch_scan:plan_tip_time",
     // 5.0.2 (ledger 2004): the park program's relay
     "pr object": "infra:park",
     "pr.clean boolean": "prog:parked:clean",
     "pr.dirty array": "prog:parked:dirty",
+    // 6.0.0 (2040): intake's relaunch reason code
+    "it.reason string": "intake:reason",
   },
   tinyRefProblem: {
     "t object": PARSED_ARGS,
@@ -618,13 +650,61 @@ const READS = {
   },
   // 5.0.0 (R1): buildMode no longer reads fresh_preflight (main still type-checks it)
   buildMode: { "input.plan_ref object": PARSED_ARGS, "input.freeze_digest string": PARSED_ARGS },
+  // 6.0.0 (ledger 2044): the token counter reads the runtime's budget; the wall time comes from policy.py
+  tokOn: { "budget object": "parsed: the runtime's budget global", "budget.spent function": "parsed: the runtime's budget global" },
+  policyStep: { "r.now integer": "prog:policy:now" },
+  // 6.0.0 security review (S6): the CI write-back line reads the script's own CI record
+  ciLine: {
+    "c.auto_merge_enabled boolean": "parsed: state.ci, the script's own CI record",
+    "c.merged boolean": ["parsed: state.ci, the script's own CI record", 2],
+    "c.merge_sha string": "parsed: state.ci, the script's own CI record (merge_sha checked as 40 hex)",
+    "counts array": "parsed: state.ciCounts, bucket counts the script computed",
+    "x integer": "parsed: a count or fix_rounds the script computed",
+  },
+  dispatch: { "label string-re": "parsed: the script's own step label" },
+  callRole: { "label string-re": "parsed: the script's own step label" },
+  fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
+    // 6.0.0 (ledger 2044)
+    "ref.history.audits number": PARSED_REF,
+    // 6.0.0 (ledger 2045)
+    "r.is_draft boolean": "prog:pr_state:is_draft",
+    "resume.iac_touched boolean": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    // 6.0.0 (ledger 2034)
+    "c.removed boolean": "prog:pr_state:removed",
+    "c.deleted boolean": "prog:pr_state:deleted",
+    "m.merge_sha string": "prog:pr_state:merge_sha",
+    "m.merged boolean": "prog:pr_state:merged",
+    "m.auto_enabled boolean": "prog:pr_state:auto_enabled",
+    "u.head string": "prog:pr_state:head",
+    "u.updated boolean": "prog:pr_state:updated",
+    "cl.checks array": "role:fleet-ci-classifier:checks",
+    "id string": "prog:ci_watch:failed[].run_id",
+    "f.run_id string": "prog:ci_watch:failed[].run_id",
+    "f.verified boolean": "prog:ci_watch:failed[].verified",
+    // 6.0.0 review fixes
+    "w.elapsed_s integer": "prog:ci_watch:elapsed_s",
+    "u.base string": "prog:pr_state:base",
+    "lg.logs array": "prog:pr_state:logs",
+    "x.verified boolean": "prog:pr_state:logs[].verified",
+    "l.excerpt string": "prog:pr_state:logs[].excerpt",
+    "v.merge_sha string": "prog:pr_state:merge_sha",
+    "resume.ci object": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    // 6.0.0 (ledger 2043): the freeze ref in the hasher:resume git map
+    "ft string": "parsed: the hasher:resume git map, read from its sha256-checked file",
     // 5.0.0 (R3): the previous review round's blocking list (reviewStep's own)
     "state.review.blocking array": PARSED_LOCAL,
     "r.refs array": "prog:plan_ref:refs",
     "c string": "prog:plan_ref:chunks[]",
     "r.chunks array": "prog:plan_ref:chunks",
     "loaded.project string": PARSED_REF,
+    // 6.0.0 (ledger 2042)
+    "loaded.plan_base string": PARSED_REF,
+    "loaded.plan_base string-re": PARSED_REF,
+    // 6.0.0 security review: the built subjects
+    "x string-re": PARSED_LOCAL,
+    // 6.0.0 security review
+    "v.replace_refs array": "prog:verify_since:replace_refs",
     "pf object": PARSED_REF,
     "pf.commands array": PARSED_REF,
     "o.check_cmd string": PARSED_REF,
@@ -949,7 +1029,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.10\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.10\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.0\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.0\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);
@@ -966,8 +1046,10 @@ function loadProgramSchema() {
     assert.ok(i >= 0, "function " + name);
     return SOURCE.slice(i, SOURCE.indexOf("\n}\n", i) + 3);
   };
-  const fns = ["nullable", "mergeProp", "programSchema"].map(grab).join("");
-  return new Function("PROGRAM_OUT", "PROGRAM_PROP", constBlock("FILE_SHA_HEX", ";\n") + fns + "\nreturn programSchema;")(
+  const fns = ["nullable", "mergeProp", "slotKeys", "programSchema"].map(grab).join("");
+  // 6.0.0 (2039): nested slots require the program's keys (PROGRAM_KEYS) and digest
+  const keys = constBlock("PROGRAM_KEYS", "\n};") + constBlock("NO_DIGEST_PROGRAMS", ";\n");
+  return new Function("PROGRAM_OUT", "PROGRAM_PROP", constBlock("FILE_SHA_HEX", ";\n") + keys + fns + "\nreturn programSchema;")(
     S.PROGRAM_OUT,
     S.INFRA_SCHEMA.properties.program,
   );
@@ -1009,7 +1091,9 @@ test("4.0.3 review: PROGRAM_OUT merges into the base schema; no item requirement
   // a nested slot keeps the base slot's typed keys too
   const pf = ps(S.INFRA_SCHEMA, [["plan_files", "plan_files"]]).properties.plan_files;
   assert.deepEqual(pf.properties.head, { type: "string" });
-  assert.deepEqual(pf.required.slice().sort(), ["file_sha256", "program"]);
+  // 6.0.0 (2039): plus the program's keys and digest
+  // 6.0.0 (ledger 2042): + commit and parent
+  assert.deepEqual(pf.required.slice().sort(), ["args", "commit", "digest", "dsn_paths", "file_sha256", "files", "head", "parent", "program"]);
   // the shared schema is never changed
   assert.deepEqual(S.INFRA_SCHEMA.properties.commits_since.items.required, ["sha", "subject"]);
   assert.equal(S.INFRA_SCHEMA.properties.head.type, "string");

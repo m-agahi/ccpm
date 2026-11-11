@@ -1,5 +1,336 @@
 # Changelog
 
+## [6.0.0] - unreleased
+
+Fleet 6.0.0: one major release in three build streams. Stream 1 fixes the PR-step push probe,
+nested digest relays and relayed mid-turn requests, resumes a shipped run into a coder round, and
+adds org and repo rulesets to the hook surface. Stream 2 adds the per-owner policy (2033) and
+takes the plan doc off the pushed branch with repo title and body conventions (2042). Stream 3
+adds the PR tail: a stats block (2044), ready for review (2045), and CI watch, CI-fix rounds and
+policy-gated merge (2034). All items are done; the ADR-1192 smoke run is pending.
+
+Upgrade notes: a run-state at `written_back` (the last state before 6.0.0) now resumes at the
+stats block, ready and CI watch instead of returning the recorded result; `shipped` is the new
+last state. With no policy file, a fleet PR is marked ready and its CI is watched (merge never).
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.0.0), then start a NEW session: the workflow
+  looks for its own `fleet/6.0.0/scripts` dir.
+- Before any other session is told to update, run the ADR-1192 smoke run (probe, then plan with
+  confirm ask on a scratch repo) and record its run ids here. Status: pending.
+
+### Done (stream 1)
+
+- Version 6.0.0 (`FLEET_VERSION`, `marketplace.json`, the root README). Role files carry no
+  contract marker since 5.0.0 (`CONTRACT` / `fleet-vN` text was removed), so the major bump
+  changes no role prompt and no wiki page; the role sha256 pins stay the integrity check.
+- 2038: the PR step no longer reads an unknown push answer as "no push access". When the
+  workspace probe answered null (unknown) and not every installed command answered false, the
+  PR step clears the cached answer and probes once more (`infra:gh-identity:pr`). It stops only
+  on a definite no ("no GitHub command with push access") or on a second unknown, with its own
+  text ("push access ... still not known after a second probe"). `gh_identity.py` records
+  `exit_code` and a short stderr (200 characters, token-shaped text redacted) on each unknown
+  answer, and the stop text shows them. A definite no still stops at build start.
+- 2039: a nested program relay (`test_db` at `infra:branch-scan` and `infra:verify-plan`, and
+  every other nested program slot) must carry the program's keys and `digest`: `programSchema`
+  requires the keys of the program's `PROGRAM_KEYS` entry (for a program with modes, the keys
+  every mode prints) plus `digest`, where it prints one. A nested relay from the shipped program
+  whose digest is missing or wrong gets one `:digest-retry` (the dispatch layer checks each
+  nested slot of a digest-checked step); a second miss stops as before. A missing top-level
+  digest also counts as a digest miss.
+- 2040: intake treats a relayed `[Workflow harness — user request]` block that does not refer
+  to `args.input` as a mid-turn message: it returns needs_human with the reason code
+  `relayed user request does not reference args.input: ...`, and the run stops with
+  `stop_gate: "relaunch"` and `relaunch: "intake"`. The `/build-task` skill launches the
+  Workflow only in a turn whose latest human message is the build request or its confirmation,
+  and on `relaunch: "intake"` re-launches once on the next such turn.
+- 2043: a build resumed from its run-state (at `committed`, `pushed` or `pr_open`) whose push
+  hook or review asks for changes no longer stops with "cannot start (no freeze)". It seeds the
+  frozen state from the run: the frozen maps are the `hasher:resume` maps (their digest equals
+  the run-state's `maps_digest`), the freeze tree is `refs/fleet/<task>/freeze`, HEAD is the
+  approved commit and the code tree is the run-state's. It then enters the code loop with the
+  findings: coder, code judge, a new commit, push, PR update, review again and write-back, under
+  the same round caps (the code-round count comes from the run-state). Without the freeze ref
+  it stops as before. The result says `resumed_at` (the step it resumed at).
+- 2041: org and repo rulesets, and workflow self-references, are hook surface. New program
+  `ruleset_surface.py <worktree> <gh_cmd|-> <owner/repo|-> <default_branch>` (34 programs) runs
+  at the plan gate (`infra:ruleset-surface:plan`, with the gh command the workspace step
+  checked). It reads `rules/branches/<default>` (org and repo rulesets that apply to the repo):
+  a required workflow hosted in this repo is surface, and one in another repo is read for
+  `uses:` references into this repo. For an Organization owner it reads `orgs/<owner>/rulesets`
+  and each ruleset (cap 50): a required workflow hosted here is surface. The floor, computed
+  locally on every run: each directory a tracked `.github/workflows/*` file names by
+  self-reference (`uses: ./<dir>`, `uses: <owner>/<repo>/<dir>@...`). Ruling 1 (report and
+  floor): org rulesets that are not readable (404, or 403 / 5xx without the `admin:org` scope)
+  give a gate warning and a `gates_not_run` line (`org-rulesets`) that the PR body states; a
+  403 / 5xx with `admin:org`, or an unreadable repo or rule list, stops with "hook surface
+  cannot be computed". The hook-gate stop names the ruleset ("run by Organization ruleset
+  "PR Title Convention" 18773609 via ..."), and its pass line names what was read. The list is
+  sealed in `plan_facts.ruleset_surface`; the build checks the approved tree against it and
+  calls the program only for a plan ref sealed before 6.0.0.
+  Fail closed (security review): a root self-reference (`./`, `.`, `<owner>/<repo>@ref`,
+  `<owner>/<repo>/@ref`) makes the whole repo surface (`./`); the rule list and the org ruleset
+  list follow `link: rel="next"` up to 10 pages. A failed or capped rule page is an error; a
+  failed or capped org page is an `unreadable` entry with the count read. A partial list never
+  reads as complete.
+  A self-reference is normalised first (backslashes to `/`, leading `/` stripped); one that
+  normalises to the root or escapes the repo (`/./`, `..`, `a/../../b`) is the whole repo
+  (`./`), never skipped.
+- README: the PR-step re-probe, the shipped-run resume and the ruleset surface; the
+  `docs/build-task-run-notes.md` "6.0.0 notes" section holds the long comments.
+
+### Done (stream 2)
+
+- 2033: per-owner policy. New program `policy.py <host> <owner/repo>` (35 programs) reads
+  `$XDG_CONFIG_HOME/fleet/policy.json` (default `~/.config/fleet/policy.json`; strict JSON,
+  `policy.example.json`): first profile matching host and owner, then the first `repos` glob
+  override. Caps: `pr_ready`, `ci_watch` (+ `ci_watch_minutes`, default 60), `stats`, `merge`
+  (`never` | `auto`), `update_branch` (`never` | `once`), `ci_trigger`, `review_post` (`none` |
+  `own_pr`). No file or no match: the default (ready, CI watch and stats on, merge never, the rest
+  off). A bad file (duplicate or unknown key, wrong type) stops the build (stop gate `policy`).
+  The build reads it once after the run-state (`infra:policy`) and seals the profile, the
+  `policy_sha256` and the caps in every run-state write and in the result (`state.policy`).
+  Ruling 5.4: `WORK_OWNERS` (`quinyx`, `concrete-media`, any host) force `merge` and
+  `update_branch` to `never` in the script. Ruling 5.6: a resumed run whose policy changed logs
+  the changed caps and keeps the sealed profile. Policy load, match and seal only: stream 3 acts on
+  the caps.
+
+- 2042a: the plan doc never lands on the pushed branch or in the PR (ADR-1213; ruling 3).
+  `plan_ref_write.py <wt> <task> <plan_base> <plan_path> <chunks...>` writes the plan commit with
+  no `git commit`: a temporary index on `plan_base` (the branch HEAD `branch_scan.py` now prints),
+  `commit-tree`, the tag at `refs/fleet/<task>/plan`. It moves the plan doc to
+  `<fleet root>/plan/<plan_path>` (a tracked plan file is restored), reuses an identical plan commit
+  and prints `{plan_commit, plan_base, tag_sha, reused, plan_file, dirty}`. Stage-plan hashes the
+  worktree file (no `git add`); format-plan still runs the hooks on it.
+  `plan_files.py <wt> <commit>` checks the commit against its parent (= `plan_base`). The sealed
+  ref holds `plan_base`;
+  the build verifies HEAD against it (`verify_since` base), gives roles `plan_blob`
+  (`<plan_commit>:<plan_path>`, read with `git show`), and diffs from `plan_base`
+  (judges, coder, hasher base tree, hook surface, caller check, review). `branch_scan`'s
+  `plan_tip_time` is the plan ref's commit time. A re-plan seals on the same `plan_base` and resets
+  the branch to it. Fleet-scan stops when `plan_path` is in the PR diff or a commit. Write-back
+  drops the plan blob link. The PR opener gets `tldr` and writes the TL;DR and the criteria into
+  the body (ruling 2). Refs and branches from 5.x are refused, not migrated: a ref without
+  `plan_base` stops the build, and a branch with a 5.x plan commit stops plan mode, both with
+  "delete branch ..., then re-run plan".
+- Security review of 2042a: roles read the plan only from the sealed plan commit (`plan_blob`), so
+  a role cannot rewrite the plan another role or the PR opener reads; the copy of the plan doc lives
+  outside the scratch dir. `plan_ref_write.py` and `plan_hash.py` (rev `""`) refuse a plan path
+  with `..`, a backslash or a symlinked component, or one that resolves outside the worktree,
+  before any read or delete.
+- Security review (replacement objects): every program runs git with `GIT_NO_REPLACE_OBJECTS=1`.
+  `plan_hash.py` prints the plan's own `blob` id and reads it by id; roles get that id as
+  `plan_blob` and read it with `git --no-replace-objects cat-file blob`. `verify_since.py` prints
+  `replace_refs`, and the hasher's git map lists `refs/replace/*`: any replacement ref stops verify
+  and every hasher run (stop gate `hash`), which covers the freeze tree and `plan_base` too.
+  `plan_hash.py` prints `args` and a `digest` over `{plan_sha256, blob, args}`; stage-plan,
+  verify-plan-commit and verify-plan recompute it and check the args, and verify requires a full
+  40- or 64-hex blob id, so a relaying agent cannot substitute another blob.
+
+- 2042b: commit subjects and PR titles follow the repo's convention. New program
+  `pr_convention.py <wt> <gh_cmd|-> <owner/repo|-> <default_branch>` (36 programs) at
+  `infra:pr-convention:plan`: a required pr-title workflow (types from its checker), else a
+  commitlint or semantic config, else 80 % of the last 20 merged titles, else the fallback
+  `type(component): summary` (ruling 4). The body convention: the repo or org PR template and a
+  required pr-body checker's sections and minimum length, passed to the PR opener as
+  `body_convention` (the template rule still applies). The planner gains `component` (the repo
+  name when unusable). `plan_facts.conventions` and `component` are sealed. Subjects (`subjectsOf`)
+  never carry the internal task id. Fleet commits are recognised by the two exact subject forms;
+  a resumed run also checks that HEAD is the run-state's `approved_sha`, so no trailer and no
+  task id are needed. The PR opener gets `title`, must report it, and the script stops on any
+  other title.
+- Security review of 2042b: convention types and the scope must match `^[a-z][a-z0-9-]{0,19}$`
+  in `pr_convention.py` and again in the workflow (no type left: the Conventional Commits list);
+  required sections must look like a markdown heading (cap 20) and `min_chars` at most 100000.
+  The program follows a checker only in the required workflow's own repo or the target repo,
+  never through `..`. The build checks both subject forms against a strict pattern before any
+  role runs and stops on anything else. The PR opener passes the title in single quotes; the
+  commit step already single-quotes the subject.
+  The summary drops the task id and every source ref (a title such as `L42: add thing (ABC-9)`
+  gives `feat(thing): add thing`; nothing left: `update`). The intent judge reads the plan with
+  `git --no-replace-objects`.
+
+### Done (stream 3)
+
+- 2044: after the write-back the build writes a stats block into its own PR body (step
+  `infra:pr-stats`, new program `pr_body_block.py`, 37 programs). The block is a `<details>`
+  table built from script counters only: acceptance criteria, tests written and test rounds,
+  code rounds, plan-audit rounds (sealed in the plan ref's `history.audits`), agents, the build's
+  wall time (from `now`, which `policy.py` now prints, to the edit), gates passed, the
+  independent review verdict and output tokens per model, labelled "output tokens (approx.)".
+  The tokens come from `budget.spent()`: each agent call books the growth since the previous
+  return to its model; the row is left out when the runtime has no `budget.spent`. Input tokens
+  are not available to the workflow and are not shown. No path, run id, ledger id or session name
+  goes in. The block links https://github.com/m-agahi/ccpm (public). The program replaces only
+  the text between `<details><summary>Built with ccpm fleet` and `<!-- ccpm-fleet-stats -->`
+  (or appends it), re-reads the body, and reports an error when the body is not the one written
+  or when a header of the sealed body convention or of the old body is gone; the script also
+  checks the block's sha256. Any mismatch stops the run (`stop_gate: "stats"`). Policy
+  `stats: false` skips the step. A new last run-state `shipped` follows it; a run-state at
+  `written_back` (any earlier fleet's last state) now resumes at the stats step.
+
+- 2045: after review approve, write-back and the stats block, the build marks its PR ready for
+  review (step `infra:pr-ready`, new program `pr_state.py` mode `ready`, 38 programs). The
+  program calls `gh pr ready` only on an open draft whose head is the approved sha, re-reads it,
+  and the script requires `is_draft: false` and head == approved sha; anything else stops
+  (`stop_gate: "ci"`). A stop earlier in the run ends it before this step, so a needs_human run
+  never marks ready. Policy `pr_ready: false` keeps the draft. A branch Max pushed himself
+  (ADR-1175 IaC diff) is recorded as `iac_touched` in the run-state, and the run stops before
+  ready with "IaC PR: Max marks it ready" (`stop_gate: "iac"`). The result reason reads "PR
+  ready for review" (a kept draft: "draft PR ready for review"). The PR tail (stats, ready, CI
+  watch, merge and their run-state write) counts in `agents` but, like path checks and build-dir
+  resets, not against the 100-agent cap; CI-fix coder rounds still count.
+- 2034: after ready, step `ci` in the PR tail (ADR-1198, ADR-1199, ADR-1203; rulings 2034). New
+  programs `orch_scan.py` and `ci_watch.py`, `pr_state.py` modes `merge`, `update`, `rerun` and
+  `cleanup` (40 programs), and the read-only role `fleet-ci-classifier` (11 roles,
+  `DISPATCH: model=sonnet (fallback=opus)`).
+  - Scan (`infra:orch-scan`, read only, fails closed, before ready; an orchestrator, IaC or
+    apply-on-merge sign keeps the PR a draft, and its CI is still watched read-only): a tracked orchestrator config or an
+    orchestrator check, status or comment on the PR (`orchestrator`); a tracked IaC file or one
+    the PR changes (`iac_repo`); a tracked CI file that names an IaC tool or orchestrator
+    (`apply_on_merge`); a PR file on the hook surface (`hook_surface_pr`). Any read error sets
+    every flag.
+  - Watch (`infra:ci-watch:w<n>`, one read-only agent per watch): the agent re-runs one
+    program command while it prints `pending`; each run waits at most 480 s with
+    `gh pr checks --watch --required` (all checks when the PR has no required check), and the
+    program keeps its own start time in a scratch file, so the whole watch ends at
+    `ci_watch_minutes` (default 60). States: green, red, timeout, head_moved, no_checks, error.
+    Policy `ci_watch: false` and a draft (`pr_ready: false`) skip the watch ("CI watch off",
+    "CI not run on draft").
+  - Red: the classifier gets each failing check with the tail of its failed job log (at most
+    3000 characters, control characters removed) as quoted data, and may only answer one of
+    `diff`, `pre_existing`, `flaky`, `infra` per check; any other answer leaves the check
+    unclassified (report only). Caused by the diff (and no IaC or orchestrator sign): a CI-fix
+    round through the code loop (coder with the log tail as quoted untrusted data, code judge,
+    commit, push to the PR branch, review, write-back, stats, ready, watch), at most 2 rounds,
+    then needs_human. Otherwise: one rerun of the failed Actions runs where policy
+    `ci_trigger` allows it and no IaC or orchestrator sign exists, then a report with no code
+    change; needs_human when a merge was expected.
+  - Security review: a failing check's log is read, and its run can be rerun, only when its url
+    is exactly `https://github.com/<this repo>/actions/runs/<id>/job/<job>` (any case) and
+    `gh run view <id> --repo <this repo> --json headSha,...,jobs` shows the watched head sha
+    with that job in it. Any other check (another repo or PR, a third-party app's url, a failed
+    read) is report-only as "unverified run": no classifier, no rerun, no fix round.
+  - `ci_watch.py` reads a JSON list on stdout whatever gh's exit code (gh exits non-zero on a
+    failed check), and starts no run read in the last 120 s of a 540 s call, so one call stays
+    under the 600 s Bash cap. The run-state carries `ci`, so a resume at `shipped` returns it.
+    "gates passed" leaves out warnings and model and fallback lines.
+  - Timeout or a forge error: "CI unresolved" with each check's state; never a merge; needs_human
+    only when a merge was expected. A moved head stops (`stop_gate: "ci"`).
+  - Green: a merge only when policy `merge: "auto"`, not a work repo (checked again here, and
+    `pr_state.py` refuses quinyx and concrete-media itself), no orchestrator, IaC or
+    apply-on-merge sign and no hook-surface file. `pr_state.py merge` uses native auto-merge
+    where the repo allows it (a refusal falls back to a direct merge), the repo's method and
+    `--match-head-commit <reviewed sha>`; it never merges a PR that is behind or in conflict.
+    Behind with `update_branch: once`: the forge's update-branch once with
+    `expected_head_sha`, then the watch again on the new head; a base change that touches a
+    PR file stops for a new review (needs_human), which differs from ADR-1203's automatic
+    re-review. Otherwise: "CI green, ready for human merge" with the reason.
+  - After a confirmed merge: the remote `fleet/*` branch is deleted, the run-state `shipped`
+    is written, then `pr_state.py cleanup` removes the fleet's own worktree
+    (`<repo>/.claude/worktrees/fleet-<key>/main`) and local branch; a failure becomes a
+    follow-up.
+  - An orchestrator PR is watched read-only and reported; the run then stops with
+    "orchestrator PR: needs Max" (`stop_gate: "merge"`): no rerun, no fix push, no merge.
+  - `result.ci = {verdict, checks: [{name, state, url}], fix_rounds, merged, merge_sha}` on every
+    result once the CI step ran; the result reason ends with the CI outcome.
+  - Write-back runs before CI (ruling 2045 order); the CI outcome follows in its own write
+    (review S6 below).
+
+### Done (review of the PR tail: REQUEST CHANGES)
+
+- B1 (green too early): `ci_watch.py` treats an empty check list as no check, and an empty
+  required list falls back to all checks. It returns green only when no check is pending or
+  failed, at least one check ran, and the read is at least 90 s after the first call and 60 s
+  after the first read (the state file keeps `first_read`). Checks that register late (a
+  `ready_for_review` workflow, a draft-skipped one) get time to appear. Each checks read sits
+  between two head reads; a head that moves during the read is `head_moved`. `gh pr checks`
+  has no per-check sha, so the bracket is how the checks are tied to the head. Each watch has
+  its own state file (`ci-<nonce>-p<push>-w<watch>.json`), so the head after update-branch
+  and a rerun settle again. `ciStep` never merges when the check list is empty (verdict
+  `not_run`).
+- S1 (the merge is decided in script): `pr_state.py merge` re-reads the checks itself
+  (`--required`, all checks when none is required) right before `gh pr merge`. It refuses
+  unless the list is non-empty, every check passed or was skipped, and one passed; the head is
+  read again after the checks read. A relayed `green` alone never merges. CI log tails moved
+  out of `ci_watch.py`: the new read-only `pr_state.py logs` re-reads the failed checks,
+  verifies each run (this repo, this head, this job) and returns the tails for the classifier
+  (`infra:ci-logs:w<n>`). The watch agent never sees CI log text.
+- S2: the digest-checked gh check's origin is the repo slug; the workspace step stops
+  (needs_human) when the relayed `remote_slug` differs from it beyond case or a `.git` suffix
+  (it used the probe and went on before). `pr_state.py`
+  merge and update read `gh repo view --json owner,nameWithOwner` and refuse a repo that
+  resolves to another name (a transfer or rename redirect) or to a work owner, any case.
+- S3: a direct merge first (`--<method> --match-head-commit <sha> --delete-branch`); native
+  auto-merge with the same flags plus `--auto` only when the direct merge is refused. Then the
+  result is `merged: false`, `auto_enabled: true` (`ci.auto_merge_enabled`), and the reason
+  says the forge merges later, without the fleet (no cleanup). `merged` is true only when the
+  PR is MERGED with its head at the expected sha and a merge commit (a squash makes a new
+  commit, so the merge commit is never the head itself).
+- S4: the orchestrator scan runs again on the head right before the merge
+  (`infra:orch-scan:merge`) and after update-branch (`:u1`); a sign then blocks the merge.
+  `orch_scan.py <worktree> <gh> <owner/repo> <pr> <head_sha> <default_branch>` also reads the
+  forge's trees of the head and of the default branch (CI file text through the blob API),
+  checks that the PR head is `<head_sha>`, and fails closed on a truncated tree, more than 60 CI
+  files, or a PR of 100 files or more (`gh pr view --json files` stops at 100).
+- S5: tests for the surviving mutants M8 (no IaC halt in ready) and M9 (no head check at the
+  merge) in the PR-tail test set (`v600_s4`).
+- S6 (ruling 2034.5): one follow-up write-back per run on the final CI outcome (green, merged,
+  auto-merge, red report, timeout, not_run and CI needs_human stops), with its own marker
+  `fleet:<task>:ci`, heading "Fleet build CI" and labels ending `:ci` (outside the agent cap).
+  Same targets and rules as the write-back. It is soft: it never gates the merge and never
+  stops the run, and a stop inside it keeps the run's stop gate. A CI-fix round is not final.
+  The result carries `ci_write_back`. After an update-branch with overlap, a stop in the
+  re-review, stats, ready or CI step also writes it, once (stop code `review` for a review stop).
+  Before that point a stop outside the CI step (review, stats, ready) writes no CI line, since
+  CI has not run.
+- Security review of S6 (MEDIUM): the CI write-back line is built only from fixed, validated
+  fields, in this order: verdict, merged (with the merge sha only when it is 40 hex),
+  auto-merge, CI-fix rounds, the counts of passed, failed and pending checks, and on a stop
+  `stopped: <code>`. A stop is an enum code
+  (`ci_timeout`, `ci_red`, `ci_red_cap`, `head_moved`, `merge_blocked`, `orchestrator`, `iac`,
+  `review`, `relay`, `other`), never halt text. Check names, urls and error strings from CI
+  never reach ledger sections, tracker comments, the PR body or the ledger and comment writers'
+  prompts. CI log tails reach the classifier and, JSON-quoted and labelled untrusted with the
+  check name and url, the CI-fix coder.
+  The `pr_state.py logs` test now also names a real run of this head behind another repo's url
+  (the url's repo alone keeps that log out; mutant M5b).
+- Mutation tests: M5 (ci_watch.py run url not bound to the repo) and M7 (a scan error alone not
+  counted as an IaC sign) survived the PR-tail tests; each now has a test in `v600_s4`.
+- S7a (ADR-1215): the stats block is written again at run end (`infra:pr-stats:final`) with a CI
+  row (verdict, CI-fix rounds, total CI wait), only when the PR is not merged; on a merged PR
+  the gate log says "stats block not refreshed".
+- S7b (ADR-1203 close and reopen once to retrigger a missing required check): not built. It
+  needs a new mode and detection of a missing required check; left for a later release.
+- S8: `ciStep`, `readyStep`, `statsStep` and `orchScan` stop with the no-push text when the repo
+  has no checked gh command.
+- ADR-1203 addendum (Max): a base change from update-branch that touches PR files no longer
+  stops. `pr_state.py update` checks on the forge that the new head's parents are exactly
+  [reviewed head, base tip], and that against the base tip it changes only files of the PR
+  (`compare <tip>...<new head>`, fail closed); this content check also covers the update with
+  no overlap, which is not fetched. The PR file set is the forge's diff `compare
+  <base>...<reviewed sha>`, read before the update-branch PUT (a list read after it can already
+  hold injected files; 100 files or more, or none, fail closed). A renamed or copied entry
+  counts its `previous_filename` too: a source outside the PR set is refused. `pr_state.py fetch` (`infra:pr-fetch:u1`) fetches the new head
+  into the fleet worktree, checks the parents again and that its tree is
+  `git merge-tree --write-tree <old> <base>` (a forge merge with no extra content), and
+  fast-forwards. Then the hasher (`hasher:update:u1`), the hook-surface check on the merged-in
+  files (`infra:hook-surface:u1`), the independent review (`role:pr-review:v<n>`), stats,
+  ready, the orchestrator scan and the CI watch run on the new head, which becomes the approved
+  sha. Any failed check or a parent or tree mismatch stops (needs_human). Update-branch still
+  runs once per run. Not as asked: review changes on the update-branch head do not reach the
+  coder loop. In a normal run that re-review is round 2, so `MAX_REVIEWS` (2) stops the run
+  ("review round 2 requested changes again", `stop_gate: "review"`). A coder round on a forge
+  merge commit would run against freeze maps and a scope fence from the old base; it needs its
+  own design and tests (Max decides).
+- NITs: the resume-at-done gate says `shipped`; check names and urls of unverified checks are
+  quoted in gate and stop text; a resume at `written_back` whose PR is MERGED at the approved
+  sha (a crash between the merge and the `shipped` run-state; `pr_state.py view`,
+  `infra:pr-view:resume`) records `shipped`, runs the cleanup and returns. README: `orch_scan`
+  is a heuristic, and `review_post` is reserved (nothing reads it yet). `policy.example.json` is
+  strict JSON and cannot carry that note.
+
 ## [5.0.10] - 2026-11-11
 
 Fleet 5.0.10 (ledger 2031): the workflow file shrinks from 476186 to under 400000 bytes with no

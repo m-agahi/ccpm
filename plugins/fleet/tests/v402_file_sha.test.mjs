@@ -62,6 +62,26 @@ const SAMPLES = [
   "infra:push:p2",
   "infra:push-probe",
   "infra:hook-surface:plan",
+  // 6.0.0 (ledger 2041)
+  "infra:ruleset-surface:plan",
+  // 6.0.0 (ledger 2033)
+  "infra:policy",
+  // 6.0.0 (ledger 2044)
+  "infra:pr-stats",
+  // 6.0.0 (ledger 2045)
+  "infra:pr-ready",
+  // 6.0.0 (ledger 2034)
+  "infra:pr-merge",
+  "infra:pr-update",
+  "infra:ci-rerun",
+  "infra:ci-logs:w1",
+  "infra:pr-view:resume",
+  "infra:pr-fetch:u1",
+  "infra:fleet-cleanup",
+  "infra:orch-scan",
+  "infra:ci-watch:w1",
+  // 6.0.0 (ledger 2042)
+  "infra:pr-convention:plan",
   "infra:review-paths:v1",
   "infra:precommit-ids",
   "infra:check-scripts:plan",
@@ -221,7 +241,7 @@ test("4.0.2 1997 repro (wf_87a99806-757): branch-scan with the right program but
   const c = o.calls.find((x) => x.label === "infra:branch-scan");
   assert.ok(requiredAt(c.opts.schema, null), "top-level file_sha256 required");
   assert.ok(requiredAt(c.opts.schema, "test_db"), "test_db.file_sha256 required");
-  assert.match(c.prompt, /Return \{status: "ok", reason, commits, refs, plan_tip_time, program, file_sha256, digest, test_db\}/);
+  assert.match(c.prompt, /Return \{status: "ok", reason, head, commits, refs, plan_tip_time, program, file_sha256, digest, test_db\}/);
   // the nested slot fails closed too
   const s2 = happy();
   s2.__mutate = { label: "infra:branch-scan", fn: (r) => (delete r.test_db.file_sha256, r) };

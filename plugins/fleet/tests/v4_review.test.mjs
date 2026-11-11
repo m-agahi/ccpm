@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { mapView, ignoredView } from "./harness.mjs";
+import { PB, mapView, ignoredView } from "./harness.mjs";
 import {
   spawnSync,
   ARGS,
@@ -39,7 +39,7 @@ import {
 function precommitScript(ids) {
   const s = happy();
   Object.assign(s, {
-    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "role:fleet-intent-judge": {
       status: "ok",
       reason: "matches the task",
@@ -47,7 +47,7 @@ function precommitScript(ids) {
       deviations: [],
       coverage: { covered: true, missing: [] },
     },
-    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ids || ["prettier", "check-json"], parser: "yaml", error: null },
   });
   s["role:scope-and-plan"] = Object.assign({}, s["role:scope-and-plan"], { repo_obligations: [{ id: "fmt", kind: "other", instruction: "format", check_cmd: "pre-commit run prettier --all-files" }] });
@@ -173,7 +173,7 @@ test("review fix 5: a halt inside the short-path writer's role call keeps its st
 function defaultHappy() {
   const s = happy();
   Object.assign(s, {
-    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "role:fleet-intent-judge": {
       status: "ok",
       reason: "matches the task",
@@ -182,7 +182,7 @@ function defaultHappy() {
       coverage: { covered: true, missing: [] },
       classification: { change_kind: "approve", new_behaviour: "approve", quote: "the parser drops NBSP (a regression)" },
     },
-    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
   });
   s["role:scope-and-plan"] = Object.assign({}, s["role:scope-and-plan"], { change_kind: "bug_fix", new_behaviour: false, est_diff_lines: 80 });
   return s;
@@ -311,7 +311,7 @@ test("review fix 4: a stop after a fix_tests re-freeze binds the re-freeze into 
   // the worktree is the re-freeze tree, untouched: still no resume
   const h = H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" });
   h.git["fleetref:" + planRef.plan_ref.replace(/\/plan$/, "/freeze")] = "M3";
-  s["hasher:resume-frozen"] = { status: "ok", fingerprint: { head: PC, tree: "M3" }, hashes: h };
+  s["hasher:resume-frozen"] = { status: "ok", fingerprint: { head: PB, tree: "M3" }, hashes: h };
   s["role:fleet-coder:r1"] = happy()["role:fleet-coder:r1"];
   const b = Object.assign({}, ARGS, { mode: "build", plan_ref: planRef, freeze_digest: out.result.freeze_digest });
   delete b.input;
@@ -378,10 +378,12 @@ test("review fix 7: a verify-plan-commit relay without dsn_paths is a relay prob
 
 test("review fix 7 (real git): plan_files.py lists the HEAD files that hold mysql://, inside its digest", () => {
   const wt = scratchRepo("fleet-pf-");
+  // 6.0.0 (ledger 2042): plan_files lists a commit against its parent
+  sh(wt, "git", "commit", "-q", "--allow-empty", "-m", "base");
   writeFileSync(join(wt, "a.txt"), "a\n");
   sh(wt, "git", "add", "a.txt");
   sh(wt, "git", "commit", "-q", "-m", "a");
-  const clean = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "plan_files.py"), wt], { encoding: "utf8" });
+  const clean = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "plan_files.py"), wt, "HEAD"], { encoding: "utf8" });
   assert.equal(clean.status, 0, clean.stderr);
   const c = JSON.parse(clean.stdout);
   assert.deepEqual(c.dsn_paths, []);
@@ -390,12 +392,12 @@ test("review fix 7 (real git): plan_files.py lists the HEAD files that hold mysq
   writeFileSync(join(wt, "b.txt"), "b\n");
   sh(wt, "git", "add", "docs/plans/p.md", "b.txt");
   sh(wt, "git", "commit", "-q", "-m", "p");
-  const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "plan_files.py"), wt], { encoding: "utf8" });
+  const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "plan_files.py"), wt, "HEAD"], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   const o = JSON.parse(r.stdout);
   assert.deepEqual(o.files.slice().sort(), ["b.txt", "docs/plans/p.md"]);
   assert.deepEqual(o.dsn_paths, ["docs/plans/p.md"]);
-  assert.equal(o.digest, relayDigestOf(o, ["head", "files", "args", "dsn_paths"]));
+  assert.equal(o.digest, relayDigestOf(o, ["head", "commit", "parent", "files", "args", "dsn_paths"]));
 });
 
 // ---------------------------------------------------------------- fix 6: old refs under build auto fail closed
@@ -414,10 +416,10 @@ test("review fix 6: a ref sealed before 4.0.0 (no change_kind/new_behaviour) can
   const old = { ...tiny, ref_sha256: sha256(s.__store[tiny.plan_commit]) };
   const BR = { status: "ok", reason: "re-read", brief: JSON.parse(JSON.stringify(ref.brief)) };
   s["intake:rulings"] = BR;
-  s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: { head: PC, tree: "P0" } };
+  s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: { head: PB, tree: "P0" } };
   // even a judge that approves the classification of the null claims
   s["role:fleet-intent-judge:rerun"] = s["role:fleet-intent-judge"];
-  s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: { head: PC, tree: "P0" } };
+  s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: { head: PB, tree: "P0" } };
   const b = { mode: "build", plan_ref: old, date: ARGS.date, project: "o/r", confirm: "auto" };
   const out = await runOne(s, b);
   assert.equal(out.result.status, "needs_human", out.result.reason);

@@ -133,7 +133,7 @@ test("5.0.8 2030: no push: gh when it reads, else gh-personal when it reads, els
     stub(bin, "gh-personal", "false");
     assert.deepEqual(prog(["-", "o/r"], bin).out.repos["o/r"], { gh_cmd: "gh", push: false, tried: TRIED.noPush });
     stub(bin, "gh", null, 1, "gh: Not Found (HTTP 404)");
-    assert.deepEqual(prog(["-", "o/r"], bin).out.repos["o/r"], { gh_cmd: "gh-personal", push: false, tried: [{ cmd: "gh", installed: true, push: null }, { cmd: "gh-personal", installed: true, push: false }] });
+    assert.deepEqual(prog(["-", "o/r"], bin).out.repos["o/r"], { gh_cmd: "gh-personal", push: false, tried: [{ cmd: "gh", installed: true, push: null, exit_code: 1, stderr: "gh: Not Found (HTTP 404)" }, { cmd: "gh-personal", installed: true, push: false }] });
     stub(bin, "gh-personal", null, 1, "gh: Not Found (HTTP 404)");
     const r = prog(["-", "o/r"], bin);
     assert.deepEqual([r.out.repos["o/r"].gh_cmd, r.out.repos["o/r"].push], [null, false]);
@@ -151,7 +151,8 @@ test("5.0.8 review N2: only rc 0 with stdout exactly true or false counts; anyth
     for (const [out, code] of [["null", 0], ["", 0], ["True", 0], ["true\ntrue", 0], ["false", 1], ["true", 2]]) {
       stub(bin, "gh", out, code);
       const r = prog(["-", "o/r"], bin);
-      assert.deepEqual(r.out.repos["o/r"].tried[0], { cmd: "gh", installed: true, push: null }, JSON.stringify([out, code]));
+      // 6.0.0 (2038): an unknown answer carries its exit code and stderr
+      assert.deepEqual(r.out.repos["o/r"].tried[0], { cmd: "gh", installed: true, push: null, exit_code: code, stderr: "" }, JSON.stringify([out, code]));
       assert.equal(r.out.repos["o/r"].gh_cmd, "gh-personal", JSON.stringify([out, code]));
     }
   }));
@@ -183,7 +184,7 @@ test("5.0.8 review B1b: a transient failure is tried once more; another failure 
     stub(bin, "gh", "true", 0, "", 30);
     r = prog(["-", "o/r"], bin);
     assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(r.out.repos["o/r"].tried[0], { cmd: "gh", installed: true, push: null });
+    assert.deepEqual(r.out.repos["o/r"].tried[0], { cmd: "gh", installed: true, push: null, exit_code: null, stderr: "timed out after 15 s" });
     assert.equal(logOf(bin, "gh").length, 1);
     assert.ok(r.ms >= 14000 && r.ms < 25000, r.ms + " ms");
   }));
@@ -312,7 +313,8 @@ test("5.0.8 review S1: a non-GitHub origin (program origin null) is no halt and 
   assert.match(out.result.reason, /^PR step: no GitHub command with push access to o\/r/);
 });
 
-test("5.0.8 review S2: the program's origin differs from remote_slug -> a gate line, the probe's answer is used; no halt", async () => {
+// 6.0.0 review S2: remote_slug drives the work-owner clamp, the policy match and every -R; a mismatch now stops
+test("5.0.8 review S2 (6.0.0 review S2): the program's origin differs from remote_slug -> the build stops (needs_human)", async () => {
   const s = happy();
   // the program read origin o/r2 (and probed it); the agent parsed o/r
   s.__mutate = {
@@ -324,9 +326,9 @@ test("5.0.8 review S2: the program's origin differs from remote_slug -> a gate l
     },
   };
   const out = await run(s, ARGS);
-  assert.equal(out.result.status, "ok", out.result.reason);
-  assert.ok(out.build.logs.some((l) => l === "workspace: the gh check read origin o/r2, not remote_slug o/r; using the probe of o/r2"), out.build.logs.join("\n"));
-  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).gh_cmd, "gh-personal");
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /^workspace: the digest-checked gh check read origin o\/r2, but the workspace relayed remote_slug o\/r; /);
+  assert.ok(!out.labels.includes("role:fleet-pr-opener"));
 });
 
 test("5.0.8 2030: a GitHub URL input gets its own gh check before intake, never inside the intake prompt", async () => {
@@ -371,7 +373,8 @@ test("5.0.8 2030: a GitHub comment with no push-capable command is failed withou
 // ---------------------------------------------------------------- resume from 5.0.7
 
 // the keys a 5.0.7 saveState wrote (no write-back yet): 5.0.8 adds none
-const STATE_507_KEYS = ["approved_sha", "auto_confirmed", "code_tree", "gates_not_run", "intent", "last_gate", "maps_digest", "plan_commit", "pr_created", "pr_number", "pr_url", "ref_sha256", "review", "reviews", "rounds", "seal", "suite_result", "template_used"];
+// 6.0.0 (ledger 2033): + policy
+const STATE_507_KEYS = ["approved_sha", "auto_confirmed", "code_tree", "gates_not_run", "intent", "last_gate", "maps_digest", "plan_commit", "policy", "pr_created", "pr_number", "pr_url", "ref_sha256", "review", "reviews", "rounds", "seal", "suite_result", "template_used", "tests_written", "iac_touched", "ci"];
 
 test("5.0.8 2030: a build stopped at the PR step (5.0.7-shaped run-state at pushed) resumes at the PR with gh_cmd set", async () => {
   const states = {};
@@ -394,7 +397,7 @@ test("5.0.8 2030: a build stopped at the PR step (5.0.7-shaped run-state at push
   assert.ok(!JSON.stringify(st).includes("gh"), "no gh value in the run-state");
   // the re-run (as docs-74 does: same plan_ref)
   s["role:fleet-pr-opener"] = opener;
-  s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], head: st.approved_sha, commits_since: [{ sha: st.approved_sha, subject: "feat(l42): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] };
+  s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], head: st.approved_sha, commits_since: [{ sha: st.approved_sha, subject: "feat(thing): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] };
   s["infra:read-state"] = { status: "ok", reason: "read", exists: true, target: st.approved_sha, message: JSON.stringify(st), head: st.approved_sha, head_tree: st.code_tree, clean: true };
   s["hasher:resume"] = { status: "ok", fingerprint: { head: st.approved_sha, tree: st.code_tree }, hashes: HASHES };
   const second = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
@@ -446,7 +449,8 @@ test("5.0.8 delta D1: a probe that was null or transient never stops the build a
     assert.ok(out.build.logs.some((l) => /^build start: push access to o\/r not known \(/.test(l)), name + ": " + out.build.logs.join("\n"));
     assert.ok(out.build.labels.includes("infra:verify-plan"), name + ": the build went on");
     assert.equal(out.result.stop_gate, "role", name);
-    assert.match(out.result.reason, /^PR step: no GitHub command with push access to o\/r/, name);
+    // 6.0.0 (2038): the PR step probes once more; unknown again -> its own text
+    assert.match(out.result.reason, /^PR step: push access to o\/r still not known after a second probe/, name);
   }
 });
 

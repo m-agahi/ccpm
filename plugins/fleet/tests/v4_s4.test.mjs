@@ -15,6 +15,7 @@ import {
   ARGS,
   BRIEF,
   PC,
+  PB,
   happy,
   run,
   runOne,
@@ -34,10 +35,14 @@ import {
 } from "./harness.mjs";
 
 // A sealed ref message (the shape priorRef in build_task_run.test.mjs makes).
+// 6.0.0 (ledger 2042): the convention a 6.0.0 plan ref seals
+const CONV = { title: { style: "conventional", types: ["feat", "fix", "chore"], key_required: false }, body: { template: null, template_repo: null, required_sections: null, min_chars: null, checker: null } };
 function sealedRef(over) {
   const o = Object.assign(
     {
       branch: "fleet/l42-add-thing",
+      // 6.0.0 (ledger 2042)
+      plan_base: PB,
       plan_path: "docs/plans/x.md",
       plan_sha256: "a".repeat(64),
       criteria: criteria(1),
@@ -45,7 +50,7 @@ function sealedRef(over) {
       task_id: "l42",
       slug: "add-thing",
       tldr: "t",
-      plan_facts: { allowed_additions: null, est_diff_lines: 10, test_cmd: { command: "pytest <paths>" }, repo_obligations: [], commands: [] },
+      plan_facts: { allowed_additions: null, est_diff_lines: 10, test_cmd: { command: "pytest <paths>" }, repo_obligations: [], commands: [], conventions: CONV, component: "thing" },
       history: { runs: 1, replans: 0, agents: 8 },
     },
     over || {},
@@ -160,7 +165,7 @@ test("4.0.0 1980: test_args is refused on make, with <paths>, with a disallowed 
 });
 
 test("4.0.0 1980: build mode re-checks every sealed criterion's test_args at load", async () => {
-  const facts = { allowed_additions: null, est_diff_lines: 10, test_cmd: { command: "cargo test --all-features" }, repo_obligations: [], commands: [] };
+  const facts = { allowed_additions: null, est_diff_lines: 10, test_cmd: { command: "cargo test --all-features" }, repo_obligations: [], commands: [], conventions: CONV, component: "thing" };
   const bad = await buildFrom(sealedRef({ plan_facts: facts, criteria: [Object.assign(criteria(1)[0], { test_args: "--config x" })] }));
   assert.equal(bad.result.status, "needs_human");
   assert.equal(bad.result.stop_gate, "commands");
@@ -346,7 +351,7 @@ const APPROVE = { status: "ok", reason: "fine", verdict: "approve", routed_findi
 function gated(over = {}) {
   const s = happy(over);
   Object.assign(s, {
-    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "role:fleet-intent-judge": {
       status: "ok",
       reason: "matches the task",
@@ -355,7 +360,7 @@ function gated(over = {}) {
       coverage: { covered: true, missing: [] },
       classification: { change_kind: "approve", new_behaviour: "approve", quote: "the parser drops NBSP (a regression)" },
     },
-    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
   });
   return Object.assign(s, over.script || {});
 }
@@ -741,7 +746,7 @@ test("4.0.0 1986 AC-2: no judge gets prior_draft or prior_round", async () => {
 
 test("4.0.0 1986 AC-3: no parked folder -> no extra planner input; the reader gets the scan's plan tip time", async () => {
   const s = happy();
-  s["infra:branch-scan"] = { status: "ok", reason: "scanned", commits: [], refs: [], plan_tip_time: 1700000123 };
+  s["infra:branch-scan"] = { status: "ok", reason: "scanned", head: PB, commits: [], refs: [], plan_tip_time: 1700000123 };
   const out = await runOne(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
@@ -753,7 +758,7 @@ test("4.0.0 1986 AC-3: no parked folder -> no extra planner input; the reader ge
   assert.equal(lp.opts.agentType, "fleet:judge");
   // a relayed tip time that is not the program's stops at the scan
   const t = happy();
-  t["infra:branch-scan"] = { status: "ok", reason: "scanned", commits: [], refs: [], plan_tip_time: 5 };
+  t["infra:branch-scan"] = { status: "ok", reason: "scanned", head: PB, commits: [], refs: [], plan_tip_time: 5 };
   t.__mutate = { label: "infra:branch-scan", fn: (r) => Object.assign(r, { plan_tip_time: 9999999999 }) };
   const o2 = await runOne(t, ARGS);
   assert.equal(o2.result.status, "failed");

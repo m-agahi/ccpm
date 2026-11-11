@@ -96,9 +96,11 @@ test("5.0.3 plan_dsn.py matches exactly what the post-commit gate (plan_files.py
   ];
   for (const c of cases) {
     const wt = planRepo("# plan\n" + c + "\n");
+    // 6.0.0 (ledger 2042): plan_files lists a commit against its parent
+    sh(wt, "git", "commit", "-q", "--allow-empty", "-m", "base");
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "p");
-    const gate = py(PLAN_FILES, wt);
+    const gate = py(PLAN_FILES, wt, "HEAD");
     const pre = py(PLAN_DSN, wt, "docs/plans/p.md");
     assert.equal(gate.code, 0, gate.err);
     assert.equal(pre.code, 0, pre.err);
@@ -195,9 +197,9 @@ test("5.0.3 the planner role names the ban and the sanctioned wording", () => {
 // ---------------------------------------------------------------- non-weakening
 
 test("5.0.3 the post-commit gate still refuses mysql:// (backstop unchanged)", async () => {
-  // the program is byte-identical to 5.0.2's
+  // the program is 5.0.2's but for 6.0.0 (ledger 2042): it lists a given commit against its parent
   const sha = (/"plan_files": "([0-9a-f]{64})"/.exec(SOURCE) || [])[1];
-  assert.equal(sha, "20f52c19db325d6b5385a443e7ad78f824f09057fd48fcd5ee5b24cf799d1670");
+  assert.equal(sha, "360fc1c69092e8da9f11cdded6296ef429c3db870181881ffff949a5b3c8253c");
   assert.match(readFileSync(PLAN_FILES, "utf8"), /b'mysql:\/\/' in d\.stdout\.lower\(\)/);
   // a clean precheck does not let a held DSN past verify-plan-commit
   const s = happy();

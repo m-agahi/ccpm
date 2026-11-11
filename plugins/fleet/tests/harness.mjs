@@ -84,6 +84,7 @@ export const ROLE_NAMES = [
   "fleet-intent-judge",
   "pr-review",
   "gate-change-nonweakening-sweep",
+  "fleet-ci-classifier",
 ];
 export const ROLES_SRC = join(HERE, "..", "roles");
 // the shipped role file text, by role
@@ -121,6 +122,7 @@ export const REQUIRED_DEFAULTS = {
   "fleet-intent-judge": { verdict: "approve", deviations: [], coverage: { covered: true, missing: [] }, classification: { change_kind: "approve", new_behaviour: "approve", quote: "the task text" } },
   "pr-review": { verdict: "approve", findings: [], touches_gate: false, checked: [] },
   "gate-change-nonweakening-sweep": { verdict: "non_weakening", units: [], findings: [] },
+  "fleet-ci-classifier": { checks: [] },
 };
 
 // The skill passes a fresh run_nonce on every invocation; scenario args that
@@ -258,7 +260,7 @@ export function fillArgs(label, r, prompt) {
   if (!r || typeof r !== "object" || r.status !== "ok" || "args" in r || "digest" in r) return r;
   if (/^infra:verify-plan$/.test(label)) {
     const i = inputsOf(prompt);
-    r.args = [i.main_worktree, i.plan_commit, i.plan_path];
+    r.args = [i.main_worktree, i.plan_base, i.plan_path];
   } else if (/^infra:hook-surface:/.test(label)) r.args = [inputsOf(prompt).worktree, inputsOf(prompt).rev, JSON.stringify(inputsOf(prompt).targets)];
   else if (/^infra:push(:p\d+)?$/.test(label) && r.push_result === "hook_rejected") r.args = ["/tmp/fleet-push.out", String(r.exit_code)];
   else if (/^infra:precommit-ids/.test(label)) r.args = [inputsOf(prompt).main_worktree, inputsOf(prompt).plan_commit];
@@ -358,8 +360,64 @@ export async function runOne(script, args0) {
     // 3.1.0: unscripted hook-surface reads find no hook entry file
     if (!(label in script) && /^infra:hook-surface:/.test(label))
       return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: {}, error: null }, prompt));
+    // 6.0.0 (ledger 2042): an unscripted convention read finds no convention (the conventional fallback)
+    if (!(label in script) && /^infra:pr-convention:/.test(label))
+      return { status: "ok", reason: "read", title: { style: "conventional", types: ["feat", "fix", "perf", "revert", "chore", "refactor", "docs", "style", "test", "build", "ci"], key_required: false }, body: { template: null, template_repo: null, required_sections: null, min_chars: null, checker: null }, source: ["title: no convention found; the fallback type(component): summary"], unreadable: [], args: inputsOf(prompt).args };
+    // 6.0.0 (ledger 2033): an unscripted policy read finds no policy file
+    if (!(label in script) && label === "infra:policy")
+      return { status: "ok", reason: "read", profile: null, file: "/home/u/.config/fleet/policy.json", policy_sha256: null, caps: { pr_ready: true, ci_watch: true, ci_watch_minutes: 60, stats: true, merge: "never", update_branch: "never", ci_trigger: false, review_post: "none" }, matched: "no policy file", error: null, args: inputsOf(prompt).args };
+    // 6.0.0 (ledger 2044): an unscripted stats edit writes the block (wall time 2m)
+    if (!(label in script) && /^infra:pr-stats/.test(label)) {
+      const a = inputsOf(prompt).args;
+      const block = Buffer.from(a[3], "base64").toString("utf8").replace("@@WALL@@", "2m");
+      return { status: "ok", reason: "written", replaced: false, wall_s: 120, block_sha256: sha256(block), body_sha256_before: "0".repeat(64), body_sha256_after: "1".repeat(64), headers_missing: [], error: null, args: a };
+    }
+    // 6.0.0 (ledger 2045): an unscripted ready step marks the draft ready at the approved sha
+    if (!(label in script) && /^infra:pr-ready/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "ready", mode: "ready", was_draft: true, is_draft: false, head: a[4], state: "OPEN", error: null, args: a };
+    }
+    // 6.0.0 (ledger 2034): unscripted CI steps: no orchestrator or IaC sign, one green check, and the PR state changes succeed
+    if (!(label in script) && /^infra:orch-scan/.test(label))
+      return { status: "ok", reason: "scanned", orchestrator: false, iac_repo: false, apply_on_merge: false, hook_surface_pr: false, reasons: [], error: null, args: inputsOf(prompt).args };
+    if (!(label in script) && /^infra:ci-watch:/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "watched", state: "green", checks: [{ name: "test", state: "SUCCESS", bucket: "pass", url: "https://github.com/o/r/actions/runs/11/job/12" }], failed: [], required: true, head: a[3], elapsed_s: 300, error: null, args: a };
+    }
+    if (!(label in script) && /^infra:pr-merge/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "merged", mode: "merge", merged: true, auto_enabled: false, method: "squash", merge_sha: "e".repeat(40), blocked: null, merge_state: "CLEAN", head: a[4], branch_deleted: true, error: null, args: a };
+    }
+    if (!(label in script) && /^infra:pr-update/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "updated", mode: "update", updated: true, head: "d".repeat(40), base: "c".repeat(40), overlap: [], error: null, args: a };
+    }
+    // review fixes: the log read finds the watched failures' tails; a resume finds the PR open; a fetch lands on the new head
+    if (!(label in script) && /^infra:ci-logs:/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "read", mode: "logs", head: a[4], logs: [{ name: "test", url: "https://github.com/o/r/actions/runs/77/job/88", run_id: "77", excerpt: "FAILED tests/test_a.py::test_x", verified: true }], error: null, args: a };
+    }
+    if (!(label in script) && /^infra:pr-view/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "read", mode: "view", state: "OPEN", head: a[4], merge_sha: null, error: null, args: a };
+    }
+    if (!(label in script) && /^infra:pr-fetch/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "fetched", mode: "fetch", head: a[4], tree: "T".repeat(1), error: null, args: a };
+    }
+    if (!(label in script) && /^infra:ci-rerun/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "reran", mode: "rerun", rerun: JSON.parse(a[3]), error: null, args: a };
+    }
+    if (!(label in script) && /^infra:fleet-cleanup/.test(label))
+      return { status: "ok", reason: "removed", mode: "cleanup", removed: true, deleted: true, error: null, args: inputsOf(prompt).args };
+    // 6.0.0 (ledger 2041): unscripted ruleset reads find a repo with no ruleset and a user owner
+    if (!(label in script) && /^infra:ruleset-surface:/.test(label))
+      return { status: "ok", reason: "read", surface: [], sources: [], read: ["self-references in 0 local workflow file(s)", "rules/branches/main: 0 rule(s)", "owner o is not an organization: no org rulesets"], unreadable: [], error: null, args: inputsOf(prompt).args };
     // 3.1.0: unscripted ledger reads find a task with a body page
-    if (!(label in script) && /^infra:ledger-read:pre$/.test(label))
+    // 2034.5: the CI follow-up write lands like the write-back
+    if (!(label in script) && /^infra:ledger-writeback:ci$/.test(label)) return { status: "ok", reason: "ok", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "written" })) };
+    if (!(label in script) && /^infra:ledger-read:pre(:ci)?$/.test(label))
       return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
     // 5.0.8 (ledger 2030): an unscripted gh check reads the scenario's answers
     if (!(label in script) && /^infra:gh-identity:/.test(label)) return Object.assign({ status: "ok", reason: "checked" }, ghIdOut(inputsOf(prompt).args, null, script.__gh));
@@ -411,6 +469,8 @@ export async function runOne(script, args0) {
     // 4.0.0 (1984): an unscripted drift retry repeats the role's answer for
     // that label (or its round-0 stub); script "<label>:retry" to differ
     if (!(key in script) && /^role:.+:retry$/.test(label)) key = roundBase(label.slice(0, -":retry".length));
+    // 6.0.0 review S6: an unscripted step of the soft CI write-back (labels ending :ci) finds nothing
+    if (!(key in script) && /^infra:[a-z-]+(:[a-z]+)*:ci$/.test(label)) return null;
     if (!(key in script)) {
       unscripted.push(label);
       return null;
@@ -484,6 +544,8 @@ export async function runOne(script, args0) {
     // a terse writer stub reports exactly its criterion's test files
     if (label.startsWith("role:fleet-test-writer:") && !raw && r.status === "ok" && !("files" in r))
       r.files = inputsOf(prompt).test_files;
+    // 6.0.0 (ledger 2042): a PR opener stub reports the title it was given
+    if (label.startsWith("role:fleet-pr-opener") && !raw && r.status === "ok" && !("title" in r)) r.title = inputsOf(prompt).title;
     // 5.0.0 (R1): a role agent reports the role file it read (raw stubs too,
     // unless they name role_file themselves)
     if (label.startsWith("role:") && !("role_file" in r)) {
@@ -539,7 +601,8 @@ export async function runOne(script, args0) {
     () => {},
     (m) => logs.push(m),
     args,
-    { total: null, spent: () => 0, remaining: () => Infinity },
+    // 6.0.0 (ledger 2044): script.__budget, a budget whose spent() a test drives
+    script.__budget || { total: null, spent: () => 0, remaining: () => Infinity },
     async () => {
       throw new Error("nested workflow not expected");
     },
@@ -590,6 +653,10 @@ export const ARGS = {
   run_nonce: NONCE,
 };
 export const PC ="abc1234def0";
+// 6.0.0 (ledger 2042): the branch commit the dangling plan commit PC sits on
+export const PB = "b0de1234567";
+// the plan doc's own blob id, as verify resolves it with replacement objects off
+export const PBLOB = "b10b".repeat(10);
 export const PSHA = "a".repeat(64);
 export const BRIEF = {
   title: "Add Thing!",
@@ -602,12 +669,12 @@ export const BRIEF = {
 // head stays at the plan commit until the commit step; only the tree moves.
 // FP_PRE: the plan commit before the writers; FP_PLAN (= FP_TESTS): the
 // worktree holding the approved tests.
-export const FP_PRE = { head: PC, tree: "T0" };
-export const FP_TESTS = { head: PC, tree: "T1" };
+export const FP_PRE = { head: PB, tree: "T0" };
+export const FP_TESTS = { head: PB, tree: "T1" };
 export const FP_PLAN = FP_TESTS;
-export const FP_K1 = { head: PC, tree: "K1" };
-export const FP_K2 = { head: PC, tree: "K2" };
-export const FP_M3 = { head: PC, tree: "M3" };
+export const FP_K1 = { head: PB, tree: "K1" };
+export const FP_K2 = { head: PB, tree: "K2" };
+export const FP_M3 = { head: PB, tree: "M3" };
 // the commit step's head for code round m
 export const CSHA = (m) => "c00000" + m;
 // Hasher output is four maps plus a suspicious list. Fixtures are written as
@@ -885,9 +952,12 @@ export function commitStub(store, head, planSha) {
     store[head] = c;
     store.__planHead = head;
     store.__task = inputsOf(prompt).task_id;
-    // 4.0.0: what the verify step reads back
-    store.__commit = { head, planSha, planPath: inputsOf(prompt).plan_path, worktree: inputsOf(prompt).worktree };
-    return { status: "ok", reason: "committed", head, tag_sha: "7".repeat(40) };
+    // 4.0.0: what the verify step reads back (6.0.0: the plan commit is off the branch, on plan_base)
+    const i = inputsOf(prompt);
+    // a re-plan worktree (no branch) sits on the plan commit it replaces
+    store.__commit = { head, planSha, planPath: i.plan_path, worktree: i.worktree, base: i.plan_base, wtHead: i.branch ? i.plan_base : prev };
+    const plan_file = i.worktree.replace(/\/+[^/]+\/*$/, "") + "/plan/" + i.plan_path;
+    return { status: "ok", reason: "committed", plan_commit: head, plan_base: i.plan_base, tag_sha: "7".repeat(40), reused: false, plan_file, dirty: [] };
   };
 }
 
@@ -905,8 +975,8 @@ export function verifyStub(store) {
     return {
       status: "ok",
       reason: "verified",
-      plan_files: { head: c.head || null, files: [i.plan_path], args: [i.worktree], dsn_paths: [] },
-      plan_hash: { plan_sha256: c.planSha || null },
+      plan_files: { head: c.wtHead || c.base || null, commit: c.head || null, parent: c.base || null, files: [i.plan_path], args: [i.worktree, i.plan_commit], dsn_paths: [] },
+      plan_hash: { plan_sha256: c.planSha || null, blob: PBLOB },
       plan_ref: { refs },
     };
   };
@@ -919,7 +989,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.10/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.0.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -959,7 +1029,7 @@ export function shq(v) {
 // state) for real, through the shipped chunk writer, as the agents do (chunks
 // in <dirname(wt)>/scratch). It prints `<head> <tag object>` like the 3.x command.
 let refWrites = 0;
-function chunkWriteCmd(program, wt, target, json, outKey) {
+function chunkWriteCmd(program, wt, target, json, outKey, extra = [], headKey = "head") {
   const msg = json + "\n";
   const b64 = Buffer.from(msg, "utf8").toString("base64");
   const dir = join(dirname(wt), "scratch", "chunks-test-" + process.pid + "-" + ++refWrites);
@@ -969,12 +1039,18 @@ function chunkWriteCmd(program, wt, target, json, outKey) {
   return (
     "set -o pipefail; mkdir -p " + shq(dir) + " && " +
     chunks.map((c, i) => "printf '%s' " + shq(c) + " > " + shq(dir + "/" + i + ".b64")).join(" && ") +
-    " && python3 -I " + [join(SCRIPTS_SRC, program + ".py"), wt, target, dir, String(chunks.length), sha256(msg), JSON.stringify(shas)].map(shq).join(" ") +
-    " | python3 -I -c 'import json, sys; o = json.load(sys.stdin); print(o[\"head\"], o[\"" + outKey + "\"])'"
+    " && python3 -I " + [join(SCRIPTS_SRC, program + ".py"), wt, target].map(shq).concat(extra, [dir, String(chunks.length), sha256(msg), JSON.stringify(shas)].map(shq)).join(" ") +
+    " | python3 -I -c 'import json, sys; o = json.load(sys.stdin); print(o[\"" + headKey + "\"], o[\"" + outKey + "\"])'"
   );
 }
-export function planRefWriteCmd(wt, taskId, json) {
-  return chunkWriteCmd("plan_ref_write", wt, taskId, json, "tag_sha");
+// 6.0.0 (ledger 2042): the program seals <plan_path> (written when absent) as a plan
+// commit on HEAD, off the branch; it prints the plan commit and the tag object
+export function planRefWriteCmd(wt, taskId, json, planPath = "docs/plans/x.md") {
+  const f = join(wt, planPath);
+  return (
+    "mkdir -p " + shq(dirname(f)) + " && { [ -f " + shq(f) + " ] || printf '# plan\\n' > " + shq(f) + "; } && base=$(git -C " + shq(wt) + " rev-parse HEAD) && " +
+    chunkWriteCmd("plan_ref_write", wt, taskId, json, "tag_sha", ['"$base"', shq(planPath)], "plan_commit")
+  );
 }
 export function stateWriteCmd(wt, stateRef, json) {
   return chunkWriteCmd("state_write", wt, stateRef, json, "state_sha");
@@ -1056,15 +1132,15 @@ export const PROGRAM_LABELS = [
   [/^infra:load-parked$/, [[null, "parked", K("parked:read")]]],
   // 5.0.2 (ledger 2004): the park program moves the draft
   [/^infra:park-plan/, [["park", "parked", K("parked:park")], ["findings_write", "parked", K("parked:write")]]],
-  [/^infra:stage-plan/, [["plan_hash", "plan_hash", null]]],
+  [/^infra:stage-plan/, [["plan_hash", "plan_hash", K("plan_hash")]]],
   [/^infra:format-(tests|code):/, [[null, "format_files", K("format_files")]]],
   // 5.0.3 (ledger 2010): the DSN precheck after the plan hooks
   [/^infra:format-plan/, [["dsn_check", "plan_dsn", K("plan_dsn")]]],
   [/^infra:commit-plan/, [[null, "plan_ref_write", K("plan_ref_write")]]],
   // 4.0.0 review: dsn_paths, the committed files that hold mysql://
-  [/^infra:verify-plan-commit/, [["plan_files", "plan_files", K("plan_files")], ["plan_hash", "plan_hash", null], ["plan_ref", "plan_ref", null]]],
+  [/^infra:verify-plan-commit/, [["plan_files", "plan_files", K("plan_files")], ["plan_hash", "plan_hash", K("plan_hash")], ["plan_ref", "plan_ref", null]]],
   [/^infra:load-ref/, [[null, "plan_ref", null]]],
-  [/^infra:verify-plan$/, [[null, "verify_since", K("verify_since")], ["plan_hash", "plan_hash", null], ["plan_hash_head", "plan_hash", null], ["test_db", "test_db_decl", K("test_db_decl")]]],
+  [/^infra:verify-plan$/, [[null, "verify_since", K("verify_since")], ["plan_hash", "plan_hash", K("plan_hash")], ["test_db", "test_db_decl", K("test_db_decl")]]],
   [/^infra:read-state$/, [[null, "read_state", K("read_state")]]],
   [/^infra:state:/, [[null, "state_write", K("state_write")]]],
   [/^infra:tf-gate:/, [[null, "tf_gate", K("tf_gate")]]],
@@ -1076,6 +1152,25 @@ export const PROGRAM_LABELS = [
   // 4.0.0 (1985, S3)
   [/^infra:push-probe$/, [[null, "push_probe", K("push_probe")]]],
   [/^infra:hook-surface:/, [[null, "hook_surface", K("hook_surface")]]],
+  // 6.0.0 (ledger 2041)
+  [/^infra:ruleset-surface:/, [[null, "ruleset_surface", K("ruleset_surface")]]],
+  // 6.0.0 (ledger 2033)
+  [/^infra:policy$/, [[null, "policy", K("policy")]]],
+  // 6.0.0 (ledger 2044)
+  [/^infra:pr-stats/, [[null, "pr_body_block", K("pr_body_block")]]],
+  // 6.0.0 (ledgers 2045, 2034)
+  [/^infra:pr-ready/, [[null, "pr_state", K("pr_state:ready")]]],
+  [/^infra:pr-merge/, [[null, "pr_state", K("pr_state:merge")]]],
+  [/^infra:pr-update/, [[null, "pr_state", K("pr_state:update")]]],
+  [/^infra:ci-rerun/, [[null, "pr_state", K("pr_state:rerun")]]],
+  [/^infra:ci-logs/, [[null, "pr_state", K("pr_state:logs")]]],
+  [/^infra:pr-view/, [[null, "pr_state", K("pr_state:view")]]],
+  [/^infra:pr-fetch/, [[null, "pr_state", K("pr_state:fetch")]]],
+  [/^infra:fleet-cleanup/, [[null, "pr_state", K("pr_state:cleanup")]]],
+  [/^infra:orch-scan/, [[null, "orch_scan", K("orch_scan")]]],
+  [/^infra:ci-watch:/, [[null, "ci_watch", K("ci_watch")]]],
+  // 6.0.0 (ledger 2042)
+  [/^infra:pr-convention:/, [[null, "pr_convention", K("pr_convention")]]],
   [/^infra:review-paths:/, [[null, "review_paths", K("review_paths")]]],
   // 4.0.0 review: the hook ids feed G2 and carry a digest
   [/^infra:precommit-ids/, [[null, "precommit_ids", K("precommit_ids")]]],
@@ -1106,10 +1201,16 @@ export function fillPrograms(label, r, prompt) {
     if (!("scripts_probe" in r)) r.scripts_probe = scriptsProbe();
   }
   // flat 3.x stub fields become the program outputs the prompt asks for
-  if (/^infra:stage-plan/.test(label) && !("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256 };
+  if (/^infra:stage-plan/.test(label) && !("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256, blob: null };
   if (/^infra:verify-plan$/.test(label)) {
-    if (!("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256 };
-    if (!("plan_hash_head" in r) && "plan_sha256_head" in r) r.plan_hash_head = { plan_sha256: r.plan_sha256_head };
+    if (!("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256, blob: PBLOB };
+  }
+  // 6.0.0 security review: plan_hash echoes its args (the prompt's)
+  if (r.plan_hash && typeof r.plan_hash === "object" && !("args" in r.plan_hash) && !("digest" in r.plan_hash)) {
+    const i = inputsOf(prompt);
+    r.plan_hash.args = /^infra:stage-plan/.test(label) ? [i.worktree, "", i.plan_path] : /^infra:verify-plan-commit/.test(label) ? [i.worktree, i.plan_commit, i.plan_path] : [i.main_worktree, i.plan_commit, i.plan_path];
+  }
+  if (/^infra:verify-plan$/.test(label)) {
   }
   // 5.0.3 (ledger 2010): a format-plan stub with no dsn_check finds no DSN
   if (/^infra:format-plan/.test(label) && !("dsn_check" in r)) {
@@ -1194,7 +1295,7 @@ export function happy(over = {}) {
     // every role on sonnet (the shipped DISPATCH lines differ; v5_roles runs them)
     __dispatch: Object.fromEntries(ROLE_NAMES.map((k) => [k, "DISPATCH: model=sonnet"])),
     intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF, tried: over.tried || triedFor(over.brief || BRIEF) },
-    "infra:branch-scan": { status: "ok", reason: "scanned", commits: [], refs: [] },
+    "infra:branch-scan": { status: "ok", reason: "scanned", head: PB, commits: [], refs: [] },
     "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
     "infra:commit-plan": commitStub(store, PC, PSHA),
     "infra:verify-plan-commit": verifyStub(store),
@@ -1203,13 +1304,13 @@ export function happy(over = {}) {
     "infra:verify-plan": {
       status: "ok",
       reason: "verified",
-      head: PC,
+      head: PB,
       plan_sha256: PSHA,
-      plan_sha256_head: PSHA,
       is_ancestor: true,
       commits_since: [],
       plan_touched: [],
       changed_since: [],
+      replace_refs: [],
     },
     "infra:push": (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha }),
     "infra:ledger-writeback": (prompt) => ({
@@ -1230,6 +1331,7 @@ export function happy(over = {}) {
       reason: "planned",
       artefacts: ["docs/plans/x.md"],
       plan_path: "docs/plans/x.md",
+      component: "thing",
       criteria: crit,
       est_diff_lines: 80,
       new_behaviour: true,

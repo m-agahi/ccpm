@@ -6,6 +6,8 @@ for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
     _h = _r.getrlimit(_k)[1]
     _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
 _o.environ['MALLOC_ARENA_MAX'] = '2'
+# 6.0.0 security review: git never reads refs/replace/* objects in place of sealed ids
+_o.environ['GIT_NO_REPLACE_OBJECTS'] = '1'
 _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
@@ -54,7 +56,9 @@ if anc and head != pc:
         commits.append({'sha': sha, 'subject': subj})
     touched = z(run('log', '-z', '--format=%H', pc + '..' + head, '--', ':(literal)' + plan_path).stdout)
     changed = z(run('diff', '--name-only', '-z', '--no-renames', pc + '..' + head, '--').stdout)
-out = {'head': head, 'is_ancestor': anc, 'commits_since': commits, 'plan_touched': touched, 'changed_since': changed, 'args': [wt, base, plan_path]}
+# 6.0.0 security review: any replacement ref fails verify
+rr = [x for x in run('for-each-ref', '--format=%(refname)', 'refs/replace/').stdout.decode().splitlines() if x]
+out = {'head': head, 'is_ancestor': anc, 'commits_since': commits, 'plan_touched': touched, 'changed_since': changed, 'replace_refs': rr, 'args': [wt, base, plan_path]}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, ensure_ascii=False))

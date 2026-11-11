@@ -4361,3 +4361,106 @@ PR #48 (ruling 3): and its shared file, checked like a role's shared_file
 ```text
 5.0.6 (ledger 2019): the per-role build dirs (only when one was reset)
 ```
+
+## 6.0.0 notes (not 5.0.9 comments)
+
+### `openPr` (2038)
+
+```text
+Run wf_204148f5-38f: gh_identity.py answered null for gh and gh-personal (3.1 s, not a
+timeout); the build start went on (only a definite no stops there), and the PR step read the
+cached unknown as "no push access". The PR step now clears state.gh.repos[<slug>] (ghEnsure
+skips a cached slug) and probes once more as infra:gh-identity:pr (soft: an unusable probe
+counts as unknown). It stops on a definite no (noPushText) or on a second unknown, with its own
+text. One re-probe per run (reprobed), not per openPr call. Each unknown tried entry carries
+exit_code and a short stderr so the next stop says why.
+```
+
+### `slotKeys`, `nestedMiss` (2039)
+
+```text
+Run wf_336c49a1-0d4: the verify-plan agent relayed test_db without its digest; nested slots
+required only program and file_sha256, and digestRetry looked at the top level only. A nested
+slot now requires the program's PROGRAM_KEYS (for a program with modes, the keys every mode
+prints: parked -> args) plus digest where the program prints one (not plan_hash, plan_ref).
+digestRetry also checks each nested slot of a digest-checked step whose relay is from the
+shipped program, and gives it one :digest-retry. Steps with nested slots only (preflight,
+workspace, ...) are not digest-checked steps and get no retry.
+```
+
+### `RELAUNCH_REASON` (2040)
+
+```text
+The Workflow harness injects the launching turn's latest human message as "[Workflow harness
+— user request] ... this request wins". A message queued mid-turn ("and the uv entry as well")
+became the request. The fleet cannot remove the frame; intake names it and returns the reason
+code, the script stops with stop_gate relaunch and relaunch: "intake", and the /build-task
+skill re-launches once from a turn whose latest human message is the build request.
+```
+
+### `shipFix`, `planBase` (2043)
+
+```text
+A run resumed at committed, pushed or pr_open used to stop when the push hook or the review
+asked for a coder round: frozen, freezeTree and the loop state are set only by the tests/freeze
+path or frozenResume. The hasher:resume maps ARE the frozen maps at ship (their digest equals
+the run-state's maps_digest, and the coder never changes a frozen key), the freeze tree is in
+their git map under refs/fleet/<task>/freeze, HEAD is approved_sha and the code tree is the
+run-state's code_tree. The loop then runs unchanged, its round count restored from the run-state.
+planBase is the commit the build's commits sit on; stream 2 of 6.0.0 (2042, the plan commit off
+the branch) retargets it.
+```
+
+### `rulesetSurface`, `hookGate` (2041)
+
+```text
+quinyx/actions hosts pr-title-convention/, which org ruleset 18773609 runs on other repos via
+.github/workflows/pr-title-convention.yaml; the 5.0.10 hook surface did not see it. Org rulesets
+are readable only with admin:org (a non-admin gets 404). Ruling 1 (Max, 2026-11-11): report and
+floor. The floor is local: directories a tracked workflow names by self-reference. The plan-time
+result is sealed in plan_facts.ruleset_surface (never in the role inputs); the approved tree
+cannot add a ruleset, and a new workflow file is hook surface by HOOK_PATH_RE anyway.
+```
+
+### `agentT`, `statsBlock`, `statsStep` (2044)
+
+```text
+The runtime gives no per-call usage; budget.spent() is output tokens for the whole turn. Every
+agent() call goes through agentT, which books the growth of spent() since the previous return to
+the returning call's model. Calls in parallel() are one model (the test writers), so the sums per
+model hold. The wall time starts at policy.py's `now` and ends in pr_body_block.py, which fills
+@@WALL@@; the script recomputes the block with the printed wall_s and checks its sha256. Plan-audit
+rounds are sealed in the plan ref's history.audits. "gates passed" counts gate-log lines that are
+not warnings.
+```
+
+### `readyStep`, `prState`, `TAIL_RE` (2045)
+
+```text
+Ruling 2045: ready after review approve, write-back and stats; never on needs_human (a halt ends
+the run first). iac_touched is set only when tfGate found the IaC diff Max pushed himself; it is
+sealed in the run-state. The PR tail sits outside MAX_AGENTS (state.tail), like path checks: a
+review fix round plus stats, ready and CI pushed the 8-criteria auto run over 100.
+```
+
+### `ciStep` (2034)
+
+```text
+Rulings 2034: one watch agent re-runs ci_watch.py while it prints pending; the program keeps its
+start and first read in scratch/ci-<nonce>-p<push>-w<watch>.json, so the time cap and the settle
+window (90 s after the first call, 60 s after the first read) do not depend on the agent
+counting. Each watch (new head, rerun) gets its own file and settles again. Green from the watch
+is never enough: pr_state.py merge re-reads the checks in script (review S1), because the relay
+digest is unkeyed and the agent could compute one. The watch prints no log text; pr_state.py logs
+reads the tails for the classifier, whose answer is used only as an enum per failing name. The
+coder gets the log tail as a JSON string labelled untrusted. Merge needs merge auto, no
+WORK_OWNERS owner (checked again here; pr_state.py refuses too, also by the forge's own name and
+owner), no orchestrator, IaC, apply-on-merge or hook-surface sign in the scan right before the
+merge. Update-branch runs once per run (state.prUpdated). A base change in PR files: ciStep
+returns {gate: "update"}, adoptUpdate fetches and checks the forge merge (parents, merge-tree),
+hashes, hook-checks and sets approvedSha; ship() runs review -> stats -> ready -> ci again
+without a new write-back. Close/reopen to retrigger a missing check (ADR-1203 "may") is not built.
+The CI write-back (marker fleet:<task>:ci) runs once on the final outcome, also on a CI stop
+(ciGuard), and keeps state.stopGate.
+Cleanup runs after the shipped run-state write, from / with git -C <repo>.
+```

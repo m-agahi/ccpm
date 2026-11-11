@@ -56,8 +56,10 @@ key, a GitHub or Codeberg issue or PR URL, a plan path, or free text.
   definite no-push (every installed command answered false) stops at its start (`role`). A GitHub URL input and a comment
   on another repo get their own `infra:gh-identity:*` step. Every gh prompt and role (`push`,
   `fleet-pr-opener`, `pr-review`, intake, the comment steps) gets that command as `gh_cmd`. The PR
-  step stops before any agent (`role`) when no command can push; the review stops (`review`) when
-  none can read. `gh_cmd` is in no seal and no digest: every run, a resume too, computes it again.
+  step stops before any agent (`role`) when no command can push. When the answer was unknown
+  (null, not a definite no), it probes once more first (`infra:gh-identity:pr`, 6.0.0) and stops
+  only on a definite no or a second unknown, with a text for each; an unknown answer carries
+  `exit_code` and a short stderr. The review stops (`review`) when none can read. `gh_cmd` is in no seal and no digest: every run, a resume too, computes it again.
 - For Jira input or write-back: the Atlassian MCP server. For GitHub write-back: a gh command with
   push access to the issue's repo (see above). For
   Codeberg write-back: `$CODEBERG_TOKEN`. A missing tool makes intake stop, or makes that comment
@@ -81,13 +83,13 @@ A missing nonce returns `needs_human` before any agent runs.
 | 1    | preflight          | a role file changed or missing; an unshimmed IaC tool on PATH                                     |
 | 2    | intake (read only) | `needs_human` (ambiguous repo or ticket) stops before any other step                              |
 | 3    | workspace (infra)  | creates or reuses branch `fleet/<task id>-<slug>` and its worktree                                |
-| 4    | branch-scan (r/o)  | any commit beyond origin/<default> that is not a plan commit -> stop                              |
+| 4    | branch-scan (r/o)  | any commit beyond origin/<default> -> stop (6.0.0: plan commits are off the branch)               |
 | 5    | scope-and-plan     | criterion ids; disjoint test files; `tldr`; `plan_diff` is a string array                         |
 | 5a   | callers (r/o)      | `changed_symbols` map well formed; `git grep -w` hits equal the map                               |
 | 6    | -                  | short path when `est_diff_lines` < 20 and `new_behaviour` false: one test writer, every gate kept |
 | 7    | plan-audit         | verdict other than `approve` -> `needs_human`                                                     |
-| 8    | stage-plan         | stages the plan doc; returns the sha256 of the staged bytes                                       |
-| 9    | commit-plan        | commits the plan doc only, LOCALLY; writes the sealed ref as a git object                         |
+| 8    | stage-plan         | hashes the plan doc in the worktree (6.0.0: no `git add`)                                         |
+| 9    | commit-plan        | seals the plan doc in a plan commit off the branch, LOCALLY; writes the sealed ref                |
 
 Branch-scan: a plan commit has the subject `plan(<task id>): <slug>`, and its file set is exactly
 `{plan_path}`. The scan reads `plan_path` from a sealed plan ref of the task
@@ -96,7 +98,40 @@ target is that commit; paths are compared exactly after normalisation, with no p
 match. A commit with no such plan ref, a broken seal, another task's ref, or any other file (a
 `.fleet/` path included) is a build commit. If the fleet branch carries any build
 commit, plan mode stops with "branch has build commits; run build, or delete branch". It never commits a plan on top
-of code. On a plan-only branch it adds a new plan commit.
+of code. Since 6.0.0 a branch that carries a plan commit of fleet 5.x stops too ("delete branch ...,
+then re-run plan"), because that commit would ship the plan doc.
+
+### Plan off the branch (6.0.0, ledger 2042)
+
+The plan doc never lands on the pushed branch or in the PR (ADR-1213; it supersedes the ADR-1163
+sentence "The plan doc does belong in the PR"). Plan mode runs the repo's pre-commit hooks on the
+plan doc (`infra:format-plan`) as before. Then `plan_ref_write.py` writes the plan commit with no
+`git commit`: a temporary index on `plan_base` (the branch HEAD the scan saw), the plan bytes as
+they are, `commit-tree -p <plan_base>`. The commit is on no branch. The tag at
+`refs/fleet/<task id>/plan` targets it and keeps it. The program then moves the plan doc to
+`<fleet root>/plan/<plan_path>`, outside the worktree and the scratch dir that roles may write (a
+tracked, ingested plan file is restored to HEAD). The plan path must stay inside the worktree with
+no `..` and no symlinked component, so the worktree is
+clean and the branch HEAD has not moved. An identical re-plan on the same base reuses the commit.
+`plan_files.py <worktree> <commit>` lists the commit against its parent, and the script checks that
+the parent is the sealed `plan_base` and HEAD is unchanged.
+
+The sealed ref holds `plan_base`. The build verifies that the branch HEAD is `plan_base` or descends
+from it through fleet commits only, and that no commit since touches `plan_path`. Roles never read
+a plan file a role could rewrite: verify resolves the plan's own blob id (replacement objects off)
+after the plan bytes hash to the sealed `plan_sha256` (`plan_hash.py` prints `{plan_sha256, blob,
+args, digest}`; the script recomputes the digest, checks the args and requires a full 40- or 64-hex
+id), and each role gets it as `plan_blob` and reads
+it with `git --no-replace-objects cat-file blob <plan_blob>`. Every fleet program runs git with
+`GIT_NO_REPLACE_OBJECTS=1`. Verify (`verify_since.py` lists `replace_refs`) and every hasher run
+(its git map lists `refs/replace/*`) stop on any replacement ref, so no replacement object can
+stand in for the plan, the freeze tree or `plan_base`. Code diffs (judges,
+coder, caller check, hook surface, review) start at `plan_base`. A ref without `plan_base` (sealed
+by 5.x) stops with "delete branch ..., then re-run plan". The fleet-scan before each push stops when
+`plan_path` is in the PR diff or in a commit. The PR body carries the plan's TL;DR and acceptance
+criteria (ruling 2), never the plan doc or a link to it. Write-back has no plan link: a ledger
+section says `Plan: <plan_path>, sealed locally at refs/fleet/<task id>/plan (not in the PR)`, and
+issue and Jira comments carry the TL;DR and the PR link only.
 Since 3.0.0 the scan is one program (`BRANCH_SCAN_PY`) and no plan-ref message text crosses the
 relay: the program lists the commits (`{sha, subject, files}`, newest first) and, per plan ref,
 the name, target, the sha256 of the message and its own reading of the message: `task_id`,
@@ -299,9 +334,8 @@ Since 2.1.4 the full plan ref is a local git object, never a file and never push
 tag object (`git mktag`, no tag name, index untouched, `core.hooksPath=/dev/null` so no hook runs)
 whose target is the plan commit and whose message is the sealed JSON, at
 `refs/fleet/<task id>/plan`. A re-plan moves that ref to the new plan commit and keeps the earlier
-value as `refs/fleet/<task id>/plan-<n>` when its target or message differs. When HEAD is a
-plan-only commit of the task and the staged plan doc is byte-identical to HEAD's, commit-plan makes
-no commit (never `--allow-empty`) and the new ref targets HEAD. The plan commit holds `plan_path` only; nothing under
+value as `refs/fleet/<task id>/plan-<n>` when its target or message differs. When the plan doc and
+`plan_base` are unchanged, the program reuses the earlier plan commit (6.0.0). The plan commit holds `plan_path` only; nothing under
 `.fleet/` is written, staged or committed, so a global `.fleet/` gitignore changes nothing. It
 holds `branch`, `plan_path`, `plan_sha256`, `criteria`, `brief`, `task_id`, `slug`, `tldr`,
 `plan_diff` (2.1.0), `plan_facts` (scope fence, estimate, `test_cmd`, `repo_obligations` and,
@@ -452,8 +486,9 @@ hooks are never bypassed. So nothing commits until the code judge approves.
     committed `HEAD^{tree}` differs: `needs_human` "hook modified files". Never auto-accepted.
   - Success: `approved_sha` = the new HEAD.
 
-  The first commit's subject is `feat(<task id>): <slug words>`; each later one (a review or hook
-  fix) is a NEW commit `fix(<task id>): code round <n>` (the PR squash-merges).
+  The first commit's subject is `<type>(<scope>): <slug words>`; each later one (a review or hook
+  fix) is a NEW commit `fix(<scope>): code round <n>` (the PR squash-merges). Since 6.0.0 the
+  type, the scope and the PR title follow the sealed convention (see "Conventions" below).
 
 Load-ref: an infra step reads the plan refs with `git cat-file` and returns each tag's target,
 message and message sha256. The ref named by `plan_ref` must be an annotated tag of `plan_commit`,
@@ -464,14 +499,14 @@ frozen with every other `refs/fleet/*` ref in the hasher's git map, so a coder o
 it trips the freeze; the script's own plan-ref write in a re-plan updates the frozen snapshot.
 
 Verify: the sha256 of `plan_path` at `plan_commit` must equal `plan_sha256`, or the run stops with
-"plan changed since approval". HEAD must equal `plan_commit`, or descend from it by commit-step
-commits of this plan only (`feat(<task id>): <slug words>` and `fix(<task id>): code round <n>`),
+"plan changed since approval". HEAD must equal `plan_base`, or descend from it by commit-step
+commits of this plan only (exactly the two subject forms the sealed convention builds),
 with `plan_path` unchanged. Anything else stops with the same reason.
 Stage-plan, commit-plan and verify run the same embedded hash program.
 Since 3.1.0 no step relays raw git output for these checks. Verify runs `VERIFY_SINCE_PY`
-(worktree, plan commit, plan path), which prints `{head, is_ancestor, commits_since, plan_touched,
+(worktree, `plan_base` since 6.0.0, plan path), which prints `{head, is_ancestor, commits_since, plan_touched,
 changed_since, args, digest}`; commit-plan runs `PLAN_FILES_PY`, which prints
-`{head, files, args, digest}`. `args` echoes the program's arguments, and the script compares them
+`{head, commit, parent, files, args, dsn_paths, digest}`. `args` echoes the program's arguments, and the script compares them
 with what it passed.
 The script recomputes each digest and stops the run (`failed`) on a dropped or changed entry or a
 missing list. Every embedded program runs as `python3 -I`; a program that reads the repo takes the
@@ -494,11 +529,12 @@ A `plan_wrong` verdict stops the build. The script:
 1. takes the code judge's `plan` findings and parses each `Proposed plan change: <line>` into
    `proposed_plan_change[]` (a finding without that line is used whole and logged);
 2. creates a detached worktree at the old `plan_commit`, runs scope-and-plan (the findings are an
-   extra `text` source) and plan-audit there, and commits the new plan there;
+   extra `text` source) and plan-audit there, and seals the new plan there on the same `plan_base`
+   (off the branch, 6.0.0);
 3. saves the old head as branch `fleet/<task id>-<slug>--superseded-<n>` and the uncommitted work
    (the judged tree) under `refs/fleet/<task id>-<slug>/superseded-<n>-tree` (`git update-ref` to
-   the tree object; no commit is created, nothing is pushed), then resets the fleet branch to the
-   new plan commit and runs `git clean -fd` (never `-x`);
+   the tree object; no commit is created, nothing is pushed), then resets the fleet branch to
+   `plan_base` and runs `git clean -fd` (never `-x`);
 4. returns `awaiting_confirmation` with `proposed_plan_change`, `plan_findings`, `superseded_ref`,
    `superseded_tree_ref` and a fresh `plan_ref`.
 
@@ -507,7 +543,116 @@ agents across runs.
 
 ### Write-back
 
-After the review, build mode writes back once. A failure here never changes the run status.
+After the review, build mode writes back once. A failure here never changes the run status. Since 6.0.0 the
+write-back runs before the CI watch (ruling 2045 order) and skips a source that already carries the
+fleet marker, so the CI outcome is in the run result (`ci`), not in the ledger section.
+
+### Conventions (6.0.0, ledger 2042)
+
+At plan time `pr_convention.py <worktree> <gh_cmd|-> <owner/repo|-> <default_branch>`
+(`infra:pr-convention:plan`, GET requests only) finds the title convention, first match:
+
+1. a required workflow in `rules/branches/<default>` (org rulesets included) whose path names
+   `pr-title`: style `scoped-key`, with the types and the key rule read from its checker's `TYPES`
+   literal when the checker is readable;
+2. a commitlint or semantic config in the repo (`type-enum` types when listed): `conventional`;
+3. 80 % or more of the last 20 merged PR titles (5 at least): `scoped-key` or `conventional`;
+4. else the fallback `type(component): summary` (ruling 4).
+
+The body convention is the repo's PR template, else the org's (`<owner>/.github`), plus the
+required sections and minimum length of a required `pr-body` workflow's checker. The planner names
+a `component` (one word; the repo name when it gives none or an unusable one). The plan ref seals
+`plan_facts.conventions` and `plan_facts.component`; the build never re-reads them. The type comes
+from `change_kind` (`bug_fix` -> `fix`, `feature` -> `feat`, `refactor`, `chore`; a type the
+checker does not list becomes `chore`), the scope is `component` (`component, KEY` in scoped-key
+style, `KEY` the Jira source's key or `NOJIRA`). The internal task id is never in a commit subject
+or the PR title. The PR opener gets `title` (it must use it verbatim; the script checks the title
+it reports) and `body_convention`. Verify knows fleet commits by these two exact subject forms; a
+resumed run also checks that HEAD is the run-state's `approved_sha`, so no trailer is needed.
+
+Convention data is remote text (security review). The program and the workflow keep only types
+and a scope matching `^[a-z][a-z0-9-]{0,19}$` (none left: the Conventional Commits list), and
+required sections shaped like a markdown heading (at most 20). The program follows a checker only
+in the repo that owns the required workflow or in the target repo, never through `..`. Before the
+first role, the build checks both subject forms against a strict pattern and stops on any other
+text. The commit step passes the subject single-quoted (`commit -m '<subject>'`), and the PR
+opener passes the title single-quoted, never in double quotes.
+
+### Policy (6.0.0, ledger 2033)
+
+A build reads `$XDG_CONFIG_HOME/fleet/policy.json` (default `~/.config/fleet/policy.json`) once,
+after the run-state read, with `scripts/policy.py <host> <owner/repo>`. The file is strict JSON
+(`policy.example.json` shows the shape): duplicate or unknown keys, a wrong type or a bad value
+stop the build (`stop_gate: "policy"`); a bad file never falls back to the default.
+
+- The first profile whose `match.hosts` (when listed) holds the origin host and whose
+  `match.owners` holds the owner (glob, any case) wins. Its first `repos` glob that matches
+  `<owner>/<repo>` overrides caps (the example keeps `yadgarhq/actions` and `yadgarhq/argocd` at
+  `merge: never`).
+- Caps and the default (no file, or no profile matches): `pr_ready` true, `ci_watch` true,
+  `ci_watch_minutes` 60, `stats` true, `merge` `never` (`never` | `auto`), `update_branch`
+  `never` (`never` | `once`), `ci_trigger` false, `review_post` `none` (`none` | `own_pr`;
+  reserved: nothing reads it yet).
+  A profile key left out keeps the default.
+- Script rule, whatever the file says: an owner in `WORK_OWNERS` (`quinyx`, `concrete-media`, on
+  any host or ssh alias) gets `merge` and `update_branch` `never`.
+- The run-state seals `policy: {profile, policy_sha256, caps}`; the result carries it too. A
+  resumed run whose file changed logs the changed caps and keeps the sealed profile.
+
+### PR tail: stats, ready, CI watch, merge (6.0.0, ledgers 2044, 2045, 2034)
+
+After the review approves, build mode runs `push -> pr -> review -> writeback -> stats -> ready
+-> ci`, then writes the last run-state `shipped`. A stop before a step ends the run, so a
+needs_human run is never marked ready or merged. The tail's agents count in `agents`, not against
+the 100-agent cap (like path checks); CI-fix coder rounds still count.
+
+- Stats (`infra:pr-stats`, `pr_body_block.py`): a `<details>` block at the end of the PR body,
+  between `<details><summary>Built with ccpm fleet` and `<!-- ccpm-fleet-stats -->`, built from
+  script counters only: acceptance criteria, tests written and test rounds, code rounds,
+  plan-audit rounds, agents, build wall time, gates passed, review verdict, and "output tokens
+  (approx.)" per model (from `budget.spent()`; no input tokens, no cost). It never names a path,
+  run id, ledger id or session. The program changes only that block, re-reads the body, and
+  checks that the headers of the body convention and of the old body are still there; the
+  script checks the block's sha256. Policy `stats: false` skips it.
+- Ready (`infra:pr-ready`, `pr_state.py ready`): `gh pr ready` only on an open draft at the
+  approved sha; the script requires `is_draft: false` and head == approved sha. Policy
+  `pr_ready: false` keeps the draft. A branch Max pushed himself (an IaC diff, ADR-1175) stops
+  with "IaC PR: Max marks it ready".
+- Scan (`infra:orch-scan`, `orch_scan.py`, read only, fails closed, before ready; any sign but
+  the hook-surface one keeps the PR a draft, with its CI watched read-only): orchestrator config or
+  orchestrator checks and comments on the PR, tracked IaC files, CI files that name an IaC tool,
+  hook-surface files in the PR. It reads the worktree and the forge's trees of the PR head and
+  the default branch, and runs again right before a merge and after update-branch. It is a
+  heuristic: composite actions under `.github/actions/**`, Makefiles, scripts a workflow runs
+  and remote reusable workflows are not read. An orchestrator PR is watched and reported, then
+  stops with "orchestrator PR: needs Max" (ADR-1199).
+- CI watch (`infra:ci-watch:w<n>`, `ci_watch.py`, one read-only agent): the required checks of
+  the PR head (all checks when the PR has none required), in slices of at most 480 s, up to
+  `ci_watch_minutes`. Green needs at least one check and a read 90 s after the first call and
+  60 s after the first read (late checks appear); an empty list is "no CI checks reported" and
+  never merges. The watch never reads CI logs: `pr_state.py logs` reads the tails for the
+  classifier. A draft is "CI not run on draft"; `ci_watch: false` skips the watch.
+- Red: `fleet-ci-classifier` labels each failing check `diff`, `pre_existing`, `flaky` or `infra`
+  from its log tail, which travels as quoted data (CI logs are untrusted input). `diff` (no IaC or
+  orchestrator sign): a CI-fix round through the code loop, at most 2, then needs_human. The
+  others: one rerun when `ci_trigger` allows it and the repo has no IaC sign, else a report.
+- Timeout or a forge error: "CI unresolved", never a merge.
+- Green: a merge only with `merge: "auto"`, outside `WORK_OWNERS`, with no orchestrator, IaC,
+  apply-on-merge or hook-surface sign. `pr_state.py merge` checks the forge's repo name and owner,
+  re-reads the checks itself (non-empty, all passed or skipped), then merges directly with the
+  repo's method, `--match-head-commit <sha>` and `--delete-branch`; only when that is refused it
+  enables native auto-merge (the forge merges later, without the fleet). Behind with
+  `update_branch: once`: the forge's update-branch once per run (the new head must change only PR files against the base tip and be a merge of
+  the reviewed head and the base tip), then the watch again; a base change in a PR file is
+  fetched (`pr_state.py fetch`: parents and merge tree checked), hashed, hook-checked and
+  reviewed again before the watch. After a confirmed merge the remote `fleet/*` branch goes, then
+  the fleet removes its own worktree and local branch. Otherwise "CI green, ready for human
+  merge".
+- The result carries `ci: {verdict, checks: [{name, state, url}], fix_rounds, merged, merge_sha,
+auto_merge_enabled}`. After the final CI outcome a follow-up write-back (marker
+  `fleet:<task>:ci`, soft) records it from fixed fields only (verdict, merged, merge sha, CI-fix
+  rounds, check counts, an enum stop code; never CI names, urls or text), and the stats block is refreshed with a CI row when the PR
+  is still open.
 
 ### Resume (run-state)
 
@@ -520,13 +665,14 @@ Its target is HEAD (the approved commit). Its message is JSON: `plan_commit`, `r
 approving code-judge run), PR number and URL, review, rounds, `suite_result`, `gates_not_run`,
 the intent result and, at the end, the write-back result. The milestones, in order:
 
-| `last_gate`    | recorded after    | a re-run resumes at                  |
-| -------------- | ----------------- | ------------------------------------ |
-| `committed`    | the commit step   | push                                 |
-| `pushed`       | the push          | the pr-opener                        |
-| `pr_open`      | the PR opens      | the review                           |
-| `reviewed`     | the review passes | write-back                           |
-| `written_back` | write-back        | nothing: returns the recorded result |
+| `last_gate`    | recorded after      | a re-run resumes at                  |
+| -------------- | ------------------- | ------------------------------------ |
+| `committed`    | the commit step     | push                                 |
+| `pushed`       | the push            | the pr-opener                        |
+| `pr_open`      | the PR opens        | the review                           |
+| `reviewed`     | the review passes   | write-back                           |
+| `written_back` | write-back          | the stats block, ready and CI watch  |
+| `shipped`      | the PR tail (6.0.0) | nothing: returns the recorded result |
 
 Every ref under `refs/fleet/` (name and target) is in the frozen git map, at freeze and around
 every writer, coder and judge step. A role that creates, moves or deletes one is a violation ("run-state ref
@@ -538,14 +684,16 @@ state's `plan_commit`, `ref_sha256` and `seal` match the plan ref, its target an
 `approved_sha`, `HEAD^{tree}` equals `code_tree`, the worktree is clean, and a fresh hasher run
 (`hasher:resume`) gives the same `maps_digest`. It logs `resuming at <step>` and runs no writer,
 coder or judge. Any failed check stops with `needs_human` "run-state mismatch: <which>"
-(`stop_gate: resume`). A resumed step that would need a coder round (a pre-push hook rejection, a
-blocking review) stops with `needs_human`: a resumed run has no freeze to code against.
+(`stop_gate: resume`). A resumed step that needs a coder round (a pre-push hook rejection, a
+blocking review) runs one (6.0.0): the frozen maps are the `hasher:resume` maps, the freeze tree
+is `refs/fleet/<task>/freeze`, and the round count comes from the run-state. Without that freeze
+ref it stops with `needs_human`.
 
-With no run-state but build commits on the branch past `plan_commit` (a branch from 2.0.x, or a
+With no run-state but build commits on the branch past `plan_base` (a branch from 2.0.x, or a
 run that stopped before its first state write), the build stops with "approved but unresumable:
 branch has build commits without run-state; push manually or delete branch". It never re-runs the
 writers on a committed fleet branch. A run-state of another plan is ignored (and logged) when HEAD
-is the plan commit, for example after a re-plan.
+is `plan_base`, for example after a re-plan.
 
 - **Ledger:** for each `ledger` source, one `## Fleet build` section (tldr, plan path, PR URL,
   hidden `fleet:<task id>` marker) is appended to the task's body page (`body_slug`) in
@@ -593,10 +741,8 @@ is the plan commit, for example after a re-plan.
   tool-restricted agent type that can call `mcp__yaadgaar__*` exists, so the step uses the default
   agent. A ref that is not a task number is never sent. A failed entry carries `section_text` to
   add by hand.
-- **Plan link:** `https://github.com/<o>/<r>/blob/<branch>/<plan>`, or
-  `https://codeberg.org/<o>/<r>/src/branch/<branch>/<plan>` when the origin's configured URL names
-  Codeberg (`remote_host` from the workspace step).
-- **Comments:** one comment on each `jira`, `github` and `codeberg` source: tldr, plan link, PR
+- **Plan:** no link since 6.0.0; the plan doc is not on the pushed branch.
+- **Comments:** one comment on each `jira`, `github` and `codeberg` source: tldr, PR
   link and the marker `fleet:<task id>` (an HTML comment on GitHub and Codeberg, a plain last line
   on Jira). A read-only step lists the existing comments first; a source that already has the
   marker is skipped. The script refuses, in code, any comment with a line that starts with `digger`
@@ -883,6 +1029,16 @@ and the approved diff right before the commit. Touching the surface and anything
 with "hook changes must be a separate PR (Max's rule)"; touching only the surface stops with "hook
 change needs Max's confirmation". Both are `needs_human`, `stop_gate: "hooks"`, in every confirm
 mode. A surface that cannot be computed refuses.
+
+**Rulesets (6.0.0).** The read-only program `ruleset_surface.py` adds what org and repo rulesets
+run: a required workflow (a `workflows` rule) hosted in this repo, read from
+`rules/branches/<default>` and, for an organization owner, from `orgs/<owner>/rulesets`; the
+`uses:` references into this repo of a required workflow hosted elsewhere; and, computed locally
+every run, each directory a tracked `.github/workflows/*` file names by self-reference
+(`uses: ./<dir>`, `uses: <owner>/<repo>/<dir>@...`). Org rulesets need the `admin:org` scope: a
+404, or a 403 / 5xx without that scope, is reported (a gate warning and an `org-rulesets` line in
+`gates_not_run`, which the PR body states) and the rest still applies; a 403 / 5xx with the scope
+refuses. The plan-time result is sealed in the plan ref and checked again on the approved diff.
 
 **Resource caps (3.1.0).** Every embedded Python program sets `RLIMIT_AS` 1 GiB and `RLIMIT_CPU`
 300 s before anything else, and tunes git's children to stay inside them; the repo's own hooks
@@ -1296,7 +1452,6 @@ change that a judge makes and reverts within its own run.
   that.
 - The pr-opener role pushes the branch too. The script pushes first, so the role's push is a no-op.
 - Each push attempt follows an approve, so a hook rejection costs a full coder and judge round.
-- The plan link in comments assumes a GitHub origin (`https://github.com/<owner>/<repo>/blob/...`).
 - Interpreter startup hooks inside an in-worktree virtualenv are not detected. The walk skips
   `.venv`, `venv`, `.tox` and `.nox`, because an editable install writes a `.pth` file there and
   would cause a false mismatch. So a coder can drop a `.pth` or `sitecustomize.py` into such a venv
@@ -1368,7 +1523,14 @@ Build mode, `status: "ok"`:
   "comment_text": null,
   "gate_log": ["..."],
   "memory_notes": [{ "role": "fleet-coder", "notes": ["..."] }],
-  "follow_ups": [{ "summary": "...", "path": "src/x.py" }]
+  "follow_ups": [{ "summary": "...", "path": "src/x.py" }],
+  "ci": {
+    "verdict": "green",
+    "checks": [{ "name": "test", "state": "SUCCESS", "url": "..." }],
+    "fix_rounds": 0,
+    "merged": false,
+    "merge_sha": null
+  }
 }
 ```
 

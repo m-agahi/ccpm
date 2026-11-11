@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { SOURCE, ARGS, PC, happy, run, runOne } from "./harness.mjs";
+import { SOURCE, ARGS, PC, PB, happy, run, runOne } from "./harness.mjs";
 
 const VERSION = /^const FLEET_VERSION = "(\d+\.\d+\.\d+)";$/m.exec(SOURCE)[1];
 // The version also reaches the sealed plan ref and run-state, so the chunked
@@ -32,7 +32,7 @@ function digest(out) {
 // confirm "auto": the gates pass and the same run builds (build_task_run.test.mjs autoHappy)
 function autoHappy() {
   return Object.assign(happy(), {
-    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "role:fleet-intent-judge": {
       status: "ok",
       reason: "matches the task",
@@ -40,7 +40,7 @@ function autoHappy() {
       deviations: [{ item: "adds f()", allowed_by: "task body: 'add f'", source_ref: "L42", fails_closed: true, verdict: "approve", reason: "asked for" }],
       coverage: { covered: true, missing: [] },
     },
-    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" },
   });
 }
@@ -72,11 +72,27 @@ const SCENARIOS = {
   },
 };
 
+// 6.0.0 stream 1: nested program slots require digest and keys (schemas of preflight, workspace,
+// branch-scan, stage-plan, format-plan, verify-plan-commit, verify-plan), gh_identity's tried
+// diagnostics (workspace schema), intake's relaunch rule (prompt), infra:ruleset-surface:plan (new call)
+// 6.0.0 stream 2: infra:policy (new build call)
+// 6.0.0 stream 2: plan doc off the branch (stage-plan, commit-plan, verify-plan-commit, verify-plan prompts; pr-opener tldr; branch-scan head)
+// 6.0.0 stream 2 (security review): roles read the plan at plan_blob; verify no longer writes a copy
+// 6.0.0 stream 2: infra:pr-convention:plan (new plan call); convention subjects; pr-opener title and body_convention; planner component
+// 6.0.0 stream 2 (security review): plan_blob is the blob id; verify-plan reads replace_refs
+// 6.0.0 stream 2 (security review): plan_hash prints args and a digest
+// 6.0.0 stream 3 (2044): infra:pr-stats and infra:state:shipped (new build calls)
+// 6.0.0 stream 3 (2045): infra:pr-ready (new build call)
+// 6.0.0 stream 3 (2034): infra:orch-scan and infra:ci-watch:w1 (new build calls)
+// 6.0.0 security review (2034): ci_watch failed[].verified in the schema
+// 6.0.0 (2034, advisor): the orchestrator scan before ready; ci in the run-state
+// 6.0.0 security review (S6): the CI write-back line has fixed fields only
+// 6.0.0 review (REQUEST CHANGES): ci_watch prints no log text; orch_scan args; pr_state modes; the CI write-back (:ci) and infra:pr-stats:final (new build calls)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 75, sha256: "461038a196d1acbe0013a9b3d23f1f0d8db773f6f11b65ebf29a272338d36f9d" },
-  "confirm auto (gates, then build in one run)": { calls: 77, sha256: "dae8844d0a55eefe8f2347f1aa29be69ba55bc66bb1c50a6cf612b74a0c3af97" },
-  "short path (one test writer)": { calls: 74, sha256: "049e38f72a01b613bf0272b9c0f15a1904a4fafbbd8dbc477cff8a1c62d30424" },
-  "probe": { calls: 2, sha256: "3b7278ac528eb76e1f4c0472117bcfa83982538b6c6daa4bb0bdd96710fa6581" },
+  "plan then build (confirm ask)": { calls: 86, sha256: "5e14809340d5348b5b96860dae092de1b319a2241394a0808291b65a5bdd3a6e" },
+  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "74504b98953eb6d335425d04dfc74eb97a9e27c8c87ccbbd798200b00183f3a8" },
+  "short path (one test writer)": { calls: 85, sha256: "9921b9762ba0b151995a30157d00aa0e5fad871cafb6189de68c1675aff88427" },
+  "probe": { calls: 2, sha256: "012d024fefbefe057a047d8b6822b07ea3152de9e7d322be0e6cf5d6273fc736" },
 };
 
 for (const [name, fn] of Object.entries(SCENARIOS)) {

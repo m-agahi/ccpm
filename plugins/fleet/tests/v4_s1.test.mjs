@@ -18,6 +18,7 @@ import {
   ARGS,
   BRIEF,
   PC,
+  PB,
   PSHA,
   happy,
   run,
@@ -61,7 +62,10 @@ test("4.0.0 1993 AC-2 (4.0.1): every program ships as scripts/<name>.py and the 
   // S5 adds test_db_decl, db_sweep, db_up, db_down (1981); 5.0.3 adds plan_dsn (2010);
   // 5.0.5 adds ignored_diff (2018); 5.0.6 adds build_dir (2019);
   // 5.0.7 replaces ignored_diff with hash_diff (2020); 5.0.8 adds gh_identity (2030); 5.0.9 session_project (2032)
-  assert.equal(PROGRAMS.length, 33);
+  // 6.0.0: + ruleset_surface
+  // 6.0.0 (ledger 2033, 2042): + policy, pr_convention
+  // 6.0.0 (ledgers 2044, 2045, 2034): + pr_body_block, pr_state, orch_scan, ci_watch
+  assert.equal(PROGRAMS.length, 40);
   const files = readdirSync(SCRIPTS_SRC).filter((f) => f.endsWith(".py")).sort();
   assert.deepEqual(files, PROGRAMS.map(([n]) => n + ".py").sort(), "no extra and no missing file");
   for (const [name, sha] of PROGRAMS) {
@@ -119,7 +123,7 @@ test("4.0.0 1993: gen.mjs --check passes on the shipped files and fails on a cha
 test("4.0.0 1993: FLEET_VERSION is a semver string and the scripts_dir shape names it", () => {
   const m = /^const FLEET_VERSION = "(\d+\.\d+\.\d+)";$/m.exec(SOURCE);
   assert.ok(m, "FLEET_VERSION constant");
-  assert.equal(m[1], "5.0.10");
+  assert.equal(m[1], "6.0.0");
   assert.match(SCRIPTS_DIR, new RegExp("/fleet/" + m[1].replace(/\./g, "\\.") + "/scripts$"));
 });
 
@@ -146,8 +150,12 @@ test("4.0.0 1993: a shipped program prints its own name and file sha256; a paste
     writeFileSync(join(wt, "a.md"), "a\n");
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "i");
+    // 6.0.0 (ledger 2042): plan_files lists a given commit against its parent
+    writeFileSync(join(wt, "b.md"), "b\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "p");
     const f = join(SCRIPTS_SRC, "plan_files.py");
-    const r = spawnSync("python3", ["-I", f, wt], { encoding: "utf8", cwd: tmpdir() });
+    const r = spawnSync("python3", ["-I", f, wt, "HEAD"], { encoding: "utf8", cwd: tmpdir() });
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.deepEqual(o.program, { name: "plan_files", sha256: sha256(readFileSync(f, "utf8")) });
@@ -155,13 +163,17 @@ test("4.0.0 1993: a shipped program prints its own name and file sha256; a paste
     const d = Object.assign({}, o);
     delete d.digest;
     assert.equal(o.digest, sha256(canon(d)));
-    const pasted = spawnSync("python3", ["-I", "-c", readFileSync(f, "utf8"), wt], { encoding: "utf8", cwd: tmpdir() });
+    const pasted = spawnSync("python3", ["-I", "-c", readFileSync(f, "utf8"), wt, "HEAD"], { encoding: "utf8", cwd: tmpdir() });
     assert.equal(pasted.status, 0, pasted.stderr);
     assert.deepEqual(JSON.parse(pasted.stdout).program, { name: null, sha256: null });
     // plan_hash prints JSON now: the sha256 and its program
     const ph = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "plan_hash.py"), wt, "HEAD", "a.md"], { encoding: "utf8", cwd: tmpdir() });
     assert.equal(ph.status, 0, ph.stderr);
-    assert.deepEqual(JSON.parse(ph.stdout), { plan_sha256: sha256("a\n"), program: { name: "plan_hash", sha256: programSha("plan_hash") } });
+    const pho = JSON.parse(ph.stdout);
+    assert.deepEqual(pho, { plan_sha256: sha256("a\n"), blob: sh(wt, "git", "rev-parse", "HEAD:a.md").trim(), args: [wt, "HEAD", "a.md"], program: { name: "plan_hash", sha256: programSha("plan_hash") }, digest: pho.digest });
+    const phd = Object.assign({}, pho);
+    delete phd.digest;
+    assert.equal(pho.digest, sha256(canon(phd)));
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }
@@ -294,7 +306,7 @@ function callersScript() {
 function precommitScript() {
   const s = happy();
   Object.assign(s, {
-    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "role:fleet-intent-judge": {
       status: "ok",
       reason: "matches the task",
@@ -302,7 +314,7 @@ function precommitScript() {
       deviations: [{ item: "adds f()", allowed_by: "task body: 'add f'", source_ref: "L42", fails_closed: true, verdict: "approve", reason: "asked for" }],
       coverage: { covered: true, missing: [] },
     },
-    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" },
   });
   s["role:scope-and-plan"] = Object.assign({}, s["role:scope-and-plan"], { repo_obligations: [{ id: "fmt", kind: "other", instruction: "format", check_cmd: "pre-commit run prettier --all-files" }] });
@@ -315,23 +327,23 @@ function precommitScript() {
 test("4.0.0 1993 AC-4: a scripts_dir outside the plugin cache halts at the first agent with stop_gate contract", async () => {
   const bad = [
     ["/tmp/x", ["/tmp/x"]],
-    ["fleet/5.0.10/scripts", ["fleet/5.0.10/scripts"]],
+    ["fleet/6.0.0/scripts", ["fleet/6.0.0/scripts"]],
     ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts", ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts"]],
-    ["/home/u/../x/fleet/5.0.10/scripts", ["/home/u/../x/fleet/5.0.10/scripts"]],
-    ["/home/u//fleet/5.0.10/scripts", ["/home/u//fleet/5.0.10/scripts"]],
-    ["/home/u/a b/fleet/5.0.10/scripts", ["/home/u/a b/fleet/5.0.10/scripts"]],
+    ["/home/u/../x/fleet/6.0.0/scripts", ["/home/u/../x/fleet/6.0.0/scripts"]],
+    ["/home/u//fleet/6.0.0/scripts", ["/home/u//fleet/6.0.0/scripts"]],
+    ["/home/u/a b/fleet/6.0.0/scripts", ["/home/u/a b/fleet/6.0.0/scripts"]],
     // security review: exactly $HOME/.claude/plugins/cache/<marketplace>/fleet/<version>/scripts
-    ["/home/u/x/fleet/5.0.10/scripts", ["/home/u/x/fleet/5.0.10/scripts"]],
-    ["/home/v/.claude/plugins/cache/m/fleet/5.0.10/scripts", ["/home/v/.claude/plugins/cache/m/fleet/5.0.10/scripts"]],
-    ["/home/u/.claude/plugins/cache/a/b/fleet/5.0.10/scripts", ["/home/u/.claude/plugins/cache/a/b/fleet/5.0.10/scripts"]],
-    ["/home/u/.claude/plugins/cache/../fleet/5.0.10/scripts", ["/home/u/.claude/plugins/cache/../fleet/5.0.10/scripts"]],
-    ["/home/u/.claude/plugins/cache/.x/fleet/5.0.10/scripts", ["/home/u/.claude/plugins/cache/.x/fleet/5.0.10/scripts"]],
+    ["/home/u/x/fleet/6.0.0/scripts", ["/home/u/x/fleet/6.0.0/scripts"]],
+    ["/home/v/.claude/plugins/cache/m/fleet/6.0.0/scripts", ["/home/v/.claude/plugins/cache/m/fleet/6.0.0/scripts"]],
+    ["/home/u/.claude/plugins/cache/a/b/fleet/6.0.0/scripts", ["/home/u/.claude/plugins/cache/a/b/fleet/6.0.0/scripts"]],
+    ["/home/u/.claude/plugins/cache/../fleet/6.0.0/scripts", ["/home/u/.claude/plugins/cache/../fleet/6.0.0/scripts"]],
+    ["/home/u/.claude/plugins/cache/.x/fleet/6.0.0/scripts", ["/home/u/.claude/plugins/cache/.x/fleet/6.0.0/scripts"]],
     // two hits: never guess
-    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/fleet/5.0.10/scripts"]],
+    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/fleet/6.0.0/scripts"]],
     // no hit
     [null, []],
     // the directory used is not the hit
-    ["/home/v/.claude/plugins/cache/n/fleet/5.0.10/scripts", [SCRIPTS_DIR]],
+    ["/home/v/.claude/plugins/cache/n/fleet/6.0.0/scripts", [SCRIPTS_DIR]],
   ];
   for (const [dir, hits] of bad) {
     const s = happy();
@@ -352,7 +364,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   assert.equal(second.result.status, "awaiting_confirmation", second.result.reason);
   for (const o of [first, second]) {
     assert.equal(o.labels[0], "preflight");
-    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/fleet/5.0.10/scripts;'));
+    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/fleet/6.0.0/scripts;'));
     assert.ok(o.calls[0].prompt.includes("sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py"));
   }
   const ref = s.__store[PC];
@@ -361,7 +373,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   // build mode resolves it again in its own first agent
   const b = await run(happy(), ARGS);
   assert.equal(b.build.labels[0], "preflight");
-  assert.match(b.build.calls[0].prompt, /fleet\/5\.0\.10\/scripts/);
+  assert.match(b.build.calls[0].prompt, /fleet\/6\.0\.0\/scripts/);
 });
 
 test("4.0.0 1993 AC-4: a path_check run from another directory (wrong self-hash) halts at preflight", async () => {
@@ -449,7 +461,7 @@ test("4.0.0 1993: a verify result that names other files, another plan hash or a
     [(r) => (r.plan_files.files = ["docs/plans/x.md", "src/evil.py"]), /not exactly docs\/plans\/x\.md/],
     [(r) => (r.plan_hash.plan_sha256 = "e".repeat(64)), /the committed plan hashes/],
     [(r) => (r.plan_ref.refs = []), /differs from the sealed ref/],
-    [(r) => (r.plan_files.head = "9".repeat(40)), /head/],
+    [(r) => (r.plan_files.head = "9".repeat(40)), /with HEAD 9{40}/],
     [(r) => (r.plan_ref.refs[0].tag_sha = "8".repeat(40)), /is not the one written/],
   ];
   for (const [mut, re] of cases) {
@@ -522,7 +534,14 @@ test("4.0.0 1993 AC-6: one flipped char in chunk 2 exits 3 with bad_chunks [2] a
     const c2 = readFileSync(join(dir, "2.b64"), "utf8");
     writeFileSync(join(dir, "2.b64"), (c2[0] === "A" ? "B" : "A") + c2.slice(1));
     const prog = join(SCRIPTS_SRC, "plan_ref_write.py");
-    const argv = ["-I", prog, wt, "l42", dir, String(shas.length), sha256(msg), JSON.stringify(shas)];
+    // 6.0.0 (ledger 2042): the plan doc in the worktree, sealed on HEAD (plan_base)
+    const head = g("rev-parse", "HEAD").trim();
+    const doc = () => {
+      mkdirSync(join(wt, "docs", "plans"), { recursive: true });
+      writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan\n");
+    };
+    doc();
+    const argv = ["-I", prog, wt, "l42", head, "docs/plans/x.md", dir, String(shas.length), sha256(msg), JSON.stringify(shas)];
     const bad = spawnSync("python3", argv, { encoding: "utf8", env, cwd: home });
     assert.equal(bad.status, 3, bad.stderr);
     assert.deepEqual(JSON.parse(bad.stdout), { bad_chunks: [2] });
@@ -531,8 +550,8 @@ test("4.0.0 1993 AC-6: one flipped char in chunk 2 exits 3 with bad_chunks [2] a
     const ok = spawnSync("python3", argv, { encoding: "utf8", env, cwd: home });
     assert.equal(ok.status, 0, ok.stderr);
     const o = JSON.parse(ok.stdout);
-    const head = g("rev-parse", "HEAD").trim();
-    assert.equal(o.head, head);
+    assert.equal(o.plan_base, head);
+    assert.equal(g("rev-parse", o.plan_commit + "^").trim(), head);
     assert.equal(g("rev-parse", "refs/fleet/l42/plan").trim(), o.tag_sha);
     assert.deepEqual(o.program, { name: "plan_ref_write", sha256: programSha("plan_ref_write") });
     const d = Object.assign({}, o);
@@ -540,13 +559,14 @@ test("4.0.0 1993 AC-6: one flipped char in chunk 2 exits 3 with bad_chunks [2] a
     assert.equal(o.digest, sha256(canon(d)));
     const raw = g("cat-file", "tag", o.tag_sha);
     assert.equal(raw.slice(raw.indexOf("\n\n") + 2), msg);
-    assert.equal(raw.split("\n")[0], "object " + head);
+    assert.equal(raw.split("\n")[0], "object " + o.plan_commit);
     assert.ok(!existsSync(dir), "the chunk dir is removed after a success");
     // a second, different ref keeps the first as plan-1
     const msg2 = msg.replace("l42", "l42 ");
     const b2 = Buffer.from(msg2, "utf8").toString("base64");
     const shas2 = writeChunks(dir, b2, 4000);
-    const ok2 = spawnSync("python3", ["-I", prog, wt, "l42", dir, String(shas2.length), sha256(msg2), JSON.stringify(shas2)], { encoding: "utf8", env, cwd: home });
+    doc();
+    const ok2 = spawnSync("python3", ["-I", prog, wt, "l42", head, "docs/plans/x.md", dir, String(shas2.length), sha256(msg2), JSON.stringify(shas2)], { encoding: "utf8", env, cwd: home });
     assert.equal(ok2.status, 0, ok2.stderr);
     assert.equal(g("rev-parse", "refs/fleet/l42/plan-1").trim(), o.tag_sha);
   } finally {
@@ -560,20 +580,21 @@ test("4.0.0 1993: the chunk writer refuses a chunk dir outside the scratch dir, 
     const msg = '{"a":1}\n';
     const b64 = Buffer.from(msg).toString("base64");
     const prog = join(SCRIPTS_SRC, "plan_ref_write.py");
+    const B = [g("rev-parse", "HEAD").trim(), "docs/plans/x.md"];
     const outside = join(home, "elsewhere");
     let shas = writeChunks(outside, b64, 4000);
-    let r = spawnSync("python3", ["-I", prog, wt, "l42", outside, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    let r = spawnSync("python3", ["-I", prog, wt, "l42", ...B, outside, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /not under/);
     const dir = join(home, "scratch", "c");
     shas = writeChunks(dir, b64, 4000);
-    r = spawnSync("python3", ["-I", prog, wt, "l42", dir, "1", sha256("other"), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    r = spawnSync("python3", ["-I", prog, wt, "l42", ...B, dir, "1", sha256("other"), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
     assert.notEqual(r.status, 3);
     assert.match(r.stderr, /decoded message hashes/);
-    r = spawnSync("python3", ["-I", prog, wt, "l42", dir, "2", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    r = spawnSync("python3", ["-I", prog, wt, "l42", ...B, dir, "2", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
-    r = spawnSync("python3", ["-I", prog, wt, "../x", dir, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    r = spawnSync("python3", ["-I", prog, wt, "../x", ...B, dir, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
     assert.equal(g("for-each-ref", "refs/fleet/"), "");
   } finally {
@@ -652,7 +673,7 @@ test("4.0.0 security 1: scripts_dir must be its own realpath and no symlink; the
 test("4.0.0 security 1: the probe command, run for real, reports a symlinked scripts dir and the program hashes", { skip: !HAVE_PY }, async () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-probe-"));
   try {
-    const real = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.10", "scripts");
+    const real = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.0.0", "scripts");
     mkdirSync(real, { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(real, n + ".py"));
     const cmd = await PREFLIGHT_PROBE();
@@ -666,9 +687,9 @@ test("4.0.0 security 1: the probe command, run for real, reports a symlinked scr
     for (const [n] of PROGRAMS) assert.ok(lines.includes(programSha(n) + "  " + real + "/" + n + ".py"), n);
     // the version dir replaced by a symlink to a copy elsewhere
     const other = join(home, "other");
-    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.10"), other, { recursive: true });
-    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.10"), { recursive: true });
-    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.10"));
+    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.0.0"), other, { recursive: true });
+    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.0.0"), { recursive: true });
+    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.0.0"));
     lines = run1();
     assert.ok(lines.includes("real=" + join(other, "scripts")), lines.join("\n"));
   } finally {
@@ -687,7 +708,7 @@ test("4.0.0 security 2: every fingerprint hashes the shipped programs; a change 
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "needs_human", label);
     assert.equal(out.result.stop_gate, "hash", label);
-    assert.equal(out.result.reason, "hasher " + label + ": the shipped fleet programs were changed: the 33 program(s) in " + SCRIPTS_DIR + " do not hash to this fleet's table of 33", label);
+    assert.equal(out.result.reason, "hasher " + label + ": the shipped fleet programs were changed: the 40 program(s) in " + SCRIPTS_DIR + " do not hash to this fleet's table of 40", label);
   }
   // every program must be present and match; an unknown extra or the overflow sentinel is refused
   const missingOne = Object.assign({}, all);
