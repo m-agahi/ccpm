@@ -3080,6 +3080,11 @@ async function ghEnsure(slugs, label, phaseName, soft) {
 function ghFor(slug) {
   return (state.gh && state.gh.repos && state.gh.repos[slug]) || null;
 }
+// a definite no-push: every installed candidate answered false (none unknown)
+function ghNoPush(slug) {
+  const t = ghFor(slug) ? ghFor(slug).tried.filter((x) => x.installed) : [];
+  return t.length > 0 && t.every((x) => x.push === false);
+}
 function noPushText(slug) {
   return "no GitHub command with push access to " + slug + " (" + ghTried(slug) + "); authorise gh or gh-personal for it, then re-run the build with the same plan_ref";
 }
@@ -6000,7 +6005,7 @@ async function planMode(input, date) {
   );
 
   const ws = await workspaceStep(brief.repo, lay);
-  if (ghFor(ws.remoteSlug) && !ghFor(ws.remoteSlug).push) gate("warning: " + noPushText(ws.remoteSlug) + " (the build stops at its start until one has)");
+  if (ghNoPush(ws.remoteSlug)) gate("warning: " + noPushText(ws.remoteSlug) + " (the build stops at its start until one has)");
   await pushProbe(lay, ws);
   const project = input.project || ws.remoteSlug;
   const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
@@ -6236,7 +6241,9 @@ async function buildMode(input, date) {
   await preflightStep(repo);
   const ws = await workspaceStep(repo, lay, { frozenResume: typeof input.freeze_digest === "string" });
   // review of #56 (N6): a checked repo with no push stops before any build step
-  if (ghFor(ws.remoteSlug) && !ghFor(ws.remoteSlug).push) halt("needs_human", "build start: " + noPushText(ws.remoteSlug), "role");
+  // delta D1: only a definite no-push stops; an unknown answer goes on
+  if (ghNoPush(ws.remoteSlug)) halt("needs_human", "build start: " + noPushText(ws.remoteSlug), "role");
+  if (ghFor(ws.remoteSlug) && !ghFor(ws.remoteSlug).push) gate("build start: push access to " + ws.remoteSlug + " not known (" + ghTried(ws.remoteSlug) + "); the PR step checks again");
   return buildFromRef(input, date, tiny, lay, ws, { rerunGates: input.confirm === "auto", intent: null, agentsBase: 0 });
 }
 

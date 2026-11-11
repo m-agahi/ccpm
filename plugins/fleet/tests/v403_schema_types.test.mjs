@@ -388,6 +388,7 @@ const READS = {
   pushProbe: { "r.args array": "push_probe:args", "r.args.length number-literal": PARSED_LOCAL },
   // 5.0.8 (ledger 2030)
   ghPick: { "x.push boolean": ["prog:gh_identity:repos.*.tried[].push", 2], "t.push boolean": "prog:gh_identity:repos.*.tried[].push" },
+  ghNoPush: { "x.push boolean": "prog:gh_identity:repos.*.tried[].push" },
   ghCheckProblem: {
     "gc object": "parsed: a gh_identity relay (the workspace gh_check or a gh-identity step's result), typed by PROGRAM_OUT",
     "gc.repos object": "prog:gh_identity:repos",

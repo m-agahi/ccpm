@@ -40,8 +40,10 @@ uses the command that program picked for the repo.
   GitHub-hosted origin, never stops the run: it logs a gate line and leaves `gh_cmd` null. When
   the program's origin differs from `remote_slug`, a gate line names both and the probe of the
   program's origin is used.
-- A build whose workspace check shows no push for its repo stops at its start (`role`), before any
-  build step. Plan mode only logs a warning.
+- A build whose workspace check shows a definite no-push for its repo (every installed candidate
+  answered false, none unknown) stops at its start (`role`), before any build step. Plan mode only
+  logs a warning. An unknown answer (null, a timeout) logs a gate line and goes on; the PR step
+  checks again.
 - `gh_cmd` goes to every step that calls GitHub: the push step's `remote_head` read, the
   `fleet-pr-opener` and `pr-review` roles (input `gh_cmd`, used as `<gh>`), intake of a GitHub URL
   (it runs the program on `["-", <o>/<r>]`), and the comment write-back (the list step runs the

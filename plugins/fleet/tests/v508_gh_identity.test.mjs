@@ -427,3 +427,38 @@ test("5.0.8 2030: no prompt or role holds the login==owner rule or picks a gh co
   assert.deepEqual(bare, []);
   for (const [f, t] of roles) assert.deepEqual(t.match(/`gh (api|pr|issue|repo|auth)\b[^`]*`/g) || [], [], f);
 });
+
+// ---------------------------------------------------------------- delta review D1: definite no-push only
+
+const UNKNOWN_PUSH = {
+  "gh=null, gh-personal=null": [{ cmd: "gh", installed: true, push: null }, { cmd: "gh-personal", installed: true, push: null }],
+  "gh=false, gh-personal=null": [{ cmd: "gh", installed: true, push: false }, { cmd: "gh-personal", installed: true, push: null }],
+  "gh=null, gh-personal not installed": [{ cmd: "gh", installed: true, push: null }, { cmd: "gh-personal", installed: false, push: null }],
+};
+
+test("5.0.8 delta D1: a probe that was null or transient never stops the build at its start; the PR step stays the backstop", async () => {
+  for (const [name, tried] of Object.entries(UNKNOWN_PUSH)) {
+    const s = happy();
+    s.__gh = { "o/r": tried };
+    const out = await run(s, ARGS);
+    assert.equal(out.planResult.status, "awaiting_confirmation", name);
+    assert.ok(!out.plan.logs.some((l) => /^warning: no GitHub command with push access/.test(l)), name + ": no definite warning");
+    assert.ok(out.build.logs.some((l) => /^build start: push access to o\/r not known \(/.test(l)), name + ": " + out.build.logs.join("\n"));
+    assert.ok(out.build.labels.includes("infra:verify-plan"), name + ": the build went on");
+    assert.equal(out.result.stop_gate, "role", name);
+    assert.match(out.result.reason, /^PR step: no GitHub command with push access to o\/r/, name);
+  }
+});
+
+test("5.0.8 delta D1: a definite no-push (every installed candidate answered false) stops at build start; plan mode warns", async () => {
+  for (const tried of [TRIED.noPush, [{ cmd: "gh", installed: true, push: false }, { cmd: "gh-personal", installed: false, push: null }]]) {
+    const s = happy();
+    s.__gh = { "o/r": tried };
+    const plan = await runOne(s, ARGS);
+    assert.ok(plan.logs.some((l) => /^warning: no GitHub command with push access to o\/r/.test(l)));
+    const b = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+    assert.equal(b.result.stop_gate, "role", JSON.stringify(tried));
+    assert.match(b.result.reason, /^build start: no GitHub command with push access to o\/r/);
+    assert.deepEqual(b.labels.filter((l) => !/^infra:(build-clean|db-down)/.test(l)), ["preflight", "workspace"]);
+  }
+});

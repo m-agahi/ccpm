@@ -52,8 +52,8 @@ key, a GitHub or Codeberg issue or PR URL, a plan path, or free text.
   Only a GitHub-hosted origin is probed (github.com over https, or an ssh host that is or
   resolves through `ssh -G` to github.com). The workspace step runs it on the origin repo
   (`gh_check`, digest- and pick-checked by the script); an unusable check or a non-GitHub origin
-  leaves `gh_cmd` null with a gate line and never stops the run. A build whose repo has no
-  push-capable command stops at its start (`role`). A GitHub URL input and a comment
+  leaves `gh_cmd` null with a gate line and never stops the run. A build whose repo has a
+  definite no-push (every installed command answered false) stops at its start (`role`). A GitHub URL input and a comment
   on another repo get their own `infra:gh-identity:*` step. Every gh prompt and role (`push`,
   `fleet-pr-opener`, `pr-review`, intake, the comment steps) gets that command as `gh_cmd`. The PR
   step stops before any agent (`role`) when no command can push; the review stops (`review`) when
