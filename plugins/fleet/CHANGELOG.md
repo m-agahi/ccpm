@@ -63,6 +63,8 @@ and 3 add the items marked "pending"; stream 3 finalises this entry.
   "PR Title Convention" 18773609 via ..."), and its pass line names what was read. The list is
   sealed in `plan_facts.ruleset_surface`; the build checks the approved tree against it and
   calls the program only for a plan ref sealed before 6.0.0.
+- README: the PR-step re-probe, the shipped-run resume and the ruleset surface; the
+  `docs/build-task-run-notes.md` "6.0.0 notes" section holds the long comments.
 
 ### Pending (streams 2 and 3)
 

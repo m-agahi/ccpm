@@ -56,8 +56,10 @@ key, a GitHub or Codeberg issue or PR URL, a plan path, or free text.
   definite no-push (every installed command answered false) stops at its start (`role`). A GitHub URL input and a comment
   on another repo get their own `infra:gh-identity:*` step. Every gh prompt and role (`push`,
   `fleet-pr-opener`, `pr-review`, intake, the comment steps) gets that command as `gh_cmd`. The PR
-  step stops before any agent (`role`) when no command can push; the review stops (`review`) when
-  none can read. `gh_cmd` is in no seal and no digest: every run, a resume too, computes it again.
+  step stops before any agent (`role`) when no command can push. When the answer was unknown
+  (null, not a definite no), it probes once more first (`infra:gh-identity:pr`, 6.0.0) and stops
+  only on a definite no or a second unknown, with a text for each; an unknown answer carries
+  `exit_code` and a short stderr. The review stops (`review`) when none can read. `gh_cmd` is in no seal and no digest: every run, a resume too, computes it again.
 - For Jira input or write-back: the Atlassian MCP server. For GitHub write-back: a gh command with
   push access to the issue's repo (see above). For
   Codeberg write-back: `$CODEBERG_TOKEN`. A missing tool makes intake stop, or makes that comment
@@ -538,8 +540,10 @@ state's `plan_commit`, `ref_sha256` and `seal` match the plan ref, its target an
 `approved_sha`, `HEAD^{tree}` equals `code_tree`, the worktree is clean, and a fresh hasher run
 (`hasher:resume`) gives the same `maps_digest`. It logs `resuming at <step>` and runs no writer,
 coder or judge. Any failed check stops with `needs_human` "run-state mismatch: <which>"
-(`stop_gate: resume`). A resumed step that would need a coder round (a pre-push hook rejection, a
-blocking review) stops with `needs_human`: a resumed run has no freeze to code against.
+(`stop_gate: resume`). A resumed step that needs a coder round (a pre-push hook rejection, a
+blocking review) runs one (6.0.0): the frozen maps are the `hasher:resume` maps, the freeze tree
+is `refs/fleet/<task>/freeze`, and the round count comes from the run-state. Without that freeze
+ref it stops with `needs_human`.
 
 With no run-state but build commits on the branch past `plan_commit` (a branch from 2.0.x, or a
 run that stopped before its first state write), the build stops with "approved but unresumable:
@@ -883,6 +887,16 @@ and the approved diff right before the commit. Touching the surface and anything
 with "hook changes must be a separate PR (Max's rule)"; touching only the surface stops with "hook
 change needs Max's confirmation". Both are `needs_human`, `stop_gate: "hooks"`, in every confirm
 mode. A surface that cannot be computed refuses.
+
+**Rulesets (6.0.0).** The read-only program `ruleset_surface.py` adds what org and repo rulesets
+run: a required workflow (a `workflows` rule) hosted in this repo, read from
+`rules/branches/<default>` and, for an organization owner, from `orgs/<owner>/rulesets`; the
+`uses:` references into this repo of a required workflow hosted elsewhere; and, computed locally
+every run, each directory a tracked `.github/workflows/*` file names by self-reference
+(`uses: ./<dir>`, `uses: <owner>/<repo>/<dir>@...`). Org rulesets need the `admin:org` scope: a
+404, or a 403 / 5xx without that scope, is reported (a gate warning and an `org-rulesets` line in
+`gates_not_run`, which the PR body states) and the rest still applies; a 403 / 5xx with the scope
+refuses. The plan-time result is sealed in the plan ref and checked again on the approved diff.
 
 **Resource caps (3.1.0).** Every embedded Python program sets `RLIMIT_AS` 1 GiB and `RLIMIT_CPU`
 300 s before anything else, and tunes git's children to stay inside them; the repo's own hooks
