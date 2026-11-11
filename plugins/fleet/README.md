@@ -281,6 +281,10 @@ answer is the truth. `args.project` is the ledger scope and is independent of `r
 `.yadgar` files and origin never decide the ledger. A yaadgaar source carries the `id` (URN) of the
 answer (`yadgar:task:<uuid>`), and `tried` must hold the `read_task` call that returned it; else it
 stops (`needs_human`), and so does an answer that names a project other than `args.project`.
+An answer that names no project (an empty or absent field: `read_task` names none for the client's
+own project) needs proof (5.0.9, ledger 2032): preflight runs `session_project.py` in the session's
+start directory, which derives the client's project by the client's own rule (`.yadgar/project-id`
+walking up, else origin). It must equal `args.project`; a different one or no proof stops.
 Intake lists every ledger call it made in `tried`. On a task-id input that stops, the script
 appends the ledgers tried, their projects and the error text intake reports for each call
 (unfiltered, labelled `error (as reported by intake agent):`) to the reason. It drops the agent-written reason or call when it
@@ -573,7 +577,9 @@ is the plan commit, for example after a re-plan.
   session's start project, and the URN names one task. No `args.project`, or a non-`yadgarhq/`
   one, writes nothing; a ref sealed before 3.1.3 (no id) writes nothing and says "re-run plan".
   The script refuses any task whose answer gives another id or number than the sealed one, names a
-  project other than `args.project`, or gives a version that is not an integer. `fleet:judge` cannot call `mcp__yaadgaar__edit_task`, `create_task` or
+  project other than `args.project`, or gives a version that is not an integer. An answer naming no
+  project needs the proven session project (5.0.9) = `args.project`: another is `failed`, no proof
+  is `unavailable`, and neither edits. `fleet:judge` cannot call `mcp__yaadgaar__edit_task`, `create_task` or
   `transition_task` (`disallowedTools`). Only then `infra:yaadgaar-writeback` (the default
   agent: `fleet:judge` may never write to a ledger) edits each task by id with the version read
   as `expect_version`, after it re-reads the task by id and checks its id and number (fail

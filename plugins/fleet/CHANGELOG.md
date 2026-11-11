@@ -1,5 +1,42 @@
 # Changelog
 
+## [5.0.9] - 2026-11-11
+
+Fleet 5.0.9 (ledger 2032): a yaadgaar task with no project in the answer is the session's own,
+and the script proves which project that is before it trusts it.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.9), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.9/scripts` dir.
+- A 5.0.8 plan ref and run-state stay valid: the session project is not sealed. Every run derives
+  it again in preflight. A 5.0.8 build that recorded its failed write-back returns that recorded
+  result on a re-run; add the entry's `section_text` to the task by hand.
+
+### Fixed
+
+- 2032: run wf_ed820f22-b98 (yadgarhq/iam-db, ledger yadgarhq/docs, 5.0.8) opened the PR and the
+  review approved it. The write-back to yaadgaar task #671 then failed with
+  `is in project "", not args.project yadgarhq/docs`. A `read_task` answer has no project field
+  for a task in the client's own project. The gateway's task view carries no project, and a
+  `find_tasks` index row names one only for another project. The read step relayed the absent
+  field as `""`, and the script read `""` as a named project.
+- An empty or absent project now names no project. That is not a match by itself: no yaadgaar
+  tool names the session's project (`list_projects` lists every reachable project and marks none).
+- New program `session_project.py` (no args). Preflight runs it in the directory the agent shell
+  starts in, which is the session's start directory. It derives the project by the yaadgaar
+  client's own rule (yadgar-client `project.rs`): the first `.yadgar/project-id` walking up
+  (an empty file falls through), else `remote.origin.url` of the repository root with `insteadOf`
+  applied, scheme and host stripped, trailing slashes and one `.git` stripped, lowercased. It
+  prints `{project, source, cwd, args, program, digest}`; the script accepts only a
+  digest-checked relay and logs the result.
+- One rule at every site (intake, the confirm-auto re-read, the write-back read): a named project
+  must equal the expected one, as before. No named project: the proven session project must equal
+  it. A different proven project is refused and both are named. No proof: intake and the re-read
+  stop (needs_human); the write-back entry is `unavailable` and nothing is edited.
+- The read, edit and intake prompts say that only a non-empty `project_id` or `project` field
+  names a project.
+
 ## [5.0.8] - 2026-11-11
 
 Fleet 5.0.8 (ledger 2030): one GitHub identity rule, decided by a program. Every gh call of a run

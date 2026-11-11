@@ -110,7 +110,8 @@ test("4.0.2 1997: every shipped program a prompt can run has a PROGRAM_SLOTS ent
   const roleRead = SOURCE.split("\n").filter((l) => l.includes('"sha256sum -- ') && l.includes("roleFilePath("));
   assert.deepEqual(roleRead, ['  return "sha256sum -- " + shQuote(roleFilePath(role));']);
   const builders = SOURCE.split("\n").filter((l) => l.includes('"sha256sum -- ') && !l.includes("roleFilePath("));
-  assert.equal(builders.length, 2, builders.join("\n"));
+  // 5.0.9 (ledger 2032): the preflight session_project command is the third
+  assert.equal(builders.length, 3, builders.join("\n"));
   for (const l of builders) assert.match(l, /emitProg\(/, l);
 });
 
