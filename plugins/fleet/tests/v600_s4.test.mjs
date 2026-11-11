@@ -686,7 +686,7 @@ test("ADR-1203 addendum: an update-branch head that is not a plain forge merge s
   assert.ok(!out.build.labels.some((l) => /^role:pr-review:v2|^infra:pr-merge:u1/.test(l)), out.build.labels.join(", "));
 });
 
-test("ADR-1203 addendum: review changes on the update-branch head stop at the review cap (round 2); no coder round, no merge", async () => {
+test("ADR-1203 addendum: review changes on the update-branch head stop (6.0.1: findings in the run result, re-plan advice); no coder round, no merge", async () => {
   const s = personal();
   s["infra:pr-merge"] = (p) => {
     const a = inputsOf(p).args;
@@ -705,7 +705,7 @@ test("ADR-1203 addendum: review changes on the update-branch head stop at the re
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "review");
-  assert.match(out.result.reason, /^review round 2 requested changes again: F1 src\/x\.py: the merge broke x/);
+  assert.match(out.result.reason, /^re-review after update-branch requested changes: F1 \(1 blocking, 0 nits\); findings are in the run result; re-plan on the new base or fix by hand$/);
   assert.ok(!out.build.labels.some((l) => /^role:fleet-coder:r2|^infra:pr-merge:u1/.test(l)), out.build.labels.join(", "));
   // delta review SHOULD 1: a stop after update-branch is a CI-tail outcome: one CI write-back, stop code review
   assert.equal(out.build.labels.filter((l) => l === "infra:ledger-writeback:ci").length, 1, out.build.labels.join(", "));

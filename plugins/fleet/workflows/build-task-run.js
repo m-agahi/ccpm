@@ -110,7 +110,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "6.0.0";
+const FLEET_VERSION = "6.0.1";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with
 const RELOAD_HINT =
@@ -613,7 +613,7 @@ const INFRA_SCHEMA = {
     is_ancestor: { type: "boolean" },
     commits_since: {
       type: "array",
-      items: { type: "object", properties: { sha: STR, subject: STR }, required: ["sha", "subject"] },
+      items: { type: "object", properties: { sha: STR, subject: STR, parents: { type: "array", items: STR } }, required: ["sha", "subject"] },
     },
     plan_touched: { type: "array", items: STR },
     changed_since: { type: "array", items: STR },
@@ -1526,7 +1526,7 @@ const PROGRAM_SHA256 = {
   "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
   "test_db_decl": "1ea403e5158e263247c8a20cf7e10d88c75fb74ebe963574f0052dd36465a7be",
   "tf_gate": "627c00cefbdf2da4a4144854dcbb4b543fb1e05335c1a4c7c74dc662ed35c02c",
-  "verify_since": "83539e7295982c15e38aa3c7fc6c222d45e3a65b7dc23899dd2f69abc987b345"
+  "verify_since": "91524ed3b1c39d49e2f5be4497d2e118b85e56482bd5e02256a17630405bb340"
 };
 // PROGRAM_SHA256_END
 function programTable() {
@@ -1777,7 +1777,7 @@ const PROGRAM_OUT = {
   verify_since: {
     head: STR,
     is_ancestor: BOOL,
-    commits_since: { type: "array", items: { type: "object", properties: { sha: STR, subject: STR } } },
+    commits_since: { type: "array", items: { type: "object", properties: { sha: STR, subject: STR, parents: STRS } } },
     plan_touched: STRS,
     changed_since: STRS,
     replace_refs: STRS,
@@ -5560,6 +5560,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       halt("needs_human", "plan changed since approval: branch HEAD " + v.head + " does not descend from plan_base " + planBase);
     if ((v.plan_touched || []).length)
       halt("needs_human", "plan changed since approval: a commit after " + planBase + " changed " + ref.plan_path + " (the plan doc never ships)");
+    // 6.0.1 D4: a forge update-branch merge (parents [a fleet commit or plan_base, a base commit]) stops, fail closed
+    const fleetShas = [planBase].concat((v.commits_since || []).filter((c) => subj.isFleet(String(c.subject || ""))).map((c) => c.sha));
+    if ((v.commits_since || []).some((c) => Array.isArray(c.parents) && c.parents.length === 2 && fleetShas.indexOf(c.parents[0]) >= 0 && fleetShas.indexOf(c.parents[1]) < 0))
+      halt("needs_human", "a merge commit (possibly update-branch) is on the branch; this plan ref cannot be resumed or re-built — finish the PR by hand or re-plan on the new base");
     for (const c of v.commits_since || [])
       if (!subj.isFleet(String(c.subject || "")))
         halt("needs_human", "plan changed since approval: branch moved by a non-fleet commit " + c.sha + " " + JSON.stringify(c.subject));
@@ -5836,6 +5840,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           tests_written: state.testsWritten || 0,
           iac_touched: iacTouched,
           ci: state.ci || null,
+          pr_updated: state.prUpdated === true,
+          update: state.update || null,
         },
         wb ? { write_back: wb.write_back, ledger_adapter: wb.ledger_adapter, ledger_reason: wb.ledger_reason, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
       ),
@@ -5927,13 +5933,16 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         }
         reviews++;
         const rv = await reviewStep(reviews, {
-          mainWt, lay, remoteSlug, pr, approvedSha, baseRef: planBase, criteria, obligations: planFacts.repo_obligations, hashedFiles,
+          mainWt, lay, remoteSlug, pr, approvedSha, baseRef: diffBase(), criteria, obligations: planFacts.repo_obligations, hashedFiles,
           allowedAdditions: planFacts.allowed_additions,
           // the previous review round's blocking findings
           priorFindings: state.review && Array.isArray(state.review.blocking) ? state.review.blocking : [],
         });
         state.review = { verdict: rv.verdict, blocking: rv.blocking, nits: rv.nits, rounds: reviews, sweep: rv.sweep, model: rv.model };
         if (rv.blocking.length) {
+          // 6.0.1: no coder round on the forge's merge; the findings stay in the run result (state.review)
+          if (state.update && state.update.head === approvedSha)
+            halt("needs_human", "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id || "-")).join(", ") + " (" + rv.blocking.length + " blocking, " + rv.nits.length + (rv.nits.length === 1 ? " nit" : " nits") + "); findings are in the run result; re-plan on the new base or fix by hand", "review");
           if (reviews >= MAX_REVIEWS)
             halt(
               "needs_human",
@@ -5979,6 +5988,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     return null;
   }
   let skipWb = false;
+  // 6.0.1 D2: the forge's update merge is diffed against the base tip it merged (the PR's net diff)
+  const diffBase = () => (state.update && state.update.head === approvedSha ? state.update.base : planBase);
   // ruling 7: after a confirmed merge the fleet removes its own worktree and local branch
   async function cleanupAfterMerge() {
     if (state.ci && state.ci.merged) {
@@ -6076,6 +6087,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           const u = await prState("infra:pr-update", ["update", g, remoteSlug, n, head], "update the fleet's own PR branch on the forge (never a local rebase or push)", "merge");
           if (u.error !== null || u.updated !== true || typeof u.head !== "string" || !/^[0-9a-f]{40}$/.test(u.head) || typeof u.base !== "string" || !/^[0-9a-f]{40}$/.test(u.base))
             halt("needs_human", "green, merge blocked: update-branch failed (" + (u.error || "no new head") + "): " + pr.pr_url, "merge");
+          state.update = { head: u.head, base: u.base };
           if (u.overlap.length) {
             if (head !== approvedSha) halt("needs_human", "green, merge blocked: update-branch moved a head the review has not seen: " + pr.pr_url, "merge");
             gate("infra:pr-update: " + pr.pr_url + " updated to " + u.head + "; the base change touches files of the PR (" + u.overlap.join(", ") + "): review the new head");
@@ -6103,7 +6115,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             return Object.assign({}, f, { log_excerpt: l && typeof l.excerpt === "string" ? l.excerpt.slice(-3000) : null });
           });
       }
-      const cl = !failed.length ? { status: "ok", checks: [] } : await callRole("fleet-ci-classifier", "role:fleet-ci-classifier:w" + watches, Object.assign({}, common, { checks: failed, worktree: mainWt, approved_sha: approvedSha, base_ref: planBase, repo: remoteSlug, pr_url: pr.pr_url }), "CI", JUDGE_AGENT);
+      const cl = !failed.length ? { status: "ok", checks: [] } : await callRole("fleet-ci-classifier", "role:fleet-ci-classifier:w" + watches, Object.assign({}, common, { checks: failed, worktree: mainWt, approved_sha: approvedSha, base_ref: diffBase(), repo: remoteSlug, pr_url: pr.pr_url }), "CI", JUDGE_AGENT);
       const cause = {};
       if (cl.status === "ok" && Array.isArray(cl.checks)) for (const c of cl.checks) if (c && failed.some((f) => f.name === c.name) && CI_CAUSES.indexOf(c.cause) >= 0 && !cause[c.name]) cause[c.name] = c.cause;
       if (failed.some((f) => !cause[f.name])) gate("warning: the CI classifier left a failing check without a usable cause: report only");
@@ -6111,7 +6123,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const byDiff = failed.filter((f) => cause[f.name] === "diff");
       // ADR-1199: on an IaC or orchestrator repo the fleet watches and reports, never pushes a fix
       if (byDiff.length && !iac && !o.orchestrator) {
-        if (head !== approvedSha) halt("needs_human", "CI red after update-branch, caused by the diff: " + rep + "; fix by hand: " + pr.pr_url, "ci");
+        // 6.0.1 D1: never a CI-fix coder round after any update-branch (an overlap update moves approvedSha too)
+        if (state.prUpdated) halt("needs_human", "CI red after update-branch, caused by the diff: " + rep + "; fix by hand: " + pr.pr_url, "ci");
         if ((state.rounds.ci || 0) >= MAX_CI_FIX) halt("needs_human", "CI still red after " + MAX_CI_FIX + " CI-fix rounds: " + rep, "ci");
         state.rounds.ci = (state.rounds.ci || 0) + 1;
         ci.fix_rounds = state.rounds.ci;
@@ -6153,6 +6166,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("update-branch: " + f.head + " is the forge's merge of " + approvedSha + " and " + f.base + " (tree " + fr.tree + "); reviewing it");
     approvedSha = f.head;
     shipTree = h.fingerprint.tree;
+    // 6.0.1 D3: the run-state digest follows the merge's maps; D2: the re-review diffs base tip..merge
+    shipDigest = mapsDigest(h.hashes);
     orch = null;
   }
   // 2034.5: one follow-up write-back per run on the final CI outcome; soft (never gates, never stops)
@@ -6274,6 +6289,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     state.testsWritten = resume.tests_written || 0;
     iacTouched = resume.iac_touched === true;
     if (resume.ci && typeof resume.ci === "object") state.ci = resume.ci;
+    // 6.0.1 D5: update-branch stays once per run across a resume; a corrupt update record stops (N1)
+    state.prUpdated = resume.pr_updated === true;
+    const ru = resume.update;
+    if (state.prUpdated && ru && typeof ru === "object") {
+      if (!/^[0-9a-f]{40}$/.test(String(ru.base)) || (ru.head === approvedSha && ru.base === approvedSha))
+        halt("needs_human", "run-state mismatch: update record " + JSON.stringify({ head: ru.head === undefined ? null : ru.head, base: ru.base === undefined ? null : ru.base }) + " at " + approvedSha + " (" + stateRef + ")", "resume");
+      if (/^[0-9a-f]{40}$/.test(String(ru.head))) state.update = { head: ru.head, base: ru.base };
+    }
     if (resume.pr_url || resume.pr_number != null) {
       pr = { pr_url: resume.pr_url, pr_number: resume.pr_number, created: resume.pr_created, template_used: resume.template_used };
       state.pr = pr;
