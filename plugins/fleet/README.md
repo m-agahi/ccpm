@@ -118,8 +118,12 @@ the parent is the sealed `plan_base` and HEAD is unchanged.
 
 The sealed ref holds `plan_base`. The build verifies that the branch HEAD is `plan_base` or descends
 from it through fleet commits only, and that no commit since touches `plan_path`. Roles never read
-a plan file a role could rewrite: each gets `plan_blob` (`<plan_commit>:<plan_path>`) and reads the
-sealed plan with `git show <plan_blob>`. Code diffs (judges,
+a plan file a role could rewrite: verify resolves the plan's own blob id (replacement objects off)
+after the plan bytes hash to the sealed `plan_sha256`, and each role gets it as `plan_blob` and reads
+it with `git --no-replace-objects cat-file blob <plan_blob>`. Every fleet program runs git with
+`GIT_NO_REPLACE_OBJECTS=1`. Verify (`verify_since.py` lists `replace_refs`) and every hasher run
+(its git map lists `refs/replace/*`) stop on any replacement ref, so no replacement object can
+stand in for the plan, the freeze tree or `plan_base`. Code diffs (judges,
 coder, caller check, hook surface, review) start at `plan_base`. A ref without `plan_base` (sealed
 by 5.x) stops with "delete branch ..., then re-run plan". The fleet-scan before each push stops when
 `plan_path` is in the PR diff or in a commit. The PR body carries the plan's TL;DR and acceptance

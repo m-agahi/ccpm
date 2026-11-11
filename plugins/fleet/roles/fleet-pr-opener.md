@@ -13,7 +13,7 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 
 - `repo` (`<owner>/<name>`), `worktree`, `branch`, `default_branch`, `approved_sha`, `scratch_dir`, `project`.
 - `gh_cmd`: the GitHub command the workflow checked for `repo` (it has push access there). Call it `<gh>` below. Use exactly it for every GitHub call; never choose another one yourself.
-- `plan_blob`: the plan doc as a sealed git object; read it only with `git -C <worktree> show <plan_blob>`. The plan doc is not in the worktree: never write it there.
+- `plan_blob`: the plan doc's git blob id; read it only with `git --no-replace-objects -C <worktree> cat-file blob <plan_blob>`. The plan doc is not in the worktree: never write it there.
 - `plan_path`, `tldr` (the plan's TL;DR), `criteria`, `suite_result` (from the code judge).
 - `gates_not_run` (optional): `[{gate, reason}]` — quality gates that did not run for this change. In this release it always lists at least `held_out`, `coverage`, `mutation` and `security_scan`.
 - `review_notes` (optional; absent → `[]`): `[{id, severity, category, file, line, summary, evidence}]` — review findings to show the human reader. See "Review notes" below.

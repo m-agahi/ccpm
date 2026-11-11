@@ -114,7 +114,8 @@ test("6.0.0 2039: nested program slots require the program's keys, args and dige
   for (const label of ["infra:branch-scan", "infra:verify-plan"])
     for (const k of ["decl", "error", "args", "digest", "program", "file_sha256"]) assert.ok(req(label, "test_db").indexOf(k) >= 0, label + " test_db requires " + k);
   // a program with no digest requires none; a multi-mode program requires what every mode prints
-  assert.deepEqual(req("infra:verify-plan", "plan_hash").slice().sort(), ["file_sha256", "plan_sha256", "program"]);
+  // 6.0.0 security review: + blob
+  assert.deepEqual(req("infra:verify-plan", "plan_hash").slice().sort(), ["blob", "file_sha256", "plan_sha256", "program"]);
   for (const k of ["remote_url_check", "gh_check"]) assert.ok(req("workspace", k).indexOf("digest") >= 0, k);
 });
 

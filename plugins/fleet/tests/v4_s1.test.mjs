@@ -168,7 +168,7 @@ test("4.0.0 1993: a shipped program prints its own name and file sha256; a paste
     // plan_hash prints JSON now: the sha256 and its program
     const ph = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "plan_hash.py"), wt, "HEAD", "a.md"], { encoding: "utf8", cwd: tmpdir() });
     assert.equal(ph.status, 0, ph.stderr);
-    assert.deepEqual(JSON.parse(ph.stdout), { plan_sha256: sha256("a\n"), program: { name: "plan_hash", sha256: programSha("plan_hash") } });
+    assert.deepEqual(JSON.parse(ph.stdout), { plan_sha256: sha256("a\n"), blob: sh(wt, "git", "rev-parse", "HEAD:a.md").trim(), program: { name: "plan_hash", sha256: programSha("plan_hash") } });
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }

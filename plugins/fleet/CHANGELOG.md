@@ -113,6 +113,11 @@ shipped run into a coder round, and adds org and repo rulesets to the hook surfa
   outside the scratch dir. `plan_ref_write.py` and `plan_hash.py` (rev `""`) refuse a plan path
   with `..`, a backslash or a symlinked component, or one that resolves outside the worktree,
   before any read or delete.
+- Security review (replacement objects): every program runs git with `GIT_NO_REPLACE_OBJECTS=1`.
+  `plan_hash.py` prints the plan's own `blob` id and reads it by id; roles get that id as
+  `plan_blob` and read it with `git --no-replace-objects cat-file blob`. `verify_since.py` prints
+  `replace_refs`, and the hasher's git map lists `refs/replace/*`: any replacement ref stops verify
+  and every hasher run (stop gate `hash`), which covers the freeze tree and `plan_base` too.
 
 - 2042b: commit subjects and PR titles follow the repo's convention. New program
   `pr_convention.py <wt> <gh_cmd|-> <owner/repo|-> <default_branch>` (36 programs) at

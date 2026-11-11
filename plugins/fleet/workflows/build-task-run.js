@@ -1464,42 +1464,42 @@ function relayDigestOk(r, keys, name) {
 // Every program ships as plugins/fleet/scripts/<name>.py
 // PROGRAM_SHA256_BEGIN
 const PROGRAM_SHA256 = {
-  "branch_scan": "ea4c598ddde55a0e69382270a8deae8e61403988d00495355139db6f86a9f776",
-  "build_dir": "7406264beafd58145a4035296636e7ab94dd4e339c58aaabf84584d7df111866",
-  "callers": "dc5b924775246e16dc8d3d8c6e913e77463ce342b5054cacebc298d394001575",
-  "changed_defs": "1a30e9ca3202f6a434911aa2ecb3e5b446194f95e414b6caa4a4c3279f96c4d4",
-  "db_down": "1a9cd8302f54116e1c9691ed6a86a6f19e132458da55f062286fd03e63a07cd3",
-  "db_sweep": "3f86d621cc27259e006fff0d7910c621d11f955b138db3b18e9337139437d6c5",
-  "db_up": "287f00df3f12543a7ffed8445fda9ba9823f58dcb37a90301ed05b245d49d913",
-  "fleet_scan": "5140d5020bee7cae61994b753e8ee100fc6cdcc1389d3a3559ef5fec5fbe2a3b",
-  "format_files": "41fa33d348944dd704583568fd6a5d95e4f8a7ce47bd8a75dd736a61d0afc714",
-  "gh_identity": "f9c39d04b5d7fd2cf64e7669865fb72aa56df85479f47458a879dfbee4be188b",
-  "hash_diff": "9ff52aea4895f751d39ab062d446078820bc1990eb8e7cfdc91083af1a413722",
-  "hasher": "e96807e4a8a376285f0b30a0bdf3529185986b473e8e9e01146df27140dd67dd",
-  "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
-  "parked": "14150028c5fc657e10214efd33dd6669c83281c8a45f07410aad6e6b7520bd9b",
-  "path_check": "9a05c718892ff35b213a61fd8abeadad4dae0fa2ca7671485d670fe02b5a1596",
-  "plan_dsn": "269dfac0132859fc884ef34a0032e2932f3d943100e3cbb7906466cf135a5fc6",
-  "plan_files": "a985309a34cc229fd08087c34933b6b752fa56896c194393b19d59ea99361e14",
-  "plan_hash": "9239aa330c4b01fb947ec9b4f4e684075f5e6338e3394392d4c9e00b522cd951",
-  "plan_ref": "70b82ddd6b5cd3321dd04efc6b9549b001d25b1aa0ac98ed73a5e2f75ff8841d",
-  "plan_ref_write": "822595ac7d947040ef3d125c9914965da696ba10290570bcb7926eb1d538d828",
-  "policy": "e4fdd22ccc9ebbee24e128ee54f91e3eba90fae350d64703655358a3e7026141",
-  "pr_convention": "96599c940c35f885d285df4dde4299b21243a559f2e1a2a576ae6016aaf6295a",
-  "precommit_ids": "627d38e747a9f5b57bba6b9cfc6e5deccb016be7b943ff89b7fd5689a6ddc09b",
-  "push_classify": "3ac4435c37d17784050a25c58f5071c60354698defb9a66c963636a70185a6c1",
-  "push_probe": "06b2ae5a476c22f30f8183c7eacd5d31c3f7c7d6ddc674a253bc7593c8e702be",
-  "read_state": "9e003f00d3e970720dc59567de185bf3ea2ad9b142d3565fe7563187ec1024ce",
-  "remote_head": "f48c45aa5706061fd110a75eeb45dd0157a3e46486dd845b6011c71396efa845",
-  "remote_url": "ba1bd212a6e1f2dcc77718808359d79a0f2866bfae9bd798cd6b8b03b43013d9",
-  "review_paths": "2904f382a5273ed64d7f0416533f45be9f6f3893892badd632dccd10fb360493",
-  "ruleset_surface": "7457a5634c17f1c600e64d18d5619194ad8b35849ee8c7456c5252d998e65125",
-  "script_check": "bd5eb9be1833d6746a8910f6a8bfc1194f980321b598a835ebd198b8a525d17d",
-  "session_project": "9e84d1a85d655f201c994c87f4a9f24e532c672bd5140a86ee7b80c8b383f89f",
-  "state_write": "428bbdc40ec4973d6e2c314a1a7c91be6f8e54c5aeb079af840623b5ee27ad78",
-  "test_db_decl": "71798f3bdc71e0a73c880a9620b4b6fd6e669fbd396a4ed1282918a554e8c765",
-  "tf_gate": "7ca27ecbca19dd989f8d6a8108f9bfe7655d48f1ebb371060146fade61cc0bfd",
-  "verify_since": "840c0f167c93ea225342c1036c58d67e6634a74712700bad58d2977390a8d9d2"
+  "branch_scan": "ec03aa965ed9a3d145ce1fb1636685d2be087877daf78f369eed0a19f532967d",
+  "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
+  "callers": "285df005bb08ce9a9f009b7554a9e697913ccff0a620980d2e59c04550bed4bc",
+  "changed_defs": "40ecf45fe37448244572d8f7fd64ad574837970047a58de7c1ac7a262f717e94",
+  "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
+  "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
+  "db_up": "6aee2fdb201b6a3634dbd1ea6c0cfa40eefe3a0eed09c8d40e7f6c3b95a17f4c",
+  "fleet_scan": "c094de993d39c7a724f937a1d35d950711b1fc8e832e00b67a1556730ea26055",
+  "format_files": "215a5675d88591d59119a64f29b1f5d7f472f06f46073237afe0342b9cc441aa",
+  "gh_identity": "44d62a8f8b6cd4f69c7b057d0180f584edf6b03f03988e35f048bdc1d7ce2d70",
+  "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
+  "hasher": "1724b6f225679fc323759e68ae5f3eb15aac394c7a99459acec8b1b48927664d",
+  "hook_surface": "bdace4ab8b4be872cc01d25cacaad4252169721a49780bfefac9847ec2cfb38c",
+  "parked": "6b87baae1a7b4be9b9a56f44f698900d825367ac3a0a412a8e730ddb047320e2",
+  "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
+  "plan_dsn": "f02908de588f71426a2995b86884be5e15127fd9fc48ead3710c0e71b481277b",
+  "plan_files": "360fc1c69092e8da9f11cdded6296ef429c3db870181881ffff949a5b3c8253c",
+  "plan_hash": "5887c14a3ef5c6548da888e86cad6ec00df88482cc1219bda8a74f000deed2c5",
+  "plan_ref": "494ceb934b89fa5c2962ef786ba93bee63bd09f776c82c50579fdf23f301c136",
+  "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
+  "policy": "347bc798a38e468d55b2b0726aef70a83a40672aa8409db0a57ebf897117d395",
+  "pr_convention": "f0b70e43c21ba96c3d2fdd8b25735e1d7fa261797c68a7fefc1dc9785e35703f",
+  "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
+  "push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
+  "push_probe": "c4381f9ce601e0729a0ab49edb33fe6c9e910e8738411e7ad4719f21ef639a5b",
+  "read_state": "7841ce4ba1f7038a1e5652f38a6237069177cfb29f54c8ec3bf32041c41df2df",
+  "remote_head": "04beeda731a3fa3ab79c1749333057426191c72b97c549f5fdf9e8f55a8549fc",
+  "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
+  "review_paths": "03950f6125e99fc8bce12cd7e22762ea63737d356b432fcb42111edbfbb43c01",
+  "ruleset_surface": "6ba0d9c8e4d281d518cd2fbc3986ee9b090c7b4f45cec75eed060dc7744e9d9e",
+  "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
+  "session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
+  "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
+  "test_db_decl": "1ea403e5158e263247c8a20cf7e10d88c75fb74ebe963574f0052dd36465a7be",
+  "tf_gate": "627c00cefbdf2da4a4144854dcbb4b543fb1e05335c1a4c7c74dc662ed35c02c",
+  "verify_since": "83539e7295982c15e38aa3c7fc6c222d45e3a65b7dc23899dd2f69abc987b345"
 };
 // PROGRAM_SHA256_END
 function programTable() {
@@ -1509,12 +1509,12 @@ function programTable() {
 // the role prompts ship as plugins/fleet/roles/<role>.md
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
-  "fleet-code-judge": "9012adff406e520fefe796e76d84fb30d99fc68d9ce9d3acf42bf727086d8adc",
-  "fleet-coder": "0dafd2181741ba41094a87e05fc247c042b6fb173ec33439c52dcc2dbd9c52b2",
+  "fleet-code-judge": "dac34f0bfce76029e2602ffa23c3210049e127187076978f82d357582f49b5a3",
+  "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
   "fleet-intent-judge": "03283fc805f57bcf22a6448fc43b8ead05983e94de1b05563f3e50c4a7837a1e",
-  "fleet-pr-opener": "bdd545c6c7e34d7f1f4ec50fcac302df3f10c81a0424cfa62728aa7a94d98fde",
-  "fleet-test-judge": "40db39eac4dbf0ec92cbd737fc575a15fd6c171f3e12f99159b1df2300f30134",
-  "fleet-test-writer": "f9a22200e193fcc17779da65140ffa8178ab6ed18568e5947e9e8f410a65d971",
+  "fleet-pr-opener": "d2f53310d606999dd545172fbcd2cf0d70db9890081e625168de14e24700e23a",
+  "fleet-test-judge": "c1aabca1c8623473811ca3d6ce66fe821f0dac251ea1d53d528372ad2d2bfe7e",
+  "fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
   "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
   "plan-audit": "084fe730cc8ecb5cf8712b164bb763cb9bbe97e18bc3cc04e82480ba158de984",
   "pr-review": "728800a005a54026eb345d5b9784bdde50cdafd5d918f9faa8d2cec7c091142d",
@@ -1635,14 +1635,14 @@ const PROGRAM_KEYS = {
   "parked:read": ["parked", "args"],
   "parked:write": ["written", "sha256", "args"],
   "parked:park": ["target", "clean", "dirty", "args"],
-  "plan_hash": ["plan_sha256"],
+  "plan_hash": ["plan_sha256", "blob"],
   "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map"],
   "plan_ref_write": ["plan_commit", "plan_base", "tag_sha", "reused", "plan_file", "dirty"],
   "plan_files": ["head", "commit", "parent", "files", "args", "dsn_paths"],
   "plan_dsn": ["holds", "lines", "args"],
   "plan_ref": ["refs"],
   "plan_ref:chunks": ["refs", "chunks"],
-  "verify_since": ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"],
+  "verify_since": ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "replace_refs", "args"],
   "read_state": ["exists", "target", "message", "head", "head_tree", "clean"],
   "state_write": ["head", "state_sha"],
   "tf_gate": ["touched", "iac_files", "problems", "hints", "args"],
@@ -1721,7 +1721,7 @@ const PROGRAM_OUT = {
     args: STRS,
     digest: STR,
   },
-  plan_hash: { plan_sha256: STR },
+  plan_hash: { plan_sha256: STR, blob: STR_OR_NULL },
   format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, digest: STR },
   plan_ref_write: { plan_commit: STR, plan_base: STR, tag_sha: STR, reused: BOOL, plan_file: STR, dirty: STRS, digest: STR },
   plan_files: { head: STR, commit: STR, parent: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
@@ -1736,6 +1736,7 @@ const PROGRAM_OUT = {
     commits_since: { type: "array", items: { type: "object", properties: { sha: STR, subject: STR } } },
     plan_touched: STRS,
     changed_since: STRS,
+    replace_refs: STRS,
     args: STRS,
     digest: STR,
   },
@@ -3437,6 +3438,8 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
     view[m] = Object.assign({ [MAP_ALL]: g.sha256 + "/" + g.count }, m === "git" ? g.inline : {});
     if (m === "ignored" && g.settings !== null) view[m][SETTINGS_LOCAL] = g.settings;
   }
+  const rr = Object.keys(view.git).filter((k) => k.indexOf(FLEETREF + "refs/replace/") === 0);
+  if (rr.length) halt("needs_human", "hasher " + label + ": " + rr[0].slice(FLEETREF.length) + " exists; replacement objects could change what a sealed object id reads as", "hash");
   return Object.assign({}, r, { hashes: Object.assign({}, h, view) });
 }
 
@@ -5343,9 +5346,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const remoteUrl = typeof pf.remote_url === "string" ? pf.remote_url : null;
   const mainWt = lay.mainWt;
   const branch = lay.branch;
-  // the commit the build's own commits sit on; roles read the plan from the sealed commit (2042)
+  // the commit the build's own commits sit on (2042)
   const planBase = ref.plan_base;
-  const planBlob = ref.plan_commit + ":" + ref.plan_path;
 
   // verify the approved plan
   const criteria = normCriteria(ref.criteria, pf.test_cmd);
@@ -5366,6 +5368,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     halt("failed", "infra:verify-plan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
   if (canonical(v.args) !== canonical([mainWt, planBase, ref.plan_path]))
     halt("failed", "infra:verify-plan: the program ran on other arguments (" + JSON.stringify(v.args === undefined ? null : v.args) + ")");
+  // security review: no replacement object may stand in for a sealed id; roles read the plan by its own blob id
+  if (!Array.isArray(v.replace_refs) || !SHA_RE.test(String(v.plan_hash.blob))) halt("failed", "infra:verify-plan: no replace_refs list or plan blob id");
+  if (v.replace_refs.length) halt("needs_human", "verify: " + v.replace_refs[0] + " exists; replacement objects could change what a sealed object id reads as; remove refs/replace/*, then re-run the build", "hash");
+  const planBlob = v.plan_hash.blob;
   if (v.plan_sha256 !== ref.plan_sha256)
     halt("needs_human", "plan changed since approval: " + ref.plan_path + " at " + ref.plan_commit + " hashes " + v.plan_sha256 + ", approved " + ref.plan_sha256);
   if (v.head !== planBase) {

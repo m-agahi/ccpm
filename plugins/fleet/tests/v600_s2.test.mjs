@@ -3,10 +3,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { SCRIPTS_SRC, ARGS, PC, PB, sha256, canon, happy, run, runOne, call, inputsOf, spawnSync, stateJsonOf } from "./harness.mjs";
+import { SCRIPTS_SRC, ARGS, PC, PB, PBLOB, sha256, canon, happy, run, runOne, call, inputsOf, spawnSync, stateJsonOf } from "./harness.mjs";
 
 const PY = spawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
 
@@ -317,7 +317,7 @@ test("6.0.0 2042a: branch_scan.py prints HEAD and takes plan_tip_time from the n
 
 // ---------------------------------------------------------------- 2042a: the workflow
 
-const PLAN_BLOB = PC + ":docs/plans/x.md";
+const PLAN_BLOB = PBLOB;
 const PLAN_ROLES = ["fleet-test-writer", "fleet-test-judge", "fleet-coder", "fleet-code-judge", "fleet-pr-opener"];
 
 test("6.0.0 2042a (security review): roles read the plan from the sealed plan commit (plan_blob), never from a file a role could rewrite; code diffs start at plan_base", async () => {
@@ -339,7 +339,7 @@ test("6.0.0 2042a (security review): roles read the plan from the sealed plan co
   assert.ok(out.build.logs.indexOf("verify: HEAD is plan_base " + PB + "; plan hash matches at " + PLAN_BLOB) >= 0, out.build.logs.join("\n"));
   for (const r of PLAN_ROLES) {
     const t = readFileSync(join(SCRIPTS_SRC, "..", "roles", r + ".md"), "utf8");
-    assert.match(t, /`plan_blob`: the plan doc as a sealed git object; read it only with `git -C <worktree> show <plan_blob>`\. The plan doc is not in the worktree: never write it there\./, r);
+    assert.match(t, /`plan_blob`: the plan doc's git blob id; read it only with `git --no-replace-objects -C <worktree> cat-file blob <plan_blob>`\. The plan doc is not in the worktree: never write it there\./, r);
   }
 });
 
@@ -585,4 +585,49 @@ test("6.0.0 2042b: the planner names a component; the PR opener uses the title v
   const po = readFileSync(join(SCRIPTS_SRC, "..", "roles", "fleet-pr-opener.md"), "utf8");
   assert.match(po, /Title: exactly `title`, never your own; it never carries an internal id\./);
   assert.match(po, /\*\*Body convention:\*\* the body holds every heading in `body_convention\.required_sections`/);
+});
+
+// ---------------------------------------------------------------- 2042 security review: refs/replace
+
+test("6.0.0 2042 (security review): every program runs git with replacement objects off; plan_hash and verify_since see the real objects and list refs/replace", () => {
+  for (const f of readdirSync(SCRIPTS_SRC).filter((x) => x.endsWith(".py"))) assert.match(readFileSync(join(SCRIPTS_SRC, f), "utf8"), /^_o\.environ\['GIT_NO_REPLACE_OBJECTS'\] = '1'$/m, f);
+  const rp = planRepo();
+  try {
+    writeFileSync(join(rp.wt, "docs", "plans", "x.md"), "# plan\n");
+    const w = writeRef(rp, rp.base, "docs/plans/x.md", "{}\n");
+    const real = rp.git("rev-parse", w.out.plan_commit + ":docs/plans/x.md");
+    const fake = spawnSync(GITBIN, ["-C", rp.wt, "hash-object", "-w", "--stdin"], { input: "# altered\n", encoding: "utf8", env: rp.env }).stdout.trim();
+    rp.git("replace", real, fake);
+    const h = prog(rp, "plan_hash", [rp.wt, w.out.plan_commit, "docs/plans/x.md"]);
+    assert.equal(h.status, 0, h.stderr);
+    assert.equal(h.out.blob, real);
+    assert.equal(h.out.plan_sha256, sha256("# plan\n"));
+    const v = prog(rp, "verify_since", [rp.wt, rp.base, "docs/plans/x.md"]);
+    assert.deepEqual(v.out.replace_refs, ["refs/replace/" + real]);
+  } finally {
+    rmSync(rp.root, { recursive: true, force: true });
+  }
+});
+
+test("6.0.0 2042 (security review): roles get the plan's own blob sha; verify and every hasher run stop on any refs/replace entry", async () => {
+  const s = happy();
+  s["infra:verify-plan"] = Object.assign({}, happy()["infra:verify-plan"], { plan_hash: { plan_sha256: "a".repeat(64), blob: "e".repeat(40) } });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  for (const l of ["role:fleet-test-writer:AC1:r1", "role:fleet-coder:r1", "role:fleet-pr-opener"]) assert.equal(inputsOf(call(out, l).prompt).plan_blob, "e".repeat(40), l);
+  for (const r of PLAN_ROLES)
+    assert.match(readFileSync(join(SCRIPTS_SRC, "..", "roles", r + ".md"), "utf8"), /`plan_blob`: the plan doc's git blob id; read it only with `git --no-replace-objects -C <worktree> cat-file blob <plan_blob>`/, r);
+  const t = happy();
+  t["infra:verify-plan"] = Object.assign({}, happy()["infra:verify-plan"], { replace_refs: ["refs/replace/" + "1".repeat(40)] });
+  const o2 = await run(t, ARGS);
+  assert.equal(o2.result.status, "needs_human");
+  assert.equal(o2.result.stop_gate, "hash");
+  assert.match(o2.result.reason, /^verify: refs\/replace\/1{40} exists; replacement objects could change what a sealed object id reads as/);
+  const u = happy();
+  const h = JSON.parse(JSON.stringify(happy()["hasher:freeze:f1"]));
+  h.hashes.git["fleetref:refs/replace/" + "2".repeat(40)] = "3".repeat(40);
+  u["hasher:post-coder:r1"] = Object.assign({}, u["hasher:post-coder:r1"], { hashes: h.hashes });
+  const o3 = await run(u, ARGS);
+  assert.equal(o3.result.status, "needs_human");
+  assert.match(o3.result.reason, /^hasher hasher:post-coder:r1: refs\/replace\/2{40} exists/);
 });

@@ -658,6 +658,8 @@ const READS = {
     // 6.0.0 (ledger 2042)
     "loaded.plan_base string": PARSED_REF,
     "loaded.plan_base string-re": PARSED_REF,
+    // 6.0.0 security review
+    "v.replace_refs array": "prog:verify_since:replace_refs",
     "pf object": PARSED_REF,
     "pf.commands array": PARSED_REF,
     "o.check_cmd string": PARSED_REF,

@@ -603,6 +603,8 @@ export const ARGS = {
 export const PC ="abc1234def0";
 // 6.0.0 (ledger 2042): the branch commit the dangling plan commit PC sits on
 export const PB = "b0de1234567";
+// the plan doc's own blob id, as verify resolves it with replacement objects off
+export const PBLOB = "b10b".repeat(10);
 export const PSHA = "a".repeat(64);
 export const BRIEF = {
   title: "Add Thing!",
@@ -922,7 +924,7 @@ export function verifyStub(store) {
       status: "ok",
       reason: "verified",
       plan_files: { head: c.wtHead || c.base || null, commit: c.head || null, parent: c.base || null, files: [i.plan_path], args: [i.worktree, i.plan_commit], dsn_paths: [] },
-      plan_hash: { plan_sha256: c.planSha || null },
+      plan_hash: { plan_sha256: c.planSha || null, blob: PBLOB },
       plan_ref: { refs },
     };
   };
@@ -1134,9 +1136,9 @@ export function fillPrograms(label, r, prompt) {
     if (!("scripts_probe" in r)) r.scripts_probe = scriptsProbe();
   }
   // flat 3.x stub fields become the program outputs the prompt asks for
-  if (/^infra:stage-plan/.test(label) && !("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256 };
+  if (/^infra:stage-plan/.test(label) && !("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256, blob: null };
   if (/^infra:verify-plan$/.test(label)) {
-    if (!("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256 };
+    if (!("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256, blob: PBLOB };
   }
   // 5.0.3 (ledger 2010): a format-plan stub with no dsn_check finds no DSN
   if (/^infra:format-plan/.test(label) && !("dsn_check" in r)) {
@@ -1236,6 +1238,7 @@ export function happy(over = {}) {
       commits_since: [],
       plan_touched: [],
       changed_since: [],
+      replace_refs: [],
     },
     "infra:push": (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha }),
     "infra:ledger-writeback": (prompt) => ({

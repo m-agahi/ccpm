@@ -6,6 +6,8 @@ for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
     _h = _r.getrlimit(_k)[1]
     _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
 _o.environ['MALLOC_ARENA_MAX'] = '2'
+# 6.0.0 security review: git never reads refs/replace/* objects in place of sealed ids
+_o.environ['GIT_NO_REPLACE_OBJECTS'] = '1'
 _n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
 for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
     _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
@@ -52,6 +54,8 @@ if rev == '':
         sys.exit('no plan doc at ' + wt + '/' + path)
     with open(f, 'rb') as fh:
         d = fh.read()
+    blob = None
 else:
-    d = subprocess.run(['git', '-C', wt, 'show', rev + ':' + path], capture_output=True, check=True).stdout
-print(json.dumps({'plan_sha256': hashlib.sha256(d).hexdigest(), 'program': _PROG}))
+    blob = subprocess.run(['git', '-C', wt, 'rev-parse', '--verify', rev + ':' + path], capture_output=True, check=True).stdout.decode().strip()
+    d = subprocess.run(['git', '-C', wt, 'cat-file', 'blob', blob], capture_output=True, check=True).stdout
+print(json.dumps({'plan_sha256': hashlib.sha256(d).hexdigest(), 'blob': blob, 'program': _PROG}))

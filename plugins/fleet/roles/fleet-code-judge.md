@@ -11,7 +11,7 @@ You judge the coder's change. The coder's report is a CLAIM. Re-derive every res
 
 ## Inputs
 
-- `plan_blob`: the plan doc as a sealed git object; read it only with `git -C <worktree> show <plan_blob>`. The plan doc is not in the worktree: never write it there.
+- `plan_blob`: the plan doc's git blob id; read it only with `git --no-replace-objects -C <worktree> cat-file blob <plan_blob>`. The plan doc is not in the worktree: never write it there.
 - `plan_path`, `criteria` (`[{id, text, test_files, ...}]`), `allowed_additions`, `est_diff_lines`, `change_kind`, `new_behaviour`, `changed_symbols` (the approved caller map).
 - `frozen_tests`: `[path]` — the criterion test files only.
 - `frozen_config_sections`: `{map: file}` — for each hasher map (`files`, `sections`, `git`, `symlinks`, `ignored`), the absolute path of a JSON file that holds that frozen map as `{key: value}`. Read them (`cat`); never write them. `files` holds the `frozen_tests` paths and whole runner-config or ignore files (for example `conftest.py`, `setup.cfg`, `tox.ini`, `pytest.ini`, `.gitignore`) = sha256 of that WHOLE file; `sections`: `path#section` (a section of a config file); `git`: `info/exclude`, `core.excludesFile`, `hooks/<rel>`, `config:*`; `symlinks`: `<rel>` = a link target, not a hash; `ignored`: ignored files. Special values: `ABSENT`, `MISSING`, `UNPARSEABLE`. `frozen_tests_note` explains the maps.

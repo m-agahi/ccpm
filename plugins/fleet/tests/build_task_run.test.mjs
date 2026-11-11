@@ -5658,6 +5658,8 @@ const ARRAY_SITES = {
   "pr.dirty @ planMode": "parsed: the park program relay (digest-checked; PROGRAM_OUT types dirty)",
   // 6.0.0 (ledger 2042)
   "r.dirty @ commitPlanAndRef": "parsed: the plan_ref_write program relay (digest-checked; PROGRAM_OUT types dirty)",
+  // 6.0.0 security review
+  "v.replace_refs @ buildFromRef": "parsed: a verify_since program output (PROGRAM_OUT types it), digest-checked with it",
 };
 
 function arraySites() {
@@ -8604,7 +8606,7 @@ test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the 
 
 // ---------------------------------------------------------------- 3.1.0 (ledger 1959): verify-plan and commit-plan relay program output, not raw git
 
-const VERIFY_KEYS = ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"];
+const VERIFY_KEYS = ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "replace_refs", "args"];
 
 test("3.1.0 1959: the verify and plan-files programs print what git says, with a digest the workflow recomputes", { skip: !HAVE_PY }, () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-1959-"));
@@ -8640,7 +8642,7 @@ test("3.1.0 1959: the verify and plan-files programs print what git says, with a
     // head = plan_base: nothing since
     const pc = pb;
     let v = runP("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY", [pc, "docs/plans/x.md"]);
-    assert.deepEqual(v, Object.assign({ head: pc, is_ancestor: true, commits_since: [], plan_touched: [], changed_since: [], args: [wt, pc, "docs/plans/x.md"] }, { program: { name: null, sha256: null }, digest: v.digest }));
+    assert.deepEqual(v, Object.assign({ head: pc, is_ancestor: true, commits_since: [], plan_touched: [], changed_since: [], replace_refs: [], args: [wt, pc, "docs/plans/x.md"] }, { program: { name: null, sha256: null }, digest: v.digest }));
     check(v, VERIFY_KEYS);
     // two commits after it: a non-ASCII subject with a tab and a control character, and one that touches the plan
     writeFileSync(join(wt, "a.py"), "b\n");
@@ -9191,7 +9193,7 @@ test("3.1.0 review: the verify and commit-plan relays must echo the arguments th
   const s = happy();
   const ref = await planRefFor(s);
   const r = { ...s["infra:verify-plan"], changed_since: [], args: ["/elsewhere", PB, "docs/plans/x.md"] };
-  r.digest = relayDigestOf(r, ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "args"]);
+  r.digest = relayDigestOf(r, ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "replace_refs", "args"]);
   s["infra:verify-plan"] = r;
   const out = await runOne(s, buildArgs(ref));
   assert.equal(out.result.status, "failed");
