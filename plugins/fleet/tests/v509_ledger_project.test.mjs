@@ -85,6 +85,9 @@ test("5.0.9 write-back: no project in the answer + no proof -> unavailable (soft
     assert.equal(e.status, "unavailable", how + ": " + e.reason);
     assert.match(e.reason, /no proof of the session's yaadgaar project/, how);
     assert.equal(out.result.ledger_status, "unavailable", how);
+    // the tool is present: no fallback, and the run's reason is the missing proof
+    assert.equal(out.result.ledger_adapter, "yaadgaar", how);
+    assert.match(out.result.ledger_reason, /no proof of the session's yaadgaar project/, how);
     assert.ok(!out.labels.includes("infra:yaadgaar-writeback"), how);
   }
 });

@@ -7807,6 +7807,8 @@ async function writeBack(ctx) {
   // step (review of 88eb9b0). A read step that finds no tool reports
   // unavailable: nothing written, the section handed back.
   const ad = ledgerAdapter(project, brief.sources, state.ledgerTools);
+  // 5.0.9: a yaadgaar entry unavailable for want of the session proof (the tool is there)
+  let noProof = null;
   const out = {
     write_back: { ledger: [], comments: [] },
     ledger_adapter: ad.adapter,
@@ -7910,6 +7912,7 @@ async function writeBack(ctx) {
           // 5.0.9 (ledger 2032): a named project must be args.project; none: the proven session's
           else if (yaadgaarScope(h.project, project)) {
             const sc = yaadgaarScope(h.project, project);
+            if (sc.soft) noProof = sc.why;
             results.push({ key: t.key, status: sc.soft ? "unavailable" : "failed", reason: "read: task #" + t.number + " (" + h.id + "): " + sc.why + "; nothing written" });
           }
           else if (h.has_marker === true) results.push({ key: t.key, status: "skipped", reason: "the body already carries " + marker });
@@ -7952,7 +7955,8 @@ async function writeBack(ctx) {
   const st = out.write_back.ledger.map((e) => e.status);
   out.ledger_status = !st.length ? "none" : st.indexOf("failed") >= 0 ? "failed" : st.indexOf("unavailable") >= 0 ? "unavailable" : "ok";
   // every ledger entry unavailable: the steps found no tool; the adapter falls back
-  if (st.length && st.every((x) => x === "unavailable")) {
+  if (noProof) out.ledger_reason = noProof;
+  else if (st.length && st.every((x) => x === "unavailable")) {
     const fb = ledgerAdapter(project, brief.sources.filter((x) => LEDGER_KINDS.indexOf(x.kind) < 0), state.ledgerTools);
     out.ledger_adapter = fb.adapter;
     out.ledger_reason = "ledger tool absent (reported by the read step); " + fb.reason;

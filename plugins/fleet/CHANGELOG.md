@@ -10,8 +10,8 @@ and the script proves which project that is before it trusts it.
 - Update the plugin (`/plugin`, update `fleet` to 5.0.9), then start a NEW session: the workflow
   looks for its own `fleet/5.0.9/scripts` dir.
 - A 5.0.8 plan ref and run-state stay valid: the session project is not sealed. Every run derives
-  it again in preflight. A 5.0.8 build whose write-back failed can be re-run with the same
-  `plan_ref`.
+  it again in preflight. A 5.0.8 build that recorded its failed write-back returns that recorded
+  result on a re-run; add the entry's `section_text` to the task by hand.
 
 ### Fixed
 
