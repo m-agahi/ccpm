@@ -91,11 +91,10 @@ def self_refs(text):
             rel = u[len(slug) + 1:].split('@', 1)[0]
         else:
             continue
-        d = norm(rel) if rel.strip('/') not in ('', '.') else None
-        if d is None and os.path.normpath(rel or '.') in ('.', ''):
-            out.append('./')
-        elif d:
-            out.append(d if d in tracked else d.rstrip('/') + '/')
+        rel = rel.replace('\\', '/').lstrip('/')
+        d = None if os.path.normpath(rel or '.') in ('.', '') else norm(rel)
+        # a root or escaping self-reference fails closed: the whole repo
+        out.append('./' if d is None else d if d in tracked else d.rstrip('/') + '/')
     return out
 
 

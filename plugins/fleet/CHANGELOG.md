@@ -68,6 +68,9 @@ and 3 add the items marked "pending"; stream 3 finalises this entry.
   list follow `link: rel="next"` up to 10 pages. A failed or capped rule page is an error; a
   failed or capped org page is an `unreadable` entry with the count read. A partial list never
   reads as complete.
+  A self-reference is normalised first (backslashes to `/`, leading `/` stripped); one that
+  normalises to the root or escapes the repo (`/./`, `..`, `a/../../b`) is the whole repo
+  (`./`), never skipped.
 - README: the PR-step re-probe, the shipped-run resume and the ruleset surface; the
   `docs/build-task-run-notes.md` "6.0.0 notes" section holds the long comments.
 

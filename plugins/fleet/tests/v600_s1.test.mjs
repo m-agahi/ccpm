@@ -473,6 +473,18 @@ test("6.0.0 2041 (review): a root self-reference (./, ., <slug>@ref, <slug>/@ref
   }
 });
 
+test("6.0.0 2041 (security review): a /./, backslash or escaping self-reference fails closed to whole-repo surface, never skipped", () => {
+  for (const u of ["q/actions//./@v1", "q/actions/.\\@v1", "q/actions/..@v1", "q/actions//..@v1", "./../x", "q/actions/a/../../b@v1"]) {
+    const files = { ".github/workflows/ci.yaml": "steps:\n  - uses: " + u + "\n", "src/x.py": "x = 1\n" };
+    withRs(ORG(), (o) => {
+      assert.equal(o.error, null, u);
+      assert.ok(o.surface.indexOf("./") >= 0, u + ": " + JSON.stringify(o.surface));
+    }, "-", files);
+  }
+  const files = { ".github/workflows/ci.yaml": "steps:\n  - uses: q/actions/sub\\act@v1\n", "sub/act/action.yaml": "runs: {}\n" };
+  withRs(ORG(), (o) => assert.deepEqual(o.surface, ["sub/act/"]), "-", files);
+});
+
 test("6.0.0 2041 (review): rulesetSurface keeps './' as whole-repo surface; the gate stops on any path", async () => {
   const s = happy();
   s["infra:ruleset-surface:plan"] = rsOut({ surface: ["./"], sources: [{ ruleset_id: null, name: null, source_type: "self-reference", path: "./", via: ".github/workflows/ci.yaml" }] });
