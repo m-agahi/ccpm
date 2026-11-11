@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { SOURCE, ARGS, PC, happy, run, runOne } from "./harness.mjs";
+import { SOURCE, ARGS, PC, PB, happy, run, runOne } from "./harness.mjs";
 
 const VERSION = /^const FLEET_VERSION = "(\d+\.\d+\.\d+)";$/m.exec(SOURCE)[1];
 // The version also reaches the sealed plan ref and run-state, so the chunked
@@ -32,7 +32,7 @@ function digest(out) {
 // confirm "auto": the gates pass and the same run builds (build_task_run.test.mjs autoHappy)
 function autoHappy() {
   return Object.assign(happy(), {
-    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "role:fleet-intent-judge": {
       status: "ok",
       reason: "matches the task",
@@ -40,7 +40,7 @@ function autoHappy() {
       deviations: [{ item: "adds f()", allowed_by: "task body: 'add f'", source_ref: "L42", fails_closed: true, verdict: "approve", reason: "asked for" }],
       coverage: { covered: true, missing: [] },
     },
-    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" },
   });
 }
@@ -76,10 +76,11 @@ const SCENARIOS = {
 // branch-scan, stage-plan, format-plan, verify-plan-commit, verify-plan), gh_identity's tried
 // diagnostics (workspace schema), intake's relaunch rule (prompt), infra:ruleset-surface:plan (new call)
 // 6.0.0 stream 2: infra:policy (new build call)
+// 6.0.0 stream 2: plan doc off the branch (stage-plan, commit-plan, verify-plan-commit, verify-plan prompts; pr-opener tldr; branch-scan head)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 77, sha256: "31b02fc976535322443356a8e5beec5dea9992493edae6d239f21b7468cbba06" },
-  "confirm auto (gates, then build in one run)": { calls: 79, sha256: "ad2c5ba39fb03c33be348661c6f607d8c05fcb06281f1b9d0c8874cc5d128618" },
-  "short path (one test writer)": { calls: 76, sha256: "922e6c7d90b370cf7ef7f12fb429403b90802f99e717bd84c53c39889847d940" },
+  "plan then build (confirm ask)": { calls: 77, sha256: "57abc3ab8f7346bec6275694d923256707508b3f024ff179b38540529a4c7f97" },
+  "confirm auto (gates, then build in one run)": { calls: 79, sha256: "5332125b7ad218d81ff3b852e528f49997af92eddcac52ab179db14f6558ee5a" },
+  "short path (one test writer)": { calls: 76, sha256: "7db6e453460077e90dad77c8cbebc774a0d4861147859e0c57857f1c9a33d04d" },
   "probe": { calls: 2, sha256: "012d024fefbefe057a047d8b6822b07ea3152de9e7d322be0e6cf5d6273fc736" },
 };
 

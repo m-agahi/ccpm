@@ -16,7 +16,7 @@ import { spawnSync as rawSpawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ARGS, PC, happy, run, runOne, call, inputsOf, noUnscripted, gitEnv, SCRIPTS_SRC, SOURCE } from "./harness.mjs";
+import { ARGS, PC, PB, happy, run, runOne, call, inputsOf, noUnscripted, gitEnv, SCRIPTS_SRC, SOURCE } from "./harness.mjs";
 
 const PY3 = rawSpawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
 const DECL = { version: 1, engine: "mariadb", major: "11.4", env: "YADGAR_TEST_DSN" };
@@ -200,7 +200,7 @@ function withDecl(s, decl) {
   return s;
 }
 const AUTO = {
-  "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+  "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
   "role:fleet-intent-judge": {
     status: "ok",
     reason: "matches the task",
@@ -209,7 +209,7 @@ const AUTO = {
     coverage: { covered: true, missing: [] },
     classification: { change_kind: "approve", new_behaviour: "approve", quote: "the task" },
   },
-  "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+  "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
 };
 
 test("2011 workflow: a declared test_db_prefix goes to db_up in the up and the add step, and to the roles' note", async () => {

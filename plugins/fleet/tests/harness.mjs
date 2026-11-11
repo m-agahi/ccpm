@@ -258,7 +258,7 @@ export function fillArgs(label, r, prompt) {
   if (!r || typeof r !== "object" || r.status !== "ok" || "args" in r || "digest" in r) return r;
   if (/^infra:verify-plan$/.test(label)) {
     const i = inputsOf(prompt);
-    r.args = [i.main_worktree, i.plan_commit, i.plan_path];
+    r.args = [i.main_worktree, i.plan_base, i.plan_path];
   } else if (/^infra:hook-surface:/.test(label)) r.args = [inputsOf(prompt).worktree, inputsOf(prompt).rev, JSON.stringify(inputsOf(prompt).targets)];
   else if (/^infra:push(:p\d+)?$/.test(label) && r.push_result === "hook_rejected") r.args = ["/tmp/fleet-push.out", String(r.exit_code)];
   else if (/^infra:precommit-ids/.test(label)) r.args = [inputsOf(prompt).main_worktree, inputsOf(prompt).plan_commit];
@@ -596,6 +596,8 @@ export const ARGS = {
   run_nonce: NONCE,
 };
 export const PC ="abc1234def0";
+// 6.0.0 (ledger 2042): the branch commit the dangling plan commit PC sits on
+export const PB = "b0de1234567";
 export const PSHA = "a".repeat(64);
 export const BRIEF = {
   title: "Add Thing!",
@@ -608,12 +610,12 @@ export const BRIEF = {
 // head stays at the plan commit until the commit step; only the tree moves.
 // FP_PRE: the plan commit before the writers; FP_PLAN (= FP_TESTS): the
 // worktree holding the approved tests.
-export const FP_PRE = { head: PC, tree: "T0" };
-export const FP_TESTS = { head: PC, tree: "T1" };
+export const FP_PRE = { head: PB, tree: "T0" };
+export const FP_TESTS = { head: PB, tree: "T1" };
 export const FP_PLAN = FP_TESTS;
-export const FP_K1 = { head: PC, tree: "K1" };
-export const FP_K2 = { head: PC, tree: "K2" };
-export const FP_M3 = { head: PC, tree: "M3" };
+export const FP_K1 = { head: PB, tree: "K1" };
+export const FP_K2 = { head: PB, tree: "K2" };
+export const FP_M3 = { head: PB, tree: "M3" };
 // the commit step's head for code round m
 export const CSHA = (m) => "c00000" + m;
 // Hasher output is four maps plus a suspicious list. Fixtures are written as
@@ -891,9 +893,12 @@ export function commitStub(store, head, planSha) {
     store[head] = c;
     store.__planHead = head;
     store.__task = inputsOf(prompt).task_id;
-    // 4.0.0: what the verify step reads back
-    store.__commit = { head, planSha, planPath: inputsOf(prompt).plan_path, worktree: inputsOf(prompt).worktree };
-    return { status: "ok", reason: "committed", head, tag_sha: "7".repeat(40) };
+    // 4.0.0: what the verify step reads back (6.0.0: the plan commit is off the branch, on plan_base)
+    const i = inputsOf(prompt);
+    // a re-plan worktree (no branch) sits on the plan commit it replaces
+    store.__commit = { head, planSha, planPath: i.plan_path, worktree: i.worktree, base: i.plan_base, wtHead: i.branch ? i.plan_base : prev };
+    const plan_file = i.worktree.replace(/\/+[^/]+\/*$/, "") + "/scratch/plan/" + i.plan_path;
+    return { status: "ok", reason: "committed", plan_commit: head, plan_base: i.plan_base, tag_sha: "7".repeat(40), reused: false, plan_file, dirty: [] };
   };
 }
 
@@ -911,7 +916,7 @@ export function verifyStub(store) {
     return {
       status: "ok",
       reason: "verified",
-      plan_files: { head: c.head || null, files: [i.plan_path], args: [i.worktree], dsn_paths: [] },
+      plan_files: { head: c.wtHead || c.base || null, commit: c.head || null, parent: c.base || null, files: [i.plan_path], args: [i.worktree, i.plan_commit], dsn_paths: [] },
       plan_hash: { plan_sha256: c.planSha || null },
       plan_ref: { refs },
     };
@@ -965,7 +970,7 @@ export function shq(v) {
 // state) for real, through the shipped chunk writer, as the agents do (chunks
 // in <dirname(wt)>/scratch). It prints `<head> <tag object>` like the 3.x command.
 let refWrites = 0;
-function chunkWriteCmd(program, wt, target, json, outKey) {
+function chunkWriteCmd(program, wt, target, json, outKey, extra = [], headKey = "head") {
   const msg = json + "\n";
   const b64 = Buffer.from(msg, "utf8").toString("base64");
   const dir = join(dirname(wt), "scratch", "chunks-test-" + process.pid + "-" + ++refWrites);
@@ -975,12 +980,18 @@ function chunkWriteCmd(program, wt, target, json, outKey) {
   return (
     "set -o pipefail; mkdir -p " + shq(dir) + " && " +
     chunks.map((c, i) => "printf '%s' " + shq(c) + " > " + shq(dir + "/" + i + ".b64")).join(" && ") +
-    " && python3 -I " + [join(SCRIPTS_SRC, program + ".py"), wt, target, dir, String(chunks.length), sha256(msg), JSON.stringify(shas)].map(shq).join(" ") +
-    " | python3 -I -c 'import json, sys; o = json.load(sys.stdin); print(o[\"head\"], o[\"" + outKey + "\"])'"
+    " && python3 -I " + [join(SCRIPTS_SRC, program + ".py"), wt, target].map(shq).concat(extra, [dir, String(chunks.length), sha256(msg), JSON.stringify(shas)].map(shq)).join(" ") +
+    " | python3 -I -c 'import json, sys; o = json.load(sys.stdin); print(o[\"" + headKey + "\"], o[\"" + outKey + "\"])'"
   );
 }
-export function planRefWriteCmd(wt, taskId, json) {
-  return chunkWriteCmd("plan_ref_write", wt, taskId, json, "tag_sha");
+// 6.0.0 (ledger 2042): the program seals <plan_path> (written when absent) as a plan
+// commit on HEAD, off the branch; it prints the plan commit and the tag object
+export function planRefWriteCmd(wt, taskId, json, planPath = "docs/plans/x.md") {
+  const f = join(wt, planPath);
+  return (
+    "mkdir -p " + shq(dirname(f)) + " && { [ -f " + shq(f) + " ] || printf '# plan\\n' > " + shq(f) + "; } && base=$(git -C " + shq(wt) + " rev-parse HEAD) && " +
+    chunkWriteCmd("plan_ref_write", wt, taskId, json, "tag_sha", ['"$base"', shq(planPath)], "plan_commit")
+  );
 }
 export function stateWriteCmd(wt, stateRef, json) {
   return chunkWriteCmd("state_write", wt, stateRef, json, "state_sha");
@@ -1070,7 +1081,7 @@ export const PROGRAM_LABELS = [
   // 4.0.0 review: dsn_paths, the committed files that hold mysql://
   [/^infra:verify-plan-commit/, [["plan_files", "plan_files", K("plan_files")], ["plan_hash", "plan_hash", null], ["plan_ref", "plan_ref", null]]],
   [/^infra:load-ref/, [[null, "plan_ref", null]]],
-  [/^infra:verify-plan$/, [[null, "verify_since", K("verify_since")], ["plan_hash", "plan_hash", null], ["plan_hash_head", "plan_hash", null], ["test_db", "test_db_decl", K("test_db_decl")]]],
+  [/^infra:verify-plan$/, [[null, "verify_since", K("verify_since")], ["plan_hash", "plan_hash", null], ["test_db", "test_db_decl", K("test_db_decl")]]],
   [/^infra:read-state$/, [[null, "read_state", K("read_state")]]],
   [/^infra:state:/, [[null, "state_write", K("state_write")]]],
   [/^infra:tf-gate:/, [[null, "tf_gate", K("tf_gate")]]],
@@ -1119,7 +1130,6 @@ export function fillPrograms(label, r, prompt) {
   if (/^infra:stage-plan/.test(label) && !("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256 };
   if (/^infra:verify-plan$/.test(label)) {
     if (!("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256 };
-    if (!("plan_hash_head" in r) && "plan_sha256_head" in r) r.plan_hash_head = { plan_sha256: r.plan_sha256_head };
   }
   // 5.0.3 (ledger 2010): a format-plan stub with no dsn_check finds no DSN
   if (/^infra:format-plan/.test(label) && !("dsn_check" in r)) {
@@ -1204,7 +1214,7 @@ export function happy(over = {}) {
     // every role on sonnet (the shipped DISPATCH lines differ; v5_roles runs them)
     __dispatch: Object.fromEntries(ROLE_NAMES.map((k) => [k, "DISPATCH: model=sonnet"])),
     intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF, tried: over.tried || triedFor(over.brief || BRIEF) },
-    "infra:branch-scan": { status: "ok", reason: "scanned", commits: [], refs: [] },
+    "infra:branch-scan": { status: "ok", reason: "scanned", head: PB, commits: [], refs: [] },
     "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
     "infra:commit-plan": commitStub(store, PC, PSHA),
     "infra:verify-plan-commit": verifyStub(store),
@@ -1213,9 +1223,8 @@ export function happy(over = {}) {
     "infra:verify-plan": {
       status: "ok",
       reason: "verified",
-      head: PC,
+      head: PB,
       plan_sha256: PSHA,
-      plan_sha256_head: PSHA,
       is_ancestor: true,
       commits_since: [],
       plan_touched: [],

@@ -18,6 +18,7 @@ import {
   ARGS,
   BRIEF,
   PC,
+  PB,
   PSHA,
   happy,
   run,
@@ -148,8 +149,12 @@ test("4.0.0 1993: a shipped program prints its own name and file sha256; a paste
     writeFileSync(join(wt, "a.md"), "a\n");
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "i");
+    // 6.0.0 (ledger 2042): plan_files lists a given commit against its parent
+    writeFileSync(join(wt, "b.md"), "b\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "p");
     const f = join(SCRIPTS_SRC, "plan_files.py");
-    const r = spawnSync("python3", ["-I", f, wt], { encoding: "utf8", cwd: tmpdir() });
+    const r = spawnSync("python3", ["-I", f, wt, "HEAD"], { encoding: "utf8", cwd: tmpdir() });
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.deepEqual(o.program, { name: "plan_files", sha256: sha256(readFileSync(f, "utf8")) });
@@ -157,7 +162,7 @@ test("4.0.0 1993: a shipped program prints its own name and file sha256; a paste
     const d = Object.assign({}, o);
     delete d.digest;
     assert.equal(o.digest, sha256(canon(d)));
-    const pasted = spawnSync("python3", ["-I", "-c", readFileSync(f, "utf8"), wt], { encoding: "utf8", cwd: tmpdir() });
+    const pasted = spawnSync("python3", ["-I", "-c", readFileSync(f, "utf8"), wt, "HEAD"], { encoding: "utf8", cwd: tmpdir() });
     assert.equal(pasted.status, 0, pasted.stderr);
     assert.deepEqual(JSON.parse(pasted.stdout).program, { name: null, sha256: null });
     // plan_hash prints JSON now: the sha256 and its program
@@ -296,7 +301,7 @@ function callersScript() {
 function precommitScript() {
   const s = happy();
   Object.assign(s, {
-    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "role:fleet-intent-judge": {
       status: "ok",
       reason: "matches the task",
@@ -304,7 +309,7 @@ function precommitScript() {
       deviations: [{ item: "adds f()", allowed_by: "task body: 'add f'", source_ref: "L42", fails_closed: true, verdict: "approve", reason: "asked for" }],
       coverage: { covered: true, missing: [] },
     },
-    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" },
   });
   s["role:scope-and-plan"] = Object.assign({}, s["role:scope-and-plan"], { repo_obligations: [{ id: "fmt", kind: "other", instruction: "format", check_cmd: "pre-commit run prettier --all-files" }] });
@@ -451,7 +456,7 @@ test("4.0.0 1993: a verify result that names other files, another plan hash or a
     [(r) => (r.plan_files.files = ["docs/plans/x.md", "src/evil.py"]), /not exactly docs\/plans\/x\.md/],
     [(r) => (r.plan_hash.plan_sha256 = "e".repeat(64)), /the committed plan hashes/],
     [(r) => (r.plan_ref.refs = []), /differs from the sealed ref/],
-    [(r) => (r.plan_files.head = "9".repeat(40)), /head/],
+    [(r) => (r.plan_files.head = "9".repeat(40)), /with HEAD 9{40}/],
     [(r) => (r.plan_ref.refs[0].tag_sha = "8".repeat(40)), /is not the one written/],
   ];
   for (const [mut, re] of cases) {
@@ -524,7 +529,14 @@ test("4.0.0 1993 AC-6: one flipped char in chunk 2 exits 3 with bad_chunks [2] a
     const c2 = readFileSync(join(dir, "2.b64"), "utf8");
     writeFileSync(join(dir, "2.b64"), (c2[0] === "A" ? "B" : "A") + c2.slice(1));
     const prog = join(SCRIPTS_SRC, "plan_ref_write.py");
-    const argv = ["-I", prog, wt, "l42", dir, String(shas.length), sha256(msg), JSON.stringify(shas)];
+    // 6.0.0 (ledger 2042): the plan doc in the worktree, sealed on HEAD (plan_base)
+    const head = g("rev-parse", "HEAD").trim();
+    const doc = () => {
+      mkdirSync(join(wt, "docs", "plans"), { recursive: true });
+      writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan\n");
+    };
+    doc();
+    const argv = ["-I", prog, wt, "l42", head, "docs/plans/x.md", dir, String(shas.length), sha256(msg), JSON.stringify(shas)];
     const bad = spawnSync("python3", argv, { encoding: "utf8", env, cwd: home });
     assert.equal(bad.status, 3, bad.stderr);
     assert.deepEqual(JSON.parse(bad.stdout), { bad_chunks: [2] });
@@ -533,8 +545,8 @@ test("4.0.0 1993 AC-6: one flipped char in chunk 2 exits 3 with bad_chunks [2] a
     const ok = spawnSync("python3", argv, { encoding: "utf8", env, cwd: home });
     assert.equal(ok.status, 0, ok.stderr);
     const o = JSON.parse(ok.stdout);
-    const head = g("rev-parse", "HEAD").trim();
-    assert.equal(o.head, head);
+    assert.equal(o.plan_base, head);
+    assert.equal(g("rev-parse", o.plan_commit + "^").trim(), head);
     assert.equal(g("rev-parse", "refs/fleet/l42/plan").trim(), o.tag_sha);
     assert.deepEqual(o.program, { name: "plan_ref_write", sha256: programSha("plan_ref_write") });
     const d = Object.assign({}, o);
@@ -542,13 +554,14 @@ test("4.0.0 1993 AC-6: one flipped char in chunk 2 exits 3 with bad_chunks [2] a
     assert.equal(o.digest, sha256(canon(d)));
     const raw = g("cat-file", "tag", o.tag_sha);
     assert.equal(raw.slice(raw.indexOf("\n\n") + 2), msg);
-    assert.equal(raw.split("\n")[0], "object " + head);
+    assert.equal(raw.split("\n")[0], "object " + o.plan_commit);
     assert.ok(!existsSync(dir), "the chunk dir is removed after a success");
     // a second, different ref keeps the first as plan-1
     const msg2 = msg.replace("l42", "l42 ");
     const b2 = Buffer.from(msg2, "utf8").toString("base64");
     const shas2 = writeChunks(dir, b2, 4000);
-    const ok2 = spawnSync("python3", ["-I", prog, wt, "l42", dir, String(shas2.length), sha256(msg2), JSON.stringify(shas2)], { encoding: "utf8", env, cwd: home });
+    doc();
+    const ok2 = spawnSync("python3", ["-I", prog, wt, "l42", head, "docs/plans/x.md", dir, String(shas2.length), sha256(msg2), JSON.stringify(shas2)], { encoding: "utf8", env, cwd: home });
     assert.equal(ok2.status, 0, ok2.stderr);
     assert.equal(g("rev-parse", "refs/fleet/l42/plan-1").trim(), o.tag_sha);
   } finally {
@@ -562,20 +575,21 @@ test("4.0.0 1993: the chunk writer refuses a chunk dir outside the scratch dir, 
     const msg = '{"a":1}\n';
     const b64 = Buffer.from(msg).toString("base64");
     const prog = join(SCRIPTS_SRC, "plan_ref_write.py");
+    const B = [g("rev-parse", "HEAD").trim(), "docs/plans/x.md"];
     const outside = join(home, "elsewhere");
     let shas = writeChunks(outside, b64, 4000);
-    let r = spawnSync("python3", ["-I", prog, wt, "l42", outside, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    let r = spawnSync("python3", ["-I", prog, wt, "l42", ...B, outside, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /not under/);
     const dir = join(home, "scratch", "c");
     shas = writeChunks(dir, b64, 4000);
-    r = spawnSync("python3", ["-I", prog, wt, "l42", dir, "1", sha256("other"), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    r = spawnSync("python3", ["-I", prog, wt, "l42", ...B, dir, "1", sha256("other"), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
     assert.notEqual(r.status, 3);
     assert.match(r.stderr, /decoded message hashes/);
-    r = spawnSync("python3", ["-I", prog, wt, "l42", dir, "2", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    r = spawnSync("python3", ["-I", prog, wt, "l42", ...B, dir, "2", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
-    r = spawnSync("python3", ["-I", prog, wt, "../x", dir, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    r = spawnSync("python3", ["-I", prog, wt, "../x", ...B, dir, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
     assert.equal(g("for-each-ref", "refs/fleet/"), "");
   } finally {

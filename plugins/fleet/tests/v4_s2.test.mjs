@@ -37,7 +37,7 @@ test("4.0.0 S2 keys: the planner schema types change_kind, new_behaviour and cri
 });
 
 test("4.0.0 S2 keys: the intent-judge schema has classification {change_kind, new_behaviour, quote}", async () => {
-  const out = await run(happy({ script: { "hasher:pre-intent": { status: "ok", fingerprint: { head: "abc1234def0", tree: "P0" } } } }), { ...ARGS, confirm: "auto" });
+  const out = await run(happy({ script: { "hasher:pre-intent": { status: "ok", fingerprint: { head: "b0de1234567", tree: "P0" } } } }), { ...ARGS, confirm: "auto" });
   const c = out.calls.find((x) => x.label === "role:fleet-intent-judge");
   assert.ok(c, "intent judge dispatched: " + out.labels.join(", "));
   const cl = c.opts.schema.properties.classification;
@@ -216,7 +216,7 @@ test("1984: a judge that mutates the worktree is reported before its drift", asy
     script: {
       "role:fleet-test-judge:r1": rawRole("fleet-test-judge", { verdict: "approve", routed_findings: [] }),
       "role:fleet-test-judge:r1:retry": rawRole("fleet-test-judge", { verdict: "approve", routed_findings: [] }),
-      "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: { head: "abc1234def0", tree: "CHANGED" } },
+      "hasher:fp-post:test-judge:r1": { status: "ok", fingerprint: { head: "b0de1234567", tree: "CHANGED" } },
     },
   });
   const out = await run(s, ARGS);
@@ -241,9 +241,9 @@ test("AC-1984-3: the coder is never re-run on drift; round 2 gets the drift as a
     script: {
       "role:fleet-coder:r1": { status: "ok", reason: "done", changed_paths: ["src/x.py"], added_symbols: null, frozen_tests_red_at_start: true, suite_result: { command: "pytest", exit_code: 0 } },
       "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
-      "hasher:post-coder:r2": { status: "ok", fingerprint: { head: "abc1234def0", tree: "K2" } },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: { head: "b0de1234567", tree: "K2" } },
       "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
-      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: { head: "abc1234def0", tree: "K2" } },
+      "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: { head: "b0de1234567", tree: "K2" } },
     },
   });
   const out = await run(s, ARGS);
@@ -263,8 +263,8 @@ test("1984: coder drift in every round ends at the code round cap", async () => 
       "role:fleet-coder:r1": bad,
       "role:fleet-coder:r2": bad,
       "role:fleet-coder:r3": bad,
-      "hasher:post-coder:r2": { status: "ok", fingerprint: { head: "abc1234def0", tree: "K2" } },
-      "hasher:post-coder:r3": { status: "ok", fingerprint: { head: "abc1234def0", tree: "K3" } },
+      "hasher:post-coder:r2": { status: "ok", fingerprint: { head: "b0de1234567", tree: "K2" } },
+      "hasher:post-coder:r3": { status: "ok", fingerprint: { head: "b0de1234567", tree: "K3" } },
     },
   });
   const out = await run(s, ARGS);

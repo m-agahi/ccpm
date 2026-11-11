@@ -225,7 +225,7 @@ test("4.0.2 1997 repro (wf_87a99806-757): branch-scan with the right program but
   const c = o.calls.find((x) => x.label === "infra:branch-scan");
   assert.ok(requiredAt(c.opts.schema, null), "top-level file_sha256 required");
   assert.ok(requiredAt(c.opts.schema, "test_db"), "test_db.file_sha256 required");
-  assert.match(c.prompt, /Return \{status: "ok", reason, commits, refs, plan_tip_time, program, file_sha256, digest, test_db\}/);
+  assert.match(c.prompt, /Return \{status: "ok", reason, head, commits, refs, plan_tip_time, program, file_sha256, digest, test_db\}/);
   // the nested slot fails closed too
   const s2 = happy();
   s2.__mutate = { label: "infra:branch-scan", fn: (r) => (delete r.test_db.file_sha256, r) };

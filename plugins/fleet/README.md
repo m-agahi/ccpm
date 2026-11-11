@@ -83,13 +83,13 @@ A missing nonce returns `needs_human` before any agent runs.
 | 1    | preflight          | a role file changed or missing; an unshimmed IaC tool on PATH                                     |
 | 2    | intake (read only) | `needs_human` (ambiguous repo or ticket) stops before any other step                              |
 | 3    | workspace (infra)  | creates or reuses branch `fleet/<task id>-<slug>` and its worktree                                |
-| 4    | branch-scan (r/o)  | any commit beyond origin/<default> that is not a plan commit -> stop                              |
+| 4    | branch-scan (r/o)  | any commit beyond origin/<default> -> stop (6.0.0: plan commits are off the branch)               |
 | 5    | scope-and-plan     | criterion ids; disjoint test files; `tldr`; `plan_diff` is a string array                         |
 | 5a   | callers (r/o)      | `changed_symbols` map well formed; `git grep -w` hits equal the map                               |
 | 6    | -                  | short path when `est_diff_lines` < 20 and `new_behaviour` false: one test writer, every gate kept |
 | 7    | plan-audit         | verdict other than `approve` -> `needs_human`                                                     |
-| 8    | stage-plan         | stages the plan doc; returns the sha256 of the staged bytes                                       |
-| 9    | commit-plan        | commits the plan doc only, LOCALLY; writes the sealed ref as a git object                         |
+| 8    | stage-plan         | hashes the plan doc in the worktree (6.0.0: no `git add`)                                         |
+| 9    | commit-plan        | seals the plan doc in a plan commit off the branch, LOCALLY; writes the sealed ref                |
 
 Branch-scan: a plan commit has the subject `plan(<task id>): <slug>`, and its file set is exactly
 `{plan_path}`. The scan reads `plan_path` from a sealed plan ref of the task
@@ -98,7 +98,32 @@ target is that commit; paths are compared exactly after normalisation, with no p
 match. A commit with no such plan ref, a broken seal, another task's ref, or any other file (a
 `.fleet/` path included) is a build commit. If the fleet branch carries any build
 commit, plan mode stops with "branch has build commits; run build, or delete branch". It never commits a plan on top
-of code. On a plan-only branch it adds a new plan commit.
+of code. Since 6.0.0 a branch that carries a plan commit of fleet 5.x stops too ("delete branch ...,
+then re-run plan"), because that commit would ship the plan doc.
+
+### Plan off the branch (6.0.0, ledger 2042)
+
+The plan doc never lands on the pushed branch or in the PR (ADR-1213; it supersedes the ADR-1163
+sentence "The plan doc does belong in the PR"). Plan mode runs the repo's pre-commit hooks on the
+plan doc (`infra:format-plan`) as before. Then `plan_ref_write.py` writes the plan commit with no
+`git commit`: a temporary index on `plan_base` (the branch HEAD the scan saw), the plan bytes as
+they are, `commit-tree -p <plan_base>`. The commit is on no branch. The tag at
+`refs/fleet/<task id>/plan` targets it and keeps it. The program then moves the plan doc to
+`<scratch>/plan/<plan_path>` (a tracked, ingested plan file is restored to HEAD), so the worktree is
+clean and the branch HEAD has not moved. An identical re-plan on the same base reuses the commit.
+`plan_files.py <worktree> <commit>` lists the commit against its parent, and the script checks that
+the parent is the sealed `plan_base` and HEAD is unchanged.
+
+The sealed ref holds `plan_base`. The build verifies that the branch HEAD is `plan_base` or descends
+from it through fleet commits only, and that no commit since touches `plan_path`. Verify writes the
+plan doc from the plan commit to `<scratch>/plan/<plan_path>`
+(`plan_hash.py <wt> <plan_commit> <plan_path> <dest>`), and every role gets that absolute path as `plan_path`. Code diffs (judges,
+coder, caller check, hook surface, review) start at `plan_base`. A ref without `plan_base` (sealed
+by 5.x) stops with "delete branch ..., then re-run plan". The fleet-scan before each push stops when
+`plan_path` is in the PR diff or in a commit. The PR body carries the plan's TL;DR and acceptance
+criteria (ruling 2), never the plan doc or a link to it. Write-back has no plan link: a ledger
+section says `Plan: <plan_path>, sealed locally at refs/fleet/<task id>/plan (not in the PR)`, and
+issue and Jira comments carry the TL;DR and the PR link only.
 Since 3.0.0 the scan is one program (`BRANCH_SCAN_PY`) and no plan-ref message text crosses the
 relay: the program lists the commits (`{sha, subject, files}`, newest first) and, per plan ref,
 the name, target, the sha256 of the message and its own reading of the message: `task_id`,
@@ -301,9 +326,8 @@ Since 2.1.4 the full plan ref is a local git object, never a file and never push
 tag object (`git mktag`, no tag name, index untouched, `core.hooksPath=/dev/null` so no hook runs)
 whose target is the plan commit and whose message is the sealed JSON, at
 `refs/fleet/<task id>/plan`. A re-plan moves that ref to the new plan commit and keeps the earlier
-value as `refs/fleet/<task id>/plan-<n>` when its target or message differs. When HEAD is a
-plan-only commit of the task and the staged plan doc is byte-identical to HEAD's, commit-plan makes
-no commit (never `--allow-empty`) and the new ref targets HEAD. The plan commit holds `plan_path` only; nothing under
+value as `refs/fleet/<task id>/plan-<n>` when its target or message differs. When the plan doc and
+`plan_base` are unchanged, the program reuses the earlier plan commit (6.0.0). The plan commit holds `plan_path` only; nothing under
 `.fleet/` is written, staged or committed, so a global `.fleet/` gitignore changes nothing. It
 holds `branch`, `plan_path`, `plan_sha256`, `criteria`, `brief`, `task_id`, `slug`, `tldr`,
 `plan_diff` (2.1.0), `plan_facts` (scope fence, estimate, `test_cmd`, `repo_obligations` and,
@@ -471,9 +495,9 @@ commits of this plan only (`feat(<task id>): <slug words>` and `fix(<task id>): 
 with `plan_path` unchanged. Anything else stops with the same reason.
 Stage-plan, commit-plan and verify run the same embedded hash program.
 Since 3.1.0 no step relays raw git output for these checks. Verify runs `VERIFY_SINCE_PY`
-(worktree, plan commit, plan path), which prints `{head, is_ancestor, commits_since, plan_touched,
+(worktree, `plan_base` since 6.0.0, plan path), which prints `{head, is_ancestor, commits_since, plan_touched,
 changed_since, args, digest}`; commit-plan runs `PLAN_FILES_PY`, which prints
-`{head, files, args, digest}`. `args` echoes the program's arguments, and the script compares them
+`{head, commit, parent, files, args, dsn_paths, digest}`. `args` echoes the program's arguments, and the script compares them
 with what it passed.
 The script recomputes each digest and stops the run (`failed`) on a dropped or changed entry or a
 missing list. Every embedded program runs as `python3 -I`; a program that reads the repo takes the
@@ -496,11 +520,12 @@ A `plan_wrong` verdict stops the build. The script:
 1. takes the code judge's `plan` findings and parses each `Proposed plan change: <line>` into
    `proposed_plan_change[]` (a finding without that line is used whole and logged);
 2. creates a detached worktree at the old `plan_commit`, runs scope-and-plan (the findings are an
-   extra `text` source) and plan-audit there, and commits the new plan there;
+   extra `text` source) and plan-audit there, and seals the new plan there on the same `plan_base`
+   (off the branch, 6.0.0);
 3. saves the old head as branch `fleet/<task id>-<slug>--superseded-<n>` and the uncommitted work
    (the judged tree) under `refs/fleet/<task id>-<slug>/superseded-<n>-tree` (`git update-ref` to
-   the tree object; no commit is created, nothing is pushed), then resets the fleet branch to the
-   new plan commit and runs `git clean -fd` (never `-x`);
+   the tree object; no commit is created, nothing is pushed), then resets the fleet branch to
+   `plan_base` and runs `git clean -fd` (never `-x`);
 4. returns `awaiting_confirmation` with `proposed_plan_change`, `plan_findings`, `superseded_ref`,
    `superseded_tree_ref` and a fresh `plan_ref`.
 
@@ -565,11 +590,11 @@ blocking review) runs one (6.0.0): the frozen maps are the `hasher:resume` maps,
 is `refs/fleet/<task>/freeze`, and the round count comes from the run-state. Without that freeze
 ref it stops with `needs_human`.
 
-With no run-state but build commits on the branch past `plan_commit` (a branch from 2.0.x, or a
+With no run-state but build commits on the branch past `plan_base` (a branch from 2.0.x, or a
 run that stopped before its first state write), the build stops with "approved but unresumable:
 branch has build commits without run-state; push manually or delete branch". It never re-runs the
 writers on a committed fleet branch. A run-state of another plan is ignored (and logged) when HEAD
-is the plan commit, for example after a re-plan.
+is `plan_base`, for example after a re-plan.
 
 - **Ledger:** for each `ledger` source, one `## Fleet build` section (tldr, plan path, PR URL,
   hidden `fleet:<task id>` marker) is appended to the task's body page (`body_slug`) in
@@ -617,10 +642,8 @@ is the plan commit, for example after a re-plan.
   tool-restricted agent type that can call `mcp__yaadgaar__*` exists, so the step uses the default
   agent. A ref that is not a task number is never sent. A failed entry carries `section_text` to
   add by hand.
-- **Plan link:** `https://github.com/<o>/<r>/blob/<branch>/<plan>`, or
-  `https://codeberg.org/<o>/<r>/src/branch/<branch>/<plan>` when the origin's configured URL names
-  Codeberg (`remote_host` from the workspace step).
-- **Comments:** one comment on each `jira`, `github` and `codeberg` source: tldr, plan link, PR
+- **Plan:** no link since 6.0.0; the plan doc is not on the pushed branch.
+- **Comments:** one comment on each `jira`, `github` and `codeberg` source: tldr, PR
   link and the marker `fleet:<task id>` (an HTML comment on GitHub and Codeberg, a plain last line
   on Jira). A read-only step lists the existing comments first; a source that already has the
   marker is skipped. The script refuses, in code, any comment with a line that starts with `digger`
@@ -1330,7 +1353,6 @@ change that a judge makes and reverts within its own run.
   that.
 - The pr-opener role pushes the branch too. The script pushes first, so the role's push is a no-op.
 - Each push attempt follows an approve, so a hook rejection costs a full coder and judge round.
-- The plan link in comments assumes a GitHub origin (`https://github.com/<owner>/<repo>/blob/...`).
 - Interpreter startup hooks inside an in-worktree virtualenv are not detected. The walk skips
   `.venv`, `venv`, `.tox` and `.nox`, because an editable install writes a `.pth` file there and
   would cause a false mismatch. So a coder can drop a `.pth` or `sitecustomize.py` into such a venv

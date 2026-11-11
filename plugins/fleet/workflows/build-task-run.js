@@ -583,7 +583,6 @@ const INFRA_SCHEMA = {
       },
     },
     plan_sha256: STR,
-    plan_sha256_head: STR,
     is_ancestor: { type: "boolean" },
     commits_since: {
       type: "array",
@@ -654,8 +653,7 @@ const INFRA_SCHEMA = {
     file_sha256: STR,
     tag_sha: STR,
     plan_hash: PROGRAM_OUTPUT,
-    plan_hash_head: PROGRAM_OUTPUT,
-    plan_files: { type: ["object", "null"], properties: { head: STR, files: { type: "array", items: STR }, args: { type: "array", items: STR }, dsn_paths: { type: "array", items: STR }, program: PROGRAM_PROP, file_sha256: STR, digest: STR } },
+    plan_files: { type: ["object", "null"], properties: { head: STR, commit: STR, parent: STR, files: { type: "array", items: STR }, args: { type: "array", items: STR }, dsn_paths: { type: "array", items: STR }, program: PROGRAM_PROP, file_sha256: STR, digest: STR } },
     plan_ref: { type: ["object", "null"], properties: { refs: { type: "array", items: { type: "object" } }, program: PROGRAM_PROP, file_sha256: STR } },
     // the DSN precheck of infra:format-plan
     dsn_check: { type: ["object", "null"], properties: { holds: { type: "boolean" }, lines: { type: "array", items: { type: "integer" } }, args: { type: "array", items: STR }, program: PROGRAM_PROP, file_sha256: STR, digest: STR } },
@@ -1417,13 +1415,9 @@ function proposedChanges(findings, note) {
     return text;
   });
 }
-function planLinkFor(host, slug, branch, planPath) {
-  if (/codeberg/i.test(String(host || ""))) return "https://codeberg.org/" + slug + "/src/branch/" + branch + "/" + planPath;
-  return "https://github.com/" + slug + "/blob/" + branch + "/" + planPath;
-}
-
-function commentText(kind, taskId, tldr, planLink, prUrl) {
-  const body = String(tldr || "").trim() + "\n\nPlan: " + planLink + "\nPR: " + prUrl;
+// 6.0.0 (2042): no plan line; the plan doc never ships, so external readers get the TL;DR only
+function commentText(kind, taskId, tldr, prUrl) {
+  const body = String(tldr || "").trim() + "\n\nPR: " + prUrl;
   const marker = "fleet:" + taskId;
   return kind === "jira" ? body + "\n\n" + marker : body + "\n\n<!-- " + marker + " -->";
 }
@@ -1466,7 +1460,7 @@ function relayDigestOk(r, keys, name) {
 // Every program ships as plugins/fleet/scripts/<name>.py
 // PROGRAM_SHA256_BEGIN
 const PROGRAM_SHA256 = {
-  "branch_scan": "fdf128542f76e119afa892f74316746ae761ccdf10d096f5274042da52d473b5",
+  "branch_scan": "ea4c598ddde55a0e69382270a8deae8e61403988d00495355139db6f86a9f776",
   "build_dir": "7406264beafd58145a4035296636e7ab94dd4e339c58aaabf84584d7df111866",
   "callers": "dc5b924775246e16dc8d3d8c6e913e77463ce342b5054cacebc298d394001575",
   "changed_defs": "1a30e9ca3202f6a434911aa2ecb3e5b446194f95e414b6caa4a4c3279f96c4d4",
@@ -1482,10 +1476,10 @@ const PROGRAM_SHA256 = {
   "parked": "14150028c5fc657e10214efd33dd6669c83281c8a45f07410aad6e6b7520bd9b",
   "path_check": "9a05c718892ff35b213a61fd8abeadad4dae0fa2ca7671485d670fe02b5a1596",
   "plan_dsn": "269dfac0132859fc884ef34a0032e2932f3d943100e3cbb7906466cf135a5fc6",
-  "plan_files": "20f52c19db325d6b5385a443e7ad78f824f09057fd48fcd5ee5b24cf799d1670",
-  "plan_hash": "5901757f34415759f587989e09b57821da8602418ecd45ba384f0366502b5b40",
+  "plan_files": "a985309a34cc229fd08087c34933b6b752fa56896c194393b19d59ea99361e14",
+  "plan_hash": "c944bdd9f0d97b8260c1ffb571501cc9dd25330fa98b58e5ea090216e5268800",
   "plan_ref": "70b82ddd6b5cd3321dd04efc6b9549b001d25b1aa0ac98ed73a5e2f75ff8841d",
-  "plan_ref_write": "ba7c4e18e5c7054dc9cc43aa6b5cf143914e42cbca72ad22f3dcd59ab957c1e1",
+  "plan_ref_write": "b59c4ac2cd9934fdea04b45296da46486c5df107b7ae8a150b6daf191ec64d6b",
   "policy": "e4fdd22ccc9ebbee24e128ee54f91e3eba90fae350d64703655358a3e7026141",
   "precommit_ids": "627d38e747a9f5b57bba6b9cfc6e5deccb016be7b943ff89b7fd5689a6ddc09b",
   "push_classify": "3ac4435c37d17784050a25c58f5071c60354698defb9a66c963636a70185a6c1",
@@ -1513,7 +1507,7 @@ const ROLE_SHA256 = {
   "fleet-code-judge": "0f9af94bf2ccd40ea9f26613f94f55a186abd63a183b348acf1c684c75958f49",
   "fleet-coder": "ba59027bfc8e81c997c39897b43c1ba9caa0aff39c20b16eae686d8161422d05",
   "fleet-intent-judge": "03283fc805f57bcf22a6448fc43b8ead05983e94de1b05563f3e50c4a7837a1e",
-  "fleet-pr-opener": "dca776ef1385239fdfcf62058fdd9546903b5f428ee763ff031cacbc483e24d9",
+  "fleet-pr-opener": "68ccfdc53f233bbbe3afd76e83c4a93662bc09c0123440accfc48f71e6c90734",
   "fleet-test-judge": "0b288f9221703e5534ba13b8ba31d242ecdd3663ceca12dba0d63fd57c4a301a",
   "fleet-test-writer": "ea3a3490bd986a1bf90bf01a8494620b819959d1bb4f1247d914e8b1d495914d",
   "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
@@ -1597,7 +1591,7 @@ const PROGRAM_SLOTS = [
   [/^infra:commit-plan/, [[null, "plan_ref_write"]]],
   [/^infra:verify-plan-commit/, [["plan_files", "plan_files"], ["plan_hash", "plan_hash"], ["plan_ref", "plan_ref"]]],
   [/^infra:load-ref/, [[null, "plan_ref"]]],
-  [/^infra:verify-plan(?!-commit)/, [[null, "verify_since"], ["plan_hash", "plan_hash"], ["plan_hash_head", "plan_hash"], ["test_db", "test_db_decl"]]],
+  [/^infra:verify-plan(?!-commit)/, [[null, "verify_since"], ["plan_hash", "plan_hash"], ["test_db", "test_db_decl"]]],
   [/^infra:read-state$/, [[null, "read_state"]]],
   [/^infra:policy$/, [[null, "policy"]]],
   [/^infra:state:/, [[null, "state_write"]]],
@@ -1630,15 +1624,15 @@ const PROGRAM_KEYS = {
   "gh_identity": ["origin", "repos", "args"],
   "hasher": ["fingerprint", "hashes", "scripts"],
   "hasher:base": ["fingerprint", "hashes", "changed", "scripts"],
-  "branch_scan": ["commits", "refs", "plan_tip_time"],
+  "branch_scan": ["head", "commits", "refs", "plan_tip_time"],
   "test_db_decl": ["decl", "error", "args"],
   "parked:read": ["parked", "args"],
   "parked:write": ["written", "sha256", "args"],
   "parked:park": ["target", "clean", "dirty", "args"],
   "plan_hash": ["plan_sha256"],
   "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map"],
-  "plan_ref_write": ["head", "tag_sha"],
-  "plan_files": ["head", "files", "args", "dsn_paths"],
+  "plan_ref_write": ["plan_commit", "plan_base", "tag_sha", "reused", "plan_file", "dirty"],
+  "plan_files": ["head", "commit", "parent", "files", "args", "dsn_paths"],
   "plan_dsn": ["holds", "lines", "args"],
   "plan_ref": ["refs"],
   "plan_ref:chunks": ["refs", "chunks"],
@@ -1696,6 +1690,7 @@ const PROGRAM_OUT = {
   remote_url: { url: STR_OR_NULL, args: STRS, digest: STR },
   session_project: { project: STR_OR_NULL, source: STR_OR_NULL, cwd: STR, args: STRS, digest: STR },
   branch_scan: {
+    head: STR,
     commits: { type: "array", items: { type: "object", properties: { sha: STR, subject: STR, files: STRS } } },
     refs: {
       type: "array",
@@ -1721,8 +1716,8 @@ const PROGRAM_OUT = {
   },
   plan_hash: { plan_sha256: STR },
   format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, digest: STR },
-  plan_ref_write: { head: STR, tag_sha: STR, digest: STR },
-  plan_files: { head: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
+  plan_ref_write: { plan_commit: STR, plan_base: STR, tag_sha: STR, reused: BOOL, plan_file: STR, dirty: STRS, digest: STR },
+  plan_files: { head: STR, commit: STR, parent: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
   plan_dsn: { holds: BOOL, lines: { type: "array", items: INT }, args: STRS, digest: STR },
   plan_ref: {
     refs: { type: "array", items: { type: "object", properties: { name: STR, tag_sha: STR, type: STR, target: STR, target_type: STR, sha256: STR_OR_NULL } } },
@@ -2249,12 +2244,11 @@ function branchScanPrompt(inputs) {
 
 function stagePlanPrompt(inputs) {
   return (
-    INFRA_STEP + "stage the plan doc and hash the staged bytes. No other edits, no commit, no push.\n" +
+    INFRA_STEP + "hash the plan doc. No edits, no staging, no commit, no push.\n" +
     inputsLine(inputs) +
     "1. " +
     planWorktreeSteps(inputs) +
-    "3. `git -C <worktree> add -- <plan_path>`.\n" +
-    "4. Run this one command exactly as written, unmodified (it hashes the staged copy):\n" +
+    "3. Run this one command exactly as written, unmodified (it hashes the worktree file):\n" +
     planHashCmd(inputs.worktree, "", inputs.plan_path) +
     "\n" +
     "It prints one JSON object " + printsKeys("plan_hash") + ": " + relayAs("plan_hash") + FAIL_STDERR +
@@ -2416,21 +2410,17 @@ function formatPlanPrompt(inputs) {
 function commitPlanPrompt(inputs, message) {
   const c = chunked(message);
   return (
-    INFRA_STEP + "commit the plan doc LOCALLY, in ONE commit that holds <plan_path> only, then record the sealed plan ref as a local git object. No other edits (the chunk files under <chunk_dir> excepted). Never push. Never --no-verify or any hook bypass; no Co-Authored-By trailer. No ledger, ticket or comment writes. Never stage, force-add or write any other path.\n" +
+    INFRA_STEP + "seal the plan doc LOCALLY: the program writes a plan commit that is on no branch (parent <plan_base>), records the sealed plan ref as a local git object and moves the plan doc out of the worktree. Never git add, commit, checkout or reset yourself. Never push. No ledger, ticket or comment writes.\n" +
     inputsLine(inputs) +
     "1. " +
     planWorktreeSteps(inputs) +
-    "3. `git -C <worktree> add -- <plan_path>`. Reuse check: when <reuse_head> is not null, `git -C <worktree> rev-parse HEAD` equals <reuse_head> and `git -C <worktree> diff --cached --quiet -- <plan_path>` exits 0 (the staged plan is byte-identical to HEAD's), make NO commit and set reused = true. Otherwise set reused = false and run `git -C <worktree> commit -m " +
-    shQuote("plan(" + inputs.task_id + "): " + inputs.slug) +
-    "`. Never --allow-empty. If a hook rewrites the plan, do not re-add it and do not commit again: return needs_human with the hook output (the plan ran through the hooks before the audit; a rewrite now would commit bytes the audit never saw). Any other hook failure: fix the cause and retry once; a second failure -> failed.\n" +
-    "4. `git -C <worktree> ls-files --error-unmatch -- <plan_path>` must succeed and `git -C <worktree> status --porcelain` must be empty; else needs_human.\n" +
-    "5. Write the plan ref (4.0.0): its tag message travels as base64 chunks you write to files under <chunk_dir>; the program checks every chunk against its sha256, then makes the tag object (git mktag: no tag name, no index change, no hook) and moves refs/fleet/<task_id>/plan. Write no other file.\n" +
-    chunkSteps(inputs.chunk_dir, c, progCmd("plan_ref_write", [inputs.worktree, inputs.task_id, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)])) +
+    "3. Write the plan ref: its tag message travels as base64 chunks you write to files under <chunk_dir>; the program checks every chunk against its sha256 (no hook runs, the branch and its index are not touched). Write no other file.\n" +
+    chunkSteps(inputs.chunk_dir, c, progCmd("plan_ref_write", [inputs.worktree, inputs.task_id, inputs.plan_base, inputs.plan_path, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)])) +
     "On success it prints one JSON object " + printsKeys("plan_ref_write") + ": copy every value unchanged and add `file_sha256` (the script recomputes the digest).\n" +
     (inputs.retire
-      ? "6. Housekeeping (4.0.0): `mkdir -p " + shQuote(inputs.retire.used) + " && mv -n -- " + shQuote(inputs.retire.dir) + " " + shQuote(inputs.retire.used) + "/`. An error here changes nothing above and does not fail the step.\n"
+      ? "4. Housekeeping (4.0.0): `mkdir -p " + shQuote(inputs.retire.used) + " && mv -n -- " + shQuote(inputs.retire.dir) + " " + shQuote(inputs.retire.used) + "/`. An error here changes nothing above and does not fail the step.\n"
       : "") +
-    "Return {status, reason, reused, " + returnKeys("plan_ref_write") + "}. The script verifies the commit and the ref in a separate read-only step."
+    "Return {status, reason, " + returnKeys("plan_ref_write") + "}. The script verifies the commit and the ref in a separate read-only step."
   );
 }
 
@@ -2440,11 +2430,11 @@ function verifyPlanCommitPrompt(inputs) {
     INFRA_STEP + "VERIFY the plan commit and the plan ref. Read only: no edits, no commits, no checkout, no reset, no push; run nothing but the three commands below.\n" +
     inputsLine(inputs) +
     "1. Run this command exactly as written, unmodified:\n" +
-    progCmd("plan_files", [inputs.worktree]) +
+    progCmd("plan_files", [inputs.worktree, inputs.plan_commit]) +
     "\n" +
     "It prints one JSON object " + printsKeys("plan_files") + ": " + relayAs("plan_files") + ", every path in order (the script recomputes the digest). Never list the files with git yourself.\n" +
     "2. Run this command exactly as written, unmodified:\n" +
-    planHashCmd(inputs.worktree, "HEAD", inputs.plan_path) +
+    planHashCmd(inputs.worktree, inputs.plan_commit, inputs.plan_path) +
     "\n" +
     "It prints one JSON object " + printsKeys("plan_hash") + ": " + relayAs("plan_hash") + ".\n" +
     "3. Run this command exactly as written, unmodified:\n" +
@@ -2613,20 +2603,17 @@ function verifyPlanPrompt(inputs) {
     (inputs.frozen_resume ? " Exception (frozen_resume is true): the uncommitted paths of a frozen build are expected; list them in reason and go on (the workflow checks the worktree tree itself)." : "") +
     "\n" +
     "2. `git -C <main_worktree> cat-file -e '<plan_commit>^{commit}'` (keep the quotes: zsh globs `^`) must succeed; else needs_human.\n" +
-    "3. Run this command exactly as written; it prints one JSON object " + printsKeys("plan_hash") + ": " + relayAs("plan_hash") + ":\n" +
-    planHashCmd(inputs.main_worktree, inputs.plan_commit, inputs.plan_path) +
-    "\n" +
-    "4. Run this command exactly as written; it prints one JSON object " + printsKeys("plan_hash") + ": " + relayAs("plan_hash_head") + ":\n" +
-    planHashCmd(inputs.main_worktree, "HEAD", inputs.plan_path) +
-    "\n" +
-    "5. Run this command exactly as written, unmodified:\n" +
-    progCmd("verify_since", [inputs.main_worktree, inputs.plan_commit, inputs.plan_path]) +
+    "3. Run this command exactly as written (it writes the plan doc to <plan_file>, outside the worktree):\n" +
+    progCmd("plan_hash", [inputs.main_worktree, inputs.plan_commit, inputs.plan_path, inputs.plan_file]) +
+    "\nIt prints one JSON object " + printsKeys("plan_hash") + ": " + relayAs("plan_hash") + ".\n" +
+    "4. Run this command exactly as written, unmodified:\n" +
+    progCmd("verify_since", [inputs.main_worktree, inputs.plan_base, inputs.plan_path]) +
     "\n" +
     "It prints one JSON object " + printsKeys("verify_since") + ". Copy every value unchanged: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). Never run git log or git diff yourself for these values. Non-zero exit -> failed with its stderr.\n" +
-    "6. Run this command exactly as written, unmodified:\n" +
+    "5. Run this command exactly as written, unmodified:\n" +
     progCmd("test_db_decl", [inputs.main_worktree, inputs.default_branch]) +
     "\nIt prints one JSON object " + printsKeys("test_db_decl") + ": " + relayAs("test_db") + FAIL_STDERR +
-    "Return {status, reason, plan_hash, plan_hash_head, " + returnKeys("verify_since") + ", test_db}."
+    "Return {status, reason, plan_hash, " + returnKeys("verify_since") + ", test_db}."
   );
 }
 
@@ -2659,7 +2646,7 @@ function replanResetPrompt(inputs) {
     treeCmd(inputs.main_worktree) +
     "\n" +
     "2. Save the old head and the uncommitted work, creating no commit: if branch <superseded_branch> exists it must point at <expected_head> (else needs_human); else `git -C <main_worktree> branch <superseded_branch> <expected_head>`. If ref <superseded_tree_ref> exists it must equal <expected_tree> (else needs_human); else `git -C <main_worktree> update-ref <superseded_tree_ref> <expected_tree>` (a ref to the judged tree object; never pushed). superseded_head = `git -C <main_worktree> rev-parse <superseded_branch>`.\n" +
-    "3. Only after step 2 succeeded: `git -C <main_worktree> reset --hard <new_plan_commit>`, then `git -C <main_worktree> clean -fd` (never -x: ignored files stay).\n" +
+    "3. Only after step 2 succeeded: `git -C <main_worktree> reset --hard <plan_base>`, then `git -C <main_worktree> clean -fd` (never -x: ignored files stay).\n" +
     "4. `git -C <main_worktree> worktree remove <replan_worktree>` (it must be clean; never --force).\n" +
     "5. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
     "Return {status, reason, head, superseded_head}."
@@ -4547,28 +4534,25 @@ async function commitPlanAndRef(ctx) {
   if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("failed", stLabel + " returned no usable plan_sha256");
   // + 2: the PATH re-check before the commit and the verify step
   const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2 });
-  const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: stagedSha, history }));
+  const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: stagedSha, history, planBase: ctx.planBase }));
   const msgSha = sha256Hex(refMessage(full));
   const label = "infra:commit-plan" + sfx;
   await pathRecheck("commit-plan" + sfx, ctx.phaseName);
   const chunkDir = scratchOf(ctx.worktree) + "/plan-ref-" + safeName(state.nonce + sfx);
   const r = await infra(
     label,
-    commitPlanPrompt(Object.assign({}, base, { task_id: full.task_id, slug: full.slug, reuse_head: ctx.reuseHead || null, chunk_dir: chunkDir }, ctx.retire ? { retire: ctx.retire } : {}), refMessage(full)),
+    commitPlanPrompt(Object.assign({}, base, { task_id: full.task_id, plan_base: ctx.planBase, chunk_dir: chunkDir }, ctx.retire ? { retire: ctx.retire } : {}), refMessage(full)),
     ctx.phaseName,
   );
   requireProgram(r, "plan_ref_write", label, "failed", "commit");
-  if (typeof r.head !== "string" || !SHA_RE.test(r.head) || typeof r.tag_sha !== "string" || !SHA_RE.test(r.tag_sha) || !relayDigestOk(r, progKeys("plan_ref_write"), "plan_ref_write"))
-    halt("failed", label + ": the relayed head and tag object do not match the program's digest (" + JSON.stringify(r.head === undefined ? null : r.head) + ")", "commit");
-  if (r.reused === true) {
-    if (!ctx.reuseHead) halt("failed", label + " claimed a reuse of HEAD, but no plan-only HEAD was offered for reuse");
-    if (r.head !== ctx.reuseHead) halt("failed", label + " claimed a reuse, but HEAD " + r.head + " is not the offered reuse head " + ctx.reuseHead);
-    gate("reused plan commit " + r.head + ": the plan doc is unchanged; no new commit");
-  }
-  const tiny = { branch: full.branch, plan_commit: r.head, plan_ref: refName, ref_sha256: msgSha, repo: full.brief.repo };
+  if (typeof r.plan_commit !== "string" || !SHA_RE.test(r.plan_commit) || r.plan_base !== ctx.planBase || typeof r.tag_sha !== "string" || !SHA_RE.test(r.tag_sha) || !Array.isArray(r.dirty) || !relayDigestOk(r, progKeys("plan_ref_write"), "plan_ref_write"))
+    halt("failed", label + ": the relayed plan commit, base and tag object do not match the program's digest (" + JSON.stringify(r.plan_commit === undefined ? null : r.plan_commit) + ")", "commit");
+  if (r.dirty.length) halt("needs_human", label + ": the worktree is not clean after the plan doc left it: " + r.dirty.join(", "), "scope");
+  if (r.reused === true) gate("reused plan commit " + r.plan_commit + ": the plan doc is unchanged; no new commit");
+  const tiny = { branch: full.branch, plan_commit: r.plan_commit, plan_ref: refName, ref_sha256: msgSha, repo: full.brief.repo };
   const v = await verifyPlanCommit(ctx, sfx, r, full, stagedSha, msgSha, tiny);
   if (ctx.onRefs) ctx.onRefs(v.plan_ref.refs);
-  gate("plan committed locally at " + r.head + " (" + full.plan_path + " sha256 " + full.plan_sha256 + "); sealed ref at " + refName + " (sha256 " + msgSha + "); not pushed");
+  gate("plan sealed locally at " + r.plan_commit + " on " + r.plan_base + ", off the branch (" + full.plan_path + " sha256 " + full.plan_sha256 + "); sealed ref at " + refName + " (sha256 " + msgSha + "); not pushed");
   return { full, tiny };
 }
 
@@ -4588,12 +4572,12 @@ async function verifyPlanCommit(ctx, sfx, w, full, stagedSha, msgSha, tiny) {
     if (typeof pf.head !== "string" || !SHA_RE.test(pf.head) || !Array.isArray(pf.files) || !relayDigestOk(pf, progKeys("plan_files"), "plan_files"))
       return "the relayed head and files do not match the program's digest (a path was dropped or changed in the copy)";
     if (!Array.isArray(pf.dsn_paths)) return "no dsn_paths list in the plan_files output";
-    if (canonical(pf.args) !== canonical([ctx.worktree])) return "the program ran on other arguments (" + JSON.stringify(pf.args === undefined ? null : pf.args) + ")";
+    if (canonical(pf.args) !== canonical([ctx.worktree, w.plan_commit])) return "the program ran on other arguments (" + JSON.stringify(pf.args === undefined ? null : pf.args) + ")";
     if (typeof ph.plan_sha256 !== "string" || !SHA256_RE.test(ph.plan_sha256)) return "no usable plan_sha256";
     if (!Array.isArray(pr.refs)) return "no plan ref list";
     return null;
   };
-  const inputs = { worktree: ctx.worktree, plan_path: full.plan_path, task_id: full.task_id };
+  const inputs = { worktree: ctx.worktree, plan_commit: w.plan_commit, plan_path: full.plan_path, task_id: full.task_id };
   let v = null;
   let problem = null;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -4608,19 +4592,20 @@ async function verifyPlanCommit(ctx, sfx, w, full, stagedSha, msgSha, tiny) {
   if (problem) {
     // only this stop returns the plan_ref, marked unverified
     state.unverifiedPlanRef = tiny;
-    halt("failed", label + ": " + problem + "; the plan commit " + w.head + " and ref " + refName + " stay unverified (build mode re-verifies them at load-ref)", "commit");
+    halt("failed", label + ": " + problem + "; the plan commit " + w.plan_commit + " and ref " + refName + " stay unverified (build mode re-verifies them at load-ref)", "commit");
   }
   const pf = v.plan_files;
-  if (pf.head !== w.head) halt("failed", label + ": HEAD is " + pf.head + ", not the head " + w.head + " the ref was written on", "commit");
+  if (pf.commit !== w.plan_commit || pf.parent !== full.plan_base || pf.head !== ctx.expectHead)
+    halt("failed", label + ": plan commit " + pf.commit + " on " + pf.parent + " with HEAD " + pf.head + ", not " + w.plan_commit + " on " + full.plan_base + " with HEAD " + ctx.expectHead, "commit");
   if (v.plan_hash.plan_sha256 !== stagedSha)
     halt("failed", label + ": the committed plan hashes " + v.plan_hash.plan_sha256 + ", the staged plan " + stagedSha);
   const files = Array.from(new Set(pf.files.map((f) => normPath(String(f)))));
   if (files.length !== 1 || files[0] !== normPath(full.plan_path))
     halt("needs_human", label + ": the plan commit holds " + JSON.stringify(pf.files) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
   if (pf.dsn_paths.length)
-    halt("needs_human", label + ": the committed plan " + JSON.stringify(pf.dsn_paths) + " holds mysql:// (a test DSN); reset the fleet branch past the plan commit " + pf.head + " before re-running plan (a later plan run does not re-check earlier plan commits, and the build pushes them)", "db");
+    halt("needs_human", label + ": the committed plan " + JSON.stringify(pf.dsn_paths) + " holds mysql:// (a test DSN); fix the plan doc, then re-run plan", "db");
   const e = v.plan_ref.refs.find((x) => x && x.name === refName);
-  const ep = planRefMetaProblem(e, w.head, msgSha) || (e.tag_sha !== w.tag_sha ? "tag object " + e.tag_sha + " is not the one written (" + w.tag_sha + ")" : null);
+  const ep = planRefMetaProblem(e, w.plan_commit, msgSha) || (e.tag_sha !== w.tag_sha ? "tag object " + e.tag_sha + " is not the one written (" + w.tag_sha + ")" : null);
   if (ep) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref (" + ep + ")");
   return v;
 }
@@ -4638,6 +4623,8 @@ function safeName(s) {
 function makePlanRef(f) {
   const ref = stripHeldOut({
     branch: f.branch,
+    // 6.0.0 (2042): the branch commit the dangling plan commit sits on
+    plan_base: f.planBase,
     plan_path: f.planPath,
     plan_sha256: f.planSha,
     criteria: f.criteria,
@@ -4973,14 +4960,16 @@ async function planMode(input, date) {
   requireProgram(scan, "branch_scan", "infra:branch-scan");
   if (!relayDigestOk(scan, progKeys("branch_scan"), "branch_scan"))
     halt("failed", "infra:branch-scan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
+  if (typeof scan.head !== "string" || !SHA_RE.test(scan.head)) halt("failed", "infra:branch-scan returned no usable head");
   const built = buildCommitsOf(scan.commits, names.taskId, scan.refs);
   if (built.length)
     halt(
       "needs_human",
       "branch has build commits; run build, or delete branch " + lay.branch + " (first: " + built[0].sha + " " + JSON.stringify(built[0].subject) + ")",
     );
-  if (scan.commits.length) gate("branch-scan: " + scan.commits.length + " earlier plan commit(s); re-planning on top");
-  const reuseHead = scan.commits.length ? String(scan.commits[0].sha) : null;
+  // 6.0.0 (2042): a 5.x plan commit on the branch would ship the plan doc
+  if (scan.commits.length)
+    halt("needs_human", "branch " + lay.branch + " carries a plan commit of fleet 5.x (" + scan.commits[0].sha + "); since 6.0.0 the plan doc never ships: delete branch " + lay.branch + ", then re-run plan");
   const tip = scan.plan_tip_time === null || scan.plan_tip_time === undefined ? null : scan.plan_tip_time;
   const parked = await loadParked(lay.scratch, Number.isInteger(tip) && tip >= 0 ? tip : null);
   const parkedBad = !!(parked && parked.unreadable);
@@ -5044,7 +5033,8 @@ async function planMode(input, date) {
       branch: lay.branch,
       phaseName: "Plan",
       after: 1 + (runGates ? autoGateAgents(p.planFacts.commands) : 0),
-      reuseHead,
+      planBase: scan.head,
+      expectHead: scan.head,
       retire: parked && parked.run ? { dir: lay.scratch + "/parked/" + parked.run, used: lay.scratch + "/parked/used" } : null,
       fields: {
         branch: lay.branch,
@@ -5283,6 +5273,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const pc = parseCheckCmd(o.check_cmd);
     if (!pc.ok) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + o.id + " check_cmd refused: " + pc.reason, "commands");
   }
+  // 6.0.0 (2042): a 5.x ref's plan commit is on the branch and its plan doc would ship
+  if (typeof loaded.plan_base !== "string" || !SHA_RE.test(loaded.plan_base))
+    halt("needs_human", "plan ref " + tiny.plan_ref + " was sealed before 6.0.0 (its plan commit is on the branch, so the plan doc would ship): delete branch " + tiny.branch + ", then re-run plan");
   const ref = Object.assign({}, loaded, { plan_commit: tiny.plan_commit, plan_ref: tiny.plan_ref });
   const brief = cleanBrief(ref.brief);
   const names = { taskId: ref.task_id, slug: ref.slug };
@@ -5305,14 +5298,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const remoteUrl = typeof pf.remote_url === "string" ? pf.remote_url : null;
   const mainWt = lay.mainWt;
   const branch = lay.branch;
-  // the commit the build's own commits sit on (2043; stream 2 of 6.0.0 retargets it)
-  const planBase = ref.plan_commit;
+  // the commit the build's own commits sit on; the plan doc is read from scratch (2042)
+  const planBase = ref.plan_base;
+  const planFile = lay.scratch + "/plan/" + ref.plan_path;
 
   // verify the approved plan
   const criteria = normCriteria(ref.criteria, pf.test_cmd);
   const v = await infra(
     "infra:verify-plan",
-    verifyPlanPrompt(Object.assign({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_path: ref.plan_path, default_branch: defaultBranch }, typeof input.freeze_digest === "string" ? { frozen_resume: true } : {})),
+    verifyPlanPrompt(Object.assign({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_base: planBase, plan_path: ref.plan_path, plan_file: planFile, default_branch: defaultBranch }, typeof input.freeze_digest === "string" ? { frozen_resume: true } : {})),
     "Verify",
     JUDGE_AGENT,
     "verify_since",
@@ -5322,32 +5316,30 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     halt("failed", "infra:verify-plan: the relayed result has no is_ancestor, commits_since, plan_touched or changed_since list");
   requireProgram(v, "verify_since", "infra:verify-plan");
   requireProgram(v.plan_hash, "plan_hash", "infra:verify-plan (plan_hash)");
-  requireProgram(v.plan_hash_head, "plan_hash", "infra:verify-plan (plan_hash_head)");
   v.plan_sha256 = v.plan_hash.plan_sha256;
-  v.plan_sha256_head = v.plan_hash_head.plan_sha256;
   if (!relayDigestOk(v, progKeys("verify_since"), "verify_since"))
     halt("failed", "infra:verify-plan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
-  if (canonical(v.args) !== canonical([mainWt, ref.plan_commit, ref.plan_path]))
+  if (canonical(v.args) !== canonical([mainWt, planBase, ref.plan_path]))
     halt("failed", "infra:verify-plan: the program ran on other arguments (" + JSON.stringify(v.args === undefined ? null : v.args) + ")");
   if (v.plan_sha256 !== ref.plan_sha256)
     halt("needs_human", "plan changed since approval: " + ref.plan_path + " at " + ref.plan_commit + " hashes " + v.plan_sha256 + ", approved " + ref.plan_sha256);
-  if (v.head !== ref.plan_commit) {
+  if (v.head !== planBase) {
     if (v.is_ancestor !== true)
-      halt("needs_human", "plan changed since approval: branch HEAD " + v.head + " does not descend from plan_commit " + ref.plan_commit);
-    if (v.plan_sha256_head !== ref.plan_sha256 || (v.plan_touched || []).length)
-      halt("needs_human", "plan changed since approval: a commit after " + ref.plan_commit + " changed " + ref.plan_path);
+      halt("needs_human", "plan changed since approval: branch HEAD " + v.head + " does not descend from plan_base " + planBase);
+    if ((v.plan_touched || []).length)
+      halt("needs_human", "plan changed since approval: a commit after " + planBase + " changed " + ref.plan_path + " (the plan doc never ships)");
     for (const c of v.commits_since || [])
       if (!isFleetCommit(String(c.subject || ""), names.taskId, names.slug))
         halt("needs_human", "plan changed since approval: branch moved by a non-fleet commit " + c.sha + " " + JSON.stringify(c.subject));
     // earlier fleet commits are fenced too, before any role runs
     fenceChanged("verify (commits since the plan commit)", v.changed_since || []);
-    gate("verify: HEAD " + v.head + " descends from plan_commit by " + (v.commits_since || []).length + " fleet commit(s)");
-  } else gate("verify: HEAD is plan_commit " + ref.plan_commit + "; plan hash matches");
+    gate("verify: HEAD " + v.head + " descends from plan_base by " + (v.commits_since || []).length + " fleet commit(s)");
+  } else gate("verify: HEAD is plan_base " + planBase + "; plan hash matches; plan doc at " + planFile);
 
   const common = { project, worktree: mainWt, branch, default_branch: defaultBranch, scratch_dir: lay.scratch };
   // the per-role build dirs live under this scratch dir
   state.buildScratch = lay.scratch;
-  const planCtx = { plan_path: ref.plan_path };
+  const planCtx = { plan_path: planFile };
   const planFacts = {
     allowed_additions: ref.plan_facts.allowed_additions,
     est_diff_lines: typeof ref.plan_facts.est_diff_lines === "number" ? ref.plan_facts.est_diff_lines : null,
@@ -5390,8 +5382,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     } catch (e) {
       st = null;
     }
-    if (st && typeof st === "object" && st.plan_commit !== ref.plan_commit && v.head === ref.plan_commit)
-      gate("stale run-state of plan " + st.plan_commit + " ignored: HEAD is the plan commit " + ref.plan_commit);
+    if (st && typeof st === "object" && st.plan_commit !== ref.plan_commit && v.head === planBase)
+      gate("stale run-state of plan " + st.plan_commit + " ignored: HEAD is the plan base " + planBase);
     else {
       const mis = (what) =>
         halt("needs_human", "run-state mismatch: " + what + " (" + stateRef + "); a committed fleet branch is never rebuilt from the writers", "resume");
@@ -5409,7 +5401,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       resume = st;
       resumeState = hr;
     }
-  } else if (v.head !== ref.plan_commit)
+  } else if (v.head !== planBase)
     halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
   // 2033: sealed in the run-state; stream 3 reads state.policy.caps
   const policy = (state.policy = await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
@@ -5428,7 +5420,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     await purgeBytecode("infra:purge-bytecode:resume-frozen", mainWt, "Verify");
     const hz = await hasher("hasher:resume-frozen", mainWt, hashedFiles, "Verify");
     const refTree = hz.hashes.git[FLEETREF + freezeRefName];
-    if (hz.fingerprint.head !== ref.plan_commit) mis("HEAD " + hz.fingerprint.head + " is not plan_commit " + ref.plan_commit);
+    if (hz.fingerprint.head !== planBase) mis("HEAD " + hz.fingerprint.head + " is not plan_base " + planBase);
     if (typeof refTree !== "string" || !refTree) mis("no freeze ref");
     if (hz.fingerprint.tree !== refTree) mis("the worktree tree " + hz.fingerprint.tree + " is not the freeze tree " + refTree + " (changed since the freeze)");
     if (hz.hashes.suspicious.length) mis("suspicious paths: " + hz.hashes.suspicious.join(", "));
@@ -5533,7 +5525,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const bad = fleetInternalPaths(r.diff);
     for (const c of r.commits) for (const q of fleetInternalPaths(c.files)) bad.push(q + " (commit " + c.sha + ")");
     if (bad.length) halt("needs_human", "fleet internal files in PR diff: " + bad.join(", "), "scope");
-    gate(label + ": no .fleet/ path in the PR diff or its commits");
+    // 6.0.0 (2042): the plan doc never ships
+    const pp = normPath(ref.plan_path);
+    if (r.diff.concat(...r.commits.map((c) => c.files)).some((x) => normPath(x) === pp)) halt("needs_human", "the plan doc " + pp + " is in the PR diff or its commits; the plan doc never ships", "scope");
+    gate(label + ": no .fleet/ path and no plan doc in the PR diff or its commits");
     return r.diff;
   }
 
@@ -5560,6 +5555,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         Object.assign({}, common, planCtx, {
           repo: remoteSlug,
           gh_cmd: g.gh_cmd,
+          tldr: ref.tldr,
           approved_sha: approvedSha,
           criteria,
           suite_result: suiteResult,
@@ -5680,7 +5676,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         }
         reviews++;
         const rv = await reviewStep(reviews, {
-          mainWt, lay, remoteSlug, pr, approvedSha, baseRef: ref.plan_commit, criteria, obligations: planFacts.repo_obligations, hashedFiles,
+          mainWt, lay, remoteSlug, pr, approvedSha, baseRef: planBase, criteria, obligations: planFacts.repo_obligations, hashedFiles,
           allowedAdditions: planFacts.allowed_additions,
           // the previous review round's blocking findings
           priorFindings: state.review && Array.isArray(state.review.blocking) ? state.review.blocking : [],
@@ -5704,7 +5700,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         await saveState("reviewed", "infra:state:reviewed:v" + reviews);
       } else {
         phase("Write-back");
-        wb = await writeBack({ ref, brief, project: input.project || null, remoteSlug, remoteHost: ws.remoteHost, branch, prUrl: pr ? pr.pr_url : null });
+        wb = await writeBack({ ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr ? pr.pr_url : null });
         await saveState("written_back", "infra:state:written_back");
       }
     }
@@ -5943,8 +5939,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // writer_outputs: this round's writer results
       const judgeInputs = Object.assign({}, common, planCtx, planFacts, {
         criteria: testable,
-        base_ref: ref.plan_commit,
-        plan_commit: ref.plan_commit,
+        base_ref: planBase,
+        plan_commit: planBase,
         freeze_tree: freezeTree,
         code_tree: codeTree,
         writer_outputs: judgeFirst ? testable.map((c) => writerOut[c.id]).filter(Boolean) : roundOut,
@@ -6100,7 +6096,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       freeze_ref: freezeRef,
       freeze_tree: freezeTree,
       code_tree: codeTree,
-      plan_commit: ref.plan_commit,
+      plan_commit: planBase,
       code_base_ref: codeBaseRef,
       ...roleEnv("coder", "coder-r" + m),
     });
@@ -6127,7 +6123,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     await formatFiles("infra:format-code:r" + m, mainWt, { dirty: true }, { sha: fileHex(configView(frozen).files) }, null, "Code", lay.scratch);
     // purge before the check and the judge
     await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");
-    const h = await hasher("hasher:post-coder:r" + m, mainWt, hashedFiles, "Code", ref.plan_commit);
+    const h = await hasher("hasher:post-coder:r" + m, mainWt, hashedFiles, "Code", planBase);
     if (h.fingerprint.head !== expectedHead)
       halt("needs_human", "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + "; the coder works uncommitted", "ownership");
     fenceChanged("code round " + m, h.changed);
@@ -6244,7 +6240,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       continue;
     }
     if (cj.verdict !== "approve") halt("failed", "code-judge returned no verdict");
-    const hs = await hookSurface("infra:hook-surface:r" + m, mainWt, ref.plan_commit, makeTargets(judgeObligations), "Code");
+    const hs = await hookSurface("infra:hook-surface:r" + m, mainWt, planBase, makeTargets(judgeObligations), "Code");
     const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check, judgeObligations, cj.gates_not_run, h.changed, hs.make_paths);
     if (obFail.length) {
       coderFindings = obFail;
@@ -6266,9 +6262,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         "infra:changed-defs:r" + m,
         planFacts.changed_symbols,
         mainWt,
-        ref.plan_commit,
+        planBase,
         codeTree,
-        frozenFiles.concat([ref.plan_path]),
+        frozenFiles,
         planScopeFiles(planFacts),
       );
       gate(
@@ -6498,7 +6494,8 @@ async function replan(ctx) {
     suffix: ":replan",
     after: 2,
     onRefs: ctx.onPlanRefs,
-    reuseHead: ref.plan_commit,
+    planBase: ref.plan_base,
+    expectHead: ref.plan_commit,
     fields: {
       branch: lay.branch,
       planPath: p.planPath,
@@ -6523,13 +6520,13 @@ async function replan(ctx) {
       expected_tree: ctx.expectedTree,
       superseded_branch: superseded,
       superseded_tree_ref: supersededTree,
-      new_plan_commit: newHead,
+      plan_base: ref.plan_base,
       replan_worktree: replanWt,
     }),
     "Re-plan",
   );
-  if (rs.head !== newHead) halt("failed", "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + newHead);
-  gate("re-plan " + n + ": old head " + (rs.superseded_head || ctx.expectedHead) + " saved as " + superseded + "; " + lay.branch + " reset to " + newHead);
+  if (rs.head !== ref.plan_base) halt("failed", "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + ref.plan_base);
+  gate("re-plan " + n + ": old head " + (rs.superseded_head || ctx.expectedHead) + " saved as " + superseded + "; " + lay.branch + " reset to " + ref.plan_base + "; new plan " + newHead + " off the branch");
   const hist = pc.full.history;
   gate("cumulative: run " + hist.runs + ", re-plans " + hist.replans + ", agents " + hist.agents);
   return awaiting("code-judge plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, pc.tiny, pc.full, {
@@ -6610,7 +6607,7 @@ function ledgerRead(label, project, tasks, marker) {
 }
 async function writeBack(ctx) {
   const { ref, brief, project, remoteSlug, branch, prUrl } = ctx;
-  const planLink = planLinkFor(ctx.remoteHost, remoteSlug, branch, ref.plan_path);
+  const planLine = "Plan: " + ref.plan_path + ", sealed locally at " + planRefName(ref.task_id) + " (not in the PR)";
   const marker = "fleet:" + ref.task_id;
   // the adapter picks the path
   const ad = ledgerAdapter(project, brief.sources, state.ledgerTools);
@@ -6627,7 +6624,7 @@ async function writeBack(ctx) {
   // (a) ledger
   const ledger = brief.sources.map((s, i) => Object.assign({ key: "s" + i }, s)).filter((s) => s.kind === "ledger");
   if (ledger.length) {
-    const sectionText = "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
+    const sectionText = "TL;DR: " + ref.tldr + "\n\n" + planLine + "\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
     const res = {};
     let why = null;
     if (!project) why = "args.project missing: no ledger project to write to";
@@ -6681,7 +6678,7 @@ async function writeBack(ctx) {
   }
   const yq = brief.sources.map((s, i) => Object.assign({ key: "s" + i }, s)).filter((s) => s.kind === "yaadgaar");
   if (yq.length) {
-    const sectionText = "TL;DR: " + ref.tldr + "\n\nPlan: " + ref.plan_path + " (" + planLink + ")\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
+    const sectionText = "TL;DR: " + ref.tldr + "\n\n" + planLine + "\nPR: " + prUrl + "\n\n<!-- " + marker + " -->";
     let results = null;
     let why = null;
     const tasks = yq.map((s) => ({ key: s.key, number: /^[1-9][0-9]*$/.test(String(s.ref)) ? Number(s.ref) : null, id: typeof s.id === "string" && s.id ? s.id : null }));
@@ -6765,7 +6762,7 @@ async function writeBack(ctx) {
 
   // (b) one marked comment per external source
   const ext = brief.sources
-    .map((s, i) => Object.assign({ key: "s" + i }, s, { text: commentText(s.kind, ref.task_id, ref.tldr, planLink, prUrl) }))
+    .map((s, i) => Object.assign({ key: "s" + i }, s, { text: commentText(s.kind, ref.task_id, ref.tldr, prUrl) }))
     .filter((s) => EXTERNAL_KINDS.indexOf(s.kind) >= 0);
   if (ext.length) {
     const res = {};

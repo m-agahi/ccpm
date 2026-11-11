@@ -552,10 +552,12 @@ const READS = {
   commitPlanAndRef: {
     "stagedSha string": "prog:plan_hash:plan_sha256",
     "stagedSha string-re": "prog:plan_hash:plan_sha256",
-    "r.head string": "prog:plan_ref_write:head",
+    // 6.0.0 (ledger 2042): the dangling plan commit
+    "r.plan_commit string": "prog:plan_ref_write:plan_commit",
     "r.tag_sha string": "prog:plan_ref_write:tag_sha",
-    "r.head string-re": "prog:plan_ref_write:head",
+    "r.plan_commit string-re": "prog:plan_ref_write:plan_commit",
     "r.tag_sha string-re": "prog:plan_ref_write:tag_sha",
+    "r.dirty array": "prog:plan_ref_write:dirty",
     "r.reused boolean": "infra:reused",
   },
   verifyPlanCommit: {
@@ -604,6 +606,9 @@ const READS = {
     // 5.0.0 (R2): + the no-ledger stop before intake
     "raw string-re": [PARSED_ARGS, 2],
     "scan.commits array": "prog:branch_scan:commits",
+    // 6.0.0 (ledger 2042)
+    "scan.head string": "prog:branch_scan:head",
+    "scan.head string-re": "prog:branch_scan:head",
     "scan.refs array": "prog:branch_scan:refs",
     "tip integer": "prog:branch_scan:plan_tip_time",
     // 5.0.2 (ledger 2004): the park program's relay
@@ -643,6 +648,9 @@ const READS = {
     "c string": "prog:plan_ref:chunks[]",
     "r.chunks array": "prog:plan_ref:chunks",
     "loaded.project string": PARSED_REF,
+    // 6.0.0 (ledger 2042)
+    "loaded.plan_base string": PARSED_REF,
+    "loaded.plan_base string-re": PARSED_REF,
     "pf object": PARSED_REF,
     "pf.commands array": PARSED_REF,
     "o.check_cmd string": PARSED_REF,
@@ -1030,7 +1038,8 @@ test("4.0.3 review: PROGRAM_OUT merges into the base schema; no item requirement
   const pf = ps(S.INFRA_SCHEMA, [["plan_files", "plan_files"]]).properties.plan_files;
   assert.deepEqual(pf.properties.head, { type: "string" });
   // 6.0.0 (2039): plus the program's keys and digest
-  assert.deepEqual(pf.required.slice().sort(), ["args", "digest", "dsn_paths", "file_sha256", "files", "head", "program"]);
+  // 6.0.0 (ledger 2042): + commit and parent
+  assert.deepEqual(pf.required.slice().sort(), ["args", "commit", "digest", "dsn_paths", "file_sha256", "files", "head", "parent", "program"]);
   // the shared schema is never changed
   assert.deepEqual(S.INFRA_SCHEMA.properties.commits_since.items.required, ["sha", "subject"]);
   assert.equal(S.INFRA_SCHEMA.properties.head.type, "string");

@@ -101,13 +101,14 @@ def ref_ok(r):
     return 'role_sha256' not in p or isinstance(p['role_sha256'], dict)
 base = 'refs/remotes/origin/' + default
 commits = []
-plan_tip_time = None
+head = run('rev-parse', '--verify', 'HEAD^{commit}').stdout.decode().strip()
+# 6.0.0 (ledger 2042): the plan commit is off the branch; plan_tip_time is the
+# committer time of the commit refs/fleet/<task id>/plan targets
+tip = run('log', '-1', '--format=%ct', 'refs/fleet/' + tid + '/plan^{commit}', '--', check=False).stdout.decode().strip()
+plan_tip_time = int(tip) if tip.isdigit() else None
 for line in run('log', '--format=%H%x00%ct%x00%s', base + '..HEAD').stdout.decode('utf-8', 'replace').splitlines():
     c, _, rest = line.partition('\0')
     ct, _, subj = rest.partition('\0')
-    # 4.0.0 (1986): the committer time of the newest commit (HEAD)
-    if plan_tip_time is None and ct.isdigit():
-        plan_tip_time = int(ct)
     files = names(run('diff-tree', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c).stdout)
     commits.append({'sha': c, 'subject': subj, 'files': sorted(set(files))})
 pre = 'refs/fleet/' + tid + '/'
@@ -141,7 +142,7 @@ for name in run('for-each-ref', '--format=%(refname)', pre).stdout.decode().spli
                 e['task_id'], e['plan_path'] = r['task_id'], r['plan_path']
     refs.append(e)
 refs.sort(key=lambda x: x['name'])
-out = {'commits': commits, 'refs': refs, 'plan_tip_time': plan_tip_time}
+out = {'head': head, 'commits': commits, 'refs': refs, 'plan_tip_time': plan_tip_time}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(out, ensure_ascii=False))

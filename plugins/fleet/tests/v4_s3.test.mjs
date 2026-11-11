@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
+import { PB,
   spawnSync,
   canon,
   commitStub,
@@ -258,8 +258,8 @@ test("4.0.0 1988: the fleet's own settings file appearing in a fix_tests round p
   const testFinding = { target: "tests", criterion: "AC1", finding: "wrong expectation" };
   const h = H({ ...HASHES_FLAT, "tests/test_a.py": "ha2" });
   h.ignored = { [SETTINGS]: OWN };
-  const M3 = { head: "abc1234def0", tree: "M3" };
-  const K2 = { head: "abc1234def0", tree: "K2" };
+  const M3 = { head: "b0de1234567", tree: "M3" };
+  const K2 = { head: "b0de1234567", tree: "K2" };
   const s = happy({
     script: {
       "role:fleet-code-judge:r1": { status: "ok", verdict: "fix_tests", routed_findings: [testFinding] },
@@ -333,7 +333,7 @@ test("4.0.0 1988 AC-1988-3: only the exact path with the exact bytes of this wor
   assert.match(of.result.reason, /^judge mutated worktree: fleet-test-judge/);
   // the fleet's own file removed during a judge run is a stop
   const s = happy();
-  s["hasher:pre-writers:r1"] = withIgnored({ head: "abc1234def0", tree: "T0" }, { [SETTINGS]: OWN });
+  s["hasher:pre-writers:r1"] = withIgnored({ head: "b0de1234567", tree: "T0" }, { [SETTINGS]: OWN });
   s["hasher:freeze:f1"] = withIgnored(FP_TESTS, { [SETTINGS]: OWN });
   s["hasher:fp-post:test-judge:r1"] = withIgnored(FP_TESTS, {});
   const out = await run(s, ARGS);
@@ -615,9 +615,9 @@ test("5.0.0 R1 (was 4.0.0 1990 confirm auto): confirm auto builds in the plan ru
   // the auto gates' stubs (as autoHappy in build_task_run.test.mjs)
   const s = happy();
   Object.assign(s, {
-    "hasher:pre-intent": { status: "ok", fingerprint: { head: "abc1234def0", tree: "P0" } },
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: "b0de1234567", tree: "P0" } },
     "role:fleet-intent-judge": { status: "ok", reason: "matches", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } },
-    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: "abc1234def0", tree: "P0" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: "b0de1234567", tree: "P0" } },
   });
   const out = await runOne(s, Object.assign({}, ARGS, { confirm: "auto" }));
   assert.equal(out.result.status, "ok", out.result.reason);
@@ -634,7 +634,7 @@ test("4.0.0 1990: a build-mode re-plan seals no preflight record (the next build
     "infra:replan-worktree": { status: "ok", reason: "ok", head: "abc1234def0" },
     "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
     "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
-    "infra:replan-reset": { status: "ok", reason: "reset", head: PC2, superseded_head: "5555555" },
+    "infra:replan-reset": { status: "ok", reason: "reset", head: "b0de1234567", superseded_head: "5555555" },
   });
   s["role:scope-and-plan:replan"] = s["role:scope-and-plan"];
   s["infra:commit-plan:replan"] = commitStub(s.__store, PC2, "d".repeat(64));

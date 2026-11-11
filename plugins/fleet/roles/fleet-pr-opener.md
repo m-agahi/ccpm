@@ -13,7 +13,7 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 
 - `repo` (`<owner>/<name>`), `worktree`, `branch`, `default_branch`, `approved_sha`, `scratch_dir`, `project`.
 - `gh_cmd`: the GitHub command the workflow checked for `repo` (it has push access there). Call it `<gh>` below. Use exactly it for every GitHub call; never choose another one yourself.
-- `plan_path`, `criteria`, `suite_result` (from the code judge).
+- `plan_path` (an absolute path outside the worktree), `tldr` (the plan's TL;DR), `criteria`, `suite_result` (from the code judge).
 - `gates_not_run` (optional): `[{gate, reason}]` — quality gates that did not run for this change. In this release it always lists at least `held_out`, `coverage`, `mutation` and `security_scan`.
 - `review_notes` (optional; absent → `[]`): `[{id, severity, category, file, line, summary, evidence}]` — review findings to show the human reader. See "Review notes" below.
 - `intent` (optional; absent or null → no intent lines): the intent judge's result, `{status, verdict, reason, deviations: [{item, allowed_by, source_ref, fails_closed, verdict, reason}], coverage, classification}`. See "Intent check" below.
@@ -55,6 +55,7 @@ Search, case-insensitive: `find <worktree> -maxdepth 4 -iname "pull_request_temp
 
 - **Template exists:** start from it. Keep EVERY section header, in order, and fill each. Tick a checkbox only when it is true. A section that does not apply gets "N/A — <reason>", never deleted. Never replace the template with your own structure.
 - **No template:** only then choose your own: Summary · Changes · Acceptance criteria → tests · Test evidence (suite command + result) · Manual checks (only when any) · Gates not run (only when any) · Review notes (only when any) · Risks.
+- **Plan:** the plan doc never ships. Never copy, attach or link it, and never quote its path. Put `tldr` in the summary (with a template: its summary or description section). List the `id` and `text` of every criterion under the acceptance criteria (with a template: the most fitting section).
 - **Sources:** the plan, the criteria, `suite_result`, `gates_not_run`, `review_notes`, `intent` and `auto_confirmed` — nothing else. Report only what was verified. Cite symbol names over line numbers.
 - **Evidence for every claim:** every factual claim in the PR body cites its evidence: a sha, a file:line, a CI run id or a command with its output.
 - **Not verified:** a claim that nobody measured or ran goes under a "Not verified" heading, never under Verification or Testing. Examples: timing, worst case, counts, "no weakening", "covers all X". With a template, put the heading in the most fitting section; add a section only when there is no template.
@@ -78,7 +79,7 @@ Write the body to a file, then:
 
 ## Verify
 
-`<gh> pr view <N> --repo <repo> --json url,body,isDraft,headRefName,headRefOid,baseRefName`: every template header present, `isDraft` true on create, head and base correct, every `gates_not_run` entry and every manual criterion present, the intent lines present when `intent` or `auto_confirmed` was given, no internal ids, no secret. A body or metadata mismatch → fix once; still wrong → `failed`.
+`<gh> pr view <N> --repo <repo> --json url,body,isDraft,headRefName,headRefOid,baseRefName`: every template header present, the `tldr` and every criterion present, `isDraft` true on create, head and base correct, every `gates_not_run` entry and every manual criterion present, the intent lines present when `intent` or `auto_confirmed` was given, no internal ids, no secret. A body or metadata mismatch → fix once; still wrong → `failed`.
 
 `headRefOid` can lag behind the pushed branch on GitHub's side. When it is not `approved_sha`, poll every 30s for at most 5 minutes. Still stale → `needs_human` with reason "PR head not synced (GitHub lag)". Never treat lag as failed, and never push to resolve it.
 

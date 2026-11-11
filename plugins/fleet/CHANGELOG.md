@@ -82,18 +82,36 @@ and 3 add the items marked "pending"; stream 3 finalises this entry.
   override. Caps: `pr_ready`, `ci_watch` (+ `ci_watch_minutes`, default 60), `stats`, `merge`
   (`never` | `auto`), `update_branch` (`never` | `once`), `ci_trigger`, `review_post` (`none` |
   `own_pr`). No file or no match: the default (ready, CI watch and stats on, merge never, the rest
-  off). A bad file (duplicate or unknown key, wrong type) stops the build with `stop_gate:
-"policy"`. The build reads it once after the run-state (`infra:policy`) and seals `{profile,
-policy_sha256, caps}` in every run-state write and the result (`state.policy` for stream 3).
+  off). A bad file (duplicate or unknown key, wrong type) stops the build (stop gate `policy`).
+  The build reads it once after the run-state (`infra:policy`) and seals the profile, the
+  `policy_sha256` and the caps in every run-state write and in the result (`state.policy`).
   Ruling 5.4: `WORK_OWNERS` (`quinyx`, `concrete-media`, any host) force `merge` and
   `update_branch` to `never` in the script. Ruling 5.6: a resumed run whose policy changed logs
   the changed caps and keeps the sealed profile. Policy load, match and seal only: stream 3 acts on
   the caps.
 
+- 2042a: the plan doc never lands on the pushed branch or in the PR (ADR-1213; ruling 3).
+  `plan_ref_write.py <wt> <task> <plan_base> <plan_path> <chunks...>` writes the plan commit with
+  no `git commit`: a temporary index on `plan_base` (the branch HEAD `branch_scan.py` now prints),
+  `commit-tree`, the tag at `refs/fleet/<task>/plan`. It moves the plan doc to
+  `<scratch>/plan/<plan_path>` (a tracked plan file is restored), reuses an identical plan commit
+  and prints `{plan_commit, plan_base, tag_sha, reused, plan_file, dirty}`. Stage-plan hashes the
+  worktree file (no `git add`); format-plan still runs the hooks on it.
+  `plan_files.py <wt> <commit>` checks the commit against its parent (= `plan_base`). The sealed
+  ref holds `plan_base`;
+  the build verifies HEAD against it (`verify_since` base), extracts the plan doc to scratch
+  (`plan_hash.py ... <dest>`), gives roles that absolute `plan_path`, and diffs from `plan_base`
+  (judges, coder, hasher base tree, hook surface, caller check, review). `branch_scan`'s
+  `plan_tip_time` is the plan ref's commit time. A re-plan seals on the same `plan_base` and resets
+  the branch to it. Fleet-scan stops when `plan_path` is in the PR diff or a commit. Write-back
+  drops the plan blob link. The PR opener gets `tldr` and writes the TL;DR and the criteria into
+  the body (ruling 2). Refs and branches from 5.x are refused, not migrated: a ref without
+  `plan_base` stops the build, and a branch with a 5.x plan commit stops plan mode, both with
+  "delete branch ..., then re-run plan".
+
 ### Pending (streams 2 and 3)
 
-- 2042: the plan doc stays off the pushed branch (dangling plan commit on `plan_base`); commit
-  subjects and PR titles follow the repo's convention (`pr_convention.py`). Pending.
+- 2042b: commit subjects and PR titles follow the repo's convention (`pr_convention.py`). Pending.
 - 2044: PR body stats block (`<details>` with counters and output tokens per model, approx.).
   Pending.
 - 2045: mark the PR ready after review approve, write-back and stats. Pending.

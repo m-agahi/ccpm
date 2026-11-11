@@ -10,7 +10,7 @@ import { spawnSync as rawSpawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mapView, ignoredView, buildAssignsRe, roleTestEnv, buildEnvSites } from "./harness.mjs";
+import { PB, mapView, ignoredView, buildAssignsRe, roleTestEnv, buildEnvSites } from "./harness.mjs";
 import {
   ARGS,
   PC,
@@ -132,8 +132,8 @@ test("1991 short path: at most MAX_SHORT_TEST_ROUNDS (2) test rounds, each with 
     "role:fleet-test-judge:r1": revise("AC2"),
     "role:fleet-test-judge:r2": revise("AC2"),
     "role:fleet-test-judge:r3": revise("AC2"),
-    "hasher:post-writers:r2": { status: "ok", fingerprint: { head: "abc1234def0", tree: "T2" }, changed: ["tests/test_b.py"] },
-    "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: { head: "abc1234def0", tree: "T2" } },
+    "hasher:post-writers:r2": { status: "ok", fingerprint: { head: "b0de1234567", tree: "T2" }, changed: ["tests/test_b.py"] },
+    "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: { head: "b0de1234567", tree: "T2" } },
   });
   s["role:fleet-test-writer:short:r2"] = { status: "ok", reason: "red", criterion_id: "short", tests: [{ name: "b", covers: "AC2: y" }], files: ["tests/test_b.py"] };
   const out = await run(s, ARGS);
@@ -195,7 +195,7 @@ async function coderStop() {
 }
 // The resume run's worktree as the frozen hasher reads it.
 function frozenState(planRef, over) {
-  const o = Object.assign({ tree: "T1", flat: HASHES_FLAT, ref: "T1", head: PC }, over || {});
+  const o = Object.assign({ tree: "T1", flat: HASHES_FLAT, ref: "T1", head: PB }, over || {});
   const h = H(o.flat);
   if (o.ref !== null) h.git["fleetref:" + freezeRefOf(planRef)] = o.ref;
   return { status: "ok", fingerprint: { head: o.head, tree: o.tree }, hashes: h };
@@ -428,7 +428,7 @@ test("AC-1981-3: a declaration error from the program halts", async () => {
 
 test("AC-1981-4: a diff that touches .fleet-test-db.json halts scope", async () => {
   const s = withDecl(happy());
-  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: { head: "abc1234def0", tree: "K1" }, hashes: HASHES, changed: ["src/x.py", ".fleet-test-db.json"] };
+  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: { head: "b0de1234567", tree: "K1" }, hashes: HASHES, changed: ["src/x.py", ".fleet-test-db.json"] };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "scope");
@@ -484,7 +484,7 @@ for (const [name, mut] of [
 test("1981: confirm auto continues into the build and adds the build's databases to the same container", async () => {
   const s = withDecl(happy());
   Object.assign(s, {
-    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "role:fleet-intent-judge": {
       status: "ok",
       reason: "matches the task",
@@ -493,7 +493,7 @@ test("1981: confirm auto continues into the build and adds the build's databases
       coverage: { covered: true, missing: [] },
       classification: { change_kind: "approve", new_behaviour: "approve", quote: "the task" },
     },
-    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
   });
   const out = await runOne(s, Object.assign({}, ARGS, { confirm: "auto" }));
   assert.equal(out.result.status, "ok", out.result.reason);
@@ -509,7 +509,7 @@ test("1981: confirm auto continues into the build and adds the build's databases
 test("1981: an add relay that does not match the build's databases halts", async () => {
   const s = withDecl(happy());
   Object.assign(s, {
-    "hasher:pre-intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "role:fleet-intent-judge": {
       status: "ok",
       reason: "ok",
@@ -518,7 +518,7 @@ test("1981: an add relay that does not match the build's databases halts", async
       coverage: { covered: true, missing: [] },
       classification: { change_kind: "approve", new_behaviour: "approve", quote: "the task" },
     },
-    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PC, tree: "P0" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "infra:db-up:add": (prompt) => {
       const i = inputsOf(prompt);
       return { status: "ok", reason: "added", up: { name: i.name, port: null, dbs: i.dbs.slice(1), users: Object.fromEntries(i.dbs.slice(1).map((d) => [d, "c".repeat(32)])), expiry: null, args: ["add", i.name, JSON.stringify(i.dbs.slice(1))] } };
