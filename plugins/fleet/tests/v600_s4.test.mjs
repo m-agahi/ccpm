@@ -98,6 +98,17 @@ test("review B1: ci_watch.py: a checks read is bracketed by head reads; a head t
   }
 });
 
+test("review M5: ci_watch.py: another repo's url whose ids name a real run of this head stays unverified", () => {
+  const dir = fakeForge({ headRefOid: SHA1 }, [{ argv: ["pr", "checks"], out: [CHECK("test", "fail", "https://github.com/evil/r/actions/runs/77/job/88")], code: 1 }, { argv: ["run", "view", "77", "--repo", "o/r", "--json"], out: { headSha: SHA1, jobs: [{ databaseId: 88 }] } }]);
+  try {
+    const o = watch(dir, null, SETTLED(), 3600);
+    assert.equal(o.state, "red");
+    assert.deepEqual([o.failed[0].run_id, o.failed[0].verified], [null, false]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("review B1: ci_watch.py: settled and every check passed is green", () => {
   const dir = fakeForge({ headRefOid: SHA1 }, [{ argv: ["pr", "checks"], out: [CHECK("test", "pass")] }]);
   try {
@@ -413,6 +424,18 @@ test("review S4: the orchestrator scan runs again on the head right before the m
   const o = await run(t, ARGS);
   assert.deepEqual(merges(o), []);
   assert.match(o.result.reason, /no merge: IaC repo or IaC tool in CI\)$/);
+});
+
+test("review M7: a scan error alone (flags false) still counts as an IaC sign: no merge", async () => {
+  const s = personal();
+  s["infra:orch-scan"] = (p) => ({ status: "ok", reason: "s", orchestrator: false, iac_repo: false, apply_on_merge: false, hook_surface_pr: false, reasons: [], error: "gh pr view: HTTP 502", args: inputsOf(p).args });
+  s["infra:pr-ready"] = (p) => {
+    const a = inputsOf(p).args;
+    return { status: "ok", reason: "ready", mode: "ready", was_draft: true, is_draft: false, head: a[4], state: "OPEN", error: null, args: a };
+  };
+  const out = await run(s, ARGS);
+  assert.deepEqual(merges(out), []);
+  assert.match(out.result.reason, /IaC repo or IaC tool in CI/);
 });
 
 test("review S5 (M9): a merge reported at another head is not a merge: the run stops, nothing is cleaned up", async () => {

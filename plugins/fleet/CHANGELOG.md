@@ -291,6 +291,8 @@ last state. With no policy file, a fleet PR is marked ready and its CI is watche
   never reach ledger sections, tracker comments or the writer agents' prompts.
   The `pr_state.py logs` test now also names a real run of this head behind another repo's url
   (the url's repo alone keeps that log out; mutant M5b).
+- Mutation tests: M5 (ci_watch.py run url not bound to the repo) and M7 (a scan error alone not
+  counted as an IaC sign) survived the PR-tail tests; each now has a test in `v600_s4`.
 - S7a (ADR-1215): the stats block is written again at run end (`infra:pr-stats:final`) with a CI
   row (verdict, CI-fix rounds, total CI wait), only when the PR is not merged; on a merged PR
   the gate log says "stats block not refreshed".
