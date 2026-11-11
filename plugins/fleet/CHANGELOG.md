@@ -1,5 +1,59 @@
 # Changelog
 
+## [5.0.8] - 2026-11-11
+
+Fleet 5.0.8 (ledger 2030): one GitHub identity rule, decided by a program. Every gh call of a run
+uses the command that program picked for the repo.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.8), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.8/scripts` dir.
+- A 5.0.7 plan ref, run-state and `freeze_digest` stay valid: the GitHub command is not sealed and
+  is in no digest. Every run computes it again in its workspace step, a resume too. A 5.0.7 build
+  stopped at the PR step resumes at the PR when you re-run it with the same `plan_ref`.
+
+### Fixed
+
+- 2030: run wf_aea3186a-4e1 (yadgarhq/iam-db, 5.0.7) passed every gate, committed and pushed,
+  then stopped at the PR step (`role`, needs_human). `fleet-pr-opener` used `gh` (the work login)
+  and got "GraphQL: must be a collaborator". Each prompt asked the agent to use `gh-personal` only
+  when `gh-personal api user --jq .login` equals the repo owner. For an org repo (`yadgarhq/*`)
+  the owner is an org, not a login, so the rule picked `gh`.
+- New program `gh_identity.py <repo|-> [<owner>/<name> ...]`. For each repo (the checkout's origin,
+  read with `git remote get-url origin` as the workspace step reads `remote_slug`, then each slug),
+  `gh` runs `gh api repos/<o>/<n> --jq .permissions.push`. Only when `gh` has no push does
+  `gh-personal` (if installed) run the same, so a work repo never touches `gh-personal`. The first
+  with push is `gh_cmd`. Else `gh` when it can read, else `gh-personal` when it can read (push
+  false). Else `gh_cmd` is null. Only exit 0 with stdout exactly `true` or `false` counts; anything
+  else is unknown. A command that is absent or cannot start is "not installed" and is not
+  retried. Each call has 15 s. Only a clearly transient error (connection, 5xx, timeout text) is
+  tried once more.
+- The origin is probed only when it is GitHub-hosted: an https URL on github.com, or an ssh URL
+  whose host is `github.com` or resolves to it through `ssh -G <host>` (its `hostname` line). A
+  path, another host or an unparseable URL gives origin null and no probe.
+- The program prints `{origin, repos: {<slug>: {gh_cmd, push, tried}}, args, program, digest}`.
+  No token is read, passed or printed. The script checks the digest, the args and an answer for
+  every repo asked, and computes the pick again from `tried`.
+- The workspace step runs it first (`gh_check`, args `[<repo>]`, Bash timeout 600000 ms) and uses
+  its `gh_cmd` for `repo view` and `pr list`. An unusable or missing `gh_check`, or no
+  GitHub-hosted origin, never stops the run: it logs a gate line and leaves `gh_cmd` null. When
+  the program's origin differs from `remote_slug`, a gate line names both and the probe of the
+  program's origin is used.
+- A build whose workspace check shows a definite no-push for its repo (every installed candidate
+  answered false, none unknown) stops at its start (`role`), before any build step. Plan mode only
+  logs a warning. An unknown answer (null, a timeout) logs a gate line and goes on; the PR step
+  checks again.
+- `gh_cmd` goes to every step that calls GitHub: the push step's `remote_head` read, the
+  `fleet-pr-opener` and `pr-review` roles (input `gh_cmd`, used as `<gh>`), intake of a GitHub URL
+  (it runs the program on `["-", <o>/<r>]`), and the comment write-back (the list step runs the
+  program on the GitHub sources' repos; each post entry carries its `gh_cmd`).
+- The PR step stops before any agent (`role`, needs_human) when no command has push access to the
+  repo. The stop names what each candidate answered. The review stops before any agent (`review`)
+  when no command can read the repo. A GitHub comment with no push-capable command is not posted;
+  write-back records it as failed with the reason and makes no agent call (write-back stays soft).
+- No prompt or role holds the login-equals-owner rule or a hard-coded `gh-personal` any more.
+
 ## [5.0.7] - 2026-11-10
 
 Fleet 5.0.7 (ledger 2020): no relayed program output carries a per-file hash. Every hasher map

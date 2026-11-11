@@ -203,7 +203,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.7 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.8 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -3122,7 +3122,10 @@ test("push prompt retries with backoff, reads remote_head through the gh api, ke
   assert.match(p, /retry up to 3 times/);
   assert.match(p, /timeout 600000 ms/);
   assert.match(p, /api repos\/<owner>\/<name>\/branches\/<branch> --jq \.commit\.sha/);
-  assert.match(p, /gh-personal/);
+  // 5.0.8 (ledger 2030): the gh command the script checked, never a login rule
+  assert.equal(inp.gh_cmd, "gh");
+  assert.match(p, /<gh> = <gh_cmd>, exactly/);
+  assert.doesNotMatch(p, /gh-personal/);
   assert.match(p, /`non_ff` or `remote_rejected` -> return status needs_human/);
   assert.match(p, /non-fast-forward\|fetch first/, "the retry loop still stops on a non-fast-forward");
   assert.match(p, /ls-remote/, "ls-remote only as the fallback");
@@ -5530,6 +5533,9 @@ function schemaAt(by, spec) {
 // mapped schema does not type as array fails (2.1.4 trial bug #2: an
 // undeclared field came back as the string "[]").
 const ARRAY_SITES = {
+  // 5.0.8 (ledger 2030): gh_identity's digest-checked output (PROGRAM_OUT types it)
+  "gc.repos @ ghCheckProblem": "parsed: a gh_identity program output; Array.isArray only refuses an array there",
+  "e.tried @ ghCheckProblem": "parsed: a gh_identity program output, digest-checked first",
   // 5.0.0 (R1)
   "r.role_file @ roleFileProblem": "parsed: a guard (role_file is typed object or null in every role schema; an array is refused)",
   "p.role_sha256 @ preflightRecordProblem": "parsed: the sealed plan ref (log-only record)",
@@ -6129,7 +6135,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.7; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.8; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6830,7 +6836,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.7\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.7 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.8\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.8 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8524,7 +8530,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.7/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.8/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

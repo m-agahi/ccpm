@@ -22,7 +22,7 @@ import { SOURCE, ARGS, happy, run, runOne, spawnSync, inputsOf, ROLE_NAMES, ROLE
 async function realProbe(mutate) {
   const home = mkdtempSync(join(tmpdir(), "fleet-roles-probe-"));
   try {
-    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.7");
+    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "5.0.8");
     mkdirSync(join(ver, "scripts"), { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(ver, "scripts", n + ".py"));
     cpSync(ROLES_SRC, join(ver, "roles"), { recursive: true });
@@ -238,7 +238,7 @@ test("5.0.0 R1: plan mode seals history.preflight {fleet_version, role_sha256}, 
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const p = JSON.parse(s.__store[out.result.plan_ref.plan_commit]).history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "5.0.7");
+  assert.equal(p.fleet_version, "5.0.8");
   assert.deepEqual(p.role_sha256, PIN);
 });
 

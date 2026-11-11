@@ -35,6 +35,8 @@ const SAMPLES = [
   "infra:path-check:commit-plan",
   "infra:path-check:commit-plan:relay-retry",
   "workspace",
+  // 5.0.8 (ledger 2030)
+  "infra:gh-identity:intake",
   "hasher:fp-pre:r1",
   "infra:branch-scan",
   "infra:load-parked",

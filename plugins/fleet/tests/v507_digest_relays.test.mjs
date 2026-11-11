@@ -438,7 +438,7 @@ test("5.0.7 2020: two digest misses fail as in 5.0.6; any other contract failure
 test("5.0.7 2020: the read-only program steps carry the retry; no write step does", () => {
   const src = readFileSync(join(SCRIPTS_SRC, "..", "workflows", "build-task-run.js"), "utf8");
   const ids = [...src.matchAll(/JUDGE_AGENT,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]).concat([...src.matchAll(/digest: (?:baseTree \? "hasher:base" : )?"([a-z_]+)"/g)].map((m) => m[1]));
-  const RO = ["read_state", "fleet_scan", "hook_surface", "tf_gate", "remote_head", "branch_scan", "verify_since", "review_paths", "callers", "precommit_ids", "script_check", "hasher", "hash_diff"];
+  const RO = ["read_state", "fleet_scan", "hook_surface", "tf_gate", "remote_head", "branch_scan", "verify_since", "review_paths", "callers", "precommit_ids", "script_check", "hasher", "hash_diff", "gh_identity"];
   assert.deepEqual([...new Set(ids)].sort(), RO.slice().sort());
 });
 
