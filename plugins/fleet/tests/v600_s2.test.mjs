@@ -683,3 +683,33 @@ test("6.0.0 2042b (security review): the workflow re-filters convention types, c
   assert.match(po, /--title '<title>'/);
   assert.doesNotMatch(po, /--title "<title>"/);
 });
+
+test("6.0.0 2042 (security review): plan_hash prints args and a digest; a relayed blob id the program did not print, other args or a short id stop the build", async () => {
+  const rp = planRepo();
+  try {
+    writeFileSync(join(rp.wt, "docs", "plans", "x.md"), "# plan\n");
+    const w = writeRef(rp, rp.base, "docs/plans/x.md", "{}\n");
+    const h = prog(rp, "plan_hash", [rp.wt, w.out.plan_commit, "docs/plans/x.md"]);
+    assert.deepEqual(h.out.args, [rp.wt, w.out.plan_commit, "docs/plans/x.md"]);
+    assert.equal(h.out.digest, sha256(canon({ plan_sha256: h.out.plan_sha256, blob: h.out.blob, args: h.out.args, program: h.out.program })));
+  } finally {
+    rmSync(rp.root, { recursive: true, force: true });
+  }
+  for (const [fn, re] of [
+    [(r) => ((r.plan_hash.blob = "c".repeat(40)), r), /^infra:verify-plan: the relayed plan hash does not match the program's digest, arguments or a full blob id/],
+    [(r) => ((r.plan_hash.args = ["/r/.claude/worktrees/fleet-l42-add-thing/main", "HEAD", "docs/plans/x.md"]), r), /^infra:verify-plan: the relayed plan hash does not match/],
+  ]) {
+    const s = happy();
+    const plan = await runOne(s, ARGS);
+    s.__mutate = { label: "infra:verify-plan", fn };
+    const out = await runOne(s, BARGS(plan));
+    assert.equal(out.result.status, "failed", out.result.reason);
+    assert.match(out.result.reason, re);
+    assert.ok(!out.labels.some((l) => /^role:/.test(l)));
+  }
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  s["infra:verify-plan"] = Object.assign({}, happy()["infra:verify-plan"], { plan_hash: { plan_sha256: "a".repeat(64), blob: "abc1234" } });
+  const out = await runOne(s, BARGS(plan));
+  assert.match(out.result.reason, /full blob id/);
+});

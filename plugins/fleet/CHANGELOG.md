@@ -118,6 +118,9 @@ shipped run into a coder round, and adds org and repo rulesets to the hook surfa
   `plan_blob` and read it with `git --no-replace-objects cat-file blob`. `verify_since.py` prints
   `replace_refs`, and the hasher's git map lists `refs/replace/*`: any replacement ref stops verify
   and every hasher run (stop gate `hash`), which covers the freeze tree and `plan_base` too.
+  `plan_hash.py` prints `args` and a `digest` over `{plan_sha256, blob, args}`; stage-plan,
+  verify-plan-commit and verify-plan recompute it and check the args, and verify requires a full
+  40- or 64-hex blob id, so a relaying agent cannot substitute another blob.
 
 - 2042b: commit subjects and PR titles follow the repo's convention. New program
   `pr_convention.py <wt> <gh_cmd|-> <owner/repo|-> <default_branch>` (36 programs) at

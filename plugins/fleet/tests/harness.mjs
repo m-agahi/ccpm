@@ -1080,15 +1080,15 @@ export const PROGRAM_LABELS = [
   [/^infra:load-parked$/, [[null, "parked", K("parked:read")]]],
   // 5.0.2 (ledger 2004): the park program moves the draft
   [/^infra:park-plan/, [["park", "parked", K("parked:park")], ["findings_write", "parked", K("parked:write")]]],
-  [/^infra:stage-plan/, [["plan_hash", "plan_hash", null]]],
+  [/^infra:stage-plan/, [["plan_hash", "plan_hash", K("plan_hash")]]],
   [/^infra:format-(tests|code):/, [[null, "format_files", K("format_files")]]],
   // 5.0.3 (ledger 2010): the DSN precheck after the plan hooks
   [/^infra:format-plan/, [["dsn_check", "plan_dsn", K("plan_dsn")]]],
   [/^infra:commit-plan/, [[null, "plan_ref_write", K("plan_ref_write")]]],
   // 4.0.0 review: dsn_paths, the committed files that hold mysql://
-  [/^infra:verify-plan-commit/, [["plan_files", "plan_files", K("plan_files")], ["plan_hash", "plan_hash", null], ["plan_ref", "plan_ref", null]]],
+  [/^infra:verify-plan-commit/, [["plan_files", "plan_files", K("plan_files")], ["plan_hash", "plan_hash", K("plan_hash")], ["plan_ref", "plan_ref", null]]],
   [/^infra:load-ref/, [[null, "plan_ref", null]]],
-  [/^infra:verify-plan$/, [[null, "verify_since", K("verify_since")], ["plan_hash", "plan_hash", null], ["test_db", "test_db_decl", K("test_db_decl")]]],
+  [/^infra:verify-plan$/, [[null, "verify_since", K("verify_since")], ["plan_hash", "plan_hash", K("plan_hash")], ["test_db", "test_db_decl", K("test_db_decl")]]],
   [/^infra:read-state$/, [[null, "read_state", K("read_state")]]],
   [/^infra:state:/, [[null, "state_write", K("state_write")]]],
   [/^infra:tf-gate:/, [[null, "tf_gate", K("tf_gate")]]],
@@ -1139,6 +1139,13 @@ export function fillPrograms(label, r, prompt) {
   if (/^infra:stage-plan/.test(label) && !("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256, blob: null };
   if (/^infra:verify-plan$/.test(label)) {
     if (!("plan_hash" in r) && "plan_sha256" in r) r.plan_hash = { plan_sha256: r.plan_sha256, blob: PBLOB };
+  }
+  // 6.0.0 security review: plan_hash echoes its args (the prompt's)
+  if (r.plan_hash && typeof r.plan_hash === "object" && !("args" in r.plan_hash) && !("digest" in r.plan_hash)) {
+    const i = inputsOf(prompt);
+    r.plan_hash.args = /^infra:stage-plan/.test(label) ? [i.worktree, "", i.plan_path] : /^infra:verify-plan-commit/.test(label) ? [i.worktree, i.plan_commit, i.plan_path] : [i.main_worktree, i.plan_commit, i.plan_path];
+  }
+  if (/^infra:verify-plan$/.test(label)) {
   }
   // 5.0.3 (ledger 2010): a format-plan stub with no dsn_check finds no DSN
   if (/^infra:format-plan/.test(label) && !("dsn_check" in r)) {

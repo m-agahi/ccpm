@@ -119,7 +119,9 @@ the parent is the sealed `plan_base` and HEAD is unchanged.
 The sealed ref holds `plan_base`. The build verifies that the branch HEAD is `plan_base` or descends
 from it through fleet commits only, and that no commit since touches `plan_path`. Roles never read
 a plan file a role could rewrite: verify resolves the plan's own blob id (replacement objects off)
-after the plan bytes hash to the sealed `plan_sha256`, and each role gets it as `plan_blob` and reads
+after the plan bytes hash to the sealed `plan_sha256` (`plan_hash.py` prints `{plan_sha256, blob,
+args, digest}`; the script recomputes the digest, checks the args and requires a full 40- or 64-hex
+id), and each role gets it as `plan_blob` and reads
 it with `git --no-replace-objects cat-file blob <plan_blob>`. Every fleet program runs git with
 `GIT_NO_REPLACE_OBJECTS=1`. Verify (`verify_since.py` lists `replace_refs`) and every hasher run
 (its git map lists `refs/replace/*`) stop on any replacement ref, so no replacement object can

@@ -153,7 +153,8 @@ const TABLE = () => {
   return new Function("return " + SOURCE.slice(SOURCE.indexOf("{", i), SOURCE.indexOf("\n};\n", i) + 2))();
 };
 // plan_hash and plan_ref print no digest (their output is checked against the plan)
-const NO_DIGEST = ["plan_hash", "plan_ref"];
+// 6.0.0 security review: plan_hash prints a digest now
+const NO_DIGEST = ["plan_ref"];
 
 function lintCall(c, table, seen) {
   const names = ran(c.prompt);

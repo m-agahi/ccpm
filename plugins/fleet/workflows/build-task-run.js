@@ -1484,7 +1484,7 @@ const PROGRAM_SHA256 = {
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
   "plan_dsn": "f02908de588f71426a2995b86884be5e15127fd9fc48ead3710c0e71b481277b",
   "plan_files": "360fc1c69092e8da9f11cdded6296ef429c3db870181881ffff949a5b3c8253c",
-  "plan_hash": "5887c14a3ef5c6548da888e86cad6ec00df88482cc1219bda8a74f000deed2c5",
+  "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
   "plan_ref": "494ceb934b89fa5c2962ef786ba93bee63bd09f776c82c50579fdf23f301c136",
   "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
   "policy": "347bc798a38e468d55b2b0726aef70a83a40672aa8409db0a57ebf897117d395",
@@ -1638,7 +1638,7 @@ const PROGRAM_KEYS = {
   "parked:read": ["parked", "args"],
   "parked:write": ["written", "sha256", "args"],
   "parked:park": ["target", "clean", "dirty", "args"],
-  "plan_hash": ["plan_sha256", "blob"],
+  "plan_hash": ["plan_sha256", "blob", "args"],
   "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map"],
   "plan_ref_write": ["plan_commit", "plan_base", "tag_sha", "reused", "plan_file", "dirty"],
   "plan_files": ["head", "commit", "parent", "files", "args", "dsn_paths"],
@@ -1672,7 +1672,7 @@ const PROGRAM_KEYS = {
   "build_dir:reset": ["dirs", "args"],
   "build_dir:clean": ["removed", "bytes", "args"],
 };
-const NO_DIGEST_PROGRAMS = ["plan_hash", "plan_ref"];
+const NO_DIGEST_PROGRAMS = ["plan_ref"];
 function progKeys(id) {
   const k = PROGRAM_KEYS[id];
   if (!k) throw new Error("no PROGRAM_KEYS entry " + id);
@@ -1724,7 +1724,7 @@ const PROGRAM_OUT = {
     args: STRS,
     digest: STR,
   },
-  plan_hash: { plan_sha256: STR, blob: STR_OR_NULL },
+  plan_hash: { plan_sha256: STR, blob: STR_OR_NULL, args: STRS, digest: STR },
   format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, digest: STR },
   plan_ref_write: { plan_commit: STR, plan_base: STR, tag_sha: STR, reused: BOOL, plan_file: STR, dirty: STRS, digest: STR },
   plan_files: { head: STR, commit: STR, parent: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
@@ -4581,6 +4581,8 @@ async function commitPlanAndRef(ctx) {
   const st = await infra(stLabel, stagePlanPrompt(base), ctx.phaseName);
   requireProgram(st.plan_hash, "plan_hash", stLabel);
   const stagedSha = st.plan_hash.plan_sha256;
+  if (!relayDigestOk(st.plan_hash, progKeys("plan_hash"), "plan_hash") || canonical(st.plan_hash.args) !== canonical([ctx.worktree, "", ctx.fields.planPath]))
+    halt("failed", stLabel + ": the relayed plan hash does not match the program's digest or arguments");
   if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("failed", stLabel + " returned no usable plan_sha256");
   // + 2: the PATH re-check before the commit and the verify step
   const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2 });
@@ -4623,7 +4625,7 @@ async function verifyPlanCommit(ctx, sfx, w, full, stagedSha, msgSha, tiny) {
       return "the relayed head and files do not match the program's digest (a path was dropped or changed in the copy)";
     if (!Array.isArray(pf.dsn_paths)) return "no dsn_paths list in the plan_files output";
     if (canonical(pf.args) !== canonical([ctx.worktree, w.plan_commit])) return "the program ran on other arguments (" + JSON.stringify(pf.args === undefined ? null : pf.args) + ")";
-    if (typeof ph.plan_sha256 !== "string" || !SHA256_RE.test(ph.plan_sha256)) return "no usable plan_sha256";
+    if (typeof ph.plan_sha256 !== "string" || !SHA256_RE.test(ph.plan_sha256) || !relayDigestOk(ph, progKeys("plan_hash"), "plan_hash") || canonical(ph.args) !== canonical([ctx.worktree, w.plan_commit, full.plan_path])) return "no usable plan_sha256 (digest or arguments)";
     if (!Array.isArray(pr.refs)) return "no plan ref list";
     return null;
   };
@@ -5378,7 +5380,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   if (canonical(v.args) !== canonical([mainWt, planBase, ref.plan_path]))
     halt("failed", "infra:verify-plan: the program ran on other arguments (" + JSON.stringify(v.args === undefined ? null : v.args) + ")");
   // security review: no replacement object may stand in for a sealed id; roles read the plan by its own blob id
-  if (!Array.isArray(v.replace_refs) || !SHA_RE.test(String(v.plan_hash.blob))) halt("failed", "infra:verify-plan: no replace_refs list or plan blob id");
+  const ph = v.plan_hash;
+  if (!relayDigestOk(ph, progKeys("plan_hash"), "plan_hash") || canonical(ph.args) !== canonical([mainWt, ref.plan_commit, ref.plan_path]) || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(String(ph.blob)))
+    halt("failed", "infra:verify-plan: the relayed plan hash does not match the program's digest, arguments or a full blob id");
+  if (!Array.isArray(v.replace_refs)) halt("failed", "infra:verify-plan: no replace_refs list");
   if (v.replace_refs.length) halt("needs_human", "verify: " + v.replace_refs[0] + " exists; replacement objects could change what a sealed object id reads as; remove refs/replace/*, then re-run the build", "hash");
   const planBlob = v.plan_hash.blob;
   if (v.plan_sha256 !== ref.plan_sha256)

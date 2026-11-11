@@ -58,4 +58,7 @@ if rev == '':
 else:
     blob = subprocess.run(['git', '-C', wt, 'rev-parse', '--verify', rev + ':' + path], capture_output=True, check=True).stdout.decode().strip()
     d = subprocess.run(['git', '-C', wt, 'cat-file', 'blob', blob], capture_output=True, check=True).stdout
-print(json.dumps({'plan_sha256': hashlib.sha256(d).hexdigest(), 'blob': blob, 'program': _PROG}))
+# security review: the args and a digest the workflow recomputes
+out = {'plan_sha256': hashlib.sha256(d).hexdigest(), 'blob': blob, 'args': [wt, rev, path], 'program': _PROG}
+out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+print(json.dumps(out, ensure_ascii=False))
