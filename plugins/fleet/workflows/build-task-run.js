@@ -53,6 +53,8 @@ const INFRA_TIER = [
   ["infra:policy", "haiku"],
   // 6.0.0 (2044): it edits the PR body
   ["infra:pr-stats", "sonnet"],
+  // 6.0.0 (2045, 2034): PR state changes
+  ["infra:pr-ready", "sonnet"],
   ["infra:callers", "haiku"],
   ["infra:check-scripts", "haiku"],
   ["infra:precommit-ids", "sonnet"],
@@ -1492,6 +1494,7 @@ const PROGRAM_SHA256 = {
   "policy": "3c3c254d65a199674727568003c0066cbb15ee7af2e86888932e2637f950ec5b",
   "pr_body_block": "368ed0c33928769f6951a1e15b65362b438fc010b0ea26c6284fc668c5e6c733",
   "pr_convention": "4763189023084bbad77a9eb5c2704692da5932d2dfa335654c5e4178f027c2b7",
+  "pr_state": "56392cdd8a4c8f02fd0a8b492e25718b3253275a510d18cba8e10e93a826209a",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
   "push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
   "push_probe": "c4381f9ce601e0729a0ab49edb33fe6c9e910e8738411e7ad4719f21ef639a5b",
@@ -1606,6 +1609,7 @@ const PROGRAM_SLOTS = [
   [/^infra:read-state$/, [[null, "read_state"]]],
   [/^infra:policy$/, [[null, "policy"]]],
   [/^infra:pr-stats/, [[null, "pr_body_block"]]],
+  [/^infra:pr-ready/, [[null, "pr_state"]]],
   [/^infra:state:/, [[null, "state_write"]]],
   [/^infra:tf-gate:/, [[null, "tf_gate"]]],
   [/^infra:remote-head:/, [[null, "remote_head"]]],
@@ -1663,6 +1667,7 @@ const PROGRAM_KEYS = {
   // 6.0.0
   "ruleset_surface": ["surface", "sources", "read", "unreadable", "error", "args"],
   "policy": ["profile", "file", "policy_sha256", "caps", "matched", "error", "now", "args"],
+  "pr_state:ready": ["mode", "was_draft", "is_draft", "head", "state", "error", "args"],
   "pr_body_block": ["replaced", "wall_s", "block_sha256", "body_sha256_before", "body_sha256_after", "headers_missing", "error", "args"],
   "pr_convention": ["title", "body", "source", "unreadable", "args"],
   "review_paths": ["changed_paths"],
@@ -1794,6 +1799,16 @@ const PROGRAM_OUT = {
     matched: STR_OR_NULL,
     error: STR_OR_NULL,
     now: INT,
+    args: STRS,
+    digest: STR,
+  },
+  pr_state: {
+    mode: STR,
+    was_draft: { type: ["boolean", "null"] },
+    is_draft: { type: ["boolean", "null"] },
+    head: STR_OR_NULL,
+    state: STR_OR_NULL,
+    error: STR_OR_NULL,
     args: STRS,
     digest: STR,
   },
@@ -3185,6 +3200,7 @@ const state = {
   freezePlanRef: null,
   db: null,
   dbTarget: null,
+  tail: 0,
 };
 
 function gate(msg) {
@@ -3197,8 +3213,10 @@ function halt(status, msg, stopGate) {
   stop(status, msg);
 }
 function capped() {
-  return state.agents - state.pathChecks - state.buildResets;
+  return state.agents - state.pathChecks - state.buildResets - state.tail;
 }
+// 2044, 2045, 2034: the PR tail sits outside the cap like path checks; CI-fix coder rounds still count
+const TAIL_RE = /^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:fleet-ci-classifier)/;
 
 function reserve(n, what) {
   if (capped() + n > MAX_AGENTS)
@@ -3248,6 +3266,7 @@ async function agentT(prompt, opts) {
 async function dispatch(label, prompt, opts) {
   const model = infraModel(label);
   const ic = infraCall(label, prompt, opts);
+  if (TAIL_RE.test(label)) state.tail++;
   reserve(1, label);
   state.agents++;
   const r = await agentT(ic.prompt, agentOpts(ic.opts, label, model));
@@ -5269,6 +5288,13 @@ function statsBlock(c) {
 function prStatsPrompt(inputs) {
   return INFRA_STEP + "write the stats block into the fleet's own PR body; only the block between its markers changes.\n" + inputsLine(inputs) + RUN_ONLY + progCmd("pr_body_block", inputs.args) + "\nIt prints one JSON object " + printsKeys("pr_body_block") + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_body_block") + "}.";
 }
+// 2045, 2034: one state change of the fleet's own PR (pr_state.py <mode> ...)
+async function prState(label, args, what, stopGate) {
+  const r = await infra(label, INFRA_STEP + what + ".\n" + inputsLine({ args }) + RUN_ONLY + progCmd("pr_state", args) + "\nIt prints one JSON object " + printsKeys("pr_state:" + args[0]) + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_state:" + args[0]) + "}.", "PR");
+  requireProgram(r, "pr_state", label, "needs_human", stopGate);
+  if (!relayDigestOk(r, progKeys("pr_state:" + args[0]), "pr_state") || canonical(r.args) !== canonical(args)) halt("needs_human", label + ": the relayed result does not match the program's digest or arguments", stopGate);
+  return r;
+}
 // 2042: subjects follow the sealed convention and never carry the internal task id (ruling 4)
 const KIND_TYPE = { bug_fix: "fix", feature: "feat", refactor: "refactor", chore: "chore" };
 function subjectsOf(pf, brief, slug, taskId) {
@@ -5593,6 +5619,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const autoConfirmed = !!intent;
   let approvedSha = null;
   let pushes = 0;
+  // ADR-1175: Max pushed this IaC diff; ready, CI-watch and merge stop (2045)
+  let iacTouched = false;
   let prOpens = 0;
   let reprobed = false;
   let reviews = 0;
@@ -5729,6 +5757,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           intent: intentForPr,
           policy,
           tests_written: state.testsWritten || 0,
+          iac_touched: iacTouched,
         },
         wb ? { write_back: wb.write_back, ledger_adapter: wb.ledger_adapter, ledger_reason: wb.ledger_reason, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
       ),
@@ -5746,7 +5775,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("run-state " + lastGate + " at " + approvedSha);
   }
   async function ship(from) {
-    const steps = ["push", "pr", "review", "writeback", "stats"];
+    const steps = ["push", "pr", "review", "writeback", "stats", "ready"];
     for (let i = steps.indexOf(from); i < steps.length; i++) {
       const step = steps[i];
       if (step === "push") {
@@ -5756,6 +5785,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         const scanDiff = await fleetScan("infra:fleet-scan:push" + (pushes > 1 ? ":p" + pushes : ""));
         if (await tfGate("infra:tf-gate:push" + (pushes > 1 ? ":p" + pushes : ""), scanDiff)) {
           // ADR-1175: Max pushed this IaC diff himself
+          iacTouched = true;
           await saveState("pushed", "infra:state:pushed:p" + pushes);
           continue;
         }
@@ -5835,10 +5865,24 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         phase("Write-back");
         wb = await writeBack({ ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr ? pr.pr_url : null });
         await saveState("written_back", "infra:state:written_back" + (pushes > 1 ? ":p" + pushes : ""));
-      } else await statsStep();
+      } else if (step === "stats") await statsStep();
+      else await readyStep();
     }
     await saveState("shipped", "infra:state:shipped" + (pushes > 1 ? ":p" + pushes : ""));
     return null;
+  }
+  // 2045: ready for review after review approve, write-back and stats; never on a stop (a halt ends the run first)
+  let readyRuns = 0;
+  async function readyStep() {
+    if (!pr || pr.pr_number == null) return gate("ready skipped: no PR");
+    if (iacTouched) halt("needs_human", "IaC PR: Max marks it ready (" + pr.pr_url + ")", "iac");
+    if (!policy.caps.pr_ready) return gate("pr_ready false (policy): " + pr.pr_url + " stays a draft");
+    const label = "infra:pr-ready" + (++readyRuns > 1 ? ":p" + readyRuns : "");
+    const r = await prState(label, ["ready", ghFor(remoteSlug).gh_cmd, remoteSlug, String(pr.pr_number), approvedSha], "mark the fleet's own PR ready for review", "ci");
+    if (r.error !== null || r.is_draft !== false || r.head !== approvedSha)
+      halt("needs_human", label + ": " + pr.pr_url + " is not ready at the approved " + approvedSha + " (" + (r.error || "is_draft " + r.is_draft + ", head " + r.head) + ")", "ci");
+    state.prReady = true;
+    gate(label + ": " + pr.pr_url + (r.was_draft ? " marked ready for review" : " was already ready") + " at " + approvedSha);
   }
   // 2044: the stats block in the PR body; any mismatch stops the run
   let statsRuns = 0;
@@ -5867,7 +5911,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   function finishOk(resumedAt) {
     history.agents += state.agents - opt.agentsBase;
     gate("cumulative: run " + history.runs + ", re-plans " + history.replans + ", agents " + history.agents);
-    const out = finish("ok", resumedAt === "done" ? "resumed: the run had already finished; recorded result" : "draft PR ready for review");
+    const out = finish("ok", resumedAt === "done" ? "resumed: the run had already finished; recorded result" : state.prReady ? "PR ready for review" : "draft PR ready for review");
     out.created = pr ? pr.created : null;
     out.template_used = pr ? pr.template_used || null : null;
     out.cumulative = history;
@@ -5891,6 +5935,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     reviews = resume.reviews || 0;
     if (resume.rounds && typeof resume.rounds === "object") state.rounds = resume.rounds;
     state.testsWritten = resume.tests_written || 0;
+    iacTouched = resume.iac_touched === true;
     if (resume.pr_url || resume.pr_number != null) {
       pr = { pr_url: resume.pr_url, pr_number: resume.pr_number, created: resume.pr_created, template_used: resume.template_used };
       state.pr = pr;

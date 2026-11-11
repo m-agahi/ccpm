@@ -82,10 +82,11 @@ const SCENARIOS = {
 // 6.0.0 stream 2 (security review): plan_blob is the blob id; verify-plan reads replace_refs
 // 6.0.0 stream 2 (security review): plan_hash prints args and a digest
 // 6.0.0 stream 3 (2044): infra:pr-stats and infra:state:shipped (new build calls)
+// 6.0.0 stream 3 (2045): infra:pr-ready (new build call)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 80, sha256: "0ae4003da30de514f82e09bc14128dd883a9b93a03735700609d59a5d36926ec" },
-  "confirm auto (gates, then build in one run)": { calls: 82, sha256: "c3f733f36f44e9a0202e931a9dfa9eec27c909119217b44ae6f2a939dbb5b80c" },
-  "short path (one test writer)": { calls: 79, sha256: "b420850894e4c3e8853039079ee5caf378e478b0b2f3f4cd3cbf5c53baaf5b0a" },
+  "plan then build (confirm ask)": { calls: 81, sha256: "9739981f79d027dac174796868ac058ed8f13a93d6beabea06071c0a86199974" },
+  "confirm auto (gates, then build in one run)": { calls: 83, sha256: "4f681dc69095deb3db8a431b44de2ff02904d588b2e8dc362af57540afca9bf8" },
+  "short path (one test writer)": { calls: 80, sha256: "d1f2ae5746694134d31394143ced1ca0b4296812b5699d5c9a42b78e693a9dba" },
   "probe": { calls: 2, sha256: "012d024fefbefe057a047d8b6822b07ea3152de9e7d322be0e6cf5d6273fc736" },
 };
 

@@ -370,6 +370,11 @@ export async function runOne(script, args0) {
       const block = Buffer.from(a[3], "base64").toString("utf8").replace("@@WALL@@", "2m");
       return { status: "ok", reason: "written", replaced: false, wall_s: 120, block_sha256: sha256(block), body_sha256_before: "0".repeat(64), body_sha256_after: "1".repeat(64), headers_missing: [], error: null, args: a };
     }
+    // 6.0.0 (ledger 2045): an unscripted ready step marks the draft ready at the approved sha
+    if (!(label in script) && /^infra:pr-ready/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "ready", mode: "ready", was_draft: true, is_draft: false, head: a[4], state: "OPEN", error: null, args: a };
+    }
     // 6.0.0 (ledger 2041): unscripted ruleset reads find a repo with no ruleset and a user owner
     if (!(label in script) && /^infra:ruleset-surface:/.test(label))
       return { status: "ok", reason: "read", surface: [], sources: [], read: ["self-references in 0 local workflow file(s)", "rules/branches/main: 0 rule(s)", "owner o is not an organization: no org rulesets"], unreadable: [], error: null, args: inputsOf(prompt).args };
@@ -1113,6 +1118,8 @@ export const PROGRAM_LABELS = [
   [/^infra:policy$/, [[null, "policy", K("policy")]]],
   // 6.0.0 (ledger 2044)
   [/^infra:pr-stats/, [[null, "pr_body_block", K("pr_body_block")]]],
+  // 6.0.0 (ledgers 2045, 2034)
+  [/^infra:pr-ready/, [[null, "pr_state", K("pr_state:ready")]]],
   // 6.0.0 (ledger 2042)
   [/^infra:pr-convention:/, [[null, "pr_convention", K("pr_convention")]]],
   [/^infra:review-paths:/, [[null, "review_paths", K("review_paths")]]],

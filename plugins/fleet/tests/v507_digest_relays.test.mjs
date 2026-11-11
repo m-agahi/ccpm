@@ -166,7 +166,7 @@ const V506 = {
   "coder/file": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review",
     "coder2": [
       "frozen test or runner-config hash changed: conftest.py -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -174,7 +174,7 @@ const V506 = {
   "coder/section": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review",
     "coder2": [
       "frozen test or runner-config hash changed: pyproject.toml#tool.pytest -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -182,7 +182,7 @@ const V506 = {
   "coder/git": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review",
     "coder2": [
       "frozen test or runner-config hash changed: git:config:local -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -190,7 +190,7 @@ const V506 = {
   "coder/ignored": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review",
     "coder2": [
       "frozen test or runner-config hash changed: ignored path written: build.log (likely cause: a build or test command ran without the fleet build env, test_env_prefix, so build output or a cache such as target/ or __pycache__ changed in the worktree) -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -198,7 +198,7 @@ const V506 = {
   "coder/symlink": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review",
     "coder2": [
       "frozen test or runner-config hash changed: symlink:lib -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -206,7 +206,7 @@ const V506 = {
   "coder/added": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review",
     "coder2": [
       "frozen test or runner-config hash changed: tests/conftest.py -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]
@@ -214,7 +214,7 @@ const V506 = {
   "coder/deleted": {
     "status": "ok",
     "gate": null,
-    "reason": "draft PR ready for review",
+    "reason": "PR ready for review",
     "coder2": [
       "frozen test or runner-config hash changed: conftest.py -- frozen paths are read-only; restore them to their content in freeze tree T1 and fix production code instead"
     ]

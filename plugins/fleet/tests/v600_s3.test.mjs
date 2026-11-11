@@ -179,3 +179,104 @@ test("6.0.0 2044: the run-state records shipped after the stats step, with the t
   assert.ok(states.shipped && states.written_back);
   assert.equal(states.shipped.tests_written, states.written_back.tests_written);
 });
+
+// ---------------------------------------------------------------- 2045: pr_state.py ready
+
+// a fake gh driven by <dir>/pr.json (the PR as `gh pr view --json` sees it) and <dir>/rules.json
+// (answers by argv prefix: [{argv: [...], out?, err?, code?, set?}]); every call goes to <dir>/calls
+function fakeForge(pr, rules) {
+  const dir = mkdtempSync(join(tmpdir(), "fleet-600forge-"));
+  mkdirSync(join(dir, "bin"));
+  writeFileSync(join(dir, "pr.json"), JSON.stringify(pr));
+  writeFileSync(join(dir, "rules.json"), JSON.stringify(rules || []));
+  const prog =
+    "#!" + PY + "\nimport json, sys\nD = " + JSON.stringify(dir) + "\na = sys.argv[1:]\nopen(D + '/calls', 'a').write(json.dumps(a) + '\\n')\n" +
+    "pr = json.load(open(D + '/pr.json'))\n" +
+    "for r in json.load(open(D + '/rules.json')):\n    if a[:len(r['argv'])] == r['argv']:\n        if 'set' in r:\n            pr.update(r['set'])\n            json.dump(pr, open(D + '/pr.json', 'w'))\n" +
+    "        if 'out' in r:\n            sys.stdout.write(r['out'] if isinstance(r['out'], str) else json.dumps(r['out']))\n        if r.get('err'):\n            sys.stderr.write(r['err'])\n        sys.exit(r.get('code', 0))\n" +
+    "if a[:2] == ['pr', 'view'] and '--json' in a:\n    print(json.dumps({k: pr.get(k) for k in a[a.index('--json') + 1].split(',')}))\n    sys.exit(0)\n" +
+    "if a[:2] == ['pr', 'ready']:\n    pr['isDraft'] = False\n    json.dump(pr, open(D + '/pr.json', 'w'))\n    sys.exit(0)\n" +
+    "sys.exit('unexpected ' + json.dumps(a))\n";
+  writeFileSync(join(dir, "bin", "gh"), prog);
+  chmodSync(join(dir, "bin", "gh"), 0o755);
+  return dir;
+}
+function callsOf(dir) {
+  let t = "";
+  try {
+    t = readFileSync(join(dir, "calls"), "utf8");
+  } catch (e) {
+    t = "";
+  }
+  return t.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+}
+function prog(name, dir, args, extraEnv) {
+  const r = spawnSync(PY, ["-I", join(SCRIPTS_SRC, name + ".py")].concat(args), { encoding: "utf8", env: Object.assign({ PATH: join(dir, "bin") + ":/usr/bin:/bin", HOME: dir }, extraEnv || {}) });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+}
+const SHA1 = "a".repeat(40);
+const SHA2 = "b".repeat(40);
+
+test("6.0.0 2045: pr_state.py ready marks an open draft at the sha ready and re-reads it", () => {
+  const dir = fakeForge({ isDraft: true, headRefOid: SHA1, state: "OPEN" });
+  try {
+    const o = prog("pr_state", dir, ["ready", "gh", "o/r", "7", SHA1]);
+    assert.equal(o.error, null);
+    assert.deepEqual([o.mode, o.was_draft, o.is_draft, o.head, o.state], ["ready", true, false, SHA1, "OPEN"]);
+    assert.ok(callsOf(dir).some((c) => c[0] === "pr" && c[1] === "ready" && c.indexOf("-R") > 0));
+    assert.equal(o.program.name, "pr_state");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("6.0.0 2045: pr_state.py ready never calls gh pr ready on another head, a closed PR or a PR already ready", () => {
+  for (const [pr, re] of [[{ isDraft: true, headRefOid: SHA2, state: "OPEN" }, /head is b+, not a+/], [{ isDraft: true, headRefOid: SHA1, state: "MERGED" }, /is MERGED, not OPEN/], [{ isDraft: false, headRefOid: SHA1, state: "OPEN" }, null]]) {
+    const dir = fakeForge(pr);
+    try {
+      const o = prog("pr_state", dir, ["ready", "gh", "o/r", "7", SHA1]);
+      if (re) assert.match(String(o.error), re);
+      else assert.deepEqual([o.error, o.was_draft, o.is_draft], [null, false, false]);
+      assert.ok(!callsOf(dir).some((c) => c[1] === "ready"), JSON.stringify(pr));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+// ---------------------------------------------------------------- 2045: the ready step in the build
+
+test("6.0.0 2045: after the stats block the build marks its PR ready at the approved sha", async () => {
+  const s = happy();
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const L = out.build.labels;
+  assert.ok(L.indexOf("infra:pr-stats") < L.indexOf("infra:pr-ready"), L.join(", "));
+  const a = inputsOf(call(out, "infra:pr-ready").prompt).args;
+  assert.equal(a[0], "ready");
+  assert.match(a[4], /^[0-9a-f]{40}$|^c0/);
+  assert.match(out.result.reason, /^PR ready for review/);
+  assert.ok(out.build.logs.some((l) => /^infra:pr-ready: .* marked ready for review at /.test(l)), out.build.logs.join("\n"));
+});
+
+test("6.0.0 2045: pr_ready false keeps the draft; a PR still draft or on another head stops", async () => {
+  const s = happy();
+  s["infra:policy"] = polOut({ caps: Object.assign({}, DEFAULT_CAPS, { pr_ready: false }) });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(!out.build.labels.some((l) => /^infra:pr-ready/.test(l)));
+  assert.match(out.result.reason, /^draft PR ready for review/);
+  assert.ok(out.build.logs.some((l) => /^pr_ready false \(policy\): .* stays a draft$/.test(l)));
+  for (const over of [{ is_draft: true }, { head: SHA2 }, { error: "gh pr ready: HTTP 403" }]) {
+    const s2 = happy();
+    s2["infra:pr-ready"] = (p) => {
+      const a = inputsOf(p).args;
+      return Object.assign({ status: "ok", reason: "r", mode: "ready", was_draft: true, is_draft: false, head: a[4], state: "OPEN", error: null, args: a }, over);
+    };
+    const o = await run(s2, ARGS);
+    assert.equal(o.result.status, "needs_human", JSON.stringify(over));
+    assert.equal(o.result.stop_gate, "ci");
+    assert.match(o.result.reason, /^infra:pr-ready: .* is not ready at the approved /);
+  }
+});

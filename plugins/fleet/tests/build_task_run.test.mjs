@@ -4871,9 +4871,9 @@ test("2.1.0 agent cap 100: an auto run with a revise round and a review fix roun
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.result.review.rounds, 2);
-  // the PATH re-checks (3.1.1) and the build-dir resets (5.0.6) are counted
-  // in agents but not against the cap
-  const work = out.calls.filter((c) => !/^infra:(path-check:|build-)/.test(c.label));
+  // the PATH re-checks (3.1.1), the build-dir resets (5.0.6) and the PR tail
+  // (6.0.0: stats, ready, CI watch, merge) are counted in agents but not against the cap
+  const work = out.calls.filter((c) => !/^infra:(path-check:|build-|pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|^role:fleet-ci-classifier/.test(c.label));
   assert.ok(out.calls.length > work.length, "the re-checks ran");
   assert.ok(work.length > 60, "dispatched " + work.length);
   assert.ok(work.length <= 100);
@@ -10159,10 +10159,14 @@ function iacScript(mk, head) {
 const MODES = [[() => happy(), ARGS, run], [() => autoHappy(), AUTO, runOne]];
 const pushed = (out) => out.labels.some((l) => /^infra:push(:p\d+)?$/.test(l));
 
+// 6.0.0 (ledger 2045): and stops before ready: Max marks an IaC PR ready
 test("3.1.0 ADR-1175: remote head == approved sha: the run continues to the PR, the review and the write-back without a push", async () => {
   for (const [mk, args, go] of MODES) {
     const out = await go(iacScript(mk, "approved"), args);
-    assert.equal(out.result.status, "ok", args.confirm + " " + out.result.reason);
+    assert.equal(out.result.status, "needs_human", args.confirm + " " + out.result.reason);
+    assert.equal(out.result.stop_gate, "iac");
+    assert.match(out.result.reason, /^IaC PR: Max marks it ready \(/);
+    assert.ok(out.labels.includes("infra:state:written_back") && !out.labels.some((l) => /^infra:pr-ready/.test(l)), out.labels.join(", "));
     assert.ok(!pushed(out), "push never dispatched");
     assert.ok(out.labels.includes("infra:remote-head:push"));
     assert.ok(out.labels.indexOf("infra:remote-head:push") < out.labels.indexOf("role:fleet-pr-opener"));
@@ -10899,7 +10903,8 @@ test("3.1.1 origin URL: the workspace step relays a program's output; the script
   const s = iacScript(() => happy(), "approved");
   s.workspace = Object.assign({}, s.workspace, { remote_url: "git@evil.example:o/r.git", remote_url_check: remoteUrlOut("git@github.com:o/r.git", "/r") });
   const ok = await run(s, ARGS);
-  assert.equal(ok.result.status, "ok", ok.result.reason);
+  // 6.0.0 (ledger 2045): an IaC PR stops before ready
+  assert.match(ok.result.reason, /^IaC PR: Max marks it ready/);
   assert.equal(inputsOf(call(ok, "infra:remote-head:push").prompt).remote_url, "git@github.com:o/r.git");
   // an unusable relay (bad digest, other args, a changed url, missing) seals no URL: an IaC diff stops at iac
   for (const bad of [

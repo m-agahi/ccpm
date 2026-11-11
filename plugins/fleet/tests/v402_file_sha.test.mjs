@@ -68,6 +68,8 @@ const SAMPLES = [
   "infra:policy",
   // 6.0.0 (ledger 2044)
   "infra:pr-stats",
+  // 6.0.0 (ledger 2045)
+  "infra:pr-ready",
   // 6.0.0 (ledger 2042)
   "infra:pr-convention:plan",
   "infra:review-paths:v1",

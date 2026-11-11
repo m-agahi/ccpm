@@ -164,9 +164,20 @@ shipped run into a coder round, and adds org and repo rulesets to the hook surfa
   `stats: false` skips the step. A new last run-state `shipped` follows it; a run-state at
   `written_back` (any earlier fleet's last state) now resumes at the stats step.
 
+- 2045: after review approve, write-back and the stats block, the build marks its PR ready for
+  review (step `infra:pr-ready`, new program `pr_state.py` mode `ready`, 38 programs). The
+  program calls `gh pr ready` only on an open draft whose head is the approved sha, re-reads it,
+  and the script requires `is_draft: false` and head == approved sha; anything else stops
+  (`stop_gate: "ci"`). A stop earlier in the run ends it before this step, so a needs_human run
+  never marks ready. Policy `pr_ready: false` keeps the draft. A branch Max pushed himself
+  (ADR-1175 IaC diff) is recorded as `iac_touched` in the run-state, and the run stops before
+  ready with "IaC PR: Max marks it ready" (`stop_gate: "iac"`). The result reason reads "PR
+  ready for review" (a kept draft: "draft PR ready for review"). The PR tail (stats, ready, CI
+  watch, merge and their run-state write) counts in `agents` but, like path checks and build-dir
+  resets, not against the 100-agent cap; CI-fix coder rounds still count.
+
 ### Pending (stream 3)
 
-- 2045: mark the PR ready after review approve, write-back and stats. Pending.
 - 2034: CI watch on every profile, CI-fix rounds, orchestrator detection, merge where the
   policy allows. Pending.
 

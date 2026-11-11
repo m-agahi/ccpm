@@ -653,10 +653,14 @@ const READS = {
   // 6.0.0 (ledger 2044): the token counter reads the runtime's budget; the wall time comes from policy.py
   tokOn: { "budget object": "parsed: the runtime's budget global", "budget.spent function": "parsed: the runtime's budget global" },
   policyStep: { "r.now integer": "prog:policy:now" },
+  dispatch: { "label string-re": "parsed: the script's own step label" },
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
     // 6.0.0 (ledger 2044)
     "ref.history.audits number": PARSED_REF,
+    // 6.0.0 (ledger 2045)
+    "r.is_draft boolean": "prog:pr_state:is_draft",
+    "resume.iac_touched boolean": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     // 6.0.0 (ledger 2043): the freeze ref in the hasher:resume git map
     "ft string": "parsed: the hasher:resume git map, read from its sha256-checked file",
     // 5.0.0 (R3): the previous review round's blocking list (reviewStep's own)
