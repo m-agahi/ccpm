@@ -1,5 +1,23 @@
 # Changelog
 
+## [5.0.10] - 2026-11-11
+
+Fleet 5.0.10 (ledger 2031): the workflow file shrinks from 476186 to under 400000 bytes with no
+change in behaviour, so 5.1.0 has room to grow under the 480000-byte budget (ADR-1189).
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.10), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.10/scripts` dir.
+- A 5.0.9 plan ref and run-state stay valid: nothing sealed changed.
+
+### Added
+
+- `tests/v5010_prompt_snapshot.test.mjs`: for four main scenarios (plan then build, confirm auto,
+  the short path, probe) it pins the sha256 of every agent call the workflow makes (label, prompt,
+  schema, model, agent type) and the final status, with the fleet version masked. The pins were
+  computed on the 5.0.9 workflow. A change to any prompt the workflow sends now fails a test.
+
 ## [5.0.9] - 2026-11-11
 
 Fleet 5.0.9 (ledger 2032): a yaadgaar task with no project in the answer is the session's own,
