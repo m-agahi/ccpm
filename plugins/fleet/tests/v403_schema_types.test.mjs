@@ -653,6 +653,14 @@ const READS = {
   // 6.0.0 (ledger 2044): the token counter reads the runtime's budget; the wall time comes from policy.py
   tokOn: { "budget object": "parsed: the runtime's budget global", "budget.spent function": "parsed: the runtime's budget global" },
   policyStep: { "r.now integer": "prog:policy:now" },
+  // 6.0.0 security review (S6): the CI write-back line reads the script's own CI record
+  ciLine: {
+    "c.auto_merge_enabled boolean": "parsed: state.ci, the script's own CI record",
+    "c.merged boolean": ["parsed: state.ci, the script's own CI record", 2],
+    "c.merge_sha string": "parsed: state.ci, the script's own CI record (merge_sha checked as 40 hex)",
+    "counts array": "parsed: state.ciCounts, bucket counts the script computed",
+    "x integer": "parsed: a count or fix_rounds the script computed",
+  },
   dispatch: { "label string-re": "parsed: the script's own step label" },
   callRole: { "label string-re": "parsed: the script's own step label" },
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },

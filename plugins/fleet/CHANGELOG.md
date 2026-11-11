@@ -282,6 +282,15 @@ last state. With no policy file, a fleet PR is marked ready and its CI is watche
   Same targets and rules as the write-back. It is soft: it never gates the merge and never
   stops the run, and a stop inside it keeps the run's stop gate. A CI-fix round is not final.
   The result carries `ci_write_back`.
+- Security review of S6 (MEDIUM): the CI write-back line is built only from fixed, validated
+  fields, in this order: verdict, merged (with the merge sha only when it is 40 hex),
+  auto-merge, CI-fix rounds, the counts of passed, failed and pending checks, and on a stop
+  `stopped: <code>`. A stop is an enum code
+  (`ci_timeout`, `ci_red`, `ci_red_cap`, `head_moved`, `merge_blocked`, `orchestrator`, `iac`,
+  `review`, `relay`, `other`), never halt text. Check names, urls and error strings from CI
+  never reach ledger sections, tracker comments or the writer agents' prompts.
+  The `pr_state.py logs` test now also names a real run of this head behind another repo's url
+  (the url's repo alone keeps that log out; mutant M5b).
 - S7a (ADR-1215): the stats block is written again at run end (`infra:pr-stats:final`) with a CI
   row (verdict, CI-fix rounds, total CI wait), only when the PR is not merged; on a merged PR
   the gate log says "stats block not refreshed".

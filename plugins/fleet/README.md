@@ -650,7 +650,8 @@ the 100-agent cap (like path checks); CI-fix coder rounds still count.
   merge".
 - The result carries `ci: {verdict, checks: [{name, state, url}], fix_rounds, merged, merge_sha,
 auto_merge_enabled}`. After the final CI outcome a follow-up write-back (marker
-  `fleet:<task>:ci`, soft) records it, and the stats block is refreshed with a CI row when the PR
+  `fleet:<task>:ci`, soft) records it from fixed fields only (verdict, merged, merge sha, CI-fix
+  rounds, check counts, an enum stop code; never CI names, urls or text), and the stats block is refreshed with a CI row when the PR
   is still open.
 
 ### Resume (run-state)

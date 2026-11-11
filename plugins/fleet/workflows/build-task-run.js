@@ -6029,6 +6029,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       requireProgram(w, "ci_watch", wl, "needs_human", "ci");
       if (!relayDigestOk(w, progKeys("ci_watch"), "ci_watch") || canonical(w.args) !== canonical(wa)) halt("needs_human", wl + ": the relayed result does not match the program's digest or arguments", "ci");
       ci.checks = w.checks.map((c) => ({ name: c.name, state: c.state, url: c.url }));
+      // security review (S6): the CI write-back carries bucket counts only, never names, urls or text
+      state.ciCounts = ["pass", "fail", "pending"].map((b) => w.checks.filter((c) => (b === "fail" ? c.bucket === "fail" || c.bucket === "cancel" : c.bucket === b)).length);
       state.ciWaitS = (state.ciWaitS || 0) + (Number.isInteger(w.elapsed_s) && w.elapsed_s > 0 ? w.elapsed_s : 0);
       if (w.state === "head_moved") halt("needs_human", wl + ": the head of " + pr.pr_url + " moved to " + w.head + " during the CI watch; nothing merged", "ci");
       // B1: an empty check list is never green: nothing ran, nothing merges
@@ -6149,7 +6151,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (ciWbDone || !state.ci || !pr || !pr.pr_url) return;
     ciWbDone = true;
     const c = state.ci;
-    const line = ("CI: " + c.verdict + (c.merged ? ", merged as " + c.merge_sha : c.auto_merge_enabled ? ", native auto-merge enabled" : "") + " (" + (stopReason ? "stopped: " + stopReason : state.ciNote || "no note") + ")").slice(0, 600);
+    const line = ciLine(c, state.ciCounts, stopReason);
     const sg = state.stopGate;
     try {
       const r = await writeBack({ ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr.pr_url, ci: line });
@@ -6165,7 +6167,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     try {
       return await fn();
     } catch (e) {
-      if (e instanceof Stop) await ciWriteBack(e.reason);
+      if (e instanceof Stop) await ciWriteBack(ciStopCode(state.stopGate, e.reason));
       throw e;
     }
   }
@@ -7146,6 +7148,34 @@ function ledgerRead(label, project, tasks, marker) {
     agentType: JUDGE_AGENT,
     phase: "Write-back",
   });
+}
+// security review (S6): the CI write-back line is built from fixed, validated fields only; a stop is
+// an enum code. Check names, urls, error and halt text come from CI and never leave the run.
+const CI_VERDICTS = ["not_run", "green", "red", "timeout"];
+const CI_STOP_CODES = ["ci_timeout", "ci_red", "ci_red_cap", "head_moved", "merge_blocked", "orchestrator", "iac", "review", "relay", "other"];
+function ciStopCode(stopGate, reason) {
+  const r = String(reason || "");
+  if (/^orchestrator PR: /.test(r)) return "orchestrator";
+  if (/^IaC PR: /.test(r)) return "iac";
+  if (/^CI unresolved /.test(r)) return "ci_timeout";
+  if (/^CI still red after /.test(r)) return "ci_red_cap";
+  if (/^CI red/.test(r)) return "ci_red";
+  if (/ moved to [0-9a-f]+ during the CI watch/.test(r)) return "head_moved";
+  if (/the relayed result does not match/.test(r)) return "relay";
+  if (stopGate === "merge") return "merge_blocked";
+  if (stopGate === "review") return "review";
+  return "other";
+}
+function ciLine(c, counts, stopCode) {
+  const n = (x) => (Number.isInteger(x) && x >= 0 ? x : 0);
+  const k = Array.isArray(counts) ? counts : [];
+  return (
+    "CI: " + (CI_VERDICTS.indexOf(c.verdict) >= 0 ? c.verdict : "not_run") + "; merged " + (c.merged === true) +
+    (c.merged === true && typeof c.merge_sha === "string" && /^[0-9a-f]{40}$/.test(c.merge_sha) ? " as " + c.merge_sha : "") +
+    "; auto-merge " + (c.auto_merge_enabled === true) + "; CI-fix rounds " + n(c.fix_rounds) +
+    "; checks " + n(k[0]) + " passed, " + n(k[1]) + " failed, " + n(k[2]) + " pending" +
+    (stopCode ? "; stopped: " + (CI_STOP_CODES.indexOf(stopCode) >= 0 ? stopCode : "other") : "")
+  );
 }
 // 2034.5: ctx.ci (a CI outcome line) writes the follow-up: its own marker fleet:<task>:ci, heading and labels (:ci)
 async function writeBack(ctx) {
