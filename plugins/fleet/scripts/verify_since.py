@@ -51,9 +51,11 @@ pc = run('rev-parse', '--verify', base + '^{commit}').stdout.decode().strip()
 anc = run('merge-base', '--is-ancestor', pc, head, ok=(0, 1)).returncode == 0
 commits, touched, changed = [], [], []
 if anc and head != pc:
-    for rec in z(run('log', '-z', '--format=%H %s', pc + '..' + head).stdout):
-        sha, _, subj = rec.partition(' ')
-        commits.append({'sha': sha, 'subject': subj})
+    # 6.0.1 (2050): the parents name a forge update-branch merge
+    for rec in z(run('log', '-z', '--format=%H %P%x01%s', pc + '..' + head).stdout):
+        ids, _, subj = rec.partition('\x01')
+        sha, *par = ids.split(' ')
+        commits.append({'sha': sha, 'subject': subj, 'parents': [p for p in par if p]})
     touched = z(run('log', '-z', '--format=%H', pc + '..' + head, '--', ':(literal)' + plan_path).stdout)
     changed = z(run('diff', '--name-only', '-z', '--no-renames', pc + '..' + head, '--').stdout)
 # 6.0.0 security review: any replacement ref fails verify

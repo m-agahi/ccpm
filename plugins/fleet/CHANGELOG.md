@@ -1,5 +1,54 @@
 # Changelog
 
+## [6.0.1] - 2026-11-11
+
+Fleet 6.0.1 (ledger 2050): five defects on the path after update-branch (ADR-1203), found in a
+read-only design review of 6.0.0. D1 was reproduced on the test harness; D2 to D5 were found by
+reading the code.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.0.1), then start a NEW session: the workflow
+  looks for its own `fleet/6.0.1/scripts` dir.
+- A 6.0.0 plan ref and run-state stay valid. A 6.0.0 run-state has no `pr_updated` or `update`
+  key; it resumes as "not updated".
+
+### Fixed
+
+- D1 (blocker): a CI red caused by the diff after an overlap update ran a CI-fix coder round on
+  the forge's merge commit. The round stopped as `ownership` ("coder committed: HEAD moved") and
+  no CI write-back ran. The guard "CI red after update-branch" compared the watched head with
+  `approvedSha`, which an overlap update also moves. It now checks `state.prUpdated`: after any
+  update-branch, a CI red caused by the diff stops with gate `ci` and CI stop code `ci_red`. The
+  CI write-back runs once. No CI-fix coder round runs.
+- D2: the re-review after an overlap update diffed against the plan base, so files that only the
+  base changed were listed as PR changes (`review-paths`, pr-review `base_ref`, the sweep trigger).
+  The re-review now uses the base tip that the update relayed (`f.base`), which gives the PR's net
+  diff against the new base. The sweep gets the same `base_ref`, because it shares the review
+  inputs. The CI classifier's `base_ref` follows the same rule (the base tip only while the
+  approved sha is the update merge). The stats block takes no base ref.
+- D3: `adoptUpdate` set `code_tree` but not `maps_digest`. The run-state after the update now
+  records the digest of the merge's hashed maps (`hasher:update:u1`).
+- D4: a resume after an overlap update stopped with "plan changed since approval: branch moved by
+  a non-fleet commit". `verify_since.py` now lists the parents of each commit since the plan base
+  (`commits_since[].parents`, optional in the schemas). When a commit has two parents, the first
+  being plan_base or a fleet commit and the second not, verify stops with "PR was updated from base
+  (update-branch); resume is not supported after update-branch — re-run build". The run still
+  stops (fail closed); only the message changed.
+- D5: the run-state now carries `pr_updated` and `update` ({head, base}). A resume restores them
+  (`update` only with two 40-hex shas), so update-branch stays once per run across a resume.
+
+### Changed
+
+- A re-review after update-branch that requests changes now hands its findings (blocking and nits)
+  to the pr-opener as `review_notes` (`role:fleet-pr-opener:findings`), so they are in the PR body.
+  The run then stops with gate `review`: "re-review after update-branch requested changes: ...;
+  the review findings are in the PR body of <pr>; re-plan on the new base or fix by hand". Before,
+  it stopped with "review round 2 requested changes again" and the findings were only in the stop
+  reason.
+- Version 6.0.1 (`FLEET_VERSION`, `marketplace.json`, the root README). The prompt snapshot pins
+  change only by the `parents` field in the schemas.
+
 ## [6.0.0] - unreleased
 
 Fleet 6.0.0: one major release in three build streams. Stream 1 fixes the PR-step push probe,

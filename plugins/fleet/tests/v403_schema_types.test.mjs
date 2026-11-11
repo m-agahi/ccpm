@@ -670,6 +670,12 @@ const READS = {
     // 6.0.0 (ledger 2045)
     "r.is_draft boolean": "prog:pr_state:is_draft",
     "resume.iac_touched boolean": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    // 6.0.1 (ledger 2050)
+    "c.parents array": "prog:verify_since:commits_since[].parents",
+    "c.parents.length number-literal": "parsed: the length of prog:verify_since:commits_since[].parents (checked as an array first)",
+    "state.prUpdated boolean": PARSED_LOCAL,
+    "resume.pr_updated boolean": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    "ru object": "parsed: resume.update, JSON.parse of the run-state message (digest-checked read_state)",
     // 6.0.0 (ledger 2034)
     "c.removed boolean": "prog:pr_state:removed",
     "c.deleted boolean": "prog:pr_state:deleted",
@@ -1029,7 +1035,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.0\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.0\.0\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.0\.1\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.0\.1\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

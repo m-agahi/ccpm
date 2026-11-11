@@ -33,7 +33,7 @@ function bodyBlock(dir, tpl, t0, headers) {
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);
 }
-const TPL = "<details><summary>Built with ccpm fleet 6.0.0</summary>\n\n| metric | value |\n|---|---|\n| wall time | @@WALL@@ |\n\n</details>\n<!-- ccpm-fleet-stats -->";
+const TPL = "<details><summary>Built with ccpm fleet 6.0.1</summary>\n\n| metric | value |\n|---|---|\n| wall time | @@WALL@@ |\n\n</details>\n<!-- ccpm-fleet-stats -->";
 
 // ---------------------------------------------------------------- 2044: pr_body_block.py
 
@@ -109,7 +109,7 @@ test("6.0.0 2044: after the write-back the build writes a stats block of script 
   // the default policy stub prints no now: the wall time is not measured
   assert.deepEqual([a[0], a[1], a[2], a[4], a[5]], ["gh", "o/r", String(out.result.pr_number), "-", "[]"]);
   const block = blockOf(out);
-  assert.ok(block.startsWith("<details><summary>Built with ccpm fleet 6.0.0</summary>\n\n| metric | value |\n|---|---|\n"), block);
+  assert.ok(block.startsWith("<details><summary>Built with ccpm fleet 6.0.1</summary>\n\n| metric | value |\n|---|---|\n"), block);
   assert.ok(block.endsWith("</details>\n<!-- ccpm-fleet-stats -->"), block);
   for (const row of ["| acceptance criteria | 2 |", "| code rounds | 1 |", "| wall time (build) | @@WALL@@ |", "| independent review | approve (sweep: not triggered) |", "| output tokens (approx.) | "])
     assert.ok(block.indexOf(row) >= 0, row + " in\n" + block);
