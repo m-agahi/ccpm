@@ -642,7 +642,7 @@ the 100-agent cap (like path checks); CI-fix coder rounds still count.
   re-reads the checks itself (non-empty, all passed or skipped), then merges directly with the
   repo's method, `--match-head-commit <sha>` and `--delete-branch`; only when that is refused it
   enables native auto-merge (the forge merges later, without the fleet). Behind with
-  `update_branch: once`: the forge's update-branch once per run (the new head must be a merge of
+  `update_branch: once`: the forge's update-branch once per run (the new head must change only PR files against the base tip and be a merge of
   the reviewed head and the base tip), then the watch again; a base change in a PR file is
   fetched (`pr_state.py fetch`: parents and merge tree checked), hashed, hook-checked and
   reviewed again before the watch. After a confirmed merge the remote `fleet/*` branch goes, then

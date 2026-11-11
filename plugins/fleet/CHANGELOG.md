@@ -281,14 +281,19 @@ last state. With no policy file, a fleet PR is marked ready and its CI is watche
   `fleet:<task>:ci`, heading "Fleet build CI" and labels ending `:ci` (outside the agent cap).
   Same targets and rules as the write-back. It is soft: it never gates the merge and never
   stops the run, and a stop inside it keeps the run's stop gate. A CI-fix round is not final.
-  The result carries `ci_write_back`.
+  The result carries `ci_write_back`. After an update-branch with overlap, a stop in the
+  re-review, stats, ready or CI step also writes it, once (stop code `review` for a review stop).
+  Before that point a stop outside the CI step (review, stats, ready) writes no CI line, since
+  CI has not run.
 - Security review of S6 (MEDIUM): the CI write-back line is built only from fixed, validated
   fields, in this order: verdict, merged (with the merge sha only when it is 40 hex),
   auto-merge, CI-fix rounds, the counts of passed, failed and pending checks, and on a stop
   `stopped: <code>`. A stop is an enum code
   (`ci_timeout`, `ci_red`, `ci_red_cap`, `head_moved`, `merge_blocked`, `orchestrator`, `iac`,
   `review`, `relay`, `other`), never halt text. Check names, urls and error strings from CI
-  never reach ledger sections, tracker comments or the writer agents' prompts.
+  never reach ledger sections, tracker comments, the PR body or the ledger and comment writers'
+  prompts. CI log tails reach the classifier and, JSON-quoted and labelled untrusted with the
+  check name and url, the CI-fix coder.
   The `pr_state.py logs` test now also names a real run of this head behind another repo's url
   (the url's repo alone keeps that log out; mutant M5b).
 - Mutation tests: M5 (ci_watch.py run url not bound to the repo) and M7 (a scan error alone not
@@ -302,7 +307,9 @@ last state. With no policy file, a fleet PR is marked ready and its CI is watche
   has no checked gh command.
 - ADR-1203 addendum (Max): a base change from update-branch that touches PR files no longer
   stops. `pr_state.py update` checks on the forge that the new head's parents are exactly
-  [reviewed head, base tip]. `pr_state.py fetch` (`infra:pr-fetch:u1`) fetches the new head
+  [reviewed head, base tip], and that against the base tip it changes only files of the PR
+  (`compare <tip>...<new head>`, fail closed); this content check also covers the update with
+  no overlap, which is not fetched. `pr_state.py fetch` (`infra:pr-fetch:u1`) fetches the new head
   into the fleet worktree, checks the parents again and that its tree is
   `git merge-tree --write-tree <old> <base>` (a forge merge with no extra content), and
   fast-forwards. Then the hasher (`hasher:update:u1`), the hook-surface check on the merged-in

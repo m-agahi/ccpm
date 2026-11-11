@@ -1512,7 +1512,7 @@ const PROGRAM_SHA256 = {
   "policy": "3c3c254d65a199674727568003c0066cbb15ee7af2e86888932e2637f950ec5b",
   "pr_body_block": "368ed0c33928769f6951a1e15b65362b438fc010b0ea26c6284fc668c5e6c733",
   "pr_convention": "4763189023084bbad77a9eb5c2704692da5932d2dfa335654c5e4178f027c2b7",
-  "pr_state": "251ccd15959a47f9655b642702dc4bbaaa1cae7f10e61660c3d703e4ed20d3c6",
+  "pr_state": "12f1b7285fb12d9f3439b4bede6b7569e44781db215cae7f1b57e25448c9296e",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
   "push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
   "push_probe": "c4381f9ce601e0729a0ab49edb33fe6c9e910e8738411e7ad4719f21ef639a5b",
@@ -5852,7 +5852,17 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (frozen) frozen.git[FLEETREF + stateRef] = r.state_sha;
     gate("run-state " + lastGate + " at " + approvedSha);
   }
+  // delta review SHOULD 1: after update-branch the review, stats, ready and CI steps are the CI tail:
+  // a stop in any of them writes the CI outcome back (enum stop code), then stops
   async function ship(from) {
+    try {
+      return await shipSteps(from);
+    } catch (e) {
+      if (e instanceof Stop && skipWb) await ciWriteBack(ciStopCode(state.stopGate, e.reason));
+      throw e;
+    }
+  }
+  async function shipSteps(from) {
     const steps = ["push", "pr", "review", "writeback", "stats", "ready", "ci"];
     for (let i = steps.indexOf(from); i < steps.length; i++) {
       const step = steps[i];

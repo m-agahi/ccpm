@@ -242,11 +242,36 @@ test("ADR-1203 addendum: pr_state.py update refuses a new head whose parents are
       { argv: ["api", "repos/o/r/branches/main"], out: { commit: { sha: BASE } } },
       { argv: ["api", "repos/o/r/commits/" + SHA3], out: { parents: parents.map((sha) => ({ sha })) } },
       { argv: ["api", "repos/o/r/compare/" + SHA1 + "..." + SHA3], out: { files: [] } },
+      { argv: ["api", "repos/o/r/compare/" + BASE + "..." + SHA3], out: { files: [] } },
     ]);
     try {
       const o = prog("pr_state", dir, ["update", "gh", "o/r", "7", SHA1]);
       assert.equal(o.updated, false, JSON.stringify(parents));
       assert.match(String(o.error), /has parents/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("delta review NIT 1: pr_state.py update refuses a [sha, tip] head that changes files outside the PR against the base tip", () => {
+  const rules = (extra) => [
+    REPO_OK(),
+    { argv: ["api", "-X", "PUT"], set: { headRefOid: SHA3 } },
+    { argv: ["api", "repos/o/r/branches/main"], out: { commit: { sha: BASE } } },
+    { argv: ["api", "repos/o/r/commits/" + SHA3], out: { parents: [{ sha: SHA1 }, { sha: BASE }] } },
+    { argv: ["api", "repos/o/r/compare/" + SHA1 + "..." + SHA3], out: { files: [{ filename: "docs/base.md" }] } },
+    { argv: ["api", "repos/o/r/compare/" + BASE + "..." + SHA3], out: { files: [{ filename: "src/x.py" }].concat(extra) } },
+  ];
+  for (const [extra, ok] of [[[], true], [[{ filename: ".github/workflows/evil.yml" }], false]]) {
+    const dir = fakeForge({ state: "OPEN", headRefOid: SHA1, baseRefName: "main", files: [{ path: "src/x.py" }] }, rules(extra));
+    try {
+      const o = prog("pr_state", dir, ["update", "gh", "o/r", "7", SHA1]);
+      if (ok) assert.deepEqual([o.error, o.updated, o.overlap], [null, true, []]);
+      else {
+        assert.equal(o.updated, false);
+        assert.match(String(o.error), /outside the PR.*\.github\/workflows\/evil\.yml/);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -260,6 +285,7 @@ test("review NIT: pr_state.py update fails closed on a PR of 100 files or more",
     { argv: ["api", "repos/o/r/branches/main"], out: { commit: { sha: BASE } } },
     { argv: ["api", "repos/o/r/commits/" + SHA3], out: { parents: [{ sha: SHA1 }, { sha: BASE }] } },
     { argv: ["api", "repos/o/r/compare/" + SHA1 + "..." + SHA3], out: { files: [] } },
+    { argv: ["api", "repos/o/r/compare/" + BASE + "..." + SHA3], out: { files: [] } },
   ]);
   try {
     assert.match(String(prog("pr_state", dir, ["update", "gh", "o/r", "7", SHA1]).error), /100 files or more/);
@@ -623,11 +649,15 @@ test("ADR-1203 addendum: review changes on the update-branch head stop at the re
     "hasher:fp-post:pr-review:v2": { status: "ok", fingerprint: { head: "d".repeat(40), tree: "KU" } },
     "infra:review-cleanup:v2": { status: "ok", reason: "clean" },
   });
+  s["infra:ledger-writeback:ci"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((x) => ({ key: x.key, status: "written" })) });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "review");
   assert.match(out.result.reason, /^review round 2 requested changes again: F1 src\/x\.py: the merge broke x/);
   assert.ok(!out.build.labels.some((l) => /^role:fleet-coder:r2|^infra:pr-merge:u1/.test(l)), out.build.labels.join(", "));
+  // delta review SHOULD 1: a stop after update-branch is a CI-tail outcome: one CI write-back, stop code review
+  assert.equal(out.build.labels.filter((l) => l === "infra:ledger-writeback:ci").length, 1, out.build.labels.join(", "));
+  assert.match(inputsOf(call(out, "infra:ledger-writeback:ci").prompt).section_text.split("\n")[0], /; stopped: review$/);
 });
 
 test("review S2: a relayed remote_slug that differs from the origin only in case or .git is the origin, no stop", async () => {

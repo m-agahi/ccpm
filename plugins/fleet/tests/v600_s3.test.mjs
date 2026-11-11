@@ -501,6 +501,7 @@ const UPDATE_RULES = (parents) => [
   { argv: ["api", "repos/o/r/branches/main"], out: { commit: { sha: BASE } } },
   { argv: ["api", "repos/o/r/commits/" + SHA3], out: { parents: (parents || [SHA1, BASE]).map((sha) => ({ sha })) } },
   { argv: ["api", "repos/o/r/compare/" + SHA1 + "..." + SHA3], out: { files: [{ filename: "README.md" }, { filename: "docs/y.md" }] } },
+  { argv: ["api", "repos/o/r/compare/" + BASE + "..." + SHA3], out: { files: [{ filename: "src/x.py" }, { filename: "README.md" }] } },
 ];
 test("6.0.0 2034 (ADR-1203): pr_state.py update calls the forge's update-branch with the sha and reports the files both sides touch", () => {
   const dir = fakeForge({ state: "OPEN", headRefOid: SHA1, baseRefName: "main", files: [{ path: "src/x.py" }, { path: "README.md" }] }, UPDATE_RULES());

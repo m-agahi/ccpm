@@ -59,13 +59,16 @@ except Exception:
 #     checks itself (the head must be <sha>) and, for each one that is this
 #     repo's Actions job of a run of <sha>, the tail of `gh run view
 #     --log-failed`, control characters removed, 3000 characters at most.
-#     CI logs are untrusted data for the classifier only. Prints {mode, head,
+#     CI logs are untrusted data: the tails reach the classifier and, as quoted
+#     untrusted data, the CI-fix coder; never the ledger, tracker comments, the
+#     PR body or the ledger and comment writers' prompts. Prints {mode, head,
 #     logs: [{name, url, run_id, excerpt, verified}], error, args, program,
 #     digest}.
 #   update <gh> <owner/repo> <pr> <sha>: the same repo and owner check as
 #     merge; the forge's update-branch with expected_head_sha <sha> (never a
 #     local rebase or push); waits for the new head, which must be a commit
-#     whose parents are exactly [<sha>, the base branch tip]; overlap = the
+#     whose parents are exactly [<sha>, the base branch tip] and which, against
+#     the base tip, changes only files of the PR (fail closed); overlap = the
 #     PR's files the base change also touches (a PR of 100 files or more fails
 #     closed). Prints {mode, updated, head, base, overlap, error, args, program,
 #     digest}.
@@ -211,7 +214,9 @@ try:
                 raise Fail('the PR head moved off ' + sha + ' during the checks read')
             else:
                 base = ['pr', 'merge', pr, '-R', slug, '--' + m, '--match-head-commit', sha, '--delete-branch']
-                # a direct merge first; native auto-merge (bound to the same head) only when it is refused
+                # a direct merge first, bound to <sha> by --match-head-commit; native auto-merge only
+                # when it is refused: it relies on the forge's required checks to merge later.
+                # Residual risk: a later push by a write-access account keeps auto-merge enabled.
                 for extra in ([],) + ((['--auto'],) if rv.get('autoMergeAllowed') else ()):
                     try:
                         run(*(base + extra))
@@ -271,6 +276,14 @@ try:
             raise Fail('the PR has 100 files or more: overlap not known')
         mine = set(f.get('path') for f in fl)
         out['overlap'] = sorted(x for x in moved & mine if isinstance(x, str))
+        # the content check: against the base tip, the new head changes only files of the PR
+        tcmp = json.loads(run('api', 'repos/' + slug + '/compare/' + out['base'] + '...' + new))
+        if len(tcmp.get('files') or []) >= 300:
+            raise Fail('the new head lists 300 files or more against the base tip: content not known')
+        extra = sorted(str(f.get('filename')) for f in tcmp.get('files') or [] if f.get('filename') not in mine)
+        if extra:
+            out['updated'] = False
+            raise Fail('the new head changes files outside the PR against the base tip: ' + ', '.join(json.dumps(x) for x in extra[:10]))
     elif mode == 'view':
         v = view('state,headRefOid,mergeCommit')
         mc = (v.get('mergeCommit') or {}).get('oid')
