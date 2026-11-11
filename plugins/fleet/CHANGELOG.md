@@ -145,10 +145,27 @@ shipped run into a coder round, and adds org and repo rulesets to the hook surfa
   gives `feat(thing): add thing`; nothing left: `update`). The intent judge reads the plan with
   `git --no-replace-objects`.
 
+### Done (stream 3)
+
+- 2044: after the write-back the build writes a stats block into its own PR body (step
+  `infra:pr-stats`, new program `pr_body_block.py`, 37 programs). The block is a `<details>`
+  table built from script counters only: acceptance criteria, tests written and test rounds,
+  code rounds, plan-audit rounds (sealed in the plan ref's `history.audits`), agents, the build's
+  wall time (from `now`, which `policy.py` now prints, to the edit), gates passed, the
+  independent review verdict and output tokens per model, labelled "output tokens (approx.)".
+  The tokens come from `budget.spent()`: each agent call books the growth since the previous
+  return to its model; the row is left out when the runtime has no `budget.spent`. Input tokens
+  are not available to the workflow and are not shown. No path, run id, ledger id or session name
+  goes in. The block links https://github.com/m-agahi/ccpm (public). The program replaces only
+  the text between `<details><summary>Built with ccpm fleet` and `<!-- ccpm-fleet-stats -->`
+  (or appends it), re-reads the body, and reports an error when the body is not the one written
+  or when a header of the sealed body convention or of the old body is gone; the script also
+  checks the block's sha256. Any mismatch stops the run (`stop_gate: "stats"`). Policy
+  `stats: false` skips the step. A new last run-state `shipped` follows it; a run-state at
+  `written_back` (any earlier fleet's last state) now resumes at the stats step.
+
 ### Pending (stream 3)
 
-- 2044: PR body stats block (`<details>` with counters and output tokens per model, approx.).
-  Pending.
 - 2045: mark the PR ready after review approve, write-back and stats. Pending.
 - 2034: CI watch on every profile, CI-fix rounds, orchestrator detection, merge where the
   policy allows. Pending.

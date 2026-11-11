@@ -66,6 +66,8 @@ const SAMPLES = [
   "infra:ruleset-surface:plan",
   // 6.0.0 (ledger 2033)
   "infra:policy",
+  // 6.0.0 (ledger 2044)
+  "infra:pr-stats",
   // 6.0.0 (ledger 2042)
   "infra:pr-convention:plan",
   "infra:review-paths:v1",

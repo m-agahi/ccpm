@@ -41,8 +41,9 @@ except Exception:
 # whose match.owners holds the owner (fnmatch, any case) wins; its first
 # repos glob that matches owner/repo overrides caps. No file or no match:
 # the default caps. Prints {profile, file, policy_sha256, caps, matched, error,
-# args, program, digest}. Read only.
-import fnmatch, hashlib, json, os, re, sys
+# now, args, program, digest}; now (epoch seconds) starts the build's wall
+# time (2044). Read only.
+import fnmatch, hashlib, json, os, re, sys, time
 args = sys.argv[1:]
 if len(args) != 2 or not re.match(r'^[A-Za-z0-9._-]{1,255}$', args[0]) or not re.match(r'^[A-Za-z0-9._-]{1,100}(/[A-Za-z0-9._-]{1,100})+$', args[1]):
     sys.exit('usage: policy.py <host> <owner/repo>')
@@ -147,6 +148,7 @@ try:
                     break
 except (Bad, OSError, UnicodeDecodeError) as e:
     out.update(profile=None, caps=None, matched=None, error='policy file ' + path + ': ' + str(e))
+out['now'] = int(time.time())
 out['args'] = args
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()

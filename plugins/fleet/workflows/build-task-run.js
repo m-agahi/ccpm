@@ -51,6 +51,8 @@ const INFRA_TIER = [
   ["infra:verify-plan", "haiku"],
   ["infra:read-state", "haiku"],
   ["infra:policy", "haiku"],
+  // 6.0.0 (2044): it edits the PR body
+  ["infra:pr-stats", "sonnet"],
   ["infra:callers", "haiku"],
   ["infra:check-scripts", "haiku"],
   ["infra:precommit-ids", "sonnet"],
@@ -157,8 +159,8 @@ const CALLER_LIMITS = [
   "a symbol is a bare identifier: a method is grepped by its last name only",
 ];
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy"];
-const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "done" };
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge"];
+const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "stats", shipped: "done" };
 const CONFIRMS = ["ask", "auto", "default"];
 const MAX_REVIEWS = 2;
 const FINDING_SEVERITIES = ["blocking", "nit"];
@@ -1487,7 +1489,8 @@ const PROGRAM_SHA256 = {
   "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
   "plan_ref": "494ceb934b89fa5c2962ef786ba93bee63bd09f776c82c50579fdf23f301c136",
   "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
-  "policy": "347bc798a38e468d55b2b0726aef70a83a40672aa8409db0a57ebf897117d395",
+  "policy": "3c3c254d65a199674727568003c0066cbb15ee7af2e86888932e2637f950ec5b",
+  "pr_body_block": "368ed0c33928769f6951a1e15b65362b438fc010b0ea26c6284fc668c5e6c733",
   "pr_convention": "4763189023084bbad77a9eb5c2704692da5932d2dfa335654c5e4178f027c2b7",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
   "push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
@@ -1602,6 +1605,7 @@ const PROGRAM_SLOTS = [
   [/^infra:verify-plan(?!-commit)/, [[null, "verify_since"], ["plan_hash", "plan_hash"], ["test_db", "test_db_decl"]]],
   [/^infra:read-state$/, [[null, "read_state"]]],
   [/^infra:policy$/, [[null, "policy"]]],
+  [/^infra:pr-stats/, [[null, "pr_body_block"]]],
   [/^infra:state:/, [[null, "state_write"]]],
   [/^infra:tf-gate:/, [[null, "tf_gate"]]],
   [/^infra:remote-head:/, [[null, "remote_head"]]],
@@ -1658,7 +1662,8 @@ const PROGRAM_KEYS = {
   "hook_surface": ["surface", "make_paths", "error", "args"],
   // 6.0.0
   "ruleset_surface": ["surface", "sources", "read", "unreadable", "error", "args"],
-  "policy": ["profile", "file", "policy_sha256", "caps", "matched", "error", "args"],
+  "policy": ["profile", "file", "policy_sha256", "caps", "matched", "error", "now", "args"],
+  "pr_body_block": ["replaced", "wall_s", "block_sha256", "body_sha256_before", "body_sha256_after", "headers_missing", "error", "args"],
   "pr_convention": ["title", "body", "source", "unreadable", "args"],
   "review_paths": ["changed_paths"],
   "precommit_ids": ["present", "ids", "parser", "error", "args"],
@@ -1787,6 +1792,18 @@ const PROGRAM_OUT = {
     policy_sha256: STR_OR_NULL,
     caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] } } },
     matched: STR_OR_NULL,
+    error: STR_OR_NULL,
+    now: INT,
+    args: STRS,
+    digest: STR,
+  },
+  pr_body_block: {
+    replaced: { type: ["boolean", "null"] },
+    wall_s: { type: ["integer", "null"] },
+    block_sha256: STR,
+    body_sha256_before: STR_OR_NULL,
+    body_sha256_after: STR_OR_NULL,
+    headers_missing: STRS,
     error: STR_OR_NULL,
     args: STRS,
     digest: STR,
@@ -2736,7 +2753,7 @@ async function resetBuild(tag, keys, phaseName) {
   state.buildResets++;
   state.agents++;
   const ic = infraCall(label, buildDirPrompt({ args }), { schema: INFRA_SCHEMA, phase: phaseName });
-  const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
+  const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
   if (!r || r.status !== "ok") halt("failed", label + " returned " + (r ? r.status + ": " + (r.reason || "no reason") : "no result") + "; the build dirs were not emptied");
   requireProgram(r, "build_dir", label);
   if (!relayDigestOk(r, progKeys("build_dir:reset"), "build_dir") || canonical(r.args) !== canonical(args) || canonical(r.dirs) !== canonical(keys.map(buildDirOf)))
@@ -2751,7 +2768,7 @@ async function buildTeardown() {
   try {
     state.agents++;
     const ic = infraCall(label, buildDirPrompt({ args }), { schema: INFRA_SCHEMA, phase: "Cleanup" });
-    const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
+    const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
     if (r && r.status === "ok" && relayDigestOk(r, progKeys("build_dir:clean"), "build_dir") && canonical(r.args) === canonical(args) && Number.isInteger(r.bytes))
       gate("build dirs " + sc + "/build " + (r.removed ? "removed (" + r.bytes + " bytes)" : "already gone"));
     else gate("build dirs " + sc + "/build not confirmed removed" + (r && r.reason ? " (" + r.reason + ")" : ""));
@@ -2982,7 +2999,7 @@ async function pathRecheck(site, phaseName) {
     const token = "recheck-" + state.pathChecks + ":" + state.nonce + ":" + site;
     state.agents++;
     const ic = infraCall(label, pathRecheckPrompt({ repo: state.repo, token }), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName });
-    const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model }));
+    const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model }));
     return { r, label, token };
   };
   // the check runs on haiku
@@ -3212,13 +3229,28 @@ function infraModel(label) {
   return hit[1];
 }
 
+// 2044: output tokens per model; each return books budget.spent()'s growth since the last return
+const TOK = {};
+let tokAt = null;
+const tokOn = () => typeof budget === "object" && !!budget && typeof budget.spent === "function";
+async function agentT(prompt, opts) {
+  if (tokOn() && tokAt === null) tokAt = budget.spent();
+  const r = await agent(prompt, opts);
+  if (tokOn()) {
+    const s = budget.spent();
+    const m = (opts && opts.model) || "default";
+    TOK[m] = (TOK[m] || 0) + Math.max(0, s - tokAt);
+    tokAt = s;
+  }
+  return r;
+}
 // Infra agents: the INFRA_TIER model of their label
 async function dispatch(label, prompt, opts) {
   const model = infraModel(label);
   const ic = infraCall(label, prompt, opts);
   reserve(1, label);
   state.agents++;
-  const r = await agent(ic.prompt, agentOpts(ic.opts, label, model));
+  const r = await agentT(ic.prompt, agentOpts(ic.opts, label, model));
   if (r == null) halt("failed", "agent " + label + " returned no result");
   return digestRetry(label, prompt, opts, r, dispatch);
 }
@@ -3265,7 +3297,7 @@ async function softDispatch(label, prompt, opts) {
     return null;
   }
   state.agents++;
-  const r = await agent(ic.prompt, agentOpts(ic.opts, label, model));
+  const r = await agentT(ic.prompt, agentOpts(ic.opts, label, model));
   if (r == null) gate(label + " returned no result");
   return digestRetry(label, prompt, opts, r, softDispatch);
 }
@@ -3275,7 +3307,7 @@ async function roleAgent(role, label, prompt, opts) {
   const tier = state.models[role];
   if (!tier) halt("needs_human", "role " + role + " has no DISPATCH tier from preflight", "contract");
   gate("model used: " + label + " -> " + tier.model);
-  const r = await agent(prompt, Object.assign({}, opts, { label, model: tier.model }));
+  const r = await agentT(prompt, Object.assign({}, opts, { label, model: tier.model }));
   if (r != null || !tier.fallback) return r;
   if (capped() + 1 > MAX_AGENTS) {
     gate("agent cap " + MAX_AGENTS + " reached: no fallback retry for " + label);
@@ -3284,7 +3316,7 @@ async function roleAgent(role, label, prompt, opts) {
   state.agents++;
   gate("fallback: " + role + " (" + label + ") died on " + tier.model + "; retrying once on " + tier.fallback);
   gate("model used: " + label + ":fallback -> " + tier.fallback);
-  return agent(prompt, Object.assign({}, opts, { label: label + ":fallback", model: tier.fallback }));
+  return agentT(prompt, Object.assign({}, opts, { label: label + ":fallback", model: tier.fallback }));
 }
 
 // optional memory notes
@@ -4509,6 +4541,7 @@ async function planAndAudit(ctx0) {
 
   // the audit runs the planner's test_cmd in a scratch worktree
   await pathRecheck("plan-audit" + sfx, "Plan");
+  state.audits = (state.audits || 0) + 1;
   const audit = requireOk(
     "plan-audit",
     await callRole(
@@ -4585,7 +4618,7 @@ async function commitPlanAndRef(ctx) {
     halt("failed", stLabel + ": the relayed plan hash does not match the program's digest or arguments");
   if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("failed", stLabel + " returned no usable plan_sha256");
   // + 2: the PATH re-check before the commit and the verify step
-  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2 });
+  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2, audits: (ctx.fields.history.audits || 0) + (state.audits || 0) });
   const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: stagedSha, history, planBase: ctx.planBase }));
   const msgSha = sha256Hex(refMessage(full));
   const label = "infra:commit-plan" + sfx;
@@ -5195,6 +5228,8 @@ async function policyStep(host, slug, sealed) {
   requireProgram(r, "policy", "infra:policy", "needs_human", "policy");
   if (!relayDigestOk(r, progKeys("policy"), "policy") || canonical(r.args) !== canonical(args)) halt("needs_human", "infra:policy: the relayed result does not match the program's digest or arguments", "policy");
   let p = { profile: r.profile, policy_sha256: r.policy_sha256, caps: r.caps };
+  // 2044: the build's wall time starts here
+  state.t0 = Number.isInteger(r.now) ? r.now : null;
   if (sealed) {
     if (sealed.policy_sha256 !== r.policy_sha256) {
       const d = r.caps ? Object.keys(sealed.caps).filter((k) => sealed.caps[k] !== r.caps[k]).map((k) => k + " " + sealed.caps[k] + " -> " + r.caps[k]) : [r.error];
@@ -5208,6 +5243,31 @@ async function policyStep(host, slug, sealed) {
     p = Object.assign({}, p, { caps: Object.assign({}, p.caps, { merge: "never", update_branch: "never" }) });
   }
   return p;
+}
+// 2044: the PR body's stats block, from script counters only (no path, run id, ledger id or session name)
+const STATS_END = "<!-- ccpm-fleet-stats -->";
+const STATS_WALL = "@@WALL@@";
+const fmtDur = (s) => (typeof s !== "number" || s < 0 ? "not measured" : s < 60 ? s + "s" : s < 3600 ? Math.floor(s / 60) + "m" : Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m");
+const fmtTok = (n) => (n >= 1000 ? Math.round(n / 1000) + "k" : String(Math.round(n)));
+function statsBlock(c) {
+  const rows = [
+    ["acceptance criteria", c.criteria],
+    ["tests written", c.tests + " (" + c.testRounds + " test rounds)"],
+    ["code rounds", c.code],
+    ["audit rounds", c.audits === null ? "not recorded" : c.audits],
+    ["agents", c.agents],
+    ["wall time (build" + (c.resumed ? ", this run" : "") + ")", STATS_WALL],
+    ["gates passed", c.gates],
+    ["independent review", c.review],
+  ];
+  if (c.tokens) rows.push(["output tokens (approx.)", Object.keys(c.tokens).sort().map((m) => m + " " + fmtTok(c.tokens[m])).join(", ") || "none"]);
+  return (
+    "<details><summary>Built with ccpm fleet " + FLEET_VERSION + "</summary>\n\n| metric | value |\n|---|---|\n" + rows.map((r) => "| " + r[0] + " | " + r[1] + " |").join("\n") +
+    "\n\nBuilt by the [ccpm](https://github.com/m-agahi/ccpm) fleet; input tokens are not available to the workflow.\n\n</details>\n" + STATS_END
+  );
+}
+function prStatsPrompt(inputs) {
+  return INFRA_STEP + "write the stats block into the fleet's own PR body; only the block between its markers changes.\n" + inputsLine(inputs) + RUN_ONLY + progCmd("pr_body_block", inputs.args) + "\nIt prints one JSON object " + printsKeys("pr_body_block") + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_body_block") + "}.";
 }
 // 2042: subjects follow the sealed convention and never carry the internal task id (ruling 4)
 const KIND_TYPE = { bug_fix: "fix", feature: "feat", refactor: "refactor", chore: "chore" };
@@ -5345,6 +5405,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     runs: (ref.history.runs || 0) + 1,
     replans: ref.history.replans || 0,
     agents: ref.history.agents || 0,
+    audits: ref.history.audits || 0,
   };
   gate("build " + lay.branch + " from plan " + ref.plan_path + " @ " + ref.plan_commit + " (run " + history.runs + ", re-plans so far " + history.replans + "); plan ref sha256 matches, seal ok");
   const project = input.project || ws.remoteSlug;
@@ -5667,6 +5728,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           auto_confirmed: autoConfirmed,
           intent: intentForPr,
           policy,
+          tests_written: state.testsWritten || 0,
         },
         wb ? { write_back: wb.write_back, ledger_adapter: wb.ledger_adapter, ledger_reason: wb.ledger_reason, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
       ),
@@ -5684,7 +5746,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("run-state " + lastGate + " at " + approvedSha);
   }
   async function ship(from) {
-    const steps = ["push", "pr", "review", "writeback"];
+    const steps = ["push", "pr", "review", "writeback", "stats"];
     for (let i = steps.indexOf(from); i < steps.length; i++) {
       const step = steps[i];
       if (step === "push") {
@@ -5769,13 +5831,37 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           pr = await openPr("role:fleet-pr-opener:notes");
         }
         await saveState("reviewed", "infra:state:reviewed:v" + reviews);
-      } else {
+      } else if (step === "writeback") {
         phase("Write-back");
         wb = await writeBack({ ref, brief, project: input.project || null, remoteSlug, branch, prUrl: pr ? pr.pr_url : null });
-        await saveState("written_back", "infra:state:written_back");
-      }
+        await saveState("written_back", "infra:state:written_back" + (pushes > 1 ? ":p" + pushes : ""));
+      } else await statsStep();
     }
+    await saveState("shipped", "infra:state:shipped" + (pushes > 1 ? ":p" + pushes : ""));
     return null;
+  }
+  // 2044: the stats block in the PR body; any mismatch stops the run
+  let statsRuns = 0;
+  async function statsStep() {
+    if (!pr || pr.pr_number == null) return gate("stats block skipped: no PR");
+    if (!policy.caps.stats) return gate("stats block off (policy stats false)");
+    const rv = state.review;
+    const tpl = statsBlock({
+      criteria: criteria.length, tests: state.testsWritten || 0, testRounds: state.rounds.tests, code: state.rounds.code,
+      audits: typeof ref.history.audits === "number" ? ref.history.audits : null, agents: history.agents + state.agents - opt.agentsBase, resumed: !!resume,
+      gates: state.gateLog.filter((x) => !/^warning:/.test(x)).length,
+      review: (rv ? rv.verdict : "not run") + " (sweep: " + (rv && rv.sweep ? rv.sweep.verdict : "not triggered") + ")",
+      tokens: tokOn() ? TOK : null,
+    });
+    const bc = ref.plan_facts.conventions.body;
+    const args = [ghFor(remoteSlug).gh_cmd, remoteSlug, String(pr.pr_number), base64Of(tpl), state.t0 === null ? "-" : String(state.t0), JSON.stringify((bc && bc.required_sections) || [])];
+    const label = "infra:pr-stats" + (++statsRuns > 1 ? ":p" + statsRuns : "");
+    const r = await infra(label, prStatsPrompt({ args }), "PR");
+    requireProgram(r, "pr_body_block", label, "needs_human", "stats");
+    if (!relayDigestOk(r, progKeys("pr_body_block"), "pr_body_block") || canonical(r.args) !== canonical(args)) halt("needs_human", label + ": the relayed result does not match the program's digest or arguments", "stats");
+    if (r.error !== null) halt("needs_human", label + ": " + r.error + "; check the body of " + pr.pr_url, "stats");
+    if (r.block_sha256 !== sha256Hex(tpl.replace(STATS_WALL, fmtDur(r.wall_s)))) halt("needs_human", label + ": the PR body's stats block is not the script's block; check " + pr.pr_url, "stats");
+    gate(label + ": stats block " + (r.replaced ? "replaced" : "added") + " in " + pr.pr_url);
   }
 
   function finishOk(resumedAt) {
@@ -5804,6 +5890,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     state.review = resume.review || null;
     reviews = resume.reviews || 0;
     if (resume.rounds && typeof resume.rounds === "object") state.rounds = resume.rounds;
+    state.testsWritten = resume.tests_written || 0;
     if (resume.pr_url || resume.pr_number != null) {
       pr = { pr_url: resume.pr_url, pr_number: resume.pr_number, created: resume.pr_created, template_used: resume.template_used };
       state.pr = pr;
@@ -5953,6 +6040,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   }
   async function afterWriters(n, pending, pre) {
     const roundOut = pending.map((p) => writerOut[p.criterion.id]);
+    state.testsWritten = Object.keys(writerOut).reduce((a, k) => a + writerOut[k].tests.length, 0);
     const wrote = [];
     for (const p of pending)
       for (const f of writerOut[p.criterion.id].files) {
@@ -6577,7 +6665,7 @@ async function replan(ctx) {
       tldr: p.tldr,
       planDiff: p.planDiff,
       planFacts: sealedFacts(p),
-      history: { runs: history.runs, replans: n, agents: history.agents },
+      history: { runs: history.runs, replans: n, agents: history.agents, audits: history.audits },
       project: ctx.project,
     },
   });
@@ -7071,7 +7159,7 @@ async function dbTeardown() {
   try {
     state.agents++;
     const ic = infraCall("infra:db-down", dbDownPrompt({ name: db.name, nonce: state.nonce }), { schema: INFRA_SCHEMA, phase: "Cleanup" });
-    const r = await agent(ic.prompt, Object.assign({}, ic.opts, { label: "infra:db-down", model: infraModel("infra:db-down") }));
+    const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label: "infra:db-down", model: infraModel("infra:db-down") }));
     const d = r && typeof r === "object" ? r.down : null;
     if (r && r.status === "ok" && d && relayDigestOk(d, progKeys("db_down"), "db_down") && canonical(d.args) === canonical([db.name, state.nonce]) && (d.removed === true || d.absent === true))
       gate("test database " + db.name + (d.removed ? " removed" : " already gone"));
@@ -7091,7 +7179,7 @@ async function probeMode(input) {
   // and its shared file, checked like a role's shared_file
   const sh = SHARED_FOR[role] || null;
   const ic = infraCall(label, roleReadPrompt(role), { schema: sh ? withShared(ROLE_READ_SCHEMA) : ROLE_READ_SCHEMA, agentType: JUDGE_AGENT, phase: "Preflight" });
-  const rr = await agent(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
+  const rr = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
   const rp = rr == null ? "returned no result" : rr.status !== "ok" ? "returned " + rr.status + ": " + (rr.reason || "no reason") : roleFileProblem(role, rr) || sharedFileProblem(role, rr);
   if (rp) halt("needs_human", "probe: the role-read agent (" + label + ") " + rp, "contract");
   gate("probe: " + label + " read " + role + ".md" + (sh ? " and _shared/" + sh + ".md" : "") + " at their pins");

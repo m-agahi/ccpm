@@ -650,7 +650,13 @@ const READS = {
   },
   // 5.0.0 (R1): buildMode no longer reads fresh_preflight (main still type-checks it)
   buildMode: { "input.plan_ref object": PARSED_ARGS, "input.freeze_digest string": PARSED_ARGS },
+  // 6.0.0 (ledger 2044): the token counter reads the runtime's budget; the wall time comes from policy.py
+  tokOn: { "budget object": "parsed: the runtime's budget global", "budget.spent function": "parsed: the runtime's budget global" },
+  policyStep: { "r.now integer": "prog:policy:now" },
+  fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
+    // 6.0.0 (ledger 2044)
+    "ref.history.audits number": PARSED_REF,
     // 6.0.0 (ledger 2043): the freeze ref in the hasher:resume git map
     "ft string": "parsed: the hasher:resume git map, read from its sha256-checked file",
     // 5.0.0 (R3): the previous review round's blocking list (reviewStep's own)

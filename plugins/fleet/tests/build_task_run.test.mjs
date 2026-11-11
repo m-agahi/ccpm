@@ -5201,7 +5201,7 @@ test("2.1.0 a coder that edits package.json scripts (a launcher hook's table) is
 
 // A build run that records every run-state write into `states` (gate -> JSON).
 function recording(s, states) {
-  for (const label of ["infra:state:committed:r1", "infra:state:pushed:p1", "infra:state:pr_open:p1", "infra:state:reviewed:v1", "infra:state:written_back"])
+  for (const label of ["infra:state:committed:r1", "infra:state:pushed:p1", "infra:state:pr_open:p1", "infra:state:reviewed:v1", "infra:state:written_back", "infra:state:shipped"])
     s[label] = (prompt) => {
       const st = stateJsonOf(prompt);
       states[st.last_gate] = st;
@@ -5290,12 +5290,21 @@ test("2.1.0 resume: a run stopped after the PR opened resumes at review", async 
   assert.ok(second.labels.includes("infra:ledger-writeback"));
 });
 
-test("2.1.0 resume: written_back returns the recorded result with no role agent", async () => {
+// 6.0.0 (ledger 2044): shipped (after the stats block) is the last run-state; written_back resumes at the stats step
+test("2.1.0 resume: shipped returns the recorded result with no role agent", async () => {
   const states = {};
   const s = recording(happy(), states);
   const plan = await runOne(s, ARGS);
   await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
-  rerunScript(s, states.written_back);
+  const w = await (async () => {
+    rerunScript(s, states.written_back);
+    return runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  })();
+  assert.equal(w.result.status, "ok", w.result.reason);
+  assert.equal(w.result.resumed_at, "stats");
+  assert.ok(!w.labels.some((l) => /^role:/.test(l) || l === "infra:push"), w.labels.join(", "));
+  assert.ok(w.labels.indexOf("infra:pr-stats") >= 0, w.labels.join(", "));
+  rerunScript(s, states.shipped);
   const again = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
   noUnscripted(again);
   assert.equal(again.result.status, "ok", again.result.reason);
@@ -10816,7 +10825,9 @@ function jsPathRecheck(agentStub) {
     // 4.0.1: its sha256 from the workflow's PROGRAM_SHA256 table
     "function programTable() { return { path_check: PROGRAM_SHA256.path_check }; }\n" +
     "function gate() {}\nfunction halt(status, msg, stopGate) { const e = new Error(msg); e.halt = { status, stopGate }; throw e; }\n" +
-    'function nonced(p) { return p + "\\nRun nonce: " + state.nonce; }\n';
+    'function nonced(p) { return p + "\\nRun nonce: " + state.nonce; }\n' +
+    // 6.0.0 (ledger 2044): the token-counting wrapper of agent()
+    "const agentT = (p, o) => agent(p, o);\n";
   const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "printedProgram", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel", "programSlots", "nullable", "mergeProp", "slotKeys", "programSchema", "fileShaRule", "infraCall", "emitProg", "progKeys", "printsKeys", "returnKeys"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
   return new Function("agent", consts + fns + "\nreturn pathRecheck;")(agentStub);
 }

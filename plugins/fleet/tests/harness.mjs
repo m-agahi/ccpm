@@ -364,6 +364,12 @@ export async function runOne(script, args0) {
     // 6.0.0 (ledger 2033): an unscripted policy read finds no policy file
     if (!(label in script) && label === "infra:policy")
       return { status: "ok", reason: "read", profile: null, file: "/home/u/.config/fleet/policy.json", policy_sha256: null, caps: { pr_ready: true, ci_watch: true, ci_watch_minutes: 60, stats: true, merge: "never", update_branch: "never", ci_trigger: false, review_post: "none" }, matched: "no policy file", error: null, args: inputsOf(prompt).args };
+    // 6.0.0 (ledger 2044): an unscripted stats edit writes the block (wall time 2m)
+    if (!(label in script) && /^infra:pr-stats/.test(label)) {
+      const a = inputsOf(prompt).args;
+      const block = Buffer.from(a[3], "base64").toString("utf8").replace("@@WALL@@", "2m");
+      return { status: "ok", reason: "written", replaced: false, wall_s: 120, block_sha256: sha256(block), body_sha256_before: "0".repeat(64), body_sha256_after: "1".repeat(64), headers_missing: [], error: null, args: a };
+    }
     // 6.0.0 (ledger 2041): unscripted ruleset reads find a repo with no ruleset and a user owner
     if (!(label in script) && /^infra:ruleset-surface:/.test(label))
       return { status: "ok", reason: "read", surface: [], sources: [], read: ["self-references in 0 local workflow file(s)", "rules/branches/main: 0 rule(s)", "owner o is not an organization: no org rulesets"], unreadable: [], error: null, args: inputsOf(prompt).args };
@@ -550,7 +556,8 @@ export async function runOne(script, args0) {
     () => {},
     (m) => logs.push(m),
     args,
-    { total: null, spent: () => 0, remaining: () => Infinity },
+    // 6.0.0 (ledger 2044): script.__budget, a budget whose spent() a test drives
+    script.__budget || { total: null, spent: () => 0, remaining: () => Infinity },
     async () => {
       throw new Error("nested workflow not expected");
     },
@@ -1104,6 +1111,8 @@ export const PROGRAM_LABELS = [
   [/^infra:ruleset-surface:/, [[null, "ruleset_surface", K("ruleset_surface")]]],
   // 6.0.0 (ledger 2033)
   [/^infra:policy$/, [[null, "policy", K("policy")]]],
+  // 6.0.0 (ledger 2044)
+  [/^infra:pr-stats/, [[null, "pr_body_block", K("pr_body_block")]]],
   // 6.0.0 (ledger 2042)
   [/^infra:pr-convention:/, [[null, "pr_convention", K("pr_convention")]]],
   [/^infra:review-paths:/, [[null, "review_paths", K("review_paths")]]],
