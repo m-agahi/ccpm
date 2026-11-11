@@ -654,6 +654,7 @@ const READS = {
   tokOn: { "budget object": "parsed: the runtime's budget global", "budget.spent function": "parsed: the runtime's budget global" },
   policyStep: { "r.now integer": "prog:policy:now" },
   dispatch: { "label string-re": "parsed: the script's own step label" },
+  callRole: { "label string-re": "parsed: the script's own step label" },
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
     // 6.0.0 (ledger 2044)
@@ -661,6 +662,16 @@ const READS = {
     // 6.0.0 (ledger 2045)
     "r.is_draft boolean": "prog:pr_state:is_draft",
     "resume.iac_touched boolean": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    // 6.0.0 (ledger 2034)
+    "c.removed boolean": "prog:pr_state:removed",
+    "c.deleted boolean": "prog:pr_state:deleted",
+    "m.merge_sha string": "prog:pr_state:merge_sha",
+    "m.merged boolean": "prog:pr_state:merged",
+    "m.auto_enabled boolean": "prog:pr_state:auto_enabled",
+    "u.head string": "prog:pr_state:head",
+    "u.updated boolean": "prog:pr_state:updated",
+    "cl.checks array": "role:fleet-ci-classifier:checks",
+    "id string": "prog:ci_watch:failed[].run_id",
     // 6.0.0 (ledger 2043): the freeze ref in the hasher:resume git map
     "ft string": "parsed: the hasher:resume git map, read from its sha256-checked file",
     // 5.0.0 (R3): the previous review round's blocking list (reviewStep's own)

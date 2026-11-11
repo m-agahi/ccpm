@@ -70,6 +70,13 @@ const SAMPLES = [
   "infra:pr-stats",
   // 6.0.0 (ledger 2045)
   "infra:pr-ready",
+  // 6.0.0 (ledger 2034)
+  "infra:pr-merge",
+  "infra:pr-update",
+  "infra:ci-rerun",
+  "infra:fleet-cleanup",
+  "infra:orch-scan",
+  "infra:ci-watch:w1",
   // 6.0.0 (ledger 2042)
   "infra:pr-convention:plan",
   "infra:review-paths:v1",

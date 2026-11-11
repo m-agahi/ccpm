@@ -175,11 +175,53 @@ shipped run into a coder round, and adds org and repo rulesets to the hook surfa
   ready for review" (a kept draft: "draft PR ready for review"). The PR tail (stats, ready, CI
   watch, merge and their run-state write) counts in `agents` but, like path checks and build-dir
   resets, not against the 100-agent cap; CI-fix coder rounds still count.
-
-### Pending (stream 3)
-
-- 2034: CI watch on every profile, CI-fix rounds, orchestrator detection, merge where the
-  policy allows. Pending.
+- 2034: after ready, step `ci` in the PR tail (ADR-1198, ADR-1199, ADR-1203; rulings 2034). New
+  programs `orch_scan.py` and `ci_watch.py`, `pr_state.py` modes `merge`, `update`, `rerun` and
+  `cleanup` (40 programs), and the read-only role `fleet-ci-classifier` (11 roles,
+  `DISPATCH: model=sonnet (fallback=opus)`).
+  - Scan (`infra:orch-scan`, read only, fails closed): a tracked orchestrator config or an
+    orchestrator check, status or comment on the PR (`orchestrator`); a tracked IaC file or one
+    the PR changes (`iac_repo`); a tracked CI file that names an IaC tool or orchestrator
+    (`apply_on_merge`); a PR file on the hook surface (`hook_surface_pr`). Any read error sets
+    every flag.
+  - Watch (`infra:ci-watch:w<n>`, one read-only agent per watch): the agent re-runs one
+    program command while it prints `pending`; each run waits at most 480 s with
+    `gh pr checks --watch --required` (all checks when the PR has no required check), and the
+    program keeps its own start time in a scratch file, so the whole watch ends at
+    `ci_watch_minutes` (default 60). States: green, red, timeout, head_moved, no_checks, error.
+    Policy `ci_watch: false` and a draft (`pr_ready: false`) skip the watch ("CI watch off",
+    "CI not run on draft").
+  - Red: the classifier gets each failing check with the tail of its failed job log (at most
+    3000 characters, control characters removed) as quoted data, and may only answer one of
+    `diff`, `pre_existing`, `flaky`, `infra` per check; any other answer leaves the check
+    unclassified (report only). Caused by the diff (and no IaC or orchestrator sign): a CI-fix
+    round through the code loop (coder with the log tail as quoted untrusted data, code judge,
+    commit, push to the PR branch, review, write-back, stats, ready, watch), at most 2 rounds,
+    then needs_human. Otherwise: one rerun of the failed Actions runs where policy
+    `ci_trigger` allows it and no IaC or orchestrator sign exists, then a report with no code
+    change; needs_human when a merge was expected.
+  - Timeout or a forge error: "CI unresolved" with each check's state; never a merge; needs_human
+    only when a merge was expected. A moved head stops (`stop_gate: "ci"`).
+  - Green: a merge only when policy `merge: "auto"`, not a work repo (checked again here, and
+    `pr_state.py` refuses quinyx and concrete-media itself), no orchestrator, IaC or
+    apply-on-merge sign and no hook-surface file. `pr_state.py merge` uses native auto-merge
+    where the repo allows it (a refusal falls back to a direct merge), the repo's method and
+    `--match-head-commit <reviewed sha>`; it never merges a PR that is behind or in conflict.
+    Behind with `update_branch: once`: the forge's update-branch once with
+    `expected_head_sha`, then the watch again on the new head; a base change that touches a
+    PR file stops for a new review (needs_human), which differs from ADR-1203's automatic
+    re-review. Otherwise: "CI green, ready for human merge" with the reason.
+  - After a confirmed merge: the remote `fleet/*` branch is deleted, the run-state `shipped`
+    is written, then `pr_state.py cleanup` removes the fleet's own worktree
+    (`<repo>/.claude/worktrees/fleet-<key>/main`) and local branch; a failure becomes a
+    follow-up.
+  - An orchestrator PR is watched read-only and reported; the run then stops with
+    "orchestrator PR: needs Max" (`stop_gate: "merge"`): no rerun, no fix push, no merge.
+  - `result.ci = {verdict, checks: [{name, state, url}], fix_rounds, merged, merge_sha}` on every
+    result once the CI step ran; the result reason ends with the CI outcome.
+  - Not done here: write-back runs before CI (ruling 2045 order), and the write-back steps skip
+    a source that already carries the fleet marker, so the ledger section and comments do not
+    carry `ci`; the run result does.
 
 ## [5.0.10] - 2026-11-11
 

@@ -1425,7 +1425,8 @@ test("5.0.0 R1 (was S-8 higher version recorded): the result records the ROLE_SH
   assert.equal(out.result.status, "ok");
   assert.deepEqual(Object.keys(out.result.role_sha256).sort(), ROLE_NAMES.slice().sort());
   for (const r of ROLE_NAMES) assert.match(out.result.role_sha256[r], /^[0-9a-f]{64}$/);
-  assert.ok(out.result.gate_log.some((l) => /all 10 role files at their ROLE_SHA256 pins/.test(l)));
+  // 6.0.0 (ledger 2034): + fleet-ci-classifier
+  assert.ok(out.result.gate_log.some((l) => /all 11 role files at their ROLE_SHA256 pins/.test(l)));
 });
 
 // was "a role runner that loaded a different version than preflight is discarded"
@@ -4686,9 +4687,9 @@ test("2.1.0 review skipped when no PR exists: listed in gates_not_run", async ()
 // ---------------------------------------------------------------- 2.1.0 contract
 
 // 5.0.0 (R1): was "preflight loads ten roles; fleet-v2 pages halt"
-test("5.0.0 R1 (was 2.1.0 contract): preflight pins ten role files; a changed one halts", async () => {
+test("5.0.0 R1 (was 2.1.0 contract): preflight pins eleven role files (6.0.0: + fleet-ci-classifier); a changed one halts", async () => {
   let out = await run(happy(), ARGS);
-  assert.equal(Object.keys(out.result.role_sha256).length, 10);
+  assert.equal(Object.keys(out.result.role_sha256).length, 11);
   out = await runOne(offPin(happy(), "pr-review"), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /pr-review\.md hashes/);
@@ -5629,6 +5630,8 @@ const ARRAY_SITES = {
   "scan.refs @ planMode": "infra:refs",
   "r.criteria @ planRefProblem": "parsed: the sealed plan ref (JSON.parse of a verified tag message)",
   "r.refs @ buildFromRef": "infra:refs",
+  // 6.0.0 (ledger 2034)
+  "cl.checks @ ciStep": "parsed: the fleet-ci-classifier result (SCHEMAS types checks as an array; each entry is checked)",
   "r.chunks @ buildFromRef": "infra:chunks",
   "pf.commands @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
   "ref.plan_diff @ buildFromRef": "parsed: the sealed plan ref",

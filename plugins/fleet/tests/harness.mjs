@@ -84,6 +84,7 @@ export const ROLE_NAMES = [
   "fleet-intent-judge",
   "pr-review",
   "gate-change-nonweakening-sweep",
+  "fleet-ci-classifier",
 ];
 export const ROLES_SRC = join(HERE, "..", "roles");
 // the shipped role file text, by role
@@ -121,6 +122,7 @@ export const REQUIRED_DEFAULTS = {
   "fleet-intent-judge": { verdict: "approve", deviations: [], coverage: { covered: true, missing: [] }, classification: { change_kind: "approve", new_behaviour: "approve", quote: "the task text" } },
   "pr-review": { verdict: "approve", findings: [], touches_gate: false, checked: [] },
   "gate-change-nonweakening-sweep": { verdict: "non_weakening", units: [], findings: [] },
+  "fleet-ci-classifier": { checks: [] },
 };
 
 // The skill passes a fresh run_nonce on every invocation; scenario args that
@@ -375,6 +377,27 @@ export async function runOne(script, args0) {
       const a = inputsOf(prompt).args;
       return { status: "ok", reason: "ready", mode: "ready", was_draft: true, is_draft: false, head: a[4], state: "OPEN", error: null, args: a };
     }
+    // 6.0.0 (ledger 2034): unscripted CI steps: no orchestrator or IaC sign, one green check, and the PR state changes succeed
+    if (!(label in script) && /^infra:orch-scan/.test(label))
+      return { status: "ok", reason: "scanned", orchestrator: false, iac_repo: false, apply_on_merge: false, hook_surface_pr: false, reasons: [], error: null, args: inputsOf(prompt).args };
+    if (!(label in script) && /^infra:ci-watch:/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "watched", state: "green", checks: [{ name: "test", state: "SUCCESS", bucket: "pass", url: "https://github.com/o/r/actions/runs/11/job/12" }], failed: [], required: true, head: a[3], elapsed_s: 300, error: null, args: a };
+    }
+    if (!(label in script) && /^infra:pr-merge/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "merged", mode: "merge", merged: true, auto_enabled: false, method: "squash", merge_sha: "e".repeat(40), blocked: null, merge_state: "CLEAN", head: a[4], branch_deleted: true, error: null, args: a };
+    }
+    if (!(label in script) && /^infra:pr-update/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "updated", mode: "update", updated: true, head: "d".repeat(40), overlap: [], error: null, args: a };
+    }
+    if (!(label in script) && /^infra:ci-rerun/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "reran", mode: "rerun", rerun: JSON.parse(a[3]), error: null, args: a };
+    }
+    if (!(label in script) && /^infra:fleet-cleanup/.test(label))
+      return { status: "ok", reason: "removed", mode: "cleanup", removed: true, deleted: true, error: null, args: inputsOf(prompt).args };
     // 6.0.0 (ledger 2041): unscripted ruleset reads find a repo with no ruleset and a user owner
     if (!(label in script) && /^infra:ruleset-surface:/.test(label))
       return { status: "ok", reason: "read", surface: [], sources: [], read: ["self-references in 0 local workflow file(s)", "rules/branches/main: 0 rule(s)", "owner o is not an organization: no org rulesets"], unreadable: [], error: null, args: inputsOf(prompt).args };
@@ -1120,6 +1143,12 @@ export const PROGRAM_LABELS = [
   [/^infra:pr-stats/, [[null, "pr_body_block", K("pr_body_block")]]],
   // 6.0.0 (ledgers 2045, 2034)
   [/^infra:pr-ready/, [[null, "pr_state", K("pr_state:ready")]]],
+  [/^infra:pr-merge/, [[null, "pr_state", K("pr_state:merge")]]],
+  [/^infra:pr-update/, [[null, "pr_state", K("pr_state:update")]]],
+  [/^infra:ci-rerun/, [[null, "pr_state", K("pr_state:rerun")]]],
+  [/^infra:fleet-cleanup/, [[null, "pr_state", K("pr_state:cleanup")]]],
+  [/^infra:orch-scan/, [[null, "orch_scan", K("orch_scan")]]],
+  [/^infra:ci-watch:/, [[null, "ci_watch", K("ci_watch")]]],
   // 6.0.0 (ledger 2042)
   [/^infra:pr-convention:/, [[null, "pr_convention", K("pr_convention")]]],
   [/^infra:review-paths:/, [[null, "review_paths", K("review_paths")]]],
