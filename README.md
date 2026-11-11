@@ -157,7 +157,7 @@ cp ~/.claude/skills/tf-naming-check/tf-naming-check/tf-naming-config.md ./tf-nam
 
 Then edit `tf-naming-config.md` to add, remove, or adjust rules. The project-level file takes precedence automatically.
 
-### fleet (v5.0.9)
+### fleet (v5.0.10)
 
 Role fleet for one task, run as a Claude Code workflow.
 

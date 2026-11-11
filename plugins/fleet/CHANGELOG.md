@@ -1,5 +1,38 @@
 # Changelog
 
+## [5.0.10] - 2026-11-11
+
+Fleet 5.0.10 (ledger 2031): the workflow file shrinks from 476186 to under 400000 bytes with no
+change in behaviour, so 5.1.0 has room to grow under the 480000-byte budget (ADR-1189).
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 5.0.10), then start a NEW session: the workflow
+  looks for its own `fleet/5.0.10/scripts` dir.
+- A 5.0.9 plan ref and run-state stay valid: nothing sealed changed.
+
+### Changed
+
+- Comments: the per-release history and review-round notes of `build-task-run.js` move, verbatim,
+  to `docs/build-task-run-notes.md` (one entry per comment block, keyed by declaration and 5.0.9
+  line): 476187 -> 385151 bytes. The workflow keeps a one-line comment where a block's first
+  sentence states a rule, plus every section divider and `*_BEGIN` / `*_END` marker. Proof of no
+  code change: the old and new workflow minify (esbuild `--minify-whitespace`) to the same bytes,
+  and every prompt, schema and model the test suite makes the workflow send is byte-identical.
+- Prompt fragments that several prompts repeat are built once: `inputsLine`, `planWorktreeSteps`
+  and the constants `INFRA_STEP`, `RUN_EXACT`, `RUN_ONLY`, `RUN_600S`, `COPY_DIGEST`,
+  `FAIL_STDERR`, `TASK_DATA` and `BODY_DATA`: 385151 -> 381940 bytes. Every rendered prompt stays
+  byte-identical (the snapshot test and a dump of all the suite's agent calls). `pathRecheckPrompt`
+  keeps its text inline: a test evaluates that function on its own.
+
+### Added
+
+- `tests/v5010_prompt_snapshot.test.mjs`: for four main scenarios (plan then build, confirm auto,
+  the short path, probe) it pins the sha256 of every agent call the workflow makes (label, prompt,
+  schema, model, agent type) and the final status. It masks the fleet version, every sha256 and
+  every base64 run of 100 or more characters (the sealed plan ref and run-state carry the version),
+  so the pins are the same on 5.0.9 and 5.0.10. A change to any prompt the workflow sends now fails a test.
+
 ## [5.0.9] - 2026-11-11
 
 Fleet 5.0.9 (ledger 2032): a yaadgaar task with no project in the answer is the session's own,
