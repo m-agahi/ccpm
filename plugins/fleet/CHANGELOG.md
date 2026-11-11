@@ -206,6 +206,11 @@ last state. With no policy file, a fleet PR is marked ready and its CI is watche
     then needs_human. Otherwise: one rerun of the failed Actions runs where policy
     `ci_trigger` allows it and no IaC or orchestrator sign exists, then a report with no code
     change; needs_human when a merge was expected.
+  - Security review: a failing check's log is read, and its run can be rerun, only when its url
+    is exactly `https://github.com/<this repo>/actions/runs/<id>/job/<job>` (any case) and
+    `gh run view <id> --repo <this repo> --json headSha,...,jobs` shows the watched head sha
+    with that job in it. Any other check (another repo or PR, a third-party app's url, a failed
+    read) is report-only as "unverified run": no classifier, no rerun, no fix round.
   - Timeout or a forge error: "CI unresolved" with each check's state; never a merge; needs_human
     only when a merge was expected. A moved head stops (`stop_gate: "ci"`).
   - Green: a merge only when policy `merge: "auto"`, not a work repo (checked again here, and

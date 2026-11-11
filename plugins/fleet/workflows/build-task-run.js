@@ -1488,7 +1488,7 @@ const PROGRAM_SHA256 = {
   "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
   "callers": "285df005bb08ce9a9f009b7554a9e697913ccff0a620980d2e59c04550bed4bc",
   "changed_defs": "40ecf45fe37448244572d8f7fd64ad574837970047a58de7c1ac7a262f717e94",
-  "ci_watch": "e64a6acb8b32ff31ef8b1eaf2c88cae5e3f219adafb0ac921d075ad264e8d176",
+  "ci_watch": "4d430ba8297a9310cf4a27692de26a6b1b9307bfc6a254bf700137569d939853",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "6aee2fdb201b6a3634dbd1ea6c0cfa40eefe3a0eed09c8d40e7f6c3b95a17f4c",
@@ -1853,7 +1853,7 @@ const PROGRAM_OUT = {
   ci_watch: {
     state: { type: "string", enum: ["green", "red", "pending", "timeout", "head_moved", "no_checks", "error"] },
     checks: { type: "array", items: { type: "object", properties: { name: STR, state: STR, bucket: STR, url: STR_OR_NULL } } },
-    failed: { type: "array", items: { type: "object", properties: { name: STR, url: STR_OR_NULL, run_id: STR_OR_NULL, excerpt: STR_OR_NULL } } },
+    failed: { type: "array", items: { type: "object", properties: { name: STR, url: STR_OR_NULL, run_id: STR_OR_NULL, excerpt: STR_OR_NULL, verified: BOOL } } },
     required: { type: ["boolean", "null"] },
     head: STR_OR_NULL,
     elapsed_s: INT,
@@ -6021,12 +6021,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         halt("needs_human", "green, merge blocked: " + (m.error || m.blocked || "not merged") + " (" + pr.pr_url + ")", "merge");
       }
       ci.verdict = "red";
-      const failed = w.failed.map((f) => ({ name: f.name, url: f.url, run_id: f.run_id, log_excerpt: f.excerpt === null ? null : String(f.excerpt).slice(-3000) }));
-      const cl = await callRole("fleet-ci-classifier", "role:fleet-ci-classifier:w" + watches, Object.assign({}, common, { checks: failed, worktree: mainWt, approved_sha: approvedSha, base_ref: planBase, repo: remoteSlug, pr_url: pr.pr_url }), "CI", JUDGE_AGENT);
+      // security review: a check whose url is not this repo's run of the head is report-only
+      const unv = w.failed.filter((f) => f.verified !== true || typeof f.run_id !== "string");
+      const failed = w.failed.filter((f) => unv.indexOf(f) < 0).map((f) => ({ name: f.name, url: f.url, run_id: f.run_id, log_excerpt: f.excerpt === null ? null : String(f.excerpt).slice(-3000) }));
+      const cl = !failed.length ? { status: "ok", checks: [] } : await callRole("fleet-ci-classifier", "role:fleet-ci-classifier:w" + watches, Object.assign({}, common, { checks: failed, worktree: mainWt, approved_sha: approvedSha, base_ref: planBase, repo: remoteSlug, pr_url: pr.pr_url }), "CI", JUDGE_AGENT);
       const cause = {};
       if (cl.status === "ok" && Array.isArray(cl.checks)) for (const c of cl.checks) if (c && failed.some((f) => f.name === c.name) && CI_CAUSES.indexOf(c.cause) >= 0 && !cause[c.name]) cause[c.name] = c.cause;
       if (failed.some((f) => !cause[f.name])) gate("warning: the CI classifier left a failing check without a usable cause: report only");
-      const rep = failed.map((f) => f.name + " (" + (cause[f.name] || "unclassified") + (f.url ? ", " + f.url : "") + ")").join("; ");
+      const rep = failed.map((f) => f.name + " (" + (cause[f.name] || "unclassified") + (f.url ? ", " + f.url : "") + ")").concat(unv.map((f) => f.name + " (unverified run" + (f.url ? ", " + f.url : "") + ")")).join("; ");
       const byDiff = failed.filter((f) => cause[f.name] === "diff");
       // ADR-1199: on an IaC or orchestrator repo the fleet watches and reports, never pushes a fix
       if (byDiff.length && !iac && !o.orchestrator) {
@@ -6046,7 +6048,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       }
       const ids = Array.from(new Set(failed.map((f) => f.run_id)));
       // one rerun: ci_trigger, no IaC or orchestrator sign, nothing caused by the diff, every failure an Actions run
-      if (!byDiff.length && !reran && policy.caps.ci_trigger && !iac && !o.orchestrator && failed.length && ids.every((id) => typeof id === "string" && /^[1-9][0-9]*$/.test(id)) && ids.length <= 10) {
+      if (!byDiff.length && !reran && !unv.length && policy.caps.ci_trigger && !iac && !o.orchestrator && failed.length && ids.every((id) => typeof id === "string" && /^[1-9][0-9]*$/.test(id)) && ids.length <= 10) {
         reran = true;
         const rr = await prState("infra:ci-rerun", ["rerun", g, remoteSlug, JSON.stringify(ids)], "rerun the failed jobs of the fleet's own PR once", "ci");
         if (rr.error === null) {

@@ -42,8 +42,9 @@ except Exception:
 # reads the checks once. state: green (none pending, none failed), red (none
 # pending, one failed or cancelled), pending (time left), timeout (none left),
 # head_moved (the PR head is not <head_sha>), no_checks (none reported after
-# NO_CHECKS_S), error (a read failed). For each failed Actions job: the run id
-# and the tail of `gh run view --log-failed`, control characters removed,
+# NO_CHECKS_S), error (a read failed). For each failed job whose url is this
+# repo's Actions job and whose run is of <head_sha> (verified): the run id and
+# the tail of `gh run view --log-failed`; any other failed check is report-only, control characters removed,
 # EXCERPT characters at most (CI logs are untrusted data). Prints {state,
 # checks, failed, required, head, elapsed_s, error, args, program, digest}.
 import hashlib, json, os, re, subprocess, sys, time
@@ -132,16 +133,22 @@ try:
             else:
                 out['state'] = 'green'
         if out['state'] == 'red':
+            # security review: only this repo's run of the watched head, with that job in it; any other url is report-only
+            RUN_URL = re.compile(r'^https://github\.com/' + re.escape(slug) + r'/actions/runs/([0-9]{1,16})/job/([0-9]{1,16})$', re.I)
             for c in [c for c in out['checks'] if c['bucket'] in ('fail', 'cancel')][:MAX_FAILED]:
-                m = re.search(r'/actions/runs/([0-9]+)/job/([0-9]+)', c['url'] or '')
-                ex = None
+                m = RUN_URL.match(c['url'] or '')
+                ok, ex = False, None
                 if m:
                     try:
-                        r = gh_run(['run', 'view', '-R', slug, '--job', m.group(2), '--log-failed'], timeout=60)
-                        ex = CTRL.sub('', r.stdout.decode('utf-8', 'replace'))[-EXCERPT:] if r.returncode == 0 else None
-                    except subprocess.TimeoutExpired:
-                        ex = None
-                out['failed'].append({'name': c['name'], 'url': c['url'], 'run_id': m.group(1) if m else None, 'excerpt': ex})
+                        r = gh_run(['run', 'view', m.group(1), '--repo', slug, '--json', 'headSha,event,headBranch,jobs'], timeout=60)
+                        v = json.loads(r.stdout.decode('utf-8')) if r.returncode == 0 else {}
+                        ok = v.get('headSha') == sha and any(str(j.get('databaseId')) == m.group(2) for j in v.get('jobs') or [])
+                        if ok:
+                            r = gh_run(['run', 'view', '-R', slug, '--job', m.group(2), '--log-failed'], timeout=60)
+                            ex = CTRL.sub('', r.stdout.decode('utf-8', 'replace'))[-EXCERPT:] if r.returncode == 0 else None
+                    except (subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
+                        ok, ex = False, None
+                out['failed'].append({'name': c['name'], 'url': c['url'], 'run_id': m.group(1) if ok else None, 'excerpt': ex, 'verified': ok})
 except (Fail, ValueError, OSError, AttributeError, TypeError, subprocess.SubprocessError) as e:
     out['state'] = 'error'
     out['error'] = str(e)[:600] or 'watch failed'
