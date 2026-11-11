@@ -461,3 +461,58 @@ test("6.0.0 2041: the approved tree is checked against the sealed ruleset surfac
   assert.equal(out.result.stop_gate, "hooks", out.result.reason);
   assert.match(out.result.reason, /^hook change needs Max's confirmation: the approved tree K1 touches src\/x\.py \(run by Repository ruleset 5 via src\/x\.py\)/);
 });
+
+// security review of 092a17a: root self-references and paginated lists fail closed
+test("6.0.0 2041 (review): a root self-reference (./, ., <slug>@ref, <slug>/@ref) makes the whole repo surface", () => {
+  for (const u of ["./", ".", "q/actions@v1", "q/actions/@v1", "Q/Actions@main"]) {
+    const files = { ".github/workflows/ci.yaml": "steps:\n  - uses: " + u + "\n", "src/x.py": "x = 1\n" };
+    withRs(ORG(), (o) => {
+      assert.equal(o.error, null, u);
+      assert.ok(o.surface.indexOf("./") >= 0, u + ": " + JSON.stringify(o.surface));
+    }, "-", files);
+  }
+});
+
+test("6.0.0 2041 (review): rulesetSurface keeps './' as whole-repo surface; the gate stops on any path", async () => {
+  const s = happy();
+  s["infra:ruleset-surface:plan"] = rsOut({ surface: ["./"], sources: [{ ruleset_id: null, name: null, source_type: "self-reference", path: "./", via: ".github/workflows/ci.yaml" }] });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "hooks", out.result.reason);
+});
+
+const LINK = (p) => ({ link: '<https://api.github.com/' + p + '>; rel="next", <https://api.github.com/' + p + '>; rel="last"' });
+test("6.0.0 2041 (review): paginated rule and org-ruleset lists are followed; a failed or capped page never reads as complete", () => {
+  const rule = (id, path) => ({ type: "workflows", ruleset_id: id, ruleset_source_type: "Repository", parameters: { workflows: [{ repository_id: 7, path, ref: "refs/heads/master" }] } });
+  // page 2 of the rules is read
+  withRs(ORG({
+    "repos/q/actions/rules/branches/master": [200, [rule(1, ".github/workflows/a.yaml")], LINK("repositories/7/rules/branches/master?page=2")],
+    "repositories/7/rules/branches/master?page=2": [200, [rule(2, "ci/b.yaml")], {}],
+  }), (o) => {
+    assert.equal(o.error, null);
+    assert.ok(o.surface.indexOf("ci/b.yaml") >= 0, JSON.stringify(o.surface));
+    assert.ok(o.read.some((x) => /^rules\/branches\/master: 2 rule\(s\)/.test(x)), JSON.stringify(o.read));
+  });
+  // a later rules page fails -> error
+  withRs(ORG({
+    "repos/q/actions/rules/branches/master": [200, [rule(1, ".github/workflows/a.yaml")], LINK("repositories/7/rules/branches/master?page=2")],
+    "repositories/7/rules/branches/master?page=2": [502, {}, {}],
+  }), (o) => assert.match(String(o.error), /^rules of q\/actions branch master not readable \(page 2: HTTP 502\)/));
+  // an endless rules list hits the cap -> error
+  withRs(ORG({ "repos/q/actions/rules/branches/master": [200, [], LINK("repos/q/actions/rules/branches/master")] }), (o) => assert.match(String(o.error), /more than 10 pages/));
+  // org rulesets: page 2 read; a failed page 2 -> unreadable with the count read
+  withRs(ORG({
+    "orgs/q/rulesets?per_page=100": [200, [{ id: 1 }], LINK("organizations/3/rulesets?per_page=100&page=2")],
+    "organizations/3/rulesets?per_page=100&page=2": [200, [{ id: 18773609 }], {}],
+    "orgs/q/rulesets/1": [200, { id: 1, name: "x", rules: [] }, {}],
+  }), (o) => {
+    assert.ok(o.surface.indexOf(".github/workflows/pr-title-convention.yaml") >= 0);
+    assert.ok(o.read.indexOf("org rulesets of q: 2") >= 0, JSON.stringify(o.read));
+  });
+  withRs(ORG({
+    "orgs/q/rulesets?per_page=100": [200, [{ id: 18773609 }], LINK("organizations/3/rulesets?per_page=100&page=2")],
+    "organizations/3/rulesets?per_page=100&page=2": [500, {}, {}],
+  }), (o) => {
+    assert.equal(o.error, null);
+    assert.ok(o.unreadable.some((x) => /^org rulesets of q: only 1 read; page 2 not readable \(HTTP 500\): the rest not checked$/.test(x)), JSON.stringify(o.unreadable));
+  });
+});

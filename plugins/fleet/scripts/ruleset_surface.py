@@ -80,15 +80,21 @@ USES = re.compile(r'''^[ \t-]*uses:[ \t]*["']?([^\s"'#]+)''', re.M)
 
 def self_refs(text):
     # the repo paths a workflow text names by self-reference
+    # (a root reference, ./ . <slug>@ref <slug>/@ref, is the whole repo: "./")
     out = []
     for u in USES.findall(text):
-        if u.startswith('./'):
-            d = norm(u[2:])
+        if u in ('.', './') or u.startswith('./'):
+            rel = u[2:]
+        elif slug != '-' and '@' in u and u.split('@', 1)[0].lower().rstrip('/') == slug.lower():
+            rel = ''
         elif slug != '-' and u.lower().startswith(slug.lower() + '/') and '@' in u:
-            d = norm(u[len(slug) + 1:].split('@', 1)[0])
+            rel = u[len(slug) + 1:].split('@', 1)[0]
         else:
             continue
-        if d:
+        d = norm(rel) if rel.strip('/') not in ('', '.') else None
+        if d is None and os.path.normpath(rel or '.') in ('.', ''):
+            out.append('./')
+        elif d:
             out.append(d if d in tracked else d.rstrip('/') + '/')
     return out
 
@@ -136,6 +142,26 @@ def api(path):
     return code, data, hdr
 
 
+PAGE_CAP = 10
+NEXT = re.compile(r'<https://api\.github\.com/([^>]+)>;\s*rel="next"')
+
+
+def api_all(path):
+    # every page of a list: (items, why the rest is missing or None, the failed page's status and headers)
+    items, page = [], 1
+    while True:
+        code, data, hdr = api(path)
+        if code != 200 or not isinstance(data, list):
+            return items, ('HTTP ' + str(code) if page == 1 else 'page ' + str(page) + ': HTTP ' + str(code)), code, hdr
+        items.extend(data)
+        m = NEXT.search(hdr.get('link', ''))
+        if not m:
+            return items, None, code, hdr
+        if page >= PAGE_CAP:
+            return items, 'more than ' + str(PAGE_CAP) + ' pages', code, hdr
+        path, page = m.group(1), page + 1
+
+
 def workflows_of(rules):
     for r in rules if isinstance(rules, list) else []:
         if isinstance(r, dict) and r.get('type') == 'workflows':
@@ -156,9 +182,9 @@ else:
     else:
         rid = repo['id']
         otype = (repo.get('owner') or {}).get('type')
-        code, rules, _ = api('repos/' + slug + '/rules/branches/' + quote(branch))
-        if code != 200 or not isinstance(rules, list):
-            error = 'rules of ' + slug + ' branch ' + branch + ' not readable (HTTP ' + str(code) + ')'
+        rules, why, _, _ = api_all('repos/' + slug + '/rules/branches/' + quote(branch))
+        if why is not None:
+            error = 'rules of ' + slug + ' branch ' + branch + ' not readable (' + why + ')'
         else:
             read.append('rules/branches/' + branch + ': ' + str(len(rules)) + ' rule(s)')
             names = {}
@@ -184,8 +210,12 @@ else:
                 usrc = dict(src, source_type=(src['source_type'] or 'ruleset'))
                 add_refs(t, full + ':' + w['path'], usrc)
             if otype == 'Organization':
-                code, org, hdr = api('orgs/' + owner + '/rulesets?per_page=100')
-                if code == 200 and isinstance(org, list):
+                org, why, code, hdr = api_all('orgs/' + owner + '/rulesets?per_page=100')
+                if why is not None and why.startswith('HTTP'):
+                    org = None
+                elif why is not None:
+                    unreadable.append('org rulesets of ' + owner + ': only ' + str(len(org)) + ' read; ' + re.sub(r'^page ([0-9]+): (HTTP .*)$', r'page \1 not readable (\2)', why) + ': the rest not checked')
+                if isinstance(org, list):
                     read.append('org rulesets of ' + owner + ': ' + str(len(org)))
                     for e in org[:50]:
                         c, d, _ = api('orgs/' + owner + '/rulesets/' + str(e.get('id') if isinstance(e, dict) else ''))

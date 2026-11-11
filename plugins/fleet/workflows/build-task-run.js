@@ -1492,7 +1492,7 @@ const PROGRAM_SHA256 = {
   "remote_head": "f48c45aa5706061fd110a75eeb45dd0157a3e46486dd845b6011c71396efa845",
   "remote_url": "ba1bd212a6e1f2dcc77718808359d79a0f2866bfae9bd798cd6b8b03b43013d9",
   "review_paths": "2904f382a5273ed64d7f0416533f45be9f6f3893892badd632dccd10fb360493",
-  "ruleset_surface": "25b0ddd6fd479e4c5e933bc2c369a82192b434570b8bd7e7e9d8df4d7f4d69ff",
+  "ruleset_surface": "b469892ccc7c02cd2599848d78b29a6beee8a956e63583a19079a53699b76110",
   "script_check": "bd5eb9be1833d6746a8910f6a8bfc1194f980321b598a835ebd198b8a525d17d",
   "session_project": "9e84d1a85d655f201c994c87f4a9f24e532c672bd5140a86ee7b80c8b383f89f",
   "state_write": "428bbdc40ec4973d6e2c314a1a7c91be6f8e54c5aeb079af840623b5ee27ad78",
@@ -4282,7 +4282,7 @@ async function rulesetSurface(label, worktree, slug, defaultBranch, phaseName) {
   if (canonical(r.args) !== canonical(args)) halt("failed", label + ": the program ran on other arguments");
   if (r.error !== null) halt("needs_human", "hook surface cannot be computed (" + r.error + "); hook change needs Max's confirmation", "hooks");
   for (const u of r.unreadable) gate("warning: " + u);
-  const np = (x) => (/\/$/.test(String(x)) ? normPath(String(x)) + "/" : normPath(String(x)));
+  const np = (x) => (String(x) === "./" ? "./" : /\/$/.test(String(x)) ? normPath(String(x)) + "/" : normPath(String(x)));
   return { surface: r.surface.map(np), sources: r.sources.map((x) => Object.assign({}, x, { path: np(x.path) })), read: r.read.map(String), unreadable: r.unreadable.map(String) };
 }
 // a plan ref's sealed ruleset surface (null: sealed before 6.0.0)
