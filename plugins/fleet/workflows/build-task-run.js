@@ -50,6 +50,7 @@ const INFRA_TIER = [
   ["infra:stage-plan", "haiku"],
   ["infra:verify-plan", "haiku"],
   ["infra:read-state", "haiku"],
+  ["infra:policy", "haiku"],
   ["infra:callers", "haiku"],
   ["infra:check-scripts", "haiku"],
   ["infra:precommit-ids", "sonnet"],
@@ -155,7 +156,7 @@ const CALLER_LIMITS = [
   "a symbol is a bare identifier: a method is grepped by its last name only",
 ];
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy"];
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "done" };
 const CONFIRMS = ["ask", "auto", "default"];
 const MAX_REVIEWS = 2;
@@ -1485,6 +1486,7 @@ const PROGRAM_SHA256 = {
   "plan_hash": "5901757f34415759f587989e09b57821da8602418ecd45ba384f0366502b5b40",
   "plan_ref": "70b82ddd6b5cd3321dd04efc6b9549b001d25b1aa0ac98ed73a5e2f75ff8841d",
   "plan_ref_write": "ba7c4e18e5c7054dc9cc43aa6b5cf143914e42cbca72ad22f3dcd59ab957c1e1",
+  "policy": "e4fdd22ccc9ebbee24e128ee54f91e3eba90fae350d64703655358a3e7026141",
   "precommit_ids": "627d38e747a9f5b57bba6b9cfc6e5deccb016be7b943ff89b7fd5689a6ddc09b",
   "push_classify": "3ac4435c37d17784050a25c58f5071c60354698defb9a66c963636a70185a6c1",
   "push_probe": "06b2ae5a476c22f30f8183c7eacd5d31c3f7c7d6ddc674a253bc7593c8e702be",
@@ -1597,6 +1599,7 @@ const PROGRAM_SLOTS = [
   [/^infra:load-ref/, [[null, "plan_ref"]]],
   [/^infra:verify-plan(?!-commit)/, [[null, "verify_since"], ["plan_hash", "plan_hash"], ["plan_hash_head", "plan_hash"], ["test_db", "test_db_decl"]]],
   [/^infra:read-state$/, [[null, "read_state"]]],
+  [/^infra:policy$/, [[null, "policy"]]],
   [/^infra:state:/, [[null, "state_write"]]],
   [/^infra:tf-gate:/, [[null, "tf_gate"]]],
   [/^infra:remote-head:/, [[null, "remote_head"]]],
@@ -1652,6 +1655,7 @@ const PROGRAM_KEYS = {
   "hook_surface": ["surface", "make_paths", "error", "args"],
   // 6.0.0
   "ruleset_surface": ["surface", "sources", "read", "unreadable", "error", "args"],
+  "policy": ["profile", "file", "policy_sha256", "caps", "matched", "error", "args"],
   "review_paths": ["changed_paths"],
   "precommit_ids": ["present", "ids", "parser", "error", "args"],
   "script_check": ["checks"],
@@ -1767,6 +1771,16 @@ const PROGRAM_OUT = {
     sources: { type: "array", items: { type: "object", properties: { ruleset_id: { type: ["integer", "null"] }, name: STR_OR_NULL, source_type: STR_OR_NULL, path: STR, via: STR } } },
     read: STRS,
     unreadable: STRS,
+    error: STR_OR_NULL,
+    args: STRS,
+    digest: STR,
+  },
+  policy: {
+    profile: STR_OR_NULL,
+    file: STR,
+    policy_sha256: STR_OR_NULL,
+    caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] } } },
+    matched: STR_OR_NULL,
     error: STR_OR_NULL,
     args: STRS,
     digest: STR,
@@ -5127,6 +5141,32 @@ function fenceChanged(where, changed) {
   }
   if (bad.length) halt("needs_human", where + ": changed path outside the scope fence: " + bad.join(", "), "scope");
 }
+// 2033: the per-owner policy; work owners never merge or update the branch, whatever it says
+const WORK_OWNERS = ["quinyx", "concrete-media"];
+function policyPrompt(inputs) {
+  return INFRA_STEP + "read the fleet policy file. READ ONLY: run nothing but the one command below.\n" + inputsLine(inputs) + RUN_ONLY + progCmd("policy", inputs.args) + "\nIt prints one JSON object " + printsKeys("policy") + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("policy") + "}.";
+}
+const capsText = (c) => Object.keys(c).map((k) => k + " " + c[k] + (k === "ci_watch" ? " " + c.ci_watch_minutes + " min" : "")).filter((x) => x.indexOf("ci_watch_minutes") !== 0).join(", ");
+async function policyStep(host, slug, sealed) {
+  const args = [host || "-", slug];
+  const r = await infra("infra:policy", policyPrompt({ args }), "Verify", JUDGE_AGENT, "policy", args);
+  requireProgram(r, "policy", "infra:policy", "needs_human", "policy");
+  if (!relayDigestOk(r, progKeys("policy"), "policy") || canonical(r.args) !== canonical(args)) halt("needs_human", "infra:policy: the relayed result does not match the program's digest or arguments", "policy");
+  let p = { profile: r.profile, policy_sha256: r.policy_sha256, caps: r.caps };
+  if (sealed) {
+    if (sealed.policy_sha256 !== r.policy_sha256) {
+      const d = r.caps ? Object.keys(sealed.caps).filter((k) => sealed.caps[k] !== r.caps[k]).map((k) => k + " " + sealed.caps[k] + " -> " + r.caps[k]) : [r.error];
+      gate("policy changed since this run started (" + (d.join(", ") || "no cap changed") + "); keeping the sealed profile " + (sealed.profile || "default"));
+    }
+    p = sealed;
+  } else if (r.error || !r.caps) halt("needs_human", "policy: " + r.error + "; fix or remove the file, then re-run the build", "policy");
+  else gate("policy: " + r.matched + " (" + capsText(p.caps) + ")");
+  if (WORK_OWNERS.indexOf(slug.split("/")[0].toLowerCase()) >= 0 && (p.caps.merge !== "never" || p.caps.update_branch !== "never")) {
+    gate("work repo " + slug + ": merge and update_branch never (script rule; the policy said merge " + p.caps.merge + ", update_branch " + p.caps.update_branch + ")");
+    p = Object.assign({}, p, { caps: Object.assign({}, p.caps, { merge: "never", update_branch: "never" }) });
+  }
+  return p;
+}
 function commitSubject(taskId, slug) {
   return ("feat(" + taskId + "): " + slug.replace(/-/g, " ")).slice(0, 72).replace(/\s+$/, "");
 }
@@ -5371,6 +5411,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     }
   } else if (v.head !== ref.plan_commit)
     halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
+  // 2033: sealed in the run-state; stream 3 reads state.policy.caps
+  const policy = (state.policy = await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
 
   // a frozen resume
   const freezeRefName = "refs/fleet/" + names.taskId + "/freeze";
@@ -5557,6 +5599,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           gates_not_run: state.gatesNotRun,
           auto_confirmed: autoConfirmed,
           intent: intentForPr,
+          policy,
         },
         wb ? { write_back: wb.write_back, ledger_adapter: wb.ledger_adapter, ledger_reason: wb.ledger_reason, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
       ),
@@ -5677,6 +5720,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     out.cumulative = history;
     out.auto_confirmed = autoConfirmed;
     out.intent = intentForPr;
+    out.policy = policy;
     if (resumedAt) out.resumed_at = resumedAt;
     return Object.assign(out, wb || {});
   }

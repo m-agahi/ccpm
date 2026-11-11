@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "name": "personal",
+      "match": {
+        "hosts": ["github.com", "github-personal", "codeberg.org"],
+        "owners": ["m-agahi", "yadgarhq", "maxagahi"]
+      },
+      "pr_ready": true,
+      "ci_watch": true,
+      "ci_watch_minutes": 60,
+      "stats": true,
+      "merge": "auto",
+      "update_branch": "once",
+      "ci_trigger": true,
+      "review_post": "own_pr",
+      "repos": {
+        "yadgarhq/actions": { "merge": "never" },
+        "yadgarhq/argocd": { "merge": "never" }
+      }
+    },
+    {
+      "name": "work",
+      "match": { "owners": ["quinyx", "concrete-media"] },
+      "pr_ready": true,
+      "ci_watch": true,
+      "stats": true,
+      "merge": "never",
+      "ci_trigger": true,
+      "review_post": "own_pr"
+    }
+  ]
+}

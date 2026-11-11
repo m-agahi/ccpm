@@ -78,6 +78,7 @@ const WANT = [
   [/^infra:tf-gate/, "sonnet"],
   [/^infra:hook-surface/, "sonnet"],
   [/^infra:ruleset-surface/, "sonnet"],
+  [/^infra:policy$/, "haiku"],
   [/^infra:changed-defs/, "sonnet"],
   [/^infra:replan-/, "sonnet"],
   [/^infra:state:/, "sonnet"],
@@ -507,8 +508,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // 5.0.6 (ledger 2019): + 7 build-dir resets (writers, test judge, coder,
   // code judge, commit, push, pr-review) and the teardown, which runs after
   // the result is made
-  assert.equal(out.build.calls.length, 58, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 57);
+  // 6.0.0 (ledger 2033): + infra:policy
+  assert.equal(out.build.calls.length, 59, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 58);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -576,7 +578,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     noUnscripted(b);
     assert.equal(b.result.status, "ok", b.result.reason);
     // 5.0.6 (ledger 2019): 50 + 7 build-dir resets + the teardown
-    assert.equal(b.calls.length, 58);
+    // 6.0.0 (ledger 2033): + infra:policy
+    assert.equal(b.calls.length, 59);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });

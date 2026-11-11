@@ -74,13 +74,27 @@ and 3 add the items marked "pending"; stream 3 finalises this entry.
 - README: the PR-step re-probe, the shipped-run resume and the ruleset surface; the
   `docs/build-task-run-notes.md` "6.0.0 notes" section holds the long comments.
 
+### Done (stream 2)
+
+- 2033: per-owner policy. New program `policy.py <host> <owner/repo>` (35 programs) reads
+  `$XDG_CONFIG_HOME/fleet/policy.json` (default `~/.config/fleet/policy.json`; strict JSON,
+  `policy.example.json`): first profile matching host and owner, then the first `repos` glob
+  override. Caps: `pr_ready`, `ci_watch` (+ `ci_watch_minutes`, default 60), `stats`, `merge`
+  (`never` | `auto`), `update_branch` (`never` | `once`), `ci_trigger`, `review_post` (`none` |
+  `own_pr`). No file or no match: the default (ready, CI watch and stats on, merge never, the rest
+  off). A bad file (duplicate or unknown key, wrong type) stops the build with `stop_gate:
+"policy"`. The build reads it once after the run-state (`infra:policy`) and seals `{profile,
+policy_sha256, caps}` in every run-state write and the result (`state.policy` for stream 3).
+  Ruling 5.4: `WORK_OWNERS` (`quinyx`, `concrete-media`, any host) force `merge` and
+  `update_branch` to `never` in the script. Ruling 5.6: a resumed run whose policy changed logs
+  the changed caps and keeps the sealed profile. Policy load, match and seal only: stream 3 acts on
+  the caps.
+
 ### Pending (streams 2 and 3)
 
 - 2042: the plan doc stays off the pushed branch (dangling plan commit on `plan_base`); commit
   subjects and PR titles follow the repo's convention (`pr_convention.py`). Pending.
 - 2044: PR body stats block (`<details>` with counters and output tokens per model, approx.).
-  Pending.
-- 2033: per-owner policy file (`~/.config/fleet/policy`, JSON), hard-coded work-owner limits.
   Pending.
 - 2045: mark the PR ready after review approve, write-back and stats. Pending.
 - 2034: CI watch on every profile, CI-fix rounds, orchestrator detection, merge where the

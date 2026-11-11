@@ -511,6 +511,26 @@ agents across runs.
 
 After the review, build mode writes back once. A failure here never changes the run status.
 
+### Policy (6.0.0, ledger 2033)
+
+A build reads `$XDG_CONFIG_HOME/fleet/policy.json` (default `~/.config/fleet/policy.json`) once,
+after the run-state read, with `scripts/policy.py <host> <owner/repo>`. The file is strict JSON
+(`policy.example.json` shows the shape): duplicate or unknown keys, a wrong type or a bad value
+stop the build (`stop_gate: "policy"`); a bad file never falls back to the default.
+
+- The first profile whose `match.hosts` (when listed) holds the origin host and whose
+  `match.owners` holds the owner (glob, any case) wins. Its first `repos` glob that matches
+  `<owner>/<repo>` overrides caps (the example keeps `yadgarhq/actions` and `yadgarhq/argocd` at
+  `merge: never`).
+- Caps and the default (no file, or no profile matches): `pr_ready` true, `ci_watch` true,
+  `ci_watch_minutes` 60, `stats` true, `merge` `never` (`never` | `auto`), `update_branch`
+  `never` (`never` | `once`), `ci_trigger` false, `review_post` `none` (`none` | `own_pr`).
+  A profile key left out keeps the default.
+- Script rule, whatever the file says: an owner in `WORK_OWNERS` (`quinyx`, `concrete-media`, on
+  any host or ssh alias) gets `merge` and `update_branch` `never`.
+- The run-state seals `policy: {profile, policy_sha256, caps}`; the result carries it too. A
+  resumed run whose file changed logs the changed caps and keeps the sealed profile.
+
 ### Resume (run-state)
 
 A build re-run with the same `plan_ref` resumes at the last completed gate.

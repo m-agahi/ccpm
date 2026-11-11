@@ -112,7 +112,8 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   // 6.0.0 (ledger 2041): + infra:ruleset-surface:plan
   assert.equal(out.plan.calls.length, 18, out.plan.labels.join(", "));
   // 5.0.6 (ledger 2019): + 7 build-dir resets and the teardown
-  assert.equal(out.build.calls.length, 58, out.build.labels.join(", "));
+  // 6.0.0 (ledger 2033): + infra:policy
+  assert.equal(out.build.calls.length, 59, out.build.labels.join(", "));
   for (const c of out.calls) assert.ok(!String(c.prompt).includes("agent_prompt_get"), c.label);
 });
 
