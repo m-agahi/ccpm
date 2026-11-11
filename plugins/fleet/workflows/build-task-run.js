@@ -1473,7 +1473,7 @@ const PROGRAM_SHA256 = {
   "db_up": "287f00df3f12543a7ffed8445fda9ba9823f58dcb37a90301ed05b245d49d913",
   "fleet_scan": "5140d5020bee7cae61994b753e8ee100fc6cdcc1389d3a3559ef5fec5fbe2a3b",
   "format_files": "41fa33d348944dd704583568fd6a5d95e4f8a7ce47bd8a75dd736a61d0afc714",
-  "gh_identity": "2406385eae3a6937f343f0081ac10a47df7177943c24bec2f8aed89c9569cae4",
+  "gh_identity": "f9c39d04b5d7fd2cf64e7669865fb72aa56df85479f47458a879dfbee4be188b",
   "hash_diff": "9ff52aea4895f751d39ab062d446078820bc1990eb8e7cfdc91083af1a413722",
   "hasher": "e96807e4a8a376285f0b30a0bdf3529185986b473e8e9e01146df27140dd67dd",
   "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
@@ -1734,7 +1734,7 @@ const PROGRAM_OUT = {
   // 5.0.8
   gh_identity: {
     origin: STR_OR_NULL,
-    repos: { type: "object", additionalProperties: { type: "object", properties: { gh_cmd: STR_OR_NULL, push: BOOL, tried: { type: "array", items: { type: "object", properties: { cmd: STR, installed: BOOL, push: { type: ["boolean", "null"] } } } } } } },
+    repos: { type: "object", additionalProperties: { type: "object", properties: { gh_cmd: STR_OR_NULL, push: BOOL, tried: { type: "array", items: { type: "object", properties: { cmd: STR, installed: BOOL, push: { type: ["boolean", "null"] }, exit_code: { type: ["integer", "null"] }, stderr: STR } } } } } },
     args: STRS,
     digest: STR,
   },
@@ -2506,7 +2506,8 @@ function noPushText(slug) {
 }
 function ghTried(slug) {
   const g = ghFor(slug);
-  return g ? g.tried.map((t) => t.cmd + "=" + (t.installed ? JSON.stringify(t.push) : "not installed")).join(", ") : "no gh check";
+  const w = (t) => (t.push === null && (t.exit_code !== undefined || t.stderr) ? " [exit " + JSON.stringify(t.exit_code === undefined ? null : t.exit_code) + ": " + String(t.stderr || "").slice(0, 200) + "]" : "");
+  return g ? g.tried.map((t) => t.cmd + "=" + (t.installed ? JSON.stringify(t.push) + w(t) : "not installed")).join(", ") : "no gh check";
 }
 
 function remoteHeadPrompt(inputs) {
@@ -5345,6 +5346,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   let approvedSha = null;
   let pushes = 0;
   let prOpens = 0;
+  let reprobed = false;
   let reviews = 0;
   let pr = null;
   let reviewNotes = [];
@@ -5409,8 +5411,17 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   }
 
   async function openPr(label, extra) {
-    // no agent call without a gh command that can push
-    const g = ghFor(remoteSlug);
+    // no agent call without a gh command that can push; an unknown answer is probed once more (2038)
+    let g = ghFor(remoteSlug);
+    if (g && !g.push && !ghNoPush(remoteSlug) && !reprobed) {
+      reprobed = true;
+      gate("PR step: push access to " + remoteSlug + " not known (" + ghTried(remoteSlug) + "); probing once more");
+      delete state.gh.repos[remoteSlug];
+      await ghEnsure([remoteSlug], "infra:gh-identity:pr", "PR", true);
+      g = ghFor(remoteSlug);
+      if (!g || (!g.push && !ghNoPush(remoteSlug)))
+        halt("needs_human", "PR step: push access to " + remoteSlug + " still not known after a second probe (" + ghTried(remoteSlug) + "); authorise gh or gh-personal for it (or retry: a probe can fail transiently), then re-run the build with the same plan_ref (it resumes at the PR)", "role");
+    }
     if (!g || !g.push)
       halt("needs_human", "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)", "role");
     await fleetScan("infra:fleet-scan:" + label.replace(/^role:/, ""));

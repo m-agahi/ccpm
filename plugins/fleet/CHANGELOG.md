@@ -1,5 +1,41 @@
 # Changelog
 
+## [6.0.0] - unreleased
+
+Fleet 6.0.0: one major release in three build streams. Stream 1 (this entry's "Done" items)
+fixes the PR-step push probe, nested digest relays and relayed mid-turn requests, resumes a
+shipped run into a coder round, and adds org and repo rulesets to the hook surface. Streams 2
+and 3 add the items marked "pending"; stream 3 finalises this entry.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.0.0), then start a NEW session: the workflow
+  looks for its own `fleet/6.0.0/scripts` dir.
+- Before any other session is told to update, run the ADR-1192 smoke run (probe, then plan with
+  confirm ask on a scratch repo) and record its run ids here. Status: pending.
+
+### Done (stream 1)
+
+- 2038: the PR step no longer reads an unknown push answer as "no push access". When the
+  workspace probe answered null (unknown) and not every installed command answered false, the
+  PR step clears the cached answer and probes once more (`infra:gh-identity:pr`). It stops only
+  on a definite no ("no GitHub command with push access") or on a second unknown, with its own
+  text ("push access ... still not known after a second probe"). `gh_identity.py` records
+  `exit_code` and a short stderr (200 characters, token-shaped text redacted) on each unknown
+  answer, and the stop text shows them. A definite no still stops at build start.
+
+### Pending (streams 2 and 3)
+
+- 2042: the plan doc stays off the pushed branch (dangling plan commit on `plan_base`); commit
+  subjects and PR titles follow the repo's convention (`pr_convention.py`). Pending.
+- 2044: PR body stats block (`<details>` with counters and output tokens per model, approx.).
+  Pending.
+- 2033: per-owner policy file (`~/.config/fleet/policy`, JSON), hard-coded work-owner limits.
+  Pending.
+- 2045: mark the PR ready after review approve, write-back and stats. Pending.
+- 2034: CI watch on every profile, CI-fix rounds, orchestrator detection, merge where the
+  policy allows. Pending.
+
 ## [5.0.10] - 2026-11-11
 
 Fleet 5.0.10 (ledger 2031): the workflow file shrinks from 476186 to under 400000 bytes with no

@@ -133,7 +133,7 @@ test("5.0.8 2030: no push: gh when it reads, else gh-personal when it reads, els
     stub(bin, "gh-personal", "false");
     assert.deepEqual(prog(["-", "o/r"], bin).out.repos["o/r"], { gh_cmd: "gh", push: false, tried: TRIED.noPush });
     stub(bin, "gh", null, 1, "gh: Not Found (HTTP 404)");
-    assert.deepEqual(prog(["-", "o/r"], bin).out.repos["o/r"], { gh_cmd: "gh-personal", push: false, tried: [{ cmd: "gh", installed: true, push: null }, { cmd: "gh-personal", installed: true, push: false }] });
+    assert.deepEqual(prog(["-", "o/r"], bin).out.repos["o/r"], { gh_cmd: "gh-personal", push: false, tried: [{ cmd: "gh", installed: true, push: null, exit_code: 1, stderr: "gh: Not Found (HTTP 404)" }, { cmd: "gh-personal", installed: true, push: false }] });
     stub(bin, "gh-personal", null, 1, "gh: Not Found (HTTP 404)");
     const r = prog(["-", "o/r"], bin);
     assert.deepEqual([r.out.repos["o/r"].gh_cmd, r.out.repos["o/r"].push], [null, false]);
@@ -151,7 +151,8 @@ test("5.0.8 review N2: only rc 0 with stdout exactly true or false counts; anyth
     for (const [out, code] of [["null", 0], ["", 0], ["True", 0], ["true\ntrue", 0], ["false", 1], ["true", 2]]) {
       stub(bin, "gh", out, code);
       const r = prog(["-", "o/r"], bin);
-      assert.deepEqual(r.out.repos["o/r"].tried[0], { cmd: "gh", installed: true, push: null }, JSON.stringify([out, code]));
+      // 6.0.0 (2038): an unknown answer carries its exit code and stderr
+      assert.deepEqual(r.out.repos["o/r"].tried[0], { cmd: "gh", installed: true, push: null, exit_code: code, stderr: "" }, JSON.stringify([out, code]));
       assert.equal(r.out.repos["o/r"].gh_cmd, "gh-personal", JSON.stringify([out, code]));
     }
   }));
@@ -183,7 +184,7 @@ test("5.0.8 review B1b: a transient failure is tried once more; another failure 
     stub(bin, "gh", "true", 0, "", 30);
     r = prog(["-", "o/r"], bin);
     assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(r.out.repos["o/r"].tried[0], { cmd: "gh", installed: true, push: null });
+    assert.deepEqual(r.out.repos["o/r"].tried[0], { cmd: "gh", installed: true, push: null, exit_code: null, stderr: "timed out after 15 s" });
     assert.equal(logOf(bin, "gh").length, 1);
     assert.ok(r.ms >= 14000 && r.ms < 25000, r.ms + " ms");
   }));
@@ -446,7 +447,8 @@ test("5.0.8 delta D1: a probe that was null or transient never stops the build a
     assert.ok(out.build.logs.some((l) => /^build start: push access to o\/r not known \(/.test(l)), name + ": " + out.build.logs.join("\n"));
     assert.ok(out.build.labels.includes("infra:verify-plan"), name + ": the build went on");
     assert.equal(out.result.stop_gate, "role", name);
-    assert.match(out.result.reason, /^PR step: no GitHub command with push access to o\/r/, name);
+    // 6.0.0 (2038): the PR step probes once more; unknown again -> its own text
+    assert.match(out.result.reason, /^PR step: push access to o\/r still not known after a second probe/, name);
   }
 });
 
