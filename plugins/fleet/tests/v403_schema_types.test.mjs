@@ -676,6 +676,7 @@ const READS = {
     "state.prUpdated boolean": PARSED_LOCAL,
     "resume.pr_updated boolean": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     "ru object": "parsed: resume.update, JSON.parse of the run-state message (digest-checked read_state)",
+    "rv.nits.length number-literal": "parsed: the length of reviewStep's nits, an array the script built",
     // 6.0.0 (ledger 2034)
     "c.removed boolean": "prog:pr_state:removed",
     "c.deleted boolean": "prog:pr_state:deleted",

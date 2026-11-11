@@ -150,6 +150,9 @@ test("6.0.1 D5: a resumed run-state with pr_updated true never runs update-branc
   const st = got["infra:state:reviewed:v2"];
   // the first run's plan store and stubs
   const r = Object.assign(overlap(), t);
+  // NOTE: this verify stub (HEAD at the forge merge, fleet-only commits) is a state the real
+  // verify_since cannot produce today: the merge commit and the base commits are in commits_since,
+  // so a real resume after an overlap update stops in verify (D4). It tests the run-state round trip.
   r["infra:verify-plan"] = Object.assign({}, happy()["infra:verify-plan"], { head: D, commits_since: [{ sha: D, subject: "feat(thing): add thing" }], changed_since: ["src/x.py"] });
   r["infra:read-state"] = { status: "ok", reason: "read", exists: true, target: D, message: JSON.stringify(st), head: D, head_tree: "KU", clean: true };
   r["hasher:resume"] = { status: "ok", fingerprint: { head: D, tree: "KU" }, hashes: JSON.parse(JSON.stringify(HASHES_U)) };
@@ -164,6 +167,7 @@ test("6.0.1 D5: a resumed run-state with pr_updated true never runs update-branc
   assert.ok(!L.includes("infra:pr-update"), L.join(", "));
 });
 
+const D4_TEXT = "a merge commit (possibly update-branch) is on the branch; this plan ref cannot be resumed or re-built — finish the PR by hand or re-plan on the new base";
 test("6.0.1 D4: a resume after an overlap update stops with the update-branch message, not the non-fleet commit message", async () => {
   const s = happy();
   const fleet = "1".repeat(40);
@@ -179,7 +183,8 @@ test("6.0.1 D4: a resume after an overlap update stops with the update-branch me
   });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.equal(out.result.reason, "PR was updated from base (update-branch); resume is not supported after update-branch — re-run build");
+  assert.equal(out.result.reason, D4_TEXT);
+  assert.ok(!/re-run build/.test(out.result.reason));
   // a non-fleet commit with no forge merge keeps the old message
   const o = happy();
   o["infra:verify-plan"] = Object.assign({}, happy()["infra:verify-plan"], { head: D, commits_since: [{ sha: D, subject: "chore: hand edit", parents: [fleet] }, { sha: fleet, subject: "feat(thing): add thing", parents: [PB.padEnd(40, "0")] }], changed_since: ["src/x.py"] });
@@ -223,18 +228,51 @@ test("6.0.1 D4: verify_since.py lists the parents of each commit since the plan 
   assert.equal(by[f1].subject, "feat: pr");
 });
 
-test("6.0.1: review changes on the update-branch head stop with the findings in the PR body and the re-plan advice", async () => {
+test("6.0.1 (review S2/S3): review changes on the update-branch head stop with the findings in the run result only; no pr-opener call before the halt", async () => {
   const t = overlap({
-    "role:pr-review:v2": { status: "ok", reason: "broken", verdict: "changes_requested", findings: [{ id: "F1", severity: "blocking", category: "correctness", file: "src/x.py", line: 1, summary: "the merge broke x", evidence: "e" }], touches_gate: false, checked: [] },
+    "role:pr-review:v2": { status: "ok", reason: "broken", verdict: "changes_requested", findings: [{ id: "F1", severity: "blocking", category: "correctness", file: "src/x.py", line: 1, summary: "the merge broke x", evidence: "e" }, { id: "N1", severity: "nit", category: "style", file: "src/x.py", line: 2, summary: "nit", evidence: "e" }], touches_gate: false, checked: [] },
   });
-  t["role:fleet-pr-opener:findings"] = { status: "ok", reason: "updated", pr_url: "https://github.com/o/r/pull/7", pr_number: 7, created: false, template_used: null, gates_not_run_stated: true };
   const out = await run(t, ARGS);
   const L = out.build.labels;
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "review");
-  assert.match(out.result.reason, /^re-review after update-branch requested changes: F1 src\/x\.py: the merge broke x; the review findings are in the PR body of https:\/\/github\.com\/o\/r\/pull\/7; re-plan on the new base or fix by hand$/);
-  const notes = inputsOf(call(out, "role:fleet-pr-opener:findings").prompt).review_notes;
-  assert.deepEqual(notes.map((f) => f.id), ["F1"]);
+  assert.equal(out.result.reason, "re-review after update-branch requested changes: F1 (1 blocking, 1 nit); findings are in the run result; re-plan on the new base or fix by hand");
+  assert.deepEqual(out.result.review.blocking.map((f) => f.id), ["F1"]);
+  assert.deepEqual(out.result.review.nits.map((f) => f.id), ["N1"]);
+  // no pr-opener call between the re-review and the halt
+  const after = L.slice(L.indexOf("role:pr-review:v2"));
+  assert.ok(!after.some((l) => /^role:fleet-pr-opener/.test(l)), L.join(", "));
   assert.ok(!L.some((l) => /^role:fleet-coder:r2|^infra:pr-merge:u1/.test(l)), L.join(", "));
   assert.equal(L.filter((l) => l === "infra:ledger-writeback:ci").length, 1, L.join(", "));
+});
+
+// review N1: a resume restores update only with pr_updated true and two 40-hex shas; a corrupt record stops
+async function resumeWith(mod, extra) {
+  const t = overlap({ "hasher:update:u1": { status: "ok", fingerprint: { head: D, tree: "KU" }, hashes: HASHES_U } });
+  const got = capture(t, ["infra:state:reviewed:v2"]);
+  const first = await run(t, ARGS);
+  assert.equal(first.result.status, "ok", first.result.reason);
+  const st = Object.assign({}, got["infra:state:reviewed:v2"], mod);
+  const r = Object.assign(overlap(), t, extra || {});
+  // a state real verify cannot produce today (see the D5 test)
+  r["infra:verify-plan"] = Object.assign({}, happy()["infra:verify-plan"], { head: D, commits_since: [{ sha: D, subject: "feat(thing): add thing" }], changed_since: ["src/x.py"] });
+  r["infra:read-state"] = { status: "ok", reason: "read", exists: true, target: D, message: JSON.stringify(st), head: D, head_tree: "KU", clean: true };
+  r["hasher:resume"] = { status: "ok", fingerprint: { head: D, tree: "KU" }, hashes: JSON.parse(JSON.stringify(HASHES_U)) };
+  return run(r, { mode: "build", plan_ref: first.plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+}
+test("6.0.1 (review N1): a resumed update record with base == head == approved_sha, or a base that is not 40 hex, stops (fail closed)", async () => {
+  for (const u of [{ head: D, base: D }, { head: D, base: "c0ffee" }, { head: D, base: null }]) {
+    const out = await resumeWith({ pr_updated: true, update: u });
+    assert.equal(out.result.status, "needs_human", JSON.stringify(u) + ": " + out.result.reason);
+    assert.equal(out.result.stop_gate, "resume", out.result.reason);
+    assert.match(out.result.reason, /^run-state mismatch: update record /);
+    assert.ok(!out.labels.some((l) => /^infra:(ci-watch|ledger-writeback)/.test(l)), out.labels.join(", "));
+  }
+});
+test("6.0.1 (review N1): an update record with pr_updated not true is not restored (the classifier keeps the plan base)", async () => {
+  const extra = { "infra:ci-watch:w1": RED, "role:fleet-ci-classifier:w1": { status: "ok", reason: "c", checks: [{ name: "test", cause: "flaky" }] } };
+  const off = await resumeWith({ pr_updated: false, update: { head: D, base: C } }, extra);
+  assert.equal(inputsOf(call(off, "role:fleet-ci-classifier:w1").prompt).base_ref, PB);
+  const on = await resumeWith({ pr_updated: true, update: { head: D, base: C } }, extra);
+  assert.equal(inputsOf(call(on, "role:fleet-ci-classifier:w1").prompt).base_ref, C);
 });

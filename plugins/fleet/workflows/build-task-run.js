@@ -5563,7 +5563,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // 6.0.1 D4: a forge update-branch merge (parents [a fleet commit or plan_base, a base commit]) stops, fail closed
     const fleetShas = [planBase].concat((v.commits_since || []).filter((c) => subj.isFleet(String(c.subject || ""))).map((c) => c.sha));
     if ((v.commits_since || []).some((c) => Array.isArray(c.parents) && c.parents.length === 2 && fleetShas.indexOf(c.parents[0]) >= 0 && fleetShas.indexOf(c.parents[1]) < 0))
-      halt("needs_human", "PR was updated from base (update-branch); resume is not supported after update-branch — re-run build");
+      halt("needs_human", "a merge commit (possibly update-branch) is on the branch; this plan ref cannot be resumed or re-built — finish the PR by hand or re-plan on the new base");
     for (const c of v.commits_since || [])
       if (!subj.isFleet(String(c.subject || "")))
         halt("needs_human", "plan changed since approval: branch moved by a non-fleet commit " + c.sha + " " + JSON.stringify(c.subject));
@@ -5940,12 +5940,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         });
         state.review = { verdict: rv.verdict, blocking: rv.blocking, nits: rv.nits, rounds: reviews, sweep: rv.sweep, model: rv.model };
         if (rv.blocking.length) {
-          // 6.0.1: no coder round on the forge's merge; the findings go into the PR body, then the run stops
-          if (state.update && state.update.head === approvedSha) {
-            reviewNotes = rv.blocking.concat(rv.nits);
-            pr = await openPr("role:fleet-pr-opener:findings");
-            halt("needs_human", "re-review after update-branch requested changes: " + rv.blocking.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; ") + "; the review findings are in the PR body of " + pr.pr_url + "; re-plan on the new base or fix by hand", "review");
-          }
+          // 6.0.1: no coder round on the forge's merge; the findings stay in the run result (state.review)
+          if (state.update && state.update.head === approvedSha)
+            halt("needs_human", "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id || "-")).join(", ") + " (" + rv.blocking.length + " blocking, " + rv.nits.length + (rv.nits.length === 1 ? " nit" : " nits") + "); findings are in the run result; re-plan on the new base or fix by hand", "review");
           if (reviews >= MAX_REVIEWS)
             halt(
               "needs_human",
@@ -6292,10 +6289,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     state.testsWritten = resume.tests_written || 0;
     iacTouched = resume.iac_touched === true;
     if (resume.ci && typeof resume.ci === "object") state.ci = resume.ci;
-    // 6.0.1 D5: update-branch stays once per run across a resume
+    // 6.0.1 D5: update-branch stays once per run across a resume; a corrupt update record stops (N1)
     state.prUpdated = resume.pr_updated === true;
     const ru = resume.update;
-    if (ru && typeof ru === "object" && /^[0-9a-f]{40}$/.test(String(ru.head)) && /^[0-9a-f]{40}$/.test(String(ru.base))) state.update = { head: ru.head, base: ru.base };
+    if (state.prUpdated && ru && typeof ru === "object") {
+      if (!/^[0-9a-f]{40}$/.test(String(ru.base)) || (ru.head === approvedSha && ru.base === approvedSha))
+        halt("needs_human", "run-state mismatch: update record " + JSON.stringify({ head: ru.head === undefined ? null : ru.head, base: ru.base === undefined ? null : ru.base }) + " at " + approvedSha + " (" + stateRef + ")", "resume");
+      if (/^[0-9a-f]{40}$/.test(String(ru.head))) state.update = { head: ru.head, base: ru.base };
+    }
     if (resume.pr_url || resume.pr_number != null) {
       pr = { pr_url: resume.pr_url, pr_number: resume.pr_number, created: resume.pr_created, template_used: resume.template_used };
       state.pr = pr;

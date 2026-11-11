@@ -35,20 +35,22 @@ reading the code.
 - D4: a resume after an overlap update stopped with "plan changed since approval: branch moved by
   a non-fleet commit". `verify_since.py` now lists the parents of each commit since the plan base
   (`commits_since[].parents`, optional in the schemas). When a commit has two parents, the first
-  being plan_base or a fleet commit and the second not, verify stops with "PR was updated from base
-  (update-branch); resume is not supported after update-branch — re-run build". The run still
-  stops (fail closed); only the message changed.
-- D5: the run-state now carries `pr_updated` and `update` ({head, base}). A resume restores them
-  (`update` only with two 40-hex shas), so update-branch stays once per run across a resume.
+  being plan_base or a fleet commit and the second not, verify stops with "a merge commit
+  (possibly update-branch) is on the branch; this plan ref cannot be resumed or re-built — finish
+  the PR by hand or re-plan on the new base". verify runs on every build, so a re-run of the same
+  plan ref stops the same way. The run still stops (fail closed); only the message changed.
+- D5: `pr_updated`/`update` are recorded for a later version; a resume after an overlap update
+  stops in verify (D4). On resume, `update` is restored only when `pr_updated` is true and both
+  shas are 40 hex; an update record whose base is not 40 hex, or whose head and base both equal
+  the approved sha, stops the resume (gate `resume`, fail closed).
 
 ### Changed
 
-- A re-review after update-branch that requests changes now hands its findings (blocking and nits)
-  to the pr-opener as `review_notes` (`role:fleet-pr-opener:findings`), so they are in the PR body.
-  The run then stops with gate `review`: "re-review after update-branch requested changes: ...;
-  the review findings are in the PR body of <pr>; re-plan on the new base or fix by hand". Before,
-  it stopped with "review round 2 requested changes again" and the findings were only in the stop
-  reason.
+- A re-review after update-branch that requests changes stops at once with gate `review`:
+  "re-review after update-branch requested changes: <ids> (<n> blocking, <n> nits); findings are
+  in the run result; re-plan on the new base or fix by hand". The findings stay in the run result
+  (`review`); nothing is written to the PR body. Before, it stopped with "review round 2 requested
+  changes again" and the finding text in the stop reason.
 - Version 6.0.1 (`FLEET_VERSION`, `marketplace.json`, the root README). The prompt snapshot pins
   change only by the `parents` field in the schemas.
 
