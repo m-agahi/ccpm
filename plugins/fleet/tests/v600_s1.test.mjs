@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SCRIPTS_SRC, ARGS, happy, run, call, inputsOf, ghIdOut, spawnSync } from "./harness.mjs";
+import { SCRIPTS_SRC, ARGS, HASHES, CSHA, happy, run, runOne, call, inputsOf, ghIdOut, spawnSync, stateJsonOf, noUnscripted } from "./harness.mjs";
 
 const UNKNOWN = [{ cmd: "gh", installed: true, push: null }, { cmd: "gh-personal", installed: true, push: null }];
 const GH_PUSH = [{ cmd: "gh", installed: true, push: true }];
@@ -175,4 +175,118 @@ test("6.0.0 2040: the /build-task skill launches the Workflow only from the buil
   assert.match(t, /latest human message is the build request or its confirmation/);
   assert.match(t, /`relaunch: "intake"`/);
   assert.match(t, /re-launch[^.]*once[^.]*next turn/i);
+});
+
+// ---------------------------------------------------------------- 2043: a run resumed at the PR enters the code loop
+
+// the build's run-state writes, recorded per last_gate
+function recording(s, states) {
+  for (const label of ["infra:state:committed:r1", "infra:state:pushed:p1", "infra:state:pr_open:p1", "infra:state:reviewed:v1", "infra:state:written_back"])
+    s[label] = (prompt) => {
+      const st = stateJsonOf(prompt);
+      states[st.last_gate] = st;
+      return { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
+    };
+  return s;
+}
+const FREEZE_KEY = "fleetref:refs/fleet/l42/freeze";
+// a re-run on the approved commit; the repo still holds the freeze ref (tree T1) unless freeze is null
+function rerun(s, st, freeze = "T1") {
+  s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], head: st.approved_sha, commits_since: [{ sha: st.approved_sha, subject: "feat(l42): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] };
+  s["infra:read-state"] = { status: "ok", reason: "read", exists: true, target: st.approved_sha, message: JSON.stringify(st), head: st.approved_sha, head_tree: st.code_tree, clean: true };
+  const h = JSON.parse(JSON.stringify(HASHES));
+  if (freeze) h.git[FREEZE_KEY] = freeze;
+  s["hasher:resume"] = { status: "ok", fingerprint: { head: st.approved_sha, tree: st.code_tree }, hashes: h };
+  s["infra:push"] = (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha });
+  return s;
+}
+const FINDING = { id: "R1", severity: "blocking", category: "fail_open", file: "src/x.py", line: 3, summary: "empty input passes", evidence: "ran x" };
+// the coder round after the review asks for changes (code round 2, push, PR update p2, review v2)
+function fixRound(s) {
+  return Object.assign(s, {
+    "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
+    "hasher:post-coder:r2": { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" }, hashes: HASHES },
+    "role:fleet-code-judge:r2": { status: "ok", verdict: "approve", routed_findings: [] },
+    "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: { head: CSHA(1), tree: "K2" } },
+    "role:fleet-pr-opener:p2": { status: "ok", reason: "updated", pr_url: "https://github.com/o/r/pull/7", pr_number: 7, created: false, template_used: null, gates_not_run_stated: true },
+    "infra:review-paths:v2": { status: "ok", reason: "listed", changed_paths: ["src/x.py"] },
+    "hasher:pre-review:v2": { status: "ok", fingerprint: { head: CSHA(2), tree: "K2" } },
+    "role:pr-review:v2": { status: "ok", reason: "clean", verdict: "approve", findings: [], touches_gate: false, checked: [] },
+    "hasher:fp-post:pr-review:v2": { status: "ok", fingerprint: { head: CSHA(2), tree: "K2" } },
+    "infra:review-cleanup:v2": { status: "ok", reason: "clean" },
+  });
+}
+// a build that stops after the PR opened (the review could not read it), then its re-run state
+async function stoppedAtPr() {
+  const states = {};
+  const s = recording(happy(), states);
+  s["role:pr-review:v1"] = { status: "needs_human", reason: "cannot read PR" };
+  const plan = await runOne(s, ARGS);
+  const first = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
+  assert.equal(first.result.status, "needs_human", first.result.reason);
+  assert.equal(states.pr_open.last_gate, "pr_open");
+  s["role:pr-review:v1"] = { status: "ok", reason: "x", verdict: "changes_requested", findings: [FINDING], touches_gate: false, checked: [] };
+  return { s, st: states.pr_open, bargs: { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" } };
+}
+
+test("6.0.0 2043: resumed at pr_open, review changes_requested -> a coder round from the freeze ref, new commit, push, PR update, review v2, write-back", async () => {
+  const { s, st, bargs } = await stoppedAtPr();
+  fixRound(rerun(s, st));
+  const out = await runOne(s, bargs);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.resumed_at, "review");
+  assert.ok(out.logs.some((l) => /^resuming at the coder from the PR \(review\): freeze tree T1 of refs\/fleet\/l42\/freeze/.test(l)), out.logs.join("\n"));
+  assert.ok(!out.labels.some((l) => /^(role:fleet-test-writer|role:fleet-test-judge|hasher:freeze|infra:freeze-ref)/.test(l)), out.labels.join(", "));
+  const ci = inputsOf(call(out, "role:fleet-coder:r2").prompt);
+  assert.match(ci.routed_findings[0].finding, /empty input passes/);
+  assert.equal(ci.freeze_tree, "T1");
+  const cp = inputsOf(call(out, "infra:commit:r2").prompt);
+  assert.equal(cp.expected_head, CSHA(1));
+  assert.match(cp.subject, /^fix\(l42\): code round 2$/);
+  assert.equal(inputsOf(call(out, "infra:push").prompt).approved_sha, CSHA(2));
+  assert.equal(inputsOf(call(out, "role:fleet-pr-opener:p2").prompt).approved_sha, CSHA(2));
+  assert.equal(inputsOf(call(out, "role:pr-review:v2").prompt).head_sha, CSHA(2));
+  assert.ok(out.labels.includes("infra:ledger-writeback"));
+  assert.equal(out.result.rounds.code, 2);
+  assert.equal(out.result.review.verdict, "approve");
+});
+
+test("6.0.0 2043: resumed at pr_open with no freeze ref -> the old resume stop", async () => {
+  const { s, st, bargs } = await stoppedAtPr();
+  rerun(s, st, null);
+  const out = await runOne(s, bargs);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "review");
+  assert.match(out.result.reason, /^resumed run at review: the review gate needs a coder round, which a resumed run cannot start \(no freeze ref refs\/fleet\/l42\/freeze\)/);
+  assert.ok(!out.labels.some((l) => /^role:fleet-coder/.test(l)));
+});
+
+test("6.0.0 2043: resumed at pr_open with the code rounds used up -> stop cap, no coder", async () => {
+  const { s, st, bargs } = await stoppedAtPr();
+  rerun(s, Object.assign({}, st, { rounds: Object.assign({}, st.rounds, { code: 3 }) }));
+  const out = await runOne(s, bargs);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "cap");
+  assert.match(out.result.reason, /^code rounds exhausted \(3\)/);
+  assert.ok(!out.labels.some((l) => /^role:fleet-coder/.test(l)));
+});
+
+test("6.0.0 2043: resumed at committed, the push hook rejects -> a coder round, then push p2, PR, review, write-back", async () => {
+  const states = {};
+  const s = recording(happy(), states);
+  s["infra:push"] = { status: "failed", reason: "ssh: permission denied (publickey)" };
+  const plan = await runOne(s, ARGS);
+  const bargs = { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" };
+  assert.equal((await runOne(s, bargs)).result.status, "failed");
+  fixRound(rerun(s, states.committed));
+  s["infra:push"] = { status: "ok", reason: "hook", push_result: "hook_rejected", exit_code: 1, hook_tail: "check_version_bump: not bumped" };
+  s["infra:push:p2"] = (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha });
+  const out = await runOne(s, bargs);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.resumed_at, "push");
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /check_version_bump: not bumped/);
+  assert.equal(inputsOf(call(out, "infra:push:p2").prompt).approved_sha, CSHA(2));
+  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, CSHA(2));
 });

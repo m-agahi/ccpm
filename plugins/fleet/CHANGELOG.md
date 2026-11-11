@@ -39,6 +39,14 @@ and 3 add the items marked "pending"; stream 3 finalises this entry.
   `stop_gate: "relaunch"` and `relaunch: "intake"`. The `/build-task` skill launches the
   Workflow only in a turn whose latest human message is the build request or its confirmation,
   and on `relaunch: "intake"` re-launches once on the next such turn.
+- 2043: a build resumed from its run-state (at `committed`, `pushed` or `pr_open`) whose push
+  hook or review asks for changes no longer stops with "cannot start (no freeze)". It seeds the
+  frozen state from the run: the frozen maps are the `hasher:resume` maps (their digest equals
+  the run-state's `maps_digest`), the freeze tree is `refs/fleet/<task>/freeze`, HEAD is the
+  approved commit and the code tree is the run-state's. It then enters the code loop with the
+  findings: coder, code judge, a new commit, push, PR update, review again and write-back, under
+  the same round caps (the code-round count comes from the run-state). Without the freeze ref
+  it stops as before. The result says `resumed_at` (the step it resumed at).
 
 ### Pending (streams 2 and 3)
 

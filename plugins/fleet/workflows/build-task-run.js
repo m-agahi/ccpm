@@ -5208,6 +5208,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const remoteUrl = typeof pf.remote_url === "string" ? pf.remote_url : null;
   const mainWt = lay.mainWt;
   const branch = lay.branch;
+  // the commit the build's own commits sit on (2043; stream 2 of 6.0.0 retargets it)
+  const planBase = ref.plan_commit;
 
   // verify the approved plan
   const criteria = normCriteria(ref.criteria, pf.test_cmd);
@@ -5282,6 +5284,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   if (!relayDigestOk(rs, progKeys("read_state"), "read_state"))
     halt("needs_human", "run-state read did not complete: the relayed state does not match the program's digest (" + stateRef + ")", "resume");
   let resume = null;
+  // the hasher:resume state: the frozen maps at ship (2043)
+  let resumeState = null;
   if (rs.exists === true) {
     let st = null;
     try {
@@ -5306,6 +5310,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const hr = await hasher("hasher:resume", mainWt, hashedFiles, "Verify");
       if (mapsDigest(hr.hashes) !== st.maps_digest) mis("frozen maps changed since " + st.last_gate);
       resume = st;
+      resumeState = hr;
     }
   } else if (v.head !== ref.plan_commit)
     halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
@@ -5619,6 +5624,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     return Object.assign(out, wb || {});
   }
 
+  // 2043: a resumed run's review or push-hook fix, and the step it resumed at
+  let shipFix = null;
+  let resumedAt = null;
   if (resume) {
     approvedSha = resume.approved_sha;
     shipTree = resume.code_tree;
@@ -5649,15 +5657,18 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       return finishOk("done");
     }
     gate("resuming at " + next + " (run-state " + resume.last_gate + " at " + approvedSha + ")");
-    const fix = await ship(next);
-    if (fix)
+    shipFix = await ship(next);
+    if (!shipFix) return finishOk(next);
+    resumedAt = next;
+    // 2043: the coder round starts from the freeze ref; without it the run stops as before
+    const ft = resumeState.hashes.git[FLEETREF + freezeRefName];
+    if (typeof ft !== "string" || !ft)
       halt(
         "needs_human",
-        "resumed run at " + next + ": the " + fix.gate + " gate needs a coder round, which a resumed run cannot start (no freeze); fix by hand or re-plan: " +
-          fix.findings.map((f) => f.finding).join("; "),
-        fix.gate === "review" ? "review" : "resume",
+        "resumed run at " + next + ": the " + shipFix.gate + " gate needs a coder round, which a resumed run cannot start (no freeze ref " + freezeRefName + "); fix by hand or re-plan: " +
+          shipFix.findings.map((f) => f.finding).join("; "),
+        shipFix.gate === "review" ? "review" : "resume",
       );
-    return finishOk(next);
   }
   function writerCriterion(c) {
     const o = Object.assign({}, c);
@@ -5924,7 +5935,18 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     state.freezePlanRef = tiny;
   }
 
-  if (frozenResume) {
+  if (shipFix) {
+    // 2043: the shipped run's frozen maps and freeze tree; HEAD is the approved commit
+    freezes = 1;
+    frozen = resumeState.hashes;
+    freezeTree = frozen.git[FLEETREF + freezeRefName];
+    freezeRef = planBase;
+    codeBaseRef = planBase;
+    last = resumeState;
+    codeTree = rs.head_tree;
+    setFreezeDigest();
+    gate("resuming at the coder from the PR (" + resumedAt + "): freeze tree " + freezeTree + " of " + freezeRefName + ", HEAD " + approvedSha);
+  } else if (frozenResume) {
     // the tests were approved and frozen in an earlier run
     freezes = 1;
     frozen = frozenResume.hashes;
@@ -5948,13 +5970,13 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   phase("Code");
   const frozenNote =
     "frozen_tests lists the criterion test files. frozen_config_sections names, per hasher map, the JSON file that holds that frozen map ({key: value}): files (the test files, whole-file runner config and the .gitignore files git reads, not those inside ignored dirs, keyed by path: sha256), sections (<path>#<section>: sha256 of a canonicalised test-runner config section), git (info/exclude, core.excludesFile, hooks/<rel>, config:*: sha256 of files and settings outside the worktree), symlinks (<rel>: link target, not a hash), ignored (ignored files: sha256). Special values: ABSENT (the section did not exist at freeze), MISSING (the file did not exist), UNPARSEABLE (the file could not be parsed at freeze). Every key is read-only; read the files, never write them. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. Nothing is committed until the code judge approves: the tests and the code stay uncommitted in the worktree. freeze_tree is the worktree tree at freeze; diff production changes with `git diff <freeze_tree>` (code_base_ref is HEAD at the first freeze).";
-  let coderFindings = [];
+  let coderFindings = shipFix ? shipFix.findings : [];
   // the code judge's prior_findings
-  let judgePrior = [];
-  let lastRoundGate = null;
+  let judgePrior = coderFindings.slice();
+  let lastRoundGate = shipFix ? shipFix.gate : null;
   // HEAD the coder must leave alone
   let expectedHead = v.head;
-  let commitsMade = v.head !== ref.plan_commit;
+  let commitsMade = v.head !== planBase;
   for (;;) {
     if (state.rounds.code >= MAX_CODE_ROUNDS)
       halt(
@@ -6213,7 +6235,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     phase("Code");
   }
 
-  return finishOk(frozenResume ? "frozen" : null);
+  return finishOk(frozenResume ? "frozen" : resumedAt);
 }
 
 function reviewFindingText(f) {
