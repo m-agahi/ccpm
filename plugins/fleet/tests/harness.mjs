@@ -197,6 +197,10 @@ export function remoteUrlOut(url, repo) {
   o.digest = sha256(canon(o));
   return o;
 }
+// 5.0.9 (ledger 2032): session_project.py's output (fillPrograms adds program and digest)
+export function sessionProjectOut(project) {
+  return { project, source: project ? "origin" : null, cwd: "/home/u/git/docs", args: [] };
+}
 // 5.0.8 (ledger 2030): gh_identity.py's output for its args. over: {<slug>:
 // tried list} (default: gh with push, so gh-personal is never tried)
 export const GH_DEFAULT_TRIED = [{ cmd: "gh", installed: true, push: true }];
@@ -290,6 +294,9 @@ export async function runOne(script, args0) {
     const base = label.replace(/:(digest|args)-retry$/, "");
     const inner = base !== label && !(label in script) ? Object.assign({}, opts, { label: base, realLabel: label }) : opts;
     let r = await agentInner(prompt, inner);
+    // 5.0.9 (ledger 2032): the session's yaadgaar project: script.__session_project, else args.project
+    if (base === "preflight" && r && typeof r === "object" && !rawResults.has(r) && !("session_project" in r))
+      r.session_project = sessionProjectOut("__session_project" in script ? script.__session_project : (args && args.project) || null);
     if (r && typeof r === "object" && !rawResults.has(r)) r = fillPrograms(base, r, prompt);
     const mut = script.__mutate;
     if (mut && r && typeof r === "object" && (mut.label instanceof RegExp ? mut.label.test(base) : mut.label === base)) r = mut.fn(r, prompt, label);
@@ -912,7 +919,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.8/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/5.0.9/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1038,7 +1045,7 @@ export function allScripts() {
 }
 // [label, [[slot (null: the result itself), program, digest keys (null: no digest)]]]
 export const PROGRAM_LABELS = [
-  [/^preflight$/, [["path_check", "path_check", K("path_check")]]],
+  [/^preflight$/, [["path_check", "path_check", K("path_check")], ["session_project", "session_project", K("session_project")]]],
   [/^infra:path-check:/, [[null, "path_check", K("path_check")]]],
   [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")], ["gh_check", "gh_identity", K("gh_identity")]]],
   // 5.0.8 (ledger 2030): a repo the workspace step did not check

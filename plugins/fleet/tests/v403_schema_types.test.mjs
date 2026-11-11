@@ -342,7 +342,9 @@ const READS = {
     "r.shared_file array": "!role:scope-and-plan:shared_file",
     "f.sha256 string": "role:scope-and-plan:shared_file.sha256",
   },
-  preflightStep: { "pre.ledger_tools array": "preflight:ledger_tools", "x string": "preflight:ledger_tools[]" },
+  preflightStep: { "pre.ledger_tools array": "preflight:ledger_tools", "x string": "preflight:ledger_tools[]", "sj object": "preflight:session_project", "sj.project string": "prog:session_project:project" },
+  // 5.0.9 (ledger 2032)
+  yaadgaarScope: { "named string": "parsed: a yaadgaar answer's project (intake:brief.sources[].project or a yaadgaar-read results[].project), any JSON value" },
   ledgerAdapter: {
     "sources array": "parsed: a cleanBrief source list (intake:brief.sources or the sealed plan ref)",
     "tools array": "parsed: state.ledgerTools (LEDGER_TOOLS filtered by preflight:ledger_tools)",
@@ -888,16 +890,16 @@ test("5.0.0 R1 (was 4.0.3 1998 repro wf_d6901710-32d): the preflight and role sc
   const pre = out.calls.find((c) => c.label === "preflight").opts.schema;
   // 5.0.0 (R2): the census ledger_tools is a list of strings; PR #48 ruling 1:
   // advisory, so optional and nullable (was: required)
-  assert.deepEqual(validate(pre, { ledger_tools: [], scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }), []);
-  assert.ok(validate(pre, { ledger_tools: [], scripts_probe: [1], scripts_dir: null, path_check: null, reason: "ok" }).length);
-  assert.deepEqual(validate(pre, { scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }), [], "no census");
-  assert.deepEqual(validate(pre, { ledger_tools: null, scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, reason: "ok" }), [], "a null census");
+  assert.deepEqual(validate(pre, { ledger_tools: [], scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, session_project: null, reason: "ok" }), []);
+  assert.ok(validate(pre, { ledger_tools: [], scripts_probe: [1], scripts_dir: null, path_check: null, session_project: null, reason: "ok" }).length);
+  assert.deepEqual(validate(pre, { scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, session_project: null, reason: "ok" }), [], "no census");
+  assert.deepEqual(validate(pre, { ledger_tools: null, scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, session_project: null, reason: "ok" }), [], "a null census");
   // PR #48 ruling 1: a null memory_notes / follow_ups fits the coder schema
   const coderSch = out.calls.find((c) => c.label === "role:fleet-coder:r1").opts.schema;
   const coderOk = { status: "ok", reason: "x", role_file: { name: "fleet-coder", sha256: "a".repeat(64) }, changed_paths: [], suite_result: {}, added_symbols: [], frozen_tests_red_at_start: true, obligations_done: [] };
   assert.deepEqual(validate(coderSch, Object.assign({}, coderOk, { memory_notes: null, follow_ups: null })), []);
   assert.deepEqual(validate(coderSch, coderOk), [], "both absent");
-  assert.ok(validate(pre, { ledger_tools: [7], scripts_probe: [], scripts_dir: null, path_check: null, reason: "ok" }).length, "a numeric tool name");
+  assert.ok(validate(pre, { ledger_tools: [7], scripts_probe: [], scripts_dir: null, path_check: null, session_project: null, reason: "ok" }).length, "a numeric tool name");
   const sch = out.calls.find((c) => c.label === "role:plan-audit").opts.schema;
   // 5.0.0 R3: plan-audit also carries the shared_file it read
   const good = { status: "ok", reason: "x", verdict: "approve", routed_findings: [], role_file: { name: "plan-audit", sha256: "a".repeat(64) }, shared_file: { name: "test-cmd-allowlist", sha256: "b".repeat(64) } };
@@ -947,12 +949,12 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.8\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.8\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.9\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.9\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);
   // 5.0.0 (R2): plus the ledger tool census
-  assert.match(pre, /Return \{ledger_tools, scripts_probe, scripts_dir, path_check, reason\}\./);
+  assert.match(pre, /Return \{ledger_tools, scripts_probe, scripts_dir, path_check, session_project, reason\}\./);
 });
 
 // ---------------------------------------------------------------- 4.0.3 review

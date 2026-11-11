@@ -29,8 +29,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const WORKFLOW = join(HERE, "..", "workflows", "build-task-run.js");
 export const SCRIPTS = HERE;
 export const ROLES_DIR = join(HERE, "..", "roles");
-// the number of shipped programs (28 since 4.0.0; 29 since 5.0.3: plan_dsn; 30 since 5.0.5: ignored_diff; 31 since 5.0.6: build_dir; 31 in 5.0.7: hash_diff replaces ignored_diff; 32 since 5.0.8: gh_identity)
-export const PROGRAM_COUNT = 32;
+// the number of shipped programs (28 since 4.0.0; 29 since 5.0.3: plan_dsn; 30 since 5.0.5: ignored_diff; 31 since 5.0.6: build_dir; 31 in 5.0.7: hash_diff replaces ignored_diff; 32 since 5.0.8: gh_identity; 33 since 5.0.9: session_project)
+export const PROGRAM_COUNT = 33;
 // the number of shipped role prompts (5.0.0)
 export const ROLE_COUNT = 10;
 // the number of shared prompt files in roles/_shared (5.0.0, R3: the test_cmd allowlist)

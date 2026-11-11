@@ -203,7 +203,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.8 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 5\.0\.9 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -6114,6 +6114,37 @@ test("2.1.5 yaadgaar: build re-reads the yaadgaar task, never L<N>", async () =>
   assert.ok(build.labels.includes("infra:yaadgaar-writeback"));
 });
 
+// 5.0.9 (ledger 2032): the confirm-auto re-read reads by number like intake;
+// an answer naming no project needs the session proof (session_project.py)
+test("5.0.9 yaadgaar: the confirm-auto re-read with no named project stops unless the session project is proven = the sealed one", async () => {
+  for (const [session, srcOver, want] of [
+    [undefined, { project: "" }, null],
+    ["yadgarhq/iam-db", {}, /session's yaadgaar project is yadgarhq\/iam-db, not yadgarhq\/docs/],
+    [null, { project: "" }, /no proof of the session's yaadgaar project/],
+    [undefined, { project: "yadgarhq/other" }, /of project yadgarhq\/other, not args\.project yadgarhq\/docs/],
+  ]) {
+    const s = autoHappy({ brief: YBRIEF });
+    const plan = await runOne(s, { ...YQ, confirm: "ask" });
+    assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+    if (session !== undefined) s.__session_project = session;
+    s["intake:rulings"] = { status: "ok", reason: "re-read", brief: { ...YBRIEF, sources: [{ ...YBRIEF.sources[0], ...srcOver }] } };
+    s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
+    s["role:fleet-intent-judge:rerun"] = { status: "ok", reason: "fine", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] } };
+    s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
+    s["infra:yaadgaar-read"] = yaadgaarRead();
+    s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
+    const build = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs", confirm: "auto" });
+    if (!want) {
+      assert.equal(build.result.status, "ok", build.result.reason);
+      continue;
+    }
+    assert.equal(build.result.status, "needs_human", String(session));
+    assert.match(build.result.reason, /re-read of yaadgaar:622: /);
+    assert.match(build.result.reason, want);
+    assert.ok(!build.labels.includes("infra:yaadgaar-writeback"));
+  }
+});
+
 test("2.1.5 yaadgaar: a sealed legacy ledger source on a yadgarhq/ project stops the build", async () => {
   const s = happy();
   // 4.0.0 (1992): planned without project, so the build's project is not a mismatch
@@ -6135,7 +6166,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.8; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 5\.0\.9; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6836,7 +6867,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.8\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.8 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/5\.0\.9\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 5\.0\.9 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8530,7 +8561,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.8/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 5\.0\.9/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
@@ -10982,6 +11013,8 @@ test("3.1.3 build: args.project, never the origin slug, decides the ledger check
   s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
   // 4.0.0 (1992, AC-1992): no project at build: the project sealed at plan
   // time (yadgarhq/docs) is the ledger scope, never the origin slug o/r
+  // 5.0.9 (ledger 2032): the build session's proof (no args.project for the harness default)
+  s.__session_project = "yadgarhq/docs";
   const none = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date });
   assert.equal(none.result.status, "ok", none.result.reason);
   assert.ok(none.labels.includes("infra:yaadgaar-read"));
