@@ -16,6 +16,9 @@ and 3 add the items marked "pending"; stream 3 finalises this entry.
 
 ### Done (stream 1)
 
+- Version 6.0.0 (`FLEET_VERSION`, `marketplace.json`, the root README). Role files carry no
+  contract marker since 5.0.0 (`CONTRACT` / `fleet-vN` text was removed), so the major bump
+  changes no role prompt and no wiki page; the role sha256 pins stay the integrity check.
 - 2038: the PR step no longer reads an unknown push answer as "no push access". When the
   workspace probe answered null (unknown) and not every installed command answered false, the
   PR step clears the cached answer and probes once more (`infra:gh-identity:pr`). It stops only
