@@ -109,7 +109,8 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   const out = await run(happy(), Object.assign({}, ARGS, { confirm: "ask" }));
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.equal(out.plan.calls.length, 17, out.plan.labels.join(", "));
+  // 6.0.0 (ledger 2041): + infra:ruleset-surface:plan
+  assert.equal(out.plan.calls.length, 18, out.plan.labels.join(", "));
   // 5.0.6 (ledger 2019): + 7 build-dir resets and the teardown
   assert.equal(out.build.calls.length, 58, out.build.labels.join(", "));
   for (const c of out.calls) assert.ok(!String(c.prompt).includes("agent_prompt_get"), c.label);

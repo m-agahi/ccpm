@@ -62,6 +62,8 @@ const SAMPLES = [
   "infra:push:p2",
   "infra:push-probe",
   "infra:hook-surface:plan",
+  // 6.0.0 (ledger 2041)
+  "infra:ruleset-surface:plan",
   "infra:review-paths:v1",
   "infra:precommit-ids",
   "infra:check-scripts:plan",

@@ -358,6 +358,9 @@ export async function runOne(script, args0) {
     // 3.1.0: unscripted hook-surface reads find no hook entry file
     if (!(label in script) && /^infra:hook-surface:/.test(label))
       return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: {}, error: null }, prompt));
+    // 6.0.0 (ledger 2041): unscripted ruleset reads find a repo with no ruleset and a user owner
+    if (!(label in script) && /^infra:ruleset-surface:/.test(label))
+      return { status: "ok", reason: "read", surface: [], sources: [], read: ["self-references in 0 local workflow file(s)", "rules/branches/main: 0 rule(s)", "owner o is not an organization: no org rulesets"], unreadable: [], error: null, args: inputsOf(prompt).args };
     // 3.1.0: unscripted ledger reads find a task with a body page
     if (!(label in script) && /^infra:ledger-read:pre$/.test(label))
       return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
@@ -1076,6 +1079,8 @@ export const PROGRAM_LABELS = [
   // 4.0.0 (1985, S3)
   [/^infra:push-probe$/, [[null, "push_probe", K("push_probe")]]],
   [/^infra:hook-surface:/, [[null, "hook_surface", K("hook_surface")]]],
+  // 6.0.0 (ledger 2041)
+  [/^infra:ruleset-surface:/, [[null, "ruleset_surface", K("ruleset_surface")]]],
   [/^infra:review-paths:/, [[null, "review_paths", K("review_paths")]]],
   // 4.0.0 review: the hook ids feed G2 and carry a digest
   [/^infra:precommit-ids/, [[null, "precommit_ids", K("precommit_ids")]]],

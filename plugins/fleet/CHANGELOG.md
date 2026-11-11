@@ -47,6 +47,22 @@ and 3 add the items marked "pending"; stream 3 finalises this entry.
   findings: coder, code judge, a new commit, push, PR update, review again and write-back, under
   the same round caps (the code-round count comes from the run-state). Without the freeze ref
   it stops as before. The result says `resumed_at` (the step it resumed at).
+- 2041: org and repo rulesets, and workflow self-references, are hook surface. New program
+  `ruleset_surface.py <worktree> <gh_cmd|-> <owner/repo|-> <default_branch>` (34 programs) runs
+  at the plan gate (`infra:ruleset-surface:plan`, with the gh command the workspace step
+  checked). It reads `rules/branches/<default>` (org and repo rulesets that apply to the repo):
+  a required workflow hosted in this repo is surface, and one in another repo is read for
+  `uses:` references into this repo. For an Organization owner it reads `orgs/<owner>/rulesets`
+  and each ruleset (cap 50): a required workflow hosted here is surface. The floor, computed
+  locally on every run: each directory a tracked `.github/workflows/*` file names by
+  self-reference (`uses: ./<dir>`, `uses: <owner>/<repo>/<dir>@...`). Ruling 1 (report and
+  floor): org rulesets that are not readable (404, or 403 / 5xx without the `admin:org` scope)
+  give a gate warning and a `gates_not_run` line (`org-rulesets`) that the PR body states; a
+  403 / 5xx with `admin:org`, or an unreadable repo or rule list, stops with "hook surface
+  cannot be computed". The hook-gate stop names the ruleset ("run by Organization ruleset
+  "PR Title Convention" 18773609 via ..."), and its pass line names what was read. The list is
+  sealed in `plan_facts.ruleset_surface`; the build checks the approved tree against it and
+  calls the program only for a plan ref sealed before 6.0.0.
 
 ### Pending (streams 2 and 3)
 

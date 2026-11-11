@@ -72,11 +72,14 @@ const SCENARIOS = {
   },
 };
 
+// 6.0.0 stream 1: nested program slots require digest and keys (schemas of preflight, workspace,
+// branch-scan, stage-plan, format-plan, verify-plan-commit, verify-plan), gh_identity's tried
+// diagnostics (workspace schema), intake's relaunch rule (prompt), infra:ruleset-surface:plan (new call)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 75, sha256: "461038a196d1acbe0013a9b3d23f1f0d8db773f6f11b65ebf29a272338d36f9d" },
-  "confirm auto (gates, then build in one run)": { calls: 77, sha256: "dae8844d0a55eefe8f2347f1aa29be69ba55bc66bb1c50a6cf612b74a0c3af97" },
-  "short path (one test writer)": { calls: 74, sha256: "049e38f72a01b613bf0272b9c0f15a1904a4fafbbd8dbc477cff8a1c62d30424" },
-  "probe": { calls: 2, sha256: "3b7278ac528eb76e1f4c0472117bcfa83982538b6c6daa4bb0bdd96710fa6581" },
+  "plan then build (confirm ask)": { calls: 76, sha256: "fb2c698618ed464439ed537436fe44cba3b7eaf78dd6dd7ba304a896e608eab2" },
+  "confirm auto (gates, then build in one run)": { calls: 78, sha256: "f44f0424a5656272a4ceb4a319075205ac0c5e7d9bb97dc5d519d98dd69bc95d" },
+  "short path (one test writer)": { calls: 75, sha256: "393d1d3d0fc2e440f42758c0c614dcdd9b428c863cc7689e8b5351576cd9d3c4" },
+  "probe": { calls: 2, sha256: "012d024fefbefe057a047d8b6822b07ea3152de9e7d322be0e6cf5d6273fc736" },
 };
 
 for (const [name, fn] of Object.entries(SCENARIOS)) {

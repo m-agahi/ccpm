@@ -503,6 +503,15 @@ const READS = {
     "r.digest string": "prog:changed_defs:digest",
   },
   hookSurface: { "r.surface array": "prog:hook_surface:surface" },
+  // 6.0.0 (ledger 2041)
+  rulesetSurface: {
+    "slug string-re": PARSED_LOCAL,
+    "r.surface array": "prog:ruleset_surface:surface",
+    "r.sources array": "prog:ruleset_surface:sources",
+    "r.read array": "prog:ruleset_surface:read",
+    "r.unreadable array": "prog:ruleset_surface:unreadable",
+  },
+  sealedRs: { "x object": PARSED_REF, "x[k] array": PARSED_REF },
   isHookPath: { "p string-re": PARSED_LOCAL },
   planScopePaths: {
     "f string": SP + "criteria[].test_files[]",
@@ -626,6 +635,8 @@ const READS = {
   // 5.0.0 (R1): buildMode no longer reads fresh_preflight (main still type-checks it)
   buildMode: { "input.plan_ref object": PARSED_ARGS, "input.freeze_digest string": PARSED_ARGS },
   buildFromRef: {
+    // 6.0.0 (ledger 2043): the freeze ref in the hasher:resume git map
+    "ft string": "parsed: the hasher:resume git map, read from its sha256-checked file",
     // 5.0.0 (R3): the previous review round's blocking list (reviewStep's own)
     "state.review.blocking array": PARSED_LOCAL,
     "r.refs array": "prog:plan_ref:refs",

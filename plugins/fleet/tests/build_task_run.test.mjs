@@ -1780,6 +1780,8 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:load-parked",
     "role:scope-and-plan",
     "infra:hook-surface:plan",
+    // 6.0.0 (ledger 2041)
+    "infra:ruleset-surface:plan",
     "infra:path-check:format-plan",
     "infra:format-plan",
     "infra:path-check:plan-audit",
@@ -2638,6 +2640,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
     "infra:replan-worktree",
     "role:scope-and-plan:replan",
     "infra:hook-surface:plan:replan",
+    "infra:ruleset-surface:plan:replan",
     "infra:path-check:format-plan:replan",
     "infra:format-plan:replan",
     "infra:path-check:plan-audit:replan",
@@ -5620,6 +5623,11 @@ const ARRAY_SITES = {
   "pre.results @ writeBack": "infra:results",
   "o.files @ obligationFailures": "parsed: repo_obligations of the sealed plan facts",
   "r.surface @ hookSurface": "infra:surface",
+  // 6.0.0 (ledger 2041)
+  "r.surface @ rulesetSurface": "infra:surface",
+  "r.sources @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
+  "r.read @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
+  "r.unreadable @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
   "pc.tools @ pathRelayProblem": "parsed: preflight path_check (digest-checked, keys and shapes checked)",
   "pc.path_problems @ pathRelayProblem": "parsed: preflight path_check (digest-checked)",
   "pf.changed_symbols @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",

@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SCRIPTS_SRC, ARGS, HASHES, CSHA, happy, run, runOne, call, inputsOf, ghIdOut, spawnSync, stateJsonOf, noUnscripted } from "./harness.mjs";
+import { SCRIPTS_SRC, ARGS, HASHES, CSHA, FP_K1, happy, run, runOne, call, inputsOf, ghIdOut, spawnSync, stateJsonOf, noUnscripted } from "./harness.mjs";
 
 const UNKNOWN = [{ cmd: "gh", installed: true, push: null }, { cmd: "gh-personal", installed: true, push: null }];
 const GH_PUSH = [{ cmd: "gh", installed: true, push: true }];
@@ -289,4 +289,175 @@ test("6.0.0 2043: resumed at committed, the push hook rejects -> a coder round, 
   assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /check_version_bump: not bumped/);
   assert.equal(inputsOf(call(out, "infra:push:p2").prompt).approved_sha, CSHA(2));
   assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, CSHA(2));
+});
+
+// ---------------------------------------------------------------- 2041: rulesets and self-references are hook surface
+
+const PY = spawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
+// a fake gh: `api -i <path>` answers from a JSON table {path: [status, body, headers]}; 404 otherwise
+function fakeGh(dir, table) {
+  writeFileSync(join(dir, "table.json"), JSON.stringify(table));
+  const f = join(dir, "gh");
+  writeFileSync(
+    f,
+    "#!" + PY + "\nimport json, sys\nopen(" + JSON.stringify(join(dir, "gh.log")) + ", 'a').write(' '.join(sys.argv[1:]) + '\\n')\n" +
+      "t = json.load(open(" + JSON.stringify(join(dir, "table.json")) + "))\n" +
+      "st, body, hdr = t.get(sys.argv[-1], [404, {'message': 'Not Found'}, {}])\n" +
+      "sys.stdout.write('HTTP/2.0 %d X\\r\\n' % st + ''.join('%s: %s\\r\\n' % kv for kv in hdr.items()) + '\\r\\n' + json.dumps(body))\n" +
+      "if st >= 300:\n    sys.stderr.write('gh: X (HTTP %d)\\n' % st)\n    sys.exit(1)\n",
+  );
+  chmodSync(f, 0o755);
+}
+function rsRepo(home, files) {
+  const r = join(home, "repo");
+  mkdirSync(r, { recursive: true });
+  spawnSync(GIT, ["init", "-q", r]);
+  for (const [p, t] of Object.entries(files)) {
+    mkdirSync(join(r, p, ".."), { recursive: true });
+    writeFileSync(join(r, p), t);
+  }
+  spawnSync(GIT, ["-C", r, "add", "-A"]);
+  return r;
+}
+function rsProg(args, bin) {
+  if (!existsSync(join(bin, "git"))) symlinkSync(GIT, join(bin, "git"));
+  const r = spawnSync(PY, ["-I", join(SCRIPTS_SRC, "ruleset_surface.py")].concat(args), { encoding: "utf8", env: { PATH: bin, HOME: bin } });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+}
+const FILES = {
+  ".github/workflows/ci.yaml": "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n      - uses: ./local-act\n      - uses: q/actions/pr-title-convention@master\n",
+  "local-act/action.yaml": "runs: {}\n",
+  "pr-title-convention/action.yaml": "runs: {}\n",
+  "pr-title-convention/pr_title_check.py": "print(1)\n",
+  "src/x.py": "x = 1\n",
+};
+const b64 = (t) => Buffer.from(t).toString("base64");
+const ORG = (over) =>
+  Object.assign(
+    {
+      "repos/q/actions": [200, { id: 7, owner: { type: "Organization" } }, {}],
+      "repos/q/actions/rules/branches/master": [200, [{ type: "workflows", ruleset_id: 15, ruleset_source_type: "Organization", parameters: { workflows: [{ repository_id: 7, path: ".github/workflows/ai-usage-label.yaml", ref: "refs/heads/master" }, { repository_id: 9, path: ".github/workflows/other.yaml", ref: "refs/heads/main" }] } }], {}],
+      "repositories/9": [200, { full_name: "q/flux" }, {}],
+      "repos/q/flux/contents/.github/workflows/other.yaml?ref=refs%2Fheads%2Fmain": [200, { content: b64("steps:\n  - uses: q/actions/shared-check@v1\n  - uses: q/flux/own@v1\n") }, {}],
+      "orgs/q/rulesets?per_page=100": [200, [{ id: 18773609 }], {}],
+      "orgs/q/rulesets/18773609": [200, { id: 18773609, name: "PR Title Convention", rules: [{ type: "workflows", parameters: { workflows: [{ repository_id: 7, path: ".github/workflows/pr-title-convention.yaml", ref: "refs/heads/master" }] } }] }, {}],
+    },
+    over || {},
+  );
+function withRs(table, fn, gh = "gh", files = FILES) {
+  const home = mkdtempSync(join(tmpdir(), "fleet-600rs-"));
+  try {
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    fakeGh(bin, table);
+    return fn(rsProg([rsRepo(home, files), gh, "q/actions", "master"], bin), bin);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test("6.0.0 2041: ruleset_surface: repo-rule paths hosted here, org-ruleset paths hosted here, references from another repo's required workflow, and the self-reference floor", () =>
+  withRs(ORG(), (o, bin) => {
+    assert.equal(o.error, null);
+    assert.deepEqual(o.surface, [".github/workflows/ai-usage-label.yaml", ".github/workflows/pr-title-convention.yaml", "local-act/", "pr-title-convention/", "shared-check/"]);
+    const by = Object.fromEntries(o.sources.map((s) => [s.path, s]));
+    assert.equal(by[".github/workflows/pr-title-convention.yaml"].name, "PR Title Convention");
+    assert.equal(by[".github/workflows/pr-title-convention.yaml"].ruleset_id, 18773609);
+    assert.equal(by["shared-check/"].via, "q/flux:.github/workflows/other.yaml");
+    assert.equal(by["local-act/"].source_type, "self-reference");
+    assert.ok(o.read.some((x) => /^rules\/branches\/master: 1 rule\(s\)$/.test(x)), JSON.stringify(o.read));
+    assert.ok(o.read.some((x) => /^org rulesets of q: 1$/.test(x)));
+    assert.deepEqual(o.unreadable, []);
+    // GET only
+    for (const l of readFileSync(join(bin, "gh.log"), "utf8").trim().split("\n")) assert.match(l, /^api -i [^ ]+$/, l);
+    assert.equal(o.program.name, "ruleset_surface");
+  }));
+
+test("6.0.0 2041 (ruling 1): org rulesets 404 -> reported, the floor stands, no error", () =>
+  withRs(ORG({ "orgs/q/rulesets?per_page=100": [404, { message: "Not Found" }, {}] }), (o) => {
+    assert.equal(o.error, null);
+    assert.ok(o.surface.indexOf("pr-title-convention/") >= 0, "self-reference floor");
+    assert.ok(o.surface.indexOf(".github/workflows/pr-title-convention.yaml") < 0);
+    assert.deepEqual(o.unreadable, ["org rulesets not readable (HTTP 404; needs admin:org): hosting-side required workflows not checked"]);
+  }));
+
+test("6.0.0 2041 (ruling 1): org rulesets 403/5xx stop only with the admin:org scope present", () => {
+  for (const st of [403, 502]) {
+    withRs(ORG({ "orgs/q/rulesets?per_page=100": [st, { message: "x" }, { "X-OAuth-Scopes": "repo, read:org" }] }), (o) => {
+      assert.equal(o.error, null, st);
+      assert.match(o.unreadable[0], /^org rulesets not readable \(HTTP \d+, no admin:org scope\)/);
+    });
+    withRs(ORG({ "orgs/q/rulesets?per_page=100": [st, { message: "x" }, { "X-OAuth-Scopes": "repo, admin:org" }] }), (o) => {
+      assert.equal(o.error, "org rulesets of q not readable (HTTP " + st + ") with the admin:org scope");
+      assert.deepEqual(o.surface, []);
+    });
+  }
+});
+
+test("6.0.0 2041: a user owner has no org call; an unreadable repo rule list is an error; no gh command keeps the floor", () => {
+  withRs(ORG({ "repos/q/actions": [200, { id: 7, owner: { type: "User" } }, {}] }), (o, bin) => {
+    assert.equal(o.error, null);
+    assert.ok(!/orgs\//.test(readFileSync(join(bin, "gh.log"), "utf8")));
+    assert.ok(o.read.indexOf("owner q is not an organization: no org rulesets") >= 0);
+  });
+  withRs(ORG({ "repos/q/actions/rules/branches/master": [500, {}, {}] }), (o) => assert.equal(o.error, "rules of q/actions branch master not readable (HTTP 500)"));
+  withRs(ORG(), (o, bin) => {
+    assert.equal(o.error, null);
+    assert.deepEqual(o.surface, ["local-act/", "pr-title-convention/"]);
+    assert.match(o.unreadable[0], /^rulesets of q\/actions not read: no GitHub command can read it/);
+    assert.ok(!existsSync(join(bin, "gh.log")), "no gh call");
+  }, "-");
+});
+
+// the ruleset step's relay for its prompt's args
+const rsOut = (over) => (p) => Object.assign({ status: "ok", reason: "read", surface: [], sources: [], read: ["rules/branches/main: 1 rule(s)", "org rulesets of o: 1"], unreadable: [], error: null, args: inputsOf(p).args }, over);
+
+test("6.0.0 2041: the plan gate stops on a path a ruleset runs, naming the ruleset", async () => {
+  const s = happy();
+  s["infra:ruleset-surface:plan"] = rsOut({ surface: ["tests/"], sources: [{ ruleset_id: 18773609, name: "PR Title Convention", source_type: "Organization", path: "tests/", via: ".github/workflows/pr-title-convention.yaml" }] });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "hooks");
+  assert.match(out.result.reason, /^hook change(s must be a separate PR \(Max's rule\)| needs Max's confirmation): the plan scope touches tests\/test_a\.py \(run by Organization ruleset "PR Title Convention" 18773609 via \.github\/workflows\/pr-title-convention\.yaml\)/);
+  // the program ran with the checked gh command, the repo and its default branch
+  assert.deepEqual(inputsOf(call(out, "infra:ruleset-surface:plan").prompt).args.slice(1), ["gh", "o/r", "master"]);
+});
+
+test("6.0.0 2041: an error stops with 'hook surface cannot be computed'", async () => {
+  const s = happy();
+  s["infra:ruleset-surface:plan"] = rsOut({ error: "org rulesets of o not readable (HTTP 403) with the admin:org scope" });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "hooks");
+  assert.ok(out.result.reason.startsWith("hook surface cannot be computed (org rulesets of o not readable (HTTP 403) with the admin:org scope); hook change needs Max's confirmation"), out.result.reason);
+});
+
+test("6.0.0 2041: the no-hook line names what was read; the build reuses the sealed list (no second call)", async () => {
+  const out = await run(happy(), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.plan.logs.some((l) => /^the plan scope: no hook-surface path \(read: hook config, CI and hook-manager files; self-references in 0 local workflow file\(s\); rules\/branches\/main: 0 rule\(s\);/.test(l)), out.plan.logs.join("\n"));
+  assert.ok(out.build.logs.some((l) => /^the approved tree K1: no hook-surface path \(read: .*rules\/branches\/main/.test(l)), out.build.logs.join("\n"));
+  assert.ok(!out.build.labels.some((l) => /^infra:ruleset-surface:/.test(l)), out.build.labels.join(", "));
+});
+
+test("6.0.0 2041 (ruling 1): unreadable org rulesets -> a gate warning and a gates_not_run line the PR body states", async () => {
+  const s = happy();
+  const gap = "org rulesets not readable (HTTP 404; needs admin:org): hosting-side required workflows not checked";
+  s["infra:ruleset-surface:plan"] = rsOut({ unreadable: [gap] });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.plan.logs.includes("warning: " + gap));
+  const g = inputsOf(call(out, "role:fleet-pr-opener").prompt).gates_not_run;
+  assert.ok(g.some((x) => x.gate === "org-rulesets" && x.reason === gap), JSON.stringify(g));
+  assert.ok(out.result.gates_not_run.some((x) => x.gate === "org-rulesets"));
+});
+
+test("6.0.0 2041: the approved tree is checked against the sealed ruleset surface", async () => {
+  const s = happy();
+  s["infra:ruleset-surface:plan"] = rsOut({ surface: ["src/x.py"], sources: [{ ruleset_id: 5, name: null, source_type: "Repository", path: "src/x.py", via: "src/x.py" }] });
+  // the plan scope avoids the path; the coder's tree changes it
+  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes: HASHES, changed: ["src/x.py"] };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.stop_gate, "hooks", out.result.reason);
+  assert.match(out.result.reason, /^hook change needs Max's confirmation: the approved tree K1 touches src\/x\.py \(run by Repository ruleset 5 via src\/x\.py\)/);
 });

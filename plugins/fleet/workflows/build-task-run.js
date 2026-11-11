@@ -70,6 +70,7 @@ const INFRA_TIER = [
   ["infra:push", "sonnet"],
   ["infra:tf-gate", "sonnet"],
   ["infra:hook-surface", "sonnet"],
+  ["infra:ruleset-surface", "sonnet"],
   ["infra:changed-defs", "sonnet"],
   ["infra:replan-", "sonnet"],
   ["infra:state:", "sonnet"],
@@ -1491,6 +1492,7 @@ const PROGRAM_SHA256 = {
   "remote_head": "f48c45aa5706061fd110a75eeb45dd0157a3e46486dd845b6011c71396efa845",
   "remote_url": "ba1bd212a6e1f2dcc77718808359d79a0f2866bfae9bd798cd6b8b03b43013d9",
   "review_paths": "2904f382a5273ed64d7f0416533f45be9f6f3893892badd632dccd10fb360493",
+  "ruleset_surface": "25b0ddd6fd479e4c5e933bc2c369a82192b434570b8bd7e7e9d8df4d7f4d69ff",
   "script_check": "bd5eb9be1833d6746a8910f6a8bfc1194f980321b598a835ebd198b8a525d17d",
   "session_project": "9e84d1a85d655f201c994c87f4a9f24e532c672bd5140a86ee7b80c8b383f89f",
   "state_write": "428bbdc40ec4973d6e2c314a1a7c91be6f8e54c5aeb079af840623b5ee27ad78",
@@ -1604,6 +1606,8 @@ const PROGRAM_SLOTS = [
   [/^infra:push(?!-probe)/, [[null, "push_classify"]]],
   [/^infra:push-probe$/, [[null, "push_probe"]]],
   [/^infra:hook-surface:/, [[null, "hook_surface"]]],
+  // 6.0.0
+  [/^infra:ruleset-surface:/, [[null, "ruleset_surface"]]],
   [/^infra:review-paths:/, [[null, "review_paths"]]],
   [/^infra:precommit-ids/, [[null, "precommit_ids"]]],
   [/^infra:check-scripts/, [[null, "script_check"]]],
@@ -1646,6 +1650,8 @@ const PROGRAM_KEYS = {
   "push_classify": ["push_result", "exit_code", "hook_tail", "args"],
   "push_probe": ["access", "result", "exit_code", "auth_line", "args"],
   "hook_surface": ["surface", "make_paths", "error", "args"],
+  // 6.0.0
+  "ruleset_surface": ["surface", "sources", "read", "unreadable", "error", "args"],
   "review_paths": ["changed_paths"],
   "precommit_ids": ["present", "ids", "parser", "error", "args"],
   "script_check": ["checks"],
@@ -1756,6 +1762,15 @@ const PROGRAM_OUT = {
   },
   push_probe: { access: STR, result: STR, exit_code: INT, auth_line: STR_OR_NULL, args: STRS, digest: STR },
   hook_surface: { surface: STRS, make_paths: STR_LISTS, error: STR_OR_NULL, args: STRS, digest: STR },
+  ruleset_surface: {
+    surface: STRS,
+    sources: { type: "array", items: { type: "object", properties: { ruleset_id: { type: ["integer", "null"] }, name: STR_OR_NULL, source_type: STR_OR_NULL, path: STR, via: STR } } },
+    read: STRS,
+    unreadable: STRS,
+    error: STR_OR_NULL,
+    args: STRS,
+    digest: STR,
+  },
   review_paths: { changed_paths: STRS, digest: STR },
   precommit_ids: { present: BOOL, ids: STRS, parser: STR_OR_NULL, error: STR_OR_NULL, args: STRS, digest: STR },
   script_check: { checks: { type: "object", additionalProperties: { type: "object", properties: { ok: BOOL, reason: STR } } }, digest: STR },
@@ -4231,14 +4246,52 @@ function isHookPath(p, surface) {
   }
   return false;
 }
-function hookGate(what, paths, surface) {
+// 6.0.0 (2041): rs is the ruleset surface; its sources say why a path is surface and what was read
+function hookGate(what, paths, surface, rs) {
+  const all = surface.concat(rs ? rs.surface : []);
   const ps = Array.from(new Set(paths.map((x) => normPath(String(x))).filter(Boolean)));
-  const hooks = ps.filter((p) => isHookPath(p, surface));
-  const other = ps.filter((p) => !isHookPath(p, surface));
+  const why = (p) => {
+    const hit = (rs ? rs.sources : []).filter((x) => (/\/$/.test(x.path) ? p.indexOf(x.path) === 0 : p === x.path));
+    return p + hit.slice(0, 2).map((x) => " (" + (x.ruleset_id === null ? "named by " + x.via : "run by " + (x.source_type || "") + " ruleset " + (x.name === null ? "" : JSON.stringify(x.name) + " ") + x.ruleset_id + " via " + x.via) + ")").join("");
+  };
+  const hooks = ps.filter((p) => isHookPath(p, all));
+  const other = ps.filter((p) => !isHookPath(p, all));
   if (hooks.length && other.length)
-    halt("needs_human", "hook changes must be a separate PR (Max's rule): " + what + " touches " + hooks.join(", ") + " and " + other.join(", "), "hooks");
-  if (hooks.length) halt("needs_human", "hook change needs Max's confirmation: " + what + " touches " + hooks.join(", "), "hooks");
-  gate(what + ": no hook-surface path");
+    halt("needs_human", "hook changes must be a separate PR (Max's rule): " + what + " touches " + hooks.map(why).join(", ") + " and " + other.join(", "), "hooks");
+  if (hooks.length) halt("needs_human", "hook change needs Max's confirmation: " + what + " touches " + hooks.map(why).join(", "), "hooks");
+  gate(what + ": no hook-surface path (read: hook config, CI and hook-manager files" + (rs ? "; " + rs.read.concat(rs.unreadable).join("; ") : "") + ")");
+}
+function rulesetSurfacePrompt(inputs) {
+  return (
+    "Infra step of the fleet workflow: list the hook surface org and repo rulesets add. READ ONLY: the program sends GET requests only; run nothing but the one command below.\n" +
+    inputsLine(inputs) +
+    RUN_EXACT +
+    progCmd("ruleset_surface", inputs.args) +
+    "\n" +
+    "It prints one JSON object " + printsKeys("ruleset_surface") + ". Copy every value unchanged, error null included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, " + returnKeys("ruleset_surface") + "}."
+  );
+}
+async function rulesetSurface(label, worktree, slug, defaultBranch, phaseName) {
+  const g = slug ? ghFor(slug) : null;
+  const args = [worktree, (g && g.gh_cmd) || "-", slug && LEDGER_PROJECT_RE.test(slug) ? slug : "-", defaultBranch];
+  const r = await infra(label, rulesetSurfacePrompt({ args }), phaseName, JUDGE_AGENT, "ruleset_surface", args);
+  requireProgram(r, "ruleset_surface", label, "needs_human", "hooks");
+  if (!Array.isArray(r.surface) || !Array.isArray(r.sources) || !Array.isArray(r.read) || !Array.isArray(r.unreadable) || !relayDigestOk(r, progKeys("ruleset_surface"), "ruleset_surface"))
+    halt("failed", label + ": the relayed surface does not match the program's digest");
+  if (canonical(r.args) !== canonical(args)) halt("failed", label + ": the program ran on other arguments");
+  if (r.error !== null) halt("needs_human", "hook surface cannot be computed (" + r.error + "); hook change needs Max's confirmation", "hooks");
+  for (const u of r.unreadable) gate("warning: " + u);
+  const np = (x) => (/\/$/.test(String(x)) ? normPath(String(x)) + "/" : normPath(String(x)));
+  return { surface: r.surface.map(np), sources: r.sources.map((x) => Object.assign({}, x, { path: np(x.path) })), read: r.read.map(String), unreadable: r.unreadable.map(String) };
+}
+// a plan ref's sealed ruleset surface (null: sealed before 6.0.0)
+function sealedRs(x) {
+  return x && typeof x === "object" && ["surface", "sources", "read", "unreadable"].every((k) => Array.isArray(x[k])) ? x : null;
+}
+// the PR body line for each ruleset source not read (ruling 1)
+function rulesetGaps(rs) {
+  return rs && rs.unreadable.length ? [{ gate: "org-rulesets", reason: rs.unreadable.join("; ") }] : [];
 }
 function planScopePaths(pf, criteria) {
   const out = planScopeFiles(pf);
@@ -4382,7 +4435,9 @@ async function planAndAudit(ctx0) {
   );
 
   // Max's rule: a plan that touches the hook surface stops here
-  hookGate("the plan scope", planScopePaths(planFacts, criteria), (await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", [], "Plan")).surface);
+  const planHs = await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", [], "Plan");
+  const planRs = await rulesetSurface("infra:ruleset-surface:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");
+  hookGate("the plan scope", planScopePaths(planFacts, criteria), planHs.surface, planRs);
   const fmtLabel = "infra:format-plan" + sfx;
   await pathRecheck("format-plan" + sfx, "Plan");
   const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath }), "Plan");
@@ -4448,6 +4503,8 @@ async function planAndAudit(ctx0) {
     criteria,
     testable,
     planFacts,
+    // sealed in plan_facts only: the build checks the approved tree against it
+    rulesetSurface: planRs,
     planDiff: plan.plan_diff.slice(),
     tldr: plan.tldr.trim(),
     fleetSize: {
@@ -4984,7 +5041,7 @@ async function planMode(input, date) {
         slug: names.slug,
         tldr: p.tldr,
         planDiff: p.planDiff,
-        planFacts: p.planFacts,
+        planFacts: Object.assign({}, p.planFacts, { ruleset_surface: p.rulesetSurface }),
         // the role table this run loaded, for the build
         history: { runs: 1, replans: 0, agents: 0, preflight: state.preflightRecord },
         project: input.project || null,
@@ -5970,6 +6027,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   phase("Code");
   const frozenNote =
     "frozen_tests lists the criterion test files. frozen_config_sections names, per hasher map, the JSON file that holds that frozen map ({key: value}): files (the test files, whole-file runner config and the .gitignore files git reads, not those inside ignored dirs, keyed by path: sha256), sections (<path>#<section>: sha256 of a canonicalised test-runner config section), git (info/exclude, core.excludesFile, hooks/<rel>, config:*: sha256 of files and settings outside the worktree), symlinks (<rel>: link target, not a hash), ignored (ignored files: sha256). Special values: ABSENT (the section did not exist at freeze), MISSING (the file did not exist), UNPARSEABLE (the file could not be parsed at freeze). Every key is read-only; read the files, never write them. The workflow recomputes every map itself after the coder; a path name containing ':' or '#' is rejected. Nothing is committed until the code judge approves: the tests and the code stay uncommitted in the worktree. freeze_tree is the worktree tree at freeze; diff production changes with `git diff <freeze_tree>` (code_base_ref is HEAD at the first freeze).";
+  // the ruleset surface the approved tree is checked against (2041)
+  let buildRs = null;
   let coderFindings = shipFix ? shipFix.findings : [];
   // the code judge's prior_findings
   let judgePrior = coderFindings.slice();
@@ -6156,7 +6215,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("code-judge r" + m + ": approve of tree " + codeTree);
 
     // Max's rule: the approved diff never touches the hook surface
-    hookGate("the approved tree " + codeTree, h.changed || [], hs.surface);
+    if (!buildRs) buildRs = sealedRs(pf.ruleset_surface) || (await rulesetSurface("infra:ruleset-surface:r" + m, mainWt, remoteSlug, defaultBranch, "Code"));
+    hookGate("the approved tree " + codeTree, h.changed || [], hs.surface, buildRs);
     if (planFacts.changed_symbols) {
       const bc = await buildCallerCheck(
         "infra:changed-defs:r" + m,
@@ -6220,7 +6280,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     shipTree = codeTree;
     shipDigest = mapsDigest(jc.state.hashes);
     suiteResult = cj.suite_result || null;
-    state.gatesNotRun = gatesNotRun(cj.gates_not_run);
+    state.gatesNotRun = gatesNotRun(cj.gates_not_run).concat(rulesetGaps(buildRs));
     if (state.gatesNotRun.length && String(cj.reason || "").indexOf(GATES_PREFIX) !== 0)
       gate("warning: code-judge approve reason does not start with '" + GATES_PREFIX + "' although gates did not run");
     gate("committed tree " + codeTree + " as " + approvedSha + " (" + JSON.stringify(subject) + ")");
@@ -6404,7 +6464,7 @@ async function replan(ctx) {
       slug: names.slug,
       tldr: p.tldr,
       planDiff: p.planDiff,
-      planFacts: p.planFacts,
+      planFacts: Object.assign({}, p.planFacts, { ruleset_surface: p.rulesetSurface }),
       history: { runs: history.runs, replans: n, agents: history.agents },
       project: ctx.project,
     },
