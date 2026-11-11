@@ -11,6 +11,15 @@ change in behaviour, so 5.1.0 has room to grow under the 480000-byte budget (ADR
   looks for its own `fleet/5.0.10/scripts` dir.
 - A 5.0.9 plan ref and run-state stay valid: nothing sealed changed.
 
+### Changed
+
+- Comments: the per-release history and review-round notes of `build-task-run.js` move, verbatim,
+  to `docs/build-task-run-notes.md` (one entry per comment block, keyed by declaration and 5.0.9
+  line): 476187 -> 385151 bytes. The workflow keeps a one-line comment where a block's first
+  sentence states a rule, plus every section divider and `*_BEGIN` / `*_END` marker. Proof of no
+  code change: the old and new workflow minify (esbuild `--minify-whitespace`) to the same bytes,
+  and every prompt, schema and model the test suite makes the workflow send is byte-identical.
+
 ### Added
 
 - `tests/v5010_prompt_snapshot.test.mjs`: for four main scenarios (plan then build, confirm auto,
