@@ -497,6 +497,7 @@ const SHA3 = "d".repeat(40);
 const BASE = "c".repeat(40);
 const UPDATE_RULES = (parents) => [
   REPO_OK(),
+  { argv: ["api", "repos/o/r/compare/main..." + SHA1], out: { files: [{ filename: "src/x.py" }, { filename: "README.md" }] } },
   { argv: ["api", "-X", "PUT"], set: { headRefOid: SHA3 } },
   { argv: ["api", "repos/o/r/branches/main"], out: { commit: { sha: BASE } } },
   { argv: ["api", "repos/o/r/commits/" + SHA3], out: { parents: (parents || [SHA1, BASE]).map((sha) => ({ sha })) } },

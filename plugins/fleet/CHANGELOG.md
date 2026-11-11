@@ -309,7 +309,10 @@ last state. With no policy file, a fleet PR is marked ready and its CI is watche
   stops. `pr_state.py update` checks on the forge that the new head's parents are exactly
   [reviewed head, base tip], and that against the base tip it changes only files of the PR
   (`compare <tip>...<new head>`, fail closed); this content check also covers the update with
-  no overlap, which is not fetched. `pr_state.py fetch` (`infra:pr-fetch:u1`) fetches the new head
+  no overlap, which is not fetched. The PR file set is the forge's diff `compare
+  <base>...<reviewed sha>`, read before the update-branch PUT (a list read after it can already
+  hold injected files; 100 files or more, or none, fail closed). A renamed or copied entry
+  counts its `previous_filename` too: a source outside the PR set is refused. `pr_state.py fetch` (`infra:pr-fetch:u1`) fetches the new head
   into the fleet worktree, checks the parents again and that its tree is
   `git merge-tree --write-tree <old> <base>` (a forge merge with no extra content), and
   fast-forwards. Then the hasher (`hasher:update:u1`), the hook-surface check on the merged-in

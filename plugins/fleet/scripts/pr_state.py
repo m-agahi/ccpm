@@ -68,9 +68,10 @@ except Exception:
 #     merge; the forge's update-branch with expected_head_sha <sha> (never a
 #     local rebase or push); waits for the new head, which must be a commit
 #     whose parents are exactly [<sha>, the base branch tip] and which, against
-#     the base tip, changes only files of the PR (fail closed); overlap = the
-#     PR's files the base change also touches (a PR of 100 files or more fails
-#     closed). Prints {mode, updated, head, base, overlap, error, args, program,
+#     the base tip, changes only files of the PR (renames and copies count their
+#     source; fail closed). The PR file set is the forge's diff of <base>...<sha>,
+#     read before the update (100 files or more fails closed); overlap = the PR's
+#     files the base change also touches. Prints {mode, updated, head, base, overlap, error, args, program,
 #     digest}.
 #   fetch <worktree> <fleet/branch> <old> <new> <base>: after update-branch,
 #     brings the forge's new head into the fleet worktree (clean, on the branch,
@@ -250,6 +251,18 @@ try:
         bname = v.get('baseRefName') or ''
         if not re.match(r'^[A-Za-z0-9._/-]{1,200}$', bname):
             raise Fail('bad base branch ' + json.dumps(bname))
+
+        def paths(f):
+            # a compare entry's changed paths: the file, and the source of a rename or copy
+            return [x for x in (f.get('filename'), f.get('previous_filename')) if isinstance(x, str) and x]
+        # security review: the PR file set comes from the forge's diff of the reviewed sha, BEFORE the
+        # update (a list read after it can already hold injected files); 100 files or more fail closed
+        pre = json.loads(run('api', 'repos/' + slug + '/compare/' + bname + '...' + sha)).get('files') or []
+        if len(pre) >= 100:
+            raise Fail('the reviewed diff has 100 files or more: the PR file set is not known')
+        mine = set(p for f in pre for p in paths(f))
+        if not mine:
+            raise Fail('the reviewed diff lists no file: the PR file set is not known')
         run('api', '-X', 'PUT', 'repos/' + slug + '/pulls/' + pr + '/update-branch', '-f', 'expected_head_sha=' + sha)
         new = sha
         for _ in range(24):
@@ -266,24 +279,20 @@ try:
         par = [x.get('sha') for x in json.loads(run('api', 'repos/' + slug + '/commits/' + new)).get('parents') or []]
         if out['base'] is None or par != [sha, out['base']]:
             raise Fail('the new head ' + new + ' has parents ' + json.dumps(par) + ', not [' + sha + ', the base tip ' + str(out['base']) + ']')
-        out['updated'] = True
-        cmp = json.loads(run('api', 'repos/' + slug + '/compare/' + sha + '...' + new))
-        if len(cmp.get('files') or []) >= 300:
+        cmp = json.loads(run('api', 'repos/' + slug + '/compare/' + sha + '...' + new)).get('files') or []
+        if len(cmp) >= 300:
             raise Fail('the base change lists 300 files or more: overlap not known')
-        moved = set(f.get('filename') for f in cmp.get('files') or [])
-        fl = view('files').get('files') or []
-        if len(fl) >= 100:
-            raise Fail('the PR has 100 files or more: overlap not known')
-        mine = set(f.get('path') for f in fl)
-        out['overlap'] = sorted(x for x in moved & mine if isinstance(x, str))
-        # the content check: against the base tip, the new head changes only files of the PR
-        tcmp = json.loads(run('api', 'repos/' + slug + '/compare/' + out['base'] + '...' + new))
-        if len(tcmp.get('files') or []) >= 300:
+        moved = set(p for f in cmp for p in paths(f))
+        out['overlap'] = sorted(moved & mine)
+        # the content check: against the base tip, the new head changes only files of the PR; a rename
+        # or copy counts its source too, and any source outside the PR set is refused
+        tcmp = json.loads(run('api', 'repos/' + slug + '/compare/' + out['base'] + '...' + new)).get('files') or []
+        if len(tcmp) >= 300:
             raise Fail('the new head lists 300 files or more against the base tip: content not known')
-        extra = sorted(str(f.get('filename')) for f in tcmp.get('files') or [] if f.get('filename') not in mine)
+        extra = sorted(set(p for f in tcmp for p in paths(f) if p not in mine) | set(str(f.get('filename')) for f in tcmp if not paths(f)))
         if extra:
-            out['updated'] = False
             raise Fail('the new head changes files outside the PR against the base tip: ' + ', '.join(json.dumps(x) for x in extra[:10]))
+        out['updated'] = True
     elif mode == 'view':
         v = view('state,headRefOid,mergeCommit')
         mc = (v.get('mergeCommit') or {}).get('oid')

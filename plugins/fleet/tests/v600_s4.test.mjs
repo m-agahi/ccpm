@@ -238,6 +238,7 @@ test("ADR-1203 addendum: pr_state.py update refuses a new head whose parents are
   for (const parents of [[BASE, SHA1], [SHA1], [SHA1, "f".repeat(40)]]) {
     const dir = fakeForge({ state: "OPEN", headRefOid: SHA1, baseRefName: "main", files: [{ path: "src/x.py" }] }, [
       REPO_OK(),
+      { argv: ["api", "repos/o/r/compare/main..." + SHA1], out: { files: [{ filename: "src/x.py" }] } },
       { argv: ["api", "-X", "PUT"], set: { headRefOid: SHA3 } },
       { argv: ["api", "repos/o/r/branches/main"], out: { commit: { sha: BASE } } },
       { argv: ["api", "repos/o/r/commits/" + SHA3], out: { parents: parents.map((sha) => ({ sha })) } },
@@ -257,6 +258,7 @@ test("ADR-1203 addendum: pr_state.py update refuses a new head whose parents are
 test("delta review NIT 1: pr_state.py update refuses a [sha, tip] head that changes files outside the PR against the base tip", () => {
   const rules = (extra) => [
     REPO_OK(),
+    { argv: ["api", "repos/o/r/compare/main..." + SHA1], out: { files: [{ filename: "src/x.py" }] } },
     { argv: ["api", "-X", "PUT"], set: { headRefOid: SHA3 } },
     { argv: ["api", "repos/o/r/branches/main"], out: { commit: { sha: BASE } } },
     { argv: ["api", "repos/o/r/commits/" + SHA3], out: { parents: [{ sha: SHA1 }, { sha: BASE }] } },
@@ -278,9 +280,59 @@ test("delta review NIT 1: pr_state.py update refuses a [sha, tip] head that chan
   }
 });
 
+// security review of 0e7bf24: the PR file set is taken before the PUT, from the forge's diff of the reviewed sha
+const PRE = (files) => ({ argv: ["api", "repos/o/r/compare/main..." + SHA1], out: { files } });
+const UPD = (tipFiles, putSet) => [
+  REPO_OK(),
+  PRE([{ filename: "src/x.py", status: "modified" }]),
+  { argv: ["api", "-X", "PUT"], set: Object.assign({ headRefOid: SHA3 }, putSet || {}) },
+  { argv: ["api", "repos/o/r/branches/main"], out: { commit: { sha: BASE } } },
+  { argv: ["api", "repos/o/r/commits/" + SHA3], out: { parents: [{ sha: SHA1 }, { sha: BASE }] } },
+  { argv: ["api", "repos/o/r/compare/" + SHA1 + "..." + SHA3], out: { files: [{ filename: "docs/base.md" }] } },
+  { argv: ["api", "repos/o/r/compare/" + BASE + "..." + SHA3], out: { files: tipFiles } },
+];
+test("security review 1: pr_state.py update takes the PR file set before the update; an injected file listed after it is refused", () => {
+  const evil = ".github/workflows/evil.yml";
+  const dir = fakeForge({ state: "OPEN", headRefOid: SHA1, baseRefName: "main", files: [{ path: "src/x.py" }] }, UPD([{ filename: "src/x.py" }, { filename: evil }], { files: [{ path: "src/x.py" }, { path: evil }] }));
+  try {
+    const o = prog("pr_state", dir, ["update", "gh", "o/r", "7", SHA1]);
+    assert.equal(o.updated, false);
+    assert.match(String(o.error), /outside the PR/);
+    const calls = callsOf(dir);
+    const put = calls.findIndex((c) => c[1] === "-X" && c[2] === "PUT");
+    const pre = calls.findIndex((c) => c[1] === "repos/o/r/compare/main..." + SHA1);
+    assert.ok(pre >= 0 && pre < put, "the PR set is read before the PUT");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  // fail closed: a reviewed diff of 100 files or more
+  const big = fakeForge({ state: "OPEN", headRefOid: SHA1, baseRefName: "main", files: [] }, [REPO_OK(), PRE(Array.from({ length: 100 }, (_, i) => ({ filename: "f" + i })))]);
+  try {
+    const o = prog("pr_state", big, ["update", "gh", "o/r", "7", SHA1]);
+    assert.match(String(o.error), /100 files or more/);
+    assert.ok(!callsOf(big).some((c) => c[2] === "PUT"), "no update on an unknown PR set");
+  } finally {
+    rmSync(big, { recursive: true, force: true });
+  }
+});
+
+test("security review 2: pr_state.py update refuses a rename or copy whose source is outside the PR", () => {
+  for (const status of ["renamed", "copied"]) {
+    const dir = fakeForge({ state: "OPEN", headRefOid: SHA1, baseRefName: "main", files: [{ path: "src/x.py" }] }, UPD([{ filename: "src/x.py", previous_filename: "secrets/key.txt", status }]));
+    try {
+      const o = prog("pr_state", dir, ["update", "gh", "o/r", "7", SHA1]);
+      assert.equal(o.updated, false, status);
+      assert.match(String(o.error), /outside the PR.*secrets\/key\.txt/, status);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test("review NIT: pr_state.py update fails closed on a PR of 100 files or more", () => {
   const dir = fakeForge({ state: "OPEN", headRefOid: SHA1, baseRefName: "main", files: Array.from({ length: 100 }, (_, i) => ({ path: "f" + i })) }, [
     REPO_OK(),
+    { argv: ["api", "repos/o/r/compare/main..." + SHA1], out: { files: Array.from({ length: 100 }, (_, i) => ({ filename: "f" + i })) } },
     { argv: ["api", "-X", "PUT"], set: { headRefOid: SHA3 } },
     { argv: ["api", "repos/o/r/branches/main"], out: { commit: { sha: BASE } } },
     { argv: ["api", "repos/o/r/commits/" + SHA3], out: { parents: [{ sha: SHA1 }, { sha: BASE }] } },
