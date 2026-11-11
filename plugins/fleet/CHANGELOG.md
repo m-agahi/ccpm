@@ -141,6 +141,9 @@ shipped run into a coder round, and adds org and repo rulesets to the hook surfa
   never through `..`. The build checks both subject forms against a strict pattern before any
   role runs and stops on anything else. The PR opener passes the title in single quotes; the
   commit step already single-quotes the subject.
+  The summary drops the task id and every source ref (a title such as `L42: add thing (ABC-9)`
+  gives `feat(thing): add thing`; nothing left: `update`). The intent judge reads the plan with
+  `git --no-replace-objects`.
 
 ### Pending (stream 3)
 

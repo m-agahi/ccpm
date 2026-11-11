@@ -713,3 +713,19 @@ test("6.0.0 2042 (security review): plan_hash prints args and a digest; a relaye
   const out = await runOne(s, BARGS(plan));
   assert.match(out.result.reason, /full blob id/);
 });
+
+test("6.0.0 2042b (ruling 4): a task id or source ref inside the task title never reaches the commit subject or the PR title", async () => {
+  const s = happy({ brief: { title: "L42: Add Thing (ABC-9)", description: "add a thing", sources: [{ kind: "ledger", ref: "42", url: null, body: "task body" }, { kind: "jira", ref: "ABC-9", url: null, body: "x" }], repo: "/r", plan_path: null } });
+  const out = await run(s, ARGS);
+  const cs = out.calls.filter((c) => /^infra:commit:r/.test(c.label)).map((c) => inputsOf(c.prompt).subject);
+  const titles = out.calls.filter((c) => /^role:fleet-pr-opener/.test(c.label)).map((c) => inputsOf(c.prompt).title);
+  assert.ok(cs.length, out.result.reason);
+  for (const x of cs.concat(titles)) assert.doesNotMatch(x, /l42|abc-9|abc 9/i, x);
+  assert.equal(cs[0], "feat(thing): add thing");
+});
+
+test("6.0.0 2042 (security review): the intent judge reads the plan with replacement objects off", () => {
+  const t = readFileSync(join(SCRIPTS_SRC, "..", "roles", "fleet-intent-judge.md"), "utf8");
+  assert.match(t, /Read the plan only with `git --no-replace-objects -C <worktree> show <plan_commit>:<plan_path>`/);
+  assert.doesNotMatch(t, /Read with `git show <plan_commit>:<path>`/);
+});

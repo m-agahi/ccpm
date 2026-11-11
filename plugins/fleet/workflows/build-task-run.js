@@ -1514,7 +1514,7 @@ function programTable() {
 const ROLE_SHA256 = {
   "fleet-code-judge": "dac34f0bfce76029e2602ffa23c3210049e127187076978f82d357582f49b5a3",
   "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
-  "fleet-intent-judge": "03283fc805f57bcf22a6448fc43b8ead05983e94de1b05563f3e50c4a7837a1e",
+  "fleet-intent-judge": "9cbd440fd7c3b20738e38598c84df438657af2fb9aa22ee007028cbd853902c1",
   "fleet-pr-opener": "b1207cb47c140b6c15cf6c1874277e1edecb2862035d97d5a6da7f8bf3cab981",
   "fleet-test-judge": "c1aabca1c8623473811ca3d6ce66fe821f0dac251ea1d53d528372ad2d2bfe7e",
   "fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
@@ -5211,7 +5211,7 @@ async function policyStep(host, slug, sealed) {
 }
 // 2042: subjects follow the sealed convention and never carry the internal task id (ruling 4)
 const KIND_TYPE = { bug_fix: "fix", feature: "feat", refactor: "refactor", chore: "chore" };
-function subjectsOf(pf, brief, slug) {
+function subjectsOf(pf, brief, slug, taskId) {
   const c = Object.assign({}, pf.conventions.title);
   c.types = (Array.isArray(c.types) ? c.types : []).filter((x) => COMPONENT_RE.test(String(x)));
   if (!c.types.length) c.types = CC_TYPES;
@@ -5219,7 +5219,10 @@ function subjectsOf(pf, brief, slug) {
   const key = j && /^[A-Z][A-Z0-9]+-[0-9]+$/.test(String(j.ref).toUpperCase()) ? String(j.ref).toUpperCase() : "NOJIRA";
   const scope = c.style === "scoped-key" ? pf.component + ", " + key : pf.component;
   const head = (t) => (c.types.indexOf(t) >= 0 ? t : c.types.indexOf("chore") >= 0 ? "chore" : c.types[0]) + "(" + scope + "): ";
-  const main = (head(KIND_TYPE[pf.change_kind] || "feat") + slug.replace(/-/g, " ")).slice(0, 72).replace(/\s+$/, "");
+  // the summary drops the task id and every source ref the title carries
+  let sl = "-" + slug + "-";
+  for (const x of [taskId].concat(brief.sources.map((y) => y.ref), brief.sources.map((y) => "l" + y.ref))) for (const k = slugify(x); k && sl.indexOf("-" + k + "-") >= 0; ) sl = sl.split("-" + k + "-").join("-");
+  const main = (head(KIND_TYPE[pf.change_kind] || "feat") + (sl.replace(/^-+|-+$/g, "").replace(/-+/g, " ") || "update")).slice(0, 72).replace(/\s+$/, "");
   const fix = head("fix");
   return { main, fix: (n) => fix + "code round " + n, isFleet: (x) => x === main || new RegExp("^" + escapeRe(fix) + "code round [0-9]+$").test(x) };
 }
@@ -5336,7 +5339,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const ref = Object.assign({}, loaded, { plan_commit: tiny.plan_commit, plan_ref: tiny.plan_ref });
   const brief = cleanBrief(ref.brief);
   const names = { taskId: ref.task_id, slug: ref.slug };
-  const subj = subjectsOf(ref.plan_facts, brief, ref.slug);
+  const subj = subjectsOf(ref.plan_facts, brief, ref.slug, ref.task_id);
   for (const x of [subj.main, subj.fix(1)]) if (!SUBJECT_RE.test(x)) halt("needs_human", "plan ref " + tiny.plan_ref + ": unsafe commit subject " + JSON.stringify(x) + "; re-run plan");
   const history = {
     runs: (ref.history.runs || 0) + 1,
