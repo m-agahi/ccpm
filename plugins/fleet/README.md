@@ -543,7 +543,9 @@ agents across runs.
 
 ### Write-back
 
-After the review, build mode writes back once. A failure here never changes the run status.
+After the review, build mode writes back once. A failure here never changes the run status. Since 6.0.0 the
+write-back runs before the CI watch (ruling 2045 order) and skips a source that already carries the
+fleet marker, so the CI outcome is in the run result (`ci`), not in the ledger section.
 
 ### Conventions (6.0.0, ledger 2042)
 
@@ -596,6 +598,46 @@ stop the build (`stop_gate: "policy"`); a bad file never falls back to the defau
 - The run-state seals `policy: {profile, policy_sha256, caps}`; the result carries it too. A
   resumed run whose file changed logs the changed caps and keeps the sealed profile.
 
+### PR tail: stats, ready, CI watch, merge (6.0.0, ledgers 2044, 2045, 2034)
+
+After the review approves, build mode runs `push -> pr -> review -> writeback -> stats -> ready
+-> ci`, then writes the last run-state `shipped`. A stop before a step ends the run, so a
+needs_human run is never marked ready or merged. The tail's agents count in `agents`, not against
+the 100-agent cap (like path checks); CI-fix coder rounds still count.
+
+- Stats (`infra:pr-stats`, `pr_body_block.py`): a `<details>` block at the end of the PR body,
+  between `<details><summary>Built with ccpm fleet` and `<!-- ccpm-fleet-stats -->`, built from
+  script counters only: acceptance criteria, tests written and test rounds, code rounds,
+  plan-audit rounds, agents, build wall time, gates passed, review verdict, and "output tokens
+  (approx.)" per model (from `budget.spent()`; no input tokens, no cost). It never names a path,
+  run id, ledger id or session. The program changes only that block, re-reads the body, and
+  checks that the headers of the body convention and of the old body are still there; the
+  script checks the block's sha256. Policy `stats: false` skips it.
+- Ready (`infra:pr-ready`, `pr_state.py ready`): `gh pr ready` only on an open draft at the
+  approved sha; the script requires `is_draft: false` and head == approved sha. Policy
+  `pr_ready: false` keeps the draft. A branch Max pushed himself (an IaC diff, ADR-1175) stops
+  with "IaC PR: Max marks it ready".
+- Scan (`infra:orch-scan`, `orch_scan.py`, read only, fails closed): orchestrator config or
+  orchestrator checks and comments on the PR, tracked IaC files, CI files that name an IaC tool,
+  hook-surface files in the PR. An orchestrator PR is watched and reported, then stops with
+  "orchestrator PR: needs Max" (ADR-1199).
+- CI watch (`infra:ci-watch:w<n>`, `ci_watch.py`, one read-only agent): the required checks of
+  the PR head (all checks when the PR has none required), in slices of at most 480 s, up to
+  `ci_watch_minutes`. A draft is "CI not run on draft"; `ci_watch: false` skips the watch.
+- Red: `fleet-ci-classifier` labels each failing check `diff`, `pre_existing`, `flaky` or `infra`
+  from its log tail, which travels as quoted data (CI logs are untrusted input). `diff` (no IaC or
+  orchestrator sign): a CI-fix round through the code loop, at most 2, then needs_human. The
+  others: one rerun when `ci_trigger` allows it and the repo has no IaC sign, else a report.
+- Timeout or a forge error: "CI unresolved", never a merge.
+- Green: a merge only with `merge: "auto"`, outside `WORK_OWNERS`, with no orchestrator, IaC,
+  apply-on-merge or hook-surface sign. `pr_state.py merge` uses native auto-merge where allowed
+  (else a direct merge), the repo's method and `--match-head-commit <reviewed sha>`. Behind with
+  `update_branch: once`: the forge's update-branch once, then the watch again; a base change in a
+  PR file stops for a new review. After a confirmed merge the remote `fleet/*` branch goes, then
+  the fleet removes its own worktree and local branch. Otherwise "CI green, ready for human
+  merge".
+- The result carries `ci: {verdict, checks: [{name, state, url}], fix_rounds, merged, merge_sha}`.
+
 ### Resume (run-state)
 
 A build re-run with the same `plan_ref` resumes at the last completed gate.
@@ -607,13 +649,14 @@ Its target is HEAD (the approved commit). Its message is JSON: `plan_commit`, `r
 approving code-judge run), PR number and URL, review, rounds, `suite_result`, `gates_not_run`,
 the intent result and, at the end, the write-back result. The milestones, in order:
 
-| `last_gate`    | recorded after    | a re-run resumes at                  |
-| -------------- | ----------------- | ------------------------------------ |
-| `committed`    | the commit step   | push                                 |
-| `pushed`       | the push          | the pr-opener                        |
-| `pr_open`      | the PR opens      | the review                           |
-| `reviewed`     | the review passes | write-back                           |
-| `written_back` | write-back        | nothing: returns the recorded result |
+| `last_gate`    | recorded after      | a re-run resumes at                  |
+| -------------- | ------------------- | ------------------------------------ |
+| `committed`    | the commit step     | push                                 |
+| `pushed`       | the push            | the pr-opener                        |
+| `pr_open`      | the PR opens        | the review                           |
+| `reviewed`     | the review passes   | write-back                           |
+| `written_back` | write-back          | the stats block, ready and CI watch  |
+| `shipped`      | the PR tail (6.0.0) | nothing: returns the recorded result |
 
 Every ref under `refs/fleet/` (name and target) is in the frozen git map, at freeze and around
 every writer, coder and judge step. A role that creates, moves or deletes one is a violation ("run-state ref
@@ -1464,7 +1507,14 @@ Build mode, `status: "ok"`:
   "comment_text": null,
   "gate_log": ["..."],
   "memory_notes": [{ "role": "fleet-coder", "notes": ["..."] }],
-  "follow_ups": [{ "summary": "...", "path": "src/x.py" }]
+  "follow_ups": [{ "summary": "...", "path": "src/x.py" }],
+  "ci": {
+    "verdict": "green",
+    "checks": [{ "name": "test", "state": "SUCCESS", "url": "..." }],
+    "fix_rounds": 0,
+    "merged": false,
+    "merge_sha": null
+  }
 }
 ```
 

@@ -4421,3 +4421,39 @@ floor. The floor is local: directories a tracked workflow names by self-referenc
 result is sealed in plan_facts.ruleset_surface (never in the role inputs); the approved tree
 cannot add a ruleset, and a new workflow file is hook surface by HOOK_PATH_RE anyway.
 ```
+
+### `agentT`, `statsBlock`, `statsStep` (2044)
+
+```text
+The runtime gives no per-call usage; budget.spent() is output tokens for the whole turn. Every
+agent() call goes through agentT, which books the growth of spent() since the previous return to
+the returning call's model. Calls in parallel() are one model (the test writers), so the sums per
+model hold. The wall time starts at policy.py's `now` and ends in pr_body_block.py, which fills
+@@WALL@@; the script recomputes the block with the printed wall_s and checks its sha256. Plan-audit
+rounds are sealed in the plan ref's history.audits. "gates passed" counts gate-log lines that are
+not warnings.
+```
+
+### `readyStep`, `prState`, `TAIL_RE` (2045)
+
+```text
+Ruling 2045: ready after review approve, write-back and stats; never on needs_human (a halt ends
+the run first). iac_touched is set only when tfGate found the IaC diff Max pushed himself; it is
+sealed in the run-state. The PR tail sits outside MAX_AGENTS (state.tail), like path checks: a
+review fix round plus stats, ready and CI pushed the 8-criteria auto run over 100.
+```
+
+### `ciStep` (2034)
+
+```text
+Rulings 2034: one watch agent re-runs ci_watch.py while it prints pending; the program keeps its
+start in scratch/ci-<nonce>-p<push>.json, so the time cap does not depend on the agent counting.
+Reruns and update-branch share that budget; a CI-fix push starts a new one. The classifier's
+answer is used only as an enum per failing name; its text is never forwarded. The coder gets the
+log tail from ci_watch.py as a JSON string labelled untrusted. Merge needs merge auto, no
+WORK_OWNERS owner (checked again here; pr_state.py refuses too), no orchestrator, IaC,
+apply-on-merge or hook-surface sign. ADR-1203 asks for a re-review after update-branch when the
+base change touches PR files; the run stops for a human there instead (the local worktree is not
+at the new head). Close/reopen to retrigger a missing check (ADR-1203 "may") is not built.
+Cleanup runs after the shipped run-state write, from / with git -C <repo>.
+```

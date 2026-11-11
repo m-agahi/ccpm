@@ -2,10 +2,16 @@
 
 ## [6.0.0] - unreleased
 
-Fleet 6.0.0: one major release in three build streams. Stream 1 (this entry's "Done" items)
-fixes the PR-step push probe, nested digest relays and relayed mid-turn requests, resumes a
-shipped run into a coder round, and adds org and repo rulesets to the hook surface. Stream 2 adds
-2033 and 2042. Stream 3 adds the items marked "pending" and finalises this entry.
+Fleet 6.0.0: one major release in three build streams. Stream 1 fixes the PR-step push probe,
+nested digest relays and relayed mid-turn requests, resumes a shipped run into a coder round, and
+adds org and repo rulesets to the hook surface. Stream 2 adds the per-owner policy (2033) and
+takes the plan doc off the pushed branch with repo title and body conventions (2042). Stream 3
+adds the PR tail: a stats block (2044), ready for review (2045), and CI watch, CI-fix rounds and
+policy-gated merge (2034). All items are done; the ADR-1192 smoke run is pending.
+
+Upgrade notes: a run-state at `written_back` (the last state before 6.0.0) now resumes at the
+stats block, ready and CI watch instead of returning the recorded result; `shipped` is the new
+last state. With no policy file, a fleet PR is marked ready and its CI is watched (merge never).
 
 ### Deploy
 
