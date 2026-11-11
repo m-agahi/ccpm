@@ -72,6 +72,7 @@ const INFRA_TIER = [
   ["infra:tf-gate", "sonnet"],
   ["infra:hook-surface", "sonnet"],
   ["infra:ruleset-surface", "sonnet"],
+  ["infra:pr-convention", "haiku"],
   ["infra:changed-defs", "sonnet"],
   ["infra:replan-", "sonnet"],
   ["infra:state:", "sonnet"],
@@ -106,7 +107,7 @@ const REQUIRED_ON_OK = {
   "fleet-test-judge": ["verdict", "routed_findings", "checked"],
   "fleet-coder": ["changed_paths", "suite_result", "added_symbols", "frozen_tests_red_at_start", "obligations_done"],
   "fleet-code-judge": ["verdict", "routed_findings", "suite_result", "hash_check", "gates_not_run", "obligations_check"],
-  "fleet-pr-opener": ["pr_url", "pr_number", "created", "template_used", "gates_not_run_stated"],
+  "fleet-pr-opener": ["pr_url", "pr_number", "created", "template_used", "gates_not_run_stated", "title"],
   "fleet-intent-judge": ["verdict", "deviations", "coverage", "classification"],
   "pr-review": ["verdict", "findings", "touches_gate", "checked"],
   "gate-change-nonweakening-sweep": ["verdict", "units", "findings"],
@@ -179,6 +180,7 @@ const PROBE_READ_ROLE = "plan-audit";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const NONCE_RE = /^[A-Za-z0-9_.:-]{6,64}$/;
 const SHA_RE = /^[0-9a-f]{7,40}$/;
+const COMPONENT_RE = /^[a-zA-Z0-9-]{1,40}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const BRANCH_RE = /^fleet\/[a-z0-9][a-z0-9-]*$/;
 const PLAN_REF_NAME_RE = /^refs\/fleet\/([a-z0-9][a-z0-9-]*)\/plan$/;
@@ -332,6 +334,7 @@ const SCHEMAS = {
     est_diff_lines: { type: "number" },
     new_behaviour: { type: "boolean" },
     change_kind: { type: "string", enum: CHANGE_KINDS },
+    component: STR_OR_NULL,
     allowed_additions: {
       type: ["object", "null"],
       properties: {
@@ -434,6 +437,7 @@ const SCHEMAS = {
     created: { type: "boolean" },
     template_used: STR_OR_NULL,
     gates_not_run_stated: { type: "boolean" },
+    title: STR_OR_NULL,
   }),
   "fleet-intent-judge": roleSchema({
     verdict: { type: "string", enum: VERDICTS["fleet-intent-judge"] },
@@ -1481,6 +1485,7 @@ const PROGRAM_SHA256 = {
   "plan_ref": "70b82ddd6b5cd3321dd04efc6b9549b001d25b1aa0ac98ed73a5e2f75ff8841d",
   "plan_ref_write": "822595ac7d947040ef3d125c9914965da696ba10290570bcb7926eb1d538d828",
   "policy": "e4fdd22ccc9ebbee24e128ee54f91e3eba90fae350d64703655358a3e7026141",
+  "pr_convention": "96599c940c35f885d285df4dde4299b21243a559f2e1a2a576ae6016aaf6295a",
   "precommit_ids": "627d38e747a9f5b57bba6b9cfc6e5deccb016be7b943ff89b7fd5689a6ddc09b",
   "push_classify": "3ac4435c37d17784050a25c58f5071c60354698defb9a66c963636a70185a6c1",
   "push_probe": "06b2ae5a476c22f30f8183c7eacd5d31c3f7c7d6ddc674a253bc7593c8e702be",
@@ -1507,13 +1512,13 @@ const ROLE_SHA256 = {
   "fleet-code-judge": "9012adff406e520fefe796e76d84fb30d99fc68d9ce9d3acf42bf727086d8adc",
   "fleet-coder": "0dafd2181741ba41094a87e05fc247c042b6fb173ec33439c52dcc2dbd9c52b2",
   "fleet-intent-judge": "03283fc805f57bcf22a6448fc43b8ead05983e94de1b05563f3e50c4a7837a1e",
-  "fleet-pr-opener": "34a30578a75867f24ce3c23b72988f6d130500ed8702f64b0870df0ac10619dd",
+  "fleet-pr-opener": "bdd545c6c7e34d7f1f4ec50fcac302df3f10c81a0424cfa62728aa7a94d98fde",
   "fleet-test-judge": "40db39eac4dbf0ec92cbd737fc575a15fd6c171f3e12f99159b1df2300f30134",
   "fleet-test-writer": "f9a22200e193fcc17779da65140ffa8178ab6ed18568e5947e9e8f410a65d971",
   "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
   "plan-audit": "084fe730cc8ecb5cf8712b164bb763cb9bbe97e18bc3cc04e82480ba158de984",
   "pr-review": "728800a005a54026eb345d5b9784bdde50cdafd5d918f9faa8d2cec7c091142d",
-  "scope-and-plan": "f035add6611148ac4167f293f2340b9247efc77a590a5977ea4f9d99ac6da90a"
+  "scope-and-plan": "5ac14fa250643699661378abfc38ed7b459268c6349df26a1d5f2a48aea8da40"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -1605,6 +1610,7 @@ const PROGRAM_SLOTS = [
   [/^infra:hook-surface:/, [[null, "hook_surface"]]],
   // 6.0.0
   [/^infra:ruleset-surface:/, [[null, "ruleset_surface"]]],
+  [/^infra:pr-convention:/, [[null, "pr_convention"]]],
   [/^infra:review-paths:/, [[null, "review_paths"]]],
   [/^infra:precommit-ids/, [[null, "precommit_ids"]]],
   [/^infra:check-scripts/, [[null, "script_check"]]],
@@ -1650,6 +1656,7 @@ const PROGRAM_KEYS = {
   // 6.0.0
   "ruleset_surface": ["surface", "sources", "read", "unreadable", "error", "args"],
   "policy": ["profile", "file", "policy_sha256", "caps", "matched", "error", "args"],
+  "pr_convention": ["title", "body", "source", "unreadable", "args"],
   "review_paths": ["changed_paths"],
   "precommit_ids": ["present", "ids", "parser", "error", "args"],
   "script_check": ["checks"],
@@ -1777,6 +1784,14 @@ const PROGRAM_OUT = {
     caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] } } },
     matched: STR_OR_NULL,
     error: STR_OR_NULL,
+    args: STRS,
+    digest: STR,
+  },
+  pr_convention: {
+    title: { type: "object", properties: { style: { type: "string", enum: ["scoped-key", "conventional"] }, types: STRS, key_required: BOOL } },
+    body: { type: "object", properties: { template: STR_OR_NULL, template_repo: STR_OR_NULL, required_sections: { type: ["array", "null"], items: STR }, min_chars: { type: ["integer", "null"] }, checker: STR_OR_NULL } },
+    source: STRS,
+    unreadable: STRS,
     args: STRS,
     digest: STR,
   },
@@ -4286,6 +4301,26 @@ async function rulesetSurface(label, worktree, slug, defaultBranch, phaseName) {
   const np = (x) => (String(x) === "./" ? "./" : /\/$/.test(String(x)) ? normPath(String(x)) + "/" : normPath(String(x)));
   return { surface: r.surface.map(np), sources: r.sources.map((x) => Object.assign({}, x, { path: np(x.path) })), read: r.read.map(String), unreadable: r.unreadable.map(String) };
 }
+// 2042: the repo's PR title and body convention, sealed in plan_facts.conventions
+function prConventionPrompt(inputs) {
+  return INFRA_STEP + "read the repo's PR title and body convention. READ ONLY: the program sends GET requests only; run nothing but the one command below.\n" + inputsLine(inputs) + RUN_EXACT + progCmd("pr_convention", inputs.args) + "\nIt prints one JSON object " + printsKeys("pr_convention") + COPY_DIGEST + "Return {status, reason, " + returnKeys("pr_convention") + "}.";
+}
+async function prConvention(label, worktree, slug, defaultBranch, phaseName) {
+  const g = slug ? ghFor(slug) : null;
+  const args = [worktree, (g && g.gh_cmd) || "-", slug && LEDGER_PROJECT_RE.test(slug) ? slug : "-", defaultBranch];
+  const r = await infra(label, prConventionPrompt({ args }), phaseName, JUDGE_AGENT, "pr_convention", args);
+  requireProgram(r, "pr_convention", label);
+  const t = r.title;
+  if (!t || ["scoped-key", "conventional"].indexOf(t.style) < 0 || !Array.isArray(t.types) || !t.types.length || !r.body || !Array.isArray(r.source) || !Array.isArray(r.unreadable) || !relayDigestOk(r, progKeys("pr_convention"), "pr_convention") || canonical(r.args) !== canonical(args))
+    halt("failed", label + ": the relayed convention does not match the program's digest or arguments");
+  for (const u of r.unreadable) gate("warning: " + u);
+  gate("conventions: " + r.source.join("; "));
+  return { title: t, body: r.body };
+}
+// the plan facts a plan ref seals beyond the spread planFacts (2041, 2042)
+function sealedFacts(p) {
+  return Object.assign({}, p.planFacts, { ruleset_surface: p.rulesetSurface, conventions: p.conventions, component: p.component });
+}
 // a plan ref's sealed ruleset surface (null: sealed before 6.0.0)
 function sealedRs(x) {
   return x && typeof x === "object" && ["surface", "sources", "read", "unreadable"].every((k) => Array.isArray(x[k])) ? x : null;
@@ -4439,6 +4474,10 @@ async function planAndAudit(ctx0) {
   const planHs = await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", [], "Plan");
   const planRs = await rulesetSurface("infra:ruleset-surface:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");
   hookGate("the plan scope", planScopePaths(planFacts, criteria), planHs.surface, planRs);
+  const conventions = await prConvention("infra:pr-convention:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");
+  // the scope of commit subjects and the PR title; the repo name when the planner gave none
+  const component = COMPONENT_RE.test(String(plan.component)) ? plan.component : String(ctx.remoteSlug || "").split("/").pop().toLowerCase().replace(/[^a-z0-9-]/g, "-") || "repo";
+  if (component !== plan.component) gate("planner component " + JSON.stringify(plan.component === undefined ? null : plan.component) + " unusable; component " + component);
   const fmtLabel = "infra:format-plan" + sfx;
   await pathRecheck("format-plan" + sfx, "Plan");
   const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath }), "Plan");
@@ -4506,6 +4545,8 @@ async function planAndAudit(ctx0) {
     planFacts,
     // sealed in plan_facts only: the build checks the approved tree against it
     rulesetSurface: planRs,
+    conventions,
+    component,
     planDiff: plan.plan_diff.slice(),
     tldr: plan.tldr.trim(),
     fleetSize: {
@@ -5045,7 +5086,7 @@ async function planMode(input, date) {
         slug: names.slug,
         tldr: p.tldr,
         planDiff: p.planDiff,
-        planFacts: Object.assign({}, p.planFacts, { ruleset_surface: p.rulesetSurface }),
+        planFacts: sealedFacts(p),
         // the role table this run loaded, for the build
         history: { runs: 1, replans: 0, agents: 0, preflight: state.preflightRecord },
         project: input.project || null,
@@ -5157,14 +5198,17 @@ async function policyStep(host, slug, sealed) {
   }
   return p;
 }
-function commitSubject(taskId, slug) {
-  return ("feat(" + taskId + "): " + slug.replace(/-/g, " ")).slice(0, 72).replace(/\s+$/, "");
-}
-function fixSubject(taskId, round) {
-  return "fix(" + taskId + "): code round " + round;
-}
-function isFleetCommit(subject, taskId, slug) {
-  return subject === commitSubject(taskId, slug) || new RegExp("^fix\\(" + escapeRe(taskId) + "\\): code round [0-9]+$").test(subject);
+// 2042: subjects follow the sealed convention and never carry the internal task id (ruling 4)
+const KIND_TYPE = { bug_fix: "fix", feature: "feat", refactor: "refactor", chore: "chore" };
+function subjectsOf(pf, brief, slug) {
+  const c = pf.conventions.title;
+  const j = brief.sources.find((x) => x.kind === "jira");
+  const key = j && /^[A-Z][A-Z0-9]+-[0-9]+$/.test(String(j.ref).toUpperCase()) ? String(j.ref).toUpperCase() : "NOJIRA";
+  const scope = c.style === "scoped-key" ? pf.component + ", " + key : pf.component;
+  const head = (t) => (c.types.indexOf(t) >= 0 ? t : c.types.indexOf("chore") >= 0 ? "chore" : c.types[0]) + "(" + scope + "): ";
+  const main = (head(KIND_TYPE[pf.change_kind] || "feat") + slug.replace(/-/g, " ")).slice(0, 72).replace(/\s+$/, "");
+  const fix = head("fix");
+  return { main, fix: (n) => fix + "code round " + n, isFleet: (x) => x === main || new RegExp("^" + escapeRe(fix) + "code round [0-9]+$").test(x) };
 }
 
 async function buildMode(input, date) {
@@ -5274,11 +5318,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (!pc.ok) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + o.id + " check_cmd refused: " + pc.reason, "commands");
   }
   // 6.0.0 (2042): a 5.x ref's plan commit is on the branch and its plan doc would ship
-  if (typeof loaded.plan_base !== "string" || !SHA_RE.test(loaded.plan_base))
+  if (typeof loaded.plan_base !== "string" || !SHA_RE.test(loaded.plan_base) || !loaded.plan_facts || !loaded.plan_facts.conventions)
     halt("needs_human", "plan ref " + tiny.plan_ref + " was sealed before 6.0.0 (its plan commit is on the branch, so the plan doc would ship): delete branch " + tiny.branch + ", then re-run plan");
   const ref = Object.assign({}, loaded, { plan_commit: tiny.plan_commit, plan_ref: tiny.plan_ref });
   const brief = cleanBrief(ref.brief);
   const names = { taskId: ref.task_id, slug: ref.slug };
+  const subj = subjectsOf(ref.plan_facts, brief, ref.slug);
   const history = {
     runs: (ref.history.runs || 0) + 1,
     replans: ref.history.replans || 0,
@@ -5329,7 +5374,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if ((v.plan_touched || []).length)
       halt("needs_human", "plan changed since approval: a commit after " + planBase + " changed " + ref.plan_path + " (the plan doc never ships)");
     for (const c of v.commits_since || [])
-      if (!isFleetCommit(String(c.subject || ""), names.taskId, names.slug))
+      if (!subj.isFleet(String(c.subject || "")))
         halt("needs_human", "plan changed since approval: branch moved by a non-fleet commit " + c.sha + " " + JSON.stringify(c.subject));
     // earlier fleet commits are fenced too, before any role runs
     fenceChanged("verify (commits since the plan commit)", v.changed_since || []);
@@ -5556,6 +5601,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           repo: remoteSlug,
           gh_cmd: g.gh_cmd,
           tldr: ref.tldr,
+          title: subj.main,
+          body_convention: ref.plan_facts.conventions.body,
           approved_sha: approvedSha,
           criteria,
           suite_result: suiteResult,
@@ -5567,6 +5614,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         "PR",
       ),
     );
+    if (r.title !== subj.main) halt("needs_human", "pr-opener set the PR title " + JSON.stringify(r.title) + ", not " + JSON.stringify(subj.main) + "; fix the title of " + r.pr_url, "role");
     state.pr = r;
     gate("pr-opener: " + (r.created ? "created " : "updated ") + r.pr_url);
     if (state.gatesNotRun && state.gatesNotRun.length && r.gates_not_run_stated !== true)
@@ -6273,7 +6321,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           bc.unattributed.length + " module-level change(s), each in a file the plan names)",
       );
     }
-    const subject = commitsMade ? fixSubject(names.taskId, m) : commitSubject(names.taskId, names.slug);
+    const subject = commitsMade ? subj.fix(m) : subj.main;
     await resetBuild("commit:r" + m, ["commit-r" + m], "Code");
     await pathRecheck("commit:r" + m, "Code");
     const cs = await infra(
@@ -6505,7 +6553,7 @@ async function replan(ctx) {
       slug: names.slug,
       tldr: p.tldr,
       planDiff: p.planDiff,
-      planFacts: Object.assign({}, p.planFacts, { ruleset_surface: p.rulesetSurface }),
+      planFacts: sealedFacts(p),
       history: { runs: history.runs, replans: n, agents: history.agents },
       project: ctx.project,
     },

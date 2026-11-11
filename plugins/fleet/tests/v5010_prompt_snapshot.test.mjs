@@ -78,10 +78,11 @@ const SCENARIOS = {
 // 6.0.0 stream 2: infra:policy (new build call)
 // 6.0.0 stream 2: plan doc off the branch (stage-plan, commit-plan, verify-plan-commit, verify-plan prompts; pr-opener tldr; branch-scan head)
 // 6.0.0 stream 2 (security review): roles read the plan at plan_blob; verify no longer writes a copy
+// 6.0.0 stream 2: infra:pr-convention:plan (new plan call); convention subjects; pr-opener title and body_convention; planner component
 const PINS = {
-  "plan then build (confirm ask)": { calls: 77, sha256: "afb98187d06563d143a88972307fb6690c99a6607f99d84992e0e47b5f8f542c" },
-  "confirm auto (gates, then build in one run)": { calls: 79, sha256: "493c50a9fdbb9c23e86fcb7b6a706c4dad93363bc103bc2609468c0c76fd00c2" },
-  "short path (one test writer)": { calls: 76, sha256: "f14a70670246424add6d865fcb064b2acd711db0bdf96025161a8a0bdd8a5eee" },
+  "plan then build (confirm ask)": { calls: 78, sha256: "174656b97c1a1826304a475318b6d643cbdd3d12d231f5c5b7b96521211ac047" },
+  "confirm auto (gates, then build in one run)": { calls: 80, sha256: "9c7008b6bb9f3ccca86a326f48fc3784693c9075b2a35705c4a9a7a34beea127" },
+  "short path (one test writer)": { calls: 77, sha256: "491ea7e84fa5dfdebf11abacdf6f623297839b0eed8bdc7db78162697c186806" },
   "probe": { calls: 2, sha256: "012d024fefbefe057a047d8b6822b07ea3152de9e7d322be0e6cf5d6273fc736" },
 };
 

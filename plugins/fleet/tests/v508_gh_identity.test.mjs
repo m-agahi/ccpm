@@ -396,7 +396,7 @@ test("5.0.8 2030: a build stopped at the PR step (5.0.7-shaped run-state at push
   assert.ok(!JSON.stringify(st).includes("gh"), "no gh value in the run-state");
   // the re-run (as docs-74 does: same plan_ref)
   s["role:fleet-pr-opener"] = opener;
-  s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], head: st.approved_sha, commits_since: [{ sha: st.approved_sha, subject: "feat(l42): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] };
+  s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], head: st.approved_sha, commits_since: [{ sha: st.approved_sha, subject: "feat(thing): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] };
   s["infra:read-state"] = { status: "ok", reason: "read", exists: true, target: st.approved_sha, message: JSON.stringify(st), head: st.approved_sha, head_tree: st.code_tree, clean: true };
   s["hasher:resume"] = { status: "ok", fingerprint: { head: st.approved_sha, tree: st.code_tree }, hashes: HASHES };
   const second = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });

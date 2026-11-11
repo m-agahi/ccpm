@@ -79,6 +79,7 @@ const WANT = [
   [/^infra:hook-surface/, "sonnet"],
   [/^infra:ruleset-surface/, "sonnet"],
   [/^infra:policy$/, "haiku"],
+  [/^infra:pr-convention/, "haiku"],
   [/^infra:changed-defs/, "sonnet"],
   [/^infra:replan-/, "sonnet"],
   [/^infra:state:/, "sonnet"],
@@ -503,8 +504,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   // 6.0.0 (ledger 2041): + infra:ruleset-surface:plan
-  assert.equal(out.plan.calls.length, 18, out.plan.labels.join(", "));
-  assert.equal(out.planResult.agents, 18);
+  // 6.0.0 (ledger 2042): + infra:pr-convention:plan
+  assert.equal(out.plan.calls.length, 19, out.plan.labels.join(", "));
+  assert.equal(out.planResult.agents, 19);
   // 5.0.6 (ledger 2019): + 7 build-dir resets (writers, test judge, coder,
   // code judge, commit, push, pr-review) and the teardown, which runs after
   // the result is made

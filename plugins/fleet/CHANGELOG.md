@@ -4,8 +4,8 @@
 
 Fleet 6.0.0: one major release in three build streams. Stream 1 (this entry's "Done" items)
 fixes the PR-step push probe, nested digest relays and relayed mid-turn requests, resumes a
-shipped run into a coder round, and adds org and repo rulesets to the hook surface. Streams 2
-and 3 add the items marked "pending"; stream 3 finalises this entry.
+shipped run into a coder round, and adds org and repo rulesets to the hook surface. Stream 2 adds
+2033 and 2042. Stream 3 adds the items marked "pending" and finalises this entry.
 
 ### Deploy
 
@@ -114,9 +114,21 @@ and 3 add the items marked "pending"; stream 3 finalises this entry.
   with `..`, a backslash or a symlinked component, or one that resolves outside the worktree,
   before any read or delete.
 
-### Pending (streams 2 and 3)
+- 2042b: commit subjects and PR titles follow the repo's convention. New program
+  `pr_convention.py <wt> <gh_cmd|-> <owner/repo|-> <default_branch>` (36 programs) at
+  `infra:pr-convention:plan`: a required pr-title workflow (types from its checker), else a
+  commitlint or semantic config, else 80 % of the last 20 merged titles, else the fallback
+  `type(component): summary` (ruling 4). The body convention: the repo or org PR template and a
+  required pr-body checker's sections and minimum length, passed to the PR opener as
+  `body_convention` (the template rule still applies). The planner gains `component` (the repo
+  name when unusable). `plan_facts.conventions` and `component` are sealed. Subjects (`subjectsOf`)
+  never carry the internal task id. Fleet commits are recognised by the two exact subject forms;
+  a resumed run also checks that HEAD is the run-state's `approved_sha`, so no trailer and no
+  task id are needed. The PR opener gets `title`, must report it, and the script stops on any
+  other title.
 
-- 2042b: commit subjects and PR titles follow the repo's convention (`pr_convention.py`). Pending.
+### Pending (stream 3)
+
 - 2044: PR body stats block (`<details>` with counters and output tokens per model, approx.).
   Pending.
 - 2045: mark the PR ready after review approve, write-back and stats. Pending.

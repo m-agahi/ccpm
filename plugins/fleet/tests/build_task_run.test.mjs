@@ -1783,6 +1783,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:hook-surface:plan",
     // 6.0.0 (ledger 2041)
     "infra:ruleset-surface:plan",
+    "infra:pr-convention:plan",
     "infra:path-check:format-plan",
     "infra:format-plan",
     "infra:path-check:plan-audit",
@@ -2329,8 +2330,8 @@ test("build mode: commit-step commits pass verify; without a run-state the build
     ...s["infra:verify-plan"],
     head,
     commits_since: [
-      { sha: "1111111", subject: "feat(l42): add thing" },
-      { sha: "2222222", subject: "fix(l42): code round 2" },
+      { sha: "1111111", subject: "feat(thing): add thing" },
+      { sha: "2222222", subject: "fix(thing): code round 2" },
     ],
   };
   const out = await runOne(s, buildArgs(ref));
@@ -2650,6 +2651,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
     "role:scope-and-plan:replan",
     "infra:hook-surface:plan:replan",
     "infra:ruleset-surface:plan:replan",
+    "infra:pr-convention:plan:replan",
     "infra:path-check:format-plan:replan",
     "infra:format-plan:replan",
     "infra:path-check:plan-audit:replan",
@@ -3687,7 +3689,7 @@ test("2.0.3 push rejected by a repo hook routes to the coder as fix_code; the ju
   assert.ok(L.indexOf("role:fleet-code-judge:r2") < L.indexOf("infra:push:p2"));
   // the fix is a new commit on top of the rejected one
   assert.equal(inputsOf(call(out, "infra:commit:r2").prompt).expected_head, CSHA(1));
-  assert.match(call(out, "infra:commit:r2").prompt, /'fix\(l42\): code round 2'/);
+  assert.match(call(out, "infra:commit:r2").prompt, /'fix\(thing\): code round 2'/);
   assert.equal(inputsOf(call(out, "infra:push:p2").prompt).approved_sha, CSHA(2));
   assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, CSHA(2));
   assert.ok(out.logs.some((l) => /rejected by a repo hook -> coder/.test(l)));
@@ -4151,7 +4153,7 @@ test("2.1.0 no RED commit: writers share the fleet worktree, nothing commits bef
   const cp = call(out, "infra:commit:r1").prompt;
   assert.match(cp, /`<git> add -A`/);
   assert.match(cp, /never --no-verify/i);
-  assert.match(cp, /'feat\(l42\): add thing'/);
+  assert.match(cp, /'feat\(thing\): add thing'/);
   assert.equal(inputsOf(cp).code_tree, "K1");
   assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, CSHA(1));
   assert.equal(inputsOf(call(out, "infra:push").prompt).approved_sha, CSHA(1));
@@ -4181,7 +4183,7 @@ test("2.1.0 commit step: a hook rejection routes to fix_code with the hook tail;
   assert.match(f[0].finding, /pytest: 2 failed/);
   assert.equal(out.result.rounds.code, 2);
   assert.equal(inputsOf(call(out, "infra:commit:r2").prompt).code_tree, "K2");
-  assert.match(call(out, "infra:commit:r2").prompt, /'feat\(l42\): add thing'/);
+  assert.match(call(out, "infra:commit:r2").prompt, /'feat\(thing\): add thing'/);
   assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).approved_sha, CSHA(2));
 });
 
@@ -4589,7 +4591,7 @@ test("2.1.0 review: a blocking finding is changes_requested whatever the verdict
   assert.equal(f[0].target, "code");
   assert.match(f[0].finding, /empty input passes/);
   const cp = call(out, "infra:commit:r2").prompt;
-  assert.match(cp, /'fix\(l42\): code round 2'/);
+  assert.match(cp, /'fix\(thing\): code round 2'/);
   assert.equal(inputsOf(cp).expected_head, CSHA(1));
   const pr2 = inputsOf(call(out, "role:fleet-pr-opener:p2").prompt);
   assert.equal(pr2.pr_number, 7);
@@ -5044,7 +5046,7 @@ test("2.1.0 base-ref differential: the fence and the review diff from plan_commi
   s["infra:verify-plan"] = {
     ...s["infra:verify-plan"],
     head: "fedcba9876",
-    commits_since: [{ sha: "1111111", subject: "feat(l42): add thing" }],
+    commits_since: [{ sha: "1111111", subject: "feat(thing): add thing" }],
     changed_since: ["src/x.py", ".github/x.yml"],
   };
   const out = await runOne(s, buildArgs(ref));
@@ -5213,7 +5215,7 @@ function rerunScript(s, st, over) {
   s["infra:verify-plan"] = {
     ...happy()["infra:verify-plan"],
     head: st.approved_sha,
-    commits_since: [{ sha: st.approved_sha, subject: "feat(l42): add thing" }],
+    commits_since: [{ sha: st.approved_sha, subject: "feat(thing): add thing" }],
     changed_since: ["src/x.py", "tests/test_a.py"],
   };
   s["infra:read-state"] = Object.assign(
@@ -5328,7 +5330,7 @@ test("2.1.0 resume: a run-state that does not match stops with run-state mismatc
 test("2.1.0 resume: no run-state but build commits on the branch stops as unresumable", async () => {
   const s = happy();
   const ref = await planRefFor(s);
-  s["infra:verify-plan"] = { ...s["infra:verify-plan"], head: "fedcba9876", commits_since: [{ sha: "fedcba9876", subject: "feat(l42): add thing" }], changed_since: ["src/x.py"] };
+  s["infra:verify-plan"] = { ...s["infra:verify-plan"], head: "fedcba9876", commits_since: [{ sha: "fedcba9876", subject: "feat(thing): add thing" }], changed_since: ["src/x.py"] };
   const out = await runOne(s, buildArgs(ref));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /approved but unresumable: branch has build commits without run-state; push manually or delete branch/);
@@ -5640,6 +5642,10 @@ const ARRAY_SITES = {
   "r.sources @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
   "r.read @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
   "r.unreadable @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
+  // 6.0.0 (ledger 2042)
+  "t.types @ prConvention": "parsed: a pr_convention program output (PROGRAM_OUT types it), digest-checked with it",
+  "r.source @ prConvention": "parsed: a pr_convention program output (PROGRAM_OUT types it), digest-checked with it",
+  "r.unreadable @ prConvention": "parsed: a pr_convention program output (PROGRAM_OUT types it), digest-checked with it",
   "pc.tools @ pathRelayProblem": "parsed: preflight path_check (digest-checked, keys and shapes checked)",
   "pc.path_problems @ pathRelayProblem": "parsed: preflight path_check (digest-checked)",
   "pf.changed_symbols @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
@@ -8706,7 +8712,7 @@ test("3.1.0 1959: a verify relay that drops or changes an entry stops the run", 
     const good = withRelayDigest("infra:verify-plan", {
       ...s["infra:verify-plan"],
       head: "fedcba9876",
-      commits_since: [{ sha: "fedcba9876", subject: "feat(l42): add thing" }],
+      commits_since: [{ sha: "fedcba9876", subject: "feat(thing): add thing" }],
       plan_touched: ["fedcba9876"],
       changed_since: ["src/x.py", ".github/x.yml"],
     });
@@ -8719,7 +8725,7 @@ test("3.1.0 1959: a verify relay that drops or changes an entry stops the run", 
   // the untampered relay reaches the fence (and stops on .github/)
   const s = happy();
   const ref = await planRefFor(s);
-  s["infra:verify-plan"] = { ...s["infra:verify-plan"], head: "fedcba9876", commits_since: [{ sha: "fedcba9876", subject: "feat(l42): add thing" }], changed_since: [".github/x.yml"] };
+  s["infra:verify-plan"] = { ...s["infra:verify-plan"], head: "fedcba9876", commits_since: [{ sha: "fedcba9876", subject: "feat(thing): add thing" }], changed_since: [".github/x.yml"] };
   const ok = await runOne(s, buildArgs(ref));
   assert.equal(ok.result.stop_gate, "scope");
 });

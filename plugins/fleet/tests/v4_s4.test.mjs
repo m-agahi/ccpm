@@ -35,6 +35,8 @@ import {
 } from "./harness.mjs";
 
 // A sealed ref message (the shape priorRef in build_task_run.test.mjs makes).
+// 6.0.0 (ledger 2042): the convention a 6.0.0 plan ref seals
+const CONV = { title: { style: "conventional", types: ["feat", "fix", "chore"], key_required: false }, body: { template: null, template_repo: null, required_sections: null, min_chars: null, checker: null } };
 function sealedRef(over) {
   const o = Object.assign(
     {
@@ -48,7 +50,7 @@ function sealedRef(over) {
       task_id: "l42",
       slug: "add-thing",
       tldr: "t",
-      plan_facts: { allowed_additions: null, est_diff_lines: 10, test_cmd: { command: "pytest <paths>" }, repo_obligations: [], commands: [] },
+      plan_facts: { allowed_additions: null, est_diff_lines: 10, test_cmd: { command: "pytest <paths>" }, repo_obligations: [], commands: [], conventions: CONV, component: "thing" },
       history: { runs: 1, replans: 0, agents: 8 },
     },
     over || {},
@@ -163,7 +165,7 @@ test("4.0.0 1980: test_args is refused on make, with <paths>, with a disallowed 
 });
 
 test("4.0.0 1980: build mode re-checks every sealed criterion's test_args at load", async () => {
-  const facts = { allowed_additions: null, est_diff_lines: 10, test_cmd: { command: "cargo test --all-features" }, repo_obligations: [], commands: [] };
+  const facts = { allowed_additions: null, est_diff_lines: 10, test_cmd: { command: "cargo test --all-features" }, repo_obligations: [], commands: [], conventions: CONV, component: "thing" };
   const bad = await buildFrom(sealedRef({ plan_facts: facts, criteria: [Object.assign(criteria(1)[0], { test_args: "--config x" })] }));
   assert.equal(bad.result.status, "needs_human");
   assert.equal(bad.result.stop_gate, "commands");

@@ -110,7 +110,8 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   // 6.0.0 (ledger 2041): + infra:ruleset-surface:plan
-  assert.equal(out.plan.calls.length, 18, out.plan.labels.join(", "));
+  // 6.0.0 (ledger 2042): + infra:pr-convention:plan
+  assert.equal(out.plan.calls.length, 19, out.plan.labels.join(", "));
   // 5.0.6 (ledger 2019): + 7 build-dir resets and the teardown
   // 6.0.0 (ledger 2033): + infra:policy
   assert.equal(out.build.calls.length, 59, out.build.labels.join(", "));

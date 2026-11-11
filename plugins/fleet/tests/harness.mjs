@@ -358,6 +358,9 @@ export async function runOne(script, args0) {
     // 3.1.0: unscripted hook-surface reads find no hook entry file
     if (!(label in script) && /^infra:hook-surface:/.test(label))
       return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: {}, error: null }, prompt));
+    // 6.0.0 (ledger 2042): an unscripted convention read finds no convention (the conventional fallback)
+    if (!(label in script) && /^infra:pr-convention:/.test(label))
+      return { status: "ok", reason: "read", title: { style: "conventional", types: ["feat", "fix", "perf", "revert", "chore", "refactor", "docs", "style", "test", "build", "ci"], key_required: false }, body: { template: null, template_repo: null, required_sections: null, min_chars: null, checker: null }, source: ["title: no convention found; the fallback type(component): summary"], unreadable: [], args: inputsOf(prompt).args };
     // 6.0.0 (ledger 2033): an unscripted policy read finds no policy file
     if (!(label in script) && label === "infra:policy")
       return { status: "ok", reason: "read", profile: null, file: "/home/u/.config/fleet/policy.json", policy_sha256: null, caps: { pr_ready: true, ci_watch: true, ci_watch_minutes: 60, stats: true, merge: "never", update_branch: "never", ci_trigger: false, review_post: "none" }, matched: "no policy file", error: null, args: inputsOf(prompt).args };
@@ -490,6 +493,8 @@ export async function runOne(script, args0) {
     // a terse writer stub reports exactly its criterion's test files
     if (label.startsWith("role:fleet-test-writer:") && !raw && r.status === "ok" && !("files" in r))
       r.files = inputsOf(prompt).test_files;
+    // 6.0.0 (ledger 2042): a PR opener stub reports the title it was given
+    if (label.startsWith("role:fleet-pr-opener") && !raw && r.status === "ok" && !("title" in r)) r.title = inputsOf(prompt).title;
     // 5.0.0 (R1): a role agent reports the role file it read (raw stubs too,
     // unless they name role_file themselves)
     if (label.startsWith("role:") && !("role_file" in r)) {
@@ -1097,6 +1102,8 @@ export const PROGRAM_LABELS = [
   [/^infra:ruleset-surface:/, [[null, "ruleset_surface", K("ruleset_surface")]]],
   // 6.0.0 (ledger 2033)
   [/^infra:policy$/, [[null, "policy", K("policy")]]],
+  // 6.0.0 (ledger 2042)
+  [/^infra:pr-convention:/, [[null, "pr_convention", K("pr_convention")]]],
   [/^infra:review-paths:/, [[null, "review_paths", K("review_paths")]]],
   // 4.0.0 review: the hook ids feed G2 and carry a digest
   [/^infra:precommit-ids/, [[null, "precommit_ids", K("precommit_ids")]]],
@@ -1249,6 +1256,7 @@ export function happy(over = {}) {
       reason: "planned",
       artefacts: ["docs/plans/x.md"],
       plan_path: "docs/plans/x.md",
+      component: "thing",
       criteria: crit,
       est_diff_lines: 80,
       new_behaviour: true,

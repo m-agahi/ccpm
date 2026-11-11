@@ -151,6 +151,7 @@ Estimate honestly. The coder's diff budget is 1.5× `est_diff_lines`. `est_diff_
 
 - `est_diff_lines`: production + test + obligation lines.
 - `new_behaviour`: true when any observable behaviour is added or changed.
+- `component`: the part of the repo the change is about, as one word of letters, digits and dashes (for example `fleet` or `go-pr`). It becomes the scope of the commit subjects and the PR title: `type(component): summary`. Never a task, ledger or ticket id.
 - `change_kind`: `bug_fix` (restores behaviour the task or a spec says is required; quote it in the plan), `feature`, `refactor` or `chore`. Pick from the task text, not from how small the diff is. The workflow may skip Max's confirmation only for `bug_fix` with `new_behaviour: false`; the intent judge checks both values against the task.
 
 ## Output
@@ -158,7 +159,7 @@ Estimate honestly. The coder's diff budget is 1.5× `est_diff_lines`. `est_diff_
 Return ONE object through the StructuredOutput tool. It is the only output channel: the workflow reads nothing else from your final message. The schema enforces the keys.
 
 - Always: `status` (`ok`, `needs_human` or `failed`), `reason` (one line: the plan path, the `test_cmd` probe exit code, the repo gate files you checked), `role_file` (step 1 of your prompt) and `shared_file` (step 3).
-- Required on `ok`: `plan_path`, `criteria` (array), `est_diff_lines` (number), `new_behaviour` (boolean), `change_kind`, `allowed_additions` (object), `held_out_examples` (array), `tldr`, `plan_diff` (array), `repo_obligations` (array, `[]` when none), `test_cmd` (object with a string `command`) and `changed_symbols` (array, `[]` only when the plan changes no existing symbol). On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
+- Required on `ok`: `plan_path`, `criteria` (array), `est_diff_lines` (number), `new_behaviour` (boolean), `change_kind`, `allowed_additions` (object), `held_out_examples` (array), `tldr`, `component`, `plan_diff` (array), `repo_obligations` (array, `[]` when none), `test_cmd` (object with a string `command`) and `changed_symbols` (array, `[]` only when the plan changes no existing symbol). On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
 - Optional: `fleet_estimate`, `artefacts` (the plan path), `memory_notes` (short facts worth keeping for this repo; the workflow passes them to its caller and writes them nowhere).
 
 Shape:
@@ -236,6 +237,7 @@ Shape:
   "est_diff_lines": 0,
   "new_behaviour": true,
   "change_kind": "bug_fix|feature|refactor|chore",
+  "component": "<one word>",
   "fleet_estimate": { "criteria": 0, "agents": 0, "rounds": 0 },
   "memory_notes": []
 }

@@ -19,6 +19,8 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 - `review_notes` (optional; absent → `[]`): `[{id, severity, category, file, line, summary, evidence}]` — review findings to show the human reader. See "Review notes" below.
 - `intent` (optional; absent or null → no intent lines): the intent judge's result, `{status, verdict, reason, deviations: [{item, allowed_by, source_ref, fails_closed, verdict, reason}], coverage, classification}`. See "Intent check" below.
 - `auto_confirmed` (optional boolean; absent → false): true when the intent judge auto-confirmed the plan instead of Max.
+- `title`: the PR title, built from the repo's convention. Use it verbatim.
+- `body_convention`: `{template, template_repo, required_sections, min_chars, checker}`, the body rules the repo or its org checks (any key may be null). `template_repo` names the org repo that holds `template`.
 - `pr_url`, `pr_number` (an update run only): the PR this branch already has.
 
 ## Run rules (non-interactive)
@@ -70,7 +72,8 @@ Search, case-insensitive: `find <worktree> -maxdepth 4 -iname "pull_request_temp
   - the line `plan auto-confirmed by intent judge` when `auto_confirmed` is true.
     On an update run, replace the earlier intent lines instead of appending a second set. For `source_ref`, write the kind of source (for example `task body`), not its id.
 - **No internal ids** — decision-record numbers, ledger or task ids, memory ids, workflow run ids. This applies to text copied from the plan and from gate reasons too. Grep the body file before submitting.
-- No `Co-Authored-By:`. Title: match the repo's convention (check `git log --oneline -20`; Conventional Commits if used).
+- **Body convention:** the body holds every heading in `body_convention.required_sections` and at least `body_convention.min_chars` characters. These rules apply on top of the template rule.
+- No `Co-Authored-By:`. Title: exactly `title`, never your own; it never carries an internal id.
 
 Write the body to a file, then:
 
@@ -80,7 +83,7 @@ Write the body to a file, then:
 
 ## Verify
 
-`<gh> pr view <N> --repo <repo> --json url,body,isDraft,headRefName,headRefOid,baseRefName`: every template header present, the `tldr` and every criterion present, `isDraft` true on create, head and base correct, every `gates_not_run` entry and every manual criterion present, the intent lines present when `intent` or `auto_confirmed` was given, no internal ids, no secret. A body or metadata mismatch → fix once; still wrong → `failed`.
+`<gh> pr view <N> --repo <repo> --json url,title,body,isDraft,headRefName,headRefOid,baseRefName`: the title is `title`, every template header present, the `tldr` and every criterion present, `isDraft` true on create, head and base correct, every `gates_not_run` entry and every manual criterion present, the intent lines present when `intent` or `auto_confirmed` was given, no internal ids, no secret. A body or metadata mismatch → fix once; still wrong → `failed`.
 
 `headRefOid` can lag behind the pushed branch on GitHub's side. When it is not `approved_sha`, poll every 30s for at most 5 minutes. Still stale → `needs_human` with reason "PR head not synced (GitHub lag)". Never treat lag as failed, and never push to resolve it.
 
@@ -89,7 +92,7 @@ Write the body to a file, then:
 Return ONE object through the StructuredOutput tool. It is the only output channel: the workflow reads nothing else from your final message.
 
 - Always: `status`, `reason` (one line) and `role_file` (step 1 of your prompt).
-- Required on `ok`: `pr_url`, `pr_number`, `created`, `template_used` and `gates_not_run_stated`. On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run. The workflow stops the run when `gates_not_run` is non-empty and `gates_not_run_stated` is not true.
+- Required on `ok`: `pr_url`, `pr_number`, `created`, `template_used`, `gates_not_run_stated` and `title` (the PR's title as `pr view` shows it). On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run. The workflow stops the run when `gates_not_run` is non-empty and `gates_not_run_stated` is not true.
 - Optional: `artefacts` (the body file), `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
 
 Shape:
@@ -104,6 +107,7 @@ Shape:
   "created": true,
   "template_used": "<path or null>",
   "gates_not_run_stated": true,
+  "title": "<the PR title>",
   "memory_notes": []
 }
 ```

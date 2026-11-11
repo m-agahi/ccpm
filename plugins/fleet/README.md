@@ -480,8 +480,9 @@ hooks are never bypassed. So nothing commits until the code judge approves.
     committed `HEAD^{tree}` differs: `needs_human` "hook modified files". Never auto-accepted.
   - Success: `approved_sha` = the new HEAD.
 
-  The first commit's subject is `feat(<task id>): <slug words>`; each later one (a review or hook
-  fix) is a NEW commit `fix(<task id>): code round <n>` (the PR squash-merges).
+  The first commit's subject is `<type>(<scope>): <slug words>`; each later one (a review or hook
+  fix) is a NEW commit `fix(<scope>): code round <n>` (the PR squash-merges). Since 6.0.0 the
+  type, the scope and the PR title follow the sealed convention (see "Conventions" below).
 
 Load-ref: an infra step reads the plan refs with `git cat-file` and returns each tag's target,
 message and message sha256. The ref named by `plan_ref` must be an annotated tag of `plan_commit`,
@@ -492,8 +493,8 @@ frozen with every other `refs/fleet/*` ref in the hasher's git map, so a coder o
 it trips the freeze; the script's own plan-ref write in a re-plan updates the frozen snapshot.
 
 Verify: the sha256 of `plan_path` at `plan_commit` must equal `plan_sha256`, or the run stops with
-"plan changed since approval". HEAD must equal `plan_commit`, or descend from it by commit-step
-commits of this plan only (`feat(<task id>): <slug words>` and `fix(<task id>): code round <n>`),
+"plan changed since approval". HEAD must equal `plan_base`, or descend from it by commit-step
+commits of this plan only (exactly the two subject forms the sealed convention builds),
 with `plan_path` unchanged. Anything else stops with the same reason.
 Stage-plan, commit-plan and verify run the same embedded hash program.
 Since 3.1.0 no step relays raw git output for these checks. Verify runs `VERIFY_SINCE_PY`
@@ -537,6 +538,29 @@ agents across runs.
 ### Write-back
 
 After the review, build mode writes back once. A failure here never changes the run status.
+
+### Conventions (6.0.0, ledger 2042)
+
+At plan time `pr_convention.py <worktree> <gh_cmd|-> <owner/repo|-> <default_branch>`
+(`infra:pr-convention:plan`, GET requests only) finds the title convention, first match:
+
+1. a required workflow in `rules/branches/<default>` (org rulesets included) whose path names
+   `pr-title`: style `scoped-key`, with the types and the key rule read from its checker's `TYPES`
+   literal when the checker is readable;
+2. a commitlint or semantic config in the repo (`type-enum` types when listed): `conventional`;
+3. 80 % or more of the last 20 merged PR titles (5 at least): `scoped-key` or `conventional`;
+4. else the fallback `type(component): summary` (ruling 4).
+
+The body convention is the repo's PR template, else the org's (`<owner>/.github`), plus the
+required sections and minimum length of a required `pr-body` workflow's checker. The planner names
+a `component` (one word; the repo name when it gives none or an unusable one). The plan ref seals
+`plan_facts.conventions` and `plan_facts.component`; the build never re-reads them. The type comes
+from `change_kind` (`bug_fix` -> `fix`, `feature` -> `feat`, `refactor`, `chore`; a type the
+checker does not list becomes `chore`), the scope is `component` (`component, KEY` in scoped-key
+style, `KEY` the Jira source's key or `NOJIRA`). The internal task id is never in a commit subject
+or the PR title. The PR opener gets `title` (it must use it verbatim; the script checks the title
+it reports) and `body_convention`. Verify knows fleet commits by these two exact subject forms; a
+resumed run also checks that HEAD is the run-state's `approved_sha`, so no trailer is needed.
 
 ### Policy (6.0.0, ledger 2033)
 

@@ -192,7 +192,7 @@ function recording(s, states) {
 const FREEZE_KEY = "fleetref:refs/fleet/l42/freeze";
 // a re-run on the approved commit; the repo still holds the freeze ref (tree T1) unless freeze is null
 function rerun(s, st, freeze = "T1") {
-  s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], head: st.approved_sha, commits_since: [{ sha: st.approved_sha, subject: "feat(l42): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] };
+  s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], head: st.approved_sha, commits_since: [{ sha: st.approved_sha, subject: "feat(thing): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] };
   s["infra:read-state"] = { status: "ok", reason: "read", exists: true, target: st.approved_sha, message: JSON.stringify(st), head: st.approved_sha, head_tree: st.code_tree, clean: true };
   const h = JSON.parse(JSON.stringify(HASHES));
   if (freeze) h.git[FREEZE_KEY] = freeze;
@@ -243,7 +243,7 @@ test("6.0.0 2043: resumed at pr_open, review changes_requested -> a coder round 
   assert.equal(ci.freeze_tree, "T1");
   const cp = inputsOf(call(out, "infra:commit:r2").prompt);
   assert.equal(cp.expected_head, CSHA(1));
-  assert.match(cp.subject, /^fix\(l42\): code round 2$/);
+  assert.match(cp.subject, /^fix\(thing\): code round 2$/);
   assert.equal(inputsOf(call(out, "infra:push").prompt).approved_sha, CSHA(2));
   assert.equal(inputsOf(call(out, "role:fleet-pr-opener:p2").prompt).approved_sha, CSHA(2));
   assert.equal(inputsOf(call(out, "role:pr-review:v2").prompt).head_sha, CSHA(2));

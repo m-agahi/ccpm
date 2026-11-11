@@ -512,6 +512,13 @@ const READS = {
     "r.unreadable array": "prog:ruleset_surface:unreadable",
   },
   sealedRs: { "x object": PARSED_REF, "x[k] array": PARSED_REF },
+  // 6.0.0 (ledger 2042)
+  prConvention: {
+    "slug string-re": PARSED_LOCAL,
+    "t.types array": "prog:pr_convention:title.types",
+    "r.source array": "prog:pr_convention:source",
+    "r.unreadable array": "prog:pr_convention:unreadable",
+  },
   isHookPath: { "p string-re": PARSED_LOCAL },
   planScopePaths: {
     "f string": SP + "criteria[].test_files[]",

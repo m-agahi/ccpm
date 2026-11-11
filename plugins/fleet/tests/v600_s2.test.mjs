@@ -103,7 +103,7 @@ test("6.0.0 2033: policy.py: a bad file is an error, never the default (strict J
 // ---------------------------------------------------------------- 2033: the policy step in the build
 
 // the subject of the build commit in the happy path
-const SUBJECT = "feat(l42): add thing";
+const SUBJECT = "feat(thing): add thing";
 const BARGS = (plan) => ({ mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
 const polOut = (over) => (p) => Object.assign({ status: "ok", reason: "read", profile: null, file: "/h/.config/fleet/policy.json", policy_sha256: null, caps: Object.assign({}, DEFAULT_CAPS), matched: "no policy file", error: null, args: inputsOf(p).args }, over);
 function stateRecorder(s) {
@@ -393,4 +393,196 @@ test("6.0.0 2042a: the PR opener puts the TL;DR and the criteria in the body and
   assert.match(t, /`tldr` \(the plan's TL;DR\)/);
   assert.match(t, /\*\*Plan:\*\* the plan doc never ships\. Never copy, attach or link it, and never quote its path\./);
   assert.match(t, /List the `id` and `text` of every criterion under the acceptance criteria/);
+});
+// ---------------------------------------------------------------- 2042b: pr_convention.py (fake gh, real git)
+
+function fakeGh(dir, table) {
+  writeFileSync(join(dir, "table.json"), JSON.stringify(table));
+  const f = join(dir, "gh");
+  writeFileSync(
+    f,
+    "#!" + PY + "\nimport json, sys\nopen(" + JSON.stringify(join(dir, "gh.log")) + ", 'a').write(' '.join(sys.argv[1:]) + '\\n')\n" +
+      "t = json.load(open(" + JSON.stringify(join(dir, "table.json")) + "))\n" +
+      "st, body, hdr = t.get(sys.argv[-1], [404, {'message': 'Not Found'}, {}])\n" +
+      "sys.stdout.write('HTTP/2.0 %d X\\r\\n' % st + ''.join('%s: %s\\r\\n' % kv for kv in hdr.items()) + '\\r\\n' + json.dumps(body))\n" +
+      "if st >= 300:\n    sys.stderr.write('gh: X (HTTP %d)\\n' % st)\n    sys.exit(1)\n",
+  );
+  chmodSync(f, 0o755);
+}
+const b64 = (t) => Buffer.from(t).toString("base64");
+function convRun(files, table, gh = "gh", slug = "q/actions") {
+  const home = mkdtempSync(join(tmpdir(), "fleet-600conv-"));
+  try {
+    const bin = join(home, "bin");
+    mkdirSync(bin);
+    symlinkSync(GITBIN, join(bin, "git"));
+    fakeGh(bin, table);
+    const r = join(home, "repo");
+    spawnSync(GITBIN, ["init", "-q", r]);
+    for (const [p, t] of Object.entries(Object.assign({ "src/x.py": "x = 1\n" }, files))) {
+      mkdirSync(dirname(join(r, p)), { recursive: true });
+      writeFileSync(join(r, p), t);
+    }
+    spawnSync(GITBIN, ["-C", r, "add", "-A"]);
+    const p = spawnSync(PY, ["-I", join(SCRIPTS_SRC, "pr_convention.py"), r, gh, slug, "master"], { encoding: "utf8", env: { PATH: bin, HOME: bin } });
+    assert.equal(p.status, 0, p.stderr);
+    const o = JSON.parse(p.stdout);
+    o.__log = existsSync(join(bin, "gh.log")) ? readFileSync(join(bin, "gh.log"), "utf8") : "";
+    return o;
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+const CC = ["feat", "fix", "perf", "revert", "chore", "refactor", "docs", "style", "test", "build", "ci"];
+const merged = (titles) => [200, titles.map((t, i) => ({ title: t, merged_at: "2026-11-0" + ((i % 9) + 1) + "T00:00:00Z" })).concat([{ title: "closed, not merged", merged_at: null }]), {}];
+const PULLS = "repos/q/actions/pulls?state=closed&sort=updated&direction=desc&per_page=50";
+const RULES = "repos/q/actions/rules/branches/master";
+const TITLE_WF = "name: PR title\non: pull_request\njobs:\n  t:\n    steps:\n      - uses: q/actions/pr-title-convention@master\n";
+const CHECKER = "TYPES = ['feat', 'fix', 'chore']\nKEY_RE = re.compile(r'^([A-Za-z][A-Za-z0-9]+-\\d+|NOJIRA)$')\n";
+const BODY_WF = "steps:\n  - uses: q/actions/pr-body-convention@master\n";
+const BODY_CHECKER = "REQUIRED_SECTIONS = ['## Summary', '## Testing']\nPR_BODY_MIN_CHARS = 120\n";
+
+test("6.0.0 2042b: pr_convention.py: a required pr-title workflow wins; types and the key rule come from its checker", () => {
+  const o = convRun({}, {
+    [RULES]: [200, [{ type: "workflows", ruleset_id: 18773609, parameters: { workflows: [{ repository_id: 7, path: ".github/workflows/pr-title-convention.yaml", ref: "refs/heads/master" }] } }], {}],
+    "repositories/7": [200, { full_name: "q/actions" }, {}],
+    "repos/q/actions/contents/.github/workflows/pr-title-convention.yaml?ref=refs%2Fheads%2Fmaster": [200, { content: b64(TITLE_WF) }, {}],
+    "repos/q/actions/contents/pr-title-convention?ref=master": [200, [{ name: "pr_title_check.py", path: "pr-title-convention/pr_title_check.py", type: "file" }, { name: "README.md", path: "pr-title-convention/README.md", type: "file" }], {}],
+    "repos/q/actions/contents/pr-title-convention/pr_title_check.py?ref=master": [200, { content: b64(CHECKER) }, {}],
+    [PULLS]: merged(["chore: x", "chore: y"]),
+  });
+  assert.deepEqual(o.unreadable, []);
+  assert.deepEqual(o.title, { style: "scoped-key", types: ["feat", "fix", "chore"], key_required: true });
+  assert.match(o.source[0], /^title: required workflow \.github\/workflows\/pr-title-convention\.yaml \(ruleset 18773609, q\/actions\), checker q\/actions\/pr-title-convention\/pr_title_check\.py$/);
+  for (const l of o.__log.trim().split("\n")) assert.match(l, /^api -i [^ ]+$/, l);
+  assert.equal(o.program.name, "pr_convention");
+});
+
+test("6.0.0 2042b: pr_convention.py: commitlint config, then >= 80 % of the last 20 merged titles, then conventional", () => {
+  const cl = convRun({ "commitlint.config.js": "module.exports = { rules: { 'type-enum': [2, 'always', ['feat', 'fix', 'docs']] } };\n" }, { [RULES]: [200, [], {}] });
+  assert.deepEqual(cl.title, { style: "conventional", types: ["feat", "fix", "docs"], key_required: false });
+  assert.equal(cl.source[0], "title: commitlint config commitlint.config.js");
+  const pj = convRun({ "package.json": JSON.stringify({ name: "x", commitlint: { extends: ["@commitlint/config-conventional"] } }) }, { [RULES]: [200, [], {}] });
+  assert.deepEqual(pj.title, { style: "conventional", types: CC, key_required: false });
+  const keyed = Array.from({ length: 20 }, (_, i) => (i < 17 ? "feat(go-pr, DEVOPS-" + (100 + i) + "): add thing " + i : "Update README"));
+  const sk = convRun({}, { [RULES]: [200, [], {}], [PULLS]: merged(keyed) });
+  assert.deepEqual(sk.title, { style: "scoped-key", types: CC, key_required: true });
+  assert.equal(sk.source[0], "title: 17 of the last 20 merged PR titles are type(component, KEY)");
+  const conv = convRun({}, { [RULES]: [200, [], {}], [PULLS]: merged(Array.from({ length: 10 }, (_, i) => (i < 8 ? "fix(fleet): x " + i : "wip"))) });
+  assert.deepEqual(conv.title, { style: "conventional", types: CC, key_required: false });
+  assert.equal(conv.source[0], "title: 8 of the last 10 merged PR titles are type(scope): summary");
+  const free = convRun({}, { [RULES]: [200, [], {}], [PULLS]: merged(["a", "b", "fix: c"]) });
+  assert.deepEqual(free.title, { style: "conventional", types: CC, key_required: false });
+  assert.equal(free.source[0], "title: no convention found; the fallback type(component): summary");
+  // no GitHub command: local sources only, said so
+  const none = convRun({}, {}, "-");
+  assert.equal(none.title.style, "conventional");
+  assert.match(none.unreadable[0], /^rules and merged PR titles of q\/actions not read: no GitHub command can read it/);
+  assert.equal(none.__log, "");
+});
+
+test("6.0.0 2042b: pr_convention.py: the body convention: the repo or org PR template and a required pr-body checker", () => {
+  const repo = convRun({ ".github/PULL_REQUEST_TEMPLATE.md": "## Summary\n" }, { [RULES]: [200, [], {}] });
+  assert.deepEqual(repo.body, { template: ".github/PULL_REQUEST_TEMPLATE.md", template_repo: null, required_sections: null, min_chars: null, checker: null });
+  const org = convRun({}, {
+    [RULES]: [200, [{ type: "workflows", ruleset_id: 19117936, parameters: { workflows: [{ repository_id: 7, path: ".github/workflows/pr-body-convention.yaml", ref: "refs/heads/master" }] } }], {}],
+    "repositories/7": [200, { full_name: "q/actions" }, {}],
+    "repos/q/actions/contents/.github/workflows/pr-body-convention.yaml?ref=refs%2Fheads%2Fmaster": [200, { content: b64(BODY_WF) }, {}],
+    "repos/q/actions/contents/pr-body-convention?ref=master": [200, [{ name: "pr_body_check.py", path: "pr-body-convention/pr_body_check.py", type: "file" }], {}],
+    "repos/q/actions/contents/pr-body-convention/pr_body_check.py?ref=master": [200, { content: b64(BODY_CHECKER) }, {}],
+    "repos/q/.github/contents/.github": [200, [{ name: "pull_request_template.md", path: ".github/pull_request_template.md", type: "file" }], {}],
+  });
+  assert.deepEqual(org.body, { template: ".github/pull_request_template.md", template_repo: "q/.github", required_sections: ["## Summary", "## Testing"], min_chars: 120, checker: "q/actions/pr-body-convention/pr_body_check.py" });
+  // an unreadable checker: named, its rules null, and said so
+  const blind = convRun({}, {
+    [RULES]: [200, [{ type: "workflows", ruleset_id: 5, parameters: { workflows: [{ repository_id: 7, path: ".github/workflows/pr_body.yml", ref: "refs/heads/main" }] } }], {}],
+    "repositories/7": [200, { full_name: "q/actions" }, {}],
+  });
+  assert.deepEqual([blind.body.required_sections, blind.body.min_chars, blind.body.checker], [null, null, "q/actions:.github/workflows/pr_body.yml"]);
+  assert.ok(blind.unreadable.some((x) => /^pr-body checker of q\/actions:\.github\/workflows\/pr_body\.yml not readable/.test(x)), JSON.stringify(blind.unreadable));
+});
+
+// ---------------------------------------------------------------- 2042b: the workflow
+
+const convOut = (title) => (p) => ({ status: "ok", reason: "read", title, body: { template: null, template_repo: "q/.github", required_sections: ["## Summary"], min_chars: 50, checker: "q/actions/pr-body-convention/pr_body_check.py" }, source: ["title: x"], unreadable: [], args: inputsOf(p).args });
+
+test("6.0.0 2042b: plan mode reads the convention after the ruleset surface and seals it with the planner's component", async () => {
+  const s = happy();
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const L = out.labels;
+  assert.equal(L.indexOf("infra:pr-convention:plan"), L.indexOf("infra:ruleset-surface:plan") + 1);
+  assert.deepEqual(inputsOf(call(out, "infra:pr-convention:plan").prompt).args, ["/r/.claude/worktrees/fleet-l42-add-thing/main", "gh", "o/r", "master"]);
+  const pf = JSON.parse(s.__store[PC]).plan_facts;
+  assert.equal(pf.component, "thing");
+  assert.equal(pf.conventions.title.style, "conventional");
+  assert.ok(out.logs.indexOf("conventions: title: no convention found; the fallback type(component): summary") >= 0);
+});
+
+test("6.0.0 2042b (ruling 4): commit subjects and the PR title follow the sealed convention; the internal task id appears in neither", async () => {
+  for (const [title, main, fix] of [
+    [null, "feat(thing): add thing", "fix(thing): code round 2"],
+    [{ style: "scoped-key", types: ["feat", "fix", "chore"], key_required: true }, "feat(thing, NOJIRA): add thing", "fix(thing, NOJIRA): code round 2"],
+    [{ style: "conventional", types: ["feat", "chore"], key_required: false }, "feat(thing): add thing", "chore(thing): code round 2"],
+  ]) {
+    const s = happy();
+    if (title) s["infra:pr-convention:plan"] = convOut(title);
+    s["infra:push"] = { status: "ok", reason: "hook", push_result: "hook_rejected", exit_code: 1, hook_tail: "no" };
+    s["role:fleet-coder:r2"] = { status: "ok", changed_paths: ["src/x.py"] };
+    s["hasher:post-coder:r2"] = { status: "ok", fingerprint: { head: "c1", tree: "K2" }, hashes: happy()["hasher:freeze:f1"].hashes };
+    s["role:fleet-code-judge:r2"] = { status: "ok", verdict: "approve", routed_findings: [] };
+    s["hasher:fp-post:code-judge:r2"] = { status: "ok", fingerprint: { head: "c1", tree: "K2" } };
+    s["infra:push:p2"] = (p) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(p).approved_sha });
+    const out = await run(s, ARGS);
+    const c1 = call(out, "infra:commit:r1").prompt;
+    assert.equal(inputsOf(c1).subject, main, JSON.stringify(title));
+    const c2 = out.calls.find((c) => c.label === "infra:commit:r2");
+    if (c2) assert.equal(inputsOf(c2.prompt).subject, fix);
+    const op = out.calls.find((c) => /^role:fleet-pr-opener/.test(c.label));
+    if (op) {
+      assert.equal(inputsOf(op.prompt).title, main);
+      if (title) assert.deepEqual(inputsOf(op.prompt).body_convention.required_sections, ["## Summary"]);
+    }
+    for (const c of out.calls.filter((x) => /^infra:commit:|^role:fleet-pr-opener/.test(x.label))) {
+      const i = inputsOf(c.prompt);
+      assert.ok(!/l42/.test(String(i.subject || "") + String(i.title || "")), c.label);
+    }
+  }
+});
+
+test("6.0.0 2042b: verify knows fleet commits by the sealed subjects; the old task-id subjects are foreign", async () => {
+  const s = happy();
+  const plan = await runOne(s, ARGS);
+  const ok = Object.assign({}, happy()["infra:verify-plan"], { head: "fedcba9876", commits_since: [{ sha: "1111111", subject: "feat(thing): add thing" }, { sha: "2222222", subject: "fix(thing): code round 2" }] });
+  s["infra:verify-plan"] = ok;
+  let out = await runOne(s, BARGS(plan));
+  assert.match(out.result.reason, /approved but unresumable/);
+  for (const subject of ["feat(l42): add thing", "fix(l42): code round 2", "fix(thing): code round x"]) {
+    s["infra:verify-plan"] = Object.assign({}, ok, { commits_since: [{ sha: "5555555", subject }] });
+    out = await runOne(s, BARGS(plan));
+    assert.match(out.result.reason, /non-fleet commit/, subject);
+  }
+});
+
+test("6.0.0 2042b: a PR opener that sets another title stops; a planner with no usable component gets the repo name", async () => {
+  const s = happy();
+  s["role:fleet-pr-opener"] = Object.assign({}, s["role:fleet-pr-opener"], { title: "feat(l42): add thing" });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "role");
+  assert.match(out.result.reason, /^pr-opener set the PR title "feat\(l42\): add thing", not "feat\(thing\): add thing"/);
+  const t = happy();
+  t["role:scope-and-plan"] = Object.assign({}, t["role:scope-and-plan"], { component: "DEVOPS 12!" });
+  const o2 = await runOne(t, ARGS);
+  assert.equal(JSON.parse(t.__store[PC]).plan_facts.component, "r");
+  assert.ok(o2.logs.indexOf('planner component "DEVOPS 12!" unusable; component r') >= 0, o2.logs.join("\n"));
+});
+
+test("6.0.0 2042b: the planner names a component; the PR opener uses the title verbatim and meets the body convention", () => {
+  const sp = readFileSync(join(SCRIPTS_SRC, "..", "roles", "scope-and-plan.md"), "utf8");
+  assert.match(sp, /`component`: the part of the repo the change is about/);
+  assert.match(sp, /Never a task, ledger or ticket id\./);
+  const po = readFileSync(join(SCRIPTS_SRC, "..", "roles", "fleet-pr-opener.md"), "utf8");
+  assert.match(po, /Title: exactly `title`, never your own; it never carries an internal id\./);
+  assert.match(po, /\*\*Body convention:\*\* the body holds every heading in `body_convention\.required_sections`/);
 });
