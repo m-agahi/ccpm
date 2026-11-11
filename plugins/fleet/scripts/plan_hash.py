@@ -32,25 +32,26 @@ try:
         _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
 except Exception:
     _PROG = {'name': None, 'sha256': None}
-import hashlib, json, os, subprocess, sys
-# 6.0.0 (ledger 2042): <rev> "" hashes the worktree file as it is; a 4th
-# argument writes the blob at <rev>:<path> to that file under the scratch dir
+import hashlib, json, os, re, subprocess, sys
+# 6.0.0 (ledger 2042): <rev> "" hashes the worktree file as it is
 wt, rev, path = sys.argv[1:4]
+def confined(wt, rel):
+    # security review (6.0.0): <wt>/<rel> with no '..', NUL, backslash or symlinked component, inside wt
+    if not re.fullmatch(r'[A-Za-z0-9._/-]+', rel) or rel.startswith('/') or '..' in rel.split('/'):
+        return None
+    base = os.path.realpath(wt)
+    cur = base
+    for part in rel.split('/'):
+        cur = os.path.join(cur, part)
+        if os.path.islink(cur):
+            return None
+    return cur if os.path.realpath(cur).startswith(base + '/') else None
 if rev == '':
-    f = os.path.join(wt, path)
-    if os.path.islink(f) or not os.path.isfile(f):
-        sys.exit('no plan doc at ' + f)
+    f = confined(wt, path)
+    if f is None or not os.path.isfile(f):
+        sys.exit('no plan doc at ' + wt + '/' + path)
     with open(f, 'rb') as fh:
         d = fh.read()
 else:
     d = subprocess.run(['git', '-C', wt, 'show', rev + ':' + path], capture_output=True, check=True).stdout
-if len(sys.argv) == 5:
-    scratch = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(wt)), 'scratch'))
-    dest = os.path.join(os.path.realpath(os.path.dirname(sys.argv[4])), os.path.basename(sys.argv[4]))
-    if not dest.startswith(scratch + '/') or os.path.islink(dest):
-        sys.exit('dest ' + sys.argv[4] + ' is not under ' + scratch)
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    with open(dest + '.tmp', 'wb') as fh:
-        fh.write(d)
-    os.replace(dest + '.tmp', dest)
 print(json.dumps({'plan_sha256': hashlib.sha256(d).hexdigest(), 'program': _PROG}))

@@ -109,15 +109,17 @@ plan doc (`infra:format-plan`) as before. Then `plan_ref_write.py` writes the pl
 `git commit`: a temporary index on `plan_base` (the branch HEAD the scan saw), the plan bytes as
 they are, `commit-tree -p <plan_base>`. The commit is on no branch. The tag at
 `refs/fleet/<task id>/plan` targets it and keeps it. The program then moves the plan doc to
-`<scratch>/plan/<plan_path>` (a tracked, ingested plan file is restored to HEAD), so the worktree is
+`<fleet root>/plan/<plan_path>`, outside the worktree and the scratch dir that roles may write (a
+tracked, ingested plan file is restored to HEAD). The plan path must stay inside the worktree with
+no `..` and no symlinked component, so the worktree is
 clean and the branch HEAD has not moved. An identical re-plan on the same base reuses the commit.
 `plan_files.py <worktree> <commit>` lists the commit against its parent, and the script checks that
 the parent is the sealed `plan_base` and HEAD is unchanged.
 
 The sealed ref holds `plan_base`. The build verifies that the branch HEAD is `plan_base` or descends
-from it through fleet commits only, and that no commit since touches `plan_path`. Verify writes the
-plan doc from the plan commit to `<scratch>/plan/<plan_path>`
-(`plan_hash.py <wt> <plan_commit> <plan_path> <dest>`), and every role gets that absolute path as `plan_path`. Code diffs (judges,
+from it through fleet commits only, and that no commit since touches `plan_path`. Roles never read
+a plan file a role could rewrite: each gets `plan_blob` (`<plan_commit>:<plan_path>`) and reads the
+sealed plan with `git show <plan_blob>`. Code diffs (judges,
 coder, caller check, hook surface, review) start at `plan_base`. A ref without `plan_base` (sealed
 by 5.x) stops with "delete branch ..., then re-run plan". The fleet-scan before each push stops when
 `plan_path` is in the PR diff or in a commit. The PR body carries the plan's TL;DR and acceptance

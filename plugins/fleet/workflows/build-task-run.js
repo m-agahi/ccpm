@@ -1477,9 +1477,9 @@ const PROGRAM_SHA256 = {
   "path_check": "9a05c718892ff35b213a61fd8abeadad4dae0fa2ca7671485d670fe02b5a1596",
   "plan_dsn": "269dfac0132859fc884ef34a0032e2932f3d943100e3cbb7906466cf135a5fc6",
   "plan_files": "a985309a34cc229fd08087c34933b6b752fa56896c194393b19d59ea99361e14",
-  "plan_hash": "c944bdd9f0d97b8260c1ffb571501cc9dd25330fa98b58e5ea090216e5268800",
+  "plan_hash": "9239aa330c4b01fb947ec9b4f4e684075f5e6338e3394392d4c9e00b522cd951",
   "plan_ref": "70b82ddd6b5cd3321dd04efc6b9549b001d25b1aa0ac98ed73a5e2f75ff8841d",
-  "plan_ref_write": "b59c4ac2cd9934fdea04b45296da46486c5df107b7ae8a150b6daf191ec64d6b",
+  "plan_ref_write": "822595ac7d947040ef3d125c9914965da696ba10290570bcb7926eb1d538d828",
   "policy": "e4fdd22ccc9ebbee24e128ee54f91e3eba90fae350d64703655358a3e7026141",
   "precommit_ids": "627d38e747a9f5b57bba6b9cfc6e5deccb016be7b943ff89b7fd5689a6ddc09b",
   "push_classify": "3ac4435c37d17784050a25c58f5071c60354698defb9a66c963636a70185a6c1",
@@ -1504,12 +1504,12 @@ function programTable() {
 // the role prompts ship as plugins/fleet/roles/<role>.md
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
-  "fleet-code-judge": "0f9af94bf2ccd40ea9f26613f94f55a186abd63a183b348acf1c684c75958f49",
-  "fleet-coder": "ba59027bfc8e81c997c39897b43c1ba9caa0aff39c20b16eae686d8161422d05",
+  "fleet-code-judge": "9012adff406e520fefe796e76d84fb30d99fc68d9ce9d3acf42bf727086d8adc",
+  "fleet-coder": "0dafd2181741ba41094a87e05fc247c042b6fb173ec33439c52dcc2dbd9c52b2",
   "fleet-intent-judge": "03283fc805f57bcf22a6448fc43b8ead05983e94de1b05563f3e50c4a7837a1e",
-  "fleet-pr-opener": "68ccfdc53f233bbbe3afd76e83c4a93662bc09c0123440accfc48f71e6c90734",
-  "fleet-test-judge": "0b288f9221703e5534ba13b8ba31d242ecdd3663ceca12dba0d63fd57c4a301a",
-  "fleet-test-writer": "ea3a3490bd986a1bf90bf01a8494620b819959d1bb4f1247d914e8b1d495914d",
+  "fleet-pr-opener": "34a30578a75867f24ce3c23b72988f6d130500ed8702f64b0870df0ac10619dd",
+  "fleet-test-judge": "40db39eac4dbf0ec92cbd737fc575a15fd6c171f3e12f99159b1df2300f30134",
+  "fleet-test-writer": "f9a22200e193fcc17779da65140ffa8178ab6ed18568e5947e9e8f410a65d971",
   "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
   "plan-audit": "084fe730cc8ecb5cf8712b164bb763cb9bbe97e18bc3cc04e82480ba158de984",
   "pr-review": "728800a005a54026eb345d5b9784bdde50cdafd5d918f9faa8d2cec7c091142d",
@@ -2603,8 +2603,8 @@ function verifyPlanPrompt(inputs) {
     (inputs.frozen_resume ? " Exception (frozen_resume is true): the uncommitted paths of a frozen build are expected; list them in reason and go on (the workflow checks the worktree tree itself)." : "") +
     "\n" +
     "2. `git -C <main_worktree> cat-file -e '<plan_commit>^{commit}'` (keep the quotes: zsh globs `^`) must succeed; else needs_human.\n" +
-    "3. Run this command exactly as written (it writes the plan doc to <plan_file>, outside the worktree):\n" +
-    progCmd("plan_hash", [inputs.main_worktree, inputs.plan_commit, inputs.plan_path, inputs.plan_file]) +
+    "3. Run this command exactly as written, unmodified:\n" +
+    progCmd("plan_hash", [inputs.main_worktree, inputs.plan_commit, inputs.plan_path]) +
     "\nIt prints one JSON object " + printsKeys("plan_hash") + ": " + relayAs("plan_hash") + ".\n" +
     "4. Run this command exactly as written, unmodified:\n" +
     progCmd("verify_since", [inputs.main_worktree, inputs.plan_base, inputs.plan_path]) +
@@ -5298,15 +5298,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const remoteUrl = typeof pf.remote_url === "string" ? pf.remote_url : null;
   const mainWt = lay.mainWt;
   const branch = lay.branch;
-  // the commit the build's own commits sit on; the plan doc is read from scratch (2042)
+  // the commit the build's own commits sit on; roles read the plan from the sealed commit (2042)
   const planBase = ref.plan_base;
-  const planFile = lay.scratch + "/plan/" + ref.plan_path;
+  const planBlob = ref.plan_commit + ":" + ref.plan_path;
 
   // verify the approved plan
   const criteria = normCriteria(ref.criteria, pf.test_cmd);
   const v = await infra(
     "infra:verify-plan",
-    verifyPlanPrompt(Object.assign({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_base: planBase, plan_path: ref.plan_path, plan_file: planFile, default_branch: defaultBranch }, typeof input.freeze_digest === "string" ? { frozen_resume: true } : {})),
+    verifyPlanPrompt(Object.assign({ main_worktree: mainWt, branch, plan_commit: ref.plan_commit, plan_base: planBase, plan_path: ref.plan_path, default_branch: defaultBranch }, typeof input.freeze_digest === "string" ? { frozen_resume: true } : {})),
     "Verify",
     JUDGE_AGENT,
     "verify_since",
@@ -5334,12 +5334,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // earlier fleet commits are fenced too, before any role runs
     fenceChanged("verify (commits since the plan commit)", v.changed_since || []);
     gate("verify: HEAD " + v.head + " descends from plan_base by " + (v.commits_since || []).length + " fleet commit(s)");
-  } else gate("verify: HEAD is plan_base " + planBase + "; plan hash matches; plan doc at " + planFile);
+  } else gate("verify: HEAD is plan_base " + planBase + "; plan hash matches at " + planBlob);
 
   const common = { project, worktree: mainWt, branch, default_branch: defaultBranch, scratch_dir: lay.scratch };
   // the per-role build dirs live under this scratch dir
   state.buildScratch = lay.scratch;
-  const planCtx = { plan_path: planFile };
+  const planCtx = { plan_path: ref.plan_path, plan_blob: planBlob };
   const planFacts = {
     allowed_additions: ref.plan_facts.allowed_additions,
     est_diff_lines: typeof ref.plan_facts.est_diff_lines === "number" ? ref.plan_facts.est_diff_lines : null,

@@ -77,10 +77,11 @@ const SCENARIOS = {
 // diagnostics (workspace schema), intake's relaunch rule (prompt), infra:ruleset-surface:plan (new call)
 // 6.0.0 stream 2: infra:policy (new build call)
 // 6.0.0 stream 2: plan doc off the branch (stage-plan, commit-plan, verify-plan-commit, verify-plan prompts; pr-opener tldr; branch-scan head)
+// 6.0.0 stream 2 (security review): roles read the plan at plan_blob; verify no longer writes a copy
 const PINS = {
-  "plan then build (confirm ask)": { calls: 77, sha256: "57abc3ab8f7346bec6275694d923256707508b3f024ff179b38540529a4c7f97" },
-  "confirm auto (gates, then build in one run)": { calls: 79, sha256: "5332125b7ad218d81ff3b852e528f49997af92eddcac52ab179db14f6558ee5a" },
-  "short path (one test writer)": { calls: 76, sha256: "7db6e453460077e90dad77c8cbebc774a0d4861147859e0c57857f1c9a33d04d" },
+  "plan then build (confirm ask)": { calls: 77, sha256: "afb98187d06563d143a88972307fb6690c99a6607f99d84992e0e47b5f8f542c" },
+  "confirm auto (gates, then build in one run)": { calls: 79, sha256: "493c50a9fdbb9c23e86fcb7b6a706c4dad93363bc103bc2609468c0c76fd00c2" },
+  "short path (one test writer)": { calls: 76, sha256: "f14a70670246424add6d865fcb064b2acd711db0bdf96025161a8a0bdd8a5eee" },
   "probe": { calls: 2, sha256: "012d024fefbefe057a047d8b6822b07ea3152de9e7d322be0e6cf5d6273fc736" },
 };
 

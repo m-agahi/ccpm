@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { SCRIPTS_SRC, ARGS, PC, PB, sha256, canon, happy, run, runOne, call, inputsOf, spawnSync, stateJsonOf } from "./harness.mjs";
@@ -222,7 +222,7 @@ function chunkArgs(rp, dir, message) {
 }
 const writeRef = (rp, base, planPath, message, dir) => prog(rp, "plan_ref_write", [rp.wt, "t1", base, planPath].concat(chunkArgs(rp, dir || "c1", message)));
 
-test("6.0.0 2042a: plan_ref_write.py writes a dangling plan commit on plan_base, tags it, moves the plan to scratch and leaves the branch where it was", () => {
+test("6.0.0 2042a: plan_ref_write.py writes a dangling plan commit on plan_base, tags it, moves the plan out of the worktree and leaves the branch where it was", () => {
   const rp = planRepo();
   try {
     writeFileSync(join(rp.wt, "docs", "plans", "x.md"), "# plan\n");
@@ -232,7 +232,8 @@ test("6.0.0 2042a: plan_ref_write.py writes a dangling plan commit on plan_base,
     assert.equal(o.plan_base, rp.base);
     assert.equal(o.reused, false);
     assert.deepEqual(o.dirty, []);
-    assert.equal(o.plan_file, join(rp.scratch, "plan", "docs/plans/x.md"));
+    // security review: outside the scratch dir, which roles may write
+    assert.equal(o.plan_file, join(rp.root, "plan", "docs/plans/x.md"));
     assert.equal(readFileSync(o.plan_file, "utf8"), "# plan\n");
     assert.equal(rp.git("rev-parse", "HEAD"), rp.base, "the branch did not move");
     assert.equal(rp.git("status", "--porcelain"), "", "the worktree is clean");
@@ -277,7 +278,7 @@ test("6.0.0 2042a: plan_ref_write.py: an ingested tracked plan is restored in th
   }
 });
 
-test("6.0.0 2042a: plan_files.py lists the files of a given commit against its parent; plan_hash.py hashes the worktree file and extracts a blob into scratch", () => {
+test("6.0.0 2042a: plan_files.py lists the files of a given commit against its parent; plan_hash.py hashes the worktree file and the sealed blob alike", () => {
   const rp = planRepo();
   try {
     writeFileSync(join(rp.wt, "docs", "plans", "x.md"), "# plan\n");
@@ -287,13 +288,9 @@ test("6.0.0 2042a: plan_files.py lists the files of a given commit against its p
     const pf = prog(rp, "plan_files", [rp.wt, w.out.plan_commit]);
     assert.equal(pf.status, 0, pf.stderr);
     assert.deepEqual([pf.out.head, pf.out.commit, pf.out.parent, pf.out.files, pf.out.args], [rp.base, w.out.plan_commit, rp.base, ["docs/plans/x.md"], [rp.wt, w.out.plan_commit]]);
-    const dest = join(rp.scratch, "plan", "docs/plans/x.md");
-    rmSync(dest);
-    const ex = prog(rp, "plan_hash", [rp.wt, w.out.plan_commit, "docs/plans/x.md", dest]);
-    assert.equal(ex.status, 0, ex.stderr);
-    assert.equal(ex.out.plan_sha256, wtHash.out.plan_sha256);
-    assert.equal(readFileSync(dest, "utf8"), "# plan\n");
-    assert.notEqual(prog(rp, "plan_hash", [rp.wt, w.out.plan_commit, "docs/plans/x.md", join(rp.root, "elsewhere.md")]).status, 0, "dest must be under scratch");
+    const at = prog(rp, "plan_hash", [rp.wt, w.out.plan_commit, "docs/plans/x.md"]);
+    assert.equal(at.status, 0, at.stderr);
+    assert.equal(at.out.plan_sha256, wtHash.out.plan_sha256);
   } finally {
     rmSync(rp.root, { recursive: true, force: true });
   }
@@ -320,21 +317,49 @@ test("6.0.0 2042a: branch_scan.py prints HEAD and takes plan_tip_time from the n
 
 // ---------------------------------------------------------------- 2042a: the workflow
 
-const PLAN_FILE = "/r/.claude/worktrees/fleet-l42-add-thing/scratch/plan/docs/plans/x.md";
+const PLAN_BLOB = PC + ":docs/plans/x.md";
+const PLAN_ROLES = ["fleet-test-writer", "fleet-test-judge", "fleet-coder", "fleet-code-judge", "fleet-pr-opener"];
 
-test("6.0.0 2042a: the build extracts the plan doc to scratch at verify; roles read it there; code diffs start at plan_base", async () => {
+test("6.0.0 2042a (security review): roles read the plan from the sealed plan commit (plan_blob), never from a file a role could rewrite; code diffs start at plan_base", async () => {
   const out = await run(happy(), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
   const vp = call(out, "infra:verify-plan").prompt;
-  assert.ok(vp.includes("/plan_hash.py' '/r/.claude/worktrees/fleet-l42-add-thing/main' '" + PC + "' 'docs/plans/x.md' '" + PLAN_FILE + "'"), vp);
+  assert.ok(vp.includes("/plan_hash.py' '/r/.claude/worktrees/fleet-l42-add-thing/main' '" + PC + "' 'docs/plans/x.md'\n"), vp);
   assert.ok(vp.includes("/verify_since.py' '/r/.claude/worktrees/fleet-l42-add-thing/main' '" + PB + "' 'docs/plans/x.md'"));
-  assert.doesNotMatch(vp, /plan_hash_head|'HEAD' 'docs\/plans/);
-  for (const l of ["role:fleet-test-writer:AC1:r1", "role:fleet-test-judge:r1", "role:fleet-coder:r1", "role:fleet-code-judge:r1", "role:fleet-pr-opener"])
-    assert.equal(inputsOf(call(out, l).prompt).plan_path, PLAN_FILE, l);
+  assert.doesNotMatch(vp, /plan_hash_head|'HEAD' 'docs\/plans|plan_file/);
+  for (const l of ["role:fleet-test-writer:AC1:r1", "role:fleet-test-judge:r1", "role:fleet-coder:r1", "role:fleet-code-judge:r1", "role:fleet-pr-opener"]) {
+    const i = inputsOf(call(out, l).prompt);
+    assert.equal(i.plan_blob, PLAN_BLOB, l);
+    assert.equal(i.plan_path, "docs/plans/x.md", l);
+  }
+  for (const c of out.build.calls) assert.ok(!/\/plan\/docs\/plans\/x\.md/.test(c.prompt), c.label + " names no plan file copy");
   assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).tldr, "adds a thing");
   assert.equal(inputsOf(call(out, "infra:hook-surface:r1").prompt).rev, PB);
   assert.equal(inputsOf(call(out, "role:pr-review:v1").prompt).base_ref, PB);
-  assert.ok(out.build.logs.indexOf("verify: HEAD is plan_base " + PB + "; plan hash matches; plan doc at " + PLAN_FILE) >= 0, out.build.logs.join("\n"));
+  assert.ok(out.build.logs.indexOf("verify: HEAD is plan_base " + PB + "; plan hash matches at " + PLAN_BLOB) >= 0, out.build.logs.join("\n"));
+  for (const r of PLAN_ROLES) {
+    const t = readFileSync(join(SCRIPTS_SRC, "..", "roles", r + ".md"), "utf8");
+    assert.match(t, /`plan_blob`: the plan doc as a sealed git object; read it only with `git -C <worktree> show <plan_blob>`\. The plan doc is not in the worktree: never write it there\./, r);
+  }
+});
+
+test("6.0.0 2042a (security review): plan_ref_write.py and plan_hash.py refuse a plan path that escapes the worktree or runs through a symlink; nothing outside is read or deleted", () => {
+  const rp = planRepo();
+  try {
+    const outside = join(rp.root, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "x.md"), "secret\n");
+    symlinkSync(outside, join(rp.wt, "docs", "link"));
+    for (const p of ["docs/link/x.md", "../outside/x.md", "docs/plans/../../../outside/x.md", "docs\\plans\\x.md"]) {
+      const w = writeRef(rp, rp.base, p, "{}\n", "c-" + p.length);
+      assert.notEqual(w.status, 0, p);
+      assert.equal(readFileSync(join(outside, "x.md"), "utf8"), "secret\n", p + ": the file outside is untouched");
+      assert.notEqual(prog(rp, "plan_hash", [rp.wt, "", p]).status, 0, "plan_hash: " + p);
+    }
+    assert.equal(rp.git("for-each-ref", "refs/fleet/"), "", "no ref written");
+  } finally {
+    rmSync(rp.root, { recursive: true, force: true });
+  }
 });
 
 test("6.0.0 2042a: a plan ref sealed before 6.0.0 (no plan_base) is refused with 'delete the branch, then re-run plan'", async () => {

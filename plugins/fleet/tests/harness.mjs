@@ -897,7 +897,7 @@ export function commitStub(store, head, planSha) {
     const i = inputsOf(prompt);
     // a re-plan worktree (no branch) sits on the plan commit it replaces
     store.__commit = { head, planSha, planPath: i.plan_path, worktree: i.worktree, base: i.plan_base, wtHead: i.branch ? i.plan_base : prev };
-    const plan_file = i.worktree.replace(/\/+[^/]+\/*$/, "") + "/scratch/plan/" + i.plan_path;
+    const plan_file = i.worktree.replace(/\/+[^/]+\/*$/, "") + "/plan/" + i.plan_path;
     return { status: "ok", reason: "committed", plan_commit: head, plan_base: i.plan_base, tag_sha: "7".repeat(40), reused: false, plan_file, dirty: [] };
   };
 }

@@ -2280,10 +2280,9 @@ test("build mode: preflight first, then workspace, verify, then the writers' bas
     main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
     branch: "fleet/l42-add-thing",
     plan_commit: PC,
-    // 6.0.0 (ledger 2042): the branch sits on plan_base; the plan doc is extracted to scratch
+    // 6.0.0 (ledger 2042): the branch sits on plan_base; roles read the plan at plan_commit
     plan_base: PB,
     plan_path: "docs/plans/x.md",
-    plan_file: "/r/.claude/worktrees/fleet-l42-add-thing/scratch/plan/docs/plans/x.md",
     // 4.0.0 (1981): the test database declaration is read at origin/<default>
     default_branch: "master",
   });

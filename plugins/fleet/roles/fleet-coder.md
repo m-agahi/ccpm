@@ -11,6 +11,7 @@ You write PRODUCTION code so the frozen tests pass. The tests were written and j
 
 ## Inputs
 
+- `plan_blob`: the plan doc as a sealed git object; read it only with `git -C <worktree> show <plan_blob>`. The plan doc is not in the worktree: never write it there.
 - `plan_path`, `criteria` (`[{id, text, test_files, ...}]`), `allowed_additions` (`{files, symbols, deps, settings}`), `est_diff_lines`, `change_kind`, `new_behaviour`.
 - `frozen_tests`: `[path]` — the criterion test files.
 - `frozen_config_sections`: `{map: file}` — for each hasher map (`files`, `sections`, `git`, `symlinks`, `ignored`), the absolute path of a JSON file that holds that frozen map as `{key: value}`. Read the files you need (`cat`); never write them. Key kinds: `files` — a path (the test files, and whole runner-config or ignore files such as `conftest.py`, `setup.cfg`, `tox.ini`, `pytest.ini`, `.gitignore`) = sha256 of that WHOLE file; `sections` — `path#section` (a section of a config file); `git` — `info/exclude`, `core.excludesFile`, `hooks/<rel>`, `config:*`; `symlinks` — `<rel>` = a link target, not a hash; `ignored` — an ignored file's path.

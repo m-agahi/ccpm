@@ -43,7 +43,19 @@ if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', target):
     sys.exit('bad task id: ' + target)
 if not re.fullmatch(r'[0-9a-f]{40}([0-9a-f]{24})?', base_arg):
     sys.exit('bad plan_base: ' + base_arg)
-if not re.fullmatch(r'[A-Za-z0-9._/-]+', plan_path) or plan_path.startswith('/') or '..' in plan_path.split('/') or plan_path.startswith('.git/'):
+def confined(wt, rel):
+    # security review (6.0.0): <wt>/<rel> with no '..', NUL, backslash or symlinked component, inside wt
+    if not re.fullmatch(r'[A-Za-z0-9._/-]+', rel) or rel.startswith('/') or '..' in rel.split('/'):
+        return None
+    base = os.path.realpath(wt)
+    cur = base
+    for part in rel.split('/'):
+        cur = os.path.join(cur, part)
+        if os.path.islink(cur):
+            return None
+    return cur if os.path.realpath(cur).startswith(base + '/') else None
+src = confined(wt, plan_path)
+if src is None or plan_path.startswith('.git/'):
     sys.exit('bad plan_path: ' + plan_path)
 if not re.fullmatch(r'[1-9][0-9]{0,2}', n_arg):
     sys.exit('bad chunk count: ' + n_arg)
@@ -99,8 +111,7 @@ head = git('rev-parse', '--verify', 'HEAD^{commit}')
 base = git('rev-parse', '--verify', base_arg + '^{commit}')
 if subprocess.run(G + ['merge-base', '--is-ancestor', base, head], capture_output=True).returncode != 0:
     sys.exit('plan_base ' + base + ' is not HEAD or an ancestor of HEAD ' + head)
-src = os.path.join(wt, plan_path)
-if os.path.islink(src) or not os.path.isfile(src):
+if not os.path.isfile(src):
     sys.exit('no plan doc at ' + src)
 with open(src, 'rb') as f:
     doc = f.read()
@@ -135,8 +146,8 @@ if old and old != tag:
     git('update-ref', ref + '-%d' % k, old)
 git('update-ref', ref, tag)
 shutil.rmtree(real, ignore_errors=True)
-# the plan doc moves to <scratch>/plan/<plan_path>; a tracked one is restored to HEAD
-dest = os.path.join(scratch, 'plan', plan_path)
+# the plan doc moves to <root>/plan/<plan_path>, outside the scratch dir roles may write; a tracked one is restored to HEAD
+dest = os.path.join(os.path.dirname(os.path.realpath(wt)), 'plan', plan_path)
 os.makedirs(os.path.dirname(dest), exist_ok=True)
 with open(dest + '.tmp', 'wb') as f:
     f.write(doc)

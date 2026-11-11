@@ -94,13 +94,13 @@ and 3 add the items marked "pending"; stream 3 finalises this entry.
   `plan_ref_write.py <wt> <task> <plan_base> <plan_path> <chunks...>` writes the plan commit with
   no `git commit`: a temporary index on `plan_base` (the branch HEAD `branch_scan.py` now prints),
   `commit-tree`, the tag at `refs/fleet/<task>/plan`. It moves the plan doc to
-  `<scratch>/plan/<plan_path>` (a tracked plan file is restored), reuses an identical plan commit
+  `<fleet root>/plan/<plan_path>` (a tracked plan file is restored), reuses an identical plan commit
   and prints `{plan_commit, plan_base, tag_sha, reused, plan_file, dirty}`. Stage-plan hashes the
   worktree file (no `git add`); format-plan still runs the hooks on it.
   `plan_files.py <wt> <commit>` checks the commit against its parent (= `plan_base`). The sealed
   ref holds `plan_base`;
-  the build verifies HEAD against it (`verify_since` base), extracts the plan doc to scratch
-  (`plan_hash.py ... <dest>`), gives roles that absolute `plan_path`, and diffs from `plan_base`
+  the build verifies HEAD against it (`verify_since` base), gives roles `plan_blob`
+  (`<plan_commit>:<plan_path>`, read with `git show`), and diffs from `plan_base`
   (judges, coder, hasher base tree, hook surface, caller check, review). `branch_scan`'s
   `plan_tip_time` is the plan ref's commit time. A re-plan seals on the same `plan_base` and resets
   the branch to it. Fleet-scan stops when `plan_path` is in the PR diff or a commit. Write-back
@@ -108,6 +108,11 @@ and 3 add the items marked "pending"; stream 3 finalises this entry.
   the body (ruling 2). Refs and branches from 5.x are refused, not migrated: a ref without
   `plan_base` stops the build, and a branch with a 5.x plan commit stops plan mode, both with
   "delete branch ..., then re-run plan".
+- Security review of 2042a: roles read the plan only from the sealed plan commit (`plan_blob`), so
+  a role cannot rewrite the plan another role or the PR opener reads; the copy of the plan doc lives
+  outside the scratch dir. `plan_ref_write.py` and `plan_hash.py` (rev `""`) refuse a plan path
+  with `..`, a backslash or a symlinked component, or one that resolves outside the worktree,
+  before any read or delete.
 
 ### Pending (streams 2 and 3)
 
