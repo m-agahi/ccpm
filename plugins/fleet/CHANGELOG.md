@@ -19,6 +19,11 @@ change in behaviour, so 5.1.0 has room to grow under the 480000-byte budget (ADR
   sentence states a rule, plus every section divider and `*_BEGIN` / `*_END` marker. Proof of no
   code change: the old and new workflow minify (esbuild `--minify-whitespace`) to the same bytes,
   and every prompt, schema and model the test suite makes the workflow send is byte-identical.
+- Prompt fragments that several prompts repeat are built once: `inputsLine`, `planWorktreeSteps`
+  and the constants `INFRA_STEP`, `RUN_EXACT`, `RUN_ONLY`, `RUN_600S`, `COPY_DIGEST`,
+  `FAIL_STDERR`, `TASK_DATA` and `BODY_DATA`: 385151 -> 381940 bytes. Every rendered prompt stays
+  byte-identical (the snapshot test and a dump of all the suite's agent calls). `pathRecheckPrompt`
+  keeps its text inline: a test evaluates that function on its own.
 
 ### Added
 
