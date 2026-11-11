@@ -515,8 +515,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // code judge, commit, push, pr-review) and the teardown, which runs after
   // the result is made
   // 6.0.0 (ledger 2033): + infra:policy
-  assert.equal(out.build.calls.length, 64, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 63);
+  // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
+  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 66);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -585,8 +586,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     noUnscripted(b);
     assert.equal(b.result.status, "ok", b.result.reason);
     // 5.0.6 (ledger 2019): 50 + 7 build-dir resets + the teardown
-    // 6.0.0 (ledger 2033): + infra:policy
-    assert.equal(b.calls.length, 64);
+    // 6.0.0 (ledger 2033): + infra:policy; review S6, S7a: + 3
+    assert.equal(b.calls.length, 67);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });

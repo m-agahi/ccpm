@@ -390,7 +390,20 @@ export async function runOne(script, args0) {
     }
     if (!(label in script) && /^infra:pr-update/.test(label)) {
       const a = inputsOf(prompt).args;
-      return { status: "ok", reason: "updated", mode: "update", updated: true, head: "d".repeat(40), overlap: [], error: null, args: a };
+      return { status: "ok", reason: "updated", mode: "update", updated: true, head: "d".repeat(40), base: "c".repeat(40), overlap: [], error: null, args: a };
+    }
+    // review fixes: the log read finds the watched failures' tails; a resume finds the PR open; a fetch lands on the new head
+    if (!(label in script) && /^infra:ci-logs:/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "read", mode: "logs", head: a[4], logs: [{ name: "test", url: "https://github.com/o/r/actions/runs/77/job/88", run_id: "77", excerpt: "FAILED tests/test_a.py::test_x", verified: true }], error: null, args: a };
+    }
+    if (!(label in script) && /^infra:pr-view/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "read", mode: "view", state: "OPEN", head: a[4], merge_sha: null, error: null, args: a };
+    }
+    if (!(label in script) && /^infra:pr-fetch/.test(label)) {
+      const a = inputsOf(prompt).args;
+      return { status: "ok", reason: "fetched", mode: "fetch", head: a[4], tree: "T".repeat(1), error: null, args: a };
     }
     if (!(label in script) && /^infra:ci-rerun/.test(label)) {
       const a = inputsOf(prompt).args;
@@ -402,7 +415,9 @@ export async function runOne(script, args0) {
     if (!(label in script) && /^infra:ruleset-surface:/.test(label))
       return { status: "ok", reason: "read", surface: [], sources: [], read: ["self-references in 0 local workflow file(s)", "rules/branches/main: 0 rule(s)", "owner o is not an organization: no org rulesets"], unreadable: [], error: null, args: inputsOf(prompt).args };
     // 3.1.0: unscripted ledger reads find a task with a body page
-    if (!(label in script) && /^infra:ledger-read:pre$/.test(label))
+    // 2034.5: the CI follow-up write lands like the write-back
+    if (!(label in script) && /^infra:ledger-writeback:ci$/.test(label)) return { status: "ok", reason: "ok", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "written" })) };
+    if (!(label in script) && /^infra:ledger-read:pre(:ci)?$/.test(label))
       return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
     // 5.0.8 (ledger 2030): an unscripted gh check reads the scenario's answers
     if (!(label in script) && /^infra:gh-identity:/.test(label)) return Object.assign({ status: "ok", reason: "checked" }, ghIdOut(inputsOf(prompt).args, null, script.__gh));
@@ -454,6 +469,8 @@ export async function runOne(script, args0) {
     // 4.0.0 (1984): an unscripted drift retry repeats the role's answer for
     // that label (or its round-0 stub); script "<label>:retry" to differ
     if (!(key in script) && /^role:.+:retry$/.test(label)) key = roundBase(label.slice(0, -":retry".length));
+    // 6.0.0 review S6: an unscripted step of the soft CI write-back (labels ending :ci) finds nothing
+    if (!(key in script) && /^infra:[a-z-]+(:[a-z]+)*:ci$/.test(label)) return null;
     if (!(key in script)) {
       unscripted.push(label);
       return null;
@@ -1146,6 +1163,9 @@ export const PROGRAM_LABELS = [
   [/^infra:pr-merge/, [[null, "pr_state", K("pr_state:merge")]]],
   [/^infra:pr-update/, [[null, "pr_state", K("pr_state:update")]]],
   [/^infra:ci-rerun/, [[null, "pr_state", K("pr_state:rerun")]]],
+  [/^infra:ci-logs/, [[null, "pr_state", K("pr_state:logs")]]],
+  [/^infra:pr-view/, [[null, "pr_state", K("pr_state:view")]]],
+  [/^infra:pr-fetch/, [[null, "pr_state", K("pr_state:fetch")]]],
   [/^infra:fleet-cleanup/, [[null, "pr_state", K("pr_state:cleanup")]]],
   [/^infra:orch-scan/, [[null, "orch_scan", K("orch_scan")]]],
   [/^infra:ci-watch:/, [[null, "ci_watch", K("ci_watch")]]],

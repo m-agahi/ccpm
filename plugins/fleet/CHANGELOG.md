@@ -235,9 +235,80 @@ last state. With no policy file, a fleet PR is marked ready and its CI is watche
     "orchestrator PR: needs Max" (`stop_gate: "merge"`): no rerun, no fix push, no merge.
   - `result.ci = {verdict, checks: [{name, state, url}], fix_rounds, merged, merge_sha}` on every
     result once the CI step ran; the result reason ends with the CI outcome.
-  - Not done here: write-back runs before CI (ruling 2045 order), and the write-back steps skip
-    a source that already carries the fleet marker, so the ledger section and comments do not
-    carry `ci`; the run result does.
+  - Write-back runs before CI (ruling 2045 order); the CI outcome follows in its own write
+    (review S6 below).
+
+### Done (review of the PR tail: REQUEST CHANGES)
+
+- B1 (green too early): `ci_watch.py` treats an empty check list as no check, and an empty
+  required list falls back to all checks. It returns green only when no check is pending or
+  failed, at least one check ran, and the read is at least 90 s after the first call and 60 s
+  after the first read (the state file keeps `first_read`). Checks that register late (a
+  `ready_for_review` workflow, a draft-skipped one) get time to appear. Each checks read sits
+  between two head reads; a head that moves during the read is `head_moved`. `gh pr checks`
+  has no per-check sha, so the bracket is how the checks are tied to the head. Each watch has
+  its own state file (`ci-<nonce>-p<push>-w<watch>.json`), so the head after update-branch
+  and a rerun settle again. `ciStep` never merges when the check list is empty (verdict
+  `not_run`).
+- S1 (the merge is decided in script): `pr_state.py merge` re-reads the checks itself
+  (`--required`, all checks when none is required) right before `gh pr merge`. It refuses
+  unless the list is non-empty, every check passed or was skipped, and one passed; the head is
+  read again after the checks read. A relayed `green` alone never merges. CI log tails moved
+  out of `ci_watch.py`: the new read-only `pr_state.py logs` re-reads the failed checks,
+  verifies each run (this repo, this head, this job) and returns the tails for the classifier
+  (`infra:ci-logs:w<n>`). The watch agent never sees CI log text.
+- S2: the digest-checked gh check's origin is the repo slug; the workspace step stops
+  (needs_human) when the relayed `remote_slug` differs from it beyond case or a `.git` suffix
+  (it used the probe and went on before). `pr_state.py`
+  merge and update read `gh repo view --json owner,nameWithOwner` and refuse a repo that
+  resolves to another name (a transfer or rename redirect) or to a work owner, any case.
+- S3: a direct merge first (`--<method> --match-head-commit <sha> --delete-branch`); native
+  auto-merge with the same flags plus `--auto` only when the direct merge is refused. Then the
+  result is `merged: false`, `auto_enabled: true` (`ci.auto_merge_enabled`), and the reason
+  says the forge merges later, without the fleet (no cleanup). `merged` is true only when the
+  PR is MERGED with its head at the expected sha and a merge commit (a squash makes a new
+  commit, so the merge commit is never the head itself).
+- S4: the orchestrator scan runs again on the head right before the merge
+  (`infra:orch-scan:merge`) and after update-branch (`:u1`); a sign then blocks the merge.
+  `orch_scan.py <worktree> <gh> <owner/repo> <pr> <head_sha> <default_branch>` also reads the
+  forge's trees of the head and of the default branch (CI file text through the blob API),
+  checks that the PR head is `<head_sha>`, and fails closed on a truncated tree, more than 60 CI
+  files, or a PR of 100 files or more (`gh pr view --json files` stops at 100).
+- S5: tests for the surviving mutants M8 (no IaC halt in ready) and M9 (no head check at the
+  merge) in the PR-tail test set (`v600_s4`).
+- S6 (ruling 2034.5): one follow-up write-back per run on the final CI outcome (green, merged,
+  auto-merge, red report, timeout, not_run and CI needs_human stops), with its own marker
+  `fleet:<task>:ci`, heading "Fleet build CI" and labels ending `:ci` (outside the agent cap).
+  Same targets and rules as the write-back. It is soft: it never gates the merge and never
+  stops the run, and a stop inside it keeps the run's stop gate. A CI-fix round is not final.
+  The result carries `ci_write_back`.
+- S7a (ADR-1215): the stats block is written again at run end (`infra:pr-stats:final`) with a CI
+  row (verdict, CI-fix rounds, total CI wait), only when the PR is not merged; on a merged PR
+  the gate log says "stats block not refreshed".
+- S7b (ADR-1203 close and reopen once to retrigger a missing required check): not built. It
+  needs a new mode and detection of a missing required check; left for a later release.
+- S8: `ciStep`, `readyStep`, `statsStep` and `orchScan` stop with the no-push text when the repo
+  has no checked gh command.
+- ADR-1203 addendum (Max): a base change from update-branch that touches PR files no longer
+  stops. `pr_state.py update` checks on the forge that the new head's parents are exactly
+  [reviewed head, base tip]. `pr_state.py fetch` (`infra:pr-fetch:u1`) fetches the new head
+  into the fleet worktree, checks the parents again and that its tree is
+  `git merge-tree --write-tree <old> <base>` (a forge merge with no extra content), and
+  fast-forwards. Then the hasher (`hasher:update:u1`), the hook-surface check on the merged-in
+  files (`infra:hook-surface:u1`), the independent review (`role:pr-review:v<n>`), stats,
+  ready, the orchestrator scan and the CI watch run on the new head, which becomes the approved
+  sha. Any failed check or a parent or tree mismatch stops (needs_human). Update-branch still
+  runs once per run. Not as asked: review changes on the update-branch head do not reach the
+  coder loop. In a normal run that re-review is round 2, so `MAX_REVIEWS` (2) stops the run
+  ("review round 2 requested changes again", `stop_gate: "review"`). A coder round on a forge
+  merge commit would run against freeze maps and a scope fence from the old base; it needs its
+  own design and tests (Max decides).
+- NITs: the resume-at-done gate says `shipped`; check names and urls of unverified checks are
+  quoted in gate and stop text; a resume at `written_back` whose PR is MERGED at the approved
+  sha (a crash between the merge and the `shipped` run-state; `pr_state.py view`,
+  `infra:pr-view:resume`) records `shipped`, runs the cleanup and returns. README: `orch_scan`
+  is a heuristic, and `review_post` is reserved (nothing reads it yet). `policy.example.json` is
+  strict JSON and cannot carry that note.
 
 ## [5.0.10] - 2026-11-11
 

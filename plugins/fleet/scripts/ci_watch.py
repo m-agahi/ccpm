@@ -37,19 +37,22 @@ except Exception:
 # fleet 6.0.0 (ledger 2034): one slice of the CI watch on the fleet's own PR.
 # Args: <gh_cmd> <owner/repo> <pr> <head_sha> <total_seconds> <state_file>.
 # The first call writes its start time to <state_file> (a ci-*.json file in an
-# existing dir); every call waits at most SLICE seconds with `gh pr checks
-# --watch --required` (all checks when the PR has no required check), then
-# reads the checks once. state: green (none pending, none failed), red (none
-# pending, one failed or cancelled), pending (time left), timeout (none left),
-# head_moved (the PR head is not <head_sha>), no_checks (none reported after
-# NO_CHECKS_S), error (a read failed). For each failed job whose url is this
-# repo's Actions job and whose run is of <head_sha> (verified), while the call
-# has time left: the run id and the tail of `gh run view --log-failed`,
-# control characters removed, EXCERPT characters at most (CI logs are
-# untrusted data). Any other failed check is report-only. Prints {state,
-# checks, failed, required, head, elapsed_s, error, args, program, digest}.
+# existing dir, one per watched head); every call waits at most SLICE seconds
+# with `gh pr checks --watch --required` (all checks when the PR has no
+# required check), then reads the checks once. An empty list is no check.
+# Each checks read sits between two head reads: both must be <head_sha>.
+# state: green (none pending, none failed, at least one check, read at least
+# SETTLE_S after the first call and GAP_S after the first read: a check that
+# registers late, such as a ready_for_review workflow, has time to appear),
+# red (none pending, one failed or cancelled), pending (time left), timeout
+# (none left), head_moved (the PR head is not <head_sha>), no_checks (none
+# reported after NO_CHECKS_S), error (a read failed). For each failed check:
+# its run id when its url is this repo's Actions job of a run of <head_sha>
+# (verified); never any log text (pr_state.py logs reads the logs for the
+# classifier, so this agent never sees CI output). Prints {state, checks,
+# failed, required, head, elapsed_s, error, args, program, digest}.
 import hashlib, json, os, re, subprocess, sys, time
-SLICE, NO_CHECKS_S, EXCERPT, MAX_FAILED, CALL_S = 480, 180, 3000, 6, 540
+SLICE, NO_CHECKS_S, MAX_FAILED, CALL_S, SETTLE_S, GAP_S = 480, 180, 6, 540, 90, 60
 args = sys.argv[1:]
 SLUG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}$')
 if len(args) != 6 or args[0] not in ('gh', 'gh-personal') or not SLUG.match(args[1]) or not re.match(r'^[1-9][0-9]{0,9}$', args[2]) or not re.match(r'^[0-9a-f]{40}$', args[3]) or not re.match(r'^[1-9][0-9]{0,5}$', args[4]):
@@ -65,13 +68,14 @@ now = int(time.time())
 call_end = time.time() + CALL_S
 try:
     with open(sf) as f:
-        start = int(json.load(f)['start'])
+        st = json.load(f)
+    start = int(st['start'])
+    first = int(st['first_read']) if st.get('first_read') is not None else None
 except (OSError, ValueError, KeyError, TypeError):
-    start = now
+    start, first = now, None
     with open(sf, 'w') as f:
         json.dump({'start': start}, f)
 out = {'state': None, 'checks': [], 'failed': [], 'required': None, 'head': None, 'elapsed_s': None, 'error': None}
-CTRL = re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]|[\x00-\x08\x0b-\x1f\x7f]')
 
 
 class Fail(Exception):
@@ -86,18 +90,20 @@ def head():
     r = gh_run(['pr', 'view', pr, '-R', slug, '--json', 'headRefOid'])
     if r.returncode != 0:
         raise Fail('gh pr view: ' + r.stderr.decode('utf-8', 'replace').strip()[-300:])
-    return json.loads(r.stdout.decode('utf-8')).get('headRefOid')
+    out['head'] = json.loads(r.stdout.decode('utf-8')).get('headRefOid')
+    return out['head']
 
 
 def checks(req):
-    # (list or None when none is reported, required flag)
+    # (list, or None when none is reported or the list is empty; required flag)
     r = gh_run(['pr', 'checks', pr, '-R', slug, '--json', 'name,state,bucket,link'] + (['--required'] if req else []))
     err = r.stderr.decode('utf-8', 'replace').strip()
     # a JSON list on stdout is the answer, whatever the exit code (gh exits non-zero on failed checks)
     try:
         lst = json.loads(r.stdout.decode('utf-8'))
         if isinstance(lst, list):
-            return lst, req
+            # an empty required list falls back to all checks; an empty list is no check
+            return (lst, req) if lst else checks(False) if req else (None, False)
     except ValueError:
         pass
     if r.returncode not in (0, 8):
@@ -106,59 +112,80 @@ def checks(req):
         if 'no checks reported' in err.lower():
             return None, req
         raise Fail('gh pr checks: ' + err[-300:])
-    return json.loads(r.stdout.decode('utf-8') or '[]'), req
+    return checks(False) if req else (None, False)
 
 
+read_at = None
+
+
+def read():
+    # one checks read between two head reads of <head_sha>; the first read's time is kept
+    global first, read_at
+    if head() != sha:
+        return None, None, False
+    cs, req = checks(True)
+    read_at = int(time.time())
+    if first is None:
+        first = read_at
+        with open(sf, 'w') as f:
+            json.dump({'start': start, 'first_read': first}, f)
+    return cs, req, head() == sha
+
+
+def settled():
+    return first is not None and read_at is not None and read_at - start >= SETTLE_S and read_at - first >= GAP_S
+
+
+bad = lambda cs: any(c.get('bucket') in ('fail', 'cancel') for c in cs)
+pend = lambda cs: any(c.get('bucket') == 'pending' for c in cs)
 try:
-    out['head'] = head()
-    if out['head'] != sha:
-        out['state'] = 'head_moved'
-    else:
-        cs, req = checks(True)
-        left = total - (int(time.time()) - start)
-        if left > 0 and (cs is None or any(c.get('bucket') == 'pending' for c in cs)):
-            if cs is None:
-                # none reported yet: wait a minute, then read again
-                time.sleep(min(60, left))
-            else:
-                try:
-                    gh_run(['pr', 'checks', pr, '-R', slug, '--watch', '--interval', '30'] + (['--required'] if req else []), timeout=min(SLICE, left))
-                except subprocess.TimeoutExpired:
-                    pass
-            cs, req = checks(True)
-            out['head'] = head()
-        out['required'] = req
-        elapsed = int(time.time()) - start
-        left = total - elapsed
-        if out['head'] != sha:
-            out['state'] = 'head_moved'
-        elif cs is None:
-            out['state'] = ('no_checks' if elapsed >= NO_CHECKS_S else 'pending') if left > 0 else 'timeout'
+    cs, req, ok = read()
+    left = total - (int(time.time()) - start)
+    if ok and left > 0 and (cs is None or pend(cs) or not (bad(cs) or settled())):
+        if cs is None:
+            # none reported yet: wait a minute, then read again
+            time.sleep(min(60, left))
+        elif pend(cs):
+            try:
+                gh_run(['pr', 'checks', pr, '-R', slug, '--watch', '--interval', '30'] + (['--required'] if req else []), timeout=min(SLICE, left))
+            except subprocess.TimeoutExpired:
+                pass
         else:
-            out['checks'] = [{'name': str(c.get('name')), 'state': str(c.get('state')), 'bucket': str(c.get('bucket')), 'url': c.get('link') or None} for c in cs]
-            if any(c['bucket'] == 'pending' for c in out['checks']):
-                out['state'] = 'pending' if left > 0 else 'timeout'
-            elif any(c['bucket'] in ('fail', 'cancel') for c in out['checks']):
-                out['state'] = 'red'
-            else:
-                out['state'] = 'green'
-        if out['state'] == 'red':
-            # security review: only this repo's run of the watched head, with that job in it; any other url is report-only
-            RUN_URL = re.compile(r'^https://github\.com/' + re.escape(slug) + r'/actions/runs/([0-9]{1,16})/job/([0-9]{1,16})$', re.I)
-            for c in [c for c in out['checks'] if c['bucket'] in ('fail', 'cancel')][:MAX_FAILED]:
-                m = RUN_URL.match(c['url'] or '')
-                ok, ex = False, None
-                if m and time.time() + 120 < call_end:
-                    try:
-                        r = gh_run(['run', 'view', m.group(1), '--repo', slug, '--json', 'headSha,event,headBranch,jobs'], timeout=60)
-                        v = json.loads(r.stdout.decode('utf-8')) if r.returncode == 0 else {}
-                        ok = v.get('headSha') == sha and any(str(j.get('databaseId')) == m.group(2) for j in v.get('jobs') or [])
-                        if ok:
-                            r = gh_run(['run', 'view', '-R', slug, '--job', m.group(2), '--log-failed'], timeout=60)
-                            ex = CTRL.sub('', r.stdout.decode('utf-8', 'replace'))[-EXCERPT:] if r.returncode == 0 else None
-                    except (subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
-                        ok, ex = False, None
-                out['failed'].append({'name': c['name'], 'url': c['url'], 'run_id': m.group(1) if ok else None, 'excerpt': ex, 'verified': ok})
+            # all done, none failed, too early to call green: wait out the settle window
+            t = int(time.time())
+            time.sleep(max(1, min(left, max(start + SETTLE_S, first + GAP_S) - t + 1)))
+        cs, req, ok = read()
+    out['required'] = req
+    elapsed = int(time.time()) - start
+    left = total - elapsed
+    if not ok:
+        out['state'] = 'head_moved'
+    elif cs is None:
+        out['state'] = ('no_checks' if elapsed >= NO_CHECKS_S else 'pending') if left > 0 else 'timeout'
+    else:
+        out['checks'] = [{'name': str(c.get('name')), 'state': str(c.get('state')), 'bucket': str(c.get('bucket')), 'url': c.get('link') or None} for c in cs]
+        if any(c['bucket'] == 'pending' for c in out['checks']):
+            out['state'] = 'pending' if left > 0 else 'timeout'
+        elif any(c['bucket'] in ('fail', 'cancel') for c in out['checks']):
+            out['state'] = 'red'
+        elif settled():
+            out['state'] = 'green'
+        else:
+            out['state'] = 'pending' if left > 0 else 'timeout'
+    if out['state'] == 'red':
+        # security review: only this repo's run of the watched head, with that job in it; any other url is report-only
+        RUN_URL = re.compile(r'^https://github\.com/' + re.escape(slug) + r'/actions/runs/([0-9]{1,16})/job/([0-9]{1,16})$', re.I)
+        for c in [c for c in out['checks'] if c['bucket'] in ('fail', 'cancel')][:MAX_FAILED]:
+            m = RUN_URL.match(c['url'] or '')
+            ok = False
+            if m and time.time() + 120 < call_end:
+                try:
+                    r = gh_run(['run', 'view', m.group(1), '--repo', slug, '--json', 'headSha,event,headBranch,jobs'], timeout=60)
+                    v = json.loads(r.stdout.decode('utf-8')) if r.returncode == 0 else {}
+                    ok = v.get('headSha') == sha and any(str(j.get('databaseId')) == m.group(2) for j in v.get('jobs') or [])
+                except (subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
+                    ok = False
+            out['failed'].append({'name': c['name'], 'url': c['url'], 'run_id': m.group(1) if ok else None, 'verified': ok})
 except (Fail, ValueError, OSError, AttributeError, TypeError, subprocess.SubprocessError) as e:
     out['state'] = 'error'
     out['error'] = str(e)[:600] or 'watch failed'

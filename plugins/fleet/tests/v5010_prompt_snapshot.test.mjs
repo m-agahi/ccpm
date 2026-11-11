@@ -86,10 +86,11 @@ const SCENARIOS = {
 // 6.0.0 stream 3 (2034): infra:orch-scan and infra:ci-watch:w1 (new build calls)
 // 6.0.0 security review (2034): ci_watch failed[].verified in the schema
 // 6.0.0 (2034, advisor): the orchestrator scan before ready; ci in the run-state
+// 6.0.0 review (REQUEST CHANGES): ci_watch prints no log text; orch_scan args; pr_state modes; the CI write-back (:ci) and infra:pr-stats:final (new build calls)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 83, sha256: "6640a23adb11f47d38d93ee1facf6508f416cc8cc519201b31322ed490112cdf" },
-  "confirm auto (gates, then build in one run)": { calls: 85, sha256: "ad834c9895ff397da1013351cd31001f92db9892e3a59ae6405d1de3bc97f8a7" },
-  "short path (one test writer)": { calls: 82, sha256: "37731e0937e22c62e06774c9a1a7c6344b511b54f6c7b6bb4ff43bf479067ceb" },
+  "plan then build (confirm ask)": { calls: 86, sha256: "64822211b3d87902986657d26b59070c0ecdb196ccd06d5e8dd7c4a568dffa35" },
+  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "404ca6c21cd35d2469736a6e7b9bdcd5082aa8904ca2f263a196c38513029a82" },
+  "short path (one test writer)": { calls: 85, sha256: "72e3630b385ed81bea36b3710846410cecb81da70361b4f1564107719e07b4b0" },
   "probe": { calls: 2, sha256: "012d024fefbefe057a047d8b6822b07ea3152de9e7d322be0e6cf5d6273fc736" },
 };
 

@@ -4447,13 +4447,20 @@ review fix round plus stats, ready and CI pushed the 8-criteria auto run over 10
 
 ```text
 Rulings 2034: one watch agent re-runs ci_watch.py while it prints pending; the program keeps its
-start in scratch/ci-<nonce>-p<push>.json, so the time cap does not depend on the agent counting.
-Reruns and update-branch share that budget; a CI-fix push starts a new one. The classifier's
-answer is used only as an enum per failing name; its text is never forwarded. The coder gets the
-log tail from ci_watch.py as a JSON string labelled untrusted. Merge needs merge auto, no
-WORK_OWNERS owner (checked again here; pr_state.py refuses too), no orchestrator, IaC,
-apply-on-merge or hook-surface sign. ADR-1203 asks for a re-review after update-branch when the
-base change touches PR files; the run stops for a human there instead (the local worktree is not
-at the new head). Close/reopen to retrigger a missing check (ADR-1203 "may") is not built.
+start and first read in scratch/ci-<nonce>-p<push>-w<watch>.json, so the time cap and the settle
+window (90 s after the first call, 60 s after the first read) do not depend on the agent
+counting. Each watch (new head, rerun) gets its own file and settles again. Green from the watch
+is never enough: pr_state.py merge re-reads the checks in script (review S1), because the relay
+digest is unkeyed and the agent could compute one. The watch prints no log text; pr_state.py logs
+reads the tails for the classifier, whose answer is used only as an enum per failing name. The
+coder gets the log tail as a JSON string labelled untrusted. Merge needs merge auto, no
+WORK_OWNERS owner (checked again here; pr_state.py refuses too, also by the forge's own name and
+owner), no orchestrator, IaC, apply-on-merge or hook-surface sign in the scan right before the
+merge. Update-branch runs once per run (state.prUpdated). A base change in PR files: ciStep
+returns {gate: "update"}, adoptUpdate fetches and checks the forge merge (parents, merge-tree),
+hashes, hook-checks and sets approvedSha; ship() runs review -> stats -> ready -> ci again
+without a new write-back. Close/reopen to retrigger a missing check (ADR-1203 "may") is not built.
+The CI write-back (marker fleet:<task>:ci) runs once on the final outcome, also on a CI stop
+(ciGuard), and keeps state.stopGate.
 Cleanup runs after the shipped run-state write, from / with git -C <repo>.
 ```

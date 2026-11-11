@@ -5632,6 +5632,8 @@ const ARRAY_SITES = {
   "r.refs @ buildFromRef": "infra:refs",
   // 6.0.0 (ledger 2034)
   "cl.checks @ ciStep": "parsed: the fleet-ci-classifier result (SCHEMAS types checks as an array; each entry is checked)",
+  // 6.0.0 review S1: pr_state.py logs
+  "lg.logs @ ciStep": "parsed: a pr_state.py logs output, digest-checked first (PROGRAM_OUT types logs as an array)",
   "r.chunks @ buildFromRef": "infra:chunks",
   "pf.commands @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
   "ref.plan_diff @ buildFromRef": "parsed: the sealed plan ref",

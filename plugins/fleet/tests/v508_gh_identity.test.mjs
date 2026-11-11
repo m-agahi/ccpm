@@ -313,7 +313,8 @@ test("5.0.8 review S1: a non-GitHub origin (program origin null) is no halt and 
   assert.match(out.result.reason, /^PR step: no GitHub command with push access to o\/r/);
 });
 
-test("5.0.8 review S2: the program's origin differs from remote_slug -> a gate line, the probe's answer is used; no halt", async () => {
+// 6.0.0 review S2: remote_slug drives the work-owner clamp, the policy match and every -R; a mismatch now stops
+test("5.0.8 review S2 (6.0.0 review S2): the program's origin differs from remote_slug -> the build stops (needs_human)", async () => {
   const s = happy();
   // the program read origin o/r2 (and probed it); the agent parsed o/r
   s.__mutate = {
@@ -325,9 +326,9 @@ test("5.0.8 review S2: the program's origin differs from remote_slug -> a gate l
     },
   };
   const out = await run(s, ARGS);
-  assert.equal(out.result.status, "ok", out.result.reason);
-  assert.ok(out.build.logs.some((l) => l === "workspace: the gh check read origin o/r2, not remote_slug o/r; using the probe of o/r2"), out.build.logs.join("\n"));
-  assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).gh_cmd, "gh-personal");
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.match(out.result.reason, /^workspace: the digest-checked gh check read origin o\/r2, but the workspace relayed remote_slug o\/r; /);
+  assert.ok(!out.labels.includes("role:fleet-pr-opener"));
 });
 
 test("5.0.8 2030: a GitHub URL input gets its own gh check before intake, never inside the intake prompt", async () => {

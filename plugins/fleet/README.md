@@ -591,7 +591,8 @@ stop the build (`stop_gate: "policy"`); a bad file never falls back to the defau
   `merge: never`).
 - Caps and the default (no file, or no profile matches): `pr_ready` true, `ci_watch` true,
   `ci_watch_minutes` 60, `stats` true, `merge` `never` (`never` | `auto`), `update_branch`
-  `never` (`never` | `once`), `ci_trigger` false, `review_post` `none` (`none` | `own_pr`).
+  `never` (`never` | `once`), `ci_trigger` false, `review_post` `none` (`none` | `own_pr`;
+  reserved: nothing reads it yet).
   A profile key left out keeps the default.
 - Script rule, whatever the file says: an owner in `WORK_OWNERS` (`quinyx`, `concrete-media`, on
   any host or ssh alias) gets `merge` and `update_branch` `never`.
@@ -620,24 +621,37 @@ the 100-agent cap (like path checks); CI-fix coder rounds still count.
 - Scan (`infra:orch-scan`, `orch_scan.py`, read only, fails closed, before ready; any sign but
   the hook-surface one keeps the PR a draft, with its CI watched read-only): orchestrator config or
   orchestrator checks and comments on the PR, tracked IaC files, CI files that name an IaC tool,
-  hook-surface files in the PR. An orchestrator PR is watched and reported, then stops with
-  "orchestrator PR: needs Max" (ADR-1199).
+  hook-surface files in the PR. It reads the worktree and the forge's trees of the PR head and
+  the default branch, and runs again right before a merge and after update-branch. It is a
+  heuristic: composite actions under `.github/actions/**`, Makefiles, scripts a workflow runs
+  and remote reusable workflows are not read. An orchestrator PR is watched and reported, then
+  stops with "orchestrator PR: needs Max" (ADR-1199).
 - CI watch (`infra:ci-watch:w<n>`, `ci_watch.py`, one read-only agent): the required checks of
   the PR head (all checks when the PR has none required), in slices of at most 480 s, up to
-  `ci_watch_minutes`. A draft is "CI not run on draft"; `ci_watch: false` skips the watch.
+  `ci_watch_minutes`. Green needs at least one check and a read 90 s after the first call and
+  60 s after the first read (late checks appear); an empty list is "no CI checks reported" and
+  never merges. The watch never reads CI logs: `pr_state.py logs` reads the tails for the
+  classifier. A draft is "CI not run on draft"; `ci_watch: false` skips the watch.
 - Red: `fleet-ci-classifier` labels each failing check `diff`, `pre_existing`, `flaky` or `infra`
   from its log tail, which travels as quoted data (CI logs are untrusted input). `diff` (no IaC or
   orchestrator sign): a CI-fix round through the code loop, at most 2, then needs_human. The
   others: one rerun when `ci_trigger` allows it and the repo has no IaC sign, else a report.
 - Timeout or a forge error: "CI unresolved", never a merge.
 - Green: a merge only with `merge: "auto"`, outside `WORK_OWNERS`, with no orchestrator, IaC,
-  apply-on-merge or hook-surface sign. `pr_state.py merge` uses native auto-merge where allowed
-  (else a direct merge), the repo's method and `--match-head-commit <reviewed sha>`. Behind with
-  `update_branch: once`: the forge's update-branch once, then the watch again; a base change in a
-  PR file stops for a new review. After a confirmed merge the remote `fleet/*` branch goes, then
+  apply-on-merge or hook-surface sign. `pr_state.py merge` checks the forge's repo name and owner,
+  re-reads the checks itself (non-empty, all passed or skipped), then merges directly with the
+  repo's method, `--match-head-commit <sha>` and `--delete-branch`; only when that is refused it
+  enables native auto-merge (the forge merges later, without the fleet). Behind with
+  `update_branch: once`: the forge's update-branch once per run (the new head must be a merge of
+  the reviewed head and the base tip), then the watch again; a base change in a PR file is
+  fetched (`pr_state.py fetch`: parents and merge tree checked), hashed, hook-checked and
+  reviewed again before the watch. After a confirmed merge the remote `fleet/*` branch goes, then
   the fleet removes its own worktree and local branch. Otherwise "CI green, ready for human
   merge".
-- The result carries `ci: {verdict, checks: [{name, state, url}], fix_rounds, merged, merge_sha}`.
+- The result carries `ci: {verdict, checks: [{name, state, url}], fix_rounds, merged, merge_sha,
+auto_merge_enabled}`. After the final CI outcome a follow-up write-back (marker
+  `fleet:<task>:ci`, soft) records it, and the stats block is refreshed with a CI row when the PR
+  is still open.
 
 ### Resume (run-state)
 
