@@ -1488,7 +1488,7 @@ const PROGRAM_SHA256 = {
   "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
   "callers": "285df005bb08ce9a9f009b7554a9e697913ccff0a620980d2e59c04550bed4bc",
   "changed_defs": "40ecf45fe37448244572d8f7fd64ad574837970047a58de7c1ac7a262f717e94",
-  "ci_watch": "4d430ba8297a9310cf4a27692de26a6b1b9307bfc6a254bf700137569d939853",
+  "ci_watch": "6784f0a8e79f1390e0d4fc0a4d4f3bfb0933331becfc15fc6879590f9b6f7e95",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "6aee2fdb201b6a3634dbd1ea6c0cfa40eefe3a0eed09c8d40e7f6c3b95a17f4c",
@@ -5821,6 +5821,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           policy,
           tests_written: state.testsWritten || 0,
           iac_touched: iacTouched,
+          ci: state.ci || null,
         },
         wb ? { write_back: wb.write_back, ledger_adapter: wb.ledger_adapter, ledger_reason: wb.ledger_reason, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
       ),
@@ -5954,12 +5955,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const g = ghFor(remoteSlug).gh_cmd;
     const n = String(pr.pr_number);
     const ci = (state.ci = { verdict: "not_run", checks: [], fix_rounds: state.rounds.ci || 0, merged: false, merge_sha: null });
-    const oa = [mainWt, g, remoteSlug, n];
-    const ol = "infra:orch-scan" + (pushes > 1 ? ":p" + pushes : "");
-    const o = await infra(ol, orchScanPrompt({ args: oa }), "CI", JUDGE_AGENT, "orch_scan", oa);
-    requireProgram(o, "orch_scan", ol, "needs_human", "ci");
-    if (!relayDigestOk(o, progKeys("orch_scan"), "orch_scan") || canonical(o.args) !== canonical(oa)) halt("needs_human", ol + ": the relayed result does not match the program's digest or arguments", "ci");
-    // ADR-1199: an error is an orchestrator and IaC repo (the program sets every flag)
+    const o = orch || (await orchScan());
     const iac = o.iac_repo || o.apply_on_merge || o.error !== null || iacTouched;
     const work = WORK_OWNERS.indexOf(remoteSlug.split("/")[0].toLowerCase()) >= 0;
     const why = [];
@@ -5968,7 +5964,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (o.orchestrator) why.push("orchestrator PR");
     if (iac) why.push("IaC repo or IaC tool in CI");
     if (o.hook_surface_pr) why.push("hook-surface PR");
-    gate(ol + ": " + (o.reasons.length ? o.reasons.join("; ") : "no orchestrator, IaC or hook-surface sign") + (o.error ? " (error: " + o.error + ")" : ""));
     const orchStop = () => o.orchestrator && halt("needs_human", "orchestrator PR: needs Max (" + pr.pr_url + "; CI " + ci.verdict + (ci.checks.length ? ": " + ci.checks.map((c) => c.name + " " + c.state).join(", ") : "") + ")", "merge");
     const done = (note) => {
       state.ciNote = note;
@@ -5977,7 +5972,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       return null;
     };
     if (!policy.caps.ci_watch) return done("CI watch off (policy)");
-    if (!state.prReady) return done("CI not run on draft");
+    // an orchestrator or IaC PR stays a draft, and its CI is watched read-only
+    if (!state.prReady && !state.keptDraft) return done("CI not run on draft");
     let head = approvedSha;
     let reran = false;
     let updated = false;
@@ -6063,9 +6059,23 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   }
   // 2045: ready for review after review approve, write-back and stats; never on a stop (a halt ends the run first)
   let readyRuns = 0;
+  // 2034, ADR-1199: orchestrator, IaC and hook-surface signs before ready (fail closed: an error sets every flag)
+  let orch = null;
+  async function orchScan() {
+    const oa = [mainWt, ghFor(remoteSlug).gh_cmd, remoteSlug, String(pr.pr_number)];
+    const ol = "infra:orch-scan" + (pushes > 1 ? ":p" + pushes : "");
+    const o = await infra(ol, orchScanPrompt({ args: oa }), "PR", JUDGE_AGENT, "orch_scan", oa);
+    requireProgram(o, "orch_scan", ol, "needs_human", "ci");
+    if (!relayDigestOk(o, progKeys("orch_scan"), "orch_scan") || canonical(o.args) !== canonical(oa)) halt("needs_human", ol + ": the relayed result does not match the program's digest or arguments", "ci");
+    gate(ol + ": " + (o.reasons.length ? o.reasons.join("; ") : "no orchestrator, IaC or hook-surface sign") + (o.error ? " (error: " + o.error + ")" : ""));
+    return (orch = o);
+  }
   async function readyStep() {
     if (!pr || pr.pr_number == null) return gate("ready skipped: no PR");
     if (iacTouched) halt("needs_human", "IaC PR: Max marks it ready (" + pr.pr_url + ")", "iac");
+    const o = await orchScan();
+    state.keptDraft = o.orchestrator || o.iac_repo || o.apply_on_merge || o.error !== null;
+    if (state.keptDraft) return gate("orchestrator or IaC sign: " + pr.pr_url + " stays a draft for Max");
     if (!policy.caps.pr_ready) return gate("pr_ready false (policy): " + pr.pr_url + " stays a draft");
     const label = "infra:pr-ready" + (++readyRuns > 1 ? ":p" + readyRuns : "");
     const r = await prState(label, ["ready", ghFor(remoteSlug).gh_cmd, remoteSlug, String(pr.pr_number), approvedSha], "mark the fleet's own PR ready for review", "ci");
@@ -6083,7 +6093,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const tpl = statsBlock({
       criteria: criteria.length, tests: state.testsWritten || 0, testRounds: state.rounds.tests, code: state.rounds.code,
       audits: typeof ref.history.audits === "number" ? ref.history.audits : null, agents: history.agents + state.agents - opt.agentsBase, resumed: !!resume,
-      gates: state.gateLog.filter((x) => !/^warning:/.test(x)).length,
+      gates: state.gateLog.filter((x) => !/^(warning:|model used:|fallback:)/.test(x)).length,
       review: (rv ? rv.verdict : "not run") + " (sweep: " + (rv && rv.sweep ? rv.sweep.verdict : "not triggered") + ")",
       tokens: tokOn() ? TOK : null,
     });
@@ -6126,6 +6136,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     if (resume.rounds && typeof resume.rounds === "object") state.rounds = resume.rounds;
     state.testsWritten = resume.tests_written || 0;
     iacTouched = resume.iac_touched === true;
+    if (resume.ci && typeof resume.ci === "object") state.ci = resume.ci;
     if (resume.pr_url || resume.pr_number != null) {
       pr = { pr_url: resume.pr_url, pr_number: resume.pr_number, created: resume.pr_created, template_used: resume.template_used };
       state.pr = pr;

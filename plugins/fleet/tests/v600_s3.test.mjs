@@ -409,6 +409,16 @@ test("6.0.0 2034 (security review): ci_watch.py reads a log only from this repo'
   }
 });
 
+test("6.0.0 2034: ci_watch.py: a failed check's non-zero exit with a JSON list on stdout is red, not a forge error", () => {
+  const dir = fakeForge({ headRefOid: SHA1 }, [{ argv: ["pr", "checks"], out: [CHECK("test", "fail", "https://github.com/evil/r/actions/runs/1/job/2")], code: 1 }]);
+  try {
+    const o = prog("ci_watch", dir, watchArgs(dir));
+    assert.deepEqual([o.state, o.error], ["red", null]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("6.0.0 2034: ci_watch.py: no required check watches all checks; time used up while pending is a timeout", () => {
   let dir = fakeForge({ headRefOid: SHA1 }, [{ argv: ["pr", "checks", "7", "-R", "o/r", "--json", "name,state,bucket,link", "--required"], err: "no required checks reported on the 'x' branch", code: 1 }, { argv: ["pr", "checks"], out: [CHECK("test", "pass")] }]);
   try {
@@ -558,7 +568,8 @@ test("6.0.0 2034: after ready the build scans for orchestrator signs and watches
   const out = await run(happy(), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
   const L = out.build.labels;
-  assert.ok(L.indexOf("infra:pr-ready") < L.indexOf("infra:orch-scan") && L.indexOf("infra:orch-scan") < L.indexOf("infra:ci-watch:w1"), L.join(", "));
+  // the scan runs before ready (design 2045): an orchestrator or IaC PR stays a draft
+  assert.ok(L.indexOf("infra:pr-stats") < L.indexOf("infra:orch-scan") && L.indexOf("infra:orch-scan") < L.indexOf("infra:pr-ready") && L.indexOf("infra:pr-ready") < L.indexOf("infra:ci-watch:w1"), L.join(", "));
   assert.ok(L.indexOf("infra:ci-watch:w1") < L.indexOf("infra:state:shipped"));
   assert.ok(!L.some((l) => /^infra:pr-merge|^infra:fleet-cleanup/.test(l)));
   const a = inputsOf(call(out, "infra:ci-watch:w1").prompt).args;
@@ -584,6 +595,8 @@ test("6.0.0 2034: merge auto on a clean personal repo merges at the reviewed sha
   assert.deepEqual(m, ["merge", "gh", "o/r", "7", inputsOf(call(out, "infra:pr-ready").prompt).args[4]]);
   const L = out.build.labels;
   assert.ok(shippedAt > 0 && L.indexOf("infra:state:shipped") < L.indexOf("infra:fleet-cleanup"), L.join(", "));
+  // the last run-state carries the CI result (a resume at shipped returns it)
+  assert.deepEqual(stateJsonOf(call(out, "infra:state:shipped").prompt).ci, out.result.ci);
   assert.deepEqual(inputsOf(call(out, "infra:fleet-cleanup").prompt).args, ["cleanup", "/r", "/r/.claude/worktrees/fleet-l42-add-thing/main", "fleet/l42-add-thing"]);
   assert.equal(out.result.ci.merged, true);
   assert.equal(out.result.ci.merge_sha, "e".repeat(40));
@@ -609,11 +622,13 @@ test("6.0.0 2034: no merge on a work repo, an orchestrator PR, an IaC repo or a 
     t["infra:orch-scan"] = (p) => Object.assign({ status: "ok", reason: "s", orchestrator: false, iac_repo: false, apply_on_merge: false, hook_surface_pr: false, reasons: [], error: null, args: inputsOf(p).args }, over);
     const o = await run(t, ARGS);
     assert.ok(!o.build.labels.some((l) => /^infra:pr-merge/.test(l)), JSON.stringify(over));
+    // an orchestrator or IaC sign keeps the draft; a hook-surface PR alone is marked ready
+    assert.equal(o.build.labels.includes("infra:pr-ready"), !!over.hook_surface_pr && !over.error, JSON.stringify(over));
     assert.match(o.result.reason, re, JSON.stringify(over));
   }
 });
 
-test("6.0.0 2034 (ADR-1199): an orchestrator PR is watched read-only, reported, and stops with orchestrator PR: needs Max", async () => {
+test("6.0.0 2034 (ADR-1199): an orchestrator PR stays a draft, is watched read-only, reported, and stops with orchestrator PR: needs Max", async () => {
   const s = happy();
   s["infra:policy"] = polOut({ profile: "personal", caps: PERSONAL });
   s["infra:orch-scan"] = (p) => ({ status: "ok", reason: "s", orchestrator: true, iac_repo: false, apply_on_merge: false, hook_surface_pr: false, reasons: ["orchestrator config " + DGR + ".yml"], error: null, args: inputsOf(p).args });
@@ -623,7 +638,8 @@ test("6.0.0 2034 (ADR-1199): an orchestrator PR is watched read-only, reported, 
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "merge");
   assert.match(out.result.reason, /^orchestrator PR: needs Max \(https:\/\/github\.com\/o\/r\/pull\/7; CI red: test FAILURE\)$/);
-  assert.ok(!out.build.labels.some((l) => /^infra:(pr-merge|ci-rerun|push:p2)|^role:fleet-coder:r2/.test(l)), out.build.labels.join(", "));
+  assert.ok(!out.build.labels.some((l) => /^infra:(pr-ready|pr-merge|ci-rerun|push:p2)|^role:fleet-coder:r2/.test(l)), out.build.labels.join(", "));
+  assert.ok(out.build.labels.includes("infra:ci-watch:w1"));
   assert.equal(out.result.ci.verdict, "red");
 });
 

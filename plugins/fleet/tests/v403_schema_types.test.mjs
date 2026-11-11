@@ -674,6 +674,7 @@ const READS = {
     "id string": "prog:ci_watch:failed[].run_id",
     "f.run_id string": "prog:ci_watch:failed[].run_id",
     "f.verified boolean": "prog:ci_watch:failed[].verified",
+    "resume.ci object": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     // 6.0.0 (ledger 2043): the freeze ref in the hasher:resume git map
     "ft string": "parsed: the hasher:resume git map, read from its sha256-checked file",
     // 5.0.0 (R3): the previous review round's blocking list (reviewStep's own)

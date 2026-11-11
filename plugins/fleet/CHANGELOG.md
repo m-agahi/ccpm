@@ -185,7 +185,8 @@ last state. With no policy file, a fleet PR is marked ready and its CI is watche
   programs `orch_scan.py` and `ci_watch.py`, `pr_state.py` modes `merge`, `update`, `rerun` and
   `cleanup` (40 programs), and the read-only role `fleet-ci-classifier` (11 roles,
   `DISPATCH: model=sonnet (fallback=opus)`).
-  - Scan (`infra:orch-scan`, read only, fails closed): a tracked orchestrator config or an
+  - Scan (`infra:orch-scan`, read only, fails closed, before ready; an orchestrator, IaC or
+    apply-on-merge sign keeps the PR a draft, and its CI is still watched read-only): a tracked orchestrator config or an
     orchestrator check, status or comment on the PR (`orchestrator`); a tracked IaC file or one
     the PR changes (`iac_repo`); a tracked CI file that names an IaC tool or orchestrator
     (`apply_on_merge`); a PR file on the hook surface (`hook_surface_pr`). Any read error sets
@@ -211,6 +212,10 @@ last state. With no policy file, a fleet PR is marked ready and its CI is watche
     `gh run view <id> --repo <this repo> --json headSha,...,jobs` shows the watched head sha
     with that job in it. Any other check (another repo or PR, a third-party app's url, a failed
     read) is report-only as "unverified run": no classifier, no rerun, no fix round.
+  - `ci_watch.py` reads a JSON list on stdout whatever gh's exit code (gh exits non-zero on a
+    failed check), and starts no run read in the last 120 s of a 540 s call, so one call stays
+    under the 600 s Bash cap. The run-state carries `ci`, so a resume at `shipped` returns it.
+    "gates passed" leaves out warnings and model and fallback lines.
   - Timeout or a forge error: "CI unresolved" with each check's state; never a merge; needs_human
     only when a merge was expected. A moved head stops (`stop_gate: "ci"`).
   - Green: a merge only when policy `merge: "auto"`, not a work repo (checked again here, and

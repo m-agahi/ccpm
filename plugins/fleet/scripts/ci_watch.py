@@ -43,12 +43,13 @@ except Exception:
 # pending, one failed or cancelled), pending (time left), timeout (none left),
 # head_moved (the PR head is not <head_sha>), no_checks (none reported after
 # NO_CHECKS_S), error (a read failed). For each failed job whose url is this
-# repo's Actions job and whose run is of <head_sha> (verified): the run id and
-# the tail of `gh run view --log-failed`; any other failed check is report-only, control characters removed,
-# EXCERPT characters at most (CI logs are untrusted data). Prints {state,
+# repo's Actions job and whose run is of <head_sha> (verified), while the call
+# has time left: the run id and the tail of `gh run view --log-failed`,
+# control characters removed, EXCERPT characters at most (CI logs are
+# untrusted data). Any other failed check is report-only. Prints {state,
 # checks, failed, required, head, elapsed_s, error, args, program, digest}.
 import hashlib, json, os, re, subprocess, sys, time
-SLICE, NO_CHECKS_S, EXCERPT, MAX_FAILED = 480, 180, 3000, 6
+SLICE, NO_CHECKS_S, EXCERPT, MAX_FAILED, CALL_S = 480, 180, 3000, 6, 540
 args = sys.argv[1:]
 SLUG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}$')
 if len(args) != 6 or args[0] not in ('gh', 'gh-personal') or not SLUG.match(args[1]) or not re.match(r'^[1-9][0-9]{0,9}$', args[2]) or not re.match(r'^[0-9a-f]{40}$', args[3]) or not re.match(r'^[1-9][0-9]{0,5}$', args[4]):
@@ -60,6 +61,8 @@ os.chdir('/')
 for k, v in (('GH_PROMPT_DISABLED', '1'), ('NO_COLOR', '1'), ('GH_NO_UPDATE_NOTIFIER', '1')):
     os.environ[k] = v
 now = int(time.time())
+# one call stays under the 600 s Bash cap: no run read starts within 120 s of CALL_S
+call_end = time.time() + CALL_S
 try:
     with open(sf) as f:
         start = int(json.load(f)['start'])
@@ -90,6 +93,13 @@ def checks(req):
     # (list or None when none is reported, required flag)
     r = gh_run(['pr', 'checks', pr, '-R', slug, '--json', 'name,state,bucket,link'] + (['--required'] if req else []))
     err = r.stderr.decode('utf-8', 'replace').strip()
+    # a JSON list on stdout is the answer, whatever the exit code (gh exits non-zero on failed checks)
+    try:
+        lst = json.loads(r.stdout.decode('utf-8'))
+        if isinstance(lst, list):
+            return lst, req
+    except ValueError:
+        pass
     if r.returncode not in (0, 8):
         if 'no required checks' in err.lower():
             return checks(False) if req else (None, False)
@@ -138,7 +148,7 @@ try:
             for c in [c for c in out['checks'] if c['bucket'] in ('fail', 'cancel')][:MAX_FAILED]:
                 m = RUN_URL.match(c['url'] or '')
                 ok, ex = False, None
-                if m:
+                if m and time.time() + 120 < call_end:
                     try:
                         r = gh_run(['run', 'view', m.group(1), '--repo', slug, '--json', 'headSha,event,headBranch,jobs'], timeout=60)
                         v = json.loads(r.stdout.decode('utf-8')) if r.returncode == 0 else {}

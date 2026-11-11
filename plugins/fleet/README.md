@@ -617,7 +617,8 @@ the 100-agent cap (like path checks); CI-fix coder rounds still count.
   approved sha; the script requires `is_draft: false` and head == approved sha. Policy
   `pr_ready: false` keeps the draft. A branch Max pushed himself (an IaC diff, ADR-1175) stops
   with "IaC PR: Max marks it ready".
-- Scan (`infra:orch-scan`, `orch_scan.py`, read only, fails closed): orchestrator config or
+- Scan (`infra:orch-scan`, `orch_scan.py`, read only, fails closed, before ready; any sign but
+  the hook-surface one keeps the PR a draft, with its CI watched read-only): orchestrator config or
   orchestrator checks and comments on the PR, tracked IaC files, CI files that name an IaC tool,
   hook-surface files in the PR. An orchestrator PR is watched and reported, then stops with
   "orchestrator PR: needs Max" (ADR-1199).
