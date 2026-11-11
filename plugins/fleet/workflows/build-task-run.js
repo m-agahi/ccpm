@@ -1775,7 +1775,7 @@ const PROGRAM_SHA256 = {
   "db_up": "287f00df3f12543a7ffed8445fda9ba9823f58dcb37a90301ed05b245d49d913",
   "fleet_scan": "5140d5020bee7cae61994b753e8ee100fc6cdcc1389d3a3559ef5fec5fbe2a3b",
   "format_files": "41fa33d348944dd704583568fd6a5d95e4f8a7ce47bd8a75dd736a61d0afc714",
-  "gh_identity": "20d4a4de37e586bda4c3f24c45aebf791b356ca7647a2cc60fdfd7b34f758ffd",
+  "gh_identity": "2406385eae3a6937f343f0081ac10a47df7177943c24bec2f8aed89c9569cae4",
   "hash_diff": "9ff52aea4895f751d39ab062d446078820bc1990eb8e7cfdc91083af1a413722",
   "hasher": "e96807e4a8a376285f0b30a0bdf3529185986b473e8e9e01146df27140dd67dd",
   "hook_surface": "84759075f5fb9750b86493135090110506b413c5d71ea76041e9ae1145ed95ab",
@@ -3010,12 +3010,13 @@ function loadRefPrompt(inputs) {
 // and checked here, never by an agent (5.0.7 asked each agent to compare
 // `gh-personal api user` with the owner, which fails for an org repo: run
 // wf_aea3186a-4e1 opened its PR with the work login and stopped). For each
-// repo, [gh-personal if installed, gh] run `api repos/<o>/<n> --jq
-// .permissions.push`: the first with push, else the first that reads, else
+// repo, gh runs `api repos/<o>/<n> --jq .permissions.push`, and gh-personal (if
+// installed) only when gh has no push: the first with push, else the first that reads, else
 // none. Args: <repo|-> [<o>/<n> ...]. Not sealed and not in any digest of the
 // plan or run-state: every run computes it again (a resume too).
 // program: scripts/gh_identity.py (PROGRAM_SHA256 holds its sha256)
-const GH_CMDS = ["gh-personal", "gh"];
+// review of #56: gh first; gh-personal only when gh has no push
+const GH_CMDS = ["gh", "gh-personal"];
 function ghPick(tried) {
   const t = (tried || []).find((x) => x.push === true) || (tried || []).find((x) => x.push === false);
   return { gh_cmd: t ? t.cmd : null, push: !!t && t.push === true };
@@ -3027,14 +3028,16 @@ function ghCheckProblem(gc, args) {
   if (canonical(gc.args) !== canonical(args)) return "the program ran on other arguments (" + JSON.stringify(gc.args === undefined ? null : gc.args) + ")";
   for (const [k, e] of Object.entries(gc.repos)) {
     const tr = e && Array.isArray(e.tried) ? e.tried : null;
-    if (!tr || canonical(tr.map((x) => x && x.cmd)) !== canonical(GH_CMDS) || canonical(ghPick(tr)) !== canonical({ gh_cmd: e.gh_cmd, push: e.push }))
+    const want = tr && tr[0] && tr[0].push === true ? GH_CMDS.slice(0, 1) : GH_CMDS;
+    if (!tr || canonical(tr.map((x) => x && x.cmd)) !== canonical(want) || canonical(ghPick(tr)) !== canonical({ gh_cmd: e.gh_cmd, push: e.push }))
       return "repo " + k + ": gh_cmd and push are not the pick of its tried list";
   }
+  for (const x of args.slice(1).concat(gc.origin === null ? [] : [gc.origin])) if (!gc.repos[x]) return "no answer for " + x;
   return null;
 }
 function ghRun(args, how) {
   return (
-    "Run this one command exactly as written, unmodified, as one Bash call:\n" + progCmd("gh_identity", args) +
+    "Run this one command exactly as written, unmodified, as one Bash call with timeout 600000 ms:\n" + progCmd("gh_identity", args) +
     "\nIt prints one JSON object " + printsKeys("gh_identity") + ": " + (how || relayAs("gh_check")) + ". Never pick a GitHub command yourself (never compare logins with owners): use the gh_cmd it names for that repo.\n"
   );
 }
@@ -3076,6 +3079,9 @@ async function ghEnsure(slugs, label, phaseName, soft) {
 // the checked {gh_cmd, push, tried} of a repo, or null
 function ghFor(slug) {
   return (state.gh && state.gh.repos && state.gh.repos[slug]) || null;
+}
+function noPushText(slug) {
+  return "no GitHub command with push access to " + slug + " (" + ghTried(slug) + "); authorise gh or gh-personal for it, then re-run the build with the same plan_ref";
 }
 function ghTried(slug) {
   const g = ghFor(slug);
@@ -4486,11 +4492,19 @@ async function workspaceStep(repo, lay, wopt) {
     !!uc && typeof uc === "object" && (uc.url === null || typeof uc.url === "string") && canonical(uc.args) === canonical([repo]) && relayDigestOk(uc, progKeys("remote_url"), "remote_url");
   if (!urlOk) gate("workspace: origin URL relay unusable (no digest-checked remote_url_check); no URL sealed or compared");
   // 5.0.8 (ledger 2030)
-  const gp = ghCheckProblem(ws.gh_check, [repo]);
-  if (gp) halt("failed", "workspace: gh check unusable: " + gp, "contract");
-  if (ws.gh_check.origin !== ws.remote_slug) halt("needs_human", "workspace: the gh check read origin " + JSON.stringify(ws.gh_check.origin) + ", not remote_slug " + ws.remote_slug, "contract");
-  state.gh = { origin: ws.gh_check.origin, repos: Object.assign({}, state.gh && state.gh.repos, ws.gh_check.repos) };
-  gate("workspace: GitHub command for " + ws.remote_slug + ": " + (ghFor(ws.remote_slug).gh_cmd || "none") + (ghFor(ws.remote_slug).push ? " (push)" : " (no push)") + "; tried " + ghTried(ws.remote_slug));
+  // (review of #56) an unusable or non-GitHub check never halts: gh_cmd is
+  // null and the steps that need gh stop or fail softly where they run
+  const gc = ws.gh_check;
+  const gp = ghCheckProblem(gc, [repo]);
+  const o = gp ? null : gc.origin;
+  if (gp) gate("workspace: gh check unusable: " + gp + "; gh_cmd null");
+  else if (o === null) gate("workspace: no GitHub-hosted origin; gh_cmd null (no probe)");
+  state.gh = { origin: o, repos: Object.assign({}, state.gh && state.gh.repos, gp ? {} : gc.repos) };
+  if (o !== null && o !== ws.remote_slug) {
+    gate("workspace: the gh check read origin " + o + ", not remote_slug " + ws.remote_slug + "; using the probe of " + o);
+    state.gh.repos[ws.remote_slug] = gc.repos[o];
+  }
+  if (o !== null) gate("workspace: GitHub command for " + ws.remote_slug + ": " + (ghFor(ws.remote_slug).gh_cmd || "none") + (ghFor(ws.remote_slug).push ? " (push)" : " (no push)") + "; tried " + ghTried(ws.remote_slug));
   return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: ws.remote_slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "" };
 }
 
@@ -5986,6 +6000,7 @@ async function planMode(input, date) {
   );
 
   const ws = await workspaceStep(brief.repo, lay);
+  if (ghFor(ws.remoteSlug) && !ghFor(ws.remoteSlug).push) gate("warning: " + noPushText(ws.remoteSlug) + " (the build stops at its start until one has)");
   await pushProbe(lay, ws);
   const project = input.project || ws.remoteSlug;
   const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
@@ -6220,6 +6235,8 @@ async function buildMode(input, date) {
   // (fresh_preflight is accepted and changes nothing)
   await preflightStep(repo);
   const ws = await workspaceStep(repo, lay, { frozenResume: typeof input.freeze_digest === "string" });
+  // review of #56 (N6): a checked repo with no push stops before any build step
+  if (ghFor(ws.remoteSlug) && !ghFor(ws.remoteSlug).push) halt("needs_human", "build start: " + noPushText(ws.remoteSlug), "role");
   return buildFromRef(input, date, tiny, lay, ws, { rerunGates: input.confirm === "auto", intent: null, agentsBase: 0 });
 }
 
@@ -6610,7 +6627,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // 5.0.8 (ledger 2030): no agent call without a gh command that can push
     const g = ghFor(remoteSlug);
     if (!g || !g.push)
-      halt("needs_human", "PR step: no GitHub command with push access to " + remoteSlug + " (" + ghTried(remoteSlug) + "); authorise gh-personal or gh for it, then re-run the build with the same plan_ref (it resumes at the PR)", "role");
+      halt("needs_human", "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)", "role");
     await fleetScan("infra:fleet-scan:" + label.replace(/^role:/, ""));
     const r = requireOk(
       "fleet-pr-opener",

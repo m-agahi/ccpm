@@ -393,6 +393,7 @@ const READS = {
     "gc.repos object": "prog:gh_identity:repos",
     "gc.repos array": "!prog:gh_identity:repos",
     "e.tried array": "prog:gh_identity:repos.*.tried",
+    "tr[0].push boolean": "prog:gh_identity:repos.*.tried[].push",
   },
   workspaceStep: { "uc object": "infra:remote_url_check", "uc.url string": ["prog:remote_url:url", 2], "ws.remote_host string": "infra:remote_host" },
   briefProblem: {

@@ -46,11 +46,14 @@ key, a GitHub or Codeberg issue or PR URL, a plan path, or free text.
   absent one, never a stop (see "Ledger adapters" below). Only a task-id input needs a ledger
   tool.
 - `git`, `gh` (authenticated), and `python3` >= 3.11 (or `tomli`) in the target repo's environment.
-- GitHub command (5.0.8, ledger 2030): `gh_identity.py` picks it per repo, never an agent. For each
-  candidate in order [`gh-personal` if installed, `gh`] it runs
-  `<cand> api repos/<o>/<n> --jq .permissions.push`: the first that answers true is `gh_cmd`;
-  else the first that read the repo (push false); else none. The workspace step runs it on the origin repo (`gh_check`, digest- and
-  pick-checked by the script, its origin equal to `remote_slug`); a GitHub URL input and a comment
+- GitHub command (5.0.8, ledger 2030): `gh_identity.py` picks it per repo, never an agent. `gh`
+  runs `gh api repos/<o>/<n> --jq .permissions.push` first; `gh-personal` runs only when `gh` has
+  no push. The first with push is `gh_cmd`; else the first that can read (push false); else none.
+  Only a GitHub-hosted origin is probed (github.com over https, or an ssh host that is or
+  resolves through `ssh -G` to github.com). The workspace step runs it on the origin repo
+  (`gh_check`, digest- and pick-checked by the script); an unusable check or a non-GitHub origin
+  leaves `gh_cmd` null with a gate line and never stops the run. A build whose repo has no
+  push-capable command stops at its start (`role`). A GitHub URL input and a comment
   on another repo get their own `infra:gh-identity:*` step. Every gh prompt and role (`push`,
   `fleet-pr-opener`, `pr-review`, intake, the comment steps) gets that command as `gh_cmd`. The PR
   step stops before any agent (`role`) when no command can push; the review stops (`review`) when

@@ -198,8 +198,8 @@ export function remoteUrlOut(url, repo) {
   return o;
 }
 // 5.0.8 (ledger 2030): gh_identity.py's output for its args. over: {<slug>:
-// tried list} (default: gh-personal not installed, gh with push)
-export const GH_DEFAULT_TRIED = [{ cmd: "gh-personal", installed: false, push: null }, { cmd: "gh", installed: true, push: true }];
+// tried list} (default: gh with push, so gh-personal is never tried)
+export const GH_DEFAULT_TRIED = [{ cmd: "gh", installed: true, push: true }];
 export function ghPickOf(tried) {
   const t = tried.find((x) => x.push === true) || tried.find((x) => x.push === false);
   return { gh_cmd: t ? t.cmd : null, push: !!t && t.push === true };

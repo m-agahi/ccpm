@@ -34,15 +34,19 @@ except Exception:
     _PROG = {'name': None, 'sha256': None}
 # fleet 5.0.8 (ledger 2030): which GitHub command the run uses for a repo,
 # decided here, not by an agent. Args: <repo> (a local checkout whose origin
-# names the repo; "-" for none), then any further <owner>/<name> slugs. For
-# each repo (origin first, then the slugs, without repeats), each candidate in
-# order [gh-personal when installed, gh] runs
-# `<cand> api repos/<owner>/<name> --jq .permissions.push`. The first that
-# prints true is gh_cmd (push true); else the first that read the repo (push
-# false); else gh_cmd null. Prints {origin, repos: {<slug>: {gh_cmd, push,
-# tried: [{cmd, installed, push}]}}, args, program, digest}; tried push is
-# true, false or null (not installed, or the read failed). No token is read,
-# passed or printed; the commands run as they are. Read only.
+# names the repo; "-" for none), then any further <owner>/<name> slugs. The
+# origin is probed only when GitHub-hosted: an https URL on github.com, or an
+# ssh URL whose host is github.com or resolves to it (`ssh -G <host>`, its
+# hostname line); a path, another host or an unparseable URL gives origin
+# null and no probe. For each repo (origin first, then the slugs, without
+# repeats), gh runs `gh api repos/<o>/<n> --jq .permissions.push`; only when
+# gh has no push, gh-personal (if installed) runs the same. gh_cmd: the first
+# with push, else the first that read the repo (push false), else null. Only
+# exit 0 with stdout exactly true or false counts; anything else is unknown.
+# Each call has 15 s; only a clearly transient error is tried once more.
+# Prints {origin, repos: {<slug>: {gh_cmd, push, tried: [{cmd, installed,
+# push}]}}, args, program, digest}. No token is read, passed or printed; the
+# commands run as they are. Read only.
 import hashlib, json, os, re, shutil, subprocess, sys, time
 args = sys.argv[1:]
 if not args:
@@ -51,54 +55,92 @@ SLUG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}$')
 for s in args[1:]:
     if not SLUG.match(s) or s.endswith('.git'):
         sys.exit('bad repo slug: ' + json.dumps(s))
+if args[0] != '-' and not os.path.isabs(args[0]):
+    sys.exit('repo must be an absolute path or -')
 os.chdir('/')
 os.environ['GIT_TERMINAL_PROMPT'] = '0'
 os.environ['GH_PROMPT_DISABLED'] = '1'
 os.environ['NO_COLOR'] = '1'
 os.environ['GH_NO_UPDATE_NOTIFIER'] = '1'
+CALL_TIMEOUT = 15
+HOST = r'[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252})'
+PATH_PART = r'([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9._-]+?)(?:\.git)?/?'
+
+
+def ssh_host(alias):
+    # the hostname `ssh -G` resolves an alias to (it reads the ssh config only)
+    if alias.lower() == 'github.com':
+        return 'github.com'
+    try:
+        p = subprocess.run(['ssh', '-G', alias], capture_output=True, timeout=CALL_TIMEOUT, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode != 0:
+        return None
+    for line in p.stdout.decode('utf-8', 'replace').splitlines():
+        k, _, v = line.partition(' ')
+        if k == 'hostname':
+            return v.strip().lower()
+    return None
+
+
+def github_slug(url):
+    # <o>/<n> of a GitHub-hosted URL, else None
+    m = re.match(r'^https://(?:[^@/]+@)?github\.com(?::443)?/' + PATH_PART + '$', url, re.I)
+    if m:
+        return m.group(1) + '/' + m.group(2)
+    m = re.match(r'^ssh://(?:[^@/]+@)?(' + HOST + r')(?::[0-9]+)?/' + PATH_PART + '$', url) or \
+        re.match(r'^(?:[^@/:]+@)?(' + HOST + r'):(?!/)' + PATH_PART + '$', url)
+    if m and ssh_host(m.group(1)) == 'github.com':
+        return m.group(2) + '/' + m.group(3)
+    return None
+
+
 origin = None
 if args[0] != '-':
-    if not os.path.isabs(args[0]):
-        sys.exit('repo must be an absolute path or -')
     # the URL after any insteadOf rewrite, as the workspace step parses remote_slug
-    r = subprocess.run(['git', '-c', 'core.fsmonitor=', '-C', args[0], 'remote', 'get-url', 'origin'], capture_output=True, timeout=60)
-    if r.returncode == 0 and len(r.stdout) <= 4096:
-        m = re.search(r'[:/]([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9._-]+?)(?:\.git)?/?$', r.stdout.decode('utf-8', 'replace').strip())
-        if m and SLUG.match(m.group(1) + '/' + m.group(2)):
-            origin = m.group(1) + '/' + m.group(2)
+    try:
+        r = subprocess.run(['git', '-c', 'core.fsmonitor=', '-C', args[0], 'remote', 'get-url', 'origin'], capture_output=True, timeout=60)
+        if r.returncode == 0 and len(r.stdout) <= 4096:
+            g = github_slug(r.stdout.decode('utf-8', 'replace').strip())
+            origin = g if g and SLUG.match(g) else None
+    except (OSError, subprocess.TimeoutExpired):
+        origin = None
 slugs = []
 for s in ([origin] if origin else []) + args[1:]:
     if s not in slugs:
         slugs.append(s)
-cands = [c for c in ('gh-personal', 'gh') if c == 'gh' or shutil.which(c)]
+TRANSIENT = re.compile(rb'(?i)timed? ?out|connection (reset|refused)|error connecting|temporary failure|EOF|TLS handshake|HTTP 5[0-9][0-9]|could not resolve host')
 
 
-def push_of(cmd, slug):
-    # true / false, or None when the repo could not be read; a failure that is
-    # not an HTTP 4xx answer is tried once more after 3 s
+def probe(cmd, slug):
+    # {cmd, installed, push}: push True / False only on exit 0 with stdout
+    # exactly true or false; None otherwise (unknown, not readable)
+    if not shutil.which(cmd):
+        return {'cmd': cmd, 'installed': False, 'push': None}
     for attempt in (0, 1):
         try:
-            p = subprocess.run([cmd, 'api', 'repos/' + slug, '--jq', '.permissions.push'], capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
-        except (OSError, subprocess.TimeoutExpired):
-            p = None
-        if p is not None and p.returncode == 0:
-            v = p.stdout.decode('utf-8', 'replace').strip()
-            return True if v == 'true' else False if v in ('false', 'null', '') else None
-        if p is not None and re.search(rb'HTTP 4\d\d', p.stderr or b''):
-            return None
-        if attempt == 0:
+            p = subprocess.run([cmd, 'api', 'repos/' + slug, '--jq', '.permissions.push'], capture_output=True, timeout=CALL_TIMEOUT, stdin=subprocess.DEVNULL)
+        except OSError:
+            return {'cmd': cmd, 'installed': False, 'push': None}
+        except subprocess.TimeoutExpired:
+            return {'cmd': cmd, 'installed': True, 'push': None}
+        if p.returncode == 0:
+            v = p.stdout.decode('utf-8', 'replace')
+            return {'cmd': cmd, 'installed': True, 'push': True if v in ('true', 'true\n') else False if v in ('false', 'false\n') else None}
+        if attempt == 0 and not re.search(rb'HTTP 4[0-9][0-9]', p.stderr or b'') and TRANSIENT.search(p.stderr or b''):
             time.sleep(3)
-    return None
+            continue
+        break
+    return {'cmd': cmd, 'installed': True, 'push': None}
 
 
 repos = {}
 for s in slugs:
-    tried = []
-    for c in ('gh-personal', 'gh'):
-        if c not in cands:
-            tried.append({'cmd': c, 'installed': False, 'push': None})
-        else:
-            tried.append({'cmd': c, 'installed': True, 'push': push_of(c, s)})
+    tried = [probe('gh', s)]
+    # gh-personal only when gh has no push (work repos never touch it)
+    if tried[0]['push'] is not True:
+        tried.append(probe('gh-personal', s))
     pick = next((t for t in tried if t['push'] is True), None) or next((t for t in tried if t['push'] is False), None)
     repos[s] = {'gh_cmd': pick['cmd'] if pick else None, 'push': bool(pick and pick['push']), 'tried': tried}
 out = {'origin': origin, 'repos': repos, 'args': args}

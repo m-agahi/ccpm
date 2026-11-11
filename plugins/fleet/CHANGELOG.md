@@ -22,15 +22,26 @@ uses the command that program picked for the repo.
   the owner is an org, not a login, so the rule picked `gh`.
 - New program `gh_identity.py <repo|-> [<owner>/<name> ...]`. For each repo (the checkout's origin,
   read with `git remote get-url origin` as the workspace step reads `remote_slug`, then each slug),
-  it runs `<cand> api repos/<o>/<n> --jq .permissions.push` for each candidate in order
-  [`gh-personal` if installed, `gh`]. The first that answers true is `gh_cmd` (push true). Else the
-  first that read the repo is `gh_cmd` (push false). Else `gh_cmd` is null. It prints
-  `{origin, repos: {<slug>: {gh_cmd, push, tried}}, args, program, digest}`. No token is read,
-  passed or printed. The script checks the digest and the args, and computes the pick again from
-  `tried`.
-- The workspace step runs it first (`gh_check`, args `[<repo>]`) and uses its `gh_cmd` for
-  `repo view` and `pr list`. The script stops when the relay is unusable (`contract`) or its
-  origin is not `remote_slug`.
+  `gh` runs `gh api repos/<o>/<n> --jq .permissions.push`. Only when `gh` has no push does
+  `gh-personal` (if installed) run the same, so a work repo never touches `gh-personal`. The first
+  with push is `gh_cmd`. Else `gh` when it can read, else `gh-personal` when it can read (push
+  false). Else `gh_cmd` is null. Only exit 0 with stdout exactly `true` or `false` counts; anything
+  else is unknown. A command that is absent or cannot start is "not installed" and is not
+  retried. Each call has 15 s. Only a clearly transient error (connection, 5xx, timeout text) is
+  tried once more.
+- The origin is probed only when it is GitHub-hosted: an https URL on github.com, or an ssh URL
+  whose host is `github.com` or resolves to it through `ssh -G <host>` (its `hostname` line). A
+  path, another host or an unparseable URL gives origin null and no probe.
+- The program prints `{origin, repos: {<slug>: {gh_cmd, push, tried}}, args, program, digest}`.
+  No token is read, passed or printed. The script checks the digest, the args and an answer for
+  every repo asked, and computes the pick again from `tried`.
+- The workspace step runs it first (`gh_check`, args `[<repo>]`, Bash timeout 600000 ms) and uses
+  its `gh_cmd` for `repo view` and `pr list`. An unusable or missing `gh_check`, or no
+  GitHub-hosted origin, never stops the run: it logs a gate line and leaves `gh_cmd` null. When
+  the program's origin differs from `remote_slug`, a gate line names both and the probe of the
+  program's origin is used.
+- A build whose workspace check shows no push for its repo stops at its start (`role`), before any
+  build step. Plan mode only logs a warning.
 - `gh_cmd` goes to every step that calls GitHub: the push step's `remote_head` read, the
   `fleet-pr-opener` and `pr-review` roles (input `gh_cmd`, used as `<gh>`), intake of a GitHub URL
   (it runs the program on `["-", <o>/<r>]`), and the comment write-back (the list step runs the
