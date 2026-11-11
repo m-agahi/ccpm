@@ -180,7 +180,10 @@ const PROBE_READ_ROLE = "plan-audit";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const NONCE_RE = /^[A-Za-z0-9_.:-]{6,64}$/;
 const SHA_RE = /^[0-9a-f]{7,40}$/;
-const COMPONENT_RE = /^[a-zA-Z0-9-]{1,40}$/;
+// security review: convention types and the scope are plain words; a subject is checked whole before use
+const COMPONENT_RE = /^[a-z][a-z0-9-]{0,19}$/;
+const SUBJECT_RE = /^[a-z][a-z0-9-]{0,19}\([a-z][a-z0-9-]{0,19}(, ([A-Z][A-Z0-9]+-[0-9]+|NOJIRA))?\): [a-z0-9 ]{1,60}$/;
+const CC_TYPES = ["feat", "fix", "perf", "revert", "chore", "refactor", "docs", "style", "test", "build", "ci"];
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const BRANCH_RE = /^fleet\/[a-z0-9][a-z0-9-]*$/;
 const PLAN_REF_NAME_RE = /^refs\/fleet\/([a-z0-9][a-z0-9-]*)\/plan$/;
@@ -1485,7 +1488,7 @@ const PROGRAM_SHA256 = {
   "plan_ref": "494ceb934b89fa5c2962ef786ba93bee63bd09f776c82c50579fdf23f301c136",
   "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
   "policy": "347bc798a38e468d55b2b0726aef70a83a40672aa8409db0a57ebf897117d395",
-  "pr_convention": "f0b70e43c21ba96c3d2fdd8b25735e1d7fa261797c68a7fefc1dc9785e35703f",
+  "pr_convention": "4763189023084bbad77a9eb5c2704692da5932d2dfa335654c5e4178f027c2b7",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
   "push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
   "push_probe": "c4381f9ce601e0729a0ab49edb33fe6c9e910e8738411e7ad4719f21ef639a5b",
@@ -1512,7 +1515,7 @@ const ROLE_SHA256 = {
   "fleet-code-judge": "dac34f0bfce76029e2602ffa23c3210049e127187076978f82d357582f49b5a3",
   "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
   "fleet-intent-judge": "03283fc805f57bcf22a6448fc43b8ead05983e94de1b05563f3e50c4a7837a1e",
-  "fleet-pr-opener": "d2f53310d606999dd545172fbcd2cf0d70db9890081e625168de14e24700e23a",
+  "fleet-pr-opener": "b1207cb47c140b6c15cf6c1874277e1edecb2862035d97d5a6da7f8bf3cab981",
   "fleet-test-judge": "c1aabca1c8623473811ca3d6ce66fe821f0dac251ea1d53d528372ad2d2bfe7e",
   "fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
   "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
@@ -4318,7 +4321,9 @@ async function prConvention(label, worktree, slug, defaultBranch, phaseName) {
     halt("failed", label + ": the relayed convention does not match the program's digest or arguments");
   for (const u of r.unreadable) gate("warning: " + u);
   gate("conventions: " + r.source.join("; "));
-  return { title: t, body: r.body };
+  const types = t.types.filter((x) => COMPONENT_RE.test(String(x)));
+  const rs = Array.isArray(r.body.required_sections) ? r.body.required_sections.filter((x) => /^#{1,6} [^\n`$]{1,80}$/.test(String(x))).slice(0, 20) : [];
+  return { title: Object.assign({}, t, { types: types.length ? types : CC_TYPES }), body: Object.assign({}, r.body, { required_sections: rs.length ? rs : null }) };
 }
 // the plan facts a plan ref seals beyond the spread planFacts (2041, 2042)
 function sealedFacts(p) {
@@ -4479,7 +4484,8 @@ async function planAndAudit(ctx0) {
   hookGate("the plan scope", planScopePaths(planFacts, criteria), planHs.surface, planRs);
   const conventions = await prConvention("infra:pr-convention:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");
   // the scope of commit subjects and the PR title; the repo name when the planner gave none
-  const component = COMPONENT_RE.test(String(plan.component)) ? plan.component : String(ctx.remoteSlug || "").split("/").pop().toLowerCase().replace(/[^a-z0-9-]/g, "-") || "repo";
+  const fb = slugify(String(ctx.remoteSlug || "").split("/").pop(), 20);
+  const component = COMPONENT_RE.test(String(plan.component)) ? plan.component : COMPONENT_RE.test(fb) ? fb : "repo";
   if (component !== plan.component) gate("planner component " + JSON.stringify(plan.component === undefined ? null : plan.component) + " unusable; component " + component);
   const fmtLabel = "infra:format-plan" + sfx;
   await pathRecheck("format-plan" + sfx, "Plan");
@@ -5204,7 +5210,9 @@ async function policyStep(host, slug, sealed) {
 // 2042: subjects follow the sealed convention and never carry the internal task id (ruling 4)
 const KIND_TYPE = { bug_fix: "fix", feature: "feat", refactor: "refactor", chore: "chore" };
 function subjectsOf(pf, brief, slug) {
-  const c = pf.conventions.title;
+  const c = Object.assign({}, pf.conventions.title);
+  c.types = (Array.isArray(c.types) ? c.types : []).filter((x) => COMPONENT_RE.test(String(x)));
+  if (!c.types.length) c.types = CC_TYPES;
   const j = brief.sources.find((x) => x.kind === "jira");
   const key = j && /^[A-Z][A-Z0-9]+-[0-9]+$/.test(String(j.ref).toUpperCase()) ? String(j.ref).toUpperCase() : "NOJIRA";
   const scope = c.style === "scoped-key" ? pf.component + ", " + key : pf.component;
@@ -5327,6 +5335,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const brief = cleanBrief(ref.brief);
   const names = { taskId: ref.task_id, slug: ref.slug };
   const subj = subjectsOf(ref.plan_facts, brief, ref.slug);
+  for (const x of [subj.main, subj.fix(1)]) if (!SUBJECT_RE.test(x)) halt("needs_human", "plan ref " + tiny.plan_ref + ": unsafe commit subject " + JSON.stringify(x) + "; re-run plan");
   const history = {
     runs: (ref.history.runs || 0) + 1,
     replans: ref.history.replans || 0,

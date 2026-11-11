@@ -131,6 +131,13 @@ shipped run into a coder round, and adds org and repo rulesets to the hook surfa
   a resumed run also checks that HEAD is the run-state's `approved_sha`, so no trailer and no
   task id are needed. The PR opener gets `title`, must report it, and the script stops on any
   other title.
+- Security review of 2042b: convention types and the scope must match `^[a-z][a-z0-9-]{0,19}$`
+  in `pr_convention.py` and again in the workflow (no type left: the Conventional Commits list);
+  required sections must look like a markdown heading (cap 20) and `min_chars` at most 100000.
+  The program follows a checker only in the required workflow's own repo or the target repo,
+  never through `..`. The build checks both subject forms against a strict pattern before any
+  role runs and stops on anything else. The PR opener passes the title in single quotes; the
+  commit step already single-quotes the subject.
 
 ### Pending (stream 3)
 

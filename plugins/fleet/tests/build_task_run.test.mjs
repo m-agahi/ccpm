@@ -5549,6 +5549,7 @@ function schemaAt(by, spec) {
 // object is no agent result. A new site with no entry fails; a field the
 // mapped schema does not type as array fails (2.1.4 trial bug #2: an
 // undeclared field came back as the string "[]").
+const PARSED_SEALED_TYPES = "parsed: the sealed plan ref (sha256-checked tag message), re-filtered to plain words";
 const ARRAY_SITES = {
   // 5.0.8 (ledger 2030): gh_identity's digest-checked output (PROGRAM_OUT types it)
   "gc.repos @ ghCheckProblem": "parsed: a gh_identity program output; Array.isArray only refuses an array there",
@@ -5643,6 +5644,7 @@ const ARRAY_SITES = {
   "r.read @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
   "r.unreadable @ rulesetSurface": "parsed: a ruleset_surface program output (PROGRAM_OUT types it), digest-checked with it",
   // 6.0.0 (ledger 2042)
+  "c.types @ subjectsOf": PARSED_SEALED_TYPES,
   "t.types @ prConvention": "parsed: a pr_convention program output (PROGRAM_OUT types it), digest-checked with it",
   "r.source @ prConvention": "parsed: a pr_convention program output (PROGRAM_OUT types it), digest-checked with it",
   "r.unreadable @ prConvention": "parsed: a pr_convention program output (PROGRAM_OUT types it), digest-checked with it",

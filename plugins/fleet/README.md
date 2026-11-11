@@ -566,6 +566,14 @@ or the PR title. The PR opener gets `title` (it must use it verbatim; the script
 it reports) and `body_convention`. Verify knows fleet commits by these two exact subject forms; a
 resumed run also checks that HEAD is the run-state's `approved_sha`, so no trailer is needed.
 
+Convention data is remote text (security review). The program and the workflow keep only types
+and a scope matching `^[a-z][a-z0-9-]{0,19}$` (none left: the Conventional Commits list), and
+required sections shaped like a markdown heading (at most 20). The program follows a checker only
+in the repo that owns the required workflow or in the target repo, never through `..`. Before the
+first role, the build checks both subject forms against a strict pattern and stops on any other
+text. The commit step passes the subject single-quoted (`commit -m '<subject>'`), and the PR
+opener passes the title single-quoted, never in double quotes.
+
 ### Policy (6.0.0, ledger 2033)
 
 A build reads `$XDG_CONFIG_HOME/fleet/policy.json` (default `~/.config/fleet/policy.json`) once,

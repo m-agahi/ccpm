@@ -100,19 +100,32 @@ def content(repo, path, ref):
 
 
 def strs(text, name):
-    m = re.search(name + r'''\s*=\s*[\[(]([^\])]*)[\])]''', text)
-    return re.findall(r'''['"]([^'"\n]+)['"]''', m.group(1)) if m else None
+    m = re.search(name + r'''\s*=\s*(?:\[([^\]]*)\]|\(([^)]*)\))''', text)
+    return re.findall(r'''['"]([^'"\n]+)['"]''', m.group(1) or m.group(2) or '') if m else None
+
+
+# security review: convention data is remote text; keep only plain types and heading-shaped sections
+TYPE_RE = re.compile(r'^[a-z][a-z0-9-]{0,19}$')
+HEAD_RE = re.compile(r'^#{1,6} [^\n`$]{1,80}$')
+
+
+def safe_types(v):
+    return [x for x in (v or []) if TYPE_RE.match(x)][:20] or None
 
 
 def checker(repo, wf, ref, want):
     # the checker files a required workflow runs: the .py files of each `uses: <o>/<r>/<dir>@<ref>`
+    # in the workflow's own repo or the target repo only, never through '..'
     text = content(repo, wf, ref)
     if text is None:
         return None, None
     for o, d, r in re.findall(r'uses:\s*["\']?([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)/([A-Za-z0-9._/-]+)@([^\s"\'#]+)', text):
+        if o.lower() not in (repo.lower(), slug.lower()) or '..' in d.split('/'):
+            continue
         code, items = api('repos/' + o + '/contents/' + quote(d) + '?ref=' + quote(r, False))
         for it in (items if code == 200 and isinstance(items, list) else [])[:20]:
-            if isinstance(it, dict) and str(it.get('name', '')).endswith('.py') and isinstance(it.get('path'), str):
+            ip = it.get('path') if isinstance(it, dict) else None
+            if isinstance(ip, str) and ip.endswith('.py') and ip.startswith(d.rstrip('/') + '/') and '..' not in ip.split('/'):
                 t = content(o, it['path'], r)
                 if t and want(t):
                     return o + '/' + it['path'], t
@@ -141,7 +154,7 @@ for r in rules:
         ref = str(w.get('ref') or 'HEAD')
         if kind == 'title':
             name, text = checker(repo, w['path'], ref, lambda t: 'TYPES' in t) if repo else (None, None)
-            types = strs(text, 'TYPES') if text else None
+            types = safe_types(strs(text, 'TYPES')) if text else None
             title = {'style': 'scoped-key', 'types': types or CC, 'key_required': True}
             source.append('title: required workflow ' + w['path'] + ' (ruleset ' + str(r.get('ruleset_id')) + ', ' + str(repo) + ')' + (', checker ' + name if name else ''))
             if not types:
@@ -150,9 +163,9 @@ for r in rules:
             name, text = checker(repo, w['path'], ref, lambda t: 'SECTIONS' in t or 'MIN_CHARS' in t) if repo else (None, None)
             body['checker'] = name or str(repo) + ':' + w['path']
             if text:
-                body['required_sections'] = strs(text, r'[A-Z_]*SECTIONS')
+                body['required_sections'] = [x for x in (strs(text, r'[A-Z_]*SECTIONS') or []) if HEAD_RE.match(x)][:20] or None
                 m = re.search(r'MIN_CHARS\s*=\s*(?:int\([^)]*?)?([0-9]+)', text)
-                body['min_chars'] = int(m.group(1)) if m else None
+                body['min_chars'] = int(m.group(1)) if m and int(m.group(1)) <= 100000 else None
                 source.append('body: required workflow ' + w['path'] + ', checker ' + name)
             else:
                 unreadable.append('pr-body checker of ' + body['checker'] + ' not readable: its required sections are not known')
@@ -161,7 +174,7 @@ if not title:
         b = p.rsplit('/', 1)[-1]
         if re.fullmatch(r'\.commitlintrc(\.(json|ya?ml|js|cjs|mjs|ts))?|commitlint\.config\.(js|cjs|mjs|ts)', b) or p == '.github/semantic.yml' or (p == 'package.json' and '"commitlint"' in read_local(p)):
             m = re.search(r'''type-enum['"]?\s*[:,]\s*\[[^\[\]]*\[([^\]]*)\]''', read_local(p))
-            types = re.findall(r'''['"]([a-z]+)['"]''', m.group(1)) if m else []
+            types = safe_types(re.findall(r'''['"]([^'"\n]+)['"]''', m.group(1))) if m else None
             title = {'style': 'conventional', 'types': types or CC, 'key_required': False}
             source.append('title: commitlint config ' + p)
             break

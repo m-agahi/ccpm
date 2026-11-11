@@ -631,3 +631,55 @@ test("6.0.0 2042 (security review): roles get the plan's own blob sha; verify an
   assert.equal(o3.result.status, "needs_human");
   assert.match(o3.result.reason, /^hasher hasher:post-coder:r1: refs\/replace\/2{40} exists/);
 });
+
+// ---------------------------------------------------------------- 2042b security review: convention data is untrusted
+
+test("6.0.0 2042b (security review): pr_convention.py keeps only safe types and heading-shaped sections, follows checkers only in the workflow's own repo or the target, never through ..", () => {
+  const evil = "TYPES = ['feat', 'x$(rm -rf ~)', 'Fix`id`', 'chore']\n";
+  const t1 = convRun({}, {
+    [RULES]: [200, [{ type: "workflows", ruleset_id: 1, parameters: { workflows: [{ repository_id: 7, path: ".github/workflows/pr-title.yaml", ref: "refs/heads/master" }] } }], {}],
+    "repositories/7": [200, { full_name: "q/actions" }, {}],
+    "repos/q/actions/contents/.github/workflows/pr-title.yaml?ref=refs%2Fheads%2Fmaster": [200, { content: b64("steps:\n  - uses: q/evil/chk@v1\n  - uses: q/actions/../x/chk@v1\n  - uses: q/actions/chk@v1\n") }, {}],
+    "repos/q/evil/contents/chk?ref=v1": [200, [{ name: "c.py", path: "chk/c.py", type: "file" }], {}],
+    "repos/q/actions/contents/chk?ref=v1": [200, [{ name: "c.py", path: "chk/c.py", type: "file" }, { name: "d.py", path: "../d.py", type: "file" }], {}],
+    "repos/q/actions/contents/chk/c.py?ref=v1": [200, { content: b64(evil) }, {}],
+  });
+  assert.deepEqual(t1.title.types, ["feat", "chore"]);
+  assert.doesNotMatch(t1.__log, /q\/evil|\.\./);
+  const allBad = convRun({ "commitlint.config.js": "module.exports = { rules: { 'type-enum': [2, 'always', ['$(id)', 'A b']] } };\n" }, { [RULES]: [200, [], {}] });
+  assert.deepEqual(allBad.title.types, CC);
+  const body = convRun({}, {
+    [RULES]: [200, [{ type: "workflows", ruleset_id: 5, parameters: { workflows: [{ repository_id: 7, path: ".github/workflows/pr-body.yaml", ref: "refs/heads/master" }] } }], {}],
+    "repositories/7": [200, { full_name: "q/actions" }, {}],
+    "repos/q/actions/contents/.github/workflows/pr-body.yaml?ref=refs%2Fheads%2Fmaster": [200, { content: b64("steps:\n  - uses: q/actions/bc@v1\n") }, {}],
+    "repos/q/actions/contents/bc?ref=v1": [200, [{ name: "b.py", path: "bc/b.py", type: "file" }], {}],
+    "repos/q/actions/contents/bc/b.py?ref=v1": [200, { content: b64("REQUIRED_SECTIONS = ['## Summary', '## `$(id)`', 'plain', '### Tests']\nPR_BODY_MIN_CHARS = 99999999\n") }, {}],
+  });
+  assert.deepEqual(body.body.required_sections, ["## Summary", "### Tests"]);
+  assert.equal(body.body.min_chars, null);
+});
+
+test("6.0.0 2042b (security review): the workflow re-filters convention types, checks the final subject and title, and the opener passes the title in single quotes", async () => {
+  for (const [types, main] of [[["feat; rm -rf ~", "fix"], "fix(thing): add thing"], [["$(id)"], "feat(thing): add thing"]]) {
+    const s = happy();
+    s["infra:pr-convention:plan"] = convOut({ style: "conventional", types, key_required: false });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "ok", out.result.reason);
+    assert.equal(inputsOf(call(out, "infra:commit:r1").prompt).subject, main, JSON.stringify(types));
+  }
+  // a sealed component that is not a plain word stops before any commit
+  const s = happy();
+  const plan = await run(s, ARGS).then((o) => o.plan);
+  const ref = JSON.parse(s.__store[PC]);
+  ref.plan_facts.component = "x$(id)";
+  delete ref.seal;
+  ref.seal = sha256(canon(ref));
+  s.__store[PC] = JSON.stringify(ref) + "\n";
+  const out = await runOne(s, BARGS({ result: { plan_ref: Object.assign({}, plan.result.plan_ref, { ref_sha256: sha256(s.__store[PC]) }) } }));
+  assert.equal(out.result.status, "needs_human");
+  assert.match(out.result.reason, /^plan ref refs\/fleet\/l42\/plan: unsafe commit subject "feat\(x\$\(id\)\): add thing"; re-run plan$/);
+  assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)));
+  const po = readFileSync(join(SCRIPTS_SRC, "..", "roles", "fleet-pr-opener.md"), "utf8");
+  assert.match(po, /--title '<title>'/);
+  assert.doesNotMatch(po, /--title "<title>"/);
+});

@@ -518,7 +518,9 @@ const READS = {
     "t.types array": "prog:pr_convention:title.types",
     "r.source array": "prog:pr_convention:source",
     "r.unreadable array": "prog:pr_convention:unreadable",
+    "r.body.required_sections array": "prog:pr_convention:body.required_sections",
   },
+  subjectsOf: { "c.types array": PARSED_REF },
   isHookPath: { "p string-re": PARSED_LOCAL },
   planScopePaths: {
     "f string": SP + "criteria[].test_files[]",
@@ -535,6 +537,8 @@ const READS = {
   },
   afterRounds: { "n number-literal": PARSED_LOCAL },
   planAndAudit: {
+    // 6.0.0 (ledger 2042): the component fallback, a slug of the remote name
+    "fb string-re": PARSED_LOCAL,
     // release review of #48: an approving audit's advisory findings go to the gate log
     "f.finding string": "role:plan-audit:routed_findings[].finding",
     "plan.plan_path string": SP + "plan_path",
@@ -658,6 +662,8 @@ const READS = {
     // 6.0.0 (ledger 2042)
     "loaded.plan_base string": PARSED_REF,
     "loaded.plan_base string-re": PARSED_REF,
+    // 6.0.0 security review: the built subjects
+    "x string-re": PARSED_LOCAL,
     // 6.0.0 security review
     "v.replace_refs array": "prog:verify_since:replace_refs",
     "pf object": PARSED_REF,
