@@ -331,6 +331,11 @@ test("6.1.0 D6 (2051): after an update the fleet scan diffs against the base tip
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "scope");
   assert.match(b.result.reason, /fleet internal files check did not complete/);
+  // a program run on another base (its digest matches its own output) is refused too
+  const ob = { diff: [], commits: [], base: "e".repeat(40) };
+  const other = await run(upd({ "infra:fleet-scan:push:p2": Object.assign({ status: "ok", reason: "scanned", digest: sha256(canon(ob)) }, ob) }), ARGS);
+  assert.equal(other.result.stop_gate, "scope", other.result.reason);
+  assert.match(other.result.reason, /fleet internal files check did not complete/);
 });
 
 test("6.1.0 D6 (2051): fleet_scan.py with the base tip lists the PR side only; the stale local origin ref lists the base change too", () => {
@@ -403,4 +408,181 @@ test("6.1.0 N1 (2052): a resumed update record whose head is not 40 hex, or no u
     assert.equal(out.result.stop_gate, "resume", out.result.reason);
     assert.match(out.result.reason, /^run-state mismatch: update record /);
   }
+});
+
+// ---------------------------------------------------------------- review of PR #61
+import { mkdirSync, existsSync, chmodSync, rmSync } from "node:fs";
+import { SOURCE, compile, sha256, canon } from "./harness.mjs";
+
+test("6.1.0 review B1: the update round's coder and code judge get plan_commit = the base tip", async () => {
+  const out = await run(upd(), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(inputsOf(call(out, "role:fleet-coder:r2").prompt).plan_commit, C);
+  assert.equal(inputsOf(call(out, "role:fleet-code-judge:r2").prompt).plan_commit, C);
+  assert.equal(inputsOf(call(out, "role:fleet-coder:r1").prompt).plan_commit, PB);
+  assert.equal(inputsOf(call(out, "role:fleet-code-judge:r1").prompt).plan_commit, PB);
+});
+
+test("6.1.0 review B2: the fleet scan prompt after an update names base in the printed and returned keys; others do not", async () => {
+  const out = await run(upd(), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const p2 = call(out, "infra:fleet-scan:push:p2").prompt;
+  assert.match(p2, /It prints one JSON object \{diff, commits, base, program, digest\}/);
+  assert.match(p2, /Return \{status, reason, diff, commits, base, program, file_sha256, digest\}/);
+  const p1 = call(out, "infra:fleet-scan:push").prompt;
+  assert.match(p1, /It prints one JSON object \{diff, commits, program, digest\}/);
+  assert.match(SOURCE, /\n  fleet_scan: \{[^\n]*\bbase: STR\b/);
+});
+
+// a bare origin with core.hooksPath .husky in the fleet worktree; the base adds hooks that write markers
+const HOOKS = ["post-merge", "post-checkout", "reference-transaction", "post-index-change", "pre-auto-gc"];
+function hookRepos() {
+  const root = mkdtempSync(join(tmpdir(), "fleet-610hook-"));
+  const env = Object.assign({}, process.env, { HOME: root, GIT_CONFIG_GLOBAL: join(root, "gc"), GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
+  writeFileSync(join(root, "gc"), "");
+  const git = (cwd, ...a) => {
+    const r = spawnSync("git", ["-C", cwd].concat(a), { encoding: "utf8", env });
+    assert.equal(r.status, 0, a.join(" ") + ": " + r.stderr);
+    return r.stdout.trim();
+  };
+  const origin = join(root, "origin.git");
+  spawnSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env });
+  const wt = join(root, "wt");
+  spawnSync("git", ["clone", "-q", origin, wt], { env });
+  writeFileSync(join(wt, "a.txt"), "a\n");
+  git(wt, "add", "-A");
+  git(wt, "commit", "-q", "-m", "init");
+  git(wt, "push", "-q", "origin", "HEAD:main");
+  git(wt, "checkout", "-q", "-b", "fleet/k");
+  writeFileSync(join(wt, "pr.txt"), "pr\n");
+  git(wt, "add", "-A");
+  git(wt, "commit", "-q", "-m", "pr");
+  git(wt, "push", "-q", "origin", "fleet/k");
+  git(wt, "config", "core.hooksPath", ".husky");
+  const old = git(wt, "rev-parse", "HEAD");
+  const other = join(root, "other");
+  spawnSync("git", ["clone", "-q", origin, other], { env });
+  mkdirSync(join(other, ".husky"));
+  for (const h of HOOKS) {
+    writeFileSync(join(other, ".husky", h), "#!/bin/sh\necho ran > " + JSON.stringify(join(root, "marker-" + h)) + "\n");
+    chmodSync(join(other, ".husky", h), 0o755);
+  }
+  git(other, "add", "-A");
+  git(other, "commit", "-q", "-m", "base adds hooks");
+  git(other, "push", "-q", "origin", "HEAD:main");
+  const base = git(other, "rev-parse", "HEAD");
+  git(other, "checkout", "-q", "fleet/k");
+  git(other, "merge", "-q", "--no-ff", "-m", "Merge branch 'main' into fleet/k", base);
+  const neu = git(other, "rev-parse", "HEAD");
+  git(other, "push", "-q", "origin", "HEAD:fleet/k");
+  return { root, wt, old, base, neu, env, git };
+}
+test("6.1.0 review B3: pr_state.py fetch runs no repo hook; a base-added hook under an in-tree core.hooksPath writes no marker", () => {
+  const h = hookRepos();
+  try {
+    const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "pr_state.py"), "fetch", h.wt, "fleet/k", h.old, h.neu, h.base], { encoding: "utf8", env: h.env });
+    assert.equal(r.status, 0, r.stderr);
+    const o = JSON.parse(r.stdout);
+    assert.deepEqual([o.error, o.head], [null, h.neu]);
+    assert.ok(existsSync(join(h.wt, ".husky", "post-merge")), "the hook file came in with the merge");
+    for (const m of HOOKS) assert.ok(!existsSync(join(h.root, "marker-" + m)), m + " ran in pr_state.py fetch");
+    // the programs that read or index the worktree after the fetch run no hook either
+    mkdirSync(join(h.root, "scratch"), { recursive: true });
+    for (const [prog, args] of [["read_state.py", [h.wt, "refs/fleet/x/state"]], ["hasher.py", [h.wt, "[]", "", join(h.root, "scratch")]]]) {
+      spawnSync("python3", ["-I", join(SCRIPTS_SRC, prog)].concat(args), { encoding: "utf8", env: h.env });
+      for (const m of HOOKS) assert.ok(!existsSync(join(h.root, "marker-" + m)), prog + ": " + m + " ran");
+    }
+  } finally {
+    rmSync(h.root, { recursive: true, force: true });
+  }
+});
+
+test("6.1.0 review S1: code rounds run out inside the update round: stop review (CI stop code review), not cap", async () => {
+  const fix = { status: "ok", reason: "again", verdict: "fix_code", routed_findings: [{ target: "code", criterion: null, finding: "again" }] };
+  const t = upd({ "role:fleet-code-judge:r2": fix, "role:fleet-coder:r3": { status: "ok", reason: "x", changed_paths: ["src/x.py"] }, "hasher:post-coder:r3": { status: "ok", fingerprint: { head: D, tree: "K3" }, hashes: HASHES, changed: ["src/x.py"] }, "role:fleet-code-judge:r3": fix, "hasher:fp-post:code-judge:r3": { status: "ok", fingerprint: { head: D, tree: "K3" } } });
+  const out = await run(t, ARGS);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "review", out.result.reason);
+  assert.match(out.result.reason, /^code rounds exhausted \(3\) without code-judge approval in the code rounds after update-branch/);
+  assert.match(out.result.reason, /re-plan on the new base or fix by hand$/);
+  assert.ok(L_(out).includes("role:fleet-coder:r3") && !L_(out).includes("role:fleet-coder:r4"));
+  assert.equal(wbCi(out), 1);
+  assert.match(wbLine(out), /; stopped: review$/);
+});
+
+test("6.1.0 review S2: R4 derives test_cmd inputs; a shape it cannot read refuses every moved file (fail closed)", async () => {
+  const src = SOURCE.replace(/^export const meta/m, "const meta").replace("\nlet input = args;\n", "\nreturn { testCmdRuns };\nlet input = args;\n");
+  assert.ok(src.indexOf("return { testCmdRuns };") > 0);
+  const { testCmdRuns } = await compile(src)(null, null, null, () => {}, () => {}, {}, {}, {}, Date, Math);
+  const runs = (cmd, p, mp) => testCmdRuns(cmd, p, mp || {});
+  assert.equal(runs("scripts/test.sh <paths>", "scripts/test.sh"), true);
+  assert.equal(runs("scripts/test.sh <paths>", "src/x.py"), false);
+  assert.equal(runs("bash scripts/test.sh <paths>", "scripts/test.sh"), true);
+  assert.equal(runs("sh ./scripts/t.sh", "scripts/t.sh"), true);
+  assert.equal(runs("python3 tools/run_tests.py <paths>", "tools/run_tests.py"), true);
+  assert.equal(runs("python3 -m pytest <paths>", "pyproject.toml"), true);
+  assert.equal(runs("python3 -m pytest <paths>", "src/x.py"), false);
+  assert.equal(runs("uv run pytest <paths>", "uv.lock"), true);
+  assert.equal(runs("npm run test:unit", "package.json"), true);
+  assert.equal(runs("npm run test:unit", "web/package.json"), true);
+  assert.equal(runs("cargo test", "Cargo.toml"), true);
+  assert.equal(runs("cargo test", "crates/a/build.rs"), true);
+  assert.equal(runs("go test ./...", "go.mod"), true);
+  assert.equal(runs("make test", "mk/x.mk"), true);
+  assert.equal(runs("make test", "tools/gen.py", { test: ["tools/gen.py"] }), true);
+  assert.equal(runs("make test", "src/x.py"), false);
+  // shapes it cannot read refuse every file
+  for (const c of ["bash", "bash -c x", "weird-runner <paths>", "sh -e scripts/t.sh", ""]) assert.equal(runs(c, "src/anything.py"), true, JSON.stringify(c));
+});
+
+test("6.1.0 review S2: R4 refuses a base edit of a make test recipe file", async () => {
+  const hs = (mp) => (p) => ({ status: "ok", reason: "read", surface: [], make_paths: mp, error: null, args: [inputsOf(p).worktree, inputsOf(p).rev, JSON.stringify(inputsOf(p).targets)] });
+  const t = upd({ "infra:hook-surface:u1:pb": hs({ test: ["tools/gen.py"] }) }, ["src/x.py", "tools/gen.py"]);
+  t["role:scope-and-plan"].test_cmd = { command: "make test", paths_placeholder: null, env: {}, tools: [] };
+  const r = await refused(t, /test or check commands run \(tools\/gen\.py\)/);
+  assert.deepEqual(inputsOf(call(r, "infra:hook-surface:u1:pb").prompt).targets, ["test"]);
+});
+
+test("6.1.0 review N6: R2 includes the ruleset surface", async () => {
+  const t = upd({}, ["src/x.py", "tools/rs.sh"]);
+  t["infra:ruleset-surface:plan"] = (p) => ({ status: "ok", reason: "read", surface: ["tools/rs.sh"], sources: [{ ruleset_id: 1, name: "R", source_type: "Repository", path: "tools/rs.sh", via: ".github/workflows/r.yml" }], read: ["x"], unreadable: [], error: null, args: inputsOf(p).args });
+  await refused(t, /the base change touches the hook surface \(tools\/rs\.sh/);
+});
+
+test("6.1.0 review N7: after pr-opener p2 the stats block is written again before the re-review u2", async () => {
+  const out = await run(upd({ "role:pr-review:v3": blockingReview() }), ARGS);
+  const L = L_(out);
+  const i = L.indexOf("role:fleet-pr-opener:p2");
+  const s = L.findIndex((l, k) => k > i && /^infra:pr-stats/.test(l));
+  assert.ok(i >= 0 && s > i && s < L.indexOf("role:pr-review:v3"), L.join(", "));
+});
+
+test("6.1.0 review N8: a stop after the update reports CI not_run for the head nobody watched", async () => {
+  const r1 = await run(upd({ "hasher:update:u1": { status: "ok", fingerprint: { head: D, tree: "KU" }, hashes: HASHES_U, changed: ["src/x.py"] } }), ARGS);
+  assert.equal(r1.result.stop_gate, "review");
+  assert.match(wbLine(r1), /^CI: not_run; /);
+  const r2 = await run(upd({ "role:pr-review:v3": blockingReview() }), ARGS);
+  assert.match(wbLine(r2), /^CI: not_run; /);
+});
+
+test("6.1.0 review N9: review_paths.py lists both sides of a rename", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fleet-610r-"));
+  const env = Object.assign({}, process.env, { GIT_CONFIG_GLOBAL: join(dir, "gc"), GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
+  const g = (...a) => {
+    const r = spawnSync("git", ["-C", dir].concat(a), { encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  g("init", "-q", "-b", "main");
+  writeFileSync(join(dir, "old.py"), "x = 1\n".repeat(20));
+  g("add", "-A");
+  g("commit", "-q", "-m", "a");
+  const a = g("rev-parse", "HEAD");
+  g("mv", "old.py", "new.py");
+  g("commit", "-q", "-m", "b");
+  const b = g("rev-parse", "HEAD");
+  g("config", "diff.renames", "true");
+  const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "review_paths.py"), dir, a, b], { encoding: "utf8", env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout).changed_paths.sort(), ["new.py", "old.py"]);
 });

@@ -433,7 +433,12 @@ export async function runOne(script, args0) {
     if (!(label in script) && /^infra:changed-defs:/.test(label)) return defsOut([]);
     // unscripted fleet-internal scans find no .fleet/ path in the PR diff
     // 6.1.0 D6 (2051): given a base tip, the program prints it (and its digest covers it)
-    if (!(label in script) && /^infra:fleet-scan:/.test(label) && inputsOf(prompt).base) return { status: "ok", reason: "scanned", diff: [], commits: [], base: inputsOf(prompt).base };
+    // 6.1.0 review B2: the relay returns exactly the keys the prompt lists (base only when listed)
+    if (!(label in script) && /^infra:fleet-scan:/.test(label) && inputsOf(prompt).base) {
+      const m = /It prints one JSON object \{([^}]*)\}/.exec(prompt);
+      const listed = m ? m[1].split(", ") : [];
+      return Object.assign({ status: "ok", reason: "scanned", diff: [], commits: [] }, listed.indexOf("base") >= 0 ? { base: inputsOf(prompt).base } : {});
+    }
     if (!(label in script) && /^infra:fleet-scan:/.test(label)) return withRelayDigest(label, { status: "ok", reason: "scanned", diff: [], commits: [] });
     // run-state writes are mechanical too: the ref lands on the expected head
     if (!(label in script) && /^infra:state:/.test(label)) {
@@ -1188,7 +1193,7 @@ export const PROGRAM_LABELS = [
 ];
 // 6.1.0 D6: fleet_scan.py prints base (in its digest) only when it was given one
 function fleetScanKeys(label, keys0, prompt) {
-  return /^infra:fleet-scan:/.test(label) && keys0 && inputsOf(prompt).base ? keys0.concat(["base"]) : keys0;
+  return /^infra:fleet-scan:/.test(label) && keys0 && inputsOf(prompt).base ? K("fleet_scan:base") : keys0;
 }
 function pick(o, keys) {
   const x = {};

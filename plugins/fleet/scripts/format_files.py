@@ -78,7 +78,8 @@ def lift():
     # the repo's own hooks (node, linters) are not bound by this program's caps
     for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
         _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
-G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false']
+# 6.1.0 review B3: index writes and worktree add/remove run no repo hook
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.quotePath=false']
 def git(cwd, *a, env=None, check=True):
     r = subprocess.run(G + ['-C', cwd] + list(a), capture_output=True, env=env)
     if check and r.returncode != 0:

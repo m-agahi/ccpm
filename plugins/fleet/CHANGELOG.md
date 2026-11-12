@@ -2,10 +2,10 @@
 
 ## [6.1.0] - 2026-11-12
 
-Fleet 6.1.0 (ledger 2049, 2051, 2052): a coder round after the update-branch re-review requests
-changes, in the strict form Max chose (option b of the 6.1 design). The reach is narrow: the
-coder round runs only when every refusal rule R1-R5 passes and the budget allows it. In every
-other case the run stops as in 6.0.1, with the refusal reason added.
+Fleet 6.1.0 (ledger 2049, 2051, 2052): code rounds after the update-branch re-review requests
+changes, in the strict form Max chose (option b of the 6.1 design). The reach is narrow: code
+rounds on the update merge start only when every refusal rule R1-R5 passes and the budget allows
+it. In every other case the run stops as in 6.0.1, with the refusal reason added.
 
 ### Deploy
 
@@ -17,41 +17,67 @@ other case the run stops as in 6.0.1, with the refusal reason added.
 
 ### Added
 
-- 2049: when the re-review of the forge's update merge d (u1) requests changes, the fleet runs one
-  coder round on d only when none of these hold (each is a stop with gate `review`, the 6.0.1 text
+- 2049: when the re-review of the forge's update merge d (u1) requests changes, the fleet goes back
+  to the coder on d only when none of these hold (each is a stop with gate `review`, the 6.0.1 text
   plus "no coder round: <reason>", and one CI write-back with stop code `review`):
   - the budget: a second post-update review (u2) requested changes, or the code rounds
-    (`MAX_CODE_ROUNDS`, 3) are used up, or the run has no freeze maps (a resumed run);
+    (`MAX_CODE_ROUNDS`, 3, counted over the whole run) are used up, or the run has no freeze maps
+    (a resumed run);
   - R1: a hashed map or a non-fleet `git` inline key of `hasher:update:u1` differs from the freeze
     maps, or the hasher lists a suspicious path;
   - R2: a moved file (old head..d, plus the overlap) is on the hook surface at the base tip or at
-    the plan base, or matches the CI and hook-manager path list;
+    the plan base, on the ruleset surface (the sealed one, else a fresh read), or matches the CI
+    and hook-manager path list;
   - R3: a moved file is a fenced path or an IaC path;
-  - R4: a moved file is run by `test_cmd` or a `check_cmd` (its script, a Makefile, a `.mk` file, a
-    make recipe file, the pre-commit config);
+  - R4: a moved file is run by a `check_cmd` (its script, a Makefile, a `.mk` file, a make recipe
+    file, the pre-commit config) or by `test_cmd`. For `test_cmd` the `<paths>` token is dropped;
+    `bash`/`sh`/`python <script>` and a direct script path give the script; `make test` gives the
+    Makefiles and its recipe files; pytest, npm/pnpm/yarn, jest/vitest, cargo and go give their
+    manifest and lock files (by basename). A `test_cmd` shape it cannot read refuses every moved
+    file (fail closed);
   - R5: with `changed_symbols`, a moved file holds a sealed occurrence or an occurrence that a
     callers grep at d (`infra:callers:u1`) lists, or that grep caps a symbol.
-- The refusal reads (`infra:hook-surface:u1:pb`, `infra:callers:u1`) run only after a blocking
-  re-review; an approving re-review goes on as in 6.0.1.
+- The refusal reads (`infra:hook-surface:u1:pb`, `infra:ruleset-surface:u1` when no surface is
+  sealed, `infra:callers:u1`) run only after a blocking re-review; an approving re-review goes on
+  as in 6.0.1. A failed refusal read stops with its own gate (`hooks` or `failed`), still with one
+  CI write-back.
+- The code rounds on d are the normal coder and code-judge loop: a `fix_code` verdict, an
+  obligations, hash or contract finding, or a commit-hook or push-hook rejection goes back to the
+  coder, within `MAX_CODE_ROUNDS` for the whole run. When the cap runs out in these rounds the
+  stop has gate `review` (CI stop code `review`), not `cap`.
 - R6: in a code round after the update, a code-judge `fix_tests` or `plan_wrong` stops with gate
   `review` (no test writer, no re-freeze, no re-plan on the merge).
-- The round on d: the frozen maps and the freeze ref stay as they are. HEAD, `freeze_ref` and
-  `code_base_ref` are d. `freeze_tree` is tree(d). The post-coder hasher, the hook surface
-  and the commit's `expected_head` use d. The build caller check and the review diff use the base
-  tip. The obligations gate sees the u1 review's paths plus the coder delta. The commit is a normal
-  commit on d; the push is the usual `git push -u origin <branch>` (a fast-forward, never a force
-  push); the merge keeps `--match-head-commit` on the new commit.
-- A stop inside such a code round writes the CI outcome back once (enum stop code).
+- The rounds on d: the frozen maps and the freeze ref stay as they are. HEAD, `freeze_ref` and
+  `code_base_ref` are d. `freeze_tree` is tree(d). The post-coder hasher, the hook surface and the
+  commit's `expected_head` use d. `plan_commit` for the coder and the code judge is the base tip,
+  so base hunks are not part of the change they judge. The build caller check and the review diff
+  use the base tip. The obligations gate sees the u1 review's paths (listed with `--no-renames`)
+  plus the coder delta. The commit is a normal commit on d; the push is the usual
+  `git push -u origin <branch>` (a fast-forward, never a force push); the merge keeps
+  `--match-head-commit` on the new commit.
+- A stop inside these code rounds writes the CI outcome back once (enum stop code). From the
+  update on, the CI line says `not_run` until CI is watched on the new head.
 - On the update path no review text goes to the PR body: the u1 nits are not handed to the
-  pr-opener, and an approving u2 with nits makes no notes call.
+  pr-opener, and an approving u2 with nits makes no notes call. After the pr-opener rewrites the
+  body for the new commit, the stats block is written again before the re-review u2.
 
 ### Fixed
 
-- 2051 (D6): `fleet_scan.py` takes an optional base tip (40 hex, a commit in the repo) and prints
-  it as `base`, inside its digest. After an update the workflow passes the base tip the forge
-  merged, so the scan diffs the PR side only and agrees with `tf_gate`'s live base; before, the
-  stale local `origin/<default>` added the base change. Every other scan runs the 6.0.1 command.
-  A test runs the program on a real repo with a forge merge and a stale `origin/<default>`.
+- 2051 (D6): `fleet_scan.py` takes an optional fourth argument, a base tip. It must be 40 lowercase
+  hex and resolve to that commit in the repo, else the program exits non-zero. With it, the
+  program diffs `<tip>...<head>` and lists the commits `<tip>..<head>` instead of using the local
+  `refs/remotes/origin/<default>`, and it prints `base` inside its digest. After an update the
+  workflow passes the base tip the forge merged; the prompt then lists `base` in the printed and
+  returned keys, and the relayed `base` must equal it. Other scans run the 6.0.1 command.
+  Before, a stale local `origin/<default>` added the base change to the scan.
+- Review B3: `pr_state.py fetch` ran `git fetch` and `git merge --ff-only` with the repo's hooks, so
+  a hook the base added under an in-tree `core.hooksPath` (for example `.husky/post-merge`) ran
+  before any gate. `pr_state.py` (fetch and cleanup), the temporary-index calls of `hasher.py`,
+  `read_state.py`, `parked.py` and `format_files.py` now run git with
+  `-c core.hooksPath=/dev/null`. The other programs run only git commands that write no index and
+  no ref. `state_write.py`, `plan_ref_write.py`, `tf_gate.py` and `remote_head.py` already set it.
+  The commit step and the push run the repo's hooks on purpose; R2 makes sure the base changed no
+  hook before such a step on the update path.
 - 2052 (N1): a resumed run-state with `pr_updated` true and an update record whose head or base is
   not 40 hex, or with no update record, stops with gate `resume`. No 6.0.1 writer produces such a
   state; it is a corrupt or hand-edited run-state.
@@ -59,7 +85,9 @@ other case the run stops as in 6.0.1, with the refusal reason added.
 ### Changed
 
 - The 6.0.1 stop "re-review after update-branch requested changes" now names the refusal reason.
-  A clean base change no longer stops there: it gets the coder round above.
+  A clean base change no longer stops there: it goes to the code rounds above.
+- `review_paths.py` lists with `--no-renames` (both paths of a rename).
+- The v5010 prompt pins move only by `base` in the `fleet_scan` output schema.
 - Version 6.1.0 (`FLEET_VERSION`, `marketplace.json`, the root README).
 
 ## [6.0.1] - 2026-11-11

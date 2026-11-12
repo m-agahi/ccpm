@@ -37,7 +37,7 @@ except Exception:
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
-r = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt, 'diff', '--name-only', '-z', base + '..' + head, '--'], capture_output=True)
+r = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt, 'diff', '--name-only', '-z', '--no-renames', base + '..' + head, '--'], capture_output=True)
 if r.returncode != 0:
     sys.exit(r.stderr.decode('utf-8', 'replace'))
 out = {'changed_paths': [x.decode('utf-8', 'replace') for x in r.stdout.split(b'\0') if x]}

@@ -118,9 +118,11 @@ def work_tree():
     os.close(fd)
     env = dict(os.environ, GIT_INDEX_FILE=tmp)
     try:
+        # 6.1.0 review B3: an index write runs no post-index-change hook
+        nh = GIT[:1] + ['-c', 'core.hooksPath=/dev/null'] + GIT[1:]
         for a in (['read-tree', 'HEAD'], ['add', '-A']):
-            subprocess.run(GIT + a, capture_output=True, check=True, env=env)
-        return subprocess.run(GIT + ['write-tree'], capture_output=True, check=True, env=env).stdout.decode().strip()
+            subprocess.run(nh + a, capture_output=True, check=True, env=env)
+        return subprocess.run(nh + ['write-tree'], capture_output=True, check=True, env=env).stdout.decode().strip()
     finally:
         os.unlink(tmp)
 
