@@ -1,5 +1,70 @@
 # Changelog
 
+## [6.2.1] - 2026-11-12
+
+Fleet 6.2.1 (ledger 2097): create `policy.json` on first use. Max's ruling, verbatim: "yes it
+should create on first use". The workflow changes only in its version; a missing file still
+means the strict default (PR ready, CI watch, stats; merge never, update_branch never).
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.2.1), then start a NEW session: the workflow
+  looks for its own `fleet/6.2.1/scripts` dir, and the new skill loads only in a new session.
+- A 6.2.0 plan ref and run-state stay valid.
+- Manual tests, not run by CI. Status: pending, not passed.
+  - P7 (question order): on a machine with no policy file, run `/build-task` on a scratch repo
+    with `confirm: "ask"`. The policy question comes after the plan result, then the Build
+    question; record that the build launched on "Build" did not stop with `relaunch`.
+  - P8 (smoke): `/fleet-policy` on a machine with no file, then with a file; record the backup
+    path of one change.
+
+### Added
+
+- `skills/fleet-policy/policy_init.py` (stdlib, `python3 -I`): `status`, `create shown|never`,
+  `marker`, `set-merge-never`, `recreate shown|never`. It takes the path from
+  `scripts/policy.py` (its `file` field). Every new text must pass `scripts/policy.py` in a
+  staging dir before it lands (the template too, so a duplicate key cannot vanish in a re-dump);
+  the staging dir is removed on every path. `create` links the file into place (mode 0600) and
+  refuses any entry at the path, a symlink included. The `fleet` dir is mode 0700 only when the
+  helper creates it; an existing dir keeps its mode. A relative `XDG_CONFIG_HOME` is refused
+  (the helper and the workflow would resolve it from different dirs), and `status` on a file
+  that is not UTF-8 exits 1 with a clear error. A change writes a mode 0600 backup `policy.json.bak-<UTC time>` first, then
+  replaces the file atomically. The helper is outside `scripts/` and `roles/`, so preflight,
+  `gen.mjs` and `PROGRAM_COUNT` do not change.
+- `skills/fleet-policy/SKILL.md` (`/fleet-policy`): shows the file and its path, or the
+  missing-file state; on Max's answer to one AskUserQuestion it switches merge to never or
+  re-creates the file from the template.
+- `tests/v621_policy_init.test.mjs`: status on a missing file, `create shown` byte for
+  byte, `create never` with every merge `never`, refuse overwrite (a file, a symlink, a file that
+  appears during the check), the parser gate (4 templates `policy.py` refuses write nothing), the
+  don't-ask marker, `set-merge-never` and `recreate` with backups (a symlink and a file
+  `policy.py` refuses are kept), and the skill text pins (the question and its four options, the
+  peer-message rule, the never-at-install rule, the unattended rule, `allowed-tools`). Review
+  (M1, N1, L1): the build-task question order (policy section referenced from step 7, before the
+  separate Build question, not before step 5, no "same turn" or relaunch line), plan-task keeps
+  its step 2 check, an existing dir keeps its mode, a non-UTF-8 file, a relative
+  `XDG_CONFIG_HOME`, no staging dir left. 28 tests in all.
+- Mutant sweep on `policy_init.py`: 26 hand-made mutants (link replaced by an overwrite, each
+  check dropped, each merge flip dropped, modes, backup, marker, path, argument checks, and for
+  the review: relative `XDG_CONFIG_HOME` allowed, decode error made quiet, staging dir kept, an
+  existing dir chmodded), 26 killed.
+
+### Changed
+
+- `/build-task` and `/plan-task` (skill text only) run `policy_init.py status`: build-task in
+  step 7, after the plan result and before the Build question (the workflow reads the policy only
+  in build mode; probe skips it), plan-task after its repo and date step. File missing and no
+  marker: show `policy.example.json` and ask ONE question: "Create as shown", "Create with merge
+  never everywhere", "Not now", "Not now, don't ask again" (writes `policy.json.dont-ask` next to
+  the policy path). Show the path written. In build-task the Build question follows as a
+  separate AskUserQuestion, so "Build" is the latest human message when the build launches (a
+  policy answer before the plan launch would make intake stop with `relaunch`). Only Max's
+  answer counts; a run that skips steps 7 and 8 (`confirm: "auto"`, a `default` run that built
+  in the same run, a goal or loop) does not ask and creates nothing. Never at install or from a
+  hook. Both skills pre-approve only `status`; writes get the normal permission prompt.
+- `tests/v620_plan_task.test.mjs` T3: the plan-task `allowed-tools` pin gains the `status` call.
+- Version 6.2.1 (`FLEET_VERSION`, `marketplace.json`, the test pins, the root README).
+
 ## [6.2.0] - 2026-11-12
 
 Fleet 6.2.0 (ledger 2058, ADR-1219): the `plan-task` skill, MVP. `/plan-task <input>` refines an

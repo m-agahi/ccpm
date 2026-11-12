@@ -454,6 +454,8 @@ test("6.2.0 T3: the plan-task skill pre-approves only the exact read-only tool l
     "Bash(git ls-files *)",
     "Bash(date *)",
     "Bash(python3 -I ${CLAUDE_PLUGIN_ROOT}/skills/plan-task/brief_check.py *)",
+    // 6.2.1 (2097): the read-only policy status call; its writes get the normal prompt
+    "Bash(python3 -I ${CLAUDE_PLUGIN_ROOT}/skills/fleet-policy/policy_init.py status)",
   ]);
 });
 
