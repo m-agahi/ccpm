@@ -46,6 +46,8 @@ const INFRA_TIER = [
   // probe mode's role-read check (one sha256sum and one Read)
   ["infra:role-read:", "haiku"],
   ["infra:path-check:", "haiku"],
+  // 6.2.2 (2104): the relay retry after a haiku relay dropped the hash lines
+  ["preflight:relay-retry", "sonnet"],
   ["preflight", "haiku"],
   ["workspace", "sonnet"],
   ["infra:branch-scan", "haiku"],
@@ -110,7 +112,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "6.2.1";
+const FLEET_VERSION = "6.2.2";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with
 const RELOAD_HINT =
@@ -1538,7 +1540,7 @@ const PROGRAM_SHA256 = {
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "6aee2fdb201b6a3634dbd1ea6c0cfa40eefe3a0eed09c8d40e7f6c3b95a17f4c",
   "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
-  "format_files": "7cf22cd87289edf9af61d433250e4dee56c9f29bcb9694510af6aae40acc9959",
+  "format_files": "51de3bf0af61d430c00136ded400681f9bad05aa9edbf03079a8f06242733d8b",
   "gh_identity": "44d62a8f8b6cd4f69c7b057d0180f584edf6b03f03988e35f048bdc1d7ce2d70",
   "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
   "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
@@ -1653,7 +1655,7 @@ function emitProg(name, cmd) {
   return cmd;
 }
 const PROGRAM_SLOTS = [
-  [/^preflight$/, [["path_check", "path_check"], ["session_project", "session_project"]]],
+  [/^preflight(:relay-retry)?$/, [["path_check", "path_check"], ["session_project", "session_project"]]],
   [/^infra:path-check:/, [[null, "path_check"]]],
   [/^workspace$/, [["remote_url_check", "remote_url"], ["gh_check", "gh_identity"]]],
   [/^infra:gh-identity:/, [[null, "gh_identity"]]],
@@ -1711,7 +1713,7 @@ const PROGRAM_KEYS = {
   "parked:write": ["written", "sha256", "args"],
   "parked:park": ["target", "clean", "dirty", "args"],
   "plan_hash": ["plan_sha256", "blob", "args"],
-  "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map"],
+  "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_output"],
   "plan_ref_write": ["plan_commit", "plan_base", "tag_sha", "reused", "plan_file", "dirty"],
   "plan_files": ["head", "commit", "parent", "files", "args", "dsn_paths"],
   "plan_dsn": ["holds", "lines", "args"],
@@ -1810,7 +1812,7 @@ const PROGRAM_OUT = {
     digest: STR,
   },
   plan_hash: { plan_sha256: STR, blob: STR_OR_NULL, args: STRS, digest: STR },
-  format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, digest: STR },
+  format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, hook_failed: BOOL, hook_output: STR, digest: STR },
   plan_ref_write: { plan_commit: STR, plan_base: STR, tag_sha: STR, reused: BOOL, plan_file: STR, dirty: STRS, digest: STR },
   plan_files: { head: STR, commit: STR, parent: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
   plan_dsn: { holds: BOOL, lines: { type: "array", items: INT }, args: STRS, digest: STR },
@@ -2065,6 +2067,12 @@ function scriptsProbeOf(probe, dir) {
     return bad("roles dir " + rolesDir + " resolves to " + JSON.stringify(rreals.length === 1 ? rreals[0] : null) + " (missing, or a symlink in its path)");
   if (rlinks.length !== 1 || rlinks[0] !== "no") return bad("roles dir " + rolesDir + " is a symlink");
   if (rodd.length) return bad("roles dir " + rolesDir + " holds entries that are not regular files: " + rodd.join(", "));
+  // 6.2.2 (2104): a relay with no hash line, or fewer than the probe's own count, is the agent's drop, not a missing file
+  const nHash = lines.filter((x) => /^[0-9a-f]{64} [ *]/.test(x)).length;
+  const counts = lines.filter((x) => /^hash_lines=[0-9]+$/.test(x)).map((x) => Number(x.slice(11)));
+  if (nHash === 0) return { problem: "preflight agent returned no hash lines", relay: "relayed no hash lines" };
+  if (counts.length === 1 && nHash < counts[0])
+    return { problem: "preflight agent relayed " + nHash + " of " + counts[0] + " hash lines", relay: "relayed " + nHash + " of " + counts[0] + " hash lines" };
   const sums = {};
   const rsums = {};
   for (const x of lines) {
@@ -2162,7 +2170,9 @@ const SCRIPTS_PROBE =
   "if [ -L \"$d\" ]; then echo symlink=yes; else echo symlink=no; fi; r=\"${d%/scripts}/roles\"; printf \"roles_real=%s\\n\" \"$(realpath -e -- \"$r\")\"; " +
   "if [ -L \"$r\" ]; then echo roles_symlink=yes; else echo roles_symlink=no; fi; for f in \"$r\"/*; do if [ \"${f##*/}\" = _shared ] && [ -d \"$f\" ] && [ ! -L \"$f\" ]; then " +
   "for g in \"$f\"/*; do if [ -L \"$g\" ] || [ ! -f \"$g\" ]; then printf \"roles_odd=_shared/%s\\n\" \"${g##*/}\"; fi; done; elif [ -L \"$f\" ] || [ ! -f \"$f\" ]; then printf \"roles_odd=%s\\n\" \"${f##*/}\"; fi; done; done; " +
-  "for d in " + SCRIPTS_GLOB + "; do sha256sum -- \"$d\"/*.py; for f in \"${d%/scripts}/roles\"/* \"${d%/scripts}/roles\"/_shared/*; do if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then sha256sum -- \"$f\"; fi; done; done'";
+  // 6.2.2 (2104): the count of the hash lines, printed before them
+  "h=$(for d in " + SCRIPTS_GLOB + "; do sha256sum -- \"$d\"/*.py; for f in \"${d%/scripts}/roles\"/* \"${d%/scripts}/roles\"/_shared/*; do if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then sha256sum -- \"$f\"; fi; done; done); " +
+  "printf \"hash_lines=%s\\n\" \"$(printf \"%s\" \"$h\" | grep -c .)\"; printf \"%s\\n\" \"$h\"'";
 
 // ---------------------------------------------------------------- prompts
 
@@ -2513,8 +2523,8 @@ function formatFilesPrompt(inputs) {
 const FIX_RUN_TIMEOUT = 180;
 async function formatFiles(label, worktree, select, frozenList, allowed, phaseName, scratchDir) {
   const r = await infra(label, formatFilesPrompt({ worktree, select, frozen: Array.isArray(frozenList) ? frozenList : "@" + frozenList.sha.slice(0, 12), scratch_dir: scratchDir }), phaseName);
-  if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed) || !Array.isArray(r.refused))
-    halt("failed", label + " returned no ran/stable/files/changed/refused");
+  if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed) || !Array.isArray(r.refused) || typeof r.hook_failed !== "boolean" || typeof r.hook_output !== "string")
+    halt("failed", label + " returned no ran/stable/files/changed/refused/hook_failed/hook_output");
   requireProgram(r, "format_files", label);
   if (!relayDigestOk(r, progKeys("format_files"), "format_files")) halt("failed", label + ": the relayed result does not match the program's digest");
   if (!Array.isArray(frozenList) && r.frozen_map !== frozenList.sha) halt("failed", label + ": the program read the frozen map " + JSON.stringify(r.frozen_map) + ", not " + frozenList.sha, "hash");
@@ -3298,6 +3308,8 @@ const state = {
   rolesLoaded: false,
   preflightRecord: null,
   freezeDigest: null,
+  // 6.2.2 (2106): the refs/fleet/ prefixes the ownership gate watches (null: every ref)
+  ownRefs: null,
   // the workspace step's checked gh_check
   gh: null,
   freezePlanRef: null,
@@ -3598,6 +3610,9 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
   }
   const rr = Object.keys(view.git).filter((k) => k.indexOf(FLEETREF + "refs/replace/") === 0);
   if (rr.length) halt("needs_human", "hasher " + label + ": " + rr[0].slice(FLEETREF.length) + " exists; replacement objects could change what a sealed object id reads as", "hash");
+  // 6.2.2 (2106, ADR-1235): only this run's refs/fleet/<own id>/* enter the gates; another run's refs in the shared git dir are not this run's roles'
+  const own = state.ownRefs;
+  if (own) for (const k of Object.keys(view.git)) if (k.indexOf(FLEETREF + "refs/fleet/") === 0 && !own.some((p) => k.indexOf(FLEETREF + p) === 0)) delete view.git[k];
   return Object.assign({}, r, { hashes: Object.assign({}, h, view) });
 }
 
@@ -3743,18 +3758,27 @@ function layout(names, repo) {
   return layoutKey(names.taskId + "-" + names.slug, repo);
 }
 
+// 6.2.2 (2106): the run's own ref prefixes: its task id, and its layout key (a re-plan's superseded tree)
+function ownRefPrefixes(names, lay) {
+  return ["refs/fleet/" + names.taskId + "/", "refs/fleet/" + lay.key + "/"];
+}
+
 function layoutKey(key, repo) {
   const root = repo + "/.claude/worktrees/fleet-" + key;
   return { key, branch: "fleet/" + key, root, mainWt: root + "/main", scratch: root + "/scratch" };
 }
 async function preflightStep(repo) {
   phase("Preflight");
-  const pre = await dispatch("preflight", preflightPrompt({ repo }), {
-    schema: PREFLIGHT_SCHEMA,
-    agentType: JUDGE_AGENT,
-    phase: "Preflight",
-  });
-  const sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
+  const preOpts = { schema: PREFLIGHT_SCHEMA, agentType: JUDGE_AGENT, phase: "Preflight" };
+  let pre = await dispatch("preflight", preflightPrompt({ repo }), preOpts);
+  let sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
+  // 6.2.2 (2104): a dropped relay gets one contract retry, then its own stop (no reinstall: the files were never checked)
+  if (sp.relay) {
+    gate("preflight: the agent " + sp.relay + "; retried once");
+    pre = await dispatch("preflight:relay-retry", preflightPrompt({ repo }) + "\nRetry: the workflow found that the " + sp.problem + ". Copy every output line of the probe command into scripts_probe, one array item per line, in order, every sha256sum line included; never a summary or a sentence in place of lines.", preOpts);
+    sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
+    if (sp.relay) halt("needs_human", "preflight: " + sp.problem + " (after one retry); the scripts on disk were not checked, so re-run /build-task", "contract");
+  }
   if (sp.problem) halt("needs_human", "preflight: scripts_dir unusable: " + sp.problem + "; install fleet " + FLEET_VERSION + " from the marketplace, then run /reload-plugins" + RELOAD_HINT, "contract");
   state.scriptsDir = sp.dir;
   state.rolesDir = sp.rolesDir;
@@ -5173,6 +5197,7 @@ async function planMode(input, date) {
   if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
   const lay = layout(names, brief.repo);
   state.branch = lay.branch;
+  state.ownRefs = ownRefPrefixes(names, lay);
   if (brief.repo !== repo) gate("intake: work repo " + brief.repo + " differs from the caller's " + repo);
   gate(
     "intake: " + brief.sources.map((x) => x.kind + ":" + x.ref).join(", ") + " -> branch " + lay.branch + ", worktree " + lay.mainWt,
@@ -5569,6 +5594,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const ref = Object.assign({}, loaded, { plan_commit: tiny.plan_commit, plan_ref: tiny.plan_ref });
   const brief = cleanBrief(ref.brief);
   const names = { taskId: ref.task_id, slug: ref.slug };
+  state.ownRefs = ownRefPrefixes(names, lay);
   const subj = subjectsOf(ref.plan_facts, brief, ref.slug, ref.task_id);
   for (const x of [subj.main, subj.fix(1)]) if (!SUBJECT_RE.test(x)) halt("needs_human", "plan ref " + tiny.plan_ref + ": unsafe commit subject " + JSON.stringify(x) + "; re-run plan");
   const history = {
@@ -6484,6 +6510,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const writerOut = {};
   // the last worktree state a gate saw (a hasher result)
   let last = null;
+  // 6.2.2 (2107): the last writer round's failing hook run ({files, output}), or null
+  let hookFail = null;
   let freezeTree = null;
   let codeTree = null;
   function writerKey(c, n) {
@@ -6599,7 +6627,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         if (p.criterion.test_files.indexOf(nf) >= 0 && wrote.indexOf(nf) < 0) wrote.push(nf);
       }
     await pathRecheck("format-tests:r" + n, "Tests");
-    await formatFiles("infra:format-tests:r" + n, mainWt, { paths: wrote }, [], wrote, "Tests", lay.scratch);
+    const fmt = await formatFiles("infra:format-tests:r" + n, mainWt, { paths: wrote }, [], wrote, "Tests", lay.scratch);
+    hookFail = fmt.ran && fmt.hook_failed ? { files: fmt.files, output: fmt.hook_output } : null;
     const post = await hasher("hasher:post-writers:r" + n, mainWt, hashedFiles, "Tests", pre.fingerprint.tree);
     if (post.fingerprint.head !== pre.fingerprint.head)
       halt("needs_human", "writer committed: HEAD moved from " + pre.fingerprint.head + " to " + post.fingerprint.head + " in test round " + n + "; writers never commit", "ownership");
@@ -6643,6 +6672,20 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (!judgeFirst) {
         reserve((shortPath ? 1 : pending.length) + 5 + (last ? 0 : 1), "test round " + n);
         roundOut = await writerRound(n, pending, codeFindings);
+        // 6.2.2 (2107, ADR-1234): a hook failing on the writers' files (check-only hooks
+        // included) is a fix_tests round to the writers; the judge never sees it, no freeze
+        if (hookFail) {
+          const hf = hookFail;
+          const what = "a pre-commit hook fails on the test files " + hf.files.join(", ");
+          if (i === maxTestRounds - 1)
+            halt("needs_human", "infra:format-tests:r" + n + ": a pre-commit hook still fails on the test files after " + maxTestRounds + " test round(s); a test file is never frozen while a hook fails on it: " + hf.output, "cap");
+          pending = pending.map((p) => ({
+            criterion: p.criterion,
+            findings: [{ target: "tests", criterion: p.criterion.id, finding: what + " (run by the workflow before the test judge); fix your test files so every hook passes, keep the tests' meaning. Hook output: " + hf.output }],
+          }));
+          gate("infra:format-tests:r" + n + ": a pre-commit hook fails on the test files; fix_tests round to " + pending.map((p) => p.criterion.id).join(", "));
+          continue;
+        }
       } else {
         reserve(2, "test round " + n);
       }

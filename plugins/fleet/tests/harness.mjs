@@ -292,8 +292,10 @@ export async function runOne(script, args0) {
     if (typeof prompt === "string" && (prompt.includes("python3 -I -c") || prompt.includes("<<'FLEET_") || prompt.includes("python3 -I - ")))
       throw new Error("AC-1993-1: prompt " + label + " pastes a program");
     // 5.0.7 (ledger 2020): an unscripted digest retry replays its step's script
-    // (a broken relay stays broken: two mismatches stop as before)
-    const base = label.replace(/:(digest|args)-retry$/, "");
+    // (a broken relay stays broken: two mismatches stop as before);
+    // 6.2.2 (2104): so does the preflight relay retry
+    // (preflight:relay-retry; script.__mutate sees the real label)
+    const base = label === "preflight:relay-retry" ? "preflight" : label.replace(/:(digest|args)-retry$/, "");
     const inner = base !== label && !(label in script) ? Object.assign({}, opts, { label: base, realLabel: label }) : opts;
     let r = await agentInner(prompt, inner);
     // 5.0.9 (ledger 2032): the session's yaadgaar project: script.__session_project, else args.project
@@ -338,7 +340,7 @@ export async function runOne(script, args0) {
     // unscripted fixer-hook runs change nothing (3.0.0)
     if (!(label in script) && /^infra:format-(tests|code):/.test(label)) {
       const sel = inputsOf(prompt).select;
-      return withRelayDigest(label, { status: "ok", reason: "ran the fixers", note: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [], frozen_map: fmHandle(prompt) });
+      return withRelayDigest(label, { status: "ok", reason: "ran the fixers", note: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [], frozen_map: fmHandle(prompt), hook_failed: false, hook_output: "" });
     }
     // 3.1.0: unscripted IaC pre-push gates find no IaC file in the PR diff
     if (!(label in script) && /^infra:tf-gate:/.test(label)) {
@@ -498,15 +500,23 @@ export async function runOne(script, args0) {
     if (label === "preflight" && !raw && !("ledger_tools" in r)) r.ledger_tools = LEDGER_TOOLS_ALL.slice();
     // 5.0.7 (ledger 2020): format_files lists the changed paths that are
     // frozen (a JSON list, or "@<files map>" read from the registry)
-    if (/^infra:format-(tests|code):/.test(label) && !raw && r && r.status === "ok" && Array.isArray(r.changed) && !("frozen_changed" in r)) {
-      const fz = inputsOf(prompt).frozen;
-      const file = typeof fz === "string" && fz.startsWith("@") ? byHandle(inputsOf(prompt).scratch_dir, "files", fz.slice(1)) : null;
-      const keys = file ? Object.keys(MAP_REG.get(file)) : Array.isArray(fz) ? fz : [];
-      r.frozen_changed = r.changed.filter((x) => keys.indexOf(x) >= 0).sort();
-      r.frozen_map = file ? file.slice(-69, -5) : null;
-      // a stub digest over the 5.0.6 keys covers the new keys too
-      const k6 = K("format_files").filter((k) => k !== "frozen_changed" && k !== "frozen_map");
-      if (typeof r.digest === "string" && r.digest === sha256(canon(pick(r, k6)))) r.digest = sha256(canon(pick(r, K("format_files"))));
+    if (/^infra:format-(tests|code):/.test(label) && !raw && r && r.status === "ok" && Array.isArray(r.changed)) {
+      // a stub digest over the 5.0.6 keys, or the 6.2.1 keys, covers the newer keys too
+      const HOOK_KEYS = ["hook_failed", "hook_output"];
+      const k621 = K("format_files").filter((k) => HOOK_KEYS.indexOf(k) < 0);
+      const k6 = k621.filter((k) => k !== "frozen_changed" && k !== "frozen_map");
+      const legacy = typeof r.digest === "string" && (r.digest === sha256(canon(pick(r, k6))) || r.digest === sha256(canon(pick(r, k621))));
+      if (!("frozen_changed" in r)) {
+        const fz = inputsOf(prompt).frozen;
+        const file = typeof fz === "string" && fz.startsWith("@") ? byHandle(inputsOf(prompt).scratch_dir, "files", fz.slice(1)) : null;
+        const keys = file ? Object.keys(MAP_REG.get(file)) : Array.isArray(fz) ? fz : [];
+        r.frozen_changed = r.changed.filter((x) => keys.indexOf(x) >= 0).sort();
+        r.frozen_map = file ? file.slice(-69, -5) : null;
+      }
+      // 6.2.2 (2107): a stub with no hook status passed every hook
+      if (!("hook_failed" in r)) r.hook_failed = false;
+      if (!("hook_output" in r)) r.hook_output = "";
+      if (legacy) r.digest = sha256(canon(pick(r, K("format_files"))));
     }
     if (!raw) withRelayDigest(label, fillArgs(label, r, prompt));
     // 3.1.1: the workspace step relays the origin URL program's output; a stub
@@ -996,7 +1006,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.2.1/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.2.2/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1090,11 +1100,14 @@ export function scriptsProbe(over = {}) {
     lines.push("roles_symlink=" + (h.roles_symlink || "no"));
   }
   if (hits.length === 1) {
+    const hl = [];
     const sums = Object.assign(Object.fromEntries(PROGRAMS.map(([n]) => [n, programSha(n)])), over.sums || {});
-    for (const [n, v] of Object.entries(sums)) if (v !== undefined) lines.push(v + "  " + hits[0].hit + "/" + n + ".py");
+    for (const [n, v] of Object.entries(sums)) if (v !== undefined) hl.push(v + "  " + hits[0].hit + "/" + n + ".py");
     const rd = hits[0].hit.replace(/\/scripts$/, "") + "/roles";
     const rs = Object.assign(roleFileSums(), over.roleSums || {});
-    for (const [f, v] of Object.entries(rs)) if (v !== undefined) lines.push(v + "  " + rd + "/" + f);
+    for (const [f, v] of Object.entries(rs)) if (v !== undefined) hl.push(v + "  " + rd + "/" + f);
+    // 6.2.2 (2104): the probe's own count of its hash lines, before them
+    lines.push("hash_lines=" + hl.filter((x) => /^[0-9a-f]{64} /.test(x)).length, ...hl);
   }
   return lines.concat(over.extra || []);
 }

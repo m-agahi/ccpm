@@ -1,5 +1,53 @@
 # Changelog
 
+## [6.2.2] - 2026-11-12
+
+Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1234, ADR-1235).
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.2.2), then start a NEW session: the workflow
+  looks for its own `fleet/6.2.2/scripts` dir.
+- A 6.2.1 plan ref and run-state stay valid.
+
+### Fixed
+
+- 2106 (ADR-1235): the ownership gate blamed another run's refs on this run. Two builds in one
+  repo share the git dir, so run B's `refs/fleet/<B>/freeze` stopped run A ("run-state ref touched
+  by role"). The workflow now keeps only the run's own refs, `refs/fleet/<task id>/*` and
+  `refs/fleet/<task id>-<slug>/*` (a re-plan's superseded tree), when it reads a hasher result.
+  The filter is in the workflow's `hasher()` view, after the digest check, so every gate (writer
+  rounds, judge fingerprints, re-freeze, code rounds) reads the same filtered map; `hasher.py`
+  and its relay are unchanged. Writes to the run's own refs and every `refs/replace/*` ref still
+  stop the run.
+- 2107 (ADR-1234): the freeze locked writer test files that a check-only hook (`cargo fmt
+--check`) rejects, and the coder could not edit them. `format_files.py` already ran every hook
+  with `pre-commit run --files`; it now also reports the final, stable run's exit status
+  (`hook_failed`) and the last 2000 characters of its output as printable ASCII (`hook_output`),
+  both digest keys. On `infra:format-tests:r<n>` a failure skips the test judge and sends a
+  fix_tests round to the round's writers with the hook output; it counts against the test rounds.
+  A hook still failing in the last round stops with `needs_human` (`stop_gate: cap`). The run
+  never freezes while a hook fails on a test file. `infra:format-code` is unchanged. The optional
+  fix-mode formatter allow-list is not in this release.
+- 2104: a preflight agent that relayed a prose summary in place of the sha256sum lines made every
+  script "missing" and asked for a reinstall. The probe now prints `hash_lines=<n>` before its hash
+  lines. No hash line, or fewer than `n`: one retry (`preflight:relay-retry`, on sonnet), then a
+  stop that says "preflight agent returned no hash lines" or "relayed <k> of <n> hash lines",
+  with no reinstall text. "is missing" names a file only when its line did not arrive and the rest
+  did. Kept as a line list with a count, not a file the agent writes or a `{file, sha256}` array:
+  the script cannot read files itself, so a file still needs an agent relay, and the count line is
+  the smallest change that lets the script tell a dropped relay from a missing file.
+
+### Changed
+
+- `tests/v622_fixes.test.mjs`: 18 tests (foreign, own, prefix-sharing and replacement refs; a
+  failing check-only hook, its last round, a passing hook, a broken relay, and `format_files.py`
+  run for real; prose-only, prose then full, partial and real probe relays).
+- Harness: the probe stub prints `hash_lines=`, the format stub carries the hook keys, and
+  `preflight:relay-retry` replays the preflight script. Prompt snapshot pins updated (the probe
+  text, checked with it reverted; the format_files schema keys).
+- Version 6.2.2 (`FLEET_VERSION`, `marketplace.json`, the test pins, the root README).
+
 ## [6.2.1] - 2026-11-12
 
 Fleet 6.2.1 (ledger 2097): create `policy.json` on first use. Max's ruling, verbatim: "yes it

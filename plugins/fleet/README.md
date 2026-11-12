@@ -234,8 +234,18 @@ writes) now runs `pre-commit run --files <paths>` in the fleet worktree until a 
 nothing, at most 3 runs: on the round's test files before the ownership hash, the test judge and
 the freeze, and on every path the worktree changes against HEAD, frozen files left out, before the
 purge, the post-coder hash and the code judge. Judges and hashes then see the formatted bytes and
-the commit-time hooks have nothing to rewrite. Exit codes are ignored (a check hook that fails,
-such as a full-suite hook on RED tests, stays the commit step's business); only bytes count. The
+the commit-time hooks have nothing to rewrite. On the code files the exit codes are ignored (a
+check hook that fails stays the commit step's business); only bytes count. On the test files
+(6.2.2, ledger 2107, ADR-1234) the program also reports the exit status of the final run, the one
+that changed nothing (`hook_failed`), and the last 2000 characters of its output as printable
+ASCII (`hook_output`), both in its digest. Every hook in that run counts, check-only hooks such as
+`cargo fmt --check` included. A failure skips the test judge and sends a fix_tests round to the
+round's writers, with the hook output as a routed finding; the round counts against the test
+rounds. A hook that still fails in the last round stops with `needs_human` (`stop_gate: cap`) and
+the hook output. A test file is never frozen while a hook fails on it: the coder may not edit a
+frozen file, and the commit hook would reject it. A hook that fails only because the tests are RED
+(a full-suite or compile hook on test files) also stops the run this way (the ADR's revisit
+trigger). The
 program reports every path that differs between the worktree tree before the first run and after
 the last, whatever hook changed it, with a digest. The run stops with `needs_human` when a hook
 changed a frozen file (`stop_gate: hash`), a path outside the files it was given (`scope`), or
@@ -776,10 +786,14 @@ the intent result and, at the end, the write-back result. The milestones, in ord
 | `written_back` | write-back          | the stats block, ready and CI watch  |
 | `shipped`      | the PR tail (6.0.0) | nothing: returns the recorded result |
 
-Every ref under `refs/fleet/` (name and target) is in the frozen git map, at freeze and around
-every writer, coder and judge step. A role that creates, moves or deletes one is a violation ("run-state ref
-touched by role"). Only the workflow's own state write moves it; the snapshot follows that write,
-and the resume digest leaves the ref out.
+Every ref under `refs/fleet/` (name and target) is in the hasher's git map, at freeze and around
+every writer, coder and judge step. The workflow keeps only the run's own refs:
+`refs/fleet/<task id>/*` and `refs/fleet/<task id>-<slug>/*` (6.2.2, ledger 2106, ADR-1235). The
+git dir is shared across worktrees, so another fleet run's refs (another task id) can move during
+this run; they are dropped and never blamed on this run's roles. `refs/replace/*` still stops
+every hasher read. A role that creates, moves or deletes one of the run's own refs is a violation
+("run-state ref touched by role"). Only the workflow's own state write moves it; the snapshot
+follows that write, and the resume digest leaves the ref out.
 
 Right after verify, build mode reads the run-state (`infra:read-state`). It resumes only when the
 state's `plan_commit`, `ref_sha256` and `seal` match the plan ref, its target and HEAD equal
@@ -900,6 +914,12 @@ any other entry. Nothing is cached; every run (plan, build, probe) checks the fi
    exactly the shared files (no extra file, no other subdirectory, no symlink). The sha256sum
    lines of the regular files must equal `ROLE_SHA256` and `SHARED_SHA256`. Any other value stops
    the run (`stop_gate: contract`).
+   The probe prints `hash_lines=<n>`, its own count of sha256sum lines, before them (6.2.2,
+   ledger 2104). A relay with no sha256sum line, or fewer than `n`, is the agent's drop, not a
+   missing file: one retry (`preflight:relay-retry`, sonnet), then a stop that says "preflight
+   agent returned no hash lines" or "preflight agent relayed <k> of <n> hash lines" and does not
+   ask for a reinstall. "is missing" names a file only when the lines arrived and that file's did
+   not.
 2. Each role's tier comes from `ROLE_DISPATCH`.
 3. Each role prompt is a short wrapper with no role text. The role agent first runs
    `sha256sum -- <roles dir>/<role>.md` in Bash, then reads the whole file with the Read tool

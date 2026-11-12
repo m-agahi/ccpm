@@ -101,7 +101,8 @@ def names(b):
 PURGED = []
 PURGED_CAP = 50
 def done(**k):
-    out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': [], 'purged': len(PURGED), 'purged_paths': sorted(PURGED)[:PURGED_CAP]}
+    # 6.2.2 (2107): hook_failed / hook_output: the final, stable run's exit status and its output tail
+    out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': [], 'purged': len(PURGED), 'purged_paths': sorted(PURGED)[:PURGED_CAP], 'hook_failed': False, 'hook_output': ''}
     out.update(k)
     # 5.0.7: the changed paths that are frozen (the workflow stops on any)
     out['frozen_changed'] = sorted(set(out['changed']) & frozen)
@@ -407,14 +408,16 @@ try:
         return d
     prev = {}
     runs, stable = 0, False
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PRE_COMMIT_COLOR='never')
+    last_rc, last_out = 0, b''
     while runs < 3:
         runs += 1
         try:
-            subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=dict(env, PATH=clean_path([wt, scratch_root])), preexec_fn=lift)
+            pr = subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=dict(env, PATH=clean_path([wt, scratch_root])), preexec_fn=lift)
         except subprocess.TimeoutExpired:
             prev = delta()
             break
+        last_rc, last_out = pr.returncode, pr.stdout + pr.stderr
         now = delta()
         if now == prev:
             stable = True
@@ -434,4 +437,14 @@ finally:
     git(wt, 'worktree', 'prune', check=False)
 if refused:
     done(note='a selected path resolves outside the checkout', files=files, refused=sorted(set(refused)))
-done(ran=True, note='ran pre-commit run --files in a scratch checkout of HEAD', runs=runs, stable=stable, files=files, changed=changed)
+# 6.2.2 (2107): a fixer's run exits non-zero when it rewrites; only the final,
+# stable run (it changed nothing) says a hook fails, check-only hooks included.
+# Its output is relayed as printable ASCII, its last HOOK_OUTPUT_CAP characters.
+HOOK_OUTPUT_CAP = 2000
+def tail_text(b):
+    t = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', b.decode('utf-8', 'replace'))
+    t = ''.join(c if c == '\n' or ' ' <= c <= '~' else '?' for c in t.replace('\r\n', '\n').replace('\t', ' ')).strip()
+    return t[-HOOK_OUTPUT_CAP:]
+hook_failed = stable and last_rc != 0
+done(ran=True, note='ran pre-commit run --files in a scratch checkout of HEAD', runs=runs, stable=stable, files=files, changed=changed,
+     hook_failed=hook_failed, hook_output=tail_text(last_out) if hook_failed else '')
