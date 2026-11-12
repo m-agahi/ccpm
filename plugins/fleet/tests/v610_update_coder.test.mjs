@@ -693,3 +693,29 @@ test("6.1.0 review 5: pr_state.py fetch runs git with core.fsmonitor=false", () 
   const src = readFileSync(join(SCRIPTS_SRC, "pr_state.py"), "utf8");
   assert.match(src, /g = lambda \*a: run\('-c', 'core\.fsmonitor=false', '-c', 'core\.hooksPath=\/dev\/null', '-C', wt, \*a, cmd='git'\)/);
 });
+
+// ---------------------------------------------------------------- third delta review (M1)
+test("6.1.0 review M1: hook_surface.py collects pre<name> and post<name> into npm:<name> (npm and yarn v1 run them)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fleet-610pre-"));
+  const env = Object.assign({}, process.env, { GIT_CONFIG_GLOBAL: join(dir, "gc"), GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
+  const g = (...a) => {
+    const r = spawnSync("git", ["-C", dir].concat(a), { encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  g("init", "-q", "-b", "main");
+  mkdirSync(join(dir, "scripts"));
+  writeFileSync(join(dir, "tsconfig.build.json"), "{}\n");
+  writeFileSync(join(dir, "scripts", "after.mjs"), "x\n");
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { pretest: "tsc -p tsconfig.build.json", test: "node --test", posttest: "node scripts/after.mjs" } }));
+  g("add", "-A");
+  g("commit", "-q", "-m", "a");
+  const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "hook_surface.py"), dir, "HEAD", JSON.stringify(["npm:test"])], { encoding: "utf8", env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout).make_paths, { "npm:test": ["scripts/after.mjs", "tsconfig.build.json"] });
+});
+
+test("6.1.0 review M1: a base edit of a file only pretest names refuses the round", async () => {
+  // the hook-surface read at d, as the fixed program prints it for {pretest: "tsc -p tsconfig.build.json", test: "node --test"}
+  await refused(npmPlan(upd({}, ["src/x.py", "tsconfig.build.json"]), "npm test", ["tsconfig.build.json"]), /test or check commands run \(tsconfig\.build\.json\)/);
+});

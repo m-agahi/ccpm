@@ -34,11 +34,14 @@ it. In every other case the run stops as in 6.0.1, with the refusal reason added
     `bash`/`sh`/`python <script>` and a direct script path give the script; `make test` gives the
     Makefiles and its recipe files; pytest, jest/vitest, cargo and go give their manifest and
     lock files (by basename); npm/pnpm/yarn give their manifest and lock files plus every repo
-    path that `scripts.<name>` of `package.json` at d names (`hook_surface.py` target
-    `npm:<name>`, read as `infra:hook-surface:u1:d`). R4 refuses every moved file when the
-    `test_cmd` shape cannot be parsed, when it is empty, and when `package.json` or that script
-    entry cannot be read. Known gaps, not checked: jest/vitest setup files, pytest `-p` plugins,
-    an npm script that calls another script, and shell libraries a script sources;
+    path that `scripts.<name>`, `scripts.pre<name>` or `scripts.post<name>` of `package.json` at d
+    names (`hook_surface.py` target `npm:<name>`, read as `infra:hook-surface:u1:d`; npm and yarn
+    v1 run the pre and post scripts, so pnpm and yarn berry may over-refuse). R4 refuses every
+    moved file when the `test_cmd` shape cannot be parsed, when it is empty, and when
+    `package.json` or one of those script entries cannot be read. Known gaps, not checked:
+    jest/vitest setup files, pytest `-p` plugins, an npm script that calls another script, shell
+    libraries a script sources, and a directory named in a script or a make recipe (for example
+    `node --test test/`), which gives no path;
   - R5: with `changed_symbols`, a moved file holds a sealed occurrence or an occurrence that a
     callers grep at d (`infra:callers:u1`) lists, or that grep caps a symbol.
 - The refusal reads (`infra:hook-surface:u1:pb`, `infra:ruleset-surface:u1` when no surface is

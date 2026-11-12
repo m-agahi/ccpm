@@ -307,8 +307,11 @@ for tgt in targets:
                 pkg = False
         sc = pkg.get('scripts') if isinstance(pkg, dict) else None
         v = sc.get(tgt[4:]) if isinstance(sc, dict) else None
-        if isinstance(v, str):
-            make_paths[tgt] = sorted(set(q for q in (norm(x) for x in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', v)) if q and q in tracked))
+        # npm and yarn v1 also run pre<name> and post<name> (over-counted for pnpm and yarn berry)
+        side = [sc.get(k + tgt[4:]) for k in ('pre', 'post')] if isinstance(sc, dict) else []
+        if isinstance(v, str) and all(x is None or isinstance(x, str) for x in side):
+            text = '\n'.join([v] + [x for x in side if isinstance(x, str)])
+            make_paths[tgt] = sorted(set(q for q in (norm(x) for x in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', text)) if q and q in tracked))
         continue
     paths = set()
     if mk is not None:
