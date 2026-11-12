@@ -694,7 +694,8 @@ test("ADR-1203 addendum: review changes on the update-branch head stop (6.0.1: f
   };
   s["infra:pr-update"] = (p) => ({ status: "ok", reason: "u", mode: "update", updated: true, head: "d".repeat(40), base: "c".repeat(40), overlap: ["src/x.py"], error: null, args: inputsOf(p).args });
   Object.assign(s, {
-    "hasher:update:u1": { status: "ok", fingerprint: { head: "d".repeat(40), tree: "KU" }, hashes: HASHES },
+    // 6.1.0 (2049): the base change also moved a hook config file (R2 refuses the coder round)
+    "hasher:update:u1": { status: "ok", fingerprint: { head: "d".repeat(40), tree: "KU" }, hashes: HASHES, changed: ["src/x.py", ".pre-commit-config.yaml"] },
     "infra:review-paths:v2": { status: "ok", reason: "listed", changed_paths: ["src/x.py"] },
     "hasher:pre-review:v2": { status: "ok", fingerprint: { head: "d".repeat(40), tree: "KU" } },
     "role:pr-review:v2": { status: "ok", reason: "broken", verdict: "changes_requested", findings: [{ id: "F1", severity: "blocking", category: "correctness", file: "src/x.py", line: 1, summary: "the merge broke x", evidence: "e" }], touches_gate: false, checked: [] },
@@ -705,7 +706,7 @@ test("ADR-1203 addendum: review changes on the update-branch head stop (6.0.1: f
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "review");
-  assert.match(out.result.reason, /^re-review after update-branch requested changes: F1 \(1 blocking, 0 nits\); findings are in the run result; re-plan on the new base or fix by hand$/);
+  assert.match(out.result.reason, /^re-review after update-branch requested changes: F1 \(1 blocking, 0 nits\); findings are in the run result; no coder round: the base change touches the hook surface \(\.pre-commit-config\.yaml\); re-plan on the new base or fix by hand$/);
   assert.ok(!out.build.labels.some((l) => /^role:fleet-coder:r2|^infra:pr-merge:u1/.test(l)), out.build.labels.join(", "));
   // delta review SHOULD 1: a stop after update-branch is a CI-tail outcome: one CI write-back, stop code review
   assert.equal(out.build.labels.filter((l) => l === "infra:ledger-writeback:ci").length, 1, out.build.labels.join(", "));

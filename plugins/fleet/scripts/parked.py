@@ -176,7 +176,8 @@ elif mode == 'park':
         sys.exit('bad plan path: ' + plan)
     if not NAME_RE.fullmatch(run) or run in ('used', '.', '..'):
         sys.exit('bad run name: ' + run)
-    G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-C', wt]
+    # 6.1.0 review B3: git status may write the index (post-index-change): no hook runs
+    G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.quotePath=false', '-C', wt]
     def git(*a, ok=(0,)):
         r = subprocess.run(G + list(a), capture_output=True)
         if r.returncode not in ok:

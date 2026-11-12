@@ -327,7 +327,8 @@ try:
             out['rerun'].append(i)
     elif mode == 'fetch':
         wt, br, old, new, base = args[1:6]
-        g = lambda *a: run('-C', wt, *a, cmd='git').strip()
+        # 6.1.0 review B3: no repo hook runs (post-merge, reference-transaction, ...)
+        g = lambda *a: run('-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', wt, *a, cmd='git').strip()
         if g('symbolic-ref', '--quiet', 'HEAD') != 'refs/heads/' + br or g('rev-parse', 'HEAD') != old:
             raise Fail('the worktree is not on ' + br + ' at ' + old)
         if g('status', '--porcelain', '--untracked-files=no'):
@@ -349,13 +350,13 @@ try:
     else:
         repo, wt, br = args[1], args[2], args[3]
         out.update(removed=False, deleted=False)
-        lst = run('-C', repo, 'worktree', 'list', '--porcelain', cmd='git')
+        lst = run('-c', 'core.hooksPath=/dev/null', '-C', repo, 'worktree', 'list', '--porcelain', cmd='git')
         hit = [b for b in lst.split('\n\n') if ('worktree ' + wt) in b.split('\n')]
         if not hit or ('branch refs/heads/' + br) not in hit[0].split('\n'):
             raise Fail('no worktree ' + wt + ' on ' + br)
-        run('-C', repo, 'worktree', 'remove', '--force', wt, cmd='git')
+        run('-c', 'core.hooksPath=/dev/null', '-C', repo, 'worktree', 'remove', '--force', wt, cmd='git')
         out['removed'] = True
-        run('-C', repo, 'branch', '-D', br, cmd='git')
+        run('-c', 'core.hooksPath=/dev/null', '-C', repo, 'branch', '-D', br, cmd='git')
         out['deleted'] = True
 except (Fail, ValueError, OSError, AttributeError, TypeError, subprocess.SubprocessError) as e:
     out['error'] = str(e)[:600] or mode + ' failed'

@@ -110,7 +110,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "6.0.1";
+const FLEET_VERSION = "6.1.0";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with
 const RELOAD_HINT =
@@ -180,6 +180,8 @@ const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap"
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "stats", shipped: "done" };
 const CONFIRMS = ["ask", "auto", "default"];
 const MAX_REVIEWS = 2;
+// 6.1.0 (2049): re-reviews after an overlap update-branch (u1 may route to one coder round; u2 stops)
+const MAX_UPDATE_REVIEWS = 2;
 const FINDING_SEVERITIES = ["blocking", "nit"];
 const FINDING_CATEGORIES = ["correctness", "security", "fail_open", "pr_body_claim", "test_quality", "obligation", "other"];
 const GATE_PATH_RE = /(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\w*|checks?|ci)(\/|\.|_|$)|^\.github\/|\.pre-commit-config|(^|\/)Makefile$/i;
@@ -1284,20 +1286,60 @@ function obligationFailures(obligations, check, judged, notRun, changed, makePat
   for (const o of judged || []) {
     if (!o || typeof o.check_cmd !== "string") continue;
     const listed = (Array.isArray(o.files) ? o.files : []).map((x) => normPath(String(x)));
-    const words = o.check_cmd.trim().split(/[ \t]+/);
-    const script = parseCheckCmd(o.check_cmd).script || null;
     for (const p of touched) {
-      const b = p.split("/").pop();
-      const recipe = words[0] === "make" && makePaths && Array.isArray(makePaths[words[1]]) ? makePaths[words[1]] : [];
-      const runs =
-        (script && p === normPath(script)) ||
-        (words[0] === "make" && (/^(GNUmakefile|makefile|Makefile)$/.test(b) || /\.mk$/.test(b) || recipe.indexOf(p) >= 0)) ||
-        (words[0] === "pre-commit" && b === ".pre-commit-config.yaml");
-      if (runs && listed.indexOf(p) < 0)
+      if (cmdRuns(o.check_cmd, p, makePaths) && listed.indexOf(p) < 0)
         out.push(o.id + ": the change edits " + p + ", which check_cmd " + JSON.stringify(o.check_cmd) + " runs; restore it (only a file the obligation lists may change)");
     }
   }
   return out.map((f) => ({ target: "code", criterion: null, finding: f }));
+}
+// 6.1.0 review S2: the files a test_cmd runs beyond the frozen runner config, per runner (by basename)
+const TEST_INPUTS = {
+  pytest: ["pyproject.toml", "setup.py", "uv.lock", "poetry.lock", "Pipfile.lock"],
+  npm: ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", ".npmrc"],
+  jest: ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", ".npmrc"],
+  cargo: ["Cargo.toml", "Cargo.lock", "build.rs", "config", "config.toml"],
+  go: ["go.mod", "go.sum", "go.work"],
+};
+// npm:<script> for an npm, pnpm or yarn test_cmd, else null
+function npmTargetOf(cmd) {
+  const t = String(cmd || "").trim().split(/[ \t]+/);
+  if ((t[0] === "npm" || t[0] === "pnpm" || t[0] === "yarn") && t[1] === "test") return "npm:test";
+  if (t[0] === "npm" && t[1] === "run" && t[2]) return "npm:" + t[2];
+  return null;
+}
+// does test_cmd run the file p; a shape this cannot read runs every file (fail closed)
+function testCmdRuns(cmd, p, makePaths) {
+  const t = String(cmd || "").trim().split(/[ \t]+/).filter((x) => x && x !== PATHS_TOKEN);
+  if (!t.length) return true;
+  const b = p.split("/").pop();
+  const script = (x) => (x && x.charAt(0) !== "-" && relPath(x) ? normPath(relPath(x)) === p : true);
+  if (/^(ba|da|k|z)?sh$/.test(t[0])) return script(t[1]);
+  if ((t[0] === "python" || t[0] === "python3") && t[1] !== "-m") return script(t[1]);
+  if (t[0].indexOf("/") >= 0) return script(t[0]);
+  const pre = testRunnerPrefix(t);
+  if (!pre) return true;
+  if (pre.kind === "make") return cmdRuns("make " + t[1], p, makePaths);
+  // npm/pnpm/yarn: the manifest and lock files, and the repo paths scripts.<name> names at d (unread: every file)
+  if (pre.kind === "npm") {
+    const np = makePaths ? makePaths[npmTargetOf(t.join(" "))] : null;
+    if (!Array.isArray(np)) return true;
+    return TEST_INPUTS.npm.indexOf(b) >= 0 || np.indexOf(p) >= 0;
+  }
+  if (pre.kind === "cargo" && (b === "config" || b === "config.toml")) return p.split("/").slice(-2, -1)[0] === ".cargo";
+  return !TEST_INPUTS[pre.kind] || TEST_INPUTS[pre.kind].indexOf(b) >= 0;
+}
+// does the command cmd run the file p (its script, a Makefile, .mk file or make recipe, the pre-commit config)
+function cmdRuns(cmd, p, makePaths) {
+  const words = cmd.trim().split(/[ \t]+/);
+  const script = parseCheckCmd(cmd).script || null;
+  const b = p.split("/").pop();
+  const recipe = words[0] === "make" && makePaths && Array.isArray(makePaths[words[1]]) ? makePaths[words[1]] : [];
+  return !!(
+    (script && p === normPath(script)) ||
+    (words[0] === "make" && (/^(GNUmakefile|makefile|Makefile)$/.test(b) || /\.mk$/.test(b) || recipe.indexOf(p) >= 0)) ||
+    (words[0] === "pre-commit" && b === ".pre-commit-config.yaml")
+  );
 }
 
 function shQuote(s) {
@@ -1495,14 +1537,14 @@ const PROGRAM_SHA256 = {
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "6aee2fdb201b6a3634dbd1ea6c0cfa40eefe3a0eed09c8d40e7f6c3b95a17f4c",
-  "fleet_scan": "c094de993d39c7a724f937a1d35d950711b1fc8e832e00b67a1556730ea26055",
-  "format_files": "215a5675d88591d59119a64f29b1f5d7f472f06f46073237afe0342b9cc441aa",
+  "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
+  "format_files": "7cf22cd87289edf9af61d433250e4dee56c9f29bcb9694510af6aae40acc9959",
   "gh_identity": "44d62a8f8b6cd4f69c7b057d0180f584edf6b03f03988e35f048bdc1d7ce2d70",
   "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
-  "hasher": "1724b6f225679fc323759e68ae5f3eb15aac394c7a99459acec8b1b48927664d",
-  "hook_surface": "bdace4ab8b4be872cc01d25cacaad4252169721a49780bfefac9847ec2cfb38c",
+  "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
+  "hook_surface": "2432e6d881cfa37850c4268b26cc6591fdcccf9b74f818ab70886125f34769f0",
   "orch_scan": "57f15f2a83ad7ab68dd275b588339eea1237e9ed8cba18278c27788fc91905b5",
-  "parked": "6b87baae1a7b4be9b9a56f44f698900d825367ac3a0a412a8e730ddb047320e2",
+  "parked": "f17158a266ebcc64d502337eb7b6b3ff1ede5af227e231be77fbe5e3c1ab8014",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
   "plan_dsn": "f02908de588f71426a2995b86884be5e15127fd9fc48ead3710c0e71b481277b",
   "plan_files": "360fc1c69092e8da9f11cdded6296ef429c3db870181881ffff949a5b3c8253c",
@@ -1512,14 +1554,14 @@ const PROGRAM_SHA256 = {
   "policy": "3c3c254d65a199674727568003c0066cbb15ee7af2e86888932e2637f950ec5b",
   "pr_body_block": "368ed0c33928769f6951a1e15b65362b438fc010b0ea26c6284fc668c5e6c733",
   "pr_convention": "4763189023084bbad77a9eb5c2704692da5932d2dfa335654c5e4178f027c2b7",
-  "pr_state": "5a8aba3eb7a29d124ceb73b21edc513bc81680bb09747c081e0a033f74b0c3e3",
+  "pr_state": "a17beb445d0fac95dff82b49bfc75f6396293a6f193bfcfe2f6d4ddee51856b9",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
   "push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
   "push_probe": "c4381f9ce601e0729a0ab49edb33fe6c9e910e8738411e7ad4719f21ef639a5b",
-  "read_state": "7841ce4ba1f7038a1e5652f38a6237069177cfb29f54c8ec3bf32041c41df2df",
+  "read_state": "c6ce8ab9dfe4ae85b144e3cc90c007334794f8e725bd8bfba071544365e18c89",
   "remote_head": "04beeda731a3fa3ab79c1749333057426191c72b97c549f5fdf9e8f55a8549fc",
   "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
-  "review_paths": "03950f6125e99fc8bce12cd7e22762ea63737d356b432fcb42111edbfbb43c01",
+  "review_paths": "711143e444b4d9772c8023c22fbb93735239030d503dd58247050553d7fce29b",
   "ruleset_surface": "6ba0d9c8e4d281d518cd2fbc3986ee9b090c7b4f45cec75eed060dc7744e9d9e",
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
   "session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
@@ -1537,7 +1579,7 @@ function programTable() {
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-  "fleet-code-judge": "dac34f0bfce76029e2602ffa23c3210049e127187076978f82d357582f49b5a3",
+  "fleet-code-judge": "0b7a412cb27884de57c70bb48f90627c8595057ef29ce1a8e0f147df49f979fe",
   "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
   "fleet-intent-judge": "9cbd440fd7c3b20738e38598c84df438657af2fb9aa22ee007028cbd853902c1",
   "fleet-pr-opener": "b1207cb47c140b6c15cf6c1874277e1edecb2862035d97d5a6da7f8bf3cab981",
@@ -1681,6 +1723,8 @@ const PROGRAM_KEYS = {
   "tf_gate": ["touched", "iac_files", "problems", "hints", "args"],
   "remote_head": ["head", "args"],
   "fleet_scan": ["diff", "commits"],
+  // 6.1.0 D6: given a base tip, the program prints it too
+  "fleet_scan:base": ["diff", "commits", "base"],
   "callers": ["occurrences", "capped", "auto_dont_care", "doctest_md"],
   "changed_defs": ["defs", "excluded", "unclassified", "unattributed"],
   "push_classify": ["push_result", "exit_code", "hook_tail", "args"],
@@ -1795,7 +1839,7 @@ const PROGRAM_OUT = {
     args: STRS,
     digest: STR,
   },
-  fleet_scan: { diff: STRS, commits: { type: "array", items: { type: "object", properties: { sha: STR, files: STRS } } }, digest: STR },
+  fleet_scan: { diff: STRS, commits: { type: "array", items: { type: "object", properties: { sha: STR, files: STRS } } }, base: STR, digest: STR },
   callers: { occurrences: STR_LISTS, capped: STRS, auto_dont_care: STR_LISTS, doctest_md: STRS, digest: STR },
   changed_defs: {
     defs: { type: "array", items: { type: "object", properties: { name: STR, at: STR, end: INT } } },
@@ -2673,10 +2717,10 @@ function fleetScanPrompt(inputs) {
     INFRA_STEP + "list the paths the PR would carry. Read only: no edits, no commits, no checkout, no fetch, no push; run nothing but the one command below.\n" +
     inputsLine(inputs) +
     RUN_EXACT +
-    progCmd("fleet_scan", [inputs.main_worktree, inputs.default_branch, inputs.approved_sha]) +
+    progCmd("fleet_scan", [inputs.main_worktree, inputs.default_branch, inputs.approved_sha].concat(inputs.base ? [inputs.base] : [])) +
     "\n" +
-    "It prints one JSON object " + printsKeys("fleet_scan") + ". Copy every value unchanged; never drop a path (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, " + returnKeys("fleet_scan") + "}."
+    "It prints one JSON object " + (inputs.base ? printsKeys("fleet_scan:base") : printsKeys("fleet_scan")) + ". Copy every value unchanged; never drop a path (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "Return {status, reason, " + (inputs.base ? returnKeys("fleet_scan:base") : returnKeys("fleet_scan")) + "}."
   );
 }
 
@@ -2754,7 +2798,7 @@ function replanResetPrompt(inputs) {
     "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> rev-parse HEAD` must equal <expected_head>; else needs_human. The tests and code are uncommitted: the worktree tree, the output of this command run exactly as written, must equal <expected_tree>; else needs_human:\n" +
     treeCmd(inputs.main_worktree) +
     "\n" +
-    "2. Save the old head and the uncommitted work, creating no commit: if branch <superseded_branch> exists it must point at <expected_head> (else needs_human); else `git -C <main_worktree> branch <superseded_branch> <expected_head>`. If ref <superseded_tree_ref> exists it must equal <expected_tree> (else needs_human); else `git -C <main_worktree> update-ref <superseded_tree_ref> <expected_tree>` (a ref to the judged tree object; never pushed). superseded_head = `git -C <main_worktree> rev-parse <superseded_branch>`.\n" +
+    "2. Save the old head and the uncommitted work, creating no commit: if branch <superseded_branch> exists it must point at <expected_head> (else needs_human); else `git -C <main_worktree> -c core.hooksPath=/dev/null branch <superseded_branch> <expected_head>`. If ref <superseded_tree_ref> exists it must equal <expected_tree> (else needs_human); else `git -C <main_worktree> -c core.hooksPath=/dev/null update-ref <superseded_tree_ref> <expected_tree>` (a ref to the judged tree object; never pushed). superseded_head = `git -C <main_worktree> rev-parse <superseded_branch>`.\n" +
     "3. Only after step 2 succeeded: `git -C <main_worktree> reset --hard <plan_base>`, then `git -C <main_worktree> clean -fd` (never -x: ignored files stay).\n" +
     "4. `git -C <main_worktree> worktree remove <replan_worktree>` (it must be clean; never --force).\n" +
     "5. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
@@ -2925,7 +2969,8 @@ function pushProbePrompt(inputs) {
   );
 }
 function treeCmd(worktree) {
-  const g = "GIT_CONFIG_NOSYSTEM=1 GIT_INDEX_FILE=\"$tmp\" git -c core.fsmonitor=false -C " + shQuote(worktree);
+  // 6.1.0 review: a measurement, never a commit: no post-index-change hook runs
+  const g = "GIT_CONFIG_NOSYSTEM=1 GIT_INDEX_FILE=\"$tmp\" git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C " + shQuote(worktree);
   return "tmp=$(mktemp) && " + g + " read-tree HEAD && " + g + " add -A && " + g + " write-tree; rm -f \"$tmp\"";
 }
 
@@ -4233,12 +4278,11 @@ function docOrLockFile(p) {
   const b = String(p).split("/").pop();
   return DOC_FILE_RE.test(b) || NOTE_FILE_RE.test(b) || LOCK_FILES.indexOf(b) >= 0;
 }
-async function callerCheck(label, symbols, worktree, planPath) {
-  const names = symbols.map((s) => s.symbol);
+async function callerGrep(label, names, worktree, planPath, phaseName) {
   const r = await infra(
     label,
     callersPrompt({ worktree, plan_path: planPath, symbols: names, cap: MAX_SYMBOL_HITS }),
-    "Plan",
+    phaseName,
     JUDGE_AGENT,
     "callers",
   );
@@ -4251,6 +4295,12 @@ async function callerCheck(label, symbols, worktree, planPath) {
   requireProgram(r, "callers", label);
   if (!relayDigestOk(r, progKeys("callers"), "callers"))
     halt("failed", label + ": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
+  return r;
+}
+async function callerCheck(label, symbols, worktree, planPath) {
+  const names = symbols.map((s) => s.symbol);
+  const r = await callerGrep(label, names, worktree, planPath, "Plan");
+  const occ = r.occurrences;
   const doctest = Array.isArray(r.doctest_md) ? r.doctest_md.filter((x) => typeof x === "string").map(normPath) : null;
   const adc = doctest && r.auto_dont_care && typeof r.auto_dont_care === "object" && !Array.isArray(r.auto_dont_care) ? r.auto_dont_care : {};
   const auto = {};
@@ -4370,7 +4420,8 @@ async function hookSurface(label, worktree, rev, targets, phaseName) {
   if (r.error !== null)
     halt("needs_human", "hook surface cannot be computed (" + r.error + "); hook change needs Max's confirmation", "hooks");
   const mp = {};
-  for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x))) : [];
+  // 6.1.0: an npm:<name> target the program could not read stays null (R4 refuses on it)
+  for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x))) : t.indexOf("npm:") === 0 ? null : [];
   return { surface: r.surface.map((x) => (/\/$/.test(String(x)) ? (String(x) === "./" ? "./" : normPath(String(x)) + "/") : normPath(String(x)))), make_paths: mp };
 }
 
@@ -5755,10 +5806,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   }
 
   async function fleetScan(label) {
-    const r = await infra(label, fleetScanPrompt({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha }), "PR", JUDGE_AGENT, "fleet_scan");
+    // 6.1.0 D6 (2051): after an update, the base tip the forge merged, not the stale local origin/<default>
+    const sb = upd ? upd.base : null;
+    const r = await infra(label, fleetScanPrompt(Object.assign({ main_worktree: mainWt, default_branch: defaultBranch, approved_sha: approvedSha }, sb ? { base: sb } : {})), "PR", JUDGE_AGENT, "fleet_scan");
     if (!Array.isArray(r.diff) || !Array.isArray(r.commits) || !r.commits.every((c) => c && Array.isArray(c.files)))
       halt("needs_human", "fleet internal files check did not complete: " + label + " returned no diff/commits lists", "scope");
-    if (!relayDigestOk(r, progKeys("fleet_scan"), "fleet_scan"))
+    if (!relayDigestOk(r, progKeys(sb ? "fleet_scan:base" : "fleet_scan"), "fleet_scan") || (sb && r.base !== sb))
       halt("needs_human", "fleet internal files check did not complete: " + label + ": the relayed lists do not match the program's digest", "scope");
     const bad = fleetInternalPaths(r.diff);
     for (const c of r.commits) for (const q of fleetInternalPaths(c.files)) bad.push(q + " (commit " + c.sha + ")");
@@ -5924,6 +5977,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       } else if (step === "pr") {
         prOpens++;
         pr = await openPr("role:fleet-pr-opener" + (prOpens > 1 ? ":p" + prOpens : ""));
+        // 6.1.0 review N7: the pr-opener rewrote the body; the stats block goes back before any later stop
+        if (upd) await statsStep();
         await saveState("pr_open", "infra:state:pr_open:p" + prOpens);
       } else if (step === "review") {
         if (!pr || !pr.pr_url || pr.pr_number == null) {
@@ -5932,6 +5987,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           continue;
         }
         reviews++;
+        if (upd) upd.reviews++;
         const rv = await reviewStep(reviews, {
           mainWt, lay, remoteSlug, pr, approvedSha, baseRef: diffBase(), criteria, obligations: planFacts.repo_obligations, hashedFiles,
           allowedAdditions: planFacts.allowed_additions,
@@ -5940,9 +5996,16 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         });
         state.review = { verdict: rv.verdict, blocking: rv.blocking, nits: rv.nits, rounds: reviews, sweep: rv.sweep, model: rv.model };
         if (rv.blocking.length) {
-          // 6.0.1: no coder round on the forge's merge; the findings stay in the run result (state.review)
-          if (state.update && state.update.head === approvedSha)
-            halt("needs_human", "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id || "-")).join(", ") + " (" + rv.blocking.length + " blocking, " + rv.nits.length + (rv.nits.length === 1 ? " nit" : " nits") + "); findings are in the run result; re-plan on the new base or fix by hand", "review");
+          // 6.1.0 (2049): code rounds on the forge's merge only when R1-R5 pass, else the 6.0.1 stop
+          // (the findings stay in the run result, state.review; no PR-body write before the stop)
+          if (upd || (state.update && state.update.head === approvedSha)) {
+            const no = upd ? await updRefusal() : "the update record is from an earlier run";
+            if (no)
+              halt("needs_human", "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id || "-")).join(", ") + " (" + rv.blocking.length + " blocking, " + rv.nits.length + (rv.nits.length === 1 ? " nit" : " nits") + "); findings are in the run result; no coder round: " + no + "; re-plan on the new base or fix by hand", "review");
+            upd.pr = rv.changed;
+            gate("review u" + upd.reviews + ": changes_requested (" + rv.blocking.length + " blocking); R1-R5 pass -> code rounds on the update merge " + upd.head + " (within the code-round cap)");
+            return { gate: "review", update: true, findings: rv.blocking.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
+          }
           if (reviews >= MAX_REVIEWS)
             halt(
               "needs_human",
@@ -5953,7 +6016,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           gate("review v" + reviews + ": changes_requested (" + rv.blocking.length + " blocking) -> coder (fix_code)");
           return { gate: "review", findings: rv.blocking.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
         }
-        if (rv.nits.length) {
+        // 6.1.0: a review of the update merge (base-author code) never writes its text to the PR body
+        if (rv.nits.length && !upd) {
           reviewNotes = rv.nits;
           pr = await openPr("role:fleet-pr-opener:notes");
         }
@@ -5988,8 +6052,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     return null;
   }
   let skipWb = false;
-  // 6.0.1 D2: the forge's update merge is diffed against the base tip it merged (the PR's net diff)
-  const diffBase = () => (state.update && state.update.head === approvedSha ? state.update.base : planBase);
+  // 6.1.0 (2049): the overlap update this run adopted (null: none)
+  let upd = null;
+  // 6.0.1 D2: the forge's update merge is diffed against the base tip it merged (the PR's net diff);
+  // 6.1.0: so is the coder round's commit on top of it
+  const diffBase = () => (upd ? upd.base : state.update && state.update.head === approvedSha ? state.update.base : planBase);
   // ruling 7: after a confirmed merge the fleet removes its own worktree and local branch
   async function cleanupAfterMerge() {
     if (state.ci && state.ci.merged) {
@@ -6159,7 +6226,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const fr = await prState("infra:pr-fetch:u1", ["fetch", mainWt, branch, approvedSha, f.head, f.base], "bring the forge's update-branch head into the fleet worktree (git fetch and a fast-forward only; never a push)", "merge");
     if (fr.error !== null || fr.head !== f.head)
       halt("needs_human", "green, merge blocked: the update-branch head " + f.head + " is not a plain forge merge of " + approvedSha + " and the base tip " + f.base + " (" + (fr.error || "head " + fr.head) + "): " + pr.pr_url, "merge");
-    const h = await hasher("hasher:update:u1", mainWt, hashedFiles, "CI");
+    // 6.1.0: changed = old head..merge, the net base change (moved)
+    const h = await hasher("hasher:update:u1", mainWt, hashedFiles, "CI", approvedSha);
     if (h.fingerprint.head !== f.head) halt("needs_human", "update-branch: worktree HEAD " + h.fingerprint.head + " is not the fetched " + f.head, "merge");
     const hs = await hookSurface("infra:hook-surface:u1", mainWt, f.base, [], "CI");
     hookGate("the update-branch merge " + f.head, f.overlap, hs.surface, null);
@@ -6169,6 +6237,51 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // 6.0.1 D3: the run-state digest follows the merge's maps; D2: the re-review diffs base tip..merge
     shipDigest = mapsDigest(h.hashes);
     orch = null;
+    // 6.1.0 review N8: nobody has watched CI on the merge yet
+    if (state.ci) state.ci = Object.assign({}, state.ci, { verdict: "not_run", checks: [] });
+    state.ciCounts = null;
+    // 6.1.0 (2049): what the refusal rules read after a blocking re-review (data here, never a stop)
+    upd = { head: f.head, base: f.base, tree: h.fingerprint.tree, hashes: h.hashes, surface: hs.surface, moved: Array.from(new Set(h.changed.concat(f.overlap).map((p) => normPath(String(p))))), reviews: 0, pr: [] };
+  }
+  // 6.1.0 (2049) R1-R5 and the budget: why the update merge gets no coder round (null: it gets one)
+  async function updRefusal() {
+    if (upd.reviews >= MAX_UPDATE_REVIEWS) return "review round u" + upd.reviews + " after update-branch requested changes again";
+    if (state.rounds.code >= MAX_CODE_ROUNDS) return "no code round left after update-branch (" + MAX_CODE_ROUNDS + " used)";
+    if (!frozen) return "this run holds no freeze maps (a resumed run)";
+    const mv = upd.moved;
+    const list = (a) => " (" + a.join(", ") + ")";
+    // R1: a frozen key changed (test files, runner config, ignore rules, git, symlinks, ignored); the fleet's own refs move
+    const keys = changedKeys(frozen, upd.hashes, mainWt).filter((x) => !(x.map === "git" && x.key.indexOf(FLEETREF) === 0));
+    const sus = upd.hashes.suspicious || [];
+    if (keys.length || sus.length) return "the base change hits frozen hashed keys" + list(keys.map((x) => (x.key === MAP_ALL ? "the " + x.map + " map" : x.name)).concat(sus.map((p) => "suspicious " + p)));
+    const cmds = (planFacts.repo_obligations || []).map((o) => o && o.check_cmd).filter(Boolean);
+    const tc = String((planFacts.test_cmd && planFacts.test_cmd.command) || "");
+    const pb = await hookSurface("infra:hook-surface:u1:pb", mainWt, planBase, makeTargets(cmds.concat([tc]).map((c) => ({ check_cmd: c }))), "Review");
+    // R2: the hook surface at the base tip or at the plan base, and the ruleset surface (as the coder's hook gate)
+    const rs = sealedRs(pf.ruleset_surface) || (await rulesetSurface("infra:ruleset-surface:u1", mainWt, remoteSlug, defaultBranch, "Review"));
+    const hk = mv.filter((p) => isHookPath(p, upd.surface.concat(pb.surface, rs.surface)));
+    if (hk.length) return "the base change touches the hook surface" + list(hk);
+    // R3
+    const fe = mv.filter((p) => fencePathProblem(p) || isIacPath(p));
+    if (fe.length) return "the base change touches fenced or IaC paths" + list(fe);
+    // R4: what test_cmd or a check_cmd runs (a test_cmd shape it cannot read refuses: fail closed)
+    const nt = npmTargetOf(tc);
+    const tm = nt ? Object.assign({}, pb.make_paths, (await hookSurface("infra:hook-surface:u1:d", mainWt, upd.head, [nt], "Review")).make_paths) : pb.make_paths;
+    const ti = mv.filter((p) => testCmdRuns(tc, p, tm) || cmds.some((c) => cmdRuns(c, p, pb.make_paths)));
+    if (ti.length) return "the base change touches files the test or check commands run" + list(ti);
+    // R5: sealed occurrences, and occurrences a grep at the merge finds (line shift, added or removed caller)
+    const syms = planFacts.changed_symbols || [];
+    if (syms.length) {
+      const g = await callerGrep("infra:callers:u1", syms.map((x) => x.symbol), mainWt, ref.plan_path, "Review");
+      if (g.capped.length) return "the occurrences of " + g.capped.join(", ") + " cannot be listed at the update merge (more than " + MAX_SYMBOL_HITS + " occurrences)";
+      const at = (k) => normPath(String(k).slice(0, String(k).lastIndexOf(":")));
+      const occ = [];
+      for (const x of syms) for (const o of x.occurrences || []) occ.push(at(occurrenceKey(o.at) || o.at));
+      for (const n of Object.keys(g.occurrences)) for (const k of g.occurrences[n]) occ.push(at(k));
+      const oc = mv.filter((p) => occ.indexOf(p) >= 0);
+      if (oc.length) return "the base change touches files with occurrences of the changed symbols" + list(oc);
+    }
+    return null;
   }
   // 2034.5: one follow-up write-back per run on the final CI outcome; soft (never gates, never stops)
   let ciWbDone = false;
@@ -6292,10 +6405,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // 6.0.1 D5: update-branch stays once per run across a resume; a corrupt update record stops (N1)
     state.prUpdated = resume.pr_updated === true;
     const ru = resume.update;
-    if (state.prUpdated && ru && typeof ru === "object") {
-      if (!/^[0-9a-f]{40}$/.test(String(ru.base)) || (ru.head === approvedSha && ru.base === approvedSha))
-        halt("needs_human", "run-state mismatch: update record " + JSON.stringify({ head: ru.head === undefined ? null : ru.head, base: ru.base === undefined ? null : ru.base }) + " at " + approvedSha + " (" + stateRef + ")", "resume");
-      if (/^[0-9a-f]{40}$/.test(String(ru.head))) state.update = { head: ru.head, base: ru.base };
+    // 6.1.0 N1 (2052): pr_updated true needs an update record with two 40-hex shas
+    if (state.prUpdated) {
+      const o = ru && typeof ru === "object" ? ru : null;
+      const uh = o && o.head !== undefined ? o.head : null;
+      const ub = o && o.base !== undefined ? o.base : null;
+      if (!/^[0-9a-f]{40}$/.test(String(uh)) || !/^[0-9a-f]{40}$/.test(String(ub)) || (uh === approvedSha && ub === approvedSha))
+        halt("needs_human", "run-state mismatch: update record " + JSON.stringify(o ? { head: uh, base: ub } : null) + " at " + approvedSha + " (" + stateRef + ")", "resume");
+      state.update = { head: uh, base: ub };
     }
     if (resume.pr_url || resume.pr_number != null) {
       pr = { pr_url: resume.pr_url, pr_number: resume.pr_number, created: resume.pr_created, template_used: resume.template_used };
@@ -6653,263 +6770,287 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // HEAD the coder must leave alone
   let expectedHead = v.head;
   let commitsMade = v.head !== planBase;
-  for (;;) {
-    if (state.rounds.code >= MAX_CODE_ROUNDS)
-      halt(
-        "needs_human",
-        "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval" +
-          (lastRoundGate ? "; last round rejected by the " + lastRoundGate + " gate" : ""),
-        "cap",
-      );
-    state.rounds.code++;
-    const m = state.rounds.code;
-    lastRoundGate = null;
-    reserve(8 + (planFacts.changed_symbols ? 1 : 0) + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
-    const codeInputs = Object.assign({}, common, planCtx, planFacts, {
-      criteria,
-      frozen_tests: frozenFiles.slice(),
-      frozen_config_sections: configView(frozen),
-      frozen_tests_note: frozenNote,
-      freeze_ref: freezeRef,
-      freeze_tree: freezeTree,
-      code_tree: codeTree,
-      plan_commit: planBase,
-      code_base_ref: codeBaseRef,
-      ...roleEnv("coder", "coder-r" + m),
-    });
-    await resetBuild("coder:r" + m, ["coder-r" + m], "Code");
-    await pathRecheck("coder:r" + m, "Code");
-    const coderIn = Object.assign({}, codeInputs, { routed_findings: coderFindings });
-    let coder = await callRole("fleet-coder", "role:fleet-coder:r" + m, coderIn, "Code", null, true, true);
-    const coderFileOnly = coder.status === "ok" && roleFileProblem("fleet-coder", coder) && !driftOf("fleet-coder", coder) ? roleFileProblem("fleet-coder", coder) : null;
-    if (coderFileOnly) {
-      const rl = "role:fleet-coder:r" + m + ":retry";
-      reserve(1, rl);
-      state.agents++;
-      const r2 = await roleAgent(
-        "fleet-coder",
-        rl,
-        rolePrompt("fleet-coder", coderIn) + "\nYour previous result was refused: " + coderFileOnly + ". Your code changes are in the worktree; change no file. Do steps 1 and 2 again, then return the whole result object again.",
-        { schema: SCHEMAS["fleet-coder"], phase: "Code" },
-      );
-      if (r2 == null) halt("failed", "agent " + rl + " returned no result");
-      gate("fleet-coder: " + coderFileOnly + "; asked once more");
-      coder = r2;
-    }
-    await pathRecheck("format-code:r" + m, "Code");
-    await formatFiles("infra:format-code:r" + m, mainWt, { dirty: true }, { sha: fileHex(configView(frozen).files) }, null, "Code", lay.scratch);
-    // purge before the check and the judge
-    await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");
-    const h = await hasher("hasher:post-coder:r" + m, mainWt, hashedFiles, "Code", planBase);
-    if (h.fingerprint.head !== expectedHead)
-      halt("needs_human", "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + "; the coder works uncommitted", "ownership");
-    fenceChanged("code round " + m, h.changed);
-    const viol = await diffHashes(frozen, h.hashes, mainWt, "code:r" + m, "Code");
-    const coderDrift = contractProblem("fleet-coder", coder);
-    if (viol.length && (coderDrift || coder.status !== "ok"))
-      halt(
-        "needs_human",
-        "code round " + m + ": hash violation on " + viol.join(", ") + " (frozen paths changed since freeze tree " + freezeTree + ")" +
-          " (role output also: " + (coder.status !== "ok" ? roleStatusText("fleet-coder", coder) : coderDrift) + ")",
-        "hash",
-      );
-    // the coder is never re-run on drift
-    const coderFile = !viol.length ? roleFileProblem("fleet-coder", coder) : null;
-    if (coderFile) halt("needs_human", "code round " + m + ": " + coderFile, coder.status !== "ok" && !coder.role_file ? "role" : "contract");
-    const coderDriftOk = !viol.length && coder.status === "ok" ? driftOf("fleet-coder", coder) : null;
-    if (!viol.length && !coderDriftOk) {
-      checkRole("fleet-coder", coder);
-      requireOk("fleet-coder", coder);
-    }
-    collect("fleet-coder", coder);
-    if (coder.status === "ok") state.followUps = followUpsOf(coder);
-    last = h;
-    if (coderDriftOk) {
-      lastRoundGate = "contract";
-      coderFindings = [
-        {
-          target: "code",
-          criterion: null,
-          finding: coderDriftOk.msg + " -- return every required key with its frozen type; fix the report, not the code",
-        },
-      ];
-      gate("code round " + m + ": " + coderDriftOk.msg + " -> coder output rejected; routed as a finding");
-      judgePrior = judgePrior.concat(coderFindings);
-      continue;
-    }
-    if (viol.length) {
-      lastRoundGate = "hash";
-      coderFindings = [
-        {
-          target: "code",
-          criterion: null,
-          finding:
-            "frozen test or runner-config hash changed: " +
-            viol.join(", ") +
-            " -- frozen paths are read-only; restore them to their content in freeze tree " +
-            freezeTree +
-            " and fix production code instead",
-        },
-      ];
-      gate("code round " + m + ": hash violation on " + viol.join(", ") + " -> coder output rejected");
-      judgePrior = judgePrior.concat(coderFindings);
-      continue;
-    }
-    // re-check check_cmd scripts in the tree the judge sees
-    const judgeObligations = await checkScripts("infra:check-scripts:r" + m, planFacts.repo_obligations, mainWt, "Code");
-    await resetBuild("code-judge:r" + m, ["cjudge-r" + m], "Code");
-    await pathRecheck("code-judge:r" + m, "Code");
-    const jc = await judged(
-      "fleet-code-judge",
-      "role:fleet-code-judge:r" + m,
-      "code-judge:r" + m,
-      Object.assign({}, codeInputs, {
-        code_tree: h.fingerprint.tree,
-        coder_output: stripHeldOut(coder),
-        hash_recheck: hashRecheck(frozen, h.hashes, mainWt),
-        // the findings still pending for this judge ([] in round 1)
-        prior_findings: stripHeldOut(judgePrior),
-        held_out_results: HELD_OUT_NOT_RUN,
-        script_findings: SCRIPT_FINDINGS_NOT_RUN,
-        repo_obligations: judgeObligations,
-        ...roleEnv("cjudge", "cjudge-r" + m),
-      }),
-      mainWt,
-      "Code",
-      h,
-      hashedFiles,
-    );
-    const cj = jc.r;
-    last = jc.state;
-    codeTree = jc.state.fingerprint.tree;
-    const routed = cj.routed_findings || [];
-    if (cj.verdict === "plan_wrong")
-      return replan({
-        ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl,
-        project: input.project || null,
-        findings: routed.filter((f) => f.target === "plan"),
-        expectedHead: jc.state.fingerprint.head,
-        expectedTree: codeTree,
-        onPlanRefs: (refs) => {
-          if (frozen) for (const e of refs) if (e && typeof e.name === "string" && e.tag_sha) frozen.git[FLEETREF + e.name] = e.tag_sha;
-        },
-      });
-    if (cj.verdict === "fix_code") {
-      coderFindings = routed.filter((f) => f.target === "code");
-      judgePrior = coderFindings.slice();
-      gate("code-judge r" + m + ": fix_code -> coder (" + coderFindings.length + " findings)");
-      continue;
-    }
-    if (cj.verdict === "fix_tests") {
-      const tf = routed.filter((f) => f.target === "tests");
-      gate("code-judge r" + m + ": fix_tests -> test-judge (" + tf.length + " findings)");
-      phase("Tests");
-      await testLoop([], tf);
-      phase("Freeze");
-      await freeze({
-        round: m,
-        criteria: tf.map((f) => f.criterion).filter((x, i, a) => x && a.indexOf(x) === i),
-      });
-      phase("Code");
-      // a fix_tests verdict may also carry code findings: keep them
-      coderFindings = routed.filter((f) => f.target === "code");
-      judgePrior = coderFindings.slice();
-      continue;
-    }
-    if (cj.verdict !== "approve") halt("failed", "code-judge returned no verdict");
-    const hs = await hookSurface("infra:hook-surface:r" + m, mainWt, planBase, makeTargets(judgeObligations), "Code");
-    const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check, judgeObligations, cj.gates_not_run, h.changed, hs.make_paths);
-    if (obFail.length) {
-      coderFindings = obFail;
-      judgePrior = coderFindings.slice();
-      lastRoundGate = "obligations";
-      gate(
-        "code round " + m + ": obligations gate: code-judge approve converted to fix_code (" +
-          obFail.map((f) => f.finding).join("; ") + ")",
-      );
-      continue;
-    }
-    gate("code-judge r" + m + ": approve of tree " + codeTree);
-
-    // Max's rule: the approved diff never touches the hook surface
-    if (!buildRs) buildRs = sealedRs(pf.ruleset_surface) || (await rulesetSurface("infra:ruleset-surface:r" + m, mainWt, remoteSlug, defaultBranch, "Code"));
-    hookGate("the approved tree " + codeTree, h.changed || [], hs.surface, buildRs);
-    if (planFacts.changed_symbols) {
-      const bc = await buildCallerCheck(
-        "infra:changed-defs:r" + m,
-        planFacts.changed_symbols,
-        mainWt,
-        planBase,
-        codeTree,
-        frozenFiles,
-        planScopeFiles(planFacts),
-      );
-      gate(
-        "build caller check r" + m + ": no existing definition outside changed_symbols (" + bc.defs.length + " modified: " +
-          (bc.defs.map((d) => d.name).join(", ") || "none") + "; " + bc.excluded.length + " excluded, " + bc.unclassified.length + " unclassified, " +
-          bc.unattributed.length + " module-level change(s), each in a file the plan names)",
-      );
-    }
-    const subject = commitsMade ? subj.fix(m) : subj.main;
-    await resetBuild("commit:r" + m, ["commit-r" + m], "Code");
-    await pathRecheck("commit:r" + m, "Code");
-    const cs = await infra(
-      "infra:commit:r" + m,
-      commitStepPrompt({
-        main_worktree: mainWt,
-        branch,
-        expected_head: expectedHead,
+  let updRound = false;
+  // 6.1.0: a stop in a code round after update-branch writes the CI outcome back once (ciWbDone), then stops
+  try {
+    for (;;) {
+      if (state.rounds.code >= MAX_CODE_ROUNDS)
+        halt(
+          "needs_human",
+          "code rounds exhausted (" + MAX_CODE_ROUNDS + ") without code-judge approval" +
+            // 6.1.0 review S1: after update-branch it is a review outcome (CI stop code review)
+            (updRound ? " in the code rounds after update-branch" : "") +
+            (lastRoundGate ? "; last round rejected by the " + lastRoundGate + " gate" : "") +
+            (updRound ? "; re-plan on the new base or fix by hand" : ""),
+          updRound ? "review" : "cap",
+        );
+      state.rounds.code++;
+      const m = state.rounds.code;
+      lastRoundGate = null;
+      reserve(8 + (planFacts.changed_symbols ? 1 : 0) + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
+      const codeInputs = Object.assign({}, common, planCtx, planFacts, {
+        criteria,
+        frozen_tests: frozenFiles.slice(),
+        frozen_config_sections: configView(frozen),
+        frozen_tests_note: frozenNote,
+        freeze_ref: freezeRef,
+        freeze_tree: freezeTree,
         code_tree: codeTree,
-        subject,
-        hooks_path: frozen.git["core.hooksPath"] && frozen.git["core.hooksPath"] !== "UNSET" ? frozen.git["core.hooksPath"] : null,
-        // the build vars of this commit's own dir (and the DSN)
-        hook_env: hookEnv("commit-r" + m),
-      }),
-      "Code",
-    );
-    if (cs.staged_tree !== codeTree)
-      halt("needs_human", "commit step r" + m + ": staged tree " + cs.staged_tree + " != code tree " + codeTree + "; nothing committed", "commit");
-    if (cs.worktree_tree !== codeTree)
-      halt("needs_human", "commit step r" + m + ": hook modified files (worktree tree " + cs.worktree_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
-    if (cs.commit_result === "hook_rejected") {
-      const tail = String(cs.hook_tail || "").trim();
-      coderFindings = [
-        {
-          target: "code",
-          criterion: null,
-          finding:
-            "the commit was rejected by a repo commit hook (pre-commit) for tree " + codeTree + "; satisfy it in production code, never bypass it. Hook output (tail):\n" +
-            (tail || "(no output captured)"),
-        },
-      ];
-      judgePrior = coderFindings.slice();
-      lastRoundGate = "commit hook";
-      gate("code round " + m + ": commit rejected by a repo hook -> coder (fix_code)");
-      continue;
-    }
-    if (cs.commit_result !== "committed" || typeof cs.head !== "string" || !SHA_RE.test(cs.head))
-      halt("failed", "commit step r" + m + " returned commit_result " + JSON.stringify(cs.commit_result || null) + " and head " + JSON.stringify(cs.head || null));
-    if (cs.head_tree !== codeTree)
-      halt("needs_human", "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
-    expectedHead = cs.head;
-    commitsMade = true;
-    approvedSha = cs.head;
-    shipTree = codeTree;
-    shipDigest = mapsDigest(jc.state.hashes);
-    suiteResult = cj.suite_result || null;
-    state.gatesNotRun = gatesNotRun(cj.gates_not_run).concat(rulesetGaps(buildRs));
-    if (state.gatesNotRun.length && String(cj.reason || "").indexOf(GATES_PREFIX) !== 0)
-      gate("warning: code-judge approve reason does not start with '" + GATES_PREFIX + "' although gates did not run");
-    gate("committed tree " + codeTree + " as " + approvedSha + " (" + JSON.stringify(subject) + ")");
-    await saveState("committed", "infra:state:committed:r" + m);
+        // 6.1.0 review B1: after update-branch the change is diffed from the base tip, so base hunks are not the PR's
+        plan_commit: updRound ? upd.base : planBase,
+        code_base_ref: codeBaseRef,
+        ...roleEnv("coder", "coder-r" + m),
+      });
+      await resetBuild("coder:r" + m, ["coder-r" + m], "Code");
+      await pathRecheck("coder:r" + m, "Code");
+      const coderIn = Object.assign({}, codeInputs, { routed_findings: coderFindings });
+      let coder = await callRole("fleet-coder", "role:fleet-coder:r" + m, coderIn, "Code", null, true, true);
+      const coderFileOnly = coder.status === "ok" && roleFileProblem("fleet-coder", coder) && !driftOf("fleet-coder", coder) ? roleFileProblem("fleet-coder", coder) : null;
+      if (coderFileOnly) {
+        const rl = "role:fleet-coder:r" + m + ":retry";
+        reserve(1, rl);
+        state.agents++;
+        const r2 = await roleAgent(
+          "fleet-coder",
+          rl,
+          rolePrompt("fleet-coder", coderIn) + "\nYour previous result was refused: " + coderFileOnly + ". Your code changes are in the worktree; change no file. Do steps 1 and 2 again, then return the whole result object again.",
+          { schema: SCHEMAS["fleet-coder"], phase: "Code" },
+        );
+        if (r2 == null) halt("failed", "agent " + rl + " returned no result");
+        gate("fleet-coder: " + coderFileOnly + "; asked once more");
+        coder = r2;
+      }
+      await pathRecheck("format-code:r" + m, "Code");
+      await formatFiles("infra:format-code:r" + m, mainWt, { dirty: true }, { sha: fileHex(configView(frozen).files) }, null, "Code", lay.scratch);
+      // purge before the check and the judge
+      await purgeBytecode("infra:purge-bytecode:code-r" + m, mainWt, "Code");
+      // 6.1.0: in a round after update-branch the coder's own delta is diffed against tree(d)
+      const h = await hasher("hasher:post-coder:r" + m, mainWt, hashedFiles, "Code", updRound ? upd.tree : planBase);
+      if (h.fingerprint.head !== expectedHead)
+        halt("needs_human", "coder committed: HEAD moved from " + expectedHead + " to " + h.fingerprint.head + " in code round " + m + "; the coder works uncommitted", "ownership");
+      fenceChanged("code round " + m, h.changed);
+      const viol = await diffHashes(frozen, h.hashes, mainWt, "code:r" + m, "Code");
+      const coderDrift = contractProblem("fleet-coder", coder);
+      if (viol.length && (coderDrift || coder.status !== "ok"))
+        halt(
+          "needs_human",
+          "code round " + m + ": hash violation on " + viol.join(", ") + " (frozen paths changed since freeze tree " + freezeTree + ")" +
+            " (role output also: " + (coder.status !== "ok" ? roleStatusText("fleet-coder", coder) : coderDrift) + ")",
+          "hash",
+        );
+      // the coder is never re-run on drift
+      const coderFile = !viol.length ? roleFileProblem("fleet-coder", coder) : null;
+      if (coderFile) halt("needs_human", "code round " + m + ": " + coderFile, coder.status !== "ok" && !coder.role_file ? "role" : "contract");
+      const coderDriftOk = !viol.length && coder.status === "ok" ? driftOf("fleet-coder", coder) : null;
+      if (!viol.length && !coderDriftOk) {
+        checkRole("fleet-coder", coder);
+        requireOk("fleet-coder", coder);
+      }
+      collect("fleet-coder", coder);
+      if (coder.status === "ok") state.followUps = followUpsOf(coder);
+      last = h;
+      if (coderDriftOk) {
+        lastRoundGate = "contract";
+        coderFindings = [
+          {
+            target: "code",
+            criterion: null,
+            finding: coderDriftOk.msg + " -- return every required key with its frozen type; fix the report, not the code",
+          },
+        ];
+        gate("code round " + m + ": " + coderDriftOk.msg + " -> coder output rejected; routed as a finding");
+        judgePrior = judgePrior.concat(coderFindings);
+        continue;
+      }
+      if (viol.length) {
+        lastRoundGate = "hash";
+        coderFindings = [
+          {
+            target: "code",
+            criterion: null,
+            finding:
+              "frozen test or runner-config hash changed: " +
+              viol.join(", ") +
+              " -- frozen paths are read-only; restore them to their content in freeze tree " +
+              freezeTree +
+              " and fix production code instead",
+          },
+        ];
+        gate("code round " + m + ": hash violation on " + viol.join(", ") + " -> coder output rejected");
+        judgePrior = judgePrior.concat(coderFindings);
+        continue;
+      }
+      // re-check check_cmd scripts in the tree the judge sees
+      const judgeObligations = await checkScripts("infra:check-scripts:r" + m, planFacts.repo_obligations, mainWt, "Code");
+      await resetBuild("code-judge:r" + m, ["cjudge-r" + m], "Code");
+      await pathRecheck("code-judge:r" + m, "Code");
+      const jc = await judged(
+        "fleet-code-judge",
+        "role:fleet-code-judge:r" + m,
+        "code-judge:r" + m,
+        Object.assign({}, codeInputs, {
+          code_tree: h.fingerprint.tree,
+          coder_output: stripHeldOut(coder),
+          hash_recheck: hashRecheck(frozen, h.hashes, mainWt),
+          // the findings still pending for this judge ([] in round 1)
+          prior_findings: stripHeldOut(judgePrior),
+          held_out_results: HELD_OUT_NOT_RUN,
+          script_findings: SCRIPT_FINDINGS_NOT_RUN,
+          repo_obligations: judgeObligations,
+          ...roleEnv("cjudge", "cjudge-r" + m),
+        }),
+        mainWt,
+        "Code",
+        h,
+        hashedFiles,
+      );
+      const cj = jc.r;
+      last = jc.state;
+      codeTree = jc.state.fingerprint.tree;
+      const routed = cj.routed_findings || [];
+      // 6.1.0 R6: never a test writer, re-freeze or re-plan on the forge's merge
+      if (updRound && (cj.verdict === "plan_wrong" || cj.verdict === "fix_tests"))
+        halt("needs_human", "code judge returned " + cj.verdict + " in a code round after update-branch: no test writer, re-freeze or re-plan runs on the forge's merge " + upd.head + "; re-plan on the new base or fix by hand", "review");
+      if (cj.verdict === "plan_wrong")
+        return replan({
+          ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl,
+          project: input.project || null,
+          findings: routed.filter((f) => f.target === "plan"),
+          expectedHead: jc.state.fingerprint.head,
+          expectedTree: codeTree,
+          onPlanRefs: (refs) => {
+            if (frozen) for (const e of refs) if (e && typeof e.name === "string" && e.tag_sha) frozen.git[FLEETREF + e.name] = e.tag_sha;
+          },
+        });
+      if (cj.verdict === "fix_code") {
+        coderFindings = routed.filter((f) => f.target === "code");
+        judgePrior = coderFindings.slice();
+        gate("code-judge r" + m + ": fix_code -> coder (" + coderFindings.length + " findings)");
+        continue;
+      }
+      if (cj.verdict === "fix_tests") {
+        const tf = routed.filter((f) => f.target === "tests");
+        gate("code-judge r" + m + ": fix_tests -> test-judge (" + tf.length + " findings)");
+        phase("Tests");
+        await testLoop([], tf);
+        phase("Freeze");
+        await freeze({
+          round: m,
+          criteria: tf.map((f) => f.criterion).filter((x, i, a) => x && a.indexOf(x) === i),
+        });
+        phase("Code");
+        // a fix_tests verdict may also carry code findings: keep them
+        coderFindings = routed.filter((f) => f.target === "code");
+        judgePrior = coderFindings.slice();
+        continue;
+      }
+      if (cj.verdict !== "approve") halt("failed", "code-judge returned no verdict");
+      // 6.1.0: after update-branch the surface at d; obligations see the PR net diff (u1 review paths) and the delta
+      const hs = await hookSurface("infra:hook-surface:r" + m, mainWt, updRound ? upd.head : planBase, makeTargets(judgeObligations), "Code");
+      const obChanged = updRound ? Array.from(new Set(upd.pr.concat(h.changed || []))) : h.changed;
+      const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check, judgeObligations, cj.gates_not_run, obChanged, hs.make_paths);
+      if (obFail.length) {
+        coderFindings = obFail;
+        judgePrior = coderFindings.slice();
+        lastRoundGate = "obligations";
+        gate(
+          "code round " + m + ": obligations gate: code-judge approve converted to fix_code (" +
+            obFail.map((f) => f.finding).join("; ") + ")",
+        );
+        continue;
+      }
+      gate("code-judge r" + m + ": approve of tree " + codeTree);
 
-    // push, PR, review, write-back
-    const fix = await ship("push");
-    if (!fix) break;
-    coderFindings = fix.findings;
-    judgePrior = coderFindings.slice();
-    lastRoundGate = fix.gate;
-    phase("Code");
+      // Max's rule: the approved diff never touches the hook surface
+      if (!buildRs) buildRs = sealedRs(pf.ruleset_surface) || (await rulesetSurface("infra:ruleset-surface:r" + m, mainWt, remoteSlug, defaultBranch, "Code"));
+      hookGate("the approved tree " + codeTree, h.changed || [], hs.surface, buildRs);
+      if (planFacts.changed_symbols) {
+        const bc = await buildCallerCheck(
+          "infra:changed-defs:r" + m,
+          planFacts.changed_symbols,
+          mainWt,
+          // 6.1.0: the base tip; a file the base moved holds no occurrence (R5), so the sealed lines hold
+          updRound ? upd.base : planBase,
+          codeTree,
+          frozenFiles,
+          planScopeFiles(planFacts),
+        );
+        gate(
+          "build caller check r" + m + ": no existing definition outside changed_symbols (" + bc.defs.length + " modified: " +
+            (bc.defs.map((d) => d.name).join(", ") || "none") + "; " + bc.excluded.length + " excluded, " + bc.unclassified.length + " unclassified, " +
+            bc.unattributed.length + " module-level change(s), each in a file the plan names)",
+        );
+      }
+      const subject = commitsMade ? subj.fix(m) : subj.main;
+      await resetBuild("commit:r" + m, ["commit-r" + m], "Code");
+      await pathRecheck("commit:r" + m, "Code");
+      const cs = await infra(
+        "infra:commit:r" + m,
+        commitStepPrompt({
+          main_worktree: mainWt,
+          branch,
+          expected_head: expectedHead,
+          code_tree: codeTree,
+          subject,
+          hooks_path: frozen.git["core.hooksPath"] && frozen.git["core.hooksPath"] !== "UNSET" ? frozen.git["core.hooksPath"] : null,
+          // the build vars of this commit's own dir (and the DSN)
+          hook_env: hookEnv("commit-r" + m),
+        }),
+        "Code",
+      );
+      if (cs.staged_tree !== codeTree)
+        halt("needs_human", "commit step r" + m + ": staged tree " + cs.staged_tree + " != code tree " + codeTree + "; nothing committed", "commit");
+      if (cs.worktree_tree !== codeTree)
+        halt("needs_human", "commit step r" + m + ": hook modified files (worktree tree " + cs.worktree_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
+      if (cs.commit_result === "hook_rejected") {
+        const tail = String(cs.hook_tail || "").trim();
+        coderFindings = [
+          {
+            target: "code",
+            criterion: null,
+            finding:
+              "the commit was rejected by a repo commit hook (pre-commit) for tree " + codeTree + "; satisfy it in production code, never bypass it. Hook output (tail):\n" +
+              (tail || "(no output captured)"),
+          },
+        ];
+        judgePrior = coderFindings.slice();
+        lastRoundGate = "commit hook";
+        gate("code round " + m + ": commit rejected by a repo hook -> coder (fix_code)");
+        continue;
+      }
+      if (cs.commit_result !== "committed" || typeof cs.head !== "string" || !SHA_RE.test(cs.head))
+        halt("failed", "commit step r" + m + " returned commit_result " + JSON.stringify(cs.commit_result || null) + " and head " + JSON.stringify(cs.head || null));
+      if (cs.head_tree !== codeTree)
+        halt("needs_human", "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
+      expectedHead = cs.head;
+      commitsMade = true;
+      approvedSha = cs.head;
+      shipTree = codeTree;
+      shipDigest = mapsDigest(jc.state.hashes);
+      suiteResult = cj.suite_result || null;
+      state.gatesNotRun = gatesNotRun(cj.gates_not_run).concat(rulesetGaps(buildRs));
+      if (state.gatesNotRun.length && String(cj.reason || "").indexOf(GATES_PREFIX) !== 0)
+        gate("warning: code-judge approve reason does not start with '" + GATES_PREFIX + "' although gates did not run");
+      gate("committed tree " + codeTree + " as " + approvedSha + " (" + JSON.stringify(subject) + ")");
+      await saveState("committed", "infra:state:committed:r" + m);
+
+      // push, PR, review, write-back
+      const fix = await ship("push");
+      if (!fix) break;
+      // 6.1.0 (2049): the coder round on the forge's merge d: HEAD d, diffs against tree(d), the frozen maps unchanged
+      if (fix.update) {
+        updRound = true;
+        expectedHead = freezeRef = codeBaseRef = upd.head;
+        freezeTree = codeTree = upd.tree;
+      }
+      coderFindings = fix.findings;
+      judgePrior = coderFindings.slice();
+      lastRoundGate = fix.gate;
+      phase("Code");
+    }
+  } catch (e) {
+    if (e instanceof Stop && state.prUpdated) await ciWriteBack(ciStopCode(state.stopGate, e.reason));
+    throw e;
   }
 
   return finishOk(frozenResume ? "frozen" : resumedAt);
@@ -7013,7 +7154,7 @@ async function reviewStep(k, ctx) {
     }
     const verdict = blocking.length ? "changes_requested" : "approve";
     gate("review v" + k + ": " + verdict + " (" + blocking.length + " blocking, " + nits.length + " nits)" + (sweep ? "; sweep " + sweep.verdict : ""));
-    return { verdict, blocking, nits, sweep, model: state.models["pr-review"].model };
+    return { verdict, blocking, nits, sweep, model: state.models["pr-review"].model, changed: changedPaths };
   } finally {
     try {
       const c = await softDispatch(

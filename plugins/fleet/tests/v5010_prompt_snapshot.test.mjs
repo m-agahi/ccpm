@@ -89,10 +89,12 @@ const SCENARIOS = {
 // 6.0.0 security review (S6): the CI write-back line has fixed fields only
 // 6.0.0 review (REQUEST CHANGES): ci_watch prints no log text; orch_scan args; pr_state modes; the CI write-back (:ci) and infra:pr-stats:final (new build calls)
 // 6.0.1 (2050): verify_since commits_since[].parents in the schema
+// 6.1.0 review B2 (2051): fleet_scan base in the schema (the only change: checked with base removed)
+// 6.1.0 delta review: treeCmd, the re-plan reset branch/update-ref and the code-judge role's scratch read-tree run git with hooks off (the only changes: checked with the three reverted)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 86, sha256: "07ace2b72ff1dfbe371ca8130c511abe653fb8fbe981a509dd646f0aee303346" },
-  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "1d78da781e1ab085129dc4c91b22af9b8e29d6c6b677b385781ee3a4272ed62f" },
-  "short path (one test writer)": { calls: 85, sha256: "7bbda76e6fe0239167e0ada89a7082e8090082f6386490409704f42d3d134c57" },
+  "plan then build (confirm ask)": { calls: 86, sha256: "c4f5ef0367b241a63ce8cf72375d8a969a4fb5f3c3abd996e8e8aa22ee9aa417" },
+  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "e080c5b7aabda243937a89617d1e9fbe16f7a41535890d7f704221ccf914d24f" },
+  "short path (one test writer)": { calls: 85, sha256: "d1249f2edf9a0165e78e871ee7ff736e32388ce089a6dc1a9150b4c2a7954c31" },
   "probe": { calls: 2, sha256: "012d024fefbefe057a047d8b6822b07ea3152de9e7d322be0e6cf5d6273fc736" },
 };
 

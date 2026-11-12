@@ -37,7 +37,8 @@ except Exception:
 import hashlib, json, os, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 wt, ref = sys.argv[1], sys.argv[2]
-G = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
+# 6.1.0 review B3: git status may write the index (post-index-change): no hook runs
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', wt]
 def run(*a):
     return subprocess.run(G + list(a), capture_output=True)
 out = {'exists': False, 'target': '', 'message': ''}

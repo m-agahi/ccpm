@@ -644,8 +644,13 @@ the 100-agent cap (like path checks); CI-fix coder rounds still count.
   enables native auto-merge (the forge merges later, without the fleet). Behind with
   `update_branch: once`: the forge's update-branch once per run (the new head must change only PR files against the base tip and be a merge of
   the reviewed head and the base tip), then the watch again; a base change in a PR file is
-  fetched (`pr_state.py fetch`: parents and merge tree checked), hashed, hook-checked and
-  reviewed again before the watch. After a confirmed merge the remote `fleet/*` branch goes, then
+  fetched (`pr_state.py fetch`: parents and merge tree checked, no repo hook run), hashed,
+  hook-checked and reviewed again before the watch. If that re-review requests changes, the
+  normal coder and code-judge loop runs on the merge (no re-freeze; within the run's code-round
+  cap; fast-forward push) only when the base change hits no frozen key, hook or ruleset surface,
+  fenced or IaC path, file a test or check command runs, or file with a changed-symbol occurrence
+  (6.1.0); otherwise, when the cap runs out there, and when the next re-review requests changes
+  again, the run stops with "re-plan on the new base". After a confirmed merge the remote `fleet/*` branch goes, then
   the fleet removes its own worktree and local branch. Otherwise "CI green, ready for human
   merge".
 - The result carries `ci: {verdict, checks: [{name, state, url}], fix_rounds, merged, merge_sha,
