@@ -56,9 +56,14 @@ plan-audit spend a run on it. The workflow changes only in intake (the yadgar bo
 - 2058 (Max, option 1): intake read a yadgar ledger task with `task_get` only, which returns the
   row and not the body on its `body_slug` page, so a brief written there never reached the planner.
   Intake now reads that page with `wiki_read` (and no page when the answer carries the body); a
-  missing, unreadable or empty page, or a `body_slug` source with no successful `wiki_read` in
-  `tried`, stops with `needs_human` and the reason code `task body page unreadable`, in plan mode
-  and in the rulings re-read (prompt pins re-pinned; `body_slug` is not sealed).
+  missing, unreadable or empty page is intake's own stop, with `needs_human` and the reason code
+  `task body page unreadable`. The script gate checks what intake reports: a `body_slug` source
+  needs a successful `wiki_read(slug=<body_slug>, project=<project>)` in `tried`, in exactly that
+  format, else the run stops with the same code, in plan mode and in the rulings re-read. The
+  script cannot see a `body_slug` that intake dropped; the prompt rule ("MUST carry body_slug") and
+  its pins are the guard there (prompt pins re-pinned; `body_slug` is not sealed).
+- `brief_check.py`: a CRLF brief and a tab pass; `--classify-paths` with bad JSON exits 2 with a
+  message.
 
 ## [6.1.0] - 2026-11-12
 

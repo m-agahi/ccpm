@@ -429,7 +429,7 @@ const READS = {
     "t object": "intake:tried[]",
     "t.call string": "intake:tried[].call",
     "s.body_slug string": "intake:brief.sources[].body_slug",
-    "s.body string": "intake:brief.sources[].body",
+    "t.project string": "intake:tried[].project",
   },
   yaadgaarIdProblem: {
     "t.call string": "intake:tried[].call",

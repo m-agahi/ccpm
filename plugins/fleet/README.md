@@ -332,11 +332,13 @@ project, body_slug}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, 
 
 A yadgar ledger task keeps its body on the wiki page its `body_slug` names; `task_get` returns the
 row only (6.2.0, ledger 2058). Intake then reads that page with `wiki_read(slug, project)`, records
-the call in `tried`, uses the page as the body and sets the source's `body_slug`. The script stops
-with `needs_human` and the reason code `task body page unreadable` when intake reports that code,
-when a `body_slug` source has no successful `wiki_read` of that slug in `tried`, or when the page
-gave no body: a run never plans on the title only. A task whose `task_get` answer carries body text
-needs no page read (`body_slug` null). `body_slug` is intake data only; the sealed brief does not
+the call in `tried` as exactly `wiki_read(slug=<body_slug>, project=<project>)`, uses the page as
+the body and sets the source's `body_slug` (a ledger source must carry it as `task_get` returned
+it). A missing, unreadable or empty page is intake's own stop with the reason code
+`task body page unreadable`; the script relays it. The script gate checks what intake reports: a
+`body_slug` source with no successful read in that exact format stops with the same code. The
+script cannot see a `body_slug` that intake dropped; the prompt rule and its pins guard that. A task
+whose `task_get` answer carries body text needs no page read (`body_slug` null). `body_slug` is intake data only; the sealed brief does not
 carry it.
 
 ### Ledger adapters (5.0.0, R2)

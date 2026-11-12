@@ -92,7 +92,8 @@ def is_hook_path(p):
     return any(segs[i] == ".git" and segs[i + 1] == "hooks" for i in range(len(segs) - 1))
 
 
-# invisible or confusable characters (the planner's class): controls (bar LF),
+# invisible or confusable characters (the planner's class): controls (bar LF and tab; a CRLF
+# line end is read as LF),
 # format characters (tags U+E0000-E007F included), non-plain spaces, line and paragraph separators,
 # variation selectors, tags, Hangul fillers
 HANGUL_FILLERS = {0x115F, 0x1160, 0x3164, 0xFFA0}
@@ -100,7 +101,7 @@ HANGUL_FILLERS = {0x115F, 0x1160, 0x3164, 0xFFA0}
 
 def invisible(ch):
     o = ord(ch)
-    if ch == "\n":
+    if ch in "\n\t":
         return False
     cat = unicodedata.category(ch)
     if cat in ("Cc", "Cf", "Zl", "Zp", "Co", "Cs", "Cn"):
@@ -164,6 +165,7 @@ def check(text, repo_dir=None, allow_open=False):
     def warn(name, line, detail):
         warnings.append({"check": name, "line": line, "detail": detail})
 
+    text = text.replace("\r\n", "\n")
     for i, line in enumerate(text.split("\n"), 1):
         bad = sorted({c for c in line if invisible(c)})
         if bad:
@@ -281,7 +283,14 @@ def check(text, repo_dir=None, allow_open=False):
 def main(argv):
     args = list(argv)
     if args[:1] == ["--classify-paths"] and len(args) == 2:
-        paths = json.loads(args[1])
+        try:
+            paths = json.loads(args[1])
+        except ValueError as e:
+            print("--classify-paths needs a JSON list of strings: %s" % e, file=sys.stderr)
+            return 2
+        if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+            print("--classify-paths needs a JSON list of strings", file=sys.stderr)
+            return 2
         print(json.dumps([{"path": p, "iac": is_iac_path(p), "hook_re": hook_re(p), "hook": is_hook_path(p)} for p in paths]))
         return 0
     repo_dir, allow_open, files = None, False, []

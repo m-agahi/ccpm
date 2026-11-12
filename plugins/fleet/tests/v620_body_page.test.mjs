@@ -30,6 +30,11 @@ test("6.2.0 body page: the intake prompt tells the agent to wiki_read the body_s
   assert.ok(p.includes("One with a body_slug and no body text: its body is that wiki page."));
   assert.ok(p.includes(CODE), "the prompt names the reason code");
   assert.match(p, /never (plan|proceed) on the title only/i);
+  // 6.2.0 review M1: the return shape names body_slug, and a ledger source must carry it
+  assert.ok(p.includes("sources: [{kind, ref, url, body, id, project, body_slug}]"), "return shape names body_slug");
+  assert.ok(p.includes("A kind ledger source MUST carry body_slug exactly as task_get returned it (null only when task_get had none)."));
+  // 6.2.0 review L2: one exact call format for the page read
+  assert.ok(p.includes("record it in `tried` with call exactly `wiki_read(slug=<body_slug>, project=<project>)`"));
   // body text in the answer: no page read
   assert.match(p, /carries body text[^.]*: use it[^.]*do not call wiki_read/i);
 });
@@ -57,11 +62,63 @@ test("6.2.0 body page: body_slug with no recorded wiki_read stops with the reaso
   }
 });
 
-test("6.2.0 body page: an empty page body stops with the reason code (never title only)", async () => {
-  const out = await runOne(happy({ brief: pageBrief({ body: "  " }), tried: [getCall, readCall(SLUG)] }), ARGS);
+// 6.2.0 review L1: an empty page is the agent's stop (its body also holds the title and status, so
+// the script cannot see an empty page); the script relays the code
+test("6.2.0 body page: intake's empty-page stop keeps the reason code", async () => {
+  const s = happy();
+  s.intake = { status: "needs_human", reason: CODE + ": " + SLUG + ": the page is empty", tried: [getCall, readCall(SLUG)] };
+  const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.ok(out.result.reason.includes(CODE), out.result.reason);
+  assert.ok(out.result.reason.startsWith("intake: " + CODE + ": "), out.result.reason);
   assert.ok(!out.labels.includes("role:scope-and-plan"));
+});
+
+// 6.2.0 review L2: the read counts only in the exact format the prompt names, at the start of the call
+test("6.2.0 body page: a page read recorded in another format, negated, or for another project does not count", async () => {
+  for (const c of [
+    "wiki_read(project=o/r, slug=" + SLUG + ")",
+    "mcp__yadgar__wiki_read({\"slug\": \"" + SLUG + "\"})",
+    "wiki_read(slug: \"" + SLUG + "\")",
+    "did NOT wiki_read(slug=" + SLUG + ", project=o/r)",
+    "wiki_read(slug=" + SLUG + ", project=other/p)",
+    "wiki_read(slug=" + SLUG + ", project=o/r) failed",
+  ]) {
+    const out = await runOne(happy({ brief: pageBrief(), tried: [getCall, { ledger: "yadgar", project: "o/r", call: c, error: null }] }), ARGS);
+    assert.equal(out.result.status, "needs_human", c);
+    assert.ok(out.result.reason.includes(CODE), out.result.reason);
+    assert.ok(!out.labels.includes("role:scope-and-plan"), c);
+  }
+  // the read's own project must be args.project, and named
+  for (const t of [
+    { ledger: "yadgar", project: "other/p", call: "wiki_read(slug=" + SLUG + ", project=other/p)", error: null },
+    { ledger: "yadgar", project: null, call: "wiki_read(slug=" + SLUG + ", project=null)", error: null },
+  ]) {
+    const out = await runOne(happy({ brief: pageBrief(), tried: [getCall, t] }), ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(t));
+    assert.ok(out.result.reason.includes(CODE), out.result.reason);
+  }
+});
+
+test("6.2.0 body page: with no args.project the read must still name a project", async () => {
+  const noProj = { ...ARGS };
+  delete noProj.project;
+  const ok = await runOne(happy({ brief: pageBrief(), tried: [getCall, readCall(SLUG)] }), noProj);
+  assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+  for (const project of [null, ""]) {
+    const t = { ledger: "yadgar", project, call: "wiki_read(slug=" + SLUG + ", project=" + project + ")", error: null };
+    const out = await runOne(happy({ brief: pageBrief(), tried: [getCall, t] }), noProj);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(t));
+    assert.ok(out.result.reason.includes(CODE), out.result.reason);
+  }
+});
+
+// 6.2.0 review M1: the script cannot see a body_slug the agent dropped; the prompt rule is the guard,
+// and the prompt pins (v5010) catch a regression in it
+test("6.2.0 body page: an intake that omits body_slug is not caught by the script (the prompt rule is the guard)", async () => {
+  const src = { kind: "ledger", ref: "42", url: null, body: "Add Thing! (open)" };
+  const out = await runOne(happy({ brief: { ...BRIEF, sources: [src] }, tried: [getCall] }), ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.ok(call(out, "intake").prompt.includes("A kind ledger source MUST carry body_slug exactly as task_get returned it"));
 });
 
 test("6.2.0 body page: a body_slug that is not a slug stops, even with a matching read", async () => {

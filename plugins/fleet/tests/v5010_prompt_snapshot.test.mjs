@@ -92,10 +92,11 @@ const SCENARIOS = {
 // 6.1.0 review B2 (2051): fleet_scan base in the schema (the only change: checked with base removed)
 // 6.1.0 delta review: treeCmd, the re-plan reset branch/update-ref and the code-judge role's scratch read-tree run git with hooks off (the only changes: checked with the three reverted)
 // 6.2.0 (2058): the intake prompt's body_slug page read and body_slug in the source schema (the only changes: checked with both reverted)
+// 6.2.0 review (M1, L2): body_slug in the intake return shape, the MUST-carry rule and the exact wiki_read call format (the only changes: checked with both prompt edits reverted)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 86, sha256: "8dcbc0307b073984888d215a9e69079d8520cb84a3e695ef41f43701217b2f7c" },
-  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "f40e78b3a76bcd6bb8bb7d3c63edbdbf603d4957c4bfc1315c8c235f485b9562" },
-  "short path (one test writer)": { calls: 85, sha256: "a50da715e2cc85a4ce2ec1915a498475bdf01403baf98f43538821c614af9480" },
+  "plan then build (confirm ask)": { calls: 86, sha256: "20c1ee91b73c255b0807bea2b8fec9d76bb0a287de0468301407f889a948ce10" },
+  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "ec2da6b9ff1e33f1d452a92881830f0b30c1e1a344a89b7dff911d76157afaab" },
+  "short path (one test writer)": { calls: 85, sha256: "cc1291ee5d4d45a58bac0f78dbc715ad5f8e809f8a09b2ebf799c7f947eb2eb4" },
   "probe": { calls: 2, sha256: "012d024fefbefe057a047d8b6822b07ea3152de9e7d322be0e6cf5d6273fc736" },
 };
 
