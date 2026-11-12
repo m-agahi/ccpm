@@ -61,31 +61,53 @@ def policy_py(xdg):
     return out
 
 
+def xdg_env():
+    # 6.2.1 review L1: a relative XDG_CONFIG_HOME resolves against the cwd, and the
+    # helper and the workflow run in different dirs: refuse it
+    x = os.environ.get("XDG_CONFIG_HOME")
+    if x and not os.path.isabs(x):
+        raise Refuse("XDG_CONFIG_HOME is relative (" + x[:100] + "); the helper and the workflow would resolve it differently. Set it to an absolute path or unset it")
+    return x
+
+
 def policy_path():
-    return policy_py(os.environ.get("XDG_CONFIG_HOME"))["file"]
+    return policy_py(xdg_env())["file"]
 
 
-def check(raw, fleet_dir):
-    """Run policy.py on these bytes in a staging dir; return the staged file path."""
-    stage = tempfile.mkdtemp(prefix=".policy-init-", dir=fleet_dir)
-    os.makedirs(os.path.join(stage, "fleet"))
-    staged = os.path.join(stage, "fleet", "policy.json")
-    fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+def write_new(path, raw):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         os.fchmod(fd, 0o600)
         os.write(fd, raw)
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def check(raw, fleet_dir):
+    """Run policy.py on these bytes in a staging dir; the dir is removed on every path."""
+    stage = tempfile.mkdtemp(prefix=".policy-init-", dir=fleet_dir)
     try:
+        os.makedirs(os.path.join(stage, "fleet"))
+        staged = os.path.join(stage, "fleet", "policy.json")
+        write_new(staged, raw)
         out = policy_py(stage)
-    except Refuse:
+        if out.get("error") is not None:
+            raise Refuse("policy.py refuses it: " + str(out["error"]).replace(staged, "<staged>")[:300])
+    finally:
         shutil.rmtree(stage, ignore_errors=True)
-        raise
-    if out.get("error") is not None:
-        shutil.rmtree(stage, ignore_errors=True)
-        raise Refuse("policy.py refuses it: " + str(out["error"]).replace(staged, "<staged>")[:300])
-    return stage, staged
+
+
+def temp_copy(raw, fleet_dir):
+    """A mode 0600 temp file in the target dir holding exactly the checked bytes."""
+    fd, tmp = tempfile.mkstemp(prefix=".policy-init-", suffix=".json", dir=fleet_dir)
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, raw)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return tmp
 
 
 def merge_never(raw):
@@ -128,8 +150,7 @@ def fleet_dir_of(path):
 def content_for(how, fleet_dir):
     raw = template_bytes()
     # the source itself must pass the parser (a duplicate key would vanish in a re-dump)
-    stage, _ = check(raw, fleet_dir)
-    shutil.rmtree(stage, ignore_errors=True)
+    check(raw, fleet_dir)
     return raw if how == "shown" else merge_never(raw)
 
 
@@ -158,11 +179,13 @@ def cmd_status():
     marker = path + MARKER_SUFFIX
     out = {"file": path, "exists": os.path.lexists(path), "content": None, "error": None, "marker_file": marker, "marker": os.path.lexists(marker), "template_file": TEMPLATE, "template": template_bytes().decode("utf-8")}
     if out["exists"]:
-        out["error"] = policy_py(os.environ.get("XDG_CONFIG_HOME"))["error"]
+        out["error"] = policy_py(xdg_env())["error"]
+        raw = read_regular(path)
         try:
-            out["content"] = read_regular(path).decode("utf-8")
-        except (Refuse, OSError, UnicodeDecodeError) as e:
-            out["error"] = out["error"] or str(e)
+            out["content"] = raw.decode("utf-8")
+        except UnicodeDecodeError as e:
+            # 6.2.1 review L1: a clear refusal, not a quiet null
+            raise Refuse(path + " is not UTF-8 text (byte " + str(e.start) + "); fix or re-create it with /fleet-policy")
     return out
 
 
@@ -172,14 +195,15 @@ def cmd_create(how):
         raise Refuse(path + " exists; /fleet-policy changes it")
     d = fleet_dir_of(path)
     raw = content_for(how, d)
-    stage, staged = check(raw, d)
+    check(raw, d)
+    tmp = temp_copy(raw, d)
     try:
         try:
-            os.link(staged, path)
+            os.link(tmp, path)
         except FileExistsError:
             raise Refuse(path + " exists; /fleet-policy changes it")
     finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        os.unlink(tmp)
     return {"written": path, "mode": how}
 
 
@@ -202,17 +226,18 @@ def cmd_change(how):
     old = read_regular(path)
     d = os.path.dirname(path)
     if how == "merge-never":
-        stage, _ = check(old, d)
-        shutil.rmtree(stage, ignore_errors=True)
+        check(old, d)
         raw = merge_never(old)
     else:
         raw = content_for(how, d)
-    stage, staged = check(raw, d)
+    check(raw, d)
+    tmp = temp_copy(raw, d)
     try:
         bak = write_backup(path, old)
-        os.replace(staged, path)
+        os.replace(tmp, path)
     finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
     return {"written": path, "backup": bak, "mode": how}
 
 

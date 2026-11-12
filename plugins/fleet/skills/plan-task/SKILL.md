@@ -85,7 +85,8 @@ or Jira. Say so when the user asks for one.
    gate. Run `python3 -I ${CLAUDE_PLUGIN_ROOT}/skills/fleet-policy/policy_init.py status`. It
    prints `file` (the path the workflow reads, by default `~/.config/fleet/policy.json`),
    `exists`, `marker` and `marker_file` (the don't-ask marker `policy.json.dont-ask` next to the
-   policy path), and `template` (the shipped `policy.example.json`). `exists` true or `marker`
+   policy path), and `template` (the shipped `policy.example.json`). A non-zero exit carries
+   `error`: show it, ask nothing, and go on. `exists` true or `marker`
    true: say nothing about it and go on. Otherwise show the `template` text, say that no file means
    the strict default (PR ready, CI watch, stats on; merge never) and that, as shown, the file
    turns on auto-merge for the personal owners except `yadgarhq/actions` and `yadgarhq/argocd`

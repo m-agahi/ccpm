@@ -14,7 +14,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync, existsSync, readdirSync, symlinkSync, copyFileSync, lstatSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync, chmodSync, existsSync, readdirSync, symlinkSync, copyFileSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { HERE, spawnSync } from "./harness.mjs";
@@ -33,9 +33,10 @@ function home() {
   const xdg = join(h, "cfg");
   return { h, xdg, file: join(xdg, "fleet", "policy.json"), marker: join(xdg, "fleet", "policy.json.dont-ask") };
 }
-function run(env, args, helper = HELPER) {
+function run(env, args, helper = HELPER, cwd = undefined) {
   const r = spawnSync(PY, ["-I", helper, ...args], {
     encoding: "utf8",
+    cwd,
     env: { PATH: "/usr/bin:/bin:" + dirname(PY), HOME: env.h, XDG_CONFIG_HOME: env.xdg },
   });
   let out = null;
@@ -513,4 +514,108 @@ test("6.2.1 P6: no hook in the plugin runs the helper", () => {
   const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((x) => (x.isDirectory() ? walk(join(d, x.name)) : [join(d, x.name)]));
   const hooks = walk(PLUGIN).filter((f) => /hooks\.json$/.test(f) || f.includes("/hooks/"));
   for (const f of hooks) assert.ok(!readFileSync(f, "utf8").includes("policy_init"), f);
+});
+
+// ---------------------------------------------------------------- 6.2.1 review M1 / N1: question order
+
+function section(text, from, to) {
+  const a = text.indexOf(from);
+  assert.ok(a >= 0, "no " + from);
+  const b = to ? text.indexOf(to, a + from.length) : text.length;
+  assert.ok(b > a, "no " + to + " after " + from);
+  return text.slice(a, b);
+}
+const flatOf = (s) => s.replace(/\s+/g, " ");
+
+test("6.2.1 review M1: build-task asks the policy question in step 7, before and apart from the Build question", () => {
+  const { text } = frontmatter(BUILD_SKILL);
+  const step7 = flatOf(section(text, "7. **Confirm.**", "8. **Build.**"));
+  const ref = step7.indexOf("Policy file on first use");
+  const build = step7.indexOf("Build this plan and run the commands listed above?");
+  assert.ok(ref >= 0, "step 7 does not reference the policy section");
+  assert.ok(build >= 0);
+  assert.ok(ref < build, "the policy question must come before the Build question");
+  assert.ok(step7.includes("a separate AskUserQuestion"), "the Build question is not a separate AskUserQuestion");
+  // nothing before step 5 runs the policy check
+  const before5 = flatOf(section(text, "## Steps", "5. **Workflow tool.**"));
+  assert.ok(!before5.includes("Policy file on first use") && !before5.includes("policy_init"), "policy check before step 5");
+  // the launch-turn hazard lines are gone
+  const pol = flatOf(section(text, "## Policy file on first use", "## Re-running"));
+  assert.ok(!pol.includes("same turn"), "a continue-in-the-same-turn line is left");
+  assert.ok(!pol.includes("relaunch"), "the policy section still admits a relaunch");
+  // runs that build in the same run, and probe, ask nothing
+  assert.ok(pol.includes("A run that skips steps 7 and 8 asks nothing and creates nothing"), "auto/default same-run builds");
+  assert.ok(pol.includes("Probe mode skips it"), "probe");
+});
+
+test("6.2.1 review M1: plan-task keeps its policy check in step 2 (it launches no Workflow)", () => {
+  const { text } = frontmatter(PLAN_SKILL);
+  const step2 = section(text, "2. **Repo and date.**", "3. **Intake (read only).**");
+  assert.ok(step2.includes("policy_init.py status"));
+});
+
+// ---------------------------------------------------------------- 6.2.1 review L1
+
+test("6.2.1 review L1: an existing fleet dir keeps its mode; a new one is 0700", () => {
+  const e = home();
+  try {
+    mkdirSync(join(e.xdg, "fleet"), { recursive: true });
+    chmodSync(join(e.xdg, "fleet"), 0o755);
+    assert.equal(run(e, ["create", "shown"]).code, 0);
+    assert.equal(mode(join(e.xdg, "fleet")), 0o755);
+    assert.equal(mode(e.file), 0o600);
+  } finally {
+    rmSync(e.h, { recursive: true, force: true });
+  }
+});
+
+test("6.2.1 review L1: status on a file that is not UTF-8 exits non-zero with a clear message", () => {
+  const e = home();
+  try {
+    mkdirSync(join(e.xdg, "fleet"), { recursive: true });
+    writeFileSync(e.file, Buffer.from([0x7b, 0xff, 0xfe, 0x7d]));
+    const r = run(e, ["status"]);
+    assert.notEqual(r.code, 0);
+    assert.match(r.out.error, /not UTF-8/);
+    assert.match(r.out.error, /policy\.json/);
+  } finally {
+    rmSync(e.h, { recursive: true, force: true });
+  }
+});
+
+test("6.2.1 review L1: a relative XDG_CONFIG_HOME is refused by every command and writes nothing", () => {
+  const e = home();
+  try {
+    const rel = { h: e.h, xdg: "cfg" };
+    for (const a of [["status"], ["create", "shown"], ["marker"], ["set-merge-never"], ["recreate", "never"]]) {
+      const r = run(rel, a, HELPER, e.h);
+      assert.notEqual(r.code, 0, a.join(" "));
+      assert.match(r.out.error, /XDG_CONFIG_HOME .*relative/, a.join(" "));
+    }
+    assert.ok(!existsSync(join(e.h, "cfg")));
+  } finally {
+    rmSync(e.h, { recursive: true, force: true });
+  }
+});
+
+test("6.2.1 review L1: no staging dir is left after a refusal or a success", () => {
+  const e = home();
+  try {
+    const fp = fakePlugin('{"version": 2, "profiles": []}\n');
+    try {
+      assert.notEqual(run(e, ["create", "never"], fp.helper).code, 0);
+    } finally {
+      rmSync(fp.root, { recursive: true, force: true });
+    }
+    assert.deepEqual(readdirSync(join(e.xdg, "fleet")), []);
+    assert.equal(run(e, ["create", "never"]).code, 0);
+    assert.equal(run(e, ["set-merge-never"]).code, 0);
+    assert.equal(run(e, ["recreate", "shown"]).code, 0);
+    assert.deepEqual(
+      readdirSync(join(e.xdg, "fleet")).filter((f) => !f.startsWith("policy.json.bak-")),
+      ["policy.json"],
+    );
+  } finally {
+    rmSync(e.h, { recursive: true, force: true });
+  }
 });

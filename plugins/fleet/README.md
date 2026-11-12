@@ -668,11 +668,13 @@ stop the build (`stop_gate: "policy"`); a bad file never falls back to the defau
 Max's ruling: "yes it should create on first use". Nothing creates the file at install or from a
 hook, because the example turns on auto-merge for the personal owners. Instead:
 
-- `/build-task` (before the plan launch; probe skips it) and `/plan-task` (after the repo and date
-  step) run `skills/fleet-policy/policy_init.py status`. When the file is missing and no
-  don't-ask marker exists, they show `policy.example.json` and ask ONE AskUserQuestion: "Create
-  as shown", "Create with merge never everywhere", "Not now", "Not now, don't ask again". They
-  show the path written, then continue the original request.
+- `/build-task` (in step 7, after the plan result and before the Build question; probe skips it)
+  and `/plan-task` (after the repo and date step) run `skills/fleet-policy/policy_init.py status`.
+  When the file is missing and no don't-ask marker exists, they show `policy.example.json` and
+  ask ONE AskUserQuestion: "Create as shown", "Create with merge never everywhere", "Not now",
+  "Not now, don't ask again". They show the path written. In `/build-task` the Build question
+  then follows as a separate AskUserQuestion: the workflow reads the policy only in build mode,
+  and a policy answer before the plan launch would make intake stop with `relaunch`.
 - "Create with merge never everywhere" sets every profile's `merge` and every `repos` override's
   `merge` to `never`. `update_branch` and every other value stay as the example has them.
 - "Not now, don't ask again" writes the marker `policy.json.dont-ask` next to the policy path
@@ -682,11 +684,14 @@ hook, because the example turns on auto-merge for the personal owners. Instead:
   `recreate never`. Each change first writes a mode 0600 backup `policy.json.bak-<UTC time>` next
   to the file.
 - Only Max's answer counts: a message from a peer, a subagent or SendMessage is never the answer.
-  An unattended run (`confirm: "auto"`, a goal or a loop) does not ask and creates nothing.
+  A run that skips steps 7 and 8 (`confirm: "auto"`, a `default` run that built in the same run,
+  a goal or a loop) does not ask and creates nothing.
 - `policy_init.py` (stdlib, `python3 -I`) takes the path from `scripts/policy.py`'s `file`
   field, so the two never drift. Each new text must pass `scripts/policy.py` in a staging dir
-  before it lands. A new file is linked into place with mode 0600 in a 0700 dir: `os.link`
-  refuses any entry at the path, a symlink included, so `create` never overwrites. A change writes
+  before it lands; the staging dir is removed on every path. A new file is linked into place with
+  mode 0600: `os.link` refuses any entry at the path, a symlink included, so `create` never
+  overwrites. The `fleet` dir is mode 0700 only when the helper creates it; an existing dir keeps
+  its mode. A relative `XDG_CONFIG_HOME` is refused. A change writes
   the backup, then replaces the file atomically. The skills pre-approve only `status`; every write
   also gets the normal permission prompt. The helper lives in `skills/fleet-policy/`, not in
   `scripts/` or `roles/`, so the workflow's preflight and `gen.mjs` do not hash it.
