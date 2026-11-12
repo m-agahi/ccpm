@@ -423,6 +423,14 @@ const READS = {
     "t.error string": "intake:tried[].error",
   },
   yaadgaarProjectProblem: { "sources array": "intake:brief.sources", "s.project string": "intake:brief.sources[].project" },
+  // 6.2.0 (2058): a yadgar task body read from its body_slug page
+  bodyPageProblem: {
+    "it.tried array": "intake:tried",
+    "t object": "intake:tried[]",
+    "t.call string": "intake:tried[].call",
+    "s.body_slug string": "intake:brief.sources[].body_slug",
+    "t.project string": "intake:tried[].project",
+  },
   yaadgaarIdProblem: {
     "t.call string": "intake:tried[].call",
     "tried array": "intake:tried",
@@ -632,8 +640,8 @@ const READS = {
     "pr object": "infra:park",
     "pr.clean boolean": "prog:parked:clean",
     "pr.dirty array": "prog:parked:dirty",
-    // 6.0.0 (2040): intake's relaunch reason code
-    "it.reason string": "intake:reason",
+    // 6.0.0 (2040): intake's relaunch reason code; 6.2.0 (2058): the body-page reason code
+    "it.reason string": ["intake:reason", 2],
   },
   tinyRefProblem: {
     "t object": PARSED_ARGS,
@@ -1042,7 +1050,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.1\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.1\.0\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.2\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.2\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

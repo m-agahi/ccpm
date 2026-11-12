@@ -65,6 +65,59 @@ key, a GitHub or Codeberg issue or PR URL, a plan path, or free text.
   Codeberg write-back: `$CODEBERG_TOKEN`. A missing tool makes intake stop, or makes that comment
   fail (reported in the result, the run stays ok).
 
+## plan-task (6.2.0, ledger 2058, ADR-1219)
+
+`/plan-task <input>` turns an idea, bug, ticket or prompt into a **Fleet brief** before the fleet
+plans it. A vague input otherwise costs one planner run and up to three plan-audit runs before
+the vagueness shows. The skill runs in the main session, because a Workflow agent cannot ask the
+user anything. It never runs the workflow, a role or a build.
+
+```
+/plan-task <ledger id | Jira key | issue or PR URL | plan path | description>
+/plan-task --fast <input>        # no brainstorm
+```
+
+1. **Intake and recall** (read only): the same input classes as `/build-task` intake. Recall is
+   used only when the yadgar tools exist; observed code wins.
+2. **Triage**: buildable now; needs brainstorm; too big (propose a split); needs a decision
+   (an ADR question under Open decisions, never `adr_add`); IaC or hook surface (Out of plan, a
+   `MIGRATION_NOTES.md` hand-off, no `/build-task`); duplicate (show the candidate); already
+   fixed (left to plan mode).
+3. **Brainstorm**: one AskUserQuestion at a time, at most 8, from a fixed question bank. Every
+   question has a "skip — just plan" option. It stops when the outcome, the place and the
+   non-goals are known and no decision is open.
+4. **Draft** from `skills/plan-task/brief-template.md`: the marker `<!-- fleet-brief:v1 -->`,
+   `Repo:`, Outcome, Behaviours (each with a literal Given/When/Then), Rulings (Max's verbatim
+   answers only), "Draft by plan-task — not a ruling", Non-goals, Open decisions, Out of plan.
+   The brief holds no command, `test_cmd`, `check_cmd`, `change_kind` or env setting: the planner
+   derives those from the repo.
+5. **Check**: `python3 -I skills/plan-task/brief_check.py [--repo DIR] [--allow-open] FILE|-`
+   prints `{ok, errors, warnings, repo}` and exits 0 (pass), 1 (errors) or 2 (usage). It checks
+   the marker (exactly one), the headings and their order, exactly one `owner/repo` (with
+   `--repo`: equal to the checkout's origin), a Given/When/Then on each behaviour, no command
+   text (the words above, an env key, a code fence, a `$ ` prompt line), no IaC or hook-surface
+   path outside Out of plan, no open decision (unless `--allow-open`, only when Max chose "plan
+   anyway"), no invisible character, and at most 64 KiB. A missing test runner file is a warning.
+   The IaC and hook rules are copies of `isIacPath` and `HOOK_PATH_RE` in the workflow; a test
+   compares both on 41 paths. A pass means the shape is right; plan mode decides buildability.
+6. **Write-back**, only after Max approves the exact text: yaadgaar `edit_task` with a tail patch
+   and `expect_version` for `yadgarhq/*` projects; else the yadgar task's `body_slug` page
+   (`wiki_append_section`, or a new page plus `task_write` with the title unchanged and no
+   status). Work trackers (`quinyx/*`, `concrete-media/**`, Jira, unknown owners) get the text to
+   paste; in this release GitHub and Codeberg issues are shown only too. The skill never changes
+   a task's status and writes nothing into a repo.
+7. **Hand-off**: Max types `/build-task <id>`.
+
+`/build-task` reads the source before the plan run. When it carries `<!-- fleet-brief:v1 -->`,
+or when the source cannot be read, it passes `confirm: "ask"` whatever mode was named: a brief
+holds agent-drafted text, so it is never evidence for the `default` or `auto` gates (ADR-1219).
+
+The plan-task files live under `skills/plan-task/`, never in `scripts/` or `roles/`: preflight
+refuses any file there that is not in its tables.
+
+Not in 6.2.0: `--refine`, `--triage`, a "prove now" plan run from the skill, a brief review agent,
+and posting to GitHub, Codeberg or Jira.
+
 ## Flow
 
 `args.mode` is `"plan"` or `"build"`. A missing or other value returns `needs_human` before any
@@ -273,9 +326,20 @@ line "build caller check skipped".
 Intake classifies the input and fetches its text: a ledger task through yadgar `task_get` (when present), a Jira
 ticket through the Atlassian MCP, an issue or PR through the checked `gh_cmd` (5.0.8) or the Codeberg API, a plan
 file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body, id,
-project}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,
+project, body_slug}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,
 `plan` and `text`. `id` and `project` are null except on a `yaadgaar` source. `url` and
 `plan_path` may be null. Free text, a plan and a ledger task work in the caller's repo.
+
+A yadgar ledger task keeps its body on the wiki page its `body_slug` names; `task_get` returns the
+row only (6.2.0, ledger 2058). Intake then reads that page with `wiki_read(slug, project)`, records
+the call in `tried` as exactly `wiki_read(slug=<body_slug>, project=<project>)`, uses the page as
+the body and sets the source's `body_slug` (a ledger source must carry it as `task_get` returned
+it). A missing, unreadable or empty page is intake's own stop with the reason code
+`task body page unreadable`; the script relays it. The script gate checks what intake reports: a
+`body_slug` source with no successful read in that exact format stops with the same code. The
+script cannot see a `body_slug` that intake dropped; the prompt rule and its pins guard that. A task
+whose `task_get` answer carries body text needs no page read (`body_slug` null). `body_slug` is intake data only; the sealed brief does not
+carry it.
 
 ### Ledger adapters (5.0.0, R2)
 
