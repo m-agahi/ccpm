@@ -432,6 +432,8 @@ export async function runOne(script, args0) {
     // unscripted build caller checks find no modified existing definition
     if (!(label in script) && /^infra:changed-defs:/.test(label)) return defsOut([]);
     // unscripted fleet-internal scans find no .fleet/ path in the PR diff
+    // 6.1.0 D6 (2051): given a base tip, the program prints it (and its digest covers it)
+    if (!(label in script) && /^infra:fleet-scan:/.test(label) && inputsOf(prompt).base) return { status: "ok", reason: "scanned", diff: [], commits: [], base: inputsOf(prompt).base };
     if (!(label in script) && /^infra:fleet-scan:/.test(label)) return withRelayDigest(label, { status: "ok", reason: "scanned", diff: [], commits: [] });
     // run-state writes are mechanical too: the ref lands on the expected head
     if (!(label in script) && /^infra:state:/.test(label)) {
@@ -989,7 +991,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.0.1/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.1.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1106,7 +1108,7 @@ export function redigest(label, r, prompt) {
   for (const [slot, , keys0] of hit ? hit[1] : []) {
     const o = slot ? r[slot] : r;
     if (!o || typeof o !== "object" || !keys0) continue;
-    const keys = keys0 === "hasher" ? K(inputsOf(prompt).base_tree ? "hasher:base" : "hasher") : keys0;
+    const keys = keys0 === "hasher" ? K(inputsOf(prompt).base_tree ? "hasher:base" : "hasher") : fleetScanKeys(label, keys0, prompt);
     o.digest = sha256(canon(Object.assign(pick(o, keys), { program: o.program })));
   }
   return r;
@@ -1184,6 +1186,10 @@ export const PROGRAM_LABELS = [
   [/^infra:build-reset:/, [[null, "build_dir", K("build_dir:reset")]]],
   [/^infra:build-clean$/, [[null, "build_dir", K("build_dir:clean")]]],
 ];
+// 6.1.0 D6: fleet_scan.py prints base (in its digest) only when it was given one
+function fleetScanKeys(label, keys0, prompt) {
+  return /^infra:fleet-scan:/.test(label) && keys0 && inputsOf(prompt).base ? keys0.concat(["base"]) : keys0;
+}
 function pick(o, keys) {
   const x = {};
   for (const k of keys) x[k] = o[k] === undefined ? null : o[k];
@@ -1223,7 +1229,7 @@ export function fillPrograms(label, r, prompt) {
     const o = slot ? r[slot] : r;
     if (!o || typeof o !== "object" || "program" in o) continue;
     // a 3.x stub digest covers the keys bar the hasher's scripts
-    const keys = keys0 === "hasher" ? K(inputsOf(prompt).base_tree ? "hasher:base" : "hasher").filter((k) => k !== "scripts") : keys0;
+    const keys = keys0 === "hasher" ? K(inputsOf(prompt).base_tree ? "hasher:base" : "hasher").filter((k) => k !== "scripts") : fleetScanKeys(label, keys0, prompt);
     const was = keys && typeof o.digest === "string" ? o.digest : null;
     const valid3 = was !== null && was === sha256(canon(pick(o, keys)));
     o.program = programOf(name);

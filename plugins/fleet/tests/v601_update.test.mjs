@@ -228,15 +228,17 @@ test("6.0.1 D4: verify_since.py lists the parents of each commit since the plan 
   assert.equal(by[f1].subject, "feat: pr");
 });
 
+// 6.1.0 (2049): a clean base change now routes to one coder round (v610_update_coder); here R1 refuses it
 test("6.0.1 (review S2/S3): review changes on the update-branch head stop with the findings in the run result only; no pr-opener call before the halt", async () => {
   const t = overlap({
+    "hasher:update:u1": { status: "ok", fingerprint: { head: D, tree: "KU" }, hashes: HASHES_U },
     "role:pr-review:v2": { status: "ok", reason: "broken", verdict: "changes_requested", findings: [{ id: "F1", severity: "blocking", category: "correctness", file: "src/x.py", line: 1, summary: "the merge broke x", evidence: "e" }, { id: "N1", severity: "nit", category: "style", file: "src/x.py", line: 2, summary: "nit", evidence: "e" }], touches_gate: false, checked: [] },
   });
   const out = await run(t, ARGS);
   const L = out.build.labels;
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "review");
-  assert.equal(out.result.reason, "re-review after update-branch requested changes: F1 (1 blocking, 1 nit); findings are in the run result; re-plan on the new base or fix by hand");
+  assert.equal(out.result.reason, "re-review after update-branch requested changes: F1 (1 blocking, 1 nit); findings are in the run result; no coder round: the base change hits frozen hashed keys (the sections map); re-plan on the new base or fix by hand");
   assert.deepEqual(out.result.review.blocking.map((f) => f.id), ["F1"]);
   assert.deepEqual(out.result.review.nits.map((f) => f.id), ["N1"]);
   // no pr-opener call between the re-review and the halt
