@@ -294,7 +294,22 @@ for name in ('GNUmakefile', 'makefile', 'Makefile'):
     if r.returncode == 0:
         mk = r.stdout[:FILE_CAP].decode('utf-8', 'replace')
         break
+pkg = None
 for tgt in targets:
+    # 6.1.0 review (R4): npm:<name> = the repo paths scripts.<name> of package.json at <rev> names;
+    # no entry when package.json or that string entry cannot be read (the workflow refuses then)
+    if tgt.startswith('npm:'):
+        if pkg is None:
+            r = subprocess.run(['git', '-C', wt, 'show', rev + ':package.json'], capture_output=True)
+            try:
+                pkg = json.loads(r.stdout.decode('utf-8', 'replace')) if r.returncode == 0 and len(r.stdout) <= FILE_CAP else False
+            except ValueError:
+                pkg = False
+        sc = pkg.get('scripts') if isinstance(pkg, dict) else None
+        v = sc.get(tgt[4:]) if isinstance(sc, dict) else None
+        if isinstance(v, str):
+            make_paths[tgt] = sorted(set(q for q in (norm(x) for x in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', v)) if q and q in tracked))
+        continue
     paths = set()
     if mk is not None:
         lines = mk.splitlines()

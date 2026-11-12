@@ -411,8 +411,9 @@ test("6.1.0 N1 (2052): a resumed update record whose head is not 40 hex, or no u
 });
 
 // ---------------------------------------------------------------- review of PR #61
-import { mkdirSync, existsSync, chmodSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, chmodSync, rmSync, utimesSync } from "node:fs";
 import { SOURCE, compile, sha256, canon } from "./harness.mjs";
+import { readFileSync } from "node:fs";
 
 test("6.1.0 review B1: the update round's coder and code judge get plan_commit = the base tip", async () => {
   const out = await run(upd(), ARGS);
@@ -488,8 +489,18 @@ test("6.1.0 review B3: pr_state.py fetch runs no repo hook; a base-added hook un
     for (const m of HOOKS) assert.ok(!existsSync(join(h.root, "marker-" + m)), m + " ran in pr_state.py fetch");
     // the programs that read or index the worktree after the fetch run no hook either
     mkdirSync(join(h.root, "scratch"), { recursive: true });
-    for (const [prog, args] of [["read_state.py", [h.wt, "refs/fleet/x/state"]], ["hasher.py", [h.wt, "[]", "", join(h.root, "scratch")]]]) {
+    // review 2: parked.py (git status) and format_files.py (temp-index read-tree and add -A) too
+    for (const [prog, args] of [
+      ["read_state.py", [h.wt, "refs/fleet/x/state"]],
+      ["hasher.py", [h.wt, "[]", "", join(h.root, "scratch")]],
+      ["parked.py", ["park", h.wt, "docs/plans/x.md", join(h.root, "scratch"), "n1-0000001"]],
+      ["format_files.py", [h.wt, JSON.stringify({ paths: ["a.txt"] }), "[]", join(h.root, "scratch"), "60"]],
+    ]) {
+      // a stale index stat makes git rewrite the index (the post-index-change channel)
+      utimesSync(join(h.wt, "a.txt"), new Date(), new Date(Date.now() + 5000));
+      writeFileSync(join(h.wt, "untracked.txt"), prog + "\n");
       spawnSync("python3", ["-I", join(SCRIPTS_SRC, prog)].concat(args), { encoding: "utf8", env: h.env });
+      rmSync(join(h.wt, "untracked.txt"), { force: true });
       for (const m of HOOKS) assert.ok(!existsSync(join(h.root, "marker-" + m)), prog + ": " + m + " ran");
     }
   } finally {
@@ -585,4 +596,100 @@ test("6.1.0 review N9: review_paths.py lists both sides of a rename", () => {
   const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "review_paths.py"), dir, a, b], { encoding: "utf8", env });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout).changed_paths.sort(), ["new.py", "old.py"]);
+});
+
+// ---------------------------------------------------------------- delta review of 8c74456
+test("6.1.0 review 2 (S2 wiring): test_cmd pytest <paths> and a base edit of pyproject.toml refuse with the R4 reason", async () => {
+  const t = upd({}, ["src/x.py", "pyproject.toml"]);
+  assert.equal(t["role:scope-and-plan"].test_cmd, undefined, "the harness default test_cmd is pytest <paths>");
+  await refused(t, /the base change touches files the test or check commands run \(pyproject\.toml\)/);
+});
+
+// an npm test_cmd; the hook-surface read at d lists what scripts.<name> names
+function npmPlan(t, cmd, npmPaths) {
+  t["role:scope-and-plan"].test_cmd = { command: cmd, paths_placeholder: null, env: {}, tools: [] };
+  t["infra:hook-surface:u1:d"] = (p) => {
+    const i = inputsOf(p);
+    const mp = {};
+    for (const k of i.targets) if (npmPaths !== undefined) mp[k] = npmPaths;
+    return { status: "ok", reason: "read", surface: [], make_paths: mp, error: null, args: [i.worktree, i.rev, JSON.stringify(i.targets)] };
+  };
+  return t;
+}
+test("6.1.0 review 3: R4 reads scripts.<name> of package.json at d for npm; a target the base edited refuses, a missing entry refuses", async () => {
+  const r = await refused(npmPlan(upd({}, ["src/x.py", "scripts/run-tests.mjs"]), "npm run test:unit", ["scripts/run-tests.mjs"]), /test or check commands run \(scripts\/run-tests\.mjs\)/);
+  const i = inputsOf(call(r, "infra:hook-surface:u1:d").prompt);
+  assert.deepEqual([i.rev, i.targets], [D, ["npm:test:unit"]]);
+  // no entry for the script (package.json or the entry unreadable): every moved file refuses
+  await refused(npmPlan(upd({}, ["src/x.py"]), "npm test", undefined), /test or check commands run \(src\/x\.py\)/);
+  // a moved file the script does not name passes
+  const ok = await run(npmPlan(upd({}, ["src/x.py"]), "npm test", ["scripts/run-tests.mjs"]), ARGS);
+  assert.equal(ok.result.status, "ok", ok.result.reason);
+  // pytest needs no read at d
+  const py = await run(upd(), ARGS);
+  assert.ok(!L_(py).includes("infra:hook-surface:u1:d"));
+});
+
+test("6.1.0 review 3: hook_surface.py lists the paths of an npm script at rev; no entry for a missing script or package.json", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fleet-610npm-"));
+  const env = Object.assign({}, process.env, { GIT_CONFIG_GLOBAL: join(dir, "gc"), GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
+  const g = (...a) => {
+    const r = spawnSync("git", ["-C", dir].concat(a), { encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  g("init", "-q", "-b", "main");
+  mkdirSync(join(dir, "scripts"));
+  writeFileSync(join(dir, "scripts", "run-tests.mjs"), "x\n");
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { "test:unit": "node scripts/run-tests.mjs --ci", lint: "x" } }));
+  g("add", "-A");
+  g("commit", "-q", "-m", "a");
+  const hs = (targets) => {
+    const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "hook_surface.py"), dir, "HEAD", JSON.stringify(targets)], { encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  assert.deepEqual(hs(["npm:test:unit"]).make_paths, { "npm:test:unit": ["scripts/run-tests.mjs"] });
+  assert.deepEqual(hs(["npm:test"]).make_paths, {});
+  g("rm", "-q", "package.json");
+  g("commit", "-q", "-m", "b");
+  assert.deepEqual(hs(["npm:test:unit"]).make_paths, {});
+});
+
+test("6.1.0 review 4: treeCmd runs no hook; a post-index-change hook under a custom core.hooksPath writes no marker", async () => {
+  const src = SOURCE.replace(/^export const meta/m, "const meta").replace("\nlet input = args;\n", "\nreturn { treeCmd };\nlet input = args;\n");
+  const { treeCmd } = await compile(src)(null, null, null, () => {}, () => {}, {}, {}, {}, Date, Math);
+  const dir = mkdtempSync(join(tmpdir(), "fleet-610tc-"));
+  const env = Object.assign({}, process.env, { GIT_CONFIG_GLOBAL: join(dir, "gc"), GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
+  const wt = join(dir, "wt");
+  mkdirSync(join(wt, "tools", "git-hooks"), { recursive: true });
+  const marker = join(dir, "marker");
+  writeFileSync(join(wt, "tools", "git-hooks", "post-index-change"), "#!/bin/sh\necho ran > " + JSON.stringify(marker) + "\n");
+  chmodSync(join(wt, "tools", "git-hooks", "post-index-change"), 0o755);
+  writeFileSync(join(wt, "a.txt"), "a\n");
+  for (const a of [["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", "a"], ["config", "core.hooksPath", "tools/git-hooks"]]) assert.equal(spawnSync("git", ["-C", wt].concat(a), { env }).status, 0);
+  rmSync(marker, { force: true });
+  writeFileSync(join(wt, "b.txt"), "b\n");
+  const r = spawnSync("sh", ["-c", treeCmd(wt)], { encoding: "utf8", env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout.trim(), /^[0-9a-f]{40}$/);
+  assert.ok(!existsSync(marker), "post-index-change ran in treeCmd");
+  // control: the same commands with hooks on do fire it (the hook channel is real)
+  const on = spawnSync("sh", ["-c", treeCmd(wt).split(" -c core.hooksPath=/dev/null").join("")], { encoding: "utf8", env });
+  assert.equal(on.status, 0, on.stderr);
+  assert.ok(existsSync(marker), "control: the hook fires without the override");
+});
+
+test("6.1.0 review 4: the re-plan reset prompt and the code judge's scratch read-tree run git with hooks off", async () => {
+  const jr = readFileSync(join(SCRIPTS_SRC, "..", "roles", "fleet-code-judge.md"), "utf8");
+  assert.match(jr, /git -C <scratch>\/<name> -c core\.hooksPath=\/dev\/null read-tree -u --reset <code_tree>/);
+  const at = SOURCE.indexOf("function replanResetPrompt(");
+  const body = SOURCE.slice(at, SOURCE.indexOf("\n}\n", at));
+  assert.match(body, /git -C <main_worktree> -c core\.hooksPath=\/dev\/null branch <superseded_branch> <expected_head>/);
+  assert.match(body, /git -C <main_worktree> -c core\.hooksPath=\/dev\/null update-ref <superseded_tree_ref> <expected_tree>/);
+});
+
+test("6.1.0 review 5: pr_state.py fetch runs git with core.fsmonitor=false", () => {
+  const src = readFileSync(join(SCRIPTS_SRC, "pr_state.py"), "utf8");
+  assert.match(src, /g = lambda \*a: run\('-c', 'core\.fsmonitor=false', '-c', 'core\.hooksPath=\/dev\/null', '-C', wt, \*a, cmd='git'\)/);
 });

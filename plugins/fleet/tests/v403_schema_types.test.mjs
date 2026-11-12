@@ -480,6 +480,8 @@ const READS = {
     "o.dont_care string": SP + "changed_symbols[].occurrences[].dont_care",
   },
   docOrLockFile: { "b string-re": [PARSED_TOKEN, 2] },
+  // 6.1.0 review: an npm:<name> entry of hookSurface's make_paths (the script maps a missing one to null)
+  testCmdRuns: { "np array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths" },
   // 6.1.0: the grep's checks moved from callerCheck to callerGrep
   callerGrep: {
     "occ object": "prog:callers:occurrences",

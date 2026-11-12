@@ -328,7 +328,7 @@ try:
     elif mode == 'fetch':
         wt, br, old, new, base = args[1:6]
         # 6.1.0 review B3: no repo hook runs (post-merge, reference-transaction, ...)
-        g = lambda *a: run('-c', 'core.hooksPath=/dev/null', '-C', wt, *a, cmd='git').strip()
+        g = lambda *a: run('-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', wt, *a, cmd='git').strip()
         if g('symbolic-ref', '--quiet', 'HEAD') != 'refs/heads/' + br or g('rev-parse', 'HEAD') != old:
             raise Fail('the worktree is not on ' + br + ' at ' + old)
         if g('status', '--porcelain', '--untracked-files=no'):

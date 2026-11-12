@@ -1301,6 +1301,13 @@ const TEST_INPUTS = {
   cargo: ["Cargo.toml", "Cargo.lock", "build.rs", "config", "config.toml"],
   go: ["go.mod", "go.sum", "go.work"],
 };
+// npm:<script> for an npm, pnpm or yarn test_cmd, else null
+function npmTargetOf(cmd) {
+  const t = String(cmd || "").trim().split(/[ \t]+/);
+  if ((t[0] === "npm" || t[0] === "pnpm" || t[0] === "yarn") && t[1] === "test") return "npm:test";
+  if (t[0] === "npm" && t[1] === "run" && t[2]) return "npm:" + t[2];
+  return null;
+}
 // does test_cmd run the file p; a shape this cannot read runs every file (fail closed)
 function testCmdRuns(cmd, p, makePaths) {
   const t = String(cmd || "").trim().split(/[ \t]+/).filter((x) => x && x !== PATHS_TOKEN);
@@ -1313,6 +1320,12 @@ function testCmdRuns(cmd, p, makePaths) {
   const pre = testRunnerPrefix(t);
   if (!pre) return true;
   if (pre.kind === "make") return cmdRuns("make " + t[1], p, makePaths);
+  // npm/pnpm/yarn: the manifest and lock files, and the repo paths scripts.<name> names at d (unread: every file)
+  if (pre.kind === "npm") {
+    const np = makePaths ? makePaths[npmTargetOf(t.join(" "))] : null;
+    if (!Array.isArray(np)) return true;
+    return TEST_INPUTS.npm.indexOf(b) >= 0 || np.indexOf(p) >= 0;
+  }
   if (pre.kind === "cargo" && (b === "config" || b === "config.toml")) return p.split("/").slice(-2, -1)[0] === ".cargo";
   return !TEST_INPUTS[pre.kind] || TEST_INPUTS[pre.kind].indexOf(b) >= 0;
 }
@@ -1529,7 +1542,7 @@ const PROGRAM_SHA256 = {
   "gh_identity": "44d62a8f8b6cd4f69c7b057d0180f584edf6b03f03988e35f048bdc1d7ce2d70",
   "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
   "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
-  "hook_surface": "bdace4ab8b4be872cc01d25cacaad4252169721a49780bfefac9847ec2cfb38c",
+  "hook_surface": "490bcc77a40e227d5060d3556d7f970dee826ec8847e6dbf31473d2116a4507f",
   "orch_scan": "57f15f2a83ad7ab68dd275b588339eea1237e9ed8cba18278c27788fc91905b5",
   "parked": "f17158a266ebcc64d502337eb7b6b3ff1ede5af227e231be77fbe5e3c1ab8014",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1541,7 +1554,7 @@ const PROGRAM_SHA256 = {
   "policy": "3c3c254d65a199674727568003c0066cbb15ee7af2e86888932e2637f950ec5b",
   "pr_body_block": "368ed0c33928769f6951a1e15b65362b438fc010b0ea26c6284fc668c5e6c733",
   "pr_convention": "4763189023084bbad77a9eb5c2704692da5932d2dfa335654c5e4178f027c2b7",
-  "pr_state": "c6459c601c16f44705f78d890c660d94cb9d7275fa81f04f45f5689384bc4fb6",
+  "pr_state": "a17beb445d0fac95dff82b49bfc75f6396293a6f193bfcfe2f6d4ddee51856b9",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
   "push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
   "push_probe": "c4381f9ce601e0729a0ab49edb33fe6c9e910e8738411e7ad4719f21ef639a5b",
@@ -1566,7 +1579,7 @@ function programTable() {
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-  "fleet-code-judge": "dac34f0bfce76029e2602ffa23c3210049e127187076978f82d357582f49b5a3",
+  "fleet-code-judge": "0b7a412cb27884de57c70bb48f90627c8595057ef29ce1a8e0f147df49f979fe",
   "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
   "fleet-intent-judge": "9cbd440fd7c3b20738e38598c84df438657af2fb9aa22ee007028cbd853902c1",
   "fleet-pr-opener": "b1207cb47c140b6c15cf6c1874277e1edecb2862035d97d5a6da7f8bf3cab981",
@@ -2785,7 +2798,7 @@ function replanResetPrompt(inputs) {
     "1. `git -C <main_worktree> branch --show-current` must equal <branch> and `git -C <main_worktree> rev-parse HEAD` must equal <expected_head>; else needs_human. The tests and code are uncommitted: the worktree tree, the output of this command run exactly as written, must equal <expected_tree>; else needs_human:\n" +
     treeCmd(inputs.main_worktree) +
     "\n" +
-    "2. Save the old head and the uncommitted work, creating no commit: if branch <superseded_branch> exists it must point at <expected_head> (else needs_human); else `git -C <main_worktree> branch <superseded_branch> <expected_head>`. If ref <superseded_tree_ref> exists it must equal <expected_tree> (else needs_human); else `git -C <main_worktree> update-ref <superseded_tree_ref> <expected_tree>` (a ref to the judged tree object; never pushed). superseded_head = `git -C <main_worktree> rev-parse <superseded_branch>`.\n" +
+    "2. Save the old head and the uncommitted work, creating no commit: if branch <superseded_branch> exists it must point at <expected_head> (else needs_human); else `git -C <main_worktree> -c core.hooksPath=/dev/null branch <superseded_branch> <expected_head>`. If ref <superseded_tree_ref> exists it must equal <expected_tree> (else needs_human); else `git -C <main_worktree> -c core.hooksPath=/dev/null update-ref <superseded_tree_ref> <expected_tree>` (a ref to the judged tree object; never pushed). superseded_head = `git -C <main_worktree> rev-parse <superseded_branch>`.\n" +
     "3. Only after step 2 succeeded: `git -C <main_worktree> reset --hard <plan_base>`, then `git -C <main_worktree> clean -fd` (never -x: ignored files stay).\n" +
     "4. `git -C <main_worktree> worktree remove <replan_worktree>` (it must be clean; never --force).\n" +
     "5. head = `git -C <main_worktree> rev-parse HEAD`.\n" +
@@ -2956,7 +2969,8 @@ function pushProbePrompt(inputs) {
   );
 }
 function treeCmd(worktree) {
-  const g = "GIT_CONFIG_NOSYSTEM=1 GIT_INDEX_FILE=\"$tmp\" git -c core.fsmonitor=false -C " + shQuote(worktree);
+  // 6.1.0 review: a measurement, never a commit: no post-index-change hook runs
+  const g = "GIT_CONFIG_NOSYSTEM=1 GIT_INDEX_FILE=\"$tmp\" git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C " + shQuote(worktree);
   return "tmp=$(mktemp) && " + g + " read-tree HEAD && " + g + " add -A && " + g + " write-tree; rm -f \"$tmp\"";
 }
 
@@ -4406,7 +4420,8 @@ async function hookSurface(label, worktree, rev, targets, phaseName) {
   if (r.error !== null)
     halt("needs_human", "hook surface cannot be computed (" + r.error + "); hook change needs Max's confirmation", "hooks");
   const mp = {};
-  for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x))) : [];
+  // 6.1.0: an npm:<name> target the program could not read stays null (R4 refuses on it)
+  for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x))) : t.indexOf("npm:") === 0 ? null : [];
   return { surface: r.surface.map((x) => (/\/$/.test(String(x)) ? (String(x) === "./" ? "./" : normPath(String(x)) + "/") : normPath(String(x)))), make_paths: mp };
 }
 
@@ -6250,7 +6265,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const fe = mv.filter((p) => fencePathProblem(p) || isIacPath(p));
     if (fe.length) return "the base change touches fenced or IaC paths" + list(fe);
     // R4: what test_cmd or a check_cmd runs (a test_cmd shape it cannot read refuses: fail closed)
-    const ti = mv.filter((p) => testCmdRuns(tc, p, pb.make_paths) || cmds.some((c) => cmdRuns(c, p, pb.make_paths)));
+    const nt = npmTargetOf(tc);
+    const tm = nt ? Object.assign({}, pb.make_paths, (await hookSurface("infra:hook-surface:u1:d", mainWt, upd.head, [nt], "Review")).make_paths) : pb.make_paths;
+    const ti = mv.filter((p) => testCmdRuns(tc, p, tm) || cmds.some((c) => cmdRuns(c, p, pb.make_paths)));
     if (ti.length) return "the base change touches files the test or check commands run" + list(ti);
     // R5: sealed occurrences, and occurrences a grep at the merge finds (line shift, added or removed caller)
     const syms = planFacts.changed_symbols || [];

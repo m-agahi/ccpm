@@ -32,9 +32,13 @@ it. In every other case the run stops as in 6.0.1, with the refusal reason added
   - R4: a moved file is run by a `check_cmd` (its script, a Makefile, a `.mk` file, a make recipe
     file, the pre-commit config) or by `test_cmd`. For `test_cmd` the `<paths>` token is dropped;
     `bash`/`sh`/`python <script>` and a direct script path give the script; `make test` gives the
-    Makefiles and its recipe files; pytest, npm/pnpm/yarn, jest/vitest, cargo and go give their
-    manifest and lock files (by basename). A `test_cmd` shape it cannot read refuses every moved
-    file (fail closed);
+    Makefiles and its recipe files; pytest, jest/vitest, cargo and go give their manifest and
+    lock files (by basename); npm/pnpm/yarn give their manifest and lock files plus every repo
+    path that `scripts.<name>` of `package.json` at d names (`hook_surface.py` target
+    `npm:<name>`, read as `infra:hook-surface:u1:d`). R4 refuses every moved file when the
+    `test_cmd` shape cannot be parsed, when it is empty, and when `package.json` or that script
+    entry cannot be read. Known gaps, not checked: jest/vitest setup files, pytest `-p` plugins,
+    an npm script that calls another script, and shell libraries a script sources;
   - R5: with `changed_symbols`, a moved file holds a sealed occurrence or an occurrence that a
     callers grep at d (`infra:callers:u1`) lists, or that grep caps a symbol.
 - The refusal reads (`infra:hook-surface:u1:pb`, `infra:ruleset-surface:u1` when no surface is
@@ -74,10 +78,15 @@ it. In every other case the run stops as in 6.0.1, with the refusal reason added
   a hook the base added under an in-tree `core.hooksPath` (for example `.husky/post-merge`) ran
   before any gate. `pr_state.py` (fetch and cleanup), the temporary-index calls of `hasher.py`,
   `read_state.py`, `parked.py` and `format_files.py` now run git with
-  `-c core.hooksPath=/dev/null`. The other programs run only git commands that write no index and
-  no ref. `state_write.py`, `plan_ref_write.py`, `tf_gate.py` and `remote_head.py` already set it.
-  The commit step and the push run the repo's hooks on purpose; R2 makes sure the base changed no
-  hook before such a step on the update path.
+  `-c core.hooksPath=/dev/null` (the fetch and merge also with `-c core.fsmonitor=false`). A
+  real-git test runs each of them after a base adds `.husky` hooks and finds no hook ran. The
+  other programs run only git commands that write no index and no ref. `state_write.py`,
+  `plan_ref_write.py`, `tf_gate.py` and `remote_head.py` already set it.
+- Hooks off in prompts too (this predates 6.1.0): the temporary-index tree command (`treeCmd`, a
+  measurement in the commit step and the re-plan reset), the re-plan reset's `branch` and
+  `update-ref` calls, and the code judge's scratch `read-tree -u --reset` (`fleet-code-judge.md`)
+  now pass `-c core.hooksPath=/dev/null`. The commit itself and the push still run the repo's
+  hooks on purpose; R2 makes sure the base changed no hook before such a step on the update path.
 - 2052 (N1): a resumed run-state with `pr_updated` true and an update record whose head or base is
   not 40 hex, or with no update record, stops with gate `resume`. No 6.0.1 writer produces such a
   state; it is a corrupt or hand-edited run-state.
@@ -87,7 +96,8 @@ it. In every other case the run stops as in 6.0.1, with the refusal reason added
 - The 6.0.1 stop "re-review after update-branch requested changes" now names the refusal reason.
   A clean base change no longer stops there: it goes to the code rounds above.
 - `review_paths.py` lists with `--no-renames` (both paths of a rename).
-- The v5010 prompt pins move only by `base` in the `fleet_scan` output schema.
+- The v5010 prompt pins move only by `base` in the `fleet_scan` output schema and by the hooks-off
+  changes in `treeCmd`, the re-plan reset and the code-judge role (each checked by reverting it).
 - Version 6.1.0 (`FLEET_VERSION`, `marketplace.json`, the root README).
 
 ## [6.0.1] - 2026-11-11
