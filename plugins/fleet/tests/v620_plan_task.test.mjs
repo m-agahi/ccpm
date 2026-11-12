@@ -290,6 +290,10 @@ for (const p of HOOKS) {
   });
 }
 
+test("6.2.0 T1 hook: a path inside a markdown link target is checked", () => {
+  assertFails(check(swap("- The check runs on the brief text only.", "- See [ci](.github/workflows/ci.yml).")), "hook");
+});
+
 const INVISIBLE = [
   ["NBSP", "a" + NBSP + "b"],
   ["ZWSP", "a" + ZWSP + "b"],

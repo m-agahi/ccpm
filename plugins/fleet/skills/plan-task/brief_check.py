@@ -266,7 +266,7 @@ def check(text, repo_dir=None, allow_open=False):
             err("commands", i, "the brief holds no shell prompt line")
         if i in out_lines:
             continue
-        for tok in l.split():
+        for tok in re.split(r"[\s()\[\]<>]+", l):
             t = tok.strip(TOKEN_STRIP).rstrip(".")
             if not t or "://" in t or ("/" not in t and "." not in t and t.lower() != "jenkinsfile"):
                 continue

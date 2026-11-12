@@ -18,8 +18,8 @@ plan-audit spend a run on it. The workflow is unchanged apart from its version c
     plan-task can ship in a later release. 6.2.0 does not ship that exit: Max types
     `/build-task <id>`.
   - T6 (ADR-1192 smoke run): probe, then `/plan-task --fast "<fixed text>"` on a scratch repo,
-    write the brief, then `/build-task <id>` plan mode must end `awaiting_confirmation` with a
-    `confirm_reason`. Record the run ids here.
+    write the brief, then `/build-task <id>` plan mode must end `awaiting_confirmation`. Record
+    the run ids here.
 
 ### Added
 
