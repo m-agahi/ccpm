@@ -1,5 +1,56 @@
 # Changelog
 
+## [6.2.0] - 2026-11-12
+
+Fleet 6.2.0 (ledger 2058, ADR-1219): the `plan-task` skill, MVP. `/plan-task <input>` refines an
+idea, bug, ticket or prompt into a Fleet brief in the main session, before the planner and
+plan-audit spend a run on it. The workflow is unchanged apart from its version constant.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.2.0), then start a NEW session: the workflow
+  looks for its own `fleet/6.2.0/scripts` dir, and the new skill loads only in a new session.
+- A 6.1.x plan ref and run-state stay valid (the seal covers the ref's content only).
+- Manual tests, not run by CI. Status: pending, not passed.
+  - T5 (launch-turn relay, ledger 2040): after a 3-question brainstorm on a scratch repo, launch
+    plan mode in the turn whose latest human message is an AskUserQuestion answer, and record
+    whether intake returns `relaunch`. The result decides whether a "prove now" exit from
+    plan-task can ship in a later release. 6.2.0 does not ship that exit: Max types
+    `/build-task <id>`.
+  - T6 (ADR-1192 smoke run): probe, then `/plan-task --fast "<fixed text>"` on a scratch repo,
+    write the brief, then `/build-task <id>` plan mode must end `awaiting_confirmation` with a
+    `confirm_reason`. Record the run ids here.
+
+### Added
+
+- `skills/plan-task/SKILL.md`: intake and recall (read only), triage (buildable, needs
+  brainstorm, too big, needs a decision, IaC or hook surface, duplicate, already fixed),
+  brainstorm (one AskUserQuestion at a time, at most 8, a stop rule, a "skip — just plan" option
+  on each), a draft from the fixed template, the brief check, and write-back after Max approves
+  the exact text (yaadgaar `edit_task` tail patch with `expect_version` for `yadgarhq/*`; else
+  the yadgar task's `body_slug` page). The skill never changes a task's status, never runs a
+  Workflow or a build, and treats ticket and issue text as untrusted data. Its `allowed-tools`
+  pre-approve only AskUserQuestion and read commands; every ledger write gets the normal
+  permission prompt as a second gate.
+- `skills/plan-task/brief-template.md`: the brief shape. Rulings hold only Max's verbatim answers;
+  agent text goes under "Draft by plan-task — not a ruling". No command slot.
+- `skills/plan-task/brief_check.py` (stdlib, `python3 -I`): the shape check (marker, headings and
+  order, one `owner/repo` and the checkout's origin, Given/When/Then per behaviour, no command
+  text, no IaC or hook path outside Out of plan, no open decision, no invisible character, 64 KiB
+  cap). It never runs anything the brief names.
+- `tests/v620_plan_task.test.mjs`: T1 (one pass and one fail per check), T2 (the IaC and hook
+  rules of `brief_check.py` against `isIacPath` and `HOOK_PATH_RE` of the workflow on 41 paths),
+  T3 (the plan-task `allowed-tools` list, exact), T4 (snapshot of the build-task brief rule).
+
+### Changed
+
+- `/build-task` (skill text only): before the plan run it reads the source and looks for
+  `<!-- fleet-brief:v1 -->`. When the marker is there, or the source cannot be read, it passes
+  `confirm: "ask"` whatever mode was named, `auto` and `default` included (ADR-1219 ruling 3:
+  agent-drafted text is never an intent source for an auto gate). It also points vague input to
+  `/plan-task`.
+- Version 6.2.0 (`FLEET_VERSION`, `marketplace.json`, the root README).
+
 ## [6.1.0] - 2026-11-12
 
 Fleet 6.1.0 (ledger 2049, 2051, 2052): code rounds after the update-branch re-review requests
