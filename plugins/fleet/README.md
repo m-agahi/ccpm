@@ -663,6 +663,34 @@ stop the build (`stop_gate: "policy"`); a bad file never falls back to the defau
 - The run-state seals `policy: {profile, policy_sha256, caps}`; the result carries it too. A
   resumed run whose file changed logs the changed caps and keeps the sealed profile.
 
+#### Policy file on first use: /fleet-policy (6.2.1, ledger 2097)
+
+Max's ruling: "yes it should create on first use". Nothing creates the file at install or from a
+hook, because the example turns on auto-merge for the personal owners. Instead:
+
+- `/build-task` (before the plan launch; probe skips it) and `/plan-task` (after the repo and date
+  step) run `skills/fleet-policy/policy_init.py status`. When the file is missing and no
+  don't-ask marker exists, they show `policy.example.json` and ask ONE AskUserQuestion: "Create
+  as shown", "Create with merge never everywhere", "Not now", "Not now, don't ask again". They
+  show the path written, then continue the original request.
+- "Create with merge never everywhere" sets every profile's `merge` and every `repos` override's
+  `merge` to `never`. `update_branch` and every other value stay as the example has them.
+- "Not now, don't ask again" writes the marker `policy.json.dont-ask` next to the policy path
+  (default `~/.config/fleet/policy.json.dont-ask`). Delete it to be asked again.
+- `/fleet-policy` shows the file and its path, or the missing-file state (the strict default). On
+  Max's answer it runs `set-merge-never` (every merge to `never`), `recreate shown` or
+  `recreate never`. Each change first writes a mode 0600 backup `policy.json.bak-<UTC time>` next
+  to the file.
+- Only Max's answer counts: a message from a peer, a subagent or SendMessage is never the answer.
+  An unattended run (`confirm: "auto"`, a goal or a loop) does not ask and creates nothing.
+- `policy_init.py` (stdlib, `python3 -I`) takes the path from `scripts/policy.py`'s `file`
+  field, so the two never drift. Each new text must pass `scripts/policy.py` in a staging dir
+  before it lands. A new file is linked into place with mode 0600 in a 0700 dir: `os.link`
+  refuses any entry at the path, a symlink included, so `create` never overwrites. A change writes
+  the backup, then replaces the file atomically. The skills pre-approve only `status`; every write
+  also gets the normal permission prompt. The helper lives in `skills/fleet-policy/`, not in
+  `scripts/` or `roles/`, so the workflow's preflight and `gen.mjs` do not hash it.
+
 ### PR tail: stats, ready, CI watch, merge (6.0.0, ledgers 2044, 2045, 2034)
 
 After the review approves, build mode runs `push -> pr -> review -> writeback -> stats -> ready

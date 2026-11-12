@@ -1,5 +1,58 @@
 # Changelog
 
+## [6.2.1] - 2026-11-12
+
+Fleet 6.2.1 (ledger 2097): create `policy.json` on first use. Max's ruling, verbatim: "yes it
+should create on first use". The workflow changes only in its version; a missing file still
+means the strict default (PR ready, CI watch, stats; merge never, update_branch never).
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.2.1), then start a NEW session: the workflow
+  looks for its own `fleet/6.2.1/scripts` dir, and the new skill loads only in a new session.
+- A 6.2.0 plan ref and run-state stay valid.
+- Manual tests, not run by CI. Status: pending, not passed.
+  - P7 (launch-turn relay, as 6.2.0 T5): on a machine with no policy file, run `/build-task` on a
+    scratch repo, answer the policy question, and record whether the plan launch in that turn
+    returns `relaunch`. The skill keeps the step 5 relaunch rule for that case.
+  - P8 (smoke): `/fleet-policy` on a machine with no file, then with a file; record the backup
+    path of one change.
+
+### Added
+
+- `skills/fleet-policy/policy_init.py` (stdlib, `python3 -I`): `status`, `create shown|never`,
+  `marker`, `set-merge-never`, `recreate shown|never`. It takes the path from
+  `scripts/policy.py` (its `file` field). Every new text must pass `scripts/policy.py` in a
+  staging dir before it lands (the template too, so a duplicate key cannot vanish in a re-dump).
+  `create` links the file into place (mode 0600, dir 0700) and refuses any entry at the path, a
+  symlink included. A change writes a mode 0600 backup `policy.json.bak-<UTC time>` first, then
+  replaces the file atomically. The helper is outside `scripts/` and `roles/`, so preflight,
+  `gen.mjs` and `PROGRAM_COUNT` do not change.
+- `skills/fleet-policy/SKILL.md` (`/fleet-policy`): shows the file and its path, or the
+  missing-file state; on Max's answer to one AskUserQuestion it switches merge to never or
+  re-creates the file from the template.
+- `tests/v621_policy_init.test.mjs` (22 tests): status on a missing file, `create shown` byte for
+  byte, `create never` with every merge `never`, refuse overwrite (a file, a symlink, a file that
+  appears during the check), the parser gate (4 templates `policy.py` refuses write nothing), the
+  don't-ask marker, `set-merge-never` and `recreate` with backups (a symlink and a file
+  `policy.py` refuses are kept), and the skill text pins (the question and its four options, the
+  peer-message rule, the never-at-install rule, the unattended rule, `allowed-tools`).
+- Mutant sweep on `policy_init.py`: 21 hand-made mutants (link replaced by an overwrite, each
+  check dropped, each merge flip dropped, modes, backup, marker, path, argument checks), 21
+  killed.
+
+### Changed
+
+- `/build-task` and `/plan-task` (skill text only): before the plan launch (build-task; probe
+  skips it) or after the repo and date step (plan-task), run `policy_init.py status`. File
+  missing and no marker: show `policy.example.json` and ask ONE question: "Create as shown",
+  "Create with merge never everywhere", "Not now", "Not now, don't ask again" (writes
+  `policy.json.dont-ask` next to the policy path). Show the path written, then continue. Only
+  Max's answer counts; an unattended run does not ask and creates nothing. Never at install or
+  from a hook. Both skills pre-approve only `status`; writes get the normal permission prompt.
+- `tests/v620_plan_task.test.mjs` T3: the plan-task `allowed-tools` pin gains the `status` call.
+- Version 6.2.1 (`FLEET_VERSION`, `marketplace.json`, the test pins, the root README).
+
 ## [6.2.0] - 2026-11-12
 
 Fleet 6.2.0 (ledger 2058, ADR-1219): the `plan-task` skill, MVP. `/plan-task <input>` refines an
