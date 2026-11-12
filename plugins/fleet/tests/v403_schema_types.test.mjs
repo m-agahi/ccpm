@@ -423,6 +423,14 @@ const READS = {
     "t.error string": "intake:tried[].error",
   },
   yaadgaarProjectProblem: { "sources array": "intake:brief.sources", "s.project string": "intake:brief.sources[].project" },
+  // 6.2.0 (2058): a yadgar task body read from its body_slug page
+  bodyPageProblem: {
+    "it.tried array": "intake:tried",
+    "t object": "intake:tried[]",
+    "t.call string": "intake:tried[].call",
+    "s.body_slug string": "intake:brief.sources[].body_slug",
+    "s.body string": "intake:brief.sources[].body",
+  },
   yaadgaarIdProblem: {
     "t.call string": "intake:tried[].call",
     "tried array": "intake:tried",
@@ -632,8 +640,8 @@ const READS = {
     "pr object": "infra:park",
     "pr.clean boolean": "prog:parked:clean",
     "pr.dirty array": "prog:parked:dirty",
-    // 6.0.0 (2040): intake's relaunch reason code
-    "it.reason string": "intake:reason",
+    // 6.0.0 (2040): intake's relaunch reason code; 6.2.0 (2058): the body-page reason code
+    "it.reason string": ["intake:reason", 2],
   },
   tinyRefProblem: {
     "t object": PARSED_ARGS,

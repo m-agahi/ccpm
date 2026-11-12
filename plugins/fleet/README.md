@@ -326,9 +326,18 @@ line "build caller check skipped".
 Intake classifies the input and fetches its text: a ledger task through yadgar `task_get` (when present), a Jira
 ticket through the Atlassian MCP, an issue or PR through the checked `gh_cmd` (5.0.8) or the Codeberg API, a plan
 file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body, id,
-project}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,
+project, body_slug}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,
 `plan` and `text`. `id` and `project` are null except on a `yaadgaar` source. `url` and
 `plan_path` may be null. Free text, a plan and a ledger task work in the caller's repo.
+
+A yadgar ledger task keeps its body on the wiki page its `body_slug` names; `task_get` returns the
+row only (6.2.0, ledger 2058). Intake then reads that page with `wiki_read(slug, project)`, records
+the call in `tried`, uses the page as the body and sets the source's `body_slug`. The script stops
+with `needs_human` and the reason code `task body page unreadable` when intake reports that code,
+when a `body_slug` source has no successful `wiki_read` of that slug in `tried`, or when the page
+gave no body: a run never plans on the title only. A task whose `task_get` answer carries body text
+needs no page read (`body_slug` null). `body_slug` is intake data only; the sealed brief does not
+carry it.
 
 ### Ledger adapters (5.0.0, R2)
 

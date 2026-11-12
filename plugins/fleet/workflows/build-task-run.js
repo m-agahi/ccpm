@@ -702,7 +702,7 @@ const INFRA_SCHEMA = {
 const SOURCE_SCHEMA = {
   type: "object",
   required: ["kind", "ref", "body"],
-  properties: { kind: { type: "string", enum: SOURCE_KINDS }, ref: STR, url: STR_OR_NULL, body: STR, id: STR_OR_NULL, project: STR_OR_NULL },
+  properties: { kind: { type: "string", enum: SOURCE_KINDS }, ref: STR, url: STR_OR_NULL, body: STR, id: STR_OR_NULL, project: STR_OR_NULL, body_slug: STR_OR_NULL },
 };
 const INTAKE_SCHEMA = {
   type: "object",
@@ -2362,7 +2362,7 @@ function intakePrompt(inputs) {
     "   - ledger `yadgar`: kind ledger. Load mcp__yadgar__task_get via ToolSearch; call it with project_id=<project> and id=<the number>. A `yaadgaar #42` input, or a refusal with external_task_ledger -> needs_human. ref = the number.\n" +
     "   - ledger `either` (no project given): try both ledgers (an absent tool recorded as above) and use the one that returns the task. A `yaadgaar #42`, `#42` or `42` input: call mcp__yaadgaar__read_task(number=<the number>) first; a task -> kind yaadgaar as above. Else, and for an `L42` input, call mcp__yadgar__task_get only when you can name its project_id; with none, record it in `tried` with error \"no project given\". A task -> kind ledger. Neither returns it -> needs_human.\n" +
     "   Never advise creating, editing or changing a repo's `.yadgar` file, project id or origin: the ledger scope is <project>, not the repo.\n" +
-    "   body = the title, status and full body. If the task names a plan path that exists in the repo, also set plan_path and add a `plan` source for it.\n" +
+    "   body = the title, status and full body. A kind ledger task whose task_get answer carries body text: use it, set body_slug null, and do not call wiki_read. One with a body_slug and no body text: its body is that wiki page. Load mcp__yadgar__wiki_read via ToolSearch, call wiki_read(slug=<body_slug>, project=<project>), record the call in `tried` like a ledger call, set body = the title, status and the page content, and body_slug = <body_slug>. The tool absent, a refusal, no page or an empty page -> needs_human with reason \"" + BODY_PAGE_REASON + ": <body_slug>: <the error>\"; never plan on the title only. If the task names a plan path that exists in the repo, also set plan_path and add a `plan` source for it.\n" +
     "2. Jira key (`ABC-123`): kind jira. Load the Atlassian MCP tools via ToolSearch: getAccessibleAtlassianResources for the cloudId, then getJiraIssue(issueIdOrKey, responseContentFormat=\"markdown\"). Tools absent -> needs_human. ref = the key; url = the browse URL; body = summary + description.\n" +
     "3. GitHub issue or PR URL (`https://github.com/<o>/<r>/issues/<n>` or `/pull/<n>`): kind github. " +
     ("gh_cmd" in inputs ? "`<gh_cmd> issue view <url> --json title,body,url` (or `pr view`), with exactly <gh_cmd>, the command the workflow checked for <o>/<r>; gh_cmd null -> needs_human. " : "The workflow found no GitHub issue or PR URL in `input` -> needs_human. ") +
@@ -3887,6 +3887,23 @@ function ledgerToolNeeded(project) {
 const NO_LEDGER_REASON = "no task ledger available; give a URL, Jira key or text";
 // 6.0.0 (2040): intake's reason code for a relayed request that is not the build request
 const RELAUNCH_REASON = "relayed user request does not reference args.input";
+// 6.2.0 (2058): a yadgar task's body is the page its body_slug names
+const BODY_PAGE_REASON = "task body page unreadable";
+function bodyPageProblem(it) {
+  const tried = (Array.isArray(it.tried) ? it.tried : []).filter((t) => t && typeof t === "object" && t.error === null && typeof t.call === "string");
+  for (const s of it.brief.sources) {
+    if (s.kind !== "ledger" || s.body_slug == null) continue;
+    const at = BODY_PAGE_REASON + ": source ledger:" + s.ref;
+    if (typeof s.body_slug !== "string" || !/^[A-Za-z0-9_.:-]+$/.test(s.body_slug)) return at + ": body_slug " + JSON.stringify(s.body_slug).slice(0, 80) + " is not a slug";
+    const read = tried.some((t) => {
+      const m = /wiki_read\(\s*slug\s*=\s*["']?([^"',)\s]+)/.exec(t.call);
+      return !!m && m[1] === s.body_slug;
+    });
+    if (!read) return at + ": intake recorded no successful wiki_read of " + s.body_slug + "; never planned on the title only";
+    if (typeof s.body !== "string" || !s.body.trim()) return at + ": page " + s.body_slug + " gave no body";
+  }
+  return null;
+}
 function noLedgerStop(it, project) {
   const tried = Array.isArray(it.tried) ? it.tried.filter((t) => t && typeof t === "object") : [];
   if (it.status === "ok" || !tried.length || !tried.every((t) => t.error === "absent")) return null;
@@ -5147,8 +5164,9 @@ async function planMode(input, date) {
   }
   const nl = TASK_ID_INPUT_RE.test(raw) ? noLedgerStop(it, input.project) : null;
   if (nl) halt("needs_human", "intake: task id " + JSON.stringify(raw) + ": " + nl);
+  if (it.status === "needs_human" && typeof it.reason === "string" && it.reason.indexOf(BODY_PAGE_REASON + ":") === 0) halt("needs_human", "intake: " + cutText(it.reason).slice(0, 400));
   if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", "intake " + it.status + ": " + intakeHaltReason(it, raw));
-  const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, input.project || null);
+  const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, input.project || null) || bodyPageProblem(it);
   if (problem) halt("needs_human", "intake: " + problem);
   const brief = cleanBrief(it.brief);
   const lp = ledgerProblem(brief, input.project) || yaadgaarIdProblem(brief, it.tried);
@@ -5469,7 +5487,7 @@ async function rereadBrief(brief, project, repo) {
   const nl = LEDGER_KINDS.indexOf(src.kind) >= 0 ? noLedgerStop(it, project) : null;
   if (nl) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + " for current rulings: " + nl + "; run build with confirm \"ask\"");
   if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", "re-read of " + src.kind + ":" + src.ref + " " + it.status + ": " + intakeHaltReason(it, input));
-  const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, project || null);
+  const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, project || null) || bodyPageProblem(it);
   if (problem) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + ": " + problem);
   const fresh = cleanBrief(it.brief);
   if (fresh.repo !== brief.repo || !fresh.sources.some((x) => x.kind === src.kind && x.ref === src.ref && (src.kind !== "yaadgaar" || !src.id || x.id === src.id)))

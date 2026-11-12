@@ -4,7 +4,7 @@
 
 Fleet 6.2.0 (ledger 2058, ADR-1219): the `plan-task` skill, MVP. `/plan-task <input>` refines an
 idea, bug, ticket or prompt into a Fleet brief in the main session, before the planner and
-plan-audit spend a run on it. The workflow is unchanged apart from its version constant.
+plan-audit spend a run on it. The workflow changes only in intake (the yadgar body page read, see Fixed) and its version.
 
 ### Deploy
 
@@ -50,6 +50,15 @@ plan-audit spend a run on it. The workflow is unchanged apart from its version c
   agent-drafted text is never an intent source for an auto gate). It also points vague input to
   `/plan-task`.
 - Version 6.2.0 (`FLEET_VERSION`, `marketplace.json`, the root README).
+
+### Fixed
+
+- 2058 (Max, option 1): intake read a yadgar ledger task with `task_get` only, which returns the
+  row and not the body on its `body_slug` page, so a brief written there never reached the planner.
+  Intake now reads that page with `wiki_read` (and no page when the answer carries the body); a
+  missing, unreadable or empty page, or a `body_slug` source with no successful `wiki_read` in
+  `tried`, stops with `needs_human` and the reason code `task body page unreadable`, in plan mode
+  and in the rulings re-read (prompt pins re-pinned; `body_slug` is not sealed).
 
 ## [6.1.0] - 2026-11-12
 

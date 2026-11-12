@@ -5579,6 +5579,7 @@ const ARRAY_SITES = {
   "r.changed @ hasher": "hasher:changed",
   "b.sources @ briefProblem": "intake:brief.sources",
   "it.tried @ intakeHaltReason": "intake:tried",
+  "it.tried @ bodyPageProblem": "intake:tried",
   "plan.criteria @ planAndAudit": "role:scope-and-plan:criteria",
   "plan.plan_diff @ planAndAudit": "role:scope-and-plan:plan_diff",
   "plan.changed_symbols @ planAndAudit": "role:scope-and-plan:changed_symbols",

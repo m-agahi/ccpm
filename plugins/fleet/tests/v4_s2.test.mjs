@@ -395,13 +395,14 @@ test("4.0.0: makePlanRef carries history.preflight through to the seal", async (
 
 // ---------------------------------------------------------------- 1982 brief schema
 
-test("1982: the intake source schema and the README agree on {kind, ref, url, body, id, project}", async () => {
+// 6.2.0 (2058): body_slug added (a yadgar task body read from its page)
+test("1982: the intake source schema and the README agree on {kind, ref, url, body, id, project, body_slug}", async () => {
   const out = await run(happy(), ARGS);
   const src = call(out, "intake").opts.schema.properties.brief.properties.sources.items;
-  assert.deepEqual(Object.keys(src.properties).sort(), ["body", "id", "kind", "project", "ref", "url"]);
+  assert.deepEqual(Object.keys(src.properties).sort(), ["body", "body_slug", "id", "kind", "project", "ref", "url"]);
   assert.deepEqual(src.properties.kind.enum, ["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]);
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-  assert.match(readme, /sources: \[\{kind, ref, url, body, id,\s+project\}\]/);
+  assert.match(readme, /sources: \[\{kind, ref, url, body, id,\s+project, body_slug\}\]/);
   assert.match(readme, /`kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,\s+`plan` and `text`/);
 });
 

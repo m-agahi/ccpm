@@ -91,10 +91,11 @@ const SCENARIOS = {
 // 6.0.1 (2050): verify_since commits_since[].parents in the schema
 // 6.1.0 review B2 (2051): fleet_scan base in the schema (the only change: checked with base removed)
 // 6.1.0 delta review: treeCmd, the re-plan reset branch/update-ref and the code-judge role's scratch read-tree run git with hooks off (the only changes: checked with the three reverted)
+// 6.2.0 (2058): the intake prompt's body_slug page read and body_slug in the source schema (the only changes: checked with both reverted)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 86, sha256: "c4f5ef0367b241a63ce8cf72375d8a969a4fb5f3c3abd996e8e8aa22ee9aa417" },
-  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "e080c5b7aabda243937a89617d1e9fbe16f7a41535890d7f704221ccf914d24f" },
-  "short path (one test writer)": { calls: 85, sha256: "d1249f2edf9a0165e78e871ee7ff736e32388ce089a6dc1a9150b4c2a7954c31" },
+  "plan then build (confirm ask)": { calls: 86, sha256: "8dcbc0307b073984888d215a9e69079d8520cb84a3e695ef41f43701217b2f7c" },
+  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "f40e78b3a76bcd6bb8bb7d3c63edbdbf603d4957c4bfc1315c8c235f485b9562" },
+  "short path (one test writer)": { calls: 85, sha256: "a50da715e2cc85a4ce2ec1915a498475bdf01403baf98f43538821c614af9480" },
   "probe": { calls: 2, sha256: "012d024fefbefe057a047d8b6822b07ea3152de9e7d322be0e6cf5d6273fc736" },
 };
 
