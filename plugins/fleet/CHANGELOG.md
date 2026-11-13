@@ -48,6 +48,7 @@ Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1235, A
   the smallest change that lets the script tell a dropped relay from a missing file.
 
 - Review of 6.2.2 (PR #64):
+
   - M1 (2104): the hash-line check trusted the count the agent relayed, and ran only with one
     count line. A dropped, forged or doubled `hash_lines=` with 10 of the lines gave no retry and
     "is missing; install". The workflow now counts against its own tables (`programTable()`,
@@ -73,9 +74,25 @@ Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1235, A
   - N2 (2106): a change to another run's ref between hasher reads gets one gate line naming it,
     never a stop.
 
+- Re-review of 6.2.2 (PR #64):
+  - D-M1 (2107): the per-file runs blamed clean files when a listed hook checks the whole tree
+    (the scratch checkout held all the round's files). Each listed hook now runs once on all the
+    files; only when it fails is each file re-run alone in a scratch checkout of HEAD plus that
+    one file. The files that fail alone are blamed; none failing alone is a whole-tree failure
+    (file `""`), sent to every writer of the round. No hook flag is read.
+  - D-L1: the fixer runs keep their 5.x budget (3 runs of at most 180 s); the listed checks get
+    their own 240 s, inside a 570 s ceiling from the program's start. `fix_timeout` (a new digest
+    key) names a fixer timeout; the stop names the phase that ran out of time and never says
+    "still rewrite after 3 runs".
+  - D-L2 (2104): one `hash_lines=` line equal to the lines relayed, short of the tables, means
+    the files are absent on disk: no retry, "<file> is absent from the installed plugin" and the
+    install text. Every other shortfall keeps the retry and the relay message.
+  - D-N1: the v507 write-step regex matches `infra(..., undefined, "<id>")` too, with an explicit
+    allowlist of write steps with the retry: `format_files` only.
+
 ### Changed
 
-- `tests/v622_fixes.test.mjs`: 29 tests (foreign, own, prefix-sharing and replacement refs; no
+- `tests/v622_fixes.test.mjs`: 33 tests (foreign, own, prefix-sharing and replacement refs; no
   list, a listed failing hook, its last round, a listed passing hook, an unknown id, hooks that
   cannot run, a bad sealed list, a broken relay, `policy.py` and `format_files.py` run for real
   (unlisted `pass_filenames: false` and `always_run` hooks never run alone); prose-only, prose then

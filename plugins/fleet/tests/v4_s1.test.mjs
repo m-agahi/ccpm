@@ -652,8 +652,8 @@ test("4.0.0 security 1: scripts_dir must be its own realpath and no symlink; the
     [{ hits: [{ hit: SCRIPTS_DIR, symlink: "yes" }] }, /is a symlink/],
     [{ home: "/home/u/../v" }, /HOME/],
     [{ sums: { plan_files: "0".repeat(64) } }, /plan_files\.py hashes 0{64}/],
-    // 6.2.2 review M1: a hash line short of the tables is a relay drop: retried, then named
-    [{ sums: { hasher: undefined } }, /no line for: hasher\.py/],
+    // 6.2.2 re-review D-L2: the probe counted the lines it hashed: absent on disk, no retry
+    [{ sums: { hasher: undefined } }, /hasher\.py is absent from the installed plugin/],
     [{ sums: { evil: "1".repeat(64) } }, /evil\.py is not a shipped program/],
     [{ extra: ["2".repeat(64) + "  /tmp/plan_files.py"] }, /outside/],
   ];

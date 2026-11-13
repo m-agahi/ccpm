@@ -192,9 +192,9 @@ function wrongFile(s, role) {
 test("5.0.0 R1 (was preflight missing role): a missing role file stops in preflight naming it", async () => {
   const out = await run(offPin(happy(), "fleet-coder", null), ARGS);
   assert.equal(out.result.status, "needs_human");
-  // 6.2.2 review M1: a hash line short of the tables is retried once, then named
-  assert.match(out.result.reason, /no line for: roles\/fleet-coder\.md/);
-  assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
+  // 6.2.2 re-review D-L2: the probe counted the lines it hashed: the file is absent, no retry
+  assert.match(out.result.reason, /roles\/fleet-coder\.md is absent from the installed plugin/);
+  assert.deepEqual(out.labels, ["preflight"]);
 });
 
 // 5.0.0 (R1): was "preflight unreachable yadgar stops with needs_human". The
@@ -1443,7 +1443,7 @@ test("5.0.0 R1 (was S-8 runner version mismatch): a role runner that read anothe
 test("5.0.0 R1 (was S-8 no version for a role): preflight with no sha256sum line for a role file stops", async () => {
   const out = await run(offPin(happy(), "plan-audit", null), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /no line for: roles\/plan-audit\.md/);
+  assert.match(out.result.reason, /roles\/plan-audit\.md is absent from the installed plugin/);
 });
 
 test("S-5: gates not stated in the PR body -> needs_human with the PR url", async () => {
@@ -7679,7 +7679,7 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
     assert.equal(readFileSync(join(home, "log"), "utf8").trim().split("\n")[0], "a.py", "the frozen test is never passed");
     const d = { program: o.program };
     // 6.2.2 (2107): the pre-freeze hook keys too
-    for (const k of ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "unknown_hooks"]) d[k] = o[k];
+    for (const k of ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "fix_timeout", "unknown_hooks"]) d[k] = o[k];
     assert.equal(o.digest, sha256(canon(d)));
     assert.deepEqual(o.frozen_changed, []);
     // a hook that touches another path: reported, never settles, and never copied back
@@ -8063,7 +8063,7 @@ test("3.0.0 review 4 LOW: the fixers run in a scratch checkout of HEAD: an edite
     assert.equal(t.ran, true);
     assert.equal(t.runs, 1);
     assert.equal(t.stable, false);
-    assert.match(prog, /timeout=min\(tmo, left\(\)\)/);
+    assert.match(prog, /timeout=tmo/);
     // a changed hook config is refused; nothing runs
     writeFileSync(join(wt, ".pre-commit-config.yaml"), "repos: []\n");
     rmSync(join(home, "log"), { force: true });
@@ -9294,7 +9294,7 @@ test("3.1.0 caps: every embedded Python program and both YAML loaders set RLIMIT
     assert.doesNotMatch(m[1], /default=str/, n);
   }
   // the repo's own hooks are not bound by the fixer's caps
-  assert.match(PROGRAMS_TEXT, /\['pre-commit', 'run', '--files'\] \+ files, cwd=scratch, capture_output=True, timeout=min\(tmo, left\(\)\), env=dict\(env, PATH=clean_path\(\[wt, scratch_root\]\)\), preexec_fn=lift\)/);
+  assert.match(PROGRAMS_TEXT, /\['pre-commit', 'run', '--files'\] \+ files, cwd=scratch, capture_output=True, timeout=tmo, env=dict\(env, PATH=clean_path\(\[wt, scratch_root\]\)\), preexec_fn=lift\)/);
 });
 
 test("3.1.0 caps: a program that allocates past its cap dies quickly instead of growing", { skip: !HAVE_PY }, () => {

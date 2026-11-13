@@ -105,7 +105,7 @@ def done(**k):
     # hook_failures [[file, id]], a short printable head and the sha256 of their output
     # (no free text to copy), hook_timeout [id], unknown_hooks ['id: why']
     out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': [], 'purged': len(PURGED), 'purged_paths': sorted(PURGED)[:PURGED_CAP],
-           'hook_failed': False, 'hook_failures': [], 'hook_head': '', 'hook_sha256': '', 'hook_timeout': [], 'unknown_hooks': []}
+           'hook_failed': False, 'hook_failures': [], 'hook_head': '', 'hook_sha256': '', 'hook_timeout': [], 'fix_timeout': False, 'unknown_hooks': []}
     out.update(k)
     # 5.0.7: the changed paths that are frozen (the workflow stops on any)
     out['frozen_changed'] = sorted(set(out['changed']) & frozen)
@@ -121,14 +121,17 @@ CHECK = sel.get('check_hooks') or []
 if not isinstance(CHECK, list) or any(not isinstance(x, str) or not x or x.startswith('-') for x in CHECK):
     sys.exit('select.check_hooks must be a list of hook ids')
 HOOK_IDS = {}
-# [(file, id, output)] of the listed hooks that failed; [id] that timed out; ['id: why'] not runnable
-FAILED, TIMED_OUT, NOT_RUN = [], [], []
-# review L2: one deadline for every hook run of this call, under the agent's 600 s Bash limit
-HOOK_BUDGET = 480
+# [(file, id)] of the listed hooks that failed (file '': the whole tree), their outputs,
+# [id] that timed out, ['id: why'] not runnable
+FAILED, OUTPUTS, TIMED_OUT, NOT_RUN = [], [], [], []
+# re-review D-L1: the fixers keep their 5.x budget (3 runs of at most tmo s each); the
+# listed checks get CHECK_BUDGET s of their own, and never run past STEP_CEILING s from
+# the start of this program (under the agent's 600 s Bash call)
+CHECK_BUDGET = 240
+STEP_CEILING = 570
 import time
-DEADLINE = time.monotonic() + HOOK_BUDGET
-def left():
-    return DEADLINE - time.monotonic()
+STARTED = time.monotonic()
+FIX_TIMEOUT = [False]
 before = snapshot(wt)
 if sel.get('dirty') is True:
     cand = names(git(wt, 'diff-tree', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', before).stdout)
@@ -449,10 +452,10 @@ try:
     while runs < 3:
         runs += 1
         try:
-            if left() < 1:
-                raise subprocess.TimeoutExpired('pre-commit', 0)
-            subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=min(tmo, left()), env=dict(env, PATH=clean_path([wt, scratch_root])), preexec_fn=lift)
+            subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=dict(env, PATH=clean_path([wt, scratch_root])), preexec_fn=lift)
         except subprocess.TimeoutExpired:
+            # re-review D-L1: the fixer phase ran out of time (reported as such)
+            FIX_TIMEOUT[0] = True
             prev = delta()
             break
         now = delta()
@@ -460,24 +463,59 @@ try:
             stable = True
             break
         prev = now
-    # 6.2.2 (2107, ADR-1237; review L1-L3): each listed hook alone on each settled file. A
-    # timeout (its own, or the shared deadline) is reported as one, never as a failure.
+    # 6.2.2 (2107, ADR-1237; re-review D-M1): each listed hook runs once on all the settled
+    # files. Only when it fails is each file re-run alone, in a scratch checkout of HEAD plus
+    # that one file, so a whole-tree hook (pass_filenames: false, always_run) blames only the
+    # files that fail alone; none failing alone is a whole-tree failure (file ''). A timeout
+    # (a run's own, or the check budget) is reported as one, never as a failure.
     NO_STAGE = re.compile(rb'No hook with id `[^`]*` in stage')
+    check_end = min(time.monotonic() + CHECK_BUDGET, STARTED + STEP_CEILING)
+    cenv = dict(env, PATH=clean_path([wt, scratch_root]), PRE_COMMIT_COLOR='never')
+    def check(hid, cwd, paths):
+        # (returncode, output), or None on a timeout
+        rest = check_end - time.monotonic()
+        if rest < 1:
+            return None
+        try:
+            pr = subprocess.run(['pre-commit', 'run', hid, '--files'] + paths, cwd=cwd, capture_output=True, timeout=min(tmo, rest), env=cenv, preexec_fn=lift)
+        except subprocess.TimeoutExpired:
+            return None
+        return pr.returncode, pr.stdout + pr.stderr
+    def isolated(hid, f):
+        iso = tempfile.mkdtemp(prefix='fmt-iso-', dir=scratch_root)
+        os.rmdir(iso)
+        git(wt, '-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', iso, 'HEAD')
+        try:
+            dst = os.path.join(iso, f)
+            if not os.path.realpath(dst).startswith(os.path.realpath(iso) + os.sep):
+                return 1, b''
+            os.makedirs(os.path.dirname(dst) or iso, exist_ok=True)
+            shutil.copy2(os.path.join(scratch, f), dst)
+            return check(hid, iso, [f])
+        finally:
+            git(wt, 'worktree', 'remove', '--force', iso, check=False)
+            shutil.rmtree(iso, ignore_errors=True)
     for hid in CHECK if stable else []:
+        res = check(hid, scratch, files)
+        if res is None:
+            TIMED_OUT.append(hid)
+            continue
+        if res[0] == 0:
+            continue
+        if NO_STAGE.search(res[1]):
+            NOT_RUN.append(hid + ': pre-commit has no such hook at the pre-commit stage')
+            continue
+        OUTPUTS.append(b'[' + hid.encode() + b'] ' + res[1])
+        bad = []
         for f in files:
-            if hid in TIMED_OUT or any(x.startswith(hid + ': ') for x in NOT_RUN):
-                break
-            try:
-                if left() < 1:
-                    raise subprocess.TimeoutExpired('pre-commit', 0)
-                pr = subprocess.run(['pre-commit', 'run', hid, '--files', f], cwd=scratch, capture_output=True, timeout=min(tmo, left()), env=dict(env, PATH=clean_path([wt, scratch_root]), PRE_COMMIT_COLOR='never'), preexec_fn=lift)
-            except subprocess.TimeoutExpired:
+            one = isolated(hid, f)
+            if one is None:
                 TIMED_OUT.append(hid)
                 break
-            if pr.returncode != 0 and NO_STAGE.search(pr.stdout + pr.stderr):
-                NOT_RUN.append(hid + ': pre-commit has no such hook at the pre-commit stage')
-            elif pr.returncode != 0:
-                FAILED.append((f, hid, pr.stdout + pr.stderr))
+            if one[0] != 0:
+                bad.append(f)
+        else:
+            FAILED.extend([(f, hid) for f in bad] if bad else [('', hid)])
     changed = sorted(prev)
     for f in changed:
         if f in files:
@@ -499,8 +537,9 @@ def head_text(b):
     t = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', b.decode('utf-8', 'replace'))
     t = ''.join(c if c == '\n' or ' ' <= c <= '~' else '?' for c in t.replace('\r\n', '\n').replace('\t', ' ')).strip()
     return t[:HOOK_HEAD_CAP]
-allout = b'\n'.join(b'[' + h.encode() + b' ' + f.encode() + b'] ' + o for f, h, o in FAILED)
+# the output of each failing hook's run on all the files
+allout = b'\n'.join(OUTPUTS) if FAILED else b''
 done(ran=not NOT_RUN, note='pre-freeze hook id(s) cannot run: ' + '; '.join(NOT_RUN) if NOT_RUN else 'ran pre-commit run --files in a scratch checkout of HEAD',
      runs=runs, stable=stable, files=files, changed=changed,
-     hook_failed=bool(FAILED), hook_failures=[[f, h] for f, h, _ in FAILED], hook_head=head_text(allout), hook_sha256=hashlib.sha256(allout).hexdigest() if FAILED else '',
-     hook_timeout=sorted(set(TIMED_OUT)), unknown_hooks=NOT_RUN)
+     hook_failed=bool(FAILED), hook_failures=[[f, h] for f, h in FAILED], hook_head=head_text(allout), hook_sha256=hashlib.sha256(allout).hexdigest() if FAILED else '',
+     hook_timeout=sorted(set(TIMED_OUT)), fix_timeout=FIX_TIMEOUT[0], unknown_hooks=NOT_RUN)

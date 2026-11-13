@@ -235,8 +235,8 @@ test("5.0.0 R3: preflight pins the shared dir: a changed, extra or missing share
   const cases = [
     [{ roleSums: { "_shared/test-cmd-allowlist.md": "1".repeat(64) } }, /_shared\/test-cmd-allowlist\.md hashes 1{64}/],
     [{ roleSums: { "_shared/x.md": "1".repeat(64) } }, /_shared\/x\.md is not a shipped role file/],
-    // 6.2.2 review M1: retried, then named
-    [{ roleSums: { "_shared/test-cmd-allowlist.md": undefined } }, /no line for: roles\/_shared\/test-cmd-allowlist\.md/],
+    // 6.2.2 re-review D-L2: absent on disk, no retry
+    [{ roleSums: { "_shared/test-cmd-allowlist.md": undefined } }, /roles\/_shared\/test-cmd-allowlist\.md is absent from the installed plugin/],
   ];
   for (const [over, re] of cases) {
     const s = happy();

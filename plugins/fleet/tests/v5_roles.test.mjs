@@ -199,8 +199,8 @@ test("5.0.0 R1: preflight pins the roles dir: a hash mismatch, an extra .md, a m
   const cases = [
     [{ roleSums: { "pr-review.md": "1".repeat(64) } }, /pr-review\.md hashes 1{64}/],
     [{ roleSums: { "x.md": "1".repeat(64) } }, /x\.md is not a shipped role file/],
-    // 6.2.2 review M1: retried, then named
-    [{ roleSums: { "pr-review.md": undefined } }, /no line for: roles\/pr-review\.md/],
+    // 6.2.2 re-review D-L2: absent on disk, no retry
+    [{ roleSums: { "pr-review.md": undefined } }, /roles\/pr-review\.md is absent from the installed plugin/],
     [{ hits: [{ hit: SCRIPTS_DIR, roles_symlink: "yes" }] }, /roles dir .* is a symlink/],
     [{ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }, /roles dir .* resolves to ""/],
   ];
@@ -294,12 +294,12 @@ test("5.0.0 R1 real execution: the probe, run by bash over a real plugin cache, 
     [(d) => writeFileSync(join(d, "plan-audit.md"), ROLE_TEXT["plan-audit"] + "x"), /plan-audit\.md hashes [0-9a-f]{64}, not /],
     [(d) => writeFileSync(join(d, "extra.md"), "x"), /extra\.md is not a shipped role file/],
     [(d) => writeFileSync(join(d, ".hidden"), "x"), /\.hidden is not a shipped role file/],
-    [(d) => rmSync(join(d, "pr-review.md")), /no line for: roles\/pr-review\.md/],
+    [(d) => rmSync(join(d, "pr-review.md")), /roles\/pr-review\.md is absent from the installed plugin/],
     [(d) => mkdirSync(join(d, "sub")), /not regular files: sub/],
     // 5.0.0 R3: the _shared dir: a changed, extra, missing or nested entry, or a symlinked dir
     [(d) => writeFileSync(join(d, "_shared", "test-cmd-allowlist.md"), "x"), /_shared\/test-cmd-allowlist\.md hashes [0-9a-f]{64}, not /],
     [(d) => writeFileSync(join(d, "_shared", "extra.md"), "x"), /_shared\/extra\.md is not a shipped role file/],
-    [(d) => rmSync(join(d, "_shared", "test-cmd-allowlist.md")), /no line for: roles\/_shared\/test-cmd-allowlist\.md/],
+    [(d) => rmSync(join(d, "_shared", "test-cmd-allowlist.md")), /roles\/_shared\/test-cmd-allowlist\.md is absent from the installed plugin/],
     [(d) => mkdirSync(join(d, "_shared", "deeper")), /not regular files: _shared\/deeper/],
     [
       (d) => {

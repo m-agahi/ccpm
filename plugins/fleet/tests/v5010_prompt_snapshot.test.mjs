@@ -95,10 +95,11 @@ const SCENARIOS = {
 // 6.2.0 review (M1, L2): body_slug in the intake return shape, the MUST-carry rule and the exact wiki_read call format (the only changes: checked with both prompt edits reverted)
 // 6.2.2 (2104, 2107): the preflight probe prints hash_lines= before its hash lines (probe: the only change, checked with it reverted); format_files hook_failed, hook_output and unknown_hooks, and the policy caps pre_freeze_hooks, in the schemas (ADR-1237)
 // 6.2.2 review (M2, L1-L3): the format_files pre-freeze keys (hook_failures, hook_head, hook_sha256, hook_timeout) in the schemas (the probe pin is unchanged)
+// 6.2.2 re-review (D-L1): format_files fix_timeout in the schema (the probe pin is unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 86, sha256: "6278ae46b3b5da2793250b06a5658c417e9d5ece0f5c5a5a507ad1a4fb94e9a6" },
-  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "cf7d4d1f3979ac4f5de1f4223e15de78c6d9a762cf6a616d273de426def2bdc8" },
-  "short path (one test writer)": { calls: 85, sha256: "d8f099a096ae43cb52a94e510835cc578570af768cada74d45f712cee239f340" },
+  "plan then build (confirm ask)": { calls: 86, sha256: "b149839ea42d2723caf00a7c10b90bcecab70eb12d7a179e65c5b9e2d7c63397" },
+  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "1a442dd05de9be07ea1f2b4fb2e8a503dde753d36ffd78cf973180ab4c70d16c" },
+  "short path (one test writer)": { calls: 85, sha256: "e45580587b9f48a1681b71b700f69e99a046073c1d5c159cb79ccfb28528ccef" },
   "probe": { calls: 2, sha256: "b6976644cdb9345851ac461a293688c2299952b462ba087a39958a03ae13b393" },
 };
 

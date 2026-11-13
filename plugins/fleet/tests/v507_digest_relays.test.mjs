@@ -439,9 +439,14 @@ test("5.0.7 2020: two digest misses fail as in 5.0.6; any other contract failure
 
 test("5.0.7 2020: the read-only program steps carry the retry; no write step does", () => {
   const src = readFileSync(join(SCRIPTS_SRC, "..", "workflows", "build-task-run.js"), "utf8");
-  const ids = [...src.matchAll(/JUDGE_AGENT,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]).concat([...src.matchAll(/digest: (?:baseTree \? "hasher:base" : )?"([a-z_]+)"/g)].map((m) => m[1]));
+  const ro = [...src.matchAll(/JUDGE_AGENT,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]).concat([...src.matchAll(/digest: (?:baseTree \? "hasher:base" : )?"([a-z_]+)"/g)].map((m) => m[1]));
+  // 6.2.2 re-review D-N1: the default-agent (write) form infra(..., undefined, "<id>") too
+  const writes = [...src.matchAll(/,\s*undefined,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]);
   const RO = ["read_state", "fleet_scan", "hook_surface", "tf_gate", "remote_head", "branch_scan", "verify_since", "review_paths", "callers", "precommit_ids", "script_check", "hasher", "hash_diff", "gh_identity", "ruleset_surface", "policy", "pr_convention", "orch_scan", "ci_watch"];
-  assert.deepEqual([...new Set(ids)].sort(), RO.slice().sort());
+  // the write steps allowed the retry: format_files only (6.2.2 review M2: a second run finds the files settled)
+  const WRITE_RETRY = ["format_files"];
+  assert.deepEqual([...new Set(ro)].sort(), RO.slice().sort());
+  assert.deepEqual([...new Set(writes)].sort(), WRITE_RETRY);
 });
 
 // ---------------------------------------------------------------- the stub is the program

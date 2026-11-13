@@ -267,7 +267,7 @@ const READS = {
     "rlinks.length number-literal": PARSED_LOCAL,
     // 6.2.2 (2104): the hash lines and the probe's own count of them
     "nHash number-literal": PARSED_LOCAL,
-    "counts.length number-literal": PARSED_LOCAL,
+    "counts.length number-literal": [PARSED_LOCAL, 2],
     "dir string": "preflight:scripts_dir",
   },
   scriptsMapProblem: { "map object": "hasher:scripts", "map array": "!hasher:scripts" },
@@ -309,6 +309,7 @@ const READS = {
     "r.hook_failed boolean": "prog:format_files:hook_failed",
     "r.hook_head string": "prog:format_files:hook_head",
     "r.hook_sha256 string": "prog:format_files:hook_sha256",
+    "r.fix_timeout boolean": "prog:format_files:fix_timeout",
     "r.hook_failures array": "prog:format_files:hook_failures",
     "f.length number-literal": "parsed: a [file, id] pair of prog:format_files:hook_failures, typed STRS by strsOf",
     "frozenList array": [PARSED_LOCAL, 3],
