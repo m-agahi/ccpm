@@ -52,6 +52,10 @@ except Exception:
 # classifier, so this agent never sees CI output). Prints {state, checks,
 # failed, required, head, elapsed_s, error, args, program, digest}.
 import hashlib, json, os, re, subprocess, sys, time
+def lift():
+    # 6.3.2 (2130): gh (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 SLICE, NO_CHECKS_S, MAX_FAILED, CALL_S, SETTLE_S, GAP_S = 480, 180, 6, 540, 90, 60
 args = sys.argv[1:]
 SLUG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}$')
@@ -83,7 +87,7 @@ class Fail(Exception):
 
 
 def gh_run(a, timeout=120):
-    return subprocess.run([gh] + a, capture_output=True, timeout=timeout)
+    return subprocess.run([gh] + a, capture_output=True, timeout=timeout, preexec_fn=lift)
 
 
 def head():

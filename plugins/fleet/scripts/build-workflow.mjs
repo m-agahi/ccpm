@@ -24,8 +24,9 @@
 //   node plugins/fleet/scripts/build-workflow.mjs --check   exit 1 when gen.mjs --check fails, the dist is stale,
 //                                                           or the esbuild check differs
 //
-// esbuild runs as `npx --yes esbuild@<ESBUILD_VERSION>` (an exact version, the
-// way CI runs prettier); no node_modules in the repo.
+// esbuild runs as `npx --yes --prefer-offline esbuild@<ESBUILD_VERSION>` (an exact
+// version, the way CI runs prettier) with npm_config_ignore_scripts=true, so no
+// install script runs; no node_modules in the repo.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -69,8 +70,10 @@ export function buildWorkflow(source) {
 
 // esbuild --minify-whitespace of `code`; throws when esbuild cannot run or fails
 export function minifyWhitespace(code) {
-  const r = spawnSync("npx", ["--yes", ESBUILD_SPEC, "--minify-whitespace", "--charset=ascii", "--log-level=error"], {
+  // 6.3.2: no install script runs (esbuild's platform binary comes as an optional dependency); the npx cache first
+  const r = spawnSync("npx", ["--yes", "--prefer-offline", ESBUILD_SPEC, "--minify-whitespace", "--charset=ascii", "--log-level=error"], {
     input: code,
+    env: Object.assign({}, process.env, { npm_config_ignore_scripts: "true" }),
     encoding: "utf8",
     maxBuffer: 64 << 20,
     timeout: 300000,

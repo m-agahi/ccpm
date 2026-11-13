@@ -44,6 +44,10 @@ except Exception:
 # body_sha256_before, body_sha256_after, headers_missing, error, args,
 # program, digest}.
 import base64, hashlib, json, os, re, subprocess, sys, tempfile, time
+def lift():
+    # 6.3.2 (2130): gh (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 START, END, WALL = '<details><summary>Built with ccpm fleet', '<!-- ccpm-fleet-stats -->', '@@WALL@@'
 args = sys.argv[1:]
 SLUG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}$')
@@ -78,7 +82,7 @@ HEAD = re.compile(r'^#{1,6}[ \t]+\S.*$', re.M)
 
 
 def body():
-    r = subprocess.run([gh, 'pr', 'view', pr, '-R', slug, '--json', 'body'], capture_output=True, timeout=120)
+    r = subprocess.run([gh, 'pr', 'view', pr, '-R', slug, '--json', 'body'], capture_output=True, timeout=120, preexec_fn=lift)
     if r.returncode != 0:
         raise RuntimeError('gh pr view: ' + r.stderr.decode('utf-8', 'replace')[-500:])
     b = json.loads(r.stdout.decode('utf-8')).get('body')
@@ -100,7 +104,7 @@ try:
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(want)
-        r = subprocess.run([gh, 'pr', 'edit', pr, '-R', slug, '--body-file', tmp], capture_output=True, timeout=120)
+        r = subprocess.run([gh, 'pr', 'edit', pr, '-R', slug, '--body-file', tmp], capture_output=True, timeout=120, preexec_fn=lift)
     finally:
         os.unlink(tmp)
     if r.returncode != 0:

@@ -614,7 +614,7 @@ test("6.2.2 re-review D-L2: one count line equal to the lines relayed, short of 
   assert.equal(out.result.stop_gate, "contract");
   assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
   assert.match(out.result.reason, /hasher\.py is absent from the installed plugin/);
-  assert.match(out.result.reason, /install fleet 6\.3\.1/);
+  assert.match(out.result.reason, /install fleet 6\.3\.2/);
   assert.doesNotMatch(out.result.reason, /relayed/);
   // 10 lines with a count of 10 reads the same way
   s = happy();

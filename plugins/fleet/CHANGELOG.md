@@ -1,5 +1,54 @@
 # Changelog
 
+## [6.3.2] - 2026-11-13
+
+Fleet 6.3.2: gh runs without the program's own memory cap (ledger 2130), plus 6.3.1 review
+follow-ups.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.3.2), then start a NEW session: the workflow
+  looks for its own `fleet/6.3.2/scripts` dir.
+- A 6.3.1 plan ref and run-state stay valid: nothing sealed changed.
+
+### Fixed
+
+- Every fleet program caps its address space at 1 GiB (ADR-1174). gh (a Go binary) inherited the
+  cap and crashed at startup in about 10-16% of calls (exit 2, `runtime: out of memory: cannot
+allocate 4194304-byte block` or `runtime/cgo: pthread_create failed`), with no HTTP status. The
+  ruleset surface then read `HTTP None` and the plan stopped at the hooks gate (runs
+  wf_68c4970e-061, wf_57d9869b-814). Each gh child of `ruleset_surface`, `pr_convention`,
+  `gh_identity`, `ci_watch`, `orch_scan`, `pr_state` and `pr_body_block` now runs with
+  `preexec_fn=lift` (db_sweep's shape): the AS and CPU soft limits rise to the hard limits for
+  that child only. The programs keep their caps; git and ssh children keep them too.
+- `ruleset_surface` and `pr_convention` `api()`: a call that ran and gave no HTTP status is tried
+  once more after 3 s. A second miss names gh's stderr (first 200 characters, tokens redacted)
+  after `HTTP None` in the error or unreadable text. A timeout is not retried.
+- `gh_identity`: a Go runtime crash (`runtime: out of memory`, `runtime/cgo`,
+  `pthread_create failed`, `fatal error: runtime`) is transient: one more try after 3 s.
+- `infra()`: a `ruleset_surface` or `hook_surface` relay that the agent returned as `failed` only
+  because the program's `error` was set (program and file sha256, digest and arguments all hold)
+  reaches the caller's own error branch: the needs_human stop at the `hooks` gate, not the
+  generic "returned failed" halt. The two prompts now say that a non-null error with exit 0 is
+  still status ok. `pr_convention` prints no `error` key: no change there.
+
+### Changed
+
+- `build-workflow.mjs`: esbuild runs as `npx --yes --prefer-offline esbuild@0.28.2` with
+  `npm_config_ignore_scripts=true` (checked with a cold npx cache: the platform binary comes as
+  an optional dependency, no install script needed).
+- Comments: `tests/v631_dist.test.mjs` (the build is a line stripper; esbuild is an equivalence
+  check) and `skills/plan-task/brief_check.py` (the rules are copied from
+  `src/build-task-run.js`).
+
+### Added
+
+- `tests/v632_gh_rlimit.test.mjs`: each of the seven programs runs a stub gh that crashes the Go
+  way when its RLIMIT_AS soft limit is below the hard limit; a source check that every gh spawn
+  lifts and no git or ssh spawn does; retry and stderr in `api()`; gh_identity's retry on a Go
+  crash; the failed-relay routing to the hooks gate (and no routing for a bad digest or a null
+  error).
+
 ## [6.3.1] - 2026-11-13
 
 Fleet 6.3.1: size headroom (ledger 2129, option E ruled by Max). The workflow ships as a build

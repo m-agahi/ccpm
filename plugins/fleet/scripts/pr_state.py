@@ -86,6 +86,10 @@ except Exception:
 #     (<repo>/.claude/worktrees/fleet-<key>/main) and local branch fleet/<key>.
 #     Prints {mode, removed, deleted, error, args, program, digest}.
 import hashlib, json, os, re, subprocess, sys, time
+def lift():
+    # 6.3.2 (2130): gh (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 args = sys.argv[1:]
 SLUG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}$')
 SHA = re.compile(r'^[0-9a-f]{40}$')
@@ -120,7 +124,7 @@ class Fail(Exception):
 
 
 def run(*a, timeout=120, cmd=None):
-    r = subprocess.run([cmd or gh] + list(a), capture_output=True, timeout=timeout)
+    r = subprocess.run([cmd or gh] + list(a), capture_output=True, timeout=timeout, preexec_fn=None if cmd else lift)
     if r.returncode != 0:
         raise Fail((cmd or 'gh') + ' ' + ' '.join(a[:2]) + ': ' + r.stderr.decode('utf-8', 'replace').strip()[-500:])
     return r.stdout.decode('utf-8', 'replace')
@@ -150,7 +154,7 @@ def same_repo():
 
 def checks(req=True):
     # the PR head's checks: required ones, all when none is required; [] when none is reported
-    r = subprocess.run([gh, 'pr', 'checks', args[3], '-R', slug, '--json', 'name,state,bucket,link'] + (['--required'] if req else []), capture_output=True, timeout=120)
+    r = subprocess.run([gh, 'pr', 'checks', args[3], '-R', slug, '--json', 'name,state,bucket,link'] + (['--required'] if req else []), capture_output=True, timeout=120, preexec_fn=lift)
     err = r.stderr.decode('utf-8', 'replace').strip()
     try:
         lst = json.loads(r.stdout.decode('utf-8'))
@@ -236,11 +240,11 @@ try:
                     out['blocked'] = 'not merged and no auto-merge request (' + str(w.get('state')) + ', ' + str(w.get('mergeStateStatus')) + ')'
         br = v.get('headRefName') or ''
         if out['merged'] and br.startswith('fleet/'):
-            q = subprocess.run([gh, 'api', 'repos/' + slug + '/branches/' + br], capture_output=True, timeout=60)
+            q = subprocess.run([gh, 'api', 'repos/' + slug + '/branches/' + br], capture_output=True, timeout=60, preexec_fn=lift)
             if q.returncode != 0 and b'404' in q.stderr + q.stdout:
                 out['branch_deleted'] = True
             else:
-                d = subprocess.run([gh, 'api', '-X', 'DELETE', 'repos/' + slug + '/git/refs/heads/' + br], capture_output=True, timeout=60)
+                d = subprocess.run([gh, 'api', '-X', 'DELETE', 'repos/' + slug + '/git/refs/heads/' + br], capture_output=True, timeout=60, preexec_fn=lift)
                 out['branch_deleted'] = d.returncode == 0
     elif mode == 'update':
         pr, sha = args[3], args[4]
@@ -311,11 +315,11 @@ try:
             ok, ex = False, None
             if mm:
                 try:
-                    r = subprocess.run([gh, 'run', 'view', mm.group(1), '--repo', slug, '--json', 'headSha,jobs'], capture_output=True, timeout=60)
+                    r = subprocess.run([gh, 'run', 'view', mm.group(1), '--repo', slug, '--json', 'headSha,jobs'], capture_output=True, timeout=60, preexec_fn=lift)
                     rv = json.loads(r.stdout.decode('utf-8')) if r.returncode == 0 else {}
                     ok = rv.get('headSha') == sha and any(str(j.get('databaseId')) == mm.group(2) for j in rv.get('jobs') or [])
                     if ok:
-                        r = subprocess.run([gh, 'run', 'view', '-R', slug, '--job', mm.group(2), '--log-failed'], capture_output=True, timeout=60)
+                        r = subprocess.run([gh, 'run', 'view', '-R', slug, '--job', mm.group(2), '--log-failed'], capture_output=True, timeout=60, preexec_fn=lift)
                         ex = CTRL.sub('', r.stdout.decode('utf-8', 'replace'))[-3000:] if r.returncode == 0 else None
                 except (subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
                     ok, ex = False, None

@@ -48,7 +48,11 @@ except Exception:
 # with admin:org, and any failure of the repo or rules read, sets `error`.
 # Prints {surface, sources, read, unreadable, error, args, program, digest}.
 # Read only: GET requests through the given command; no token is read.
-import base64, hashlib, json, os, re, subprocess, sys
+import base64, hashlib, json, os, re, subprocess, sys, time
+def lift():
+    # 6.3.2 (2130): gh (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 UNRESERVED = re.compile(r'[A-Za-z0-9._~/-]')
 
 
@@ -118,12 +122,35 @@ for w in local:
 read.append('self-references in ' + str(len(local)) + ' local workflow file(s)')
 
 
+TOKEN = re.compile(r'(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|[A-Za-z0-9_-]{40,})')
+# 6.3.2 (2130): gh's stderr of the last call with no HTTP status (first 200 characters, tokens redacted)
+LAST_ERR = {'text': ''}
+
+
+def http(code):
+    # 'HTTP <code>'; with no status, gh's stderr after it
+    return 'HTTP ' + str(code) + (': ' + LAST_ERR['text'] if code is None and LAST_ERR['text'] else '')
+
+
 def api(path):
-    # (status or None, parsed JSON body or None, {lower header: value})
+    # (status or None, parsed JSON body or None, {lower header: value});
+    # a call that ran and gave no status is tried once more after 3 s
+    r = api1(path)
+    if r[0] is None and r[3]:
+        time.sleep(3)
+        r = api1(path)
+    LAST_ERR['text'] = TOKEN.sub('[redacted]', ' '.join(r[4].split()))[:200] if r[0] is None else ''
+    return r[:3]
+
+
+def api1(path):
+    # (status, body, headers, ran, stderr)
     try:
-        p = subprocess.run([gh, 'api', '-i', path], capture_output=True, timeout=30, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
-        return None, None, {}
+        p = subprocess.run([gh, 'api', '-i', path], capture_output=True, timeout=30, stdin=subprocess.DEVNULL, preexec_fn=lift)
+    except OSError as e:
+        return None, None, {}, False, str(e)
+    except subprocess.TimeoutExpired:
+        return None, None, {}, False, 'timed out after 30 s'
     raw = p.stdout.decode('utf-8', 'replace').replace('\r\n', '\n')
     code, hdr, body = None, {}, raw
     m = re.match(r'^HTTP/[0-9.]+ ([0-9]{3})', raw)
@@ -140,7 +167,7 @@ def api(path):
         data = json.loads(body) if body.strip() else None
     except ValueError:
         data = None
-    return code, data, hdr
+    return code, data, hdr, True, p.stderr.decode('utf-8', 'replace')
 
 
 PAGE_CAP = 10
@@ -153,7 +180,7 @@ def api_all(path):
     while True:
         code, data, hdr = api(path)
         if code != 200 or not isinstance(data, list):
-            return items, ('HTTP ' + str(code) if page == 1 else 'page ' + str(page) + ': HTTP ' + str(code)), code, hdr
+            return items, (http(code) if page == 1 else 'page ' + str(page) + ': ' + http(code)), code, hdr
         items.extend(data)
         m = NEXT.search(hdr.get('link', ''))
         if not m:
@@ -179,7 +206,7 @@ else:
     owner = slug.split('/')[0]
     code, repo, _ = api('repos/' + slug)
     if code != 200 or not isinstance(repo, dict) or not isinstance(repo.get('id'), int):
-        error = 'repo ' + slug + ' not readable (HTTP ' + str(code) + ')'
+        error = 'repo ' + slug + ' not readable (' + http(code) + ')'
     else:
         rid = repo['id']
         otype = (repo.get('owner') or {}).get('type')
@@ -202,7 +229,7 @@ else:
                 full = other.get('full_name') if c1 == 200 and isinstance(other, dict) else None
                 c2, f, _ = api('repos/' + full + '/contents/' + quote(w['path']) + '?ref=' + quote(str(w.get('ref') or ''), False)) if full else (c1, None, {})
                 if c2 != 200 or not isinstance(f, dict) or not isinstance(f.get('content'), str):
-                    unreadable.append('required workflow ' + w['path'] + ' in repo ' + str(w.get('repository_id')) + ' not readable (HTTP ' + str(c2) + '): its references into ' + slug + ' not checked')
+                    unreadable.append('required workflow ' + w['path'] + ' in repo ' + str(w.get('repository_id')) + ' not readable (' + http(c2) + '): its references into ' + slug + ' not checked')
                     continue
                 try:
                     t = base64.b64decode(f['content']).decode('utf-8', 'replace')
@@ -221,7 +248,7 @@ else:
                     for e in org[:50]:
                         c, d, _ = api('orgs/' + owner + '/rulesets/' + str(e.get('id') if isinstance(e, dict) else ''))
                         if c != 200 or not isinstance(d, dict):
-                            unreadable.append('org ruleset ' + str(e.get('id') if isinstance(e, dict) else e) + ' not readable (HTTP ' + str(c) + ')')
+                            unreadable.append('org ruleset ' + str(e.get('id') if isinstance(e, dict) else e) + ' not readable (' + http(c) + ')')
                             continue
                         for r, w in workflows_of(d.get('rules')):
                             p = norm(w['path'])
@@ -233,11 +260,11 @@ else:
                 elif code in (403,) or code is None or code >= 500:
                     scopes = [s.strip() for s in hdr.get('x-oauth-scopes', '').split(',')]
                     if 'admin:org' in scopes:
-                        error = 'org rulesets of ' + owner + ' not readable (HTTP ' + str(code) + ') with the admin:org scope'
+                        error = 'org rulesets of ' + owner + ' not readable (' + http(code) + ') with the admin:org scope'
                     else:
-                        unreadable.append('org rulesets not readable (HTTP ' + str(code) + ', no admin:org scope): hosting-side required workflows not checked')
+                        unreadable.append('org rulesets not readable (' + http(code) + ', no admin:org scope): hosting-side required workflows not checked')
                 else:
-                    unreadable.append('org rulesets not readable (HTTP ' + str(code) + '; needs admin:org): hosting-side required workflows not checked')
+                    unreadable.append('org rulesets not readable (' + http(code) + '; needs admin:org): hosting-side required workflows not checked')
             else:
                 read.append('owner ' + owner + ' is not an organization: no org rulesets')
 sources.sort(key=lambda s: (s['path'], str(s['ruleset_id']), s['via']))
