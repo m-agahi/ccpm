@@ -36,8 +36,8 @@ lands, so a file the workflow would refuse is never written.
    `template` (the shipped `policy.example.json`).
 
    - `exists` true: show `file` and `content` in one block. When `error` is not null, show it and
-     say that the workflow stops on this file (`stop_gate: "policy"`) until it is fixed or
-     re-created.
+     say that the workflow uses the strict default instead of this file (6.3.0: a gate line names
+     the error; no stop) until it is fixed or re-created.
    - `exists` false: say "no policy file at `<file>`: the fleet uses the strict default (PR ready,
      CI watch, stats on; merge never, update_branch never)". Show `template`. When `marker` is
      true, say that `/build-task` and `/plan-task` do not offer to create it while
@@ -93,6 +93,20 @@ for a human. Example, inside a profile:
 The helper has no command for this key. When Max asks to add it, show the example and the path;
 he edits the file. List only hooks that pass on RED tests (formatter checks); a compile or
 test-suite hook fails until the code exists.
+
+## Unattended mode (6.3.0, ADR-1239)
+
+A profile or a `repos` override may carry `unattended: true` (a bool; anything else makes
+`policy.py` refuse the file, and an invalid file is the strict default: unattended off). It turns
+on the fleet's unattended mode for those repos: the fleet decides the Build confirmation and the
+other judgement prompts itself and records each decision in the result, the run-state and the PR
+body. It never bypasses a safety stop. The `/build-task --unattended` argument turns it on for one
+run. Off when unset. The helper has no command for this key: show the example and the path; Max
+edits the file.
+
+```json
+{ "name": "personal", "match": { "owners": ["m-agahi"] }, "unattended": true }
+```
 
 ## Report
 

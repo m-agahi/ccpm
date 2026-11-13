@@ -56,16 +56,16 @@ def pm(*a, timeout=120):
     return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
 def tail(r):
     return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
-# usage: db_up.py up <name> <image> <ttl> <nonce> <dbs json> [<test_db_prefix>]
-#        db_up.py add <name> <dbs json> [<test_db_prefix>]
+# usage: db_up.py up <name> <image> <ttl> <nonce> <dbs json> [<test_db_prefix>] [grant:PROCESS]
+#        db_up.py add <name> <dbs json> [<test_db_prefix>] [grant:PROCESS]
 # One MariaDB user per database, granted on that database only, with a random
 # password from this program. The root password is random too, lives only in
 # the container, and is never printed.
 import secrets
 argv = sys.argv[1:]
 mode = argv[0] if argv else ''
-if mode not in ('up', 'add') or len(argv) - (6 if mode == 'up' else 3) not in (0, 1):
-    fail(2, 'usage: db_up.py up <name> <image> <ttl> <nonce> <dbs> [<test_db_prefix>] | add <name> <dbs> [<test_db_prefix>]')
+if mode not in ('up', 'add') or len(argv) - (6 if mode == 'up' else 3) not in (0, 1, 2):
+    fail(2, 'usage: db_up.py up <name> <image> <ttl> <nonce> <dbs> [<test_db_prefix>] [grant:PROCESS] | add <name> <dbs> [<test_db_prefix>] [grant:PROCESS]')
 name = argv[1]
 if not name_ok(name):
     fail(2, 'container name refused: ' + name)
@@ -82,7 +82,15 @@ def prefix_problem(p):
     if any(s.startswith(p) or p.startswith(s) or like.fullmatch(s) for s in SYSTEM_SCHEMAS):
         return 'test_db_prefix must not match or start a system schema (' + ', '.join(SYSTEM_SCHEMAS) + ')'
     return None
-prefix = argv[6 if mode == 'up' else 3] if len(argv) == (7 if mode == 'up' else 4) else None
+# fleet 6.3.0 (ADR-1233): grant:PROCESS, the one extra grant, to this container's role users only
+rest = argv[6 if mode == 'up' else 3:]
+process = 'grant:PROCESS' in rest
+if any(x.startswith('grant:') and x != 'grant:PROCESS' for x in rest) or rest.count('grant:PROCESS') > 1:
+    fail(2, 'grants refused: only grant:PROCESS, once (ADR-1233)')
+rest = [x for x in rest if x != 'grant:PROCESS']
+if len(rest) > 1:
+    fail(2, 'usage: one <test_db_prefix> at most')
+prefix = rest[0] if rest else None
 if prefix is not None and prefix_problem(prefix):
     fail(2, prefix_problem(prefix))
 try:
@@ -106,6 +114,8 @@ def create(root):
         if prefix is not None:
             # a LIKE pattern in a backtick identifier: _ escaped as \_ is a literal _
             st.append("GRANT ALL PRIVILEGES ON `" + prefix.replace('_', '\\_') + "%`.* TO '" + d + "'@'%';")
+        if process:
+            st.append("GRANT PROCESS ON *.* TO '" + d + "'@'%';")
     return sql(root, ' '.join(st))
 if mode == 'add':
     i = pm('container', 'inspect', '--format', '{{index .Config.Labels "fleet.db"}}', name)

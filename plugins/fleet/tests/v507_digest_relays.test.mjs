@@ -447,6 +447,40 @@ test("5.0.7 2020: the read-only program steps carry the retry; no write step doe
   const WRITE_RETRY = ["format_files"];
   assert.deepEqual([...new Set(ro)].sort(), RO.slice().sort());
   assert.deepEqual([...new Set(writes)].sort(), WRITE_RETRY);
+  // 6.3.0 (6.2.2 carry-over low 3): every infra(label, prompt, phase, agent, "<id>") call, parsed by
+  // its top-level arguments: a 4th argument other than JUDGE_AGENT (undefined, null, a variable) is a write step
+  const callArgs = (text, at) => {
+    const out = [];
+    let depth = 0, cur = "", q = null;
+    for (let i = at; i < text.length; i++) {
+      const ch = text[i];
+      if (q) {
+        cur += ch;
+        if (ch === "\\") cur += text[++i];
+        else if (ch === q) q = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") q = ch;
+      if (ch === "(" || ch === "[" || ch === "{") depth++;
+      if (ch === ")" || ch === "]" || ch === "}") {
+        if (depth === 0) return out.concat([cur.trim()]);
+        depth--;
+      }
+      if (ch === "," && depth === 0) {
+        out.push(cur.trim());
+        cur = "";
+      } else cur += ch;
+    }
+    return out;
+  };
+  const sites = [...src.matchAll(/[^A-Za-z_.]infra\(/g)].filter((m) => !/function $/.test(src.slice(m.index - 9, m.index + 1))).map((m) => callArgs(src, m.index + m[0].length));
+  assert.ok(sites.length > 20, sites.length + " infra( calls");
+  const parsedWrites = sites.filter((a) => a.length >= 5 && /^"[a-z_:]+"$/.test(a[4]) && a[3] !== "JUDGE_AGENT").map((a) => a[4].slice(1, -1));
+  assert.deepEqual([...new Set(parsedWrites)].sort(), WRITE_RETRY, "infra( write-step digests: " + JSON.stringify(sites.filter((a) => a.length >= 5 && a[3] !== "JUDGE_AGENT").map((a) => a.slice(3, 5))));
+  // and the parser catches the forms the old regex missed
+  const probe = (t) => callArgs(t, t.indexOf("infra(") + 6);
+  for (const t of ['infra("l", p, "X", null, "x")', 'infra("l", p, "X", agentType, "x")', 'infra("l", f(a, b), "X", undefined, "x")'])
+    assert.ok(probe(t)[3] !== "JUDGE_AGENT" && probe(t)[4] === '"x"', t);
 });
 
 // ---------------------------------------------------------------- the stub is the program

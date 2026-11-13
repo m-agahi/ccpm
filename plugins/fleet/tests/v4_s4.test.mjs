@@ -819,12 +819,15 @@ test("4.0.0 1983 AC-7: a parked prior_round with no round 0 is relaxed (fail clo
   u["infra:load-parked"] = parkedOut({ reason: "x", rounds: [Object.assign({}, R0, { change_kind: "bug_fix", new_behaviour: false })], symbols: [] });
   const o3 = await runOne(u, DEFAULT);
   assert.equal(o3.result.status, "ok", o3.result.reason);
-  // the parked symbols are carried: dropping one stops
+  // the parked symbols are carried: dropping one is a re-plan finding (6.3.0); dropped in every round, it stops
   const v = happy();
   v["infra:load-parked"] = parkedOut({ reason: "x", rounds: [R0], symbols: ["guard_verdict"] });
   const o4 = await runOne(v, ARGS);
   assert.equal(o4.result.status, "needs_human");
-  assert.match(o4.result.reason, /changed_symbols dropped guard_verdict after the parked run n0-1234567/);
+  assert.match(o4.result.reason, /changed_symbols dropped guard_verdict after the /);
+  assert.ok(o4.logs.some((l) => /^changed_symbols dropped a symbol of an earlier round: re-plan round 1 of 2/.test(l)), o4.logs.join("\n"));
+  const pr1 = inputsOf(call(o4, "role:scope-and-plan:audit-fix").prompt).prior_round;
+  assert.ok(pr1.findings.some((f) => /changed_symbols dropped guard_verdict after the parked run n0-1234567: x round/.test(f.finding)), JSON.stringify(pr1.findings));
 });
 
 test("4.0.0 1986: a plan stop parks the draft with findings.json of every refused round", async () => {

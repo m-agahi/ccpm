@@ -1,5 +1,119 @@
 # Changelog
 
+## [6.3.0] - 2026-11-13
+
+Fleet 6.3.0: fewer stops for unattended runs, ruled by Max (ledger 2108; ADR-1238, ADR-1239,
+ADR-1233; wiki fleet-auto-flow-review-2026-11-13). Every safety stop stays.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.3.0), then start a NEW session: the workflow
+  looks for its own `fleet/6.3.0/scripts` dir.
+- A 6.2.2 plan ref and run-state stay valid. Unattended mode is off until a policy key or the
+  `--unattended` argument turns it on.
+
+### Added
+
+- ADR-1239: an opt-in `unattended` mode, off by default. On by `unattended: true` as a
+  `policy.json` profile or `repos` key (`policy.py` validates it as a bool; unset, the caps carry
+  no key) or by `/build-task --unattended` (`args.unattended: true`). The result records the
+  source (`unattended_source`: `policy`, `arg` or `both`). Plan mode now reads the policy too
+  (`infra:policy:plan`, read only; it never starts the build's wall time). In unattended mode the
+  fleet decides, without asking: the Build confirmation (as confirm `auto`: the auto gates, then
+  the build in the same run), the default-mode blockers `change_kind`, `new_behaviour` and a task
+  id with no project that exactly one ledger answered (the result keeps `ledger_source`), a
+  relaxed re-plan (passed to the intent judge as `relaxed`; the judge rules), the fleet-brief
+  marker (`args.brief_marker: true`, treated as a ruling), and a code-judge or test-judge
+  `plan_wrong` re-plan before any PR (the auto gates on the new plan, then the build, in the same
+  run). A `confirm: "ask"` the user named without a marker still asks. It never bypasses: hook
+  surface, IaC paths (they still ask) or terraform, work-owner merge, orchestrator PR, intent-judge
+  refusal, scope fence, command allowlist, hash, freeze, fingerprint, ownership, commit, plan-ref,
+  run-state, contract drift, DSN or relaunch stops (one test per stop).
+- The plan ref seals the policy plan mode read (`policy: {profile, policy_sha256, caps}`). A build
+  is never looser than that seal nor than the current file (security review): it reads the file
+  (or a resume's run-state seal) and takes per cap the stricter value: `unattended` only when both
+  say true; `merge`, `update_branch`, `ci_trigger` and `review_post` toward the default;
+  `pr_ready`, `ci_watch` and `stats` on when either is; `pre_freeze_hooks` and
+  `ci_watch_minutes` from the file (or run-state). A gate line names each cap the seal tightened.
+  A malformed sealed policy refuses the plan ref (`planRefProblem`). A plan ref without the key
+  (6.2.2) reads the file as before.
+- A relaxed re-plan passes the intent gate only when each relaxed item has a deviation that quotes
+  it, with verdict `approve`, a non-empty `allowed_by` and `fails_closed: true`; anything else is
+  the intent stop (fail closed, checked by the script).
+- Review H1: a `plan_wrong` re-plan seals the build's policy (already never looser than the plan
+  ref's seal) in the new plan ref, so neither the same-run unattended build nor a later build runs
+  looser. Review L2: `ci_watch_minutes` takes the smaller of the two values; `pre_freeze_hooks`
+  always follows the current file (or run-state).
+- Review M2: a pr-opener retry that names another PR (url or number) stops (`stop_gate: role`).
+- Review L3: the skill passes `user_confirm` (the mode the user named) apart from the marker's
+  ask; unattended never overrides the user's own `confirm: "ask"`, with or without the marker.
+- At most one automatic `plan_wrong` build per run: a second `plan_wrong`, or one after the PR
+  opened, asks as before and records `plan_wrong: ask`.
+- Audit trail: `state.autoDecisions` (`{gate, decision, reason}`, written by `autoDecide()` next
+  to `gate()`) goes into the result (`auto_decisions`), the run-state (next to `auto_confirmed`)
+  and the pr-opener input (`unattended_section`): the PR body gets a `### Unattended run` section
+  under Risks, "Unattended run (policy sha <sha> / arg): automatic decisions: ...". The pr-opener
+  checks it in its own body check; the stats step requires the header in the real PR body
+  (`pr_body_block.py` headers) and stops at `stats` when it is missing.
+- The skill documents `--unattended` and `resume_with`; the fleet-policy skill and the README
+  document the key. The default confirm mode stays `default`.
+- Prompt pins: `infra:policy:plan` (a new plan call) and `unattended` in the policy caps schema
+  moved the three scenario pins; with both reverted every pin is 6.2.2's. The probe pin is
+  unchanged.
+
+- ADR-1233: `.fleet-test-db.json` takes an optional `grants` list. `"PROCESS"` is the only
+  accepted value; any other value (another privilege, `process`, a duplicate, a non-list) refuses
+  the declaration in `test_db_decl.py`, the workflow and `db_up.py` alike. With `["PROCESS"]`,
+  `db_up.py` (argument `grant:PROCESS`) runs `GRANT PROCESS ON *.* TO '<role user>'@'%'` for each
+  role user in the run's own throwaway container only (no tf-local or other server is touched).
+  Without the key the SQL and the arguments are as before, byte for byte.
+
+### Changed
+
+- ADR-1238 (supersedes ADR-1232): the caller check runs in dispatches of at most 30 symbols, with
+  no planner weights (`infra:callers`, then `infra:callers:b2`, ...). `callers.py` refuses to print
+  an output over the 65536-byte relay cap and exits with the `FLEET_CALLERS_RELAY_CAP:` marker; the
+  workflow splits that batch in halves and retries until each part fits, so every relay is bounded
+  whatever the plan maps. One symbol alone over the cap stops (`needs_human`, `stop_gate: callers`,
+  naming the symbol and the relay size). (Re-review: a 4-symbol batch, tried first, cost up to 8
+  times the agents and could stop a run at `cap` that 6.2.2 finished; the marker and the halving
+  make the relay size strict without it.) The plan has no `changed_symbols` count cap and no "split
+  the task" finding. The per-symbol hit cap (100) and the build-time definition check stay. The
+  update-merge grep (`infra:callers:u1`) runs in the same batches. Measured: `callers.py` prints
+  about 61 bytes per occurrence for 50-character paths (4 symbols x 100 hits: about 24 KB; 30 x 100:
+  about 182 KB, over the cap, so such a batch splits).
+  Known (L4, not changed): there is no ceiling on the number of changed symbols; `MAX_AGENTS`
+  bounds the dispatches.
+- A symbol a re-plan round drops is a re-plan finding (`changed_symbols dropped a symbol of an
+earlier round`), not an immediate stop. The round cap still stops.
+- An invalid `policy.json` is the strict default (`policy.py` `DEFAULT`, no `pre_freeze_hooks`
+  list) plus a gate line, not a stop. `policy.py` prints the default caps with the error. A sealed
+  `pre_freeze_hooks` that is not a list of hook ids is no list (a gate line).
+- Plan mode on a branch that has build commits and its sealed plan ref
+  (`refs/fleet/<task id>/plan`) returns `resume_with: "build"` and that `plan_ref`
+  (`stop_gate: resume`); the build-task skill then runs build mode with it. With no usable plan
+  ref the stop is as before.
+- One scripted retry before these stops: push access still unknown at the PR step
+  (`infra:gh-identity:pr-2`), a pr-opener title other than the convention's, a pr-opener that did
+  not state `gates_not_run` (`role:fleet-pr-opener:again`, on the same PR, with `retry_reason`),
+  and a test-judge `revise` that routes no finding to a known criterion
+  (`role:fleet-test-judge:r<n>:again`, with `retry_reason`).
+- A test-judge plan finding takes the plan_wrong re-plan path (re-plan, save the old head, ask
+  for confirmation), as a code-judge `plan_wrong` does.
+
+### Fixed (6.2.2 carry-over lows)
+
+- `format_files.py` (one clock read decides the cut): a pre-freeze check-phase timeout now names the fixer time and whether the
+  570 s step ceiling cut the 240 s check budget ("the fixer runs took N s, so the check phase had
+  M s (cut by the 570 s step ceiling)", in `note`; the workflow's stop reason quotes it). No
+  isolated `git worktree add` starts once the check budget is spent.
+- Preflight: "absent from the installed plugin" is given only when the hash-line count agrees on
+  both relays; the first such relay is retried like any drop (a relay that dropped lines and
+  counted only those it kept no longer reads as a missing file).
+- `tests/v507_digest_relays.test.mjs`: the write-step check parses every `infra(...)` call by its
+  top-level arguments, so `infra(..., null, "x")` and an agent variable as the 4th argument are
+  caught too.
+
 ## [6.2.2] - 2026-11-12
 
 Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1235, ADR-1237).

@@ -22,6 +22,7 @@ You check a plan against the task's stated intent before the workflow auto-confi
 - `changed_symbols`: the planner's caller map.
 - `change_kind`, `new_behaviour`: the planner's classification, declared from ticket text. With confirm `default` the workflow builds without Max only for `bug_fix` with `new_behaviour: false`. They are claims to check, not facts. Both are null for an old plan ref.
 - `worktree`, `branch`, `default_branch`, `scratch_dir`, `project`.
+- `relaxed` (unattended only): how a re-plan relaxed round 0. Rule on each as a deviation whose `item` quotes it; refuse unless the task or a ruling allows it.
 
 ## Run rules
 

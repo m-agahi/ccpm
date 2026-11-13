@@ -264,15 +264,14 @@ test("6.2.2 re-review D-L1: fixer runs that ran out of time stop with a reason n
   assert.match(out.result.reason, /the pre_freeze_hooks check phase ran out of time: cargo-fmt/);
 });
 
-test("6.2.2 2107: listed hooks that could not run (no pre-commit) stop for a human; a bad sealed list stops too", async () => {
+test("6.2.2 2107: listed hooks that could not run (no pre-commit) stop for a human; 6.3.0: a bad sealed list is no list (v630_flow)", async () => {
   let out = await run(happy({ script: { "infra:policy": policyWith(["cargo-fmt"]), "infra:format-tests:r1": (p) => hookResult(p, [], { ran: false, note: "pre-commit is not installed" }) } }), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "policy");
   assert.match(out.result.reason, /pre_freeze_hooks \(cargo-fmt\) did not run \(pre-commit is not installed\)/);
   for (const bad of ["cargo-fmt", [""], ["a b"], ["-x"], [1]]) {
     out = await run(happy({ script: { "infra:policy": policyWith(bad) } }), ARGS);
-    assert.equal(out.result.status, "needs_human", JSON.stringify(bad));
-    assert.equal(out.result.stop_gate, "policy", JSON.stringify(bad));
+    assert.equal(out.result.status, "ok", JSON.stringify(bad));
   }
 });
 
@@ -334,14 +333,14 @@ test("6.2.2 2107: policy.py: a repos override's pre_freeze_hooks reaches the cap
   assert.deepEqual(policyRun(polDoc({ pre_freeze_hooks: [] })).caps.pre_freeze_hooks, []);
 });
 
-test("6.2.2 2107: policy.py: a pre_freeze_hooks that is not a list of hook ids makes the policy invalid; the key is per repo only", () => {
+test("6.2.2 2107: policy.py: a pre_freeze_hooks that is not a list of hook ids makes the policy invalid (6.3.0: the strict default, no list); the key is per repo only", () => {
   for (const bad of ["cargo-fmt", [""], [1], ["a b"], ["-x"], [null], { a: 1 }]) {
     const o = policyRun(polDoc({ pre_freeze_hooks: bad }));
-    assert.equal(o.caps, null, JSON.stringify(bad));
+    assert.deepEqual(o.caps, DEFAULT_CAPS, JSON.stringify(bad));
     assert.match(o.error, /pre_freeze_hooks must be a list of hook ids/, JSON.stringify(bad));
   }
   const p = policyRun(polDoc({}, { pre_freeze_hooks: ["cargo-fmt"] }));
-  assert.equal(p.caps, null);
+  assert.deepEqual(p.caps, DEFAULT_CAPS);
   assert.match(p.error, /unknown key "pre_freeze_hooks"/);
 });
 
@@ -606,23 +605,31 @@ test("6.2.2 review M1: every hash line but no single hash_lines= line (none, or 
   assert.equal(out.result.status, "ok", out.result.reason);
 });
 
-test("6.2.2 re-review D-L2: one count line equal to the lines relayed, short of the tables, is a file absent on disk: no retry, named with the install text", async () => {
+test("6.2.2 re-review D-L2: one count line equal to the lines relayed, short of the tables, is a file absent on disk: 6.3.0: one retry, then named with the install text when both relays agree", async () => {
   // a real missing file: the probe hashed one file fewer and counted it
   let s = happy();
   s.preflight = Object.assign({}, s.preflight, { scripts_probe: scriptsProbe({ sums: { hasher: undefined } }) });
   let out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "contract");
-  assert.deepEqual(out.labels, ["preflight"]);
+  assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
   assert.match(out.result.reason, /hasher\.py is absent from the installed plugin/);
-  assert.match(out.result.reason, /install fleet 6\.2\.2/);
+  assert.match(out.result.reason, /install fleet 6\.3\.0/);
   assert.doesNotMatch(out.result.reason, /relayed/);
   // 10 lines with a count of 10 reads the same way
   s = happy();
   s.preflight = Object.assign({}, s.preflight, { scripts_probe: META.concat(["hash_lines=10"], FIRST10) });
   out = await runOne(s, ARGS);
-  assert.deepEqual(out.labels, ["preflight"]);
+  assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
   assert.match(out.result.reason, /is absent from the installed plugin/);
+  // 6.3.0 (6.2.2 carry-over low 2): a first relay that dropped lines and counted only those it kept is
+  // retried; a full second relay passes (the residual the retry removes)
+  s = happy();
+  let n = 0;
+  s.__mutate = { label: "preflight", fn: (r, prompt, label) => (label === "preflight" && n++ === 0 ? Object.assign(r, { scripts_probe: scriptsProbe({ sums: { hasher: undefined } }) }) : r) };
+  out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.ok(out.labels.includes("preflight:relay-retry"));
 });
 
 test("6.2.2 2104: the probe, run for real, prints hash_lines= with the count of its sha256sum lines before them", { skip: spawnSync("python3", ["-c", "1"]).status !== 0 }, async () => {

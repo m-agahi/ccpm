@@ -132,6 +132,8 @@ STEP_CEILING = 570
 import time
 STARTED = time.monotonic()
 FIX_TIMEOUT = [False]
+# 6.3.0 (6.2.2 carry-over low 1): the fixer time and the check budget, named in a timeout note
+TIMING = ['']
 before = snapshot(wt)
 if sel.get('dirty') is True:
     cand = names(git(wt, 'diff-tree', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', before).stdout)
@@ -469,7 +471,11 @@ try:
     # files that fail alone; none failing alone is a whole-tree failure (file ''). A timeout
     # (a run's own, or the check budget) is reported as one, never as a failure.
     NO_STAGE = re.compile(rb'No hook with id `[^`]*` in stage')
-    check_end = min(time.monotonic() + CHECK_BUDGET, STARTED + STEP_CEILING)
+    t_fix = time.monotonic()
+    full = t_fix + CHECK_BUDGET
+    check_end = min(full, STARTED + STEP_CEILING)
+    TIMING[0] = '; the fixer runs took %d s, so the check phase had %d s%s' % (
+        int(t_fix - STARTED), max(0, int(check_end - t_fix)), ' (cut by the %d s step ceiling)' % STEP_CEILING if check_end < full else '')
     cenv = dict(env, PATH=clean_path([wt, scratch_root]), PRE_COMMIT_COLOR='never')
     def check(hid, cwd, paths):
         # (returncode, output), or None on a timeout
@@ -482,6 +488,9 @@ try:
             return None
         return pr.returncode, pr.stdout + pr.stderr
     def isolated(hid, f):
+        # 6.3.0 (low 1): no isolated checkout once the check budget is spent
+        if check_end - time.monotonic() < 1:
+            return None
         iso = tempfile.mkdtemp(prefix='fmt-iso-', dir=scratch_root)
         os.rmdir(iso)
         git(wt, '-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', iso, 'HEAD')
@@ -539,7 +548,7 @@ def head_text(b):
     return t[:HOOK_HEAD_CAP]
 # the output of each failing hook's run on all the files
 allout = b'\n'.join(OUTPUTS) if FAILED else b''
-done(ran=not NOT_RUN, note='pre-freeze hook id(s) cannot run: ' + '; '.join(NOT_RUN) if NOT_RUN else 'ran pre-commit run --files in a scratch checkout of HEAD',
+done(ran=not NOT_RUN, note=('pre-freeze hook id(s) cannot run: ' + '; '.join(NOT_RUN) if NOT_RUN else 'ran pre-commit run --files in a scratch checkout of HEAD') + (TIMING[0] if TIMED_OUT else ''),
      runs=runs, stable=stable, files=files, changed=changed,
      hook_failed=bool(FAILED), hook_failures=[[f, h] for f, h in FAILED], hook_head=head_text(allout), hook_sha256=hashlib.sha256(allout).hexdigest() if FAILED else '',
      hook_timeout=sorted(set(TIMED_OUT)), fix_timeout=FIX_TIMEOUT[0], unknown_hooks=NOT_RUN)

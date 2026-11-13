@@ -674,9 +674,11 @@ opener passes the title single-quoted, never in double quotes.
 ### Policy (6.0.0, ledger 2033)
 
 A build reads `$XDG_CONFIG_HOME/fleet/policy.json` (default `~/.config/fleet/policy.json`) once,
-after the run-state read, with `scripts/policy.py <host> <owner/repo>`. The file is strict JSON
-(`policy.example.json` shows the shape): duplicate or unknown keys, a wrong type or a bad value
-stop the build (`stop_gate: "policy"`); a bad file never falls back to the default.
+after the run-state read, with `scripts/policy.py <host> <owner/repo>`; plan mode reads it too
+(6.3.0). The file is strict JSON (`policy.example.json` shows the shape): duplicate or unknown
+keys, a wrong type or a bad value make the file invalid. Since 6.3.0 an invalid file is the strict
+default (no `pre_freeze_hooks` list, unattended off) with a gate line naming the error; it no
+longer stops the build.
 
 - The first profile whose `match.hosts` (when listed) holds the origin host and whose
   `match.owners` holds the owner (glob, any case) wins. Its first `repos` glob that matches
@@ -699,6 +701,20 @@ stop the build (`stop_gate: "policy"`); a bad file never falls back to the defau
   }
   ```
 
+- `unattended` (6.3.0, ADR-1239): a profile or `repos` key, `true` or `false`; unset is off, and
+  the caps carry no key. `true` turns on the fleet's unattended mode for those repos (as the
+  `/build-task --unattended` argument does for one run): the fleet decides the Build confirmation,
+  the default-mode blockers (`change_kind`, `new_behaviour`, a task id that exactly one ledger
+  answered), a relaxed re-plan (the intent judge rules on it), the fleet-brief marker and a
+  `plan_wrong` re-plan (built in the same run) without asking. It never bypasses a safety stop
+  (hook surface, IaC, work-owner merge, orchestrator PR, intent refusal, scope fence, command
+  allowlist, hash, freeze, fingerprint, ownership, commit, plan-ref, run-state, contract drift,
+  DSN, relaunch). Each decision is recorded as `{gate, decision, reason}` in the result
+  (`auto_decisions`, with `unattended_source`), the run-state and the PR body's
+  `### Unattended run` section under Risks, which the stats step checks in the real body. Plan
+  mode reads the policy too (`infra:policy:plan`).
+- An invalid file (6.3.0) is the strict default, with a gate line naming the error; it no longer
+  stops the build.
 - Script rule, whatever the file says: an owner in `WORK_OWNERS` (`quinyx`, `concrete-media`, on
   any host or ssh alias) gets `merge` and `update_branch` `never`.
 - The run-state seals `policy: {profile, policy_sha256, caps}`; the result carries it too. A
@@ -1031,6 +1047,14 @@ start with, start, or LIKE-match a system schema (`mysql`, `sys`, `information_s
 and `db_up.py` check the same). Without the key, the SQL is the same as before. Every role user
 gets the same pattern grant in the one container, so two roles that run at the same time can
 see each other's prefixed databases: tests should use unique names.
+
+Optional since 6.3.0 (ADR-1233): `"grants": ["PROCESS"]`, for tests that read
+`information_schema.innodb_trx` or other process data. `db_up.py` (argument `grant:PROCESS`)
+then also runs `GRANT PROCESS ON *.* TO '<role user>'@'%'` for each role user, in the run's own
+throwaway container only, never on another database server. `PROCESS` is the only accepted
+value: any other value (another privilege, a lower-case `process`, a duplicate, a non-list)
+refuses the whole declaration in all three checks. `[]` grants nothing. Without the key, the SQL
+and the `db_up.py` arguments are the same as before.
 
 ### Threat model
 

@@ -54,6 +54,9 @@ ENUMS = {'merge': ('never', 'auto'), 'update_branch': ('never', 'once'), 'review
 # 6.2.2 (2107, ADR-1237): a repos override may list the hook ids the fleet runs
 # on the writers' test files before the freeze; no list, no hook (not a default cap)
 REPO_ONLY = ('pre_freeze_hooks',)
+# 6.3.0 (ADR-1239): unattended mode, a bool in a profile or a repos override; off when unset
+# (not a default cap: with no key, the caps carry none)
+OPTIONAL = ('unattended',)
 path = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'fleet', 'policy.json')
 
 
@@ -92,6 +95,11 @@ def caps_of(o, at):
                 raise Bad(at + '.pre_freeze_hooks must be a list of hook ids (non-empty strings, no whitespace, no leading -, at most 128 characters)')
             c[k] = list(v)
             continue
+        if k in OPTIONAL:
+            if not isinstance(v, bool):
+                raise Bad(at + '.' + k + ' must be true or false')
+            c[k] = v
+            continue
         if k not in DEFAULT:
             continue
         if k in ENUMS:
@@ -126,7 +134,7 @@ try:
         hit = None
         for i, p in enumerate(doc['profiles']):
             at = 'profiles[%d]' % i
-            keys(p, ('name', 'match', 'repos') + tuple(DEFAULT), at)
+            keys(p, ('name', 'match', 'repos') + tuple(DEFAULT) + OPTIONAL, at)
             if not isinstance(p.get('name'), str) or not p['name']:
                 raise Bad(at + '.name must be a non-empty string')
             m = p.get('match')
@@ -140,7 +148,7 @@ try:
             over = []
             for g, rc in repos.items():
                 ra = at + '.repos[' + json.dumps(g) + ']'
-                keys(rc, tuple(DEFAULT) + REPO_ONLY, ra)
+                keys(rc, tuple(DEFAULT) + REPO_ONLY + OPTIONAL, ra)
                 over.append((g, caps_of(rc, ra)))
             if hit is None and (hosts is None or host in hosts) and any(fnmatch.fnmatchcase(owner, o) for o in owners):
                 hit = (p['name'], caps, over)
@@ -155,7 +163,8 @@ try:
                     out['matched'] += ', repos[' + json.dumps(g) + ']'
                     break
 except (Bad, OSError, UnicodeDecodeError) as e:
-    out.update(profile=None, caps=None, matched=None, error='policy file ' + path + ': ' + str(e))
+    # 6.3.0: an invalid file is the strict default (no pre_freeze_hooks list), with the error
+    out.update(profile=None, caps=dict(DEFAULT), matched=None, error='policy file ' + path + ': ' + str(e))
 out['now'] = int(time.time())
 out['args'] = args
 out['program'] = _PROG

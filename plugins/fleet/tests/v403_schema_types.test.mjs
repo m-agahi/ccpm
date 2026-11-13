@@ -507,7 +507,14 @@ const READS = {
     "r.capped array": "prog:callers:capped",
     "x string": "prog:callers:occurrences.*[]",
     "occ[n] array": "prog:callers:occurrences.*",
+    // 6.3.0 (ADR-1238): the batches merge
+    "r.auto_dont_care object": "prog:callers:auto_dont_care",
+    "r.auto_dont_care array": "!prog:callers:auto_dont_care",
+    "r.doctest_md array": "prog:callers:doctest_md",
+    // review M1: a batch over the relay cap splits until one symbol is left
+    "part.length number-literal": PARSED_LOCAL,
   },
+  unattendedOn: { "p.caps.unattended boolean": "prog:policy:caps.unattended", "input.unattended boolean": PARSED_ARGS },
   callerCheck: {
     "x string": "prog:callers:occurrences.*[]",
     "r.doctest_md array": "prog:callers:doctest_md",
@@ -605,7 +612,19 @@ const READS = {
     "pr.refs array": "prog:plan_ref:refs",
     "files.length number-literal": PARSED_LOCAL,
   },
-  makePlanRef: { "f.project string": PARSED_ARGS },
+  // 6.3.0 (security review): the plan ref's policy seal; this check IS its refusal (pre_freeze_hooks follows the current file)
+  sealedPolicyProblem: {
+    "p object": PARSED_REF,
+    "p array": PARSED_REF,
+    "p.profile string": PARSED_REF,
+    "c object": PARSED_REF,
+    "c array": PARSED_REF,
+    "c[k] boolean": PARSED_REF,
+    "c.ci_watch_minutes integer": PARSED_REF,
+    "c.unattended boolean": PARSED_REF,
+  },
+  stricterPolicy: { "b[k] boolean": "parsed: the policyStep result (policy.py caps or the run-state seal)", "s[k] boolean": PARSED_REF, "s.ci_watch_minutes integer": PARSED_REF },
+  makePlanRef: { "f.project string": PARSED_ARGS, "f.policy object": "parsed: the policyStep result (digest-checked policy.py)" },
   preflightRecordProblem: {
     "p object": PARSED_REF,
     "p array": PARSED_REF,
@@ -634,9 +653,20 @@ const READS = {
     "cl array": "!" + IJ + "classification",
     "cl.quote string": IJ + "classification.quote",
   },
-  autoGates: { "r.deviations array": IJ + "deviations", "r.classification object": IJ + "classification" },
+  autoGates: {
+    "r.deviations array": IJ + "deviations",
+    "r.classification object": IJ + "classification",
+    // 6.3.0 (ADR-1239): a relaxed item's deviation
+    "d.allowed_by string": IJ + "deviations[].allowed_by",
+    "d.fails_closed boolean": IJ + "deviations[].fails_closed",
+  },
   defaultBlockers: { "pf.new_behaviour boolean": SP + "new_behaviour", "raw string-re": PARSED_ARGS },
   planMode: {
+    // 6.3.0 (ADR-1239)
+    "input.unattended boolean": PARSED_ARGS,
+    "size number-literal": PARSED_LOCAL,
+    // 6.3.0: the sealed plan ref a branch with build commits resumes with
+    "e.ref_ok boolean": "prog:branch_scan:refs[].ref_ok",
     "input.input string": PARSED_ARGS,
     // 5.0.0 (R2): + the no-ledger stop before intake
     "raw string-re": [PARSED_ARGS, 2],
@@ -693,6 +723,9 @@ const READS = {
   callRole: { "label string-re": "parsed: the script's own step label" },
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
+    // 6.3.0 (ADR-1239)
+    "resume.auto_decisions array": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    "r.headers_missing array": "prog:pr_body_block:headers_missing",
     // 6.0.0 (ledger 2044)
     "ref.history.audits number": PARSED_REF,
     // 6.0.0 (ledger 2045)
@@ -767,7 +800,7 @@ const READS = {
     "r.diff array": "prog:fleet_scan:diff",
     "r.commits array": "prog:fleet_scan:commits",
     "c.files array": "prog:fleet_scan:commits[].files",
-    "r.gates_not_run_stated boolean": "role:fleet-pr-opener:gates_not_run_stated",
+    "x.gates_not_run_stated boolean": "role:fleet-pr-opener:gates_not_run_stated",
     "r.state_sha string": "prog:state_write:state_sha",
     "pa[0] string": "prog:push_classify:args[]",
     "pa array": "prog:push_classify:args",
@@ -823,12 +856,16 @@ const READS = {
     "d.major string": "parsed: the repo's declaration file (test_db_decl decl)",
     "d.env string": "parsed: the repo's declaration file (test_db_decl decl)",
     "d.env string-re": "parsed: the repo's declaration file (test_db_decl decl)",
+    // 6.3.0 (ADR-1233): the optional grants list; this check IS its refusal
+    "g array": "parsed: the repo's declaration file (test_db_decl decl.grants)",
+    "x string": "parsed: the repo's declaration file (test_db_decl decl.grants[])",
   },
   // 5.0.3 (2011): the optional test_db_prefix of the same file; this check IS its refusal
   dbPrefixProblem: { "p string": "parsed: the repo's declaration file (test_db_decl decl.test_db_prefix)" },
   dbUsersOk: { "users object": "prog:db_up:users", "users array": "!prog:db_up:users", "users[d] string": "prog:db_up:users.*" },
   testDbStep: {
     "t object": "infra:test_db",
+    "t.decl.grants array": "parsed: the repo's declaration file, checked by testDbDeclProblem",
     "name string-re": PARSED_LOCAL,
     "sw.removed array": "prog:db_sweep:removed",
     "sw.errors array": "prog:db_sweep:errors",
@@ -843,6 +880,8 @@ const READS = {
     "d.error string": "prog:db_down:error",
   },
   main: {
+    "input.unattended boolean": [PARSED_ARGS, 2],
+    "input.brief_marker boolean": PARSED_ARGS,
     "input.fresh_preflight boolean": PARSED_ARGS,
     "input.date string": PARSED_ARGS,
     "input.date string-re": PARSED_ARGS,
@@ -1064,7 +1103,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.2\.2\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.2\.2\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

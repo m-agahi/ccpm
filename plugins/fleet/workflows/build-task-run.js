@@ -112,7 +112,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "6.2.2";
+const FLEET_VERSION = "6.3.0";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with
 const RELOAD_HINT =
@@ -166,8 +166,11 @@ const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
 // Caller coverage: a changed symbol is a bare identifier
 const SYMBOL_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const OCCURRENCE_RE = /^(.+):([1-9][0-9]*)$/;
-const MAX_CHANGED_SYMBOLS = 30;
 const MAX_SYMBOL_HITS = 100;
+// 6.3.0 (ADR-1238; re-review): the caller check runs in dispatches of at most 30 symbols (no planner weights);
+// callers.py marks an output over the relay cap and the workflow splits that batch in halves
+const CALLER_BATCH_SYMBOLS = 30;
+const CALLERS_CAP_MARK = "FLEET_CALLERS_RELAY_CAP:";
 const CALLER_METHOD =
   "git grep -n -I -w -F --full-name -e <symbol>: the working tree content of the tracked files in the fleet worktree, the run's own plan doc excluded; every hit must be mapped and every mapped line must be a hit (checked by the script)";
 const CALLER_LIMITS = [
@@ -1537,14 +1540,14 @@ function relayDigestOk(r, keys, name) {
 const PROGRAM_SHA256 = {
   "branch_scan": "ec03aa965ed9a3d145ce1fb1636685d2be087877daf78f369eed0a19f532967d",
   "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
-  "callers": "285df005bb08ce9a9f009b7554a9e697913ccff0a620980d2e59c04550bed4bc",
+  "callers": "4623272ec380872179ed0df68287bee2e66c4d88a1677c4a298cad642cdcb462",
   "changed_defs": "40ecf45fe37448244572d8f7fd64ad574837970047a58de7c1ac7a262f717e94",
   "ci_watch": "d32f9341cf25c626370097dd2d91c5f4703d393139f5951405c6e40c63eb80b8",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
-  "db_up": "6aee2fdb201b6a3634dbd1ea6c0cfa40eefe3a0eed09c8d40e7f6c3b95a17f4c",
+  "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
   "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
-  "format_files": "8c4ad53ffeed3e5d29d8c7274e8b90097710f4285cca98a232b0af64d48680f7",
+  "format_files": "183f424e72733a515b9c87dd4ff541f287bf897d6d37dec91b48269dd090f4e1",
   "gh_identity": "44d62a8f8b6cd4f69c7b057d0180f584edf6b03f03988e35f048bdc1d7ce2d70",
   "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
   "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
@@ -1557,7 +1560,7 @@ const PROGRAM_SHA256 = {
   "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
   "plan_ref": "494ceb934b89fa5c2962ef786ba93bee63bd09f776c82c50579fdf23f301c136",
   "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
-  "policy": "cfa06238bb22327ccfe4cbfe198cd0752aca3cdab77d6eaf4068fdf9a7b6d906",
+  "policy": "1efd8ada37abf58151d14b11300fac1235c13b414ab0649fcc8e26b0e10d37b5",
   "pr_body_block": "368ed0c33928769f6951a1e15b65362b438fc010b0ea26c6284fc668c5e6c733",
   "pr_convention": "4763189023084bbad77a9eb5c2704692da5932d2dfa335654c5e4178f027c2b7",
   "pr_state": "a17beb445d0fac95dff82b49bfc75f6396293a6f193bfcfe2f6d4ddee51856b9",
@@ -1572,7 +1575,7 @@ const PROGRAM_SHA256 = {
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
   "session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
   "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
-  "test_db_decl": "1ea403e5158e263247c8a20cf7e10d88c75fb74ebe963574f0052dd36465a7be",
+  "test_db_decl": "c2e9f36d23fb147835a85c4421d5e38a05912d343fdaa1f08fe285c3cfc5c11d",
   "tf_gate": "627c00cefbdf2da4a4144854dcbb4b543fb1e05335c1a4c7c74dc662ed35c02c",
   "verify_since": "91524ed3b1c39d49e2f5be4497d2e118b85e56482bd5e02256a17630405bb340"
 };
@@ -1587,14 +1590,14 @@ const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
   "fleet-code-judge": "0b7a412cb27884de57c70bb48f90627c8595057ef29ce1a8e0f147df49f979fe",
   "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
-  "fleet-intent-judge": "9cbd440fd7c3b20738e38598c84df438657af2fb9aa22ee007028cbd853902c1",
-  "fleet-pr-opener": "b1207cb47c140b6c15cf6c1874277e1edecb2862035d97d5a6da7f8bf3cab981",
-  "fleet-test-judge": "c1aabca1c8623473811ca3d6ce66fe821f0dac251ea1d53d528372ad2d2bfe7e",
+  "fleet-intent-judge": "eec4332e06027010a8f22aec7b399289665fb652f6d773b9c093f0f7d1f3bfc6",
+  "fleet-pr-opener": "33912b762a9020c5aff7bd1a24aa5bb2673509a584660e4670ac41200ef62404",
+  "fleet-test-judge": "219c89b656f7ae61d28ab7cf2486b498792385df0cdd2a256fdae6c0f53c051b",
   "fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
   "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
   "plan-audit": "084fe730cc8ecb5cf8712b164bb763cb9bbe97e18bc3cc04e82480ba158de984",
   "pr-review": "728800a005a54026eb345d5b9784bdde50cdafd5d918f9faa8d2cec7c091142d",
-  "scope-and-plan": "5ac14fa250643699661378abfc38ed7b459268c6349df26a1d5f2a48aea8da40"
+  "scope-and-plan": "1f9d529f2aabefca5a109d1a053c11b1858478bc4c40f89027874d9c070ca9b4"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -1675,7 +1678,7 @@ const PROGRAM_SLOTS = [
   [/^infra:load-ref/, [[null, "plan_ref"]]],
   [/^infra:verify-plan(?!-commit)/, [[null, "verify_since"], ["plan_hash", "plan_hash"], ["test_db", "test_db_decl"]]],
   [/^infra:read-state$/, [[null, "read_state"]]],
-  [/^infra:policy$/, [[null, "policy"]]],
+  [/^infra:policy(:plan)?$/, [[null, "policy"]]],
   [/^infra:pr-stats/, [[null, "pr_body_block"]]],
   [/^infra:(pr-ready|pr-merge|pr-update|ci-rerun|ci-logs|pr-view|pr-fetch|fleet-cleanup)/, [[null, "pr_state"]]],
   [/^infra:orch-scan/, [[null, "orch_scan"]]],
@@ -1876,7 +1879,7 @@ const PROGRAM_OUT = {
     profile: STR_OR_NULL,
     file: STR,
     policy_sha256: STR_OR_NULL,
-    caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] }, pre_freeze_hooks: STRS } },
+    caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] }, pre_freeze_hooks: STRS, unattended: BOOL } },
     matched: STR_OR_NULL,
     error: STR_OR_NULL,
     now: INT,
@@ -2040,7 +2043,7 @@ function relayAs(slot) {
 }
 
 // scripts_dir: the preflight probe's lines, parsed
-function scriptsProbeOf(probe, dir) {
+function scriptsProbeOf(probe, dir, retried) {
   const bad = (m) => ({ problem: m });
   if (!Array.isArray(probe) || probe.some((x) => typeof x !== "string")) return bad("the scripts directory probe returned no list of lines");
   const lines = probe.map((x) => x.replace(/\r$/, "")).filter((x) => x !== "");
@@ -2095,8 +2098,9 @@ function scriptsProbeOf(probe, dir) {
   for (const n of Object.keys(ROLE_SHA256)) if (!Object.prototype.hasOwnProperty.call(rsums, n + ".md")) want.push("roles/" + n + ".md");
   for (const n of Object.keys(SHARED_SHA256)) if (!Object.prototype.hasOwnProperty.call(rsums, "_shared/" + n + ".md")) want.push("roles/_shared/" + n + ".md");
   const nWant = Object.keys(programTable()).length + Object.keys(ROLE_SHA256).length + Object.keys(SHARED_SHA256).length;
-  // re-review D-L2: one count line equal to the lines relayed: the probe hashed what is there, the rest is absent on disk
-  if (want.length && counts.length === 1 && counts[0] === "hash_lines=" + nHash)
+  // re-review D-L2: one count line equal to the lines relayed: the probe hashed what is there, the rest is absent on disk;
+  // 6.3.0 (low 2): only when both relays agree (the first one is retried like any drop)
+  if (retried && want.length && counts.length === 1 && counts[0] === "hash_lines=" + nHash)
     return bad(want.slice(0, 10).map((f) => f + " is absent from the installed plugin").join("; ") + (want.length > 10 ? " (" + (want.length - 10) + " more)" : ""));
   if (want.length) return drop("relayed " + nHash + " of " + nWant + " expected hash lines", want);
   if (counts.length !== 1) return drop("relayed " + counts.length + " hash_lines= lines (the probe prints one)");
@@ -2556,7 +2560,7 @@ async function formatFiles(label, worktree, select, frozenList, allowed, phaseNa
   if (r.fix_timeout)
     halt("needs_human", label + ": the fixer hook runs ran out of time (each run at most " + FIX_RUN_TIMEOUT + " s, at most 3 runs); no hook result is trusted, fix or speed up the hooks", "hooks");
   if (r.hook_timeout.length)
-    halt("needs_human", label + ": the pre_freeze_hooks check phase ran out of time: " + r.hook_timeout.join(", ") + " (each run at most " + FIX_RUN_TIMEOUT + " s, the check phase at most 240 s); a test file is never frozen unchecked: list a faster hook or none", "hooks");
+    halt("needs_human", label + ": the pre_freeze_hooks check phase ran out of time: " + r.hook_timeout.join(", ") + " (each run at most " + FIX_RUN_TIMEOUT + " s, the check phase at most 240 s" + (/; the fixer runs took \d+ s/.test(r.note) ? r.note.slice(r.note.indexOf("; the fixer runs took")) : "") + "); a test file is never frozen unchecked: list a faster hook or none", "hooks");
   if (!Array.isArray(frozenList) && r.frozen_map !== frozenList.sha) halt("failed", label + ": the program read the frozen map " + JSON.stringify(r.frozen_map) + ", not " + frozenList.sha, "hash");
   // the cache purge before the comparison
   if (!Number.isInteger(r.purged) || r.purged < 0 || !Array.isArray(r.purged_paths) || r.purged_paths.length > r.purged || r.purged_paths.some((x) => typeof x !== "string"))
@@ -3348,11 +3352,32 @@ const state = {
   db: null,
   dbTarget: null,
   tail: 0,
+  // 6.3.0 (ADR-1239): "policy", "arg", "both" or null, and the decisions made instead of Max
+  unattended: null,
+  autoDecisions: [],
 };
 
 function gate(msg) {
   state.gateLog.push(msg);
   log(msg);
+}
+function autoDecide(g, decision, reason) {
+  state.autoDecisions.push({ gate: g, decision, reason });
+  gate("unattended: " + g + ": " + decision + " (" + reason + ")");
+}
+// the PR body section of an unattended run (under Risks); the stats step checks its header in the real body
+const UNATT_HEAD = "### Unattended run";
+function unattendedSection() {
+  if (!state.unattended) return null;
+  const src = state.unattended === "arg" ? "arg" : "policy sha " + state.unattendedSha + (state.unattended === "both" ? " / arg" : "");
+  return UNATT_HEAD + "\n\nUnattended run (" + src + "): automatic decisions: " + (state.autoDecisions.map((d) => d.gate + ": " + d.decision + " (" + d.reason + ")").join("; ") || "none") + "\n";
+}
+function unattendedOn(p, input) {
+  const a = !!(p && p.caps && p.caps.unattended === true);
+  const b = input.unattended === true;
+  state.unattended = a && b ? "both" : a ? "policy" : b ? "arg" : null;
+  state.unattendedSha = p ? p.policy_sha256 : null;
+  if (state.unattended) gate("unattended mode on (" + state.unattended + ")");
 }
 function halt(status, msg, stopGate) {
   state.stopGate = STOP_GATES.indexOf(stopGate) >= 0 ? stopGate : null;
@@ -3772,6 +3797,7 @@ function finish(status, reason) {
     follow_ups: state.followUps || [],
     ...(state.ci ? { ci: state.ci } : {}),
     ...(state.ciWriteBack ? { ci_write_back: state.ciWriteBack } : {}),
+    ...(state.unattended ? { unattended: true, unattended_source: state.unattended, auto_decisions: state.autoDecisions } : {}),
   };
 }
 function finishStop(status, reason) {
@@ -3824,7 +3850,7 @@ async function preflightStep(repo) {
   if (sp.relay) {
     gate("preflight: the agent " + sp.relay + "; retried once");
     pre = await dispatch("preflight:relay-retry", preflightPrompt({ repo }) + "\nRetry: the workflow found that the " + sp.problem + ". Copy every output line of the probe command into scripts_probe, one array item per line, in order, every sha256sum line included; never a summary or a sentence in place of lines.", preOpts);
-    sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
+    sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir, true);
     if (sp.relay)
       halt(
         "needs_human",
@@ -4330,10 +4356,6 @@ function changedSymbolFindings(raw, criteria) {
   const findings = [];
   const clean = [];
   const bad = (f) => findings.push({ criterion: null, finding: f });
-  if (raw.length > MAX_CHANGED_SYMBOLS) {
-    bad(raw.length + " symbols; at most " + MAX_CHANGED_SYMBOLS + " can be checked (split the task)");
-    return { findings, clean };
-  }
   const seen = {};
   raw.forEach((e, i) => {
     if (!e || typeof e !== "object" || Array.isArray(e)) return bad("entry " + i + " is not an object");
@@ -4374,23 +4396,44 @@ function docOrLockFile(p) {
   return DOC_FILE_RE.test(b) || NOTE_FILE_RE.test(b) || LOCK_FILES.indexOf(b) >= 0;
 }
 async function callerGrep(label, names, worktree, planPath, phaseName) {
-  const r = await infra(
-    label,
-    callersPrompt({ worktree, plan_path: planPath, symbols: names, cap: MAX_SYMBOL_HITS }),
-    phaseName,
-    JUDGE_AGENT,
-    "callers",
-  );
-  const occ = r.occurrences;
-  if (!occ || typeof occ !== "object" || Array.isArray(occ) || !Array.isArray(r.capped))
-    halt("failed", label + " returned no occurrences map or capped list");
-  for (const n of names)
-    if (!Array.isArray(occ[n]) || !occ[n].every((x) => typeof x === "string"))
-      halt("failed", label + " returned no occurrence list for " + n);
-  requireProgram(r, "callers", label);
-  if (!relayDigestOk(r, progKeys("callers"), "callers"))
-    halt("failed", label + ": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
-  return r;
+  const all = { occurrences: {}, capped: [], auto_dont_care: {}, doctest_md: [] };
+  const per = CALLER_BATCH_SYMBOLS;
+  const queue = [];
+  for (let i = 0; i < names.length; i += per) queue.push(names.slice(i, i + per));
+  if (queue.length > 1) gate(label + ": " + names.length + " symbols in " + queue.length + " caller-check dispatches (at most " + per + " symbols each)");
+  for (let b = 0; queue.length; b++) {
+    const lb = label + (b ? ":b" + (b + 1) : "");
+    const part = queue.shift();
+    const r = await dispatch(lb, callersPrompt({ worktree, plan_path: planPath, symbols: part, cap: MAX_SYMBOL_HITS }), { schema: INFRA_SCHEMA, phase: phaseName, agentType: JUDGE_AGENT, digest: "callers" });
+    // review M1: an output over the relay cap is split in two; one symbol alone over it stops
+    if (r.status !== "ok" && String(r.reason).indexOf(CALLERS_CAP_MARK) >= 0) {
+      if (part.length === 1) halt("needs_human", lb + ": the occurrences of " + part[0] + " are over the 65536-byte relay cap (relay size; at most " + MAX_SYMBOL_HITS + " hits, long paths); the caller check cannot relay them", "callers");
+      gate(lb + ": " + part.length + " symbols are over the relay cap; split in two");
+      queue.unshift(part.slice(0, part.length >> 1), part.slice(part.length >> 1));
+      continue;
+    }
+    if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", lb + " returned " + r.status + ": " + (r.reason || "no reason"));
+    const occ = r.occurrences;
+    if (!occ || typeof occ !== "object" || Array.isArray(occ) || !Array.isArray(r.capped))
+      halt("failed", lb + " returned no occurrences map or capped list");
+    for (const n of part)
+      if (!Array.isArray(occ[n]) || !occ[n].every((x) => typeof x === "string"))
+        halt("failed", lb + " returned no occurrence list for " + n);
+    requireProgram(r, "callers", lb);
+    if (!relayDigestOk(r, progKeys("callers"), "callers"))
+      halt("failed", lb + ": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
+    const adc = r.auto_dont_care && typeof r.auto_dont_care === "object" && !Array.isArray(r.auto_dont_care) ? r.auto_dont_care : {};
+    for (const n of part) {
+      all.occurrences[n] = occ[n];
+      if (n in adc) all.auto_dont_care[n] = adc[n];
+    }
+    for (const c of r.capped) if (all.capped.indexOf(c) < 0) all.capped.push(c);
+    if (!Array.isArray(r.doctest_md)) all.doctest_md = null;
+    else if (all.doctest_md) for (const d of r.doctest_md) if (all.doctest_md.indexOf(d) < 0) all.doctest_md.push(d);
+  }
+  all.capped.sort();
+  if (all.doctest_md) all.doctest_md.sort();
+  return all;
 }
 async function callerCheck(label, symbols, worktree, planPath) {
   const names = symbols.map((s) => s.symbol);
@@ -4684,11 +4727,9 @@ async function planAndAudit(ctx0) {
   if (prior) {
     const now = cs.clean.map((x) => x.symbol);
     const dropped = prior.symbols.filter((x) => now.indexOf(x) < 0);
+    // 6.3.0: a dropped symbol is a re-plan finding (the round cap still stops)
     if (dropped.length)
-      halt(
-        "needs_human",
-        "changed_symbols dropped " + dropped.join(", ") + " after the " + prior.reason + " round; a mapped or flagged symbol stays in the map (narrower symbols only in addition)",
-      );
+      return planFindingsStop(ctx, planPath, "changed_symbols dropped a symbol of an earlier round", dropped.map((x) => ({ criterion: null, symbol: x, finding: "changed_symbols dropped " + x + " after the " + prior.reason + " round; a mapped or flagged symbol stays in the map (narrower symbols only in addition)" })), plan.changed_symbols, plan);
   }
   let callerOcc = null;
   let autoDontCare = null;
@@ -4951,6 +4992,8 @@ function makePlanRef(f) {
     // the ledger scope of the plan run (args.project), or null
     project: typeof f.project === "string" && f.project ? f.project : null,
   });
+  // 6.3.0 (ADR-1239): the policy plan mode read, sealed; the build keeps it (a later edit is logged)
+  if (f.policy && typeof f.policy === "object") ref.policy = stripHeldOut(f.policy);
   ref.seal = sealOf(ref);
   return ref;
 }
@@ -5143,7 +5186,7 @@ async function autoGates(ctx) {
       changed_symbols: ctx.planFacts.changed_symbols,
       change_kind: ctx.planFacts.change_kind === undefined ? null : ctx.planFacts.change_kind,
       new_behaviour: ctx.planFacts.new_behaviour === undefined ? null : ctx.planFacts.new_behaviour,
-    }),
+    }, ctx.relaxed && ctx.relaxed.length ? { relaxed: ctx.relaxed } : {}),
     ctx.mainWt,
     "Auto-confirm",
     null,
@@ -5164,6 +5207,8 @@ async function autoGates(ctx) {
     return { ok: false, failedCheck, reasons, intent };
   };
   const g1 = intentProblems(r);
+  // 6.3.0 (ADR-1239): an unattended relaxed re-plan passes only on an approved, backed, fail-closed deviation quoting each item
+  for (const x of ctx.relaxed || []) if (!intent.deviations.some((d) => d && String(d.item).indexOf(x) >= 0 && d.verdict === "approve" && typeof d.allowed_by === "string" && d.allowed_by.trim() && d.fails_closed === true)) g1.push("relaxed re-plan item " + JSON.stringify(x) + " has no approved deviation");
   if (g1.length) return fail("intent", g1);
   gate("auto-confirm: intent approve (" + intent.deviations.length + " deviation(s), all allowed and fail-closed)");
   const shape = commandShapeProblems(ctx.planFacts.commands);
@@ -5224,7 +5269,7 @@ async function planMode(input, date) {
   const repo = cleanRepo(input.repo);
   if (!raw) stop("needs_human", "args.input missing: run /build-task <ledger id | Jira key | issue or PR URL | plan path | text>");
   if (!repo) stop("needs_human", "args.repo must be the absolute path of the caller's git toplevel");
-  if (input.confirm === "auto" && ledgerFor(input.project) === "either" && TASK_ID_INPUT_RE.test(raw))
+  if (input.confirm === "auto" && input.unattended !== true && ledgerFor(input.project) === "either" && TASK_ID_INPUT_RE.test(raw))
     stop("needs_human", "task id " + JSON.stringify(raw) + " with no args.project under confirm \"auto\": pass project, or run with confirm \"ask\" so Max sees which ledger and project it resolved to");
 
   await preflightStep(repo);
@@ -5262,6 +5307,9 @@ async function planMode(input, date) {
   const ws = await workspaceStep(brief.repo, lay);
   if (ghNoPush(ws.remoteSlug)) gate("warning: " + noPushText(ws.remoteSlug) + " (the build stops at its start until one has)");
   await pushProbe(lay, ws);
+  const planPolicy = await policyStep(ws.remoteHost, ws.remoteSlug, null, true);
+  unattendedOn(planPolicy, input);
+  const un = !!state.unattended;
   const project = input.project || ws.remoteSlug;
   const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
   const scan = await infra(
@@ -5277,6 +5325,14 @@ async function planMode(input, date) {
     halt("failed", "infra:branch-scan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
   if (typeof scan.head !== "string" || !SHA_RE.test(scan.head)) halt("failed", "infra:branch-scan returned no usable head");
   const built = buildCommitsOf(scan.commits, names.taskId, scan.refs);
+  // 6.3.0: a branch with build commits and its sealed plan ref resumes in build mode with that ref
+  const sref = built.length ? scan.refs.find((e) => e && e.name === "refs/fleet/" + names.taskId + "/plan" && e.type === "tag" && e.target_type === "commit" && e.ref_ok === true && e.task_id === names.taskId) : null;
+  const rtiny = sref ? { branch: lay.branch, plan_commit: sref.target, plan_ref: sref.name, ref_sha256: sref.sha256, repo } : null;
+  if (rtiny && !tinyRefProblem(rtiny)) {
+    state.stopGate = "resume";
+    gate("branch has build commits (first: " + built[0].sha + "); resume_with build: plan_ref " + sref.name + " at " + sref.target);
+    return Object.assign(finish("needs_human", "branch has build commits; resume_with build: run build with plan_ref " + sref.name + " (it resumes at the last completed gate)"), { resume_with: "build", plan_ref: rtiny });
+  }
   if (built.length)
     halt(
       "needs_human",
@@ -5330,9 +5386,13 @@ async function planMode(input, date) {
     gate("park-plan" + note);
     throw new Stop(e.status, e.reason + note);
   };
-  const confirm = input.confirm === undefined ? "ask" : input.confirm;
+  const confirm0 = input.confirm === undefined ? "ask" : input.confirm;
+  // 6.3.0: unattended decides the Build confirmation (auto), unless the user asked to confirm ("ask" with no brief marker)
+  const confirm = un && input.user_confirm !== "ask" && !(input.confirm === "ask" && !input.brief_marker) ? "auto" : confirm0;
   const auto = confirm === "auto";
-  let p, pc, blockers, runGates;
+  const ua = un && auto;
+  const one = new Set((it.tried || []).filter((t) => t && t.error === null).map((t) => t.ledger)).size === 1;
+  let p, pc, blockers, runGates, decided;
   try {
     p = await planAndAudit({
       common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, remoteUrl: ws.remoteUrl, onPlanPath: (x) => (draft = x),
@@ -5340,9 +5400,12 @@ async function planMode(input, date) {
       priorRound: parked ? parked.priorRound : null,
     });
     // decided before the seal (the gate agents count into it)
-    blockers = confirm === "default" ? defaultBlockers(p, input, raw) : [];
-    if (parkedBad && confirm === "default") blockers.push(PARKED_UNREADABLE);
-    runGates = auto ? !p.relaxed.length && !parkedBad : confirm === "default" && !blockers.length;
+    blockers = confirm === "default" || ua ? defaultBlockers(p, input, raw) : [];
+    if (parkedBad && (confirm === "default" || ua)) blockers.push(PARKED_UNREADABLE);
+    // unattended decides change_kind, new_behaviour, a relaxed re-plan and a task id one ledger answered; never an IaC path or a parked prior
+    decided = ua ? blockers.filter((b) => !/^plan touches IaC path/.test(b) && b !== PARKED_UNREADABLE && !(/^task id /.test(b) && !one)) : [];
+    if (ua) blockers = blockers.filter((b) => decided.indexOf(b) < 0);
+    runGates = ua ? !blockers.length : auto ? !p.relaxed.length && !parkedBad : confirm === "default" && !blockers.length;
     pc = await commitPlanAndRef({
       worktree: lay.mainWt,
       branch: lay.branch,
@@ -5364,14 +5427,21 @@ async function planMode(input, date) {
         // the role table this run loaded, for the build
         history: { runs: 1, replans: 0, agents: 0, preflight: state.preflightRecord },
         project: input.project || null,
+        policy: planPolicy,
       },
     });
   } catch (e) {
     await parkOnStop(e);
   }
   const ls = ledgerSourceOf(brief, input.project);
-  // a relaxed re-plan never reaches the auto gates
-  if (auto && p.relaxed.length)
+  if (ua && confirm !== confirm0) autoDecide("confirm", "auto", "the Build confirmation (confirm " + confirm0 + (input.brief_marker ? "; the fleet-brief marker is treated as a ruling" : "") + ")");
+  for (const b of decided) autoDecide("default-blocker", "decided", b + (/^re-plan relaxed/.test(b) ? "; the intent judge rules on it" : /^task id /.test(b) && ls ? "; ledger_source " + ls.ledger + " " + ls.ref : ""));
+  if (ua && blockers.length) {
+    gate("unattended: asking Max (" + blockers.join("; ") + ")");
+    return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, { ledger_source: ls, confirm_reason: blockers.join("; ") });
+  }
+  // a relaxed re-plan never reaches the auto gates (unattended: the intent judge rules on it)
+  if (auto && !ua && p.relaxed.length)
     return autoFailResult({ failedCheck: "intent", reasons: ["re-plan relaxed: " + p.relaxed.join("; ")], intent: null }, p.planPath, pc.tiny);
   if (auto && parkedBad)
     return autoFailResult({ failedCheck: "intent", reasons: [PARKED_UNREADABLE + ": " + parked.unreadable], intent: null }, p.planPath, pc.tiny);
@@ -5399,6 +5469,7 @@ async function planMode(input, date) {
     planDiff: p.planDiff,
     planFacts: p.planFacts,
     files: p.testable.reduce((a, c) => a.concat(c.test_files), []),
+    relaxed: ua ? p.relaxed : [],
   });
   if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
   gate("auto-confirm: all gates pass; building " + pc.tiny.branch + " from " + pc.tiny.plan_commit + " in this run");
@@ -5420,6 +5491,18 @@ function tinyRefProblem(t) {
   return null;
 }
 
+function sealedPolicyProblem(p) {
+  if (!p || typeof p !== "object" || Array.isArray(p)) return "not an object";
+  if (p.profile !== null && typeof p.profile !== "string") return "profile";
+  if (p.policy_sha256 !== null && !SHA256_RE.test(String(p.policy_sha256))) return "policy_sha256";
+  const c = p.caps;
+  if (!c || typeof c !== "object" || Array.isArray(c)) return "caps";
+  for (const k of ["pr_ready", "ci_watch", "stats", "ci_trigger"]) if (typeof c[k] !== "boolean") return k;
+  if (!Number.isInteger(c.ci_watch_minutes)) return "ci_watch_minutes";
+  if (["never", "auto"].indexOf(c.merge) < 0 || ["never", "once"].indexOf(c.update_branch) < 0 || ["none", "own_pr"].indexOf(c.review_post) < 0) return "merge, update_branch or review_post";
+  if ("unattended" in c && typeof c.unattended !== "boolean") return "unattended";
+  return null;
+}
 // The full ref loaded from the ref file
 function planRefProblem(r) {
   if (!r || typeof r !== "object") return "missing";
@@ -5434,6 +5517,8 @@ function planRefProblem(r) {
   if (!r.history || typeof r.history !== "object") return "history missing";
   const pre = preflightRecordProblem(r.history.preflight);
   if (pre) return pre;
+  // 6.3.0: the plan-mode policy seal (absent before 6.3.0)
+  if ("policy" in r && sealedPolicyProblem(r.policy)) return "policy is malformed (" + sealedPolicyProblem(r.policy) + ")";
   // absent in a ref sealed before 4.0.0
   if ("project" in r && r.project !== null && (typeof r.project !== "string" || !r.project)) return "project is not a non-empty string or null";
   return null;
@@ -5456,25 +5541,31 @@ const capsText = (c) => Object.keys(c).map((k) => k + " " + c[k] + (k === "ci_wa
 function preFreezeHooks(p) {
   const v = p && p.caps ? p.caps.pre_freeze_hooks : undefined;
   if (v === undefined || v === null) return [];
-  if (!Array.isArray(v) || v.some((x) => typeof x !== "string" || !x || /[\s\x00-\x1f\x7f]/.test(x) || x.charAt(0) === "-"))
-    halt("needs_human", "policy: pre_freeze_hooks " + JSON.stringify(v) + " is not a list of hook ids; fix the policy file, then re-run the build", "policy");
+  // 6.3.0: an invalid list is the strict default: no list
+  if (!Array.isArray(v) || v.some((x) => typeof x !== "string" || !x || /[\s\x00-\x1f\x7f]/.test(x) || x.charAt(0) === "-")) {
+    gate("policy: pre_freeze_hooks " + JSON.stringify(v) + " is not a list of hook ids; the strict default (no pre-freeze hook) applies; fix the policy file");
+    return [];
+  }
   return v;
 }
-async function policyStep(host, slug, sealed) {
+// 6.3.0 (ADR-1239): plan mode reads it too (infra:policy:plan); that read never starts the build's wall time
+async function policyStep(host, slug, sealed, plan) {
   const args = [host || "-", slug];
-  const r = await infra("infra:policy", policyPrompt({ args }), "Verify", JUDGE_AGENT, "policy", args);
-  requireProgram(r, "policy", "infra:policy", "needs_human", "policy");
-  if (!relayDigestOk(r, progKeys("policy"), "policy") || canonical(r.args) !== canonical(args)) halt("needs_human", "infra:policy: the relayed result does not match the program's digest or arguments", "policy");
+  const lb = "infra:policy" + (plan ? ":plan" : "");
+  const r = await infra(lb, policyPrompt({ args }), plan ? "Workspace" : "Verify", JUDGE_AGENT, "policy", args);
+  requireProgram(r, "policy", lb, "needs_human", "policy");
+  if (!relayDigestOk(r, progKeys("policy"), "policy") || canonical(r.args) !== canonical(args)) halt("needs_human", lb + ": the relayed result does not match the program's digest or arguments", "policy");
   let p = { profile: r.profile, policy_sha256: r.policy_sha256, caps: r.caps };
   // 2044: the build's wall time starts here
-  state.t0 = Number.isInteger(r.now) ? r.now : null;
-  if (sealed) {
-    if (sealed.policy_sha256 !== r.policy_sha256) {
-      const d = r.caps ? Object.keys(Object.assign({}, sealed.caps, r.caps)).filter((k) => canonical(sealed.caps[k]) !== canonical(r.caps[k])).map((k) => k + " " + sealed.caps[k] + " -> " + r.caps[k]) : [r.error];
-      gate("policy changed since this run started (" + (d.join(", ") || "no cap changed") + "); keeping the sealed profile " + (sealed.profile || "default"));
-    }
+  if (!plan) state.t0 = Number.isInteger(r.now) ? r.now : null;
+  // the sealed policy (run-state, or the plan ref since 6.3.0) wins when the file changed since
+  if (sealed && sealed.policy_sha256 !== r.policy_sha256) {
+    const d = r.caps ? Object.keys(Object.assign({}, sealed.caps, r.caps)).filter((k) => canonical(sealed.caps[k]) !== canonical(r.caps[k])).map((k) => k + " " + sealed.caps[k] + " -> " + r.caps[k]) : [r.error];
+    gate("policy changed since this run started (" + (d.join(", ") || "no cap changed") + "); keeping the sealed profile " + (sealed.profile || "default"));
     p = sealed;
-  } else if (r.error || !r.caps) halt("needs_human", "policy: " + r.error + "; fix or remove the file, then re-run the build", "policy");
+  } else if (!r.caps) halt("needs_human", "policy: " + r.error + "; fix or remove the file, then re-run the build", "policy");
+  // 6.3.0: an invalid file is the strict default (policy.py DEFAULT), never a halt
+  else if (r.error) gate("policy: " + r.error + "; the strict default applies (" + capsText(p.caps) + "); fix or remove the file");
   else gate("policy: " + r.matched + " (" + capsText(p.caps) + ")");
   if (WORK_OWNERS.indexOf(slug.split("/")[0].toLowerCase()) >= 0 && (p.caps.merge !== "never" || p.caps.update_branch !== "never")) {
     gate("work repo " + slug + ": merge and update_branch never (script rule; the policy said merge " + p.caps.merge + ", update_branch " + p.caps.update_branch + ")");
@@ -5482,6 +5573,23 @@ async function policyStep(host, slug, sealed) {
   }
   return p;
 }
+// 6.3.0 (security review): per cap the stricter of the base policy (the current file, or a resume's seal) and the
+// plan ref's seal: unattended only when both say true; merge, update_branch, ci_trigger, review_post toward the
+// default; pr_ready, ci_watch, stats on when either is; ci_watch_minutes the smaller. Exception: pre_freeze_hooks
+// always comes from the base (the current file), whatever the seal says
+const STRICT_OFF = { unattended: true, merge: "auto", update_branch: "once", ci_trigger: true, review_post: "own_pr" };
+function stricterPolicy(base, seal, what) {
+  const b = base.caps;
+  const s = seal.caps;
+  const c = Object.assign({}, b);
+  for (const k of Object.keys(STRICT_OFF)) if (k in b || k in s) c[k] = b[k] === STRICT_OFF[k] && s[k] === STRICT_OFF[k] ? STRICT_OFF[k] : k === "unattended" ? false : DEFAULT_OFF[k];
+  for (const k of ["pr_ready", "ci_watch", "stats"]) c[k] = b[k] === true || s[k] === true;
+  if (Number.isInteger(s.ci_watch_minutes) && s.ci_watch_minutes < b.ci_watch_minutes) c.ci_watch_minutes = s.ci_watch_minutes;
+  const d = Object.keys(c).filter((k) => canonical(c[k]) !== canonical(b[k]));
+  if (d.length) gate("policy: the plan ref's sealed policy is stricter than " + what + " for " + d.map((k) => k + " " + b[k] + " -> " + c[k]).join(", ") + "; the stricter applies");
+  return Object.assign({}, base, { caps: c });
+}
+const DEFAULT_OFF = { merge: "never", update_branch: "never", ci_trigger: false, review_post: "none" };
 // 2044: the PR body's stats block, from script counters only (no path, run id, ledger id or session name)
 const STATS_END = "<!-- ccpm-fleet-stats -->";
 const STATS_WALL = "@@WALL@@";
@@ -5797,7 +5905,10 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   } else if (v.head !== planBase)
     halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
   // 2033: sealed in the run-state; stream 3 reads state.policy.caps
-  const policy = (state.policy = await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
+  // 6.3.0 (security review): the current file (or a resume's run-state seal), never looser than the plan ref's seal
+  const policy = (state.policy = ref.policy ? stricterPolicy(await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy), ref.policy, resume ? "the run-state's" : "the current file") : await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
+  unattendedOn(policy, input);
+  if (resume && Array.isArray(resume.auto_decisions) && !state.autoDecisions.length) state.autoDecisions = resume.auto_decisions.slice();
 
   // a frozen resume
   const freezeRefName = "refs/fleet/" + names.taskId + "/freeze";
@@ -5938,17 +6049,24 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       delete state.gh.repos[remoteSlug];
       await ghEnsure([remoteSlug], "infra:gh-identity:pr", "PR", true);
       g = ghFor(remoteSlug);
+      // 6.3.0: one scripted retry of the probe
+      if (!g || (!g.push && !ghNoPush(remoteSlug))) {
+        gate("PR step: push access to " + remoteSlug + " still not known (" + ghTried(remoteSlug) + "); one scripted retry of the probe");
+        delete state.gh.repos[remoteSlug];
+        await ghEnsure([remoteSlug], "infra:gh-identity:pr-2", "PR", true);
+        g = ghFor(remoteSlug);
+      }
       if (!g || (!g.push && !ghNoPush(remoteSlug)))
         halt("needs_human", "PR step: push access to " + remoteSlug + " still not known after a second probe (" + ghTried(remoteSlug) + "); authorise gh or gh-personal for it (or retry: a probe can fail transiently), then re-run the build with the same plan_ref (it resumes at the PR)", "role");
     }
     if (!g || !g.push)
       halt("needs_human", "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)", "role");
     await fleetScan("infra:fleet-scan:" + label.replace(/^role:/, ""));
-    const r = requireOk(
+    const opener = async (lb, more) => requireOk(
       "fleet-pr-opener",
       await callRole(
         "fleet-pr-opener",
-        label,
+        lb,
         Object.assign({}, common, planCtx, {
           repo: remoteSlug,
           gh_cmd: g.gh_cmd,
@@ -5960,17 +6078,33 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           suite_result: suiteResult,
           gates_not_run: state.gatesNotRun,
           auto_confirmed: autoConfirmed,
+          ...(state.unattended ? { unattended_section: unattendedSection() } : {}),
           intent: intentForPr,
           review_notes: reviewNotes,
-        }, pr ? { pr_url: pr.pr_url, pr_number: pr.pr_number } : {}, extra || {}),
+        }, pr ? { pr_url: pr.pr_url, pr_number: pr.pr_number } : {}, extra || {}, more || {}),
         "PR",
       ),
     );
-    if (r.title !== subj.main) halt("needs_human", "pr-opener set the PR title " + JSON.stringify(r.title) + ", not " + JSON.stringify(subj.main) + "; fix the title of " + r.pr_url, "role");
+    const why = (x) =>
+      x.title !== subj.main ? "pr-opener set the PR title " + JSON.stringify(x.title) + ", not " + JSON.stringify(subj.main) + "; fix the title of " + x.pr_url
+      : state.gatesNotRun && state.gatesNotRun.length && x.gates_not_run_stated !== true ? "pr-opener did not state gates_not_run in the PR body; fix the body of " + x.pr_url
+      : null;
+    let r = await opener(label);
+    let w = why(r);
+    // 6.3.0: one scripted retry on the same PR, then the stop
+    if (w) {
+      gate(w + "; one scripted retry (" + label + ":again)");
+      const first = r;
+      r = await opener(label + ":again", { pr_url: first.pr_url, pr_number: first.pr_number, retry_reason: w });
+      if (first.created) r = Object.assign({}, r, { created: true });
+      // review M2: the retry fixes the same PR, never another
+      if (r.pr_url !== first.pr_url || r.pr_number !== first.pr_number) halt("needs_human", "pr-opener retry named " + r.pr_url + " (#" + r.pr_number + "), not " + first.pr_url + " (#" + first.pr_number + "); check both PRs", "role");
+      w = why(r);
+    }
+    if (w && r.title !== subj.main) halt("needs_human", w, "role");
     state.pr = r;
     gate("pr-opener: " + (r.created ? "created " : "updated ") + r.pr_url);
-    if (state.gatesNotRun && state.gatesNotRun.length && r.gates_not_run_stated !== true)
-      halt("needs_human", "pr-opener did not state gates_not_run in the PR body; fix the body of " + r.pr_url);
+    if (w) halt("needs_human", w);
     return r;
   }
   async function saveState(lastGate, label) {
@@ -5994,6 +6128,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           suite_result: suiteResult,
           gates_not_run: state.gatesNotRun,
           auto_confirmed: autoConfirmed,
+          ...(state.unattended ? { unattended: state.unattended, auto_decisions: state.autoDecisions } : {}),
           intent: intentForPr,
           policy,
           tests_written: state.testsWritten || 0,
@@ -6457,7 +6592,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   let statsRuns = 0;
   async function statsStep(tag) {
     if (!pr || pr.pr_number == null) return gate("stats block skipped: no PR");
-    if (!policy.caps.stats) return gate("stats block off (policy stats false)");
+    if (!policy.caps.stats) return gate("stats block off (policy stats false)" + (state.unattended ? "; warning: the " + UNATT_HEAD + " section is not checked in the real body" : ""));
     const g = ghCmd("stats block", "stats");
     const rv = state.review;
     const tpl = statsBlock({
@@ -6469,11 +6604,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       ci: state.ci ? { verdict: state.ci.verdict, fixRounds: state.rounds.ci || 0, waitS: state.ciWaitS || 0 } : null,
     });
     const bc = ref.plan_facts.conventions.body;
-    const args = [g, remoteSlug, String(pr.pr_number), base64Of(tpl), state.t0 === null ? "-" : String(state.t0), JSON.stringify((bc && bc.required_sections) || [])];
+    const args = [g, remoteSlug, String(pr.pr_number), base64Of(tpl), state.t0 === null ? "-" : String(state.t0), JSON.stringify(((bc && bc.required_sections) || []).concat(state.unattended ? [UNATT_HEAD] : []))];
     const label = tag ? "infra:pr-stats:" + tag : "infra:pr-stats" + (++statsRuns > 1 ? ":p" + statsRuns : "");
     const r = await infra(label, prStatsPrompt({ args }), "PR");
     requireProgram(r, "pr_body_block", label, "needs_human", "stats");
     if (!relayDigestOk(r, progKeys("pr_body_block"), "pr_body_block") || canonical(r.args) !== canonical(args)) halt("needs_human", label + ": the relayed result does not match the program's digest or arguments", "stats");
+    if (state.unattended && Array.isArray(r.headers_missing) && r.headers_missing.indexOf(UNATT_HEAD) >= 0) halt("needs_human", label + ": the PR body has no " + UNATT_HEAD + " section (the unattended run's automatic decisions); fix the body of " + pr.pr_url, "stats");
     if (r.error !== null) halt("needs_human", label + ": " + r.error + "; check the body of " + pr.pr_url, "stats");
     if (r.block_sha256 !== sha256Hex(tpl.replace(STATS_WALL, fmtDur(r.wall_s)))) halt("needs_human", label + ": the PR body's stats block is not the script's block; check " + pr.pr_url, "stats");
     gate(label + ": stats block " + (r.replaced ? "replaced" : "added") + " in " + pr.pr_url);
@@ -6731,6 +6867,20 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   }
 
   // pending: [{criterion, findings}] to (re)write this round
+  // the plan_wrong re-plan (code judge; 6.3.0: a test-judge plan finding too)
+  function planWrong(source, findings, head, tree) {
+    return replan({
+      ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl, source, input, ws,
+      project: input.project || null,
+      findings,
+      expectedHead: head,
+      expectedTree: tree,
+      onPlanRefs: (refs) => {
+        if (frozen) for (const e of refs) if (e && typeof e.name === "string" && e.tag_sha) frozen.git[FLEETREF + e.name] = e.tag_sha;
+      },
+    });
+  }
+  const testJudgeReplan = (tl) => planWrong("test-judge", tl.plan, tl.fp.head, tl.fp.tree);
   async function testLoop(pending, codeFindings) {
     for (let i = 0; i < maxTestRounds; i++) {
       state.rounds.tests++;
@@ -6788,27 +6938,37 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (codeFindings) judgeInputs.code_judge_findings = codeFindings;
       await resetBuild("test-judge:r" + n, ["tjudge-r" + n], "Tests");
       await pathRecheck("test-judge:r" + n, "Tests");
-      const jt = await judged("fleet-test-judge", "role:fleet-test-judge:r" + n, "test-judge:r" + n, judgeInputs, mainWt, "Tests", last, hashedFiles);
-      const tj = jt.r;
-      last = jt.state;
-      const routed = tj.routed_findings || [];
-      const planF = routed.filter((f) => f.target === "plan");
-      if (planF.length)
-        halt(
-          "needs_human",
-          "test-judge raised a plan finding: " + planF.map((f) => (f.criterion || "-") + ": " + f.finding).join("; "),
-          "role",
-        );
-      if (tj.verdict === "approve") {
-        gate("test-judge r" + n + ": approve");
-        return;
+      let tl = "role:fleet-test-judge:r" + n;
+      let jt = await judged("fleet-test-judge", tl, "test-judge:r" + n, judgeInputs, mainWt, "Tests", last, hashedFiles);
+      for (let k = 0; ; k++) {
+        const tj = jt.r;
+        last = jt.state;
+        const routed = tj.routed_findings || [];
+        const planF = routed.filter((f) => f.target === "plan");
+        // 6.3.0: a test-judge plan finding takes the plan_wrong re-plan path
+        if (planF.length) {
+          gate("test-judge raised a plan finding: " + planF.map((f) => (f.criterion || "-") + ": " + f.finding).join("; ") + "; re-plan");
+          return { plan: planF, fp: jt.state.fingerprint };
+        }
+        if (tj.verdict === "approve") {
+          gate("test-judge r" + n + ": approve");
+          return null;
+        }
+        if (tj.verdict !== "revise") halt("failed", "test-judge returned no verdict");
+        const byCrit = {};
+        for (const f of routed)
+          if (f.target === "tests" && testable.some((c) => c.id === f.criterion)) (byCrit[f.criterion] = byCrit[f.criterion] || []).push(f);
+        pending = testable.filter((c) => byCrit[c.id]).map((c) => ({ criterion: c, findings: byCrit[c.id] }));
+        if (pending.length) break;
+        const w = "test-judge revise r" + n + " routed no finding to a known criterion";
+        if (k) halt("needs_human", w);
+        // 6.3.0: one scripted retry of the judge
+        gate(w + "; one scripted retry (" + tl + ":again)");
+        reserve(2, "test-judge retry r" + n);
+        await pathRecheck("test-judge:r" + n + ":again", "Tests");
+        tl += ":again";
+        jt = await judged("fleet-test-judge", tl, "test-judge:r" + n + ":again", Object.assign({}, judgeInputs, { retry_reason: w }), mainWt, "Tests", last, hashedFiles);
       }
-      if (tj.verdict !== "revise") halt("failed", "test-judge returned no verdict");
-      const byCrit = {};
-      for (const f of routed)
-        if (f.target === "tests" && testable.some((c) => c.id === f.criterion)) (byCrit[f.criterion] = byCrit[f.criterion] || []).push(f);
-      pending = testable.filter((c) => byCrit[c.id]).map((c) => ({ criterion: c, findings: byCrit[c.id] }));
-      if (!pending.length) halt("needs_human", "test-judge revise r" + n + " routed no finding to a known criterion");
       gate("test-judge r" + n + ": revise -> " + pending.map((p) => p.criterion.id).join(", "));
     }
     halt("needs_human", "test rounds exhausted (" + maxTestRounds + ") without test-judge approval", "cap");
@@ -6893,10 +7053,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("resuming at the coder (frozen): no writer and no test judge runs; freeze tree " + freezeTree);
   } else {
     phase("Tests");
-    await testLoop(
+    const tl = await testLoop(
       testable.map((c) => ({ criterion: c, findings: [] })),
       null,
     );
+    if (tl) return testJudgeReplan(tl);
     phase("Freeze");
     await freeze();
   }
@@ -7055,17 +7216,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // 6.1.0 R6: never a test writer, re-freeze or re-plan on the forge's merge
       if (updRound && (cj.verdict === "plan_wrong" || cj.verdict === "fix_tests"))
         halt("needs_human", "code judge returned " + cj.verdict + " in a code round after update-branch: no test writer, re-freeze or re-plan runs on the forge's merge " + upd.head + "; re-plan on the new base or fix by hand", "review");
-      if (cj.verdict === "plan_wrong")
-        return replan({
-          ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl,
-          project: input.project || null,
-          findings: routed.filter((f) => f.target === "plan"),
-          expectedHead: jc.state.fingerprint.head,
-          expectedTree: codeTree,
-          onPlanRefs: (refs) => {
-            if (frozen) for (const e of refs) if (e && typeof e.name === "string" && e.tag_sha) frozen.git[FLEETREF + e.name] = e.tag_sha;
-          },
-        });
+      if (cj.verdict === "plan_wrong") return planWrong("code-judge", routed.filter((f) => f.target === "plan"), jc.state.fingerprint.head, codeTree);
       if (cj.verdict === "fix_code") {
         coderFindings = routed.filter((f) => f.target === "code");
         judgePrior = coderFindings.slice();
@@ -7076,7 +7227,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         const tf = routed.filter((f) => f.target === "tests");
         gate("code-judge r" + m + ": fix_tests -> test-judge (" + tf.length + " findings)");
         phase("Tests");
-        await testLoop([], tf);
+        const tl = await testLoop([], tf);
+        if (tl) return testJudgeReplan(tl);
         phase("Freeze");
         await freeze({
           round: m,
@@ -7314,9 +7466,10 @@ async function reviewStep(k, ctx) {
 }
 async function replan(ctx) {
   const { ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl } = ctx;
-  if (!ctx.findings.length) halt("needs_human", "code-judge verdict plan_wrong without a plan finding");
+  const who = ctx.source || "code-judge";
+  if (!ctx.findings.length) halt("needs_human", who + " verdict plan_wrong without a plan finding");
   const proposed = proposedChanges(ctx.findings, gate);
-  gate("code-judge verdict plan_wrong: " + proposed.join("; "));
+  gate(who + " verdict plan_wrong: " + proposed.join("; "));
   const n = history.replans + 1;
   const superseded = lay.branch + "--superseded-" + n;
   const supersededTree = "refs/fleet/" + lay.key + "/superseded-" + n + "-tree";
@@ -7337,7 +7490,7 @@ async function replan(ctx) {
   const findingsText = ctx.findings.map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n");
   const replanBrief = Object.assign({}, brief, {
     plan_path: ref.plan_path,
-    sources: brief.sources.concat([{ kind: "text", ref: "code-judge plan findings", url: null, body: findingsText }]),
+    sources: brief.sources.concat([{ kind: "text", ref: who + " plan findings", url: null, body: findingsText }]),
   });
   const p = await planAndAudit({
     common: Object.assign({}, common, { worktree: replanWt }),
@@ -7370,6 +7523,8 @@ async function replan(ctx) {
       planFacts: sealedFacts(p),
       history: { runs: history.runs, replans: n, agents: history.agents, audits: history.audits },
       project: ctx.project,
+      // review H1: the build's policy (already never looser than the plan ref's seal)
+      policy: state.policy,
     },
   });
   const newHead = pc.tiny.plan_commit;
@@ -7391,7 +7546,18 @@ async function replan(ctx) {
   gate("re-plan " + n + ": old head " + (rs.superseded_head || ctx.expectedHead) + " saved as " + superseded + "; " + lay.branch + " reset to " + ref.plan_base + "; new plan " + newHead + " off the branch");
   const hist = pc.full.history;
   gate("cumulative: run " + hist.runs + ", re-plans " + hist.replans + ", agents " + hist.agents);
-  return awaiting("code-judge plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, pc.tiny, pc.full, {
+  // 6.3.0 (ADR-1239): unattended, with no PR yet: the auto gates, then the build, in this run (once per run)
+  if (state.unattended && (state.pr || state.autoReplanned)) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": " + (state.pr ? "a PR is open" : "the run already built one re-plan"));
+  else if (state.unattended) {
+    state.autoReplanned = true;
+    autoDecide("plan_wrong", "build", who + " re-plan " + n + ": the auto gates, then the build in this run");
+    reserve(autoGateAgents(p.planFacts.commands), "the re-plan's auto gates");
+    const g = await autoGates({ sfx: ":replan", common, mainWt: lay.mainWt, planCommit: newHead, brief, callerRepo: brief.repo, branch: lay.branch, defaultBranch: common.default_branch, criteria: p.criteria, planPath: p.planPath, planDiff: p.planDiff, planFacts: p.planFacts, files: p.testable.reduce((a, c) => a.concat(c.test_files), []), relaxed: p.relaxed });
+    if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
+    Object.assign(state, { rounds: { tests: 0, code: 0 }, freezeDigest: null, gatesNotRun: null, review: null });
+    return buildFromRef(ctx.input, date, pc.tiny, lay, ctx.ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents, full: pc.full });
+  }
+  return awaiting(who + " plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, pc.tiny, pc.full, {
     proposed_plan_change: proposed,
     plan_findings: ctx.findings,
     superseded_ref: superseded,
@@ -7730,11 +7896,17 @@ const DB_DSN_NOTE =
 // Why a declaration is refused (null: it is fine)
 function testDbDeclProblem(d) {
   if (!d || typeof d !== "object" || Array.isArray(d)) return "not a JSON object";
-  if (canonical(Object.keys(d).filter((k) => k !== "test_db_prefix").sort()) !== canonical(["engine", "env", "major", "version"])) return "keys must be exactly version, engine, major, env (and optionally test_db_prefix)";
+  if (canonical(Object.keys(d).filter((k) => k !== "test_db_prefix" && k !== "grants").sort()) !== canonical(["engine", "env", "major", "version"])) return "keys must be exactly version, engine, major, env (and optionally test_db_prefix, grants)";
   if (d.version !== 1) return "version must be 1";
   if (d.engine !== "mariadb") return "engine must be mariadb";
   if (typeof d.major !== "string" || !/^[0-9]{1,3}\.[0-9]{1,3}$/.test(d.major)) return "major must be a string like 11.4";
   if (typeof d.env !== "string" || !DB_ENV_RE.test(d.env)) return "env " + JSON.stringify(d.env) + " must match " + String(DB_ENV_RE);
+  // 6.3.0 (ADR-1233): "PROCESS" is the only grant a repo may request
+  const g = d.grants;
+  if ("grants" in d && (!Array.isArray(g) || g.some((x) => typeof x !== "string"))) return "grants must be a list of strings";
+  const bad = "grants" in d ? g.find((x) => x !== "PROCESS") : undefined;
+  if (bad !== undefined) return "grants may hold only \"PROCESS\" (ADR-1233), not " + JSON.stringify(bad).slice(0, 80);
+  if ("grants" in d && g.length > 1) return "grants lists \"PROCESS\" twice";
   if ("test_db_prefix" in d) return dbPrefixProblem(d.test_db_prefix);
   return null;
 }
@@ -7835,13 +8007,14 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
   const image = DB_IMAGES[t.decl.engine + ":" + t.decl.major];
   // db_up's optional last argument
   const prefix = t.decl.test_db_prefix === undefined ? null : t.decl.test_db_prefix;
-  const pa = prefix ? [prefix] : [];
-  const pi = prefix ? { test_db_prefix: prefix } : {};
+  const proc = Array.isArray(t.decl.grants) && t.decl.grants.indexOf("PROCESS") >= 0;
+  const pa = (prefix ? [prefix] : []).concat(proc ? ["grant:PROCESS"] : []);
+  const pi = Object.assign(prefix ? { test_db_prefix: prefix } : {}, proc ? { grants: ["PROCESS"] } : {});
   if (!image) halt("needs_human", DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IMAGES).join(", ") + ")", "db");
   const want = [];
   for (const c of consumers) if (want.indexOf(dbOf(c)) < 0) want.push(dbOf(c));
   if (state.db) {
-    if (state.db.env !== t.decl.env || state.db.image !== image || state.db.prefix !== prefix) halt("needs_human", DB_DECL_FILE + " changed during the run", "db");
+    if (state.db.env !== t.decl.env || state.db.image !== image || state.db.prefix !== prefix || !!state.db.process !== proc) halt("needs_human", DB_DECL_FILE + " changed during the run", "db");
     const missing = want.filter((d) => state.db.dbs.indexOf(d) < 0);
     if (!missing.length) return;
     const al = "infra:db-up:add";
@@ -7877,9 +8050,9 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
   const ex = u.expiry;
   if (!ex || typeof ex !== "object" || ["podman-timeout", "systemd-run"].indexOf(ex.mechanism) < 0 || !Number.isInteger(ex.expires))
     halt("failed", "infra:db-up: no self-expiry recorded", "db");
-  state.db = { name, users: Object.assign({}, u.users), port: u.port, env: t.decl.env, image, prefix, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
+  state.db = { name, users: Object.assign({}, u.users), port: u.port, env: t.decl.env, image, prefix, process: proc, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
   state.dbTarget = { name, mechanism: ex.mechanism, expires: ex.expires };
-  gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + (prefix ? " (each user also on " + prefix + "*)" : "") + "; " + t.decl.env + " goes to each role's test_env");
+  gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + (prefix ? " (each user also on " + prefix + "*)" : "") + (proc ? " (each user also has PROCESS, ADR-1233)" : "") + "; " + t.decl.env + " goes to each role's test_env");
 }
 
 // main's finally: remove the run's test database
@@ -7932,6 +8105,11 @@ async function main(input) {
   state.mode = mode;
   if (input.confirm !== undefined && CONFIRMS.indexOf(input.confirm) < 0)
     stop("needs_human", "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm));
+  // 6.3.0 (ADR-1239)
+  if (input.unattended !== undefined && input.unattended !== true) stop("needs_human", "args.unattended must be true or absent, got " + JSON.stringify(input.unattended));
+  if (input.unattended === true) state.unattended = "arg";
+  if (input.user_confirm !== undefined && CONFIRMS.indexOf(input.user_confirm) < 0) stop("needs_human", "args.user_confirm must be the mode the user named, got " + JSON.stringify(input.user_confirm));
+  if (input.brief_marker !== undefined && typeof input.brief_marker !== "boolean") stop("needs_human", "args.brief_marker must be true or false, got " + JSON.stringify(input.brief_marker));
   // 4.0.0 (1990, S3)
   if (input.fresh_preflight !== undefined && typeof input.fresh_preflight !== "boolean")
     stop("needs_human", "args.fresh_preflight must be true or false, got " + JSON.stringify(input.fresh_preflight));
