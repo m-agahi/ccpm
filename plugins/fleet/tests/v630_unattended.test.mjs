@@ -373,3 +373,49 @@ test("6.3.0 B (security review): a plan ref whose sealed policy is malformed is 
     assert.ok(!b.labels.some((l) => /^role:fleet-test-writer/.test(l)));
   }
 });
+
+// ---------------------------------------------------------------- review H1, L2, L3
+
+const LOOSE = Object.assign({}, DEFAULT_CAPS, { merge: "auto", update_branch: "once", ci_trigger: true, unattended: true, ci_watch_minutes: 90 });
+
+test("6.3.0 review H1: a plan_wrong re-plan seals the build's policy in the new plan ref; a looser file after it never loosens the build (same run and later build)", async () => {
+  // a later separate build: confirm auto, not unattended; the re-plan asks; then the file loosens
+  const s = planWrong(gated());
+  const first = await runOne(s, { ...ARGS, confirm: "auto" });
+  assert.equal(first.result.status, "awaiting_confirmation", first.result.reason);
+  assert.deepEqual(JSON.parse(s.__store[PC2]).policy.caps, DEFAULT_CAPS, "the re-plan ref seals the build's policy");
+  s["infra:policy"] = polOut({ policy_sha256: "e".repeat(64), caps: LOOSE });
+  s["role:fleet-code-judge:r1"] = gated()["role:fleet-code-judge:r1"];
+  const b = await runOne(s, BUILD(first));
+  assert.equal(b.result.status, "ok", b.result.reason);
+  assert.ok(!("unattended" in b.result));
+  for (const k of ["merge", "update_branch"]) assert.equal(b.result.policy.caps[k], "never", k);
+  assert.equal(b.result.policy.caps.ci_trigger, false);
+  assert.equal(b.result.policy.caps.ci_watch_minutes, 60, "review L2: the smaller ci_watch_minutes");
+  assert.ok(!b.labels.some((l) => /^infra:pr-merge/.test(l)));
+  // the same-run unattended build: the file loosens between the first build's read and the re-plan's build
+  const t = planWrong(gated());
+  t["infra:policy:plan"] = polOut({});
+  t["infra:policy"] = [polOut({}), polOut({ policy_sha256: "e".repeat(64), caps: LOOSE })];
+  const o = await runOne(t, U);
+  assert.equal(o.result.status, "ok", o.result.reason);
+  assert.ok(decisions(o).some((d) => /^plan_wrong: build/.test(d)));
+  assert.equal(o.result.policy.caps.merge, "never");
+  assert.equal(o.result.policy.caps.update_branch, "never");
+  assert.ok(!o.labels.some((l) => /^infra:pr-merge/.test(l)));
+});
+
+test("6.3.0 review L3: --unattended never overrides the user's own confirm ask, with or without the brief marker", async () => {
+  for (const marker of [true, false]) {
+    const out = await runOne(gated(), { ...U, confirm: "ask", user_confirm: "ask", brief_marker: marker });
+    assert.equal(out.result.status, "awaiting_confirmation", marker + ": " + out.result.reason);
+    assert.ok(!out.labels.includes("role:fleet-intent-judge"));
+  }
+  // the marker's ask alone (the user named default) is overridden
+  const m = await runOne(gated(), { ...U, confirm: "ask", user_confirm: "default", brief_marker: true });
+  assert.equal(m.result.status, "ok", m.result.reason);
+  const bad = await runOne(gated(), { ...U, user_confirm: "yes" });
+  assert.equal(bad.result.status, "needs_human");
+  assert.match(bad.result.reason, /args\.user_confirm/);
+  assert.equal(bad.calls.length, 0);
+});

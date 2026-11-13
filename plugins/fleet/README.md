@@ -674,9 +674,11 @@ opener passes the title single-quoted, never in double quotes.
 ### Policy (6.0.0, ledger 2033)
 
 A build reads `$XDG_CONFIG_HOME/fleet/policy.json` (default `~/.config/fleet/policy.json`) once,
-after the run-state read, with `scripts/policy.py <host> <owner/repo>`. The file is strict JSON
-(`policy.example.json` shows the shape): duplicate or unknown keys, a wrong type or a bad value
-stop the build (`stop_gate: "policy"`); a bad file never falls back to the default.
+after the run-state read, with `scripts/policy.py <host> <owner/repo>`; plan mode reads it too
+(6.3.0). The file is strict JSON (`policy.example.json` shows the shape): duplicate or unknown
+keys, a wrong type or a bad value make the file invalid. Since 6.3.0 an invalid file is the strict
+default (no `pre_freeze_hooks` list, unattended off) with a gate line naming the error; it no
+longer stops the build.
 
 - The first profile whose `match.hosts` (when listed) holds the origin host and whose
   `match.owners` holds the owner (glob, any case) wins. Its first `repos` glob that matches

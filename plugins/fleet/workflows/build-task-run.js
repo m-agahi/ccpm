@@ -167,9 +167,10 @@ const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
 const SYMBOL_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const OCCURRENCE_RE = /^(.+):([1-9][0-9]*)$/;
 const MAX_SYMBOL_HITS = 100;
-// 6.3.0 (ADR-1238): the caller check runs in dispatches of at most 30 symbols and 400 mapped occurrences each
-const CALLER_BATCH_SYMBOLS = 30;
+// 6.3.0 (ADR-1238; review M1): the caller check runs in dispatches of at most CALLER_BATCH_OCC / MAX_SYMBOL_HITS
+// symbols (every symbol weighs its hit cap, whatever the plan maps); callers.py marks an output over the relay cap
 const CALLER_BATCH_OCC = 400;
+const CALLERS_CAP_MARK = "FLEET_CALLERS_RELAY_CAP:";
 const CALLER_METHOD =
   "git grep -n -I -w -F --full-name -e <symbol>: the working tree content of the tracked files in the fleet worktree, the run's own plan doc excluded; every hit must be mapped and every mapped line must be a hit (checked by the script)";
 const CALLER_LIMITS = [
@@ -1539,7 +1540,7 @@ function relayDigestOk(r, keys, name) {
 const PROGRAM_SHA256 = {
   "branch_scan": "ec03aa965ed9a3d145ce1fb1636685d2be087877daf78f369eed0a19f532967d",
   "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
-  "callers": "285df005bb08ce9a9f009b7554a9e697913ccff0a620980d2e59c04550bed4bc",
+  "callers": "4623272ec380872179ed0df68287bee2e66c4d88a1677c4a298cad642cdcb462",
   "changed_defs": "40ecf45fe37448244572d8f7fd64ad574837970047a58de7c1ac7a262f717e94",
   "ci_watch": "d32f9341cf25c626370097dd2d91c5f4703d393139f5951405c6e40c63eb80b8",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
@@ -4394,33 +4395,24 @@ function docOrLockFile(p) {
   const b = String(p).split("/").pop();
   return DOC_FILE_RE.test(b) || NOTE_FILE_RE.test(b) || LOCK_FILES.indexOf(b) >= 0;
 }
-// 6.3.0 (ADR-1238): batches of names in order; a batch closes at CALLER_BATCH_SYMBOLS names or when the
-// next name's mapped occurrences (weight, 1..MAX_SYMBOL_HITS) would pass CALLER_BATCH_OCC; one name always fits
-function callerBatches(names, weight) {
-  const out = [];
-  let cur = [];
-  let n = 0;
-  for (const s of names) {
-    const k = Math.max(1, Math.min(MAX_SYMBOL_HITS, (weight && weight[s]) || 1));
-    if (cur.length && (cur.length >= CALLER_BATCH_SYMBOLS || n + k > CALLER_BATCH_OCC)) {
-      out.push(cur);
-      cur = [];
-      n = 0;
-    }
-    cur.push(s);
-    n += k;
-  }
-  if (cur.length) out.push(cur);
-  return out;
-}
-async function callerGrep(label, names, worktree, planPath, phaseName, weight) {
+async function callerGrep(label, names, worktree, planPath, phaseName) {
   const all = { occurrences: {}, capped: [], auto_dont_care: {}, doctest_md: [] };
-  const batches = callerBatches(names, weight);
-  if (batches.length > 1) gate(label + ": " + names.length + " symbols in " + batches.length + " caller-check dispatches (at most " + CALLER_BATCH_SYMBOLS + " symbols and " + CALLER_BATCH_OCC + " mapped occurrences each)");
-  for (let b = 0; b < batches.length; b++) {
+  const per = CALLER_BATCH_OCC / MAX_SYMBOL_HITS;
+  const queue = [];
+  for (let i = 0; i < names.length; i += per) queue.push(names.slice(i, i + per));
+  if (queue.length > 1) gate(label + ": " + names.length + " symbols in " + queue.length + " caller-check dispatches (at most " + per + " symbols each)");
+  for (let b = 0; queue.length; b++) {
     const lb = label + (b ? ":b" + (b + 1) : "");
-    const part = batches[b];
-    const r = await infra(lb, callersPrompt({ worktree, plan_path: planPath, symbols: part, cap: MAX_SYMBOL_HITS }), phaseName, JUDGE_AGENT, "callers");
+    const part = queue.shift();
+    const r = await dispatch(lb, callersPrompt({ worktree, plan_path: planPath, symbols: part, cap: MAX_SYMBOL_HITS }), { schema: INFRA_SCHEMA, phase: phaseName, agentType: JUDGE_AGENT, digest: "callers" });
+    // review M1: an output over the relay cap is split in two; one symbol alone over it stops
+    if (r.status !== "ok" && String(r.reason).indexOf(CALLERS_CAP_MARK) >= 0) {
+      if (part.length === 1) halt("needs_human", lb + ": the occurrences of " + part[0] + " are over the 65536-byte relay cap (relay size; at most " + MAX_SYMBOL_HITS + " hits, long paths); the caller check cannot relay them", "callers");
+      gate(lb + ": " + part.length + " symbols are over the relay cap; split in two");
+      queue.unshift(part.slice(0, part.length >> 1), part.slice(part.length >> 1));
+      continue;
+    }
+    if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", lb + " returned " + r.status + ": " + (r.reason || "no reason"));
     const occ = r.occurrences;
     if (!occ || typeof occ !== "object" || Array.isArray(occ) || !Array.isArray(r.capped))
       halt("failed", lb + " returned no occurrences map or capped list");
@@ -4443,10 +4435,9 @@ async function callerGrep(label, names, worktree, planPath, phaseName, weight) {
   if (all.doctest_md) all.doctest_md.sort();
   return all;
 }
-const occWeight = (symbols) => Object.fromEntries(symbols.map((s) => [s.symbol, Array.isArray(s.occurrences) ? s.occurrences.length : 1]));
 async function callerCheck(label, symbols, worktree, planPath) {
   const names = symbols.map((s) => s.symbol);
-  const r = await callerGrep(label, names, worktree, planPath, "Plan", occWeight(symbols));
+  const r = await callerGrep(label, names, worktree, planPath, "Plan");
   const occ = r.occurrences;
   const doctest = Array.isArray(r.doctest_md) ? r.doctest_md.filter((x) => typeof x === "string").map(normPath) : null;
   const adc = doctest && r.auto_dont_care && typeof r.auto_dont_care === "object" && !Array.isArray(r.auto_dont_care) ? r.auto_dont_care : {};
@@ -5397,7 +5388,7 @@ async function planMode(input, date) {
   };
   const confirm0 = input.confirm === undefined ? "ask" : input.confirm;
   // 6.3.0: unattended decides the Build confirmation (auto), unless the user asked to confirm ("ask" with no brief marker)
-  const confirm = un && !(input.confirm === "ask" && !input.brief_marker) ? "auto" : confirm0;
+  const confirm = un && input.user_confirm !== "ask" && !(input.confirm === "ask" && !input.brief_marker) ? "auto" : confirm0;
   const auto = confirm === "auto";
   const ua = un && auto;
   const one = new Set((it.tried || []).filter((t) => t && t.error === null).map((t) => t.ledger)).size === 1;
@@ -5584,7 +5575,8 @@ async function policyStep(host, slug, sealed, plan) {
 }
 // 6.3.0 (security review): per cap the stricter of the base policy (the current file, or a resume's seal) and the
 // plan ref's seal: unattended only when both say true; merge, update_branch, ci_trigger, review_post toward the
-// default; pr_ready, ci_watch, stats on when either is; pre_freeze_hooks and ci_watch_minutes from the base
+// default; pr_ready, ci_watch, stats on when either is; ci_watch_minutes the smaller. Exception: pre_freeze_hooks
+// always comes from the base (the current file), whatever the seal says
 const STRICT_OFF = { unattended: true, merge: "auto", update_branch: "once", ci_trigger: true, review_post: "own_pr" };
 function stricterPolicy(base, seal, what) {
   const b = base.caps;
@@ -5592,6 +5584,7 @@ function stricterPolicy(base, seal, what) {
   const c = Object.assign({}, b);
   for (const k of Object.keys(STRICT_OFF)) if (k in b || k in s) c[k] = b[k] === STRICT_OFF[k] && s[k] === STRICT_OFF[k] ? STRICT_OFF[k] : k === "unattended" ? false : DEFAULT_OFF[k];
   for (const k of ["pr_ready", "ci_watch", "stats"]) c[k] = b[k] === true || s[k] === true;
+  if (Number.isInteger(s.ci_watch_minutes) && s.ci_watch_minutes < b.ci_watch_minutes) c.ci_watch_minutes = s.ci_watch_minutes;
   const d = Object.keys(c).filter((k) => canonical(c[k]) !== canonical(b[k]));
   if (d.length) gate("policy: the plan ref's sealed policy is stricter than " + what + " for " + d.map((k) => k + " " + b[k] + " -> " + c[k]).join(", ") + "; the stricter applies");
   return Object.assign({}, base, { caps: c });
@@ -6104,6 +6097,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const first = r;
       r = await opener(label + ":again", { pr_url: first.pr_url, pr_number: first.pr_number, retry_reason: w });
       if (first.created) r = Object.assign({}, r, { created: true });
+      // review M2: the retry fixes the same PR, never another
+      if (r.pr_url !== first.pr_url || r.pr_number !== first.pr_number) halt("needs_human", "pr-opener retry named " + r.pr_url + " (#" + r.pr_number + "), not " + first.pr_url + " (#" + first.pr_number + "); check both PRs", "role");
       w = why(r);
     }
     if (w && r.title !== subj.main) halt("needs_human", w, "role");
@@ -6518,7 +6513,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // R5: sealed occurrences, and occurrences a grep at the merge finds (line shift, added or removed caller)
     const syms = planFacts.changed_symbols || [];
     if (syms.length) {
-      const g = await callerGrep("infra:callers:u1", syms.map((x) => x.symbol), mainWt, ref.plan_path, "Review", occWeight(syms));
+      const g = await callerGrep("infra:callers:u1", syms.map((x) => x.symbol), mainWt, ref.plan_path, "Review");
       if (g.capped.length) return "the occurrences of " + g.capped.join(", ") + " cannot be listed at the update merge (more than " + MAX_SYMBOL_HITS + " occurrences)";
       const at = (k) => normPath(String(k).slice(0, String(k).lastIndexOf(":")));
       const occ = [];
@@ -7528,6 +7523,8 @@ async function replan(ctx) {
       planFacts: sealedFacts(p),
       history: { runs: history.runs, replans: n, agents: history.agents, audits: history.audits },
       project: ctx.project,
+      // review H1: the build's policy (already never looser than the plan ref's seal)
+      policy: state.policy,
     },
   });
   const newHead = pc.tiny.plan_commit;
@@ -8111,6 +8108,7 @@ async function main(input) {
   // 6.3.0 (ADR-1239)
   if (input.unattended !== undefined && input.unattended !== true) stop("needs_human", "args.unattended must be true or absent, got " + JSON.stringify(input.unattended));
   if (input.unattended === true) state.unattended = "arg";
+  if (input.user_confirm !== undefined && CONFIRMS.indexOf(input.user_confirm) < 0) stop("needs_human", "args.user_confirm must be the mode the user named, got " + JSON.stringify(input.user_confirm));
   if (input.brief_marker !== undefined && typeof input.brief_marker !== "boolean") stop("needs_human", "args.brief_marker must be true or false, got " + JSON.stringify(input.brief_marker));
   // 4.0.0 (1990, S3)
   if (input.fresh_preflight !== undefined && typeof input.fresh_preflight !== "boolean")

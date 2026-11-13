@@ -93,4 +93,9 @@ for s in syms:
 out = {'occurrences': occ, 'capped': sorted(capped), 'auto_dont_care': auto, 'doctest_md': sorted(doctest)}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
-print(json.dumps(out, sort_keys=True, ensure_ascii=False))
+text = json.dumps(out, sort_keys=True, ensure_ascii=False)
+# fleet 6.3.0 (review M1): a relay agent cannot copy an output this size; a fixed marker, and the workflow splits the batch
+RELAY_CAP = 65536
+if len(text.encode('utf-8')) > RELAY_CAP:
+    sys.exit('FLEET_CALLERS_RELAY_CAP: the callers output is over the %d-byte relay cap (%d bytes; symbols: %s)' % (RELAY_CAP, len(text.encode('utf-8')), ', '.join(syms)[:300]))
+print(text)

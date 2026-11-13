@@ -22,15 +22,17 @@ import {
 } from "./harness.mjs";
 
 const num = (name) => Number(new RegExp("\\nconst " + name + " = (\\d+);").exec(SOURCE)[1]);
-const BATCH_SYMBOLS = num("CALLER_BATCH_SYMBOLS");
 const BATCH_OCC = num("CALLER_BATCH_OCC");
 const SYMBOL_HITS = num("MAX_SYMBOL_HITS");
+// review M1: every symbol weighs its hit cap, whatever the plan maps
+const PER = BATCH_OCC / SYMBOL_HITS;
 
 // ---------------------------------------------------------------- A1
 
 const grep = (extra) => (p) => {
   const syms = inputsOf(p).symbols;
   const e = extra || {};
+  if (e.over !== undefined && syms.length > e.over) return { status: "failed", reason: "FLEET_CALLERS_RELAY_CAP: the callers output is over the 65536-byte relay cap (99999 bytes; symbols: " + syms.join(", ") + ")" };
   return {
     status: "ok",
     reason: "grepped",
@@ -41,65 +43,61 @@ const grep = (extra) => (p) => {
   };
 };
 const one = (x) => ({ symbol: x, occurrences: [{ at: "src/" + x + ".py:1", criterion: "AC1", dont_care: null }] });
+const labelsOf = (n, sfx) => Array.from({ length: n }, (_, b) => "infra:callers" + (sfx || "") + (b ? ":b" + (b + 1) : ""));
+const script = (s, n, extra, sfx) => {
+  for (const l of labelsOf(n, sfx)) s[l] = grep(extra);
+};
 
-test("6.3.0 A1: the bounds are 30 symbols and a mapped-occurrence budget per dispatch; one symbol at the hit cap always fits", () => {
-  assert.equal(BATCH_SYMBOLS, 30);
-  assert.ok(BATCH_OCC >= SYMBOL_HITS, "one symbol at the hit cap fits a dispatch");
-  assert.ok(!/MAX_CHANGED_SYMBOLS|split the task/.test(SOURCE));
+test("6.3.0 A1 (review M1): a dispatch holds at most CALLER_BATCH_OCC / MAX_SYMBOL_HITS symbols (4), weighed at the hit cap; no symbol-count cap", () => {
+  assert.equal(PER, 4);
+  assert.ok(!/MAX_CHANGED_SYMBOLS|split the task|occWeight|CALLER_BATCH_SYMBOLS/.test(SOURCE));
 });
 
-test("6.3.0 A1 (ADR-1238): 31 changed symbols are checked in 2 dispatches (30 + 1); no cap, no split finding", async () => {
+test("6.3.0 A1 (ADR-1238): 31 changed symbols mapped at one line each (under-mapped) are checked in 8 dispatches of at most 4", async () => {
   const s = happy();
   const syms = Array.from({ length: 31 }, (_, i) => "f" + i);
   s["role:scope-and-plan"].changed_symbols = syms.map(one);
-  s["infra:callers"] = grep();
-  s["infra:callers:b2"] = grep();
+  script(s, 8);
   const out = await runOne(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  assert.deepEqual(inputsOf(call(out, "infra:callers").prompt).symbols, syms.slice(0, 30));
-  assert.deepEqual(inputsOf(call(out, "infra:callers:b2").prompt).symbols, ["f30"]);
-  assert.ok(out.logs.includes("infra:callers: 31 symbols in 2 caller-check dispatches (at most 30 symbols and " + BATCH_OCC + " mapped occurrences each)"), out.logs.join("\n"));
-  assert.ok(!out.logs.some((l) => /split the task/.test(l)));
-  // 70 symbols: 3 dispatches
-  const t = happy();
-  t["role:scope-and-plan"].changed_symbols = Array.from({ length: 70 }, (_, i) => one("g" + i));
-  for (const l of ["infra:callers", "infra:callers:b2", "infra:callers:b3"]) t[l] = grep();
-  const o2 = await runOne(t, ARGS);
-  assert.equal(o2.result.status, "awaiting_confirmation", o2.result.reason);
-  assert.deepEqual(["infra:callers", "infra:callers:b2", "infra:callers:b3"].map((l) => inputsOf(call(o2, l).prompt).symbols.length), [30, 30, 10]);
+  labelsOf(8).forEach((l, b) => assert.deepEqual(inputsOf(call(out, l).prompt).symbols, syms.slice(b * 4, b * 4 + 4), l));
+  assert.ok(!out.labels.includes("infra:callers:b9"));
+  assert.ok(out.logs.includes("infra:callers: 31 symbols in 8 caller-check dispatches (at most 4 symbols each)"), out.logs.join("\n"));
 });
 
-test("6.3.0 A1: a dispatch closes when the next symbol's mapped occurrences would pass the budget", async () => {
-  const per = SYMBOL_HITS;
-  const n = Math.floor(BATCH_OCC / per) + 1;
+test("6.3.0 A1 (review M1): an output over the relay cap splits the batch in two; one symbol alone over it stops with its name", async () => {
   const s = happy();
-  const syms = Array.from({ length: n }, (_, i) => "h" + i);
-  const hits = Object.fromEntries(syms.map((x) => [x, Array.from({ length: per }, (_, j) => "src/" + x + ".py:" + (j + 1))]));
-  s["role:scope-and-plan"].changed_symbols = syms.map((x) => ({ symbol: x, occurrences: hits[x].map((at) => ({ at, criterion: "AC1", dont_care: null })) }));
-  s["infra:callers"] = grep({ hits });
-  s["infra:callers:b2"] = grep({ hits });
+  const syms = ["a1", "a2", "a3", "a4"];
+  s["role:scope-and-plan"].changed_symbols = syms.map(one);
+  script(s, 3, { over: 2 });
   const out = await runOne(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  assert.deepEqual(inputsOf(call(out, "infra:callers").prompt).symbols, syms.slice(0, n - 1));
-  assert.deepEqual(inputsOf(call(out, "infra:callers:b2").prompt).symbols, syms.slice(n - 1));
+  assert.deepEqual(inputsOf(call(out, "infra:callers:b2").prompt).symbols, ["a1", "a2"]);
+  assert.deepEqual(inputsOf(call(out, "infra:callers:b3").prompt).symbols, ["a3", "a4"]);
+  assert.ok(out.logs.includes("infra:callers: 4 symbols are over the relay cap; split in two"), out.logs.join("\n"));
+  // a single symbol over the cap
+  const t = happy();
+  t["role:scope-and-plan"].changed_symbols = ["big", "b2"].map(one);
+  script(t, 3, { over: 0 });
+  const o2 = await runOne(t, ARGS);
+  assert.equal(o2.result.status, "needs_human");
+  assert.equal(o2.result.stop_gate, "callers");
+  assert.match(o2.result.reason, /: the occurrences of big are over the 65536-byte relay cap \(relay size; at most 100 hits, long paths\)/);
 });
 
 test("6.3.0 A1: the batches merge: a later batch's auto dont_care and capped symbol count as in one dispatch", async () => {
   const s = happy();
   const syms = Array.from({ length: 31 }, (_, i) => "f" + i);
   s["role:scope-and-plan"].changed_symbols = syms.map(one);
-  const extra = { hits: { f30: ["src/f30.py:1", "README.md:3"] }, auto: { f30: ["README.md:3"] } };
-  s["infra:callers"] = grep(extra);
-  s["infra:callers:b2"] = grep(extra);
+  script(s, 8, { hits: { f30: ["src/f30.py:1", "README.md:3"] }, auto: { f30: ["README.md:3"] } });
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   assert.ok(out.logs.some((l) => /^callers: .*f30 1 occurrence\(s\) mapped; git grep -w agrees; 1 doc or lock hit\(s\) mapped/.test(l)), out.logs.join("\n"));
-  // a capped symbol in batch 2 is the capped finding (every round)
   const t = happy();
   t["role:scope-and-plan"].changed_symbols = syms.map(one);
-  for (const sfx of ["", ":audit-fix", ":audit-fix-2"]) for (const b of ["", ":b2"]) t["infra:callers" + sfx + b] = grep({ capped: ["f30"], hits: { f30: [] } });
+  for (const sfx of ["", ":audit-fix", ":audit-fix-2"]) script(t, 8, { capped: ["f30"], hits: { f30: [] } }, sfx);
   const o2 = await runOne(t, ARGS);
   assert.equal(o2.result.status, "needs_human");
   assert.match(o2.result.reason, /f30: more than 100 occurrences \(git grep -w\)/);
@@ -113,7 +111,7 @@ function callersRun(wt, syms) {
   return { text: r.stdout, out: JSON.parse(r.stdout) };
 }
 
-test("6.3.0 A1: callers.py per symbol does not depend on the batch: 31 symbols in one run equal the 30 + 1 split", () => {
+test("6.3.0 A1: callers.py per symbol does not depend on the batch: 31 symbols in one run equal a 30 + 1 split", () => {
   const wt = scratchRepo("fleet-630-callers-");
   try {
     const syms = Array.from({ length: 31 }, (_, i) => "sym_" + i);
@@ -139,7 +137,7 @@ test("6.3.0 A1 (ADR-1195 measure): a dispatch at the occurrence budget relays we
   const wt = scratchRepo("fleet-630-size-");
   try {
     const per = SYMBOL_HITS;
-    const n = BATCH_OCC / per;
+    const n = PER;
     const syms = Array.from({ length: n }, (_, i) => "sym_name_" + i + "_long_identifier");
     for (let f = 0; f < 50; f++) {
       const d = join(wt, "src/services/module_" + (f % 10) + "/handlers");
@@ -393,4 +391,33 @@ test("6.3.0 D low 1: format_files.py, run for real: a check timeout names the fi
   const cut = slowHookRun(30, 1);
   assert.deepEqual(cut.hook_timeout, ["slow"], cut.note);
   assert.match(cut.note, /; the fixer runs took \d+ s, so the check phase had [01] s \(cut by the 1 s step ceiling\)$/);
+});
+
+test("6.3.0 A1 (review M1): callers.py prints no output over the relay cap: it exits with the FLEET_CALLERS_RELAY_CAP marker", () => {
+  const wt = scratchRepo("fleet-630-cap-");
+  try {
+    const d = join(wt, ...Array.from({ length: 3 }, (_, k) => "d".repeat(200) + k));
+    mkdirSync(d, { recursive: true });
+    for (let f = 0; f < 100; f++) writeFileSync(join(d, "m" + String(f).padStart(3, "0") + "_" + "x".repeat(60) + ".py"), "huge_symbol()\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "x");
+    const r = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(["huge_symbol"]), String(SYMBOL_HITS)], { encoding: "utf8" });
+    assert.notEqual(r.status, 0);
+    assert.equal(r.stdout, "");
+    assert.match(r.stderr, /^FLEET_CALLERS_RELAY_CAP: the callers output is over the 65536-byte relay cap \(\d+ bytes; symbols: huge_symbol\)/);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- review M2
+
+test("6.3.0 review M2: a pr-opener retry that names another PR stops", async () => {
+  const s = happy();
+  s["role:fleet-pr-opener"] = Object.assign({}, OPENER, { title: "feat(l42): add thing" });
+  s["role:fleet-pr-opener:again"] = Object.assign({}, OPENER, { pr_url: "https://github.com/o/r/pull/8", pr_number: 8, created: true });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "role");
+  assert.match(out.result.reason, /^pr-opener retry named https:\/\/github\.com\/o\/r\/pull\/8 \(#8\), not https:\/\/github\.com\/o\/r\/pull\/7 \(#7\)/);
 });

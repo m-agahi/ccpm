@@ -511,9 +511,10 @@ const READS = {
     "r.auto_dont_care object": "prog:callers:auto_dont_care",
     "r.auto_dont_care array": "!prog:callers:auto_dont_care",
     "r.doctest_md array": "prog:callers:doctest_md",
+    // review M1: a batch over the relay cap splits until one symbol is left
+    "part.length number-literal": PARSED_LOCAL,
   },
   unattendedOn: { "p.caps.unattended boolean": "prog:policy:caps.unattended", "input.unattended boolean": PARSED_ARGS },
-  occWeight: { "s.occurrences array": SP + "changed_symbols[].occurrences" },
   callerCheck: {
     "x string": "prog:callers:occurrences.*[]",
     "r.doctest_md array": "prog:callers:doctest_md",
@@ -622,7 +623,7 @@ const READS = {
     "c.ci_watch_minutes integer": PARSED_REF,
     "c.unattended boolean": PARSED_REF,
   },
-  stricterPolicy: { "b[k] boolean": "parsed: the policyStep result (policy.py caps or the run-state seal)", "s[k] boolean": PARSED_REF },
+  stricterPolicy: { "b[k] boolean": "parsed: the policyStep result (policy.py caps or the run-state seal)", "s[k] boolean": PARSED_REF, "s.ci_watch_minutes integer": PARSED_REF },
   makePlanRef: { "f.project string": PARSED_ARGS, "f.policy object": "parsed: the policyStep result (digest-checked policy.py)" },
   preflightRecordProblem: {
     "p object": PARSED_REF,

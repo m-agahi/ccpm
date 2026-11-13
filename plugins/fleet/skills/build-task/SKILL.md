@@ -120,9 +120,10 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
    default-mode blockers `change_kind`, `new_behaviour` and a task id with no `project` that
    exactly one ledger answered, a relaxed re-plan (the intent judge rules on it), the fleet-brief
    marker, and a code-judge or test-judge `plan_wrong` re-plan (built in the same run). When the
-   marker is there, pass `brief_marker: true` too, with `confirm: "ask"` as above: unattended mode
-   treats the marker as a ruling and records it. A `confirm: "ask"` the user named (no marker)
-   still asks. Unattended mode never bypasses a safety stop: hook surface, IaC or terraform,
+   marker is there, pass `brief_marker: true` too, with `confirm: "ask"` as above, and pass
+   `user_confirm: "<ask | auto | default>"` when the user named a mode: unattended mode
+   treats the marker's ask as a ruling and records it. A `confirm: "ask"` the user named
+   (`user_confirm: "ask"`, with or without the marker) always asks. Unattended mode never bypasses a safety stop: hook surface, IaC or terraform,
    work-owner merge, orchestrator PR, intent-judge refusal, scope fence, command allowlist, hash,
    freeze, fingerprint, ownership, commit, plan-ref, run-state, contract drift, DSN and relaunch
    stop as before. Report `auto_decisions` (each `gate`, `decision`, `reason`) in step 9; the PR
@@ -272,8 +273,8 @@ Build question. Probe mode skips it: probe reads no policy.
    marker `policy.json.dont-ask` next to the policy path), and `template` (the shipped
    `policy.example.json`). A non-zero exit carries `error` (for example a relative
    `XDG_CONFIG_HOME`, or a file that is not UTF-8): show it, ask nothing, and go on.
-2. `exists` true or `marker` true: say nothing about it and go on. (An invalid file stops the
-   build with `stop_gate: "policy"`; `/fleet-policy` shows and fixes it.)
+2. `exists` true or `marker` true: say nothing about it and go on. (An invalid file means the
+   strict default, with a gate line naming the error; `/fleet-policy` shows and fixes it.)
 3. Otherwise show the `template` text in one block, and say: as shown, the file turns on
    auto-merge for the personal owners (`m-agahi`, `yadgarhq`, `maxagahi`), except
    `yadgarhq/actions` and `yadgarhq/argocd`; work owners stay merge never in script code whatever

@@ -40,6 +40,13 @@ ADR-1233; wiki fleet-auto-flow-review-2026-11-13). Every safety stop stays.
 - A relaxed re-plan passes the intent gate only when each relaxed item has a deviation that quotes
   it, with verdict `approve`, a non-empty `allowed_by` and `fails_closed: true`; anything else is
   the intent stop (fail closed, checked by the script).
+- Review H1: a `plan_wrong` re-plan seals the build's policy (already never looser than the plan
+  ref's seal) in the new plan ref, so neither the same-run unattended build nor a later build runs
+  looser. Review L2: `ci_watch_minutes` takes the smaller of the two values; `pre_freeze_hooks`
+  always follows the current file (or run-state).
+- Review M2: a pr-opener retry that names another PR (url or number) stops (`stop_gate: role`).
+- Review L3: the skill passes `user_confirm` (the mode the user named) apart from the marker's
+  ask; unattended never overrides the user's own `confirm: "ask"`, with or without the marker.
 - At most one automatic `plan_wrong` build per run: a second `plan_wrong`, or one after the PR
   opened, asks as before and records `plan_wrong: ask`.
 - Audit trail: `state.autoDecisions` (`{gate, decision, reason}`, written by `autoDecide()` next
@@ -63,14 +70,18 @@ ADR-1233; wiki fleet-auto-flow-review-2026-11-13). Every safety stop stays.
 
 ### Changed
 
-- ADR-1238 (supersedes ADR-1232): the caller check runs in dispatches of at most 30 symbols and
-  400 mapped occurrences each (`infra:callers`, then `infra:callers:b2`, ...). The plan has no
+- ADR-1238 (supersedes ADR-1232): the caller check runs in dispatches of at most 4 symbols
+  (`CALLER_BATCH_OCC` 400 / `MAX_SYMBOL_HITS` 100: review M1 weighs every symbol at its hit cap,
+  whatever the plan maps; `infra:callers`, then `infra:callers:b2`, ...). `callers.py` refuses to
+  print an output over the 65536-byte relay cap and exits with the `FLEET_CALLERS_RELAY_CAP:` marker;
+  the workflow splits that batch in two and retries, and one symbol alone over the cap stops
+  (`needs_human`, `stop_gate: callers`, naming the symbol and the relay size). The plan has no
   `changed_symbols` count cap and no "split the task" finding. The per-symbol hit cap (100) and
   the build-time definition check stay. The update-merge grep (`infra:callers:u1`) runs in the
   same batches. Measured: `callers.py` prints about 61 bytes per occurrence for 50-character
   paths (about 24 KB at the 400-occurrence budget; a hit in a doc or lock file is listed twice).
-  The budget packs by the planner's mapped counts; a plan that maps far fewer lines than git grep
-  finds can still relay up to 30 x 100 hits in one dispatch, as every dispatch did before 6.3.0.
+  Known (L4, not changed): there is no ceiling on the number of changed symbols; `MAX_AGENTS`
+  bounds the dispatches.
 - A symbol a re-plan round drops is a re-plan finding (`changed_symbols dropped a symbol of an
 earlier round`), not an immediate stop. The round cap still stops.
 - An invalid `policy.json` is the strict default (`policy.py` `DEFAULT`, no `pre_freeze_hooks`

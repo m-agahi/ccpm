@@ -5604,7 +5604,6 @@ const ARRAY_SITES = {
   "r.auto_dont_care @ callerGrep": "parsed: a program map; Array.isArray only refuses an array there",
   "resume.auto_decisions @ buildFromRef": "parsed: the run-state (read-state), copied only when an array",
   "r.headers_missing @ statsStep": "parsed: the pr_body_block relay (digest-checked; schema prog:pr_body_block:headers_missing)",
-  "s.occurrences @ callerGrep": "parsed: the checked changed_symbols map (changedSymbolFindings) or the sealed plan facts",
   "r.doctest_md @ callerCheck": "infra:doctest_md",
   "r.auto_dont_care @ callerCheck": "parsed: a program map; Array.isArray only refuses an array there",
   // 4.0.0 (1986): a parked findings.json (digest-checked relay, JSON.parse)

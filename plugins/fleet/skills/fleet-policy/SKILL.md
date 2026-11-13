@@ -36,8 +36,8 @@ lands, so a file the workflow would refuse is never written.
    `template` (the shipped `policy.example.json`).
 
    - `exists` true: show `file` and `content` in one block. When `error` is not null, show it and
-     say that the workflow stops on this file (`stop_gate: "policy"`) until it is fixed or
-     re-created.
+     say that the workflow uses the strict default instead of this file (6.3.0: a gate line names
+     the error; no stop) until it is fixed or re-created.
    - `exists` false: say "no policy file at `<file>`: the fleet uses the strict default (PR ready,
      CI watch, stats on; merge never, update_branch never)". Show `template`. When `marker` is
      true, say that `/build-task` and `/plan-task` do not offer to create it while
