@@ -1,5 +1,43 @@
 # Changelog
 
+## [6.3.1] - 2026-11-13
+
+Fleet 6.3.1: size headroom (ledger 2129, option E ruled by Max). The workflow ships as a build
+output of a commented source; no change in behaviour.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.3.1), then start a NEW session: the workflow
+  looks for its own `fleet/6.3.1/scripts` dir.
+- A 6.3.0 plan ref and run-state stay valid: nothing sealed changed.
+
+### Changed
+
+- The commented source moves to `src/build-task-run.js` (outside `workflows/`, so the plugin loader
+  does not register it). `scripts/build-workflow.mjs` writes the shipped
+  `workflows/build-task-run.js`: the `export const meta` block byte for byte, then each other line
+  with its indentation cut, minus empty lines and lines that are only a `//` comment (the
+  `*_BEGIN` / `*_END` table markers stay). Nothing inside a line changes. 478123 -> 422259 bytes:
+  57741 bytes under the 480000-byte budget (ADR-1189), 102029 under Claude Code's 524288 cap.
+- Proof of no code change: the build fails unless esbuild `--minify-whitespace` (pinned 0.28.2,
+  run as `npx --yes esbuild@0.28.2`) gives the same bytes for the source and the workflow. An acorn
+  parse of the 6.3.0 file and the 6.3.1 workflow (positions dropped, `raw` text kept) is identical
+  apart from `FLEET_VERSION`. esbuild's own output is not shipped: it renames identifiers that
+  shadow an outer name (`args` -> `args2`, `input` -> `input2`, `main` -> `main2`) and rewrites
+  `undefined` to `void 0`.
+- `gen.mjs` writes its tables into the source; `build-workflow.mjs` runs it, then builds.
+- The test harness runs every scenario on the shipped workflow; text-matching and fault-injection
+  tests read the source (`SOURCE`), and the size guards check the shipped file.
+- The cap on all role files together is 200000 characters (was 150000; 149976 in 6.3.0). The
+  per-role cap (35000) and `gen.mjs`'s Read limits stay.
+
+### Added
+
+- `tests/v631_dist.test.mjs`: the shipped workflow is the build of the source (stale -> fail); the
+  esbuild check passes and catches a change inside a line (it fails, never skips, when esbuild
+  cannot run); only the table markers stay as comments; `gen.mjs` reads the same tables from both
+  files; no control or invisible format character; at most 480000 bytes.
+
 ## [6.3.0] - 2026-11-13
 
 Fleet 6.3.0: fewer stops for unattended runs, ruled by Max (ledger 2108; ADR-1238, ADR-1239,

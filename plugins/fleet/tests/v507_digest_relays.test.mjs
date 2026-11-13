@@ -438,7 +438,7 @@ test("5.0.7 2020: two digest misses fail as in 5.0.6; any other contract failure
 });
 
 test("5.0.7 2020: the read-only program steps carry the retry; no write step does", () => {
-  const src = readFileSync(join(SCRIPTS_SRC, "..", "workflows", "build-task-run.js"), "utf8");
+  const src = readFileSync(join(SCRIPTS_SRC, "..", "src", "build-task-run.js"), "utf8");
   const ro = [...src.matchAll(/JUDGE_AGENT,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]).concat([...src.matchAll(/digest: (?:baseTree \? "hasher:base" : )?"([a-z_]+)"/g)].map((m) => m[1]));
   // 6.2.2 re-review D-N1: the default-agent (write) form infra(..., undefined, "<id>") too
   const writes = [...src.matchAll(/,\s*undefined,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]);
@@ -672,7 +672,7 @@ test("5.0.7 review SF2: a changed map with no listed row and no overflow fails c
 });
 
 test("5.0.7 review: a hash-diff the agent cap cannot fit stops at cap", () => {
-  const src = readFileSync(join(SCRIPTS_SRC, "..", "workflows", "build-task-run.js"), "utf8");
+  const src = readFileSync(join(SCRIPTS_SRC, "..", "src", "build-task-run.js"), "utf8");
   const body = src.slice(src.indexOf("async function expandKeys("), src.indexOf("function keyNames("));
   const i = body.indexOf("reserve(1, ");
   assert.ok(i > 0 && i < body.indexOf("softDispatch("), "expandKeys reserves its agent (stop_gate cap) before the dispatch");

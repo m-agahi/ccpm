@@ -948,7 +948,7 @@ build past its commit) wins over `freeze_digest`.
 
 The ten role prompts ship as `plugins/fleet/roles/<role>.md`, and the shared prompt files as
 `plugins/fleet/roles/_shared/<name>.md` (5.0.0 R3: one, `test-cmd-allowlist.md`), under the same
-trust model as the shipped programs. `scripts/gen.mjs` writes three tables into the workflow
+trust model as the shipped programs. `scripts/gen.mjs` writes three tables into the workflow source
 from the files: `ROLE_SHA256` (the sha256 of each role file's exact bytes), `ROLE_DISPATCH`
 (each role file's first `DISPATCH:` line) and `SHARED_SHA256` (each shared file's sha256).
 `gen.mjs --check` fails when a file differs, is missing, or the roles dir (or `_shared`) holds
@@ -1739,3 +1739,26 @@ node --test 'plugins/fleet/tests/*.test.mjs'
 Node 22+. Pass files or a quoted glob: `node --test <dir>` runs the directory as one file and fails
 on Node 22 and later. CI (`validate.yaml`, step "Run plugin node tests") runs every
 `plugins/*/tests/*.test.mjs` on Node 24, with the list expanded by the shell.
+
+The tests need `npx` and the npm registry (or the npx cache): `v631_dist.test.mjs` runs the pinned
+esbuild through `npx --yes esbuild@<version>`, and fails, never skips, when it cannot.
+
+## Building the workflow (6.3.1, ledger 2129)
+
+Edit `src/build-task-run.js`, never `workflows/build-task-run.js`. The source holds the comments
+and the `*_BEGIN` / `*_END` tables; the plugin loader registers every `workflows/*.js`, so the
+source lives outside `workflows/`. The shipped workflow is a build output, committed with the
+source (the plugin installs from git). After a change to the source, a program in `scripts/` or a
+role file, run:
+
+```bash
+node plugins/fleet/scripts/build-workflow.mjs          # gen.mjs tables into src/, then workflows/
+node plugins/fleet/scripts/build-workflow.mjs --check  # what the tests check
+```
+
+The build keeps the `export const meta` block byte for byte, cuts each other line's indentation,
+and drops the empty lines and the lines that are only a `//` comment (the table markers stay).
+Nothing inside a line changes. It then checks that esbuild `--minify-whitespace` (pinned
+`ESBUILD_VERSION`, run by `npx`) gives the same bytes for the source and the workflow, and fails
+when they differ (a string, template or comment that spans a line). The workflow must stay at most
+480000 bytes (ADR-1189; Claude Code skips a workflow file over 524288 bytes).

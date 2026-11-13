@@ -22,14 +22,20 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const HERE = dirname(fileURLToPath(import.meta.url));
-export const SCRIPT_PATH = join(HERE, "..", "workflows", "build-task-run.js");
-export const SOURCE = readFileSync(SCRIPT_PATH, "utf8");
+// 6.3.1 (ledger 2129): SOURCE is the commented source (src/), which the
+// text-matching and fault-injection tests read; DIST is the shipped workflow
+// (scripts/build-workflow.mjs writes it), which the scenario runs execute.
+export const SRC_PATH = join(HERE, "..", "src", "build-task-run.js");
+export const SCRIPT_PATH = SRC_PATH;
+export const SOURCE = readFileSync(SRC_PATH, "utf8");
+export const DIST_PATH = join(HERE, "..", "workflows", "build-task-run.js");
+export const DIST = readFileSync(DIST_PATH, "utf8");
 
 export const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
-// src: a fault-injected copy of the script (tests only); default the script
+// src: a fault-injected copy of the source (tests only); default the shipped dist
 export function compile(src) {
-  const body = (src || SOURCE).replace(/^export const meta/m, "const meta");
+  const body = (src || DIST).replace(/^export const meta/m, "const meta");
   return new AsyncFunction(
     "agent",
     "parallel",
@@ -605,7 +611,9 @@ export async function runOne(script, args0) {
   // 5.0.0: a scenario's changed role texts are pinned in a copy of the source
   const roleText = scenarioRoles(script);
   const roleTable = Object.fromEntries(ROLE_NAMES.map((r) => [r, sha256(roleText[r])]));
-  let src = script.__source || SOURCE;
+  // 6.3.1: the shipped dist (it keeps gen's table markers), unless the
+  // scenario injects a fault-injected copy of the source
+  let src = script.__source || DIST;
   if (ROLE_NAMES.some((r) => roleText[r] !== ROLE_TEXT[r])) {
     const disp = Object.fromEntries(ROLE_NAMES.map((r) => [r, (/^DISPATCH:.*$/m.exec(roleText[r]) || [null])[0]]));
     src = GEN.withDispatchTable(GEN.withRoleTable(src, roleTable), disp);
@@ -1012,7 +1020,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.3.0/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.3.1/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
