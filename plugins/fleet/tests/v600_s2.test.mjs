@@ -79,7 +79,7 @@ test("6.0.0 2033: policy.py: first match on host and owner; per-repo glob overri
   assert.equal(policyProg(POLICY, ["gitlab.com", "quinyx/x"]).profile, "work");
 });
 
-test("6.0.0 2033: policy.py: a bad file is an error, never the default (strict JSON, unknown keys, types, duplicates)", () => {
+test("6.0.0 2033: policy.py: a bad file is an error (strict JSON, unknown keys, types, duplicates); 6.3.0: with the strict default caps", () => {
   const bad = [
     ["{", /not valid JSON/],
     [JSON.stringify({ version: 2, profiles: [] }), /version must be 1/],
@@ -96,7 +96,7 @@ test("6.0.0 2033: policy.py: a bad file is an error, never the default (strict J
     const o = policyProg(text, ["github.com", "a/b"]);
     assert.match(String(o.error), re, text);
     assert.equal(o.profile, null);
-    assert.equal(o.caps, null, text);
+    assert.deepEqual(o.caps, DEFAULT_CAPS, text);
   }
 });
 
@@ -148,7 +148,7 @@ test("6.0.0 2033: a work owner (quinyx, concrete-media, any host alias) gets mer
   }
 });
 
-test("6.0.0 2033: a policy file error stops the build (needs_human, gate policy); it never falls back to the default", async () => {
+test("6.0.0 2033: a policy result with no caps stops the build (needs_human, gate policy); 6.3.0: an invalid file is the strict default (v630_flow)", async () => {
   const s = happy();
   s["infra:policy"] = polOut({ caps: null, matched: null, policy_sha256: "d".repeat(64), error: "policy file /h/.config/fleet/policy.json: profiles[0].merge must be one of never|auto" });
   const out = await run(s, ARGS);
@@ -567,6 +567,8 @@ test("6.0.0 2042b: verify knows fleet commits by the sealed subjects; the old ta
 test("6.0.0 2042b: a PR opener that sets another title stops; a planner with no usable component gets the repo name", async () => {
   const s = happy();
   s["role:fleet-pr-opener"] = Object.assign({}, s["role:fleet-pr-opener"], { title: "feat(l42): add thing" });
+  // 6.3.0: one scripted retry, wrong again
+  s["role:fleet-pr-opener:again"] = s["role:fleet-pr-opener"];
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "role");

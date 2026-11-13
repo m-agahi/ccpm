@@ -1,0 +1,338 @@
+// fleet 6.3.0, part A: the flow fixes (ledger 2108; wiki fleet-auto-flow-review-2026-11-13).
+//
+// A1 (ADR-1238): the caller check runs in dispatches of at most 30 symbols and
+//    CALLER_BATCH_OCC mapped occurrences each; no changed_symbols count cap and
+//    no "split the task" finding.
+// A2: a symbol dropped after a round is a re-plan finding (planFindingsStop).
+// A3: an invalid policy.json is the strict default plus a gate line; a bad
+//    pre_freeze_hooks list is no list.
+// A4: plan mode on a branch with build commits returns resume_with "build".
+// A5: one scripted retry at the PR-step push probe, the two pr-opener checks
+//    and a test-judge revise with no routed finding.
+// A6: a test-judge plan finding takes the plan_wrong re-plan path.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  ARGS, PC, PB, FP_TESTS, SOURCE, SCRIPTS_SRC, happy, run, runOne, call, inputsOf, noUnscripted, criteria, commitStub,
+  planRefFor, buildArgs, ghIdOut, scratchRepo, sh, spawnSync,
+} from "./harness.mjs";
+
+const num = (name) => Number(new RegExp("\\nconst " + name + " = (\\d+);").exec(SOURCE)[1]);
+const BATCH_SYMBOLS = num("CALLER_BATCH_SYMBOLS");
+const BATCH_OCC = num("CALLER_BATCH_OCC");
+const SYMBOL_HITS = num("MAX_SYMBOL_HITS");
+
+// ---------------------------------------------------------------- A1
+
+const grep = (extra) => (p) => {
+  const syms = inputsOf(p).symbols;
+  const e = extra || {};
+  return {
+    status: "ok",
+    reason: "grepped",
+    occurrences: Object.fromEntries(syms.map((x) => [x, (e.hits && e.hits[x]) || ["src/" + x + ".py:1"]])),
+    capped: syms.filter((x) => (e.capped || []).indexOf(x) >= 0),
+    auto_dont_care: Object.fromEntries(syms.filter((x) => e.auto && e.auto[x]).map((x) => [x, e.auto[x]])),
+    doctest_md: [],
+  };
+};
+const one = (x) => ({ symbol: x, occurrences: [{ at: "src/" + x + ".py:1", criterion: "AC1", dont_care: null }] });
+
+test("6.3.0 A1: the bounds are 30 symbols and a mapped-occurrence budget per dispatch; one symbol at the hit cap always fits", () => {
+  assert.equal(BATCH_SYMBOLS, 30);
+  assert.ok(BATCH_OCC >= SYMBOL_HITS, "one symbol at the hit cap fits a dispatch");
+  assert.ok(!/MAX_CHANGED_SYMBOLS|split the task/.test(SOURCE));
+});
+
+test("6.3.0 A1 (ADR-1238): 31 changed symbols are checked in 2 dispatches (30 + 1); no cap, no split finding", async () => {
+  const s = happy();
+  const syms = Array.from({ length: 31 }, (_, i) => "f" + i);
+  s["role:scope-and-plan"].changed_symbols = syms.map(one);
+  s["infra:callers"] = grep();
+  s["infra:callers:b2"] = grep();
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.deepEqual(inputsOf(call(out, "infra:callers").prompt).symbols, syms.slice(0, 30));
+  assert.deepEqual(inputsOf(call(out, "infra:callers:b2").prompt).symbols, ["f30"]);
+  assert.ok(out.logs.includes("infra:callers: 31 symbols in 2 caller-check dispatches (at most 30 symbols and " + BATCH_OCC + " mapped occurrences each)"), out.logs.join("\n"));
+  assert.ok(!out.logs.some((l) => /split the task/.test(l)));
+  // 70 symbols: 3 dispatches
+  const t = happy();
+  t["role:scope-and-plan"].changed_symbols = Array.from({ length: 70 }, (_, i) => one("g" + i));
+  for (const l of ["infra:callers", "infra:callers:b2", "infra:callers:b3"]) t[l] = grep();
+  const o2 = await runOne(t, ARGS);
+  assert.equal(o2.result.status, "awaiting_confirmation", o2.result.reason);
+  assert.deepEqual(["infra:callers", "infra:callers:b2", "infra:callers:b3"].map((l) => inputsOf(call(o2, l).prompt).symbols.length), [30, 30, 10]);
+});
+
+test("6.3.0 A1: a dispatch closes when the next symbol's mapped occurrences would pass the budget", async () => {
+  const per = SYMBOL_HITS;
+  const n = Math.floor(BATCH_OCC / per) + 1;
+  const s = happy();
+  const syms = Array.from({ length: n }, (_, i) => "h" + i);
+  const hits = Object.fromEntries(syms.map((x) => [x, Array.from({ length: per }, (_, j) => "src/" + x + ".py:" + (j + 1))]));
+  s["role:scope-and-plan"].changed_symbols = syms.map((x) => ({ symbol: x, occurrences: hits[x].map((at) => ({ at, criterion: "AC1", dont_care: null })) }));
+  s["infra:callers"] = grep({ hits });
+  s["infra:callers:b2"] = grep({ hits });
+  const out = await runOne(s, ARGS);
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.deepEqual(inputsOf(call(out, "infra:callers").prompt).symbols, syms.slice(0, n - 1));
+  assert.deepEqual(inputsOf(call(out, "infra:callers:b2").prompt).symbols, syms.slice(n - 1));
+});
+
+test("6.3.0 A1: the batches merge: a later batch's auto dont_care and capped symbol count as in one dispatch", async () => {
+  const s = happy();
+  const syms = Array.from({ length: 31 }, (_, i) => "f" + i);
+  s["role:scope-and-plan"].changed_symbols = syms.map(one);
+  const extra = { hits: { f30: ["src/f30.py:1", "README.md:3"] }, auto: { f30: ["README.md:3"] } };
+  s["infra:callers"] = grep(extra);
+  s["infra:callers:b2"] = grep(extra);
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.ok(out.logs.some((l) => /^callers: .*f30 1 occurrence\(s\) mapped; git grep -w agrees; 1 doc or lock hit\(s\) mapped/.test(l)), out.logs.join("\n"));
+  // a capped symbol in batch 2 is the capped finding (every round)
+  const t = happy();
+  t["role:scope-and-plan"].changed_symbols = syms.map(one);
+  for (const sfx of ["", ":audit-fix", ":audit-fix-2"]) for (const b of ["", ":b2"]) t["infra:callers" + sfx + b] = grep({ capped: ["f30"], hits: { f30: [] } });
+  const o2 = await runOne(t, ARGS);
+  assert.equal(o2.result.status, "needs_human");
+  assert.match(o2.result.reason, /f30: more than 100 occurrences \(git grep -w\)/);
+});
+
+// callers.py run for real
+const CALLERS = join(SCRIPTS_SRC, "callers.py");
+function callersRun(wt, syms) {
+  const r = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms), String(SYMBOL_HITS)], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  return { text: r.stdout, out: JSON.parse(r.stdout) };
+}
+
+test("6.3.0 A1: callers.py per symbol does not depend on the batch: 31 symbols in one run equal the 30 + 1 split", () => {
+  const wt = scratchRepo("fleet-630-callers-");
+  try {
+    const syms = Array.from({ length: 31 }, (_, i) => "sym_" + i);
+    mkdirSync(join(wt, "src"));
+    for (let f = 0; f < 4; f++) writeFileSync(join(wt, "src", "m" + f + ".py"), syms.map((x, i) => (i % 4 === f ? x + "()\n" : "pass\n")).join(""));
+    writeFileSync(join(wt, "README.md"), "sym_30 and sym_2\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "x");
+    const all = callersRun(wt, syms).out;
+    const a = callersRun(wt, syms.slice(0, 30)).out;
+    const b = callersRun(wt, syms.slice(30)).out;
+    assert.deepEqual(Object.assign({}, a.occurrences, b.occurrences), all.occurrences);
+    assert.deepEqual(Object.assign({}, a.auto_dont_care, b.auto_dont_care), all.auto_dont_care);
+    assert.deepEqual(a.capped.concat(b.capped).sort(), all.capped);
+    assert.deepEqual(Array.from(new Set(a.doctest_md.concat(b.doctest_md))).sort(), all.doctest_md);
+    assert.deepEqual(all.auto_dont_care.sym_30, ["README.md:1"]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test("6.3.0 A1 (ADR-1195 measure): a dispatch at the occurrence budget relays well under 64 KiB (code paths of 50 characters)", () => {
+  const wt = scratchRepo("fleet-630-size-");
+  try {
+    const per = SYMBOL_HITS;
+    const n = BATCH_OCC / per;
+    const syms = Array.from({ length: n }, (_, i) => "sym_name_" + i + "_long_identifier");
+    for (let f = 0; f < 50; f++) {
+      const d = join(wt, "src/services/module_" + (f % 10) + "/handlers");
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, "request_handler_" + String(f).padStart(2, "0") + ".py"), syms.map((x) => "x = " + x + "(1)\ny = " + x + "(2)\n").join(""));
+    }
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "x");
+    const r = callersRun(wt, syms);
+    const occ = Object.values(r.out.occurrences).reduce((a, v) => a + v.length, 0);
+    assert.equal(occ, BATCH_OCC);
+    const bytes = Buffer.byteLength(r.text);
+    assert.ok(bytes < 32768, bytes + " bytes for " + occ + " occurrences");
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------- A2
+
+const REFUSE = (finding) => ({ status: "ok", reason: "defect", verdict: "plan_defect", routed_findings: [{ target: "plan", criterion: "AC1", finding }] });
+const planRound = (s, over) => Object.assign({}, s["role:scope-and-plan"], over);
+
+test("6.3.0 A2: a symbol dropped after a round is a re-plan finding; a round that restores it goes on", async () => {
+  const s = happy();
+  const map = (...xs) => xs.map(one);
+  s["role:scope-and-plan"].changed_symbols = map("foo");
+  s["role:scope-and-plan:audit-fix"] = planRound(s, { changed_symbols: map("bar") });
+  s["role:scope-and-plan:audit-fix-2"] = planRound(s, { changed_symbols: map("foo", "bar") });
+  for (const sfx of ["", ":audit-fix", ":audit-fix-2"]) s["infra:callers" + sfx] = grep();
+  s["role:plan-audit"] = REFUSE("r0");
+  s["role:plan-audit:audit-fix-2"] = { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] };
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.ok(out.logs.includes("changed_symbols dropped a symbol of an earlier round: re-plan round 2 of 2 with the findings"), out.logs.join("\n"));
+  const pr = inputsOf(call(out, "role:scope-and-plan:audit-fix-2").prompt).prior_round;
+  assert.ok(pr.symbols.includes("foo"));
+  assert.ok(pr.findings.some((f) => f.symbol === "foo" && /^changed_symbols dropped foo after the /.test(f.finding)), JSON.stringify(pr.findings));
+  // the round-1 drop ran no plan audit for that round
+  assert.ok(!out.labels.includes("role:plan-audit:audit-fix"));
+});
+
+// ---------------------------------------------------------------- A3
+
+const DEFAULT_CAPS = { pr_ready: true, ci_watch: true, ci_watch_minutes: 60, stats: true, merge: "never", update_branch: "never", ci_trigger: false, review_post: "none" };
+function policyPy(doc) {
+  const home = mkdtempSync(join(tmpdir(), "fleet-630pol-"));
+  try {
+    mkdirSync(join(home, ".config", "fleet"), { recursive: true });
+    writeFileSync(join(home, ".config", "fleet", "policy.json"), typeof doc === "string" ? doc : JSON.stringify(doc));
+    const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "policy.py"), "github.com", "yadgarhq/iam-db"], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: home } });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test("6.3.0 A3: policy.py: an invalid file prints the strict default caps (no pre_freeze_hooks list) with the error", () => {
+  for (const doc of ["{", { version: 2, profiles: [] }, { version: 1, profiles: [{ name: "p", match: { owners: ["yadgarhq"] }, merge: "sometimes" }] }, { version: 1, profiles: [{ name: "p", match: { owners: ["yadgarhq"] }, repos: { "yadgarhq/iam-db": { pre_freeze_hooks: "fmt" } } }] }]) {
+    const o = policyPy(doc);
+    assert.ok(o.error, JSON.stringify(doc));
+    assert.deepEqual(o.caps, DEFAULT_CAPS, JSON.stringify(doc));
+    assert.equal(o.profile, null);
+  }
+});
+
+const polOut = (over) => (p) => Object.assign({ status: "ok", reason: "read", profile: null, file: "/h/.config/fleet/policy.json", policy_sha256: "d".repeat(64), caps: Object.assign({}, DEFAULT_CAPS), matched: null, error: null, args: inputsOf(p).args }, over);
+
+test("6.3.0 A3: an invalid policy file builds with the strict default and a gate line; no policy stop", async () => {
+  const s = happy();
+  const err = "policy file /h/.config/fleet/policy.json: profiles[0].merge must be one of never|auto";
+  s["infra:policy"] = polOut({ error: err });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.build.logs.includes("policy: " + err + "; the strict default applies (pr_ready true, ci_watch true 60 min, stats true, merge never, update_branch never, ci_trigger false, review_post none); fix or remove the file"), out.build.logs.join("\n"));
+  assert.deepEqual(out.result.policy.caps, DEFAULT_CAPS);
+});
+
+test("6.3.0 A3: a sealed pre_freeze_hooks that is not a list of hook ids is no list (a gate line), never a stop", async () => {
+  for (const bad of ["fmt", ["a b"], [""], ["-x"]]) {
+    const s = happy();
+    s["infra:policy"] = polOut({ error: null, matched: "profile p", caps: Object.assign({}, DEFAULT_CAPS, { pre_freeze_hooks: bad }) });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "ok", JSON.stringify(bad) + ": " + out.result.reason);
+    assert.ok(out.build.logs.some((l) => l.startsWith("policy: pre_freeze_hooks " + JSON.stringify(bad) + " is not a list of hook ids; the strict default (no pre-freeze hook) applies")), out.build.logs.join("\n"));
+    assert.ok(!("check_hooks" in inputsOf(call(out, "infra:format-tests:r1").prompt).select));
+  }
+});
+
+// ---------------------------------------------------------------- A4
+
+const META = { name: "refs/fleet/l42/plan", tag_sha: "7".repeat(40), type: "tag", target: "2222222", target_type: "commit", sha256: "a".repeat(64), task_id: "l42", plan_path: "docs/plans/x.md", ref_ok: true };
+
+test("6.3.0 A4: plan mode on a branch with build commits and its sealed plan ref returns resume_with build and that plan_ref", async () => {
+  const s = happy();
+  s["infra:branch-scan"] = { status: "ok", reason: "scanned", head: PB, commits: [{ sha: "1111111", subject: "feat(thing): add thing", files: ["src/x.py"] }], refs: [META] };
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "resume");
+  assert.equal(out.result.resume_with, "build");
+  assert.deepEqual(out.result.plan_ref, { branch: "fleet/l42-add-thing", plan_commit: "2222222", plan_ref: "refs/fleet/l42/plan", ref_sha256: "a".repeat(64), repo: "/r" });
+  assert.match(out.result.reason, /^branch has build commits; resume_with build: run build with plan_ref refs\/fleet\/l42\/plan/);
+  assert.ok(!out.labels.includes("role:scope-and-plan"));
+  // no usable plan ref: the stop as before
+  for (const refs of [[], [{ ...META, ref_ok: false }], [{ ...META, task_id: "l43" }], [{ ...META, name: "refs/fleet/l42/plan-1" }], [{ ...META, sha256: "x" }]]) {
+    s["infra:branch-scan"] = { status: "ok", reason: "scanned", head: PB, commits: [{ sha: "1111111", subject: "feat(thing): add thing", files: ["src/x.py"] }], refs };
+    const o = await runOne(s, ARGS);
+    assert.equal(o.result.status, "needs_human", JSON.stringify(refs));
+    assert.ok(!("resume_with" in o.result), JSON.stringify(refs));
+    assert.match(o.result.reason, /branch has build commits; run build, or delete branch/);
+  }
+});
+
+// ---------------------------------------------------------------- A5
+
+const UNKNOWN = [{ cmd: "gh", installed: true, push: null }, { cmd: "gh-personal", installed: true, push: null }];
+const reprobe = (tried) => (p) => Object.assign({ status: "ok", reason: "checked" }, ghIdOut(inputsOf(p).args, null, { "o/r": tried }));
+
+test("6.3.0 A5: push access still unknown at the PR re-probe: one scripted retry of the probe; push true -> the PR opens", async () => {
+  const s = happy();
+  s.__gh = { "o/r": UNKNOWN };
+  s["infra:gh-identity:pr"] = reprobe(UNKNOWN);
+  s["infra:gh-identity:pr-2"] = reprobe([{ cmd: "gh", installed: true, push: true }]);
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.build.labels.indexOf("infra:gh-identity:pr-2") < out.build.labels.indexOf("role:fleet-pr-opener"));
+  assert.ok(out.build.logs.some((l) => /^PR step: push access to o\/r still not known \(.*\); one scripted retry of the probe$/.test(l)));
+});
+
+const OPENER = { status: "ok", reason: "opened", pr_url: "https://github.com/o/r/pull/7", pr_number: 7, created: true, template_used: null, gates_not_run_stated: true };
+
+test("6.3.0 A5: a pr-opener title or gates_not_run miss gets one scripted retry on the same PR; fixed -> the build goes on", async () => {
+  for (const [bad, re] of [[{ title: "feat(l42): add thing" }, /^pr-opener set the PR title/], [{ gates_not_run_stated: false }, /^pr-opener did not state gates_not_run/]]) {
+    const s = happy();
+    s["role:fleet-pr-opener"] = Object.assign({}, OPENER, bad);
+    s["role:fleet-pr-opener:again"] = Object.assign({}, OPENER, { created: false });
+    const out = await run(s, ARGS);
+    assert.equal(out.result.status, "ok", out.result.reason);
+    const i = inputsOf(call(out, "role:fleet-pr-opener:again").prompt);
+    assert.equal(i.pr_url, OPENER.pr_url);
+    assert.equal(i.pr_number, 7);
+    assert.match(i.retry_reason, re);
+    assert.equal(out.result.pr_url, OPENER.pr_url);
+    // wrong twice: the stop as before
+    const t = happy();
+    t["role:fleet-pr-opener"] = Object.assign({}, OPENER, bad);
+    t["role:fleet-pr-opener:again"] = Object.assign({}, OPENER, bad);
+    const o2 = await run(t, ARGS);
+    assert.equal(o2.result.status, "needs_human");
+    assert.match(o2.result.reason, re);
+  }
+});
+
+test("6.3.0 A5: a test-judge revise that routes no finding to a known criterion gets one scripted retry of the judge", async () => {
+  const s = happy();
+  s["role:fleet-test-judge:r1"] = { status: "ok", reason: "weak", verdict: "revise", routed_findings: [{ target: "tests", criterion: "AC9", finding: "x" }], checked: [] };
+  s["role:fleet-test-judge:r1:again"] = { status: "ok", reason: "good", verdict: "approve", routed_findings: [], checked: [] };
+  s["hasher:fp-post:test-judge:r1:again"] = { status: "ok", fingerprint: FP_TESTS };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.match(inputsOf(call(out, "role:fleet-test-judge:r1:again").prompt).retry_reason, /^test-judge revise r1 routed no finding to a known criterion/);
+  // again no routed finding: the stop as before
+  s["role:fleet-test-judge:r1:again"] = s["role:fleet-test-judge:r1"];
+  const o2 = await run(s, ARGS);
+  assert.equal(o2.result.status, "needs_human");
+  assert.equal(o2.result.reason, "test-judge revise r1 routed no finding to a known criterion");
+});
+
+// ---------------------------------------------------------------- A6
+
+const PC2 = "0123456789ab";
+test("6.3.0 A6: a test-judge plan finding takes the plan_wrong re-plan path (re-plan, save the old head, ask for confirmation)", async () => {
+  const s = happy();
+  const f = { target: "plan", criterion: "AC2", finding: "AC2 cannot be tested — Proposed plan change: split AC2" };
+  Object.assign(s, {
+    "role:fleet-test-judge:r1": { status: "ok", reason: "plan", verdict: "revise", routed_findings: [f], checked: [] },
+    "infra:replan-worktree": { status: "ok", reason: "ok", head: PC },
+    "role:scope-and-plan:replan": Object.assign({}, s["role:scope-and-plan"], { tldr: "re-planned" }),
+    "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
+    "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
+    "infra:commit-plan:replan": commitStub(s.__store, PC2, "d".repeat(64)),
+    "infra:replan-reset": { status: "ok", reason: "reset", head: PB, superseded_head: "5555555" },
+  });
+  const ref = await planRefFor(s);
+  const out = await runOne(s, buildArgs(ref));
+  noUnscripted(out);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.match(out.result.reason, /^test-judge plan_wrong: re-planned; confirm the proposed plan change/);
+  assert.deepEqual(out.result.proposed_plan_change, ["split AC2"]);
+  assert.deepEqual(inputsOf(call(out, "infra:replan-reset").prompt).expected_tree, FP_TESTS.tree);
+  assert.ok(!out.labels.some((l) => /^hasher:freeze/.test(l)), "no freeze");
+  assert.ok(!out.labels.includes("role:fleet-coder:r1"));
+  const pin = inputsOf(call(out, "role:scope-and-plan:replan").prompt);
+  assert.ok(pin.brief.sources.some((x) => x.ref === "test-judge plan findings"));
+});

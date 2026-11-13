@@ -22,6 +22,7 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 - `title`: the PR title, built from the repo's convention. Use it verbatim.
 - `body_convention`: `{template, template_repo, required_sections, min_chars, checker}`, the body rules the repo or its org checks (any key may be null). `template_repo` names the org repo that holds `template`.
 - `pr_url`, `pr_number` (an update run only): the PR this branch already has.
+- `retry_reason` (a scripted retry only): why the workflow refused your first result for this PR. Fix exactly that on the PR named by `pr_url`; never open another PR.
 
 ## Run rules (non-interactive)
 

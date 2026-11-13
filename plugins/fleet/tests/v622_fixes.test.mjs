@@ -264,15 +264,14 @@ test("6.2.2 re-review D-L1: fixer runs that ran out of time stop with a reason n
   assert.match(out.result.reason, /the pre_freeze_hooks check phase ran out of time: cargo-fmt/);
 });
 
-test("6.2.2 2107: listed hooks that could not run (no pre-commit) stop for a human; a bad sealed list stops too", async () => {
+test("6.2.2 2107: listed hooks that could not run (no pre-commit) stop for a human; 6.3.0: a bad sealed list is no list (v630_flow)", async () => {
   let out = await run(happy({ script: { "infra:policy": policyWith(["cargo-fmt"]), "infra:format-tests:r1": (p) => hookResult(p, [], { ran: false, note: "pre-commit is not installed" }) } }), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "policy");
   assert.match(out.result.reason, /pre_freeze_hooks \(cargo-fmt\) did not run \(pre-commit is not installed\)/);
   for (const bad of ["cargo-fmt", [""], ["a b"], ["-x"], [1]]) {
     out = await run(happy({ script: { "infra:policy": policyWith(bad) } }), ARGS);
-    assert.equal(out.result.status, "needs_human", JSON.stringify(bad));
-    assert.equal(out.result.stop_gate, "policy", JSON.stringify(bad));
+    assert.equal(out.result.status, "ok", JSON.stringify(bad));
   }
 });
 
@@ -334,14 +333,14 @@ test("6.2.2 2107: policy.py: a repos override's pre_freeze_hooks reaches the cap
   assert.deepEqual(policyRun(polDoc({ pre_freeze_hooks: [] })).caps.pre_freeze_hooks, []);
 });
 
-test("6.2.2 2107: policy.py: a pre_freeze_hooks that is not a list of hook ids makes the policy invalid; the key is per repo only", () => {
+test("6.2.2 2107: policy.py: a pre_freeze_hooks that is not a list of hook ids makes the policy invalid (6.3.0: the strict default, no list); the key is per repo only", () => {
   for (const bad of ["cargo-fmt", [""], [1], ["a b"], ["-x"], [null], { a: 1 }]) {
     const o = policyRun(polDoc({ pre_freeze_hooks: bad }));
-    assert.equal(o.caps, null, JSON.stringify(bad));
+    assert.deepEqual(o.caps, DEFAULT_CAPS, JSON.stringify(bad));
     assert.match(o.error, /pre_freeze_hooks must be a list of hook ids/, JSON.stringify(bad));
   }
   const p = policyRun(polDoc({}, { pre_freeze_hooks: ["cargo-fmt"] }));
-  assert.equal(p.caps, null);
+  assert.deepEqual(p.caps, DEFAULT_CAPS);
   assert.match(p.error, /unknown key "pre_freeze_hooks"/);
 });
 

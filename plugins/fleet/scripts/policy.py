@@ -155,7 +155,8 @@ try:
                     out['matched'] += ', repos[' + json.dumps(g) + ']'
                     break
 except (Bad, OSError, UnicodeDecodeError) as e:
-    out.update(profile=None, caps=None, matched=None, error='policy file ' + path + ': ' + str(e))
+    # 6.3.0: an invalid file is the strict default (no pre_freeze_hooks list), with the error
+    out.update(profile=None, caps=dict(DEFAULT), matched=None, error='policy file ' + path + ': ' + str(e))
 out['now'] = int(time.time())
 out['args'] = args
 out['program'] = _PROG

@@ -507,7 +507,12 @@ const READS = {
     "r.capped array": "prog:callers:capped",
     "x string": "prog:callers:occurrences.*[]",
     "occ[n] array": "prog:callers:occurrences.*",
+    // 6.3.0 (ADR-1238): the batches merge
+    "r.auto_dont_care object": "prog:callers:auto_dont_care",
+    "r.auto_dont_care array": "!prog:callers:auto_dont_care",
+    "r.doctest_md array": "prog:callers:doctest_md",
   },
+  occWeight: { "s.occurrences array": SP + "changed_symbols[].occurrences" },
   callerCheck: {
     "x string": "prog:callers:occurrences.*[]",
     "r.doctest_md array": "prog:callers:doctest_md",
@@ -637,6 +642,8 @@ const READS = {
   autoGates: { "r.deviations array": IJ + "deviations", "r.classification object": IJ + "classification" },
   defaultBlockers: { "pf.new_behaviour boolean": SP + "new_behaviour", "raw string-re": PARSED_ARGS },
   planMode: {
+    // 6.3.0: the sealed plan ref a branch with build commits resumes with
+    "e.ref_ok boolean": "prog:branch_scan:refs[].ref_ok",
     "input.input string": PARSED_ARGS,
     // 5.0.0 (R2): + the no-ledger stop before intake
     "raw string-re": [PARSED_ARGS, 2],
@@ -767,7 +774,7 @@ const READS = {
     "r.diff array": "prog:fleet_scan:diff",
     "r.commits array": "prog:fleet_scan:commits",
     "c.files array": "prog:fleet_scan:commits[].files",
-    "r.gates_not_run_stated boolean": "role:fleet-pr-opener:gates_not_run_stated",
+    "x.gates_not_run_stated boolean": "role:fleet-pr-opener:gates_not_run_stated",
     "r.state_sha string": "prog:state_write:state_sha",
     "pa[0] string": "prog:push_classify:args[]",
     "pa array": "prog:push_classify:args",

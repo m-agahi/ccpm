@@ -30,7 +30,7 @@ test("6.0.0 2038: unknown push at the workspace, push true at the PR re-probe ->
   assert.ok(out.build.labels.indexOf("infra:gh-identity:pr") < out.build.labels.indexOf("role:fleet-pr-opener"));
 });
 
-test("6.0.0 2038: unknown twice -> halt with the unknown text, not 'no push access'", async () => {
+test("6.0.0 2038: unknown twice (6.3.0: and at the scripted retry) -> halt with the unknown text, not 'no push access'", async () => {
   const s = happy();
   s.__gh = { "o/r": UNKNOWN };
   const out = await run(s, ARGS);
@@ -38,7 +38,7 @@ test("6.0.0 2038: unknown twice -> halt with the unknown text, not 'no push acce
   assert.equal(out.result.stop_gate, "role");
   assert.match(out.result.reason, /^PR step: push access to o\/r still not known after a second probe \(gh=null, gh-personal=null\)/);
   assert.doesNotMatch(out.result.reason, /no GitHub command with push access/);
-  assert.equal(out.build.labels.filter((l) => /^infra:gh-identity:pr/.test(l)).length, 1);
+  assert.deepEqual(out.build.labels.filter((l) => /^infra:gh-identity:pr/.test(l)), ["infra:gh-identity:pr", "infra:gh-identity:pr-2"]);
   assert.ok(!out.build.labels.includes("role:fleet-pr-opener"));
 });
 

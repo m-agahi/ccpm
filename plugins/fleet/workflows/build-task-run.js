@@ -166,8 +166,10 @@ const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
 // Caller coverage: a changed symbol is a bare identifier
 const SYMBOL_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const OCCURRENCE_RE = /^(.+):([1-9][0-9]*)$/;
-const MAX_CHANGED_SYMBOLS = 30;
 const MAX_SYMBOL_HITS = 100;
+// 6.3.0 (ADR-1238): the caller check runs in dispatches of at most 30 symbols and 400 mapped occurrences each
+const CALLER_BATCH_SYMBOLS = 30;
+const CALLER_BATCH_OCC = 400;
 const CALLER_METHOD =
   "git grep -n -I -w -F --full-name -e <symbol>: the working tree content of the tracked files in the fleet worktree, the run's own plan doc excluded; every hit must be mapped and every mapped line must be a hit (checked by the script)";
 const CALLER_LIMITS = [
@@ -1557,7 +1559,7 @@ const PROGRAM_SHA256 = {
   "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
   "plan_ref": "494ceb934b89fa5c2962ef786ba93bee63bd09f776c82c50579fdf23f301c136",
   "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
-  "policy": "cfa06238bb22327ccfe4cbfe198cd0752aca3cdab77d6eaf4068fdf9a7b6d906",
+  "policy": "b04c0a519a5113ccb25a0a377e93a1725b205d9a7d985d2cac3e269cd5d49b6b",
   "pr_body_block": "368ed0c33928769f6951a1e15b65362b438fc010b0ea26c6284fc668c5e6c733",
   "pr_convention": "4763189023084bbad77a9eb5c2704692da5932d2dfa335654c5e4178f027c2b7",
   "pr_state": "a17beb445d0fac95dff82b49bfc75f6396293a6f193bfcfe2f6d4ddee51856b9",
@@ -1588,13 +1590,13 @@ const ROLE_SHA256 = {
   "fleet-code-judge": "0b7a412cb27884de57c70bb48f90627c8595057ef29ce1a8e0f147df49f979fe",
   "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
   "fleet-intent-judge": "9cbd440fd7c3b20738e38598c84df438657af2fb9aa22ee007028cbd853902c1",
-  "fleet-pr-opener": "b1207cb47c140b6c15cf6c1874277e1edecb2862035d97d5a6da7f8bf3cab981",
-  "fleet-test-judge": "c1aabca1c8623473811ca3d6ce66fe821f0dac251ea1d53d528372ad2d2bfe7e",
+  "fleet-pr-opener": "8809fc9d13256ceca0714514e7bd6dd710e2cbd6e2f5af5367eb17c63caa048d",
+  "fleet-test-judge": "321c1772ae375487adb5019f58d681e10bcc92072fc9ab7136afb89bc3c40285",
   "fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
   "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
   "plan-audit": "084fe730cc8ecb5cf8712b164bb763cb9bbe97e18bc3cc04e82480ba158de984",
   "pr-review": "728800a005a54026eb345d5b9784bdde50cdafd5d918f9faa8d2cec7c091142d",
-  "scope-and-plan": "5ac14fa250643699661378abfc38ed7b459268c6349df26a1d5f2a48aea8da40"
+  "scope-and-plan": "1f9d529f2aabefca5a109d1a053c11b1858478bc4c40f89027874d9c070ca9b4"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -4330,10 +4332,6 @@ function changedSymbolFindings(raw, criteria) {
   const findings = [];
   const clean = [];
   const bad = (f) => findings.push({ criterion: null, finding: f });
-  if (raw.length > MAX_CHANGED_SYMBOLS) {
-    bad(raw.length + " symbols; at most " + MAX_CHANGED_SYMBOLS + " can be checked (split the task)");
-    return { findings, clean };
-  }
   const seen = {};
   raw.forEach((e, i) => {
     if (!e || typeof e !== "object" || Array.isArray(e)) return bad("entry " + i + " is not an object");
@@ -4373,28 +4371,59 @@ function docOrLockFile(p) {
   const b = String(p).split("/").pop();
   return DOC_FILE_RE.test(b) || NOTE_FILE_RE.test(b) || LOCK_FILES.indexOf(b) >= 0;
 }
-async function callerGrep(label, names, worktree, planPath, phaseName) {
-  const r = await infra(
-    label,
-    callersPrompt({ worktree, plan_path: planPath, symbols: names, cap: MAX_SYMBOL_HITS }),
-    phaseName,
-    JUDGE_AGENT,
-    "callers",
-  );
-  const occ = r.occurrences;
-  if (!occ || typeof occ !== "object" || Array.isArray(occ) || !Array.isArray(r.capped))
-    halt("failed", label + " returned no occurrences map or capped list");
-  for (const n of names)
-    if (!Array.isArray(occ[n]) || !occ[n].every((x) => typeof x === "string"))
-      halt("failed", label + " returned no occurrence list for " + n);
-  requireProgram(r, "callers", label);
-  if (!relayDigestOk(r, progKeys("callers"), "callers"))
-    halt("failed", label + ": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
-  return r;
+// 6.3.0 (ADR-1238): batches of names in order; a batch closes at CALLER_BATCH_SYMBOLS names or when the
+// next name's mapped occurrences (weight, 1..MAX_SYMBOL_HITS) would pass CALLER_BATCH_OCC; one name always fits
+function callerBatches(names, weight) {
+  const out = [];
+  let cur = [];
+  let n = 0;
+  for (const s of names) {
+    const k = Math.max(1, Math.min(MAX_SYMBOL_HITS, (weight && weight[s]) || 1));
+    if (cur.length && (cur.length >= CALLER_BATCH_SYMBOLS || n + k > CALLER_BATCH_OCC)) {
+      out.push(cur);
+      cur = [];
+      n = 0;
+    }
+    cur.push(s);
+    n += k;
+  }
+  if (cur.length) out.push(cur);
+  return out;
 }
+async function callerGrep(label, names, worktree, planPath, phaseName, weight) {
+  const all = { occurrences: {}, capped: [], auto_dont_care: {}, doctest_md: [] };
+  const batches = callerBatches(names, weight);
+  if (batches.length > 1) gate(label + ": " + names.length + " symbols in " + batches.length + " caller-check dispatches (at most " + CALLER_BATCH_SYMBOLS + " symbols and " + CALLER_BATCH_OCC + " mapped occurrences each)");
+  for (let b = 0; b < batches.length; b++) {
+    const lb = label + (b ? ":b" + (b + 1) : "");
+    const part = batches[b];
+    const r = await infra(lb, callersPrompt({ worktree, plan_path: planPath, symbols: part, cap: MAX_SYMBOL_HITS }), phaseName, JUDGE_AGENT, "callers");
+    const occ = r.occurrences;
+    if (!occ || typeof occ !== "object" || Array.isArray(occ) || !Array.isArray(r.capped))
+      halt("failed", lb + " returned no occurrences map or capped list");
+    for (const n of part)
+      if (!Array.isArray(occ[n]) || !occ[n].every((x) => typeof x === "string"))
+        halt("failed", lb + " returned no occurrence list for " + n);
+    requireProgram(r, "callers", lb);
+    if (!relayDigestOk(r, progKeys("callers"), "callers"))
+      halt("failed", lb + ": the relayed occurrences do not match the program's digest (a hit was dropped or changed in the copy)");
+    const adc = r.auto_dont_care && typeof r.auto_dont_care === "object" && !Array.isArray(r.auto_dont_care) ? r.auto_dont_care : {};
+    for (const n of part) {
+      all.occurrences[n] = occ[n];
+      if (n in adc) all.auto_dont_care[n] = adc[n];
+    }
+    for (const c of r.capped) if (all.capped.indexOf(c) < 0) all.capped.push(c);
+    if (!Array.isArray(r.doctest_md)) all.doctest_md = null;
+    else if (all.doctest_md) for (const d of r.doctest_md) if (all.doctest_md.indexOf(d) < 0) all.doctest_md.push(d);
+  }
+  all.capped.sort();
+  if (all.doctest_md) all.doctest_md.sort();
+  return all;
+}
+const occWeight = (symbols) => Object.fromEntries(symbols.map((s) => [s.symbol, Array.isArray(s.occurrences) ? s.occurrences.length : 1]));
 async function callerCheck(label, symbols, worktree, planPath) {
   const names = symbols.map((s) => s.symbol);
-  const r = await callerGrep(label, names, worktree, planPath, "Plan");
+  const r = await callerGrep(label, names, worktree, planPath, "Plan", occWeight(symbols));
   const occ = r.occurrences;
   const doctest = Array.isArray(r.doctest_md) ? r.doctest_md.filter((x) => typeof x === "string").map(normPath) : null;
   const adc = doctest && r.auto_dont_care && typeof r.auto_dont_care === "object" && !Array.isArray(r.auto_dont_care) ? r.auto_dont_care : {};
@@ -4684,11 +4713,9 @@ async function planAndAudit(ctx0) {
   if (prior) {
     const now = cs.clean.map((x) => x.symbol);
     const dropped = prior.symbols.filter((x) => now.indexOf(x) < 0);
+    // 6.3.0: a dropped symbol is a re-plan finding (the round cap still stops)
     if (dropped.length)
-      halt(
-        "needs_human",
-        "changed_symbols dropped " + dropped.join(", ") + " after the " + prior.reason + " round; a mapped or flagged symbol stays in the map (narrower symbols only in addition)",
-      );
+      return planFindingsStop(ctx, planPath, "changed_symbols dropped a symbol of an earlier round", dropped.map((x) => ({ criterion: null, symbol: x, finding: "changed_symbols dropped " + x + " after the " + prior.reason + " round; a mapped or flagged symbol stays in the map (narrower symbols only in addition)" })), plan.changed_symbols, plan);
   }
   let callerOcc = null;
   let autoDontCare = null;
@@ -5277,6 +5304,14 @@ async function planMode(input, date) {
     halt("failed", "infra:branch-scan: the relayed lists do not match the program's digest (an entry was dropped or changed in the copy)");
   if (typeof scan.head !== "string" || !SHA_RE.test(scan.head)) halt("failed", "infra:branch-scan returned no usable head");
   const built = buildCommitsOf(scan.commits, names.taskId, scan.refs);
+  // 6.3.0: a branch with build commits and its sealed plan ref resumes in build mode with that ref
+  const sref = built.length ? scan.refs.find((e) => e && e.name === "refs/fleet/" + names.taskId + "/plan" && e.type === "tag" && e.target_type === "commit" && e.ref_ok === true && e.task_id === names.taskId) : null;
+  const rtiny = sref ? { branch: lay.branch, plan_commit: sref.target, plan_ref: sref.name, ref_sha256: sref.sha256, repo } : null;
+  if (rtiny && !tinyRefProblem(rtiny)) {
+    state.stopGate = "resume";
+    gate("branch has build commits (first: " + built[0].sha + "); resume_with build: plan_ref " + sref.name + " at " + sref.target);
+    return Object.assign(finish("needs_human", "branch has build commits; resume_with build: run build with plan_ref " + sref.name + " (it resumes at the last completed gate)"), { resume_with: "build", plan_ref: rtiny });
+  }
   if (built.length)
     halt(
       "needs_human",
@@ -5456,8 +5491,11 @@ const capsText = (c) => Object.keys(c).map((k) => k + " " + c[k] + (k === "ci_wa
 function preFreezeHooks(p) {
   const v = p && p.caps ? p.caps.pre_freeze_hooks : undefined;
   if (v === undefined || v === null) return [];
-  if (!Array.isArray(v) || v.some((x) => typeof x !== "string" || !x || /[\s\x00-\x1f\x7f]/.test(x) || x.charAt(0) === "-"))
-    halt("needs_human", "policy: pre_freeze_hooks " + JSON.stringify(v) + " is not a list of hook ids; fix the policy file, then re-run the build", "policy");
+  // 6.3.0: an invalid list is the strict default: no list
+  if (!Array.isArray(v) || v.some((x) => typeof x !== "string" || !x || /[\s\x00-\x1f\x7f]/.test(x) || x.charAt(0) === "-")) {
+    gate("policy: pre_freeze_hooks " + JSON.stringify(v) + " is not a list of hook ids; the strict default (no pre-freeze hook) applies; fix the policy file");
+    return [];
+  }
   return v;
 }
 async function policyStep(host, slug, sealed) {
@@ -5474,7 +5512,9 @@ async function policyStep(host, slug, sealed) {
       gate("policy changed since this run started (" + (d.join(", ") || "no cap changed") + "); keeping the sealed profile " + (sealed.profile || "default"));
     }
     p = sealed;
-  } else if (r.error || !r.caps) halt("needs_human", "policy: " + r.error + "; fix or remove the file, then re-run the build", "policy");
+  } else if (!r.caps) halt("needs_human", "policy: " + r.error + "; fix or remove the file, then re-run the build", "policy");
+  // 6.3.0: an invalid file is the strict default (policy.py DEFAULT), never a halt
+  else if (r.error) gate("policy: " + r.error + "; the strict default applies (" + capsText(p.caps) + "); fix or remove the file");
   else gate("policy: " + r.matched + " (" + capsText(p.caps) + ")");
   if (WORK_OWNERS.indexOf(slug.split("/")[0].toLowerCase()) >= 0 && (p.caps.merge !== "never" || p.caps.update_branch !== "never")) {
     gate("work repo " + slug + ": merge and update_branch never (script rule; the policy said merge " + p.caps.merge + ", update_branch " + p.caps.update_branch + ")");
@@ -5938,17 +5978,24 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       delete state.gh.repos[remoteSlug];
       await ghEnsure([remoteSlug], "infra:gh-identity:pr", "PR", true);
       g = ghFor(remoteSlug);
+      // 6.3.0: one scripted retry of the probe
+      if (!g || (!g.push && !ghNoPush(remoteSlug))) {
+        gate("PR step: push access to " + remoteSlug + " still not known (" + ghTried(remoteSlug) + "); one scripted retry of the probe");
+        delete state.gh.repos[remoteSlug];
+        await ghEnsure([remoteSlug], "infra:gh-identity:pr-2", "PR", true);
+        g = ghFor(remoteSlug);
+      }
       if (!g || (!g.push && !ghNoPush(remoteSlug)))
         halt("needs_human", "PR step: push access to " + remoteSlug + " still not known after a second probe (" + ghTried(remoteSlug) + "); authorise gh or gh-personal for it (or retry: a probe can fail transiently), then re-run the build with the same plan_ref (it resumes at the PR)", "role");
     }
     if (!g || !g.push)
       halt("needs_human", "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)", "role");
     await fleetScan("infra:fleet-scan:" + label.replace(/^role:/, ""));
-    const r = requireOk(
+    const opener = async (lb, more) => requireOk(
       "fleet-pr-opener",
       await callRole(
         "fleet-pr-opener",
-        label,
+        lb,
         Object.assign({}, common, planCtx, {
           repo: remoteSlug,
           gh_cmd: g.gh_cmd,
@@ -5962,15 +6009,28 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           auto_confirmed: autoConfirmed,
           intent: intentForPr,
           review_notes: reviewNotes,
-        }, pr ? { pr_url: pr.pr_url, pr_number: pr.pr_number } : {}, extra || {}),
+        }, pr ? { pr_url: pr.pr_url, pr_number: pr.pr_number } : {}, extra || {}, more || {}),
         "PR",
       ),
     );
-    if (r.title !== subj.main) halt("needs_human", "pr-opener set the PR title " + JSON.stringify(r.title) + ", not " + JSON.stringify(subj.main) + "; fix the title of " + r.pr_url, "role");
+    const why = (x) =>
+      x.title !== subj.main ? "pr-opener set the PR title " + JSON.stringify(x.title) + ", not " + JSON.stringify(subj.main) + "; fix the title of " + x.pr_url
+      : state.gatesNotRun && state.gatesNotRun.length && x.gates_not_run_stated !== true ? "pr-opener did not state gates_not_run in the PR body; fix the body of " + x.pr_url
+      : null;
+    let r = await opener(label);
+    let w = why(r);
+    // 6.3.0: one scripted retry on the same PR, then the stop
+    if (w) {
+      gate(w + "; one scripted retry (" + label + ":again)");
+      const first = r;
+      r = await opener(label + ":again", { pr_url: first.pr_url, pr_number: first.pr_number, retry_reason: w });
+      if (first.created) r = Object.assign({}, r, { created: true });
+      w = why(r);
+    }
+    if (w && r.title !== subj.main) halt("needs_human", w, "role");
     state.pr = r;
     gate("pr-opener: " + (r.created ? "created " : "updated ") + r.pr_url);
-    if (state.gatesNotRun && state.gatesNotRun.length && r.gates_not_run_stated !== true)
-      halt("needs_human", "pr-opener did not state gates_not_run in the PR body; fix the body of " + r.pr_url);
+    if (w) halt("needs_human", w);
     return r;
   }
   async function saveState(lastGate, label) {
@@ -6378,7 +6438,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // R5: sealed occurrences, and occurrences a grep at the merge finds (line shift, added or removed caller)
     const syms = planFacts.changed_symbols || [];
     if (syms.length) {
-      const g = await callerGrep("infra:callers:u1", syms.map((x) => x.symbol), mainWt, ref.plan_path, "Review");
+      const g = await callerGrep("infra:callers:u1", syms.map((x) => x.symbol), mainWt, ref.plan_path, "Review", occWeight(syms));
       if (g.capped.length) return "the occurrences of " + g.capped.join(", ") + " cannot be listed at the update merge (more than " + MAX_SYMBOL_HITS + " occurrences)";
       const at = (k) => normPath(String(k).slice(0, String(k).lastIndexOf(":")));
       const occ = [];
@@ -6731,6 +6791,20 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   }
 
   // pending: [{criterion, findings}] to (re)write this round
+  // the plan_wrong re-plan (code judge; 6.3.0: a test-judge plan finding too)
+  function planWrong(source, findings, head, tree) {
+    return replan({
+      ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl, source,
+      project: input.project || null,
+      findings,
+      expectedHead: head,
+      expectedTree: tree,
+      onPlanRefs: (refs) => {
+        if (frozen) for (const e of refs) if (e && typeof e.name === "string" && e.tag_sha) frozen.git[FLEETREF + e.name] = e.tag_sha;
+      },
+    });
+  }
+  const testJudgeReplan = (tl) => planWrong("test-judge", tl.plan, tl.fp.head, tl.fp.tree);
   async function testLoop(pending, codeFindings) {
     for (let i = 0; i < maxTestRounds; i++) {
       state.rounds.tests++;
@@ -6788,27 +6862,37 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (codeFindings) judgeInputs.code_judge_findings = codeFindings;
       await resetBuild("test-judge:r" + n, ["tjudge-r" + n], "Tests");
       await pathRecheck("test-judge:r" + n, "Tests");
-      const jt = await judged("fleet-test-judge", "role:fleet-test-judge:r" + n, "test-judge:r" + n, judgeInputs, mainWt, "Tests", last, hashedFiles);
-      const tj = jt.r;
-      last = jt.state;
-      const routed = tj.routed_findings || [];
-      const planF = routed.filter((f) => f.target === "plan");
-      if (planF.length)
-        halt(
-          "needs_human",
-          "test-judge raised a plan finding: " + planF.map((f) => (f.criterion || "-") + ": " + f.finding).join("; "),
-          "role",
-        );
-      if (tj.verdict === "approve") {
-        gate("test-judge r" + n + ": approve");
-        return;
+      let tl = "role:fleet-test-judge:r" + n;
+      let jt = await judged("fleet-test-judge", tl, "test-judge:r" + n, judgeInputs, mainWt, "Tests", last, hashedFiles);
+      for (let k = 0; ; k++) {
+        const tj = jt.r;
+        last = jt.state;
+        const routed = tj.routed_findings || [];
+        const planF = routed.filter((f) => f.target === "plan");
+        // 6.3.0: a test-judge plan finding takes the plan_wrong re-plan path
+        if (planF.length) {
+          gate("test-judge raised a plan finding: " + planF.map((f) => (f.criterion || "-") + ": " + f.finding).join("; ") + "; re-plan");
+          return { plan: planF, fp: jt.state.fingerprint };
+        }
+        if (tj.verdict === "approve") {
+          gate("test-judge r" + n + ": approve");
+          return null;
+        }
+        if (tj.verdict !== "revise") halt("failed", "test-judge returned no verdict");
+        const byCrit = {};
+        for (const f of routed)
+          if (f.target === "tests" && testable.some((c) => c.id === f.criterion)) (byCrit[f.criterion] = byCrit[f.criterion] || []).push(f);
+        pending = testable.filter((c) => byCrit[c.id]).map((c) => ({ criterion: c, findings: byCrit[c.id] }));
+        if (pending.length) break;
+        const w = "test-judge revise r" + n + " routed no finding to a known criterion";
+        if (k) halt("needs_human", w);
+        // 6.3.0: one scripted retry of the judge
+        gate(w + "; one scripted retry (" + tl + ":again)");
+        reserve(2, "test-judge retry r" + n);
+        await pathRecheck("test-judge:r" + n + ":again", "Tests");
+        tl += ":again";
+        jt = await judged("fleet-test-judge", tl, "test-judge:r" + n + ":again", Object.assign({}, judgeInputs, { retry_reason: w }), mainWt, "Tests", last, hashedFiles);
       }
-      if (tj.verdict !== "revise") halt("failed", "test-judge returned no verdict");
-      const byCrit = {};
-      for (const f of routed)
-        if (f.target === "tests" && testable.some((c) => c.id === f.criterion)) (byCrit[f.criterion] = byCrit[f.criterion] || []).push(f);
-      pending = testable.filter((c) => byCrit[c.id]).map((c) => ({ criterion: c, findings: byCrit[c.id] }));
-      if (!pending.length) halt("needs_human", "test-judge revise r" + n + " routed no finding to a known criterion");
       gate("test-judge r" + n + ": revise -> " + pending.map((p) => p.criterion.id).join(", "));
     }
     halt("needs_human", "test rounds exhausted (" + maxTestRounds + ") without test-judge approval", "cap");
@@ -6893,10 +6977,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate("resuming at the coder (frozen): no writer and no test judge runs; freeze tree " + freezeTree);
   } else {
     phase("Tests");
-    await testLoop(
+    const tl = await testLoop(
       testable.map((c) => ({ criterion: c, findings: [] })),
       null,
     );
+    if (tl) return testJudgeReplan(tl);
     phase("Freeze");
     await freeze();
   }
@@ -7055,17 +7140,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // 6.1.0 R6: never a test writer, re-freeze or re-plan on the forge's merge
       if (updRound && (cj.verdict === "plan_wrong" || cj.verdict === "fix_tests"))
         halt("needs_human", "code judge returned " + cj.verdict + " in a code round after update-branch: no test writer, re-freeze or re-plan runs on the forge's merge " + upd.head + "; re-plan on the new base or fix by hand", "review");
-      if (cj.verdict === "plan_wrong")
-        return replan({
-          ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl,
-          project: input.project || null,
-          findings: routed.filter((f) => f.target === "plan"),
-          expectedHead: jc.state.fingerprint.head,
-          expectedTree: codeTree,
-          onPlanRefs: (refs) => {
-            if (frozen) for (const e of refs) if (e && typeof e.name === "string" && e.tag_sha) frozen.git[FLEETREF + e.name] = e.tag_sha;
-          },
-        });
+      if (cj.verdict === "plan_wrong") return planWrong("code-judge", routed.filter((f) => f.target === "plan"), jc.state.fingerprint.head, codeTree);
       if (cj.verdict === "fix_code") {
         coderFindings = routed.filter((f) => f.target === "code");
         judgePrior = coderFindings.slice();
@@ -7076,7 +7151,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         const tf = routed.filter((f) => f.target === "tests");
         gate("code-judge r" + m + ": fix_tests -> test-judge (" + tf.length + " findings)");
         phase("Tests");
-        await testLoop([], tf);
+        const tl = await testLoop([], tf);
+        if (tl) return testJudgeReplan(tl);
         phase("Freeze");
         await freeze({
           round: m,
@@ -7314,9 +7390,10 @@ async function reviewStep(k, ctx) {
 }
 async function replan(ctx) {
   const { ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl } = ctx;
-  if (!ctx.findings.length) halt("needs_human", "code-judge verdict plan_wrong without a plan finding");
+  const who = ctx.source || "code-judge";
+  if (!ctx.findings.length) halt("needs_human", who + " verdict plan_wrong without a plan finding");
   const proposed = proposedChanges(ctx.findings, gate);
-  gate("code-judge verdict plan_wrong: " + proposed.join("; "));
+  gate(who + " verdict plan_wrong: " + proposed.join("; "));
   const n = history.replans + 1;
   const superseded = lay.branch + "--superseded-" + n;
   const supersededTree = "refs/fleet/" + lay.key + "/superseded-" + n + "-tree";
@@ -7337,7 +7414,7 @@ async function replan(ctx) {
   const findingsText = ctx.findings.map((f) => (f.criterion ? f.criterion + ": " : "") + f.finding).join("\n");
   const replanBrief = Object.assign({}, brief, {
     plan_path: ref.plan_path,
-    sources: brief.sources.concat([{ kind: "text", ref: "code-judge plan findings", url: null, body: findingsText }]),
+    sources: brief.sources.concat([{ kind: "text", ref: who + " plan findings", url: null, body: findingsText }]),
   });
   const p = await planAndAudit({
     common: Object.assign({}, common, { worktree: replanWt }),
@@ -7391,7 +7468,7 @@ async function replan(ctx) {
   gate("re-plan " + n + ": old head " + (rs.superseded_head || ctx.expectedHead) + " saved as " + superseded + "; " + lay.branch + " reset to " + ref.plan_base + "; new plan " + newHead + " off the branch");
   const hist = pc.full.history;
   gate("cumulative: run " + hist.runs + ", re-plans " + hist.replans + ", agents " + hist.agents);
-  return awaiting("code-judge plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, pc.tiny, pc.full, {
+  return awaiting(who + " plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, pc.tiny, pc.full, {
     proposed_plan_change: proposed,
     plan_findings: ctx.findings,
     superseded_ref: superseded,

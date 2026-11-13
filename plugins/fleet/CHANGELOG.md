@@ -1,5 +1,37 @@
 # Changelog
 
+## [6.3.0] - 2026-11-13
+
+Fleet 6.3.0: fewer stops for unattended runs, ruled by Max (ledger 2108; ADR-1238, ADR-1239,
+ADR-1233; wiki fleet-auto-flow-review-2026-11-13). Every safety stop stays.
+
+### Changed
+
+- ADR-1238 (supersedes ADR-1232): the caller check runs in dispatches of at most 30 symbols and
+  400 mapped occurrences each (`infra:callers`, then `infra:callers:b2`, ...). The plan has no
+  `changed_symbols` count cap and no "split the task" finding. The per-symbol hit cap (100) and
+  the build-time definition check stay. The update-merge grep (`infra:callers:u1`) runs in the
+  same batches. Measured: `callers.py` prints about 61 bytes per occurrence for 50-character
+  paths (about 24 KB at the 400-occurrence budget; a hit in a doc or lock file is listed twice).
+  The budget packs by the planner's mapped counts; a plan that maps far fewer lines than git grep
+  finds can still relay up to 30 x 100 hits in one dispatch, as every dispatch did before 6.3.0.
+- A symbol a re-plan round drops is a re-plan finding (`changed_symbols dropped a symbol of an
+earlier round`), not an immediate stop. The round cap still stops.
+- An invalid `policy.json` is the strict default (`policy.py` `DEFAULT`, no `pre_freeze_hooks`
+  list) plus a gate line, not a stop. `policy.py` prints the default caps with the error. A sealed
+  `pre_freeze_hooks` that is not a list of hook ids is no list (a gate line).
+- Plan mode on a branch that has build commits and its sealed plan ref
+  (`refs/fleet/<task id>/plan`) returns `resume_with: "build"` and that `plan_ref`
+  (`stop_gate: resume`); the build-task skill then runs build mode with it. With no usable plan
+  ref the stop is as before.
+- One scripted retry before these stops: push access still unknown at the PR step
+  (`infra:gh-identity:pr-2`), a pr-opener title other than the convention's, a pr-opener that did
+  not state `gates_not_run` (`role:fleet-pr-opener:again`, on the same PR, with `retry_reason`),
+  and a test-judge `revise` that routes no finding to a known criterion
+  (`role:fleet-test-judge:r<n>:again`, with `retry_reason`).
+- A test-judge plan finding takes the plan_wrong re-plan path (re-plan, save the old head, ask
+  for confirmation), as a code-judge `plan_wrong` does.
+
 ## [6.2.2] - 2026-11-12
 
 Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1235, ADR-1237).

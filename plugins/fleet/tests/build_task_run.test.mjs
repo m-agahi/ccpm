@@ -412,7 +412,7 @@ test("three revise rounds end in needs_human without freezing", async () => {
   assert.ok(!out.labels.includes("hasher:freeze:f1"));
 });
 
-test("a plan finding from the test-judge stops the run", async () => {
+test("a plan finding from the test-judge stops the test loop (6.3.0: and takes the plan_wrong re-plan path)", async () => {
   const s = happy({
     script: {
       "role:fleet-test-judge:r1": {
@@ -423,8 +423,8 @@ test("a plan finding from the test-judge stops the run", async () => {
     },
   });
   const out = await run(s, ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /plan/);
+  assert.ok(out.labels.includes("infra:replan-worktree"), out.labels.join(", "));
+  assert.match(out.result.reason, /replan-worktree/);
   assert.ok(!out.labels.includes("role:fleet-test-writer:AC1:r2"));
 });
 
@@ -1449,6 +1449,8 @@ test("5.0.0 R1 (was S-8 no version for a role): preflight with no sha256sum line
 test("S-5: gates not stated in the PR body -> needs_human with the PR url", async () => {
   const s = happy();
   s["role:fleet-pr-opener"].gates_not_run_stated = false;
+  // 6.3.0: one scripted retry, still not stated
+  s["role:fleet-pr-opener:again"] = s["role:fleet-pr-opener"];
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.pr_url, "https://github.com/o/r/pull/7");
@@ -2203,7 +2205,7 @@ function scanOut(commits, refs) {
   return { "infra:branch-scan": { status: "ok", reason: "scanned", head: PB, commits, refs: refs || [] } };
 }
 
-test("plan mode on a branch with build commits stops before the planner", async () => {
+test("plan mode on a branch with build commits stops before the planner (6.3.0: resume_with build when its sealed plan ref is there)", async () => {
   const tampered = JSON.parse(priorRef(PLAN_MD));
   tampered.plan_path = "README.md";
   const R1 = (content) => [refEntry("refs/fleet/l42/plan", "1111111", content || priorRef(PLAN_MD))];
@@ -2236,7 +2238,13 @@ test("plan mode on a branch with build commits stops before the planner", async 
     const s = happy({ script: scanOut(commits, refs) });
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human", JSON.stringify(commits.map((c) => [c.subject, c.files])) + " " + JSON.stringify(refs.map((r) => [r.name, r.target])));
-    assert.match(out.result.reason, /branch has build commits; run build, or delete branch/);
+    const r0 = refs[0];
+    const resumable = !!r0 && r0.name === "refs/fleet/l42/plan" && r0.sha256 === sha256(r0.content) && JSON.parse(r0.content).task_id === "l42" && JSON.parse(r0.content).plan_path === PLAN_MD;
+    if (resumable) {
+      assert.equal(out.result.resume_with, "build");
+      assert.equal(out.result.plan_ref.plan_commit, r0.target);
+      assert.match(out.result.reason, /branch has build commits; resume_with build/);
+    } else assert.match(out.result.reason, /branch has build commits; run build, or delete branch/);
     assert.ok(!out.labels.includes("role:scope-and-plan"));
     assert.ok(!out.labels.includes("infra:commit-plan"));
   }
@@ -5586,6 +5594,10 @@ const ARRAY_SITES = {
   "plan.changed_symbols @ planAndAudit": "role:scope-and-plan:changed_symbols",
   "e.occurrences @ changedSymbolFindings": "role:scope-and-plan:changed_symbols[].occurrences",
   "r.capped @ callerGrep": "infra:capped",
+  // 6.3.0 (ADR-1238): the batches merge
+  "r.doctest_md @ callerGrep": "infra:doctest_md",
+  "r.auto_dont_care @ callerGrep": "parsed: a program map; Array.isArray only refuses an array there",
+  "s.occurrences @ callerGrep": "parsed: the checked changed_symbols map (changedSymbolFindings) or the sealed plan facts",
   "r.doctest_md @ callerCheck": "infra:doctest_md",
   "r.auto_dont_care @ callerCheck": "parsed: a program map; Array.isArray only refuses an array there",
   // 4.0.0 (1986): a parked findings.json (digest-checked relay, JSON.parse)
@@ -6587,14 +6599,7 @@ test("2.1.6 caller map structure: every malformed entry is refused before any gr
   assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
 });
 
-test("2.1.6 too many changed symbols is refused before any grep", async () => {
-  const s = happy();
-  s["role:scope-and-plan"].changed_symbols = Array.from({ length: 31 }, (_, i) => ({ symbol: "f" + i, occurrences: [{ at: "a.py:" + (i + 1), criterion: "AC1", dont_care: null }] }));
-  const out = await runOne(s, ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /changed_symbols.*31 symbols/);
-  assert.ok(!out.labels.some((x) => x.startsWith("infra:callers")));
-});
+// 6.3.0 (ADR-1238): no changed_symbols count cap; 31 symbols run in two caller-check dispatches (v630_flow)
 
 test("2.1.6 a mapped line the grep does not find is refused (stale or invented)", async () => {
   const out = await runOne(callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP, { at: "chart/render.py:90", criterion: "AC2", dont_care: null }]), ARGS);
@@ -6860,6 +6865,9 @@ function droppedRound(round2) {
   s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], changed_symbols: round2 };
   s["infra:callers:audit-fix"] = (p) => callersOut(Object.fromEntries(inputsOf(p).symbols.map((x) => [x, x === "guard_verdict" ? GV_HITS.guard_verdict : ["chart/other.py:3"]])));
   s["role:plan-audit:audit-fix"] = s["role:plan-audit"];
+  // 6.3.0: a dropped symbol is a re-plan finding; dropped in every round, it stops at the round cap
+  s["role:scope-and-plan:audit-fix-2"] = s["role:scope-and-plan:audit-fix"];
+  s["infra:callers:audit-fix-2"] = s["infra:callers:audit-fix"];
   return s;
 }
 
@@ -6902,6 +6910,7 @@ test("2.1.6 review: after a plan-audit refusal the round-1 map symbols are carri
   const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP], null, autoHappy);
   s["role:plan-audit"] = { status: "ok", reason: "defect", verdict: "plan_defect", routed_findings: [{ target: "plan", criterion: "AC2", finding: "prestop path untested" }] };
   s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], changed_symbols: [] };
+  s["role:scope-and-plan:audit-fix-2"] = s["role:scope-and-plan:audit-fix"];
   const out = await runOne(s, AUTO);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.match(out.result.reason, /dropped.*guard_verdict/);
@@ -6974,6 +6983,8 @@ test("3.0.0 H6: a round refused only for a confusable character carries its map;
     s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], criteria: criteria(2), changed_symbols: round2 };
     s["infra:callers:audit-fix"] = callersOut(GV_HITS);
     s["role:plan-audit:audit-fix"] = s["role:plan-audit"];
+    s["role:scope-and-plan:audit-fix-2"] = s["role:scope-and-plan:audit-fix"];
+    s["infra:callers:audit-fix-2"] = callersOut(GV_HITS);
     return s;
   };
   const out = await runOne(mk([]), AUTO);
@@ -6995,6 +7006,8 @@ test("3.0.0 H8: a map with a malformed entry carries its valid entries into the 
     s["role:scope-and-plan:audit-fix"] = { ...s["role:scope-and-plan"], changed_symbols: round2 };
     s["infra:callers:audit-fix"] = callersOut(GV_HITS);
     s["role:plan-audit:audit-fix"] = s["role:plan-audit"];
+    s["role:scope-and-plan:audit-fix-2"] = s["role:scope-and-plan:audit-fix"];
+    s["infra:callers:audit-fix-2"] = callersOut(GV_HITS);
     return s;
   };
   const out = await runOne(mk([]), AUTO);
