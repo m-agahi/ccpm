@@ -73,7 +73,8 @@ test("5.0.0 R3: every role file is well under 40000 characters (35000), names St
     assert.match(t, /role_file/, r + ": names role_file in its output");
   }
   const total = Object.values(sizes).reduce((a, b) => a + b, 0);
-  assert.ok(total < 150000, "all role files: " + total + " characters");
+  // 6.3.1 (ledger 2129): 200000, up from 150000 (149976 in 6.3.0); the per-role 35000 cap stays
+  assert.ok(total < 200000, "all role files: " + total + " characters");
 });
 
 test("5.0.0 R3: memory is optional prose only: a role may consult a memory tool when present, never writes one", () => {

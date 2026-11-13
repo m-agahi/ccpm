@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Writes the PROGRAM_SHA256, ROLE_SHA256, ROLE_DISPATCH and SHARED_SHA256 tables of
-// workflows/build-task-run.js from the shipped files: the programs
+// src/build-task-run.js (6.3.1; build-workflow.mjs then writes the shipped
+// workflows/build-task-run.js) from the shipped files: the programs
 // plugins/fleet/scripts/*.py (fleet 4.0.1, ledger 1996), the role prompts
 // plugins/fleet/roles/*.md (fleet 5.0.0, R1, ledger 1999) and the shared prompt
 // files plugins/fleet/roles/_shared/*.md (5.0.0, R3). The files are the source
@@ -26,7 +27,9 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-export const WORKFLOW = join(HERE, "..", "workflows", "build-task-run.js");
+// 6.3.1 (ledger 2129): the tables live in the commented source; build-workflow.mjs
+// writes the shipped workflows/build-task-run.js from it
+export const WORKFLOW = join(HERE, "..", "src", "build-task-run.js");
 export const SCRIPTS = HERE;
 export const ROLES_DIR = join(HERE, "..", "roles");
 // the number of shipped programs (28 since 4.0.0; 29 since 5.0.3: plan_dsn; 30 since 5.0.5: ignored_diff; 31 since 5.0.6: build_dir; 31 in 5.0.7: hash_diff replaces ignored_diff; 32 since 5.0.8: gh_identity; 33 since 5.0.9: session_project; 34 since 6.0.0: ruleset_surface; 35: policy; 36: pr_convention; 37: pr_body_block; 38: pr_state; 39: orch_scan; 40: ci_watch)
@@ -257,7 +260,7 @@ function main(argv) {
     if (dwant[k] !== dhave[k]) bad.push(k + ".md: DISPATCH line " + JSON.stringify(dwant[k] === undefined ? null : dwant[k]) + ", ROLE_DISPATCH holds " + JSON.stringify(dhave[k] === undefined ? null : dhave[k]));
   if (!bad.length && withTables(source, { programs: have, roles: rhave, dispatch: dhave, shared: shave }) !== source) bad.push("a table is not in its generated form");
   if (bad.length) {
-    console.error("PROGRAM_SHA256 / ROLE_SHA256 / ROLE_DISPATCH / SHARED_SHA256 out of date (run node plugins/fleet/scripts/gen.mjs):\n  " + bad.join("\n  "));
+    console.error("PROGRAM_SHA256 / ROLE_SHA256 / ROLE_DISPATCH / SHARED_SHA256 out of date (run node plugins/fleet/scripts/build-workflow.mjs):\n  " + bad.join("\n  "));
     return 1;
   }
   console.log(n + " programs match the PROGRAM_SHA256 table; " + rn + " role files match the ROLE_SHA256 and ROLE_DISPATCH tables; " + sn + " shared files match the SHARED_SHA256 table");
