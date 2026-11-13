@@ -5500,6 +5500,18 @@ function tinyRefProblem(t) {
   return null;
 }
 
+function sealedPolicyProblem(p) {
+  if (!p || typeof p !== "object" || Array.isArray(p)) return "not an object";
+  if (p.profile !== null && typeof p.profile !== "string") return "profile";
+  if (p.policy_sha256 !== null && !SHA256_RE.test(String(p.policy_sha256))) return "policy_sha256";
+  const c = p.caps;
+  if (!c || typeof c !== "object" || Array.isArray(c)) return "caps";
+  for (const k of ["pr_ready", "ci_watch", "stats", "ci_trigger"]) if (typeof c[k] !== "boolean") return k;
+  if (!Number.isInteger(c.ci_watch_minutes)) return "ci_watch_minutes";
+  if (["never", "auto"].indexOf(c.merge) < 0 || ["never", "once"].indexOf(c.update_branch) < 0 || ["none", "own_pr"].indexOf(c.review_post) < 0) return "merge, update_branch or review_post";
+  if ("unattended" in c && typeof c.unattended !== "boolean") return "unattended";
+  return null;
+}
 // The full ref loaded from the ref file
 function planRefProblem(r) {
   if (!r || typeof r !== "object") return "missing";
@@ -5514,6 +5526,8 @@ function planRefProblem(r) {
   if (!r.history || typeof r.history !== "object") return "history missing";
   const pre = preflightRecordProblem(r.history.preflight);
   if (pre) return pre;
+  // 6.3.0: the plan-mode policy seal (absent before 6.3.0)
+  if ("policy" in r && sealedPolicyProblem(r.policy)) return "policy is malformed (" + sealedPolicyProblem(r.policy) + ")";
   // absent in a ref sealed before 4.0.0
   if ("project" in r && r.project !== null && (typeof r.project !== "string" || !r.project)) return "project is not a non-empty string or null";
   return null;
@@ -5568,6 +5582,21 @@ async function policyStep(host, slug, sealed, plan) {
   }
   return p;
 }
+// 6.3.0 (security review): per cap the stricter of the base policy (the current file, or a resume's seal) and the
+// plan ref's seal: unattended only when both say true; merge, update_branch, ci_trigger, review_post toward the
+// default; pr_ready, ci_watch, stats on when either is; pre_freeze_hooks and ci_watch_minutes from the base
+const STRICT_OFF = { unattended: true, merge: "auto", update_branch: "once", ci_trigger: true, review_post: "own_pr" };
+function stricterPolicy(base, seal, what) {
+  const b = base.caps;
+  const s = seal.caps;
+  const c = Object.assign({}, b);
+  for (const k of Object.keys(STRICT_OFF)) if (k in b || k in s) c[k] = b[k] === STRICT_OFF[k] && s[k] === STRICT_OFF[k] ? STRICT_OFF[k] : k === "unattended" ? false : DEFAULT_OFF[k];
+  for (const k of ["pr_ready", "ci_watch", "stats"]) c[k] = b[k] === true || s[k] === true;
+  const d = Object.keys(c).filter((k) => canonical(c[k]) !== canonical(b[k]));
+  if (d.length) gate("policy: the plan ref's sealed policy is stricter than " + what + " for " + d.map((k) => k + " " + b[k] + " -> " + c[k]).join(", ") + "; the stricter applies");
+  return Object.assign({}, base, { caps: c });
+}
+const DEFAULT_OFF = { merge: "never", update_branch: "never", ci_trigger: false, review_post: "none" };
 // 2044: the PR body's stats block, from script counters only (no path, run id, ledger id or session name)
 const STATS_END = "<!-- ccpm-fleet-stats -->";
 const STATS_WALL = "@@WALL@@";
@@ -5883,8 +5912,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   } else if (v.head !== planBase)
     halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
   // 2033: sealed in the run-state; stream 3 reads state.policy.caps
-  const sealedPolicy = (resume && resume.policy) || (ref.policy && typeof ref.policy === "object" && ref.policy.caps && typeof ref.policy.caps === "object" ? ref.policy : null);
-  const policy = (state.policy = await policyStep(ws.remoteHost, remoteSlug, sealedPolicy));
+  // 6.3.0 (security review): the current file (or a resume's run-state seal), never looser than the plan ref's seal
+  const policy = (state.policy = ref.policy ? stricterPolicy(await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy), ref.policy, resume ? "the run-state's" : "the current file") : await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
   unattendedOn(policy, input);
   if (resume && Array.isArray(resume.auto_decisions) && !state.autoDecisions.length) state.autoDecisions = resume.auto_decisions.slice();
 

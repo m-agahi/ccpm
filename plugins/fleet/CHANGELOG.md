@@ -29,9 +29,14 @@ ADR-1233; wiki fleet-auto-flow-review-2026-11-13). Every safety stop stays.
   surface, IaC paths (they still ask) or terraform, work-owner merge, orchestrator PR, intent-judge
   refusal, scope fence, command allowlist, hash, freeze, fingerprint, ownership, commit, plan-ref,
   run-state, contract drift, DSN or relaunch stops (one test per stop).
-- The plan ref seals the policy plan mode read (`policy: {profile, policy_sha256, caps}`); a build
-  without a run-state keeps it, and a later edit of the file is logged ("policy changed since this
-  run started"), not applied. A plan ref without the key (6.2.2) reads the file as before.
+- The plan ref seals the policy plan mode read (`policy: {profile, policy_sha256, caps}`). A build
+  is never looser than that seal nor than the current file (security review): it reads the file
+  (or a resume's run-state seal) and takes per cap the stricter value: `unattended` only when both
+  say true; `merge`, `update_branch`, `ci_trigger` and `review_post` toward the default;
+  `pr_ready`, `ci_watch` and `stats` on when either is; `pre_freeze_hooks` and
+  `ci_watch_minutes` from the file (or run-state). A gate line names each cap the seal tightened.
+  A malformed sealed policy refuses the plan ref (`planRefProblem`). A plan ref without the key
+  (6.2.2) reads the file as before.
 - A relaxed re-plan passes the intent gate only when each relaxed item has a deviation that quotes
   it, with verdict `approve`, a non-empty `allowed_by` and `fails_closed: true`; anything else is
   the intent stop (fail closed, checked by the script).

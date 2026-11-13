@@ -326,3 +326,50 @@ test("6.3.0 B: the skill documents --unattended, the policy skill and README doc
   assert.match(readFileSync(join(R, "skills", "fleet-policy", "SKILL.md"), "utf8"), /unattended/);
   assert.match(readFileSync(join(R, "README.md"), "utf8"), /`unattended`/);
 });
+
+// ---------------------------------------------------------------- the plan ref's policy seal (security review)
+
+const BUILD = (plan, over) => Object.assign({ mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" }, over || {});
+
+test("6.3.0 B (security review): a build never runs looser than the plan ref's sealed policy, nor looser than the current file", async () => {
+  // the plan ref sealed unattended true; the file now says nothing: the build is not unattended
+  const s = gated();
+  s["infra:policy:plan"] = polUn;
+  const plan = await runOne(s, { ...ARGS, confirm: "ask" });
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  s["infra:policy"] = polOut({});
+  const b = await runOne(s, BUILD(plan));
+  assert.equal(b.result.status, "ok", b.result.reason);
+  assert.ok(!("unattended" in b.result));
+  assert.ok(b.logs.some((l) => /^policy: the plan ref's sealed policy is stricter than the current file for unattended undefined -> false; the stricter applies$/.test(l)), b.logs.join("\n"));
+  // merge auto sealed, never now: never (and the other way round: never sealed, auto now: never)
+  for (const [sealed, now] of [["auto", "never"], ["never", "auto"]]) {
+    const t = gated();
+    t["infra:policy:plan"] = polOut({ caps: Object.assign({}, DEFAULT_CAPS, { merge: sealed, update_branch: sealed === "auto" ? "once" : "never" }) });
+    const p = await runOne(t, { ...ARGS, confirm: "ask" });
+    t["infra:policy"] = polOut({ policy_sha256: "e".repeat(64), caps: Object.assign({}, DEFAULT_CAPS, { merge: now, update_branch: now === "auto" ? "once" : "never" }) });
+    const o = await runOne(t, BUILD(p));
+    assert.equal(o.result.policy.caps.merge, "never", sealed + "/" + now);
+    assert.equal(o.result.policy.caps.update_branch, "never", sealed + "/" + now);
+    assert.ok(!o.labels.some((l) => /^infra:pr-merge/.test(l)), sealed + "/" + now);
+  }
+  // unattended in both: on
+  const u = gated();
+  u["infra:policy:plan"] = polUn;
+  const pu = await runOne(u, { ...ARGS, confirm: "ask" });
+  u["infra:policy"] = polUn;
+  assert.equal((await runOne(u, BUILD(pu))).result.unattended_source, "policy");
+});
+
+test("6.3.0 B (security review): a plan ref whose sealed policy is malformed is refused like any other plan ref problem", async () => {
+  for (const caps of [Object.assign({}, DEFAULT_CAPS, { merge: "sometimes" }), Object.assign({}, DEFAULT_CAPS, { unattended: "yes" }), Object.assign({}, DEFAULT_CAPS, { pr_ready: null })]) {
+    const s = gated();
+    s["infra:policy:plan"] = polOut({ caps });
+    const plan = await runOne(s, { ...ARGS, confirm: "ask" });
+    assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+    const b = await runOne(s, BUILD(plan));
+    assert.equal(b.result.status, "needs_human", JSON.stringify(caps));
+    assert.match(b.result.reason, /policy is malformed/);
+    assert.ok(!b.labels.some((l) => /^role:fleet-test-writer/.test(l)));
+  }
+});

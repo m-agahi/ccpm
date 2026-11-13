@@ -611,6 +611,18 @@ const READS = {
     "pr.refs array": "prog:plan_ref:refs",
     "files.length number-literal": PARSED_LOCAL,
   },
+  // 6.3.0 (security review): the plan ref's policy seal; this check IS its refusal (pre_freeze_hooks follows the current file)
+  sealedPolicyProblem: {
+    "p object": PARSED_REF,
+    "p array": PARSED_REF,
+    "p.profile string": PARSED_REF,
+    "c object": PARSED_REF,
+    "c array": PARSED_REF,
+    "c[k] boolean": PARSED_REF,
+    "c.ci_watch_minutes integer": PARSED_REF,
+    "c.unattended boolean": PARSED_REF,
+  },
+  stricterPolicy: { "b[k] boolean": "parsed: the policyStep result (policy.py caps or the run-state seal)", "s[k] boolean": PARSED_REF },
   makePlanRef: { "f.project string": PARSED_ARGS, "f.policy object": "parsed: the policyStep result (digest-checked policy.py)" },
   preflightRecordProblem: {
     "p object": PARSED_REF,
@@ -711,8 +723,6 @@ const READS = {
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
     // 6.3.0 (ADR-1239)
-    "ref.policy object": PARSED_REF,
-    "ref.policy.caps object": PARSED_REF,
     "resume.auto_decisions array": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     "r.headers_missing array": "prog:pr_body_block:headers_missing",
     // 6.0.0 (ledger 2044)
