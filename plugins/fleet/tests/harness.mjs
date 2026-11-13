@@ -366,7 +366,12 @@ export async function runOne(script, args0) {
     if (!(label in script) && /^infra:pr-convention:/.test(label))
       return { status: "ok", reason: "read", title: { style: "conventional", types: ["feat", "fix", "perf", "revert", "chore", "refactor", "docs", "style", "test", "build", "ci"], key_required: false }, body: { template: null, template_repo: null, required_sections: null, min_chars: null, checker: null }, source: ["title: no convention found; the fallback type(component): summary"], unreadable: [], args: inputsOf(prompt).args };
     // 6.0.0 (ledger 2033): an unscripted policy read finds no policy file
-    if (!(label in script) && label === "infra:policy")
+    // 6.3.0: plan mode's read (infra:policy:plan) gets the scenario's infra:policy stub
+    if (!(label in script) && label === "infra:policy:plan" && "infra:policy" in script) {
+      const ps = script["infra:policy"];
+      return JSON.parse(JSON.stringify(typeof ps === "function" ? ps(prompt, opts) : ps));
+    }
+    if (!(label in script) && (label === "infra:policy" || label === "infra:policy:plan"))
       return { status: "ok", reason: "read", profile: null, file: "/home/u/.config/fleet/policy.json", policy_sha256: null, caps: { pr_ready: true, ci_watch: true, ci_watch_minutes: 60, stats: true, merge: "never", update_branch: "never", ci_trigger: false, review_post: "none" }, matched: "no policy file", error: null, args: inputsOf(prompt).args };
     // 6.0.0 (ledger 2044): an unscripted stats edit writes the block (wall time 2m)
     if (!(label in script) && /^infra:pr-stats/.test(label)) {
@@ -1007,7 +1012,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.2.2/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.3.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1176,7 +1181,7 @@ export const PROGRAM_LABELS = [
   // 6.0.0 (ledger 2041)
   [/^infra:ruleset-surface:/, [[null, "ruleset_surface", K("ruleset_surface")]]],
   // 6.0.0 (ledger 2033)
-  [/^infra:policy$/, [[null, "policy", K("policy")]]],
+  [/^infra:policy(:plan)?$/, [[null, "policy", K("policy")]]],
   // 6.0.0 (ledger 2044)
   [/^infra:pr-stats/, [[null, "pr_body_block", K("pr_body_block")]]],
   // 6.0.0 (ledgers 2045, 2034)

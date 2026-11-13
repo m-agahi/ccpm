@@ -96,10 +96,11 @@ const SCENARIOS = {
 // 6.2.2 (2104, 2107): the preflight probe prints hash_lines= before its hash lines (probe: the only change, checked with it reverted); format_files hook_failed, hook_output and unknown_hooks, and the policy caps pre_freeze_hooks, in the schemas (ADR-1237)
 // 6.2.2 review (M2, L1-L3): the format_files pre-freeze keys (hook_failures, hook_head, hook_sha256, hook_timeout) in the schemas (the probe pin is unchanged)
 // 6.2.2 re-review (D-L1): format_files fix_timeout in the schema (the probe pin is unchanged)
+// 6.3.0 (ADR-1239): infra:policy:plan (new plan call) and unattended in the policy caps schema (the only changes: with both reverted every pin is 6.2.2's; probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 86, sha256: "b149839ea42d2723caf00a7c10b90bcecab70eb12d7a179e65c5b9e2d7c63397" },
-  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "1a442dd05de9be07ea1f2b4fb2e8a503dde753d36ffd78cf973180ab4c70d16c" },
-  "short path (one test writer)": { calls: 85, sha256: "e45580587b9f48a1681b71b700f69e99a046073c1d5c159cb79ccfb28528ccef" },
+  "plan then build (confirm ask)": { calls: 87, sha256: "0507d4a770dfd30f2c1a6d326235722eda1e189a8e796018e252d1e1fff4b26b" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "10a2eedcfe6060f2e40a46dd47851b2d3997a1b3564362f22cd7ba7ac2cae5b6" },
+  "short path (one test writer)": { calls: 86, sha256: "d4177f6956e6fda8f249d3291d69295857a22ebdd175ac1a048f49729ec59ab9" },
   "probe": { calls: 2, sha256: "b6976644cdb9345851ac461a293688c2299952b462ba087a39958a03ae13b393" },
 };
 

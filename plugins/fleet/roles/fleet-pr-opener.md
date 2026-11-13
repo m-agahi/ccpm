@@ -19,10 +19,11 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 - `review_notes` (optional; absent → `[]`): `[{id, severity, category, file, line, summary, evidence}]` — review findings to show the human reader. See "Review notes" below.
 - `intent` (optional; absent or null → no intent lines): the intent judge's result, `{status, verdict, reason, deviations: [{item, allowed_by, source_ref, fails_closed, verdict, reason}], coverage, classification}`. See "Intent check" below.
 - `auto_confirmed` (optional boolean; absent → false): true when the intent judge auto-confirmed the plan instead of Max.
+- `unattended_section` (optional): put it verbatim under the body's Risks section (add `## Risks` if none).
 - `title`: the PR title, built from the repo's convention. Use it verbatim.
 - `body_convention`: `{template, template_repo, required_sections, min_chars, checker}`, the body rules the repo or its org checks (any key may be null). `template_repo` names the org repo that holds `template`.
 - `pr_url`, `pr_number` (an update run only): the PR this branch already has.
-- `retry_reason` (a scripted retry only): why the workflow refused your first result for this PR. Fix exactly that on the PR named by `pr_url`; never open another PR.
+- `retry_reason` (a retry only): why the workflow refused your first result. Fix that on the PR at `pr_url`; open no other PR.
 
 ## Run rules (non-interactive)
 
@@ -84,7 +85,7 @@ Write the body to a file, then:
 
 ## Verify
 
-`<gh> pr view <N> --repo <repo> --json url,title,body,isDraft,headRefName,headRefOid,baseRefName`: the title is `title`, every template header present, the `tldr` and every criterion present, `isDraft` true on create, head and base correct, every `gates_not_run` entry and every manual criterion present, the intent lines present when `intent` or `auto_confirmed` was given, no internal ids, no secret. A body or metadata mismatch → fix once; still wrong → `failed`.
+`<gh> pr view <N> --repo <repo> --json url,title,body,isDraft,headRefName,headRefOid,baseRefName`: the title is `title`, every template header present, the `tldr` and every criterion present, `isDraft` true on create, head and base correct, every `gates_not_run` entry and every manual criterion present, the intent lines present when `intent` or `auto_confirmed` was given, `unattended_section` when given, no internal ids, no secret. A body or metadata mismatch → fix once; still wrong → `failed`.
 
 `headRefOid` can lag behind the pushed branch on GitHub's side. When it is not `approved_sha`, poll every 30s for at most 5 minutes. Still stale → `needs_human` with reason "PR head not synced (GitHub lag)". Never treat lag as failed, and never push to resolve it.
 

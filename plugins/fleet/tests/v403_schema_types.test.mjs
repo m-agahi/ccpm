@@ -512,6 +512,7 @@ const READS = {
     "r.auto_dont_care array": "!prog:callers:auto_dont_care",
     "r.doctest_md array": "prog:callers:doctest_md",
   },
+  unattendedOn: { "p.caps.unattended boolean": "prog:policy:caps.unattended", "input.unattended boolean": PARSED_ARGS },
   occWeight: { "s.occurrences array": SP + "changed_symbols[].occurrences" },
   callerCheck: {
     "x string": "prog:callers:occurrences.*[]",
@@ -642,6 +643,9 @@ const READS = {
   autoGates: { "r.deviations array": IJ + "deviations", "r.classification object": IJ + "classification" },
   defaultBlockers: { "pf.new_behaviour boolean": SP + "new_behaviour", "raw string-re": PARSED_ARGS },
   planMode: {
+    // 6.3.0 (ADR-1239)
+    "input.unattended boolean": PARSED_ARGS,
+    "size number-literal": PARSED_LOCAL,
     // 6.3.0: the sealed plan ref a branch with build commits resumes with
     "e.ref_ok boolean": "prog:branch_scan:refs[].ref_ok",
     "input.input string": PARSED_ARGS,
@@ -700,6 +704,9 @@ const READS = {
   callRole: { "label string-re": "parsed: the script's own step label" },
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
+    // 6.3.0 (ADR-1239)
+    "resume.auto_decisions array": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    "r.headers_missing array": "prog:pr_body_block:headers_missing",
     // 6.0.0 (ledger 2044)
     "ref.history.audits number": PARSED_REF,
     // 6.0.0 (ledger 2045)
@@ -850,6 +857,8 @@ const READS = {
     "d.error string": "prog:db_down:error",
   },
   main: {
+    "input.unattended boolean": [PARSED_ARGS, 2],
+    "input.brief_marker boolean": PARSED_ARGS,
     "input.fresh_preflight boolean": PARSED_ARGS,
     "input.date string": PARSED_ARGS,
     "input.date string-re": PARSED_ARGS,
@@ -1071,7 +1080,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.2\.2\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.2\.2\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

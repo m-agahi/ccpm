@@ -699,6 +699,20 @@ stop the build (`stop_gate: "policy"`); a bad file never falls back to the defau
   }
   ```
 
+- `unattended` (6.3.0, ADR-1239): a profile or `repos` key, `true` or `false`; unset is off, and
+  the caps carry no key. `true` turns on the fleet's unattended mode for those repos (as the
+  `/build-task --unattended` argument does for one run): the fleet decides the Build confirmation,
+  the default-mode blockers (`change_kind`, `new_behaviour`, a task id that exactly one ledger
+  answered), a relaxed re-plan (the intent judge rules on it), the fleet-brief marker and a
+  `plan_wrong` re-plan (built in the same run) without asking. It never bypasses a safety stop
+  (hook surface, IaC, work-owner merge, orchestrator PR, intent refusal, scope fence, command
+  allowlist, hash, freeze, fingerprint, ownership, commit, plan-ref, run-state, contract drift,
+  DSN, relaunch). Each decision is recorded as `{gate, decision, reason}` in the result
+  (`auto_decisions`, with `unattended_source`), the run-state and the PR body's
+  `### Unattended run` section under Risks, which the stats step checks in the real body. Plan
+  mode reads the policy too (`infra:policy:plan`).
+- An invalid file (6.3.0) is the strict default, with a gate line naming the error; it no longer
+  stops the build.
 - Script rule, whatever the file says: an owner in `WORK_OWNERS` (`quinyx`, `concrete-media`, on
   any host or ssh alias) gets `merge` and `update_branch` `never`.
 - The run-state seals `policy: {profile, policy_sha256, caps}`; the result carries it too. A

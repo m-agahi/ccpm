@@ -205,7 +205,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 6\.2\.2 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 6\.3\.0 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -1781,6 +1781,8 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     // 4.0.0 (1985): the push-access dry run, after its own PATH re-check
     "infra:path-check:push-probe",
     "infra:push-probe",
+    // 6.3.0 (ADR-1239)
+    "infra:policy:plan",
     "infra:branch-scan",
     "infra:load-parked",
     "role:scope-and-plan",
@@ -5338,11 +5340,14 @@ test("2.1.0 resume: a run-state that does not match stops with run-state mismatc
     [{ read: { message: JSON.stringify(Object.assign({}, st, { ref_sha256: "0".repeat(64) })) } }, /run-state mismatch: ref_sha256/],
     [{ hasher: { hashes: H({ ...HASHES_FLAT, "tests/test_a.py": "WEAKENED" }) } }, /run-state mismatch: frozen maps/],
   ]) {
-    rerunScript(s, st, over);
-    const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
-    assert.equal(out.result.status, "needs_human", String(re));
-    assert.match(out.result.reason, re);
-    assert.ok(!out.labels.some((l) => NO_REWORK.test(l)), out.labels.join(", "));
+    // 6.3.0 (ADR-1239): unattended never bypasses the run-state check
+    for (const un of [{}, { unattended: true }]) {
+      rerunScript(s, st, over);
+      const out = await runOne(s, Object.assign({ mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" }, un));
+      assert.equal(out.result.status, "needs_human", String(re));
+      assert.match(out.result.reason, re);
+      assert.ok(!out.labels.some((l) => NO_REWORK.test(l)), out.labels.join(", "));
+    }
   }
 });
 
@@ -5597,6 +5602,8 @@ const ARRAY_SITES = {
   // 6.3.0 (ADR-1238): the batches merge
   "r.doctest_md @ callerGrep": "infra:doctest_md",
   "r.auto_dont_care @ callerGrep": "parsed: a program map; Array.isArray only refuses an array there",
+  "resume.auto_decisions @ buildFromRef": "parsed: the run-state (read-state), copied only when an array",
+  "r.headers_missing @ statsStep": "parsed: the pr_body_block relay (digest-checked; schema prog:pr_body_block:headers_missing)",
   "s.occurrences @ callerGrep": "parsed: the checked changed_symbols map (changedSymbolFindings) or the sealed plan facts",
   "r.doctest_md @ callerCheck": "infra:doctest_md",
   "r.auto_dont_care @ callerCheck": "parsed: a program map; Array.isArray only refuses an array there",
@@ -6231,7 +6238,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 6\.2\.2; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 6\.3\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6929,7 +6936,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.2\.2\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 6\.2\.2 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 6\.3\.0 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8636,7 +8643,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 6\.2\.2/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 6\.3\.0/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

@@ -112,7 +112,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "6.2.2";
+const FLEET_VERSION = "6.3.0";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with
 const RELOAD_HINT =
@@ -1559,7 +1559,7 @@ const PROGRAM_SHA256 = {
   "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
   "plan_ref": "494ceb934b89fa5c2962ef786ba93bee63bd09f776c82c50579fdf23f301c136",
   "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
-  "policy": "b04c0a519a5113ccb25a0a377e93a1725b205d9a7d985d2cac3e269cd5d49b6b",
+  "policy": "1efd8ada37abf58151d14b11300fac1235c13b414ab0649fcc8e26b0e10d37b5",
   "pr_body_block": "368ed0c33928769f6951a1e15b65362b438fc010b0ea26c6284fc668c5e6c733",
   "pr_convention": "4763189023084bbad77a9eb5c2704692da5932d2dfa335654c5e4178f027c2b7",
   "pr_state": "a17beb445d0fac95dff82b49bfc75f6396293a6f193bfcfe2f6d4ddee51856b9",
@@ -1589,9 +1589,9 @@ const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
   "fleet-code-judge": "0b7a412cb27884de57c70bb48f90627c8595057ef29ce1a8e0f147df49f979fe",
   "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
-  "fleet-intent-judge": "9cbd440fd7c3b20738e38598c84df438657af2fb9aa22ee007028cbd853902c1",
-  "fleet-pr-opener": "8809fc9d13256ceca0714514e7bd6dd710e2cbd6e2f5af5367eb17c63caa048d",
-  "fleet-test-judge": "321c1772ae375487adb5019f58d681e10bcc92072fc9ab7136afb89bc3c40285",
+  "fleet-intent-judge": "350cc27c09b46c8e4ba5bfc040c44c7141e8c755b02ab18494fbeb89f9335569",
+  "fleet-pr-opener": "33912b762a9020c5aff7bd1a24aa5bb2673509a584660e4670ac41200ef62404",
+  "fleet-test-judge": "219c89b656f7ae61d28ab7cf2486b498792385df0cdd2a256fdae6c0f53c051b",
   "fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
   "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
   "plan-audit": "084fe730cc8ecb5cf8712b164bb763cb9bbe97e18bc3cc04e82480ba158de984",
@@ -1677,7 +1677,7 @@ const PROGRAM_SLOTS = [
   [/^infra:load-ref/, [[null, "plan_ref"]]],
   [/^infra:verify-plan(?!-commit)/, [[null, "verify_since"], ["plan_hash", "plan_hash"], ["test_db", "test_db_decl"]]],
   [/^infra:read-state$/, [[null, "read_state"]]],
-  [/^infra:policy$/, [[null, "policy"]]],
+  [/^infra:policy(:plan)?$/, [[null, "policy"]]],
   [/^infra:pr-stats/, [[null, "pr_body_block"]]],
   [/^infra:(pr-ready|pr-merge|pr-update|ci-rerun|ci-logs|pr-view|pr-fetch|fleet-cleanup)/, [[null, "pr_state"]]],
   [/^infra:orch-scan/, [[null, "orch_scan"]]],
@@ -1878,7 +1878,7 @@ const PROGRAM_OUT = {
     profile: STR_OR_NULL,
     file: STR,
     policy_sha256: STR_OR_NULL,
-    caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] }, pre_freeze_hooks: STRS } },
+    caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] }, pre_freeze_hooks: STRS, unattended: BOOL } },
     matched: STR_OR_NULL,
     error: STR_OR_NULL,
     now: INT,
@@ -3350,11 +3350,32 @@ const state = {
   db: null,
   dbTarget: null,
   tail: 0,
+  // 6.3.0 (ADR-1239): "policy", "arg", "both" or null, and the decisions made instead of Max
+  unattended: null,
+  autoDecisions: [],
 };
 
 function gate(msg) {
   state.gateLog.push(msg);
   log(msg);
+}
+function autoDecide(g, decision, reason) {
+  state.autoDecisions.push({ gate: g, decision, reason });
+  gate("unattended: " + g + ": " + decision + " (" + reason + ")");
+}
+// the PR body section of an unattended run (under Risks); the stats step checks its header in the real body
+const UNATT_HEAD = "### Unattended run";
+function unattendedSection() {
+  if (!state.unattended) return null;
+  const src = state.unattended === "arg" ? "arg" : "policy sha " + state.unattendedSha + (state.unattended === "both" ? " / arg" : "");
+  return UNATT_HEAD + "\n\nUnattended run (" + src + "): automatic decisions: " + (state.autoDecisions.map((d) => d.gate + ": " + d.decision + " (" + d.reason + ")").join("; ") || "none") + "\n";
+}
+function unattendedOn(p, input) {
+  const a = !!(p && p.caps && p.caps.unattended === true);
+  const b = input.unattended === true;
+  state.unattended = a && b ? "both" : a ? "policy" : b ? "arg" : null;
+  state.unattendedSha = p ? p.policy_sha256 : null;
+  if (state.unattended) gate("unattended mode on (" + state.unattended + ")");
 }
 function halt(status, msg, stopGate) {
   state.stopGate = STOP_GATES.indexOf(stopGate) >= 0 ? stopGate : null;
@@ -3774,6 +3795,7 @@ function finish(status, reason) {
     follow_ups: state.followUps || [],
     ...(state.ci ? { ci: state.ci } : {}),
     ...(state.ciWriteBack ? { ci_write_back: state.ciWriteBack } : {}),
+    ...(state.unattended ? { unattended: true, unattended_source: state.unattended, auto_decisions: state.autoDecisions } : {}),
   };
 }
 function finishStop(status, reason) {
@@ -5170,7 +5192,7 @@ async function autoGates(ctx) {
       changed_symbols: ctx.planFacts.changed_symbols,
       change_kind: ctx.planFacts.change_kind === undefined ? null : ctx.planFacts.change_kind,
       new_behaviour: ctx.planFacts.new_behaviour === undefined ? null : ctx.planFacts.new_behaviour,
-    }),
+    }, ctx.relaxed && ctx.relaxed.length ? { relaxed: ctx.relaxed } : {}),
     ctx.mainWt,
     "Auto-confirm",
     null,
@@ -5251,7 +5273,7 @@ async function planMode(input, date) {
   const repo = cleanRepo(input.repo);
   if (!raw) stop("needs_human", "args.input missing: run /build-task <ledger id | Jira key | issue or PR URL | plan path | text>");
   if (!repo) stop("needs_human", "args.repo must be the absolute path of the caller's git toplevel");
-  if (input.confirm === "auto" && ledgerFor(input.project) === "either" && TASK_ID_INPUT_RE.test(raw))
+  if (input.confirm === "auto" && input.unattended !== true && ledgerFor(input.project) === "either" && TASK_ID_INPUT_RE.test(raw))
     stop("needs_human", "task id " + JSON.stringify(raw) + " with no args.project under confirm \"auto\": pass project, or run with confirm \"ask\" so Max sees which ledger and project it resolved to");
 
   await preflightStep(repo);
@@ -5289,6 +5311,8 @@ async function planMode(input, date) {
   const ws = await workspaceStep(brief.repo, lay);
   if (ghNoPush(ws.remoteSlug)) gate("warning: " + noPushText(ws.remoteSlug) + " (the build stops at its start until one has)");
   await pushProbe(lay, ws);
+  unattendedOn(await policyStep(ws.remoteHost, ws.remoteSlug, null, true), input);
+  const un = !!state.unattended;
   const project = input.project || ws.remoteSlug;
   const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
   const scan = await infra(
@@ -5365,9 +5389,13 @@ async function planMode(input, date) {
     gate("park-plan" + note);
     throw new Stop(e.status, e.reason + note);
   };
-  const confirm = input.confirm === undefined ? "ask" : input.confirm;
+  const confirm0 = input.confirm === undefined ? "ask" : input.confirm;
+  // 6.3.0: unattended decides the Build confirmation (auto), unless the user asked to confirm ("ask" with no brief marker)
+  const confirm = un && !(input.confirm === "ask" && !input.brief_marker) ? "auto" : confirm0;
   const auto = confirm === "auto";
-  let p, pc, blockers, runGates;
+  const ua = un && auto;
+  const one = new Set((it.tried || []).filter((t) => t && t.error === null).map((t) => t.ledger)).size === 1;
+  let p, pc, blockers, runGates, decided;
   try {
     p = await planAndAudit({
       common, brief, date, baseRef: ws.baseRef, remoteSlug: ws.remoteSlug, remoteUrl: ws.remoteUrl, onPlanPath: (x) => (draft = x),
@@ -5375,9 +5403,12 @@ async function planMode(input, date) {
       priorRound: parked ? parked.priorRound : null,
     });
     // decided before the seal (the gate agents count into it)
-    blockers = confirm === "default" ? defaultBlockers(p, input, raw) : [];
-    if (parkedBad && confirm === "default") blockers.push(PARKED_UNREADABLE);
-    runGates = auto ? !p.relaxed.length && !parkedBad : confirm === "default" && !blockers.length;
+    blockers = confirm === "default" || ua ? defaultBlockers(p, input, raw) : [];
+    if (parkedBad && (confirm === "default" || ua)) blockers.push(PARKED_UNREADABLE);
+    // unattended decides change_kind, new_behaviour, a relaxed re-plan and a task id one ledger answered; never an IaC path or a parked prior
+    decided = ua ? blockers.filter((b) => !/^plan touches IaC path/.test(b) && b !== PARKED_UNREADABLE && !(/^task id /.test(b) && !one)) : [];
+    if (ua) blockers = blockers.filter((b) => decided.indexOf(b) < 0);
+    runGates = ua ? !blockers.length : auto ? !p.relaxed.length && !parkedBad : confirm === "default" && !blockers.length;
     pc = await commitPlanAndRef({
       worktree: lay.mainWt,
       branch: lay.branch,
@@ -5405,8 +5436,14 @@ async function planMode(input, date) {
     await parkOnStop(e);
   }
   const ls = ledgerSourceOf(brief, input.project);
-  // a relaxed re-plan never reaches the auto gates
-  if (auto && p.relaxed.length)
+  if (ua && confirm !== confirm0) autoDecide("confirm", "auto", "the Build confirmation (confirm " + confirm0 + (input.brief_marker ? "; the fleet-brief marker is treated as a ruling" : "") + ")");
+  for (const b of decided) autoDecide("default-blocker", "decided", b + (/^re-plan relaxed/.test(b) ? "; the intent judge rules on it" : /^task id /.test(b) && ls ? "; ledger_source " + ls.ledger + " " + ls.ref : ""));
+  if (ua && blockers.length) {
+    gate("unattended: asking Max (" + blockers.join("; ") + ")");
+    return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, { ledger_source: ls, confirm_reason: blockers.join("; ") });
+  }
+  // a relaxed re-plan never reaches the auto gates (unattended: the intent judge rules on it)
+  if (auto && !ua && p.relaxed.length)
     return autoFailResult({ failedCheck: "intent", reasons: ["re-plan relaxed: " + p.relaxed.join("; ")], intent: null }, p.planPath, pc.tiny);
   if (auto && parkedBad)
     return autoFailResult({ failedCheck: "intent", reasons: [PARKED_UNREADABLE + ": " + parked.unreadable], intent: null }, p.planPath, pc.tiny);
@@ -5434,6 +5471,7 @@ async function planMode(input, date) {
     planDiff: p.planDiff,
     planFacts: p.planFacts,
     files: p.testable.reduce((a, c) => a.concat(c.test_files), []),
+    relaxed: ua ? p.relaxed : [],
   });
   if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
   gate("auto-confirm: all gates pass; building " + pc.tiny.branch + " from " + pc.tiny.plan_commit + " in this run");
@@ -5498,14 +5536,16 @@ function preFreezeHooks(p) {
   }
   return v;
 }
-async function policyStep(host, slug, sealed) {
+// 6.3.0 (ADR-1239): plan mode reads it too (infra:policy:plan); that read never starts the build's wall time
+async function policyStep(host, slug, sealed, plan) {
   const args = [host || "-", slug];
-  const r = await infra("infra:policy", policyPrompt({ args }), "Verify", JUDGE_AGENT, "policy", args);
-  requireProgram(r, "policy", "infra:policy", "needs_human", "policy");
-  if (!relayDigestOk(r, progKeys("policy"), "policy") || canonical(r.args) !== canonical(args)) halt("needs_human", "infra:policy: the relayed result does not match the program's digest or arguments", "policy");
+  const lb = "infra:policy" + (plan ? ":plan" : "");
+  const r = await infra(lb, policyPrompt({ args }), plan ? "Workspace" : "Verify", JUDGE_AGENT, "policy", args);
+  requireProgram(r, "policy", lb, "needs_human", "policy");
+  if (!relayDigestOk(r, progKeys("policy"), "policy") || canonical(r.args) !== canonical(args)) halt("needs_human", lb + ": the relayed result does not match the program's digest or arguments", "policy");
   let p = { profile: r.profile, policy_sha256: r.policy_sha256, caps: r.caps };
   // 2044: the build's wall time starts here
-  state.t0 = Number.isInteger(r.now) ? r.now : null;
+  if (!plan) state.t0 = Number.isInteger(r.now) ? r.now : null;
   if (sealed) {
     if (sealed.policy_sha256 !== r.policy_sha256) {
       const d = r.caps ? Object.keys(Object.assign({}, sealed.caps, r.caps)).filter((k) => canonical(sealed.caps[k]) !== canonical(r.caps[k])).map((k) => k + " " + sealed.caps[k] + " -> " + r.caps[k]) : [r.error];
@@ -5838,6 +5878,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
   // 2033: sealed in the run-state; stream 3 reads state.policy.caps
   const policy = (state.policy = await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
+  unattendedOn(policy, input);
+  if (resume && Array.isArray(resume.auto_decisions) && !state.autoDecisions.length) state.autoDecisions = resume.auto_decisions.slice();
 
   // a frozen resume
   const freezeRefName = "refs/fleet/" + names.taskId + "/freeze";
@@ -6007,6 +6049,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           suite_result: suiteResult,
           gates_not_run: state.gatesNotRun,
           auto_confirmed: autoConfirmed,
+          ...(state.unattended ? { unattended_section: unattendedSection() } : {}),
           intent: intentForPr,
           review_notes: reviewNotes,
         }, pr ? { pr_url: pr.pr_url, pr_number: pr.pr_number } : {}, extra || {}, more || {}),
@@ -6054,6 +6097,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           suite_result: suiteResult,
           gates_not_run: state.gatesNotRun,
           auto_confirmed: autoConfirmed,
+          ...(state.unattended ? { unattended: state.unattended, auto_decisions: state.autoDecisions } : {}),
           intent: intentForPr,
           policy,
           tests_written: state.testsWritten || 0,
@@ -6517,7 +6561,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   let statsRuns = 0;
   async function statsStep(tag) {
     if (!pr || pr.pr_number == null) return gate("stats block skipped: no PR");
-    if (!policy.caps.stats) return gate("stats block off (policy stats false)");
+    if (!policy.caps.stats) return gate("stats block off (policy stats false)" + (state.unattended ? "; warning: the " + UNATT_HEAD + " section is not checked in the real body" : ""));
     const g = ghCmd("stats block", "stats");
     const rv = state.review;
     const tpl = statsBlock({
@@ -6529,11 +6573,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       ci: state.ci ? { verdict: state.ci.verdict, fixRounds: state.rounds.ci || 0, waitS: state.ciWaitS || 0 } : null,
     });
     const bc = ref.plan_facts.conventions.body;
-    const args = [g, remoteSlug, String(pr.pr_number), base64Of(tpl), state.t0 === null ? "-" : String(state.t0), JSON.stringify((bc && bc.required_sections) || [])];
+    const args = [g, remoteSlug, String(pr.pr_number), base64Of(tpl), state.t0 === null ? "-" : String(state.t0), JSON.stringify(((bc && bc.required_sections) || []).concat(state.unattended ? [UNATT_HEAD] : []))];
     const label = tag ? "infra:pr-stats:" + tag : "infra:pr-stats" + (++statsRuns > 1 ? ":p" + statsRuns : "");
     const r = await infra(label, prStatsPrompt({ args }), "PR");
     requireProgram(r, "pr_body_block", label, "needs_human", "stats");
     if (!relayDigestOk(r, progKeys("pr_body_block"), "pr_body_block") || canonical(r.args) !== canonical(args)) halt("needs_human", label + ": the relayed result does not match the program's digest or arguments", "stats");
+    if (state.unattended && Array.isArray(r.headers_missing) && r.headers_missing.indexOf(UNATT_HEAD) >= 0) halt("needs_human", label + ": the PR body has no " + UNATT_HEAD + " section (the unattended run's automatic decisions); fix the body of " + pr.pr_url, "stats");
     if (r.error !== null) halt("needs_human", label + ": " + r.error + "; check the body of " + pr.pr_url, "stats");
     if (r.block_sha256 !== sha256Hex(tpl.replace(STATS_WALL, fmtDur(r.wall_s)))) halt("needs_human", label + ": the PR body's stats block is not the script's block; check " + pr.pr_url, "stats");
     gate(label + ": stats block " + (r.replaced ? "replaced" : "added") + " in " + pr.pr_url);
@@ -6794,7 +6839,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // the plan_wrong re-plan (code judge; 6.3.0: a test-judge plan finding too)
   function planWrong(source, findings, head, tree) {
     return replan({
-      ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl, source,
+      ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl, source, input, ws,
       project: input.project || null,
       findings,
       expectedHead: head,
@@ -7468,6 +7513,15 @@ async function replan(ctx) {
   gate("re-plan " + n + ": old head " + (rs.superseded_head || ctx.expectedHead) + " saved as " + superseded + "; " + lay.branch + " reset to " + ref.plan_base + "; new plan " + newHead + " off the branch");
   const hist = pc.full.history;
   gate("cumulative: run " + hist.runs + ", re-plans " + hist.replans + ", agents " + hist.agents);
+  // 6.3.0 (ADR-1239): unattended, with no PR yet: the auto gates, then the build, in this run
+  if (state.unattended && !state.pr) {
+    autoDecide("plan_wrong", "build", who + " re-plan " + n + ": the auto gates, then the build in this run");
+    reserve(autoGateAgents(p.planFacts.commands), "the re-plan's auto gates");
+    const g = await autoGates({ sfx: ":replan", common, mainWt: lay.mainWt, planCommit: newHead, brief, callerRepo: brief.repo, branch: lay.branch, defaultBranch: common.default_branch, criteria: p.criteria, planPath: p.planPath, planDiff: p.planDiff, planFacts: p.planFacts, files: p.testable.reduce((a, c) => a.concat(c.test_files), []), relaxed: p.relaxed });
+    if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
+    state.rounds = { tests: 0, code: 0 };
+    return buildFromRef(ctx.input, date, pc.tiny, lay, ctx.ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents, full: pc.full });
+  }
   return awaiting(who + " plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, pc.tiny, pc.full, {
     proposed_plan_change: proposed,
     plan_findings: ctx.findings,
@@ -8009,6 +8063,10 @@ async function main(input) {
   state.mode = mode;
   if (input.confirm !== undefined && CONFIRMS.indexOf(input.confirm) < 0)
     stop("needs_human", "args.confirm must be \"ask\", \"auto\" or \"default\", got " + JSON.stringify(input.confirm));
+  // 6.3.0 (ADR-1239)
+  if (input.unattended !== undefined && input.unattended !== true) stop("needs_human", "args.unattended must be true or absent, got " + JSON.stringify(input.unattended));
+  if (input.unattended === true) state.unattended = "arg";
+  if (input.brief_marker !== undefined && typeof input.brief_marker !== "boolean") stop("needs_human", "args.brief_marker must be true or false, got " + JSON.stringify(input.brief_marker));
   // 4.0.0 (1990, S3)
   if (input.fresh_preflight !== undefined && typeof input.fresh_preflight !== "boolean")
     stop("needs_human", "args.fresh_preflight must be true or false, got " + JSON.stringify(input.fresh_preflight));

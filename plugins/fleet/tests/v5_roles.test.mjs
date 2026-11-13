@@ -22,7 +22,7 @@ import { SOURCE, ARGS, happy, run, runOne, spawnSync, inputsOf, ROLE_NAMES, ROLE
 async function realProbe(mutate) {
   const home = mkdtempSync(join(tmpdir(), "fleet-roles-probe-"));
   try {
-    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.2.2");
+    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.3.0");
     mkdirSync(join(ver, "scripts"), { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(ver, "scripts", n + ".py"));
     cpSync(ROLES_SRC, join(ver, "roles"), { recursive: true });
@@ -111,7 +111,8 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   assert.equal(out.result.status, "ok", out.result.reason);
   // 6.0.0 (ledger 2041): + infra:ruleset-surface:plan
   // 6.0.0 (ledger 2042): + infra:pr-convention:plan
-  assert.equal(out.plan.calls.length, 19, out.plan.labels.join(", "));
+  // 6.3.0 (ADR-1239): + infra:policy:plan
+  assert.equal(out.plan.calls.length, 20, out.plan.labels.join(", "));
   // 5.0.6 (ledger 2019): + 7 build-dir resets and the teardown
   // 6.0.0 (ledger 2033): + infra:policy
   // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
@@ -243,7 +244,7 @@ test("5.0.0 R1: plan mode seals history.preflight {fleet_version, role_sha256}, 
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const p = JSON.parse(s.__store[out.result.plan_ref.plan_commit]).history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "6.2.2");
+  assert.equal(p.fleet_version, "6.3.0");
   assert.deepEqual(p.role_sha256, PIN);
 });
 

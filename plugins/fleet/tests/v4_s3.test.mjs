@@ -80,7 +80,7 @@ const WANT = [
   [/^infra:tf-gate/, "sonnet"],
   [/^infra:hook-surface/, "sonnet"],
   [/^infra:ruleset-surface/, "sonnet"],
-  [/^infra:policy$/, "haiku"],
+  [/^infra:policy(:plan)?$/, "haiku"],
   [/^infra:pr-stats/, "sonnet"],
   [/^infra:pr-ready/, "sonnet"],
   [/^infra:(pr-merge|pr-update|ci-rerun|fleet-cleanup)/, "sonnet"],
@@ -511,8 +511,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   assert.equal(out.result.status, "ok", out.result.reason);
   // 6.0.0 (ledger 2041): + infra:ruleset-surface:plan
   // 6.0.0 (ledger 2042): + infra:pr-convention:plan
-  assert.equal(out.plan.calls.length, 19, out.plan.labels.join(", "));
-  assert.equal(out.planResult.agents, 19);
+  // 6.3.0 (ADR-1239): + infra:policy:plan
+  assert.equal(out.plan.calls.length, 20, out.plan.labels.join(", "));
+  assert.equal(out.planResult.agents, 20);
   // 5.0.6 (ledger 2019): + 7 build-dir resets (writers, test judge, coder,
   // code judge, commit, push, pr-review) and the teardown, which runs after
   // the result is made
@@ -544,7 +545,7 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "6.2.2");
+  assert.equal(p.fleet_version, "6.3.0");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
   assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/5.0.8/scripts"), "no scripts dir or PATH check sealed");
@@ -604,7 +605,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 6\.2\.2/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 6\.3\.0/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });

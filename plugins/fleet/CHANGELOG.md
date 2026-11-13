@@ -5,6 +5,42 @@
 Fleet 6.3.0: fewer stops for unattended runs, ruled by Max (ledger 2108; ADR-1238, ADR-1239,
 ADR-1233; wiki fleet-auto-flow-review-2026-11-13). Every safety stop stays.
 
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.3.0), then start a NEW session: the workflow
+  looks for its own `fleet/6.3.0/scripts` dir.
+- A 6.2.2 plan ref and run-state stay valid. Unattended mode is off until a policy key or the
+  `--unattended` argument turns it on.
+
+### Added
+
+- ADR-1239: an opt-in `unattended` mode, off by default. On by `unattended: true` as a
+  `policy.json` profile or `repos` key (`policy.py` validates it as a bool; unset, the caps carry
+  no key) or by `/build-task --unattended` (`args.unattended: true`). The result records the
+  source (`unattended_source`: `policy`, `arg` or `both`). Plan mode now reads the policy too
+  (`infra:policy:plan`, read only; it never starts the build's wall time). In unattended mode the
+  fleet decides, without asking: the Build confirmation (as confirm `auto`: the auto gates, then
+  the build in the same run), the default-mode blockers `change_kind`, `new_behaviour` and a task
+  id with no project that exactly one ledger answered (the result keeps `ledger_source`), a
+  relaxed re-plan (passed to the intent judge as `relaxed`; the judge rules), the fleet-brief
+  marker (`args.brief_marker: true`, treated as a ruling), and a code-judge or test-judge
+  `plan_wrong` re-plan before any PR (the auto gates on the new plan, then the build, in the same
+  run). A `confirm: "ask"` the user named without a marker still asks. It never bypasses: hook
+  surface, IaC paths (they still ask) or terraform, work-owner merge, orchestrator PR, intent-judge
+  refusal, scope fence, command allowlist, hash, freeze, fingerprint, ownership, commit, plan-ref,
+  run-state, contract drift, DSN or relaunch stops (one test per stop).
+- Audit trail: `state.autoDecisions` (`{gate, decision, reason}`, written by `autoDecide()` next
+  to `gate()`) goes into the result (`auto_decisions`), the run-state (next to `auto_confirmed`)
+  and the pr-opener input (`unattended_section`): the PR body gets a `### Unattended run` section
+  under Risks, "Unattended run (policy sha <sha> / arg): automatic decisions: ...". The pr-opener
+  checks it in its own body check; the stats step requires the header in the real PR body
+  (`pr_body_block.py` headers) and stops at `stats` when it is missing.
+- The skill documents `--unattended` and `resume_with`; the fleet-policy skill and the README
+  document the key. The default confirm mode stays `default`.
+- Prompt pins: `infra:policy:plan` (a new plan call) and `unattended` in the policy caps schema
+  moved the three scenario pins; with both reverted every pin is 6.2.2's. The probe pin is
+  unchanged.
+
 ### Changed
 
 - ADR-1238 (supersedes ADR-1232): the caller check runs in dispatches of at most 30 symbols and
