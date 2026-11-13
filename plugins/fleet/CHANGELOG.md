@@ -75,6 +75,19 @@ earlier round`), not an immediate stop. The round cap still stops.
 - A test-judge plan finding takes the plan_wrong re-plan path (re-plan, save the old head, ask
   for confirmation), as a code-judge `plan_wrong` does.
 
+### Fixed (6.2.2 carry-over lows)
+
+- `format_files.py`: a pre-freeze check-phase timeout now names the fixer time and whether the
+  570 s step ceiling cut the 240 s check budget ("the fixer runs took N s, so the check phase had
+  M s (cut by the 570 s step ceiling)", in `note`; the workflow's stop reason quotes it). No
+  isolated `git worktree add` starts once the check budget is spent.
+- Preflight: "absent from the installed plugin" is given only when the hash-line count agrees on
+  both relays; the first such relay is retried like any drop (a relay that dropped lines and
+  counted only those it kept no longer reads as a missing file).
+- `tests/v507_digest_relays.test.mjs`: the write-step check parses every `infra(...)` call by its
+  top-level arguments, so `infra(..., null, "x")` and an agent variable as the 4th argument are
+  caught too.
+
 ## [6.2.2] - 2026-11-12
 
 Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1235, ADR-1237).

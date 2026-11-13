@@ -1546,7 +1546,7 @@ const PROGRAM_SHA256 = {
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
   "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
-  "format_files": "8c4ad53ffeed3e5d29d8c7274e8b90097710f4285cca98a232b0af64d48680f7",
+  "format_files": "eff23e61d5b282e017e007b4f321db47589a97bfaa5303681e00eeae2652fb24",
   "gh_identity": "44d62a8f8b6cd4f69c7b057d0180f584edf6b03f03988e35f048bdc1d7ce2d70",
   "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
   "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
@@ -2042,7 +2042,7 @@ function relayAs(slot) {
 }
 
 // scripts_dir: the preflight probe's lines, parsed
-function scriptsProbeOf(probe, dir) {
+function scriptsProbeOf(probe, dir, retried) {
   const bad = (m) => ({ problem: m });
   if (!Array.isArray(probe) || probe.some((x) => typeof x !== "string")) return bad("the scripts directory probe returned no list of lines");
   const lines = probe.map((x) => x.replace(/\r$/, "")).filter((x) => x !== "");
@@ -2097,8 +2097,9 @@ function scriptsProbeOf(probe, dir) {
   for (const n of Object.keys(ROLE_SHA256)) if (!Object.prototype.hasOwnProperty.call(rsums, n + ".md")) want.push("roles/" + n + ".md");
   for (const n of Object.keys(SHARED_SHA256)) if (!Object.prototype.hasOwnProperty.call(rsums, "_shared/" + n + ".md")) want.push("roles/_shared/" + n + ".md");
   const nWant = Object.keys(programTable()).length + Object.keys(ROLE_SHA256).length + Object.keys(SHARED_SHA256).length;
-  // re-review D-L2: one count line equal to the lines relayed: the probe hashed what is there, the rest is absent on disk
-  if (want.length && counts.length === 1 && counts[0] === "hash_lines=" + nHash)
+  // re-review D-L2: one count line equal to the lines relayed: the probe hashed what is there, the rest is absent on disk;
+  // 6.3.0 (low 2): only when both relays agree (the first one is retried like any drop)
+  if (retried && want.length && counts.length === 1 && counts[0] === "hash_lines=" + nHash)
     return bad(want.slice(0, 10).map((f) => f + " is absent from the installed plugin").join("; ") + (want.length > 10 ? " (" + (want.length - 10) + " more)" : ""));
   if (want.length) return drop("relayed " + nHash + " of " + nWant + " expected hash lines", want);
   if (counts.length !== 1) return drop("relayed " + counts.length + " hash_lines= lines (the probe prints one)");
@@ -2558,7 +2559,7 @@ async function formatFiles(label, worktree, select, frozenList, allowed, phaseNa
   if (r.fix_timeout)
     halt("needs_human", label + ": the fixer hook runs ran out of time (each run at most " + FIX_RUN_TIMEOUT + " s, at most 3 runs); no hook result is trusted, fix or speed up the hooks", "hooks");
   if (r.hook_timeout.length)
-    halt("needs_human", label + ": the pre_freeze_hooks check phase ran out of time: " + r.hook_timeout.join(", ") + " (each run at most " + FIX_RUN_TIMEOUT + " s, the check phase at most 240 s); a test file is never frozen unchecked: list a faster hook or none", "hooks");
+    halt("needs_human", label + ": the pre_freeze_hooks check phase ran out of time: " + r.hook_timeout.join(", ") + " (each run at most " + FIX_RUN_TIMEOUT + " s, the check phase at most 240 s" + (/; the fixer runs took \d+ s/.test(r.note) ? r.note.slice(r.note.indexOf("; the fixer runs took")) : "") + "); a test file is never frozen unchecked: list a faster hook or none", "hooks");
   if (!Array.isArray(frozenList) && r.frozen_map !== frozenList.sha) halt("failed", label + ": the program read the frozen map " + JSON.stringify(r.frozen_map) + ", not " + frozenList.sha, "hash");
   // the cache purge before the comparison
   if (!Number.isInteger(r.purged) || r.purged < 0 || !Array.isArray(r.purged_paths) || r.purged_paths.length > r.purged || r.purged_paths.some((x) => typeof x !== "string"))
@@ -3848,7 +3849,7 @@ async function preflightStep(repo) {
   if (sp.relay) {
     gate("preflight: the agent " + sp.relay + "; retried once");
     pre = await dispatch("preflight:relay-retry", preflightPrompt({ repo }) + "\nRetry: the workflow found that the " + sp.problem + ". Copy every output line of the probe command into scripts_probe, one array item per line, in order, every sha256sum line included; never a summary or a sentence in place of lines.", preOpts);
-    sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
+    sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir, true);
     if (sp.relay)
       halt(
         "needs_human",

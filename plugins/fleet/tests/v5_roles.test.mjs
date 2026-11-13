@@ -200,7 +200,7 @@ test("5.0.0 R1: preflight pins the roles dir: a hash mismatch, an extra .md, a m
   const cases = [
     [{ roleSums: { "pr-review.md": "1".repeat(64) } }, /pr-review\.md hashes 1{64}/],
     [{ roleSums: { "x.md": "1".repeat(64) } }, /x\.md is not a shipped role file/],
-    // 6.2.2 re-review D-L2: absent on disk, no retry
+    // 6.2.2 re-review D-L2: absent on disk (6.3.0: after one retry whose count agrees)
     [{ roleSums: { "pr-review.md": undefined } }, /roles\/pr-review\.md is absent from the installed plugin/],
     [{ hits: [{ hit: SCRIPTS_DIR, roles_symlink: "yes" }] }, /roles dir .* is a symlink/],
     [{ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }, /roles dir .* resolves to ""/],
@@ -212,7 +212,7 @@ test("5.0.0 R1: preflight pins the roles dir: a hash mismatch, an extra .md, a m
     assert.equal(out.result.status, "needs_human", JSON.stringify(over));
     assert.equal(out.result.stop_gate, "contract");
     assert.match(out.result.reason, re);
-    assert.deepEqual(out.labels, /no line for/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
+    assert.deepEqual(out.labels, /no line for|is absent from the installed plugin/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
   }
 });
 
@@ -324,7 +324,7 @@ test("5.0.0 R1 real execution: the probe, run by bash over a real plugin cache, 
     assert.equal(out.result.status, "needs_human", String(re));
     assert.equal(out.result.stop_gate, "contract");
     assert.match(out.result.reason, re);
-    assert.deepEqual(out.labels, /no line for/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
+    assert.deepEqual(out.labels, /no line for|is absent from the installed plugin/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
   }
 });
 

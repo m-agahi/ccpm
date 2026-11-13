@@ -192,9 +192,9 @@ function wrongFile(s, role) {
 test("5.0.0 R1 (was preflight missing role): a missing role file stops in preflight naming it", async () => {
   const out = await run(offPin(happy(), "fleet-coder", null), ARGS);
   assert.equal(out.result.status, "needs_human");
-  // 6.2.2 re-review D-L2: the probe counted the lines it hashed: the file is absent, no retry
+  // 6.2.2 re-review D-L2: the probe counted the lines it hashed: the file is absent (6.3.0: after one retry whose count agrees)
   assert.match(out.result.reason, /roles\/fleet-coder\.md is absent from the installed plugin/);
-  assert.deepEqual(out.labels, ["preflight"]);
+  assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
 });
 
 // 5.0.0 (R1): was "preflight unreachable yadgar stops with needs_human". The

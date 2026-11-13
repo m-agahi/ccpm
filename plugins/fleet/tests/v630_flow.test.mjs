@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -335,4 +335,21 @@ test("6.3.0 A6: a test-judge plan finding takes the plan_wrong re-plan path (re-
   assert.ok(!out.labels.includes("role:fleet-coder:r1"));
   const pin = inputsOf(call(out, "role:scope-and-plan:replan").prompt);
   assert.ok(pin.brief.sources.some((x) => x.ref === "test-judge plan findings"));
+});
+
+// ---------------------------------------------------------------- D (6.2.2 carry-over lows)
+
+const POL_HOOKS = (p) => ({ status: "ok", reason: "read", profile: "personal", file: "/h/.config/fleet/policy.json", policy_sha256: "f".repeat(64), caps: Object.assign({}, DEFAULT_CAPS, { pre_freeze_hooks: ["cargo-fmt"] }), matched: "profile personal", error: null, args: inputsOf(p).args });
+const hookOut = (p, over) => Object.assign({ status: "ok", reason: "ran", note: "ran pre-commit run --files in a scratch checkout of HEAD", ran: true, runs: 1, stable: true, files: inputsOf(p).select.paths || [], changed: [], refused: [], purged: 0, purged_paths: [], hook_failed: false, hook_failures: [], hook_head: "", hook_sha256: "", hook_timeout: [], fix_timeout: false, unknown_hooks: [] }, over);
+
+test("6.3.0 D low 1: a check-phase timeout names the fixer time and the ceiling cut (format_files note)", async () => {
+  const note = "ran pre-commit run --files in a scratch checkout of HEAD; the fixer runs took 541 s, so the check phase had 29 s (cut by the 570 s step ceiling)";
+  const out = await run(happy({ script: { "infra:policy": POL_HOOKS, "infra:format-tests:r1": (p) => hookOut(p, { hook_timeout: ["cargo-fmt"], note }) } }), ARGS);
+  assert.equal(out.result.stop_gate, "hooks");
+  assert.match(out.result.reason, /check phase ran out of time: cargo-fmt \(each run at most 180 s, the check phase at most 240 s; the fixer runs took 541 s, so the check phase had 29 s \(cut by the 570 s step ceiling\)\)/);
+  // format_files.py: the note carries the timing only on a check timeout, and no isolated checkout starts once the budget is spent
+  const src = readFileSync(join(SCRIPTS_SRC, "format_files.py"), "utf8");
+  assert.match(src, /\(TIMING\[0\] if TIMED_OUT else ''\)/);
+  const iso = src.slice(src.indexOf("def isolated(hid, f):"), src.indexOf("def isolated(hid, f):") + 400);
+  assert.ok(iso.indexOf("if check_end - time.monotonic() < 1:") >= 0 && iso.indexOf("if check_end - time.monotonic() < 1:") < iso.indexOf("'worktree', 'add'"), iso);
 });
