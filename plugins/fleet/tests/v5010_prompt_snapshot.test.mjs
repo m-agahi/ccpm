@@ -93,11 +93,11 @@ const SCENARIOS = {
 // 6.1.0 delta review: treeCmd, the re-plan reset branch/update-ref and the code-judge role's scratch read-tree run git with hooks off (the only changes: checked with the three reverted)
 // 6.2.0 (2058): the intake prompt's body_slug page read and body_slug in the source schema (the only changes: checked with both reverted)
 // 6.2.0 review (M1, L2): body_slug in the intake return shape, the MUST-carry rule and the exact wiki_read call format (the only changes: checked with both prompt edits reverted)
-// 6.2.2 (2104, 2107): the preflight probe prints hash_lines= before its hash lines (probe: the only change, checked with it reverted); format_files hook_failed and hook_output in the schema
+// 6.2.2 (2104, 2107): the preflight probe prints hash_lines= before its hash lines (probe: the only change, checked with it reverted); format_files hook_failed, hook_output and unknown_hooks, and the policy caps pre_freeze_hooks, in the schemas (ADR-1237)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 86, sha256: "f90ae976891d3b7e48d2f0464db04fa7b4ebb3845922fd156af31aae30459dcc" },
-  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "3ca4e2c2c30bf6688b230226559a31376a6bd7fa98953215d819a4be35eb31d4" },
-  "short path (one test writer)": { calls: 85, sha256: "d65da3f3f505b19d0fefb28eb45b89a3dae9c1e18de055b2f0611015c3cd5a43" },
+  "plan then build (confirm ask)": { calls: 86, sha256: "3f156152d4204cfe3c0af5b20ae0a63d67561f5a3625f33a6c1c26b53b30c491" },
+  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "beb20932c72f0a2f103b3f2b28c0d38a59dad614a928425f9c1fff9047e02202" },
+  "short path (one test writer)": { calls: 85, sha256: "fa6863315d80bee9caa02404f68c8a5e6efee0dbe251b20671c6a82cdf470f8b" },
   "probe": { calls: 2, sha256: "b6976644cdb9345851ac461a293688c2299952b462ba087a39958a03ae13b393" },
 };
 

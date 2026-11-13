@@ -326,8 +326,8 @@ test("5.0.4 2013: format_files purges before it compares the hook surface, and b
   const cmp = src.indexOf("\nrefused = sorted(");
   assert.ok(purge > 0 && cmp > purge, "the purge runs before the comparison");
   // 5.0.7 (ledger 2020): frozen_changed after them
-  // 6.2.2 (2107): then the final hook run's status and output
-  assert.deepEqual(K("format_files").slice(-6), ["purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_output"]);
+  // 6.2.2 (2107): then the listed pre-freeze hooks' result
+  assert.deepEqual(K("format_files").slice(-7), ["purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_output", "unknown_hooks"]);
 });
 
 // the relay the agent returns: the program output with a forged or missing purge result

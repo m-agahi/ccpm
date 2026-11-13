@@ -74,6 +74,26 @@ lands, so a file the workflow would refuse is never written.
    - `create` refuses when anything is at the path.
    - A result with `error` wrote nothing: show the error.
 
+## Pre-freeze hooks (6.2.2, ADR-1237)
+
+A `repos` override may carry `pre_freeze_hooks`: a list of hook ids from that repo's
+`.pre-commit-config.yaml`. The fleet runs those hooks on the writers' test files before the test
+judge and the freeze; a failure sends the tests back to the writers, and the fleet never freezes a
+test file a listed hook fails on. No list: no hook runs before the freeze. Every hook still runs at
+the commit step. The key is valid only inside a `repos` override, as a list of non-empty strings;
+anything else makes `policy.py` refuse the file. An id the repo's config lacks stops the build
+for a human. Example, inside a profile:
+
+```json
+"repos": {
+  "yadgarhq/iam-db": { "pre_freeze_hooks": ["cargo-fmt"] }
+}
+```
+
+The helper has no command for this key. When Max asks to add it, show the example and the path;
+he edits the file. List only hooks that pass on RED tests (formatter checks); a compile or
+test-suite hook fails until the code exists.
+
 ## Report
 
 The path, whether the file exists, the answer, the command run (or none), the path written and the

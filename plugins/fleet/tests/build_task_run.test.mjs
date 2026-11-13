@@ -5615,6 +5615,8 @@ const ARRAY_SITES = {
   "r.changed @ expandKeys": "infra:changed",
   "opts.args @ digestRetry": "parsed: the args the step sent (a script-built list)",
   "r.frozen_changed @ formatFiles": "infra:frozen_changed",
+  // 6.2.2 (2107)
+  "r.unknown_hooks @ formatFiles": "infra:unknown_hooks",
   "rd.results @ writeBack": "infra:results",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   // 5.0.3 (ledger 2010)
@@ -7675,8 +7677,8 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
     assert.deepEqual(o.changed, ["a.py"]);
     assert.equal(readFileSync(join(home, "log"), "utf8").trim().split("\n")[0], "a.py", "the frozen test is never passed");
     const d = { program: o.program };
-    // 6.2.2 (2107): hook_failed and hook_output too
-    for (const k of ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_output"]) d[k] = o[k];
+    // 6.2.2 (2107): hook_failed, hook_output and unknown_hooks too
+    for (const k of ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_output", "unknown_hooks"]) d[k] = o[k];
     assert.equal(o.digest, sha256(canon(d)));
     assert.deepEqual(o.frozen_changed, []);
     // a hook that touches another path: reported, never settles, and never copied back

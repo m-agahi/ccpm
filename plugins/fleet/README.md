@@ -234,18 +234,25 @@ writes) now runs `pre-commit run --files <paths>` in the fleet worktree until a 
 nothing, at most 3 runs: on the round's test files before the ownership hash, the test judge and
 the freeze, and on every path the worktree changes against HEAD, frozen files left out, before the
 purge, the post-coder hash and the code judge. Judges and hashes then see the formatted bytes and
-the commit-time hooks have nothing to rewrite. On the code files the exit codes are ignored (a
-check hook that fails stays the commit step's business); only bytes count. On the test files
-(6.2.2, ledger 2107, ADR-1234) the program also reports the exit status of the final run, the one
-that changed nothing (`hook_failed`), and the last 2000 characters of its output as printable
-ASCII (`hook_output`), both in its digest. Every hook in that run counts, check-only hooks such as
-`cargo fmt --check` included. A failure skips the test judge and sends a fix_tests round to the
-round's writers, with the hook output as a routed finding; the round counts against the test
-rounds. A hook that still fails in the last round stops with `needs_human` (`stop_gate: cap`) and
-the hook output. A test file is never frozen while a hook fails on it: the coder may not edit a
-frozen file, and the commit hook would reject it. A hook that fails only because the tests are RED
-(a full-suite or compile hook on test files) also stops the run this way (the ADR's revisit
-trigger). The
+the commit-time hooks have nothing to rewrite. Exit codes of these runs are ignored (a check hook
+that fails, such as a full-suite hook on RED tests, stays the commit step's business); only bytes
+count.
+
+Pre-freeze hooks (6.2.2, ledger 2107, ADR-1237): a repo can list hook ids in its policy
+`repos` override, key `pre_freeze_hooks` (see the policy file section). With no list, no hook is
+judged before the freeze, as in 6.2.1. With a list, `infra:format-tests:r<n>` runs each listed
+hook once more, alone, on the round's test files after the fixer runs settle (`pre-commit run <id>
+--files <paths>` in the same scratch checkout). A non-zero exit is a failure. The program reports
+`hook_failed` and the last 2000 characters of the failing hooks' output as printable ASCII
+(`hook_output`), both in its digest. A failure skips the test judge and sends a fix_tests round to
+the round's writers, with the hook output as a routed finding; the round counts against the test
+rounds. A hook that still fails in the last round stops with `needs_human` (`stop_gate: cap`).
+The run never freezes while a listed hook fails on a test file: the coder may not edit a frozen
+file, and the commit hook would reject it. A listed id that the config at HEAD does not have stops
+with `needs_human` naming it (`stop_gate: policy`), and so do listed hooks that cannot run (no
+`pre-commit`). Every hook still runs at the commit step, unchanged. List only hooks that pass on
+RED tests, such as a formatter check (`cargo-fmt`); a compile or test-suite hook fails until the
+code exists. The
 program reports every path that differs between the worktree tree before the first run and after
 the last, whatever hook changed it, with a digest. The run stops with `needs_human` when a hook
 changed a frozen file (`stop_gate: hash`), a path outside the files it was given (`scope`), or
@@ -668,6 +675,18 @@ stop the build (`stop_gate: "policy"`); a bad file never falls back to the defau
   `never` (`never` | `once`), `ci_trigger` false, `review_post` `none` (`none` | `own_pr`;
   reserved: nothing reads it yet).
   A profile key left out keeps the default.
+- `pre_freeze_hooks` (6.2.2, ADR-1237): a `repos` override only, never a profile key. A list of
+  hook ids from the repo's `.pre-commit-config.yaml` (non-empty strings, no whitespace, no
+  leading `-`); anything else makes the file invalid. The listed hooks run on the writers' test
+  files before the test judge and the freeze (see "Pre-freeze hooks"). No list: none run. Example,
+  inside a profile:
+
+  ```json
+  "repos": {
+    "yadgarhq/iam-db": { "pre_freeze_hooks": ["cargo-fmt"] }
+  }
+  ```
+
 - Script rule, whatever the file says: an owner in `WORK_OWNERS` (`quinyx`, `concrete-media`, on
   any host or ssh alias) gets `merge` and `update_branch` `never`.
 - The run-state seals `policy: {profile, policy_sha256, caps}`; the result carries it too. A

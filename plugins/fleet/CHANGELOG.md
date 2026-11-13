@@ -2,7 +2,7 @@
 
 ## [6.2.2] - 2026-11-12
 
-Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1234, ADR-1235).
+Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1235, ADR-1237).
 
 ### Deploy
 
@@ -20,15 +20,25 @@ Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1234, A
   rounds, judge fingerprints, re-freeze, code rounds) reads the same filtered map; `hasher.py`
   and its relay are unchanged. Writes to the run's own refs and every `refs/replace/*` ref still
   stop the run.
-- 2107 (ADR-1234): the freeze locked writer test files that a check-only hook (`cargo fmt
---check`) rejects, and the coder could not edit them. `format_files.py` already ran every hook
-  with `pre-commit run --files`; it now also reports the final, stable run's exit status
-  (`hook_failed`) and the last 2000 characters of its output as printable ASCII (`hook_output`),
-  both digest keys. On `infra:format-tests:r<n>` a failure skips the test judge and sends a
-  fix_tests round to the round's writers with the hook output; it counts against the test rounds.
-  A hook still failing in the last round stops with `needs_human` (`stop_gate: cap`). The run
-  never freezes while a hook fails on a test file. `infra:format-code` is unchanged. The optional
-  fix-mode formatter allow-list is not in this release.
+- 2107 (ADR-1237, which supersedes ADR-1234 and ADR-1236): the freeze locked writer test files
+  that a check-only hook (`cargo fmt --check`) rejects, and the coder could not edit them. A repo
+  now lists the hooks to judge before the freeze in its policy `repos` override, key
+  `pre_freeze_hooks`, for example `"yadgarhq/iam-db": {"pre_freeze_hooks": ["cargo-fmt"]}`. With
+  no list, no hook is judged before the freeze, as in 6.2.1. With a list, `format_files.py` (on
+  `infra:format-tests:r<n>`, through `select.check_hooks`) runs each listed hook once more, alone,
+  after the fixer runs settle: `pre-commit run <id> --files <paths>` in the same scratch checkout.
+  It reports `hook_failed`, the last 2000 characters of the failing hooks' output as printable
+  ASCII (`hook_output`), and `unknown_hooks`, all digest keys. A failure skips the test judge and
+  sends a fix_tests round to the round's writers with the hook output; it counts against the test
+  rounds. A hook still failing in the last round stops with `needs_human` (`stop_gate: cap`); the
+  run never freezes then. A listed id that the config at HEAD lacks, or listed hooks that cannot
+  run (no `pre-commit`), stop with `needs_human` (`stop_gate: policy`). The list comes from the
+  sealed policy (`state.policy`). Every hook still runs at the commit step, unchanged. No remote
+  hook manifest is read. `infra:format-code` is unchanged.
+- `scripts/policy.py`: `pre_freeze_hooks` is valid only in a `repos` override, as a list of
+  non-empty strings with no whitespace and no leading `-`, at most 128 characters each; anything
+  else makes the policy invalid. It is not a default cap: with no list, the caps carry no key.
+  The policy drift gate line compares caps by value, so a list compares by content.
 - 2104: a preflight agent that relayed a prose summary in place of the sha256sum lines made every
   script "missing" and asked for a reinstall. The probe now prints `hash_lines=<n>` before its hash
   lines. No hash line, or fewer than `n`: one retry (`preflight:relay-retry`, on sonnet), then a
@@ -40,12 +50,15 @@ Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1234, A
 
 ### Changed
 
-- `tests/v622_fixes.test.mjs`: 18 tests (foreign, own, prefix-sharing and replacement refs; a
-  failing check-only hook, its last round, a passing hook, a broken relay, and `format_files.py`
-  run for real; prose-only, prose then full, partial and real probe relays).
+- `tests/v622_fixes.test.mjs`: 24 tests (foreign, own, prefix-sharing and replacement refs; no
+  list, a listed failing hook, its last round, a listed passing hook, an unknown id, hooks that
+  cannot run, a bad sealed list, a broken relay, `policy.py` and `format_files.py` run for real
+  (unlisted `pass_filenames: false` and `always_run` hooks never run alone); prose-only, prose then
+  full, partial and real probe relays).
+- `skills/fleet-policy/SKILL.md` and the README document `pre_freeze_hooks`.
 - Harness: the probe stub prints `hash_lines=`, the format stub carries the hook keys, and
   `preflight:relay-retry` replays the preflight script. Prompt snapshot pins updated (the probe
-  text, checked with it reverted; the format_files schema keys).
+  text, checked with it reverted; the format_files and policy schema keys).
 - Version 6.2.2 (`FLEET_VERSION`, `marketplace.json`, the test pins, the root README).
 
 ## [6.2.1] - 2026-11-12

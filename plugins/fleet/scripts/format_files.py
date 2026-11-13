@@ -101,8 +101,8 @@ def names(b):
 PURGED = []
 PURGED_CAP = 50
 def done(**k):
-    # 6.2.2 (2107): hook_failed / hook_output: the final, stable run's exit status and its output tail
-    out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': [], 'purged': len(PURGED), 'purged_paths': sorted(PURGED)[:PURGED_CAP], 'hook_failed': False, 'hook_output': ''}
+    # 6.2.2 (2107, ADR-1237): hook_failed / hook_output / unknown_hooks: the listed pre-freeze hooks
+    out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': [], 'purged': len(PURGED), 'purged_paths': sorted(PURGED)[:PURGED_CAP], 'hook_failed': False, 'hook_output': '', 'unknown_hooks': []}
     out.update(k)
     # 5.0.7: the changed paths that are frozen (the workflow stops on any)
     out['frozen_changed'] = sorted(set(out['changed']) & frozen)
@@ -111,6 +111,14 @@ def done(**k):
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
     print(json.dumps(out, sort_keys=True, ensure_ascii=False))
     sys.exit(0)
+# 6.2.2 (2107, ADR-1237): select.check_hooks, the policy's pre_freeze_hooks: after the
+# fixer runs, each listed hook runs once more alone on the files (`pre-commit run <id>
+# --files`); a non-zero exit is a failure. No list: no check, as in 6.2.1.
+CHECK = sel.get('check_hooks') or []
+if not isinstance(CHECK, list) or any(not isinstance(x, str) or not x or x.startswith('-') for x in CHECK):
+    sys.exit('select.check_hooks must be a list of hook ids')
+HOOK_IDS = set()
+FAILED = []
 before = snapshot(wt)
 if sel.get('dirty') is True:
     cand = names(git(wt, 'diff-tree', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', before).stdout)
@@ -247,7 +255,7 @@ LOADER = (
     "            if a is not None and not (isinstance(a, list) and all(isinstance(x, str) for x in a)):\n"
     "                sys.exit(7)\n"
     "            for x in a or []:\n                grow(len(x))\n"
-    "            out.append({'entry': s(h, 'entry'), 'args': a or [], 'language': s(h, 'language')})\n"
+    "            out.append({'id': s(h, 'id'), 'entry': s(h, 'entry'), 'args': a or [], 'language': s(h, 'language')})\n"
     "print(json.dumps(out))\n"
 )
 LOADER_EXITS = {4: 'the loader output over 1 MiB', 5: 'the config is over 256 KiB', 6: 'a hook entry or language is not a string', 7: 'a hook args is not a list of strings'}
@@ -324,6 +332,8 @@ def hook_values():
         vals = []
         for h in hooks if isinstance(hooks, list) else []:
             if isinstance(h, dict):
+                if isinstance(h.get('id'), str):
+                    HOOK_IDS.add(h['id'])
                 if isinstance(h.get('entry'), str):
                     vals.append(h['entry'])
                 for x in h.get('args') or []:
@@ -335,6 +345,11 @@ if head_cfg.returncode == 0 and shutil.which('pre-commit') is not None:
     vals, why = hook_values()
     if why:
         done(note='hook surface unknown: ' + why + '; no hook was run', refused=['.pre-commit-config.yaml'])
+# 6.2.2 (2107, ADR-1237): every listed id must be a hook id of the config at HEAD
+if CHECK and shutil.which('pre-commit') is not None:
+    unknown = [i for i in CHECK if i not in HOOK_IDS]
+    if unknown:
+        done(note='pre-freeze hook id(s) not in .pre-commit-config.yaml: ' + ', '.join(unknown) + '; no hook was run', unknown_hooks=unknown)
 for v in vals:
     for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', v):
         q = os.path.normpath(tok)
@@ -408,21 +423,27 @@ try:
         return d
     prev = {}
     runs, stable = 0, False
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PRE_COMMIT_COLOR='never')
-    last_rc, last_out = 0, b''
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
     while runs < 3:
         runs += 1
         try:
-            pr = subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=dict(env, PATH=clean_path([wt, scratch_root])), preexec_fn=lift)
+            subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=dict(env, PATH=clean_path([wt, scratch_root])), preexec_fn=lift)
         except subprocess.TimeoutExpired:
             prev = delta()
             break
-        last_rc, last_out = pr.returncode, pr.stdout + pr.stderr
         now = delta()
         if now == prev:
             stable = True
             break
         prev = now
+    # 6.2.2 (2107, ADR-1237): the listed hooks, each alone, on the settled files
+    for hid in CHECK if stable else []:
+        try:
+            pr = subprocess.run(['pre-commit', 'run', hid, '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=dict(env, PATH=clean_path([wt, scratch_root]), PRE_COMMIT_COLOR='never'), preexec_fn=lift)
+            if pr.returncode != 0:
+                FAILED.append((hid, pr.stdout + pr.stderr))
+        except subprocess.TimeoutExpired:
+            FAILED.append((hid, ('timed out after %d s' % tmo).encode()))
     changed = sorted(prev)
     for f in changed:
         if f in files:
@@ -437,14 +458,12 @@ finally:
     git(wt, 'worktree', 'prune', check=False)
 if refused:
     done(note='a selected path resolves outside the checkout', files=files, refused=sorted(set(refused)))
-# 6.2.2 (2107): a fixer's run exits non-zero when it rewrites; only the final,
-# stable run (it changed nothing) says a hook fails, check-only hooks included.
-# Its output is relayed as printable ASCII, its last HOOK_OUTPUT_CAP characters.
+# 6.2.2 (2107, ADR-1237): the failing listed hooks' output, as printable ASCII,
+# its last HOOK_OUTPUT_CAP characters
 HOOK_OUTPUT_CAP = 2000
 def tail_text(b):
     t = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', b.decode('utf-8', 'replace'))
     t = ''.join(c if c == '\n' or ' ' <= c <= '~' else '?' for c in t.replace('\r\n', '\n').replace('\t', ' ')).strip()
     return t[-HOOK_OUTPUT_CAP:]
-hook_failed = stable and last_rc != 0
 done(ran=True, note='ran pre-commit run --files in a scratch checkout of HEAD', runs=runs, stable=stable, files=files, changed=changed,
-     hook_failed=hook_failed, hook_output=tail_text(last_out) if hook_failed else '')
+     hook_failed=bool(FAILED), hook_output=tail_text(b'\n'.join(b'[' + h.encode() + b'] ' + o for h, o in FAILED)))

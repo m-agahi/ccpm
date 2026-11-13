@@ -340,7 +340,7 @@ export async function runOne(script, args0) {
     // unscripted fixer-hook runs change nothing (3.0.0)
     if (!(label in script) && /^infra:format-(tests|code):/.test(label)) {
       const sel = inputsOf(prompt).select;
-      return withRelayDigest(label, { status: "ok", reason: "ran the fixers", note: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [], frozen_map: fmHandle(prompt), hook_failed: false, hook_output: "" });
+      return withRelayDigest(label, { status: "ok", reason: "ran the fixers", note: "ran pre-commit run --files", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [], frozen_map: fmHandle(prompt), hook_failed: false, hook_output: "", unknown_hooks: [] });
     }
     // 3.1.0: unscripted IaC pre-push gates find no IaC file in the PR diff
     if (!(label in script) && /^infra:tf-gate:/.test(label)) {
@@ -502,7 +502,7 @@ export async function runOne(script, args0) {
     // frozen (a JSON list, or "@<files map>" read from the registry)
     if (/^infra:format-(tests|code):/.test(label) && !raw && r && r.status === "ok" && Array.isArray(r.changed)) {
       // a stub digest over the 5.0.6 keys, or the 6.2.1 keys, covers the newer keys too
-      const HOOK_KEYS = ["hook_failed", "hook_output"];
+      const HOOK_KEYS = ["hook_failed", "hook_output", "unknown_hooks"];
       const k621 = K("format_files").filter((k) => HOOK_KEYS.indexOf(k) < 0);
       const k6 = k621.filter((k) => k !== "frozen_changed" && k !== "frozen_map");
       const legacy = typeof r.digest === "string" && (r.digest === sha256(canon(pick(r, k6))) || r.digest === sha256(canon(pick(r, k621))));
@@ -516,6 +516,7 @@ export async function runOne(script, args0) {
       // 6.2.2 (2107): a stub with no hook status passed every hook
       if (!("hook_failed" in r)) r.hook_failed = false;
       if (!("hook_output" in r)) r.hook_output = "";
+      if (!("unknown_hooks" in r)) r.unknown_hooks = [];
       if (legacy) r.digest = sha256(canon(pick(r, K("format_files"))));
     }
     if (!raw) withRelayDigest(label, fillArgs(label, r, prompt));

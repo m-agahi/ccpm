@@ -592,6 +592,8 @@ const INFRA_SCHEMA = {
     files: { type: "array", items: STR },
     // format_files.py
     frozen_changed: { type: "array", items: STR },
+    // 6.2.2 (2107): the policy's pre-freeze hook ids the config lacks
+    unknown_hooks: { type: "array", items: STR },
     diff: { type: "array", items: STR },
     chunks: { type: "array", items: STR },
     refs: {
@@ -1540,7 +1542,7 @@ const PROGRAM_SHA256 = {
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "6aee2fdb201b6a3634dbd1ea6c0cfa40eefe3a0eed09c8d40e7f6c3b95a17f4c",
   "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
-  "format_files": "51de3bf0af61d430c00136ded400681f9bad05aa9edbf03079a8f06242733d8b",
+  "format_files": "8a4004f344886f16a8962db7513e6736c6313ac5904090a0dcf56500aeb2ac48",
   "gh_identity": "44d62a8f8b6cd4f69c7b057d0180f584edf6b03f03988e35f048bdc1d7ce2d70",
   "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
   "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
@@ -1553,7 +1555,7 @@ const PROGRAM_SHA256 = {
   "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
   "plan_ref": "494ceb934b89fa5c2962ef786ba93bee63bd09f776c82c50579fdf23f301c136",
   "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
-  "policy": "3c3c254d65a199674727568003c0066cbb15ee7af2e86888932e2637f950ec5b",
+  "policy": "cfa06238bb22327ccfe4cbfe198cd0752aca3cdab77d6eaf4068fdf9a7b6d906",
   "pr_body_block": "368ed0c33928769f6951a1e15b65362b438fc010b0ea26c6284fc668c5e6c733",
   "pr_convention": "4763189023084bbad77a9eb5c2704692da5932d2dfa335654c5e4178f027c2b7",
   "pr_state": "a17beb445d0fac95dff82b49bfc75f6396293a6f193bfcfe2f6d4ddee51856b9",
@@ -1713,7 +1715,7 @@ const PROGRAM_KEYS = {
   "parked:write": ["written", "sha256", "args"],
   "parked:park": ["target", "clean", "dirty", "args"],
   "plan_hash": ["plan_sha256", "blob", "args"],
-  "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_output"],
+  "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_output", "unknown_hooks"],
   "plan_ref_write": ["plan_commit", "plan_base", "tag_sha", "reused", "plan_file", "dirty"],
   "plan_files": ["head", "commit", "parent", "files", "args", "dsn_paths"],
   "plan_dsn": ["holds", "lines", "args"],
@@ -1812,7 +1814,7 @@ const PROGRAM_OUT = {
     digest: STR,
   },
   plan_hash: { plan_sha256: STR, blob: STR_OR_NULL, args: STRS, digest: STR },
-  format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, hook_failed: BOOL, hook_output: STR, digest: STR },
+  format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, hook_failed: BOOL, hook_output: STR, unknown_hooks: STRS, digest: STR },
   plan_ref_write: { plan_commit: STR, plan_base: STR, tag_sha: STR, reused: BOOL, plan_file: STR, dirty: STRS, digest: STR },
   plan_files: { head: STR, commit: STR, parent: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
   plan_dsn: { holds: BOOL, lines: { type: "array", items: INT }, args: STRS, digest: STR },
@@ -1872,7 +1874,7 @@ const PROGRAM_OUT = {
     profile: STR_OR_NULL,
     file: STR,
     policy_sha256: STR_OR_NULL,
-    caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] } } },
+    caps: { type: ["object", "null"], properties: { pr_ready: BOOL, ci_watch: BOOL, ci_watch_minutes: INT, stats: BOOL, merge: { type: "string", enum: ["never", "auto"] }, update_branch: { type: "string", enum: ["never", "once"] }, ci_trigger: BOOL, review_post: { type: "string", enum: ["none", "own_pr"] }, pre_freeze_hooks: STRS } },
     matched: STR_OR_NULL,
     error: STR_OR_NULL,
     now: INT,
@@ -2523,8 +2525,11 @@ function formatFilesPrompt(inputs) {
 const FIX_RUN_TIMEOUT = 180;
 async function formatFiles(label, worktree, select, frozenList, allowed, phaseName, scratchDir) {
   const r = await infra(label, formatFilesPrompt({ worktree, select, frozen: Array.isArray(frozenList) ? frozenList : "@" + frozenList.sha.slice(0, 12), scratch_dir: scratchDir }), phaseName);
-  if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed) || !Array.isArray(r.refused) || typeof r.hook_failed !== "boolean" || typeof r.hook_output !== "string")
-    halt("failed", label + " returned no ran/stable/files/changed/refused/hook_failed/hook_output");
+  if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed) || !Array.isArray(r.refused) || typeof r.hook_failed !== "boolean" || typeof r.hook_output !== "string" || !Array.isArray(r.unknown_hooks))
+    halt("failed", label + " returned no ran/stable/files/changed/refused/hook_failed/hook_output/unknown_hooks");
+  // 6.2.2 (2107, ADR-1237): a policy pre_freeze_hooks id that the repo's config does not have
+  if (r.unknown_hooks.length)
+    halt("needs_human", label + ": the policy's pre_freeze_hooks names hook id(s) not in .pre-commit-config.yaml: " + r.unknown_hooks.map(String).join(", ") + "; fix the policy file or the config", "policy");
   requireProgram(r, "format_files", label);
   if (!relayDigestOk(r, progKeys("format_files"), "format_files")) halt("failed", label + ": the relayed result does not match the program's digest");
   if (!Array.isArray(frozenList) && r.frozen_map !== frozenList.sha) halt("failed", label + ": the program read the frozen map " + JSON.stringify(r.frozen_map) + ", not " + frozenList.sha, "hash");
@@ -5396,6 +5401,14 @@ function policyPrompt(inputs) {
   return INFRA_STEP + "read the fleet policy file. READ ONLY: run nothing but the one command below.\n" + inputsLine(inputs) + RUN_ONLY + progCmd("policy", inputs.args) + "\nIt prints one JSON object " + printsKeys("policy") + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("policy") + "}.";
 }
 const capsText = (c) => Object.keys(c).map((k) => k + " " + c[k] + (k === "ci_watch" ? " " + c.ci_watch_minutes + " min" : "")).filter((x) => x.indexOf("ci_watch_minutes") !== 0).join(", ");
+// 6.2.2 (2107, ADR-1237): the sealed policy's pre_freeze_hooks (a repos override key); none: []
+function preFreezeHooks(p) {
+  const v = p && p.caps ? p.caps.pre_freeze_hooks : undefined;
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || v.some((x) => typeof x !== "string" || !x || /[\s\x00-\x1f\x7f]/.test(x) || x.charAt(0) === "-"))
+    halt("needs_human", "policy: pre_freeze_hooks " + JSON.stringify(v) + " is not a list of hook ids; fix the policy file, then re-run the build", "policy");
+  return v;
+}
 async function policyStep(host, slug, sealed) {
   const args = [host || "-", slug];
   const r = await infra("infra:policy", policyPrompt({ args }), "Verify", JUDGE_AGENT, "policy", args);
@@ -5406,7 +5419,7 @@ async function policyStep(host, slug, sealed) {
   state.t0 = Number.isInteger(r.now) ? r.now : null;
   if (sealed) {
     if (sealed.policy_sha256 !== r.policy_sha256) {
-      const d = r.caps ? Object.keys(sealed.caps).filter((k) => sealed.caps[k] !== r.caps[k]).map((k) => k + " " + sealed.caps[k] + " -> " + r.caps[k]) : [r.error];
+      const d = r.caps ? Object.keys(Object.assign({}, sealed.caps, r.caps)).filter((k) => canonical(sealed.caps[k]) !== canonical(r.caps[k])).map((k) => k + " " + sealed.caps[k] + " -> " + r.caps[k]) : [r.error];
       gate("policy changed since this run started (" + (d.join(", ") || "no cap changed") + "); keeping the sealed profile " + (sealed.profile || "default"));
     }
     p = sealed;
@@ -6627,8 +6640,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         if (p.criterion.test_files.indexOf(nf) >= 0 && wrote.indexOf(nf) < 0) wrote.push(nf);
       }
     await pathRecheck("format-tests:r" + n, "Tests");
-    const fmt = await formatFiles("infra:format-tests:r" + n, mainWt, { paths: wrote }, [], wrote, "Tests", lay.scratch);
-    hookFail = fmt.ran && fmt.hook_failed ? { files: fmt.files, output: fmt.hook_output } : null;
+    // 6.2.2 (2107, ADR-1237): only the policy's pre_freeze_hooks are judged before the freeze
+    const pfh = preFreezeHooks(state.policy);
+    const fmt = await formatFiles("infra:format-tests:r" + n, mainWt, pfh.length ? { paths: wrote, check_hooks: pfh } : { paths: wrote }, [], wrote, "Tests", lay.scratch);
+    if (pfh.length && !fmt.ran && fmt.note !== "no files to format")
+      halt("needs_human", "infra:format-tests:r" + n + ": the policy's pre_freeze_hooks (" + pfh.join(", ") + ") did not run (" + fmt.note + "); a test file is never frozen unchecked", "policy");
+    hookFail = pfh.length && fmt.ran && fmt.hook_failed ? { files: fmt.files, ids: pfh, output: fmt.hook_output } : null;
     const post = await hasher("hasher:post-writers:r" + n, mainWt, hashedFiles, "Tests", pre.fingerprint.tree);
     if (post.fingerprint.head !== pre.fingerprint.head)
       halt("needs_human", "writer committed: HEAD moved from " + pre.fingerprint.head + " to " + post.fingerprint.head + " in test round " + n + "; writers never commit", "ownership");
@@ -6672,16 +6689,16 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (!judgeFirst) {
         reserve((shortPath ? 1 : pending.length) + 5 + (last ? 0 : 1), "test round " + n);
         roundOut = await writerRound(n, pending, codeFindings);
-        // 6.2.2 (2107, ADR-1234): a hook failing on the writers' files (check-only hooks
-        // included) is a fix_tests round to the writers; the judge never sees it, no freeze
+        // 6.2.2 (2107, ADR-1237): a pre_freeze_hooks hook failing on the writers' files is a
+        // fix_tests round to the writers; the judge never sees it, no freeze
         if (hookFail) {
           const hf = hookFail;
-          const what = "a pre-commit hook fails on the test files " + hf.files.join(", ");
+          const what = "a pre-commit hook the policy lists in pre_freeze_hooks (" + hf.ids.join(", ") + ") fails on the test files " + hf.files.join(", ");
           if (i === maxTestRounds - 1)
             halt("needs_human", "infra:format-tests:r" + n + ": a pre-commit hook still fails on the test files after " + maxTestRounds + " test round(s); a test file is never frozen while a hook fails on it: " + hf.output, "cap");
           pending = pending.map((p) => ({
             criterion: p.criterion,
-            findings: [{ target: "tests", criterion: p.criterion.id, finding: what + " (run by the workflow before the test judge); fix your test files so every hook passes, keep the tests' meaning. Hook output: " + hf.output }],
+            findings: [{ target: "tests", criterion: p.criterion.id, finding: what + " (run by the workflow before the test judge); fix your test files so those hooks pass, keep the tests' meaning. Hook output: " + hf.output }],
           }));
           gate("infra:format-tests:r" + n + ": a pre-commit hook fails on the test files; fix_tests round to " + pending.map((p) => p.criterion.id).join(", "));
           continue;

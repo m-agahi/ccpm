@@ -51,6 +51,9 @@ host, slug = args[0].lower(), args[1].lower()
 owner = slug.split('/', 1)[0]
 DEFAULT = {'pr_ready': True, 'ci_watch': True, 'ci_watch_minutes': 60, 'stats': True, 'merge': 'never', 'update_branch': 'never', 'ci_trigger': False, 'review_post': 'none'}
 ENUMS = {'merge': ('never', 'auto'), 'update_branch': ('never', 'once'), 'review_post': ('none', 'own_pr')}
+# 6.2.2 (2107, ADR-1237): a repos override may list the hook ids the fleet runs
+# on the writers' test files before the freeze; no list, no hook (not a default cap)
+REPO_ONLY = ('pre_freeze_hooks',)
 path = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'fleet', 'policy.json')
 
 
@@ -84,6 +87,11 @@ def strs(v, at):
 def caps_of(o, at):
     c = {}
     for k, v in o.items():
+        if k == 'pre_freeze_hooks':
+            if not isinstance(v, list) or any(not isinstance(x, str) or not x or len(x) > 128 or x.startswith('-') or re.search(r'[\s\x00-\x1f\x7f]', x) for x in v):
+                raise Bad(at + '.pre_freeze_hooks must be a list of hook ids (non-empty strings, no whitespace, no leading -, at most 128 characters)')
+            c[k] = list(v)
+            continue
         if k not in DEFAULT:
             continue
         if k in ENUMS:
@@ -132,7 +140,7 @@ try:
             over = []
             for g, rc in repos.items():
                 ra = at + '.repos[' + json.dumps(g) + ']'
-                keys(rc, tuple(DEFAULT), ra)
+                keys(rc, tuple(DEFAULT) + REPO_ONLY, ra)
                 over.append((g, caps_of(rc, ra)))
             if hit is None and (hosts is None or host in hosts) and any(fnmatch.fnmatchcase(owner, o) for o in owners):
                 hit = (p['name'], caps, over)
