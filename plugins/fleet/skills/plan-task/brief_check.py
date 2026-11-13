@@ -16,7 +16,8 @@ does. The brief is data: this program never runs anything it names.
 
 This file lives under skills/plan-task/, never in scripts/ or roles/: the
 workflow's preflight refuses an unknown file there. The IaC and hook rules are
-copies of isIacPath and HOOK_PATH_RE in workflows/build-task-run.js; the
+copies of isIacPath and HOOK_PATH_RE in src/build-task-run.js (the readable
+original; workflows/build-task-run.js is its build output); the
 6.2.0 T2 test compares both on a fixed path list.
 """
 
@@ -42,7 +43,7 @@ HEADINGS = (
 )
 OUT_OF_PLAN = "### Out of plan"
 
-# --- copied from build-task-run.js (normPath, isIacPath, HOOK_PATH_RE) ---
+# --- copied from src/build-task-run.js (normPath, isIacPath, HOOK_PATH_RE) ---
 IAC_TF = "terra" + "form"
 IAC_EXT = re.compile(r"\.(tf|tofu|tf\.json|tofu\.json|tfvars|tfvars\.json|tofuvars|tofuvars\.json|hcl|hcl\.json|tfbackend)\Z")
 IAC_NAMES = ("." + IAC_TF + "rc", "." + IAC_TF + "-version", ".open" + "to" + "fu-version", "." + "to" + "fu-version", "atlan" + "tis.yaml", "atlan" + "tis.yml")

@@ -4,8 +4,9 @@
 // plugin loader registers every plugins/<p>/workflows/*.js, so the source lives
 // outside workflows/. scripts/build-workflow.mjs writes
 // workflows/build-task-run.js from it: the `export const meta` block verbatim,
-// then the body through esbuild --minify-whitespace (a pinned version; no
-// identifier or syntax minify). The dist is committed: the plugin installs from
+// then the body through a line stripper (indentation, empty and comment-only
+// lines cut); esbuild --minify-whitespace (a pinned version) is an equivalence
+// check of source and dist, not the build. The dist is committed: the plugin installs from
 // git. These tests fail when the dist is stale, and they fail (never skip) when
 // esbuild cannot run.
 

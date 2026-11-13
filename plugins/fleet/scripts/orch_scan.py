@@ -50,6 +50,10 @@ except Exception:
 # hook-manager file. Prints {orchestrator, iac_repo, apply_on_merge,
 # hook_surface_pr, reasons, error, args, program, digest}. Read only.
 import base64, hashlib, json, os, re, subprocess, sys
+def lift():
+    # 6.3.2 (2130): gh (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 args = sys.argv[1:]
 SLUG = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}$')
 if len(args) != 6 or not os.path.isabs(args[0]) or args[1] not in ('gh', 'gh-personal') or not SLUG.match(args[2]) or not re.match(r'^[1-9][0-9]{0,9}$', args[3]) or not re.match(r'^[0-9a-f]{40}$', args[4]) or not re.match(r'^[A-Za-z0-9._/-]{1,200}$', args[5]) or '..' in args[5]:
@@ -73,7 +77,7 @@ class Fail(Exception):
 
 
 def api(path):
-    r = subprocess.run([gh, 'api', path], capture_output=True, timeout=120)
+    r = subprocess.run([gh, 'api', path], capture_output=True, timeout=120, preexec_fn=lift)
     if r.returncode != 0:
         raise Fail('gh api ' + path + ': ' + r.stderr.decode('utf-8', 'replace').strip()[-300:])
     return json.loads(r.stdout.decode('utf-8'))
@@ -108,7 +112,7 @@ try:
             raise Fail('read ' + p + ': ' + str(e))
     for p in sorted(x.decode('utf-8', 'replace') for x in ls.stdout.split(b'\0') if x):
         scan_path(p, lambda p=p: local(p), '')
-    r = subprocess.run([gh, 'pr', 'view', pr, '-R', slug, '--json', 'statusCheckRollup,comments,files,headRefOid'], capture_output=True, timeout=120)
+    r = subprocess.run([gh, 'pr', 'view', pr, '-R', slug, '--json', 'statusCheckRollup,comments,files,headRefOid'], capture_output=True, timeout=120, preexec_fn=lift)
     if r.returncode != 0:
         raise Fail('gh pr view: ' + r.stderr.decode('utf-8', 'replace').strip()[-300:])
     v = json.loads(r.stdout.decode('utf-8'))

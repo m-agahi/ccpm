@@ -52,6 +52,10 @@ except Exception:
 # a timeout) and stderr (its first 200 characters, token-shaped text redacted). No token is read, passed or printed; the
 # commands run as they are. Read only.
 import hashlib, json, os, re, shutil, subprocess, sys, time
+def lift():
+    # 6.3.2 (2130): gh (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 args = sys.argv[1:]
 if not args:
     sys.exit('usage: gh_identity.py <repo|-> [<owner>/<name> ...]')
@@ -114,7 +118,8 @@ slugs = []
 for s in ([origin] if origin else []) + args[1:]:
     if s not in slugs:
         slugs.append(s)
-TRANSIENT = re.compile(rb'(?i)timed? ?out|connection (reset|refused)|error connecting|temporary failure|EOF|TLS handshake|HTTP 5[0-9][0-9]|could not resolve host')
+# 6.3.2 (2130): a Go runtime crash at startup (no answer at all) is transient too
+TRANSIENT = re.compile(rb'(?i)timed? ?out|connection (reset|refused)|error connecting|temporary failure|EOF|TLS handshake|HTTP 5[0-9][0-9]|could not resolve host|runtime: out of memory|runtime/cgo|pthread_create failed|fatal error: runtime')
 
 
 TOKEN = re.compile(r'(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|[A-Za-z0-9_-]{40,})')
@@ -133,7 +138,7 @@ def probe(cmd, slug):
         return {'cmd': cmd, 'installed': False, 'push': None}
     for attempt in (0, 1):
         try:
-            p = subprocess.run([cmd, 'api', 'repos/' + slug, '--jq', '.permissions.push'], capture_output=True, timeout=CALL_TIMEOUT, stdin=subprocess.DEVNULL)
+            p = subprocess.run([cmd, 'api', 'repos/' + slug, '--jq', '.permissions.push'], capture_output=True, timeout=CALL_TIMEOUT, stdin=subprocess.DEVNULL, preexec_fn=lift)
         except OSError:
             return {'cmd': cmd, 'installed': False, 'push': None}
         except subprocess.TimeoutExpired:

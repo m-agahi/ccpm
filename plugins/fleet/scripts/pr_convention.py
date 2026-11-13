@@ -43,7 +43,11 @@ except Exception:
 # Body: the repo's PR template, else the org's (<owner>/.github), and a
 # required pr-body workflow's checker literals. Prints {title, body, source,
 # unreadable, args, program, digest}. Read only: GET requests, no token read.
-import base64, hashlib, json, os, re, subprocess, sys
+import base64, hashlib, json, os, re, subprocess, sys, time
+def lift():
+    # 6.3.2 (2130): gh (a Go binary) is not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 UNRESERVED = re.compile(r'[A-Za-z0-9._~/-]')
 
 
@@ -75,18 +79,43 @@ def read_local(p):
         return ''
 
 
+TOKEN = re.compile(r'(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|[A-Za-z0-9_-]{40,})')
+# 6.3.2 (2130): gh's stderr of the last call with no HTTP status (first 200 characters, tokens redacted)
+LAST_ERR = {'text': ''}
+
+
+def http(code):
+    # 'HTTP <code>'; with no status, gh's stderr after it
+    return 'HTTP ' + str(code) + (': ' + LAST_ERR['text'] if code is None and LAST_ERR['text'] else '')
+
+
 def api(path):
+    # (status or None, parsed JSON body or None); a call that ran and gave no
+    # status is tried once more after 3 s
+    r = api1(path)
+    if r[0] is None and r[2]:
+        time.sleep(3)
+        r = api1(path)
+    LAST_ERR['text'] = TOKEN.sub('[redacted]', ' '.join(r[3].split()))[:200] if r[0] is None else ''
+    return r[:2]
+
+
+def api1(path):
+    # (status, body, ran, stderr)
     try:
-        p = subprocess.run([gh, 'api', '-i', path], capture_output=True, timeout=30, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
-        return None, None
+        p = subprocess.run([gh, 'api', '-i', path], capture_output=True, timeout=30, stdin=subprocess.DEVNULL, preexec_fn=lift)
+    except OSError as e:
+        return None, None, False, str(e)
+    except subprocess.TimeoutExpired:
+        return None, None, False, 'timed out after 30 s'
+    err = p.stderr.decode('utf-8', 'replace')
     raw = p.stdout.decode('utf-8', 'replace').replace('\r\n', '\n')
     m = re.match(r'^HTTP/[0-9.]+ ([0-9]{3})', raw)
     code, text = (int(m.group(1)), raw.partition('\n\n')[2]) if m else (200 if p.returncode == 0 else None, raw)
     try:
-        return code, json.loads(text) if text.strip() else None
+        return code, json.loads(text) if text.strip() else None, True, err
     except ValueError:
-        return code, None
+        return code, None, True, err
 
 
 def content(repo, path, ref):
@@ -138,7 +167,7 @@ if slug == '-' or gh == '-':
 else:
     code, rules = api('repos/' + slug + '/rules/branches/' + quote(branch))
     if code != 200 or not isinstance(rules, list):
-        unreadable.append('rules of ' + slug + ' branch ' + branch + ' not readable (HTTP ' + str(code) + ')')
+        unreadable.append('rules of ' + slug + ' branch ' + branch + ' not readable (' + http(code) + ')')
         rules = []
 for r in rules:
     if not isinstance(r, dict) or r.get('type') != 'workflows':
@@ -182,7 +211,7 @@ if not title and slug != '-' and gh != '-':
     code, pulls = api('repos/' + slug + '/pulls?state=closed&sort=updated&direction=desc&per_page=50')
     got = sorted((x for x in pulls if isinstance(x, dict) and x.get('merged_at') and isinstance(x.get('title'), str)), key=lambda x: x['merged_at'], reverse=True)[:20] if code == 200 and isinstance(pulls, list) else []
     if code != 200:
-        unreadable.append('merged PR titles of ' + slug + ' not readable (HTTP ' + str(code) + ')')
+        unreadable.append('merged PR titles of ' + slug + ' not readable (' + http(code) + ')')
     t = '(' + '|'.join(CC) + ')'
     sk = sum(1 for x in got if re.match(r'^' + t + r'\([a-z0-9-]+, ([A-Z][A-Z0-9]+-[0-9]+|NOJIRA)\): |^' + t + r'\(([A-Z][A-Z0-9]+-[0-9]+|NOJIRA)\): ', x['title']))
     cv = sum(1 for x in got if re.match(r'^' + t + r'(\([^)]+\))?!?: ', x['title']))

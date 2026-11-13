@@ -112,7 +112,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "6.3.1";
+const FLEET_VERSION = "6.3.2";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with
 const RELOAD_HINT =
@@ -1542,17 +1542,17 @@ const PROGRAM_SHA256 = {
   "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
   "callers": "4623272ec380872179ed0df68287bee2e66c4d88a1677c4a298cad642cdcb462",
   "changed_defs": "40ecf45fe37448244572d8f7fd64ad574837970047a58de7c1ac7a262f717e94",
-  "ci_watch": "d32f9341cf25c626370097dd2d91c5f4703d393139f5951405c6e40c63eb80b8",
+  "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
   "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
   "format_files": "183f424e72733a515b9c87dd4ff541f287bf897d6d37dec91b48269dd090f4e1",
-  "gh_identity": "44d62a8f8b6cd4f69c7b057d0180f584edf6b03f03988e35f048bdc1d7ce2d70",
+  "gh_identity": "82885435973242bc67bbfeca19ec512f83e5ca52e7342dbd4207cff33567c357",
   "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
   "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
   "hook_surface": "2432e6d881cfa37850c4268b26cc6591fdcccf9b74f818ab70886125f34769f0",
-  "orch_scan": "57f15f2a83ad7ab68dd275b588339eea1237e9ed8cba18278c27788fc91905b5",
+  "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
   "parked": "f17158a266ebcc64d502337eb7b6b3ff1ede5af227e231be77fbe5e3c1ab8014",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
   "plan_dsn": "f02908de588f71426a2995b86884be5e15127fd9fc48ead3710c0e71b481277b",
@@ -1561,9 +1561,9 @@ const PROGRAM_SHA256 = {
   "plan_ref": "494ceb934b89fa5c2962ef786ba93bee63bd09f776c82c50579fdf23f301c136",
   "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
   "policy": "1efd8ada37abf58151d14b11300fac1235c13b414ab0649fcc8e26b0e10d37b5",
-  "pr_body_block": "368ed0c33928769f6951a1e15b65362b438fc010b0ea26c6284fc668c5e6c733",
-  "pr_convention": "4763189023084bbad77a9eb5c2704692da5932d2dfa335654c5e4178f027c2b7",
-  "pr_state": "a17beb445d0fac95dff82b49bfc75f6396293a6f193bfcfe2f6d4ddee51856b9",
+  "pr_body_block": "0969891f59f2b11b033b99bb8e2b9f5d3fc1b0fad60ffbebbd5149f0cfae61be",
+  "pr_convention": "8e33c899cf1174e28b41e27e5b9c9e10a28e18d46da2a588df73edce1aa77a73",
+  "pr_state": "2882890a993396876229672961f66eba4290f1f98263b4a19c62c395856f3fd8",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
   "push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
   "push_probe": "c4381f9ce601e0729a0ab49edb33fe6c9e910e8738411e7ad4719f21ef639a5b",
@@ -1571,7 +1571,7 @@ const PROGRAM_SHA256 = {
   "remote_head": "04beeda731a3fa3ab79c1749333057426191c72b97c549f5fdf9e8f55a8549fc",
   "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
   "review_paths": "711143e444b4d9772c8023c22fbb93735239030d503dd58247050553d7fce29b",
-  "ruleset_surface": "6ba0d9c8e4d281d518cd2fbc3986ee9b090c7b4f45cec75eed060dc7744e9d9e",
+  "ruleset_surface": "b8fec064efbf7ec62125f71016cde95b4a5edcb0156094cd8050e79a8278f067",
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
   "session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
   "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
@@ -3755,8 +3755,22 @@ async function infra(label, prompt, phaseName, agentType, digest, args) {
   if (digest) opts.digest = digest;
   if (args) opts.args = args;
   const r = await dispatch(label, prompt, opts);
-  if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+  if (r.status !== "ok" && !programErrorRelay(r, digest, args)) halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+  if (r.status !== "ok") {
+    gate(label + ": the agent returned " + r.status + " for the program's own error; its error branch decides");
+    return Object.assign({}, r, { status: "ok" });
+  }
   return r;
+}
+// 6.3.2 (2130): programs whose callers stop on a non-null `error` at their own gate
+const ERROR_BRANCH_PROGRAMS = ["ruleset_surface", "hook_surface"];
+// A relay the agent marked failed only because the program's `error` was set:
+// the shipped program ran (its digest holds, so it printed and exited 0) on the
+// sent arguments. Its caller's error branch decides, not the generic halt.
+function programErrorRelay(r, digest, args) {
+  if (!r || r.status !== "failed" || ERROR_BRANCH_PROGRAMS.indexOf(digest) < 0 || progKeys(digest).indexOf("error") < 0) return false;
+  if (typeof r.error !== "string" || !r.error) return false;
+  return relayDigestOk(r, progKeys(digest), digest) && Array.isArray(args) && canonical(r.args) === canonical(args);
 }
 async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, files, opts) {
   const before = pre || (await hasher(opts && opts.preLabel ? opts.preLabel : "hasher:fp-pre:" + roundTag, worktree, files, phaseName));
@@ -4544,7 +4558,7 @@ function hookSurfacePrompt(inputs) {
     RUN_EXACT +
     progCmd("hook_surface", [inputs.worktree, inputs.rev, JSON.stringify(inputs.targets)]) +
     "\n" +
-    "It prints one JSON object " + printsKeys("hook_surface") + ". Copy every value unchanged, error null included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "It prints one JSON object " + printsKeys("hook_surface") + ". Copy every value unchanged, error null included (the script recomputes the digest). A non-null error with exit 0 is still status ok: copy it, the workflow decides. Non-zero exit -> failed with its stderr.\n" +
     "Return {status, reason, " + returnKeys("hook_surface") + "}."
   );
 }
@@ -4593,7 +4607,7 @@ function rulesetSurfacePrompt(inputs) {
     RUN_EXACT +
     progCmd("ruleset_surface", inputs.args) +
     "\n" +
-    "It prints one JSON object " + printsKeys("ruleset_surface") + ". Copy every value unchanged, error null included (the script recomputes the digest). Non-zero exit -> failed with its stderr.\n" +
+    "It prints one JSON object " + printsKeys("ruleset_surface") + ". Copy every value unchanged, error null included (the script recomputes the digest). A non-null error with exit 0 is still status ok: copy it, the workflow decides. Non-zero exit -> failed with its stderr.\n" +
     "Return {status, reason, " + returnKeys("ruleset_surface") + "}."
   );
 }

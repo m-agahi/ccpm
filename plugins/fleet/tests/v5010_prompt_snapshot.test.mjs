@@ -97,10 +97,11 @@ const SCENARIOS = {
 // 6.2.2 review (M2, L1-L3): the format_files pre-freeze keys (hook_failures, hook_head, hook_sha256, hook_timeout) in the schemas (the probe pin is unchanged)
 // 6.2.2 re-review (D-L1): format_files fix_timeout in the schema (the probe pin is unchanged)
 // 6.3.0 (ADR-1239): infra:policy:plan (new plan call) and unattended in the policy caps schema (the only changes: with both reverted every pin is 6.2.2's; probe unchanged)
+// 6.3.2 (2130): the ruleset-surface and hook-surface prompts say a non-null error with exit 0 is still status ok (the only change: with that sentence removed every pin is 6.3.1's; probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 87, sha256: "0507d4a770dfd30f2c1a6d326235722eda1e189a8e796018e252d1e1fff4b26b" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "10a2eedcfe6060f2e40a46dd47851b2d3997a1b3564362f22cd7ba7ac2cae5b6" },
-  "short path (one test writer)": { calls: 86, sha256: "d4177f6956e6fda8f249d3291d69295857a22ebdd175ac1a048f49729ec59ab9" },
+  "plan then build (confirm ask)": { calls: 87, sha256: "dc8cefc9b39335e0305646d8e5f9a907233c5ce665717a55a4788e7cc04d1210" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "7a48052f3c42515b6146c21704ef6ab6e4e024fc6f9dbc917ace3d30b87689ce" },
+  "short path (one test writer)": { calls: 86, sha256: "3ffac842c6e27bd2104ca7774a6b73622b973f9ebaf642b2ba10a04bef2680e6" },
   "probe": { calls: 2, sha256: "b6976644cdb9345851ac461a293688c2299952b462ba087a39958a03ae13b393" },
 };
 
