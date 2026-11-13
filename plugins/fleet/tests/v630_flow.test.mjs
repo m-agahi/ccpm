@@ -22,10 +22,9 @@ import {
 } from "./harness.mjs";
 
 const num = (name) => Number(new RegExp("\\nconst " + name + " = (\\d+);").exec(SOURCE)[1]);
-const BATCH_OCC = num("CALLER_BATCH_OCC");
 const SYMBOL_HITS = num("MAX_SYMBOL_HITS");
-// review M1: every symbol weighs its hit cap, whatever the plan maps
-const PER = BATCH_OCC / SYMBOL_HITS;
+// re-review: at most 30 symbols per dispatch, no planner weights; callers.py's relay-cap marker splits a batch
+const PER = num("CALLER_BATCH_SYMBOLS");
 
 // ---------------------------------------------------------------- A1
 
@@ -48,35 +47,39 @@ const script = (s, n, extra, sfx) => {
   for (const l of labelsOf(n, sfx)) s[l] = grep(extra);
 };
 
-test("6.3.0 A1 (review M1): a dispatch holds at most CALLER_BATCH_OCC / MAX_SYMBOL_HITS symbols (4), weighed at the hit cap; no symbol-count cap", () => {
-  assert.equal(PER, 4);
-  assert.ok(!/MAX_CHANGED_SYMBOLS|split the task|occWeight|CALLER_BATCH_SYMBOLS/.test(SOURCE));
+test("6.3.0 A1 (re-review): a dispatch holds at most 30 symbols, with no planner weights; no symbol-count cap", () => {
+  assert.equal(PER, 30);
+  assert.ok(!/MAX_CHANGED_SYMBOLS|split the task|occWeight|CALLER_BATCH_OCC/.test(SOURCE));
 });
 
-test("6.3.0 A1 (ADR-1238): 31 changed symbols mapped at one line each (under-mapped) are checked in 8 dispatches of at most 4", async () => {
+test("6.3.0 A1 (ADR-1238): 31 changed symbols are checked in 2 dispatches (30 + 1), however many lines each maps", async () => {
   const s = happy();
   const syms = Array.from({ length: 31 }, (_, i) => "f" + i);
-  s["role:scope-and-plan"].changed_symbols = syms.map(one);
-  script(s, 8);
+  const hits = { f0: Array.from({ length: 100 }, (_, j) => "src/f0.py:" + (j + 1)) };
+  s["role:scope-and-plan"].changed_symbols = syms.map((x) => (hits[x] ? { symbol: x, occurrences: hits[x].map((at) => ({ at, criterion: "AC1", dont_care: null })) } : one(x)));
+  script(s, 2, { hits });
   const out = await runOne(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  labelsOf(8).forEach((l, b) => assert.deepEqual(inputsOf(call(out, l).prompt).symbols, syms.slice(b * 4, b * 4 + 4), l));
-  assert.ok(!out.labels.includes("infra:callers:b9"));
-  assert.ok(out.logs.includes("infra:callers: 31 symbols in 8 caller-check dispatches (at most 4 symbols each)"), out.logs.join("\n"));
+  assert.deepEqual(inputsOf(call(out, "infra:callers").prompt).symbols, syms.slice(0, 30));
+  assert.deepEqual(inputsOf(call(out, "infra:callers:b2").prompt).symbols, ["f30"]);
+  assert.ok(!out.labels.includes("infra:callers:b3"));
+  assert.ok(out.logs.includes("infra:callers: 31 symbols in 2 caller-check dispatches (at most 30 symbols each)"), out.logs.join("\n"));
 });
 
-test("6.3.0 A1 (review M1): an output over the relay cap splits the batch in two; one symbol alone over it stops with its name", async () => {
+test("6.3.0 A1 (re-review): a batch of 30 over the relay cap splits in halves until each part fits; one symbol alone over it stops with its name", async () => {
   const s = happy();
-  const syms = ["a1", "a2", "a3", "a4"];
+  const syms = Array.from({ length: 30 }, (_, i) => "g" + i);
   s["role:scope-and-plan"].changed_symbols = syms.map(one);
-  script(s, 3, { over: 2 });
+  script(s, 7, { over: 8 });
   const out = await runOne(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  assert.deepEqual(inputsOf(call(out, "infra:callers:b2").prompt).symbols, ["a1", "a2"]);
-  assert.deepEqual(inputsOf(call(out, "infra:callers:b3").prompt).symbols, ["a3", "a4"]);
-  assert.ok(out.logs.includes("infra:callers: 4 symbols are over the relay cap; split in two"), out.logs.join("\n"));
+  const sizes = out.calls.filter((c) => /^infra:callers/.test(c.label)).map((c) => inputsOf(c.prompt).symbols.length);
+  assert.deepEqual(sizes, [30, 15, 7, 8, 15, 7, 8]);
+  const done = out.calls.filter((c) => /^infra:callers/.test(c.label)).map((c) => inputsOf(c.prompt).symbols).filter((x) => x.length <= 8).flat();
+  assert.deepEqual(done, syms);
+  assert.ok(out.logs.includes("infra:callers: 30 symbols are over the relay cap; split in two"), out.logs.join("\n"));
   // a single symbol over the cap
   const t = happy();
   t["role:scope-and-plan"].changed_symbols = ["big", "b2"].map(one);
@@ -91,13 +94,13 @@ test("6.3.0 A1: the batches merge: a later batch's auto dont_care and capped sym
   const s = happy();
   const syms = Array.from({ length: 31 }, (_, i) => "f" + i);
   s["role:scope-and-plan"].changed_symbols = syms.map(one);
-  script(s, 8, { hits: { f30: ["src/f30.py:1", "README.md:3"] }, auto: { f30: ["README.md:3"] } });
+  script(s, 2, { hits: { f30: ["src/f30.py:1", "README.md:3"] }, auto: { f30: ["README.md:3"] } });
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   assert.ok(out.logs.some((l) => /^callers: .*f30 1 occurrence\(s\) mapped; git grep -w agrees; 1 doc or lock hit\(s\) mapped/.test(l)), out.logs.join("\n"));
   const t = happy();
   t["role:scope-and-plan"].changed_symbols = syms.map(one);
-  for (const sfx of ["", ":audit-fix", ":audit-fix-2"]) script(t, 8, { capped: ["f30"], hits: { f30: [] } }, sfx);
+  for (const sfx of ["", ":audit-fix", ":audit-fix-2"]) script(t, 2, { capped: ["f30"], hits: { f30: [] } }, sfx);
   const o2 = await runOne(t, ARGS);
   assert.equal(o2.result.status, "needs_human");
   assert.match(o2.result.reason, /f30: more than 100 occurrences \(git grep -w\)/);
@@ -133,7 +136,7 @@ test("6.3.0 A1: callers.py per symbol does not depend on the batch: 31 symbols i
   }
 });
 
-test("6.3.0 A1 (ADR-1195 measure): a dispatch at the occurrence budget relays well under 64 KiB (code paths of 50 characters)", () => {
+test("6.3.0 A1 (ADR-1195 measure): 4 symbols x 100 hits relay about 24 KB; a full batch of 30 x 100 is over the cap and prints the marker", () => {
   const wt = scratchRepo("fleet-630-size-");
   try {
     const per = SYMBOL_HITS;
@@ -146,11 +149,14 @@ test("6.3.0 A1 (ADR-1195 measure): a dispatch at the occurrence budget relays we
     }
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "x");
-    const r = callersRun(wt, syms);
+    const r = callersRun(wt, syms.slice(0, 4));
     const occ = Object.values(r.out.occurrences).reduce((a, v) => a + v.length, 0);
-    assert.equal(occ, BATCH_OCC);
+    assert.equal(occ, 4 * per);
     const bytes = Buffer.byteLength(r.text);
     assert.ok(bytes < 32768, bytes + " bytes for " + occ + " occurrences");
+    const full = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms), String(per)], { encoding: "utf8" });
+    assert.notEqual(full.status, 0);
+    assert.match(full.stderr, /^FLEET_CALLERS_RELAY_CAP: .*\(\d+ bytes; symbols: sym_name_0_long_identifier/);
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }

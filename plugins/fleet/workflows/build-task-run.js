@@ -167,9 +167,9 @@ const TEST_CMD_BAD_WORDS = ["install", "add", "pip"];
 const SYMBOL_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const OCCURRENCE_RE = /^(.+):([1-9][0-9]*)$/;
 const MAX_SYMBOL_HITS = 100;
-// 6.3.0 (ADR-1238; review M1): the caller check runs in dispatches of at most CALLER_BATCH_OCC / MAX_SYMBOL_HITS
-// symbols (every symbol weighs its hit cap, whatever the plan maps); callers.py marks an output over the relay cap
-const CALLER_BATCH_OCC = 400;
+// 6.3.0 (ADR-1238; re-review): the caller check runs in dispatches of at most 30 symbols (no planner weights);
+// callers.py marks an output over the relay cap and the workflow splits that batch in halves
+const CALLER_BATCH_SYMBOLS = 30;
 const CALLERS_CAP_MARK = "FLEET_CALLERS_RELAY_CAP:";
 const CALLER_METHOD =
   "git grep -n -I -w -F --full-name -e <symbol>: the working tree content of the tracked files in the fleet worktree, the run's own plan doc excluded; every hit must be mapped and every mapped line must be a hit (checked by the script)";
@@ -4397,7 +4397,7 @@ function docOrLockFile(p) {
 }
 async function callerGrep(label, names, worktree, planPath, phaseName) {
   const all = { occurrences: {}, capped: [], auto_dont_care: {}, doctest_md: [] };
-  const per = CALLER_BATCH_OCC / MAX_SYMBOL_HITS;
+  const per = CALLER_BATCH_SYMBOLS;
   const queue = [];
   for (let i = 0; i < names.length; i += per) queue.push(names.slice(i, i + per));
   if (queue.length > 1) gate(label + ": " + names.length + " symbols in " + queue.length + " caller-check dispatches (at most " + per + " symbols each)");

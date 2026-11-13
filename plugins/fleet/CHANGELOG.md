@@ -70,16 +70,18 @@ ADR-1233; wiki fleet-auto-flow-review-2026-11-13). Every safety stop stays.
 
 ### Changed
 
-- ADR-1238 (supersedes ADR-1232): the caller check runs in dispatches of at most 4 symbols
-  (`CALLER_BATCH_OCC` 400 / `MAX_SYMBOL_HITS` 100: review M1 weighs every symbol at its hit cap,
-  whatever the plan maps; `infra:callers`, then `infra:callers:b2`, ...). `callers.py` refuses to
-  print an output over the 65536-byte relay cap and exits with the `FLEET_CALLERS_RELAY_CAP:` marker;
-  the workflow splits that batch in two and retries, and one symbol alone over the cap stops
-  (`needs_human`, `stop_gate: callers`, naming the symbol and the relay size). The plan has no
-  `changed_symbols` count cap and no "split the task" finding. The per-symbol hit cap (100) and
-  the build-time definition check stay. The update-merge grep (`infra:callers:u1`) runs in the
-  same batches. Measured: `callers.py` prints about 61 bytes per occurrence for 50-character
-  paths (about 24 KB at the 400-occurrence budget; a hit in a doc or lock file is listed twice).
+- ADR-1238 (supersedes ADR-1232): the caller check runs in dispatches of at most 30 symbols, with
+  no planner weights (`infra:callers`, then `infra:callers:b2`, ...). `callers.py` refuses to print
+  an output over the 65536-byte relay cap and exits with the `FLEET_CALLERS_RELAY_CAP:` marker; the
+  workflow splits that batch in halves and retries until each part fits, so every relay is bounded
+  whatever the plan maps. One symbol alone over the cap stops (`needs_human`, `stop_gate: callers`,
+  naming the symbol and the relay size). (Re-review: a 4-symbol batch, tried first, cost up to 8
+  times the agents and could stop a run at `cap` that 6.2.2 finished; the marker and the halving
+  make the relay size strict without it.) The plan has no `changed_symbols` count cap and no "split
+  the task" finding. The per-symbol hit cap (100) and the build-time definition check stay. The
+  update-merge grep (`infra:callers:u1`) runs in the same batches. Measured: `callers.py` prints
+  about 61 bytes per occurrence for 50-character paths (4 symbols x 100 hits: about 24 KB; 30 x 100:
+  about 182 KB, over the cap, so such a batch splits).
   Known (L4, not changed): there is no ceiling on the number of changed symbols; `MAX_AGENTS`
   bounds the dispatches.
 - A symbol a re-plan round drops is a re-plan finding (`changed_symbols dropped a symbol of an
