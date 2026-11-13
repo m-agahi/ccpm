@@ -192,7 +192,8 @@ function wrongFile(s, role) {
 test("5.0.0 R1 (was preflight missing role): a missing role file stops in preflight naming it", async () => {
   const out = await run(offPin(happy(), "fleet-coder", null), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-coder\.md is missing/);
+  // 6.2.2 re-review D-L2: the probe counted the lines it hashed: the file is absent, no retry
+  assert.match(out.result.reason, /roles\/fleet-coder\.md is absent from the installed plugin/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -204,7 +205,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 6\.2\.1 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 6\.2\.2 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -1442,7 +1443,7 @@ test("5.0.0 R1 (was S-8 runner version mismatch): a role runner that read anothe
 test("5.0.0 R1 (was S-8 no version for a role): preflight with no sha256sum line for a role file stops", async () => {
   const out = await run(offPin(happy(), "plan-audit", null), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /plan-audit\.md is missing/);
+  assert.match(out.result.reason, /roles\/plan-audit\.md is absent from the installed plugin/);
 });
 
 test("S-5: gates not stated in the PR body -> needs_human with the PR url", async () => {
@@ -5615,6 +5616,8 @@ const ARRAY_SITES = {
   "r.changed @ expandKeys": "infra:changed",
   "opts.args @ digestRetry": "parsed: the args the step sent (a script-built list)",
   "r.frozen_changed @ formatFiles": "infra:frozen_changed",
+  // 6.2.2 (2107)
+  "r.hook_failures @ formatFiles": "infra:hook_failures",
   "rd.results @ writeBack": "infra:results",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   // 5.0.3 (ledger 2010)
@@ -6216,7 +6219,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 6\.2\.1; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 6\.2\.2; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6917,7 +6920,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.2\.1\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 6\.2\.1 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.2\.2\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 6\.2\.2 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -7675,7 +7678,8 @@ test("3.0.0 fixer program: runs pre-commit until stable, reports every changed p
     assert.deepEqual(o.changed, ["a.py"]);
     assert.equal(readFileSync(join(home, "log"), "utf8").trim().split("\n")[0], "a.py", "the frozen test is never passed");
     const d = { program: o.program };
-    for (const k of ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map"]) d[k] = o[k];
+    // 6.2.2 (2107): the pre-freeze hook keys too
+    for (const k of ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "fix_timeout", "unknown_hooks"]) d[k] = o[k];
     assert.equal(o.digest, sha256(canon(d)));
     assert.deepEqual(o.frozen_changed, []);
     // a hook that touches another path: reported, never settles, and never copied back
@@ -8619,7 +8623,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 6\.2\.1/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 6\.2\.2/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

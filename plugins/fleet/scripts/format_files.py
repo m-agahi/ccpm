@@ -101,7 +101,11 @@ def names(b):
 PURGED = []
 PURGED_CAP = 50
 def done(**k):
-    out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': [], 'purged': len(PURGED), 'purged_paths': sorted(PURGED)[:PURGED_CAP]}
+    # 6.2.2 (2107, ADR-1237; review M2, L1, L2, L3): the listed pre-freeze hooks' result:
+    # hook_failures [[file, id]], a short printable head and the sha256 of their output
+    # (no free text to copy), hook_timeout [id], unknown_hooks ['id: why']
+    out = {'ran': False, 'note': '', 'runs': 0, 'stable': True, 'files': [], 'changed': [], 'refused': [], 'purged': len(PURGED), 'purged_paths': sorted(PURGED)[:PURGED_CAP],
+           'hook_failed': False, 'hook_failures': [], 'hook_head': '', 'hook_sha256': '', 'hook_timeout': [], 'fix_timeout': False, 'unknown_hooks': []}
     out.update(k)
     # 5.0.7: the changed paths that are frozen (the workflow stops on any)
     out['frozen_changed'] = sorted(set(out['changed']) & frozen)
@@ -110,6 +114,24 @@ def done(**k):
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
     print(json.dumps(out, sort_keys=True, ensure_ascii=False))
     sys.exit(0)
+# 6.2.2 (2107, ADR-1237): select.check_hooks, the policy's pre_freeze_hooks: after the
+# fixer runs, each listed hook runs once more alone on the files (`pre-commit run <id>
+# --files`); a non-zero exit is a failure. No list: no check, as in 6.2.1.
+CHECK = sel.get('check_hooks') or []
+if not isinstance(CHECK, list) or any(not isinstance(x, str) or not x or x.startswith('-') for x in CHECK):
+    sys.exit('select.check_hooks must be a list of hook ids')
+HOOK_IDS = {}
+# [(file, id)] of the listed hooks that failed (file '': the whole tree), their outputs,
+# [id] that timed out, ['id: why'] not runnable
+FAILED, OUTPUTS, TIMED_OUT, NOT_RUN = [], [], [], []
+# re-review D-L1: the fixers keep their 5.x budget (3 runs of at most tmo s each); the
+# listed checks get CHECK_BUDGET s of their own, and never run past STEP_CEILING s from
+# the start of this program (under the agent's 600 s Bash call)
+CHECK_BUDGET = 240
+STEP_CEILING = 570
+import time
+STARTED = time.monotonic()
+FIX_TIMEOUT = [False]
 before = snapshot(wt)
 if sel.get('dirty') is True:
     cand = names(git(wt, 'diff-tree', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', before).stdout)
@@ -238,6 +260,8 @@ LOADER = (
     "n = [0]\n"
     "def grow(k):\n    n[0] += k\n    if n[0] > 1048576:\n        sys.exit(4)\n"
     "def s(h, k):\n    v = h.get(k)\n    if v is None:\n        return None\n    if not isinstance(v, str):\n        sys.exit(6)\n    grow(len(v))\n    return v\n"
+    # 6.2.2 review L1: each hook's stages, and the config's default_stages
+    "def strs(v):\n    if v is not None and not (isinstance(v, list) and all(isinstance(x, str) for x in v)):\n        sys.exit(8)\n    for x in v or []:\n        grow(len(x))\n    return v\n"
     "out = []\n"
     "for r in (d.get('repos') if isinstance(d, dict) else None) or []:\n"
     "    for h in (r.get('hooks') if isinstance(r, dict) else None) or []:\n"
@@ -246,10 +270,10 @@ LOADER = (
     "            if a is not None and not (isinstance(a, list) and all(isinstance(x, str) for x in a)):\n"
     "                sys.exit(7)\n"
     "            for x in a or []:\n                grow(len(x))\n"
-    "            out.append({'entry': s(h, 'entry'), 'args': a or [], 'language': s(h, 'language')})\n"
-    "print(json.dumps(out))\n"
+    "            out.append({'id': s(h, 'id'), 'entry': s(h, 'entry'), 'args': a or [], 'language': s(h, 'language'), 'stages': strs(h.get('stages'))})\n"
+    "print(json.dumps({'hooks': out, 'default_stages': strs(d.get('default_stages')) if isinstance(d, dict) else None}))\n"
 )
-LOADER_EXITS = {4: 'the loader output over 1 MiB', 5: 'the config is over 256 KiB', 6: 'a hook entry or language is not a string', 7: 'a hook args is not a list of strings'}
+LOADER_EXITS = {4: 'the loader output over 1 MiB', 5: 'the config is over 256 KiB', 6: 'a hook entry or language is not a string', 7: 'a hook args is not a list of strings', 8: 'a stages or default_stages is not a list of strings'}
 SHELLS = ('sh', 'bash', 'dash', 'zsh', 'ksh')
 NIX_SITE = re.compile(r"'(/nix/store/[^'\s]+/site-packages)'")
 def interpreters(path, depth=0):
@@ -321,8 +345,12 @@ def hook_values():
         except ValueError:
             continue
         vals = []
-        for h in hooks if isinstance(hooks, list) else []:
+        ds = hooks.get('default_stages') if isinstance(hooks, dict) else None
+        for h in (hooks.get('hooks') if isinstance(hooks, dict) else None) or []:
             if isinstance(h, dict):
+                if isinstance(h.get('id'), str):
+                    # 6.2.2 review L1: the stages the hook runs at (its own, else default_stages; None: all)
+                    HOOK_IDS.setdefault(h['id'], []).append(h.get('stages') if h.get('stages') is not None else ds)
                 if isinstance(h.get('entry'), str):
                     vals.append(h['entry'])
                 for x in h.get('args') or []:
@@ -334,6 +362,19 @@ if head_cfg.returncode == 0 and shutil.which('pre-commit') is not None:
     vals, why = hook_values()
     if why:
         done(note='hook surface unknown: ' + why + '; no hook was run', refused=['.pre-commit-config.yaml'])
+# 6.2.2 (2107, ADR-1237): every listed id must be a hook id of the config at HEAD
+# and run at the pre-commit stage (`commit` is its legacy name)
+PRE_COMMIT_STAGES = ('pre-commit', 'commit')
+def why_not(i):
+    if i not in HOOK_IDS:
+        return 'not in .pre-commit-config.yaml'
+    if any(st is None or any(x in PRE_COMMIT_STAGES for x in st) for st in HOOK_IDS[i]):
+        return None
+    return 'its stages (' + ', '.join(sorted(set(x for st in HOOK_IDS[i] for x in st))) + ') exclude pre-commit'
+if CHECK and shutil.which('pre-commit') is not None:
+    unknown = [i + ': ' + why_not(i) for i in CHECK if why_not(i)]
+    if unknown:
+        done(note='pre-freeze hook id(s) cannot run: ' + '; '.join(unknown) + '; no hook was run', unknown_hooks=unknown)
 for v in vals:
     for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', v):
         q = os.path.normpath(tok)
@@ -413,6 +454,8 @@ try:
         try:
             subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=dict(env, PATH=clean_path([wt, scratch_root])), preexec_fn=lift)
         except subprocess.TimeoutExpired:
+            # re-review D-L1: the fixer phase ran out of time (reported as such)
+            FIX_TIMEOUT[0] = True
             prev = delta()
             break
         now = delta()
@@ -420,6 +463,59 @@ try:
             stable = True
             break
         prev = now
+    # 6.2.2 (2107, ADR-1237; re-review D-M1): each listed hook runs once on all the settled
+    # files. Only when it fails is each file re-run alone, in a scratch checkout of HEAD plus
+    # that one file, so a whole-tree hook (pass_filenames: false, always_run) blames only the
+    # files that fail alone; none failing alone is a whole-tree failure (file ''). A timeout
+    # (a run's own, or the check budget) is reported as one, never as a failure.
+    NO_STAGE = re.compile(rb'No hook with id `[^`]*` in stage')
+    check_end = min(time.monotonic() + CHECK_BUDGET, STARTED + STEP_CEILING)
+    cenv = dict(env, PATH=clean_path([wt, scratch_root]), PRE_COMMIT_COLOR='never')
+    def check(hid, cwd, paths):
+        # (returncode, output), or None on a timeout
+        rest = check_end - time.monotonic()
+        if rest < 1:
+            return None
+        try:
+            pr = subprocess.run(['pre-commit', 'run', hid, '--files'] + paths, cwd=cwd, capture_output=True, timeout=min(tmo, rest), env=cenv, preexec_fn=lift)
+        except subprocess.TimeoutExpired:
+            return None
+        return pr.returncode, pr.stdout + pr.stderr
+    def isolated(hid, f):
+        iso = tempfile.mkdtemp(prefix='fmt-iso-', dir=scratch_root)
+        os.rmdir(iso)
+        git(wt, '-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', iso, 'HEAD')
+        try:
+            dst = os.path.join(iso, f)
+            if not os.path.realpath(dst).startswith(os.path.realpath(iso) + os.sep):
+                return 1, b''
+            os.makedirs(os.path.dirname(dst) or iso, exist_ok=True)
+            shutil.copy2(os.path.join(scratch, f), dst)
+            return check(hid, iso, [f])
+        finally:
+            git(wt, 'worktree', 'remove', '--force', iso, check=False)
+            shutil.rmtree(iso, ignore_errors=True)
+    for hid in CHECK if stable else []:
+        res = check(hid, scratch, files)
+        if res is None:
+            TIMED_OUT.append(hid)
+            continue
+        if res[0] == 0:
+            continue
+        if NO_STAGE.search(res[1]):
+            NOT_RUN.append(hid + ': pre-commit has no such hook at the pre-commit stage')
+            continue
+        OUTPUTS.append(b'[' + hid.encode() + b'] ' + res[1])
+        bad = []
+        for f in files:
+            one = isolated(hid, f)
+            if one is None:
+                TIMED_OUT.append(hid)
+                break
+            if one[0] != 0:
+                bad.append(f)
+        else:
+            FAILED.extend([(f, hid) for f in bad] if bad else [('', hid)])
     changed = sorted(prev)
     for f in changed:
         if f in files:
@@ -434,4 +530,16 @@ finally:
     git(wt, 'worktree', 'prune', check=False)
 if refused:
     done(note='a selected path resolves outside the checkout', files=files, refused=sorted(set(refused)))
-done(ran=True, note='ran pre-commit run --files in a scratch checkout of HEAD', runs=runs, stable=stable, files=files, changed=changed)
+# 6.2.2 (2107, ADR-1237; review M2): the failing hooks' output is relayed as its sha256 and its
+# first HOOK_HEAD_CAP characters as printable ASCII; the writers re-run the hook for the rest
+HOOK_HEAD_CAP = 300
+def head_text(b):
+    t = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', b.decode('utf-8', 'replace'))
+    t = ''.join(c if c == '\n' or ' ' <= c <= '~' else '?' for c in t.replace('\r\n', '\n').replace('\t', ' ')).strip()
+    return t[:HOOK_HEAD_CAP]
+# the output of each failing hook's run on all the files
+allout = b'\n'.join(OUTPUTS) if FAILED else b''
+done(ran=not NOT_RUN, note='pre-freeze hook id(s) cannot run: ' + '; '.join(NOT_RUN) if NOT_RUN else 'ran pre-commit run --files in a scratch checkout of HEAD',
+     runs=runs, stable=stable, files=files, changed=changed,
+     hook_failed=bool(FAILED), hook_failures=[[f, h] for f, h in FAILED], hook_head=head_text(allout), hook_sha256=hashlib.sha256(allout).hexdigest() if FAILED else '',
+     hook_timeout=sorted(set(TIMED_OUT)), fix_timeout=FIX_TIMEOUT[0], unknown_hooks=NOT_RUN)

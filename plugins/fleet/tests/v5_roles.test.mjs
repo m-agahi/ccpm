@@ -22,7 +22,7 @@ import { SOURCE, ARGS, happy, run, runOne, spawnSync, inputsOf, ROLE_NAMES, ROLE
 async function realProbe(mutate) {
   const home = mkdtempSync(join(tmpdir(), "fleet-roles-probe-"));
   try {
-    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.2.1");
+    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.2.2");
     mkdirSync(join(ver, "scripts"), { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(ver, "scripts", n + ".py"));
     cpSync(ROLES_SRC, join(ver, "roles"), { recursive: true });
@@ -199,7 +199,8 @@ test("5.0.0 R1: preflight pins the roles dir: a hash mismatch, an extra .md, a m
   const cases = [
     [{ roleSums: { "pr-review.md": "1".repeat(64) } }, /pr-review\.md hashes 1{64}/],
     [{ roleSums: { "x.md": "1".repeat(64) } }, /x\.md is not a shipped role file/],
-    [{ roleSums: { "pr-review.md": undefined } }, /pr-review\.md is missing/],
+    // 6.2.2 re-review D-L2: absent on disk, no retry
+    [{ roleSums: { "pr-review.md": undefined } }, /roles\/pr-review\.md is absent from the installed plugin/],
     [{ hits: [{ hit: SCRIPTS_DIR, roles_symlink: "yes" }] }, /roles dir .* is a symlink/],
     [{ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }, /roles dir .* resolves to ""/],
   ];
@@ -210,7 +211,7 @@ test("5.0.0 R1: preflight pins the roles dir: a hash mismatch, an extra .md, a m
     assert.equal(out.result.status, "needs_human", JSON.stringify(over));
     assert.equal(out.result.stop_gate, "contract");
     assert.match(out.result.reason, re);
-    assert.deepEqual(out.labels, ["preflight"]);
+    assert.deepEqual(out.labels, /no line for/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
   }
 });
 
@@ -242,7 +243,7 @@ test("5.0.0 R1: plan mode seals history.preflight {fleet_version, role_sha256}, 
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const p = JSON.parse(s.__store[out.result.plan_ref.plan_commit]).history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "6.2.1");
+  assert.equal(p.fleet_version, "6.2.2");
   assert.deepEqual(p.role_sha256, PIN);
 });
 
@@ -293,12 +294,12 @@ test("5.0.0 R1 real execution: the probe, run by bash over a real plugin cache, 
     [(d) => writeFileSync(join(d, "plan-audit.md"), ROLE_TEXT["plan-audit"] + "x"), /plan-audit\.md hashes [0-9a-f]{64}, not /],
     [(d) => writeFileSync(join(d, "extra.md"), "x"), /extra\.md is not a shipped role file/],
     [(d) => writeFileSync(join(d, ".hidden"), "x"), /\.hidden is not a shipped role file/],
-    [(d) => rmSync(join(d, "pr-review.md")), /pr-review\.md is missing/],
+    [(d) => rmSync(join(d, "pr-review.md")), /roles\/pr-review\.md is absent from the installed plugin/],
     [(d) => mkdirSync(join(d, "sub")), /not regular files: sub/],
     // 5.0.0 R3: the _shared dir: a changed, extra, missing or nested entry, or a symlinked dir
     [(d) => writeFileSync(join(d, "_shared", "test-cmd-allowlist.md"), "x"), /_shared\/test-cmd-allowlist\.md hashes [0-9a-f]{64}, not /],
     [(d) => writeFileSync(join(d, "_shared", "extra.md"), "x"), /_shared\/extra\.md is not a shipped role file/],
-    [(d) => rmSync(join(d, "_shared", "test-cmd-allowlist.md")), /_shared\/test-cmd-allowlist\.md is missing/],
+    [(d) => rmSync(join(d, "_shared", "test-cmd-allowlist.md")), /roles\/_shared\/test-cmd-allowlist\.md is absent from the installed plugin/],
     [(d) => mkdirSync(join(d, "_shared", "deeper")), /not regular files: _shared\/deeper/],
     [
       (d) => {
@@ -322,7 +323,7 @@ test("5.0.0 R1 real execution: the probe, run by bash over a real plugin cache, 
     assert.equal(out.result.status, "needs_human", String(re));
     assert.equal(out.result.stop_gate, "contract");
     assert.match(out.result.reason, re);
-    assert.deepEqual(out.labels, ["preflight"]);
+    assert.deepEqual(out.labels, /no line for/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
   }
 });
 

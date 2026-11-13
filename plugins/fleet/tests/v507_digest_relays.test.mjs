@@ -427,19 +427,26 @@ test("5.0.7 2020: two digest misses fail as in 5.0.6; any other contract failure
     assert.equal(out.result.status, "failed", JSON.stringify(r));
     assert.ok(!out.labels.some((l) => l.endsWith(":digest-retry")), JSON.stringify(r));
   }
-  // a write step is never retried: format_files is not on the read-only list
+  // 6.2.2 review M2: format_files is the one write step with the retry: a second run finds the
+  // files settled (the fixers changed them already) and re-runs only the read-only checks.
+  // Two misses still fail.
   s = happy();
   s["infra:format-code:r1"] = { status: "ok", reason: "x", ran: true, note: "n", runs: 1, stable: true, files: [], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [], digest: BAD };
   out = await run(s, ARGS);
   assert.equal(out.result.status, "failed");
-  assert.ok(!out.labels.some((l) => l.endsWith(":digest-retry")));
+  assert.deepEqual(out.labels.filter((l) => l.endsWith(":digest-retry")), ["infra:format-code:r1:digest-retry"]);
 });
 
 test("5.0.7 2020: the read-only program steps carry the retry; no write step does", () => {
   const src = readFileSync(join(SCRIPTS_SRC, "..", "workflows", "build-task-run.js"), "utf8");
-  const ids = [...src.matchAll(/JUDGE_AGENT,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]).concat([...src.matchAll(/digest: (?:baseTree \? "hasher:base" : )?"([a-z_]+)"/g)].map((m) => m[1]));
+  const ro = [...src.matchAll(/JUDGE_AGENT,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]).concat([...src.matchAll(/digest: (?:baseTree \? "hasher:base" : )?"([a-z_]+)"/g)].map((m) => m[1]));
+  // 6.2.2 re-review D-N1: the default-agent (write) form infra(..., undefined, "<id>") too
+  const writes = [...src.matchAll(/,\s*undefined,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]);
   const RO = ["read_state", "fleet_scan", "hook_surface", "tf_gate", "remote_head", "branch_scan", "verify_since", "review_paths", "callers", "precommit_ids", "script_check", "hasher", "hash_diff", "gh_identity", "ruleset_surface", "policy", "pr_convention", "orch_scan", "ci_watch"];
-  assert.deepEqual([...new Set(ids)].sort(), RO.slice().sort());
+  // the write steps allowed the retry: format_files only (6.2.2 review M2: a second run finds the files settled)
+  const WRITE_RETRY = ["format_files"];
+  assert.deepEqual([...new Set(ro)].sort(), RO.slice().sort());
+  assert.deepEqual([...new Set(writes)].sort(), WRITE_RETRY);
 });
 
 // ---------------------------------------------------------------- the stub is the program

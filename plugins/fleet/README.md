@@ -234,8 +234,37 @@ writes) now runs `pre-commit run --files <paths>` in the fleet worktree until a 
 nothing, at most 3 runs: on the round's test files before the ownership hash, the test judge and
 the freeze, and on every path the worktree changes against HEAD, frozen files left out, before the
 purge, the post-coder hash and the code judge. Judges and hashes then see the formatted bytes and
-the commit-time hooks have nothing to rewrite. Exit codes are ignored (a check hook that fails,
-such as a full-suite hook on RED tests, stays the commit step's business); only bytes count. The
+the commit-time hooks have nothing to rewrite. Exit codes of these runs are ignored (a check hook
+that fails, such as a full-suite hook on RED tests, stays the commit step's business); only bytes
+count.
+
+Pre-freeze hooks (6.2.2, ledger 2107, ADR-1237): a repo can list hook ids in its policy
+`repos` override, key `pre_freeze_hooks` (see the policy file section). With no list, no hook is
+judged before the freeze, as in 6.2.1. With a list, `infra:format-tests:r<n>` runs each listed
+hook once more, alone, on all of the round's test files after the fixer runs settle
+(`pre-commit run <id> --files <paths>` in the same scratch checkout). A non-zero exit is a
+failure. Only then is each file re-run alone, in a scratch checkout of HEAD plus that one file,
+so a hook that checks the whole tree (`pass_filenames: false`, `always_run`) blames only the files
+that fail alone; when no file fails alone, the failure needs the files together and is a
+whole-tree failure (file `""`). The program reports `hook_failures` (`[file, id]` pairs), the first
+300 characters of the failing output as printable ASCII (`hook_head`) and the sha256 of the whole
+output (`hook_sha256`), all in its digest; the step carries the one digest retry (a second run
+finds the files settled). A failure skips the test judge and sends a fix_tests round to the
+writers that own the failing files, each with only its own failures, the command to reproduce
+them and the rule to edit only its own test files; a whole-tree failure goes to every writer of
+the round. The round counts against the test rounds. A hook that still fails
+in the last round stops with `needs_human` (`stop_gate: cap`). The run never freezes while a
+listed hook fails on a test file: the coder may not edit a frozen file, and the commit hook would
+reject it. A listed id that the config at HEAD does not have, or whose `stages` (or the config's
+`default_stages`) exclude the pre-commit stage, stops with `needs_human` naming it and why
+(`stop_gate: policy`); so do listed hooks that cannot run (no `pre-commit`). Time: the fixer runs
+keep their budget (at most 3 runs of at most 180 s each); the listed checks get their own 240 s,
+and nothing runs past 570 s from the program's start (under the agent's 600 s Bash call). A phase
+that runs out of time stops with `needs_human` (`stop_gate: hooks`) and a reason that names it
+("the fixer hook runs ran out of time" or "the pre_freeze_hooks check phase ran out of time");
+a check that timed out is never sent to the writers. Every hook still runs at the commit step, unchanged. List only hooks that pass on
+RED tests, such as a formatter check (`cargo-fmt`); a compile or test-suite hook fails until the
+code exists. The
 program reports every path that differs between the worktree tree before the first run and after
 the last, whatever hook changed it, with a digest. The run stops with `needs_human` when a hook
 changed a frozen file (`stop_gate: hash`), a path outside the files it was given (`scope`), or
@@ -658,6 +687,18 @@ stop the build (`stop_gate: "policy"`); a bad file never falls back to the defau
   `never` (`never` | `once`), `ci_trigger` false, `review_post` `none` (`none` | `own_pr`;
   reserved: nothing reads it yet).
   A profile key left out keeps the default.
+- `pre_freeze_hooks` (6.2.2, ADR-1237): a `repos` override only, never a profile key. A list of
+  hook ids from the repo's `.pre-commit-config.yaml` (non-empty strings, no whitespace, no
+  leading `-`); anything else makes the file invalid. The listed hooks run on the writers' test
+  files before the test judge and the freeze (see "Pre-freeze hooks"). No list: none run. Example,
+  inside a profile:
+
+  ```json
+  "repos": {
+    "yadgarhq/iam-db": { "pre_freeze_hooks": ["cargo-fmt"] }
+  }
+  ```
+
 - Script rule, whatever the file says: an owner in `WORK_OWNERS` (`quinyx`, `concrete-media`, on
   any host or ssh alias) gets `merge` and `update_branch` `never`.
 - The run-state seals `policy: {profile, policy_sha256, caps}`; the result carries it too. A
@@ -776,10 +817,14 @@ the intent result and, at the end, the write-back result. The milestones, in ord
 | `written_back` | write-back          | the stats block, ready and CI watch  |
 | `shipped`      | the PR tail (6.0.0) | nothing: returns the recorded result |
 
-Every ref under `refs/fleet/` (name and target) is in the frozen git map, at freeze and around
-every writer, coder and judge step. A role that creates, moves or deletes one is a violation ("run-state ref
-touched by role"). Only the workflow's own state write moves it; the snapshot follows that write,
-and the resume digest leaves the ref out.
+Every ref under `refs/fleet/` (name and target) is in the hasher's git map, at freeze and around
+every writer, coder and judge step. The workflow keeps only the run's own refs:
+`refs/fleet/<task id>/*` and `refs/fleet/<task id>-<slug>/*` (6.2.2, ledger 2106, ADR-1235). The
+git dir is shared across worktrees, so another fleet run's refs (another task id) can move during
+this run; they are dropped and never blamed on this run's roles. `refs/replace/*` still stops
+every hasher read. A role that creates, moves or deletes one of the run's own refs is a violation
+("run-state ref touched by role"). Only the workflow's own state write moves it; the snapshot
+follows that write, and the resume digest leaves the ref out.
 
 Right after verify, build mode reads the run-state (`infra:read-state`). It resumes only when the
 state's `plan_commit`, `ref_sha256` and `seal` match the plan ref, its target and HEAD equal
@@ -900,6 +945,16 @@ any other entry. Nothing is cached; every run (plan, build, probe) checks the fi
    exactly the shared files (no extra file, no other subdirectory, no symlink). The sha256sum
    lines of the regular files must equal `ROLE_SHA256` and `SHARED_SHA256`. Any other value stops
    the run (`stop_gate: contract`).
+   The probe prints `hash_lines=<n>`, its own count of sha256sum lines, before them (6.2.2,
+   ledger 2104). The workflow compares the sha256sum lines with its own tables (every shipped
+   program, role file and shared file), never with the relayed count alone. No sha256sum line,
+   fewer lines than the tables expect, no single `hash_lines=` line, or a count that differs from
+   the lines relayed is a relay drop: one retry (`preflight:relay-retry`, sonnet), then a stop
+   that says "preflight agent returned no hash lines" (no reinstall text) or "preflight agent
+   relayed <k> of <n> expected hash lines", which names the files with no line and adds the
+   reinstall hint for files absent on disk. One `hash_lines=` line that equals the lines relayed,
+   short of the tables, means the probe hashed what is on disk: no retry, and the stop says
+   "<file> is absent from the installed plugin" with the install text.
 2. Each role's tier comes from `ROLE_DISPATCH`.
 3. Each role prompt is a short wrapper with no role text. The role agent first runs
    `sha256sum -- <roles dir>/<role>.md` in Bash, then reads the whole file with the Read tool

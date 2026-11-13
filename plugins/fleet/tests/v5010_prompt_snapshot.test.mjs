@@ -93,11 +93,14 @@ const SCENARIOS = {
 // 6.1.0 delta review: treeCmd, the re-plan reset branch/update-ref and the code-judge role's scratch read-tree run git with hooks off (the only changes: checked with the three reverted)
 // 6.2.0 (2058): the intake prompt's body_slug page read and body_slug in the source schema (the only changes: checked with both reverted)
 // 6.2.0 review (M1, L2): body_slug in the intake return shape, the MUST-carry rule and the exact wiki_read call format (the only changes: checked with both prompt edits reverted)
+// 6.2.2 (2104, 2107): the preflight probe prints hash_lines= before its hash lines (probe: the only change, checked with it reverted); format_files hook_failed, hook_output and unknown_hooks, and the policy caps pre_freeze_hooks, in the schemas (ADR-1237)
+// 6.2.2 review (M2, L1-L3): the format_files pre-freeze keys (hook_failures, hook_head, hook_sha256, hook_timeout) in the schemas (the probe pin is unchanged)
+// 6.2.2 re-review (D-L1): format_files fix_timeout in the schema (the probe pin is unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 86, sha256: "20c1ee91b73c255b0807bea2b8fec9d76bb0a287de0468301407f889a948ce10" },
-  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "ec2da6b9ff1e33f1d452a92881830f0b30c1e1a344a89b7dff911d76157afaab" },
-  "short path (one test writer)": { calls: 85, sha256: "cc1291ee5d4d45a58bac0f78dbc715ad5f8e809f8a09b2ebf799c7f947eb2eb4" },
-  "probe": { calls: 2, sha256: "012d024fefbefe057a047d8b6822b07ea3152de9e7d322be0e6cf5d6273fc736" },
+  "plan then build (confirm ask)": { calls: 86, sha256: "b149839ea42d2723caf00a7c10b90bcecab70eb12d7a179e65c5b9e2d7c63397" },
+  "confirm auto (gates, then build in one run)": { calls: 88, sha256: "1a442dd05de9be07ea1f2b4fb2e8a503dde753d36ffd78cf973180ab4c70d16c" },
+  "short path (one test writer)": { calls: 85, sha256: "e45580587b9f48a1681b71b700f69e99a046073c1d5c159cb79ccfb28528ccef" },
+  "probe": { calls: 2, sha256: "b6976644cdb9345851ac461a293688c2299952b462ba087a39958a03ae13b393" },
 };
 
 for (const [name, fn] of Object.entries(SCENARIOS)) {

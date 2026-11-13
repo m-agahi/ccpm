@@ -1,5 +1,108 @@
 # Changelog
 
+## [6.2.2] - 2026-11-12
+
+Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1235, ADR-1237).
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.2.2), then start a NEW session: the workflow
+  looks for its own `fleet/6.2.2/scripts` dir.
+- A 6.2.1 plan ref and run-state stay valid.
+
+### Fixed
+
+- 2106 (ADR-1235): the ownership gate blamed another run's refs on this run. Two builds in one
+  repo share the git dir, so run B's `refs/fleet/<B>/freeze` stopped run A ("run-state ref touched
+  by role"). The workflow now keeps only the run's own refs, `refs/fleet/<task id>/*` and
+  `refs/fleet/<task id>-<slug>/*` (a re-plan's superseded tree), when it reads a hasher result.
+  The filter is in the workflow's `hasher()` view, after the digest check, so every gate (writer
+  rounds, judge fingerprints, re-freeze, code rounds) reads the same filtered map; `hasher.py`
+  and its relay are unchanged. Writes to the run's own refs and every `refs/replace/*` ref still
+  stop the run.
+- 2107 (ADR-1237, which supersedes ADR-1234 and ADR-1236): the freeze locked writer test files
+  that a check-only hook (`cargo fmt --check`) rejects, and the coder could not edit them. A repo
+  now lists the hooks to judge before the freeze in its policy `repos` override, key
+  `pre_freeze_hooks`, for example `"yadgarhq/iam-db": {"pre_freeze_hooks": ["cargo-fmt"]}`. With
+  no list, no hook is judged before the freeze, as in 6.2.1. With a list, `format_files.py` (on
+  `infra:format-tests:r<n>`, through `select.check_hooks`) runs each listed hook once more, alone,
+  after the fixer runs settle: `pre-commit run <id> --files <paths>` in the same scratch checkout.
+  It reports `hook_failed`, `hook_failures`, `hook_head`, `hook_sha256`, `hook_timeout` and
+  `unknown_hooks`, all digest keys (see the review entry below). A failure skips the test judge and
+  sends a fix_tests round to the round's writers with the hook output; it counts against the test
+  rounds. A hook still failing in the last round stops with `needs_human` (`stop_gate: cap`); the
+  run never freezes then. A listed id that the config at HEAD lacks, or listed hooks that cannot
+  run (no `pre-commit`), stop with `needs_human` (`stop_gate: policy`). The list comes from the
+  sealed policy (`state.policy`). Every hook still runs at the commit step, unchanged. No remote
+  hook manifest is read. `infra:format-code` is unchanged.
+- `scripts/policy.py`: `pre_freeze_hooks` is valid only in a `repos` override, as a list of
+  non-empty strings with no whitespace and no leading `-`, at most 128 characters each; anything
+  else makes the policy invalid. It is not a default cap: with no list, the caps carry no key.
+  The policy drift gate line compares caps by value, so a list compares by content.
+- 2104: a preflight agent that relayed a prose summary in place of the sha256sum lines made every
+  script "missing" and asked for a reinstall. The probe now prints `hash_lines=<n>` before its hash
+  lines. No hash line, fewer lines than the workflow's own tables expect, or no single matching
+  count line: one retry (`preflight:relay-retry`, on sonnet), then a distinct stop (see review
+  M1 below). Kept as a line list with a count, not a file the agent writes or a `{file, sha256}` array:
+  the script cannot read files itself, so a file still needs an agent relay, and the count line is
+  the smallest change that lets the script tell a dropped relay from a missing file.
+
+- Review of 6.2.2 (PR #64):
+
+  - M1 (2104): the hash-line check trusted the count the agent relayed, and ran only with one
+    count line. A dropped, forged or doubled `hash_lines=` with 10 of the lines gave no retry and
+    "is missing; install". The workflow now counts against its own tables (`programTable()`,
+    `ROLE_SHA256`, `SHARED_SHA256`). Any shortfall, no single count line, or a count that differs
+    from the lines relayed is a relay drop: one retry, then "preflight agent relayed <k> of <n>
+    expected hash lines (after one retry); no line for: ...", with the reinstall hint for files
+    absent on disk. A file absent on disk is now retried once too.
+  - M2 (2107): `hook_output` (2000 free-text characters) made a miscopied relay a dead end. The
+    relay is now `hook_head` (at most 300 printable characters) and `hook_sha256` (the whole
+    output), and `infra:format-*` carries the `format_files` digest id, so a miscopied relay gets
+    the one digest retry. format_files is the one write step with the retry: a second run finds
+    the files settled.
+  - L1: a listed id whose `stages` (or the config's `default_stages`) exclude the pre-commit stage
+    is reported in `unknown_hooks` with its reason; so is pre-commit's own "No hook with id ... in
+    stage" refusal. The loader now returns each hook's `stages` and the config's `default_stages`.
+  - L2: one 480 s deadline for every hook run of the step (each at most 180 s), under the 600 s
+    Bash limit. A listed hook that times out is `hook_timeout`, a `needs_human` stop
+    (`stop_gate: hooks`), never a failure sent to the writers.
+  - L3: each listed hook runs per file (`hook_failures` holds `[file, id]` pairs). Only the writers
+    that own a failing file get a round, each with only its own failures, the command to
+    reproduce them and "edit only your own test files".
+  - N1: the test file header names ADR-1237.
+  - N2 (2106): a change to another run's ref between hasher reads gets one gate line naming it,
+    never a stop.
+
+- Re-review of 6.2.2 (PR #64):
+  - D-M1 (2107): the per-file runs blamed clean files when a listed hook checks the whole tree
+    (the scratch checkout held all the round's files). Each listed hook now runs once on all the
+    files; only when it fails is each file re-run alone in a scratch checkout of HEAD plus that
+    one file. The files that fail alone are blamed; none failing alone is a whole-tree failure
+    (file `""`), sent to every writer of the round. No hook flag is read.
+  - D-L1: the fixer runs keep their 5.x budget (3 runs of at most 180 s); the listed checks get
+    their own 240 s, inside a 570 s ceiling from the program's start. `fix_timeout` (a new digest
+    key) names a fixer timeout; the stop names the phase that ran out of time and never says
+    "still rewrite after 3 runs".
+  - D-L2 (2104): one `hash_lines=` line equal to the lines relayed, short of the tables, means
+    the files are absent on disk: no retry, "<file> is absent from the installed plugin" and the
+    install text. Every other shortfall keeps the retry and the relay message.
+  - D-N1: the v507 write-step regex matches `infra(..., undefined, "<id>")` too, with an explicit
+    allowlist of write steps with the retry: `format_files` only.
+
+### Changed
+
+- `tests/v622_fixes.test.mjs`: 33 tests (foreign, own, prefix-sharing and replacement refs; no
+  list, a listed failing hook, its last round, a listed passing hook, an unknown id, hooks that
+  cannot run, a bad sealed list, a broken relay, `policy.py` and `format_files.py` run for real
+  (unlisted `pass_filenames: false` and `always_run` hooks never run alone); prose-only, prose then
+  full, partial and real probe relays).
+- `skills/fleet-policy/SKILL.md` and the README document `pre_freeze_hooks`.
+- Harness: the probe stub prints `hash_lines=`, the format stub carries the hook keys, and
+  `preflight:relay-retry` replays the preflight script. Prompt snapshot pins updated (the probe
+  text, checked with it reverted; the format_files and policy schema keys).
+- Version 6.2.2 (`FLEET_VERSION`, `marketplace.json`, the test pins, the root README).
+
 ## [6.2.1] - 2026-11-12
 
 Fleet 6.2.1 (ledger 2097): create `policy.json` on first use. Max's ruling, verbatim: "yes it
