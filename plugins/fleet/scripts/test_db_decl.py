@@ -56,11 +56,21 @@ def prefix_problem(p):
     if any(s.startswith(p) or p.startswith(s) or like.fullmatch(s) for s in SYSTEM_SCHEMAS):
         return 'test_db_prefix must not match or start a system schema (' + ', '.join(SYSTEM_SCHEMAS) + ')'
     return None
+# fleet 6.3.0 (ADR-1233): the optional grants list; "PROCESS" is the only value
+def grants_problem(g):
+    if not isinstance(g, list) or any(not isinstance(x, str) for x in g):
+        return 'grants must be a list of strings'
+    for x in g:
+        if x != 'PROCESS':
+            return 'grants may hold only "PROCESS" (ADR-1233), not ' + json.dumps(x)[:80]
+    if len(g) > 1:
+        return 'grants lists "PROCESS" twice'
+    return None
 def problem(d):
     if not isinstance(d, dict):
         return 'not a JSON object'
-    if sorted(k for k in d if k != 'test_db_prefix') != ['engine', 'env', 'major', 'version']:
-        return 'keys must be exactly version, engine, major, env (and optionally test_db_prefix)'
+    if sorted(k for k in d if k not in ('test_db_prefix', 'grants')) != ['engine', 'env', 'major', 'version']:
+        return 'keys must be exactly version, engine, major, env (and optionally test_db_prefix, grants)'
     if isinstance(d['version'], bool) or d['version'] != 1:
         return 'version must be 1'
     if d['engine'] != 'mariadb':
@@ -69,6 +79,8 @@ def problem(d):
         return 'major must be a string like 11.4'
     if not isinstance(d['env'], str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,40}_TEST_DSN', d['env']):
         return 'env must match ^[A-Z][A-Z0-9_]{0,40}_TEST_DSN$'
+    if 'grants' in d and grants_problem(d['grants']):
+        return grants_problem(d['grants'])
     if 'test_db_prefix' in d:
         return prefix_problem(d['test_db_prefix'])
     return None

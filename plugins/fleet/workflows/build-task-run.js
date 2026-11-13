@@ -1544,7 +1544,7 @@ const PROGRAM_SHA256 = {
   "ci_watch": "d32f9341cf25c626370097dd2d91c5f4703d393139f5951405c6e40c63eb80b8",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
-  "db_up": "6aee2fdb201b6a3634dbd1ea6c0cfa40eefe3a0eed09c8d40e7f6c3b95a17f4c",
+  "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
   "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
   "format_files": "8c4ad53ffeed3e5d29d8c7274e8b90097710f4285cca98a232b0af64d48680f7",
   "gh_identity": "44d62a8f8b6cd4f69c7b057d0180f584edf6b03f03988e35f048bdc1d7ce2d70",
@@ -1574,7 +1574,7 @@ const PROGRAM_SHA256 = {
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
   "session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
   "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
-  "test_db_decl": "1ea403e5158e263247c8a20cf7e10d88c75fb74ebe963574f0052dd36465a7be",
+  "test_db_decl": "c2e9f36d23fb147835a85c4421d5e38a05912d343fdaa1f08fe285c3cfc5c11d",
   "tf_gate": "627c00cefbdf2da4a4144854dcbb4b543fb1e05335c1a4c7c74dc662ed35c02c",
   "verify_since": "91524ed3b1c39d49e2f5be4497d2e118b85e56482bd5e02256a17630405bb340"
 };
@@ -7861,11 +7861,17 @@ const DB_DSN_NOTE =
 // Why a declaration is refused (null: it is fine)
 function testDbDeclProblem(d) {
   if (!d || typeof d !== "object" || Array.isArray(d)) return "not a JSON object";
-  if (canonical(Object.keys(d).filter((k) => k !== "test_db_prefix").sort()) !== canonical(["engine", "env", "major", "version"])) return "keys must be exactly version, engine, major, env (and optionally test_db_prefix)";
+  if (canonical(Object.keys(d).filter((k) => k !== "test_db_prefix" && k !== "grants").sort()) !== canonical(["engine", "env", "major", "version"])) return "keys must be exactly version, engine, major, env (and optionally test_db_prefix, grants)";
   if (d.version !== 1) return "version must be 1";
   if (d.engine !== "mariadb") return "engine must be mariadb";
   if (typeof d.major !== "string" || !/^[0-9]{1,3}\.[0-9]{1,3}$/.test(d.major)) return "major must be a string like 11.4";
   if (typeof d.env !== "string" || !DB_ENV_RE.test(d.env)) return "env " + JSON.stringify(d.env) + " must match " + String(DB_ENV_RE);
+  // 6.3.0 (ADR-1233): "PROCESS" is the only grant a repo may request
+  const g = d.grants;
+  if ("grants" in d && (!Array.isArray(g) || g.some((x) => typeof x !== "string"))) return "grants must be a list of strings";
+  const bad = "grants" in d ? g.find((x) => x !== "PROCESS") : undefined;
+  if (bad !== undefined) return "grants may hold only \"PROCESS\" (ADR-1233), not " + JSON.stringify(bad).slice(0, 80);
+  if ("grants" in d && g.length > 1) return "grants lists \"PROCESS\" twice";
   if ("test_db_prefix" in d) return dbPrefixProblem(d.test_db_prefix);
   return null;
 }
@@ -7966,13 +7972,14 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
   const image = DB_IMAGES[t.decl.engine + ":" + t.decl.major];
   // db_up's optional last argument
   const prefix = t.decl.test_db_prefix === undefined ? null : t.decl.test_db_prefix;
-  const pa = prefix ? [prefix] : [];
-  const pi = prefix ? { test_db_prefix: prefix } : {};
+  const proc = Array.isArray(t.decl.grants) && t.decl.grants.indexOf("PROCESS") >= 0;
+  const pa = (prefix ? [prefix] : []).concat(proc ? ["grant:PROCESS"] : []);
+  const pi = Object.assign(prefix ? { test_db_prefix: prefix } : {}, proc ? { grants: ["PROCESS"] } : {});
   if (!image) halt("needs_human", DB_DECL_FILE + ": no pinned image for " + t.decl.engine + " " + t.decl.major + " (known: " + Object.keys(DB_IMAGES).join(", ") + ")", "db");
   const want = [];
   for (const c of consumers) if (want.indexOf(dbOf(c)) < 0) want.push(dbOf(c));
   if (state.db) {
-    if (state.db.env !== t.decl.env || state.db.image !== image || state.db.prefix !== prefix) halt("needs_human", DB_DECL_FILE + " changed during the run", "db");
+    if (state.db.env !== t.decl.env || state.db.image !== image || state.db.prefix !== prefix || !!state.db.process !== proc) halt("needs_human", DB_DECL_FILE + " changed during the run", "db");
     const missing = want.filter((d) => state.db.dbs.indexOf(d) < 0);
     if (!missing.length) return;
     const al = "infra:db-up:add";
@@ -8008,9 +8015,9 @@ async function testDbStep(t, label, wt, defaultBranch, phaseName, consumers, tas
   const ex = u.expiry;
   if (!ex || typeof ex !== "object" || ["podman-timeout", "systemd-run"].indexOf(ex.mechanism) < 0 || !Number.isInteger(ex.expires))
     halt("failed", "infra:db-up: no self-expiry recorded", "db");
-  state.db = { name, users: Object.assign({}, u.users), port: u.port, env: t.decl.env, image, prefix, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
+  state.db = { name, users: Object.assign({}, u.users), port: u.port, env: t.decl.env, image, prefix, process: proc, dbs: want.slice(), expires: ex.expires, mechanism: ex.mechanism };
   state.dbTarget = { name, mechanism: ex.mechanism, expires: ex.expires };
-  gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + (prefix ? " (each user also on " + prefix + "*)" : "") + "; " + t.decl.env + " goes to each role's test_env");
+  gate("test database " + name + " up on 127.0.0.1:" + u.port + " (" + image + "), expiry " + ex.mechanism + " in " + DB_TTL_SECONDS + " s; databases " + want.join(", ") + (prefix ? " (each user also on " + prefix + "*)" : "") + (proc ? " (each user also has PROCESS, ADR-1233)" : "") + "; " + t.decl.env + " goes to each role's test_env");
 }
 
 // main's finally: remove the run's test database

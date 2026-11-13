@@ -1046,6 +1046,14 @@ and `db_up.py` check the same). Without the key, the SQL is the same as before. 
 gets the same pattern grant in the one container, so two roles that run at the same time can
 see each other's prefixed databases: tests should use unique names.
 
+Optional since 6.3.0 (ADR-1233): `"grants": ["PROCESS"]`, for tests that read
+`information_schema.innodb_trx` or other process data. `db_up.py` (argument `grant:PROCESS`)
+then also runs `GRANT PROCESS ON *.* TO '<role user>'@'%'` for each role user, in the run's own
+throwaway container only, never on another database server. `PROCESS` is the only accepted
+value: any other value (another privilege, a lower-case `process`, a duplicate, a non-list)
+refuses the whole declaration in all three checks. `[]` grants nothing. Without the key, the SQL
+and the `db_up.py` arguments are the same as before.
+
 ### Threat model
 
 The freeze guards against **reward hacking**: a writer or coder that weakens tests or gates to get

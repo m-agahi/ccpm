@@ -456,7 +456,7 @@ export async function runOne(script, args0) {
     if (!(label in script) && /^infra:db-up/.test(label)) {
       const i = inputsOf(prompt);
       const users = Object.fromEntries(i.dbs.map((d) => [d, sha256(d).slice(0, 32)]));
-      const up = { name: i.name, port: 40000, dbs: i.dbs, users, expiry: i.mode === "up" ? { mechanism: "podman-timeout", expires: 1700000000 } : null, args: (i.mode === "up" ? ["up", i.name, i.image, String(i.ttl), i.nonce, JSON.stringify(i.dbs)] : ["add", i.name, JSON.stringify(i.dbs)]).concat(i.test_db_prefix ? [i.test_db_prefix] : []) };
+      const up = { name: i.name, port: 40000, dbs: i.dbs, users, expiry: i.mode === "up" ? { mechanism: "podman-timeout", expires: 1700000000 } : null, args: (i.mode === "up" ? ["up", i.name, i.image, String(i.ttl), i.nonce, JSON.stringify(i.dbs)] : ["add", i.name, JSON.stringify(i.dbs)]).concat(i.test_db_prefix ? [i.test_db_prefix] : [], i.grants ? ["grant:PROCESS"] : []) };
       if (i.mode !== "up") up.port = null;
       return Object.assign({ status: "ok", reason: "up", up }, i.mode === "up" ? { sweep: { podman: true, removed: [], kept: [], errors: [] } } : {});
     }

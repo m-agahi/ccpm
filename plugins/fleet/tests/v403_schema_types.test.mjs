@@ -837,12 +837,16 @@ const READS = {
     "d.major string": "parsed: the repo's declaration file (test_db_decl decl)",
     "d.env string": "parsed: the repo's declaration file (test_db_decl decl)",
     "d.env string-re": "parsed: the repo's declaration file (test_db_decl decl)",
+    // 6.3.0 (ADR-1233): the optional grants list; this check IS its refusal
+    "g array": "parsed: the repo's declaration file (test_db_decl decl.grants)",
+    "x string": "parsed: the repo's declaration file (test_db_decl decl.grants[])",
   },
   // 5.0.3 (2011): the optional test_db_prefix of the same file; this check IS its refusal
   dbPrefixProblem: { "p string": "parsed: the repo's declaration file (test_db_decl decl.test_db_prefix)" },
   dbUsersOk: { "users object": "prog:db_up:users", "users array": "!prog:db_up:users", "users[d] string": "prog:db_up:users.*" },
   testDbStep: {
     "t object": "infra:test_db",
+    "t.decl.grants array": "parsed: the repo's declaration file, checked by testDbDeclProblem",
     "name string-re": PARSED_LOCAL,
     "sw.removed array": "prog:db_sweep:removed",
     "sw.errors array": "prog:db_sweep:errors",

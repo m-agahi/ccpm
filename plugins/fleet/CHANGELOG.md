@@ -41,6 +41,13 @@ ADR-1233; wiki fleet-auto-flow-review-2026-11-13). Every safety stop stays.
   moved the three scenario pins; with both reverted every pin is 6.2.2's. The probe pin is
   unchanged.
 
+- ADR-1233: `.fleet-test-db.json` takes an optional `grants` list. `"PROCESS"` is the only
+  accepted value; any other value (another privilege, `process`, a duplicate, a non-list) refuses
+  the declaration in `test_db_decl.py`, the workflow and `db_up.py` alike. With `["PROCESS"]`,
+  `db_up.py` (argument `grant:PROCESS`) runs `GRANT PROCESS ON *.* TO '<role user>'@'%'` for each
+  role user in the run's own throwaway container only (no tf-local or other server is touched).
+  Without the key the SQL and the arguments are as before, byte for byte.
+
 ### Changed
 
 - ADR-1238 (supersedes ADR-1232): the caller check runs in dispatches of at most 30 symbols and
