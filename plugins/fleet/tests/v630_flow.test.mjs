@@ -353,3 +353,44 @@ test("6.3.0 D low 1: a check-phase timeout names the fixer time and the ceiling 
   const iso = src.slice(src.indexOf("def isolated(hid, f):"), src.indexOf("def isolated(hid, f):") + 400);
   assert.ok(iso.indexOf("if check_end - time.monotonic() < 1:") >= 0 && iso.indexOf("if check_end - time.monotonic() < 1:") < iso.indexOf("'worktree', 'add'"), iso);
 });
+
+// format_files.py run for real (a copy with a small check budget) with a fake pre-commit whose check hook sleeps
+function slowHookRun(budget, ceiling) {
+  const home = mkdtempSync(join(tmpdir(), "fleet-630-fmt-"));
+  try {
+    const wt = join(home, "repo");
+    const bin = join(home, "bin");
+    mkdirSync(join(wt, "tests"), { recursive: true });
+    mkdirSync(bin);
+    sh(wt, "git", "init", "-q");
+    sh(wt, "git", "config", "user.email", "t@example.com");
+    sh(wt, "git", "config", "user.name", "t");
+    sh(wt, "git", "config", "commit.gpgsign", "false");
+    writeFileSync(join(wt, ".pre-commit-config.yaml"), "repos:\n  - repo: local\n    hooks:\n      - id: slow\n        name: slow\n        entry: slow\n        language: system\n");
+    writeFileSync(join(wt, "src.py"), "x = 1\n");
+    sh(wt, "git", "add", "-A");
+    sh(wt, "git", "commit", "-qm", "base");
+    writeFileSync(join(bin, "pre-commit"), "#!/bin/sh\nif [ \"$2\" = slow ]; then sleep 6; fi\nexit 0\n", { mode: 0o755 });
+    writeFileSync(join(wt, "tests", "test_a.py"), "def test_a():\n    assert 1\n");
+    const prog = readFileSync(join(SCRIPTS_SRC, "format_files.py"), "utf8").replace("\nCHECK_BUDGET = 240\n", "\nCHECK_BUDGET = " + budget + "\n").replace("\nSTEP_CEILING = 570\n", "\nSTEP_CEILING = " + ceiling + "\n");
+    assert.ok(prog.includes("CHECK_BUDGET = " + budget) && prog.includes("STEP_CEILING = " + ceiling));
+    const copy = join(home, "format_files.py");
+    writeFileSync(copy, prog);
+    const env = Object.assign({}, process.env, { PATH: bin + ":" + process.env.PATH });
+    const r = spawnSync("python3", ["-I", copy, wt, JSON.stringify({ paths: ["tests/test_a.py"], check_hooks: ["slow"] }), "[]", join(home, "scratch"), "60"], { encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test("6.3.0 D low 1: format_files.py, run for real: a check timeout names the fixer time; 'cut by the ceiling' only when the ceiling bound", () => {
+  const free = slowHookRun(2, 570);
+  assert.deepEqual(free.hook_timeout, ["slow"], free.note);
+  assert.match(free.note, /; the fixer runs took \d+ s, so the check phase had [12] s$/);
+  assert.doesNotMatch(free.note, /cut by/);
+  const cut = slowHookRun(30, 1);
+  assert.deepEqual(cut.hook_timeout, ["slow"], cut.note);
+  assert.match(cut.note, /; the fixer runs took \d+ s, so the check phase had [01] s \(cut by the 1 s step ceiling\)$/);
+});

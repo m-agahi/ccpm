@@ -153,9 +153,10 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
 
    Pass `args` as an object, not a JSON string. Wait for the result. Do not narrate progress.
 
-   A result with `resume_with: "build"` (6.3.0): the branch already has build commits and its
-   sealed plan ref. Do not ask: run step 8 once with that result's `plan_ref`, unchanged (it
-   resumes at the last completed gate).
+   Check `resume_with` first, before the per-mode rules below. A result with
+   `resume_with: "build"` (6.3.0; status `needs_human`, stop gate `resume`): the branch already
+   has build commits and its sealed plan ref. Do not ask: run step 8 once with that result's
+   `plan_ref`, unchanged (it resumes at the last completed gate).
 
    - `confirm: "ask"`: any status other than `awaiting_confirmation` -> report it as in step 9 and
      stop.

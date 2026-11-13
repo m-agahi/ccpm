@@ -1546,7 +1546,7 @@ const PROGRAM_SHA256 = {
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
   "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
-  "format_files": "eff23e61d5b282e017e007b4f321db47589a97bfaa5303681e00eeae2652fb24",
+  "format_files": "183f424e72733a515b9c87dd4ff541f287bf897d6d37dec91b48269dd090f4e1",
   "gh_identity": "44d62a8f8b6cd4f69c7b057d0180f584edf6b03f03988e35f048bdc1d7ce2d70",
   "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
   "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
@@ -1589,7 +1589,7 @@ const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
   "fleet-code-judge": "0b7a412cb27884de57c70bb48f90627c8595057ef29ce1a8e0f147df49f979fe",
   "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
-  "fleet-intent-judge": "350cc27c09b46c8e4ba5bfc040c44c7141e8c755b02ab18494fbeb89f9335569",
+  "fleet-intent-judge": "eec4332e06027010a8f22aec7b399289665fb652f6d773b9c093f0f7d1f3bfc6",
   "fleet-pr-opener": "33912b762a9020c5aff7bd1a24aa5bb2673509a584660e4670ac41200ef62404",
   "fleet-test-judge": "219c89b656f7ae61d28ab7cf2486b498792385df0cdd2a256fdae6c0f53c051b",
   "fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
@@ -5001,6 +5001,8 @@ function makePlanRef(f) {
     // the ledger scope of the plan run (args.project), or null
     project: typeof f.project === "string" && f.project ? f.project : null,
   });
+  // 6.3.0 (ADR-1239): the policy plan mode read, sealed; the build keeps it (a later edit is logged)
+  if (f.policy && typeof f.policy === "object") ref.policy = stripHeldOut(f.policy);
   ref.seal = sealOf(ref);
   return ref;
 }
@@ -5214,6 +5216,8 @@ async function autoGates(ctx) {
     return { ok: false, failedCheck, reasons, intent };
   };
   const g1 = intentProblems(r);
+  // 6.3.0 (ADR-1239): an unattended relaxed re-plan passes only on an approved, backed, fail-closed deviation quoting each item
+  for (const x of ctx.relaxed || []) if (!intent.deviations.some((d) => d && String(d.item).indexOf(x) >= 0 && d.verdict === "approve" && typeof d.allowed_by === "string" && d.allowed_by.trim() && d.fails_closed === true)) g1.push("relaxed re-plan item " + JSON.stringify(x) + " has no approved deviation");
   if (g1.length) return fail("intent", g1);
   gate("auto-confirm: intent approve (" + intent.deviations.length + " deviation(s), all allowed and fail-closed)");
   const shape = commandShapeProblems(ctx.planFacts.commands);
@@ -5312,7 +5316,8 @@ async function planMode(input, date) {
   const ws = await workspaceStep(brief.repo, lay);
   if (ghNoPush(ws.remoteSlug)) gate("warning: " + noPushText(ws.remoteSlug) + " (the build stops at its start until one has)");
   await pushProbe(lay, ws);
-  unattendedOn(await policyStep(ws.remoteHost, ws.remoteSlug, null, true), input);
+  const planPolicy = await policyStep(ws.remoteHost, ws.remoteSlug, null, true);
+  unattendedOn(planPolicy, input);
   const un = !!state.unattended;
   const project = input.project || ws.remoteSlug;
   const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
@@ -5431,6 +5436,7 @@ async function planMode(input, date) {
         // the role table this run loaded, for the build
         history: { runs: 1, replans: 0, agents: 0, preflight: state.preflightRecord },
         project: input.project || null,
+        policy: planPolicy,
       },
     });
   } catch (e) {
@@ -5547,11 +5553,10 @@ async function policyStep(host, slug, sealed, plan) {
   let p = { profile: r.profile, policy_sha256: r.policy_sha256, caps: r.caps };
   // 2044: the build's wall time starts here
   if (!plan) state.t0 = Number.isInteger(r.now) ? r.now : null;
-  if (sealed) {
-    if (sealed.policy_sha256 !== r.policy_sha256) {
-      const d = r.caps ? Object.keys(Object.assign({}, sealed.caps, r.caps)).filter((k) => canonical(sealed.caps[k]) !== canonical(r.caps[k])).map((k) => k + " " + sealed.caps[k] + " -> " + r.caps[k]) : [r.error];
-      gate("policy changed since this run started (" + (d.join(", ") || "no cap changed") + "); keeping the sealed profile " + (sealed.profile || "default"));
-    }
+  // the sealed policy (run-state, or the plan ref since 6.3.0) wins when the file changed since
+  if (sealed && sealed.policy_sha256 !== r.policy_sha256) {
+    const d = r.caps ? Object.keys(Object.assign({}, sealed.caps, r.caps)).filter((k) => canonical(sealed.caps[k]) !== canonical(r.caps[k])).map((k) => k + " " + sealed.caps[k] + " -> " + r.caps[k]) : [r.error];
+    gate("policy changed since this run started (" + (d.join(", ") || "no cap changed") + "); keeping the sealed profile " + (sealed.profile || "default"));
     p = sealed;
   } else if (!r.caps) halt("needs_human", "policy: " + r.error + "; fix or remove the file, then re-run the build", "policy");
   // 6.3.0: an invalid file is the strict default (policy.py DEFAULT), never a halt
@@ -5878,7 +5883,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   } else if (v.head !== planBase)
     halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
   // 2033: sealed in the run-state; stream 3 reads state.policy.caps
-  const policy = (state.policy = await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
+  const sealedPolicy = (resume && resume.policy) || (ref.policy && typeof ref.policy === "object" && ref.policy.caps && typeof ref.policy.caps === "object" ? ref.policy : null);
+  const policy = (state.policy = await policyStep(ws.remoteHost, remoteSlug, sealedPolicy));
   unattendedOn(policy, input);
   if (resume && Array.isArray(resume.auto_decisions) && !state.autoDecisions.length) state.autoDecisions = resume.auto_decisions.slice();
 
@@ -7514,13 +7520,15 @@ async function replan(ctx) {
   gate("re-plan " + n + ": old head " + (rs.superseded_head || ctx.expectedHead) + " saved as " + superseded + "; " + lay.branch + " reset to " + ref.plan_base + "; new plan " + newHead + " off the branch");
   const hist = pc.full.history;
   gate("cumulative: run " + hist.runs + ", re-plans " + hist.replans + ", agents " + hist.agents);
-  // 6.3.0 (ADR-1239): unattended, with no PR yet: the auto gates, then the build, in this run
-  if (state.unattended && !state.pr) {
+  // 6.3.0 (ADR-1239): unattended, with no PR yet: the auto gates, then the build, in this run (once per run)
+  if (state.unattended && (state.pr || state.autoReplanned)) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": " + (state.pr ? "a PR is open" : "the run already built one re-plan"));
+  else if (state.unattended) {
+    state.autoReplanned = true;
     autoDecide("plan_wrong", "build", who + " re-plan " + n + ": the auto gates, then the build in this run");
     reserve(autoGateAgents(p.planFacts.commands), "the re-plan's auto gates");
     const g = await autoGates({ sfx: ":replan", common, mainWt: lay.mainWt, planCommit: newHead, brief, callerRepo: brief.repo, branch: lay.branch, defaultBranch: common.default_branch, criteria: p.criteria, planPath: p.planPath, planDiff: p.planDiff, planFacts: p.planFacts, files: p.testable.reduce((a, c) => a.concat(c.test_files), []), relaxed: p.relaxed });
     if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
-    state.rounds = { tests: 0, code: 0 };
+    Object.assign(state, { rounds: { tests: 0, code: 0 }, freezeDigest: null, gatesNotRun: null, review: null });
     return buildFromRef(ctx.input, date, pc.tiny, lay, ctx.ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents, full: pc.full });
   }
   return awaiting(who + " plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, pc.tiny, pc.full, {

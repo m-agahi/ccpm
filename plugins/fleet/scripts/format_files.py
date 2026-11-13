@@ -471,10 +471,11 @@ try:
     # files that fail alone; none failing alone is a whole-tree failure (file ''). A timeout
     # (a run's own, or the check budget) is reported as one, never as a failure.
     NO_STAGE = re.compile(rb'No hook with id `[^`]*` in stage')
-    check_end = min(time.monotonic() + CHECK_BUDGET, STARTED + STEP_CEILING)
+    t_fix = time.monotonic()
+    full = t_fix + CHECK_BUDGET
+    check_end = min(full, STARTED + STEP_CEILING)
     TIMING[0] = '; the fixer runs took %d s, so the check phase had %d s%s' % (
-        int(time.monotonic() - STARTED), max(0, int(check_end - time.monotonic())),
-        ' (cut by the %d s step ceiling)' % STEP_CEILING if check_end < time.monotonic() + CHECK_BUDGET else '')
+        int(t_fix - STARTED), max(0, int(check_end - t_fix)), ' (cut by the %d s step ceiling)' % STEP_CEILING if check_end < full else '')
     cenv = dict(env, PATH=clean_path([wt, scratch_root]), PRE_COMMIT_COLOR='never')
     def check(hid, cwd, paths):
         # (returncode, output), or None on a timeout

@@ -611,7 +611,7 @@ const READS = {
     "pr.refs array": "prog:plan_ref:refs",
     "files.length number-literal": PARSED_LOCAL,
   },
-  makePlanRef: { "f.project string": PARSED_ARGS },
+  makePlanRef: { "f.project string": PARSED_ARGS, "f.policy object": "parsed: the policyStep result (digest-checked policy.py)" },
   preflightRecordProblem: {
     "p object": PARSED_REF,
     "p array": PARSED_REF,
@@ -640,7 +640,13 @@ const READS = {
     "cl array": "!" + IJ + "classification",
     "cl.quote string": IJ + "classification.quote",
   },
-  autoGates: { "r.deviations array": IJ + "deviations", "r.classification object": IJ + "classification" },
+  autoGates: {
+    "r.deviations array": IJ + "deviations",
+    "r.classification object": IJ + "classification",
+    // 6.3.0 (ADR-1239): a relaxed item's deviation
+    "d.allowed_by string": IJ + "deviations[].allowed_by",
+    "d.fails_closed boolean": IJ + "deviations[].fails_closed",
+  },
   defaultBlockers: { "pf.new_behaviour boolean": SP + "new_behaviour", "raw string-re": PARSED_ARGS },
   planMode: {
     // 6.3.0 (ADR-1239)
@@ -705,6 +711,8 @@ const READS = {
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
     // 6.3.0 (ADR-1239)
+    "ref.policy object": PARSED_REF,
+    "ref.policy.caps object": PARSED_REF,
     "resume.auto_decisions array": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     "r.headers_missing array": "prog:pr_body_block:headers_missing",
     // 6.0.0 (ledger 2044)

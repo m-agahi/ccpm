@@ -16,7 +16,7 @@ import { mkdirSync, writeFileSync, rmSync, mkdtempSync, readFileSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  ARGS, PB, PC, FP_TESTS, HASHES_FLAT, SOURCE, SCRIPTS_SRC, H, happy, run, runOne, call, inputsOf, noUnscripted, commitStub, spawnSync, stateJsonOf,
+  ARGS, PB, PC, PSHA, FP_TESTS, HASHES_FLAT, SOURCE, SCRIPTS_SRC, H, happy, run, runOne, call, inputsOf, noUnscripted, commitStub, spawnSync, stateJsonOf, pathRecheckOut, tfGateRelay, sha256, canon,
 } from "./harness.mjs";
 
 const U = { ...ARGS, unattended: true };
@@ -156,9 +156,16 @@ test("6.3.0 B: a relaxed re-plan goes to the intent judge as `relaxed`; a refusa
     if (ij) s["role:fleet-intent-judge"] = Object.assign({}, s["role:fleet-intent-judge"], ij);
     return s;
   };
-  const out = await runOne(mk(), U);
+  const dev = { item: "criterion AC2 dropped", allowed_by: "task body: 'AC2 is out of scope'", source_ref: "L42", fails_closed: true, verdict: "approve", reason: "the task drops it" };
+  const out = await runOne(mk({ deviations: [dev] }), U);
   assert.notEqual(out.result.failed_check, "intent", out.result.reason);
   assert.deepEqual(inputsOf(call(out, "role:fleet-intent-judge").prompt).relaxed, ["criterion AC2 dropped"]);
+  // fail closed: no deviation, an unbacked one or a refused one for the relaxed item is the intent stop
+  for (const d of [[], [Object.assign({}, dev, { allowed_by: "" })], [Object.assign({}, dev, { verdict: "refuse" })], [Object.assign({}, dev, { item: "something else" })]]) {
+    const o = await runOne(mk({ deviations: d }), U);
+    assert.equal(o.result.failed_check, "intent", JSON.stringify(d));
+    assert.match(o.result.reason, /relaxed re-plan item "criterion AC2 dropped" has no approved deviation/);
+  }
   assert.ok(decisions(out).some((d) => /^default-blocker: decided \(re-plan relaxed: criterion AC2 dropped; the intent judge rules on it\)$/.test(d)), decisions(out).join("\n"));
   const no = await runOne(mk({ verdict: "refuse" }), U);
   assert.equal(no.result.status, "needs_human");
@@ -200,31 +207,38 @@ test("6.3.0 B: a task id with no project that exactly one ledger answered is dec
 // ---------------------------------------------------------------- plan_wrong
 
 const PC2 = "0123456789ab";
-function planWrong(s) {
+const PLAN_WRONG = { status: "ok", reason: "plan wrong", verdict: "plan_wrong", routed_findings: [{ target: "plan", criterion: "AC2", finding: "x — Proposed plan change: split AC2" }] };
+function planWrong(s, again) {
+  const cj = s["role:fleet-code-judge:r1"];
   return Object.assign(s, {
-    "role:fleet-code-judge:r1": { status: "ok", reason: "plan wrong", verdict: "plan_wrong", routed_findings: [{ target: "plan", criterion: "AC2", finding: "x — Proposed plan change: split AC2" }] },
-    "infra:replan-worktree": { status: "ok", reason: "ok", head: PC },
+    "role:fleet-code-judge:r1": [PLAN_WRONG, again ? PLAN_WRONG : cj],
+    "infra:replan-worktree": [{ status: "ok", reason: "ok", head: PC }, { status: "ok", reason: "ok", head: PC2 }],
     "role:scope-and-plan:replan": Object.assign({}, s["role:scope-and-plan"], { tldr: "re-planned" }),
     "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
-    "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
-    "infra:commit-plan:replan": commitStub(s.__store, PC2, "d".repeat(64)),
+    "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: PSHA },
+    "infra:commit-plan:replan": [commitStub(s.__store, PC2, PSHA), commitStub(s.__store, "0123456789cd", PSHA)],
     "infra:replan-reset": { status: "ok", reason: "reset", head: PB, superseded_head: "5555555" },
     "hasher:pre-intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "hasher:fp-post:intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "role:fleet-intent-judge:replan": s["role:fleet-intent-judge"],
-    "role:fleet-code-judge:r2": { status: "ok", reason: "good", verdict: "approve", routed_findings: [], hash_check: { match: true, mismatched: [] }, suite_result: { command: "pytest", exit_code: 0 } },
   });
 }
 
-test("6.3.0 B: a plan_wrong re-plan under unattended runs the auto gates on the new plan and builds it in the same run", async () => {
-  const s = planWrong(gated());
-  const out = await runOne(s, U);
-  assert.ok(out.labels.includes("role:fleet-intent-judge:replan"), out.labels.join(", "));
-  assert.ok(decisions(out).some((d) => /^plan_wrong: build \(code-judge re-plan 1: the auto gates, then the build in this run\)$/.test(d)), decisions(out).join("\n"));
+test("6.3.0 B: a plan_wrong re-plan under unattended runs the auto gates on the new plan and builds it in the same run (once per run)", async () => {
+  const out = await runOne(planWrong(gated()), U);
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.result.pr_url);
   const i = out.labels.indexOf("infra:replan-reset");
-  // a second build from the new plan (the fixture's verify stub knows only the first plan, so it stops there)
-  assert.ok(i > 0 && out.labels.slice(i).includes("infra:load-ref") && out.labels.slice(i).includes("infra:verify-plan"), out.labels.slice(i).join(", "));
-  assert.notEqual(out.result.status, "awaiting_confirmation");
+  assert.ok(i > 0, out.labels.join(", "));
+  for (const l of ["role:fleet-intent-judge:replan", "infra:load-ref", "infra:verify-plan", "role:fleet-coder:r1", "role:fleet-pr-opener"]) assert.ok(out.labels.slice(i).includes(l), l);
+  assert.ok(decisions(out).includes("plan_wrong: build (code-judge re-plan 1: the auto gates, then the build in this run)"), decisions(out).join("\n"));
+  assert.match(inputsOf(call(out, "role:fleet-pr-opener").prompt).unattended_section, /plan_wrong: build \(code-judge re-plan 1/);
+  assert.equal(out.result.rounds.code, 1, "the second pass counts its own rounds");
+  // a second plan_wrong in the same run asks, as before
+  const two = await runOne(planWrong(gated(), true), U);
+  assert.equal(two.result.status, "awaiting_confirmation", two.result.reason);
+  assert.ok(decisions(two).some((d) => /^plan_wrong: ask \(code-judge re-plan 2: the run already built one re-plan\)$/.test(d)), decisions(two).join("\n"));
   // not unattended: the re-plan asks, as before
   const ask = await runOne(planWrong(gated()), { ...ARGS, confirm: "auto" });
   assert.equal(ask.result.status, "awaiting_confirmation");
@@ -254,10 +268,17 @@ const NEVER = [
   ["freeze", (s) => (s["hasher:freeze:f1"] = { status: "ok", fingerprint: { head: PB, tree: "OTHER" }, hashes: H(HASHES_FLAT) }), (o) => assert.equal(o.result.stop_gate, "fingerprint")],
   ["ownership", (s) => (s["hasher:post-writers:r1"] = { status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: H(Object.assign({}, HASHES_FLAT, { ["git:fleetref:" + OWN]: "a".repeat(40) })) }), (o) => assert.equal(o.result.stop_gate, "ownership")],
   ["hash", (s) => (s["hasher:post-writers:r1"] = { status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: H(Object.assign({}, HASHES_FLAT, { ["git:fleetref:refs/replace/" + "c".repeat(40)]: "a".repeat(40) })) }), (o) => assert.equal(o.result.stop_gate, "hash")],
+  ["terraform on PATH", (s) => (s["infra:path-check:plan-audit"] = (p) => { const i = inputsOf(p); return pathRecheckOut({ ["terra" + "form"]: { path: "/usr/bin/x", real: "/usr/bin/x", shim: false } }, [i.repo, i.token]); }), (o) => assert.equal(o.result.stop_gate, "iac")],
+  ["IaC push gate", (s) => {
+    let sha = null;
+    s["infra:policy"] = polOut({ caps: Object.assign({}, DEFAULT_CAPS, { merge: "auto", unattended: true }) });
+    s["infra:tf-gate:push"] = (p) => { const i = inputsOf(p); sha = i.approved_sha; return tfGateRelay({ touched: true, iac_files: ["infra/main.tf"], args: [i.main_worktree, i.default_branch, i.approved_sha, i.remote_url] }); };
+    s["infra:remote-head:push"] = (p) => { const i = inputsOf(p); const r = { status: "ok", reason: "read", head: sha, args: [i.main_worktree, i.branch, i.remote_url] }; r.digest = sha256(canon({ head: r.head, args: r.args })); return r; };
+  }, (o) => (assert.equal(o.result.stop_gate, "iac"), assert.ok(!o.labels.some((l) => /^infra:(pr-ready|pr-merge)/.test(l))))],
   ["commit integrity", (s) => { const f = s["infra:commit:r1"]; s["infra:commit:r1"] = (p, o) => Object.assign(typeof f === "function" ? f(p, o) : JSON.parse(JSON.stringify(f)), { staged_tree: "BAD" }); }, (o) => assert.equal(o.result.stop_gate, "commit")],
 ];
 
-test("6.3.0 B (ADR-1239): unattended never bypasses a safety stop (hooks, IaC, intent, scope, commands, contract, DSN, relaunch, fingerprint, freeze, ownership, hash, commit)", async () => {
+test("6.3.0 B (ADR-1239): unattended never bypasses a safety stop (hooks, IaC, terraform on PATH, the IaC push gate, intent, scope, commands, contract, DSN, relaunch, fingerprint, freeze, ownership, hash, commit)", async () => {
   for (const [name, mut, check] of NEVER) {
     for (const a of [U, { ...ARGS, confirm: "default" }]) {
       const s = gated({ script: a === U ? {} : { "infra:policy": polUn } });

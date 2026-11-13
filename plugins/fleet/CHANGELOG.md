@@ -29,6 +29,14 @@ ADR-1233; wiki fleet-auto-flow-review-2026-11-13). Every safety stop stays.
   surface, IaC paths (they still ask) or terraform, work-owner merge, orchestrator PR, intent-judge
   refusal, scope fence, command allowlist, hash, freeze, fingerprint, ownership, commit, plan-ref,
   run-state, contract drift, DSN or relaunch stops (one test per stop).
+- The plan ref seals the policy plan mode read (`policy: {profile, policy_sha256, caps}`); a build
+  without a run-state keeps it, and a later edit of the file is logged ("policy changed since this
+  run started"), not applied. A plan ref without the key (6.2.2) reads the file as before.
+- A relaxed re-plan passes the intent gate only when each relaxed item has a deviation that quotes
+  it, with verdict `approve`, a non-empty `allowed_by` and `fails_closed: true`; anything else is
+  the intent stop (fail closed, checked by the script).
+- At most one automatic `plan_wrong` build per run: a second `plan_wrong`, or one after the PR
+  opened, asks as before and records `plan_wrong: ask`.
 - Audit trail: `state.autoDecisions` (`{gate, decision, reason}`, written by `autoDecide()` next
   to `gate()`) goes into the result (`auto_decisions`), the run-state (next to `auto_confirmed`)
   and the pr-opener input (`unattended_section`): the PR body gets a `### Unattended run` section
@@ -77,7 +85,7 @@ earlier round`), not an immediate stop. The round cap still stops.
 
 ### Fixed (6.2.2 carry-over lows)
 
-- `format_files.py`: a pre-freeze check-phase timeout now names the fixer time and whether the
+- `format_files.py` (one clock read decides the cut): a pre-freeze check-phase timeout now names the fixer time and whether the
   570 s step ceiling cut the 240 s check budget ("the fixer runs took N s, so the check phase had
   M s (cut by the 570 s step ceiling)", in `note`; the workflow's stop reason quotes it). No
   isolated `git worktree add` starts once the check budget is spent.
