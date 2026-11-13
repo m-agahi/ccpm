@@ -307,8 +307,10 @@ const READS = {
     "r.frozen_changed array": "prog:format_files:frozen_changed",
     // 6.2.2 (2107)
     "r.hook_failed boolean": "prog:format_files:hook_failed",
-    "r.hook_output string": "prog:format_files:hook_output",
-    "r.unknown_hooks array": "prog:format_files:unknown_hooks",
+    "r.hook_head string": "prog:format_files:hook_head",
+    "r.hook_sha256 string": "prog:format_files:hook_sha256",
+    "r.hook_failures array": "prog:format_files:hook_failures",
+    "f.length number-literal": "parsed: a [file, id] pair of prog:format_files:hook_failures, typed STRS by strsOf",
     "frozenList array": [PARSED_LOCAL, 3],
   },
   formatFilesPrompt: { "inputs.frozen string": PARSED_LOCAL },
@@ -675,6 +677,8 @@ const READS = {
   tokOn: { "budget object": "parsed: the runtime's budget global", "budget.spent function": "parsed: the runtime's budget global" },
   policyStep: { "r.now integer": "prog:policy:now" },
   // 6.2.2 (2107, ADR-1237): the sealed policy's pre_freeze_hooks (policy.py caps, or the run-state seal)
+  // 6.2.2 (2107): every caller passes a field typed STRS in PROGRAM_OUT
+  strsOf: { "v array": "parsed: a helper; each caller's field is typed STRS in PROGRAM_OUT", "s string": "parsed: a helper; each caller's field is typed STRS in PROGRAM_OUT" },
   preFreezeHooks: { "v array": "parsed: state.policy, the sealed policy (policy.py caps or the run-state)", "x string": "parsed: state.policy, the sealed policy (policy.py caps or the run-state)" },
   // 6.0.0 security review (S6): the CI write-back line reads the script's own CI record
   ciLine: {

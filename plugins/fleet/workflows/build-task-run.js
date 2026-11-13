@@ -592,8 +592,10 @@ const INFRA_SCHEMA = {
     files: { type: "array", items: STR },
     // format_files.py
     frozen_changed: { type: "array", items: STR },
-    // 6.2.2 (2107): the policy's pre-freeze hook ids the config lacks
+    // 6.2.2 (2107): the policy's pre-freeze hooks: ids that cannot run, [file, id] failures, ids that timed out
     unknown_hooks: { type: "array", items: STR },
+    hook_failures: { type: "array", items: { type: "array", items: STR } },
+    hook_timeout: { type: "array", items: STR },
     diff: { type: "array", items: STR },
     chunks: { type: "array", items: STR },
     refs: {
@@ -1542,7 +1544,7 @@ const PROGRAM_SHA256 = {
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "6aee2fdb201b6a3634dbd1ea6c0cfa40eefe3a0eed09c8d40e7f6c3b95a17f4c",
   "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
-  "format_files": "8a4004f344886f16a8962db7513e6736c6313ac5904090a0dcf56500aeb2ac48",
+  "format_files": "1767d90329f3aebf0f80661b7436ca9db613cd35d88c7dd93d11d810f8e3ff44",
   "gh_identity": "44d62a8f8b6cd4f69c7b057d0180f584edf6b03f03988e35f048bdc1d7ce2d70",
   "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
   "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
@@ -1715,7 +1717,7 @@ const PROGRAM_KEYS = {
   "parked:write": ["written", "sha256", "args"],
   "parked:park": ["target", "clean", "dirty", "args"],
   "plan_hash": ["plan_sha256", "blob", "args"],
-  "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_output", "unknown_hooks"],
+  "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "unknown_hooks"],
   "plan_ref_write": ["plan_commit", "plan_base", "tag_sha", "reused", "plan_file", "dirty"],
   "plan_files": ["head", "commit", "parent", "files", "args", "dsn_paths"],
   "plan_dsn": ["holds", "lines", "args"],
@@ -1814,7 +1816,7 @@ const PROGRAM_OUT = {
     digest: STR,
   },
   plan_hash: { plan_sha256: STR, blob: STR_OR_NULL, args: STRS, digest: STR },
-  format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, hook_failed: BOOL, hook_output: STR, unknown_hooks: STRS, digest: STR },
+  format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, hook_failed: BOOL, hook_failures: { type: "array", items: STRS }, hook_head: STR, hook_sha256: STR, hook_timeout: STRS, unknown_hooks: STRS, digest: STR },
   plan_ref_write: { plan_commit: STR, plan_base: STR, tag_sha: STR, reused: BOOL, plan_file: STR, dirty: STRS, digest: STR },
   plan_files: { head: STR, commit: STR, parent: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
   plan_dsn: { holds: BOOL, lines: { type: "array", items: INT }, args: STRS, digest: STR },
@@ -2069,12 +2071,12 @@ function scriptsProbeOf(probe, dir) {
     return bad("roles dir " + rolesDir + " resolves to " + JSON.stringify(rreals.length === 1 ? rreals[0] : null) + " (missing, or a symlink in its path)");
   if (rlinks.length !== 1 || rlinks[0] !== "no") return bad("roles dir " + rolesDir + " is a symlink");
   if (rodd.length) return bad("roles dir " + rolesDir + " holds entries that are not regular files: " + rodd.join(", "));
-  // 6.2.2 (2104): a relay with no hash line, or fewer than the probe's own count, is the agent's drop, not a missing file
+  // 6.2.2 (2104, review M1): fewer hash lines than this workflow's own tables expect, or no single
+  // count line, is a relay drop (retried once); the relayed count is never trusted on its own
   const nHash = lines.filter((x) => /^[0-9a-f]{64} [ *]/.test(x)).length;
-  const counts = lines.filter((x) => /^hash_lines=[0-9]+$/.test(x)).map((x) => Number(x.slice(11)));
-  if (nHash === 0) return { problem: "preflight agent returned no hash lines", relay: "relayed no hash lines" };
-  if (counts.length === 1 && nHash < counts[0])
-    return { problem: "preflight agent relayed " + nHash + " of " + counts[0] + " hash lines", relay: "relayed " + nHash + " of " + counts[0] + " hash lines" };
+  const counts = lines.filter((x) => x.indexOf("hash_lines=") === 0);
+  const drop = (what, absent) => ({ problem: "preflight agent " + what, relay: what, absent: absent || null, dir: hit });
+  if (nHash === 0) return { problem: "preflight agent returned no hash lines", relay: "relayed no hash lines", absent: null, dir: hit };
   const sums = {};
   const rsums = {};
   for (const x of lines) {
@@ -2089,6 +2091,13 @@ function scriptsProbeOf(probe, dir) {
     if (m[2].slice(0, hit.length + 1) !== hit + "/" || !/^[A-Za-z0-9_.-]+\.py$/.test(m[2].slice(hit.length + 1))) return bad("the probe hashed " + m[2] + ", outside " + hit);
     sums[m[2].slice(hit.length + 1, -3)] = m[1];
   }
+  const want = Object.keys(programTable()).map((n) => n + ".py").filter((f) => !Object.prototype.hasOwnProperty.call(sums, f.slice(0, -3)));
+  for (const n of Object.keys(ROLE_SHA256)) if (!Object.prototype.hasOwnProperty.call(rsums, n + ".md")) want.push("roles/" + n + ".md");
+  for (const n of Object.keys(SHARED_SHA256)) if (!Object.prototype.hasOwnProperty.call(rsums, "_shared/" + n + ".md")) want.push("roles/_shared/" + n + ".md");
+  const nWant = Object.keys(programTable()).length + Object.keys(ROLE_SHA256).length + Object.keys(SHARED_SHA256).length;
+  if (want.length) return drop("relayed " + nHash + " of " + nWant + " expected hash lines", want);
+  if (counts.length !== 1) return drop("relayed " + counts.length + " hash_lines= lines (the probe prints one)");
+  if (!/^hash_lines=[0-9]+$/.test(counts[0]) || Number(counts[0].slice(11)) !== nHash) return drop("relayed " + nHash + " hash lines, but the probe counted " + JSON.stringify(counts[0].slice(11)));
   const p = scriptsMapProblem(sums, hit) || rolesMapProblem(rsums, rolesDir);
   return p ? bad(p) : { dir: hit, rolesDir };
 }
@@ -2523,15 +2532,25 @@ function formatFilesPrompt(inputs) {
   );
 }
 const FIX_RUN_TIMEOUT = 180;
+// 6.2.2 (2107): a list of strings (each caller's field is typed STRS in PROGRAM_OUT)
+function strsOf(v) {
+  return Array.isArray(v) && v.every((s) => typeof s === "string");
+}
 async function formatFiles(label, worktree, select, frozenList, allowed, phaseName, scratchDir) {
-  const r = await infra(label, formatFilesPrompt({ worktree, select, frozen: Array.isArray(frozenList) ? frozenList : "@" + frozenList.sha.slice(0, 12), scratch_dir: scratchDir }), phaseName);
-  if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed) || !Array.isArray(r.refused) || typeof r.hook_failed !== "boolean" || typeof r.hook_output !== "string" || !Array.isArray(r.unknown_hooks))
-    halt("failed", label + " returned no ran/stable/files/changed/refused/hook_failed/hook_output/unknown_hooks");
-  // 6.2.2 (2107, ADR-1237): a policy pre_freeze_hooks id that the repo's config does not have
-  if (r.unknown_hooks.length)
-    halt("needs_human", label + ": the policy's pre_freeze_hooks names hook id(s) not in .pre-commit-config.yaml: " + r.unknown_hooks.map(String).join(", ") + "; fix the policy file or the config", "policy");
+  // 6.2.2 review M2: the digest id, so a miscopied relay gets the one digest retry
+  const r = await infra(label, formatFilesPrompt({ worktree, select, frozen: Array.isArray(frozenList) ? frozenList : "@" + frozenList.sha.slice(0, 12), scratch_dir: scratchDir }), phaseName, undefined, "format_files");
+  if (typeof r.ran !== "boolean" || typeof r.stable !== "boolean" || !Array.isArray(r.files) || !Array.isArray(r.changed) || !Array.isArray(r.refused))
+    halt("failed", label + " returned no ran/stable/files/changed/refused");
+  if (typeof r.hook_failed !== "boolean" || typeof r.hook_head !== "string" || typeof r.hook_sha256 !== "string" || !strsOf(r.hook_timeout) || !strsOf(r.unknown_hooks) ||
+      !Array.isArray(r.hook_failures) || !r.hook_failures.every((f) => strsOf(f) && f.length === 2))
+    halt("failed", label + " returned no hook_failed/hook_failures/hook_head/hook_sha256/hook_timeout/unknown_hooks");
   requireProgram(r, "format_files", label);
   if (!relayDigestOk(r, progKeys("format_files"), "format_files")) halt("failed", label + ": the relayed result does not match the program's digest");
+  // 6.2.2 (2107, ADR-1237; review L1, L2): a listed id the repo cannot run before commit, or a listed hook that timed out
+  if (r.unknown_hooks.length)
+    halt("needs_human", label + ": the policy's pre_freeze_hooks names hook id(s) the repo cannot run at the pre-commit stage: " + r.unknown_hooks.join("; ") + "; fix the policy file or the config", "policy");
+  if (r.hook_timeout.length)
+    halt("needs_human", label + ": pre_freeze_hooks timed out: " + r.hook_timeout.join(", ") + " (each run at most " + FIX_RUN_TIMEOUT + " s, all hook runs of the step at most 480 s); a test file is never frozen unchecked: list a faster hook or none", "hooks");
   if (!Array.isArray(frozenList) && r.frozen_map !== frozenList.sha) halt("failed", label + ": the program read the frozen map " + JSON.stringify(r.frozen_map) + ", not " + frozenList.sha, "hash");
   // the cache purge before the comparison
   if (!Number.isInteger(r.purged) || r.purged < 0 || !Array.isArray(r.purged_paths) || r.purged_paths.length > r.purged || r.purged_paths.some((x) => typeof x !== "string"))
@@ -3315,6 +3334,8 @@ const state = {
   freezeDigest: null,
   // 6.2.2 (2106): the refs/fleet/ prefixes the ownership gate watches (null: every ref)
   ownRefs: null,
+  // review N2: the other runs' refs at the last hasher read, and the refs already logged
+  foreignRefs: null,
   // the workspace step's checked gh_check
   gh: null,
   freezePlanRef: null,
@@ -3617,7 +3638,23 @@ async function hasher(label, worktree, testFiles, phaseName, baseTree) {
   if (rr.length) halt("needs_human", "hasher " + label + ": " + rr[0].slice(FLEETREF.length) + " exists; replacement objects could change what a sealed object id reads as", "hash");
   // 6.2.2 (2106, ADR-1235): only this run's refs/fleet/<own id>/* enter the gates; another run's refs in the shared git dir are not this run's roles'
   const own = state.ownRefs;
-  if (own) for (const k of Object.keys(view.git)) if (k.indexOf(FLEETREF + "refs/fleet/") === 0 && !own.some((p) => k.indexOf(FLEETREF + p) === 0)) delete view.git[k];
+  if (own) {
+    const foreign = {};
+    for (const k of Object.keys(view.git))
+      if (k.indexOf(FLEETREF + "refs/fleet/") === 0 && !own.some((p) => k.indexOf(FLEETREF + p) === 0)) {
+        foreign[k] = view.git[k];
+        delete view.git[k];
+      }
+    // review N2: a change to another run's ref is logged once per ref, never a stop
+    const seen = state.foreignRefs;
+    if (seen)
+      for (const k of Object.keys(Object.assign({}, seen.refs, foreign)))
+        if (seen.refs[k] !== foreign[k] && !seen.logged[k]) {
+          seen.logged[k] = true;
+          gate("another fleet run's ref changed: " + k.slice(FLEETREF.length) + " (" + (seen.refs[k] || "absent") + " -> " + (foreign[k] || "absent") + "); not this run's, ignored (ADR-1235)");
+        }
+    state.foreignRefs = { refs: foreign, logged: seen ? seen.logged : {} };
+  }
   return Object.assign({}, r, { hashes: Object.assign({}, h, view) });
 }
 
@@ -3782,7 +3819,15 @@ async function preflightStep(repo) {
     gate("preflight: the agent " + sp.relay + "; retried once");
     pre = await dispatch("preflight:relay-retry", preflightPrompt({ repo }) + "\nRetry: the workflow found that the " + sp.problem + ". Copy every output line of the probe command into scripts_probe, one array item per line, in order, every sha256sum line included; never a summary or a sentence in place of lines.", preOpts);
     sp = scriptsProbeOf(pre.scripts_probe, pre.scripts_dir);
-    if (sp.relay) halt("needs_human", "preflight: " + sp.problem + " (after one retry); the scripts on disk were not checked, so re-run /build-task", "contract");
+    if (sp.relay)
+      halt(
+        "needs_human",
+        "preflight: " + sp.problem + " (after one retry)" +
+          (sp.absent
+            ? "; no line for: " + sp.absent.slice(0, 10).join(", ") + (sp.absent.length > 10 ? " (" + (sp.absent.length - 10) + " more)" : "") + "; re-run /build-task; if those files are absent from " + sp.dir.slice(0, -"/scripts".length) + ", install fleet " + FLEET_VERSION + " from the marketplace"
+            : "; the scripts on disk were not checked, so re-run /build-task"),
+        "contract",
+      );
   }
   if (sp.problem) halt("needs_human", "preflight: scripts_dir unusable: " + sp.problem + "; install fleet " + FLEET_VERSION + " from the marketplace, then run /reload-plugins" + RELOAD_HINT, "contract");
   state.scriptsDir = sp.dir;
@@ -6645,7 +6690,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const fmt = await formatFiles("infra:format-tests:r" + n, mainWt, pfh.length ? { paths: wrote, check_hooks: pfh } : { paths: wrote }, [], wrote, "Tests", lay.scratch);
     if (pfh.length && !fmt.ran && fmt.note !== "no files to format")
       halt("needs_human", "infra:format-tests:r" + n + ": the policy's pre_freeze_hooks (" + pfh.join(", ") + ") did not run (" + fmt.note + "); a test file is never frozen unchecked", "policy");
-    hookFail = pfh.length && fmt.ran && fmt.hook_failed ? { files: fmt.files, ids: pfh, output: fmt.hook_output } : null;
+    hookFail = pfh.length && fmt.ran && fmt.hook_failed ? { failures: fmt.hook_failures.map((x) => [normPath(x[0]), x[1]]), head: fmt.hook_head } : null;
     const post = await hasher("hasher:post-writers:r" + n, mainWt, hashedFiles, "Tests", pre.fingerprint.tree);
     if (post.fingerprint.head !== pre.fingerprint.head)
       halt("needs_human", "writer committed: HEAD moved from " + pre.fingerprint.head + " to " + post.fingerprint.head + " in test round " + n + "; writers never commit", "ownership");
@@ -6693,14 +6738,23 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         // fix_tests round to the writers; the judge never sees it, no freeze
         if (hookFail) {
           const hf = hookFail;
-          const what = "a pre-commit hook the policy lists in pre_freeze_hooks (" + hf.ids.join(", ") + ") fails on the test files " + hf.files.join(", ");
+          const listed = hf.failures.map((x) => x[0] + " (" + x[1] + ")").join(", ");
           if (i === maxTestRounds - 1)
-            halt("needs_human", "infra:format-tests:r" + n + ": a pre-commit hook still fails on the test files after " + maxTestRounds + " test round(s); a test file is never frozen while a hook fails on it: " + hf.output, "cap");
-          pending = pending.map((p) => ({
-            criterion: p.criterion,
-            findings: [{ target: "tests", criterion: p.criterion.id, finding: what + " (run by the workflow before the test judge); fix your test files so those hooks pass, keep the tests' meaning. Hook output: " + hf.output }],
-          }));
-          gate("infra:format-tests:r" + n + ": a pre-commit hook fails on the test files; fix_tests round to " + pending.map((p) => p.criterion.id).join(", "));
+            halt("needs_human", "infra:format-tests:r" + n + ": pre_freeze_hooks still fail after " + maxTestRounds + " test round(s): " + listed + "; a test file is never frozen while a listed hook fails on it. First output: " + hf.head, "cap");
+          // review L3: each writer gets only the failures in its own test files
+          const next = [];
+          for (const p of pending) {
+            const own = hf.failures.filter((x) => p.criterion.test_files.indexOf(x[0]) >= 0);
+            if (!own.length) continue;
+            const finding =
+              "pre_freeze_hooks fail on your test file(s) (run by the workflow before the test judge): " + own.map((x) => x[0] + " (" + x[1] + ")").join(", ") +
+              ". Fix them so these hooks pass and keep the tests' meaning; edit only your own test files. Reproduce with " + own.map((x) => "`pre-commit run " + x[1] + " --files " + x[0] + "`").join(", ") +
+              ". First output: " + hf.head;
+            next.push({ criterion: p.criterion, findings: [{ target: "tests", criterion: p.criterion.id, finding }] });
+          }
+          if (!next.length) halt("needs_human", "infra:format-tests:r" + n + ": pre_freeze_hooks fail on " + listed + ", which no pending writer owns", "ownership");
+          pending = next;
+          gate("infra:format-tests:r" + n + ": pre_freeze_hooks fail on " + listed + "; fix_tests round to " + pending.map((p) => p.criterion.id).join(", "));
           continue;
         }
       } else {

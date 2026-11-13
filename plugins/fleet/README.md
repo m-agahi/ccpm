@@ -241,16 +241,22 @@ count.
 Pre-freeze hooks (6.2.2, ledger 2107, ADR-1237): a repo can list hook ids in its policy
 `repos` override, key `pre_freeze_hooks` (see the policy file section). With no list, no hook is
 judged before the freeze, as in 6.2.1. With a list, `infra:format-tests:r<n>` runs each listed
-hook once more, alone, on the round's test files after the fixer runs settle (`pre-commit run <id>
---files <paths>` in the same scratch checkout). A non-zero exit is a failure. The program reports
-`hook_failed` and the last 2000 characters of the failing hooks' output as printable ASCII
-(`hook_output`), both in its digest. A failure skips the test judge and sends a fix_tests round to
-the round's writers, with the hook output as a routed finding; the round counts against the test
-rounds. A hook that still fails in the last round stops with `needs_human` (`stop_gate: cap`).
-The run never freezes while a listed hook fails on a test file: the coder may not edit a frozen
-file, and the commit hook would reject it. A listed id that the config at HEAD does not have stops
-with `needs_human` naming it (`stop_gate: policy`), and so do listed hooks that cannot run (no
-`pre-commit`). Every hook still runs at the commit step, unchanged. List only hooks that pass on
+hook once more, alone, on each of the round's test files after the fixer runs settle
+(`pre-commit run <id> --files <file>` in the same scratch checkout). A non-zero exit is a
+failure. The program reports `hook_failures` (`[file, id]` pairs), the first 300 characters of the
+failing output as printable ASCII (`hook_head`) and the sha256 of the whole output
+(`hook_sha256`), all in its digest; the step carries the one digest retry (a second run finds the
+files settled). A failure skips the test judge and sends a fix_tests round to the writers that own
+the failing files, each with only its own failures, the command to reproduce them and the rule to
+edit only its own test files; the round counts against the test rounds. A hook that still fails
+in the last round stops with `needs_human` (`stop_gate: cap`). The run never freezes while a
+listed hook fails on a test file: the coder may not edit a frozen file, and the commit hook would
+reject it. A listed id that the config at HEAD does not have, or whose `stages` (or the config's
+`default_stages`) exclude the pre-commit stage, stops with `needs_human` naming it and why
+(`stop_gate: policy`); so do listed hooks that cannot run (no `pre-commit`). Every hook run of the
+step shares one 480 s deadline (each run at most 180 s), under the agent's 600 s Bash limit; a
+listed hook that runs out of time stops with `needs_human` (`stop_gate: hooks`) and is never sent
+to the writers. Every hook still runs at the commit step, unchanged. List only hooks that pass on
 RED tests, such as a formatter check (`cargo-fmt`); a compile or test-suite hook fails until the
 code exists. The
 program reports every path that differs between the worktree tree before the first run and after
@@ -934,11 +940,13 @@ any other entry. Nothing is cached; every run (plan, build, probe) checks the fi
    lines of the regular files must equal `ROLE_SHA256` and `SHARED_SHA256`. Any other value stops
    the run (`stop_gate: contract`).
    The probe prints `hash_lines=<n>`, its own count of sha256sum lines, before them (6.2.2,
-   ledger 2104). A relay with no sha256sum line, or fewer than `n`, is the agent's drop, not a
-   missing file: one retry (`preflight:relay-retry`, sonnet), then a stop that says "preflight
-   agent returned no hash lines" or "preflight agent relayed <k> of <n> hash lines" and does not
-   ask for a reinstall. "is missing" names a file only when the lines arrived and that file's did
-   not.
+   ledger 2104). The workflow compares the sha256sum lines with its own tables (every shipped
+   program, role file and shared file), never with the relayed count alone. No sha256sum line,
+   fewer lines than the tables expect, no single `hash_lines=` line, or a count that differs from
+   the lines relayed is a relay drop: one retry (`preflight:relay-retry`, sonnet), then a stop
+   that says "preflight agent returned no hash lines" (no reinstall text) or "preflight agent
+   relayed <k> of <n> expected hash lines", which names the files with no line and adds the
+   reinstall hint for files absent on disk.
 2. Each role's tier comes from `ROLE_DISPATCH`.
 3. Each role prompt is a short wrapper with no role text. The role agent first runs
    `sha256sum -- <roles dir>/<role>.md` in Bash, then reads the whole file with the Read tool

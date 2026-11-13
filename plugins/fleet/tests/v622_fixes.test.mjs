@@ -2,14 +2,17 @@
 //
 // 2106 / ADR-1235: the ownership gate compares only refs under
 //   refs/fleet/<own task id>/* (and the run's own layout key). Another run's
-//   refs in the shared git-common-dir are never blamed on this run's roles.
-// 2107 / ADR-1234: format_files.py reports the exit status of the final,
-//   stable pre-commit run (check-only hooks included). A failure on the
-//   writers' files sends a fix_tests round to the writers with the hook
-//   output; the run never freezes while a hook fails on a test file.
+//   refs in the shared git-common-dir are never blamed on this run's roles;
+//   a change to one is logged once (review N2).
+// 2107 / ADR-1237 (supersedes ADR-1234, ADR-1236): only the hook ids in the
+//   repo's policy override pre_freeze_hooks run before the freeze, each alone
+//   on each writer file. A failure sends a fix_tests round to the writers that
+//   own the failing files; the run never freezes while a listed hook fails on
+//   a test file. No list: no pre-freeze hook, as in 6.2.1.
 // 2104: the preflight probe prints its own count of hash lines. A relay with
-//   no hash line, or fewer than the count, is retried once; then a distinct
-//   reason, never "missing" and never "reinstall".
+//   fewer hash lines than the workflow's own tables expect, or with no single
+//   count line, is retried once; then a distinct reason, never a bare
+//   "missing" (review M1).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -90,9 +93,18 @@ test("6.2.2 2106: replacement refs still stop every hasher read, own task or not
   assert.match(out.result.reason, /refs\/replace\/c{40} exists/);
 });
 
+test("6.2.2 review N2: another run's ref that changes between hasher reads gets one gate line naming it, and no stop", async () => {
+  const out = await run(writerRound({ "refs/fleet/y690/state": SHA_A }, { "refs/fleet/y690/state": SHA_B, "refs/fleet/y690/freeze": SHA_A }), ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  for (const ref of ["refs/fleet/y690/state", "refs/fleet/y690/freeze"]) {
+    const lines = out.result.gate_log.filter((g) => g.includes("another fleet run's ref changed: " + ref + " "));
+    assert.equal(lines.length, 1, ref + ": " + out.result.gate_log.filter((g) => /another fleet run/.test(g)).join("\n"));
+  }
+});
+
 // ---------------------------------------------------------------- 2107 (ADR-1237)
 
-const HOOK_OUT = "[cargo-fmt] cargo fmt..............Failed\n- hook id: cargo-fmt\n- exit code: 1\n\nDiff in tests/test_a.py at line 13";
+const HOOK_HEAD = "[cargo-fmt tests/test_a.py] cargo fmt..............Failed\n- hook id: cargo-fmt\n- exit code: 1\n\nDiff in tests/test_a.py at line 13";
 const DEFAULT_CAPS = { pr_ready: true, ci_watch: true, ci_watch_minutes: 60, stats: true, merge: "never", update_branch: "never", ci_trigger: false, review_post: "none" };
 // the sealed policy read: the repos override's pre_freeze_hooks (undefined: no list)
 const policyWith = (hooks) => (p) => ({
@@ -100,13 +112,14 @@ const policyWith = (hooks) => (p) => ({
   caps: Object.assign({}, DEFAULT_CAPS, hooks === undefined ? {} : { pre_freeze_hooks: hooks }),
   matched: "profile personal, repos[\"o/r\"]", error: null, args: inputsOf(p).args,
 });
-// a format_files result for the writers' files
-function hookResult(prompt, failed, over) {
+// a format_files result for the writers' files; failures: [[file, id]]
+function hookResult(prompt, failures, over) {
   const sel = inputsOf(prompt).select;
-  return Object.assign({ status: "ok", reason: "ran", note: "ran pre-commit run --files in a scratch checkout of HEAD", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [], purged: 0, purged_paths: [], hook_failed: failed, hook_output: failed ? HOOK_OUT : "", unknown_hooks: [] }, over || {});
+  const f = failures || [];
+  return Object.assign({ status: "ok", reason: "ran", note: "ran pre-commit run --files in a scratch checkout of HEAD", ran: true, runs: 1, stable: true, files: sel.paths || [], changed: [], refused: [], purged: 0, purged_paths: [], hook_failed: f.length > 0, hook_failures: f, hook_head: f.length ? HOOK_HEAD : "", hook_sha256: f.length ? "e".repeat(64) : "", hook_timeout: [], unknown_hooks: [] }, over || {});
 }
-const failing = (prompt) => hookResult(prompt, true);
-const passing = (prompt) => hookResult(prompt, false);
+const failing = (prompt) => hookResult(prompt, [["tests/test_a.py", "cargo-fmt"]]);
+const passing = (prompt) => hookResult(prompt, []);
 const selectOf = (out, label) => inputsOf(call(out, label).prompt).select;
 
 function round(n, writers) {
@@ -116,9 +129,10 @@ function round(n, writers) {
   return s;
 }
 
-test("6.2.2 2107: format_files relays hook_failed, hook_output and unknown_hooks as digest keys; the policy caps type pre_freeze_hooks", () => {
+test("6.2.2 2107: format_files relays the pre-freeze result as digest keys (no free-text output: a head and a sha256)", () => {
   const keys = K("format_files");
-  for (const k of ["hook_failed", "hook_output", "unknown_hooks"]) assert.ok(keys.includes(k), keys.join(","));
+  for (const k of ["hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "unknown_hooks"]) assert.ok(keys.includes(k), keys.join(","));
+  assert.ok(!keys.includes("hook_output"));
 });
 
 test("6.2.2 2107: no pre_freeze_hooks list: no hook is judged before the freeze (6.2.1 behaviour), even when the program says one failed", async () => {
@@ -133,7 +147,7 @@ test("6.2.2 2107: no pre_freeze_hooks list: no hook is judged before the freeze 
   }
 });
 
-test("6.2.2 2107: a listed hook failing on a writer file sends a fix_tests round to the writers, never the judge, and never freezes then", async () => {
+test("6.2.2 2107 / review L3: a listed hook failing on one writer's file sends a fix_tests round to that writer only, never the judge, never a freeze then", async () => {
   const s = happy({
     script: Object.assign(
       {
@@ -143,7 +157,7 @@ test("6.2.2 2107: a listed hook failing on a writer file sends a fix_tests round
         "role:fleet-test-judge:r2": { status: "ok", reason: "good", verdict: "approve", routed_findings: [], checked: [] },
         "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_TESTS },
       },
-      round(2, ["AC1", "AC2"]),
+      round(2, ["AC1"]),
     ),
   });
   const out = await run(s, ARGS);
@@ -153,32 +167,34 @@ test("6.2.2 2107: a listed hook failing on a writer file sends a fix_tests round
   assert.equal(selectOf(out, "infra:format-code:r1").check_hooks, undefined, "the coder's files are never checked here");
   const l = out.labels;
   assert.ok(!l.includes("role:fleet-test-judge:r1"), "no test judge on a failing hook");
+  assert.ok(!l.includes("role:fleet-test-writer:AC2:r2"), "AC2's file passed: no round for it");
   assert.ok(l.indexOf("role:fleet-test-writer:AC1:r2") > l.indexOf("infra:format-tests:r1"));
   assert.ok(l.indexOf("hasher:freeze:f1") > l.indexOf("role:fleet-test-judge:r2"), "the freeze follows the judge's approval of a clean round");
-  for (const id of ["AC1", "AC2"]) {
-    const w = inputsOf(call(out, "role:fleet-test-writer:" + id + ":r2").prompt);
-    assert.equal(w.routed_findings.length, 1, id);
-    assert.equal(w.routed_findings[0].criterion, id);
-    assert.equal(w.routed_findings[0].target, "tests");
-    assert.ok(w.routed_findings[0].finding.includes(HOOK_OUT), w.routed_findings[0].finding);
-    assert.match(w.routed_findings[0].finding, /pre_freeze_hooks \(cargo-fmt\)/);
-  }
-  assert.ok(out.result.gate_log.some((g) => /format-tests:r1: a pre-commit hook fails on the test files/.test(g)), out.result.gate_log.join("\n"));
+  const w = inputsOf(call(out, "role:fleet-test-writer:AC1:r2").prompt);
+  assert.equal(w.routed_findings.length, 1);
+  const f = w.routed_findings[0];
+  assert.equal(f.criterion, "AC1");
+  assert.equal(f.target, "tests");
+  assert.ok(f.finding.includes("tests/test_a.py") && !f.finding.includes("tests/test_b.py"), f.finding);
+  assert.match(f.finding, /edit only your own test files/);
+  assert.ok(f.finding.includes("pre-commit run cargo-fmt --files tests/test_a.py"), f.finding);
+  assert.ok(f.finding.includes(HOOK_HEAD), f.finding);
+  assert.ok(out.result.gate_log.some((g) => /format-tests:r1: pre_freeze_hooks fail on tests\/test_a\.py \(cargo-fmt\); fix_tests round to AC1/.test(g)), out.result.gate_log.join("\n"));
 });
 
-test("6.2.2 2107: a listed hook still failing in the last test round stops for a human with the hook output; no judge, no freeze", async () => {
+test("6.2.2 2107: a listed hook still failing in the last test round stops for a human; no judge, no freeze", async () => {
   const s = happy({
     script: Object.assign(
       { "infra:policy": policyWith(["cargo-fmt"]), "infra:format-tests:r1": failing, "infra:format-tests:r2": failing, "infra:format-tests:r3": failing },
-      round(2, ["AC1", "AC2"]),
-      round(3, ["AC1", "AC2"]),
+      round(2, ["AC1"]),
+      round(3, ["AC1"]),
     ),
   });
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "cap");
-  assert.match(out.result.reason, /pre-commit hook still fails on the test files after 3 test round\(s\)/);
+  assert.match(out.result.reason, /pre_freeze_hooks still fail after 3 test round\(s\): tests\/test_a\.py \(cargo-fmt\)/);
   assert.ok(out.result.reason.includes("Diff in tests/test_a.py at line 13"), out.result.reason);
   assert.match(out.result.reason, /never frozen/);
   assert.ok(!out.labels.some((x) => /^role:fleet-test-judge:/.test(x)), "no judge ran");
@@ -193,16 +209,25 @@ test("6.2.2 2107: a listed hook that passes leaves the round on the normal path"
   assert.ok(!out.labels.includes("role:fleet-test-writer:AC1:r2"));
 });
 
-test("6.2.2 2107: a listed id the repo's config does not have stops for a human, naming it", async () => {
-  const out = await run(happy({ script: { "infra:policy": policyWith(["cargo-fmt", "nope"]), "infra:format-tests:r1": (p) => hookResult(p, false, { ran: false, note: "pre-freeze hook id(s) not in .pre-commit-config.yaml: nope; no hook was run", unknown_hooks: ["nope"] }) } }), ARGS);
+test("6.2.2 2107 / review L1: a listed id the repo cannot run before commit stops for a human, naming it and why", async () => {
+  const out = await run(happy({ script: { "infra:policy": policyWith(["cargo-fmt", "nope"]), "infra:format-tests:r1": (p) => hookResult(p, [], { ran: false, note: "pre-freeze hook id(s) cannot run: nope; no hook was run", unknown_hooks: ["nope: not in .pre-commit-config.yaml"] }) } }), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "policy");
-  assert.match(out.result.reason, /pre_freeze_hooks names hook id\(s\) not in \.pre-commit-config\.yaml: nope/);
+  assert.match(out.result.reason, /pre_freeze_hooks names hook id\(s\) the repo cannot run at the pre-commit stage: nope: not in \.pre-commit-config\.yaml/);
+  assert.ok(!out.labels.some((x) => /^hasher:freeze:/.test(x)));
+});
+
+test("6.2.2 review L2: a listed hook that timed out stops for a human with its own reason; the writers get nothing", async () => {
+  const out = await run(happy({ script: { "infra:policy": policyWith(["cargo-fmt"]), "infra:format-tests:r1": (p) => hookResult(p, [], { hook_timeout: ["cargo-fmt"] }) } }), ARGS);
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "hooks");
+  assert.match(out.result.reason, /pre_freeze_hooks timed out: cargo-fmt/);
+  assert.ok(!out.labels.includes("role:fleet-test-writer:AC1:r2"));
   assert.ok(!out.labels.some((x) => /^hasher:freeze:/.test(x)));
 });
 
 test("6.2.2 2107: listed hooks that could not run (no pre-commit) stop for a human; a bad sealed list stops too", async () => {
-  let out = await run(happy({ script: { "infra:policy": policyWith(["cargo-fmt"]), "infra:format-tests:r1": (p) => hookResult(p, false, { ran: false, note: "pre-commit is not installed" }) } }), ARGS);
+  let out = await run(happy({ script: { "infra:policy": policyWith(["cargo-fmt"]), "infra:format-tests:r1": (p) => hookResult(p, [], { ran: false, note: "pre-commit is not installed" }) } }), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "policy");
   assert.match(out.result.reason, /pre_freeze_hooks \(cargo-fmt\) did not run \(pre-commit is not installed\)/);
@@ -213,12 +238,33 @@ test("6.2.2 2107: listed hooks that could not run (no pre-commit) stop for a hum
   }
 });
 
-test("6.2.2 2107: a format result without a boolean hook_failed or a list unknown_hooks is a broken relay", async () => {
-  for (const over of [{ hook_failed: "no" }, { unknown_hooks: null }]) {
-    const out = await run(happy({ script: { "infra:format-tests:r1": (prompt) => hookResult(prompt, false, over) } }), ARGS);
+test("6.2.2 2107: a format result with a mistyped pre-freeze key is a broken relay", async () => {
+  for (const over of [{ hook_failed: "no" }, { unknown_hooks: null }, { hook_failures: null }, { hook_timeout: "x" }, { hook_head: 1 }, { hook_failures: [["tests/test_a.py"]] }]) {
+    const out = await run(happy({ script: { "infra:format-tests:r1": (prompt) => hookResult(prompt, [], over) } }), ARGS);
     assert.equal(out.result.status, "failed", JSON.stringify(over));
-    assert.match(out.result.reason, /hook_failed|unknown_hooks/);
+    assert.match(out.result.reason, /hook_failed|unknown_hooks|hook_failures|hook_timeout|hook_head/);
   }
+});
+
+test("6.2.2 review M2: a format relay whose hook_head was miscopied gets the one digest retry, and the run goes on", async () => {
+  const s = happy({
+    script: Object.assign(
+      {
+        "infra:policy": policyWith(["cargo-fmt"]),
+        "infra:format-tests:r1": failing,
+        "infra:format-tests:r2": passing,
+        "role:fleet-test-judge:r2": { status: "ok", reason: "good", verdict: "approve", routed_findings: [], checked: [] },
+        "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_TESTS },
+      },
+      round(2, ["AC1"]),
+    ),
+  });
+  // the first relay of format-tests:r1 drops a character of hook_head after the program's digest
+  s.__mutate = { label: "infra:format-tests:r1", fn: (r, prompt, label) => (label === "infra:format-tests:r1" ? Object.assign(r, { hook_head: r.hook_head.slice(1) }) : r) };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.labels.includes("infra:format-tests:r1:digest-retry"), out.labels.join(", "));
+  assert.ok(out.labels.includes("role:fleet-test-writer:AC1:r2"));
 });
 
 // policy.py run for real (an absolute python3: the env has a bare PATH)
@@ -262,9 +308,9 @@ test("6.2.2 2107: policy.py: a pre_freeze_hooks that is not a list of hook ids m
 });
 
 // format_files.py run for real with a fake pre-commit: `pre-commit run --files ...`
-// (the fixer runs) exits 0; `pre-commit run <id> --files ...` follows the case below
-const CFG622 = "repos:\n  - repo: local\n    hooks:\n      - id: fmt-check\n        name: fmt-check\n        entry: fmt --check\n        language: system\n      - id: clippy\n        name: clippy\n        entry: clippy --all-targets\n        language: system\n        pass_filenames: false\n      - id: suite\n        name: suite\n        entry: suite\n        language: system\n        always_run: true\n";
-function hookRepo(perId) {
+// (the fixer runs) exits 1 (ignored); `pre-commit run <id> --files <file>` follows the case below
+const CFG622 = "repos:\n  - repo: local\n    hooks:\n      - id: fmt-check\n        name: fmt-check\n        entry: fmt --check\n        language: system\n      - id: clippy\n        name: clippy\n        entry: clippy --all-targets\n        language: system\n        pass_filenames: false\n      - id: suite\n        name: suite\n        entry: suite\n        language: system\n        always_run: true\n      - id: push-only\n        name: push-only\n        entry: push-only\n        language: system\n        stages: [pre-push]\n      - id: legacy-commit\n        name: legacy-commit\n        entry: legacy\n        language: system\n        stages: [commit]\n";
+function hookRepo(perId, cfg) {
   const home = mkdtempSync(join(tmpdir(), "fleet-622-"));
   const wt = join(home, "repo");
   const bin = join(home, "bin");
@@ -274,17 +320,19 @@ function hookRepo(perId) {
   sh(wt, "git", "config", "user.email", "t@example.com");
   sh(wt, "git", "config", "user.name", "t");
   sh(wt, "git", "config", "commit.gpgsign", "false");
-  writeFileSync(join(wt, ".pre-commit-config.yaml"), CFG622);
+  writeFileSync(join(wt, ".pre-commit-config.yaml"), cfg || CFG622);
   writeFileSync(join(wt, "src.py"), "x = 1\n");
   sh(wt, "git", "add", "-A");
   sh(wt, "git", "commit", "-qm", "base");
   const log = join(home, "log");
-  writeFileSync(join(bin, "pre-commit"), "#!/bin/sh\necho \"$2\" >> '" + log + "'\nif [ \"$2\" = --files ]; then exit 1; fi\ncase \"$2\" in\n" + perId + "\nesac\nexit 0\n", { mode: 0o755 });
+  writeFileSync(join(bin, "pre-commit"), "#!/bin/sh\necho \"$2 $4\" >> '" + log + "'\nif [ \"$2\" = --files ]; then exit 1; fi\ncase \"$2\" in\n" + perId + "\nesac\nexit 0\n", { mode: 0o755 });
   writeFileSync(join(wt, "tests", "test_a.py"), "def test_a():\n    assert  1\n");
-  const runF = (check) => {
+  writeFileSync(join(wt, "tests", "test_b.py"), "def test_b():\n    assert 1\n");
+  const runF = (check, tmo) => {
     const env = Object.assign({}, process.env, { PATH: bin + ":" + process.env.PATH });
-    const sel = check === undefined ? { paths: ["tests/test_a.py"] } : { paths: ["tests/test_a.py"], check_hooks: check };
-    const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "format_files.py"), wt, JSON.stringify(sel), "[]", join(home, "scratch"), "60"], { encoding: "utf8", env });
+    const paths = ["tests/test_a.py", "tests/test_b.py"];
+    const sel = check === undefined ? { paths } : { paths, check_hooks: check };
+    const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "format_files.py"), wt, JSON.stringify(sel), "[]", join(home, "scratch"), String(tmo || 60)], { encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.doesNotMatch(o.note, /hook surface unknown/, o.note);
@@ -293,67 +341,94 @@ function hookRepo(perId) {
   const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []);
   return { wt, runF, calls, done: () => rmSync(home, { recursive: true, force: true }) };
 }
-// every hook fails when run alone: the clippy-style and the always_run hook too
-const ALL_FAIL = "  fmt-check) echo 'fmt-check..........Failed'; echo 'Diff in tests/test_a.py at line 2'; exit 1;;\n  clippy) echo 'clippy: cannot find function new_thing'; exit 1;;\n  suite) echo 'suite: 1 failed'; exit 1;;";
+const NONE = { hook_failed: false, hook_failures: [], hook_head: "", hook_sha256: "", hook_timeout: [], unknown_hooks: [] };
+const pick6 = (o) => Object.fromEntries(Object.keys(NONE).map((k) => [k, o[k]]));
+// every hook fails when run alone; fmt-check only on test_a
+const ALL_FAIL = "  fmt-check) if [ \"$4\" = tests/test_a.py ]; then echo 'fmt-check..........Failed'; echo 'Diff in tests/test_a.py at line 2'; exit 1; fi;;\n  clippy) echo 'clippy: cannot find function new_thing'; exit 1;;\n  suite) echo 'suite: 1 failed'; exit 1;;";
 
 test("6.2.2 2107: format_files.py: no check_hooks: no hook runs alone and nothing fails, whatever the fixer runs exit with", () => {
   const r = hookRepo(ALL_FAIL);
   try {
     const o = r.runF();
     assert.equal(o.ran, true, o.note);
-    assert.equal(o.hook_failed, false);
-    assert.equal(o.hook_output, "");
-    assert.deepEqual(o.unknown_hooks, []);
-    assert.deepEqual(r.calls().filter((x) => x !== "--files"), [], "no per-id run");
+    assert.deepEqual(pick6(o), NONE);
+    assert.deepEqual(r.calls().filter((x) => !x.startsWith("--files")), [], "no per-id run");
   } finally {
     r.done();
   }
 });
 
-test("6.2.2 2107: format_files.py: a listed check-only hook that fails is reported; unlisted pass_filenames:false and always_run hooks never run alone", () => {
+test("6.2.2 2107 / review L3: format_files.py: each listed hook runs alone per file; only the failing file is reported; unlisted pass_filenames:false and always_run hooks never run", () => {
   const r = hookRepo(ALL_FAIL);
   try {
     const o = r.runF(["fmt-check"]);
     assert.equal(o.ran, true, o.note);
     assert.equal(o.hook_failed, true);
-    assert.match(o.hook_output, /^\[fmt-check\] fmt-check\.+Failed/);
-    assert.match(o.hook_output, /Diff in tests\/test_a\.py at line 2/);
-    assert.doesNotMatch(o.hook_output, /clippy|suite/);
-    assert.deepEqual(r.calls().filter((x) => x !== "--files"), ["fmt-check"]);
+    assert.deepEqual(o.hook_failures, [["tests/test_a.py", "fmt-check"]]);
+    assert.match(o.hook_head, /^\[fmt-check tests\/test_a\.py\] fmt-check\.+Failed/);
+    assert.match(o.hook_head, /Diff in tests\/test_a\.py at line 2/);
+    assert.match(o.hook_sha256, /^[0-9a-f]{64}$/);
+    assert.doesNotMatch(o.hook_head, /clippy|suite/);
+    assert.deepEqual(r.calls().filter((x) => !x.startsWith("--files")).sort(), ["fmt-check tests/test_a.py", "fmt-check tests/test_b.py"]);
   } finally {
     r.done();
   }
 });
 
-test("6.2.2 2107: format_files.py: a listed hook that passes is no failure; an unknown id runs nothing and is named", () => {
-  let r = hookRepo("  fmt-check) exit 0;;\n  clippy) exit 1;;");
+test("6.2.2 2107 / review L1: format_files.py: an unknown id, or one whose stages exclude pre-commit, runs nothing and is named with a reason", () => {
+  let r = hookRepo(ALL_FAIL);
+  try {
+    const o = r.runF(["fmt-check", "nope", "push-only"]);
+    assert.equal(o.ran, false);
+    assert.deepEqual(o.unknown_hooks, ["nope: not in .pre-commit-config.yaml", "push-only: its stages (pre-push) exclude pre-commit"]);
+    assert.deepEqual(r.calls(), [], "nothing ran");
+    // the legacy stage name `commit` is the pre-commit stage
+    assert.deepEqual(r.runF(["legacy-commit"]).unknown_hooks, []);
+  } finally {
+    r.done();
+  }
+  // default_stages without the pre-commit stage applies to a hook with no stages of its own
+  r = hookRepo(ALL_FAIL, "default_stages: [pre-push]\n" + CFG622);
+  try {
+    assert.deepEqual(r.runF(["fmt-check"]).unknown_hooks, ["fmt-check: its stages (pre-push) exclude pre-commit"]);
+  } finally {
+    r.done();
+  }
+  // pre-commit's own refusal (a stage a remote manifest set) is reported the same way, never as a failure
+  r = hookRepo("  fmt-check) echo 'No hook with id `fmt-check` in stage `pre-commit`'; exit 1;;");
   try {
     const o = r.runF(["fmt-check"]);
     assert.equal(o.hook_failed, false);
-    assert.equal(o.hook_output, "");
-  } finally {
-    r.done();
-  }
-  r = hookRepo(ALL_FAIL);
-  try {
-    const o = r.runF(["fmt-check", "nope"]);
-    assert.equal(o.ran, false);
-    assert.deepEqual(o.unknown_hooks, ["nope"]);
-    assert.match(o.note, /not in \.pre-commit-config\.yaml: nope/);
-    assert.deepEqual(r.calls(), [], "nothing ran");
+    assert.deepEqual(o.unknown_hooks, ["fmt-check: pre-commit has no such hook at the pre-commit stage"]);
   } finally {
     r.done();
   }
 });
 
-test("6.2.2 2107: format_files.py: the failing hooks' output is capped and printable", () => {
+test("6.2.2 review L2: format_files.py: a listed hook that runs past its time is a timeout, not a failure", () => {
+  const r = hookRepo("  fmt-check) sleep 5;;");
+  try {
+    const o = r.runF(["fmt-check"], 1);
+    assert.equal(o.hook_failed, false);
+    assert.deepEqual(o.hook_failures, []);
+    assert.deepEqual(o.hook_timeout, ["fmt-check"]);
+  } finally {
+    r.done();
+  }
+  const src = readFileSync(join(SCRIPTS_SRC, "format_files.py"), "utf8");
+  assert.match(src, /HOOK_BUDGET = (\d+)/);
+  assert.ok(Number(/HOOK_BUDGET = (\d+)/.exec(src)[1]) <= 540, "the shared deadline stays under the 600 s Bash limit");
+});
+
+test("6.2.2 review M2: format_files.py: the failing hooks' head is at most 300 printable characters; the sha256 covers the whole output", () => {
   const r = hookRepo("  fmt-check) printf '\\033[31mred\\033[0m\\001\\n'; i=0; while [ $i -lt 400 ]; do echo \"line $i of a long hook report\"; i=$((i+1)); done; exit 1;;");
   try {
     const o = r.runF(["fmt-check"]);
     assert.equal(o.hook_failed, true);
-    assert.ok(o.hook_output.length <= 2000, String(o.hook_output.length));
-    assert.match(o.hook_output, /line 399 of a long hook report$/);
-    assert.doesNotMatch(o.hook_output, /[^\n\x20-\x7e]/);
+    assert.ok(o.hook_head.length <= 300, String(o.hook_head.length));
+    assert.match(o.hook_head, /^\[fmt-check tests\/test_a\.py\] red\?/);
+    assert.doesNotMatch(o.hook_head, /[^\n\x20-\x7e]/);
+    assert.match(o.hook_sha256, /^[0-9a-f]{64}$/);
   } finally {
     r.done();
   }
@@ -396,32 +471,57 @@ test("6.2.2 2104: a prose relay then a full relay passes preflight", async () =>
   assert.ok(out.result.gate_log.some((g) => /preflight: the agent relayed no hash lines; retried once/.test(g)), out.result.gate_log.join("\n"));
 });
 
-test("6.2.2 2104: fewer hash lines than the probe's own count is a relay drop: retried, then 'relayed N of M', never 'missing'", async () => {
-  const full = scriptsProbe();
-  const nHash = full.filter((x) => /^[0-9a-f]{64} /.test(x)).length;
-  // the count line the real probe prints, then only the first 10 hash lines
-  const partial = () => {
-    const meta = full.filter((x) => !/^[0-9a-f]{64} /.test(x) && !/^hash_lines=/.test(x));
-    return meta.concat(["hash_lines=" + nHash], full.filter((x) => /^[0-9a-f]{64} /.test(x)).slice(0, 10));
-  };
-  const s = happy();
-  s.__mutate = relayMutate(partial, partial);
-  const out = await runOne(s, ARGS);
-  assert.equal(out.result.status, "needs_human");
-  assert.equal(out.result.stop_gate, "contract");
-  assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
-  assert.match(out.result.reason, new RegExp("preflight agent relayed 10 of " + nHash + " hash lines"));
-  assert.doesNotMatch(out.result.reason, /missing|install|reinstall/);
+// the workflow's own count: every shipped program, role file and shared file
+const FULL = scriptsProbe();
+const WANT = FULL.filter((x) => /^[0-9a-f]{64} /.test(x)).length;
+const META = FULL.filter((x) => !/^[0-9a-f]{64} /.test(x) && !/^hash_lines=/.test(x));
+const FIRST10 = FULL.filter((x) => /^[0-9a-f]{64} /.test(x)).slice(0, 10);
+
+test("6.2.2 review M1: 10 of the expected hash lines is a relay drop whatever count line arrives (true, dropped, forged, doubled): retried, then 'relayed 10 of N expected'", async () => {
+  for (const [name, counts] of [
+    ["true count", ["hash_lines=" + WANT]],
+    ["count dropped", []],
+    ["count forged to 10", ["hash_lines=10"]],
+    ["count doubled", ["hash_lines=10", "hash_lines=10"]],
+  ]) {
+    const partial = () => META.concat(counts, FIRST10);
+    const s = happy();
+    s.__mutate = relayMutate(partial, partial);
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", name);
+    assert.equal(out.result.stop_gate, "contract", name);
+    assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"], name);
+    assert.match(out.result.reason, new RegExp("preflight agent relayed 10 of " + WANT + " expected hash lines \\(after one retry\\)"), name + ": " + out.result.reason);
+    assert.doesNotMatch(out.result.reason, /is missing/, name);
+    assert.ok(out.result.reason.includes("no line for: "), name);
+  }
 });
 
-test("6.2.2 2104: lines that all arrive, but no line for one file, still name that file 'missing' (no retry)", async () => {
+test("6.2.2 review M1: every hash line but no single hash_lines= line (none, or two) is a relay drop too", async () => {
+  for (const counts of [[], ["hash_lines=" + WANT, "hash_lines=" + WANT]]) {
+    const relay = () => META.concat(counts, FULL.filter((x) => /^[0-9a-f]{64} /.test(x)));
+    const s = happy();
+    s.__mutate = relayMutate(relay, relay);
+    const out = await runOne(s, ARGS);
+    assert.equal(out.result.status, "needs_human", JSON.stringify(counts));
+    assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
+    assert.match(out.result.reason, new RegExp("preflight agent relayed " + counts.length + " hash_lines= lines \\(the probe prints one\\)"));
+  }
+  // and a retry that brings the full relay passes
+  const s = happy();
+  s.__mutate = relayMutate(() => META.concat(FULL.filter((x) => /^[0-9a-f]{64} /.test(x))), () => scriptsProbe());
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+});
+
+test("6.2.2 review M1: a file absent on disk (its line missing, the count true) is retried, then named with the reinstall hint", async () => {
   const s = happy();
   s.preflight = Object.assign({}, s.preflight, { scripts_probe: scriptsProbe({ sums: { hasher: undefined } }) });
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.deepEqual(out.labels, ["preflight"]);
-  assert.match(out.result.reason, /hasher\.py is missing/);
-  assert.doesNotMatch(out.result.reason, /plan_files\.py is missing/, "only the absent file");
+  assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
+  assert.match(out.result.reason, new RegExp("relayed " + (WANT - 1) + " of " + WANT + " expected hash lines \\(after one retry\\); no line for: hasher\\.py"));
+  assert.match(out.result.reason, /if those files are absent from .*, install fleet 6\.2\.2/);
 });
 
 test("6.2.2 2104: the probe, run for real, prints hash_lines= with the count of its sha256sum lines before them", { skip: spawnSync("python3", ["-c", "1"]).status !== 0 }, async () => {

@@ -235,7 +235,8 @@ test("5.0.0 R3: preflight pins the shared dir: a changed, extra or missing share
   const cases = [
     [{ roleSums: { "_shared/test-cmd-allowlist.md": "1".repeat(64) } }, /_shared\/test-cmd-allowlist\.md hashes 1{64}/],
     [{ roleSums: { "_shared/x.md": "1".repeat(64) } }, /_shared\/x\.md is not a shipped role file/],
-    [{ roleSums: { "_shared/test-cmd-allowlist.md": undefined } }, /_shared\/test-cmd-allowlist\.md is missing/],
+    // 6.2.2 review M1: retried, then named
+    [{ roleSums: { "_shared/test-cmd-allowlist.md": undefined } }, /no line for: roles\/_shared\/test-cmd-allowlist\.md/],
   ];
   for (const [over, re] of cases) {
     const s = happy();
@@ -244,7 +245,7 @@ test("5.0.0 R3: preflight pins the shared dir: a changed, extra or missing share
     assert.equal(out.result.status, "needs_human", JSON.stringify(over));
     assert.equal(out.result.stop_gate, "contract");
     assert.match(out.result.reason, re);
-    assert.deepEqual(out.labels, ["preflight"]);
+    assert.deepEqual(out.labels, /no line for/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
   }
 });
 

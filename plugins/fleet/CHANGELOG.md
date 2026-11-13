@@ -27,8 +27,8 @@ Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1235, A
   no list, no hook is judged before the freeze, as in 6.2.1. With a list, `format_files.py` (on
   `infra:format-tests:r<n>`, through `select.check_hooks`) runs each listed hook once more, alone,
   after the fixer runs settle: `pre-commit run <id> --files <paths>` in the same scratch checkout.
-  It reports `hook_failed`, the last 2000 characters of the failing hooks' output as printable
-  ASCII (`hook_output`), and `unknown_hooks`, all digest keys. A failure skips the test judge and
+  It reports `hook_failed`, `hook_failures`, `hook_head`, `hook_sha256`, `hook_timeout` and
+  `unknown_hooks`, all digest keys (see the review entry below). A failure skips the test judge and
   sends a fix_tests round to the round's writers with the hook output; it counts against the test
   rounds. A hook still failing in the last round stops with `needs_human` (`stop_gate: cap`); the
   run never freezes then. A listed id that the config at HEAD lacks, or listed hooks that cannot
@@ -41,16 +41,41 @@ Fleet 6.2.2: three bug fixes, ruled by Max (ledger 2104, 2106, 2107; ADR-1235, A
   The policy drift gate line compares caps by value, so a list compares by content.
 - 2104: a preflight agent that relayed a prose summary in place of the sha256sum lines made every
   script "missing" and asked for a reinstall. The probe now prints `hash_lines=<n>` before its hash
-  lines. No hash line, or fewer than `n`: one retry (`preflight:relay-retry`, on sonnet), then a
-  stop that says "preflight agent returned no hash lines" or "relayed <k> of <n> hash lines",
-  with no reinstall text. "is missing" names a file only when its line did not arrive and the rest
-  did. Kept as a line list with a count, not a file the agent writes or a `{file, sha256}` array:
+  lines. No hash line, fewer lines than the workflow's own tables expect, or no single matching
+  count line: one retry (`preflight:relay-retry`, on sonnet), then a distinct stop (see review
+  M1 below). Kept as a line list with a count, not a file the agent writes or a `{file, sha256}` array:
   the script cannot read files itself, so a file still needs an agent relay, and the count line is
   the smallest change that lets the script tell a dropped relay from a missing file.
 
+- Review of 6.2.2 (PR #64):
+  - M1 (2104): the hash-line check trusted the count the agent relayed, and ran only with one
+    count line. A dropped, forged or doubled `hash_lines=` with 10 of the lines gave no retry and
+    "is missing; install". The workflow now counts against its own tables (`programTable()`,
+    `ROLE_SHA256`, `SHARED_SHA256`). Any shortfall, no single count line, or a count that differs
+    from the lines relayed is a relay drop: one retry, then "preflight agent relayed <k> of <n>
+    expected hash lines (after one retry); no line for: ...", with the reinstall hint for files
+    absent on disk. A file absent on disk is now retried once too.
+  - M2 (2107): `hook_output` (2000 free-text characters) made a miscopied relay a dead end. The
+    relay is now `hook_head` (at most 300 printable characters) and `hook_sha256` (the whole
+    output), and `infra:format-*` carries the `format_files` digest id, so a miscopied relay gets
+    the one digest retry. format_files is the one write step with the retry: a second run finds
+    the files settled.
+  - L1: a listed id whose `stages` (or the config's `default_stages`) exclude the pre-commit stage
+    is reported in `unknown_hooks` with its reason; so is pre-commit's own "No hook with id ... in
+    stage" refusal. The loader now returns each hook's `stages` and the config's `default_stages`.
+  - L2: one 480 s deadline for every hook run of the step (each at most 180 s), under the 600 s
+    Bash limit. A listed hook that times out is `hook_timeout`, a `needs_human` stop
+    (`stop_gate: hooks`), never a failure sent to the writers.
+  - L3: each listed hook runs per file (`hook_failures` holds `[file, id]` pairs). Only the writers
+    that own a failing file get a round, each with only its own failures, the command to
+    reproduce them and "edit only your own test files".
+  - N1: the test file header names ADR-1237.
+  - N2 (2106): a change to another run's ref between hasher reads gets one gate line naming it,
+    never a stop.
+
 ### Changed
 
-- `tests/v622_fixes.test.mjs`: 24 tests (foreign, own, prefix-sharing and replacement refs; no
+- `tests/v622_fixes.test.mjs`: 29 tests (foreign, own, prefix-sharing and replacement refs; no
   list, a listed failing hook, its last round, a listed passing hook, an unknown id, hooks that
   cannot run, a bad sealed list, a broken relay, `policy.py` and `format_files.py` run for real
   (unlisted `pass_filenames: false` and `always_run` hooks never run alone); prose-only, prose then

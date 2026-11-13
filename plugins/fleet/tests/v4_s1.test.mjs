@@ -652,7 +652,8 @@ test("4.0.0 security 1: scripts_dir must be its own realpath and no symlink; the
     [{ hits: [{ hit: SCRIPTS_DIR, symlink: "yes" }] }, /is a symlink/],
     [{ home: "/home/u/../v" }, /HOME/],
     [{ sums: { plan_files: "0".repeat(64) } }, /plan_files\.py hashes 0{64}/],
-    [{ sums: { hasher: undefined } }, /hasher\.py is missing/],
+    // 6.2.2 review M1: a hash line short of the tables is a relay drop: retried, then named
+    [{ sums: { hasher: undefined } }, /no line for: hasher\.py/],
     [{ sums: { evil: "1".repeat(64) } }, /evil\.py is not a shipped program/],
     [{ extra: ["2".repeat(64) + "  /tmp/plan_files.py"] }, /outside/],
   ];
@@ -663,7 +664,7 @@ test("4.0.0 security 1: scripts_dir must be its own realpath and no symlink; the
     assert.equal(out.result.status, "needs_human", JSON.stringify(over));
     assert.equal(out.result.stop_gate, "contract", JSON.stringify(over));
     assert.match(out.result.reason, re, JSON.stringify(over));
-    assert.deepEqual(out.labels, ["preflight"]);
+    assert.deepEqual(out.labels, /no line for/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
   }
   // the probe is one bash command: realpath, the symlink test and sha256sum of every program
   const p = call(await runOne(happy(), ARGS), "preflight").prompt;

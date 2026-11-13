@@ -199,7 +199,8 @@ test("5.0.0 R1: preflight pins the roles dir: a hash mismatch, an extra .md, a m
   const cases = [
     [{ roleSums: { "pr-review.md": "1".repeat(64) } }, /pr-review\.md hashes 1{64}/],
     [{ roleSums: { "x.md": "1".repeat(64) } }, /x\.md is not a shipped role file/],
-    [{ roleSums: { "pr-review.md": undefined } }, /pr-review\.md is missing/],
+    // 6.2.2 review M1: retried, then named
+    [{ roleSums: { "pr-review.md": undefined } }, /no line for: roles\/pr-review\.md/],
     [{ hits: [{ hit: SCRIPTS_DIR, roles_symlink: "yes" }] }, /roles dir .* is a symlink/],
     [{ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }, /roles dir .* resolves to ""/],
   ];
@@ -210,7 +211,7 @@ test("5.0.0 R1: preflight pins the roles dir: a hash mismatch, an extra .md, a m
     assert.equal(out.result.status, "needs_human", JSON.stringify(over));
     assert.equal(out.result.stop_gate, "contract");
     assert.match(out.result.reason, re);
-    assert.deepEqual(out.labels, ["preflight"]);
+    assert.deepEqual(out.labels, /no line for/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
   }
 });
 
@@ -293,12 +294,12 @@ test("5.0.0 R1 real execution: the probe, run by bash over a real plugin cache, 
     [(d) => writeFileSync(join(d, "plan-audit.md"), ROLE_TEXT["plan-audit"] + "x"), /plan-audit\.md hashes [0-9a-f]{64}, not /],
     [(d) => writeFileSync(join(d, "extra.md"), "x"), /extra\.md is not a shipped role file/],
     [(d) => writeFileSync(join(d, ".hidden"), "x"), /\.hidden is not a shipped role file/],
-    [(d) => rmSync(join(d, "pr-review.md")), /pr-review\.md is missing/],
+    [(d) => rmSync(join(d, "pr-review.md")), /no line for: roles\/pr-review\.md/],
     [(d) => mkdirSync(join(d, "sub")), /not regular files: sub/],
     // 5.0.0 R3: the _shared dir: a changed, extra, missing or nested entry, or a symlinked dir
     [(d) => writeFileSync(join(d, "_shared", "test-cmd-allowlist.md"), "x"), /_shared\/test-cmd-allowlist\.md hashes [0-9a-f]{64}, not /],
     [(d) => writeFileSync(join(d, "_shared", "extra.md"), "x"), /_shared\/extra\.md is not a shipped role file/],
-    [(d) => rmSync(join(d, "_shared", "test-cmd-allowlist.md")), /_shared\/test-cmd-allowlist\.md is missing/],
+    [(d) => rmSync(join(d, "_shared", "test-cmd-allowlist.md")), /no line for: roles\/_shared\/test-cmd-allowlist\.md/],
     [(d) => mkdirSync(join(d, "_shared", "deeper")), /not regular files: _shared\/deeper/],
     [
       (d) => {
@@ -322,7 +323,7 @@ test("5.0.0 R1 real execution: the probe, run by bash over a real plugin cache, 
     assert.equal(out.result.status, "needs_human", String(re));
     assert.equal(out.result.stop_gate, "contract");
     assert.match(out.result.reason, re);
-    assert.deepEqual(out.labels, ["preflight"]);
+    assert.deepEqual(out.labels, /no line for/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
   }
 });
 
