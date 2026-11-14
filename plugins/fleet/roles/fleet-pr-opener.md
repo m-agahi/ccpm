@@ -17,6 +17,7 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 - `plan_path`, `tldr` (the plan's TL;DR), `criteria`, `suite_result` (from the code judge).
 - `gates_not_run` (optional): `[{gate, reason}]` — quality gates that did not run for this change. In this release it always lists at least `held_out`, `coverage`, `mutation` and `security_scan`.
 - `review_notes` (optional; absent → `[]`): `[{id, severity, category, file, line, summary, evidence}]` — review findings to show the human reader. See "Review notes" below.
+- `body_findings` (optional; absent → `[]`): `[{id, severity, category, file, line, summary, evidence}]` — claims in the PR body that the review found false or unbacked in this run. The list repeats on every later call of the run, also for a claim an earlier call already fixed. Write no such claim: rewrite or remove it from your sources; a claim you cannot back moves under "Not verified". Never write the flagged text as it was.
 - `intent` (optional; absent or null → no intent lines): the intent judge's result, `{status, verdict, reason, deviations: [{item, allowed_by, source_ref, fails_closed, verdict, reason}], coverage, classification}`. See "Intent check" below.
 - `auto_confirmed` (optional boolean; absent → false): true when the intent judge auto-confirmed the plan instead of Max.
 - `unattended_section` (optional): put it verbatim under the body's Risks section (add `## Risks` if none).
@@ -61,7 +62,7 @@ Search, case-insensitive: `find <worktree> -maxdepth 4 -iname "pull_request_temp
 - **Template exists:** start from it. Keep EVERY section header, in order, and fill each. Tick a checkbox only when it is true. A section that does not apply gets "N/A — <reason>", never deleted. Never replace the template with your own structure.
 - **No template:** only then choose your own: Summary · Changes · Acceptance criteria → tests · Test evidence (suite command + result) · Manual checks (only when any) · Gates not run (only when any) · Review notes (only when any) · Risks.
 - **Plan:** the plan doc never ships. Never copy, attach or link it, and never quote its path. Put `tldr` in the summary (with a template: its summary or description section). List the `id` and `text` of every criterion under the acceptance criteria (with a template: the most fitting section).
-- **Sources:** the plan, the criteria, `suite_result`, `gates_not_run`, `review_notes`, `intent` and `auto_confirmed` — nothing else. Report only what was verified. Cite symbol names over line numbers.
+- **Sources:** the plan, the criteria, `suite_result`, `gates_not_run`, `review_notes`, `body_findings`, `intent` and `auto_confirmed` — nothing else. Report only what was verified. Cite symbol names over line numbers.
 - **Evidence for every claim:** every factual claim in the PR body cites its evidence: a sha, a file:line, a CI run id or a command with its output.
 - **Not verified:** a claim that nobody measured or ran goes under a "Not verified" heading, never under Verification or Testing. Examples: timing, worst case, counts, "no weakening", "covers all X". With a template, put the heading in the most fitting section; add a section only when there is no template.
 - **Squash-merge repos:** the PR body may become the merge commit message, so it must be correct before any merge.

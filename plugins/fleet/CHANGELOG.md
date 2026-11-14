@@ -1,5 +1,53 @@
 # Changelog
 
+## [6.3.3] - 2026-11-14
+
+Fleet 6.3.3: a PR review finding of category `pr_body_claim` goes to a pr-opener body update, not
+to the coder (ledger 2144). Run wf_4ed1ca74-595 sent a false "147 passed" claim in the PR body to
+the coder as `fix_code`; the coder cannot change the body, so the run stopped at the code-round
+cap. Narrowed by Max: the update-branch re-review path keeps its routing (ledger 2174).
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.3.3), then start a NEW session: the workflow
+  looks for its own `fleet/6.3.3/scripts` dir.
+- A 6.3.2 plan ref and run-state stay valid: the seal covers the ref's content only. The body-fix
+  state is not in the run-state: a resumed run loses it (allowed by Max).
+
+### Changed
+
+- Review step, normal path: a review whose blocking findings are all `pr_body_claim` gets one
+  pr-opener body update (`role:fleet-pr-opener:body-v<k>`, new input `body_findings`), then the
+  review runs again. No coder, code judge, commit or push runs, the code-round count does not
+  change, and that re-review uses no `MAX_REVIEWS` slot.
+- A mixed review sends only the other findings to the coder; the next PR-step pr-opener call
+  carries the `pr_body_claim` findings as `body_findings`.
+- The fixed findings go with every later pr-opener call of the run (`:notes`, `p<k>`).
+- One body update per run (`MAX_BODY_FIXES = 1`): a later blocking `pr_body_claim` stops the run
+  `needs_human` at the review gate with the finding text. Brief B4 said "per review round"; this
+  is a declared deviation.
+- `judged()`: a code-judge `fix_code` drops findings in the exact review shape
+  `review <id> [pr_body_claim] ...` with no criterion; with no other finding left and a measured
+  passing suite (`exit_code` exactly 0, `failed` and `errors` absent, null or 0) the verdict
+  becomes `approve`. Every later gate still runs.
+- The code judge's `suite_result` schema is `JUDGE_SUITE`: `exit_code`, `failed` and `errors` are
+  integer or null. The coder's `suite_result` stays untyped.
+- `roles/fleet-pr-opener.md`: the `body_findings` input and the Sources rule.
+- Not changed: the update-branch re-review still sends every blocking finding, `pr_body_claim`
+  included, to the coder, and the `judged()` guard is off in the code rounds after update-branch
+  (`state.update` set): a code-judge `fix_code` there stays `fix_code` (ledger 2174).
+
+### Tests
+
+- `tests/v633_body_only`, `v633_body_mixed`, `v633_judge_body`, `v633_body_cap`,
+  `v633_body_rounds`, `v633_opener_role`, `v633_judge_fence`, `v633_judge_suite` and
+  `v633_body_slot` (36 examples), plus a security-review example: a code finding whose summary
+  quotes `[pr_body_claim]` stays `fix_code` (the tag counts only right after `review <id> `).
+  Review follow-ups: a `failed` above 0 with `exit_code` 0 stays `fix_code`; in an update-branch
+  code round a tagged-only `fix_code` stays `fix_code`.
+- `tests/v403_schema_types.test.mjs`: READS entries for the five typed reads of the guard.
+- `tests/v5010_prompt_snapshot.test.mjs`: the build-scenario pins.
+
 ## [6.3.2] - 2026-11-13
 
 Fleet 6.3.2: gh runs without the program's own memory cap (ledger 2130), plus 6.3.1 review

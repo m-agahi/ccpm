@@ -98,10 +98,11 @@ const SCENARIOS = {
 // 6.2.2 re-review (D-L1): format_files fix_timeout in the schema (the probe pin is unchanged)
 // 6.3.0 (ADR-1239): infra:policy:plan (new plan call) and unattended in the policy caps schema (the only changes: with both reverted every pin is 6.2.2's; probe unchanged)
 // 6.3.2 (2130): the ruleset-surface and hook-surface prompts say a non-null error with exit 0 is still status ok (the only change: with that sentence removed every pin is 6.3.1's; probe unchanged)
+// 6.3.3 (2144): the code judge's suite_result schema is JUDGE_SUITE (the only change: with the judge entry put back to SUITE every pin is 6.3.2's; probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 87, sha256: "dc8cefc9b39335e0305646d8e5f9a907233c5ce665717a55a4788e7cc04d1210" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "7a48052f3c42515b6146c21704ef6ab6e4e024fc6f9dbc917ace3d30b87689ce" },
-  "short path (one test writer)": { calls: 86, sha256: "3ffac842c6e27bd2104ca7774a6b73622b973f9ebaf642b2ba10a04bef2680e6" },
+  "plan then build (confirm ask)": { calls: 87, sha256: "1ae34b7f26ae59d50f2eb539c80ce69bc582ecd37ac33d47b70a715e9ab1a4f1" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "4fb49cf3cf605d749dd1653196a3336b148c386785efe9a11889d12d72e34d72" },
+  "short path (one test writer)": { calls: 86, sha256: "a71d25bb9b1410de382ef00a21ef7fb5d5a5ce32268501d0e6fa744746179c25" },
   "probe": { calls: 2, sha256: "b6976644cdb9345851ac461a293688c2299952b462ba087a39958a03ae13b393" },
 };
 
