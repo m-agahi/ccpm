@@ -1,0 +1,7 @@
+{
+  "name": "ccpm",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}
