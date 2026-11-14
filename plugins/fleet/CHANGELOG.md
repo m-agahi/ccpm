@@ -40,7 +40,8 @@ cap. Narrowed by Max: the update-branch re-review path keeps its routing (ledger
 
 - `tests/v633_body_only`, `v633_body_mixed`, `v633_judge_body`, `v633_body_cap`,
   `v633_body_rounds`, `v633_opener_role`, `v633_judge_fence`, `v633_judge_suite` and
-  `v633_body_slot` (36 examples).
+  `v633_body_slot` (36 examples), plus a security-review example: a code finding whose summary
+  quotes `[pr_body_claim]` stays `fix_code` (the tag counts only right after `review <id> `).
 - `tests/v403_schema_types.test.mjs`: READS entries for the five typed reads of the guard.
 - `tests/v5010_prompt_snapshot.test.mjs`: the build-scenario pins.
 

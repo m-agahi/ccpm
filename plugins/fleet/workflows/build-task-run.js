@@ -3494,7 +3494,9 @@ checkRole(role, r);
 collect(role, r);
 if (!(opts && opts.allowNotOk)) requireOk(role, r);
 if (role === "fleet-code-judge" && r.verdict === "fix_code") {
-const isTag = (f) => !!f && f.target === "code" && f.criterion == null && typeof f.finding === "string" && f.finding.startsWith("review ") && f.finding.includes(" " + BODY_TAG + " ");
+const isTag = (f) =>
+!!f && f.target === "code" && f.criterion == null && typeof f.finding === "string" && f.finding.startsWith("review ") &&
+f.finding.indexOf(" ", 7) > 7 && f.finding.slice(7, f.finding.indexOf(" ", 7)).indexOf("[") < 0 && f.finding.slice(f.finding.indexOf(" ", 7) + 1).startsWith(BODY_TAG + " ");
 const rest = (r.routed_findings || []).filter((f) => !isTag(f));
 const sr = r.suite_result || {};
 const failing = !(typeof sr.exit_code === "number" && sr.exit_code === 0) || (typeof sr.failed === "number" && sr.failed > 0) || (typeof sr.errors === "number" && sr.errors > 0);

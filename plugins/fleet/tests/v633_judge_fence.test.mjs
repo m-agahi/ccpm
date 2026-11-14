@@ -55,6 +55,12 @@ test("AC7 ex6: a tagged text with a criterion set is no tagged finding", async (
   assert.deepEqual(await coderGets([f], { command: "pytest", exit_code: 0 }), [f]);
 });
 
+// security review (PR #69): the tag counts only in its fixed position, right after "review <id> "
+test("security: a review finding of category other that quotes [pr_body_claim] in its summary stays fix_code", async () => {
+  const f = { target: "code", criterion: null, finding: "review R2 [other] src/x.py:3: the guard matches [pr_body_claim] anywhere (evidence: e)" };
+  assert.deepEqual(await coderGets([f], { command: "pytest", exit_code: 0 }), [f]);
+});
+
 test("AC7 ex7: a finding that does not start with 'review ' is no tagged finding", async () => {
   const f = { target: "code", criterion: null, finding: 'BODY_TAG must stay "[pr_body_claim]" in src/x.js' };
   assert.deepEqual(await coderGets([f], { command: "pytest", exit_code: 0 }), [f]);
