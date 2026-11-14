@@ -518,6 +518,7 @@ args: `{mode: "build", plan_ref, date, run_nonce, project?, confirm?}`.
 | 14   | push (infra)       | `.fleet/` check first; pushes; a hook rejection -> coder (`fix_code`)      |
 | 15   | pr-opener          | `.fleet/` check first; draft PR at `approved_sha` (the commit step's HEAD) |
 | 16   | review             | pr-review, plus the non-weakening sweep for gate changes (below)           |
+| 16a  | pr-opener          | only `pr_body_claim` blocking -> pr-opener body update, then review again  |
 | 17   | write-back         | ledger section and one marked comment per external source                  |
 
 ### No commit before approval
@@ -1582,6 +1583,17 @@ most one extra review round: a second blocking review stops with `needs_human` a
 `review: {verdict, blocking, nits, rounds, sweep, model}`. Without a PR the review is skipped and
 listed in `gates_not_run`.
 
+Since 6.3.3 (ledger 2144), blocking findings of category `pr_body_claim` (a false or unbacked claim
+in the PR body) go to the pr-opener as `body_findings`, not to the coder. A review with only such
+findings gets one pr-opener body update (`role:fleet-pr-opener:body-v<n>`) and the review runs
+again: no code round, and that re-review uses no review slot. A review with both kinds sends the
+code findings to the coder first; the next PR-step pr-opener call fixes the body. The fixed
+findings go with every later pr-opener call of the run. One body update per run: a later blocking
+`pr_body_claim` finding stops with `needs_human` (`stop_gate: review`). The code judge's
+`fix_code` on review-shaped `[pr_body_claim]` findings only, with a measured passing suite, becomes
+`approve`. The re-review after update-branch still sends every blocking finding to the coder
+(ledger 2174).
+
 ### Judge separation
 
 Judges (test, code, intent, pr-review, sweep), preflight, intake, branch-scan, load-ref, verify,
@@ -1605,7 +1617,7 @@ change that a judge makes and reverts within its own run.
   gates, the build and the review: a two-criterion happy run uses about 35 agents, and one review
   fix round adds about 13. Every cap hit is logged. Test rounds: 3 per entry into the test loop. Code rounds: 3 per build
   run; a `fix_tests` detour, a commit-hook rejection, a push-hook rejection and a review fix each
-  count as one code round.
+  count as one code round. A PR-body update for a `pr_body_claim` finding is no code round.
 - Nothing is committed before the code judge approves, so a build interrupted before its commit
   step leaves uncommitted tests and code in the fleet worktree. The workspace and verify steps
   require a clean worktree, so a re-run stops with `needs_human` until a human commits, stashes or

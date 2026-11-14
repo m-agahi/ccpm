@@ -112,7 +112,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "6.3.2";
+const FLEET_VERSION = "6.3.3";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with
 const RELOAD_HINT =
@@ -187,6 +187,9 @@ const CONFIRMS = ["ask", "auto", "default"];
 const MAX_REVIEWS = 2;
 // 6.1.0 (2049): re-reviews after an overlap update-branch (u1 may route to one coder round; u2 stops)
 const MAX_UPDATE_REVIEWS = 2;
+// 6.3.3 (2144): one pr-opener body update per run for review findings of category pr_body_claim
+const MAX_BODY_FIXES = 1;
+const BODY_TAG = "[pr_body_claim]";
 const FINDING_SEVERITIES = ["blocking", "nit"];
 const FINDING_CATEGORIES = ["correctness", "security", "fail_open", "pr_body_claim", "test_quality", "obligation", "other"];
 const GATE_PATH_RE = /(^|\/)(hooks?|gates?|guards?|validat\w*|polic(y|ies)|auth\w*|checks?|ci)(\/|\.|_|$)|^\.github\/|\.pre-commit-config|(^|\/)Makefile$/i;
@@ -302,6 +305,8 @@ const AUDIT_FINDINGS = {
   },
 };
 const SUITE = { type: "object" };
+// 6.3.3 (2144): the code judge's suite_result, typed where the guard in judged() reads it
+const JUDGE_SUITE = { type: "object", properties: { exit_code: { type: ["integer", "null"] }, failed: { type: ["integer", "null"] }, errors: { type: ["integer", "null"] } } };
 const REVIEW_FINDINGS = {
   type: "array",
   items: {
@@ -450,7 +455,7 @@ const SCHEMAS = {
     verdict: { type: "string", enum: ["approve", "fix_code", "fix_tests", "plan_wrong"] },
     routed_findings: FINDINGS,
     hash_check: { type: "object" },
-    suite_result: SUITE,
+    suite_result: JUDGE_SUITE,
     gates_not_run: {
       type: "array",
       items: { type: "object", properties: { gate: STR, reason: STR }, required: ["gate"] },
@@ -1591,7 +1596,7 @@ const ROLE_SHA256 = {
   "fleet-code-judge": "0b7a412cb27884de57c70bb48f90627c8595057ef29ce1a8e0f147df49f979fe",
   "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
   "fleet-intent-judge": "eec4332e06027010a8f22aec7b399289665fb652f6d773b9c093f0f7d1f3bfc6",
-  "fleet-pr-opener": "33912b762a9020c5aff7bd1a24aa5bb2673509a584660e4670ac41200ef62404",
+  "fleet-pr-opener": "e64228bb6be02920701b8fa4701797d1316d74bedae4ff7e5abcdbd20bd7ace0",
   "fleet-test-judge": "219c89b656f7ae61d28ab7cf2486b498792385df0cdd2a256fdae6c0f53c051b",
   "fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
   "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
@@ -3786,6 +3791,20 @@ async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, f
   checkRole(role, r);
   collect(role, r);
   if (!(opts && opts.allowNotOk)) requireOk(role, r);
+  // 6.3.3 (2144): a review finding of category pr_body_claim is a PR-body fix, never a code fix.
+  // Only the exact reviewFindingText shape with no criterion counts; with no other finding
+  // left, fix_code becomes approve only on a measured passing suite (exit_code exactly 0).
+  if (role === "fleet-code-judge" && r.verdict === "fix_code") {
+    const isTag = (f) => !!f && f.target === "code" && f.criterion == null && typeof f.finding === "string" && f.finding.startsWith("review ") && f.finding.includes(" " + BODY_TAG + " ");
+    const rest = (r.routed_findings || []).filter((f) => !isTag(f));
+    const sr = r.suite_result || {};
+    const failing = !(typeof sr.exit_code === "number" && sr.exit_code === 0) || (typeof sr.failed === "number" && sr.failed > 0) || (typeof sr.errors === "number" && sr.errors > 0);
+    if (rest.length < (r.routed_findings || []).length && (rest.length || !failing)) {
+      gate(label + ": " + ((r.routed_findings || []).length - rest.length) + " " + BODY_TAG + " review finding(s) dropped (a PR-body fix, not a code fix)" + (!rest.length ? "; fix_code -> approve (suite passed)" : ""));
+      r.routed_findings = rest;
+      if (!rest.length) r.verdict = "approve";
+    }
+  }
   return { r, state: after };
 }
 
@@ -6231,7 +6250,13 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         await saveState("pushed", "infra:state:pushed:p" + pushes);
       } else if (step === "pr") {
         prOpens++;
-        pr = await openPr("role:fleet-pr-opener" + (prOpens > 1 ? ":p" + prOpens : ""));
+        // 6.3.3 (2144): the pr_body_claim findings of a mixed review go with this call; the fixed ones go with every later call
+        if (state.bodyPending) {
+          state.bodyFixed = (state.bodyFixed || []).concat(state.bodyPending);
+          state.bodyFixes = (state.bodyFixes || 0) + 1;
+          state.bodyPending = null;
+        }
+        pr = await openPr("role:fleet-pr-opener" + (prOpens > 1 ? ":p" + prOpens : ""), state.bodyFixed ? { body_findings: state.bodyFixed } : null);
         // 6.1.0 review N7: the pr-opener rewrote the body; the stats block goes back before any later stop
         if (upd) await statsStep();
         await saveState("pr_open", "infra:state:pr_open:p" + prOpens);
@@ -6261,20 +6286,38 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
             gate("review u" + upd.reviews + ": changes_requested (" + rv.blocking.length + " blocking); R1-R5 pass -> code rounds on the update merge " + upd.head + " (within the code-round cap)");
             return { gate: "review", update: true, findings: rv.blocking.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
           }
-          if (reviews >= MAX_REVIEWS)
+          // 6.3.3 (2144): pr_body_claim findings go to the pr-opener (one body update per run), all others to the coder
+          const bodyF = rv.blocking.filter((f) => f.category === "pr_body_claim");
+          const codeF = rv.blocking.filter((f) => f.category !== "pr_body_claim");
+          if (bodyF.length && (state.bodyFixes || 0) >= MAX_BODY_FIXES)
+            halt("needs_human", "review v" + reviews + ": PR body claim still flagged after one body update: " + bodyF.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "), "review");
+          if (!codeF.length) {
+            // body only: a pr-opener body update and a re-review; no code round, no MAX_REVIEWS slot
+            state.bodyFixes = (state.bodyFixes || 0) + 1;
+            state.bodyReviews = (state.bodyReviews || 0) + 1;
+            state.bodyFixed = (state.bodyFixed || []).concat(bodyF);
+            reviewNotes = rv.nits;
+            pr = await openPr("role:fleet-pr-opener:body-v" + reviews, { body_findings: state.bodyFixed });
+            gate("review v" + reviews + ": changes_requested (" + bodyF.length + " pr_body_claim) -> pr-opener body update");
+            i--;
+            continue;
+          }
+          // mixed: the code findings go to the coder first; the next PR-step pr-opener call fixes the body
+          if (bodyF.length) state.bodyPending = bodyF;
+          if (reviews - (state.bodyReviews || 0) >= MAX_REVIEWS)
             halt(
               "needs_human",
               "review round " + reviews + " requested changes again: " + rv.blocking.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "),
               "review",
             );
           reviewNotes = rv.nits;
-          gate("review v" + reviews + ": changes_requested (" + rv.blocking.length + " blocking) -> coder (fix_code)");
-          return { gate: "review", findings: rv.blocking.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
+          gate("review v" + reviews + ": changes_requested (" + codeF.length + " blocking) -> coder (fix_code)");
+          return { gate: "review", findings: codeF.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
         }
         // 6.1.0: a review of the update merge (base-author code) never writes its text to the PR body
         if (rv.nits.length && !upd) {
           reviewNotes = rv.nits;
-          pr = await openPr("role:fleet-pr-opener:notes");
+          pr = await openPr("role:fleet-pr-opener:notes", state.bodyFixed ? { body_findings: state.bodyFixed } : null);
         }
         await saveState("reviewed", "infra:state:reviewed:v" + reviews);
       } else if (step === "writeback") {
