@@ -3794,7 +3794,8 @@ async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, f
   // 6.3.3 (2144): a review finding of category pr_body_claim is a PR-body fix, never a code fix.
   // Only the exact reviewFindingText shape with no criterion counts; with no other finding
   // left, fix_code becomes approve only on a measured passing suite (exit_code exactly 0).
-  if (role === "fleet-code-judge" && r.verdict === "fix_code") {
+  // Off in the code rounds after update-branch: that path keeps its routing (ledger 2174).
+  if (role === "fleet-code-judge" && r.verdict === "fix_code" && !state.update) {
     // the tag counts only in its fixed position: "review <id> [pr_body_claim] ", <id> non-empty with no space or "["
     const isTag = (f) =>
       !!f && f.target === "code" && f.criterion == null && typeof f.finding === "string" && f.finding.startsWith("review ") &&

@@ -1591,8 +1591,8 @@ code findings to the coder first; the next PR-step pr-opener call fixes the body
 findings go with every later pr-opener call of the run. One body update per run: a later blocking
 `pr_body_claim` finding stops with `needs_human` (`stop_gate: review`). The code judge's
 `fix_code` on review-shaped `[pr_body_claim]` findings only, with a measured passing suite, becomes
-`approve`. The re-review after update-branch still sends every blocking finding to the coder
-(ledger 2174).
+`approve`. The re-review after update-branch still sends every blocking finding to the coder, and
+this code-judge guard is off in the code rounds after update-branch (ledger 2174).
 
 ### Judge separation
 

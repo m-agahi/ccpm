@@ -34,7 +34,8 @@ cap. Narrowed by Max: the update-branch re-review path keeps its routing (ledger
   integer or null. The coder's `suite_result` stays untyped.
 - `roles/fleet-pr-opener.md`: the `body_findings` input and the Sources rule.
 - Not changed: the update-branch re-review still sends every blocking finding, `pr_body_claim`
-  included, to the coder (ledger 2174).
+  included, to the coder, and the `judged()` guard is off in the code rounds after update-branch
+  (`state.update` set): a code-judge `fix_code` there stays `fix_code` (ledger 2174).
 
 ### Tests
 
@@ -42,6 +43,8 @@ cap. Narrowed by Max: the update-branch re-review path keeps its routing (ledger
   `v633_body_rounds`, `v633_opener_role`, `v633_judge_fence`, `v633_judge_suite` and
   `v633_body_slot` (36 examples), plus a security-review example: a code finding whose summary
   quotes `[pr_body_claim]` stays `fix_code` (the tag counts only right after `review <id> `).
+  Review follow-ups: a `failed` above 0 with `exit_code` 0 stays `fix_code`; in an update-branch
+  code round a tagged-only `fix_code` stays `fix_code`.
 - `tests/v403_schema_types.test.mjs`: READS entries for the five typed reads of the guard.
 - `tests/v5010_prompt_snapshot.test.mjs`: the build-scenario pins.
 

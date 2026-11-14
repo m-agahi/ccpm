@@ -3493,7 +3493,7 @@ halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") change
 checkRole(role, r);
 collect(role, r);
 if (!(opts && opts.allowNotOk)) requireOk(role, r);
-if (role === "fleet-code-judge" && r.verdict === "fix_code") {
+if (role === "fleet-code-judge" && r.verdict === "fix_code" && !state.update) {
 const isTag = (f) =>
 !!f && f.target === "code" && f.criterion == null && typeof f.finding === "string" && f.finding.startsWith("review ") &&
 f.finding.indexOf(" ", 7) > 7 && f.finding.slice(7, f.finding.indexOf(" ", 7)).indexOf("[") < 0 && f.finding.slice(f.finding.indexOf(" ", 7) + 1).startsWith(BODY_TAG + " ");
