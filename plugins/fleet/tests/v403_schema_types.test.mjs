@@ -744,6 +744,8 @@ const READS = {
     "p.sha256 string": "prog:plan_ref:part.sha256",
     "p0.part object": "prog:plan_ref:part",
     "p0.part.count integer": "prog:plan_ref:part.count",
+    // F2: the part count partOk checks the lengths against (the caller's, else the relay's own)
+    "n integer": "prog:plan_ref:part.count",
     // 6.3.0 (ADR-1239)
     "resume.auto_decisions array": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     "r.headers_missing array": "prog:pr_body_block:headers_missing",

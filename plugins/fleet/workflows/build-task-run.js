@@ -2014,6 +2014,7 @@ return out;
 }
 const CHUNK_CHARS = 4000;
 const MAX_REF_PARTS = 64;
+const REF_PART_CHARS = 32000;
 const MAX_CHUNK_RETRIES = 2;
 function chunked(message) {
 const b64 = base64Of(message);
@@ -4599,6 +4600,8 @@ await pathRecheck("commit-plan" + sfx + (round ? ":rewrite-" + round : ""), ctx.
 r = await dispatch(lbl, commitPlanPrompt(cpInputs, c), { schema: INFRA_SCHEMA, phase: ctx.phaseName });
 const bad = r && Array.isArray(r.bad_chunks) && r.bad_chunks.length ? r.bad_chunks : null;
 if (!bad) break;
+if (r.status !== "failed")
+halt("failed", lbl + ": the relay has status " + r.status + " and bad_chunks " + JSON.stringify(bad) + " (status ok and bad_chunks cannot both be true); no rewrite runs, and the plan ref may already be written", "commit");
 if (!bad.every((i) => Number.isInteger(i) && i >= 0 && i < c.chunks.length))
 halt("failed", lbl + ": the relayed bad_chunks " + JSON.stringify(bad) + " are not chunk numbers of this ref (0.." + (c.chunks.length - 1) + ")", "commit");
 const ids = bad.filter((i, k) => bad.indexOf(i) === k).sort((a, b) => a - b);
@@ -5354,7 +5357,34 @@ return r;
 const partOk = (r, k, count) => {
 const p = r && r.part;
 const j = joined(r);
-return !!p && typeof p === "object" && p.index === k && (count === undefined || p.count === count) && j !== null && typeof p.sha256 === "string" && sha256Hex(j) === p.sha256;
+if (!p || typeof p !== "object" || p.index !== k || j === null || typeof p.sha256 !== "string" || sha256Hex(j) !== p.sha256) return false;
+const n = count === undefined ? p.count : count;
+if (p.count !== n || !Number.isInteger(n) || n < 1) return false;
+const cps = Array.from(j).length;
+return k < n - 1 ? cps === REF_PART_CHARS : cps >= 1 && cps <= REF_PART_CHARS;
+};
+const countOf = (p0) => (p0.part && Number.isInteger(p0.part.count) && p0.part.count >= 1 && p0.part.count <= MAX_REF_PARTS ? p0.part.count : null);
+const readParts = async (p0, tag) => {
+const count = countOf(p0);
+if (count === null) return null;
+const parts = [p0];
+if (count > 1) {
+reserve(count - 1, "the plan ref parts");
+const ks = Array.from({ length: count - 1 }, (_, i) => i + 1);
+const rest = await parallel(ks.map((k) => () => softDispatch("infra:load-ref:p" + k + tag, loadPrompt(k), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Verify" })));
+for (const k of ks) {
+const lbl = "infra:load-ref:p" + k + tag;
+let r = rest[k - 1];
+if (r && r.status === "ok") checked(r, lbl);
+if (!r || r.status !== "ok" || !partOk(r, k, count)) {
+gate(lbl + ": " + (r ? (r.status === "ok" ? "the copied chunks do not match the part's sha256, length or count" : "returned " + r.status) : "returned no result") + "; reading once more");
+r = checked(await load(lbl + ":retry", k), lbl + ":retry");
+}
+parts.push(r);
+}
+}
+const js = parts.map(joined);
+return { count, content: js.every((x) => x !== null) ? js.join("") : null };
 };
 let content = null;
 if (mem) {
@@ -5362,30 +5392,21 @@ checked(await load("infra:load-ref", null), "infra:load-ref");
 content = refMessage(mem);
 } else {
 let p0 = checked(await load("infra:load-ref", 0), "infra:load-ref");
+let reread = false;
 if (p0.part && typeof p0.part === "object" && !partOk(p0, 0)) {
 gate("infra:load-ref: the copied chunks do not match ref_sha256; reading once more");
 p0 = checked(await load("infra:load-ref:retry", 0), "infra:load-ref:retry");
+reread = true;
 }
-const count = p0.part && Number.isInteger(p0.part.count) && p0.part.count >= 1 && p0.part.count <= MAX_REF_PARTS ? p0.part.count : null;
-if (count === null) changed("part 0 gives no part count from 1 to " + MAX_REF_PARTS);
-const parts = [p0];
-if (count > 1) {
-reserve(count - 1, "the plan ref parts");
-const ks = Array.from({ length: count - 1 }, (_, i) => i + 1);
-const rest = await parallel(ks.map((k) => () => softDispatch("infra:load-ref:p" + k, loadPrompt(k), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Verify" })));
-for (const k of ks) {
-const lbl = "infra:load-ref:p" + k;
-let r = rest[k - 1];
-if (r && r.status === "ok") checked(r, lbl);
-if (!r || r.status !== "ok" || !partOk(r, k, count)) {
-gate(lbl + ": " + (r ? (r.status === "ok" ? "the copied chunks do not match the part's sha256" : "returned " + r.status) : "returned no result") + "; reading once more");
-r = checked(await load(lbl + ":retry", k), lbl + ":retry");
+if (countOf(p0) === null) changed("part 0 gives no part count from 1 to " + MAX_REF_PARTS);
+let got = await readParts(p0, "");
+if (!reread && (got.content === null || sha256Hex(got.content) !== tiny.ref_sha256)) {
+gate("infra:load-ref: the joined parts do not match ref_sha256; reading part 0 once more for its part count");
+const q0 = checked(await load("infra:load-ref:retry", 0), "infra:load-ref:retry");
+const n = countOf(q0);
+if (n !== null && n !== got.count && partOk(q0, 0)) got = await readParts(q0, ":c" + n);
 }
-parts.push(r);
-}
-}
-const js = parts.map(joined);
-content = js.every((x) => x !== null) ? js.join("") : null;
+content = got.content;
 }
 if (content === null || sha256Hex(content) !== tiny.ref_sha256) changed("message chunks do not match ref_sha256 " + tiny.ref_sha256);
 let loaded = null;

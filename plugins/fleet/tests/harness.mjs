@@ -494,7 +494,7 @@ export async function runOne(script, args0) {
     const rw = /^(infra:commit-plan.*?):rewrite-[0-9]+$/.exec(key);
     if (!(key in script) && rw) key = roundBase(rw[1]);
     // 6.3.4 (2176): an unscripted load-ref part (or its re-read) reads with the load-ref stub
-    if (!(key in script) && /^infra:load-ref:p[0-9]+(:retry)?$/.test(key)) key = "infra:load-ref";
+    if (!(key in script) && /^infra:load-ref(:p[0-9]+(:c[0-9]+)?)?:retry$|^infra:load-ref:p[0-9]+(:c[0-9]+)?$/.test(key)) key = "infra:load-ref";
     // 4.0.0 (1984): an unscripted drift retry repeats the role's answer for
     // that label (or its round-0 stub); script "<label>:retry" to differ
     if (!(key in script) && /^role:.+:retry$/.test(label)) key = roundBase(label.slice(0, -":retry".length));

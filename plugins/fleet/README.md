@@ -212,8 +212,10 @@ dir; `infra:commit-plan` carries no chunk text, runs `plan_ref_write.py` and rel
 runs, at most 2 rounds; then the run stops `failed` at the commit gate with nothing sealed. In
 build mode, load-ref reads the message in parts of 32000 code points (`plan_ref.py` mode
 `part:<ref>:<k>`): part 0 as `infra:load-ref`, the rest in parallel as `infra:load-ref:p<k>`. A
-part whose chunks do not match its sha256 is read once more; the ref metadata of every relay is
-checked. The joined parts must match `ref_sha256`, as before.
+part whose chunks do not match its sha256, its length (every part but the last holds exactly 32000
+code points) or part 0's count is read once more; the ref metadata of every relay is checked. When
+the joined parts miss `ref_sha256`, part 0 is read once more for its count before the run stops.
+Only a `failed` commit relay steers a rewrite. The joined parts must match `ref_sha256`, as before.
 
 Plan mode returns `awaiting_confirmation` with `tldr`, `plan_diff`, `fleet_size`
 (`{criteria, est_agents, est_rounds}`), `plan_path` and `plan_ref`. It makes no push, no PR, no

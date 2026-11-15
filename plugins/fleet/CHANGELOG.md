@@ -33,6 +33,13 @@ a piece that fails its sha256 goes to a fresh agent. The seal does not change.
   more (`:retry`); the ref metadata of every relay is checked, so a changed ref stops at once. The
   part sha256 only picks what to read again: the joined parts must match `ref_sha256`, as before.
   The confirm-auto path (metadata only) does not change.
+- Only a commit relay with status `failed` (the program's exit 3) steers a rewrite; any other status
+  that carries `bad_chunks` stops the run `failed` at the commit gate, with no rewrite.
+- A part count is checked against the part lengths: every part but the last holds exactly 32000
+  code points, the last 1 to 32000. A count too high is a relay error and part 0 is read again. A
+  count too low passes that rule, so when the joined parts miss `ref_sha256`, part 0 is read once
+  more (if it was not already) and, with another count, the parts are read again
+  (`infra:load-ref:p<k>:c<count>`) before the run calls the ref changed.
 
 ### Not changed
 

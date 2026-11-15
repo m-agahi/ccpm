@@ -258,9 +258,97 @@ test("6.3.4 2176: the shipped programs round-trip a 256 KiB plan ref (plan_ref_w
   }
 });
 
-test("6.3.4 2176: the dist matches the source build", () => {
+test("6.3.4 2176: the committed dist is the build of the committed source", async () => {
   // the scenario tests run the dist; a stale dist would test old code
+  const B = await import(new URL("../scripts/build-workflow.mjs", import.meta.url));
   const dist = readFileSync(new URL("../workflows/build-task-run.js", import.meta.url), "utf8");
-  assert.ok(dist.includes("infra:plan-chunks"), "the dist has the writer steps");
-  assert.ok(SOURCE.includes("infra:plan-chunks"));
+  assert.ok(B.buildWorkflow(SOURCE) === dist, "workflows/build-task-run.js is stale: run node plugins/fleet/scripts/build-workflow.mjs");
+});
+
+// review of PR #71, F1: bad_chunks steer a rewrite only on a failed relay
+test("6.3.4 2176 F1: an ok commit relay that also carries bad_chunks stops failed; no rewrite runs", async () => {
+  const s = happy();
+  const base = s["infra:commit-plan"];
+  s["infra:commit-plan"] = (p) => Object.assign(base(p), { bad_chunks: [0] });
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "failed");
+  assert.equal(out.result.stop_gate, "commit");
+  assert.match(out.result.reason, /status ok and bad_chunks/);
+  assert.doesNotMatch(out.result.reason, /nothing was sealed/);
+  assert.ok(!out.labels.some((l) => /rewrite|:r1w/.test(l)), out.labels.join(", "));
+  assert.ok(!out.labels.includes("infra:verify-plan-commit"));
+});
+
+// F2: a part count mis-copied in part 0 is a relay error, not a changed ref
+test("6.3.4 2176 F2: part 0 relays a count too low; part 0 is read once more and the build goes on", async () => {
+  const s = bigHappy(128);
+  const tiny = await planRefFor(s);
+  const good = loadStub(s.__store);
+  const n = Math.ceil([...s.__store[PC]].length / PART_CHARS);
+  assert.ok(n >= 5, "parts: " + n);
+  // the first read of part 0 says 1 part; every other read is right (unscripted parts fall back to this stub)
+  let first = true;
+  s["infra:load-ref"] = (p) => {
+    const r = good(p);
+    if (first && inputsOf(p).part === 0) r.part = { ...r.part, count: 1 };
+    first = false;
+    return r;
+  };
+  s["infra:load-ref:retry"] = good;
+  const out = await runOne(s, buildArgs(tiny));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.labels.includes("infra:load-ref:retry"));
+  // the second pass reads parts 1..n-1 under the new count, none twice
+  assert.deepEqual(out.labels.filter((l) => /^infra:load-ref:p[0-9]+/.test(l)), Array.from({ length: n - 1 }, (_, k) => "infra:load-ref:p" + (k + 1) + ":c" + n));
+});
+
+test("6.3.4 2176 F2: part 0 relays a count too high; its short part is a relay error, read once more", async () => {
+  const s = happy();
+  const tiny = await planRefFor(s);
+  const good = loadStub(s.__store);
+  s["infra:load-ref"] = (p) => {
+    const r = good(p);
+    r.part = { ...r.part, count: 5 };
+    return r;
+  };
+  s["infra:load-ref:retry"] = good;
+  const out = await runOne(s, buildArgs(tiny));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.labels.includes("infra:load-ref:retry"));
+  assert.ok(!out.labels.some((l) => /^infra:load-ref:p[0-9]+/.test(l)), out.labels.join(", "));
+});
+
+test("6.3.4 2176 F2: a short part that is not the last is read once more", async () => {
+  const s = bigHappy(128);
+  const tiny = await planRefFor(s);
+  const good = loadStub(s.__store);
+  // a consistent part (its sha256 is over its own chunks) that lost its tail
+  s["infra:load-ref:p1"] = (p) => {
+    const r = good(p);
+    r.chunks = r.chunks.slice(0, -1);
+    r.part = { ...r.part, sha256: sha256(r.chunks.join("")) };
+    return r;
+  };
+  const out = await runOne(s, buildArgs(tiny));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.labels.includes("infra:load-ref:p1:retry"));
+});
+
+// F4: a part whose count differs from part 0's is read once more (kills dropping p.count === count)
+test("6.3.4 2176 F4: a part that relays another part count is read once more", async () => {
+  const s = bigHappy(128);
+  const tiny = await planRefFor(s);
+  const good = loadStub(s.__store);
+  s["infra:load-ref:p2"] = (p) => {
+    const r = good(p);
+    r.part = { ...r.part, count: r.part.count + 1 };
+    return r;
+  };
+  const out = await runOne(s, buildArgs(tiny));
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.deepEqual(out.labels.filter((l) => /^infra:load-ref.*:retry$/.test(l)), ["infra:load-ref:p2:retry"]);
 });
