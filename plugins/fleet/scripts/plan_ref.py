@@ -37,13 +37,13 @@ except Exception:
 import hashlib, json, os, re, subprocess, sys
 os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 if len(sys.argv) != 4:
-    sys.exit('usage: <worktree> <task id> meta|chunks:<plan ref name>|part:<plan ref name>:<k>')
-# mode: 'meta' (no content) or 'chunks:<plan ref name>' (no content in the
-# entries; that ref's message as 'chunks' of <= 1000 chars). No mode prints
-# message text whole (3.0.0, ledger 1952).
-# 6.3.4 (ledger 2176): 'part:<plan ref name>:<k>' prints part k of that ref's
-# message (parts of PART code points) as 'chunks' of <= 1000 chars, and
-# 'part': {index, count, sha256 of the part's UTF-8 bytes}.
+    sys.exit('usage: <worktree> <task id> meta|part:<plan ref name>:<k>')
+# mode: 'meta' (no content) or 'part:<plan ref name>:<k>' (no content in the
+# entries; part k of that ref's message, parts of PART code points, as
+# 'chunks' of <= 1000 chars, and 'part': {index, count, sha256 of the part's
+# UTF-8 bytes}). No mode prints message text whole (3.0.0, ledger 1952).
+# 6.3.4 (ledger 2176): part mode replaced 'chunks:<plan ref name>', which put
+# the whole message in one relay.
 PART = 32000
 wt, tid, mode = sys.argv[1], sys.argv[2], sys.argv[3]
 if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', tid):
@@ -83,11 +83,7 @@ out.sort(key=lambda x: x['name'])
 res = {'refs': out}
 want = None
 part = None
-if mode.startswith('chunks:'):
-    want = mode[len('chunks:'):]
-    if not name_re.fullmatch(want):
-        sys.exit('bad chunks ref: ' + want)
-elif mode.startswith('part:'):
+if mode.startswith('part:'):
     want, _, k = mode[len('part:'):].rpartition(':')
     if not name_re.fullmatch(want):
         sys.exit('bad part ref: ' + want)
@@ -99,9 +95,6 @@ elif mode != 'meta':
 for e in out:
     c = e.pop('content')
     if want is not None and e['name'] == want and c is not None:
-        if part is None:
-            res['chunks'] = [c[i:i + 1000] for i in range(0, len(c), 1000)]
-            continue
         count = max(1, -(-len(c) // PART))
         if part >= count:
             sys.exit('part %d of %d' % (part, count))

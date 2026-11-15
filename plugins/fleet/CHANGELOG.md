@@ -26,7 +26,7 @@ a piece that fails its sha256 goes to a fresh agent. The seal does not change.
   sealed. A `bad_chunks` entry that is not a chunk number stops the run.
 - The sealed `history.agents` counts the first-round writers (the count is solved with the
   message length that holds it); rewrite rounds are not counted, as digest retries are not.
-- Build mode, load-ref: `plan_ref.py` has a new mode `part:<ref>:<k>` that prints part k (32000
+- Build mode, load-ref: `plan_ref.py` mode `part:<ref>:<k>` (replaces `chunks:<ref>`) prints part k (32000
   code points) of the message as chunks of at most 1000, with `part: {index, count, sha256}`.
   `infra:load-ref` reads part 0; parts 1.. run in parallel as `infra:load-ref:p<k>` (at most
   `MAX_REF_PARTS = 64`). A part whose chunks do not match its sha256, or that failed, is read once

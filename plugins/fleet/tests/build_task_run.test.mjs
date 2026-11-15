@@ -2463,7 +2463,7 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
     const base = g("rev-parse", "HEAD").trim();
     const writeCmd = planRefWriteCmd;
     const reader = extractPy("PLAN_REF_PY_BEGIN", "PLAN_REF_PY_END", "PLAN_REF_PY");
-    // 3.0.0: no mode prints message text whole; meta lists, chunks rebuild it
+    // 3.0.0: no mode prints message text whole; meta lists, parts rebuild it (6.3.4: one part each here)
     const read = () => {
       const run1 = (mode) => {
         const r = spawnSync("python3", ["-I", "-", wt, "l42", mode], { input: reader, encoding: "utf8", env });
@@ -2471,7 +2471,7 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
         return JSON.parse(r.stdout);
       };
       return run1("meta").refs.map((x) => {
-        const ch = run1("chunks:" + x.name).chunks;
+        const ch = run1("part:" + x.name + ":0").chunks;
         return Object.assign({}, x, { content: Array.isArray(ch) ? ch.join("") : null });
       });
     };
@@ -6032,7 +6032,7 @@ test("2.1.5 confirm auto builds from the in-memory sealed ref: load-ref reads me
   assert.match(p, / 'meta'\n/);
 });
 
-test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebuilds the exact bytes", { skip: !HAVE_PY }, () => {
+test("2.1.5 plan-ref reader program: meta mode has no content, part mode rebuilds the exact bytes (6.3.4: was chunks mode)", { skip: !HAVE_PY }, () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-chunks-"));
   const wt = join(home, "repo");
   try {
@@ -6063,14 +6063,18 @@ test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebui
     assert.ok(!("content" in meta.refs[0]));
     assert.equal(meta.refs[0].sha256, full.sha256);
     assert.equal(meta.chunks, undefined);
-    const ch = read("chunks:refs/fleet/l42/plan");
+    // 6.3.4 (2176): part mode replaced chunks mode
+    const old = spawnSync("python3", ["-I", "-", wt, "l42", "chunks:refs/fleet/l42/plan"], { input: reader, encoding: "utf8", env });
+    assert.notEqual(old.status, 0, "chunks mode is gone");
+    const ch = read("part:refs/fleet/l42/plan:0");
+    assert.equal(ch.part.count, 1);
     assert.ok(!("content" in ch.refs[0]));
     assert.ok(ch.chunks.length >= 5, "several chunks: " + ch.chunks.length);
     assert.ok(ch.chunks.every((c) => [...c].length <= CHUNK), "at most 1000 code points per chunk");
     assert.equal(ch.chunks.join(""), full.content);
     assert.equal(sha256(ch.chunks.join("")), full.sha256);
-    const bad = spawnSync("python3", ["-I", "-", wt, "l42", "chunks:refs/heads/master"], { input: reader, encoding: "utf8", env });
-    assert.notEqual(bad.status, 0, "chunks of a non-plan ref are refused");
+    const bad = spawnSync("python3", ["-I", "-", wt, "l42", "part:refs/heads/master:0"], { input: reader, encoding: "utf8", env });
+    assert.notEqual(bad.status, 0, "parts of a non-plan ref are refused");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

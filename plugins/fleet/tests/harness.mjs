@@ -1332,8 +1332,8 @@ export function fillPrograms(label, r, prompt) {
 }
 
 // load-ref stub: the plan-ref reader over the store, in the prompt's mode
-// (2.1.5): no content in the entries; "chunks" adds the plan ref's message
-// in pieces of at most 1000 characters.
+// (2.1.5): no content in the entries; "part" (6.3.4) adds one part of the
+// plan ref's message in pieces of at most 1000 characters.
 export function loadStub(store) {
   return (prompt) => {
     const inp = inputsOf(prompt);
@@ -1348,13 +1348,6 @@ export function loadStub(store) {
     if (inp.mode === "part") {
       const e = all.find((x) => x.name === inp.plan_ref);
       if (e && typeof e.content === "string") Object.assign(r, partOut(e.content, inp.part));
-    }
-    if (inp.mode === "chunks") {
-      const e = all.find((x) => x.name === inp.plan_ref);
-      if (e && typeof e.content === "string") {
-        r.chunks = [];
-        for (let i = 0; i < e.content.length; i += 1000) r.chunks.push(e.content.slice(i, i + 1000));
-      }
     }
     return r;
   };
