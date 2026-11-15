@@ -614,6 +614,9 @@ const READS = {
     "r.tag_sha string-re": "prog:plan_ref_write:tag_sha",
     "r.dirty array": "prog:plan_ref_write:dirty",
     "r.reused boolean": "infra:reused",
+    // 6.3.4 (2176): plan_ref_write's exit-3 list (it only picks chunks to write again)
+    "r.bad_chunks array": "infra:bad_chunks",
+    "i integer": "infra:bad_chunks[]",
   },
   verifyPlanCommit: {
     "pf.head string": "prog:plan_files:head",
@@ -736,6 +739,13 @@ const READS = {
   callRole: { "label string-re": "parsed: the script's own step label" },
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
+    // 6.3.4 (2176): a load-ref part (it only picks what to read again; ref_sha256 decides)
+    "p object": "prog:plan_ref:part",
+    "p.sha256 string": "prog:plan_ref:part.sha256",
+    "p0.part object": "prog:plan_ref:part",
+    "p0.part.count integer": "prog:plan_ref:part.count",
+    // F2: the part count partOk checks the lengths against (the caller's, else the relay's own)
+    "n integer": "prog:plan_ref:part.count",
     // 6.3.0 (ADR-1239)
     "resume.auto_decisions array": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     "r.headers_missing array": "prog:pr_body_block:headers_missing",
@@ -1116,7 +1126,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.3\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.3\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.4\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.4\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

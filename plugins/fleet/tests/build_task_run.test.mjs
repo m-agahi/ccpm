@@ -66,6 +66,7 @@ import {
   criteria,
   sha256,
   refContentOf,
+  writersContentOf,
   refEntry,
   planRefsOf,
   commitStub,
@@ -205,7 +206,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 6\.3\.3 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 6\.3\.4 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -1795,6 +1796,8 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:path-check:plan-audit",
     "role:plan-audit",
     "infra:stage-plan",
+    // 6.3.4 (2176): the chunk writer
+    "infra:plan-chunks:r0w0",
     "infra:path-check:commit-plan",
     "infra:commit-plan",
     "infra:verify-plan-commit",
@@ -1936,8 +1939,8 @@ test("2.1.4 plan mode: the written plan ref must target the plan commit and read
 
 // the sealed ref the plan run wrote as the tag message
 function richPlanStore(out) {
-  const c = call(out, "infra:commit-plan");
-  return refContentOf(c.prompt);
+  // 6.3.4 (2176): the writer steps carry the chunks
+  return writersContentOf(out);
 }
 
 test("plan_diff is forwarded to plan-audit as an array", async () => {
@@ -2016,7 +2019,9 @@ test("tiny plan_ref round trip: build mode loads the plan ref object and uses it
     main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
     task_id: "l42",
     plan_ref: "refs/fleet/l42/plan",
-    mode: "chunks",
+    // 6.3.4 (2176): the message in parts; this one fits in part 0
+    mode: "part",
+    part: 0,
   });
   // the reader program runs read-only: cat-file, never a checkout or a write
   assert.ok(load.prompt.includes("python3 -I '" + SCRIPTS_DIR + "/plan_ref.py'"));
@@ -2458,7 +2463,7 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
     const base = g("rev-parse", "HEAD").trim();
     const writeCmd = planRefWriteCmd;
     const reader = extractPy("PLAN_REF_PY_BEGIN", "PLAN_REF_PY_END", "PLAN_REF_PY");
-    // 3.0.0: no mode prints message text whole; meta lists, chunks rebuild it
+    // 3.0.0: no mode prints message text whole; meta lists, parts rebuild it (6.3.4: one part each here)
     const read = () => {
       const run1 = (mode) => {
         const r = spawnSync("python3", ["-I", "-", wt, "l42", mode], { input: reader, encoding: "utf8", env });
@@ -2466,7 +2471,7 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
         return JSON.parse(r.stdout);
       };
       return run1("meta").refs.map((x) => {
-        const ch = run1("chunks:" + x.name).chunks;
+        const ch = run1("part:" + x.name + ":0").chunks;
         return Object.assign({}, x, { content: Array.isArray(ch) ? ch.join("") : null });
       });
     };
@@ -2669,6 +2674,8 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
     "infra:path-check:plan-audit:replan",
     "role:plan-audit:replan",
     "infra:stage-plan:replan",
+    // 6.3.4 (2176)
+    "infra:plan-chunks:replan:r0w0",
     "infra:path-check:commit-plan:replan",
     "infra:commit-plan:replan",
     "infra:verify-plan-commit:replan",
@@ -5698,6 +5705,8 @@ const ARRAY_SITES = {
   "pr.dirty @ planMode": "parsed: the park program relay (digest-checked; PROGRAM_OUT types dirty)",
   // 6.0.0 (ledger 2042)
   "r.dirty @ commitPlanAndRef": "parsed: the plan_ref_write program relay (digest-checked; PROGRAM_OUT types dirty)",
+  // 6.3.4 (2176): plan_ref_write's exit-3 list; it only picks chunks to write again
+  "r.bad_chunks @ commitPlanAndRef": "infra:bad_chunks",
   // 6.0.0 security review
   "v.replace_refs @ buildFromRef": "parsed: a verify_since program output (PROGRAM_OUT types it), digest-checked with it",
 };
@@ -5961,7 +5970,9 @@ test("2.1.5 commit-plan relays no ref content: the script hashes the bytes it se
   // 4.0.0: the verify step reads the refs in meta mode; no step relays the content
   const vp = call(out, "infra:verify-plan-commit").prompt;
   assert.match(vp, / 'meta'\n/, "the reader runs in meta mode");
-  assert.equal(chunkedContentOf(call(out, "infra:commit-plan").prompt), s.__store[PC], "the chunks are the sealed bytes");
+  // 6.3.4 (2176): the writer steps carry the chunks; the commit step carries none
+  assert.equal(writersContentOf(out), s.__store[PC], "the chunks are the sealed bytes");
+  assert.equal(chunkedContentOf(call(out, "infra:commit-plan").prompt), null);
   assert.equal(out.result.plan_ref.ref_sha256, sha256(s.__store[PC]));
 });
 
@@ -5984,8 +5995,9 @@ test("2.1.5 load-ref reads the content in chunks and checks them against ref_sha
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   const p = call(out, "infra:load-ref").prompt;
-  assert.equal(inputsOf(p).mode, "chunks");
-  assert.match(p, / 'chunks:refs\/fleet\/l42\/plan'\n/);
+  // 6.3.4 (2176): part mode; a small ref is one part
+  assert.equal(inputsOf(p).mode, "part");
+  assert.match(p, / 'part:refs\/fleet\/l42\/plan:0'\n/);
   assert.match(p, /never shorten|NEVER shorten/i);
 });
 
@@ -6020,7 +6032,7 @@ test("2.1.5 confirm auto builds from the in-memory sealed ref: load-ref reads me
   assert.match(p, / 'meta'\n/);
 });
 
-test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebuilds the exact bytes", { skip: !HAVE_PY }, () => {
+test("2.1.5 plan-ref reader program: meta mode has no content, part mode rebuilds the exact bytes (6.3.4: was chunks mode)", { skip: !HAVE_PY }, () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-chunks-"));
   const wt = join(home, "repo");
   try {
@@ -6051,14 +6063,18 @@ test("2.1.5 plan-ref reader program: meta mode has no content, chunks mode rebui
     assert.ok(!("content" in meta.refs[0]));
     assert.equal(meta.refs[0].sha256, full.sha256);
     assert.equal(meta.chunks, undefined);
-    const ch = read("chunks:refs/fleet/l42/plan");
+    // 6.3.4 (2176): part mode replaced chunks mode
+    const old = spawnSync("python3", ["-I", "-", wt, "l42", "chunks:refs/fleet/l42/plan"], { input: reader, encoding: "utf8", env });
+    assert.notEqual(old.status, 0, "chunks mode is gone");
+    const ch = read("part:refs/fleet/l42/plan:0");
+    assert.equal(ch.part.count, 1);
     assert.ok(!("content" in ch.refs[0]));
     assert.ok(ch.chunks.length >= 5, "several chunks: " + ch.chunks.length);
     assert.ok(ch.chunks.every((c) => [...c].length <= CHUNK), "at most 1000 code points per chunk");
     assert.equal(ch.chunks.join(""), full.content);
     assert.equal(sha256(ch.chunks.join("")), full.sha256);
-    const bad = spawnSync("python3", ["-I", "-", wt, "l42", "chunks:refs/heads/master"], { input: reader, encoding: "utf8", env });
-    assert.notEqual(bad.status, 0, "chunks of a non-plan ref are refused");
+    const bad = spawnSync("python3", ["-I", "-", wt, "l42", "part:refs/heads/master:0"], { input: reader, encoding: "utf8", env });
+    assert.notEqual(bad.status, 0, "parts of a non-plan ref are refused");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -6237,7 +6253,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 6\.3\.3; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 6\.3\.4; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6935,7 +6951,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.3\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 6\.3\.3 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.4\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 6\.3\.4 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8642,7 +8658,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 6\.3\.3/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 6\.3\.4/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

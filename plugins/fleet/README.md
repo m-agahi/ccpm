@@ -204,6 +204,19 @@ every check_cmd script judge-only), plus the hasher. Since 3.1.0 also `infra:ver
 entries or as sha256-checked chunks (`infra:load-ref`). The digest catches a relay that drops or
 changes an entry; it is not a security boundary against a hostile relay (ADR-1152).
 
+**Large plan refs (6.3.4, ledger 2176).** The script has no filesystem, so the sealed ref still
+travels through agents, but no agent copies all of it. In plan mode, writer steps
+(`infra:plan-chunks:r<round>w<k>`, in parallel) each write at most 8 base64 chunks to the chunk
+dir; `infra:commit-plan` carries no chunk text, runs `plan_ref_write.py` and relays its exit-3
+`bad_chunks` list. Only those chunks go to fresh writers, then `infra:commit-plan:rewrite-<n>`
+runs, at most 2 rounds; then the run stops `failed` at the commit gate with nothing sealed. In
+build mode, load-ref reads the message in parts of 32000 code points (`plan_ref.py` mode
+`part:<ref>:<k>`): part 0 as `infra:load-ref`, the rest in parallel as `infra:load-ref:p<k>`. A
+part whose chunks do not match its sha256, its length (every part but the last holds exactly 32000
+code points) or part 0's count is read once more; the ref metadata of every relay is checked. When
+the joined parts miss `ref_sha256`, part 0 is read once more for its count before the run stops.
+Only a `failed` commit relay steers a rewrite. The joined parts must match `ref_sha256`, as before.
+
 Plan mode returns `awaiting_confirmation` with `tldr`, `plan_diff`, `fleet_size`
 (`{criteria, est_agents, est_rounds}`), `plan_path` and `plan_ref`. It makes no push, no PR, no
 ledger write and no comment. The planner's `held_out_examples` are dropped: never returned and

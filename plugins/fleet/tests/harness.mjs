@@ -283,6 +283,8 @@ export function withRelayDigest(label, r) {
 
 export async function runOne(script, args0) {
   const args = withNonce(args0);
+  // 6.3.4 (2176): each run starts with no chunk files written
+  CHUNK_STORE.clear();
   const calls = [];
   const unscripted = [];
   const logs = [];
@@ -478,6 +480,8 @@ export async function runOne(script, args0) {
     }
     // 4.0.0: unscripted verify steps read what the commit-plan stubs wrote
     if (!(label in script) && /^infra:verify-plan-commit/.test(label)) return verifyStub(script.__store || {})(prompt);
+    // 6.3.4 (2176): unscripted plan-ref chunk writers write their chunks exactly
+    if (!(label in script) && /^infra:plan-chunks/.test(label)) return chunkWriterStub()(prompt);
     // 4.0.0 (1983): every confirm mode gets up to 2 re-plan rounds; an
     // unscripted round step (":audit-fix", ":audit-fix-2") repeats the
     // round-0 stub, so a plan the stubs refuse is refused in every round
@@ -486,6 +490,11 @@ export async function runOne(script, args0) {
       return !(k in script) && rb && !script.__noRoundFallback && rb[1] in script ? rb[1] : k;
     };
     let key = roundBase(label);
+    // 6.3.4 (2176): an unscripted commit re-run after rewritten chunks repeats its step's stub
+    const rw = /^(infra:commit-plan.*?):rewrite-[0-9]+$/.exec(key);
+    if (!(key in script) && rw) key = roundBase(rw[1]);
+    // 6.3.4 (2176): an unscripted load-ref part (or its re-read) reads with the load-ref stub
+    if (!(key in script) && /^infra:load-ref(:p[0-9]+(:c[0-9]+)?)?:retry$|^infra:load-ref:p[0-9]+(:c[0-9]+)?$/.test(key)) key = "infra:load-ref";
     // 4.0.0 (1984): an unscripted drift retry repeats the role's answer for
     // that label (or its round-0 stub); script "<label>:retry" to differ
     if (!(key in script) && /^role:.+:retry$/.test(label)) key = roundBase(label.slice(0, -":retry".length));
@@ -953,6 +962,50 @@ export function chunkedContentOf(prompt) {
 export function refContentOf(prompt) {
   return chunkedContentOf(prompt);
 }
+// 6.3.4 (2176): the chunk files the plan-ref writers wrote, by chunk dir: {dir: {i: text}}
+export const CHUNK_STORE = new Map();
+// a writer prompt's chunks, {i: text} ("chunk <i> sha256 <hex>:" then the text)
+export function writerChunksOf(prompt) {
+  const out = {};
+  for (const m of String(prompt).matchAll(/^chunk (\d+) sha256 ([0-9a-f]{64}):\n([A-Za-z0-9+/=]*)$/gm)) out[Number(m[1])] = m[3];
+  return out;
+}
+// the writer stub: the chunks land in CHUNK_STORE under the prompt's chunk_dir; mut(i, text) may change one
+export function chunkWriterStub(mut) {
+  return (prompt) => {
+    const dir = inputsOf(prompt).chunk_dir;
+    const got = writerChunksOf(prompt);
+    const files = CHUNK_STORE.get(dir) || {};
+    for (const [i, t] of Object.entries(got)) {
+      const v = mut ? mut(Number(i), t) : t;
+      if (v === null) delete files[i];
+      else files[i] = v;
+    }
+    CHUNK_STORE.set(dir, files);
+    return { status: "ok", reason: "written", written: Object.keys(got).map(Number) };
+  };
+}
+// the commit prompt's chunk sha256 list (the plan_ref_write command's last argument)
+export function commitShasOf(prompt) {
+  const m = /plan_ref_write\.py'(?: '[^']*'){7} '(\[[^']*\])'/.exec(String(prompt));
+  return m ? JSON.parse(m[1]) : null;
+}
+// what plan_ref_write finds in the chunk dir: {bad: [<i>...], content}
+export function writtenRefOf(prompt) {
+  const shas = commitShasOf(prompt);
+  if (!shas) return { bad: [], content: chunkedContentOf(prompt) };
+  const files = CHUNK_STORE.get(inputsOf(prompt).chunk_dir) || {};
+  const bad = shas.filter((e) => typeof files[e.i] !== "string" || sha256(files[e.i]) !== e.sha256).map((e) => e.i);
+  return { bad, content: bad.length ? null : Buffer.from(shas.map((e) => files[e.i]).join(""), "base64").toString("utf8") };
+}
+// the sealed bytes the writer prompts of a run carried, decoded (null: no writer ran)
+export function writersContentOf(out) {
+  const all = {};
+  for (const c of out.calls) if (/^infra:plan-chunks/.test(c.label)) Object.assign(all, writerChunksOf(c.prompt));
+  const n = Object.keys(all).length;
+  if (!n) return null;
+  return Buffer.from(Array.from({ length: n }, (_, i) => all[i]).join(""), "base64").toString("utf8");
+}
 
 // One entry of the plan-ref reader's output, as the real program prints it.
 export function refEntry(name, target, content) {
@@ -976,8 +1029,12 @@ export function planRefsOf(store, taskId) {
 // the tag message at refs/fleet/l42/plan (an earlier one is archived).
 export function commitStub(store, head, planSha) {
   return (prompt) => {
-    const c = refContentOf(prompt);
+    // 6.3.4 (2176): the chunks are files the writer steps wrote; the program checks each against its sha256
+    const w = writtenRefOf(prompt);
+    if (w.bad.length) return { status: "failed", reason: "bad chunks", bad_chunks: w.bad };
+    const c = w.content;
     if (c == null) return { status: "failed", reason: "no ref content in the prompt" };
+    CHUNK_STORE.delete(inputsOf(prompt).chunk_dir);
     const prev = "__planHead" in store ? store.__planHead : null;
     if (prev && prev !== head) (store.__archived || (store.__archived = [])).push(prev);
     store[head] = c;
@@ -1020,7 +1077,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.3.3/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.3.4/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1275,8 +1332,8 @@ export function fillPrograms(label, r, prompt) {
 }
 
 // load-ref stub: the plan-ref reader over the store, in the prompt's mode
-// (2.1.5): no content in the entries; "chunks" adds the plan ref's message
-// in pieces of at most 1000 characters.
+// (2.1.5): no content in the entries; "part" (6.3.4) adds one part of the
+// plan ref's message in pieces of at most 1000 characters.
 export function loadStub(store) {
   return (prompt) => {
     const inp = inputsOf(prompt);
@@ -1287,15 +1344,24 @@ export function loadStub(store) {
       return o;
     });
     const r = { status: "ok", reason: "read", refs };
-    if (inp.mode === "chunks") {
+    // 6.3.4 (2176): one part of PART_CHARS code points, in chunks of 1000
+    if (inp.mode === "part") {
       const e = all.find((x) => x.name === inp.plan_ref);
-      if (e && typeof e.content === "string") {
-        r.chunks = [];
-        for (let i = 0; i < e.content.length; i += 1000) r.chunks.push(e.content.slice(i, i + 1000));
-      }
+      if (e && typeof e.content === "string") Object.assign(r, partOut(e.content, inp.part));
     }
     return r;
   };
+}
+
+// 6.3.4 (2176): plan_ref.py part mode: {part: {index, count, sha256}, chunks}
+export const PART_CHARS = 32000;
+export function partOut(content, k) {
+  const cps = [...content];
+  const count = Math.max(1, Math.ceil(cps.length / PART_CHARS));
+  const part = cps.slice(k * PART_CHARS, (k + 1) * PART_CHARS);
+  const chunks = [];
+  for (let i = 0; i < part.length; i += CHUNK) chunks.push(part.slice(i, i + CHUNK).join(""));
+  return { part: { index: k, count, sha256: sha256(part.join("")) }, chunks };
 }
 
 // commit-step stub: hooks pass; the commit holds exactly the judged tree.

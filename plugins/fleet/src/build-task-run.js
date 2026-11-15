@@ -82,6 +82,8 @@ const INFRA_TIER = [
   ["hasher:", "sonnet"],
   ["infra:load-ref", "sonnet"],
   ["infra:commit-plan", "sonnet"],
+  // 6.3.4 (2176): the plan-ref chunk writers
+  ["infra:plan-chunks", "sonnet"],
   ["infra:park-plan", "sonnet"],
   ["infra:format-", "sonnet"],
   ["infra:commit:", "sonnet"],
@@ -112,7 +114,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "6.3.3";
+const FLEET_VERSION = "6.3.4";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with
 const RELOAD_HINT =
@@ -606,6 +608,10 @@ const INFRA_SCHEMA = {
     hook_timeout: { type: "array", items: STR },
     diff: { type: "array", items: STR },
     chunks: { type: "array", items: STR },
+    // 6.3.4 (2176): plan_ref_write's exit-3 list, the chunks a writer wrote, a load-ref part
+    bad_chunks: { type: "array", items: { type: "integer" } },
+    written: { type: "array", items: { type: "integer" } },
+    part: { type: ["object", "null"], properties: { index: { type: "integer" }, count: { type: "integer" }, sha256: STR } },
     refs: {
       type: "array",
       items: {
@@ -1563,7 +1569,7 @@ const PROGRAM_SHA256 = {
   "plan_dsn": "f02908de588f71426a2995b86884be5e15127fd9fc48ead3710c0e71b481277b",
   "plan_files": "360fc1c69092e8da9f11cdded6296ef429c3db870181881ffff949a5b3c8253c",
   "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
-  "plan_ref": "494ceb934b89fa5c2962ef786ba93bee63bd09f776c82c50579fdf23f301c136",
+  "plan_ref": "bf07be4e67cb6d56ca9a7c1b926f99579c0f5329633babbf2ce22eb3aef6f594",
   "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
   "policy": "1efd8ada37abf58151d14b11300fac1235c13b414ab0649fcc8e26b0e10d37b5",
   "pr_body_block": "0969891f59f2b11b033b99bb8e2b9f5d3fc1b0fad60ffbebbd5149f0cfae61be",
@@ -1730,7 +1736,8 @@ const PROGRAM_KEYS = {
   "plan_files": ["head", "commit", "parent", "files", "args", "dsn_paths"],
   "plan_dsn": ["holds", "lines", "args"],
   "plan_ref": ["refs"],
-  "plan_ref:chunks": ["refs", "chunks"],
+  // 6.3.4 (2176): part mode replaced chunks mode
+  "plan_ref:part": ["refs", "part", "chunks"],
   "verify_since": ["head", "is_ancestor", "commits_since", "plan_touched", "changed_since", "replace_refs", "args"],
   "read_state": ["exists", "target", "message", "head", "head_tree", "clean"],
   "state_write": ["head", "state_sha"],
@@ -1831,6 +1838,7 @@ const PROGRAM_OUT = {
   plan_ref: {
     refs: { type: "array", items: { type: "object", properties: { name: STR, tag_sha: STR, type: STR, target: STR, target_type: STR, sha256: STR_OR_NULL } } },
     chunks: STRS,
+    part: { type: "object", properties: { index: INT, count: INT, sha256: STR } },
   },
   verify_since: {
     head: STR,
@@ -2155,6 +2163,9 @@ function base64Of(str) {
   return out;
 }
 const CHUNK_CHARS = 4000;
+// 6.3.4 (2176): the most parts load-ref reads (plan_ref.py parts are 32000 code points)
+const MAX_REF_PARTS = 64;
+const REF_PART_CHARS = 32000;
 const MAX_CHUNK_RETRIES = 2;
 function chunked(message) {
   const b64 = base64Of(message);
@@ -2608,17 +2619,32 @@ function formatPlanPrompt(inputs) {
   );
 }
 
-// message: the exact tag message, refMessage(full)
-function commitPlanPrompt(inputs, message) {
-  const c = chunked(message);
+// 6.3.4 (2176): one writer copies at most this many base64 chunks of the plan ref
+const CHUNKS_PER_WRITER = 8;
+// the writer step for chunks `ids` of c
+function planChunksPrompt(inputs, c, ids) {
+  return (
+    INFRA_STEP + "write some chunks of the sealed plan ref to scratch files. Write no other file. No git, no other command, no ledger, ticket or comment writes, no push.\n" +
+    inputsLine(Object.assign({}, inputs, { chunks: ids })) +
+    "1. `mkdir -p " + shQuote(inputs.chunk_dir) + "`.\n" +
+    "2. For each chunk below, one Bash call: `printf '%s' '<the chunk text>' > " + shQuote(inputs.chunk_dir) + "/<i>.b64`, with the chunk text copied exactly, byte for byte, in place of <the chunk text> (base64 holds no quote; printf adds no newline). Never shorten, merge, reflow or skip a chunk.\n" +
+    'Return {status: "ok", reason, written: [<i>, ...]}: the chunk numbers you wrote. A later step checks every file against its sha256 and sends a bad one to a fresh writer.\n' +
+    "The " + ids.length + " chunk(s) (" + CHUNK_CHARS + " characters each at most):\n" +
+    ids.map((i) => "chunk " + i + " sha256 " + c.shas[i].sha256 + ":\n" + c.chunks[i] + "\n").join("")
+  );
+}
+// c: chunked(refMessage(full)); the writer steps wrote its chunks to <chunk_dir>
+function commitPlanPrompt(inputs, c) {
   return (
     INFRA_STEP + "seal the plan doc LOCALLY: the program writes a plan commit that is on no branch (parent <plan_base>), records the sealed plan ref as a local git object and moves the plan doc out of the worktree. Never git add, commit, checkout or reset yourself. Never push. No ledger, ticket or comment writes.\n" +
     inputsLine(inputs) +
     "1. " +
     planWorktreeSteps(inputs) +
-    "3. Write the plan ref: its tag message travels as base64 chunks you write to files under <chunk_dir>; the program checks every chunk against its sha256 (no hook runs, the branch and its index are not touched). Write no other file.\n" +
-    chunkSteps(inputs.chunk_dir, c, progCmd("plan_ref_write", [inputs.worktree, inputs.task_id, inputs.plan_base, inputs.plan_path, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)])) +
+    "3. Write the plan ref: its tag message is already in base64 chunk files under <chunk_dir> (earlier steps wrote them); the program checks every chunk against its sha256 (no hook runs, the branch and its index are not touched). Write, change or delete no file yourself. Run this command exactly as written, unmodified:\n" +
+    progCmd("plan_ref_write", [inputs.worktree, inputs.task_id, inputs.plan_base, inputs.plan_path, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)]) +
+    "\n" +
     "On success it prints one JSON object " + printsKeys("plan_ref_write") + ": copy every value unchanged and add `file_sha256` (the script recomputes the digest).\n" +
+    '   Exit 3 prints {"bad_chunks": [<i>, ...]}: the files of those chunks do not hash to their sha256 and nothing was written. Then return {status: "failed", reason: "bad chunks", bad_chunks: <that list, exactly>} at once and do nothing else. Any other non-zero exit -> failed with its stderr.\n' +
     (inputs.retire
       ? "4. Housekeeping (4.0.0): `mkdir -p " + shQuote(inputs.retire.used) + " && mv -n -- " + shQuote(inputs.retire.dir) + " " + shQuote(inputs.retire.used) + "/`. An error here changes nothing above and does not fail the step.\n"
       : "") +
@@ -2653,10 +2679,10 @@ function loadRefPrompt(inputs) {
     INFRA_STEP + "LOAD the approved plan ref (a local git tag object). Read only: no edits, no commits, no checkout, no reset, no push.\n" +
     inputsLine(inputs) +
     "Run this one command exactly as written, unmodified (it reads the refs with git cat-file):\n" +
-    planRefsCmd(inputs.main_worktree, inputs.task_id, inputs.mode === "chunks" ? "chunks:" + inputs.plan_ref : "meta") +
+    planRefsCmd(inputs.main_worktree, inputs.task_id, inputs.mode === "part" ? "part:" + inputs.plan_ref + ":" + inputs.part : "meta") +
     "\n" +
-    (inputs.mode === "chunks"
-      ? 'It prints one JSON object ' + printsKeys("plan_ref:chunks") + '. Return {status: "ok", reason, ' + returnKeys("plan_ref:chunks") + '} with refs, chunks and program copied exactly, byte for byte: every chunk in full and in order. NEVER shorten, summarise, elide, merge or drop a chunk, and never write an ellipsis or a placeholder such as [truncated ...]; the script checks the joined chunks against a sha256 and stops the run on any change. '
+    (inputs.mode === "part"
+      ? 'It prints one JSON object ' + printsKeys("plan_ref:part") + ' (part ' + inputs.part + ' of the message: its chunks, its index, the part count and its sha256). Return {status: "ok", reason, ' + returnKeys("plan_ref:part") + '} with refs, part, chunks and program copied exactly, byte for byte: every chunk in full and in order. NEVER shorten, summarise, elide, merge or drop a chunk, and never write an ellipsis or a placeholder such as [truncated ...]; the script checks the joined chunks against the sha256 and reads a bad part again. '
       : 'It prints one JSON object ' + printsKeys("plan_ref") + '. Return {status: "ok", reason, ' + returnKeys("plan_ref") + '} with refs and program copied exactly, byte for byte. ') +
     'If the command exits non-zero, return {status: "needs_human", reason: <its stderr>}. Run no other command.'
   );
@@ -4923,18 +4949,56 @@ async function commitPlanAndRef(ctx) {
   if (!relayDigestOk(st.plan_hash, progKeys("plan_hash"), "plan_hash") || canonical(st.plan_hash.args) !== canonical([ctx.worktree, "", ctx.fields.planPath]))
     halt("failed", stLabel + ": the relayed plan hash does not match the program's digest or arguments");
   if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("failed", stLabel + " returned no usable plan_sha256");
-  // + 2: the PATH re-check before the commit and the verify step
-  const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2, audits: (ctx.fields.history.audits || 0) + (state.audits || 0) });
-  const full = makePlanRef(Object.assign({}, ctx.fields, { planSha: stagedSha, history, planBase: ctx.planBase }));
-  const msgSha = sha256Hex(refMessage(full));
+  // + 2: the PATH re-check before the commit and the verify step; + the first-round chunk writers
+  // (6.3.4, 2176: their count depends on the message's length, which holds it; rewrite rounds are not counted)
+  const sealAt = (writers) => {
+    const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2 + writers, audits: (ctx.fields.history.audits || 0) + (state.audits || 0) });
+    return makePlanRef(Object.assign({}, ctx.fields, { planSha: stagedSha, history, planBase: ctx.planBase }));
+  };
+  let writers = 1;
+  let full = sealAt(writers);
+  for (let k = 0; k < 4; k++) {
+    const n = Math.ceil(chunked(refMessage(full)).chunks.length / CHUNKS_PER_WRITER);
+    if (n === writers) break;
+    writers = n;
+    full = sealAt(writers);
+  }
+  const c = chunked(refMessage(full));
+  const msgSha = c.expected;
   const label = "infra:commit-plan" + sfx;
-  await pathRecheck("commit-plan" + sfx, ctx.phaseName);
   const chunkDir = scratchOf(ctx.worktree) + "/plan-ref-" + safeName(state.nonce + sfx);
-  const r = await infra(
-    label,
-    commitPlanPrompt(Object.assign({}, base, { task_id: full.task_id, plan_base: ctx.planBase, chunk_dir: chunkDir }, ctx.retire ? { retire: ctx.retire } : {}), refMessage(full)),
-    ctx.phaseName,
-  );
+  const cpInputs = Object.assign({}, base, { task_id: full.task_id, plan_base: ctx.planBase, chunk_dir: chunkDir }, ctx.retire ? { retire: ctx.retire } : {});
+  // 6.3.4 (2176): writers copy the chunks in batches; the commit step copies none and names any chunk file that is bad
+  const writeChunks = async (round, ids) => {
+    const groups = [];
+    for (let i = 0; i < ids.length; i += CHUNKS_PER_WRITER) groups.push(ids.slice(i, i + CHUNKS_PER_WRITER));
+    reserve(groups.length, "the plan ref chunk writers");
+    // a throw inside a thunk resolves to null: no halt() may be reached inside softDispatch here (no program, no digest)
+    const res = await parallel(groups.map((g, b) => () => softDispatch("infra:plan-chunks" + sfx + ":r" + round + "w" + b, planChunksPrompt({ chunk_dir: chunkDir }, c, g), { schema: INFRA_SCHEMA, phase: ctx.phaseName })));
+    res.forEach((w, b) => {
+      if (!w || w.status !== "ok") gate("infra:plan-chunks" + sfx + ":r" + round + "w" + b + " returned " + (w ? w.status + ": " + (w.reason || "no reason") : "no result") + "; the commit step checks every chunk file");
+    });
+  };
+  await writeChunks(0, c.chunks.map((x, i) => i));
+  let r = null;
+  for (let round = 0; ; round++) {
+    const lbl = label + (round ? ":rewrite-" + round : "");
+    // the PATH re-check right before each commit run (the writers run no program)
+    await pathRecheck("commit-plan" + sfx + (round ? ":rewrite-" + round : ""), ctx.phaseName);
+    r = await dispatch(lbl, commitPlanPrompt(cpInputs, c), { schema: INFRA_SCHEMA, phase: ctx.phaseName });
+    const bad = r && Array.isArray(r.bad_chunks) && r.bad_chunks.length ? r.bad_chunks : null;
+    if (!bad) break;
+    // only a failed relay (plan_ref_write's exit 3) steers a rewrite; with any other status the program may have sealed
+    if (r.status !== "failed")
+      halt("failed", lbl + ": the relay has status " + r.status + " and bad_chunks " + JSON.stringify(bad) + " (status ok and bad_chunks cannot both be true); no rewrite runs, and the plan ref may already be written", "commit");
+    if (!bad.every((i) => Number.isInteger(i) && i >= 0 && i < c.chunks.length))
+      halt("failed", lbl + ": the relayed bad_chunks " + JSON.stringify(bad) + " are not chunk numbers of this ref (0.." + (c.chunks.length - 1) + ")", "commit");
+    const ids = bad.filter((i, k) => bad.indexOf(i) === k).sort((a, b) => a - b);
+    if (round >= MAX_CHUNK_RETRIES) halt("failed", lbl + ": chunk(s) " + ids.join(", ") + " still do not match their sha256 after " + MAX_CHUNK_RETRIES + " rewrite rounds; nothing was sealed", "commit");
+    gate(lbl + ": chunk(s) " + ids.join(", ") + " do not match their sha256; each goes to a fresh writer (round " + (round + 1) + ")");
+    await writeChunks(round + 1, ids);
+  }
+  if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
   requireProgram(r, "plan_ref_write", label, "failed", "commit");
   if (typeof r.plan_commit !== "string" || !SHA_RE.test(r.plan_commit) || r.plan_base !== ctx.planBase || typeof r.tag_sha !== "string" || !SHA_RE.test(r.tag_sha) || !Array.isArray(r.dirty) || !relayDigestOk(r, progKeys("plan_ref_write"), "plan_ref_write"))
     halt("failed", label + ": the relayed plan commit, base and tag object do not match the program's digest (" + JSON.stringify(r.plan_commit === undefined ? null : r.plan_commit) + ")", "commit");
@@ -5739,24 +5803,77 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   const changed = (why) => halt("needs_human", "plan ref missing or changed; re-run plan (" + tiny.plan_ref + " " + why + ")");
   // a model relaying the whole ref shortened it
   const mem = opt.full && sha256Hex(refMessage(opt.full)) === tiny.ref_sha256 ? opt.full : null;
-  const load = (label) =>
-    infra(label, loadRefPrompt({ main_worktree: lay.mainWt, task_id: refTask, plan_ref: tiny.plan_ref, mode: mem ? "meta" : "chunks" }), "Verify", JUDGE_AGENT);
-  let ld = await load("infra:load-ref");
-  requireProgram(ld, "plan_ref", "infra:load-ref");
+  const loadPrompt = (part) => loadRefPrompt(Object.assign({ main_worktree: lay.mainWt, task_id: refTask, plan_ref: tiny.plan_ref }, part === null ? { mode: "meta" } : { mode: "part", part }));
+  const load = (label, part) => infra(label, loadPrompt(part), "Verify", JUDGE_AGENT);
   const entryOf = (r) => (Array.isArray(r.refs) ? r.refs.find((x) => x && x.name === tiny.plan_ref) : null);
-  const joined = (r) => (Array.isArray(r.chunks) && r.chunks.length && r.chunks.every((c) => typeof c === "string") ? r.chunks.join("") : null);
-  let entry = entryOf(ld);
-  const ep = planRefMetaProblem(entry, tiny.plan_commit, tiny.ref_sha256);
-  if (ep) changed(ep);
-  let content = mem ? refMessage(mem) : joined(ld);
-  if (!mem && content !== null && sha256Hex(content) !== tiny.ref_sha256) {
-    gate("infra:load-ref: the copied chunks do not match ref_sha256; reading once more");
-    ld = await load("infra:load-ref:retry");
-    requireProgram(ld, "plan_ref", "infra:load-ref:retry");
-    entry = entryOf(ld);
-    const ep2 = planRefMetaProblem(entry, tiny.plan_commit, tiny.ref_sha256);
-    if (ep2) changed(ep2);
-    content = joined(ld);
+  const joined = (r) => (r && Array.isArray(r.chunks) && r.chunks.length && r.chunks.every((c) => typeof c === "string") ? r.chunks.join("") : null);
+  // every relay's ref metadata: a ref that changed stops at once
+  const checked = (r, label) => {
+    requireProgram(r, "plan_ref", label);
+    const ep = planRefMetaProblem(entryOf(r), tiny.plan_commit, tiny.ref_sha256);
+    if (ep) changed(ep);
+    return r;
+  };
+  // 6.3.4 (2176): the message travels in parts; a part's sha256 only picks what to read again, ref_sha256 decides
+  // a part count is a relay error, not a changed ref, when the part lengths disagree with it:
+  // every part but the last holds exactly REF_PART_CHARS code points (plan_ref.py PART), the last 1 to REF_PART_CHARS
+  const partOk = (r, k, count) => {
+    const p = r && r.part;
+    const j = joined(r);
+    if (!p || typeof p !== "object" || p.index !== k || j === null || typeof p.sha256 !== "string" || sha256Hex(j) !== p.sha256) return false;
+    const n = count === undefined ? p.count : count;
+    if (p.count !== n || !Number.isInteger(n) || n < 1) return false;
+    const cps = Array.from(j).length;
+    return k < n - 1 ? cps === REF_PART_CHARS : cps >= 1 && cps <= REF_PART_CHARS;
+  };
+  const countOf = (p0) => (p0.part && Number.isInteger(p0.part.count) && p0.part.count >= 1 && p0.part.count <= MAX_REF_PARTS ? p0.part.count : null);
+  // parts 1..count-1 after part 0; tag keys a second pass with another count apart
+  const readParts = async (p0, tag) => {
+    const count = countOf(p0);
+    if (count === null) return null;
+    const parts = [p0];
+    if (count > 1) {
+      reserve(count - 1, "the plan ref parts");
+      const ks = Array.from({ length: count - 1 }, (_, i) => i + 1);
+      // a throw inside a thunk resolves to null: no halt() may be reached inside softDispatch here (no digest; the plan_ref slot is placed)
+      const rest = await parallel(ks.map((k) => () => softDispatch("infra:load-ref:p" + k + tag, loadPrompt(k), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Verify" })));
+      for (const k of ks) {
+        const lbl = "infra:load-ref:p" + k + tag;
+        let r = rest[k - 1];
+        if (r && r.status === "ok") checked(r, lbl);
+        if (!r || r.status !== "ok" || !partOk(r, k, count)) {
+          gate(lbl + ": " + (r ? (r.status === "ok" ? "the copied chunks do not match the part's sha256, length or count" : "returned " + r.status) : "returned no result") + "; reading once more");
+          r = checked(await load(lbl + ":retry", k), lbl + ":retry");
+        }
+        parts.push(r);
+      }
+    }
+    const js = parts.map(joined);
+    return { count, content: js.every((x) => x !== null) ? js.join("") : null };
+  };
+  let content = null;
+  if (mem) {
+    checked(await load("infra:load-ref", null), "infra:load-ref");
+    content = refMessage(mem);
+  } else {
+    let p0 = checked(await load("infra:load-ref", 0), "infra:load-ref");
+    let reread = false;
+    // a relay with no part at all found no message text: nothing to read again
+    if (p0.part && typeof p0.part === "object" && !partOk(p0, 0)) {
+      gate("infra:load-ref: the copied chunks do not match ref_sha256; reading once more");
+      p0 = checked(await load("infra:load-ref:retry", 0), "infra:load-ref:retry");
+      reread = true;
+    }
+    if (countOf(p0) === null) changed("part 0 gives no part count from 1 to " + MAX_REF_PARTS);
+    let got = await readParts(p0, "");
+    // a count too low passes the length rule (a full last part): read part 0 once more before calling the ref changed
+    if (!reread && (got.content === null || sha256Hex(got.content) !== tiny.ref_sha256)) {
+      gate("infra:load-ref: the joined parts do not match ref_sha256; reading part 0 once more for its part count");
+      const q0 = checked(await load("infra:load-ref:retry", 0), "infra:load-ref:retry");
+      const n = countOf(q0);
+      if (n !== null && n !== got.count && partOk(q0, 0)) got = await readParts(q0, ":c" + n);
+    }
+    content = got.content;
   }
   if (content === null || sha256Hex(content) !== tiny.ref_sha256) changed("message chunks do not match ref_sha256 " + tiny.ref_sha256);
   let loaded = null;
