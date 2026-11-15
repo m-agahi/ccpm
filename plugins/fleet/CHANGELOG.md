@@ -1,5 +1,43 @@
 # Changelog
 
+## [6.3.4] - 2026-11-15
+
+Fleet 6.3.4: a large plan ref commits and loads without one agent copying all of it (ledger 2176).
+Runs wf_5461ef31-9cc and wf_b8ee1e8f-73d lost an audited plan when one commit-plan agent mis-copied
+chunks of a 90 KB ref and stopped writing at chunk 19 of 31; runs wf_4b5e908e-939 and
+wf_1924a450-af2 failed or re-read load-ref on an intact 87 KB ref. The workflow script has no
+filesystem, so the ref still travels through agents: each agent now copies a bounded piece, and only
+a piece that fails its sha256 goes to a fresh agent. The seal does not change.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 6.3.4), then start a NEW session: the workflow
+  looks for its own `fleet/6.3.4/scripts` dir.
+- A 6.3.3 plan ref stays valid: its tag message and `ref_sha256` are read the same way.
+
+### Changed
+
+- Plan mode, commit: writer steps `infra:plan-chunks[<sfx>]:r<round>w<k>` (sonnet, run in
+  parallel) each write at most `CHUNKS_PER_WRITER = 8` base64 chunks (4000 characters each) to the
+  chunk dir. `infra:commit-plan` carries no chunk text: it runs `plan_ref_write.py` (unchanged: the
+  per-chunk sha256 list and the whole-message sha256) and, on its exit 3, relays `bad_chunks`.
+  Only those chunks go to fresh writers, then `infra:commit-plan:rewrite-<n>` runs; after
+  `MAX_CHUNK_RETRIES = 2` rewrite rounds the run stops `failed` at the commit gate with nothing
+  sealed. A `bad_chunks` entry that is not a chunk number stops the run.
+- The sealed `history.agents` counts the first-round writers (the count is solved with the
+  message length that holds it); rewrite rounds are not counted, as digest retries are not.
+- Build mode, load-ref: `plan_ref.py` has a new mode `part:<ref>:<k>` that prints part k (32000
+  code points) of the message as chunks of at most 1000, with `part: {index, count, sha256}`.
+  `infra:load-ref` reads part 0; parts 1.. run in parallel as `infra:load-ref:p<k>` (at most
+  `MAX_REF_PARTS = 64`). A part whose chunks do not match its sha256, or that failed, is read once
+  more (`:retry`); the ref metadata of every relay is checked, so a changed ref stops at once. The
+  part sha256 only picks what to read again: the joined parts must match `ref_sha256`, as before.
+  The confirm-auto path (metadata only) does not change.
+
+### Not changed
+
+- `state_write` and `parked write` still copy all their chunks in one agent (`chunkSteps`).
+
 ## [6.3.3] - 2026-11-14
 
 Fleet 6.3.3: a PR review finding of category `pr_body_claim` goes to a pr-opener body update, not
