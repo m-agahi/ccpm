@@ -527,5 +527,6 @@ test("5.0.0 R3: role schemas carry memory_notes only (no yadgar_findings); notes
 test("5.0.0 R3: a write-back step whose tools are absent reports every entry unavailable, never failed", () => {
   assert.doesNotMatch(SOURCE, /Tools absent -> every entry failed/);
   const n = (SOURCE.match(/every entry status unavailable, reason \\"absent\\"; call nothing/g) || []).length;
-  assert.ok(n >= 4, "unavailable rules: " + n);
+  // 7.0.0 (yaadgaar #699): the two yadgar ledger write-back prompts are retired; the yaadgaar read and write remain
+  assert.ok(n >= 2, "unavailable rules: " + n);
 });

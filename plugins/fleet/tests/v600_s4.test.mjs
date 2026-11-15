@@ -467,6 +467,19 @@ function personal() {
   s["infra:policy"] = polOut({ profile: "personal", caps: PERSONAL });
   return s;
 }
+// 7.0.0 (yaadgaar #699): the CI write-back tests run on a yaadgaar task (the default fixture's
+// legacy ledger source is inert); its read and write steps succeed unless a test scripts them
+const YURN = "yadgar:task:0192";
+const YA = { ...ARGS, input: "#622" };
+function asYaadgaar(s) {
+  const brief = { title: "Add Thing!", description: "add a thing", sources: [{ kind: "yaadgaar", ref: "622", url: null, body: "task body", id: YURN }], repo: "/r", plan_path: null };
+  s.intake = { status: "ok", reason: "resolved", brief, tried: [{ ledger: "yaadgaar", project: null, call: "read_task(number=622)", error: null }] };
+  const read = (p) => ({ status: "ok", reason: "read", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "ok", id: t.id, number: t.number, version: 3, has_marker: false })) });
+  const written = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
+  for (const l of ["infra:yaadgaar-read", "infra:yaadgaar-read:ci"]) s[l] = read;
+  for (const l of ["infra:yaadgaar-writeback", "infra:yaadgaar-writeback:ci"]) s[l] = written;
+  return s;
+}
 
 test("review B1: green with an empty check list never merges; the verdict is not_run", async () => {
   const s = personal();
@@ -599,34 +612,34 @@ test("review S8: the PR-tail steps stop with the no-push text when the repo has 
 });
 
 test("review S6 (2034.5): one CI write-back per run on the final outcome, with its own marker; soft on a CI stop", async () => {
-  const out = await run(personal(), ARGS);
+  const out = await run(asYaadgaar(personal()), YA);
   assert.equal(out.result.status, "ok", out.result.reason);
   const L = out.build.labels;
-  assert.ok(L.indexOf("infra:ledger-writeback:ci") > L.indexOf("infra:pr-merge"), L.join(", "));
-  const w = inputsOf(call(out, "infra:ledger-writeback:ci").prompt);
+  assert.ok(L.indexOf("infra:yaadgaar-writeback:ci") > L.indexOf("infra:pr-merge"), L.join(", "));
+  const w = inputsOf(call(out, "infra:yaadgaar-writeback:ci").prompt);
   assert.match(w.section_text, /^CI: green; merged true as e{40}; auto-merge false; CI-fix rounds 0; checks 1 passed, 0 failed, 0 pending\nPR: /);
   assert.match(w.marker, /^fleet:.+:ci$/);
   assert.equal(w.section_heading, "Fleet build CI");
   assert.equal(out.result.ci_write_back.ledger_status, "ok");
   // a CI stop (timeout with a merge expected) still writes, and stays the same stop
-  const s = personal();
+  const s = asYaadgaar(personal());
   s["infra:ci-watch:w1"] = (p) => ({ status: "ok", reason: "w", state: "timeout", checks: [], failed: [], required: true, head: inputsOf(p).args[3], elapsed_s: 3600, error: null, args: inputsOf(p).args });
-  s["infra:ledger-writeback:ci"] = () => null;
-  const o = await run(s, ARGS);
+  s["infra:yaadgaar-writeback:ci"] = () => null;
+  const o = await run(s, YA);
   assert.equal(o.result.status, "needs_human");
   assert.equal(o.result.stop_gate, "ci");
-  assert.ok(o.build.labels.includes("infra:ledger-read:pre:ci"));
-  assert.match(inputsOf(call(o, "infra:ledger-read:pre:ci").prompt).marker, /:ci$/);
+  assert.ok(o.build.labels.includes("infra:yaadgaar-read:ci"));
+  assert.match(inputsOf(call(o, "infra:yaadgaar-read:ci").prompt).marker, /:ci$/);
   // a CI-fix round is not final: no write until the last outcome
-  const t = happy();
+  const t = asYaadgaar(happy());
   t["infra:ci-watch:w1"] = (p) => ({ status: "ok", reason: "w", state: "red", checks: [{ name: "test", state: "FAILURE", bucket: "fail", url: "https://github.com/o/r/actions/runs/77/job/88" }], failed: [{ name: "test", url: "https://github.com/o/r/actions/runs/77/job/88", run_id: "77", verified: true }], required: true, head: inputsOf(p).args[3], elapsed_s: 100, error: null, args: inputsOf(p).args });
   t["role:fleet-ci-classifier:w1"] = { status: "ok", reason: "c", checks: [{ name: "test", cause: "diff" }] };
   Object.assign(t, {
     "role:fleet-coder:r2": { status: "ok", changed_paths: ["src/x.py"] },
   });
-  const q = await run(t, ARGS);
-  assert.ok(q.build.labels.filter((l) => l === "infra:ledger-read:pre:ci").length <= 1);
-  assert.ok(!q.build.labels.some((l, i) => l === "infra:ledger-read:pre:ci" && i < q.build.labels.indexOf("role:fleet-coder:r2")), q.build.labels.join(", "));
+  const q = await run(t, YA);
+  assert.ok(q.build.labels.filter((l) => l === "infra:yaadgaar-read:ci").length <= 1);
+  assert.ok(!q.build.labels.some((l, i) => l === "infra:yaadgaar-read:ci" && i < q.build.labels.indexOf("role:fleet-coder:r2")), q.build.labels.join(", "));
 });
 
 test("security review (S6): the CI write-back carries fixed fields and an enum stop code only, never CI names, urls or text", async () => {
@@ -637,24 +650,22 @@ test("security review (S6): the CI write-back carries fixed fields and an enum s
     ["timeout", {}, "ci_timeout", "1 passed, 0 failed, 1 pending"],
     ["error", { error: "gh pr checks: " + EVIL + " " + URL }, "ci_timeout", "1 passed, 0 failed, 1 pending"],
   ]) {
-    const s = happy();
+    const s = asYaadgaar(happy());
     s["infra:policy"] = polOut({ profile: "personal", caps: PERSONAL });
-    s["infra:ledger-writeback:ci"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((x) => ({ key: x.key, status: "written" })) });
     s["infra:ci-watch:w1"] = watchOut(st, extra);
-    const out = await run(s, ARGS);
+    const out = await run(s, YA);
     assert.equal(out.result.status, "needs_human", st);
-    const c = call(out, "infra:ledger-writeback:ci").prompt;
+    const c = call(out, "infra:yaadgaar-writeback:ci").prompt;
     const w = inputsOf(c);
     assert.equal(w.section_text.split("\n")[0], "CI: timeout; merged false; auto-merge false; CI-fix rounds 0; checks " + counts + "; stopped: " + code, st);
     for (const bad of [EVIL, "evil.example", "HTTP", "gh pr checks"]) assert.ok(c.indexOf(bad) < 0, st + ": " + bad + " in the write-back prompt");
   }
   // a red report with an unverified check's name: still counts only
-  const r = happy();
+  const r = asYaadgaar(happy());
   r["infra:ci-watch:w1"] = (p) => ({ status: "ok", reason: "w", state: "red", checks: [{ name: EVIL, state: "FAILURE", bucket: "fail", url: URL }], failed: [{ name: EVIL, url: URL, run_id: null, verified: false }], required: true, head: inputsOf(p).args[3], elapsed_s: 100, error: null, args: inputsOf(p).args });
-  r["infra:ledger-writeback:ci"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((x) => ({ key: x.key, status: "written" })) });
-  const o = await run(r, ARGS);
+  const o = await run(r, YA);
   assert.equal(o.result.status, "ok", o.result.reason);
-  const pc = call(o, "infra:ledger-writeback:ci").prompt;
+  const pc = call(o, "infra:yaadgaar-writeback:ci").prompt;
   assert.equal(inputsOf(pc).section_text.split("\n")[0], "CI: red; merged false; auto-merge false; CI-fix rounds 0; checks 0 passed, 1 failed, 0 pending");
   assert.ok(pc.indexOf(EVIL) < 0 && pc.indexOf("evil.example") < 0);
 });
@@ -687,7 +698,7 @@ test("ADR-1203 addendum: an update-branch head that is not a plain forge merge s
 });
 
 test("ADR-1203 addendum: review changes on the update-branch head stop (6.0.1: findings in the run result, re-plan advice); no coder round, no merge", async () => {
-  const s = personal();
+  const s = asYaadgaar(personal());
   s["infra:pr-merge"] = (p) => {
     const a = inputsOf(p).args;
     return { status: "ok", reason: "b", mode: "merge", merged: false, auto_enabled: false, method: "squash", merge_sha: null, blocked: "behind", merge_state: "BEHIND", head: a[4], branch_deleted: null, error: null, args: a };
@@ -702,15 +713,14 @@ test("ADR-1203 addendum: review changes on the update-branch head stop (6.0.1: f
     "hasher:fp-post:pr-review:v2": { status: "ok", fingerprint: { head: "d".repeat(40), tree: "KU" } },
     "infra:review-cleanup:v2": { status: "ok", reason: "clean" },
   });
-  s["infra:ledger-writeback:ci"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((x) => ({ key: x.key, status: "written" })) });
-  const out = await run(s, ARGS);
+  const out = await run(s, YA);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "review");
   assert.match(out.result.reason, /^re-review after update-branch requested changes: F1 \(1 blocking, 0 nits\); findings are in the run result; no coder round: the base change touches the hook surface \(\.pre-commit-config\.yaml\); re-plan on the new base or fix by hand$/);
   assert.ok(!out.build.labels.some((l) => /^role:fleet-coder:r2|^infra:pr-merge:u1/.test(l)), out.build.labels.join(", "));
   // delta review SHOULD 1: a stop after update-branch is a CI-tail outcome: one CI write-back, stop code review
-  assert.equal(out.build.labels.filter((l) => l === "infra:ledger-writeback:ci").length, 1, out.build.labels.join(", "));
-  assert.match(inputsOf(call(out, "infra:ledger-writeback:ci").prompt).section_text.split("\n")[0], /; stopped: review$/);
+  assert.equal(out.build.labels.filter((l) => l === "infra:yaadgaar-writeback:ci").length, 1, out.build.labels.join(", "));
+  assert.match(inputsOf(call(out, "infra:yaadgaar-writeback:ci").prompt).section_text.split("\n")[0], /; stopped: review$/);
 });
 
 test("review S2: a relayed remote_slug that differs from the origin only in case or .git is the origin, no stop", async () => {

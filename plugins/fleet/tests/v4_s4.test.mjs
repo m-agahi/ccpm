@@ -40,14 +40,14 @@ const CONV = { title: { style: "conventional", types: ["feat", "fix", "chore"], 
 function sealedRef(over) {
   const o = Object.assign(
     {
-      branch: "fleet/l42-add-thing",
+      branch: "fleet/y42-add-thing",
       // 6.0.0 (ledger 2042)
       plan_base: PB,
       plan_path: "docs/plans/x.md",
       plan_sha256: "a".repeat(64),
       criteria: criteria(1),
       brief: BRIEF,
-      task_id: "l42",
+      task_id: "y42",
       slug: "add-thing",
       tldr: "t",
       plan_facts: { allowed_additions: null, est_diff_lines: 10, test_cmd: { command: "pytest <paths>" }, repo_obligations: [], commands: [], conventions: CONV, component: "thing" },
@@ -64,7 +64,7 @@ async function buildFrom(content, over) {
   s.__store[PC] = content;
   return runOne(s, Object.assign({
     mode: "build",
-    plan_ref: { branch: "fleet/l42-add-thing", plan_commit: PC, plan_ref: "refs/fleet/l42/plan", ref_sha256: sha256(content), repo: "/r" },
+    plan_ref: { branch: "fleet/y42-add-thing", plan_commit: PC, plan_ref: "refs/fleet/y42/plan", ref_sha256: sha256(content), repo: "/r" },
     date: "2026-11-04",
     project: "o/r",
   }, over || {}));
@@ -615,7 +615,8 @@ test("4.0.0 1991 AC-2/3/4: default asks for IaC paths, other change kinds, new b
     [(s) => (s["role:scope-and-plan"].change_kind = "refactor"), {}, /change_kind refactor/],
     [(s) => (s["role:scope-and-plan"].new_behaviour = true), {}, /new_behaviour true \(only false skips the confirmation\)/],
     [() => {}, { input: "#622", project: undefined }, /task id "#622" with no args\.project/],
-    [() => {}, { input: "L42", project: undefined }, /task id "L42" with no args\.project/],
+    // 7.0.0 review F1: an L<N> input stops before intake as a legacy id (v700_legacy_gate)
+    [() => {}, { input: "42", project: undefined }, /task id "42" with no args\.project/],
   ];
   for (const [mut, argOver, want] of cases) {
     const s = defaultHappy();
@@ -727,7 +728,7 @@ test("4.0.0 1986 AC-1: a parked draft and findings reach the planner as inputs o
   for (const x of ["prior_draft", "prior_round", "parked", "draft plan", "parked f0"]) assert.ok(!sealed.includes(x), x);
   // the used folder moves to parked/used/ after the commit (in the commit step)
   const cp = call(out, "infra:commit-plan").prompt;
-  assert.match(cp, /mkdir -p '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch\/parked\/used' && mv -n -- '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch\/parked\/n0-1234567'/);
+  assert.match(cp, /mkdir -p '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch\/parked\/used' && mv -n -- '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch\/parked\/n0-1234567'/);
   assert.ok(out.logs.some((l) => /parked draft of run n0-1234567 loaded \(docs\/plans\/x\.md\), 1 finding\(s\): planner inputs only/.test(l)));
 });
 
@@ -754,7 +755,7 @@ test("4.0.0 1986 AC-3: no parked folder -> no extra planner input; the reader ge
   assert.ok(!("prior_draft" in pin) && !("prior_round" in pin));
   const lp = call(out, "infra:load-parked");
   assert.equal(inputsOf(lp.prompt).plan_tip_time, 1700000123);
-  assert.match(lp.prompt, /parked\.py' 'read' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch' '1700000123'/);
+  assert.match(lp.prompt, /parked\.py' 'read' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch' '1700000123'/);
   assert.equal(lp.opts.agentType, "fleet:judge");
   // a relayed tip time that is not the program's stops at the scan
   const t = happy();
@@ -839,7 +840,7 @@ test("4.0.0 1986: a plan stop parks the draft with findings.json of every refuse
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   const pk = call(out, "infra:park-plan").prompt;
-  assert.match(pk, /parked\.py' 'write' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch' 'n1-0000001' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch\/park-chunks-n1-0000001'/);
+  assert.match(pk, /parked\.py' 'write' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch' 'n1-0000001' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch\/park-chunks-n1-0000001'/);
   const f = JSON.parse(chunkedContentOf(pk));
   assert.equal(f.plan_path, "docs/plans/x.md");
   assert.match(f.reason, /^plan-audit verdict plan_defect: AC1: r2 \(after 2 re-plan rounds\)/);
@@ -929,7 +930,8 @@ test("4.0.0 1991: SKILL.md passes confirm default and documents confirm_reason a
   assert.match(skill, /confirm: "<default \| ask \| auto>"/);
   assert.match(skill, /`confirm: "default"`: the result is one of three/);
   assert.match(skill, /show\s+`confirm_reason`/);
-  assert.match(skill, /`ledger_source`, when it is not null: the ledger \(`ledger` or `yaadgaar`\)/);
+  // 7.0.0 (yaadgaar #699): one ledger, yaadgaar; `ledger` only on a plan ref sealed before 7.0.0
+  assert.match(skill, /`ledger_source`, when it is not null: the ledger \(`yaadgaar`; `ledger` only on a plan ref\s+sealed before 7\.0\.0\)/);
   assert.match(skill, /not a security boundary/);
 });
 

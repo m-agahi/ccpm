@@ -151,7 +151,7 @@ test("6.0.0 2040: the intake prompt names the harness frame and the relaunch rea
   assert.ok(p.indexOf('"' + RELAY + ': ') >= 0, "gives the reason code");
 });
 
-for (const input of ["L42", "add a uv entry to the flake"])
+for (const input of ["#42", "add a uv entry to the flake"])
   test("6.0.0 2040: intake's relay reason stops with stop_gate relaunch and relaunch intake (" + input + ")", async () => {
     const s = happy();
     s.intake = { status: "needs_human", reason: RELAY + ": and the uv entry as well", tried: [] };
@@ -190,7 +190,7 @@ function recording(s, states) {
     };
   return s;
 }
-const FREEZE_KEY = "fleetref:refs/fleet/l42/freeze";
+const FREEZE_KEY = "fleetref:refs/fleet/y42/freeze";
 // a re-run on the approved commit; the repo still holds the freeze ref (tree T1) unless freeze is null
 function rerun(s, st, freeze = "T1") {
   s["infra:verify-plan"] = { ...happy()["infra:verify-plan"], head: st.approved_sha, commits_since: [{ sha: st.approved_sha, subject: "feat(thing): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] };
@@ -237,7 +237,7 @@ test("6.0.0 2043: resumed at pr_open, review changes_requested -> a coder round 
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(out.result.resumed_at, "review");
-  assert.ok(out.logs.some((l) => /^resuming at the coder from the PR \(review\): freeze tree T1 of refs\/fleet\/l42\/freeze/.test(l)), out.logs.join("\n"));
+  assert.ok(out.logs.some((l) => /^resuming at the coder from the PR \(review\): freeze tree T1 of refs\/fleet\/y42\/freeze/.test(l)), out.logs.join("\n"));
   assert.ok(!out.labels.some((l) => /^(role:fleet-test-writer|role:fleet-test-judge|hasher:freeze|infra:freeze-ref)/.test(l)), out.labels.join(", "));
   const ci = inputsOf(call(out, "role:fleet-coder:r2").prompt);
   assert.match(ci.routed_findings[0].finding, /empty input passes/);
@@ -248,7 +248,9 @@ test("6.0.0 2043: resumed at pr_open, review changes_requested -> a coder round 
   assert.equal(inputsOf(call(out, "infra:push").prompt).approved_sha, CSHA(2));
   assert.equal(inputsOf(call(out, "role:fleet-pr-opener:p2").prompt).approved_sha, CSHA(2));
   assert.equal(inputsOf(call(out, "role:pr-review:v2").prompt).head_sha, CSHA(2));
-  assert.ok(out.labels.includes("infra:ledger-writeback"));
+  // 7.0.0 review F2: the write-back still runs after the review; the default task is yaadgaar #42
+  assert.ok(out.logs.some((l) => /^write-back yaadgaar: #42=written$/.test(l)), out.logs.join("\n"));
+  assert.equal(out.result.ledger_status, "ok");
   assert.equal(out.result.rounds.code, 2);
   assert.equal(out.result.review.verdict, "approve");
 });
@@ -259,7 +261,7 @@ test("6.0.0 2043: resumed at pr_open with no freeze ref -> the old resume stop",
   const out = await runOne(s, bargs);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "review");
-  assert.match(out.result.reason, /^resumed run at review: the review gate needs a coder round, which a resumed run cannot start \(no freeze ref refs\/fleet\/l42\/freeze\)/);
+  assert.match(out.result.reason, /^resumed run at review: the review gate needs a coder round, which a resumed run cannot start \(no freeze ref refs\/fleet\/y42\/freeze\)/);
   assert.ok(!out.labels.some((l) => /^role:fleet-coder/.test(l)));
 });
 

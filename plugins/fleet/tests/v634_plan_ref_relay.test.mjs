@@ -146,7 +146,7 @@ test("6.3.4 2176: build mode reads a large ref in parts of at most PART_CHARS", 
     const i = inputsOf(call(out, l).prompt);
     assert.equal(i.mode, "part");
     assert.equal(i.part, k);
-    assert.match(call(out, l).prompt, new RegExp(" 'part:refs/fleet/l42/plan:" + k + "'\\n"));
+    assert.match(call(out, l).prompt, new RegExp(" 'part:refs/fleet/y42/plan:" + k + "'\\n"));
   }
 });
 
@@ -223,25 +223,25 @@ test("6.3.4 2176: the shipped programs round-trip a 256 KiB plan ref (plan_ref_w
     writeFileSync(join(wt, "a.py"), "a\n");
     spawnSync("git", ["-C", wt, "add", "-A"], { env });
     spawnSync("git", ["-C", wt, "commit", "-qm", "i"], { env });
-    const big = { task_id: "l42", body: "x y — ü 🚀 ".repeat(24000) };
+    const big = { task_id: "y42", body: "x y — ü 🚀 ".repeat(24000) };
     const msg = JSON.stringify(big) + "\n";
     assert.ok(Buffer.byteLength(msg, "utf8") >= 256 * 1024);
-    const w = spawnSync("bash", ["-s"], { input: planRefWriteCmd(wt, "l42", JSON.stringify(big)), encoding: "utf8", env, maxBuffer: 1 << 26 });
+    const w = spawnSync("bash", ["-s"], { input: planRefWriteCmd(wt, "y42", JSON.stringify(big)), encoding: "utf8", env, maxBuffer: 1 << 26 });
     // (the command is longer than one argv string may be; bash reads it from stdin)
     assert.equal(w.status, 0, w.stderr);
     const prog = join(SCRIPTS_SRC, "plan_ref.py");
     const read = (mode) => {
-      const r = spawnSync("python3", ["-I", prog, wt, "l42", mode], { encoding: "utf8", env, maxBuffer: 1 << 26 });
+      const r = spawnSync("python3", ["-I", prog, wt, "y42", mode], { encoding: "utf8", env, maxBuffer: 1 << 26 });
       return r;
     };
-    const p0 = JSON.parse(read("part:refs/fleet/l42/plan:0").stdout);
+    const p0 = JSON.parse(read("part:refs/fleet/y42/plan:0").stdout);
     assert.equal(p0.part.index, 0);
     assert.equal(p0.part.count, Math.ceil([...msg].length / PART_CHARS));
     assert.ok(p0.part.count >= 8);
     assert.ok(!("content" in p0.refs[0]));
     assert.equal(p0.refs[0].sha256, sha256(msg));
     const all = [p0];
-    for (let k = 1; k < p0.part.count; k++) all.push(JSON.parse(read("part:refs/fleet/l42/plan:" + k).stdout));
+    for (let k = 1; k < p0.part.count; k++) all.push(JSON.parse(read("part:refs/fleet/y42/plan:" + k).stdout));
     for (const [k, r] of all.entries()) {
       assert.equal(r.part.index, k);
       assert.equal(r.part.count, p0.part.count);
@@ -251,7 +251,7 @@ test("6.3.4 2176: the shipped programs round-trip a 256 KiB plan ref (plan_ref_w
       assert.deepEqual(r.program.name, "plan_ref");
     }
     assert.equal(all.map((r) => r.chunks.join("")).join(""), msg, "the joined parts are the exact bytes");
-    for (const bad of ["part:refs/fleet/l42/plan:" + p0.part.count, "part:refs/fleet/l42/plan:-1", "part:refs/fleet/l42/plan:x", "part:refs/heads/master:0"])
+    for (const bad of ["part:refs/fleet/y42/plan:" + p0.part.count, "part:refs/fleet/y42/plan:-1", "part:refs/fleet/y42/plan:x", "part:refs/heads/master:0"])
       assert.notEqual(read(bad).status, 0, bad + " is refused");
   } finally {
     rmSync(home, { recursive: true, force: true });

@@ -250,7 +250,7 @@ test("6.3.0 B: a plan_wrong re-plan under unattended runs the auto gates on the 
 const fence = (files) => ({ allowed_additions: { files, symbols: [], deps: [], settings: [] } });
 const plan = (s, o) => Object.assign(s["role:scope-and-plan"], o);
 const RELAY = "relayed user request does not reference args.input";
-const OWN = "refs/fleet/l42/freeze";
+const OWN = "refs/fleet/y42/freeze";
 const fmtWith = (holds) => (prompt) => {
   const i = inputsOf(prompt);
   return { status: "ok", reason: "formatted", changed_paths: [i.plan_path], dsn_check: { holds, lines: holds ? [3] : [], args: [i.worktree, i.plan_path] } };

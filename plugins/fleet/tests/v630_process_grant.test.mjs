@@ -43,8 +43,8 @@ function stubDir() {
 const runUp = (args, st) => rawSpawnSync(PY3, ["-I", join(SCRIPTS_SRC, "db_up.py")].concat(args), { encoding: "utf8", env: st.env, timeout: 60000 });
 const IMG = "docker.io/library/mariadb@sha256:" + "d".repeat(64);
 const DBS = ["fleet_plan", "fleet_audit"];
-const UP = (extra) => ["up", "fleet-db-l42-1", IMG, "21600", "n1-0000001", JSON.stringify(DBS)].concat(extra || []);
-const ADD = (extra) => ["add", "fleet-db-l42-1", JSON.stringify(DBS)].concat(extra || []);
+const UP = (extra) => ["up", "fleet-db-y42-1", IMG, "21600", "n1-0000001", JSON.stringify(DBS)].concat(extra || []);
+const ADD = (extra) => ["add", "fleet-db-y42-1", JSON.stringify(DBS)].concat(extra || []);
 const sqlLineOf = (st) => {
   const l = st.log().filter((x) => x.includes("CREATE DATABASE"));
   assert.equal(l.length, 1, st.log().join("\n"));
@@ -62,7 +62,7 @@ test("6.3.0 C (ADR-1233) db_up: grant:PROCESS gives each role user PROCESS ON *.
     const want = DBS.map((d) => own(o.users, d) + (pre ? " GRANT ALL PRIVILEGES ON `iam\\_db\\_%`.* TO '" + d + "'@'%';" : "") + " GRANT PROCESS ON *.* TO '" + d + "'@'%';").join(" ");
     assert.ok(sqlLineOf(st).endsWith(" -e " + want), mode + "\n" + sqlLineOf(st) + "\n" + want);
     // the grant goes only through the exec into this run's own container
-    assert.ok(st.log().filter((x) => x.includes("GRANT PROCESS")).every((x) => x.startsWith("exec -e MYSQL_PWD=") && x.includes(" fleet-db-l42-1 mariadb ")));
+    assert.ok(st.log().filter((x) => x.includes("GRANT PROCESS")).every((x) => x.startsWith("exec -e MYSQL_PWD=") && x.includes(" fleet-db-y42-1 mariadb ")));
   }
 });
 

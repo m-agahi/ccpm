@@ -4,10 +4,10 @@ description:
   Build a NON-TRIVIAL code change with a gated role fleet - plan, plan audit, tests per acceptance
   criterion, test judge, hash freeze, coder, code judge, draft PR - after the user confirms the plan.
   Use for features, bug fixes and multi-file changes, when the user runs /build-task, or asks to
-  "build L123 with the fleet", "run the fleet on ABC-42", "build this issue tests-first". Takes a
-  ledger id, a Jira key, a GitHub or Codeberg issue or PR URL, a plan path, or a plain description.
+  "build task 123 with the fleet", "run the fleet on ABC-42", "build this issue tests-first". Takes a
+  task id, a Jira key, a GitHub or Codeberg issue or PR URL, a plan path, or a plain description.
   Do NOT use for one-line or mechanical edits (typo, rename, version bump, config tweak, formatting).
-argument-hint: "<ledger id | Jira key | issue or PR URL | plan path | description>"
+argument-hint: "<task id | Jira key | issue or PR URL | plan path | description>"
 allowed-tools:
   - Workflow
   - Workflow(fleet:build-task-run)
@@ -39,8 +39,8 @@ into the task body, before the planner and plan-audit spend a run on them.
 ## Usage
 
 ```
-/build-task <ledger id | Jira key | issue or PR URL | plan path | description>
-/build-task --unattended <ledger id | Jira key | issue or PR URL | plan path | description>
+/build-task <task id | Jira key | issue or PR URL | plan path | description>
+/build-task --unattended <task id | Jira key | issue or PR URL | plan path | description>
 /build-task probe
 ```
 
@@ -78,14 +78,19 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
    workflow again with a new nonce; build mode resumes from its own run-state ref.
 
 4. **Project (optional).** Use the `<owner>/<repo>` project key from the session banner, if one is
-   shown, as `project`. It scopes ledger reads and the ledger write-back, and it is independent of
-   `repo`: a task from the session's project can be built in another repo. Otherwise omit it; then
-   intake tries each ledger whose tool the session has. No ledger MCP server (yadgar, yaadgaar) is
-   required: without one, a task id stops with "no task ledger available; give a URL, Jira key or
-   text", and an issue, Jira key, plan or text builds as usual. With `confirm: "auto"`, a task id needs `project`: without it the
-   workflow stops before intake.
-   On a `yadgarhq/` project a task id (`#622`, `622`, `yaadgaar #622`) is a yaadgaar task, never
-   the legacy `L622`; the workflow needs `project` to tell them apart.
+   shown, as `project`. It is a guard, not a selector: `read_task` is bound to the yaadgaar project
+   of the directory this session started in, and takes no project argument. So build a task id from
+   a session started in the task's own project. `project` then checks that the task read and the
+   write-back stay in that project (keys compare case-insensitively). It is independent of `repo`:
+   a task from the session's project can be built in another repo. Otherwise omit it; then intake
+   reads the task from the session's yaadgaar project, and the write-back uses the session project
+   that the preflight proved. Every project keeps its tasks in
+   yaadgaar (7.0.0): a task id (`#622`, `622`, `yaadgaar #622`) is a yaadgaar task, read with
+   `read_task`. A legacy `L622` id stops: the migrated yaadgaar task carries the title prefix
+   `L622: `, so pass its yaadgaar number instead. The yaadgaar MCP server is not required: without
+   it, a task id stops with "no task ledger available; give a URL, Jira key or text", and an issue,
+   Jira key, plan or text builds as usual. With `confirm: "auto"`, a task id needs `project`:
+   without it the workflow stops before intake.
 
    **Confirm mode.** Pass `confirm: "default"` unless the user named a mode (ADR-1186):
 
@@ -98,13 +103,13 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
      PR with review are.
    - `"ask"`: when the user asks to confirm the plan first (for example "show me the plan
      first"): always the interactive confirmation in step 7.
-   - `"auto"`: only when the user asked for an unattended or goal run (for example "build L42
-     unattended", "run the fleet on L42 without asking", or a goal/loop that runs without the
+   - `"auto"`: only when the user asked for an unattended or goal run (for example "build #42
+     unattended", "run the fleet on #42 without asking", or a goal/loop that runs without the
      user). Never pick `"auto"` on your own for an interactive request.
 
    **Fleet brief (6.2.0, ADR-1219).** Before step 6, read the input's source text and look for the
-   marker `<!-- fleet-brief:v1 -->` that `/plan-task` writes: a ledger task id -> its body
-   (yaadgaar `read_task`; yadgar `task_get`, then `wiki_read` of its `body_slug`); a Jira key or an
+   marker `<!-- fleet-brief:v1 -->` that `/plan-task` writes: a task id -> its yaadgaar body
+   (`read_task`); a Jira key or an
    issue or PR URL -> its description and comments, with the read tool the session has; a plan path
    -> the file; text -> `input` itself. When the marker is there, pass `confirm: "ask"`, whatever
    mode the user named, `"auto"` and `"default"` included, and say why: a brief holds agent-drafted
@@ -185,7 +190,8 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
    - fleet size: `fleet_size.criteria` criteria, about `fleet_size.est_agents` agents, about
      `fleet_size.est_rounds` fix rounds;
    - `plan_path` and the branch (`plan_ref.branch`). The plan is committed locally only.
-   - `ledger_source`, when it is not null: the ledger (`ledger` or `yaadgaar`), the task (`ref`,
+   - `ledger_source`, when it is not null: the ledger (`yaadgaar`; `ledger` only on a plan ref
+     sealed before 7.0.0), the task (`ref`,
      and `id` for yaadgaar) and the project it resolved in (`null` = the session's yaadgaar
      project, no `project` given). Show it so the user sees which task in which ledger the plan
      builds before they confirm.
@@ -252,10 +258,10 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
      model used. With `confirm: "auto"`, also `auto_confirmed` and the `intent` verdict.
    - `unattended_source` and every `auto_decisions` entry, when `unattended` is true.
    - `gates_not_run`: list every gate the run did not execute.
-   - Write-back: `ledger_adapter` (`yaadgaar`, `yadgar`, `tracker` or `none`, with
-     `ledger_reason`), `ledger_status` and `comment_status`. On `failed` or `unavailable`, show
-     `comment_text` (and any `section_text`, for a ledger or yaadgaar entry that failed or was
-     unavailable) so the user can post it by hand.
+   - Write-back: `ledger_adapter` (`yaadgaar`, `tracker` or `none`, with `ledger_reason`),
+     `ledger_status` and `comment_status`. On `failed` or `unavailable`, show `comment_text` (and
+     any `section_text`, for a yaadgaar entry that failed or was unavailable, or a legacy ledger
+     entry from a plan ref sealed before 7.0.0) so the user can post it by hand.
    - `memory_notes`, grouped by role, when not empty. If this session has a memory tool, offer to
      store them; otherwise show them.
 

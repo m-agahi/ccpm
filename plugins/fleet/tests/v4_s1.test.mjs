@@ -123,7 +123,7 @@ test("4.0.0 1993: gen.mjs --check passes on the shipped files and fails on a cha
 test("4.0.0 1993: FLEET_VERSION is a semver string and the scripts_dir shape names it", () => {
   const m = /^const FLEET_VERSION = "(\d+\.\d+\.\d+)";$/m.exec(SOURCE);
   assert.ok(m, "FLEET_VERSION constant");
-  assert.equal(m[1], "6.3.4");
+  assert.equal(m[1], "7.0.0");
   assert.match(SCRIPTS_DIR, new RegExp("/fleet/" + m[1].replace(/\./g, "\\.") + "/scripts$"));
 });
 
@@ -327,23 +327,23 @@ function precommitScript() {
 test("4.0.0 1993 AC-4: a scripts_dir outside the plugin cache halts at the first agent with stop_gate contract", async () => {
   const bad = [
     ["/tmp/x", ["/tmp/x"]],
-    ["fleet/6.3.4/scripts", ["fleet/6.3.4/scripts"]],
+    ["fleet/7.0.0/scripts", ["fleet/7.0.0/scripts"]],
     ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts", ["/home/u/.claude/plugins/cache/m/fleet/3.1.3/scripts"]],
-    ["/home/u/../x/fleet/6.3.4/scripts", ["/home/u/../x/fleet/6.3.4/scripts"]],
-    ["/home/u//fleet/6.3.4/scripts", ["/home/u//fleet/6.3.4/scripts"]],
-    ["/home/u/a b/fleet/6.3.4/scripts", ["/home/u/a b/fleet/6.3.4/scripts"]],
+    ["/home/u/../x/fleet/7.0.0/scripts", ["/home/u/../x/fleet/7.0.0/scripts"]],
+    ["/home/u//fleet/7.0.0/scripts", ["/home/u//fleet/7.0.0/scripts"]],
+    ["/home/u/a b/fleet/7.0.0/scripts", ["/home/u/a b/fleet/7.0.0/scripts"]],
     // security review: exactly $HOME/.claude/plugins/cache/<marketplace>/fleet/<version>/scripts
-    ["/home/u/x/fleet/6.3.4/scripts", ["/home/u/x/fleet/6.3.4/scripts"]],
-    ["/home/v/.claude/plugins/cache/m/fleet/6.3.4/scripts", ["/home/v/.claude/plugins/cache/m/fleet/6.3.4/scripts"]],
-    ["/home/u/.claude/plugins/cache/a/b/fleet/6.3.4/scripts", ["/home/u/.claude/plugins/cache/a/b/fleet/6.3.4/scripts"]],
-    ["/home/u/.claude/plugins/cache/../fleet/6.3.4/scripts", ["/home/u/.claude/plugins/cache/../fleet/6.3.4/scripts"]],
-    ["/home/u/.claude/plugins/cache/.x/fleet/6.3.4/scripts", ["/home/u/.claude/plugins/cache/.x/fleet/6.3.4/scripts"]],
+    ["/home/u/x/fleet/7.0.0/scripts", ["/home/u/x/fleet/7.0.0/scripts"]],
+    ["/home/v/.claude/plugins/cache/m/fleet/7.0.0/scripts", ["/home/v/.claude/plugins/cache/m/fleet/7.0.0/scripts"]],
+    ["/home/u/.claude/plugins/cache/a/b/fleet/7.0.0/scripts", ["/home/u/.claude/plugins/cache/a/b/fleet/7.0.0/scripts"]],
+    ["/home/u/.claude/plugins/cache/../fleet/7.0.0/scripts", ["/home/u/.claude/plugins/cache/../fleet/7.0.0/scripts"]],
+    ["/home/u/.claude/plugins/cache/.x/fleet/7.0.0/scripts", ["/home/u/.claude/plugins/cache/.x/fleet/7.0.0/scripts"]],
     // two hits: never guess
-    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/fleet/6.3.4/scripts"]],
+    [SCRIPTS_DIR, [SCRIPTS_DIR, "/home/v/.claude/plugins/cache/n/fleet/7.0.0/scripts"]],
     // no hit
     [null, []],
     // the directory used is not the hit
-    ["/home/v/.claude/plugins/cache/n/fleet/6.3.4/scripts", [SCRIPTS_DIR]],
+    ["/home/v/.claude/plugins/cache/n/fleet/7.0.0/scripts", [SCRIPTS_DIR]],
   ];
   for (const [dir, hits] of bad) {
     const s = happy();
@@ -364,7 +364,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   assert.equal(second.result.status, "awaiting_confirmation", second.result.reason);
   for (const o of [first, second]) {
     assert.equal(o.labels[0], "preflight");
-    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/fleet/6.3.4/scripts;'));
+    assert.ok(o.calls[0].prompt.includes('for d in "$HOME"/.claude/plugins/cache/*/fleet/7.0.0/scripts;'));
     assert.ok(o.calls[0].prompt.includes("sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py"));
   }
   const ref = s.__store[PC];
@@ -373,7 +373,7 @@ test("4.0.0 1993 AC-4: every run resolves scripts_dir in its own first agent; no
   // build mode resolves it again in its own first agent
   const b = await run(happy(), ARGS);
   assert.equal(b.build.labels[0], "preflight");
-  assert.match(b.build.calls[0].prompt, /fleet\/6\.3\.4\/scripts/);
+  assert.match(b.build.calls[0].prompt, /fleet\/7\.0\.0\/scripts/);
 });
 
 test("4.0.0 1993 AC-4: a path_check run from another directory (wrong self-hash) halts at preflight", async () => {
@@ -407,7 +407,7 @@ test("4.0.0 1993: commit-plan writes the ref from chunks; verify-plan-commit is 
   assert.equal(chunkedContentOf(cp), null, "the commit step carries no chunk");
   const content = chunkedContentOf(wp);
   assert.equal(content, s.__store[PC]);
-  assert.equal(JSON.parse(content).task_id, "l42");
+  assert.equal(JSON.parse(content).task_id, "y42");
   assert.equal(out.result.plan_ref.ref_sha256, sha256(content));
   // at most 4000 base64 chars per chunk, each listed with its sha256
   const chunks = [...wp.matchAll(/^chunk (\d+) sha256 ([0-9a-f]{64}):\n([A-Za-z0-9+/=]+)$/gm)];
@@ -531,7 +531,7 @@ function writeChunks(dir, b64, size) {
 test("4.0.0 1993 AC-6: one flipped char in chunk 2 exits 3 with bad_chunks [2] and writes no ref; fixed chunks write it", { skip: !HAVE_PY }, () => {
   const { home, wt, env, g } = chunkRepo();
   try {
-    const msg = JSON.stringify({ task_id: "l42", note: "it's \"quoted\" — ünï 🚀", pad: "x".repeat(300) }) + "\n";
+    const msg = JSON.stringify({ task_id: "y42", note: "it's \"quoted\" — ünï 🚀", pad: "x".repeat(300) }) + "\n";
     const b64 = Buffer.from(msg, "utf8").toString("base64");
     const dir = join(home, "scratch", "plan-ref-n1");
     const shas = writeChunks(dir, b64, 100);
@@ -546,7 +546,7 @@ test("4.0.0 1993 AC-6: one flipped char in chunk 2 exits 3 with bad_chunks [2] a
       writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan\n");
     };
     doc();
-    const argv = ["-I", prog, wt, "l42", head, "docs/plans/x.md", dir, String(shas.length), sha256(msg), JSON.stringify(shas)];
+    const argv = ["-I", prog, wt, "y42", head, "docs/plans/x.md", dir, String(shas.length), sha256(msg), JSON.stringify(shas)];
     const bad = spawnSync("python3", argv, { encoding: "utf8", env, cwd: home });
     assert.equal(bad.status, 3, bad.stderr);
     assert.deepEqual(JSON.parse(bad.stdout), { bad_chunks: [2] });
@@ -557,7 +557,7 @@ test("4.0.0 1993 AC-6: one flipped char in chunk 2 exits 3 with bad_chunks [2] a
     const o = JSON.parse(ok.stdout);
     assert.equal(o.plan_base, head);
     assert.equal(g("rev-parse", o.plan_commit + "^").trim(), head);
-    assert.equal(g("rev-parse", "refs/fleet/l42/plan").trim(), o.tag_sha);
+    assert.equal(g("rev-parse", "refs/fleet/y42/plan").trim(), o.tag_sha);
     assert.deepEqual(o.program, { name: "plan_ref_write", sha256: programSha("plan_ref_write") });
     const d = Object.assign({}, o);
     delete d.digest;
@@ -567,13 +567,13 @@ test("4.0.0 1993 AC-6: one flipped char in chunk 2 exits 3 with bad_chunks [2] a
     assert.equal(raw.split("\n")[0], "object " + o.plan_commit);
     assert.ok(!existsSync(dir), "the chunk dir is removed after a success");
     // a second, different ref keeps the first as plan-1
-    const msg2 = msg.replace("l42", "l42 ");
+    const msg2 = msg.replace("y42", "y42 ");
     const b2 = Buffer.from(msg2, "utf8").toString("base64");
     const shas2 = writeChunks(dir, b2, 4000);
     doc();
-    const ok2 = spawnSync("python3", ["-I", prog, wt, "l42", head, "docs/plans/x.md", dir, String(shas2.length), sha256(msg2), JSON.stringify(shas2)], { encoding: "utf8", env, cwd: home });
+    const ok2 = spawnSync("python3", ["-I", prog, wt, "y42", head, "docs/plans/x.md", dir, String(shas2.length), sha256(msg2), JSON.stringify(shas2)], { encoding: "utf8", env, cwd: home });
     assert.equal(ok2.status, 0, ok2.stderr);
-    assert.equal(g("rev-parse", "refs/fleet/l42/plan-1").trim(), o.tag_sha);
+    assert.equal(g("rev-parse", "refs/fleet/y42/plan-1").trim(), o.tag_sha);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -588,16 +588,16 @@ test("4.0.0 1993: the chunk writer refuses a chunk dir outside the scratch dir, 
     const B = [g("rev-parse", "HEAD").trim(), "docs/plans/x.md"];
     const outside = join(home, "elsewhere");
     let shas = writeChunks(outside, b64, 4000);
-    let r = spawnSync("python3", ["-I", prog, wt, "l42", ...B, outside, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    let r = spawnSync("python3", ["-I", prog, wt, "y42", ...B, outside, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /not under/);
     const dir = join(home, "scratch", "c");
     shas = writeChunks(dir, b64, 4000);
-    r = spawnSync("python3", ["-I", prog, wt, "l42", ...B, dir, "1", sha256("other"), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    r = spawnSync("python3", ["-I", prog, wt, "y42", ...B, dir, "1", sha256("other"), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
     assert.notEqual(r.status, 3);
     assert.match(r.stderr, /decoded message hashes/);
-    r = spawnSync("python3", ["-I", prog, wt, "l42", ...B, dir, "2", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    r = spawnSync("python3", ["-I", prog, wt, "y42", ...B, dir, "2", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
     r = spawnSync("python3", ["-I", prog, wt, "../x", ...B, dir, "1", sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.notEqual(r.status, 0);
@@ -614,12 +614,12 @@ test("4.0.0 1993: the run-state writer writes from chunks and the reader reads i
     const msg = JSON.stringify(st) + "\n";
     const dir = join(home, "scratch", "state-x");
     const shas = writeChunks(dir, Buffer.from(msg, "utf8").toString("base64"), 4000);
-    const w = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "state_write.py"), wt, "refs/fleet/l42/state", dir, String(shas.length), sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
+    const w = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "state_write.py"), wt, "refs/fleet/y42/state", dir, String(shas.length), sha256(msg), JSON.stringify(shas)], { encoding: "utf8", env, cwd: home });
     assert.equal(w.status, 0, w.stderr);
     const o = JSON.parse(w.stdout);
-    assert.equal(o.state_sha, g("rev-parse", "refs/fleet/l42/state").trim());
+    assert.equal(o.state_sha, g("rev-parse", "refs/fleet/y42/state").trim());
     assert.deepEqual(o.program, { name: "state_write", sha256: programSha("state_write") });
-    const rr = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "read_state.py"), wt, "refs/fleet/l42/state"], { encoding: "utf8", env, cwd: home });
+    const rr = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "read_state.py"), wt, "refs/fleet/y42/state"], { encoding: "utf8", env, cwd: home });
     assert.equal(rr.status, 0, rr.stderr);
     assert.deepEqual(JSON.parse(JSON.parse(rr.stdout).message), st);
     // a ref outside refs/fleet/<task>/state is refused before anything is read
@@ -679,7 +679,7 @@ test("4.0.0 security 1: scripts_dir must be its own realpath and no symlink; the
 test("4.0.0 security 1: the probe command, run for real, reports a symlinked scripts dir and the program hashes", { skip: !HAVE_PY }, async () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-probe-"));
   try {
-    const real = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.3.4", "scripts");
+    const real = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "7.0.0", "scripts");
     mkdirSync(real, { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(real, n + ".py"));
     const cmd = await PREFLIGHT_PROBE();
@@ -693,9 +693,9 @@ test("4.0.0 security 1: the probe command, run for real, reports a symlinked scr
     for (const [n] of PROGRAMS) assert.ok(lines.includes(programSha(n) + "  " + real + "/" + n + ".py"), n);
     // the version dir replaced by a symlink to a copy elsewhere
     const other = join(home, "other");
-    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.3.4"), other, { recursive: true });
-    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.3.4"), { recursive: true });
-    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "fleet", "6.3.4"));
+    cpSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "7.0.0"), other, { recursive: true });
+    rmSync(join(home, ".claude", "plugins", "cache", "mkt", "fleet", "7.0.0"), { recursive: true });
+    symlinkSync(other, join(home, ".claude", "plugins", "cache", "mkt", "fleet", "7.0.0"));
     lines = run1();
     assert.ok(lines.includes("real=" + join(other, "scripts")), lines.join("\n"));
   } finally {

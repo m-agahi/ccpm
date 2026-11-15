@@ -236,7 +236,7 @@ test("6.3.0 A3: a sealed pre_freeze_hooks that is not a list of hook ids is no l
 
 // ---------------------------------------------------------------- A4
 
-const META = { name: "refs/fleet/l42/plan", tag_sha: "7".repeat(40), type: "tag", target: "2222222", target_type: "commit", sha256: "a".repeat(64), task_id: "l42", plan_path: "docs/plans/x.md", ref_ok: true };
+const META = { name: "refs/fleet/y42/plan", tag_sha: "7".repeat(40), type: "tag", target: "2222222", target_type: "commit", sha256: "a".repeat(64), task_id: "y42", plan_path: "docs/plans/x.md", ref_ok: true };
 
 test("6.3.0 A4: plan mode on a branch with build commits and its sealed plan ref returns resume_with build and that plan_ref", async () => {
   const s = happy();
@@ -245,11 +245,11 @@ test("6.3.0 A4: plan mode on a branch with build commits and its sealed plan ref
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "resume");
   assert.equal(out.result.resume_with, "build");
-  assert.deepEqual(out.result.plan_ref, { branch: "fleet/l42-add-thing", plan_commit: "2222222", plan_ref: "refs/fleet/l42/plan", ref_sha256: "a".repeat(64), repo: "/r" });
-  assert.match(out.result.reason, /^branch has build commits; resume_with build: run build with plan_ref refs\/fleet\/l42\/plan/);
+  assert.deepEqual(out.result.plan_ref, { branch: "fleet/y42-add-thing", plan_commit: "2222222", plan_ref: "refs/fleet/y42/plan", ref_sha256: "a".repeat(64), repo: "/r" });
+  assert.match(out.result.reason, /^branch has build commits; resume_with build: run build with plan_ref refs\/fleet\/y42\/plan/);
   assert.ok(!out.labels.includes("role:scope-and-plan"));
   // no usable plan ref: the stop as before
-  for (const refs of [[], [{ ...META, ref_ok: false }], [{ ...META, task_id: "l43" }], [{ ...META, name: "refs/fleet/l42/plan-1" }], [{ ...META, sha256: "x" }]]) {
+  for (const refs of [[], [{ ...META, ref_ok: false }], [{ ...META, task_id: "l43" }], [{ ...META, name: "refs/fleet/y42/plan-1" }], [{ ...META, sha256: "x" }]]) {
     s["infra:branch-scan"] = { status: "ok", reason: "scanned", head: PB, commits: [{ sha: "1111111", subject: "feat(thing): add thing", files: ["src/x.py"] }], refs };
     const o = await runOne(s, ARGS);
     assert.equal(o.result.status, "needs_human", JSON.stringify(refs));
@@ -277,7 +277,7 @@ test("6.3.0 A5: push access still unknown at the PR re-probe: one scripted retry
 const OPENER = { status: "ok", reason: "opened", pr_url: "https://github.com/o/r/pull/7", pr_number: 7, created: true, template_used: null, gates_not_run_stated: true };
 
 test("6.3.0 A5: a pr-opener title or gates_not_run miss gets one scripted retry on the same PR; fixed -> the build goes on", async () => {
-  for (const [bad, re] of [[{ title: "feat(l42): add thing" }, /^pr-opener set the PR title/], [{ gates_not_run_stated: false }, /^pr-opener did not state gates_not_run/]]) {
+  for (const [bad, re] of [[{ title: "feat(y42): add thing" }, /^pr-opener set the PR title/], [{ gates_not_run_stated: false }, /^pr-opener did not state gates_not_run/]]) {
     const s = happy();
     s["role:fleet-pr-opener"] = Object.assign({}, OPENER, bad);
     s["role:fleet-pr-opener:again"] = Object.assign({}, OPENER, { created: false });
@@ -420,7 +420,7 @@ test("6.3.0 A1 (review M1): callers.py prints no output over the relay cap: it e
 
 test("6.3.0 review M2: a pr-opener retry that names another PR stops", async () => {
   const s = happy();
-  s["role:fleet-pr-opener"] = Object.assign({}, OPENER, { title: "feat(l42): add thing" });
+  s["role:fleet-pr-opener"] = Object.assign({}, OPENER, { title: "feat(y42): add thing" });
   s["role:fleet-pr-opener:again"] = Object.assign({}, OPENER, { pr_url: "https://github.com/o/r/pull/8", pr_number: 8, created: true });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");

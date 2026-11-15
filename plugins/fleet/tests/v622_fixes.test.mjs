@@ -26,7 +26,7 @@ import {
 
 // ---------------------------------------------------------------- 2106
 
-const OWN = "refs/fleet/l42/";
+const OWN = "refs/fleet/y42/";
 const withRefs = (refs) => H(Object.assign({}, HASHES_FLAT, Object.fromEntries(Object.entries(refs).map(([k, v]) => ["git:fleetref:" + k, v]))));
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
@@ -58,7 +58,7 @@ test("6.2.2 2106: a write to the run's own refs/fleet/<id>/* in test round 1 sti
     [{}, { [OWN + "freeze"]: SHA_A }, OWN + "freeze"],
     [{ [OWN + "state"]: SHA_A }, { [OWN + "state"]: SHA_B }, OWN + "state"],
     // the layout key (task id + slug) is the run's own too: the re-plan's superseded tree
-    [{}, { "refs/fleet/l42-add-thing/superseded-1-tree": SHA_A }, "refs/fleet/l42-add-thing/superseded-1-tree"],
+    [{}, { "refs/fleet/y42-add-thing/superseded-1-tree": SHA_A }, "refs/fleet/y42-add-thing/superseded-1-tree"],
   ]) {
     const out = await run(writerRound(pre, post), ARGS);
     assert.equal(out.result.status, "needs_human", name);
@@ -67,8 +67,8 @@ test("6.2.2 2106: a write to the run's own refs/fleet/<id>/* in test round 1 sti
   }
 });
 
-test("6.2.2 2106: a task id that only shares a prefix with the own id (l4, l420) is another run's", async () => {
-  for (const ref of ["refs/fleet/l4/freeze", "refs/fleet/l420/freeze", "refs/fleet/l42x/state"]) {
+test("6.2.2 2106: a task id that only shares a prefix with the own id (l4, y420) is another run's", async () => {
+  for (const ref of ["refs/fleet/l4/freeze", "refs/fleet/y420/freeze", "refs/fleet/y42x/state"]) {
     const out = await run(writerRound({}, { [ref]: SHA_A }), ARGS);
     assert.equal(out.result.status, "ok", ref + ": " + out.result.reason);
   }
@@ -83,7 +83,7 @@ test("6.2.2 2106: foreign refs are no violation in the judge fingerprint and the
   assert.ok(!out.labels.includes("role:fleet-coder:r2"), "no coder round 2 for a foreign ref");
   out = await run(happy({ script: { "hasher:fp-post:code-judge:r1": { status: "ok", fingerprint: FP_K1, hashes: withRefs({ [OWN + "x"]: SHA_A }) } } }), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /judge mutated worktree.*run-state ref touched by role: refs\/fleet\/l42\/x/);
+  assert.match(out.result.reason, /judge mutated worktree.*run-state ref touched by role: refs\/fleet\/y42\/x/);
 });
 
 test("6.2.2 2106: replacement refs still stop every hasher read, own task or not", async () => {
@@ -614,7 +614,7 @@ test("6.2.2 re-review D-L2: one count line equal to the lines relayed, short of 
   assert.equal(out.result.stop_gate, "contract");
   assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
   assert.match(out.result.reason, /hasher\.py is absent from the installed plugin/);
-  assert.match(out.result.reason, /install fleet 6\.3\.4/);
+  assert.match(out.result.reason, /install fleet 7\.0\.0/);
   assert.doesNotMatch(out.result.reason, /relayed/);
   // 10 lines with a count of 10 reads the same way
   s = happy();
