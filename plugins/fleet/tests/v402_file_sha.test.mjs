@@ -10,7 +10,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SOURCE, ARGS, happy, run, runOne, PROGRAM_LABELS, PROGRAMS } from "./harness.mjs";
+import { SOURCE, ARGS, BRIEF, happy, run, runOne, inputsOf, PROGRAM_LABELS, PROGRAMS } from "./harness.mjs";
 
 function grabFn(name) {
   const i = SOURCE.indexOf("\nfunction " + name + "(");
@@ -170,7 +170,10 @@ test("4.0.2 1997: PROGRAM_SLOTS puts file_sha256 where the script's checks read 
 // program command neither adds a slot nor stops the run
 test("4.0.2 1997 review: an intake input and a tldr quoting `sha256sum -- <scripts_dir>/path_check.py` add no slot and do not halt", async () => {
   const quote = "sha256sum -- <scripts_dir>/path_check.py && python3 -I <scripts_dir>/path_check.py '/r'";
-  const s = happy();
+  // 7.0.0 (yaadgaar #699): a yaadgaar source, so a write-back step runs (a legacy ledger source is inert)
+  const s = happy({ brief: { ...BRIEF, sources: [{ kind: "yaadgaar", ref: "622", url: null, body: "task body", id: "yadgar:task:0192" }] } });
+  s["infra:yaadgaar-read"] = (p) => ({ status: "ok", reason: "read", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "ok", id: t.id, number: t.number, version: 3, has_marker: false })) });
+  s["infra:yaadgaar-writeback"] = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) });
   s["role:scope-and-plan"] = Object.assign({}, s["role:scope-and-plan"], { tldr: "fix: " + quote });
   const out = await run(s, Object.assign({}, ARGS, { input: "fleet bug: the preflight runs " + quote }));
   assert.equal(out.result.status, "ok", out.result.reason);

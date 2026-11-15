@@ -137,7 +137,8 @@ export const NONCE = "n1-0000001";
 
 // 5.0.0 (R2): a preflight stub with no ledger_tools reports every ledger read
 // tool (a session with yadgar and yaadgaar); v5_adapters scripts the others.
-export const LEDGER_TOOLS_ALL = ["mcp__yaadgaar__read_task", "mcp__yadgar__task_get"];
+// 7.0.0 (yaadgaar #699): the yadgar ledger is retired; the census names the yaadgaar read tool only
+export const LEDGER_TOOLS_ALL = ["mcp__yaadgaar__read_task"];
 export function withNonce(args) {
   if (!args || typeof args !== "object" || !args.mode || "run_nonce" in args) return args;
   return Object.assign({}, args, { run_nonce: NONCE });
@@ -429,11 +430,6 @@ export async function runOne(script, args0) {
     // 6.0.0 (ledger 2041): unscripted ruleset reads find a repo with no ruleset and a user owner
     if (!(label in script) && /^infra:ruleset-surface:/.test(label))
       return { status: "ok", reason: "read", surface: [], sources: [], read: ["self-references in 0 local workflow file(s)", "rules/branches/main: 0 rule(s)", "owner o is not an organization: no org rulesets"], unreadable: [], error: null, args: inputsOf(prompt).args };
-    // 3.1.0: unscripted ledger reads find a task with a body page
-    // 2034.5: the CI follow-up write lands like the write-back
-    if (!(label in script) && /^infra:ledger-writeback:ci$/.test(label)) return { status: "ok", reason: "ok", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "written" })) };
-    if (!(label in script) && /^infra:ledger-read:pre(:ci)?$/.test(label))
-      return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: "T" + t.id, body_slug: "o_r_task-" + t.id, has_marker: false })) };
     // 5.0.8 (ledger 2030): an unscripted gh check reads the scenario's answers
     if (!(label in script) && /^infra:gh-identity:/.test(label)) return Object.assign({ status: "ok", reason: "checked" }, ghIdOut(inputsOf(prompt).args, null, script.__gh));
     // 5.0.6 (ledger 2019): unscripted build-dir resets and the teardown succeed
@@ -1077,7 +1073,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/6.3.4/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/7.0.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1417,11 +1413,6 @@ export function happy(over = {}) {
       replace_refs: [],
     },
     "infra:push": (prompt) => ({ status: "ok", reason: "pushed", push_result: "ok", remote_head: inputsOf(prompt).approved_sha }),
-    "infra:ledger-writeback": (prompt) => ({
-      status: "ok",
-      reason: "ok",
-      results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "written" })),
-    }),
     workspace: {
       status: "ok",
       reason: "created",

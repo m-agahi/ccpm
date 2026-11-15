@@ -206,7 +206,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 6\.3\.4 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 7\.0\.0 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -1709,8 +1709,8 @@ test("intake runs read-only, gets input, repo and project", async () => {
   const c = call(out, "intake");
   assert.equal(c.opts.agentType, "fleet:judge");
   assert.equal(c.opts.model, "sonnet");
-  // 5.0.0 (R2): intake also gets the ledger tool census
-  assert.deepEqual(inputsOf(c.prompt), { input: "L42", repo: "/r", project: "o/r", ledger: "yadgar", ledger_tools: ["mcp__yaadgaar__read_task", "mcp__yadgar__task_get"] });
+  // 5.0.0 (R2): intake also gets the ledger tool census; 7.0.0 (yaadgaar #699): one ledger, yaadgaar
+  assert.deepEqual(inputsOf(c.prompt), { input: "L42", repo: "/r", project: "o/r", ledger: "yaadgaar", ledger_tools: ["mcp__yaadgaar__read_task"] });
   assert.match(c.prompt, /Read only/);
   assert.ok(out.labels.indexOf("intake") < out.labels.indexOf("workspace"));
 });
@@ -2659,8 +2659,10 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.equal(JSON.parse(s.__store[PC2]).project, "o/r");
   assert.ok(!JSON.stringify(r).includes(SECRET));
   // no PR, no push, no write-back on a plan_wrong stop
-  for (const l of ["infra:push", "role:fleet-pr-opener", "infra:ledger-writeback", "infra:comments-list", "infra:comments-post"])
+  for (const l of ["infra:push", "role:fleet-pr-opener", "infra:yaadgaar-writeback", "infra:comments-list", "infra:comments-post"])
     assert.ok(!out.labels.includes(l), l);
+  // 7.0.0 (yaadgaar #699): nor the legacy ledger entry
+  assert.ok(!out.logs.some((l) => /^write-back ledger /.test(l)), "no write-back");
   // order: worktree at the old plan commit, planner, audit, commit there, then save + reset
   const tail = out.labels.slice(out.labels.indexOf("hasher:fp-post:code-judge:r1") + 1);
   assert.deepEqual(tail, [
@@ -2775,16 +2777,23 @@ function posting(fail) {
 }
 
 test("write-back: the ledger is written only for ledger sources", async () => {
+  // 7.0.0 (yaadgaar #699): a yaadgaar task is written; the default fixture's legacy ledger source is
+  // inert and hands the same section back
+  const y = await run(Object.assign(happy({ brief: YBRIEF }), { "infra:yaadgaar-read": yaadgaarRead(), "infra:yaadgaar-writeback": (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) }) }), { ...ARGS, input: "#622" });
+  noUnscripted(y);
+  const yw = inputsOf(call(y, "infra:yaadgaar-writeback").prompt);
+  assert.equal(yw.project, "o/r");
+  assert.deepEqual(yw.tasks, [{ key: "s0", id: YURN, number: 622, version: 3 }]);
+  assert.equal(y.result.ledger_status, "ok");
   const out = await run(happy(), ARGS);
   noUnscripted(out);
-  const lw = inputsOf(call(out, "infra:ledger-writeback").prompt);
-  assert.equal(lw.project, "o/r");
-  assert.deepEqual(lw.tasks, [{ key: "s0", ref: "42" }]);
+  const lw = out.result.write_back.ledger[0];
+  assert.equal(lw.ref, "42");
   assert.match(lw.section_text, /adds a thing/);
   assert.match(lw.section_text, /docs\/plans\/x\.md/);
   assert.match(lw.section_text, /https:\/\/github\.com\/o\/r\/pull\/7/);
   assert.match(lw.section_text, /fleet:l42/);
-  assert.equal(out.result.ledger_status, "ok");
+  assert.equal(out.result.ledger_status, "unavailable");
   assert.equal(out.result.comment_status, "none");
 
   const gh = await run(withSources([GH], { "infra:comments-list": listing({}), "infra:comments-post": posting() }), {
@@ -2792,7 +2801,7 @@ test("write-back: the ledger is written only for ledger sources", async () => {
     input: GH.url,
   });
   noUnscripted(gh);
-  assert.ok(!gh.labels.includes("infra:ledger-writeback"));
+  assert.ok(!gh.labels.some((l) => /^infra:(ledger|yaadgaar)-/.test(l)));
   assert.equal(gh.result.ledger_status, "none");
 });
 
@@ -2849,16 +2858,17 @@ test("write-back: a comment failure reports comment_status failed with the text;
 });
 
 test("write-back: a ledger failure is reported and never stops the run", async () => {
-  const out = await run(happy({ script: { "infra:ledger-writeback": null } }), ARGS);
+  // 7.0.0 (yaadgaar #699): a yaadgaar task on o/r
+  const out = await run(Object.assign(happy({ brief: YBRIEF }), { "infra:yaadgaar-read": yaadgaarRead(), "infra:yaadgaar-writeback": null }), { ...ARGS, input: "#622" });
   assert.equal(out.result.status, "ok");
   assert.equal(out.result.ledger_status, "failed");
-  assert.match(out.result.write_back.ledger[0].section_text, /fleet:l42/);
+  assert.match(out.result.write_back.ledger[0].section_text, /fleet:y622/);
   // 3.1.3 (PR #41 review 2): a legacy ledger source with no project stops the build before any role
   // (4.0.0, 1992: only when the plan run sealed no project either)
   const noProject = await run(happy(), { ...ARGS, project: undefined });
   assert.equal(noProject.result.status, "needs_human");
   assert.match(noProject.result.reason, /needs args\.project.*re-run plan/);
-  assert.ok(!noProject.build.labels.includes("infra:ledger-writeback"));
+  assert.ok(!noProject.build.labels.some((l) => /^infra:(ledger|yaadgaar)-/.test(l)));
 });
 
 test("write-back: comment text with a line starting with a terraform-bot word is refused in code", async () => {
@@ -4403,7 +4413,8 @@ test("2.1.0 confirm auto: gates pass, the same run builds through the shared ver
   for (const k of ["brief", "ledger_task", "plan_path", "criteria", "plan_diff", "allowed_additions", "repo_obligations", "commands"])
     assert.ok(k in ij, "intent judge input " + k);
   assert.equal(ij.brief.sources[0].body, "task body");
-  assert.equal(ij.ledger_task.body, "task body");
+  // 7.0.0 (yaadgaar #699): the default fixture's legacy ledger source has no ledger adapter
+  assert.equal(ij.ledger_task, null);
   const pr = inputsOf(call(out, "role:fleet-pr-opener").prompt);
   assert.equal(pr.auto_confirmed, true);
   assert.equal(pr.intent.verdict, "approve");
@@ -4504,10 +4515,12 @@ test("2.1.0 G3 scope fence: secrets, rulesets and a foreign repo are refused (Ia
 });
 
 test("2.1.0 build with confirm auto re-runs the gates against the current ledger rulings", async () => {
-  const s = autoHappy();
-  const plan = await runOne(s, ARGS);
+  // 7.0.0 (yaadgaar #699): a yaadgaar task on o/r (a legacy ledger source is never re-read)
+  const s = autoHappy({ brief: YBRIEF });
+  Object.assign(s, { "infra:yaadgaar-read": yaadgaarRead(), "infra:yaadgaar-writeback": (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) }) });
+  const plan = await runOne(s, { ...ARGS, input: "#622" });
   assert.equal(plan.result.status, "awaiting_confirmation");
-  s["intake:rulings"] = { status: "ok", reason: "re-read", brief: { ...BRIEF, sources: [{ kind: "ledger", ref: "42", url: null, body: "task body\n\nRuling: no new deps" }] } };
+  s["intake:rulings"] = { status: "ok", reason: "re-read", brief: { ...YBRIEF, sources: [{ ...YBRIEF.sources[0], body: "task body\n\nRuling: no new deps" }] } };
   s["hasher:pre-intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
   s["role:fleet-intent-judge:rerun"] = { status: "ok", reason: "violates ruling", verdict: "refuse", deviations: [], coverage: { covered: true, missing: [] } };
   s["hasher:fp-post:intent:rerun"] = { status: "ok", fingerprint: FP_PLAN };
@@ -4515,7 +4528,7 @@ test("2.1.0 build with confirm auto re-runs the gates against the current ledger
   const build = await runOne(s, bargs);
   assert.equal(build.result.status, "needs_human");
   assert.equal(build.result.failed_check, "intent");
-  assert.equal(inputsOf(call(build, "intake:rulings").prompt).input, "L42");
+  assert.equal(inputsOf(call(build, "intake:rulings").prompt).input, "yaadgaar #622");
   assert.match(inputsOf(call(build, "role:fleet-intent-judge:rerun").prompt).ledger_task.body, /Ruling: no new deps/);
   assert.ok(!build.labels.some((l) => /^role:fleet-test-writer/.test(l)));
   // approve on the re-run: the build proceeds
@@ -4525,7 +4538,7 @@ test("2.1.0 build with confirm auto re-runs the gates against the current ledger
   assert.equal(ok.result.status, "ok", ok.result.reason);
   assert.equal(ok.result.auto_confirmed, true);
   // a re-read that resolves to another task stops
-  s["intake:rulings"] = { status: "ok", reason: "x", brief: { ...BRIEF, sources: [{ kind: "ledger", ref: "43", url: null, body: "b" }] } };
+  s["intake:rulings"] = { status: "ok", reason: "x", brief: { ...YBRIEF, sources: [{ ...YBRIEF.sources[0], ref: "623", body: "b" }] } };
   const b2 = await runOne(s, bargs);
   assert.equal(b2.result.status, "needs_human");
   assert.match(b2.result.reason, /re-read/);
@@ -4536,15 +4549,16 @@ test("2.1.0 build with confirm auto re-runs the gates against the current ledger
 // When it reports the tool absent, the sealed ledger task's current rulings
 // cannot be read, so confirm auto stops (fails closed); confirm ask goes on.
 test("5.0.0 R2: build confirm auto: a rulings re-read that finds no ledger tool stops", async () => {
-  const s = autoHappy();
-  const plan = await runOne(s, ARGS);
+  // 7.0.0 (yaadgaar #699): a yaadgaar task (a legacy ledger source is never re-read)
+  const s = autoHappy({ brief: YBRIEF });
+  const plan = await runOne(s, { ...ARGS, input: "#622" });
   assert.equal(plan.result.status, "awaiting_confirmation");
   s.preflight = { ledger_tools: [] };
-  s["intake:rulings"] = { status: "needs_human", reason: "no task ledger available; give a URL, Jira key or text", tried: [{ ledger: "yadgar", project: "o/r", call: "mcp__yadgar__task_get", error: "absent" }] };
+  s["intake:rulings"] = { status: "needs_human", reason: "no task ledger available; give a URL, Jira key or text", tried: [{ ledger: "yaadgaar", project: "o/r", call: "mcp__yaadgaar__read_task", error: "absent" }] };
   const build = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r", confirm: "auto" });
   assert.equal(build.result.status, "needs_human");
   assert.ok(build.labels.includes("intake:rulings"), "the census never skips the re-read: " + build.labels.join(", "));
-  assert.match(build.result.reason, /re-read of ledger:42 for current rulings: no task ledger available; give a URL, Jira key or text/);
+  assert.match(build.result.reason, /re-read of yaadgaar:622 for current rulings: no task ledger available; give a URL, Jira key or text/);
   assert.match(build.result.reason, /confirm "ask"/);
 });
 
@@ -4854,9 +4868,12 @@ test("2.1.0 an auto build reports mode build", async () => {
 test("2.1.0 write-back follows the review (the run-state milestone order)", async () => {
   const out = await run(happy({ script: { "role:pr-review:v1": { status: "needs_human", reason: "cannot read PR" } } }), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.ok(!out.labels.includes("infra:ledger-writeback"));
+  // 7.0.0 (yaadgaar #699): the legacy ledger entry is a gate line, written with the written_back milestone
+  assert.ok(!out.logs.some((l) => /^write-back ledger /.test(l)));
+  assert.ok(!out.labels.includes("infra:state:written_back"));
   const ok = await run(happy(), ARGS);
-  assert.ok(ok.labels.indexOf("infra:ledger-writeback") > ok.labels.indexOf("role:pr-review:v1"));
+  assert.ok(ok.build.logs.some((l) => /^write-back ledger \(fleet:l42\): 42=unavailable$/.test(l)));
+  assert.ok(ok.labels.indexOf("infra:state:written_back") > ok.labels.indexOf("role:pr-review:v1"));
 });
 
 test("2.1.0 re-plan keeps the uncommitted work under a non-branch ref to the tree: no commit object", async () => {
@@ -5253,7 +5270,9 @@ test("2.1.0 run-state: every milestone writes the state ref, in order, with a mk
   const out = await run(recording(happy(), states), ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  const order = ["infra:state:committed:r1", "infra:push", "infra:state:pushed:p1", "role:fleet-pr-opener", "infra:state:pr_open:p1", "role:pr-review:v1", "infra:state:reviewed:v1", "infra:ledger-writeback", "infra:state:written_back"];
+  const order = ["infra:state:committed:r1", "infra:push", "infra:state:pushed:p1", "role:fleet-pr-opener", "infra:state:pr_open:p1", "role:pr-review:v1", "infra:state:reviewed:v1", "infra:state:written_back"];
+  // 7.0.0 (yaadgaar #699): the legacy ledger source dispatches no write-back step; its entry is a gate line
+  assert.ok(out.build.logs.some((l) => /^write-back ledger \(fleet:l42\): 42=unavailable$/.test(l)));
   for (let i = 1; i < order.length; i++) assert.ok(out.labels.indexOf(order[i]) > out.labels.indexOf(order[i - 1]), order[i]);
   const p = call(out, "infra:state:committed:r1").prompt;
   assert.match(p, /mktag/);
@@ -5266,7 +5285,7 @@ test("2.1.0 run-state: every milestone writes the state ref, in order, with a mk
   assert.equal(states.committed.code_tree, "K1");
   assert.match(states.committed.maps_digest, /^[0-9a-f]{64}$/);
   assert.equal(states.pr_open.pr_number, 7);
-  assert.equal(states.written_back.ledger_status, "ok");
+  assert.equal(states.written_back.ledger_status, "unavailable");
 });
 
 test("2.1.0 resume: a push that failed resumes at push on the re-run; no writer, coder or judge runs", async () => {
@@ -5297,7 +5316,7 @@ test("2.1.0 resume: a run stopped after the PR opened resumes at review", async 
   const plan = await runOne(s, ARGS);
   const first = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
   assert.equal(first.result.status, "needs_human");
-  assert.ok(!first.labels.includes("infra:ledger-writeback"), "write-back follows the review");
+  assert.ok(!first.logs.some((l) => /^write-back ledger /.test(l)), "write-back follows the review");
   rerunScript(s, states.pr_open);
   s["role:pr-review:v1"] = happy()["role:pr-review:v1"];
   const second = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
@@ -5306,7 +5325,7 @@ test("2.1.0 resume: a run stopped after the PR opened resumes at review", async 
   assert.ok(second.logs.some((l) => /resuming at review/.test(l)));
   assert.ok(!second.labels.some((l) => NO_REWORK.test(l) || l === "infra:push" || l === "role:fleet-pr-opener"), second.labels.join(", "));
   assert.equal(inputsOf(call(second, "role:pr-review:v1").prompt).pr_number, 7);
-  assert.ok(second.labels.includes("infra:ledger-writeback"));
+  assert.ok(second.logs.some((l) => /^write-back ledger \(fleet:l42\): 42=unavailable$/.test(l)));
 });
 
 // 6.0.0 (ledger 2044): shipped (after the stats block) is the last run-state; written_back resumes at the stats step
@@ -5328,7 +5347,8 @@ test("2.1.0 resume: shipped returns the recorded result with no role agent", asy
   noUnscripted(again);
   assert.equal(again.result.status, "ok", again.result.reason);
   assert.equal(again.result.pr_url, "https://github.com/o/r/pull/7");
-  assert.equal(again.result.ledger_status, "ok");
+  // 7.0.0 (yaadgaar #699): the recorded status of the inert legacy ledger entry
+  assert.equal(again.result.ledger_status, "unavailable");
   assert.equal(again.result.resumed_at, "done");
   assert.ok(!again.labels.some((l) => /^role:/.test(l) || l === "infra:push" || /^infra:state:/.test(l)), again.labels.join(", "));
 });
@@ -5600,7 +5620,6 @@ const ARRAY_SITES = {
   "r.changed @ hasher": "hasher:changed",
   "b.sources @ briefProblem": "intake:brief.sources",
   "it.tried @ intakeHaltReason": "intake:tried",
-  "it.tried @ bodyPageProblem": "intake:tried",
   "plan.criteria @ planAndAudit": "role:scope-and-plan:criteria",
   "plan.plan_diff @ planAndAudit": "role:scope-and-plan:plan_diff",
   "plan.changed_symbols @ planAndAudit": "role:scope-and-plan:changed_symbols",
@@ -5679,8 +5698,6 @@ const ARRAY_SITES = {
   "c.parents @ buildFromRef": "infra:commits_since[].parents",
   "v.plan_touched @ buildFromRef": "infra:plan_touched",
   "v.changed_since @ buildFromRef": "infra:changed_since",
-  "r.results @ writeBodies": "infra:results",
-  "pre.results @ writeBack": "infra:results",
   "o.files @ obligationFailures": "parsed: repo_obligations of the sealed plan facts",
   "r.surface @ hookSurface": "infra:surface",
   // 6.0.0 (ledger 2041)
@@ -5698,7 +5715,6 @@ const ARRAY_SITES = {
   "pf.changed_symbols @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "e.occurrences @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "c.test_files @ planScopePaths": "parsed: normalised criteria",
-  "h.page_tags @ writeBodies": "infra:results[].page_tags",
   // 4.0.0 (1985)
   "r.args @ pushProbe": "parsed: the push probe relay (PUSH_PROBE_SCHEMA args; digest-checked)",
   // 5.0.2 (ledger 2004)
@@ -6157,9 +6173,9 @@ test("2.1.5 yaadgaar: intake is told the ledger by project; the task id and the 
   assert.equal(out.result.plan_ref.plan_ref, "refs/fleet/y622/plan");
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   assert.deepEqual(ref.brief.sources.map((x) => x.kind + ":" + x.ref), ["yaadgaar:622"]);
-  // another project keeps the yadgar ledger
+  // 7.0.0 (yaadgaar #699): another project reads yaadgaar too
   const o = await runOne(happy(), ARGS);
-  assert.equal(inputsOf(call(o, "intake").prompt).ledger, "yadgar");
+  assert.equal(inputsOf(call(o, "intake").prompt).ledger, "yaadgaar");
 });
 
 test("2.1.5 yaadgaar: a legacy ledger source on a yadgarhq/ project stops before the workspace", async () => {
@@ -6172,8 +6188,12 @@ test("2.1.5 yaadgaar: a legacy ledger source on a yadgarhq/ project stops before
   }
 });
 
-test("2.1.5 yaadgaar: a yaadgaar source on another project stops", async () => {
-  const out = await runOne(happy({ brief: YBRIEF }), { ...ARGS, input: "yaadgaar #622" });
+test("2.1.5 yaadgaar: a yaadgaar source of another project stops (7.0.0: any args.project reads yaadgaar)", async () => {
+  // 7.0.0 (yaadgaar #699): a yaadgaar source on a project outside yadgarhq/ plans
+  const ok = await runOne(happy({ brief: YBRIEF }), { ...ARGS, input: "yaadgaar #622" });
+  assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
+  // an answer naming another project than args.project still stops
+  const out = await runOne(happy({ brief: { ...YBRIEF, sources: [{ ...YBRIEF.sources[0], project: "x/y" }] } }), { ...ARGS, input: "yaadgaar #622" });
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /yaadgaar/);
   assert.ok(!out.labels.includes("workspace"));
@@ -6253,7 +6273,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 6\.3\.4; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 7\.0\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6951,7 +6971,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.4\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 6\.3\.4 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.0\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 7\.0\.0 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -7871,8 +7891,10 @@ test("3.0.0 yaadgaar write-back: an agent step edits the task through mcp__yaadg
   assert.doesNotMatch(r.prompt, /\.yadgar\/project-id|remote get-url|walking up/);
   assert.match(r.prompt, /read_task\(id=<id>\)/);
   assert.ok(out.labels.indexOf("infra:yaadgaar-read") < out.labels.indexOf("infra:yaadgaar-writeback"));
-  for (const re of [/mcp__yaadgaar__read_task/, /mcp__yaadgaar__edit_task/, /expect_version/, /VERSION_MISMATCH/, /patch/, /expect_count/, /expect_body_sha256/, /never mcp__yadgar__task_/i, /id=<id>/])
+  // 7.0.0 (yaadgaar #699): the yaadgaar tools only, and no other task, memory or wiki tool
+  for (const re of [/mcp__yaadgaar__read_task/, /mcp__yaadgaar__edit_task/, /expect_version/, /VERSION_MISMATCH/, /patch/, /expect_count/, /expect_body_sha256/, /call no other task, memory or wiki tool/, /id=<id>/])
     assert.match(c.prompt, re);
+  assert.doesNotMatch(c.prompt, /mcp__yadgar__/);
   assert.equal(out.result.ledger_status, "ok");
   assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["yaadgaar #622", "written"]]);
 });
@@ -7896,7 +7918,8 @@ test("6.0.0 2042: the ledger section names the sealed plan ref, with no blob lin
     s.workspace = { ...s.workspace, remote_host: host };
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "ok", out.result.reason);
-    const t = inputsOf(call(out, "infra:ledger-writeback").prompt).section_text;
+    // 7.0.0 (yaadgaar #699): the legacy ledger entry hands the section back
+    const t = out.result.write_back.ledger[0].section_text;
     assert.match(t, /\nPlan: docs\/plans\/x\.md, sealed locally at refs\/fleet\/l42\/plan \(not in the PR\)\n/);
     assert.doesNotMatch(t, /https:\/\/(codeberg\.org|github\.com)\/o\/r\/(src|blob)\//, host);
   }
@@ -8658,7 +8681,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 6\.3\.4/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 7\.0\.0/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
@@ -9016,136 +9039,8 @@ test("3.1.0 1935b: a met:false obligation and a check_cmd failure each count onc
 });
 
 // ---------------------------------------------------------------- 3.1.0 (ledger 1958): write-back to a yadgar ledger task without a body page
-
-const T42 = "fleet: a ledger task title, verbatim — with ü and \"quotes\"";
-
-// A happy run whose ledger task L42 has no body_slug. over: label -> stub.
-function noBody(over) {
-  const s = happy();
-  s["infra:ledger-read:pre"] = (prompt) => ({
-    status: "ok",
-    reason: "read",
-    results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: T42, body_slug: null, has_marker: false })),
-  });
-  s["infra:ledger-body"] = (prompt) => ({ status: "ok", reason: "ok", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "written" })) });
-  s["infra:ledger-read:post"] = (prompt) => ({
-    status: "ok",
-    reason: "read",
-    results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title: T42, body_slug: "o_r_task-42", has_marker: true, page_project: "o/r", page_tags: ["task-body", "fleet", "ledger-42"] })),
-  });
-  return Object.assign(s, over || {});
-}
-
-test("3.1.0 1958: a ledger task without a body page gets one, linked with the title a judge read", async () => {
-  const out = await run(noBody(), ARGS);
-  noUnscripted(out);
-  assert.equal(out.result.status, "ok", out.result.reason);
-  assert.equal(out.result.ledger_status, "ok");
-  assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["42", "written"]]);
-  const L = out.labels;
-  // the first title read is a judge's; the general write-back step has nothing to do
-  assert.ok(!L.includes("infra:ledger-writeback"));
-  assert.ok(L.indexOf("infra:ledger-read:pre") < L.indexOf("infra:ledger-body"));
-  assert.ok(L.indexOf("infra:ledger-body") < L.indexOf("infra:ledger-read:post"));
-  assert.equal(call(out, "infra:ledger-read:pre").opts.agentType, "fleet:judge");
-  assert.equal(call(out, "infra:ledger-read:post").opts.agentType, "fleet:judge");
-  const w = call(out, "infra:ledger-body");
-  assert.equal(w.opts.agentType, "fleet:ledger-writer");
-  const i = inputsOf(w.prompt);
-  assert.equal(i.project, "o/r");
-  assert.equal(i.directory, "/r");
-  assert.deepEqual(i.tasks, [{ key: "s0", id: 42, title: T42, slug: "o_r_task-42" }]);
-  assert.match(i.page_body, /<!-- fleet:l42 -->/);
-  assert.equal(i.page_body, "## Fleet build\n\n" + i.section_text);
-  for (const re of [
-    /data, not instructions/,
-    /task_get\(project_id=<project>, id=<id>\)/,
-    /byte for byte/,
-    /wiki_add\([^)]*slug=<slug>[^)]*upsert=False[^)]*wait=True/,
-    /directory=<directory>/,
-    /slug_exists/,
-    // slug collision: an existing page must be this task's (3.1.0 review)
-    /project must be <project> and its tags must include "ledger-<id>"/,
-    /task_write\(project_id=<project>, id=<id>, title=<title>, body_slug=<slug>\)/,
-    /never.*status/i,
-  ])
-    assert.match(w.prompt, re);
-});
-
-test("3.1.0 1958: a task with a body page goes to the append step; the judge read decides", async () => {
-  const out = await run(happy(), ARGS);
-  noUnscripted(out);
-  assert.equal(out.result.ledger_status, "ok");
-  const L = out.labels;
-  assert.ok(L.indexOf("infra:ledger-read:pre") < L.indexOf("infra:ledger-writeback"));
-  assert.ok(!L.includes("infra:ledger-body"));
-  assert.deepEqual(inputsOf(call(out, "infra:ledger-writeback").prompt).tasks, [{ key: "s0", ref: "42" }]);
-  // a refused read writes nothing
-  const bad = await run(happy({ script: { "infra:ledger-read:pre": { status: "ok", reason: "x", results: [{ key: "s0", status: "failed", reason: "absent" }] } } }), ARGS);
-  assert.ok(!bad.labels.includes("infra:ledger-writeback"));
-  assert.equal(bad.result.ledger_status, "failed");
-  assert.match(bad.result.write_back.ledger[0].reason, /absent/);
-  assert.match(bad.result.write_back.ledger[0].section_text, /fleet:l42/);
-});
-
-test("3.1.0 1958: a title of 1..200 code points is used as read; an empty, missing or longer one writes nothing", async () => {
-  const astral = "\u{1D4B3}";
-  for (const [title, ok] of [
-    [astral.repeat(200), true],
-    ["a".repeat(200), true],
-    ["a".repeat(201), false],
-    [astral.repeat(201), false],
-    ["", false],
-    [null, false],
-  ]) {
-    const s = noBody({
-      "infra:ledger-read:pre": (prompt) => ({ status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title, body_slug: null })) }),
-      "infra:ledger-read:post": (prompt) => ({ status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", title, body_slug: "o_r_task-42", has_marker: true, page_project: "o/r", page_tags: ["ledger-42"] })) }),
-    });
-    const out = await run(s, ARGS);
-    noUnscripted(out);
-    assert.equal(out.result.status, "ok");
-    assert.equal(out.labels.includes("infra:ledger-body"), ok, String(title).length + " " + ok);
-    assert.equal(out.result.ledger_status, ok ? "ok" : "failed");
-    if (!ok) {
-      assert.match(out.result.write_back.ledger[0].reason, /title/);
-      assert.match(out.result.write_back.ledger[0].section_text, /fleet:l42/);
-    } else assert.equal(inputsOf(call(out, "infra:ledger-body").prompt).tasks[0].title, title);
-  }
-});
-
-test("3.1.0 1958: a changed or truncated title after the write, a wrong body_slug or no marker fails closed", async () => {
-  const post = (r) => ({
-    "infra:ledger-read:post": (prompt) => ({ status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => Object.assign({ key: t.key, status: "ok", title: T42, body_slug: "o_r_task-42", has_marker: true, page_project: "o/r", page_tags: ["ledger-42"] }, r)) }),
-  });
-  for (const [over, re] of [
-    [post({ title: T42.slice(0, 30) }), /title changed by the write-back/],
-    [post({ title: T42.toUpperCase() }), /title changed by the write-back/],
-    [post({ title: undefined }), /title changed by the write-back/],
-    [post({ body_slug: "o_r_task-43" }), /body_slug/],
-    [post({ body_slug: null }), /body_slug/],
-    [post({ has_marker: false }), /marker/],
-    [post({ status: "failed", reason: "refused" }), /refused/],
-    [{ "infra:ledger-read:post": null }, /no result/],
-    [{ "infra:ledger-body": (prompt) => ({ status: "ok", reason: "x", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "failed", reason: "title differs" })) }) }, /title differs/],
-    [{ "infra:ledger-body": (prompt) => ({ status: "ok", reason: "x", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "failed", reason: "slug collision" })) }) }, /slug collision/],
-  ]) {
-    const out = await run(noBody(over), ARGS);
-    noUnscripted(out);
-    assert.equal(out.result.status, "ok");
-    assert.equal(out.result.ledger_status, "failed", JSON.stringify(Object.keys(over)));
-    assert.equal(out.result.write_back.ledger[0].status, "failed");
-    assert.match(out.result.write_back.ledger[0].reason, re);
-    assert.match(out.result.write_back.ledger[0].section_text, /fleet:l42/);
-  }
-});
-
-test("3.1.0 1958: a project that is not owner/repo writes nothing", async () => {
-  // 4.0.0 (1992): planned without project, so o/r/x is not a sealed-project mismatch
-  const out = await run(noBody(), { ...ARGS, project: undefined }, { project: "o/r/x" });
-  assert.ok(!out.build.labels.includes("infra:ledger-body"));
-  assert.equal(out.result.ledger_status, "failed");
-});
+// 7.0.0 (yaadgaar #699): the yadgar ledger is retired, with the body-page write-back and the
+// fleet:ledger-writer agent; v700_legacy_inert.test.mjs and v700_retired.test.mjs pin that.
 
 // frontmatter: name -> value (single-line values only)
 function frontmatter(name) {
@@ -9160,19 +9055,8 @@ function frontmatter(name) {
   return out;
 }
 
-test("3.1.0 review F1: fleet:ledger-writer has an exact tools allowlist; fleet:judge denies every yadgar writer", () => {
-  const w = frontmatter("ledger-writer.md");
-  assert.equal(w.name, "ledger-writer");
-  assert.deepEqual(w.tools.split(/,\s*/).sort(), [
-    "StructuredOutput",
-    "ToolSearch",
-    "mcp__yadgar__task_get",
-    "mcp__yadgar__task_write",
-    "mcp__yadgar__wiki_add",
-    "mcp__yadgar__wiki_append_section",
-    "mcp__yadgar__wiki_read",
-  ]);
-  assert.ok(!("disallowedTools" in w), "an allowlist, not a denylist");
+// 7.0.0 (yaadgaar #699): fleet:ledger-writer is deleted (v700_retired.test.mjs); the judge part stays
+test("3.1.0 review F1: fleet:judge denies every yadgar writer", () => {
   const deny = frontmatter("judge.md").disallowedTools.split(/,\s*/);
   for (const t of [
     "Write", "Edit", "NotebookEdit",
@@ -9595,28 +9479,6 @@ test("3.1.0 delta review LOW: a git-lfs batch line next to a declined push is am
   assert.equal(classifyPush(1, "version not bumped\nerror: failed to push some refs to 'x'\n").push_result, "hook_rejected");
 });
 
-test("3.1.0 delta review LOW: the slug-collision check runs in code on the page's project and tags", async () => {
-  for (const [page, ok] of [
-    [{ page_project: "o/r", page_tags: ["task-body", "fleet", "ledger-42"] }, true],
-    [{ page_project: "o/other", page_tags: ["task-body", "fleet", "ledger-42"] }, false],
-    [{ page_project: "o/r", page_tags: ["task-body", "fleet", "ledger-43"] }, false],
-    [{ page_project: "o/r" }, false],
-    [{}, false],
-  ]) {
-    const s = noBody({
-      "infra:ledger-read:post": (prompt) => ({
-        status: "ok",
-        reason: "read",
-        results: inputsOf(prompt).tasks.map((t) => Object.assign({ key: t.key, status: "ok", title: T42, body_slug: "o_r_task-42", has_marker: true }, page)),
-      }),
-    });
-    const out = await run(s, ARGS);
-    assert.equal(out.result.ledger_status, ok ? "ok" : "failed", JSON.stringify(page));
-    if (!ok) assert.match(out.result.write_back.ledger[0].reason, /slug collision/);
-  }
-  assert.match(call(await run(noBody(), ARGS), "infra:ledger-read:post").prompt, /page_project.*page_tags/);
-});
-
 test("3.1.0 delta review LOW: fleet:judge denies every remaining yadgar writer", () => {
   const deny = frontmatter("judge.md").disallowedTools.split(/,\s*/);
   for (const t of [
@@ -9798,16 +9660,6 @@ test("3.1.0 survivor M11c: a declined-push line with an exit code other than 1 i
     const o = classifyPush(code, "error: failed to push some refs to 'github.com:o/r.git'\n");
     assert.notEqual(o.push_result, "hook_rejected", String(code));
     assert.equal(o.push_result, "ambiguous", String(code));
-  }
-});
-
-test("3.1.0 survivor M20: a ledger-writer status other than written fails before the read after the write", async () => {
-  for (const status of ["skipped", "error", "ok", "WRITTEN"]) {
-    const out = await run(noBody({ "infra:ledger-body": (prompt) => ({ status: "ok", reason: "x", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status })) }) }), ARGS);
-    assert.equal(out.result.ledger_status, "failed", status);
-    assert.equal(out.result.write_back.ledger[0].status, "failed", status);
-    assert.match(out.result.write_back.ledger[0].reason, new RegExp("^write: " + status), status);
-    assert.ok(!out.labels.includes("infra:ledger-read:post"), status + ": no read after a write that did not happen");
   }
 });
 
@@ -11034,7 +10886,8 @@ test("3.1.3 intake: a task id resolves only through the ledger tool; the repo's 
   assert.doesNotMatch(rules, /walking up|remote get-url|first `\.yadgar\/project-id` found/);
   assert.match(rules, /mcp__yaadgaar__read_task/);
   assert.match(rules, /number=<the number>/);
-  assert.match(rules, /only by calling the ledger tool/i);
+  // 7.0.0 (yaadgaar #699): the one ledger tool
+  assert.match(rules, /only by calling mcp__yaadgaar__read_task/i);
   assert.match(rules, /independent of <repo>/);
   assert.match(rules, /never advise/i);
   assert.match(rules, /`tried`/);
@@ -11057,15 +10910,16 @@ test("3.1.3 intake: a yaadgaar source without the task id from the read_task ans
   }
 });
 
-test("3.1.3 intake: ledger routing by project prefix; no project tries both", async () => {
+// 7.0.0 (yaadgaar #699): every project, and none, reads yaadgaar (was: routing by project prefix)
+test("3.1.3 intake: ledger routing by project prefix; no project tries both (7.0.0: yaadgaar for every project)", async () => {
   for (const [project, ledger] of [
     ["yadgarhq/docs", "yaadgaar"],
     ["yadgarhq/iam-db", "yaadgaar"],
-    ["m-agahi/ccpm", "yadgar"],
-    ["o/yadgarhq", "yadgar"],
-    ["xyadgarhq/docs", "yadgar"],
-    [undefined, "either"],
-    ["", "either"],
+    ["m-agahi/ccpm", "yaadgaar"],
+    ["o/yadgarhq", "yaadgaar"],
+    ["xyadgarhq/docs", "yaadgaar"],
+    [undefined, "yaadgaar"],
+    ["", "yaadgaar"],
   ]) {
     const a = { ...ARGS };
     if (project === undefined) delete a.project;
@@ -11074,7 +10928,8 @@ test("3.1.3 intake: ledger routing by project prefix; no project tries both", as
     assert.equal(inputsOf(call(out, "intake").prompt).ledger, ledger, String(project));
   }
   const rules = intakeIdRules(call(await runOne(happy(), ARGS), "intake").prompt);
-  assert.match(rules, /ledger `either`[\s\S]*mcp__yaadgaar__read_task[\s\S]*mcp__yadgar__task_get/);
+  assert.doesNotMatch(rules, /ledger `either`|mcp__yadgar__task_get/);
+  assert.match(rules, /mcp__yaadgaar__read_task/);
   // no project: the yaadgaar task the session's client returned is used
   const a = { ...YQ };
   delete a.project;
@@ -11139,7 +10994,7 @@ test("3.1.3 build: args.project, never the origin slug, decides the ledger check
   assert.ok(!none0.labels.includes("infra:yaadgaar-read"));
   assert.ok(!none0.labels.includes("infra:yaadgaar-writeback"));
   assert.equal(none0.result.ledger_status, "failed");
-  assert.match(none0.result.write_back.ledger[0].reason, /no yadgarhq\/ project/);
+  assert.match(none0.result.write_back.ledger[0].reason, /no <owner>\/<repo> project/);
   assert.match(none0.result.write_back.ledger[0].section_text, /fleet:y622/);
   const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
   assert.equal(out.result.status, "ok", out.result.reason);
@@ -11220,12 +11075,14 @@ test("3.1.3 intake: a yadgar reason that echoes task_get(project_id=...) is rela
   assert.doesNotMatch(out.result.reason, /dropped/);
 });
 
-test("3.1.3 build: the yadgar ledger write-back takes args.project, independent of the origin slug", async () => {
-  const out = await run(happy(), { ...ARGS, project: "m-agahi/yadgar" });
+// 7.0.0 (yaadgaar #699): the yaadgaar write-back on a project outside yadgarhq/ (was the yadgar ledger)
+test("3.1.3 build: the ledger write-back takes args.project, independent of the origin slug", async () => {
+  const s = Object.assign(happy({ brief: YBRIEF }), { "infra:yaadgaar-read": yaadgaarRead(), "infra:yaadgaar-writeback": (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) }) });
+  const out = await run(s, { ...ARGS, input: "#622", project: "m-agahi/yadgar" });
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.equal(inputsOf(call(out, "intake").prompt).project, "m-agahi/yadgar");
-  assert.equal(inputsOf(call(out, "infra:ledger-read:pre").prompt).project, "m-agahi/yadgar");
-  assert.equal(inputsOf(call(out, "infra:ledger-writeback").prompt).project, "m-agahi/yadgar");
+  assert.equal(inputsOf(call(out, "infra:yaadgaar-read").prompt).project, "m-agahi/yadgar");
+  assert.equal(inputsOf(call(out, "infra:yaadgaar-writeback").prompt).project, "m-agahi/yadgar");
 });
 
 // ---------------------------------------------------------------- 3.1.3 review of PR #41

@@ -31,7 +31,10 @@ const RED = (p) => {
 };
 // the hashed maps of the forge's merge: the base changed a hashed key
 const HASHES_U = H(Object.assign({}, HASHES_FLAT, { "pyproject.toml#tool.pytest": "hp-base" }));
-const WRITTEN = (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((x) => ({ key: x.key, status: "written" })) });
+// 7.0.0 (yaadgaar #699): the default fixture's legacy ledger source is inert; the CI write-back is
+// its gate line and the section text it hands back
+const wbCi = (out) => out.build.logs.filter((l) => /^write-back ledger \(fleet:l42:ci\): /.test(l)).length;
+const wbLine = (out) => out.result.ci_write_back.write_back.ledger[0].section_text.split("\n")[0];
 
 // personal profile; the green PR is behind; update-branch moves it to D, a merge of the old head and C,
 // and the base change touches a PR file (overlap): the merge is fetched and reviewed again (v2)
@@ -49,7 +52,6 @@ function overlap(over) {
     "infra:review-cleanup:v2": { status: "ok", reason: "clean" },
     "infra:ci-watch:w1": GREEN,
     "infra:ci-watch:w2": GREEN,
-    "infra:ledger-writeback:ci": WRITTEN,
   });
   return Object.assign(t, over || {});
 }
@@ -74,8 +76,8 @@ test("6.0.1 D1: a CI red caused by the diff after an overlap update stops with c
   assert.equal(out.result.stop_gate, "ci", out.result.reason);
   assert.match(out.result.reason, /^CI red after update-branch, caused by the diff: test \(diff/);
   assert.ok(!L.includes("role:fleet-coder:r2"), L.join(", "));
-  assert.equal(L.filter((l) => l === "infra:ledger-writeback:ci").length, 1, L.join(", "));
-  assert.match(inputsOf(call(out, "infra:ledger-writeback:ci").prompt).section_text.split("\n")[0], /; stopped: ci_red$/);
+  assert.equal(wbCi(out), 1, L.join(", "));
+  assert.match(wbLine(out), /; stopped: ci_red$/);
 });
 
 test("6.0.1 D2: the re-review after update-branch diffs against the base tip the update relayed; the first review keeps the plan base", async () => {
@@ -245,7 +247,7 @@ test("6.0.1 (review S2/S3): review changes on the update-branch head stop with t
   const after = L.slice(L.indexOf("role:pr-review:v2"));
   assert.ok(!after.some((l) => /^role:fleet-pr-opener/.test(l)), L.join(", "));
   assert.ok(!L.some((l) => /^role:fleet-coder:r2|^infra:pr-merge:u1/.test(l)), L.join(", "));
-  assert.equal(L.filter((l) => l === "infra:ledger-writeback:ci").length, 1, L.join(", "));
+  assert.equal(wbCi(out), 1, L.join(", "));
 });
 
 // review N1: a resume restores update only with pr_updated true and two 40-hex shas; a corrupt record stops
@@ -268,7 +270,8 @@ test("6.0.1 (review N1): a resumed update record with base == head == approved_s
     assert.equal(out.result.status, "needs_human", JSON.stringify(u) + ": " + out.result.reason);
     assert.equal(out.result.stop_gate, "resume", out.result.reason);
     assert.match(out.result.reason, /^run-state mismatch: update record /);
-    assert.ok(!out.labels.some((l) => /^infra:(ci-watch|ledger-writeback)/.test(l)), out.labels.join(", "));
+    assert.ok(!out.labels.some((l) => /^infra:ci-watch/.test(l)), out.labels.join(", "));
+    assert.ok(!out.logs.some((l) => /^write-back ledger /.test(l)), "no write-back after the resume stop");
   }
 });
 test("6.0.1 (review N1): an update record with pr_updated not true is not restored (the classifier keeps the plan base)", async () => {

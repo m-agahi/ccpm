@@ -1,5 +1,55 @@
 # Changelog
 
+## [7.0.0] - 2026-11-15
+
+Fleet 7.0.0: every project's tasks live in yaadgaar; the yadgar ledger path is retired (yaadgaar
+#699, ADR-1269). The open yadgar ledger rows outside `yadgarhq/*` were migrated to yaadgaar with
+the title prefix `L<id>: ` and `legacy_ref` `urn:yadgar:ledger:<project>:<id>`. Jira, GitHub,
+Codeberg, plan and text inputs are unchanged. MAJOR: an `L<N>` id no longer builds, and no write
+reaches the yadgar ledger.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 7.0.0), then start a NEW session: the workflow
+  looks for its own `fleet/7.0.0/scripts` dir.
+- Build a task by its yaadgaar number (`#622`, `622`, `yaadgaar #622`). For a migrated task, find
+  the yaadgaar task whose title starts `L<N>: `.
+- A plan ref sealed before 7.0.0 with a `ledger` source still builds. Its write-back entry is
+  `unavailable` and carries the `section_text` to paste into the migrated yaadgaar task.
+
+### Changed
+
+- Intake: `ledger` is `yaadgaar` for every `args.project`, and for none. The prompt keeps one
+  ledger branch, `mcp__yaadgaar__read_task(number=...)`. An `L<N>` input stops `needs_human` and
+  names the migrated task's title prefix `L<N>: `. The prompt names no yadgar tool, `wiki_read` or
+  `body_slug`.
+- A yaadgaar source on a project outside `yadgarhq/` plans, builds and is written back through
+  `infra:yaadgaar-read` / `infra:yaadgaar-writeback`, with the same id, number, project and
+  session-project checks. The write-back needs an `<owner>/<repo>` `args.project`.
+- `ledgerAdapter`: `yaadgaar` for a yaadgaar source on any project, `tracker`, else `none`; never
+  `yadgar`. `LEDGER_TOOLS` and the preflight census hold `mcp__yaadgaar__read_task` only; the
+  no-ledger stop names only that tool.
+- A legacy `ledger` source (old sealed plan ref) is inert: no ledger step; one entry
+  `unavailable` with `section_text` (`failed` on a `yadgarhq/` project); `ledger_reason` says the
+  yadgar ledger is retired. Under confirm auto it is not re-read for rulings (the yadgar ledger is
+  frozen): the sealed brief is used and the intent judge gets `ledger_task: null`.
+- The no-project task-id blocker (confirm default) and the confirm-auto stop key on a missing
+  `args.project`. `ledgerProblem` still refuses a legacy `ledger` source on a `yadgarhq/` project.
+- The yaadgaar read and write-back prompts say "call no other task, memory or wiki tool" instead
+  of naming the yadgar ledger tools.
+- Skills: `build-task` and `plan-task` describe one ledger, yaadgaar, for every project.
+  `plan-task` writes the brief with `edit_task` (patch append, `expect_version`), files a new task
+  with `create_task`, and checks duplicates with `find_tasks` only.
+
+### Removed
+
+- The yadgar ledger write-back: `infra:ledger-read:pre|post`, `infra:ledger-writeback` and
+  `infra:ledger-body`, with `ledgerReadPrompt`, `ledgerWritebackPrompt`, `ledgerBodyPrompt`,
+  `writeBodies`, `ledgerRead`, `ledgerFor`, `ledgerToolNeeded`, `WRITER_AGENT`, `TASK_DATA` and
+  `TITLE_MAX`.
+- The 6.2.0 body-page intake check (`bodyPageProblem`, `BODY_PAGE_REASON`).
+- The `fleet:ledger-writer` agent (`agents/ledger-writer.md`).
+
 ## [6.3.4] - 2026-11-15
 
 Fleet 6.3.4: a large plan ref commits and loads without one agent copying all of it (ledger 2176).

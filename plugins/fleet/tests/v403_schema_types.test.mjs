@@ -376,8 +376,6 @@ const READS = {
   ledgerAdapter: {
     "sources array": "parsed: a cleanBrief source list (intake:brief.sources or the sealed plan ref)",
     "tools array": "parsed: state.ledgerTools (LEDGER_TOOLS filtered by preflight:ledger_tools)",
-    "project string": PARSED_ARGS,
-    "project string-re": PARSED_ARGS,
   },
   jsType: { "v array": "parsed: the drift check's own type helper" },
   typeMatches: { "v integer": "parsed: the drift check's own type helper" },
@@ -434,7 +432,8 @@ const READS = {
     "src.ref string": "intake:brief.sources[].ref",
     "b.plan_path string": "intake:brief.plan_path",
   },
-  ledgerFor: { "project string": PARSED_ARGS, "project string-re": PARSED_ARGS },
+  // 7.0.0 (yaadgaar #699): ledgerFor is gone; the legacy-source check tests the project prefix itself
+  ledgerProblem: { "project string": PARSED_ARGS, "project string-re": PARSED_ARGS },
   // 5.0.0 (R2, review of 88eb9b0): intake's all-absent stop
   noLedgerStop: { "t object": "intake:tried[]", "it.tried array": "intake:tried" },
   intakeHaltReason: {
@@ -446,14 +445,7 @@ const READS = {
     "t.error string": "intake:tried[].error",
   },
   yaadgaarProjectProblem: { "sources array": "intake:brief.sources", "s.project string": "intake:brief.sources[].project" },
-  // 6.2.0 (2058): a yadgar task body read from its body_slug page
-  bodyPageProblem: {
-    "it.tried array": "intake:tried",
-    "t object": "intake:tried[]",
-    "t.call string": "intake:tried[].call",
-    "s.body_slug string": "intake:brief.sources[].body_slug",
-    "t.project string": "intake:tried[].project",
-  },
+
   yaadgaarIdProblem: {
     "t.call string": "intake:tried[].call",
     "tried array": "intake:tried",
@@ -696,8 +688,8 @@ const READS = {
     "pr object": "infra:park",
     "pr.clean boolean": "prog:parked:clean",
     "pr.dirty array": "prog:parked:dirty",
-    // 6.0.0 (2040): intake's relaunch reason code; 6.2.0 (2058): the body-page reason code
-    "it.reason string": ["intake:reason", 2],
+    // 6.0.0 (2040): intake's relaunch reason code (7.0.0: the body-page reason code is retired)
+    "it.reason string": "intake:reason",
   },
   tinyRefProblem: {
     "t object": PARSED_ARGS,
@@ -847,20 +839,11 @@ const READS = {
     // release review of #48: the unmeasured-unit stop
     "u object": "role:gate-change-nonweakening-sweep:units[]",
   },
-  writeBodies: {
-    "ctx.project string": PARSED_ARGS,
-    "ctx.project string-re": PARSED_ARGS,
-    "t.title string": "infra:results[].title",
-    "r.results array": "infra:results",
-    "h.page_tags array": "infra:results[].page_tags",
-    "h.has_marker boolean": "infra:results[].has_marker",
-  },
+
   writeBack: {
-    // 5.0.0 (R2): args.project, the ledger scope
-    "project string-re": PARSED_ARGS,
-    "pre.results array": "infra:results",
-    "h.body_slug string": "infra:results[].body_slug",
-    "r.results array": ["infra:results", 2],
+    // 5.0.0 (R2): args.project, the ledger scope (7.0.0: the legacy-ledger check and the yaadgaar <owner>/<repo> check)
+    "project string-re": [PARSED_ARGS, 2],
+    "r.results array": "infra:results",
     "s.id string": "parsed: a cleanBrief source of the sealed plan ref",
     "rd.results array": "infra:results",
     "h.id string": "infra:results[].id",
@@ -1126,7 +1109,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.4\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/6\.3\.4\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.0\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.0\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

@@ -100,11 +100,12 @@ const SCENARIOS = {
 // 6.3.2 (2130): the ruleset-surface and hook-surface prompts say a non-null error with exit 0 is still status ok (the only change: with that sentence removed every pin is 6.3.1's; probe unchanged)
 // 6.3.3 (2144): the code judge's suite_result schema is JUDGE_SUITE (the only change: with the judge entry put back to SUITE every pin is 6.3.2's; probe unchanged)
 // 6.3.4 (2176): infra:plan-chunks:r0w0 (new plan call) carries the chunks; commit-plan carries none and relays bad_chunks; load-ref reads in part mode; bad_chunks, written and part in INFRA_SCHEMA (probe unchanged)
+// 7.0.0 (yaadgaar #699): the intake prompt has one ledger branch (yaadgaar) and no body page read; the preflight census asks for mcp__yaadgaar__read_task only (the probe pin moves); the reworded yaadgaar read and write-back prompts; no infra:ledger-read:pre, infra:ledger-writeback or their :ci calls (4 fewer build calls on the default legacy ledger fixture)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 88, sha256: "5aafe813d4a2a9bdd6aa1df742d2f756924fc7492a51eab853dffe38fcf4cbe8" },
-  "confirm auto (gates, then build in one run)": { calls: 90, sha256: "853cfe0372f103bb20dae563254892e3c2fe1d97ed5f05aead7b31463b35c734" },
-  "short path (one test writer)": { calls: 87, sha256: "aef7914da489503b5b8784fc419886d0f29569f7728dff626bfd5199ca075a66" },
-  "probe": { calls: 2, sha256: "b6976644cdb9345851ac461a293688c2299952b462ba087a39958a03ae13b393" },
+  "plan then build (confirm ask)": { calls: 84, sha256: "33a7c9629011f5ba537d7fbcc7f9287a619b58674d55e9baa60c07ed3d4c1e16" },
+  "confirm auto (gates, then build in one run)": { calls: 86, sha256: "d312e9d7609e851044a61439c431c29b46ffb58c26cec66172ecb6274980adc9" },
+  "short path (one test writer)": { calls: 83, sha256: "e013c6132f9829e45295887fb0f5953991034df21d240ab4ec2c944b8bae6b5d" },
+  "probe": { calls: 2, sha256: "a8ceccc781cf8954f6b925f6d96462387d40cede1db8d318d28eb0441753e8de" },
 };
 
 for (const [name, fn] of Object.entries(SCENARIOS)) {

@@ -522,8 +522,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // the result is made
   // 6.0.0 (ledger 2033): + infra:policy
   // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
-  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 66);
+  // 7.0.0 (yaadgaar #699): - the legacy ledger read and write (main and :ci): the source is inert
+  assert.equal(out.build.calls.length, 63, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 62);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -548,7 +549,7 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "6.3.4");
+  assert.equal(p.fleet_version, "7.0.0");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
   assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/5.0.8/scripts"), "no scripts dir or PATH check sealed");
@@ -593,7 +594,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     assert.equal(b.result.status, "ok", b.result.reason);
     // 5.0.6 (ledger 2019): 50 + 7 build-dir resets + the teardown
     // 6.0.0 (ledger 2033): + infra:policy; review S6, S7a: + 3
-    assert.equal(b.calls.length, 67);
+    // 7.0.0 (yaadgaar #699): - 4 legacy ledger steps
+    assert.equal(b.calls.length, 63);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });
@@ -608,7 +610,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 6\.3\.4/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 7\.0\.0/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });

@@ -929,7 +929,8 @@ test("4.0.0 1991: SKILL.md passes confirm default and documents confirm_reason a
   assert.match(skill, /confirm: "<default \| ask \| auto>"/);
   assert.match(skill, /`confirm: "default"`: the result is one of three/);
   assert.match(skill, /show\s+`confirm_reason`/);
-  assert.match(skill, /`ledger_source`, when it is not null: the ledger \(`ledger` or `yaadgaar`\)/);
+  // 7.0.0 (yaadgaar #699): one ledger, yaadgaar; `ledger` only on a plan ref sealed before 7.0.0
+  assert.match(skill, /`ledger_source`, when it is not null: the ledger \(`yaadgaar`; `ledger` only on a plan ref\s+sealed before 7\.0\.0\)/);
   assert.match(skill, /not a security boundary/);
 });
 

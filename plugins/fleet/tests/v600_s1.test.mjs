@@ -248,7 +248,9 @@ test("6.0.0 2043: resumed at pr_open, review changes_requested -> a coder round 
   assert.equal(inputsOf(call(out, "infra:push").prompt).approved_sha, CSHA(2));
   assert.equal(inputsOf(call(out, "role:fleet-pr-opener:p2").prompt).approved_sha, CSHA(2));
   assert.equal(inputsOf(call(out, "role:pr-review:v2").prompt).head_sha, CSHA(2));
-  assert.ok(out.labels.includes("infra:ledger-writeback"));
+  // 7.0.0 (yaadgaar #699): the write-back still runs after the review; the legacy ledger source is inert
+  assert.ok(out.logs.some((l) => /^write-back ledger \(fleet:l42\): 42=unavailable$/.test(l)), out.logs.join("\n"));
+  assert.equal(out.result.ledger_status, "unavailable");
   assert.equal(out.result.rounds.code, 2);
   assert.equal(out.result.review.verdict, "approve");
 });

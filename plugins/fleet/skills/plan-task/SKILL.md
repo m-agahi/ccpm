@@ -2,12 +2,12 @@
 name: plan-task
 description:
   Brainstorm and refine an idea, bug, ticket or prompt into a buildable Fleet brief before the fleet
-  plans it. Use when the user runs /plan-task, or asks to "plan L123", "refine this ticket", "turn
+  plans it. Use when the user runs /plan-task, or asks to "plan task 123", "refine this ticket", "turn
   this idea into a task", "brainstorm this before we build it", or when the input to /build-task is
   vague (no observable outcome, no place in the code, no non-goals). Runs in the main session, asks
   one question at a time, writes the brief into the task body only after the user approves the
   exact text, and hands off to /build-task. Never builds, never runs a workflow.
-argument-hint: "[--fast] <ledger id | Jira key | issue or PR URL | plan path | description>"
+argument-hint: "[--fast] <task id | Jira key | issue or PR URL | plan path | description>"
 allowed-tools:
   - AskUserQuestion
   - Bash(git rev-parse *)
@@ -32,7 +32,7 @@ judges of buildability.
 ## Usage
 
 ```
-/plan-task <ledger id | Jira key | issue or PR URL | plan path | description>
+/plan-task <task id | Jira key | issue or PR URL | plan path | description>
 /plan-task --fast <input>        # no brainstorm: triage, draft, check, write-back
 ```
 
@@ -63,8 +63,8 @@ or Jira. Say so when the user asks for one.
 6. **Write gate.** Every external write shows its exact text first and needs Max's explicit
    "Write". Writes append or add a marked section; never replace a whole body. No write to a
    target repo at all: plan-task writes no plan file, no doc, no branch.
-7. **Never change a task's status.** Do not call `transition_task`, and never pass a status to
-   `task_write`. You may suggest a move; Max decides.
+7. **Never change a task's status.** Do not call `transition_task`. You may suggest a move; Max
+   decides.
 8. **Work trackers: Show only.** For `quinyx/*`, `concrete-media/**`, any Jira key and any owner
    you do not know, only show the brief for Max to paste. In this release GitHub and Codeberg
    issues of personal owners (`m-agahi/*`, `maxagahi/*`, `yadgarhq/*`) are also Show only.
@@ -109,10 +109,10 @@ or Jira. Say so when the user asks for one.
 
 3. **Intake (read only).** Resolve the item the way `/build-task` intake does:
 
-   - a ledger task id: on a `yadgarhq/` project, yaadgaar `read_task` (a number like `622` or
-     `#622` is a yaadgaar task); otherwise yadgar `task_get(project_id=<project>, id=<id>)`, then
-     `wiki_read` of its `body_slug` when it has one. Keep the task's `version` (yaadgaar) or
-     `title` and `body_slug` (yadgar) for step 9.
+   - a task id: every project keeps its tasks in yaadgaar. Read it with yaadgaar `read_task` (a
+     number like `622` or `#622` is a yaadgaar task). A legacy `L622` id: the migrated task carries
+     the title prefix `L622: `; ask Max for its yaadgaar number. Keep the task's `id` and `version`
+     for step 9.
    - a Jira key: read the issue with the session's Jira read tool; it must name exactly one repo.
    - a GitHub or Codeberg issue or PR URL: read it with the read tool the session has.
    - a `.md` path inside the repo: read the file. A path outside the repo is plain text.
@@ -127,15 +127,15 @@ or Jira. Say so when the user asks for one.
 
 4. **Triage.** Classify before any question and tell Max the class in one line:
 
-   | Class               | Signal                                                                | Action                                                                                                                                                    |
-   | ------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | Buildable now       | Outcome, place and non-goals are clear                                | Skip to step 6                                                                                                                                            |
-   | Needs brainstorm    | Outcome, place or non-goals missing                                   | Step 5                                                                                                                                                    |
-   | Too big             | More than one component, about 400+ lines, several outcomes           | Propose child tasks (title and one-line outcome each). Create nothing in this release; Max files them or runs plan-task per child                         |
-   | Needs a decision    | Two valid designs with a real trade-off                               | Draft the ADR question (context, options, recommendation) under Open decisions and ask it in step 5. Never call `adr_add`                                 |
-   | IaC or hook surface | A path that rule 5 names                                              | Stop the brainstorm. Draft a brief whose Out of plan lists the paths and the `MIGRATION_NOTES.md` hand-off, show it, and do not hand off to `/build-task` |
-   | Duplicate           | Same outcome in another open task (`find_tasks` index or `task_list`) | Show the candidate and stop unless Max says it is not a duplicate. Write no link in this release                                                          |
-   | Already fixed       | The text describes behaviour the code may already have                | Note it under Draft ("may not reproduce; plan mode checks"). The planner stops with "does not reproduce" when that is true                                |
+   | Class               | Signal                                                      | Action                                                                                                                                                    |
+   | ------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Buildable now       | Outcome, place and non-goals are clear                      | Skip to step 6                                                                                                                                            |
+   | Needs brainstorm    | Outcome, place or non-goals missing                         | Step 5                                                                                                                                                    |
+   | Too big             | More than one component, about 400+ lines, several outcomes | Propose child tasks (title and one-line outcome each). Create nothing in this release; Max files them or runs plan-task per child                         |
+   | Needs a decision    | Two valid designs with a real trade-off                     | Draft the ADR question (context, options, recommendation) under Open decisions and ask it in step 5. Never call `adr_add`                                 |
+   | IaC or hook surface | A path that rule 5 names                                    | Stop the brainstorm. Draft a brief whose Out of plan lists the paths and the `MIGRATION_NOTES.md` hand-off, show it, and do not hand off to `/build-task` |
+   | Duplicate           | Same outcome in another open task (`find_tasks` index)      | Show the candidate and stop unless Max says it is not a duplicate. Write no link in this release                                                          |
+   | Already fixed       | The text describes behaviour the code may already have      | Note it under Draft ("may not reproduce; plan mode checks"). The planner stops with "does not reproduce" when that is true                                |
 
 5. **Brainstorm** (skipped with `--fast`). Ask with AskUserQuestion, **one question per call**, at
    most **8** questions in all, and only questions whose answer the item does not already give:
@@ -183,7 +183,7 @@ or Jira. Say so when the user asks for one.
 9. **Write-back** (only after "Write"). Load the ledger tools with ToolSearch and read their
    schemas first. A tool is absent -> write nothing, show the text, say so.
 
-   - **yaadgaar** (`yadgarhq/*` projects). Never use the yadgar ledger for these projects.
+   - **A task** (yaadgaar, every project):
      1. `read_task(id)` for the body and `version`. The body now carries the marker -> write
         nothing.
      2. Pick `<tail>`: the end of the body, long enough to occur exactly once in it.
@@ -192,26 +192,14 @@ or Jira. Say so when the user asks for one.
         body -> `edit_task` with `expect_version` and `body` = `<brief>`.
      4. `VERSION_MISMATCH` -> read again and retry once. Any other refusal -> stop and show the
         text.
-   - **yadgar ledger** (other projects): `task_get(project_id=<project>, id=<id>)`.
-     1. With a `body_slug`: `wiki_read(slug=<body_slug>, project=<project>)`. The marker is
-        there -> write nothing. Else `wiki_append_section` with `slug` = `<body_slug>`,
-        `section_heading` = `Fleet brief (plan-task, <date>)`, `content` = the brief without its
-        first heading line, `position` = `new_section_bottom` and `project` = `<project>`.
-     2. With no `body_slug`: `wiki_add` with `title` = `Task <id> body (fleet)`, `content` =
-        `<brief>`, `slug` = `<owner>_<repo>_task-<id>` (the project with its first `/` as `_`),
-        `project` = `<project>`, `category` = `reference`,
-        `tags` = `["task-body", "fleet", "ledger-<id>"]` and `upsert` = `False`. A `slug_exists`
-        answer -> stop and show the text. Then `task_write` with `project_id`, `id`, `title` =
-        the current title byte for byte, and `body_slug` = the slug. Pass no status.
    - **Plain text or a plan path** (no task): offer AskUserQuestion "File as a new task" / "Show
-     only". On "File": for `yadgarhq/*`, yaadgaar `create_task` with `title`, `body` =
-     `<brief>` and `idempotency_key` = `plan-task:<date>:<title slug>`; else yadgar `task_write`
-     with `project_id` and `title`, then the body page as above. Never file in both ledgers.
+     only". On "File": yaadgaar `create_task` with `title`, `body` = `<brief>` and
+     `idempotency_key` = `plan-task:<date>:<title slug>`.
 
    After a write, read the task again and confirm the marker is there exactly once. Report what
    you wrote and where.
 
-10. **Hand-off.** Print the next command, for example `/build-task L2058`, and stop. Max types it.
+10. **Hand-off.** Print the next command, for example `/build-task #622`, and stop. Max types it.
     A task whose body carries the marker always gets the plan confirmation in `/build-task`
     (`confirm: "ask"`, ADR-1219), so the brief never starts an unattended build. Suggest a status
     move only when it helps; never make it.

@@ -307,7 +307,9 @@ test("AC-1992: a build without project uses the sealed project for the ledger an
   const tiny = await planRefFor(s);
   const out = await runOne(s, buildArgs(tiny, { project: undefined }));
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.equal(inputsOf(call(out, "infra:ledger-writeback").prompt).project, "o/r");
+  // 7.0.0 (yaadgaar #699): the legacy ledger source is inert: no ledger step, one unavailable entry
+  assert.ok(!out.labels.some((l) => /^infra:ledger-/.test(l)), out.labels.join(", "));
+  assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["42", "unavailable"]]);
   assert.ok(out.result.gate_log.some((g) => /project o\/r from the sealed plan ref/.test(g)));
 });
 

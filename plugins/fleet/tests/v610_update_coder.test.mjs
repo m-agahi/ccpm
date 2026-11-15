@@ -64,8 +64,10 @@ function upd(over, moved) {
   return Object.assign(t, over || {});
 }
 const L_ = (out) => out.build.labels;
-const wbCi = (out) => L_(out).filter((l) => l === "infra:ledger-writeback:ci").length;
-const wbLine = (out) => inputsOf(call(out, "infra:ledger-writeback:ci").prompt).section_text.split("\n")[0];
+// 7.0.0 (yaadgaar #699): the default fixture's legacy ledger source is inert; the CI write-back is
+// its gate line and the section text it hands back
+const wbCi = (out) => out.build.logs.filter((l) => /^write-back ledger \(fleet:l42:ci\): /.test(l)).length;
+const wbLine = (out) => out.result.ci_write_back.write_back.ledger[0].section_text.split("\n")[0];
 function noCoder(out) {
   const L = L_(out);
   assert.ok(!L.some((l) => /^role:fleet-coder:r2|^infra:commit:r2|^infra:pr-merge:u1/.test(l)), L.join(", "));

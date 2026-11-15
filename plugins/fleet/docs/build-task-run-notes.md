@@ -11,6 +11,15 @@ the declaration the block sat before (top level) or in (inside a function), and 
 obvious from the code, the workflow keeps a one-line comment that states it. Section dividers and
 the `*_BEGIN` / `*_END` markers stay in the workflow.
 
+Fleet 7.0.0 (yaadgaar #699) retired the yadgar ledger: every project's tasks live in yaadgaar. The
+entries of the code it deleted (`WRITER_AGENT`, `ledgerReadPrompt`, `ledgerFor`,
+`ledgerToolNeeded`, `writeBodies`, `ledgerRead` and the yadgar ledger part of `writeBack`) are
+gone from this file. The entries below that still name the yadgar ledger (`LEDGER_TOOLS`,
+`ledgerAdapter`, `ledgerProblem`, `rereadBrief`, `writeBack`) are 5.0.9 history: since 7.0.0
+`LEDGER_TOOLS` holds `mcp__yaadgaar__read_task` only, `ledgerAdapter` never returns `yadgar`, a
+legacy `ledger` source is never read or written, and the yaadgaar write-back runs for every
+`<owner>/<repo>` project.
+
 ### `before ROLES` (5.0.9 line 26)
 
 ```text
@@ -244,12 +253,6 @@ confirm "auto" G2: the only check_cmd shape the auto gate accepts.
 
 ```text
 confirm "auto" G3 scope fence over every planned path and command.
-```
-
-### `before WRITER_AGENT` (5.0.9 line 223)
-
-```text
-The ledger body write (3.1.0): MCP only; no shell, no file tools, no yaadgaar writes.
 ```
 
 ### `before LEDGER_PROJECT_RE` (5.0.9 line 225)
@@ -1975,14 +1978,6 @@ Reads the run-state ref: {exists, target, message, head, head_tree, clean}.
 program: scripts/read_state.py (PROGRAM_SHA256 holds its sha256)
 ```
 
-### `before ledgerReadPrompt` (5.0.9 line 3737)
-
-```text
-The body-page write-back for a yadgar ledger task with no body_slug (3.1.0,
-ledger 1958). A judge read before and after the write; the script compares
-the titles and checks the slug it computed itself.
-```
-
 ### `before yaadgaarReadPrompt` (5.0.9 line 3770)
 
 ```text
@@ -2477,13 +2472,6 @@ null and the steps that need gh stop or fail softly where they run
 Brief from intake, or from a plan_ref: shape checked in code.
 ```
 
-### `before ledgerFor` (5.0.9 line 4550)
-
-```text
-Which task ledger a project uses: yaadgaar for yadgarhq/*, else yadgar.
-3.1.3 (ledger 1979): no project -> "either": intake tries both.
-```
-
 ### `before LEDGER_TOOLS` (5.0.9 line 4557)
 
 ```text
@@ -2504,12 +2492,6 @@ try the tool); else "tracker" when a GitHub, Codeberg or Jira source exists
 (the marked comment is the whole write-back, Max's ruling 2026-11-10); else
 "none". A yadgarhq/ project never uses the yadgar ledger (ADR-0994).
 Project problems of a ledger stay the write-back's own `failed` entries.
-```
-
-### `before ledgerToolNeeded` (5.0.9 line 4585)
-
-```text
-The ledger tool a project's ledger needs (5.0.0, R2), for the stop reason.
 ```
 
 ### `before noLedgerStop` (5.0.9 line 4591)
@@ -4042,39 +4024,6 @@ a plan_wrong re-plan always ends at awaiting_confirmation: no extra rounds
 the re-plan worktree sits at the approved plan commit (plan-only)
 ```
 
-### `before writeBodies` (5.0.9 line 7723)
-
-```text
-A yadgar ledger task with no body page (3.1.0, ledger 1958). The title
-comes from the judge read writeBack makes first (infra:ledger-read:pre);
-the narrow writer re-reads the task and writes nothing when its title
-differs, creates the page at the slug this script computes,
-{project with / as _}_task-<id>, and links it with task_write (which writes
-the title on every call, so the title read goes back unchanged); then a
-judge reads the task again: the title must be unchanged, body_slug the
-computed slug and the page must carry the marker. The title check works at
-the relay level only: task_write cannot leave the title out. Returns
-{key: {status, reason}} for every task given.
-```
-
-### `in writeBodies` (5.0.9 line 7769)
-
-```text
-5.0.0 (R3): the step found no write tool: nothing written, not a failure
-```
-
-### `in writeBodies` (5.0.9 line 7783)
-
-```text
-the page at the slug must be this project's page of this task (a_b/c and a/b_c share a slug)
-```
-
-### `before ledgerRead` (5.0.9 line 7792)
-
-```text
-A read-only judge read of yadgar ledger tasks: title, body_slug, marker.
-```
-
 ### `before writeBack` (5.0.9 line 7801)
 
 ```text
@@ -4093,25 +4042,6 @@ unavailable: nothing written, the section handed back.
 
 ```text
 5.0.9: a yaadgaar entry unavailable for want of the session proof (the tool is there)
-```
-
-### `in writeBack` (5.0.9 line 7821)
-
-```text
-(a) ledger. 3.1.0: a judge reads every task first; a task with a body
-page goes to the append step, one without to writeBodies.
-```
-
-### `in writeBack` (5.0.9 line 7829)
-
-```text
-a yadgarhq/ project never writes the yadgar ledger (failed, as before 5.0.0; intake refuses that source first)
-```
-
-### `in writeBack` (5.0.9 line 7863)
-
-```text
-a no_body here means the body page went away between the reads: never written
 ```
 
 ### `in writeBack` (5.0.9 line 7878)
