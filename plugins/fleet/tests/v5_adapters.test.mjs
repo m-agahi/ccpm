@@ -16,7 +16,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SOURCE, ARGS, BRIEF, happy, run, runOne, inputsOf, call, noUnscripted } from "./harness.mjs";
+import { SOURCE, ARGS, BRIEF, happy, run, runOne, inputsOf, call, noUnscripted, sealLegacyLedger } from "./harness.mjs";
 
 const YGET = "mcp__yadgar__task_get";
 const YREAD = "mcp__yaadgaar__read_task";
@@ -140,7 +140,8 @@ function absentIntake(prompt) {
 }
 
 test("5.0.0 R2 (review of 88eb9b0): census [] + a task id still dispatches intake; intake reporting absent stops with the plain sentence", async () => {
-  for (const input of ["L123", "123", "#123", "yaadgaar #123"]) {
+  // (7.0.0 review F1: an L<N> input stops before intake; v700_legacy_gate)
+  for (const input of ["123", "#123", "yaadgaar #123"]) {
     for (const project of ["m-agahi/x", "yadgarhq/docs", undefined]) {
       const a = { ...ARGS, input, confirm: "ask" };
       if (project === undefined) delete a.project;
@@ -192,8 +193,8 @@ test("5.0.0 R2 (review of 88eb9b0): a wrong census [] for a yaadgaar user: intak
 
 test("5.0.0 R2 (review of 88eb9b0): an intake stop that is not all-absent keeps today's reason", async () => {
   const s = withCensus([]);
-  s.intake = { status: "needs_human", reason: "task 123 not found", tried: [{ ledger: "yadgar", project: "o/r", call: "task_get(project_id=o/r, id=123)", error: "not found" }] };
-  const out = await runOne(s, { ...ARGS, input: "L123", confirm: "ask" });
+  s.intake = { status: "needs_human", reason: "task 123 not found", tried: [{ ledger: "yaadgaar", project: "o/r", call: "read_task(number=123)", error: "not found" }] };
+  const out = await runOne(s, { ...ARGS, input: "#123", confirm: "ask" });
   assert.equal(out.result.status, "needs_human");
   assert.doesNotMatch(out.result.reason, NO_LEDGER);
   assert.match(out.result.reason, /not found/);
@@ -202,7 +203,12 @@ test("5.0.0 R2 (review of 88eb9b0): an intake stop that is not all-absent keeps 
 test("5.0.0 R2: census with mcp__yadgar__task_get, project m-agahi/x (7.0.0): not a ledger tool; a legacy source is inert", async () => {
   const s = withCensus([YGET]);
   s.workspace = { ...s.workspace, remote_slug: "m-agahi/x" };
-  const out = await run(s, { ...ARGS, project: "m-agahi/x", confirm: "ask" });
+  // 7.0.0 review F1: plan mode refuses a legacy source; a ref sealed before 7.0.0 carries one
+  const plan = await runOne(s, { ...ARGS, project: "m-agahi/x", confirm: "ask" });
+  assert.equal(plan.result.status, "awaiting_confirmation", plan.result.reason);
+  const old = sealLegacyLedger(s, plan.result.plan_ref);
+  const b = await runOne(s, { mode: "build", plan_ref: old, date: ARGS.date, project: "m-agahi/x" });
+  const out = { ...b, calls: plan.calls.concat(b.calls), labels: plan.labels.concat(b.labels), unscripted: plan.unscripted.concat(b.unscripted) };
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   const it = inputsOf(call(out, "intake").prompt);

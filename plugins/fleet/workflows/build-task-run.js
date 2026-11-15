@@ -652,7 +652,7 @@ results: {
 type: "array",
 items: {
 type: "object",
-properties: { key: STR, status: STR, has_marker: { type: "boolean" }, reason: STR, url: STR_OR_NULL, id: STR, version: { type: "integer" }, number: { type: "integer" }, project: STR, title: STR_OR_NULL, body_slug: STR_OR_NULL, page_project: STR_OR_NULL, page_tags: { type: "array", items: STR } },
+properties: { key: STR, status: STR, has_marker: { type: "boolean" }, reason: STR, url: STR_OR_NULL, id: STR, version: { type: "integer" }, number: { type: "integer" }, project: STR },
 required: ["key"],
 },
 },
@@ -661,7 +661,7 @@ required: ["key"],
 const SOURCE_SCHEMA = {
 type: "object",
 required: ["kind", "ref", "body"],
-properties: { kind: { type: "string", enum: SOURCE_KINDS }, ref: STR, url: STR_OR_NULL, body: STR, id: STR_OR_NULL, project: STR_OR_NULL, body_slug: STR_OR_NULL },
+properties: { kind: { type: "string", enum: SOURCE_KINDS }, ref: STR, url: STR_OR_NULL, body: STR, id: STR_OR_NULL, project: STR_OR_NULL },
 };
 const INTAKE_SCHEMA = {
 type: "object",
@@ -3690,6 +3690,12 @@ return "source ledger:" + s.ref + " is a legacy yadgar task, but project " + pro
 }
 return null;
 }
+const LEGACY_ID_RE = /^L\s*([0-9]+)$/i;
+function legacySourceProblem(brief) {
+const s = brief.sources.find((x) => x.kind === "ledger");
+if (!s) return null;
+return "source ledger:" + s.ref + " is a legacy yadgar ledger task: " + RETIRED_REASON + "; its migrated yaadgaar task carries the title prefix `L" + String(s.ref).replace(/^l\s*/i, "") + ": `; pass that task's yaadgaar number";
+}
 const TASK_ID_INPUT_RE = /^(?:L|#|yaadgaar\s*#)?\s*[0-9]+$/i;
 const PROJECT_ADVICE_RE = /\.yadgar\b|project[-_ ]?id/i;
 const ADVICE_DROPPED = "(dropped: it advised changing the repo's project identity; the ledger scope is args.project, never the repo)";
@@ -3725,14 +3731,17 @@ noAdvice(show(t.call)) +
 .join("; ")
 );
 }
+function sameProject(a, b) {
+return typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+}
 function yaadgaarScope(named, want) {
-if (typeof named === "string" && named) return named === want ? null : { why: "is in project " + JSON.stringify(named) + ", not args.project " + want };
+if (typeof named === "string" && named) return sameProject(named, want) ? null : { why: "is in project " + JSON.stringify(named) + ", not args.project " + want };
 if (!state.sessionProject) return { soft: true, why: "no proof of the session's yaadgaar project (session_project.py resolved none)" };
-return state.sessionProject === want ? null : { why: "the session's yaadgaar project is " + state.sessionProject + ", not " + want };
+return sameProject(state.sessionProject, want) ? null : { why: "the session's yaadgaar project is " + state.sessionProject + ", not " + want };
 }
 function yaadgaarProjectProblem(sources, project) {
 for (const s of Array.isArray(sources) ? sources : [])
-if (s && s.kind === "yaadgaar" && typeof s.project === "string" && s.project && s.project !== project)
+if (s && s.kind === "yaadgaar" && typeof s.project === "string" && s.project && !sameProject(s.project, project))
 return "source yaadgaar:" + s.ref + " is task " + JSON.stringify(s.id || null) + " of project " + s.project + ", not args.project " + (project || "(none)") + ": nothing sealed";
 else if (s && s.kind === "yaadgaar" && project && yaadgaarScope(s.project, project))
 return "source yaadgaar:" + s.ref + ": " + yaadgaarScope(s.project, project).why + ": nothing sealed";
@@ -4891,6 +4900,9 @@ const raw = typeof input.input === "string" ? input.input.trim() : "";
 const repo = cleanRepo(input.repo);
 if (!raw) stop("needs_human", "args.input missing: run /build-task <ledger id | Jira key | issue or PR URL | plan path | text>");
 if (!repo) stop("needs_human", "args.repo must be the absolute path of the caller's git toplevel");
+const legacyId = LEGACY_ID_RE.exec(raw);
+if (legacyId)
+stop("needs_human", "task id " + JSON.stringify(raw) + " is a legacy yadgar ledger id: " + RETIRED_REASON + "; its migrated yaadgaar task carries the title prefix `L" + legacyId[1] + ": `; run /build-task with that task's yaadgaar number");
 if (input.confirm === "auto" && input.unattended !== true && !input.project && TASK_ID_INPUT_RE.test(raw))
 stop("needs_human", "task id " + JSON.stringify(raw) + " with no args.project under confirm \"auto\": pass project, or run with confirm \"ask\" so Max sees which ledger and project it resolved to");
 await preflightStep(repo);
@@ -4910,7 +4922,7 @@ if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", 
 const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, input.project || null);
 if (problem) halt("needs_human", "intake: " + problem);
 const brief = cleanBrief(it.brief);
-const lp = ledgerProblem(brief, input.project) || yaadgaarIdProblem(brief, it.tried);
+const lp = legacySourceProblem(brief) || yaadgaarIdProblem(brief, it.tried);
 if (lp) halt("needs_human", "intake: " + lp);
 const names = namesFor(brief, raw);
 if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
@@ -5269,6 +5281,8 @@ if (it.status !== "ok") halt(it.status === "failed" ? "failed" : "needs_human", 
 const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, project || null);
 if (problem) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + ": " + problem);
 const fresh = cleanBrief(it.brief);
+const legacy = legacySourceProblem(fresh);
+if (legacy) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + ": " + legacy);
 if (fresh.repo !== brief.repo || !fresh.sources.some((x) => x.kind === src.kind && x.ref === src.ref && (src.kind !== "yaadgaar" || !src.id || x.id === src.id)))
 halt(
 "needs_human",
@@ -5401,11 +5415,7 @@ audits: ref.history.audits || 0,
 };
 gate("build " + lay.branch + " from plan " + ref.plan_path + " @ " + ref.plan_commit + " (run " + history.runs + ", re-plans so far " + history.replans + "); plan ref sha256 matches, seal ok");
 const project = input.project || ws.remoteSlug;
-const lpb =
-ledgerProblem(brief, input.project) ||
-(!input.project && brief.sources.some((x) => x.kind === "ledger")
-? "source ledger:" + brief.sources.find((x) => x.kind === "ledger").ref + " needs args.project (the yadgar ledger scope); re-run plan with project"
-: null);
+const lpb = ledgerProblem(brief, input.project);
 if (lpb) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + lpb + "; re-run plan");
 const defaultBranch = ws.defaultBranch;
 const remoteSlug = ws.remoteSlug;
@@ -7111,13 +7121,8 @@ comment_text: null,
 };
 const ledger = brief.sources.filter((s) => s.kind === "ledger");
 if (ledger.length) {
-let why = RETIRED_REASON + ": nothing written; paste the section into the migrated yaadgaar task (title prefix L<N>: )";
-let st = "unavailable";
-if (project && YAADGAAR_PROJECT_RE.test(project)) {
-why = "project " + project + " keeps its tasks in yaadgaar, not the yadgar ledger: nothing written";
-st = "failed";
-}
-for (const s of ledger) out.write_back.ledger.push({ ref: s.ref, status: st, reason: why, section_text: sectionText });
+const why = RETIRED_REASON + ": nothing written; paste the section into the migrated yaadgaar task (title prefix L<N>: )";
+for (const s of ledger) out.write_back.ledger.push({ ref: s.ref, status: "unavailable", reason: why, section_text: sectionText });
 gate("write-back ledger (" + marker + "): " + out.write_back.ledger.map((e) => e.ref + "=" + e.status).join(", "));
 }
 const yq = brief.sources.map((s, i) => Object.assign({ key: "s" + i }, s)).filter((s) => s.kind === "yaadgaar");
@@ -7125,13 +7130,14 @@ if (yq.length) {
 let results = null;
 let why = null;
 const tasks = yq.map((s) => ({ key: s.key, number: /^[1-9][0-9]*$/.test(String(s.ref)) ? Number(s.ref) : null, id: typeof s.id === "string" && s.id ? s.id : null }));
-if (!project || !LEDGER_PROJECT_RE.test(project)) why = "no <owner>/<repo> project to write to (args.project " + JSON.stringify(project) + ")";
+const yp = project || state.sessionProject || null;
+if (!yp || !LEDGER_PROJECT_RE.test(yp)) why = "no <owner>/<repo> project to write to (args.project " + JSON.stringify(project) + ", session project " + JSON.stringify(state.sessionProject) + ")";
 else if (tasks.some((t) => t.number === null)) why = "a yaadgaar ref is not a task number";
 else if (tasks.some((t) => t.id === null)) why = "the plan ref holds no task id for a yaadgaar source (sealed before 3.1.3): nothing was edited; re-run plan";
 else {
 const rd = await softDispatch(
 "infra:yaadgaar-read" + sfx,
-yaadgaarReadPrompt({ project, tasks, marker }),
+yaadgaarReadPrompt({ project: yp, tasks, marker }),
 { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Write-back" },
 );
 if (!rd || !Array.isArray(rd.results)) why = (rd && rd.reason) || "yaadgaar read agent returned no result";
@@ -7147,8 +7153,8 @@ else if (h.id !== t.id)
 results.push({ key: t.key, status: "failed", reason: "read: the id " + h.id + " is not the sealed " + t.id });
 else if (h.number !== t.number)
 results.push({ key: t.key, status: "failed", reason: "read: the id " + h.id + " is task number " + JSON.stringify(h.number === undefined ? null : h.number) + ", not " + t.number });
-else if (yaadgaarScope(h.project, project)) {
-const sc = yaadgaarScope(h.project, project);
+else if (yaadgaarScope(h.project, yp)) {
+const sc = yaadgaarScope(h.project, yp);
 if (sc.soft) noProof = sc.why;
 results.push({ key: t.key, status: sc.soft ? "unavailable" : "failed", reason: "read: task #" + t.number + " (" + h.id + "): " + sc.why + "; nothing written" });
 }
@@ -7159,7 +7165,7 @@ if (toEdit.length) {
 const r = await softDispatch(
 "infra:yaadgaar-writeback" + sfx,
 yaadgaarWritebackPrompt({
-project,
+project: yp,
 tasks: toEdit,
 section_heading: heading,
 section_text: sectionText,

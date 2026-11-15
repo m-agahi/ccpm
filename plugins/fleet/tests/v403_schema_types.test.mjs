@@ -372,6 +372,8 @@ const READS = {
   },
   preflightStep: { "pre.ledger_tools array": "preflight:ledger_tools", "x string": "preflight:ledger_tools[]", "sj object": "preflight:session_project", "sj.project string": "prog:session_project:project" },
   // 5.0.9 (ledger 2032)
+  // 7.0.0 review F5: a case-insensitive project key compare (typeof-guarded)
+  sameProject: { "a string": "parsed: a project key, typeof-checked here", "b string": "parsed: a project key, typeof-checked here" },
   yaadgaarScope: { "named string": "parsed: a yaadgaar answer's project (intake:brief.sources[].project or a yaadgaar-read results[].project), any JSON value" },
   ledgerAdapter: {
     "sources array": "parsed: a cleanBrief source list (intake:brief.sources or the sealed plan ref)",
@@ -841,8 +843,8 @@ const READS = {
   },
 
   writeBack: {
-    // 5.0.0 (R2): args.project, the ledger scope (7.0.0: the legacy-ledger check and the yaadgaar <owner>/<repo> check)
-    "project string-re": [PARSED_ARGS, 2],
+    // 7.0.0 review F5: the yaadgaar scope, args.project or else the digest-checked session_project (the <owner>/<repo> check)
+    "yp string-re": "parsed: the workflow args (project) or preflight:session_project.project (digest-checked)",
     "r.results array": "infra:results",
     "s.id string": "parsed: a cleanBrief source of the sealed plan ref",
     "rd.results array": "infra:results",

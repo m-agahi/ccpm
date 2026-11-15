@@ -78,9 +78,13 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
    workflow again with a new nonce; build mode resumes from its own run-state ref.
 
 4. **Project (optional).** Use the `<owner>/<repo>` project key from the session banner, if one is
-   shown, as `project`. It scopes ledger reads and the ledger write-back, and it is independent of
-   `repo`: a task from the session's project can be built in another repo. Otherwise omit it; then
-   intake reads the task from the session's yaadgaar project. Every project keeps its tasks in
+   shown, as `project`. It is a guard, not a selector: `read_task` is bound to the yaadgaar project
+   of the directory this session started in, and takes no project argument. So build a task id from
+   a session started in the task's own project. `project` then checks that the task read and the
+   write-back stay in that project (keys compare case-insensitively). It is independent of `repo`:
+   a task from the session's project can be built in another repo. Otherwise omit it; then intake
+   reads the task from the session's yaadgaar project, and the write-back uses the session project
+   that the preflight proved. Every project keeps its tasks in
    yaadgaar (7.0.0): a task id (`#622`, `622`, `yaadgaar #622`) is a yaadgaar task, read with
    `read_task`. A legacy `L622` id stops: the migrated yaadgaar task carries the title prefix
    `L622: `, so pass its yaadgaar number instead. The yaadgaar MCP server is not required: without

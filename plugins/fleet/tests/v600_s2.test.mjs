@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { SCRIPTS_SRC, ARGS, PC, PB, PBLOB, sha256, canon, happy, run, runOne, call, inputsOf, spawnSync, stateJsonOf } from "./harness.mjs";
+import { SCRIPTS_SRC, ARGS, BRIEF, PC, PB, PBLOB, sha256, canon, happy, run, runOne, call, inputsOf, spawnSync, stateJsonOf } from "./harness.mjs";
 
 const PY = spawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
 
@@ -324,8 +324,8 @@ test("6.0.0 2042a (security review): roles read the plan from the sealed plan co
   const out = await run(happy(), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
   const vp = call(out, "infra:verify-plan").prompt;
-  assert.ok(vp.includes("/plan_hash.py' '/r/.claude/worktrees/fleet-l42-add-thing/main' '" + PC + "' 'docs/plans/x.md'\n"), vp);
-  assert.ok(vp.includes("/verify_since.py' '/r/.claude/worktrees/fleet-l42-add-thing/main' '" + PB + "' 'docs/plans/x.md'"));
+  assert.ok(vp.includes("/plan_hash.py' '/r/.claude/worktrees/fleet-y42-add-thing/main' '" + PC + "' 'docs/plans/x.md'\n"), vp);
+  assert.ok(vp.includes("/verify_since.py' '/r/.claude/worktrees/fleet-y42-add-thing/main' '" + PB + "' 'docs/plans/x.md'"));
   assert.doesNotMatch(vp, /plan_hash_head|'HEAD' 'docs\/plans|plan_file/);
   for (const l of ["role:fleet-test-writer:AC1:r1", "role:fleet-test-judge:r1", "role:fleet-coder:r1", "role:fleet-code-judge:r1", "role:fleet-pr-opener"]) {
     const i = inputsOf(call(out, l).prompt);
@@ -372,7 +372,7 @@ test("6.0.0 2042a: a plan ref sealed before 6.0.0 (no plan_base) is refused with
   s.__store[PC] = JSON.stringify(ref) + "\n";
   const out = await runOne(s, BARGS({ result: { plan_ref: Object.assign({}, plan.result.plan_ref, { ref_sha256: sha256(s.__store[PC]) }) } }));
   assert.equal(out.result.status, "needs_human");
-  assert.equal(out.result.reason, "plan ref refs/fleet/l42/plan was sealed before 6.0.0 (its plan commit is on the branch, so the plan doc would ship): delete branch fleet/l42-add-thing, then re-run plan");
+  assert.equal(out.result.reason, "plan ref refs/fleet/y42/plan was sealed before 6.0.0 (its plan commit is on the branch, so the plan doc would ship): delete branch fleet/y42-add-thing, then re-run plan");
   assert.ok(!out.labels.includes("infra:verify-plan"));
 });
 
@@ -512,7 +512,7 @@ test("6.0.0 2042b: plan mode reads the convention after the ruleset surface and 
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const L = out.labels;
   assert.equal(L.indexOf("infra:pr-convention:plan"), L.indexOf("infra:ruleset-surface:plan") + 1);
-  assert.deepEqual(inputsOf(call(out, "infra:pr-convention:plan").prompt).args, ["/r/.claude/worktrees/fleet-l42-add-thing/main", "gh", "o/r", "master"]);
+  assert.deepEqual(inputsOf(call(out, "infra:pr-convention:plan").prompt).args, ["/r/.claude/worktrees/fleet-y42-add-thing/main", "gh", "o/r", "master"]);
   const pf = JSON.parse(s.__store[PC]).plan_facts;
   assert.equal(pf.component, "thing");
   assert.equal(pf.conventions.title.style, "conventional");
@@ -545,7 +545,7 @@ test("6.0.0 2042b (ruling 4): commit subjects and the PR title follow the sealed
     }
     for (const c of out.calls.filter((x) => /^infra:commit:|^role:fleet-pr-opener/.test(x.label))) {
       const i = inputsOf(c.prompt);
-      assert.ok(!/l42/.test(String(i.subject || "") + String(i.title || "")), c.label);
+      assert.ok(!/y42/.test(String(i.subject || "") + String(i.title || "")), c.label);
     }
   }
 });
@@ -557,7 +557,7 @@ test("6.0.0 2042b: verify knows fleet commits by the sealed subjects; the old ta
   s["infra:verify-plan"] = ok;
   let out = await runOne(s, BARGS(plan));
   assert.match(out.result.reason, /approved but unresumable/);
-  for (const subject of ["feat(l42): add thing", "fix(l42): code round 2", "fix(thing): code round x"]) {
+  for (const subject of ["feat(y42): add thing", "fix(y42): code round 2", "fix(thing): code round x"]) {
     s["infra:verify-plan"] = Object.assign({}, ok, { commits_since: [{ sha: "5555555", subject }] });
     out = await runOne(s, BARGS(plan));
     assert.match(out.result.reason, /non-fleet commit/, subject);
@@ -566,13 +566,13 @@ test("6.0.0 2042b: verify knows fleet commits by the sealed subjects; the old ta
 
 test("6.0.0 2042b: a PR opener that sets another title stops; a planner with no usable component gets the repo name", async () => {
   const s = happy();
-  s["role:fleet-pr-opener"] = Object.assign({}, s["role:fleet-pr-opener"], { title: "feat(l42): add thing" });
+  s["role:fleet-pr-opener"] = Object.assign({}, s["role:fleet-pr-opener"], { title: "feat(y42): add thing" });
   // 6.3.0: one scripted retry, wrong again
   s["role:fleet-pr-opener:again"] = s["role:fleet-pr-opener"];
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "role");
-  assert.match(out.result.reason, /^pr-opener set the PR title "feat\(l42\): add thing", not "feat\(thing\): add thing"/);
+  assert.match(out.result.reason, /^pr-opener set the PR title "feat\(y42\): add thing", not "feat\(thing\): add thing"/);
   const t = happy();
   t["role:scope-and-plan"] = Object.assign({}, t["role:scope-and-plan"], { component: "DEVOPS 12!" });
   const o2 = await runOne(t, ARGS);
@@ -679,7 +679,7 @@ test("6.0.0 2042b (security review): the workflow re-filters convention types, c
   s.__store[PC] = JSON.stringify(ref) + "\n";
   const out = await runOne(s, BARGS({ result: { plan_ref: Object.assign({}, plan.result.plan_ref, { ref_sha256: sha256(s.__store[PC]) }) } }));
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /^plan ref refs\/fleet\/l42\/plan: unsafe commit subject "feat\(x\$\(id\)\): add thing"; re-run plan$/);
+  assert.match(out.result.reason, /^plan ref refs\/fleet\/y42\/plan: unsafe commit subject "feat\(x\$\(id\)\): add thing"; re-run plan$/);
   assert.ok(!out.labels.some((l) => /^infra:commit:/.test(l)));
   const po = readFileSync(join(SCRIPTS_SRC, "..", "roles", "fleet-pr-opener.md"), "utf8");
   assert.match(po, /--title '<title>'/);
@@ -699,7 +699,7 @@ test("6.0.0 2042 (security review): plan_hash prints args and a digest; a relaye
   }
   for (const [fn, re] of [
     [(r) => ((r.plan_hash.blob = "c".repeat(40)), r), /^infra:verify-plan: the relayed plan hash does not match the program's digest, arguments or a full blob id/],
-    [(r) => ((r.plan_hash.args = ["/r/.claude/worktrees/fleet-l42-add-thing/main", "HEAD", "docs/plans/x.md"]), r), /^infra:verify-plan: the relayed plan hash does not match/],
+    [(r) => ((r.plan_hash.args = ["/r/.claude/worktrees/fleet-y42-add-thing/main", "HEAD", "docs/plans/x.md"]), r), /^infra:verify-plan: the relayed plan hash does not match/],
   ]) {
     const s = happy();
     const plan = await runOne(s, ARGS);
@@ -717,12 +717,12 @@ test("6.0.0 2042 (security review): plan_hash prints args and a digest; a relaye
 });
 
 test("6.0.0 2042b (ruling 4): a task id or source ref inside the task title never reaches the commit subject or the PR title", async () => {
-  const s = happy({ brief: { title: "L42: Add Thing (ABC-9)", description: "add a thing", sources: [{ kind: "ledger", ref: "42", url: null, body: "task body" }, { kind: "jira", ref: "ABC-9", url: null, body: "x" }], repo: "/r", plan_path: null } });
+  const s = happy({ brief: { title: "L42: Add Thing (ABC-9)", description: "add a thing", sources: [BRIEF.sources[0], { kind: "jira", ref: "ABC-9", url: null, body: "x" }], repo: "/r", plan_path: null } });
   const out = await run(s, ARGS);
   const cs = out.calls.filter((c) => /^infra:commit:r/.test(c.label)).map((c) => inputsOf(c.prompt).subject);
   const titles = out.calls.filter((c) => /^role:fleet-pr-opener/.test(c.label)).map((c) => inputsOf(c.prompt).title);
   assert.ok(cs.length, out.result.reason);
-  for (const x of cs.concat(titles)) assert.doesNotMatch(x, /l42|abc-9|abc 9/i, x);
+  for (const x of cs.concat(titles)) assert.doesNotMatch(x, /y42|abc-9|abc 9/i, x);
   assert.equal(cs[0], "feat(thing): add thing");
 });
 

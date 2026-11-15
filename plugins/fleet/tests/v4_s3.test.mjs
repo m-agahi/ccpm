@@ -211,7 +211,7 @@ test("4.0.0 1990: a haiku PATH check whose relay is broken is retried once on so
 
 // ---------------------------------------------------------------- 1988 settings.local.json
 
-const MAIN_WT = "/r/.claude/worktrees/fleet-l42-add-thing/main";
+const MAIN_WT = "/r/.claude/worktrees/fleet-y42-add-thing/main";
 const SETTINGS = ".claude/settings.local.json";
 // the bytes the workspace step writes (settingsFor in the script)
 const settingsFor = (wt) => JSON.stringify({ permissions: { allow: ["Edit(/" + wt + "/**)", "Write(/" + wt + "/**)"] } });
@@ -321,7 +321,7 @@ test("4.0.0 1988 AC-1988-3: only the exact path with the exact bytes of this wor
     [".claude/settings.local.json.bak", OWN],
     ["./.claude/settings.local.json", OWN],
     // another worktree's settings bytes
-    [SETTINGS, sha256(settingsFor("/r/.claude/worktrees/fleet-l42-add-thing/replan-1"))],
+    [SETTINGS, sha256(settingsFor("/r/.claude/worktrees/fleet-y42-add-thing/replan-1"))],
     [SETTINGS, "MISSING"],
   ]) {
     const s = happy();
@@ -413,7 +413,7 @@ test("4.0.0 1985 AC-1985-3: the probe is a dry run with hooks, right after its o
   noUnscripted(out);
   const c = call(out, "infra:push-probe");
   assert.match(c.prompt, /--dry-run/);
-  assert.match(c.prompt, /push --dry-run --porcelain origin 'B0:refs\/heads\/fleet\/l42-add-thing'/);
+  assert.match(c.prompt, /push --dry-run --porcelain origin 'B0:refs\/heads\/fleet\/y42-add-thing'/);
   assert.doesNotMatch(c.prompt, /--no-verify/);
   assert.doesNotMatch(c.prompt, /hooksPath/);
   assert.match(c.prompt, /push_probe\.py/);
@@ -523,8 +523,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // 6.0.0 (ledger 2033): + infra:policy
   // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
   // 7.0.0 (yaadgaar #699): - the legacy ledger read and write (main and :ci): the source is inert
-  assert.equal(out.build.calls.length, 63, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 62);
+  // 7.0.0 review F2: + the yaadgaar read and write (main and :ci): the default task is yaadgaar #42
+  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 66);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -594,8 +595,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     assert.equal(b.result.status, "ok", b.result.reason);
     // 5.0.6 (ledger 2019): 50 + 7 build-dir resets + the teardown
     // 6.0.0 (ledger 2033): + infra:policy; review S6, S7a: + 3
-    // 7.0.0 (yaadgaar #699): - 4 legacy ledger steps
-    assert.equal(b.calls.length, 63);
+    // 7.0.0 (yaadgaar #699): - 4 legacy ledger steps; review F2: + 4 yaadgaar steps (the default task)
+    assert.equal(b.calls.length, 67);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });

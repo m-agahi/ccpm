@@ -30,16 +30,39 @@ reaches the yadgar ledger.
   `yadgar`. `LEDGER_TOOLS` and the preflight census hold `mcp__yaadgaar__read_task` only; the
   no-ledger stop names only that tool.
 - A legacy `ledger` source (old sealed plan ref) is inert: no ledger step; one entry
-  `unavailable` with `section_text` (`failed` on a `yadgarhq/` project); `ledger_reason` says the
+  `unavailable` with `section_text`; `ledger_reason` says the
   yadgar ledger is retired. Under confirm auto it is not re-read for rulings (the yadgar ledger is
   frozen): the sealed brief is used and the intent judge gets `ledger_task: null`.
 - The no-project task-id blocker (confirm default) and the confirm-auto stop key on a missing
-  `args.project`. `ledgerProblem` still refuses a legacy `ledger` source on a `yadgarhq/` project.
+  `args.project`. In build mode, `ledgerProblem` still refuses a legacy `ledger` source when
+  `args.project` is a `yadgarhq/` project.
 - The yaadgaar read and write-back prompts say "call no other task, memory or wiki tool" instead
   of naming the yadgar ledger tools.
 - Skills: `build-task` and `plan-task` describe one ledger, yaadgaar, for every project.
   `plan-task` writes the brief with `edit_task` (patch append, `expect_version`), files a new task
   with `create_task`, and checks duplicates with `find_tasks` only.
+
+### Review round 1 (PR #72)
+
+- F1: the retired ledger is refused in script code, not prompt text. Plan mode stops
+  `needs_human` on an `L<N>` input (`/^L\s*\d+$/i`) before any agent runs, naming the title
+  prefix `L<N>: `. After intake, and after the confirm-auto re-read, a brief that names a `ledger`
+  source stops on every project (`legacySourceProblem`); nothing is sealed. Build mode still
+  accepts a legacy source from a ref sealed before 7.0.0. `fleet:judge` cannot call
+  `mcp__yadgar__task_get` or `mcp__yadgar__task_list`.
+- F3: the build-start stop "needs args.project (the yadgar ledger scope)" is gone: a legacy source
+  is inert, so an old ref with no project resumes to its `unavailable` write-back entry.
+- F4: the unreachable `failed` branch of the legacy write-back is removed (a `yadgarhq/`
+  `args.project` stops at build start, and the write-back `project` is `args.project`). The unread
+  `title`, `body_slug`, `page_project` and `page_tags` leave the infra results schema, and
+  `body_slug` leaves the intake source schema.
+- F5: `args.project` is a guard, not a selector. With no `args.project` the yaadgaar write-back
+  uses the digest-checked session project. Project keys compare case-insensitively
+  (`session_project.py` lowercases). `build-task` step 4 says to build a task from a session
+  started in its own project.
+- Tests: the harness default task is yaadgaar `#42` (task id `y42`), with default stubs for the
+  yaadgaar read and write-back (and `:ci`) and the confirm-auto re-read. Legacy tests build from a
+  re-sealed pre-7.0.0 ref (`sealLegacyLedger`).
 
 ### Removed
 

@@ -182,7 +182,7 @@ export function parkOut(prompt, over) {
   return { status: "ok", reason: "parked", park };
 }
 export function tfGateRelay(over) {
-  const r = Object.assign({ status: "ok", reason: "scanned", touched: false, iac_files: [], problems: [], hints: [], args: ["/r/.claude/worktrees/fleet-l42-add-thing/main", "master", "0".repeat(40), "git@github.com:o/r.git"] }, over);
+  const r = Object.assign({ status: "ok", reason: "scanned", touched: false, iac_files: [], problems: [], hints: [], args: ["/r/.claude/worktrees/fleet-y42-add-thing/main", "master", "0".repeat(40), "git@github.com:o/r.git"] }, over);
   r.digest = sha256(canon({ touched: r.touched, iac_files: r.iac_files, problems: r.problems, hints: r.hints, args: r.args }));
   return r;
 }
@@ -309,7 +309,7 @@ export async function runOne(script, args0) {
     let r = await agentInner(prompt, inner);
     // 5.0.9 (ledger 2032): the session's yaadgaar project: script.__session_project, else args.project
     if (base === "preflight" && r && typeof r === "object" && !rawResults.has(r) && !("session_project" in r))
-      r.session_project = sessionProjectOut("__session_project" in script ? script.__session_project : (args && args.project) || null);
+      r.session_project = sessionProjectOut("__session_project" in script ? script.__session_project : argsProject(args));
     if (r && typeof r === "object" && !rawResults.has(r)) r = fillPrograms(base, r, prompt);
     const mut = script.__mutate;
     if (mut && r && typeof r === "object" && (mut.label instanceof RegExp ? mut.label.test(base) : mut.label === base)) r = mut.fn(r, prompt, label);
@@ -682,7 +682,7 @@ export function noUnscripted(out) {
 
 export const ARGS = {
   mode: "plan",
-  input: "L42",
+  input: "#42",
   repo: "/r",
   project: "o/r",
   date: "2026-11-04",
@@ -694,10 +694,13 @@ export const PB = "b0de1234567";
 // the plan doc's own blob id, as verify resolves it with replacement objects off
 export const PBLOB = "b10b".repeat(10);
 export const PSHA = "a".repeat(64);
+// 7.0.0 review F2: the default task is the live path, yaadgaar task #42 (a legacy ledger source
+// is set explicitly by the tests that need one)
+export const YURN42 = "yadgar:task:0192aaaa-0000-7000-8000-000000000042";
 export const BRIEF = {
   title: "Add Thing!",
   description: "add a thing",
-  sources: [{ kind: "ledger", ref: "42", url: null, body: "task body" }],
+  sources: [{ kind: "yaadgaar", ref: "42", url: null, body: "task body", id: YURN42 }],
   repo: "/r",
   plan_path: null,
 };
@@ -818,8 +821,8 @@ export const BUILD_ROWS = [
   ["COVERAGE_FILE", "coverage"],
   ["TURBO_CACHE_DIR", "turbo-cache"],
 ];
-// the happy run's scratch dir (repo /r, task l42-add-thing)
-export const BUILD_SCRATCH = "/r/.claude/worktrees/fleet-l42-add-thing/scratch";
+// the happy run's scratch dir (repo /r, task y42-add-thing)
+export const BUILD_SCRATCH = "/r/.claude/worktrees/fleet-y42-add-thing/scratch";
 export function buildEnvOf(key, scratch = BUILD_SCRATCH, nonce = NONCE) {
   return Object.fromEntries(BUILD_ROWS.map(([k, sub]) => [k, scratch + "/build/" + nonce + "/" + key + "/" + sub]));
 }
@@ -1008,13 +1011,13 @@ export function refEntry(name, target, content) {
   return { name, tag_sha: "7".repeat(40), type: "tag", target, target_type: "commit", sha256: sha256(content), content };
 }
 
-// The plan refs of task l42 in the store: refs/fleet/l42/plan targets
+// The plan refs of task y42 in the store: refs/fleet/y42/plan targets
 // store.__planHead (PC when unset; null means no ref), and every earlier
-// plan ref is kept as refs/fleet/l42/plan-<n>. store[<commit>] is the tag
+// plan ref is kept as refs/fleet/y42/plan-<n>. store[<commit>] is the tag
 // message whose target is that commit.
 export function planRefsOf(store, taskId) {
   const out = [];
-  const t = taskId || store.__task || "l42";
+  const t = taskId || store.__task || "y42";
   const head = "__planHead" in store ? store.__planHead : PC;
   if (head && store[head] !== undefined) out.push(refEntry("refs/fleet/" + t + "/plan", head, store[head]));
   (store.__archived || []).forEach((h, i) => out.push(refEntry("refs/fleet/" + t + "/plan-" + (i + 1), h, store[h])));
@@ -1022,7 +1025,7 @@ export function planRefsOf(store, taskId) {
 }
 
 // commit-plan stub: the commit holds only plan_path; the sealed ref becomes
-// the tag message at refs/fleet/l42/plan (an earlier one is archived).
+// the tag message at refs/fleet/y42/plan (an earlier one is archived).
 export function commitStub(store, head, planSha) {
   return (prompt) => {
     // 6.3.4 (2176): the chunks are files the writer steps wrote; the program checks each against its sha256
@@ -1382,6 +1385,27 @@ export function triedFor(brief) {
   return (brief.sources || []).filter((x) => x.kind === "yaadgaar").map((x) => ({ ledger: "yaadgaar", project: null, call: "read_task(number=" + x.ref + ")", error: null }));
 }
 
+// 7.0.0 review F2: the default yaadgaar read (the sealed task, no marker yet) and write-back answers
+export function yaadgaarReadOk(prompt) {
+  return { status: "ok", reason: "read", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "ok", id: t.id, number: t.number, version: 3, has_marker: false })) };
+}
+export function yaadgaarWritten(prompt) {
+  return { status: "ok", reason: "written", results: inputsOf(prompt).tasks.map((t) => ({ key: t.key, status: "written" })) };
+}
+
+// args.project, of an args object or its JSON text (the workflow parses string args)
+function argsProject(args) {
+  let a = args;
+  if (typeof a === "string") {
+    try {
+      a = JSON.parse(a);
+    } catch {
+      a = null;
+    }
+  }
+  return (a && typeof a === "object" && a.project) || null;
+}
+
 export function happy(over = {}) {
   const crit = over.criteria || criteria(2);
   const store = {};
@@ -1395,6 +1419,12 @@ export function happy(over = {}) {
     // every role on sonnet (the shipped DISPATCH lines differ; v5_roles runs them)
     __dispatch: Object.fromEntries(ROLE_NAMES.map((k) => [k, "DISPATCH: model=sonnet"])),
     intake: { status: "ok", reason: "resolved", brief: over.brief || BRIEF, tried: over.tried || triedFor(over.brief || BRIEF) },
+    // 7.0.0 review F2: the yaadgaar re-read (confirm auto) and write-back steps of the default task
+    "intake:rulings": { status: "ok", reason: "re-read", brief: over.brief || BRIEF, tried: over.tried || triedFor(over.brief || BRIEF) },
+    "infra:yaadgaar-read": yaadgaarReadOk,
+    "infra:yaadgaar-read:ci": yaadgaarReadOk,
+    "infra:yaadgaar-writeback": yaadgaarWritten,
+    "infra:yaadgaar-writeback:ci": yaadgaarWritten,
     "infra:branch-scan": { status: "ok", reason: "scanned", head: PB, commits: [], refs: [] },
     "infra:stage-plan": { status: "ok", reason: "staged", plan_sha256: PSHA },
     "infra:commit-plan": commitStub(store, PC, PSHA),
@@ -1632,4 +1662,19 @@ export function chunksOf(c) {
 export function defsOut(defs, more) {
   const o = Object.assign({ defs, excluded: [], unclassified: [], unattributed: [] }, more || {});
   return { status: "ok", reason: "listed", ...o, digest: sha256(canon(o)) };
+}
+
+// 7.0.0 review F1: plan mode refuses a legacy ledger source in script code, so a test of the
+// inert legacy path builds from a plan ref sealed before 7.0.0: the store's sealed ref with its
+// brief sources rewritten to a legacy yadgar ledger task (and re-sealed). Returns the tiny ref.
+export const LEGACY_SOURCE = { kind: "ledger", ref: "42", url: null, body: "task body" };
+export function sealLegacyLedger(s, tiny, sources) {
+  const content = s.__store[tiny.plan_commit];
+  const ref = JSON.parse(content);
+  ref.brief.sources = sources || [LEGACY_SOURCE];
+  delete ref.seal;
+  ref.seal = sha256(canon(ref));
+  const next = JSON.stringify(ref) + (content.endsWith("\n") ? "\n" : "");
+  s.__store[tiny.plan_commit] = next;
+  return Object.assign({}, tiny, { ref_sha256: sha256(next) });
 }

@@ -119,7 +119,7 @@ test("6.0.0 2044: after the write-back the build writes a stats block of script 
   assert.match(block, /\| gates passed \| \d+ \|/);
   assert.ok(block.indexOf("https://github.com/m-agahi/ccpm") >= 0);
   // no internal path, run id, ledger id or session name
-  assert.doesNotMatch(block, /refs\/fleet|wf_|\/home\/|\/r\/|\bL\d+\b|fleet\/l42|n1-0000001|\.claude/);
+  assert.doesNotMatch(block, /refs\/fleet|wf_|\/home\/|\/r\/|\bL\d+\b|fleet\/y42|n1-0000001|\.claude/);
   assert.ok(out.build.logs.some((l) => /^infra:pr-stats: stats block added in /.test(l)), out.build.logs.join("\n"));
 });
 
@@ -450,8 +450,8 @@ const CHECKS_OK = { argv: ["pr", "checks"], out: [{ name: "test", state: "SUCCES
 test("6.0.0 2034 (review S3): pr_state.py merge: a direct merge first with --match-head-commit and --delete-branch; never --auto when it lands", () => {
   for (const auto of [true, false]) {
     const dir = fakeForge(
-      { state: "OPEN", headRefOid: SHA1, headRefName: "fleet/l42-add-thing", mergeStateStatus: "CLEAN" },
-      [REPO_OK({ autoMergeAllowed: auto }), CHECKS_OK, { argv: ["pr", "merge"], set: { state: "MERGED", mergeCommit: { oid: "e".repeat(40) } } }, { argv: ["api", "repos/o/r/branches/fleet/l42-add-thing"], err: "HTTP 404", code: 1 }],
+      { state: "OPEN", headRefOid: SHA1, headRefName: "fleet/y42-add-thing", mergeStateStatus: "CLEAN" },
+      [REPO_OK({ autoMergeAllowed: auto }), CHECKS_OK, { argv: ["pr", "merge"], set: { state: "MERGED", mergeCommit: { oid: "e".repeat(40) } } }, { argv: ["api", "repos/o/r/branches/fleet/y42-add-thing"], err: "HTTP 404", code: 1 }],
     );
     try {
       const o = prog("pr_state", dir, ["merge", "gh", "o/r", "7", SHA1]);
@@ -528,16 +528,16 @@ test("6.0.0 2034: pr_state.py rerun reruns each failed run once; cleanup removes
   dir = fakeForge({});
   try {
     const { wt: repo, git, env } = repoWith(dir, {});
-    const fw = join(repo, ".claude", "worktrees", "fleet-l42-x", "main");
-    git("worktree", "add", "-q", "-b", "fleet/l42-x", fw);
-    const bad = spawnSync(PY, ["-I", join(SCRIPTS_SRC, "pr_state.py"), "cleanup", repo, join(repo, "elsewhere"), "fleet/l42-x"], { encoding: "utf8", env });
+    const fw = join(repo, ".claude", "worktrees", "fleet-y42-x", "main");
+    git("worktree", "add", "-q", "-b", "fleet/y42-x", fw);
+    const bad = spawnSync(PY, ["-I", join(SCRIPTS_SRC, "pr_state.py"), "cleanup", repo, join(repo, "elsewhere"), "fleet/y42-x"], { encoding: "utf8", env });
     assert.notEqual(bad.status, 0, "a path outside .claude/worktrees/fleet-<key>/main is refused");
-    const r = spawnSync(PY, ["-I", join(SCRIPTS_SRC, "pr_state.py"), "cleanup", repo, fw, "fleet/l42-x"], { encoding: "utf8", env });
+    const r = spawnSync(PY, ["-I", join(SCRIPTS_SRC, "pr_state.py"), "cleanup", repo, fw, "fleet/y42-x"], { encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.deepEqual([o.error, o.removed, o.deleted], [null, true, true]);
-    assert.equal(git("branch", "--list", "fleet/l42-x"), "");
-    assert.ok(!git("worktree", "list").includes("fleet-l42-x"));
+    assert.equal(git("branch", "--list", "fleet/y42-x"), "");
+    assert.ok(!git("worktree", "list").includes("fleet-y42-x"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -622,7 +622,7 @@ test("6.0.0 2034: merge auto on a clean personal repo merges at the reviewed sha
   assert.ok(shippedAt > 0 && L.indexOf("infra:state:shipped") < L.indexOf("infra:fleet-cleanup"), L.join(", "));
   // the last run-state carries the CI result (a resume at shipped returns it)
   assert.deepEqual(stateJsonOf(call(out, "infra:state:shipped").prompt).ci, out.result.ci);
-  assert.deepEqual(inputsOf(call(out, "infra:fleet-cleanup").prompt).args, ["cleanup", "/r", "/r/.claude/worktrees/fleet-l42-add-thing/main", "fleet/l42-add-thing"]);
+  assert.deepEqual(inputsOf(call(out, "infra:fleet-cleanup").prompt).args, ["cleanup", "/r", "/r/.claude/worktrees/fleet-y42-add-thing/main", "fleet/y42-add-thing"]);
   assert.equal(out.result.ci.merged, true);
   assert.equal(out.result.ci.merge_sha, "e".repeat(40));
   assert.match(out.result.reason, /merged as e{40}, remote branch deleted/);

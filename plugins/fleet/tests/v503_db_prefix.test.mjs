@@ -82,8 +82,8 @@ function runUp(args, st) {
 }
 const IMG = "docker.io/library/mariadb@sha256:" + "d".repeat(64);
 const DBS = ["fleet_plan", "fleet_audit"];
-const UP = (extra) => ["up", "fleet-db-l42-1", IMG, "21600", "n1-0000001", JSON.stringify(DBS)].concat(extra || []);
-const ADD = (extra) => ["add", "fleet-db-l42-1", JSON.stringify(DBS)].concat(extra || []);
+const UP = (extra) => ["up", "fleet-db-y42-1", IMG, "21600", "n1-0000001", JSON.stringify(DBS)].concat(extra || []);
+const ADD = (extra) => ["add", "fleet-db-y42-1", JSON.stringify(DBS)].concat(extra || []);
 
 // the 5.0.2 statement, rebuilt from the printed users
 function sql502(users) {

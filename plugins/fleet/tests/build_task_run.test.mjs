@@ -113,6 +113,8 @@ import {
   countedCalls,
   roleTestEnv,
   buildEnvSites,
+  sealLegacyLedger,
+  YURN42,
 } from "./harness.mjs";
 
 
@@ -146,9 +148,9 @@ test("missing repo or date is rejected before any agent", async () => {
 test("branch name derives deterministically from a ledger id and title", async () => {
   const out = await run(happy(), ARGS);
   const ws = inputsOf(call(out, "workspace").prompt);
-  assert.equal(ws.branch, "fleet/l42-add-thing");
-  assert.equal(ws.main_worktree, "/r/.claude/worktrees/fleet-l42-add-thing/main");
-  assert.equal(out.result.branch, "fleet/l42-add-thing");
+  assert.equal(ws.branch, "fleet/y42-add-thing");
+  assert.equal(ws.main_worktree, "/r/.claude/worktrees/fleet-y42-add-thing/main");
+  assert.equal(out.result.branch, "fleet/y42-add-thing");
 });
 
 test("an ingested plan: task id p<sha256(plan path)[:8]>, slug from the brief title, plan_path forwarded in the brief", async () => {
@@ -230,7 +232,7 @@ test("full path: plan, audit, tests, freeze, code, judge, PR", async () => {
   // the frozen maps' files, one per map, which frozen_config_sections names
   assert.deepEqual(coder.frozen_tests, ["tests/test_a.py", "tests/test_b.py"]);
   assert.deepEqual(Object.keys(coder.frozen_config_sections).sort(), ["files", "git", "ignored", "sections", "symlinks"]);
-  for (const f of Object.values(coder.frozen_config_sections)) assert.match(f, /^\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch\/hashes\/[a-z]+-[0-9a-f]{64}\.json$/);
+  for (const f of Object.values(coder.frozen_config_sections)) assert.match(f, /^\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch\/hashes\/[a-z]+-[0-9a-f]{64}\.json$/);
   assert.deepEqual(frozenMap(coder, "files"), { "tests/test_a.py": "ha", "tests/test_b.py": "hb" });
   assert.deepEqual(frozenMap(coder, "sections"), { "pyproject.toml#tool.pytest": "hp" });
   assert.deepEqual(frozenMap(coder, "ignored"), {});
@@ -1367,7 +1369,7 @@ test("MI-2: fix_tests re-entry writers work in the fleet worktree on top of the 
   noUnscripted(out);
   assert.ok(!out.labels.some((l) => /^infra:(sync|integrate|prepare)/.test(l)));
   const w = inputsOf(call(out, "role:fleet-test-writer:AC1:r3").prompt);
-  assert.equal(w.worktree, "/r/.claude/worktrees/fleet-l42-add-thing/main");
+  assert.equal(w.worktree, "/r/.claude/worktrees/fleet-y42-add-thing/main");
   // the ownership delta starts at the code judge's tree, not the plan commit
   assert.equal(inputsOf(call(out, "hasher:post-writers:r3").prompt).base_tree, "K1");
   assert.ok(!out.labels.includes("hasher:pre-writers:r3"));
@@ -1710,7 +1712,7 @@ test("intake runs read-only, gets input, repo and project", async () => {
   assert.equal(c.opts.agentType, "fleet:judge");
   assert.equal(c.opts.model, "sonnet");
   // 5.0.0 (R2): intake also gets the ledger tool census; 7.0.0 (yaadgaar #699): one ledger, yaadgaar
-  assert.deepEqual(inputsOf(c.prompt), { input: "L42", repo: "/r", project: "o/r", ledger: "yaadgaar", ledger_tools: ["mcp__yaadgaar__read_task"] });
+  assert.deepEqual(inputsOf(c.prompt), { input: "#42", repo: "/r", project: "o/r", ledger: "yaadgaar", ledger_tools: ["mcp__yaadgaar__read_task"] });
   assert.match(c.prompt, /Read only/);
   assert.ok(out.labels.indexOf("intake") < out.labels.indexOf("workspace"));
 });
@@ -1756,12 +1758,12 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
   assert.deepEqual(r.plan_diff, ["new plan"]);
   assert.deepEqual(r.fleet_size, { criteria: 2, est_agents: 20, est_rounds: 1 });
   assert.equal(r.plan_path, "docs/plans/x.md");
-  // the caller gets a tiny ref; the full sealed ref is a local tag object at refs/fleet/l42/plan
+  // the caller gets a tiny ref; the full sealed ref is a local tag object at refs/fleet/y42/plan
   const tiny = r.plan_ref;
   assert.deepEqual(Object.keys(tiny).sort(), ["branch", "plan_commit", "plan_ref", "ref_sha256", "repo"]);
-  assert.equal(tiny.branch, "fleet/l42-add-thing");
+  assert.equal(tiny.branch, "fleet/y42-add-thing");
   assert.equal(tiny.plan_commit, PC);
-  assert.equal(tiny.plan_ref, "refs/fleet/l42/plan");
+  assert.equal(tiny.plan_ref, "refs/fleet/y42/plan");
   assert.equal(tiny.repo, "/r");
   const content = out.calls.length && richPlanStore(out);
   assert.equal(tiny.ref_sha256, sha256(content));
@@ -1809,19 +1811,19 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
   assert.match(cp, /a plan commit that is on no branch \(parent <plan_base>\)/);
   assert.doesNotMatch(cp, /`git -C <worktree> (add|commit)\b/);
   assert.deepEqual(inputsOf(cp), {
-    worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
-    branch: "fleet/l42-add-thing",
+    worktree: "/r/.claude/worktrees/fleet-y42-add-thing/main",
+    branch: "fleet/y42-add-thing",
     plan_path: "docs/plans/x.md",
-    task_id: "l42",
+    task_id: "y42",
     plan_base: PB,
-    chunk_dir: "/r/.claude/worktrees/fleet-l42-add-thing/scratch/plan-ref-n1-0000001",
+    chunk_dir: "/r/.claude/worktrees/fleet-y42-add-thing/scratch/plan-ref-n1-0000001",
   });
   // 2.1.4: the commit holds the plan doc only; the sealed ref is a tag object
-  // (git mktag, no hook) at refs/fleet/l42/plan; nothing under .fleet/ is written
+  // (git mktag, no hook) at refs/fleet/y42/plan; nothing under .fleet/ is written
   assert.ok(!cp.includes(".fleet/"), "commit-plan names no .fleet/ path");
   assert.ok(!/add -f|add --force/.test(cp));
   // 4.0.0: the shipped writer program makes the tag object, hooks off
-  assert.ok(cp.includes("python3 -I '" + SCRIPTS_DIR + "/plan_ref_write.py' '/r/.claude/worktrees/fleet-l42-add-thing/main' 'l42' '" + PB + "' 'docs/plans/x.md'"));
+  assert.ok(cp.includes("python3 -I '" + SCRIPTS_DIR + "/plan_ref_write.py' '/r/.claude/worktrees/fleet-y42-add-thing/main' 'y42' '" + PB + "' 'docs/plans/x.md'"));
   const w = readFileSync(join(SCRIPTS_SRC, "plan_ref_write.py"), "utf8");
   assert.match(w, /'core\.hooksPath=\/dev\/null'/);
   assert.match(w, /ref = 'refs\/fleet\/' \+ target \+ '\/plan'/);
@@ -1831,7 +1833,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
 });
 
 test("2.1.4 plan mode: a plan commit that holds anything but plan_path fails, no plan_ref", async () => {
-  for (const files of [["docs/plans/x.md", ".fleet/l42/plan_ref.json"], [".fleet/l42/plan_ref.json"], [], ["docs/plans/x.md", "src/x.py"]]) {
+  for (const files of [["docs/plans/x.md", ".fleet/y42/plan_ref.json"], [".fleet/y42/plan_ref.json"], [], ["docs/plans/x.md", "src/x.py"]]) {
     const s = happy();
     const base = s["infra:verify-plan-commit"];
     s["infra:verify-plan-commit"] = (prompt) => {
@@ -1847,7 +1849,7 @@ test("2.1.4 plan mode: a plan commit that holds anything but plan_path fails, no
 });
 
 test("6.0.0 2042: an identical re-plan reuses the plan commit (the program decides); the build loads the reused ref", async () => {
-  const s = happy({ script: scanOut([], [refEntry("refs/fleet/l42/plan", PC, priorRef(PLAN_MD))]) });
+  const s = happy({ script: scanOut([], [refEntry("refs/fleet/y42/plan", PC, priorRef(PLAN_MD))]) });
   const base = s["infra:commit-plan"];
   s["infra:commit-plan"] = (prompt) => Object.assign(base(prompt), { reused: true });
   const out = await runOne(s, ARGS);
@@ -1916,7 +1918,7 @@ test("2.1.4 plan mode: the written plan ref must target the plan commit and read
       const o = JSON.parse(store[PC]);
       o.tldr = "changed";
       const c = JSON.stringify(o) + "\n";
-      r.refs[0] = refEntry("refs/fleet/l42/plan", PC, c);
+      r.refs[0] = refEntry("refs/fleet/y42/plan", PC, c);
       delete r.refs[0].content;
       return r;
     },
@@ -2016,9 +2018,9 @@ test("tiny plan_ref round trip: build mode loads the plan ref object and uses it
   const load = call(out, "infra:load-ref");
   assert.equal(load.opts.agentType, "fleet:judge");
   assert.deepEqual(inputsOf(load.prompt), {
-    main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
-    task_id: "l42",
-    plan_ref: "refs/fleet/l42/plan",
+    main_worktree: "/r/.claude/worktrees/fleet-y42-add-thing/main",
+    task_id: "y42",
+    plan_ref: "refs/fleet/y42/plan",
     // 6.3.4 (2176): the message in parts; this one fits in part 0
     mode: "part",
     part: 0,
@@ -2037,8 +2039,8 @@ test("a malformed tiny plan_ref is refused before any agent", async () => {
     { ...tiny, plan_commit: "P1" },
     { ...tiny, plan_ref: "../etc/plan" },
     { ...tiny, plan_ref: "refs/fleet/l43/plan" },
-    { ...tiny, plan_ref: "refs/fleet/l42/plan; rm -rf /" },
-    { ...tiny, plan_ref: "refs/fleet/l42/plan-1" },
+    { ...tiny, plan_ref: "refs/fleet/y42/plan; rm -rf /" },
+    { ...tiny, plan_ref: "refs/fleet/y42/plan-1" },
     { ...tiny, branch: "main" },
     { ...tiny, repo: "r" },
   ]) {
@@ -2050,8 +2052,8 @@ test("a malformed tiny plan_ref is refused before any agent", async () => {
 
 test("2.1.4 a legacy plan_ref with ref_path (2.0.1-2.1.3) is refused before any agent: re-run plan", async () => {
   const tiny = await planRefFor(happy());
-  const legacy = { branch: tiny.branch, plan_commit: tiny.plan_commit, ref_path: ".fleet/l42/plan_ref.json", ref_sha256: tiny.ref_sha256, repo: tiny.repo };
-  for (const bad of [legacy, { ...tiny, ref_path: ".fleet/l42/plan_ref.json" }]) {
+  const legacy = { branch: tiny.branch, plan_commit: tiny.plan_commit, ref_path: ".fleet/y42/plan_ref.json", ref_sha256: tiny.ref_sha256, repo: tiny.repo };
+  for (const bad of [legacy, { ...tiny, ref_path: ".fleet/y42/plan_ref.json" }]) {
     const out = await runOne(happy(), buildArgs(bad));
     assert.equal(out.result.status, "needs_human");
     assert.match(out.result.reason, /plan_ref predates 2\.1\.4; re-run plan/);
@@ -2099,7 +2101,7 @@ test("a wrong ref_sha256 stops after the load, before any role", async () => {
 test("a tampered plan ref tag message stops before any role", async () => {
   const s = happy();
   const tiny = await planRefFor(s);
-  // the tag message at refs/fleet/l42/plan differs from the one the plan run wrote
+  // the tag message at refs/fleet/y42/plan differs from the one the plan run wrote
   const ref = JSON.parse(s.__store[PC]);
   ref.criteria[0].text = "something else";
   s.__store[PC] = JSON.stringify(ref) + "\n";
@@ -2117,7 +2119,7 @@ test("a tampered plan ref tag message stops before any role", async () => {
 test("a plan ref for another branch or repo stops before any role", async () => {
   const s = happy();
   const tiny = await planRefFor(s);
-  for (const over of [{ repo: "/other" }, { branch: "fleet/l42-other-slug" }]) {
+  for (const over of [{ repo: "/other" }, { branch: "fleet/y42-other-slug" }]) {
     const out = await runOne(s, buildArgs({ ...tiny, ...over }));
     assert.equal(out.result.status, "needs_human", JSON.stringify(over));
     assert.match(out.result.reason, /plan ref missing or changed; re-run plan.*does not match plan_ref/);
@@ -2130,7 +2132,7 @@ test("a load step that copies the right sha256 but changed content stops", async
   const tiny = await planRefFor(s);
   const ref = JSON.parse(s.__store[PC]);
   ref.tldr = "other";
-  s["infra:load-ref"] = { status: "ok", reason: "read", refs: [Object.assign(refEntry("refs/fleet/l42/plan", PC, JSON.stringify(ref) + "\n"), { sha256: tiny.ref_sha256 })] };
+  s["infra:load-ref"] = { status: "ok", reason: "read", refs: [Object.assign(refEntry("refs/fleet/y42/plan", PC, JSON.stringify(ref) + "\n"), { sha256: tiny.ref_sha256 })] };
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan/);
@@ -2140,7 +2142,7 @@ test("a load step that copies the right sha256 but changed content stops", async
 test("a load step that returns content not matching its own sha256 stops", async () => {
   const s = happy();
   const tiny = await planRefFor(s);
-  s["infra:load-ref"] = { status: "ok", reason: "read", refs: [Object.assign(refEntry("refs/fleet/l42/plan", PC, s.__store[PC]), { sha256: "f".repeat(64) })] };
+  s["infra:load-ref"] = { status: "ok", reason: "read", refs: [Object.assign(refEntry("refs/fleet/y42/plan", PC, s.__store[PC]), { sha256: "f".repeat(64) })] };
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "needs_human");
   assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
@@ -2155,7 +2157,7 @@ test("commit-plan: a plan hash that differs from the staged one fails", async ()
 
 test("2.1.4 the plan ref is frozen as a fleetref, not a file: the coder never sees .fleet/", async () => {
   const s = happy();
-  const withRef = H({ ...HASHES_FLAT, "git:fleetref:refs/fleet/l42/plan": "7".repeat(40) });
+  const withRef = H({ ...HASHES_FLAT, "git:fleetref:refs/fleet/y42/plan": "7".repeat(40) });
   s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_PLAN, hashes: withRef };
   s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1, hashes: withRef };
   const out = await run(s, ARGS);
@@ -2168,28 +2170,28 @@ test("2.1.4 the plan ref is frozen as a fleetref, not a file: the coder never se
 });
 
 test("2.1.4 a coder round that moves the plan ref is rejected", async () => {
-  const frozenRef = H({ ...HASHES_FLAT, "git:fleetref:refs/fleet/l42/plan": "7".repeat(40) });
-  const s = hashViolation(H({ ...HASHES_FLAT, "git:fleetref:refs/fleet/l42/plan": "8".repeat(40) }));
+  const frozenRef = H({ ...HASHES_FLAT, "git:fleetref:refs/fleet/y42/plan": "7".repeat(40) });
+  const s = hashViolation(H({ ...HASHES_FLAT, "git:fleetref:refs/fleet/y42/plan": "8".repeat(40) }));
   s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_PLAN, hashes: frozenRef };
   s["hasher:post-coder:r2"] = { status: "ok", fingerprint: FP_K2, hashes: frozenRef };
   const out = await run(s, ARGS);
   noUnscripted(out);
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
-  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /refs\/fleet\/l42\/plan/);
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /refs\/fleet\/y42\/plan/);
 });
 
 // ---------------------------------------------------------------- plan mode on a built branch
 
-// A sealed ref as an earlier plan run of task l42 wrote it (the tag message).
+// A sealed ref as an earlier plan run of task y42 wrote it (the tag message).
 function priorRef(planPath, over) {
   const o = Object.assign(
     {
-      branch: "fleet/l42-add-thing",
+      branch: "fleet/y42-add-thing",
       plan_path: planPath,
       plan_sha256: PSHA,
       criteria: criteria(1),
       brief: BRIEF,
-      task_id: "l42",
+      task_id: "y42",
       slug: "add-thing",
       tldr: "t",
       plan_facts: { allowed_additions: null, est_diff_lines: 10 },
@@ -2204,7 +2206,7 @@ function priorRef(planPath, over) {
 const PLAN_MD = "docs/plans/x.md";
 
 function planCommit(sha, files, over) {
-  return Object.assign({ sha, subject: "plan(l42): add-thing", files }, over || {});
+  return Object.assign({ sha, subject: "plan(y42): add-thing", files }, over || {});
 }
 
 // branch-scan output: commits plus the plan refs the reader lists.
@@ -2215,7 +2217,7 @@ function scanOut(commits, refs) {
 test("plan mode on a branch with build commits stops before the planner (6.3.0: resume_with build when its sealed plan ref is there)", async () => {
   const tampered = JSON.parse(priorRef(PLAN_MD));
   tampered.plan_path = "README.md";
-  const R1 = (content) => [refEntry("refs/fleet/l42/plan", "1111111", content || priorRef(PLAN_MD))];
+  const R1 = (content) => [refEntry("refs/fleet/y42/plan", "1111111", content || priorRef(PLAN_MD))];
   for (const [commits, refs] of [
     [[{ sha: "1111111", subject: "feat(x): add it", files: ["src/x.py"] }], R1()],
     // the right subject with the wrong files
@@ -2226,27 +2228,27 @@ test("plan mode on a branch with build commits stops before the planner (6.3.0: 
     [[planCommit("1111111", [PLAN_MD, "README.md"])], R1()],
     [[planCommit("1111111", ["docs/plans/other.md"])], R1()],
     // 2.1.4: a .fleet/ path in the commit makes it a build commit (no ref file any more)
-    [[planCommit("1111111", [PLAN_MD, ".fleet/l42/plan_ref.json"])], R1()],
-    [[planCommit("1111111", [".fleet/l42/plan_ref.json"])], R1()],
+    [[planCommit("1111111", [PLAN_MD, ".fleet/y42/plan_ref.json"])], R1()],
+    [[planCommit("1111111", [".fleet/y42/plan_ref.json"])], R1()],
     // another task's plan subject
     [[planCommit("1111111", [PLAN_MD], { subject: "plan(l43): other" })], R1()],
     // no files; no plan ref; a plan ref at another commit; a plan ref whose seal is broken
     [[planCommit("1111111", [])], R1()],
     [[planCommit("1111111", [PLAN_MD])], []],
-    [[planCommit("1111111", [PLAN_MD])], [refEntry("refs/fleet/l42/plan", "2222222", priorRef(PLAN_MD))]],
+    [[planCommit("1111111", [PLAN_MD])], [refEntry("refs/fleet/y42/plan", "2222222", priorRef(PLAN_MD))]],
     [[planCommit("1111111", ["README.md"])], R1(JSON.stringify(tampered) + "\n")],
     // a plan ref of another task, or one whose sha256 does not match its message
     [[planCommit("1111111", [PLAN_MD])], R1(priorRef(PLAN_MD, { task_id: "l43", branch: "fleet/l43-add-thing" }))],
     [[planCommit("1111111", [PLAN_MD])], [Object.assign(R1()[0], { sha256: "e".repeat(64) })]],
     // a ref that is not a plan ref name
-    [[planCommit("1111111", [PLAN_MD])], [refEntry("refs/fleet/l42/state", "1111111", priorRef(PLAN_MD))]],
+    [[planCommit("1111111", [PLAN_MD])], [refEntry("refs/fleet/y42/state", "1111111", priorRef(PLAN_MD))]],
     [[planCommit("1111111", [PLAN_MD]), { sha: "2222222", subject: "test(AC1): behaviour 1", files: ["tests/test_a.py"] }], R1()],
   ]) {
     const s = happy({ script: scanOut(commits, refs) });
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human", JSON.stringify(commits.map((c) => [c.subject, c.files])) + " " + JSON.stringify(refs.map((r) => [r.name, r.target])));
     const r0 = refs[0];
-    const resumable = !!r0 && r0.name === "refs/fleet/l42/plan" && r0.sha256 === sha256(r0.content) && JSON.parse(r0.content).task_id === "l42" && JSON.parse(r0.content).plan_path === PLAN_MD;
+    const resumable = !!r0 && r0.name === "refs/fleet/y42/plan" && r0.sha256 === sha256(r0.content) && JSON.parse(r0.content).task_id === "y42" && JSON.parse(r0.content).plan_path === PLAN_MD;
     if (resumable) {
       assert.equal(out.result.resume_with, "build");
       assert.equal(out.result.plan_ref.plan_commit, r0.target);
@@ -2259,29 +2261,29 @@ test("plan mode on a branch with build commits stops before the planner (6.3.0: 
 
 test("6.0.0 2042: plan mode on a branch that carries a 5.x plan commit stops: delete the branch, then re-plan", async () => {
   for (const [commits, refs] of [
-    [[planCommit("1111111", [PLAN_MD])], [refEntry("refs/fleet/l42/plan", "1111111", priorRef(PLAN_MD))]],
-    [[planCommit("1111111", ["./" + PLAN_MD])], [refEntry("refs/fleet/l42/plan", "1111111", priorRef(PLAN_MD))]],
+    [[planCommit("1111111", [PLAN_MD])], [refEntry("refs/fleet/y42/plan", "1111111", priorRef(PLAN_MD))]],
+    [[planCommit("1111111", ["./" + PLAN_MD])], [refEntry("refs/fleet/y42/plan", "1111111", priorRef(PLAN_MD))]],
     [
       [planCommit("1111111", ["docs/plans/old.md"]), planCommit("2222222", [PLAN_MD])],
-      [refEntry("refs/fleet/l42/plan", "2222222", priorRef(PLAN_MD)), refEntry("refs/fleet/l42/plan-1", "1111111", priorRef("docs/plans/old.md"))],
+      [refEntry("refs/fleet/y42/plan", "2222222", priorRef(PLAN_MD)), refEntry("refs/fleet/y42/plan-1", "1111111", priorRef("docs/plans/old.md"))],
     ],
   ]) {
     const s = happy({ script: scanOut(commits, refs) });
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "needs_human", JSON.stringify(commits.map((c) => c.files)));
-    assert.equal(out.result.reason, "branch fleet/l42-add-thing carries a plan commit of fleet 5.x (" + commits[0].sha + "); since 6.0.0 the plan doc never ships: delete branch fleet/l42-add-thing, then re-run plan");
+    assert.equal(out.result.reason, "branch fleet/y42-add-thing carries a plan commit of fleet 5.x (" + commits[0].sha + "); since 6.0.0 the plan doc never ships: delete branch fleet/y42-add-thing, then re-run plan");
     assert.ok(!out.labels.includes("role:scope-and-plan"));
   }
   const out = await runOne(happy(), ARGS);
   const scan = call(out, "infra:branch-scan");
   assert.equal(scan.opts.agentType, "fleet:judge");
   assert.deepEqual(inputsOf(scan.prompt), {
-    main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
+    main_worktree: "/r/.claude/worktrees/fleet-y42-add-thing/main",
     default_branch: "master",
-    task_id: "l42",
+    task_id: "y42",
   });
   // the same plan-ref reader program lists every refs/fleet/<id>/plan* ref
-  assert.ok(scan.prompt.includes("python3 -I '" + SCRIPTS_DIR + "/branch_scan.py'") && scan.prompt.includes("'l42'"));
+  assert.ok(scan.prompt.includes("python3 -I '" + SCRIPTS_DIR + "/branch_scan.py'") && scan.prompt.includes("'y42'"));
   assert.ok(!scan.prompt.includes(".fleet/"));
 });
 
@@ -2295,8 +2297,8 @@ test("build mode: preflight first, then workspace, verify, then the writers' bas
   assert.ok(!out.labels.some((l) => l.startsWith("role:scope-and-plan") || l.startsWith("role:plan-audit")));
   const v = inputsOf(call(out, "infra:verify-plan").prompt);
   assert.deepEqual(v, {
-    main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main",
-    branch: "fleet/l42-add-thing",
+    main_worktree: "/r/.claude/worktrees/fleet-y42-add-thing/main",
+    branch: "fleet/y42-add-thing",
     plan_commit: PC,
     // 6.0.0 (ledger 2042): the branch sits on plan_base; roles read the plan at plan_commit
     plan_base: PB,
@@ -2355,7 +2357,7 @@ test("build mode: commit-step commits pass verify; without a run-state the build
   assert.ok(out.logs.some((l) => /descends from plan_base by 2 fleet commit/.test(l)));
   assert.match(out.result.reason, /approved but unresumable/);
   // any other subject is not a commit step of this plan (writers and the coder never commit)
-  for (const subject of ["test(AC1): behaviour 1", "Merge branch 'fleet/l42-add-thing--pabc1234d-t-AC1'", "feat(thing): add it", "fix(l43): code round 2"]) {
+  for (const subject of ["test(AC1): behaviour 1", "Merge branch 'fleet/y42-add-thing--pabc1234d-t-AC1'", "feat(thing): add it", "fix(l43): code round 2"]) {
     s["infra:verify-plan"].commits_since = [{ sha: "5555555", subject }];
     const other = await runOne(s, buildArgs(ref));
     assert.equal(other.result.status, "needs_human", subject);
@@ -2371,7 +2373,7 @@ test("build mode: the script pushes the approved sha before the PR opener runs",
   assert.ok(iPush > 0 && iPr > iPush);
   const p = inputsOf(call(out, "infra:push").prompt);
   assert.equal(p.approved_sha, CSHA(1));
-  assert.equal(p.branch, "fleet/l42-add-thing");
+  assert.equal(p.branch, "fleet/y42-add-thing");
   assert.match(call(out, "infra:push").prompt, /Never --force/);
 });
 
@@ -2386,9 +2388,9 @@ test("build mode: a push that did not land the approved sha stops before the PR"
 test("2.1.4 a PR diff with a .fleet/ path is refused before the push", async () => {
   for (const scan of [
     { diff: ["src/x.py", ".fleet/x/plan_ref.json"], commits: [] },
-    { diff: ["src/x.py", "sub/.fleet/l42/notes.txt"], commits: [] },
+    { diff: ["src/x.py", "sub/.fleet/y42/notes.txt"], commits: [] },
     // the net diff is clean, but a commit on the branch touched .fleet/
-    { diff: ["src/x.py"], commits: [{ sha: PC, files: ["docs/plans/x.md", ".fleet/l42/plan_ref.json"] }] },
+    { diff: ["src/x.py"], commits: [{ sha: PC, files: ["docs/plans/x.md", ".fleet/y42/plan_ref.json"] }] },
   ]) {
     const s = happy({ script: { "infra:fleet-scan:push": Object.assign({ status: "ok", reason: "scanned" }, scan) } });
     const out = await run(s, ARGS);
@@ -2404,7 +2406,7 @@ test("2.1.4 a PR diff with a .fleet/ path is refused before the push", async () 
   assert.equal(ok.result.status, "ok", ok.result.reason);
   const c = call(ok, "infra:fleet-scan:push");
   assert.equal(c.opts.agentType, "fleet:judge");
-  assert.deepEqual(inputsOf(c.prompt), { main_worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main", default_branch: "master", approved_sha: CSHA(1) });
+  assert.deepEqual(inputsOf(c.prompt), { main_worktree: "/r/.claude/worktrees/fleet-y42-add-thing/main", default_branch: "master", approved_sha: CSHA(1) });
   assert.ok(ok.labels.indexOf("infra:fleet-scan:push") < ok.labels.indexOf("infra:push"));
 });
 
@@ -2427,11 +2429,11 @@ test("2.1.4 a fleet-internal scan that returns no lists stops (fail-closed)", as
 });
 
 test("2.1.4 a coder round that creates a .fleet/ path stops at the scope fence", async () => {
-  const s = happy({ script: { "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES, changed: ["src/x.py", ".fleet/l42/notes.txt"] } } });
+  const s = happy({ script: { "hasher:post-coder:r1": { status: "ok", fingerprint: FP_K1, hashes: HASHES, changed: ["src/x.py", ".fleet/y42/notes.txt"] } } });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "scope");
-  assert.match(out.result.reason, /\.fleet\/l42\/notes\.txt \(fleet internal/);
+  assert.match(out.result.reason, /\.fleet\/y42\/notes\.txt \(fleet internal/);
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
@@ -2466,7 +2468,7 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
     // 3.0.0: no mode prints message text whole; meta lists, parts rebuild it (6.3.4: one part each here)
     const read = () => {
       const run1 = (mode) => {
-        const r = spawnSync("python3", ["-I", "-", wt, "l42", mode], { input: reader, encoding: "utf8", env });
+        const r = spawnSync("python3", ["-I", "-", wt, "y42", mode], { input: reader, encoding: "utf8", env });
         assert.equal(r.status, 0, r.stderr);
         return JSON.parse(r.stdout);
       };
@@ -2475,21 +2477,21 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
         return Object.assign({}, x, { content: Array.isArray(ch) ? ch.join("") : null });
       });
     };
-    const ref1 = { task_id: "l42", note: "it's \"quoted\" — ünï", n: 1 };
-    let r = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(ref1))], { encoding: "utf8", env });
+    const ref1 = { task_id: "y42", note: "it's \"quoted\" — ünï", n: 1 };
+    let r = spawnSync("bash", ["-c", writeCmd(wt, "y42", JSON.stringify(ref1))], { encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     const head = r.stdout.trim().split(" ")[0];
     assert.equal(g("rev-parse", head + "^").trim(), base, "the plan commit sits on the branch HEAD");
     assert.equal(g("rev-parse", "HEAD").trim(), base, "the branch did not move");
     assert.ok(!existsSync(join(home, "HOOK_RAN")), "no reference-transaction hook ran");
-    assert.equal(g("cat-file", "-t", "refs/fleet/l42/plan").trim(), "tag");
+    assert.equal(g("cat-file", "-t", "refs/fleet/y42/plan").trim(), "tag");
     assert.equal(g("tag", "-l").trim(), "", "no tag name left");
     assert.equal(g("status", "--porcelain"), "");
     assert.equal(g("show", "--name-only", "--format=", head).trim(), "docs/plans/x.md", "the plan commit holds the plan only");
     assert.ok(!existsSync(join(wt, ".fleet")), "nothing written under .fleet/");
-    g("update-ref", "refs/fleet/l42/state", head);
+    g("update-ref", "refs/fleet/y42/state", head);
     let refs = read();
-    assert.deepEqual(refs.map((x) => x.name), ["refs/fleet/l42/plan"], "the state ref is not a plan ref");
+    assert.deepEqual(refs.map((x) => x.name), ["refs/fleet/y42/plan"], "the state ref is not a plan ref");
     const e = refs[0];
     assert.equal(e.type, "tag");
     assert.equal(e.target, head);
@@ -2499,38 +2501,38 @@ test("2.1.4 plan ref object: write and read round-trip in a real repo whose glob
     assert.deepEqual(JSON.parse(e.content), ref1);
     // a re-plan: a new plan commit, a new plan ref; the old one is kept as plan-1
     writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan v2\n");
-    const ref2 = { task_id: "l42", n: 2 };
-    r = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(ref2))], { encoding: "utf8", env });
+    const ref2 = { task_id: "y42", n: 2 };
+    r = spawnSync("bash", ["-c", writeCmd(wt, "y42", JSON.stringify(ref2))], { encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     const head2 = r.stdout.trim().split(" ")[0];
     assert.notEqual(head2, head);
     refs = read();
     const by = Object.fromEntries(refs.map((x) => [x.name, x]));
-    assert.deepEqual(Object.keys(by).sort(), ["refs/fleet/l42/plan", "refs/fleet/l42/plan-1"]);
-    assert.equal(by["refs/fleet/l42/plan"].target, head2);
-    assert.deepEqual(JSON.parse(by["refs/fleet/l42/plan"].content), ref2);
-    assert.equal(by["refs/fleet/l42/plan-1"].target, head);
-    assert.equal(by["refs/fleet/l42/plan-1"].tag_sha, e.tag_sha);
+    assert.deepEqual(Object.keys(by).sort(), ["refs/fleet/y42/plan", "refs/fleet/y42/plan-1"]);
+    assert.equal(by["refs/fleet/y42/plan"].target, head2);
+    assert.deepEqual(JSON.parse(by["refs/fleet/y42/plan"].content), ref2);
+    assert.equal(by["refs/fleet/y42/plan-1"].target, head);
+    assert.equal(by["refs/fleet/y42/plan-1"].tag_sha, e.tag_sha);
     // an identical re-write (same plan, same base, same message) reuses the commit and archives nothing
     writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan v2\n");
-    r = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(ref2))], { encoding: "utf8", env });
+    r = spawnSync("bash", ["-c", writeCmd(wt, "y42", JSON.stringify(ref2))], { encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(read().map((x) => x.name), ["refs/fleet/l42/plan", "refs/fleet/l42/plan-1"]);
+    assert.deepEqual(read().map((x) => x.name), ["refs/fleet/y42/plan", "refs/fleet/y42/plan-1"]);
     // same target, new message (an identical re-plan): the old value is kept as plan-2
     writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan v2\n");
-    const ref3 = { task_id: "l42", n: 3 };
-    r = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(ref3))], { encoding: "utf8", env });
+    const ref3 = { task_id: "y42", n: 3 };
+    r = spawnSync("bash", ["-c", writeCmd(wt, "y42", JSON.stringify(ref3))], { encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     const by3 = Object.fromEntries(read().map((x) => [x.name, x]));
-    assert.deepEqual(Object.keys(by3).sort(), ["refs/fleet/l42/plan", "refs/fleet/l42/plan-1", "refs/fleet/l42/plan-2"]);
-    assert.equal(by3["refs/fleet/l42/plan-2"].target, head2);
-    assert.deepEqual(JSON.parse(by3["refs/fleet/l42/plan"].content), ref3);
-    assert.equal(by3["refs/fleet/l42/plan"].target, head2);
+    assert.deepEqual(Object.keys(by3).sort(), ["refs/fleet/y42/plan", "refs/fleet/y42/plan-1", "refs/fleet/y42/plan-2"]);
+    assert.equal(by3["refs/fleet/y42/plan-2"].target, head2);
+    assert.deepEqual(JSON.parse(by3["refs/fleet/y42/plan"].content), ref3);
+    assert.equal(by3["refs/fleet/y42/plan"].target, head2);
     // nothing reaches a push of the branch: the branch holds no .fleet/ path
     assert.equal(g("log", "--format=", "--name-only", "master").split("\n").filter((x) => x.includes(".fleet")).length, 0);
     // a ref that points at a commit, not a tag, reads as no message
-    g("update-ref", "refs/fleet/l42/plan", head2);
-    const plain = read().find((x) => x.name === "refs/fleet/l42/plan");
+    g("update-ref", "refs/fleet/y42/plan", head2);
+    const plain = read().find((x) => x.name === "refs/fleet/y42/plan");
     assert.equal(plain.type, "commit");
     assert.equal(plain.content, null);
     // missing: another task has no plan refs
@@ -2558,15 +2560,15 @@ test("2.1.4 fleet-internal scan program: lists the PR diff and every commit's fi
     g("add", "-A");
     g("commit", "-qm", "i");
     g("update-ref", "refs/remotes/origin/master", "HEAD");
-    g("checkout", "-qb", "fleet/l42-x");
-    spawnSync("mkdir", ["-p", join(wt, ".fleet", "l42")]);
-    writeFileSync(join(wt, ".fleet", "l42", "plan_ref.json"), "{}\n");
+    g("checkout", "-qb", "fleet/y42-x");
+    spawnSync("mkdir", ["-p", join(wt, ".fleet", "y42")]);
+    writeFileSync(join(wt, ".fleet", "y42", "plan_ref.json"), "{}\n");
     g("add", "-A");
-    g("commit", "-qm", "plan(l42): x");
-    g("rm", "-q", ".fleet/l42/plan_ref.json");
+    g("commit", "-qm", "plan(y42): x");
+    g("rm", "-q", ".fleet/y42/plan_ref.json");
     writeFileSync(join(wt, "b.py"), "b\n");
     g("add", "-A");
-    g("commit", "-qm", "feat(l42): x");
+    g("commit", "-qm", "feat(y42): x");
     const sha = g("rev-parse", "HEAD").trim();
     const prog = extractPy("FLEET_SCAN_PY_BEGIN", "FLEET_SCAN_PY_END", "FLEET_SCAN_PY");
     const r = spawnSync("python3", ["-I", "-", wt, "master", sha], { input: prog, encoding: "utf8", env });
@@ -2574,7 +2576,7 @@ test("2.1.4 fleet-internal scan program: lists the PR diff and every commit's fi
     const o = JSON.parse(r.stdout);
     assert.deepEqual(o.diff, ["b.py"]);
     assert.equal(o.commits.length, 2);
-    assert.ok(o.commits.some((c) => c.files.includes(".fleet/l42/plan_ref.json")));
+    assert.ok(o.commits.some((c) => c.files.includes(".fleet/y42/plan_ref.json")));
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -2646,13 +2648,13 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.equal(r.status, "awaiting_confirmation");
   assert.deepEqual(r.proposed_plan_change, ["split AC2 into AC2 and AC3"]);
   assert.deepEqual(r.plan_findings, [f]);
-  assert.equal(r.superseded_ref, "fleet/l42-add-thing--superseded-1");
+  assert.equal(r.superseded_ref, "fleet/y42-add-thing--superseded-1");
   assert.equal(r.superseded_head, "5555555");
   assert.equal(r.tldr, "adds a thing, now with AC3");
   assert.deepEqual(r.plan_diff, ["AC3 added: the code judge found a missing behaviour"]);
   assert.equal(r.fleet_size.criteria, 3);
   assert.equal(r.plan_ref.plan_commit, PC2);
-  assert.equal(r.plan_ref.branch, "fleet/l42-add-thing");
+  assert.equal(r.plan_ref.branch, "fleet/y42-add-thing");
   assert.equal(r.plan_ref.ref_sha256, sha256(s.__store[PC2]));
   assert.equal(JSON.parse(s.__store[PC2]).history.replans, 1);
   // 4.0.0 (1992): the re-plan's ref seals the build's project too
@@ -2662,7 +2664,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   for (const l of ["infra:push", "role:fleet-pr-opener", "infra:yaadgaar-writeback", "infra:comments-list", "infra:comments-post"])
     assert.ok(!out.labels.includes(l), l);
   // 7.0.0 (yaadgaar #699): nor the legacy ledger entry
-  assert.ok(!out.logs.some((l) => /^write-back ledger /.test(l)), "no write-back");
+  assert.ok(!out.logs.some((l) => /^write-back (ledger|yaadgaar)/.test(l)), "no write-back");
   // order: worktree at the old plan commit, planner, audit, commit there, then save + reset
   const tail = out.labels.slice(out.labels.indexOf("hasher:fp-post:code-judge:r1") + 1);
   assert.deepEqual(tail, [
@@ -2699,7 +2701,7 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   // superseded branch and the judged tree under a ref, creating no commit
   assert.deepEqual(
     { superseded_branch: reset.superseded_branch, expected_head: reset.expected_head, expected_tree: reset.expected_tree, plan_base: reset.plan_base },
-    { superseded_branch: "fleet/l42-add-thing--superseded-1", expected_head: PB, expected_tree: "K1", plan_base: PB },
+    { superseded_branch: "fleet/y42-add-thing--superseded-1", expected_head: PB, expected_tree: "K1", plan_base: PB },
   );
   const rp = call(out, "infra:replan-reset").prompt;
   assert.match(rp, /Only after step 2 succeeded/);
@@ -2777,8 +2779,8 @@ function posting(fail) {
 }
 
 test("write-back: the ledger is written only for ledger sources", async () => {
-  // 7.0.0 (yaadgaar #699): a yaadgaar task is written; the default fixture's legacy ledger source is
-  // inert and hands the same section back
+  // 7.0.0 (yaadgaar #699): a yaadgaar task is written; 7.0.0 review F2: the default fixture's task is
+  // yaadgaar #42, written through the same steps
   const y = await run(Object.assign(happy({ brief: YBRIEF }), { "infra:yaadgaar-read": yaadgaarRead(), "infra:yaadgaar-writeback": (p) => ({ status: "ok", reason: "ok", results: inputsOf(p).tasks.map((t) => ({ key: t.key, status: "written" })) }) }), { ...ARGS, input: "#622" });
   noUnscripted(y);
   const yw = inputsOf(call(y, "infra:yaadgaar-writeback").prompt);
@@ -2788,12 +2790,13 @@ test("write-back: the ledger is written only for ledger sources", async () => {
   const out = await run(happy(), ARGS);
   noUnscripted(out);
   const lw = out.result.write_back.ledger[0];
-  assert.equal(lw.ref, "42");
-  assert.match(lw.section_text, /adds a thing/);
-  assert.match(lw.section_text, /docs\/plans\/x\.md/);
-  assert.match(lw.section_text, /https:\/\/github\.com\/o\/r\/pull\/7/);
-  assert.match(lw.section_text, /fleet:l42/);
-  assert.equal(out.result.ledger_status, "unavailable");
+  assert.deepEqual([lw.ref, lw.status], ["yaadgaar #42", "written"]);
+  const text = inputsOf(call(out, "infra:yaadgaar-writeback").prompt).section_text;
+  assert.match(text, /adds a thing/);
+  assert.match(text, /docs\/plans\/x\.md/);
+  assert.match(text, /https:\/\/github\.com\/o\/r\/pull\/7/);
+  assert.match(text, /fleet:y42/);
+  assert.equal(out.result.ledger_status, "ok");
   assert.equal(out.result.comment_status, "none");
 
   const gh = await run(withSources([GH], { "infra:comments-list": listing({}), "infra:comments-post": posting() }), {
@@ -2863,12 +2866,13 @@ test("write-back: a ledger failure is reported and never stops the run", async (
   assert.equal(out.result.status, "ok");
   assert.equal(out.result.ledger_status, "failed");
   assert.match(out.result.write_back.ledger[0].section_text, /fleet:y622/);
-  // 3.1.3 (PR #41 review 2): a legacy ledger source with no project stops the build before any role
-  // (4.0.0, 1992: only when the plan run sealed no project either)
-  const noProject = await run(happy(), { ...ARGS, project: undefined });
-  assert.equal(noProject.result.status, "needs_human");
-  assert.match(noProject.result.reason, /needs args\.project.*re-run plan/);
-  assert.ok(!noProject.build.labels.some((l) => /^infra:(ledger|yaadgaar)-/.test(l)));
+  // 7.0.0 review F5: with no args.project the write-back scope is the digest-checked session project
+  const s = happy();
+  s.__session_project = "o/r";
+  const noProject = await run(s, { ...ARGS, project: undefined });
+  assert.equal(noProject.result.status, "ok", noProject.result.reason);
+  assert.equal(inputsOf(call(noProject, "infra:yaadgaar-writeback").prompt).project, "o/r");
+  assert.equal(noProject.result.ledger_status, "ok");
 });
 
 test("write-back: comment text with a line starting with a terraform-bot word is refused in code", async () => {
@@ -3644,7 +3648,7 @@ test("2.0.3 build from a 2.0.2 plan_ref stops: plan_ref predates 2.0.3", async (
   s.__store[PC] = content;
   const out = await runOne(s, {
     mode: "build",
-    plan_ref: { branch: "fleet/l42-add-thing", plan_commit: PC, plan_ref: "refs/fleet/l42/plan", ref_sha256: sha256(content), repo: "/r" },
+    plan_ref: { branch: "fleet/y42-add-thing", plan_commit: PC, plan_ref: "refs/fleet/y42/plan", ref_sha256: sha256(content), repo: "/r" },
     date: "2026-11-04",
     project: "o/r",
   });
@@ -3886,7 +3890,7 @@ async function buildFrom(content) {
   s.__store[PC] = content;
   return runOne(s, {
     mode: "build",
-    plan_ref: { branch: "fleet/l42-add-thing", plan_commit: PC, plan_ref: "refs/fleet/l42/plan", ref_sha256: sha256(content), repo: "/r" },
+    plan_ref: { branch: "fleet/y42-add-thing", plan_commit: PC, plan_ref: "refs/fleet/y42/plan", ref_sha256: sha256(content), repo: "/r" },
     date: "2026-11-04",
     project: "o/r",
   });
@@ -4144,7 +4148,7 @@ test("2.0.5 build re-checks check_cmd scripts before each code-judge run; a fail
   const c = call(out, "infra:check-scripts:r1");
   assert.equal(c.opts.agentType, "fleet:judge");
   assert.deepEqual(inputsOf(c.prompt).paths, ["scripts/check_version_bump.py"]);
-  assert.equal(inputsOf(c.prompt).worktree, "/r/.claude/worktrees/fleet-l42-add-thing/main");
+  assert.equal(inputsOf(c.prompt).worktree, "/r/.claude/worktrees/fleet-y42-add-thing/main");
   const L = out.labels;
   assert.ok(L.indexOf("hasher:post-coder:r1") < L.indexOf("infra:check-scripts:r1"));
   assert.ok(L.indexOf("infra:check-scripts:r1") < L.indexOf("role:fleet-code-judge:r1"));
@@ -4172,8 +4176,8 @@ test("2.1.0 no RED commit: writers share the fleet worktree, nothing commits bef
   for (const l of out.labels) assert.ok(!/^infra:(prepare|integrate|sync)/.test(l), "no per-criterion branch step: " + l);
   for (const c of criteria(2)) {
     const w = inputsOf(call(out, "role:fleet-test-writer:" + c.id + ":r1").prompt);
-    assert.equal(w.worktree, "/r/.claude/worktrees/fleet-l42-add-thing/main");
-    assert.equal(w.branch, "fleet/l42-add-thing");
+    assert.equal(w.worktree, "/r/.claude/worktrees/fleet-y42-add-thing/main");
+    assert.equal(w.branch, "fleet/y42-add-thing");
   }
   const commits = out.labels.filter((l) => /^infra:commit:/.test(l));
   assert.deepEqual(commits, ["infra:commit:r1"]);
@@ -4413,8 +4417,8 @@ test("2.1.0 confirm auto: gates pass, the same run builds through the shared ver
   for (const k of ["brief", "ledger_task", "plan_path", "criteria", "plan_diff", "allowed_additions", "repo_obligations", "commands"])
     assert.ok(k in ij, "intent judge input " + k);
   assert.equal(ij.brief.sources[0].body, "task body");
-  // 7.0.0 (yaadgaar #699): the default fixture's legacy ledger source has no ledger adapter
-  assert.equal(ij.ledger_task, null);
+  // 7.0.0 review F2: the default fixture's task is yaadgaar #42; the intent judge gets it
+  assert.deepEqual(ij.ledger_task, { ref: "42", body: "task body" });
   const pr = inputsOf(call(out, "role:fleet-pr-opener").prompt);
   assert.equal(pr.auto_confirmed, true);
   assert.equal(pr.intent.verdict, "approve");
@@ -4584,7 +4588,7 @@ test("2.1.0 review: after the draft PR, pr-review gets the PR, the diff paths an
   assert.equal(ri.base_ref, PB);
   assert.equal(ri.head_sha, CSHA(1));
   assert.deepEqual(ri.changed_paths, ["src/x.py", "tests/test_a.py"]);
-  assert.equal(ri.scratch_dir, "/r/.claude/worktrees/fleet-l42-add-thing/scratch");
+  assert.equal(ri.scratch_dir, "/r/.claude/worktrees/fleet-y42-add-thing/scratch");
   assert.deepEqual(ri.criteria, [{ id: "AC1", text: "behaviour 1" }, { id: "AC2", text: "behaviour 2" }]);
   for (const k of ["tldr", "plan_path", "plan_diff", "brief"]) assert.ok(!(k in ri), "no " + k);
   assert.match(call(out, "infra:review-cleanup:v1").prompt, /worktree remove --force/);
@@ -4868,11 +4872,11 @@ test("2.1.0 an auto build reports mode build", async () => {
 test("2.1.0 write-back follows the review (the run-state milestone order)", async () => {
   const out = await run(happy({ script: { "role:pr-review:v1": { status: "needs_human", reason: "cannot read PR" } } }), ARGS);
   assert.equal(out.result.status, "needs_human");
-  // 7.0.0 (yaadgaar #699): the legacy ledger entry is a gate line, written with the written_back milestone
-  assert.ok(!out.logs.some((l) => /^write-back ledger /.test(l)));
+  // 7.0.0 review F2: the yaadgaar write-back is a gate line, written with the written_back milestone
+  assert.ok(!out.logs.some((l) => /^write-back (ledger|yaadgaar)/.test(l)));
   assert.ok(!out.labels.includes("infra:state:written_back"));
   const ok = await run(happy(), ARGS);
-  assert.ok(ok.build.logs.some((l) => /^write-back ledger \(fleet:l42\): 42=unavailable$/.test(l)));
+  assert.ok(ok.build.logs.some((l) => /^write-back yaadgaar: #42=written$/.test(l)));
   assert.ok(ok.labels.indexOf("infra:state:written_back") > ok.labels.indexOf("role:pr-review:v1"));
 });
 
@@ -4884,8 +4888,8 @@ test("2.1.0 re-plan keeps the uncommitted work under a non-branch ref to the tre
   const rp = call(out, "infra:replan-reset").prompt;
   assert.ok(!/commit-tree/.test(rp));
   assert.match(rp, /update-ref <superseded_tree_ref> <expected_tree>/);
-  assert.equal(inputsOf(rp).superseded_tree_ref, "refs/fleet/l42-add-thing/superseded-1-tree");
-  assert.equal(out.result.superseded_tree_ref, "refs/fleet/l42-add-thing/superseded-1-tree");
+  assert.equal(inputsOf(rp).superseded_tree_ref, "refs/fleet/y42-add-thing/superseded-1-tree");
+  assert.equal(out.result.superseded_tree_ref, "refs/fleet/y42-add-thing/superseded-1-tree");
 });
 
 test("2.1.0 agent cap 100: an auto run with a revise round and a review fix round passes 60 agents and completes", async () => {
@@ -5271,13 +5275,13 @@ test("2.1.0 run-state: every milestone writes the state ref, in order, with a mk
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   const order = ["infra:state:committed:r1", "infra:push", "infra:state:pushed:p1", "role:fleet-pr-opener", "infra:state:pr_open:p1", "role:pr-review:v1", "infra:state:reviewed:v1", "infra:state:written_back"];
-  // 7.0.0 (yaadgaar #699): the legacy ledger source dispatches no write-back step; its entry is a gate line
-  assert.ok(out.build.logs.some((l) => /^write-back ledger \(fleet:l42\): 42=unavailable$/.test(l)));
+  // 7.0.0 review F2: the default yaadgaar task's write-back is a gate line
+  assert.ok(out.build.logs.some((l) => /^write-back yaadgaar: #42=written$/.test(l)));
   for (let i = 1; i < order.length; i++) assert.ok(out.labels.indexOf(order[i]) > out.labels.indexOf(order[i - 1]), order[i]);
   const p = call(out, "infra:state:committed:r1").prompt;
   assert.match(p, /mktag/);
   // 4.0.0: the shipped writer program moves the ref, hooks off, no system config
-  assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/state_write.py' '/r/.claude/worktrees/fleet-l42-add-thing/main' 'refs/fleet/l42/state'"));
+  assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/state_write.py' '/r/.claude/worktrees/fleet-y42-add-thing/main' 'refs/fleet/y42/state'"));
   const sw = readFileSync(join(SCRIPTS_SRC, "state_write.py"), "utf8");
   assert.match(sw, /os\.environ\['GIT_CONFIG_NOSYSTEM'\] = '1'/);
   assert.equal(states.committed.plan_commit, PC);
@@ -5285,7 +5289,7 @@ test("2.1.0 run-state: every milestone writes the state ref, in order, with a mk
   assert.equal(states.committed.code_tree, "K1");
   assert.match(states.committed.maps_digest, /^[0-9a-f]{64}$/);
   assert.equal(states.pr_open.pr_number, 7);
-  assert.equal(states.written_back.ledger_status, "unavailable");
+  assert.equal(states.written_back.ledger_status, "ok");
 });
 
 test("2.1.0 resume: a push that failed resumes at push on the re-run; no writer, coder or judge runs", async () => {
@@ -5316,7 +5320,7 @@ test("2.1.0 resume: a run stopped after the PR opened resumes at review", async 
   const plan = await runOne(s, ARGS);
   const first = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
   assert.equal(first.result.status, "needs_human");
-  assert.ok(!first.logs.some((l) => /^write-back ledger /.test(l)), "write-back follows the review");
+  assert.ok(!first.logs.some((l) => /^write-back (ledger|yaadgaar)/.test(l)), "write-back follows the review");
   rerunScript(s, states.pr_open);
   s["role:pr-review:v1"] = happy()["role:pr-review:v1"];
   const second = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
@@ -5325,7 +5329,7 @@ test("2.1.0 resume: a run stopped after the PR opened resumes at review", async 
   assert.ok(second.logs.some((l) => /resuming at review/.test(l)));
   assert.ok(!second.labels.some((l) => NO_REWORK.test(l) || l === "infra:push" || l === "role:fleet-pr-opener"), second.labels.join(", "));
   assert.equal(inputsOf(call(second, "role:pr-review:v1").prompt).pr_number, 7);
-  assert.ok(second.logs.some((l) => /^write-back ledger \(fleet:l42\): 42=unavailable$/.test(l)));
+  assert.ok(second.logs.some((l) => /^write-back yaadgaar: #42=written$/.test(l)));
 });
 
 // 6.0.0 (ledger 2044): shipped (after the stats block) is the last run-state; written_back resumes at the stats step
@@ -5347,8 +5351,8 @@ test("2.1.0 resume: shipped returns the recorded result with no role agent", asy
   noUnscripted(again);
   assert.equal(again.result.status, "ok", again.result.reason);
   assert.equal(again.result.pr_url, "https://github.com/o/r/pull/7");
-  // 7.0.0 (yaadgaar #699): the recorded status of the inert legacy ledger entry
-  assert.equal(again.result.ledger_status, "unavailable");
+  // 7.0.0 review F2: the recorded status of the default yaadgaar task's write-back
+  assert.equal(again.result.ledger_status, "ok");
   assert.equal(again.result.resumed_at, "done");
   assert.ok(!again.labels.some((l) => /^role:/.test(l) || l === "infra:push" || /^infra:state:/.test(l)), again.labels.join(", "));
 });
@@ -5411,15 +5415,15 @@ test("2.1.0 run-state program: the write command and the read program round-trip
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "i");
     const st = { plan_commit: "abc", last_gate: "committed", note: "it's \"quoted\"" };
-    const cmd = stateWriteCmd(wt, "refs/fleet/l42/state", JSON.stringify(st));
+    const cmd = stateWriteCmd(wt, "refs/fleet/y42/state", JSON.stringify(st));
     const r = spawnSync("bash", ["-c", cmd], { encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     const head = sh(wt, "git", "rev-parse", "HEAD").trim();
-    assert.equal(sh(wt, "git", "cat-file", "-t", "refs/fleet/l42/state").trim(), "tag");
+    assert.equal(sh(wt, "git", "cat-file", "-t", "refs/fleet/y42/state").trim(), "tag");
     assert.equal(sh(wt, "git", "tag", "-l").trim(), "", "no tag name left");
     // 4.0.1: the program lives in scripts/read_state.py only
     const body = extractPy("READ_STATE_PY_BEGIN", "READ_STATE_PY_END", "READ_STATE_PY");
-    const rr = spawnSync("python3", ["-I", "-", wt, "refs/fleet/l42/state"], { input: body, encoding: "utf8" });
+    const rr = spawnSync("python3", ["-I", "-", wt, "refs/fleet/y42/state"], { input: body, encoding: "utf8" });
     assert.equal(rr.status, 0, rr.stderr);
     const got = JSON.parse(rr.stdout);
     assert.equal(got.exists, true);
@@ -5457,7 +5461,7 @@ test("2.1.0 resume survives a transport fix: remote, url, credential, http and s
 
 // ---------------------------------------------------------------- 2.1.0 run-state ref snapshot
 
-const FREF = "refs/fleet/l42/state";
+const FREF = "refs/fleet/y42/state";
 const withFleetRef = (sha) => H({ ...HASHES_FLAT, ["git:fleetref:" + FREF]: sha });
 
 test("2.1.0 run-state refs are snapshotted into the git map by the hasher", { skip: !HAVE_PY }, () => {
@@ -5479,7 +5483,7 @@ test("2.1.0 a coder that creates a run-state ref is a violation", async () => {
   const out = await run(hashViolation(withFleetRef("1234567890abcdef1234567890abcdef12345678")), ARGS);
   noUnscripted(out);
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
-  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /run-state ref touched by role: refs\/fleet\/l42\/state/);
+  assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /run-state ref touched by role: refs\/fleet\/y42\/state/);
 });
 
 test("2.1.0 a judge or a writer that touches a run-state ref is stopped", async () => {
@@ -5488,7 +5492,7 @@ test("2.1.0 a judge or a writer that touches a run-state ref is stopped", async 
   assert.match(out.result.reason, /judge mutated worktree.*run-state ref touched by role/);
   out = await run(happy({ script: { "hasher:post-writers:r1": { status: "ok", fingerprint: FP_TESTS, changed: ["tests/test_a.py", "tests/test_b.py"], hashes: withFleetRef("ab".repeat(20)) } } }), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /run-state ref touched by role: refs\/fleet\/l42\/state/);
+  assert.match(out.result.reason, /run-state ref touched by role: refs\/fleet\/y42\/state/);
 });
 
 test("2.1.0 the script's own run-state write is no violation: the snapshot follows saveState", async () => {
@@ -5785,7 +5789,7 @@ test("2.1.5 run_nonce is required in both modes; no agent runs without it", asyn
     { ...ARGS, run_nonce: null },
     { ...ARGS, run_nonce: "" },
     { ...ARGS, run_nonce: "bad nonce!" },
-    { mode: "build", plan_ref: { branch: "fleet/l42-x" }, date: ARGS.date, run_nonce: null },
+    { mode: "build", plan_ref: { branch: "fleet/y42-x" }, date: ARGS.date, run_nonce: null },
   ]) {
     const a = args;
     const out = await runOne(happy(), a);
@@ -5895,7 +5899,7 @@ test("2.1.5 format-plan runs the repo's hooks on the plan after the planner and 
   assert.ok(l.indexOf("infra:format-plan") > l.indexOf("role:scope-and-plan"));
   assert.ok(l.indexOf("infra:format-plan") < l.indexOf("role:plan-audit"));
   const p = call(out, "infra:format-plan").prompt;
-  assert.deepEqual(inputsOf(p), { worktree: "/r/.claude/worktrees/fleet-l42-add-thing/main", plan_path: "docs/plans/x.md" });
+  assert.deepEqual(inputsOf(p), { worktree: "/r/.claude/worktrees/fleet-y42-add-thing/main", plan_path: "docs/plans/x.md" });
   assert.match(p, /pre-commit run --files/);
   // a new plans dir must list the file, not the dir
   assert.ok(!/status --porcelain`/.test(p) && /status --porcelain --untracked-files=all/.test(p), "files in new untracked dirs are listed");
@@ -5944,12 +5948,12 @@ test("2.1.5 a plan stop after the planner parks the run's own draft plan and kee
   assert.match(out.result.reason, /plan-audit verdict plan_defect/);
   const pk = call(out, "infra:park-plan");
   const inp = inputsOf(pk.prompt);
-  assert.equal(inp.worktree, "/r/.claude/worktrees/fleet-l42-add-thing/main");
+  assert.equal(inp.worktree, "/r/.claude/worktrees/fleet-y42-add-thing/main");
   assert.equal(inp.plan_path, "docs/plans/x.md");
   // 5.0.2 (ledger 2004): the park program checks the tree and moves the draft
-  assert.equal(inp.scratch, "/r/.claude/worktrees/fleet-l42-add-thing/scratch");
+  assert.equal(inp.scratch, "/r/.claude/worktrees/fleet-y42-add-thing/scratch");
   assert.equal(inp.run, NONCE);
-  assert.match(pk.prompt, /parked\.py' 'park' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/main' 'docs\/plans\/x\.md' '\/r\/\.claude\/worktrees\/fleet-l42-add-thing\/scratch' 'n1-0000001'/);
+  assert.match(pk.prompt, /parked\.py' 'park' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/main' 'docs\/plans\/x\.md' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch' 'n1-0000001'/);
   assert.match(pk.prompt, /Run only the commands given in the steps below, each as its own Bash call, exactly as written: no other command \(no git, cp, mv or rm of your own\)/);
   assert.match(out.result.reason, /draft plan moved to .*scratch\/parked/);
   assert.equal(out.result.stop_gate, "role");
@@ -6013,7 +6017,7 @@ test("2.1.5 load-ref reads the content in chunks and checks them against ref_sha
   const p = call(out, "infra:load-ref").prompt;
   // 6.3.4 (2176): part mode; a small ref is one part
   assert.equal(inputsOf(p).mode, "part");
-  assert.match(p, / 'part:refs\/fleet\/l42\/plan:0'\n/);
+  assert.match(p, / 'part:refs\/fleet\/y42\/plan:0'\n/);
   assert.match(p, /never shorten|NEVER shorten/i);
 });
 
@@ -6061,18 +6065,18 @@ test("2.1.5 plan-ref reader program: meta mode has no content, part mode rebuild
     spawnSync("git", ["-C", wt, "commit", "-qm", "i"], { env });
     const writeCmd = planRefWriteCmd;
     const reader = extractPy("PLAN_REF_PY_BEGIN", "PLAN_REF_PY_END", "PLAN_REF_PY");
-    const big = { task_id: "l42", body: "x y — ü 🚀 ".repeat(400) };
-    const w = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(big))], { encoding: "utf8", env });
+    const big = { task_id: "y42", body: "x y — ü 🚀 ".repeat(400) };
+    const w = spawnSync("bash", ["-c", writeCmd(wt, "y42", JSON.stringify(big))], { encoding: "utf8", env });
     assert.equal(w.status, 0, w.stderr);
     const read = (mode) => {
-      const r = spawnSync("python3", ["-I", "-", wt, "l42"].concat(mode ? [mode] : []), { input: reader, encoding: "utf8", env });
+      const r = spawnSync("python3", ["-I", "-", wt, "y42"].concat(mode ? [mode] : []), { input: reader, encoding: "utf8", env });
       assert.equal(r.status, 0, r.stderr);
       return JSON.parse(r.stdout);
     };
     // 3.0.0 (ledger 1952): the full-content mode is gone
-    const none = spawnSync("python3", ["-I", "-", wt, "l42", ""], { input: reader, encoding: "utf8", env });
+    const none = spawnSync("python3", ["-I", "-", wt, "y42", ""], { input: reader, encoding: "utf8", env });
     assert.notEqual(none.status, 0, "an empty mode is refused");
-    const noArg = spawnSync("python3", ["-I", "-", wt, "l42"], { input: reader, encoding: "utf8", env });
+    const noArg = spawnSync("python3", ["-I", "-", wt, "y42"], { input: reader, encoding: "utf8", env });
     assert.notEqual(noArg.status, 0, "a missing mode is refused");
     const meta = read("meta");
     const full = { sha256: sha256(JSON.stringify(big) + "\n"), content: JSON.stringify(big) + "\n" };
@@ -6080,16 +6084,16 @@ test("2.1.5 plan-ref reader program: meta mode has no content, part mode rebuild
     assert.equal(meta.refs[0].sha256, full.sha256);
     assert.equal(meta.chunks, undefined);
     // 6.3.4 (2176): part mode replaced chunks mode
-    const old = spawnSync("python3", ["-I", "-", wt, "l42", "chunks:refs/fleet/l42/plan"], { input: reader, encoding: "utf8", env });
+    const old = spawnSync("python3", ["-I", "-", wt, "y42", "chunks:refs/fleet/y42/plan"], { input: reader, encoding: "utf8", env });
     assert.notEqual(old.status, 0, "chunks mode is gone");
-    const ch = read("part:refs/fleet/l42/plan:0");
+    const ch = read("part:refs/fleet/y42/plan:0");
     assert.equal(ch.part.count, 1);
     assert.ok(!("content" in ch.refs[0]));
     assert.ok(ch.chunks.length >= 5, "several chunks: " + ch.chunks.length);
     assert.ok(ch.chunks.every((c) => [...c].length <= CHUNK), "at most 1000 code points per chunk");
     assert.equal(ch.chunks.join(""), full.content);
     assert.equal(sha256(ch.chunks.join("")), full.sha256);
-    const bad = spawnSync("python3", ["-I", "-", wt, "l42", "part:refs/heads/master:0"], { input: reader, encoding: "utf8", env });
+    const bad = spawnSync("python3", ["-I", "-", wt, "y42", "part:refs/heads/master:0"], { input: reader, encoding: "utf8", env });
     assert.notEqual(bad.status, 0, "parts of a non-plan ref are refused");
   } finally {
     rmSync(home, { recursive: true, force: true });
@@ -6256,7 +6260,9 @@ test("2.1.5 yaadgaar: a sealed legacy ledger source on a yadgarhq/ project stops
   const s = happy();
   // 4.0.0 (1992): planned without project, so the build's project is not a mismatch
   const plan = await runOne(s, { ...ARGS, project: undefined });
-  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "yadgarhq/docs" });
+  // 7.0.0 review F1: plan mode no longer seals a ledger source; a ref sealed before 7.0.0 carries one
+  const old = sealLegacyLedger(s, plan.result.plan_ref);
+  const out = await runOne(s, { mode: "build", plan_ref: old, date: ARGS.date, project: "yadgarhq/docs" });
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /yaadgaar.*re-run plan/);
   assert.ok(!out.labels.some((l) => ROLE_LABEL.test(l)));
@@ -7280,7 +7286,7 @@ function scanRepo(home, env) {
   g("add", "-A");
   g("commit", "-qm", "i");
   g("update-ref", "refs/remotes/origin/master", "HEAD");
-  g("checkout", "-qb", "fleet/l42-add-thing");
+  g("checkout", "-qb", "fleet/y42-add-thing");
   // 6.0.0 (ledger 2042): the plan doc stays untracked; each plan-ref write seals it off the branch
   spawnSync("mkdir", ["-p", join(wt, "docs", "plans")]);
   writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan\n");
@@ -7299,7 +7305,7 @@ test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; P
     const prog = extractPy("BRANCH_SCAN_PY_BEGIN", "BRANCH_SCAN_PY_END", "BRANCH_SCAN_PY");
     const kinds = JSON.stringify(["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]);
     const scan = () => {
-      const r = spawnSync("python3", ["-I", "-", wt, "master", "l42", kinds], { input: prog, encoding: "utf8", env });
+      const r = spawnSync("python3", ["-I", "-", wt, "master", "y42", kinds], { input: prog, encoding: "utf8", env });
       assert.equal(r.status, 0, r.stderr);
       return JSON.parse(r.stdout);
     };
@@ -7315,7 +7321,7 @@ test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; P
       ["sealed, non-ASCII and numbers", base],
       ["seal broken", Object.assign({}, base, { tldr: "changed" })],
       ["no slug", sealed(Object.assign({}, base, { slug: "" }))],
-      ["branch mismatch", sealed(Object.assign({}, base, { branch: "fleet/l42-other" }))],
+      ["branch mismatch", sealed(Object.assign({}, base, { branch: "fleet/y42-other" }))],
       ["bad plan_sha256", sealed(Object.assign({}, base, { plan_sha256: "x" }))],
       ["criteria not a list", sealed(Object.assign({}, base, { criteria: {} }))],
       ["brief source kind", sealed(Object.assign({}, base, { brief: { ...BRIEF, sources: [{ kind: "nope", ref: "1" }] } }))],
@@ -7336,11 +7342,11 @@ test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; P
     ];
     for (const [what, ref] of cases) {
       const msg = JSON.stringify(ref);
-      const w = spawnSync("bash", ["-c", writeCmd(wt, "l42", msg)], { encoding: "utf8", env });
+      const w = spawnSync("bash", ["-c", writeCmd(wt, "y42", msg)], { encoding: "utf8", env });
       assert.equal(w.status, 0, w.stderr);
       const pc = w.stdout.trim().split(" ")[0];
       const o = scan();
-      const e = o.refs.find((x) => x.name === "refs/fleet/l42/plan");
+      const e = o.refs.find((x) => x.name === "refs/fleet/y42/plan");
       assert.ok(!("content" in e), "no message text");
       assert.ok(!JSON.stringify(o).includes("ünï"), "no message text anywhere");
       assert.equal(e.target, pc);
@@ -7348,7 +7354,7 @@ test("3.0.0 branch-scan program: commits and plan-ref checks, no message text; P
       assert.equal(e.sha256, sha256(msg + "\n"));
       assert.equal(e.ref_ok, problem(JSON.parse(msg)) === null, what + ": python " + e.ref_ok + ", js " + problem(JSON.parse(msg)));
       // names only from an ok ref (review 3)
-      assert.equal(e.task_id, e.ref_ok ? "l42" : null);
+      assert.equal(e.task_id, e.ref_ok ? "y42" : null);
       assert.equal(e.plan_path, e.ref_ok ? "docs/plans/x.md" : null);
       // 6.0.0 (ledger 2042): the branch carries no plan commit
       assert.deepEqual(o.commits, []);
@@ -7371,7 +7377,7 @@ test("3.0.0 branch-scan: the prompt carries the program, not a copy-the-text ste
   assert.doesNotMatch(p, /byte for byte/);
   assert.doesNotMatch(p, /git -C <main_worktree> log/);
   // a dropped entry
-  const s = happy({ script: scanOut([planCommit("1111111", [PLAN_MD])], [refEntry("refs/fleet/l42/plan", "1111111", priorRef(PLAN_MD))]) });
+  const s = happy({ script: scanOut([planCommit("1111111", [PLAN_MD])], [refEntry("refs/fleet/y42/plan", "1111111", priorRef(PLAN_MD))]) });
   const good = withRelayDigest("infra:branch-scan", JSON.parse(JSON.stringify(s["infra:branch-scan"])));
   s["infra:branch-scan"] = { ...good, refs: [] };
   const o2 = await runOne(s, ARGS);
@@ -7379,7 +7385,7 @@ test("3.0.0 branch-scan: the prompt carries the program, not a copy-the-text ste
   assert.match(o2.result.reason, /infra:branch-scan: the relayed lists do not match the program's digest/);
   // the program says the ref is not ok: the plan commit is a build commit
   const t = happy();
-  const meta = { name: "refs/fleet/l42/plan", tag_sha: "7".repeat(40), type: "tag", target: "1111111", target_type: "commit", sha256: "a".repeat(64), task_id: "l42", plan_path: PLAN_MD, ref_ok: false };
+  const meta = { name: "refs/fleet/y42/plan", tag_sha: "7".repeat(40), type: "tag", target: "1111111", target_type: "commit", sha256: "a".repeat(64), task_id: "y42", plan_path: PLAN_MD, ref_ok: false };
   t["infra:branch-scan"] = { status: "ok", reason: "scanned", head: PB, commits: [planCommit("1111111", [PLAN_MD])], refs: [meta] };
   const o3 = await runOne(t, ARGS);
   assert.equal(o3.result.status, "needs_human");
@@ -7395,7 +7401,7 @@ test("3.0.0 relays carry program digests: fleet-scan, read-state, review-paths, 
   // fleet-scan: a dropped .fleet/ path
   {
     const s = happy();
-    const good = withRelayDigest("infra:fleet-scan:push", { status: "ok", reason: "x", diff: [".fleet/l42/x"], commits: [] });
+    const good = withRelayDigest("infra:fleet-scan:push", { status: "ok", reason: "x", diff: [".fleet/y42/x"], commits: [] });
     s["infra:fleet-scan:push"] = { ...good, diff: [] };
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "needs_human");
@@ -7461,7 +7467,7 @@ test("3.0.0 relay programs print digests the workflow accepts (read-state, revie
       for (const k of keys) x[k] = o[k] === undefined ? null : o[k];
       assert.equal(sha256(fn(x)), o.digest, keys.join(","));
     };
-    const st = runP("READ_STATE_PY_BEGIN", "READ_STATE_PY_END", "READ_STATE_PY", ["refs/fleet/l42/state"]);
+    const st = runP("READ_STATE_PY_BEGIN", "READ_STATE_PY_END", "READ_STATE_PY", ["refs/fleet/y42/state"]);
     assert.deepEqual([st.exists, st.target, st.message], [false, "", ""]);
     check(st, ["exists", "target", "message", "head", "head_tree", "clean"]);
     const rp = runP("REVIEW_PATHS_PY_BEGIN", "REVIEW_PATHS_PY_END", "REVIEW_PATHS_PY", ["refs/remotes/origin/master", head]);
@@ -7918,9 +7924,9 @@ test("6.0.0 2042: the ledger section names the sealed plan ref, with no blob lin
     s.workspace = { ...s.workspace, remote_host: host };
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "ok", out.result.reason);
-    // 7.0.0 (yaadgaar #699): the legacy ledger entry hands the section back
-    const t = out.result.write_back.ledger[0].section_text;
-    assert.match(t, /\nPlan: docs\/plans\/x\.md, sealed locally at refs\/fleet\/l42\/plan \(not in the PR\)\n/);
+    // 7.0.0 review F2: the section the default yaadgaar task's write-back carries
+    const t = inputsOf(call(out, "infra:yaadgaar-writeback").prompt).section_text;
+    assert.match(t, /\nPlan: docs\/plans\/x\.md, sealed locally at refs\/fleet\/y42\/plan \(not in the PR\)\n/);
     assert.doesNotMatch(t, /https:\/\/(codeberg\.org|github\.com)\/o\/r\/(src|blob)\//, host);
   }
 });
@@ -8155,10 +8161,10 @@ test("3.0.0 review 3 LOW: branch-scan prints task_id and plan_path only for an o
     const writeCmd = planRefWriteCmd;
     const bad = JSON.parse(priorRef("docs/plans/x.md"));
     bad.tldr = "changed after the seal";
-    const w = spawnSync("bash", ["-c", writeCmd(wt, "l42", JSON.stringify(bad))], { encoding: "utf8", env });
+    const w = spawnSync("bash", ["-c", writeCmd(wt, "y42", JSON.stringify(bad))], { encoding: "utf8", env });
     assert.equal(w.status, 0, w.stderr);
     const kinds = JSON.stringify(["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]);
-    const r = spawnSync("python3", ["-I", "-", wt, "master", "l42", kinds], { input: prog, encoding: "utf8", env });
+    const r = spawnSync("python3", ["-I", "-", wt, "master", "y42", kinds], { input: prog, encoding: "utf8", env });
     const e = JSON.parse(r.stdout).refs[0];
     assert.equal(e.ref_ok, false);
     assert.equal(e.task_id, null);
@@ -8243,9 +8249,9 @@ test("3.0.0 review 4 n_bs_refok_regex: a sealed ref whose task_id or plan_path f
       const { wt } = scanRepo(home, env);
       const msg = priorRef("docs/plans/x.md", over).trimEnd();
       assert.equal(jsPlanRefProblem()(JSON.parse(msg)), null, "sealed and well formed for planRefProblem");
-      const w = spawnSync("bash", ["-c", writeCmd(wt, "l42", msg)], { encoding: "utf8", env });
+      const w = spawnSync("bash", ["-c", writeCmd(wt, "y42", msg)], { encoding: "utf8", env });
       assert.equal(w.status, 0, w.stderr);
-      const r = spawnSync("python3", ["-I", "-", wt, "master", "l42", kinds], { input: prog, encoding: "utf8", env });
+      const r = spawnSync("python3", ["-I", "-", wt, "master", "y42", kinds], { input: prog, encoding: "utf8", env });
       const e = JSON.parse(r.stdout).refs[0];
       assert.equal(e.ref_ok, false, JSON.stringify(over));
       assert.equal(e.plan_path, null);
@@ -8259,12 +8265,12 @@ test("3.0.0 review 4 n_planref_argc: the plan-ref reader refuses an extra argume
   const reader = extractPy("PLAN_REF_PY_BEGIN", "PLAN_REF_PY_END", "PLAN_REF_PY");
   const wt = gitRepo("fleet-r4-argc-", { "a.py": "a\n" });
   try {
-    for (const args of [[wt, "l42", "meta", "extra"], [wt, "l42"]]) {
+    for (const args of [[wt, "y42", "meta", "extra"], [wt, "y42"]]) {
       const r = spawnSync("python3", ["-I", "-"].concat(args), { input: reader, encoding: "utf8" });
       assert.notEqual(r.status, 0, args.join(" "));
       assert.match(r.stderr, /usage/);
     }
-    const ok = spawnSync("python3", ["-I", "-", wt, "l42", "meta"], { input: reader, encoding: "utf8" });
+    const ok = spawnSync("python3", ["-I", "-", wt, "y42", "meta"], { input: reader, encoding: "utf8" });
     assert.equal(ok.status, 0, ok.stderr);
   } finally {
     rmSync(wt, { recursive: true, force: true });
@@ -8710,7 +8716,7 @@ test("3.1.0 1959: the verify and plan-files programs print what git says, with a
     };
     // 6.0.0 (ledger 2042): the plan commit sits on the branch HEAD (plan_base), off the branch
     const pb = g("rev-parse", "HEAD").trim();
-    const w = spawnSync("bash", ["-c", planRefWriteCmd(wt, "l42", "{}")], { encoding: "utf8", env });
+    const w = spawnSync("bash", ["-c", planRefWriteCmd(wt, "y42", "{}")], { encoding: "utf8", env });
     assert.equal(w.status, 0, w.stderr);
     const plan = w.stdout.trim().split(" ")[0];
     // the plan commit holds the plan doc only
@@ -8729,7 +8735,7 @@ test("3.1.0 1959: the verify and plan-files programs print what git says, with a
     writeFileSync(join(wt, "a.py"), "b\n");
     writeFileSync(join(wt, "ü é.py"), "x\n");
     g("add", "-A");
-    g("commit", "-qm", "feat(l42): ü\tthing \u0001 done");
+    g("commit", "-qm", "feat(y42): ü\tthing \u0001 done");
     const c1 = g("rev-parse", "HEAD").trim();
     writeFileSync(join(wt, "docs", "plans", "x.md"), "# plan 2\n");
     g("add", "-A");
@@ -8740,7 +8746,7 @@ test("3.1.0 1959: the verify and plan-files programs print what git says, with a
     assert.equal(v.is_ancestor, true);
     assert.deepEqual(v.commits_since, [
       { sha: c2, subject: "edit plan", parents: [c1] },
-      { sha: c1, subject: "feat(l42): ü\tthing \u0001 done", parents: [pc] },
+      { sha: c1, subject: "feat(y42): ü\tthing \u0001 done", parents: [pc] },
     ]);
     assert.deepEqual(v.plan_touched, [c2]);
     assert.deepEqual(v.changed_since, ["a.py", "docs/plans/x.md", "ü é.py"]);
@@ -8923,7 +8929,7 @@ test("3.1.0 1935c: the push step runs the classifier program; a hook_rejected th
     (r) => ({ ...r, push_result: "hook_rejected", exit_code: 1, hook_tail: "x", digest: undefined }),
     (r) => ({ ...r, exit_code: 128 }),
     (r) => {
-      const o = { ...r, args: ["/r/.claude/worktrees/fleet-l42-add-thing/main/out.txt", "1"] };
+      const o = { ...r, args: ["/r/.claude/worktrees/fleet-y42-add-thing/main/out.txt", "1"] };
       o.digest = relayDigestOf(o, ["push_result", "exit_code", "hook_tail", "args"]);
       return o;
     },
@@ -8949,10 +8955,10 @@ test("3.1.0 1935c: the push step runs the classifier program; a hook_rejected th
 test("3.1.0 1935c: a gh error string in remote_head never passes as the pushed sha", async () => {
   // DERIVED from gh's error format, not observed: a 5xx from the GitHub API
   const s = happy();
-  s["infra:push"] = { status: "ok", reason: "pushed", push_result: "ok", remote_head: "gh: HTTP 502: Bad Gateway (https://api.github.com/repos/o/r/branches/fleet/l42-add-thing)" };
+  s["infra:push"] = { status: "ok", reason: "pushed", push_result: "ok", remote_head: "gh: HTTP 502: Bad Gateway (https://api.github.com/repos/o/r/branches/fleet/y42-add-thing)" };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /push: origin\/fleet\/l42-add-thing is at gh: HTTP 502/);
+  assert.match(out.result.reason, /push: origin\/fleet\/y42-add-thing is at gh: HTTP 502/);
 });
 
 // ---------------------------------------------------------------- 3.1.0 (ledger 1935a): writers and the test judge get the plan's env
@@ -9971,9 +9977,9 @@ test("3.1.0 IaC push gate: a plain .tf change stops at iac-push before the push,
     const r = out.result.reason;
     assert.match(r, /never push(es)? automatically/);
     assert.ok(r.includes(seen.approved_sha), r);
-    assert.match(r, /fleet\/l42-[a-z0-9-]+/);
+    assert.match(r, /fleet\/y42-[a-z0-9-]+/);
     assert.match(r, /infra\/main\.tf/);
-    assert.match(r, /git -C \S+ push -u origin fleet\/l42-[a-z0-9-]+/);
+    assert.match(r, /git -C \S+ push -u origin fleet\/y42-[a-z0-9-]+/);
     assert.match(r, /hints \(not a security check\): none/);
   }
 });
@@ -10103,7 +10109,7 @@ test("3.1.0 ADR-1175: the remote head program reads origin's branch head, null w
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "a");
     sh(wt, "git", "remote", "add", "origin", bare);
-    sh(wt, "git", "push", "-q", "origin", "HEAD:refs/heads/fleet/l42-x");
+    sh(wt, "git", "push", "-q", "origin", "HEAD:refs/heads/fleet/y42-x");
     const head = sh(wt, "git", "rev-parse", "HEAD").trim();
     // a role's repo config edits: a marker sshCommand and uploadpack, and an insteadOf decoy
     const m1 = markerScript(home, "ssh");
@@ -10116,15 +10122,15 @@ test("3.1.0 ADR-1175: the remote head program reads origin's branch head, null w
     const prog = extractPy("REMOTE_HEAD_PY_BEGIN", "REMOTE_HEAD_PY_END", "REMOTE_HEAD_PY");
     const env = testGitEnv(home);
     const go = (branch, url) => spawnSync("python3", ["-I", "-c", prog, wt, branch, url || TEST_URL], { encoding: "utf8", cwd: home, env });
-    let r = go("fleet/l42-x");
+    let r = go("fleet/y42-x");
     assert.equal(r.status, 0, r.stderr);
     let o = JSON.parse(r.stdout);
     assert.equal(o.head, head, "the decoy origin was not used");
-    assert.deepEqual(o.args, [wt, "fleet/l42-x", TEST_URL]);
+    assert.deepEqual(o.args, [wt, "fleet/y42-x", TEST_URL]);
     assert.ok(!existsSync(m1.marker) && !existsSync(m2.marker), "no repo-config command ran");
-    for (const bad of [bare, "file://" + bare, "ext::sh -c x", "-u", "ssh://h/x"]) assert.notEqual(go("fleet/l42-x", bad).status, 0, bad);
+    for (const bad of [bare, "file://" + bare, "ext::sh -c x", "-u", "ssh://h/x"]) assert.notEqual(go("fleet/y42-x", bad).status, 0, bad);
     assert.equal(o.digest, sha256(canon({ head: o.head, args: o.args, program: o.program })));
-    o = JSON.parse(go("fleet/l42-gone").stdout);
+    o = JSON.parse(go("fleet/y42-gone").stdout);
     assert.equal(o.head, null);
     assert.notEqual(go("--upload-pack=x").status, 0);
     assert.doesNotMatch(prog, /terraform|tofu|digger|atlantis/i);
@@ -10949,7 +10955,8 @@ test("3.1.3 intake: needs_human on a task id names the ledgers tried and the too
   assert.match(out.result.reason, /yadgar \(project yadgarhq\/docs\) task_get\(project_id=yadgarhq\/docs, id=671\): error \(as reported by intake agent\): external_task_ledger/);
   assert.deepEqual(out.labels, ["preflight", "intake"]);
   // a task-id input that made no ledger call says so
-  for (const input of ["#671", "671", "L42", "yaadgaar #671"]) {
+  // (7.0.0 review F1: an L<N> input stops before intake; v700_legacy_gate)
+  for (const input of ["#671", "671", "yaadgaar #671"]) {
     const o = await runOne(happy({ script: { intake: { status: "needs_human", reason: "unsure" } } }), { ...YQ, input });
     assert.match(o.result.reason, /ledgers tried: none \(intake made no ledger tool call\)/, input);
   }
@@ -11088,7 +11095,8 @@ test("3.1.3 build: the ledger write-back takes args.project, independent of the 
 // ---------------------------------------------------------------- 3.1.3 review of PR #41
 
 test("3.1.3 review 1: confirm auto with no project and a task-id input stops before intake", async () => {
-  for (const input of ["#42", "42", "L42", "yaadgaar #42"]) {
+  // (7.0.0 review F1: an L<N> input stops earlier, as a legacy id; v700_legacy_gate)
+  for (const input of ["#42", "42", "yaadgaar #42"]) {
     const a = { ...ARGS, input, confirm: "auto" };
     delete a.project;
     const out = await runOne(autoHappy(), a);
@@ -11115,21 +11123,28 @@ test("3.1.3 review 1: the confirmation names the resolved ledger and project", a
   assert.equal(n.result.status, "awaiting_confirmation", n.result.reason);
   assert.equal(n.result.ledger_source.project, null);
   assert.match(n.result.reason, /yaadgaar #622 .* of the session's yaadgaar project \(no args\.project\)/);
+  // 7.0.0 review F2: the default fixture's task is yaadgaar #42
   const l = await runOne(happy(), ARGS);
-  assert.deepEqual(l.result.ledger_source, { ledger: "yadgar", ref: "42", id: null, project: "o/r" });
-  assert.match(l.result.reason, /yadgar L42 of project o\/r/);
+  assert.deepEqual(l.result.ledger_source, { ledger: "yaadgaar", ref: "42", id: YURN42, project: "o/r" });
+  assert.match(l.result.reason, /yaadgaar #42 \(yadgar:task:0192aaaa-0000-7000-8000-000000000042\) of project o\/r/);
   const t = await runOne(happy({ brief: { ...BRIEF, sources: [{ kind: "text", ref: "text", url: null, body: "x" }] } }), { ...ARGS, input: "do x" });
   assert.equal(t.result.ledger_source, null);
 });
 
-test("3.1.3 review 2: build with no project stops on a legacy ledger source", async () => {
+// 7.0.0 review F3: was "build with no project stops on a legacy ledger source". The legacy source
+// is inert (never read or written), so it needs no project: an old ref resumes to its unavailable
+// write-back entry instead of dead-ending
+test("7.0.0 review F3 (was 3.1.3 review 2): build with no project on a legacy ledger source resumes to the inert write-back", async () => {
   const s = happy();
   // 4.0.0 (1992): a plan run with no project seals none
   const plan = await runOne(s, { ...ARGS, project: undefined });
-  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date });
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /source ledger:42 needs args\.project.*re-run plan/);
-  assert.ok(!out.labels.some((l) => ROLE_LABEL.test(l)));
+  const old = sealLegacyLedger(s, plan.result.plan_ref);
+  const out = await runOne(s, { mode: "build", plan_ref: old, date: ARGS.date });
+  noUnscripted(out);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["42", "unavailable"]]);
+  assert.match(out.result.write_back.ledger[0].section_text, /<!-- fleet:y42 -->/);
+  assert.ok(!out.labels.some((l) => /^infra:(ledger|yaadgaar)-/.test(l)), out.labels.join(", "));
 });
 
 test("3.1.3 review 3: the yaadgaar id has the URN shape and comes from a read_task call that returned it", async () => {

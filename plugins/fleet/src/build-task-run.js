@@ -215,7 +215,8 @@ const CC_TYPES = ["feat", "fix", "perf", "revert", "chore", "refactor", "docs", 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const BRANCH_RE = /^fleet\/[a-z0-9][a-z0-9-]*$/;
 const PLAN_REF_NAME_RE = /^refs\/fleet\/([a-z0-9][a-z0-9-]*)\/plan$/;
-// "ledger" is the yadgar task ledger (L<N>)
+// "ledger" is the retired yadgar task ledger (L<N>): only a plan ref sealed before 7.0.0 carries it;
+// plan mode refuses it in script code (legacySourceProblem)
 const SOURCE_KINDS = ["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"];
 const EXTERNAL_KINDS = ["jira", "github", "codeberg"];
 const ID_KINDS = ["ledger", "yaadgaar", "jira", "github", "codeberg"];
@@ -710,7 +711,7 @@ const INFRA_SCHEMA = {
       type: "array",
       items: {
         type: "object",
-        properties: { key: STR, status: STR, has_marker: { type: "boolean" }, reason: STR, url: STR_OR_NULL, id: STR, version: { type: "integer" }, number: { type: "integer" }, project: STR, title: STR_OR_NULL, body_slug: STR_OR_NULL, page_project: STR_OR_NULL, page_tags: { type: "array", items: STR } },
+        properties: { key: STR, status: STR, has_marker: { type: "boolean" }, reason: STR, url: STR_OR_NULL, id: STR, version: { type: "integer" }, number: { type: "integer" }, project: STR },
         required: ["key"],
       },
     },
@@ -719,7 +720,7 @@ const INFRA_SCHEMA = {
 const SOURCE_SCHEMA = {
   type: "object",
   required: ["kind", "ref", "body"],
-  properties: { kind: { type: "string", enum: SOURCE_KINDS }, ref: STR, url: STR_OR_NULL, body: STR, id: STR_OR_NULL, project: STR_OR_NULL, body_slug: STR_OR_NULL },
+  properties: { kind: { type: "string", enum: SOURCE_KINDS }, ref: STR, url: STR_OR_NULL, body: STR, id: STR_OR_NULL, project: STR_OR_NULL },
 };
 const INTAKE_SCHEMA = {
   type: "object",
@@ -4022,6 +4023,15 @@ function ledgerProblem(brief, project) {
   return null;
 }
 
+// 7.0.0 review F1: a legacy ledger id (L<N>), and a brief that names a legacy ledger source. Intake
+// never seals one, on any project; only a plan ref sealed before 7.0.0 carries one (build mode)
+const LEGACY_ID_RE = /^L\s*([0-9]+)$/i;
+function legacySourceProblem(brief) {
+  const s = brief.sources.find((x) => x.kind === "ledger");
+  if (!s) return null;
+  return "source ledger:" + s.ref + " is a legacy yadgar ledger task: " + RETIRED_REASON + "; its migrated yaadgaar task carries the title prefix `L" + String(s.ref).replace(/^l\s*/i, "") + ": `; pass that task's yaadgaar number";
+}
+
 // a task-id input, and the reason intake halts with
 const TASK_ID_INPUT_RE = /^(?:L|#|yaadgaar\s*#)?\s*[0-9]+$/i;
 // Advice to change a repo's project identity
@@ -4061,14 +4071,18 @@ function intakeHaltReason(it, raw) {
       .join("; ")
   );
 }
+// 7.0.0 review F5: session_project.py lowercases, so project keys compare case-insensitively
+function sameProject(a, b) {
+  return typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+}
 function yaadgaarScope(named, want) {
-  if (typeof named === "string" && named) return named === want ? null : { why: "is in project " + JSON.stringify(named) + ", not args.project " + want };
+  if (typeof named === "string" && named) return sameProject(named, want) ? null : { why: "is in project " + JSON.stringify(named) + ", not args.project " + want };
   if (!state.sessionProject) return { soft: true, why: "no proof of the session's yaadgaar project (session_project.py resolved none)" };
-  return state.sessionProject === want ? null : { why: "the session's yaadgaar project is " + state.sessionProject + ", not " + want };
+  return sameProject(state.sessionProject, want) ? null : { why: "the session's yaadgaar project is " + state.sessionProject + ", not " + want };
 }
 function yaadgaarProjectProblem(sources, project) {
   for (const s of Array.isArray(sources) ? sources : [])
-    if (s && s.kind === "yaadgaar" && typeof s.project === "string" && s.project && s.project !== project)
+    if (s && s.kind === "yaadgaar" && typeof s.project === "string" && s.project && !sameProject(s.project, project))
       return "source yaadgaar:" + s.ref + " is task " + JSON.stringify(s.id || null) + " of project " + s.project + ", not args.project " + (project || "(none)") + ": nothing sealed";
     else if (s && s.kind === "yaadgaar" && project && yaadgaarScope(s.project, project))
       return "source yaadgaar:" + s.ref + ": " + yaadgaarScope(s.project, project).why + ": nothing sealed";
@@ -5303,6 +5317,10 @@ async function planMode(input, date) {
   const repo = cleanRepo(input.repo);
   if (!raw) stop("needs_human", "args.input missing: run /build-task <ledger id | Jira key | issue or PR URL | plan path | text>");
   if (!repo) stop("needs_human", "args.repo must be the absolute path of the caller's git toplevel");
+  // 7.0.0 review F1: an L<N> input stops in script code, before any agent runs
+  const legacyId = LEGACY_ID_RE.exec(raw);
+  if (legacyId)
+    stop("needs_human", "task id " + JSON.stringify(raw) + " is a legacy yadgar ledger id: " + RETIRED_REASON + "; its migrated yaadgaar task carries the title prefix `L" + legacyId[1] + ": `; run /build-task with that task's yaadgaar number");
   if (input.confirm === "auto" && input.unattended !== true && !input.project && TASK_ID_INPUT_RE.test(raw))
     stop("needs_human", "task id " + JSON.stringify(raw) + " with no args.project under confirm \"auto\": pass project, or run with confirm \"ask\" so Max sees which ledger and project it resolved to");
 
@@ -5325,7 +5343,7 @@ async function planMode(input, date) {
   const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, input.project || null);
   if (problem) halt("needs_human", "intake: " + problem);
   const brief = cleanBrief(it.brief);
-  const lp = ledgerProblem(brief, input.project) || yaadgaarIdProblem(brief, it.tried);
+  const lp = legacySourceProblem(brief) || yaadgaarIdProblem(brief, it.tried);
   if (lp) halt("needs_human", "intake: " + lp);
   const names = namesFor(brief, raw);
   if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
@@ -5723,6 +5741,8 @@ async function rereadBrief(brief, project, repo) {
   const problem = briefProblem(it.brief) || yaadgaarProjectProblem(it.brief.sources, project || null);
   if (problem) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + ": " + problem);
   const fresh = cleanBrief(it.brief);
+  const legacy = legacySourceProblem(fresh);
+  if (legacy) halt("needs_human", "re-read of " + src.kind + ":" + src.ref + ": " + legacy);
   if (fresh.repo !== brief.repo || !fresh.sources.some((x) => x.kind === src.kind && x.ref === src.ref && (src.kind !== "yaadgaar" || !src.id || x.id === src.id)))
     halt(
       "needs_human",
@@ -5868,11 +5888,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   };
   gate("build " + lay.branch + " from plan " + ref.plan_path + " @ " + ref.plan_commit + " (run " + history.runs + ", re-plans so far " + history.replans + "); plan ref sha256 matches, seal ok");
   const project = input.project || ws.remoteSlug;
-  const lpb =
-    ledgerProblem(brief, input.project) ||
-    (!input.project && brief.sources.some((x) => x.kind === "ledger")
-      ? "source ledger:" + brief.sources.find((x) => x.kind === "ledger").ref + " needs args.project (the yadgar ledger scope); re-run plan with project"
-      : null);
+  // 7.0.0 review F3: a legacy ledger source is inert (never read or written), so it needs no
+  // args.project; an old ref without one resumes to the unavailable write-back entry
+  const lpb = ledgerProblem(brief, input.project);
   if (lpb) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + lpb + "; re-run plan");
   const defaultBranch = ws.defaultBranch;
   const remoteSlug = ws.remoteSlug;
@@ -7735,14 +7753,9 @@ async function writeBack(ctx) {
   // written, and the section goes back for Max to paste into the migrated yaadgaar task
   const ledger = brief.sources.filter((s) => s.kind === "ledger");
   if (ledger.length) {
-    let why = RETIRED_REASON + ": nothing written; paste the section into the migrated yaadgaar task (title prefix L<N>: )";
-    let st = "unavailable";
-    // a yadgarhq/ project never had a yadgar ledger task to write
-    if (project && YAADGAAR_PROJECT_RE.test(project)) {
-      why = "project " + project + " keeps its tasks in yaadgaar, not the yadgar ledger: nothing written";
-      st = "failed";
-    }
-    for (const s of ledger) out.write_back.ledger.push({ ref: s.ref, status: st, reason: why, section_text: sectionText });
+    // a yadgarhq/ args.project with a legacy source halts at build start (ledgerProblem)
+    const why = RETIRED_REASON + ": nothing written; paste the section into the migrated yaadgaar task (title prefix L<N>: )";
+    for (const s of ledger) out.write_back.ledger.push({ ref: s.ref, status: "unavailable", reason: why, section_text: sectionText });
     gate("write-back ledger (" + marker + "): " + out.write_back.ledger.map((e) => e.ref + "=" + e.status).join(", "));
   }
   const yq = brief.sources.map((s, i) => Object.assign({ key: "s" + i }, s)).filter((s) => s.kind === "yaadgaar");
@@ -7750,15 +7763,17 @@ async function writeBack(ctx) {
     let results = null;
     let why = null;
     const tasks = yq.map((s) => ({ key: s.key, number: /^[1-9][0-9]*$/.test(String(s.ref)) ? Number(s.ref) : null, id: typeof s.id === "string" && s.id ? s.id : null }));
-    // args.project is the ledger scope
-    if (!project || !LEDGER_PROJECT_RE.test(project)) why = "no <owner>/<repo> project to write to (args.project " + JSON.stringify(project) + ")";
+    // 7.0.0 review F5: args.project guards the scope; without it the digest-checked session
+    // project (the one read_task is bound to) is the scope
+    const yp = project || state.sessionProject || null;
+    if (!yp || !LEDGER_PROJECT_RE.test(yp)) why = "no <owner>/<repo> project to write to (args.project " + JSON.stringify(project) + ", session project " + JSON.stringify(state.sessionProject) + ")";
     else if (tasks.some((t) => t.number === null)) why = "a yaadgaar ref is not a task number";
     else if (tasks.some((t) => t.id === null)) why = "the plan ref holds no task id for a yaadgaar source (sealed before 3.1.3): nothing was edited; re-run plan";
     else {
       // read by the sealed id first
       const rd = await softDispatch(
         "infra:yaadgaar-read" + sfx,
-        yaadgaarReadPrompt({ project, tasks, marker }),
+        yaadgaarReadPrompt({ project: yp, tasks, marker }),
         { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Write-back" },
       );
       if (!rd || !Array.isArray(rd.results)) why = (rd && rd.reason) || "yaadgaar read agent returned no result";
@@ -7775,9 +7790,9 @@ async function writeBack(ctx) {
             results.push({ key: t.key, status: "failed", reason: "read: the id " + h.id + " is not the sealed " + t.id });
           else if (h.number !== t.number)
             results.push({ key: t.key, status: "failed", reason: "read: the id " + h.id + " is task number " + JSON.stringify(h.number === undefined ? null : h.number) + ", not " + t.number });
-          // a named project must be args.project
-          else if (yaadgaarScope(h.project, project)) {
-            const sc = yaadgaarScope(h.project, project);
+          // a named project must be the scope
+          else if (yaadgaarScope(h.project, yp)) {
+            const sc = yaadgaarScope(h.project, yp);
             if (sc.soft) noProof = sc.why;
             results.push({ key: t.key, status: sc.soft ? "unavailable" : "failed", reason: "read: task #" + t.number + " (" + h.id + "): " + sc.why + "; nothing written" });
           }
@@ -7788,7 +7803,7 @@ async function writeBack(ctx) {
           const r = await softDispatch(
             "infra:yaadgaar-writeback" + sfx,
             yaadgaarWritebackPrompt({
-              project,
+              project: yp,
               tasks: toEdit,
               section_heading: heading,
               section_text: sectionText,

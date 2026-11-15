@@ -28,7 +28,9 @@ test("7.0.0 AC1: a task id on any project, or on none, is read from yaadgaar", a
   }
 });
 
-test("7.0.0 AC1: the intake prompt holds no yadgar ledger branch; an L<N> id stops for the yaadgaar number", async () => {
+// 7.0.0 review F1: the L<N> stop is script code (v700_review_r1 F1(a), F1(b)); this test no longer
+// pins the prompt's L42 sentence as the gate
+test("7.0.0 AC1: the intake prompt holds no yadgar ledger branch", async () => {
   for (const project of ["o/r", undefined]) {
     const a = { ...ARGS, confirm: "ask" };
     if (project === undefined) delete a.project;
@@ -38,8 +40,5 @@ test("7.0.0 AC1: the intake prompt holds no yadgar ledger branch; an L<N> id sto
       assert.ok(p.indexOf(banned) < 0, String(project) + ": intake prompt still names " + banned);
     assert.match(p, /mcp__yaadgaar__read_task/);
     assert.match(p, /read_task|number=<the number>/);
-    // a legacy id is not resolved: the migrated task carries the title prefix L<N>:
-    assert.match(p, /`L42` input -> needs_human/);
-    assert.match(p, /title prefix `L42: `/);
   }
 });

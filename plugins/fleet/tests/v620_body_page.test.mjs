@@ -5,8 +5,9 @@
 // 7.0.0 (yaadgaar #699): the yadgar ledger is retired; every project's tasks
 // live in yaadgaar, whose read_task answer carries the body. Intake reads no
 // body page, the script checks no page read, and BODY_PAGE_REASON is gone. The
-// schema keeps the body_slug property (a follow-up removes it), and the sealed
-// brief never carried it.
+// sealed brief never carried body_slug; 7.0.0 review F4 removed the schema
+// property. 7.0.0 review F1: plan mode refuses a legacy ledger source, so a
+// stray body_slug is checked on a yaadgaar source.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -15,7 +16,7 @@ import { SOURCE, ARGS, BRIEF, happy, runOne, call, inputsOf, noUnscripted } from
 const SLUG = "o_r_task-42";
 const MARKER = "<!-- fleet-brief:v1 -->";
 const PAGE = "## Fleet brief (plan-task, 2026-11-12)\n\n" + MARKER + "\n\nRepo: o/r Component: x\n";
-const pageBrief = (over) => ({ ...BRIEF, sources: [Object.assign({ kind: "ledger", ref: "42", url: null, body: "Add Thing! (open)\n\n" + PAGE, body_slug: SLUG }, over || {})] });
+const pageBrief = (over) => ({ ...BRIEF, sources: [Object.assign({}, BRIEF.sources[0], { body: "Add Thing! (open)\n\n" + PAGE, body_slug: SLUG }, over || {})] });
 
 test("7.0.0 body page retired: no reason code, and the intake prompt names no page read", async () => {
   assert.doesNotMatch(SOURCE, /BODY_PAGE_REASON/);
@@ -25,12 +26,14 @@ test("7.0.0 body page retired: no reason code, and the intake prompt names no pa
   assert.ok(p.includes("sources: [{kind, ref, url, body, id, project}]"), "return shape");
 });
 
-test("6.2.0 body page: the intake schema accepts body_slug on a source", () => {
-  assert.match(SOURCE, /const SOURCE_SCHEMA = \{[\s\S]*?body_slug: STR_OR_NULL[\s\S]*?\};/);
+test("7.0.0 review F4 (was 6.2.0): the intake source schema has no body_slug property", () => {
+  const m = /const SOURCE_SCHEMA = \{[\s\S]*?\n\};/.exec(SOURCE);
+  assert.ok(m, "SOURCE_SCHEMA");
+  assert.doesNotMatch(m[0], /body_slug/);
 });
 
-test("7.0.0 body page retired: a legacy source with a body_slug and no page read is not stopped by the script", async () => {
-  const out = await runOne(happy({ brief: pageBrief(), tried: [] }), ARGS);
+test("7.0.0 body page retired: a source with a stray body_slug and no page read is not stopped by the script", async () => {
+  const out = await runOne(happy({ brief: pageBrief() }), ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   assert.ok(call(out, "role:scope-and-plan").prompt.includes(MARKER), "the planner sees the sealed body");

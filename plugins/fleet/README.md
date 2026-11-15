@@ -368,11 +368,13 @@ line "build caller check skipped".
 Intake classifies the input and fetches its text: a task through yaadgaar `read_task` (when present), a Jira
 ticket through the Atlassian MCP, an issue or PR through the checked `gh_cmd` (5.0.8) or the Codeberg API, a plan
 file, or free text. It returns `brief: {title, description, sources: [{kind, ref, url, body, id,
-project, body_slug}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,
+project}], repo, plan_path}`. `kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,
 `plan` and `text`. `id` and `project` are null except on a `yaadgaar` source. `url` and
 `plan_path` may be null. Free text, a plan and a yaadgaar task work in the caller's repo. Since
-7.0.0 (yaadgaar #699) intake never produces a `ledger` source or a `body_slug`: the kind and the
-schema property stay only for plan refs sealed before 7.0.0 (see "Ledger adapters").
+7.0.0 (yaadgaar #699) intake never produces a `ledger` source: the kind stays only for plan refs
+sealed before 7.0.0 (see "Ledger adapters"). The plan run refuses it in script code, before any agent
+for an `L<N>` input and after intake for a brief that names a `ledger` source, on every project
+(7.0.0 review F1). The `body_slug` schema property is removed.
 
 The yadgar ledger body page (6.2.0, ledger 2058: `task_get`, then `wiki_read` of the `body_slug`
 page) is retired with the yadgar ledger in 7.0.0.
@@ -407,7 +409,7 @@ itself and reports it absent only when `ToolSearch` finds no such tool.
   tool that fails at call time stays `failed`. Neither stops the run. `ledger_status` is `none`
   when no ledger entry exists. A legacy `ledger` source is never read or written (7.0.0): its
   entry is `unavailable` with the `section_text` to paste into the migrated yaadgaar task (title
-  prefix `L<N>: `), or `failed` on a `yadgarhq/` project.
+  prefix `L<N>: `). A build with a `yadgarhq/` `args.project` stops at build start instead.
 - The intent judge gets `ledger_task` only through a ledger adapter, and never reads tracker
   comments as rulings. A build with `confirm: "auto"` whose rulings re-read reports the ledger
   tool absent stops with the same sentence (Max's ruling: only plans that used a ledger reach
@@ -872,8 +874,8 @@ writers on a committed fleet branch. A run-state of another plan is ignored (and
 is `plan_base`, for example after a re-plan.
 
 - **Ledger (retired in 7.0.0, yaadgaar #699):** a `ledger` source from a plan ref sealed before
-  7.0.0 is never read or written. Its entry is `unavailable` (`failed` on a `yadgarhq/` project)
-  and hands back the `section_text` (tldr, plan path, PR URL, hidden `fleet:<task id>` marker) to
+  7.0.0 is never read or written, so it needs no `args.project` (7.0.0 review F3). Its entry is
+  `unavailable` (a build with a `yadgarhq/` `args.project` stops at build start) and hands back the `section_text` (tldr, plan path, PR URL, hidden `fleet:<task id>` marker) to
   paste into the migrated yaadgaar task. The 3.1.0 body-page write (`infra:ledger-read:*`,
   `infra:ledger-body` on `fleet:ledger-writer`) and the `infra:ledger-writeback` append step are
   gone, with the `fleet:ledger-writer` agent.
@@ -881,12 +883,14 @@ is `plan_base`, for example after a re-plan.
   (`infra:yaadgaar-read`, `fleet:judge`) runs `mcp__yaadgaar__read_task` by the task id (URN)
   intake sealed with the source. It returns per task the id, number, version and whether the
   marker is there. It never reads the repo's files or remotes: the yaadgaar client is bound to the
-  session's start project, and the URN names one task. No `args.project`, or one that is not
-  `<owner>/<repo>`, writes nothing (7.0.0: any `<owner>/<repo>` project, not only `yadgarhq/`); a
+  session's start project, and the URN names one task. The scope is `args.project`, else the
+  proven session project (7.0.0 review F5); neither, or one that is not `<owner>/<repo>`, writes
+  nothing (7.0.0: any `<owner>/<repo>` project, not only `yadgarhq/`). Project keys compare
+  case-insensitively (`session_project.py` lowercases); a
   ref sealed before 3.1.3 (no id) writes nothing and says "re-run plan".
   The script refuses any task whose answer gives another id or number than the sealed one, names a
-  project other than `args.project`, or gives a version that is not an integer. An answer naming no
-  project needs the proven session project (5.0.9) = `args.project`: another is `failed`, no proof
+  project other than the scope, or gives a version that is not an integer. An answer naming no
+  project needs the proven session project (5.0.9) = the scope: another is `failed`, no proof
   is `unavailable`, and neither edits. `fleet:judge` cannot call `mcp__yaadgaar__edit_task`, `create_task` or
   `transition_task` (`disallowedTools`). Only then `infra:yaadgaar-writeback` (the default
   agent: `fleet:judge` may never write to a ledger) edits each task by id with the version read

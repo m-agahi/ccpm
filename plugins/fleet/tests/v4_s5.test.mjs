@@ -622,14 +622,14 @@ function sortDeep(v) {
 
 test("AC-1981-6 (stub podman): db_up starts a capped, self-expiring container bound to 127.0.0.1", { skip: !PY3 }, () => {
   const st = stubDir();
-  const r = runProg("db_up", UP_ARGS("fleet-db-l42-1"), st);
+  const r = runProg("db_up", UP_ARGS("fleet-db-y42-1"), st);
   assert.equal(r.status, 0, r.stderr);
   const o = JSON.parse(r.stdout);
-  assert.equal(o.name, "fleet-db-l42-1");
+  assert.equal(o.name, "fleet-db-y42-1");
   assert.equal(o.port, 40001);
   assert.deepEqual(o.dbs, ["fleet_plan", "fleet_audit"]);
   assert.equal(o.expiry.mechanism, "podman-timeout");
-  assert.deepEqual(o.args, UP_ARGS("fleet-db-l42-1"));
+  assert.deepEqual(o.args, UP_ARGS("fleet-db-y42-1"));
   // one user per database, random 32-hex passwords; the root password is never printed
   assert.deepEqual(Object.keys(o.users).sort(), ["fleet_audit", "fleet_plan"]);
   for (const v of Object.values(o.users)) assert.match(v, /^[0-9a-f]{32}$/);
@@ -637,13 +637,13 @@ test("AC-1981-6 (stub podman): db_up starts a capped, self-expiring container bo
   const rootPw = /MARIADB_ROOT_PASSWORD=([0-9a-f]+)/.exec(st.log().find((l) => l.startsWith("run -d")))[1];
   assert.match(rootPw, /^[0-9a-f]{32}$/);
   assert.ok(!r.stdout.includes(rootPw), "the output holds no root password");
-  const again = JSON.parse(runProg("db_up", UP_ARGS("fleet-db-l42-1"), stubDir()).stdout);
+  const again = JSON.parse(runProg("db_up", UP_ARGS("fleet-db-y42-1"), stubDir()).stdout);
   assert.notEqual(again.users.fleet_plan, o.users.fleet_plan, "passwords are random per run");
   assert.equal(o.program.name, "db_up");
   assert.ok(digestOk(o), "the digest covers the printed object");
   const runLine = st.log().find((l) => l.startsWith("run -d"));
   assert.ok(runLine, st.log().join("\n"));
-  for (const want of ["--rm", "--name fleet-db-l42-1", "--label fleet.db=1", "--label fleet.nonce=n1-0000001", "-p 127.0.0.1::3306", "--tmpfs /var/lib/mysql:size=1g", "--memory 1g", "--cpus 2", "--pids-limit 512", "--timeout 21600"])
+  for (const want of ["--rm", "--name fleet-db-y42-1", "--label fleet.db=1", "--label fleet.nonce=n1-0000001", "-p 127.0.0.1::3306", "--tmpfs /var/lib/mysql:size=1g", "--memory 1g", "--cpus 2", "--pids-limit 512", "--timeout 21600"])
     assert.ok(runLine.includes(want), want + " in " + runLine);
   assert.ok(runLine.endsWith(IMG));
   assert.ok(st.log().some((l) => /^exec .*mariadb-admin --protocol=tcp -h127\.0\.0\.1 -uroot ping$/.test(l)));

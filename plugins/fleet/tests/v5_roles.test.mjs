@@ -118,7 +118,8 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   // 6.0.0 (ledger 2033): + infra:policy
   // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
   // 7.0.0 (yaadgaar #699): - the legacy ledger read and write (main and :ci): the source is inert
-  assert.equal(out.build.calls.length, 63, out.build.labels.join(", "));
+  // 7.0.0 review F2: + the yaadgaar read and write (main and :ci): the default task is yaadgaar #42
+  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
   for (const c of out.calls) assert.ok(!String(c.prompt).includes("agent_prompt_get"), c.label);
 });
 

@@ -31,10 +31,10 @@ const RED = (p) => {
 };
 // the hashed maps of the forge's merge: the base changed a hashed key
 const HASHES_U = H(Object.assign({}, HASHES_FLAT, { "pyproject.toml#tool.pytest": "hp-base" }));
-// 7.0.0 (yaadgaar #699): the default fixture's legacy ledger source is inert; the CI write-back is
-// its gate line and the section text it hands back
-const wbCi = (out) => out.build.logs.filter((l) => /^write-back ledger \(fleet:l42:ci\): /.test(l)).length;
-const wbLine = (out) => out.result.ci_write_back.write_back.ledger[0].section_text.split("\n")[0];
+// 7.0.0 review F2: the default fixture's task is yaadgaar #42; the CI write-back is its
+// infra:yaadgaar-writeback:ci step and the section text that step writes
+const wbCi = (out) => out.build.labels.filter((l) => l === "infra:yaadgaar-writeback:ci").length;
+const wbLine = (out) => inputsOf(out.build.calls.filter((c) => c.label === "infra:yaadgaar-writeback:ci").pop().prompt).section_text.split("\n")[0];
 
 // personal profile; the green PR is behind; update-branch moves it to D, a merge of the old head and C,
 // and the base change touches a PR file (overlap): the merge is fetched and reviewed again (v2)
@@ -271,7 +271,7 @@ test("6.0.1 (review N1): a resumed update record with base == head == approved_s
     assert.equal(out.result.stop_gate, "resume", out.result.reason);
     assert.match(out.result.reason, /^run-state mismatch: update record /);
     assert.ok(!out.labels.some((l) => /^infra:ci-watch/.test(l)), out.labels.join(", "));
-    assert.ok(!out.logs.some((l) => /^write-back ledger /.test(l)), "no write-back after the resume stop");
+    assert.ok(!out.logs.some((l) => /^write-back (ledger|yaadgaar)/.test(l)), "no write-back after the resume stop");
   }
 });
 test("6.0.1 (review N1): an update record with pr_updated not true is not restored (the classifier keeps the plan base)", async () => {

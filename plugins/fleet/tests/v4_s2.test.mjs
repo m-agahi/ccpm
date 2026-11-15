@@ -305,11 +305,14 @@ test("AC-1992: the plan ref seals project and plan_facts change_kind/new_behavio
 test("AC-1992: a build without project uses the sealed project for the ledger and write-back", async () => {
   const s = happy();
   const tiny = await planRefFor(s);
+  // the session that builds is started in the task's project (build-task step 4)
+  s.__session_project = "o/r";
   const out = await runOne(s, buildArgs(tiny, { project: undefined }));
   assert.equal(out.result.status, "ok", out.result.reason);
-  // 7.0.0 (yaadgaar #699): the legacy ledger source is inert: no ledger step, one unavailable entry
+  // 7.0.0 review F2: the default yaadgaar task is written back in the sealed project
   assert.ok(!out.labels.some((l) => /^infra:ledger-/.test(l)), out.labels.join(", "));
-  assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["42", "unavailable"]]);
+  assert.equal(inputsOf(call(out, "infra:yaadgaar-writeback").prompt).project, "o/r");
+  assert.deepEqual(out.result.write_back.ledger.map((e) => [e.ref, e.status]), [["yaadgaar #42", "written"]]);
   assert.ok(out.result.gate_log.some((g) => /project o\/r from the sealed plan ref/.test(g)));
 });
 
@@ -332,10 +335,13 @@ test("AC-1992: an old ref with no project keeps the 3.1.3 behaviour", async () =
   });
   let out = await runOne(s, buildArgs(old));
   assert.equal(out.result.status, "ok", out.result.reason);
-  // no project anywhere: the 3.1.3 halt for a yadgar ledger source
+  // no project anywhere and no session project: 7.0.0 review F3 dropped the 3.1.3 halt; the build
+  // finishes and the yaadgaar write-back, with no scope, fails and hands the section back
   out = await runOne(s, buildArgs(old, { project: undefined }));
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /needs args\.project/);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.equal(out.result.write_back.ledger[0].status, "failed");
+  assert.match(out.result.write_back.ledger[0].reason, /no <owner>\/<repo> project to write to/);
+  assert.match(out.result.write_back.ledger[0].section_text, /fleet:y42/);
 });
 
 test("1992: a sealed project that is not a non-empty string or null is a changed ref", async () => {
@@ -397,14 +403,14 @@ test("4.0.0: makePlanRef carries history.preflight through to the seal", async (
 
 // ---------------------------------------------------------------- 1982 brief schema
 
-// 6.2.0 (2058): body_slug added (a yadgar task body read from its page)
-test("1982: the intake source schema and the README agree on {kind, ref, url, body, id, project, body_slug}", async () => {
+// 6.2.0 (2058): body_slug added (a yadgar task body read from its page); 7.0.0 review F4: removed
+test("1982: the intake source schema and the README agree on {kind, ref, url, body, id, project}", async () => {
   const out = await run(happy(), ARGS);
   const src = call(out, "intake").opts.schema.properties.brief.properties.sources.items;
-  assert.deepEqual(Object.keys(src.properties).sort(), ["body", "body_slug", "id", "kind", "project", "ref", "url"]);
+  assert.deepEqual(Object.keys(src.properties).sort(), ["body", "id", "kind", "project", "ref", "url"]);
   assert.deepEqual(src.properties.kind.enum, ["ledger", "yaadgaar", "jira", "github", "codeberg", "plan", "text"]);
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-  assert.match(readme, /sources: \[\{kind, ref, url, body, id,\s+project, body_slug\}\]/);
+  assert.match(readme, /sources: \[\{kind, ref, url, body, id,\s+project\}\]/);
   assert.match(readme, /`kind` is one of `ledger`, `yaadgaar`, `jira`, `github`, `codeberg`,\s+`plan` and `text`/);
 });
 

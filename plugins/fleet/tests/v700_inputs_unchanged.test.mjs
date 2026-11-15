@@ -20,6 +20,13 @@ test("7.0.0 AC7: the intake prompt keeps the Jira, GitHub, Codeberg, plan and te
     "6. Anything else: kind text; ref = \"text\"; body = `input` verbatim.",
   ])
     assert.ok(p.indexOf(s) >= 0, "intake prompt lost: " + s);
+  // 7.0.0 review F6: the full Jira rule, and the full GitHub rule in both forms (no GitHub URL in the
+  // input; a GitHub URL with the checked gh_cmd)
+  assert.ok(p.includes("2. Jira key (`ABC-123`): kind jira. Load the Atlassian MCP tools via ToolSearch: getAccessibleAtlassianResources for the cloudId, then getJiraIssue(issueIdOrKey, responseContentFormat=\"markdown\"). Tools absent -> needs_human. ref = the key; url = the browse URL; body = summary + description.\n"), "Jira rule");
+  assert.ok(p.includes("3. GitHub issue or PR URL (`https://github.com/<o>/<r>/issues/<n>` or `/pull/<n>`): kind github. The workflow found no GitHub issue or PR URL in `input` -> needs_human. ref = `<o>/<r>#<n>`.\n"), "GitHub rule, no URL");
+  const gh = { kind: "github", ref: "o/r#5", url: "https://github.com/o/r/issues/5", body: "issue" };
+  const g = call(await runOne(happy({ brief: { ...BRIEF, sources: [gh] } }), { ...ARGS, input: gh.url, confirm: "ask" }), "intake").prompt;
+  assert.ok(g.includes("3. GitHub issue or PR URL (`https://github.com/<o>/<r>/issues/<n>` or `/pull/<n>`): kind github. `<gh_cmd> issue view <url> --json title,body,url` (or `pr view`), with exactly <gh_cmd>, the command the workflow checked for <o>/<r>; gh_cmd null -> needs_human. ref = `<o>/<r>#<n>`.\n"), "GitHub rule, URL");
 });
 
 test("7.0.0 AC7: plan and text inputs build with no ledger step and adapter none", async () => {
