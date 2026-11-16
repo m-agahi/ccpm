@@ -2150,6 +2150,8 @@ names it. Any other failure, or a second mismatch, goes on to the step's
 own check, as before.
 ```
 
+7.1.1 (L2142): a relay marked failed whose only defect is a 64-hex digest the relayed keys do not hash to gets the same one retry; a failed relay with no digest does not.
+
 ### `before ARGS_RETRY` (5.0.9 line 3989)
 
 ```text
