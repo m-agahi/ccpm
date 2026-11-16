@@ -1,6 +1,6 @@
 # fleet: infra:callers on-disk handoff for large caller relays (L2178, yaadgaar #44)
 
-Status: draft (plan round 2, the third planner round, after the plan-audit verdicts plan_defect of rounds 0 and 1; RCA-corrected). Fleet 7.1.1 -> 7.2.0.
+Status: approved (plan round 2, the third planner round, after the plan-audit verdicts plan_defect of rounds 0 and 1; RCA-corrected), then amended by hand after the fable plan-audit (verdict approve, no blocking findings): advisories A1-A5 and A7 and scope cuts (a)-(d) are applied (see "Audit amendments"). Fleet 7.1.1 -> 7.2.0.
 Component: fleet.
 
 ## Request
@@ -51,8 +51,8 @@ lines at f36f3b3; they are current (re-checked).
 ## Design
 
 The hasher pattern (content-addressed file in the run scratch, relay only a summary) plus
-batch-wide 50-entry read pages for the lists the script must see, with a read budget and a
-per-file memo so the agent count stays bounded.
+batch-wide 50-entry read pages for the lists the script must see, with a read budget so the
+agent count stays bounded.
 
 ### callers.py: three modes
 
@@ -83,13 +83,14 @@ per-file memo so the agent count stays bounded.
      build. The path hash lets R5 compare path sets: a line shift needs no read.
    - `args` = the five arguments after the mode word, as given. `digest` covers
      `symbols, capped, doctest_md, file, args` plus `program`, as every program's digest does.
-   - Summary cap: a printed summary over `INLINE_CAP` (8192) bytes exits non-zero with
-     `FLEET_CALLERS_RELAY_CAP: the callers summary is over the 8192-byte inline cap (<n> bytes; symbols: ...)`.
-     The workflow then halves the batch (the existing halving rule). The summary holds two 64-hex
-     hashes per symbol (line level and path level); about 205 bytes per symbol plus the name
-     twice (the entry key and the echoed symbol list), plus about 400 bytes of `file`, `program`
-     and `digest`. So 30 names of 15 characters are about 7.4 KB and fit; 30 names of 20
-     characters or more split once (2 more file dispatches).
+   - Summary cap (A7): a printed summary over `SUMMARY_CAP = 4096` bytes exits non-zero with
+     `FLEET_CALLERS_RELAY_CAP: the callers summary is over the 4096-byte summary cap (<n> bytes; symbols: ...)`.
+     `SUMMARY_CAP` is its own constant, independent of `INLINE_CAP` (8192). The workflow then
+     halves the batch (the existing halving rule). The summary holds two 64-hex hashes per symbol
+     (line level and path level); about 205 bytes per symbol plus the name twice (the entry key
+     and the echoed symbol list), plus about 400 bytes of `file`, `program` and `digest`. So about
+     14 names of 15 characters fit; a full batch of 30 names splits once (2 more file
+     dispatches), and names of 120 characters fit about 8 to a summary.
    - A write failure (mkdir, write or rename) exits non-zero, stdout empty, stderr starting
      `FLEET_CALLERS_FILE: cannot write the callers file`. Another argument count exits with stderr
      starting `FLEET_CALLERS_FILE: `.
@@ -99,20 +100,20 @@ per-file memo so the agent count stays bounded.
      occurrences; `auto`: its auto doc or lock hits; `paths`: the sorted unique paths of its
      occurrences), as (symbol, entry) pairs. `page.count = max(1, ceil(len(L) / 50))`
      (`PAGE = 50`). Page `k` = `L[50k : 50k+50]`.
-   - Prints `{part, page: {index, count}, hits: {<s>: [...]}, auto: {<s>: [...]}, args, program, digest}`:
-     `hits[s]` = the page's entries of `s` in order; `auto[s]` = for `all`, the indices into
-     `hits[s]` of its auto hits, for `auto`, every index of `hits[s]`, for `paths`, no key (the
-     `auto` map is `{}`). A symbol with no entry on the page has no key in either map. `args` = the four arguments after the mode word.
+   - Prints `{part, page: {index, count}, hits: {<s>: [...]}, args, program, digest}`:
+     `hits[s]` = the page's entries of `s` in order. A symbol with no entry on the page has no key
+     in `hits`. `args` = the four arguments after the mode word. There is no `auto` index map
+     (cut (c)): for part `all` the workflow derives the auto hits itself with `docOrLockFile`
+     and the summary's `doctest_md`, which it already re-checks (`src:4487`); for part `auto`
+     every entry is an auto hit; part `paths` needs none.
    - Refusals (non-zero exit, empty stdout, stderr starting `FLEET_CALLERS_READ: `): another
-     argument count; a basename other than `callers-<64 lowercase hex>.json`; a path that is not a
-     regular file (a symlink or a directory); bytes that do not hash to the name; a file that is
-     not a callers object; a part other than `all`/`auto`/`paths`; symbols that are not a non-empty JSON
-     list of distinct strings; a symbol that is not a key of the file's `occurrences`; a page
-     that is not `0` or `[1-9][0-9]*`, or is not below `page.count`.
-   - A printed page over 65536 bytes (only with very long paths) exits with
-     `FLEET_CALLERS_RELAY_CAP: the callers output is over the 65536-byte relay cap (<n> bytes; symbols: <symbols on that page>)`.
-     Read mode runs before line 39, where `RELAY_CAP` (`:98`) is not yet defined, so it uses a new
-     constant `READ_CAP = 65536` of the same value; `RELAY_CAP`'s line stays unchanged.
+     argument count; a basename other than `callers-<64 lowercase hex>.json`; a path that cannot
+     be read; bytes that do not hash to the name; a file that is not a callers object; a part
+     other than `all`/`auto`/`paths`; symbols that are not a non-empty JSON list of distinct
+     strings; a symbol that is not a key of the file's `occurrences`; a page that is not a
+     decimal integer `>= 0` below `page.count` (`-1` is refused).
+   - No page size cap (cut (b)): a page holds at most 50 entries. A relay of a page that the
+     agent cannot copy fails as any failed relay does (plain `failed`).
 
 **Build-time definition check (changed_defs.py) — hard rules for the coder.** `changed_defs.py`
 classes every top-level `name = ...` line as a definition (`TOP_ASSIGN`, `changed_defs.py:58`),
@@ -141,9 +142,8 @@ all_docs, included, doctest, auto, out, text, RELAY_CAP` (`callers.py:40-98`) ar
 New constants `CALLERS_DISK_MARK = "FLEET_CALLERS_ON_DISK:"`, `CALLER_PAGE = 50`,
 `CALLER_READ_BUDGET = 4`; new prompts `callersFilePrompt` and `callersReadPrompt` (run
 `progCmd("callers", ["file", ...])` / `["read", ...]`, digest ids `callers:file` /
-`callers:read`, `opts.args` = the arguments after the mode word). A script-memory memo
-`callerReads`: content-addressed file path -> `{all: {<s>: hits}, auto: {<s>: hits}}`, kept for
-the life of the run (never persisted).
+`callers:read`, `opts.args` = the arguments after the mode word). No memo (cut (a)): every
+disk round reads again.
 
 `callerGrep(label, names, worktree, planPath, phaseName, expected, level)` gains `expected` and
 `level` (`"line"`, the default, or `"path"`). At line level `expected` is `{symbol: [path:line, ...]}`;
@@ -156,14 +156,17 @@ at path level it is `{symbol: [path, ...]}`; a missing symbol counts as `[]`. Qu
    takes the disk path for this entry with the same `lb`. The `FLEET_CALLERS_RELAY_CAP` halving
    branch for the inline relay stays as it is.
 2. Disk path: dispatch `<lb>:file`, args `[worktree, planPath, JSON.stringify(part), "100", scratchOf(worktree)]`.
-   - `failed` with `FLEET_CALLERS_RELAY_CAP:` (summary over 8192): one symbol -> halt
+   - `failed` with `FLEET_CALLERS_RELAY_CAP:` (summary over 4096): one symbol -> halt
      `needs_human`, stop gate `callers`,
-     `<lb>:file: the caller summary of <s> is over the 8192-byte inline cap; the caller check cannot relay it`;
+     `<lb>:file: the caller summary of <s> is over the 4096-byte summary cap; the caller check cannot relay it`;
      else gate line `<lb>:file: <n> symbols are over the summary cap; split in two` and both
      halves go to the front of the queue as `{disk: true}` (no inline dispatch for them).
    - Any other `failed`: halt `failed`, `<lb>:file returned failed: <reason>`.
    - Checks (each miss halts `failed`, reason starting `<lb>:file: `): `requireProgram`; digest
-     over `PROGRAM_KEYS["callers:file"]`; `file` equals
+     over `PROGRAM_KEYS["callers:file"]`; `canonical(r.args)` equals the sent args
+     (`the program ran on other arguments`; A2: `digestRetry`, `src:3485-3495`, returns the
+     args-retry unchecked, so the caller halts itself as `hookSurface` does at `src:4616`);
+     `file` equals
      `scratchOf(worktree) + "/callers/callers-" + <64 lowercase hex> + ".json"`
      (`the callers file <file> is not ...`); for every batch symbol an entry with integer
      `count >= 0`, 64-hex `sha256`, integer `0 <= auto_count <= count`, integer
@@ -177,18 +180,17 @@ at path level it is `{symbol: [path, ...]}`; a missing symbol counts as `[]`. Qu
      so the sealed map adds nothing); no read.
    - else, `auto_count > 0`: into the AUTO set. Else: into the ALL set.
    - capped: occurrences `[]`, listed in `capped`, as inline.
-4. Reads (batch-wide). For each part, the symbols of its set whose list the memo lacks for this
-   file are read together; their pages = `max(1, ceil(Σ n / 50))` (`n` = `auto_count` for auto,
-   `count` for all). Labels `<lb>:read:auto:<k>` and `<lb>:read:all:<k>`, args
+4. Reads (batch-wide). For each part, the symbols of its set are read together; their pages =
+   `max(1, ceil(Σ n / 50))` (`n` = `auto_count` for auto, `count` for all). Labels `<lb>:read:auto:<k>` and `<lb>:read:all:<k>`, args
    `[file, part, JSON.stringify(symbols in code-point order), "<k>"]`.
    - Budget: at most `CALLER_READ_BUDGET` (4) read dispatches per `callerGrep` call (digest or
-     args retries and memo hits not counted). A part whose pages do not fit the remaining budget
+     args retries not counted). A part whose pages do not fit the remaining budget
      is not read: its symbols go to `unread` with their part.
-   - Each page relay: `requireProgram`, digest over `PROGRAM_KEYS["callers:read"]`, args,
-     `page.index == k`, `page.count` == the computed pages, `hits`/`auto` keys among the listed
-     symbols (miss: halt `failed`, `<label>: the read page ...`). `failed` with
-     `FLEET_CALLERS_RELAY_CAP:` -> halt `needs_human`, stop gate `callers`,
-     `<label>: the occurrences of <symbols> are over the 65536-byte relay cap on one read page (relay size; long paths); the caller check cannot relay them`.
+   - Each page relay: `requireProgram`, digest over `PROGRAM_KEYS["callers:read"]`, args
+     (checked after the retries, as for `:file`), `part`, `page.index == k`, `page.count` == the
+     computed pages, `hits` keys among the listed symbols (miss: halt `failed`,
+     `<label>: the read page ...`). Any `failed` read relay halts `failed`,
+     `<label> returned failed: <reason>` (cut (b): no relay-cap branch).
    - AUTO join: per symbol, the joined list must hold `auto_count` entries (else halt `failed`,
      `<lb>:read:auto: the read occurrences of <s> do not match the summary ...`). `U` = sorted
      unique `E ∪ auto list`; `len(U) == count` and `sha256(canonical(U)) == sha256` ->
@@ -196,7 +198,10 @@ at path level it is `{symbol: [path, ...]}`; a missing symbol counts as `[]`. Qu
      (the AUTO phase runs first).
    - ALL join: per symbol, `count` entries hashing to `sha256` (else halt `failed`,
      `<lb>:read:all: the read occurrences of <s> do not match the summary count or sha256`);
-     occurrences = the hits, `auto_dont_care[s]` = the hits at the auto indices.
+     occurrences = the hits, `auto_dont_care[s]` = the hits whose path passes `docOrLockFile`
+     and is not in the summary's `doctest_md` (cut (c)). Their number must equal `auto_count`
+     (else halt `failed`, `<lb>:read:all: the auto hits of <s> do not match the summary auto_count`);
+     `callerCheck` then re-checks each one as today.
 5. Path level (the update merge, `infra:callers:u1`), per batch symbol `s` (not capped): `P` =
    `expected[s]` (`normPath`), unique, sorted by code point; `p` = sha256 of `canonical(P)`.
    - `p == paths_sha256`: `paths[s] = P`; no read. A line shift with the same files lands here.
@@ -204,7 +209,7 @@ at path level it is `{symbol: [path, ...]}`; a missing symbol counts as `[]`. Qu
      already holds the auto entries, and R5 needs only paths).
    - PATHS reads, batch-wide as in step 4: pages = `max(1, ceil(Σ path_count / 50))`, labels
      `<lb>:read:paths:<k>`, args `[file, "paths", JSON.stringify(symbols in code-point order), "<k>"]`,
-     the same budget, memo and page checks. Join: per symbol, `path_count` entries hashing to
+     the same budget and page checks. Join: per symbol, `path_count` entries hashing to
      `paths_sha256` (else halt `failed`,
      `<lb>:read:paths: the read occurrences of <s> do not match the summary count or sha256`);
      `paths[s]` = the joined list.
@@ -245,15 +250,13 @@ One `callerGrep` call of at most 30 symbols, no summary split:
 
 - inline output at most 8192 bytes: 1 dispatch (unchanged).
 - disk path: 1 inline + 1 file + at most 4 reads = at most 6 dispatches; with one digest or
-  args retry on each, at most 12. A summary split adds 2 file dispatches per split.
-- The memo is keyed by the content-addressed file, whose name hashes the whole inline output,
-  the symbol list included. A later round reuses it only when its batch and every hit are
-  unchanged: then 2 dispatches. Batches change whenever an audit finds a missed symbol. In
-  wf_c04c41b0-5ee, round 0 (digest `547fa0f4...`, 14 symbols) and round 1 (`bb39d4e3...`,
-  `SAMPLES` added) differed, so round 1 would read again; only round 2 (the same digest as
-  round 1) would hit the memo.
+  args retry on each, at most 12. A summary split adds 2 file dispatches, and each batch beyond
+  30 symbols adds 2 more (inline + file).
+- No memo (cut (a)): every round that takes the disk path reads again.
 - Plan mode worst case: rounds `infra:callers`, `:audit-fix`, `:audit-fix-2` = 18 (36 with
   every relay retried). Today: 3.
+- Baseline (A4): 14 shipped runs had a median of 23 capped agents and a max of 92. A run above
+  about 80 can now stop at the cap (`agent cap 100 reached`, needs_human).
 - Update merge (`infra:callers:u1`, path level): 1 inline + 1 file, plus 1 paths read per 50
   symbol-path pairs of the symbols whose path set differs from the sealed one. A paths read is
   the normal case for a task like this one: OB2, OB4 and the new tests name changed symbols
@@ -264,8 +267,8 @@ One `callerGrep` call of at most 30 symbols, no summary split:
   build that adds no new path for any changed symbol (line shifts only) needs 2. Today: 1.
 - This run's own map (wf_c04c41b0-5ee: 15 symbols, 102 doc or lock hits left to auto over 11
   symbols): round 0 = 1 inline + 1 file + 3 auto pages (`ceil(102 / 50)`) = 5, when the planner
-  maps every other hit exactly. Round 1 (`SAMPLES` added: a new file, a memo miss) = 5 again;
-  round 2 (the same file) = 2. About 12 for the three plan rounds, against 3 today. The 3 auto
+  maps every other hit exactly; with 15 symbols the summary of about 4 KB may split once (+2).
+  Every round reads again, so about 15-21 for the three plan rounds, against 3 today. The 3 auto
   pages fit the budget of 4, so the worst case above stands. The incident wf_0e5677ad-a03
   (unverified: 11 symbols, 60 doc hits): round 0 = 1 + 1 + 2 = 4.
 - Unbounded today-style reads are impossible: past the budget the run gets findings (plan) or a
@@ -298,19 +301,19 @@ Summary:
 - AC2 file mode: content-addressed file, line and path hashes in the summary, write failure
   (real program).
 - AC3 read mode: batch-wide 50-entry pages for parts `all`, `auto` and `paths` (real program).
-- AC4 read mode refusals and the relay-cap marker (real program).
+- AC4 read mode refusals (real program).
 - AC5 workflow: marker -> `:file`; an exact map needs no read; `auto_dont_care` `[]`.
 - AC6 workflow: batch-wide auto reads (exact read count) and part-all reads with today's findings.
 - AC7 workflow relay checks: file path, summary entries, joins, page fields, digest and args
-  retries.
-- AC8 workflow: a read page over the relay cap stops `needs_human`, stop gate `callers`.
+  retries, the args check after the retry, a failed read relay.
+- AC8 dropped (cut (b)).
 - AC9 update-merge grep `infra:callers:u1` on the disk path at path level: a line shift needs no
   read; a changed path set reads part `paths` only (never part `auto`).
 - AC10 summary cap: program marker and the workflow's split into disk halves.
-- AC11 read budget findings and the per-file memo across plan rounds.
+- AC11 read budget findings, a mixed-budget map included.
 
-The criteria below are copied from the structured criteria (criteria_r3.json) by a script;
-the Given/When/Then text is literal.
+The criteria below were copied from the structured criteria (criteria_r3.json) by a script,
+then amended by hand for the audit advisories and the scope cuts.
 
 ### AC1
 
@@ -457,7 +460,7 @@ Don't care:
 ### AC3
 
 ```text
-[unit] callers.py read mode (callers.py read <file> <part> <symbols json> <page>) pages over ALL listed symbols at once and prints {part, page: {index, count}, hits, auto, args, program, digest}: the list L is, per listed symbol in code-point order, its hits sorted by code point (part all), its auto doc or lock hits sorted (part auto) or the sorted unique paths of its hits (part paths); page <page> holds L[50*page : 50*page+50]; hits[s] = the page's entries of s in order; auto[s] = for part all the indices into hits[s] of its auto hits, for part auto every index of hits[s], for part paths no key (auto is {}); a symbol with no entry on the page has no key in hits or auto; page.count = max(1, ceil(len(L) / 50)); args = the four arguments after the mode word
+[unit] callers.py read mode (callers.py read <file> <part> <symbols json> <page>) pages over ALL listed symbols at once and prints {part, page: {index, count}, hits, args, program, digest} (no key auto): the list L is, per listed symbol in code-point order, its hits sorted by code point (part all), its auto doc or lock hits sorted (part auto) or the sorted unique paths of its hits (part paths); page <page> holds L[50*page : 50*page+50]; hits[s] = the page's entries of s in order; a symbol with no entry on the page has no key in hits; page.count = max(1, ceil(len(L) / 50)); args = the four arguments after the mode word
 ```
 
 Test files: `plugins/fleet/tests/v720_callers_read_mode.test.mjs`
@@ -473,7 +476,7 @@ Example 1 (main):
 ```text
 Given: a git repo with src/a.py = 'foo()\n\nfoo()\n', README.md = 'x\nfoo\n', src/b.py = 'x\nbaz()\n'; F = the file written by callers.py file <repo> docs/plans/x.md '["baz","foo"]' 100 S
 When: callers.py read F all '["baz","foo"]' 0
-Then: exit 0; part == 'all'; page == {"index": 0, "count": 1}; hits == {"baz": ["src/b.py:2"], "foo": ["README.md:2", "src/a.py:1", "src/a.py:3"]}; auto == {"baz": [], "foo": [0]}; args == [F, "all", "[\"baz\",\"foo\"]", "0"]
+Then: exit 0; part == 'all'; page == {"index": 0, "count": 1}; hits == {"baz": ["src/b.py:2"], "foo": ["README.md:2", "src/a.py:1", "src/a.py:3"]}; no key 'auto'; args == [F, "all", "[\"baz\",\"foo\"]", "0"]
 ```
 
 Example 2 (main):
@@ -481,7 +484,7 @@ Example 2 (main):
 ```text
 Given: the same F
 When: callers.py read F auto '["baz","foo"]' 0
-Then: exit 0; page == {"index": 0, "count": 1}; hits == {"foo": ["README.md:2"]}; auto == {"foo": [0]}; no key baz in hits or auto
+Then: exit 0; page == {"index": 0, "count": 1}; hits == {"foo": ["README.md:2"]}; no key baz in hits
 ```
 
 Example 3 (main):
@@ -489,7 +492,7 @@ Example 3 (main):
 ```text
 Given: the same F
 When: callers.py read F paths '["baz","foo"]' 0
-Then: exit 0; part == 'paths'; page == {"index": 0, "count": 1}; hits == {"baz": ["src/b.py"], "foo": ["README.md", "src/a.py"]}; auto == {}
+Then: exit 0; part == 'paths'; page == {"index": 0, "count": 1}; hits == {"baz": ["src/b.py"], "foo": ["README.md", "src/a.py"]}
 ```
 
 Example 4 (boundary):
@@ -497,7 +500,7 @@ Example 4 (boundary):
 ```text
 Given: a repo with src/m.py of 60 lines 'many()'; F = file mode output for '["many"]' cap 100
 When: run 1: read F all '["many"]' 0; run 2: read F all '["many"]' 1
-Then: run 1: page == {"index": 0, "count": 2}, hits.many has 50 entries starting 'src/m.py:1', 'src/m.py:10', 'src/m.py:11'; run 2: page == {"index": 1, "count": 2}, hits.many == ["src/m.py:55", "src/m.py:56", "src/m.py:57", "src/m.py:58", "src/m.py:59", "src/m.py:6", "src/m.py:60", "src/m.py:7", "src/m.py:8", "src/m.py:9"], auto == {"many": []}
+Then: run 1: page == {"index": 0, "count": 2}, hits.many has 50 entries starting 'src/m.py:1', 'src/m.py:10', 'src/m.py:11'; run 2: page == {"index": 1, "count": 2}, hits.many == ["src/m.py:55", "src/m.py:56", "src/m.py:57", "src/m.py:58", "src/m.py:59", "src/m.py:6", "src/m.py:60", "src/m.py:7", "src/m.py:8", "src/m.py:9"]
 ```
 
 Example 5 (boundary):
@@ -505,7 +508,7 @@ Example 5 (boundary):
 ```text
 Given: a repo with src/p.py of 30 lines 'aa1()' and src/q.py of 30 lines 'aa2()'; F = file mode output for '["aa1","aa2"]' cap 100
 When: run 1: read F all '["aa2","aa1"]' 0; run 2: read F all '["aa2","aa1"]' 1
-Then: run 1: page.count == 2, hits.aa1 has 30 entries, hits.aa2 has 20 entries; run 2: hits has only key aa2 with 10 entries, no key aa1 in hits or auto
+Then: run 1: page.count == 2, hits.aa1 has 30 entries, hits.aa2 has 20 entries; run 2: hits has only key aa2 with 10 entries
 ```
 
 Example 6 (boundary):
@@ -513,7 +516,7 @@ Example 6 (boundary):
 ```text
 Given: a repo where 'nothing_here' has no hit; F = file mode output for '["nothing_here"]' cap 100
 When: read F all '["nothing_here"]' 0
-Then: exit 0; page == {"index": 0, "count": 1}; hits == {}; auto == {}
+Then: exit 0; page == {"index": 0, "count": 1}; hits == {}
 ```
 
 Don't care:
@@ -533,7 +536,7 @@ Don't care:
 ### AC4
 
 ```text
-[unit] callers.py read mode refuses with a non-zero exit, empty stdout and stderr starting 'FLEET_CALLERS_READ: ': another argument count, a basename other than callers-<64 lowercase hex>.json, a path that is not a regular file (symlink or directory), bytes that do not hash to the name, a part other than all, auto or paths, symbols that are not a non-empty JSON list of distinct strings, a symbol that is not a key of the file's occurrences, a page that is not 0 or [1-9][0-9]* or is not below page.count; a page whose printed JSON is over 65536 bytes exits with stderr starting 'FLEET_CALLERS_RELAY_CAP: the callers output is over the 65536-byte relay cap (<n> bytes; symbols: <symbols on the page>)'
+[unit] callers.py read mode refuses with a non-zero exit, empty stdout and stderr starting 'FLEET_CALLERS_READ: ': another argument count, a basename other than callers-<64 lowercase hex>.json, bytes that do not hash to the name, a part other than all, auto or paths, symbols that are not a non-empty JSON list of distinct strings, a symbol that is not a key of the file's occurrences, a page that is not a decimal integer >= 0 or is not below page.count
 ```
 
 Test files: `plugins/fleet/tests/v720_callers_read_refusals.test.mjs`
@@ -548,7 +551,7 @@ Example 1 (refusal):
 
 ```text
 Given: F = a valid file from file mode for '["foo"]' (AC2 main repo)
-When: each of: read F all '["foo"]' (3 args); read <dir>/callers-ABC.json all '["foo"]' 0; read <a symlink named callers-<hash of F>.json pointing to F> all '["foo"]' 0; read <copy of F with one byte changed, same name> all '["foo"]' 0; read F code '["foo"]' 0; read F all '[]' 0; read F all '["foo","foo"]' 0; read F all '"foo"' 0; read F all '["nope"]' 0; read F all '["foo"]' -1; read F all '["foo"]' 01; read F all '["foo"]' 1
+When: each of: read F all '["foo"]' (3 args); read <dir>/callers-ABC.json all '["foo"]' 0; read <copy of F with one byte changed, same name> all '["foo"]' 0; read F code '["foo"]' 0; read F all '[]' 0; read F all '["foo","foo"]' 0; read F all '"foo"' 0; read F all '["nope"]' 0; read F all '["foo"]' -1; read F all '["foo"]' 1
 Then: every run: exit != 0, stdout == '', stderr starts with 'FLEET_CALLERS_READ: '
 ```
 
@@ -558,14 +561,6 @@ Example 2 (boundary):
 Given: F as above
 When: read F all '["foo"]' 0 (control)
 Then: exit 0
-```
-
-Example 3 (refusal):
-
-```text
-Given: a repo with 7 nested dirs, dir k named 'd' * 200 + str(k) for k = 0..6, and in the innermost dir 50 files 'm' + <f as 3 digits> + '_' + 'x' * 60 + '.py' (f = 0..49), each holding 'huge_symbol()\n'; F = file mode output for '["huge_symbol"]' cap 100
-When: read F all '["huge_symbol"]' 0
-Then: exit != 0; stdout == ''; stderr starts with 'FLEET_CALLERS_RELAY_CAP: the callers output is over the 65536-byte relay cap (' and contains 'bytes; symbols: huge_symbol)'
 ```
 
 Don't care:
@@ -643,7 +638,7 @@ Test files: `plugins/fleet/tests/v720_callers_disk_reads.test.mjs`
 Example 1 (main):
 
 ```text
-Given: planner maps b_sym to src/b.py:2; inline relay failed ON_DISK; file summary b_sym = {count: 2, sha256: 'aed7e430798b190baaa0a0db673923920222eceb6d0d58b10b50b1291451a590', auto_count: 1, path_count: 2, paths_sha256: '6b2ddbbe50d3d44a9e1a5202343cb42a369e29406cfcac48ef7dd28e5a400a15'}; stub infra:callers:read:auto:0 = {part: 'auto', page: {index: 0, count: 1}, hits: {b_sym: ['docs/b.md:4']}, auto: {b_sym: [0]}, args: [file, 'auto', '["b_sym"]', '0']} with valid digest
+Given: planner maps b_sym to src/b.py:2; inline relay failed ON_DISK; file summary b_sym = {count: 2, sha256: 'aed7e430798b190baaa0a0db673923920222eceb6d0d58b10b50b1291451a590', auto_count: 1, path_count: 2, paths_sha256: '6b2ddbbe50d3d44a9e1a5202343cb42a369e29406cfcac48ef7dd28e5a400a15'}; stub infra:callers:read:auto:0 = {part: 'auto', page: {index: 0, count: 1}, hits: {b_sym: ['docs/b.md:4']}, args: [file, 'auto', '["b_sym"]', '0']} with valid digest
 When: the run proceeds
 Then: the only read label is 'infra:callers:read:auto:0'; no caller finding; caller_check.auto_dont_care.b_sym == ['docs/b.md:4']; the sealed changed_symbols entry of b_sym holds {at: 'docs/b.md:4', criterion: null, dont_care: 'auto: non-code file'}
 ```
@@ -659,7 +654,7 @@ Then: read labels are exactly 'infra:callers:read:auto:0', 'infra:callers:read:a
 Example 3 (refusal):
 
 ```text
-Given: planner maps b_sym to src/b.py:9 (stale); summary b_sym = {count: 2, sha256: 'aed7e430798b190baaa0a0db673923920222eceb6d0d58b10b50b1291451a590', auto_count: 1, path_count: 2, paths_sha256: '6b2ddbbe50d3d44a9e1a5202343cb42a369e29406cfcac48ef7dd28e5a400a15'}; auto read page returns hits {b_sym: ['docs/b.md:4']}; stub infra:callers:read:all:0 = hits {b_sym: ['docs/b.md:4', 'src/b.py:2']}, auto {b_sym: [0]}, page {index: 0, count: 1}
+Given: planner maps b_sym to src/b.py:9 (stale); summary b_sym = {count: 2, sha256: 'aed7e430798b190baaa0a0db673923920222eceb6d0d58b10b50b1291451a590', auto_count: 1, path_count: 2, paths_sha256: '6b2ddbbe50d3d44a9e1a5202343cb42a369e29406cfcac48ef7dd28e5a400a15'}; auto read page returns hits {b_sym: ['docs/b.md:4']}; stub infra:callers:read:all:0 = hits {b_sym: ['docs/b.md:4', 'src/b.py:2']}, page {index: 0, count: 1}
 When: the run proceeds
 Then: read labels in order: 'infra:callers:read:auto:0', 'infra:callers:read:all:0'; caller findings include 'b_sym: src/b.py:2 is an occurrence (git grep -w) not mapped in changed_symbols; map it to a criterion or to dont_care with a reason' and 'b_sym: src/b.py:9 is mapped but git grep -w finds no occurrence there (stale line or wrong path; cite lines at the worktree HEAD)'
 ```
@@ -667,7 +662,7 @@ Then: read labels in order: 'infra:callers:read:auto:0', 'infra:callers:read:all
 Example 4 (refusal):
 
 ```text
-Given: planner maps x_sym to src/x.py:2; summary x_sym = {count: 1, sha256: '8146edc58d41c639f6fe85625f99208cdea6a668e2ff175749f09d81b721d6ff', auto_count: 0, path_count: 1, paths_sha256: 'd972a97a86d66627b452ed0a5cf304fb49338cbc7df048358a55ebe28acf219f'}; read all page returns hits {x_sym: ['src/x.py:1']}, auto {x_sym: []}
+Given: planner maps x_sym to src/x.py:2; summary x_sym = {count: 1, sha256: '8146edc58d41c639f6fe85625f99208cdea6a668e2ff175749f09d81b721d6ff', auto_count: 0, path_count: 1, paths_sha256: 'd972a97a86d66627b452ed0a5cf304fb49338cbc7df048358a55ebe28acf219f'}; read all page returns hits {x_sym: ['src/x.py:1']}
 When: the run proceeds
 Then: the only read label is 'infra:callers:read:all:0'; findings include 'x_sym: src/x.py:1 is an occurrence (git grep -w) not mapped ...' and 'x_sym: src/x.py:2 is mapped but git grep -w finds no occurrence there ...'
 ```
@@ -683,13 +678,13 @@ Don't care:
 ```
 
 ```text
-- read relay failures and digest misses are AC7/AC8
+- read relay failures and digest misses are AC7
 ```
 
 ### AC7
 
 ```text
-[unit] workflow relay checks on the disk path: a file other than scratchOf(worktree)/callers/callers-<64 lowercase hex>.json halts failed with a reason starting '<lb>:file: the callers file '; a summary missing a batch symbol or with an invalid entry (count not an integer >= 0, sha256 or paths_sha256 not 64 hex, auto_count not in 0..count, path_count not in 0..count) halts failed starting '<lb>:file: the summary has no valid entry for <s>'; a read page whose page.index or page.count differs halts failed starting '<label>: the read page'; joined pages whose count or hash differ from the summary halt failed starting '<lb>:read:<part>: the read occurrences of <s> do not match the summary'; a file or read relay that misses its digest gets exactly one '<label>:digest-retry' dispatch and one with other args one '<label>:args-retry'; faithful file and read relays get neither
+[unit] workflow relay checks on the disk path: a file other than scratchOf(worktree)/callers/callers-<64 lowercase hex>.json halts failed with a reason starting '<lb>:file: the callers file '; a summary missing a batch symbol or with an invalid entry (count not an integer >= 0, sha256 or paths_sha256 not 64 hex, auto_count not in 0..count, path_count not in 0..count) halts failed starting '<lb>:file: the summary has no valid entry for <s>'; a read page whose page.index or page.count differs halts failed starting '<label>: the read page'; joined pages whose count or hash differ from the summary halt failed starting '<lb>:read:<part>: the read occurrences of <s> do not match the summary'; a file or read relay that misses its digest gets exactly one '<label>:digest-retry' dispatch and one with other args one '<label>:args-retry'; a file relay whose args-retry still runs on other args halts failed starting '<lb>:file: the program ran on other arguments'; a failed read relay halts failed with a reason holding its label; faithful file and read relays get neither retry
 ```
 
 Test files: `plugins/fleet/tests/v720_callers_disk_checks.test.mjs`
@@ -755,7 +750,23 @@ Example 8 (boundary):
 ```text
 Given: AC6 main setup with faithful relays (control paired with the retry examples)
 When: the run proceeds
-Then: no label ends with ':digest-retry' or ':args-retry'
+Then: no label ends with ':digest-retry' or ':args-retry'; labels include 'infra:callers:read:auto:0'; role:plan-audit is dispatched
+```
+
+Example 9 (refusal):
+
+```text
+Given: AC5 main setup but both infra:callers:file and infra:callers:file:args-retry echo args with another worktree (digest valid for each relay)
+When: the run proceeds
+Then: labels contain 'infra:callers:file:args-retry' exactly once; status failed; reason starts with 'infra:callers:file: the program ran on other arguments'; role:plan-audit is not dispatched
+```
+
+Example 10 (failure):
+
+```text
+Given: AC6 main setup but infra:callers:read:auto:0 is {status: 'failed', reason: 'boom'}
+When: the run proceeds
+Then: status failed (not needs_human); reason contains 'infra:callers:read:auto:0'
 ```
 
 Don't care:
@@ -778,37 +789,8 @@ Don't care:
 
 ### AC8
 
-```text
-[unit] workflow: a read page relay marked failed with a reason holding 'FLEET_CALLERS_RELAY_CAP:' stops the run needs_human with stop_gate 'callers' and a reason starting '<label>: the occurrences of <symbols> are over the 65536-byte relay cap on one read page'; a summary relay with that marker is AC10
-```
-
-Test files: `plugins/fleet/tests/v720_callers_read_cap.test.mjs`
-
-Example 1 (refusal):
-
-```text
-Given: planner maps huge_symbol to nothing; inline relay failed ON_DISK; summary huge_symbol = {count: 50, sha256: 64 hex 'c' * 64, auto_count: 0, path_count: 50, paths_sha256: 'd' * 64}; stub infra:callers:read:all:0 = {status: 'failed', reason: 'FLEET_CALLERS_RELAY_CAP: the callers output is over the 65536-byte relay cap (74300 bytes; symbols: huge_symbol)'}
-When: the run proceeds
-Then: status needs_human; stop_gate 'callers'; reason starts with 'infra:callers:read:all:0: the occurrences of huge_symbol are over the 65536-byte relay cap on one read page'
-```
-
-Example 2 (failure):
-
-```text
-Given: as above but the read relay is failed with reason 'boom'
-When: the run proceeds
-Then: status failed (not needs_human); reason contains 'infra:callers:read:all:0'
-```
-
-Don't care:
-
-```text
-- reason text after the pinned prefix
-```
-
-```text
-- no retry for a relay-cap marker (the run stops)
-```
+Dropped (scope cut (b)): there is no read-page size cap. A failed read relay, whatever its reason,
+halts `failed`; AC7 example 10 covers it. No test file.
 
 ### AC9
 
@@ -829,7 +811,7 @@ Then: no label starts with 'infra:callers:u1:read:'; logs include a line contain
 Example 2 (refusal):
 
 ```text
-Given: as the main example but the summary is guard_verdict = {count: 3, sha256: '6176962c118111a700bf7c64fdbc1206b7aac13385048a4302186ed94b639b9b', auto_count: 0, path_count: 3, paths_sha256: 'e27644c1a1452d659f6eb1e9a355da502f8148fea737c573e00a070f4ab0a028'}; stub infra:callers:u1:read:paths:0 = {part: 'paths', page: {index: 0, count: 1}, hits: {guard_verdict: ['src/a.py', 'src/w.py', 'src/y.py']}, auto: {}, args: [file, 'paths', '["guard_verdict"]', '0']}
+Given: as the main example but the summary is guard_verdict = {count: 3, sha256: '6176962c118111a700bf7c64fdbc1206b7aac13385048a4302186ed94b639b9b', auto_count: 0, path_count: 3, paths_sha256: 'e27644c1a1452d659f6eb1e9a355da502f8148fea737c573e00a070f4ab0a028'}; stub infra:callers:u1:read:paths:0 = {part: 'paths', page: {index: 0, count: 1}, hits: {guard_verdict: ['src/a.py', 'src/w.py', 'src/y.py']}, args: [file, 'paths', '["guard_verdict"]', '0']}
 When: the run proceeds
 Then: the only u1 read label is 'infra:callers:u1:read:paths:0'; status needs_human; reason contains 'no coder round: the base change touches files with occurrences of the changed symbols (src/w.py)'
 ```
@@ -883,7 +865,7 @@ Don't care:
 ### AC10
 
 ```text
-[unit] summary cap: callers.py file mode whose printed summary is over 8192 bytes exits non-zero, empty stdout, stderr starting 'FLEET_CALLERS_RELAY_CAP: the callers summary is over the 8192-byte inline cap ('; the workflow splits that batch in halves that go straight to the disk path (<lb'>:file, no inline dispatch for them) with the gate line '<lb>:file: <n> symbols are over the summary cap; split in two'; one symbol alone stops needs_human with stop_gate 'callers'
+[unit] summary cap: callers.py file mode whose printed summary is over SUMMARY_CAP = 4096 bytes (independent of INLINE_CAP 8192) exits non-zero, empty stdout, stderr starting 'FLEET_CALLERS_RELAY_CAP: the callers summary is over the 4096-byte summary cap ('; the workflow splits that batch in halves that go straight to the disk path (<lb'>:file, no inline dispatch for them) with the gate line '<lb>:file: <n> symbols are over the summary cap; split in two'; one symbol alone stops needs_human with stop_gate 'callers'
 ```
 
 Test files: `plugins/fleet/tests/v720_callers_summary_cap.test.mjs`
@@ -892,14 +874,14 @@ Example 1 (main):
 
 ```text
 Given: a repo with src/f.py holding one line '<name>()' per name, names s<i as 2 digits>_ + 'n' * 116 for i = 0..29; scratch dir S
-When: run 1: callers.py file <repo> docs/plans/x.md '<JSON list of all 30 names>' 100 S; run 2 (control): the same with the first 10 names
-Then: run 1: exit != 0, stdout == '', stderr starts with 'FLEET_CALLERS_RELAY_CAP: the callers summary is over the 8192-byte inline cap ('; run 2: exit 0 and stdout JSON has 10 keys in symbols
+When: run 1: callers.py file <repo> docs/plans/x.md '<JSON list of all 30 names>' 100 S; run 2 (control): the same with the first 4 names
+Then: run 1: exit != 0, stdout == '', stderr starts with 'FLEET_CALLERS_RELAY_CAP: the callers summary is over the 4096-byte summary cap ('; run 2: exit 0, stdout at most 4096 bytes and stdout JSON has 4 keys in symbols
 ```
 
 Example 2 (main):
 
 ```text
-Given: batch ['s1', 's2', 's3', 's4']; inline relay failed ON_DISK; stub infra:callers:file = {status: 'failed', reason: 'FLEET_CALLERS_RELAY_CAP: the callers summary is over the 8192-byte inline cap (9000 bytes; symbols: s1, s2, s3, s4)'}; stubs infra:callers:b2:file and infra:callers:b3:file = faithful summaries for ['s1','s2'] and ['s3','s4'] that match the map
+Given: batch ['s1', 's2', 's3', 's4']; inline relay failed ON_DISK; stub infra:callers:file = {status: 'failed', reason: 'FLEET_CALLERS_RELAY_CAP: the callers summary is over the 4096-byte summary cap (9000 bytes; symbols: s1, s2, s3, s4)'}; stubs infra:callers:b2:file and infra:callers:b3:file = faithful summaries for ['s1','s2'] and ['s3','s4'] that match the map
 When: the run proceeds
 Then: logs include 'infra:callers:file: 4 symbols are over the summary cap; split in two'; labels include 'infra:callers:b2:file' and 'infra:callers:b3:file' and not 'infra:callers:b2' or 'infra:callers:b3'; role:plan-audit is dispatched
 ```
@@ -909,7 +891,7 @@ Example 3 (refusal):
 ```text
 Given: batch ['s1']; inline relay failed ON_DISK; infra:callers:file failed with the summary RELAY_CAP marker
 When: the run proceeds
-Then: status needs_human; stop_gate 'callers'; reason starts with 'infra:callers:file: the caller summary of s1 is over the 8192-byte inline cap'
+Then: status needs_human; stop_gate 'callers'; reason starts with 'infra:callers:file: the caller summary of s1 is over the 4096-byte summary cap'
 ```
 
 Don't care:
@@ -925,7 +907,7 @@ Don't care:
 ### AC11
 
 ```text
-[unit] read budget and memo: at most CALLER_READ_BUDGET = 4 read dispatches per callerGrep call (retries not counted); a part whose pages do not fit the remaining budget is not read, and callerCheck gives each such symbol one finding (part auto: '<s>: <auto_count> doc or lock hit(s) left to auto dont_care are over the caller read budget (4 reads of 50 entries); map them in changed_symbols (dont_care with a reason)'; part all: '<s>: the mapped occurrences differ from git grep -w (<count> hits, <n> mapped) and the hit list is over the caller read budget (4 reads of 50 entries); re-grep and map every hit'); lists already read for the same file earlier in the run are reused with no dispatch
+[unit] read budget: at most CALLER_READ_BUDGET = 4 read dispatches per callerGrep call (retries not counted); a part whose pages do not fit the remaining budget is not read, and callerCheck gives each such symbol one finding (part auto: '<s>: <auto_count> doc or lock hit(s) left to auto dont_care are over the caller read budget (4 reads of 50 entries); map them in changed_symbols (dont_care with a reason)'; part all: '<s>: the mapped occurrences differ from git grep -w (<count> hits, <n> mapped) and the hit list is over the caller read budget (4 reads of 50 entries); re-grep and map every hit'); the AUTO part is read before the ALL part, so the ALL part gets only the budget the AUTO pages left
 ```
 
 Test files: `plugins/fleet/tests/v720_callers_read_budget.test.mjs`
@@ -954,12 +936,12 @@ When: the plan run proceeds
 Then: read labels are exactly 'infra:callers:read:auto:0' .. 'infra:callers:read:auto:3'; no budget finding
 ```
 
-Example 4 (main):
+Example 4 (refusal, mixed budget):
 
 ```text
-Given: AC6 main setup (b_sym, one auto read); role:plan-audit refuses once (plan_defect); the audit-fix round's infra:callers:audit-fix is failed ON_DISK and infra:callers:audit-fix:file returns the same file value and summary
-When: the run proceeds
-Then: labels include 'infra:callers:read:auto:0' and not 'infra:callers:audit-fix:read:auto:0'; the audit-fix round's caller_check.auto_dont_care.b_sym == ['docs/b.md:4']
+Given: symbols m_one, m_two, m_three each mapped exactly to one code hit, with summaries auto_count 34 each (102 auto hits -> 3 auto pages; each sha256 = hash of its mapped hit plus its 34 auto hits); m_stale mapped to src/s.py:999, summary {count: 56, auto_count: 0, path_count: 1} with sha256 not the hash of the mapped one; the auto read relays return the auto hits in code-point order
+When: the plan run proceeds
+Then: read labels are exactly 'infra:callers:read:auto:0', 'infra:callers:read:auto:1', 'infra:callers:read:auto:2'; page 0 args symbols == '["m_one","m_three","m_two"]'; no ':read:all:' label; findings include 'm_stale: the mapped occurrences differ from git grep -w (56 hits, 1 mapped) and the hit list is over the caller read budget (4 reads of 50 entries); re-grep and map every hit'
 ```
 
 Don't care:
@@ -969,21 +951,21 @@ Don't care:
 ```
 
 ```text
-- the memo is never persisted (a resumed run reads again)
+- the order of the read labels within one part (they run k = 0, 1, ...)
 ```
 
 ## STRIDE (trust boundary: the scratch file and the agent relays of the new modes)
 
 - Spoofing: the script accepts only `file` = `<scratch>/callers/callers-<64 hex>.json` (AC7);
-  read mode refuses another basename and a symlink (AC4); the args check catches a run on
-  other arguments (AC7).
+  read mode refuses another basename (AC4) and bytes that do not hash to the name; the args
+  check catches a run on other arguments, after the args retry too (AC7).
 - Tampering: read mode refuses a file whose bytes do not hash to its name (AC4); every relay is
   digest-checked, and every joined list is checked against the summary count and hash (AC7).
 - Repudiation: not applicable (no actor identity; gate lines log each handoff).
 - Information disclosure: the file holds repo paths and line numbers only, in the run scratch
   outside the worktree; no new exposure (non-goal: scratch cleanup).
-- Denial of service: 50-entry pages, a 65536-byte page cap (AC4, AC8), the 8192-byte summary
-  cap (AC10), the read budget (AC11), the 100-hit cap per symbol.
+- Denial of service: 50-entry pages (AC3), the 4096-byte summary cap (AC10), the read budget
+  (AC11), the 100-hit cap per symbol.
 - Elevation of privilege: read mode opens one file read-only and runs no subprocess; the agent
   runs only the printed command (prompt rule as today).
 
@@ -1001,7 +983,7 @@ Don't care:
   release of L2142 stay.
 - OB2 changelog: `plugins/fleet/CHANGELOG.md`, a new top `## [7.2.0] - 2026-11-16` entry with a
   Deploy note (update the plugin to 7.2.0, start a new session) and Changed/Added items for the
-  three modes, the disk path, the read budget and the memo (hook `check-changelog`).
+  three modes, the disk path and the read budget (hook `check-changelog`).
 - OB3 generated: `node plugins/fleet/scripts/gen.mjs` (the `callers` entry of `PROGRAM_SHA256`
   changes with `callers.py`), then `node plugins/fleet/scripts/build-workflow.mjs`; commit
   `plugins/fleet/workflows/build-task-run.js` as built (`tests/v631_dist.test.mjs`,
@@ -1032,7 +1014,8 @@ Don't care:
 - OB6 existing tests that pin the old inline size, in `tests/v630_flow.test.mjs`: "6.3.0 A1
   (ADR-1195 measure)" (`:139`, 4 x 100 hits printed inline) and "6.3.0 A1 (review M1)" (`:402`,
   the 65536 marker on a 100-hit symbol). Both now meet the 8192 inline cap first: change them to
-  assert the `FLEET_CALLERS_ON_DISK` marker. AC4 covers the 65536 marker in read mode.
+  assert the `FLEET_CALLERS_ON_DISK` marker. The 65536 marker is now reached only by a stubbed or
+  old relay (non-goal: no removal).
 
 Test command: `npm test -- <paths>` (`package.json` `"test": "node --test"`; CI runs
 `node --test plugins/*/tests/*.test.mjs`). Probe on `plugins/fleet/tests/v630_flow.test.mjs` in a
@@ -1056,7 +1039,7 @@ scratch worktree: exit 0 (19 tests pass).
 
 ## Open decisions
 
-1. `INLINE_CAP` 8192 bytes, `PAGE` 50 entries and `CALLER_READ_BUDGET` 4 come from one incident
+1. `INLINE_CAP` 8192 bytes, `SUMMARY_CAP` 4096 bytes, `PAGE` 50 entries and `CALLER_READ_BUDGET` 4 come from one incident
    (wf_c04c41b0-5ee: 25,915 bytes failed, 102 doc hits; unverified wf_0e5677ad-a03: about
    16 KB, 60 doc hits). A smaller cap or budget sends more plans to findings; a larger
    budget costs more agents (task #62). Max may pick other values.
@@ -1069,6 +1052,38 @@ scratch worktree: exit 0 (19 tests pass).
    as other R1-R5 refusals do). Path counts this large need about 3 symbols of 70 or more
    distinct files each, all with a changed file set; Max may prefer a larger budget for
    path reads.
+5. Mixed budget (A3): for maps of this task's size (102 auto hits, 3 auto pages), one stale
+   symbol of more than 50 hits gets a budget finding ("re-grep and map every hit") instead of
+   per-line findings, because the AUTO pages leave one read. Max may prefer the ALL part first.
+
+## Plan facts (amended)
+
+- `allowed_additions.files`: `plugins/fleet/scripts/callers.py`, `plugins/fleet/CHANGELOG.md`,
+  `plugins/fleet/README.md`, `plugins/fleet/docs/build-task-run-notes.md`,
+  `.claude-plugin/marketplace.json`, `README.md`, `plugins/fleet/workflows/build-task-run.js`,
+  `plugins/fleet/tests/v630_flow.test.mjs`.
+- `allowed_additions.symbols`: `CALLERS_DISK_MARK`, `CALLER_PAGE`, `CALLER_READ_BUDGET`,
+  `callersFilePrompt`, `callersReadPrompt`, `INLINE_CAP`, `SUMMARY_CAP`, `PAGE`
+  (cuts: `callerReads` and `READ_CAP` removed; A7: `SUMMARY_CAP` added).
+- `est_diff_lines`: 1300 (was 1650; the memo, AC8, the read cap, the read `auto` map and two
+  refusals are cut).
+
+## Audit amendments
+
+The fable plan-audit approved round 3 with no blocking findings. Applied by hand:
+
+- A1 (AC7 ex 8): the control now also asserts `infra:callers:read:auto:0` and the plan audit.
+- A2 (AC7): the `:file` and read relays are args-checked after `digestRetry`; AC7 ex 9.
+- A3 (AC11 ex 4, Open decision 5): the mixed-budget example.
+- A4 (Agent count): the 14-run baseline.
+- A5: moot (cut (a) removes the memo).
+- A7 (AC10): `SUMMARY_CAP` 4096, independent of `INLINE_CAP` 8192; the split examples adjusted.
+- Cut (a): no `callerReads` memo; AC11 ex 4 replaced.
+- Cut (b): no AC8, no `READ_CAP`; a failed read relay is a plain `failed` (AC7 ex 10).
+- Cut (c): no `auto` key in read output (all parts, as the key carries nothing once part `all`
+  loses it); the workflow derives part-`all` auto hits with `docOrLockFile` and `doctest_md`,
+  checks their number against `auto_count`, and `callerCheck` re-checks them.
+- Cut (d): no symlink refusal and no `01` page refusal in read mode.
 
 ## Risks
 
