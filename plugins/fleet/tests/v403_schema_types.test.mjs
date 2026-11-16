@@ -527,10 +527,26 @@ const READS = {
     // 6.3.0 (ADR-1238): the batches merge
     "r.auto_dont_care object": "prog:callers:auto_dont_care",
     "r.auto_dont_care array": "!prog:callers:auto_dont_care",
-    "r.doctest_md array": "prog:callers:doctest_md",
     // review M1: a batch over the relay cap splits until one symbol is left
     "part.length number-literal": PARSED_LOCAL,
+    // 7.2.0 (L2178): the plan's map or the sealed paths, compared by hash on the disk path
+    "expected object": PARSED_LOCAL,
   },
+  // 7.2.0 (L2178): the on-disk handoff
+  isStrList: { "v string": "parsed: a relayed list the caller check types here (prog:callers:capped, doctest_md, hits.*)", "x array": "parsed: a relayed list the caller check types here (prog:callers:capped, doctest_md, hits.*)" },
+  callerMerge: { "doctest array": "prog:callers:doctest_md" },
+  callerDisk: {
+    "part.length number-literal": PARSED_LOCAL,
+    "r.file string": "prog:callers:file",
+    "r.symbols object": "prog:callers:symbols",
+    "r.symbols array": "!prog:callers:symbols",
+    "e object": "prog:callers:symbols.*",
+    "x integer": "prog:callers:symbols.*.count",
+    "x string": "prog:callers:symbols.*.sha256",
+    "x string-re": "prog:callers:symbols.*.paths_sha256",
+    "disk.expected[s] array": PARSED_LOCAL,
+  },
+  callerReadParts: { "pg object": "prog:callers:page", "hits object": "prog:callers:hits", "hits array": "!prog:callers:hits" },
   unattendedOn: { "p.caps.unattended boolean": "prog:policy:caps.unattended", "input.unattended boolean": PARSED_ARGS },
   callerCheck: {
     "x string": "prog:callers:occurrences.*[]",
@@ -1126,7 +1142,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.1\.1\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.1\.1\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.2\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.2\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

@@ -136,7 +136,8 @@ test("6.3.0 A1: callers.py per symbol does not depend on the batch: 31 symbols i
   }
 });
 
-test("6.3.0 A1 (ADR-1195 measure): 4 symbols x 100 hits relay about 24 KB; a full batch of 30 x 100 is over the cap and prints the marker", () => {
+// 7.2.0 (L2178): both outputs are now over the 8192-byte inline cap and take the on-disk handoff
+test("6.3.0 A1 (ADR-1195 measure): 4 symbols x 100 hits and a full batch of 30 x 100 are over the inline cap and print the on-disk marker", () => {
   const wt = scratchRepo("fleet-630-size-");
   try {
     const per = SYMBOL_HITS;
@@ -149,14 +150,13 @@ test("6.3.0 A1 (ADR-1195 measure): 4 symbols x 100 hits relay about 24 KB; a ful
     }
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "x");
-    const r = callersRun(wt, syms.slice(0, 4));
-    const occ = Object.values(r.out.occurrences).reduce((a, v) => a + v.length, 0);
-    assert.equal(occ, 4 * per);
-    const bytes = Buffer.byteLength(r.text);
-    assert.ok(bytes < 32768, bytes + " bytes for " + occ + " occurrences");
+    const four = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms.slice(0, 4)), String(per)], { encoding: "utf8" });
+    assert.notEqual(four.status, 0);
+    assert.equal(four.stdout, "");
+    assert.match(four.stderr, /^FLEET_CALLERS_ON_DISK: the callers output is over the 8192-byte inline cap \(\d+ bytes; symbols: sym_name_0_long_identifier, /);
     const full = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(syms), String(per)], { encoding: "utf8" });
     assert.notEqual(full.status, 0);
-    assert.match(full.stderr, /^FLEET_CALLERS_RELAY_CAP: .*\(\d+ bytes; symbols: sym_name_0_long_identifier/);
+    assert.match(full.stderr, /^FLEET_CALLERS_ON_DISK: .*\(\d+ bytes; symbols: sym_name_0_long_identifier/);
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }
@@ -399,7 +399,8 @@ test("6.3.0 D low 1: format_files.py, run for real: a check timeout names the fi
   assert.match(cut.note, /; the fixer runs took \d+ s, so the check phase had [01] s \(cut by the 1 s step ceiling\)$/);
 });
 
-test("6.3.0 A1 (review M1): callers.py prints no output over the relay cap: it exits with the FLEET_CALLERS_RELAY_CAP marker", () => {
+// 7.2.0 (L2178): the 8192-byte inline cap is met first; the relay-cap marker is now reached only by a stubbed or old relay
+test("6.3.0 A1 (review M1): callers.py prints no output over the inline cap: it exits with the FLEET_CALLERS_ON_DISK marker", () => {
   const wt = scratchRepo("fleet-630-cap-");
   try {
     const d = join(wt, ...Array.from({ length: 3 }, (_, k) => "d".repeat(200) + k));
@@ -410,7 +411,7 @@ test("6.3.0 A1 (review M1): callers.py prints no output over the relay cap: it e
     const r = spawnSync("python3", ["-I", CALLERS, wt, "docs/plans/x.md", JSON.stringify(["huge_symbol"]), String(SYMBOL_HITS)], { encoding: "utf8" });
     assert.notEqual(r.status, 0);
     assert.equal(r.stdout, "");
-    assert.match(r.stderr, /^FLEET_CALLERS_RELAY_CAP: the callers output is over the 65536-byte relay cap \(\d+ bytes; symbols: huge_symbol\)/);
+    assert.match(r.stderr, /^FLEET_CALLERS_ON_DISK: the callers output is over the 8192-byte inline cap \(\d+ bytes; symbols: huge_symbol\)/);
   } finally {
     rmSync(wt, { recursive: true, force: true });
   }

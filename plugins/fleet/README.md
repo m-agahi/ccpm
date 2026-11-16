@@ -240,6 +240,17 @@ through an alias, a re-export under another name, a name built at runtime, submo
 treats as binary and other repos are not searched or not found. An empty `changed_symbols` is only
 checked by the audit. A ref sealed before 2.1.6 builds without caller coverage (gate line).
 
+On-disk caller handoff (7.2.0, L2178): a grep output over 8192 bytes is not copied through the
+relay. `callers.py` exits with `FLEET_CALLERS_ON_DISK`, and the script runs its file mode: the full
+output goes to `<scratch>/callers/callers-<sha256>.json`, and the relay carries only a summary per
+symbol (hit count, sha256 of the sorted hits, auto doc or lock hit count, path count and path
+hash; at most 4096 bytes, else the batch splits in halves). A symbol whose mapped occurrences hash
+to the summary needs no read. Other symbols are read in batch-wide pages of 50 entries (read mode,
+part `auto`, `all` or `paths`), each page digest- and args-checked and joined against the summary
+count and hash. A caller check reads at most 4 pages; a list over that read budget is one finding
+(plan) or an R5 refusal (update merge). At the update merge (`infra:callers:u1`) the comparison is
+by path set, so a line shift with the same files needs no read.
+
 Fixer hooks on build files (3.0.0, steps 6a and 10a): the one commit step must commit exactly the
 approved tree (ADR-1151), so a pre-commit fixer that rewrote a file at commit time used to stop
 the run. A program (`infra:format-tests:r<n>`, `infra:format-code:r<n>`, the default agent: it

@@ -57,6 +57,9 @@ const SAMPLES = [
   "infra:remote-head:p1",
   "infra:fleet-scan:p1",
   "infra:callers",
+  // 7.2.0 (L2178): the on-disk handoff
+  "infra:callers:file",
+  "infra:callers:read:auto:0",
   "infra:changed-defs:c1",
   "infra:push",
   "infra:push:p2",

@@ -1082,7 +1082,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/7.1.1/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/7.2.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1242,7 +1242,11 @@ export const PROGRAM_LABELS = [
   [/^infra:tf-gate:/, [[null, "tf_gate", K("tf_gate")]]],
   [/^infra:remote-head:/, [[null, "remote_head", K("remote_head")]]],
   [/^infra:fleet-scan:/, [[null, "fleet_scan", K("fleet_scan")]]],
-  [/^infra:callers/, [[null, "callers", K("callers")]]],
+  // 7.2.0 (L2178): the inline relay, the file-mode summary and the read pages are mutually exclusive;
+  // the new keys are read lazily so the module imports while PROGRAM_KEYS lacks the entries
+  [/^infra:callers(?!.*:(file|read)(:|$))/, [[null, "callers", K("callers")]]],
+  [/^infra:callers(:[a-z0-9-]+)*:file(:(digest|args)-retry)?$/, [[null, "callers", PROGRAM_KEYS["callers:file"] || null]]],
+  [/^infra:callers(:[a-z0-9-]+)*:read:(all|auto|paths):[0-9]+(:(digest|args)-retry)?$/, [[null, "callers", PROGRAM_KEYS["callers:read"] || null]]],
   [/^infra:changed-defs:/, [[null, "changed_defs", K("changed_defs")]]],
   [/^infra:push(:p\d+)?$/, [[null, "push_classify", K("push_classify")]]],
   // 4.0.0 (1985, S3)
@@ -1685,4 +1689,65 @@ export function sealLegacyLedger(s, tiny, sources) {
   const next = JSON.stringify(ref) + (content.endsWith("\n") ? "\n" : "");
   s.__store[tiny.plan_commit] = next;
   return Object.assign({}, tiny, { ref_sha256: sha256(next) });
+}
+
+// ---------------------------------------------------------------- 7.2.0 (L2178): callers on-disk handoff stubs
+// the summary hash of a list: sha256 of the sorted list as canonical JSON (as callers.py file mode)
+export const callersHash = (list) => sha256(canon(list.slice().sort(cpCompare)));
+function cpCompare(a, b) {
+  const x = Array.from(a);
+  const y = Array.from(b);
+  for (let i = 0; i < x.length && i < y.length; i++) {
+    const d = x[i].codePointAt(0) - y[i].codePointAt(0);
+    if (d) return d;
+  }
+  return x.length - y.length;
+}
+export const callersPathsOf = (hits) => Array.from(new Set(hits.map((h) => h.slice(0, h.lastIndexOf(":"))))).sort(cpCompare);
+export const ON_DISK = (syms) => ({ status: "failed", reason: "FLEET_CALLERS_ON_DISK: the callers output is over the 8192-byte inline cap (9000 bytes; symbols: " + syms.join(", ") + ")" });
+export const callersFileOf = (scratch) => scratch + "/callers/callers-" + "a".repeat(64) + ".json";
+// one summary entry for a symbol {hits, auto} (over replaces fields)
+export function callersEntry(d, over) {
+  const hits = d.hits || [];
+  const paths = callersPathsOf(hits);
+  return Object.assign({ count: hits.length, sha256: callersHash(hits), auto_count: (d.auto || []).length, path_count: paths.length, paths_sha256: callersHash(paths) }, over || {});
+}
+// the file-mode relay for data {<sym>: {hits, auto, summary?}}; fillPrograms adds program and digest
+export function callersFileStub(data, over) {
+  return (p) => {
+    const i = inputsOf(p);
+    const symbols = {};
+    for (const s of i.symbols) if (data[s]) symbols[s] = callersEntry(data[s], data[s].summary);
+    return Object.assign(
+      { status: "ok", reason: "summary", symbols, capped: [], doctest_md: [], file: callersFileOf(i.scratch_dir), args: [i.worktree, i.plan_path, JSON.stringify(i.symbols), String(i.cap), i.scratch_dir] },
+      typeof over === "function" ? over(i) : over || {},
+    );
+  };
+}
+// the read-mode relay: pages of 50 over the listed symbols' entries of the part
+export function callersReadStub(data, over) {
+  return (p) => {
+    const i = inputsOf(p);
+    const L = [];
+    for (const s of i.symbols.slice().sort(cpCompare)) {
+      const d = data[s] || {};
+      const list = i.part === "auto" ? (d.auto || []).slice().sort(cpCompare) : i.part === "paths" ? callersPathsOf(d.hits || []) : (d.hits || []).slice().sort(cpCompare);
+      for (const e of list) L.push([s, e]);
+    }
+    const k = Number(i.page);
+    const hits = {};
+    for (const [s, e] of L.slice(50 * k, 50 * k + 50)) (hits[s] = hits[s] || []).push(e);
+    return Object.assign(
+      { status: "ok", reason: "page", part: i.part, page: { index: k, count: Math.max(1, Math.ceil(L.length / 50)) }, hits, args: [i.file, i.part, JSON.stringify(i.symbols), String(i.page)] },
+      typeof over === "function" ? over(i) : over || {},
+    );
+  };
+}
+// scripts the disk path under one label prefix: inline ON_DISK, the file relay, and read pages 0..9 of every part
+export function callersDisk(s, prefix, data, opts) {
+  const o = opts || {};
+  s[prefix] = (p) => ON_DISK(inputsOf(p).symbols);
+  s[prefix + ":file"] = callersFileStub(data, o.file);
+  for (const part of ["all", "auto", "paths"]) for (let k = 0; k < 10; k++) s[prefix + ":read:" + part + ":" + k] = callersReadStub(data, o.read);
+  return s;
 }
