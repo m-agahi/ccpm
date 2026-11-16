@@ -277,7 +277,7 @@ test("6.1.0 T17: no code round left at u1: stop review, not cap", async () => {
 
 test("6.1.0 T18: a stop inside the update coder round (callers) writes exactly one CI write-back", async () => {
   const t = withSyms(upd({ "infra:pr-update": (p) => ({ status: "ok", reason: "u", mode: "update", updated: true, head: D, base: C, overlap: ["src/w.py"], error: null, args: inputsOf(p).args }) }, ["src/w.py"]));
-  const o = { defs: [{ name: "other_fn", at: "src/w.py:3", end: 9 }], excluded: [], unclassified: [], unattributed: [] };
+  const o = { defs: [{ name: "other_fn", at: "src/w.py:3", end: 9 }], excluded: [], unclassified: [], unattributed: [], generated: [] };
   t["infra:changed-defs:r2"] = Object.assign({ status: "ok", reason: "listed" }, o);
   const out = await run(t, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);

@@ -114,7 +114,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "7.0.0";
+const FLEET_VERSION = "7.0.1";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with
 const RELOAD_HINT =
@@ -1550,7 +1550,7 @@ const PROGRAM_SHA256 = {
   "branch_scan": "ec03aa965ed9a3d145ce1fb1636685d2be087877daf78f369eed0a19f532967d",
   "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
   "callers": "4623272ec380872179ed0df68287bee2e66c4d88a1677c4a298cad642cdcb462",
-  "changed_defs": "40ecf45fe37448244572d8f7fd64ad574837970047a58de7c1ac7a262f717e94",
+  "changed_defs": "b076bad1aeaa5f97762c1b0665919ded55d971a4f10cf7c4bdba177c11a772bd",
   "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
@@ -1745,7 +1745,7 @@ const PROGRAM_KEYS = {
   // 6.1.0 D6: given a base tip, the program prints it too
   "fleet_scan:base": ["diff", "commits", "base"],
   "callers": ["occurrences", "capped", "auto_dont_care", "doctest_md"],
-  "changed_defs": ["defs", "excluded", "unclassified", "unattributed"],
+  "changed_defs": ["defs", "excluded", "unclassified", "unattributed", "generated"],
   "push_classify": ["push_result", "exit_code", "hook_tail", "args"],
   "push_probe": ["access", "result", "exit_code", "auth_line", "args"],
   "hook_surface": ["surface", "make_paths", "error", "args"],
@@ -1866,6 +1866,7 @@ const PROGRAM_OUT = {
     excluded: STRS,
     unclassified: STRS,
     unattributed: STRS,
+    generated: STRS,
     digest: STR,
   },
   push_classify: {
@@ -4518,6 +4519,7 @@ function buildCallerFindings(relayed, symbols, scopeFiles) {
   return out;
 }
 
+const GENERATED_DIST = "plugins/fleet/workflows/build-task-run.js";
 async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, scopeFiles) {
   const r = await infra(label, changedDefsPrompt({ worktree, base, tree, exclude }), "Code", JUDGE_AGENT);
   const lists = ["excluded", "unclassified", "unattributed"];
@@ -4527,6 +4529,14 @@ async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, s
     !r.defs.every((d) => d && typeof d.name === "string" && typeof d.at === "string" && typeof d.end === "number")
   )
     halt("failed", label + " returned no defs, excluded, unclassified or unattributed list");
+  if (
+    !Array.isArray(r.generated) ||
+    !r.generated.every((g) => typeof g === "string")
+  )
+    halt(
+      "failed",
+      label + " returned no generated list (an array of path strings)",
+    );
   // the digested keys are the table's
   const relayed = {};
   for (const k of progKeys("changed_defs")) relayed[k] = k === "defs" ? r.defs.map((d) => ({ name: d.name, at: d.at, end: d.end })) : r[k];
@@ -4534,6 +4544,18 @@ async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, s
   if (typeof r.digest !== "string" || sha256Hex(canonical(Object.assign({ program: printedProgram(r) }, relayed))) !== r.digest)
     halt("failed", label + ": the relayed lists do not match the program's digest (a definition was dropped or changed in the copy)");
   for (const p of relayed.excluded) gate(label + ": skipped " + p + " (frozen test or plan doc)");
+  for (const p of relayed.generated) {
+    if (p !== GENERATED_DIST)
+      halt(
+        "failed",
+        label +
+          ": generated names " +
+          p +
+          ", not the fleet dist " +
+          GENERATED_DIST,
+      );
+    gate(label + ": skipped " + p + " (generated from src)");
+  }
   for (const p of relayed.unclassified) gate(label + ": unclassified " + p + " (no definition pattern; checked against the plan's files)");
   const bad = buildCallerFindings(relayed, symbols, scopeFiles);
   if (bad.length)

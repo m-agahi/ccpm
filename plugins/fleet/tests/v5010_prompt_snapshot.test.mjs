@@ -103,9 +103,9 @@ const SCENARIOS = {
 // 7.0.0 (yaadgaar #699): the intake prompt has one ledger branch (yaadgaar) and no body page read; the preflight census asks for mcp__yaadgaar__read_task only (the probe pin moves); the reworded yaadgaar read and write-back prompts; no infra:ledger-read:pre, infra:ledger-writeback or their :ci calls (4 fewer build calls on the default legacy ledger fixture)
 // 7.0.0 review F2, F4: the default fixture is yaadgaar task #42 (input #42; + infra:yaadgaar-read, infra:yaadgaar-writeback and their :ci calls: 4 more build calls), and title, body_slug, page_project and page_tags leave INFRA_SCHEMA results and body_slug leaves SOURCE_SCHEMA (both move the pins: with the schema fields put back the plan-then-build pin is 9b97deb7..., not the one below; probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 88, sha256: "94611502e7333df1e3f825653ec87e40d62c6c1952cb5a5ef316662fe40ade76" },
-  "confirm auto (gates, then build in one run)": { calls: 90, sha256: "f3fe78dfbd67f10edd7e7e4d3a53c08844e42e3561f1c71cf2f5254bae84ae64" },
-  "short path (one test writer)": { calls: 87, sha256: "e5001b2f897f3b7c7ca234447895f341a7928dd9cb6e9acfe436f2dc359b0742" },
+  "plan then build (confirm ask)": { calls: 88, sha256: "c8b8aa36efd666a359a4379bdbba217fa656c5d106378fb07aef215aae86d507" },
+  "confirm auto (gates, then build in one run)": { calls: 90, sha256: "aa2e2cc5d918ddd8454c2ee5c81dcacbc1d7675e39e3312e8065b79c252874e6" },
+  "short path (one test writer)": { calls: 87, sha256: "a3fcb9ffb583f40bf5ad6c51327adefceae27d12ba8ef3d06d2fa7cffe78caed" },
   "probe": { calls: 2, sha256: "a8ceccc781cf8954f6b925f6d96462387d40cede1db8d318d28eb0441753e8de" },
 };
 
