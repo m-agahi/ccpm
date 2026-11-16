@@ -157,9 +157,13 @@ def gen_build(src):
         if t and (not t.startswith(b'//') or GEN_MARK.match(t)):
             kept.append(t)
     return src[:i] + b'\n'.join(kept) + b'\n'
-def gen_blob(p):
-    r = subprocess.run(G + ['cat-file', 'blob', tree + ':' + p], capture_output=True)
+def gen_blob(rev, p):
+    r = subprocess.run(G + ['cat-file', 'blob', rev + ':' + p], capture_output=True)
     return r.stdout if r.returncode == 0 else None
+def gen_fresh(rev):
+    # the dist at rev is the build of the src at rev
+    s, d = gen_blob(rev, GEN_SRC), gen_blob(rev, GEN_DIST)
+    return s is not None and d is not None and gen_build(s) == d
 entries = []
 st = run('diff', '--name-status', '-z', '-M', base, tree, '--').split(b'\0')
 i = 0
@@ -181,11 +185,11 @@ for status, path, newpath in entries:
     if path in excl or (newpath is not None and newpath in excl):
         excluded.add(esc(path))
         continue
-    if path == GEN_DIST and status in ('M', 'T'):
-        _s, _d = gen_blob(GEN_SRC), gen_blob(GEN_DIST)
-        if _s is not None and _d is not None and gen_build(_s) == _d:
-            generated.add(esc(path))
-            continue
+    # fresh at BOTH ends (review S1): then every changed dist line comes from a changed src line,
+    # which is scanned; a stale base dist could hide dist-only definitions, so it is scanned
+    if path == GEN_DIST and status in ('M', 'T') and gen_fresh(base) and gen_fresh(tree):
+        generated.add(esc(path))
+        continue
     blob = run('cat-file', 'blob', base + ':' + path)
     lang = lang_of(path, blob)
     if lang is None or b'\0' in blob:

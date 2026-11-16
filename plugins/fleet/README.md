@@ -309,7 +309,7 @@ names the nearest column-0 line, the class rather than its method. It also print
 (the criterion test files and the plan doc), `unclassified` (files no definition pattern covers,
 and binary diffs) and `unattributed` (`<path>:<line>` of a change with no enclosing definition,
 such as an added import). Path names are printed with non-printable characters escaped. The
-relayed lists must match the program's digest. The program also prints `generated`, the fleet dist `plugins/fleet/workflows/build-task-run.js` when at the tree its blob equals the build of `plugins/fleet/src/build-task-run.js`; that dist is not scanned, and the workflow logs it as skipped (generated from src).
+relayed lists must match the program's digest. The program also prints `generated`, the fleet dist `plugins/fleet/workflows/build-task-run.js` when its blob equals the build of `plugins/fleet/src/build-task-run.js` at both the base and the tree; that dist is not scanned (a stale base dist is scanned), and the workflow logs it as skipped (generated from src).
 
 The fixer program (3.0.0) runs the hooks in a scratch checkout of HEAD under `scratch_dir`
 (`git worktree add --detach`, hooks off for that checkout only): only the selected files are

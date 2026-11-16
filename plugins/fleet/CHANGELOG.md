@@ -7,8 +7,11 @@
 - The build callers gate no longer counts the generated fleet dist `plugins/fleet/workflows/build-task-run.js`
   as definitions (yaadgaar #55, L2190). `changed_defs.py` compares the dist blob at the approved tree
   with the build of `plugins/fleet/src/build-task-run.js` at the same tree (a byte port of
-  `buildWorkflow`). On equality the dist is not scanned and is printed in the new `generated` list;
-  the workflow logs `skipped <path> (generated from src)`. Any difference scans the dist as before.
+  `buildWorkflow`). The dist is skipped only when it is that fresh build at both the base and the
+  approved tree; then every changed dist line comes from a changed src line, which is scanned. A stale
+  base dist (a hand edit in the dist only) is scanned, so its dropped definitions still reach the gate
+  (review S1). On a skip the dist is printed in the new `generated` list and the workflow logs
+  `skipped <path> (generated from src)`. Any difference scans the dist as before.
   The src stays scanned. The workflow refuses a relay with no `generated` array, a non-string entry,
   or an entry other than the fleet dist.
 

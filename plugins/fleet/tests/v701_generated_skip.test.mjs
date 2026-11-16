@@ -1,5 +1,5 @@
 // fleet 7.0.1 AC1: changed_defs.py reports the generated dist in `generated` and does not scan it
-// when the dist blob at the tree equals buildWorkflow(src blob at the tree).
+// when the dist blob equals buildWorkflow(src blob) at the tree AND at the base (review S1).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -96,11 +96,17 @@ test("AC1: boundary: the check reads tree blobs, not the disk", () => {
   assert.deepStrictEqual(o.defs, [{ name: "alpha", at: S + ":5", end: 7 }]);
 });
 
-test("AC1: boundary: stale base dist", () => {
-  // AC1: base D = "old\n", tree as in main
-  const o = scan({ ...baseFiles(), [D]: "old\n" }, { [S]: withA2, [D]: buildWorkflow(withA2) });
-  assert.deepStrictEqual(o.generated, [D]);
-  assert.deepStrictEqual(o.defs.filter((d) => d.at.startsWith(D + ":")), []);
+test("AC1: boundary: stale base dist is scanned", () => {
+  // AC1 (corrected by review S1): the dist is skipped only when it is the fresh build at BOTH ends.
+  // Base D is a hand-edited stale build (an extra top-level const); the tree regenerates D from src.
+  // The dropped const is a changed dist definition with no changed src line, so D must be scanned.
+  const stale = buildWorkflow(SRC0) + "const staleProbe = 2;\n";
+  const o = scan({ ...baseFiles(), [D]: stale }, { [S]: withA2, [D]: buildWorkflow(withA2) });
+  assert.deepStrictEqual(o.generated, []);
+  assert.ok(
+    o.defs.some((d) => d.name === "staleProbe" && d.at.startsWith(D + ":")),
+    "stale base dist def staleProbe reported: " + JSON.stringify(o.defs),
+  );
 });
 
 test("AC1: boundary: dist not in the diff", () => {
