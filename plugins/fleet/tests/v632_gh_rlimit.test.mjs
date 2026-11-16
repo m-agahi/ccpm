@@ -81,6 +81,8 @@ const GH_PROGRAMS = {
   orch_scan: (e) => [e.repo, "gh", "q/actions", "1", SHA, "master"],
   pr_state: () => ["view", "gh", "q/actions", "1", SHA],
   pr_body_block: () => ["gh", "q/actions", "1", Buffer.from("<details><summary>Built with ccpm fleet x @@WALL@@ <!-- ccpm-fleet-stats -->").toString("base64"), "-", "[]"],
+  // 7.1.0 (L2145) AC1 ex19: the script-written test block
+  pr_test_block: () => ["gh", "q/actions", "1", Buffer.from("<!-- ccpm-fleet-tests -->\n**Tests (measured by the fleet):** 133 passed, 0 failed, 0 errors, 133 total.\nCommand: `npm test`\n<!-- /ccpm-fleet-tests -->").toString("base64"), "[]"],
 };
 
 for (const [name, argsOf] of Object.entries(GH_PROGRAMS)) {

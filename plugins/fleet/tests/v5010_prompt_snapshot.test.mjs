@@ -102,10 +102,11 @@ const SCENARIOS = {
 // 6.3.4 (2176): infra:plan-chunks:r0w0 (new plan call) carries the chunks; commit-plan carries none and relays bad_chunks; load-ref reads in part mode; bad_chunks, written and part in INFRA_SCHEMA (probe unchanged)
 // 7.0.0 (yaadgaar #699): the intake prompt has one ledger branch (yaadgaar) and no body page read; the preflight census asks for mcp__yaadgaar__read_task only (the probe pin moves); the reworded yaadgaar read and write-back prompts; no infra:ledger-read:pre, infra:ledger-writeback or their :ci calls (4 fewer build calls on the default legacy ledger fixture)
 // 7.0.0 review F2, F4: the default fixture is yaadgaar task #42 (input #42; + infra:yaadgaar-read, infra:yaadgaar-writeback and their :ci calls: 4 more build calls), and title, body_slug, page_project and page_tags leave INFRA_SCHEMA results and body_slug leaves SOURCE_SCHEMA (both move the pins: with the schema fields put back the plan-then-build pin is 9b97deb7..., not the one below; probe unchanged)
+// 7.1.0 (L2145): + infra:pr-tests after the pr-opener (one more build call), the code judge suite_result types passed, the pr-opener role sha moves (probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 88, sha256: "c8b8aa36efd666a359a4379bdbba217fa656c5d106378fb07aef215aae86d507" },
-  "confirm auto (gates, then build in one run)": { calls: 90, sha256: "aa2e2cc5d918ddd8454c2ee5c81dcacbc1d7675e39e3312e8065b79c252874e6" },
-  "short path (one test writer)": { calls: 87, sha256: "a3fcb9ffb583f40bf5ad6c51327adefceae27d12ba8ef3d06d2fa7cffe78caed" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "cabb1497e68698a1bcf2c8cc525964fc1a11f2993fec3b92561ad276f80c13ee" },
+  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "26d75a00fec0baf1b5ba02fea00e1b2a6dbb2138dfe9c9812d11a9add4a93909" },
+  "short path (one test writer)": { calls: 88, sha256: "c941f661e573ca0251872c009092723c2f650402ba231ec13672d581df2e5b0a" },
   "probe": { calls: 2, sha256: "a8ceccc781cf8954f6b925f6d96462387d40cede1db8d318d28eb0441753e8de" },
 };
 

@@ -22,7 +22,7 @@ import { SOURCE, ARGS, happy, run, runOne, spawnSync, inputsOf, ROLE_NAMES, ROLE
 async function realProbe(mutate) {
   const home = mkdtempSync(join(tmpdir(), "fleet-roles-probe-"));
   try {
-    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "7.0.1");
+    const ver = join(home, ".claude", "plugins", "cache", "mkt", "fleet", "7.1.0");
     mkdirSync(join(ver, "scripts"), { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(ver, "scripts", n + ".py"));
     cpSync(ROLES_SRC, join(ver, "roles"), { recursive: true });
@@ -119,7 +119,7 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
   // 7.0.0 (yaadgaar #699): - the legacy ledger read and write (main and :ci): the source is inert
   // 7.0.0 review F2: + the yaadgaar read and write (main and :ci): the default task is yaadgaar #42
-  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
+  assert.equal(out.build.calls.length, 68, out.build.labels.join(", "));
   for (const c of out.calls) assert.ok(!String(c.prompt).includes("agent_prompt_get"), c.label);
 });
 
@@ -247,7 +247,7 @@ test("5.0.0 R1: plan mode seals history.preflight {fleet_version, role_sha256}, 
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const p = JSON.parse(s.__store[out.result.plan_ref.plan_commit]).history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "7.0.1");
+  assert.equal(p.fleet_version, "7.1.0");
   assert.deepEqual(p.role_sha256, PIN);
 });
 

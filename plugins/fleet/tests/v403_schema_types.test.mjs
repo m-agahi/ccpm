@@ -171,6 +171,15 @@ const PARSED_TOKEN = "parsed: a token the script split from a typed string";
 // fn -> {"<expr> <kind>": spec}. A read with no entry fails; so does an
 // entry the source no longer has, and an agent path not typed for the read.
 const READS = {
+  // 7.1.0 (L2145): the script-written test block of the PR body
+  testsBlock: {
+    "suite object": CJ + "suite_result",
+    "suite array": "parsed: suite_result, the code judge's (or the run-state's) object; an array is refused here",
+    "n integer": "parsed: a suite_result count, checked as an integer >= 0 here",
+    "testCmd.env object": PARSED_REF,
+  },
+  suppliedTexts: { "o object": "parsed: a review note or intent deviation, filtered to its string fields here", "x string": ["parsed: the strings the workflow supplies to the pr-opener, filtered here", 2] },
+  prTestsStep: { "x string": "prog:pr_test_block:claims[]", "r.claims array": "prog:pr_test_block:claims", "r.claims_truncated boolean": "prog:pr_test_block:claims_truncated", "r.edited boolean": "prog:pr_test_block:edited" },
   STRICT: { "p.enum array": "parsed: a schema property, not an agent result" },
   stripHeldOut: { "v array": PARSED_LOCAL, "v object": PARSED_LOCAL },
   gatesNotRun: { "g object": CJ + "gates_not_run[]", "judgeList array": CJ + "gates_not_run" },
@@ -735,6 +744,9 @@ const READS = {
   callRole: { "label string-re": "parsed: the script's own step label" },
   fmtDur: { "s number": "prog:pr_body_block:wall_s" },
   buildFromRef: {
+    // 7.1.0 (L2145): the resume check of the test block
+    "state.testsResumed boolean": PARSED_LOCAL,
+    "state.review.nits array": "parsed: state.review, the review step's result or JSON.parse of the run-state message (digest-checked read_state)",
     // 6.3.4 (2176): a load-ref part (it only picks what to read again; ref_sha256 decides)
     "p object": "prog:plan_ref:part",
     "p.sha256 string": "prog:plan_ref:part.sha256",
@@ -1113,7 +1125,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.0\.1\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.0\.1\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.1\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.1\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

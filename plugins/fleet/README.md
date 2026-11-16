@@ -783,6 +783,19 @@ the 100-agent cap (like path checks); CI-fix coder rounds still count.
   run id, ledger id or session. The program changes only that block, re-reads the body, and
   checks that the headers of the body convention and of the old body are still there; the
   script checks the block's sha256. Policy `stats: false` skips it.
+- Test block (`infra:pr-tests*`, `pr_test_block.py`, 7.1.0, L2145): after every accepted
+  pr-opener call (labels `infra:pr-tests`, `:p<k>`, `:body-v<k>`, `:notes`), on every policy, the
+  program writes one block between `<!-- ccpm-fleet-tests -->` and `<!-- /ccpm-fleet-tests -->`:
+  passed, failed, errors and total from the code judge's `suite_result`, and the plan's full-suite
+  test command (never the judge's own command text). A later suite run replaces it. The program
+  also reports the test-count phrases of the body outside the block (the stats block included).
+  A phrase the workflow did not supply to the opener gets one pr-opener rewrite
+  (`role:fleet-pr-opener<sfx>:counts`, checked like the first call, then
+  `infra:pr-tests<sfx>:counts`); a phrase that stays stops the run `needs_human`. A run that
+  resumes at the review, write-back or stats step runs the check once (`infra:pr-tests:resume`)
+  before that step, with no rewrite. Every `infra:pr-tests*` label (`:counts`, `:resume`,
+  `:digest-retry`, `:args-retry`) matches the tail rule and runs outside the agent cap; the
+  `role:fleet-pr-opener<sfx>:counts` rewrite is a role call and counts toward the cap.
 - Ready (`infra:pr-ready`, `pr_state.py ready`): `gh pr ready` only on an open draft at the
   approved sha; the script requires `is_draft: false` and head == approved sha. Policy
   `pr_ready: false` keeps the draft. A branch Max pushed himself (an IaC diff, ADR-1175) stops
