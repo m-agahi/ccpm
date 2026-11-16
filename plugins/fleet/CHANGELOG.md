@@ -1,5 +1,43 @@
 # Changelog
 
+## [7.2.0] - 2026-11-16
+
+Fleet 7.2.0: the caller check no longer copies a large occurrence list through a model relay
+(yaadgaar #44, L2178). In run wf_c04c41b0-5ee a haiku relay of a 25,915-byte callers output
+missed the program digest, and its digest retry missed it the same way, so the run failed.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 7.2.0), then start a NEW session: the workflow
+  looks for its own `fleet/7.2.0/scripts` dir.
+
+### Changed
+
+- `callers.py` inline mode prints its output only up to 8192 bytes (`INLINE_CAP`). Over it, the
+  program prints nothing and exits with `FLEET_CALLERS_ON_DISK: ...`; the workflow then takes the
+  on-disk handoff for that batch. The 65536-byte `FLEET_CALLERS_RELAY_CAP` inline branch stays,
+  and is now reached only by a stubbed or old relay.
+- The update-merge grep (R5, `infra:callers:u1`) compares path sets on the disk path: a line
+  shift with the same files needs no read; a changed path set reads part `paths` only.
+
+### Added
+
+- `callers.py file <worktree> <plan_path> <symbols json> <cap> <scratch_dir>`: writes the full
+  inline JSON to `<scratch_dir>/callers/callers-<sha256>.json` (temp file, then rename) and prints
+  a summary per symbol (`count`, `sha256`, `auto_count`, `path_count`, `paths_sha256`). A summary
+  over 4096 bytes (`SUMMARY_CAP`) exits with the relay-cap marker, and the workflow splits the
+  batch in halves that go straight to the disk path.
+- `callers.py read <file> <part> <symbols json> <page>`: 50-entry pages over all listed symbols
+  for part `all`, `auto` or `paths`. It refuses a file whose bytes do not hash to its name, a bad
+  part, symbol list or page.
+- The workflow's disk path: a symbol whose mapped set hashes to the summary needs no read; a
+  symbol whose only gap is its doc or lock hits reads part `auto`; any other reads part `all` and
+  gets the usual findings. Every relay is digest- and args-checked (also after the args retry);
+  every joined list is checked against the summary count and hash; the part-`all` auto hits are
+  derived by the script's own doc and lock list and checked against `auto_count`.
+- Read budget: at most 4 read pages per caller check (`CALLER_READ_BUDGET`). A list over it is
+  one plan finding per symbol, or an R5 refusal at the update merge.
+
 ## [7.1.1] - 2026-11-16
 
 Fleet 7.1.1: a relay that the agent marks failed no longer loses the digest retry or the program's

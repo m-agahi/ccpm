@@ -116,7 +116,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "7.1.1";
+const FLEET_VERSION = "7.2.0";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with
 const RELOAD_HINT =
@@ -175,6 +175,14 @@ const MAX_SYMBOL_HITS = 100;
 // callers.py marks an output over the relay cap and the workflow splits that batch in halves
 const CALLER_BATCH_SYMBOLS = 30;
 const CALLERS_CAP_MARK = "FLEET_CALLERS_RELAY_CAP:";
+// 7.2.0 (L2178, ADR-1195): an output over callers.py's 8192-byte inline cap is handed off on disk: file mode
+// writes it to the run scratch and relays a summary (at most 4096 bytes); read mode relays 50-entry pages,
+// at most CALLER_READ_BUDGET pages per caller check
+const CALLERS_DISK_MARK = "FLEET_CALLERS_ON_DISK:";
+const CALLER_INLINE_CAP = 8192;
+const CALLER_SUMMARY_CAP = 4096;
+const CALLER_PAGE = 50;
+const CALLER_READ_BUDGET = 4;
 const CALLER_METHOD =
   "git grep -n -I -w -F --full-name -e <symbol>: the working tree content of the tracked files in the fleet worktree, the run's own plan doc excluded; every hit must be mapped and every mapped line must be a hit (checked by the script)";
 const CALLER_LIMITS = [
@@ -1552,7 +1560,7 @@ function relayDigestOk(r, keys, name) {
 const PROGRAM_SHA256 = {
   "branch_scan": "ec03aa965ed9a3d145ce1fb1636685d2be087877daf78f369eed0a19f532967d",
   "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
-  "callers": "4623272ec380872179ed0df68287bee2e66c4d88a1677c4a298cad642cdcb462",
+  "callers": "41a09efcbcf4588e6e76f5428d375e102719f897bd644ba46cb74273a9c92703",
   "changed_defs": "3afdc459fcc5590a26516a41d31fd637ea5833ad59b06566140f6cef0fb6561a",
   "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
@@ -1751,6 +1759,9 @@ const PROGRAM_KEYS = {
   // 6.1.0 D6: given a base tip, the program prints it too
   "fleet_scan:base": ["diff", "commits", "base"],
   "callers": ["occurrences", "capped", "auto_dont_care", "doctest_md"],
+  // 7.2.0 (L2178): the on-disk handoff
+  "callers:file": ["symbols", "capped", "doctest_md", "file", "args"],
+  "callers:read": ["part", "page", "hits", "args"],
   "changed_defs": ["defs", "excluded", "unclassified", "unattributed", "generated"],
   "push_classify": ["push_result", "exit_code", "hook_tail", "args"],
   "push_probe": ["access", "result", "exit_code", "auth_line", "args"],
@@ -1868,7 +1879,21 @@ const PROGRAM_OUT = {
     digest: STR,
   },
   fleet_scan: { diff: STRS, commits: { type: "array", items: { type: "object", properties: { sha: STR, files: STRS } } }, base: STR, digest: STR },
-  callers: { occurrences: STR_LISTS, capped: STRS, auto_dont_care: STR_LISTS, doctest_md: STRS, digest: STR },
+  callers: {
+    occurrences: STR_LISTS,
+    capped: STRS,
+    auto_dont_care: STR_LISTS,
+    doctest_md: STRS,
+    digest: STR,
+    // 7.2.0 (L2178): file mode
+    symbols: { type: "object", additionalProperties: { type: "object", properties: { count: INT, sha256: STR, auto_count: INT, path_count: INT, paths_sha256: STR } } },
+    file: STR,
+    args: STRS,
+    // read mode
+    part: STR,
+    page: { type: "object", properties: { index: INT, count: INT } },
+    hits: STR_LISTS,
+  },
   changed_defs: {
     defs: { type: "array", items: { type: "object", properties: { name: STR, at: STR, end: INT } } },
     excluded: STRS,
@@ -2824,6 +2849,30 @@ function callersPrompt(inputs) {
     progCmd("callers", [inputs.worktree, inputs.plan_path, JSON.stringify(inputs.symbols), String(inputs.cap)]) +
     "\n" +
     'It prints one JSON object ' + printsKeys("callers") + '. Return {status: "ok", reason, ' + returnKeys("callers") + '} with those values copied exactly: every key, every list entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
+  );
+}
+
+// 7.2.0 (L2178): the on-disk handoff of an output over the inline cap
+function callersFilePrompt(inputs) {
+  return (
+    INFRA_STEP + "write the occurrences of the changed symbols to a file in the run scratch and relay its summary. Read only in the worktree: no edits, no commits, no checkout, no fetch, no push; the program writes only under the scratch dir; run nothing but the one command below.\n" +
+    inputsLine(inputs) +
+    RUN_EXACT +
+    progCmd("callers", ["file", inputs.worktree, inputs.plan_path, JSON.stringify(inputs.symbols), String(inputs.cap), inputs.scratch_dir]) +
+    "\n" +
+    'It prints one JSON object ' + printsKeys("callers:file") + '. Return {status: "ok", reason, ' + returnKeys("callers:file") + '} with those values copied exactly: every key and every value, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
+    'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
+  );
+}
+function callersReadPrompt(inputs) {
+  return (
+    INFRA_STEP + "read one page of the occurrences file of the caller check. Read only: no edits, no commits, no checkout, no fetch, no push; run nothing but the one command below.\n" +
+    inputsLine(inputs) +
+    RUN_EXACT +
+    progCmd("callers", ["read", inputs.file, inputs.part, JSON.stringify(inputs.symbols), String(inputs.page)]) +
+    "\n" +
+    'It prints one JSON object ' + printsKeys("callers:read") + '. Return {status: "ok", reason, ' + returnKeys("callers:read") + '} with those values copied exactly: every key, every list entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
     'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
   );
 }
@@ -4433,21 +4482,40 @@ function docOrLockFile(p) {
   const b = String(p).split("/").pop();
   return DOC_FILE_RE.test(b) || NOTE_FILE_RE.test(b) || LOCK_FILES.indexOf(b) >= 0;
 }
-async function callerGrep(label, names, worktree, planPath, phaseName) {
-  const all = { occurrences: {}, capped: [], auto_dont_care: {}, doctest_md: [] };
+// sorted by code point, no duplicates
+function uniqSorted(xs) {
+  return Array.from(new Set(xs)).sort(codePointCompare);
+}
+const isStrList = (x) => Array.isArray(x) && x.every((v) => typeof v === "string");
+// expected: {symbol: [path:line ...]} (level "line") or {symbol: [path ...]} (level "path"); it is
+// compared by hash with the on-disk summary, so a symbol that matches needs no read
+async function callerGrep(label, names, worktree, planPath, phaseName, expected, level) {
+  const all = { occurrences: {}, capped: [], auto_dont_care: {}, doctest_md: [], unread: {}, paths: {} };
+  const disk = { expected: expected && typeof expected === "object" ? expected : {}, pathLevel: level === "path", left: CALLER_READ_BUDGET, worktree, planPath, phaseName };
   const per = CALLER_BATCH_SYMBOLS;
   const queue = [];
-  for (let i = 0; i < names.length; i += per) queue.push(names.slice(i, i + per));
+  for (let i = 0; i < names.length; i += per) queue.push({ part: names.slice(i, i + per), disk: false });
   if (queue.length > 1) gate(label + ": " + names.length + " symbols in " + queue.length + " caller-check dispatches (at most " + per + " symbols each)");
   for (let b = 0; queue.length; b++) {
     const lb = label + (b ? ":b" + (b + 1) : "");
-    const part = queue.shift();
+    const q = queue.shift();
+    const part = q.part;
+    if (q.disk) {
+      queue.unshift(...(await callerDisk(lb, part, disk, all)));
+      continue;
+    }
     const r = await dispatch(lb, callersPrompt({ worktree, plan_path: planPath, symbols: part, cap: MAX_SYMBOL_HITS }), { schema: INFRA_SCHEMA, phase: phaseName, agentType: JUDGE_AGENT, digest: "callers" });
     // review M1: an output over the relay cap is split in two; one symbol alone over it stops
     if (r.status !== "ok" && String(r.reason).indexOf(CALLERS_CAP_MARK) >= 0) {
       if (part.length === 1) halt("needs_human", lb + ": the occurrences of " + part[0] + " are over the 65536-byte relay cap (relay size; at most " + MAX_SYMBOL_HITS + " hits, long paths); the caller check cannot relay them", "callers");
       gate(lb + ": " + part.length + " symbols are over the relay cap; split in two");
-      queue.unshift(part.slice(0, part.length >> 1), part.slice(part.length >> 1));
+      queue.unshift({ part: part.slice(0, part.length >> 1), disk: false }, { part: part.slice(part.length >> 1), disk: false });
+      continue;
+    }
+    // 7.2.0 (L2178): an output over the inline cap is handed off on disk
+    if (r.status !== "ok" && String(r.reason).indexOf(CALLERS_DISK_MARK) >= 0) {
+      gate(lb + ": the caller output is over the " + CALLER_INLINE_CAP + "-byte inline cap; on-disk handoff (" + part.length + " symbols)");
+      queue.unshift(...(await callerDisk(lb, part, disk, all)));
       continue;
     }
     if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", lb + " returned " + r.status + ": " + (r.reason || "no reason"));
@@ -4465,23 +4533,169 @@ async function callerGrep(label, names, worktree, planPath, phaseName) {
       all.occurrences[n] = occ[n];
       if (n in adc) all.auto_dont_care[n] = adc[n];
     }
-    for (const c of r.capped) if (all.capped.indexOf(c) < 0) all.capped.push(c);
-    if (!Array.isArray(r.doctest_md)) all.doctest_md = null;
-    else if (all.doctest_md) for (const d of r.doctest_md) if (all.doctest_md.indexOf(d) < 0) all.doctest_md.push(d);
+    callerMerge(all, r.capped, r.doctest_md);
   }
   all.capped.sort();
   if (all.doctest_md) all.doctest_md.sort();
   return all;
 }
+function callerMerge(all, capped, doctest) {
+  for (const c of capped) if (all.capped.indexOf(c) < 0) all.capped.push(c);
+  if (!Array.isArray(doctest)) all.doctest_md = null;
+  else if (all.doctest_md) for (const d of doctest) if (all.doctest_md.indexOf(d) < 0) all.doctest_md.push(d);
+}
+// 7.2.0 (L2178): one batch on the disk path; returns the halves of a batch whose summary is over the cap
+async function callerDisk(lb, part, disk, all) {
+  const fl = lb + ":file";
+  const scratch = scratchOf(disk.worktree);
+  const args = [disk.worktree, disk.planPath, JSON.stringify(part), String(MAX_SYMBOL_HITS), scratch];
+  const r = await dispatch(fl, callersFilePrompt({ worktree: disk.worktree, plan_path: disk.planPath, symbols: part, cap: MAX_SYMBOL_HITS, scratch_dir: scratch }), { schema: INFRA_SCHEMA, phase: disk.phaseName, agentType: JUDGE_AGENT, digest: "callers:file", args });
+  if (r.status !== "ok" && String(r.reason).indexOf(CALLERS_CAP_MARK) >= 0) {
+    if (part.length === 1) halt("needs_human", fl + ": the caller summary of " + part[0] + " is over the " + CALLER_SUMMARY_CAP + "-byte summary cap; the caller check cannot relay it", "callers");
+    gate(fl + ": " + part.length + " symbols are over the summary cap; split in two");
+    return [{ part: part.slice(0, part.length >> 1), disk: true }, { part: part.slice(part.length >> 1), disk: true }];
+  }
+  if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", fl + " returned " + r.status + ": " + (r.reason || "no reason"));
+  requireProgram(r, "callers", fl);
+  if (!relayDigestOk(r, progKeys("callers:file"), "callers")) halt("failed", fl + ": the relayed summary does not match the program's digest");
+  // A2: digestRetry returns its args retry unchecked
+  if (canonical(r.args) !== canonical(args)) halt("failed", fl + ": the program ran on other arguments (" + JSON.stringify(r.args === undefined ? null : r.args) + ")");
+  const pre = scratch + "/callers/callers-";
+  if (typeof r.file !== "string" || r.file.slice(0, pre.length) !== pre || !/^[0-9a-f]{64}\.json$/.test(r.file.slice(pre.length)))
+    halt("failed", fl + ": the callers file " + JSON.stringify(r.file === undefined ? null : r.file) + " is not " + pre + "<64 lowercase hex>.json");
+  const sm = r.symbols && typeof r.symbols === "object" && !Array.isArray(r.symbols) ? r.symbols : {};
+  const cnt = (x) => Number.isInteger(x) && x >= 0;
+  const hex = (x) => typeof x === "string" && SHA256_RE.test(x);
+  for (const s of part) {
+    const e = Object.prototype.hasOwnProperty.call(sm, s) ? sm[s] : null;
+    if (!e || typeof e !== "object" || !cnt(e.count) || !hex(e.sha256) || !cnt(e.auto_count) || e.auto_count > e.count || !cnt(e.path_count) || e.path_count > e.count || !hex(e.paths_sha256))
+      halt("failed", fl + ": the summary has no valid entry for " + s);
+  }
+  if (!isStrList(r.capped) || !isStrList(r.doctest_md)) halt("failed", fl + ": the summary has no capped or doctest_md string list");
+  callerMerge(all, r.capped, r.doctest_md);
+  const live = part.filter((s) => r.capped.indexOf(s) < 0);
+  const want = (s) => (Array.isArray(disk.expected[s]) ? disk.expected[s] : []);
+  const sumOf = (xs, k) => xs.reduce((a, s) => a + sm[s][k], 0);
+  const unread = (xs, p) => {
+    for (const s of xs) all.unread[s] = { part: p, count: sm[s].count, auto_count: sm[s].auto_count, path_count: sm[s].path_count };
+  };
+  if (disk.pathLevel) {
+    // the update merge: R5 reads only paths, so a line shift with the same files needs no read
+    const P = {};
+    const differ = [];
+    for (const s of live) {
+      P[s] = uniqSorted(want(s).map((x) => normPath(String(x))).filter(Boolean));
+      if (P[s].length === sm[s].path_count && sha256Hex(canonical(P[s])) === sm[s].paths_sha256) all.paths[s] = P[s];
+      else differ.push(s);
+    }
+    if (!differ.length) return [];
+    const got = await callerReadParts(lb, r.file, "paths", differ, sumOf(differ, "path_count"), disk);
+    if (!got) return unread(differ, "paths"), [];
+    for (const s of differ) {
+      const Q = got[s] || [];
+      if (Q.length !== sm[s].path_count || sha256Hex(canonical(Q)) !== sm[s].paths_sha256)
+        halt("failed", lb + ":read:paths: the read occurrences of " + s + " do not match the summary count or sha256");
+      all.paths[s] = Q;
+    }
+    return [];
+  }
+  for (const s of part) if (r.capped.indexOf(s) >= 0) {
+    all.occurrences[s] = [];
+    all.auto_dont_care[s] = [];
+  }
+  const E = {};
+  const autoSet = [];
+  let allSet = [];
+  for (const s of live) {
+    E[s] = uniqSorted(want(s).map(occurrenceKey).filter(Boolean));
+    if (E[s].length === sm[s].count && sha256Hex(canonical(E[s])) === sm[s].sha256) {
+      // every hit is mapped by the planner: the sealed map adds nothing
+      all.occurrences[s] = E[s];
+      all.auto_dont_care[s] = [];
+    } else (sm[s].auto_count > 0 ? autoSet : allSet).push(s);
+  }
+  // AUTO first: the planner mapped every code hit and left the doc or lock hits to auto
+  if (autoSet.length) {
+    const got = await callerReadParts(lb, r.file, "auto", autoSet, sumOf(autoSet, "auto_count"), disk);
+    if (!got) unread(autoSet, "auto");
+    else
+      for (const s of autoSet) {
+        const A = got[s] || [];
+        if (A.length !== sm[s].auto_count) halt("failed", lb + ":read:auto: the read occurrences of " + s + " do not match the summary auto_count");
+        const U = uniqSorted(E[s].concat(A));
+        if (U.length === sm[s].count && sha256Hex(canonical(U)) === sm[s].sha256) {
+          all.occurrences[s] = U;
+          all.auto_dont_care[s] = A;
+        } else allSet.push(s);
+      }
+  }
+  allSet = allSet.sort(codePointCompare);
+  if (allSet.length) {
+    const got = await callerReadParts(lb, r.file, "all", allSet, sumOf(allSet, "count"), disk);
+    if (!got) unread(allSet, "all");
+    else {
+      const doctest = r.doctest_md.map(normPath);
+      for (const s of allSet) {
+        const H = got[s] || [];
+        if (H.length !== sm[s].count || sha256Hex(canonical(H)) !== sm[s].sha256)
+          halt("failed", lb + ":read:all: the read occurrences of " + s + " do not match the summary count or sha256");
+        // cut (c): the auto hits by the script's own doc and lock list; callerCheck re-checks each one
+        const auto = H.filter((h) => {
+          const p = h.slice(0, h.lastIndexOf(":"));
+          return docOrLockFile(p) && doctest.indexOf(normPath(p)) < 0;
+        });
+        if (auto.length !== sm[s].auto_count) halt("failed", lb + ":read:all: the auto hits of " + s + " do not match the summary auto_count");
+        all.occurrences[s] = H;
+        all.auto_dont_care[s] = auto;
+      }
+    }
+  }
+  return [];
+}
+// the pages of one part for the listed symbols, or null when they do not fit the read budget left
+async function callerReadParts(lb, file, part, syms, total, disk) {
+  const sorted = syms.slice().sort(codePointCompare);
+  const pages = Math.max(1, Math.ceil(total / CALLER_PAGE));
+  if (pages > disk.left) {
+    gate(lb + ": the " + part + " lists of " + sorted.join(", ") + " need " + pages + " read(s); " + disk.left + " of the caller read budget (" + CALLER_READ_BUDGET + ") left; not read");
+    return null;
+  }
+  disk.left -= pages;
+  const sj = JSON.stringify(sorted);
+  const out = {};
+  for (let k = 0; k < pages; k++) {
+    const rl = lb + ":read:" + part + ":" + k;
+    const args = [file, part, sj, String(k)];
+    const r = await dispatch(rl, callersReadPrompt({ file, part, symbols: sorted, page: k }), { schema: INFRA_SCHEMA, phase: disk.phaseName, agentType: JUDGE_AGENT, digest: "callers:read", args });
+    if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", rl + " returned " + r.status + ": " + (r.reason || "no reason"));
+    requireProgram(r, "callers", rl);
+    if (!relayDigestOk(r, progKeys("callers:read"), "callers")) halt("failed", rl + ": the relayed page does not match the program's digest");
+    if (canonical(r.args) !== canonical(args)) halt("failed", rl + ": the program ran on other arguments (" + JSON.stringify(r.args === undefined ? null : r.args) + ")");
+    const pg = r.page;
+    const hits = r.hits;
+    if (
+      r.part !== part ||
+      !pg || typeof pg !== "object" || pg.index !== k || pg.count !== pages ||
+      !hits || typeof hits !== "object" || Array.isArray(hits) ||
+      Object.keys(hits).some((s) => sorted.indexOf(s) < 0 || !isStrList(hits[s]))
+    )
+      halt("failed", rl + ": the read page does not match the request (part " + part + ", page " + k + " of " + pages + ", symbols " + sorted.join(", ") + ")");
+    for (const s of sorted) if (hits[s]) out[s] = (out[s] || []).concat(hits[s]);
+  }
+  return out;
+}
 async function callerCheck(label, symbols, worktree, planPath) {
   const names = symbols.map((s) => s.symbol);
-  const r = await callerGrep(label, names, worktree, planPath, "Plan");
+  const expected = {};
+  for (const s of symbols) expected[s.symbol] = s.occurrences.map((o) => o.at);
+  const r = await callerGrep(label, names, worktree, planPath, "Plan", expected, "line");
   const occ = r.occurrences;
   const doctest = Array.isArray(r.doctest_md) ? r.doctest_md.filter((x) => typeof x === "string").map(normPath) : null;
   const adc = doctest && r.auto_dont_care && typeof r.auto_dont_care === "object" && !Array.isArray(r.auto_dont_care) ? r.auto_dont_care : {};
   const auto = {};
   for (const n of names) {
     auto[n] = [];
+    if (r.unread[n]) continue;
     for (const h of Array.isArray(adc[n]) ? adc[n] : []) {
       const p = typeof h === "string" ? h.slice(0, h.lastIndexOf(":")) : "";
       if (typeof h !== "string" || occ[n].indexOf(h) < 0 || !docOrLockFile(p) || doctest.indexOf(normPath(p)) >= 0)
@@ -4497,6 +4711,19 @@ async function callerCheck(label, symbols, worktree, planPath) {
         symbol: s.symbol,
         finding:
           s.symbol + ": more than " + MAX_SYMBOL_HITS + " occurrences (git grep -w); too common a name to check by grep. It stays in changed_symbols: narrower symbols may be added in addition, never in its place; a human decides",
+      });
+      continue;
+    }
+    // 7.2.0 (L2178): a list over the caller read budget is one finding, not a read
+    const un = r.unread[s.symbol];
+    if (un) {
+      findings.push({
+        criterion: null,
+        symbol: s.symbol,
+        finding:
+          un.part === "auto"
+            ? s.symbol + ": " + un.auto_count + " doc or lock hit(s) left to auto dont_care are over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); map them in changed_symbols (dont_care with a reason)"
+            : s.symbol + ": the mapped occurrences differ from git grep -w (" + un.count + " hits, " + s.occurrences.length + " mapped) and the hit list is over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); re-grep and map every hit",
       });
       continue;
     }
@@ -6807,12 +7034,18 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // R5: sealed occurrences, and occurrences a grep at the merge finds (line shift, added or removed caller)
     const syms = planFacts.changed_symbols || [];
     if (syms.length) {
-      const g = await callerGrep("infra:callers:u1", syms.map((x) => x.symbol), mainWt, ref.plan_path, "Review");
-      if (g.capped.length) return "the occurrences of " + g.capped.join(", ") + " cannot be listed at the update merge (more than " + MAX_SYMBOL_HITS + " occurrences)";
       const at = (k) => normPath(String(k).slice(0, String(k).lastIndexOf(":")));
+      // 7.2.0 (L2178): the sealed paths per symbol; on the disk path only a symbol whose path set differs is read
+      const sealedPaths = {};
+      for (const x of syms) sealedPaths[x.symbol] = (x.occurrences || []).map((o) => at(occurrenceKey(o.at) || o.at));
+      const g = await callerGrep("infra:callers:u1", syms.map((x) => x.symbol), mainWt, ref.plan_path, "Review", sealedPaths, "path");
+      if (g.capped.length) return "the occurrences of " + g.capped.join(", ") + " cannot be listed at the update merge (more than " + MAX_SYMBOL_HITS + " occurrences)";
+      const unread = Object.keys(g.unread).sort(codePointCompare);
+      if (unread.length) return "the occurrences of " + unread.join(", ") + " at the update merge differ from the sealed map and are over the caller read budget";
       const occ = [];
-      for (const x of syms) for (const o of x.occurrences || []) occ.push(at(occurrenceKey(o.at) || o.at));
+      for (const x of syms) for (const p of sealedPaths[x.symbol]) occ.push(p);
       for (const n of Object.keys(g.occurrences)) for (const k of g.occurrences[n]) occ.push(at(k));
+      for (const n of Object.keys(g.paths)) for (const p of g.paths[n]) occ.push(normPath(p));
       const oc = mv.filter((p) => occ.indexOf(p) >= 0);
       if (oc.length) return "the base change touches files with occurrences of the changed symbols" + list(oc);
     }

@@ -2737,6 +2737,8 @@ findings. Returns {findings, occurrences}. The relayed lists must match the
 program's digest.
 ```
 
+7.2.0 (L2178): an output over the 8192-byte inline cap takes the on-disk handoff (callers.py file and read modes); a mapped set that hashes to the summary needs no read, and a list over the read budget of 4 pages is one finding.
+
 ### `in callerCheck` (5.0.9 line 5095)
 
 ```text
