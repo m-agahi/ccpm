@@ -1,5 +1,20 @@
 # Changelog
 
+## [7.0.1] - 2026-11-16
+
+### Fixed
+
+- The build callers gate no longer counts the generated fleet dist `plugins/fleet/workflows/build-task-run.js`
+  as definitions (yaadgaar #55, L2190). `changed_defs.py` compares the dist blob at the approved tree
+  with the build of `plugins/fleet/src/build-task-run.js` at the same tree (a byte port of
+  `buildWorkflow`). The dist is skipped only when it is that fresh build at both the base and the
+  approved tree; then every changed dist line comes from a changed src line, which is scanned. A stale
+  base dist (a hand edit in the dist only) is scanned, so its dropped definitions still reach the gate
+  (review S1). On a skip the dist is printed in the new `generated` list and the workflow logs
+  `skipped <path> (generated from src)`. Any difference scans the dist as before.
+  The src stays scanned. The workflow refuses a relay with no `generated` array, a non-string entry,
+  or an entry other than the fleet dist.
+
 ## [7.0.0] - 2026-11-15
 
 Fleet 7.0.0: every project's tasks live in yaadgaar; the yadgar ledger path is retired (yaadgaar

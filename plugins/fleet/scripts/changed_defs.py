@@ -140,6 +140,30 @@ def span(lines, i):
         end = q
     return end + 1
 defs, excluded, unclassified, unattributed = {}, set(), set(), set()
+GEN_DIST = 'plugins/fleet/workflows/build-task-run.js'
+GEN_SRC = 'plugins/fleet/src/build-task-run.js'
+GEN_MARK = re.compile(rb'// [A-Z0-9_]+_(BEGIN|END)\Z')
+generated = set()
+def gen_build(src):
+    # port of buildWorkflow (scripts/build-workflow.mjs): keep the meta block, cut each body line's indent, drop blank and comment-only lines
+    head, tail = b'export const meta = {\n', b'\n};\n'
+    i = src.find(tail)
+    if not src.startswith(head) or i < 0:
+        return None
+    i += len(tail)
+    kept = []
+    for t in src[i:].split(b'\n'):
+        t = t.lstrip(b' \t')
+        if t and (not t.startswith(b'//') or GEN_MARK.match(t)):
+            kept.append(t)
+    return src[:i] + b'\n'.join(kept) + b'\n'
+def gen_blob(rev, p):
+    r = subprocess.run(G + ['cat-file', 'blob', rev + ':' + p], capture_output=True)
+    return r.stdout if r.returncode == 0 else None
+def gen_fresh(rev):
+    # the dist at rev is the build of the src at rev
+    s, d = gen_blob(rev, GEN_SRC), gen_blob(rev, GEN_DIST)
+    return s is not None and d is not None and gen_build(s) == d
 entries = []
 st = run('diff', '--name-status', '-z', '-M', base, tree, '--').split(b'\0')
 i = 0
@@ -160,6 +184,11 @@ for status, path, newpath in entries:
         status, newpath = 'D', None
     if path in excl or (newpath is not None and newpath in excl):
         excluded.add(esc(path))
+        continue
+    # fresh at BOTH ends (review S1): then every changed dist line comes from a changed src line,
+    # which is scanned; a stale base dist could hide dist-only definitions, so it is scanned
+    if path == GEN_DIST and status in ('M', 'T') and gen_fresh(base) and gen_fresh(tree):
+        generated.add(esc(path))
         continue
     blob = run('cat-file', 'blob', base + ':' + path)
     lang = lang_of(path, blob)
@@ -328,6 +357,7 @@ o = {
     'unclassified': sorted(unclassified),
     'unattributed': sorted(unattributed),
 }
+o['generated'] = sorted(generated)
 o['program'] = _PROG
 o['digest'] = hashlib.sha256(json.dumps(o, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
 print(json.dumps(o, sort_keys=True, ensure_ascii=False))

@@ -208,7 +208,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 7\.0\.0 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 7\.0\.1 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -5651,6 +5651,7 @@ const ARRAY_SITES = {
   "prior.findings @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
   "prior.criteria_by_round @ replanWithFindings": "parsed: the script's round record (or a parked findings.json)",
   "r.defs @ buildCallerCheck": "infra:defs",
+  "r.generated @ buildCallerCheck": "parsed: the changed_defs relay (digest-checked; schema prog:changed_defs:generated)",
   "p.enum @ roleSchema": "parsed: a role schema property (the 1984 STRICT loop), not an agent result",
   "p.enum @ nullable": "parsed: a PROGRAM_OUT schema property (4.0.3), not an agent result",
   "pf.changed_symbols @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
@@ -6279,7 +6280,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 7\.0\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 7\.0\.1; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6977,7 +6978,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.0\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 7\.0\.0 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.0\.1\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 7\.0\.1 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -7173,7 +7174,7 @@ test("3.0.0 changed-defs program: the B1 PoC, an indented method, a constant, a 
     assert.deepEqual(o.excluded, ["docs/plans/x.md", "tests/test_guards.py"]);
     assert.deepEqual(o.unclassified, ["README.md", "data.bin"]);
     assert.deepEqual(o.unattributed, []);
-    const keep = { defs: o.defs, excluded: o.excluded, unclassified: o.unclassified, unattributed: o.unattributed, program: o.program };
+    const keep = { defs: o.defs, excluded: o.excluded, unclassified: o.unclassified, unattributed: o.unattributed, generated: o.generated, program: o.program };
     assert.equal(o.digest, sha256(canon(keep)));
     const fn = new Function(extractCanonical() + "\nreturn canonical;")();
     assert.equal(sha256(fn(keep)), o.digest);
@@ -8687,7 +8688,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 7\.0\.0/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 7\.0\.1/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
