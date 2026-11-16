@@ -1,5 +1,38 @@
 # Changelog
 
+## [7.1.0] - 2026-11-16
+
+Fleet 7.1.0: the test counts of a fleet PR body come only from a measured suite run, never from the
+pr-opener's own text (yaadgaar #37, L2145). A fleet PR body claimed "147 passed" where the suite
+gave 133.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 7.1.0), then start a NEW session: the workflow
+  looks for its own `fleet/7.1.0/scripts` dir.
+
+### Added
+
+- New program `pr_test_block.py` (labels `infra:pr-tests*`, sonnet, digest id `pr_test_block` with
+  the digest and args retry). After every accepted pr-opener call, on every policy, it writes one
+  block between `<!-- ccpm-fleet-tests -->` and `<!-- /ccpm-fleet-tests -->`: passed, failed,
+  errors and total from the code judge's `suite_result`, and the plan's full-suite `test_cmd`
+  (never the judge's own command text, which can carry a DSN). Without valid counts the block says
+  "not reported". The first block is replaced and any other block is removed; an unpaired or forged
+  marker stops with no edit.
+- The same program lists the test-count phrases of the body outside every test block, the stats
+  block included (only its `<n> test rounds)` cell is dropped), up to 16384 bytes
+  (`claims_truncated` past that: the run stops, fail closed). A phrase that the workflow supplied to
+  the opener (tldr, criterion text, `[manual]` examples, review notes, intent reason and deviations,
+  unattended section, gates_not_run) is ignored. Any other phrase gets one checked pr-opener
+  rewrite (`role:fleet-pr-opener<sfx>:counts`, then `infra:pr-tests<sfx>:counts`); a phrase that
+  stays stops the run `needs_human` (stop gate `role`) and quotes it.
+- A run that resumes at the review, write-back or stats step with a PR runs the check once
+  (`infra:pr-tests:resume`) before that step, with no rewrite.
+- `JUDGE_SUITE` types `passed` as integer or null.
+- `fleet-pr-opener` role: no test counts anywhere in the body; "Test evidence" names the test
+  command and says the workflow adds the counts.
+
 ## [7.0.1] - 2026-11-16
 
 ### Fixed

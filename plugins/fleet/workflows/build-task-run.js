@@ -48,6 +48,7 @@ const INFRA_TIER = [
 ["infra:read-state", "haiku"],
 ["infra:policy", "haiku"],
 ["infra:pr-stats", "sonnet"],
+["infra:pr-tests", "sonnet"],
 ["infra:pr-ready", "sonnet"],
 ["infra:pr-merge", "sonnet"],
 ["infra:pr-update", "sonnet"],
@@ -98,7 +99,7 @@ const INFRA_TIER = [
 const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "7.0.1";
+const FLEET_VERSION = "7.1.0";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
 " (this fleet workflow is fleet " + FLEET_VERSION + "; if the plugin was updated after this session started, run /reload-plugins or start a new session, then run /build-task again)";
@@ -267,7 +268,7 @@ required: ["target", "finding"],
 },
 };
 const SUITE = { type: "object" };
-const JUDGE_SUITE = { type: "object", properties: { exit_code: { type: ["integer", "null"] }, failed: { type: ["integer", "null"] }, errors: { type: ["integer", "null"] } } };
+const JUDGE_SUITE = { type: "object", properties: { exit_code: { type: ["integer", "null"] }, failed: { type: ["integer", "null"] }, errors: { type: ["integer", "null"] }, passed: { type: ["integer", "null"] } } };
 const REVIEW_FINDINGS = {
 type: "array",
 items: {
@@ -1455,6 +1456,7 @@ const PROGRAM_SHA256 = {
 "pr_body_block": "0969891f59f2b11b033b99bb8e2b9f5d3fc1b0fad60ffbebbd5149f0cfae61be",
 "pr_convention": "8e33c899cf1174e28b41e27e5b9c9e10a28e18d46da2a588df73edce1aa77a73",
 "pr_state": "2882890a993396876229672961f66eba4290f1f98263b4a19c62c395856f3fd8",
+"pr_test_block": "030c64b7f12abe00a4e9f9ddd1493f446ed4a6b2ccb43a8f1f5e6007c45ca8eb",
 "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
 "push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
 "push_probe": "c4381f9ce601e0729a0ab49edb33fe6c9e910e8738411e7ad4719f21ef639a5b",
@@ -1480,7 +1482,7 @@ const ROLE_SHA256 = {
 "fleet-code-judge": "0b7a412cb27884de57c70bb48f90627c8595057ef29ce1a8e0f147df49f979fe",
 "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
 "fleet-intent-judge": "eec4332e06027010a8f22aec7b399289665fb652f6d773b9c093f0f7d1f3bfc6",
-"fleet-pr-opener": "e64228bb6be02920701b8fa4701797d1316d74bedae4ff7e5abcdbd20bd7ace0",
+"fleet-pr-opener": "6fe602c3d2c5fd7bfa3f1d3b9de32f20db66247dfe0f6e1b89856cc30f2498f2",
 "fleet-test-judge": "219c89b656f7ae61d28ab7cf2486b498792385df0cdd2a256fdae6c0f53c051b",
 "fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
 "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
@@ -1565,6 +1567,7 @@ const PROGRAM_SLOTS = [
 [/^infra:read-state$/, [[null, "read_state"]]],
 [/^infra:policy(:plan)?$/, [[null, "policy"]]],
 [/^infra:pr-stats/, [[null, "pr_body_block"]]],
+[/^infra:pr-tests/, [[null, "pr_test_block"]]],
 [/^infra:(pr-ready|pr-merge|pr-update|ci-rerun|ci-logs|pr-view|pr-fetch|fleet-cleanup)/, [[null, "pr_state"]]],
 [/^infra:orch-scan/, [[null, "orch_scan"]]],
 [/^infra:ci-watch/, [[null, "ci_watch"]]],
@@ -1631,6 +1634,7 @@ const PROGRAM_KEYS = {
 "orch_scan": ["orchestrator", "iac_repo", "apply_on_merge", "hook_surface_pr", "reasons", "error", "args"],
 "ci_watch": ["state", "checks", "failed", "required", "head", "elapsed_s", "error", "args"],
 "pr_body_block": ["replaced", "wall_s", "block_sha256", "body_sha256_before", "body_sha256_after", "headers_missing", "error", "args"],
+"pr_test_block": ["replaced", "edited", "block_sha256", "claims", "claims_truncated", "body_sha256_before", "body_sha256_after", "headers_missing", "error", "args"],
 "pr_convention": ["title", "body", "source", "unreadable", "args"],
 "review_paths": ["changed_paths"],
 "precommit_ids": ["present", "ids", "parser", "error", "args"],
@@ -1802,6 +1806,19 @@ pr_body_block: {
 replaced: { type: ["boolean", "null"] },
 wall_s: { type: ["integer", "null"] },
 block_sha256: STR,
+body_sha256_before: STR_OR_NULL,
+body_sha256_after: STR_OR_NULL,
+headers_missing: STRS,
+error: STR_OR_NULL,
+args: STRS,
+digest: STR,
+},
+pr_test_block: {
+replaced: { type: ["boolean", "null"] },
+edited: BOOL,
+block_sha256: STR,
+claims: STRS,
+claims_truncated: BOOL,
 body_sha256_before: STR_OR_NULL,
 body_sha256_after: STR_OR_NULL,
 headers_missing: STRS,
@@ -5237,6 +5254,66 @@ return (
 function prStatsPrompt(inputs) {
 return INFRA_STEP + "write the stats block into the fleet's own PR body; only the block between its markers changes.\n" + inputsLine(inputs) + RUN_ONLY + progCmd("pr_body_block", inputs.args) + "\nIt prints one JSON object " + printsKeys("pr_body_block") + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_body_block") + "}.";
 }
+const TESTS_START = "<!-- ccpm-fleet-tests -->";
+const TESTS_END = "<!-- /ccpm-fleet-tests -->";
+function testsBlock(suite, testCmd) {
+const s = suite && typeof suite === "object" && !Array.isArray(suite) ? suite : null;
+const ok = (n) => Number.isInteger(n) && n >= 0;
+const errors = s ? (s.errors === undefined || s.errors === null ? 0 : s.errors) : null;
+const counts = s && ok(s.passed) && ok(s.failed) && ok(errors) ? s.passed + " passed, " + s.failed + " failed, " + errors + " errors, " + (s.passed + s.failed + errors) + " total." : "not reported (the code judge's suite run gave no counts).";
+const toks = String((testCmd && testCmd.command) || "").split(" ").filter((t) => t && t !== PATHS_TOKEN);
+if (toks[toks.length - 1] === "--") toks.pop();
+const env = testCmd && testCmd.env && typeof testCmd.env === "object" ? Object.keys(testCmd.env).sort().map((k) => k + "=" + testCmd.env[k]) : [];
+return TESTS_START + "\n**Tests (measured by the fleet):** " + counts + "\nCommand: `" + env.concat(toks).join(" ") + "`\n" + TESTS_END;
+}
+function testsHeaders(bc, unattended) {
+return JSON.stringify(((bc && bc.required_sections) || []).concat(unattended ? [UNATT_HEAD] : []));
+}
+function suppliedTexts(c) {
+const out = [c.tldr];
+const strs = (o) => (o && typeof o === "object" ? Object.values(o).filter((x) => typeof x === "string") : []);
+for (const k of c.criteria || []) {
+out.push(k.text);
+if (!k.test_files.length) for (const e of k.examples || []) out.push(e.given, e.when, e.then);
+}
+for (const n of c.notes || []) {
+out.push(...strs(n));
+if (n && n.file != null && n.line != null) out.push(n.file + ":" + n.line);
+}
+if (c.intent) {
+out.push(c.intent.reason);
+for (const d of c.intent.deviations || []) out.push(...strs(d));
+}
+out.push(c.unattended);
+for (const g of c.gatesNotRun || []) out.push(g.gate, g.reason);
+return out.filter((x) => typeof x === "string" && x);
+}
+function ownClaims(claims, supplied) {
+const norm = (x) => String(x).replace(/\s+/g, " ").trim().toLowerCase();
+const text = supplied.map(norm);
+return claims.filter((c) => !text.some((t) => t.indexOf(norm(c)) >= 0));
+}
+const quoteClaims = (claims) => claims.map((x) => JSON.stringify(x)).join(", ");
+function stillClaims(label, claims, prUrl) {
+return label + ": the PR body still states test counts outside the script-written test block: " + quoteClaims(claims) + "; remove them from the body of " + prUrl + " by hand, then re-run the build with the same plan_ref";
+}
+function prTestsPrompt(inputs) {
+return INFRA_STEP + "write the test block into the fleet's own PR body; only the block between its markers changes.\n" + inputsLine(inputs) + RUN_ONLY + progCmd("pr_test_block", inputs.args) + "\nIt prints one JSON object " + printsKeys("pr_test_block") + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_test_block") + "}.";
+}
+async function prTestsStep(label, args, block, prUrl, supplied) {
+const r = await infra(label, prTestsPrompt({ args }), "PR", undefined, "pr_test_block", args);
+requireProgram(r, "pr_test_block", label, "needs_human", "stats");
+if (!relayDigestOk(r, progKeys("pr_test_block"), "pr_test_block") || canonical(r.args) !== canonical(args)) halt("needs_human", label + ": the relayed result does not match the program's digest or arguments", "stats");
+if (!Array.isArray(r.claims) || r.claims.some((x) => typeof x !== "string")) halt("needs_human", label + ": claims is not a list of strings", "stats");
+if (r.error !== null) halt("needs_human", label + ": " + r.error + "; check the body of " + prUrl, "stats");
+if (r.block_sha256 !== sha256Hex(block)) halt("needs_human", label + ": the PR body's test block is not the script's block; check " + prUrl, "stats");
+if (r.claims_truncated === true)
+halt("needs_human", label + ": the PR body holds more test-count phrases than the program reports (16384 bytes); remove them from the body of " + prUrl + " by hand, then re-run the build with the same plan_ref", "role");
+gate(label + ": test block " + (r.edited === true ? "written" : "unchanged") + " in " + prUrl);
+const own = ownClaims(r.claims, supplied);
+if (own.length < r.claims.length) gate(label + ": ignored " + (r.claims.length - own.length) + " claim(s) found in workflow-supplied text");
+return own;
+}
 async function prState(label, args, what, stopGate) {
 const r = await infra(label, INFRA_STEP + what + ".\n" + inputsLine({ args }) + RUN_ONLY + progCmd("pr_state", args) + "\nIt prints one JSON object " + printsKeys("pr_state:" + args[0]) + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_state:" + args[0]) + "}.", "PR");
 requireProgram(r, "pr_state", label, "needs_human", stopGate);
@@ -5732,6 +5809,30 @@ if (w && r.title !== subj.main) halt("needs_human", w, "role");
 state.pr = r;
 gate("pr-opener: " + (r.created ? "created " : "updated ") + r.pr_url);
 if (w) halt("needs_human", w);
+if (r.pr_number == null) {
+gate("test block skipped: no PR");
+return r;
+}
+const tl = "infra:pr-tests" + label.replace("role:fleet-pr-opener", "");
+const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd);
+const targs = [g.gh_cmd, remoteSlug, String(r.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
+const supplied = suppliedTexts({ tldr: ref.tldr, criteria, notes: reviewNotes, intent: intentForPr, unattended: state.unattended ? unattendedSection() : null, gatesNotRun: state.gatesNotRun });
+const own = await prTestsStep(tl, targs, tb, r.pr_url, supplied);
+if (!own.length) return r;
+gate(tl + ": " + own.length + " test count claim(s) outside the script-written test block; one pr-opener rewrite (" + label + ":counts)");
+const first = r;
+const r2 = await opener(label + ":counts", {
+pr_url: first.pr_url,
+pr_number: first.pr_number,
+retry_reason: "the PR body states test counts outside the script-written test block: " + quoteClaims(own) + "; write no test count anywhere in your text (the workflow writes the measured counts into its own block)",
+});
+if (r2.pr_url !== first.pr_url || r2.pr_number !== first.pr_number) halt("needs_human", "pr-opener retry named " + r2.pr_url + " (#" + r2.pr_number + "), not " + first.pr_url + " (#" + first.pr_number + "); check both PRs", "role");
+const w2 = why(r2);
+if (w2) halt("needs_human", w2, "role");
+r = Object.assign({}, r2, { created: first.created });
+state.pr = r;
+const left = await prTestsStep(tl + ":counts", targs, tb, r.pr_url, supplied);
+if (left.length) halt("needs_human", stillClaims(tl + ":counts", left, r.pr_url), "role");
 return r;
 }
 async function saveState(lastGate, label) {
@@ -5789,6 +5890,15 @@ throw e;
 }
 async function shipSteps(from) {
 const steps = ["push", "pr", "review", "writeback", "stats", "ready", "ci"];
+if (resume && state.testsResumed !== true && ["review", "writeback", "stats"].indexOf(from) >= 0 && pr && pr.pr_number != null) {
+state.testsResumed = true;
+const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd);
+const targs = [ghCmd("test block", "role"), remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
+const notes = state.review && Array.isArray(state.review.nits) ? state.review.nits : [];
+const supplied = suppliedTexts({ tldr: ref.tldr, criteria, notes, intent: intentForPr, unattended: state.unattended ? unattendedSection() : null, gatesNotRun: state.gatesNotRun });
+const own = await prTestsStep("infra:pr-tests:resume", targs, tb, pr.pr_url, supplied);
+if (own.length) halt("needs_human", stillClaims("infra:pr-tests:resume", own, pr.pr_url), "role");
+}
 for (let i = steps.indexOf(from); i < steps.length; i++) {
 const step = steps[i];
 if (step === "push") {

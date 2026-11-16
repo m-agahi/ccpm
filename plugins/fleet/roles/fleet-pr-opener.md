@@ -24,7 +24,7 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 - `title`: the PR title, built from the repo's convention. Use it verbatim.
 - `body_convention`: `{template, template_repo, required_sections, min_chars, checker}`, the body rules the repo or its org checks (any key may be null). `template_repo` names the org repo that holds `template`.
 - `pr_url`, `pr_number` (an update run only): the PR this branch already has.
-- `retry_reason` (a retry only): why the workflow refused your first result. Fix that on the PR at `pr_url`; open no other PR.
+- `retry_reason` (a retry only): why the workflow refused your first result. Fix that on the PR at `pr_url`; open no other PR. It can also name test counts outside the script-written test block: remove every test count from your text.
 
 ## Run rules (non-interactive)
 
@@ -60,10 +60,11 @@ Do not push. Verify through the API, not `git ls-remote` (git ssh auth can fail 
 Search, case-insensitive: `find <worktree> -maxdepth 4 -iname "pull_request_template*"`, then the org fallback `<gh> api repos/<owner>/.github/contents/.github`. Absence needs BOTH searches to come back empty.
 
 - **Template exists:** start from it. Keep EVERY section header, in order, and fill each. Tick a checkbox only when it is true. A section that does not apply gets "N/A — <reason>", never deleted. Never replace the template with your own structure.
-- **No template:** only then choose your own: Summary · Changes · Acceptance criteria → tests · Test evidence (suite command + result) · Manual checks (only when any) · Gates not run (only when any) · Review notes (only when any) · Risks.
+- **No template:** only then choose your own: Summary · Changes · Acceptance criteria → tests · Test evidence (the test command; the workflow adds the measured counts) · Manual checks (only when any) · Gates not run (only when any) · Review notes (only when any) · Risks.
 - **Plan:** the plan doc never ships. Never copy, attach or link it, and never quote its path. Put `tldr` in the summary (with a template: its summary or description section). List the `id` and `text` of every criterion under the acceptance criteria (with a template: the most fitting section).
 - **Sources:** the plan, the criteria, `suite_result`, `gates_not_run`, `review_notes`, `body_findings`, `intent` and `auto_confirmed` — nothing else. Report only what was verified. Cite symbol names over line numbers.
 - **Evidence for every claim:** every factual claim in the PR body cites its evidence: a sha, a file:line, a CI run id or a command with its output.
+- **No test counts:** write no number of tests, passed, failed or errors anywhere in the body. The workflow writes the measured counts into its own block between `<!-- ccpm-fleet-tests -->` and `<!-- /ccpm-fleet-tests -->`; never write, copy or edit that block.
 - **Not verified:** a claim that nobody measured or ran goes under a "Not verified" heading, never under Verification or Testing. Examples: timing, worst case, counts, "no weakening", "covers all X". With a template, put the heading in the most fitting section; add a section only when there is no template.
 - **Squash-merge repos:** the PR body may become the merge commit message, so it must be correct before any merge.
 - **Manual criteria:** every criterion tagged `[manual]` (`test_files: []`) is listed for the human to check, with its example. With a template, put them in the most fitting section (Test plan, Testing, Notes).

@@ -388,6 +388,12 @@ export async function runOne(script, args0) {
       const block = Buffer.from(a[3], "base64").toString("utf8").replace("@@WALL@@", "2m");
       return { status: "ok", reason: "written", replaced: false, wall_s: 120, block_sha256: sha256(block), body_sha256_before: "0".repeat(64), body_sha256_after: "1".repeat(64), headers_missing: [], error: null, args: a };
     }
+    // 7.1.0 (L2145): an unscripted test-block step writes the block it was given and finds no count claim
+    if (!(label in script) && /^infra:pr-tests/.test(label)) {
+      const a = inputsOf(prompt).args;
+      const block = Buffer.from(a[3], "base64").toString("utf8");
+      return { status: "ok", reason: "written", replaced: false, edited: true, block_sha256: sha256(block), claims: [], claims_truncated: false, body_sha256_before: "0".repeat(64), body_sha256_after: "1".repeat(64), headers_missing: [], error: null, args: a };
+    }
     // 6.0.0 (ledger 2045): an unscripted ready step marks the draft ready at the approved sha
     if (!(label in script) && /^infra:pr-ready/.test(label)) {
       const a = inputsOf(prompt).args;
@@ -1076,7 +1082,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/7.0.1/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/7.1.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1248,6 +1254,8 @@ export const PROGRAM_LABELS = [
   [/^infra:policy(:plan)?$/, [[null, "policy", K("policy")]]],
   // 6.0.0 (ledger 2044)
   [/^infra:pr-stats/, [[null, "pr_body_block", K("pr_body_block")]]],
+  // 7.1.0 (L2145): the script-written test block; the keys are read lazily so the module imports while PROGRAM_KEYS lacks the entry
+  [/^infra:pr-tests/, [[null, "pr_test_block", PROGRAM_KEYS["pr_test_block"] || null]]],
   // 6.0.0 (ledgers 2045, 2034)
   [/^infra:pr-ready/, [[null, "pr_state", K("pr_state:ready")]]],
   [/^infra:pr-merge/, [[null, "pr_state", K("pr_state:merge")]]],

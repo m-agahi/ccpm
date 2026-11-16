@@ -84,6 +84,8 @@ const WANT = [
   [/^infra:ruleset-surface/, "sonnet"],
   [/^infra:policy(:plan)?$/, "haiku"],
   [/^infra:pr-stats/, "sonnet"],
+  // 7.1.0 (L2145)
+  [/^infra:pr-tests/, "sonnet"],
   [/^infra:pr-ready/, "sonnet"],
   [/^infra:(pr-merge|pr-update|ci-rerun|fleet-cleanup)/, "sonnet"],
   [/^infra:(orch-scan|ci-watch)/, "haiku"],
@@ -524,8 +526,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
   // 7.0.0 (yaadgaar #699): - the legacy ledger read and write (main and :ci): the source is inert
   // 7.0.0 review F2: + the yaadgaar read and write (main and :ci): the default task is yaadgaar #42
-  assert.equal(out.build.calls.length, 67, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 66);
+  assert.equal(out.build.calls.length, 68, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 67);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -550,7 +552,7 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "7.0.1");
+  assert.equal(p.fleet_version, "7.1.0");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
   assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/5.0.8/scripts"), "no scripts dir or PATH check sealed");
@@ -596,7 +598,7 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     // 5.0.6 (ledger 2019): 50 + 7 build-dir resets + the teardown
     // 6.0.0 (ledger 2033): + infra:policy; review S6, S7a: + 3
     // 7.0.0 (yaadgaar #699): - 4 legacy ledger steps; review F2: + 4 yaadgaar steps (the default task)
-    assert.equal(b.calls.length, 67);
+    assert.equal(b.calls.length, 68);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });
@@ -611,7 +613,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 7\.0\.1/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 7\.1\.0/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });

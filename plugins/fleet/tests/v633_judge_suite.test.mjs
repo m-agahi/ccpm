@@ -20,7 +20,7 @@ const { SCHEMAS, STRICT } = load();
 const INT_OR_NULL = { type: ["integer", "null"] };
 
 test("AC8 ex1: the code judge's declared suite_result is typed", () => {
-  assert.deepEqual(STRICT["fleet-code-judge"].suite_result, { type: "object", properties: { exit_code: INT_OR_NULL, failed: INT_OR_NULL, errors: INT_OR_NULL } });
+  assert.deepEqual(STRICT["fleet-code-judge"].suite_result, { type: "object", properties: { exit_code: INT_OR_NULL, failed: INT_OR_NULL, errors: INT_OR_NULL, passed: INT_OR_NULL } });
 });
 
 test("AC8 ex2: the coder's declared suite_result stays untyped and is a different object", () => {
@@ -36,5 +36,5 @@ test("AC8 ex3: exit_code is integer or null, never string or number", () => {
 });
 
 test("AC8 ex4: the widened SCHEMAS copy keeps the typed properties", () => {
-  assert.deepEqual(SCHEMAS["fleet-code-judge"].properties.suite_result.properties, { exit_code: INT_OR_NULL, failed: INT_OR_NULL, errors: INT_OR_NULL });
+  assert.deepEqual(SCHEMAS["fleet-code-judge"].properties.suite_result.properties, { exit_code: INT_OR_NULL, failed: INT_OR_NULL, errors: INT_OR_NULL, passed: INT_OR_NULL });
 });
