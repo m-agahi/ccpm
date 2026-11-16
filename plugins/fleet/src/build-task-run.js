@@ -116,7 +116,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "7.1.0";
+const FLEET_VERSION = "7.1.1";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 // A session keeps the plugin version it started with
 const RELOAD_HINT =
@@ -3466,7 +3466,10 @@ function agentOpts(opts, label, model) {
 const DIGEST_RETRY = ":digest-retry";
 function digestOnlyMiss(r, id) {
   const name = id.split(":")[0];
-  return !!r && typeof r === "object" && r.status === "ok" && !programProblem(r, name) && (r.digest === undefined || (typeof r.digest === "string" && SHA256_RE.test(r.digest))) && !relayDigestOk(r, progKeys(id), name);
+  // 7.1.1 (L2142): a failed relay too, but only with a 64-hex digest (a real non-zero exit prints none)
+  if (!r || typeof r !== "object") return false;
+  const hex = typeof r.digest === "string" && SHA256_RE.test(r.digest);
+  return (r.status === "ok" ? r.digest === undefined || hex : r.status === "failed" && hex) && !programProblem(r, name) && !relayDigestOk(r, progKeys(id), name);
 }
 const ARGS_RETRY = ":args-retry";
 const RETRY_RE = /:(digest|args)-retry$/;
@@ -3772,15 +3775,18 @@ async function infra(label, prompt, phaseName, agentType, digest, args) {
   }
   return r;
 }
-// 6.3.2 (2130): programs whose callers stop on a non-null `error` at their own gate
-const ERROR_BRANCH_PROGRAMS = ["ruleset_surface", "hook_surface"];
+// 6.3.2 (2130), 7.1.1 (L2142): programs whose callers handle a non-null `error` in their own
+// error branch (stop at their own gate, or report, exactly as for an ok relay with that error)
+const ERROR_BRANCH_PROGRAMS = ["ruleset_surface", "hook_surface", "pr_state", "ci_watch", "orch_scan", "policy", "precommit_ids"];
 // A relay the agent marked failed only because the program's `error` was set:
 // the shipped program ran (its digest holds, so it printed and exited 0) on the
 // sent arguments. Its caller's error branch decides, not the generic halt.
+// digest: the script's own PROGRAM_KEYS id (pr_state:<mode>); the list holds its program name
 function programErrorRelay(r, digest, args) {
-  if (!r || r.status !== "failed" || ERROR_BRANCH_PROGRAMS.indexOf(digest) < 0 || progKeys(digest).indexOf("error") < 0) return false;
+  const name = typeof digest === "string" ? digest.split(":")[0] : null;
+  if (!r || r.status !== "failed" || ERROR_BRANCH_PROGRAMS.indexOf(name) < 0 || progKeys(digest).indexOf("error") < 0) return false;
   if (typeof r.error !== "string" || !r.error) return false;
-  return relayDigestOk(r, progKeys(digest), digest) && Array.isArray(args) && canonical(r.args) === canonical(args);
+  return relayDigestOk(r, progKeys(digest), name) && Array.isArray(args) && canonical(r.args) === canonical(args);
 }
 async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, files, opts) {
   const before = pre || (await hasher(opts && opts.preLabel ? opts.preLabel : "hasher:fp-pre:" + roundTag, worktree, files, phaseName));
@@ -5781,8 +5787,16 @@ async function prTestsStep(label, args, block, prUrl, supplied) {
   return own;
 }
 // 2045, 2034: one state change of the fleet's own PR (pr_state.py <mode> ...)
+// 7.1.1 (L2142): a failed relay for the program's own error goes to the caller's error branch, as in
+// infra(); no digest retry (a write step: a retried merge or rerun could act twice)
 async function prState(label, args, what, stopGate) {
-  const r = await infra(label, INFRA_STEP + what + ".\n" + inputsLine({ args }) + RUN_ONLY + progCmd("pr_state", args) + "\nIt prints one JSON object " + printsKeys("pr_state:" + args[0]) + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_state:" + args[0]) + "}.", "PR");
+  const prompt = INFRA_STEP + what + ".\n" + inputsLine({ args }) + RUN_ONLY + progCmd("pr_state", args) + "\nIt prints one JSON object " + printsKeys("pr_state:" + args[0]) + COPY_DIGEST + 'Return {status: "ok", reason, ' + returnKeys("pr_state:" + args[0]) + "}.";
+  let r = await dispatch(label, prompt, { schema: INFRA_SCHEMA, phase: "PR" });
+  if (r.status !== "ok" && !programErrorRelay(r, "pr_state:" + args[0], args)) halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+  if (r.status !== "ok") {
+    gate(label + ": the agent returned " + r.status + " for the program's own error; its error branch decides");
+    r = Object.assign({}, r, { status: "ok" });
+  }
   requireProgram(r, "pr_state", label, "needs_human", stopGate);
   if (!relayDigestOk(r, progKeys("pr_state:" + args[0]), "pr_state") || canonical(r.args) !== canonical(args)) halt("needs_human", label + ": the relayed result does not match the program's digest or arguments", stopGate);
   return r;

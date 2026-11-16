@@ -1,5 +1,28 @@
 # Changelog
 
+## [7.1.1] - 2026-11-16
+
+Fleet 7.1.1: a relay that the agent marks failed no longer loses the digest retry or the program's
+own error branch (yaadgaar #35, L2142).
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 7.1.1), then start a NEW session: the workflow
+  looks for its own `fleet/7.1.1/scripts` dir.
+
+### Fixed
+
+- A relay marked failed whose only defect is a mis-copied 64-hex digest gets the one digest retry
+  that an ok relay gets (`<label>:digest-retry`, on the agent cap). A second wrong digest still
+  halts "returned failed". A failed relay with no digest gets no retry (a real non-zero exit prints
+  none), and the args retry stays for ok relays only.
+- `pr_state`, `ci_watch`, `orch_scan`, `policy` and `precommit_ids` join `ruleset_surface` and
+  `hook_surface`: a relay marked failed with a non-empty `error`, a valid digest and the sent args
+  reaches the caller's own error branch, which stops or reports exactly as for an ok relay with that
+  error. A failed relay on other args, or with a null or empty error, still halts "returned failed".
+  `pr_state` routes the same way with no digest retry (a write step: a retried merge or rerun could
+  act twice). `db_down` needs no change: its teardown already reports the error for every status.
+
 ## [7.1.0] - 2026-11-16
 
 Fleet 7.1.0: the test counts of a fleet PR body come only from a measured suite run, never from the

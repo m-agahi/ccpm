@@ -571,7 +571,13 @@ hooks are never bypassed. So nothing commits until the code judge approves.
   A comparison that fails, or lists fewer rows than changed, is never routed (fail closed). A hasher
   output over 64 KiB exits non-zero. A program relay that fails only on its digest is dispatched
   once more to a fresh agent (`<label>:digest-retry`, on the agent cap, gate-logged); one whose
-  program ran on other args than the step sent, as `<label>:args-retry`; read-only programs only. `freeze_tree` is the tree at freeze; `code_tree` is the tree the code judge
+  program ran on other args than the step sent, as `<label>:args-retry`; read-only programs only.
+  7.1.1 (L2142): a relay marked failed whose only defect is its digest (a 64-hex string the relayed
+  keys do not hash to) is retried too; a failed relay with no digest is not. A relay marked failed
+  for its program's own `error` (a valid digest, the sent args, a non-empty error) goes to the
+  caller's error branch, which stops or reports as for an ok relay with that error, for
+  `ruleset_surface`, `hook_surface`, `pr_state`, `ci_watch`, `orch_scan`, `policy` and
+  `precommit_ids`; `pr_state` gets no retry (a write step). `freeze_tree` is the tree at freeze; `code_tree` is the tree the code judge
   judged. Test judge and code judge get `freeze_tree`, `code_tree` and `plan_commit`; diff
   production changes with `git diff <freeze_tree>`.
 - **Scope fence on the real changes** (every mode, not only `confirm: "auto"`). The post-coder
