@@ -46,7 +46,7 @@ Stub and revert experiments never run in `worktree`. Make a throwaway copy of th
 
 ## Test command
 
-EVERY test run (checks 4, 5 and 11, and every re-entry run) uses `test_cmd.command` with `<paths>` replaced by the space-separated test files under judgement. Export `test_cmd.env` on the same command line, then apply `test_env` after it (it wins on a clash). A failure caused by a runner you guessed is not evidence about the test.
+EVERY test run (checks 4, 5 and 11, and every re-entry run) uses `test_cmd.command` with `<paths>` replaced by the space-separated test files under judgement. A runner-config file in `test_files` (`pyproject.toml`, a greenfield repo's first one) is never a `<paths>` argument. Export `test_cmd.env` on the same command line, then apply `test_env` after it (it wins on a clash). A failure caused by a runner you guessed is not evidence about the test.
 When a criterion has `test_args` (cargo and go only), its targeted runs are `test_cmd.command` + space + `test_args`, exactly. `test_env` may carry a database DSN for a throwaway database, under the env name the repo declares; use it as given, in the throwaway copy too.
 On the short path one writer covers several criteria, and the workflow gives you `writer_outputs` split per criterion. Judge each criterion on its own.
 

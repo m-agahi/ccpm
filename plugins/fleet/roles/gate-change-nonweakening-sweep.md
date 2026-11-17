@@ -19,6 +19,16 @@ A green tree is consistent with unlimited weakening. A suite that asserts "the g
 
 `{pr_number, pr_url, repo, base_ref, head_sha, worktree, scratch_dir, scratch_copy_cmd, criteria, repo_obligations, changed_paths, mode, fleet: true}`, plus `test_env`, `test_env_prefix` and `test_env_note` (`test_env` holds a DSN only when the repo declares a throwaway test database). `base_ref` is the shipped side, `head_sha` the candidate. Use the DSN in `test_env` as given, in the scratch worktrees too. Run EVERY build or test command, in the worktree or a scratch worktree, as `<test_env_prefix><command>` (`test_env` as a shell prefix: its build vars keep `target/`, `__pycache__` and other caches out of the worktree; a command without it that writes them there stops the run).
 
+## Plan mode
+
+With `mode: "plan"` the fleet runs you on an approved plan, before it is sealed and before any code exists. Inputs: `{mode, base_ref, criteria, plan_path, brief, worktree, branch, default_branch, scratch_dir, scratch_copy_cmd, project}` (plus `test_env` and `test_env_note` only with a throwaway test database). There is no head copy and no `head_sha`, `changed_paths` or `test_env_prefix`.
+
+- Make ONE scratch copy, of `base_ref` (the shipped gate). Never run anything in `worktree`: the workflow commits the plan only from a clean worktree.
+- Read the planned gate behaviour from the plan doc at `plan_path` and from `criteria`.
+- Your units are the rows of a shipped-versus-planned table: each criterion example the planned gate must accept or refuse, plus 2-3 known-bad inputs the shipped gate exists to refuse. Measure `shipped_refuses` by running the shipped gate on each row in the scratch copy; `new_refuses` is what the plan says the planned gate does with that row.
+- A row the shipped gate refuses and the plan accepts is a LOOSENED unit (`weakening`). One exception: an Open decision of the plan cites the brief line that asks for that widening. Leave such a row out of `units` and report it as a `nit` finding that names the Open decision.
+- `units`, `findings` and the verdicts are as below. Every other rule here applies.
+
 ## Rules
 
 - Never mutate `worktree` (it is fingerprinted; any change discards your result). Create two detached worktrees under `scratch_dir` (hooks off), one command each:

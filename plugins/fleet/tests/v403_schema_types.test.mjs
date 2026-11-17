@@ -628,6 +628,12 @@ const READS = {
     "plan.plan_path string": SP + "plan_path",
     // 7.3.0 (#33)
     "plan.merge_after string": SP + "merge_after",
+    // 7.4.0 (#60 step 3): the plan-mode sweep trigger, the gate path test and the unmeasured-unit stop
+    "plan.touches_gate boolean": [SP + "touches_gate", 2],
+    "p string-re": PARSED_LOCAL,
+    "u.shipped_refuses boolean": "role:gate-change-nonweakening-sweep:units[].shipped_refuses",
+    "u.new_refuses boolean": "role:gate-change-nonweakening-sweep:units[].new_refuses",
+    "u object": "role:gate-change-nonweakening-sweep:units[]",
     "plan.criteria array": SP + "criteria",
     "x string": SP + "plan_diff[]",
     "plan.plan_diff array": SP + "plan_diff",
@@ -900,6 +906,12 @@ const READS = {
     "e.name string": "prog:plan_ref:refs[].name",
     "cs.head string": "infra:head",
     "cs.head string-re": "infra:head",
+  },
+  // 7.4.0 (#61): the coder's test conflict
+  testConflictOf: {
+    "x object": "role:fleet-coder:test_conflict",
+    "x.findings array": "role:fleet-coder:test_conflict.findings",
+    "v string": ["parsed: test_conflict.test, .why or a findings[] entry, each checked as a non-empty string here", 1],
   },
   reviewStep: {
     "rp.changed_paths array": "prog:review_paths:changed_paths",

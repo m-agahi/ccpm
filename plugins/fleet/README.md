@@ -1350,6 +1350,16 @@ The hasher freezes every criterion test file, plus:
   `package.json#vitest`, `package.json#mocha`, `package.json#scripts.test`. The rest of these files
   (dependencies) stays editable. A missing section hashes as `ABSENT`, so adding one is a change.
 
+A greenfield repo's first `pyproject.toml` (7.4.0, #72): every `pyproject.toml` the coder adds is a
+new frozen key, so the coder can never create it. The supported route: the plan lists
+`pyproject.toml` in the `test_files` of the criterion whose tests need its pytest config, that
+criterion's test writer creates it before the freeze, and the freeze takes its new content (the
+whole file as a test file, and its `[tool.pytest]` table). The writer round accepts a section
+change only of a config file the round's own criteria list. The whole file is then frozen: the
+coder cannot add a dependency to it later, so the writer writes the `[project]` metadata and
+dependencies the code needs. A runner-config file in `test_files` is never a `<paths>` argument.
+A fix_tests re-freeze still refuses a change to its `[tool.pytest]` table.
+
 The comparison runs in the script, never in an agent. A key that appears (for example a new
 `conftest.py`), disappears or changes rejects the coder round, whatever the code judge says. Roles
 receive the criterion test file names in `frozen_tests`, and in `frozen_config_sections` the path

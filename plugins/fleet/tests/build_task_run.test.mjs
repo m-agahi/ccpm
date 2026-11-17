@@ -5634,6 +5634,8 @@ const ARRAY_SITES = {
   "plan.criteria @ planAndAudit": "role:scope-and-plan:criteria",
   "plan.plan_diff @ planAndAudit": "role:scope-and-plan:plan_diff",
   "plan.changed_symbols @ planAndAudit": "role:scope-and-plan:changed_symbols",
+  // 7.4.0 (#61)
+  "x.findings @ testConflictOf": "role:fleet-coder:test_conflict.findings",
   "e.occurrences @ changedSymbolFindings": "role:scope-and-plan:changed_symbols[].occurrences",
   "r.capped @ callerGrep": "infra:capped",
   // 7.2.0 (L2178): the batches merge in callerMerge (an Array.isArray of its doctest argument)

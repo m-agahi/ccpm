@@ -357,6 +357,9 @@ export async function runOne(script, args0) {
     // 4.0.0 (1985, S3): unscripted push-access probes find access (a new branch)
     if (!(label in script) && /^infra:push-probe$/.test(label))
       return { status: "ok", reason: "probed", access: "ok", result: "ok", exit_code: 0, auth_line: null, args: pushArgsOf(prompt) };
+    // 7.4.0 (#60): an unscripted plan-mode gate sweep measures one unit and finds no loosening
+    if (!(label in script) && /^role:gate-change-nonweakening-sweep:plan/.test(label))
+      script[label] = { status: "ok", reason: "0 loosened", verdict: "non_weakening", units: [{ unit: "planned gate", mutation: "the shipped gate at base", shipped_refuses: true, new_refuses: true }], findings: [] };
     // unscripted plan parks move the draft and leave the worktree clean
     if (!(label in script) && /^infra:park-plan/.test(label)) return parkOut(prompt);
     // unscripted plan formatting changes nothing (the hooks found nothing to fix)
@@ -856,6 +859,9 @@ export const BUILD_ROWS = [
   ["RUFF_CACHE_DIR", "ruff-cache"],
   ["COVERAGE_FILE", "coverage"],
   ["TURBO_CACHE_DIR", "turbo-cache"],
+  // 7.4.0 (#73)
+  ["UV_PROJECT_ENVIRONMENT", "uv-venv"],
+  ["UV_CACHE_DIR", "uv-cache"],
 ];
 // the happy run's scratch dir (repo /r, task y42-add-thing)
 export const BUILD_SCRATCH = "/r/.claude/worktrees/fleet-y42-add-thing/scratch";
@@ -1481,8 +1487,11 @@ export function partOut(content, k) {
 export function commitStepStub(m, live) {
   return (prompt) => {
     const code = inputsOf(prompt).code_tree;
+    // 7.4.0 (#61): a commit on an open PR's head reports its parent
+    const parent = inputsOf(prompt).parent;
     if (live) Object.assign(live, { head: CSHA(m), tree: code });
     return {
+      ...(parent ? { parent } : {}),
       status: "ok",
       reason: "committed",
       commit_result: "committed",

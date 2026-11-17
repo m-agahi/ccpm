@@ -343,6 +343,8 @@ const REVIEW_FINDINGS = {
       line: { type: ["integer", "null"] },
       summary: STR,
       evidence: STR,
+      // 7.4.0 (#61): "plan" when the fix contradicts a frozen test or criterion (pr-review)
+      target: { type: "string", enum: ["code", "plan"] },
     },
     required: ["severity", "summary"],
   },
@@ -395,6 +397,8 @@ const SCHEMAS = {
     component: STR_OR_NULL,
     // 7.3.0 (#33): optional; set only when the task says the PR must wait for a condition or another PR
     merge_after: STR_OR_NULL,
+    // 7.4.0 (#60): optional; true runs the plan-mode sweep
+    touches_gate: { type: "boolean" },
     allowed_additions: {
       type: ["object", "null"],
       properties: {
@@ -476,6 +480,8 @@ const SCHEMAS = {
     obligations_done: { type: "array", items: ANY_ITEM },
     // optional work the coder saw and left
     follow_ups: { type: ["array", "null"], items: { type: "object", properties: { summary: STR, path: STR_OR_NULL }, required: ["summary"] } },
+    // 7.4.0 (#61): with needs_human, a frozen test that looks wrong
+    test_conflict: { type: ["object", "null"], properties: { test: STR, findings: { type: "array", items: STR }, why: STR } },
   }),
   "fleet-code-judge": roleSchema({
     verdict: { type: "string", enum: ["approve", "fix_code", "fix_tests", "plan_wrong"] },
@@ -1640,7 +1646,7 @@ const PROGRAM_SHA256 = {
   "pr_body_block": "399c9f1ec13ac3059d922b68e19220571ebfadea3cd944dea4ff0b007f053c1b",
   "pr_convention": "f26cb4a739d549ccfc5554a9deaa94a44698e71c2039e16d77247fdfdbf1d17f",
   "pr_state": "ae131b39f087f22172a20dfa7af4dd01f261e1a07580ca1fa6e4b85e93201540",
-  "pr_test_block": "b448f6b547179a4f1764ba21deb84d36155f40d9c2422958d0b482ddde9ba0d0",
+  "pr_test_block": "91c1d4610ffce1fe1ca2823a03cfb06e98d2385e42b14b17a5e2ccd1eb8280be",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
   "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
   "push": "67cc55d5fe9ef3cfe0fe0c3ab8dd5a7281acf96ef98f7bef5faa805a9c77a469",
@@ -1666,16 +1672,16 @@ function programTable() {
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-  "fleet-code-judge": "64551eb558f61e89624f15766eec57968466ef866236f327f7ad5e6e9092ff1a",
-  "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
+  "fleet-code-judge": "a260ec03b47b5c3f0853042476fb5cd29c812ab77a7659570b54b26c86911880",
+  "fleet-coder": "ee4e8960386899888881cb56e377c5ca74a23c7c93c7ac8971504890245cf3b4",
   "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
   "fleet-pr-opener": "0c4d24c3bbcc9a99d5e51de251d3817183f85ced1a73d0eeb1318cb1429447cf",
-  "fleet-test-judge": "43cb62e8d83552ae58a79061ec9949203db267489e749d0ae6973815dd928c55",
-  "fleet-test-writer": "d35428ca572612ec6f35b236dc113a153fa395afcc3184ccb1a09f289d1a6acf",
-  "gate-change-nonweakening-sweep": "5d4196f07f2fd2477547cdfbea2420e1de180d87f960ae7043afacffd2d7f8cd",
-  "plan-audit": "b29f65c76cd48a7ed3462c93aec835747fa23ea001ce989e058879a0462a149a",
-  "pr-review": "9caa9b6709d448708d0ba555f8a4b9c893a475dc4edb9cd8fca3c7cfeab22267",
-  "scope-and-plan": "79d0e02b8462ac0035d68e6f826c3e6d8d7c34741af66aee55bb3195aa3a689b"
+  "fleet-test-judge": "12ded7120c00c2346d4040ca132e433cef3f299ff199fe97f8f44d535918a819",
+  "fleet-test-writer": "5305fd0bc8ed856a6e397b9f2df0dea8ad0857fc774100d054debae9ec18448a",
+  "gate-change-nonweakening-sweep": "d47794e8fae6abc3cbb4091fe087a9a5367508fa10fc433f201a2d652b6aec69",
+  "plan-audit": "652f50e283b40d5d8e5ceac2c6d6112e5b9be43d9df5143254741fabd73ddca0",
+  "pr-review": "2a82c6c1413fde77cb92a973804ce3313192f5772e16023cf3bc8d3161de700e",
+  "scope-and-plan": "1b17797dd667069021230ebe44572a5db3a468a94c4bb9af106ac34fdb1325ee"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -3140,6 +3146,9 @@ const BUILD_ENV_ROWS = Object.freeze([
   ["RUFF_CACHE_DIR", "ruff-cache"], // ruff: .ruff_cache/
   ["COVERAGE_FILE", "coverage"], // coverage.py: .coverage (a file in the role dir)
   ["TURBO_CACHE_DIR", "turbo-cache"], // turborepo: .turbo/cache/
+  // 7.4.0 (#73): uv run/sync: <project>/.venv (and an editable install's .pth files); the cache per role too
+  ["UV_PROJECT_ENVIRONMENT", "uv-venv"],
+  ["UV_CACHE_DIR", "uv-cache"],
 ]);
 const BUILD_ENV_NOTE =
   "test_env_prefix: test_env as a shell prefix. Its build vars (" + BUILD_ENV_ROWS.map((r) => r[0]).join(", ") +
@@ -3277,13 +3286,15 @@ function commitStepPrompt(inputs) {
     "1. `<git> branch --show-current` must equal <branch> and `<git> rev-parse HEAD` must equal <expected_head>; else needs_human.\n" +
     "2. `<git> add -A`.\n" +
     "3. staged_tree = the output of `<git> write-tree`. If it differs from <code_tree>: commit_result = `tree_mismatch`; do NOT commit; go to step 5.\n" +
+    // 7.4.0 (#61): the re-plan of an open PR commits on the PR's head (the index keeps the tree)
+    (inputs.parent ? "3b. `<git> merge-base --is-ancestor <expected_head> <parent>` must exit 0; else needs_human. Then `<git> reset --soft <parent>`. If step 4 does not commit, run `<git> reset --soft <expected_head>` before step 5.\n" : "") +
     "4. Commit once: `<git> commit -m " + shQuote(inputs.subject) + "` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The pre-commit hooks run here; let them. " +
-    "Exit code 0 -> commit_result `committed`; head = `<git> rev-parse HEAD`; head_tree = `<git> rev-parse 'HEAD^{tree}'` (keep the quotes). " +
+    "Exit code 0 -> commit_result `committed`; head = `<git> rev-parse HEAD`; head_tree = `<git> rev-parse 'HEAD^{tree}'` (keep the quotes)" + (inputs.parent ? "; parent = `<git> rev-parse 'HEAD^'`" : "") + ". " +
     "Any other exit code -> commit_result `hook_rejected`; hook_tail = the last 60 lines of the temp file. Delete the temp file.\n" +
     "5. worktree_tree = the output of this one command, run exactly as written:\n" +
     treeCmd(inputs.main_worktree) +
     "\n" +
-    "Return {status: \"ok\", reason, commit_result, staged_tree, worktree_tree, head, head_tree, hook_tail}."
+    "Return {status: \"ok\", reason, commit_result, staged_tree, worktree_tree, head, head_tree, hook_tail" + (inputs.parent ? ", parent" : "") + "}."
   );
 }
 
@@ -5349,6 +5360,7 @@ async function planAndAudit(ctx0) {
   }
 
   // the audit runs the planner's test_cmd in a scratch worktree
+  const aEnv = dbInputs("audit");
   await pathRecheck("plan-audit" + sfx, "Plan");
   state.audits = (state.audits || 0) + 1;
   const audit = requireOk(
@@ -5366,7 +5378,7 @@ async function planAndAudit(ctx0) {
         caller_check: { method: CALLER_METHOD, limits: CALLER_LIMITS, occurrences: callerOcc, auto_dont_care: autoDontCare },
         // every refused round before this one, or null
         prior_round: priorRoundView(prior),
-      }, dbInputs("audit")),
+      }, aEnv),
       "Plan",
     ),
   );
@@ -5385,6 +5397,23 @@ async function planAndAudit(ctx0) {
   gate("plan-audit: approve");
   for (const f of audit.routed_findings || [])
     if (f && typeof f.finding === "string") gate("plan-audit advisory finding (approve): " + (f.criterion || "-") + ": " + f.finding);
+  // 7.4.0 (#60 step 3, Max Q3 (a)+(c)): a planned gate path or touches_gate: the sweep on the plan, before the seal
+  const gp = planScopePaths(planFacts, criteria);
+  for (const e of symbolMap) for (const o of e.occurrences || []) if (OCCURRENCE_RE.test(String(o.at))) gp.push(OCCURRENCE_RE.exec(String(o.at))[1]);
+  const gt = gp.filter((p) => GATE_PATH_RE.test(p));
+  if (plan.touches_gate === true || gt.length) {
+    gate("plan sweep triggered (" + (plan.touches_gate === true ? "touches_gate" : "") + (gt.length ? " paths " + logPath(gt.join(", ")) : "") + ")");
+    await pathRecheck("sweep:plan" + sfx, "Plan");
+    const sw = requireOk("gate-change-nonweakening-sweep", await callRole("gate-change-nonweakening-sweep", "role:gate-change-nonweakening-sweep:plan" + sfx, Object.assign({}, ctx.common, { mode: "plan", base_ref: ctx.baseRef, criteria, plan_path: planPath, brief: ctx.brief }, aEnv), "Plan"));
+    if (sw.verdict === "weakening") {
+      const loose = sw.units.filter((u) => u && u.shipped_refuses === true && u.new_refuses === false);
+      const fs = (loose.length ? loose : [{ unit: "(see the sweep units)", mutation: sw.reason }]).map((u) => ({ criterion: null, finding: "planned gate accepts " + u.unit + " (" + u.mutation + ") that the shipped gate refuses; make it an Open decision citing the brief, or keep the refusal" }));
+      return planFindingsStop(ctx, planPath, "plan sweep verdict weakening", fs, plan.changed_symbols, plan, "intent");
+    }
+    const um = sw.verdict === "non_weakening" ? sw.units.find((u) => !u || typeof u !== "object" || u.shipped_refuses == null || u.new_refuses == null) : undefined;
+    if (um !== undefined) halt("needs_human", "plan sweep unit " + (um && um.unit != null ? um.unit : "?") + " not measured (" + (um && um.mutation != null ? um.mutation : "no reason given") + ")", "intent");
+    gate("plan sweep: " + sw.verdict + " (" + sw.units.length + " unit(s))");
+  }
   const testable = testableOf(criteria);
   const est = plan.fleet_estimate && typeof plan.fleet_estimate === "object" ? plan.fleet_estimate : {};
   if (typeof est.criteria === "number" && est.criteria !== testable.length)
@@ -7084,6 +7113,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           const bodyF = rv.blocking.filter((f) => f.category === "pr_body_claim");
           const codeF = rv.blocking.filter((f) => f.category !== "pr_body_claim");
           const inUpd = upd || (state.update && state.update.head === approvedSha);
+          // 7.4.0 (#61): a fix that contradicts a frozen test or criterion re-plans, never a coder round
+          const planF = rv.blocking.filter((f) => f.target === "plan");
+          if (planF.length && inUpd)
+            halt("needs_human", "review v" + reviews + ": a finding targets the plan after update-branch: no re-plan runs on the forge's merge; re-plan on the new base or fix by hand", "review");
+          if (planF.length) {
+            gate("review v" + reviews + ": changes_requested (" + planF.length + " plan-target) -> re-plan");
+            return { gate: "review", plan: planF.map((f) => ({ target: "plan", criterion: null, finding: reviewFindingText(f) })) };
+          }
           if (bodyF.length && (state.bodyFixes || 0) >= MAX_BODY_FIXES)
             halt("needs_human", "review v" + reviews + ": PR body claim still flagged after one body update: " + bodyF.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "), "review");
           // 6.1.0 (2049): code rounds on the forge's merge only when R1-R5 pass, else the 6.0.1 stop
@@ -7585,6 +7622,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     }
     shipFix = await ship(next);
     if (!shipFix) return finishOk(next);
+    if (shipFix.plan) return planWrong("pr-review", shipFix.plan, approvedSha, shipTree);
     resumedAt = next;
     // 2043: the coder round starts from the freeze ref; without it the run stops as before
     const ft = resumeState.hashes.git[FLEETREF + freezeRefName];
@@ -7751,7 +7789,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (k.map === "ignored" || (k.map === "git" && k.key.indexOf(FLEETREF) === 0))
         halt("needs_human", (k.map === "ignored" && (k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")) : [violationName(k)]).map(logPath).join(", ") + " in test round " + n, "ownership");
       if (k.more) more = k.more;
-      else if (!(k.map === "files" && k.key !== MAP_ALL && owner[k.key])) changed.push(violationName(k));
+      // 7.4.0 (#72): a config file the round owns (a greenfield pyproject.toml in test_files) owns its sections
+      else if (!(k.key !== MAP_ALL && (k.map === "files" ? owner[k.key] : k.map === "sections" && k.key.indexOf("#") > 0 && owner[k.key.slice(0, k.key.indexOf("#"))]))) changed.push(violationName(k));
     }
     const ids = pending.map((p) => p.criterion.id).join(", ");
     const uniq = changed.filter((x, i, a) => a.indexOf(x) === i);
@@ -8052,7 +8091,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const coderFile = !viol.length ? roleFileProblem("fleet-coder", coder) : null;
       if (coderFile) halt("needs_human", "code round " + m + ": " + coderFile, coder.status !== "ok" && !coder.role_file ? "role" : "contract");
       const coderDriftOk = !viol.length && coder.status === "ok" ? driftOf("fleet-coder", coder) : null;
-      if (!viol.length && !coderDriftOk) {
+      // 7.4.0 (#61): a well-formed test conflict goes to the code judge this round (no hash change, role file checked)
+      const tc = !viol.length && coder.status === "needs_human" ? testConflictOf(coder.test_conflict) : null;
+      if (tc) checkRole("fleet-coder", coder);
+      if (tc) gate("code round " + m + ": the coder names a test conflict in " + logPath(tc.test) + " (" + tc.findings.join(", ") + ") -> code judge");
+      else if (!viol.length && !coderDriftOk) {
         checkRole("fleet-coder", coder);
         requireOk("fleet-coder", coder);
       }
@@ -8108,7 +8151,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           script_findings: SCRIPT_FINDINGS_NOT_RUN,
           repo_obligations: judgeObligations,
           ...roleEnv("cjudge", "cjudge-r" + m),
-        }),
+        }, tc ? { test_conflict: tc } : {}),
         mainWt,
         "Code",
         h,
@@ -8119,6 +8162,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       last = jc.state;
       codeTree = jc.state.fingerprint.tree;
       const routed = cj.routed_findings || [];
+      if (tc && cj.verdict !== "plan_wrong" && cj.verdict !== "fix_tests") requireOk("fleet-coder", coder);
       // 6.1.0 R6: never a test writer, re-freeze or re-plan on the forge's merge
       if (updRound && (cj.verdict === "plan_wrong" || cj.verdict === "fix_tests"))
         halt("needs_human", "code judge returned " + cj.verdict + " in a code round after update-branch: no test writer, re-freeze or re-plan runs on the forge's merge " + upd.head + "; re-plan on the new base or fix by hand", "review");
@@ -8184,11 +8228,13 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         );
       }
       const subject = commitsMade ? subj.fix(m) : subj.main;
+      // 7.4.0 (#61): the re-plan of an open PR: its first commit sits on the PR's head
+      const prParent = !commitsMade && opt.prHead ? opt.prHead : null;
       await resetBuild("commit:r" + m, ["commit-r" + m], "Code");
       await pathRecheck("commit:r" + m, "Code");
       const cs = await infra(
         "infra:commit:r" + m,
-        commitStepPrompt({
+        commitStepPrompt(Object.assign({
           main_worktree: mainWt,
           branch,
           expected_head: expectedHead,
@@ -8197,7 +8243,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           hooks_path: frozen.git["core.hooksPath"] && frozen.git["core.hooksPath"] !== "UNSET" ? frozen.git["core.hooksPath"] : null,
           // the build vars of this commit's own dir (and the DSN)
           hook_env: hookEnv("commit-r" + m),
-        }),
+        }, prParent ? { parent: prParent } : {})),
         "Code",
       );
       if (cs.staged_tree !== codeTree)
@@ -8224,6 +8270,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         halt("failed", "commit step r" + m + " returned commit_result " + JSON.stringify(cs.commit_result || null) + " and head " + JSON.stringify(cs.head || null));
       if (cs.head_tree !== codeTree)
         halt("needs_human", "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
+      if (prParent && cs.parent !== prParent)
+        halt("needs_human", "commit step r" + m + ": the commit's parent " + cs.parent + " is not the open PR's head " + prParent + "; the push would need a force", "commit");
       expectedHead = cs.head;
       commitsMade = true;
       approvedSha = cs.head;
@@ -8233,12 +8281,13 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       state.gatesNotRun = gatesNotRun(cj.gates_not_run).concat(rulesetGaps(buildRs));
       if (state.gatesNotRun.length && String(cj.reason || "").indexOf(GATES_PREFIX) !== 0)
         gate("warning: code-judge approve reason does not start with '" + GATES_PREFIX + "' although gates did not run");
-      gate("committed tree " + codeTree + " as " + approvedSha + " (" + JSON.stringify(subject) + ")");
+      gate("committed tree " + codeTree + " as " + approvedSha + " (" + JSON.stringify(subject) + ")" + (prParent ? " on the open PR's head " + prParent : ""));
       await saveState("committed", "infra:state:committed:r" + m);
 
       // push, PR, review, write-back
       const fix = await ship("push");
       if (!fix) break;
+      if (fix.plan) return planWrong("pr-review", fix.plan, approvedSha, shipTree);
       // 6.1.0 (2049): the coder round on the forge's merge d: HEAD d, diffs against tree(d), the frozen maps unchanged
       if (fix.update) {
         updRound = true;
@@ -8258,6 +8307,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   return finishOk(frozenResume ? "frozen" : resumedAt);
 }
 
+// 7.4.0 (#61): the coder's {test, findings, why}, or null when malformed
+function testConflictOf(x) {
+  const s = (v) => typeof v === "string" && v.trim() !== "";
+  return x && typeof x === "object" && s(x.test) && s(x.why) && Array.isArray(x.findings) && x.findings.length && x.findings.every(s) ? { test: x.test, findings: x.findings.slice(), why: x.why } : null;
+}
 function reviewFindingText(f) {
   return (
     "review " + (f.id || "-") + " [" + (f.category || "other") + "] " + (f.file || "-") + (f.line ? ":" + f.line : "") + ": " + f.summary +
@@ -8453,16 +8507,21 @@ async function replan(ctx) {
   gate("re-plan " + n + ": old head " + (rs.superseded_head || ctx.expectedHead) + " saved as " + superseded + "; " + lay.branch + " reset to " + ref.plan_base + "; new plan " + newHead + " off the branch");
   const hist = pc.full.history;
   gate("cumulative: run " + hist.runs + ", re-plans " + hist.replans + ", agents " + hist.agents);
-  // 6.3.0 (ADR-1239): unattended, with no PR yet: the auto gates, then the build, in this run (once per run)
-  if (state.unattended && (state.pr || state.autoReplanned)) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": " + (state.pr ? "a PR is open" : "the run already built one re-plan"));
+  // 6.3.0 (ADR-1239): unattended: the auto gates, then the build, in this run (once per run); 7.4.0 (#61, Max Q4 (b)):
+  // with the PR open too: the rebuilt first commit goes on the PR's head (the superseded head), so the push is a fast-forward
+  const prHead = state.pr ? rs.superseded_head || ctx.expectedHead : null;
+  // 7.4.0 (#61): a re-plan that touches an IaC path asks, as the first plan does
+  const iac = Array.from(new Set(planScopePaths(p.planFacts, p.criteria).map((q) => normPath(String(q))))).filter(isIacPath);
+  if (state.unattended && state.autoReplanned) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": the run already built one re-plan");
+  else if (state.unattended && iac.length) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": plan touches IaC path " + iac.join(", "));
   else if (state.unattended) {
     state.autoReplanned = true;
-    autoDecide("plan_wrong", "build", who + " re-plan " + n + ": the auto gates, then the build in this run");
+    autoDecide("plan_wrong", "build", who + " re-plan " + n + ": the auto gates, then the build in this run" + (prHead ? "; the PR is open: the new commits go on its head " + prHead + ", never force-pushed" : ""));
     reserve(autoGateAgents(p.planFacts.commands), "the re-plan's auto gates");
     const g = await autoGates({ sfx: ":replan", common, mainWt: lay.mainWt, planCommit: newHead, brief, callerRepo: brief.repo, branch: lay.branch, defaultBranch: common.default_branch, criteria: p.criteria, planPath: p.planPath, planDiff: p.planDiff, planFacts: p.planFacts, files: p.testable.reduce((a, c) => a.concat(c.test_files), []), relaxed: p.relaxed });
     if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
     Object.assign(state, { rounds: { tests: 0, code: 0 }, freezeDigest: null, gatesNotRun: null, review: null });
-    return buildFromRef(ctx.input, date, pc.tiny, lay, ctx.ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents, full: pc.full });
+    return buildFromRef(ctx.input, date, pc.tiny, lay, ctx.ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents, full: pc.full, prHead });
   }
   return awaiting(who + " plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, pc.tiny, pc.full, {
     proposed_plan_change: proposed,

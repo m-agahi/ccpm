@@ -2,9 +2,9 @@
 // - V1/V2 (items 1, 2): the claim check reads more count forms: markdown around the number
 //   (**147** passed), one word before the noun (147 unit tests), pass|fail in P1, passing in P2,
 //   n/m and "n of m" near a test word, NBSP or a newline between the number and the word, n+.
-//   DEVIATION from the plan's item 2 (brief: "all gate edits only tighten"): the shipped P1/P2
-//   matches stay, so "test 2 of AC3" and "Step 2 tests the parser" are still claims. The claim
-//   check is a fail-closed backstop; the new forms only add matches.
+//   Car 5 kept the shipped P1/P2 matches ("all gate edits only tighten"); car 6 (Max ruling)
+//   drops exactly the ordinal forms "test 2 of AC3" and "Step 2 tests the parser"
+//   (v740_ordinal_claims). The claim check is a fail-closed backstop.
 // - V3 (item 3): the stats row skip ('<n> test rounds)') holds only on a line that starts with
 //   '| tests written |' inside the stats region; elsewhere it is a claim.
 // - V4 (item 4): a supplied string exempts a claim only as a whole phrase with word bounds
@@ -86,9 +86,10 @@ test("7.4.0 #64 V1: the item-2 table: each row is a claim (shipped rows kept, ne
   assert.deepEqual(claimsOf("Ran 147 unit tests."), ["147 unit tests"]);
   assert.ok(claimsOf("All 147/147 tests green.").includes("147/147"));
   assert.ok(claimsOf("| tests | 147/147 |").includes("147/147"));
-  // kept on purpose (deviation, see the header): the shipped P2 and P1 matches stay claims
-  assert.deepEqual(claimsOf("See test 2 of AC3."), ["test 2"]);
-  assert.deepEqual(claimsOf("Step 2 tests the parser."), ["2 tests"]);
+  // car 6 (Max ruling on the car-5 deviation): the two exact ordinal forms are no claim
+  // (v740_ordinal_claims); every other shipped match stays
+  assert.deepEqual(claimsOf("See test 2 of AC3."), []);
+  assert.deepEqual(claimsOf("Step 2 tests the parser."), []);
   assert.deepEqual(claimsOf("Ran 147 tests."), ["147 tests"]);
   assert.deepEqual(claimsOf("AC1 has 3 tests."), ["3 tests"]);
 });

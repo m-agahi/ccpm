@@ -46,10 +46,13 @@ Hunt specifically for:
 
 Read `brief.description` and every `brief.sources[].body`, and the plan at `base_ref` when one was ingested. Each requirement, constraint or deliverable a source states must be covered by a criterion or a repo obligation, or listed in the plan's "Non-goals" or "Open decisions" with a reason. One that is in none of these → `plan_defect`, with a routed finding that quotes the source line.
 
+A Non-goal covers a brief requirement only when the brief itself puts it out of scope, or an Open decision cites the brief line. A narrowing of the brief that sits in Non-goals alone → `plan_defect`, with a routed finding that quotes the brief line and asks for the Open decision.
+
 ## Planner-quality findings — advisory
 
 These rules are new in this release. Each failure is a routed finding the planner fixes in the next re-plan round; it never changes the verdict on its own. With no gating finding, the verdict stays `approve`, and the workflow writes your findings to its gate log.
 
+- **Paraphrase first:** before you read the plan, write a two-sentence paraphrase of the brief's outcome (from `brief` only). After the audit, compare it with what the plan delivers. A gap → a routed finding (`criterion: null`) that starts with `advisory: paraphrase gap`. The paraphrase never changes the verdict.
 - **Non-goals:** a plan with no "Non-goals" section → finding (`criterion: null`, "add a Non-goals section").
 - **I/O failure paths:** a criterion that does I/O (network, disk, database, subprocess, a queue) with no failure-path example for timeout, partial read or write, or concurrent access, and no `dont_care` entry that says why it does not apply → finding naming the criterion.
 - **STRIDE:** at each trust boundary the change adds or touches, a STRIDE threat that applies (spoofing, tampering, repudiation, information disclosure, denial of service, elevation of privilege) with no refusal criterion, and no reason in the plan why it does not apply → finding.
@@ -84,7 +87,8 @@ Test writers take expected values only from the criteria, so a weak criterion be
 - `dont_care` where outputs are incidental (log text, unordered order, timestamps);
 - `guards_existing: true` only with a quoted spec line;
 - no example of a `guards_existing: false` criterion that the current code already satisfies. Verify each example against the code: refusals, not-found or unknown ids, soft-deleted records and expiry often hold already. One that holds → routed finding "split guard examples into a guards_existing=true criterion", naming the criterion and the example; the verdict is `untestable_criteria` (the test judge refuses a test that already passes unless `guards_existing` is true). An example that already holds, has no spec line, and is listed under the plan's non-goals or in `dont_care` with a one-line reason is correct: no finding.
-- test file paths disjoint from every other criterion's paths;
+- test file paths disjoint from every other criterion's paths (a greenfield repo's first `pyproject.toml` in one criterion's `test_files` is the supported route: its writer creates it before the freeze; it must hold the metadata and dependencies the code needs);
+- reachable examples: trace each example through the same loader, schema or validator its test will use (the parser, the config loader, the request model). An example that path rejects or changes before the code under test sees it (a value the schema refuses, a key the loader drops or renames) is unreachable → `untestable_criteria`, naming the criterion and the example;
 - consistency with the code as it is (no criterion the current interface cannot express without a design change the plan does not describe);
 - specificity: two independent test writers would test the same thing. "Works correctly", "is robust", "handles errors", or a performance claim with no number fail.
 

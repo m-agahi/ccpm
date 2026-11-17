@@ -218,6 +218,18 @@ test("6.1.0 T11 (R6): code judge plan_wrong in the update round stops; no re-pla
   assert.equal(wbCi(out), 1, L.join(", "));
 });
 
+// 7.4.0 car 6 (#61 Y4): a u1 finding that targets the plan stops as the update round's plan_wrong does
+test("7.4.0 #61 Y4: a re-review after update-branch with a plan-target finding stops; no coder round, no re-plan", async () => {
+  const out = await run(upd({ "role:pr-review:v2": blockingReview(Object.assign({}, F1, { target: "plan" })) }), ARGS);
+  const L = L_(out);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "review");
+  assert.match(out.result.reason, /a finding targets the plan after update-branch: no re-plan runs on the forge's merge/);
+  noCoder(out);
+  assert.ok(!L.some((l) => /^infra:replan-|role:scope-and-plan:replan/.test(l)), L.join(", "));
+  assert.equal(wbCi(out), 1, L.join(", "));
+});
+
 test("6.1.0 T12-T15: the update round's ownership checks use d; the PR-level checks use the base tip", async () => {
   const out = await run(withSyms(upd({ "infra:pr-update": (p) => ({ status: "ok", reason: "u", mode: "update", updated: true, head: D, base: C, overlap: ["src/w.py"], error: null, args: inputsOf(p).args }) }, ["src/w.py"])), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);

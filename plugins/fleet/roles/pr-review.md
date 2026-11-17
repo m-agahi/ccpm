@@ -91,6 +91,7 @@ A `still_present` or `regressed` prior finding is reported again in `findings`, 
 
 - `blocking`: correctness, security, `fail_open`, a false PR-body claim, an unmet criterion or obligation, a still-present or regressed prior finding. Any blocking finding → verdict MUST be `changes_requested`.
 - `nit`: everything else worth saying.
+- **A fix that contradicts a frozen test or criterion** (the code is right only if a frozen test or an acceptance criterion changes) is blocking with `target: "plan"`: the workflow re-plans instead of sending it to the coder. Every other finding has `target: "code"` or no `target`.
 - **The coder cannot leave the plan.** A finding whose fix needs a file, symbol, dependency or setting outside `allowed_additions` is always a `nit` whose summary starts with `needs plan change:`, never blocking: a blocking finding goes back to the coder, who may not add it. Say what the plan would have to allow.
 - Report only findings you verified, with one exception: a `security` or `fail_open` suspicion is never dropped for low confidence. Try to reproduce it in scratch; reproduced → blocking; not reproduced → a `nit` whose summary starts with `unverified:` and says what you tried.
 - Do not flag pre-existing issues outside the diff, or anything a linter or compiler already catches.
@@ -120,7 +121,8 @@ Shape:
       "file": "<path>",
       "line": 0,
       "summary": "<one line>",
-      "evidence": "<command + output, or quote with file:line>"
+      "evidence": "<command + output, or quote with file:line>",
+      "target": "code|plan"
     }
   ],
   "touches_gate": false,

@@ -213,6 +213,48 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
   "test_cmd runs inline code ...".
 - Car 5 dist: 459,113 bytes (+2,808; the plan estimated ~500 for #64, #66, #68, #70; Z1, Z2 and
   the JS port of the scratch_copy form list are outside the estimate).
+- Car 6, #64 item 2 (Max ruling): `pr_test_block.py` drops a claim only when it lies wholly inside
+  one of two exact ordinal forms: "test N of AC<k>", and "Step N tests" / "step N tests" followed
+  by a word. Real counts ("2 tests pass", "tests: 5 passed", "12/12 tests") stay claims, also on
+  the same line as an ordinal form.
+- Car 6, #26 (L2054): plan-audit writes a two-sentence paraphrase of the brief's outcome before it
+  reads the plan. A gap is a routed `advisory: paraphrase gap` finding. It never changes the verdict.
+- Car 6, #45 (L2179): a Non-goal covers a brief requirement only when the brief puts it out of
+  scope, or an Open decision cites the brief line. Else plan-audit returns `plan_defect`. The
+  planner puts every narrowing in Open decisions.
+- Car 6, #46 (L2180): plan-audit traces each example through the loader, schema or validator its
+  test uses; an example that path rejects or changes is `untestable_criteria`. A test writer that
+  cannot reach an example returns `needs_human` naming the criterion.
+- Car 6, #60 step 3 (Max Q3 (a)+(c)): after plan-audit approves and before the plan is sealed, the
+  gate sweep runs on the plan (`role:gate-change-nonweakening-sweep:plan`, `mode: "plan"`) when a
+  planned path matches `GATE_PATH_RE` or the planner sets `touches_gate`. A `weakening` verdict
+  routes each loosened unit to a re-plan; at the last round it stops (`intent`). An unmeasured unit
+  stops. The sweep role gets a "Plan mode" section. Deviations: the plan-mode call gets no build
+  env (plan mode has no build scratch, as plan-audit), and `touches_gate` is a plain optional
+  planner output, not sealed (no build step reads it).
+- Car 6, #61: the coder may return `needs_human` with `test_conflict: {test, findings, why}`. A
+  well-formed one goes to the code judge in the same round (input `test_conflict`); `plan_wrong`
+  re-plans, `fix_tests` re-opens the test round, any other verdict stops on the coder's own
+  needs_human. A pr-review blocking finding with `target: "plan"` re-plans instead of a coder
+  round (after update-branch it stops, as a judge plan_wrong does).
+- Car 6, #61 Q4 (Max ruling (b), not the plan's default): unattended, a re-plan while the PR is
+  open is built in the same run. The first rebuilt commit is made on the PR's old head (the commit
+  step gets `parent`, checks `merge-base --is-ancestor`, runs `reset --soft <parent>` and commits
+  the same tree). The workflow stops (`commit`) when the reported parent is not that head. The push
+  is a fast-forward; nothing is force-pushed; the superseded ref stays. Every auto gate still runs.
+  An interactive run still asks; a second re-plan in one run asks. New tightening: an unattended
+  re-plan that touches an IaC path asks (with or without a PR). Known limit: a re-plan after a
+  whole PR build usually reaches the 100-agent cap at the re-review; the run then stops (`cap`)
+  after the push.
+- Car 6, #72: the supported route for a greenfield repo's first `pyproject.toml`: the plan lists it
+  in one criterion's `test_files`, the writer creates it before the freeze, and the writer-round
+  check accepts a section change of a config file the round owns (the section's own file decides).
+  The freeze covers the whole file, so the coder cannot change it later. Planner rule, README text,
+  and a `<paths>` rule in the writer, both judges and the coder.
+- Car 6, #73: `UV_PROJECT_ENVIRONMENT` and `UV_CACHE_DIR` are per-role build env rows (`uv-venv`,
+  `uv-cache` under the role's build dir), so `uv run` writes no `.venv` in the worktree. Cost: the
+  uv cache is cold in every role (5.0.6: no role reads another role's output).
+- Car 6 dist: 463,803 bytes (+4,690).
 
 ### Removed
 
@@ -297,6 +339,24 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
 - `v730_review_scratch_guard` M1: `["sh", "probe.sh", "-c"]` moved from "runs" to "refused" (#70
   item 1, a shell's whole argv).
 - Harness: at plan time an unscripted hook-surface read gives `[]` for `pkg:package.json` too.
+
+### Tests changed on purpose (car 6)
+
+- New: `v740_ordinal_claims` (with the frozen 1565a52 claim patterns), `v740_uv_env` (U1, U2 on
+  real uv), `v740_pyproject_route` (P1-P5), `v740_role_text`, `v740_plan_sweep` (Z1-Z4),
+  `v740_test_conflict` (Y1-Y3, Q4 both modes, the real-git recipe).
+- `v740_pr_test_block` V1: "test 2 of AC3" and "Step 2 tests the parser." are no claims now
+  (#64 item 2).
+- `v610_update_coder`: new Y4 (a u1 plan-target finding stops; no coder round, no re-plan).
+- `v5010_prompt_snapshot`: the three build pins move (role shas, uv build vars, the new schema
+  keys); calls unchanged; probe unchanged.
+- `v403_schema_types` READS and `build_task_run` ARRAY_SITES: the plan-sweep reads in
+  `planAndAudit` and `testConflictOf`.
+- Harness: `BUILD_ROWS` mirrors the two uv rows; `commitStepStub` echoes `parent`; an unscripted
+  `role:gate-change-nonweakening-sweep:plan*` measures one unit and returns `non_weakening`
+  (existing fixtures whose caller map names `chart/guards.py` now trigger the plan sweep).
+- `v740_test_conflict` Q4 fixtures carry the freeze and post-coder maps forward (the harness
+  adds run-state refs to a stub's own git map on its first call only).
 
 ## [7.3.0] - 2026-11-17
 

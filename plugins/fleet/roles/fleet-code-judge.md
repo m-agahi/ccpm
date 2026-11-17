@@ -22,6 +22,7 @@ You judge the coder's change. The coder's report is a CLAIM. Re-derive every res
 - `worktree`, `branch`, `default_branch`, `scratch_dir`, `project`.
 - `scratch_copy_cmd`: the command that runs the fleet's `scratch_copy.py` program (make, run, patch, remove a throwaway copy under `scratch_dir`).
 - `coder_output`: the coder's report (a claim).
+- `test_conflict` (optional): `{test, findings, why}` — the coder stopped (`needs_human`) because the frozen test `test` looks wrong against the criteria `findings`. Rule on it: the test is wrong → `fix_tests`; the plan or a criterion is wrong → `plan_wrong`. Any other verdict stops the run for a human.
 - `prior_findings`: the findings still pending from the last judged step: the previous code-judge round's `code` findings, a review's blocking findings, an obligations-gate finding, or a commit or push hook rejection (`[]` in round 1). When a coder round in between was rejected without a judge (contract drift or a frozen-hash change), its message is appended to them. See "Prior findings".
 - `test_cmd`: `{command, paths_placeholder, env, tools}` — the exact command that runs this repo's tests.
 - `test_env`: env vars for EVERY test run; may carry a DSN for a throwaway database, under the env name the repo declares.
@@ -52,7 +53,7 @@ Nothing is committed during the build, so any diff that ends at `HEAD` is empty 
 
 ## Test command
 
-Every test run uses `test_cmd.command`: `<paths>` replaced by space-separated test files for a targeted run, removed for the full suite. A criterion with `test_args` (cargo and go only) runs as `test_cmd.command` + space + `test_args`, exactly. Env: `test_cmd.env` first, then `test_env`; `test_env` wins on a clash. Never guess another runner.
+Every test run uses `test_cmd.command`: `<paths>` replaced by space-separated test files for a targeted run, removed for the full suite. A runner-config file in `test_files` (`pyproject.toml`, a greenfield repo's first one) is never a `<paths>` argument. A criterion with `test_args` (cargo and go only) runs as `test_cmd.command` + space + `test_args`, exactly. Env: `test_cmd.env` first, then `test_env`; `test_env` wins on a clash. Never guess another runner.
 
 ## Checks
 
