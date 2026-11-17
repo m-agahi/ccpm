@@ -1394,7 +1394,8 @@ function shQuote(s) {
 // scratch dir (outside the worktree): one Write rule there, no Edit and no Bash rule
 function settingsFor(worktree) {
   return JSON.stringify({
-    permissions: { allow: ["Edit(/" + worktree + "/**)", "Write(/" + worktree + "/**)", "Write(/" + scratchOf(worktree) + "/**)"] },
+    // 7.3.0 review (M2): in the scratch dir only the chunk files (no nonce: the sha holds across a resume)
+    permissions: { allow: ["Edit(/" + worktree + "/**)", "Write(/" + worktree + "/**)", "Write(/" + scratchOf(worktree) + "/chunks/*/*.b64)"] },
   });
 }
 function codePointCompare(a, b) {
@@ -1613,7 +1614,7 @@ const PROGRAM_SHA256 = {
   "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
   "review_paths": "711143e444b4d9772c8023c22fbb93735239030d503dd58247050553d7fce29b",
   "ruleset_surface": "b8fec064efbf7ec62125f71016cde95b4a5edcb0156094cd8050e79a8278f067",
-  "scratch_copy": "e5ecf3aef534b8840ca5a734fec3aade93a17d583a8c7808dbe169e8d67228a8",
+  "scratch_copy": "dae1fa5ce8ee91aa28d4fc0780c5b8bf3a5faf743c30abedf2b0d5bc232ce90d",
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
   "session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
   "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
@@ -1630,16 +1631,16 @@ function programTable() {
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-  "fleet-code-judge": "91924c6068821dc74566a8c6e31a7865f647d4624d4f32306850ac8dd110d5c5",
+  "fleet-code-judge": "64551eb558f61e89624f15766eec57968466ef866236f327f7ad5e6e9092ff1a",
   "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
   "fleet-intent-judge": "728f3c0a1510644bfffa0ed095ed8d6e1bc66023740938f0f861f4a5e77a3804",
   "fleet-pr-opener": "0c4d24c3bbcc9a99d5e51de251d3817183f85ced1a73d0eeb1318cb1429447cf",
-  "fleet-test-judge": "abb89160158ac0e0a2c4777fd61807685880f113d69186751b79beddfbc40e61",
-  "fleet-test-writer": "3682d53663567bd9e47a0a14b20d0948fec7211cd6693cb5168192e99c2e6411",
-  "gate-change-nonweakening-sweep": "d2e598a8ebcb557406ef43b5b9e659201b09fb931097b8f3f1ef7c2982f1eed0",
-  "plan-audit": "3ccafa7ff737346ef7825262ecdd7f9c467ca33810b20ba0e50ca49789f2e47c",
-  "pr-review": "25341e7ce426a8e2adde9a0614c5328ab364b2042b97fbb6d3fee68da07c0cb2",
-  "scope-and-plan": "d90c19b8e402925248c34c8a1fd06e4fb5413be4ce327ff5c6f9499f3d79f437"
+  "fleet-test-judge": "43cb62e8d83552ae58a79061ec9949203db267489e749d0ae6973815dd928c55",
+  "fleet-test-writer": "d35428ca572612ec6f35b236dc113a153fa395afcc3184ccb1a09f289d1a6acf",
+  "gate-change-nonweakening-sweep": "5d4196f07f2fd2477547cdfbea2420e1de180d87f960ae7043afacffd2d7f8cd",
+  "plan-audit": "b29f65c76cd48a7ed3462c93aec835747fa23ea001ce989e058879a0462a149a",
+  "pr-review": "9caa9b6709d448708d0ba555f8a4b9c893a475dc4edb9cd8fca3c7cfeab22267",
+  "scope-and-plan": "79d0e02b8462ac0035d68e6f826c3e6d8d7c34741af66aee55bb3195aa3a689b"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -2258,7 +2259,7 @@ function chunked(message) {
   for (let i = 0; i < b64.length; i += CHUNK_CHARS) chunks.push(b64.slice(i, i + CHUNK_CHARS));
   return { expected: sha256Hex(message), chunks, shas: chunks.map((c, i) => ({ i, sha256: sha256Hex(c) })) };
 }
-// 7.3.0 (#9, Max ruled Q4 (a)): a chunk file is written with the Write tool (settingsFor allows Write in the scratch dir)
+// 7.3.0 (#9, Max ruled Q4 (a)): a chunk file is written with the Write tool (settingsFor allows Write to <scratch>/chunks/*/*.b64)
 function CHUNK_WRITE(dir) {
   return "For each chunk below, write the file " + dir + "/<i>.b64 with the Write tool, its content the chunk text copied exactly, byte for byte, with no newline added. If the file already exists, Read it first (the Write tool refuses to replace a file it has not read). Never shorten, merge, reflow or skip a chunk.";
 }
@@ -5373,7 +5374,7 @@ async function commitPlanAndRef(ctx) {
   const c = chunked(refMessage(full));
   const msgSha = c.expected;
   const label = "infra:commit-plan" + sfx;
-  const chunkDir = scratchOf(ctx.worktree) + "/plan-ref-" + safeName(state.nonce + sfx);
+  const chunkDir = scratchOf(ctx.worktree) + "/chunks/plan-ref-" + safeName(state.nonce + sfx);
   const cpInputs = Object.assign({}, base, { task_id: full.task_id, plan_base: ctx.planBase, chunk_dir: chunkDir }, ctx.retire ? { retire: ctx.retire } : {});
   // 6.3.4 (2176): writers copy the chunks in batches; the commit step copies none and names any chunk file that is bad
   const pfx = "infra:plan-chunks" + sfx;
@@ -5857,7 +5858,7 @@ async function planMode(input, date) {
     const findings = {
       scratch: lay.scratch,
       run: state.nonce,
-      chunk_dir: lay.scratch + "/park-chunks-" + safeName(state.nonce),
+      chunk_dir: lay.scratch + "/chunks/park-chunks-" + safeName(state.nonce),
       c: chunked(JSON.stringify(stripHeldOut({ reason: e instanceof Stop ? e.reason : "stopped", rounds: ls.rounds, symbols: ls.symbols, plan_path: draft }))),
     };
     let pk = null;
@@ -6829,7 +6830,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       ),
     );
     const json = JSON.stringify(st);
-    const si = { main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha, chunk_dir: scratchOf(mainWt) + "/state-" + safeName(state.nonce + "-" + label) };
+    const si = { main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha, chunk_dir: scratchOf(mainWt) + "/chunks/state-" + safeName(state.nonce + "-" + label) };
     const c = chunked(json + "\n");
     let r;
     // the PR state, not the label: a review-fix round's committed and pushed states are post-PR too (also on a resume)

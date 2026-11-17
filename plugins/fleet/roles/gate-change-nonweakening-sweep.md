@@ -23,12 +23,12 @@ A green tree is consistent with unlimited weakening. A suite that asserts "the g
 
 - Never mutate `worktree` (it is fingerprinted; any change discards your result). Create two detached worktrees under `scratch_dir` (hooks off), one command each:
 
-  - `<scratch_copy_cmd> make <worktree> <scratch_dir> <base_ref>` (prints `{tmp}`: the shipped copy)
-  - `<scratch_copy_cmd> make <worktree> <scratch_dir> <head_sha>` (prints `{tmp}`: the new copy)
+  - `<scratch_copy_cmd> make <worktree> <base_ref>` (prints `{tmp}`: the shipped copy)
+  - `<scratch_copy_cmd> make <worktree> <head_sha>` (prints `{tmp}`: the new copy)
 
-  Apply refusing-direction mutations there with the Edit tool, and run the shipped gate and the new gate on the same inputs. Run each command there with `<scratch_copy_cmd> run <scratch_dir> <tmp> '<argv as a JSON list>' '<env as a JSON object>'` (no shell; it prints `{exit_code, tail}`; pass `test_env` as its env JSON).
+  Apply each refusing-direction mutation there with `<scratch_copy_cmd> patch <worktree> <tmp> <file> <old> <new>` (`<file>` relative to `<tmp>`; `<old>` and `<new>` base64 of the exact text, e.g. from `base64 -w0`; it replaces the one occurrence of old and refuses none or several, so keep each hunk small), and run the shipped gate and the new gate on the same inputs. Run each command there with `<scratch_copy_cmd> run <worktree> <tmp> '<argv as a JSON list>' '<env as a JSON object>'` (no shell; it prints `{exit_code, tail}`; pass `test_env` as its env JSON).
 
-- Remove both copies with `<scratch_copy_cmd> remove <worktree> <scratch_dir> <tmp>` before you report, even when you fail.
+- Remove both copies with `<scratch_copy_cmd> remove <worktree> <tmp>` before you report, even when you fail.
 - Never run terraform, tofu, tfp or any `digger` / `atlantis` command, even when the gate under test wraps one: report such a unit as not runnable.
 - Non-interactive: never ask. A blocker → `status: "needs_human"`.
 - If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. Put a fact worth keeping in `memory_notes`.

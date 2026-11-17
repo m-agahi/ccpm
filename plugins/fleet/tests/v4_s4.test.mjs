@@ -843,7 +843,7 @@ test("4.0.0 1986: a plan stop parks the draft with findings.json of every refuse
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   const pk = call(out, "infra:park-plan").prompt;
-  assert.match(pk, /parked\.py' 'write' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch' 'n1-0000001' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch\/park-chunks-n1-0000001'/);
+  assert.match(pk, /parked\.py' 'write' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch' 'n1-0000001' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch\/chunks\/park-chunks-n1-0000001'/);
   const f = JSON.parse(chunkedContentOf(pk));
   assert.equal(f.plan_path, "docs/plans/x.md");
   assert.match(f.reason, /^plan-audit verdict plan_defect: AC1: r2 \(after 2 re-plan rounds\)/);

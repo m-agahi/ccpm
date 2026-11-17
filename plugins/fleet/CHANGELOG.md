@@ -150,6 +150,36 @@ closed): <why>; plan-audit passed; the intent judge rules on it)`); the auto gat
   caller cap); the orch_scan warning is saved in the run-state as `scan_warn` and restored on
   resume (#32 leftover).
 
+### Review fixes
+
+Two adversarial reviews of cars 1 to 4, fixed before the PR.
+
+- B1 (judges and the Edit tool): the code judge, the test judge and the gate sweep run as
+  `fleet:judge`, which has no Edit or Write tool, and the test writer's Edit rule covers the
+  worktree only. 7.3.0 car 4 told them to edit the scratch copy "with the Edit tool" (7.2.0's roles
+  had no such line). The line is gone; `scratch_copy.py patch <worktree> <tmp> <file> <old b64>
+<new b64>` replaces exactly one occurrence in a regular file inside the copy.
+- M1 (`scratch_copy.py`): the program derives the scratch dir from the worktree
+  (`<dirname(worktree)>/scratch`); every mode names the worktree and no mode takes a scratch dir:
+  `make <worktree> [<rev>]`, `run <worktree> <tmp> ...`, `patch ...`, `remove <worktree> <tmp>`.
+  `run`, `patch` and `remove` act only on a direct child `copy-*` of that dir that `git worktree
+list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp, terragrunt,
+  digger, atlantis) anywhere in argv or as the resolved program, and a shell given a `-c` flag. An
+  env `PATH` no longer crashes `run`: its entries (absolute only) go first, then the program's
+  PATH, so a `test_cmd.env` venv path keeps working. The copy loop checks `<tmp>/` with a separator.
+- M2 (scratch Write rule): `settingsFor` allows `Write(/<scratch>/chunks/*/*.b64)` only (no nonce,
+  so the settings sha holds across a resume), not `Write(/<scratch>/**)`. The plan-ref, park and
+  run-state chunk dirs moved to `<scratch>/chunks/`. No Write rule covers `ci-*.json`, `parked/`,
+  `hashes/` or `callers/`. A worktree with the car-4 settings gets the new file from the workspace
+  step (it rewrites a differing file); chunk dirs are per run, so a resume reads none.
+
+### Tests changed on purpose (review fixes)
+
+- New: `v730_review_scratch_copy`, `v730_review_judge_tools`, `v730_review_chunk_dirs`.
+- `v730_scratch_copy`: the new `scratch_copy.py` signatures; the env probe runs `printenv`, not
+  `sh -c`. `v730_shell_programs`, `v4_s3`: the narrowed Write rule. `v502_relay_keys`, `v4_s4`,
+  `build_task_run` (plan-ref chunk dir): the chunk dirs under `scratch/chunks/`.
+
 ### Tests changed on purpose (car 4)
 
 - `v4_s1`: 45 programs (count and the hasher reason); `scratch_copy_cmd` role inputs are not

@@ -181,7 +181,7 @@ test("7.3.0 #9: a format-plan relay whose plan-mode hooks failed stops with need
   assert.match(out.result.reason, /no-todo\.\.\.Failed/);
 });
 
-test("7.3.0 #9 (Q4 a): the chunk writers use the Write tool; settings.local.json allows Write in the run's scratch dir only", async () => {
+test("7.3.0 #9 (Q4 a): the chunk writers use the Write tool; settings.local.json allows Write to the scratch chunk files only", async () => {
   const out = await run(happy(), ARGS);
   const w = out.plan.calls.find((c) => /^infra:plan-chunks:/.test(c.label));
   assert.ok(w, out.plan.labels.join(", "));
@@ -192,7 +192,7 @@ test("7.3.0 #9 (Q4 a): the chunk writers use the Write tool; settings.local.json
   const ws = inputsOf(call(out.plan, "workspace").prompt);
   const set = JSON.parse(ws.settings_local_json);
   const main = "/r/.claude/worktrees/fleet-y42-add-thing/main";
-  assert.deepEqual(set.permissions.allow, ["Edit(/" + main + "/**)", "Write(/" + main + "/**)", "Write(//r/.claude/worktrees/fleet-y42-add-thing/scratch/**)"]);
+  assert.deepEqual(set.permissions.allow, ["Edit(/" + main + "/**)", "Write(/" + main + "/**)", "Write(//r/.claude/worktrees/fleet-y42-add-thing/scratch/chunks/*/*.b64)"]);
   // a settings file with other content is rewritten, never left stale
   assert.match(call(out.plan, "workspace").prompt, /absent or its content differs from `settings_local_json`/);
 });

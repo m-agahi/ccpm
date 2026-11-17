@@ -1818,7 +1818,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     plan_path: "docs/plans/x.md",
     task_id: "y42",
     plan_base: PB,
-    chunk_dir: "/r/.claude/worktrees/fleet-y42-add-thing/scratch/plan-ref-n1-0000001",
+    chunk_dir: "/r/.claude/worktrees/fleet-y42-add-thing/scratch/chunks/plan-ref-n1-0000001",
   });
   // 2.1.4: the commit holds the plan doc only; the sealed ref is a tag object
   // (git mktag, no hook) at refs/fleet/y42/plan; nothing under .fleet/ is written

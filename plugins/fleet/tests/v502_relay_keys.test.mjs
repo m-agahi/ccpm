@@ -316,7 +316,7 @@ test("5.0.2 2004: the park-plan prompt runs only the park and write commands; th
   assert.match(pk, /never join commands with &&, ; or if/);
   // the findings chunk steps stay: the ban covers commands the steps do not give
   // 7.3.0 (#9, Q4 (a)): the chunk files are written with the Write tool (was a. `mkdir -p` and printf)
-  assert.match(pk, /a\. For each chunk below, write the file [^ ]*park-chunks-n1-0000001\/<i>\.b64 with the Write tool/);
+  assert.match(pk, /a\. For each chunk below, write the file [^ ]*scratch\/chunks\/park-chunks-n1-0000001\/<i>\.b64 with the Write tool/);
   assert.match(pk, /parked\.py' 'write'/);
   assert.doesNotMatch(pk, /git -C <worktree>|rm -f|cp -p|restore --staged/);
   assert.match(out.result.reason, /draft plan moved to .*scratch\/parked/);

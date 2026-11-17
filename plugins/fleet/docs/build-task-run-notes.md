@@ -4418,13 +4418,21 @@ slug. Several without it: needs_human with the branch list. A text input (t... i
 ```text
 The seven roles that build a throwaway copy (test judge, code judge, test writer, plan-audit,
 the nonweakening sweep, scope-and-plan, pr-review) get scratch_copy_cmd ("python3 -I
-<scripts_dir>/scratch_copy.py") as a role input. make <worktree> <scratch_dir> [<rev>] adds a
-detached worktree (hooks off) in a new dir under <scratch_dir>; with no rev it is HEAD plus every
-changed and untracked path of the worktree (a temporary-index snapshot and diff-tree, as
-format_files.py does), deleted paths deleted. run <scratch_dir> <tmp> <argv json> [<env json>]
-runs argv with cwd <tmp> and no shell, the program caps lifted for the child. remove <worktree>
-<scratch_dir> <tmp> is worktree remove --force plus prune. run and remove refuse a <tmp> outside
-<scratch_dir>. The roles relay nothing from it, so it has no PROGRAM_SLOTS entry.
+<scripts_dir>/scratch_copy.py") as a role input. The program derives the scratch dir from the
+worktree (<dirname(realpath(worktree))>/scratch, the fleet layout; review fix M1) and takes no
+scratch dir argument. make <worktree> [<rev>] adds a detached worktree (hooks off) in a new
+<scratch>/copy-* dir; with no rev it is HEAD plus every changed and untracked path of the
+worktree (a temporary-index snapshot and diff-tree, as format_files.py does), deleted paths
+deleted. run <worktree> <tmp> <argv json> [<env json>] runs argv with cwd <tmp> and no shell,
+the program caps lifted for the child; it refuses a terraform-family program (terraform, tofu,
+tfp, terragrunt, digger, atlantis) anywhere in argv or as the resolved argv[0], and a shell
+(sh, bash, zsh, dash, ksh) followed by a flag cluster with c. An env PATH (absolute entries only)
+goes before the program's PATH. patch <worktree> <tmp> <file> <old b64> <new b64> replaces the
+one occurrence of old in a regular file inside <tmp> (review fix B1: fleet:judge has no Edit or
+Write tool, and the test writer's Edit rule covers the worktree only). remove <worktree> <tmp>
+is worktree remove --force plus prune. run, patch and remove act only on a direct child copy-*
+of the derived scratch dir that git worktree list registers. The roles relay nothing from it,
+so it has no PROGRAM_SLOTS entry.
 ```
 
 ### `exclude_add.py`, `purge.py`, `parked.py retire`, format-plan (#9, L2008)

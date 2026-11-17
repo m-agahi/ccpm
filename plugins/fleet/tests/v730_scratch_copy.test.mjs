@@ -1,10 +1,10 @@
 // fleet 7.3.0 (#54, L2189) A23: scratch_copy.py makes, runs in and removes the throwaway
 // copy the roles used to build with mktemp -d, worktree add and copy and delete loops.
-// make <worktree> <scratch_dir> [<rev>]: a detached worktree under <scratch_dir>; with no rev
+// make <worktree> [<rev>]: a detached worktree under <dirname(worktree)>/scratch; with no rev
 // it holds the CURRENT working tree (changed and untracked paths copied, deleted ones deleted).
-// run <scratch_dir> <tmp> <argv json> [<env json>]: argv with cwd <tmp>. remove <worktree>
-// <scratch_dir> <tmp>: worktree remove --force, then prune. A <tmp> outside <scratch_dir> is
-// refused. The workflow hands the command prefix to the seven copy roles as scratch_copy_cmd.
+// run <worktree> <tmp> <argv json> [<env json>]: argv with cwd <tmp>. remove <worktree>
+// <tmp>: worktree remove --force, then prune. A <tmp> outside that scratch dir is refused
+// (review M1). The workflow hands the command prefix to the seven copy roles as scratch_copy_cmd.
 //
 // dont_care: the tmp dir's name below <scratch_dir>; the length of `tail`.
 
@@ -21,7 +21,7 @@ const COPY_ROLES = ["fleet-test-judge", "fleet-code-judge", "fleet-test-writer",
 
 test("7.3.0 #54 A23: make copies the modified, untracked and deleted states; run returns the exit code; remove drops the worktree", () => {
   const root = mkdtempSync(join(tmpdir(), "fleet-730s-"));
-  const repo = join(root, "wt");
+  const repo = join(root, "main");
   const scratch = join(root, "scratch");
   mkdirSync(repo);
   try {
@@ -38,7 +38,7 @@ test("7.3.0 #54 A23: make copies the modified, untracked and deleted states; run
     writeFileSync(join(repo, "mod.txt"), "new\n");
     writeFileSync(join(repo, "new.txt"), "untracked\n");
     rmSync(join(repo, "gone.txt"));
-    const m = py("make", repo, scratch);
+    const m = py("make", repo);
     assert.equal(m.status, 0, m.stderr);
     const o = JSON.parse(m.stdout);
     assert.ok(o.tmp.startsWith(scratch + "/"), o.tmp);
@@ -49,28 +49,28 @@ test("7.3.0 #54 A23: make copies the modified, untracked and deleted states; run
     assert.deepEqual(o.deleted, ["gone.txt"]);
     // the fleet worktree is unchanged
     assert.equal(readFileSync(join(repo, "mod.txt"), "utf8"), "new\n");
-    const f = py("run", scratch, o.tmp, JSON.stringify(["false"]));
+    const f = py("run", repo, o.tmp, JSON.stringify(["false"]));
     assert.equal(f.status, 0, f.stderr);
     assert.equal(JSON.parse(f.stdout).exit_code, 1);
-    const p = py("run", scratch, o.tmp, JSON.stringify(["sh", "-c", "pwd; echo $FLEET_X"]), JSON.stringify({ FLEET_X: "seen" }));
+    const p = py("run", repo, o.tmp, JSON.stringify(["printenv", "FLEET_X"]), JSON.stringify({ FLEET_X: "seen" }));
     const po = JSON.parse(p.stdout);
     assert.equal(po.exit_code, 0);
     assert.match(po.tail, /seen/);
-    assert.ok(po.tail.includes(o.tmp), po.tail);
+    assert.ok(JSON.parse(py("run", repo, o.tmp, JSON.stringify(["pwd"])).stdout).tail.includes(o.tmp));
     // a tmp outside scratch_dir is refused by run and remove
-    assert.notEqual(py("run", scratch, repo, JSON.stringify(["true"])).status, 0);
-    assert.notEqual(py("remove", repo, scratch, repo).status, 0);
-    const r = py("remove", repo, scratch, o.tmp);
+    assert.notEqual(py("run", repo, repo, JSON.stringify(["true"])).status, 0);
+    assert.notEqual(py("remove", repo, repo).status, 0);
+    const r = py("remove", repo, o.tmp);
     assert.equal(r.status, 0, r.stderr);
     assert.ok(!git("worktree", "list").includes(o.tmp));
     assert.ok(!existsSync(o.tmp));
     // a rev: a detached copy of that commit, nothing copied
     const head = git("rev-parse", "HEAD").trim();
-    const v = JSON.parse(py("make", repo, scratch, head).stdout);
+    const v = JSON.parse(py("make", repo, head).stdout);
     assert.equal(readFileSync(join(v.tmp, "mod.txt"), "utf8"), "old\n");
     assert.ok(existsSync(join(v.tmp, "gone.txt")) && !existsSync(join(v.tmp, "new.txt")));
     assert.deepEqual([v.copied, v.deleted], [[], []]);
-    assert.equal(py("remove", repo, scratch, v.tmp).status, 0);
+    assert.equal(py("remove", repo, v.tmp).status, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
