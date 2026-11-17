@@ -1,6 +1,8 @@
 // fleet 7.4.0 car 3 (#23, L2035): session_project follow-ups.
-// - S1: when the digest-checked session_project ran in the repo itself or in a fleet worktree
-//   under it, the gate log warns (a cd there is ignored); the run goes on.
+// - S1: when the digest-checked session_project ran in a fleet worktree under the repo
+//   (<repo>/.claude/worktrees/...), the gate log warns (a cd there is ignored); the run goes on.
+//   7.4.0 car 4 (Y1, changed on purpose): the repo root itself is the normal start and no longer
+//   warns.
 // - S2: the no-proof texts name the next step. With args.project and no proof, intake's stop
 //   says to start the session in a directory under the repo. With no args.project and no
 //   session project, the write-back reason also says to pass args.project. (The AC's
@@ -19,8 +21,8 @@ import { ARGS, BRIEF, SCRIPTS_SRC, happy, run, runOne } from "./harness.mjs";
 const sj = (cwd) => ({ project: "o/r", source: "origin", cwd, args: [] });
 const warned = (out) => out.logs.filter((l) => /WARN session_project ran in/.test(l));
 
-test("7.4.0 #23 S1: session_project run in the repo or a fleet worktree warns; the run goes on", async () => {
-  for (const cwd of ["/r", "/r/.claude/worktrees/fleet-y42-add-thing/main"]) {
+test("7.4.0 #23 S1: session_project run in a fleet worktree warns; the run goes on", async () => {
+  for (const cwd of ["/r/.claude/worktrees/fleet-y42-add-thing/main", "/r/.claude/worktrees/step3"]) {
     const s = happy({ script: { preflight: { session_project: sj(cwd) } } });
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "ok", cwd + ": " + out.result.reason);
@@ -30,8 +32,8 @@ test("7.4.0 #23 S1: session_project run in the repo or a fleet worktree warns; t
   }
 });
 
-test("7.4.0 #23 S1: no warning for a directory beside the repo or under it but not a fleet worktree", async () => {
-  for (const cwd of ["/r2", "/r/sub", "/home/u/git/docs"]) {
+test("7.4.0 #23 S1: no warning for the repo root, a directory beside the repo, or under it but not a worktree", async () => {
+  for (const cwd of ["/r", "/r2", "/r/sub", "/r/.claude", "/home/u/git/docs"]) {
     const s = happy({ script: { preflight: { session_project: sj(cwd) } } });
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "awaiting_confirmation", cwd + ": " + out.result.reason);

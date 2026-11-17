@@ -128,6 +128,36 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
   session cwd.
 - Car 3 dist: 455,022 bytes (+1,041; the plan estimated ~700; X2 is outside the estimate).
 
+- Car 4, #29 (L2084): the five R4 gaps the 6.1.0 entry listed as known are closed. Each one only
+  adds refusals to the update-branch rule R4; none accepts more. `hook_surface.py`: N1, an npm
+  script follows a nested `npm|pnpm|yarn run X` (and `npm test`/`npm t`) with its pre and post
+  scripts, depth 3, with a visited set; a nested run of a missing script or a deeper chain drops
+  the `npm:<name>` entry (R4 then refuses every moved file). N2, a tracked dir named in an npm script
+  or a make recipe is listed as `dir/` (for example `node --test test/`), and R4 matches every
+  path under it. N3, `-p mod` and `-m mod` in a script or a recipe resolve to `mod.py`,
+  `mod/__init__.py`, `mod/__main__.py` and the parent `__init__.py` files (tracked only). N5, a
+  tracked shell script a script or a recipe names adds the tracked files it sources (one level,
+  read at the rev; a `$(dirname "$0")/x`, `${BASH_SOURCE%/*}/x` or `$DIR/x` path by its tail), and
+  the new target `sh:<path>` lists them for a script test_cmd or check_cmd; R4 reads it at d, and
+  an unread script refuses every moved file. N4, test_cmd `npx jest|vitest` also runs
+  `jest|vitest.setup.*`, `jest|vitest.config.*`, `setupTests.*` and `*.setup.{js,ts,...}`. The
+  obligations gate (`cmdRuns` without the R4 flag) keeps its exact-path match: a `dir/` entry there
+  would refuse every test file the fleet writes under `tests/`. Still not checked: an npm test_cmd
+  whose script runs jest (the setup files are not named in the script), a nested npm run with
+  `--prefix`/`--workspace`, and a sourced path whose variable tail does not resolve to a tracked
+  file.
+- Car 4, #39 part 2 (L2162): plan mode passes the npm target of an npm, pnpm or yarn test_cmd to
+  the plan hook-surface read. When `package.json` with `scripts.<name>` is not tracked at the
+  worktree root at HEAD (or the script cannot be read), it is a plan finding through
+  `planFindingsStop` ("... npm would walk up into the main checkout"): a re-plan while audit rounds
+  are left, then needs_human. npm 11.19.0 checked again: `npm_config_prefix` and
+  `npm_config_local_prefix` do not stop the walk-up to a parent `package.json`; only `--prefix`
+  does.
+- Car 4, Y1 (car-3 report): the #23 WARN fires only when `session_project` ran under
+  `<repo>/.claude/worktrees/` (a fleet or agent worktree, where a cd is ignored). The repo root is
+  the normal start and no longer warns.
+- Car 4 dist: 456,305 bytes (+1,283; the plan estimated ~1,600).
+
 ### Removed
 
 - Car 1, #9: `push_classify.py` and `push_probe.py`. Their rules moved into `push.py`; no prompt
@@ -180,6 +210,21 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
   (`yaadgaarScope` runs only with args.project), so S2 pins the intake stop with args.project and
   no proof, and the write-back reason with neither.
 - Harness: the role list comment says eleven (#28). No existing test changed.
+
+### Tests changed on purpose (car 4)
+
+- New: `v740_r4_gaps` (N1-N5 on the real program and in the workflow, and the non-weakening
+  checks: the bc8998b `testCmdRuns`/`cmdRuns` and the 6.1.0 make_paths rule run beside the new
+  code; every old refusal stays, and an old missing entry stays missing), `v740_npm_walkup` (J1).
+- `v740_session_project` S1 (Y1): the repo root `/r` moved from the warning case to the no-warning
+  case; a second worktree path (`/r/.claude/worktrees/step3`) and `/r/.claude` were added.
+- `v610_update_coder` 6.1.0 review S2: `scripts/test.sh <paths>` with no `sh:` entry now refuses
+  every file (fail closed); the old "false" case passes `{"sh:scripts/test.sh": []}`.
+- `v403_schema_types`: READS for `sp array` and `b string-re` in `testCmdRuns` and
+  `makePaths[st] array` in `cmdRuns`.
+- Harness: an unscripted hook-surface read gives `[]` for a `sh:<path>` target, and at plan time
+  (`infra:hook-surface:plan*`) for an `npm:<name>` target. Other labels keep `{}` (the R4
+  refuse-all tests depend on it).
 
 ## [7.3.0] - 2026-11-17
 

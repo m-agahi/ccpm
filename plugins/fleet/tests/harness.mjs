@@ -384,8 +384,13 @@ export async function runOne(script, args0) {
       return pathRecheckOut({}, [i.repo, i.token]);
     }
     // 3.1.0: unscripted hook-surface reads find no hook entry file
-    if (!(label in script) && /^infra:hook-surface:/.test(label))
-      return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: {}, error: null }, prompt));
+    // 7.4.0 car 4 (#29 N5, #39): a sh:<path> target reads a script that sources nothing; at plan time an
+    // npm:<name> target finds a tracked package.json script (no walk-up finding)
+    if (!(label in script) && /^infra:hook-surface:/.test(label)) {
+      const mp = {};
+      for (const t of inputsOf(prompt).targets || []) if (/^sh:/.test(t) || (/^infra:hook-surface:plan/.test(label) && /^npm:/.test(t))) mp[t] = [];
+      return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: mp, error: null }, prompt));
+    }
     // 6.0.0 (ledger 2042): an unscripted convention read finds no convention (the conventional fallback)
     if (!(label in script) && /^infra:pr-convention:/.test(label))
       return { status: "ok", reason: "read", title: { style: "conventional", types: ["feat", "fix", "perf", "revert", "chore", "refactor", "docs", "style", "test", "build", "ci"], key_required: false }, body: { template: null, template_repo: null, required_sections: null, min_chars: null, checker: null }, source: ["title: no convention found; the fallback type(component): summary"], unreadable: [], args: inputsOf(prompt).args };

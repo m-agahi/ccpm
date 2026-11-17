@@ -291,6 +291,73 @@ elif hp:
     rel = os.path.relpath(os.path.realpath(os.path.expanduser(hp)), os.path.realpath(wt))
     if not rel.startswith('..'):
         surface.add(rel.rstrip('/') + '/')
+# 7.4.0 (#29): what a command text runs. N2: a tracked dir it names is listed as "dir/". N3: `-p mod`
+# and `-m mod` resolve like a hook command's -m. N5: a tracked shell script it names adds the
+# tracked files that script sources (one level, read at <rev>). Each only adds paths.
+DIRS = set()
+for x in tracked:
+    parts = x.split('/')
+    for k in range(1, len(parts)):
+        DIRS.add('/'.join(parts[:k]))
+def show(rel):
+    # the file at <rev>; None when absent or over FILE_CAP
+    r = subprocess.run(GIT + ['show', rev + ':' + rel], capture_output=True)
+    return r.stdout.decode('utf-8', 'replace') if r.returncode == 0 and len(r.stdout) <= FILE_CAP else None
+SOURCE_RE = re.compile(r'(?:^|[;&|(]|\bthen|\bdo|\belse)[ \t]*(?:source|\.)[ \t]+([^;&|\n]+)', re.M)
+def sourced(rel):
+    out = set()
+    t = show(rel)
+    if t is None or not (rel.endswith(('.sh', '.bash')) or re.match(r'#!\S*(?:/|env\s+)(?:ba|z|da|k)?sh\b', t)):
+        return out
+    d = os.path.dirname(rel)
+    for arg in SOURCE_RE.findall(t):
+        m = re.match(r'\$\([^)]*\)\S*|\S+', arg.replace('"', '').replace("'", '').strip())
+        w = m.group(0) if m else ''
+        # a path built from a variable ("$(dirname "$0")/lib.sh", "${BASH_SOURCE%/*}/lib.sh", "$DIR/lib.sh"): its tail
+        if '$' in w:
+            k = max(w.rfind('}'), w.rfind(')'))
+            w = (w[k + 1:] if k > w.rfind('$') else re.sub(r'^.*\$\w+', '', w)).lstrip('/')
+        for c in (w, os.path.join(d, w)):
+            q = norm(c) if w else None
+            if q and q in tracked:
+                out.add(q)
+    return out
+def paths_in(text):
+    out = set()
+    for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', text):
+        q = norm(tok)
+        if q and q in tracked:
+            out.add(q)
+        elif q and q in DIRS:
+            out.add(q + '/')
+    for mod in re.findall(r'(?:^|\s)-[mp][ \t]*([A-Za-z_][A-Za-z0-9_.]*)', text):
+        parts = mod.split('.')
+        cands = ['/'.join(parts[:k]) + '/__init__.py' for k in range(1, len(parts) + 1)] + ['/'.join(parts) + '.py', '/'.join(parts) + '/__main__.py']
+        out.update(c for c in cands if c in tracked)
+    for q in sorted(out):
+        if q in tracked:
+            out |= sourced(q)
+    return out
+# N1: a nested `npm|pnpm|yarn run X` (or `npm test`) runs scripts.X with its pre and post; None when
+# a nested name is not a string script or the chain is deeper than 3 (no entry: R4 refuses every file)
+NPM_RUN = re.compile(r'\b(?:npm|pnpm|yarn)[ \t]+(?:run(?:-script)?(?:[ \t]+-\S+)*[ \t]+([A-Za-z0-9_:.][A-Za-z0-9_:.-]*)|(?:test|t)\b)')
+def npm_texts(sc, name, depth, seen):
+    v = sc.get(name)
+    side = [sc.get(k + name) for k in ('pre', 'post')]
+    if not isinstance(v, str) or not all(x is None or isinstance(x, str) for x in side):
+        return None
+    texts = [v] + [x for x in side if isinstance(x, str)]
+    for t in list(texts):
+        for m in NPM_RUN.finditer(t):
+            n = m.group(1) or 'test'
+            if n in seen:
+                continue
+            seen.add(n)
+            sub = npm_texts(sc, n, depth + 1, seen) if depth < 3 else None
+            if sub is None:
+                return None
+            texts.extend(sub)
+    return texts
 # F2: the repo paths each make target's recipe names, in the root Makefile at <rev>
 make_paths = {}
 mk = None
@@ -311,14 +378,18 @@ for tgt in targets:
             except ValueError:
                 pkg = False
         sc = pkg.get('scripts') if isinstance(pkg, dict) else None
-        v = sc.get(tgt[4:]) if isinstance(sc, dict) else None
         # npm and yarn v1 also run pre<name> and post<name> (over-counted for pnpm and yarn berry)
-        side = [sc.get(k + tgt[4:]) for k in ('pre', 'post')] if isinstance(sc, dict) else []
-        if isinstance(v, str) and all(x is None or isinstance(x, str) for x in side):
-            text = '\n'.join([v] + [x for x in side if isinstance(x, str)])
-            make_paths[tgt] = sorted(set(q for q in (norm(x) for x in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', text)) if q and q in tracked))
+        texts = npm_texts(sc, tgt[4:], 0, {tgt[4:]}) if isinstance(sc, dict) else None
+        if texts is not None:
+            make_paths[tgt] = sorted(paths_in('\n'.join(texts)))
         continue
-    paths = set()
+    # 7.4.0 (#29 N5): sh:<path> = the tracked files the script at <rev> sources; no entry when unreadable
+    if tgt.startswith('sh:'):
+        q = norm(tgt[3:])
+        if q and show(q) is not None:
+            make_paths[tgt] = sorted(sourced(q))
+        continue
+    rec = []
     if mk is not None:
         lines = mk.splitlines()
         for i, line in enumerate(lines):
@@ -327,11 +398,8 @@ for tgt in targets:
                 for rl in lines[i + 1:]:
                     if not rl.startswith('\t'):
                         break
-                    for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', rl):
-                        q = norm(tok)
-                        if q and q in tracked:
-                            paths.add(q)
-    make_paths[tgt] = sorted(paths)
+                    rec.append(rl)
+    make_paths[tgt] = sorted(paths_in('\n'.join(rec)))
 out = {'surface': [] if error else sorted(surface), 'make_paths': {} if error else make_paths, 'error': error, 'args': [wt, rev, targets_arg]}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()

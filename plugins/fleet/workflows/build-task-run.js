@@ -1236,6 +1236,15 @@ jest: ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", ".npm
 cargo: ["Cargo.toml", "Cargo.lock", "build.rs", "config", "config.toml"],
 go: ["go.mod", "go.sum", "go.work"],
 };
+const JEST_SETUP_RE = /^(jest|vitest)\.(setup|config)\.|^setupTests\.|\.setup\.[cm]?[jt]sx?$/;
+function pathsHit(list, p) {
+return list.some((x) => x === p || (x.slice(-1) === "/" && p.indexOf(x) === 0));
+}
+function shTargetOf(cmd) {
+const t = String(cmd || "").trim().split(/[ \t]+/);
+const s = /^(ba|da|k|z)?sh$/.test(t[0]) ? relPath(t[1]) : t[0].indexOf("/") >= 0 ? relPath(t[0]) : null;
+return s ? "sh:" + normPath(s) : null;
+}
 function npmTargetOf(cmd) {
 const t = String(cmd || "").trim().split(/[ \t]+/);
 if ((t[0] === "npm" || t[0] === "pnpm" || t[0] === "yarn") && t[1] === "test") return "npm:test";
@@ -1247,28 +1256,33 @@ const t = String(cmd || "").trim().split(/[ \t]+/).filter((x) => x && x !== PATH
 if (!t.length) return true;
 const b = p.split("/").pop();
 const script = (x) => (x && x.charAt(0) !== "-" && relPath(x) ? normPath(relPath(x)) === p : true);
-if (/^(ba|da|k|z)?sh$/.test(t[0])) return script(t[1]);
+const sp = makePaths ? makePaths[shTargetOf(t.join(" "))] : null;
+const shell = (x) => script(x) || !Array.isArray(sp) || pathsHit(sp, p);
+if (/^(ba|da|k|z)?sh$/.test(t[0])) return shell(t[1]);
 if ((t[0] === "python" || t[0] === "python3") && t[1] !== "-m") return script(t[1]);
-if (t[0].indexOf("/") >= 0) return script(t[0]);
+if (t[0].indexOf("/") >= 0) return shell(t[0]);
 const pre = testRunnerPrefix(t);
 if (!pre) return true;
-if (pre.kind === "make") return cmdRuns("make " + t[1], p, makePaths);
+if (pre.kind === "make") return cmdRuns("make " + t[1], p, makePaths, true);
 if (pre.kind === "npm") {
 const np = makePaths ? makePaths[npmTargetOf(t.join(" "))] : null;
 if (!Array.isArray(np)) return true;
-return TEST_INPUTS.npm.indexOf(b) >= 0 || np.indexOf(p) >= 0;
+return TEST_INPUTS.npm.indexOf(b) >= 0 || pathsHit(np, p);
 }
+if (pre.kind === "jest" && JEST_SETUP_RE.test(b)) return true;
 if (pre.kind === "cargo" && (b === "config" || b === "config.toml")) return p.split("/").slice(-2, -1)[0] === ".cargo";
 return !TEST_INPUTS[pre.kind] || TEST_INPUTS[pre.kind].indexOf(b) >= 0;
 }
-function cmdRuns(cmd, p, makePaths) {
+function cmdRuns(cmd, p, makePaths, r4) {
 const words = cmd.trim().split(/[ \t]+/);
 const script = parseCheckCmd(cmd).script || null;
 const b = p.split("/").pop();
 const recipe = words[0] === "make" && makePaths && Array.isArray(makePaths[words[1]]) ? makePaths[words[1]] : [];
+const st = r4 ? shTargetOf(cmd) : null;
 return !!(
 (script && p === normPath(script)) ||
-(words[0] === "make" && (/^(GNUmakefile|makefile|Makefile)$/.test(b) || /\.mk$/.test(b) || recipe.indexOf(p) >= 0)) ||
+(st && (!makePaths || !Array.isArray(makePaths[st]) || pathsHit(makePaths[st], p))) ||
+(words[0] === "make" && (/^(GNUmakefile|makefile|Makefile)$/.test(b) || /\.mk$/.test(b) || (r4 ? pathsHit(recipe, p) : recipe.indexOf(p) >= 0))) ||
 (words[0] === "pre-commit" && b === ".pre-commit-config.yaml")
 );
 }
@@ -1470,7 +1484,7 @@ const PROGRAM_SHA256 = {
 "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
 "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
 "hasher": "869a4df97832a2c762934a316c83fb19923e946f2331278ab810b1acc55f5a0a",
-"hook_surface": "f4c20e8962ce3d5e283ce2b1773a62c9cd7b7e981d971ca122f928e4bd7f7e87",
+"hook_surface": "a912db75fb66fd900323ebe2a9c9a9e55383c8c538b75decd92592cacc0835d1",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -3758,8 +3772,8 @@ const sj = pre.session_project;
 const sjOk = !!sj && typeof sj === "object" && canonical(sj.args) === "[]" && (sj.project === null || typeof sj.project === "string") && relayDigestOk(sj, progKeys("session_project"), "session_project");
 state.sessionProject = sjOk && sj.project ? sj.project : null;
 gate("session yaadgaar project: " + (sjOk ? JSON.stringify(state.sessionProject) + " (" + sj.source + " of " + logPath(sj.cwd) + ")" : "unknown (no digest-checked session_project)"));
-if (sjOk && (String(sj.cwd) === repo || String(sj.cwd).indexOf(repo + "/.claude/worktrees/") === 0))
-gate("WARN session_project ran in " + logPath(sj.cwd) + " (the repo or a fleet worktree): a cd there is ignored; start the session in the directory you mean");
+if (sjOk && String(sj.cwd).indexOf(repo + "/.claude/worktrees/") === 0)
+gate("WARN session_project ran in " + logPath(sj.cwd) + " (a worktree under the repo): a cd there is ignored; start the session in the directory you mean");
 state.repo = repo;
 for (const role of ROLES) {
 const line = ROLE_DISPATCH[role];
@@ -4605,7 +4619,7 @@ if (canonical(r.args) !== canonical([worktree, rev, JSON.stringify(targets)])) h
 if (r.error !== null)
 hookReadStop(r.error);
 const mp = {};
-for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x))) : t.indexOf("npm:") === 0 ? null : [];
+for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x)) + (/\/$/.test(String(x)) ? "/" : "")) : /^(npm|sh):/.test(t) ? null : [];
 return { surface: r.surface.map((x) => (/\/$/.test(String(x)) ? (String(x) === "./" ? "./" : normPath(String(x)) + "/") : normPath(String(x)))), make_paths: mp };
 }
 function logPath(p) {
@@ -4815,9 +4829,12 @@ plan.new_behaviour +
 " -> " +
 (wouldBeShort ? "short (one test writer for every criterion, at most " + MAX_SHORT_TEST_ROUNDS + " test rounds; every gate runs)" : "full"),
 );
-const planHs = await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", [], "Plan");
+const pnt = npmTargetOf(plan.test_cmd.command);
+const planHs = await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", pnt ? [pnt] : [], "Plan");
 const planRs = await rulesetSurface("infra:ruleset-surface:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");
 hookGate("the plan scope", planScopePaths(planFacts, criteria), planHs.surface, planRs);
+if (pnt && !planHs.make_paths[pnt])
+return planFindingsStop(ctx, planPath, "npm test_cmd", [{ criterion: null, finding: "package.json (with scripts." + pnt.slice(4) + ") is not tracked at the worktree root at HEAD, or the script cannot be read; npm would walk up into the main checkout" }], plan.changed_symbols, plan);
 const conventions = await prConvention("infra:pr-convention:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");
 const fb = slugify(String(ctx.remoteSlug || "").split("/").pop(), 20);
 const component = COMPONENT_RE.test(String(plan.component)) ? plan.component : COMPONENT_RE.test(fb) ? fb : "repo";
@@ -6624,9 +6641,10 @@ const hk = mv.filter((p) => isHookPath(p, upd.surface.concat(pb.surface, rs.surf
 if (hk.length) return "the base change touches the hook surface" + list(hk);
 const fe = mv.filter((p) => fencePathProblem(p) || isIacPath(p));
 if (fe.length) return "the base change touches fenced or IaC paths" + list(fe);
-const nt = npmTargetOf(tc);
-const tm = nt ? Object.assign({}, pb.make_paths, (await hookSurface("infra:hook-surface:u1:d", mainWt, upd.head, [nt], "Review")).make_paths) : pb.make_paths;
-const ti = mv.filter((p) => testCmdRuns(tc, p, tm) || cmds.some((c) => cmdRuns(c, p, pb.make_paths)));
+const dt = [];
+for (const x of [npmTargetOf(tc)].concat([tc].concat(cmds).map(shTargetOf))) if (x && dt.indexOf(x) < 0) dt.push(x);
+const tm = dt.length ? Object.assign({}, pb.make_paths, (await hookSurface("infra:hook-surface:u1:d", mainWt, upd.head, dt, "Review")).make_paths) : pb.make_paths;
+const ti = mv.filter((p) => testCmdRuns(tc, p, tm) || cmds.some((c) => cmdRuns(c, p, tm, true)));
 if (ti.length) return "the base change touches files the test or check commands run" + list(ti);
 const syms = planFacts.changed_symbols || [];
 if (syms.length) {

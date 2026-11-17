@@ -529,7 +529,9 @@ test("6.1.0 review S2: R4 derives test_cmd inputs; a shape it cannot read refuse
   const { testCmdRuns } = await compile(src)(null, null, null, () => {}, () => {}, {}, {}, {}, Date, Math);
   const runs = (cmd, p, mp) => testCmdRuns(cmd, p, mp || {});
   assert.equal(runs("scripts/test.sh <paths>", "scripts/test.sh"), true);
-  assert.equal(runs("scripts/test.sh <paths>", "src/x.py"), false);
+  // 7.4.0 (#29 N5, changed on purpose): a script reads its sh: entry (the files it sources); none refuses every file
+  assert.equal(runs("scripts/test.sh <paths>", "src/x.py", { "sh:scripts/test.sh": [] }), false);
+  assert.equal(runs("scripts/test.sh <paths>", "src/x.py"), true);
   assert.equal(runs("bash scripts/test.sh <paths>", "scripts/test.sh"), true);
   assert.equal(runs("sh ./scripts/t.sh", "scripts/t.sh"), true);
   assert.equal(runs("python3 tools/run_tests.py <paths>", "tools/run_tests.py"), true);

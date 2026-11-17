@@ -527,7 +527,14 @@ const READS = {
   },
   docOrLockFile: { "b string-re": [PARSED_TOKEN, 2] },
   // 6.1.0 review: an npm:<name> entry of hookSurface's make_paths (the script maps a missing one to null)
-  testCmdRuns: { "np array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths" },
+  testCmdRuns: {
+    "np array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths",
+    // 7.4.0 (#29 N5, N4): a sh:<path> entry (null when unread); the jest setup basename of a path
+    "sp array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths",
+    "b string-re": PARSED_TOKEN,
+  },
+  // 7.4.0 (#29 N5): the R4 read of a check script's sh:<path> entry
+  cmdRuns: { "makePaths[st] array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths" },
   // 6.1.0: the grep's checks moved from callerCheck to callerGrep
   callerGrep: {
     "occ object": "prog:callers:occurrences",
