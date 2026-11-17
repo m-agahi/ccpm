@@ -484,6 +484,8 @@ export async function runOne(script, args0) {
     if (!(label in script) && /^infra:verify-plan-commit/.test(label)) return verifyStub(script.__store || {})(prompt);
     // 6.3.4 (2176): unscripted plan-ref chunk writers write their chunks exactly
     if (!(label in script) && /^infra:plan-chunks/.test(label)) return chunkWriterStub()(prompt);
+    // 7.3.0 (#47a): so do the run-state and park-findings chunk writers
+    if (!(label in script) && /^infra:(state|park)-chunks/.test(label)) return chunkWriterStub()(prompt);
     // 4.0.0 (1983): every confirm mode gets up to 2 re-plan rounds; an
     // unscripted round step (":audit-fix", ":audit-fix-2") repeats the
     // round-0 stub, so a plan the stubs refuse is refused in every round
@@ -1082,7 +1084,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/7.2.0/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/7.3.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));

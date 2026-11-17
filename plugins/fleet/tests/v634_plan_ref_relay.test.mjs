@@ -178,8 +178,9 @@ test("6.3.4 2176: a part that is bad twice stops the build (chunks do not match 
   s["infra:load-ref:p1"] = bad;
   s["infra:load-ref:p1:retry"] = bad;
   const out = await runOne(s, buildArgs(tiny));
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /plan ref missing or changed; re-run plan.*chunks do not match ref_sha256/);
+  // 7.3.0 (#47b): an intact ref whose parts do not join is a relay failure
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /load-ref: the relayed parts do not join to ref_sha256 .* is intact; re-run build with the same plan_ref/);
   assert.ok(!out.labels.some((x) => x.startsWith("role:")));
 });
 

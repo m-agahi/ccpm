@@ -208,7 +208,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 7\.2\.0 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 7\.3\.0 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -2136,7 +2136,8 @@ test("a load step that copies the right sha256 but changed content stops", async
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan/);
-  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+  // 7.3.0 (#47c): a part 0 with no part count is read once more before the stop
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref", "infra:load-ref:retry"]);
 });
 
 test("a load step that returns content not matching its own sha256 stops", async () => {
@@ -5689,7 +5690,7 @@ const ARRAY_SITES = {
   "cl.checks @ ciStep": "parsed: the fleet-ci-classifier result (SCHEMAS types checks as an array; each entry is checked)",
   // 6.0.0 review S1: pr_state.py logs
   "lg.logs @ ciStep": "parsed: a pr_state.py logs output, digest-checked first (PROGRAM_OUT types logs as an array)",
-  "r.chunks @ buildFromRef": "infra:chunks",
+  "r.chunks @ partReader": "infra:chunks",
   "pf.commands @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
   "ref.plan_diff @ buildFromRef": "parsed: the sealed plan ref",
   "r.diff @ fleetScan": "infra:diff",
@@ -5729,7 +5730,7 @@ const ARRAY_SITES = {
   // 6.0.0 (ledger 2042)
   "r.dirty @ commitPlanAndRef": "parsed: the plan_ref_write program relay (digest-checked; PROGRAM_OUT types dirty)",
   // 6.3.4 (2176): plan_ref_write's exit-3 list; it only picks chunks to write again
-  "r.bad_chunks @ commitPlanAndRef": "infra:bad_chunks",
+  "r.bad_chunks @ chunkRounds": "infra:bad_chunks",
   // 6.0.0 security review
   "v.replace_refs @ buildFromRef": "parsed: a verify_since program output (PROGRAM_OUT types it), digest-checked with it",
 };
@@ -6042,8 +6043,9 @@ test("2.1.5 load-ref: a truncated chunk is asked for once more; a second bad cop
   assert.ok(out.labels.includes("infra:load-ref:retry"));
   s["infra:load-ref:retry"] = bad;
   out = await runOne(s, buildArgs(tiny));
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /plan ref missing or changed; re-run plan.*chunks do not match/);
+  // 7.3.0 (#47b): the ref's metadata held on every relay, so the ref is intact: a relay failure, not a changed ref
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /^load-ref: the relayed parts do not join to ref_sha256 [0-9a-f]{64} after the re-reads; the plan ref refs\/fleet\/y42\/plan is intact; re-run build with the same plan_ref$/);
 });
 
 test("2.1.5 confirm auto builds from the in-memory sealed ref: load-ref reads metadata only", async () => {
@@ -6282,7 +6284,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 7\.2\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 7\.3\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6980,7 +6982,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.2\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 7\.2\.0 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.3\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 7\.3\.0 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8690,7 +8692,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 7\.2\.0/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 7\.3\.0/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

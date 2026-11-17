@@ -402,7 +402,7 @@ test("5.0.7 2020: a relay that fails only on its digest is dispatched once more;
   assert.equal(out.result.status, "ok", out.result.reason);
   const i = out.labels.indexOf("hasher:fp-post:test-judge:r1");
   assert.equal(out.labels[i + 1], "hasher:fp-post:test-judge:r1:digest-retry");
-  assert.ok(out.result.gate_log.includes("hasher:fp-post:test-judge:r1: the relay does not match the program's digest; dispatched once more to a fresh agent (hasher:fp-post:test-judge:r1:digest-retry)"));
+  assert.ok(out.result.gate_log.includes("hasher:fp-post:test-judge:r1: the relay does not match the program's digest; dispatched once more to a fresh agent (hasher:fp-post:test-judge:r1:digest-retry) on opus"));
   assert.match(call(out, "hasher:fp-post:test-judge:r1:digest-retry").prompt, /A first relay of this step did not match the program's digest/);
   const base0 = await run(happy(), ARGS);
   assert.equal(out.result.agents, base0.result.agents + 1, "the retry is on the agent cap");
@@ -616,7 +616,7 @@ test("5.0.7 review: a read-only relay whose only fault is other args is dispatch
   s["infra:hash-diff:writers:r1:args-retry"] = (p) => Object.assign({ status: "ok", reason: "x" }, hashDiffOut(inputsOf(p).args));
   let out = await run(s, ARGS);
   assert.deepEqual([out.result.status, out.result.stop_gate, out.result.reason], [V506["writers/git"].status, V506["writers/git"].gate, V506["writers/git"].reason]);
-  assert.ok(out.result.gate_log.includes("infra:hash-diff:writers:r1: the program ran on other arguments than the workflow sent; dispatched once more to a fresh agent (infra:hash-diff:writers:r1:args-retry)"));
+  assert.ok(out.result.gate_log.includes("infra:hash-diff:writers:r1: the program ran on other arguments than the workflow sent; dispatched once more to a fresh agent (infra:hash-diff:writers:r1:args-retry) on opus"));
   s = scenario("writers", "git");
   s["infra:hash-diff:writers:r1"] = otherArgs;
   out = await run(s, ARGS);

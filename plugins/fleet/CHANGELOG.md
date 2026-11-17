@@ -1,5 +1,59 @@
 # Changelog
 
+## [7.3.0] - 2026-11-17
+
+Fleet 7.3.0: the combined workflow-reliability batch (plan
+`docs/plans/fleet-reliability-batch-7.3.0-2026-11-17.md`). One release for every open fleet
+workflow-reliability task that the plan puts IN.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 7.3.0), then start a NEW session: the workflow
+  looks for its own `fleet/7.3.0/scripts` dir.
+
+### Changed
+
+- Relay core (car 1, #67): a digest or args retry of an infra relay (`<label>:digest-retry`,
+  `<label>:args-retry`) runs one model step up from its `INFRA_TIER` model (`RETRY_UP`: haiku ->
+  sonnet, sonnet -> opus; opus and fable stay). The gate line names the retry model
+  (`... (<label>:digest-retry) on <model>`). Advisory (Q5, plan default taken): a sonnet relay's
+  retry now runs on opus, which costs more per retry; retries are rare. The PATH re-check's
+  `:relay-retry` keeps `RELAY_RETRY_MODEL` (sonnet).
+- Relay core (car 1, #59): the chunk writers of a rewrite round (`infra:plan-chunks:r<k>w<b>`,
+  `k >= 1`, and the new state and park writers) run one model step up (sonnet -> opus). The
+  rewrite gate line names the model. No refusal detection is added.
+- Relay core (car 1, #47a): a run-state payload over one writer's bound (`CHUNKS_PER_WRITER` = 8
+  chunks of 4000 base64 characters, ADR-1267) is written by parallel writers
+  (`infra:state-chunks:<state label>:r<k>w<b>`); the `infra:state:<label>` step then runs
+  `state_write.py` only, with no chunk text in its prompt, and its exit-3 `bad_chunks` list sends
+  only those chunks to fresh writers (at most `MAX_CHUNK_RETRIES` rounds, then `failed`). Park
+  findings over the bound go to parallel writers too (`infra:park-chunks:r0w<b>`), on the soft
+  agent cap: a skipped or failed park writer logs a gate line and never halts. The park step has
+  no rewrite rounds: a bad chunk leaves `findings_write` null, as a failed findings write did
+  before (a re-run of the park step would move the draft a second time). A payload within the
+  bound stays inline, as before. The writer and rewrite loop is one shared helper
+  (`writeChunksParallel`, `chunkRounds`) that commit-plan uses too.
+- Relay core (car 1, #47b): load-ref of an intact ref (every relay's metadata check passed) whose
+  parts still do not join to `ref_sha256` after the re-reads stops `failed` with "load-ref: the
+  relayed parts do not join to ref_sha256 <sha> after the re-reads; the plan ref <name> is intact;
+  re-run build with the same plan_ref". "plan ref missing or changed" stays for a metadata, parse,
+  shape or part-count problem.
+- Relay core (car 1, #47c): the part-0 count re-read runs once in every path, also after a first
+  part-0 re-read; a part 0 with no part at all is read once more before it stops. The part reader
+  (`partOk`, `countOf`, `readParts`) is one top-level helper (`partReader`).
+
+### Tests changed on purpose (car 1)
+
+- `v507_digest_relays`: two pinned retry gate lines end with " on opus".
+- `v634_plan_ref_relay` ("a part that is bad twice") and `build_task_run` ("2.1.5 load-ref: a
+  truncated chunk ..."): an intact ref with bad parts now stops `failed` with the relay text.
+- `build_task_run` ("a load step that copies the right sha256 but changed content stops"): one
+  part-0 re-read runs before the stop.
+- `build_task_run` ARRAY_SITES and `v403_schema_types` READS: the reads moved to `chunkRounds`,
+  `partReader` and `relayModel`.
+- Version pins: the plan's list, plus the regex forms (`7\.2\.0`) in `build_task_run`,
+  `v403_schema_types`, `v4_s1`, `v4_s3` and `v622_fixes`, which the plan's grep did not match.
+
 ## [7.2.0] - 2026-11-16
 
 Fleet 7.2.0: the caller check no longer copies a large occurrence list through a model relay
