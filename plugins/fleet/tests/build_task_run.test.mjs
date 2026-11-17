@@ -925,7 +925,8 @@ test("approve without a gates_not_run list: script builds it for the PR and the 
   // 8.0.0 (G2): coverage carries its gate's own not_run reason (the harness default: no coverage tool)
   // 8.0.0 (G4): held_out carries the runner's own not_run reason (the harness default: no store file)
   // 8.0.0 (G5): mutation carries its gate's own not_run reason (the harness default: no mutation run)
-  for (const g of pr.gates_not_run) assert.match(g.reason, g.gate === "coverage" ? /^no coverage tool: / : g.gate === "held_out" ? /^store file missing on this machine$/ : g.gate === "mutation" ? /^tool absent: no mutation run$/ : NOT_RUN);
+  // 8.0.0 (G7): security_scan carries its gate's own reason (the harness default: no runtime, partial)
+  for (const g of pr.gates_not_run) assert.match(g.reason, g.gate === "coverage" ? /^no coverage tool: / : g.gate === "held_out" ? /^store file missing on this machine$/ : g.gate === "mutation" ? /^tool absent: no mutation run$/ : g.gate === "security_scan" ? /^container scan not run: no container runtime/ : NOT_RUN);
   assert.deepEqual(out.result.gates_not_run, pr.gates_not_run);
 });
 
@@ -950,7 +951,8 @@ test("approve with a gates_not_run list: the code-judge list plus every script d
   const want = list.concat([
     // 8.0.0 (G5): the mutation gate's own not_run reason (the harness default)
     { gate: "mutation", reason: inputsOf(call(out, "role:fleet-code-judge:r1").prompt).script_findings.mutation.reason },
-    { gate: "security_scan", reason: inputsOf(call(out, "role:fleet-code-judge:r1").prompt).script_findings.reason },
+    // 8.0.0 (G7): the security gate's own reason (the harness default: partial, no runtime)
+    { gate: "security_scan", reason: inputsOf(call(out, "role:fleet-code-judge:r1").prompt).script_findings.security.reason },
   ]);
   assert.deepEqual(inputsOf(call(out, "role:fleet-pr-opener").prompt).gates_not_run, want);
   assert.deepEqual(out.result.gates_not_run, want);

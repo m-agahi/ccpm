@@ -85,8 +85,8 @@ function grabConst(name) {
   return SOURCE.slice(i + 1, SOURCE.indexOf(";\n", i) + 2);
 }
 
-test("8.0.0 G1: AUDIT_IMAGE is the audit-lab image pinned by a placeholder digest; gates is a stop gate", () => {
-  assert.equal(AUDIT_IMAGE, "openfantasy/audit-lab@sha256:PENDING");
+test("8.0.0 G1: AUDIT_IMAGE is the audit-lab image pinned by a digest (G7: the real index digest); gates is a stop gate", () => {
+  assert.match(AUDIT_IMAGE, /^docker\.io\/openfantasy\/audit-lab@sha256:[0-9a-f]{64}$/);
   const gates = JSON.parse(/const STOP_GATES = (\[[^\]]*\]);/.exec(SOURCE)[1]);
   assert.ok(gates.includes("gates"), "STOP_GATES has gates");
   assert.match(README, /`gates`/);
@@ -97,9 +97,10 @@ test("8.0.0 G1-1: the census lists each gate per language with a tool, builtin o
   assert.deepEqual(out.languages, ["python", "node"]);
   assert.deepEqual(Object.keys(out.matrix), ["python", "node", "go", "rust", "other"]);
   assert.deepEqual(out.matrix.python, { coverage: "coverage", mutation: "builtin", security: "container" });
-  assert.deepEqual(out.matrix.node, { coverage: "c8", mutation: "builtin", security: "container" });
-  assert.deepEqual(out.matrix.go, { coverage: "unsupported", mutation: "builtin", security: "container" });
-  assert.deepEqual(out.matrix.rust, { coverage: "unsupported", mutation: "builtin", security: "container" });
+  // 8.0.0 (G7): the built-in mutator supports python (pytest) only
+  assert.deepEqual(out.matrix.node, { coverage: "c8", mutation: "unsupported", security: "container" });
+  assert.deepEqual(out.matrix.go, { coverage: "unsupported", mutation: "unsupported", security: "container" });
+  assert.deepEqual(out.matrix.rust, { coverage: "unsupported", mutation: "unsupported", security: "container" });
   assert.deepEqual(out.matrix.other, { coverage: "unsupported", mutation: "unsupported", security: "container" });
   assert.deepEqual(out.container, { runtime: "podman", image: IMG, present: true, reason: null });
   assert.deepEqual(calls, ["podman image exists " + IMG], "only the read-only image check ran");
@@ -108,17 +109,18 @@ test("8.0.0 G1-1: the census lists each gate per language with a tool, builtin o
   assert.equal(out.args[1], IMG);
 });
 
-test("8.0.0 G1-1: with every tool absent, coverage and security are unsupported and mutation stays builtin", { skip: !HAVE_PY }, () => {
+test("8.0.0 G1-1: with every tool absent, coverage and security are unsupported and mutation stays builtin (G7: python only)", { skip: !HAVE_PY }, () => {
   const { out, calls } = census({ markers: ["go.mod", "Cargo.toml"] });
   assert.deepEqual(out.languages, ["go", "rust"]);
-  for (const l of ["python", "node", "go", "rust"]) assert.deepEqual(out.matrix[l], { coverage: "unsupported", mutation: "builtin", security: "unsupported" }, l);
+  for (const l of ["python", "node", "go", "rust"]) assert.deepEqual(out.matrix[l], { coverage: "unsupported", mutation: l === "python" ? "builtin" : "unsupported", security: "unsupported" }, l);
   assert.deepEqual(out.container, { runtime: null, image: IMG, present: false, reason: "no container runtime (podman or docker)" });
   assert.deepEqual(calls, []);
   assert.deepEqual(census().out.languages, ["other"], "no marker file");
 });
 
 test("8.0.0 G1: a PENDING (or any unpinned) image is never checked: not available, image digest not pinned", { skip: !HAVE_PY }, () => {
-  for (const image of [AUDIT_IMAGE, "openfantasy/audit-lab:latest", "openfantasy/audit-lab@sha256:" + "AB".repeat(32), "x@sha256:abc"]) {
+  // 8.0.0 (G7): AUDIT_IMAGE is pinned now; the former placeholder stays an example
+  for (const image of ["openfantasy/audit-lab@sha256:PENDING", "openfantasy/audit-lab:latest", "openfantasy/audit-lab@sha256:" + "AB".repeat(32), "x@sha256:abc"]) {
     const { out, calls } = census({ markers: ["package.json"], stubs: { podman: 0, docker: 0 }, image });
     assert.deepEqual(calls, [], image + ": no runtime call");
     assert.deepEqual(out.container, { runtime: "podman", image, present: false, reason: "image digest not pinned" }, image);
@@ -126,14 +128,14 @@ test("8.0.0 G1: a PENDING (or any unpinned) image is never checked: not availabl
   }
 });
 
-test("8.0.0 G1: docker only when podman is absent; a missing image is not available with the reason", { skip: !HAVE_PY }, () => {
+test("8.0.0 G1: docker only when podman is absent; a missing image is not available with the reason (G7: after one failed pull)", { skip: !HAVE_PY }, () => {
   const { out, calls } = census({ stubs: { docker: 1 } });
-  assert.deepEqual(calls, ["docker image inspect " + IMG]);
+  assert.deepEqual(calls, ["docker image inspect " + IMG, "docker pull " + IMG]);
   assert.equal(out.container.runtime, "docker");
   assert.equal(out.container.present, false);
-  assert.match(out.container.reason, /^image not present locally/);
+  assert.equal(out.container.reason, "image not present locally (exit 1); pull failed (exit 1)");
   const both = census({ stubs: { docker: 0, podman: 1 } });
-  assert.deepEqual(both.calls, ["podman image exists " + IMG], "podman first");
+  assert.deepEqual(both.calls, ["podman image exists " + IMG, "podman pull " + IMG], "podman first");
   assert.equal(both.out.container.present, false);
 });
 
@@ -148,14 +150,15 @@ test("8.0.0 G1: host scanners are never reported or run; a runtime planted insid
   assert.equal(planted.out.matrix.python.coverage, "unsupported", "a coverage inside the repo is not a host tool");
 });
 
-test("8.0.0 G1-5: gate_tools.py names no IaC binary and no host scanner; it runs one command, the image check", () => {
+test("8.0.0 G1-5: gate_tools.py names no IaC binary and no host scanner; it runs the image check (G7: and one pull of the pinned image)", () => {
   const src = readFileSync(PROG, "utf8");
   const pathTools = new Function(grabConst("PATH_TOOLS") + "\nreturn PATH_TOOLS;")();
   assert.equal(pathTools.length, 6);
   for (const n of pathTools.concat(["checkov", "tfsec", "trivy", "terrascan", "kics", "tflint", "semgrep", "gitleaks", "bandit", "trufflehog"]))
     assert.ok(!new RegExp("\\b" + n + "\\b", "i").test(src), "gate_tools.py names " + n);
   assert.equal(src.match(/subprocess\.\w+\(/g).length, 1, "one subprocess call");
-  assert.ok(!/'(pull|run|exec)'/.test(src), "no pull, run or exec verb");
+  assert.ok(!/'(run|exec)'/.test(src), "no run or exec verb");
+  assert.deepEqual(src.match(/'pull'.*$/gm), ["'pull', image], 540)"], "one pull, of the pinned image only");
 });
 
 // ---------------------------------------------------------------- the workflow
@@ -171,7 +174,7 @@ test("8.0.0 G1-1: the preflight prompt runs gate_tools.py on the repo and AUDIT_
   assert.deepEqual(Object.keys(g.matrix), ["python", "node", "go", "rust", "other"]);
   for (const [l, row] of Object.entries(g.matrix))
     for (const gate of ["coverage", "mutation", "security"]) assert.ok(row[gate] === "unsupported" || row[gate] === "builtin" || /^[a-z0-9-]+$/.test(row[gate]), l + "." + gate);
-  assert.equal(g.container.reason, "image digest not pinned");
+  assert.equal(g.container.reason, "no container runtime (podman or docker)");
   assert.equal(out.labels.filter((l) => /preflight/.test(l)).length, 1, "no extra agent");
 });
 
@@ -183,7 +186,7 @@ test("8.0.0 G1-2: each missing gate tool is logged at preflight, before intake",
   assert.ok(lines.length >= 2, out.logs.join("\n"));
   for (const [l, i] of lines) assert.ok(i < end, "logged in preflight: " + l);
   assert.ok(lines.some(([l]) => /coverage unsupported/.test(l)), "a missing coverage tool is named");
-  assert.ok(lines.some(([l]) => /security: not available: image digest not pinned/.test(l)), "the container reason");
+  assert.ok(lines.some(([l]) => /security: not available: no container runtime \(podman or docker\)/.test(l)), "the container reason");
   assert.ok(out.labels.indexOf("preflight") < out.labels.indexOf("intake"));
 });
 
@@ -194,7 +197,8 @@ test("8.0.0 G1-3 (non-weakening): with no gate result, gates_not_run is exactly 
   // the same order, coverage with the gate's own reason
   // 8.0.0 (G4): and a held-out runner result (not_run: no store file on this machine, the harness default)
   // 8.0.0 (G5): and a mutation gate result (not_run: the harness default, no mutation run)
-  const own = { coverage: "no coverage tool: coverage is not on PATH", held_out: "store file missing on this machine", mutation: "tool absent: no mutation run" };
+  // 8.0.0 (G7): and a security gate result (partial: the harness default, no container runtime)
+  const own = { coverage: "no coverage tool: coverage is not on PATH", held_out: "store file missing on this machine", mutation: "tool absent: no mutation run", security_scan: "container scan not run: no container runtime (podman or docker); always-on checks only" };
   assert.deepEqual(out.result.gates_not_run, FOUR.map((x) => (own[x.gate] ? { gate: x.gate, reason: own[x.gate] } : x)));
   // the derived function: no state.gates entry, an earlier round's ran, a partial, the judge list
   const src = [grabConst("HELD_OUT_NOT_RUN"), grabConst("SCRIPT_FINDINGS_NOT_RUN"), grabConst("GATE_DEFAULTS"), grabFn("gatesNotRun")].join("\n");

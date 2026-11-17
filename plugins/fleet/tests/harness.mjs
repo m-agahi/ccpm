@@ -226,8 +226,9 @@ export function gateToolsOut(repo) {
   const row = (m) => ({ coverage: "unsupported", mutation: m, security: "unsupported" });
   return {
     languages: ["other"],
-    matrix: { python: row("builtin"), node: row("builtin"), go: row("builtin"), rust: row("builtin"), other: row("unsupported") },
-    container: { runtime: null, image: AUDIT_IMAGE, present: false, reason: "image digest not pinned" },
+    // 8.0.0 (G7): mutation is builtin for python only; no container runtime on the harness host
+    matrix: { python: row("builtin"), node: row("unsupported"), go: row("unsupported"), rust: row("unsupported"), other: row("unsupported") },
+    container: { runtime: null, image: AUDIT_IMAGE, present: false, reason: "no container runtime (podman or docker)" },
     args: [repo, AUDIT_IMAGE],
   };
 }
@@ -334,6 +335,8 @@ export async function runOne(script, args0) {
     if (base === "preflight" && r && typeof r === "object" && !rawResults.has(r) && !("session_project" in r))
       r.session_project = sessionProjectOut("__session_project" in script ? script.__session_project : argsProject(args));
     if (base === "preflight" && r && typeof r === "object" && !rawResults.has(r) && !("gate_tools" in r)) r.gate_tools = gateToolsOut(args && args.repo);
+    // 8.0.0 (G7): a gates stub with no security_scan slot relays the default (no runtime: partial)
+    if (/^infra:gates:/.test(base) && r && typeof r === "object" && !rawResults.has(r) && r.status === "ok" && !("security_scan" in r)) r.security_scan = secOut(prompt);
     if (r && typeof r === "object" && !rawResults.has(r)) r = fillPrograms(base, r, prompt);
     const mut = script.__mutate;
     if (mut && r && typeof r === "object" && (mut.label instanceof RegExp ? mut.label.test(base) : mut.label === base)) r = mut.fn(r, prompt, label);
@@ -396,7 +399,7 @@ export async function runOne(script, args0) {
     if (!(label in script) && /^role:fleet-held-out-runner:r\d+$/.test(label)) script[label] = { status: "ok", reason: "no store", store: "missing", store_digest: null, results: null };
     // 8.0.0 (G2): an unscripted gate step finds no coverage tool (not_run)
     // 8.0.0 (G5): and runs no mutant (tool absent: not_run)
-    if (!(label in script) && /^infra:gates:/.test(label)) return { status: "ok", reason: "ran", coverage: coverOut(prompt), mutation: mutOut(prompt) };
+    if (!(label in script) && /^infra:gates:/.test(label)) return { status: "ok", reason: "ran", coverage: coverOut(prompt), mutation: mutOut(prompt), security_scan: secOut(prompt) };
     // the bytecode purge is mechanical; unscripted purges succeed by default
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
     // 4.0.0 (1986): unscripted parked-run reads find no parked draft
@@ -1378,7 +1381,7 @@ export const PROGRAM_LABELS = [
   // 8.0.0 (G3): the held-out store write (read lazily)
   [/^infra:held-out:write/, [[null, "held_out", PROGRAM_KEYS["held_out:write"] || null]]],
   // 8.0.0 (G2): a code round's gate programs, one slot per gate (read lazily)
-  [/^infra:gates:/, [["coverage", "cover_diff", PROGRAM_KEYS["cover_diff"] || null], ["mutation", "mutants", PROGRAM_KEYS["mutants"] || null]]],
+  [/^infra:gates:/, [["coverage", "cover_diff", PROGRAM_KEYS["cover_diff"] || null], ["mutation", "mutants", PROGRAM_KEYS["mutants"] || null], ["security_scan", "sec_scan", PROGRAM_KEYS["sec_scan"] || null]]],
   [/^infra:path-check:/, [[null, "path_check", K("path_check")]]],
   [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")], ["gh_check", "gh_identity", K("gh_identity")], ["exclude", "exclude_add", PROGRAM_KEYS["exclude_add"] || null]]],
   // 5.0.8 (ledger 2030): a repo the workspace step did not check
@@ -1544,6 +1547,12 @@ export function coverArgsOf(prompt) {
 // 8.0.0 (G5): the mutants.py slot (same args as cover_diff); default: tool absent, not_run
 export function mutOut(prompt, over) {
   return Object.assign({ status: "not_run", reason: "tool absent: no mutation run", killed: 0, survived: [], not_run: 0, budget_hit: false, args: coverArgsOf(prompt) }, over);
+}
+// 8.0.0 (G7): the sec_scan.py slot; default: no container runtime, always-on checks only, nothing found
+export function secOut(prompt, over) {
+  const m = /sec_scan\.py'((?: '(?:[^']|'\\'')*')+)/.exec(prompt);
+  const args = m ? [...m[1].matchAll(/'((?:[^']|'\\'')*)'/g)].map((x) => x[1].replace(/'\\''/g, "'")) : [];
+  return Object.assign({ status: "partial", reason: "container scan not run: no container runtime (podman or docker); always-on checks only", findings: [], args }, over);
 }
 export function coverOut(prompt, over) {
   return Object.assign({ status: "not_run", reason: "no coverage tool: coverage is not on PATH", findings: [], args: coverArgsOf(prompt) }, over);

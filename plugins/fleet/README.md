@@ -1067,13 +1067,14 @@ stops: no worktree, no role agent, no write. Use it after an install or update.
 agent). It finds the repo's languages from marker files at its root (python, node, go, rust,
 else other) and prints one row per language: `coverage` (a host tool found by `which()` on a
 PATH with no entry inside the repo: python `coverage`; node `jest`, `c8`, `nyc`; go `go`; rust
-`cargo-llvm-cov`; else `unsupported`), `mutation` (`builtin` for python, node, go and rust, the
-fleet's own mutator; `unsupported` for other) and `security` (`container` only when the pinned
-image is present, else `unsupported`). The security scan runs only in the audit-lab container
-(ADR-1315): the census names the runtime (podman, else docker) and checks the image with the
-runtime's read-only `image exists` / `image inspect`, and only for an image pinned by a
-64-hex digest; a placeholder digest (`PENDING`, until G7) is `image digest not pinned`. It pulls
-and runs no image. Host semgrep and gitleaks are never reported, and the program names no IaC
+`cargo-llvm-cov`; else `unsupported`), `mutation` (`builtin` for python, the fleet's own
+mutator, which needs pytest; `unsupported` for the others) and `security` (`container` only when
+the pinned image is present, else `unsupported`). The security scan runs only in the audit-lab
+container (ADR-1315): the census names the runtime (podman, else docker) and checks the image with
+the runtime's `image exists` / `image inspect`, and only for an image pinned by a 64-hex digest
+(else `image digest not pinned`). When the pinned image is missing, it pulls that digest once
+(540 s; the preflight runs it with timeout 600000 ms) and checks again: the one network step, never
+a tag. A failed pull is not fatal: the image is not available, with the reason. It runs no image. Host semgrep and gitleaks are never reported, and the program names no IaC
 binary. The script logs one `gate census` line per language and one for the container before
 intake, and `probe.gate_tools` carries the rows. The census is advisory: an unusable relay (no
 digest, other args, a malformed shape) logs `gate census unusable` and marks no gate tool
@@ -1633,7 +1634,7 @@ The script pins the role contract, not the prose:
   preflight's `ledger_tools` census are never required and accept null, so a model's null never
   stops a build. `role_file` and `shared_file` stay required (null allowed by the schema, refused
   by the script's check on an ok result).
-- Gates this release does not run (coverage when no tool is found, mutation when it cannot run, security scan, and
+- Gates this release does not run (coverage when no tool is found, mutation when it cannot run, the security scan's container part, and
   held-out examples when no store is sealed or found) reach
   the judges as `{status: "not_run", reason}` and the PR body as `gates_not_run`; the role files
   call them not run, never run. Since 8.0.0 (G1, ADR-1316) the script derives the list: a gate
@@ -1670,6 +1671,26 @@ The script pins the role contract, not the prose:
   coder, and `tests` goes to the augmentation round (below). An approve with an unruled survivor
   becomes `fix_code`. There is no kill rate. There is no result cache:
   a digest retry runs the gate again (code under test can write the scratch dir).
+- **Security gate (8.0.0, G7).** `sec_scan.py` is the 3rd slot (`security_scan`) of
+  `infra:gates:r<n>`. Findings `[{path, lines, rule, kind: code|secret}]` are on the added
+  production lines only. Always on: a risky-API grep (shell=True, eval/exec, yaml.load without
+  SafeLoader, pickle, SQL built from strings, TLS checks off, os.system, and the `nosemgrep` and
+  `gitleaks:allow` markers), a size check against 1.5 x `est_diff_lines` (path `<diff>`, line 0)
+  and the frozen tests' string literals in added production lines. semgrep and gitleaks run only in
+  the pinned audit-lab image (`AUDIT_IMAGE`), never on the host:
+  `--pull=never --network none --read-only --tmpfs /tmp`, this uid, no capability, no new
+  privileges, read-only mounts of a scan
+  dir (only the judged blobs of the changed production files) and of a rules dir (the plugin's
+  `skills/build-task/sec-rules.yml`, pinned by its sha256 in `sec_scan.py`, plus the repo's
+  `.semgrep.yml` / `.semgrep/` from the base, never from the judged tree). A changed scanner config
+  or ignore file is scanned under a renamed path; the scan dir's own `.semgrepignore` is empty.
+  semgrep runs with `--disable-nosem` and `--max-target-bytes=0`, and a file it did not scan gives
+  `partial`; gitleaks redacts every secret. A result counts when any line of its span is added. A
+  findings list over 200 is `partial` and keeps every secret. No runtime or no image: `partial` (the
+  always-on part only), and `security_scan` stays in gates_not_run. A tool error gets one retry,
+  then stops at `gates`. The code judge exempts a code finding line in `exemptions` with gate
+  `security_scan` and a reason; a secret finding is never exempted. An approve with a finding left
+  becomes `fix_code`. The program runs only podman, docker and git, and names no IaC tool.
 - **Augmentation round (8.0.0, G6).** When every survivor has a ruling and some are ruled `tests`,
   the fleet runs one fix_tests detour per run. The first testable criterion's writer adds tests in
   one new file the script names (`_mut<m>` before the suffix of its first test file), with

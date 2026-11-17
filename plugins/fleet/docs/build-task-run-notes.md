@@ -4724,3 +4724,40 @@ judge reset, judge, judge fp hasher, purge, freeze hasher, re-freeze hash diff, 
 resets and 1 path check are uncapped: 10 capped, inside reserve(1 + 5 + 0) and reserve(3).
 The round in code round 3 still runs, then the loop top stops at cap (as a fix_tests detour does).
 ```
+
+## 8.0.0 notes (G7)
+
+### The security gate (G7, ADR-1315, ADR-1316)
+
+```text
+Digest: skopeo inspect --raw docker://docker.io/openfantasy/audit-lab:latest (2026-11-18, read only,
+no pull, no run) gives an OCI index; its sha256 is cc0d88ec...b66b, the Digest skopeo reports. The
+image label revision is e3c3ec2; plugins/audit-lab/docker/ is unchanged since (semgrep 1.175.0,
+gitleaks 8.30.1). The fully qualified name avoids podman's short-name prompt.
+Image config: Entrypoint ["sleep", "infinity"], User unset, WorkingDir /workspace. So each run sets
+--entrypoint, -e HOME=/tmp (semgrep writes ~/.semgrep; --read-only), -w /tmp (no ignore file in
+the cwd), and --pull=never (podman and docker pull a missing image at run time by default; the
+preflight pull is the only network step). Not verified against a real container here (no run).
+Rootless podman maps --user <uid> to a sub-uid: the scan dir is chmod 755/644 so it can read it.
+gitleaks 8.30.1 (source, cmd/root.go, cmd/directory.go): dir [path]; -r - is stdout (a file path is
+test-created and removed up front); -f json is needed with -r -; --exit-code N on leaks; a scan
+error exits 1 even with findings; an unknown flag 126. So 99 means findings, 0 clean, else error.
+semgrep: without --error, findings exit 0; 1..n are errors; the JSON errors list (a file it could
+not parse) gives partial, not ran.
+Evasion routes closed: the scan dir holds only the changed production files' judged blobs (no .git,
+.gitignore, .semgrepignore, .gitleaksignore, .gitleaks.toml, .semgrep*), --disable-nosem, the grep
+flags nosemgrep and gitleaks:allow (a secret), rules from the base, results filtered to added lines.
+Exemptions: gateLeft("security_scan") gives the code ids no reasoned exemption covers; every line of
+a kind secret finding is left whatever the exemptions say.
+Step 0: augName(testable, m) is the one generator; the resume accepts aug_files only as [augName(
+testable, r)] for r in 1..MAX_CODE_ROUNDS, normPath-equal, relative, no .. (G6 accepted any string
+list that was not already frozen, and [] set augAt -1 silently).
+Census: mutation builtin for python only (mutants.py: pytest and python source, else not_run).
+Security review of G7 (4 fail-opens): (1) config/ignore files were dropped from the scan dir and a
+diff of only those files gave ran; now each path component in SKIP is renamed _fleet_<name> and the
+result paths map back (dst); a collision exits non-zero. (2) semgrep's default ignore list (tests/,
+vendor/, build/ ...) applies when no .semgrepignore exists: checked with host semgrep 1.172, only
+pkg/a.py of six files was scanned; an empty /src/.semgrepignore and --max-target-bytes=0 scanned
+all six. paths.scanned is checked for every .py/.js/.mjs/.cjs/.jsx/.ts/.tsx file: a miss is
+partial. (3) secrets sort first and are never cut. (4) span: start..end, the added lines in it.
+```

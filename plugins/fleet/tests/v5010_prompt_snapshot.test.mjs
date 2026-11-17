@@ -114,11 +114,12 @@ const SCENARIOS = {
 // 8.0.0 car G3: plan mode runs infra:held-out:write (held_out.py write, the examples as base64 chunks) after infra:stage-plan: 1 more plan call (the harness planner returns one held-out example); the sealed plan ref carries held_out; the scope-and-plan role sha moves (probe unchanged)
 // 8.0.0 car G4: each code round with a sealed store runs infra:build-reset:held-out:r<n> and role:fleet-held-out-runner:r<n> (held_out_cmd, scratch_copy_cmd, the sealed held_out) before the code judge's reset: 2 more build calls; the code judge's held_out_results carries the runner's result, the role table gains fleet-held-out-runner, the code-judge role sha moves; the runner has its own database (fleet_hrun, in the verify-plan list) and a private HOME, TMPDIR and XDG_* (probe unchanged)
 // 8.0.0 car G5: infra:gates:r<n> runs mutants.py as its 2nd slot (mutation), one Bash call per slot, one after the other (no new call); the code judge's script_findings carries mutation, its schema mutant_rulings, the code-judge role sha moves; the run state carries held_out_seen (step 0) (probe unchanged)
+// 8.0.0 car G7: infra:gates:r<n> runs sec_scan.py as its 3rd slot (security_scan; no new call); the code judge's script_findings carries security, the code-judge role sha moves; AUDIT_IMAGE is the real digest and the preflight runs gate_tools.py with timeout 600000 ms (the preflight pull; the probe pin moves)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 85, sha256: "6e66d9c81456ef8e59d3b2fc4031e3ee4fb98e912b12bd22ee9486567c249a79" },
-  "confirm auto (gates, then build in one run)": { calls: 87, sha256: "31841aa2affc8047c768f0e5d8c816bbeb379d2f504e3599d1e047af596e27a8" },
-  "short path (one test writer)": { calls: 84, sha256: "c44c5b98f660e6a2f9ac6e58e227175af0ba13b13b86e660beb469da940262df" },
-  "probe": { calls: 2, sha256: "0699a53c5c939afed37e60fae64f04e0adfd8fd0c6b8e4a344d2ac53bd59e02b" },
+  "plan then build (confirm ask)": { calls: 85, sha256: "96ab006c2c88256bcef71f9eb58bae678ffb70ce9d78119ae5e6dd763fb3d6a9" },
+  "confirm auto (gates, then build in one run)": { calls: 87, sha256: "1683ae36d8dda1d44b7b7d6b651b20aadcc16e1fb7ba7b52a238d40292d1074c" },
+  "short path (one test writer)": { calls: 84, sha256: "31c3945568689c78ec5fca38d93c3162467e741f402d003d86a0bbc068d743c0" },
+  "probe": { calls: 2, sha256: "b007168548b60fbbb404893e8af0f3a6e5f62349166467f6ebec532e2cebe9ff" },
 };
 
 for (const [name, fn] of Object.entries(SCENARIOS)) {

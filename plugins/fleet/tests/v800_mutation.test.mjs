@@ -399,7 +399,8 @@ test("8.0.0 G5: mutants runs as the 2nd slot of infra:gates:r<m> (no new agent, 
   assert.ok(p.indexOf("cover_diff.py") < p.indexOf("mutants.py"), "coverage first, then mutation");
   assert.match(p, /one after the other, never in the background or in parallel/);
   assert.deepEqual(argsOf(p, "mutants"), argsOf(p, "cover_diff"));
-  assert.deepEqual(inputsOf(p).gates, ["coverage", "mutation"]);
+  // 8.0.0 (G7): the security gate is the 3rd slot (v800_security)
+  assert.deepEqual(inputsOf(p).gates, ["coverage", "mutation", "security_scan"]);
   // the default stub: no mutation run (not_run); the judge sees it; mutation stays listed with its reason
   const cj = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
   assert.deepEqual(cj.script_findings.mutation, { status: "not_run", reason: "tool absent: no mutation run", survived: [] });
@@ -465,9 +466,9 @@ test("8.0.0 G5: the code-judge schema has mutant_rulings [{id, target: tests|cod
   assert.ok(!/kill rate/i.test(SOURCE.replace(/\/\/.*$/gm, "")), "no kill-rate stop in the script");
 });
 
-test("8.0.0 G5: the program checklist: PROGRAM_COUNT 48, the slot, the keys, the output types", () => {
-  assert.equal(PROGRAM_COUNT, 48);
-  assert.match(SOURCE, /\[\/\^infra:gates:\/, \[\["coverage", "cover_diff"\], \["mutation", "mutants"\]\]\]/);
+test("8.0.0 G5: the program checklist: PROGRAM_COUNT 48 (49 since G7), the slot, the keys, the output types", () => {
+  assert.equal(PROGRAM_COUNT, 49);
+  assert.match(SOURCE, /\[\/\^infra:gates:\/, \[\["coverage", "cover_diff"\], \["mutation", "mutants"\], /);
   assert.match(SOURCE, /"mutants": \["status", "reason", "killed", "survived", "not_run", "budget_hit", "args"\]/);
   assert.match(SOURCE, /\n  mutants: \{ status: STR, reason: STR_OR_NULL, killed: INT, survived: /);
 });

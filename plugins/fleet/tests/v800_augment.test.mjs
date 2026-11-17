@@ -141,7 +141,8 @@ test("8.0.0 G6-1: a resumed build hashes the round's file as frozen (aug_files i
   assert.equal(second.result.status, "ok", second.result.reason);
   assert.deepEqual(inputsOf(call(second, "hasher:resume").prompt).test_files, ["tests/test_a.py", "tests/test_b.py", NEW]);
   // a forged list: not an array, or a path already frozen
-  for (const bad of ["x", ["tests/test_a.py"], [1]]) {
+  // 8.0.0 G7 step 0: exactly one entry, normPath-equal, relative, no .., the generated name of a round
+  for (const bad of ["x", ["tests/test_a.py"], [1], [], [NEW, "tests/test_a_mut2.py"], ["./" + NEW], [NEW + "/"], ["/" + NEW], ["tests/../" + NEW], ["../tests/test_a_mut1.py"], ["tests/test_a_mut9.py"], ["tests/test_b_mut1.py"], ["tests/evil.py"], [" " + NEW]]) {
     s["infra:read-state"] = Object.assign({}, s["infra:read-state"], { message: JSON.stringify(Object.assign({}, st, { aug_files: bad })) });
     const r = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
     assert.equal(r.result.stop_gate, "resume", JSON.stringify(bad));

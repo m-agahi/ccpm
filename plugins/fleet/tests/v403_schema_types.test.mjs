@@ -860,6 +860,8 @@ const READS = {
     // 8.0.0 (G6)
     "af array": "parsed: JSON.parse of the run-state message (digest-checked read_state), aug_files",
     "f string": "parsed: an entry of the run-state's aug_files (checked as an array first)",
+    // 8.0.0 (G7 step 0): exactly one entry
+    "af.length number-literal": "parsed: the run-state's aug_files (checked as an array first)",
     // 6.0.1 (ledger 2050)
     "c.parents array": "prog:verify_since:commits_since[].parents",
     "c.parents.length number-literal": "parsed: the length of prog:verify_since:commits_since[].parents (checked as an array first)",

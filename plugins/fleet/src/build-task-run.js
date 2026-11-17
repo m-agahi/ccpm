@@ -270,8 +270,9 @@ const SCRIPT_FINDINGS_NOT_RUN = { status: "not_run", reason: "fleet v2: mutation
 const GATE_DEFAULTS = [["mutation", SCRIPT_FINDINGS_NOT_RUN], ["coverage", SCRIPT_FINDINGS_NOT_RUN], ["security_scan", SCRIPT_FINDINGS_NOT_RUN], ["held_out", HELD_OUT_NOT_RUN]];
 const GATE_STATUS = ["ran", "partial", "not_run"];
 const MUTANT_TARGETS = ["tests", "code", "equivalent"];
-// 8.0.0 (G1, ADR-1315): the security-scan image, pinned by digest (G7 resolves it; PENDING: not available)
-const AUDIT_IMAGE = "openfantasy/audit-lab@sha256:PENDING";
+// 8.0.0 (G1, ADR-1315): the security-scan image, pinned by its index digest (G7: skopeo inspect of :latest,
+// 2026-11-18; revision e3c3ec2, audit-lab 6.0.1: semgrep 1.175.0, gitleaks 8.30.1). A new digest is a fleet release.
+const AUDIT_IMAGE = "docker.io/openfantasy/audit-lab@sha256:cc0d88ecfa9c70ab81be01331f05ca822db0f197d212de63c571add7aaceb66b";
 // The planner may emit these
 const HELD_OUT_KEY = "held_out_examples";
 const RUNNER_CONFIG_FILES = [
@@ -1685,7 +1686,7 @@ const PROGRAM_SHA256 = {
   "fleet_branch": "f1af514598ab542d58a16456f00e5cba0aeb43131fc2eab1618e2ca87bf846d7",
   "fleet_scan": "2cd4e1171e82f47fa2c1356ba175398f33bc10ae65258720cf113b65cb78969f",
   "format_files": "a8a416d1d5566038a485428fcc82d792a90923578e1ba471f9c3a12a846324ba",
-  "gate_tools": "4342db6bbd911b02171378c3b033bceac37f2d691425b9aef06d2f4d6a998da2",
+  "gate_tools": "208fd938d377ba0a051fe3e9cd0bcd13aca1040f1ee544c40cc10699db0cd784",
   "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
   "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
   "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
@@ -1715,6 +1716,7 @@ const PROGRAM_SHA256 = {
   "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
   "scratch_copy": "a32ea715f21ed91fccf4689c84f8a8e8ceab62b30439f2061ba6da35d6defae3",
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
+  "sec_scan": "b22b6bf73d223d80e191a82028b12a119b0aca75f0df75dce7ee6353fa92532c",
   "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",
   "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
   "test_db_decl": "c2e9f36d23fb147835a85c4421d5e38a05912d343fdaa1f08fe285c3cfc5c11d",
@@ -1730,7 +1732,7 @@ function programTable() {
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-  "fleet-code-judge": "226f6e1534aab5ee1ada986ed8dfeea9e27871db4c4f2050efac76c1cb91fad2",
+  "fleet-code-judge": "fdd95e92358734335190c162d165a5e72d0b10ce4c6f17397b878869810cf4eb",
   "fleet-coder": "ee4e8960386899888881cb56e377c5ca74a23c7c93c7ac8971504890245cf3b4",
   "fleet-held-out-runner": "30cae706ba8631be377b92c3bf0d44714511b96742b54689111b2d1a29fcbe1f",
   "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
@@ -1844,7 +1846,7 @@ const PROGRAM_SLOTS = [
   // 8.0.0 (#62 B2): each read-only surface program in its own slot
   [/^infra:surfaces:/, [["hook_surface", "hook_surface"], ["ruleset_surface", "ruleset_surface"], ["pr_convention", "pr_convention"], ["changed_defs", "changed_defs"]]],
   // 8.0.0 (G2): one slot per gate, named after the gate
-  [/^infra:gates:/, [["coverage", "cover_diff"], ["mutation", "mutants"]]],
+  [/^infra:gates:/, [["coverage", "cover_diff"], ["mutation", "mutants"], ["security_scan", "sec_scan"]]],
   // 8.0.0 (G3): a write step (no digest retry)
   [/^infra:held-out:write/, [[null, "held_out"]]],
   [/^infra:review-paths:/, [[null, "review_paths"]]],
@@ -1872,6 +1874,8 @@ const PROGRAM_KEYS = {
   "cover_diff": ["status", "reason", "findings", "args"],
   // 8.0.0 (G5)
   "mutants": ["status", "reason", "killed", "survived", "not_run", "budget_hit", "args"],
+  // 8.0.0 (G7)
+  "sec_scan": ["status", "reason", "findings", "args"],
   // 8.0.0 (G3): show runs in G4's runner role
   "held_out:write": ["sha256", "count", "per_criterion", "dropped", "args"],
   "held_out:show": ["examples", "sha256", "args"],
@@ -1981,6 +1985,7 @@ const PROGRAM_OUT = {
   },
   held_out: { sha256: STR_OR_NULL, count: INT, per_criterion: { type: "object", additionalProperties: INT }, dropped: { type: "array", items: { type: "object", properties: { criterion: STR_OR_NULL, index: INT, why: STR } } }, examples: { type: "array", items: { type: "object", properties: { criterion_id: STR, given: STR, when: STR, then: STR } } }, args: STRS, digest: STR },
   cover_diff: { status: STR, reason: STR_OR_NULL, findings: { type: "array", items: { type: "object", properties: { path: STR, lines: { type: "array", items: INT } } } }, args: STRS, digest: STR },
+  sec_scan: { status: STR, reason: STR_OR_NULL, findings: { type: "array", items: { type: "object", properties: { path: STR, lines: { type: "array", items: INT }, rule: STR, kind: STR } } }, args: STRS, digest: STR },
   mutants: { status: STR, reason: STR_OR_NULL, killed: INT, survived: { type: "array", items: { type: "object", properties: { id: STR, path: STR, line: INT, op: STR } } }, not_run: INT, budget_hit: BOOL, args: STRS, digest: STR },
   branch_scan: {
     head: STR,
@@ -2547,7 +2552,7 @@ function preflightPrompt(inputs) {
     emitProg("session_project", "sha256sum -- <scripts_dir>/session_project.py && python3 -I <scripts_dir>/session_project.py") +
     "\nIt prints one JSON object " + printsKeys("session_project") + ": " + relayAs("session_project") + ". Non-zero exit or not run -> session_project null.\n" +
     // 8.0.0 (G1): the gate tool census
-    "Then, scripts_dir not null, run this one command as one Bash call, with <scripts_dir> replaced and nothing else changed: " +
+    "Then, scripts_dir not null, run this one command as one Bash call with timeout 600000 ms, with <scripts_dir> replaced and nothing else changed: " +
     emitProg("gate_tools", "sha256sum -- <scripts_dir>/gate_tools.py && python3 -I <scripts_dir>/gate_tools.py " + shQuote(inputs.repo) + " " + shQuote(AUDIT_IMAGE)) +
     "\nIt prints one JSON object " + printsKeys("gate_tools") + ": " + relayAs("gate_tools") + ". Non-zero exit or not run -> gate_tools null.\n" +
     "Return {ledger_tools, scripts_probe, scripts_dir, path_check, session_project, gate_tools, reason}."
@@ -4412,6 +4417,11 @@ async function heldOutRun(ref, m, inputs) {
   return { status: "ran", reason: null, results: res };
 }
 
+// 8.0.0 (G6): the augmentation round's new file: the first test-named file of the first testable criterion, _mut<m> before its suffix
+function augName(testable, m) {
+  const t = testable[0].test_files;
+  return (t.find((f) => /^test_|_test\.|[.-](test|spec)\.|Test\./.test(f.split("/").pop())) || t[0]).replace(/^(.*\/)?([^/.]*?)((?:_test)?(?:\.[^/]*)?)$/, "$1$2_mut" + m + "$3");
+}
 // 8.0.0 (G5, ADR-1316): this round's survivors the code judge did not rule (a target and a non-blank reason), and
 // the coder's findings for those ruled code, and those ruled tests with their mutant (G6: the augmentation round);
 // equivalent passes. No kill-rate stop.
@@ -7059,7 +7069,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (rs.clean !== true) mis("worktree not clean");
       // 8.0.0 (G6): the augmentation round's files are frozen too; the maps digest below checks them
       const af = st.aug_files;
-      if (af !== undefined && (!Array.isArray(af) || af.some((f) => typeof f !== "string" || frozenFiles.indexOf(f) >= 0))) mis("aug_files");
+      // 8.0.0 (G7 step 0): one entry, the generated name of a round (normPath-equal, relative, no ..)
+      if (af !== undefined && (!Array.isArray(af) || af.length !== 1 || af.some((f) => typeof f !== "string" || normPath(f) !== f || f[0] === "/" || f.split("/").indexOf("..") >= 0 || frozenFiles.indexOf(f) >= 0 || !Array.from({ length: MAX_CODE_ROUNDS }, (_, r) => testable.length && augName(testable, r + 1)).includes(f)))) mis("aug_files");
       if (af) frozenFiles.push(...(state.augFiles = af));
       const hr = await hasher("hasher:resume", mainWt, hashedFiles, "Verify");
       if (mapsDigest(hr.hashes) !== st.maps_digest) mis("frozen maps changed since " + st.last_gate);
@@ -8516,9 +8527,11 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const tc0 = planFacts.test_cmd;
       // 8.0.0 (G5): the mutation gate, the same args, a 2nd Bash call of the same agent (no new agent or reset)
       const ga = [mainWt, updRound ? upd.base : planBase, h.fingerprint.tree, tc0.command, JSON.stringify(Object.assign({}, tc0.env, testEnvFor("cjudge", "gates-r" + m))), JSON.stringify(frozenFiles)];
-      await runGate("infra:gates:r" + m, [["coverage", "cover_diff", ga], ["mutation", "mutants", ga]], "Code");
+      // 8.0.0 (G7, ADR-1315): the security gate, a 3rd Bash call
+      await runGate("infra:gates:r" + m, [["coverage", "cover_diff", ga], ["mutation", "mutants", ga], ["security_scan", "sec_scan", [mainWt, ga[1], ga[2], ga[5], String(planFacts.est_diff_lines), AUDIT_IMAGE]]], "Code");
       const cov = state.gates.coverage;
       const mut = state.gates.mutation;
+      const sec = state.gates.security_scan;
       // 8.0.0 (G4, ADR-1152): the held-out runner, after its own reset; the judge's fp-post hasher covers it
       const hoR = await heldOutRun(ref, m, Object.assign({}, common, { criteria, test_cmd: tc0, plan_commit: updRound ? upd.base : planBase, code_tree: h.fingerprint.tree }));
       await resetBuild("code-judge:r" + m, ["cjudge-r" + m], "Code");
@@ -8533,7 +8546,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           // the findings still pending for this judge ([] in round 1)
           prior_findings: stripHeldOut(judgePrior),
           held_out_results: hoR,
-          script_findings: Object.assign({ coverage: { status: cov.status, reason: cov.reason, findings: cov.findings }, mutation: { status: mut.status, reason: mut.reason, survived: mut.findings } }, SCRIPT_FINDINGS_NOT_RUN),
+          script_findings: Object.assign({ coverage: { status: cov.status, reason: cov.reason, findings: cov.findings }, mutation: { status: mut.status, reason: mut.reason, survived: mut.findings }, security: { status: sec.status, reason: sec.reason, findings: sec.findings } }, SCRIPT_FINDINGS_NOT_RUN),
           repo_obligations: judgeObligations,
           ...roleEnv("cjudge", "cjudge-r" + m),
         }, tc ? { test_conflict: tc } : {}),
@@ -8594,6 +8607,16 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         gate("code round " + m + ": coverage gate: code-judge approve converted to fix_code (" + covLeft.length + " line(s): " + covLeft.join(", ") + ")");
         continue;
       }
+      // 8.0.0 (G7, ADR-1315): every security finding line needs a reasoned exemption; a secret never has one
+      const secX = gateLeft("security_scan", cj.exemptions, m);
+      const secLeft = [].concat(...sec.findings.map((f) => f.lines.map((l) => f.path + ":" + l).filter((id) => f.kind === "secret" || secX.indexOf(id) >= 0).map((id) => id + " " + f.rule)));
+      if (secLeft.length) {
+        coderFindings = [{ target: "code", criterion: null, finding: "security gate: findings no exemption covers (a secret is never exempted): " + secLeft.join(", ") + " -- fix the code or remove the secret" }];
+        judgePrior = coderFindings.slice();
+        lastRoundGate = "security_scan";
+        gate("code round " + m + ": security gate: code-judge approve converted to fix_code (" + secLeft.length + " line(s))");
+        continue;
+      }
       // 8.0.0 (G5, ADR-1316): every survivor ruled; one ruled code goes to the coder
       const mutF = mutantsLeft(cj.mutant_rulings, m);
       // G6: those ruled tests go to the augmentation round, once per run (never on the forge's merge, ADR-1220 R6),
@@ -8609,8 +8632,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         augAt = m;
         // the round's new file: the first test file of the first testable criterion, _mut<m> before its suffix
         const c0 = testable[0] || halt("needs_human", "code round " + m + ": surviving mutant(s) ruled tests, but no criterion has a test file", "gates");
-        const f0 = c0.test_files.find((f) => /^test_|_test\.|[.-](test|spec)\.|Test\./.test(f.split("/").pop())) || c0.test_files[0];
-        const files = [f0.replace(/^(.*\/)?([^/.]*?)((?:_test)?(?:\.[^/]*)?)$/, "$1$2_mut" + m + "$3")];
+        const files = [augName(testable, m)];
         aug = { c: Object.assign({}, c0, { test_files: files }), orig: frozenFiles.slice(), files, mut: mutT.map((f) => f.mutant) };
         frozenFiles.push(...(state.augFiles = files));
         gate("code round " + m + ": mutation gate: augmentation round for " + aug.mut.map((v) => v.id).join(", ") + " -> " + files.join(", "));

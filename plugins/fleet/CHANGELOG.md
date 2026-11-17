@@ -248,6 +248,54 @@ not_run, budget_hit}`. A red baseline: `not_run` "baseline red in scratch copy";
   mutation-augmentation section is active; the test judge gains "Mutation-augmentation round"; the
   code judge's `tests` ruling text changes (`v800_augment.test.mjs`). Tests changed on purpose:
   G5-3 (v800_mutation: `tests` goes to the round) and v5_prompts (the section is active).
+- Car G7 (the security gate, gate 10, yaadgaar #1, ADR-1315, ADR-1316): a 49th program,
+  `sec_scan.py <worktree> <base> <tree> <exclude json> <est_diff_lines> <image>`, runs as the 3rd
+  slot (`security_scan`) of the existing `infra:gates:r<n>` agent, one Bash call after mutation (no
+  new agent, no cap change). Findings `[{path, lines, rule, kind: code|secret}]` are on the added
+  lines of the changed production files only (the frozen tests aside), from G2's attribute-safe diff.
+  Always on, with no container: a risky-API grep (shell=True, eval/exec, yaml.load without
+  SafeLoader, pickle/marshal load, SQL built from strings, TLS checks off, os.system/popen, and the
+  `nosemgrep` and `gitleaks:allow` markers, the second a secret), a size check (added production
+  lines over 1.5 x `est_diff_lines`: path `<diff>`, line 0; null skips it with a note) and the
+  string literals of the frozen tests found in added production lines. The container part: semgrep
+  and gitleaks only in `AUDIT_IMAGE`, now the real index digest
+  `docker.io/openfantasy/audit-lab@sha256:cc0d88ec...` (read with `skopeo inspect` of `:latest` on
+  2026-11-18; it equals the sha256 of the raw index; revision e3c3ec2, audit-lab 6.0.1: semgrep
+  1.175.0, gitleaks 8.30.1, Dockerfile unchanged since). Podman, else docker, with
+  `run --rm --pull=never --network none --read-only --tmpfs /tmp`,
+  `--user <uid>:<gid> --security-opt no-new-privileges --cap-drop ALL -e HOME=/tmp -w /tmp`,
+  a read-only mount of a scan dir that holds
+  only the judged blobs of the changed production files (no `.git`, no ignore or scanner config file
+  of the judged tree) and a read-only mount of a rules dir: the plugin's pinned rule file
+  `skills/build-task/sec-rules.yml` (its sha256 is in `sec_scan.py`; a changed file is an error)
+  plus the repo's `.semgrep.yml` / `.semgrep/` read from the base. The image's entrypoint is
+  `sleep infinity`, so each run sets `--entrypoint semgrep` / `--entrypoint gitleaks`. semgrep
+  `scan --metrics=off --disable-version-check --disable-nosem --config /rules --json /src`: exit 0
+  with a results list, any other exit an error, reported errors `partial`. gitleaks
+  `dir --no-banner --redact=100 --exit-code 99 -f json -r - /src`: 0 clean, 99 findings, any other
+  exit an error. A
+  tool error or output that does not parse exits non-zero: one retry, then needs_human at `gates`.
+  No runtime, no image or no pinned digest: `partial`, "container scan not run: <why>; always-on
+  checks only", and security_scan stays in gates_not_run. Host scanners are never used, and the
+  program runs only podman, docker and git (`EXE`). The code judge gets `script_findings.security`;
+  every code finding line needs an `exemptions` entry `{gate: "security_scan", ...}` with a reason,
+  and a secret is never exempted: either turns an approve into `fix_code`. Preflight pull: when the
+  pinned digest is missing, `gate_tools.py` pulls it once (540 s, the caps lifted) and checks again,
+  so the census shows the result; a failed pull is not fatal. The preflight runs it with timeout
+  600000 ms. The census says mutation `builtin` for python only (the mutator needs pytest). Step 0
+  (security review of G6): a resumed `aug_files` must be exactly one entry, `normPath`-equal,
+  relative, with no `..`, and the generated name of a round (`augName`, shared with the round); else
+  the resume stops. Security review of G7 (4 fail-opens, fixed): a changed scanner config or ignore
+  file (`.gitignore`, `.semgrepignore`, `.gitleaks*`, `.semgrep*`) is scanned under a renamed path
+  (a fleet prefix on the name) and its findings are mapped back; the scan dir's own `.semgrepignore` is empty
+  and semgrep runs with `--max-target-bytes=0`, so its default ignore list and size limit are off; a
+  rule-language file missing from semgrep's `paths.scanned` gives `partial` with the file named (no
+  `paths.scanned` is an error); a truncated list keeps every secret finding first and cuts only the
+  others at 200; a semgrep or gitleaks result counts when any line of its span (start to end) is
+  added, with the added lines it covers. Tests: `v800_security.test.mjs`; v800_augment gains the forged lists. Changed on
+  purpose: the program count (v4_s1), the gate census rows and the image (v800_gate_tools, harness),
+  the security reason in the gates_not_run tests (build_task_run, v800_gate_tools), the gates slot
+  list (v800_mutation), v502 (`sec_scan` prints through `gatePrompt`), v403 READS and the v5010 pins.
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

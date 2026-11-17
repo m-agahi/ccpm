@@ -37,10 +37,12 @@ except Exception:
 # fleet 8.0.0 (G1, ADR-1315, ADR-1316): the gate tool census. Args: <repo> <image>.
 # Languages come from marker files at the repo root; coverage tools from which()
 # on PATH (no entry inside the repo). Mutation is the built-in mutator for the
-# supported languages. The security scan is the pinned container image only: the
-# runtime is podman, else docker; the one command it runs is the runtime's
-# read-only image check, and only for an image pinned by digest. It pulls and
-# runs no image and no scanner. Host scanners are never named here.
+# supported languages (8.0.0 G7: python with pytest only). The security scan is
+# the pinned container image only: the runtime is podman, else docker; for an
+# image pinned by digest it runs the runtime's image check and, when the image
+# is missing, one pull of that digest (ADR-1315: the one network step; never a
+# tag), then the check again. It runs no image and no scanner. Host scanners are
+# never named here.
 import hashlib, json, os, re, shutil, subprocess, sys
 if len(sys.argv) != 3:
     sys.stderr.write('usage: gate_tools.py <repo> <image>\n')
@@ -58,17 +60,28 @@ if not re.match(r'^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$', image):
 elif runtime is None:
     reason = 'no container runtime (podman or docker)'
 else:
-    argv = [shutil.which(runtime), 'image', 'exists' if runtime == 'podman' else 'inspect', image]
+    rt = shutil.which(runtime)
+    def lift():
+        # the runtime (a Go program) needs more address space than this program's cap
+        for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+            _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
+    def sh(argv, t):
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=t, preexec_fn=lift).returncode
+    check = [rt, 'image', 'exists' if runtime == 'podman' else 'inspect', image]
     try:
-        r = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
-        present = r.returncode == 0
-        reason = None if present else 'image not present locally (exit %d)' % r.returncode
+        code = sh(check, 30)
+        present = code == 0
+        if not present:
+            reason = 'image not present locally (exit %d)' % code
+            pull = sh([rt, 'pull', image], 540)
+            present = pull == 0 and sh(check, 30) == 0
+            reason = None if present else reason + ('; pull exit 0, still missing' if pull == 0 else '; pull failed (exit %d)' % pull)
     except Exception as e:
-        reason = '%s image check failed: %s' % (runtime, type(e).__name__)
+        present, reason = False, '%s image check or pull failed: %s' % (runtime, type(e).__name__)
 matrix = {}
 for n in ('python', 'node', 'go', 'rust', 'other'):
     cov = next((t for t in COVER[n] if shutil.which(t)), None)
-    matrix[n] = {'coverage': cov or 'unsupported', 'mutation': 'builtin' if n != 'other' else 'unsupported', 'security': 'container' if present else 'unsupported'}
+    matrix[n] = {'coverage': cov or 'unsupported', 'mutation': 'builtin' if n == 'python' else 'unsupported', 'security': 'container' if present else 'unsupported'}
 out = {'languages': langs, 'matrix': matrix, 'container': {'runtime': runtime, 'image': image, 'present': present, 'reason': reason}, 'args': sys.argv[1:]}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
