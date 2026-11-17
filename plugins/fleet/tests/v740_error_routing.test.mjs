@@ -84,7 +84,7 @@ test("7.4.0 #66 E2: pr_state.py merge whose branch delete raises prints merged t
       "sys.exit('unexpected ' + json.dumps(a))\n";
     writeFileSync(join(dir, "bin", "gh"), gh);
     chmodSync(join(dir, "bin", "gh"), 0o755);
-    const r = spawnSync(PY, ["-I", join(SCRIPTS_SRC, "pr_state.py"), "merge", "gh", "o/r", "7", SHA1], { encoding: "utf8", env: { PATH: join(dir, "bin") + ":/usr/bin:/bin", HOME: dir } });
+    const r = spawnSync(PY, ["-I", join(SCRIPTS_SRC, "pr_state.py"), "merge", "gh", "o/r", "7", SHA1], { encoding: "utf8", env: { PATH: join(dir, "bin"), HOME: dir } });
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.equal(o.merged, true);

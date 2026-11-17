@@ -501,6 +501,9 @@ fixed before the PR.
   (existing fixtures whose caller map names `chart/guards.py` now trigger the plan sweep).
 - `v740_test_conflict` Q4 fixtures carry the freeze and post-coder maps forward (the harness
   adds run-state refs to a stub's own git map on its first call only).
+- `v740_error_routing` E2 (pr_state merge, branch delete raises): the spawned `PATH` is the stub
+  dir only, no `/usr/bin:/bin`. A runner with a real `gh` in `/usr/bin` answered the delete call
+  and `error` stayed null; the fake `gh` needs no other program.
 
 ## [7.3.0] - 2026-11-17
 
