@@ -15,7 +15,7 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 - `gh_cmd`: the GitHub command the workflow checked for `repo` (it has push access there). Call it `<gh>` below. Use exactly it for every GitHub call; never choose another one yourself.
 - `plan_blob`: the plan doc's git blob id; read it only with `git --no-replace-objects -C <worktree> cat-file blob <plan_blob>`. The plan doc is not in the worktree: never write it there.
 - `plan_path`, `tldr` (the plan's TL;DR), `criteria`, `suite_result` (from the code judge).
-- `gates_not_run` (optional): `[{gate, reason}]` — quality gates that did not run for this change. In this release it always lists at least `held_out`, `coverage`, `mutation` and `security_scan`.
+- `gates_not_run` (optional): `[{gate, reason}]` — quality gates that did not run for this change. It lists each gate that did not run or ran only in part.
 - `review_notes` (optional; absent → `[]`): `[{id, severity, category, file, line, summary, evidence}]` — review findings to show the human reader. See "Review notes" below.
 - `body_findings` (optional; absent → `[]`): `[{id, severity, category, file, line, summary, evidence}]` — claims in the PR body that the review found false or unbacked in this run. The list repeats on every later call of the run, also for a claim an earlier call already fixed. Write no such claim: rewrite or remove it from your sources; a claim you cannot back moves under "Not verified". Never write the flagged text as it was.
 - `intent` (optional; absent or null → no intent lines): the intent judge's result, `{status, verdict, reason, deviations: [{item, allowed_by, source_ref, fails_closed, verdict, reason}], coverage, classification}`. See "Intent check" below.

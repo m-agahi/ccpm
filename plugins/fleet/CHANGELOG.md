@@ -59,6 +59,41 @@ Fleet 8.0.0: one major release in two cars. Car A: yaadgaar #74 and #71. Car B: 
   list only with a digest-checked `ran` result of the same code round), and with no gate result
   it is exactly today's four entries in today's order. The size guard is 495000 bytes (was
   480000; still under Claude Code's 524288 cap) (`v800_gate_tools.test.mjs`).
+- Car G2 (the coverage gate, #6 half, gate 5, ADR-1316): a 46th program, `cover_diff.py <worktree>
+  <base> <tree> <test_cmd> <env json> <exclude json>`. Each code round, after its own build-dir
+  reset (`infra:build-reset:gates:r<n>`, with the PATH check) and before the code judge's, one
+  read-only agent `infra:gates:r<n>` (sonnet, `fleet:judge`, capped) runs it through `runGate`.
+  The program makes a detached worktree under `<dirname(worktree)>/scratch` at the plan base (the
+  update-branch base in a round after update-branch), reads the judged tree in (`read-tree -u
+  --reset`) and removes it again; the main worktree is never touched. It runs the sealed pytest
+  test_cmd (`pytest`, `python[3] -m pytest`, `uv run [...] pytest`; `<paths>` dropped) once plain
+  and once under the coverage module (`coverage`, `python -m coverage` or `uv run ... coverage`)
+  with its own rcfile (no repo omit list, no pragma exclusion; excluded lines count as uncovered),
+  all within one 540 s deadline, the children with the caps lifted, in their own process group,
+  behind the PATH guard of `scratch_copy.py run`. It prints the added lines of the changed
+  production `.py` files (the frozen tests excluded) that no test ran; a changed file the report
+  lacks counts every added line that is not blank or a comment. No coverage tool, a non-pytest
+  test_cmd or a red baseline: `not_run` with the reason; the deadline or more than 400 lines:
+  `partial`; a tool that errs after a green baseline: a non-zero exit, so `runGate` retries once
+  and then stops at gate `gates`. The code judge gets `script_findings.coverage` and a new
+  optional `exemptions: [{gate, path, lines, reason}]` (a blank reason exempts nothing; the
+  script checks it, the schema has no pattern keyword); an approve with an unexempted uncovered line becomes
+  `fix_code`, routed like the obligations gate. No numeric stop: the judge rules each line. A
+  `ran` result removes coverage from `gates_not_run`. Roles: the code judge's coverage section
+  and output, and the pr-opener no longer says the list always holds four gates. A happy build
+  makes 62 calls, not 60 (61 agents; the gate is one more capped agent per code round, so a code
+  round reserves 9, not 8) (`v800_coverage.test.mjs`).
+  Security review fixes: no `COVERAGE_*` variable reaches the child (the build env's
+  `COVERAGE_FILE` included); `--rcfile` and `--data-file` go on argv only, and the data file and
+  the report sit in a random temp dir outside the scratch dir and the copy. A changed file with
+  no executed line has no records of its own and counts as wholly uncovered. A red baseline is
+  `not_run` "baseline red in scratch copy". Every git diff runs with `--text --no-textconv
+  --no-ext-diff`, `core.attributesFile=/dev/null` and `GIT_ATTR_NOSYSTEM=1`, with
+  `--diff-filter=AMT`; a changed `.py` file with no hunk to parse counts as wholly added. A
+  changed non-python source file (`.js`, `.go`, `.rs`, `.sh` and others) makes the result
+  `partial` ("not measured (not python)"), never a clean `ran`. Limit: code under test runs in
+  the same process as the tracer and can still tamper with it; the gate is advisory to the judge
+  and does not stand against a hostile coder.
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

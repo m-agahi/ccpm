@@ -403,6 +403,11 @@ const READS = {
     "x.id string": "parsed: a ruling's id; a non-string rules nothing",
     "x.reason string": "parsed: a ruling's reason; a non-string or blank reason rules nothing",
   },
+  // 8.0.0 (G2): the code judge's exemptions; a non-list (or an item with non-list lines) exempts nothing
+  gateLeft: {
+    "ex array": CJ + "exemptions",
+    "e.lines array": CJ + "exemptions[].lines",
+  },
   preflightStep: { "pre.ledger_tools array": "preflight:ledger_tools", "x string": "preflight:ledger_tools[]", "sj object": "preflight:session_project", "sj.project string": "prog:session_project:project" },
   // 5.0.9 (ledger 2032)
   // 7.0.0 review F5: a case-insensitive project key compare (typeof-guarded)

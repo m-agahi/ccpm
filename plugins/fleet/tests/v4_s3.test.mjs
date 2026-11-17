@@ -96,6 +96,8 @@ const WANT = [
   [/^infra:(orch-scan|ci-watch)/, "haiku"],
   // 8.0.0 (#62 B2): the hook surface, ruleset, convention (haiku before) and changed-definition reads of one step
   [/^infra:surfaces:/, "sonnet"],
+  // 8.0.0 (G2): a code round's gate programs
+  [/^infra:gates:/, "sonnet"],
   [/^infra:replan-/, "sonnet"],
   [/^infra:state:/, "sonnet"],
   [/^infra:(fleet-scan|purge-bytecode|review-cleanup|ledger-|yaadgaar-|comments-)/, "sonnet"],
@@ -537,8 +539,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // 8.0.0 (#62 B1): - 7 PATH re-checks (writers, test judge, coder, code judge, commit, push,
   // pr-review): each runs in its build-dir reset; capped() is unchanged
   // 8.0.0 (#62 B2): - 1 (infra:surfaces:r1 runs the hook surface and changed-definition reads)
-  assert.equal(out.build.calls.length, 60, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 59);
+  // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
+  assert.equal(out.build.calls.length, 62, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 61);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -611,7 +614,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     // 7.0.0 (yaadgaar #699): - 4 legacy ledger steps; review F2: + 4 yaadgaar steps (the default task)
     // 8.0.0 (#62 B1): - 7 PATH re-checks (each runs in its build-dir reset)
     // 8.0.0 (#62 B2): - 1 (one surfaces step after the approve)
-    assert.equal(b.calls.length, 60);
+    // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
+    assert.equal(b.calls.length, 62);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });

@@ -85,6 +85,7 @@ const INFRA_TIER = [
 ["infra:hook-surface", "sonnet"],
 ["infra:ruleset-surface", "sonnet"],
 ["infra:surfaces:", "sonnet"],
+["infra:gates:", "sonnet"],
 ["infra:replan-", "sonnet"],
 ["infra:state:", "sonnet"],
 ["infra:fleet-scan", "sonnet"],
@@ -438,6 +439,10 @@ items: { type: "object", properties: { gate: STR, reason: STR }, required: ["gat
 obligations_check: {
 type: "array",
 items: { type: "object", properties: { id: STR, met: { type: "boolean" }, evidence: STR, check_exit: { type: ["integer", "null"] } }, required: ["id", "met"] },
+},
+exemptions: {
+type: ["array", "null"],
+items: { type: "object", properties: { gate: STR, path: STR, lines: { type: "array", items: { type: "integer" } }, reason: STR }, required: ["gate", "path", "lines", "reason"] },
 },
 }),
 "fleet-pr-opener": roleSchema({
@@ -1491,6 +1496,7 @@ const PROGRAM_SHA256 = {
 "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
 "changed_defs": "489230ce46b9d6fdeecb17f49f462ac8e51229c8436f24b29985596ffe305116",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
+"cover_diff": "dfda1addf19d3c7ee7faa88fdd38d33fede3dbf3df12198ceaf3f6776e94578c",
 "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
 "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
 "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
@@ -1539,10 +1545,10 @@ return PROGRAM_SHA256;
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-"fleet-code-judge": "a260ec03b47b5c3f0853042476fb5cd29c812ab77a7659570b54b26c86911880",
+"fleet-code-judge": "e21c96ae42c5d4f593e7370031ef77d86969151a03f7120a6d28edd4b7819fad",
 "fleet-coder": "ee4e8960386899888881cb56e377c5ca74a23c7c93c7ac8971504890245cf3b4",
 "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
-"fleet-pr-opener": "0c4d24c3bbcc9a99d5e51de251d3817183f85ced1a73d0eeb1318cb1429447cf",
+"fleet-pr-opener": "28a9ebb7770541b23050f249997cb447453be6ab58dcc495f09490d3109e772a",
 "fleet-test-judge": "12ded7120c00c2346d4040ca132e433cef3f299ff199fe97f8f44d535918a819",
 "fleet-test-writer": "5305fd0bc8ed856a6e397b9f2df0dea8ad0857fc774100d054debae9ec18448a",
 "gate-change-nonweakening-sweep": "3634918d362a90dcf4a124eaeda7cf871950a124773b34ff68bd27695fae3a1b",
@@ -1642,6 +1648,7 @@ const PROGRAM_SLOTS = [
 [/^infra:hook-surface:/, [[null, "hook_surface"]]],
 [/^infra:ruleset-surface:/, [[null, "ruleset_surface"]]],
 [/^infra:surfaces:/, [["hook_surface", "hook_surface"], ["ruleset_surface", "ruleset_surface"], ["pr_convention", "pr_convention"], ["changed_defs", "changed_defs"]]],
+[/^infra:gates:/, [["coverage", "cover_diff"]]],
 [/^infra:review-paths:/, [[null, "review_paths"]]],
 [/^infra:precommit-ids/, [[null, "precommit_ids"]]],
 [/^infra:check-scripts/, [[null, "script_check"]]],
@@ -1657,6 +1664,7 @@ const PROGRAM_KEYS = {
 "remote_url": ["url", "args"],
 "session_project": ["project", "source", "cwd", "args"],
 "gate_tools": ["languages", "matrix", "container", "args"],
+"cover_diff": ["status", "reason", "findings", "args"],
 "gh_identity": ["origin", "repos", "args"],
 "hasher": ["fingerprint", "hashes", "scripts"],
 "hasher:base": ["fingerprint", "hashes", "changed", "scripts"],
@@ -1749,6 +1757,7 @@ container: { type: "object", properties: { runtime: STR_OR_NULL, image: STR, pre
 args: STRS,
 digest: STR,
 },
+cover_diff: { status: STR, reason: STR_OR_NULL, findings: { type: "array", items: { type: "object", properties: { path: STR, lines: { type: "array", items: INT } } } }, args: STRS, digest: STR },
 branch_scan: {
 head: STR,
 commits: { type: "array", items: { type: "object", properties: { sha: STR, subject: STR, files: STRS } } },
@@ -3850,7 +3859,8 @@ gate("gate census security: " + (g.container.present === true ? g.container.runt
 }
 function gatePrompt(slots) {
 return (
-INFRA_STEP + "run the fleet gate programs. Read only; change no file.\n" +
+INFRA_STEP + "run the fleet gate programs, each as one Bash call with timeout 600000 ms. Read only; change no file.\n" +
+inputsLine({ gates: slots.map((s) => s[0]) }) +
 slots.map(([g, id, args]) => RUN_EXACT + progCmd(id.split(":")[0], args) + "\nIt prints one JSON object " + printsKeys(id) + ": " + relayAs(g) + ". Non-zero exit -> " + g + " null and the stderr in reason.\n").join("") +
 "Return {status: \"ok\", reason, " + slots.map((s) => s[0]).join(", ") + "}."
 );
@@ -3877,6 +3887,13 @@ gate("gate " + s[0] + ": " + x.status + (x.reason ? " (" + x.reason + ")" : ""))
 function unruled(findings, rulings) {
 const ok = (Array.isArray(rulings) ? rulings : []).filter((x) => x && typeof x.id === "string" && typeof x.reason === "string" && x.reason.trim()).map((x) => x.id);
 return (Array.isArray(findings) ? findings : []).filter((f) => !f || ok.indexOf(f.id) < 0);
+}
+function gateLeft(g, ex, m) {
+const x = state.gates[g];
+if (!x || x.round !== m) return [];
+const flat = (a, f) => [].concat(...a.map(f));
+const rul = flat(Array.isArray(ex) ? ex : [], (e) => (e && e.gate === g && Array.isArray(e.lines) ? e.lines.map((l) => ({ id: e.path + ":" + l, reason: e.reason })) : []));
+return unruled(flat(x.findings, (f) => f.lines.map((l) => ({ id: f.path + ":" + l }))), rul).map((f) => f.id);
 }
 async function pushProbe(lay, ws) {
 await pathRecheck("push-probe", "Workspace");
@@ -7409,7 +7426,7 @@ updRound ? "review" : "cap",
 state.rounds.code++;
 const m = state.rounds.code;
 lastRoundGate = null;
-reserve(8 + (planFacts.changed_symbols ? 1 : 0) + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
+reserve(9 + (planFacts.changed_symbols ? 1 : 0) + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
 const codeInputs = Object.assign({}, common, planCtx, planFacts, {
 criteria,
 frozen_tests: frozenFiles.slice(),
@@ -7502,6 +7519,10 @@ judgePrior = judgePrior.concat(coderFindings);
 continue;
 }
 const judgeObligations = await checkScripts("infra:check-scripts:r" + m, planFacts.repo_obligations, mainWt, "Code");
+await resetBuild("gates:r" + m, ["gates-r" + m], "Code");
+const tc0 = planFacts.test_cmd;
+await runGate("infra:gates:r" + m, [["coverage", "cover_diff", [mainWt, updRound ? upd.base : planBase, h.fingerprint.tree, tc0.command, JSON.stringify(Object.assign({}, tc0.env, testEnvFor("cjudge", "gates-r" + m))), JSON.stringify(frozenFiles)]]], "Code");
+const cov = state.gates.coverage;
 await resetBuild("code-judge:r" + m, ["cjudge-r" + m], "Code");
 const jc = await judged(
 "fleet-code-judge",
@@ -7513,7 +7534,7 @@ coder_output: stripHeldOut(coder),
 hash_recheck: hashRecheck(frozen, h.hashes, mainWt),
 prior_findings: stripHeldOut(judgePrior),
 held_out_results: HELD_OUT_NOT_RUN,
-script_findings: SCRIPT_FINDINGS_NOT_RUN,
+script_findings: Object.assign({ coverage: { status: cov.status, reason: cov.reason, findings: cov.findings } }, SCRIPT_FINDINGS_NOT_RUN),
 repo_obligations: judgeObligations,
 ...roleEnv("cjudge", "cjudge-r" + m),
 }, tc ? { test_conflict: tc } : {}),
@@ -7554,6 +7575,14 @@ judgePrior = coderFindings.slice();
 continue;
 }
 if (cj.verdict !== "approve") halt("failed", "code-judge returned no verdict");
+const covLeft = gateLeft("coverage", cj.exemptions, m);
+if (covLeft.length) {
+coderFindings = [{ target: "code", criterion: null, finding: "coverage gate: added production lines that no test runs and no exemption covers: " + covLeft.join(", ") + " -- delete the untested code or make the frozen tests run it" }];
+judgePrior = coderFindings.slice();
+lastRoundGate = "coverage";
+gate("code round " + m + ": coverage gate: code-judge approve converted to fix_code (" + covLeft.length + " line(s): " + covLeft.join(", ") + ")");
+continue;
+}
 const surfL = "infra:surfaces:r" + m;
 const hsRev = updRound ? upd.head : planBase;
 const hsT = makeTargets(judgeObligations);

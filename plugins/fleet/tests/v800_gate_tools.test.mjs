@@ -189,7 +189,9 @@ test("8.0.0 G1-2: each missing gate tool is logged at preflight, before intake",
 test("8.0.0 G1-3 (non-weakening): with no gate result, gates_not_run is exactly today's four, in today's order", async () => {
   const out = await run(happy(), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.deepEqual(out.result.gates_not_run, FOUR);
+  // 8.0.0 (G2): the happy run has a coverage gate result (not_run: no coverage tool); the same four, in
+  // the same order, coverage with the gate's own reason
+  assert.deepEqual(out.result.gates_not_run, FOUR.map((x) => (x.gate === "coverage" ? { gate: "coverage", reason: "no coverage tool: coverage is not on PATH" } : x)));
   // the derived function: no state.gates entry, an earlier round's ran, a partial, the judge list
   const src = [grabConst("HELD_OUT_NOT_RUN"), grabConst("SCRIPT_FINDINGS_NOT_RUN"), grabConst("GATE_DEFAULTS"), grabFn("gatesNotRun")].join("\n");
   const make = (state) => new Function("state", src + "\nreturn gatesNotRun;")(state);
@@ -260,6 +262,8 @@ function gateRig(results) {
     state,
     INFRA_STEP: "Infra step: ",
     RUN_EXACT: "Run:\n",
+    // 8.0.0 (G2): the gate prompt names its gates in an Inputs line
+    inputsLine: (o) => "Inputs: " + JSON.stringify(o) + "\n",
     DIGEST_RETRY: ":digest-retry",
     INFRA_SCHEMA: {},
     JUDGE_AGENT: "fleet:judge",

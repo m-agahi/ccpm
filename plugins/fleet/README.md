@@ -1640,6 +1640,21 @@ The script pins the role contract, not the prose:
   The helpers `gatePrompt`, `runGate` and `unruled` (the findings no reasoned ruling covers) carry
   the later gates; a gate program that errs or relays no digest-checked result gets one retry,
   then stops with `needs_human` and `stop_gate: gates`.
+- **Coverage gate (8.0.0, G2).** Each code round, after its own build-dir reset and PATH check
+  and before the code judge's, `infra:gates:r<n>` (sonnet, read-only) runs `cover_diff.py`. It
+  builds a throwaway copy of the judged tree at the plan base under the run's scratch dir, runs
+  the sealed pytest `test_cmd` once plain and once under the coverage module (the host
+  `coverage`, `python -m coverage`, or the plan's `uv run` prefix), within 540 s, and lists the
+  added lines of changed production `.py` files that no test ran. Its own rcfile ignores the
+  repo's omit list and `# pragma: no cover`. No tool, another runner (npm, go, cargo, make, jest)
+  or a red baseline: `not_run`; the deadline or more than 400 lines: `partial`; a tool that errs
+  after a green baseline: one retry, then `gates`. The code judge rules each line: it routes it,
+  or exempts it in `exemptions: [{gate, path, lines, reason}]` with a non-blank reason. An approve
+  that leaves a line unexempted becomes `fix_code`. There is no coverage percentage. A changed
+  non-python source file makes the result `partial`. The coverage data file sits outside the copy
+  and no `COVERAGE_*` variable reaches the tests, and git attributes cannot hide an added line.
+  Limit: code under test runs in the same process as the tracer and can still tamper with it, so
+  the gate is advisory to the judge and does not stand against a hostile coder.
 - Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint

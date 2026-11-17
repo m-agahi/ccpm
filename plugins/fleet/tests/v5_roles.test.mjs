@@ -123,7 +123,8 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   // 7.0.0 review F2: + the yaadgaar read and write (main and :ci): the default task is yaadgaar #42
   // 8.0.0 (#62 B1): - 7 PATH re-checks (each runs in its build-dir reset)
   // 8.0.0 (#62 B2): - 1 (one surfaces step after the approve)
-  assert.equal(out.build.calls.length, 60, out.build.labels.join(", "));
+  // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1)
+  assert.equal(out.build.calls.length, 62, out.build.labels.join(", "));
   for (const c of out.calls) assert.ok(!String(c.prompt).includes("agent_prompt_get"), c.label);
 });
 

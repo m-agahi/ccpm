@@ -1,0 +1,235 @@
+
+# resource caps (3.1.0): every embedded program bounds its own address space
+# and CPU time, and git's children are tuned to stay inside them
+import os as _o, resource as _r
+for _k, _v in ((_r.RLIMIT_AS, 1 << 30), (_r.RLIMIT_CPU, 300)):
+    _h = _r.getrlimit(_k)[1]
+    _r.setrlimit(_k, (_v if _h == _r.RLIM_INFINITY else min(_v, _h), _h))
+_o.environ['MALLOC_ARENA_MAX'] = '2'
+# 6.0.0 security review: git never reads refs/replace/* objects in place of sealed ids
+_o.environ['GIT_NO_REPLACE_OBJECTS'] = '1'
+_n = int(_o.environ.get('GIT_CONFIG_COUNT') or 0)
+for _i, _kv in enumerate((('core.packedGitWindowSize', '32m'), ('core.packedGitLimit', '256m'), ('core.bigFileThreshold', '16m'), ('pack.threads', '1'))):
+    _o.environ['GIT_CONFIG_KEY_%d' % (_n + _i)], _o.environ['GIT_CONFIG_VALUE_%d' % (_n + _i)] = _kv
+_o.environ['GIT_CONFIG_COUNT'] = str(_n + 4)
+_RAW_PATH = _o.environ.get('PATH', '')
+def clean_path(inside=()):
+    # PATH for children: absolute entries only, none inside the given dirs
+    keep = []
+    for e in _RAW_PATH.split(':'):
+        if not e or not _o.path.isabs(e):
+            continue
+        r = _o.path.realpath(e)
+        if any(r == _o.path.realpath(d) or r.startswith(_o.path.realpath(d).rstrip('/') + '/') for d in inside):
+            continue
+        keep.append(e)
+    return ':'.join(keep)
+_o.environ['PATH'] = clean_path()
+# fleet 4.0.0 (1993): the program hashes its own file. The workflow compares
+# the name and the sha256 with the shipped copy; a pasted or re-typed copy
+# has no file and prints nulls.
+import hashlib as _hl
+try:
+    with open(globals()['__file__'], 'rb') as _fh:
+        _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
+except Exception:
+    _PROG = {'name': None, 'sha256': None}
+# fleet 8.0.0 (G2, ADR-1316): the coverage gate. Args: <worktree> <base> <tree> <test_cmd> <env json> <exclude json>.
+# A throwaway detached worktree <dirname(worktree)>/scratch/copy-* at <base> with the judged <tree>
+# read in (read-tree -u --reset; the main worktree is never touched). The test_cmd (a pytest
+# shape only, <paths> dropped) runs once plain (red: not_run) and once under the coverage
+# module with this program's own rcfile (no repo omit list, no pragma exclusion), within one
+# 540 s deadline (hit: partial). Findings: the added lines of the changed .py files (git diff
+# -U0 <base> <tree>, the <exclude> paths aside) the run did not execute; a changed file the
+# report lacks counts every added line that is not blank or a comment. Prints {status: ran|
+# partial|not_run, reason, findings: [{path, lines}], args}. No coverage tool: not_run. A tool
+# that errors after a good probe and a green baseline: a non-zero exit (the workflow retries
+# once, then stops at gate gates). The child runs with the caps lifted, in its own process
+# group, behind the PATH guard of scratch_copy.py run (no terraform-family name resolves
+# other than on the agent PATH).
+import hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, time
+DEADLINE, CAP = 540, 400
+# security review: no attributes file, no system attributes, and every diff as text with no
+# textconv or external driver, so no git attribute (binary, -diff, a diff driver) hides a line
+G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.quotePath=false', '-c', 'core.attributesFile=/dev/null']
+D = ['--text', '--no-textconv', '--no-ext-diff', '--no-renames', '--no-color']
+CODE = ('.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.go', '.rs', '.sh', '.bash', '.rb', '.java', '.kt', '.c', '.h', '.cc', '.cpp', '.php', '.pl', '.lua', '.swift', '.scala', '.cs')
+REFUSED = {'terraform', 'tofu', 'tfp', 'terragrunt', 'digger', 'atlantis'}
+os.environ['GIT_TERMINAL_PROMPT'] = '0'
+os.environ['GIT_ATTR_NOSYSTEM'] = '1'
+start = time.monotonic()
+left = lambda: DEADLINE - (time.monotonic() - start)
+def emit(status, reason, findings=()):
+    out = {'status': status, 'reason': reason, 'findings': list(findings), 'args': sys.argv[1:], 'program': _PROG}
+    out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(0)
+def git(cwd, *a):
+    r = subprocess.run(G + ['-C', cwd] + list(a), capture_output=True, stdin=subprocess.DEVNULL)
+    if r.returncode != 0:
+        sys.exit('git ' + ' '.join(a[:2]) + ' failed: ' + r.stderr.decode('utf-8', 'replace')[-1000:])
+    return r.stdout
+def lift():
+    # the repo's own commands are not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
+class Late(Exception):
+    pass
+def run(argv, cwd, env, log):
+    # the exit code and the output tail; the whole process group dies at the deadline
+    if left() <= 1:
+        raise Late()
+    with open(log, 'wb') as fh:
+        try:
+            p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT, preexec_fn=lift, start_new_session=True)
+        except OSError as e:
+            return 127, str(e)
+        try:
+            code = p.wait(timeout=left())
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            p.wait()
+            raise Late()
+    with open(log, 'rb') as fh:
+        return code, fh.read()[-2000:].decode('utf-8', 'replace')
+a = sys.argv[1:]
+if len(a) != 6:
+    sys.exit('usage: cover_diff.py <worktree> <base> <tree> <test_cmd> <env json> <exclude json>')
+wt, base, tree, cmd = a[0], a[1], a[2], a[3]
+try:
+    env_in, exclude = json.loads(a[4]), json.loads(a[5])
+except ValueError:
+    env_in, exclude = None, None
+if not os.path.isabs(wt) or not os.path.isdir(wt) or not all(re.match(r'^[0-9a-f]{40}$', x) for x in (base, tree)):
+    sys.exit('bad worktree, base or tree')
+if not isinstance(env_in, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in env_in.items()) or not isinstance(exclude, list) or not all(isinstance(x, str) for x in exclude):
+    sys.exit('env is not a JSON object of strings or exclude is not a JSON list of strings')
+# the pytest shapes of the workflow's testRunnerPrefix: pytest | python[3] -m pytest | uv run [--frozen|--no-sync|--extra X]... pytest
+try:
+    argv = [x for x in shlex.split(cmd) if x != '<paths>']
+except ValueError:
+    argv = []
+i = 0
+if argv[:2] == ['uv', 'run']:
+    i = 2
+    while i < len(argv) and (argv[i] in ('--frozen', '--no-sync') or (argv[i] == '--extra' and i + 1 < len(argv))):
+        i += 2 if argv[i] == '--extra' else 1
+if argv[i:i + 1] == ['pytest']:
+    head = argv[:i] + ['coverage']
+elif argv[:1] in (['python'], ['python3']) and argv[1:3] == ['-m', 'pytest']:
+    head, i = argv[:1] + ['-m', 'coverage'], 2
+else:
+    emit('not_run', 'unsupported: the coverage gate runs a pytest test_cmd only (got ' + cmd + ')')
+if any(os.path.basename(x) in REFUSED for x in argv):
+    sys.exit('refusing a terraform-family program in test_cmd')
+# the child PATH: an env PATH (absolute entries, none holding a terraform-family name) first, then
+# this program's PATH with no entry inside the worktree or the scratch dir; a guard dir before both
+scratch = os.path.join(os.path.realpath(os.path.dirname(os.path.realpath(wt))), 'scratch')
+path = clean_path((wt, scratch))
+if 'PATH' in env_in:
+    ents = [e for e in env_in.pop('PATH').split(':') if e]
+    if not all(os.path.isabs(e) for e in ents) or any(os.path.lexists(os.path.join(e, n)) for e in ents for n in REFUSED):
+        sys.exit('refusing an env PATH with a relative entry or a terraform-family name')
+    path = ':'.join(ents + [path])
+if any(shutil.which(n, path=path) != shutil.which(n, path=_RAW_PATH) for n in REFUSED):
+    sys.exit('refusing a PATH that resolves a terraform-family name differently from the agent PATH')
+if head[0] == 'coverage' and not shutil.which('coverage', path=path):
+    emit('not_run', 'no coverage tool: coverage is not on PATH')
+# the added lines of the changed production .py files (added, modified, type-changed); other
+# changed source files are listed as not measured
+want, other = {}, []
+for n in git(wt, 'diff', '--name-only', '-z', '--diff-filter=AMT', *D, base, tree).decode('utf-8', 'replace').split('\0'):
+    if not n or n in exclude:
+        continue
+    if not n.endswith('.py'):
+        if n.endswith(CODE):
+            other.append(n)
+        continue
+    hunks = list(re.finditer(r'^@@ -\S+ \+(\d+)(?:,(\d+))? @@', git(wt, 'diff', '-U0', *D, base, tree, '--', n).decode('utf-8', 'replace'), re.M))
+    if hunks:
+        rows = [x for m in hunks for x in range(int(m.group(1)), int(m.group(1)) + int(m.group(2) if m.group(2) is not None else 1))]
+    else:
+        # listed but no hunk to parse: fail closed, the whole file is added
+        rows = list(range(1, len(git(wt, 'cat-file', 'blob', tree + ':' + n).decode('utf-8', 'replace').rstrip('\n').split('\n')) + 1))
+    if rows:
+        want[n] = rows
+miss_note = 'not measured (not python): ' + ', '.join(other) if other else None
+if not want:
+    emit('partial' if other else 'ran', miss_note or 'no added line in a production .py file')
+os.makedirs(scratch, exist_ok=True)
+# security review: the data file and the report live in a random dir outside the scratch dir
+# and the copy (never in the child's env), so no test finds them by walking up from the copy
+work = tempfile.mkdtemp()
+guard = tempfile.mkdtemp(prefix='guard-', dir=scratch)
+tmp = tempfile.mkdtemp(prefix='copy-', dir=scratch)
+added = False
+try:
+    for n in REFUSED:
+        os.symlink(shutil.which(n, path=_RAW_PATH) or shutil.which('false', path=_RAW_PATH) or '/bin/false', os.path.join(guard, n))
+    git(wt, 'worktree', 'add', '--detach', tmp, base + '^{commit}')
+    added = True
+    git(tmp, 'read-tree', '-u', '--reset', tree)
+    rc, data, log, rep = (os.path.join(work, x) for x in ('rc', 'data', 'log', 'cov.json'))
+    with open(rc, 'w') as fh:
+        fh.write('[run]\nsource = .\nrelative_files = True\n[report]\nexclude_lines =\n    (?!x)x\n')
+    # no COVERAGE_* variable reaches the child (the build env's COVERAGE_FILE among them): only argv names them
+    env = dict(os.environ)
+    env.update(env_in)
+    for k in [k for k in env if k.startswith('COVERAGE_')]:
+        del env[k]
+    env['PATH'] = guard + ':' + path
+    cov = ['--rcfile=' + rc, '--data-file=' + data]
+    try:
+        code, tail = run(head + ['--version'], tmp, env, log)
+        if code != 0:
+            emit('not_run', 'no coverage tool: ' + ' '.join(head) + ' --version exit %d' % code)
+        code, tail = run(argv, tmp, env, log)
+        if code != 0:
+            emit('not_run', 'baseline red in scratch copy (test_cmd exit %d)' % code)
+        code, tail = run(head + ['run'] + cov + ['-m', 'pytest'] + argv[i + 1:], tmp, env, log)
+        if code != 0:
+            sys.exit('coverage run exit %d with a green baseline: %s' % (code, tail[-500:]))
+        code, tail = run(head + ['json'] + cov + ['-o', rep], tmp, env, log)
+        if code != 0:
+            sys.exit('coverage json exit %d: %s' % (code, tail[-500:]))
+    except Late:
+        emit('partial', 'the %d s deadline was hit before the coverage report' % DEADLINE)
+    try:
+        with open(rep, 'rb') as fh:
+            files = json.loads(fh.read().decode('utf-8')).get('files')
+    except (OSError, ValueError, AttributeError):
+        files = None
+    if not isinstance(files, dict):
+        sys.exit('coverage json has no files map')
+    got = {}
+    for k, v in files.items():
+        p = os.path.relpath(k, tmp) if os.path.isabs(k) else os.path.normpath(k)
+        # a file with no executed line has no records of its own: not measured (wholly uncovered)
+        got[p] = set((v.get('missing_lines') or []) + (v.get('excluded_lines') or [])) if isinstance(v, dict) and v.get('executed_lines') else None
+    findings, n = [], 0
+    for p in sorted(want):
+        miss = got.get(p)
+        if miss is None:
+            # not measured: every added line that is not blank or a comment
+            with open(os.path.join(tmp, p), 'rb') as fh:
+                text = fh.read().decode('utf-8', 'replace').split('\n')
+            lines = [x for x in want[p] if x <= len(text) and text[x - 1].strip() and not text[x - 1].strip().startswith('#')]
+        else:
+            lines = [x for x in want[p] if x in miss]
+        if lines and n < CAP:
+            findings.append({'path': p, 'lines': lines[:CAP - n]})
+        n += len(lines)
+        if n > CAP:
+            emit('partial', 'more than %d uncovered added lines: the first %d are listed' % (CAP, CAP), findings)
+    note = '%d uncovered added line(s) in %d file(s)' % (n, len(findings)) if n else None
+    emit('partial' if other else 'ran', '; '.join(x for x in (note, miss_note) if x) or None, findings)
+finally:
+    if added:
+        subprocess.run(G + ['-C', wt, 'worktree', 'remove', '--force', tmp], capture_output=True)
+    shutil.rmtree(tmp, ignore_errors=True)
+    shutil.rmtree(work, ignore_errors=True)
+    shutil.rmtree(guard, ignore_errors=True)
+    subprocess.run(G + ['-C', wt, 'worktree', 'prune'], capture_output=True)

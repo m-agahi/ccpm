@@ -388,6 +388,8 @@ export async function runOne(script, args0) {
       if (SHARED_FOR_ROLE[role]) r.shared_file = { name: SHARED_FOR_ROLE[role], sha256: SHARED_PIN[SHARED_FOR_ROLE[role]] };
       return r;
     }
+    // 8.0.0 (G2): an unscripted gate step finds no coverage tool (not_run)
+    if (!(label in script) && /^infra:gates:/.test(label)) return { status: "ok", reason: "ran", coverage: coverOut(prompt) };
     // the bytecode purge is mechanical; unscripted purges succeed by default
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
     // 4.0.0 (1986): unscripted parked-run reads find no parked draft
@@ -1366,6 +1368,8 @@ export const PROGRAM_LABELS = [
   // 8.0.0 (#62 B2): the read-only surface programs of one step, each in its own slot
   [/^infra:surfaces:/, SURFACE_PARTS.map(([slot]) => [slot, slot, K(slot)])],
   [/^preflight$/, [["path_check", "path_check", K("path_check")], ["session_project", "session_project", K("session_project")], ["gate_tools", "gate_tools", K("gate_tools")]]],
+  // 8.0.0 (G2): a code round's gate programs, one slot per gate (read lazily)
+  [/^infra:gates:/, [["coverage", "cover_diff", PROGRAM_KEYS["cover_diff"] || null]]],
   [/^infra:path-check:/, [[null, "path_check", K("path_check")]]],
   [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")], ["gh_check", "gh_identity", K("gh_identity")], ["exclude", "exclude_add", PROGRAM_KEYS["exclude_add"] || null]]],
   // 5.0.8 (ledger 2030): a repo the workspace step did not check
@@ -1511,6 +1515,14 @@ function fillSlot(o, name, keys0, label, prompt) {
 export function pushArgsOf(prompt) {
   const m = /push\.py'((?: '(?:[^']|'\\'')*')+)/.exec(prompt);
   return m ? [...m[1].matchAll(/'((?:[^']|'\\'')*)'/g)].map((x) => x[1].replace(/'\\''/g, "'")) : [];
+}
+// 8.0.0 (G2): the args of the prompt's cover_diff.py command, and its output (default: no coverage tool)
+export function coverArgsOf(prompt) {
+  const m = /cover_diff\.py'((?: '(?:[^']|'\\'')*')+)/.exec(prompt);
+  return m ? [...m[1].matchAll(/'((?:[^']|'\\'')*)'/g)].map((x) => x[1].replace(/'\\''/g, "'")) : [];
+}
+export function coverOut(prompt, over) {
+  return Object.assign({ status: "not_run", reason: "no coverage tool: coverage is not on PATH", findings: [], args: coverArgsOf(prompt) }, over);
 }
 // 7.3.0 (#9): the args of the workspace prompt's exclude_add.py command
 export function excludeArgsOf(prompt) {

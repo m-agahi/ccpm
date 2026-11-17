@@ -110,10 +110,11 @@ const SCENARIOS = {
 // 8.0.0 car B1 (#62): each build-dir reset runs the PATH check of its step (repo, token, the path_check command and slot): 7 fewer build calls, no standalone infra:path-check at the paired sites (probe unchanged)
 // 8.0.0 car B2 (#62): infra:surfaces:plan runs the hook_surface, ruleset_surface and pr_convention programs (one slot each) and infra:surfaces:r<n> the hook_surface and changed_defs programs: 2 fewer plan calls, 1 fewer build call (probe unchanged)
 // 8.0.0 car G1: the preflight prompt and schema run gate_tools.py <repo> <AUDIT_IMAGE> in a gate_tools slot (no new call; the probe pin moves with the preflight prompt)
+// 8.0.0 car G2: each code round runs infra:build-reset:gates:r<n> and infra:gates:r<n> (cover_diff.py) before the code judge's reset: 2 more build calls; the code judge's script_findings carries coverage, its schema exemptions, the code-judge and pr-opener role shas move (probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 80, sha256: "3d7b9fc1f133605b4daf071b1f7fa289e6d54120d4869043e48ec4659531d5a5" },
-  "confirm auto (gates, then build in one run)": { calls: 82, sha256: "6320eef688b2c1a0e820277632eb8a218f17553cb038f8fa41cbfa13542fa45a" },
-  "short path (one test writer)": { calls: 79, sha256: "a5e354908334266e843d02af5a93d16e3d0e8c8b7f30061a7b8ab7dd5081acd7" },
+  "plan then build (confirm ask)": { calls: 82, sha256: "6b8078750ca720333798f031c2b6b4d6b217ae7eb7c5e8adf1be09bb1f823750" },
+  "confirm auto (gates, then build in one run)": { calls: 84, sha256: "25ccb42c150b80b5c90b6240f32394ce629b28b3d13d7fd051137b06633ada6e" },
+  "short path (one test writer)": { calls: 81, sha256: "7f28a3a60603d6e6b36961658faf648f3cad53714a32047911e3e183ab890b15" },
   "probe": { calls: 2, sha256: "0699a53c5c939afed37e60fae64f04e0adfd8fd0c6b8e4a344d2ac53bd59e02b" },
 };
 

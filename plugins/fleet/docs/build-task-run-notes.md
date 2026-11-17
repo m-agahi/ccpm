@@ -4502,3 +4502,39 @@ the gate steps (PROGRAM_SLOTS and INFRA_TIER rows come with them). gatesNotRun k
 judge-list union; state.gates entries carry the code round, so a result of an earlier round
 never removes a gate, and a replan resets state.gates.
 ```
+
+## 8.0.0 notes (G2)
+
+### `cover_diff.py`, `infra:gates:r<n>`, `gateLeft` (G2, ADR-1316)
+
+```text
+The gate agent runs after its own reset (infra:build-reset:gates:r<n>, build key gates-r<n>,
+with the PATH check), not inside the code judge's reset: the 3.1.1 rule (every guarded step is
+preceded by its own check) and the B1-5 site set stay intact; the new site is gates:r<n>. The
+env is test_cmd.env, then testEnvFor("cjudge", "gates-r<n>") (the judge's database, the gate's
+own build dir; test_env wins). The program re-checks the pytest shape itself and runs nothing
+else; its PATH guard is scratch_copy run's (an env PATH with a relative entry or a guarded IaC
+name is refused, the which() comparison with the agent PATH, the guard dir in front). It
+counts excluded lines as uncovered and a changed file the report lacks as wholly uncovered
+(fail closed). The baseline runs first, so a red suite is not_run and a coverage failure after
+a green baseline is a tool error (exit 1: runGate's retry, then gates). The code judge's
+script_findings keeps the 7.x top level ({status: not_run, reason}: mutation, security_scan)
+and adds coverage {status, reason, findings}. gateLeft expands the findings and that gate's
+exemptions to path:line ids and uses G1's unruled, so a blank reason exempts nothing; it acts
+only on a result of the same code round. The check sits right after the approve, before the
+surfaces step (a converted approve spends no surfaces agent).
+Deviation: python (pytest) only. go, rust and node coverage are not_run "unsupported" even when
+the census names a tool; a later car may add them.
+Security review: the child env has no COVERAGE_* variable (the build env sets COVERAGE_FILE);
+--rcfile and --data-file are argv only; the data file and the report are in a mkdtemp() dir
+outside <scratch> and the copy, so a conftest cannot find them by walking up. A changed file with
+no executed_lines has no records of its own: wholly uncovered. A red baseline: not_run "baseline
+red in scratch copy". Every diff: --text --no-textconv --no-ext-diff, -c
+core.attributesFile=/dev/null, GIT_ATTR_NOSYSTEM=1, --diff-filter=AMT; a listed .py file with no
+parsable hunk counts as wholly added. A changed non-python source file (by extension) gives
+partial "not measured (not python): ...". The exemptions reason has no schema pattern keyword
+(no role schema uses one); gateLeft's unruled refuses a blank reason.
+Limit: in-process code under test can still tamper with the tracer (sys.settrace, the
+coverage module's own objects). The gate is advisory to the judge; it does not stand against
+a hostile coder.
+```
