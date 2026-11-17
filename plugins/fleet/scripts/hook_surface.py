@@ -350,7 +350,8 @@ def npm_texts(sc, name, depth, seen):
     for t in list(texts):
         for m in NPM_RUN.finditer(t):
             n = m.group(1) or 'test'
-            if n in seen:
+            # `--if-present` in the call skips a missing script
+            if n in seen or (sc.get(n) is None and '--if-present' in re.split(r'&&|[;|\n]', t[m.start():], 1)[0]):
                 continue
             seen.add(n)
             sub = npm_texts(sc, n, depth + 1, seen) if depth < 3 else None

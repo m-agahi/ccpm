@@ -91,6 +91,18 @@ test("7.4.0 #29 N1: a nested run of a missing script, or a chain deeper than 3, 
   assert.deepEqual(mp["npm:three"], ["a.mjs"]);
 });
 
+test("7.4.0 #29 N1: a nested run with --if-present skips a missing script (no fail-closed drop)", () => {
+  const { hs } = repo({
+    "package.json": pkg({ test: "npm run lint --if-present && node a.mjs", t2: "npm run --if-present lint; npm run b", b: "node b.mjs", t3: "npm run lint && npm run x --if-present" }),
+    "a.mjs": "x\n",
+    "b.mjs": "x\n",
+  });
+  const mp = hs(["npm:test", "npm:t2", "npm:t3"]);
+  assert.deepEqual(mp["npm:test"], ["a.mjs"]);
+  assert.deepEqual(mp["npm:t2"], ["b.mjs"]);
+  assert.equal(mp["npm:t3"], undefined, "--if-present of another call does not cover the missing lint");
+});
+
 test("7.4.0 #29 N2: a directory in an npm script or a make recipe is listed as dir/", () => {
   const files = {
     "package.json": pkg({ test: "node --test test/" }),
@@ -160,7 +172,7 @@ async function fns() {
   const src = SOURCE.replace(/^export const meta/m, "const meta").replace("\nlet input = args;\n", "\nreturn { testCmdRuns, cmdRuns, testRunnerPrefix, parseCheckCmd, relPath, normPath, PATHS_TOKEN };\nlet input = args;\n");
   return compile(src)(null, null, null, () => {}, () => {}, {}, {}, {}, Date, Math);
 }
-// testCmdRuns, cmdRuns and their tables at bc8998b (6.1.0 to 7.4.0 car 3), byte for byte
+// testCmdRuns, cmdRuns and their tables at bc8998b (6.1.0 to 7.4.0 car 3): every code line, the comment lines dropped
 const OLD = `
 const TEST_INPUTS = {
   pytest: ["pyproject.toml", "setup.py", "uv.lock", "poetry.lock", "Pipfile.lock"],

@@ -97,9 +97,9 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
   plan ref under Not defended: the ref is self-hashed, any role with a shell can forge one, roles
   are inside the trust boundary (ADR-1152), and the sealed `kind:ref` check blocks only accidental
   cross-task branch adoption.
-- Car 3, #23 (L2035): when the digest-checked `session_project` ran in the repo itself or in a
-  fleet worktree under it, the gate log has "WARN session_project ran in <cwd> ..."; the run goes
-  on. The no-proof texts name the next step: intake's stop says "start the session in a directory
+- Car 3, #23 (L2035): when the digest-checked `session_project` ran in a worktree under the repo
+  (`<repo>/.claude/worktrees/`; car 4 Y1 took the repo root out), the gate log has "WARN
+  session_project ran in <cwd> ..."; the run goes on. The no-proof texts name the next step: intake's stop says "start the session in a directory
   under the repo (a .yadgar/project-id or an origin remote)", and the write-back reason with no
   project at all adds "pass args.project, or ...". `session_project.py`'s header lists where its
   derive differs from yadgar-client c2200bb `src/project.rs` (64 vs 16 insteadOf passes; a 4096-byte
@@ -131,8 +131,9 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
 - Car 4, #29 (L2084): the five R4 gaps the 6.1.0 entry listed as known are closed. Each one only
   adds refusals to the update-branch rule R4; none accepts more. `hook_surface.py`: N1, an npm
   script follows a nested `npm|pnpm|yarn run X` (and `npm test`/`npm t`) with its pre and post
-  scripts, depth 3, with a visited set; a nested run of a missing script or a deeper chain drops
-  the `npm:<name>` entry (R4 then refuses every moved file). N2, a tracked dir named in an npm script
+  scripts, depth 3, with a visited set; a nested run of a missing script (with no `--if-present` in
+  that call) or a deeper chain drops the `npm:<name>` entry (R4 then refuses every moved file, and
+  plan mode gives the #39 finding). N2, a tracked dir named in an npm script
   or a make recipe is listed as `dir/` (for example `node --test test/`), and R4 matches every
   path under it. N3, `-p mod` and `-m mod` in a script or a recipe resolve to `mod.py`,
   `mod/__init__.py`, `mod/__main__.py` and the parent `__init__.py` files (tracked only). N5, a
@@ -142,17 +143,21 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
   an unread script refuses every moved file. N4, test_cmd `npx jest|vitest` also runs
   `jest|vitest.setup.*`, `jest|vitest.config.*`, `setupTests.*` and `*.setup.{js,ts,...}`. The
   obligations gate (`cmdRuns` without the R4 flag) keeps its exact-path match: a `dir/` entry there
-  would refuse every test file the fleet writes under `tests/`. Still not checked: an npm test_cmd
-  whose script runs jest (the setup files are not named in the script), a nested npm run with
-  `--prefix`/`--workspace`, and a sourced path whose variable tail does not resolve to a tracked
-  file.
+  would refuse every test file the fleet writes under `tests/`. It does get the new file paths of
+  a make target: the `-m`/`-p` module files and the libs a recipe's script sources. A coder edit
+  of such a file is now refused unless the obligation lists it (stricter). Still not checked: an
+  npm test_cmd whose script runs jest (the setup files are not named in the script), a nested npm
+  run with `--prefix`/`--workspace`, a bare nested `yarn <script>` or `pnpm <script>` (no `run`),
+  and a sourced path whose variable tail does not resolve to a tracked file.
 - Car 4, #39 part 2 (L2162): plan mode passes the npm target of an npm, pnpm or yarn test_cmd to
   the plan hook-surface read. When `package.json` with `scripts.<name>` is not tracked at the
   worktree root at HEAD (or the script cannot be read), it is a plan finding through
   `planFindingsStop` ("... npm would walk up into the main checkout"): a re-plan while audit rounds
-  are left, then needs_human. npm 11.19.0 checked again: `npm_config_prefix` and
+  are left, then needs_human. The finding also fires on the N1 fail-closed cases (a nested run of
+  a missing script, a chain deeper than 3). npm 11.19.0 checked again: `npm_config_prefix` and
   `npm_config_local_prefix` do not stop the walk-up to a parent `package.json`; only `--prefix`
-  does.
+  does. Not guarded: `npx jest|vitest` (`npm prefix` in a dir with no `package.json` also prints
+  the parent's dir, so npx resolves the main checkout's local prefix).
 - Car 4, Y1 (car-3 report): the #23 WARN fires only when `session_project` ran under
   `<repo>/.claude/worktrees/` (a fleet or agent worktree, where a cd is ignored). The repo root is
   the normal start and no longer warns.
@@ -213,7 +218,7 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
 
 ### Tests changed on purpose (car 4)
 
-- New: `v740_r4_gaps` (N1-N5 on the real program and in the workflow, and the non-weakening
+- New: `v740_r4_gaps` (N1-N5 and N1 `--if-present` on the real program and in the workflow, and the non-weakening
   checks: the bc8998b `testCmdRuns`/`cmdRuns` and the 6.1.0 make_paths rule run beside the new
   code; every old refusal stays, and an old missing entry stays missing), `v740_npm_walkup` (J1).
 - `v740_session_project` S1 (Y1): the repo root `/r` moved from the warning case to the no-warning
