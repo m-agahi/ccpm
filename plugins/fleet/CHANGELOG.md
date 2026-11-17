@@ -95,9 +95,10 @@ closed): <why>; plan-audit passed; the intent judge rules on it)`); the auto gat
   The review text of the update merge still never reaches the body. The code-judge guard is on in
   update rounds too.
 - Car 3 (#32): an `orch_scan` error gets one retry (`infra:orch-scan[:<tag>]:retry`); the second
-  result counts. An error on the ready step's retry too: a warning `{gate: "orch_scan", error}` in
-  the new result key `warnings` (always present, `[]` when none), and the script-written test
-  block in the PR body gets the line "Orchestrator/IaC scan error: <error>. Next step: ..."
+  result counts. An error on any scan's retry too (ready, merge, after update-branch): a warning
+  `{gate: "orch_scan", error}` (once per error text) in the new result key `warnings` (always
+  present, `[]` when none). On the ready step's scan the script-written test block in the PR body
+  also gets the line "Orchestrator/IaC scan error: <error>. Next step: ..."
   (`infra:pr-tests:scan-warning`; later test-block writes keep it). The error still blocks the
   merge and the CI rerun.
 - Car 3 (#33, Max added it to 7.3.0): the fleet opens its PR ready for review, also on

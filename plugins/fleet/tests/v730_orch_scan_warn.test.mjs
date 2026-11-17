@@ -60,3 +60,17 @@ test("7.3.0 A19: \"truncated tree\" twice: ready, no merge, no rerun, a warning 
     assert.ok(out.result.status !== "ok" || out.result.warnings.length === 1);
   }
 });
+
+test("7.3.0 A33: a merge-time scan that errors twice blocks the merge and leaves a warning", async () => {
+  const s = happy();
+  s["infra:policy"] = pol;
+  s["infra:orch-scan:merge"] = ERR("gh api: HTTP 502");
+  s["infra:orch-scan:merge:retry"] = ERR("gh api: HTTP 502");
+  const out = await run(s, ARGS);
+  const L = out.build.labels;
+  assert.ok(L.includes("infra:orch-scan:merge:retry"), L.join(", "));
+  assert.ok(!L.some((l) => /^infra:pr-merge/.test(l)), L.join(", "));
+  assert.deepEqual(out.result.warnings, [{ gate: "orch_scan", error: "gh api: HTTP 502" }]);
+  // the body line comes only from the ready scan
+  assert.ok(!L.includes("infra:pr-tests:scan-warning"), L.join(", "));
+});

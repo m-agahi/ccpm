@@ -7254,6 +7254,9 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     gate(ol + ": " + (o.reasons.length ? o.reasons.join("; ") : "no orchestrator, IaC or hook-surface sign") + (o.error ? " (error: " + o.error + ")" : ""));
     // 7.3.0 (#32): an error gets one retry; the second result counts
     if (o.error !== null && !again) return orchScan(head, (tag ? tag + ":" : "") + "retry", true);
+    // still an error: a warning on every scan path (ready, merge, u1), never an ok with no warning
+    const ws = (state.warnings = state.warnings || []);
+    if (o.error !== null && !ws.some((x) => x.gate === "orch_scan" && x.error === o.error)) ws.push({ gate: "orch_scan", error: o.error });
     return (orch = o);
   }
   async function readyStep() {
@@ -7264,7 +7267,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const o = await orchScan(approvedSha);
     // 7.3.0 (#32): a scan error no longer keeps a draft; it blocks merge and rerun (judge() in ciStep) and is a warning
     if (o.error !== null) {
-      (state.warnings = state.warnings || []).push({ gate: "orch_scan", error: o.error });
       state.scanWarn = "Orchestrator/IaC scan error: " + o.error + ". Next step: re-run the build with the same plan_ref (the scan runs again), or check the PR by hand before any merge.";
       const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
       const targs = [g, remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];

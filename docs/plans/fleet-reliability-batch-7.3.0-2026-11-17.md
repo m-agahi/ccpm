@@ -222,6 +222,9 @@ branch on the forge", "role")`.
 - Known edge from 6.3.3: a guard-made approve with no coder change finds nothing to commit. With
   the split, tagged findings no longer reach an update round's coder. Add one test that pins the
   edge result. The commit step's "nothing to commit" must stop loudly, never end ok silently.
+- Design note (not test-covered): a resumed update record (no update adopted in this run) with
+  only pr_body_claim findings takes the body-only route too; a body update runs no code round, so
+  the "update record is from an earlier run" refusal does not apply.
 
 ### #32: orch_scan error -> one retry, then ready + warn
 
@@ -240,8 +243,9 @@ branch on the forge", "role")`.
 - `finish()` (src:3873) gets `warnings: state.warnings || []`.
 - Dependency: the brief says #33 (L2140, PRs open ready) ships in the same release. Max added #33
   to 7.3.0 (Q6). With #33 an error no longer has a draft to keep: the PR opened ready.
-- The retry runs inside `orchScan` (every scan: ready, merge, u1). Only the `readyStep` scan
-  writes the warning to `state.warnings` and the PR body. The warning line lives in
+- The retry runs inside `orchScan` (every scan: ready, merge, u1). Every scan whose retry still
+  errors adds the warning to `state.warnings` (once per error text). Only the `readyStep` scan
+  writes the PR body line. The warning line lives in
   `testsBlock`, so a later test-block rewrite (a CI-fix round) keeps it.
 
 ### #33 (L2140): the PR opens ready; draft only with `merge_after` or policy `pr_ready: false`
@@ -464,10 +468,10 @@ for scripted relays is `v711_failed_digest_retry.test.mjs`. The harness records 
   `state.tail` before `reserve`. Given `saveState`, Then the flag is set before the inline
   writer's `infra(` call.
 - **A32** (#41 edge, `v730_update_body_claim.test.mjs`). Given an update round whose commit step
-  returns `commit_result` "nothing_to_commit", Then the run status is `failed` (never `ok`). A
-  resumed update record (no adopted update this run) with only pr_body_claim findings takes the
-  body-only route too: a body update runs no code round, so the earlier-run refusal does not
-  apply.
+  returns `commit_result` "nothing_to_commit", Then the run status is `failed` (never `ok`).
+- **A33** (#32, `v730_orch_scan_warn.test.mjs`). Given a clean ready scan and personal caps (merge
+  auto), When `infra:orch-scan:merge` and `infra:orch-scan:merge:retry` both return an error, Then
+  no `infra:pr-merge` call runs and `result.warnings` holds one `orch_scan` entry with that error.
 
 Test command: `node --test 'plugins/fleet/tests/*.test.mjs'` (README:1777). Dist and tables:
 `node plugins/fleet/scripts/build-workflow.mjs`, then `node plugins/fleet/scripts/gen.mjs --check`.

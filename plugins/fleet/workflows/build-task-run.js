@@ -6621,6 +6621,8 @@ requireProgram(o, "orch_scan", ol, "needs_human", "ci");
 if (!relayDigestOk(o, progKeys("orch_scan"), "orch_scan") || canonical(o.args) !== canonical(oa)) halt("needs_human", ol + ": the relayed result does not match the program's digest or arguments", "ci");
 gate(ol + ": " + (o.reasons.length ? o.reasons.join("; ") : "no orchestrator, IaC or hook-surface sign") + (o.error ? " (error: " + o.error + ")" : ""));
 if (o.error !== null && !again) return orchScan(head, (tag ? tag + ":" : "") + "retry", true);
+const ws = (state.warnings = state.warnings || []);
+if (o.error !== null && !ws.some((x) => x.gate === "orch_scan" && x.error === o.error)) ws.push({ gate: "orch_scan", error: o.error });
 return (orch = o);
 }
 async function readyStep() {
@@ -6629,7 +6631,6 @@ if (iacTouched) halt("needs_human", "IaC PR: needs Max; the fleet watches no CI 
 const g = ghCmd("ready", "ci");
 const o = await orchScan(approvedSha);
 if (o.error !== null) {
-(state.warnings = state.warnings || []).push({ gate: "orch_scan", error: o.error });
 state.scanWarn = "Orchestrator/IaC scan error: " + o.error + ". Next step: re-run the build with the same plan_ref (the scan runs again), or check the PR by hand before any merge.";
 const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
 const targs = [g, remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
