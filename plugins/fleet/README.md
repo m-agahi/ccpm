@@ -37,10 +37,10 @@ free text.
 ## Requirements
 
 - Claude Code with the Workflow tool (dynamic workflows) enabled.
-- Nothing for the role prompts (5.0.0, R1): the ten role prompts ship in the plugin as
+- Nothing for the role prompts (5.0.0, R1): the eleven role prompts ship in the plugin as
   `roles/<role>.md`: `scope-and-plan`, `plan-audit`, `fleet-test-writer`, `fleet-test-judge`,
-  `fleet-coder`, `fleet-code-judge`, `fleet-pr-opener`, `fleet-intent-judge`, `pr-review` and
-  `gate-change-nonweakening-sweep`. See "Role files" below.
+  `fleet-coder`, `fleet-code-judge`, `fleet-pr-opener`, `fleet-intent-judge`, `pr-review`,
+  `gate-change-nonweakening-sweep` and `fleet-ci-classifier`. See "Role files" below.
 - No MCP server is required (5.0.0, R2). Optional: `yaadgaar` (task ids of every project, 7.0.0;
   the yadgar ledger is retired), the Atlassian MCP (Jira input and comments), `gh` /
   `gh-personal` (GitHub input and comments) and `$CODEBERG_TOKEN` (Codeberg comments). Preflight
@@ -981,7 +981,7 @@ build past its commit) wins over `freeze_digest`.
 
 ### Role files (5.0.0, R1, ledger 1999)
 
-The ten role prompts ship as `plugins/fleet/roles/<role>.md`, and the shared prompt files as
+The eleven role prompts ship as `plugins/fleet/roles/<role>.md`, and the shared prompt files as
 `plugins/fleet/roles/_shared/<name>.md` (5.0.0 R3: one, `test-cmd-allowlist.md`), under the same
 trust model as the shipped programs. `scripts/gen.mjs` writes three tables into the workflow source
 from the files: `ROLE_SHA256` (the sha256 of each role file's exact bytes), `ROLE_DISPATCH`
@@ -1123,7 +1123,12 @@ Not defended:
   interpreter flag clusters (for example `-xc` in a hook entry), nested git config includes,
   the transport git config left unfrozen for resume (for example `credential.helper=!<command>`,
   `core.sshCommand`), virtualenv and `node_modules` internals beyond the startup hooks, and
-  anything else that runs code without changing a frozen key.
+  anything else that runs code without changing a frozen key;
+- a forged sealed plan ref (7.4.0, #69, Max ruled: no HMAC): a sealed plan ref
+  (`refs/fleet/<task>/plan`) is self-hashed, so any role with a shell can forge one, in another
+  task's namespace too. Roles are inside the trust boundary (ADR-1152), and no key can sit outside
+  a role's read scope. The sealed `kind:ref` check blocks only accidental cross-task branch
+  adoption.
 
 #### IaC tooling: Max's hard rules and the PATH shims (3.1.0)
 
@@ -1266,6 +1271,15 @@ output, so an alias bomb ("billion laughs") is refused, not expanded.
 Every `git worktree add` the fleet runs uses `-c core.hooksPath=/dev/null`, so no `post-checkout`
 hook runs in a fleet worktree. The scope-and-plan role page creates the planner's own probe worktree;
 the script does not create it.
+
+### Known limits
+
+- Node build leftovers (7.4.0, #17, Max ruled: keep strict): `.next/`, `tsconfig.tsbuildinfo`,
+  the coverage dir and `.eslintcache` in the worktree stop the hash check, as any other changed
+  file does. Set them outside the worktree in the repo's config. The `TURBO_CACHE_DIR`,
+  `MYPY_CACHE_DIR` and `COVERAGE_FILE` rows of `BUILD_ENV_ROWS` are not verified on the real tools.
+- One fleet run per worktree at a time (7.4.0, #18): a second run's build reset deletes the first
+  run's build dirs. A drift retry empties only the retried role's own build dir.
 
 ### Frozen set
 
@@ -1559,7 +1573,8 @@ The script pins the role contract, not the prose:
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
   `commands`, `contract`, `role`, `cap`, `ownership`, `commit`, `review`, `intent`, `scope`,
-  `resume`, `iac`, `iac-push` or `callers` (`null` when the run did not stop at one of them). A
+  `resume`, `iac`, `iac-push`, `callers`, `hooks`, `db`, `relaunch`, `policy`, `stats`, `ci` or
+  `merge` (`null` when the run did not stop at one of them). A
   cap stop names the gate that rejected the last round (hash, obligations gate, commit hook, push
   hook or review).
 

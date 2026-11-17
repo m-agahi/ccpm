@@ -85,6 +85,49 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
   and accept `f_` and `fl_`.
 - Car 2 dist: 453,981 bytes (+2,216; the plan estimated ~700).
 
+- Car 3, #4 (L1995): the README Role contract lists all 22 `STOP_GATES` in src order.
+- Car 3, #28 (L2056): the README says eleven role prompts and names `fleet-ci-classifier`; so
+  does the root README's fleet section.
+- Car 3, #17 (L2023, Max ruling Q7 "keep strict, document"): a README Known limits line: Node build
+  leftovers (`.next/`, `tsconfig.tsbuildinfo`, the coverage dir, `.eslintcache`) in the worktree
+  stop the hash check; the `TURBO_CACHE_DIR`, `MYPY_CACHE_DIR` and `COVERAGE_FILE` rows are not
+  verified on real tools. #18: one fleet run per worktree at a time (a second run's build reset
+  deletes the first run's build dirs).
+- Car 3, #69 (Max ruling Q11 "decline the HMAC"): the README Threat model lists a forged sealed
+  plan ref under Not defended: the ref is self-hashed, any role with a shell can forge one, roles
+  are inside the trust boundary (ADR-1152), and the sealed `kind:ref` check blocks only accidental
+  cross-task branch adoption.
+- Car 3, #23 (L2035): when the digest-checked `session_project` ran in the repo itself or in a
+  fleet worktree under it, the gate log has "WARN session_project ran in <cwd> ..."; the run goes
+  on. The no-proof texts name the next step: intake's stop says "start the session in a directory
+  under the repo (a .yadgar/project-id or an origin remote)", and the write-back reason with no
+  project at all adds "pass args.project, or ...". `session_project.py`'s header lists where its
+  derive differs from yadgar-client c2200bb `src/project.rs` (64 vs 16 insteadOf passes; a 4096-byte
+  strict-UTF-8 project-id read that ends the program on error where the client falls through to
+  the origin remote; a 60 s timeout and core.fsmonitor off on every git call).
+- Car 3, #30 N1 (L2098): plan mode stops (needs_human) when a source body holds
+  `<!-- fleet-brief:v1 -->` and the caller's confirm is not `ask` ("re-run with confirm ask (a
+  briefed task is confirmed by Max)"), before the planner runs. Under unattended the marker stays
+  a ruling, as in 6.3.0. #30 L3: `brief_check.py` cuts a `:<line>[:<col>]` and a possessive
+  `'s`/`’s` suffix off a token before the IaC and hook checks.
+- Car 3, #31 (L2103, the leak part): `policy_init.py` `temp_copy` removes its temp file when the
+  fchmod, write or fsync raises, then raises again. P7, P8, T5 and T6 stay manual.
+- Car 3, X1 (car-2 report): `tf_gate.py` (its three tree diffs) and `changed_defs.py` (the
+  name-status and the per-path diff) pass `--ignore-submodules=none`. `tf_gate.py` reads through a
+  scratch repo, so only the user's global `diff.ignoreSubmodules=all` could hide a gitlink bump
+  there; `changed_defs.py` read the repo's own. `changed_defs.py` lists a gitlink at either end as
+  unclassified (it has no blob; the flag alone would have crashed the program on `cat-file blob`),
+  so the callers gate checks it against the plan's files.
+- Car 3, X2 (car-2 report): `logPath` maps control characters in every remaining halt and gate
+  line that carries a path from a program relay: format-tests and format-plan (refused, frozen,
+  outside, reformatted, purged), the judge fingerprint keys, changed_defs (skipped, unclassified,
+  the callers findings), the plan commit (dirty, files, DSN paths, park dirty), the scope fence,
+  the frozen-resume and freeze suspicious paths, tf_gate (problems, hints, IaC files), the fleet
+  scan, the update-branch overlap, the orchestrator scan reasons, the short-path writer, the
+  pre-freeze hook failures, the code-round hash violations, the review sweep triggers, and the
+  session cwd.
+- Car 3 dist: 455,022 bytes (+1,041; the plan estimated ~700; X2 is outside the estimate).
+
 ### Removed
 
 - Car 1, #9: `push_classify.py` and `push_probe.py`. Their rules moved into `push.py`; no prompt
@@ -128,6 +171,15 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
   maps `r.allowed @ expandKeys`. `v740_hook_dir_allow` F3 uses a plain `helpers.py` under the
   hook dir (a `conftest.py` edit is now refused at format-code). `v403_schema_types`: READS for `prog:hash_diff:allowed` and
   `allowed_changed`. Harness: `hashDiffOut` reads `--allow` and prints the two new keys.
+
+### Tests changed on purpose (car 3)
+
+- New: `v740_readme` (D1-D4), `v740_session_project` (S1-S3), `v740_brief_marker` (M1-M3),
+  `v740_policy_init` (L1), `v740_submodule_gates` (X1), `v740_logpath_sweep` (X2).
+- S2 deviates from the AC wording: with no args.project intake never checks the session project
+  (`yaadgaarScope` runs only with args.project), so S2 pins the intake stop with args.project and
+  no proof, and the write-back reason with neither.
+- Harness: the role list comment says eleven (#28). No existing test changed.
 
 ## [7.3.0] - 2026-11-17
 

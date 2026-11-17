@@ -164,8 +164,11 @@ def gen_fresh(rev):
     # the dist at rev is the build of the src at rev
     s, d = gen_blob(rev, GEN_SRC), gen_blob(rev, GEN_DIST)
     return s is not None and d is not None and gen_build(s) == d
+def gitlink(rev, p):
+    return run('ls-tree', '-z', rev, '--', p).startswith(b'160000 ')
 entries = []
-st = run('diff', '--name-status', '-z', '-M', base, tree, '--').split(b'\0')
+# 7.4.0 (X1): the repo's diff.ignoreSubmodules cannot hide a gitlink bump
+st = run('diff', '--ignore-submodules=none', '--name-status', '-z', '-M', base, tree, '--').split(b'\0')
 i = 0
 while i < len(st) and st[i]:
     status = st[i].decode()
@@ -189,6 +192,10 @@ for status, path, newpath in entries:
     # which is scanned; a stale base dist could hide dist-only definitions, so it is scanned
     if path == GEN_DIST and status in ('M', 'T') and gen_fresh(base) and gen_fresh(tree):
         generated.add(esc(path))
+        continue
+    # a gitlink (a submodule commit) at either end has no blob to scan
+    if gitlink(base, path) or gitlink(tree, newpath or path):
+        unclassified.add(esc(path))
         continue
     blob = run('cat-file', 'blob', base + ':' + path)
     lang = lang_of(path, blob)
@@ -265,7 +272,7 @@ for status, path, newpath in entries:
     if status == 'R':
         out = run('diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', base + ':' + path, tree + ':' + newpath)
     else:
-        out = run('diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', base, tree, '--', path)
+        out = run('diff', '--ignore-submodules=none', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', base, tree, '--', path)
     if b'\nBinary files ' in out or out.startswith(b'Binary files '):
         unclassified.add(esc(path))
         continue

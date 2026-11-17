@@ -174,6 +174,7 @@ const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
 const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge"];
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "stats", shipped: "done" };
 const CONFIRMS = ["ask", "auto", "default"];
+const BRIEF_MARKER = "<!-- fleet-brief:v1 -->";
 const MAX_REVIEWS = 2;
 const MAX_UPDATE_REVIEWS = 2;
 const MAX_BODY_FIXES = 1;
@@ -1457,7 +1458,7 @@ const PROGRAM_SHA256 = {
 "branch_scan": "ec03aa965ed9a3d145ce1fb1636685d2be087877daf78f369eed0a19f532967d",
 "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
 "callers": "98a98f11d7896e206249104b08dcf84b3478b2522e5996dbf2bd35278cf2a9c2",
-"changed_defs": "3afdc459fcc5590a26516a41d31fd637ea5833ad59b06566140f6cef0fb6561a",
+"changed_defs": "489230ce46b9d6fdeecb17f49f462ac8e51229c8436f24b29985596ffe305116",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
 "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
 "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
@@ -1493,10 +1494,10 @@ const PROGRAM_SHA256 = {
 "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
 "scratch_copy": "1807aea9a3afbaac7e63acca21df6ad4b9f1a55f392972cd753eaec6d161a690",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
-"session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
+"session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",
 "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
 "test_db_decl": "c2e9f36d23fb147835a85c4421d5e38a05912d343fdaa1f08fe285c3cfc5c11d",
-"tf_gate": "f147f9c7e729aaf6b6adc39c4599112e6ac1040c385d103f970775d57cf8e070",
+"tf_gate": "758589362151c24837a3dbd0c6b9161da2e07c4fb91b93e9b3a5508b2f8e815f",
 "verify_since": "49e9c91f4bfe302b9a7c5c88c20636518521515becfd2e4a709f5f3a8ad4b786"
 };
 // PROGRAM_SHA256_END
@@ -2514,9 +2515,9 @@ halt("needs_human", label + ": the pre_freeze_hooks check phase ran out of time:
 if (!Array.isArray(frozenList) && r.frozen_map !== frozenList.sha) halt("failed", label + ": the program read the frozen map " + JSON.stringify(r.frozen_map) + ", not " + frozenList.sha, "hash");
 if (!Number.isInteger(r.purged) || r.purged < 0 || !Array.isArray(r.purged_paths) || r.purged_paths.length > r.purged || r.purged_paths.some((x) => typeof x !== "string"))
 halt("failed", label + " returned no purged/purged_paths", "contract");
-if (r.purged) gate(label + ": purged " + r.purged + " cache path(s) under hook paths: " + r.purged_paths.slice(0, 10).join(", "));
+if (r.purged) gate(label + ": purged " + r.purged + " cache path(s) under hook paths: " + logPath(r.purged_paths.slice(0, 10).join(", ")));
 if (r.refused.length)
-halt("needs_human", label + ": hook config, a hook entry or a symlinked path differs from HEAD: " + r.refused.join(", ") + "; no hook was run (" + r.note + ")", "hash");
+halt("needs_human", label + ": hook config, a hook entry or a symlinked path differs from HEAD: " + logPath(r.refused.join(", ")) + "; no hook was run (" + r.note + ")", "hash");
 if (!r.ran) {
 gate(label + ": fixer hooks not run (" + r.note + ")");
 return r;
@@ -2525,13 +2526,13 @@ const changed = r.changed.map((x) => normPath(String(x)));
 if (!Array.isArray(r.frozen_changed) || r.frozen_changed.some((x) => typeof x !== "string")) halt("failed", label + " returned no frozen_changed list", "contract");
 const frozenHit = changed.filter((x) => (Array.isArray(frozenList) && frozenList.indexOf(x) >= 0) || r.frozen_changed.map(normPath).indexOf(x) >= 0);
 if (frozenHit.length)
-halt("needs_human", label + ": a fixer hook changed frozen path(s) " + frozenHit.join(", ") + " after freeze; never accepted", "hash");
+halt("needs_human", label + ": a fixer hook changed frozen path(s) " + logPath(frozenHit.join(", ")) + " after freeze; never accepted", "hash");
 const allow = (allowed || r.files).map((x) => normPath(String(x)));
 const outside = changed.filter((x) => allow.indexOf(x) < 0);
 if (outside.length)
-halt("needs_human", label + ": the fixer hooks changed path(s) outside the files they were given (" + allow.join(", ") + "): " + outside.join(", "), "scope");
-if (!r.stable) halt("needs_human", label + ": the fixer hooks still rewrite files after 3 runs: " + changed.join(", "), "commit");
-gate(label + ": fixer hooks ran " + r.runs + "x on " + r.files.length + " file(s); " + (changed.length ? "reformatted " + changed.join(", ") : "no change"));
+halt("needs_human", label + ": the fixer hooks changed path(s) outside the files they were given (" + logPath(allow.join(", ")) + "): " + logPath(outside.join(", ")), "scope");
+if (!r.stable) halt("needs_human", label + ": the fixer hooks still rewrite files after 3 runs: " + logPath(changed.join(", ")), "commit");
+gate(label + ": fixer hooks ran " + r.runs + "x on " + r.files.length + " file(s); " + (changed.length ? "reformatted " + logPath(changed.join(", ")) : "no change"));
 return r;
 }
 function formatPlanPrompt(inputs) {
@@ -3647,7 +3648,7 @@ let what = [];
 if (before.fingerprint.head !== after.fingerprint.head) what.push("HEAD");
 if (before.fingerprint.tree !== after.fingerprint.tree) what.push("tree");
 what = what.concat(keyNames(await expandKeys(changedKeys(before.hashes, after.hashes, worktree), before.hashes, after.hashes, roundTag, phaseName)));
-halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") changed " + what.join(", ") + "; verdict discarded", "fingerprint");
+halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") changed " + logPath(what.join(", ")) + "; verdict discarded", "fingerprint");
 }
 checkRole(role, r);
 collect(role, r);
@@ -3756,7 +3757,9 @@ gate("ledger tools: " + (state.ledgerTools.length ? state.ledgerTools.join(", ")
 const sj = pre.session_project;
 const sjOk = !!sj && typeof sj === "object" && canonical(sj.args) === "[]" && (sj.project === null || typeof sj.project === "string") && relayDigestOk(sj, progKeys("session_project"), "session_project");
 state.sessionProject = sjOk && sj.project ? sj.project : null;
-gate("session yaadgaar project: " + (sjOk ? JSON.stringify(state.sessionProject) + " (" + sj.source + " of " + sj.cwd + ")" : "unknown (no digest-checked session_project)"));
+gate("session yaadgaar project: " + (sjOk ? JSON.stringify(state.sessionProject) + " (" + sj.source + " of " + logPath(sj.cwd) + ")" : "unknown (no digest-checked session_project)"));
+if (sjOk && (String(sj.cwd) === repo || String(sj.cwd).indexOf(repo + "/.claude/worktrees/") === 0))
+gate("WARN session_project ran in " + logPath(sj.cwd) + " (the repo or a fleet worktree): a cd there is ignored; start the session in the directory you mean");
 state.repo = repo;
 for (const role of ROLES) {
 const line = ROLE_DISPATCH[role];
@@ -3939,9 +3942,10 @@ noAdvice(show(t.call)) +
 function sameProject(a, b) {
 return typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
 }
+const START_HINT = "start the session in a directory under the repo (a .yadgar/project-id or an origin remote)";
 function yaadgaarScope(named, want) {
 if (typeof named === "string" && named) return sameProject(named, want) ? null : { why: "is in project " + JSON.stringify(named) + ", not args.project " + want };
-if (!state.sessionProject) return { soft: true, why: "no proof of the session's yaadgaar project (session_project.py resolved none)" };
+if (!state.sessionProject) return { soft: true, why: "no proof of the session's yaadgaar project (session_project.py resolved none; " + START_HINT + ")" };
 return sameProject(state.sessionProject, want) ? null : { why: "the session's yaadgaar project is " + state.sessionProject + ", not " + want };
 }
 function yaadgaarProjectProblem(sources, project) {
@@ -4552,7 +4556,7 @@ for (const k of progKeys("changed_defs")) relayed[k] = k === "defs" ? r.defs.map
 requireProgram(r, "changed_defs", label);
 if (typeof r.digest !== "string" || sha256Hex(canonical(Object.assign({ program: printedProgram(r) }, relayed))) !== r.digest)
 halt("failed", label + ": the relayed lists do not match the program's digest (a definition was dropped or changed in the copy)");
-for (const p of relayed.excluded) gate(label + ": skipped " + p + " (frozen test or plan doc)");
+for (const p of relayed.excluded) gate(label + ": skipped " + logPath(p) + " (frozen test or plan doc)");
 for (const p of relayed.generated) {
 if (p !== GENERATED_DIST)
 halt(
@@ -4563,15 +4567,15 @@ p +
 ", not the fleet dist " +
 GENERATED_DIST,
 );
-gate(label + ": skipped " + p + " (generated from src)");
+gate(label + ": skipped " + logPath(p) + " (generated from src)");
 }
-for (const p of relayed.unclassified) gate(label + ": unclassified " + p + " (no definition pattern; checked against the plan's files)");
+for (const p of relayed.unclassified) gate(label + ": unclassified " + logPath(p) + " (no definition pattern; checked against the plan's files)");
 const bad = buildCallerFindings(relayed, symbols, scopeFiles);
 if (bad.length)
 halt(
 "needs_human",
 "build caller check " + label + ": the approved tree " + tree + " changes code the sealed changed_symbols does not map: " +
-bad.join(", ") +
+logPath(bad.join(", ")) +
 "; nothing committed. Re-plan with these symbols mapped (every caller to a criterion or dont_care), or keep the change inside the planned symbols",
 "callers",
 );
@@ -4826,13 +4830,13 @@ const ff = fmt.format;
 requireProgram(ff, "format_files", fmtLabel);
 if (!relayDigestOk(ff, progKeys("format_files"), "format_files") || !strsOf(ff.files) || !Array.isArray(ff.hook_failures))
 halt("failed", fmtLabel + ": the relayed format result does not match the program's digest", "contract");
-if (ff.refused.length) halt("needs_human", fmtLabel + ": hook config, a hook entry or a symlinked path differs from HEAD: " + ff.refused.join(", ") + " (" + ff.note + ")", "hooks");
+if (ff.refused.length) halt("needs_human", fmtLabel + ": hook config, a hook entry or a symlinked path differs from HEAD: " + logPath(ff.refused.join(", ")) + " (" + ff.note + ")", "hooks");
 if (ff.note === "pre-commit is not installed") halt("needs_human", fmtLabel + ": pre-commit is not installed; the plan doc cannot run the repo's hooks", "hooks");
 if (ff.fix_timeout || !ff.stable || ff.hook_failed)
 halt("needs_human", fmtLabel + ": the repo's hooks " + (ff.fix_timeout ? "ran out of time" : !ff.stable ? "still rewrite the plan after 3 runs" : "fail on the plan doc") + " (" + ff.runs + " run(s)): " + ff.hook_head, "hooks");
 const fmtOther = fmt.changed_paths.map((x) => normPath(String(x))).filter((x) => x !== planPath);
 if (fmtOther.length)
-halt("needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + fmtOther.join(", ") + " (never committed; clean the worktree)", "scope");
+halt("needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + logPath(fmtOther.join(", ")) + " (never committed; clean the worktree)", "scope");
 gate(fmtLabel + ": " + (fmt.reason || "hooks run on " + planPath));
 const dc = fmt.dsn_check;
 requireProgram(dc, "plan_dsn", fmtLabel);
@@ -4950,7 +4954,7 @@ if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", la
 requireProgram(r, "plan_ref_write", label, "failed", "commit");
 if (typeof r.plan_commit !== "string" || !SHA_RE.test(r.plan_commit) || r.plan_base !== ctx.planBase || typeof r.tag_sha !== "string" || !SHA_RE.test(r.tag_sha) || !Array.isArray(r.dirty) || !relayDigestOk(r, progKeys("plan_ref_write"), "plan_ref_write"))
 halt("failed", label + ": the relayed plan commit, base and tag object do not match the program's digest (" + JSON.stringify(r.plan_commit === undefined ? null : r.plan_commit) + ")", "commit");
-if (r.dirty.length) halt("needs_human", label + ": the worktree is not clean after the plan doc left it: " + r.dirty.join(", "), "scope");
+if (r.dirty.length) halt("needs_human", label + ": the worktree is not clean after the plan doc left it: " + logPath(r.dirty.join(", ")), "scope");
 if (r.reused === true) gate("reused plan commit " + r.plan_commit + ": the plan doc is unchanged; no new commit");
 if (ctx.retire) {
 const rt = r.retire;
@@ -5007,9 +5011,9 @@ if (v.plan_hash.plan_sha256 !== stagedSha)
 halt("failed", label + ": the committed plan hashes " + v.plan_hash.plan_sha256 + ", the staged plan " + stagedSha);
 const files = Array.from(new Set(pf.files.map((f) => normPath(String(f)))));
 if (files.length !== 1 || files[0] !== normPath(full.plan_path))
-halt("needs_human", label + ": the plan commit holds " + JSON.stringify(pf.files) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
+halt("needs_human", label + ": the plan commit holds " + logPath(JSON.stringify(pf.files)) + ", not exactly " + full.plan_path + " (nothing else may be committed, .fleet/ least of all)", "scope");
 if (pf.dsn_paths.length)
-halt("needs_human", label + ": the committed plan " + JSON.stringify(pf.dsn_paths) + " holds mysql:// (a test DSN); fix the plan doc, then re-run plan", "db");
+halt("needs_human", label + ": the committed plan " + logPath(JSON.stringify(pf.dsn_paths)) + " holds mysql:// (a test DSN); fix the plan doc, then re-run plan", "db");
 const e = v.plan_ref.refs.find((x) => x && x.name === refName);
 const ep = planRefMetaProblem(e, w.plan_commit, msgSha) || (e.tag_sha !== w.tag_sha ? "tag object " + e.tag_sha + " is not the one written (" + w.tag_sha + ")" : null);
 if (ep) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref (" + ep + ")");
@@ -5339,6 +5343,8 @@ await pushProbe(lay, ws);
 const planPolicy = await policyStep(ws.remoteHost, ws.remoteSlug, null, true);
 unattendedOn(planPolicy, input);
 const un = !!state.unattended;
+if (!un && (input.confirm === undefined ? "ask" : input.confirm) !== "ask" && brief.sources.some((x) => x.body.indexOf(BRIEF_MARKER) >= 0))
+halt("needs_human", "the brief holds the fleet-brief marker: re-run with confirm ask (a briefed task is confirmed by Max)");
 const project = input.project || ws.remoteSlug;
 const common = { project, worktree: lay.mainWt, branch: lay.branch, default_branch: ws.defaultBranch, scratch_dir: lay.scratch };
 const scan = await infra(
@@ -5405,7 +5411,7 @@ parkOk && pr.clean === true
 ? "; draft plan moved to " + dest + " (the worktree is clean for a re-run)"
 : "; no draft plan to park (the worktree is clean)"
 : "; draft plan left in the worktree (park failed: " +
-(parkOk && Array.isArray(pr.dirty) && pr.dirty.length ? "other dirty paths " + pr.dirty.join(", ") : pk && pk.status === "ok" && !parkOk ? "the park relay does not match the program's digest" : (pk && pk.reason) || "no result") +
+(parkOk && Array.isArray(pr.dirty) && pr.dirty.length ? "other dirty paths " + logPath(pr.dirty.join(", ")) : pk && pk.status === "ok" && !parkOk ? "the park relay does not match the program's digest" : (pk && pk.reason) || "no result") +
 ")";
 if (!(e instanceof Stop)) {
 log("park-plan" + note);
@@ -5544,7 +5550,7 @@ for (const p of changed || []) {
 const why = fencePathProblem(p);
 if (why) bad.push(normPath(p) + " (" + why + ")");
 }
-if (bad.length) halt("needs_human", where + ": changed path outside the scope fence: " + bad.join(", "), "scope");
+if (bad.length) halt("needs_human", where + ": changed path outside the scope fence: " + logPath(bad.join(", ")), "scope");
 }
 const WORK_OWNERS = ["quinyx", "concrete-media"];
 function policyPrompt(inputs) {
@@ -6023,7 +6029,7 @@ const hz = await hasher("hasher:resume-frozen", mainWt, hashedFiles, "Verify");
 const refTree = hz.hashes.git[FLEETREF + freezeRefName];
 if (hz.fingerprint.head !== planBase) mis("HEAD " + hz.fingerprint.head + " is not plan_base " + planBase);
 if (typeof refTree !== "string" || !refTree) mis("no freeze ref");
-if (hz.hashes.suspicious.length) mis("suspicious paths: " + hz.hashes.suspicious.join(", "));
+if (hz.hashes.suspicious.length) mis("suspicious paths: " + logPath(hz.hashes.suspicious.join(", ")));
 if (freezeDigestOf(tiny.ref_sha256, refTree, hz.hashes, true) === input.freeze_digest)
 mis("the freeze was re-frozen after fix_tests; a frozen resume would restart its round and re-freeze counts");
 if (freezeDigestOf(tiny.ref_sha256, refTree, hz.hashes) !== input.freeze_digest)
@@ -6091,8 +6097,8 @@ typeof r.touched !== "boolean" || !strs(r.iac_files) || !strs(r.problems) || !st
 r.touched !== r.iac_files.length > 0 || scanIac.some((p) => r.iac_files.indexOf(p) < 0)
 )
 halt("needs_human", "IaC pre-push check could not complete: " + label + " returned no usable result (the relayed result does not match the program's digest, arguments or the PR diff)", "iac");
-const hints = "hints (not a security check): " + (r.hints.length ? r.hints.join("; ") : "none");
-if (r.problems.length) halt("needs_human", "IaC pre-push check stops: " + r.problems.join("; ") + ". " + hints, "iac");
+const hints = "hints (not a security check): " + (r.hints.length ? logPath(r.hints.join("; ")) : "none");
+if (r.problems.length) halt("needs_human", "IaC pre-push check stops: " + logPath(r.problems.join("; ")) + ". " + hints, "iac");
 if (!r.touched) {
 gate(label + ": no IaC file in the PR diff");
 return false;
@@ -6108,7 +6114,7 @@ return true;
 const remote = !rhOk ? "could not be read" : rh.head === null ? "is absent" : "is at " + rh.head;
 halt(
 "needs_human",
-"IaC diffs never push automatically; the fleet hands the push to Max. Branch " + branch + ", commit " + approvedSha + ", IaC files: " + r.iac_files.join(", ") +
+"IaC diffs never push automatically; the fleet hands the push to Max. Branch " + branch + ", commit " + approvedSha + ", IaC files: " + logPath(r.iac_files.join(", ")) +
 ". To push it yourself: git -C " + shQuote(mainWt) + " push -u origin " + branch + " ; then re-run the build with the same plan_ref to open the PR (it goes on only when origin/" +
 branch + " is exactly " + approvedSha + "; it " + remote + "). " + hints,
 "iac-push",
@@ -6123,7 +6129,7 @@ if (!relayDigestOk(r, progKeys(sb ? "fleet_scan:base" : "fleet_scan"), "fleet_sc
 halt("needs_human", "fleet internal files check did not complete: " + label + ": the relayed lists do not match the program's digest", "scope");
 const bad = fleetInternalPaths(r.diff);
 for (const c of r.commits) for (const q of fleetInternalPaths(c.files)) bad.push(q + " (commit " + c.sha + ")");
-if (bad.length) halt("needs_human", "fleet internal files in PR diff: " + bad.join(", "), "scope");
+if (bad.length) halt("needs_human", "fleet internal files in PR diff: " + logPath(bad.join(", ")), "scope");
 const pp = normPath(ref.plan_path);
 if (r.diff.concat(...r.commits.map((c) => c.files)).some((x) => normPath(x) === pp)) halt("needs_human", "the plan doc " + pp + " is in the PR diff or its commits; the plan doc never ships", "scope");
 gate(label + ": no .fleet/ path and no plan doc in the PR diff or its commits");
@@ -6526,7 +6532,7 @@ halt("needs_human", "green, merge blocked: update-branch failed (" + (u.error ||
 state.update = { head: u.head, base: u.base };
 if (u.overlap.length) {
 if (head !== approvedSha) halt("needs_human", "green, merge blocked: update-branch moved a head the review has not seen: " + pr.pr_url, "merge");
-gate("infra:pr-update: " + pr.pr_url + " updated to " + u.head + "; the base change touches files of the PR (" + u.overlap.join(", ") + "): review the new head");
+gate("infra:pr-update: " + pr.pr_url + " updated to " + u.head + "; the base change touches files of the PR (" + logPath(u.overlap.join(", ")) + "): review the new head");
 return { gate: "update", head: u.head, base: u.base, overlap: u.overlap };
 }
 gate("infra:pr-update: " + pr.pr_url + " updated to " + u.head + "; the base change touches no PR file, so CI is watched again without a new review");
@@ -6681,7 +6687,7 @@ orchLabels.push(ol);
 const o = await infra(ol, orchScanPrompt({ args: oa }), "PR", JUDGE_AGENT, "orch_scan", oa);
 requireProgram(o, "orch_scan", ol, "needs_human", "ci");
 if (!relayDigestOk(o, progKeys("orch_scan"), "orch_scan") || canonical(o.args) !== canonical(oa)) halt("needs_human", ol + ": the relayed result does not match the program's digest or arguments", "ci");
-gate(ol + ": " + (o.reasons.length ? o.reasons.join("; ") : "no orchestrator, IaC or hook-surface sign") + (o.error ? " (error: " + o.error + ")" : ""));
+gate(ol + ": " + (o.reasons.length ? logPath(o.reasons.join("; ")) : "no orchestrator, IaC or hook-surface sign") + (o.error ? " (error: " + o.error + ")" : ""));
 if (o.error !== null && !again) return orchScan(head, (tag ? tag + ":" : "") + "retry", true);
 const warns = (state.warnings = state.warnings || []);
 if (o.error !== null && !warns.some((x) => x.gate === "orch_scan" && x.error === o.error)) warns.push({ gate: "orch_scan", error: o.error });
@@ -6871,7 +6877,7 @@ const owner = {};
 for (const p of pending) for (const f of p.criterion.test_files) owner[f] = p.criterion.id;
 for (const f of out.files) {
 const nf = normPath(f);
-if (!owner[nf]) halt("needs_human", "short-path writer touched " + nf + " in test round " + n + " (not a test file of " + ids.join(", ") + ")", "ownership");
+if (!owner[nf]) halt("needs_human", "short-path writer touched " + logPath(nf) + " in test round " + n + " (not a test file of " + ids.join(", ") + ")", "ownership");
 }
 const split = {};
 for (const id of ids) split[id] = [];
@@ -7003,7 +7009,7 @@ roundOut = await writerRound(n, pending, codeFindings);
 if (hookFail) {
 const hf = hookFail;
 const whole = hf.failures.filter((x) => x[0] === "").map((x) => x[1]);
-const listed = hf.failures.map((x) => (x[0] === "" ? "the whole tree" : x[0]) + " (" + x[1] + ")").join(", ");
+const listed = hf.failures.map((x) => (x[0] === "" ? "the whole tree" : logPath(x[0])) + " (" + x[1] + ")").join(", ");
 if (i === maxTestRounds - 1)
 halt("needs_human", "infra:format-tests:r" + n + ": pre_freeze_hooks still fail after " + maxTestRounds + " test round(s): " + listed + "; a test file is never frozen while a listed hook fails on it. First output: " + hf.head, "cap");
 const next = [];
@@ -7090,7 +7096,7 @@ if (h.hashes.suspicious.length)
 halt(
 "needs_human",
 "suspicious paths in the worktree at freeze (':' or '#' in a name, or runner config in a skipped cache dir): " +
-h.hashes.suspicious.join(", "),
+logPath(h.hashes.suspicious.join(", ")),
 "hash",
 );
 if (refreeze && frozen) {
@@ -7227,7 +7233,7 @@ const coderDrift = contractProblem("fleet-coder", coder);
 if (viol.length && (coderDrift || coder.status !== "ok"))
 halt(
 "needs_human",
-"code round " + m + ": hash violation on " + viol.join(", ") + " (frozen paths changed since freeze tree " + freezeTree + ")" +
+"code round " + m + ": hash violation on " + logPath(viol.join(", ")) + " (frozen paths changed since freeze tree " + freezeTree + ")" +
 " (role output also: " + (coder.status !== "ok" ? roleStatusText("fleet-coder", coder) : coderDrift) + ")",
 "hash",
 );
@@ -7268,7 +7274,7 @@ freezeTree +
 " and fix production code instead",
 },
 ];
-gate("code round " + m + ": hash violation on " + viol.join(", ") + " -> coder output rejected");
+gate("code round " + m + ": hash violation on " + logPath(viol.join(", ")) + " -> coder output rejected");
 judgePrior = judgePrior.concat(coderFindings);
 continue;
 }
@@ -7483,7 +7489,7 @@ blocking.push({ id: "review", severity: "blocking", category: "other", file: nul
 let sweep = null;
 const triggers = changedPaths.filter((p) => GATE_PATH_RE.test(p));
 if (r.touches_gate === true || triggers.length) {
-gate("review v" + k + ": sweep triggered (" + (r.touches_gate === true ? "touches_gate" : "") + (triggers.length ? " paths " + triggers.join(", ") : "") + ")");
+gate("review v" + k + ": sweep triggered (" + (r.touches_gate === true ? "touches_gate" : "") + (triggers.length ? " paths " + logPath(triggers.join(", ")) : "") + ")");
 await resetBuild("sweep:v" + k, ["sweep-v" + k], "Review");
 await pathRecheck("sweep:v" + k, "Review");
 const js = await judged(
@@ -7689,7 +7695,7 @@ let results = null;
 let why = null;
 const tasks = yq.map((s) => ({ key: s.key, number: /^[1-9][0-9]*$/.test(String(s.ref)) ? Number(s.ref) : null, id: typeof s.id === "string" && s.id ? s.id : null }));
 const yp = project || state.sessionProject || null;
-if (!yp || !LEDGER_PROJECT_RE.test(yp)) why = "no <owner>/<repo> project to write to (args.project " + JSON.stringify(project) + ", session project " + JSON.stringify(state.sessionProject) + ")";
+if (!yp || !LEDGER_PROJECT_RE.test(yp)) why = "no <owner>/<repo> project to write to (args.project " + JSON.stringify(project) + ", session project " + JSON.stringify(state.sessionProject) + "); pass args.project, or " + START_HINT;
 else if (tasks.some((t) => t.number === null)) why = "a yaadgaar ref is not a task number";
 else if (tasks.some((t) => t.id === null)) why = "the plan ref holds no task id for a yaadgaar source (sealed before 3.1.3): nothing was edited; re-run plan";
 else {

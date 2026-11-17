@@ -78,7 +78,7 @@ export function inputsOf(prompt) {
   }
 }
 
-// The ten fleet roles (5.0.0, R1: their prompts ship as plugins/fleet/roles/<role>.md).
+// The eleven fleet roles (5.0.0, R1; their prompts ship as plugins/fleet/roles/<role>.md).
 export const ROLE_NAMES = [
   "scope-and-plan",
   "plan-audit",
