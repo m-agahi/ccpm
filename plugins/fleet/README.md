@@ -1633,7 +1633,7 @@ The script pins the role contract, not the prose:
   preflight's `ledger_tools` census are never required and accept null, so a model's null never
   stops a build. `role_file` and `shared_file` stay required (null allowed by the schema, refused
   by the script's check on an ok result).
-- Gates this release does not run (coverage when no tool is found, mutation, security scan, and
+- Gates this release does not run (coverage when no tool is found, mutation when it cannot run, security scan, and
   held-out examples when no store is sealed or found) reach
   the judges as `{status: "not_run", reason}` and the PR body as `gates_not_run`; the role files
   call them not run, never run. Since 8.0.0 (G1, ADR-1316) the script derives the list: a gate
@@ -1658,6 +1658,18 @@ The script pins the role contract, not the prose:
   and no `COVERAGE_*` variable reaches the tests, and git attributes cannot hide an added line.
   Limit: code under test runs in the same process as the tracer and can still tamper with it, so
   the gate is advisory to the judge and does not stand against a hostile coder.
+- **Mutation gate (8.0.0, G5).** The same `infra:gates:r<n>` agent runs `mutants.py` as its second
+  Bash call (no new agent). It is a built-in mutator (no mutmut or other tool) for python and
+  pytest only. In a throwaway copy of the judged tree at the plan base it mutates the added lines
+  of changed production `.py` files: comparison flip, boolean swap, boundary +-1 and dropped
+  `not`, at most 200 mutants spread evenly over the lines. It runs the sealed `test_cmd` once per
+  mutant within 540 s and lists the survivors `{id, path, line, op}`. The file is restored and
+  checked after each run. A red baseline, another runner or no python source: `not_run`; changed
+  non-python source or the deadline: `partial` ("N of M not run"). The code judge rules every
+  survivor in `mutant_rulings: [{id, target, reason}]`: `equivalent` passes, `code` goes to the
+  coder, and `tests` goes to the coder with a note until the augmentation round (G6). An approve
+  with an unruled survivor becomes `fix_code`. There is no kill rate. There is no result cache:
+  a digest retry runs the gate again (code under test can write the scratch dir).
 - **Held-out store (8.0.0, G3).** In plan mode, after the plan is staged, one agent
   (`infra:held-out:write`, sonnet, a write step: one attempt, no digest retry) writes the
   planner's top-level held-out examples and each criterion's visible examples as base64 chunks
@@ -1819,7 +1831,7 @@ change that a judge makes and reverts within its own run.
   change to `.github/`, IaC, Kubernetes, rulesets or secret-like paths, in every mode.
 - A re-plan after `plan_wrong` saves the uncommitted work with `git commit-tree` (a plumbing commit
   object on a side branch, no hooks). That is not a `git commit`, and it is never pushed.
-- The fleet runs no mutation or scanner gates. Held-out examples run only on the machine that
+- The fleet runs no scanner gate. Mutation runs for python with pytest only (8.0.0, G5). Held-out examples run only on the machine that
   sealed them (8.0.0, G4). Judges receive explicit `{status: "not_run"}` markers for a gate that
   did not run, and `gates_not_run` reaches the PR opener and the result.
   The planner's `held_out_examples` never reach another role; the held-out store (8.0.0, G3)

@@ -193,7 +193,8 @@ test("8.0.0 G1-3 (non-weakening): with no gate result, gates_not_run is exactly 
   // 8.0.0 (G2): the happy run has a coverage gate result (not_run: no coverage tool); the same four, in
   // the same order, coverage with the gate's own reason
   // 8.0.0 (G4): and a held-out runner result (not_run: no store file on this machine, the harness default)
-  const own = { coverage: "no coverage tool: coverage is not on PATH", held_out: "store file missing on this machine" };
+  // 8.0.0 (G5): and a mutation gate result (not_run: the harness default, no mutation run)
+  const own = { coverage: "no coverage tool: coverage is not on PATH", held_out: "store file missing on this machine", mutation: "tool absent: no mutation run" };
   assert.deepEqual(out.result.gates_not_run, FOUR.map((x) => (own[x.gate] ? { gate: x.gate, reason: own[x.gate] } : x)));
   // the derived function: no state.gates entry, an earlier round's ran, a partial, the judge list
   const src = [grabConst("HELD_OUT_NOT_RUN"), grabConst("SCRIPT_FINDINGS_NOT_RUN"), grabConst("GATE_DEFAULTS"), grabFn("gatesNotRun")].join("\n");

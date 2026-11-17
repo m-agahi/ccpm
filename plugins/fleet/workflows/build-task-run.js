@@ -219,6 +219,7 @@ const HELD_OUT_NOT_RUN = { status: "not_run", reason: "runs in the code rounds o
 const SCRIPT_FINDINGS_NOT_RUN = { status: "not_run", reason: "fleet v2: mutation/coverage/scan gates are not run yet" };
 const GATE_DEFAULTS = [["mutation", SCRIPT_FINDINGS_NOT_RUN], ["coverage", SCRIPT_FINDINGS_NOT_RUN], ["security_scan", SCRIPT_FINDINGS_NOT_RUN], ["held_out", HELD_OUT_NOT_RUN]];
 const GATE_STATUS = ["ran", "partial", "not_run"];
+const MUTANT_TARGETS = ["tests", "code", "equivalent"];
 const AUDIT_IMAGE = "openfantasy/audit-lab@sha256:PENDING";
 const HELD_OUT_KEY = "held_out_examples";
 const RUNNER_CONFIG_FILES = [
@@ -446,6 +447,10 @@ items: { type: "object", properties: { id: STR, met: { type: "boolean" }, eviden
 exemptions: {
 type: ["array", "null"],
 items: { type: "object", properties: { gate: STR, path: STR, lines: { type: "array", items: { type: "integer" } }, reason: STR }, required: ["gate", "path", "lines", "reason"] },
+},
+mutant_rulings: {
+type: ["array", "null"],
+items: { type: "object", properties: { id: STR, target: { type: "string", enum: MUTANT_TARGETS }, reason: STR }, required: ["id", "target", "reason"] },
 },
 }),
 "fleet-pr-opener": roleSchema({
@@ -1518,6 +1523,7 @@ const PROGRAM_SHA256 = {
 "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
 "held_out": "cd9c62029ca923706d62a815728e67297a674e917c88f2c83fd4e2c301d740aa",
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
+"mutants": "75803f583e004968108032d2de1b95138e2d0a6bdd7508a746178ec0a0d81354",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1554,7 +1560,7 @@ return PROGRAM_SHA256;
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-"fleet-code-judge": "199c21addee66317dfb162f60f2a1f3c06d3c007cbc296ab80dbe3bf496bddd8",
+"fleet-code-judge": "d414aec60760db31724d23bda941b0607ba0f427b1de1d48b960bf1fee65e2ad",
 "fleet-coder": "ee4e8960386899888881cb56e377c5ca74a23c7c93c7ac8971504890245cf3b4",
 "fleet-held-out-runner": "30cae706ba8631be377b92c3bf0d44714511b96742b54689111b2d1a29fcbe1f",
 "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
@@ -1659,7 +1665,7 @@ const PROGRAM_SLOTS = [
 [/^infra:hook-surface:/, [[null, "hook_surface"]]],
 [/^infra:ruleset-surface:/, [[null, "ruleset_surface"]]],
 [/^infra:surfaces:/, [["hook_surface", "hook_surface"], ["ruleset_surface", "ruleset_surface"], ["pr_convention", "pr_convention"], ["changed_defs", "changed_defs"]]],
-[/^infra:gates:/, [["coverage", "cover_diff"]]],
+[/^infra:gates:/, [["coverage", "cover_diff"], ["mutation", "mutants"]]],
 [/^infra:held-out:write/, [[null, "held_out"]]],
 [/^infra:review-paths:/, [[null, "review_paths"]]],
 [/^infra:precommit-ids/, [[null, "precommit_ids"]]],
@@ -1677,6 +1683,7 @@ const PROGRAM_KEYS = {
 "session_project": ["project", "source", "cwd", "args"],
 "gate_tools": ["languages", "matrix", "container", "args"],
 "cover_diff": ["status", "reason", "findings", "args"],
+"mutants": ["status", "reason", "killed", "survived", "not_run", "budget_hit", "args"],
 "held_out:write": ["sha256", "count", "per_criterion", "dropped", "args"],
 "held_out:show": ["examples", "sha256", "args"],
 "gh_identity": ["origin", "repos", "args"],
@@ -1773,6 +1780,7 @@ digest: STR,
 },
 held_out: { sha256: STR_OR_NULL, count: INT, per_criterion: { type: "object", additionalProperties: INT }, dropped: { type: "array", items: { type: "object", properties: { criterion: STR_OR_NULL, index: INT, why: STR } } }, examples: { type: "array", items: { type: "object", properties: { criterion_id: STR, given: STR, when: STR, then: STR } } }, args: STRS, digest: STR },
 cover_diff: { status: STR, reason: STR_OR_NULL, findings: { type: "array", items: { type: "object", properties: { path: STR, lines: { type: "array", items: INT } } } }, args: STRS, digest: STR },
+mutants: { status: STR, reason: STR_OR_NULL, killed: INT, survived: { type: "array", items: { type: "object", properties: { id: STR, path: STR, line: INT, op: STR } } }, not_run: INT, budget_hit: BOOL, args: STRS, digest: STR },
 branch_scan: {
 head: STR,
 commits: { type: "array", items: { type: "object", properties: { sha: STR, subject: STR, files: STRS } } },
@@ -3874,7 +3882,7 @@ gate("gate census security: " + (g.container.present === true ? g.container.runt
 }
 function gatePrompt(slots) {
 return (
-INFRA_STEP + "run the fleet gate programs, each as one Bash call with timeout 600000 ms. Read only; change no file.\n" +
+INFRA_STEP + "run the fleet gate programs, each as one Bash call with timeout 600000 ms, one after the other, never in the background or in parallel. Read only; change no file.\n" +
 inputsLine({ gates: slots.map((s) => s[0]) }) +
 slots.map(([g, id, args]) => RUN_EXACT + progCmd(id.split(":")[0], args) + "\nIt prints one JSON object " + printsKeys(id) + ": " + relayAs(g) + ". Non-zero exit -> " + g + " null and the stderr in reason.\n").join("") +
 "Return {status: \"ok\", reason, " + slots.map((s) => s[0]).join(", ") + "}."
@@ -3895,7 +3903,7 @@ if (bad().length) halt("needs_human", label + ": gate " + bad().join(", ") + " e
 }
 for (const s of slots) {
 const x = gateResult(r, s);
-state.gates[s[0]] = { status: x.status, reason: x.reason, findings: x.findings, round: state.rounds.code };
+state.gates[s[0]] = { status: x.status, reason: x.reason, findings: "survived" in x ? x.survived : x.findings, round: state.rounds.code };
 gate("gate " + s[0] + ": " + x.status + (x.reason ? " (" + x.reason + ")" : ""));
 }
 }
@@ -3913,11 +3921,12 @@ return unruled(flat(x.findings, (f) => f.lines.map((l) => ({ id: f.path + ":" + 
 const RUNNER = "fleet-held-out-runner";
 async function heldOutRun(ref, m, inputs) {
 const ho = ref.held_out;
+const prev = state.gates.held_out || {};
 const set = (status, reason, findings) => {
-state.gates.held_out = { status, reason, findings, round: m };
+state.gates.held_out = { status, reason, findings, round: m, seen: !!prev.seen || status !== "not_run" };
 gate("gate held_out: " + status + " (" + reason + ")");
 };
-const nr = (reason) => (set("not_run", reason, []), { status: "not_run", reason });
+const nr = (reason) => (prev.status === "failed" ? set("failed", prev.reason, prev.findings) : set("not_run", reason, []), { status: "not_run", reason });
 if (!("held_out" in ref)) return nr("a pre-8.0.0 plan ref");
 if (!ho) return nr(ref.history.replans ? "not stored on a re-plan" : "no held-out example sealed");
 const k = "held-out-r" + m;
@@ -3929,7 +3938,7 @@ const st = r && r.status === "failed" ? "failed" : "needs_human";
 if (!r || r.status !== "ok") halt(st, label + " returned " + st, "role");
 if (roleFileProblem(RUNNER, { role_file: r.role_file }) || driftOf(RUNNER, r)) halt(st, label + ": contract drift", "contract");
 const stop = (why) => halt(st, label + ": " + why, "gates");
-if (r.store === "missing") return nr("store file missing on this machine");
+if (r.store === "missing") return prev.seen ? stop("store file missing after an earlier round of this build read it") : nr("store file missing on this machine");
 if (r.store !== "ok") stop("held_out.py show: store " + r.store);
 if (r.store_digest !== ho.sha256) stop("store_digest off the seal");
 const pc = ho.per_criterion;
@@ -3940,6 +3949,18 @@ stop("results off the sealed per_criterion");
 const fails = Object.keys(pc).filter((c) => res.some((x) => x.criterion === c && !x.pass));
 set(fails.length ? "failed" : "ran", res.filter((x) => x.pass).length + " of " + res.length + " pass", fails);
 return { status: "ran", reason: null, results: res };
+}
+function mutantsLeft(rul, m) {
+const x = state.gates.mutation;
+const ok = (Array.isArray(rul) ? rul : []).filter((r) => r && MUTANT_TARGETS.indexOf(r.target) >= 0);
+const by = (v) => ok.find((r) => !unruled([v], [r]).length);
+const d = (v) => v.id + " (" + v.path + ":" + v.line + " " + v.op + ")";
+const s = x && x.round === m ? x.findings : [];
+const left = s.filter((v) => !by(v));
+const f = (t) => ({ target: "code", criterion: null, finding: "mutation gate: " + t });
+return (left.length ? [f("surviving mutants no ruling covers: " + left.map(d).join(", ") + " -- the code judge must rule each one")] : []).concat(
+s.filter((v) => by(v) && by(v).target !== "equivalent").map((v) => f("mutant " + d(v) + " survives the frozen tests; the code judge ruled " + by(v).target + ": " + by(v).reason + (by(v).target === "tests" ? " (the test augmentation round is not built yet (G6): change the code so the frozen tests kill it, or stop)" : ""))),
+);
 }
 async function pushProbe(lay, ws) {
 await pathRecheck("push-probe", "Workspace");
@@ -6556,6 +6577,7 @@ reviews,
 rounds: state.rounds,
 suite_result: suiteResult,
 gates_not_run: state.gatesNotRun,
+held_out_seen: !!(state.gates.held_out || {}).seen,
 auto_confirmed: autoConfirmed,
 ...(state.unattended ? { unattended: state.unattended, auto_decisions: state.autoDecisions } : {}),
 intent: intentForPr,
@@ -7084,6 +7106,7 @@ shipTree = resume.code_tree;
 shipDigest = resume.maps_digest;
 suiteResult = resume.suite_result || null;
 state.gatesNotRun = resume.gates_not_run || null;
+if (resume.held_out_seen === true) state.gates.held_out = { status: "not_run", reason: null, findings: [], round: 0, seen: true };
 state.review = resume.review || null;
 reviews = resume.reviews || 0;
 if (resume.rounds && typeof resume.rounds === "object") state.rounds = resume.rounds;
@@ -7601,8 +7624,10 @@ continue;
 const judgeObligations = await checkScripts("infra:check-scripts:r" + m, planFacts.repo_obligations, mainWt, "Code");
 await resetBuild("gates:r" + m, ["gates-r" + m], "Code");
 const tc0 = planFacts.test_cmd;
-await runGate("infra:gates:r" + m, [["coverage", "cover_diff", [mainWt, updRound ? upd.base : planBase, h.fingerprint.tree, tc0.command, JSON.stringify(Object.assign({}, tc0.env, testEnvFor("cjudge", "gates-r" + m))), JSON.stringify(frozenFiles)]]], "Code");
+const ga = [mainWt, updRound ? upd.base : planBase, h.fingerprint.tree, tc0.command, JSON.stringify(Object.assign({}, tc0.env, testEnvFor("cjudge", "gates-r" + m))), JSON.stringify(frozenFiles)];
+await runGate("infra:gates:r" + m, [["coverage", "cover_diff", ga], ["mutation", "mutants", ga]], "Code");
 const cov = state.gates.coverage;
+const mut = state.gates.mutation;
 const hoR = await heldOutRun(ref, m, Object.assign({}, common, { criteria, test_cmd: tc0, plan_commit: updRound ? upd.base : planBase, code_tree: h.fingerprint.tree }));
 await resetBuild("code-judge:r" + m, ["cjudge-r" + m], "Code");
 const jc = await judged(
@@ -7615,7 +7640,7 @@ coder_output: stripHeldOut(coder),
 hash_recheck: hashRecheck(frozen, h.hashes, mainWt),
 prior_findings: stripHeldOut(judgePrior),
 held_out_results: hoR,
-script_findings: Object.assign({ coverage: { status: cov.status, reason: cov.reason, findings: cov.findings } }, SCRIPT_FINDINGS_NOT_RUN),
+script_findings: Object.assign({ coverage: { status: cov.status, reason: cov.reason, findings: cov.findings }, mutation: { status: mut.status, reason: mut.reason, survived: mut.findings } }, SCRIPT_FINDINGS_NOT_RUN),
 repo_obligations: judgeObligations,
 ...roleEnv("cjudge", "cjudge-r" + m),
 }, tc ? { test_conflict: tc } : {}),
@@ -7670,6 +7695,14 @@ coderFindings = [{ target: "code", criterion: null, finding: "coverage gate: add
 judgePrior = coderFindings.slice();
 lastRoundGate = "coverage";
 gate("code round " + m + ": coverage gate: code-judge approve converted to fix_code (" + covLeft.length + " line(s): " + covLeft.join(", ") + ")");
+continue;
+}
+const mutF = mutantsLeft(cj.mutant_rulings, m);
+if (mutF.length) {
+coderFindings = mutF;
+judgePrior = coderFindings.slice();
+lastRoundGate = "mutation";
+gate("code round " + m + ": mutation gate: code-judge approve converted to fix_code (" + mutF.length + " finding(s))");
 continue;
 }
 const surfL = "infra:surfaces:r" + m;

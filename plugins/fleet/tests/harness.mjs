@@ -395,7 +395,8 @@ export async function runOne(script, args0) {
     // 8.0.0 (G4): an unscripted held-out runner finds no store file on this machine (not_run)
     if (!(label in script) && /^role:fleet-held-out-runner:r\d+$/.test(label)) script[label] = { status: "ok", reason: "no store", store: "missing", store_digest: null, results: null };
     // 8.0.0 (G2): an unscripted gate step finds no coverage tool (not_run)
-    if (!(label in script) && /^infra:gates:/.test(label)) return { status: "ok", reason: "ran", coverage: coverOut(prompt) };
+    // 8.0.0 (G5): and runs no mutant (tool absent: not_run)
+    if (!(label in script) && /^infra:gates:/.test(label)) return { status: "ok", reason: "ran", coverage: coverOut(prompt), mutation: mutOut(prompt) };
     // the bytecode purge is mechanical; unscripted purges succeed by default
     if (!(label in script) && /^infra:purge-bytecode:/.test(label)) return { status: "ok", reason: "purged", purged: 0 };
     // 4.0.0 (1986): unscripted parked-run reads find no parked draft
@@ -1377,7 +1378,7 @@ export const PROGRAM_LABELS = [
   // 8.0.0 (G3): the held-out store write (read lazily)
   [/^infra:held-out:write/, [[null, "held_out", PROGRAM_KEYS["held_out:write"] || null]]],
   // 8.0.0 (G2): a code round's gate programs, one slot per gate (read lazily)
-  [/^infra:gates:/, [["coverage", "cover_diff", PROGRAM_KEYS["cover_diff"] || null]]],
+  [/^infra:gates:/, [["coverage", "cover_diff", PROGRAM_KEYS["cover_diff"] || null], ["mutation", "mutants", PROGRAM_KEYS["mutants"] || null]]],
   [/^infra:path-check:/, [[null, "path_check", K("path_check")]]],
   [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")], ["gh_check", "gh_identity", K("gh_identity")], ["exclude", "exclude_add", PROGRAM_KEYS["exclude_add"] || null]]],
   // 5.0.8 (ledger 2030): a repo the workspace step did not check
@@ -1539,6 +1540,10 @@ export function heldOutOut(prompt, over) {
 export function coverArgsOf(prompt) {
   const m = /cover_diff\.py'((?: '(?:[^']|'\\'')*')+)/.exec(prompt);
   return m ? [...m[1].matchAll(/'((?:[^']|'\\'')*)'/g)].map((x) => x[1].replace(/'\\''/g, "'")) : [];
+}
+// 8.0.0 (G5): the mutants.py slot (same args as cover_diff); default: tool absent, not_run
+export function mutOut(prompt, over) {
+  return Object.assign({ status: "not_run", reason: "tool absent: no mutation run", killed: 0, survived: [], not_run: 0, budget_hit: false, args: coverArgsOf(prompt) }, over);
 }
 export function coverOut(prompt, over) {
   return Object.assign({ status: "not_run", reason: "no coverage tool: coverage is not on PATH", findings: [], args: coverArgsOf(prompt) }, over);

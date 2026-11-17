@@ -924,7 +924,8 @@ test("approve without a gates_not_run list: script builds it for the PR and the 
   assert.deepEqual(gates, ["coverage", "held_out", "mutation", "security_scan"]);
   // 8.0.0 (G2): coverage carries its gate's own not_run reason (the harness default: no coverage tool)
   // 8.0.0 (G4): held_out carries the runner's own not_run reason (the harness default: no store file)
-  for (const g of pr.gates_not_run) assert.match(g.reason, g.gate === "coverage" ? /^no coverage tool: / : g.gate === "held_out" ? /^store file missing on this machine$/ : NOT_RUN);
+  // 8.0.0 (G5): mutation carries its gate's own not_run reason (the harness default: no mutation run)
+  for (const g of pr.gates_not_run) assert.match(g.reason, g.gate === "coverage" ? /^no coverage tool: / : g.gate === "held_out" ? /^store file missing on this machine$/ : g.gate === "mutation" ? /^tool absent: no mutation run$/ : NOT_RUN);
   assert.deepEqual(out.result.gates_not_run, pr.gates_not_run);
 });
 
@@ -947,7 +948,8 @@ test("approve with a gates_not_run list: the code-judge list plus every script d
   const out = await run(s, ARGS);
   noUnscripted(out);
   const want = list.concat([
-    { gate: "mutation", reason: inputsOf(call(out, "role:fleet-code-judge:r1").prompt).script_findings.reason },
+    // 8.0.0 (G5): the mutation gate's own not_run reason (the harness default)
+    { gate: "mutation", reason: inputsOf(call(out, "role:fleet-code-judge:r1").prompt).script_findings.mutation.reason },
     { gate: "security_scan", reason: inputsOf(call(out, "role:fleet-code-judge:r1").prompt).script_findings.reason },
   ]);
   assert.deepEqual(inputsOf(call(out, "role:fleet-pr-opener").prompt).gates_not_run, want);
@@ -8627,7 +8629,7 @@ test("3.0.0 review 8: every embedded program runs isolated (-I), the YAML loader
   // no program uses a third-party import (the YAML loader runs under pre-commit's interpreter)
   const progs = PROGRAM_BODIES;
   assert.ok(progs.length >= 10);
-  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "resource", "ast", "base64", "secrets", "signal"]);
+  const stdlib = new Set(["fnmatch", "glob", "hashlib", "json", "os", "re", "shlex", "shutil", "subprocess", "sys", "tempfile", "stat", "collections", "functools", "itertools", "pathlib", "configparser", "tomllib", "io", "errno", "codecs", "sqlite3", "atexit", "time", "resource", "ast", "base64", "secrets", "signal", "tokenize"]);
   for (const [name, p] of progs) {
     for (const m of p.matchAll(/^\s*import ([A-Za-z0-9_, .]+)$/gm))
       for (const mod of m[1].split(",").map((x) => x.trim().split(" ")[0].split(".")[0]))

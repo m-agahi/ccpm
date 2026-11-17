@@ -69,8 +69,8 @@ test("4.0.0 1993 AC-2 (4.0.1): every program ships as scripts/<name>.py and the 
   // 7.3.0 (#43): + fleet_branch
   // 7.3.0 (#54, #9): + scratch_copy, exclude_add, purge
   // 7.4.0 (#9): push replaces push_classify and push_probe (45 -> 44)
-  // 8.0.0 (G1): + gate_tools; (G2): + cover_diff; (G3): + held_out
-  assert.equal(PROGRAMS.length, 47);
+  // 8.0.0 (G1): + gate_tools; (G2): + cover_diff; (G3): + held_out; (G5): + mutants
+  assert.equal(PROGRAMS.length, 48);
   const files = readdirSync(SCRIPTS_SRC).filter((f) => f.endsWith(".py")).sort();
   assert.deepEqual(files, PROGRAMS.map(([n]) => n + ".py").sort(), "no extra and no missing file");
   for (const [name, sha] of PROGRAMS) {
@@ -740,7 +740,7 @@ test("4.0.0 security 2: every fingerprint hashes the shipped programs; a change 
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "needs_human", label);
     assert.equal(out.result.stop_gate, "hash", label);
-    assert.equal(out.result.reason, "hasher " + label + ": the shipped fleet programs were changed: the 47 program(s) in " + SCRIPTS_DIR + " do not hash to this fleet's table of 47", label);
+    assert.equal(out.result.reason, "hasher " + label + ": the shipped fleet programs were changed: the 48 program(s) in " + SCRIPTS_DIR + " do not hash to this fleet's table of 48", label);
   }
   // every program must be present and match; an unknown extra or the overflow sentinel is refused
   const missingOne = Object.assign({}, all);

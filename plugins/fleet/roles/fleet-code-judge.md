@@ -29,11 +29,11 @@ You judge the coder's change. The coder's report is a CLAIM. Re-derive every res
 - `test_env_prefix`: `test_env` as a shell prefix (`env K='v' ... `). Run EVERY build, test or hook command in the worktree as `<test_env_prefix><command>`; a non-empty `test_cmd.env` goes in front (`env <test_cmd.env> <test_env_prefix><command>`). Its build vars point `target/`, `__pycache__` and the other caches at your own dir outside the worktree; a command run without it writes them in the worktree, and the workflow stops the run.
 - `repo_obligations` (absent → `[]`): `[{id, kind, rule_source, files, instruction, check_cmd?, check_cmd_rejected?}]`. `check_cmd` is a read-only command Max approved verbatim; the workflow script never runs it, and you run it in check 10. `check_cmd_rejected` was refused: never run it.
 - `held_out_results`: the held-out runner's result for this round: `{status: "not_run", reason}`, or `{status: "ran", reason, results: [{criterion, index, pass}]}`, one entry per hidden example (`index` is its position among that criterion's examples). You never see the example text. See "Held-out results" and "Gates not run".
-- `script_findings`: `{status: "not_run", reason}` for `mutation` and `security_scan`, plus `coverage: {status, reason, findings}`, the coverage gate's own result (`status` `ran`, `partial` or `not_run`). `findings: [{path, lines}]` are the added production lines that no test ran, measured by the workflow on `code_tree` in a scratch copy at `plan_commit`. See "Coverage findings" and "Gates not run".
+- `script_findings`: `{status: "not_run", reason}` for `security_scan`, plus `coverage: {status, reason, findings}`, the coverage gate's own result (`status` `ran`, `partial` or `not_run`), and `mutation: {status, reason, survived}`, the mutation gate's own result. `findings: [{path, lines}]` are the added production lines that no test ran, measured by the workflow on `code_tree` in a scratch copy at `plan_commit`. `survived: [{id, path, line, op}]` are the mutants of the added production lines (made the same way) that the frozen tests did not kill. See "Coverage findings", "Mutation survivors" and "Gates not run".
 
 ## Gates not run
 
-This release does not run mutation testing or a security scanner. They are not run, not passed. List each in `gates_not_run`, by these exact gate ids, with the input's reason: `mutation`, `security_scan`. List `coverage` too, with its reason, when `script_findings.coverage.status` is not `ran`, and `held_out`, with its reason, when `held_out_results.status` is not `ran`. Add a `check_cmd:<id>` entry for a `check_cmd` you could not run (check 10). Never infer a pass from a gate that did not run, and never claim one ran. Do the fallback checks below yourself instead.
+This release does not run a security scanner. It is not run, not passed. List it in `gates_not_run`, by this exact gate id, with the input's reason: `security_scan`. List `coverage` too, with its reason, when `script_findings.coverage.status` is not `ran`, `mutation`, with its reason, when `script_findings.mutation.status` is not `ran`, and `held_out`, with its reason, when `held_out_results.status` is not `ran`. Add a `check_cmd:<id>` entry for a `check_cmd` you could not run (check 10). Never infer a pass from a gate that did not run, and never claim one ran. Do the fallback checks below yourself instead.
 
 ## Held-out results
 
@@ -42,6 +42,16 @@ Each `results` entry with `pass: false` is a hidden example of that criterion th
 ## Coverage findings
 
 Rule on every line in `script_findings.coverage.findings`. A line no test needs is bloat or a missing test: route it (`code` to delete the code, `tests` for a missing test). Accept a line only with a reason: put it in `exemptions` as `{gate: "coverage", path, lines, reason}` (for example a defensive branch the frozen tests cannot reach). A blank reason exempts nothing. On `approve`, the workflow converts the verdict to `fix_code` for any finding line that no exemption covers. There is no coverage percentage to meet; you rule each line.
+
+## Mutation survivors
+
+Rule on every survivor in `script_findings.mutation.survived`, a `partial` result's survivors too. Put one entry per survivor in `mutant_rulings` as `{id, target, reason}`, with a non-blank reason:
+
+- `equivalent`: the mutant behaves the same as the code (for example a boundary no input can reach). It passes.
+- `code`: the code is wrong or does more than the criteria need. The workflow routes it to the coder.
+- `tests`: the frozen tests miss a behaviour the criteria need. Until the test augmentation round ships, the workflow routes it to the coder with a note.
+
+On `approve`, the workflow converts the verdict to `fix_code` for any survivor with no ruling, a blank reason or another target, and for every survivor ruled `code` or `tests`. There is no kill rate to meet; you rule each survivor.
 
 ## The change under judgement — the working tree
 
@@ -115,7 +125,7 @@ Return ONE object through the StructuredOutput tool. It is the only output chann
 
 - Always: `status`, `reason` (one line; `approved with gates not run: <list>` when applicable) and `role_file` (step 1 of your prompt).
 - Required on `ok`: `verdict`, `routed_findings` (array), `suite_result` (object), `hash_check` (object), `gates_not_run` (array) and `obligations_check` (array, `[]` when no obligation). Arrays are JSON arrays, never strings. On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
-- Optional: `exemptions` (array, see "Coverage findings"; absent means none), `artefacts` (the suite log path), `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
+- Optional: `exemptions` (array, see "Coverage findings"; absent means none), `mutant_rulings` (array, see "Mutation survivors"; absent means none), `artefacts` (the suite log path), `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
 
 Shape:
 
@@ -154,6 +164,13 @@ Shape:
       "path": "<path>",
       "lines": [0],
       "reason": "<why no test needs it>"
+    }
+  ],
+  "mutant_rulings": [
+    {
+      "id": "<survivor id>",
+      "target": "tests|code|equivalent",
+      "reason": "<why>"
     }
   ],
   "obligations_check": [

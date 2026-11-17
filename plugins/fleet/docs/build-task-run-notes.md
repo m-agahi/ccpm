@@ -4618,3 +4618,65 @@ gate then stays in gates_not_run and the PR states it (fail closed, not a pass).
 Not used: gateLeft/unruled. A failing hidden example has no exemption path (the judge cannot see
 the example, so it cannot reason about it); the conversion is unconditional.
 ```
+
+## 8.0.0 notes (G5)
+
+### Step 0: held_out never fails open across rounds (security review of G4, finding 1)
+
+```text
+heldOutRun keeps prev = state.gates.held_out. set() writes seen = prev.seen || status !== not_run
+(ran and failed are set only after the store digest matched the seal). store missing with
+prev.seen -> needs_human at gates; nr() keeps a prior failed result (failed, its reason and
+findings, this round), so the approve check converts again. Only a round where every example
+passes sets ran. Persistence: saveState writes held_out_seen; a resume sets state.gates.held_out
+{status not_run, round 0, seen true} (round 0 never counts in gatesNotRun). The re-plan path
+resets state.gates: a new build, a new store (held_out null on a re-plan anyway).
+Both required tests stop at gates: a round-1 fail implies the store was read ok in round 1.
+```
+
+### `mutants.py`, the mutation slot (G5, ADR-1316)
+
+```text
+Layout: option 2, the 2nd slot of infra:gates:r<n>. gatePrompt already makes one RUN_EXACT Bash
+call per slot (600000 ms each) and gateResult checks each slot's digest on its own; coverage (up
+to 540 s) and mutants (up to 540 s) cannot share one Bash call, but one agent can make two. Cost
+of the choice: runGate's one retry reruns both slots (coverage and mutants run again). No new agent, no new reset, cap +0 (the plan's infra:mutants:r<n> would be +2 calls,
++1 capped, reserve 11). The prompt now says "one after the other, never in the background or in
+parallel": a background call escapes the 600 s cap and two copies would fight over worktree add.
+Mutator: tokenize on the copy's file text (what the tests import), tokens on added rows only, a
+token on one line only. FLIP and BOUND on OP tokens, BOOL on NAME, not dropped up to the next
+token on the same line, decimal integer literals +1 and -1. Per line in token order; selection
+round-robin, a round larger than the room left takes evenly spaced entries; ids m1.. in
+(path, line, column) order, stable across the retry. More candidates than 200: ran, with
+"<n> of <total> candidates sampled" in the reason (sampling is Max's Q4, not a budget hit).
+A file that does not decode or tokenize: not mutated, partial.
+Bytecode: PYTHONDONTWRITEBYTECODE=1 and PYTHONPYCACHEPREFIX in a fresh temp dir. Without them a
+same-length mutant (== -> !=) written in the same second keeps mtime and size, and Python loads
+the baseline .pyc: a false survivor. G5-1 asserts that == -> != is killed with real pytest.
+Bound per mutant: max(10, 4 * baseline + 5) s; a timeout is killed (-9). The deadline (540 s, from
+process start, so worktree add and the baseline count) raises Late: partial, the rest not_run.
+Restore: put() writes a temp file in the same dir and os.replace()s it (a planted symlink is
+replaced, never written through), then reads it back; a final git diff --quiet <tree> -- <files>
+in the copy. A failure is sys.exit (non-zero: runGate retries, then gates). SIGTERM -> sys.exit,
+so the finally blocks restore and remove the copy; a SIGKILLed run's mut-* dirs are removed by the
+next run's sweep (worktree remove --force, rmtree, prune).
+No cache (security review, HIGH): the first cut cached the result in scratch/mutants-cache.json
+keyed by sha256([program sha, args]); every arg is predictable, and code under test (same uid)
+can write the scratch dir, so a planted entry forged a clean ran for the run or its retry. No
+workflow-held key exists for an HMAC (ADR-1307). The cache is gone: a digest retry runs the gate
+again (rare; costs time, not safety); a leftover mutants-cache.json is unlinked unread.
+cover_diff.py checked for the same class: it trusts its data file and json report, both in a
+random 0700 mkdtemp dir outside the scratch dir and the copy, named only on argv; code under test
+runs inside the coverage process and can tamper with the tracer anyway (G2's documented limit).
+Exit codes: 126/127 (no runner) and pytest 4/5 (usage error, nothing collected) in a mutant run
+exit non-zero (retry, then gates), never a kill; in the baseline 127 stays not_run (red). Any
+other non-zero exit, a signal or the per-mutant bound (-9) is a kill.
+FLEET_MUTANTS_DEADLINE: a test knob, read only as an integer 1..9999 and min(540, x); it can only
+lower the deadline, which yields partial (fail closed). The child never sees FLEET_* or COVERAGE_*.
+Routing: mutantsLeft(rulings, m) -- a ruling counts only with a target in MUTANT_TARGETS and a
+reason unruled() accepts (a string id, a non-blank reason). Unruled survivors -> one finding;
+each survivor ruled code or tests -> its own finding with the judge's reason; equivalent passes.
+After the coverage check, lastRoundGate "mutation". No kill-rate stop (Q6).
+For G6: the tests target is routed to the coder with a note today; G6 replaces that branch with
+the fix_tests augmentation round (surviving_mutants, new test_files, re-freeze).
+```

@@ -99,7 +99,9 @@ test("5.0.0 R3: gates this release does not run are described as not run, never 
   const cj = readFileSync(join(ROLES_SRC, "fleet-code-judge.md"), "utf8");
   for (const g of ["mutation", "coverage", "security_scan", "held_out"]) assert.match(cj, new RegExp("`" + g + "`"), "code judge names gate " + g);
   assert.match(cj, /gates_not_run/);
-  assert.doesNotMatch(cj, /hunk_rulings|mutant_rulings/, "no dead output keys");
+  assert.doesNotMatch(cj, /hunk_rulings/, "no dead output keys");
+  // 8.0.0 (G5): mutant_rulings is live: the script reads it (mutantsLeft) before it accepts an approve
+  assert.match(SOURCE, /mutantsLeft\(cj\.mutant_rulings, m\)/, "mutant_rulings is read by the script");
   // 8.0.0 (G2): exemptions is live: the script reads it (gateLeft) before it accepts an approve
   assert.match(SOURCE, /gateLeft\("coverage", cj\.exemptions, m\)/, "exemptions is read by the script");
   const tw = readFileSync(join(ROLES_SRC, "fleet-test-writer.md"), "utf8");

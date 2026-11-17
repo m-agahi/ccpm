@@ -374,8 +374,8 @@ test("5.0.8 2030: a GitHub comment with no push-capable command is failed withou
 
 // the keys a 5.0.7 saveState wrote (no write-back yet): 5.0.8 adds none
 // 6.0.0 (ledger 2033): + policy
-// 7.3.0 (#32 leftover): + scan_warn; review m2: + warnings
-const STATE_507_KEYS = ["approved_sha", "auto_confirmed", "code_tree", "gates_not_run", "intent", "last_gate", "maps_digest", "plan_commit", "policy", "pr_created", "pr_number", "pr_url", "ref_sha256", "review", "reviews", "rounds", "seal", "suite_result", "template_used", "tests_written", "iac_touched", "ci", "pr_updated", "update", "scan_warn", "warnings"];
+// 7.3.0 (#32 leftover): + scan_warn; review m2: + warnings; 8.0.0 (G5 step 0): + held_out_seen
+const STATE_507_KEYS = ["approved_sha", "auto_confirmed", "code_tree", "gates_not_run", "held_out_seen", "intent", "last_gate", "maps_digest", "plan_commit", "policy", "pr_created", "pr_number", "pr_url", "ref_sha256", "review", "reviews", "rounds", "seal", "suite_result", "template_used", "tests_written", "iac_touched", "ci", "pr_updated", "update", "scan_warn", "warnings"];
 
 test("5.0.8 2030: a build stopped at the PR step (5.0.7-shaped run-state at pushed) resumes at the PR with gh_cmd set", async () => {
   const states = {};

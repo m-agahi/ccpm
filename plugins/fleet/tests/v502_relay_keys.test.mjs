@@ -222,7 +222,7 @@ test("5.0.2 2007: the digest checks and the prompts read the one key table (sour
     // 8.0.0 (#62 B2): a surfaces step builds each program's list with printsKeys(p.name)
     const surf = n === "changed_defs" || n === "pr_convention" ? /\nfunction surfacesPrompt\([^]*?printsKeys\(p\.name\)/ : null;
     // 8.0.0 (G2): the gate step builds each gate program's list with printsKeys(id)
-    const gate = n === "cover_diff" ? /\nfunction gatePrompt\([^]*?printsKeys\(id\)/ : null;
+    const gate = n === "cover_diff" || n === "mutants" ? /\nfunction gatePrompt\([^]*?printsKeys\(id\)/ : null;
     assert.ok(re.test(SOURCE) || (surf && surf.test(SOURCE)) || (gate && gate.test(SOURCE)), n + ": no printsKeys(" + n + ") in a prompt");
   }
 });

@@ -418,6 +418,8 @@ const READS = {
     "ex array": CJ + "exemptions",
     "e.lines array": CJ + "exemptions[].lines",
   },
+  // 8.0.0 (G5): the code judge's mutant rulings; a non-list rules nothing
+  mutantsLeft: { "rul array": CJ + "mutant_rulings" },
   preflightStep: { "pre.ledger_tools array": "preflight:ledger_tools", "x string": "preflight:ledger_tools[]", "sj object": "preflight:session_project", "sj.project string": "prog:session_project:project" },
   // 5.0.9 (ledger 2032)
   // 7.0.0 review F5: a case-insensitive project key compare (typeof-guarded)
@@ -853,6 +855,8 @@ const READS = {
     // 6.0.0 (ledger 2045)
     "r.is_draft boolean": "prog:pr_state:is_draft",
     "resume.iac_touched boolean": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    // 8.0.0 (G5 step 0)
+    "resume.held_out_seen boolean": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     // 6.0.1 (ledger 2050)
     "c.parents array": "prog:verify_since:commits_since[].parents",
     "c.parents.length number-literal": "parsed: the length of prog:verify_since:commits_since[].parents (checked as an array first)",

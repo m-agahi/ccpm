@@ -27,7 +27,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, readdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, sha256, canon, spawnSync, programSha, FP_K1, FP_K2, HASHES } from "./harness.mjs";
+import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, sha256, canon, spawnSync, programSha, FP_K1, FP_K2, HASHES, mutOut } from "./harness.mjs";
 
 const PROG = join(HERE, "..", "scripts", "cover_diff.py");
 const PY = HAVE_PY ? spawnSync("python3", ["-I", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim() : null;
@@ -274,8 +274,9 @@ test("8.0.0 G2 (non-weakening): the PATH guard of scratch_copy run: no terraform
 
 const GATES = /^infra:gates:r\d+$/;
 // a gates stub: the coverage slot with the prompt's own args (the harness fills program and digest)
+// 8.0.0 (G5): and the mutation slot's harness default (not_run)
 function gatesStub(over) {
-  return (prompt) => ({ status: "ok", reason: "ran", coverage: Object.assign({ status: "ran", reason: null, findings: [], args: argsOf(prompt) }, over) });
+  return (prompt) => ({ status: "ok", reason: "ran", coverage: Object.assign({ status: "ran", reason: null, findings: [], args: argsOf(prompt) }, over), mutation: mutOut(prompt) });
 }
 function argsOf(prompt) {
   const m = /cover_diff\.py'((?: '(?:[^']|'\\'')*')+)/.exec(prompt);
