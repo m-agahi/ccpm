@@ -861,13 +861,13 @@ export const BUILD_ROWS = [
   ["TURBO_CACHE_DIR", "turbo-cache"],
   // 7.4.0 (#73)
   ["UV_PROJECT_ENVIRONMENT", "uv-venv"],
-  // 7.4.0 review B-M4: one uv cache per run, outside build/ (null: <scratch>/uv-cache/<nonce>)
+  // 7.4.0 review B-M4: uv caches per run and tier, outside build/ (null: <scratch>/uv-cache/<nonce>/write|gate)
   ["UV_CACHE_DIR", null],
 ];
 // the happy run's scratch dir (repo /r, task y42-add-thing)
 export const BUILD_SCRATCH = "/r/.claude/worktrees/fleet-y42-add-thing/scratch";
 export function buildEnvOf(key, scratch = BUILD_SCRATCH, nonce = NONCE) {
-  return Object.fromEntries(BUILD_ROWS.map(([k, sub]) => [k, sub ? scratch + "/build/" + nonce + "/" + key + "/" + sub : scratch + "/uv-cache/" + nonce]));
+  return Object.fromEntries(BUILD_ROWS.map(([k, sub]) => [k, sub ? scratch + "/build/" + nonce + "/" + key + "/" + sub : scratch + "/uv-cache/" + nonce + (/^(w|coder)-/.test(key) ? "/write" : "/gate")]));
 }
 // the build vars as the shell assignments of a prefix (K='v' K='v'), as a
 // regex source

@@ -40,9 +40,10 @@ except Exception:
 #     nothing pushed); with <parent> and <tree> (a re-plan built on an open PR)
 #     also approved^ == parent, approved^{tree} == tree and origin's head at the
 #     sealed URL == parent; refuses repo config that rewrites, redirects or
-#     re-routes a push (any non-global url.*, http.*, credential.*, ssh.*,
-#     core.sshCommand, core.gitProxy key; any remote.* key but <name>.url and
-#     <name>.fetch; a remote named by the sealed URL). Pushes once to the sealed URL (the URL sealed at plan time,
+#     re-routes a push (any non-global url.* or remote.*.push/pushurl/
+#     receivepack/mirror key or remote named by the sealed URL; any local,
+#     worktree or command-env http.*, credential.*, ssh.*, core.sshCommand,
+#     core.gitProxy key, or remote.* key but <name>.url and <name>.fetch). Pushes once to the sealed URL (the URL sealed at plan time,
 #     not the repo's origin: 7.4.0 review A-M1) with the explicit refspec
 #     refs/heads/<branch>:refs/heads/<branch> (no +, so no config forces it or
 #     sends it to another ref); retries a network failure after 5, 15 and 45 s
@@ -188,7 +189,6 @@ else:
     if local('status', '--porcelain'):
         sys.exit('the worktree has uncommitted changes')
     url, parent, tree = args[9], args[10], args[11]
-    os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
     cfg = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-C', wt, 'config', '--show-scope', '--includes', '--name-only', '--list'], capture_output=True, timeout=120)
     if cfg.returncode != 0:
         sys.exit('git config --list: ' + cfg.stderr.decode('utf-8', 'replace').strip()[-500:])
@@ -199,7 +199,10 @@ else:
         # the transport keys (http.*, credential.*, ssh.*, core.sshCommand, core.gitProxy) outside the
         # user's global config: the HARD -c values cannot reset a URL-scoped key such as
         # credential.<url>.helper or http.<url>.proxy, so a local one is refused, never overridden
-        if sc != 'global' and (re.match(r'(url|http|credential|ssh)\.|core\.(sshcommand|gitproxy)$', key) or (key.startswith('remote.') and (not re.match(r'remote\..*\.(url|fetch)$', key) or key.startswith('remote.' + url + '.')))):
+        # the system config (root-owned; Homebrew, Xcode and Git for Windows put credential.helper
+        # there) is kept for the transport keys; the repo's config and an inherited GIT_CONFIG_* are not
+        if (sc != 'global' and (re.match(r'url\.', key) or re.match(r'remote\..*\.(push|pushurl|receivepack|mirror)$', key) or key.startswith('remote.' + url + '.'))
+                or sc in ('local', 'worktree', 'command') and (re.match(r'(http|credential|ssh)\.|core\.(sshcommand|gitproxy)$', key) or key.startswith('remote.') and not re.match(r'remote\..*\.(url|fetch)$', key))):
             bad.append(sc + ' ' + key)
     if bad:
         sys.exit('repo config rewrites or redirects the push (never followed): ' + ', '.join(sorted(set(bad)))[:500])

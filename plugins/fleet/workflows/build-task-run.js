@@ -1476,7 +1476,7 @@ return typeof r.digest === "string" && SHA256_RE.test(r.digest) && sha256Hex(can
 // PROGRAM_SHA256_BEGIN
 const PROGRAM_SHA256 = {
 "branch_scan": "b74d9dd5692933e455dbe90923b9687e27ac63a8c73234a8d57f97587cbf8feb",
-"build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
+"build_dir": "03fb2f319b703f12a67d9ec660be2acd817d3636051ca548fdf3ee616c4c2a49",
 "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
 "changed_defs": "489230ce46b9d6fdeecb17f49f462ac8e51229c8436f24b29985596ffe305116",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
@@ -1506,7 +1506,7 @@ const PROGRAM_SHA256 = {
 "pr_test_block": "91c1d4610ffce1fe1ca2823a03cfb06e98d2385e42b14b17a5e2ccd1eb8280be",
 "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
 "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
-"push": "71d0f85fd58aeaf34f8bbfd11c5b271ed407e926dbb21e9d0ad7d3b97e290889",
+"push": "c164956e3b5bf968f527688fb3125d7821d42b9a8843353186d9e8dfbc64166e",
 "read_state": "c6ce8ab9dfe4ae85b144e3cc90c007334794f8e725bd8bfba071544365e18c89",
 "remote_head": "b5ad5f009c9ca166fefd68fb54a33211465827fe7a78d7fc2e5e6c8afa612f58",
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
@@ -2884,13 +2884,13 @@ const BUILD_ENV_ROWS = Object.freeze([
 ]);
 const BUILD_ENV_NOTE =
 "test_env_prefix: test_env as a shell prefix. Its build vars (" + BUILD_ENV_ROWS.map((r) => r[0]).join(", ") +
-") point build output and caches at this role's own dir outside the worktree, emptied right before you started (UV_CACHE_DIR: one per run). Run EVERY build, test or hook command in the worktree as <test_env_prefix><command> (with a non-empty test_cmd.env: `env <test_cmd.env> ` in front of it); a command run without it writes target/, __pycache__ or a cache in the worktree, and the workflow stops the run there.";
+") point build output and caches at this role's own dir outside the worktree, emptied right before you started (UV_CACHE_DIR: one per run for the roles that write code, another for the gates). Run EVERY build, test or hook command in the worktree as <test_env_prefix><command> (with a non-empty test_cmd.env: `env <test_cmd.env> ` in front of it); a command run without it writes target/, __pycache__ or a cache in the worktree, and the workflow stops the run there.";
 function buildDirOf(key) {
 return state.buildScratch + "/build/" + safeName(state.nonce) + "/" + key;
 }
 function buildEnv(key) {
 const o = {};
-for (const [k, sub] of BUILD_ENV_ROWS) o[k] = sub ? buildDirOf(key) + "/" + sub : state.buildScratch + "/uv-cache/" + safeName(state.nonce);
+for (const [k, sub] of BUILD_ENV_ROWS) o[k] = sub ? buildDirOf(key) + "/" + sub : state.buildScratch + "/uv-cache/" + safeName(state.nonce) + (/^(w|coder)-/.test(key) ? "/write" : "/gate");
 return o;
 }
 function envPrefix(env) {
@@ -4916,7 +4916,7 @@ audit.verdict ? "needs_human" : "failed",
 gate("plan-audit: approve");
 for (const f of audit.routed_findings || [])
 if (f && typeof f.finding === "string") gate("plan-audit advisory finding (approve): " + (f.criterion || "-") + ": " + f.finding);
-const gt = planScopeFiles(planFacts).concat(...criteria.map((c) => c.test_files || [])).filter((p) => GATE_PATH_RE.test(p));
+const gt = planScopePaths(planFacts, criteria).filter((p) => GATE_PATH_RE.test(p));
 if (plan.touches_gate === true || gt.length) {
 gate("plan sweep triggered (" + (plan.touches_gate === true ? "touches_gate" : "") + (gt.length ? " paths " + logPath(gt.join(", ")) : "") + ")");
 await pathRecheck("sweep:plan" + sfx, "Plan");

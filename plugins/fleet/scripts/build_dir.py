@@ -48,7 +48,8 @@ import hashlib, json, os, re, shutil, stat, sys
 #   build_dir.py reset <scratch> <nonce> <key>...  delete <scratch>/build,
 #     then create each <scratch>/build/<nonce>/<key> empty; prints
 #     {dirs, args}
-#   build_dir.py clean <scratch>  delete <scratch>/build; prints
+#   build_dir.py clean <scratch>  delete <scratch>/build and <scratch>/uv-cache
+#     (the run's uv caches, which a reset keeps); prints
 #     {removed, bytes, args} (bytes: the size of the files it held)
 # <scratch> is absolute and normalised. A symlink at any component from
 # <realpath repo>/.claude (the run's layout <repo>/.claude/worktrees/
@@ -149,13 +150,15 @@ try:
                 fail('not empty after reset: ' + real)
             dirs.append(os.path.join(scratch, 'build', nonce, key))
         done({'dirs': dirs, 'args': argv})
-    real = no_link(REST + ['build'])
+    # 7.4.0 review B-M4: the run's uv caches (<scratch>/uv-cache, never reset) go with build/
     removed, size = False, 0
-    if os.path.lexists(real):
-        size = remove(real)
-        removed = True
-    if os.path.lexists(real):
-        fail('still present: ' + real)
+    for sub in ('build', 'uv-cache'):
+        real = no_link(REST + [sub])
+        if os.path.lexists(real):
+            size += remove(real)
+            removed = True
+        if os.path.lexists(real):
+            fail('still present: ' + real)
     done({'removed': removed, 'bytes': size, 'args': argv})
 except OSError as e:
     fail(str(e))

@@ -307,11 +307,14 @@ fixed before the PR.
   `logPath`; the tail splits on CR and LF.
 - B-M2 (`push.py`): each push attempt's timeout is `max(1, left() - READ_RESERVE)`, so the head
   read keeps its 60 s.
-- Security follow-up to A-M1 (an allowlist, option B): `push.py` also refuses any non-global
-  `http.*`, `credential.*`, `ssh.*`, `core.sshCommand` or `core.gitProxy` key, and any `remote.*`
-  key but `<name>.url` and `<name>.fetch`. The hard `-c` values cannot reset a URL-scoped key such
-  as `credential.<url>.helper` or `http.<url>.proxy`, so a local one is refused, not overridden;
-  the user's global SSH and credential setup is used as before. The plan-mode probe is a dry run
+- Security follow-up to A-M1 (an allowlist, option B): `push.py` also refuses any `http.*`,
+  `credential.*`, `ssh.*`, `core.sshCommand` or `core.gitProxy` key, and any `remote.*` key but
+  `<name>.url` and `<name>.fetch`, from the repo's config (local, worktree) or an inherited
+  `GIT_CONFIG_*` (command). The hard `-c` values cannot reset a URL-scoped key such as
+  `credential.<url>.helper` or `http.<url>.proxy`, so such a key is refused, not overridden. The
+  user's global and the system config (root-owned; Homebrew, Xcode and Git for Windows put
+  `credential.helper` there) are used as before: `push.py` no longer sets `GIT_CONFIG_NOSYSTEM`,
+  and a system `url.*` or remote push key is refused like a local one. The plan-mode probe is a dry run
   before any role ran, so it reads the human's repo config unchanged. The `ls-remote` head reads
   run with no repo and read no repo config.
 - Security follow-up to A-M3 (an allowlist): in a new `pyproject.toml` the pytest table may hold
@@ -344,15 +347,19 @@ fixed before the PR.
 - B-M1 deviation: the brief's empty `npm:` target for a flag-first `npm run -w X test` is not
   needed. The test_cmd shape check refuses that form before the guard, so the guard reads
   `pkg:scripts.<name>` only.
-- B-M3: the plan sweep runs only for a planned file or criterion test file on a gate path, or
-  `touches_gate`; a caller occurrence alone (a changed symbol used in a gate file) no longer
-  triggers it. A sweep that did not finish (not `ok`, no units) and a unit not measured are gate
+- B-M3: the plan sweep runs only for a planned path on a gate path (planned files, criterion test
+  files, changed-symbol occurrences with a criterion) or `touches_gate`; a caller occurrence alone
+  (no criterion, or only an `infra:callers` hit) no longer triggers it. A sweep that did not finish (not `ok`, no units) and a unit not measured are gate
   warnings (the post-PR sweep decides), not plan stops; a weakening verdict still stops the plan.
   The role's plan mode: a planned gate with no shipped side gives no unit (`not_applicable`,
   `units: []` when none is left).
-- B-M4: `UV_CACHE_DIR` is one dir per run, `<scratch>/uv-cache/<nonce>`, outside `build/` (a build
-  reset deletes `build/`, never this dir). `UV_PROJECT_ENVIRONMENT` stays per role. uv's cache is
-  content-addressed and a role cannot plant a module through it the way it could through a venv.
+- B-M4: `UV_CACHE_DIR` is per run and per tier, outside `build/` (a build reset deletes `build/`,
+  never these dirs): `<scratch>/uv-cache/<nonce>/write` for the test writers and the coder,
+  `<scratch>/uv-cache/<nonce>/gate` for every other role and hook env (judges, sweeps, pr-review,
+  commit hooks). The cache is split so that a role that writes code can never put a wheel or build
+  in the cache a gate installs from. This relaxes the 5.0.6 rule (no role reads what another role
+  left) for this one variable, within a tier only. `UV_PROJECT_ENVIRONMENT` stays per role.
+  `build_dir.py clean` deletes `<scratch>/uv-cache` with `build/` (never through a link).
 - B-m1: the push-access probe prompt asks for a 180000 ms Bash timeout (`RUN_180S`); its git runs
   up to 120 s.
 - B-m3: the push slug check uses `PUSH_SLUG_RE`, the same pattern as `push.py` `SLUG` (a test
@@ -364,7 +371,7 @@ fixed before the PR.
 - B-m7: a fleet-brief marker under confirm `default` or `auto` (not unattended) makes the run ask
   (`confirm ask`, with a gate line) in place of a needs_human stop.
 - B-m9: the plan doc says 44 programs (`push.py` in, `push_classify.py` and `push_probe.py` out).
-- Review fixes dist: 464,991 bytes (+1,028 over car 6).
+- Review fixes dist: 465,052 bytes (+1,089 over car 6).
 
 ### Tests changed on purpose (review fixes)
 
@@ -387,8 +394,8 @@ fixed before the PR.
 - `v503_dsn_precheck` backstop: the `plan_files` sha pin moves (A-m2 flag only).
 - `v740_npm_walkup` J1: the plan targets are `[npm:<name>, pkg:scripts.<name>]`; a tracked script
   is the `pkg:scripts.test` entry (B-M1).
-- New: `v740_review_b` (B-M3, B-M4, B-m1, B-m3, B-m7); the B-m5 count test in
-  `v740_test_conflict`.
+- New: `v740_review_b` (B-M3, B-M4 tiers and cleanup, B-m1, B-m3, B-m7); the B-m5 count test in
+  `v740_test_conflict`; `v740_review_push` R3b (system config kept, command-env keys refused).
 - `v506_build_env` table test: `UV_CACHE_DIR` is the one value outside the role's dir (B-M4).
   `build_task_run` ARRAY_SITES and `v403_schema_types` READS map the plan sweep's `sw.units`
   (B-M3).

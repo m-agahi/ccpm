@@ -138,9 +138,9 @@ test("5.0.6 2019: BUILD_ENV_ROWS is one data table; every role env is built from
   // not TMPDIR: the scratch dir is inside the user's checkout (git, cargo,
   // pytest and node would find it from a temp dir there)
   for (const [k] of rows) assert.ok(!["PYTEST_ADDOPTS", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "TMPDIR", "TMP", "TEMP"].includes(k), k);
-  // every value lives under the role's own dir, but the uv cache: one per run (7.4.0 review B-M4)
+  // every value lives under the role's own dir, but the uv cache: per run and tier (7.4.0 review B-M4)
   for (const [k, v] of Object.entries(buildEnvOf("coder-r1")))
-    assert.ok(k === "UV_CACHE_DIR" ? v === BUILD_SCRATCH + "/uv-cache/" + NONCE : v.startsWith(BUILD_SCRATCH + "/build/" + NONCE + "/coder-r1/"), k);
+    assert.ok(k === "UV_CACHE_DIR" ? v === BUILD_SCRATCH + "/uv-cache/" + NONCE + "/write" : v.startsWith(BUILD_SCRATCH + "/build/" + NONCE + "/coder-r1/"), k);
 });
 
 // ---------------------------------------------------------------- every emit site

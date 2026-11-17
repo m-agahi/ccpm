@@ -187,6 +187,32 @@ test("7.4.0 review A-M1 R3: the push and the head read use the sealed URL, not t
   }
 });
 
+// review follow-up: the system config (root-owned: Homebrew and Xcode git ship
+// credential.helper=osxkeychain there, Git for Windows its manager) is read and kept; only the
+// repo's own config (local, worktree) and an inherited GIT_CONFIG_* (command) are refused
+test("7.4.0 review A-M1 R3b: a system credential helper and CA file are kept; the same keys from the repo or the command env are refused", () => {
+  const e = scene();
+  try {
+    const sys = join(e.h, "system.gitconfig");
+    writeFileSync(sys, "[credential]\n\thelper = !true\n[http]\n\tsslCAInfo = /etc/ssl/certs/ca.pem\n");
+    const r = prog(pushArgs(e), e, { GIT_CONFIG_SYSTEM: sys });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).push_result, "ok");
+    assert.doesNotMatch(readFileSync(join(SCRIPTS_SRC, "push.py"), "utf8"), /GIT_CONFIG_NOSYSTEM/);
+  } finally {
+    rmSync(e.h, { recursive: true, force: true });
+  }
+  const e2 = scene();
+  try {
+    const r = prog(pushArgs(e2), e2, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "!evil" });
+    assert.notEqual(r.status, 0, r.stdout);
+    assert.match(r.stderr, /repo config rewrites or redirects the push/);
+    untouched(e2);
+  } finally {
+    rmSync(e2.h, { recursive: true, force: true });
+  }
+});
+
 test("7.4.0 review A-M1: a sealed URL that is not https or git@host: is a usage error", () => {
   const e = scene();
   try {
