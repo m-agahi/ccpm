@@ -187,6 +187,7 @@ const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 const LEDGER_PROJECT_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const MAX_AGENTS = 100;
+const OPEN_PR_SHIP_AGENTS = 21;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
 const MAX_CODE_ROUNDS = 3; // total coder rounds; a fix_tests detour counts as one
 const SHORT_PATH_MAX_DIFF = 20;
@@ -7335,7 +7336,7 @@ halt(
 const coderFile = !viol.length ? roleFileProblem("fleet-coder", coder) : null;
 if (coderFile) halt("needs_human", "code round " + m + ": " + coderFile, coder.status !== "ok" && !coder.role_file ? "role" : "contract");
 const coderDriftOk = !viol.length && coder.status === "ok" ? driftOf("fleet-coder", coder) : null;
-const tc = !viol.length && coder.status === "needs_human" ? testConflictOf(coder.test_conflict) : null;
+const tc = !viol.length && !updRound && coder.status === "needs_human" ? testConflictOf(coder.test_conflict) : null;
 if (tc) checkRole("fleet-coder", coder);
 if (tc) gate("code round " + m + ": the coder names a test conflict in " + logPath(tc.test) + " (" + tc.findings.join(", ") + ") -> code judge");
 else if (!viol.length && !coderDriftOk) {
@@ -7464,6 +7465,7 @@ bc.unattributed.length + " module-level change(s), each in a file the plan names
 }
 const subject = commitsMade ? subj.fix(m) : subj.main;
 const prParent = !commitsMade && opt.prHead ? opt.prHead : null;
+if (prParent) reserve(OPEN_PR_SHIP_AGENTS, "the rebuilt commit on the open PR (commit, push, PR update, review)");
 await resetBuild("commit:r" + m, ["commit-r" + m], "Code");
 await pathRecheck("commit:r" + m, "Code");
 const cs = await infra(

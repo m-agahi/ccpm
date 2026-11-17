@@ -243,9 +243,14 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
   the same tree). The workflow stops (`commit`) when the reported parent is not that head. The push
   is a fast-forward; nothing is force-pushed; the superseded ref stays. Every auto gate still runs.
   An interactive run still asks; a second re-plan in one run asks. New tightening: an unattended
-  re-plan that touches an IaC path asks (with or without a PR). Known limit: a re-plan after a
-  whole PR build usually reaches the 100-agent cap at the re-review; the run then stops (`cap`)
-  after the push.
+  re-plan that touches an IaC path asks (with or without a PR), and a coder test conflict in an
+  update round stops as before (no judge).
+- Car 6, #61 Q4 limit (needs Max's ruling): before the rebuilt commit the run reserves 21 agents
+  (`OPEN_PR_SHIP_AGENTS`: commit, push, PR update and one review), so the PR is never changed
+  unless its re-review fits the 100-agent cap. A re-plan found by the review of a run that built
+  the PR (a whole build, a re-plan and a second whole build) does not fit: that run stops `cap`
+  before the commit, with the PR untouched. In practice Q4 (b) pushes only from a resumed run (for
+  example a resume at `pr_open`). The cap is not raised here.
 - Car 6, #72: the supported route for a greenfield repo's first `pyproject.toml`: the plan lists it
   in one criterion's `test_files`, the writer creates it before the freeze, and the writer-round
   check accepts a section change of a config file the round owns (the section's own file decides).
@@ -254,7 +259,7 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
 - Car 6, #73: `UV_PROJECT_ENVIRONMENT` and `UV_CACHE_DIR` are per-role build env rows (`uv-venv`,
   `uv-cache` under the role's build dir), so `uv run` writes no `.venv` in the worktree. Cost: the
   uv cache is cold in every role (5.0.6: no role reads another role's output).
-- Car 6 dist: 463,803 bytes (+4,690).
+- Car 6 dist: 463,963 bytes (+4,850).
 
 ### Removed
 
@@ -344,10 +349,12 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
 
 - New: `v740_ordinal_claims` (with the frozen 1565a52 claim patterns), `v740_uv_env` (U1, U2 on
   real uv), `v740_pyproject_route` (P1-P5), `v740_role_text`, `v740_plan_sweep` (Z1-Z4),
-  `v740_test_conflict` (Y1-Y3, Q4 both modes, the real-git recipe).
+  `v740_test_conflict` (Y1-Y3, Q4 both modes in one run and on a resume at `pr_open`, the real-git
+  recipe).
 - `v740_pr_test_block` V1: "test 2 of AC3" and "Step 2 tests the parser." are no claims now
   (#64 item 2).
-- `v610_update_coder`: new Y4 (a u1 plan-target finding stops; no coder round, no re-plan).
+- `v610_update_coder`: new Y4 (a u1 plan-target finding stops; no coder round, no re-plan) and an
+  update-round coder test conflict (stops at `role`, no code judge r2).
 - `v5010_prompt_snapshot`: the three build pins move (role shas, uv build vars, the new schema
   keys); calls unchanged; probe unchanged.
 - `v403_schema_types` READS and `build_task_run` ARRAY_SITES: the plan-sweep reads in

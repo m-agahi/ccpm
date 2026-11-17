@@ -223,6 +223,8 @@ const FENCE_COMMAND_RE = /\b(kubectl|helm|terraform|tofu|tfp|tflint|terragrunt)\
 const JUDGE_AGENT = "fleet:judge"; // read-only: Write/Edit/NotebookEdit disallowed
 const LEDGER_PROJECT_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const MAX_AGENTS = 100;
+// 7.4.0 (#61 Q4): the build reset, path check, commit, push, PR update and one review (review k reserves 7) of a re-plan built on an open PR
+const OPEN_PR_SHIP_AGENTS = 21;
 const MAX_TEST_ROUNDS = 3; // per test-loop entry (initial, and each fix_tests re-entry)
 const MAX_CODE_ROUNDS = 3; // total coder rounds; a fix_tests detour counts as one
 const SHORT_PATH_MAX_DIFF = 20;
@@ -8092,7 +8094,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       if (coderFile) halt("needs_human", "code round " + m + ": " + coderFile, coder.status !== "ok" && !coder.role_file ? "role" : "contract");
       const coderDriftOk = !viol.length && coder.status === "ok" ? driftOf("fleet-coder", coder) : null;
       // 7.4.0 (#61): a well-formed test conflict goes to the code judge this round (no hash change, role file checked)
-      const tc = !viol.length && coder.status === "needs_human" ? testConflictOf(coder.test_conflict) : null;
+      const tc = !viol.length && !updRound && coder.status === "needs_human" ? testConflictOf(coder.test_conflict) : null;
       if (tc) checkRole("fleet-coder", coder);
       if (tc) gate("code round " + m + ": the coder names a test conflict in " + logPath(tc.test) + " (" + tc.findings.join(", ") + ") -> code judge");
       else if (!viol.length && !coderDriftOk) {
@@ -8230,6 +8232,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const subject = commitsMade ? subj.fix(m) : subj.main;
       // 7.4.0 (#61): the re-plan of an open PR: its first commit sits on the PR's head
       const prParent = !commitsMade && opt.prHead ? opt.prHead : null;
+      // the PR is only touched when its push, PR update and re-review all fit the agent cap
+      if (prParent) reserve(OPEN_PR_SHIP_AGENTS, "the rebuilt commit on the open PR (commit, push, PR update, review)");
       await resetBuild("commit:r" + m, ["commit-r" + m], "Code");
       await pathRecheck("commit:r" + m, "Code");
       const cs = await infra(

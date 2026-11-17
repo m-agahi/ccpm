@@ -230,6 +230,17 @@ test("7.4.0 #61 Y4: a re-review after update-branch with a plan-target finding s
   assert.equal(wbCi(out), 1, L.join(", "));
 });
 
+// 7.4.0 car 6 (#61): an update round's coder test conflict halts on the coder's own needs_human (no judge)
+test("7.4.0 #61: a coder test_conflict in the update round stops at role with the coder's reason; no code judge r2", async () => {
+  const coder = { status: "needs_human", reason: "frozen test contradicts AC1", changed_paths: null, suite_result: null, added_symbols: null, frozen_tests_red_at_start: null, obligations_done: null, test_conflict: { test: "tests/test_a.py", findings: ["AC1"], why: "3 vs 4" } };
+  const out = await run(upd({ "role:fleet-coder:r2": coder }), ARGS);
+  const L = L_(out);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "role");
+  assert.match(out.result.reason, /fleet-coder returned needs_human: frozen test contradicts AC1/);
+  assert.ok(!L.includes("role:fleet-code-judge:r2"), L.join(", "));
+});
+
 test("6.1.0 T12-T15: the update round's ownership checks use d; the PR-level checks use the base tip", async () => {
   const out = await run(withSyms(upd({ "infra:pr-update": (p) => ({ status: "ok", reason: "u", mode: "update", updated: true, head: D, base: C, overlap: ["src/w.py"], error: null, args: inputsOf(p).args }) }, ["src/w.py"])), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);

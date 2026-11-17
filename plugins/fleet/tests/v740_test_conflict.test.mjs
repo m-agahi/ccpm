@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ARGS, PB, PC, PSHA, FP_K1, FP_TESTS, H, HASHES, happy, run, runOne, call, inputsOf, commitStub, spawnSync } from "./harness.mjs";
+import { ARGS, PB, PC, PSHA, FP_K1, FP_TESTS, H, HASHES, happy, run, runOne, call, inputsOf, commitStub, stateJsonOf, spawnSync } from "./harness.mjs";
 
 const U = { ...ARGS, unattended: true };
 const PC2 = "0123456789ab";
@@ -161,40 +161,85 @@ function q4(over) {
 }
 const commits = (out) => out.calls.filter((c) => c.label === "infra:commit:r1");
 
-test("7.4.0 #61 Q4 (b): unattended with the PR open: the re-plan is built in this run and its commit goes on the open PR's head", async () => {
+test("7.4.0 #61 Q4 (b): unattended with the PR open in one run: the rebuilt commit is refused before it touches the PR when its review cannot fit the agent cap", async () => {
   const out = await runOne(q4(), U);
-  // the rebuilt head is pushed; its review does not fit the 100-agent cap of one run (a whole build
-  // with a PR, a re-plan and a second whole build): the run stops there, after the fast-forward push
+  // a whole build with a PR, a re-plan and a second whole build: the commit, push, PR update and
+  // re-review of the rebuilt head do not fit the 100-agent cap; the run stops before that commit
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "cap");
-  assert.match(out.result.reason, /more needed for review 1$/);
-  assert.equal(out.labels.filter((l) => l === "infra:push").length, 2);
+  assert.match(out.result.reason, /more needed for the rebuilt commit on the open PR/);
   assert.ok(decisions(out).includes("plan_wrong: build (pr-review re-plan 1: the auto gates, then the build in this run; the PR is open: the new commits go on its head " + OLD_HEAD + ", never force-pushed)"), decisions(out).join("\n"));
   const i = out.labels.indexOf("infra:replan-reset");
   assert.ok(i > 0);
-  for (const l of ["role:fleet-intent-judge:replan", "infra:verify-plan", "role:fleet-coder:r1", "infra:push"]) assert.ok(out.labels.slice(i).includes(l), l);
+  for (const l of ["role:fleet-intent-judge:replan", "infra:verify-plan", "role:fleet-coder:r1"]) assert.ok(out.labels.slice(i).includes(l), l);
+  // the PR is untouched after the re-plan: one commit, one push, one PR update, one test block
+  assert.equal(commits(out).length, 1);
+  for (const l of ["infra:push", "role:fleet-pr-opener", "infra:pr-tests"]) assert.equal(out.labels.filter((x) => x === l).length, 1, l);
+});
+
+// a resumed build at pr_open (a run-state of a first build), unattended: the review targets the
+// plan; the re-plan is built in that run and its first commit goes on the open PR's head
+async function resumedQ4(over) {
+  const states = {};
+  const s = replanStubs(gated());
+  s["role:fleet-intent-judge:replan"] = s["role:fleet-intent-judge"];
+  for (const label of ["infra:state:committed:r1", "infra:state:pushed:p1", "infra:state:pr_open:p1", "infra:state:reviewed:v1", "infra:state:written_back", "infra:state:shipped"]) {
+    const o = s[label];
+    s[label] = (prompt, opts) => {
+      const st = stateJsonOf(prompt);
+      if (!states[st.last_gate]) states[st.last_gate] = st;
+      if (typeof o === "function") return o(prompt, opts);
+      return o || { status: "ok", reason: "written", head: inputsOf(prompt).expected_head, state_sha: "f".repeat(40) };
+    };
+  }
+  const plan = await runOne(s, ARGS);
+  const bargs = { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" };
+  const first = await runOne(s, bargs);
+  assert.equal(first.result.status, "ok", first.result.reason);
+  const x = states.pr_open;
+  assert.ok(x, "the first build wrote the run-state pr_open");
+  // the resumed run reads the run-state once; the rebuilt build verifies its new plan as usual
+  s["infra:verify-plan"] = [{ ...happy()["infra:verify-plan"], head: x.approved_sha, commits_since: [{ sha: x.approved_sha, subject: "feat(thing): add thing" }], changed_since: ["src/x.py", "tests/test_a.py"] }, happy()["infra:verify-plan"]];
+  s["infra:read-state"] = [{ status: "ok", reason: "read", exists: true, target: x.approved_sha, message: JSON.stringify(x), head: x.approved_sha, head_tree: x.code_tree, clean: true }, happy()["infra:read-state"]];
+  const h = JSON.parse(JSON.stringify(HASHES));
+  h.git["fleetref:refs/fleet/l42/freeze"] = "T1";
+  s["hasher:resume"] = { status: "ok", fingerprint: { head: x.approved_sha, tree: x.code_tree }, hashes: h };
+  s["role:pr-review:v1"] = [REVIEW_PLAN, happy()["role:pr-review:v1"]];
+  s["infra:replan-reset"] = { status: "ok", reason: "reset", head: PB, superseded_head: x.approved_sha };
+  s["hasher:freeze:f1"] = { status: "ok", fingerprint: FP_TESTS };
+  s["hasher:post-coder:r1"] = { status: "ok", fingerprint: FP_K1 };
+  Object.assign(s, over || {});
+  return { out: await runOne(s, { ...bargs, unattended: true }), head: x.approved_sha };
+}
+
+test("7.4.0 #61 Q4 (b): a resumed unattended run at pr_open: the plan-target review re-plans, and the rebuilt commit goes on the open PR's head", async () => {
+  const { out, head } = await resumedQ4();
+  assert.ok(decisions(out).includes("plan_wrong: build (pr-review re-plan 1: the auto gates, then the build in this run; the PR is open: the new commits go on its head " + head + ", never force-pushed)"), out.result.reason + "\n" + decisions(out).join("\n"));
   const cs = commits(out);
-  assert.equal(cs.length, 2);
-  // the first build's commit is made on the plan base; the rebuilt one on the open PR's head
-  assert.ok(!("parent" in inputsOf(cs[0].prompt)));
-  assert.equal(inputsOf(cs[1].prompt).parent, OLD_HEAD);
-  assert.match(cs[1].prompt, /reset --soft <parent>/);
-  assert.doesNotMatch(cs[1].prompt, /--force/);
-  // no push forces; the second push is a plain push of the new head
-  for (const c of out.calls.filter((x) => /^infra:push/.test(x.label))) assert.doesNotMatch(c.prompt.replace(/Never --force/g, ""), /--force|\+refs/);
-  assert.ok(out.logs.some((l) => /committed tree .* on the open PR's head 5555555/.test(l)), out.logs.join("\n"));
+  assert.equal(cs.length, 1, out.labels.join(", "));
+  assert.equal(inputsOf(cs[0].prompt).parent, head);
+  assert.match(cs[0].prompt, /merge-base --is-ancestor <expected_head> <parent>/);
+  assert.match(cs[0].prompt, /reset --soft <parent>/);
+  assert.doesNotMatch(cs[0].prompt, /--force/);
+  for (const c of out.calls.filter((y) => /^infra:push/.test(y.label))) assert.doesNotMatch(c.prompt.replace(/Never --force/g, ""), /--force|\+refs/);
+  assert.ok(out.labels.includes("infra:push"), out.labels.join(", "));
+  assert.ok(out.logs.some((l) => new RegExp("committed tree .* on the open PR's head " + head).test(l)), out.logs.join("\n"));
+  assert.equal(out.result.status, "ok", out.result.reason);
+});
+
+test("7.4.0 #61 Q4: the rebuilt run's review targets the plan again: once per run, so it asks", async () => {
+  const { out } = await resumedQ4({ "role:pr-review:v1": REVIEW_PLAN });
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.ok(decisions(out).some((d) => /^plan_wrong: ask \(pr-review re-plan 2: the run already built one re-plan\)$/.test(d)), decisions(out).join("\n"));
+  assert.equal(commits(out).length, 1);
 });
 
 test("7.4.0 #61 Q4 (b): a commit not made on the open PR's head stops (the push would need a force)", async () => {
-  const s = q4();
-  let n = 0;
-  const orig = s["infra:commit:r1"];
-  s["infra:commit:r1"] = (p) => Object.assign(orig(p), ++n === 2 ? { parent: PB } : {});
-  const out = await runOne(s, U);
+  const { out } = await resumedQ4({ "infra:commit:r1": (p) => Object.assign(happy()["infra:commit:r1"](p), { parent: PB }) });
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "commit");
-  assert.match(out.result.reason, /not the open PR's head 5555555/);
-  assert.ok(out.labels.filter((l) => l === "infra:push").length === 1, out.labels.join(", "));
+  assert.match(out.result.reason, /is not the open PR's head /);
+  assert.ok(!out.labels.includes("infra:push"), out.labels.join(", "));
 });
 
 test("7.4.0 #61 Q4 (b): with the PR open the auto path keeps every safety stop", async () => {
