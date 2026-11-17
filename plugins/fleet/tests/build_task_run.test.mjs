@@ -2635,7 +2635,7 @@ function planWrong(findings) {
       "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
       "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
       "infra:commit-plan:replan": commitStub(s.__store, PC2, "d".repeat(64)),
-      "infra:replan-reset": { status: "ok", reason: "reset", head: PB, superseded_head: "5555555" },
+      "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: PB, superseded_head: inputsOf(p).expected_head }), // 7.4.0 review A-M2: the script's expected head
   });
 }
 
@@ -2654,7 +2654,8 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.deepEqual(r.proposed_plan_change, ["split AC2 into AC2 and AC3"]);
   assert.deepEqual(r.plan_findings, [f]);
   assert.equal(r.superseded_ref, "fleet/y42-add-thing--superseded-1");
-  assert.equal(r.superseded_head, "5555555");
+  // 7.4.0 review A-M2: the script's expected head, not the agent's value
+  assert.equal(r.superseded_head, inputsOf(call(out, "infra:replan-reset").prompt).expected_head);
   assert.equal(r.tldr, "adds a thing, now with AC3");
   assert.deepEqual(r.plan_diff, ["AC3 added: the code judge found a missing behaviour"]);
   assert.equal(r.fleet_size.criteria, 3);
@@ -3176,7 +3177,8 @@ test("push prompt retries with backoff, reads remote_head through the gh api, ke
   assert.match(p, /timeout 600000 ms/);
   // 5.0.8 (ledger 2030): the gh command the script checked, never a login rule
   assert.equal(inp.gh_cmd, "gh");
-  assert.deepEqual(inp.args.slice(6), ["gh", "o/r", "540"]);
+  // 7.4.0 review A-M1: then the sealed URL; A-M2: no parent, no tree
+  assert.deepEqual(inp.args.slice(6), ["gh", "o/r", "540", "git@github.com:o/r.git", "-", "-"]);
   assert.doesNotMatch(p, /gh-personal/);
   assert.match(p, /Never --force/);
   const prog = readFileSync(join(SCRIPTS_SRC, "push.py"), "utf8");
@@ -3184,7 +3186,9 @@ test("push prompt retries with backoff, reads remote_head through the gh api, ke
   // only a network failure is retried: non_ff, remote_rejected, a hook verdict stop the ladder
   assert.match(prog, /if res != 'network' or left\(\) < wait \+ took \+ READ_RESERVE:\n {16}break/);
   assert.match(prog, /\[gh, 'api', 'repos\/' \+ slug \+ '\/branches\/' \+ branch, '--jq', '\.commit\.sha'\]/);
-  assert.match(prog, /'ls-remote', 'origin', 'refs\/heads\/' \+ branch/, "ls-remote only as the fallback");
+  // 7.4.0 review A-M1: the fallback reads the sealed URL with no repo, never the repo's origin
+  assert.match(prog, /v = tip\(url, 'refs\/heads\/' \+ branch, tmo\) or ''/, "ls-remote only as the fallback");
+  assert.doesNotMatch(prog, /'ls-remote', 'origin'/);
 });
 
 test("workspace prompt retries fetch with backoff and treats only ls-remote exit 2 as absent", async () => {

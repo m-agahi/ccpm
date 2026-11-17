@@ -326,7 +326,7 @@ test("6.3.0 A6: a test-judge plan finding takes the plan_wrong re-plan path (re-
     "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
     "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
     "infra:commit-plan:replan": commitStub(s.__store, PC2, "d".repeat(64)),
-    "infra:replan-reset": { status: "ok", reason: "reset", head: PB, superseded_head: "5555555" },
+    "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: PB, superseded_head: inputsOf(p).expected_head }), // 7.4.0 review A-M2: the script's expected head
   });
   const ref = await planRefFor(s);
   const out = await runOne(s, buildArgs(ref));

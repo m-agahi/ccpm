@@ -268,6 +268,61 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
   program count is 44 (`PROGRAM_COUNT`). The plan expected both kept (46); its "resume check"
   use of `push_classify` does not exist in the code.
 
+### Review fixes
+
+Two reviews of cars 1 to 6 (A: gate weakening and security; B: correctness and run reliability),
+fixed before the PR.
+
+- A-M1 (`push.py`): the push goes to the origin URL sealed at plan time (`remote_head.py`'s form
+  and its hard `-c` overrides, minus `core.hooksPath`: the pre-push hooks still run), with the
+  explicit refspec `refs/heads/<branch>:refs/heads/<branch>` and no `+`, so no repo config forces
+  it or sends it to another ref. Before it pushes, the program refuses any local, worktree or
+  command-scope `url.*` key, any `remote.*.push|pushurl|receivepack|mirror` key, and a remote
+  section named by the sealed URL (includes expanded). The upstream (`branch.<b>.remote`,
+  `branch.<b>.merge`, `refs/remotes/origin/<b>`) is set in separate local calls after the push.
+  The head read after the push uses gh, else `ls-remote` of the sealed URL with no repo (never the
+  repo's origin or `uploadpack`). The push args gain `<sealed_url> <parent|-> <tree|->` (12
+  args). A pre-push hook now gets the sealed URL as its remote name and URL (before: `origin`).
+  `tfGate`, which runs before every push, already stops on a missing sealed URL or an origin URL
+  that changed since the plan.
+- A-M2: the open PR's head of a re-plan is the script's expected head (the approved sha the push
+  checked on origin), never the replan-reset agent's `superseded_head`; a `superseded_head` that
+  differs stops the run. The push after the rebuilt commit passes `[parent, tree]`; `push.py`
+  then checks `approved^ == parent`, `approved^{tree} == tree` and origin's head at the sealed URL
+  == parent before it pushes.
+- A-M3: a writer may change a `[tool.pytest]` table of a `pyproject.toml` it owns only when the
+  file is new in the round. The hasher lists a section key for every existing `pyproject.toml`
+  (`ABSENT` with no table), so the workflow accepts only a section key that `hash_diff` lists as
+  `added` (the review asked for `pre.hashes.files[file] === "MISSING"`; the workflow holds map
+  summaries, not values, and the key kind is the same fact). The hasher flags a `pyproject.toml`
+  that is not in HEAD whose pytest table has an addopts token `-p`, `-k`, `-m`, `--deselect`,
+  `--ignore` or `--ignore-glob` (or unparseable addopts), sets `python_files`, `python_classes`,
+  `python_functions` or `norecursedirs`, or has `testpaths` that leave out a frozen test file in
+  its directory; the freeze stops on a flagged path. An existing (committed) file is not flagged.
+- A-M4: the coder's `test_conflict` is capped (test, why and each finding at 2000 characters, at
+  most 20 findings) and its gate line goes through `logPath`. Unattended, a `plan_wrong` that a
+  coder test conflict started asks (`plan_wrong: ask`, the re-plan ready), never an automatic
+  re-plan build: Max's Q4 covers review and sweep findings.
+- A-m1: the push tail in a stop reason and the IaC list of an unattended re-plan go through
+  `logPath`; the tail splits on CR and LF.
+- B-M2 (`push.py`): each push attempt's timeout is `max(1, left() - READ_RESERVE)`, so the head
+  read keeps its 60 s.
+
+### Tests changed on purpose (review fixes)
+
+- New: `v740_review_push` (A-M1 R1-R3 on real git with local bare repos, A-M2 R4, B-M2 R5, B-m6
+  R6), `v740_review_gates` (A-M2, A-M3, A-M4, A-m1).
+- `v740_push_program`: push args carry the sealed URL and `- -`; a wrapper git maps the URL to the
+  bare origin; P2 finds the push line by `'push', '--receive-pack=git-receive-pack', url`.
+- `build_task_run` push prompt test: args end `["gh", "o/r", "540", "git@github.com:o/r.git",
+"-", "-"]`; the head-read fallback is `tip(url, ...)`, never `ls-remote origin`. Harness
+  `pushOn` passes the 12 args.
+- The `infra:replan-reset` stubs (`v630_unattended`, `v4_s3`, `v630_flow`, `build_task_run`,
+  `v740_test_conflict`) echo the prompt's `expected_head` as `superseded_head`; `build_task_run`
+  and the `v740_test_conflict` Q4 test read the expected head, not `5555555`. The Q4 resume test
+  pins the push's parent and tree args.
+- `v5010_prompt_snapshot`: the three build pins move (push args); calls unchanged.
+
 ### Tests changed on purpose (car 1)
 
 - New: `v740_git_net_lift` (B1-B3), `v740_push_program` (P1-P4), `v740_review_lows` (H1-H5).

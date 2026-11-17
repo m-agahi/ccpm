@@ -1799,7 +1799,8 @@ export function pushOn(code, output, mode = "push") {
         "os.execv(" + JSON.stringify(git) + ", [" + JSON.stringify(git) + "] + sys.argv[1:])\n",
     );
     chmodSync(join(bin, "git"), 0o755);
-    const args = mode === "probe" ? ["probe", repo, base, "fleet/x"] : ["push", repo, "fleet/x", sha, "master", "{}", "-", "-", "0"];
+    // 7.4.0 review A-M1: the sealed URL (the stub git answers every push itself)
+    const args = mode === "probe" ? ["probe", repo, base, "fleet/x"] : ["push", repo, "fleet/x", sha, "master", "{}", "-", "-", "0", "https://example.com/o/r.git", "-", "-"];
     const r = rawSpawnSync(py, ["-I", join(SCRIPTS_SRC, "push.py")].concat(args), { encoding: "utf8", env: { PATH: bin + ":/usr/bin:/bin", HOME: h, GIT_CONFIG_GLOBAL: "/dev/null" }, timeout: 60000 });
     assert.equal(r.status, 0, r.stderr);
     return { out: JSON.parse(r.stdout), args };

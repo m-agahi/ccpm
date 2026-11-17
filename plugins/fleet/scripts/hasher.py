@@ -637,6 +637,32 @@ for rel in hook_frozen:
 if hook_launcher:
     sections.update(launcher_tables())
 SUSPICIOUS.extend(hook_bad)
+# 7.4.0 review A-M3: a pyproject.toml new in this run (not in HEAD; a test writer may create one
+# for its criterion) may not load a plugin, deselect or filter tests, or narrow collection away
+# from the frozen test files: the freeze stops on it (an existing file keeps its options)
+NARROW_OPT = re.compile(r'(-[pkm]|--(deselect|ignore|ignore-glob)\b)')
+def narrowing(rel, sec):
+    out = []
+    d = os.path.dirname(rel)
+    io = sec.get('ini_options')
+    for t in (sec, io if isinstance(io, dict) else {}):
+        ao = t.get('addopts')
+        try:
+            toks = shlex.split(ao) if isinstance(ao, str) else ao if isinstance(ao, list) else []
+        except ValueError:
+            toks = ['(unparseable addopts)']
+        out += ['addopts ' + str(x) for x in toks if not isinstance(x, str) or NARROW_OPT.match(x) or x == '(unparseable addopts)']
+        out += [k for k in ('python_files', 'python_classes', 'python_functions', 'norecursedirs') if k in t]
+        tp = t.get('testpaths')
+        if tp is not None:
+            tp = [tp] if isinstance(tp, str) else tp if isinstance(tp, list) else [None]
+            roots = [os.path.normpath(x) for x in tp if isinstance(x, str)]
+            for f in explicit:
+                r = os.path.relpath(f, d or '.')
+                if f.endswith('.py') and not r.startswith('..') and (len(roots) < len(tp) or not any(r == x or r.startswith(x + '/') or x == '.' for x in roots)):
+                    out.append('testpaths leaves out ' + f)
+    return out
+
 listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\x00')
 for rel in sorted(set(f.decode() for f in listed if f)):
     base = os.path.basename(rel)
@@ -648,6 +674,8 @@ for rel in sorted(set(f.decode() for f in listed if f)):
                 data = tomllib.load(fh)
             sec = data.get('tool', {}).get('pytest')
             sections[rel + '#tool.pytest'] = 'ABSENT' if sec is None else sha(canon(sec))
+            if isinstance(sec, dict) and subprocess.run(GIT + ['cat-file', '-e', 'HEAD:' + rel], capture_output=True).returncode != 0:
+                SUSPICIOUS.extend('runner config narrows the tests in a new ' + rel + ': ' + w for w in narrowing(rel, sec))
         except FileNotFoundError:
             sections[rel + '#tool.pytest'] = 'MISSING'
         except Exception:

@@ -1487,7 +1487,7 @@ const PROGRAM_SHA256 = {
 "format_files": "1a38b2822c17227ea89e9ac345621571c39d8019e356588788b69888f15dd467",
 "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
 "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
-"hasher": "869a4df97832a2c762934a316c83fb19923e946f2331278ab810b1acc55f5a0a",
+"hasher": "18a5ea9f11abbabafedb3c4c7c29444ece62355bb5a3d8d1337f01f8128dcb20",
 "hook_surface": "f119cf2f6fc277a44b9ff33337c8abcc9f3a06b19f5ea5b8523dd5aefde0524c",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
@@ -1504,7 +1504,7 @@ const PROGRAM_SHA256 = {
 "pr_test_block": "91c1d4610ffce1fe1ca2823a03cfb06e98d2385e42b14b17a5e2ccd1eb8280be",
 "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
 "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
-"push": "67cc55d5fe9ef3cfe0fe0c3ab8dd5a7281acf96ef98f7bef5faa805a9c77a469",
+"push": "b29f961221121caf9a0123c95e04cf77ce1795c622d074bbe653340bec78b0d9",
 "read_state": "c6ce8ab9dfe4ae85b144e3cc90c007334794f8e725bd8bfba071544365e18c89",
 "remote_head": "b5ad5f009c9ca166fefd68fb54a33211465827fe7a78d7fc2e5e6c8afa612f58",
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
@@ -6157,6 +6157,7 @@ intent = g.intent;
 const autoConfirmed = !!intent;
 let approvedSha = null;
 let pushes = 0;
+let shipParent = null;
 let iacTouched = false;
 let prOpens = 0;
 let reprobed = false;
@@ -6405,7 +6406,7 @@ await resetBuild("push" + (pushes > 1 ? ":p" + pushes : ""), [pushKey], "PR");
 await pathRecheck("push" + (pushes > 1 ? ":p" + pushes : ""), "PR");
 const gc = ghFor(remoteSlug) ? ghFor(remoteSlug).gh_cmd : null;
 const pin = { main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug, gh_cmd: gc, hook_env: hookEnv(pushKey) };
-const pushArgs = ["push", mainWt, branch, approvedSha, defaultBranch, JSON.stringify(pin.hook_env), gc || "-", gc && LEDGER_PROJECT_RE.test(String(remoteSlug || "")) ? remoteSlug : "-", "540"];
+const pushArgs = ["push", mainWt, branch, approvedSha, defaultBranch, JSON.stringify(pin.hook_env), gc || "-", gc && LEDGER_PROJECT_RE.test(String(remoteSlug || "")) ? remoteSlug : "-", "540", remoteUrl].concat(shipParent || ["-", "-"]);
 const push = await infra(
 pushLabel,
 pushPrompt(Object.assign(pin, { args: pushArgs })),
@@ -6433,7 +6434,7 @@ finding:
 };
 }
 if (push.push_result !== "ok")
-halt(["non_ff", "remote_rejected", "ambiguous"].indexOf(push.push_result) >= 0 ? "needs_human" : "failed", pushLabel + ": push_result " + JSON.stringify(push.push_result || null) + " after " + push.attempts + " attempt(s): " + String(push.tail || "").trim().split("\n").slice(-5).join(" | "));
+halt(["non_ff", "remote_rejected", "ambiguous"].indexOf(push.push_result) >= 0 ? "needs_human" : "failed", pushLabel + ": push_result " + JSON.stringify(push.push_result || null) + " after " + push.attempts + " attempt(s): " + logPath(String(push.tail || "").trim().split(/[\r\n]+/).slice(-5).join(" | ")));
 if (push.remote_head !== approvedSha)
 halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha);
 gate("pushed " + branch + " at " + approvedSha);
@@ -7068,7 +7069,7 @@ for (const k of keys) {
 if (k.map === "ignored" || (k.map === "git" && k.key.indexOf(FLEETREF) === 0))
 halt("needs_human", (k.map === "ignored" && (k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")) : [violationName(k)]).map(logPath).join(", ") + " in test round " + n, "ownership");
 if (k.more) more = k.more;
-else if (!(k.key !== MAP_ALL && (k.map === "files" ? owner[k.key] : k.map === "sections" && k.key.indexOf("#") > 0 && owner[k.key.slice(0, k.key.indexOf("#"))]))) changed.push(violationName(k));
+else if (!(k.key !== MAP_ALL && (k.map === "files" ? owner[k.key] : k.map === "sections" && k.kind === "added" && k.key.indexOf("#") > 0 && owner[k.key.split("#")[0]]))) changed.push(violationName(k));
 }
 const ids = pending.map((p) => p.criterion.id).join(", ");
 const uniq = changed.filter((x, i, a) => a.indexOf(x) === i);
@@ -7080,9 +7081,9 @@ gate("test round " + n + ": writers ok: " + ids + "; " + changed.length + " owne
 last = post;
 return roundOut;
 }
-function planWrong(source, findings, head, tree) {
+function planWrong(source, findings, head, tree, testConflict) {
 return replan({
-ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl, source, input, ws,
+ref, brief, names, lay, common, date, history, remoteSlug, remoteUrl, source, input, ws, testConflict,
 project: input.project || null,
 findings,
 expectedHead: head,
@@ -7338,7 +7339,7 @@ if (coderFile) halt("needs_human", "code round " + m + ": " + coderFile, coder.s
 const coderDriftOk = !viol.length && coder.status === "ok" ? driftOf("fleet-coder", coder) : null;
 const tc = !viol.length && !updRound && coder.status === "needs_human" ? testConflictOf(coder.test_conflict) : null;
 if (tc) checkRole("fleet-coder", coder);
-if (tc) gate("code round " + m + ": the coder names a test conflict in " + logPath(tc.test) + " (" + tc.findings.join(", ") + ") -> code judge");
+if (tc) gate("code round " + m + ": the coder names a test conflict in " + logPath(tc.test) + " (" + logPath(tc.findings.join(", ")) + ") -> code judge");
 else if (!viol.length && !coderDriftOk) {
 checkRole("fleet-coder", coder);
 requireOk("fleet-coder", coder);
@@ -7407,7 +7408,7 @@ const routed = cj.routed_findings || [];
 if (tc && cj.verdict !== "plan_wrong" && cj.verdict !== "fix_tests") requireOk("fleet-coder", coder);
 if (updRound && (cj.verdict === "plan_wrong" || cj.verdict === "fix_tests"))
 halt("needs_human", "code judge returned " + cj.verdict + " in a code round after update-branch: no test writer, re-freeze or re-plan runs on the forge's merge " + upd.head + "; re-plan on the new base or fix by hand", "review");
-if (cj.verdict === "plan_wrong") return planWrong("code-judge", routed.filter((f) => f.target === "plan"), jc.state.fingerprint.head, codeTree);
+if (cj.verdict === "plan_wrong") return planWrong("code-judge", routed.filter((f) => f.target === "plan"), jc.state.fingerprint.head, codeTree, !!tc);
 if (cj.verdict === "fix_code") {
 coderFindings = routed.filter((f) => f.target === "code");
 judgePrior = coderFindings.slice();
@@ -7507,6 +7508,7 @@ if (cs.head_tree !== codeTree)
 halt("needs_human", "commit step r" + m + ": hook modified files (committed tree " + cs.head_tree + " != code tree " + codeTree + "); never auto-accepted", "commit");
 if (prParent && cs.parent !== prParent)
 halt("needs_human", "commit step r" + m + ": the commit's parent " + cs.parent + " is not the open PR's head " + prParent + "; the push would need a force", "commit");
+shipParent = prParent ? [prParent, codeTree] : null;
 expectedHead = cs.head;
 commitsMade = true;
 approvedSha = cs.head;
@@ -7539,7 +7541,7 @@ return finishOk(frozenResume ? "frozen" : resumedAt);
 }
 function testConflictOf(x) {
 const s = (v) => typeof v === "string" && v.trim() !== "";
-return x && typeof x === "object" && s(x.test) && s(x.why) && Array.isArray(x.findings) && x.findings.length && x.findings.every(s) ? { test: x.test, findings: x.findings.slice(), why: x.why } : null;
+return x && typeof x === "object" && s(x.test) && s(x.why) && Array.isArray(x.findings) && x.findings.length && x.findings.every(s) ? { test: x.test.slice(0, 2000), findings: x.findings.slice(0, 20).map((f) => f.slice(0, 2000)), why: x.why.slice(0, 2000) } : null;
 }
 function reviewFindingText(f) {
 return (
@@ -7728,13 +7730,15 @@ replan_worktree: replanWt,
 "Re-plan",
 );
 if (rs.head !== ref.plan_base) halt("failed", "infra:replan-reset left " + lay.branch + " at " + rs.head + ", not " + ref.plan_base);
-gate("re-plan " + n + ": old head " + (rs.superseded_head || ctx.expectedHead) + " saved as " + superseded + "; " + lay.branch + " reset to " + ref.plan_base + "; new plan " + newHead + " off the branch");
+if (rs.superseded_head !== ctx.expectedHead) halt("needs_human", "infra:replan-reset: superseded_head " + logPath(rs.superseded_head) + " is not " + ctx.expectedHead);
+gate("re-plan " + n + ": old head " + ctx.expectedHead + " saved as " + superseded + "; " + lay.branch + " reset to " + ref.plan_base + "; new plan " + newHead + " off the branch");
 const hist = pc.full.history;
 gate("cumulative: run " + hist.runs + ", re-plans " + hist.replans + ", agents " + hist.agents);
-const prHead = state.pr ? rs.superseded_head || ctx.expectedHead : null;
+const prHead = state.pr ? ctx.expectedHead : null;
 const iac = Array.from(new Set(planScopePaths(p.planFacts, p.criteria).map((q) => normPath(String(q))))).filter(isIacPath);
-if (state.unattended && state.autoReplanned) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": the run already built one re-plan");
-else if (state.unattended && iac.length) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": plan touches IaC path " + iac.join(", "));
+if (state.unattended && ctx.testConflict) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": the plan_wrong started from a coder test conflict");
+else if (state.unattended && state.autoReplanned) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": the run already built one re-plan");
+else if (state.unattended && iac.length) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": plan touches IaC path " + logPath(iac.join(", ")));
 else if (state.unattended) {
 state.autoReplanned = true;
 autoDecide("plan_wrong", "build", who + " re-plan " + n + ": the auto gates, then the build in this run" + (prHead ? "; the PR is open: the new commits go on its head " + prHead + ", never force-pushed" : ""));
@@ -7749,7 +7753,7 @@ proposed_plan_change: proposed,
 plan_findings: ctx.findings,
 superseded_ref: superseded,
 superseded_tree_ref: supersededTree,
-superseded_head: rs.superseded_head || ctx.expectedHead,
+superseded_head: ctx.expectedHead,
 });
 }
 const CI_VERDICTS = ["not_run", "green", "red", "timeout"];

@@ -18,11 +18,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ARGS, PB, PC, PSHA, FP_K1, FP_TESTS, H, HASHES, happy, run, runOne, call, inputsOf, commitStub, stateJsonOf, spawnSync } from "./harness.mjs";
+import { ARGS, PB, PC, PSHA, FP_K1, FP_TESTS, H, HASHES, happy, run, runOne, call, inputsOf, commitStub, stateJsonOf, spawnSync, pushArgsOf } from "./harness.mjs";
 
 const U = { ...ARGS, unattended: true };
 const PC2 = "0123456789ab";
-const OLD_HEAD = "5555555";
 const CONFLICT = { test: "tests/test_a.py", findings: ["S1"], why: "the test expects 3 but AC1's example says 4" };
 const coderConflict = (extra) => Object.assign({ status: "needs_human", reason: "frozen test contradicts AC1", changed_paths: null, suite_result: null, added_symbols: null, frozen_tests_red_at_start: null, obligations_done: null, test_conflict: CONFLICT }, extra || {});
 const PLAN_WRONG = { status: "ok", reason: "plan wrong", verdict: "plan_wrong", routed_findings: [{ target: "plan", criterion: "AC1", finding: "AC1 example conflicts — Proposed plan change: fix AC1's example" }], hash_check: { match: true, mismatched: [] }, suite_result: { command: "pytest", exit_code: 1 }, gates_not_run: [], obligations_check: [] };
@@ -35,7 +34,7 @@ function replanStubs(s) {
     "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
     "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: PSHA },
     "infra:commit-plan:replan": [commitStub(s.__store, PC2, PSHA), commitStub(s.__store, "0123456789cd", PSHA)],
-    "infra:replan-reset": { status: "ok", reason: "reset", head: PB, superseded_head: OLD_HEAD },
+    "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: PB, superseded_head: inputsOf(p).expected_head }), // 7.4.0 review A-M2: the script's expected head
     "hasher:pre-intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "hasher:fp-post:intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
   });
@@ -168,7 +167,9 @@ test("7.4.0 #61 Q4 (b): unattended with the PR open in one run: the rebuilt comm
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "cap");
   assert.match(out.result.reason, /more needed for the rebuilt commit on the open PR/);
-  assert.ok(decisions(out).includes("plan_wrong: build (pr-review re-plan 1: the auto gates, then the build in this run; the PR is open: the new commits go on its head " + OLD_HEAD + ", never force-pushed)"), decisions(out).join("\n"));
+  // 7.4.0 review A-M2: the head is the script's expected head (the approved sha), never the agent's superseded_head
+  const eh = inputsOf(call(out, "infra:replan-reset").prompt).expected_head;
+  assert.ok(decisions(out).includes("plan_wrong: build (pr-review re-plan 1: the auto gates, then the build in this run; the PR is open: the new commits go on its head " + eh + ", never force-pushed)"), decisions(out).join("\n"));
   const i = out.labels.indexOf("infra:replan-reset");
   assert.ok(i > 0);
   for (const l of ["role:fleet-intent-judge:replan", "infra:verify-plan", "role:fleet-coder:r1"]) assert.ok(out.labels.slice(i).includes(l), l);
@@ -223,6 +224,9 @@ test("7.4.0 #61 Q4 (b): a resumed unattended run at pr_open: the plan-target rev
   assert.doesNotMatch(cs[0].prompt, /--force/);
   for (const c of out.calls.filter((y) => /^infra:push/.test(y.label))) assert.doesNotMatch(c.prompt.replace(/Never --force/g, ""), /--force|\+refs/);
   assert.ok(out.labels.includes("infra:push"), out.labels.join(", "));
+  // 7.4.0 review A-M2: push.py checks the parent, the tree and origin's head before the push
+  const pa = pushArgsOf(call(out, "infra:push").prompt);
+  assert.deepEqual(pa.slice(10), [head, inputsOf(cs[0].prompt).code_tree], JSON.stringify(pa));
   assert.ok(out.logs.some((l) => new RegExp("committed tree .* on the open PR's head " + head).test(l)), out.logs.join("\n"));
   assert.equal(out.result.status, "ok", out.result.reason);
 });

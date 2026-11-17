@@ -35,12 +35,22 @@ try:
 except Exception:
     _PROG = {'name': None, 'sha256': None}
 # fleet 7.4.0 (#9, L2008): the push and the push-access probe, in one program
-#   push <main_worktree> <branch> <approved_sha> <default_branch> <hook_env_json> <gh|gh-personal|-> <owner/repo|-> <deadline_s>
+#   push <main_worktree> <branch> <approved_sha> <default_branch> <hook_env_json> <gh|gh-personal|-> <owner/repo|-> <deadline_s> <sealed_url> <parent|-> <tree|->
 #     Checks the branch, HEAD and a clean worktree (any mismatch: non-zero exit,
-#     nothing pushed); pushes once; retries a network failure after 5, 15 and
-#     45 s while the deadline leaves room for one more attempt and the head
-#     read (READ_RESERVE s); classifies git's output; then reads origin's head
-#     of <branch> (gh api, else ls-remote) within what is left of the deadline.
+#     nothing pushed); with <parent> and <tree> (a re-plan built on an open PR)
+#     also approved^ == parent, approved^{tree} == tree and origin's head at the
+#     sealed URL == parent; refuses repo config that rewrites or redirects a push
+#     (url.*, remote.*.push/pushurl/receivepack/mirror, a remote named by the
+#     sealed URL). Pushes once to the sealed URL (the URL sealed at plan time,
+#     not the repo's origin: 7.4.0 review A-M1) with the explicit refspec
+#     refs/heads/<branch>:refs/heads/<branch> (no +, so no config forces it or
+#     sends it to another ref); retries a network failure after 5, 15 and 45 s
+#     while the deadline leaves room for one more attempt and the head read
+#     (READ_RESERVE s; each attempt's timeout leaves that reserve too, review
+#     B-M2); classifies git's output; sets the upstream in a separate local
+#     call; then reads origin's head of <branch> (gh api, else ls-remote of the
+#     sealed URL with no repo) within what is left of the deadline. A pre-push
+#     hook gets the sealed URL as both its remote name and URL.
 #     Prints {push_result, exit_code, hook_tail, tail, attempts, remote_head,
 #     args, program, digest}.
 #   probe <main_worktree> <base_ref> <branch>
@@ -63,15 +73,19 @@ ENV_KEY = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 ref_ok = lambda x: bool(REF.match(x)) and not x.startswith('-') and '..' not in x
 mode = args[0] if args else None
 abs_ok = lambda p: os.path.isabs(p) and p == os.path.normpath(p)
+# the sealed origin URL: remote_head.py's form
+URL_OK = re.compile(r'^(https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+)$')
+opt_sha = lambda x: x == '-' or bool(SHA.match(x))
 if mode == 'push':
-    ok = (len(args) == 9 and abs_ok(args[1]) and ref_ok(args[2]) and SHA.match(args[3]) and ref_ok(args[4])
-          and args[6] in ('gh', 'gh-personal', '-') and (args[7] == '-' or SLUG.match(args[7])) and re.match(r'^[0-9]{1,4}$', args[8]))
+    ok = (len(args) == 12 and abs_ok(args[1]) and ref_ok(args[2]) and SHA.match(args[3]) and ref_ok(args[4])
+          and args[6] in ('gh', 'gh-personal', '-') and (args[7] == '-' or SLUG.match(args[7])) and re.match(r'^[0-9]{1,4}$', args[8])
+          and URL_OK.match(args[9]) and opt_sha(args[10]) and opt_sha(args[11]) and (args[10] == '-') == (args[11] == '-'))
 elif mode == 'probe':
     ok = len(args) == 4 and abs_ok(args[1]) and ref_ok(args[2]) and ref_ok(args[3])
 else:
     ok = False
 if not ok:
-    sys.exit('usage: push.py push <main_worktree> <branch> <approved_sha> <default_branch> <hook_env_json> <gh|gh-personal|-> <owner/repo|-> <deadline_s> | probe <main_worktree> <base_ref> <branch>')
+    sys.exit('usage: push.py push <main_worktree> <branch> <approved_sha> <default_branch> <hook_env_json> <gh|gh-personal|-> <owner/repo|-> <deadline_s> <sealed_url> <parent|-> <tree|-> | probe <main_worktree> <base_ref> <branch>')
 wt = args[1]
 os.chdir('/')
 os.environ['GIT_TERMINAL_PROMPT'] = '0'
@@ -85,6 +99,24 @@ def local(*a):
     if r.returncode != 0:
         sys.exit('git ' + ' '.join(a[:2]) + ': ' + r.stderr.decode('utf-8', 'replace').strip()[-500:])
     return r.stdout.decode('utf-8', 'replace').strip()
+
+
+# 7.4.0 review A-M1: network git outside the repo's transport config (remote_head.py's HARD,
+# without core.hooksPath: the push runs the repo's pre-push hooks on purpose); the user's
+# global config stays trusted (ADR-1152)
+HARD = ['git', '-c', 'core.fsmonitor=', '-c', 'core.sshCommand=ssh -o BatchMode=yes', '-c', 'core.askPass=',
+        '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.ssh.allow=always',
+        '-c', 'push.recurseSubmodules=no', '-c', 'push.followTags=false', '-c', 'push.pushOption=',
+        '-c', 'gc.auto=0', '-c', 'maintenance.auto=false']
+
+
+def tip(url, ref, tmo):
+    # origin's head of ref at the sealed URL; no repo, so no repo config is read
+    q = subprocess.run(HARD + ['ls-remote', '--upload-pack=git-upload-pack', url, ref], capture_output=True, stdin=subprocess.DEVNULL, timeout=tmo, preexec_fn=lift, cwd='/')
+    rows = [x.split('\t') for x in q.stdout.decode('utf-8', 'replace').splitlines() if x.strip()]
+    if q.returncode != 0 or len(rows) > 1 or (rows and (len(rows[0]) != 2 or rows[0][1] != ref or not SHA.match(rows[0][0]))):
+        return False
+    return rows[0][0] if rows else None
 
 
 def lines_of(b):
@@ -154,6 +186,30 @@ else:
         sys.exit('HEAD is not the approved ' + approved)
     if local('status', '--porcelain'):
         sys.exit('the worktree has uncommitted changes')
+    url, parent, tree = args[9], args[10], args[11]
+    os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+    cfg = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-C', wt, 'config', '--show-scope', '--includes', '--name-only', '--list'], capture_output=True, timeout=120)
+    if cfg.returncode != 0:
+        sys.exit('git config --list: ' + cfg.stderr.decode('utf-8', 'replace').strip()[-500:])
+    bad = []
+    for row in cfg.stdout.decode('utf-8', 'replace').splitlines():
+        sc, _, key = row.partition('\t')
+        if sc != 'global' and (re.match(r'url\.', key) or re.match(r'remote\..*\.(push|pushurl|receivepack|mirror)$', key) or key.startswith('remote.' + url + '.')):
+            bad.append(sc + ' ' + key)
+    if bad:
+        sys.exit('repo config rewrites or redirects the push (never followed): ' + ', '.join(sorted(set(bad)))[:500])
+    if parent != '-':
+        # A-M2: the rebuilt commit sits on the open PR's head, and origin is still there
+        if local('rev-parse', approved + '^') != parent:
+            sys.exit('the approved commit\'s parent is not ' + parent)
+        if local('rev-parse', approved + '^{tree}') != tree:
+            sys.exit('the approved commit\'s tree is not ' + tree)
+        try:
+            at = tip(url, 'refs/heads/' + branch, 60)
+        except (OSError, subprocess.TimeoutExpired):
+            at = False
+        if at != parent:
+            sys.exit('origin/' + branch + ' at the sealed URL is ' + ('unreadable' if at is False else str(at)) + ', not the open PR\'s head ' + parent)
     env = dict(os.environ, **env_add)
     start, deadline = time.monotonic(), int(args[8])
     left = lambda: deadline - (time.monotonic() - start)
@@ -169,7 +225,8 @@ else:
         attempts += 1
         try:
             # the pre-push hooks run on purpose (no core.hooksPath, no --no-verify)
-            p = subprocess.run(['git', '-C', wt, 'push', '-u', 'origin', branch], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, timeout=max(1, left()), preexec_fn=lift)
+            # A-M1: the sealed URL and an explicit refspec with no +; B-M2: the head read keeps its reserve
+            p = subprocess.run(HARD + ['-C', wt, 'push', '--receive-pack=git-receive-pack', url, 'refs/heads/' + branch + ':refs/heads/' + branch], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, timeout=max(1, left() - READ_RESERVE), preexec_fn=lift)
             code, lines = p.returncode, lines_of(p.stdout)
         except subprocess.TimeoutExpired as e:
             code, lines = 124, lines_of(e.stdout or b'') + ['fatal: push timed out at the deadline']
@@ -177,6 +234,9 @@ else:
         res = classify(code, lines)
     head = None
     if res == 'ok':
+        # the upstream, set apart from the push (local only, best effort)
+        for a in (('config', 'branch.' + branch + '.remote', 'origin'), ('config', 'branch.' + branch + '.merge', 'refs/heads/' + branch), ('update-ref', 'refs/remotes/origin/' + branch, approved)):
+            subprocess.run(['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', wt] + list(a), capture_output=True, timeout=120)
         gh, slug = args[6], args[7]
         for wait in (0, 5, 15, 45):
             if wait:
@@ -190,11 +250,12 @@ else:
                     q = subprocess.run([gh, 'api', 'repos/' + slug + '/branches/' + branch, '--jq', '.commit.sha'], capture_output=True, stdin=subprocess.DEVNULL, timeout=tmo, preexec_fn=lift)
                     v = q.stdout.decode('utf-8', 'replace').strip()
                 else:
-                    q = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-C', wt, 'ls-remote', 'origin', 'refs/heads/' + branch], capture_output=True, stdin=subprocess.DEVNULL, timeout=tmo, preexec_fn=lift)
-                    v = q.stdout.decode('utf-8', 'replace').split('\t')[0].strip()
+                    # A-M1: the sealed URL with no repo, never the repo's origin or uploadpack
+                    v = tip(url, 'refs/heads/' + branch, tmo) or ''
+                    q = None
             except (OSError, subprocess.TimeoutExpired):
                 continue
-            if q.returncode == 0 and SHA.match(v):
+            if (q is None or q.returncode == 0) and SHA.match(v):
                 head = v
                 break
     out = {'push_result': res, 'exit_code': code, 'hook_tail': '\n'.join(lines[-60:]) if res == 'hook_rejected' else '',

@@ -659,7 +659,7 @@ test("4.0.0 1990: a build-mode re-plan seals no preflight record (the next build
     "infra:replan-worktree": { status: "ok", reason: "ok", head: "abc1234def0" },
     "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
     "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
-    "infra:replan-reset": { status: "ok", reason: "reset", head: "b0de1234567", superseded_head: "5555555" },
+    "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: "b0de1234567", superseded_head: inputsOf(p).expected_head }), // 7.4.0 review A-M2: the script's expected head
   });
   s["role:scope-and-plan:replan"] = s["role:scope-and-plan"];
   s["infra:commit-plan:replan"] = commitStub(s.__store, PC2, "d".repeat(64));
