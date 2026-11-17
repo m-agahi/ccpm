@@ -340,7 +340,12 @@ def paths_in(text):
     return out
 # N1: a nested `npm|pnpm|yarn run X` (or `npm test`) runs scripts.X with its pre and post; None when
 # a nested name is not a string script or the chain is deeper than 3 (no entry: R4 refuses every file)
-NPM_RUN = re.compile(r'\b(?:npm|pnpm|yarn)[ \t]+(?:run(?:-script)?(?:[ \t]+-\S+)*[ \t]+([A-Za-z0-9_:.][A-Za-z0-9_:.-]*)|(?:test|t)\b)')
+# 7.4.0 review B-M1: a flag that takes a value (-w X, --workspace X, --prefix X, ...) is never the
+# script name (group 2); with it, or with --workspaces/-r/--recursive (group 1, NPM_OTHER), the run
+# is another package's: no entry. B-m8: `yarn test:unit` (and pnpm's bare form) names test:unit (group 3)
+NPM_RUN = re.compile(r'\b(?:(?:npm|pnpm|yarn)[ \t]+run(?:-script)?((?:[ \t]+(?:(?:-w|--workspace|--prefix|-C|--dir|--filter|-F)(?:=|[ \t]+)\S+|-(?!w\b|-workspace\b|-prefix\b|C\b|-dir\b|-filter\b|F\b)\S+))*)[ \t]+([A-Za-z0-9_:.][A-Za-z0-9_:.-]*)'
+                     r'|(?:npm|pnpm|yarn)[ \t]+(?:test|t)(?![A-Za-z0-9_:.-])|(?:pnpm|yarn)[ \t]+([A-Za-z0-9_.-]+:[A-Za-z0-9_:.-]+))')
+NPM_OTHER = re.compile(r'(?:^|[ \t])(?:-w|--workspaces?|--prefix|-C|--dir|--filter|-F|-r|--recursive)(?:=|[ \t]|$)')
 # 7.4.0 car 5 (Z2): `--if-present` skips a missing script only in the exact forms `<mgr> run
 # --if-present X` and `<mgr> run X --if-present`, alone in their segment, with no cd, pushd, popd,
 # export, npm_config, subshell, backtick or --prefix earlier in the text (another package may run)
@@ -348,7 +353,8 @@ def if_present_exact(t, m, n):
     a = max(t.rfind(c, 0, m.start()) for c in ';|&\n') + 1
     b = min([i for i in (t.find(c, m.start()) for c in ';|&\n') if i >= 0] or [len(t)])
     w = t[a:b].split()
-    return w in ([w[0], 'run', '--if-present', n], [w[0], 'run', n, '--if-present']) and w[0] in ('npm', 'pnpm', 'yarn') and not re.search(r'\b(?:cd|pushd|popd|export)\b|npm_config|[(`]|--prefix', t[:a], re.I)
+    # 7.4.0 review A-m4: never yarn (`yarn run X` runs a package binary X when the script is missing)
+    return w in ([w[0], 'run', '--if-present', n], [w[0], 'run', n, '--if-present']) and w[0] in ('npm', 'pnpm') and not re.search(r'\b(?:cd|pushd|popd|export)\b|npm_config|[(`]|--prefix', t[:a], re.I)
 def npm_texts(sc, name, depth, seen):
     v = sc.get(name)
     side = [sc.get(k + name) for k in ('pre', 'post')]
@@ -357,9 +363,11 @@ def npm_texts(sc, name, depth, seen):
     texts = [v] + [x for x in side if isinstance(x, str)]
     for t in list(texts):
         for m in NPM_RUN.finditer(t):
-            n = m.group(1) or 'test'
+            if m.group(1) and NPM_OTHER.search(m.group(1)):
+                return None
+            n = m.group(2) or m.group(3) or 'test'
             # `--if-present` in the call skips a missing script
-            if n in seen or (sc.get(n) is None and '--if-present' in re.split(r'&&|[;|\n]', t[m.start():], 1)[0] and if_present_exact(t, m, n)):
+            if n in seen or (sc.get(n) is None and '--if-present' in re.split(r'&&|[;|\n]', t[m.start():], maxsplit=1)[0] and if_present_exact(t, m, n)):
                 continue
             seen.add(n)
             sub = npm_texts(sc, n, depth + 1, seen) if depth < 3 else None
@@ -390,6 +398,10 @@ for tgt in targets:
                 pkg = False
         if tgt.startswith('pkg:'):
             if tgt == 'pkg:package.json' and isinstance(pkg, dict):
+                make_paths[tgt] = []
+            # 7.4.0 review B-M1: pkg:scripts.<name> = [] when package.json at <rev> is a JSON object
+            # whose scripts.<name> is a string: npm runs it here and never walks up (the plan guard)
+            elif tgt.startswith('pkg:scripts.') and isinstance(pkg, dict) and isinstance(pkg.get('scripts'), dict) and isinstance(pkg['scripts'].get(tgt[12:]), str):
                 make_paths[tgt] = []
             continue
         sc = pkg.get('scripts') if isinstance(pkg, dict) else None

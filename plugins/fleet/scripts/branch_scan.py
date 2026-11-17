@@ -111,7 +111,7 @@ plan_tip_time = int(tip) if tip.isdigit() else None
 for line in run('log', '--format=%H%x00%ct%x00%s', base + '..HEAD').stdout.decode('utf-8', 'replace').splitlines():
     c, _, rest = line.partition('\0')
     ct, _, subj = rest.partition('\0')
-    files = names(run('diff-tree', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c).stdout)
+    files = names(run('diff-tree', '--ignore-submodules=none', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c).stdout)
     commits.append({'sha': c, 'subject': subj, 'files': sorted(set(files))})
 pre = 'refs/fleet/' + tid + '/'
 name_re = re.compile(re.escape(pre) + r'plan(-[0-9]+)?')

@@ -1620,7 +1620,7 @@ function relayDigestOk(r, keys, name) {
 // Every program ships as plugins/fleet/scripts/<name>.py
 // PROGRAM_SHA256_BEGIN
 const PROGRAM_SHA256 = {
-  "branch_scan": "ec03aa965ed9a3d145ce1fb1636685d2be087877daf78f369eed0a19f532967d",
+  "branch_scan": "b74d9dd5692933e455dbe90923b9687e27ac63a8c73234a8d57f97587cbf8feb",
   "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
   "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
   "changed_defs": "489230ce46b9d6fdeecb17f49f462ac8e51229c8436f24b29985596ffe305116",
@@ -1630,17 +1630,17 @@ const PROGRAM_SHA256 = {
   "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
   "exclude_add": "8e510601a0deac5baa673f1a888a78fa28c3cf49c20e2949a539252ffdea3566",
   "fleet_branch": "f1af514598ab542d58a16456f00e5cba0aeb43131fc2eab1618e2ca87bf846d7",
-  "fleet_scan": "7bbeae69c4bad1a78883c0726da690dc63ef75067e5416da42feb8b086ceb3f7",
-  "format_files": "1a38b2822c17227ea89e9ac345621571c39d8019e356588788b69888f15dd467",
+  "fleet_scan": "2cd4e1171e82f47fa2c1356ba175398f33bc10ae65258720cf113b65cb78969f",
+  "format_files": "a8a416d1d5566038a485428fcc82d792a90923578e1ba471f9c3a12a846324ba",
   "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
   "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
-  "hasher": "18a5ea9f11abbabafedb3c4c7c29444ece62355bb5a3d8d1337f01f8128dcb20",
-  "hook_surface": "f119cf2f6fc277a44b9ff33337c8abcc9f3a06b19f5ea5b8523dd5aefde0524c",
+  "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
+  "hook_surface": "ccd331ce4c783f94b546ed735275b171e38b4b982ea6d8b1241db6fe9c90582c",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
   "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
   "plan_dsn": "f02908de588f71426a2995b86884be5e15127fd9fc48ead3710c0e71b481277b",
-  "plan_files": "360fc1c69092e8da9f11cdded6296ef429c3db870181881ffff949a5b3c8253c",
+  "plan_files": "9c5b4bece57b1f49f3106d015a39c68f640a932c39f9de19ea4660733eafac26",
   "plan_hash": "ee8fdef64dd4c198233adb2e011245fb2c9213d254cb88b2ad57c2edb0473757",
   "plan_ref": "bf07be4e67cb6d56ca9a7c1b926f99579c0f5329633babbf2ce22eb3aef6f594",
   "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
@@ -1651,13 +1651,13 @@ const PROGRAM_SHA256 = {
   "pr_test_block": "91c1d4610ffce1fe1ca2823a03cfb06e98d2385e42b14b17a5e2ccd1eb8280be",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
   "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
-  "push": "b29f961221121caf9a0123c95e04cf77ce1795c622d074bbe653340bec78b0d9",
+  "push": "71d0f85fd58aeaf34f8bbfd11c5b271ed407e926dbb21e9d0ad7d3b97e290889",
   "read_state": "c6ce8ab9dfe4ae85b144e3cc90c007334794f8e725bd8bfba071544365e18c89",
   "remote_head": "b5ad5f009c9ca166fefd68fb54a33211465827fe7a78d7fc2e5e6c8afa612f58",
   "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
   "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
   "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
-  "scratch_copy": "97c86abdbe6a0113b3cdc406bcb57258e0cf2b2080cb7ff12ffd88d464fa875d",
+  "scratch_copy": "a32ea715f21ed91fccf4689c84f8a8e8ceab62b30439f2061ba6da35d6defae3",
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
   "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",
   "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
@@ -5318,13 +5318,15 @@ async function planAndAudit(ctx0) {
   const pnt = npmTargetOf(plan.test_cmd.command);
   // 7.4.0 car 5 (Z1): npx jest|vitest resolves the nearest dir with a package.json (no root one: the main checkout's)
   const pxt = /^npx$/.test(String(plan.test_cmd.command || "").trim().split(/[ \t]+/)[0]) ? "pkg:package.json" : null;
-  const planHs = await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", [pnt, pxt].filter(Boolean), "Plan");
+  // 7.4.0 review B-M1: the walk-up guard reads the root package.json and its scripts.<name> (pst); npm:<name> is R4's only
+  const pst = pnt ? "pkg:scripts." + pnt.slice(4) : null;
+  const planHs = await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", [pnt, pst, pxt].filter((x, i, a) => x && a.indexOf(x) === i), "Plan");
   const planRs = await rulesetSurface("infra:ruleset-surface:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");
   hookGate("the plan scope", planScopePaths(planFacts, criteria), planHs.surface, planRs);
   // 7.4.0 (#39): with no package.json script at the worktree root npm walks up to the main checkout's
   // (npm_config_prefix and npm_config_local_prefix do not stop it; only --prefix does)
-  if (pnt && !planHs.make_paths[pnt])
-    return planFindingsStop(ctx, planPath, "npm test_cmd", [{ criterion: null, finding: "package.json (with scripts." + pnt.slice(4) + ") is not tracked at the worktree root at HEAD, or the script cannot be read; npm would walk up into the main checkout" }], plan.changed_symbols, plan);
+  if (pnt && !planHs.make_paths[pst])
+    return planFindingsStop(ctx, planPath, "npm test_cmd", [{ criterion: null, finding: "package.json (a JSON object with a string scripts." + pnt.slice(4) + ") is not tracked at the worktree root at HEAD; npm would walk up into the main checkout" }], plan.changed_symbols, plan);
   if (pxt && !planHs.make_paths[pxt])
     return planFindingsStop(ctx, planPath, "npx test_cmd", [{ criterion: null, finding: "package.json is not tracked at the worktree root at HEAD (or is not a JSON object); npx would resolve the main checkout's prefix" }], plan.changed_symbols, plan);
   const conventions = await prConvention("infra:pr-convention:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");

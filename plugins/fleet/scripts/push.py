@@ -39,9 +39,10 @@ except Exception:
 #     Checks the branch, HEAD and a clean worktree (any mismatch: non-zero exit,
 #     nothing pushed); with <parent> and <tree> (a re-plan built on an open PR)
 #     also approved^ == parent, approved^{tree} == tree and origin's head at the
-#     sealed URL == parent; refuses repo config that rewrites or redirects a push
-#     (url.*, remote.*.push/pushurl/receivepack/mirror, a remote named by the
-#     sealed URL). Pushes once to the sealed URL (the URL sealed at plan time,
+#     sealed URL == parent; refuses repo config that rewrites, redirects or
+#     re-routes a push (any non-global url.*, http.*, credential.*, ssh.*,
+#     core.sshCommand, core.gitProxy key; any remote.* key but <name>.url and
+#     <name>.fetch; a remote named by the sealed URL). Pushes once to the sealed URL (the URL sealed at plan time,
 #     not the repo's origin: 7.4.0 review A-M1) with the explicit refspec
 #     refs/heads/<branch>:refs/heads/<branch> (no +, so no config forces it or
 #     sends it to another ref); retries a network failure after 5, 15 and 45 s
@@ -194,7 +195,11 @@ else:
     bad = []
     for row in cfg.stdout.decode('utf-8', 'replace').splitlines():
         sc, _, key = row.partition('\t')
-        if sc != 'global' and (re.match(r'url\.', key) or re.match(r'remote\..*\.(push|pushurl|receivepack|mirror)$', key) or key.startswith('remote.' + url + '.')):
+        # security follow-up: an allowlist for remote.* (url and fetch of a named remote), and none of
+        # the transport keys (http.*, credential.*, ssh.*, core.sshCommand, core.gitProxy) outside the
+        # user's global config: the HARD -c values cannot reset a URL-scoped key such as
+        # credential.<url>.helper or http.<url>.proxy, so a local one is refused, never overridden
+        if sc != 'global' and (re.match(r'(url|http|credential|ssh)\.|core\.(sshcommand|gitproxy)$', key) or (key.startswith('remote.') and (not re.match(r'remote\..*\.(url|fetch)$', key) or key.startswith('remote.' + url + '.')))):
             bad.append(sc + ' ' + key)
     if bad:
         sys.exit('repo config rewrites or redirects the push (never followed): ' + ', '.join(sorted(set(bad)))[:500])

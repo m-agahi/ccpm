@@ -35,7 +35,8 @@ test("7.4.0 #39 J1: npm test with no tracked package.json script: a re-plan find
     assert.equal(out.result.status, "needs_human", cmd + ": " + out.result.reason);
     assert.match(out.result.reason, /npm would walk up into the main checkout/, cmd);
     assert.ok(out.result.reason.includes("scripts." + tgt.slice(4)), out.result.reason);
-    assert.deepEqual(inputsOf(call(out, "infra:hook-surface:plan").prompt).targets, [tgt]);
+    // 7.4.0 review B-M1: the guard reads pkg:scripts.<name>; npm:<name> is for R4
+    assert.deepEqual(inputsOf(call(out, "infra:hook-surface:plan").prompt).targets, [tgt, "pkg:scripts." + tgt.slice(4)]);
     const pr = inputsOf(call(out, "role:scope-and-plan:audit-fix").prompt).prior_round;
     assert.ok(pr.findings.some((f) => /npm would walk up/.test(f.finding)), JSON.stringify(pr.findings));
   }
@@ -43,10 +44,10 @@ test("7.4.0 #39 J1: npm test with no tracked package.json script: a re-plan find
 
 test("7.4.0 #39 J1: a re-plan to a tracked script goes on; package.json with scripts.test gives no finding", async () => {
   const s = npmPlan("npm test", {});
-  s["infra:hook-surface:plan:audit-fix"] = hsOut({ "npm:test": [] });
+  s["infra:hook-surface:plan:audit-fix"] = hsOut({ "pkg:scripts.test": [] });
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  const ok = await runOne(npmPlan("npm test", { "npm:test": ["scripts/run.mjs"] }), ARGS);
+  const ok = await runOne(npmPlan("npm test", { "npm:test": ["scripts/run.mjs"], "pkg:scripts.test": [] }), ARGS);
   assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
   assert.ok(!ok.labels.includes("role:scope-and-plan:audit-fix"), ok.labels.join(", "));
 });

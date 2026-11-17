@@ -92,7 +92,8 @@ const BYPASS = [
   "export npm_config_prefix=sub; npm run --if-present lint",
   "node a.mjs --prefix sub && npm run --if-present lint",
 ];
-const EXACT = ["npm run --if-present lint", "npm run lint --if-present", "pnpm run --if-present lint", "yarn run lint --if-present", "node a.mjs && npm run --if-present lint", "node a.mjs; npm run lint --if-present"];
+// 7.4.0 review A-m4: yarn left the exact forms (`yarn run X` runs a package binary when the script is missing)
+const EXACT = ["npm run --if-present lint", "npm run lint --if-present", "pnpm run --if-present lint", "node a.mjs && npm run --if-present lint", "node a.mjs; npm run lint --if-present"];
 
 test("7.4.0 car 5 Z2: each bypass form of --if-present drops the entry (fail closed)", () => {
   const scripts = { a: "node a.mjs" };

@@ -48,7 +48,7 @@ def run(*a):
 head = run('rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
 pc = run('rev-parse', '--verify', commit + '^{commit}').decode().strip()
 parent = run('rev-parse', '--verify', pc + '^').decode().strip()
-raw = [x for x in run('diff-tree', '-r', '--no-commit-id', '--name-only', '-z', '--no-renames', parent, pc).split(b'\0') if x]
+raw = [x for x in run('diff-tree', '--ignore-submodules=none', '-r', '--no-commit-id', '--name-only', '-z', '--no-renames', parent, pc).split(b'\0') if x]
 files = [x.decode('utf-8', 'replace') for x in raw]
 # fleet 4.0.0 review: the committed files that hold a test DSN (mysql://,
 # any case); a blob over 8 MiB is listed unread (fail closed); a path the

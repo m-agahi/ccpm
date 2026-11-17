@@ -107,7 +107,7 @@ if mode == 'make' and len(args) in (1, 2):
             tree = git(wt, 'write-tree', env=env).stdout.decode().strip()
         finally:
             os.unlink(idx)
-        out = names(git(wt, 'diff-tree', '-r', '-z', '--name-status', '--no-renames', 'HEAD^{tree}', tree).stdout)
+        out = names(git(wt, 'diff-tree', '--ignore-submodules=none', '-r', '-z', '--name-status', '--no-renames', 'HEAD^{tree}', tree).stdout)
         rt = os.path.realpath(tmp)
         for k in range(0, len(out) - 1, 2):
             st, p = out[k], out[k + 1]

@@ -148,6 +148,32 @@ test("7.4.0 review A-M3: the hasher flags a new pyproject.toml whose pytest tabl
   assert.deepEqual(hashed('[tool.pytest.ini_options]\naddopts = "-p no:cacheprovider"\n', true), [], "an existing pyproject.toml is not flagged");
 });
 
+// security follow-up (HIGH): an allowlist, not a deny-list, for a new pyproject.toml's pytest table
+test("7.4.0 review A-M3 allowlist: a new pyproject.toml's addopts and pytest keys pass only from the allowlist", { skip: !HAVE_PY && "no tomllib" }, () => {
+  const io = (x) => "[tool.pytest.ini_options]\n" + x + "\n";
+  const refused = [
+    'addopts = "-o python_files=x_*.py"', 'addopts = "--override-ini=testpaths=x"', 'addopts = "-c other.ini"', 'addopts = "--config-file=o.ini"',
+    'addopts = "--rootdir=sub"', 'addopts = "--confcutdir=tests"', 'addopts = "--noconftest"', 'addopts = "--co"', 'addopts = "--collect-only"',
+    'addopts = "--pyargs"', 'addopts = "--lf"', 'addopts = "--sw"', 'addopts = "-W ignore"', 'addopts = "--import-mode=importlib"',
+    'addopts = "-qp no:x"', 'addopts = "-vk not_a"', 'addopts = "-xm slow"', 'addopts = "--strict"', 'addopts = "--desel=tests/test_a.py::test_a"',
+    'addopts = "--tb"', 'addopts = "--maxfail=x"', 'addopts = "-r"', 'addopts = "-rq"', 'addopts = ["--ignore-glob=*"]', "addopts = 3",
+    'python_classes = ["Check"]', 'python_functions = ["test_*"]', 'filterwarnings = ["ignore"]', 'norecursedirs = ["tests"]',
+    'python_files = ["x_*.py"]', 'testpaths = ["tests", 3]', 'usefixtures = ["x"]',
+  ];
+  for (const b of refused) {
+    const sus = hashed(io(b), false);
+    assert.ok(sus.some((x) => /^runner config narrows the tests in a new pyproject\.toml: /.test(x)), b + " -> " + JSON.stringify(sus));
+  }
+  assert.ok(hashed("[tool.pytest.other]\nx = 1\n", false).length, "an unknown [tool.pytest.*] subtable");
+  const allowed = [
+    'addopts = "-q"', 'addopts = "-v"', 'addopts = "-vv"', 'addopts = "-ra"', 'addopts = "-rfEs"', 'addopts = "-qx"', 'addopts = "-x"',
+    'addopts = "--strict-markers --strict-config"', 'addopts = "--tb=short"', 'addopts = "--maxfail=1"', 'addopts = "--durations=5"', 'addopts = "--color=yes"',
+    'python_files = ["test_*.py"]', 'norecursedirs = [".git", "build"]', 'testpaths = ["tests"]', 'markers = ["slow: slow tests"]', 'minversion = "8.0"', "xfail_strict = true",
+  ];
+  for (const b of allowed) assert.deepEqual(hashed(io(b), false), [], b);
+  assert.deepEqual(hashed('[tool.pytest]\naddopts = ["-ra", "--strict-markers"]\ntestpaths = ["tests"]\n', false), []);
+});
+
 // ---------------------------------------------------------------- A-M4, A-m1
 
 test("7.4.0 review A-M4: the coder's test_conflict is capped and its gate line goes through logPath", async () => {

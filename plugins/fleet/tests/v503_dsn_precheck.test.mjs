@@ -199,7 +199,8 @@ test("5.0.3 the planner role names the ban and the sanctioned wording", () => {
 test("5.0.3 the post-commit gate still refuses mysql:// (backstop unchanged)", async () => {
   // the program is 5.0.2's but for 6.0.0 (ledger 2042): it lists a given commit against its parent
   const sha = (/"plan_files": "([0-9a-f]{64})"/.exec(SOURCE) || [])[1];
-  assert.equal(sha, "360fc1c69092e8da9f11cdded6296ef429c3db870181881ffff949a5b3c8253c");
+  // 7.4.0 review A-m2: plan_files' diff-tree passes --ignore-submodules=none (the DSN check unchanged)
+  assert.equal(sha, "9c5b4bece57b1f49f3106d015a39c68f640a932c39f9de19ea4660733eafac26");
   assert.match(readFileSync(PLAN_FILES, "utf8"), /b'mysql:\/\/' in d\.stdout\.lower\(\)/);
   // a clean precheck does not let a held DSN past verify-plan-commit
   const s = happy();

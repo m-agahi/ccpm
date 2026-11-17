@@ -142,7 +142,7 @@ TIMING = ['']
 before = snapshot(wt)
 DIRTY = sel.get('dirty') is True
 if DIRTY:
-    cand = names(git(wt, 'diff-tree', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', before).stdout)
+    cand = names(git(wt, 'diff-tree', '--ignore-submodules=none', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', before).stdout)
 else:
     cand = list(sel.get('paths') or [])
 tracked, links = set(), set()
@@ -193,11 +193,13 @@ CONFIG_NAMES = {'conftest.py', '__init__.py', 'setup.py', 'setup.cfg', 'tox.ini'
                 'go.mod', 'go.work', '.pre-commit-config.yaml', '.pre-commit-hooks.yaml'}
 CONFIG_STEMS = ('jest.config', 'vitest.config', 'vite.config', 'babel.config', 'karma.conf',
                 'webpack.config', 'rollup.config', 'eslint.config', 'prettier.config', 'playwright.config',
-                'cypress.config', 'ava.config', 'tsconfig', 'jsconfig')
+                'cypress.config', 'ava.config', 'tsconfig', 'jsconfig', 'jest.setup', 'setuptests', 'vitest.workspace')
+# 7.4.0 review A-m3: names compare lower-cased; a module under __mocks__/ replaces imports in jest
+CONFIG_LOWER = {x.lower() for x in CONFIG_NAMES}
 def config_like(q):
-    b = q.rsplit('/', 1)[-1]
-    return (b in CONFIG_NAMES or b.endswith(('.pth', '.cfg', '.ini', '.toml'))
-            or b.startswith('.') or b.startswith(CONFIG_STEMS))
+    b = q.rsplit('/', 1)[-1].lower()
+    return (b in CONFIG_LOWER or b.endswith(('.pth', '.cfg', '.ini', '.toml'))
+            or b.startswith('.') or b.startswith(CONFIG_STEMS) or '__mocks__' in q.split('/')[:-1])
 def dir_offenders(p):
     # what under directory hook path p is not HEAD's: a path that differs
     # between HEAD and the snapshot, any untracked or ignored path (exempt()
@@ -210,7 +212,7 @@ def dir_offenders(p):
     links = gitlinks('HEAD', p) + gitlinks(snap(), p)
     if links:
         return sorted(set(links))
-    out = names(git(wt, 'diff-tree', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', snap(), '--', p).stdout) + others(p)
+    out = names(git(wt, 'diff-tree', '--ignore-submodules=none', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', snap(), '--', p).stdout) + others(p)
     return sorted(set(q for q in out if not exempt(q)))
 OFFENDERS = []
 def differs(p):
@@ -466,7 +468,7 @@ try:
     # what a run changed: tracked or selected paths only (a cache a hook leaves
     # in the scratch checkout is never copied back), with their blob ids
     def delta():
-        out = git(scratch, 'diff-tree', '-r', '-z', '--no-renames', start, snapshot(scratch)).stdout.split(b'\0')
+        out = git(scratch, 'diff-tree', '--ignore-submodules=none', '-r', '-z', '--no-renames', start, snapshot(scratch)).stdout.split(b'\0')
         d = {}
         for k in range(0, len(out) - 1, 2):
             q = out[k + 1].decode('utf-8', 'replace')

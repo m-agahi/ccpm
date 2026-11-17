@@ -307,6 +307,40 @@ fixed before the PR.
   `logPath`; the tail splits on CR and LF.
 - B-M2 (`push.py`): each push attempt's timeout is `max(1, left() - READ_RESERVE)`, so the head
   read keeps its 60 s.
+- Security follow-up to A-M1 (an allowlist, option B): `push.py` also refuses any non-global
+  `http.*`, `credential.*`, `ssh.*`, `core.sshCommand` or `core.gitProxy` key, and any `remote.*`
+  key but `<name>.url` and `<name>.fetch`. The hard `-c` values cannot reset a URL-scoped key such
+  as `credential.<url>.helper` or `http.<url>.proxy`, so a local one is refused, not overridden;
+  the user's global SSH and credential setup is used as before. The plan-mode probe is a dry run
+  before any role ran, so it reads the human's repo config unchanged. The `ls-remote` head reads
+  run with no repo and read no repo config.
+- Security follow-up to A-M3 (an allowlist): in a new `pyproject.toml` the pytest table may hold
+  only `addopts`, `testpaths`, `python_files`, `norecursedirs`, `markers`, `minversion` and
+  `xfail_strict`; an unknown key or `[tool.pytest.*]` subtable (other than `ini_options`) is
+  flagged. An addopts token passes only as `-q`, `-v`, `-x` or `-r<report chars>` (short clusters
+  read char by char, for example `-qx`, `-vv`, `-rfEs`) or exactly `--strict-markers`,
+  `--strict-config`, `--tb=<style>`, `--maxfail=N`, `--durations=N`, `--color=yes|no|auto`; every
+  other token is flagged, an abbreviated long option included (`-W` and `--import-mode` are not
+  allowed). `testpaths`, `python_files` and `norecursedirs` must keep every frozen test file in
+  the file's directory collected; `python_classes` and `python_functions` are flagged.
+- B-M1: the #39 walk-up guard reads only the new hook-surface target `pkg:scripts.<name>` (`[]`
+  when the root `package.json` at HEAD is a JSON object with a string `scripts.<name>`). The
+  nested `npm:<name>` entry is R4's only: a root `scripts.test` of `npm run -w packages/web test`
+  or `cd web && npm run build && jest` plans with no finding; no root script still stops. In the
+  nested reader a valued flag (`-w`, `--workspace`, `--prefix`, `-C`, `--dir`, `--filter`, `-F`) is
+  never the script name, and a run with such a flag (or `--workspaces`, `-r`, `--recursive`) has no
+  R4 entry (another package's script).
+- B-m8: `yarn test:unit` (and pnpm's bare `name:x` form) names that script, not `test`.
+- A-m4: yarn never takes the `--if-present` skip (`yarn run X` runs a package binary when the
+  script is missing); a missing script under yarn drops the entry.
+- B-m2: `hook_surface.py` passes `maxsplit=1` by keyword.
+- A-m2: every `git diff-tree` in `fleet_scan.py`, `branch_scan.py`, `plan_files.py`,
+  `scratch_copy.py` and `format_files.py` passes `--ignore-submodules=none` (a `.gitmodules`
+  `ignore = all` hid a gitlink change from diff-tree). `fleet_scan.py` exits non-zero when the PR
+  adds or changes a `submodule.*.ignore` key (merge base against the head), so the push and PR
+  steps stop.
+- A-m3: `format_files.py` `config_like` compares names lower-cased and covers `jest.setup.*`,
+  `setupTests.*`, `vitest.workspace.*` and any path under `__mocks__/`.
 
 ### Tests changed on purpose (review fixes)
 
@@ -322,6 +356,13 @@ fixed before the PR.
   and the `v740_test_conflict` Q4 test read the expected head, not `5555555`. The Q4 resume test
   pins the push's parent and tree args.
 - `v5010_prompt_snapshot`: the three build pins move (push args); calls unchanged.
+- New: `v740_review_lows2` (B-M1, B-m2, B-m8, A-m2, A-m3, A-m4); the A-M3 allowlist test in
+  `v740_review_gates`; the transport keys in `v740_review_push` R1 (R3 no longer sets an
+  `uploadpack`: R1 refuses it).
+- `v740_if_present_npx` Z2: `yarn run lint --if-present` left the exact forms (A-m4).
+- `v503_dsn_precheck` backstop: the `plan_files` sha pin moves (A-m2 flag only).
+- `v740_npm_walkup` J1: the plan targets are `[npm:<name>, pkg:scripts.<name>]`; a tracked script
+  is the `pkg:scripts.test` entry (B-M1).
 
 ### Tests changed on purpose (car 1)
 

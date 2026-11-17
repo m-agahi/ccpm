@@ -637,30 +637,60 @@ for rel in hook_frozen:
 if hook_launcher:
     sections.update(launcher_tables())
 SUSPICIOUS.extend(hook_bad)
-# 7.4.0 review A-M3: a pyproject.toml new in this run (not in HEAD; a test writer may create one
-# for its criterion) may not load a plugin, deselect or filter tests, or narrow collection away
-# from the frozen test files: the freeze stops on it (an existing file keeps its options)
-NARROW_OPT = re.compile(r'(-[pkm]|--(deselect|ignore|ignore-glob)\b)')
+# 7.4.0 review A-M3 (security follow-up: an allowlist): a pyproject.toml new in this run (not in
+# HEAD; a test writer may create one for its criterion) may set only these pytest keys and addopts
+# tokens; anything else (a plugin, a deselect or filter, -o/-c/--rootdir/--confcutdir/--noconftest,
+# --co, --pyargs, --lf, -W, an abbreviated long option, an unknown key or subtable) stops the freeze.
+# testpaths, python_files and norecursedirs must keep every frozen test file collected
+PYTEST_KEYS = {'addopts', 'testpaths', 'python_files', 'norecursedirs', 'markers', 'minversion', 'xfail_strict'}
+LONG_OK = re.compile(r'^--(strict-markers|strict-config|tb=(auto|long|short|line|native|no)|maxfail=[0-9]+|durations=[0-9]+|color=(yes|no|auto))$')
+def short_ok(x):
+    # a cluster read char by char: q, v, x; r takes the rest as report chars
+    if not re.match(r'^-[^-]', x):
+        return False
+    c = x[1:]
+    i = c.find('r')
+    if i >= 0:
+        c, rest = c[:i], c[i + 1:]
+        if not re.match(r'^[fEsxXpPaANw]+$', rest):
+            return False
+    return all(ch in 'qvx' for ch in c)
+def strs(v):
+    return [v] if isinstance(v, str) else v if isinstance(v, list) and all(isinstance(x, str) for x in v) else None
 def narrowing(rel, sec):
     out = []
     d = os.path.dirname(rel)
     io = sec.get('ini_options')
+    tests = [f for f in explicit if f.endswith('.py') and not os.path.relpath(f, d or '.').startswith('..')]
+    out += ['[tool.pytest.' + k + ']' for k, v in sec.items() if isinstance(v, dict) and k != 'ini_options']
     for t in (sec, io if isinstance(io, dict) else {}):
-        ao = t.get('addopts')
-        try:
-            toks = shlex.split(ao) if isinstance(ao, str) else ao if isinstance(ao, list) else []
-        except ValueError:
-            toks = ['(unparseable addopts)']
-        out += ['addopts ' + str(x) for x in toks if not isinstance(x, str) or NARROW_OPT.match(x) or x == '(unparseable addopts)']
-        out += [k for k in ('python_files', 'python_classes', 'python_functions', 'norecursedirs') if k in t]
-        tp = t.get('testpaths')
-        if tp is not None:
-            tp = [tp] if isinstance(tp, str) else tp if isinstance(tp, list) else [None]
-            roots = [os.path.normpath(x) for x in tp if isinstance(x, str)]
-            for f in explicit:
-                r = os.path.relpath(f, d or '.')
-                if f.endswith('.py') and not r.startswith('..') and (len(roots) < len(tp) or not any(r == x or r.startswith(x + '/') or x == '.' for x in roots)):
-                    out.append('testpaths leaves out ' + f)
+        for k, v in t.items():
+            if isinstance(v, dict):
+                continue
+            if k not in PYTEST_KEYS:
+                out.append(k)
+                continue
+            if k == 'addopts':
+                try:
+                    toks = shlex.split(v) if isinstance(v, str) else strs(v)
+                except ValueError:
+                    toks = None
+                if toks is None:
+                    out.append('addopts (unreadable)')
+                else:
+                    out += ['addopts ' + x for x in toks if not (LONG_OK.match(x) or short_ok(x))]
+            elif k in ('testpaths', 'python_files', 'norecursedirs'):
+                pats = strs(v)
+                if pats is None:
+                    out.append(k + ' (not strings)')
+                    continue
+                for f in tests:
+                    r = os.path.relpath(f, d or '.')
+                    roots = [os.path.normpath(x) for x in pats]
+                    if (k == 'testpaths' and not any(x == '.' or r == x or r.startswith(x + '/') for x in roots)
+                            or k == 'python_files' and not any(fnmatch.fnmatch(os.path.basename(r), x) for x in pats)
+                            or k == 'norecursedirs' and any(fnmatch.fnmatch(seg, x) for seg in r.split('/')[:-1] for x in pats)):
+                        out.append(k + ' leaves out ' + f)
     return out
 
 listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\x00')

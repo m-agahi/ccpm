@@ -5,9 +5,10 @@
 // own -c protocol.allow=never refuses); it changes nothing else.
 // - R1 (A-M1): a + push config, a push config that maps to master, a pushurl, a pushInsteadOf, an
 //   insteadOf and a remote named by the sealed URL: each is a refusal (non-zero exit), nothing
-//   reaches any ref of origin or of the decoy.
+//   reaches any ref of origin or of the decoy. Security follow-up: so is any local http.*,
+//   credential.*, ssh.*, core.sshCommand or core.gitProxy key, and any remote.* key but url and fetch.
 // - R2 (A-M1): with no such config, a diverged origin branch is non_ff, never a forced update.
-// - R3 (A-M1): the repo's origin URL and uploadpack are not used: the push and the head read go to
+// - R3 (A-M1): the repo's origin URL is not used (its uploadpack is refused, R1): the push and the head read go to
 //   the sealed URL; the upstream is set (branch.<b>.remote, branch.<b>.merge).
 // - R4 (A-M2): with <parent> and <tree>, push.py checks approved^ == parent, approved^{tree} ==
 //   tree and origin's head at the sealed URL == parent before it pushes.
@@ -99,6 +100,17 @@ test("7.4.0 review A-M1 R1: push config, pushurl, (push)insteadOf and a remote n
     ["url.DECOY.insteadOf", URL],
     ["remote." + URL + ".pushurl", "DECOY"],
     ["remote." + URL + ".push", "+refs/heads/fleet/x:refs/heads/master"],
+    // security follow-up (MEDIUM): transport config outside the user's global config
+    ["http.proxy", "http://127.0.0.1:9"],
+    ["http.https://example.com.proxy", "http://127.0.0.1:9"],
+    ["http.sslVerify", "false"],
+    ["core.sshCommand", "ssh -o ProxyCommand=evil"],
+    ["core.gitProxy", "evil"],
+    ["credential.helper", "!evil"],
+    ["credential.https://example.com.helper", "!evil"],
+    ["ssh.variant", "simple"],
+    ["remote.origin.uploadpack", "evil"],
+    ["remote.origin.receivepack", "evil"],
   ];
   for (const [k, v] of cases) {
     const e = scene();
@@ -151,14 +163,9 @@ test("7.4.0 review A-M1 R2: a diverged origin branch is non_ff, never a forced u
   }
 });
 
-test("7.4.0 review A-M1 R3: the push and the head read use the sealed URL, not the repo's origin or its uploadpack; the upstream is set", () => {
+test("7.4.0 review A-M1 R3: the push and the head read use the sealed URL, not the repo's origin; the upstream is set", () => {
   const e = scene();
   try {
-    const mark = join(e.h, "uploadpack-ran");
-    const up = join(e.h, "evil-upload-pack");
-    writeFileSync(up, "#!/bin/sh\ntouch " + mark + "\nexec git-upload-pack \"$@\"\n");
-    chmodSync(up, 0o755);
-    g(e.repo, "config", "--local", "remote.origin.uploadpack", up);
     const args = pushArgs(e);
     const r = prog(args, e);
     assert.equal(r.status, 0, r.stderr);
@@ -169,7 +176,6 @@ test("7.4.0 review A-M1 R3: the push and the head read use the sealed URL, not t
     assert.equal(relayDigestOf(o, KEYS), o.digest);
     assert.equal(refOf(e.origin, "refs/heads/fleet/x"), e.sha, "the sealed origin has the branch");
     assert.equal(refOf(e.decoy, "refs/heads/fleet/x"), null, "the repo's origin remote got nothing");
-    assert.ok(!existsSync(mark), "the repo's uploadpack never ran");
     assert.equal(g(e.repo, "config", "branch.fleet/x.remote"), "origin");
     assert.equal(g(e.repo, "config", "branch.fleet/x.merge"), "refs/heads/fleet/x");
     // the refspec is explicit, with no +
