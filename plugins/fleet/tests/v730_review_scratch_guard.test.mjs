@@ -15,7 +15,8 @@ import { tmpdir } from "node:os";
 import { SCRIPTS_SRC, spawnSync } from "./harness.mjs";
 
 const PY = join(SCRIPTS_SRC, "scratch_copy.py");
-const TF = ["terra", "form"].join("");
+// a fake executable name only: every file below with this name is a temp-dir shell stub
+const TF = "terraform";
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "fleet-730g-")));

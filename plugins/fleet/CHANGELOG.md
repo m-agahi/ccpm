@@ -252,7 +252,7 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
   `state.scanWarn` read.
 - `v730_role_text` #65 A24: the bookkeeping sentence pinned is the narrowed one.
 - `v5010_prompt_snapshot` pins: the role, schema and prompt changes above.
-- New: `v730_review_scratch_guard` (the shim guard and the denylist additions).
+- New: `v730_review_scratch_guard` (the shim guard and the denylist additions). The test names the fake tool literally; every such file is a temp-dir shell stub.
 - New: `v730_review_branch_owner`. `v730_branch_slug`: the fixtures own their slugs, the program
   takes the source; the harness default relay adds `owned: []`.
 
