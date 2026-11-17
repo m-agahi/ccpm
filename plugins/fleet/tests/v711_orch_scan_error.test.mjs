@@ -18,11 +18,13 @@ function F(name, id, fields, args) {
 }
 const scan = (p) => F("orch_scan", "orch_scan", { orchestrator: true, iac_repo: true, apply_on_merge: true, hook_surface_pr: true, reasons: [], error: "gh pr view: HTTP 502" }, inputsOf(p).args);
 
-test("7.1.1 L2142 AC6: a routed failed orch_scan relay keeps the draft and stops 'orchestrator PR: needs Max', as the ok relay does", async () => {
+test("7.1.1 L2142 AC6: a routed failed orch_scan relay (7.3.0: ready, not merged) stops 'orchestrator PR: needs Max', as the ok relay does", async () => {
   const outs = [];
   for (const status of ["failed", "ok"]) {
     const s = happy();
     s["infra:orch-scan"] = (p) => Object.assign(scan(p), { status });
+    // 7.3.0 (#32): the error stays on the one retry
+    s["infra:orch-scan:retry"] = s["infra:orch-scan"];
     outs.push(await run(s, ARGS));
   }
   const [out, ok] = outs;
@@ -30,7 +32,9 @@ test("7.1.1 L2142 AC6: a routed failed orch_scan relay keeps the draft and stops
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "merge");
   assert.equal(out.result.reason, "orchestrator PR: needs Max (https://github.com/o/r/pull/7; CI green: test SUCCESS)");
-  assert.ok(!out.build.labels.includes("infra:pr-ready"), out.build.labels.join(", "));
+  // 7.3.0 (#33): changed on purpose: the PR opened ready; the ready check runs, nothing merges
+  assert.ok(out.build.labels.includes("infra:pr-ready"), out.build.labels.join(", "));
+  assert.ok(!out.build.labels.some((l) => /^infra:pr-merge/.test(l)), out.build.labels.join(", "));
   assert.ok(out.build.labels.includes("infra:ci-watch:w1"), out.build.labels.join(", "));
 });
 

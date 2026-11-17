@@ -69,6 +69,9 @@ const WANT = [
   [/^infra:review-paths/, "haiku"],
   [/^infra:remote-head/, "haiku"],
   [/^infra:load-parked$/, "haiku"],
+  // 7.3.0 (#42, #43): the parked draft parts (as load-ref), the fleet-branch read
+  [/^infra:load-parked:p/, "sonnet"],
+  [/^infra:fleet-branch$/, "haiku"],
   [/^intake/, "sonnet"],
   [/^hasher:/, "sonnet"],
   [/^infra:load-ref/, "sonnet"],
@@ -216,7 +219,8 @@ test("4.0.0 1990: a haiku PATH check whose relay is broken is retried once on so
 const MAIN_WT = "/r/.claude/worktrees/fleet-y42-add-thing/main";
 const SETTINGS = ".claude/settings.local.json";
 // the bytes the workspace step writes (settingsFor in the script)
-const settingsFor = (wt) => JSON.stringify({ permissions: { allow: ["Edit(/" + wt + "/**)", "Write(/" + wt + "/**)"] } });
+// 7.3.0 (#9, Q4 (a)): + Write in the run's scratch dir
+const settingsFor = (wt) => JSON.stringify({ permissions: { allow: ["Edit(/" + wt + "/**)", "Write(/" + wt + "/**)", "Write(/" + wt.replace(/\/+[^/]+\/*$/, "") + "/scratch/chunks/*/*.b64)"] } });
 const OWN = sha256(settingsFor(MAIN_WT));
 function withIgnored(fp, ignored) {
   const h = H({ ...HASHES_FLAT });
@@ -517,8 +521,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // 6.0.0 (ledger 2042): + infra:pr-convention:plan
   // 6.3.0 (ADR-1239): + infra:policy:plan
   // 6.3.4 (2176): + infra:plan-chunks:r0w0
-  assert.equal(out.plan.calls.length, 21, out.plan.labels.join(", "));
-  assert.equal(out.planResult.agents, 21);
+  // 7.3.0 (#43): + infra:fleet-branch
+  assert.equal(out.plan.calls.length, 22, out.plan.labels.join(", "));
+  assert.equal(out.planResult.agents, 22);
   // 5.0.6 (ledger 2019): + 7 build-dir resets (writers, test judge, coder,
   // code judge, commit, push, pr-review) and the teardown, which runs after
   // the result is made
@@ -552,7 +557,7 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "7.2.0");
+  assert.equal(p.fleet_version, "7.3.0");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
   assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/5.0.8/scripts"), "no scripts dir or PATH check sealed");
@@ -613,7 +618,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 7\.2\.0/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 7\.3\.0/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });

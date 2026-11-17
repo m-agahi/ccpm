@@ -8,7 +8,8 @@ Role fleet for one non-trivial code change. `/build-task <anything>` runs the
 2. After Max confirms, **build mode** checks that the approved plan is unchanged, writes tests per
    acceptance criterion, judges and freezes them, codes against them and judges the code. Nothing is
    committed until the code judge approves: then ONE commit step commits tests and code together
-   with the repo's hooks. It pushes the branch, opens a **draft** PR, has the PR reviewed
+   with the repo's hooks. It pushes the branch, opens the PR (ready for review; a draft only for a plan `merge_after` condition or policy
+   `pr_ready: false`), has the PR reviewed
    independently, and writes back to the sources. Max reviews and merges.
 
 With `confirm: "auto"` (opt-in, for goal or unattended runs) plan mode does not ask. It runs three
@@ -227,7 +228,8 @@ function, guard or symbol the plan changes, as `{symbol, occurrences: [{at: "<pa
 criterion, dont_care}]}`; each occurrence maps to exactly one of an existing criterion id or a
 `dont_care` reason. Step 5a greps each symbol (`git grep -n -I -w -F`, tracked text files, the plan
 doc excluded; the relayed lists are checked against the program's digest). A malformed map, a hit
-the map leaves out, a mapped line that is no hit, more than 100 hits for one symbol or more than 30
+the map leaves out, a mapped line that is no hit, more than 100 call-shaped hits (7.3.0: the name, optional spaces
+or tabs, then `(`; every hit is still mapped) for one symbol or more than 30
 symbols stop the run with `needs_human`, or go to the one `:audit-fix` round under confirm auto.
 The `:audit-fix` round must keep every symbol the refused round mapped and every symbol that one
 of its findings names (narrower symbols only in addition); a dropped or swapped symbol stops the
@@ -541,7 +543,7 @@ args: `{mode: "build", plan_ref, date, run_nonce, project?, confirm?}`.
 | 12b  | changed-defs (r/o) | a modified existing definition outside `changed_symbols` -> stop (below)   |
 | 13   | commit (infra)     | `git add -A`, staged tree = `code_tree`, ONE commit WITH hooks (below)     |
 | 14   | push (infra)       | `.fleet/` check first; pushes; a hook rejection -> coder (`fix_code`)      |
-| 15   | pr-opener          | `.fleet/` check first; draft PR at `approved_sha` (the commit step's HEAD) |
+| 15   | pr-opener          | `.fleet/` check first; PR (ready unless `draft`) at `approved_sha`         |
 | 16   | review             | pr-review, plus the non-weakening sweep for gate changes (below)           |
 | 16a  | pr-opener          | only `pr_body_claim` blocking -> pr-opener body update, then review again  |
 | 17   | write-back         | ledger section and one marked comment per external source                  |
@@ -813,12 +815,14 @@ the 100-agent cap (like path checks); CI-fix coder rounds still count.
   before that step, with no rewrite. Every `infra:pr-tests*` label (`:counts`, `:resume`,
   `:digest-retry`, `:args-retry`) matches the tail rule and runs outside the agent cap; the
   `role:fleet-pr-opener<sfx>:counts` rewrite is a role call and counts toward the cap.
-- Ready (`infra:pr-ready`, `pr_state.py ready`): `gh pr ready` only on an open draft at the
-  approved sha; the script requires `is_draft: false` and head == approved sha. Policy
-  `pr_ready: false` keeps the draft. A branch Max pushed himself (an IaC diff, ADR-1175) stops
-  with "IaC PR: Max marks it ready".
-- Scan (`infra:orch-scan`, `orch_scan.py`, read only, fails closed, before ready; any sign but
-  the hook-surface one keeps the PR a draft, with its CI watched read-only): orchestrator config or
+- Ready (`infra:pr-ready`, `pr_state.py ready`): the PR opened ready (7.3.0); this step checks it
+  at the approved sha (`gh pr ready` only on an open draft); the script requires
+  `is_draft: false` and head == approved sha. A plan `merge_after` condition or policy
+  `pr_ready: false` opened a draft and keeps it. A branch Max pushed himself (an IaC diff,
+  ADR-1175) stops with "IaC PR: needs Max".
+- Scan (`infra:orch-scan`, `orch_scan.py`, read only, fails closed, before ready; an error gets
+  one retry, then a warning in the result and the PR test block; a sign keeps no draft but blocks
+  the merge and the CI rerun): orchestrator config or
   orchestrator checks and comments on the PR, tracked IaC files, CI files that name an IaC tool,
   hook-surface files in the PR. It reads the worktree and the forge's trees of the PR head and
   the default branch, and runs again right before a merge and after update-branch. It is a
@@ -1580,7 +1584,7 @@ is broken runs once more on sonnet.
 
 ### Independent review
 
-After the commit step, the push and the pr-opener (draft PR open):
+After the commit step, the push and the pr-opener (PR open):
 
 1. `infra:review-paths:v<n>` (read only) runs a program that lists `changed_paths` =
    `git diff --name-only <plan_commit>..<approved_sha>`, with its digest.

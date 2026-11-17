@@ -54,11 +54,40 @@ def read_text(p):
         return None
 def pieces(t):
     return [t[i:i + CHUNK] for i in range(0, len(t), CHUNK)]
+PART = 32000
+def files_of(d):
+    files = []
+    for dp, dns, fns in os.walk(d):
+        dns[:] = sorted(x for x in dns if not os.path.islink(os.path.join(dp, x)))
+        for fn in sorted(fns):
+            fp = os.path.join(dp, fn)
+            if not os.path.islink(fp) and os.path.isfile(fp):
+                files.append(os.path.relpath(fp, d))
+    return files
+def payload(d, files):
+    # 7.3.0 (#42): (plan path, canonical JSON {draft, findings}) of a parked
+    # run folder, or None; the on-disk layout is 7.2.0's
+    findings = read_text(os.path.join(d, 'findings.json')) if 'findings.json' in files else None
+    pp = None
+    if findings is not None:
+        try:
+            fj = json.loads(findings)
+            pp = fj.get('plan_path') if isinstance(fj, dict) else None
+        except ValueError:
+            pp = None
+    mds = [f for f in files if f.endswith('.md')]
+    if not (isinstance(pp, str) and pp in mds):
+        pp = mds[0] if len(mds) == 1 else None
+    draft = read_text(os.path.join(d, pp)) if pp else None
+    if draft is None and findings is None:
+        return None
+    return (pp if draft is not None else None), json.dumps({'draft': draft, 'findings': findings}, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
 mode = sys.argv[1] if len(sys.argv) > 1 else ''
 if mode == 'read':
     # read <scratch> <plan tip time|null>: the newest parked/<run>/ folder
     # newer than the last plan commit (its newest file's mtime); parked/used/
-    # and symlinks are skipped
+    # and symlinks are skipped. 7.3.0 (#42): the meta only (payload sha256 and
+    # part count); read-part prints the payload
     if len(sys.argv) != 4:
         sys.exit('usage: read <scratch> <plan tip time|null>')
     scratch, tip_arg = sys.argv[2], sys.argv[3]
@@ -72,13 +101,7 @@ if mode == 'read':
             d = os.path.join(root, name)
             if name == 'used' or not NAME_RE.fullmatch(name) or os.path.islink(d) or not os.path.isdir(d):
                 continue
-            files = []
-            for dp, dns, fns in os.walk(d):
-                dns[:] = sorted(x for x in dns if not os.path.islink(os.path.join(dp, x)))
-                for fn in sorted(fns):
-                    fp = os.path.join(dp, fn)
-                    if not os.path.islink(fp) and os.path.isfile(fp):
-                        files.append(os.path.relpath(fp, d))
+            files = files_of(d)
             if not files:
                 continue
             t = max(os.path.getmtime(os.path.join(d, f)) for f in files)
@@ -89,24 +112,31 @@ if mode == 'read':
     parked = None
     if best:
         t, name, files = best
-        d = os.path.join(root, name)
-        findings = read_text(os.path.join(d, 'findings.json')) if 'findings.json' in files else None
-        pp = None
-        if findings is not None:
-            try:
-                fj = json.loads(findings)
-                pp = fj.get('plan_path') if isinstance(fj, dict) else None
-            except ValueError:
-                pp = None
-        mds = [f for f in files if f.endswith('.md')]
-        if not (isinstance(pp, str) and pp in mds):
-            pp = mds[0] if len(mds) == 1 else None
-        draft = read_text(os.path.join(d, pp)) if pp else None
-        if draft is not None or findings is not None:
-            parked = {'run': name, 'plan_path': pp if draft is not None else None,
-                      'draft_chunks': pieces(draft) if draft is not None else [],
-                      'findings_chunks': pieces(findings) if findings is not None else []}
+        pl = payload(os.path.join(root, name), files)
+        if pl:
+            parked = {'run': name, 'plan_path': pl[0], 'payload_sha256': hashlib.sha256(pl[1].encode('utf-8')).hexdigest(), 'part_count': max(1, -(-len(pl[1]) // PART))}
     emit({'parked': parked, 'args': [scratch, tip_arg]})
+elif mode == 'read-part':
+    # read-part <scratch> <run> <k>: part k of the run's payload, PART code
+    # points as chunks of CHUNK, with {index, count, sha256 of the part}
+    if len(sys.argv) != 5:
+        sys.exit('usage: read-part <scratch> <run> <k>')
+    scratch, run, k_arg = sys.argv[2:]
+    if not NAME_RE.fullmatch(run) or run in ('used', '.', '..'):
+        sys.exit('bad run name: ' + run)
+    if not re.fullmatch(r'[0-9]{1,3}', k_arg):
+        sys.exit('bad part number: ' + k_arg)
+    d = os.path.join(scratch, 'parked', run)
+    if os.path.islink(os.path.join(scratch, 'parked')) or os.path.islink(d) or not os.path.isdir(d):
+        sys.exit('no parked run ' + run)
+    pl = payload(d, files_of(d))
+    if not pl:
+        sys.exit('parked run ' + run + ' holds no draft or findings')
+    k, count = int(k_arg), max(1, -(-len(pl[1]) // PART))
+    if k >= count:
+        sys.exit('part %d of %d' % (k, count))
+    p = pl[1][k * PART:(k + 1) * PART]
+    emit({'part': {'index': k, 'count': count, 'sha256': hashlib.sha256(p.encode('utf-8')).hexdigest()}, 'chunks': pieces(p), 'args': [scratch, run, k_arg]})
 elif mode == 'write':
     # write <scratch> <run> <chunk dir> <n> <expected sha256> <chunk sha256 list>:
     # parked/<run>/findings.json from checked base64 chunks (exit 3 + bad_chunks)
@@ -272,5 +302,24 @@ elif mode == 'park':
         if os.path.lexists(src):
             os.unlink(src)
     emit({'target': target, 'clean': not dirty(), 'dirty': [], 'args': args})
+elif mode == 'retire' and len(sys.argv) == 4:
+    # fleet 7.3.0 (#9): retire <dir> <used>: move the used parked run folder <dir> into <used>/
+    # (made when missing), never over an existing <used>/<name>, never through a symlink.
+    # Prints {moved, args}; nothing to move or a taken target is moved false, not an error.
+    src, used = sys.argv[2], sys.argv[3]
+    # 7.3.0 review (m3): src is <x>/scratch/parked/<run> and used is <x>/scratch/parked/used
+    pk = os.path.dirname(os.path.realpath(src))
+    name = os.path.basename(os.path.realpath(src))
+    if os.path.basename(pk) != 'parked' or os.path.basename(os.path.dirname(pk)) != 'scratch' or not NAME_RE.fullmatch(name) or name in ('used', '.', '..') \
+            or os.path.islink(pk) or os.path.realpath(used) != os.path.join(pk, 'used'):
+        sys.exit('refusing a retire outside <scratch>/parked: ' + src + ' -> ' + used)
+    dest = os.path.join(used, os.path.basename(src.rstrip('/')))
+    moved = False
+    if os.path.isdir(src) and not os.path.islink(src) and not os.path.islink(used):
+        os.makedirs(used, exist_ok=True)
+        if not os.path.lexists(dest):
+            os.rename(src, dest)
+            moved = True
+    emit({'moved': moved, 'args': [src, used]})
 else:
-    sys.exit('usage: read <scratch> <tip> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run>')
+    sys.exit('usage: read <scratch> <tip> | read-part <scratch> <run> <k> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run> | retire <dir> <used>')

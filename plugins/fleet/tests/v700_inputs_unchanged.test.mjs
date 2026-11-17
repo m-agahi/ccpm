@@ -16,7 +16,8 @@ test("7.0.0 AC7: the intake prompt keeps the Jira, GitHub, Codeberg, plan and te
     "getJiraIssue(issueIdOrKey, responseContentFormat=\"markdown\")",
     "3. GitHub issue or PR URL",
     "4. Codeberg issue or PR URL (`https://codeberg.org/<o>/<r>/issues/<n>` or `/pulls/<n>`): kind codeberg. `curl -sf https://codeberg.org/api/v1/repos/<o>/<r>/issues/<n>`. ref = `<o>/<r>#<n>`.",
-    "5. A path to an existing `.md` file inside <repo>: kind plan.",
+    // 7.3.0 (#63): the plan rule asks for a git-tracked path
+    "5. A path to a `.md` file that is tracked by git (`git -C <repo> ls-files --error-unmatch <path>` exits 0) and has no path part that starts with a dot (such as `.claude/`) or is `scratch` or `parked`: kind plan.",
     "6. Anything else: kind text; ref = \"text\"; body = `input` verbatim.",
   ])
     assert.ok(p.indexOf(s) >= 0, "intake prompt lost: " + s);

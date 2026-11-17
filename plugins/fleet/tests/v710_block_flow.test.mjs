@@ -115,10 +115,11 @@ test("AC4 ex6: edited false logs 'test block unchanged'", async () => {
   assert.ok(hasLog(out, "infra:pr-tests: test block unchanged in " + URL7), out.logs.join("\n"));
 });
 
-test("AC4 ex7: no PR: a gate line and no infra:pr-tests step", async () => {
+// 7.3.0 (#49): changed on purpose: no PR stops the run before the test block (stop gate role)
+test("AC4 ex7: no PR: a stop and no infra:pr-tests step", async () => {
   const s = happy({ script: { "role:fleet-pr-opener": Object.assign({}, happy()["role:fleet-pr-opener"], { pr_url: null, pr_number: null }) } });
   const out = await run(s, ARGS);
-  assert.ok(hasLog(out, "test block skipped: no PR"), out.logs.join("\n"));
+  assert.equal(out.result.stop_gate, "role", out.result.reason);
   assert.ok(!out.labels.some((l) => l.startsWith("infra:pr-tests")), out.labels.join(", "));
 });
 

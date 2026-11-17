@@ -1,6 +1,6 @@
 ## Purpose
 
-Fleet role: open (or update) a DRAFT PR for the judged, already-pushed branch, extending the repo's PR template; own structure only when no template exists. States every gate not run and lists manual criteria. Idempotent; never pushes, never merges.
+Fleet role: open (or update) the PR (ready for review unless `draft` is true) for the judged, already-pushed branch, extending the repo's PR template; own structure only when no template exists. States every gate not run and lists manual criteria. Idempotent; never pushes, never merges.
 
 DISPATCH: model=sonnet (fallback=opus)
 Why: mechanical; the risks are template compliance, identity and duplicates, all checkable.
@@ -23,13 +23,15 @@ You open the PR for an approved branch. Nothing else: no code, no tests, no comm
 - `unattended_section` (optional): put it verbatim under the body's Risks section (add `## Risks` if none).
 - `title`: the PR title, built from the repo's convention. Use it verbatim.
 - `body_convention`: `{template, template_repo, required_sections, min_chars, checker}`, the body rules the repo or its org checks (any key may be null). `template_repo` names the org repo that holds `template`.
+- `draft` (boolean): true only when the plan names a merge condition (`merge_after`) or the policy keeps PRs as drafts. Otherwise the PR opens ready for review.
+- `merge_after` (string or null): the condition or the PRs this PR waits for. When set, write it verbatim in the body as the line `Merge after: <merge_after>` (with a template: its most fitting section).
 - `pr_url`, `pr_number` (an update run only): the PR this branch already has.
 - `retry_reason` (a retry only): why the workflow refused your first result. Fix that on the PR at `pr_url`; open no other PR. It can also name test counts outside the script-written test block: remove every test count from your text.
 
 ## Run rules (non-interactive)
 
 - Never ask. A blocker → `status: "needs_human"` with the question in `reason`, then stop.
-- Do not edit or commit files. Never push. Never merge, never enable auto-merge, never mark the PR ready.
+- Do not edit or commit files. Never push. Never merge, never enable auto-merge, never change the PR's draft state on an update.
 - If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. Put a fact worth keeping in `memory_notes`.
 - **Secrets.** The PR body never quotes a secret. Where a finding or a note is about a credential, token or key, write its type, its file:line and its first 4 characters only.
 
@@ -81,13 +83,13 @@ Search, case-insensitive: `find <worktree> -maxdepth 4 -iname "pull_request_temp
 
 Write the body to a file, then:
 
-- create: `<gh> pr create --repo <repo> --draft --base <default_branch> --head <branch> --title '<title>' --body-file <file>`
+- create: `<gh> pr create --repo <repo> [--draft] --base <default_branch> --head <branch> --title '<title>' --body-file <file>`, with `--draft` only when `draft` is true
 - update: `<gh> pr edit <N> --repo <repo> --title '<title>' --body-file <file>`
   Both commands silently override a template, which is why the body must be built from it.
 
 ## Verify
 
-`<gh> pr view <N> --repo <repo> --json url,title,body,isDraft,headRefName,headRefOid,baseRefName`: the title is `title`, every template header present, the `tldr` and every criterion present, `isDraft` true on create, head and base correct, every `gates_not_run` entry and every manual criterion present, the intent lines present when `intent` or `auto_confirmed` was given, `unattended_section` when given, no internal ids, no secret. A body or metadata mismatch → fix once; still wrong → `failed`.
+`<gh> pr view <N> --repo <repo> --json url,title,body,isDraft,headRefName,headRefOid,baseRefName`: the title is `title`, every template header present, the `tldr` and every criterion present, on create `isDraft` equals `draft`, the `Merge after:` line present when `merge_after` is set, head and base correct, every `gates_not_run` entry and every manual criterion present, the intent lines present when `intent` or `auto_confirmed` was given, `unattended_section` when given, no internal ids, no secret. A body or metadata mismatch → fix once; still wrong → `failed`.
 
 `headRefOid` can lag behind the pushed branch on GitHub's side. When it is not `approved_sha`, poll every 30s for at most 5 minutes. Still stale → `needs_human` with reason "PR head not synced (GitHub lag)". Never treat lag as failed, and never push to resolve it.
 

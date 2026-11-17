@@ -208,7 +208,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 7\.2\.0 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 7\.3\.0 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -1780,6 +1780,8 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
   assert.deepEqual(out.labels, [
     "preflight",
     "intake",
+    // 7.3.0 (#43)
+    "infra:fleet-branch",
     "workspace",
     // 4.0.0 (1985): the push-access dry run, after its own PATH re-check
     "infra:path-check:push-probe",
@@ -1816,7 +1818,7 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     plan_path: "docs/plans/x.md",
     task_id: "y42",
     plan_base: PB,
-    chunk_dir: "/r/.claude/worktrees/fleet-y42-add-thing/scratch/plan-ref-n1-0000001",
+    chunk_dir: "/r/.claude/worktrees/fleet-y42-add-thing/scratch/chunks/plan-ref-n1-0000001",
   });
   // 2.1.4: the commit holds the plan doc only; the sealed ref is a tag object
   // (git mktag, no hook) at refs/fleet/y42/plan; nothing under .fleet/ is written
@@ -2136,7 +2138,8 @@ test("a load step that copies the right sha256 but changed content stops", async
   const out = await runOne(s, buildArgs(tiny));
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /plan ref missing or changed; re-run plan/);
-  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref"]);
+  // 7.3.0 (#47c): a part 0 with no part count is read once more before the stop
+  assert.deepEqual(out.labels, ["preflight", "workspace", "infra:load-ref", "infra:load-ref:retry"]);
 });
 
 test("a load step that returns content not matching its own sha256 stops", async () => {
@@ -3235,21 +3238,21 @@ test("a failed bytecode purge stops the run before the code-judge", async () => 
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
+// 7.3.0 (#9): the purge is purge.py (was a find | xargs PURGE: line); the same fixture and result
 test("the purge command deletes bytecode and pytest caches, sparing venvs and .git", () => {
   const out0 = (async () => run(happy(), ARGS))();
   return out0.then((out) => {
     const p = call(out, "infra:purge-bytecode:code-r1").prompt;
-    const m = /^PURGE: (.*)$/m.exec(p);
-    assert.ok(m, "prompt carries a PURGE: command line");
+    assert.match(p, /purge\.py' '/, "prompt runs purge.py");
     const wt = mkdtempSync(join(tmpdir(), "fleet-purge-"));
     try {
       for (const d of ["a/__pycache__", ".pytest_cache/v", "b", ".venv/lib/__pycache__", ".git/x", "venv/__pycache__"])
         sh(wt, "mkdir", "-p", d);
       for (const f of ["a/__pycache__/m.cpython-313.pyc", "b/old.pyc", "b/old.pyo", ".pytest_cache/v/x", ".venv/lib/__pycache__/k.pyc", ".git/x/y.pyc", "venv/__pycache__/z.pyc", "b/keep.py"])
         writeFileSync(join(wt, f), "x");
-      const r = spawnSync("bash", ["-c", m[1].split("<worktree>").join(shq(wt))], { encoding: "utf8" });
+      const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "purge.py"), wt], { encoding: "utf8" });
       assert.equal(r.status, 0, r.stderr);
-      assert.match(r.stdout, /purged=4\b/);
+      assert.equal(JSON.parse(r.stdout).purged, 4);
       const left = sh(wt, "find", ".", "-type", "f").split("\n").filter(Boolean).sort();
       assert.deepEqual(left, ["./.git/x/y.pyc", "./.venv/lib/__pycache__/k.pyc", "./b/keep.py", "./venv/__pycache__/z.pyc"]);
     } finally {
@@ -3257,10 +3260,6 @@ test("the purge command deletes bytecode and pytest caches, sparing venvs and .g
     }
   });
 });
-
-function shq(v) {
-  return "'" + String(v).replace(/'/g, "'\\''") + "'";
-}
 
 test("code-judge and coder get test_env; the coder gets it as a note for frozen-test runs", async () => {
   const out = await run(happy(), ARGS);
@@ -4713,10 +4712,12 @@ test("2.1.0 review: a review that stops still gets its scratch cleanup", async (
   assert.ok(out.labels.indexOf("infra:review-cleanup:v1") > out.labels.indexOf("role:pr-review:v1"));
 });
 
-test("2.1.0 review skipped when no PR exists: listed in gates_not_run", async () => {
+// 7.3.0 (#49): changed on purpose: no PR is a stop before the review, never a skip
+test("2.1.0 review skipped when no PR exists: listed in gates_not_run (7.3.0: a stop)", async () => {
   const out = await run(happy({ script: { "role:fleet-pr-opener": { status: "ok", reason: "x", pr_url: null, pr_number: null, created: false, template_used: null, gates_not_run_stated: true } } }), ARGS);
   assert.ok(!out.labels.includes("role:pr-review:v1"));
-  assert.ok(out.result.gates_not_run.some((g) => g.gate === "review"));
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "role");
   assert.equal(out.result.review, null);
 });
 
@@ -4913,10 +4914,13 @@ test("2.1.0 agent cap 100: an auto run with a revise round and a review fix roun
   assert.equal(out.result.review.rounds, 2);
   // the PATH re-checks (3.1.1), the build-dir resets (5.0.6) and the PR tail
   // (6.0.0: stats, ready, CI watch, merge) are counted in agents but not against the cap
-  const work = out.calls.filter((c) => !/^infra:(path-check:|build-|pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|^role:fleet-ci-classifier/.test(c.label));
+  // 7.3.0 car 3: the post-PR state steps (after the first pr-opener) and the soft :ci tail too; with
+  // them off the cap the CI write-back (infra:yaadgaar-*:ci) now runs instead of being cap-skipped
+  const pr1 = out.calls.findIndex((c) => c.label === "role:fleet-pr-opener");
+  const work = out.calls.filter((c, i) => !/^infra:(path-check:|build-|pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|^role:fleet-ci-classifier|^infra:[a-z:-]+:ci$/.test(c.label) && !(i > pr1 && /^infra:state:/.test(c.label)));
   assert.ok(out.calls.length > work.length, "the re-checks ran");
   assert.ok(work.length > 60, "dispatched " + work.length);
-  assert.ok(work.length <= 100);
+  assert.ok(work.length <= 100, "dispatched " + work.length + ": " + work.map((c) => c.label).join(", "));
   assert.equal(out.result.agents, countedCalls(out.calls).length);
   // 5.0.6 (ledger 2019): every round's writers, judges, coder, commit, push
   // and review carry their own build dir, intent judge and test r2 included
@@ -5633,6 +5637,9 @@ const ARRAY_SITES = {
   "r.symbols @ callerDisk": "parsed: the callers file-mode summary map; Array.isArray only refuses an array there",
   "r.auto_dont_care @ callerGrep": "parsed: a program map; Array.isArray only refuses an array there",
   "resume.auto_decisions @ buildFromRef": "parsed: the run-state (read-state), copied only when an array",
+  // 7.3.0 review (m2)
+  "state.warnings @ saveState": "parsed: the script's own warning list",
+  "resume.warnings @ finishOk": "parsed: the run-state (read-state), filtered to objects with a string gate",
   "r.headers_missing @ statsStep": "parsed: the pr_body_block relay (digest-checked; schema prog:pr_body_block:headers_missing)",
   // 7.1.0 (L2145)
   "r.claims @ prTestsStep": "parsed: the pr_test_block relay (digest-checked; schema prog:pr_test_block:claims)",
@@ -5669,6 +5676,8 @@ const ARRAY_SITES = {
   "r.frozen_changed @ formatFiles": "infra:frozen_changed",
   // 6.2.2 (2107)
   "r.hook_failures @ formatFiles": "infra:hook_failures",
+  // 7.3.0 (#9): the plan-mode format_files relay (digest-checked first)
+  "ff.hook_failures @ planAndAudit": "parsed: a format_files program output (PROGRAM_OUT types it), digest-checked first",
   "rd.results @ writeBack": "infra:results",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   // 5.0.3 (ledger 2010)
@@ -5681,6 +5690,8 @@ const ARRAY_SITES = {
   "aa.files @ scopeProblems": "role:scope-and-plan:allowed_additions.files",
   "cfg.ids @ hookIdProblems": "infra:ids",
   "r.deviations @ autoGates": "role:fleet-intent-judge:deviations",
+  // 7.3.0 review (M3)
+  "r.bookkept @ intentProblems": "role:fleet-intent-judge:bookkept",
   "scan.commits @ planMode": "infra:commits",
   "scan.refs @ planMode": "infra:refs",
   "r.criteria @ planRefProblem": "parsed: the sealed plan ref (JSON.parse of a verified tag message)",
@@ -5689,7 +5700,7 @@ const ARRAY_SITES = {
   "cl.checks @ ciStep": "parsed: the fleet-ci-classifier result (SCHEMAS types checks as an array; each entry is checked)",
   // 6.0.0 review S1: pr_state.py logs
   "lg.logs @ ciStep": "parsed: a pr_state.py logs output, digest-checked first (PROGRAM_OUT types logs as an array)",
-  "r.chunks @ buildFromRef": "infra:chunks",
+  "r.chunks @ partReader": "infra:chunks",
   "pf.commands @ buildFromRef": "parsed: plan_facts of the sealed plan ref",
   "ref.plan_diff @ buildFromRef": "parsed: the sealed plan ref",
   "r.diff @ fleetScan": "infra:diff",
@@ -5729,7 +5740,7 @@ const ARRAY_SITES = {
   // 6.0.0 (ledger 2042)
   "r.dirty @ commitPlanAndRef": "parsed: the plan_ref_write program relay (digest-checked; PROGRAM_OUT types dirty)",
   // 6.3.4 (2176): plan_ref_write's exit-3 list; it only picks chunks to write again
-  "r.bad_chunks @ commitPlanAndRef": "infra:bad_chunks",
+  "r.bad_chunks @ chunkRounds": "infra:bad_chunks",
   // 6.0.0 security review
   "v.replace_refs @ buildFromRef": "parsed: a verify_since program output (PROGRAM_OUT types it), digest-checked with it",
 };
@@ -5902,8 +5913,9 @@ test("2.1.5 format-plan runs the repo's hooks on the plan after the planner and 
   assert.ok(l.indexOf("infra:format-plan") > l.indexOf("role:scope-and-plan"));
   assert.ok(l.indexOf("infra:format-plan") < l.indexOf("role:plan-audit"));
   const p = call(out, "infra:format-plan").prompt;
-  assert.deepEqual(inputsOf(p), { worktree: "/r/.claude/worktrees/fleet-y42-add-thing/main", plan_path: "docs/plans/x.md" });
-  assert.match(p, /pre-commit run --files/);
+  // 7.3.0 (#9): format_files.py in plan mode runs `pre-commit run --files` (was a `cd && pre-commit` call)
+  assert.deepEqual(inputsOf(p), { worktree: "/r/.claude/worktrees/fleet-y42-add-thing/main", plan_path: "docs/plans/x.md", scratch_dir: "/r/.claude/worktrees/fleet-y42-add-thing/scratch" });
+  assert.match(p, /format_files\.py' '[^']*' '\{"mode":"plan","paths":\["docs\/plans\/x\.md"\]\}'/);
   // a new plans dir must list the file, not the dir
   assert.ok(!/status --porcelain`/.test(p) && /status --porcelain --untracked-files=all/.test(p), "files in new untracked dirs are listed");
   assert.match(p, /--no-verify|never bypass|Never bypass/i);
@@ -6042,8 +6054,9 @@ test("2.1.5 load-ref: a truncated chunk is asked for once more; a second bad cop
   assert.ok(out.labels.includes("infra:load-ref:retry"));
   s["infra:load-ref:retry"] = bad;
   out = await runOne(s, buildArgs(tiny));
-  assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /plan ref missing or changed; re-run plan.*chunks do not match/);
+  // 7.3.0 (#47b): the ref's metadata held on every relay, so the ref is intact: a relay failure, not a changed ref
+  assert.equal(out.result.status, "failed");
+  assert.match(out.result.reason, /^load-ref: the relayed parts do not join to ref_sha256 [0-9a-f]{64} after the re-reads; the plan ref refs\/fleet\/y42\/plan is intact; re-run build with the same plan_ref$/);
 });
 
 test("2.1.5 confirm auto builds from the in-memory sealed ref: load-ref reads metadata only", async () => {
@@ -6282,7 +6295,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 7\.2\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 7\.3\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6669,7 +6682,7 @@ test("2.1.6 a symbol over the grep cap is refused, never silently cut", async ()
   s["infra:callers"] = callersOut({ guard_verdict: [] }, ["guard_verdict"]);
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /guard_verdict: more than 100 occurrences/);
+  assert.match(out.result.reason, /guard_verdict: more than 100 call-shaped occurrences/);
 });
 
 test("2.1.6 a grep result whose relayed lists do not match the program's digest fails", async () => {
@@ -6720,7 +6733,8 @@ test("2.1.6 caller grep program: word-boundary hits in tracked text files, the p
     writeFileSync(join(wt, "docs", "plans", "x.md"), "changes guard_verdict\n");
     writeFileSync(join(wt, "blob.bin"), Buffer.from("guard_verdict\0\x01\x02"));
     writeFileSync(join(wt, "x y.py"), "guard_verdict()\n");
-    writeFileSync(join(wt, "many.py"), "z = 1\n".repeat(6));
+    // 7.3.0 (#40): only call-shaped hits count toward the cap
+    writeFileSync(join(wt, "many.py"), "z(1)\n".repeat(6));
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "i");
     writeFileSync(join(wt, "untracked.py"), "guard_verdict()\n");
@@ -6730,7 +6744,7 @@ test("2.1.6 caller grep program: word-boundary hits in tracked text files, the p
     const o = JSON.parse(r.stdout);
     assert.deepEqual(o.occurrences.guard_verdict, ["chart/guards.py:1", "chart/render.py:1", "chart/render.py:2", "chart/render.py:5", "x y.py:1"].sort());
     assert.deepEqual(o.occurrences.nohit, []);
-    // "z" is a word on more than 5 lines: capped, its list left empty; guard_verdict (5) is not
+    // "z" is called on more than 5 lines: capped, its list left empty; guard_verdict (5 hits, 4 call-shaped) is not
     assert.deepEqual(o.capped, ["z"]);
     assert.deepEqual(o.occurrences.z, []);
     // 4.0.0 (1989): the digest covers the auto dont_care map and the doctest list too
@@ -6980,7 +6994,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.2\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 7\.2\.0 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.3\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 7\.3\.0 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8690,7 +8704,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 7\.2\.0/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 7\.3\.0/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
@@ -10073,7 +10087,7 @@ test("3.1.0 ADR-1175: remote head == approved sha: the run continues to the PR, 
     const out = await go(iacScript(mk, "approved"), args);
     assert.equal(out.result.status, "needs_human", args.confirm + " " + out.result.reason);
     assert.equal(out.result.stop_gate, "iac");
-    assert.match(out.result.reason, /^IaC PR: Max marks it ready \(/);
+    assert.match(out.result.reason, /^IaC PR: needs Max; the fleet watches no CI and merges nothing \(/);
     assert.ok(out.labels.includes("infra:state:written_back") && !out.labels.some((l) => /^infra:pr-ready/.test(l)), out.labels.join(", "));
     assert.ok(!pushed(out), "push never dispatched");
     assert.ok(out.labels.includes("infra:remote-head:push"));
@@ -10812,7 +10826,7 @@ test("3.1.1 origin URL: the workspace step relays a program's output; the script
   s.workspace = Object.assign({}, s.workspace, { remote_url: "git@evil.example:o/r.git", remote_url_check: remoteUrlOut("git@github.com:o/r.git", "/r") });
   const ok = await run(s, ARGS);
   // 6.0.0 (ledger 2045): an IaC PR stops before ready
-  assert.match(ok.result.reason, /^IaC PR: Max marks it ready/);
+  assert.match(ok.result.reason, /^IaC PR: needs Max; the fleet watches no CI and merges nothing/);
   assert.equal(inputsOf(call(ok, "infra:remote-head:push").prompt).remote_url, "git@github.com:o/r.git");
   // an unusable relay (bad digest, other args, a changed url, missing) seals no URL: an IaC diff stops at iac
   for (const bad of [

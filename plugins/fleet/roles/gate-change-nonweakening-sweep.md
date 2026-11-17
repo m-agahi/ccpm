@@ -17,18 +17,18 @@ A green tree is consistent with unlimited weakening. A suite that asserts "the g
 
 ## Inputs
 
-`{pr_number, pr_url, repo, base_ref, head_sha, worktree, scratch_dir, criteria, repo_obligations, changed_paths, mode, fleet: true}`, plus `test_env`, `test_env_prefix` and `test_env_note` (`test_env` holds a DSN only when the repo declares a throwaway test database). `base_ref` is the shipped side, `head_sha` the candidate. Use the DSN in `test_env` as given, in the scratch worktrees too. Run EVERY build or test command, in the worktree or a scratch worktree, as `<test_env_prefix><command>` (`test_env` as a shell prefix: its build vars keep `target/`, `__pycache__` and other caches out of the worktree; a command without it that writes them there stops the run).
+`{pr_number, pr_url, repo, base_ref, head_sha, worktree, scratch_dir, scratch_copy_cmd, criteria, repo_obligations, changed_paths, mode, fleet: true}`, plus `test_env`, `test_env_prefix` and `test_env_note` (`test_env` holds a DSN only when the repo declares a throwaway test database). `base_ref` is the shipped side, `head_sha` the candidate. Use the DSN in `test_env` as given, in the scratch worktrees too. Run EVERY build or test command, in the worktree or a scratch worktree, as `<test_env_prefix><command>` (`test_env` as a shell prefix: its build vars keep `target/`, `__pycache__` and other caches out of the worktree; a command without it that writes them there stops the run).
 
 ## Rules
 
-- Never mutate `worktree` (it is fingerprinted; any change discards your result). Create two detached worktrees:
+- Never mutate `worktree` (it is fingerprinted; any change discards your result). Create two detached worktrees under `scratch_dir` (hooks off), one command each:
 
-  - `git -C <worktree> -c core.hooksPath=/dev/null worktree add --detach <scratch_dir>/sweep-shipped <base_ref>`
-  - `git -C <worktree> -c core.hooksPath=/dev/null worktree add --detach <scratch_dir>/sweep-new <head_sha>`
+  - `<scratch_copy_cmd> make <worktree> <base_ref>` (prints `{tmp}`: the shipped copy)
+  - `<scratch_copy_cmd> make <worktree> <head_sha>` (prints `{tmp}`: the new copy)
 
-  (hooks off for scratch worktrees only — never for commits or pushes). Apply refusing-direction mutations and run the shipped gate and the new gate on the same inputs there.
+  Apply each refusing-direction mutation there with `<scratch_copy_cmd> patch <worktree> <tmp> <file> <old> <new>` (`<file>` relative to `<tmp>`; `<old>` and `<new>` base64 of the exact text, e.g. from `base64 -w0`; it replaces the one occurrence of old and refuses none or several, so keep each hunk small), and run the shipped gate and the new gate on the same inputs. Run each command there with `<scratch_copy_cmd> run <worktree> <tmp> '<argv as a JSON list>' '<env as a JSON object>'` (no shell; it prints `{exit_code, tail}`; pass `test_env` as its env JSON).
 
-- Remove both worktrees with `git worktree remove --force`, then run `git worktree prune`, before you report, even when you fail.
+- Remove both copies with `<scratch_copy_cmd> remove <worktree> <tmp>` before you report, even when you fail.
 - Never run terraform, tofu, tfp or any `digger` / `atlantis` command, even when the gate under test wraps one: report such a unit as not runnable.
 - Non-interactive: never ask. A blocker → `status: "needs_human"`.
 - If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. Put a fact worth keeping in `memory_notes`.

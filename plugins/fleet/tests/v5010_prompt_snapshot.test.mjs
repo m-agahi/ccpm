@@ -103,10 +103,12 @@ const SCENARIOS = {
 // 7.0.0 (yaadgaar #699): the intake prompt has one ledger branch (yaadgaar) and no body page read; the preflight census asks for mcp__yaadgaar__read_task only (the probe pin moves); the reworded yaadgaar read and write-back prompts; no infra:ledger-read:pre, infra:ledger-writeback or their :ci calls (4 fewer build calls on the default legacy ledger fixture)
 // 7.0.0 review F2, F4: the default fixture is yaadgaar task #42 (input #42; + infra:yaadgaar-read, infra:yaadgaar-writeback and their :ci calls: 4 more build calls), and title, body_slug, page_project and page_tags leave INFRA_SCHEMA results and body_slug leaves SOURCE_SCHEMA (both move the pins: with the schema fields put back the plan-then-build pin is 9b97deb7..., not the one below; probe unchanged)
 // 7.1.0 (L2145): + infra:pr-tests after the pr-opener (one more build call), the code judge suite_result types passed, the pr-opener role sha moves (probe unchanged)
+// 7.3.0 car 2: + infra:fleet-branch in plan mode (#43, one more call each), the intake plan-path rule (#63), the plan-mode workspace fast-forward rule (#39), the parked meta prompt and its digest/args opts (#42), fast_forwarded and the parked part keys in the schemas (probe unchanged)
+// 7.3.0 car 4: the workspace exclude_add program and settings rewrite (#9), format-plan via format_files plan mode (#9), commit-plan retire via parked.py (#9), purge.py (#9), the chunk Write-tool steps (Q4 (a)), scratch_copy_cmd role inputs and role shas (#54, #60, #65), the call-shaped caller cap text (#40) (probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "cabb1497e68698a1bcf2c8cc525964fc1a11f2993fec3b92561ad276f80c13ee" },
-  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "26d75a00fec0baf1b5ba02fea00e1b2a6dbb2138dfe9c9812d11a9add4a93909" },
-  "short path (one test writer)": { calls: 88, sha256: "c941f661e573ca0251872c009092723c2f650402ba231ec13672d581df2e5b0a" },
+  "plan then build (confirm ask)": { calls: 90, sha256: "bbbfc8785b9381964615f75f2d5cb35c9e4fcd534245cb547b098ac9f01a1b6a" },
+  "confirm auto (gates, then build in one run)": { calls: 92, sha256: "ca358569dc09da0392bd1be1f2236acb05c8e345603deca4e8f652d07c8ec522" },
+  "short path (one test writer)": { calls: 89, sha256: "1c1d757d0d54620e24420afb1be02b36d02346f3e8f88250ea7059b251219863" },
   "probe": { calls: 2, sha256: "a8ceccc781cf8954f6b925f6d96462387d40cede1db8d318d28eb0441753e8de" },
 };
 

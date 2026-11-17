@@ -1,5 +1,325 @@
 # Changelog
 
+## [7.3.0] - 2026-11-17
+
+Fleet 7.3.0: the combined workflow-reliability batch (plan
+`docs/plans/fleet-reliability-batch-7.3.0-2026-11-17.md`). One release for every open fleet
+workflow-reliability task that the plan puts IN.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 7.3.0), then start a NEW session: the workflow
+  looks for its own `fleet/7.3.0/scripts` dir.
+
+### Changed
+
+- Relay core (car 1, #67): a digest or args retry of an infra relay (`<label>:digest-retry`,
+  `<label>:args-retry`) runs one model step up from its `INFRA_TIER` model (`RETRY_UP`: haiku ->
+  sonnet, sonnet -> opus; opus and fable stay). The gate line names the retry model
+  (`... (<label>:digest-retry) on <model>`). Advisory (Q5, plan default taken): a sonnet relay's
+  retry now runs on opus, which costs more per retry; retries are rare. The PATH re-check's
+  `:relay-retry` keeps `RELAY_RETRY_MODEL` (sonnet).
+- Relay core (car 1, #59): the chunk writers of a rewrite round (`infra:plan-chunks:r<k>w<b>`,
+  `k >= 1`, and the new state and park writers) run one model step up (sonnet -> opus). The
+  rewrite gate line names the model. No refusal detection is added.
+- Relay core (car 1, #47a): a run-state payload over one writer's bound (`CHUNKS_PER_WRITER` = 8
+  chunks of 4000 base64 characters, ADR-1267) is written by parallel writers
+  (`infra:state-chunks:<state label>:r<k>w<b>`); the `infra:state:<label>` step then runs
+  `state_write.py` only, with no chunk text in its prompt, and its exit-3 `bad_chunks` list sends
+  only those chunks to fresh writers (at most `MAX_CHUNK_RETRIES` rounds, then `failed`). Park
+  findings over the bound go to parallel writers too (`infra:park-chunks:r0w<b>`), on the soft
+  agent cap: a skipped or failed park writer logs a gate line and never halts. The park step has
+  no rewrite rounds: a bad chunk leaves `findings_write` null, as a failed findings write did
+  before (a re-run of the park step would move the draft a second time). A payload within the
+  bound stays inline, as before. The writer and rewrite loop is one shared helper
+  (`writeChunksParallel`, `chunkRounds`) that commit-plan uses too.
+- Relay core (car 1, #47b): load-ref of an intact ref (every relay's metadata check passed) whose
+  parts still do not join to `ref_sha256` after the re-reads stops `failed` with "load-ref: the
+  relayed parts do not join to ref_sha256 <sha> after the re-reads; the plan ref <name> is intact;
+  re-run build with the same plan_ref". "plan ref missing or changed" stays for a metadata, parse,
+  shape or part-count problem.
+- Relay core (car 1, #47c): the part-0 count re-read runs once in every path, also after a first
+  part-0 re-read, with its own prompt text so it is never the same call as the first re-read; a
+  part 0 with no part at all is read once more before it stops. The part reader
+  (`partOk`, `countOf`, `readParts`) is one top-level helper (`partReader`).
+
+- Plan intake, parked, workspace (car 2, #42): the parked prior is read in parts. `parked.py read`
+  prints the meta only (`parked: {run, plan_path, payload_sha256, part_count}`), with digest id
+  `parked:read` and the args, so a mis-copied meta relay gets the digest retry. The new
+  `parked.py read-part <scratch> <run> <k>` prints part k of the payload (canonical JSON
+  `{draft, findings}`, parts of 32000 code points, `{part: {index, count, sha256}, chunks}`); the
+  part reads (`infra:load-parked:p<k>`, sonnet) use the shared `partReader`, a bad part is read
+  once more, and the joined parts must hash to `payload_sha256`, else the prior is ignored (fail
+  closed, the unreadable blocker as before). The on-disk park layout is 7.2.0's: a draft parked by
+  7.2.0 loads. Covers #22 (L2029).
+- Car 2 (#63): a brief `plan_path` with a segment that starts with `.`, or a `scratch` or `parked`
+  segment, stops at intake (needs_human, "is not a tracked repo path") before the planner runs.
+  The intake prompt asks for a plan path that git tracks (`ls-files --error-unmatch`) and that is
+  not under `.claude/` or a `scratch/` dir.
+- Car 2 (#43): plan mode reads the local branches `fleet/<task id>-*` with the new read-only
+  program `fleet_branch.py` (`infra:fleet-branch`, haiku, digest id `fleet_branch`) before the
+  layout. One slug: it is adopted (gate "branch slug <s> adopted from existing ..."). None, or the
+  derived slug among them: the derived slug. Several without the derived one: needs_human with the
+  branch list. A text input (`t...` id) reads none. 42 shipped programs (`PROGRAM_COUNT`).
+- Car 2 (#39 part 1): in plan mode only, the workspace step fast-forwards a reused (or added
+  existing) fleet branch with no own commits to `origin/<default_branch>`
+  (`merge-base --is-ancestor`, a clean status, `merge --ff-only` with hooks off) and returns
+  `fast_forwarded`; the run logs "fast-forwarded to origin/<default>". Build mode never does.
+- Car 2 (#53, Max ruled "Decide + log"): under unattended an unreadable parked prior is a decided
+  default blocker (`auto_decisions`: `default-blocker: decided (parked prior unreadable (fail
+closed): <why>; plan-audit passed; the auto gates run)`); the auto gates then run, and
+  a refusing intent judge still stops. Without unattended nothing changes.
+- Car 2 (#52, Max ruled Q2 (b)): a frozen resume (`freeze_digest`) checks the digest over the
+  freeze ref's tree, so a worktree the coder left dirty resumes at the coder when every frozen map
+  (tests, frozen config) still matches; the coder gets `freeze_tree` = the freeze tree. A
+  frozen-map change, HEAD off `plan_base`, no freeze ref or suspicious paths still refuse.
+- Car 2 (car-1 follow-up, Max ruled "Exempt writers"): the chunk writers of a run-state that
+  `saveState` writes after the PR is open (`pr` with a `pr_number`, also on a resume; a review-fix
+  round's `committed` and `pushed` states included) sit outside the agent cap, as
+  `infra:state:shipped` does: no reserve, counted as tail in `softDispatch` (`state.tailWriters`,
+  `tailWriter`). The pre-PR writers keep the cap; the `infra:state:<label>` program steps keep
+  their own rule.
+- Car 3 (#50): the code-judge guard counts any non-null `failed` or `errors` other than 0 (of any
+  type, `"2"` too) and any `exit_code` other than the integer 0 as a failing suite. `driftOf`
+  checks the typed properties of a required object one level down (present keys only), so
+  `suite_result.failed: "2"` is contract drift (`suite_result.failed type: got string`), retried
+  once.
+- Car 3 (#49): a pr-opener result `ok` with a null `pr_url` or `pr_number` stops the run
+  (needs_human, stop gate `role`, "pr-opener returned ok with no PR ..."), on every pr-opener
+  call (`:p<k>`, `:again`, `:counts`, `:body-v<k>`, `:notes`). A review step with no PR stops
+  (stop gate `review`); "review skipped: no PR" and its `gates_not_run` entry are gone.
+- Car 3 (#41): after an update-branch, a blocking re-review routes `pr_body_claim` findings as the
+  main path does: the code findings go to the update round's coder, the body findings to the next
+  pr-opener call (`body_findings`); a body-only re-review runs one pr-opener body update and a
+  re-review, no code round and no R1-R5 check (also for an update record from an earlier run).
+  The review text of the update merge still never reaches the body. The code-judge guard is on in
+  update rounds too.
+- Car 3 (#32): an `orch_scan` error gets one retry (`infra:orch-scan[:<tag>]:retry`); the second
+  result counts. An error on any scan's retry too (ready, merge, after update-branch): a warning
+  `{gate: "orch_scan", error}` (once per error text) in the new result key `warnings` (always
+  present, `[]` when none). On the ready step's scan the script-written test block in the PR body
+  also gets the line "Orchestrator/IaC scan error: <error>. Next step: ..."
+  (`infra:pr-tests:scan-warning`; later test-block writes keep it). The error still blocks the
+  merge and the CI rerun.
+- Car 3 (#33, Max added it to 7.3.0): the fleet opens its PR ready for review, also on
+  orchestrator and IaC repos. It opens a draft only when the plan names a `merge_after` condition
+  (new optional planner output, sealed in `plan_facts.merge_after`; the pr-opener writes
+  `Merge after: <condition>` in the body, and the run result reason names it) or the policy sets
+  `pr_ready: false`. The pr-opener gets `draft` and `merge_after` and creates with `--draft` only
+  when `draft` is true. The ready step keeps `pr_state.py ready` as the check that the PR is ready
+  at the approved sha. Orchestrator, IaC and scan-error signs no longer keep a draft; the merge and
+  CI-rerun rules do not change. A branch Max pushed himself (ADR-1175) still stops at the ready
+  step, now with "IaC PR: needs Max; the fleet watches no CI and merges nothing". The pr-opener
+  and scope-and-plan role files, the build-task skill and the README say so (role sha pins move).
+  The decision record that supersedes the draft-first part of ADR-1215 is for the orchestrator to
+  file.
+- Car 3 (car-2 follow-up, Max: "a run is never halted for the cap after its PR is open"): the
+  `infra:state:{pr_open,reviewed,written_back,committed,pushed}` program steps (inline, rewrite
+  and retry labels) that `saveState` runs after the PR is open sit outside the agent cap too
+  (`tailWriter`, counted once in `dispatch`). The flag now covers the inline writer as well.
+  Pre-PR state writes keep the cap.
+
+- Car 4, intent judge (#65, A24): a `plan_diff` item that only records bookkeeping (a plan
+  round, a reworded line, a moved section, a re-plan note) is no deviation; the G1 check of every
+  real change stays. Role sha pin moves.
+- Car 4, gate differential (#60 steps 1-2, A25): a boundary example that makes a gate accept an
+  input the shipped gate refuses must be an Open decision that cites the brief; plan-audit builds
+  a shipped-vs-planned table (criteria examples plus 2-3 known-bad inputs) and refuses an uncited
+  widening as `plan_defect`. Step 3 stays split out.
+- Car 4, throwaway copies (#54, A23): new program `scratch_copy.py` (`make`, `run`, `remove`).
+  The seven copy roles (test judge, code judge, test writer, plan-audit, nonweakening sweep,
+  scope-and-plan, pr-review) get `scratch_copy_cmd` and no longer build copies with `mktemp -d`,
+  `worktree add` and copy loops. It relays nothing, so it has no `PROGRAM_SLOTS` entry.
+- Car 4, shell forms into programs (#9 IN part, A20-A22): new programs `exclude_add.py` (the
+  workspace `info/exclude` append, relayed as `exclude`; a bad relay is a warning line) and
+  `purge.py` (the bytecode purge, was a `find | xargs` line); new mode `parked.py retire` (the
+  commit-plan retire, was `mkdir -p && mv -n`; relayed as `retire`; a bad relay is a warning
+  line, a wrong program stops); format-plan runs `format_files.py` with select `{"mode": "plan"}`
+  (was `cd && pre-commit run`), and stops on a fixer timeout, an unstable run or a hook that
+  still fails on the settled plan. 45 shipped programs.
+- Car 4, chunk writers (Max ruled Q4 (a)): plan-ref, park and findings chunk files are written
+  with the Write tool, not `printf`. `settingsFor` adds `Write(/<scratch>/**)`; the workspace step
+  rewrites a `settings.local.json` whose content differs. The push output redirect stays split out.
+- Car 4, caller cap (#40, #58, Max ruling): `callers.py` counts only call-shaped hits (the name,
+  optional spaces or tabs, then `(`) toward the 100-hit cap; the cap stays 100. Every `git grep -w`
+  hit is still listed and must be mapped. A common name with many bare hits now meets the caller
+  read budget instead of the cap.
+- Car 4 leftovers: no "draft PR" text left in the plugin description, the README files, the
+  pr-review role and the notes; `docs/build-task-run-notes.md` has a 7.3.0 section
+  (`fleet_branch.py`, `scratch_copy.py`, `exclude_add.py`, `purge.py`, `parked.py retire`, the
+  caller cap); the orch_scan warning is saved in the run-state as `scan_warn` and restored on
+  resume (#32 leftover).
+
+### Review fixes
+
+Two adversarial reviews of cars 1 to 4, fixed before the PR.
+
+- B1 (judges and the Edit tool): the code judge, the test judge and the gate sweep run as
+  `fleet:judge`, which has no Edit or Write tool, and the test writer's Edit rule covers the
+  worktree only. 7.3.0 car 4 told them to edit the scratch copy "with the Edit tool" (7.2.0's roles
+  had no such line). The line is gone; `scratch_copy.py patch <worktree> <tmp> <file> <old b64>
+<new b64>` replaces exactly one occurrence in a regular file inside the copy.
+- M1 (`scratch_copy.py`): the program derives the scratch dir from the worktree
+  (`<dirname(worktree)>/scratch`); every mode names the worktree and no mode takes a scratch dir:
+  `make <worktree> [<rev>]`, `run <worktree> <tmp> ...`, `patch ...`, `remove <worktree> <tmp>`.
+  `run`, `patch` and `remove` act only on a direct child `copy-*` of that dir that `git worktree
+list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp, terragrunt,
+  digger, atlantis) anywhere in argv or as the resolved program, and a shell given a `-c` flag. An
+  env `PATH` no longer crashes `run`: its entries (absolute only) go first, then the program's
+  PATH, so a `test_cmd.env` venv path keeps working. The copy loop checks `<tmp>/` with a separator.
+- M1 addendum (security review of the M1 fix): the argv denylist is bypassable (wrapper
+  scripts, interpreters) and is defense in depth only. The primary guard is the agent PATH: in
+  `run`, a PATH lookup of a terraform-family name resolves exactly as the agent PATH resolves
+  it, that is to the nix shim the PATH-check gate verified, or to nothing. An env `PATH` dir that
+  holds such a name is refused, and so is any PATH that would resolve one differently. The
+  denylist also refuses `env -S`/`--split-string`, `git -c alias.*` (and `--config-env` alias
+  keys), and inline program strings: `python* -c`, `node -e`/`-p`/`--eval`/`--print`,
+  `perl -e`/`-E`, `ruby -e`, and a shell with `-c`. It is not a sandbox: a child can still run a
+  binary by its absolute path; the agent's own hard rules and settings denies cover that.
+- M1 follow-up: the env `PATH` check runs once, before exec, so a child could write a
+  terraform-family file into an env PATH dir (a venv bin) and then call it by name. `run` now puts
+  a per-call guard dir first on the child's PATH: one link per terraform-family name to what the
+  agent PATH resolves it to (the shim), else to `false`. The env PATH dirs keep their order
+  after it. The inline-code scan now reads only the options before the program's first operand
+  (a script, or python `-m <module>`), so `python3 a.py -c x` and `node app.js -p 3000` run.
+- M2 (scratch Write rule): `settingsFor` allows `Write(/<scratch>/chunks/*/*.b64)` only (no nonce,
+  so the settings sha holds across a resume), not `Write(/<scratch>/**)`. The plan-ref, park and
+  run-state chunk dirs moved to `<scratch>/chunks/`. No Write rule covers `ci-*.json`, `parked/`,
+  `hashes/` or `callers/`. A worktree with the car-4 settings gets the new file from the workspace
+  step (it rewrites a differing file); chunk dirs are per run, so a resume reads none.
+- #43 (cross-task branch adoption, major): `fleet_branch.py <repo> <task id> <source>` prints
+  `owned` beside `slugs`, digest-covered: a slug is owned when the sealed `refs/fleet/<task id>/plan`
+  names its branch and lists `<source>` (`kind:ref`) in its brief. Plan mode adopts an owned slug
+  only. A parked `findings.json` is no proof (security review: another task's coder can write one
+  in its own scratch dir), so a run stopped before its plan was sealed keeps the derived slug (a
+  new branch); slug drift only matters once a plan is sealed. The prefix match alone also found another task's branch (`acme/api#2`, task id
+  `acme-api-2`, adopted `fleet/acme-api-2-7-fix-x` of `acme/api-2#7`); unowned slugs are listed in
+  a gate line and never adopted, and several of them no longer stop the run. The seal is a hash
+  of the message, so it proves integrity, not who wrote the ref (no independent `ref_sha256`
+  exists in plan mode). A task id that a 24-character cut would shorten keeps 15 characters plus `-` and
+  8 hex of the sha256 of the full ref (`yadgarhq/yadgar-backend#45` and `#46` shared one id); a
+  short id is unchanged, so its branches and refs still resolve. A task in flight with such a
+  long ref gets the new id: its old branch and refs are not found (re-run plan, or delete them).
+  The text-input skip reads the source kind, not a task id starting with `t` (a ref such as
+  `team/tools#12` was skipped).
+- M3 (#65 bookkeeping backstop): the intent judge keeps only an `est_diff_lines` change and a
+  verified process item as bookkeeping; a `changed_symbols` addition and a test-example change
+  that flips an accept or refuse outcome are deviations (the wider carve-out is deleted). The
+  judge returns `bookkept: [<plan_diff entry>]`, and `intentProblems` refuses the plan when a
+  `plan_diff` entry (except `"new plan"`) is, copied exactly, neither a deviation `item` nor in
+  `bookkept`. A missing `bookkept` counts as `[]`, so it fails closed without being contract drift
+  (`bookkept` is in the schema, not in `REQUIRED_ON_OK`).
+- m1 (#33): IaC PRs stay ready like every PR (Max's ruling; `prDraft` unchanged). A PR that is a
+  draft for another reason (`merge_after`, policy `pr_ready: false`) and carries an orchestrator or
+  IaC sign keeps the read-only CI watch again, as 7.2.0 did for its kept drafts (ADR-1199);
+  `judge()` still bars merge and rerun. A draft with no sign is "CI not run on draft" as before.
+- m2: the run's `warnings` are saved in the run-state and restored on resume. A rescan that comes
+  back clean clears `scan_warn` and rewrites the PR test block without the warning
+  (`infra:pr-tests:scan-clear`).
+- m3: `parked.py retire` moves only `<x>/scratch/parked/<run>` (a run name, not `used`) into
+  `<x>/scratch/parked/used`; any other pair is refused.
+- Parked part reads are soft on the agent cap: `partReader` skips its hard `reserve` for
+  `loadParked` (`softCap`), so a part over the cap is not run (`softDispatch` returns null) and the
+  parked draft is ignored instead of the run stopping.
+- #63: the intake `TRACKED` text now says what `briefProblem` checks: no path part that starts
+  with a dot, or is `scratch` or `parked`.
+- #39 (stop text when HEAD is past plan_base with no build commit): not changed. `verify_since`
+  lists every commit in plan_base..HEAD, and a commit that is not a fleet commit stops earlier
+  ("branch moved by a non-fleet commit"), so the unresumable stop is reached only with build commits.
+- Nits: the #53 decision text reads "plan-audit passed; the auto gates run" (the intent judge gets
+  no `parked_unreadable` input, so it did not rule on it); the run-state chunk rewrite rounds stop
+  with stop gate `resume`; the `ws` shadow in `orchScan` is renamed `warns`; a policy draft
+  finishes "draft PR (policy pr_ready false)", not "draft PR ready for review". Not changed: a
+  part 0 with no part count keeps "plan ref missing or changed; re-run plan" because
+  `build_task_run` ("a load step that copies the right sha256 but changed content stops") pins it,
+  and such a relay does not show the ref is intact.
+
+### Tests changed on purpose (review fixes)
+
+- New: `v730_review_scratch_copy`, `v730_review_judge_tools`, `v730_review_chunk_dirs`.
+- `v730_scratch_copy`: the new `scratch_copy.py` signatures; the env probe runs `printenv`, not
+  `sh -c`. `v730_shell_programs`, `v4_s3`: the narrowed Write rule. `v502_relay_keys`, `v4_s4`,
+  `build_task_run` (plan-ref chunk dir): the chunk dirs under `scratch/chunks/`.
+- New: `v730_review_bookkept`. `v403_schema_types` READS and `build_task_run` ARRAY_SITES: `r.bookkept`
+  in `intentProblems`.
+- New: `v730_review_minors`; `v730_review_scratch_guard` adds the mid-run guard dir and the
+  operand-scan cases. `v730_parked_unattended` A26: the #53 decision text. `v600_s3`
+  2045: the policy-draft finish reason. `v700_inputs_unchanged`: the intake TRACKED text.
+  `v730_frozen_dirty` A27: the refusal pins "freeze_digest does not match".
+- `v730_shell_programs` #9 retire: the fixture is `<x>/scratch/parked/<run>`. `v730_intake_parked_path`
+  #63: the new TRACKED text. `v508_gh_identity`: the run-state keys add `warnings`. `v403_schema_types`
+  READS and `build_task_run` ARRAY_SITES: `state.warnings`, `resume.warnings`, the second
+  `state.scanWarn` read.
+- `v730_role_text` #65 A24: the bookkeeping sentence pinned is the narrowed one.
+- `v5010_prompt_snapshot` pins: the role, schema and prompt changes above.
+- New: `v730_review_scratch_guard` (the shim guard and the denylist additions). The test names the fake tool literally; every such file is a temp-dir shell stub.
+- New: `v730_review_branch_owner`. `v730_branch_slug`: the fixtures own their slugs, the program
+  takes the source; the harness default relay adds `owned: []`.
+
+### Tests changed on purpose (car 4)
+
+- `v4_s1`: 45 programs (count and the hasher reason); `scratch_copy_cmd` role inputs are not
+  program steps; the commit-plan `retire` slot runs only with a parked prior (covered in
+  `v730_shell_programs`).
+- `v402_file_sha`: `scratch_copy` is run by roles, not by a slotted step; `infra:purge-bytecode`
+  sampled. `v502_relay_keys`: `scratch_copy` has no key table; the park chunk step is a Write-tool
+  step.
+- `v403_schema_types` READS and `build_task_run` ARRAY_SITES: the plan-mode `format_files` relay,
+  `rt.moved`, `scan_warn`.
+- `build_task_run`: the purge test runs `purge.py` (same fixture and result); format-plan inputs
+  add `scratch_dir` and run `format_files.py` plan mode; the caller grep fixture uses call-shaped
+  hits for the capped symbol; the capped reasons read "call-shaped occurrences". So do
+  `v610_update_coder` T9 and `v630_flow` A1.
+- `v610_update_coder` review 4: the code judge's read-tree runs in `<tmp>` (scratch_copy).
+- `v4_s3`: the fleet's own settings file adds the scratch Write rule. `v4_s4` AC-1: the retire is
+  `parked.py retire`. `v504_pycache`: format-plan's no-bytecode env is in `format_files.py`.
+- `v508_gh_identity`: the run-state keys add `scan_warn`.
+- `v5010_prompt_snapshot` pins: all of the above prompts, schemas and role files (probe unchanged).
+
+### Tests changed on purpose (car 3)
+
+- `build_task_run` "2.1.0 review skipped when no PR exists" and `v710_block_flow` "AC4 ex7": no PR
+  is now a stop (#49).
+- `build_task_run` "2.1.0 agent cap 100": the work-call filter also leaves out the post-PR
+  `infra:state:*` steps and the soft `:ci` tail; with those off the cap the CI write-back now runs
+  where the cap skipped it before.
+- `build_task_run` (two ADR-1175 cases): the reason reads "IaC PR: needs Max; ...".
+- `v600_s3` (orchestrator, IaC and scan-error cases), `v711_orch_scan_error` AC6: `infra:pr-ready`
+  runs (#33); the scan-error stubs also script `infra:orch-scan:retry` (#32). So do `v600_s4`
+  "review M7" and `v630_unattended` "6.3.0 B".
+- `v633_judge_fence` "tagged-only fix_code ... stays fix_code (L2174)": now becomes approve (#41).
+- `v403_schema_types` READS: the guard reads, `driftOf`, `merge_after`.
+- `v5010_prompt_snapshot` pins: the pr-opener inputs `draft` and `merge_after`, the planner
+  schema, the role files.
+
+### Tests changed on purpose (car 2)
+
+- One more plan-mode call (`infra:fleet-branch`): `build_task_run` (plan-mode label list),
+  `v4_s3` and `v5_roles` (plan call count 21 -> 22), the `v5010_prompt_snapshot` pins (also the
+  intake, workspace and parked prompt changes).
+- 42 programs: `v4_s1` (the count and the "table of 42" text).
+- `v4_s5`: the frozen-resume case "coder edits in the worktree (tree != freeze tree)" now resumes
+  (#52); it moved to `v730_frozen_dirty`.
+- `v4_s4`: the parked "chunk" case (a meta chunk over 1000 characters) became a "count" case (a
+  part count of 65); the real-python parked test reads the meta and `read-part`.
+- `v700_inputs_unchanged`: the intake plan rule text (#63).
+- `v730_state_chunks`: the soft-cap pin reads `if (!soft && !tailWriter(prefix))`.
+- Tables: `v402_file_sha` SAMPLES, `v403_schema_types` READS, `v507_digest_relays` RO list,
+  `v4_s3` tier table. The harness turns a 7.2.0-shaped `infra:load-parked` stub into the meta relay
+  and serves the part reads.
+
+### Tests changed on purpose (car 1)
+
+- `v507_digest_relays`: two pinned retry gate lines end with " on opus".
+- `v634_plan_ref_relay` ("a part that is bad twice") and `build_task_run` ("2.1.5 load-ref: a
+  truncated chunk ..."): an intact ref with bad parts now stops `failed` with the relay text.
+- `build_task_run` ("a load step that copies the right sha256 but changed content stops"): one
+  part-0 re-read runs before the stop.
+- `build_task_run` ARRAY_SITES and `v403_schema_types` READS: the reads moved to `chunkRounds`,
+  `partReader` and `relayModel`.
+- Version pins: the plan's list, plus the regex forms (`7\.2\.0`) in `build_task_run`,
+  `v403_schema_types`, `v4_s1`, `v4_s3` and `v622_fixes`, which the plan's grep did not match.
+
 ## [7.2.0] - 2026-11-16
 
 Fleet 7.2.0: the caller check no longer copies a large occurrence list through a model relay

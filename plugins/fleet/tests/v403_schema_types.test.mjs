@@ -162,6 +162,8 @@ const OB = SP + "repo_obligations[]";
 const CJ = "role:fleet-code-judge:";
 const IJ = "role:fleet-intent-judge:";
 const PARSED_REF = "parsed: the sealed plan ref (sha256-checked tag message, JSON.parse)";
+// 7.3.0 (#42)
+const PARSED_PAYLOAD = "parsed: the parked payload {draft, findings} (JSON.parse of parts that join to the digest-checked payload_sha256)";
 const PARSED_PARK = "parsed: a parked findings.json (JSON.parse of digest-checked chunks)";
 const PARSED_ROUND = "parsed: the script's round snapshot (or a parked findings.json)";
 const PARSED_ARGS = "parsed: the workflow args";
@@ -186,11 +188,14 @@ const READS = {
   // 6.3.3 (2144): the code-judge guard for review-shaped [pr_body_claim] findings (JUDGE_SUITE types the suite)
   judged: {
     "f.finding string": CJ + "routed_findings[].finding",
-    "sr.exit_code number": CJ + "suite_result.exit_code",
+    // 7.3.0 (#50): any non-null value but 0 fails; a string is drift first (driftOf, one level down)
+    "sr.exit_code integer": CJ + "suite_result.exit_code",
     "sr.exit_code number-literal": CJ + "suite_result.exit_code",
-    "sr.failed number": CJ + "suite_result.failed",
-    "sr.errors number": CJ + "suite_result.errors",
+    "sr.failed number-literal": CJ + "suite_result.failed",
+    "sr.errors number-literal": CJ + "suite_result.errors",
   },
+  // 7.3.0 (#50): a required role key, checked here against its STRICT schema one level down
+  driftOf: { "r[k] object": "parsed: a role result key, type-checked here against STRICT", "r[k] array": "parsed: a role result key, type-checked here against STRICT" },
   // 5.0.0 (R1): the DISPATCH line comes from ROLE_DISPATCH (gen.mjs, from the pinned files)
   parseDispatch: { "line string": "parsed: ROLE_DISPATCH, generated from the role files (gen.mjs --check)" },
   sameState: { "length number-literal": PARSED_LOCAL },
@@ -295,13 +300,16 @@ const READS = {
   },
   scriptsMapProblem: { "map object": "hasher:scripts", "map array": "!hasher:scripts" },
   loadParked: {
-    // the chunk lists, and the parked findings' symbols filter (parsed)
-    "x string": ["prog:parked:parked.draft_chunks[]", 2],
-    "a array": "prog:parked:parked.draft_chunks",
+    // 7.3.0 (#42): the meta; the payload's draft and findings (parsed), and the parked findings' symbols filter (parsed)
+    "x string": [PARSED_PAYLOAD, 2],
     "k object": "prog:parked:parked",
     "k.run string": "prog:parked:parked.run",
     "k.run string-re": "prog:parked:parked.run",
-    "k.plan_path string": "prog:parked:parked.plan_path",
+    "k.plan_path string": ["prog:parked:parked.plan_path", 2],
+    "k.payload_sha256 string": "prog:parked:parked.payload_sha256",
+    "k.payload_sha256 string-re": "prog:parked:parked.payload_sha256",
+    "n integer": "prog:parked:parked.part_count",
+    "pl object": PARSED_PAYLOAD,
     "f object": [PARSED_PARK, 2],
     "f array": PARSED_PARK,
     "f.rounds array": [PARSED_PARK, 2],
@@ -436,7 +444,7 @@ const READS = {
     "e.tried array": "prog:gh_identity:repos.*.tried",
     "tr[0].push boolean": "prog:gh_identity:repos.*.tried[].push",
   },
-  workspaceStep: { "uc object": "infra:remote_url_check", "uc.url string": ["prog:remote_url:url", 2], "ws.remote_host string": "infra:remote_host" },
+  workspaceStep: { "uc object": "infra:remote_url_check", "uc.url string": ["prog:remote_url:url", 2], "ws.remote_host string": "infra:remote_host", "ws.fast_forwarded boolean": "infra:fast_forwarded" },
   briefProblem: {
     "b object": "intake:brief",
     "b.title string": "intake:brief.title",
@@ -608,6 +616,8 @@ const READS = {
     // release review of #48: an approving audit's advisory findings go to the gate log
     "f.finding string": "role:plan-audit:routed_findings[].finding",
     "plan.plan_path string": SP + "plan_path",
+    // 7.3.0 (#33)
+    "plan.merge_after string": SP + "merge_after",
     "plan.criteria array": SP + "criteria",
     "x string": SP + "plan_diff[]",
     "plan.plan_diff array": SP + "plan_diff",
@@ -617,6 +627,8 @@ const READS = {
     "plan.new_behaviour boolean": SP + "new_behaviour",
     "plan[HELD_OUT_KEY] array": SP + "held_out_examples",
     "fmt.changed_paths array": "infra:changed_paths",
+    // 7.3.0 (#9): the plan-mode format_files relay (digest-checked)
+    "ff.hook_failures array": "prog:format_files:hook_failures",
     // 5.0.3 (ledger 2010)
     "dc.holds boolean": "prog:plan_dsn:holds",
     "dc.lines array": "prog:plan_dsn:lines",
@@ -636,9 +648,24 @@ const READS = {
     "r.tag_sha string-re": "prog:plan_ref_write:tag_sha",
     "r.dirty array": "prog:plan_ref_write:dirty",
     "r.reused boolean": "infra:reused",
-    // 6.3.4 (2176): plan_ref_write's exit-3 list (it only picks chunks to write again)
-    "r.bad_chunks array": "infra:bad_chunks",
-    "i integer": "infra:bad_chunks[]",
+    // 7.3.0 (#9): parked.py retire
+    "rt.moved boolean": "prog:parked:moved",
+  },
+  // 7.3.0 (#47a): the shared rewrite loop; a program's exit-3 list (it only picks chunks to write again)
+  chunkRounds: { "r.bad_chunks array": "infra:bad_chunks", "i integer": "infra:bad_chunks[]" },
+  // 7.3.0 (#67, #59)
+  relayModel: { "label string-re": ["parsed: the script's own step label", 2] },
+  // 7.3.0 car 2 (Max: "Exempt writers"): the script's own flag
+  tailWriter: { "state.tailWriters boolean": "parsed: the script's own flag (saveState sets it from the PR state)" },
+  // 7.3.0 (#47, #42): the shared part reader (a part only picks what to read again; the whole-payload sha256 decides)
+  partReader: {
+    "c string": "prog:plan_ref:chunks[]",
+    "r.chunks array": "prog:plan_ref:chunks",
+    "p object": "prog:plan_ref:part",
+    "p.sha256 string": "prog:plan_ref:part.sha256",
+    "p0.part.count integer": "prog:plan_ref:part.count",
+    // F2: the part count partOk checks the lengths against (the caller's, else the relay's own)
+    "n integer": "prog:plan_ref:part.count",
   },
   verifyPlanCommit: {
     "pf.head string": "prog:plan_files:head",
@@ -690,6 +717,8 @@ const READS = {
     "cl object": IJ + "classification",
     "cl array": "!" + IJ + "classification",
     "cl.quote string": IJ + "classification.quote",
+    // 7.3.0 review (M3)
+    "r.bookkept array": IJ + "bookkept",
   },
   autoGates: {
     "r.deviations array": IJ + "deviations",
@@ -764,13 +793,6 @@ const READS = {
     // 7.1.0 (L2145): the resume check of the test block
     "state.testsResumed boolean": PARSED_LOCAL,
     "state.review.nits array": "parsed: state.review, the review step's result or JSON.parse of the run-state message (digest-checked read_state)",
-    // 6.3.4 (2176): a load-ref part (it only picks what to read again; ref_sha256 decides)
-    "p object": "prog:plan_ref:part",
-    "p.sha256 string": "prog:plan_ref:part.sha256",
-    "p0.part object": "prog:plan_ref:part",
-    "p0.part.count integer": "prog:plan_ref:part.count",
-    // F2: the part count partOk checks the lengths against (the caller's, else the relay's own)
-    "n integer": "prog:plan_ref:part.count",
     // 6.3.0 (ADR-1239)
     "resume.auto_decisions array": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     "r.headers_missing array": "prog:pr_body_block:headers_missing",
@@ -784,6 +806,15 @@ const READS = {
     "c.parents.length number-literal": "parsed: the length of prog:verify_since:commits_since[].parents (checked as an array first)",
     "state.prUpdated boolean": PARSED_LOCAL,
     "resume.pr_updated boolean": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    // 7.3.0 (#32 leftover)
+    "resume.scan_warn string": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    "state.scanWarn string": ["parsed: the script's own warning text", 2],
+    // 7.3.0 review (m2)
+    "state.warnings array": "parsed: the script's own warning list (or the run-state's, filtered to objects with a string gate)",
+    "resume.warnings array": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    "x object": "parsed: a resume.warnings entry (JSON.parse of the run-state message)",
+    "x array": "parsed: a resume.warnings entry (JSON.parse of the run-state message); an array is refused here",
+    "x.gate string": "parsed: a resume.warnings entry's gate (JSON.parse of the run-state message)",
     "ru object": "parsed: resume.update, JSON.parse of the run-state message (digest-checked read_state)",
     "rv.nits.length number-literal": "parsed: the length of reviewStep's nits, an array the script built",
     // 6.0.0 (ledger 2034)
@@ -811,8 +842,6 @@ const READS = {
     // 5.0.0 (R3): the previous review round's blocking list (reviewStep's own)
     "state.review.blocking array": PARSED_LOCAL,
     "r.refs array": "prog:plan_ref:refs",
-    "c string": "prog:plan_ref:chunks[]",
-    "r.chunks array": "prog:plan_ref:chunks",
     "loaded.project string": PARSED_REF,
     // 6.0.0 (ledger 2042)
     "loaded.plan_base string": PARSED_REF,
@@ -825,6 +854,7 @@ const READS = {
     "pf.commands array": PARSED_REF,
     "o.check_cmd string": PARSED_REF,
     "pf.remote_url string": PARSED_REF,
+    "pf.merge_after string": PARSED_REF,
     "input.freeze_digest string": [PARSED_ARGS, 3],
     "v.head string": "prog:verify_since:head",
     "v.head string-re": "prog:verify_since:head",
@@ -1142,7 +1172,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.2\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.2\.0\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.3\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.3\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

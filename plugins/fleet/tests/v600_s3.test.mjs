@@ -33,7 +33,7 @@ function bodyBlock(dir, tpl, t0, headers) {
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);
 }
-const TPL = "<details><summary>Built with ccpm fleet 7.2.0</summary>\n\n| metric | value |\n|---|---|\n| wall time | @@WALL@@ |\n\n</details>\n<!-- ccpm-fleet-stats -->";
+const TPL = "<details><summary>Built with ccpm fleet 7.3.0</summary>\n\n| metric | value |\n|---|---|\n| wall time | @@WALL@@ |\n\n</details>\n<!-- ccpm-fleet-stats -->";
 
 // ---------------------------------------------------------------- 2044: pr_body_block.py
 
@@ -109,7 +109,7 @@ test("6.0.0 2044: after the write-back the build writes a stats block of script 
   // the default policy stub prints no now: the wall time is not measured
   assert.deepEqual([a[0], a[1], a[2], a[4], a[5]], ["gh", "o/r", String(out.result.pr_number), "-", "[]"]);
   const block = blockOf(out);
-  assert.ok(block.startsWith("<details><summary>Built with ccpm fleet 7.2.0</summary>\n\n| metric | value |\n|---|---|\n"), block);
+  assert.ok(block.startsWith("<details><summary>Built with ccpm fleet 7.3.0</summary>\n\n| metric | value |\n|---|---|\n"), block);
   assert.ok(block.endsWith("</details>\n<!-- ccpm-fleet-stats -->"), block);
   for (const row of ["| acceptance criteria | 2 |", "| code rounds | 1 |", "| wall time (build) | @@WALL@@ |", "| independent review | approve (sweep: not triggered) |", "| output tokens (approx.) | "])
     assert.ok(block.indexOf(row) >= 0, row + " in\n" + block);
@@ -268,7 +268,7 @@ test("6.0.0 2045: pr_ready false keeps the draft; a PR still draft or on another
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.ok(!out.build.labels.some((l) => /^infra:pr-ready/.test(l)));
-  assert.match(out.result.reason, /^draft PR ready for review/);
+  assert.match(out.result.reason, /^draft PR \(policy pr_ready false\)/);
   assert.ok(out.build.logs.some((l) => /^pr_ready false \(policy\): .* stays a draft$/.test(l)));
   for (const over of [{ is_draft: true }, { head: SHA2 }, { error: "gh pr ready: HTTP 403" }]) {
     const s2 = happy();
@@ -645,15 +645,18 @@ test("6.0.0 2034: no merge on a work repo, an orchestrator PR, an IaC repo or a 
     const t = happy();
     t["infra:policy"] = polOut({ profile: "personal", caps: PERSONAL });
     t["infra:orch-scan"] = (p) => Object.assign({ status: "ok", reason: "s", orchestrator: false, iac_repo: false, apply_on_merge: false, hook_surface_pr: false, reasons: [], error: null, args: inputsOf(p).args }, over);
+    // 7.3.0 (#32): an error stays on the one retry
+    t["infra:orch-scan:retry"] = t["infra:orch-scan"];
     const o = await run(t, ARGS);
     assert.ok(!o.build.labels.some((l) => /^infra:pr-merge/.test(l)), JSON.stringify(over));
-    // an orchestrator or IaC sign keeps the draft; a hook-surface PR alone is marked ready
-    assert.equal(o.build.labels.includes("infra:pr-ready"), !!over.hook_surface_pr && !over.error, JSON.stringify(over));
+    // 7.3.0 (#33): changed on purpose: no sign keeps a draft (the PR opened ready); the ready check runs
+    assert.equal(o.build.labels.includes("infra:pr-ready"), true, JSON.stringify(over));
     assert.match(o.result.reason, re, JSON.stringify(over));
   }
 });
 
-test("6.0.0 2034 (ADR-1199): an orchestrator PR stays a draft, is watched read-only, reported, and stops with orchestrator PR: needs Max", async () => {
+// 7.3.0 (#33): changed on purpose: the orchestrator PR opened ready (infra:pr-ready runs); never merged
+test("6.0.0 2034 (ADR-1199): an orchestrator PR is ready (7.3.0), is watched read-only, reported, and stops with orchestrator PR: needs Max", async () => {
   const s = happy();
   s["infra:policy"] = polOut({ profile: "personal", caps: PERSONAL });
   s["infra:orch-scan"] = (p) => ({ status: "ok", reason: "s", orchestrator: true, iac_repo: false, apply_on_merge: false, hook_surface_pr: false, reasons: ["orchestrator config " + DGR + ".yml"], error: null, args: inputsOf(p).args });
@@ -663,7 +666,8 @@ test("6.0.0 2034 (ADR-1199): an orchestrator PR stays a draft, is watched read-o
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "merge");
   assert.match(out.result.reason, /^orchestrator PR: needs Max \(https:\/\/github\.com\/o\/r\/pull\/7; CI red: test FAILURE\)$/);
-  assert.ok(!out.build.labels.some((l) => /^infra:(pr-ready|pr-merge|ci-rerun|push:p2)|^role:fleet-coder:r2/.test(l)), out.build.labels.join(", "));
+  assert.ok(!out.build.labels.some((l) => /^infra:(pr-merge|ci-rerun|push:p2)|^role:fleet-coder:r2/.test(l)), out.build.labels.join(", "));
+  assert.ok(out.build.labels.includes("infra:pr-ready"), out.build.labels.join(", "));
   assert.ok(out.build.labels.includes("infra:ci-watch:w1"));
   assert.equal(out.result.ci.verdict, "red");
 });

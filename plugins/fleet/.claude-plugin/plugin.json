@@ -1,6 +1,6 @@
 {
   "name": "fleet",
-  "description": "Role fleet for one task: /build-task plans, audits, writes tests per acceptance criterion, judges them, freezes them by hash, codes against them, judges the code and opens a draft PR. Role prompts ship in the plugin; no MCP server is required; every gate runs in workflow script code.",
+  "description": "Role fleet for one task: /build-task plans, audits, writes tests per acceptance criterion, judges them, freezes them by hash, codes against them, judges the code and opens a PR, ready for review unless the plan or the policy keeps a draft. Role prompts ship in the plugin; no MCP server is required; every gate runs in workflow script code.",
   "author": {
     "name": "Max Agahi"
   },

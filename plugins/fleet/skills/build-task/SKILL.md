@@ -2,7 +2,7 @@
 name: build-task
 description:
   Build a NON-TRIVIAL code change with a gated role fleet - plan, plan audit, tests per acceptance
-  criterion, test judge, hash freeze, coder, code judge, draft PR - after the user confirms the plan.
+  criterion, test judge, hash freeze, coder, code judge, PR - after the user confirms the plan.
   Use for features, bug fixes and multi-file changes, when the user runs /build-task, or asks to
   "build task 123 with the fleet", "run the fleet on ABC-42", "build this issue tests-first". Takes a
   task id, a Jira key, a GitHub or Codeberg issue or PR URL, a plan path, or a plain description.
@@ -99,8 +99,8 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
      (`change_kind: "bug_fix"`) with no new behaviour, no planned path is an IaC path, no re-plan
      round relaxed the plan, and a task id carries `project`. Otherwise it asks, as `"ask"` does,
      and the result says why in `confirm_reason`. The declared values come from the ticket text and
-     are not a security boundary: the gates, the IaC push stop, the hook-surface stop and the draft
-     PR with review are.
+     are not a security boundary: the gates, the IaC push stop, the hook-surface stop and the PR
+     review are.
    - `"ask"`: when the user asks to confirm the plan first (for example "show me the plan
      first"): always the interactive confirmation in step 7.
    - `"auto"`: only when the user asked for an unattended or goal run (for example "build #42
@@ -252,8 +252,9 @@ stale or changed: tell the user to reinstall the fleet plugin and run `/reload-p
      after the freeze returns both. This includes a build that ran in the same run as the plan
      (`confirm: "auto"` or `"default"`), where the user saw no `plan_ref` before. Say that step 8
      with both resumes at the coder (see "Re-running").
-   - `pr_url` when present. The PR is a **draft**. The user reviews and merges it. Never mark it
-     ready, never merge it, never enable auto-merge.
+   - `pr_url` when present. The PR opens ready for review; it is a draft only when the plan names a
+     `merge_after` condition (the reason and the PR body name it) or the policy sets `pr_ready: false`.
+     The user reviews and merges it. Never merge it, never enable auto-merge.
    - `review`: verdict, rounds, blocking findings and nits, the sweep verdict when it ran, and the
      model used. With `confirm: "auto"`, also `auto_confirmed` and the `intent` verdict.
    - `unattended_source` and every `auto_decisions` entry, when `unattended` is true.
@@ -350,7 +351,7 @@ installed before the fleet runs. Do not retry, and never change PATH or run the 
 (ADR-1172 and ADR-1175). Relay the reason: it names the branch, the commit, the
 IaC files and the push command for Max to run himself. Never push it yourself. After pushing
 yourself, re-run the build to open the PR: run step 8 again with the same `plan_ref`. That run
-goes on to the draft PR, the review and the write-back without a push, and only when the remote
+goes on to the PR, the review and the write-back without a push, and only when the remote
 branch head is exactly the approved sha; any other remote state stops at `iac-push` again. The hints in it are
 not a security check. `stop_gate: "iac"` from the push gate names a provider plugin directory, a
 symlink or code that existing IaC runs at plan time, or says the plan ref holds no sealed origin URL

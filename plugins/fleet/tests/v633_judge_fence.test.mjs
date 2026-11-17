@@ -100,18 +100,15 @@ function upd(over) {
   return Object.assign(t, over || {});
 }
 
-test("review follow-up: in an update-branch code round a tagged-only fix_code with a passing suite stays fix_code (L2174)", async () => {
-  const BODY = { id: "R1", severity: "blocking", category: "pr_body_claim", file: "PR body", line: null, summary: "body says 147 passed; the suite gives 133", evidence: "npm test: 133 pass" };
+// 7.3.0 (#41, L2174): changed on purpose. The guard is on in update rounds too; a body-only
+// update review goes to the pr-opener (v730_update_body_claim), so a code finding drives this round.
+test("review follow-up: in an update-branch code round a tagged-only fix_code with a passing suite becomes approve (7.3.0 #41)", async () => {
+  const CODE = { id: "R2", severity: "blocking", category: "correctness", file: "src/x.py", line: 1, summary: "x broke", evidence: "e" };
   const t = upd({
-    "role:pr-review:v2": { status: "ok", reason: "x", verdict: "changes_requested", findings: [BODY], touches_gate: false, checked: [] },
+    "role:pr-review:v2": { status: "ok", reason: "x", verdict: "changes_requested", findings: [CODE], touches_gate: false, checked: [] },
     "role:fleet-code-judge:r2": { status: "ok", reason: "x", verdict: "fix_code", routed_findings: [TAGF], hash_check: { match: true, mismatched: [] }, suite_result: { command: "pytest", exit_code: 0 } },
-    "role:fleet-coder:r3": { status: "ok", reason: "x", changed_paths: ["src/x.py"], suite_result: { command: "pytest", exit_code: 0 } },
-    "hasher:post-coder:r3": { status: "ok", fingerprint: { head: D, tree: "K3" }, hashes: HASHES, changed: ["src/x.py"] },
-    "role:fleet-code-judge:r3": { status: "ok", reason: "x", verdict: "fix_code", routed_findings: [TAGF], hash_check: { match: true, mismatched: [] }, suite_result: { command: "pytest", exit_code: 0 } },
-    "hasher:fp-post:code-judge:r3": { status: "ok", fingerprint: { head: D, tree: "K3" } },
   });
   const out = await run(t, ARGS);
-  assert.ok(out.labels.includes("role:fleet-coder:r3"), out.labels.join(", ") + " / " + out.result.reason);
-  assert.deepEqual(inputsOf(call(out, "role:fleet-coder:r3").prompt).routed_findings, [TAGF]);
-  assert.ok(!out.labels.includes("infra:commit:r2"), out.labels.join(", "));
+  assert.ok(!out.labels.includes("role:fleet-coder:r3"), out.labels.join(", ") + " / " + out.result.reason);
+  assert.ok(out.labels.includes("infra:commit:r2"), out.labels.join(", "));
 });

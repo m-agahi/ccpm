@@ -1,7 +1,7 @@
 export const meta = {
   name: "build-task-run",
   description:
-    "Role fleet for one task in two modes. plan: intake, plan, audit, commit the plan locally, return for confirmation (confirm \"auto\": intent, command and scope gates, then build in the same run). build: verify the approved plan, test writers in the fleet worktree, test judge, freeze, coder, code judge, one commit step, push, draft PR, independent review, write-back. Every gate runs in script code.",
+    "Role fleet for one task in two modes. plan: intake, plan, audit, commit the plan locally, return for confirmation (confirm \"auto\": intent, command and scope gates, then build in the same run). build: verify the approved plan, test writers in the fleet worktree, test judge, freeze, coder, code judge, one commit step, push, PR (ready for review unless the plan names merge_after or the policy keeps drafts), independent review, write-back. Every gate runs in script code.",
   whenToUse:
     "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, run_nonce, project?, confirm?} or {mode: \"build\", plan_ref, date, run_nonce, project?, confirm?} or {mode: \"probe\", repo, date, run_nonce} (preflight only: scripts and role files hashed, PATH check; returns the table); confirm is \"ask\" (when omitted), \"default\" (the auto gates for an eligible bug-fix plan, else ask) or \"auto\". If invoked with no args, do not call Workflow again: tell the user to run /build-task <task>.",
   phases: [
@@ -15,7 +15,7 @@ export const meta = {
     { title: "Freeze", detail: "hash frozen tests and test-runner config" },
     { title: "Code", detail: "coder, hash check, code judge, commit step, fix rounds" },
     { title: "Re-plan", detail: "on plan_wrong: re-plan, save the superseded head, return for confirmation" },
-    { title: "PR", detail: "push, draft PR from the approved sha" },
+    { title: "PR", detail: "push, PR from the approved sha" },
     { title: "Review", detail: "pr-review and, for gate changes, the non-weakening sweep; fix round" },
     { title: "Write-back", detail: "ledger section and one marked comment per external source" },
     { title: "CI", detail: "stats block, ready, CI watch, CI-fix rounds, merge where the policy and the script rules allow" },
@@ -64,7 +64,9 @@ const INFRA_TIER = [
 ["infra:precommit-ids", "sonnet"],
 ["infra:review-paths", "haiku"],
 ["infra:remote-head", "haiku"],
+["infra:load-parked:p", "sonnet"],
 ["infra:load-parked", "haiku"],
+["infra:fleet-branch", "haiku"],
 ["infra:db-up", "haiku"],
 ["infra:db-down", "haiku"],
 ["infra:db-sweep", "haiku"],
@@ -73,6 +75,8 @@ const INFRA_TIER = [
 ["infra:load-ref", "sonnet"],
 ["infra:commit-plan", "sonnet"],
 ["infra:plan-chunks", "sonnet"],
+["infra:state-chunks", "sonnet"],
+["infra:park-chunks", "sonnet"],
 ["infra:park-plan", "sonnet"],
 ["infra:format-", "sonnet"],
 ["infra:commit:", "sonnet"],
@@ -97,9 +101,10 @@ const INFRA_TIER = [
 ];
 // INFRA_TIER_END
 const RELAY_RETRY_MODEL = "sonnet";
+const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "7.2.0";
+const FLEET_VERSION = "7.3.0";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
 " (this fleet workflow is fleet " + FLEET_VERSION + "; if the plugin was updated after this session started, run /reload-plugins or start a new session, then run /build-task again)";
@@ -163,6 +168,7 @@ const CALLER_LIMITS = [
 "over-matches: comments, docs, strings and another symbol with the same name are hits; the planner maps them as dont_care",
 "word boundary is [A-Za-z0-9_]: a symbol inside a longer identifier is not a hit",
 "a symbol is a bare identifier: a method is grepped by its last name only",
+"the 100-hit cap counts call-shaped hits only (the name, optional spaces or tabs, then `(`); every hit is still listed and mapped",
 ];
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
 const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge"];
@@ -331,6 +337,7 @@ est_diff_lines: { type: "number" },
 new_behaviour: { type: "boolean" },
 change_kind: { type: "string", enum: CHANGE_KINDS },
 component: STR_OR_NULL,
+merge_after: STR_OR_NULL,
 allowed_additions: {
 type: ["object", "null"],
 properties: {
@@ -463,6 +470,7 @@ quote: STR,
 },
 required: ["change_kind", "new_behaviour", "quote"],
 },
+bookkept: { type: "array", items: STR },
 }),
 "pr-review": roleSchema({
 verdict: { type: "string", enum: VERDICTS["pr-review"] },
@@ -547,6 +555,7 @@ down: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha2
 park: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
 project: STR,
 created: { type: "boolean" },
+fast_forwarded: { type: "boolean" },
 reused: { type: "boolean" },
 merged: ANY_ARRAY,
 files: { type: "array", items: STR },
@@ -1266,7 +1275,7 @@ return "'" + String(s).replace(/'/g, "'\\''") + "'";
 }
 function settingsFor(worktree) {
 return JSON.stringify({
-permissions: { allow: ["Edit(/" + worktree + "/**)", "Write(/" + worktree + "/**)"] },
+permissions: { allow: ["Edit(/" + worktree + "/**)", "Write(/" + worktree + "/**)", "Write(/" + scratchOf(worktree) + "/chunks/*/*.b64)"] },
 });
 }
 function codePointCompare(a, b) {
@@ -1366,28 +1375,37 @@ return sha256Hex(canonical(o));
 function escapeRe(s) {
 return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+function idSlug(s, ref) {
+const full = slugify(s, 1e4);
+return full.length <= 24 ? full : slugify(s, 15) + "-" + sha256Hex(String(ref)).slice(0, 8);
+}
 function namesFor(brief, raw) {
 let taskId = null;
+let source = null;
 for (const kind of ID_KINDS) {
 const src = brief.sources.find((x) => x.kind === kind);
 if (!src) continue;
 taskId =
 kind === "ledger"
-? "l" + slugify(String(src.ref).replace(/^l/i, ""), 24)
+? "l" + idSlug(String(src.ref).replace(/^l/i, ""), src.ref)
 : kind === "yaadgaar"
-? "y" + slugify(String(src.ref).replace(/^#/, ""), 24)
-: slugify(src.ref, 24);
+? "y" + idSlug(String(src.ref).replace(/^#/, ""), src.ref)
+: idSlug(src.ref, src.ref);
+source = kind + ":" + src.ref;
 break;
 }
 const planSrc = brief.sources.find((x) => x.kind === "plan");
-if (taskId === null && planSrc) taskId = "p" + sha256Hex(normPath(brief.plan_path || planSrc.ref)).slice(0, 8);
+if (taskId === null && planSrc) {
+taskId = "p" + sha256Hex(normPath(brief.plan_path || planSrc.ref)).slice(0, 8);
+source = "plan:" + planSrc.ref;
+}
 const text = taskId === null ? brief.sources.find((x) => x.kind === "text") : null;
 if (text) {
 const src = typeof raw === "string" && raw.trim() ? raw.trim() : text.body.trim();
-return { taskId: "t" + sha256Hex(src).slice(0, 8), slug: slugify(src) || "task" };
+return { taskId: "t" + sha256Hex(src).slice(0, 8), slug: slugify(src) || "task", text: true, source: null };
 }
 if (taskId === null) taskId = "task";
-return { taskId, slug: slugify(brief.title) || "task" };
+return { taskId, slug: slugify(brief.title) || "task", text: false, source };
 }
 function proposedChanges(findings, note) {
 return findings.map((f) => {
@@ -1437,20 +1455,22 @@ return typeof r.digest === "string" && SHA256_RE.test(r.digest) && sha256Hex(can
 const PROGRAM_SHA256 = {
 "branch_scan": "ec03aa965ed9a3d145ce1fb1636685d2be087877daf78f369eed0a19f532967d",
 "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
-"callers": "41a09efcbcf4588e6e76f5428d375e102719f897bd644ba46cb74273a9c92703",
+"callers": "98a98f11d7896e206249104b08dcf84b3478b2522e5996dbf2bd35278cf2a9c2",
 "changed_defs": "3afdc459fcc5590a26516a41d31fd637ea5833ad59b06566140f6cef0fb6561a",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
 "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
 "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
 "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
+"exclude_add": "8e510601a0deac5baa673f1a888a78fa28c3cf49c20e2949a539252ffdea3566",
+"fleet_branch": "f1af514598ab542d58a16456f00e5cba0aeb43131fc2eab1618e2ca87bf846d7",
 "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
-"format_files": "183f424e72733a515b9c87dd4ff541f287bf897d6d37dec91b48269dd090f4e1",
+"format_files": "6890f94e46365fecdff078a39b28cda938d715b53ef7157baee5475b38a6951a",
 "gh_identity": "82885435973242bc67bbfeca19ec512f83e5ca52e7342dbd4207cff33567c357",
 "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
 "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
 "hook_surface": "2432e6d881cfa37850c4268b26cc6591fdcccf9b74f818ab70886125f34769f0",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
-"parked": "f17158a266ebcc64d502337eb7b6b3ff1ede5af227e231be77fbe5e3c1ab8014",
+"parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
 "plan_dsn": "f02908de588f71426a2995b86884be5e15127fd9fc48ead3710c0e71b481277b",
 "plan_files": "360fc1c69092e8da9f11cdded6296ef429c3db870181881ffff949a5b3c8253c",
@@ -1463,6 +1483,7 @@ const PROGRAM_SHA256 = {
 "pr_state": "2882890a993396876229672961f66eba4290f1f98263b4a19c62c395856f3fd8",
 "pr_test_block": "030c64b7f12abe00a4e9f9ddd1493f446ed4a6b2ccb43a8f1f5e6007c45ca8eb",
 "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
+"purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
 "push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
 "push_probe": "c4381f9ce601e0729a0ab49edb33fe6c9e910e8738411e7ad4719f21ef639a5b",
 "read_state": "c6ce8ab9dfe4ae85b144e3cc90c007334794f8e725bd8bfba071544365e18c89",
@@ -1470,6 +1491,7 @@ const PROGRAM_SHA256 = {
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
 "review_paths": "711143e444b4d9772c8023c22fbb93735239030d503dd58247050553d7fce29b",
 "ruleset_surface": "b8fec064efbf7ec62125f71016cde95b4a5edcb0156094cd8050e79a8278f067",
+"scratch_copy": "1807aea9a3afbaac7e63acca21df6ad4b9f1a55f392972cd753eaec6d161a690",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
 "session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
 "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
@@ -1484,16 +1506,16 @@ return PROGRAM_SHA256;
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-"fleet-code-judge": "0b7a412cb27884de57c70bb48f90627c8595057ef29ce1a8e0f147df49f979fe",
+"fleet-code-judge": "64551eb558f61e89624f15766eec57968466ef866236f327f7ad5e6e9092ff1a",
 "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
-"fleet-intent-judge": "eec4332e06027010a8f22aec7b399289665fb652f6d773b9c093f0f7d1f3bfc6",
-"fleet-pr-opener": "6fe602c3d2c5fd7bfa3f1d3b9de32f20db66247dfe0f6e1b89856cc30f2498f2",
-"fleet-test-judge": "219c89b656f7ae61d28ab7cf2486b498792385df0cdd2a256fdae6c0f53c051b",
-"fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
-"gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
-"plan-audit": "084fe730cc8ecb5cf8712b164bb763cb9bbe97e18bc3cc04e82480ba158de984",
-"pr-review": "728800a005a54026eb345d5b9784bdde50cdafd5d918f9faa8d2cec7c091142d",
-"scope-and-plan": "1f9d529f2aabefca5a109d1a053c11b1858478bc4c40f89027874d9c070ca9b4"
+"fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
+"fleet-pr-opener": "0c4d24c3bbcc9a99d5e51de251d3817183f85ced1a73d0eeb1318cb1429447cf",
+"fleet-test-judge": "43cb62e8d83552ae58a79061ec9949203db267489e749d0ae6973815dd928c55",
+"fleet-test-writer": "d35428ca572612ec6f35b236dc113a153fa395afcc3184ccb1a09f289d1a6acf",
+"gate-change-nonweakening-sweep": "5d4196f07f2fd2477547cdfbea2420e1de180d87f960ae7043afacffd2d7f8cd",
+"plan-audit": "b29f65c76cd48a7ed3462c93aec835747fa23ea001ce989e058879a0462a149a",
+"pr-review": "9caa9b6709d448708d0ba555f8a4b9c893a475dc4edb9cd8fca3c7cfeab22267",
+"scope-and-plan": "79d0e02b8462ac0035d68e6f826c3e6d8d7c34741af66aee55bb3195aa3a689b"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -1556,16 +1578,17 @@ return cmd;
 const PROGRAM_SLOTS = [
 [/^preflight(:relay-retry)?$/, [["path_check", "path_check"], ["session_project", "session_project"]]],
 [/^infra:path-check:/, [[null, "path_check"]]],
-[/^workspace$/, [["remote_url_check", "remote_url"], ["gh_check", "gh_identity"]]],
+[/^workspace$/, [["remote_url_check", "remote_url"], ["gh_check", "gh_identity"], ["exclude", "exclude_add"]]],
 [/^infra:gh-identity:/, [[null, "gh_identity"]]],
 [/^hasher:/, [[null, "hasher"]]],
 [/^infra:branch-scan$/, [[null, "branch_scan"], ["test_db", "test_db_decl"]]],
-[/^infra:load-parked$/, [[null, "parked"]]],
+[/^infra:load-parked(:|$)/, [[null, "parked"]]],
+[/^infra:fleet-branch/, [[null, "fleet_branch"]]],
 [/^infra:park-plan/, [["park", "parked"], ["findings_write", "parked"]]],
 [/^infra:stage-plan/, [["plan_hash", "plan_hash"]]],
 [/^infra:format-(tests|code):/, [[null, "format_files"]]],
-[/^infra:format-plan/, [["dsn_check", "plan_dsn"]]],
-[/^infra:commit-plan/, [[null, "plan_ref_write"]]],
+[/^infra:format-plan/, [["format", "format_files"], ["dsn_check", "plan_dsn"]]],
+[/^infra:commit-plan/, [[null, "plan_ref_write"], ["retire", "parked"]]],
 [/^infra:verify-plan-commit/, [["plan_files", "plan_files"], ["plan_hash", "plan_hash"], ["plan_ref", "plan_ref"]]],
 [/^infra:load-ref/, [[null, "plan_ref"]]],
 [/^infra:verify-plan(?!-commit)/, [[null, "verify_since"], ["plan_hash", "plan_hash"], ["test_db", "test_db_decl"]]],
@@ -1594,6 +1617,7 @@ const PROGRAM_SLOTS = [
 [/^infra:db-down$/, [["down", "db_down"]]],
 [/^infra:hash-diff:/, [[null, "hash_diff"]]],
 [/^infra:build-/, [[null, "build_dir"]]],
+[/^infra:purge-bytecode:/, [[null, "purge"]]],
 ];
 const PROGRAM_KEYS = {
 "path_check": ["tools", "args", "path_problems"],
@@ -1605,8 +1629,13 @@ const PROGRAM_KEYS = {
 "branch_scan": ["head", "commits", "refs", "plan_tip_time"],
 "test_db_decl": ["decl", "error", "args"],
 "parked:read": ["parked", "args"],
+"parked:part": ["part", "chunks", "args"],
+"fleet_branch": ["slugs", "owned", "args"],
 "parked:write": ["written", "sha256", "args"],
 "parked:park": ["target", "clean", "dirty", "args"],
+"parked:retire": ["moved", "args"],
+"exclude_add": ["added", "exclude", "args"],
+"purge": ["purged", "args"],
 "plan_hash": ["plan_sha256", "blob", "args"],
 "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "fix_timeout", "unknown_hooks"],
 "plan_ref_write": ["plan_commit", "plan_base", "tag_sha", "reused", "plan_file", "dirty"],
@@ -1694,16 +1723,22 @@ digest: STR,
 },
 test_db_decl: { decl: { type: ["object", "null"] }, error: STR_OR_NULL, args: STRS, digest: STR },
 parked: {
-parked: { type: ["object", "null"], properties: { run: STR, plan_path: STR_OR_NULL, draft_chunks: STRS, findings_chunks: STRS } },
+parked: { type: ["object", "null"], properties: { run: STR, plan_path: STR_OR_NULL, payload_sha256: STR, part_count: INT } },
+part: { type: "object", properties: { index: INT, count: INT, sha256: STR } },
+chunks: STRS,
 written: STR,
 sha256: STR,
 target: STR_OR_NULL,
 clean: BOOL,
 dirty: STRS,
+moved: BOOL,
 args: STRS,
 digest: STR,
 },
 plan_hash: { plan_sha256: STR, blob: STR_OR_NULL, args: STRS, digest: STR },
+fleet_branch: { slugs: STRS, owned: STRS, args: STRS, digest: STR },
+exclude_add: { added: STRS, exclude: STR, args: STRS, digest: STR },
+purge: { purged: INT, args: STRS, digest: STR },
 format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, hook_failed: BOOL, hook_failures: { type: "array", items: STRS }, hook_head: STR, hook_sha256: STR, hook_timeout: STRS, fix_timeout: BOOL, unknown_hooks: STRS, digest: STR },
 plan_ref_write: { plan_commit: STR, plan_base: STR, tag_sha: STR, reused: BOOL, plan_file: STR, dirty: STRS, digest: STR },
 plan_files: { head: STR, commit: STR, parent: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
@@ -2057,14 +2092,16 @@ const chunks = [];
 for (let i = 0; i < b64.length; i += CHUNK_CHARS) chunks.push(b64.slice(i, i + CHUNK_CHARS));
 return { expected: sha256Hex(message), chunks, shas: chunks.map((c, i) => ({ i, sha256: sha256Hex(c) })) };
 }
+function CHUNK_WRITE(dir) {
+return "For each chunk below, write the file " + dir + "/<i>.b64 with the Write tool, its content the chunk text copied exactly, byte for byte, with no newline added. If the file already exists, Read it first (the Write tool refuses to replace a file it has not read). Never shorten, merge, reflow or skip a chunk.";
+}
 function chunkSteps(dir, c, cmd) {
 return (
-"a. `mkdir -p " + shQuote(dir) + "`.\n" +
-"b. For each chunk below, one Bash call: `printf '%s' '<the chunk text>' > " + shQuote(dir) + "/<i>.b64`, with the chunk text copied exactly, byte for byte, in place of <the chunk text> (base64 holds no quote; printf adds no newline). Never shorten, merge, reflow or skip a chunk.\n" +
-"c. Run this command exactly as written, unmodified:\n" +
+"a. " + CHUNK_WRITE(dir) + "\n" +
+"b. Run this command exactly as written, unmodified:\n" +
 cmd +
 "\n" +
-"   Exit 3 prints {\"bad_chunks\": [<i>, ...]}: the files of those chunks do not hash to their sha256 and nothing was written. Rewrite only those chunks as in step b, then run the command again; at most " + MAX_CHUNK_RETRIES + " such retries, then return failed with the last output. Any other non-zero exit -> failed with its stderr.\n" +
+"   Exit 3 prints {\"bad_chunks\": [<i>, ...]}: the files of those chunks do not hash to their sha256 and nothing was written. Rewrite only those chunks as in step a, then run the command again; at most " + MAX_CHUNK_RETRIES + " such retries, then return failed with the last output. Any other non-zero exit -> failed with its stderr.\n" +
 "The " + c.chunks.length + " chunk(s) (" + CHUNK_CHARS + " characters each at most):\n" +
 c.chunks.map((x, i) => "chunk " + i + " sha256 " + c.shas[i].sha256 + ":\n" + x + "\n").join("")
 );
@@ -2139,8 +2176,15 @@ sharedFilePath(name) +
 function sharedFileRule(name) {
 return " Put shared_file: {name: \"" + name + "\", sha256: <the hex sha256sum printed in step 3>}, copied exactly, in it too.";
 }
+const COPY_ROLES = ["fleet-test-judge", "fleet-code-judge", "fleet-test-writer", "plan-audit", "gate-change-nonweakening-sweep", "scope-and-plan", "pr-review"];
+function scratchCopyCmd() {
+if (!state.scriptsDir) throw new Error("scripts_dir is not resolved; program scratch_copy cannot run");
+programSha("scratch_copy");
+return "python3 -I " + shQuote(state.scriptsDir + "/scratch_copy.py");
+}
 function rolePrompt(role, inputs) {
 const sh = SHARED_FOR[role] || null;
+if (COPY_ROLES.indexOf(role) >= 0) inputs = Object.assign({}, inputs, { scratch_copy_cmd: scratchCopyCmd() });
 return (
 "You are the fleet role " + role + ". Do these " + (sh ? "four" : "two") + " steps first, in order:\n" +
 roleReadSteps(role) +
@@ -2199,6 +2243,7 @@ emitProg("path_check", "sha256sum -- <scripts_dir>/path_check.py && python3 -I <
 "\nIt prints one JSON object " + printsKeys("path_check") + ": " + relayAs("path_check") + " (the script recomputes the digest). Non-zero exit -> path_check null and the stderr in reason.\n"
 );
 }
+const EXCLUDE_LINES = [".claude/worktrees/", ".claude/settings.local.json", "__pycache__/", ".pytest_cache/", ".coverage", ".hypothesis/"];
 function workspacePrompt(inputs) {
 return (
 INFRA_STEP + "mechanical git setup only. No code, no commits, no push. Never delete, reset or recreate an existing branch or worktree.\n" +
@@ -2210,10 +2255,13 @@ inputsLine(inputs) +
 RETRY_SHELL("git -C <repo> fetch origin --prune") +
 " Still failing after the 3 retries -> failed with the last error.\n" +
 "2. default_branch = `git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD` without the `origin/` prefix; if that fails, `<gh> repo view --json defaultBranchRef -q .defaultBranchRef.name` run in <repo>.\n" +
-"3. Keep fleet files out of git status: if `git -C <repo> check-ignore -q .claude/worktrees/probe` fails, append the line `.claude/worktrees/` to `$(git -C <repo> rev-parse --path-format=absolute --git-common-dir)/info/exclude`. Do the same for `.claude/settings.local.json` (probe that path), and for the test caches `__pycache__/`, `.pytest_cache/`, `.coverage`, `.hypothesis/` (a judge's test run must not leave untracked noise). Never edit a tracked .gitignore.\n" +
+"3. Keep fleet files and test caches out of git status (a judge's test run must not leave untracked noise; never edit a tracked .gitignore). Run this one command exactly as written, unmodified, as one Bash call: " +
+progCmd("exclude_add", [inputs.repo].concat(EXCLUDE_LINES)) +
+"\n   It prints one JSON object " + printsKeys("exclude_add") + ": " + relayAs("exclude") + " (the script recomputes the digest). Non-zero exit -> exclude null and the stderr in reason; go on.\n" +
 "4. Branch state: `<gh> pr list --head <branch> --state all --json number,state` in <repo>. MERGED or CLOSED -> status needs_human.\n" +
 "5. main_worktree: if it exists and `git -C <main_worktree> branch --show-current` equals <branch>, reuse it (created=false). If the path exists otherwise -> needs_human. If absent: local branch <branch> exists -> `git -C <repo> -c core.hooksPath=/dev/null worktree add <main_worktree> <branch>`; else remote branch exists (`git -C <repo> ls-remote --exit-code --heads origin <branch>`: exit code 0 = exists, exit code 2 = absent; any other exit code is a network/auth error -> retry with the same 5 15 45 backoff, and still erroring after the 3 retries -> failed; never treat an error as absent) -> `git -C <repo> -c core.hooksPath=/dev/null worktree add -b <branch> <main_worktree> origin/<branch>`; else `git -C <repo> -c core.hooksPath=/dev/null worktree add --no-track -b <branch> <main_worktree> origin/<default_branch>` (created=true).\n" +
-"6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths." +
+(inputs.ff_reused ? "   A reused or added existing branch (not created=true): when `git -C <main_worktree> merge-base --is-ancestor HEAD origin/<default_branch>` exits 0 and `git -C <main_worktree> status --porcelain` is empty, run `git -C <main_worktree> -c core.hooksPath=/dev/null merge --ff-only origin/<default_branch>`. fast_forwarded = true when that merge moved HEAD, else false.\n" : "") +
+"6. If `<main_worktree>/.claude/settings.local.json` is absent or its content differs from `settings_local_json`, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths." +
 (inputs.frozen_resume ? " Exception (frozen_resume is true): the uncommitted paths of a frozen build are expected; list them in reason and go on (the workflow checks the worktree tree itself). Never stash, reset, clean or change them." : "") +
 "\n" +
 "7. `mkdir -p <scratch_dir>`.\n" +
@@ -2222,7 +2270,7 @@ RETRY_SHELL("git -C <repo> fetch origin --prune") +
 "10. Run this one command exactly as written, unmodified, as one Bash call:\n" +
 progCmd("remote_url", [inputs.repo]) +
 "\nIt prints one JSON object " + printsKeys("remote_url") + ": " + relayAs("remote_url_check") + " (the script recomputes the digest). Non-zero exit -> remote_url_check null.\n" +
-"Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url_check, gh_check, created}."
+"Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url_check, gh_check, exclude, created" + (inputs.ff_reused ? ", fast_forwarded" : "") + "}."
 );
 }
 function hasherPrompt(inputs) {
@@ -2257,6 +2305,7 @@ cmd +
 rules
 );
 }
+const TRACKED = "is tracked by git (`git -C <repo> ls-files --error-unmatch <path>` exits 0) and has no path part that starts with a dot (such as `.claude/`) or is `scratch` or `parked`";
 function intakePrompt(inputs) {
 return (
 INFRA_STEP + "INTAKE. Read only. Never write, edit, comment, transition or post anywhere: no file edits, no git writes, no ledger, ticket, issue or PR writes.\n" +
@@ -2265,13 +2314,13 @@ inputsLine(inputs) +
 "1. Task id (`L42`, `42`, `#42`, `yaadgaar #42`). Every project keeps its tasks in yaadgaar (`ledger` is always `yaadgaar`). The ledger scope is <project>, as the caller gave it; it is independent of <repo>. A repo's `.yadgar` files, its git remotes and its config never decide the ledger or the project. Resolve the id only by calling mcp__yaadgaar__read_task, and take its answer as the truth. Record EVERY ledger tool call in `tried`: {ledger, project, call (the tool and its arguments), error (the tool's error text, exactly; null when it returned the task)}. `ledger_tools` is the preflight census of the ledger tools, advisory only: it can miss a tool, so load the ledger tool via ToolSearch even when it is not listed. Only when ToolSearch finds no such tool, record {ledger, project, call: <the tool name>, error \"absent\"} and call nothing -> needs_human with reason \"" + NO_LEDGER_REASON + "\".\n" +
 "   `42`, `#42` and `yaadgaar #42` are yaadgaar task 42; never map them to L<N>. An `L42` input -> needs_human: it is a legacy yadgar ledger id, and its migrated yaadgaar task carries the title prefix `L42: `; ask for that task's yaadgaar number. Load mcp__yaadgaar__read_task via ToolSearch and call it with number=<the number>. The yaadgaar client is bound to the session's project and takes no project argument; never check or guess which project it is bound to. A refusal or no task -> needs_human. kind yaadgaar; ref = the number; id = the `id` (URN) of the answer, copied exactly; project = the project the answer names (a non-empty `project_id` or `project` field), copied exactly, else null (read_task names none for the client's own project). An answer that names a project other than <project> -> needs_human naming both.\n" +
 "   Never advise creating, editing or changing a repo's `.yadgar` file, project id or origin: the ledger scope is <project>, not the repo.\n" +
-"   body = the title, status and full body. If the task names a plan path that exists in the repo, also set plan_path and add a `plan` source for it.\n" +
+"   body = the title, status and full body. If the task names a plan path that " + TRACKED + ", also set plan_path and add a `plan` source for it.\n" +
 "2. Jira key (`ABC-123`): kind jira. Load the Atlassian MCP tools via ToolSearch: getAccessibleAtlassianResources for the cloudId, then getJiraIssue(issueIdOrKey, responseContentFormat=\"markdown\"). Tools absent -> needs_human. ref = the key; url = the browse URL; body = summary + description.\n" +
 "3. GitHub issue or PR URL (`https://github.com/<o>/<r>/issues/<n>` or `/pull/<n>`): kind github. " +
 ("gh_cmd" in inputs ? "`<gh_cmd> issue view <url> --json title,body,url` (or `pr view`), with exactly <gh_cmd>, the command the workflow checked for <o>/<r>; gh_cmd null -> needs_human. " : "The workflow found no GitHub issue or PR URL in `input` -> needs_human. ") +
 "ref = `<o>/<r>#<n>`.\n" +
 "4. Codeberg issue or PR URL (`https://codeberg.org/<o>/<r>/issues/<n>` or `/pulls/<n>`): kind codeberg. `curl -sf https://codeberg.org/api/v1/repos/<o>/<r>/issues/<n>`. ref = `<o>/<r>#<n>`.\n" +
-"5. A path to an existing `.md` file inside <repo>: kind plan. ref and plan_path = the path relative to <repo>; body = the file text.\n" +
+"5. A path to a `.md` file that " + TRACKED + ": kind plan. ref and plan_path = the path relative to <repo>; body = the file text.\n" +
 "6. Anything else: kind text; ref = \"text\"; body = `input` verbatim.\n" +
 "Repo (brief.repo is the ABSOLUTE path of the local checkout to work in):\n" +
 "- text, plan, yaadgaar: <repo>.\n" +
@@ -2317,21 +2366,28 @@ inputsLine(inputs) +
 progCmd("parked", ["park", inputs.worktree, inputs.plan_path, inputs.scratch, inputs.run]) +
 "\nIt prints one JSON object " + printsKeys("parked:park") + ": " + relayAs("park") + " (the script recomputes the digest). Non-zero exit -> park null and the stderr in reason.\n" +
 (findings
-? "2. Write this run's findings (4.0.0): they travel as base64 chunks you write to files under " + findings.chunk_dir + "; the program checks every chunk and writes " + findings.scratch + "/parked/" + findings.run + "/findings.json. Write no other file.\n" +
-chunkSteps(findings.chunk_dir, findings.c, progCmd("parked", ["write", findings.scratch, findings.run, findings.chunk_dir, String(findings.c.chunks.length), findings.c.expected, JSON.stringify(findings.c.shas)])) +
+? (findings.written
+? // 7.3.0 (#47a): parallel writers already wrote the chunk files
+"2. Write this run's findings: they are already in base64 chunk files under " + findings.chunk_dir + " (earlier steps wrote them); the program checks every chunk and writes " + findings.scratch + "/parked/" + findings.run + "/findings.json. Write, change or delete no file yourself. Run this command exactly as written, unmodified:\n" +
+progCmd("parked", ["write", findings.scratch, findings.run, findings.chunk_dir, String(findings.c.chunks.length), findings.c.expected, JSON.stringify(findings.c.shas)]) +
+"\nExit 3 (bad chunks) or any other non-zero exit: findings_write null.\n"
+: "2. Write this run's findings (4.0.0): they travel as base64 chunks you write to files under " + findings.chunk_dir + "; the program checks every chunk and writes " + findings.scratch + "/parked/" + findings.run + "/findings.json. Write no other file.\n" +
+chunkSteps(findings.chunk_dir, findings.c, progCmd("parked", ["write", findings.scratch, findings.run, findings.chunk_dir, String(findings.c.chunks.length), findings.c.expected, JSON.stringify(findings.c.shas)]))) +
 "On success it prints one JSON object " + printsKeys("parked:write") + ": " + relayAs("findings_write") + ". A failure here does not undo step 1: return findings_write null.\n"
 : "") +
 "Return {status, reason, park" + (findings ? ", findings_write" : "") + "}."
 );
 }
 function loadParkedPrompt(inputs) {
+const pt = "part" in inputs;
+const id = pt ? "parked:part" : "parked:read";
 return (
-INFRA_STEP + "read the parked draft plan of an earlier stopped run. READ ONLY: no edits, no moves, no commits; run nothing but the one command below.\n" +
+INFRA_STEP + "read the parked draft plan of an earlier stopped run" + (pt ? " (part " + inputs.part + ")" : "") + ". READ ONLY: no edits, no moves, no commits; run nothing but the one command below.\n" +
 inputsLine(inputs) +
 RUN_EXACT +
-progCmd("parked", ["read", inputs.scratch, inputs.plan_tip_time === null ? "null" : String(inputs.plan_tip_time)]) +
+progCmd("parked", pt ? ["read-part", inputs.scratch, inputs.run, String(inputs.part)] : ["read", inputs.scratch, inputs.plan_tip_time === null ? "null" : String(inputs.plan_tip_time)]) +
 "\n" +
-'It prints one JSON object ' + printsKeys("parked:read") + '. Return {status: "ok", reason, ' + returnKeys("parked:read") + '} with those values copied exactly: every chunk in order, byte for byte, nothing dropped, shortened or reflowed (the script recomputes the digest). Non-zero exit -> failed with its stderr.'
+'It prints one JSON object ' + printsKeys(id) + '. Return {status: "ok", reason, ' + returnKeys(id) + '} with those values copied exactly' + (pt ? ": every chunk in full and in order, byte for byte; NEVER shorten, summarise, merge or drop a chunk (the script checks the joined chunks against the sha256)" : " (the script recomputes the digest)") + '. Non-zero exit -> failed with its stderr.'
 );
 }
 const PARKED_UNREADABLE = "parked prior unreadable (fail closed)";
@@ -2341,9 +2397,11 @@ const ignore = (why) => {
 gate("parked draft ignored (" + why + ")");
 return { run: null, priorDraft: null, priorRound: null, unreadable: why };
 };
+const args = [scratch, tip === null ? "null" : String(tip)];
+const opts = { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Workspace" };
 let r = null;
 try {
-r = await softDispatch(label, loadParkedPrompt({ scratch, plan_tip_time: tip }), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Workspace" });
+r = await softDispatch(label, loadParkedPrompt({ scratch, plan_tip_time: tip }), Object.assign({ digest: "parked:read", args }, opts));
 } catch (e) {
 if (e instanceof Stop) throw e;
 return ignore("the read step crashed");
@@ -2352,24 +2410,45 @@ if (!r || r.status !== "ok") return ignore(label + " returned " + (r ? r.status 
 const pp = programProblem(r, "parked");
 if (pp) return ignore(pp);
 if (!relayDigestOk(r, progKeys("parked:read"), "parked")) return ignore("the relay does not match the program's digest");
-if (canonical(r.args) !== canonical([scratch, tip === null ? "null" : String(tip)])) return ignore("the program ran on other arguments");
+if (canonical(r.args) !== canonical(args)) return ignore("the program ran on other arguments");
 const k = r.parked;
 if (k === null) {
 gate("no parked draft newer than the last plan commit");
 return null;
 }
-const strs = (a) => Array.isArray(a) && a.every((x) => typeof x === "string" && x.length <= 1000);
-if (!k || typeof k !== "object" || typeof k.run !== "string" || !NONCE_RE.test(k.run) || !strs(k.draft_chunks) || !strs(k.findings_chunks))
+const n = k && k.part_count;
+if (!k || typeof k !== "object" || typeof k.run !== "string" || !NONCE_RE.test(k.run) || typeof k.payload_sha256 !== "string" || !SHA256_RE.test(k.payload_sha256) || !Number.isInteger(n) || n < 1 || n > MAX_REF_PARTS)
 return ignore("unusable shape");
-const out = { run: k.run, priorDraft: null, priorRound: null };
-if (k.draft_chunks.length) {
-if (typeof k.plan_path !== "string" || planPathProblem(k.plan_path)) return ignore("plan_path " + JSON.stringify(k.plan_path));
-out.priorDraft = { run: k.run, plan_path: normPath(k.plan_path), text: k.draft_chunks.join("") };
+if (k.plan_path !== null && (typeof k.plan_path !== "string" || planPathProblem(k.plan_path))) return ignore("plan_path " + JSON.stringify(k.plan_path));
+const one = async (lbl, i) => {
+const x = await softDispatch(lbl, loadParkedPrompt({ scratch, run: k.run, part: i }), opts);
+return x && x.status === "ok" && !programProblem(x, "parked") && canonical(x.args) === canonical([scratch, k.run, String(i)]) ? x : null;
+};
+const { partOk, readParts } = partReader({ prefix: label, what: "the parked draft parts", load: one, checked: (x) => x, soft: one, softCap: true });
+let p0 = await one(label + ":p0", 0);
+if (!partOk(p0, 0, n)) {
+gate(label + ":p0: unusable; reading once more");
+p0 = await one(label + ":p0:retry", 0);
 }
-if (k.findings_chunks.length) {
+const got = partOk(p0, 0, n) ? await readParts(p0, "") : { content: null };
+if (got.content === null || sha256Hex(got.content) !== k.payload_sha256) return ignore("the relayed parts do not join to payload_sha256");
+let pl = null;
+try {
+pl = JSON.parse(got.content);
+} catch (e) {
+pl = null;
+}
+const sn = (x) => x === null || typeof x === "string";
+if (!pl || typeof pl !== "object" || !sn(pl.draft) || !sn(pl.findings)) return ignore("unusable payload");
+const out = { run: k.run, priorDraft: null, priorRound: null };
+if (pl.draft) {
+if (typeof k.plan_path !== "string") return ignore("plan_path null");
+out.priorDraft = { run: k.run, plan_path: normPath(k.plan_path), text: pl.draft };
+}
+if (pl.findings) {
 let f = null;
 try {
-f = JSON.parse(k.findings_chunks.join(""));
+f = JSON.parse(pl.findings);
 } catch (e) {
 f = null;
 }
@@ -2452,23 +2531,23 @@ function formatPlanPrompt(inputs) {
 return (
 INFRA_STEP + "run the repo's pre-commit hooks on the plan doc ONLY, so the later plan commit has nothing left to rewrite. Change no other path. No staging, no commit, no push. Never bypass or skip a hook, never edit a hook or its config, never edit the plan by hand.\n" +
 inputsLine(inputs) +
-"1. If `<worktree>/.pre-commit-config.yaml` does not exist: reason = \"no pre-commit config\"; go to step 3.\n" +
-"2. Run `cd <worktree> && PYTHONDONTWRITEBYTECODE=1 pre-commit run --files <plan_path>` as one Bash call with timeout 600000 ms. Exit 0 -> go to step 3. A non-zero exit after which `git -C <worktree> hash-object <plan_path>` differs from before the run means a fixer rewrote the plan: run the same command again, at most 3 runs in all. A non-zero exit that left the plan unchanged, `pre-commit` not installed, or a 3rd run that still fails -> return {status: \"needs_human\", reason: <the failing hook ids and the last 60 lines of output>}.\n" +
-"3. changed_paths = the paths of `git -C <worktree> status --porcelain --untracked-files=all` (the plan doc itself is expected there).\n" +
-"4. Run this one command exactly as written, unmodified (it reads the plan doc, never changes it):\n" +
+"1. " + RUN_600S +
+progCmd("format_files", [inputs.worktree, JSON.stringify({ mode: "plan", paths: [inputs.plan_path] }), "[]", inputs.scratch_dir, String(FIX_RUN_TIMEOUT)]) +
+"\n   It prints one JSON object " + printsKeys("format_files") + ": " + relayAs("format") + " (the script recomputes the digest and reads the hook result). Non-zero exit -> failed with its stderr.\n" +
+"2. changed_paths = the paths of `git -C <worktree> status --porcelain --untracked-files=all` (the plan doc itself is expected there).\n" +
+"3. Run this one command exactly as written, unmodified (it reads the plan doc, never changes it):\n" +
 progCmd("plan_dsn", [inputs.worktree, inputs.plan_path]) +
 "\n" +
 "It prints one JSON object " + printsKeys("plan_dsn") + ": " + relayAs("dsn_check") + FAIL_STDERR +
-"Return {status, reason, changed_paths, dsn_check}."
+"Return {status, reason, format, changed_paths, dsn_check}."
 );
 }
 const CHUNKS_PER_WRITER = 8;
-function planChunksPrompt(inputs, c, ids) {
+function planChunksPrompt(inputs, c, ids, what) {
 return (
-INFRA_STEP + "write some chunks of the sealed plan ref to scratch files. Write no other file. No git, no other command, no ledger, ticket or comment writes, no push.\n" +
+INFRA_STEP + "write some chunks of " + (what || "the sealed plan ref") + " to scratch files with the Write tool. Write no other file. No git, no Bash command, no ledger, ticket or comment writes, no push.\n" +
 inputsLine(Object.assign({}, inputs, { chunks: ids })) +
-"1. `mkdir -p " + shQuote(inputs.chunk_dir) + "`.\n" +
-"2. For each chunk below, one Bash call: `printf '%s' '<the chunk text>' > " + shQuote(inputs.chunk_dir) + "/<i>.b64`, with the chunk text copied exactly, byte for byte, in place of <the chunk text> (base64 holds no quote; printf adds no newline). Never shorten, merge, reflow or skip a chunk.\n" +
+"1. " + CHUNK_WRITE(inputs.chunk_dir) + "\n" +
 'Return {status: "ok", reason, written: [<i>, ...]}: the chunk numbers you wrote. A later step checks every file against its sha256 and sends a bad one to a fresh writer.\n' +
 "The " + ids.length + " chunk(s) (" + CHUNK_CHARS + " characters each at most):\n" +
 ids.map((i) => "chunk " + i + " sha256 " + c.shas[i].sha256 + ":\n" + c.chunks[i] + "\n").join("")
@@ -2486,10 +2565,36 @@ progCmd("plan_ref_write", [inputs.worktree, inputs.task_id, inputs.plan_base, in
 "On success it prints one JSON object " + printsKeys("plan_ref_write") + ": copy every value unchanged and add `file_sha256` (the script recomputes the digest).\n" +
 '   Exit 3 prints {"bad_chunks": [<i>, ...]}: the files of those chunks do not hash to their sha256 and nothing was written. Then return {status: "failed", reason: "bad chunks", bad_chunks: <that list, exactly>} at once and do nothing else. Any other non-zero exit -> failed with its stderr.\n' +
 (inputs.retire
-? "4. Housekeeping (4.0.0): `mkdir -p " + shQuote(inputs.retire.used) + " && mv -n -- " + shQuote(inputs.retire.dir) + " " + shQuote(inputs.retire.used) + "/`. An error here changes nothing above and does not fail the step.\n"
+? // 7.3.0 (#9): a program, not a shell mkdir and move
+"4. Housekeeping (4.0.0): run this one command exactly as written, unmodified: " + progCmd("parked", ["retire", inputs.retire.dir, inputs.retire.used]) + "\n   It prints one JSON object " + printsKeys("parked:retire") + ": " + relayAs("retire") + ". A non-zero exit here changes nothing above and does not fail the step: retire null.\n"
 : "") +
-"Return {status, reason, " + returnKeys("plan_ref_write") + "}. The script verifies the commit and the ref in a separate read-only step."
+"Return {status, reason, " + returnKeys("plan_ref_write") + (inputs.retire ? ", retire" : "") + "}. The script verifies the commit and the ref in a separate read-only step."
 );
+}
+async function writeChunksParallel(prefix, chunkDir, c, ids, phaseName, round, what, soft) {
+const groups = [];
+for (let i = 0; i < ids.length; i += CHUNKS_PER_WRITER) groups.push(ids.slice(i, i + CHUNKS_PER_WRITER));
+if (!soft && !tailWriter(prefix)) reserve(groups.length, "the " + what + " chunk writers");
+const res = await parallel(groups.map((g, b) => () => softDispatch(prefix + ":r" + round + "w" + b, planChunksPrompt({ chunk_dir: chunkDir }, c, g, what === "plan ref" ? null : "the " + what), { schema: INFRA_SCHEMA, phase: phaseName })));
+res.forEach((w, b) => {
+if (!w || w.status !== "ok") gate(prefix + ":r" + round + "w" + b + " returned " + (w ? w.status + ": " + (w.reason || "no reason") : "no result") + "; the program step checks every chunk file");
+});
+}
+async function chunkRounds(label, prefix, chunkDir, c, phaseName, step, what, none, stopGate) {
+for (let round = 0; ; round++) {
+const lbl = label + (round ? ":rewrite-" + round : "");
+const r = await step(lbl, round);
+const bad = r && Array.isArray(r.bad_chunks) && r.bad_chunks.length ? r.bad_chunks : null;
+if (!bad) return r;
+if (r.status !== "failed")
+halt("failed", lbl + ": the relay has status " + r.status + " and bad_chunks " + JSON.stringify(bad) + " (status ok and bad_chunks cannot both be true); no rewrite runs, and the " + what + " may already be written", stopGate);
+if (!bad.every((i) => Number.isInteger(i) && i >= 0 && i < c.chunks.length))
+halt("failed", lbl + ": the relayed bad_chunks " + JSON.stringify(bad) + " are not chunk numbers of the " + what + " (0.." + (c.chunks.length - 1) + ")", stopGate);
+const ids = bad.filter((i, k) => bad.indexOf(i) === k).sort((a, b) => a - b);
+if (round >= MAX_CHUNK_RETRIES) halt("failed", lbl + ": chunk(s) " + ids.join(", ") + " still do not match their sha256 after " + MAX_CHUNK_RETRIES + " rewrite rounds; " + none, stopGate);
+gate(lbl + ": chunk(s) " + ids.join(", ") + " do not match their sha256; each goes to a fresh writer (round " + (round + 1) + ") on " + relayModel(prefix + ":r" + (round + 1) + "w0"));
+await writeChunksParallel(prefix, chunkDir, c, ids, phaseName, round + 1, what);
+}
 }
 function verifyPlanCommitPrompt(inputs) {
 return (
@@ -2735,11 +2840,6 @@ fatal +
 ' done; cat "$e"; echo rc=$rc` (run it as one Bash call with timeout 600000 ms; the waits alone take 65s)'
 );
 }
-const PURGE_FIND =
-"find <worktree> \\( -name .git -o -name .venv -o -name venv -o -name .tox -o -name .nox -o -name node_modules -o -path '*/.claude/worktrees' \\) -prune -o " +
-"\\( -type d \\( -name __pycache__ -o -name .pytest_cache \\) -prune -print0 \\) -o \\( -type f \\( -name '*.pyc' -o -name '*.pyo' \\) -print0 \\)";
-const PURGE_CMD =
-"n=$(" + PURGE_FIND + " | tr -cd '\\0' | wc -c) && " + PURGE_FIND + " | xargs -0 -r rm -rf -- && echo purged=$n";
 const TEST_ENV = Object.freeze({ PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" });
 const TEST_ENV_NOTE =
 "test_env: set these environment variables for every run of the frozen tests and the suite (frozen-test red check included), so no bytecode or pytest cache is written or read. The workflow deletes all bytecode before every hash check and code-judge run.";
@@ -2814,17 +2914,18 @@ function purgePrompt(inputs) {
 return (
 INFRA_STEP + "delete Python bytecode and pytest caches. No other change: never touch tracked files, never commit.\n" +
 inputsLine(inputs) +
-"Run this one Bash command exactly as written (replace <worktree> with the shell-quoted worktree path), in the foreground. It removes every __pycache__ dir, *.pyc and *.pyo file and .pytest_cache dir, and skips .git, .venv, venv, .tox, .nox, node_modules and .claude/worktrees:\n" +
-"PURGE: " +
-PURGE_CMD +
-"\n" +
-"purged = the number after `purged=`. Non-zero exit -> failed with its stderr.\n" +
-"Return {status, reason, purged}."
+"It removes every __pycache__ dir, *.pyc and *.pyo file and .pytest_cache dir, and skips .git, .venv, venv, .tox, .nox, node_modules and .claude/worktrees. " +
+RUN_EXACT +
+progCmd("purge", [inputs.worktree]) +
+"\nIt prints one JSON object " + printsKeys("purge") + COPY_DIGEST +
+"Return {status, reason, " + returnKeys("purge") + "}."
 );
 }
 async function purgeBytecode(label, worktree, phaseName) {
 const r = await infra(label, purgePrompt({ worktree }), phaseName);
 if (typeof r.purged !== "number") halt("failed", label + " returned no purged count");
+requireProgram(r, "purge", label);
+if (canonical(r.args) !== canonical([worktree]) || !relayDigestOk(r, progKeys("purge"), "purge")) halt("failed", label + ": the relayed purge result does not match the program's digest", "contract");
 gate(label + ": purged " + r.purged + " bytecode/cache paths");
 return r;
 }
@@ -3021,13 +3122,18 @@ if (r.status !== "ok")
 halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned " + r.status + ": " + (r.reason || "no reason") + ")", "iac");
 pathCheck(r, state.repo, { label, args: [state.repo, token] });
 }
-function writeStatePrompt(inputs, json) {
+function writeStatePrompt(inputs, json, written) {
 const c = chunked(json + "\n");
+const cmd = progCmd("state_write", [inputs.main_worktree, inputs.state_ref, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)]);
 return (
 INFRA_STEP + "record the run-state. Local only: never push, never create a tag name, never commit, never touch the index or any file but the chunk files under <chunk_dir>.\n" +
 inputsLine(inputs) +
-"The state JSON travels as base64 chunks you write to files; the program checks every chunk against its sha256, then makes the tag object (git mktag: no tag name, no hook) and moves <state_ref>.\n" +
-chunkSteps(inputs.chunk_dir, c, progCmd("state_write", [inputs.main_worktree, inputs.state_ref, inputs.chunk_dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)])) +
+(written
+? "The state JSON is already in base64 chunk files under <chunk_dir> (earlier steps wrote them); the program checks every chunk against its sha256, then makes the tag object (git mktag: no tag name, no hook) and moves <state_ref>. Write, change or delete no file yourself. Run this command exactly as written, unmodified:\n" +
+cmd +
+"\n" +
+'   Exit 3 prints {"bad_chunks": [<i>, ...]}: the files of those chunks do not hash to their sha256 and nothing was written. Then return {status: "failed", reason: "bad chunks", bad_chunks: <that list, exactly>} at once and do nothing else. Any other non-zero exit -> failed with its stderr.\n'
+: "The state JSON travels as base64 chunks you write to files; the program checks every chunk against its sha256, then makes the tag object (git mktag: no tag name, no hook) and moves <state_ref>.\n" + chunkSteps(inputs.chunk_dir, c, cmd)) +
 "On success it prints one JSON object " + printsKeys("state_write") + ": copy every value unchanged and add `file_sha256` (the script recomputes the digest).\n" +
 "Return {status, reason, " + returnKeys("state_write") + "}."
 );
@@ -3171,6 +3277,9 @@ function capped() {
 return state.agents - state.pathChecks - state.buildResets - state.tail;
 }
 const TAIL_RE = /^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:fleet-ci-classifier)|^infra:[a-z:-]+:ci$/;
+function tailWriter(l) {
+return state.tailWriters === true && (l.indexOf("infra:state-chunks:") === 0 || /^infra:state:(pr_open|reviewed|written_back|committed|pushed)(:|$)/.test(l));
+}
 function reserve(n, what) {
 if (capped() + n > MAX_AGENTS)
 halt(
@@ -3193,6 +3302,11 @@ const hit = INFRA_TIER.find((e) => label.indexOf(e[0]) === 0);
 if (!hit) halt("failed", "no INFRA_TIER entry for agent label " + label);
 return hit[1];
 }
+const REWRITE_RE = /^infra:(plan|state|park)-chunks.*:r[1-9][0-9]*w[0-9]+$/;
+function relayModel(label) {
+const m = infraModel(label);
+return RETRY_RE.test(label) || REWRITE_RE.test(label) ? RETRY_UP[m] : m;
+}
 const TOK = {};
 let tokAt = null;
 const tokOn = () => typeof budget === "object" && !!budget && typeof budget.spent === "function";
@@ -3208,9 +3322,9 @@ tokAt = s;
 return r;
 }
 async function dispatch(label, prompt, opts) {
-const model = infraModel(label);
+const model = relayModel(label);
 const ic = infraCall(label, prompt, opts);
-if (TAIL_RE.test(label)) state.tail++;
+if (TAIL_RE.test(label) || tailWriter(label)) state.tail++;
 reserve(1, label);
 state.agents++;
 const r = await agentT(ic.prompt, agentOpts(ic.opts, label, model));
@@ -3248,13 +3362,14 @@ const nm = !dm && !am ? nestedMiss(label, r) : null;
 if (!dm && !am && !nm) return r;
 if (again === softDispatch && capped() + 1 > MAX_AGENTS) return r;
 const sfx = dm || nm ? DIGEST_RETRY : ARGS_RETRY;
-gate(label + ": " + (dm ? "the relay does not match the program's digest" : nm ? "the " + nm + " relay does not match the program's digest" : "the program ran on other arguments than the workflow sent") + "; dispatched once more to a fresh agent (" + label + sfx + ")");
+gate(label + ": " + (dm ? "the relay does not match the program's digest" : nm ? "the " + nm + " relay does not match the program's digest" : "the program ran on other arguments than the workflow sent") + "; dispatched once more to a fresh agent (" + label + sfx + ") on " + relayModel(label + sfx));
 return again(label + sfx, prompt + (dm ? "\nA first relay of this step did not match the program's digest: run the command again and copy every value exactly." : "\nA first run of this step used other arguments: run the command again exactly as written."), opts);
 }
 async function softDispatch(label, prompt, opts) {
-const model = infraModel(label);
+const model = relayModel(label);
 const ic = infraCall(label, prompt, opts);
-if (capped() + 1 > MAX_AGENTS) {
+if (tailWriter(label)) state.tail++;
+else if (capped() + 1 > MAX_AGENTS) {
 gate("agent cap " + MAX_AGENTS + " reached: " + label + " not run");
 return null;
 }
@@ -3341,6 +3456,9 @@ for (const k of REQUIRED_ON_OK[role] || []) {
 if (!(k in r)) return { msg: "role " + role + " contract drift: missing " + k, detail: "missing " + k };
 if (!typeMatches(strict[k], r[k]))
 return { msg: "contract drift: " + role + " " + k + " type: got " + jsType(r[k]), detail: k + " type: got " + jsType(r[k]) };
+const sub = strict[k] && strict[k].properties;
+if (sub && r[k] && typeof r[k] === "object" && !Array.isArray(r[k]))
+for (const j of Object.keys(sub)) if (r[k][j] != null && !typeMatches(sub[j], r[k][j])) return { msg: "contract drift: " + role + " " + k + "." + j + " type: got " + jsType(r[k][j]), detail: k + "." + j + " type: got " + jsType(r[k][j]) };
 const en = strict[k] && strict[k].enum;
 if (en && k !== "verdict" && r[k] !== null && en.indexOf(r[k]) < 0)
 return { msg: "contract drift: " + role + " " + k + " value " + JSON.stringify(r[k]), detail: k + " value " + JSON.stringify(r[k]) };
@@ -3534,13 +3652,13 @@ halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") change
 checkRole(role, r);
 collect(role, r);
 if (!(opts && opts.allowNotOk)) requireOk(role, r);
-if (role === "fleet-code-judge" && r.verdict === "fix_code" && !state.update) {
+if (role === "fleet-code-judge" && r.verdict === "fix_code") {
 const isTag = (f) =>
 !!f && f.target === "code" && f.criterion == null && typeof f.finding === "string" && f.finding.startsWith("review ") &&
 f.finding.indexOf(" ", 7) > 7 && f.finding.slice(7, f.finding.indexOf(" ", 7)).indexOf("[") < 0 && f.finding.slice(f.finding.indexOf(" ", 7) + 1).startsWith(BODY_TAG + " ");
 const rest = (r.routed_findings || []).filter((f) => !isTag(f));
 const sr = r.suite_result || {};
-const failing = !(typeof sr.exit_code === "number" && sr.exit_code === 0) || (typeof sr.failed === "number" && sr.failed > 0) || (typeof sr.errors === "number" && sr.errors > 0);
+const failing = !(Number.isInteger(sr.exit_code) && sr.exit_code === 0) || (sr.failed != null && sr.failed !== 0) || (sr.errors != null && sr.errors !== 0);
 if (rest.length < (r.routed_findings || []).length && (rest.length || !failing)) {
 gate(label + ": " + ((r.routed_findings || []).length - rest.length) + " " + BODY_TAG + " review finding(s) dropped (a PR-body fix, not a code fix)" + (!rest.length ? "; fix_code -> approve (suite passed)" : ""));
 r.routed_findings = rest;
@@ -3568,6 +3686,7 @@ refreeze_log: state.refreezeLog,
 gate_log: state.gateLog,
 memory_notes: state.findings,
 follow_ups: state.followUps || [],
+warnings: state.warnings || [],
 ...(state.ci ? { ci: state.ci } : {}),
 ...(state.ciWriteBack ? { ci_write_back: state.ciWriteBack } : {}),
 ...(state.unattended ? { unattended: true, unattended_source: state.unattended, auto_decisions: state.autoDecisions } : {}),
@@ -3682,13 +3801,19 @@ main_worktree: lay.mainWt,
 scratch_dir: lay.scratch,
 settings_local_json: settingsFor(lay.mainWt),
 gh_args: [repo],
-}, wopt && wopt.frozenResume ? { frozen_resume: true } : {})),
+}, wopt && wopt.frozenResume ? { frozen_resume: true } : {}, wopt && wopt.ffReused ? { ff_reused: true } : {})),
 "Workspace",
 );
 if (!ws.default_branch || !ws.base_ref) halt("failed", "workspace returned no default_branch/base_ref");
 if (!ws.remote_slug) halt("needs_human", "workspace found no origin remote owner/name (remote_slug)");
 if (ws.default_branch === lay.branch) halt("needs_human", "fleet branch equals the default branch " + ws.default_branch);
 gate("workspace: " + (ws.created ? "created " : "reused ") + lay.mainWt + " off " + ws.default_branch + " @ " + ws.base_ref);
+if (ws.fast_forwarded === true) gate("workspace: fast-forwarded to origin/" + ws.default_branch);
+const ex = ws.exclude;
+if (ex) requireProgram(ex, "exclude_add", "workspace");
+if (ex && strsOf(ex.added) && canonical(ex.args) === canonical([repo].concat(EXCLUDE_LINES)) && relayDigestOk(ex, progKeys("exclude_add"), "exclude_add"))
+gate("workspace: info/exclude " + (ex.added.length ? "added " + ex.added.join(", ") : "unchanged"));
+else gate("warning: workspace: the info/exclude relay is unusable (no digest-checked exclude); git status may list fleet files");
 const uc = ws.remote_url_check;
 const urlOk =
 !!uc && typeof uc === "object" && (uc.url === null || typeof uc.url === "string") && canonical(uc.args) === canonical([repo]) && relayDigestOk(uc, progKeys("remote_url"), "remote_url");
@@ -3706,6 +3831,21 @@ const slug = o !== null ? o : ws.remote_slug;
 if (o !== null) gate("workspace: GitHub command for " + slug + ": " + (ghFor(slug).gh_cmd || "none") + (ghFor(slug).push ? " (push)" : " (no push)") + "; tried " + ghTried(slug));
 return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "" };
 }
+async function branchSlug(repo, names) {
+const args = [repo, names.taskId, names.source];
+const r = await infra("infra:fleet-branch", INFRA_STEP + "list the local fleet branches of this task. Read only.\n" + inputsLine({ repo, task_id: names.taskId, source: names.source }) + RUN_EXACT + progCmd("fleet_branch", args) + "\nIt prints one JSON object " + printsKeys("fleet_branch") + '. Return {status: "ok", reason, ' + returnKeys("fleet_branch") + "}" + COPY_DIGEST, "Intake", JUDGE_AGENT, "fleet_branch", args);
+requireProgram(r, "fleet_branch", "infra:fleet-branch");
+if (!relayDigestOk(r, progKeys("fleet_branch"), "fleet_branch") || canonical(r.args) !== canonical(args) || !strsOf(r.slugs) || !strsOf(r.owned) || r.owned.some((x) => r.slugs.indexOf(x) < 0))
+halt("failed", "infra:fleet-branch: the relay does not match the program's digest or arguments");
+const d = names.slug;
+const s = r.owned.filter((x) => x && x === slugify(x));
+if (r.slugs.some((x) => x !== d && s.indexOf(x) < 0)) gate("branch slug: fleet branches with no proof they are task " + names.taskId + "'s are not adopted: " + r.slugs.filter((x) => x !== d && s.indexOf(x) < 0).join(", "));
+const br = (x) => "fleet/" + names.taskId + "-" + x;
+if (!s.length || s.indexOf(d) >= 0) return d;
+if (s.length > 1) halt("needs_human", "several fleet branches of task " + names.taskId + " and none is " + br(d) + ": " + s.map(br).join(", ") + "; delete the stale ones, then re-run plan");
+gate("branch slug " + s[0] + " adopted from existing " + br(s[0]) + " (intake gave " + d + ")");
+return s[0];
+}
 function briefProblem(b) {
 if (!b || typeof b !== "object") return "no brief";
 if (typeof b.title !== "string" || !b.title.trim()) return "brief has no title";
@@ -3719,6 +3859,8 @@ if (b.plan_path != null) {
 if (typeof b.plan_path !== "string" || !normPath(b.plan_path)) return "brief.plan_path is not a path";
 if (b.plan_path.charAt(0) === "/" || normPath(b.plan_path).split("/").indexOf("..") >= 0)
 return "brief.plan_path must be relative to the repo";
+if (normPath(b.plan_path).split("/").some((x) => x.charAt(0) === "." || x === "scratch" || x === "parked"))
+return "brief.plan_path " + b.plan_path + " is not a tracked repo path (under a dot dir, scratch or parked)";
 }
 return null;
 }
@@ -4132,7 +4274,7 @@ continue;
 }
 const r = await dispatch(lb, callersPrompt({ worktree, plan_path: planPath, symbols: part, cap: MAX_SYMBOL_HITS }), { schema: INFRA_SCHEMA, phase: phaseName, agentType: JUDGE_AGENT, digest: "callers" });
 if (r.status !== "ok" && String(r.reason).indexOf(CALLERS_CAP_MARK) >= 0) {
-if (part.length === 1) halt("needs_human", lb + ": the occurrences of " + part[0] + " are over the 65536-byte relay cap (relay size; at most " + MAX_SYMBOL_HITS + " hits, long paths); the caller check cannot relay them", "callers");
+if (part.length === 1) halt("needs_human", lb + ": the occurrences of " + part[0] + " are over the 65536-byte relay cap (relay size; at most " + MAX_SYMBOL_HITS + " call-shaped hits, long paths); the caller check cannot relay them", "callers");
 gate(lb + ": " + part.length + " symbols are over the relay cap; split in two");
 queue.unshift({ part: part.slice(0, part.length >> 1), disk: false }, { part: part.slice(part.length >> 1), disk: false });
 continue;
@@ -4327,7 +4469,7 @@ findings.push({
 criterion: null,
 symbol: s.symbol,
 finding:
-s.symbol + ": more than " + MAX_SYMBOL_HITS + " occurrences (git grep -w); too common a name to check by grep. It stays in changed_symbols: narrower symbols may be added in addition, never in its place; a human decides",
+s.symbol + ": more than " + MAX_SYMBOL_HITS + " call-shaped occurrences (git grep -w hits followed by `(`); too common a name to check by grep. It stays in changed_symbols: narrower symbols may be added in addition, never in its place; a human decides",
 });
 continue;
 }
@@ -4643,6 +4785,7 @@ repo_obligations: stripHeldOut(obligations),
 commands: commandsOf(plan.test_cmd, obligations, criteria),
 changed_symbols: symbolMap,
 remote_url: validRemoteUrl(ctx.remoteUrl) ? ctx.remoteUrl : null,
+merge_after: typeof plan.merge_after === "string" && plan.merge_after.trim() ? plan.merge_after.trim() : null,
 };
 gate(
 "plan: test_cmd " + JSON.stringify(plan.test_cmd.command) + ", " + obligations.length + " repo obligation(s)" +
@@ -4670,8 +4813,16 @@ const component = COMPONENT_RE.test(String(plan.component)) ? plan.component : C
 if (component !== plan.component) gate("planner component " + JSON.stringify(plan.component === undefined ? null : plan.component) + " unusable; component " + component);
 const fmtLabel = "infra:format-plan" + sfx;
 await pathRecheck("format-plan" + sfx, "Plan");
-const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath }), "Plan");
+const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath, scratch_dir: ctx.common.scratch_dir }), "Plan");
 if (!Array.isArray(fmt.changed_paths)) halt("failed", fmtLabel + " returned no changed_paths list");
+const ff = fmt.format;
+requireProgram(ff, "format_files", fmtLabel);
+if (!relayDigestOk(ff, progKeys("format_files"), "format_files") || !strsOf(ff.files) || !Array.isArray(ff.hook_failures))
+halt("failed", fmtLabel + ": the relayed format result does not match the program's digest", "contract");
+if (ff.refused.length) halt("needs_human", fmtLabel + ": hook config, a hook entry or a symlinked path differs from HEAD: " + ff.refused.join(", ") + " (" + ff.note + ")", "hooks");
+if (ff.note === "pre-commit is not installed") halt("needs_human", fmtLabel + ": pre-commit is not installed; the plan doc cannot run the repo's hooks", "hooks");
+if (ff.fix_timeout || !ff.stable || ff.hook_failed)
+halt("needs_human", fmtLabel + ": the repo's hooks " + (ff.fix_timeout ? "ran out of time" : !ff.stable ? "still rewrite the plan after 3 runs" : "fail on the plan doc") + " (" + ff.runs + " run(s)): " + ff.hook_head, "hooks");
 const fmtOther = fmt.changed_paths.map((x) => normPath(String(x))).filter((x) => x !== planPath);
 if (fmtOther.length)
 halt("needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + fmtOther.join(", ") + " (never committed; clean the worktree)", "scope");
@@ -4776,40 +4927,30 @@ full = sealAt(writers);
 const c = chunked(refMessage(full));
 const msgSha = c.expected;
 const label = "infra:commit-plan" + sfx;
-const chunkDir = scratchOf(ctx.worktree) + "/plan-ref-" + safeName(state.nonce + sfx);
+const chunkDir = scratchOf(ctx.worktree) + "/chunks/plan-ref-" + safeName(state.nonce + sfx);
 const cpInputs = Object.assign({}, base, { task_id: full.task_id, plan_base: ctx.planBase, chunk_dir: chunkDir }, ctx.retire ? { retire: ctx.retire } : {});
-const writeChunks = async (round, ids) => {
-const groups = [];
-for (let i = 0; i < ids.length; i += CHUNKS_PER_WRITER) groups.push(ids.slice(i, i + CHUNKS_PER_WRITER));
-reserve(groups.length, "the plan ref chunk writers");
-const res = await parallel(groups.map((g, b) => () => softDispatch("infra:plan-chunks" + sfx + ":r" + round + "w" + b, planChunksPrompt({ chunk_dir: chunkDir }, c, g), { schema: INFRA_SCHEMA, phase: ctx.phaseName })));
-res.forEach((w, b) => {
-if (!w || w.status !== "ok") gate("infra:plan-chunks" + sfx + ":r" + round + "w" + b + " returned " + (w ? w.status + ": " + (w.reason || "no reason") : "no result") + "; the commit step checks every chunk file");
-});
-};
-await writeChunks(0, c.chunks.map((x, i) => i));
-let r = null;
-for (let round = 0; ; round++) {
-const lbl = label + (round ? ":rewrite-" + round : "");
+const pfx = "infra:plan-chunks" + sfx;
+await writeChunksParallel(pfx, chunkDir, c, c.chunks.map((x, i) => i), ctx.phaseName, 0, "plan ref");
+const r = await chunkRounds(
+label, pfx, chunkDir, c, ctx.phaseName,
+async (lbl, round) => {
 await pathRecheck("commit-plan" + sfx + (round ? ":rewrite-" + round : ""), ctx.phaseName);
-r = await dispatch(lbl, commitPlanPrompt(cpInputs, c), { schema: INFRA_SCHEMA, phase: ctx.phaseName });
-const bad = r && Array.isArray(r.bad_chunks) && r.bad_chunks.length ? r.bad_chunks : null;
-if (!bad) break;
-if (r.status !== "failed")
-halt("failed", lbl + ": the relay has status " + r.status + " and bad_chunks " + JSON.stringify(bad) + " (status ok and bad_chunks cannot both be true); no rewrite runs, and the plan ref may already be written", "commit");
-if (!bad.every((i) => Number.isInteger(i) && i >= 0 && i < c.chunks.length))
-halt("failed", lbl + ": the relayed bad_chunks " + JSON.stringify(bad) + " are not chunk numbers of this ref (0.." + (c.chunks.length - 1) + ")", "commit");
-const ids = bad.filter((i, k) => bad.indexOf(i) === k).sort((a, b) => a - b);
-if (round >= MAX_CHUNK_RETRIES) halt("failed", lbl + ": chunk(s) " + ids.join(", ") + " still do not match their sha256 after " + MAX_CHUNK_RETRIES + " rewrite rounds; nothing was sealed", "commit");
-gate(lbl + ": chunk(s) " + ids.join(", ") + " do not match their sha256; each goes to a fresh writer (round " + (round + 1) + ")");
-await writeChunks(round + 1, ids);
-}
+return dispatch(lbl, commitPlanPrompt(cpInputs, c), { schema: INFRA_SCHEMA, phase: ctx.phaseName });
+},
+"plan ref", "nothing was sealed", "commit",
+);
 if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
 requireProgram(r, "plan_ref_write", label, "failed", "commit");
 if (typeof r.plan_commit !== "string" || !SHA_RE.test(r.plan_commit) || r.plan_base !== ctx.planBase || typeof r.tag_sha !== "string" || !SHA_RE.test(r.tag_sha) || !Array.isArray(r.dirty) || !relayDigestOk(r, progKeys("plan_ref_write"), "plan_ref_write"))
 halt("failed", label + ": the relayed plan commit, base and tag object do not match the program's digest (" + JSON.stringify(r.plan_commit === undefined ? null : r.plan_commit) + ")", "commit");
 if (r.dirty.length) halt("needs_human", label + ": the worktree is not clean after the plan doc left it: " + r.dirty.join(", "), "scope");
 if (r.reused === true) gate("reused plan commit " + r.plan_commit + ": the plan doc is unchanged; no new commit");
+if (ctx.retire) {
+const rt = r.retire;
+if (rt) requireProgram(rt, "parked", label, "failed", "commit");
+const rtOk = !!rt && typeof rt.moved === "boolean" && canonical(rt.args) === canonical([ctx.retire.dir, ctx.retire.used]) && relayDigestOk(rt, progKeys("parked:retire"), "parked");
+gate(rtOk ? "parked folder " + ctx.retire.dir + (rt.moved ? " moved to " + ctx.retire.used : " not moved (gone, or taken in " + ctx.retire.used + ")") : "warning: " + label + ": the parked retire relay is unusable; " + ctx.retire.dir + " may stay");
+}
 const tiny = { branch: full.branch, plan_commit: r.plan_commit, plan_ref: refName, ref_sha256: msgSha, repo: full.brief.repo };
 const v = await verifyPlanCommit(ctx, sfx, r, full, stagedSha, msgSha, tiny);
 if (ctx.onRefs) ctx.onRefs(v.plan_ref.refs);
@@ -5012,9 +5153,11 @@ else if (count[h.hook] > 1) out.push(h.id + ": hook id " + h.hook + " appears " 
 }
 return out;
 }
-function intentProblems(r) {
+function intentProblems(r, planDiff) {
 if (r.status !== "ok") return ["intent judge returned " + r.status + ": " + (r.reason || "no reason")];
 const out = [];
+const filed = r.deviations.map((d) => d && d.item).concat(Array.isArray(r.bookkept) ? r.bookkept : []);
+for (const x of planDiff || []) if (x !== "new plan" && filed.indexOf(x) < 0) out.push("plan_diff entry " + JSON.stringify(x) + " is neither a deviation nor bookkept");
 if (r.verdict !== "approve") out.push("intent verdict " + r.verdict + ": " + (r.reason || ""));
 for (const d of r.deviations) {
 const tag = JSON.stringify((d && d.item) || "?");
@@ -5092,7 +5235,7 @@ const fail = (failedCheck, reasons) => {
 gate("auto-confirm: " + failedCheck + " check failed: " + reasons.join("; "));
 return { ok: false, failedCheck, reasons, intent };
 };
-const g1 = intentProblems(r);
+const g1 = intentProblems(r, ctx.planDiff);
 for (const x of ctx.relaxed || []) if (!intent.deviations.some((d) => d && String(d.item).indexOf(x) >= 0 && d.verdict === "approve" && typeof d.allowed_by === "string" && d.allowed_by.trim() && d.fails_closed === true)) g1.push("relaxed re-plan item " + JSON.stringify(x) + " has no approved deviation");
 if (g1.length) return fail("intent", g1);
 gate("auto-confirm: intent approve (" + intent.deviations.length + " deviation(s), all allowed and fail-closed)");
@@ -5175,6 +5318,7 @@ const lp = legacySourceProblem(brief) || yaadgaarIdProblem(brief, it.tried);
 if (lp) halt("needs_human", "intake: " + lp);
 const names = namesFor(brief, raw);
 if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
+if (!names.text) names.slug = await branchSlug(brief.repo, names);
 const lay = layout(names, brief.repo);
 state.branch = lay.branch;
 state.ownRefs = ownRefPrefixes(names, lay);
@@ -5182,7 +5326,7 @@ if (brief.repo !== repo) gate("intake: work repo " + brief.repo + " differs from
 gate(
 "intake: " + brief.sources.map((x) => x.kind + ":" + x.ref).join(", ") + " -> branch " + lay.branch + ", worktree " + lay.mainWt,
 );
-const ws = await workspaceStep(brief.repo, lay);
+const ws = await workspaceStep(brief.repo, lay, { ffReused: true });
 if (ghNoPush(ws.remoteSlug)) gate("warning: " + noPushText(ws.remoteSlug) + " (the build stops at its start until one has)");
 await pushProbe(lay, ws);
 const planPolicy = await policyStep(ws.remoteHost, ws.remoteSlug, null, true);
@@ -5230,11 +5374,15 @@ const ls = state.lastPlanStop || { rounds: [], symbols: [] };
 const findings = {
 scratch: lay.scratch,
 run: state.nonce,
-chunk_dir: lay.scratch + "/park-chunks-" + safeName(state.nonce),
+chunk_dir: lay.scratch + "/chunks/park-chunks-" + safeName(state.nonce),
 c: chunked(JSON.stringify(stripHeldOut({ reason: e instanceof Stop ? e.reason : "stopped", rounds: ls.rounds, symbols: ls.symbols, plan_path: draft }))),
 };
 let pk = null;
 try {
+if (findings.c.chunks.length > CHUNKS_PER_WRITER) {
+findings.written = true;
+await writeChunksParallel("infra:park-chunks", findings.chunk_dir, findings.c, findings.c.chunks.map((x, i) => i), "Plan", 0, "park findings", true);
+}
 pk = await softDispatch("infra:park-plan", parkPlanPrompt({ worktree: lay.mainWt, plan_path: draft, scratch: lay.scratch, run: state.nonce }, findings), {
 schema: INFRA_SCHEMA,
 phase: "Plan",
@@ -5273,7 +5421,7 @@ priorRound: parked ? parked.priorRound : null,
 });
 blockers = confirm === "default" || ua ? defaultBlockers(p, input, raw) : [];
 if (parkedBad && (confirm === "default" || ua)) blockers.push(PARKED_UNREADABLE);
-decided = ua ? blockers.filter((b) => !/^plan touches IaC path/.test(b) && b !== PARKED_UNREADABLE && !(/^task id /.test(b) && !one)) : [];
+decided = ua ? blockers.filter((b) => !/^plan touches IaC path/.test(b) && !(/^task id /.test(b) && !one)) : [];
 if (ua) blockers = blockers.filter((b) => decided.indexOf(b) < 0);
 runGates = ua ? !blockers.length : auto ? !p.relaxed.length && !parkedBad : confirm === "default" && !blockers.length;
 pc = await commitPlanAndRef({
@@ -5304,14 +5452,14 @@ await parkOnStop(e);
 }
 const ls = ledgerSourceOf(brief, input.project);
 if (ua && confirm !== confirm0) autoDecide("confirm", "auto", "the Build confirmation (confirm " + confirm0 + (input.brief_marker ? "; the fleet-brief marker is treated as a ruling" : "") + ")");
-for (const b of decided) autoDecide("default-blocker", "decided", b + (/^re-plan relaxed/.test(b) ? "; the intent judge rules on it" : /^task id /.test(b) && ls ? "; ledger_source " + ls.ledger + " " + ls.ref : ""));
+for (const b of decided) autoDecide("default-blocker", "decided", b + (/^re-plan relaxed/.test(b) ? "; the intent judge rules on it" : b === PARKED_UNREADABLE ? ": " + parked.unreadable + "; plan-audit passed; the auto gates run" : /^task id /.test(b) && ls ? "; ledger_source " + ls.ledger + " " + ls.ref : ""));
 if (ua && blockers.length) {
 gate("unattended: asking Max (" + blockers.join("; ") + ")");
 return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, { ledger_source: ls, confirm_reason: blockers.join("; ") });
 }
 if (auto && !ua && p.relaxed.length)
 return autoFailResult({ failedCheck: "intent", reasons: ["re-plan relaxed: " + p.relaxed.join("; ")], intent: null }, p.planPath, pc.tiny);
-if (auto && parkedBad)
+if (auto && !ua && parkedBad)
 return autoFailResult({ failedCheck: "intent", reasons: [PARKED_UNREADABLE + ": " + parked.unreadable], intent: null }, p.planPath, pc.tiny);
 if (!runGates) {
 const extra = { ledger_source: ls };
@@ -5466,7 +5614,7 @@ return INFRA_STEP + "write the stats block into the fleet's own PR body; only th
 }
 const TESTS_START = "<!-- ccpm-fleet-tests -->";
 const TESTS_END = "<!-- /ccpm-fleet-tests -->";
-function testsBlock(suite, testCmd) {
+function testsBlock(suite, testCmd, warn) {
 const s = suite && typeof suite === "object" && !Array.isArray(suite) ? suite : null;
 const ok = (n) => Number.isInteger(n) && n >= 0;
 const errors = s ? (s.errors === undefined || s.errors === null ? 0 : s.errors) : null;
@@ -5474,7 +5622,7 @@ const counts = s && ok(s.passed) && ok(s.failed) && ok(errors) ? s.passed + " pa
 const toks = String((testCmd && testCmd.command) || "").split(" ").filter((t) => t && t !== PATHS_TOKEN);
 if (toks[toks.length - 1] === "--") toks.pop();
 const env = testCmd && testCmd.env && typeof testCmd.env === "object" ? Object.keys(testCmd.env).sort().map((k) => k + "=" + testCmd.env[k]) : [];
-return TESTS_START + "\n**Tests (measured by the fleet):** " + counts + "\nCommand: `" + env.concat(toks).join(" ") + "`\n" + TESTS_END;
+return TESTS_START + "\n**Tests (measured by the fleet):** " + counts + "\nCommand: `" + env.concat(toks).join(" ") + "`\n" + (warn ? warn + "\n" : "") + TESTS_END;
 }
 function testsHeaders(bc, unattended) {
 return JSON.stringify(((bc && bc.required_sections) || []).concat(unattended ? [UNATT_HEAD] : []));
@@ -5606,23 +5754,8 @@ halt(
 gate("auto-confirm: re-read " + src.kind + ":" + src.ref + " for current rulings");
 return fresh;
 }
-async function buildFromRef(input, date, tiny, lay, ws, opt) {
-state.mode = "build";
-const repo = cleanRepo(tiny.repo);
-phase("Verify");
-const refTask = PLAN_REF_NAME_RE.exec(tiny.plan_ref)[1];
-const changed = (why) => halt("needs_human", "plan ref missing or changed; re-run plan (" + tiny.plan_ref + " " + why + ")");
-const mem = opt.full && sha256Hex(refMessage(opt.full)) === tiny.ref_sha256 ? opt.full : null;
-const loadPrompt = (part) => loadRefPrompt(Object.assign({ main_worktree: lay.mainWt, task_id: refTask, plan_ref: tiny.plan_ref }, part === null ? { mode: "meta" } : { mode: "part", part }));
-const load = (label, part) => infra(label, loadPrompt(part), "Verify", JUDGE_AGENT);
-const entryOf = (r) => (Array.isArray(r.refs) ? r.refs.find((x) => x && x.name === tiny.plan_ref) : null);
+function partReader(o) {
 const joined = (r) => (r && Array.isArray(r.chunks) && r.chunks.length && r.chunks.every((c) => typeof c === "string") ? r.chunks.join("") : null);
-const checked = (r, label) => {
-requireProgram(r, "plan_ref", label);
-const ep = planRefMetaProblem(entryOf(r), tiny.plan_commit, tiny.ref_sha256);
-if (ep) changed(ep);
-return r;
-};
 const partOk = (r, k, count) => {
 const p = r && r.part;
 const j = joined(r);
@@ -5638,16 +5771,16 @@ const count = countOf(p0);
 if (count === null) return null;
 const parts = [p0];
 if (count > 1) {
-reserve(count - 1, "the plan ref parts");
+if (!o.softCap) reserve(count - 1, o.what);
 const ks = Array.from({ length: count - 1 }, (_, i) => i + 1);
-const rest = await parallel(ks.map((k) => () => softDispatch("infra:load-ref:p" + k + tag, loadPrompt(k), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Verify" })));
+const rest = await parallel(ks.map((k) => () => o.soft(o.prefix + ":p" + k + tag, k)));
 for (const k of ks) {
-const lbl = "infra:load-ref:p" + k + tag;
+const lbl = o.prefix + ":p" + k + tag;
 let r = rest[k - 1];
-if (r && r.status === "ok") checked(r, lbl);
+if (r && r.status === "ok") o.checked(r, lbl);
 if (!r || r.status !== "ok" || !partOk(r, k, count)) {
 gate(lbl + ": " + (r ? (r.status === "ok" ? "the copied chunks do not match the part's sha256, length or count" : "returned " + r.status) : "returned no result") + "; reading once more");
-r = checked(await load(lbl + ":retry", k), lbl + ":retry");
+r = o.checked(await o.load(lbl + ":retry", k), lbl + ":retry");
 }
 parts.push(r);
 }
@@ -5655,29 +5788,53 @@ parts.push(r);
 const js = parts.map(joined);
 return { count, content: js.every((x) => x !== null) ? js.join("") : null };
 };
+return { joined, partOk, countOf, readParts };
+}
+async function buildFromRef(input, date, tiny, lay, ws, opt) {
+state.mode = "build";
+const repo = cleanRepo(tiny.repo);
+phase("Verify");
+const refTask = PLAN_REF_NAME_RE.exec(tiny.plan_ref)[1];
+const changed = (why) => halt("needs_human", "plan ref missing or changed; re-run plan (" + tiny.plan_ref + " " + why + ")");
+const mem = opt.full && sha256Hex(refMessage(opt.full)) === tiny.ref_sha256 ? opt.full : null;
+const loadPrompt = (part) => loadRefPrompt(Object.assign({ main_worktree: lay.mainWt, task_id: refTask, plan_ref: tiny.plan_ref }, part === null ? { mode: "meta" } : { mode: "part", part }));
+const load = (label, part) => infra(label, loadPrompt(part), "Verify", JUDGE_AGENT);
+const entryOf = (r) => (Array.isArray(r.refs) ? r.refs.find((x) => x && x.name === tiny.plan_ref) : null);
+const checked = (r, label) => {
+requireProgram(r, "plan_ref", label);
+const ep = planRefMetaProblem(entryOf(r), tiny.plan_commit, tiny.ref_sha256);
+if (ep) changed(ep);
+return r;
+};
+const { partOk, countOf, readParts } = partReader({
+prefix: "infra:load-ref",
+what: "the plan ref parts",
+load,
+checked,
+soft: (lbl, k) => softDispatch(lbl, loadPrompt(k), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: "Verify" }),
+});
 let content = null;
 if (mem) {
 checked(await load("infra:load-ref", null), "infra:load-ref");
 content = refMessage(mem);
 } else {
 let p0 = checked(await load("infra:load-ref", 0), "infra:load-ref");
-let reread = false;
-if (p0.part && typeof p0.part === "object" && !partOk(p0, 0)) {
-gate("infra:load-ref: the copied chunks do not match ref_sha256; reading once more");
+if (!partOk(p0, 0)) {
+gate("infra:load-ref: " + (countOf(p0) === null ? "part 0 gives no part count" : "the copied chunks do not match ref_sha256") + "; reading once more");
 p0 = checked(await load("infra:load-ref:retry", 0), "infra:load-ref:retry");
-reread = true;
 }
 if (countOf(p0) === null) changed("part 0 gives no part count from 1 to " + MAX_REF_PARTS);
 let got = await readParts(p0, "");
-if (!reread && (got.content === null || sha256Hex(got.content) !== tiny.ref_sha256)) {
+if (got.content === null || sha256Hex(got.content) !== tiny.ref_sha256) {
 gate("infra:load-ref: the joined parts do not match ref_sha256; reading part 0 once more for its part count");
-const q0 = checked(await load("infra:load-ref:retry", 0), "infra:load-ref:retry");
+const q0 = checked(await infra("infra:load-ref:retry", loadPrompt(0) + "\nThe parts of an earlier read did not join: run the command again and copy every value exactly, the part count included.", "Verify", JUDGE_AGENT), "infra:load-ref:retry");
 const n = countOf(q0);
 if (n !== null && n !== got.count && partOk(q0, 0)) got = await readParts(q0, ":c" + n);
 }
 content = got.content;
 }
-if (content === null || sha256Hex(content) !== tiny.ref_sha256) changed("message chunks do not match ref_sha256 " + tiny.ref_sha256);
+if (content === null || sha256Hex(content) !== tiny.ref_sha256)
+halt("failed", "load-ref: the relayed parts do not join to ref_sha256 " + tiny.ref_sha256 + " after the re-reads; the plan ref " + tiny.plan_ref + " is intact; re-run build with the same plan_ref");
 let loaded = null;
 try {
 loaded = JSON.parse(content);
@@ -5735,6 +5892,7 @@ if (lpb) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + lpb + "; re-ru
 const defaultBranch = ws.defaultBranch;
 const remoteSlug = ws.remoteSlug;
 const remoteUrl = typeof pf.remote_url === "string" ? pf.remote_url : null;
+const mergeAfter = typeof pf.merge_after === "string" && pf.merge_after.trim() ? pf.merge_after.trim() : null;
 const mainWt = lay.mainWt;
 const branch = lay.branch;
 const planBase = ref.plan_base;
@@ -5840,6 +5998,7 @@ resumeState = hr;
 } else if (v.head !== planBase)
 halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
 const policy = (state.policy = ref.policy ? stricterPolicy(await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy), ref.policy, resume ? "the run-state's" : "the current file") : await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
+const prDraft = () => mergeAfter !== null || !policy.caps.pr_ready;
 unattendedOn(policy, input);
 if (resume && Array.isArray(resume.auto_decisions) && !state.autoDecisions.length) state.autoDecisions = resume.auto_decisions.slice();
 const freezeRefName = "refs/fleet/" + names.taskId + "/freeze";
@@ -5857,14 +6016,13 @@ const hz = await hasher("hasher:resume-frozen", mainWt, hashedFiles, "Verify");
 const refTree = hz.hashes.git[FLEETREF + freezeRefName];
 if (hz.fingerprint.head !== planBase) mis("HEAD " + hz.fingerprint.head + " is not plan_base " + planBase);
 if (typeof refTree !== "string" || !refTree) mis("no freeze ref");
-if (hz.fingerprint.tree !== refTree) mis("the worktree tree " + hz.fingerprint.tree + " is not the freeze tree " + refTree + " (changed since the freeze)");
 if (hz.hashes.suspicious.length) mis("suspicious paths: " + hz.hashes.suspicious.join(", "));
-if (freezeDigestOf(tiny.ref_sha256, hz.fingerprint.tree, hz.hashes, true) === input.freeze_digest)
+if (freezeDigestOf(tiny.ref_sha256, refTree, hz.hashes, true) === input.freeze_digest)
 mis("the freeze was re-frozen after fix_tests; a frozen resume would restart its round and re-freeze counts");
-if (freezeDigestOf(tiny.ref_sha256, hz.fingerprint.tree, hz.hashes) !== input.freeze_digest)
-mis("freeze_digest does not match the plan ref, the freeze tree and the frozen maps");
+if (freezeDigestOf(tiny.ref_sha256, refTree, hz.hashes) !== input.freeze_digest)
+mis("freeze_digest does not match the plan ref, the freeze tree " + refTree + " and the frozen maps" + (hz.fingerprint.tree !== refTree ? " (the worktree tree " + hz.fingerprint.tree + " changed since the freeze)" : ""));
 frozenResume = hz;
-gate("frozen resume: worktree is the freeze tree " + refTree + " of " + freezeRefName + " and freeze_digest matches");
+gate("frozen resume: " + (hz.fingerprint.tree === refTree ? "worktree is the freeze tree " + refTree : "worktree tree " + hz.fingerprint.tree + " is dirty, every frozen map matches the freeze tree " + refTree + "; the coder continues from it") + " of " + freezeRefName + " and freeze_digest matches");
 }
 let intent = resume ? resume.intent || null : opt.intent;
 if (opt.rerunGates && !resume) {
@@ -5984,7 +6142,8 @@ halt("needs_human", "PR step: push access to " + remoteSlug + " still not known 
 if (!g || !g.push)
 halt("needs_human", "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)", "role");
 await fleetScan("infra:fleet-scan:" + label.replace(/^role:/, ""));
-const opener = async (lb, more) => requireOk(
+const opener = async (lb, more) => {
+const x = requireOk(
 "fleet-pr-opener",
 await callRole(
 "fleet-pr-opener",
@@ -6003,10 +6162,15 @@ auto_confirmed: autoConfirmed,
 ...(state.unattended ? { unattended_section: unattendedSection() } : {}),
 intent: intentForPr,
 review_notes: reviewNotes,
+draft: prDraft(),
+merge_after: mergeAfter,
 }, pr ? { pr_url: pr.pr_url, pr_number: pr.pr_number } : {}, extra || {}, more || {}),
 "PR",
 ),
 );
+if (x.pr_url == null || x.pr_number == null) halt("needs_human", "pr-opener returned ok with no PR (pr_url " + x.pr_url + ", pr_number " + x.pr_number + "); check the branch on the forge", "role");
+return x;
+};
 const why = (x) =>
 x.title !== subj.main ? "pr-opener set the PR title " + JSON.stringify(x.title) + ", not " + JSON.stringify(subj.main) + "; fix the title of " + x.pr_url
 : state.gatesNotRun && state.gatesNotRun.length && x.gates_not_run_stated !== true ? "pr-opener did not state gates_not_run in the PR body; fix the body of " + x.pr_url
@@ -6025,12 +6189,8 @@ if (w && r.title !== subj.main) halt("needs_human", w, "role");
 state.pr = r;
 gate("pr-opener: " + (r.created ? "created " : "updated ") + r.pr_url);
 if (w) halt("needs_human", w);
-if (r.pr_number == null) {
-gate("test block skipped: no PR");
-return r;
-}
 const tl = "infra:pr-tests" + label.replace("role:fleet-pr-opener", "");
-const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd);
+const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
 const targs = [g.gh_cmd, remoteSlug, String(r.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
 const supplied = suppliedTexts({ tldr: ref.tldr, criteria, notes: reviewNotes, intent: intentForPr, unattended: state.unattended ? unattendedSection() : null, gatesNotRun: state.gatesNotRun });
 const own = await prTestsStep(tl, targs, tb, r.pr_url, supplied);
@@ -6080,15 +6240,28 @@ iac_touched: iacTouched,
 ci: state.ci || null,
 pr_updated: state.prUpdated === true,
 update: state.update || null,
+scan_warn: typeof state.scanWarn === "string" ? state.scanWarn : null,
+warnings: Array.isArray(state.warnings) ? state.warnings : [],
 },
 wb ? { write_back: wb.write_back, ledger_adapter: wb.ledger_adapter, ledger_reason: wb.ledger_reason, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
 ),
 );
-const r = await infra(
-label,
-writeStatePrompt({ main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha, chunk_dir: scratchOf(mainWt) + "/state-" + safeName(state.nonce + "-" + label) }, JSON.stringify(st)),
-"PR",
-);
+const json = JSON.stringify(st);
+const si = { main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha, chunk_dir: scratchOf(mainWt) + "/chunks/state-" + safeName(state.nonce + "-" + label) };
+const c = chunked(json + "\n");
+let r;
+state.tailWriters = !!(pr && pr.pr_number != null);
+try {
+if (c.chunks.length <= CHUNKS_PER_WRITER) r = await infra(label, writeStatePrompt(si, json), "PR");
+else {
+const pfx = "infra:state-chunks:" + label.slice("infra:state:".length);
+await writeChunksParallel(pfx, si.chunk_dir, c, c.chunks.map((x, i) => i), "PR", 0, "run-state");
+r = await chunkRounds(label, pfx, si.chunk_dir, c, "PR", (lbl) => dispatch(lbl, writeStatePrompt(si, json, true), { schema: INFRA_SCHEMA, phase: "PR" }), "run-state", "no run-state was written", "resume");
+if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+}
+} finally {
+state.tailWriters = false;
+}
 requireProgram(r, "state_write", label);
 if (!relayDigestOk(r, progKeys("state_write"), "state_write")) halt("failed", label + ": the relayed head and state object do not match the program's digest");
 if (r.head !== approvedSha) halt("failed", label + ": the run-state landed on " + r.head + ", not " + approvedSha);
@@ -6108,7 +6281,7 @@ async function shipSteps(from) {
 const steps = ["push", "pr", "review", "writeback", "stats", "ready", "ci"];
 if (resume && state.testsResumed !== true && ["review", "writeback", "stats"].indexOf(from) >= 0 && pr && pr.pr_number != null) {
 state.testsResumed = true;
-const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd);
+const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
 const targs = [ghCmd("test block", "role"), remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
 const notes = state.review && Array.isArray(state.review.nits) ? state.review.nits : [];
 const supplied = suppliedTexts({ tldr: ref.tldr, criteria, notes, intent: intentForPr, unattended: state.unattended ? unattendedSection() : null, gatesNotRun: state.gatesNotRun });
@@ -6175,11 +6348,7 @@ pr = await openPr("role:fleet-pr-opener" + (prOpens > 1 ? ":p" + prOpens : ""), 
 if (upd) await statsStep();
 await saveState("pr_open", "infra:state:pr_open:p" + prOpens);
 } else if (step === "review") {
-if (!pr || !pr.pr_url || pr.pr_number == null) {
-state.gatesNotRun = (state.gatesNotRun || []).concat([{ gate: "review", reason: "no PR to review (pr-opener returned no pr_url/pr_number)" }]);
-gate("review skipped: no PR");
-continue;
-}
+if (!pr || !pr.pr_url || pr.pr_number == null) halt("needs_human", "review: no PR to review (pr-opener returned no pr_url/pr_number)", "review");
 reviews++;
 if (upd) upd.reviews++;
 const rv = await reviewStep(reviews, {
@@ -6189,24 +6358,27 @@ priorFindings: state.review && Array.isArray(state.review.blocking) ? state.revi
 });
 state.review = { verdict: rv.verdict, blocking: rv.blocking, nits: rv.nits, rounds: reviews, sweep: rv.sweep, model: rv.model };
 if (rv.blocking.length) {
-if (upd || (state.update && state.update.head === approvedSha)) {
+const bodyF = rv.blocking.filter((f) => f.category === "pr_body_claim");
+const codeF = rv.blocking.filter((f) => f.category !== "pr_body_claim");
+const inUpd = upd || (state.update && state.update.head === approvedSha);
+if (bodyF.length && (state.bodyFixes || 0) >= MAX_BODY_FIXES)
+halt("needs_human", "review v" + reviews + ": PR body claim still flagged after one body update: " + bodyF.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "), "review");
+if (codeF.length && inUpd) {
 const no = upd ? await updRefusal() : "the update record is from an earlier run";
 if (no)
 halt("needs_human", "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id || "-")).join(", ") + " (" + rv.blocking.length + " blocking, " + rv.nits.length + (rv.nits.length === 1 ? " nit" : " nits") + "); findings are in the run result; no coder round: " + no + "; re-plan on the new base or fix by hand", "review");
 upd.pr = rv.changed;
-gate("review u" + upd.reviews + ": changes_requested (" + rv.blocking.length + " blocking); R1-R5 pass -> code rounds on the update merge " + upd.head + " (within the code-round cap)");
-return { gate: "review", update: true, findings: rv.blocking.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
+if (bodyF.length) state.bodyPending = bodyF;
+gate("review u" + upd.reviews + ": changes_requested (" + codeF.length + " blocking); R1-R5 pass -> code rounds on the update merge " + upd.head + " (within the code-round cap)");
+return { gate: "review", update: true, findings: codeF.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
 }
-const bodyF = rv.blocking.filter((f) => f.category === "pr_body_claim");
-const codeF = rv.blocking.filter((f) => f.category !== "pr_body_claim");
-if (bodyF.length && (state.bodyFixes || 0) >= MAX_BODY_FIXES)
-halt("needs_human", "review v" + reviews + ": PR body claim still flagged after one body update: " + bodyF.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "), "review");
 if (!codeF.length) {
 state.bodyFixes = (state.bodyFixes || 0) + 1;
 state.bodyReviews = (state.bodyReviews || 0) + 1;
 state.bodyFixed = (state.bodyFixed || []).concat(bodyF);
-reviewNotes = rv.nits;
+if (!inUpd) reviewNotes = rv.nits;
 pr = await openPr("role:fleet-pr-opener:body-v" + reviews, { body_findings: state.bodyFixed });
+if (upd) await statsStep();
 gate("review v" + reviews + ": changes_requested (" + bodyF.length + " pr_body_claim) -> pr-opener body update");
 i--;
 continue;
@@ -6300,7 +6472,7 @@ gate(note + ": " + pr.pr_url);
 return null;
 };
 if (!policy.caps.ci_watch) return done("CI watch off (policy)");
-if (!state.prReady && !state.keptDraft) return done("CI not run on draft");
+if (!state.prReady && !(o.orchestrator || iac)) return done("CI not run on draft");
 let head = approvedSha;
 let reran = false;
 for (;;) {
@@ -6448,7 +6620,7 @@ const at = (k) => normPath(String(k).slice(0, String(k).lastIndexOf(":")));
 const sealedPaths = {};
 for (const x of syms) sealedPaths[x.symbol] = (x.occurrences || []).map((o) => at(occurrenceKey(o.at) || o.at));
 const g = await callerGrep("infra:callers:u1", syms.map((x) => x.symbol), mainWt, ref.plan_path, "Review", sealedPaths, "path");
-if (g.capped.length) return "the occurrences of " + g.capped.join(", ") + " cannot be listed at the update merge (more than " + MAX_SYMBOL_HITS + " occurrences)";
+if (g.capped.length) return "the occurrences of " + g.capped.join(", ") + " cannot be listed at the update merge (more than " + MAX_SYMBOL_HITS + " call-shaped occurrences)";
 const unread = Object.keys(g.unread).sort(codePointCompare);
 if (unread.length) return "the occurrences of " + unread.join(", ") + " at the update merge differ from the sealed map and are over the caller read budget";
 const occ = [];
@@ -6492,7 +6664,7 @@ await statsStep("final");
 let readyRuns = 0;
 let orch = null;
 const orchLabels = [];
-async function orchScan(head, tag) {
+async function orchScan(head, tag, again) {
 const oa = [mainWt, ghCmd("orchestrator scan", "ci"), remoteSlug, String(pr.pr_number), head, defaultBranch];
 const ob = "infra:orch-scan" + (pushes > 1 ? ":p" + pushes : "") + (tag ? ":" + tag : "");
 let ol = ob;
@@ -6502,15 +6674,29 @@ const o = await infra(ol, orchScanPrompt({ args: oa }), "PR", JUDGE_AGENT, "orch
 requireProgram(o, "orch_scan", ol, "needs_human", "ci");
 if (!relayDigestOk(o, progKeys("orch_scan"), "orch_scan") || canonical(o.args) !== canonical(oa)) halt("needs_human", ol + ": the relayed result does not match the program's digest or arguments", "ci");
 gate(ol + ": " + (o.reasons.length ? o.reasons.join("; ") : "no orchestrator, IaC or hook-surface sign") + (o.error ? " (error: " + o.error + ")" : ""));
+if (o.error !== null && !again) return orchScan(head, (tag ? tag + ":" : "") + "retry", true);
+const warns = (state.warnings = state.warnings || []);
+if (o.error !== null && !warns.some((x) => x.gate === "orch_scan" && x.error === o.error)) warns.push({ gate: "orch_scan", error: o.error });
 return (orch = o);
 }
 async function readyStep() {
 if (!pr || pr.pr_number == null) return gate("ready skipped: no PR");
-if (iacTouched) halt("needs_human", "IaC PR: Max marks it ready (" + pr.pr_url + ")", "iac");
+if (iacTouched) halt("needs_human", "IaC PR: needs Max; the fleet watches no CI and merges nothing (" + pr.pr_url + ")", "iac");
 const g = ghCmd("ready", "ci");
 const o = await orchScan(approvedSha);
-state.keptDraft = o.orchestrator || o.iac_repo || o.apply_on_merge || o.error !== null;
-if (state.keptDraft) return gate("orchestrator or IaC sign: " + pr.pr_url + " stays a draft for Max");
+if (o.error !== null) {
+state.scanWarn = "Orchestrator/IaC scan error: " + o.error + ". Next step: re-run the build with the same plan_ref (the scan runs again), or check the PR by hand before any merge.";
+const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
+const targs = [g, remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
+await prTestsStep("infra:pr-tests:scan-warning", targs, tb, pr.pr_url, []);
+gate("warning: orchestrator/IaC scan error after one retry (" + o.error + "): no merge, no CI rerun; named in the PR body");
+} else if (typeof state.scanWarn === "string") {
+state.scanWarn = null;
+const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, null);
+await prTestsStep("infra:pr-tests:scan-clear", [g, remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)], tb, pr.pr_url, []);
+gate("orchestrator/IaC scan clean: the scan warning is out of the PR body");
+}
+if (mergeAfter !== null) return gate("merge_after: " + mergeAfter + ": " + pr.pr_url + " stays a draft");
 if (!policy.caps.pr_ready) return gate("pr_ready false (policy): " + pr.pr_url + " stays a draft");
 const label = "infra:pr-ready" + (++readyRuns > 1 ? ":p" + readyRuns : "");
 const r = await prState(label, ["ready", g, remoteSlug, String(pr.pr_number), approvedSha], "mark the fleet's own PR ready for review", "ci");
@@ -6547,7 +6733,7 @@ gate(label + ": stats block " + (r.replaced ? "replaced" : "added") + " in " + p
 function finishOk(resumedAt) {
 history.agents += state.agents - opt.agentsBase;
 gate("cumulative: run " + history.runs + ", re-plans " + history.replans + ", agents " + history.agents);
-const out = finish("ok", resumedAt === "done" ? "resumed: the run had already finished; recorded result" : (state.prReady ? "PR ready for review" : "draft PR ready for review") + (state.ciNote ? "; " + state.ciNote : ""));
+const out = finish("ok", resumedAt === "done" ? "resumed: the run had already finished; recorded result" : (state.prReady ? "PR ready for review" : mergeAfter !== null ? "draft PR (merge after: " + mergeAfter + ")" : "draft PR (policy pr_ready false)") + (state.ciNote ? "; " + state.ciNote : ""));
 out.created = pr ? pr.created : null;
 out.template_used = pr ? pr.template_used || null : null;
 out.cumulative = history;
@@ -6571,6 +6757,8 @@ if (resume.rounds && typeof resume.rounds === "object") state.rounds = resume.ro
 state.testsWritten = resume.tests_written || 0;
 iacTouched = resume.iac_touched === true;
 if (resume.ci && typeof resume.ci === "object") state.ci = resume.ci;
+if (typeof resume.scan_warn === "string") state.scanWarn = resume.scan_warn;
+if (Array.isArray(resume.warnings)) state.warnings = resume.warnings.filter((x) => x && typeof x === "object" && !Array.isArray(x) && typeof x.gate === "string");
 state.prUpdated = resume.pr_updated === true;
 const ru = resume.update;
 if (state.prUpdated) {
@@ -6941,7 +7129,7 @@ gate("resuming at the coder from the PR (" + resumedAt + "): freeze tree " + fre
 freezes = 1;
 frozen = frozenResume.hashes;
 freezeRef = frozenResume.fingerprint.head;
-freezeTree = frozenResume.fingerprint.tree;
+freezeTree = frozenResume.hashes.git[FLEETREF + freezeRefName];
 codeBaseRef = freezeRef;
 last = frozenResume;
 setFreezeDigest();

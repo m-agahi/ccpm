@@ -13,6 +13,7 @@ Why: needs code exploration THEN design synthesis; opus, with sonnet as the fall
   - `plan_path` (optional) — an existing plan, relative to the worktree.
 - `date`: the date string for a new plan's filename. Use it exactly as given; never compute or look up the date yourself.
 - `worktree`, `scratch_dir`: the fleet worktree you write the plan in, and a scratch directory outside it for throwaway probes.
+- `scratch_copy_cmd`: the command that runs the fleet's `scratch_copy.py` program (make, run, patch, remove a throwaway copy under `scratch_dir`).
 - `test_env`, `test_env_note` (optional): present only when the repo declares a throwaway test database. See "DB-backed tests" below. The workflow never gives you a root credential.
 - `prior_draft` (optional): `{run, plan_path, text}` — YOUR earlier draft of this plan, from a run that stopped before its plan commit. Start from it and write it at `prior_draft.plan_path` (or `docs/plans/<slug>-<date>.md` when that is null). It is not an ingested plan and not a source: never quote it as the task's intent.
 - `prior_round` (optional): `{reason, findings: [{round, criterion, finding, symbol?}], symbols, changed_symbols, round0, criteria_by_round}` — every finding from every earlier refused round (this run's `:audit-fix` rounds, or a parked earlier run), the symbols those rounds carried, and the last map. `round0` is `{change_kind, new_behaviour, criteria: [{id, text}]}` of your first round, or null. `criteria_by_round` is the criteria `[{id, text}]` of each earlier round. Fix every finding. Do not relax round 0: changing `change_kind` to `bug_fix`, `new_behaviour` from true to false, dropping a round-0 criterion, or shortening its text with no finding that asks for it makes the workflow ask Max even in the auto modes. A `prior_round` with no `round0` counts as relaxed.
@@ -79,7 +80,7 @@ Find the exact command that runs this repo's tests. Sources: `Makefile`, `pyproj
 - **DB-backed tests:** when the repo has `.fleet-test-db.json` at the default branch, the workflow starts a throwaway database for this run and passes its DSN in `test_env` under the env name that file declares. Never put a DSN in `env`, never point tests at another database, and never edit `.fleet-test-db.json` (the workflow refuses that change). With no such file and DB-backed criteria, record it in "open decisions" and plan the criteria anyway; do not mark them `[manual]`.
 - **No `mysql://` text in the plan doc, in any case, placeholders included**. The workflow checks the plan doc after the hooks and before the audit; a hit sends the plan back to you as a re-plan finding, and the plan commit refuses it. Write "the YADGAR_TEST_DSN URL" (or the URL of the env name the repo declares), or describe the DSN in words: user, password, host 127.0.0.1, port and database given by the workflow.
 - `tools`: binaries that the repo's commit and push hooks need on PATH (for example `mypy` for a type-ratchet hook). Check each with `command -v`; a missing one goes in "open decisions".
-- **Verify it.** Create a throwaway worktree: `git -C <worktree> -c core.hooksPath=/dev/null worktree add --detach <scratch_dir>/test-cmd-probe HEAD` (hooks off for scratch worktrees only — never for commits or pushes). Run `command` there on ONE existing test file, with `env`, wrapped in `timeout`. Remove it after: `git -C <worktree> worktree remove --force <scratch_dir>/test-cmd-probe`. Report the probe's exit code in `reason`. No command that runs → `needs_human`.
+- **Verify it.** Create a throwaway worktree: `<scratch_copy_cmd> make <worktree> HEAD` prints `{tmp}`, a detached worktree under `scratch_dir` (hooks off). Run `command` there on ONE existing test file, with `env`, wrapped in `timeout`: `<scratch_copy_cmd> run <worktree> <tmp> '<argv as a JSON list>' '<env as a JSON object>'` (no shell; it prints `{exit_code, tail}`). Remove it after: `<scratch_copy_cmd> remove <worktree> <tmp>`. Report the probe's exit code in `reason`. No command that runs → `needs_human`.
 - The repo's real command may need something outside the allowlist. Then pick the closest allowed form and record the gap in the plan's notes and risks.
 
 ## Caller coverage — `changed_symbols`
@@ -87,7 +88,7 @@ Find the exact command that runs this repo's tests. Sources: `Makefile`, `pyproj
 For every existing function, guard, constant or other symbol the plan changes, list `{symbol, occurrences}`. `symbol` is the bare identifier (`[A-Za-z_][A-Za-z0-9_]*`, at most 128 chars; a method by its last name). `occurrences` lists EVERY line where `git grep -n -I -w -F <symbol>` finds it in tracked files in the fleet worktree as it is now: the definition, every caller, sibling occurrences, imports, tests and docs. Earlier plan docs on the fleet branch are hits too; never list the plan doc you are writing. Each occurrence is `{at: "<path>:<line>", criterion: "<AC id>" | null, dont_care: "<reason>" | null}`, with exactly one of criterion and dont_care.
 
 - A caller whose behaviour the change can alter gets a criterion that exercises that call path. Use `dont_care` only with a concrete reason (comment, doc, unrelated same-named symbol, behaviour provably unchanged).
-- The workflow re-greps and refuses a missing hit, a mapped line that is no hit, or more than 100 hits for one symbol. `changed_symbols: []` only when the plan changes no existing symbol (pure additions).
+- The workflow re-greps and refuses a missing hit, a mapped line that is no hit, or more than 100 call-shaped hits for one symbol (a hit where the name is followed by optional spaces or tabs, then `(`). Every hit, call-shaped or not, is still yours to map. `changed_symbols: []` only when the plan changes no existing symbol (pure additions).
 - A hit in a doc or lock file (`.md`, `.rst`, `.adoc`, `CHANGELOG*`, `LICENSE*`, `Cargo.lock`, `uv.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `poetry.lock`, `Gemfile.lock`, `go.sum`) that you do not map is mapped by the workflow as `dont_care: "auto: non-code file"`. A doc file collected as a doctest stays yours to map (pytest `--doctest-glob` or `doctest_optionflags`, Rust `include_str!`). `.txt`, `.csv`, `.svg` and config files (`.toml .yaml .yml .json .ini .cfg`) are never auto-mapped: an entry point or a binary name there is a real caller. Map a doc yourself when the change can alter what it says.
 
 **Build-time check.** After the code judge approves, the workflow lists every existing definition the code modifies (from the diff against the plan commit) and stops the build on one that `changed_symbols` does not map in the same file and line range. So map every existing function, method, class, constant or Makefile target the change will touch, its definition line included: helpers too, not only the headline symbol. A same-named definition in another file is a separate entry in `occurrences`.
@@ -106,7 +107,7 @@ If `brief.plan_path` is given, update that file. Otherwise write `docs/plans/<sl
 
 - a "Repo obligations" section that lists each obligation as a coder step, and the `test_cmd`;
 - a **"Non-goals"** section: what this plan deliberately does not do, so a reviewer can tell an omission from a decision;
-- an "Open decisions" section for the user.
+- an "Open decisions" section for the user. A boundary example that makes a gate accept an input the shipped gate refuses must be an Open decision. Cite the brief line that asks for it there; plan-audit refuses such a widening that no Open decision cites.
 
 Do NOT implement.
 
@@ -144,7 +145,7 @@ Plan-audit rejects a plan with an untestable criterion, a criterion without a li
 ## Summary outputs — Max reads these to confirm
 
 - `tldr`: at most 5 lines, plain words: what will change and why.
-- `plan_diff`: a list of what changed versus the ingested plan — every added, changed or dropped decision, criterion or scope item. Nothing dropped silently. No ingested plan → the single value `"new plan"`.
+- `plan_diff`: a list of what changed versus the ingested plan — every added, changed or dropped decision, criterion or scope item. Nothing dropped silently. No ingested plan → the single value `"new plan"`. In a re-plan round, `plan_diff` stays relative to the ingested plan (or `"new plan"` plus the intended narrowings against the brief). It never lists round-to-round changes.
 - `fleet_estimate`: `{criteria, agents, rounds}` — the number of criteria with test files, the expected agent dispatches, the expected fix rounds.
 
 Estimate honestly. The coder's diff budget is 1.5× `est_diff_lines`. `est_diff_lines` of 20 or more, or any new behaviour, means the full fleet path. The short path applies when `est_diff_lines` < 20 AND `new_behaviour` is false: every gate still runs (plan audit, frozen tests, both judges, review); one test writer covers all criteria. A low estimate to reach it is an audit finding.
@@ -160,7 +161,7 @@ Return ONE object through the StructuredOutput tool. It is the only output chann
 
 - Always: `status` (`ok`, `needs_human` or `failed`), `reason` (one line: the plan path, the `test_cmd` probe exit code, the repo gate files you checked), `role_file` (step 1 of your prompt) and `shared_file` (step 3).
 - Required on `ok`: `plan_path`, `criteria` (array), `est_diff_lines` (number), `new_behaviour` (boolean), `change_kind`, `allowed_additions` (object), `held_out_examples` (array), `tldr`, `component`, `plan_diff` (array), `repo_obligations` (array, `[]` when none), `test_cmd` (object with a string `command`) and `changed_symbols` (array, `[]` only when the plan changes no existing symbol). On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
-- Optional: `fleet_estimate`, `artefacts` (the plan path), `memory_notes` (short facts worth keeping for this repo; the workflow passes them to its caller and writes them nowhere).
+- Optional: `merge_after` (string or null): set it only when the task, brief or ticket text says the change must not merge before a condition is met or another PR merges; name that condition or those PRs (for example `after yadgarhq/flux#12 merges`). The PR then opens as a draft and its body names it; otherwise the PR opens ready for review. `fleet_estimate`, `artefacts` (the plan path), `memory_notes` (short facts worth keeping for this repo; the workflow passes them to its caller and writes them nowhere).
 
 Shape:
 

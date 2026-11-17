@@ -375,7 +375,9 @@ test("5.0.4 2013: the hooks that run in the real worktree write no bytecode (for
   assert.match(p, new RegExp("`env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 " + buildAssignsRe("commit-r1") + " git "));
   assert.ok(!/PYTEST_ADDOPTS/.test(p), "the repo's own PYTEST_ADDOPTS is left alone");
   const plan = await runOne(happy(), ARGS);
-  assert.match(call(plan, "infra:format-plan").prompt, /`cd <worktree> && PYTHONDONTWRITEBYTECODE=1 pre-commit run --files <plan_path>`/);
+  // 7.3.0 (#9): format-plan runs format_files.py in plan mode; its fixer runs set PYTHONDONTWRITEBYTECODE=1
+  assert.match(call(plan, "infra:format-plan").prompt, /format_files\.py' '[^']*' '\{"mode":"plan"/);
+  assert.match(readFileSync(join(SCRIPTS_SRC, "format_files.py"), "utf8"), /env = dict\(os\.environ, PYTHONDONTWRITEBYTECODE='1'\)/);
 });
 
 test("5.0.4 2013: the workflow stays at most 480000 bytes", () => {

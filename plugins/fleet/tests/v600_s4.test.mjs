@@ -520,6 +520,8 @@ test("review S4: the orchestrator scan runs again on the head right before the m
 test("review M7: a scan error alone (flags false) still counts as an IaC sign: no merge", async () => {
   const s = personal();
   s["infra:orch-scan"] = (p) => ({ status: "ok", reason: "s", orchestrator: false, iac_repo: false, apply_on_merge: false, hook_surface_pr: false, reasons: [], error: "gh pr view: HTTP 502", args: inputsOf(p).args });
+  // 7.3.0 (#32): the error stays on the one retry
+  s["infra:orch-scan:retry"] = s["infra:orch-scan"];
   s["infra:pr-ready"] = (p) => {
     const a = inputsOf(p).args;
     return { status: "ok", reason: "ready", mode: "ready", was_draft: true, is_draft: false, head: a[4], state: "OPEN", error: null, args: a };

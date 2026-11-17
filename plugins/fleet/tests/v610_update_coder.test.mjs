@@ -182,7 +182,7 @@ test("6.1.0 T9 (R5): a moved file with a sealed occurrence, or with an occurrenc
   await refused(withSyms(upd({}, ["src/x.py", "src/y.py"]), callersOut({ guard_verdict: ["src/a.py:10"] })), /the base change touches files with occurrences of the changed symbols \(src\/y\.py\)/);
   // a caller the base added
   await refused(withSyms(upd({}, ["src/x.py", "src/z.py"]), callersOut({ guard_verdict: ["src/a.py:10", "src/y.py:5", "src/z.py:3"] })), /occurrences of the changed symbols \(src\/z\.py\)/);
-  await refused(withSyms(upd({}, ["src/x.py", "src/z.py"]), callersOut({ guard_verdict: [] }, ["guard_verdict"])), /more than \d+ occurrences/);
+  await refused(withSyms(upd({}, ["src/x.py", "src/z.py"]), callersOut({ guard_verdict: [] }, ["guard_verdict"])), /more than \d+ call-shaped occurrences/);
   // a caller the base added in the overlap file
   const o = await refused(withSyms(upd({}, ["src/x.py"]), callersOut({ guard_verdict: ["src/a.py:10", "src/x.py:4", "src/y.py:5"] })), /occurrences of the changed symbols \(src\/x\.py\)/);
   assert.equal(inputsOf(call(o, "infra:callers:u1").prompt).symbols[0], "guard_verdict");
@@ -684,7 +684,8 @@ test("6.1.0 review 4: treeCmd runs no hook; a post-index-change hook under a cus
 
 test("6.1.0 review 4: the re-plan reset prompt and the code judge's scratch read-tree run git with hooks off", async () => {
   const jr = readFileSync(join(SCRIPTS_SRC, "..", "roles", "fleet-code-judge.md"), "utf8");
-  assert.match(jr, /git -C <scratch>\/<name> -c core\.hooksPath=\/dev\/null read-tree -u --reset <code_tree>/);
+  // 7.3.0 (#54): the scratch worktree comes from scratch_copy.py (<tmp>)
+  assert.match(jr, /git -C <tmp> -c core\.hooksPath=\/dev\/null read-tree -u --reset <code_tree>/);
   const at = SOURCE.indexOf("function replanResetPrompt(");
   const body = SOURCE.slice(at, SOURCE.indexOf("\n}\n", at));
   assert.match(body, /git -C <main_worktree> -c core\.hooksPath=\/dev\/null branch <superseded_branch> <expected_head>/);
