@@ -341,6 +341,30 @@ fixed before the PR.
   steps stop.
 - A-m3: `format_files.py` `config_like` compares names lower-cased and covers `jest.setup.*`,
   `setupTests.*`, `vitest.workspace.*` and any path under `__mocks__/`.
+- B-M1 deviation: the brief's empty `npm:` target for a flag-first `npm run -w X test` is not
+  needed. The test_cmd shape check refuses that form before the guard, so the guard reads
+  `pkg:scripts.<name>` only.
+- B-M3: the plan sweep runs only for a planned file or criterion test file on a gate path, or
+  `touches_gate`; a caller occurrence alone (a changed symbol used in a gate file) no longer
+  triggers it. A sweep that did not finish (not `ok`, no units) and a unit not measured are gate
+  warnings (the post-PR sweep decides), not plan stops; a weakening verdict still stops the plan.
+  The role's plan mode: a planned gate with no shipped side gives no unit (`not_applicable`,
+  `units: []` when none is left).
+- B-M4: `UV_CACHE_DIR` is one dir per run, `<scratch>/uv-cache/<nonce>`, outside `build/` (a build
+  reset deletes `build/`, never this dir). `UV_PROJECT_ENVIRONMENT` stays per role. uv's cache is
+  content-addressed and a role cannot plant a module through it the way it could through a venv.
+- B-m1: the push-access probe prompt asks for a 180000 ms Bash timeout (`RUN_180S`); its git runs
+  up to 120 s.
+- B-m3: the push slug check uses `PUSH_SLUG_RE`, the same pattern as `push.py` `SLUG` (a test
+  compares the two sources).
+- B-m5: `OPEN_PR_SHIP_AGENTS` is 14, counted from the code: commit 1, push 3 (fleet scan, tf gate,
+  push), PR update 2 (fleet scan, pr-opener), the review's own reserve `REVIEW_AGENTS` (7), margin 1. Build
+  resets, path checks, the PR tail and the run-state writers after the PR is open sit outside the
+  cap. A test counts the capped agents of a resumed Q4 run (11) against it.
+- B-m7: a fleet-brief marker under confirm `default` or `auto` (not unattended) makes the run ask
+  (`confirm ask`, with a gate line) in place of a needs_human stop.
+- B-m9: the plan doc says 44 programs (`push.py` in, `push_classify.py` and `push_probe.py` out).
+- Review fixes dist: 464,991 bytes (+1,028 over car 6).
 
 ### Tests changed on purpose (review fixes)
 
@@ -363,6 +387,16 @@ fixed before the PR.
 - `v503_dsn_precheck` backstop: the `plan_files` sha pin moves (A-m2 flag only).
 - `v740_npm_walkup` J1: the plan targets are `[npm:<name>, pkg:scripts.<name>]`; a tracked script
   is the `pkg:scripts.test` entry (B-M1).
+- New: `v740_review_b` (B-M3, B-M4, B-m1, B-m3, B-m7); the B-m5 count test in
+  `v740_test_conflict`.
+- `v506_build_env` table test: `UV_CACHE_DIR` is the one value outside the role's dir (B-M4).
+  `build_task_run` ARRAY_SITES and `v403_schema_types` READS map the plan sweep's `sw.units`
+  (B-M3).
+- `v740_plan_sweep` Z4: an unmeasured unit is a warning and the plan goes on (B-M3).
+- `v740_uv_env` U1: `UV_CACHE_DIR` is `<scratch>/uv-cache/<nonce>`; harness `BUILD_ROWS` gives it a
+  `null` sub-dir (B-M4).
+- `v740_brief_marker` M1, M2 (body_slug): the marked brief asks (`awaiting_confirmation`) in place
+  of `needs_human` (B-m7).
 
 ### Tests changed on purpose (car 1)
 

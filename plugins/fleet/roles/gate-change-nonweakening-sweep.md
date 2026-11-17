@@ -27,6 +27,7 @@ With `mode: "plan"` the fleet runs you on an approved plan, before it is sealed 
 - Read the planned gate behaviour from the plan doc at `plan_path` and from `criteria`.
 - Your units are the rows of a shipped-versus-planned table: each criterion example the planned gate must accept or refuse, plus 2-3 known-bad inputs the shipped gate exists to refuse. Measure `shipped_refuses` by running the shipped gate on each row in the scratch copy; `new_refuses` is what the plan says the planned gate does with that row.
 - A row the shipped gate refuses and the plan accepts is a LOOSENED unit (`weakening`). One exception: an Open decision of the plan cites the brief line that asks for that widening. Leave such a row out of `units` and report it as a `nit` finding that names the Open decision.
+- A planned gate with no shipped side (the plan adds a new gate; nothing at `base_ref` runs it) gives no unit: there is nothing it could loosen. When no unit is left, return verdict `not_applicable` with `units: []`.
 - `units`, `findings` and the verdicts are as below. Every other rule here applies.
 
 ## Rules

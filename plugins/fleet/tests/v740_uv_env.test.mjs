@@ -1,9 +1,9 @@
 // fleet 7.4.0 car 6 (#73): uv projects stopped at the ownership gate in test round 1: `uv run`
 // creates or updates <project>/.venv (and an editable install writes its .pth files there), and
 // the fleet build env did not send it elsewhere. The build env every role command gets now holds
-// UV_PROJECT_ENVIRONMENT (a per-role dir under <scratch>/build) and UV_CACHE_DIR (also per role,
-// under <scratch>/build: the 5.0.6 rule that no role reads what another role left there holds;
-// the cost is a cold uv cache in every role), two more BUILD_ENV_ROWS rows like TURBO_CACHE_DIR.
+// UV_PROJECT_ENVIRONMENT (a per-role dir under <scratch>/build) and UV_CACHE_DIR (review B-M4: one
+// per run, <scratch>/uv-cache/<nonce>, never reset: uv's cache is content-addressed, a per-role
+// cache made every role download again), two more BUILD_ENV_ROWS rows like TURBO_CACHE_DIR.
 // - U1: a uv test_cmd run gives every role env both vars, in test_env and in test_env_prefix.
 // - U2: with uv installed, a real uv project (no dependencies, offline) run with the emitted env
 //   writes nothing under the worktree; the same run without the env writes <worktree>/.venv.
@@ -33,9 +33,10 @@ test("7.4.0 #73 U1: a uv test_cmd run gives each role UV_PROJECT_ENVIRONMENT and
     const i = inputsOf(call(out, label).prompt);
     const dir = BUILD_SCRATCH + "/build/" + NONCE + "/" + key;
     assert.equal(i.test_env.UV_PROJECT_ENVIRONMENT, dir + "/uv-venv", label);
-    assert.equal(i.test_env.UV_CACHE_DIR, dir + "/uv-cache", label);
+    // 7.4.0 review B-M4: the uv cache is one per run, outside build/
+    assert.equal(i.test_env.UV_CACHE_DIR, BUILD_SCRATCH + "/uv-cache/" + NONCE, label);
     assert.ok(i.test_env_prefix.includes("UV_PROJECT_ENVIRONMENT='" + dir + "/uv-venv'"), label);
-    assert.ok(i.test_env_prefix.includes("UV_CACHE_DIR='" + dir + "/uv-cache'"), label);
+    assert.ok(i.test_env_prefix.includes("UV_CACHE_DIR='" + BUILD_SCRATCH + "/uv-cache/" + NONCE + "'"), label);
     assert.match(i.test_env_note, /UV_PROJECT_ENVIRONMENT, UV_CACHE_DIR/);
   }
   // the commit step's hook env too (the repo's hooks may run uv)

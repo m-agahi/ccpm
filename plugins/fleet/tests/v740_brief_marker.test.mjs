@@ -1,11 +1,11 @@
 // fleet 7.4.0 car 3 (#30, L2098).
 // - N1 (M1, M2): a task body that holds the fleet-brief marker was briefed by /plan-task and is
-//   confirmed by Max. Plan mode stops (needs_human) when a source body holds the marker and the
-//   caller's confirm is not "ask", before any plan is written; except under unattended, where
+//   confirmed by Max. Plan mode asks (confirm ask, review B-m7; it stopped needs_human before)
+//   when a source body holds the marker and the caller's confirm is not "ask"; except under unattended, where
 //   the marker stays a ruling (6.3.0 ADR-1239) and auto_decisions logs the confirm as before.
 // - L3 (M3): brief_check.py flags an IaC path with a ":<line>" or a possessive "'s" suffix.
 //
-// dont_care: the stop text after "fleet-brief marker".
+// dont_care: the gate text after "fleet-brief marker".
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -31,13 +31,12 @@ function gated(over = {}) {
 }
 const decisions = (out) => (out.result.auto_decisions || []).map((d) => d.gate + ": " + d.decision + " (" + d.reason + ")");
 
-test("7.4.0 #30 M1: a marked brief under confirm auto or default stops needs_human before the planner", async () => {
+// 7.4.0 review B-m7: the run asks (confirm ask) with a gate line in place of the stop
+test("7.4.0 #30 M1: a marked brief under confirm auto or default asks (confirm ask), no build", async () => {
   for (const confirm of ["auto", "default"]) {
     const out = await runOne(gated({ brief: marked() }), { ...ARGS, confirm });
-    assert.equal(out.result.status, "needs_human", confirm + ": " + out.result.reason);
-    assert.match(out.result.reason, /fleet-brief marker/, confirm);
-    assert.match(out.result.reason, /confirm ask/, confirm);
-    assert.ok(!out.labels.includes("role:scope-and-plan"), confirm + ": no plan");
+    assert.equal(out.result.status, "awaiting_confirmation", confirm + ": " + out.result.reason);
+    assert.ok(out.logs.some((l) => /fleet-brief marker: confirm ask/.test(l)), confirm);
     assert.ok(!out.labels.some((l) => /^role:fleet-test-writer/.test(l)), confirm + ": no build");
   }
 });
@@ -49,10 +48,10 @@ test("7.4.0 #30 M2: a marked brief under confirm ask (or none) ends awaiting_con
   }
 });
 
-test("7.4.0 #30 M2: the marker in a body_slug page body stops like M1", async () => {
+test("7.4.0 #30 M2: the marker in a body_slug page body asks like M1", async () => {
   const out = await runOne(gated({ brief: marked({ body_slug: "o_r_task-42" }) }), { ...ARGS, confirm: "auto" });
-  assert.equal(out.result.status, "needs_human", out.result.reason);
-  assert.match(out.result.reason, /fleet-brief marker/);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.ok(out.logs.some((l) => /fleet-brief marker/.test(l)));
 });
 
 test("7.4.0 #30 M2: a body without the marker is not stopped under confirm auto", async () => {

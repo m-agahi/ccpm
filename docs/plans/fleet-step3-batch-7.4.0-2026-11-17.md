@@ -107,12 +107,14 @@ Counts:
      has a 540 s deadline (under the agent's 600 s Bash limit): no retry starts when the remaining
      time is less than the last attempt took.
   4. Prints `{push_result, exit_code, hook_tail, attempts, args, program, digest}`. The
-     classification of `push_classify.py` moves into it; `push_classify.py` stays for the resume check
-     (src ~6933-6952) in this release.
+     classification of `push_classify.py` moves into it. As shipped (review B-m9): the resume check
+     does not use `push_classify.py`, so it is retired with `push_probe.py`.
 - `pushPrompt` (src ~3216): step 2 becomes one `progCmd("push", ...)` call. `RETRY_SHELL` is no
   longer used by the push. Keep it if another prompt uses it (the builder greps).
 - `pushProbePrompt` (src ~3241): same shape, `push.py --dry-run` (no retry, 120 s).
-- New `PROGRAM_SLOTS`, `PROGRAM_KEYS`, `INFRA_TIER` rows; `PROGRAM_COUNT` 45 -> 46.
+- New `PROGRAM_SLOTS`, `PROGRAM_KEYS`, `INFRA_TIER` rows. As shipped (review B-m9): `push.py` took
+  over both `push_classify.py` and `push_probe.py` (the resume check does not use `push_classify`),
+  so both are retired and `PROGRAM_COUNT` is 44 (45 + `push.py` - 2).
 - #34's source scan (AC B3 below) includes `push.py`: its push is a network call and must lift.
 
 ### #36: 6.3.2 review lows (brief B1-B7, Max ruled "All five")

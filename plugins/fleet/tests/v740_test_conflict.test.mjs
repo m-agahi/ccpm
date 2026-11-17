@@ -15,7 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ARGS, PB, PC, PSHA, FP_K1, FP_TESTS, H, HASHES, happy, run, runOne, call, inputsOf, commitStub, stateJsonOf, spawnSync, pushArgsOf } from "./harness.mjs";
@@ -326,4 +326,24 @@ test("7.4.0 #61 Q4 (b): the commit-step recipe on real git: the new commit sits 
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+// 7.4.0 review B-m5: OPEN_PR_SHIP_AGENTS is counted from the code; the rebuilt commit, its push,
+// the PR update and one review (the capped agents, from infra:commit:r1 through the review's last
+// step) fit it, with a margin of at most 3
+test("7.4.0 review B-m5: the capped agents of the rebuilt commit on the open PR fit OPEN_PR_SHIP_AGENTS with a small margin", async () => {
+  const src = readFileSync(new URL("../src/build-task-run.js", import.meta.url), "utf8");
+  const m = /const REVIEW_AGENTS = (\d+);\nconst OPEN_PR_SHIP_AGENTS = ([0-9 +A-Z_]+);/.exec(src);
+  assert.ok(m, "the constants");
+  const cap = m[2].split("+").reduce((a, x) => a + (x.trim() === "REVIEW_AGENTS" ? Number(m[1]) : Number(x)), 0);
+  const { out } = await resumedQ4();
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const L = out.labels;
+  const i = L.indexOf("infra:commit:r1");
+  const j = L.indexOf("infra:review-cleanup:v1", i);
+  assert.ok(i > 0 && j > i, L.join(", "));
+  const TAIL = /^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:fleet-ci-classifier)|^infra:[a-z:-]+:ci$/;
+  const free = (l) => /^infra:(path-check|build-reset)/.test(l) || TAIL.test(l) || /^infra:state:(pr_open|reviewed|written_back|committed|pushed)(:|$)/.test(l) || l.indexOf("infra:state-chunks:") === 0;
+  const n = L.slice(i, j + 1).filter((l) => !free(l)).length;
+  assert.ok(n <= cap && cap - n <= 3, "counted " + n + ", constant " + cap);
 });

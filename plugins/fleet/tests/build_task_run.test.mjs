@@ -5638,6 +5638,8 @@ const ARRAY_SITES = {
   "plan.criteria @ planAndAudit": "role:scope-and-plan:criteria",
   "plan.plan_diff @ planAndAudit": "role:scope-and-plan:plan_diff",
   "plan.changed_symbols @ planAndAudit": "role:scope-and-plan:changed_symbols",
+  // 7.4.0 review B-M3
+  "sw.units @ planAndAudit": "parsed: the plan sweep's units (the role schema declares an array; the happy run calls no sweep, and a missing array is the not-finished warning)",
   // 7.4.0 (#61)
   "x.findings @ testConflictOf": "role:fleet-coder:test_conflict.findings",
   "e.occurrences @ changedSymbolFindings": "role:scope-and-plan:changed_symbols[].occurrences",

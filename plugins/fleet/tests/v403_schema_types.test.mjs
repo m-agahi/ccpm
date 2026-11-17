@@ -634,6 +634,8 @@ const READS = {
     "u.shipped_refuses boolean": "role:gate-change-nonweakening-sweep:units[].shipped_refuses",
     "u.new_refuses boolean": "role:gate-change-nonweakening-sweep:units[].new_refuses",
     "u object": "role:gate-change-nonweakening-sweep:units[]",
+    // 7.4.0 review B-M3: a sweep with no units array is a warning
+    "sw.units array": ["role:gate-change-nonweakening-sweep:units", 2],
     "plan.criteria array": SP + "criteria",
     "x string": SP + "plan_diff[]",
     "plan.plan_diff array": SP + "plan_diff",

@@ -9,7 +9,7 @@
 // - Z2: verdict weakening -> each loose unit is a routed finding (naming the unit) and a re-plan
 //   runs; no freeze. At the last audit round -> needs_human (stop_gate intent).
 // - Z3: no gate path and no touches_gate -> no sweep call (no change for such plans).
-// - Z4: non_weakening with a unit not measured -> needs_human, as in the post-PR sweep.
+// - Z4: non_weakening with a unit not measured -> a warning (review B-M3; the post-PR sweep decides).
 //
 // dont_care: the finding's wording after the unit name.
 
@@ -77,10 +77,11 @@ test("7.4.0 #60 Z3: a plan with no gate path and touches_gate false runs no swee
   assert.ok(!f.labels.some((l) => /gate-change-nonweakening-sweep/.test(l)), f.labels.join(", "));
 });
 
-test("7.4.0 #60 Z4: a non_weakening plan sweep with an unmeasured unit stops needs_human", async () => {
+// 7.4.0 review B-M3: an unmeasured unit at plan time is a warning (the post-PR sweep decides), not a stop
+test("7.4.0 #60 Z4: a non_weakening plan sweep with an unmeasured unit warns; the plan goes on", async () => {
   const um = Object.assign({}, NONW, { units: [{ unit: "check.py", mutation: "0 units examined", shipped_refuses: null, new_refuses: true }] });
   const out = await runOne(gatePlan(null, um), ARGS);
-  assert.equal(out.result.status, "needs_human", out.result.reason);
-  assert.match(out.result.reason, /sweep unit check\.py not measured/);
-  assert.ok(!out.labels.includes("infra:commit-plan"));
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  assert.ok(out.logs.some((l) => /warning: plan sweep unit check\.py not measured/.test(l)), out.logs.join("\n"));
+  assert.ok(out.labels.includes("infra:commit-plan"));
 });

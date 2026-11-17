@@ -108,9 +108,9 @@ const SCENARIOS = {
 // 7.4.0 car 1: the push and push-probe prompts run push.py (#9), the hook stop text (#36 B1) (probe unchanged)
 // 7.4.0 car 6: the role shas (#26, #45, #46, #60, #61, #72), the uv build vars (#73), touches_gate, test_conflict, target and parent in the schemas (no new call; probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 90, sha256: "c426382965e5fd4600b52b61525ca191de15454396f98b13d33b832a3916c327" },
-  "confirm auto (gates, then build in one run)": { calls: 92, sha256: "69efc0abbbf948993bc5669057347c62d58e69da168276b97feb21b99adf7196" },
-  "short path (one test writer)": { calls: 89, sha256: "f8e06325b4917c243b83a00d0ce5fac65809b117024f3ced0c61554437d736d2" },
+  "plan then build (confirm ask)": { calls: 90, sha256: "a264b7595d6ae92d843901f076853184d5726931f765c6b1946c33d7becf3ab5" },
+  "confirm auto (gates, then build in one run)": { calls: 92, sha256: "0924b01b135f9037fd9b556f123a6b719a0b6b871418ee09db325bc9e74dde6e" },
+  "short path (one test writer)": { calls: 89, sha256: "390667a9ea070ae9fb358090ac7f790c5d054650fdee22b9812954e73bc0d9da" },
   "probe": { calls: 2, sha256: "a8ceccc781cf8954f6b925f6d96462387d40cede1db8d318d28eb0441753e8de" },
 };
 
