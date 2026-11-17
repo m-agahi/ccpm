@@ -42,3 +42,22 @@ test("7.3.0 A28: softDispatch counts a tail writer before its cap check; writeCh
   assert.match(sd, /if \(tailWriter\(label\)\) state\.tail\+\+;\n\s*else if \(capped\(\) \+ 1 > MAX_AGENTS\)/);
   assert.match(body("writeChunksParallel", "async function "), /if \(!soft && !tailWriter\(prefix\)\) reserve\(/);
 });
+
+// 7.3.0 car 3 (Max: "a run is never halted for the cap after its PR is open"): the post-PR
+// infra:state:<label> program steps (inline, rewrite and retry labels) are tail agents too
+test("7.3.0 A31: a post-PR infra:state step is a tail writer; infra:state:shipped stays on TAIL_RE only", () => {
+  const on = tailWriterOf({ tailWriters: true });
+  const off = tailWriterOf({ tailWriters: false });
+  const ls = ["infra:state:pr_open:p1", "infra:state:reviewed:v2", "infra:state:written_back", "infra:state:committed:r2", "infra:state:pushed:p2", "infra:state:committed:r2:rewrite-1", "infra:state:pushed:p2:digest-retry"];
+  for (const l of ls) {
+    assert.equal(on(l), true, l);
+    assert.equal(off(l), false, l);
+  }
+  for (const l of ["infra:state:shipped", "infra:state:shipped:p2", "infra:state:frozen", "infra:state:planned"]) assert.equal(on(l), false, l);
+});
+
+test("7.3.0 A31: dispatch counts a tail writer once before reserve; saveState sets the flag before the inline writer", () => {
+  assert.match(body("dispatch", "async function "), /if \(TAIL_RE\.test\(label\) \|\| tailWriter\(label\)\) state\.tail\+\+;\n\s*reserve\(1, label\);/);
+  const ss = body("saveState", "async function ");
+  assert.ok(ss.indexOf("state.tailWriters = !!") >= 0 && ss.indexOf("state.tailWriters = !!") < ss.indexOf("r = await infra(label"), "set before the inline writer");
+});

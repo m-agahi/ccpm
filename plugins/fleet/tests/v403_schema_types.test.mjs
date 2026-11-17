@@ -188,11 +188,14 @@ const READS = {
   // 6.3.3 (2144): the code-judge guard for review-shaped [pr_body_claim] findings (JUDGE_SUITE types the suite)
   judged: {
     "f.finding string": CJ + "routed_findings[].finding",
-    "sr.exit_code number": CJ + "suite_result.exit_code",
+    // 7.3.0 (#50): any non-null value but 0 fails; a string is drift first (driftOf, one level down)
+    "sr.exit_code integer": CJ + "suite_result.exit_code",
     "sr.exit_code number-literal": CJ + "suite_result.exit_code",
-    "sr.failed number": CJ + "suite_result.failed",
-    "sr.errors number": CJ + "suite_result.errors",
+    "sr.failed number-literal": CJ + "suite_result.failed",
+    "sr.errors number-literal": CJ + "suite_result.errors",
   },
+  // 7.3.0 (#50): a required role key, checked here against its STRICT schema one level down
+  driftOf: { "r[k] object": "parsed: a role result key, type-checked here against STRICT", "r[k] array": "parsed: a role result key, type-checked here against STRICT" },
   // 5.0.0 (R1): the DISPATCH line comes from ROLE_DISPATCH (gen.mjs, from the pinned files)
   parseDispatch: { "line string": "parsed: ROLE_DISPATCH, generated from the role files (gen.mjs --check)" },
   sameState: { "length number-literal": PARSED_LOCAL },
@@ -613,6 +616,8 @@ const READS = {
     // release review of #48: an approving audit's advisory findings go to the gate log
     "f.finding string": "role:plan-audit:routed_findings[].finding",
     "plan.plan_path string": SP + "plan_path",
+    // 7.3.0 (#33)
+    "plan.merge_after string": SP + "merge_after",
     "plan.criteria array": SP + "criteria",
     "x string": SP + "plan_diff[]",
     "plan.plan_diff array": SP + "plan_diff",
@@ -834,6 +839,7 @@ const READS = {
     "pf.commands array": PARSED_REF,
     "o.check_cmd string": PARSED_REF,
     "pf.remote_url string": PARSED_REF,
+    "pf.merge_after string": PARSED_REF,
     "input.freeze_digest string": [PARSED_ARGS, 3],
     "v.head string": "prog:verify_since:head",
     "v.head string-re": "prog:verify_since:head",

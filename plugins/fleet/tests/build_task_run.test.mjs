@@ -4716,10 +4716,12 @@ test("2.1.0 review: a review that stops still gets its scratch cleanup", async (
   assert.ok(out.labels.indexOf("infra:review-cleanup:v1") > out.labels.indexOf("role:pr-review:v1"));
 });
 
-test("2.1.0 review skipped when no PR exists: listed in gates_not_run", async () => {
+// 7.3.0 (#49): changed on purpose: no PR is a stop before the review, never a skip
+test("2.1.0 review skipped when no PR exists: listed in gates_not_run (7.3.0: a stop)", async () => {
   const out = await run(happy({ script: { "role:fleet-pr-opener": { status: "ok", reason: "x", pr_url: null, pr_number: null, created: false, template_used: null, gates_not_run_stated: true } } }), ARGS);
   assert.ok(!out.labels.includes("role:pr-review:v1"));
-  assert.ok(out.result.gates_not_run.some((g) => g.gate === "review"));
+  assert.equal(out.result.status, "needs_human");
+  assert.equal(out.result.stop_gate, "role");
   assert.equal(out.result.review, null);
 });
 
@@ -4916,10 +4918,13 @@ test("2.1.0 agent cap 100: an auto run with a revise round and a review fix roun
   assert.equal(out.result.review.rounds, 2);
   // the PATH re-checks (3.1.1), the build-dir resets (5.0.6) and the PR tail
   // (6.0.0: stats, ready, CI watch, merge) are counted in agents but not against the cap
-  const work = out.calls.filter((c) => !/^infra:(path-check:|build-|pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|^role:fleet-ci-classifier/.test(c.label));
+  // 7.3.0 car 3: the post-PR state steps (after the first pr-opener) and the soft :ci tail too; with
+  // them off the cap the CI write-back (infra:yaadgaar-*:ci) now runs instead of being cap-skipped
+  const pr1 = out.calls.findIndex((c) => c.label === "role:fleet-pr-opener");
+  const work = out.calls.filter((c, i) => !/^infra:(path-check:|build-|pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|^role:fleet-ci-classifier|^infra:[a-z:-]+:ci$/.test(c.label) && !(i > pr1 && /^infra:state:/.test(c.label)));
   assert.ok(out.calls.length > work.length, "the re-checks ran");
   assert.ok(work.length > 60, "dispatched " + work.length);
-  assert.ok(work.length <= 100);
+  assert.ok(work.length <= 100, "dispatched " + work.length + ": " + work.map((c) => c.label).join(", "));
   assert.equal(out.result.agents, countedCalls(out.calls).length);
   // 5.0.6 (ledger 2019): every round's writers, judges, coder, commit, push
   // and review carry their own build dir, intent judge and test r2 included
@@ -10077,7 +10082,7 @@ test("3.1.0 ADR-1175: remote head == approved sha: the run continues to the PR, 
     const out = await go(iacScript(mk, "approved"), args);
     assert.equal(out.result.status, "needs_human", args.confirm + " " + out.result.reason);
     assert.equal(out.result.stop_gate, "iac");
-    assert.match(out.result.reason, /^IaC PR: Max marks it ready \(/);
+    assert.match(out.result.reason, /^IaC PR: needs Max; the fleet watches no CI and merges nothing \(/);
     assert.ok(out.labels.includes("infra:state:written_back") && !out.labels.some((l) => /^infra:pr-ready/.test(l)), out.labels.join(", "));
     assert.ok(!pushed(out), "push never dispatched");
     assert.ok(out.labels.includes("infra:remote-head:push"));
@@ -10816,7 +10821,7 @@ test("3.1.1 origin URL: the workspace step relays a program's output; the script
   s.workspace = Object.assign({}, s.workspace, { remote_url: "git@evil.example:o/r.git", remote_url_check: remoteUrlOut("git@github.com:o/r.git", "/r") });
   const ok = await run(s, ARGS);
   // 6.0.0 (ledger 2045): an IaC PR stops before ready
-  assert.match(ok.result.reason, /^IaC PR: Max marks it ready/);
+  assert.match(ok.result.reason, /^IaC PR: needs Max; the fleet watches no CI and merges nothing/);
   assert.equal(inputsOf(call(ok, "infra:remote-head:push").prompt).remote_url, "git@github.com:o/r.git");
   // an unusable relay (bad digest, other args, a changed url, missing) seals no URL: an IaC diff stops at iac
   for (const bad of [

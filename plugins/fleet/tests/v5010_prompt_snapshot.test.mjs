@@ -105,9 +105,9 @@ const SCENARIOS = {
 // 7.1.0 (L2145): + infra:pr-tests after the pr-opener (one more build call), the code judge suite_result types passed, the pr-opener role sha moves (probe unchanged)
 // 7.3.0 car 2: + infra:fleet-branch in plan mode (#43, one more call each), the intake plan-path rule (#63), the plan-mode workspace fast-forward rule (#39), the parked meta prompt and its digest/args opts (#42), fast_forwarded and the parked part keys in the schemas (probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 90, sha256: "a8dacd4229c4f011c72a345fe6e70390bb9e3350480b57816d4ae8d4cfb0570d" },
-  "confirm auto (gates, then build in one run)": { calls: 92, sha256: "ebe7fa60a0e2cbf9b0bf189b2fb209fb2754c0dc335582c2c075caa3f2f7f4a8" },
-  "short path (one test writer)": { calls: 89, sha256: "46ecc9a86b4ac0ad3e91c304b66373096f8ed308e46f826ee3e52ac3eb07519b" },
+  "plan then build (confirm ask)": { calls: 90, sha256: "84486c77e8327551560decc9c25b4e8206e0ebcdff411774b55b98d370a4500e" },
+  "confirm auto (gates, then build in one run)": { calls: 92, sha256: "723eaa42873cf54f514edba4997faac76f1005cbbe992de203bf992b29e47293" },
+  "short path (one test writer)": { calls: 89, sha256: "8a2d8345bcf089b56dd412091d102d71d998d33360d2adedbeb4f2fbbd580171" },
   "probe": { calls: 2, sha256: "a8ceccc781cf8954f6b925f6d96462387d40cede1db8d318d28eb0441753e8de" },
 };
 

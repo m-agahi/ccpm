@@ -160,7 +160,7 @@ Return ONE object through the StructuredOutput tool. It is the only output chann
 
 - Always: `status` (`ok`, `needs_human` or `failed`), `reason` (one line: the plan path, the `test_cmd` probe exit code, the repo gate files you checked), `role_file` (step 1 of your prompt) and `shared_file` (step 3).
 - Required on `ok`: `plan_path`, `criteria` (array), `est_diff_lines` (number), `new_behaviour` (boolean), `change_kind`, `allowed_additions` (object), `held_out_examples` (array), `tldr`, `component`, `plan_diff` (array), `repo_obligations` (array, `[]` when none), `test_cmd` (object with a string `command`) and `changed_symbols` (array, `[]` only when the plan changes no existing symbol). On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run.
-- Optional: `fleet_estimate`, `artefacts` (the plan path), `memory_notes` (short facts worth keeping for this repo; the workflow passes them to its caller and writes them nowhere).
+- Optional: `merge_after` (string or null): set it only when the task, brief or ticket text says the change must not merge before a condition is met or another PR merges; name that condition or those PRs (for example `after yadgarhq/flux#12 merges`). The PR then opens as a draft and its body names it; otherwise the PR opens ready for review. `fleet_estimate`, `artefacts` (the plan path), `memory_notes` (short facts worth keeping for this repo; the workflow passes them to its caller and writes them nowhere).
 
 Shape:
 

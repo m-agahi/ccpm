@@ -306,6 +306,8 @@ test("6.3.0 B (ADR-1239): unattended never merges on a work owner, never merges 
   const t = gated();
   t["infra:policy"] = polOut({ caps: PERSONAL });
   t["infra:orch-scan"] = (p) => ({ status: "ok", reason: "s", orchestrator: true, iac_repo: true, apply_on_merge: true, hook_surface_pr: true, reasons: [], error: "gh pr view: HTTP 502", args: inputsOf(p).args });
+  // 7.3.0 (#32): the error stays on the one retry
+  t["infra:orch-scan:retry"] = t["infra:orch-scan"];
   const o = await runOne(t, U);
   assert.ok(!o.labels.some((l) => /^infra:pr-merge/.test(l)), o.labels.join(", "));
   assert.match(o.result.reason, /orchestrator PR: needs Max/);

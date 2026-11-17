@@ -336,6 +336,7 @@ est_diff_lines: { type: "number" },
 new_behaviour: { type: "boolean" },
 change_kind: { type: "string", enum: CHANGE_KINDS },
 component: STR_OR_NULL,
+merge_after: STR_OR_NULL,
 allowed_additions: {
 type: ["object", "null"],
 properties: {
@@ -1494,13 +1495,13 @@ const ROLE_SHA256 = {
 "fleet-code-judge": "0b7a412cb27884de57c70bb48f90627c8595057ef29ce1a8e0f147df49f979fe",
 "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
 "fleet-intent-judge": "eec4332e06027010a8f22aec7b399289665fb652f6d773b9c093f0f7d1f3bfc6",
-"fleet-pr-opener": "6fe602c3d2c5fd7bfa3f1d3b9de32f20db66247dfe0f6e1b89856cc30f2498f2",
+"fleet-pr-opener": "0c4d24c3bbcc9a99d5e51de251d3817183f85ced1a73d0eeb1318cb1429447cf",
 "fleet-test-judge": "219c89b656f7ae61d28ab7cf2486b498792385df0cdd2a256fdae6c0f53c051b",
 "fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
 "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
 "plan-audit": "084fe730cc8ecb5cf8712b164bb763cb9bbe97e18bc3cc04e82480ba158de984",
 "pr-review": "728800a005a54026eb345d5b9784bdde50cdafd5d918f9faa8d2cec7c091142d",
-"scope-and-plan": "1f9d529f2aabefca5a109d1a053c11b1858478bc4c40f89027874d9c070ca9b4"
+"scope-and-plan": "71429f33898fef13d02c3e6a8a2f73b49492e75439585c24d397ddcaa66b93c1"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -3247,7 +3248,7 @@ return state.agents - state.pathChecks - state.buildResets - state.tail;
 }
 const TAIL_RE = /^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:fleet-ci-classifier)|^infra:[a-z:-]+:ci$/;
 function tailWriter(l) {
-return state.tailWriters === true && l.indexOf("infra:state-chunks:") === 0;
+return state.tailWriters === true && (l.indexOf("infra:state-chunks:") === 0 || /^infra:state:(pr_open|reviewed|written_back|committed|pushed)(:|$)/.test(l));
 }
 function reserve(n, what) {
 if (capped() + n > MAX_AGENTS)
@@ -3293,7 +3294,7 @@ return r;
 async function dispatch(label, prompt, opts) {
 const model = relayModel(label);
 const ic = infraCall(label, prompt, opts);
-if (TAIL_RE.test(label)) state.tail++;
+if (TAIL_RE.test(label) || tailWriter(label)) state.tail++;
 reserve(1, label);
 state.agents++;
 const r = await agentT(ic.prompt, agentOpts(ic.opts, label, model));
@@ -3425,6 +3426,9 @@ for (const k of REQUIRED_ON_OK[role] || []) {
 if (!(k in r)) return { msg: "role " + role + " contract drift: missing " + k, detail: "missing " + k };
 if (!typeMatches(strict[k], r[k]))
 return { msg: "contract drift: " + role + " " + k + " type: got " + jsType(r[k]), detail: k + " type: got " + jsType(r[k]) };
+const sub = strict[k] && strict[k].properties;
+if (sub && r[k] && typeof r[k] === "object" && !Array.isArray(r[k]))
+for (const j of Object.keys(sub)) if (r[k][j] != null && !typeMatches(sub[j], r[k][j])) return { msg: "contract drift: " + role + " " + k + "." + j + " type: got " + jsType(r[k][j]), detail: k + "." + j + " type: got " + jsType(r[k][j]) };
 const en = strict[k] && strict[k].enum;
 if (en && k !== "verdict" && r[k] !== null && en.indexOf(r[k]) < 0)
 return { msg: "contract drift: " + role + " " + k + " value " + JSON.stringify(r[k]), detail: k + " value " + JSON.stringify(r[k]) };
@@ -3618,13 +3622,13 @@ halt("needs_human", "judge mutated worktree: " + role + " (" + label + ") change
 checkRole(role, r);
 collect(role, r);
 if (!(opts && opts.allowNotOk)) requireOk(role, r);
-if (role === "fleet-code-judge" && r.verdict === "fix_code" && !state.update) {
+if (role === "fleet-code-judge" && r.verdict === "fix_code") {
 const isTag = (f) =>
 !!f && f.target === "code" && f.criterion == null && typeof f.finding === "string" && f.finding.startsWith("review ") &&
 f.finding.indexOf(" ", 7) > 7 && f.finding.slice(7, f.finding.indexOf(" ", 7)).indexOf("[") < 0 && f.finding.slice(f.finding.indexOf(" ", 7) + 1).startsWith(BODY_TAG + " ");
 const rest = (r.routed_findings || []).filter((f) => !isTag(f));
 const sr = r.suite_result || {};
-const failing = !(typeof sr.exit_code === "number" && sr.exit_code === 0) || (typeof sr.failed === "number" && sr.failed > 0) || (typeof sr.errors === "number" && sr.errors > 0);
+const failing = !(Number.isInteger(sr.exit_code) && sr.exit_code === 0) || (sr.failed != null && sr.failed !== 0) || (sr.errors != null && sr.errors !== 0);
 if (rest.length < (r.routed_findings || []).length && (rest.length || !failing)) {
 gate(label + ": " + ((r.routed_findings || []).length - rest.length) + " " + BODY_TAG + " review finding(s) dropped (a PR-body fix, not a code fix)" + (!rest.length ? "; fix_code -> approve (suite passed)" : ""));
 r.routed_findings = rest;
@@ -3652,6 +3656,7 @@ refreeze_log: state.refreezeLog,
 gate_log: state.gateLog,
 memory_notes: state.findings,
 follow_ups: state.followUps || [],
+warnings: state.warnings || [],
 ...(state.ci ? { ci: state.ci } : {}),
 ...(state.ciWriteBack ? { ci_write_back: state.ciWriteBack } : {}),
 ...(state.unattended ? { unattended: true, unattended_source: state.unattended, auto_decisions: state.autoDecisions } : {}),
@@ -4744,6 +4749,7 @@ repo_obligations: stripHeldOut(obligations),
 commands: commandsOf(plan.test_cmd, obligations, criteria),
 changed_symbols: symbolMap,
 remote_url: validRemoteUrl(ctx.remoteUrl) ? ctx.remoteUrl : null,
+merge_after: typeof plan.merge_after === "string" && plan.merge_after.trim() ? plan.merge_after.trim() : null,
 };
 gate(
 "plan: test_cmd " + JSON.stringify(plan.test_cmd.command) + ", " + obligations.length + " repo obligation(s)" +
@@ -5556,7 +5562,7 @@ return INFRA_STEP + "write the stats block into the fleet's own PR body; only th
 }
 const TESTS_START = "<!-- ccpm-fleet-tests -->";
 const TESTS_END = "<!-- /ccpm-fleet-tests -->";
-function testsBlock(suite, testCmd) {
+function testsBlock(suite, testCmd, warn) {
 const s = suite && typeof suite === "object" && !Array.isArray(suite) ? suite : null;
 const ok = (n) => Number.isInteger(n) && n >= 0;
 const errors = s ? (s.errors === undefined || s.errors === null ? 0 : s.errors) : null;
@@ -5564,7 +5570,7 @@ const counts = s && ok(s.passed) && ok(s.failed) && ok(errors) ? s.passed + " pa
 const toks = String((testCmd && testCmd.command) || "").split(" ").filter((t) => t && t !== PATHS_TOKEN);
 if (toks[toks.length - 1] === "--") toks.pop();
 const env = testCmd && testCmd.env && typeof testCmd.env === "object" ? Object.keys(testCmd.env).sort().map((k) => k + "=" + testCmd.env[k]) : [];
-return TESTS_START + "\n**Tests (measured by the fleet):** " + counts + "\nCommand: `" + env.concat(toks).join(" ") + "`\n" + TESTS_END;
+return TESTS_START + "\n**Tests (measured by the fleet):** " + counts + "\nCommand: `" + env.concat(toks).join(" ") + "`\n" + (warn ? warn + "\n" : "") + TESTS_END;
 }
 function testsHeaders(bc, unattended) {
 return JSON.stringify(((bc && bc.required_sections) || []).concat(unattended ? [UNATT_HEAD] : []));
@@ -5834,6 +5840,7 @@ if (lpb) halt("needs_human", "plan ref " + tiny.plan_ref + ": " + lpb + "; re-ru
 const defaultBranch = ws.defaultBranch;
 const remoteSlug = ws.remoteSlug;
 const remoteUrl = typeof pf.remote_url === "string" ? pf.remote_url : null;
+const mergeAfter = typeof pf.merge_after === "string" && pf.merge_after.trim() ? pf.merge_after.trim() : null;
 const mainWt = lay.mainWt;
 const branch = lay.branch;
 const planBase = ref.plan_base;
@@ -5939,6 +5946,7 @@ resumeState = hr;
 } else if (v.head !== planBase)
 halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
 const policy = (state.policy = ref.policy ? stricterPolicy(await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy), ref.policy, resume ? "the run-state's" : "the current file") : await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
+const prDraft = () => mergeAfter !== null || !policy.caps.pr_ready;
 unattendedOn(policy, input);
 if (resume && Array.isArray(resume.auto_decisions) && !state.autoDecisions.length) state.autoDecisions = resume.auto_decisions.slice();
 const freezeRefName = "refs/fleet/" + names.taskId + "/freeze";
@@ -6082,7 +6090,8 @@ halt("needs_human", "PR step: push access to " + remoteSlug + " still not known 
 if (!g || !g.push)
 halt("needs_human", "PR step: " + noPushText(remoteSlug) + " (it resumes at the PR)", "role");
 await fleetScan("infra:fleet-scan:" + label.replace(/^role:/, ""));
-const opener = async (lb, more) => requireOk(
+const opener = async (lb, more) => {
+const x = requireOk(
 "fleet-pr-opener",
 await callRole(
 "fleet-pr-opener",
@@ -6101,10 +6110,15 @@ auto_confirmed: autoConfirmed,
 ...(state.unattended ? { unattended_section: unattendedSection() } : {}),
 intent: intentForPr,
 review_notes: reviewNotes,
+draft: prDraft(),
+merge_after: mergeAfter,
 }, pr ? { pr_url: pr.pr_url, pr_number: pr.pr_number } : {}, extra || {}, more || {}),
 "PR",
 ),
 );
+if (x.pr_url == null || x.pr_number == null) halt("needs_human", "pr-opener returned ok with no PR (pr_url " + x.pr_url + ", pr_number " + x.pr_number + "); check the branch on the forge", "role");
+return x;
+};
 const why = (x) =>
 x.title !== subj.main ? "pr-opener set the PR title " + JSON.stringify(x.title) + ", not " + JSON.stringify(subj.main) + "; fix the title of " + x.pr_url
 : state.gatesNotRun && state.gatesNotRun.length && x.gates_not_run_stated !== true ? "pr-opener did not state gates_not_run in the PR body; fix the body of " + x.pr_url
@@ -6123,12 +6137,8 @@ if (w && r.title !== subj.main) halt("needs_human", w, "role");
 state.pr = r;
 gate("pr-opener: " + (r.created ? "created " : "updated ") + r.pr_url);
 if (w) halt("needs_human", w);
-if (r.pr_number == null) {
-gate("test block skipped: no PR");
-return r;
-}
 const tl = "infra:pr-tests" + label.replace("role:fleet-pr-opener", "");
-const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd);
+const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
 const targs = [g.gh_cmd, remoteSlug, String(r.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
 const supplied = suppliedTexts({ tldr: ref.tldr, criteria, notes: reviewNotes, intent: intentForPr, unattended: state.unattended ? unattendedSection() : null, gatesNotRun: state.gatesNotRun });
 const own = await prTestsStep(tl, targs, tb, r.pr_url, supplied);
@@ -6186,17 +6196,17 @@ const json = JSON.stringify(st);
 const si = { main_worktree: mainWt, state_ref: stateRef, expected_head: approvedSha, chunk_dir: scratchOf(mainWt) + "/state-" + safeName(state.nonce + "-" + label) };
 const c = chunked(json + "\n");
 let r;
+state.tailWriters = !!(pr && pr.pr_number != null);
+try {
 if (c.chunks.length <= CHUNKS_PER_WRITER) r = await infra(label, writeStatePrompt(si, json), "PR");
 else {
 const pfx = "infra:state-chunks:" + label.slice("infra:state:".length);
-state.tailWriters = !!(pr && pr.pr_number != null);
-try {
 await writeChunksParallel(pfx, si.chunk_dir, c, c.chunks.map((x, i) => i), "PR", 0, "run-state");
 r = await chunkRounds(label, pfx, si.chunk_dir, c, "PR", (lbl) => dispatch(lbl, writeStatePrompt(si, json, true), { schema: INFRA_SCHEMA, phase: "PR" }), "run-state", "no run-state was written");
+if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+}
 } finally {
 state.tailWriters = false;
-}
-if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
 }
 requireProgram(r, "state_write", label);
 if (!relayDigestOk(r, progKeys("state_write"), "state_write")) halt("failed", label + ": the relayed head and state object do not match the program's digest");
@@ -6217,7 +6227,7 @@ async function shipSteps(from) {
 const steps = ["push", "pr", "review", "writeback", "stats", "ready", "ci"];
 if (resume && state.testsResumed !== true && ["review", "writeback", "stats"].indexOf(from) >= 0 && pr && pr.pr_number != null) {
 state.testsResumed = true;
-const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd);
+const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
 const targs = [ghCmd("test block", "role"), remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
 const notes = state.review && Array.isArray(state.review.nits) ? state.review.nits : [];
 const supplied = suppliedTexts({ tldr: ref.tldr, criteria, notes, intent: intentForPr, unattended: state.unattended ? unattendedSection() : null, gatesNotRun: state.gatesNotRun });
@@ -6284,11 +6294,7 @@ pr = await openPr("role:fleet-pr-opener" + (prOpens > 1 ? ":p" + prOpens : ""), 
 if (upd) await statsStep();
 await saveState("pr_open", "infra:state:pr_open:p" + prOpens);
 } else if (step === "review") {
-if (!pr || !pr.pr_url || pr.pr_number == null) {
-state.gatesNotRun = (state.gatesNotRun || []).concat([{ gate: "review", reason: "no PR to review (pr-opener returned no pr_url/pr_number)" }]);
-gate("review skipped: no PR");
-continue;
-}
+if (!pr || !pr.pr_url || pr.pr_number == null) halt("needs_human", "review: no PR to review (pr-opener returned no pr_url/pr_number)", "review");
 reviews++;
 if (upd) upd.reviews++;
 const rv = await reviewStep(reviews, {
@@ -6298,24 +6304,27 @@ priorFindings: state.review && Array.isArray(state.review.blocking) ? state.revi
 });
 state.review = { verdict: rv.verdict, blocking: rv.blocking, nits: rv.nits, rounds: reviews, sweep: rv.sweep, model: rv.model };
 if (rv.blocking.length) {
-if (upd || (state.update && state.update.head === approvedSha)) {
+const bodyF = rv.blocking.filter((f) => f.category === "pr_body_claim");
+const codeF = rv.blocking.filter((f) => f.category !== "pr_body_claim");
+const inUpd = upd || (state.update && state.update.head === approvedSha);
+if (bodyF.length && (state.bodyFixes || 0) >= MAX_BODY_FIXES)
+halt("needs_human", "review v" + reviews + ": PR body claim still flagged after one body update: " + bodyF.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "), "review");
+if (codeF.length && inUpd) {
 const no = upd ? await updRefusal() : "the update record is from an earlier run";
 if (no)
 halt("needs_human", "re-review after update-branch requested changes: " + rv.blocking.map((f) => String(f.id || "-")).join(", ") + " (" + rv.blocking.length + " blocking, " + rv.nits.length + (rv.nits.length === 1 ? " nit" : " nits") + "); findings are in the run result; no coder round: " + no + "; re-plan on the new base or fix by hand", "review");
 upd.pr = rv.changed;
-gate("review u" + upd.reviews + ": changes_requested (" + rv.blocking.length + " blocking); R1-R5 pass -> code rounds on the update merge " + upd.head + " (within the code-round cap)");
-return { gate: "review", update: true, findings: rv.blocking.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
+if (bodyF.length) state.bodyPending = bodyF;
+gate("review u" + upd.reviews + ": changes_requested (" + codeF.length + " blocking); R1-R5 pass -> code rounds on the update merge " + upd.head + " (within the code-round cap)");
+return { gate: "review", update: true, findings: codeF.map((f) => ({ target: "code", criterion: null, finding: reviewFindingText(f) })) };
 }
-const bodyF = rv.blocking.filter((f) => f.category === "pr_body_claim");
-const codeF = rv.blocking.filter((f) => f.category !== "pr_body_claim");
-if (bodyF.length && (state.bodyFixes || 0) >= MAX_BODY_FIXES)
-halt("needs_human", "review v" + reviews + ": PR body claim still flagged after one body update: " + bodyF.map((f) => (f.id || "-") + " " + (f.file || "") + ": " + f.summary).join("; "), "review");
 if (!codeF.length) {
 state.bodyFixes = (state.bodyFixes || 0) + 1;
 state.bodyReviews = (state.bodyReviews || 0) + 1;
 state.bodyFixed = (state.bodyFixed || []).concat(bodyF);
-reviewNotes = rv.nits;
+if (!inUpd) reviewNotes = rv.nits;
 pr = await openPr("role:fleet-pr-opener:body-v" + reviews, { body_findings: state.bodyFixed });
+if (upd) await statsStep();
 gate("review v" + reviews + ": changes_requested (" + bodyF.length + " pr_body_claim) -> pr-opener body update");
 i--;
 continue;
@@ -6409,7 +6418,7 @@ gate(note + ": " + pr.pr_url);
 return null;
 };
 if (!policy.caps.ci_watch) return done("CI watch off (policy)");
-if (!state.prReady && !state.keptDraft) return done("CI not run on draft");
+if (!state.prReady) return done("CI not run on draft");
 let head = approvedSha;
 let reran = false;
 for (;;) {
@@ -6601,7 +6610,7 @@ await statsStep("final");
 let readyRuns = 0;
 let orch = null;
 const orchLabels = [];
-async function orchScan(head, tag) {
+async function orchScan(head, tag, again) {
 const oa = [mainWt, ghCmd("orchestrator scan", "ci"), remoteSlug, String(pr.pr_number), head, defaultBranch];
 const ob = "infra:orch-scan" + (pushes > 1 ? ":p" + pushes : "") + (tag ? ":" + tag : "");
 let ol = ob;
@@ -6611,15 +6620,23 @@ const o = await infra(ol, orchScanPrompt({ args: oa }), "PR", JUDGE_AGENT, "orch
 requireProgram(o, "orch_scan", ol, "needs_human", "ci");
 if (!relayDigestOk(o, progKeys("orch_scan"), "orch_scan") || canonical(o.args) !== canonical(oa)) halt("needs_human", ol + ": the relayed result does not match the program's digest or arguments", "ci");
 gate(ol + ": " + (o.reasons.length ? o.reasons.join("; ") : "no orchestrator, IaC or hook-surface sign") + (o.error ? " (error: " + o.error + ")" : ""));
+if (o.error !== null && !again) return orchScan(head, (tag ? tag + ":" : "") + "retry", true);
 return (orch = o);
 }
 async function readyStep() {
 if (!pr || pr.pr_number == null) return gate("ready skipped: no PR");
-if (iacTouched) halt("needs_human", "IaC PR: Max marks it ready (" + pr.pr_url + ")", "iac");
+if (iacTouched) halt("needs_human", "IaC PR: needs Max; the fleet watches no CI and merges nothing (" + pr.pr_url + ")", "iac");
 const g = ghCmd("ready", "ci");
 const o = await orchScan(approvedSha);
-state.keptDraft = o.orchestrator || o.iac_repo || o.apply_on_merge || o.error !== null;
-if (state.keptDraft) return gate("orchestrator or IaC sign: " + pr.pr_url + " stays a draft for Max");
+if (o.error !== null) {
+(state.warnings = state.warnings || []).push({ gate: "orch_scan", error: o.error });
+state.scanWarn = "Orchestrator/IaC scan error: " + o.error + ". Next step: re-run the build with the same plan_ref (the scan runs again), or check the PR by hand before any merge.";
+const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, state.scanWarn);
+const targs = [g, remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
+await prTestsStep("infra:pr-tests:scan-warning", targs, tb, pr.pr_url, []);
+gate("warning: orchestrator/IaC scan error after one retry (" + o.error + "): no merge, no CI rerun; named in the PR body");
+}
+if (mergeAfter !== null) return gate("merge_after: " + mergeAfter + ": " + pr.pr_url + " stays a draft");
 if (!policy.caps.pr_ready) return gate("pr_ready false (policy): " + pr.pr_url + " stays a draft");
 const label = "infra:pr-ready" + (++readyRuns > 1 ? ":p" + readyRuns : "");
 const r = await prState(label, ["ready", g, remoteSlug, String(pr.pr_number), approvedSha], "mark the fleet's own PR ready for review", "ci");
@@ -6656,7 +6673,7 @@ gate(label + ": stats block " + (r.replaced ? "replaced" : "added") + " in " + p
 function finishOk(resumedAt) {
 history.agents += state.agents - opt.agentsBase;
 gate("cumulative: run " + history.runs + ", re-plans " + history.replans + ", agents " + history.agents);
-const out = finish("ok", resumedAt === "done" ? "resumed: the run had already finished; recorded result" : (state.prReady ? "PR ready for review" : "draft PR ready for review") + (state.ciNote ? "; " + state.ciNote : ""));
+const out = finish("ok", resumedAt === "done" ? "resumed: the run had already finished; recorded result" : (state.prReady ? "PR ready for review" : mergeAfter !== null ? "draft PR (merge after: " + mergeAfter + ")" : "draft PR ready for review") + (state.ciNote ? "; " + state.ciNote : ""));
 out.created = pr ? pr.created : null;
 out.template_used = pr ? pr.template_used || null : null;
 out.cumulative = history;

@@ -238,8 +238,37 @@ branch on the forge", "role")`.
     "Orchestrator/IaC scan error: <error>. Next step: re-run the scan with /build-task <plan_ref>
     or check the PR by hand before merge."
 - `finish()` (src:3873) gets `warnings: state.warnings || []`.
-- Dependency: the brief says #33 (L2140, PRs open ready) ships in the same release. #33 is not in
-  the batch. This design works on today's draft-then-ready flow (see Q6).
+- Dependency: the brief says #33 (L2140, PRs open ready) ships in the same release. Max added #33
+  to 7.3.0 (Q6). With #33 an error no longer has a draft to keep: the PR opened ready.
+- The retry runs inside `orchScan` (every scan: ready, merge, u1). Only the `readyStep` scan
+  writes the warning to `state.warnings` and the PR body. The warning line lives in
+  `testsBlock`, so a later test-block rewrite (a CI-fix round) keeps it.
+
+### #33 (L2140): the PR opens ready; draft only with `merge_after` or policy `pr_ready: false`
+
+- Planner output `merge_after` (string or null, optional: not in `REQUIRED_ON_OK`). The planner
+  sets it only when the task, brief or ticket text says the change must not merge before a
+  condition or another PR. The script seals it in `plan_facts.merge_after`. An older plan_ref
+  has none: null, the PR opens ready.
+- The script decides `draft = merge_after != null || policy pr_ready false` and sends `draft`
+  and `merge_after` to the pr-opener. The role creates with `--draft` only when `draft` is true,
+  verifies `isDraft == draft`, and names `merge_after` verbatim in the body.
+- `readyStep`: a draft run keeps the draft (gate line, finish reason names the condition). Else
+  `pr_state ready` runs as the check that the PR is ready at the approved sha (an already-ready
+  PR gives `was_draft: false`). Orchestrator, IaC and scan-error signs no longer keep a draft;
+  they still block the merge and the CI rerun (`judge()` in `ciStep`, unchanged).
+- A branch Max pushed himself (`iacTouched`, ADR-1175) still stops at the ready step; the reason
+  no longer says "Max marks it ready" (the PR is already ready).
+- SKILL.md, README and the pr-opener role say the PR opens ready.
+
+### Car-3 follow-up: post-PR `infra:state:*` program steps skip the agent cap
+
+- `tailWriter(label)` is also true for `infra:state:{pr_open,reviewed,written_back,committed,
+pushed}` labels (inline writer, rewrite and digest-retry labels included) while
+  `state.tailWriters` is set. `saveState` sets the flag from `pr && pr.pr_number != null` before
+  its first writer (inline or chunked) and clears it in a `finally`. `dispatch` counts such a
+  label in `state.tail` once (`TAIL_RE || tailWriter`) before `reserve`. `infra:state:shipped`
+  stays on `TAIL_RE` only. Pre-PR state writes keep the cap.
 
 ### #65: intent judge and bookkeeping plan_diff items
 
@@ -414,6 +443,32 @@ for scripted relays is `v711_failed_digest_retry.test.mjs`. The harness records 
   rounds. Given `softDispatch`, Then it counts a tail writer in `state.tail` before its cap check,
   and `writeChunksParallel` reserves no slot for one.
 
+- **A29** (#33, `v730_pr_ready.test.mjs`). Given a plan with no `merge_after` and the default
+  policy, When ship runs, Then the first pr-opener call has `draft: false` and `merge_after: null`,
+  `infra:pr-ready` runs, and the result reason starts with "PR ready for review". Given an
+  orchestrator scan sign (`orchestrator: true`), Then `draft: false`, `infra:pr-ready` runs, and
+  no `infra:pr-merge` call runs. Given `merge_after` "after yadgarhq/flux#12 merges" in the plan,
+  Then the pr-opener gets `draft: true` and that `merge_after`, no `infra:pr-ready` call runs, the
+  gate log has "merge_after: after yadgarhq/flux#12 merges", and the result reason contains
+  "after yadgarhq/flux#12 merges". Given policy `pr_ready: false`, Then `draft: true` and no
+  `infra:pr-ready` call runs.
+- **A30** (#33, same file). Given the pr-opener role file, Then the create command reads
+  `--draft` only when `draft` is true and the verify line checks `isDraft` against `draft`; the
+  scope-and-plan role names `merge_after`. Given SKILL.md, Then it does not contain "Never mark it
+  ready" and states that the PR opens ready unless `merge_after` or policy `pr_ready: false`.
+- **A31** (car-3 follow-up, `v730_tail_writers.test.mjs`). Given `state.tailWriters` true, Then
+  `tailWriter` is true for `infra:state:pr_open:p1`, `infra:state:reviewed:v2`,
+  `infra:state:written_back`, `infra:state:committed:r2`, `infra:state:pushed:p2` and
+  `infra:state:committed:r2:rewrite-1`, and false for `infra:state:shipped`; false for all of them
+  with the flag false. Given `dispatch`, Then it counts `TAIL_RE || tailWriter` once in
+  `state.tail` before `reserve`. Given `saveState`, Then the flag is set before the inline
+  writer's `infra(` call.
+- **A32** (#41 edge, `v730_update_body_claim.test.mjs`). Given an update round whose commit step
+  returns `commit_result` "nothing_to_commit", Then the run status is `failed` (never `ok`). A
+  resumed update record (no adopted update this run) with only pr_body_claim findings takes the
+  body-only route too: a body update runs no code round, so the earlier-run refusal does not
+  apply.
+
 Test command: `node --test 'plugins/fleet/tests/*.test.mjs'` (README:1777). Dist and tables:
 `node plugins/fleet/scripts/build-workflow.mjs`, then `node plugins/fleet/scripts/gen.mjs --check`.
 No python test suite exists in `plugins/fleet/tests` (all `.test.mjs`). Python programs are
@@ -450,8 +505,8 @@ the dist and the tables, then the full suite green, then one commit with `CHANGE
    shared part reader that car 2 uses.
 2. **Car 2: plan intake, parked, workspace.** #42, #63, #43, #39 (1). It uses car 1's part reader.
    It adds the `fleet_branch.py` and `parked.py` changes. (#53 joins here only if Max rules Q1.)
-3. **Car 3: ship and judge.** #50, #49, #41, #32. All four touch `judged` or shipSteps. Build in
-   that order: guard types, no-PR stop, update routing, orch warning.
+3. **Car 3: ship and judge.** #50, #49, #41, #32, #33 (Max added it, Q6), and the car-2 cap
+   follow-up for the post-PR `infra:state:*` steps. All touch `judged` or shipSteps.
 4. **Car 4: roles and shell programs.** #65, #60 (1-2), #54, #9 (IN part). Every role edit is in
    this car, so `ROLE_SHA256` changes once. It adds `scratch_copy.py`, `exclude_add.py` and
    `purge.py`.

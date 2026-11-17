@@ -79,6 +79,60 @@ closed): <why>; plan-audit passed; the intent judge rules on it)`); the auto gat
   `infra:state:shipped` does: no reserve, counted as tail in `softDispatch` (`state.tailWriters`,
   `tailWriter`). The pre-PR writers keep the cap; the `infra:state:<label>` program steps keep
   their own rule.
+- Car 3 (#50): the code-judge guard counts any non-null `failed` or `errors` other than 0 (of any
+  type, `"2"` too) and any `exit_code` other than the integer 0 as a failing suite. `driftOf`
+  checks the typed properties of a required object one level down (present keys only), so
+  `suite_result.failed: "2"` is contract drift (`suite_result.failed type: got string`), retried
+  once.
+- Car 3 (#49): a pr-opener result `ok` with a null `pr_url` or `pr_number` stops the run
+  (needs_human, stop gate `role`, "pr-opener returned ok with no PR ..."), on every pr-opener
+  call (`:p<k>`, `:again`, `:counts`, `:body-v<k>`, `:notes`). A review step with no PR stops
+  (stop gate `review`); "review skipped: no PR" and its `gates_not_run` entry are gone.
+- Car 3 (#41): after an update-branch, a blocking re-review routes `pr_body_claim` findings as the
+  main path does: the code findings go to the update round's coder, the body findings to the next
+  pr-opener call (`body_findings`); a body-only re-review runs one pr-opener body update and a
+  re-review, no code round and no R1-R5 check (also for an update record from an earlier run).
+  The review text of the update merge still never reaches the body. The code-judge guard is on in
+  update rounds too.
+- Car 3 (#32): an `orch_scan` error gets one retry (`infra:orch-scan[:<tag>]:retry`); the second
+  result counts. An error on the ready step's retry too: a warning `{gate: "orch_scan", error}` in
+  the new result key `warnings` (always present, `[]` when none), and the script-written test
+  block in the PR body gets the line "Orchestrator/IaC scan error: <error>. Next step: ..."
+  (`infra:pr-tests:scan-warning`; later test-block writes keep it). The error still blocks the
+  merge and the CI rerun.
+- Car 3 (#33, Max added it to 7.3.0): the fleet opens its PR ready for review, also on
+  orchestrator and IaC repos. It opens a draft only when the plan names a `merge_after` condition
+  (new optional planner output, sealed in `plan_facts.merge_after`; the pr-opener writes
+  `Merge after: <condition>` in the body, and the run result reason names it) or the policy sets
+  `pr_ready: false`. The pr-opener gets `draft` and `merge_after` and creates with `--draft` only
+  when `draft` is true. The ready step keeps `pr_state.py ready` as the check that the PR is ready
+  at the approved sha. Orchestrator, IaC and scan-error signs no longer keep a draft; the merge and
+  CI-rerun rules do not change. A branch Max pushed himself (ADR-1175) still stops at the ready
+  step, now with "IaC PR: needs Max; the fleet watches no CI and merges nothing". The pr-opener
+  and scope-and-plan role files, the build-task skill and the README say so (role sha pins move).
+  The decision record that supersedes the draft-first part of ADR-1215 is for the orchestrator to
+  file.
+- Car 3 (car-2 follow-up, Max: "a run is never halted for the cap after its PR is open"): the
+  `infra:state:{pr_open,reviewed,written_back,committed,pushed}` program steps (inline, rewrite
+  and retry labels) that `saveState` runs after the PR is open sit outside the agent cap too
+  (`tailWriter`, counted once in `dispatch`). The flag now covers the inline writer as well.
+  Pre-PR state writes keep the cap.
+
+### Tests changed on purpose (car 3)
+
+- `build_task_run` "2.1.0 review skipped when no PR exists" and `v710_block_flow` "AC4 ex7": no PR
+  is now a stop (#49).
+- `build_task_run` "2.1.0 agent cap 100": the work-call filter also leaves out the post-PR
+  `infra:state:*` steps and the soft `:ci` tail; with those off the cap the CI write-back now runs
+  where the cap skipped it before.
+- `build_task_run` (two ADR-1175 cases): the reason reads "IaC PR: needs Max; ...".
+- `v600_s3` (orchestrator, IaC and scan-error cases), `v711_orch_scan_error` AC6: `infra:pr-ready`
+  runs (#33); the scan-error stubs also script `infra:orch-scan:retry` (#32). So do `v600_s4`
+  "review M7" and `v630_unattended` "6.3.0 B".
+- `v633_judge_fence` "tagged-only fix_code ... stays fix_code (L2174)": now becomes approve (#41).
+- `v403_schema_types` READS: the guard reads, `driftOf`, `merge_after`.
+- `v5010_prompt_snapshot` pins: the pr-opener inputs `draft` and `merge_after`, the planner
+  schema, the role files.
 
 ### Tests changed on purpose (car 2)
 
