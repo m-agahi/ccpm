@@ -69,6 +69,9 @@ const WANT = [
   [/^infra:review-paths/, "haiku"],
   [/^infra:remote-head/, "haiku"],
   [/^infra:load-parked$/, "haiku"],
+  // 7.3.0 (#42, #43): the parked draft parts (as load-ref), the fleet-branch read
+  [/^infra:load-parked:p/, "sonnet"],
+  [/^infra:fleet-branch$/, "haiku"],
   [/^intake/, "sonnet"],
   [/^hasher:/, "sonnet"],
   [/^infra:load-ref/, "sonnet"],
@@ -517,8 +520,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // 6.0.0 (ledger 2042): + infra:pr-convention:plan
   // 6.3.0 (ADR-1239): + infra:policy:plan
   // 6.3.4 (2176): + infra:plan-chunks:r0w0
-  assert.equal(out.plan.calls.length, 21, out.plan.labels.join(", "));
-  assert.equal(out.planResult.agents, 21);
+  // 7.3.0 (#43): + infra:fleet-branch
+  assert.equal(out.plan.calls.length, 22, out.plan.labels.join(", "));
+  assert.equal(out.planResult.agents, 22);
   // 5.0.6 (ledger 2019): + 7 build-dir resets (writers, test judge, coder,
   // code judge, commit, push, pr-review) and the teardown, which runs after
   // the result is made

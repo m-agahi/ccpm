@@ -258,7 +258,7 @@ test("AC-1987-2: a re-run with the freeze_digest and the frozen tree resumes at 
 for (const [name, over] of [
   ["one test file edited (another tree, another hash)", { tree: "T9", ref: "T1", flat: Object.assign({}, HASHES_FLAT, { "tests/test_a.py": "hX" }) }],
   ["the maps changed under the same tree", { flat: Object.assign({}, HASHES_FLAT, { "tests/test_b.py": "hX" }) }],
-  ["coder edits in the worktree (tree != freeze tree)", { tree: "K1" }],
+  // 7.3.0 (#52, Max: Q2 (b)): coder edits with every frozen map unchanged now resume (v730_frozen_dirty)
   ["no freeze ref", { ref: null }],
   ["a freeze ref at another tree", { ref: "T7" }],
   ["HEAD moved off the plan commit", { head: "d".repeat(40) }],

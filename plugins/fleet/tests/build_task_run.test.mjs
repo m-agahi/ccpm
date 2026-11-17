@@ -1780,6 +1780,8 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
   assert.deepEqual(out.labels, [
     "preflight",
     "intake",
+    // 7.3.0 (#43)
+    "infra:fleet-branch",
     "workspace",
     // 4.0.0 (1985): the push-access dry run, after its own PATH re-check
     "infra:path-check:push-probe",

@@ -286,6 +286,7 @@ export async function runOne(script, args0) {
   const args = withNonce(args0);
   // 6.3.4 (2176): each run starts with no chunk files written
   CHUNK_STORE.clear();
+  PARKED_STORE.clear();
   const calls = [];
   const unscripted = [];
   const logs = [];
@@ -313,6 +314,8 @@ export async function runOne(script, args0) {
     if (r && typeof r === "object" && !rawResults.has(r)) r = fillPrograms(base, r, prompt);
     const mut = script.__mutate;
     if (mut && r && typeof r === "object" && (mut.label instanceof RegExp ? mut.label.test(base) : mut.label === base)) r = mut.fn(r, prompt, label);
+    // 7.3.0 (#42): a load-parked stub in the 7.2.0 shape becomes the meta relay (after any mutation)
+    if (base === "infra:load-parked" && r && r.parked && Array.isArray(r.parked.draft_chunks)) r = parkedMeta(r);
     return r;
   };
   const agentInner = async (prompt, opts = {}) => {
@@ -338,6 +341,16 @@ export async function runOne(script, args0) {
     if (!(label in script) && /^infra:load-parked$/.test(label)) {
       const i = inputsOf(prompt);
       return { status: "ok", reason: "read", parked: null, args: [i.scratch, i.plan_tip_time === null ? "null" : String(i.plan_tip_time)] };
+    }
+    // 7.3.0 (#42): unscripted parked part reads serve the payload of the meta relay's run
+    if (!(label in script) && /^infra:load-parked:p\d+(:retry)?$/.test(label)) {
+      const i = inputsOf(prompt);
+      return parkedPartOut(PARKED_STORE.get(i.run) || "", i.part, [i.scratch, i.run, String(i.part)]);
+    }
+    // 7.3.0 (#43): unscripted fleet-branch reads find no fleet branch of the task
+    if (!(label in script) && /^infra:fleet-branch$/.test(label)) {
+      const i = inputsOf(prompt);
+      return { status: "ok", reason: "listed", slugs: [], args: [i.repo, i.task_id] };
     }
     // 4.0.0 (1985, S3): unscripted push-access probes find access (a new branch)
     if (!(label in script) && /^infra:push-probe$/.test(label))
@@ -971,6 +984,30 @@ export function refContentOf(prompt) {
 }
 // 6.3.4 (2176): the chunk files the plan-ref writers wrote, by chunk dir: {dir: {i: text}}
 export const CHUNK_STORE = new Map();
+// 7.3.0 (#42): parked payloads by run (canonical JSON {draft, findings}), parts of PARKED_PART code points
+export const PARKED_STORE = new Map();
+export const PARKED_PART = 32000;
+function parkedMeta(r) {
+  const p = r.parked;
+  const was = r.digest === relayDigestOf(r, K("parked:read"));
+  const draft = p.draft_chunks.length ? p.draft_chunks.join("") : null;
+  const findings = Array.isArray(p.findings_chunks) && p.findings_chunks.length ? p.findings_chunks.join("") : null;
+  const payload = JSON.stringify({ draft, findings });
+  PARKED_STORE.set(p.run, payload);
+  // a meta key the stub (or its mutation) set wins
+  const meta = Object.assign({ run: p.run, plan_path: draft === null ? null : p.plan_path, payload_sha256: sha256(payload), part_count: Math.max(1, Math.ceil(Array.from(payload).length / PARKED_PART)) }, "part_count" in p ? { part_count: p.part_count } : {}, "payload_sha256" in p ? { payload_sha256: p.payload_sha256 } : {});
+  const out = Object.assign({}, r, { parked: meta });
+  if (was) out.digest = relayDigestOf(out, K("parked:read"));
+  return out;
+}
+// parked.py read-part's output for part k of a payload (fillPrograms adds program and digest)
+export function parkedPartOut(payload, k, args) {
+  const cps = Array.from(payload);
+  const p = cps.slice(k * PARKED_PART, (k + 1) * PARKED_PART);
+  const chunks = [];
+  for (let j = 0; j < p.length; j += 1000) chunks.push(p.slice(j, j + 1000).join(""));
+  return { status: "ok", reason: "read", part: { index: k, count: Math.max(1, Math.ceil(cps.length / PARKED_PART)), sha256: sha256(p.join("")) }, chunks, args };
+}
 // a writer prompt's chunks, {i: text} ("chunk <i> sha256 <hex>:" then the text)
 export function writerChunksOf(prompt) {
   const out = {};
@@ -1228,6 +1265,9 @@ export const PROGRAM_LABELS = [
   [/^infra:branch-scan$/, [[null, "branch_scan", K("branch_scan")], ["test_db", "test_db_decl", K("test_db_decl")]]],
   // 4.0.0 (1986)
   [/^infra:load-parked$/, [[null, "parked", K("parked:read")]]],
+  // 7.3.0 (#42, #43): read lazily (the module imports while PROGRAM_KEYS lacks the entries)
+  [/^infra:load-parked:p\d+/, [[null, "parked", PROGRAM_KEYS["parked:part"] || null]]],
+  [/^infra:fleet-branch$/, [[null, "fleet_branch", PROGRAM_KEYS["fleet_branch"] || null]]],
   // 5.0.2 (ledger 2004): the park program moves the draft
   [/^infra:park-plan/, [["park", "parked", K("parked:park")], ["findings_write", "parked", K("parked:write")]]],
   [/^infra:stage-plan/, [["plan_hash", "plan_hash", K("plan_hash")]]],

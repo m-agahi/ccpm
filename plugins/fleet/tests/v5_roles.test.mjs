@@ -113,7 +113,8 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   // 6.0.0 (ledger 2042): + infra:pr-convention:plan
   // 6.3.0 (ADR-1239): + infra:policy:plan
   // 6.3.4 (2176): + infra:plan-chunks:r0w0
-  assert.equal(out.plan.calls.length, 21, out.plan.labels.join(", "));
+  // 7.3.0 (#43): + infra:fleet-branch
+  assert.equal(out.plan.calls.length, 22, out.plan.labels.join(", "));
   // 5.0.6 (ledger 2019): + 7 build-dir resets and the teardown
   // 6.0.0 (ledger 2033): + infra:policy
   // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block

@@ -27,8 +27,8 @@ Edit `src` only. Regenerate the dist `plugins/fleet/workflows/build-task-run.js`
 | #59                       | real, cause unproven: one refusal in r0w0; the rewrite round recovered. A writer that never writes leaves bad chunks, so `writeChunks` already retries (src:5196-5222). Both rewrite rounds run on the same model (sonnet)                                                                                                                                                         | IN (option 3 only)                                                                          | rewrite-round writers run one model step up. Option 1 cannot work for writes (ADR-1267 alt. (a)): only the script holds the payload         | A3            |
 | #47 (L2187)               | (a) real: `writeStatePrompt` (src:3276-3286) and the park findings write (src:2505-2508) put every chunk in one agent. (b) real: an intact ref with a bad part relay ends in `changed()` "plan ref missing or changed" (src:6113, :6186). (c) real: after a first part-0 re-read (`reread = true`), the count re-read is skipped (src:6179). A null count stops at once (src:6177) | IN                                                                                          | (a) the parallel chunk writers of commit-plan, for state_write and park. (b) a relay-failure stop text. (c) one count re-read in every path | A4, A5, A6    |
 | #42 (L2175)               | real: `loadParked` runs `softDispatch` with no `opts.digest` (src:2534), so `digestRetry` returns at once (src:3535). One haiku agent copies the whole draft (src:2515-2523). Any mismatch -> `ignore` (src:2542)                                                                                                                                                                  | IN                                                                                          | parked read in parts (meta + parts of 32000 code points with per-part sha256), with the load-ref part reader and digest ids                 | A7, A8        |
-| #53 (L2188)               | real: unattended keeps `PARKED_UNREADABLE` as a blocker (src:5731-5733). The comment says "never an IaC path or a parked prior". The task title asks to relax a fail-closed blocker. A title is not a ruling                                                                                                                                                                       | PARK                                                                                        | Q1                                                                                                                                          | none          |
-| #52 (L2185)               | half real. The coder's dirty work blocks a re-run: workspace step 6 (src:2396) and the frozen-resume tree check (src:6391). The load-ref 87 KB mis-copy does NOT reproduce: 6.3.4 part reads (src:6127-6185, ADR-1267) fixed it                                                                                                                                                    | PARK                                                                                        | Q2                                                                                                                                          | none          |
+| #53 (L2188)               | real: unattended keeps `PARKED_UNREADABLE` as a blocker (src:5731-5733). The comment says "never an IaC path or a parked prior". The task title asks to relax a fail-closed blocker. A title is not a ruling                                                                                                                                                                       | IN (Max ruled Q1 (a), "Decide + log", 2026-11-17)                                           | unattended: an unreadable parked prior is decided and logged when plan-audit and the intent judge pass                                      | A26           |
+| #52 (L2185)               | half real. The coder's dirty work blocks a re-run: workspace step 6 (src:2396) and the frozen-resume tree check (src:6391). The load-ref 87 KB mis-copy does NOT reproduce: 6.3.4 part reads (src:6127-6185, ADR-1267) fixed it                                                                                                                                                    | IN (Max ruled Q2 (b), 2026-11-17)                                                           | a frozen resume accepts a dirty tree when every frozen map still matches; the coder continues from it                                       | A27           |
 | #9 (L2008)                | real, every form named is still there: chunk `printf > file` (src:2223, :2672). Exclude append with `$(...)` (src:2393). `cd && pre-commit` (src:2653). `mkdir && mv` (src:2691). Purge pipeline `n=$(find ...) && find ... \| xargs` (src:2959-2963). Push output redirect (src:3079)                                                                                             | IN (exclude, retire, purge, plan-doc pre-commit). PARK (chunk printf, Q4). SPLIT-OUT (push) | move four forms into programs                                                                                                               | A20, A21, A22 |
 | #54 (L2189)               | real: seven roles tell the agent to build a throwaway copy with `mktemp -d`, `worktree add`, copy and delete loops (fleet-test-judge.md:44, plus code-judge, test-writer, plan-audit, sweep, scope-and-plan, pr-review)                                                                                                                                                            | IN                                                                                          | a `scratch_copy.py` program (make, run, remove). Role text names it                                                                         | A23           |
 | #40 (L2166) + #58 (L2197) | real: `callers.py:141-153` counts raw `git grep -w -F` hits against `MAX_SYMBOL_HITS = 100` (src:173). A capped symbol is a finding that only a human clears (src:4708-4714)                                                                                                                                                                                                       | PARK                                                                                        | Q3 (options 1-4 of #58)                                                                                                                     | none          |
@@ -99,9 +99,10 @@ of #60 (step 3), #9 (push) and #39 (npm prefix).
 
 ### #42: parked read in parts
 
-- `parked.py read` gets two modes:
-  - `read-meta <scratch> <tip>` prints `{run, plan_path, payload_sha256, part_count}` or
-    `{parked: null}`.
+- `parked.py read` gets two modes (as built, car 2: the meta mode keeps the name `read` and its
+  digest id `parked:read`; its `parked` object changed shape):
+  - `read <scratch> <tip>` prints `{parked: {run, plan_path, payload_sha256, part_count} | null,
+args}`.
   - `read-part <scratch> <run> <k>` prints `{part: {index, count, sha256}, chunks}` with
     32000-code-point parts.
 - Payload = canonical JSON `{draft, findings}`, built at read time from the files that
@@ -157,6 +158,37 @@ of #60 (step 3), #9 (push) and #39 (npm prefix).
   Return `fast_forwarded: true|false`.
 - Step 8 (base_ref) already runs after step 5.
 - `workspaceStep` (src:4028) logs "fast-forwarded to origin/<default>" when the flag is true.
+
+### #53: unattended decides an unreadable parked prior (Max ruled Q1 (a), "Decide + log")
+
+- Under unattended (`ua`), `PARKED_UNREADABLE` is no longer kept out of `decided` (src:5773). It is
+  logged with `autoDecide("default-blocker", "decided", ...)`, and its reason names that plan-audit
+  passed and that the intent judge rules on it.
+- The early `autoFailResult` for `parkedBad` (src:5813) runs only without unattended.
+- The auto gates (intent judge included) still run. An intent judge that refuses still stops.
+- Without unattended, nothing changes (confirm "default" asks; confirm "auto" fails closed).
+
+### #52: a frozen resume accepts the coder's dirty tree (Max ruled Q2 (b))
+
+- The frozen-resume check (src:6432-6451) computes `freeze_digest` over the freeze ref's tree
+  (`refTree`), not the worktree tree. The digest holds the frozen maps (`mapsDigest`, the fleet
+  refs left out), so a match proves every frozen file (tests and frozen config) still has its frozen
+  hash.
+- A worktree tree that differs from `refTree` no longer refuses on its own. The gate line names the
+  dirty tree. The coder round runs with `freeze_tree` = `refTree` and continues from the dirty
+  worktree.
+- Still refused: HEAD off `plan_base`, no freeze ref, suspicious paths, a re-frozen digest, and any
+  frozen-map mismatch (the digest differs). A stop before the freeze returns no `freeze_digest`, so
+  a dirty tree there is refused as today.
+
+### Car-1 follow-up: post-PR state chunk writers skip the agent cap (Max ruled "Exempt writers")
+
+- The chunk writers of a run-state written after the PR is open
+  (`infra:state-chunks:(pr_open|reviewed|written_back|shipped)...`) are tail agents, as
+  `infra:state:shipped` is (`TAIL_RE`). A new `TAIL_WRITER_RE` names them: `writeChunksParallel` reserves no slot for them, and
+  `softDispatch` counts them in `state.tail` and runs them past the cap.
+- The pre-PR state writers (`committed`, `pushed`) keep the cap. The `infra:state:<label>` program
+  steps keep their own rule (only `infra:state:shipped` is tail).
 
 ### #49: no silent skip of the review
 
@@ -356,6 +388,26 @@ for scripted relays is `v711_failed_digest_retry.test.mjs`. The harness records 
 - **A25** (#60, same file). Given plan-audit.md, Then it contains the shipped-vs-planned table
   rule with `plan_defect`. Given scope-and-plan.md, Then it contains the gate-boundary Open
   decision rule.
+
+- **A26** (#53, `v730_parked_unattended.test.mjs`). Given unattended (policy `unattended`) and a
+  parked prior whose findings are unparseable, When plan-audit passes and the intent judge
+  approves, Then the run builds (status `ok`), no "unattended: asking Max" gate is logged, and
+  `auto_decisions` holds one entry `{gate: "default-blocker", decision: "decided"}` whose reason
+  starts with "parked prior unreadable (fail closed)". Given the same with the intent judge
+  refusing, Then the run stops with `failed_check` "intent" and builds nothing. Given no unattended
+  and confirm "auto", Then the result is the `autoFailResult` with "parked prior unreadable", as
+  before.
+- **A27** (#52, `v730_frozen_dirty.test.mjs`). Given a coder stop after the freeze and a re-run
+  with its `freeze_digest`, When the worktree tree is `K1` (not the freeze tree `T1`) and every
+  frozen map is unchanged, Then the build resumes at the coder (`resumed_at` "frozen"), the coder's
+  `freeze_tree` is `T1`, and the gate log names the dirty tree. Given the tree `T9` and one frozen
+  test file changed, Then needs_human with stop_gate `resume` and no role call.
+- **A28** (car-1 follow-up, `v730_tail_writers.test.mjs`). Given the chunk writer labels
+  `infra:state-chunks:shipped:r0w0`, `:reviewed:v1:r1w0`, `:pr_open:p1:r0w0` and
+  `:written_back:r0w0`, Then `TAIL_WRITER_RE` matches each. Given `infra:state-chunks:committed:r1:r0w0`
+  and `:pushed:p1:r0w0`, Then `TAIL_WRITER_RE` matches neither. Given `softDispatch`, Then it counts a
+  tail label in `state.tail` before its cap check, and `writeChunksParallel` reserves no slot for a
+  tail prefix.
 
 Test command: `node --test 'plugins/fleet/tests/*.test.mjs'` (README:1777). Dist and tables:
 `node plugins/fleet/scripts/build-workflow.mjs`, then `node plugins/fleet/scripts/gen.mjs --check`.

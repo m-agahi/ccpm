@@ -103,10 +103,11 @@ const SCENARIOS = {
 // 7.0.0 (yaadgaar #699): the intake prompt has one ledger branch (yaadgaar) and no body page read; the preflight census asks for mcp__yaadgaar__read_task only (the probe pin moves); the reworded yaadgaar read and write-back prompts; no infra:ledger-read:pre, infra:ledger-writeback or their :ci calls (4 fewer build calls on the default legacy ledger fixture)
 // 7.0.0 review F2, F4: the default fixture is yaadgaar task #42 (input #42; + infra:yaadgaar-read, infra:yaadgaar-writeback and their :ci calls: 4 more build calls), and title, body_slug, page_project and page_tags leave INFRA_SCHEMA results and body_slug leaves SOURCE_SCHEMA (both move the pins: with the schema fields put back the plan-then-build pin is 9b97deb7..., not the one below; probe unchanged)
 // 7.1.0 (L2145): + infra:pr-tests after the pr-opener (one more build call), the code judge suite_result types passed, the pr-opener role sha moves (probe unchanged)
+// 7.3.0 car 2: + infra:fleet-branch in plan mode (#43, one more call each), the intake plan-path rule (#63), the plan-mode workspace fast-forward rule (#39), the parked meta prompt and its digest/args opts (#42), fast_forwarded and the parked part keys in the schemas (probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "cabb1497e68698a1bcf2c8cc525964fc1a11f2993fec3b92561ad276f80c13ee" },
-  "confirm auto (gates, then build in one run)": { calls: 91, sha256: "26d75a00fec0baf1b5ba02fea00e1b2a6dbb2138dfe9c9812d11a9add4a93909" },
-  "short path (one test writer)": { calls: 88, sha256: "c941f661e573ca0251872c009092723c2f650402ba231ec13672d581df2e5b0a" },
+  "plan then build (confirm ask)": { calls: 90, sha256: "a8dacd4229c4f011c72a345fe6e70390bb9e3350480b57816d4ae8d4cfb0570d" },
+  "confirm auto (gates, then build in one run)": { calls: 92, sha256: "ebe7fa60a0e2cbf9b0bf189b2fb209fb2754c0dc335582c2c075caa3f2f7f4a8" },
+  "short path (one test writer)": { calls: 89, sha256: "46ecc9a86b4ac0ad3e91c304b66373096f8ed308e46f826ee3e52ac3eb07519b" },
   "probe": { calls: 2, sha256: "a8ceccc781cf8954f6b925f6d96462387d40cede1db8d318d28eb0441753e8de" },
 };
 

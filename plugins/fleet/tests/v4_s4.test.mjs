@@ -780,7 +780,8 @@ test("4.0.0 1986 AC-4: a parked read that is unusable is ignored with a gate lin
     ["failed", () => ({ status: "failed", reason: "boom" }), /returned failed/],
     ["dead", () => null, /returned nothing/],
     ["run", (r, p) => redigest("infra:load-parked", Object.assign(r, { parked: Object.assign({}, r.parked, { run: "../x" }) }), p), /unusable shape/],
-    ["chunk", (r, p) => redigest("infra:load-parked", Object.assign(r, { parked: Object.assign({}, r.parked, { draft_chunks: ["x".repeat(1001)] }) }), p), /unusable shape/],
+    // 7.3.0 (#42): the meta carries no chunks (was: a chunk over 1000 characters); a part count out of range is unusable
+    ["count", (r, p) => redigest("infra:load-parked", Object.assign(r, { parked: Object.assign({}, r.parked, { part_count: 65 }) }), p), /unusable shape/],
     ["path", (r, p) => redigest("infra:load-parked", Object.assign(r, { parked: Object.assign({}, r.parked, { plan_path: "/etc/x.md" }) }), p), /plan_path/],
   ];
   for (const [what, fn, want] of cases) {
@@ -892,9 +893,13 @@ test("4.0.0 1986 (real python): parked.py writes findings from checked chunks an
     assert.deepEqual(o.args, [scratch, "1000"]);
     assert.equal(o.parked.run, "r-000001");
     assert.equal(o.parked.plan_path, "docs/plans/x.md");
-    assert.equal(o.parked.draft_chunks.join(""), "# old draft\n");
-    assert.equal(o.parked.findings_chunks.join(""), msg);
-    assert.ok(o.parked.findings_chunks.every((x) => x.length <= 1000));
+    // 7.3.0 (#42): read prints the meta; read-part the payload {draft, findings}
+    assert.equal(o.parked.part_count, 1);
+    const p0 = JSON.parse(py("read-part", scratch, "r-000001", "0").stdout);
+    const joined = p0.chunks.join("");
+    assert.equal(sha256(joined), o.parked.payload_sha256);
+    assert.deepEqual(JSON.parse(joined), { draft: "# old draft\n", findings: msg });
+    assert.ok(p0.chunks.every((x) => x.length <= 1000));
     assert.equal(o.program.name, "parked");
     const dg = Object.assign({}, o);
     delete dg.digest;
@@ -912,7 +917,7 @@ test("4.0.0 1986 (real python): parked.py writes findings from checked chunks an
     o = JSON.parse(py("read", scratch, "null").stdout);
     assert.equal(o.parked.run, "r-000002");
     assert.equal(o.parked.plan_path, "p.md");
-    assert.deepEqual(o.parked.findings_chunks, []);
+    assert.equal(JSON.parse(JSON.parse(py("read-part", scratch, "r-000002", "0").stdout).chunks.join("")).findings, null);
     assert.deepEqual(o.args, [scratch, "null"]);
     // bad tip
     assert.notEqual(py("read", scratch, "-1").status, 0);

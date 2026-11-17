@@ -162,6 +162,8 @@ const OB = SP + "repo_obligations[]";
 const CJ = "role:fleet-code-judge:";
 const IJ = "role:fleet-intent-judge:";
 const PARSED_REF = "parsed: the sealed plan ref (sha256-checked tag message, JSON.parse)";
+// 7.3.0 (#42)
+const PARSED_PAYLOAD = "parsed: the parked payload {draft, findings} (JSON.parse of parts that join to the digest-checked payload_sha256)";
 const PARSED_PARK = "parsed: a parked findings.json (JSON.parse of digest-checked chunks)";
 const PARSED_ROUND = "parsed: the script's round snapshot (or a parked findings.json)";
 const PARSED_ARGS = "parsed: the workflow args";
@@ -295,13 +297,16 @@ const READS = {
   },
   scriptsMapProblem: { "map object": "hasher:scripts", "map array": "!hasher:scripts" },
   loadParked: {
-    // the chunk lists, and the parked findings' symbols filter (parsed)
-    "x string": ["prog:parked:parked.draft_chunks[]", 2],
-    "a array": "prog:parked:parked.draft_chunks",
+    // 7.3.0 (#42): the meta; the payload's draft and findings (parsed), and the parked findings' symbols filter (parsed)
+    "x string": [PARSED_PAYLOAD, 2],
     "k object": "prog:parked:parked",
     "k.run string": "prog:parked:parked.run",
     "k.run string-re": "prog:parked:parked.run",
-    "k.plan_path string": "prog:parked:parked.plan_path",
+    "k.plan_path string": ["prog:parked:parked.plan_path", 2],
+    "k.payload_sha256 string": "prog:parked:parked.payload_sha256",
+    "k.payload_sha256 string-re": "prog:parked:parked.payload_sha256",
+    "n integer": "prog:parked:parked.part_count",
+    "pl object": PARSED_PAYLOAD,
     "f object": [PARSED_PARK, 2],
     "f array": PARSED_PARK,
     "f.rounds array": [PARSED_PARK, 2],
@@ -436,7 +441,7 @@ const READS = {
     "e.tried array": "prog:gh_identity:repos.*.tried",
     "tr[0].push boolean": "prog:gh_identity:repos.*.tried[].push",
   },
-  workspaceStep: { "uc object": "infra:remote_url_check", "uc.url string": ["prog:remote_url:url", 2], "ws.remote_host string": "infra:remote_host" },
+  workspaceStep: { "uc object": "infra:remote_url_check", "uc.url string": ["prog:remote_url:url", 2], "ws.remote_host string": "infra:remote_host", "ws.fast_forwarded boolean": "infra:fast_forwarded" },
   briefProblem: {
     "b object": "intake:brief",
     "b.title string": "intake:brief.title",
@@ -641,6 +646,9 @@ const READS = {
   chunkRounds: { "r.bad_chunks array": "infra:bad_chunks", "i integer": "infra:bad_chunks[]" },
   // 7.3.0 (#67, #59)
   relayModel: { "label string-re": ["parsed: the script's own step label", 2] },
+  // 7.3.0 car 2 (Max: "Exempt writers"): the script's own labels
+  writeChunksParallel: { "prefix string-re": "parsed: the script's own writer label prefix" },
+  softDispatch: { "label string-re": "parsed: the script's own step label" },
   // 7.3.0 (#47, #42): the shared part reader (a part only picks what to read again; the whole-payload sha256 decides)
   partReader: {
     "c string": "prog:plan_ref:chunks[]",

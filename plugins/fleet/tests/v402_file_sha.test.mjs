@@ -40,6 +40,9 @@ const SAMPLES = [
   "hasher:fp-pre:r1",
   "infra:branch-scan",
   "infra:load-parked",
+  // 7.3.0 (#42, #43)
+  "infra:load-parked:p1",
+  "infra:fleet-branch",
   "infra:park-plan",
   "infra:stage-plan",
   "infra:format-tests:r1",

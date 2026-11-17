@@ -442,7 +442,8 @@ test("5.0.7 2020: the read-only program steps carry the retry; no write step doe
   const ro = [...src.matchAll(/JUDGE_AGENT,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]).concat([...src.matchAll(/digest: (?:baseTree \? "hasher:base" : )?"([a-z_]+)"/g)].map((m) => m[1]));
   // 6.2.2 re-review D-N1: the default-agent (write) form infra(..., undefined, "<id>") too
   const writes = [...src.matchAll(/,\s*undefined,\s*"([a-z_:]+)"\)?/g)].map((m) => m[1]);
-  const RO = ["read_state", "fleet_scan", "hook_surface", "tf_gate", "remote_head", "branch_scan", "verify_since", "review_paths", "callers", "precommit_ids", "script_check", "hasher", "hash_diff", "gh_identity", "ruleset_surface", "policy", "pr_convention", "orch_scan", "ci_watch"];
+  // 7.3.0 (#43): fleet_branch
+  const RO = ["read_state", "fleet_scan", "hook_surface", "tf_gate", "remote_head", "branch_scan", "verify_since", "review_paths", "callers", "precommit_ids", "script_check", "hasher", "hash_diff", "gh_identity", "ruleset_surface", "policy", "pr_convention", "orch_scan", "ci_watch", "fleet_branch"];
   // the write steps allowed the retry: format_files (6.2.2 review M2: a second run finds the files settled) and pr_test_block (7.1.0, L2145 ruling AC4)
   const WRITE_RETRY = ["format_files", "pr_test_block"];
   assert.deepEqual([...new Set(ro)].sort(), RO.slice().sort());

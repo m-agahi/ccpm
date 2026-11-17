@@ -43,6 +43,58 @@ workflow-reliability task that the plan puts IN.
   part 0 with no part at all is read once more before it stops. The part reader
   (`partOk`, `countOf`, `readParts`) is one top-level helper (`partReader`).
 
+- Plan intake, parked, workspace (car 2, #42): the parked prior is read in parts. `parked.py read`
+  prints the meta only (`parked: {run, plan_path, payload_sha256, part_count}`), with digest id
+  `parked:read` and the args, so a mis-copied meta relay gets the digest retry. The new
+  `parked.py read-part <scratch> <run> <k>` prints part k of the payload (canonical JSON
+  `{draft, findings}`, parts of 32000 code points, `{part: {index, count, sha256}, chunks}`); the
+  part reads (`infra:load-parked:p<k>`, sonnet) use the shared `partReader`, a bad part is read
+  once more, and the joined parts must hash to `payload_sha256`, else the prior is ignored (fail
+  closed, the unreadable blocker as before). The on-disk park layout is 7.2.0's: a draft parked by
+  7.2.0 loads. Covers #22 (L2029).
+- Car 2 (#63): a brief `plan_path` with a segment that starts with `.`, or a `scratch` or `parked`
+  segment, stops at intake (needs_human, "is not a tracked repo path") before the planner runs.
+  The intake prompt asks for a plan path that git tracks (`ls-files --error-unmatch`) and that is
+  not under `.claude/` or a `scratch/` dir.
+- Car 2 (#43): plan mode reads the local branches `fleet/<task id>-*` with the new read-only
+  program `fleet_branch.py` (`infra:fleet-branch`, haiku, digest id `fleet_branch`) before the
+  layout. One slug: it is adopted (gate "branch slug <s> adopted from existing ..."). None, or the
+  derived slug among them: the derived slug. Several without the derived one: needs_human with the
+  branch list. A text input (`t...` id) reads none. 42 shipped programs (`PROGRAM_COUNT`).
+- Car 2 (#39 part 1): in plan mode only, the workspace step fast-forwards a reused (or added
+  existing) fleet branch with no own commits to `origin/<default_branch>`
+  (`merge-base --is-ancestor`, a clean status, `merge --ff-only` with hooks off) and returns
+  `fast_forwarded`; the run logs "fast-forwarded to origin/<default>". Build mode never does.
+- Car 2 (#53, Max ruled "Decide + log"): under unattended an unreadable parked prior is a decided
+  default blocker (`auto_decisions`: `default-blocker: decided (parked prior unreadable (fail
+closed): <why>; plan-audit passed; the intent judge rules on it)`); the auto gates then run, and
+  a refusing intent judge still stops. Without unattended nothing changes.
+- Car 2 (#52, Max ruled Q2 (b)): a frozen resume (`freeze_digest`) checks the digest over the
+  freeze ref's tree, so a worktree the coder left dirty resumes at the coder when every frozen map
+  (tests, frozen config) still matches; the coder gets `freeze_tree` = the freeze tree. A
+  frozen-map change, HEAD off `plan_base`, no freeze ref or suspicious paths still refuse.
+- Car 2 (car-1 follow-up, Max ruled "Exempt writers"): the chunk writers of a run-state written
+  after the PR is open (`infra:state-chunks:(pr_open|reviewed|written_back|shipped)...`,
+  `TAIL_WRITER_RE`) sit outside the agent cap, as `infra:state:shipped` does: no reserve, counted
+  as tail in `softDispatch`. The pre-PR writers (`committed`, `pushed`) keep the cap; the
+  `infra:state:<label>` program steps keep their own rule.
+
+### Tests changed on purpose (car 2)
+
+- One more plan-mode call (`infra:fleet-branch`): `build_task_run` (plan-mode label list),
+  `v4_s3` and `v5_roles` (plan call count 21 -> 22), the `v5010_prompt_snapshot` pins (also the
+  intake, workspace and parked prompt changes).
+- 42 programs: `v4_s1` (the count and the "table of 42" text).
+- `v4_s5`: the frozen-resume case "coder edits in the worktree (tree != freeze tree)" now resumes
+  (#52); it moved to `v730_frozen_dirty`.
+- `v4_s4`: the parked "chunk" case (a meta chunk over 1000 characters) became a "count" case (a
+  part count of 65); the real-python parked test reads the meta and `read-part`.
+- `v700_inputs_unchanged`: the intake plan rule text (#63).
+- `v730_state_chunks`: the soft-cap pin reads `if (!soft && !TAIL_WRITER_RE.test(prefix))`.
+- Tables: `v402_file_sha` SAMPLES, `v403_schema_types` READS, `v507_digest_relays` RO list,
+  `v4_s3` tier table. The harness turns a 7.2.0-shaped `infra:load-parked` stub into the meta relay
+  and serves the part reads.
+
 ### Tests changed on purpose (car 1)
 
 - `v507_digest_relays`: two pinned retry gate lines end with " on opus".
