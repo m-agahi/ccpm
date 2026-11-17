@@ -302,5 +302,18 @@ elif mode == 'park':
         if os.path.lexists(src):
             os.unlink(src)
     emit({'target': target, 'clean': not dirty(), 'dirty': [], 'args': args})
+elif mode == 'retire' and len(sys.argv) == 4:
+    # fleet 7.3.0 (#9): retire <dir> <used>: move the used parked run folder <dir> into <used>/
+    # (made when missing), never over an existing <used>/<name>, never through a symlink.
+    # Prints {moved, args}; nothing to move or a taken target is moved false, not an error.
+    src, used = sys.argv[2], sys.argv[3]
+    dest = os.path.join(used, os.path.basename(src.rstrip('/')))
+    moved = False
+    if os.path.isdir(src) and not os.path.islink(src) and not os.path.islink(used):
+        os.makedirs(used, exist_ok=True)
+        if not os.path.lexists(dest):
+            os.rename(src, dest)
+            moved = True
+    emit({'moved': moved, 'args': [src, used]})
 else:
-    sys.exit('usage: read <scratch> <tip> | read-part <scratch> <run> <k> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run>')
+    sys.exit('usage: read <scratch> <tip> | read-part <scratch> <run> <k> | write <scratch> <run> <chunk dir> <n> <expected> <shas> | park <worktree> <plan path> <scratch> <run> | retire <dir> <used>')

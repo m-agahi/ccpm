@@ -196,7 +196,9 @@ test("5.0.2 2007: the digest checks and the prompts read the one key table (sour
   // PROGRAM_OUT types every key of every mode, and no other (the hasher's are in HASHER_SCHEMA)
   const at = SOURCE.indexOf("\nconst PROGRAM_OUT = {");
   const out = new Function("const STR = {}, STR_OR_NULL = {}, STRS = {}, BOOL = {}, INT = {}, STR_LISTS = {}, PROGRAM_PROP = {};\nreturn " + SOURCE.slice(SOURCE.indexOf("{", at), SOURCE.indexOf("\n};\n", at) + 2))();
-  for (const [n] of PROGRAMS) {
+  // 7.3.0 (#54): scratch_copy.py is run by the copy roles and relayed by no step: no key table
+  const RELAYED = PROGRAMS.filter(([n]) => n !== "scratch_copy");
+  for (const [n] of RELAYED) {
     const union = [...new Set(Object.entries(table).filter(([id]) => id.split(":")[0] === n).flatMap(([, k]) => k))].sort();
     if (n === "hasher") continue;
     assert.deepEqual(Object.keys(out[n]).filter((k) => k !== "digest").sort(), union, n + ": PROGRAM_OUT keys are the PROGRAM_KEYS keys");
@@ -207,14 +209,14 @@ test("5.0.2 2007: the digest checks and the prompts read the one key table (sour
   // the changed-definitions digest reads the table too
   assert.match(SOURCE, /for \(const k of progKeys\("changed_defs"\)\) relayed\[k\] =/);
   // every shipped program has keys, and every key list is the program's
-  for (const [n] of PROGRAMS) assert.ok(Object.keys(table).some((id) => id.split(":")[0] === n), n + " has no PROGRAM_KEYS entry");
+  for (const [n] of RELAYED) assert.ok(Object.keys(table).some((id) => id.split(":")[0] === n), n + " has no PROGRAM_KEYS entry");
   // no digest check passes a hand-written key list
   for (const m of SOURCE.matchAll(/relayDigestOk\(\w+, (\[[^\]]*\])/g)) assert.fail("a literal key list at a digest check: " + m[0]);
   // no prompt hand-writes a program's printed list
   const lits = [...SOURCE.matchAll(/prints one JSON object \{[a-z_]/g)].map((m) => SOURCE.slice(m.index, m.index + 80));
   assert.deepEqual(lits, [], "hand-written printed lists");
   // every program-running prompt builds its lists from the table
-  for (const [n] of PROGRAMS) {
+  for (const [n] of RELAYED) {
     // the hasher prompt picks its mode: printsKeys(hid), hid "hasher" or "hasher:base"
     const re = n === "hasher" ? /const hid = inputs\.base_tree \? "hasher:base" : "hasher";[^]*?printsKeys\(hid\)/ : new RegExp('printsKeys\\("' + n + '[":]');
     assert.ok(re.test(SOURCE), n + ": no printsKeys(" + n + ") in a prompt");
@@ -313,7 +315,8 @@ test("5.0.2 2004: the park-plan prompt runs only the park and write commands; th
   const pk = out.calls.find((c) => c.label === "infra:park-plan").prompt;
   assert.match(pk, /never join commands with &&, ; or if/);
   // the findings chunk steps stay: the ban covers commands the steps do not give
-  assert.match(pk, /a\. `mkdir -p '[^']*park-chunks-n1-0000001'`/);
+  // 7.3.0 (#9, Q4 (a)): the chunk files are written with the Write tool (was a. `mkdir -p` and printf)
+  assert.match(pk, /a\. For each chunk below, write the file [^ ]*park-chunks-n1-0000001\/<i>\.b64 with the Write tool/);
   assert.match(pk, /parked\.py' 'write'/);
   assert.doesNotMatch(pk, /git -C <worktree>|rm -f|cp -p|restore --staged/);
   assert.match(out.result.reason, /draft plan moved to .*scratch\/parked/);

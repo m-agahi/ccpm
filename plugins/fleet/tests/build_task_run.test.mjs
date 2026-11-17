@@ -3238,21 +3238,21 @@ test("a failed bytecode purge stops the run before the code-judge", async () => 
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
+// 7.3.0 (#9): the purge is purge.py (was a find | xargs PURGE: line); the same fixture and result
 test("the purge command deletes bytecode and pytest caches, sparing venvs and .git", () => {
   const out0 = (async () => run(happy(), ARGS))();
   return out0.then((out) => {
     const p = call(out, "infra:purge-bytecode:code-r1").prompt;
-    const m = /^PURGE: (.*)$/m.exec(p);
-    assert.ok(m, "prompt carries a PURGE: command line");
+    assert.match(p, /purge\.py' '/, "prompt runs purge.py");
     const wt = mkdtempSync(join(tmpdir(), "fleet-purge-"));
     try {
       for (const d of ["a/__pycache__", ".pytest_cache/v", "b", ".venv/lib/__pycache__", ".git/x", "venv/__pycache__"])
         sh(wt, "mkdir", "-p", d);
       for (const f of ["a/__pycache__/m.cpython-313.pyc", "b/old.pyc", "b/old.pyo", ".pytest_cache/v/x", ".venv/lib/__pycache__/k.pyc", ".git/x/y.pyc", "venv/__pycache__/z.pyc", "b/keep.py"])
         writeFileSync(join(wt, f), "x");
-      const r = spawnSync("bash", ["-c", m[1].split("<worktree>").join(shq(wt))], { encoding: "utf8" });
+      const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "purge.py"), wt], { encoding: "utf8" });
       assert.equal(r.status, 0, r.stderr);
-      assert.match(r.stdout, /purged=4\b/);
+      assert.equal(JSON.parse(r.stdout).purged, 4);
       const left = sh(wt, "find", ".", "-type", "f").split("\n").filter(Boolean).sort();
       assert.deepEqual(left, ["./.git/x/y.pyc", "./.venv/lib/__pycache__/k.pyc", "./b/keep.py", "./venv/__pycache__/z.pyc"]);
     } finally {
@@ -3260,10 +3260,6 @@ test("the purge command deletes bytecode and pytest caches, sparing venvs and .g
     }
   });
 });
-
-function shq(v) {
-  return "'" + String(v).replace(/'/g, "'\\''") + "'";
-}
 
 test("code-judge and coder get test_env; the coder gets it as a note for frozen-test runs", async () => {
   const out = await run(happy(), ARGS);
@@ -5677,6 +5673,8 @@ const ARRAY_SITES = {
   "r.frozen_changed @ formatFiles": "infra:frozen_changed",
   // 6.2.2 (2107)
   "r.hook_failures @ formatFiles": "infra:hook_failures",
+  // 7.3.0 (#9): the plan-mode format_files relay (digest-checked first)
+  "ff.hook_failures @ planAndAudit": "parsed: a format_files program output (PROGRAM_OUT types it), digest-checked first",
   "rd.results @ writeBack": "infra:results",
   "fmt.changed_paths @ planAndAudit": "infra:changed_paths",
   // 5.0.3 (ledger 2010)
@@ -5910,8 +5908,9 @@ test("2.1.5 format-plan runs the repo's hooks on the plan after the planner and 
   assert.ok(l.indexOf("infra:format-plan") > l.indexOf("role:scope-and-plan"));
   assert.ok(l.indexOf("infra:format-plan") < l.indexOf("role:plan-audit"));
   const p = call(out, "infra:format-plan").prompt;
-  assert.deepEqual(inputsOf(p), { worktree: "/r/.claude/worktrees/fleet-y42-add-thing/main", plan_path: "docs/plans/x.md" });
-  assert.match(p, /pre-commit run --files/);
+  // 7.3.0 (#9): format_files.py in plan mode runs `pre-commit run --files` (was a `cd && pre-commit` call)
+  assert.deepEqual(inputsOf(p), { worktree: "/r/.claude/worktrees/fleet-y42-add-thing/main", plan_path: "docs/plans/x.md", scratch_dir: "/r/.claude/worktrees/fleet-y42-add-thing/scratch" });
+  assert.match(p, /format_files\.py' '[^']*' '\{"mode":"plan","paths":\["docs\/plans\/x\.md"\]\}'/);
   // a new plans dir must list the file, not the dir
   assert.ok(!/status --porcelain`/.test(p) && /status --porcelain --untracked-files=all/.test(p), "files in new untracked dirs are listed");
   assert.match(p, /--no-verify|never bypass|Never bypass/i);
@@ -6678,7 +6677,7 @@ test("2.1.6 a symbol over the grep cap is refused, never silently cut", async ()
   s["infra:callers"] = callersOut({ guard_verdict: [] }, ["guard_verdict"]);
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /guard_verdict: more than 100 occurrences/);
+  assert.match(out.result.reason, /guard_verdict: more than 100 call-shaped occurrences/);
 });
 
 test("2.1.6 a grep result whose relayed lists do not match the program's digest fails", async () => {
@@ -6729,7 +6728,8 @@ test("2.1.6 caller grep program: word-boundary hits in tracked text files, the p
     writeFileSync(join(wt, "docs", "plans", "x.md"), "changes guard_verdict\n");
     writeFileSync(join(wt, "blob.bin"), Buffer.from("guard_verdict\0\x01\x02"));
     writeFileSync(join(wt, "x y.py"), "guard_verdict()\n");
-    writeFileSync(join(wt, "many.py"), "z = 1\n".repeat(6));
+    // 7.3.0 (#40): only call-shaped hits count toward the cap
+    writeFileSync(join(wt, "many.py"), "z(1)\n".repeat(6));
     sh(wt, "git", "add", "-A");
     sh(wt, "git", "commit", "-qm", "i");
     writeFileSync(join(wt, "untracked.py"), "guard_verdict()\n");
@@ -6739,7 +6739,7 @@ test("2.1.6 caller grep program: word-boundary hits in tracked text files, the p
     const o = JSON.parse(r.stdout);
     assert.deepEqual(o.occurrences.guard_verdict, ["chart/guards.py:1", "chart/render.py:1", "chart/render.py:2", "chart/render.py:5", "x y.py:1"].sort());
     assert.deepEqual(o.occurrences.nohit, []);
-    // "z" is a word on more than 5 lines: capped, its list left empty; guard_verdict (5) is not
+    // "z" is called on more than 5 lines: capped, its list left empty; guard_verdict (5 hits, 4 call-shaped) is not
     assert.deepEqual(o.capped, ["z"]);
     assert.deepEqual(o.occurrences.z, []);
     // 4.0.0 (1989): the digest covers the auto dont_care map and the doctest list too

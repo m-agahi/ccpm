@@ -119,6 +119,57 @@ closed): <why>; plan-audit passed; the intent judge rules on it)`); the auto gat
   (`tailWriter`, counted once in `dispatch`). The flag now covers the inline writer as well.
   Pre-PR state writes keep the cap.
 
+- Car 4, intent judge (#65, A24): a `plan_diff` item that only records bookkeeping (a plan
+  round, a reworded line, a moved section, a re-plan note) is no deviation; the G1 check of every
+  real change stays. Role sha pin moves.
+- Car 4, gate differential (#60 steps 1-2, A25): a boundary example that makes a gate accept an
+  input the shipped gate refuses must be an Open decision that cites the brief; plan-audit builds
+  a shipped-vs-planned table (criteria examples plus 2-3 known-bad inputs) and refuses an uncited
+  widening as `plan_defect`. Step 3 stays split out.
+- Car 4, throwaway copies (#54, A23): new program `scratch_copy.py` (`make`, `run`, `remove`).
+  The seven copy roles (test judge, code judge, test writer, plan-audit, nonweakening sweep,
+  scope-and-plan, pr-review) get `scratch_copy_cmd` and no longer build copies with `mktemp -d`,
+  `worktree add` and copy loops. It relays nothing, so it has no `PROGRAM_SLOTS` entry.
+- Car 4, shell forms into programs (#9 IN part, A20-A22): new programs `exclude_add.py` (the
+  workspace `info/exclude` append, relayed as `exclude`; a bad relay is a warning line) and
+  `purge.py` (the bytecode purge, was a `find | xargs` line); new mode `parked.py retire` (the
+  commit-plan retire, was `mkdir -p && mv -n`; relayed as `retire`; a bad relay is a warning
+  line, a wrong program stops); format-plan runs `format_files.py` with select `{"mode": "plan"}`
+  (was `cd && pre-commit run`), and stops on a fixer timeout, an unstable run or a hook that
+  still fails on the settled plan. 45 shipped programs.
+- Car 4, chunk writers (Max ruled Q4 (a)): plan-ref, park and findings chunk files are written
+  with the Write tool, not `printf`. `settingsFor` adds `Write(/<scratch>/**)`; the workspace step
+  rewrites a `settings.local.json` whose content differs. The push output redirect stays split out.
+- Car 4, caller cap (#40, #58, Max ruling): `callers.py` counts only call-shaped hits (the name,
+  optional spaces or tabs, then `(`) toward the 100-hit cap; the cap stays 100. Every `git grep -w`
+  hit is still listed and must be mapped. A common name with many bare hits now meets the caller
+  read budget instead of the cap.
+- Car 4 leftovers: no "draft PR" text left in the plugin description, the README files, the
+  pr-review role and the notes; `docs/build-task-run-notes.md` has a 7.3.0 section
+  (`fleet_branch.py`, `scratch_copy.py`, `exclude_add.py`, `purge.py`, `parked.py retire`, the
+  caller cap); the orch_scan warning is saved in the run-state as `scan_warn` and restored on
+  resume (#32 leftover).
+
+### Tests changed on purpose (car 4)
+
+- `v4_s1`: 45 programs (count and the hasher reason); `scratch_copy_cmd` role inputs are not
+  program steps; the commit-plan `retire` slot runs only with a parked prior (covered in
+  `v730_shell_programs`).
+- `v402_file_sha`: `scratch_copy` is run by roles, not by a slotted step; `infra:purge-bytecode`
+  sampled. `v502_relay_keys`: `scratch_copy` has no key table; the park chunk step is a Write-tool
+  step.
+- `v403_schema_types` READS and `build_task_run` ARRAY_SITES: the plan-mode `format_files` relay,
+  `rt.moved`, `scan_warn`.
+- `build_task_run`: the purge test runs `purge.py` (same fixture and result); format-plan inputs
+  add `scratch_dir` and run `format_files.py` plan mode; the caller grep fixture uses call-shaped
+  hits for the capped symbol; the capped reasons read "call-shaped occurrences". So do
+  `v610_update_coder` T9 and `v630_flow` A1.
+- `v610_update_coder` review 4: the code judge's read-tree runs in `<tmp>` (scratch_copy).
+- `v4_s3`: the fleet's own settings file adds the scratch Write rule. `v4_s4` AC-1: the retire is
+  `parked.py retire`. `v504_pycache`: format-plan's no-bytecode env is in `format_files.py`.
+- `v508_gh_identity`: the run-state keys add `scan_warn`.
+- `v5010_prompt_snapshot` pins: all of the above prompts, schemas and role files (probe unchanged).
+
 ### Tests changed on purpose (car 3)
 
 - `build_task_run` "2.1.0 review skipped when no PR exists" and `v710_block_flow` "AC4 ex7": no PR

@@ -118,6 +118,11 @@ def done(**k):
 # fixer runs, each listed hook runs once more alone on the files (`pre-commit run <id>
 # --files`); a non-zero exit is a failure. No list: no check, as in 6.2.1.
 CHECK = sel.get('check_hooks') or []
+# fleet 7.3.0 (#9): select.mode "plan" (no check_hooks): the fixers' own exit code counts
+PLAN_MODE = sel.get('mode') == 'plan'
+if 'mode' in sel and not PLAN_MODE or PLAN_MODE and CHECK:
+    sys.exit('select.mode must be "plan", with no check_hooks')
+LAST_FIX = []
 if not isinstance(CHECK, list) or any(not isinstance(x, str) or not x or x.startswith('-') for x in CHECK):
     sys.exit('select.check_hooks must be a list of hook ids')
 HOOK_IDS = {}
@@ -454,7 +459,8 @@ try:
     while runs < 3:
         runs += 1
         try:
-            subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=dict(env, PATH=clean_path([wt, scratch_root])), preexec_fn=lift)
+            fr = subprocess.run(['pre-commit', 'run', '--files'] + files, cwd=scratch, capture_output=True, timeout=tmo, env=dict(env, PATH=clean_path([wt, scratch_root])), preexec_fn=lift)
+            LAST_FIX[:] = [fr.returncode, fr.stdout + fr.stderr]
         except subprocess.TimeoutExpired:
             # re-review D-L1: the fixer phase ran out of time (reported as such)
             FIX_TIMEOUT[0] = True
@@ -504,6 +510,11 @@ try:
         finally:
             git(wt, 'worktree', 'remove', '--force', iso, check=False)
             shutil.rmtree(iso, ignore_errors=True)
+    # fleet 7.3.0 (#9): plan mode (the plan doc before the plan commit): a last fixer run that
+    # still exits non-zero on settled files is a failure of every hook in it (id '')
+    if PLAN_MODE and stable and LAST_FIX and LAST_FIX[0] != 0:
+        FAILED.extend([(f, '') for f in files])
+        OUTPUTS.append(LAST_FIX[1])
     for hid in CHECK if stable else []:
         res = check(hid, scratch, files)
         if res is None:

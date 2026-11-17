@@ -228,7 +228,8 @@ function, guard or symbol the plan changes, as `{symbol, occurrences: [{at: "<pa
 criterion, dont_care}]}`; each occurrence maps to exactly one of an existing criterion id or a
 `dont_care` reason. Step 5a greps each symbol (`git grep -n -I -w -F`, tracked text files, the plan
 doc excluded; the relayed lists are checked against the program's digest). A malformed map, a hit
-the map leaves out, a mapped line that is no hit, more than 100 hits for one symbol or more than 30
+the map leaves out, a mapped line that is no hit, more than 100 call-shaped hits (7.3.0: the name, optional spaces
+or tabs, then `(`; every hit is still mapped) for one symbol or more than 30
 symbols stop the run with `needs_human`, or go to the one `:audit-fix` round under confirm auto.
 The `:audit-fix` round must keep every symbol the refused round mapped and every symbol that one
 of its findings names (narrower symbols only in addition); a dropped or swapped symbol stops the

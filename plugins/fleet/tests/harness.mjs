@@ -1258,7 +1258,7 @@ export function allScripts() {
 export const PROGRAM_LABELS = [
   [/^preflight$/, [["path_check", "path_check", K("path_check")], ["session_project", "session_project", K("session_project")]]],
   [/^infra:path-check:/, [[null, "path_check", K("path_check")]]],
-  [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")], ["gh_check", "gh_identity", K("gh_identity")]]],
+  [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")], ["gh_check", "gh_identity", K("gh_identity")], ["exclude", "exclude_add", PROGRAM_KEYS["exclude_add"] || null]]],
   // 5.0.8 (ledger 2030): a repo the workspace step did not check
   [/^infra:gh-identity:/, [[null, "gh_identity", K("gh_identity")]]],
   [/^hasher:/, [[null, "hasher", "hasher"]]],
@@ -1273,8 +1273,10 @@ export const PROGRAM_LABELS = [
   [/^infra:stage-plan/, [["plan_hash", "plan_hash", K("plan_hash")]]],
   [/^infra:format-(tests|code):/, [[null, "format_files", K("format_files")]]],
   // 5.0.3 (ledger 2010): the DSN precheck after the plan hooks
-  [/^infra:format-plan/, [["dsn_check", "plan_dsn", K("plan_dsn")]]],
-  [/^infra:commit-plan/, [[null, "plan_ref_write", K("plan_ref_write")]]],
+  [/^infra:format-plan/, [["format", "format_files", K("format_files")], ["dsn_check", "plan_dsn", K("plan_dsn")]]],
+  [/^infra:commit-plan/, [[null, "plan_ref_write", K("plan_ref_write")], ["retire", "parked", PROGRAM_KEYS["parked:retire"] || null]]],
+  // 7.3.0 (#9)
+  [/^infra:purge-bytecode:/, [[null, "purge", PROGRAM_KEYS["purge"] || null]]],
   // 4.0.0 review: dsn_paths, the committed files that hold mysql://
   [/^infra:verify-plan-commit/, [["plan_files", "plan_files", K("plan_files")], ["plan_hash", "plan_hash", K("plan_hash")], ["plan_ref", "plan_ref", null]]],
   [/^infra:load-ref/, [[null, "plan_ref", null]]],
@@ -1365,6 +1367,19 @@ export function fillPrograms(label, r, prompt) {
     const i = inputsOf(prompt);
     r.dsn_check = { holds: false, lines: [], args: [i.worktree, i.plan_path] };
   }
+  // 7.3.0 (#9): a format-plan stub with no format result: the plan-mode hooks passed with no change
+  if (/^infra:format-plan/.test(label) && !("format" in r)) {
+    const i = inputsOf(prompt);
+    r.format = { ran: true, note: "ran pre-commit run --files in a scratch checkout of HEAD", runs: 1, stable: true, files: [i.plan_path], changed: [], refused: [], purged: 0, purged_paths: [], frozen_changed: [], frozen_map: null, hook_failed: false, hook_failures: [], hook_head: "", hook_sha256: "", hook_timeout: [], fix_timeout: false, unknown_hooks: [] };
+  }
+  // 7.3.0 (#9): a workspace stub with no exclude relay added nothing; a commit-plan stub with a retire step moved the folder
+  if (label === "workspace" && !("exclude" in r)) r.exclude = { added: [], exclude: "/r/.git/info/exclude", args: excludeArgsOf(prompt) };
+  if (/^infra:commit-plan/.test(label) && !("retire" in r) && /parked\.py' 'retire'/.test(prompt)) {
+    const m = /parked\.py' 'retire' '([^']*)' '([^']*)'/.exec(prompt);
+    r.retire = { moved: true, args: [m[1], m[2]] };
+  }
+  // 7.3.0 (#9): purge.py echoes its worktree
+  if (/^infra:purge-bytecode:/.test(label) && !("args" in r)) r.args = [/purge\.py' '([^']*)'/.exec(prompt)[1]];
   const hit = PROGRAM_LABELS.find(([re]) => re.test(label));
   if (!hit) return r;
   for (const [slot, name, keys0] of hit[1]) {
@@ -1384,6 +1399,11 @@ export function fillPrograms(label, r, prompt) {
   return r;
 }
 
+// 7.3.0 (#9): the args of the workspace prompt's exclude_add.py command
+export function excludeArgsOf(prompt) {
+  const m = /exclude_add\.py'((?: '[^']*')+)/.exec(prompt);
+  return m ? [...m[1].matchAll(/'([^']*)'/g)].map((x) => x[1]) : [];
+}
 // load-ref stub: the plan-ref reader over the store, in the prompt's mode
 // (2.1.5): no content in the entries; "part" (6.3.4) adds one part of the
 // plan ref's message in pieces of at most 1000 characters.

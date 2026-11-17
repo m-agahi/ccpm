@@ -3627,7 +3627,7 @@ classifier program's own (3.1.0, ledger 1935c)
 ### `in buildFromRef` (5.0.9 line 6790)
 
 ```text
-draft PR at the pushed, approved sha (later rounds update its body)
+the PR (ready for review since 7.3.0, #33) at the pushed, approved sha (later rounds update its body)
 ```
 
 ### `in buildFromRef` (5.0.9 line 6804)
@@ -4397,4 +4397,60 @@ without a new write-back. Close/reopen to retrigger a missing check (ADR-1203 "m
 The CI write-back (marker fleet:<task>:ci) runs once on the final outcome, also on a CI stop
 (ciGuard), and keeps state.stopGate.
 Cleanup runs after the shipped run-state write, from / with git -C <repo>.
+```
+
+## 7.3.0 notes (not 5.0.9 comments)
+
+### `fleet_branch.py`, `branchSlug` (#43, L2177)
+
+```text
+Plan mode reads the local branches refs/heads/fleet/<task id>-* before the layout, with the
+read-only program fleet_branch.py <repo> <task id> (label infra:fleet-branch, haiku, digest id
+fleet_branch). It prints {slugs, args, program, digest}: the slugs after "fleet/<task id>-",
+sorted, at most 50. A task id that is not [a-z0-9][a-z0-9-]{0,31} exits non-zero. One slug is
+adopted over the intake title's slug, so a re-run whose intake titles the task differently keeps
+its branch, worktree and parked drafts. None, or the derived slug among several: the derived
+slug. Several without it: needs_human with the branch list. A text input (t... id) reads none.
+```
+
+### `scratch_copy.py`, `COPY_ROLES` (#54, L2189)
+
+```text
+The seven roles that build a throwaway copy (test judge, code judge, test writer, plan-audit,
+the nonweakening sweep, scope-and-plan, pr-review) get scratch_copy_cmd ("python3 -I
+<scripts_dir>/scratch_copy.py") as a role input. make <worktree> <scratch_dir> [<rev>] adds a
+detached worktree (hooks off) in a new dir under <scratch_dir>; with no rev it is HEAD plus every
+changed and untracked path of the worktree (a temporary-index snapshot and diff-tree, as
+format_files.py does), deleted paths deleted. run <scratch_dir> <tmp> <argv json> [<env json>]
+runs argv with cwd <tmp> and no shell, the program caps lifted for the child. remove <worktree>
+<scratch_dir> <tmp> is worktree remove --force plus prune. run and remove refuse a <tmp> outside
+<scratch_dir>. The roles relay nothing from it, so it has no PROGRAM_SLOTS entry.
+```
+
+### `exclude_add.py`, `purge.py`, `parked.py retire`, format-plan (#9, L2008)
+
+```text
+Four compound shell forms moved into programs with the progCmd shape, so the same allow rules
+match: the workspace step's info/exclude append (exclude_add.py <repo> <line>...: a line git does
+not already ignore is appended once to the common git dir's info/exclude; relayed as exclude,
+a warning line when unusable), the commit-plan retire of a used parked folder (parked.py retire
+<dir> <used>: no-clobber rename, relayed as retire, a warning line when unusable), the bytecode
+purge (purge.py <worktree>: os.walk with the old prune list, lstat only, {purged, args} with a
+digest the script checks) and the plan-doc pre-commit run (format_files.py with select
+{"mode": "plan"}: the fixers run in a scratch checkout, and a last run that still exits non-zero
+on settled files is hook_failed; the script stops needs_human as the old prompt did). The push
+output redirect stays a shell form (split out: the program rlimit and gh credential helpers).
+The chunk writers write their chunk files with the Write tool (Max ruled Q4 (a)); settingsFor
+adds Write(/<scratch>/**) for the run's scratch dir, and the workspace step rewrites a
+settings.local.json whose content differs.
+```
+
+### `callers.py` cap (#40, #58)
+
+```text
+Max ruled (2026-11-17): only call-shaped hits (the name, optional spaces or tabs, then "(")
+count toward MAX_SYMBOL_HITS (100). Every git grep -w hit is still listed and must be mapped:
+dropping the bare hits would leave a constant or guard symbol with no listed occurrence. A
+common name with many bare hits now meets the caller read budget (4 pages of 50) instead of the
+cap.
 ```

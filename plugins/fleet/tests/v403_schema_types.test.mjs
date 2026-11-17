@@ -627,6 +627,8 @@ const READS = {
     "plan.new_behaviour boolean": SP + "new_behaviour",
     "plan[HELD_OUT_KEY] array": SP + "held_out_examples",
     "fmt.changed_paths array": "infra:changed_paths",
+    // 7.3.0 (#9): the plan-mode format_files relay (digest-checked)
+    "ff.hook_failures array": "prog:format_files:hook_failures",
     // 5.0.3 (ledger 2010)
     "dc.holds boolean": "prog:plan_dsn:holds",
     "dc.lines array": "prog:plan_dsn:lines",
@@ -646,6 +648,8 @@ const READS = {
     "r.tag_sha string-re": "prog:plan_ref_write:tag_sha",
     "r.dirty array": "prog:plan_ref_write:dirty",
     "r.reused boolean": "infra:reused",
+    // 7.3.0 (#9): parked.py retire
+    "rt.moved boolean": "prog:parked:moved",
   },
   // 7.3.0 (#47a): the shared rewrite loop; a program's exit-3 list (it only picks chunks to write again)
   chunkRounds: { "r.bad_chunks array": "infra:bad_chunks", "i integer": "infra:bad_chunks[]" },
@@ -800,6 +804,9 @@ const READS = {
     "c.parents.length number-literal": "parsed: the length of prog:verify_since:commits_since[].parents (checked as an array first)",
     "state.prUpdated boolean": PARSED_LOCAL,
     "resume.pr_updated boolean": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    // 7.3.0 (#32 leftover)
+    "resume.scan_warn string": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    "state.scanWarn string": "parsed: the script's own warning text",
     "ru object": "parsed: resume.update, JSON.parse of the run-state message (digest-checked read_state)",
     "rv.nits.length number-literal": "parsed: the length of reviewStep's nits, an array the script built",
     // 6.0.0 (ledger 2034)

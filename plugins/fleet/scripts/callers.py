@@ -145,14 +145,21 @@ for s in syms:
     if r.returncode not in (0, 1):
         sys.exit(r.stderr.decode('utf-8', 'replace'))
     hits = set()
+    # fleet 7.3.0 (#40, #58; Max ruling 2026-11-17): only call-shaped hits (the name, optional
+    # spaces or tabs, then '(') count toward the cap; every hit is still listed and mapped
+    calls = set()
+    call_re = re.compile(rb'(?<![A-Za-z0-9_])' + re.escape(s.encode('utf-8')) + rb'[ \t]*\(')
     for rec in r.stdout.split(b'\n'):
         if not rec:
             continue
         parts = rec.split(b'\0', 2)
         if len(parts) != 3 or not parts[1].isdigit():
             sys.exit('unparseable git grep output: ' + repr(rec[:200]))
-        hits.add(parts[0].decode('utf-8', 'replace') + ':' + str(int(parts[1])))
-    if len(hits) > cap:
+        h = parts[0].decode('utf-8', 'replace') + ':' + str(int(parts[1]))
+        hits.add(h)
+        if call_re.search(parts[2]):
+            calls.add(h)
+    if len(calls) > cap:
         capped.append(s)
         occ[s] = []
     else:

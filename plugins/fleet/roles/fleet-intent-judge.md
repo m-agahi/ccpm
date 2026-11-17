@@ -52,6 +52,8 @@ List each of these as one deviation entry:
 - every repo obligation that is not a verified process item (see above).
   An item that the task or a ruling states outright is not a deviation; do not list it.
 
+**Bookkeeping `plan_diff` items.** A `plan_diff` entry that only restates a verified process obligation, a `changed_symbols` update, an `est_diff_lines` change or a test-example refinement of a criterion that is already allowed is not a deviation. Leave it out. An approved deviation always has a non-empty verbatim `allowed_by`. A repo rule is never an allowance.
+
 ## Rules per deviation
 
 Approve a deviation only when BOTH hold:

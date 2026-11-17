@@ -728,7 +728,9 @@ test("4.0.0 1986 AC-1: a parked draft and findings reach the planner as inputs o
   for (const x of ["prior_draft", "prior_round", "parked", "draft plan", "parked f0"]) assert.ok(!sealed.includes(x), x);
   // the used folder moves to parked/used/ after the commit (in the commit step)
   const cp = call(out, "infra:commit-plan").prompt;
-  assert.match(cp, /mkdir -p '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch\/parked\/used' && mv -n -- '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch\/parked\/n0-1234567'/);
+  // 7.3.0 (#9): parked.py retire (was `mkdir -p && mv -n`)
+  assert.match(cp, /parked\.py' 'retire' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch\/parked\/n0-1234567' '\/r\/\.claude\/worktrees\/fleet-y42-add-thing\/scratch\/parked\/used'/);
+  assert.ok(out.logs.some((l) => l === "parked folder /r/.claude/worktrees/fleet-y42-add-thing/scratch/parked/n0-1234567 moved to /r/.claude/worktrees/fleet-y42-add-thing/scratch/parked/used"), out.logs.join("\n"));
   assert.ok(out.logs.some((l) => /parked draft of run n0-1234567 loaded \(docs\/plans\/x\.md\), 1 finding\(s\): planner inputs only/.test(l)));
 });
 

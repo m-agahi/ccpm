@@ -161,12 +161,12 @@ Then edit `tf-naming-config.md` to add, remove, or adjust rules. The project-lev
 
 Role fleet for one task, run as a Claude Code workflow.
 
-- `/build-task <ledger id | Jira key | issue or PR URL | plan path | text>` — plan mode (intake, plan, plan audit, local plan commit) returns for confirmation; build mode runs one test writer per acceptance criterion, test judge, hash freeze, coder, code judge, draft PR, independent review and write-back to the sources
+- `/build-task <ledger id | Jira key | issue or PR URL | plan path | text>` — plan mode (intake, plan, plan audit, local plan commit) returns for confirmation; build mode runs one test writer per acceptance criterion, test judge, hash freeze, coder, code judge, PR (ready for review unless the plan or the policy keeps a draft), independent review and write-back to the sources
 - `/plan-task <input>` — brainstorm and refine an idea, bug, ticket or prompt into a Fleet brief in the task body (one question at a time, written only after approval), then hand off to `/build-task`
 - `/fleet-policy` — show or change the fleet policy file (`~/.config/fleet/policy.json`); `/build-task` and `/plan-task` offer to create it on first use, only on the user's answer
 - The ten role prompts ship in the plugin (`plugins/fleet/roles/`), each pinned by sha256 in the workflow; the workflow script holds role names, inputs, schemas and gates
 - Gates in script code: disjoint test files, frozen-test and runner-config hashes, judge worktree fingerprints, round caps, a 100-agent cap
-- PRs stay draft; a human merges
+- PRs open ready for review (a draft only for a plan `merge_after` or policy `pr_ready: false`); a human merges unless the per-owner policy allows a merge
 
 **Requirements:** Workflow tool, `gh`, `git`, `python3` >= 3.11. No MCP server is required: a yadgar or yaadgaar ledger is used when present.
 

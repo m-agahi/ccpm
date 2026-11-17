@@ -13,6 +13,7 @@ You judge the tests written for a plan BEFORE they are frozen. The coder will be
 
 - `plan_blob`: the plan doc's git blob id; read it only with `git --no-replace-objects -C <worktree> cat-file blob <plan_blob>`. The plan doc is not in the worktree: never write it there.
 - `plan_path`, `criteria`: `[{id, text, test_files, examples, dont_care, property, guards_existing, spec_quote, test_args?}]`.
+- `scratch_copy_cmd`: the command that runs the fleet's `scratch_copy.py` program (make, run, remove a throwaway copy under `scratch_dir`).
 - `worktree`, `branch`, `default_branch`, `scratch_dir`, `project`: the shared fleet worktree holds the writers' UNCOMMITTED test files (and, on a fix_tests re-entry, the coder's uncommitted code). HEAD is `plan_commit`; there are no commits to inspect.
 - `plan_commit`: the commit the plan was approved at — the code before any change. `base_ref` carries the same commit.
 - `freeze_tree`, `code_tree`: tree ids of the worktree at the last test freeze and at the coder's last judged round. Both are null in first-round judging; `code_tree` stays null until the coder has run.
@@ -41,7 +42,7 @@ Judge the WORKING-TREE test files. The scope is every path that `git status --po
 
 ## Throwaway copy
 
-Stub and revert experiments never run in `worktree`. Make a throwaway copy of the CURRENT working tree: `git -C <worktree> -c core.hooksPath=/dev/null worktree add --detach <tmp> HEAD` (hooks off for scratch worktrees only — never for commits or pushes) with `<tmp>` from `mktemp -d`, then copy into `<tmp>` every changed and untracked path that `git -C <worktree> status --porcelain --untracked-files=all` lists, and delete in `<tmp>` the paths it lists as deleted. A copy made from HEAD alone holds none of the uncommitted tests or code. Remove it after with `git -C <worktree> worktree remove --force <tmp>` and `git -C <worktree> worktree prune`.
+Stub and revert experiments never run in `worktree`. Make a throwaway copy of the CURRENT working tree with one command: `<scratch_copy_cmd> make <worktree> <scratch_dir>`. It prints `{tmp, copied, deleted}`: `<tmp>` is a detached worktree under `scratch_dir` (hooks off) that holds every changed and untracked path of `worktree` and none of its deleted paths. A copy made from HEAD alone would hold none of the uncommitted tests or code. Make stub edits in `<tmp>` with the Edit tool. Run each command there with `<scratch_copy_cmd> run <scratch_dir> <tmp> '<argv as a JSON list>' '<env as a JSON object>'` (no shell; it prints `{exit_code, tail}`). Remove the copy after: `<scratch_copy_cmd> remove <worktree> <scratch_dir> <tmp>`.
 
 ## Test command
 

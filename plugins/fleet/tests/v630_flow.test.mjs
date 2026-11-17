@@ -87,7 +87,7 @@ test("6.3.0 A1 (re-review): a batch of 30 over the relay cap splits in halves un
   const o2 = await runOne(t, ARGS);
   assert.equal(o2.result.status, "needs_human");
   assert.equal(o2.result.stop_gate, "callers");
-  assert.match(o2.result.reason, /: the occurrences of big are over the 65536-byte relay cap \(relay size; at most 100 hits, long paths\)/);
+  assert.match(o2.result.reason, /: the occurrences of big are over the 65536-byte relay cap \(relay size; at most 100 call-shaped hits, long paths\)/);
 });
 
 test("6.3.0 A1: the batches merge: a later batch's auto dont_care and capped symbol count as in one dispatch", async () => {
@@ -103,7 +103,7 @@ test("6.3.0 A1: the batches merge: a later batch's auto dont_care and capped sym
   for (const sfx of ["", ":audit-fix", ":audit-fix-2"]) script(t, 2, { capped: ["f30"], hits: { f30: [] } }, sfx);
   const o2 = await runOne(t, ARGS);
   assert.equal(o2.result.status, "needs_human");
-  assert.match(o2.result.reason, /f30: more than 100 occurrences \(git grep -w\)/);
+  assert.match(o2.result.reason, /f30: more than 100 call-shaped occurrences \(git grep -w hits followed by `\(`\)/);
 });
 
 // callers.py run for real

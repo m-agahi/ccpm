@@ -67,7 +67,8 @@ test("4.0.0 1993 AC-2 (4.0.1): every program ships as scripts/<name>.py and the 
   // 6.0.0 (ledgers 2044, 2045, 2034): + pr_body_block, pr_state, orch_scan, ci_watch
   // 7.1.0 (L2145): + pr_test_block
   // 7.3.0 (#43): + fleet_branch
-  assert.equal(PROGRAMS.length, 42);
+  // 7.3.0 (#54, #9): + scratch_copy, exclude_add, purge
+  assert.equal(PROGRAMS.length, 45);
   const files = readdirSync(SCRIPTS_SRC).filter((f) => f.endsWith(".py")).sort();
   assert.deepEqual(files, PROGRAMS.map(([n]) => n + ".py").sort(), "no extra and no missing file");
   for (const [name, sha] of PROGRAMS) {
@@ -286,6 +287,11 @@ test("4.0.0 1993: a wrong program at every program-running step stops the run (t
       // 5.0.6 (ledger 2019): the build-dir teardown is soft: logged, never a stop
       assert.ok(okish, label + ": " + out.result.reason);
       assert.ok(out.result.gate_log.some((l) => /build dirs .*\/build not confirmed removed/.test(l)), label);
+      continue;
+    }
+    if (/^infra:commit-plan$/.test(label) && path === "retire") {
+      // 7.3.0 (#9): the retire relay runs only with a parked prior (none here); v730_shell_programs covers it
+      assert.ok(!call(full, label).prompt.includes("'retire'"), label);
       continue;
     }
     if (/^infra:load-parked$/.test(label)) {
@@ -716,7 +722,7 @@ test("4.0.0 security 2: every fingerprint hashes the shipped programs; a change 
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "needs_human", label);
     assert.equal(out.result.stop_gate, "hash", label);
-    assert.equal(out.result.reason, "hasher " + label + ": the shipped fleet programs were changed: the 42 program(s) in " + SCRIPTS_DIR + " do not hash to this fleet's table of 42", label);
+    assert.equal(out.result.reason, "hasher " + label + ": the shipped fleet programs were changed: the 45 program(s) in " + SCRIPTS_DIR + " do not hash to this fleet's table of 45", label);
   }
   // every program must be present and match; an unknown extra or the overflow sentinel is refused
   const missingOne = Object.assign({}, all);
@@ -786,6 +792,8 @@ test("4.0.0 security 3: each program step runs sha256sum on the file first; a sh
   let n = 0;
   for (const c of out.calls) {
     for (const m of c.prompt.matchAll(/python3 -I ('[^']+\.py')/g)) {
+      // 7.3.0 (#54): the copy roles' scratch_copy_cmd input is a command prefix the role runs; it relays nothing
+      if (/^role:/.test(c.label) && m[1].endsWith("/scratch_copy.py'") && inputsOf(c.prompt).scratch_copy_cmd === "python3 -I " + m[1]) continue;
       n++;
       assert.ok(c.prompt.includes("sha256sum -- " + m[1] + " && python3 -I " + m[1]), c.label + ": " + m[1]);
       assert.match(c.prompt, /as `file_sha256`/, c.label);

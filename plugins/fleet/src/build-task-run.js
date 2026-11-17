@@ -1,7 +1,7 @@
 export const meta = {
   name: "build-task-run",
   description:
-    "Role fleet for one task in two modes. plan: intake, plan, audit, commit the plan locally, return for confirmation (confirm \"auto\": intent, command and scope gates, then build in the same run). build: verify the approved plan, test writers in the fleet worktree, test judge, freeze, coder, code judge, one commit step, push, draft PR, independent review, write-back. Every gate runs in script code.",
+    "Role fleet for one task in two modes. plan: intake, plan, audit, commit the plan locally, return for confirmation (confirm \"auto\": intent, command and scope gates, then build in the same run). build: verify the approved plan, test writers in the fleet worktree, test judge, freeze, coder, code judge, one commit step, push, PR (ready for review unless the plan names merge_after or the policy keeps drafts), independent review, write-back. Every gate runs in script code.",
   whenToUse:
     "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, run_nonce, project?, confirm?} or {mode: \"build\", plan_ref, date, run_nonce, project?, confirm?} or {mode: \"probe\", repo, date, run_nonce} (preflight only: scripts and role files hashed, PATH check; returns the table); confirm is \"ask\" (when omitted), \"default\" (the auto gates for an eligible bug-fix plan, else ask) or \"auto\". If invoked with no args, do not call Workflow again: tell the user to run /build-task <task>.",
   phases: [
@@ -15,7 +15,7 @@ export const meta = {
     { title: "Freeze", detail: "hash frozen tests and test-runner config" },
     { title: "Code", detail: "coder, hash check, code judge, commit step, fix rounds" },
     { title: "Re-plan", detail: "on plan_wrong: re-plan, save the superseded head, return for confirmation" },
-    { title: "PR", detail: "push, draft PR from the approved sha" },
+    { title: "PR", detail: "push, PR from the approved sha" },
     { title: "Review", detail: "pr-review and, for gate changes, the non-weakening sweep; fix round" },
     { title: "Write-back", detail: "ledger section and one marked comment per external source" },
     { title: "CI", detail: "stats block, ready, CI watch, CI-fix rounds, merge where the policy and the script rules allow" },
@@ -200,6 +200,8 @@ const CALLER_LIMITS = [
   "over-matches: comments, docs, strings and another symbol with the same name are hits; the planner maps them as dont_care",
   "word boundary is [A-Za-z0-9_]: a symbol inside a longer identifier is not a hit",
   "a symbol is a bare identifier: a method is grepped by its last name only",
+  // 7.3.0 (#40, #58)
+  "the 100-hit cap counts call-shaped hits only (the name, optional spaces or tabs, then `(`); every hit is still listed and mapped",
 ];
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
 const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge"];
@@ -1388,9 +1390,11 @@ function shQuote(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
 }
 
+// 7.3.0 (#9, Max ruled Q4 (a)): the chunk writers write their chunk files with the Write tool, in the run's
+// scratch dir (outside the worktree): one Write rule there, no Edit and no Bash rule
 function settingsFor(worktree) {
   return JSON.stringify({
-    permissions: { allow: ["Edit(/" + worktree + "/**)", "Write(/" + worktree + "/**)"] },
+    permissions: { allow: ["Edit(/" + worktree + "/**)", "Write(/" + worktree + "/**)", "Write(/" + scratchOf(worktree) + "/**)"] },
   });
 }
 function codePointCompare(a, b) {
@@ -1573,21 +1577,22 @@ function relayDigestOk(r, keys, name) {
 const PROGRAM_SHA256 = {
   "branch_scan": "ec03aa965ed9a3d145ce1fb1636685d2be087877daf78f369eed0a19f532967d",
   "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
-  "callers": "41a09efcbcf4588e6e76f5428d375e102719f897bd644ba46cb74273a9c92703",
+  "callers": "98a98f11d7896e206249104b08dcf84b3478b2522e5996dbf2bd35278cf2a9c2",
   "changed_defs": "3afdc459fcc5590a26516a41d31fd637ea5833ad59b06566140f6cef0fb6561a",
   "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
+  "exclude_add": "8e510601a0deac5baa673f1a888a78fa28c3cf49c20e2949a539252ffdea3566",
   "fleet_branch": "f9bb29a4f8bdfc382075aab56e547902bf2be532042e7ba410e623ea2aadb299",
   "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
-  "format_files": "183f424e72733a515b9c87dd4ff541f287bf897d6d37dec91b48269dd090f4e1",
+  "format_files": "6890f94e46365fecdff078a39b28cda938d715b53ef7157baee5475b38a6951a",
   "gh_identity": "82885435973242bc67bbfeca19ec512f83e5ca52e7342dbd4207cff33567c357",
   "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
   "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
   "hook_surface": "2432e6d881cfa37850c4268b26cc6591fdcccf9b74f818ab70886125f34769f0",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
-  "parked": "8a391d9b9bd6515d28f50e72e40ec154be600f454842ef4508f9f32deb6b7dc5",
+  "parked": "e810605024d57e4397e80cfd5153f96448449169f7ac57b9d530425cd3a493a8",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
   "plan_dsn": "f02908de588f71426a2995b86884be5e15127fd9fc48ead3710c0e71b481277b",
   "plan_files": "360fc1c69092e8da9f11cdded6296ef429c3db870181881ffff949a5b3c8253c",
@@ -1600,6 +1605,7 @@ const PROGRAM_SHA256 = {
   "pr_state": "2882890a993396876229672961f66eba4290f1f98263b4a19c62c395856f3fd8",
   "pr_test_block": "030c64b7f12abe00a4e9f9ddd1493f446ed4a6b2ccb43a8f1f5e6007c45ca8eb",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
+  "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
   "push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
   "push_probe": "c4381f9ce601e0729a0ab49edb33fe6c9e910e8738411e7ad4719f21ef639a5b",
   "read_state": "c6ce8ab9dfe4ae85b144e3cc90c007334794f8e725bd8bfba071544365e18c89",
@@ -1607,6 +1613,7 @@ const PROGRAM_SHA256 = {
   "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
   "review_paths": "711143e444b4d9772c8023c22fbb93735239030d503dd58247050553d7fce29b",
   "ruleset_surface": "b8fec064efbf7ec62125f71016cde95b4a5edcb0156094cd8050e79a8278f067",
+  "scratch_copy": "e5ecf3aef534b8840ca5a734fec3aade93a17d583a8c7808dbe169e8d67228a8",
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
   "session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
   "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
@@ -1623,16 +1630,16 @@ function programTable() {
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-  "fleet-code-judge": "0b7a412cb27884de57c70bb48f90627c8595057ef29ce1a8e0f147df49f979fe",
+  "fleet-code-judge": "91924c6068821dc74566a8c6e31a7865f647d4624d4f32306850ac8dd110d5c5",
   "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
-  "fleet-intent-judge": "eec4332e06027010a8f22aec7b399289665fb652f6d773b9c093f0f7d1f3bfc6",
+  "fleet-intent-judge": "728f3c0a1510644bfffa0ed095ed8d6e1bc66023740938f0f861f4a5e77a3804",
   "fleet-pr-opener": "0c4d24c3bbcc9a99d5e51de251d3817183f85ced1a73d0eeb1318cb1429447cf",
-  "fleet-test-judge": "219c89b656f7ae61d28ab7cf2486b498792385df0cdd2a256fdae6c0f53c051b",
-  "fleet-test-writer": "b7be1e508ec6cb691639379a7b7a0a3bec5cd09e00044b11ec3252cdda73dd5c",
-  "gate-change-nonweakening-sweep": "f03a1be7236bb6b4be449762cd1b5de0a0f86adf47616623ab2ed1ce533dad9f",
-  "plan-audit": "084fe730cc8ecb5cf8712b164bb763cb9bbe97e18bc3cc04e82480ba158de984",
-  "pr-review": "728800a005a54026eb345d5b9784bdde50cdafd5d918f9faa8d2cec7c091142d",
-  "scope-and-plan": "71429f33898fef13d02c3e6a8a2f73b49492e75439585c24d397ddcaa66b93c1"
+  "fleet-test-judge": "abb89160158ac0e0a2c4777fd61807685880f113d69186751b79beddfbc40e61",
+  "fleet-test-writer": "3682d53663567bd9e47a0a14b20d0948fec7211cd6693cb5168192e99c2e6411",
+  "gate-change-nonweakening-sweep": "d2e598a8ebcb557406ef43b5b9e659201b09fb931097b8f3f1ef7c2982f1eed0",
+  "plan-audit": "3ccafa7ff737346ef7825262ecdd7f9c467ca33810b20ba0e50ca49789f2e47c",
+  "pr-review": "25341e7ce426a8e2adde9a0614c5328ab364b2042b97fbb6d3fee68da07c0cb2",
+  "scope-and-plan": "d90c19b8e402925248c34c8a1fd06e4fb5413be4ce327ff5c6f9499f3d79f437"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -1699,7 +1706,7 @@ function emitProg(name, cmd) {
 const PROGRAM_SLOTS = [
   [/^preflight(:relay-retry)?$/, [["path_check", "path_check"], ["session_project", "session_project"]]],
   [/^infra:path-check:/, [[null, "path_check"]]],
-  [/^workspace$/, [["remote_url_check", "remote_url"], ["gh_check", "gh_identity"]]],
+  [/^workspace$/, [["remote_url_check", "remote_url"], ["gh_check", "gh_identity"], ["exclude", "exclude_add"]]],
   [/^infra:gh-identity:/, [[null, "gh_identity"]]],
   [/^hasher:/, [[null, "hasher"]]],
   [/^infra:branch-scan$/, [[null, "branch_scan"], ["test_db", "test_db_decl"]]],
@@ -1708,8 +1715,8 @@ const PROGRAM_SLOTS = [
   [/^infra:park-plan/, [["park", "parked"], ["findings_write", "parked"]]],
   [/^infra:stage-plan/, [["plan_hash", "plan_hash"]]],
   [/^infra:format-(tests|code):/, [[null, "format_files"]]],
-  [/^infra:format-plan/, [["dsn_check", "plan_dsn"]]],
-  [/^infra:commit-plan/, [[null, "plan_ref_write"]]],
+  [/^infra:format-plan/, [["format", "format_files"], ["dsn_check", "plan_dsn"]]],
+  [/^infra:commit-plan/, [[null, "plan_ref_write"], ["retire", "parked"]]],
   [/^infra:verify-plan-commit/, [["plan_files", "plan_files"], ["plan_hash", "plan_hash"], ["plan_ref", "plan_ref"]]],
   [/^infra:load-ref/, [[null, "plan_ref"]]],
   [/^infra:verify-plan(?!-commit)/, [[null, "verify_since"], ["plan_hash", "plan_hash"], ["test_db", "test_db_decl"]]],
@@ -1742,6 +1749,8 @@ const PROGRAM_SLOTS = [
   [/^infra:hash-diff:/, [[null, "hash_diff"]]],
   // 5.0.6
   [/^infra:build-/, [[null, "build_dir"]]],
+  // 7.3.0 (#9)
+  [/^infra:purge-bytecode:/, [[null, "purge"]]],
 ];
 const PROGRAM_KEYS = {
   "path_check": ["tools", "args", "path_problems"],
@@ -1760,6 +1769,10 @@ const PROGRAM_KEYS = {
   "fleet_branch": ["slugs", "args"],
   "parked:write": ["written", "sha256", "args"],
   "parked:park": ["target", "clean", "dirty", "args"],
+  // 7.3.0 (#9)
+  "parked:retire": ["moved", "args"],
+  "exclude_add": ["added", "exclude", "args"],
+  "purge": ["purged", "args"],
   "plan_hash": ["plan_sha256", "blob", "args"],
   "format_files": ["ran", "note", "runs", "stable", "files", "changed", "refused", "purged", "purged_paths", "frozen_changed", "frozen_map", "hook_failed", "hook_failures", "hook_head", "hook_sha256", "hook_timeout", "fix_timeout", "unknown_hooks"],
   "plan_ref_write": ["plan_commit", "plan_base", "tag_sha", "reused", "plan_file", "dirty"],
@@ -1865,11 +1878,16 @@ const PROGRAM_OUT = {
     target: STR_OR_NULL,
     clean: BOOL,
     dirty: STRS,
+    // 7.3.0 (#9): retire mode
+    moved: BOOL,
     args: STRS,
     digest: STR,
   },
   plan_hash: { plan_sha256: STR, blob: STR_OR_NULL, args: STRS, digest: STR },
   fleet_branch: { slugs: STRS, args: STRS, digest: STR },
+  // 7.3.0 (#9)
+  exclude_add: { added: STRS, exclude: STR, args: STRS, digest: STR },
+  purge: { purged: INT, args: STRS, digest: STR },
   format_files: { ran: BOOL, note: STR, runs: INT, stable: BOOL, files: STRS, changed: STRS, refused: STRS, purged: INT, purged_paths: STRS, frozen_changed: STRS, frozen_map: STR_OR_NULL, hook_failed: BOOL, hook_failures: { type: "array", items: STRS }, hook_head: STR, hook_sha256: STR, hook_timeout: STRS, fix_timeout: BOOL, unknown_hooks: STRS, digest: STR },
   plan_ref_write: { plan_commit: STR, plan_base: STR, tag_sha: STR, reused: BOOL, plan_file: STR, dirty: STRS, digest: STR },
   plan_files: { head: STR, commit: STR, parent: STR, files: STRS, args: STRS, dsn_paths: STRS, digest: STR },
@@ -2240,14 +2258,17 @@ function chunked(message) {
   for (let i = 0; i < b64.length; i += CHUNK_CHARS) chunks.push(b64.slice(i, i + CHUNK_CHARS));
   return { expected: sha256Hex(message), chunks, shas: chunks.map((c, i) => ({ i, sha256: sha256Hex(c) })) };
 }
+// 7.3.0 (#9, Max ruled Q4 (a)): a chunk file is written with the Write tool (settingsFor allows Write in the scratch dir)
+function CHUNK_WRITE(dir) {
+  return "For each chunk below, write the file " + dir + "/<i>.b64 with the Write tool, its content the chunk text copied exactly, byte for byte, with no newline added. If the file already exists, Read it first (the Write tool refuses to replace a file it has not read). Never shorten, merge, reflow or skip a chunk.";
+}
 function chunkSteps(dir, c, cmd) {
   return (
-    "a. `mkdir -p " + shQuote(dir) + "`.\n" +
-    "b. For each chunk below, one Bash call: `printf '%s' '<the chunk text>' > " + shQuote(dir) + "/<i>.b64`, with the chunk text copied exactly, byte for byte, in place of <the chunk text> (base64 holds no quote; printf adds no newline). Never shorten, merge, reflow or skip a chunk.\n" +
-    "c. Run this command exactly as written, unmodified:\n" +
+    "a. " + CHUNK_WRITE(dir) + "\n" +
+    "b. Run this command exactly as written, unmodified:\n" +
     cmd +
     "\n" +
-    "   Exit 3 prints {\"bad_chunks\": [<i>, ...]}: the files of those chunks do not hash to their sha256 and nothing was written. Rewrite only those chunks as in step b, then run the command again; at most " + MAX_CHUNK_RETRIES + " such retries, then return failed with the last output. Any other non-zero exit -> failed with its stderr.\n" +
+    "   Exit 3 prints {\"bad_chunks\": [<i>, ...]}: the files of those chunks do not hash to their sha256 and nothing was written. Rewrite only those chunks as in step a, then run the command again; at most " + MAX_CHUNK_RETRIES + " such retries, then return failed with the last output. Any other non-zero exit -> failed with its stderr.\n" +
     "The " + c.chunks.length + " chunk(s) (" + CHUNK_CHARS + " characters each at most):\n" +
     c.chunks.map((x, i) => "chunk " + i + " sha256 " + c.shas[i].sha256 + ":\n" + x + "\n").join("")
   );
@@ -2336,8 +2357,16 @@ function sharedReadSteps(name) {
 function sharedFileRule(name) {
   return " Put shared_file: {name: \"" + name + "\", sha256: <the hex sha256sum printed in step 3>}, copied exactly, in it too.";
 }
+// 7.3.0 (#54): the roles that build a throwaway copy get the scratch_copy.py command prefix as an input
+const COPY_ROLES = ["fleet-test-judge", "fleet-code-judge", "fleet-test-writer", "plan-audit", "gate-change-nonweakening-sweep", "scope-and-plan", "pr-review"];
+function scratchCopyCmd() {
+  if (!state.scriptsDir) throw new Error("scripts_dir is not resolved; program scratch_copy cannot run");
+  programSha("scratch_copy");
+  return "python3 -I " + shQuote(state.scriptsDir + "/scratch_copy.py");
+}
 function rolePrompt(role, inputs) {
   const sh = SHARED_FOR[role] || null;
+  if (COPY_ROLES.indexOf(role) >= 0) inputs = Object.assign({}, inputs, { scratch_copy_cmd: scratchCopyCmd() });
   return (
     "You are the fleet role " + role + ". Do these " + (sh ? "four" : "two") + " steps first, in order:\n" +
     roleReadSteps(role) +
@@ -2401,6 +2430,8 @@ function preflightScriptsText(repo, after) {
   );
 }
 
+// 7.3.0 (#9): the info/exclude lines the workspace step keeps (exclude_add.py <repo> <line>...)
+const EXCLUDE_LINES = [".claude/worktrees/", ".claude/settings.local.json", "__pycache__/", ".pytest_cache/", ".coverage", ".hypothesis/"];
 function workspacePrompt(inputs) {
   return (
     INFRA_STEP + "mechanical git setup only. No code, no commits, no push. Never delete, reset or recreate an existing branch or worktree.\n" +
@@ -2412,12 +2443,15 @@ function workspacePrompt(inputs) {
     RETRY_SHELL("git -C <repo> fetch origin --prune") +
     " Still failing after the 3 retries -> failed with the last error.\n" +
     "2. default_branch = `git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD` without the `origin/` prefix; if that fails, `<gh> repo view --json defaultBranchRef -q .defaultBranchRef.name` run in <repo>.\n" +
-    "3. Keep fleet files out of git status: if `git -C <repo> check-ignore -q .claude/worktrees/probe` fails, append the line `.claude/worktrees/` to `$(git -C <repo> rev-parse --path-format=absolute --git-common-dir)/info/exclude`. Do the same for `.claude/settings.local.json` (probe that path), and for the test caches `__pycache__/`, `.pytest_cache/`, `.coverage`, `.hypothesis/` (a judge's test run must not leave untracked noise). Never edit a tracked .gitignore.\n" +
+    // 7.3.0 (#9): a program, not a $(...) append
+    "3. Keep fleet files and test caches out of git status (a judge's test run must not leave untracked noise; never edit a tracked .gitignore). Run this one command exactly as written, unmodified, as one Bash call: " +
+    progCmd("exclude_add", [inputs.repo].concat(EXCLUDE_LINES)) +
+    "\n   It prints one JSON object " + printsKeys("exclude_add") + ": " + relayAs("exclude") + " (the script recomputes the digest). Non-zero exit -> exclude null and the stderr in reason; go on.\n" +
     "4. Branch state: `<gh> pr list --head <branch> --state all --json number,state` in <repo>. MERGED or CLOSED -> status needs_human.\n" +
     "5. main_worktree: if it exists and `git -C <main_worktree> branch --show-current` equals <branch>, reuse it (created=false). If the path exists otherwise -> needs_human. If absent: local branch <branch> exists -> `git -C <repo> -c core.hooksPath=/dev/null worktree add <main_worktree> <branch>`; else remote branch exists (`git -C <repo> ls-remote --exit-code --heads origin <branch>`: exit code 0 = exists, exit code 2 = absent; any other exit code is a network/auth error -> retry with the same 5 15 45 backoff, and still erroring after the 3 retries -> failed; never treat an error as absent) -> `git -C <repo> -c core.hooksPath=/dev/null worktree add -b <branch> <main_worktree> origin/<branch>`; else `git -C <repo> -c core.hooksPath=/dev/null worktree add --no-track -b <branch> <main_worktree> origin/<default_branch>` (created=true).\n" +
     // 7.3.0 (#39): plan mode only; a build keeps its worktree at the audited plan_base
     (inputs.ff_reused ? "   A reused or added existing branch (not created=true): when `git -C <main_worktree> merge-base --is-ancestor HEAD origin/<default_branch>` exits 0 and `git -C <main_worktree> status --porcelain` is empty, run `git -C <main_worktree> -c core.hooksPath=/dev/null merge --ff-only origin/<default_branch>`. fast_forwarded = true when that merge moved HEAD, else false.\n" : "") +
-    "6. If `<main_worktree>/.claude/settings.local.json` is absent, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths." +
+    "6. If `<main_worktree>/.claude/settings.local.json` is absent or its content differs from `settings_local_json`, write it with exactly the content of `settings_local_json`. Then `git -C <main_worktree> status --porcelain` must be empty; if not -> needs_human with the listed paths." +
     (inputs.frozen_resume ? " Exception (frozen_resume is true): the uncommitted paths of a frozen build are expected; list them in reason and go on (the workflow checks the worktree tree itself). Never stash, reset, clean or change them." : "") +
     "\n" +
     "7. `mkdir -p <scratch_dir>`.\n" +
@@ -2426,7 +2460,7 @@ function workspacePrompt(inputs) {
     "10. Run this one command exactly as written, unmodified, as one Bash call:\n" +
     progCmd("remote_url", [inputs.repo]) +
     "\nIt prints one JSON object " + printsKeys("remote_url") + ": " + relayAs("remote_url_check") + " (the script recomputes the digest). Non-zero exit -> remote_url_check null.\n" +
-    "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url_check, gh_check, created" + (inputs.ff_reused ? ", fast_forwarded" : "") + "}."
+    "Return {status, reason, default_branch, base_ref, remote_slug, remote_host, remote_url_check, gh_check, exclude, created" + (inputs.ff_reused ? ", fast_forwarded" : "") + "}."
   );
 }
 
@@ -2707,15 +2741,18 @@ function formatPlanPrompt(inputs) {
   return (
     INFRA_STEP + "run the repo's pre-commit hooks on the plan doc ONLY, so the later plan commit has nothing left to rewrite. Change no other path. No staging, no commit, no push. Never bypass or skip a hook, never edit a hook or its config, never edit the plan by hand.\n" +
     inputsLine(inputs) +
-    "1. If `<worktree>/.pre-commit-config.yaml` does not exist: reason = \"no pre-commit config\"; go to step 3.\n" +
-    "2. Run `cd <worktree> && PYTHONDONTWRITEBYTECODE=1 pre-commit run --files <plan_path>` as one Bash call with timeout 600000 ms. Exit 0 -> go to step 3. A non-zero exit after which `git -C <worktree> hash-object <plan_path>` differs from before the run means a fixer rewrote the plan: run the same command again, at most 3 runs in all. A non-zero exit that left the plan unchanged, `pre-commit` not installed, or a 3rd run that still fails -> return {status: \"needs_human\", reason: <the failing hook ids and the last 60 lines of output>}.\n" +
-    "3. changed_paths = the paths of `git -C <worktree> status --porcelain --untracked-files=all` (the plan doc itself is expected there).\n" +
+    // 7.3.0 (#9): format_files.py in plan mode, not a `cd <worktree> && pre-commit` call: it runs the hooks on the plan doc in a
+    // scratch checkout (up to 3 runs while a fixer rewrites it) and copies a rewrite back; the script reads the result
+    "1. " + RUN_600S +
+    progCmd("format_files", [inputs.worktree, JSON.stringify({ mode: "plan", paths: [inputs.plan_path] }), "[]", inputs.scratch_dir, String(FIX_RUN_TIMEOUT)]) +
+    "\n   It prints one JSON object " + printsKeys("format_files") + ": " + relayAs("format") + " (the script recomputes the digest and reads the hook result). Non-zero exit -> failed with its stderr.\n" +
+    "2. changed_paths = the paths of `git -C <worktree> status --porcelain --untracked-files=all` (the plan doc itself is expected there).\n" +
     // the DSN precheck on the bytes the plan commit will hold
-    "4. Run this one command exactly as written, unmodified (it reads the plan doc, never changes it):\n" +
+    "3. Run this one command exactly as written, unmodified (it reads the plan doc, never changes it):\n" +
     progCmd("plan_dsn", [inputs.worktree, inputs.plan_path]) +
     "\n" +
     "It prints one JSON object " + printsKeys("plan_dsn") + ": " + relayAs("dsn_check") + FAIL_STDERR +
-    "Return {status, reason, changed_paths, dsn_check}."
+    "Return {status, reason, format, changed_paths, dsn_check}."
   );
 }
 
@@ -2724,10 +2761,9 @@ const CHUNKS_PER_WRITER = 8;
 // the writer step for chunks `ids` of c
 function planChunksPrompt(inputs, c, ids, what) {
   return (
-    INFRA_STEP + "write some chunks of " + (what || "the sealed plan ref") + " to scratch files. Write no other file. No git, no other command, no ledger, ticket or comment writes, no push.\n" +
+    INFRA_STEP + "write some chunks of " + (what || "the sealed plan ref") + " to scratch files with the Write tool. Write no other file. No git, no Bash command, no ledger, ticket or comment writes, no push.\n" +
     inputsLine(Object.assign({}, inputs, { chunks: ids })) +
-    "1. `mkdir -p " + shQuote(inputs.chunk_dir) + "`.\n" +
-    "2. For each chunk below, one Bash call: `printf '%s' '<the chunk text>' > " + shQuote(inputs.chunk_dir) + "/<i>.b64`, with the chunk text copied exactly, byte for byte, in place of <the chunk text> (base64 holds no quote; printf adds no newline). Never shorten, merge, reflow or skip a chunk.\n" +
+    "1. " + CHUNK_WRITE(inputs.chunk_dir) + "\n" +
     'Return {status: "ok", reason, written: [<i>, ...]}: the chunk numbers you wrote. A later step checks every file against its sha256 and sends a bad one to a fresh writer.\n' +
     "The " + ids.length + " chunk(s) (" + CHUNK_CHARS + " characters each at most):\n" +
     ids.map((i) => "chunk " + i + " sha256 " + c.shas[i].sha256 + ":\n" + c.chunks[i] + "\n").join("")
@@ -2746,9 +2782,10 @@ function commitPlanPrompt(inputs, c) {
     "On success it prints one JSON object " + printsKeys("plan_ref_write") + ": copy every value unchanged and add `file_sha256` (the script recomputes the digest).\n" +
     '   Exit 3 prints {"bad_chunks": [<i>, ...]}: the files of those chunks do not hash to their sha256 and nothing was written. Then return {status: "failed", reason: "bad chunks", bad_chunks: <that list, exactly>} at once and do nothing else. Any other non-zero exit -> failed with its stderr.\n' +
     (inputs.retire
-      ? "4. Housekeeping (4.0.0): `mkdir -p " + shQuote(inputs.retire.used) + " && mv -n -- " + shQuote(inputs.retire.dir) + " " + shQuote(inputs.retire.used) + "/`. An error here changes nothing above and does not fail the step.\n"
+      ? // 7.3.0 (#9): a program, not a shell mkdir and move
+        "4. Housekeeping (4.0.0): run this one command exactly as written, unmodified: " + progCmd("parked", ["retire", inputs.retire.dir, inputs.retire.used]) + "\n   It prints one JSON object " + printsKeys("parked:retire") + ": " + relayAs("retire") + ". A non-zero exit here changes nothing above and does not fail the step: retire null.\n"
       : "") +
-    "Return {status, reason, " + returnKeys("plan_ref_write") + "}. The script verifies the commit and the ref in a separate read-only step."
+    "Return {status, reason, " + returnKeys("plan_ref_write") + (inputs.retire ? ", retire" : "") + "}. The script verifies the commit and the ref in a separate read-only step."
   );
 }
 
@@ -3045,11 +3082,6 @@ function RETRY_SHELL(cmd, fatalRe) {
     ' done; cat "$e"; echo rc=$rc` (run it as one Bash call with timeout 600000 ms; the waits alone take 65s)'
   );
 }
-const PURGE_FIND =
-  "find <worktree> \\( -name .git -o -name .venv -o -name venv -o -name .tox -o -name .nox -o -name node_modules -o -path '*/.claude/worktrees' \\) -prune -o " +
-  "\\( -type d \\( -name __pycache__ -o -name .pytest_cache \\) -prune -print0 \\) -o \\( -type f \\( -name '*.pyc' -o -name '*.pyo' \\) -print0 \\)";
-const PURGE_CMD =
-  "n=$(" + PURGE_FIND + " | tr -cd '\\0' | wc -c) && " + PURGE_FIND + " | xargs -0 -r rm -rf -- && echo purged=$n";
 const TEST_ENV = Object.freeze({ PYTHONDONTWRITEBYTECODE: "1", PYTEST_ADDOPTS: "-p no:cacheprovider" });
 const TEST_ENV_NOTE =
   "test_env: set these environment variables for every run of the frozen tests and the suite (frozen-test red check included), so no bytecode or pytest cache is written or read. The workflow deletes all bytecode before every hash check and code-judge run.";
@@ -3128,18 +3160,21 @@ function purgePrompt(inputs) {
   return (
     INFRA_STEP + "delete Python bytecode and pytest caches. No other change: never touch tracked files, never commit.\n" +
     inputsLine(inputs) +
-    "Run this one Bash command exactly as written (replace <worktree> with the shell-quoted worktree path), in the foreground. It removes every __pycache__ dir, *.pyc and *.pyo file and .pytest_cache dir, and skips .git, .venv, venv, .tox, .nox, node_modules and .claude/worktrees:\n" +
-    "PURGE: " +
-    PURGE_CMD +
-    "\n" +
-    "purged = the number after `purged=`. Non-zero exit -> failed with its stderr.\n" +
-    "Return {status, reason, purged}."
+    // 7.3.0 (#9): a program, not a find | xargs pipeline
+    "It removes every __pycache__ dir, *.pyc and *.pyo file and .pytest_cache dir, and skips .git, .venv, venv, .tox, .nox, node_modules and .claude/worktrees. " +
+    RUN_EXACT +
+    progCmd("purge", [inputs.worktree]) +
+    "\nIt prints one JSON object " + printsKeys("purge") + COPY_DIGEST +
+    "Return {status, reason, " + returnKeys("purge") + "}."
   );
 }
 
 async function purgeBytecode(label, worktree, phaseName) {
   const r = await infra(label, purgePrompt({ worktree }), phaseName);
   if (typeof r.purged !== "number") halt("failed", label + " returned no purged count");
+  // 7.3.0 (#9): purge.py's own count, digest-checked
+  requireProgram(r, "purge", label);
+  if (canonical(r.args) !== canonical([worktree]) || !relayDigestOk(r, progKeys("purge"), "purge")) halt("failed", label + ": the relayed purge result does not match the program's digest", "contract");
   gate(label + ": purged " + r.purged + " bytecode/cache paths");
   return r;
 }
@@ -4140,6 +4175,13 @@ async function workspaceStep(repo, lay, wopt) {
   if (ws.default_branch === lay.branch) halt("needs_human", "fleet branch equals the default branch " + ws.default_branch);
   gate("workspace: " + (ws.created ? "created " : "reused ") + lay.mainWt + " off " + ws.default_branch + " @ " + ws.base_ref);
   if (ws.fast_forwarded === true) gate("workspace: fast-forwarded to origin/" + ws.default_branch);
+  // 7.3.0 (#9): housekeeping; an unusable relay is a warning line, never a stop
+  const ex = ws.exclude;
+  // a relay from another program stops, as at every program step
+  if (ex) requireProgram(ex, "exclude_add", "workspace");
+  if (ex && strsOf(ex.added) && canonical(ex.args) === canonical([repo].concat(EXCLUDE_LINES)) && relayDigestOk(ex, progKeys("exclude_add"), "exclude_add"))
+    gate("workspace: info/exclude " + (ex.added.length ? "added " + ex.added.join(", ") : "unchanged"));
+  else gate("warning: workspace: the info/exclude relay is unusable (no digest-checked exclude); git status may list fleet files");
   // origin's URL only from the program's digest-checked output
   const uc = ws.remote_url_check;
   const urlOk =
@@ -4639,7 +4681,7 @@ async function callerGrep(label, names, worktree, planPath, phaseName, expected,
     const r = await dispatch(lb, callersPrompt({ worktree, plan_path: planPath, symbols: part, cap: MAX_SYMBOL_HITS }), { schema: INFRA_SCHEMA, phase: phaseName, agentType: JUDGE_AGENT, digest: "callers" });
     // review M1: an output over the relay cap is split in two; one symbol alone over it stops
     if (r.status !== "ok" && String(r.reason).indexOf(CALLERS_CAP_MARK) >= 0) {
-      if (part.length === 1) halt("needs_human", lb + ": the occurrences of " + part[0] + " are over the 65536-byte relay cap (relay size; at most " + MAX_SYMBOL_HITS + " hits, long paths); the caller check cannot relay them", "callers");
+      if (part.length === 1) halt("needs_human", lb + ": the occurrences of " + part[0] + " are over the 65536-byte relay cap (relay size; at most " + MAX_SYMBOL_HITS + " call-shaped hits, long paths); the caller check cannot relay them", "callers");
       gate(lb + ": " + part.length + " symbols are over the relay cap; split in two");
       queue.unshift({ part: part.slice(0, part.length >> 1), disk: false }, { part: part.slice(part.length >> 1), disk: false });
       continue;
@@ -4842,7 +4884,7 @@ async function callerCheck(label, symbols, worktree, planPath) {
         criterion: null,
         symbol: s.symbol,
         finding:
-          s.symbol + ": more than " + MAX_SYMBOL_HITS + " occurrences (git grep -w); too common a name to check by grep. It stays in changed_symbols: narrower symbols may be added in addition, never in its place; a human decides",
+          s.symbol + ": more than " + MAX_SYMBOL_HITS + " call-shaped occurrences (git grep -w hits followed by `(`); too common a name to check by grep. It stays in changed_symbols: narrower symbols may be added in addition, never in its place; a human decides",
       });
       continue;
     }
@@ -5209,8 +5251,17 @@ async function planAndAudit(ctx0) {
   if (component !== plan.component) gate("planner component " + JSON.stringify(plan.component === undefined ? null : plan.component) + " unusable; component " + component);
   const fmtLabel = "infra:format-plan" + sfx;
   await pathRecheck("format-plan" + sfx, "Plan");
-  const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath }), "Plan");
+  const fmt = await infra(fmtLabel, formatPlanPrompt({ worktree: ctx.common.worktree, plan_path: planPath, scratch_dir: ctx.common.scratch_dir }), "Plan");
   if (!Array.isArray(fmt.changed_paths)) halt("failed", fmtLabel + " returned no changed_paths list");
+  // 7.3.0 (#9): the plan-mode hook result, digest-checked (a failing hook, an unsettled fixer or no pre-commit stop as before)
+  const ff = fmt.format;
+  requireProgram(ff, "format_files", fmtLabel);
+  if (!relayDigestOk(ff, progKeys("format_files"), "format_files") || !strsOf(ff.files) || !Array.isArray(ff.hook_failures))
+    halt("failed", fmtLabel + ": the relayed format result does not match the program's digest", "contract");
+  if (ff.refused.length) halt("needs_human", fmtLabel + ": hook config, a hook entry or a symlinked path differs from HEAD: " + ff.refused.join(", ") + " (" + ff.note + ")", "hooks");
+  if (ff.note === "pre-commit is not installed") halt("needs_human", fmtLabel + ": pre-commit is not installed; the plan doc cannot run the repo's hooks", "hooks");
+  if (ff.fix_timeout || !ff.stable || ff.hook_failed)
+    halt("needs_human", fmtLabel + ": the repo's hooks " + (ff.fix_timeout ? "ran out of time" : !ff.stable ? "still rewrite the plan after 3 runs" : "fail on the plan doc") + " (" + ff.runs + " run(s)): " + ff.hook_head, "hooks");
   const fmtOther = fmt.changed_paths.map((x) => normPath(String(x))).filter((x) => x !== planPath);
   if (fmtOther.length)
     halt("needs_human", fmtLabel + ": the hooks changed paths other than the plan: " + fmtOther.join(", ") + " (never committed; clean the worktree)", "scope");
@@ -5342,6 +5393,13 @@ async function commitPlanAndRef(ctx) {
     halt("failed", label + ": the relayed plan commit, base and tag object do not match the program's digest (" + JSON.stringify(r.plan_commit === undefined ? null : r.plan_commit) + ")", "commit");
   if (r.dirty.length) halt("needs_human", label + ": the worktree is not clean after the plan doc left it: " + r.dirty.join(", "), "scope");
   if (r.reused === true) gate("reused plan commit " + r.plan_commit + ": the plan doc is unchanged; no new commit");
+  // 7.3.0 (#9): the parked folder's retire is housekeeping; an unusable relay is a warning line
+  if (ctx.retire) {
+    const rt = r.retire;
+    if (rt) requireProgram(rt, "parked", label, "failed", "commit");
+    const rtOk = !!rt && typeof rt.moved === "boolean" && canonical(rt.args) === canonical([ctx.retire.dir, ctx.retire.used]) && relayDigestOk(rt, progKeys("parked:retire"), "parked");
+    gate(rtOk ? "parked folder " + ctx.retire.dir + (rt.moved ? " moved to " + ctx.retire.used : " not moved (gone, or taken in " + ctx.retire.used + ")") : "warning: " + label + ": the parked retire relay is unusable; " + ctx.retire.dir + " may stay");
+  }
   const tiny = { branch: full.branch, plan_commit: r.plan_commit, plan_ref: refName, ref_sha256: msgSha, repo: full.brief.repo };
   const v = await verifyPlanCommit(ctx, sfx, r, full, stagedSha, msgSha, tiny);
   if (ctx.onRefs) ctx.onRefs(v.plan_ref.refs);
@@ -6764,6 +6822,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           ci: state.ci || null,
           pr_updated: state.prUpdated === true,
           update: state.update || null,
+          // 7.3.0 (#32 leftover): the orch_scan warning stays in the PR test block across a resume
+          scan_warn: typeof state.scanWarn === "string" ? state.scanWarn : null,
         },
         wb ? { write_back: wb.write_back, ledger_adapter: wb.ledger_adapter, ledger_reason: wb.ledger_reason, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
       ),
@@ -7193,7 +7253,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const sealedPaths = {};
       for (const x of syms) sealedPaths[x.symbol] = (x.occurrences || []).map((o) => at(occurrenceKey(o.at) || o.at));
       const g = await callerGrep("infra:callers:u1", syms.map((x) => x.symbol), mainWt, ref.plan_path, "Review", sealedPaths, "path");
-      if (g.capped.length) return "the occurrences of " + g.capped.join(", ") + " cannot be listed at the update merge (more than " + MAX_SYMBOL_HITS + " occurrences)";
+      if (g.capped.length) return "the occurrences of " + g.capped.join(", ") + " cannot be listed at the update merge (more than " + MAX_SYMBOL_HITS + " call-shaped occurrences)";
       const unread = Object.keys(g.unread).sort(codePointCompare);
       if (unread.length) return "the occurrences of " + unread.join(", ") + " at the update merge differ from the sealed map and are over the caller read budget";
       const occ = [];
@@ -7338,6 +7398,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     state.testsWritten = resume.tests_written || 0;
     iacTouched = resume.iac_touched === true;
     if (resume.ci && typeof resume.ci === "object") state.ci = resume.ci;
+    if (typeof resume.scan_warn === "string") state.scanWarn = resume.scan_warn;
     // 6.0.1 D5: update-branch stays once per run across a resume; a corrupt update record stops (N1)
     state.prUpdated = resume.pr_updated === true;
     const ru = resume.update;

@@ -219,7 +219,8 @@ test("4.0.0 1990: a haiku PATH check whose relay is broken is retried once on so
 const MAIN_WT = "/r/.claude/worktrees/fleet-y42-add-thing/main";
 const SETTINGS = ".claude/settings.local.json";
 // the bytes the workspace step writes (settingsFor in the script)
-const settingsFor = (wt) => JSON.stringify({ permissions: { allow: ["Edit(/" + wt + "/**)", "Write(/" + wt + "/**)"] } });
+// 7.3.0 (#9, Q4 (a)): + Write in the run's scratch dir
+const settingsFor = (wt) => JSON.stringify({ permissions: { allow: ["Edit(/" + wt + "/**)", "Write(/" + wt + "/**)", "Write(/" + wt.replace(/\/+[^/]+\/*$/, "") + "/scratch/**)"] } });
 const OWN = sha256(settingsFor(MAIN_WT));
 function withIgnored(fp, ignored) {
   const h = H({ ...HASHES_FLAT });
