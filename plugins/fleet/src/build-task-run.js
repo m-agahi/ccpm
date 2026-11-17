@@ -6229,7 +6229,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // a count too low passes the length rule (a full last part): read part 0 once more, in every path (7.3.0, #47c)
     if (got.content === null || sha256Hex(got.content) !== tiny.ref_sha256) {
       gate("infra:load-ref: the joined parts do not match ref_sha256; reading part 0 once more for its part count");
-      const q0 = checked(await load("infra:load-ref:retry", 0), "infra:load-ref:retry");
+      // its own prompt text: never the same call as a first part-0 re-read
+      const q0 = checked(await infra("infra:load-ref:retry", loadPrompt(0) + "\nThe parts of an earlier read did not join: run the command again and copy every value exactly, the part count included.", "Verify", JUDGE_AGENT), "infra:load-ref:retry");
       const n = countOf(q0);
       if (n !== null && n !== got.count && partOk(q0, 0)) got = await readParts(q0, ":c" + n);
     }

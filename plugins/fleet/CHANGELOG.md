@@ -39,7 +39,8 @@ workflow-reliability task that the plan puts IN.
   re-run build with the same plan_ref". "plan ref missing or changed" stays for a metadata, parse,
   shape or part-count problem.
 - Relay core (car 1, #47c): the part-0 count re-read runs once in every path, also after a first
-  part-0 re-read; a part 0 with no part at all is read once more before it stops. The part reader
+  part-0 re-read, with its own prompt text so it is never the same call as the first re-read; a
+  part 0 with no part at all is read once more before it stops. The part reader
   (`partOk`, `countOf`, `readParts`) is one top-level helper (`partReader`).
 
 ### Tests changed on purpose (car 1)
