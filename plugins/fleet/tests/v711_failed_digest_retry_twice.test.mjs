@@ -23,8 +23,8 @@ test("7.1.1 L2142 AC2: a failed ruleset relay mis-copied twice halts 'returned f
   s["infra:ruleset-surface:plan"] = (p) => Object.assign(F("ruleset_surface", "ruleset_surface", { surface: [], sources: [], read: [], unreadable: [], error: "x" }, inputsOf(p).args), { digest: BAD });
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "failed", out.result.reason);
-  assert.ok(out.result.reason.startsWith("infra:ruleset-surface:plan returned failed: the program reported an error"), out.result.reason);
-  assert.equal(count(out.labels, "infra:ruleset-surface:plan:digest-retry"), 1, out.labels.join(", "));
+  assert.ok(out.result.reason.startsWith("infra:surfaces:plan returned failed: the program reported an error"), out.result.reason);
+  assert.equal(count(out.labels, "infra:surfaces:plan:digest-retry"), 1, out.labels.join(", "));
   assert.ok(!out.labels.some((l) => l.endsWith(":digest-retry:digest-retry")), out.labels.join(", "));
 });
 

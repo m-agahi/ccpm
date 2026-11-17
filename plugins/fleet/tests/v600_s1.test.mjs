@@ -424,7 +424,7 @@ test("6.0.0 2041: the plan gate stops on a path a ruleset runs, naming the rules
   assert.equal(out.result.stop_gate, "hooks");
   assert.match(out.result.reason, /^hook change(s must be a separate PR \(Max's rule\)| needs Max's confirmation): the plan scope touches tests\/test_a\.py \(run by Organization ruleset "PR Title Convention" 18773609 via \.github\/workflows\/pr-title-convention\.yaml\)/);
   // the program ran with the checked gh command, the repo and its default branch
-  assert.deepEqual(inputsOf(call(out, "infra:ruleset-surface:plan").prompt).args.slice(1), ["gh", "o/r", "master"]);
+  assert.deepEqual(inputsOf(call(out, "infra:surfaces:plan").prompt).args.slice(1), ["gh", "o/r", "master"]);
 });
 
 test("6.0.0 2041: an error stops with 'hook surface cannot be computed'", async () => {
@@ -440,7 +440,8 @@ test("6.0.0 2041: the no-hook line names what was read; the build reuses the sea
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.ok(out.plan.logs.some((l) => /^the plan scope: no hook-surface path \(read: hook config, CI and hook-manager files; self-references in 0 local workflow file\(s\); rules\/branches\/main: 0 rule\(s\);/.test(l)), out.plan.logs.join("\n"));
   assert.ok(out.build.logs.some((l) => /^the approved tree K1: no hook-surface path \(read: .*rules\/branches\/main/.test(l)), out.build.logs.join("\n"));
-  assert.ok(!out.build.labels.some((l) => /^infra:ruleset-surface:/.test(l)), out.build.labels.join(", "));
+  // 8.0.0 (#62 B2): no build step (a surfaces step included) runs the ruleset program
+  assert.ok(!out.build.calls.some((c) => /^infra:ruleset-surface:/.test(c.label) || c.prompt.includes("ruleset_surface.py")), out.build.labels.join(", "));
 });
 
 test("6.0.0 2041 (ruling 1): unreadable org rulesets -> a gate warning and a gates_not_run line the PR body states", async () => {

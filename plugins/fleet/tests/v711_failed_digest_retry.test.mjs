@@ -33,7 +33,7 @@ test("7.1.1 L2142 AC1: a failed ruleset relay with a mis-copied digest gets one 
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "hooks");
   assert.ok(out.result.reason.startsWith("hook surface cannot be computed (repo o/r not readable (HTTP 502)); hook change needs Max's confirmation"), out.result.reason);
-  assert.equal(count(out.labels, "infra:ruleset-surface:plan:digest-retry"), 1, out.labels.join(", "));
+  assert.equal(count(out.labels, "infra:surfaces:plan:digest-retry"), 1, out.labels.join(", "));
 });
 
 test("7.1.1 L2142 AC1: a failed orch-scan relay with a mis-copied digest gets one digest retry; an ok retry lets the PR go ready", async () => {

@@ -79,7 +79,7 @@ test("7.4.0 #36 H3: a ruleset_surface relay marked failed whose args differ from
   s["infra:ruleset-surface:plan"] = (p) => failedRsRelay(p, "x", ["/elsewhere", "gh", "o/r", "master"]);
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "failed");
-  assert.match(out.result.reason, /^infra:ruleset-surface:plan returned failed/);
+  assert.match(out.result.reason, /^infra:surfaces:plan returned failed/);
 });
 
 test("7.4.0 #36 H4: at a hard RLIMIT_AS of 1 GiB or less the lift tests skip with a message naming the hard limit", () => {

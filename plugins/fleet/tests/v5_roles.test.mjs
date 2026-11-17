@@ -114,14 +114,16 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   // 6.3.0 (ADR-1239): + infra:policy:plan
   // 6.3.4 (2176): + infra:plan-chunks:r0w0
   // 7.3.0 (#43): + infra:fleet-branch
-  assert.equal(out.plan.calls.length, 22, out.plan.labels.join(", "));
+  // 8.0.0 (#62 B2): - 2 (one surfaces step)
+  assert.equal(out.plan.calls.length, 20, out.plan.labels.join(", "));
   // 5.0.6 (ledger 2019): + 7 build-dir resets and the teardown
   // 6.0.0 (ledger 2033): + infra:policy
   // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
   // 7.0.0 (yaadgaar #699): - the legacy ledger read and write (main and :ci): the source is inert
   // 7.0.0 review F2: + the yaadgaar read and write (main and :ci): the default task is yaadgaar #42
   // 8.0.0 (#62 B1): - 7 PATH re-checks (each runs in its build-dir reset)
-  assert.equal(out.build.calls.length, 61, out.build.labels.join(", "));
+  // 8.0.0 (#62 B2): - 1 (one surfaces step after the approve)
+  assert.equal(out.build.calls.length, 60, out.build.labels.join(", "));
   for (const c of out.calls) assert.ok(!String(c.prompt).includes("agent_prompt_get"), c.label);
 });
 

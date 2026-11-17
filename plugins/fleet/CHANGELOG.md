@@ -21,6 +21,27 @@ Fleet 8.0.0: one major release in two cars. Car A: yaadgaar #74 and #71. Car B: 
   dirs were not emptied"; every 7.4.0 check site still has a check (site-set test against the
   7.4.0 baseline). The coder's role_file re-ask reset gains a check. The check now runs in the
   reset agent, not the read-only judge agent (`v800_reset_path.test.mjs`).
+- Car B2, #62 (fewer capped agents): the read-only surface steps run in one agent each.
+  M3: plan mode's `infra:hook-surface:plan`, `infra:ruleset-surface:plan` and
+  `infra:pr-convention:plan` become `infra:surfaces:plan` (sonnet, `fleet:judge`), one slot per
+  program. M4: after a code-judge approve, `infra:hook-surface:r<n>`, the first approving round's
+  `infra:ruleset-surface:r<n>` (a ref that seals no ruleset surface) and `infra:changed-defs:r<n>`
+  become `infra:surfaces:r<n>`. The script checks each slot where it checked that step, in the same
+  order (the obligations route still wins over a ruleset error, a broken changed_defs relay or a
+  callers stop of the same round). A plan run makes 20 calls, not 22, and 16 capped agents, not 17
+  (`infra:pr-convention:plan` matched the PR-tail pattern `infra:pr-` and was never capped); a happy
+  build 60 calls, not 61 (40 capped, not 41); the 7.4.0 #61 Q4 (b) run reaches the cap at 87
+  agents, not 91. An ok step with a null slot reaches that program's own stop; a not-ok status no
+  slot explains halts before a route that skips the later slots (the obligations route, an npm or
+  npx walk-up finding) and after the last check. Non-weakening: every hook-surface,
+  ruleset and callers stop test passes with label or count changes only (some source-lint tests
+  learn the surfaces step: v402, v502, v507, v4_s1); a `hook_surface` or
+  `ruleset_surface` error in its slot reaches its own `hooks` stop under an ok and under a failed
+  status (`programErrorRelay` per slot); an error relay off its digest gets the one retry, then the
+  generic halt; a slot with no relay, or a failed status no slot explains, halts as the step did;
+  `changed_defs` still has no retry. `changedDefsPrompt`, `prConventionPrompt` and their
+  `PROGRAM_SLOTS`/`INFRA_TIER` rows are gone; the update-branch reads keep their own steps
+  (`v800_surfaces.test.mjs`).
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

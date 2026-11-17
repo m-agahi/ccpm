@@ -2909,6 +2909,11 @@ the sealed plan facts; the build re-decides it from the sealed ref
 
 ```text
 Max's rule (3.1.0): a plan that touches the hook surface stops here
+8.0.0 (#62 B2): one agent (infra:surfaces:plan) runs hook_surface.py,
+ruleset_surface.py and pr_convention.py, each relayed in its own slot;
+the script checks each slot where its own step was: the hook and ruleset
+stops, the plan-scope gate and the npm/npx walk-up stops come before the
+convention slot is read
 ```
 
 ### `in planAndAudit` (5.0.9 line 5438)
@@ -3919,6 +3924,14 @@ a fix_tests verdict may also carry code findings: keep them
 
 ```text
 the hook surface and the recipe paths of make check_cmds (3.1.0), read once per approve
+8.0.0 (#62 B2): one agent (infra:surfaces:r<m>) runs hook_surface.py, then
+ruleset_surface.py (the first approving round of a ref that seals none) and
+changed_defs.py (a ref with changed_symbols); the obligations gate reads the
+hook slot first and routes to fix_code before the ruleset or changed_defs
+slot is read, so a broken or stopping slot there never pre-empts it.
+A not-ok status halts only through a slot: a null slot halts as the step
+did, a valid error relay goes to its program's error branch, and a status
+no slot explains halts after the last check; changed_defs keeps no retry
 ```
 
 ### `in buildFromRef` (5.0.9 line 7418)

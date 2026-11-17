@@ -1795,10 +1795,8 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:branch-scan",
     "infra:load-parked",
     "role:scope-and-plan",
-    "infra:hook-surface:plan",
-    // 6.0.0 (ledger 2041)
-    "infra:ruleset-surface:plan",
-    "infra:pr-convention:plan",
+    // 8.0.0 (#62 B2): the hook surface, the rulesets (6.0.0, ledger 2041) and the convention in one step
+    "infra:surfaces:plan",
     "infra:path-check:format-plan",
     "infra:format-plan",
     "infra:path-check:plan-audit",
@@ -2678,9 +2676,8 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.deepEqual(tail, [
     "infra:replan-worktree",
     "role:scope-and-plan:replan",
-    "infra:hook-surface:plan:replan",
-    "infra:ruleset-surface:plan:replan",
-    "infra:pr-convention:plan:replan",
+    // 8.0.0 (#62 B2)
+    "infra:surfaces:plan:replan",
     "infra:path-check:format-plan:replan",
     "infra:format-plan:replan",
     "infra:path-check:plan-audit:replan",
@@ -7221,7 +7218,8 @@ test("3.0.0 build caller check: runs read-only after the code judge and before t
   const out = await run(happy(), ARGS);
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  const c = call(out, "infra:changed-defs:r1");
+  // 8.0.0 (#62 B2): the changed_defs slot of the round's surfaces step
+  const c = call(out, "infra:surfaces:r1");
   assert.equal(c.opts.agentType, "fleet:judge");
   const i = inputsOf(c.prompt);
   assert.equal(i.base, PB);
@@ -7229,8 +7227,8 @@ test("3.0.0 build caller check: runs read-only after the code judge and before t
   assert.deepEqual(i.exclude, ["tests/test_a.py", "tests/test_b.py"]);
   assert.ok(c.prompt.includes("python3 -I '" + SCRIPTS_DIR + "/changed_defs.py'"));
   const l = out.labels;
-  assert.ok(l.indexOf("role:fleet-code-judge:r1") < l.indexOf("infra:changed-defs:r1"));
-  assert.ok(l.indexOf("infra:changed-defs:r1") < l.indexOf("infra:commit:r1"));
+  assert.ok(l.indexOf("role:fleet-code-judge:r1") < l.indexOf("infra:surfaces:r1"));
+  assert.ok(l.indexOf("infra:surfaces:r1") < l.indexOf("infra:commit:r1"));
   assert.ok(out.result.gate_log.some((m) => /build caller check r1: no existing definition outside changed_symbols/.test(m)));
 });
 
@@ -7261,7 +7259,7 @@ test("3.0.0 build caller check: a relay that drops a definition fails the step",
   s["infra:changed-defs:r1"] = { ...good, defs: [] };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "failed");
-  assert.match(out.result.reason, /infra:changed-defs:r1: the relayed lists do not match the program's digest/);
+  assert.match(out.result.reason, /infra:surfaces:r1 changed_defs: the relayed lists do not match the program's digest/);
   assert.ok(!out.labels.includes("infra:commit:r1"));
   const t = happy();
   t["infra:changed-defs:r1"] = { status: "ok", reason: "x", defs: "[]", excluded: [], unclassified: [], unattributed: [], digest: "0".repeat(64) };
@@ -7281,7 +7279,8 @@ test("3.0.0 build caller check: a ref sealed before 2.1.6 (changed_symbols null)
   const out = await runOne(s, buildArgs({ ...tiny, ref_sha256: sha256(s.__store[tiny.plan_commit]) }));
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.ok(!out.labels.some((x) => x.startsWith("infra:changed-defs")));
+  // 8.0.0 (#62 B2): no step runs the changed-definitions program
+  assert.ok(!out.calls.some((c) => c.label.startsWith("infra:changed-defs") || c.prompt.includes("changed_defs.py")));
   assert.ok(out.result.gate_log.some((m) => /build caller check skipped: plan ref sealed before 2\.1\.6/.test(m)));
 });
 
@@ -7634,15 +7633,15 @@ test("3.0.0 review: an unclassified file or a module-level change stops unless t
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "callers");
   assert.match(out.result.reason, /unclassified file README\.md/);
-  assert.ok(out.result.gate_log.some((m) => /infra:changed-defs:r1: unclassified README\.md/.test(m)));
-  assert.ok(out.result.gate_log.some((m) => /infra:changed-defs:r1: skipped tests\/test_a\.py \(frozen test or plan doc\)/.test(m)));
+  assert.ok(out.result.gate_log.some((m) => /infra:surfaces:r1 changed_defs: unclassified README\.md/.test(m)));
+  assert.ok(out.result.gate_log.some((m) => /infra:surfaces:r1 changed_defs: skipped tests\/test_a\.py \(frozen test or plan doc\)/.test(m)));
   const o2 = await run(mk({ unattributed: ["chart/c.py:1"] }), ARGS);
   assert.equal(o2.result.stop_gate, "callers", o2.result.reason);
   assert.match(o2.result.reason, /module-level change at chart\/c\.py:1/);
   // a docs file the plan names in a repo obligation passes
   const ok = await run(mk({ unclassified: ["CHANGELOG.md"] }, [Object.assign({}, OB_LOG, { files: ["CHANGELOG.md"] })]), ARGS);
   assert.equal(ok.result.status, "ok", ok.result.reason);
-  assert.ok(ok.result.gate_log.some((m) => /infra:changed-defs:r1: unclassified CHANGELOG\.md/.test(m)));
+  assert.ok(ok.result.gate_log.some((m) => /infra:surfaces:r1 changed_defs: unclassified CHANGELOG\.md/.test(m)));
   // second review: a module-level change in a file whose symbol the plan maps is NOT waived
   const s = callerPlan([GV_DEF, GV_RENDER, GV_PRESTOP]);
   s["infra:changed-defs:r1"] = defsOut([], { unattributed: ["chart/render.py:1"] });
@@ -9294,7 +9293,7 @@ test("3.1.0 hooks: a plan scope with the hook config, a workflow or a hook entry
   // code only: the plan goes on
   const ok = await runOne(happy(), ARGS);
   assert.equal(ok.result.status, "awaiting_confirmation");
-  assert.equal(call(ok, "infra:hook-surface:plan").opts.agentType, "fleet:judge");
+  assert.equal(call(ok, "infra:surfaces:plan").opts.agentType, "fleet:judge");
 });
 
 test("3.1.0 hooks: the approved tree's diff is checked right before the commit; a mixed or hook-only diff stops, even under confirm auto", async () => {
@@ -9320,7 +9319,7 @@ test("3.1.0 hooks: the approved tree's diff is checked right before the commit; 
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
   const L = out.labels;
-  assert.ok(L.indexOf("infra:hook-surface:r1") > L.indexOf("role:fleet-code-judge:r1") && L.indexOf("infra:hook-surface:r1") < L.indexOf("infra:commit:r1"));
+  assert.ok(L.indexOf("infra:surfaces:r1") > L.indexOf("role:fleet-code-judge:r1") && L.indexOf("infra:surfaces:r1") < L.indexOf("infra:commit:r1"));
 });
 
 test("3.1.0 hooks: a surface that cannot be computed, or a relay that differs from the program, refuses", async () => {
@@ -9339,7 +9338,7 @@ test("3.1.0 hooks: a surface that cannot be computed, or a relay that differs fr
   };
   out = await runOne(t, ARGS);
   assert.equal(out.result.status, "failed");
-  assert.match(out.result.reason, /infra:hook-surface:plan: the relayed surface does not match the program's digest/);
+  assert.match(out.result.reason, /infra:surfaces:plan hook_surface: the relayed surface does not match the program's digest/);
 });
 
 test("3.1.0 hooks: the surface program lists hook entries, args and -m modules; no PyYAML or a bomb refuses", { skip: !HAVE_PY || !HAVE_YAML }, () => {

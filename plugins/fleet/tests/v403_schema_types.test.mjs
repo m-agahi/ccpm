@@ -593,8 +593,9 @@ const READS = {
   },
   hookSurface: { "r.surface array": "prog:hook_surface:surface" },
   // 6.0.0 (ledger 2041)
+  // 8.0.0 (#62 B2): the gh args of rulesetSurface and prConvention, built once for the surfaces step
+  ghArgs: { "slug string-re": PARSED_LOCAL },
   rulesetSurface: {
-    "slug string-re": PARSED_LOCAL,
     "r.surface array": "prog:ruleset_surface:surface",
     "r.sources array": "prog:ruleset_surface:sources",
     "r.read array": "prog:ruleset_surface:read",
@@ -603,7 +604,6 @@ const READS = {
   sealedRs: { "x object": PARSED_REF, "x[k] array": PARSED_REF },
   // 6.0.0 (ledger 2042)
   prConvention: {
-    "slug string-re": PARSED_LOCAL,
     "t.types array": "prog:pr_convention:title.types",
     "r.source array": "prog:pr_convention:source",
     "r.unreadable array": "prog:pr_convention:unreadable",

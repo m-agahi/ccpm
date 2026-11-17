@@ -327,9 +327,41 @@ export async function runOne(script, args0) {
     if (base === "infra:load-parked" && r && r.parked && Array.isArray(r.parked.draft_chunks)) r = parkedMeta(r);
     return r;
   };
+  // 8.0.0 (#62 B2): an unscripted surfaces step relays, in each program's slot, what that program's own
+  // step stub (infra:hook-surface:<tail>, infra:ruleset-surface:<tail>, infra:pr-convention:<tail>,
+  // infra:changed-defs:<tail>) or its default returns: a failed part fails the step; a part with no
+  // digest (a non-zero exit) leaves its slot null. __mutate sees each part under its own step label.
+  const surfacesOf = async (prompt, opts) => {
+    const tail = opts.label.slice("infra:surfaces:".length);
+    const out = { status: "ok", reason: "read" };
+    for (const [slot, pre] of SURFACE_PARTS) {
+      if (!prompt.includes("/" + slot + ".py'")) continue;
+      const sub = pre + tail;
+      let x = await agentInner(prompt, Object.assign({}, opts, { label: sub, __sub: true }));
+      if (x && typeof x === "object" && !rawResults.has(x) && x.status === "ok") fillSlot(x, slot, K(slot), sub, prompt);
+      // a mutation of the surfaces step itself applies to the whole result, once (in agent)
+      const mut = script.__mutate;
+      const hits = (l) => (mut.label instanceof RegExp ? mut.label.test(l) : mut.label === l);
+      if (mut && x && typeof x === "object" && hits(sub) && !hits(opts.label)) x = mut.fn(x, prompt, opts.realLabel ? sub + opts.realLabel.slice(opts.label.length) : sub);
+      if (x == null) return null;
+      const rest = Object.assign({}, x);
+      delete rest.status;
+      delete rest.reason;
+      out[slot] = x.status === "ok" || "digest" in rest ? rest : null;
+      if (x.status !== "ok") {
+        out.status = x.status;
+        out.reason = x.reason;
+      }
+    }
+    return out;
+  };
   const agentInner = async (prompt, opts = {}) => {
     const label = opts.label;
-    calls.push({ label: opts.realLabel || label, prompt, opts });
+    if (!opts.__sub) calls.push({ label: opts.realLabel || label, prompt, opts });
+    {
+      const rb = /^(.*?)(:audit-fix(?:-[0-9]+)?)$/.exec(label);
+      if (/^infra:surfaces:/.test(label) && !(label in script) && !(rb && !script.__noRoundFallback && rb[1] in script)) return surfacesOf(prompt, opts);
+    }
     // 3.1.0: preflight returns the PATH check program's output (no IaC tool on PATH)
     if (label === "preflight" && script.preflight && typeof script.preflight === "object" && !("path_check" in script.preflight) && !script.preflight.__raw_path_check) {
       const pc = { tools: { ["terra" + "form"]: null, ["to" + "fu"]: null, ["t" + "fp"]: null, ["terra" + "grunt"]: null, ["dig" + "ger"]: null, ["atlan" + "tis"]: null }, args: [inputsOf(prompt).repo], path_problems: [] };
@@ -1310,8 +1342,17 @@ export function scriptsSummary(map = allScripts()) {
 export function allScripts() {
   return Object.fromEntries(PROGRAMS.map(([n]) => [n, programSha(n)]));
 }
+// 8.0.0 (#62 B2): the slots of a surfaces step and the step label each part's stub keeps
+export const SURFACE_PARTS = [
+  ["hook_surface", "infra:hook-surface:"],
+  ["ruleset_surface", "infra:ruleset-surface:"],
+  ["pr_convention", "infra:pr-convention:"],
+  ["changed_defs", "infra:changed-defs:"],
+];
 // [label, [[slot (null: the result itself), program, digest keys (null: no digest)]]]
 export const PROGRAM_LABELS = [
+  // 8.0.0 (#62 B2): the read-only surface programs of one step, each in its own slot
+  [/^infra:surfaces:/, SURFACE_PARTS.map(([slot]) => [slot, slot, K(slot)])],
   [/^preflight$/, [["path_check", "path_check", K("path_check")], ["session_project", "session_project", K("session_project")]]],
   [/^infra:path-check:/, [[null, "path_check", K("path_check")]]],
   [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")], ["gh_check", "gh_identity", K("gh_identity")], ["exclude", "exclude_add", PROGRAM_KEYS["exclude_add"] || null]]],
@@ -1347,7 +1388,6 @@ export const PROGRAM_LABELS = [
   [/^infra:callers(?!.*:(file|read)(:|$))/, [[null, "callers", K("callers")]]],
   [/^infra:callers(:[a-z0-9-]+)*:file(:(digest|args)-retry)?$/, [[null, "callers", PROGRAM_KEYS["callers:file"] || null]]],
   [/^infra:callers(:[a-z0-9-]+)*:read:(all|auto|paths):[0-9]+(:(digest|args)-retry)?$/, [[null, "callers", PROGRAM_KEYS["callers:read"] || null]]],
-  [/^infra:changed-defs:/, [[null, "changed_defs", K("changed_defs")]]],
   // 7.4.0 (#9): push.py pushes and probes
   [/^infra:push(:p\d+)?$/, [[null, "push", K("push:push")]]],
   [/^infra:push-probe$/, [[null, "push", K("push:probe")]]],
@@ -1371,8 +1411,6 @@ export const PROGRAM_LABELS = [
   [/^infra:fleet-cleanup/, [[null, "pr_state", K("pr_state:cleanup")]]],
   [/^infra:orch-scan/, [[null, "orch_scan", K("orch_scan")]]],
   [/^infra:ci-watch:/, [[null, "ci_watch", K("ci_watch")]]],
-  // 6.0.0 (ledger 2042)
-  [/^infra:pr-convention:/, [[null, "pr_convention", K("pr_convention")]]],
   [/^infra:review-paths:/, [[null, "review_paths", K("review_paths")]]],
   // 4.0.0 review: the hook ids feed G2 and carry a digest
   [/^infra:precommit-ids/, [[null, "precommit_ids", K("precommit_ids")]]],
@@ -1439,21 +1477,22 @@ export function fillPrograms(label, r, prompt) {
   if (/^infra:purge-bytecode:/.test(label) && !("args" in r)) r.args = [/purge\.py' '([^']*)'/.exec(prompt)[1]];
   const hit = PROGRAM_LABELS.find(([re]) => re.test(label));
   if (!hit) return r;
-  for (const [slot, name, keys0] of hit[1]) {
-    const o = slot ? r[slot] : r;
-    if (!o || typeof o !== "object" || "program" in o) continue;
-    // a 3.x stub digest covers the keys bar the hasher's scripts
-    const keys = keys0 === "hasher" ? K(inputsOf(prompt).base_tree ? "hasher:base" : "hasher").filter((k) => k !== "scripts") : fleetScanKeys(label, keys0, prompt);
-    const was = keys && typeof o.digest === "string" ? o.digest : null;
-    const valid3 = was !== null && was === sha256(canon(pick(o, keys)));
-    o.program = programOf(name);
-    // the sha256sum line the same Bash call printed (4.0.0 security review)
-    if (!("file_sha256" in o)) o.file_sha256 = programSha(name);
-    // every hasher run hashes the shipped programs beside it
-    const extra = keys0 === "hasher" ? { scripts: "scripts" in o ? o.scripts : (o.scripts = scriptsSummary()) } : {};
-    if (keys && (was === null || valid3)) o.digest = sha256(canon(Object.assign(pick(o, keys), extra, { program: o.program })));
-  }
+  for (const [slot, name, keys0] of hit[1]) fillSlot(slot ? r[slot] : r, name, keys0, label, prompt);
   return r;
+}
+// one program output of a stub result (8.0.0 #62 B2: a part of a surfaces step too)
+function fillSlot(o, name, keys0, label, prompt) {
+  if (!o || typeof o !== "object" || "program" in o) return;
+  // a 3.x stub digest covers the keys bar the hasher's scripts
+  const keys = keys0 === "hasher" ? K(inputsOf(prompt).base_tree ? "hasher:base" : "hasher").filter((k) => k !== "scripts") : fleetScanKeys(label, keys0, prompt);
+  const was = keys && typeof o.digest === "string" ? o.digest : null;
+  const valid3 = was !== null && was === sha256(canon(pick(o, keys)));
+  o.program = programOf(name);
+  // the sha256sum line the same Bash call printed (4.0.0 security review)
+  if (!("file_sha256" in o)) o.file_sha256 = programSha(name);
+  // every hasher run hashes the shipped programs beside it
+  const extra = keys0 === "hasher" ? { scripts: "scripts" in o ? o.scripts : (o.scripts = scriptsSummary()) } : {};
+  if (keys && (was === null || valid3)) o.digest = sha256(canon(Object.assign(pick(o, keys), extra, { program: o.program })));
 }
 
 // 7.4.0 (#9): the args of the prompt's push.py command (push or probe mode)

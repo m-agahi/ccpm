@@ -219,7 +219,9 @@ test("5.0.2 2007: the digest checks and the prompts read the one key table (sour
   for (const [n] of RELAYED) {
     // the hasher prompt picks its mode: printsKeys(hid), hid "hasher" or "hasher:base"
     const re = n === "hasher" ? /const hid = inputs\.base_tree \? "hasher:base" : "hasher";[^]*?printsKeys\(hid\)/ : new RegExp('printsKeys\\("' + n + '[":]');
-    assert.ok(re.test(SOURCE), n + ": no printsKeys(" + n + ") in a prompt");
+    // 8.0.0 (#62 B2): a surfaces step builds each program's list with printsKeys(p.name)
+    const surf = n === "changed_defs" || n === "pr_convention" ? /\nfunction surfacesPrompt\([^]*?printsKeys\(p\.name\)/ : null;
+    assert.ok(re.test(SOURCE) || (surf && surf.test(SOURCE)), n + ": no printsKeys(" + n + ") in a prompt");
   }
 });
 

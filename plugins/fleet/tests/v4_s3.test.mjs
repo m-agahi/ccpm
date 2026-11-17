@@ -94,8 +94,8 @@ const WANT = [
   [/^infra:pr-ready/, "sonnet"],
   [/^infra:(pr-merge|pr-update|ci-rerun|fleet-cleanup)/, "sonnet"],
   [/^infra:(orch-scan|ci-watch)/, "haiku"],
-  [/^infra:pr-convention/, "haiku"],
-  [/^infra:changed-defs/, "sonnet"],
+  // 8.0.0 (#62 B2): the hook surface, ruleset, convention (haiku before) and changed-definition reads of one step
+  [/^infra:surfaces:/, "sonnet"],
   [/^infra:replan-/, "sonnet"],
   [/^infra:state:/, "sonnet"],
   [/^infra:(fleet-scan|purge-bytecode|review-cleanup|ledger-|yaadgaar-|comments-)/, "sonnet"],
@@ -524,8 +524,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // 6.3.0 (ADR-1239): + infra:policy:plan
   // 6.3.4 (2176): + infra:plan-chunks:r0w0
   // 7.3.0 (#43): + infra:fleet-branch
-  assert.equal(out.plan.calls.length, 22, out.plan.labels.join(", "));
-  assert.equal(out.planResult.agents, 22);
+  // 8.0.0 (#62 B2): - 2 (infra:surfaces:plan runs the hook, ruleset and convention reads)
+  assert.equal(out.plan.calls.length, 20, out.plan.labels.join(", "));
+  assert.equal(out.planResult.agents, 20);
   // 5.0.6 (ledger 2019): + 7 build-dir resets (writers, test judge, coder,
   // code judge, commit, push, pr-review) and the teardown, which runs after
   // the result is made
@@ -535,8 +536,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // 7.0.0 review F2: + the yaadgaar read and write (main and :ci): the default task is yaadgaar #42
   // 8.0.0 (#62 B1): - 7 PATH re-checks (writers, test judge, coder, code judge, commit, push,
   // pr-review): each runs in its build-dir reset; capped() is unchanged
-  assert.equal(out.build.calls.length, 61, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 60);
+  // 8.0.0 (#62 B2): - 1 (infra:surfaces:r1 runs the hook surface and changed-definition reads)
+  assert.equal(out.build.calls.length, 60, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 59);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -608,7 +610,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     // 6.0.0 (ledger 2033): + infra:policy; review S6, S7a: + 3
     // 7.0.0 (yaadgaar #699): - 4 legacy ledger steps; review F2: + 4 yaadgaar steps (the default task)
     // 8.0.0 (#62 B1): - 7 PATH re-checks (each runs in its build-dir reset)
-    assert.equal(b.calls.length, 61);
+    // 8.0.0 (#62 B2): - 1 (one surfaces step after the approve)
+    assert.equal(b.calls.length, 60);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });

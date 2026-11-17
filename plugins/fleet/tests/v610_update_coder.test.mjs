@@ -248,14 +248,14 @@ test("6.1.0 T12-T15: the update round's ownership checks use d; the PR-level che
   assert.equal(inputsOf(call(out, "hasher:post-coder:r2").prompt).base_tree, "KU");
   assert.equal(inputsOf(call(out, "hasher:post-coder:r1").prompt).base_tree, PB);
   // T13: the build caller check diffs the base tip against the approved tree
-  assert.equal(inputsOf(call(out, "infra:changed-defs:r2").prompt).base, C);
-  assert.equal(inputsOf(call(out, "infra:changed-defs:r1").prompt).base, PB);
+  assert.equal(inputsOf(call(out, "infra:surfaces:r2").prompt).base, C);
+  assert.equal(inputsOf(call(out, "infra:surfaces:r1").prompt).base, PB);
   // T14: the commit step expects HEAD d
   assert.equal(inputsOf(call(out, "infra:commit:r2").prompt).expected_head, D);
   // T15: the coder diffs against tree(d); the hook surface is read at d
   const ci = inputsOf(call(out, "role:fleet-coder:r2").prompt);
   assert.deepEqual([ci.freeze_tree, ci.freeze_ref, ci.code_base_ref], ["KU", D, D]);
-  assert.equal(inputsOf(call(out, "infra:hook-surface:r2").prompt).rev, D);
+  assert.equal(inputsOf(call(out, "infra:surfaces:r2").prompt).rev, D);
   // the review findings reach the coder
   assert.match(ci.routed_findings.map((f) => f.finding).join("\n"), /review F1 \[correctness\] src\/x\.py:1: the merge broke x/);
 });

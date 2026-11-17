@@ -334,7 +334,7 @@ test("6.0.0 2042a (security review): roles read the plan from the sealed plan co
   }
   for (const c of out.build.calls) assert.ok(!/\/plan\/docs\/plans\/x\.md/.test(c.prompt), c.label + " names no plan file copy");
   assert.equal(inputsOf(call(out, "role:fleet-pr-opener").prompt).tldr, "adds a thing");
-  assert.equal(inputsOf(call(out, "infra:hook-surface:r1").prompt).rev, PB);
+  assert.equal(inputsOf(call(out, "infra:surfaces:r1").prompt).rev, PB);
   assert.equal(inputsOf(call(out, "role:pr-review:v1").prompt).base_ref, PB);
   assert.ok(out.build.logs.indexOf("verify: HEAD is plan_base " + PB + "; plan hash matches at " + PLAN_BLOB) >= 0, out.build.logs.join("\n"));
   for (const r of PLAN_ROLES) {
@@ -511,8 +511,10 @@ test("6.0.0 2042b: plan mode reads the convention after the ruleset surface and 
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const L = out.labels;
-  assert.equal(L.indexOf("infra:pr-convention:plan"), L.indexOf("infra:ruleset-surface:plan") + 1);
-  assert.deepEqual(inputsOf(call(out, "infra:pr-convention:plan").prompt).args, ["/r/.claude/worktrees/fleet-y42-add-thing/main", "gh", "o/r", "master"]);
+  // 8.0.0 (#62 B2): one surfaces step runs the ruleset read, then the convention read
+  const sp = call(out, "infra:surfaces:plan").prompt;
+  assert.ok(L.includes("infra:surfaces:plan") && sp.indexOf("ruleset_surface.py") >= 0 && sp.indexOf("ruleset_surface.py") < sp.indexOf("pr_convention.py"));
+  assert.deepEqual(inputsOf(call(out, "infra:surfaces:plan").prompt).args, ["/r/.claude/worktrees/fleet-y42-add-thing/main", "gh", "o/r", "master"]);
   const pf = JSON.parse(s.__store[PC]).plan_facts;
   assert.equal(pf.component, "thing");
   assert.equal(pf.conventions.title.style, "conventional");

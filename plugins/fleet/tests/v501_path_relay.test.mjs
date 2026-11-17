@@ -169,7 +169,8 @@ test("5.0.1: file_sha256 copied into program passes the changed-definitions dige
   const ref = await planRefFor(s);
   s.__mutate = { label: /^infra:changed-defs:/, fn: (r) => inProgram(r) };
   const out = await runOne(s, buildArgs(ref));
-  assert.ok(out.labels.some((l) => /^infra:changed-defs:/.test(l)), "the build ran the changed-definitions step");
+  // 8.0.0 (#62 B2): the changed_defs slot of infra:surfaces:r1 (the mutation applies to that part)
+  assert.ok(out.calls.some((c) => /^infra:surfaces:/.test(c.label) && c.prompt.includes("changed_defs.py")), "the build ran the changed-definitions step");
   assert.equal(out.result.status, "ok", out.result.reason);
 });
 

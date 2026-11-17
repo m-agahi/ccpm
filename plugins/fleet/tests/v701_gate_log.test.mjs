@@ -10,6 +10,9 @@ import { ARGS, happy, run, call, defsOut, sha256, canon } from "./harness.mjs";
 
 const DIST_REL = "plugins/fleet/workflows/build-task-run.js";
 const LABEL = "infra:changed-defs:r1";
+// 8.0.0 (#62 B2): the changed_defs slot of the round's surfaces step (LABEL keys its stub)
+const STEP = "infra:surfaces:r1";
+const MSG = STEP + " changed_defs";
 
 function withRelay(relay) {
   const s = happy();
@@ -21,7 +24,7 @@ test("AC5: a generated dist entry is logged as skipped and the build continues",
   // AC5: valid relay with the dist path -> ok, skipped line, commit runs
   const out = await run(withRelay(defsOut([], { generated: [DIST_REL] })), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.ok(out.result.gate_log.includes(LABEL + ": skipped " + DIST_REL + " (generated from src)"));
+  assert.ok(out.result.gate_log.includes(MSG + ": skipped " + DIST_REL + " (generated from src)"));
   assert.ok(out.labels.includes("infra:commit:r1"));
 });
 
@@ -39,7 +42,7 @@ test("AC5: a relay with no generated array halts the step before any commit", as
   const relay = { status: "ok", reason: "listed", defs: [], excluded: [], unclassified: [], unattributed: [], digest: sha256(canon(o)) };
   const out = await run(withRelay(relay), ARGS);
   assert.equal(out.result.status, "failed");
-  assert.ok(out.result.reason.startsWith(LABEL), out.result.reason);
+  assert.ok(out.result.reason.startsWith(MSG), out.result.reason);
   assert.match(out.result.reason, /generated/);
   assert.ok(!out.labels.includes("infra:commit:r1"));
 });
@@ -80,8 +83,8 @@ test("AC5: triangulation, the src file itself is not an allowed generated path",
 test("AC5: the changed_defs prompt lists generated among the printed keys", async () => {
   // AC5: prompt printed-keys list
   const out = await run(happy(), ARGS);
-  const c = call(out, LABEL);
-  const m = /It prints one JSON object \{([^}]*)\}/.exec(c.prompt);
+  const c = call(out, STEP);
+  const m = /It prints one JSON object \{([^}]*)\}/.exec(c.prompt.slice(c.prompt.indexOf("changed_defs.py'")));
   assert.ok(m, "printed keys object not found in the prompt");
   assert.ok(m[1].split(", ").includes("generated"), m[1]);
 });

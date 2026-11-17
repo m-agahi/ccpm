@@ -109,9 +109,10 @@ test("8.0.0 B1-1: the happy build drops 7 calls (68 -> 61): each paired reset ru
   const out = await run(happy(), Object.assign({}, ARGS, { confirm: "ask" }));
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.equal(out.plan.calls.length, 22, out.plan.labels.join(", "));
-  assert.equal(out.build.calls.length, 61, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 60);
+  // 8.0.0 (#62 B2): - 2 plan calls (the surfaces step), - 1 build call (infra:surfaces:r1)
+  assert.equal(out.plan.calls.length, 20, out.plan.labels.join(", "));
+  assert.equal(out.build.calls.length, 60, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 59);
   for (const [site] of MERGED) {
     assert.ok(!out.build.labels.includes("infra:path-check:" + site), site + ": no standalone check");
     const c = call(out.build, "infra:build-reset:" + site);

@@ -100,8 +100,9 @@ const INFRA_TIER = [
   ["infra:tf-gate", "sonnet"],
   ["infra:hook-surface", "sonnet"],
   ["infra:ruleset-surface", "sonnet"],
-  ["infra:pr-convention", "haiku"],
-  ["infra:changed-defs", "sonnet"],
+  // 8.0.0 (#62 B2): the hook, ruleset, convention and changed-definition reads of one step (sonnet: the
+  // highest tier of the steps it replaces)
+  ["infra:surfaces:", "sonnet"],
   ["infra:replan-", "sonnet"],
   ["infra:state:", "sonnet"],
   ["infra:fleet-scan", "sonnet"],
@@ -1800,14 +1801,14 @@ const PROGRAM_SLOTS = [
   [/^infra:remote-head:/, [[null, "remote_head"]]],
   [/^infra:fleet-scan:/, [[null, "fleet_scan"]]],
   [/^infra:callers/, [[null, "callers"]]],
-  [/^infra:changed-defs:/, [[null, "changed_defs"]]],
   // 7.4.0 (#9): push.py pushes and probes
   [/^infra:push(?!-probe)/, [[null, "push"]]],
   [/^infra:push-probe$/, [[null, "push"]]],
   [/^infra:hook-surface:/, [[null, "hook_surface"]]],
   // 6.0.0
   [/^infra:ruleset-surface:/, [[null, "ruleset_surface"]]],
-  [/^infra:pr-convention:/, [[null, "pr_convention"]]],
+  // 8.0.0 (#62 B2): each read-only surface program in its own slot
+  [/^infra:surfaces:/, [["hook_surface", "hook_surface"], ["ruleset_surface", "ruleset_surface"], ["pr_convention", "pr_convention"], ["changed_defs", "changed_defs"]]],
   [/^infra:review-paths:/, [[null, "review_paths"]]],
   [/^infra:precommit-ids/, [[null, "precommit_ids"]]],
   [/^infra:check-scripts/, [[null, "script_check"]]],
@@ -3084,18 +3085,6 @@ function callersReadPrompt(inputs) {
   );
 }
 
-function changedDefsPrompt(inputs) {
-  return (
-    INFRA_STEP + "list the existing definitions the approved tree modifies. Read only: no edits, no commits, no checkout, no fetch, no push; run nothing but the one command below.\n" +
-    inputsLine(inputs) +
-    RUN_EXACT +
-    progCmd("changed_defs", [inputs.worktree, inputs.base, inputs.tree, JSON.stringify(inputs.exclude)]) +
-    "\n" +
-    'It prints one JSON object ' + printsKeys("changed_defs") + '. Return {status: "ok", reason, ' + returnKeys("changed_defs") + '} with those values copied exactly: every entry in order, nothing dropped or shortened (the script recomputes the digest and fails the step on any difference). ' +
-    'If the command exits non-zero, return {status: "failed", reason: <its stderr>}.'
-  );
-}
-
 function verifyPlanPrompt(inputs) {
   return (
     INFRA_STEP + "VERIFY the approved plan. Read only: no edits, no commits, no checkout, no reset, no push.\n" +
@@ -3749,6 +3738,7 @@ function agentOpts(opts, label, model) {
   const o = Object.assign({}, opts, { label, model });
   delete o.digest;
   delete o.args;
+  delete o.nested;
   return o;
 }
 const DIGEST_RETRY = ":digest-retry";
@@ -3762,7 +3752,13 @@ function digestOnlyMiss(r, id) {
 const ARGS_RETRY = ":args-retry";
 const RETRY_RE = /:(digest|args)-retry$/;
 // 6.0.0 (2039): the first nested program slot whose relay is from the shipped program but misses its digest (null: none)
-function nestedMiss(label, r) {
+// 8.0.0 (#62 B2): nested ([[slot, program, args]]): only those slots, each as its own step's relay (a failed
+// status too, with a 64-hex digest)
+function nestedMiss(label, r, nested) {
+  if (nested) {
+    for (const [slot, name] of nested) if (r && r[slot] && digestOnlyMiss(Object.assign({}, r[slot], { status: r.status }), name)) return slot;
+    return null;
+  }
   const hit = r && typeof r === "object" && r.status === "ok" ? PROGRAM_SLOTS.find((e) => e[0].test(label)) : null;
   for (const [slot, name] of hit ? hit[1] : []) {
     const x = slot === null ? null : r[slot];
@@ -3771,15 +3767,19 @@ function nestedMiss(label, r) {
   return null;
 }
 async function digestRetry(label, prompt, opts, r, again) {
-  if (!opts || !opts.digest || RETRY_RE.test(label)) return r;
-  const dm = digestOnlyMiss(r, opts.digest);
-  const am = !dm && Array.isArray(opts.args) && !!r && r.status === "ok" && relayDigestOk(r, progKeys(opts.digest), opts.digest.split(":")[0]) && canonical(r.args) !== canonical(opts.args);
-  const nm = !dm && !am ? nestedMiss(label, r) : null;
+  if (!opts || !(opts.digest || opts.nested) || RETRY_RE.test(label)) return r;
+  const dm = !!opts.digest && digestOnlyMiss(r, opts.digest);
+  const am = !dm && ((Array.isArray(opts.args) && !!r && r.status === "ok" && relayDigestOk(r, progKeys(opts.digest), opts.digest.split(":")[0]) && canonical(r.args) !== canonical(opts.args)) || nestedArgsMiss(r, opts.nested));
+  const nm = !dm && !am ? nestedMiss(label, r, opts.nested) : null;
   if (!dm && !am && !nm) return r;
   if (again === softDispatch && capped() + 1 > MAX_AGENTS) return r;
   const sfx = dm || nm ? DIGEST_RETRY : ARGS_RETRY;
   gate(label + ": " + (dm ? "the relay does not match the program's digest" : nm ? "the " + nm + " relay does not match the program's digest" : "the program ran on other arguments than the workflow sent") + "; dispatched once more to a fresh agent (" + label + sfx + ") on " + relayModel(label + sfx));
   return again(label + sfx, prompt + (dm ? "\nA first relay of this step did not match the program's digest: run the command again and copy every value exactly." : "\nA first run of this step used other arguments: run the command again exactly as written."), opts);
+}
+// 8.0.0 (#62 B2): a nested slot that holds its digest but ran on other arguments (an ok relay only, as a top-level one)
+function nestedArgsMiss(r, nested) {
+  return !!nested && !!r && r.status === "ok" && nested.some(([slot, name, args]) => r[slot] && relayDigestOk(r[slot], progKeys(name), name) && canonical(r[slot].args) !== canonical(args));
 }
 async function softDispatch(label, prompt, opts) {
   const model = relayModel(label);
@@ -5067,8 +5067,9 @@ function buildCallerFindings(relayed, symbols, scopeFiles) {
 }
 
 const GENERATED_DIST = "plugins/fleet/workflows/build-task-run.js";
-async function buildCallerCheck(label, symbols, worktree, base, tree, exclude, scopeFiles) {
-  const r = await infra(label, changedDefsPrompt({ worktree, base, tree, exclude }), "Code", JUDGE_AGENT);
+// 8.0.0 (#62 B2): the changed_defs slot of the round's surfaces step (got)
+async function buildCallerCheck(label, symbols, tree, scopeFiles, got) {
+  const r = got("changed_defs");
   const lists = ["excluded", "unclassified", "unattributed"];
   if (
     !Array.isArray(r.defs) ||
@@ -5132,8 +5133,9 @@ function hookSurfacePrompt(inputs) {
 function hookReadStop(err) {
   halt("needs_human", "hook surface cannot be computed (" + err + "); " + (/HTTP None/.test(err) ? "transient GitHub read failure; re-run" : "hook change needs Max's confirmation"), "hooks");
 }
-async function hookSurface(label, worktree, rev, targets, phaseName) {
-  const r = await infra(label, hookSurfacePrompt({ worktree, rev, targets }), phaseName, JUDGE_AGENT, "hook_surface", [worktree, rev, JSON.stringify(targets)]);
+// 8.0.0 (#62 B2): got, the hook_surface slot of a surfaces step (else its own step)
+async function hookSurface(label, worktree, rev, targets, phaseName, got) {
+  const r = got ? got("hook_surface") : await infra(label, hookSurfacePrompt({ worktree, rev, targets }), phaseName, JUDGE_AGENT, "hook_surface", [worktree, rev, JSON.stringify(targets)]);
   requireProgram(r, "hook_surface", label, "needs_human", "hooks");
   if (!Array.isArray(r.surface) || !relayDigestOk(r, progKeys("hook_surface"), "hook_surface"))
     halt("failed", label + ": the relayed surface does not match the program's digest");
@@ -5145,6 +5147,51 @@ async function hookSurface(label, worktree, rev, targets, phaseName) {
   // 7.4.0 (#29 N2): a "dir/" entry keeps its slash
   for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x)) + (/\/$/.test(String(x)) ? "/" : "")) : null;
   return { surface: r.surface.map((x) => (/\/$/.test(String(x)) ? (String(x) === "./" ? "./" : normPath(String(x)) + "/") : normPath(String(x)))), make_paths: mp };
+}
+
+// 8.0.0 (#62 B2): the read-only surface programs of one step in one agent, each in its own slot.
+// progs: [{name, args, retry}], in the order the script checks them; retry: the digest and args retry
+// of the step the program had (changed_defs had none). Returns got(slot): the slot's relay, read when
+// the script reaches the check that used that program's own step, so the stops keep their order;
+// got.end(): after the last check, a not-ok status that no slot explained halts as the step did.
+function surfacesPrompt(inputs, progs) {
+  return (
+    INFRA_STEP + "read the hook surface" + (progs.length > 1 ? " and the other read-only facts below" : "") + ". READ ONLY: no edits, no commits, no checkout, no fetch, no push; the programs only read (GitHub: GET requests); never run a hook.\n" +
+    inputsLine(inputs) +
+    "Run these " + progs.length + " command(s) exactly as written, unmodified, each as one Bash call, in this order; run nothing else:\n" +
+    progs.map((p, i) => (i + 1) + ". " + progCmd(p.name, p.args) + "\nIt prints one JSON object " + printsKeys(p.name) + ": " + relayAs(p.name) + ", every list entry in order (the script recomputes the digest). Non-zero exit -> " + p.name + " null and its stderr in reason.\n").join("") +
+    "A non-null error with exit 0 is still a run: copy it, the workflow decides. Status ok when every command exited 0, else failed.\n" +
+    "Return {status, reason, " + progs.map((p) => p.name).join(", ") + "}."
+  );
+}
+async function surfaces(label, inputs, progs, phaseName) {
+  const nested = progs.filter((p) => p.retry).map((p) => [p.name, p.name, p.args]);
+  const r = await dispatch(label, surfacesPrompt(inputs, progs), { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName, nested });
+  const stop = () => halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+  // a failed relay of the program's own error (programErrorRelay, per slot)
+  const errRelay = (p) => r[p.name] != null && programErrorRelay(Object.assign({}, r[p.name], { status: r.status }), p.name, p.args);
+  const got = (slot) => {
+    const p = progs.find((x) => x.name === slot);
+    const x = r[slot];
+    // an ok step with no relay: the program's own check refuses it (no program key), as for its own step
+    if (r.status === "ok") return x == null ? {} : x;
+    // the program's own error goes to its error branch
+    if (errRelay(p)) {
+      gate(label + ": the agent returned " + r.status + " for " + slot + "'s own error; its error branch decides");
+      return x;
+    }
+    // no relay, or an error the program's own branch may not see: the step's halt
+    if (x == null || ("error" in Object(x) && x.error != null)) stop();
+    return x;
+  };
+  // before a route that skips the later slots: a not-ok status that no slot explains (a null slot or an error relay) halts
+  got.settle = () => {
+    if (r.status !== "ok" && !progs.some((p) => r[p.name] == null || errRelay(p))) stop();
+  };
+  got.end = () => {
+    if (r.status !== "ok") stop();
+  };
+  return got;
 }
 
 // 7.4.0 (#13): a path in a gate line, its control characters as "?" (no forged log line)
@@ -5187,10 +5234,15 @@ function rulesetSurfacePrompt(inputs) {
     "Return {status, reason, " + returnKeys("ruleset_surface") + "}."
   );
 }
-async function rulesetSurface(label, worktree, slug, defaultBranch, phaseName) {
+// the args of ruleset_surface.py and pr_convention.py
+function ghArgs(worktree, slug, defaultBranch) {
   const g = slug ? ghFor(slug) : null;
-  const args = [worktree, (g && g.gh_cmd) || "-", slug && LEDGER_PROJECT_RE.test(slug) ? slug : "-", defaultBranch];
-  const r = await infra(label, rulesetSurfacePrompt({ args }), phaseName, JUDGE_AGENT, "ruleset_surface", args);
+  return [worktree, (g && g.gh_cmd) || "-", slug && LEDGER_PROJECT_RE.test(slug) ? slug : "-", defaultBranch];
+}
+// 8.0.0 (#62 B2): got, the ruleset_surface slot of a surfaces step (else its own step)
+async function rulesetSurface(label, worktree, slug, defaultBranch, phaseName, got) {
+  const args = ghArgs(worktree, slug, defaultBranch);
+  const r = got ? got("ruleset_surface") : await infra(label, rulesetSurfacePrompt({ args }), phaseName, JUDGE_AGENT, "ruleset_surface", args);
   requireProgram(r, "ruleset_surface", label, "needs_human", "hooks");
   if (!Array.isArray(r.surface) || !Array.isArray(r.sources) || !Array.isArray(r.read) || !Array.isArray(r.unreadable) || !relayDigestOk(r, progKeys("ruleset_surface"), "ruleset_surface"))
     halt("failed", label + ": the relayed surface does not match the program's digest");
@@ -5201,13 +5253,10 @@ async function rulesetSurface(label, worktree, slug, defaultBranch, phaseName) {
   return { surface: r.surface.map(np), sources: r.sources.map((x) => Object.assign({}, x, { path: np(x.path) })), read: r.read.map(String), unreadable: r.unreadable.map(String) };
 }
 // 2042: the repo's PR title and body convention, sealed in plan_facts.conventions
-function prConventionPrompt(inputs) {
-  return INFRA_STEP + "read the repo's PR title and body convention. READ ONLY: the program sends GET requests only; run nothing but the one command below.\n" + inputsLine(inputs) + RUN_EXACT + progCmd("pr_convention", inputs.args) + "\nIt prints one JSON object " + printsKeys("pr_convention") + COPY_DIGEST + "Return {status, reason, " + returnKeys("pr_convention") + "}.";
-}
-async function prConvention(label, worktree, slug, defaultBranch, phaseName) {
-  const g = slug ? ghFor(slug) : null;
-  const args = [worktree, (g && g.gh_cmd) || "-", slug && LEDGER_PROJECT_RE.test(slug) ? slug : "-", defaultBranch];
-  const r = await infra(label, prConventionPrompt({ args }), phaseName, JUDGE_AGENT, "pr_convention", args);
+// 8.0.0 (#62 B2): read from the pr_convention slot of the plan's surfaces step (got)
+async function prConvention(label, worktree, slug, defaultBranch, got) {
+  const args = ghArgs(worktree, slug, defaultBranch);
+  const r = got("pr_convention");
   requireProgram(r, "pr_convention", label);
   const t = r.title;
   if (!t || ["scoped-key", "conventional"].indexOf(t.style) < 0 || !Array.isArray(t.types) || !t.types.length || !r.body || !Array.isArray(r.source) || !Array.isArray(r.unreadable) || !relayDigestOk(r, progKeys("pr_convention"), "pr_convention") || canonical(r.args) !== canonical(args))
@@ -5376,16 +5425,29 @@ async function planAndAudit(ctx0) {
   const pxt = /^npx$/.test(String(plan.test_cmd.command || "").trim().split(/[ \t]+/)[0]) ? "pkg:package.json" : null;
   // 7.4.0 review B-M1: the walk-up guard reads the root package.json and its scripts.<name> (pst); npm:<name> is R4's only
   const pst = pnt ? "pkg:scripts." + pnt.slice(4) : null;
-  const planHs = await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", [pnt, pst, pxt].filter((x, i, a) => x && a.indexOf(x) === i), "Plan");
-  const planRs = await rulesetSurface("infra:ruleset-surface:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");
+  // 8.0.0 (#62 B2): one agent reads the hook surface, the rulesets and the PR convention; each is checked where its own step was
+  const surfL = "infra:surfaces:plan" + sfx;
+  const planT = [pnt, pst, pxt].filter((x, i, a) => x && a.indexOf(x) === i);
+  const ghA = ghArgs(ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch);
+  const planGot = await surfaces(
+    surfL,
+    { worktree: ctx.common.worktree, rev: "HEAD", targets: planT, args: ghA },
+    [{ name: "hook_surface", args: [ctx.common.worktree, "HEAD", JSON.stringify(planT)], retry: true }, { name: "ruleset_surface", args: ghA, retry: true }, { name: "pr_convention", args: ghA, retry: true }],
+    "Plan",
+  );
+  const planHs = await hookSurface(surfL + " hook_surface", ctx.common.worktree, "HEAD", planT, "Plan", planGot);
+  const planRs = await rulesetSurface(surfL + " ruleset_surface", ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan", planGot);
   hookGate("the plan scope", planScopePaths(planFacts, criteria), planHs.surface, planRs);
   // 7.4.0 (#39): with no package.json script at the worktree root npm walks up to the main checkout's
   // (npm_config_prefix and npm_config_local_prefix do not stop it; only --prefix does)
+  // 8.0.0 (#62 B2): a walk-up stop skips the convention slot; a not-ok status no slot explains halts first
+  if ((pnt && !planHs.make_paths[pst]) || (pxt && !planHs.make_paths[pxt])) planGot.settle();
   if (pnt && !planHs.make_paths[pst])
     return planFindingsStop(ctx, planPath, "npm test_cmd", [{ criterion: null, finding: "package.json (a JSON object with a string scripts." + pnt.slice(4) + ") is not tracked at the worktree root at HEAD; npm would walk up into the main checkout" }], plan.changed_symbols, plan);
   if (pxt && !planHs.make_paths[pxt])
     return planFindingsStop(ctx, planPath, "npx test_cmd", [{ criterion: null, finding: "package.json is not tracked at the worktree root at HEAD (or is not a JSON object); npx would resolve the main checkout's prefix" }], plan.changed_symbols, plan);
-  const conventions = await prConvention("infra:pr-convention:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");
+  const conventions = await prConvention(surfL + " pr_convention", ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, planGot);
+  planGot.end();
   // the scope of commit subjects and the PR title; the repo name when the planner gave none
   const fb = slugify(String(ctx.remoteSlug || "").split("/").pop(), 20);
   const component = COMPONENT_RE.test(String(plan.component)) ? plan.component : COMPONENT_RE.test(fb) ? fb : "repo";
@@ -8253,10 +8315,30 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       }
       if (cj.verdict !== "approve") halt("failed", "code-judge returned no verdict");
       // 6.1.0: after update-branch the surface at d; obligations see the PR net diff (u1 review paths) and the delta
-      const hs = await hookSurface("infra:hook-surface:r" + m, mainWt, updRound ? upd.head : planBase, makeTargets(judgeObligations), "Code");
+      // 8.0.0 (#62 B2): one agent reads the hook surface, the first approving round's ruleset surface (a ref that seals
+      // none) and the changed definitions; each is checked where its own step was (the obligations route first)
+      const surfL = "infra:surfaces:r" + m;
+      const hsRev = updRound ? upd.head : planBase;
+      const hsT = makeTargets(judgeObligations);
+      const rsSealed = buildRs || sealedRs(pf.ruleset_surface);
+      const ghA = rsSealed ? null : ghArgs(mainWt, remoteSlug, defaultBranch);
+      // 6.1.0: the base tip; a file the base moved holds no occurrence (R5), so the sealed lines hold
+      const cdBase = updRound ? upd.base : planBase;
+      const cdOn = !!planFacts.changed_symbols;
+      const progs = [{ name: "hook_surface", args: [mainWt, hsRev, JSON.stringify(hsT)], retry: true }];
+      if (ghA) progs.push({ name: "ruleset_surface", args: ghA, retry: true });
+      if (cdOn) progs.push({ name: "changed_defs", args: [mainWt, cdBase, codeTree, JSON.stringify(frozenFiles)] });
+      const got = await surfaces(
+        surfL,
+        Object.assign({ worktree: mainWt, rev: hsRev, targets: hsT }, ghA ? { args: ghA } : {}, cdOn ? { base: cdBase, tree: codeTree, exclude: frozenFiles } : {}),
+        progs,
+        "Code",
+      );
+      const hs = await hookSurface(surfL + " hook_surface", mainWt, hsRev, hsT, "Code", got);
       const obChanged = updRound ? Array.from(new Set(upd.pr.concat(h.changed || []))) : h.changed;
       const obFail = obligationFailures(planFacts.repo_obligations, cj.obligations_check, judgeObligations, cj.gates_not_run, obChanged, hs.make_paths);
       if (obFail.length) {
+        got.settle();
         coderFindings = obFail;
         judgePrior = coderFindings.slice();
         lastRoundGate = "obligations";
@@ -8269,25 +8351,17 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       gate("code-judge r" + m + ": approve of tree " + codeTree);
 
       // Max's rule: the approved diff never touches the hook surface
-      if (!buildRs) buildRs = sealedRs(pf.ruleset_surface) || (await rulesetSurface("infra:ruleset-surface:r" + m, mainWt, remoteSlug, defaultBranch, "Code"));
+      if (!buildRs) buildRs = rsSealed || (await rulesetSurface(surfL + " ruleset_surface", mainWt, remoteSlug, defaultBranch, "Code", got));
       hookGate("the approved tree " + codeTree, h.changed || [], hs.surface, buildRs);
       if (planFacts.changed_symbols) {
-        const bc = await buildCallerCheck(
-          "infra:changed-defs:r" + m,
-          planFacts.changed_symbols,
-          mainWt,
-          // 6.1.0: the base tip; a file the base moved holds no occurrence (R5), so the sealed lines hold
-          updRound ? upd.base : planBase,
-          codeTree,
-          frozenFiles,
-          planScopeFiles(planFacts),
-        );
+        const bc = await buildCallerCheck(surfL + " changed_defs", planFacts.changed_symbols, codeTree, planScopeFiles(planFacts), got);
         gate(
           "build caller check r" + m + ": no existing definition outside changed_symbols (" + bc.defs.length + " modified: " +
             (bc.defs.map((d) => d.name).join(", ") || "none") + "; " + bc.excluded.length + " excluded, " + bc.unclassified.length + " unclassified, " +
             bc.unattributed.length + " module-level change(s), each in a file the plan names)",
         );
       }
+      got.end();
       const subject = commitsMade ? subj.fix(m) : subj.main;
       // 7.4.0 (#61): the re-plan of an open PR: its first commit sits on the PR's head
       const prParent = !commitsMade && opt.prHead ? opt.prHead : null;

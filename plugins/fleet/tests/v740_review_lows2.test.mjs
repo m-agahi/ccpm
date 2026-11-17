@@ -162,7 +162,7 @@ test("7.4.0 review B-M1: the plan guard reads only pkg:scripts.<name>: no npm: e
   const ok = await runOne(npmPlan("npm test", { "pkg:scripts.test": [] }), ARGS);
   assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
   assert.ok(!ok.labels.includes("role:scope-and-plan:audit-fix"), ok.labels.join(", "));
-  assert.deepEqual(inputsOf(call(ok, "infra:hook-surface:plan").prompt).targets, ["npm:test", "pkg:scripts.test"]);
+  assert.deepEqual(inputsOf(call(ok, "infra:surfaces:plan").prompt).targets, ["npm:test", "pkg:scripts.test"]);
   // no root package.json (or no string scripts.test): the walk-up stop, even with an npm: entry
   const stop = await runOne(npmPlan("npm test", { "npm:test": [] }), ARGS);
   assert.equal(stop.result.status, "needs_human", stop.result.reason);

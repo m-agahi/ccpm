@@ -238,6 +238,8 @@ test("4.0.0 1993: a wrong program at every program-running step stops the run (t
     for (const [re, slots] of PROGRAM_LABELS) {
       if (!re.test(c.label)) continue;
       for (const [path, name] of slots) {
+        // 8.0.0 (#62 B2): a surfaces step fills only the slots of the programs its prompt runs
+        if (/^infra:surfaces:/.test(c.label) && !c.prompt.includes("/" + name + ".py'")) continue;
         const key = c.label + "|" + path;
         if (seen.has(key)) continue;
         seen.add(key);

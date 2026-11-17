@@ -233,7 +233,7 @@ test("6.3.2 2130: a failed ruleset relay with a wrong digest or no error still h
     s["infra:ruleset-surface:plan"] = (p) => mut(failedRsRelay(p, "x"));
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "failed");
-    assert.match(out.result.reason, /^infra:ruleset-surface:plan returned failed/);
+    assert.match(out.result.reason, /^infra:surfaces:plan returned failed/);
   }
 });
 

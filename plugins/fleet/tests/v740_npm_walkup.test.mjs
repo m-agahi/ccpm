@@ -36,7 +36,7 @@ test("7.4.0 #39 J1: npm test with no tracked package.json script: a re-plan find
     assert.match(out.result.reason, /npm would walk up into the main checkout/, cmd);
     assert.ok(out.result.reason.includes("scripts." + tgt.slice(4)), out.result.reason);
     // 7.4.0 review B-M1: the guard reads pkg:scripts.<name>; npm:<name> is for R4
-    assert.deepEqual(inputsOf(call(out, "infra:hook-surface:plan").prompt).targets, [tgt, "pkg:scripts." + tgt.slice(4)]);
+    assert.deepEqual(inputsOf(call(out, "infra:surfaces:plan").prompt).targets, [tgt, "pkg:scripts." + tgt.slice(4)]);
     const pr = inputsOf(call(out, "role:scope-and-plan:audit-fix").prompt).prior_round;
     assert.ok(pr.findings.some((f) => /npm would walk up/.test(f.finding)), JSON.stringify(pr.findings));
   }
@@ -55,5 +55,5 @@ test("7.4.0 #39 J1: a re-plan to a tracked script goes on; package.json with scr
 test("7.4.0 #39 J1: a pytest test_cmd asks the plan hook-surface read for no target", async () => {
   const out = await runOne(happy(), ARGS);
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  assert.deepEqual(inputsOf(call(out, "infra:hook-surface:plan").prompt).targets, []);
+  assert.deepEqual(inputsOf(call(out, "infra:surfaces:plan").prompt).targets, []);
 });

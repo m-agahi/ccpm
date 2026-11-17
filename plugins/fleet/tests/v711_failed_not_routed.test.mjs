@@ -73,8 +73,8 @@ test("7.1.1 L2142 AC10 (boundary): a failed ruleset relay with no digest halts '
   };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "failed", out.result.reason);
-  assert.ok(out.result.reason.startsWith("infra:ruleset-surface:plan returned failed"), out.result.reason);
-  assert.ok(!out.labels.includes("infra:ruleset-surface:plan:digest-retry"), out.labels.join(", "));
+  assert.ok(out.result.reason.startsWith("infra:surfaces:plan returned failed"), out.result.reason);
+  assert.ok(!out.labels.includes("infra:surfaces:plan:digest-retry"), out.labels.join(", "));
 });
 
 test("7.1.1 L2142 AC10: a failed pr_state relay with a mis-copied digest halts 'returned failed', with no digest retry (a write step)", async () => {

@@ -196,7 +196,8 @@ reads as not ok, so its commit counts as a build commit and the run stops (fail-
 
 **Program digests on relays (3.0.0).** Every read-only infra step whose output reaches a gate runs
 one program and relays its output with the program's digest (sha256 over its canonical JSON);
-the script recomputes it and stops on a difference: `infra:callers`, `infra:changed-defs`,
+the script recomputes it and stops on a difference: `infra:callers`, `infra:changed-defs` (8.0.0:
+the `changed_defs` slot of `infra:surfaces:r<n>`),
 `infra:branch-scan` (failed), `infra:fleet-scan` (`stop_gate: scope`), `infra:read-state`
 (`stop_gate: resume`), `infra:review-paths` (failed) and `infra:check-scripts` (a mismatch makes
 every check_cmd script judge-only), plus the hasher. Since 3.1.0 also `infra:verify-plan`
@@ -302,7 +303,8 @@ still rewrites after 3 runs (`commit`). No `.pre-commit-config.yaml`, no file to
 tree-equality check is unchanged.
 
 Build-time caller check (3.0.0, step 12b): after the code judge approves a tree and before every
-commit step, a read-only step (`infra:changed-defs:r<n>`, the `fleet:judge` agent) runs a program
+commit step, a read-only step (`infra:changed-defs:r<n>`; 8.0.0: the `changed_defs` slot of
+`infra:surfaces:r<n>`, the `fleet:judge` agent) runs a program
 over `git diff <plan_commit> <approved tree>` (`-U0`, renames off) for the files that existed at the
 plan commit (modified, type-changed or deleted). For each hunk it reads the base blob: a removed
 definition line, or a re-added one (then every base definition of that name), names that
@@ -680,7 +682,8 @@ fleet marker, so the CI outcome is in the run result (`ci`), not in the ledger s
 ### Conventions (6.0.0, ledger 2042)
 
 At plan time `pr_convention.py <worktree> <gh_cmd|-> <owner/repo|-> <default_branch>`
-(`infra:pr-convention:plan`, GET requests only) finds the title convention, first match:
+(`infra:pr-convention:plan`; 8.0.0: the `pr_convention` slot of `infra:surfaces:plan`; GET
+requests only) finds the title convention, first match:
 
 1. a required workflow in `rules/branches/<default>` (org rulesets included) whose path names
    `pr-title`: style `scoped-key`, with the types and the key rule read from its checker's `TYPES`
@@ -1200,6 +1203,25 @@ were not emptied". The reset agent is not the read-only judge agent (it deletes 
 the digest and the token carry the check. A happy build makes 7 fewer calls (68 -> 61); the
 agent cap is unchanged, because the cap counted neither the reset nor the re-check. The coder's
 role_file re-ask reset (`fleet-coder:r<m>:drift`) now checks the PATH too.
+
+**One agent for the surface reads (8.0.0, #62).** Plan mode runs `hook_surface.py`,
+`ruleset_surface.py` and `pr_convention.py` in one read-only agent, `infra:surfaces:plan` (sonnet,
+`fleet:judge`), each relayed in its own slot. After a code-judge approve, `infra:surfaces:r<n>`
+runs `hook_surface.py`, `ruleset_surface.py` (only in the first approving round of a plan ref that
+seals no ruleset surface) and `changed_defs.py` (when the ref has `changed_symbols`). The script
+checks each slot at the point where it checked that program's own step, in the same order: in the
+build the hook surface, then the obligations gate (an unmet obligation still routes to fix_code
+before the ruleset or changed-definitions slot is read), then the ruleset surface, the hook gate
+and the caller check. Each program's error branch is unchanged: a `hook_surface` or
+`ruleset_surface` error stops at `hooks`, also when the agent marks the step failed for it (a
+relay with its digest and args). A slot with no relay halts as the step did; a not-ok status that
+no slot explains halts after the last check. The digest and args retry stays per program
+(`changed_defs` had none and has none). A plan run makes 2 fewer calls (22 -> 20) but only 1 fewer
+capped agent (17 -> 16): `infra:pr-convention:plan` matched the PR-tail pattern (`infra:pr-`) and
+was never capped, while the convention read now runs in a capped agent. An approving code round
+makes 1 fewer call and capped agent (2 in the first round of a ref that seals no ruleset surface).
+The update-branch reads (`infra:hook-surface:u1`,
+`:u1:pb`, `:u1:d`, `infra:ruleset-surface:u1`) keep their own steps.
 
 **Resume replays re-checks.** A `resumeFromRunId` call with the same args (the same `run_nonce`)
 gets the same re-check prompts, so the runtime replays the earlier re-check results, the same as

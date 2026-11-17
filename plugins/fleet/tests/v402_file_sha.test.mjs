@@ -65,7 +65,6 @@ const SAMPLES = [
   // 7.2.0 (L2178): the on-disk handoff
   "infra:callers:file",
   "infra:callers:read:auto:0",
-  "infra:changed-defs:c1",
   "infra:push",
   "infra:push:p2",
   "infra:push-probe",
@@ -90,8 +89,9 @@ const SAMPLES = [
   "infra:fleet-cleanup",
   "infra:orch-scan",
   "infra:ci-watch:w1",
-  // 6.0.0 (ledger 2042)
-  "infra:pr-convention:plan",
+  // 8.0.0 (#62 B2): the hook, ruleset, convention (6.0.0, ledger 2042) and changed-definition reads of one step
+  "infra:surfaces:plan",
+  "infra:surfaces:r1",
   "infra:review-paths:v1",
   "infra:precommit-ids",
   "infra:check-scripts:plan",
@@ -131,6 +131,9 @@ test("4.0.2 1997: every shipped program a prompt can run has a PROGRAM_SLOTS ent
   if (/\nfunction planHashCmd\([^]*?progCmd\("plan_hash"/.test(SOURCE)) names.add("plan_hash");
   if (/\nfunction planRefsCmd\([^]*?progCmd\("plan_ref"/.test(SOURCE)) names.add("plan_ref");
   for (const m of SOURCE.matchAll(/sha256sum -- <scripts_dir>\/([a-z_]+)\.py/g)) names.add(m[1]);
+  // 8.0.0 (#62 B2): the surfaces step runs the programs of its PROGRAM_SLOTS row (progCmd(p.name, ...))
+  const surf = new Function(grabTable("PROGRAM_SLOTS") + "\nreturn PROGRAM_SLOTS;")().find(([re]) => re.test("infra:surfaces:plan"));
+  if (/\nfunction surfacesPrompt\([^]*?progCmd\(p\.name, p\.args\)/.test(SOURCE)) for (const [, n] of surf[1]) names.add(n);
   // 7.3.0 (#54): scratch_copy.py is run by the copy roles (scratchCopyCmd), which relay nothing from it: no slot
   const roleRun = /\nfunction scratchCopyCmd\(\) \{[^]*?programSha\("scratch_copy"\)/.test(SOURCE) ? ["scratch_copy"] : [];
   assert.deepEqual([...names, ...roleRun].sort(), PROGRAMS.map(([n]) => n).sort(), "every shipped program is run by some prompt");
@@ -243,8 +246,11 @@ test("4.0.2 1997: every Return line that names program names file_sha256, and ev
   assert.ok((SOURCE.match(/returnKeys\(/g) || []).length >= 22, "Return lines built by returnKeys");
   assert.match(SOURCE, /function returnKeys\(id\) \{\n  return progKeys\(id\)\.concat\("program", "file_sha256", progTail\(id\)\)/);
   const table = new Function(grabTable("PROGRAM_SLOTS") + "\nreturn PROGRAM_SLOTS;")();
+  // 8.0.0 (#62 B2): the surfaces step relays each program in the slot of its name (relayAs(p.name))
+  const surf = table.find(([re]) => re.test("infra:surfaces:plan"))[1];
+  assert.ok(surf.every(([k, n]) => k === n) && /\nfunction surfacesPrompt\([^]*?relayAs\(p\.name\)/.test(SOURCE), "the surfaces slots are relayed through relayAs");
   for (const slot of new Set(table.flatMap(([, s]) => s.map(([k]) => k)).filter((k) => k !== null)))
-    assert.ok(SOURCE.includes('relayAs("' + slot + '")'), slot + " is relayed through relayAs");
+    assert.ok(SOURCE.includes('relayAs("' + slot + '")') || surf.some(([k]) => k === slot), slot + " is relayed through relayAs");
   assert.doesNotMatch(SOURCE, /return it as \w+, every value copied unchanged|return it unchanged as \w+|copy all \w+ unchanged|Copy (both|all \w+) unchanged/);
 });
 

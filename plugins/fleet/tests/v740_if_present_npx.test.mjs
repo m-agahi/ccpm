@@ -156,7 +156,7 @@ test("7.4.0 car 5 Z1: npx jest|vitest with no tracked root package.json: a re-pl
     const out = await runOne(npxPlan(cmd, {}), ARGS);
     assert.equal(out.result.status, "needs_human", cmd + ": " + out.result.reason);
     assert.match(out.result.reason, /npx would resolve the main checkout/, cmd);
-    assert.deepEqual(inputsOf(call(out, "infra:hook-surface:plan").prompt).targets, ["pkg:package.json"], cmd);
+    assert.deepEqual(inputsOf(call(out, "infra:surfaces:plan").prompt).targets, ["pkg:package.json"], cmd);
     const pr = inputsOf(call(out, "role:scope-and-plan:audit-fix").prompt).prior_round;
     assert.ok(pr.findings.some((f) => /npx would resolve/.test(f.finding)), JSON.stringify(pr.findings));
   }
@@ -167,5 +167,5 @@ test("7.4.0 car 5 Z1: a tracked root package.json gives no finding; pytest asks 
   assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
   assert.ok(!ok.labels.includes("role:scope-and-plan:audit-fix"), ok.labels.join(", "));
   const py = await runOne(happy(), ARGS);
-  assert.deepEqual(inputsOf(call(py, "infra:hook-surface:plan").prompt).targets, []);
+  assert.deepEqual(inputsOf(call(py, "infra:surfaces:plan").prompt).targets, []);
 });
