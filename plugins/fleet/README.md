@@ -961,10 +961,10 @@ under `default` and `auto` ("parked prior unreadable (fail closed)").
 
 ### Push-access probe (4.0.0, ledger 1985)
 
-Plan mode only, right after the workspace step: a PATH re-check, then `infra:push-probe` runs
-`git push --dry-run --porcelain origin <base_ref>:refs/heads/<branch>` (with a 120 s timeout).
-The dry run sends nothing, but it runs the repo's pre-push hook. `push_probe.py` classifies the
-output. An auth failure stops the run with `needs_human` before any role runs. Anything the
+Plan mode only, right after the workspace step: a PATH re-check, then `infra:push-probe` runs `push.py probe`
+(7.4.0), which runs `git push --dry-run --porcelain origin <base_ref>:refs/heads/<branch>` (with a
+120 s timeout). The dry run sends nothing, but it runs the repo's pre-push hook. The program
+classifies the output. An auth failure stops the run with `needs_human` before any role runs. Anything the
 program cannot classify, or a relay that is not the program's own, logs "push access unknown"
 and the run goes on: the real push is still gated later.
 
@@ -1258,7 +1258,8 @@ refuses. The plan-time result is sealed in the plan ref and checked again on the
 
 **Resource caps (3.1.0).** Every embedded Python program sets `RLIMIT_AS` 1 GiB and `RLIMIT_CPU`
 300 s before anything else, and tunes git's children to stay inside them; the repo's own hooks
-that the fixer runs get the limits lifted back. The YAML loaders (60 s, 1 GiB) read at most
+that the fixer runs get the limits lifted back. A git network call (fetch, push, ls-remote) and
+the credential helper it starts get them lifted back too (7.4.0); local git keeps them. The YAML loaders (60 s, 1 GiB) read at most
 256 KiB of config, emit only string values (`args` a list of strings) and stop past 1 MiB of
 output, so an alias bomb ("billion laughs") is refused, not expanded.
 

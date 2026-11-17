@@ -123,11 +123,13 @@ TRANSIENT = re.compile(rb'(?i)timed? ?out|connection (reset|refused)|error conne
 
 
 TOKEN = re.compile(r'(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|[A-Za-z0-9_-]{40,})')
+# 7.4.0 (#36 B6): a Bearer token of any length
+BEARER = re.compile(r'(?i)\b(bearer)\s+\S+')
 
 
 def why(code, err):
     # the diagnostics of an unknown answer: exit code and a short, token-free stderr
-    t = TOKEN.sub('[redacted]', ' '.join((err or b'').decode('utf-8', 'replace').split()))
+    t = BEARER.sub(r'\1 ***', TOKEN.sub('[redacted]', ' '.join((err or b'').decode('utf-8', 'replace').split())))
     return {'exit_code': code, 'stderr': t[:200]}
 
 

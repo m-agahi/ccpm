@@ -16,7 +16,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SCRIPTS_SRC, ARGS, happy, run, inputsOf, spawnSync, programOf, programSha, relayDigestOf, K } from "./harness.mjs";
+import { SCRIPTS_SRC, ARGS, happy, run, inputsOf, spawnSync, programOf, programSha, relayDigestOf, K, liftSkip } from "./harness.mjs";
+
+// 7.4.0 (#36 B5): at a hard RLIMIT_AS of 1 GiB or less the lift cannot be observed: the lift tests skip
+const SKIP = liftSkip();
 
 const PY = spawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
 const GIT = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
@@ -86,7 +89,7 @@ const GH_PROGRAMS = {
 };
 
 for (const [name, argsOf] of Object.entries(GH_PROGRAMS)) {
-  test("6.3.2 2130: " + name + " runs gh with the hard address-space limit, not the program's 1 GiB cap", () => {
+  test("6.3.2 2130: " + name + " runs gh with the hard address-space limit, not the program's 1 GiB cap", { skip: SKIP }, () => {
     const e = home();
     try {
       stubGh(e.bin, "gh");
@@ -100,7 +103,8 @@ for (const [name, argsOf] of Object.entries(GH_PROGRAMS)) {
   });
 }
 
-test("6.3.2 2130: every gh spawn in the seven programs passes preexec_fn=lift; git and ssh keep the caps", () => {
+// 7.4.0 (#34, changed on purpose): pr_state's run() lifts git too when the call is a network call (net=True)
+test("6.3.2 2130: every gh spawn in the seven programs passes preexec_fn=lift; git and ssh keep the caps (7.4.0: bar the git network calls)", () => {
   for (const name of Object.keys(GH_PROGRAMS)) {
     const src = readFileSync(join(SCRIPTS_SRC, name + ".py"), "utf8");
     assert.match(src, /\ndef lift\(\):\n    # [^\n]*\n    for k in \(_r\.RLIMIT_AS, _r\.RLIMIT_CPU\):\n        _r\.setrlimit\(k, \(_r\.getrlimit\(k\)\[1\],\) \* 2\)\n/, name);
@@ -110,7 +114,7 @@ test("6.3.2 2130: every gh spawn in the seven programs passes preexec_fn=lift; g
     const gh = spawns.filter((s) => /^subprocess\.run\(\[(gh|cmd|cmd or gh)\b/.test(s));
     assert.ok(gh.length > 0, name + ": no gh spawn found");
     for (const s of gh) {
-      if (/^subprocess\.run\(\[cmd or gh\]/.test(s)) assert.match(s, /preexec_fn=None if cmd else lift/, name + ": " + s);
+      if (/^subprocess\.run\(\[cmd or gh\]/.test(s)) assert.match(s, /preexec_fn=lift if \(not cmd or net\) else None/, name + ": " + s);
       else assert.match(s, /preexec_fn=lift\b/, name + ": " + s);
     }
     for (const s of spawns.filter((x) => /^subprocess\.run\(\[('git'|'ssh'|G\b)/.test(x))) assert.doesNotMatch(s, /preexec_fn/, name + ": " + s);
@@ -121,7 +125,7 @@ test("6.3.2 2130: every gh spawn in the seven programs passes preexec_fn=lift; g
 
 const RS_OK = { "repos/q/actions": [200, { id: 7, owner: { type: "User" } }], "repos/q/actions/rules/branches/master": [200, []] };
 
-test("6.3.2 2130: ruleset_surface: a call with no HTTP status is tried once more; a second success leaves error null", () => {
+test("6.3.2 2130: ruleset_surface: a call with no HTTP status is tried once more; a second success leaves error null", { skip: SKIP }, () => {
   const e = home();
   try {
     stubGh(e.bin, "gh", Object.assign({}, RS_OK, { "repos/q/actions": "crash-once", "repos/q/actions#ok": RS_OK["repos/q/actions"] }));
@@ -135,7 +139,7 @@ test("6.3.2 2130: ruleset_surface: a call with no HTTP status is tried once more
   }
 });
 
-test("6.3.2 2130: ruleset_surface: two calls with no HTTP status name gh's stderr (tokens redacted) in error", () => {
+test("6.3.2 2130: ruleset_surface: two calls with no HTTP status name gh's stderr (tokens redacted) in error", { skip: SKIP }, () => {
   const e = home();
   try {
     stubGh(e.bin, "gh", Object.assign({}, RS_OK, { "repos/q/actions": "crash" }));
@@ -150,7 +154,7 @@ test("6.3.2 2130: ruleset_surface: two calls with no HTTP status name gh's stder
   }
 });
 
-test("6.3.2 2130: ruleset_surface: an HTTP status is never retried and its text is unchanged", () => {
+test("6.3.2 2130: ruleset_surface: an HTTP status is never retried and its text is unchanged", { skip: SKIP }, () => {
   const e = home();
   try {
     stubGh(e.bin, "gh", Object.assign({}, RS_OK, { "repos/q/actions/rules/branches/master": [500, {}] }));
@@ -162,7 +166,7 @@ test("6.3.2 2130: ruleset_surface: an HTTP status is never retried and its text 
   }
 });
 
-test("6.3.2 2130: pr_convention: a call with no HTTP status is tried once more, then names gh's stderr in unreadable", () => {
+test("6.3.2 2130: pr_convention: a call with no HTTP status is tried once more, then names gh's stderr in unreadable", { skip: SKIP }, () => {
   const e = home();
   try {
     const rules = "repos/q/actions/rules/branches/master";
@@ -187,7 +191,7 @@ test("6.3.2 2130: pr_convention: a call with no HTTP status is tried once more, 
   }
 });
 
-test("6.3.2 2130: gh_identity: a Go runtime crash is transient: tried once more, and a second answer counts", () => {
+test("6.3.2 2130: gh_identity: a Go runtime crash is transient: tried once more, and a second answer counts", { skip: SKIP }, () => {
   const e = home();
   try {
     stubGh(e.bin, "gh", { ".permissions.push": "crash-once", ".permissions.push#ok": [0, "true"] });
@@ -218,7 +222,8 @@ test("6.3.2 2130: a valid ruleset relay marked failed for its own error reaches 
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "hooks");
-  assert.ok(out.result.reason.startsWith("hook surface cannot be computed (repo o/r not readable (HTTP None: runtime: out of memory)); hook change needs Max's confirmation"), out.result.reason);
+  // 7.4.0 (#36 B1, changed on purpose): HTTP None asks for a re-run
+  assert.ok(out.result.reason.startsWith("hook surface cannot be computed (repo o/r not readable (HTTP None: runtime: out of memory)); transient GitHub read failure; re-run"), out.result.reason);
   assert.doesNotMatch(out.result.reason, /returned failed/);
 });
 

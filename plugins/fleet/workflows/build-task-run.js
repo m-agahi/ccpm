@@ -104,7 +104,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "7.3.0";
+const FLEET_VERSION = "7.4.0";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/fleet/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
 " (this fleet workflow is fleet " + FLEET_VERSION + "; if the plugin was updated after this session started, run /reload-plugins or start a new session, then run /build-task again)";
@@ -1465,7 +1465,7 @@ const PROGRAM_SHA256 = {
 "fleet_branch": "f1af514598ab542d58a16456f00e5cba0aeb43131fc2eab1618e2ca87bf846d7",
 "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
 "format_files": "6890f94e46365fecdff078a39b28cda938d715b53ef7157baee5475b38a6951a",
-"gh_identity": "82885435973242bc67bbfeca19ec512f83e5ca52e7342dbd4207cff33567c357",
+"gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
 "hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
 "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
 "hook_surface": "2432e6d881cfa37850c4268b26cc6591fdcccf9b74f818ab70886125f34769f0",
@@ -1479,24 +1479,23 @@ const PROGRAM_SHA256 = {
 "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
 "policy": "1efd8ada37abf58151d14b11300fac1235c13b414ab0649fcc8e26b0e10d37b5",
 "pr_body_block": "0969891f59f2b11b033b99bb8e2b9f5d3fc1b0fad60ffbebbd5149f0cfae61be",
-"pr_convention": "8e33c899cf1174e28b41e27e5b9c9e10a28e18d46da2a588df73edce1aa77a73",
-"pr_state": "2882890a993396876229672961f66eba4290f1f98263b4a19c62c395856f3fd8",
+"pr_convention": "f26cb4a739d549ccfc5554a9deaa94a44698e71c2039e16d77247fdfdbf1d17f",
+"pr_state": "ae131b39f087f22172a20dfa7af4dd01f261e1a07580ca1fa6e4b85e93201540",
 "pr_test_block": "030c64b7f12abe00a4e9f9ddd1493f446ed4a6b2ccb43a8f1f5e6007c45ca8eb",
 "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
 "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
-"push_classify": "dbd96b8daaeaa4586007878af4ac02e0cca9c2391089bbf3e304c835da92a281",
-"push_probe": "c4381f9ce601e0729a0ab49edb33fe6c9e910e8738411e7ad4719f21ef639a5b",
+"push": "67cc55d5fe9ef3cfe0fe0c3ab8dd5a7281acf96ef98f7bef5faa805a9c77a469",
 "read_state": "c6ce8ab9dfe4ae85b144e3cc90c007334794f8e725bd8bfba071544365e18c89",
-"remote_head": "04beeda731a3fa3ab79c1749333057426191c72b97c549f5fdf9e8f55a8549fc",
+"remote_head": "b5ad5f009c9ca166fefd68fb54a33211465827fe7a78d7fc2e5e6c8afa612f58",
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
 "review_paths": "711143e444b4d9772c8023c22fbb93735239030d503dd58247050553d7fce29b",
-"ruleset_surface": "b8fec064efbf7ec62125f71016cde95b4a5edcb0156094cd8050e79a8278f067",
+"ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
 "scratch_copy": "1807aea9a3afbaac7e63acca21df6ad4b9f1a55f392972cd753eaec6d161a690",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
 "session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
 "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
 "test_db_decl": "c2e9f36d23fb147835a85c4421d5e38a05912d343fdaa1f08fe285c3cfc5c11d",
-"tf_gate": "627c00cefbdf2da4a4144854dcbb4b543fb1e05335c1a4c7c74dc662ed35c02c",
+"tf_gate": "f147f9c7e729aaf6b6adc39c4599112e6ac1040c385d103f970775d57cf8e070",
 "verify_since": "91524ed3b1c39d49e2f5be4497d2e118b85e56482bd5e02256a17630405bb340"
 };
 // PROGRAM_SHA256_END
@@ -1605,8 +1604,8 @@ const PROGRAM_SLOTS = [
 [/^infra:fleet-scan:/, [[null, "fleet_scan"]]],
 [/^infra:callers/, [[null, "callers"]]],
 [/^infra:changed-defs:/, [[null, "changed_defs"]]],
-[/^infra:push(?!-probe)/, [[null, "push_classify"]]],
-[/^infra:push-probe$/, [[null, "push_probe"]]],
+[/^infra:push(?!-probe)/, [[null, "push"]]],
+[/^infra:push-probe$/, [[null, "push"]]],
 [/^infra:hook-surface:/, [[null, "hook_surface"]]],
 [/^infra:ruleset-surface:/, [[null, "ruleset_surface"]]],
 [/^infra:pr-convention:/, [[null, "pr_convention"]]],
@@ -1654,8 +1653,8 @@ const PROGRAM_KEYS = {
 "callers:file": ["symbols", "capped", "doctest_md", "file", "args"],
 "callers:read": ["part", "page", "hits", "args"],
 "changed_defs": ["defs", "excluded", "unclassified", "unattributed", "generated"],
-"push_classify": ["push_result", "exit_code", "hook_tail", "args"],
-"push_probe": ["access", "result", "exit_code", "auth_line", "args"],
+"push:push": ["push_result", "exit_code", "hook_tail", "tail", "attempts", "remote_head", "args"],
+"push:probe": ["access", "result", "exit_code", "auth_line", "args"],
 "hook_surface": ["surface", "make_paths", "error", "args"],
 "ruleset_surface": ["surface", "sources", "read", "unreadable", "error", "args"],
 "policy": ["profile", "file", "policy_sha256", "caps", "matched", "error", "now", "args"],
@@ -1790,14 +1789,19 @@ unattributed: STRS,
 generated: STRS,
 digest: STR,
 },
-push_classify: {
+push: {
 push_result: { type: "string", enum: ["ok", "hook_rejected", "network", "non_ff", "remote_rejected", "ambiguous"] },
 exit_code: INT,
 hook_tail: STR,
+tail: STR,
+attempts: INT,
+remote_head: STR_OR_NULL,
+access: STR,
+result: STR,
+auth_line: STR_OR_NULL,
 args: STRS,
 digest: STR,
 },
-push_probe: { access: STR, result: STR, exit_code: INT, auth_line: STR_OR_NULL, args: STRS, digest: STR },
 hook_surface: { surface: STRS, make_paths: STR_LISTS, error: STR_OR_NULL, args: STRS, digest: STR },
 ruleset_surface: {
 surface: STRS,
@@ -2938,40 +2942,25 @@ inputsLine(inputs) +
 );
 }
 function pushPrompt(inputs) {
-const pg = inputs.hook_env ? "env " + hookEnvPrefix(inputs.hook_env) : "";
 return (
 INFRA_STEP + "push the approved fleet branch. No edits, no commits.\n" +
 inputsLine(inputs) +
-"1. <branch> must differ from <default_branch>; `git -C <main_worktree> branch --show-current` must equal <branch>; `git -C <main_worktree> rev-parse HEAD` must equal <approved_sha>; `git -C <main_worktree> status --porcelain` must be empty. Any mismatch -> needs_human.\n" +
-"2. Push ONCE: `" + pg + "git -C <main_worktree> push -u origin <branch>` as one Bash call with timeout 600000 ms, stdout and stderr redirected to a temp file outside <main_worktree>, then `echo $?`. The repo's pre-push hooks run here; let them. Never --force, never --no-verify, never push another ref; never change remotes, hooks or credentials. Never classify the output yourself: run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code:\n" +
-progCmd("push_classify", []) + " <file> <exit>\n" +
-"   It prints one JSON object " + printsKeys("push_classify") + ". Copy every value unchanged and add `file_sha256` (the script recomputes the digest). Then, by push_result:\n" +
-"   - `ok` -> step 3.\n" +
-"   - `non_ff` or `remote_rejected` -> return status needs_human at once with the git line, no retry.\n" +
-"   - `ambiguous` (git's lines cannot be told from a hook's) -> return status needs_human at once with the last 60 lines of the temp file, no retry.\n" +
-"   - `hook_rejected` (a local pre-push hook declined the push) -> no retry. Return status ok with the program's push_result, exit_code, hook_tail, args, program and digest, and file_sha256.\n" +
-"   - `network` (auth, network, 5xx) -> retry up to 3 times with backoff 5 15 45 (seconds): " +
-RETRY_SHELL(pg + "git -C <main_worktree> push -u origin <branch>", "non-fast-forward|fetch first|\\[rejected\\]") +
-" Exit 0 now -> `ok`. Still failing after the 3 retries -> status failed with the last error.\n" +
-"   Delete the temp file. Step 3 runs only when push_result is `ok`.\n" +
-"3. remote_head through the GitHub API, not git over the network: <owner>/<name> = <remote_slug>. <gh> = <gh_cmd>, exactly. " +
-"remote_head = the output of `<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha` (the branch name goes in the path as is, slashes included), retry up to 3 times with backoff 5 15 45 (seconds): " +
-RETRY_SHELL("<gh> api repos/<owner>/<name>/branches/<branch> --jq .commit.sha") +
-" Only when gh_cmd is null: remote_head = the sha `git -C <main_worktree> ls-remote origin refs/heads/<branch>` prints, with the same backoff. remote_head must be the full 40-hex sha.\n" +
-"Return {status, reason, " + returnKeys("push_classify") + ", remote_head}."
+RUN_600S +
+progCmd("push", inputs.args) +
+"\nThe program checks the branch, pushes once, retries a network failure itself and reads origin's head. The repo's pre-push hooks run in it; let them. Never push, retry or classify yourself. Never --force, never --no-verify, never change remotes, hooks or credentials. " +
+"It prints one JSON object " + printsKeys("push:push") + COPY_DIGEST +
+"Return {status, reason, " + returnKeys("push:push") + "}; status ok whenever the program printed, whatever push_result says."
 );
 }
 function pushProbePrompt(inputs) {
 return (
 INFRA_STEP + "probe push access with a dry run. No edits, no commits, no real push.\n" +
 inputsLine(inputs) +
-"1. Run this one command exactly as written, unmodified, as one Bash call with timeout 180000 ms. <file> is a new temp file outside <main_worktree> (`mktemp`): " +
-"timeout 120 git -C " + shQuote(inputs.main_worktree) + " push --dry-run --porcelain origin " + shQuote(inputs.base_ref + ":refs/heads/" + inputs.branch) + " > <file> 2>&1; echo $?\n" +
-"   The repo's pre-push hook runs here; let it. Add no option, change no git config and no hook, never push for real, never retry.\n" +
-"2. Run this classifier command exactly as written, with <file> replaced by the shell-quoted temp file path and <exit> by the exit code step 1 printed:\n" +
-progCmd("push_probe", []) + " <file> <exit>\n" +
-"   It prints one JSON object " + printsKeys("push_probe") + ". Copy every value unchanged (the script recomputes the digest). Never classify the output yourself. Delete the temp file.\n" +
-"Return {status, reason, " + returnKeys("push_probe") + "}; status ok whenever the classifier ran, whatever it printed."
+RUN_EXACT +
+progCmd("push", inputs.args) +
+"\nIt runs git push --dry-run (120 s); the repo's pre-push hook runs there; let it. Add no option, change no git config and no hook, never run a real push, never retry, never classify the output yourself. " +
+"It prints one JSON object " + printsKeys("push:probe") + COPY_DIGEST +
+"Return {status, reason, " + returnKeys("push:probe") + "}; status ok whenever the program printed, whatever it printed."
 );
 }
 function treeCmd(worktree) {
@@ -3773,7 +3762,8 @@ gate("preflight: all " + ROLES.length + " role files at their ROLE_SHA256 pins (
 async function pushProbe(lay, ws) {
 await pathRecheck("push-probe", "Workspace");
 const label = "infra:push-probe";
-const r = await softDispatch(label, pushProbePrompt({ main_worktree: lay.mainWt, branch: lay.branch, base_ref: ws.baseRef }), {
+const args = ["probe", lay.mainWt, ws.baseRef, lay.branch];
+const r = await softDispatch(label, pushProbePrompt({ main_worktree: lay.mainWt, branch: lay.branch, base_ref: ws.baseRef, args }), {
 schema: PUSH_PROBE_SCHEMA,
 agentType: JUDGE_AGENT,
 phase: "Workspace",
@@ -3781,9 +3771,9 @@ phase: "Workspace",
 const unknown = (why) => gate("push access unknown: " + why + "; the real push is still gated");
 if (!r) return unknown("the probe returned no result");
 if (r.status !== "ok") return unknown("the probe returned " + r.status + ": " + (r.reason || "no reason"));
-const pp = programProblem(r, "push_probe");
+const pp = programProblem(r, "push");
 if (pp) return unknown(label + ": " + pp);
-if (!relayDigestOk(r, progKeys("push_probe"), "push_probe") || !Array.isArray(r.args) || r.args.length !== 2 || r.args[1] !== String(r.exit_code))
+if (!relayDigestOk(r, progKeys("push:probe"), "push") || canonical(r.args) !== canonical(args))
 return unknown(label + ": the relayed result does not match the program's digest or args");
 if (r.access === "denied")
 halt("needs_human", "no push access to origin for " + lay.branch + ": " + JSON.stringify(r.auth_line || r.result) + " (git push --dry-run); fix the credentials or the remote, then run plan again");
@@ -4588,6 +4578,9 @@ progCmd("hook_surface", [inputs.worktree, inputs.rev, JSON.stringify(inputs.targ
 "Return {status, reason, " + returnKeys("hook_surface") + "}."
 );
 }
+function hookReadStop(err) {
+halt("needs_human", "hook surface cannot be computed (" + err + "); " + (/HTTP None/.test(err) ? "transient GitHub read failure; re-run" : "hook change needs Max's confirmation"), "hooks");
+}
 async function hookSurface(label, worktree, rev, targets, phaseName) {
 const r = await infra(label, hookSurfacePrompt({ worktree, rev, targets }), phaseName, JUDGE_AGENT, "hook_surface", [worktree, rev, JSON.stringify(targets)]);
 requireProgram(r, "hook_surface", label, "needs_human", "hooks");
@@ -4595,7 +4588,7 @@ if (!Array.isArray(r.surface) || !relayDigestOk(r, progKeys("hook_surface"), "ho
 halt("failed", label + ": the relayed surface does not match the program's digest");
 if (canonical(r.args) !== canonical([worktree, rev, JSON.stringify(targets)])) halt("failed", label + ": the program ran on other arguments");
 if (r.error !== null)
-halt("needs_human", "hook surface cannot be computed (" + r.error + "); hook change needs Max's confirmation", "hooks");
+hookReadStop(r.error);
 const mp = {};
 for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x))) : t.indexOf("npm:") === 0 ? null : [];
 return { surface: r.surface.map((x) => (/\/$/.test(String(x)) ? (String(x) === "./" ? "./" : normPath(String(x)) + "/") : normPath(String(x)))), make_paths: mp };
@@ -4641,7 +4634,7 @@ requireProgram(r, "ruleset_surface", label, "needs_human", "hooks");
 if (!Array.isArray(r.surface) || !Array.isArray(r.sources) || !Array.isArray(r.read) || !Array.isArray(r.unreadable) || !relayDigestOk(r, progKeys("ruleset_surface"), "ruleset_surface"))
 halt("failed", label + ": the relayed surface does not match the program's digest");
 if (canonical(r.args) !== canonical(args)) halt("failed", label + ": the program ran on other arguments");
-if (r.error !== null) halt("needs_human", "hook surface cannot be computed (" + r.error + "); hook change needs Max's confirmation", "hooks");
+if (r.error !== null) hookReadStop(r.error);
 for (const u of r.unreadable) gate("warning: " + u);
 const np = (x) => (String(x) === "./" ? "./" : /\/$/.test(String(x)) ? normPath(String(x)) + "/" : normPath(String(x)));
 return { surface: r.surface.map(np), sources: r.sources.map((x) => Object.assign({}, x, { path: np(x.path) })), read: r.read.map(String), unreadable: r.unreadable.map(String) };
@@ -6303,18 +6296,20 @@ const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
 const pushKey = "push" + (pushes > 1 ? "-p" + pushes : "");
 await resetBuild("push" + (pushes > 1 ? ":p" + pushes : ""), [pushKey], "PR");
 await pathRecheck("push" + (pushes > 1 ? ":p" + pushes : ""), "PR");
+const gc = ghFor(remoteSlug) ? ghFor(remoteSlug).gh_cmd : null;
+const pin = { main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug, gh_cmd: gc, hook_env: hookEnv(pushKey) };
+const pushArgs = ["push", mainWt, branch, approvedSha, defaultBranch, JSON.stringify(pin.hook_env), gc || "-", gc && LEDGER_PROJECT_RE.test(String(remoteSlug || "")) ? remoteSlug : "-", "540"];
 const push = await infra(
 pushLabel,
-pushPrompt({ main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug, gh_cmd: ghFor(remoteSlug) ? ghFor(remoteSlug).gh_cmd : null, hook_env: hookEnv(pushKey) }),
+pushPrompt(Object.assign(pin, { args: pushArgs })),
 "PR",
 );
+requireProgram(push, "push", pushLabel);
+if (!relayDigestOk(push, progKeys("push:push"), "push") || canonical(push.args) !== canonical(pushArgs))
+halt("failed", pushLabel + ": the relayed push result does not match the program's digest or arguments (push_result " + JSON.stringify(push.push_result === undefined ? null : push.push_result) + ")");
 if (push.push_result === "hook_rejected") {
-const pa = push.args;
-const argsOk =
-Array.isArray(pa) && pa.length === 2 && typeof pa[0] === "string" && pa[0].charAt(0) === "/" &&
-normPath(pa[0]).indexOf(normPath(mainWt) + "/") !== 0 && pa[1] === String(push.exit_code);
-if (push.exit_code !== 1 || typeof push.hook_tail !== "string" || !relayDigestOk(push, progKeys("push_classify"), "push_classify") || !argsOk)
-halt("failed", pushLabel + ": the relayed hook_rejected result does not match the classifier program's digest (exit_code " + JSON.stringify(push.exit_code === undefined ? null : push.exit_code) + ")");
+if (push.exit_code !== 1 || typeof push.hook_tail !== "string")
+halt("failed", pushLabel + ": the relayed hook_rejected result is not the program's (exit_code " + JSON.stringify(push.exit_code === undefined ? null : push.exit_code) + ")");
 const tail = String(push.hook_tail || "").trim();
 gate("push of " + approvedSha + " rejected by a repo hook -> coder (fix_code)");
 return {
@@ -6331,8 +6326,7 @@ finding:
 };
 }
 if (push.push_result !== "ok")
-halt("failed", pushLabel + " returned push_result " + JSON.stringify(push.push_result || null) + " with status ok");
-requireProgram(push, "push_classify", pushLabel);
+halt(["non_ff", "remote_rejected", "ambiguous"].indexOf(push.push_result) >= 0 ? "needs_human" : "failed", pushLabel + ": push_result " + JSON.stringify(push.push_result || null) + " after " + push.attempts + " attempt(s): " + String(push.tail || "").trim().split("\n").slice(-5).join(" | "));
 if (push.remote_head !== approvedSha)
 halt("needs_human", "push: origin/" + branch + " is at " + push.remote_head + ", not the approved " + approvedSha);
 gate("pushed " + branch + " at " + approvedSha);

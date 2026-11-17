@@ -35,6 +35,10 @@ try:
 except Exception:
     _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
+def lift():
+    # 7.4.0 (#34, L2141): a git network call and its credential helper are not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 wt, default, sha, url = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 os.chdir('/')
 import atexit, shutil, tempfile
@@ -109,7 +113,7 @@ def blob(rev, p):
 # repo lacks is fetched by its sha. Either failing refuses (fail closed).
 if not re.match(r'^[A-Za-z0-9._/-]+$', default) or default.startswith('-'):
     sys.exit('bad default branch name')
-lr = subprocess.run(G + ['ls-remote', '--exit-code', '--upload-pack=git-upload-pack', url, 'refs/heads/' + default], capture_output=True)
+lr = subprocess.run(G + ['ls-remote', '--exit-code', '--upload-pack=git-upload-pack', url, 'refs/heads/' + default], capture_output=True, preexec_fn=lift)
 if lr.returncode != 0:
     sys.exit('cannot read origin/' + default + ': ' + lr.stderr.decode('utf-8', 'replace'))
 rows = [l.split('\t') for l in lr.stdout.decode('utf-8', 'replace').splitlines() if l.strip()]
@@ -120,7 +124,7 @@ have = lambda: subprocess.run(G + ['cat-file', '-e', remote + '^{commit}'], capt
 if not have():
     # a full fetch of that one sha into the scratch repo (the repo's own
     # commits count as haves): --depth would leave a shallow history there
-    fr = subprocess.run(G + ['fetch', '--no-tags', '--no-write-fetch-head', '--upload-pack=git-upload-pack', url, remote], capture_output=True)
+    fr = subprocess.run(G + ['fetch', '--no-tags', '--no-write-fetch-head', '--upload-pack=git-upload-pack', url, remote], capture_output=True, preexec_fn=lift)
     if fr.returncode != 0 or not have():
         sys.exit('cannot fetch origin/' + default + ' at ' + remote + ': ' + fr.stderr.decode('utf-8', 'replace'))
 base = run('merge-base', remote, sha).decode().strip()

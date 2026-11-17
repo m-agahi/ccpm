@@ -694,7 +694,8 @@ test("6.1.0 review 4: the re-plan reset prompt and the code judge's scratch read
 
 test("6.1.0 review 5: pr_state.py fetch runs git with core.fsmonitor=false", () => {
   const src = readFileSync(join(SCRIPTS_SRC, "pr_state.py"), "utf8");
-  assert.match(src, /g = lambda \*a: run\('-c', 'core\.fsmonitor=false', '-c', 'core\.hooksPath=\/dev\/null', '-C', wt, \*a, cmd='git'\)/);
+  // 7.4.0 (#34, changed on purpose): g passes net through, so only the fetch is lifted
+  assert.match(src, /g = lambda \*a, net=False: run\('-c', 'core\.fsmonitor=false', '-c', 'core\.hooksPath=\/dev\/null', '-C', wt, \*a, cmd='git', net=net\)/);
 });
 
 // ---------------------------------------------------------------- third delta review (M1)

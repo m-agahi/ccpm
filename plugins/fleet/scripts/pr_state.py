@@ -123,8 +123,8 @@ class Fail(Exception):
     pass
 
 
-def run(*a, timeout=120, cmd=None):
-    r = subprocess.run([cmd or gh] + list(a), capture_output=True, timeout=timeout, preexec_fn=None if cmd else lift)
+def run(*a, timeout=120, cmd=None, net=False):
+    r = subprocess.run([cmd or gh] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift if (not cmd or net) else None)
     if r.returncode != 0:
         raise Fail((cmd or 'gh') + ' ' + ' '.join(a[:2]) + ': ' + r.stderr.decode('utf-8', 'replace').strip()[-500:])
     return r.stdout.decode('utf-8', 'replace')
@@ -332,12 +332,13 @@ try:
     elif mode == 'fetch':
         wt, br, old, new, base = args[1:6]
         # 6.1.0 review B3: no repo hook runs (post-merge, reference-transaction, ...)
-        g = lambda *a: run('-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', wt, *a, cmd='git').strip()
+        # 7.4.0 (#34): only the network call (fetch) runs without the caps
+        g = lambda *a, net=False: run('-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', wt, *a, cmd='git', net=net).strip()
         if g('symbolic-ref', '--quiet', 'HEAD') != 'refs/heads/' + br or g('rev-parse', 'HEAD') != old:
             raise Fail('the worktree is not on ' + br + ' at ' + old)
         if g('status', '--porcelain', '--untracked-files=no'):
             raise Fail('the worktree has uncommitted changes')
-        g('fetch', '--no-tags', '--no-recurse-submodules', 'origin', 'refs/heads/' + br)
+        g('fetch', '--no-tags', '--no-recurse-submodules', 'origin', 'refs/heads/' + br, net=True)
         if g('rev-parse', 'FETCH_HEAD') != new:
             raise Fail('origin/' + br + ' is not ' + new)
         par = g('rev-list', '--parents', '-n', '1', new).split()[1:]

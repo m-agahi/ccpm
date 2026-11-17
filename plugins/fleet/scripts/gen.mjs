@@ -32,8 +32,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const WORKFLOW = join(HERE, "..", "src", "build-task-run.js");
 export const SCRIPTS = HERE;
 export const ROLES_DIR = join(HERE, "..", "roles");
-// the number of shipped programs (28 since 4.0.0; 29 since 5.0.3: plan_dsn; 30 since 5.0.5: ignored_diff; 31 since 5.0.6: build_dir; 31 in 5.0.7: hash_diff replaces ignored_diff; 32 since 5.0.8: gh_identity; 33 since 5.0.9: session_project; 34 since 6.0.0: ruleset_surface; 35: policy; 36: pr_convention; 37: pr_body_block; 38: pr_state; 39: orch_scan; 40: ci_watch; 41 since 7.1.0: pr_test_block; 42 since 7.3.0: fleet_branch; 45 in 7.3.0: scratch_copy, exclude_add, purge)
-export const PROGRAM_COUNT = 45;
+// the number of shipped programs (28 since 4.0.0; 29 since 5.0.3: plan_dsn; 30 since 5.0.5: ignored_diff; 31 since 5.0.6: build_dir; 31 in 5.0.7: hash_diff replaces ignored_diff; 32 since 5.0.8: gh_identity; 33 since 5.0.9: session_project; 34 since 6.0.0: ruleset_surface; 35: policy; 36: pr_convention; 37: pr_body_block; 38: pr_state; 39: orch_scan; 40: ci_watch; 41 since 7.1.0: pr_test_block; 42 since 7.3.0: fleet_branch; 45 in 7.3.0: scratch_copy, exclude_add, purge; 44 in 7.4.0: push replaces push_classify and push_probe)
+export const PROGRAM_COUNT = 44;
 // the number of shipped role prompts (5.0.0)
 // 11 since 6.0.0: fleet-ci-classifier
 export const ROLE_COUNT = 11;

@@ -80,6 +80,8 @@ def read_local(p):
 
 
 TOKEN = re.compile(r'(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|[A-Za-z0-9_-]{40,})')
+# 7.4.0 (#36 B6): a Bearer token of any length
+BEARER = re.compile(r'(?i)\b(bearer)\s+\S+')
 # 6.3.2 (2130): gh's stderr of the last call with no HTTP status (first 200 characters, tokens redacted)
 LAST_ERR = {'text': ''}
 
@@ -96,7 +98,7 @@ def api(path):
     if r[0] is None and r[2]:
         time.sleep(3)
         r = api1(path)
-    LAST_ERR['text'] = TOKEN.sub('[redacted]', ' '.join(r[3].split()))[:200] if r[0] is None else ''
+    LAST_ERR['text'] = BEARER.sub(r'\1 ***', TOKEN.sub('[redacted]', ' '.join(r[3].split())))[:200] if r[0] is None else ''
     return r[:2]
 
 

@@ -35,6 +35,10 @@ try:
 except Exception:
     _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
+def lift():
+    # 7.4.0 (#34, L2141): a git network call and its credential helper are not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 wt, branch, url = sys.argv[1], sys.argv[2], sys.argv[3]
 os.chdir('/')
 URL_OK = re.compile(r'^(https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+)$')
@@ -52,7 +56,7 @@ HARD = ['git', '-c', 'core.fsmonitor=', '-c', 'core.hooksPath=/dev/null', '-c', 
 if not re.match(r'^[A-Za-z0-9._/-]+$', branch) or branch.startswith('-'):
     sys.exit('bad branch name')
 # no repo at all: ls-remote needs none, so no repo config is read
-r = subprocess.run(HARD + ['ls-remote', '--exit-code', '--upload-pack=git-upload-pack', url, 'refs/heads/' + branch], capture_output=True)
+r = subprocess.run(HARD + ['ls-remote', '--exit-code', '--upload-pack=git-upload-pack', url, 'refs/heads/' + branch], capture_output=True, preexec_fn=lift)
 if r.returncode == 2:
     head = None
 elif r.returncode == 0:

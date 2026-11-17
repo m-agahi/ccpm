@@ -1,5 +1,68 @@
 # Changelog
 
+## [7.4.0] - 2026-11-17
+
+Fleet 7.4.0: the combined step-3 batch (plan `docs/plans/fleet-step3-batch-7.4.0-2026-11-17.md`).
+One release for every remaining step-3 fleet task the plan puts IN, built in six cars on one branch.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 7.4.0), then start a NEW session: the workflow
+  looks for its own `fleet/7.4.0/scripts` dir.
+
+### Changed
+
+- Car 1, #34 (L2141, Max ruling 2026-11-14 "Lift caps on git network calls"): a git child that
+  talks to a remote, and the credential helper it starts, runs without the program's 1 GiB memory
+  and CPU caps (`preexec_fn=lift`): `remote_head.py` ls-remote, `tf_gate.py` ls-remote and fetch,
+  `pr_state.py fetch` (`run(..., net=True)`), and every network call of the new `push.py`. Local
+  git commands keep the caps. No cap value changes.
+- Car 1, #9 push (L2008): the push and the plan-mode push-access probe run in one program,
+  `push.py` (`push` and `probe` modes). In push mode it checks the branch (not the default),
+  HEAD (the approved sha) and a clean worktree, pushes once, retries a network failure after 5,
+  15 and 45 s while the 540 s deadline leaves room for one more attempt and a 60 s head read
+  (each head read is bounded by what is left of the deadline), classifies git's output
+  (the `push_classify.py` rules) and reads origin's head (gh api, else ls-remote) itself. It prints
+  `{push_result, exit_code, hook_tail, tail, attempts, remote_head, args, program, digest}`; the
+  workflow checks the digest and that `args` are the ones it sent for every result. The target
+  repo's pre-push hooks run on purpose (the one fleet git call without `core.hooksPath=/dev/null`)
+  with the push's hook env, passed as a JSON argument. Probe mode runs the 120 s dry run and
+  prints the push-probe keys (the `push_probe.py` rules). The prompts hold no `$?`, no redirect and
+  no shell loop. `non_ff`, `remote_rejected` and `ambiguous` stop for a human; `network` after the
+  ladder, or any other result, fails.
+- Car 1, #36 B1 (L2143): a hook-surface or ruleset-surface read that failed with no HTTP status
+  (`HTTP None`: gh crashed or timed out) stops with "transient GitHub read failure; re-run", not
+  "hook change needs Max's confirmation". Any other read error keeps the old text.
+- Car 1, #36 B6: the gh stderr redaction of `ruleset_surface.py`, `pr_convention.py` and
+  `gh_identity.py` turns `Bearer <token>` of any length into `Bearer ***`.
+
+### Removed
+
+- Car 1, #9: `push_classify.py` and `push_probe.py`. Their rules moved into `push.py`; no prompt
+  ran them any more, and every shipped program must be run by some prompt (4.0.2 1997). The
+  program count is 44 (`PROGRAM_COUNT`). The plan expected both kept (46); its "resume check"
+  use of `push_classify` does not exist in the code.
+
+### Tests changed on purpose (car 1)
+
+- New: `v740_git_net_lift` (B1-B3), `v740_push_program` (P1-P4), `v740_review_lows` (H1-H5).
+- `v632_gh_rlimit`: the lift tests skip at a hard `RLIMIT_AS` of 1 GiB or less (#36 B5,
+  `harness.liftSkip`, `FLEET_TEST_HARD_AS` forces the value); the source check pins
+  `preexec_fn=lift if (not cmd or net) else None` (#34); the HTTP None relay test pins the
+  re-run text (#36 B1).
+- `v610_update_coder` 6.1.0 review 5: `g` passes `net` through.
+- `build_task_run`: the push prompt, classifier and relay tests read `push.py` (the classifier
+  fixtures run through `harness.pushOn`, a stub git); the 1959, caps and PATH prelude tests read
+  `push.py`; ARRAY_SITES drops the probe's `r.args` read. `v403_schema_types`: READS for
+  `prog:push`, no `pa` reads, no `pushProbe` args reads.
+- `v4_s3` 1985: the probe relays echo `push.py probe` args; the real-python classifier test runs
+  through `harness.pushOn`. `v4_s1`: 44 programs; the probe's wrong-program gate line names
+  `push`. `v4_s5` AC-1981-1: the push's hook env is the JSON argument. Harness: push and probe
+  relay keys, `pushArgsOf`, the hook-env check of `infra:push`.
+- Version pins 7.3.0 -> 7.4.0 (`harness`, `v4_s1`, `v4_s3`, `v5_roles`, `v600_s3`,
+  `build_task_run`, `v403_schema_types`, `v622_fixes`).
+- `v5010_prompt_snapshot` pins: the push and probe prompts and the hook stop text.
+
 ## [7.3.0] - 2026-11-17
 
 Fleet 7.3.0: the combined workflow-reliability batch (plan
@@ -604,7 +667,8 @@ follow-ups.
 
 - Update the plugin (`/plugin`, update `fleet` to 6.3.2), then start a NEW session: the workflow
   looks for its own `fleet/6.3.2/scripts` dir.
-- A 6.3.1 plan ref and run-state stay valid: nothing sealed changed.
+- A 6.3.1 plan ref and run-state stay valid: the sealed preflight record differs, and resume only
+  logs that. (Reworded in 7.4.0, #36 B7.)
 
 ### Fixed
 
