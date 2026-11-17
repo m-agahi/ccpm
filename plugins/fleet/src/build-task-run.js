@@ -2755,7 +2755,7 @@ function commitPlanPrompt(inputs, c) {
 async function writeChunksParallel(prefix, chunkDir, c, ids, phaseName, round, what, soft) {
   const groups = [];
   for (let i = 0; i < ids.length; i += CHUNKS_PER_WRITER) groups.push(ids.slice(i, i + CHUNKS_PER_WRITER));
-  if (!soft && !TAIL_WRITER_RE.test(prefix)) reserve(groups.length, "the " + what + " chunk writers");
+  if (!soft && !tailWriter(prefix)) reserve(groups.length, "the " + what + " chunk writers");
   // a throw inside a thunk resolves to null: no halt() may be reached inside softDispatch here (no program, no digest)
   const res = await parallel(groups.map((g, b) => () => softDispatch(prefix + ":r" + round + "w" + b, planChunksPrompt({ chunk_dir: chunkDir }, c, g, what === "plan ref" ? null : "the " + what), { schema: INFRA_SCHEMA, phase: phaseName })));
   res.forEach((w, b) => {
@@ -3541,8 +3541,10 @@ function capped() {
 }
 // 2044, 2045, 2034: the PR tail sits outside the cap like path checks; CI-fix coder rounds still count
 const TAIL_RE = /^(infra:(pr-|orch-scan|ci-|fleet-cleanup|state:shipped)|role:fleet-ci-classifier)|^infra:[a-z:-]+:ci$/;
-// 7.3.0 (Max: "Exempt writers"): so are the (soft) chunk writers of a run-state written after the PR is open
-const TAIL_WRITER_RE = /^infra:state-chunks:(pr_open|reviewed|written_back|shipped)/;
+// 7.3.0 (Max: "Exempt writers"): so are the (soft) chunk writers of a run-state saveState writes after the PR is open
+function tailWriter(l) {
+  return state.tailWriters === true && l.indexOf("infra:state-chunks:") === 0;
+}
 
 function reserve(n, what) {
   if (capped() + n > MAX_AGENTS)
@@ -3646,7 +3648,7 @@ async function digestRetry(label, prompt, opts, r, again) {
 async function softDispatch(label, prompt, opts) {
   const model = relayModel(label);
   const ic = infraCall(label, prompt, opts);
-  if (TAIL_WRITER_RE.test(label)) state.tail++;
+  if (tailWriter(label)) state.tail++;
   else if (capped() + 1 > MAX_AGENTS) {
     gate("agent cap " + MAX_AGENTS + " reached: " + label + " not run");
     return null;
@@ -6757,8 +6759,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     else {
       // 7.3.0 (#47a): over one writer's bound the chunks go to parallel writers first
       const pfx = "infra:state-chunks:" + label.slice("infra:state:".length);
-      await writeChunksParallel(pfx, si.chunk_dir, c, c.chunks.map((x, i) => i), "PR", 0, "run-state");
-      r = await chunkRounds(label, pfx, si.chunk_dir, c, "PR", (lbl) => dispatch(lbl, writeStatePrompt(si, json, true), { schema: INFRA_SCHEMA, phase: "PR" }), "run-state", "no run-state was written");
+      // the PR state, not the label: a review-fix round's committed and pushed states are post-PR too (also on a resume)
+      state.tailWriters = !!(pr && pr.pr_number != null);
+      try {
+        await writeChunksParallel(pfx, si.chunk_dir, c, c.chunks.map((x, i) => i), "PR", 0, "run-state");
+        r = await chunkRounds(label, pfx, si.chunk_dir, c, "PR", (lbl) => dispatch(lbl, writeStatePrompt(si, json, true), { schema: INFRA_SCHEMA, phase: "PR" }), "run-state", "no run-state was written");
+      } finally {
+        state.tailWriters = false;
+      }
       if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
     }
     requireProgram(r, "state_write", label);

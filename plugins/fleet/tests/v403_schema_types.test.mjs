@@ -646,9 +646,8 @@ const READS = {
   chunkRounds: { "r.bad_chunks array": "infra:bad_chunks", "i integer": "infra:bad_chunks[]" },
   // 7.3.0 (#67, #59)
   relayModel: { "label string-re": ["parsed: the script's own step label", 2] },
-  // 7.3.0 car 2 (Max: "Exempt writers"): the script's own labels
-  writeChunksParallel: { "prefix string-re": "parsed: the script's own writer label prefix" },
-  softDispatch: { "label string-re": "parsed: the script's own step label" },
+  // 7.3.0 car 2 (Max: "Exempt writers"): the script's own flag
+  tailWriter: { "state.tailWriters boolean": "parsed: the script's own flag (saveState sets it from the PR state)" },
   // 7.3.0 (#47, #42): the shared part reader (a part only picks what to read again; the whole-payload sha256 decides)
   partReader: {
     "c string": "prog:plan_ref:chunks[]",

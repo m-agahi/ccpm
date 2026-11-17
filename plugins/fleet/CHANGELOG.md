@@ -73,11 +73,12 @@ closed): <why>; plan-audit passed; the intent judge rules on it)`); the auto gat
   freeze ref's tree, so a worktree the coder left dirty resumes at the coder when every frozen map
   (tests, frozen config) still matches; the coder gets `freeze_tree` = the freeze tree. A
   frozen-map change, HEAD off `plan_base`, no freeze ref or suspicious paths still refuse.
-- Car 2 (car-1 follow-up, Max ruled "Exempt writers"): the chunk writers of a run-state written
-  after the PR is open (`infra:state-chunks:(pr_open|reviewed|written_back|shipped)...`,
-  `TAIL_WRITER_RE`) sit outside the agent cap, as `infra:state:shipped` does: no reserve, counted
-  as tail in `softDispatch`. The pre-PR writers (`committed`, `pushed`) keep the cap; the
-  `infra:state:<label>` program steps keep their own rule.
+- Car 2 (car-1 follow-up, Max ruled "Exempt writers"): the chunk writers of a run-state that
+  `saveState` writes after the PR is open (`pr` with a `pr_number`, also on a resume; a review-fix
+  round's `committed` and `pushed` states included) sit outside the agent cap, as
+  `infra:state:shipped` does: no reserve, counted as tail in `softDispatch` (`state.tailWriters`,
+  `tailWriter`). The pre-PR writers keep the cap; the `infra:state:<label>` program steps keep
+  their own rule.
 
 ### Tests changed on purpose (car 2)
 
@@ -90,7 +91,7 @@ closed): <why>; plan-audit passed; the intent judge rules on it)`); the auto gat
 - `v4_s4`: the parked "chunk" case (a meta chunk over 1000 characters) became a "count" case (a
   part count of 65); the real-python parked test reads the meta and `read-part`.
 - `v700_inputs_unchanged`: the intake plan rule text (#63).
-- `v730_state_chunks`: the soft-cap pin reads `if (!soft && !TAIL_WRITER_RE.test(prefix))`.
+- `v730_state_chunks`: the soft-cap pin reads `if (!soft && !tailWriter(prefix))`.
 - Tables: `v402_file_sha` SAMPLES, `v403_schema_types` READS, `v507_digest_relays` RO list,
   `v4_s3` tier table. The harness turns a 7.2.0-shaped `infra:load-parked` stub into the meta relay
   and serves the part reads.

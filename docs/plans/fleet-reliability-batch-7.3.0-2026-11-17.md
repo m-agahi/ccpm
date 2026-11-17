@@ -183,12 +183,15 @@ args}`.
 
 ### Car-1 follow-up: post-PR state chunk writers skip the agent cap (Max ruled "Exempt writers")
 
-- The chunk writers of a run-state written after the PR is open
-  (`infra:state-chunks:(pr_open|reviewed|written_back|shipped)...`) are tail agents, as
-  `infra:state:shipped` is (`TAIL_RE`). A new `TAIL_WRITER_RE` names them: `writeChunksParallel` reserves no slot for them, and
-  `softDispatch` counts them in `state.tail` and runs them past the cap.
-- The pre-PR state writers (`committed`, `pushed`) keep the cap. The `infra:state:<label>` program
-  steps keep their own rule (only `infra:state:shipped` is tail).
+- The chunk writers of a run-state that `saveState` writes after the PR is open are tail agents,
+  as `infra:state:shipped` is (`TAIL_RE`). "After the PR is open" is the PR state at `saveState`
+  (`pr` with a `pr_number`, also on a resume from the run-state), not the state label: a
+  review-fix round's `committed` and `pushed` states are post-PR too. `saveState` sets
+  `state.tailWriters` around its writers and rewrite rounds; `tailWriter(label)` is true for an
+  `infra:state-chunks:` label while it is set. `writeChunksParallel` reserves no slot for such a
+  writer, and `softDispatch` counts it in `state.tail` and runs it past the cap.
+- The pre-PR state writers keep the cap. The `infra:state:<label>` program steps keep their own
+  rule (only `infra:state:shipped` is tail): open for Max, since the ruling exempted the writers.
 
 ### #49: no silent skip of the review
 
@@ -402,12 +405,14 @@ for scripted relays is `v711_failed_digest_retry.test.mjs`. The harness records 
   frozen map is unchanged, Then the build resumes at the coder (`resumed_at` "frozen"), the coder's
   `freeze_tree` is `T1`, and the gate log names the dirty tree. Given the tree `T9` and one frozen
   test file changed, Then needs_human with stop_gate `resume` and no role call.
-- **A28** (car-1 follow-up, `v730_tail_writers.test.mjs`). Given the chunk writer labels
-  `infra:state-chunks:shipped:r0w0`, `:reviewed:v1:r1w0`, `:pr_open:p1:r0w0` and
-  `:written_back:r0w0`, Then `TAIL_WRITER_RE` matches each. Given `infra:state-chunks:committed:r1:r0w0`
-  and `:pushed:p1:r0w0`, Then `TAIL_WRITER_RE` matches neither. Given `softDispatch`, Then it counts a
-  tail label in `state.tail` before its cap check, and `writeChunksParallel` reserves no slot for a
-  tail prefix.
+- **A28** (car-1 follow-up, `v730_tail_writers.test.mjs`). Given `state.tailWriters` true, Then
+  `tailWriter` is true for `infra:state-chunks:shipped:r0w0`, `:committed:r2:r1w0`,
+  `:pushed:p2:r0w0` and `:reviewed:v1:r0w0`, and false for `infra:plan-chunks:r0w0`,
+  `infra:park-chunks:r0w0`, `infra:yaadgaar-writeback:ci` and `infra:state:shipped`. Given it
+  false, Then false for every state writer. Given `saveState`, Then it sets the flag from
+  `pr && pr.pr_number != null` before the writers and clears it in a `finally` after the rewrite
+  rounds. Given `softDispatch`, Then it counts a tail writer in `state.tail` before its cap check,
+  and `writeChunksParallel` reserves no slot for one.
 
 Test command: `node --test 'plugins/fleet/tests/*.test.mjs'` (README:1777). Dist and tables:
 `node plugins/fleet/scripts/build-workflow.mjs`, then `node plugins/fleet/scripts/gen.mjs --check`.

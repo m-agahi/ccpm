@@ -117,7 +117,7 @@ test("7.3.0 #47a A4: a park writer that returns nothing logs a gate line and nev
 test("7.3.0 #47a A4: the park writers run on the soft cap (no reserve: a cap-skipped writer logs and never halts)", () => {
   const fn = SOURCE.slice(SOURCE.indexOf("async function writeChunksParallel("), SOURCE.indexOf("\n}\n", SOURCE.indexOf("async function writeChunksParallel(")));
   // 7.3.0 car 2 (Max: "Exempt writers"): the post-PR run-state writers reserve nothing either
-  assert.match(fn, /if \(!soft && !TAIL_WRITER_RE\.test\(prefix\)\) reserve\(/);
+  assert.match(fn, /if \(!soft && !tailWriter\(prefix\)\) reserve\(/);
   const park = SOURCE.slice(SOURCE.indexOf("const parkOnStop = async"), SOURCE.indexOf("const confirm0 ="));
   assert.match(park, /writeChunksParallel\("infra:park-chunks"[^\n]*true\)/);
   assert.ok(!/reserve\(/.test(park), "parkOnStop reaches no reserve()");

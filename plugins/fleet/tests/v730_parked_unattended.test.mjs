@@ -1,7 +1,8 @@
 // fleet 7.3.0 (#53, L2188; Max ruled "Decide + log") A26: under unattended an
 // unreadable parked prior is decided by the run, not asked, when plan-audit
 // and the intent judge both pass; the decision is recorded in auto_decisions.
-// A refusing intent judge still stops. Without unattended nothing changes.
+// A refusing intent judge still stops (the decision entry, logged before the
+// judge runs, stays in auto_decisions). Without unattended nothing changes.
 //
 // dont_care: the wording of the decision reason after its first words; the
 // order of unrelated labels.
@@ -44,6 +45,8 @@ test("7.3.0 #53 A26: unattended with a refusing intent judge stops; nothing is b
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.failed_check, "intent");
   assert.ok(!out.labels.some((l) => /^role:fleet-(test-writer|coder)/.test(l)), out.labels.join(", "));
+  // the decision is logged before the intent judge runs (as for a relaxed re-plan): the entry stays, the run stops
+  assert.ok(out.result.auto_decisions.some((x) => x.gate === "default-blocker" && /^parked prior unreadable/.test(x.reason)), JSON.stringify(out.result.auto_decisions));
 });
 
 test("7.3.0 #53 A26: without unattended, confirm auto still fails closed on an unreadable parked prior", async () => {

@@ -38,6 +38,9 @@ test("7.3.0 #52 A27: a frozen resume with the coder's dirty tree and every froze
   assert.equal(inputsOf(call(r, "role:fleet-coder:r1").prompt).freeze_tree, "T1");
   assert.ok(r.logs.some((l) => /frozen resume: .*K1/.test(l) && /T1/.test(l)), r.logs.filter((l) => /frozen/.test(l)).join("\n"));
   assert.ok(!r.labels.some((l) => /^role:fleet-test-(writer|judge)/.test(l)));
+  // #39 A13: a frozen-resume build never fast-forwards its worktree
+  const ws = call(r, "workspace").prompt;
+  assert.ok(!ws.includes("merge-base --is-ancestor HEAD origin/<default_branch>") && !ws.includes("merge --ff-only origin/<default_branch>"));
 });
 
 test("7.3.0 #52 A27: a dirty tree with one frozen test file changed still refuses the frozen resume", async () => {
