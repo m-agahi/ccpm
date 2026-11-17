@@ -73,14 +73,19 @@ of #60 (step 3), #9 (push) and #39 (npm prefix).
 - (a) Lift `writeChunks` out of `commitPlanAndRef` (src:5195-5204) into a top-level
   `writeChunksParallel(prefix, chunkDir, c, ids, phaseName)`. Commit-plan keeps its labels
   (`infra:plan-chunks...`).
-  - `saveState` (around src:6630) and `writeStatePrompt` (src:3276): writers first (label
-    `infra:state-chunks:<state label>:r<k>w<b>`). The state step then runs the program only, with
-    no chunk text in its prompt (the shape of `commitPlanPrompt`, src:2679).
+  - ADR-1267 bounds an agent at `CHUNKS_PER_WRITER` chunks (8 of 4000 characters). A payload of
+    at most that many chunks stays inline, as today: no extra agent per save (see #62, cost).
+    Only a payload of more chunks takes the parallel writers.
+  - `saveState` (around src:6630) and `writeStatePrompt` (src:3276), over the bound: writers
+    first (label `infra:state-chunks:<state label>:r<k>w<b>`). The state step then runs the
+    program only, with no chunk text in its prompt (the shape of `commitPlanPrompt`, src:2679).
   - `state_write.py` exit 3 already prints `bad_chunks` (scripts/state_write.py:76-77). Rewrite
     rounds and the cap are the same as commit-plan (`MAX_CHUNK_RETRIES`).
   - Park findings (src:2505-2508, `parked.py write` exit 3 at scripts/parked.py:148-149): same,
-    with labels `infra:park-chunks:r<k>w<b>`. `parkOnStop` must not halt inside `parallel()`
-    thunks (ADR-1267).
+    with labels `infra:park-chunks:r<k>w<b>`, and the same inline bound. `parkOnStop` must not
+    halt inside `parallel()` thunks (ADR-1267). The park writers run inside `parkOnStop`'s
+    try/catch, so a `reserve()` cap halt there would be swallowed as "park failed". Use the
+    soft cap check of `softDispatch` (src:3548) for the park writers, and log a skipped writer.
   - Add new `INFRA_TIER` rows (sonnet).
 - (b) In `buildFromRef`: when every relay's metadata check passed (`checked`, src:6120-6125),
   the ref itself is intact. A final join mismatch (src:6186) then stops `failed` with this text:
@@ -99,7 +104,9 @@ of #60 (step 3), #9 (push) and #39 (npm prefix).
     `{parked: null}`.
   - `read-part <scratch> <run> <k>` prints `{part: {index, count, sha256}, chunks}` with
     32000-code-point parts.
-- Payload = canonical JSON `{draft, findings}`.
+- Payload = canonical JSON `{draft, findings}`, built at read time from the files that
+  `parked.py read` already reads (`parked/<run>/<plan_path>` and `findings.json`). The on-disk
+  park layout does not change, so a draft parked by 7.2.0 loads in 7.3.0.
 - `loadParked` reads the meta with digest id `parked:meta`, so `digestRetry` runs, and with
   `args`. It reads the parts with the shared part reader. It checks the joined payload against
   `payload_sha256` from the digest-checked meta relay.
@@ -122,8 +129,10 @@ of #60 (step 3), #9 (push) and #39 (npm prefix).
 ### #43: stable branch slug
 
 - New read-only program `scripts/fleet_branch.py <repo> <task_id>`. It lists the slugs of
-  `refs/heads/fleet/<task_id>-*` and `refs/remotes/origin/fleet/<task_id>-*`, with program and
-  digest.
+  `refs/heads/fleet/<task_id>-*`, with program and digest.
+- The program reads local heads only (`refs/heads/fleet/<task_id>-*`). It runs before the
+  workspace `fetch`, so remote-tracking refs can be stale. A remote-only branch of the task is
+  not seen; the workspace step 5 still finds it by its full name.
 - Plan mode, after intake and before `layout(names, repo)` (src:3929, call near src:5625):
   dispatch `infra:fleet-branch` (haiku, digest id `fleet_branch`, args).
   - Exactly one distinct slug: `names.slug` = that slug. Gate: "branch slug <s> adopted from
@@ -136,8 +145,12 @@ of #60 (step 3), #9 (push) and #39 (npm prefix).
 
 ### #39 (1): fast-forward a reused branch with no own commits
 
+- Plan mode only. `workspaceStep` also runs in build mode (src:6072), where the reused worktree
+  sits clean at the audited `plan_base` with 0 own commits (the plan commit is off-branch). A
+  fast-forward there would move HEAD off `plan_base`. So the plan path alone passes a new input
+  `ff_reused: true`; build mode never passes it.
 - Workspace step 5 (src:2395): after a reuse or an `add` of an existing local branch, and only
-  when `frozen_resume` is not set, add this rule. When
+  when `ff_reused` is true, add this rule. When
   `git -C <main_worktree> merge-base --is-ancestor HEAD origin/<default_branch>` exits 0 and
   `git -C <main_worktree> status --porcelain` is empty, run
   `git -C <main_worktree> -c core.hooksPath=/dev/null merge --ff-only origin/<default_branch>`.
@@ -164,7 +177,9 @@ branch on the forge", "role")`.
 
 ### #41: update-branch path routes pr_body_claim like the main path
 
-- src:6758-6767: in the update branch, split `bodyF`/`codeF` as at src:6769-6770.
+- src:6758-6767: in the update branch, split `bodyF`/`codeF` as at src:6769-6770. The split runs
+  before `updRefusal()` (src:6761). A body-only update review runs no code round, so the R1-R5
+  checks do not stop it. `updRefusal()` still runs when `codeF` is not empty.
   - `codeF` empty: take the body-only branch (src:6773-6781). The `MAX_BODY_FIXES` cap and the
     own slot stay the same.
   - Else return only `codeF` with `update: true`, and set `state.bodyPending = bodyF`.
@@ -258,10 +273,12 @@ for scripted relays is `v711_failed_digest_retry.test.mjs`. The harness records 
   `infra:plan-chunks:r1w0` has `opts.model === "opus"`, `r0w0` has `"sonnet"`, and the plan
   commit then seals.
 - **A4** (#47a, `v730_state_chunks.test.mjs`). Given a run-state JSON of 3 chunks, When
-  `saveState` runs, Then `infra:state-chunks:...:r0w0` writes the chunks, the
-  `infra:state:<label>` prompt holds no chunk text, and a `state_write` exit-3 result
-  `bad_chunks:[1]` sends only chunk 1 to `...:r1w0`. A third bad round halts `failed`. Same for
-  park: `infra:park-chunks:r0w0`.
+  `saveState` runs, Then no `infra:state-chunks` call runs and the state prompt holds the chunks
+  (as today). Given a run-state JSON of 9 or more chunks, Then `infra:state-chunks:...:r0w0` and
+  `...:r0w1` write the chunks, the `infra:state:<label>` prompt holds no chunk text, and a
+  `state_write` exit-3 result `bad_chunks:[1]` sends only chunk 1 to `...:r1w0`. A third bad
+  round halts `failed`. Same for park findings of 9 or more chunks: `infra:park-chunks:r0w0`; a
+  park writer skipped by the agent cap logs a gate line and never halts.
 - **A5** (#47b, `v730_load_ref_relay.test.mjs`). Given an intact ref whose metadata relays pass
   but whose part 1 is mis-copied on every read, When build loads it, Then status `failed`, the
   reason contains "the plan ref" and "is intact; re-run build with the same plan_ref", and the
@@ -277,6 +294,7 @@ for scripted relays is `v711_failed_digest_retry.test.mjs`. The harness records 
 - **A8** (#42, same file). Given a `parked:meta` relay with a bad digest first, Then
   `infra:load-parked:digest-retry` runs and the draft loads. Given part 1 mis-copied twice, Then
   "parked draft ignored" is logged and the unreadable blocker is set (fail closed, no change).
+  Given a draft parked by 7.2.0 (the same on-disk files), Then it loads.
 - **A9** (#63, `v730_intake_parked_path.test.mjs`). Given an intake brief with `plan_path`
   `.claude/worktrees/fleet-x/scratch/parked/123/docs/plans/p.md`, When plan mode runs, Then
   status `needs_human`, the reason matches `/plan_path/`, and no `role:scope-and-plan` call ran.
@@ -291,7 +309,8 @@ for scripted relays is `v711_failed_digest_retry.test.mjs`. The harness records 
   Then no `infra:fleet-branch` call.
 - **A13** (#39, `v730_workspace_ff.test.mjs`). Given the workspace prompt, Then it contains
   `merge-base --is-ancestor HEAD origin/<default_branch>` and
-  `merge --ff-only origin/<default_branch>`, and neither appears when `frozen_resume` is true.
+  `merge --ff-only origin/<default_branch>` in plan mode. Given the build-mode workspace prompt
+  (plain build and `freeze_digest` resume), Then it contains neither.
   Given a workspace relay with `fast_forwarded: true`, Then the gate log contains
   "fast-forwarded".
 - **A14** (#49, `v730_review_no_pr.test.mjs`). Given the second pr-opener call (`:p2`) returns ok
@@ -466,8 +485,7 @@ Change only these real pins. Test titles that start with "7.2.0 AC..." are histo
 
 - Car 1 changes the model of every retry. A test that pins a retry's model to its tier fails and
   must be updated on purpose. List every such test in the CHANGELOG.
-- `writeChunksParallel` adds agents to every `saveState`. The agent cap (`MAX_AGENTS`) and
-  `reserve` must count them, as commit-plan does.
-- The parked payload format changes. Drafts parked by 7.2.0 are unreadable to 7.3.0 and are
-  ignored (fail closed, logged). Accepted: a re-plan, with no lost sealed plan.
+- `writeChunksParallel` adds agents to a `saveState` only over the 8-chunk bound. The agent cap
+  (`MAX_AGENTS`) and `reserve` must count them, as commit-plan does.
+- #39's fast-forward must never run in build mode. A13 pins that.
 - #49 turns a skip into a stop. A forge that is slow to show a new PR now stops the run.
