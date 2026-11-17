@@ -157,27 +157,54 @@ elif mode == 'run' and len(args) in (3, 4):
         path = ':'.join(ents + ([_RAW_PATH] if _RAW_PATH else []))
     if any(shutil.which(n, path=path) != shutil.which(n, path=_RAW_PATH) for n in REFUSED):
         sys.exit('refusing a PATH that resolves a terraform-family name differently from the agent PATH')
-    # defense in depth only: argv forms that run a program string inline
+    # defense in depth only: argv forms that run a program string inline. Only the options
+    # before the program's first operand count (a script's or module's own args do not).
+    VAL = {'sh': ('-o', '-O'), 'python': ('-W', '-X', '-Q'), 'node': ('-r', '--require', '--import', '--loader'), 'git': ('-c', '-C', '--config-env', '--git-dir', '--work-tree', '--namespace'), 'env': ('-u', '--unset', '-C', '--chdir')}
+    def lead(rest, kind):
+        # [(option, value or None)] up to the first operand; python stops at -m
+        out, k = [], 0
+        while k < len(rest) and rest[k].startswith('-') and rest[k] != '--':
+            o = rest[k]
+            if kind == 'python' and o == '-m':
+                break
+            v = rest[k + 1] if o in VAL.get(kind, ()) and k + 1 < len(rest) else None
+            out.append((o, v))
+            k += 2 if v is not None else 1
+        if kind == 'env':
+            # env NAME=VALUE ... before the command
+            while k < len(rest) and '=' in rest[k] and not rest[k].startswith('-'):
+                k += 1
+        return out
     def cluster(x, letters):
         return re.fullmatch(r'-[A-Za-z]*[' + letters + r'][A-Za-z]*', x) is not None
     for i, a in enumerate(argv):
         b, rest = os.path.basename(a), argv[i + 1:]
         if b in REFUSED:
             sys.exit('refusing ' + b + ' (no terraform-family program runs here)')
+        py = re.fullmatch(r'python[0-9.]*', b) is not None
+        kind = 'sh' if b in SHELLS else 'python' if py else 'node' if b in ('node', 'nodejs') else b
+        opts = lead(rest, kind) if kind in ('sh', 'python', 'node', 'perl', 'ruby', 'env', 'git') else []
         inline = (
-            (b in SHELLS and any(cluster(x, 'c') for x in rest))
-            or (re.fullmatch(r'python[0-9.]*', b) and any(cluster(x, 'c') for x in rest))
-            or (b in ('node', 'nodejs') and any(cluster(x, 'ep') or x.split('=')[0] in ('--eval', '--print') for x in rest))
-            or (b == 'perl' and any(cluster(x, 'eE') for x in rest))
-            or (b == 'ruby' and any(cluster(x, 'e') for x in rest))
-            or (b == 'env' and any(cluster(x, 'S') or x.startswith('--split-string') for x in rest))
-            or (b == 'git' and any(re.match(r'(-c)?alias\.', x.lower()) or (x.startswith('--config-env') and 'alias.' in x.lower()) for x in rest))
+            (kind in ('sh', 'python') and any(cluster(o, 'c') for o, v in opts))
+            or (kind == 'node' and any(cluster(o, 'ep') or o.split('=')[0] in ('--eval', '--print') for o, v in opts))
+            or (kind == 'perl' and any(cluster(o, 'eE') for o, v in opts))
+            or (kind == 'ruby' and any(cluster(o, 'e') for o, v in opts))
+            or (kind == 'env' and any(cluster(o, 'S') or o.startswith('--split-string') for o, v in opts))
+            or (kind == 'git' and any(re.match(r'(-c)?alias\.', (v or o).lower()) or (o.startswith('--config-env') and 'alias.' in (v or o).lower()) for o, v in opts))
         )
         if inline:
             sys.exit('refusing ' + b + ' with an inline program string (run an argv list or a script file)')
     exe = shutil.which(argv[0], path=path)
     if exe and os.path.basename(os.path.realpath(exe)) in REFUSED:
         sys.exit('refusing ' + argv[0] + ': it resolves to ' + os.path.realpath(exe))
+    # a guard dir goes first: one link per terraform-family name to what the agent PATH
+    # resolves it to (the shim), else to false, so a file the child writes into an env PATH
+    # dir later (a venv bin) never shadows it
+    guard = tempfile.mkdtemp(prefix='guard-', dir=scratch_of(args[0]))
+    stop = shutil.which('false', path=_RAW_PATH) or '/bin/false'
+    for n in REFUSED:
+        os.symlink(shutil.which(n, path=_RAW_PATH) or stop, os.path.join(guard, n))
+    path = guard + (':' + path if path else '')
     def lift():
         # the repo's own commands are not bound by this program's caps
         for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
@@ -187,6 +214,8 @@ elif mode == 'run' and len(args) in (3, 4):
         code, text = p.returncode, p.stdout.decode('utf-8', 'replace')
     except OSError as e:
         code, text = 127, str(e)
+    finally:
+        shutil.rmtree(guard, ignore_errors=True)
     emit({'exit_code': code, 'tail': text[-TAIL:], 'args': args})
 elif mode == 'patch' and len(args) == 5:
     tmp = copy_of(args[0], args[1])

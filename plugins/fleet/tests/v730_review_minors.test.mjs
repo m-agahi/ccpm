@@ -5,7 +5,6 @@
 // m3: parked.py retire moves only <x>/scratch/parked/<run> into <x>/scratch/parked/used.
 // loadParked: a parked part read over the agent cap is soft (the draft is ignored, no cap stop).
 // #63: the intake text says what briefProblem checks (any dot dir, scratch, parked).
-// #39: HEAD past plan_base with no build commit gets its own stop text.
 // nits: #53 decision text, policy-draft finish reason.
 //
 // dont_care: gate line wording beyond what is pinned.
@@ -34,6 +33,21 @@ test("7.3.0 review m1: a policy draft with an IaC sign keeps the CI watch and me
   assert.ok(!p.build.labels.some((l) => /^infra:ci-watch/.test(l)));
   // nit: a policy draft's finish reason names the policy
   assert.match(p.result.reason, /^draft PR \(policy pr_ready false\)/);
+});
+
+test("7.3.0 review m1: a red check on that draft IaC PR is report-only: no CI-fix round, no push, no rerun", async () => {
+  const s = happy();
+  s["infra:policy"] = polOut({ caps: Object.assign({}, DEFAULT_CAPS, { pr_ready: false, ci_trigger: true }) });
+  s["infra:orch-scan"] = scan({ iac_repo: true, reasons: ["IaC repo"] });
+  s["infra:ci-watch:w1"] = (p) => {
+    const a = inputsOf(p).args;
+    return { status: "ok", reason: "w", state: "red", checks: [{ name: "test", state: "FAILURE", bucket: "fail", url: "https://github.com/o/r/actions/runs/77/job/88" }], failed: [{ name: "test", url: "https://github.com/o/r/actions/runs/77/job/88", run_id: "77", excerpt: "FAILED", verified: true }], required: true, head: a[3], elapsed_s: 60, error: null, args: a };
+  };
+  s["role:fleet-ci-classifier:w1"] = { status: "ok", reason: "c", checks: [{ name: "test", cause: "diff" }] };
+  const out = await run(s, ARGS);
+  const after = out.build.labels.slice(out.build.labels.indexOf("infra:ci-watch:w1"));
+  assert.ok(out.build.labels.includes("infra:ci-watch:w1"), out.build.labels.join(", "));
+  assert.ok(!after.some((l) => /^role:fleet-coder|^infra:push|^infra:ci-rerun|^infra:pr-(merge|ready)/.test(l)), after.join(", "));
 });
 
 test("7.3.0 review m2: warnings ride the run-state; a resume restores them; a clean rescan clears the scan warning", async () => {
@@ -120,14 +134,4 @@ test("7.3.0 review #63: the intake TRACKED text names every dot dir, scratch and
   const out = await runOne(happy(), ARGS);
   const p = call(out, "intake").prompt;
   assert.ok(p.includes("has no path part that starts with a dot (such as `.claude/`) or is `scratch` or `parked`"), p);
-});
-
-test("7.3.0 review #39: HEAD past plan_base with no build commit and no run-state names that, not build commits", async () => {
-  const s = happy();
-  const plan = await runOne(s, ARGS);
-  s["infra:verify-plan"] = { ...s["infra:verify-plan"], head: "fedcba9876", commits_since: [], changed_since: [] };
-  const out = await runOne(s, { mode: "build", plan_ref: plan.result.plan_ref, date: ARGS.date, project: "o/r" });
-  assert.equal(out.result.status, "needs_human", out.result.reason);
-  assert.match(out.result.reason, /approved but unresumable: HEAD fedcba9876 is past plan_base \S+ with no build commit and no run-state/);
-  assert.doesNotMatch(out.result.reason, /build commits/);
 });

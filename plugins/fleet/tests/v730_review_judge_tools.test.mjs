@@ -37,3 +37,9 @@ test("7.3.0 review B1: no role dispatched as fleet:judge names the Edit or Write
   assert.ok(copyPara && !TOOL_RE.test(copyPara), copyPara);
   for (const r of ["fleet-test-judge", "fleet-code-judge", "fleet-test-writer", "gate-change-nonweakening-sweep"]) assert.match(ROLE_TEXT[r], /<scratch_copy_cmd> patch <worktree> <tmp> <file> <old> <new>/, r);
 });
+
+test("7.3.0 review B1: of all role files only the coder's names the Edit or Write tool (covers judges a happy run does not dispatch: intent judge, CI classifier)", () => {
+  const named = Object.keys(ROLE_TEXT).filter((r) => TOOL_RE.test(ROLE_TEXT[r]));
+  assert.ok(named.every((r) => r === "fleet-coder"), named.join(", "));
+  assert.ok("fleet-intent-judge" in ROLE_TEXT && "fleet-ci-classifier" in ROLE_TEXT, Object.keys(ROLE_TEXT).join(", "));
+});

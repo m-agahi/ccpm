@@ -1491,7 +1491,7 @@ const PROGRAM_SHA256 = {
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
 "review_paths": "711143e444b4d9772c8023c22fbb93735239030d503dd58247050553d7fce29b",
 "ruleset_surface": "b8fec064efbf7ec62125f71016cde95b4a5edcb0156094cd8050e79a8278f067",
-"scratch_copy": "616a19d98d3b0345165fd4af9f83f2c7411660f59dd101f65b703dee769eb902",
+"scratch_copy": "1807aea9a3afbaac7e63acca21df6ad4b9f1a55f392972cd753eaec6d161a690",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
 "session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
 "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
@@ -5996,14 +5996,7 @@ resume = st;
 resumeState = hr;
 }
 } else if (v.head !== planBase)
-halt(
-"needs_human",
-"approved but unresumable: " +
-((v.commits_since || []).length
-? "branch has build commits without run-state; push manually or delete branch"
-: "HEAD " + v.head + " is past plan_base " + planBase + " with no build commit and no run-state; reset " + branch + " to plan_base or re-run plan"),
-"resume",
-);
+halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
 const policy = (state.policy = ref.policy ? stricterPolicy(await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy), ref.policy, resume ? "the run-state's" : "the current file") : await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
 const prDraft = () => mergeAfter !== null || !policy.caps.pr_ready;
 unattendedOn(policy, input);

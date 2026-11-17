@@ -83,3 +83,38 @@ test("7.3.0 review M1: the denylist refuses env -S, git -c alias.*, and interpre
     rmSync(f.root, { recursive: true, force: true });
   }
 });
+
+test("7.3.0 review M1: a tool the child writes into an env PATH dir mid-run never shadows the shim (the guard dir goes first)", () => {
+  const f = fixture();
+  try {
+    const venv = join(f.root, "venv");
+    mkdirSync(venv);
+    writeFileSync(join(f.tmp, "plant.sh"), "printf '#!/bin/sh\\ntouch " + join(f.root, "planted-reached") + "\\n' > " + join(venv, TF) + "\nchmod +x " + join(venv, TF) + "\n" + TF + " plan\n");
+    const o = JSON.parse(f.py("run", f.wt, f.tmp, JSON.stringify(["sh", "plant.sh"]), JSON.stringify({ PATH: venv })).stdout);
+    assert.ok(existsSync(join(venv, TF)), "the child planted the file");
+    assert.match(o.tail, /shim-reached/);
+    assert.ok(!existsSync(join(f.root, "planted-reached")));
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("7.3.0 review M1: the inline-code scan stops at the program's first operand (a script's or module's own args are not refused)", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.tmp, "a.py"), "import sys; print('args', sys.argv[1:])\n");
+    writeFileSync(join(f.tmp, "a.js"), "console.log('js-ran')\n");
+    for (const [a, re] of [
+      [["python3", "a.py", "-c", "setup.cfg"], /args/],
+      [["python3", "-m", "json.tool", "-c"], /./],
+      [["node", "a.js", "-p", "3000"], /js-ran/],
+      [["sh", "probe.sh", "-c"], /shim-reached/],
+    ]) {
+      const r = f.py("run", f.wt, f.tmp, JSON.stringify(a));
+      assert.equal(r.status, 0, JSON.stringify(a) + " " + r.stderr);
+      assert.match(JSON.parse(r.stdout).tail, re, JSON.stringify(a));
+    }
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});

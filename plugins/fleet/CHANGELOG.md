@@ -176,6 +176,12 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
   keys), and inline program strings: `python* -c`, `node -e`/`-p`/`--eval`/`--print`,
   `perl -e`/`-E`, `ruby -e`, and a shell with `-c`. It is not a sandbox: a child can still run a
   binary by its absolute path; the agent's own hard rules and settings denies cover that.
+- M1 follow-up: the env `PATH` check runs once, before exec, so a child could write a
+  terraform-family file into an env PATH dir (a venv bin) and then call it by name. `run` now puts
+  a per-call guard dir first on the child's PATH: one link per terraform-family name to what the
+  agent PATH resolves it to (the shim), else to `false`. The env PATH dirs keep their order
+  after it. The inline-code scan now reads only the options before the program's first operand
+  (a script, or python `-m <module>`), so `python3 a.py -c x` and `node app.js -p 3000` run.
 - M2 (scratch Write rule): `settingsFor` allows `Write(/<scratch>/chunks/*/*.b64)` only (no nonce,
   so the settings sha holds across a resume), not `Write(/<scratch>/**)`. The plan-ref, park and
   run-state chunk dirs moved to `<scratch>/chunks/`. No Write rule covers `ci-*.json`, `parked/`,
@@ -217,9 +223,9 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
   parked draft is ignored instead of the run stopping.
 - #63: the intake `TRACKED` text now says what `briefProblem` checks: no path part that starts
   with a dot, or is `scratch` or `parked`.
-- #39: a build whose HEAD is past `plan_base` with no build commit and no run-state stops with
-  that text ("HEAD ... is past plan_base ... with no build commit and no run-state"), not "branch
-  has build commits".
+- #39 (stop text when HEAD is past plan_base with no build commit): not changed. `verify_since`
+  lists every commit in plan_base..HEAD, and a commit that is not a fleet commit stops earlier
+  ("branch moved by a non-fleet commit"), so the unresumable stop is reached only with build commits.
 - Nits: the #53 decision text reads "plan-audit passed; the auto gates run" (the intent judge gets
   no `parked_unreadable` input, so it did not rule on it); the run-state chunk rewrite rounds stop
   with stop gate `resume`; the `ws` shadow in `orchScan` is renamed `warns`; a policy draft
@@ -236,7 +242,8 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
   `build_task_run` (plan-ref chunk dir): the chunk dirs under `scratch/chunks/`.
 - New: `v730_review_bookkept`. `v403_schema_types` READS and `build_task_run` ARRAY_SITES: `r.bookkept`
   in `intentProblems`.
-- New: `v730_review_minors`. `v730_parked_unattended` A26: the #53 decision text. `v600_s3`
+- New: `v730_review_minors`; `v730_review_scratch_guard` adds the mid-run guard dir and the
+  operand-scan cases. `v730_parked_unattended` A26: the #53 decision text. `v600_s3`
   2045: the policy-draft finish reason. `v700_inputs_unchanged`: the intake TRACKED text.
   `v730_frozen_dirty` A27: the refusal pins "freeze_digest does not match".
 - `v730_shell_programs` #9 retire: the fixture is `<x>/scratch/parked/<run>`. `v730_intake_parked_path`
