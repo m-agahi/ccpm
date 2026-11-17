@@ -1187,6 +1187,20 @@ site's label, before the guarded step runs. The re-checks count in `agents` but 
 agent cap: the cap refuses exactly the runs it refused in 3.1.0. Not re-checked: the
 `check_cmd` scripts.
 
+**One agent for a reset and its re-check (8.0.0, #62).** Where a step's build dirs are emptied
+right before it (the test writers, the test judge, the coder, the code judge, the commit, each
+push, pr-review and the sweep, and a drift retry with build keys), the reset agent
+`infra:build-reset:<step>` runs `path_check.py` with that step's token as its second command and
+relays the output in its `path_check` slot; no `infra:path-check:<step>` follows. The checks are
+the same: an unshimmed tool or a path problem in a valid relay stops at `iac` with the reset's
+label, before the step. A slot that is missing, null or not the program's output for that
+`[repo, token]` gets one standalone check on sonnet (`infra:path-check:<step>:relay-retry`), then
+stops. A failed reset or a reset relay off its digest or args still stops with "the build dirs
+were not emptied". The reset agent is not the read-only judge agent (it deletes the build dirs);
+the digest and the token carry the check. A happy build makes 7 fewer calls (68 -> 61); the
+agent cap is unchanged, because the cap counted neither the reset nor the re-check. The coder's
+role_file re-ask reset (`fleet-coder:r<m>:drift`) now checks the PATH too.
+
 **Resume replays re-checks.** A `resumeFromRunId` call with the same args (the same `run_nonce`)
 gets the same re-check prompts, so the runtime replays the earlier re-check results, the same as
 every other infra check. A tool planted since then is not seen. Never resume with the same args:

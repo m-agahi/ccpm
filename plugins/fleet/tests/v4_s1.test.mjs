@@ -224,6 +224,8 @@ test("4.0.0 1993 AC-3: a relayed plan_files program sha256 of zeros, or no progr
 function relayRetried(label) {
   const esc = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (/^infra:path-check:/.test(label)) return new RegExp("^" + esc + "(:relay-retry)?$");
+  // 8.0.0 (#62 B1): a reset's broken path_check slot gets the standalone check on sonnet; the mutation applies there too
+  if (/^infra:build-reset:/.test(label)) return new RegExp("^(" + esc + "|infra:path-check:" + esc.slice("infra:build-reset:".length) + ":relay-retry)$");
   return label;
 }
 
@@ -260,10 +262,11 @@ test("4.0.0 1993: a wrong program at every program-running step stops the run (t
     const orig = s[label];
     // after the harness filled the program: a wrong self-hash under a digest
     // that still matches, so only the program check can stop it
-    s.__mutate = { label: relayRetried(label), fn: (r, prompt) => {
-      const o = at(r, path);
+    s.__mutate = { label: relayRetried(label), fn: (r, prompt, real) => {
+      // 8.0.0 (#62 B1): the standalone check after a reset relays path_check at its top level
+      const o = /^infra:path-check:/.test(real) ? r : at(r, path);
       if (o && typeof o === "object") o.program = { name, sha256: "0".repeat(64) };
-      return redigest(label, r, prompt);
+      return redigest(/^infra:path-check:/.test(real) ? real : label, r, prompt);
     } };
     if (orig === undefined) delete s[label];
     const out = await run(s, args || ARGS);

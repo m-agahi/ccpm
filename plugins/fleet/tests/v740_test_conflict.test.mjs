@@ -167,6 +167,8 @@ test("7.4.0 #61 Q4 (b): unattended with the PR open in one run: the rebuilt comm
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "cap");
   assert.match(out.result.reason, /more needed for the rebuilt commit on the open PR/);
+  // 8.0.0 (#62 B1): capped() is 7.4.0's (91): a merged reset+check is one agent off the cap, as the pair was
+  assert.match(out.result.reason, /: 91 dispatched, 14 more needed/);
   // 7.4.0 review A-M2: the head is the script's expected head (the approved sha), never the agent's superseded_head
   const eh = inputsOf(call(out, "infra:replan-reset").prompt).expected_head;
   assert.ok(decisions(out).includes("plan_wrong: build (pr-review re-plan 1: the auto gates, then the build in this run; the PR is open: the new commits go on its head " + eh + ", never force-pushed)"), decisions(out).join("\n"));

@@ -3677,6 +3677,8 @@ writer's `files`, and no writer reports another criterion's file.
 ```text
 5.0.6 (ledger 2019): each writer's own build dir, emptied first; every
 reset comes before its role's PATH re-check, which stays right before it
+8.0.0 (#62 B1): the reset runs that re-check itself (its path_check slot);
+a bad slot gets one standalone check on sonnet (pathRecheckRetry), then stops
 ```
 
 ### `in buildFromRef` (5.0.9 line 6922)

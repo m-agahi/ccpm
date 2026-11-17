@@ -159,7 +159,10 @@ test("1991 short path: a drifting writer retries once as <label>:retry after the
   assert.equal(out.result.status, "ok", out.result.reason);
   const i = out.labels.indexOf("role:fleet-test-writer:short:r1:retry");
   assert.ok(i > 0, out.labels.join(", "));
-  assert.equal(out.labels[i - 1], "infra:path-check:fleet-test-writer:short:r1:retry");
+  // 8.0.0 (#62 B1): the drift reset runs the retry's PATH check (its token names the retry)
+  assert.equal(out.labels[i - 1], "infra:build-reset:fleet-test-writer:short:r1:drift");
+  const reset = out.calls[i - 1];
+  assert.ok(reset.prompt.includes("path_check.py") && inputsOf(reset.prompt).token.endsWith(":fleet-test-writer:short:r1:retry"), reset.prompt);
 });
 
 test("1991: a full-path plan keeps one writer per criterion", async () => {

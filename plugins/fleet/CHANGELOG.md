@@ -10,6 +10,17 @@ Fleet 8.0.0: one major release in two cars. Car A: yaadgaar #74 and #71. Car B: 
 - Version 8.0.0: FLEET_VERSION, the marketplace entry, the root README line and the test pins
   (the harness `SCRIPTS_DIR` among them) move from 7.4.0 to 8.0.0. The plugin keeps the name
   `fleet` until the rename car.
+- Car B1, #62 (first cut, fewer agents): a build-dir reset and its PATH re-check run in one agent.
+  `resetBuild` runs `build_dir.py reset` and then `path_check.py` (the guarded step's token) in
+  `infra:build-reset:<step>` and relays the check in a `path_check` slot; the paired
+  `infra:path-check:<step>` is gone at the 8 sites (test writers, test judge, coder, code judge,
+  commit, push, pr-review, sweep) and at a drift retry with build keys. A happy build makes 61
+  calls, not 68; `capped()` is unchanged (it counted neither agent). Non-weakening: a valid relay
+  with an unshimmed tool stops at `iac` before the step; a missing, null or foreign slot gets one
+  standalone check on sonnet, then stops; a failed or off-digest reset still stops with "the build
+  dirs were not emptied"; every 7.4.0 check site still has a check (site-set test against the
+  7.4.0 baseline). The coder's role_file re-ask reset gains a check. The check now runs in the
+  reset agent, not the read-only judge agent (`v800_reset_path.test.mjs`).
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

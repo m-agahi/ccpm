@@ -201,6 +201,13 @@ export function pathRecheckOut(tools, args) {
   pc.file_sha256 = programSha("path_check");
   return Object.assign({ status: "ok", reason: "checked" }, pc);
 }
+// 8.0.0 (#62 B1): the path_check slot of a build-dir reset (the program's output, no status)
+export function pathSlotOut(tools, args) {
+  const r = pathRecheckOut(tools, args);
+  delete r.status;
+  delete r.reason;
+  return r;
+}
 // 3.1.1: the origin URL program's output
 export function remoteUrlOut(url, repo) {
   const o = { url: url === undefined ? null : url, args: [repo] };
@@ -463,7 +470,13 @@ export async function runOne(script, args0) {
     // 5.0.8 (ledger 2030): an unscripted gh check reads the scenario's answers
     if (!(label in script) && /^infra:gh-identity:/.test(label)) return Object.assign({ status: "ok", reason: "checked" }, ghIdOut(inputsOf(prompt).args, null, script.__gh));
     // 5.0.6 (ledger 2019): unscripted build-dir resets and the teardown succeed
-    if (!(label in script) && /^infra:build-(reset:|clean$)/.test(label)) return buildDirOut(inputsOf(prompt).args);
+    if (!(label in script) && /^infra:build-(reset:|clean$)/.test(label)) {
+      // 8.0.0 (#62 B1): a reset that runs the PATH check too finds no IaC tool on PATH
+      const i = inputsOf(prompt);
+      const r = buildDirOut(i.args);
+      if (/path_check\.py/.test(prompt)) r.path_check = pathSlotOut({}, [i.repo, i.token]);
+      return r;
+    }
     // 5.0.7 (ledger 2020): an unscripted comparison reads the registered maps
     if (!(label in script) && /^infra:hash-diff:/.test(label)) {
       const o = hashDiffOut(inputsOf(prompt).args);
@@ -1370,7 +1383,8 @@ export const PROGRAM_LABELS = [
   // 5.0.7 (ledger 2020): the capped list of changed hasher keys
   [/^infra:hash-diff:/, [[null, "hash_diff", K("hash_diff")]]],
   // 5.0.6 (ledger 2019): the per-role build dirs
-  [/^infra:build-reset:/, [[null, "build_dir", K("build_dir:reset")]]],
+  // 8.0.0 (#62 B1): a reset runs the PATH check in the same agent
+  [/^infra:build-reset:/, [[null, "build_dir", K("build_dir:reset")], ["path_check", "path_check", K("path_check")]]],
   [/^infra:build-clean$/, [[null, "build_dir", K("build_dir:clean")]]],
 ];
 // 6.1.0 D6: fleet_scan.py prints base (in its digest) only when it was given one

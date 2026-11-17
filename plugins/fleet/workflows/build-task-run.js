@@ -1649,6 +1649,7 @@ const PROGRAM_SLOTS = [
 [/^infra:db-up/, [["sweep", "db_sweep"], ["up", "db_up"]]],
 [/^infra:db-down$/, [["down", "db_down"]]],
 [/^infra:hash-diff:/, [[null, "hash_diff"]]],
+[/^infra:build-reset:/, [[null, "build_dir"], ["path_check", "path_check"]]],
 [/^infra:build-/, [[null, "build_dir"]]],
 [/^infra:purge-bytecode:/, [[null, "purge"]]],
 ];
@@ -2914,27 +2915,40 @@ return { test_env: e, test_env_prefix: envPrefix(e), test_env_note: testEnvNote(
 }
 function buildDirPrompt(inputs) {
 const mode = inputs.args[0];
+const pc = mode === "reset" && "token" in inputs;
 return (
-INFRA_STEP + (mode === "reset" ? "empty this run's per-role build dirs (outside the worktree) before the role runs" : "delete this run's build dirs (outside the worktree)") +
+INFRA_STEP + (mode === "reset" ? "empty this run's per-role build dirs (outside the worktree) before the role runs" + (pc ? ", then check the agent PATH" : "") : "delete this run's build dirs (outside the worktree)") +
 ". No other change: never touch the worktree, never commit.\n" +
 "Inputs: " + JSON.stringify(inputs) + "\n" +
-RUN_ONLY +
+(pc ? "Run these two commands exactly as written, unmodified, each as one Bash call, in this order; run nothing else:\n1. " : RUN_ONLY) +
 progCmd("build_dir", inputs.args) + "\n" +
 "It prints one JSON object " + printsKeys("build_dir:" + mode) + COPY_DIGEST +
-"Return {status, reason, " + returnKeys("build_dir:" + mode) + "}."
+(pc
+? "2. " + progCmd("path_check", [inputs.repo, inputs.token]) + "\n" +
+"It prints one JSON object " + printsKeys("path_check") + ": " + relayAs("path_check") + " (the script recomputes the digest). Non-zero exit -> path_check null and its stderr in reason.\n"
+: "") +
+"Return {status, reason, " + returnKeys("build_dir:" + mode) + (pc ? ", path_check" : "") + "}."
 );
 }
-async function resetBuild(tag, keys, phaseName) {
+async function resetBuild(tag, keys, phaseName, site) {
 const label = "infra:build-reset:" + tag;
 const args = ["reset", state.buildScratch, safeName(state.nonce)].concat(keys);
+const chk = site === undefined ? tag : site;
 state.buildResets++;
+const token = "reset-" + state.buildResets + ":" + state.nonce + ":" + chk;
 state.agents++;
-const ic = infraCall(label, buildDirPrompt({ args }), { schema: INFRA_SCHEMA, phase: phaseName });
+const ic = infraCall(label, buildDirPrompt({ args, repo: state.repo, token }), { schema: INFRA_SCHEMA, phase: phaseName });
 const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
 if (!r || r.status !== "ok") halt("failed", label + " returned " + (r ? r.status + ": " + (r.reason || "no reason") : "no result") + "; the build dirs were not emptied");
 requireProgram(r, "build_dir", label);
 if (!relayDigestOk(r, progKeys("build_dir:reset"), "build_dir") || canonical(r.args) !== canonical(args) || canonical(r.dirs) !== canonical(keys.map(buildDirOf)))
-halt("failed", label + ": the relayed result does not match the program's digest or its arguments");
+halt("failed", label + ": the relayed result does not match the program's digest or its arguments; the build dirs were not emptied");
+const pc = r.path_check;
+if (pathRelayProblem(pc, [state.repo, token])) {
+gate(label + ": no usable path_check; checking once more on " + RELAY_RETRY_MODEL);
+return pathRecheckRetry(chk, phaseName);
+}
+pathCheck(pc, state.repo, { label, args: [state.repo, token] });
 }
 async function buildTeardown() {
 const sc = state.buildScratch;
@@ -3132,24 +3146,31 @@ progCmd("path_check", [inputs.repo, inputs.token]) +
 "Return {status, reason, " + returnKeys("path_check") + "}."
 );
 }
-async function pathRecheck(site, phaseName) {
-const one = async (label, model) => {
+async function pathRecheckOne(site, label, model, phaseName) {
 state.pathChecks++;
 const token = "recheck-" + state.pathChecks + ":" + state.nonce + ":" + site;
 state.agents++;
 const ic = infraCall(label, pathRecheckPrompt({ repo: state.repo, token }), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName });
 const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model }));
 return { r, label, token };
-};
-let { r, label, token } = await one("infra:path-check:" + site, infraModel("infra:path-check:" + site));
-if (r == null || r.status !== "ok" || pathRelayProblem(r, [state.repo, token])) {
-gate("infra:path-check:" + site + ": no usable result on " + infraModel("infra:path-check:" + site) + "; checking once more on " + RELAY_RETRY_MODEL);
-({ r, label, token } = await one("infra:path-check:" + site + ":relay-retry", RELAY_RETRY_MODEL));
 }
+function pathRecheckEnd(x) {
+const { r, label, token } = x;
 if (r == null) halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned no result)", "iac");
 if (r.status !== "ok")
 halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned " + r.status + ": " + (r.reason || "no reason") + ")", "iac");
 pathCheck(r, state.repo, { label, args: [state.repo, token] });
+}
+async function pathRecheckRetry(site, phaseName) {
+pathRecheckEnd(await pathRecheckOne(site, "infra:path-check:" + site + ":relay-retry", RELAY_RETRY_MODEL, phaseName));
+}
+async function pathRecheck(site, phaseName) {
+const x = await pathRecheckOne(site, "infra:path-check:" + site, infraModel("infra:path-check:" + site), phaseName);
+if (x.r == null || x.r.status !== "ok" || pathRelayProblem(x.r, [state.repo, x.token])) {
+gate("infra:path-check:" + site + ": no usable result on " + infraModel("infra:path-check:" + site) + "; checking once more on " + RELAY_RETRY_MODEL);
+return pathRecheckRetry(site, phaseName);
+}
+pathRecheckEnd(x);
 }
 function writeStatePrompt(inputs, json, written) {
 const c = chunked(json + "\n");
@@ -3504,8 +3525,8 @@ const d = fp ? { msg: fp, detail: "role_file" } : sp ? { msg: sp, detail: "share
 if (!d) return r;
 const rl = label + ":retry";
 reserve(1, rl);
-if (buildKeys && buildKeys.length) await resetBuild(label.replace(/^role:/, "") + ":drift", buildKeys, opts.phase);
-await pathRecheck(rl.replace(/^role:/, ""), opts.phase);
+if (buildKeys && buildKeys.length) await resetBuild(label.replace(/^role:/, "") + ":drift", buildKeys, opts.phase, rl.replace(/^role:/, ""));
+else await pathRecheck(rl.replace(/^role:/, ""), opts.phase);
 state.agents++;
 const r2 = await roleAgent(role, rl, prompt + "\nYour previous result was refused: " + d.msg + ". Return the whole object again.", opts);
 if (r2 == null) halt("failed", "agent " + rl + " returned no result");
@@ -6417,7 +6438,6 @@ continue;
 const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
 const pushKey = "push" + (pushes > 1 ? "-p" + pushes : "");
 await resetBuild("push" + (pushes > 1 ? ":p" + pushes : ""), [pushKey], "PR");
-await pathRecheck("push" + (pushes > 1 ? ":p" + pushes : ""), "PR");
 const gc = ghFor(remoteSlug) ? ghFor(remoteSlug).gh_cmd : null;
 const pin = { main_worktree: mainWt, branch, default_branch: defaultBranch, approved_sha: approvedSha, remote_slug: remoteSlug, gh_cmd: gc, hook_env: hookEnv(pushKey) };
 const pushArgs = ["push", mainWt, branch, approvedSha, defaultBranch, JSON.stringify(pin.hook_env), gc || "-", gc && PUSH_SLUG_RE.test(String(remoteSlug || "")) ? remoteSlug : "-", "540", remoteUrl].concat(shipParent || ["-", "-"]);
@@ -6953,7 +6973,6 @@ return "w-" + (c ? safeName(c.id) : "short") + "-r" + n;
 async function writerRound(n, pending, codeFindings) {
 const pre = last || (await hasher("hasher:pre-writers:r" + n, mainWt, hashedFiles, "Tests"));
 await resetBuild("writers:r" + n, shortPath ? [writerKey(null, n)] : pending.map((p) => writerKey(p.criterion, n)), "Tests");
-await pathRecheck("writers:r" + n, "Tests");
 if (shortPath) await shortWriter(n, pending, codeFindings);
 else await fullWriters(n, pending, codeFindings);
 return afterWriters(n, pending, pre);
@@ -7159,7 +7178,6 @@ script_findings: SCRIPT_FINDINGS_NOT_RUN,
 });
 if (codeFindings) judgeInputs.code_judge_findings = codeFindings;
 await resetBuild("test-judge:r" + n, ["tjudge-r" + n], "Tests");
-await pathRecheck("test-judge:r" + n, "Tests");
 let tl = "role:fleet-test-judge:r" + n;
 let jt = await judged("fleet-test-judge", tl, "test-judge:r" + n, judgeInputs, mainWt, "Tests", last, hashedFiles, { buildKeys: ["tjudge-r" + n] });
 for (let k = 0; ; k++) {
@@ -7313,7 +7331,6 @@ code_base_ref: codeBaseRef,
 ...roleEnv("coder", "coder-r" + m),
 });
 await resetBuild("coder:r" + m, ["coder-r" + m], "Code");
-await pathRecheck("coder:r" + m, "Code");
 const coderIn = Object.assign({}, codeInputs, { routed_findings: coderFindings });
 let coder = await callRole("fleet-coder", "role:fleet-coder:r" + m, coderIn, "Code", null, true, true);
 const coderFileOnly = coder.status === "ok" && roleFileProblem("fleet-coder", coder) && !driftOf("fleet-coder", coder) ? roleFileProblem("fleet-coder", coder) : null;
@@ -7394,7 +7411,6 @@ continue;
 }
 const judgeObligations = await checkScripts("infra:check-scripts:r" + m, planFacts.repo_obligations, mainWt, "Code");
 await resetBuild("code-judge:r" + m, ["cjudge-r" + m], "Code");
-await pathRecheck("code-judge:r" + m, "Code");
 const jc = await judged(
 "fleet-code-judge",
 "role:fleet-code-judge:r" + m,
@@ -7482,7 +7498,6 @@ const subject = commitsMade ? subj.fix(m) : subj.main;
 const prParent = !commitsMade && opt.prHead ? opt.prHead : null;
 if (prParent) reserve(OPEN_PR_SHIP_AGENTS, "the rebuilt commit on the open PR (commit, push, PR update, review)");
 await resetBuild("commit:r" + m, ["commit-r" + m], "Code");
-await pathRecheck("commit:r" + m, "Code");
 const cs = await infra(
 "infra:commit:r" + m,
 commitStepPrompt(Object.assign({
@@ -7599,7 +7614,6 @@ const pre = await hasher("hasher:pre-review:v" + k, ctx.mainWt, ctx.hashedFiles,
 if (pre.fingerprint.head !== ctx.approvedSha)
 halt("needs_human", "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha, "review");
 await resetBuild("pr-review:v" + k, ["review-v" + k], "Review");
-await pathRecheck("pr-review:v" + k, "Review");
 const reviewIn = Object.assign({}, inputs, roleEnv("review", "review-v" + k), {
 allowed_additions: stripHeldOut(ctx.allowedAdditions === undefined ? null : ctx.allowedAdditions),
 prior_findings: stripHeldOut(ctx.priorFindings || []),
@@ -7616,7 +7630,6 @@ const triggers = changedPaths.filter((p) => GATE_PATH_RE.test(p));
 if (r.touches_gate === true || triggers.length) {
 gate("review v" + k + ": sweep triggered (" + (r.touches_gate === true ? "touches_gate" : "") + (triggers.length ? " paths " + logPath(triggers.join(", ")) : "") + ")");
 await resetBuild("sweep:v" + k, ["sweep-v" + k], "Review");
-await pathRecheck("sweep:v" + k, "Review");
 const js = await judged(
 "gate-change-nonweakening-sweep",
 "role:gate-change-nonweakening-sweep:v" + k,

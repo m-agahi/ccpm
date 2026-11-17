@@ -107,10 +107,11 @@ const SCENARIOS = {
 // 7.3.0 car 4: the workspace exclude_add program and settings rewrite (#9), format-plan via format_files plan mode (#9), commit-plan retire via parked.py (#9), purge.py (#9), the chunk Write-tool steps (Q4 (a)), scratch_copy_cmd role inputs and role shas (#54, #60, #65), the call-shaped caller cap text (#40) (probe unchanged)
 // 7.4.0 car 1: the push and push-probe prompts run push.py (#9), the hook stop text (#36 B1) (probe unchanged)
 // 7.4.0 car 6: the role shas (#26, #45, #46, #60, #61, #72), the uv build vars (#73), touches_gate, test_conflict, target and parent in the schemas (no new call; probe unchanged)
+// 8.0.0 car B1 (#62): each build-dir reset runs the PATH check of its step (repo, token, the path_check command and slot): 7 fewer build calls, no standalone infra:path-check at the paired sites (probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 90, sha256: "0f514ca75005c22d5e8f697d92b1f52662230aa25127c89b68afff064c247ddb" },
-  "confirm auto (gates, then build in one run)": { calls: 92, sha256: "e94c5a28968fdc91f2f928148913ae2a852d1988f68a59bb325aae029f7d5123" },
-  "short path (one test writer)": { calls: 89, sha256: "85779206422f7020f4461f75862fd552e175b2195d5a51b331b52b6f8feba1bb" },
+  "plan then build (confirm ask)": { calls: 83, sha256: "3bf76a603dbd32e2e021494c8c4ba412c27d46d7eeda7d88fdf2dc0fbcbb6c23" },
+  "confirm auto (gates, then build in one run)": { calls: 85, sha256: "72fbbbd2f6de5a84039cfe54ca406f9f4b9e31df82c631a46b9dd3d539a1d9a9" },
+  "short path (one test writer)": { calls: 82, sha256: "f4e550113ce78e8920c33ecc8c8dd1b7c7c8c1bddf5c304af457cde769b250a3" },
   "probe": { calls: 2, sha256: "a8ceccc781cf8954f6b925f6d96462387d40cede1db8d318d28eb0441753e8de" },
 };
 

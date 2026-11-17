@@ -117,6 +117,8 @@ import {
   YURN42,
   pushOn,
   K,
+  buildDirOut,
+  pathSlotOut,
 } from "./harness.mjs";
 
 
@@ -10496,6 +10498,26 @@ const recheckPlanted = (prompt) => {
   const i = inputsOf(prompt);
   return pathRecheckOut({ [TF_TOOLS[0]]: REAL_TOOL }, [i.repo, i.token]);
 };
+// 8.0.0 (#62 B1): at these sites the build-dir reset runs the check (its path_check slot)
+const MERGED_SITES = new Set(["writers:r1", "test-judge:r1", "coder:r1", "code-judge:r1", "commit:r1", "push", "pr-review:v1", "sweep:v1"]);
+const checkLabel = (site) => (MERGED_SITES.has(site) ? "infra:build-reset:" : "infra:path-check:") + site;
+// a merged reset relay whose path_check slot is f's re-check relay (status and reason dropped; null stays null)
+const resetWith = (f) => (prompt) => {
+  const i = inputsOf(prompt);
+  const r = buildDirOut(i.args);
+  const pc = f(prompt);
+  if (pc && typeof pc === "object") {
+    delete pc.status;
+    delete pc.reason;
+    delete pc.__raw;
+  }
+  r.path_check = pc;
+  return r;
+};
+const plantAt = (s, site) => {
+  if (MERGED_SITES.has(site)) s["infra:build-reset:" + site] = resetWith(recheckPlanted);
+  else s["infra:path-check:" + site] = recheckPlanted;
+};
 
 test("3.1.1 PATH re-check: every guarded step is preceded by its own re-check (hashers aside)", async () => {
   const out = await run(happy(), ARGS);
@@ -10505,31 +10527,34 @@ test("3.1.1 PATH re-check: every guarded step is preceded by its own re-check (h
     const at = out.labels.indexOf(step);
     assert.ok(at > 0, step);
     const before = out.labels.slice(0, at).filter((l) => !/^hasher:/.test(l));
-    assert.equal(before[before.length - 1], "infra:path-check:" + site, step + " is guarded");
+    assert.equal(before[before.length - 1], checkLabel(site), step + " is guarded");
+    // 8.0.0 (#62 B1): a merged reset runs the check program with this site's token
+    if (MERGED_SITES.has(site)) assert.ok(call(out, checkLabel(site)).prompt.includes("path_check.py") && inputsOf(call(out, checkLabel(site)).prompt).token.endsWith(":" + site), site);
   }
 });
 
 test("3.1.1 PATH re-check: a tool planted after preflight is caught at the next check; the guarded step never runs", async () => {
   for (const [site, step] of RECHECK_SITES) {
     const s = happy();
-    s["infra:path-check:" + site] = recheckPlanted;
+    plantAt(s, site);
     const out = await run(s, ARGS);
     assert.equal(out.result.status, "needs_human", site);
     assert.equal(out.result.stop_gate, "iac", site);
     assert.match(out.result.reason, NOT_SHIMMED, site);
-    assert.ok(out.result.reason.includes("infra:path-check:" + site), site);
+    assert.ok(out.result.reason.includes(checkLabel(site)), site);
     assert.ok(!out.labels.includes(step), site + ": " + step + " never runs");
   }
   // the coder case in words: preflight and every earlier re-check pass, the coder's re-check finds the tool
   const s = happy();
-  s["infra:path-check:coder:r1"] = recheckPlanted;
+  plantAt(s, "coder:r1");
   const out = await run(s, ARGS);
   assert.ok(out.labels.includes("role:fleet-test-judge:r1"));
   assert.ok(!out.labels.some((l) => l.startsWith("role:fleet-coder")));
 });
 
 test("3.1.1 PATH re-check: a failed, tampered, path-problem or other-step result stops at iac", async () => {
-  const site = "code-judge:r1";
+  // 8.0.0 (#62 B1): code-judge:r1 is a merged reset (the slot, then the standalone sonnet check); format-code:r1 a standalone check
+  for (const [site, step] of [["code-judge:r1", "role:fleet-code-judge:r1"], ["format-code:r1", "infra:format-code:r1"]]) {
   const cases = [
     () => null,
     () => ({ status: "failed", reason: "python3 exited 1" }),
@@ -10561,20 +10586,25 @@ test("3.1.1 PATH re-check: a failed, tampered, path-problem or other-step result
   ];
   for (const [k, f] of cases.entries()) {
     const s = happy();
-    s["infra:path-check:" + site] = (p) => (f(p) === null ? null : Object.assign(f(p), { __raw: true }));
+    const raw = (p) => (f(p) === null ? null : Object.assign(f(p), { __raw: true }));
+    if (MERGED_SITES.has(site)) s["infra:build-reset:" + site] = resetWith(f);
+    else s["infra:path-check:" + site] = raw;
     // 4.0.0 (1990): a broken relay is checked once more on sonnet; it is broken there too
-    s["infra:path-check:" + site + ":relay-retry"] = s["infra:path-check:" + site];
+    s["infra:path-check:" + site + ":relay-retry"] = raw;
     const out = await run(s, ARGS);
-    assert.equal(out.result.status, "needs_human", String(k));
-    assert.equal(out.result.stop_gate, "iac", String(k) + " " + out.result.reason);
-    assert.ok(!out.labels.includes("role:fleet-code-judge:r1"), String(k));
+    assert.equal(out.result.status, "needs_human", site + " " + String(k));
+    assert.equal(out.result.stop_gate, "iac", site + " " + String(k) + " " + out.result.reason);
+    assert.ok(!out.labels.includes(step), site + " " + String(k));
+  }
   }
 });
 
 test("3.1.1 PATH re-check: each check runs the same program with a fresh token; a resumed run never replays a cached pass", async () => {
   const out = await run(happy(), ARGS);
   const prog = extractPy("PATH_CHECK_PY_BEGIN", "PATH_CHECK_PY_END", "PATH_CHECK_PY");
-  const checks = out.calls.filter((c) => /^infra:path-check:/.test(c.label));
+  // 8.0.0 (#62 B1): and the merged resets, which run the same program
+  const isCheck = (c) => /^infra:path-check:/.test(c.label) || (/^infra:build-reset:/.test(c.label) && c.prompt.includes("path_check.py"));
+  const checks = out.calls.filter(isCheck);
   assert.ok(checks.length >= RECHECK_SITES.length);
   const tokens = checks.map((c) => inputsOf(c.prompt).token);
   assert.equal(new Set(tokens).size, tokens.length, "no two checks share a token");
@@ -10593,11 +10623,11 @@ test("3.1.1 PATH re-check: each check runs the same program with a fresh token; 
   const first = await run(s1, ARGS);
   assert.equal(first.result.status, "failed", first.result.reason);
   const recorded = {};
-  for (const c of first.calls.filter((x) => /^infra:path-check:/.test(x.label))) {
+  for (const c of first.calls.filter(isCheck)) {
     const i = inputsOf(c.prompt);
-    recorded[c.label] = pathRecheckOut({}, [i.repo, i.token]);
+    recorded[c.label] = /^infra:build-reset:/.test(c.label) ? Object.assign(buildDirOut(i.args), { path_check: pathSlotOut({}, [i.repo, i.token]) }) : pathRecheckOut({}, [i.repo, i.token]);
   }
-  assert.ok(recorded["infra:path-check:coder:r1"], "run 1 checked before the coder");
+  assert.ok(recorded["infra:build-reset:coder:r1"], "run 1 checked before the coder");
   const s2 = happy();
   for (const [label, r] of Object.entries(recorded)) {
     s2[label] = Object.assign({}, r, { __raw: true });
@@ -10657,19 +10687,19 @@ test("3.1.2 PATH re-check: the intent judge and the gate sweep are each preceded
     const at = out.labels.indexOf(step);
     assert.ok(at > 0, step);
     const before = out.labels.slice(0, at).filter((l) => !/^hasher:/.test(l));
-    assert.equal(before[before.length - 1], "infra:path-check:" + site, step + " is guarded");
+    assert.equal(before[before.length - 1], checkLabel(site), step + " is guarded");
   }
 });
 
 test("3.1.2 PATH re-check: a tool planted right before the intent judge or the sweep stops the run; the step never runs", async () => {
   for (const [site, step, mk, args] of EXTRA_SITES) {
     const s = mk();
-    s["infra:path-check:" + site] = recheckPlanted;
+    plantAt(s, site);
     const out = await run(s, args);
     assert.equal(out.result.status, "needs_human", site);
     assert.equal(out.result.stop_gate, "iac", site);
     assert.match(out.result.reason, NOT_SHIMMED, site);
-    assert.ok(out.result.reason.includes("infra:path-check:" + site), site);
+    assert.ok(out.result.reason.includes(checkLabel(site)), site);
     assert.ok(!out.labels.includes(step), site + ": " + step + " never runs");
   }
   // build mode with confirm auto re-runs the intent judge: intent:rerun guards it
@@ -10702,12 +10732,15 @@ test("3.1.2 PATH re-check (mutant R6): a not-ok status with a valid digest and s
   for (const site of ["plan-audit", "code-judge:r1", "pr-review:v1"]) {
     for (const status of ["failed", "needs_human"]) {
       const s = happy();
-      s["infra:path-check:" + site] = (p) => {
+      const notOk = (p) => {
         const i = inputsOf(p);
         return Object.assign(pathRecheckOut({}, [i.repo, i.token]), { status, reason: "x", __raw: true });
       };
+      // 8.0.0 (#62 B1): a merged reset with no usable slot hands over to the standalone sonnet check
+      if (MERGED_SITES.has(site)) s["infra:build-reset:" + site] = resetWith(() => null);
+      else s["infra:path-check:" + site] = notOk;
       // 4.0.0 (1990): the sonnet relay retry says the same
-      s["infra:path-check:" + site + ":relay-retry"] = s["infra:path-check:" + site];
+      s["infra:path-check:" + site + ":relay-retry"] = notOk;
       const out = await run(s, ARGS);
       assert.equal(out.result.status, "needs_human", site + " " + status);
       assert.equal(out.result.stop_gate, "iac", site + " " + status + ": " + out.result.reason);
@@ -10762,7 +10795,9 @@ function jsPathRecheck(agentStub) {
     'function nonced(p) { return p + "\\nRun nonce: " + state.nonce; }\n' +
     // 6.0.0 (ledger 2044): the token-counting wrapper of agent()
     "const agentT = (p, o) => agent(p, o);\n";
-  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "printedProgram", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel", "programSlots", "nullable", "mergeProp", "slotKeys", "programSchema", "fileShaRule", "infraCall", "emitProg", "progKeys", "printsKeys", "returnKeys"].map((n) => grab(n)).join("\n") + grab("pathRecheck", "async function ");
+  const fns = ["codePointCompare", "canonical", "utf8Bytes", "rotr", "sha256Hex", "relayDigestOk", "printedProgram", "programSha", "programProblem", "progCmd", "shQuote", "pathRelayProblem", "pathCheck", "pathRecheckPrompt", "infraModel", "programSlots", "nullable", "mergeProp", "slotKeys", "programSchema", "fileShaRule", "infraCall", "emitProg", "progKeys", "printsKeys", "returnKeys", "pathRecheckEnd"].map((n) => grab(n)).join("\n") +
+    // 8.0.0 (#62 B1): one check, and the sonnet check a reset's bad slot hands over to
+    grab("pathRecheckOne", "async function ") + grab("pathRecheckRetry", "async function ") + grab("pathRecheck", "async function ");
   return new Function("agent", consts + fns + "\nreturn pathRecheck;")(agentStub);
 }
 

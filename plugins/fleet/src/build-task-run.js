@@ -1815,6 +1815,8 @@ const PROGRAM_SLOTS = [
   [/^infra:db-down$/, [["down", "db_down"]]],
   // 5.0.7
   [/^infra:hash-diff:/, [[null, "hash_diff"]]],
+  // 8.0.0 (#62 B1): a reset runs the PATH check of the step it guards in the same agent
+  [/^infra:build-reset:/, [[null, "build_dir"], ["path_check", "path_check"]]],
   // 5.0.6
   [/^infra:build-/, [[null, "build_dir"]]],
   // 7.3.0 (#9)
@@ -3199,28 +3201,46 @@ function roleEnv(consumer, key) {
 }
 function buildDirPrompt(inputs) {
   const mode = inputs.args[0];
+  // 8.0.0 (#62 B1): a reset with a token also runs the PATH check (read only) of the step it guards
+  const pc = mode === "reset" && "token" in inputs;
   return (
-    INFRA_STEP + (mode === "reset" ? "empty this run's per-role build dirs (outside the worktree) before the role runs" : "delete this run's build dirs (outside the worktree)") +
+    INFRA_STEP + (mode === "reset" ? "empty this run's per-role build dirs (outside the worktree) before the role runs" + (pc ? ", then check the agent PATH" : "") : "delete this run's build dirs (outside the worktree)") +
     ". No other change: never touch the worktree, never commit.\n" +
     "Inputs: " + JSON.stringify(inputs) + "\n" +
-    RUN_ONLY +
+    (pc ? "Run these two commands exactly as written, unmodified, each as one Bash call, in this order; run nothing else:\n1. " : RUN_ONLY) +
     progCmd("build_dir", inputs.args) + "\n" +
     "It prints one JSON object " + printsKeys("build_dir:" + mode) + COPY_DIGEST +
-    "Return {status, reason, " + returnKeys("build_dir:" + mode) + "}."
+    (pc
+      ? "2. " + progCmd("path_check", [inputs.repo, inputs.token]) + "\n" +
+        "It prints one JSON object " + printsKeys("path_check") + ": " + relayAs("path_check") + " (the script recomputes the digest). Non-zero exit -> path_check null and its stderr in reason.\n"
+      : "") +
+    "Return {status, reason, " + returnKeys("build_dir:" + mode) + (pc ? ", path_check" : "") + "}."
   );
 }
 // Empty the build dirs of `keys` right before their role runs
-async function resetBuild(tag, keys, phaseName) {
+// 8.0.0 (#62 B1): and check the agent PATH for that step (site; default the tag) in the same agent.
+// One agent, one buildResets count: capped() is unchanged; a bad path_check slot gets the one
+// standalone check on RELAY_RETRY_MODEL (a pathChecks count), then stops at iac.
+async function resetBuild(tag, keys, phaseName, site) {
   const label = "infra:build-reset:" + tag;
   const args = ["reset", state.buildScratch, safeName(state.nonce)].concat(keys);
+  const chk = site === undefined ? tag : site;
   state.buildResets++;
+  const token = "reset-" + state.buildResets + ":" + state.nonce + ":" + chk;
   state.agents++;
-  const ic = infraCall(label, buildDirPrompt({ args }), { schema: INFRA_SCHEMA, phase: phaseName });
+  const ic = infraCall(label, buildDirPrompt({ args, repo: state.repo, token }), { schema: INFRA_SCHEMA, phase: phaseName });
   const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model: infraModel(label) }));
   if (!r || r.status !== "ok") halt("failed", label + " returned " + (r ? r.status + ": " + (r.reason || "no reason") : "no result") + "; the build dirs were not emptied");
   requireProgram(r, "build_dir", label);
   if (!relayDigestOk(r, progKeys("build_dir:reset"), "build_dir") || canonical(r.args) !== canonical(args) || canonical(r.dirs) !== canonical(keys.map(buildDirOf)))
-    halt("failed", label + ": the relayed result does not match the program's digest or its arguments");
+    halt("failed", label + ": the relayed result does not match the program's digest or its arguments; the build dirs were not emptied");
+  const pc = r.path_check;
+  // pathRelayProblem refuses a null, a non-object and a relay of another program, args or token
+  if (pathRelayProblem(pc, [state.repo, token])) {
+    gate(label + ": no usable path_check; checking once more on " + RELAY_RETRY_MODEL);
+    return pathRecheckRetry(chk, phaseName);
+  }
+  pathCheck(pc, state.repo, { label, args: [state.repo, token] });
 }
 async function buildTeardown() {
   const sc = state.buildScratch;
@@ -3446,25 +3466,33 @@ function pathRecheckPrompt(inputs) {
   );
 }
 
-async function pathRecheck(site, phaseName) {
-  const one = async (label, model) => {
-    state.pathChecks++;
-    const token = "recheck-" + state.pathChecks + ":" + state.nonce + ":" + site;
-    state.agents++;
-    const ic = infraCall(label, pathRecheckPrompt({ repo: state.repo, token }), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName });
-    const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model }));
-    return { r, label, token };
-  };
-  // the check runs on haiku
-  let { r, label, token } = await one("infra:path-check:" + site, infraModel("infra:path-check:" + site));
-  if (r == null || r.status !== "ok" || pathRelayProblem(r, [state.repo, token])) {
-    gate("infra:path-check:" + site + ": no usable result on " + infraModel("infra:path-check:" + site) + "; checking once more on " + RELAY_RETRY_MODEL);
-    ({ r, label, token } = await one("infra:path-check:" + site + ":relay-retry", RELAY_RETRY_MODEL));
-  }
+async function pathRecheckOne(site, label, model, phaseName) {
+  state.pathChecks++;
+  const token = "recheck-" + state.pathChecks + ":" + state.nonce + ":" + site;
+  state.agents++;
+  const ic = infraCall(label, pathRecheckPrompt({ repo: state.repo, token }), { schema: PATH_RECHECK_SCHEMA, agentType: JUDGE_AGENT, phase: phaseName });
+  const r = await agentT(ic.prompt, Object.assign({}, ic.opts, { label, model }));
+  return { r, label, token };
+}
+function pathRecheckEnd(x) {
+  const { r, label, token } = x;
   if (r == null) halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned no result)", "iac");
   if (r.status !== "ok")
     halt("needs_human", NOT_SHIMMED + " (the PATH re-check " + label + " could not complete: it returned " + r.status + ": " + (r.reason || "no reason") + ")", "iac");
   pathCheck(r, state.repo, { label, args: [state.repo, token] });
+}
+// the one check on RELAY_RETRY_MODEL after a first check gave no usable result
+async function pathRecheckRetry(site, phaseName) {
+  pathRecheckEnd(await pathRecheckOne(site, "infra:path-check:" + site + ":relay-retry", RELAY_RETRY_MODEL, phaseName));
+}
+async function pathRecheck(site, phaseName) {
+  // the check runs on haiku
+  const x = await pathRecheckOne(site, "infra:path-check:" + site, infraModel("infra:path-check:" + site), phaseName);
+  if (x.r == null || x.r.status !== "ok" || pathRelayProblem(x.r, [state.repo, x.token])) {
+    gate("infra:path-check:" + site + ": no usable result on " + infraModel("infra:path-check:" + site) + "; checking once more on " + RELAY_RETRY_MODEL);
+    return pathRecheckRetry(site, phaseName);
+  }
+  pathRecheckEnd(x);
 }
 
 // written (7.3.0, #47a): parallel writers already wrote the chunk files; the step runs the program only
@@ -3869,8 +3897,9 @@ async function retryOnDrift(role, label, prompt, opts, r, buildKeys) {
   if (!d) return r;
   const rl = label + ":retry";
   reserve(1, rl);
-  if (buildKeys && buildKeys.length) await resetBuild(label.replace(/^role:/, "") + ":drift", buildKeys, opts.phase);
-  await pathRecheck(rl.replace(/^role:/, ""), opts.phase);
+  // 8.0.0 (#62 B1): the reset runs the retry's PATH check; with no build keys, the standalone check
+  if (buildKeys && buildKeys.length) await resetBuild(label.replace(/^role:/, "") + ":drift", buildKeys, opts.phase, rl.replace(/^role:/, ""));
+  else await pathRecheck(rl.replace(/^role:/, ""), opts.phase);
   state.agents++;
   const r2 = await roleAgent(role, rl, prompt + "\nYour previous result was refused: " + d.msg + ". Return the whole object again.", opts);
   if (r2 == null) halt("failed", "agent " + rl + " returned no result");
@@ -7080,7 +7109,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         const pushLabel = "infra:push" + (pushes > 1 ? ":p" + pushes : "");
         const pushKey = "push" + (pushes > 1 ? "-p" + pushes : "");
         await resetBuild("push" + (pushes > 1 ? ":p" + pushes : ""), [pushKey], "PR");
-        await pathRecheck("push" + (pushes > 1 ? ":p" + pushes : ""), "PR");
         // 7.4.0 (#9): push.py checks, pushes once, retries the network and reads origin's head (540 s deadline)
         const gc = ghFor(remoteSlug) ? ghFor(remoteSlug).gh_cmd : null;
         // the repo's pre-push hooks see the run's test database
@@ -7688,7 +7716,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     const pre = last || (await hasher("hasher:pre-writers:r" + n, mainWt, hashedFiles, "Tests"));
     // each writer's own build dir, emptied first
     await resetBuild("writers:r" + n, shortPath ? [writerKey(null, n)] : pending.map((p) => writerKey(p.criterion, n)), "Tests");
-    await pathRecheck("writers:r" + n, "Tests");
     if (shortPath) await shortWriter(n, pending, codeFindings);
     else await fullWriters(n, pending, codeFindings);
     return afterWriters(n, pending, pre);
@@ -7912,7 +7939,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       });
       if (codeFindings) judgeInputs.code_judge_findings = codeFindings;
       await resetBuild("test-judge:r" + n, ["tjudge-r" + n], "Tests");
-      await pathRecheck("test-judge:r" + n, "Tests");
       let tl = "role:fleet-test-judge:r" + n;
       let jt = await judged("fleet-test-judge", tl, "test-judge:r" + n, judgeInputs, mainWt, "Tests", last, hashedFiles, { buildKeys: ["tjudge-r" + n] });
       for (let k = 0; ; k++) {
@@ -8086,7 +8112,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         ...roleEnv("coder", "coder-r" + m),
       });
       await resetBuild("coder:r" + m, ["coder-r" + m], "Code");
-      await pathRecheck("coder:r" + m, "Code");
       const coderIn = Object.assign({}, codeInputs, { routed_findings: coderFindings });
       let coder = await callRole("fleet-coder", "role:fleet-coder:r" + m, coderIn, "Code", null, true, true);
       const coderFileOnly = coder.status === "ok" && roleFileProblem("fleet-coder", coder) && !driftOf("fleet-coder", coder) ? roleFileProblem("fleet-coder", coder) : null;
@@ -8173,7 +8198,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // re-check check_cmd scripts in the tree the judge sees
       const judgeObligations = await checkScripts("infra:check-scripts:r" + m, planFacts.repo_obligations, mainWt, "Code");
       await resetBuild("code-judge:r" + m, ["cjudge-r" + m], "Code");
-      await pathRecheck("code-judge:r" + m, "Code");
       const jc = await judged(
         "fleet-code-judge",
         "role:fleet-code-judge:r" + m,
@@ -8270,7 +8294,6 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // the PR is only touched when its push, PR update and re-review all fit the agent cap
       if (prParent) reserve(OPEN_PR_SHIP_AGENTS, "the rebuilt commit on the open PR (commit, push, PR update, review)");
       await resetBuild("commit:r" + m, ["commit-r" + m], "Code");
-      await pathRecheck("commit:r" + m, "Code");
       const cs = await infra(
         "infra:commit:r" + m,
         commitStepPrompt(Object.assign({
@@ -8398,7 +8421,6 @@ async function reviewStep(k, ctx) {
       halt("needs_human", "review v" + k + ": worktree HEAD " + pre.fingerprint.head + " is not the pushed " + ctx.approvedSha, "review");
     // the review and the sweep run repo tests
     await resetBuild("pr-review:v" + k, ["review-v" + k], "Review");
-    await pathRecheck("pr-review:v" + k, "Review");
     // pr-review only (the sweep keeps the shared inputs)
     const reviewIn = Object.assign({}, inputs, roleEnv("review", "review-v" + k), {
       allowed_additions: stripHeldOut(ctx.allowedAdditions === undefined ? null : ctx.allowedAdditions),
@@ -8416,7 +8438,6 @@ async function reviewStep(k, ctx) {
     if (r.touches_gate === true || triggers.length) {
       gate("review v" + k + ": sweep triggered (" + (r.touches_gate === true ? "touches_gate" : "") + (triggers.length ? " paths " + logPath(triggers.join(", ")) : "") + ")");
       await resetBuild("sweep:v" + k, ["sweep-v" + k], "Review");
-      await pathRecheck("sweep:v" + k, "Review");
       const js = await judged(
         "gate-change-nonweakening-sweep",
         "role:gate-change-nonweakening-sweep:v" + k,

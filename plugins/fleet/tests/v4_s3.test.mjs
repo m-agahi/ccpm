@@ -122,7 +122,8 @@ test("4.0.0 1990 AC-1990-2: every infra agent runs on its INFRA_TIER model; ever
     const w = wantTier(c.label);
     assert.ok(w, "no expected tier for " + c.label);
     assert.equal(c.opts.model, w, c.label);
-    if (/^infra:path-check:/.test(c.label)) checks++;
+    // 8.0.0 (#62 B1): a build-dir reset runs the check too (haiku, the reset's tier)
+    if (/^infra:path-check:/.test(c.label) || (/^infra:build-reset:/.test(c.label) && c.prompt.includes("path_check.py"))) checks++;
   }
   assert.ok(checks >= 10, "the happy run has its PATH checks");
 });
@@ -532,8 +533,10 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // 6.0.0 review S6, S7a: + the CI write-back (ledger read and write :ci) and the run-end stats block
   // 7.0.0 (yaadgaar #699): - the legacy ledger read and write (main and :ci): the source is inert
   // 7.0.0 review F2: + the yaadgaar read and write (main and :ci): the default task is yaadgaar #42
-  assert.equal(out.build.calls.length, 68, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 67);
+  // 8.0.0 (#62 B1): - 7 PATH re-checks (writers, test judge, coder, code judge, commit, push,
+  // pr-review): each runs in its build-dir reset; capped() is unchanged
+  assert.equal(out.build.calls.length, 61, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 60);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -604,7 +607,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     // 5.0.6 (ledger 2019): 50 + 7 build-dir resets + the teardown
     // 6.0.0 (ledger 2033): + infra:policy; review S6, S7a: + 3
     // 7.0.0 (yaadgaar #699): - 4 legacy ledger steps; review F2: + 4 yaadgaar steps (the default task)
-    assert.equal(b.calls.length, 68);
+    // 8.0.0 (#62 B1): - 7 PATH re-checks (each runs in its build-dir reset)
+    assert.equal(b.calls.length, 61);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });
