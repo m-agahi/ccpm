@@ -142,7 +142,8 @@ test("4.0.2 1997: every shipped program a prompt can run has a PROGRAM_SLOTS ent
   const gates = new Function(grabTable("PROGRAM_SLOTS") + "\nreturn PROGRAM_SLOTS;")().find(([re]) => re.test("infra:gates:r1"));
   if (/\nfunction gatePrompt\([^]*?progCmd\(id\.split\(":"\)\[0\], args\)/.test(SOURCE)) for (const [, n] of gates[1]) names.add(n);
   // 7.3.0 (#54): scratch_copy.py is run by the copy roles (scratchCopyCmd), which relay nothing from it: no slot
-  const roleRun = /\nfunction scratchCopyCmd\(\) \{[^]*?programSha\("scratch_copy"\)/.test(SOURCE) ? ["scratch_copy"] : [];
+  // 8.0.0 (G4): scratchCopyCmd(n = "scratch_copy") runs programSha(n); the held-out runner's held_out_cmd is scratchCopyCmd("held_out")
+  const roleRun = /\nfunction scratchCopyCmd\(n = "scratch_copy"\) \{[^]*?programSha\(n\)/.test(SOURCE) ? ["scratch_copy"] : [];
   assert.deepEqual([...names, ...roleRun].sort(), PROGRAMS.map(([n]) => n).sort(), "every shipped program is run by some prompt");
   const table = new Function(grabTable("PROGRAM_SLOTS") + "\nreturn PROGRAM_SLOTS;")();
   const slotted = new Set(table.flatMap(([, slots]) => slots.map(([, n]) => n)));

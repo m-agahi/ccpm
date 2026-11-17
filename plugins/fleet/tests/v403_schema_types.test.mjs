@@ -408,6 +408,8 @@ const READS = {
     "pc array": "parsed: the sealed or relayed per_criterion; an array is refused",
     "v integer": "parsed: a per_criterion count; a non-integer is refused",
     "h.sha256 string-re": "parsed: the sealed or relayed sha256; a non-hex value is refused",
+    // 8.0.0 (G4): a non-string (an array of one hex string) would pass the RE test by coercion
+    "h.sha256 string": "parsed: the sealed or relayed sha256; a non-string is refused",
   },
   // 8.0.0 (G3): the planner's top-level held-out list (absent or empty: no write step)
   heldOutWrite: { "ex array": SP + "held_out_examples" },

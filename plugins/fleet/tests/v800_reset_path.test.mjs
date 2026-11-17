@@ -113,8 +113,9 @@ test("8.0.0 B1-1: the happy build drops 7 calls (68 -> 61): each paired reset ru
   // 8.0.0 (G3): + 1 plan call (infra:held-out:write)
   assert.equal(out.plan.calls.length, 21, out.plan.labels.join(", "));
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
-  assert.equal(out.build.calls.length, 62, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 61);
+  // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1; the runner is capped)
+  assert.equal(out.build.calls.length, 64, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 63);
   for (const [site] of MERGED) {
     assert.ok(!out.build.labels.includes("infra:path-check:" + site), site + ": no standalone check");
     const c = call(out.build, "infra:build-reset:" + site);
@@ -245,8 +246,8 @@ test("8.0.0 B1-5 (non-weakening): every PATH-check site of 7.4.0 still has a che
     for (const site of BASELINE[name]) assert.ok(sites.includes(site), name + ": no check at " + site + " (" + sites.join(", ") + ")");
     // no site lost; a reset that had no check before may gain one
     const extra = sites.filter((x) => !BASELINE[name].includes(x));
-    // 8.0.0 (G2): the coverage gate's own reset is a new site with a check
-    assert.ok(extra.every((x) => /:drift$/.test(x) || /^gates:r\d+$/.test(x)), name + ": unexpected sites " + extra.join(", "));
+    // 8.0.0 (G2): the coverage gate's own reset is a new site with a check; 8.0.0 (G4): so is the held-out runner's
+    assert.ok(extra.every((x) => /:drift$/.test(x) || /^(gates|held-out):r\d+$/.test(x)), name + ": unexpected sites " + extra.join(", "));
   }
   // the order: the check of each merged site is the last non-hasher call before its step
   const out = await run(happy(), ARGS);

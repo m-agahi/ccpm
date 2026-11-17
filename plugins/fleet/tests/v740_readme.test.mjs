@@ -38,9 +38,11 @@ test("7.4.0 #4 D1: the README stop_gate list names every STOP_GATES entry, in sr
   assert.deepEqual(named, STOP_GATES);
 });
 
-test("7.4.0 #28 D2: README says eleven role prompts and names fleet-ci-classifier", () => {
-  assert.equal(ROLE_NAMES.length, 11);
-  assert.ok(FLAT.includes("eleven role prompts"));
+// 8.0.0 (G4): twelve, with fleet-held-out-runner
+test("7.4.0 #28 D2: README says twelve role prompts (8.0.0 G4) and names fleet-ci-classifier", () => {
+  assert.equal(ROLE_NAMES.length, 12);
+  assert.ok(FLAT.includes("twelve role prompts"));
+  assert.ok(!/\beleven role prompts\b/.test(FLAT), "a stale 'eleven role prompts'");
   assert.ok(!/\bten role prompts\b/.test(FLAT), "a stale 'ten role prompts'");
   const req = flat(README.slice(README.indexOf("## Requirements"), README.indexOf("\n## ", README.indexOf("## Requirements") + 5)));
   for (const r of ROLE_NAMES) assert.ok(req.includes("`" + r + "`"), r + " not in the Requirements role list");

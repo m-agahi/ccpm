@@ -4566,3 +4566,55 @@ Residual for G4: if the agent dies after writing chunks and before the program r
 files stay under <scratch>/chunks/held-out-<nonce> until the run's scratch dir goes. The store
 blocks casual reads only (ADR-1152): roles have a shell and can read ~/.config.
 ```
+
+## 8.0.0 notes (G4)
+
+### `fleet-held-out-runner`, `heldOutRun` (G4, ADR-1152)
+
+```text
+Placement: in the code round, after infra:gates:r<n> and before the code judge's reset, behind its
+own reset (infra:build-reset:held-out:r<n>, build key held-out-r<n>, with the PATH check: B1-5).
+One capped agent per code round with a seal; reserve(10 + ...). No digest or drift retry: one
+attempt, then a fixed-text stop. No hasher of its own (that would cost a second capped agent):
+the code judge's judged() call keeps pre = the post-coder hasher, so its fp-post hasher stops a
+runner (or the gate agent) that changed the worktree at fingerprint; the message names the code
+judge.
+Discriminator: the role returns store (ok|missing|mismatch|error), an enum, never the program's
+stderr. missing -> not_run "store file missing on this machine"; mismatch and error -> needs_human
+at gates ("held_out.py show: store <value>"); a store_digest off the seal -> gates; results that
+are not exactly {criterion, index} for every sealed criterion and index 0..n-1, each once, with a
+boolean pass -> gates. The comparison is canonical([criterion, index]) sorted, so a non-string
+criterion or a string index does not pass by coercion.
+Leak surfaces: callRole/checkRole/collect/requireOk/retryOnDrift copy r.reason, memory_notes or a
+drift message (an enum value) into logs, prompts or the result. heldOutRun uses none of them: it
+calls roleAgent itself, checks roleFileProblem on {role_file} only and driftOf as a boolean, and
+rebuilds results from the three checked fields.
+index: the 0-based position among that criterion's examples in store order (the script has only
+per_criterion counts, so that is the index it can check).
+Test env (security review): roleEnv("hrun", "held-out-r<n>", {HOME, TMPDIR, XDG_CONFIG_HOME,
+XDG_CACHE_HOME, XDG_DATA_HOME, XDG_STATE_HOME} under buildDirOf("held-out-r<n>")). fleet_hrun is in
+the verify-plan database list, so db_up makes it with its own user; the code judge's and the
+coder's users cannot read it. roleEnv takes the extra vars before it builds test_env_prefix.
+The build dir's teardown is free: build_dir.py reset deletes the whole <scratch>/build root before
+it makes the keys it is given, and the next step after the runner on every path that goes on is
+the code judge's resetBuild; a halt runs infra:build-clean. A store-missing return also reaches
+the judge's reset. Not done: dropping fleet_hrun after the run (the container's teardown drops it
+with the rest); the runner's own copy is under scratch_dir, removed by scratch_copy remove.
+Throwaway test: the role appends the test to the criterion's frozen test file in the copy with
+scratch_copy patch (old = a short unique tail of the file) and patches it back; fleet:judge has
+no Write or Edit tool and scratch_copy run refuses python -c. No program change.
+Null seals: no key -> "a pre-8.0.0 plan ref"; null and history.replans > 0 ->
+"not stored on a re-plan"; null -> "no held-out example sealed". No reset, no agent. The in-run
+re-plan path (buildFromRef with opt.full) reads the same ref object, so it derives the same reason.
+gatesNotRun is unchanged: a failing round stores status "failed" (not ran), so held_out stays
+listed; the approve is converted to fix_code anyway.
+Harness default: an unscripted runner returns store missing (no store on the test machine), so
+the happy run lists held_out with that reason; G4-1 scripts an all-pass runner.
+Residual (ADR-1152): code under test can write anywhere the user can write, and the coder has
+a shell that can read the store file directly; the env and reset measures block casual leaks only.
+Residual: the runner is a model and can mark a failing example as passing; the gate catches
+honest misses, not a colluding runner. A runner can claim store missing to skip the gate; the
+gate then stays in gates_not_run and the PR states it (fail closed, not a pass).
+Not used: gateLeft/unruled. A failing hidden example has no exemption path (the judge cannot see
+the example, so it cannot reason about it); the conversion is unconditional.
+```

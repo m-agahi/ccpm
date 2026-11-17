@@ -33,6 +33,7 @@ const ROLES = [
 "pr-review",
 "gate-change-nonweakening-sweep",
 "fleet-ci-classifier",
+"fleet-held-out-runner",
 ];
 const TIERS = ["fable", "opus", "sonnet", "haiku"];
 // INFRA_TIER_BEGIN
@@ -121,6 +122,7 @@ const REQUIRED_ON_OK = {
 "pr-review": ["verdict", "findings", "touches_gate", "checked"],
 "gate-change-nonweakening-sweep": ["verdict", "units", "findings"],
 "fleet-ci-classifier": ["checks"],
+"fleet-held-out-runner": ["store", "store_digest", "results"],
 };
 const CI_CAUSES = "diff pre_existing flaky infra".split(" ");
 const MAX_CI_FIX = 2;
@@ -213,7 +215,7 @@ const YAADGAAR_PROJECT_RE = /^yadgarhq\//;
 const FORBIDDEN_COMMENT_RE = /^\s*(digger|atlantis)\b/im;
 const PROPOSED_RE = /Proposed plan change:\s*(.+?)\s*$/m;
 const LEDGER_SECTION = "Fleet build";
-const HELD_OUT_NOT_RUN = { status: "not_run", reason: "fleet v2: held-out execution is not run yet" };
+const HELD_OUT_NOT_RUN = { status: "not_run", reason: "runs in the code rounds only" };
 const SCRIPT_FINDINGS_NOT_RUN = { status: "not_run", reason: "fleet v2: mutation/coverage/scan gates are not run yet" };
 const GATE_DEFAULTS = [["mutation", SCRIPT_FINDINGS_NOT_RUN], ["coverage", SCRIPT_FINDINGS_NOT_RUN], ["security_scan", SCRIPT_FINDINGS_NOT_RUN], ["held_out", HELD_OUT_NOT_RUN]];
 const GATE_STATUS = ["ran", "partial", "not_run"];
@@ -499,6 +501,11 @@ units: { type: "array", items: { type: "object", properties: { unit: STR, mutati
 findings: REVIEW_FINDINGS,
 }),
 "fleet-ci-classifier": roleSchema({ checks: { type: "array", items: { type: "object", properties: { name: STR, cause: { type: "string", enum: CI_CAUSES } }, required: ["name", "cause"] } } }),
+"fleet-held-out-runner": roleSchema({
+store: { type: "string", enum: ["ok", "missing", "mismatch", "error"] },
+store_digest: STR_OR_NULL,
+results: { type: ["array", "null"], items: { type: "object", properties: { criterion: STR, index: { type: "integer" }, pass: { type: "boolean" } } } },
+}),
 };
 const STRICT = {};
 for (const role of Object.keys(SCHEMAS)) {
@@ -1547,8 +1554,9 @@ return PROGRAM_SHA256;
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-"fleet-code-judge": "e21c96ae42c5d4f593e7370031ef77d86969151a03f7120a6d28edd4b7819fad",
+"fleet-code-judge": "199c21addee66317dfb162f60f2a1f3c06d3c007cbc296ab80dbe3bf496bddd8",
 "fleet-coder": "ee4e8960386899888881cb56e377c5ca74a23c7c93c7ac8971504890245cf3b4",
+"fleet-held-out-runner": "30cae706ba8631be377b92c3bf0d44714511b96742b54689111b2d1a29fcbe1f",
 "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
 "fleet-pr-opener": "28a9ebb7770541b23050f249997cb447453be6ab58dcc495f09490d3109e772a",
 "fleet-test-judge": "12ded7120c00c2346d4040ca132e433cef3f299ff199fe97f8f44d535918a819",
@@ -1564,6 +1572,7 @@ const ROLE_DISPATCH = {
 "fleet-ci-classifier": "DISPATCH: model=sonnet (fallback=opus)",
 "fleet-code-judge": "DISPATCH: model=opus (fallback=sonnet)",
 "fleet-coder": "DISPATCH: model=sonnet (fallback=opus)",
+"fleet-held-out-runner": "DISPATCH: model=sonnet (fallback=opus)",
 "fleet-intent-judge": "DISPATCH: model=opus (fallback=sonnet)",
 "fleet-pr-opener": "DISPATCH: model=sonnet (fallback=opus)",
 "fleet-test-judge": "DISPATCH: model=opus (fallback=sonnet)",
@@ -2240,11 +2249,11 @@ sharedFilePath(name) +
 function sharedFileRule(name) {
 return " Put shared_file: {name: \"" + name + "\", sha256: <the hex sha256sum printed in step 3>}, copied exactly, in it too.";
 }
-const COPY_ROLES = ["fleet-test-judge", "fleet-code-judge", "fleet-test-writer", "plan-audit", "gate-change-nonweakening-sweep", "scope-and-plan", "pr-review"];
-function scratchCopyCmd() {
-if (!state.scriptsDir) throw new Error("scripts_dir is not resolved; program scratch_copy cannot run");
-programSha("scratch_copy");
-return "python3 -I " + shQuote(state.scriptsDir + "/scratch_copy.py");
+const COPY_ROLES = ["fleet-test-judge", "fleet-code-judge", "fleet-test-writer", "plan-audit", "gate-change-nonweakening-sweep", "scope-and-plan", "pr-review", "fleet-held-out-runner"];
+function scratchCopyCmd(n = "scratch_copy") {
+if (!state.scriptsDir) throw new Error("scripts_dir is not resolved; program " + n + " cannot run");
+programSha(n);
+return "python3 -I " + shQuote(state.scriptsDir + "/" + n + ".py");
 }
 function rolePrompt(role, inputs) {
 const sh = SHARED_FOR[role] || null;
@@ -2923,8 +2932,8 @@ return o;
 function envPrefix(env) {
 return "env " + hookEnvPrefix(env);
 }
-function roleEnv(consumer, key) {
-const e = testEnvFor(consumer, key);
+function roleEnv(consumer, key, x) {
+const e = Object.assign(testEnvFor(consumer, key), x);
 return { test_env: e, test_env_prefix: envPrefix(e), test_env_note: testEnvNote() + " " + BUILD_ENV_NOTE };
 }
 function buildDirPrompt(inputs) {
@@ -3900,6 +3909,37 @@ if (!x || x.round !== m) return [];
 const flat = (a, f) => [].concat(...a.map(f));
 const rul = flat(Array.isArray(ex) ? ex : [], (e) => (e && e.gate === g && Array.isArray(e.lines) ? e.lines.map((l) => ({ id: e.path + ":" + l, reason: e.reason })) : []));
 return unruled(flat(x.findings, (f) => f.lines.map((l) => ({ id: f.path + ":" + l }))), rul).map((f) => f.id);
+}
+const RUNNER = "fleet-held-out-runner";
+async function heldOutRun(ref, m, inputs) {
+const ho = ref.held_out;
+const set = (status, reason, findings) => {
+state.gates.held_out = { status, reason, findings, round: m };
+gate("gate held_out: " + status + " (" + reason + ")");
+};
+const nr = (reason) => (set("not_run", reason, []), { status: "not_run", reason });
+if (!("held_out" in ref)) return nr("a pre-8.0.0 plan ref");
+if (!ho) return nr(ref.history.replans ? "not stored on a re-plan" : "no held-out example sealed");
+const k = "held-out-r" + m;
+await resetBuild("held-out:r" + m, [k], "Code");
+const label = "role:" + RUNNER + ":r" + m;
+state.agents++;
+const r = await roleAgent(RUNNER, label, rolePrompt(RUNNER, Object.assign(inputs, { task_id: ref.task_id, plan_sha256: ref.plan_sha256, held_out: ho, held_out_cmd: scratchCopyCmd("held_out") }, roleEnv("hrun", k, Object.fromEntries("HOME TMPDIR XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME".split(" ").map((v) => [v, buildDirOf(k) + "/" + v]))))), { schema: SCHEMAS[RUNNER], phase: "Code", agentType: JUDGE_AGENT });
+const st = r && r.status === "failed" ? "failed" : "needs_human";
+if (!r || r.status !== "ok") halt(st, label + " returned " + st, "role");
+if (roleFileProblem(RUNNER, { role_file: r.role_file }) || driftOf(RUNNER, r)) halt(st, label + ": contract drift", "contract");
+const stop = (why) => halt(st, label + ": " + why, "gates");
+if (r.store === "missing") return nr("store file missing on this machine");
+if (r.store !== "ok") stop("held_out.py show: store " + r.store);
+if (r.store_digest !== ho.sha256) stop("store_digest off the seal");
+const pc = ho.per_criterion;
+const res = (r.results || []).map((x) => ({ criterion: (x = x || {}).criterion, index: x.index, pass: x.pass }));
+const want = [].concat(...Object.keys(pc).map((c) => Array.from({ length: pc[c] }, (_, i) => canonical([c, i])))).sort();
+if (canonical(res.map((x) => canonical([x.criterion, x.index])).sort()) !== canonical(want) || res.some((x) => [true, false].indexOf(x.pass) < 0))
+stop("results off the sealed per_criterion");
+const fails = Object.keys(pc).filter((c) => res.some((x) => x.criterion === c && !x.pass));
+set(fails.length ? "failed" : "ran", res.filter((x) => x.pass).length + " of " + res.length + " pass", fails);
+return { status: "ran", reason: null, results: res };
 }
 async function pushProbe(lay, ws) {
 await pathRecheck("push-probe", "Workspace");
@@ -5217,7 +5257,7 @@ return v;
 function heldOutProblem(h) {
 const pc = (h && h.per_criterion) || 0;
 const n = Array.isArray(pc) ? 0 : Object.values(Object(pc)).reduce((a, v) => a + (Number.isInteger(v) && v > 0 ? v : NaN), 0);
-return Object.keys(h || 0).sort() + "" !== "count,per_criterion,sha256" || !SHA256_RE.test(h.sha256) || h.count !== n || !n;
+return Object.keys(h || 0).sort() + "" !== "count,per_criterion,sha256" || typeof h.sha256 !== "string" || !SHA256_RE.test(h.sha256) || h.count !== n || !n;
 }
 async function heldOutWrite(ctx, sha) {
 const ex = ctx.heldOut;
@@ -6241,7 +6281,7 @@ state.path = shortPath ? "short" : "full";
 const maxTestRounds = shortPath ? MAX_SHORT_TEST_ROUNDS : MAX_TEST_ROUNDS;
 const testable = testableOf(criteria);
 const writerDbs = shortPath ? ["w_short"] : testable.map((c) => "w_" + c.id);
-await testDbStep(v.test_db, "infra:verify-plan", mainWt, defaultBranch, "Verify", writerDbs.concat(["plan", "audit", "tjudge", "coder", "cjudge", "review", "hooks"]), names.taskId);
+await testDbStep(v.test_db, "infra:verify-plan", mainWt, defaultBranch, "Verify", writerDbs.concat(["plan", "audit", "tjudge", "coder", "cjudge", "review", "hooks", "hrun"]), names.taskId);
 const frozenFiles = [];
 for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
 const hashedFiles = frozenFiles;
@@ -7466,7 +7506,7 @@ updRound ? "review" : "cap",
 state.rounds.code++;
 const m = state.rounds.code;
 lastRoundGate = null;
-reserve(9 + (planFacts.changed_symbols ? 1 : 0) + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
+reserve(10 + (planFacts.changed_symbols ? 1 : 0) + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
 const codeInputs = Object.assign({}, common, planCtx, planFacts, {
 criteria,
 frozen_tests: frozenFiles.slice(),
@@ -7563,6 +7603,7 @@ await resetBuild("gates:r" + m, ["gates-r" + m], "Code");
 const tc0 = planFacts.test_cmd;
 await runGate("infra:gates:r" + m, [["coverage", "cover_diff", [mainWt, updRound ? upd.base : planBase, h.fingerprint.tree, tc0.command, JSON.stringify(Object.assign({}, tc0.env, testEnvFor("cjudge", "gates-r" + m))), JSON.stringify(frozenFiles)]]], "Code");
 const cov = state.gates.coverage;
+const hoR = await heldOutRun(ref, m, Object.assign({}, common, { criteria, test_cmd: tc0, plan_commit: updRound ? upd.base : planBase, code_tree: h.fingerprint.tree }));
 await resetBuild("code-judge:r" + m, ["cjudge-r" + m], "Code");
 const jc = await judged(
 "fleet-code-judge",
@@ -7573,7 +7614,7 @@ code_tree: h.fingerprint.tree,
 coder_output: stripHeldOut(coder),
 hash_recheck: hashRecheck(frozen, h.hashes, mainWt),
 prior_findings: stripHeldOut(judgePrior),
-held_out_results: HELD_OUT_NOT_RUN,
+held_out_results: hoR,
 script_findings: Object.assign({ coverage: { status: cov.status, reason: cov.reason, findings: cov.findings } }, SCRIPT_FINDINGS_NOT_RUN),
 repo_obligations: judgeObligations,
 ...roleEnv("cjudge", "cjudge-r" + m),
@@ -7615,6 +7656,14 @@ judgePrior = coderFindings.slice();
 continue;
 }
 if (cj.verdict !== "approve") halt("failed", "code-judge returned no verdict");
+const hoF = state.gates.held_out;
+if (hoF.status === "failed") {
+coderFindings = hoF.findings.map((c) => ({ target: "code", criterion: c, finding: "criterion " + c + " fails a hidden example" }));
+judgePrior = coderFindings.slice();
+lastRoundGate = "held_out";
+gate("code round " + m + ": held_out gate: approve -> fix_code (" + hoF.findings + ")");
+continue;
+}
 const covLeft = gateLeft("coverage", cj.exemptions, m);
 if (covLeft.length) {
 coderFindings = [{ target: "code", criterion: null, finding: "coverage gate: added production lines that no test runs and no exemption covers: " + covLeft.join(", ") + " -- delete the untested code or make the frozen tests run it" }];

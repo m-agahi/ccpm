@@ -37,10 +37,11 @@ free text.
 ## Requirements
 
 - Claude Code with the Workflow tool (dynamic workflows) enabled.
-- Nothing for the role prompts (5.0.0, R1): the eleven role prompts ship in the plugin as
+- Nothing for the role prompts (5.0.0, R1): the twelve role prompts ship in the plugin as
   `roles/<role>.md`: `scope-and-plan`, `plan-audit`, `fleet-test-writer`, `fleet-test-judge`,
   `fleet-coder`, `fleet-code-judge`, `fleet-pr-opener`, `fleet-intent-judge`, `pr-review`,
-  `gate-change-nonweakening-sweep` and `fleet-ci-classifier`. See "Role files" below.
+  `gate-change-nonweakening-sweep`, `fleet-ci-classifier` and `fleet-held-out-runner` (8.0.0).
+  See "Role files" below.
 - No MCP server is required (5.0.0, R2). Optional: `yaadgaar` (task ids of every project, 7.0.0;
   the yadgar ledger is retired), the Atlassian MCP (Jira input and comments), `gh` /
   `gh-personal` (GitHub input and comments) and `$CODEBERG_TOKEN` (Codeberg comments). Preflight
@@ -988,7 +989,7 @@ build past its commit) wins over `freeze_digest`.
 
 ### Role files (5.0.0, R1, ledger 1999)
 
-The eleven role prompts ship as `plugins/fleet/roles/<role>.md`, and the shared prompt files as
+The twelve role prompts ship as `plugins/fleet/roles/<role>.md`, and the shared prompt files as
 `plugins/fleet/roles/_shared/<name>.md` (5.0.0 R3: one, `test-cmd-allowlist.md`), under the same
 trust model as the shipped programs. `scripts/gen.mjs` writes three tables into the workflow source
 from the files: `ROLE_SHA256` (the sha256 of each role file's exact bytes), `ROLE_DISPATCH`
@@ -1632,7 +1633,8 @@ The script pins the role contract, not the prose:
   preflight's `ledger_tools` census are never required and accept null, so a model's null never
   stops a build. `role_file` and `shared_file` stay required (null allowed by the schema, refused
   by the script's check on an ok result).
-- Gates this release does not run (held-out examples, coverage, mutation, security scan) reach
+- Gates this release does not run (coverage when no tool is found, mutation, security scan, and
+  held-out examples when no store is sealed or found) reach
   the judges as `{status: "not_run", reason}` and the PR body as `gates_not_run`; the role files
   call them not run, never run. Since 8.0.0 (G1, ADR-1316) the script derives the list: a gate
   leaves it only with a digest-checked `ran` result of the same code round (`runGate`, stored in
@@ -1669,9 +1671,36 @@ The script pins the role contract, not the prose:
   `held_out`; any failure, or no example, seals `held_out: null`, and the build lists `held_out`
   in `gates_not_run`. A ref sealed before 8.0.0 has no `held_out` key and is accepted; a malformed
   one is refused. `held_out.py show` prints the examples only for the sealed sha256 (for the
-  runner role of a later car). Threat model (ADR-1152): the store keeps the examples out of the
+  held-out runner role). Threat model (ADR-1152): the store keeps the examples out of the
   worktree, the plan ref, every role prompt, the run-state and the PR; it blocks casual reads
   only. Roles have a shell and can read `~/.config`, so it does not stand against a hostile coder.
+- **Held-out runner (8.0.0, G4).** Each code round, after `infra:gates:r<n>` and its own build-dir
+  reset and PATH check (`infra:build-reset:held-out:r<n>`), and before the code judge's reset, the
+  role `fleet-held-out-runner` (`fleet:judge`, read-only, one capped agent) runs `held_out.py show`
+  itself, makes a scratch copy of the judged tree with `scratch_copy.py`, appends one throwaway
+  test per example to the criterion's frozen test file in the copy, and runs it with the sealed
+  `test_cmd` and the code judge's test database. It returns `{store, store_digest, results}`
+  (each result `{criterion, index, pass}`), with no example text; `index` is the 0-based position among that
+  criterion's examples in store order. The script stops with `needs_human` at gate `gates` when the
+  store does not match the seal (`store: mismatch` or `error`), `store_digest` is not the sealed
+  sha256, or the results do not match the sealed `per_criterion` counts (each index once,
+  `pass` a boolean). A missing store file on this machine gives `not_run` ("store file missing on
+  this machine"). A null seal ("no held-out example sealed"), a ref with no `held_out` key ("a
+  pre-8.0.0 plan ref") and a re-planned ref ("not stored on a re-plan") dispatch no
+  runner. The code judge gets `held_out_results: {status, reason, results}` (criterion, index and
+  pass only). An approve with a failing example becomes `fix_code`, routed to the coder as
+  "criterion X fails a hidden example". `held_out` leaves `gates_not_run` only when every example
+  of the current round passes. The runner's `reason`, `memory_notes` and any other text are never
+  logged or forwarded, and its stops use fixed text. The code judge's post-hasher (whose `pre` is
+  the post-coder state) catches a runner that changes the worktree (`stop_gate: fingerprint`, the
+  message names the code judge). The code under test sees the examples, so the runner gets its own
+  test database (`fleet_hrun`, a user no other role has) and a private `HOME`, `TMPDIR` and
+  `XDG_*` under its own build dir; the next build-dir reset (the code judge's) deletes the whole
+  build root right after the runner, and a stop's teardown does too. Limit: the runner is a model;
+  it can report a failing example as passing, so the gate catches honest misses, not a colluding
+  runner. Threat model (ADR-1152): code under test can still write anywhere the user can write,
+  and the coder has a shell that can read the store file directly, so these measures block casual
+  leaks only.
 - Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
@@ -1790,8 +1819,9 @@ change that a judge makes and reverts within its own run.
   change to `.github/`, IaC, Kubernetes, rulesets or secret-like paths, in every mode.
 - A re-plan after `plan_wrong` saves the uncommitted work with `git commit-tree` (a plumbing commit
   object on a side branch, no hooks). That is not a `git commit`, and it is never pushed.
-- The fleet runs no held-out examples and no mutation, coverage or scanner gates. Judges receive
-  explicit `{status: "not_run"}` markers, and `gates_not_run` reaches the PR opener and the result.
+- The fleet runs no mutation or scanner gates. Held-out examples run only on the machine that
+  sealed them (8.0.0, G4). Judges receive explicit `{status: "not_run"}` markers for a gate that
+  did not run, and `gates_not_run` reaches the PR opener and the result.
   The planner's `held_out_examples` never reach another role; the held-out store (8.0.0, G3)
   drops an example the plan doc quotes verbatim, but it cannot see a paraphrase in the plan doc.
 - Verify tells fleet commits apart by their subject lines only; git cannot prove who made a commit.

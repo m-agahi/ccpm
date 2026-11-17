@@ -17,7 +17,7 @@ import { SCRIPTS_SRC, ROLE_TEXT, happy, run, ARGS, spawnSync, inputsOf } from ".
 
 const PY = join(SCRIPTS_SRC, "scratch_copy.py");
 const py = (...a) => spawnSync("python3", ["-I", PY, ...a], { encoding: "utf8" });
-const COPY_ROLES = ["fleet-test-judge", "fleet-code-judge", "fleet-test-writer", "plan-audit", "gate-change-nonweakening-sweep", "scope-and-plan", "pr-review"];
+const COPY_ROLES = ["fleet-test-judge", "fleet-code-judge", "fleet-test-writer", "plan-audit", "gate-change-nonweakening-sweep", "scope-and-plan", "pr-review", "fleet-held-out-runner"];
 
 test("7.3.0 #54 A23: make copies the modified, untracked and deleted states; run returns the exit code; remove drops the worktree", () => {
   const root = mkdtempSync(join(tmpdir(), "fleet-730s-"));
@@ -96,5 +96,6 @@ test("7.3.0 #54: the copy roles get scratch_copy_cmd as an input; other roles do
       seen.add(m[1]);
     } else assert.ok(!("scratch_copy_cmd" in i), c.label);
   }
-  for (const r of ["fleet-test-judge", "fleet-code-judge", "fleet-test-writer", "plan-audit", "scope-and-plan", "pr-review"]) assert.ok(seen.has(r), r);
+  // 8.0.0 (G4): the held-out runner copies the judged tree too
+  for (const r of ["fleet-test-judge", "fleet-code-judge", "fleet-test-writer", "plan-audit", "scope-and-plan", "pr-review", "fleet-held-out-runner"]) assert.ok(seen.has(r), r);
 });

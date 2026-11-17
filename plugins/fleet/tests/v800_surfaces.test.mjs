@@ -88,12 +88,13 @@ test("8.0.0 B2-1: a plan run is 20 calls (G3: 21); infra:surfaces:plan runs the 
   assert.equal(L.indexOf("infra:surfaces:plan"), L.indexOf("role:scope-and-plan") + 1);
 });
 
-test("8.0.0 B2-2: an approving code round is one agent (hook surface and changed defs); the happy build is 62 calls (G2: + 2)", async () => {
+test("8.0.0 B2-2: an approving code round is one agent (hook surface and changed defs); the happy build is 64 calls (G2: + 2, G4: + 2)", async () => {
   const out = await run(happy(), Object.assign({}, ARGS, { confirm: "ask" }));
   noUnscripted(out);
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
-  assert.equal(out.build.calls.length, 62, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 61);
+  // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1; the runner is capped)
+  assert.equal(out.build.calls.length, 64, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 63);
   const c = call(out, "infra:surfaces:r1");
   // the plan ref seals the ruleset surface: the build reads none
   assert.deepEqual(ran(c.prompt), ["hook_surface", "changed_defs"]);
@@ -108,7 +109,8 @@ test("8.0.0 B2-2: a ref that seals no ruleset surface reads it in round 1's merg
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.deepEqual(ran(call(out, "infra:surfaces:r1").prompt), ["hook_surface", "ruleset_surface", "changed_defs"]);
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
-  assert.equal(out.calls.length, 62, out.labels.join(", "));
+  // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1; the runner is capped)
+  assert.equal(out.calls.length, 64, out.labels.join(", "));
 });
 
 test("8.0.0 B2-3 order: an obligations failure routes to fix_code before a broken changed_defs, ruleset_surface or callers result of the same round is read", async () => {

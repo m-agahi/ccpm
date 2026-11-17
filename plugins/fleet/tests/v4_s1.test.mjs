@@ -812,6 +812,8 @@ test("4.0.0 security 3: each program step runs sha256sum on the file first; a sh
     for (const m of c.prompt.matchAll(/python3 -I ('[^']+\.py')/g)) {
       // 7.3.0 (#54): the copy roles' scratch_copy_cmd input is a command prefix the role runs; it relays nothing
       if (/^role:/.test(c.label) && m[1].endsWith("/scratch_copy.py'") && inputsOf(c.prompt).scratch_copy_cmd === "python3 -I " + m[1]) continue;
+      // 8.0.0 (G4): so is the held-out runner's held_out_cmd input (it runs held_out.py show itself)
+      if (/^role:fleet-held-out-runner:/.test(c.label) && m[1].endsWith("/held_out.py'") && inputsOf(c.prompt).held_out_cmd === "python3 -I " + m[1]) continue;
       n++;
       assert.ok(c.prompt.includes("sha256sum -- " + m[1] + " && python3 -I " + m[1]), c.label + ": " + m[1]);
       assert.match(c.prompt, /as `file_sha256`/, c.label);

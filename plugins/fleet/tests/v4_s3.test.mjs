@@ -543,8 +543,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // pr-review): each runs in its build-dir reset; capped() is unchanged
   // 8.0.0 (#62 B2): - 1 (infra:surfaces:r1 runs the hook surface and changed-definition reads)
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
-  assert.equal(out.build.calls.length, 62, out.build.labels.join(", "));
-  assert.equal(out.result.agents, 61);
+  // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1; the runner is capped)
+  assert.equal(out.build.calls.length, 64, out.build.labels.join(", "));
+  assert.equal(out.result.agents, 63);
   for (const o of [out.plan, out.build]) {
     const first = o.calls[0];
     assert.equal(first.label, "preflight");
@@ -618,7 +619,8 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-3): a 3.1.3, 4.x or no record, and fresh_
     // 8.0.0 (#62 B1): - 7 PATH re-checks (each runs in its build-dir reset)
     // 8.0.0 (#62 B2): - 1 (one surfaces step after the approve)
     // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
-    assert.equal(b.calls.length, 62);
+    // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1)
+    assert.equal(b.calls.length, 64);
     assert.equal(b.labels.filter((l) => l === "preflight").length, 1);
   }
 });

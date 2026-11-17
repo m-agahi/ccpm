@@ -148,8 +148,8 @@ test("5.0.6 2019: BUILD_ENV_ROWS is one data table; every role env is built from
 test("5.0.6 2019: every emitted build, test or hook step carries the exact prefix of its own, freshly reset dir", async () => {
   const out = await run(happy(), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
-  // writers AC1, AC2, test judge, coder, code judge, commit, push, pr-review
-  assert.equal(buildEnvSites(out), 8);
+  // writers AC1, AC2, test judge, coder, code judge, commit, push, pr-review; 8.0.0 (G4): the held-out runner
+  assert.equal(buildEnvSites(out), 9);
   // the sweep too, when it runs
   const s = happy();
   s["role:pr-review:v1"] = Object.assign({}, s["role:pr-review:v1"], { touches_gate: true });
@@ -157,7 +157,7 @@ test("5.0.6 2019: every emitted build, test or hook step carries the exact prefi
   s["hasher:fp-post:sweep:v1"] = s["hasher:fp-post:pr-review:v1"];
   const o2 = await run(s, ARGS);
   assert.equal(o2.result.status, "ok", o2.result.reason);
-  assert.equal(buildEnvSites(o2), 9);
+  assert.equal(buildEnvSites(o2), 10);
   assert.equal(inputsOf(call(o2, "role:gate-change-nonweakening-sweep:v1").prompt).test_env.CARGO_TARGET_DIR, buildEnvOf("sweep-v1").CARGO_TARGET_DIR);
 });
 

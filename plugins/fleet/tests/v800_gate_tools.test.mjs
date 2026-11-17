@@ -36,7 +36,8 @@ const FOUR = [
   { gate: "mutation", reason: "fleet v2: mutation/coverage/scan gates are not run yet" },
   { gate: "coverage", reason: "fleet v2: mutation/coverage/scan gates are not run yet" },
   { gate: "security_scan", reason: "fleet v2: mutation/coverage/scan gates are not run yet" },
-  { gate: "held_out", reason: "fleet v2: held-out execution is not run yet" },
+  // 8.0.0 (G4): the default before a code round's runner result (was "fleet v2: held-out execution is not run yet")
+  { gate: "held_out", reason: "runs in the code rounds only" },
 ];
 
 // gate_tools.py on a temp repo with marker files, PATH = a dir of stub scripts only.
@@ -191,7 +192,9 @@ test("8.0.0 G1-3 (non-weakening): with no gate result, gates_not_run is exactly 
   assert.equal(out.result.status, "ok", out.result.reason);
   // 8.0.0 (G2): the happy run has a coverage gate result (not_run: no coverage tool); the same four, in
   // the same order, coverage with the gate's own reason
-  assert.deepEqual(out.result.gates_not_run, FOUR.map((x) => (x.gate === "coverage" ? { gate: "coverage", reason: "no coverage tool: coverage is not on PATH" } : x)));
+  // 8.0.0 (G4): and a held-out runner result (not_run: no store file on this machine, the harness default)
+  const own = { coverage: "no coverage tool: coverage is not on PATH", held_out: "store file missing on this machine" };
+  assert.deepEqual(out.result.gates_not_run, FOUR.map((x) => (own[x.gate] ? { gate: x.gate, reason: own[x.gate] } : x)));
   // the derived function: no state.gates entry, an earlier round's ran, a partial, the judge list
   const src = [grabConst("HELD_OUT_NOT_RUN"), grabConst("SCRIPT_FINDINGS_NOT_RUN"), grabConst("GATE_DEFAULTS"), grabFn("gatesNotRun")].join("\n");
   const make = (state) => new Function("state", src + "\nreturn gatesNotRun;")(state);

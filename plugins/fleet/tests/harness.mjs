@@ -78,7 +78,7 @@ export function inputsOf(prompt) {
   }
 }
 
-// The eleven fleet roles (5.0.0, R1; their prompts ship as plugins/fleet/roles/<role>.md).
+// The twelve fleet roles (5.0.0, R1; their prompts ship as plugins/fleet/roles/<role>.md; 8.0.0 G4: + the held-out runner).
 export const ROLE_NAMES = [
   "scope-and-plan",
   "plan-audit",
@@ -91,6 +91,7 @@ export const ROLE_NAMES = [
   "pr-review",
   "gate-change-nonweakening-sweep",
   "fleet-ci-classifier",
+  "fleet-held-out-runner",
 ];
 export const ROLES_SRC = join(HERE, "..", "roles");
 // the shipped role file text, by role
@@ -129,6 +130,7 @@ export const REQUIRED_DEFAULTS = {
   "pr-review": { verdict: "approve", findings: [], touches_gate: false, checked: [] },
   "gate-change-nonweakening-sweep": { verdict: "non_weakening", units: [], findings: [] },
   "fleet-ci-classifier": { checks: [] },
+  "fleet-held-out-runner": { store: "missing", store_digest: null, results: null },
 };
 
 // The skill passes a fresh run_nonce on every invocation; scenario args that
@@ -390,6 +392,8 @@ export async function runOne(script, args0) {
     }
     // 8.0.0 (G3): an unscripted held-out write stores every example it was sent
     if (!(label in script) && /^infra:held-out:write/.test(label)) return heldOutOut(prompt);
+    // 8.0.0 (G4): an unscripted held-out runner finds no store file on this machine (not_run)
+    if (!(label in script) && /^role:fleet-held-out-runner:r\d+$/.test(label)) script[label] = { status: "ok", reason: "no store", store: "missing", store_digest: null, results: null };
     // 8.0.0 (G2): an unscripted gate step finds no coverage tool (not_run)
     if (!(label in script) && /^infra:gates:/.test(label)) return { status: "ok", reason: "ran", coverage: coverOut(prompt) };
     // the bytecode purge is mechanical; unscripted purges succeed by default

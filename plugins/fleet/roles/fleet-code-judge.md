@@ -28,12 +28,16 @@ You judge the coder's change. The coder's report is a CLAIM. Re-derive every res
 - `test_env`: env vars for EVERY test run; may carry a DSN for a throwaway database, under the env name the repo declares.
 - `test_env_prefix`: `test_env` as a shell prefix (`env K='v' ... `). Run EVERY build, test or hook command in the worktree as `<test_env_prefix><command>`; a non-empty `test_cmd.env` goes in front (`env <test_cmd.env> <test_env_prefix><command>`). Its build vars point `target/`, `__pycache__` and the other caches at your own dir outside the worktree; a command run without it writes them in the worktree, and the workflow stops the run.
 - `repo_obligations` (absent → `[]`): `[{id, kind, rule_source, files, instruction, check_cmd?, check_cmd_rejected?}]`. `check_cmd` is a read-only command Max approved verbatim; the workflow script never runs it, and you run it in check 10. `check_cmd_rejected` was refused: never run it.
-- `held_out_results`: in this release `{status: "not_run", reason}`. See "Gates not run".
+- `held_out_results`: the held-out runner's result for this round: `{status: "not_run", reason}`, or `{status: "ran", reason, results: [{criterion, index, pass}]}`, one entry per hidden example (`index` is its position among that criterion's examples). You never see the example text. See "Held-out results" and "Gates not run".
 - `script_findings`: `{status: "not_run", reason}` for `mutation` and `security_scan`, plus `coverage: {status, reason, findings}`, the coverage gate's own result (`status` `ran`, `partial` or `not_run`). `findings: [{path, lines}]` are the added production lines that no test ran, measured by the workflow on `code_tree` in a scratch copy at `plan_commit`. See "Coverage findings" and "Gates not run".
 
 ## Gates not run
 
-This release does not run held-out examples, mutation testing or a security scanner. They are not run, not passed. List each in `gates_not_run`, by these exact gate ids, with the input's reason: `held_out`, `mutation`, `security_scan`. List `coverage` too, with its reason, when `script_findings.coverage.status` is not `ran`. Add a `check_cmd:<id>` entry for a `check_cmd` you could not run (check 10). Never infer a pass from a gate that did not run, and never claim one ran. Do the fallback checks below yourself instead.
+This release does not run mutation testing or a security scanner. They are not run, not passed. List each in `gates_not_run`, by these exact gate ids, with the input's reason: `mutation`, `security_scan`. List `coverage` too, with its reason, when `script_findings.coverage.status` is not `ran`, and `held_out`, with its reason, when `held_out_results.status` is not `ran`. Add a `check_cmd:<id>` entry for a `check_cmd` you could not run (check 10). Never infer a pass from a gate that did not run, and never claim one ran. Do the fallback checks below yourself instead.
+
+## Held-out results
+
+Each `results` entry with `pass: false` is a hidden example of that criterion that the change fails. Route a `code` finding with that criterion: `criterion <id> fails a hidden example`. Never ask for, guess or quote the example. On `approve`, the workflow converts the verdict to `fix_code` for any failing entry.
 
 ## Coverage findings
 

@@ -49,7 +49,7 @@ const readCmd = (role) => "sha256sum -- '" + ROLES_DIR + "/" + role + ".md'\n2. 
 // a scripted role result with an explicit role_file
 const withFile = (r, rf) => Object.assign({}, r, { role_file: rf });
 
-test("5.0.0 R1: eleven role files ship (6.0.0: + fleet-ci-classifier), each pinned by ROLE_SHA256; gen.mjs --check passes", () => {
+test("5.0.0 R1: twelve role files ship (6.0.0: + fleet-ci-classifier; 8.0.0: + fleet-held-out-runner), each pinned by ROLE_SHA256; gen.mjs --check passes", () => {
   // 5.0.0 R3: plus the _shared dir (pinned by SHARED_SHA256; v5_prompts)
   assert.deepEqual(readdirSync(ROLES_SRC).sort(), ROLE_NAMES.map((r) => r + ".md").concat(["_shared"]).sort());
   assert.deepEqual(Object.keys(PIN).sort(), ROLE_NAMES.slice().sort());
@@ -125,7 +125,8 @@ test("5.0.0 R1: no relay program and no relay agent; a happy run dispatches what
   // 8.0.0 (#62 B1): - 7 PATH re-checks (each runs in its build-dir reset)
   // 8.0.0 (#62 B2): - 1 (one surfaces step after the approve)
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1)
-  assert.equal(out.build.calls.length, 62, out.build.labels.join(", "));
+  // 8.0.0 (G4): + 2 (infra:build-reset:held-out:r1 and role:fleet-held-out-runner:r1)
+  assert.equal(out.build.calls.length, 64, out.build.labels.join(", "));
   for (const c of out.calls) assert.ok(!String(c.prompt).includes("agent_prompt_get"), c.label);
 });
 
@@ -299,7 +300,8 @@ test("5.0.0 probe mode: preflight only on the given repo; returns the table and 
 test("5.0.0 R1 real execution: the probe, run by bash over a real plugin cache, passes the shipped roles and refuses a changed, extra, missing, symlinked or nested entry", async () => {
   const ok = await realProbe();
   assert.equal(ok.result.status, "awaiting_confirmation", ok.result.reason);
-  assert.ok(ok.logs.some((l) => /all 11 role files at their ROLE_SHA256 pins/.test(l)));
+  // 8.0.0 (G4): twelve
+  assert.ok(ok.logs.some((l) => /all 12 role files at their ROLE_SHA256 pins/.test(l)));
   const cases = [
     [(d) => writeFileSync(join(d, "plan-audit.md"), ROLE_TEXT["plan-audit"] + "x"), /plan-audit\.md hashes [0-9a-f]{64}, not /],
     [(d) => writeFileSync(join(d, "extra.md"), "x"), /extra\.md is not a shipped role file/],

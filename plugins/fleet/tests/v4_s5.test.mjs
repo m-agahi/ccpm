@@ -383,7 +383,13 @@ test("AC-1981-1: with a declaration the database is up before the planner; every
   assert.ok(!JSON.stringify(s2.__store).includes("mysql://"));
   assert.ok(!JSON.stringify(o2.planResult.plan_ref).includes("mysql://"));
   // 5.0.6 (ledger 2019): with a database each role keeps its build dir too
-  assert.equal(buildEnvSites(out), 8);
+  // 8.0.0 (G4): + the held-out runner (its own build dir and its own database, fleet_hrun: the code
+  // under test runs the hidden examples; the judge's and the coder's users cannot read it)
+  assert.equal(buildEnvSites(out), 9);
+  const hr = dsnOf(out.build, "role:fleet-held-out-runner:r1");
+  assert.match(hr, DSN_RE);
+  assert.match(hr, /\/fleet_hrun$/);
+  assert.ok(!Object.values(dsns).includes(hr), "no other role's DSN");
 });
 
 test("1981: no declaration starts no database and changes no role input", async () => {
@@ -508,7 +514,7 @@ test("1981: confirm auto continues into the build and adds the build's databases
   const add = out.labels.indexOf("infra:db-up:add");
   assert.ok(add > out.labels.indexOf("infra:verify-plan"), out.labels.join(", "));
   assert.equal(out.labels[add - 1], "infra:path-check:db-up:add");
-  assert.deepEqual(inputsOf(call(out, "infra:db-up:add").prompt).dbs, ["fleet_w_ac1", "fleet_w_ac2", "fleet_tjudge", "fleet_coder", "fleet_cjudge", "fleet_review", "fleet_hooks"]);
+  assert.deepEqual(inputsOf(call(out, "infra:db-up:add").prompt).dbs, ["fleet_w_ac1", "fleet_w_ac2", "fleet_tjudge", "fleet_coder", "fleet_cjudge", "fleet_review", "fleet_hooks", "fleet_hrun"]); // 8.0.0 (G4): + the held-out runner's own
   assert.match(dsnOf(out, "role:fleet-coder:r1"), /\/fleet_coder$/);
   assert.equal(out.labels.filter((l) => l === "infra:db-down").length, 1);
 });

@@ -297,7 +297,8 @@ test("8.0.0 G2: each code round runs infra:gates:r<m> (cover_diff, read-only, so
   const i = out.labels.indexOf("infra:gates:r1");
   assert.ok(i > 0, out.labels.join(", "));
   assert.equal(out.labels[i - 1], "infra:build-reset:gates:r1", "its own reset and PATH check");
-  assert.deepEqual(out.labels.slice(i + 1, i + 3), ["infra:build-reset:code-judge:r1", "role:fleet-code-judge:r1"]);
+  // 8.0.0 (G4): the held-out runner, behind its own reset, sits between the gate and the judge's reset
+  assert.deepEqual(out.labels.slice(i + 1, i + 5), ["infra:build-reset:held-out:r1", "role:fleet-held-out-runner:r1", "infra:build-reset:code-judge:r1", "role:fleet-code-judge:r1"]);
   const c = call(out, "infra:gates:r1");
   assert.equal(c.opts.model, "sonnet");
   assert.equal(c.opts.agentType, "fleet:judge");
@@ -390,8 +391,9 @@ test("8.0.0 G2: a gate relay that errs twice stops at gate gates (one retry, ADR
   assert.ok(!out.labels.includes("role:fleet-code-judge:r1"));
 });
 
-test("8.0.0 G2: a code round reserves 9 agents (the gate is capped)", () => {
-  assert.match(SOURCE, /reserve\(9 \+ \(planFacts\.changed_symbols \? 1 : 0\)/);
+// 8.0.0 (G4): 10, the held-out runner is capped too
+test("8.0.0 G2: a code round reserves 9 agents (the gate is capped; G4: 10, with the held-out runner)", () => {
+  assert.match(SOURCE, /reserve\(10 \+ \(planFacts\.changed_symbols \? 1 : 0\)/);
   assert.match(SOURCE, /\["infra:gates:", "sonnet"\]/);
 });
 

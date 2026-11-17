@@ -912,7 +912,8 @@ test("judges get fail-closed not_run gates, never an empty list", async () => {
   }
   const cj = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
   assert.equal(cj.held_out_results.status, "not_run");
-  assert.match(cj.held_out_results.reason, NOT_RUN);
+  // 8.0.0 (G4): the runner's own not_run reason (the harness default: no store file on this machine)
+  assert.equal(cj.held_out_results.reason, "store file missing on this machine");
 });
 
 test("approve without a gates_not_run list: script builds it for the PR and the result", async () => {
@@ -922,7 +923,8 @@ test("approve without a gates_not_run list: script builds it for the PR and the 
   const gates = pr.gates_not_run.map((g) => g.gate).sort();
   assert.deepEqual(gates, ["coverage", "held_out", "mutation", "security_scan"]);
   // 8.0.0 (G2): coverage carries its gate's own not_run reason (the harness default: no coverage tool)
-  for (const g of pr.gates_not_run) assert.match(g.reason, g.gate === "coverage" ? /^no coverage tool: / : NOT_RUN);
+  // 8.0.0 (G4): held_out carries the runner's own not_run reason (the harness default: no store file)
+  for (const g of pr.gates_not_run) assert.match(g.reason, g.gate === "coverage" ? /^no coverage tool: / : g.gate === "held_out" ? /^store file missing on this machine$/ : NOT_RUN);
   assert.deepEqual(out.result.gates_not_run, pr.gates_not_run);
 });
 
@@ -1434,8 +1436,8 @@ test("5.0.0 R1 (was S-8 higher version recorded): the result records the ROLE_SH
   assert.equal(out.result.status, "ok");
   assert.deepEqual(Object.keys(out.result.role_sha256).sort(), ROLE_NAMES.slice().sort());
   for (const r of ROLE_NAMES) assert.match(out.result.role_sha256[r], /^[0-9a-f]{64}$/);
-  // 6.0.0 (ledger 2034): + fleet-ci-classifier
-  assert.ok(out.result.gate_log.some((l) => /all 11 role files at their ROLE_SHA256 pins/.test(l)));
+  // 6.0.0 (ledger 2034): + fleet-ci-classifier; 8.0.0 (G4): + fleet-held-out-runner
+  assert.ok(out.result.gate_log.some((l) => /all 12 role files at their ROLE_SHA256 pins/.test(l)));
 });
 
 // was "a role runner that loaded a different version than preflight is discarded"
@@ -4733,9 +4735,9 @@ test("2.1.0 review skipped when no PR exists: listed in gates_not_run (7.3.0: a 
 // ---------------------------------------------------------------- 2.1.0 contract
 
 // 5.0.0 (R1): was "preflight loads ten roles; fleet-v2 pages halt"
-test("5.0.0 R1 (was 2.1.0 contract): preflight pins eleven role files (6.0.0: + fleet-ci-classifier); a changed one halts", async () => {
+test("5.0.0 R1 (was 2.1.0 contract): preflight pins twelve role files (6.0.0: + fleet-ci-classifier; 8.0.0: + fleet-held-out-runner); a changed one halts", async () => {
   let out = await run(happy(), ARGS);
-  assert.equal(Object.keys(out.result.role_sha256).length, 11);
+  assert.equal(Object.keys(out.result.role_sha256).length, 12);
   out = await runOne(offPin(happy(), "pr-review"), ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /pr-review\.md hashes/);

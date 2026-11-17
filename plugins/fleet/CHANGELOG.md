@@ -121,6 +121,55 @@ Fleet 8.0.0: one major release in two cars. Car A: yaadgaar #74 and #71. Car B: 
   the happy plan pins move by one. Sentinel test: a unique string in an example reaches no
   dispatched prompt (raw, or decoded from any chunk but the write step's own), no plan ref, no
   run-state chunk, no result and no gate log line (`v800_held_out.test.mjs`).
+- Car G4 (the held-out runner, build side, #6 half, gate 3, ADR-1152): a twelfth role,
+  `roles/fleet-held-out-runner.md` (sonnet, fallback opus, `fleet:judge`, read-only on the
+  worktree; `ROLE_COUNT` 12). Each code round, after `infra:gates:r<n>` and before the code judge's
+  reset, `infra:build-reset:held-out:r<n>` (its own build dir and PATH check, B1-5) and
+  `role:fleet-held-out-runner:r<n>` run when the plan ref seals a store. The role runs
+  `held_out.py show` itself (`held_out_cmd` input; the program is pinned and its slot is the write
+  step's), makes a scratch copy of the judged tree with `scratch_copy.py`, appends one throwaway
+  test per example to the criterion's frozen test file in the copy (`patch`, then a patch back),
+  runs it with the sealed `test_cmd`, and returns
+  `{store, store_digest, results}` (each result `{criterion, index, pass}`) with no example text.
+  The script: store `missing` gives `not_run` "store file missing on this machine"; `mismatch` or
+  `error`, a
+  `store_digest` off the seal, or results that do not match the sealed `per_criterion`
+  counts (each 0-based index once, `pass` a boolean, no other criterion) stop with `needs_human`
+  at gate `gates`. The runner's `reason`, `memory_notes` and other text are never logged,
+  forwarded or collected; its stops use fixed text, and the results are rebuilt from the checked
+  fields. The code judge gets `held_out_results: {status: "ran", reason: null, results}` (or the
+  not_run object); an approve with a failing example becomes `fix_code` with the coder finding
+  "criterion X fails a hidden example" (`lastRoundGate` `held_out`). `held_out` leaves
+  `gates_not_run` only when every example of the current round passes (`state.gates.held_out`
+  status `failed` otherwise). A null seal ("no held-out example sealed"), a ref with no key ("a
+  pre-8.0.0 plan ref") and a re-planned ref ("not stored on a re-plan") dispatch no
+  runner. `HELD_OUT_NOT_RUN` (the default before a round's result) now reads "runs in the code
+  rounds only". `heldOutProblem` refuses a non-string sha256 (an array of one hex
+  string passed the RE test by coercion). Cap: one capped agent per code round with a seal;
+  `reserve(9 + ...)` becomes `reserve(10 + ...)`. The runner has no fingerprint hasher of its own:
+  the code judge's post-hasher (pre = the post-coder state) stops a runner that changes the
+  worktree at `fingerprint`, and the message names the code judge. The code-judge role rules on
+  `held_out_results` and lists `held_out` only when it did not run. A happy build makes 64 calls,
+  not 62 (63 agents); the 7.4.0 #61 Q4 (b) run reaches the cap at 91, not 90. Sentinel test: a
+  hostile runner (the sentinel in reason, memory_notes and an extra result key) leaks it into no
+  prompt, gate log, result, PR body input or code-judge input (`v800_held_out_runner.test.mjs`).
+  Security review: the code under test sees the examples, so the runner gets its own test
+  database (`fleet_hrun`, a user no other role has; never the code judge's DSN) and a private
+  `HOME`, `TMPDIR` and XDG dirs (`XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`,
+  `XDG_STATE_HOME`) under its own build dir `held-out-r<n>`; the role runs `held_out.py show` without that env. The next build-dir reset
+  (the code judge's, right after the runner on every path that goes on) deletes the whole build
+  root, and a stop's teardown (`infra:build-clean`) does too: no new agent. The role text also
+  asks for evidence that the new test ran (a name filter in `test_args` must still select it) and
+  never appends to a runner-config file. Limit (ADR-1152): code under test can still write
+  anywhere the user can write, and the coder has a shell that can read the store file directly,
+  so these measures block casual leaks only.
+  Tests changed on purpose: the call and agent counts (v4_s3, v5_roles, v800_reset_path,
+  v800_surfaces, v740_test_conflict), the build-env site counts (v4_s5, v506), the twelve-role
+  pins (build_task_run, v5_roles, v740_readme), the copy-role list (v730_scratch_copy), the
+  held_out reason (build_task_run, v800_gate_tools), the G2 label order and reserve pin
+  (v800_coverage), the role-run program exemption (v4_s1), a READS entry (v403) and the v5010
+  snapshot. Three stale dist guards at 480000 (v503, v504, v631) move to the 495000 limit that G1
+  set in the size guard (Max's Q7); the dist is now over 480000.
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

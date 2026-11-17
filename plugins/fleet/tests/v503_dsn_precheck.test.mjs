@@ -218,6 +218,6 @@ test("5.0.3 the post-commit gate still refuses mysql:// (backstop unchanged)", a
   assert.equal(out.result.plan_ref, undefined);
 });
 
-test("5.0.3 the workflow stays at most 480000 bytes", () => {
-  assert.ok(statSync(WORKFLOW).size <= 480000, "build-task-run.js is " + statSync(WORKFLOW).size + " bytes");
+test("5.0.3 the workflow stays at most 495000 bytes (8.0.0 G1, Q7; was 480000)", () => {
+  assert.ok(statSync(WORKFLOW).size <= 495000, "build-task-run.js is " + statSync(WORKFLOW).size + " bytes");
 });
