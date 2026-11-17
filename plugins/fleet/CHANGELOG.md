@@ -172,6 +172,20 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
   run-state chunk dirs moved to `<scratch>/chunks/`. No Write rule covers `ci-*.json`, `parked/`,
   `hashes/` or `callers/`. A worktree with the car-4 settings gets the new file from the workspace
   step (it rewrites a differing file); chunk dirs are per run, so a resume reads none.
+- #43 (cross-task branch adoption, major): `fleet_branch.py <repo> <task id> <source>` prints
+  `owned` beside `slugs`, digest-covered: a slug is owned when the sealed `refs/fleet/<task id>/plan`
+  names its branch and lists `<source>` (`kind:ref`) in its brief, or when a parked
+  `findings.json` of its worktree names this task id and source. Plan mode adopts an owned slug
+  only. The prefix match alone also found another task's branch (`acme/api#2`, task id
+  `acme-api-2`, adopted `fleet/acme-api-2-7-fix-x` of `acme/api-2#7`); unowned slugs are listed in
+  a gate line and never adopted, and several of them no longer stop the run. Park findings now
+  carry `task_id` and `source`; a 7.2.0 park has neither, so it proves nothing (fail closed: the
+  derived slug). A task id that a 24-character cut would shorten keeps 15 characters plus `-` and
+  8 hex of the sha256 of the full ref (`yadgarhq/yadgar-backend#45` and `#46` shared one id); a
+  short id is unchanged, so its branches and refs still resolve. A task in flight with such a
+  long ref gets the new id: its old branch and refs are not found (re-run plan, or delete them).
+  The text-input skip reads the source kind, not a task id starting with `t` (a ref such as
+  `team/tools#12` was skipped).
 
 ### Tests changed on purpose (review fixes)
 
@@ -179,6 +193,8 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
 - `v730_scratch_copy`: the new `scratch_copy.py` signatures; the env probe runs `printenv`, not
   `sh -c`. `v730_shell_programs`, `v4_s3`: the narrowed Write rule. `v502_relay_keys`, `v4_s4`,
   `build_task_run` (plan-ref chunk dir): the chunk dirs under `scratch/chunks/`.
+- New: `v730_review_branch_owner`. `v730_branch_slug`: the fixtures own their slugs, the program
+  takes the source; the harness default relay adds `owned: []`.
 
 ### Tests changed on purpose (car 4)
 

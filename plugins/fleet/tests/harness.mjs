@@ -350,7 +350,7 @@ export async function runOne(script, args0) {
     // 7.3.0 (#43): unscripted fleet-branch reads find no fleet branch of the task
     if (!(label in script) && /^infra:fleet-branch$/.test(label)) {
       const i = inputsOf(prompt);
-      return { status: "ok", reason: "listed", slugs: [], args: [i.repo, i.task_id] };
+      return { status: "ok", reason: "listed", slugs: [], owned: [], args: [i.repo, i.task_id, i.source] };
     }
     // 4.0.0 (1985, S3): unscripted push-access probes find access (a new branch)
     if (!(label in script) && /^infra:push-probe$/.test(label))

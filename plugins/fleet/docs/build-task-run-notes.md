@@ -4406,11 +4406,17 @@ Cleanup runs after the shipped run-state write, from / with git -C <repo>.
 ```text
 Plan mode reads the local branches refs/heads/fleet/<task id>-* before the layout, with the
 read-only program fleet_branch.py <repo> <task id> (label infra:fleet-branch, haiku, digest id
-fleet_branch). It prints {slugs, args, program, digest}: the slugs after "fleet/<task id>-",
-sorted, at most 50. A task id that is not [a-z0-9][a-z0-9-]{0,31} exits non-zero. One slug is
-adopted over the intake title's slug, so a re-run whose intake titles the task differently keeps
-its branch, worktree and parked drafts. None, or the derived slug among several: the derived
-slug. Several without it: needs_human with the branch list. A text input (t... id) reads none.
+fleet_branch). It prints {slugs, owned, args, program, digest}: the slugs after
+"fleet/<task id>-", sorted, at most 50, and (review fix) the owned ones: the sealed
+refs/fleet/<task id>/plan names that branch and lists the source (kind:ref, a third argument),
+or a parked findings.json of that branch's worktree names the task id and source (park findings
+carry both since the review fix). A task id that is not [a-z0-9][a-z0-9-]{0,31} exits non-zero.
+One owned slug is adopted over the intake title's slug, so a re-run whose intake titles the task
+differently keeps its branch, worktree and parked drafts. No owned slug, or the derived slug: the
+derived slug (unowned slugs are named in a gate line). Several owned without the derived one:
+needs_human with the branch list. A text source reads none. namesFor: an id slug longer than 24
+characters is 15 characters, "-" and 8 hex of sha256(ref) (idSlug), so two long refs never share
+a task id; a short one is unchanged.
 ```
 
 ### `scratch_copy.py`, `COPY_ROLES` (#54, L2189)

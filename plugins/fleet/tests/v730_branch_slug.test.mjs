@@ -13,9 +13,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ARGS, BRIEF, SCRIPTS_SRC, happy, runOne, call, inputsOf, spawnSync } from "./harness.mjs";
 
+// review fix: a slug is adopted only when the program proves it (owned); these fixtures own every slug
 const slugs = (list) => (p) => {
   const i = inputsOf(p);
-  return { status: "ok", reason: "listed", slugs: list, args: [i.repo, i.task_id] };
+  return { status: "ok", reason: "listed", slugs: list, owned: list.slice(), args: [i.repo, i.task_id, i.source] };
 };
 function titled(title, list) {
   const s = happy();
@@ -30,7 +31,7 @@ test("7.3.0 #43 A11: one existing fleet/y42-<slug> branch: its slug is adopted o
   assert.equal(ws.branch, "fleet/y42-intake-branch-slug-drifts");
   assert.ok(out.logs.some((l) => /branch slug intake-branch-slug-drifts adopted from existing fleet\/y42-intake-branch-slug-drifts \(intake gave intake-slug-drift\)/.test(l)), out.logs.join("\n"));
   assert.ok(out.labels.indexOf("infra:fleet-branch") < out.labels.indexOf("workspace"));
-  assert.match(call(out, "infra:fleet-branch").prompt, /fleet_branch\.py' '\/r' 'y42'/);
+  assert.match(call(out, "infra:fleet-branch").prompt, /fleet_branch\.py' '\/r' 'y42' 'yaadgaar:42'/);
 });
 
 test("7.3.0 #43 A12: several slugs without the derived one stop; none or the derived one keep it; a text input reads none", async () => {
@@ -58,13 +59,14 @@ test("7.3.0 #43: fleet_branch.py lists the slugs of refs/heads/fleet/<id>-* only
     git("init", "-q", "-b", "main");
     git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "init");
     for (const b of ["fleet/y43-one", "fleet/y43-two", "fleet/y430-other", "fleet/x43-no", "y43-no"]) git("branch", b);
-    const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "fleet_branch.py"), repo, "y43"], { encoding: "utf8" });
+    const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "fleet_branch.py"), repo, "y43", "yaadgaar:43"], { encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.deepEqual(o.slugs, ["one", "two"]);
-    assert.deepEqual(o.args, [repo, "y43"]);
+    assert.deepEqual(o.owned, []);
+    assert.deepEqual(o.args, [repo, "y43", "yaadgaar:43"]);
     assert.match(o.digest, /^[0-9a-f]{64}$/);
-    assert.notEqual(spawnSync("python3", ["-I", join(SCRIPTS_SRC, "fleet_branch.py"), repo, "../x"]).status, 0);
+    assert.notEqual(spawnSync("python3", ["-I", join(SCRIPTS_SRC, "fleet_branch.py"), repo, "../x", "yaadgaar:43"]).status, 0);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

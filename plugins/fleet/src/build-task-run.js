@@ -1499,28 +1499,38 @@ function sealOf(ref) {
 function escapeRe(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+// 7.3.0 review (#43): a slug cut to 24 characters keeps 15 and a hash of the full ref (two refs shared one id); a short one is unchanged
+function idSlug(s, ref) {
+  const full = slugify(s, 1e4);
+  return full.length <= 24 ? full : slugify(s, 15) + "-" + sha256Hex(String(ref)).slice(0, 8);
+}
 function namesFor(brief, raw) {
   let taskId = null;
+  let source = null;
   for (const kind of ID_KINDS) {
     const src = brief.sources.find((x) => x.kind === kind);
     if (!src) continue;
     taskId =
       kind === "ledger"
-        ? "l" + slugify(String(src.ref).replace(/^l/i, ""), 24)
+        ? "l" + idSlug(String(src.ref).replace(/^l/i, ""), src.ref)
         : kind === "yaadgaar"
-          ? "y" + slugify(String(src.ref).replace(/^#/, ""), 24)
-          : slugify(src.ref, 24);
+          ? "y" + idSlug(String(src.ref).replace(/^#/, ""), src.ref)
+          : idSlug(src.ref, src.ref);
+    source = kind + ":" + src.ref;
     break;
   }
   const planSrc = brief.sources.find((x) => x.kind === "plan");
-  if (taskId === null && planSrc) taskId = "p" + sha256Hex(normPath(brief.plan_path || planSrc.ref)).slice(0, 8);
+  if (taskId === null && planSrc) {
+    taskId = "p" + sha256Hex(normPath(brief.plan_path || planSrc.ref)).slice(0, 8);
+    source = "plan:" + planSrc.ref;
+  }
   const text = taskId === null ? brief.sources.find((x) => x.kind === "text") : null;
   if (text) {
     const src = typeof raw === "string" && raw.trim() ? raw.trim() : text.body.trim();
-    return { taskId: "t" + sha256Hex(src).slice(0, 8), slug: slugify(src) || "task" };
+    return { taskId: "t" + sha256Hex(src).slice(0, 8), slug: slugify(src) || "task", text: true, source: null };
   }
   if (taskId === null) taskId = "task";
-  return { taskId, slug: slugify(brief.title) || "task" };
+  return { taskId, slug: slugify(brief.title) || "task", text: false, source };
 }
 function proposedChanges(findings, note) {
   return findings.map((f) => {
@@ -1585,7 +1595,7 @@ const PROGRAM_SHA256 = {
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
   "exclude_add": "8e510601a0deac5baa673f1a888a78fa28c3cf49c20e2949a539252ffdea3566",
-  "fleet_branch": "f9bb29a4f8bdfc382075aab56e547902bf2be532042e7ba410e623ea2aadb299",
+  "fleet_branch": "b8ae42b7e44d8fb434675d04af4842b12099e322f0feced20e992c42db69d900",
   "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
   "format_files": "6890f94e46365fecdff078a39b28cda938d715b53ef7157baee5475b38a6951a",
   "gh_identity": "82885435973242bc67bbfeca19ec512f83e5ca52e7342dbd4207cff33567c357",
@@ -1767,7 +1777,7 @@ const PROGRAM_KEYS = {
   "parked:read": ["parked", "args"],
   // 7.3.0 (#42, #43)
   "parked:part": ["part", "chunks", "args"],
-  "fleet_branch": ["slugs", "args"],
+  "fleet_branch": ["slugs", "owned", "args"],
   "parked:write": ["written", "sha256", "args"],
   "parked:park": ["target", "clean", "dirty", "args"],
   // 7.3.0 (#9)
@@ -1885,7 +1895,7 @@ const PROGRAM_OUT = {
     digest: STR,
   },
   plan_hash: { plan_sha256: STR, blob: STR_OR_NULL, args: STRS, digest: STR },
-  fleet_branch: { slugs: STRS, args: STRS, digest: STR },
+  fleet_branch: { slugs: STRS, owned: STRS, args: STRS, digest: STR },
   // 7.3.0 (#9)
   exclude_add: { added: STRS, exclude: STR, args: STRS, digest: STR },
   purge: { purged: INT, args: STRS, digest: STR },
@@ -4204,14 +4214,16 @@ async function workspaceStep(repo, lay, wopt) {
   return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "" };
 }
 // 7.3.0 (#43): the slug of the one existing local branch fleet/<task id>-<slug> (an intake title varies per run)
+// review fix: only a slug the program proves this task's (sealed plan ref, or parked findings naming the source)
 async function branchSlug(repo, names) {
-  const args = [repo, names.taskId];
-  const r = await infra("infra:fleet-branch", INFRA_STEP + "list the local fleet branches of this task. Read only.\n" + inputsLine({ repo, task_id: names.taskId }) + RUN_EXACT + progCmd("fleet_branch", args) + "\nIt prints one JSON object " + printsKeys("fleet_branch") + '. Return {status: "ok", reason, ' + returnKeys("fleet_branch") + "}" + COPY_DIGEST, "Intake", JUDGE_AGENT, "fleet_branch", args);
+  const args = [repo, names.taskId, names.source];
+  const r = await infra("infra:fleet-branch", INFRA_STEP + "list the local fleet branches of this task. Read only.\n" + inputsLine({ repo, task_id: names.taskId, source: names.source }) + RUN_EXACT + progCmd("fleet_branch", args) + "\nIt prints one JSON object " + printsKeys("fleet_branch") + '. Return {status: "ok", reason, ' + returnKeys("fleet_branch") + "}" + COPY_DIGEST, "Intake", JUDGE_AGENT, "fleet_branch", args);
   requireProgram(r, "fleet_branch", "infra:fleet-branch");
-  if (!relayDigestOk(r, progKeys("fleet_branch"), "fleet_branch") || canonical(r.args) !== canonical(args) || !strsOf(r.slugs))
+  if (!relayDigestOk(r, progKeys("fleet_branch"), "fleet_branch") || canonical(r.args) !== canonical(args) || !strsOf(r.slugs) || !strsOf(r.owned) || r.owned.some((x) => r.slugs.indexOf(x) < 0))
     halt("failed", "infra:fleet-branch: the relay does not match the program's digest or arguments");
   const d = names.slug;
-  const s = r.slugs.filter((x) => x && x === slugify(x));
+  const s = r.owned.filter((x) => x && x === slugify(x));
+  if (r.slugs.some((x) => x !== d && s.indexOf(x) < 0)) gate("branch slug: fleet branches with no proof they are task " + names.taskId + "'s are not adopted: " + r.slugs.filter((x) => x !== d && s.indexOf(x) < 0).join(", "));
   const br = (x) => "fleet/" + names.taskId + "-" + x;
   if (!s.length || s.indexOf(d) >= 0) return d;
   if (s.length > 1) halt("needs_human", "several fleet branches of task " + names.taskId + " and none is " + br(d) + ": " + s.map(br).join(", ") + "; delete the stale ones, then re-run plan");
@@ -5797,7 +5809,7 @@ async function planMode(input, date) {
   if (lp) halt("needs_human", "intake: " + lp);
   const names = namesFor(brief, raw);
   if (!names.taskId) halt("needs_human", "task id derives to an empty slug from " + JSON.stringify(brief.sources[0].ref));
-  if (names.taskId.charAt(0) !== "t") names.slug = await branchSlug(brief.repo, names);
+  if (!names.text) names.slug = await branchSlug(brief.repo, names);
   const lay = layout(names, brief.repo);
   state.branch = lay.branch;
   state.ownRefs = ownRefPrefixes(names, lay);
@@ -5859,7 +5871,7 @@ async function planMode(input, date) {
       scratch: lay.scratch,
       run: state.nonce,
       chunk_dir: lay.scratch + "/chunks/park-chunks-" + safeName(state.nonce),
-      c: chunked(JSON.stringify(stripHeldOut({ reason: e instanceof Stop ? e.reason : "stopped", rounds: ls.rounds, symbols: ls.symbols, plan_path: draft }))),
+      c: chunked(JSON.stringify(stripHeldOut({ reason: e instanceof Stop ? e.reason : "stopped", rounds: ls.rounds, symbols: ls.symbols, plan_path: draft, task_id: names.taskId, source: names.source }))),
     };
     let pk = null;
     try {
