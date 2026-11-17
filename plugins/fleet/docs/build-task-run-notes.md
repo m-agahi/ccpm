@@ -4538,3 +4538,31 @@ Limit: in-process code under test can still tamper with the tracer (sys.settrace
 coverage module's own objects). The gate is advisory to the judge; it does not stand against
 a hostile coder.
 ```
+
+## 8.0.0 notes (G3)
+
+### `held_out.py`, `infra:held-out:write`, `heldOutWrite` (G3, ADR-1152)
+
+```text
+Transport: the script has no filesystem, so the examples reach the program the way the plan ref
+does: base64 chunks in the write step's own prompt, written with the Write tool under
+<scratch>/chunks/held-out-<nonce> (settingsFor already allows it), and checked per chunk by the
+program. The step's prompt is the only one that carries them; no role prompt does. The planner's
+list travels in planAndAudit's return under HELD_OUT_KEY, so any stripHeldOut copy (awaiting,
+run-state, park) drops it; commitPlanAndRef gets it as ctx.heldOut (plan mode only).
+One attempt, softDispatch, no opts.digest (a write step is not on the read-only retry list);
+the agent's reason is never logged. Any failure seals held_out null: the ref always carries the
+key from 8.0.0 on (absent = an older ref). No exit-3 chunk rewrite: a bad chunk is a failure, and
+the program removes the chunk dir on every exit path (try/finally), refusals included.
+Drop rules: when AND then both found verbatim in the plan doc (the doc at plan_path that hashes
+to the staged plan_sha256), or given, when and then all equal to a visible example of any
+criterion. A malformed example (criterion id not [A-Za-z0-9][A-Za-z0-9_-]{0,31}, a non-string
+field, an empty when or then) is dropped too. dropped carries {criterion, index, why} with a fixed
+why; a criterion id that fails the pattern is null, so no planner text reaches the log.
+Choices: no examples -> no write step (held_out null, gate line); a build-time re-plan stores
+none (held_out null, "not stored on a re-plan"): G4 reports not_run for a re-planned ref. No
+PATH check before the step (as infra:stage-plan: the program runs no child process).
+Residual for G4: if the agent dies after writing chunks and before the program runs, the chunk
+files stay under <scratch>/chunks/held-out-<nonce> until the run's scratch dir goes. The store
+blocks casual reads only (ADR-1152): roles have a shell and can read ~/.config.
+```

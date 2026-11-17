@@ -75,6 +75,7 @@ const INFRA_TIER = [
 ["infra:load-ref", "sonnet"],
 ["infra:commit-plan", "sonnet"],
 ["infra:plan-chunks", "sonnet"],
+["infra:held-out", "sonnet"],
 ["infra:state-chunks", "sonnet"],
 ["infra:park-chunks", "sonnet"],
 ["infra:park-plan", "sonnet"],
@@ -1508,6 +1509,7 @@ const PROGRAM_SHA256 = {
 "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
 "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
 "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
+"held_out": "cd9c62029ca923706d62a815728e67297a674e917c88f2c83fd4e2c301d740aa",
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
@@ -1554,7 +1556,7 @@ const ROLE_SHA256 = {
 "gate-change-nonweakening-sweep": "3634918d362a90dcf4a124eaeda7cf871950a124773b34ff68bd27695fae3a1b",
 "plan-audit": "652f50e283b40d5d8e5ceac2c6d6112e5b9be43d9df5143254741fabd73ddca0",
 "pr-review": "2a82c6c1413fde77cb92a973804ce3313192f5772e16023cf3bc8d3161de700e",
-"scope-and-plan": "1b17797dd667069021230ebe44572a5db3a468a94c4bb9af106ac34fdb1325ee"
+"scope-and-plan": "f97df1173552dfddf503864c06a3cfb75a8fce9b1a661981566ca236c8cb023b"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -1649,6 +1651,7 @@ const PROGRAM_SLOTS = [
 [/^infra:ruleset-surface:/, [[null, "ruleset_surface"]]],
 [/^infra:surfaces:/, [["hook_surface", "hook_surface"], ["ruleset_surface", "ruleset_surface"], ["pr_convention", "pr_convention"], ["changed_defs", "changed_defs"]]],
 [/^infra:gates:/, [["coverage", "cover_diff"]]],
+[/^infra:held-out:write/, [[null, "held_out"]]],
 [/^infra:review-paths:/, [[null, "review_paths"]]],
 [/^infra:precommit-ids/, [[null, "precommit_ids"]]],
 [/^infra:check-scripts/, [[null, "script_check"]]],
@@ -1665,6 +1668,8 @@ const PROGRAM_KEYS = {
 "session_project": ["project", "source", "cwd", "args"],
 "gate_tools": ["languages", "matrix", "container", "args"],
 "cover_diff": ["status", "reason", "findings", "args"],
+"held_out:write": ["sha256", "count", "per_criterion", "dropped", "args"],
+"held_out:show": ["examples", "sha256", "args"],
 "gh_identity": ["origin", "repos", "args"],
 "hasher": ["fingerprint", "hashes", "scripts"],
 "hasher:base": ["fingerprint", "hashes", "changed", "scripts"],
@@ -1757,6 +1762,7 @@ container: { type: "object", properties: { runtime: STR_OR_NULL, image: STR, pre
 args: STRS,
 digest: STR,
 },
+held_out: { sha256: STR_OR_NULL, count: INT, per_criterion: { type: "object", additionalProperties: INT }, dropped: { type: "array", items: { type: "object", properties: { criterion: STR_OR_NULL, index: INT, why: STR } } }, examples: { type: "array", items: { type: "object", properties: { criterion_id: STR, given: STR, when: STR, then: STR } } }, args: STRS, digest: STR },
 cover_diff: { status: STR, reason: STR_OR_NULL, findings: { type: "array", items: { type: "object", properties: { path: STR, lines: { type: "array", items: INT } } } }, args: STRS, digest: STR },
 branch_scan: {
 head: STR,
@@ -4957,8 +4963,7 @@ gate(
 "plan: test_cmd " + JSON.stringify(plan.test_cmd.command) + ", " + obligations.length + " repo obligation(s)" +
 (obligations.length ? " (" + obligations.map((o) => o.id + ":" + o.kind).join(", ") + ")" : ""),
 );
-if (Array.isArray(plan[HELD_OUT_KEY]) || plan.criteria.some((c) => c && c[HELD_OUT_KEY]))
-gate("planner emitted held_out_examples: dropped, never returned or forwarded");
+if (plan.criteria.some((c) => c && c[HELD_OUT_KEY])) gate("held-out: a criterion's own list is dropped");
 gate("plan: " + planPath + ", " + criteria.length + " criteria, test files disjoint");
 const wouldBeShort = isShortPath(planFacts);
 state.path = wouldBeShort ? "short" : "full";
@@ -5092,6 +5097,7 @@ est_agents: typeof est.agents === "number" ? est.agents : null,
 est_rounds: typeof est.rounds === "number" ? est.rounds : null,
 },
 relaxed: ctx.relaxed || [],
+[HELD_OUT_KEY]: plan[HELD_OUT_KEY],
 };
 }
 const MAX_SHORT_TEST_ROUNDS = 2;
@@ -5111,9 +5117,10 @@ const stagedSha = st.plan_hash.plan_sha256;
 if (!relayDigestOk(st.plan_hash, progKeys("plan_hash"), "plan_hash") || canonical(st.plan_hash.args) !== canonical([ctx.worktree, "", ctx.fields.planPath]))
 halt("failed", stLabel + ": the relayed plan hash does not match the program's digest or arguments");
 if (typeof stagedSha !== "string" || !SHA256_RE.test(stagedSha)) halt("failed", stLabel + " returned no usable plan_sha256");
+const heldOut = await heldOutWrite(ctx, stagedSha);
 const sealAt = (writers) => {
 const history = Object.assign({}, ctx.fields.history, { agents: ctx.fields.history.agents + state.agents + ctx.after + 2 + writers, audits: (ctx.fields.history.audits || 0) + (state.audits || 0) });
-return makePlanRef(Object.assign({}, ctx.fields, { planSha: stagedSha, history, planBase: ctx.planBase }));
+return makePlanRef(Object.assign({}, ctx.fields, { planSha: stagedSha, history, planBase: ctx.planBase, heldOut }));
 };
 let writers = 1;
 let full = sealAt(writers);
@@ -5207,6 +5214,34 @@ const ep = planRefMetaProblem(e, w.plan_commit, msgSha) || (e.tag_sha !== w.tag_
 if (ep) halt("failed", label + ": the plan ref " + refName + " differs from the sealed ref (" + ep + ")");
 return v;
 }
+function heldOutProblem(h) {
+const pc = (h && h.per_criterion) || 0;
+const n = Array.isArray(pc) ? 0 : Object.values(Object(pc)).reduce((a, v) => a + (Number.isInteger(v) && v > 0 ? v : NaN), 0);
+return Object.keys(h || 0).sort() + "" !== "count,per_criterion,sha256" || !SHA256_RE.test(h.sha256) || h.count !== n || !n;
+}
+async function heldOutWrite(ctx, sha) {
+const ex = ctx.heldOut;
+const none = (why) => (gate("held-out: " + why + "; held_out null"), null);
+if (!Array.isArray(ex) || !ex.length) return none(ex ? "no example" : "not stored on a re-plan");
+const c = chunked(JSON.stringify({ examples: ex, visible: ctx.fields.criteria.map((k) => k.examples) }));
+if (c.chunks.length > CHUNKS_PER_WRITER) return none("too many chunks");
+const dir = scratchOf(ctx.worktree) + "/chunks/held-out-" + safeName(state.nonce);
+const args = [ctx.worktree, ctx.fields.taskId, ctx.fields.planPath, sha, dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)];
+const r = await softDispatch(
+"infra:held-out:write",
+INFRA_STEP + "store the held-out examples; never decode the chunks.\n" +
+inputsLine({ task_id: args[1], chunk_dir: dir }) + "a. " + CHUNK_WRITE(dir) + "\nb. " + RUN_EXACT + progCmd("held_out", ["write"].concat(args)) +
+"\nIt prints one JSON object " + printsKeys("held_out:write") + COPY_DIGEST + "Return {status, reason, " + returnKeys("held_out:write") + "}.\n" +
+c.chunks.map((x, i) => "chunk " + i + " sha256 " + c.shas[i].sha256 + ":\n" + x + "\n").join(""),
+{ schema: INFRA_SCHEMA, phase: ctx.phaseName },
+);
+const ok = r && r.status === "ok" && relayDigestOk(r, progKeys("held_out:write"), "held_out") && canonical(r.args) === canonical(args);
+if (ok && r.dropped.length) gate("held-out: dropped " + JSON.stringify(r.dropped));
+const h = ok && { sha256: r.sha256, count: r.count, per_criterion: r.per_criterion };
+if (!h || heldOutProblem(h)) return none(ok ? "nothing kept" : "the store write failed");
+gate("held-out: " + h.count + " example(s) stored " + JSON.stringify(h.per_criterion));
+return h;
+}
 function scratchOf(worktree) {
 return String(worktree).replace(/\/+[^/]+\/*$/, "") + "/scratch";
 }
@@ -5228,6 +5263,7 @@ plan_diff: f.planDiff,
 plan_facts: f.planFacts,
 history: f.history,
 project: typeof f.project === "string" && f.project ? f.project : null,
+held_out: f.heldOut || null,
 });
 if (f.policy && typeof f.policy === "object") ref.policy = stripHeldOut(f.policy);
 ref.seal = sealOf(ref);
@@ -5670,6 +5706,7 @@ after: 1 + (runGates ? autoGateAgents(p.planFacts.commands) : 0),
 planBase: scan.head,
 expectHead: scan.head,
 retire: parked && parked.run ? { dir: lay.scratch + "/parked/" + parked.run, used: lay.scratch + "/parked/used" } : null,
+heldOut: p[HELD_OUT_KEY] || [],
 fields: {
 branch: lay.branch,
 planPath: p.planPath,
@@ -5765,6 +5802,7 @@ if (r.branch !== "fleet/" + r.task_id + "-" + r.slug) return "branch does not ma
 if (!r.history || typeof r.history !== "object") return "history missing";
 const pre = preflightRecordProblem(r.history.preflight);
 if (pre) return pre;
+if ("held_out" in r && r.held_out !== null && heldOutProblem(r.held_out)) return "held_out is malformed";
 if ("policy" in r && sealedPolicyProblem(r.policy)) return "policy is malformed (" + sealedPolicyProblem(r.policy) + ")";
 if ("project" in r && r.project !== null && (typeof r.project !== "string" || !r.project)) return "project is not a non-empty string or null";
 return null;
@@ -6087,6 +6125,8 @@ loaded = null;
 }
 const lp = planRefProblem(loaded);
 if (lp) changed(lp);
+const ho = loaded.held_out;
+gate("held_out: " + (ho ? ho.count + " example(s) sealed" : "none sealed"));
 if (loaded.branch !== tiny.branch || cleanRepo(loaded.brief.repo) !== repo || planRefName(loaded.task_id) !== tiny.plan_ref)
 changed("does not match plan_ref (branch, repo or task id)");
 if (loaded.history.preflight && loaded.history.preflight.fleet_version !== FLEET_VERSION)

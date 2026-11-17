@@ -138,7 +138,7 @@ Each criterion gets a stable id (`AC1`, `AC2`, …) and must be:
 
 Also produce `held_out_examples`: at least one per criterion where feasible, in the same literal `given / when / then` form, using DIFFERENT inputs from the plan's examples. They exist to catch a coder who fits the visible examples only.
 
-- This release does not run them: the workflow drops them on receipt and never forwards them to another role. A later release will execute them on the finished code, out of the coder's sight. Write them as if they were executed.
+- The workflow stores them outside the worktree, on this machine only, and never forwards them to another role. An example whose `when` and `then` both appear in the plan doc, or that equals one of the plan's visible examples, is dropped. A later release will execute them on the finished code, out of the coder's sight. Write them as if they were executed.
 - Return them ONLY in your StructuredOutput object.
 - NEVER write them into the plan file, any other file, a commit, a PR, or the worktree. The coder can read every file in the worktree; a held-out example written anywhere there is no longer held out. Do not mention their values in `reason` or `tldr` either.
 

@@ -110,7 +110,8 @@ test("8.0.0 B1-1: the happy build drops 7 calls (68 -> 61): each paired reset ru
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
   // 8.0.0 (#62 B2): - 2 plan calls (the surfaces step), - 1 build call (infra:surfaces:r1)
-  assert.equal(out.plan.calls.length, 20, out.plan.labels.join(", "));
+  // 8.0.0 (G3): + 1 plan call (infra:held-out:write)
+  assert.equal(out.plan.calls.length, 21, out.plan.labels.join(", "));
   // 8.0.0 (G2): + 2 (infra:build-reset:gates:r1 and infra:gates:r1; the gate is capped)
   assert.equal(out.build.calls.length, 62, out.build.labels.join(", "));
   assert.equal(out.result.agents, 61);

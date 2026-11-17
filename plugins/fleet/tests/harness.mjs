@@ -118,7 +118,7 @@ export function scenarioRoles(script) {
 // The harness fills missing ones with neutral defaults for terse override
 // stubs; a stub with __raw: true is returned as written (drift tests).
 export const REQUIRED_DEFAULTS = {
-  "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [], tldr: "adds a thing", plan_diff: ["new plan"], repo_obligations: [], test_cmd: { command: "pytest <paths>", paths_placeholder: "<paths>", env: {}, tools: [] }, changed_symbols: [], change_kind: "feature" },
+  "scope-and-plan": { plan_path: "docs/plans/x.md", criteria: [], est_diff_lines: 80, new_behaviour: true, allowed_additions: { files: [], symbols: [], deps: [], settings: [] }, held_out_examples: [{ criterion_id: "AC1", given: "g", when: "held(1)", then: "h1" }], tldr: "adds a thing", plan_diff: ["new plan"], repo_obligations: [], test_cmd: { command: "pytest <paths>", paths_placeholder: "<paths>", env: {}, tools: [] }, changed_symbols: [], change_kind: "feature" },
   "plan-audit": { verdict: "approve", routed_findings: [] },
   "fleet-test-writer": { criterion_id: "AC1", tests: [], files: [] },
   "fleet-test-judge": { verdict: "approve", routed_findings: [], checked: [] },
@@ -388,6 +388,8 @@ export async function runOne(script, args0) {
       if (SHARED_FOR_ROLE[role]) r.shared_file = { name: SHARED_FOR_ROLE[role], sha256: SHARED_PIN[SHARED_FOR_ROLE[role]] };
       return r;
     }
+    // 8.0.0 (G3): an unscripted held-out write stores every example it was sent
+    if (!(label in script) && /^infra:held-out:write/.test(label)) return heldOutOut(prompt);
     // 8.0.0 (G2): an unscripted gate step finds no coverage tool (not_run)
     if (!(label in script) && /^infra:gates:/.test(label)) return { status: "ok", reason: "ran", coverage: coverOut(prompt) };
     // the bytecode purge is mechanical; unscripted purges succeed by default
@@ -1368,6 +1370,8 @@ export const PROGRAM_LABELS = [
   // 8.0.0 (#62 B2): the read-only surface programs of one step, each in its own slot
   [/^infra:surfaces:/, SURFACE_PARTS.map(([slot]) => [slot, slot, K(slot)])],
   [/^preflight$/, [["path_check", "path_check", K("path_check")], ["session_project", "session_project", K("session_project")], ["gate_tools", "gate_tools", K("gate_tools")]]],
+  // 8.0.0 (G3): the held-out store write (read lazily)
+  [/^infra:held-out:write/, [[null, "held_out", PROGRAM_KEYS["held_out:write"] || null]]],
   // 8.0.0 (G2): a code round's gate programs, one slot per gate (read lazily)
   [/^infra:gates:/, [["coverage", "cover_diff", PROGRAM_KEYS["cover_diff"] || null]]],
   [/^infra:path-check:/, [[null, "path_check", K("path_check")]]],
@@ -1515,6 +1519,17 @@ function fillSlot(o, name, keys0, label, prompt) {
 export function pushArgsOf(prompt) {
   const m = /push\.py'((?: '(?:[^']|'\\'')*')+)/.exec(prompt);
   return m ? [...m[1].matchAll(/'((?:[^']|'\\'')*)'/g)].map((x) => x[1].replace(/'\\''/g, "'")) : [];
+}
+// 8.0.0 (G3): the args of the prompt's held_out.py command (mode dropped), and a write that keeps every example
+export function heldOutArgsOf(prompt) {
+  const m = /held_out\.py'((?: '(?:[^']|'\\'')*')+)/.exec(prompt);
+  return m ? [...m[1].matchAll(/'((?:[^']|'\\'')*)'/g)].map((x) => x[1].replace(/'\\''/g, "'")).slice(1) : [];
+}
+export function heldOutOut(prompt, over) {
+  const ex = JSON.parse(chunkedContentOf(prompt)).examples;
+  const per = {};
+  for (const e of ex) per[e.criterion_id] = (per[e.criterion_id] || 0) + 1;
+  return Object.assign({ status: "ok", reason: "stored", sha256: sha256("salt" + JSON.stringify(ex)), count: ex.length, per_criterion: per, dropped: [], args: heldOutArgsOf(prompt) }, over);
 }
 // 8.0.0 (G2): the args of the prompt's cover_diff.py command, and its output (default: no coverage tool)
 export function coverArgsOf(prompt) {

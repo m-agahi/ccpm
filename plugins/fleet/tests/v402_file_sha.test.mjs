@@ -94,6 +94,8 @@ const SAMPLES = [
   "infra:surfaces:r1",
   // 8.0.0 (G2): a code round's gate programs
   "infra:gates:r1",
+  // 8.0.0 (G3): the held-out store write (plan mode)
+  "infra:held-out:write",
   "infra:review-paths:v1",
   "infra:precommit-ids",
   "infra:check-scripts:plan",

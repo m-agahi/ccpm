@@ -98,6 +98,8 @@ const WANT = [
   [/^infra:surfaces:/, "sonnet"],
   // 8.0.0 (G2): a code round's gate programs
   [/^infra:gates:/, "sonnet"],
+  // 8.0.0 (G3)
+  [/^infra:held-out:write$/, "sonnet"],
   [/^infra:replan-/, "sonnet"],
   [/^infra:state:/, "sonnet"],
   [/^infra:(fleet-scan|purge-bytecode|review-cleanup|ledger-|yaadgaar-|comments-)/, "sonnet"],
@@ -527,8 +529,9 @@ test("5.0.0 R1 (was 4.0.0 1990 AC-1990-1): absolute agent counts are 4.0.3's; ev
   // 6.3.4 (2176): + infra:plan-chunks:r0w0
   // 7.3.0 (#43): + infra:fleet-branch
   // 8.0.0 (#62 B2): - 2 (infra:surfaces:plan runs the hook, ruleset and convention reads)
-  assert.equal(out.plan.calls.length, 20, out.plan.labels.join(", "));
-  assert.equal(out.planResult.agents, 20);
+  // 8.0.0 (G3): + 1 (infra:held-out:write; the harness planner returns one held-out example; capped)
+  assert.equal(out.plan.calls.length, 21, out.plan.labels.join(", "));
+  assert.equal(out.planResult.agents, 21);
   // 5.0.6 (ledger 2019): + 7 build-dir resets (writers, test judge, coder,
   // code judge, commit, push, pr-review) and the teardown, which runs after
   // the result is made

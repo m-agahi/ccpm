@@ -221,8 +221,9 @@ Only a `failed` commit relay steers a rewrite. The joined parts must match `ref_
 
 Plan mode returns `awaiting_confirmation` with `tldr`, `plan_diff`, `fleet_size`
 (`{criteria, est_agents, est_rounds}`), `plan_path` and `plan_ref`. It makes no push, no PR, no
-ledger write and no comment. The planner's `held_out_examples` are dropped: never returned and
-never forwarded.
+ledger write and no comment. The planner's `held_out_examples` are never returned and never
+forwarded to another role: since 8.0.0 (G3) they go to the held-out store on this machine, and the
+plan ref seals only its sha256 (see "Held-out store" under the gates).
 
 Caller coverage (2.1.6): the planner returns `changed_symbols`, every occurrence of each existing
 function, guard or symbol the plan changes, as `{symbol, occurrences: [{at: "<path>:<line>",
@@ -1655,6 +1656,22 @@ The script pins the role contract, not the prose:
   and no `COVERAGE_*` variable reaches the tests, and git attributes cannot hide an added line.
   Limit: code under test runs in the same process as the tracer and can still tamper with it, so
   the gate is advisory to the judge and does not stand against a hostile coder.
+- **Held-out store (8.0.0, G3).** In plan mode, after the plan is staged, one agent
+  (`infra:held-out:write`, sonnet, a write step: one attempt, no digest retry) writes the
+  planner's top-level held-out examples and each criterion's visible examples as base64 chunks
+  under the run's scratch dir and runs `held_out.py write`. The program removes the chunks on
+  every exit, drops an example whose `when` and `then` both appear verbatim in the plan doc or
+  that equals a visible example (given, when and then), and stores the rest in
+  `$XDG_CONFIG_HOME/fleet/held-out/<task_id>/<plan_sha256>.json` (`~/.config` when unset; a
+  relative value is refused). The dir is 0700, the file 0600, with a random salt. It prints
+  `{sha256, count, per_criterion}` (plus the dropped criterion and index, never example text);
+  `sha256` is the hash of the file bytes, salt included. The plan ref seals only that object as
+  `held_out`; any failure, or no example, seals `held_out: null`, and the build lists `held_out`
+  in `gates_not_run`. A ref sealed before 8.0.0 has no `held_out` key and is accepted; a malformed
+  one is refused. `held_out.py show` prints the examples only for the sealed sha256 (for the
+  runner role of a later car). Threat model (ADR-1152): the store keeps the examples out of the
+  worktree, the plan ref, every role prompt, the run-state and the PR; it blocks casual reads
+  only. Roles have a shell and can read `~/.config`, so it does not stand against a hostile coder.
 - Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
@@ -1775,8 +1792,8 @@ change that a judge makes and reverts within its own run.
   object on a side branch, no hooks). That is not a `git commit`, and it is never pushed.
 - The fleet runs no held-out examples and no mutation, coverage or scanner gates. Judges receive
   explicit `{status: "not_run"}` markers, and `gates_not_run` reaches the PR opener and the result.
-  The planner's `held_out_examples` are dropped before any other role sees the plan. The script
-  cannot check that the planner kept them out of the plan doc itself.
+  The planner's `held_out_examples` never reach another role; the held-out store (8.0.0, G3)
+  drops an example the plan doc quotes verbatim, but it cannot see a paraphrase in the plan doc.
 - Verify tells fleet commits apart by their subject lines only; git cannot prove who made a commit.
   The plan-file checks (hash at `plan_commit` and at HEAD, no commit touching it) do not depend on
   that.

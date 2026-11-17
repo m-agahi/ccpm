@@ -68,12 +68,13 @@ function obFail() {
   return s;
 }
 
-test("8.0.0 B2-1: a plan run is 20 calls; infra:surfaces:plan runs the hook, ruleset and convention programs in that order on sonnet as fleet:judge", async () => {
+test("8.0.0 B2-1: a plan run is 20 calls (G3: 21); infra:surfaces:plan runs the hook, ruleset and convention programs in that order on sonnet as fleet:judge", async () => {
   const out = await run(happy(), Object.assign({}, ARGS, { confirm: "ask" }));
   noUnscripted(out);
   assert.equal(out.result.status, "ok", out.result.reason);
-  assert.equal(out.plan.calls.length, 20, out.plan.labels.join(", "));
-  assert.equal(out.planResult.agents, 20);
+  // 8.0.0 (G3): + 1 (infra:held-out:write)
+  assert.equal(out.plan.calls.length, 21, out.plan.labels.join(", "));
+  assert.equal(out.planResult.agents, 21);
   assert.ok(!out.labels.some((l) => OLD.test(l)), out.labels.join(", "));
   const c = call(out, "infra:surfaces:plan");
   assert.deepEqual(ran(c.prompt), ["hook_surface", "ruleset_surface", "pr_convention"]);

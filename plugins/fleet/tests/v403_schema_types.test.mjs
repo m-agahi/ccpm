@@ -403,6 +403,14 @@ const READS = {
     "x.id string": "parsed: a ruling's id; a non-string rules nothing",
     "x.reason string": "parsed: a ruling's reason; a non-string or blank reason rules nothing",
   },
+  // 8.0.0 (G3): the sealed held-out object (the plan ref, or the digest-checked held_out relay)
+  heldOutProblem: {
+    "pc array": "parsed: the sealed or relayed per_criterion; an array is refused",
+    "v integer": "parsed: a per_criterion count; a non-integer is refused",
+    "h.sha256 string-re": "parsed: the sealed or relayed sha256; a non-hex value is refused",
+  },
+  // 8.0.0 (G3): the planner's top-level held-out list (absent or empty: no write step)
+  heldOutWrite: { "ex array": SP + "held_out_examples" },
   // 8.0.0 (G2): the code judge's exemptions; a non-list (or an item with non-list lines) exempts nothing
   gateLeft: {
     "ex array": CJ + "exemptions",
@@ -668,7 +676,6 @@ const READS = {
     "plan.changed_symbols array": SP + "changed_symbols",
     "plan.est_diff_lines number": SP + "est_diff_lines",
     "plan.new_behaviour boolean": SP + "new_behaviour",
-    "plan[HELD_OUT_KEY] array": SP + "held_out_examples",
     "fmt.changed_paths array": "infra:changed_paths",
     // 7.3.0 (#9): the plan-mode format_files relay (digest-checked)
     "ff.hook_failures array": "prog:format_files:hook_failures",

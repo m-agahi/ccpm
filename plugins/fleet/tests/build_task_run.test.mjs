@@ -1803,6 +1803,8 @@ test("plan mode returns awaiting_confirmation with every field and makes no push
     "infra:path-check:plan-audit",
     "role:plan-audit",
     "infra:stage-plan",
+    // 8.0.0 (G3): the held-out store write
+    "infra:held-out:write",
     // 6.3.4 (2176): the chunk writer
     "infra:plan-chunks:r0w0",
     "infra:path-check:commit-plan",

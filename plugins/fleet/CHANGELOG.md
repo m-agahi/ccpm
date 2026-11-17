@@ -94,6 +94,33 @@ Fleet 8.0.0: one major release in two cars. Car A: yaadgaar #74 and #71. Car B: 
   `partial` ("not measured (not python)"), never a clean `ran`. Limit: code under test runs in
   the same process as the tracer and can still tamper with it; the gate is advisory to the judge
   and does not stand against a hostile coder.
+- Car G3 (the held-out store, plan side, #6 half, gate 3, ADR-1152): a 47th program,
+  `held_out.py write|show`. In plan mode, after `infra:stage-plan` and before the plan-ref chunk writers, one
+  agent `infra:held-out:write` (sonnet, a write step, capped; no digest retry) writes the
+  planner's top-level `held_out_examples` and each criterion's visible examples as base64 chunks
+  under the run's scratch dir and runs `held_out.py write`. The program removes the chunk dir on
+  every exit, checks that the plan doc hashes to the staged `plan_sha256`, drops an example whose
+  `when` and `then` both appear verbatim in the plan doc or whose given, when and then equal a
+  visible example (and a malformed one), and stores the rest in
+  `$XDG_CONFIG_HOME/fleet/held-out/<task_id>/<plan_sha256>.json` (`~/.config` when unset; a
+  relative value is refused, as policy_init does): dirs 0700, file 0600 (O_EXCL temp file, then
+  rename), a random 16-byte salt. It prints `{sha256, count, per_criterion, dropped, args}`;
+  `sha256` is the hash of the file bytes, salt included, so a guessed example cannot be tested
+  against the ref. `dropped` holds criterion, index and a fixed reason only; no stdout or stderr
+  text carries an example. The plan ref seals only `held_out: {sha256, count, per_criterion}`.
+  One attempt: a failed or off-digest relay, nothing kept, more than 8 chunks, no example at all,
+  or a re-plan during a build seals `held_out: null` with a gate line; the build logs
+  `held_out: none sealed` (or `held_out: <n> example(s) sealed`) and still lists `held_out` in
+  `gates_not_run` (G4 runs the examples). `planRefProblem` accepts a ref with no `held_out` key
+  (sealed before 8.0.0) and refuses a malformed one (keys other than the three, a non-hex sha256,
+  a count that is not the per-criterion sum, a zero count). `held_out.py show`
+  (args: task id, plan sha256, sealed sha256) prints the examples only when the file hashes to the sealed
+  sha256 (G4's runner role). An example nested in a criterion is still dropped and never stored.
+  The planner role says the examples are stored, not dropped. A plan run with held-out examples
+  makes one more call and one more capped agent; the harness planner now returns one example, so
+  the happy plan pins move by one. Sentinel test: a unique string in an example reaches no
+  dispatched prompt (raw, or decoded from any chunk but the write step's own), no plan ref, no
+  run-state chunk, no result and no gate log line (`v800_held_out.test.mjs`).
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

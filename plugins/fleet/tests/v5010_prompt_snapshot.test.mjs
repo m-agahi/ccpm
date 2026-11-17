@@ -111,10 +111,11 @@ const SCENARIOS = {
 // 8.0.0 car B2 (#62): infra:surfaces:plan runs the hook_surface, ruleset_surface and pr_convention programs (one slot each) and infra:surfaces:r<n> the hook_surface and changed_defs programs: 2 fewer plan calls, 1 fewer build call (probe unchanged)
 // 8.0.0 car G1: the preflight prompt and schema run gate_tools.py <repo> <AUDIT_IMAGE> in a gate_tools slot (no new call; the probe pin moves with the preflight prompt)
 // 8.0.0 car G2: each code round runs infra:build-reset:gates:r<n> and infra:gates:r<n> (cover_diff.py) before the code judge's reset: 2 more build calls; the code judge's script_findings carries coverage, its schema exemptions, the code-judge and pr-opener role shas move (probe unchanged)
+// 8.0.0 car G3: plan mode runs infra:held-out:write (held_out.py write, the examples as base64 chunks) after infra:stage-plan: 1 more plan call (the harness planner returns one held-out example); the sealed plan ref carries held_out; the scope-and-plan role sha moves (probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 82, sha256: "6b8078750ca720333798f031c2b6b4d6b217ae7eb7c5e8adf1be09bb1f823750" },
-  "confirm auto (gates, then build in one run)": { calls: 84, sha256: "25ccb42c150b80b5c90b6240f32394ce629b28b3d13d7fd051137b06633ada6e" },
-  "short path (one test writer)": { calls: 81, sha256: "7f28a3a60603d6e6b36961658faf648f3cad53714a32047911e3e183ab890b15" },
+  "plan then build (confirm ask)": { calls: 83, sha256: "49fb8c8ca75bc30085b656a50fb8287dcacb5ef9a70039fbc4883a3d7bb52194" },
+  "confirm auto (gates, then build in one run)": { calls: 85, sha256: "f6433ea76bcaaa8038b780b57092c7748c7e49af414c3ceddbf560ead0aac703" },
+  "short path (one test writer)": { calls: 82, sha256: "f3af4508f640e109b7f16d1bc7cbc8b332ae2a52afa9cdd6ee8d9a7138f24476" },
   "probe": { calls: 2, sha256: "0699a53c5c939afed37e60fae64f04e0adfd8fd0c6b8e4a344d2ac53bd59e02b" },
 };
 
