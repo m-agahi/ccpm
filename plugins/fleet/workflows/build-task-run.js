@@ -1243,6 +1243,7 @@ cargo: ["Cargo.toml", "Cargo.lock", "build.rs", "config", "config.toml"],
 go: ["go.mod", "go.sum", "go.work"],
 };
 const JEST_SETUP_RE = /^(jest|vitest)\.(setup|config)\.|^setupTests\.|\.setup\.[cm]?[jt]sx?$/;
+const MAKE_INCOMPLETE = "/:incomplete";
 function pathsHit(list, p) {
 return list.some((x) => x === p || (x.slice(-1) === "/" && p.indexOf(x) === 0));
 }
@@ -1298,7 +1299,7 @@ return !!(
 (script && p === normPath(script)) ||
 (st && (!makePaths || !Array.isArray(makePaths[st]) || pathsHit(makePaths[st], p))) ||
 (pt && (!makePaths || !Array.isArray(makePaths[pt]) || pathsHit(makePaths[pt], p))) ||
-(r4 && words[0] === "make" && makePaths && makePaths[words[1]] === null) ||
+(words[0] === "make" && makePaths && (makePaths[words[1]] === null || (r4 && recipe.indexOf(MAKE_INCOMPLETE) >= 0))) ||
 (words[0] === "make" && (/^(GNUmakefile|makefile|Makefile)$/.test(b) || /\.mk$/.test(b) || (r4 ? pathsHit(recipe, p) : recipe.indexOf(p) >= 0))) ||
 (words[0] === "pre-commit" && b === ".pre-commit-config.yaml")
 );
@@ -1501,7 +1502,7 @@ const PROGRAM_SHA256 = {
 "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
 "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
 "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
-"hook_surface": "36fe79ef2fe3b5c4e231c0e250c3d380574442278e9b1d5087c2597657ee6023",
+"hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",

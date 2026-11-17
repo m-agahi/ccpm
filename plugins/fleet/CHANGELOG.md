@@ -28,13 +28,16 @@ Fleet 8.0.0: one major release in two cars. Car A: yaadgaar #74 and #71. Car B: 
   - G3: a bare nested `yarn <script>` or `pnpm <script>` is followed when the word is a key of
     `scripts`.
   - G4: a sourced shell path built from a variable that resolves to no tracked file drops the
-    entry (fail closed) for `sh:`, `npm:` and make targets. The workflow now maps every target the
-    program did not list to null (before: `[]` for a make target); R4 reads a null make entry as
-    every file, and the obligations gate still reads it as no recipe.
+    entry (fail closed) for `sh:` and `npm:` targets. A make entry is never dropped: it keeps every
+    path it resolved (a superset of the 7.4.0 list, which the obligations gate reads) and adds the
+    mark `/:incomplete`, which R4 reads as every file. The workflow now maps every target the
+    program did not list to null (before: `[]` for a make target), and both R4 and the obligations
+    gate read a null make entry as every file (security review: no fail-open path).
   - G5: new `py:<path>` target: the tracked modules a `python|python3 <file>` (or
     `uv run [--extra x] python <file>`) test_cmd or check_cmd script imports, transitively, read
     at the update head. A Python file a script or a make recipe names adds its imports too. A file
-    that does not parse, or an unreadable script, drops the entry.
+    that does not parse, or an unreadable script, drops a `py:` or `npm:` entry and marks a make
+    entry `/:incomplete`. G5 bites for check_cmd only: `python3 <file>` is not an allowed test_cmd.
   - Non-weakening: `v800_r4_gaps.test.mjs` runs the 7.4.0 `hook_surface.py`
     (`tests/fixtures/hook_surface_740.py`) beside the new one on the same repos, and the 7.4.0
     `testCmdRuns`/`cmdRuns` (`tests/fixtures/r4_fns_740.js`) beside the new ones over a cross

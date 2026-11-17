@@ -10,17 +10,19 @@
 //   package's script: the entry is dropped (R4 refuses every moved file).
 // - G3: a bare nested `yarn <word>` or `pnpm <word>` is followed when <word> is a key of scripts.
 // - G4: a sourced shell path built from a variable that resolves to no tracked file drops the entry
-//   (sh:, npm: and make targets). A dropped make target is mapped to null by the workflow; R4 reads
-//   null as every file (the obligations gate keeps reading it as no recipe).
+//   (sh: and npm: targets). A make entry is never dropped: it keeps every path it resolved (the
+//   obligations gate reads them) and adds the mark "/:incomplete", which R4 reads as every file. A
+//   make entry the workflow did not get (null) is every file for both gates (security review).
 // - G5: a Python script a command runs adds the tracked modules it imports (transitively, from the
 //   script's dir, the repo root and the importing file's dir): the new py:<path> target for a
 //   `python|python3 <file>` (or `uv run [--extra x] python <file>`) test_cmd or check_cmd, read at
 //   the update head, and every Python file a script or a make recipe names. A file that does not
 //   parse, or a py: script that cannot be read, drops the entry.
 // Non-weakening: the 7.4.0 hook_surface.py (931e844, tests/fixtures/hook_surface_740.py) runs beside
-// the new one on the same repos: every old entry is a subset of the new one, or the new entry is
-// dropped (fail closed). The 7.4.0 testCmdRuns/cmdRuns (tests/fixtures/r4_fns_740.js) run beside the
-// new ones over a cross product: every old refusal stays; cmdRuns without the R4 flag is unchanged.
+// the new one on the same repos: every old entry is a subset of the new one, or (npm:, sh:, py: only)
+// the new entry is dropped (fail closed). The 7.4.0 testCmdRuns/cmdRuns (tests/fixtures/r4_fns_740.js)
+// run beside the new ones over a cross product: every old refusal stays; cmdRuns without the R4 flag
+// is unchanged but for a null make entry, which is now every file.
 //
 // dont_care: the order of the paths in a refusal beyond the named one; gate wording after the
 // "test or check commands run" phrase.
@@ -64,7 +66,10 @@ function repo(files) {
     const nw = by(NEW_HS, targets);
     const old = by(OLD_HS, targets);
     for (const t of Object.keys(old)) {
-      if (!(t in nw)) continue;
+      if (!(t in nw)) {
+        assert.match(t, /^(npm|sh|py):/, t + ": only an npm:, sh: or py: entry may be dropped");
+        continue;
+      }
       for (const p of old[t]) assert.ok(pathsHit(nw[t], p), t + ": the 7.4.0 program listed " + p + "; new " + JSON.stringify(nw[t]));
     }
     for (const t of Object.keys(nw)) assert.ok(t in old || /^py:/.test(t), t + ": a new entry where 7.4.0 had none");
@@ -156,7 +161,8 @@ test("8.0.0 #71 G4: a sourced variable path that resolves to no tracked file dro
   });
   const { nw, old } = hs(["sh:scripts/t.sh", "sh:scripts/e.sh", "sh:scripts/u.sh", "test", "ok", "npm:test", "npm:ok"]);
   assert.deepEqual([old["sh:scripts/t.sh"], old.test], [[], ["scripts/t.sh"]]);
-  for (const t of ["sh:scripts/t.sh", "sh:scripts/e.sh", "test", "npm:test"]) assert.equal(nw[t], undefined, t);
+  for (const t of ["sh:scripts/t.sh", "sh:scripts/e.sh", "npm:test"]) assert.equal(nw[t], undefined, t);
+  assert.deepEqual(nw.test, ["scripts/t.sh", "/:incomplete"], "a make entry keeps its paths and is marked");
   assert.deepEqual(nw["sh:scripts/u.sh"], ["scripts/lib.sh"]);
   assert.deepEqual(nw.ok, ["scripts/lib.sh", "scripts/u.sh"]);
   assert.deepEqual(nw["npm:ok"], ["scripts/lib.sh", "scripts/u.sh"]);
@@ -184,7 +190,7 @@ test("8.0.0 #71 G5: py:<path> lists the tracked modules the script imports; a re
   assert.equal(nw["py:nope.py"], undefined, "an unreadable script has no entry");
   assert.deepEqual(nw["py:tools/run.py"], ["tools/util.py"]);
   assert.deepEqual(nw.lint, ["tools/run.py", "tools/util.py"]);
-  assert.equal(nw.bad, undefined);
+  assert.deepEqual(nw.bad, ["bad.py", "/:incomplete"]);
   assert.deepEqual(nw["npm:check"], want.concat(["scripts/check.py"]).sort());
 });
 
@@ -215,7 +221,7 @@ test("8.0.0 #71 non-weakening: on the 7.4.0 #29 repos every old entry stays a su
 // ---------------------------------------------------------------- testCmdRuns and cmdRuns
 async function fns() {
   const src = SOURCE.replace(/^export const meta/m, "const meta").replace("\nlet input = args;\n", "\nreturn { testCmdRuns, cmdRuns, testRunnerPrefix, parseCheckCmd, relPath, normPath, PATHS_TOKEN };\nlet input = args;\n");
-  return compile(src)(null, null, null, () => {}, () => {}, {}, {}, {}, Date, Math);
+  return compile(src.replace("return { testCmdRuns, cmdRuns,", "return { obligationFailures, testCmdRuns, cmdRuns,"))(null, null, null, () => {}, () => {}, {}, {}, {}, Date, Math);
 }
 async function oldFns() {
   const f = await fns();
@@ -227,7 +233,8 @@ const PATHS = ["package.json", "web/package.json", ".npmrc", "jest.setup.js", "s
 const FULL = { "npm:test": ["scripts/run.mjs", "test/", "test/env.js"], "npm:test:unit": ["test/", "tools/gen.py"], test: ["tests/", "tools/gen.py", "myplug.py"], lint: ["tools/gen.py"], "sh:scripts/test.sh": ["scripts/lib.sh"], "sh:scripts/t.sh": [], "py:tools/run.py": ["tools/util.py"], "py:scripts/check.py": ["scripts/lib.py"] };
 const NULLS = { "npm:test": null, "npm:test:unit": null, test: null, lint: null, "sh:scripts/test.sh": null, "sh:scripts/t.sh": null, "py:tools/run.py": null, "py:scripts/check.py": null };
 const EMPTY = { "npm:test": [], "npm:test:unit": [], test: [], lint: [], "sh:scripts/test.sh": [], "sh:scripts/t.sh": [], "py:tools/run.py": [], "py:scripts/check.py": [] };
-const MPS = [undefined, {}, FULL, NULLS, EMPTY];
+const INC = Object.assign({}, FULL, { test: ["tests/", "tools/gen.py", "myplug.py", "/:incomplete"], lint: ["tools/gen.py", "/:incomplete"] });
+const MPS = [undefined, {}, FULL, NULLS, EMPTY, INC];
 
 test("8.0.0 #71 non-weakening: every (test_cmd, path, make_paths) the 7.4.0 testCmdRuns refused is still refused", async () => {
   const nw = await fns();
@@ -246,14 +253,15 @@ test("8.0.0 #71 non-weakening: every (test_cmd, path, make_paths) the 7.4.0 test
   assert.ok(n > 300 && more > 20, "old refusals " + n + ", new refusals " + more);
 });
 
-test("8.0.0 #71 non-weakening: cmdRuns without the R4 flag is the 7.4.0 cmdRuns; with it, every old hit stays", async () => {
+test("8.0.0 #71 non-weakening: cmdRuns without the R4 flag is the 7.4.0 cmdRuns but for a null make entry; with it, every old hit stays", async () => {
   const nw = await fns();
   const old = await oldFns();
   for (const c of ["make test", "make lint", "make other", "scripts/check.sh", "scripts/test.sh", "python3 tools/gen.py", "python3 tools/run.py", "uv run python tools/run.py", "uv run python scripts/check.py", "pre-commit run x"])
     for (const p of PATHS)
       for (const mp of MPS) {
         const o = old.cmdRuns(c, p, mp);
-        assert.equal(nw.cmdRuns(c, p, mp), o, "obligations gate unchanged: " + JSON.stringify([c, p, mp]));
+        const nullMake = /^make /.test(c) && mp && mp[c.split(" ")[1]] === null;
+        assert.equal(nw.cmdRuns(c, p, mp), nullMake ? true : o, "obligations gate: " + JSON.stringify([c, p, mp]));
         if (old.cmdRuns(c, p, mp, true)) assert.equal(nw.cmdRuns(c, p, mp, true), true, "R4: " + JSON.stringify([c, p, mp]));
       }
 });
@@ -264,11 +272,16 @@ test("8.0.0 #71 G1, G4, G5: testCmdRuns and cmdRuns (R4) read the new entries; u
   for (const p of ["jest.setup.js", "web/vitest.config.mts", "src/setupTests.ts", "test/db.setup.mjs"]) assert.equal(runs("npm test", p, EMPTY), true, p);
   assert.equal(runs("npm test", "src/x.js", EMPTY), false);
   assert.equal(runs("npm test", "test/env.js", FULL), true);
-  // G4: a dropped make entry (null) is every file for R4; the obligations gate reads no recipe
+  // G4: a make entry marked incomplete is every file for R4; the obligations gate keeps its exact paths
+  assert.equal(runs("make test", "src/x.py", INC), true);
+  assert.equal(cmdRuns("make lint", "src/x.py", INC, true), true);
+  assert.equal(cmdRuns("make lint", "src/x.py", INC), false);
+  assert.equal(cmdRuns("make lint", "tools/gen.py", INC), true);
+  assert.equal(cmdRuns("make lint", "src/x.py", EMPTY, true), false);
+  // a null make entry (not read) is every file for both gates
   assert.equal(runs("make test", "src/x.py", NULLS), true);
   assert.equal(cmdRuns("make lint", "src/x.py", NULLS, true), true);
-  assert.equal(cmdRuns("make lint", "src/x.py", NULLS), false);
-  assert.equal(cmdRuns("make lint", "src/x.py", EMPTY, true), false);
+  assert.equal(cmdRuns("make lint", "src/x.py", NULLS), true);
   // G5: py:<path>
   assert.equal(runs("python3 tools/run.py", "tools/util.py", FULL), true);
   assert.equal(runs("python3 tools/run.py", "src/x.py", FULL), false);
@@ -362,9 +375,10 @@ test("8.0.0 #71 G5: check_cmd python3 tools/gen.py reads py:tools/gen.py at d; a
   // (a `python3 <file>` test_cmd is not on the test_cmd allowlist; testCmdRuns reads py: for it all the same)
 });
 
-test("8.0.0 #71 G4: a make target the program dropped refuses R4 on every moved file; a listed one does not", async () => {
+test("8.0.0 #71 G4: a make target marked incomplete (or not read) refuses R4 on every moved file; a listed one does not", async () => {
   const pb = (mp) => ({ "infra:hook-surface:u1:pb": hsOut(mp) });
   await refused(withTc(upd(["src/x.py", "docs/a.md"], pb({})), "make test"), /\(src\/x\.py, docs\/a\.md\)/);
+  await refused(withTc(upd(["src/x.py", "docs/a.md"], pb({ test: ["tools/gen.py", "/:incomplete"] })), "make test"), /\(src\/x\.py, docs\/a\.md\)/);
   await passes(withTc(upd(["src/x.py", "docs/a.md"], pb({ test: ["tools/gen.py"] })), "make test"));
   await refused(withOb(withTc(upd(["src/x.py", "docs/a.md"], pb({})), "pytest <paths>"), "make lint"), /\(src\/x\.py, docs\/a\.md\)/);
 });
@@ -373,4 +387,23 @@ test("8.0.0 #71 G1: npm test: a base change of a jest setup file refuses R4", as
   const d = { "infra:hook-surface:u1:d": hsOut({ "npm:test": [] }) };
   await refused(withTc(upd(["src/x.py", "web/jest.setup.ts"], d), "npm test"), /\(web\/jest\.setup\.ts\)/);
   await passes(withTc(upd(["src/x.py", "docs/a.md"], d), "npm test"));
+});
+
+test("8.0.0 #71 security review: the obligations gate fails closed on a null make entry and keeps an incomplete entry's paths", async () => {
+  const { obligationFailures } = await fns();
+  const ob = { id: "OB1", kind: "other", rule_source: "Makefile", files: ["docs/ok.md"], instruction: "lint", check_cmd: "make lint" };
+  const met = [{ id: "OB1", met: true, evidence: "ran", check_exit: 0 }];
+  const hits = (changed, mp) => obligationFailures([ob], met, [ob], [], changed, mp).map((f) => f.finding);
+  // null (the program's entry was not read): any edit is an obligation hit unless the obligation lists it
+  assert.match(hits(["src/x.py"], { lint: null }).join("\n"), /OB1: the change edits src\/x\.py, which check_cmd "make lint" runs/);
+  assert.deepEqual(hits(["docs/ok.md"], { lint: null }), []);
+  // incomplete: the resolved paths stay hits; other paths are R4's only
+  assert.match(hits(["tools/gen.py"], { lint: ["tools/gen.py", "/:incomplete"] }).join("\n"), /OB1: the change edits tools\/gen\.py, which check_cmd/);
+  assert.deepEqual(hits(["src/x.py"], { lint: ["tools/gen.py", "/:incomplete"] }), []);
+  // npm:, sh: and py: entries never reach the obligations gate: a check script is matched by its own path
+  const sh = Object.assign({}, ob, { check_cmd: "scripts/check.sh" });
+  for (const mp of [{ "sh:scripts/check.sh": null }, { "py:scripts/check.sh": null }, {}]) {
+    assert.deepEqual(obligationFailures([sh], met, [sh], [], ["src/x.py"], mp), []);
+    assert.match(obligationFailures([sh], met, [sh], [], ["scripts/check.sh"], mp).map((f) => f.finding).join("\n"), /OB1: the change edits scripts\/check\.sh/);
+  }
 });

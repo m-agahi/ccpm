@@ -305,11 +305,11 @@ def show(rel):
     return r.stdout.decode('utf-8', 'replace') if r.returncode == 0 and len(r.stdout) <= FILE_CAP else None
 SOURCE_RE = re.compile(r'(?:^|[;&|(]|\bthen|\bdo|\belse)[ \t]*(?:source|\.)[ \t]+([^;&|\n]+)', re.M)
 def sourced(rel):
-    # 8.0.0 (#71 G4): None when a path built from a variable resolves to no tracked file (fail closed)
-    out = set()
+    # (files, ok); 8.0.0 (#71 G4): ok is False when a path built from a variable resolves to no tracked file
+    out, ok = set(), True
     t = show(rel)
     if t is None or not (rel.endswith(('.sh', '.bash')) or re.match(r'#!\S*(?:/|env\s+)(?:ba|z|da|k)?sh\b', t)):
-        return out
+        return out, ok
     d = os.path.dirname(rel)
     for arg in SOURCE_RE.findall(t):
         m = re.match(r'\$\([^)]*\)\S*|\S+', arg.replace('"', '').replace("'", '').strip())
@@ -320,23 +320,22 @@ def sourced(rel):
             k = max(w.rfind('}'), w.rfind(')'))
             w = (w[k + 1:] if k > w.rfind('$') else re.sub(r'^.*\$\w+', '', w)).lstrip('/')
         hit = [q for q in ((norm(c) if w else None) for c in (w, os.path.join(d, w))) if q and q in tracked]
-        if var and not hit:
-            return None
+        ok = ok and not (var and not hit)
         out.update(hit)
-    return out
+    return out, ok
 # 8.0.0 (#71 G5): the tracked modules a Python file at <rev> imports, transitively (from the file's
-# own dir, the first file's dir and the repo root); None when one does not parse or is over the cap
+# own dir, the first file's dir and the repo root): (files, ok); ok is False when one cannot be read or
+# parsed or the walk passes the cap
 def imports(rel):
-    out, todo, base = set(), [rel], os.path.dirname(rel)
+    out, todo, base, ok = set(), [rel], os.path.dirname(rel), True
     while todo:
         q = todo.pop()
         t = show(q)
-        if t is None:
-            return None
         try:
             tree = ast.parse(t)
-        except (SyntaxError, ValueError, RecursionError, MemoryError):
-            return None
+        except (SyntaxError, ValueError, RecursionError, MemoryError, TypeError):
+            ok = False
+            continue
         d = os.path.dirname(q)
         for node in ast.walk(tree):
             mods = []
@@ -356,8 +355,8 @@ def imports(rel):
                                 out.add(c)
                                 todo.append(c)
         if len(out) > MAX_FILES:
-            return None
-    return out
+            return out, False
+    return out, ok
 def paths_in(text):
     out = set()
     for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', text):
@@ -370,13 +369,13 @@ def paths_in(text):
         parts = mod.split('.')
         cands = ['/'.join(parts[:k]) + '/__init__.py' for k in range(1, len(parts) + 1)] + ['/'.join(parts) + '.py', '/'.join(parts) + '/__main__.py']
         out.update(c for c in cands if c in tracked)
+    ok = True
     for q in sorted(out):
         if q in tracked:
-            more = sourced(q) if not q.endswith('.py') else imports(q)
-            if more is None:
-                return None
+            more, good = sourced(q) if not q.endswith('.py') else imports(q)
+            ok = ok and good
             out |= more
-    return out
+    return out, ok
 # N1: a nested `npm|pnpm|yarn run X` (or `npm test`) runs scripts.X with its pre and post; None when
 # a nested name is not a string script or the chain is deeper than 3 (no entry: R4 refuses every file)
 # 7.4.0 review B-M1: a flag that takes a value (-w X, --workspace X, --prefix X, ...) is never the
@@ -432,6 +431,8 @@ def npm_texts(sc, name, depth, seen):
     return texts
 # F2: the repo paths each make target's recipe names, in the root Makefile at <rev>
 make_paths = {}
+# no tracked path starts with '/': no exact or dir match of a changed path can hit it
+INCOMPLETE = '/:incomplete'
 mk = None
 for name in ('GNUmakefile', 'makefile', 'Makefile'):
     r = subprocess.run(GIT + ['show', rev + ':' + name], capture_output=True)
@@ -462,8 +463,8 @@ for tgt in targets:
         sc = pkg.get('scripts') if isinstance(pkg, dict) else None
         # npm and yarn v1 also run pre<name> and post<name> (over-counted for pnpm and yarn berry)
         texts = npm_texts(sc, tgt[4:], 0, {tgt[4:]}) if isinstance(sc, dict) else None
-        found = paths_in('\n'.join(texts)) if texts is not None else None
-        if found is not None:
+        found, ok = paths_in('\n'.join(texts)) if texts is not None else (None, False)
+        if ok:
             # 8.0.0 (#71 G1): a script that runs jest or vitest also loads the setup files of
             # package.json's `jest` key and of the root jest/vitest/vite config files (read as text)
             if re.search(r'(?<![\w.-])(?:jest|vitest)(?![\w.-])', '\n'.join(texts)):
@@ -482,15 +483,15 @@ for tgt in targets:
     # 7.4.0 (#29 N5): sh:<path> = the tracked files the script at <rev> sources; no entry when unreadable
     if tgt.startswith('sh:'):
         q = norm(tgt[3:])
-        src = sourced(q) if q and show(q) is not None else None
-        if src is not None:
+        src, ok = sourced(q) if q and show(q) is not None else (None, False)
+        if ok:
             make_paths[tgt] = sorted(src)
         continue
     # 8.0.0 (#71 G5): py:<path> = the tracked modules the script at <rev> imports; no entry when unreadable
     if tgt.startswith('py:'):
         q = norm(tgt[3:])
-        mods = imports(q) if q else None
-        if mods is not None:
+        mods, ok = imports(q) if q and show(q) is not None else (None, False)
+        if ok:
             make_paths[tgt] = sorted(mods)
         continue
     rec = []
@@ -503,10 +504,10 @@ for tgt in targets:
                     if not rl.startswith('\t'):
                         break
                     rec.append(rl)
-    # 8.0.0 (#71 G4): no entry when a recipe's script sources or imports cannot be listed
-    found = paths_in('\n'.join(rec))
-    if found is not None:
-        make_paths[tgt] = sorted(found)
+    # 8.0.0 (#71 G4, G5): a make entry is never dropped (the obligations gate reads its paths); when a
+    # recipe's script sources or imports cannot all be listed it also holds INCOMPLETE (R4: every file)
+    found, ok = paths_in('\n'.join(rec))
+    make_paths[tgt] = sorted(found) + ([] if ok else [INCOMPLETE])
 out = {'surface': [] if error else sorted(surface), 'make_paths': {} if error else make_paths, 'error': error, 'args': [wt, rev, targets_arg]}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
