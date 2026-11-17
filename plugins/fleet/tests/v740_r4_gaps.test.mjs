@@ -279,7 +279,8 @@ test("7.4.0 #29 N2, N4, N5: testCmdRuns refuses a path under a dir entry, a jest
   assert.equal(cmdRuns("scripts/check.sh", "scripts/lib.sh", FULL, true), true);
   assert.equal(cmdRuns("scripts/check.sh", "src/x.py", FULL, true), false);
   assert.equal(cmdRuns("scripts/check.sh", "src/x.py", NULLS, true), true);
-  assert.equal(cmdRuns("python3 tools/gen.py", "src/x.py", {}, true), false, "a python check script reads no sh: entry");
+  // 8.0.0 (#71 G5) supersedes: a python check script reads its py: entry; none fails closed
+  assert.equal(cmdRuns("python3 tools/gen.py", "src/x.py", {}, true), true, "a python check script with no py: entry fails closed");
 });
 
 // ---------------------------------------------------------------- R4 in the workflow
@@ -386,7 +387,7 @@ test("7.4.0 #29 N5: check_cmd scripts/check.sh sourcing scripts/lib.sh: a base c
   assert.deepEqual([i.rev, i.targets], [D, ["sh:scripts/check.sh"]]);
   await passes(withOb(upd(["src/x.py", "scripts/other.sh"], d({ "sh:scripts/check.sh": ["scripts/lib.sh"] })), "scripts/check.sh"));
   await refused(withOb(upd(["src/x.py"], d({})), "scripts/check.sh"), /\(src\/x\.py\)/);
-  // a python check script asks for no sh: entry; pytest asks for no read at d
+  // a python check script asks for no sh: entry; 8.0.0 (#71 G5) supersedes: it reads its py: entry at d
   const py = await run(withOb(upd(["src/x.py"]), "python3 tools/gen.py"), ARGS);
-  assert.ok(!py.build.labels.includes("infra:hook-surface:u1:d"), py.build.labels.join(", "));
+  assert.deepEqual(inputsOf(call(py, "infra:hook-surface:u1:d").prompt).targets, ["py:tools/gen.py"]);
 });

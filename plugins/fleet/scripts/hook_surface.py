@@ -305,6 +305,7 @@ def show(rel):
     return r.stdout.decode('utf-8', 'replace') if r.returncode == 0 and len(r.stdout) <= FILE_CAP else None
 SOURCE_RE = re.compile(r'(?:^|[;&|(]|\bthen|\bdo|\belse)[ \t]*(?:source|\.)[ \t]+([^;&|\n]+)', re.M)
 def sourced(rel):
+    # 8.0.0 (#71 G4): None when a path built from a variable resolves to no tracked file (fail closed)
     out = set()
     t = show(rel)
     if t is None or not (rel.endswith(('.sh', '.bash')) or re.match(r'#!\S*(?:/|env\s+)(?:ba|z|da|k)?sh\b', t)):
@@ -314,13 +315,48 @@ def sourced(rel):
         m = re.match(r'\$\([^)]*\)\S*|\S+', arg.replace('"', '').replace("'", '').strip())
         w = m.group(0) if m else ''
         # a path built from a variable ("$(dirname "$0")/lib.sh", "${BASH_SOURCE%/*}/lib.sh", "$DIR/lib.sh"): its tail
-        if '$' in w:
+        var = '$' in w
+        if var:
             k = max(w.rfind('}'), w.rfind(')'))
             w = (w[k + 1:] if k > w.rfind('$') else re.sub(r'^.*\$\w+', '', w)).lstrip('/')
-        for c in (w, os.path.join(d, w)):
-            q = norm(c) if w else None
-            if q and q in tracked:
-                out.add(q)
+        hit = [q for q in ((norm(c) if w else None) for c in (w, os.path.join(d, w))) if q and q in tracked]
+        if var and not hit:
+            return None
+        out.update(hit)
+    return out
+# 8.0.0 (#71 G5): the tracked modules a Python file at <rev> imports, transitively (from the file's
+# own dir, the first file's dir and the repo root); None when one does not parse or is over the cap
+def imports(rel):
+    out, todo, base = set(), [rel], os.path.dirname(rel)
+    while todo:
+        q = todo.pop()
+        t = show(q)
+        if t is None:
+            return None
+        try:
+            tree = ast.parse(t)
+        except (SyntaxError, ValueError, RecursionError, MemoryError):
+            return None
+        d = os.path.dirname(q)
+        for node in ast.walk(tree):
+            mods = []
+            if isinstance(node, ast.Import):
+                mods = [(a.name, 0) for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                mods = [(node.module or '', node.level)] + [((node.module + '.' if node.module else '') + a.name, node.level) for a in node.names]
+            for m, lvl in mods:
+                parts = [x for x in m.split('.') if x]
+                bases = ['/'.join(d.split('/')[:max(0, len(d.split('/')) - (lvl - 1))]) if d else ''] if lvl else ['', base, d]
+                for b in bases:
+                    for k in range(1, len(parts) + 1):
+                        stem = os.path.join(b, *parts[:k])
+                        for c in (stem + '.py', os.path.join(stem, '__init__.py')):
+                            c = norm(c)
+                            if c and c in tracked and c != rel and c not in out:
+                                out.add(c)
+                                todo.append(c)
+        if len(out) > MAX_FILES:
+            return None
     return out
 def paths_in(text):
     out = set()
@@ -336,7 +372,10 @@ def paths_in(text):
         out.update(c for c in cands if c in tracked)
     for q in sorted(out):
         if q in tracked:
-            out |= sourced(q)
+            more = sourced(q) if not q.endswith('.py') else imports(q)
+            if more is None:
+                return None
+            out |= more
     return out
 # N1: a nested `npm|pnpm|yarn run X` (or `npm test`) runs scripts.X with its pre and post; None when
 # a nested name is not a string script or the chain is deeper than 3 (no entry: R4 refuses every file)
@@ -355,6 +394,11 @@ def if_present_exact(t, m, n):
     w = t[a:b].split()
     # 7.4.0 review A-m4: never yarn (`yarn run X` runs a package binary X when the script is missing)
     return w in ([w[0], 'run', '--if-present', n], [w[0], 'run', n, '--if-present']) and w[0] in ('npm', 'pnpm') and not re.search(r'\b(?:cd|pushd|popd|export)\b|npm_config|[(`]|--prefix', t[:a], re.I)
+# 8.0.0 (#71 G2): such a flag anywhere in an npm|pnpm|yarn call's segment (or `yarn workspace(s)`):
+# another package's script runs, no entry. G3: a bare `yarn|pnpm <word>` runs scripts.<word> when it is one
+MGR = re.compile(r'(?:^|[\s(])(npm|pnpm|yarn)(?=\s|$)')
+OTHER_PKG = re.compile(r'(?:^|[ \t])(?:-w|--workspaces?|--prefix|-C|--dir|--filter|-F|-r|--recursive|--cwd)(?:=|[ \t]|$)|\byarn[ \t]+workspaces?\b')
+BARE = re.compile(r'(?:^|[\s;&|(])(?:pnpm|yarn)[ \t]+([A-Za-z0-9_:.][A-Za-z0-9_:.-]*)')
 def npm_texts(sc, name, depth, seen):
     v = sc.get(name)
     side = [sc.get(k + name) for k in ('pre', 'post')]
@@ -362,6 +406,17 @@ def npm_texts(sc, name, depth, seen):
         return None
     texts = [v] + [x for x in side if isinstance(x, str)]
     for t in list(texts):
+        if any(MGR.search(g) and OTHER_PKG.search(g) for g in re.split(r'[;&|\n]', t)):
+            return None
+        for m in BARE.finditer(t):
+            n = m.group(1)
+            if n in ('run', 'run-script', 'test', 't') or n in seen or n not in sc:
+                continue
+            seen.add(n)
+            sub = npm_texts(sc, n, depth + 1, seen) if depth < 3 else None
+            if sub is None:
+                return None
+            texts.extend(sub)
         for m in NPM_RUN.finditer(t):
             if m.group(1) and NPM_OTHER.search(m.group(1)):
                 return None
@@ -407,14 +462,36 @@ for tgt in targets:
         sc = pkg.get('scripts') if isinstance(pkg, dict) else None
         # npm and yarn v1 also run pre<name> and post<name> (over-counted for pnpm and yarn berry)
         texts = npm_texts(sc, tgt[4:], 0, {tgt[4:]}) if isinstance(sc, dict) else None
-        if texts is not None:
-            make_paths[tgt] = sorted(paths_in('\n'.join(texts)))
+        found = paths_in('\n'.join(texts)) if texts is not None else None
+        if found is not None:
+            # 8.0.0 (#71 G1): a script that runs jest or vitest also loads the setup files of
+            # package.json's `jest` key and of the root jest/vitest/vite config files (read as text)
+            if re.search(r'(?<![\w.-])(?:jest|vitest)(?![\w.-])', '\n'.join(texts)):
+                cfg = [json.dumps(pkg.get('jest'))]
+                for c in sorted(tracked):
+                    if re.match(r'^(?:jest|vitest|vite)\.config\.[cm]?[jt]s(?:on)?$', c):
+                        found.add(c)
+                        cfg.append(show(c) or '')
+                for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', '\n'.join(cfg)):
+                    for c in [tok] + [tok + e for e in ('.js', '.ts', '.mjs', '.cjs', '.jsx', '.tsx', '.mts', '.cts')]:
+                        q = norm(c)
+                        if q and q in tracked:
+                            found.add(q)
+            make_paths[tgt] = sorted(found)
         continue
     # 7.4.0 (#29 N5): sh:<path> = the tracked files the script at <rev> sources; no entry when unreadable
     if tgt.startswith('sh:'):
         q = norm(tgt[3:])
-        if q and show(q) is not None:
-            make_paths[tgt] = sorted(sourced(q))
+        src = sourced(q) if q and show(q) is not None else None
+        if src is not None:
+            make_paths[tgt] = sorted(src)
+        continue
+    # 8.0.0 (#71 G5): py:<path> = the tracked modules the script at <rev> imports; no entry when unreadable
+    if tgt.startswith('py:'):
+        q = norm(tgt[3:])
+        mods = imports(q) if q else None
+        if mods is not None:
+            make_paths[tgt] = sorted(mods)
         continue
     rec = []
     if mk is not None:
@@ -426,7 +503,10 @@ for tgt in targets:
                     if not rl.startswith('\t'):
                         break
                     rec.append(rl)
-    make_paths[tgt] = sorted(paths_in('\n'.join(rec)))
+    # 8.0.0 (#71 G4): no entry when a recipe's script sources or imports cannot be listed
+    found = paths_in('\n'.join(rec))
+    if found is not None:
+        make_paths[tgt] = sorted(found)
 out = {'surface': [] if error else sorted(surface), 'make_paths': {} if error else make_paths, 'error': error, 'args': [wt, rev, targets_arg]}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()

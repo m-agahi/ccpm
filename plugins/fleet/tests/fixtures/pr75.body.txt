@@ -1,0 +1,49 @@
+## Summary
+
+Fleet 7.1.1 (L2142, yaadgaar #35).
+
+**Fallback build.** The fleet workflow run wf_8699f3eb-e7b made and audited this plan, then stopped at the intent gate on a separate defect (#65). This PR builds the sealed plan (`refs/fleet/y35/plan`, commit 888ef47) by hand with TDD. The plan doc is the first commit.
+
+### Changes
+- **(a) Digest retry for a failed relay.** `digestOnlyMiss` now accepts a relay marked `failed` when its only defect is a 64-hex digest that the relayed keys do not hash to. Such a relay gets the same one `:digest-retry` as an `ok` relay. A second miss halts `<label> returned failed`. A failed relay with no digest gets no retry. The args retry stays `ok`-only.
+- **(b) Error-branch routing.** `pr_state`, `ci_watch`, `orch_scan`, `policy` and `precommit_ids` join `ERROR_BRANCH_PROGRAMS`. `programErrorRelay` matches on the program name (the part of the PROGRAM_KEYS id before the first `:`). `prState` calls `dispatch` with no digest, so a write step gets no retry. It then applies the same halt and routing rules as `infra`. `infra`, `dispatch` and `digestRetry` are byte-identical.
+- `db_down` needs no code change. Its teardown already reports the error for every status (AC9 pins this).
+- Plan-audit advisories:
+  - (a) The `programErrorRelay` READS text and the `ERROR_BRANCH_PROGRAMS` comment now say "stop or report".
+  - (b) New example: a failed `infra:hash-diff` relay (softDispatch) with a mis-copied digest gets one retry. The cap path is a documented dont_care.
+- Version 7.1.0 -> 7.1.1 with every test mirror the plan lists. Also: CHANGELOG, fleet README digest-retry paragraph, notes-doc line (OB6) and the generated dist (`build-workflow.mjs --check` passes, `gen.mjs --check` passes).
+
+### Test evidence
+- New tests `plugins/fleet/tests/v711_*.test.mjs` (10 files, 27 tests):
+  - At base e72d456 with the plan commit: 7 pass, 20 fail. AC1-AC8 fail; the AC9 and AC10 guards hold.
+  - After the fix: 27 of 27 pass.
+- Full suite (`npm test` in `plugins/fleet`, 4G memory cap): 1658 tests, 1658 pass, 0 fail.
+
+### Non-weakening evidence (gates)
+- **Equality tests.** Each routed program has a test that runs the same scenario twice: once with a `failed` relay, once with an `ok` relay with the same error. Status, stop gate and reason must be equal. Coverage: pr_state ready, merge, update, fetch, cleanup, logs, rerun and resume view; ci_watch under both policies; orch_scan; policy with caps null and caps set; precommit_ids. db_down is covered by AC9.
+- **Mutation check.** Each new list entry was dropped one at a time and the dist rebuilt. Only that program's tests failed:
+
+| entry dropped | failing tests |
+|---|---|
+| `pr_state` | the 8 AC3/AC4 tests |
+| `ci_watch` | the 2 AC5 tests |
+| `orch_scan` | the AC6 routing test |
+| `policy` | the 2 AC7 tests |
+| `precommit_ids` | the AC8 test |
+
+- Reverting the `digestOnlyMiss` change fails AC1, AC2 and the AC6 boundary test (the base run).
+
+### Open decisions for Max (the plan's recommended defaults are built)
+- **D1 db_down:** no code change. Teardown never goes through `infra`.
+- **D2:** `pr_body_block`, `pr_test_block` and `hash_diff` also print `error` but are outside the ruling. Recommended: a follow-up task.
+- **D3:** report-only callers keep reporting. A routed failed relay gets the same report as an ok relay, and the run can end `ok`. Examples: pr_state cleanup, logs, rerun and view; ci_watch when no merge is expected; policy with caps set.
+
+### Deviations from the plan
+- OB5: the v403 check reported only `digest string @ programErrorRelay` (added as planned). `digestOnlyMiss` has one `r.digest string` read in the final code, so the plan's `[text, 2]` entry change was not needed.
+- None other.
+
+## Closes
+
+yaadgaar #35 (L2142).
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)

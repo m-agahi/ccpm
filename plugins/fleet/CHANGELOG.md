@@ -1,5 +1,46 @@
 # Changelog
 
+## [8.0.0] - unreleased
+
+Fleet 8.0.0: one major release in two cars. Car A: yaadgaar #74 and #71. Car B: #56 and #38
+(the rename to ccpmcwf) and the version bump.
+
+### Changed
+
+- Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
+  and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
+  run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or
+  tildes; an unclosed fence exempts nothing), and a claim right after the word `timeout`
+  (`timeout 1800 npm test`). A claim that only partly lies in a code span stays a claim
+  (`` `12` tests ``). Quoted prose is no named form: PR 74's "133 unit tests" stays a claim.
+  Corpus test over the bodies of merged PRs 73-78 (`tests/fixtures/pr<n>.body.txt`): every real
+  count claim is still caught; the only claim dropped is PR 76's `1800 npm test`. A frozen copy of
+  the 7.4.0 program (`tests/fixtures/pr_test_block_740.py`) proves new claims = old claims minus
+  the named forms (`v800_claims.test.mjs`).
+- Car A, #71: the remaining R4 (update-branch refusal) hook-input gaps. Each one only tightens:
+  - G1: an `npm:<name>` entry whose script texts run jest or vitest also lists the files that the
+    package.json `jest` key and the root `jest|vitest|vite.config.*` files name (read as text,
+    tracked files only, `<rootDir>/` and a missing extension resolved) and those config files. An
+    npm test_cmd also refuses a jest/vitest setup or config file by basename.
+  - G2: an npm, pnpm or yarn call with `--prefix`, `--workspace(s)`, `-w`, `-C`, `--dir`,
+    `--filter`, `-F`, `-r`, `--recursive` or `--cwd` anywhere in its command segment, or
+    `yarn workspace(s)`, drops the entry (another package's script runs).
+  - G3: a bare nested `yarn <script>` or `pnpm <script>` is followed when the word is a key of
+    `scripts`.
+  - G4: a sourced shell path built from a variable that resolves to no tracked file drops the
+    entry (fail closed) for `sh:`, `npm:` and make targets. The workflow now maps every target the
+    program did not list to null (before: `[]` for a make target); R4 reads a null make entry as
+    every file, and the obligations gate still reads it as no recipe.
+  - G5: new `py:<path>` target: the tracked modules a `python|python3 <file>` (or
+    `uv run [--extra x] python <file>`) test_cmd or check_cmd script imports, transitively, read
+    at the update head. A Python file a script or a make recipe names adds its imports too. A file
+    that does not parse, or an unreadable script, drops the entry.
+  - Non-weakening: `v800_r4_gaps.test.mjs` runs the 7.4.0 `hook_surface.py`
+    (`tests/fixtures/hook_surface_740.py`) beside the new one on the same repos, and the 7.4.0
+    `testCmdRuns`/`cmdRuns` (`tests/fixtures/r4_fns_740.js`) beside the new ones over a cross
+    product: every old refusal stays, and `cmdRuns` without the R4 flag is unchanged. Two
+    `v740_r4_gaps` assertions that a python check script reads no entry now expect the `py:` read.
+
 ## [7.4.0] - 2026-11-17
 
 Fleet 7.4.0: the combined step-3 batch (plan `docs/plans/fleet-step3-batch-7.4.0-2026-11-17.md`).

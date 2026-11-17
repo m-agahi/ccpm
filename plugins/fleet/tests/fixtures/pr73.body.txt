@@ -1,0 +1,67 @@
+## Summary
+
+changed_defs.py gets a pure-bytes port of buildWorkflow (gen_build) and a tree blob reader (gen_blob).
+When the dist plugins/fleet/workflows/build-task-run.js at the tree equals gen_build(src blob), it reports the dist in a new `generated` list and does not scan it. Otherwise it scans the dist as it does today.
+buildCallerCheck validates `generated`. It accepts only the one dist path and logs 'skipped <path> (generated from src)'. A bad relay halts the step as failed.
+The src stays scanned. Repos without this layout are unchanged. The fleet version goes to 7.0.1 and the pins, dist and README are regenerated or updated.
+
+### Review S1 closed (commit 9c60c05)
+
+The generated-dist skip now needs the dist to be the fresh build of the src at BOTH the base and the approved tree (gen_build(base src) == base dist AND gen_build(tree src) == tree dist). A stale base dist (hand edit in the dist only) is scanned, so its changed dist definitions (e.g. FLEET_VERSION, a dropped `const staleProbe = 2;`) reach the callers gate again. Re-run of review scenarios M3/M8 at e3c3ec2: old program `generated=[dist], defs=[]`; new program `generated=[]`, defs FLEET_VERSION and staleProbe reported.
+
+Frozen test AC1 "boundary: stale base dist" pinned the old fail-open behaviour. The orchestrator corrected it to expect the dist scanned (plan defect; finished outside the fleet after needs_human). Measured: new test RED on 36cebe1, GREEN with the fix, RED again with the base-freshness check removed.
+
+### Acceptance criteria
+
+- AC1: [unit] changed_defs.py reports the dist plugins/fleet/workflows/build-task-run.js in a new output list `generated` and does not scan it when, at both the base and the tree, its blob equals buildWorkflow(blob of plugins/fleet/src/build-task-run.js) (base clause added by review S1); fixtures per the plan doc (SRC0, build(x) = JS buildWorkflow from plugins/fleet/scripts/build-workflow.mjs; base S=SRC0, D=build(SRC0), lib/other.js). Test: plugins/fleet/tests/v701_generated_skip.test.mjs
+- AC2: [unit] When the dist blob at the tree differs from buildWorkflow(src blob), or the src blob is missing, or the dist is deleted, changed_defs.py scans the dist as today and `generated` is []; fixtures per the plan doc (SRC0, S, D, build). Test: plugins/fleet/tests/v701_generated_mismatch.test.mjs
+- AC3: [unit] The src file plugins/fleet/src/build-task-run.js stays scanned: its changed definitions are listed in defs even when the dist is the fresh build; fixtures per the plan doc (SRC0, S, D, build). Test: plugins/fleet/tests/v701_src_scanned.test.mjs
+- AC4: [unit] Repos without the ccpm src/dist layout are unaffected: `generated` is [] and every changed file is scanned as today; fixtures per the plan doc (SRC0, S, D, build). Test: plugins/fleet/tests/v701_other_layouts.test.mjs
+- AC5: [unit] The workflow's build caller check carries `generated`: the changed_defs prompt lists it, a valid relay logs '<label>: skipped <path> (generated from src)' and the build continues; a relay with no generated array, a non-string entry, or an entry other than plugins/fleet/workflows/build-task-run.js halts the step as failed before any commit. Test: plugins/fleet/tests/v701_gate_log.test.mjs
+- AC6: [unit] The program's build check equals the JS buildWorkflow byte for byte, including tab indentation, indented comment-only lines, whitespace-only lines, marker lines and the meta split; fixtures per the plan doc (SRC0, S, D, build). Test: plugins/fleet/tests/v701_build_parity.test.mjs
+
+## Closes
+
+N/A — no issue link in the plan sources.
+
+## Test evidence
+
+- Suite command: `npm test --` (run by the code judge, with cache env vars redirected to a scratch dir). Result: exit code 0, 1543 passed, 0 failed, 0 errors, no pre-existing failures.
+- After the S1 fix (9c60c05): `npm test` 1543 passed, 0 failed; `build-workflow.mjs --check` and `gen.mjs --check` pass.
+
+## Not verified
+
+- The Python build port omits the esbuild equivalence check; CI keeps `build-workflow.mjs --check`. This was not run here.
+- Byte parity of the port with the JS buildWorkflow is covered only by the AC6 fixtures, not by a measured sweep over all possible sources.
+
+## Gates not run
+
+Gates not run: held_out — fleet v2: held-out execution is not run yet
+Gates not run: coverage — fleet v2: mutation/coverage/scan gates are not run yet
+Gates not run: mutation — fleet v2: mutation/coverage/scan gates are not run yet
+Gates not run: security_scan — fleet v2: mutation/coverage/scan gates are not run yet
+
+## Risks
+
+### Unattended run
+
+Unattended run (arg): automatic decisions: default-blocker: decided (new_behaviour true (only false skips the confirmation))
+
+Intent check: approve — Plan matches the task intent: the dist is skipped only when it is byte-equal to build(src) at the tree, src stays scanned, the skip is logged as generated from src, pins are regenerated, AC1-AC4 are covered, and all extras are allowed and fail closed.
+
+- Design D1: the build(src)==dist check runs inside changed_defs.py as a Python port of buildWorkflow on tree blobs (not node build-workflow.mjs --check); new symbols GEN_DIST, GEN_SRC, GEN_MARK, gen_build, gen_blob, _s, _d — approve; allowed by: "(or an equivalent program comparing build(src) to dist)" (task body)
+- Design D2: a new output key `generated` (Python set, relay field, PROGRAM_KEYS/PROGRAM_OUT entry) in place of putting the dist in `excluded`; the workflow logs '<label>: skipped <path> (generated from src)' — approve; allowed by: "logged as skipped, reason "generated from src"" (task body)
+- New JS constant GENERATED_DIST and AC5 refusals: a relay with no generated array, a non-string entry, or an entry other than the fleet dist halts the step as failed — approve; allowed by: "ONLY when the dist equals the build of the src at the approved tree" (task body)
+- AC6 parity criterion: the Python build port equals the JS buildWorkflow byte for byte — approve; allowed by: "(or an equivalent program comparing build(src) to dist)" (task body)
+- plan_diff: D1 names every new Python symbol with value/shape; tree blobs read by gen_blob (missing blob gives no exclusion, exit 0) — approve; allowed by: "If the check fails, do not exclude" (task body)
+- plan_diff: D3.2 exact placement and loop code in changed_defs.py; o['generated'] added before o['program'] — approve; allowed by: "(or an equivalent program comparing build(src) to dist)" (task body)
+- plan_diff: new Scope fence section (GENERATED_DIST, generated, GEN_DIST, GEN_SRC, GEN_MARK, gen_build, gen_blob, _s, _d; file list without gen.mjs) — approve; allowed by: "## Fix (preferred, smallest)" (task body)
+- plan_diff: allowed_additions.symbols gains GEN_DIST, GEN_SRC, GEN_MARK, gen_build, gen_blob, _s, _d — approve; allowed by: "(or an equivalent program comparing build(src) to dist)" (task body)
+- plan_diff: allowed_additions.files drops gen.mjs; gen.mjs only reads/writes the PROGRAM_SHA256 table — approve; allowed by: "changed_defs.py / any new program changes sha256 pins (src:1555 table) - regenerate with build-workflow.mjs / gen.mjs." (task body)
+- plan_diff: Non-goals add no change to plugins/fleet/docs/build-task-run-notes.md — approve; allowed by: "## Fix (preferred, smallest)" (task body)
+- plan_diff: AC2, AC3, AC4, AC6 criterion texts point to the fixtures (SRC0, S, D, build) — approve; allowed by: "AC2: a tree where the dist differs from build(src) (hand edit in dist) does NOT get the exclusion; dist defs are reported as today (or a dedicated stop)." (task body)
+- plan_diff: kept from revision 1 (AC5 relay construction, D2 ARRAY_SITES/READS entries, D3.4 no INFRA_SCHEMA edit, R3 tampering limit, OB1 double-version lines, OB6 README) — approve; allowed by: "logged as skipped, reason "generated from src"" (task body)
+- OB4 (kind other): update existing tests broken by the new key (changed-defs digest test, ARRAY_SITES, READS, harness defsOut default, T18 fixture, v5010 PINS) — approve; allowed by: "changed_defs.py / any new program changes sha256 pins (src:1555 table) - regenerate with build-workflow.mjs / gen.mjs." (task body)
+- OB5 (kind other): bootstrap coder constraints (no new const/let/var in src function bodies, D3.2 exact code, no INFRA_SCHEMA edit, never hand-edit dist) — approve; allowed by: "Result: any fleet change that edits src (and so regenerates the dist) stops here." (task body)
+
+plan auto-confirmed by intent judge

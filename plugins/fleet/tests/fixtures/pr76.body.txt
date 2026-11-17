@@ -1,0 +1,107 @@
+## Summary
+
+Fleet 7.2.0: the caller check no longer copies a large occurrence list through a model relay (yaadgaar #44, L2178; ADR-1195 applied to `callers.py`).
+
+**Why a fallback build.** The fleet run on this task, wf_c04c41b0-5ee (fleet 7.1.1), failed on this bug: round `infra:callers:audit-fix-2` mis-copied a 25,915-byte callers output on haiku, and its digest retry failed the same way. This PR was built by hand with TDD from the approved plan. No Workflow or /build-task was run.
+
+**Plan and audit.** Plan: `docs/plans/fleet-infra-callers-on-disk-handoff-l2178-2026-11-16.md` (round 3, commit 8710404). A fable plan-audit approved it with no blocking findings. Commit 583e767 applies these advisories and cuts:
+- A1: the AC7 control also asserts `infra:callers:read:auto:0` and the plan audit.
+- A2: the `:file` and read relays are args-checked after `digestRetry`. AC7 has a new example where the args retry is also wrong and the run stops `failed`.
+- A3: a mixed-budget example (AC11 ex 4) and Open decision 5.
+- A4: an agent-count baseline (14 runs: median 23, max 92).
+- A5: moot after cut (a).
+- A7: `SUMMARY_CAP` is 4096 and independent of `INLINE_CAP` 8192.
+- Cuts:
+  - (a) no `callerReads` memo
+  - (b) no AC8 and no `READ_CAP`: a failed read relay is a plain `failed`
+  - (c) no `auto` index map in read output
+  - (d) no symlink refusal and no `01` page refusal
+
+**What changed**
+- `callers.py`:
+  - **Inline mode:** prints its output only up to 8192 bytes. Over that, it prints nothing and exits with `FLEET_CALLERS_ON_DISK:`.
+  - **File mode:** writes the full output to `<scratch>/callers/callers-<sha256>.json` (temp file, then rename). It relays a summary per symbol of at most 4096 bytes: `count`, `sha256`, `auto_count`, `path_count`, `paths_sha256`.
+  - **Read mode:** prints 50-entry pages over all listed symbols, for part `all`, `auto` or `paths`.
+  - Lines 1-101 are byte-identical (zero `-` lines). Every added line is a new def or one column-0 statement.
+- Workflow, plan rounds (line level):
+  - A symbol whose mapped set hashes to the summary needs no read.
+  - Auto-only gaps read part `auto`. Every other symbol reads part `all` and gets today's findings.
+  - At most 4 pages per caller check. A list over that budget is one finding per symbol.
+- Workflow, update merge (R5, `infra:callers:u1`, path level): a line shift with the same files needs no read. A changed path set reads part `paths` and joins the moved-file check. A list over the budget refuses the coder round.
+- `PROGRAM_KEYS` gains `callers:file` and `callers:read`. `PROGRAM_OUT.callers` is the union of the new keys. `PROGRAM_SLOTS` is unchanged.
+- Version 7.1.1 -> 7.2.0 (FLEET_VERSION, marketplace.json, root README, test mirrors). CHANGELOG, README and notes are updated, and gen/dist are regenerated (`gen.mjs --check` and `build-workflow.mjs --check` pass).
+
+**Tests (real counts)**
+- RED on base: 36 new tests, 34 failing for the right reason and 2 unchanged-behaviour controls green.
+  - The workflow tests stopped with `infra:callers returned failed: FLEET_CALLERS_ON_DISK`.
+  - The program tests failed on the missing modes.
+  - The RED proof is a log, not a commit, because the `check-changelog` hook forces tests and CHANGELOG into one commit.
+- Targeted after the build: the `v720_*` files have 40 tests, 40 passing. The caller-related existing files plus `build_task_run` have 892 tests, 892 passing.
+- Full suite (`systemd-run ... timeout 1800 npm test` in `plugins/fleet`): **1698 tests, 1698 pass, 0 fail**.
+- OB6: two `v630_flow` tests that pinned the old inline size now assert the `FLEET_CALLERS_ON_DISK` marker.
+
+**Non-weakening.** `callerCheck` and R5 are gates. On the disk path each one refuses at least everything the inline path refuses:
+
+| Gate | Disk-path argument |
+|---|---|
+| callerCheck, exact | A sha256-equal sorted canonical list is the same set, so no unmapped or stale line passes (the count is also checked). |
+| callerCheck, AUTO | E ∪ auto must hash to the full-set sha256. A mismatch drops to ALL, never to a pass. The auto entries still go through the existing doc/lock/doctest refusal in `callerCheck`. |
+| callerCheck, ALL | The full list is count- and hash-checked, then today's findings run. The script derives the auto hits itself (cut (c)), and their number must equal `auto_count`. |
+| R5, equal path hash | The path set equals the sealed set, so `occ` is the same set as inline sealed ∪ grep. |
+| R5, changed path set | `occ` = sealed ∪ the read paths (count- and hash-checked), the same as inline. |
+| Budget overrun | A finding (plan) or a refusal (R5), never a pass. |
+| Read or summary relay failure, digest miss after retry, args miss after retry, wrong file path, bad page fields | `failed`. |
+
+Mutation table. Each row drops one new check, rebuilds the dist and runs the named tests. Every mutation is killed.
+
+| # | Check dropped | Tests failing |
+|---|---|---|
+| M1 | file summary digest | 1 (disk_checks) |
+| M2 | file args after the args retry (A2) | 1 |
+| M3 | file path under scratch | 1 |
+| M4a | summary entry field checks | 1 |
+| M4b | summary entry presence | 1 |
+| M5 | exact-map hash compare | 8 (disk_reads, read_budget) |
+| M6 | AUTO join count | 1 |
+| M7 | AUTO join hash | 1 |
+| M8 | ALL join count/hash | 1 |
+| M9 | ALL derived auto count | 1 |
+| M10 | read page fields (part, index, count, keys) | 2 |
+| M11 | read page digest | 1 |
+| M12 | read args after retry | 1 |
+| M13 | read budget | 4 (read_budget, update_merge) |
+| M14 | PATHS join | 1 |
+| M15 | path-level compare | 4 |
+| M16 | R5 budget refusal | 1 |
+| M17 | R5 joins the read paths | 2 |
+| M18 | callerCheck budget finding | 3 |
+| P1 | callers.py read-mode hash check | 1 (read_refusals) |
+| P2 | callers.py inline cap | 2 (inline_cap) |
+
+**Deviations from the plan**
+1. Cut (c) drops the `auto` key from read output in every part, not only in part `all`. Once part `all` loses it, the key carries no information.
+2. New helper names beyond the plan facts:
+   - JS: `CALLER_INLINE_CAP`, `CALLER_SUMMARY_CAP`, `uniqSorted`, `isStrList`, `callerMerge`, `callerDisk`, `callerReadParts`
+   - Python: `list_sha`, `hit_paths`, `digest_of`, `read_mode`, `file_args`, `file_mode`, `FILE_MODE`, `FILE_ARGS`
+3. The diff is +1709/-203 including the generated dist, against `est_diff_lines` 1300.
+4. Five non-weakening tests were added after the implementation, for mutation coverage. They were never RED.
+   - `disk_checks`: digest twice; read args and an extra key; ALL join; ALL auto count.
+   - `update_merge`: paths join.
+5. In AC4, the changed-byte case keeps the file a valid callers object, so only the hash check refuses it.
+6. The AC9 fixture is copied from `v610_update_coder` T9.
+7. ADR-1271: the dispatch asked for the plan commits (8710404, 583e767), so they are on this branch, as the fallback build for #75 also did. Drop them if the plan doc should stay out of master.
+
+**Open decisions (from the plan)**
+1. `INLINE_CAP` 8192, `SUMMARY_CAP` 4096, `PAGE` 50 and `CALLER_READ_BUDGET` 4 come from one incident.
+2. Moving the `infra:callers` tier or its retries to sonnet is yaadgaar #67.
+3. A plan with more than 200 doc hits left to auto gets a finding.
+4. R5 refuses when differing path sets need more than 4 reads.
+5. For maps of this size, one stale symbol of more than 50 hits gets a budget finding, not per-line findings.
+
+ADR-1192: a smoke run after merge is still pending.
+
+## Closes
+
+yaadgaar m-agahi/ccpm #44 (L2178)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)

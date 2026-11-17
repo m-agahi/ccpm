@@ -391,7 +391,8 @@ export async function runOne(script, args0) {
     // npm:<name> target finds a tracked package.json script (no walk-up finding); car 5 (Z1): so does pkg:package.json
     if (!(label in script) && /^infra:hook-surface:/.test(label)) {
       const mp = {};
-      for (const t of inputsOf(prompt).targets || []) if (/^sh:/.test(t) || (/^infra:hook-surface:plan/.test(label) && /^(npm|pkg):/.test(t))) mp[t] = [];
+      // 8.0.0 (#71): a make target finds a recipe and a py:<path> target a script that imports nothing
+      for (const t of inputsOf(prompt).targets || []) if (/^(sh|py):/.test(t) || !/^(npm|pkg):/.test(t) || (/^infra:hook-surface:plan/.test(label) && /^(npm|pkg):/.test(t))) mp[t] = [];
       return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: mp, error: null }, prompt));
     }
     // 6.0.0 (ledger 2042): an unscripted convention read finds no convention (the conventional fallback)

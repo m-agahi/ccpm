@@ -1376,6 +1376,14 @@ function shTargetOf(cmd) {
   const s = /^(ba|da|k|z)?sh$/.test(t[0]) ? relPath(t[1]) : t[0].indexOf("/") >= 0 ? relPath(t[0]) : null;
   return s ? "sh:" + normPath(s) : null;
 }
+// 8.0.0 (#71 G5): py:<path> for a command that runs a repo Python script (`uv run [--extra x] python <file>`), else null
+function pyTargetOf(cmd) {
+  const t = String(cmd || "").trim().split(/[ \t]+/);
+  let i = 0;
+  if (t[0] === "uv" && t[1] === "run") for (i = 2; t[i] === "--extra" && t[i + 1]; ) i += 2;
+  const s = /^python[0-9.]*$/.test(t[i] || "") ? relPath(t[i + 1]) : null;
+  return s ? "py:" + normPath(s) : null;
+}
 // npm:<script> for an npm, pnpm or yarn test_cmd, else null
 function npmTargetOf(cmd) {
   const t = String(cmd || "").trim().split(/[ \t]+/);
@@ -1393,7 +1401,9 @@ function testCmdRuns(cmd, p, makePaths) {
   const sp = makePaths ? makePaths[shTargetOf(t.join(" "))] : null;
   const shell = (x) => script(x) || !Array.isArray(sp) || pathsHit(sp, p);
   if (/^(ba|da|k|z)?sh$/.test(t[0])) return shell(t[1]);
-  if ((t[0] === "python" || t[0] === "python3") && t[1] !== "-m") return script(t[1]);
+  // 8.0.0 (#71 G5): a Python script: also the modules it imports (no py: entry: every file)
+  const pp = makePaths ? makePaths[pyTargetOf(t.join(" "))] : null;
+  if ((t[0] === "python" || t[0] === "python3") && t[1] !== "-m") return script(t[1]) || !Array.isArray(pp) || pathsHit(pp, p);
   if (t[0].indexOf("/") >= 0) return shell(t[0]);
   const pre = testRunnerPrefix(t);
   if (!pre) return true;
@@ -1402,7 +1412,8 @@ function testCmdRuns(cmd, p, makePaths) {
   if (pre.kind === "npm") {
     const np = makePaths ? makePaths[npmTargetOf(t.join(" "))] : null;
     if (!Array.isArray(np)) return true;
-    return TEST_INPUTS.npm.indexOf(b) >= 0 || pathsHit(np, p);
+    // 8.0.0 (#71 G1): a script may run jest or vitest: their setup and config files by basename too
+    return TEST_INPUTS.npm.indexOf(b) >= 0 || JEST_SETUP_RE.test(b) || pathsHit(np, p);
   }
   if (pre.kind === "jest" && JEST_SETUP_RE.test(b)) return true;
   if (pre.kind === "cargo" && (b === "config" || b === "config.toml")) return p.split("/").slice(-2, -1)[0] === ".cargo";
@@ -1417,9 +1428,13 @@ function cmdRuns(cmd, p, makePaths, r4) {
   const b = p.split("/").pop();
   const recipe = words[0] === "make" && makePaths && Array.isArray(makePaths[words[1]]) ? makePaths[words[1]] : [];
   const st = r4 ? shTargetOf(cmd) : null;
+  // 8.0.0 (#71): R4 also reads a Python script's py: entry (G5) and a dropped make entry (null) as every file (G4)
+  const pt = r4 ? pyTargetOf(cmd) : null;
   return !!(
     (script && p === normPath(script)) ||
     (st && (!makePaths || !Array.isArray(makePaths[st]) || pathsHit(makePaths[st], p))) ||
+    (pt && (!makePaths || !Array.isArray(makePaths[pt]) || pathsHit(makePaths[pt], p))) ||
+    (r4 && words[0] === "make" && makePaths && makePaths[words[1]] === null) ||
     (words[0] === "make" && (/^(GNUmakefile|makefile|Makefile)$/.test(b) || /\.mk$/.test(b) || (r4 ? pathsHit(recipe, p) : recipe.indexOf(p) >= 0))) ||
     (words[0] === "pre-commit" && b === ".pre-commit-config.yaml")
   );
@@ -1640,7 +1655,7 @@ const PROGRAM_SHA256 = {
   "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
   "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
   "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
-  "hook_surface": "ccd331ce4c783f94b546ed735275b171e38b4b982ea6d8b1241db6fe9c90582c",
+  "hook_surface": "36fe79ef2fe3b5c4e231c0e250c3d380574442278e9b1d5087c2597657ee6023",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
   "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1653,7 +1668,7 @@ const PROGRAM_SHA256 = {
   "pr_body_block": "399c9f1ec13ac3059d922b68e19220571ebfadea3cd944dea4ff0b007f053c1b",
   "pr_convention": "f26cb4a739d549ccfc5554a9deaa94a44698e71c2039e16d77247fdfdbf1d17f",
   "pr_state": "ae131b39f087f22172a20dfa7af4dd01f261e1a07580ca1fa6e4b85e93201540",
-  "pr_test_block": "91c1d4610ffce1fe1ca2823a03cfb06e98d2385e42b14b17a5e2ccd1eb8280be",
+  "pr_test_block": "8d1f6242e056b00522afe1c83361d99168c623e4d34fcb7c8602e31982ea5888",
   "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
   "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
   "push": "c164956e3b5bf968f527688fb3125d7821d42b9a8843353186d9e8dfbc64166e",
@@ -5094,9 +5109,9 @@ async function hookSurface(label, worktree, rev, targets, phaseName) {
   if (r.error !== null)
     hookReadStop(r.error);
   const mp = {};
-  // 6.1.0: an npm:<name> (7.4.0: or sh:<path>) target the program could not read stays null (R4 refuses on it);
+  // 6.1.0: an npm:<name> (7.4.0: or sh:<path>; 8.0.0: py:<path> or a make target) target the program could not read stays null (R4 refuses on it);
   // 7.4.0 (#29 N2): a "dir/" entry keeps its slash
-  for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x)) + (/\/$/.test(String(x)) ? "/" : "")) : /^(npm|sh|pkg):/.test(t) ? null : [];
+  for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x)) + (/\/$/.test(String(x)) ? "/" : "")) : null;
   return { surface: r.surface.map((x) => (/\/$/.test(String(x)) ? (String(x) === "./" ? "./" : normPath(String(x)) + "/") : normPath(String(x)))), make_paths: mp };
 }
 
@@ -7427,7 +7442,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // R4: what test_cmd or a check_cmd runs (a test_cmd shape it cannot read refuses: fail closed)
     // 7.4.0 (#29 N5): and the files a script test_cmd or check_cmd sources, read at d
     const dt = [];
-    for (const x of [npmTargetOf(tc)].concat([tc].concat(cmds).map(shTargetOf))) if (x && dt.indexOf(x) < 0) dt.push(x);
+    for (const x of [npmTargetOf(tc)].concat([tc].concat(cmds).map(shTargetOf), [tc].concat(cmds).map(pyTargetOf))) if (x && dt.indexOf(x) < 0) dt.push(x);
     const tm = dt.length ? Object.assign({}, pb.make_paths, (await hookSurface("infra:hook-surface:u1:d", mainWt, upd.head, dt, "Review")).make_paths) : pb.make_paths;
     const ti = mv.filter((p) => testCmdRuns(tc, p, tm) || cmds.some((c) => cmdRuns(c, p, tm, true)));
     if (ti.length) return "the base change touches files the test or check commands run" + list(ti);

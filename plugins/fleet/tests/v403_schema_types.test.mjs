@@ -531,10 +531,15 @@ const READS = {
     "np array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths",
     // 7.4.0 (#29 N5, N4): a sh:<path> entry (null when unread); the jest setup basename of a path
     "sp array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths",
-    "b string-re": PARSED_TOKEN,
+    // 8.0.0 (#71 G5, G1): a py:<path> entry (null when unread); the npm branch also tests the jest setup basename
+    "pp array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths",
+    "b string-re": [PARSED_TOKEN, 2],
   },
-  // 7.4.0 (#29 N5): the R4 read of a check script's sh:<path> entry
-  cmdRuns: { "makePaths[st] array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths" },
+  // 7.4.0 (#29 N5): the R4 read of a check script's sh:<path> entry; 8.0.0 (#71 G5): and its py:<path> entry
+  cmdRuns: {
+    "makePaths[st] array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths",
+    "makePaths[pt] array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths",
+  },
   // 6.1.0: the grep's checks moved from callerCheck to callerGrep
   callerGrep: {
     "occ object": "prog:callers:occurrences",

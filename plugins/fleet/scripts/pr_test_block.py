@@ -90,6 +90,25 @@ NEAR = re.compile(r'\b' + NOUN, re.I)
 # claim that lies wholly inside such a span is dropped; every other claim stays.
 ORDINAL = (re.compile(r'(?<![A-Za-z0-9_])[Tt]est[ \t]+[0-9]+[ \t]+of[ \t]+AC[0-9]+(?![A-Za-z0-9_])'),
            re.compile(r'(?<![A-Za-z0-9_])[Ss]tep[ \t]+[0-9]+[ \t]+tests[ \t]+(?=[A-Za-z])'))
+# 8.0.0 (#74): three forms are no count claim: a claim wholly inside an inline code span (a backtick
+# run, text on one line, a run of the same length) or a closed fenced code block (3+ backticks or
+# tildes, up to 3 spaces indent; closed by a line of the same character at least as long; an unclosed
+# fence exempts nothing), and a claim right after the word `timeout` (`timeout 1800 npm test`)
+FENCE = re.compile(r'^ {0,3}(`{3,}|~{3,})')
+FENCE_END = re.compile(r'^ {0,3}(`+|~+)[ \t]*$')
+CODE = re.compile(r'(?<!`)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)')
+TIMEOUT = re.compile(r'(?<![A-Za-z0-9_-])timeout[ \t]+\Z')
+def code_spans(text):
+    out, at, fence = [], 0, None
+    for line in text.split('\n'):
+        m = (FENCE_END if fence else FENCE).match(line)
+        if not fence and m and not (m.group(1)[0] == '`' and '`' in line[m.end():]):
+            fence = (m.group(1)[0], len(m.group(1)), at)
+        elif fence and m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]:
+            out.append((fence[2], at + len(line)))
+            fence = None
+        at += len(line) + 1
+    return out + [m.span() for m in CODE.finditer(text)]
 # the stats block's '| tests written | <n> (<m> test rounds) |' cell, only on that row of the stats region
 ROUNDS = ' rounds)'
 STATS = re.compile(re.escape('<details><summary>Built with ccpm fleet') + r'.*?' + re.escape('<!-- ccpm-fleet-stats -->'), re.S)
@@ -117,9 +136,12 @@ def claims_of(text):
         return NEAR.search(text[max(ls, m.start() - 40):min(len(text) if le < 0 else le, m.end() + 40)]) is not None
     hits, at = [], set()
     ords = [o.span() for r in ORDINAL for o in r.finditer(text)]
+    code = code_spans(text)
     for p in (P1, P2, P1N, P2N, P3):
         for m in p.finditer(text):
             if any(a <= m.start() and m.end() <= b for a, b in ords):
+                continue
+            if any(a <= m.start() and m.end() <= b for a, b in code) or TIMEOUT.search(text[max(0, m.start() - 200):m.start()]):
                 continue
             if p in (P1, P1N) and rounds_cell(m):
                 continue
