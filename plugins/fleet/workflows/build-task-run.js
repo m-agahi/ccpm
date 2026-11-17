@@ -470,6 +470,7 @@ quote: STR,
 },
 required: ["change_kind", "new_behaviour", "quote"],
 },
+bookkept: { type: "array", items: STR },
 }),
 "pr-review": roleSchema({
 verdict: { type: "string", enum: VERDICTS["pr-review"] },
@@ -1507,7 +1508,7 @@ const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
 "fleet-code-judge": "64551eb558f61e89624f15766eec57968466ef866236f327f7ad5e6e9092ff1a",
 "fleet-coder": "8e81af45bcd412c0ce61ee29f714ca0f36d074c00c531ca4dfda97c51d0cb7d3",
-"fleet-intent-judge": "728f3c0a1510644bfffa0ed095ed8d6e1bc66023740938f0f861f4a5e77a3804",
+"fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
 "fleet-pr-opener": "0c4d24c3bbcc9a99d5e51de251d3817183f85ced1a73d0eeb1318cb1429447cf",
 "fleet-test-judge": "43cb62e8d83552ae58a79061ec9949203db267489e749d0ae6973815dd928c55",
 "fleet-test-writer": "d35428ca572612ec6f35b236dc113a153fa395afcc3184ccb1a09f289d1a6acf",
@@ -5152,9 +5153,11 @@ else if (count[h.hook] > 1) out.push(h.id + ": hook id " + h.hook + " appears " 
 }
 return out;
 }
-function intentProblems(r) {
+function intentProblems(r, planDiff) {
 if (r.status !== "ok") return ["intent judge returned " + r.status + ": " + (r.reason || "no reason")];
 const out = [];
+const filed = r.deviations.map((d) => d && d.item).concat(Array.isArray(r.bookkept) ? r.bookkept : []);
+for (const x of planDiff || []) if (x !== "new plan" && filed.indexOf(x) < 0) out.push("plan_diff entry " + JSON.stringify(x) + " is neither a deviation nor bookkept");
 if (r.verdict !== "approve") out.push("intent verdict " + r.verdict + ": " + (r.reason || ""));
 for (const d of r.deviations) {
 const tag = JSON.stringify((d && d.item) || "?");
@@ -5232,7 +5235,7 @@ const fail = (failedCheck, reasons) => {
 gate("auto-confirm: " + failedCheck + " check failed: " + reasons.join("; "));
 return { ok: false, failedCheck, reasons, intent };
 };
-const g1 = intentProblems(r);
+const g1 = intentProblems(r, ctx.planDiff);
 for (const x of ctx.relaxed || []) if (!intent.deviations.some((d) => d && String(d.item).indexOf(x) >= 0 && d.verdict === "approve" && typeof d.allowed_by === "string" && d.allowed_by.trim() && d.fails_closed === true)) g1.push("relaxed re-plan item " + JSON.stringify(x) + " has no approved deviation");
 if (g1.length) return fail("intent", g1);
 gate("auto-confirm: intent approve (" + intent.deviations.length + " deviation(s), all allowed and fail-closed)");

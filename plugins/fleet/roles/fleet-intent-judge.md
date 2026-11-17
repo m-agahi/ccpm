@@ -47,12 +47,12 @@ Some plan items come from the repo's own rules, not from the task. They are proc
 
 List each of these as one deviation entry:
 
-- every entry of `plan_diff` (unless it is `"new plan"`);
+- every entry of `plan_diff` that is not bookkeeping (see below) and not `"new plan"`, copied character for character as its `item`;
 - every planned behaviour, file, symbol, dependency or setting that the task or the rulings do not state. Walk the criteria (each behaviour) and `allowed_additions` (each file, symbol, dependency and setting);
 - every repo obligation that is not a verified process item (see above).
   An item that the task or a ruling states outright is not a deviation; do not list it.
 
-**Bookkeeping `plan_diff` items.** A `plan_diff` entry that only restates a verified process obligation, a `changed_symbols` update, an `est_diff_lines` change or a test-example refinement of a criterion that is already allowed is not a deviation. Leave it out. An approved deviation always has a non-empty verbatim `allowed_by`. A repo rule is never an allowance.
+**Bookkeeping `plan_diff` items.** A `plan_diff` entry that only changes `est_diff_lines`, or only restates a process item you verified (see above), is bookkeeping: put it, copied character for character, in `bookkept`, not in `deviations`. Every other entry is a deviation, a `changed_symbols` addition and a test-example change that flips an accept or refuse outcome included. Each `plan_diff` entry except `"new plan"` goes in exactly one of `deviations[].item` and `bookkept`; the workflow refuses the plan when an entry is in neither. An approved deviation always has a non-empty verbatim `allowed_by`. A repo rule is never an allowance.
 
 ## Rules per deviation
 
@@ -87,7 +87,7 @@ Judge the planner's `change_kind` and `new_behaviour` against the task, and retu
 Return ONE object through the StructuredOutput tool. It is the only output channel: the workflow reads nothing else from your final message. `status: "ok"` means the judging completed — even when the verdict is `refuse`.
 
 - Always: `status`, `reason` (one line) and `role_file` (step 1 of your prompt).
-- Required on `ok`: `verdict`, `deviations` (array, `[]` when none), `coverage` (object) and `classification` (object with `change_kind`, `new_behaviour` and `quote`). Arrays are JSON arrays, never strings. On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run. A missing `classification` on `ok` is contract drift; a `refuse` or an empty `quote` is an intent-gate failure.
+- Required on `ok`: `verdict`, `deviations` (array, `[]` when none), `bookkept` (array of `plan_diff` strings, `[]` when none), `coverage` (object) and `classification` (object with `change_kind`, `new_behaviour` and `quote`). Arrays are JSON arrays, never strings. On `needs_human` or `failed`, set each one you have no value for to null. On `ok`, a missing key, a `null` where the type does not allow it, or a wrong type is contract drift: the workflow sends the result back to you once, then stops the run. A missing `classification` on `ok` is contract drift; a `refuse` or an empty `quote` is an intent-gate failure.
 - Optional: `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
 
 Shape:
@@ -108,6 +108,7 @@ Shape:
       "reason": "<one line>"
     }
   ],
+  "bookkept": ["<a plan_diff entry, copied exactly>"],
   "coverage": { "covered": true, "missing": [] },
   "classification": {
     "change_kind": "approve|refuse",

@@ -717,6 +717,8 @@ const READS = {
     "cl object": IJ + "classification",
     "cl array": "!" + IJ + "classification",
     "cl.quote string": IJ + "classification.quote",
+    // 7.3.0 review (M3)
+    "r.bookkept array": IJ + "bookkept",
   },
   autoGates: {
     "r.deviations array": IJ + "deviations",

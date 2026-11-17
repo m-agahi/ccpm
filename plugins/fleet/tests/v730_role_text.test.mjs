@@ -17,7 +17,8 @@ const one = (s) => s.replace(/\s+/g, " ");
 
 test("7.3.0 #65 A24: the intent judge leaves bookkeeping plan_diff items out; a repo rule is never an allowance", () => {
   const t = one(ROLE_TEXT["fleet-intent-judge"]);
-  assert.match(t, /A `plan_diff` entry that only restates a verified process obligation, a `changed_symbols` update, an `est_diff_lines` change or a test-example refinement of a criterion that is already allowed is not a deviation\. Leave it out\./);
+  // review fix M3: only est_diff_lines and verified process items are bookkeeping, filed in bookkept
+  assert.match(t, /A `plan_diff` entry that only changes `est_diff_lines`, or only restates a process item you verified \(see above\), is bookkeeping: put it, copied character for character, in `bookkept`, not in `deviations`\./);
   assert.match(t, /An approved deviation always has a non-empty verbatim `allowed_by`\. A repo rule is never an allowance\./);
 });
 

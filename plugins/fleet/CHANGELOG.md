@@ -196,6 +196,13 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
   long ref gets the new id: its old branch and refs are not found (re-run plan, or delete them).
   The text-input skip reads the source kind, not a task id starting with `t` (a ref such as
   `team/tools#12` was skipped).
+- M3 (#65 bookkeeping backstop): the intent judge keeps only an `est_diff_lines` change and a
+  verified process item as bookkeeping; a `changed_symbols` addition and a test-example change
+  that flips an accept or refuse outcome are deviations (the wider carve-out is deleted). The
+  judge returns `bookkept: [<plan_diff entry>]`, and `intentProblems` refuses the plan when a
+  `plan_diff` entry (except `"new plan"`) is, copied exactly, neither a deviation `item` nor in
+  `bookkept`. A missing `bookkept` counts as `[]`, so it fails closed without being contract drift
+  (`bookkept` is in the schema, not in `REQUIRED_ON_OK`).
 
 ### Tests changed on purpose (review fixes)
 
@@ -203,6 +210,10 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
 - `v730_scratch_copy`: the new `scratch_copy.py` signatures; the env probe runs `printenv`, not
   `sh -c`. `v730_shell_programs`, `v4_s3`: the narrowed Write rule. `v502_relay_keys`, `v4_s4`,
   `build_task_run` (plan-ref chunk dir): the chunk dirs under `scratch/chunks/`.
+- New: `v730_review_bookkept`. `v403_schema_types` READS and `build_task_run` ARRAY_SITES: `r.bookkept`
+  in `intentProblems`.
+- `v730_role_text` #65 A24: the bookkeeping sentence pinned is the narrowed one.
+- `v5010_prompt_snapshot` pins: the role, schema and prompt changes above.
 - New: `v730_review_scratch_guard` (the shim guard and the denylist additions).
 - New: `v730_review_branch_owner`. `v730_branch_slug`: the fixtures own their slugs, the program
   takes the source; the harness default relay adds `owned: []`.

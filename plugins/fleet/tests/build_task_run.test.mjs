@@ -5687,6 +5687,8 @@ const ARRAY_SITES = {
   "aa.files @ scopeProblems": "role:scope-and-plan:allowed_additions.files",
   "cfg.ids @ hookIdProblems": "infra:ids",
   "r.deviations @ autoGates": "role:fleet-intent-judge:deviations",
+  // 7.3.0 review (M3)
+  "r.bookkept @ intentProblems": "role:fleet-intent-judge:bookkept",
   "scan.commits @ planMode": "infra:commits",
   "scan.refs @ planMode": "infra:refs",
   "r.criteria @ planRefProblem": "parsed: the sealed plan ref (JSON.parse of a verified tag message)",
