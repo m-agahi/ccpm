@@ -246,12 +246,15 @@ On-disk caller handoff (7.2.0, L2178): a grep output over 8192 bytes is not copi
 relay. `callers.py` exits with `FLEET_CALLERS_ON_DISK`, and the script runs its file mode: the full
 output goes to `<scratch>/callers/callers-<sha256>.json`, and the relay carries only a summary per
 symbol (hit count, sha256 of the sorted hits, auto doc or lock hit count, path count and path
-hash; at most 4096 bytes, else the batch splits in halves). A symbol whose mapped occurrences hash
+hash; at most 4096 bytes, else the batch splits in halves; one symbol alone may reach 16384 bytes
+since 7.4.0). A symbol whose mapped occurrences hash
 to the summary needs no read. Other symbols are read in batch-wide pages of 50 entries (read mode,
 part `auto`, `all` or `paths`), each page digest- and args-checked and joined against the summary
 count and hash. A caller check reads at most 4 pages; a list over that read budget is one finding
-(plan) or an R5 refusal (update merge). At the update merge (`infra:callers:u1`) the comparison is
-by path set, so a line shift with the same files needs no read.
+(plan) or an R5 refusal (update merge); that finding names the callers file. At the update merge
+(`infra:callers:u1`) the comparison is by path set, so a line shift with the same files needs no
+read. The disk path adds up to 18 plan-mode agents (36 with digest and args retries), so a heavy
+plan run can reach "agent cap 100 reached" and stop (fail closed).
 
 Fixer hooks on build files (3.0.0, steps 6a and 10a): the one commit step must commit exactly the
 approved tree (ADR-1151), so a pre-commit fixer that rewrote a file at commit time used to stop

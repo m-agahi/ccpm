@@ -341,6 +341,14 @@ def paths_in(text):
 # N1: a nested `npm|pnpm|yarn run X` (or `npm test`) runs scripts.X with its pre and post; None when
 # a nested name is not a string script or the chain is deeper than 3 (no entry: R4 refuses every file)
 NPM_RUN = re.compile(r'\b(?:npm|pnpm|yarn)[ \t]+(?:run(?:-script)?(?:[ \t]+-\S+)*[ \t]+([A-Za-z0-9_:.][A-Za-z0-9_:.-]*)|(?:test|t)\b)')
+# 7.4.0 car 5 (Z2): `--if-present` skips a missing script only in the exact forms `<mgr> run
+# --if-present X` and `<mgr> run X --if-present`, alone in their segment, with no cd, pushd, popd,
+# export, npm_config, subshell, backtick or --prefix earlier in the text (another package may run)
+def if_present_exact(t, m, n):
+    a = max(t.rfind(c, 0, m.start()) for c in ';|&\n') + 1
+    b = min([i for i in (t.find(c, m.start()) for c in ';|&\n') if i >= 0] or [len(t)])
+    w = t[a:b].split()
+    return w in ([w[0], 'run', '--if-present', n], [w[0], 'run', n, '--if-present']) and w[0] in ('npm', 'pnpm', 'yarn') and not re.search(r'\b(?:cd|pushd|popd|export)\b|npm_config|[(`]|--prefix', t[:a], re.I)
 def npm_texts(sc, name, depth, seen):
     v = sc.get(name)
     side = [sc.get(k + name) for k in ('pre', 'post')]
@@ -351,7 +359,7 @@ def npm_texts(sc, name, depth, seen):
         for m in NPM_RUN.finditer(t):
             n = m.group(1) or 'test'
             # `--if-present` in the call skips a missing script
-            if n in seen or (sc.get(n) is None and '--if-present' in re.split(r'&&|[;|\n]', t[m.start():], 1)[0]):
+            if n in seen or (sc.get(n) is None and '--if-present' in re.split(r'&&|[;|\n]', t[m.start():], 1)[0] and if_present_exact(t, m, n)):
                 continue
             seen.add(n)
             sub = npm_texts(sc, n, depth + 1, seen) if depth < 3 else None
@@ -371,13 +379,19 @@ pkg = None
 for tgt in targets:
     # 6.1.0 review (R4): npm:<name> = the repo paths scripts.<name> of package.json at <rev> names;
     # no entry when package.json or that string entry cannot be read (the workflow refuses then)
-    if tgt.startswith('npm:'):
+    # 7.4.0 car 5 (Z1): pkg:package.json = [] when package.json at <rev> is a JSON object (npx
+    # resolves this dir); no entry otherwise (npx would walk up)
+    if tgt.startswith(('npm:', 'pkg:')):
         if pkg is None:
             r = subprocess.run(GIT + ['show', rev + ':package.json'], capture_output=True)
             try:
                 pkg = json.loads(r.stdout.decode('utf-8', 'replace')) if r.returncode == 0 and len(r.stdout) <= FILE_CAP else False
             except ValueError:
                 pkg = False
+        if tgt.startswith('pkg:'):
+            if tgt == 'pkg:package.json' and isinstance(pkg, dict):
+                make_paths[tgt] = []
+            continue
         sc = pkg.get('scripts') if isinstance(pkg, dict) else None
         # npm and yarn v1 also run pre<name> and post<name> (over-counted for pnpm and yarn berry)
         texts = npm_texts(sc, tgt[4:], 0, {tgt[4:]}) if isinstance(sc, dict) else None

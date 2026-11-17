@@ -41,6 +41,8 @@ os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
 # prints 50-entry pages of that file. Every added line is a new def or one column-0 statement.
 INLINE_CAP = 8192
 SUMMARY_CAP = 4096
+# 7.4.0 (#68): the summary of one symbol may reach 16384 bytes (doctest_md can list many docs)
+SUMMARY_CAP_ONE = 16384
 PAGE = 50
 def list_sha(xs):
     return hashlib.sha256(json.dumps(sorted(xs), separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
@@ -117,8 +119,9 @@ def file_mode(text, out, syms, args):
     o['digest'] = digest_of(o)
     t = json.dumps(o, sort_keys=True, ensure_ascii=False)
     n = len(t.encode('utf-8'))
-    if n > SUMMARY_CAP:
-        sys.exit('FLEET_CALLERS_RELAY_CAP: the callers summary is over the %d-byte summary cap (%d bytes; symbols: %s)' % (SUMMARY_CAP, n, ', '.join(syms)[:300]))
+    cap = SUMMARY_CAP_ONE if len(syms) == 1 else SUMMARY_CAP
+    if n > cap:
+        sys.exit('FLEET_CALLERS_RELAY_CAP: the callers summary is over the %d-byte summary cap (%d bytes; symbols: %s)' % (cap, n, ', '.join(syms)[:300]))
     tmp = None
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)

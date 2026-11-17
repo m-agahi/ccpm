@@ -385,10 +385,10 @@ export async function runOne(script, args0) {
     }
     // 3.1.0: unscripted hook-surface reads find no hook entry file
     // 7.4.0 car 4 (#29 N5, #39): a sh:<path> target reads a script that sources nothing; at plan time an
-    // npm:<name> target finds a tracked package.json script (no walk-up finding)
+    // npm:<name> target finds a tracked package.json script (no walk-up finding); car 5 (Z1): so does pkg:package.json
     if (!(label in script) && /^infra:hook-surface:/.test(label)) {
       const mp = {};
-      for (const t of inputsOf(prompt).targets || []) if (/^sh:/.test(t) || (/^infra:hook-surface:plan/.test(label) && /^npm:/.test(t))) mp[t] = [];
+      for (const t of inputsOf(prompt).targets || []) if (/^sh:/.test(t) || (/^infra:hook-surface:plan/.test(label) && /^(npm|pkg):/.test(t))) mp[t] = [];
       return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: mp, error: null }, prompt));
     }
     // 6.0.0 (ledger 2042): an unscripted convention read finds no convention (the conventional fallback)

@@ -158,16 +158,18 @@ elif mode == 'run' and len(args) in (3, 4):
     if any(shutil.which(n, path=path) != shutil.which(n, path=_RAW_PATH) for n in REFUSED):
         sys.exit('refusing a PATH that resolves a terraform-family name differently from the agent PATH')
     # defense in depth only: argv forms that run a program string inline. Only the options
-    # before the program's first operand count (a script's or module's own args do not).
-    VAL = {'sh': ('-o', '-O'), 'python': ('-W', '-X', '-Q'), 'node': ('-r', '--require', '--import', '--loader'), 'git': ('-c', '-C', '--config-env', '--git-dir', '--work-tree', '--namespace'), 'env': ('-u', '--unset', '-C', '--chdir')}
-    def lead(rest, kind):
+    # before the program's first operand count (a script's or module's own args do not; a shell: all).
+    VAL = {'python': ('-W', '-X', '-Q'), 'node': ('-r', '--require', '--import', '--loader'), 'git': ('-c', '-C', '--config-env', '--git-dir', '--work-tree', '--namespace'), 'env': ('-u', '--unset', '-C', '--chdir')}
+    # 7.4.0 (#70): more value-taking options; the scan with the old table runs too (either refuses)
+    VAL2 = dict(VAL, python=VAL['python'] + ('--check-hash-based-pycs',), node=VAL['node'] + ('-C', '--conditions', '--title', '--input-type'), perl=('-I', '-r'), ruby=('-I', '-r'))
+    def lead(rest, kind, val=VAL):
         # [(option, value or None)] up to the first operand; python stops at -m
         out, k = [], 0
         while k < len(rest) and rest[k].startswith('-') and rest[k] != '--':
             o = rest[k]
             if kind == 'python' and o == '-m':
                 break
-            v = rest[k + 1] if o in VAL.get(kind, ()) and k + 1 < len(rest) else None
+            v = rest[k + 1] if o in val.get(kind, ()) and k + 1 < len(rest) else None
             out.append((o, v))
             k += 2 if v is not None else 1
         if kind == 'env':
@@ -183,7 +185,10 @@ elif mode == 'run' and len(args) in (3, 4):
             sys.exit('refusing ' + b + ' (no terraform-family program runs here)')
         py = re.fullmatch(r'python[0-9.]*', b) is not None
         kind = 'sh' if b in SHELLS else 'python' if py else 'node' if b in ('node', 'nodejs') else b
-        opts = lead(rest, kind) if kind in ('sh', 'python', 'node', 'perl', 'ruby', 'env', 'git') else []
+        opts = lead(rest, kind) + lead(rest, kind, VAL2) if kind in ('python', 'node', 'perl', 'ruby', 'env', 'git') else []
+        if kind == 'sh':
+            # 7.4.0 (#70): a shell's whole argv (+O/+o and value options no longer end the scan)
+            opts = [(x, None) for x in rest]
         inline = (
             (kind in ('sh', 'python') and any(cluster(o, 'c') for o, v in opts))
             or (kind == 'node' and any(cluster(o, 'ep') or o.split('=')[0] in ('--eval', '--print') for o, v in opts))

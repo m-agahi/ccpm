@@ -163,6 +163,57 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
   the normal start and no longer warns.
 - Car 4 dist: 456,305 bytes (+1,283; the plan estimated ~1,600).
 
+- Car 5, Z2 (security fix, car-4 review): the N1 `--if-present` skip in `hook_surface.py` was
+  fail-open. It now holds only for the exact forms `npm|pnpm|yarn run --if-present X` and
+  `... run X --if-present`, alone in their `;`/`&`/`|`/newline segment, with no `cd`, `pushd`,
+  `popd`, `export`, `npm_config`, `(`, backtick or `--prefix` earlier in the script text. A nested
+  run of a missing script with `-w`/`--workspace(s)`, `--prefix`, `-C`, `--filter`, `-r`/`--recursive`,
+  `--if-present` after `--`, an env prefix, `env -C` or an earlier cd/subshell drops the
+  `npm:<name>` entry (fail closed). New skip = old skip AND the exact form.
+- Car 5, Z1 (#39 extension): plan mode guards `npx jest|vitest`. The plan hook-surface read asks
+  for the new target `pkg:package.json` (an entry only when `package.json` at HEAD is a JSON
+  object); no entry is a plan finding through `planFindingsStop` ("... npx would resolve the main
+  checkout's prefix"), as for the J1 npm guard. `npm exec` is not guarded: it is no allowed test
+  runner.
+- Car 5, #64 (pr_test_block follow-ups): the claim check reads more count forms, each only adding
+  claims: markdown around the number (`**147** passed`), `n+`, one word before the noun
+  (`147 unit tests`), `pass`/`fail` after a number, `passing: 5`, NBSP or one newline between
+  number and word, and `n/m` or `n of m` with a whole test word within 40 characters on its line
+  (not after `#`, no bare dash as the word, no blank line inside). The workflow's own stats and
+  test blocks give no claim (a test runs the real templates through the program). The stats row
+  skip (`<n> test rounds)`) holds only on a line that starts with `| tests written |` inside the
+  stats region. `ownClaims` exempts a claim only as a whole phrase with word bounds ("13 tests"
+  supplied no longer exempts "3 tests"). The test block says "errors not reported" for a judge
+  with no `errors` count (was "0 errors"), and the total is passed + failed. `pr_body_block.py`
+  refuses (error, no write) a stats region that holds the test block marker (an opener-written
+  `<details><summary>Built with ccpm fleet` above the block). Deviation from plan item 2 (brief
+  rule "all gate edits only tighten"): the shipped P1/P2 matches stay, so "test 2 of AC3" and
+  "Step 2 tests the parser" are still claims; Max to rule if the false positives should go.
+- Car 5, #66: `pr_test_block` and `pr_body_block` are in `ERROR_BRANCH_PROGRAMS`. A relay the agent
+  marked failed for the program's own `error` (valid digest and args) reaches the caller's stop
+  (stop_gate `stats`) instead of "returned failed". The pr-stats step routes through a new `route`
+  argument of `infra()`, with no digest retry (a write step). `hash_diff` stays out (it runs
+  through `softDispatch`). The failed-relay digest retry re-runs `format_files` and
+  `pr_test_block`; both are idempotent (the block is replaced in place, an equal body is not
+  edited).
+- Car 5, #68: `callers.py` lets the summary of one symbol reach 16384 bytes (`SUMMARY_CAP_ONE`;
+  `doctest_md` can list many docs); two or more symbols keep 4096. This is a transport cap, not a
+  gate: the content is still checked by count and sha256. The finding for auto hits over the
+  caller read budget names the callers file. The on-disk callers path adds up to 18 plan-mode
+  agents (36 with retries), so a heavy run can reach "agent cap 100 reached" (fails closed); no
+  memo in this release. The 7.2.0 entry's "every joined list is checked against the summary count
+  and hash" is reworded (the auto part is checked by count).
+- Car 5, #70 items 1, 2, 4 (item 3 parked, Q12): `scratch_copy.py run` scans a shell's whole argv
+  (sh, bash, dash, zsh, ksh), so `+O`/`+o` and value options no longer end the inline-code scan,
+  and a script's own `-c` arg is refused too. Value-taking options skip their value: ruby and perl
+  `-I`, `-r`; node `-C`, `--conditions`, `--title`, `--input-type`; python
+  `--check-hash-based-pycs`. The scan with the old table runs as well, and either one refuses. The
+  agent PATH shim stays the primary guard. `commandShapeProblems` refuses a `test_cmd` whose argv
+  has an inline-code form (`inlineCodeArgv`, the same forms and tables as `scratch_copy.py`):
+  "test_cmd runs inline code ...".
+- Car 5 dist: 459,113 bytes (+2,808; the plan estimated ~500 for #64, #66, #68, #70; Z1, Z2 and
+  the JS port of the scratch_copy form list are outside the estimate).
+
 ### Removed
 
 - Car 1, #9: `push_classify.py` and `push_probe.py`. Their rules moved into `push.py`; no prompt
@@ -230,6 +281,22 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
 - Harness: an unscripted hook-surface read gives `[]` for a `sh:<path>` target, and at plan time
   (`infra:hook-surface:plan*`) for an `npm:<name>` target. Other labels keep `{}` (the R4
   refuse-all tests depend on it).
+
+### Tests changed on purpose (car 5)
+
+- New: `v740_if_present_npx` (Z2 bypass forms, exact forms, and the non-weakening check against
+  the frozen aaed9b1 skip; Z1 on the real program and in the workflow), `v740_pr_test_block`
+  (V1-V7, with the frozen shipped `ownClaims` beside the new one), `v740_error_routing` (E1 with
+  its mutation, E2 on the real program and in the workflow), `v740_callers_followups` (C1, C2),
+  `v740_scratch_copy_guard` (U1, U2, and a corpus where the JS check and `scratch_copy.py` agree),
+  `v740_state_chunks_resume` (U3 with its mutation).
+- `v710_block_text` AC3 ex3 and the AC3 property: errors null reads "errors not reported" (#64
+  item 5).
+- `v720_callers_summary_cap` AC10: one symbol over the cap names 16384 bytes (#68 item 2).
+- `v720_callers_read_budget` AC11: the auto finding ends with the callers file (#68 item 3).
+- `v730_review_scratch_guard` M1: `["sh", "probe.sh", "-c"]` moved from "runs" to "refused" (#70
+  item 1, a shell's whole argv).
+- Harness: at plan time an unscripted hook-surface read gives `[]` for `pkg:package.json` too.
 
 ## [7.3.0] - 2026-11-17
 
@@ -584,8 +651,9 @@ missed the program digest, and its digest retry missed it the same way, so the r
 - The workflow's disk path: a symbol whose mapped set hashes to the summary needs no read; a
   symbol whose only gap is its doc or lock hits reads part `auto`; any other reads part `all` and
   gets the usual findings. Every relay is digest- and args-checked (also after the args retry);
-  every joined list is checked against the summary count and hash; the part-`all` auto hits are
-  derived by the script's own doc and lock list and checked against `auto_count`.
+  the auto part is checked by count; completeness comes from the union hash and the per-entry
+  re-check (7.4.0 #68 wording fix); the part-`all` auto hits are derived by the script's own doc
+  and lock list and checked against `auto_count`.
 - Read budget: at most 4 read pages per caller check (`CALLER_READ_BUDGET`). A list over it is
   one plan finding per symbol, or an R5 refusal at the update merge.
 

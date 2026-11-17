@@ -157,7 +157,7 @@ const CALLER_BATCH_SYMBOLS = 30;
 const CALLERS_CAP_MARK = "FLEET_CALLERS_RELAY_CAP:";
 const CALLERS_DISK_MARK = "FLEET_CALLERS_ON_DISK:";
 const CALLER_INLINE_CAP = 8192;
-const CALLER_SUMMARY_CAP = 4096;
+const CALLER_SUMMARY_CAP_ONE = 16384;
 const CALLER_PAGE = 50;
 const CALLER_READ_BUDGET = 4;
 const CALLER_METHOD =
@@ -1471,7 +1471,7 @@ return typeof r.digest === "string" && SHA256_RE.test(r.digest) && sha256Hex(can
 const PROGRAM_SHA256 = {
 "branch_scan": "ec03aa965ed9a3d145ce1fb1636685d2be087877daf78f369eed0a19f532967d",
 "build_dir": "f74072493f65d7e8e2ce20309855912b1a0af9b5c07c6734d2ef531364262706",
-"callers": "98a98f11d7896e206249104b08dcf84b3478b2522e5996dbf2bd35278cf2a9c2",
+"callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
 "changed_defs": "489230ce46b9d6fdeecb17f49f462ac8e51229c8436f24b29985596ffe305116",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
 "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
@@ -1484,7 +1484,7 @@ const PROGRAM_SHA256 = {
 "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
 "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
 "hasher": "869a4df97832a2c762934a316c83fb19923e946f2331278ab810b1acc55f5a0a",
-"hook_surface": "4df8409145db68036ba0a315ff964ddc4b4cae937aecabc127d4a13292df6086",
+"hook_surface": "f119cf2f6fc277a44b9ff33337c8abcc9f3a06b19f5ea5b8523dd5aefde0524c",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1494,10 +1494,10 @@ const PROGRAM_SHA256 = {
 "plan_ref": "bf07be4e67cb6d56ca9a7c1b926f99579c0f5329633babbf2ce22eb3aef6f594",
 "plan_ref_write": "cdbab85c96a14ecb8bdf7e28f2993a23d7d10570a41d087e1bb2dc595b9aa826",
 "policy": "1efd8ada37abf58151d14b11300fac1235c13b414ab0649fcc8e26b0e10d37b5",
-"pr_body_block": "0969891f59f2b11b033b99bb8e2b9f5d3fc1b0fad60ffbebbd5149f0cfae61be",
+"pr_body_block": "399c9f1ec13ac3059d922b68e19220571ebfadea3cd944dea4ff0b007f053c1b",
 "pr_convention": "f26cb4a739d549ccfc5554a9deaa94a44698e71c2039e16d77247fdfdbf1d17f",
 "pr_state": "ae131b39f087f22172a20dfa7af4dd01f261e1a07580ca1fa6e4b85e93201540",
-"pr_test_block": "030c64b7f12abe00a4e9f9ddd1493f446ed4a6b2ccb43a8f1f5e6007c45ca8eb",
+"pr_test_block": "b448f6b547179a4f1764ba21deb84d36155f40d9c2422958d0b482ddde9ba0d0",
 "precommit_ids": "3869d8543ddd83c394bd7076a580b8246350e00d558fc550cad03259641952cb",
 "purge": "6b5c7741f6dcb5732e337ab18cb3a8d7028de06802a878418ba4a2166e248dc9",
 "push": "67cc55d5fe9ef3cfe0fe0c3ab8dd5a7281acf96ef98f7bef5faa805a9c77a469",
@@ -1506,7 +1506,7 @@ const PROGRAM_SHA256 = {
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
 "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
 "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
-"scratch_copy": "1807aea9a3afbaac7e63acca21df6ad4b9f1a55f392972cd753eaec6d161a690",
+"scratch_copy": "97c86abdbe6a0113b3cdc406bcb57258e0cf2b2080cb7ff12ffd88d464fa875d",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
 "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",
 "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
@@ -3633,20 +3633,20 @@ if (x.map === "ignored" && (x.expanded || x.unavailable)) last = i;
 if (last >= 0) names[last] += BUILD_ENV_HINT;
 return names;
 }
-async function infra(label, prompt, phaseName, agentType, digest, args) {
+async function infra(label, prompt, phaseName, agentType, digest, args, route) {
 const opts = { schema: INFRA_SCHEMA, phase: phaseName };
 if (agentType) opts.agentType = agentType;
 if (digest) opts.digest = digest;
 if (args) opts.args = args;
 const r = await dispatch(label, prompt, opts);
-if (r.status !== "ok" && !programErrorRelay(r, digest, args)) halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
+if (r.status !== "ok" && !programErrorRelay(r, digest || route, args)) halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
 if (r.status !== "ok") {
 gate(label + ": the agent returned " + r.status + " for the program's own error; its error branch decides");
 return Object.assign({}, r, { status: "ok" });
 }
 return r;
 }
-const ERROR_BRANCH_PROGRAMS = ["ruleset_surface", "hook_surface", "pr_state", "ci_watch", "orch_scan", "policy", "precommit_ids"];
+const ERROR_BRANCH_PROGRAMS = ["ruleset_surface", "hook_surface", "pr_state", "ci_watch", "orch_scan", "policy", "precommit_ids", "pr_body_block", "pr_test_block"];
 function programErrorRelay(r, digest, args) {
 const name = typeof digest === "string" ? digest.split(":")[0] : null;
 if (!r || r.status !== "failed" || ERROR_BRANCH_PROGRAMS.indexOf(name) < 0 || progKeys(digest).indexOf("error") < 0) return false;
@@ -4335,7 +4335,7 @@ const scratch = scratchOf(disk.worktree);
 const args = [disk.worktree, disk.planPath, JSON.stringify(part), String(MAX_SYMBOL_HITS), scratch];
 const r = await dispatch(fl, callersFilePrompt({ worktree: disk.worktree, plan_path: disk.planPath, symbols: part, cap: MAX_SYMBOL_HITS, scratch_dir: scratch }), { schema: INFRA_SCHEMA, phase: disk.phaseName, agentType: JUDGE_AGENT, digest: "callers:file", args });
 if (r.status !== "ok" && String(r.reason).indexOf(CALLERS_CAP_MARK) >= 0) {
-if (part.length === 1) halt("needs_human", fl + ": the caller summary of " + part[0] + " is over the " + CALLER_SUMMARY_CAP + "-byte summary cap; the caller check cannot relay it", "callers");
+if (part.length === 1) halt("needs_human", fl + ": the caller summary of " + part[0] + " is over the " + CALLER_SUMMARY_CAP_ONE + "-byte summary cap; the caller check cannot relay it", "callers");
 gate(fl + ": " + part.length + " symbols are over the summary cap; split in two");
 return [{ part: part.slice(0, part.length >> 1), disk: true }, { part: part.slice(part.length >> 1), disk: true }];
 }
@@ -4360,7 +4360,7 @@ const live = part.filter((s) => r.capped.indexOf(s) < 0);
 const want = (s) => (Array.isArray(disk.expected[s]) ? disk.expected[s] : []);
 const sumOf = (xs, k) => xs.reduce((a, s) => a + sm[s][k], 0);
 const unread = (xs, p) => {
-for (const s of xs) all.unread[s] = { part: p, count: sm[s].count, auto_count: sm[s].auto_count, path_count: sm[s].path_count };
+for (const s of xs) all.unread[s] = { part: p, count: sm[s].count, auto_count: sm[s].auto_count, path_count: sm[s].path_count, file: r.file };
 };
 if (disk.pathLevel) {
 const P = {};
@@ -4499,7 +4499,7 @@ criterion: null,
 symbol: s.symbol,
 finding:
 un.part === "auto"
-? s.symbol + ": " + un.auto_count + " doc or lock hit(s) left to auto dont_care are over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); map them in changed_symbols (dont_care with a reason)"
+? s.symbol + ": " + un.auto_count + " doc or lock hit(s) left to auto dont_care are over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); map them in changed_symbols (dont_care with a reason); the hit list is in " + logPath(un.file)
 : s.symbol + ": the mapped occurrences differ from git grep -w (" + un.count + " hits, " + s.occurrences.length + " mapped) and the hit list is over the caller read budget (" + CALLER_READ_BUDGET + " reads of " + CALLER_PAGE + " entries); re-grep and map every hit",
 });
 continue;
@@ -4619,7 +4619,7 @@ if (canonical(r.args) !== canonical([worktree, rev, JSON.stringify(targets)])) h
 if (r.error !== null)
 hookReadStop(r.error);
 const mp = {};
-for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x)) + (/\/$/.test(String(x)) ? "/" : "")) : /^(npm|sh):/.test(t) ? null : [];
+for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x)) + (/\/$/.test(String(x)) ? "/" : "")) : /^(npm|sh|pkg):/.test(t) ? null : [];
 return { surface: r.surface.map((x) => (/\/$/.test(String(x)) ? (String(x) === "./" ? "./" : normPath(String(x)) + "/") : normPath(String(x)))), make_paths: mp };
 }
 function logPath(p) {
@@ -4830,11 +4830,14 @@ plan.new_behaviour +
 (wouldBeShort ? "short (one test writer for every criterion, at most " + MAX_SHORT_TEST_ROUNDS + " test rounds; every gate runs)" : "full"),
 );
 const pnt = npmTargetOf(plan.test_cmd.command);
-const planHs = await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", pnt ? [pnt] : [], "Plan");
+const pxt = /^npx$/.test(String(plan.test_cmd.command || "").trim().split(/[ \t]+/)[0]) ? "pkg:package.json" : null;
+const planHs = await hookSurface("infra:hook-surface:plan" + sfx, ctx.common.worktree, "HEAD", [pnt, pxt].filter(Boolean), "Plan");
 const planRs = await rulesetSurface("infra:ruleset-surface:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");
 hookGate("the plan scope", planScopePaths(planFacts, criteria), planHs.surface, planRs);
 if (pnt && !planHs.make_paths[pnt])
 return planFindingsStop(ctx, planPath, "npm test_cmd", [{ criterion: null, finding: "package.json (with scripts." + pnt.slice(4) + ") is not tracked at the worktree root at HEAD, or the script cannot be read; npm would walk up into the main checkout" }], plan.changed_symbols, plan);
+if (pxt && !planHs.make_paths[pxt])
+return planFindingsStop(ctx, planPath, "npx test_cmd", [{ criterion: null, finding: "package.json is not tracked at the worktree root at HEAD (or is not a JSON object); npx would resolve the main checkout's prefix" }], plan.changed_symbols, plan);
 const conventions = await prConvention("infra:pr-convention:plan" + sfx, ctx.common.worktree, ctx.remoteSlug, ctx.common.default_branch, "Plan");
 const fb = slugify(String(ctx.remoteSlug || "").split("/").pop(), 20);
 const component = COMPONENT_RE.test(String(plan.component)) ? plan.component : COMPONENT_RE.test(fb) ? fb : "repo";
@@ -5150,6 +5153,39 @@ if (!ctx.branch || ctx.branch === ctx.defaultBranch) out.push("target branch " +
 if (ctx.brief.repo !== ctx.callerRepo) out.push("work repo " + ctx.brief.repo + " is not the caller's repo " + ctx.callerRepo);
 return out;
 }
+function inlineCodeArgv(t) {
+const V0 = { python: ["-W", "-X", "-Q"], node: ["-r", "--require", "--import", "--loader"], git: ["-c", "-C", "--config-env", "--git-dir", "--work-tree", "--namespace"], env: ["-u", "--unset", "-C", "--chdir"], perl: [], ruby: [] };
+const V = Object.assign({}, V0, { python: V0.python.concat("--check-hash-based-pycs"), node: V0.node.concat("-C", "--conditions", "--title", "--input-type"), perl: ["-I", "-r"], ruby: ["-I", "-r"] });
+const cl = (x, l) => new RegExp("^-[A-Za-z]*[" + l + "][A-Za-z]*$").test(x);
+const lead = (rest, kind, val) => {
+const out = [];
+for (let k = 0; k < rest.length && rest[k].charAt(0) === "-" && rest[k] !== "--"; k++) {
+if (kind === "python" && rest[k] === "-m") break;
+const v = val.indexOf(rest[k]) >= 0 && k + 1 < rest.length ? rest[k + 1] : null;
+out.push([rest[k], v]);
+if (v !== null) k++;
+}
+return out;
+};
+for (let i = 0; i < t.length; i++) {
+const b = t[i].split("/").pop();
+const rest = t.slice(i + 1);
+const kind = /^(sh|bash|zsh|dash|ksh)$/.test(b) ? "sh" : /^python[0-9.]*$/.test(b) ? "python" : b === "nodejs" ? "node" : b;
+const opts = kind === "sh" ? rest.map((x) => [x, null]) : V0[kind] ? lead(rest, kind, V0[kind]).concat(lead(rest, kind, V[kind])) : [];
+const lo = (o, v) => (v || o).toLowerCase();
+const hit = {
+sh: (o) => cl(o, "c"),
+python: (o) => cl(o, "c"),
+node: (o) => cl(o, "ep") || ["--eval", "--print"].indexOf(o.split("=")[0]) >= 0,
+perl: (o) => cl(o, "eE"),
+ruby: (o) => cl(o, "e"),
+env: (o) => cl(o, "S") || o.indexOf("--split-string") === 0,
+git: (o, v) => /^(-c)?alias\./.test(lo(o, v)) || (o.indexOf("--config-env") === 0 && lo(o, v).indexOf("alias.") >= 0),
+}[kind];
+if (hit && opts.some(([o, v]) => hit(o, v))) return true;
+}
+return false;
+}
 function commandShapeProblems(commands) {
 const problems = [];
 const hookIds = [];
@@ -5158,7 +5194,11 @@ if (c.run_by === "nobody") {
 problems.push((c.id || c.kind) + ": refused command " + JSON.stringify(c.command) + " (run_by nobody)");
 continue;
 }
-if (c.kind === "test_cmd") continue;
+if (c.kind === "test_cmd") {
+if (inlineCodeArgv(String(c.command || "").trim().split(/[ \t]+/)))
+problems.push((c.id || c.kind) + ": test_cmd runs inline code " + JSON.stringify(c.command) + "; scratch_copy run refuses it, so the judges' copy check cannot run");
+continue;
+}
 const m = c.kind === "check_cmd" ? PRECOMMIT_CMD_RE.exec(String(c.command || "")) : null;
 if (!m) {
 problems.push((c.id || c.kind) + ": " + JSON.stringify(c.command) + " is not `pre-commit run <id> [--all-files] [--hook-stage <s>]`");
@@ -5647,8 +5687,9 @@ const TESTS_END = "<!-- /ccpm-fleet-tests -->";
 function testsBlock(suite, testCmd, warn) {
 const s = suite && typeof suite === "object" && !Array.isArray(suite) ? suite : null;
 const ok = (n) => Number.isInteger(n) && n >= 0;
-const errors = s ? (s.errors === undefined || s.errors === null ? 0 : s.errors) : null;
-const counts = s && ok(s.passed) && ok(s.failed) && ok(errors) ? s.passed + " passed, " + s.failed + " failed, " + errors + " errors, " + (s.passed + s.failed + errors) + " total." : "not reported (the code judge's suite run gave no counts).";
+const none = s && (s.errors === undefined || s.errors === null);
+const errors = s ? (none ? 0 : s.errors) : null;
+const counts = s && ok(s.passed) && ok(s.failed) && ok(errors) ? s.passed + " passed, " + s.failed + " failed, " + (none ? "errors not reported" : errors + " errors") + ", " + (s.passed + s.failed + errors) + " total." : "not reported (the code judge's suite run gave no counts).";
 const toks = String((testCmd && testCmd.command) || "").split(" ").filter((t) => t && t !== PATHS_TOKEN);
 if (toks[toks.length - 1] === "--") toks.pop();
 const env = testCmd && testCmd.env && typeof testCmd.env === "object" ? Object.keys(testCmd.env).sort().map((k) => k + "=" + testCmd.env[k]) : [];
@@ -5679,7 +5720,12 @@ return out.filter((x) => typeof x === "string" && x);
 function ownClaims(claims, supplied) {
 const norm = (x) => String(x).replace(/\s+/g, " ").trim().toLowerCase();
 const text = supplied.map(norm);
-return claims.filter((c) => !text.some((t) => t.indexOf(norm(c)) >= 0));
+const w = (ch) => /[0-9a-z_]/.test(ch || "");
+const has = (t, c) => {
+for (let i = t.indexOf(c); i >= 0; i = t.indexOf(c, i + 1)) if (!w(t[i - 1]) && !w(t[i + c.length])) return true;
+return false;
+};
+return claims.filter((c) => !text.some((t) => has(t, norm(c))));
 }
 const quoteClaims = (claims) => claims.map((x) => JSON.stringify(x)).join(", ");
 function stillClaims(label, claims, prUrl) {
@@ -6754,7 +6800,7 @@ ci: state.ci ? { verdict: state.ci.verdict, fixRounds: state.rounds.ci || 0, wai
 const bc = ref.plan_facts.conventions.body;
 const args = [g, remoteSlug, String(pr.pr_number), base64Of(tpl), state.t0 === null ? "-" : String(state.t0), JSON.stringify(((bc && bc.required_sections) || []).concat(state.unattended ? [UNATT_HEAD] : []))];
 const label = tag ? "infra:pr-stats:" + tag : "infra:pr-stats" + (++statsRuns > 1 ? ":p" + statsRuns : "");
-const r = await infra(label, prStatsPrompt({ args }), "PR");
+const r = await infra(label, prStatsPrompt({ args }), "PR", undefined, undefined, args, "pr_body_block");
 requireProgram(r, "pr_body_block", label, "needs_human", "stats");
 if (!relayDigestOk(r, progKeys("pr_body_block"), "pr_body_block") || canonical(r.args) !== canonical(args)) halt("needs_human", label + ": the relayed result does not match the program's digest or arguments", "stats");
 if (state.unattended && Array.isArray(r.headers_missing) && r.headers_missing.indexOf(UNATT_HEAD) >= 0) halt("needs_human", label + ": the PR body has no " + UNATT_HEAD + " section (the unattended run's automatic decisions); fix the body of " + pr.pr_url, "stats");
