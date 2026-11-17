@@ -4433,7 +4433,10 @@ deleted. run <worktree> <tmp> <argv json> [<env json>] runs argv with cwd <tmp> 
 the program caps lifted for the child; it refuses a terraform-family program (terraform, tofu,
 tfp, terragrunt, digger, atlantis) anywhere in argv or as the resolved argv[0], and a shell
 (sh, bash, zsh, dash, ksh) followed by a flag cluster with c. An env PATH (absolute entries only)
-goes before the program's PATH. patch <worktree> <tmp> <file> <old b64> <new b64> replaces the
+goes before the program's PATH, but a dir in it that holds a
+terraform-family name is refused: the primary guard is that the child resolves those names as
+the agent PATH does (the verified nix shim, or nothing); the argv denylist (also env -S, git -c
+alias.*, python -c, node -e, perl -e, ruby -e) is defense in depth. patch <worktree> <tmp> <file> <old b64> <new b64> replaces the
 one occurrence of old in a regular file inside <tmp> (review fix B1: fleet:judge has no Edit or
 Write tool, and the test writer's Edit rule covers the worktree only). remove <worktree> <tmp>
 is worktree remove --force plus prune. run, patch and remove act only on a direct child copy-*

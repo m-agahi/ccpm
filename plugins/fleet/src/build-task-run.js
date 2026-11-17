@@ -1624,7 +1624,7 @@ const PROGRAM_SHA256 = {
   "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
   "review_paths": "711143e444b4d9772c8023c22fbb93735239030d503dd58247050553d7fce29b",
   "ruleset_surface": "b8fec064efbf7ec62125f71016cde95b4a5edcb0156094cd8050e79a8278f067",
-  "scratch_copy": "dae1fa5ce8ee91aa28d4fc0780c5b8bf3a5faf743c30abedf2b0d5bc232ce90d",
+  "scratch_copy": "616a19d98d3b0345165fd4af9f83f2c7411660f59dd101f65b703dee769eb902",
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
   "session_project": "ebb3009e811adf411f1034a78245b9ee133b6598903b7d37633a2bcefe50093c",
   "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",

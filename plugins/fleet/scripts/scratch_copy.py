@@ -142,19 +142,39 @@ elif mode == 'run' and len(args) in (3, 4):
     if not isinstance(env, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
         sys.exit('env is not a JSON object of strings')
     # an env PATH (test_cmd.env, a venv's bin) goes first, then this program's PATH; its
-    # entries must be absolute (a relative one would resolve against the copy)
+    # entries must be absolute (a relative one would resolve against the copy).
+    # The primary guard (security review): the child's PATH lookup of a terraform-family
+    # name resolves exactly as the agent PATH does (the nix shim path_check verified, or
+    # nothing), so an env PATH dir that holds such a name is refused.
     path = _RAW_PATH
     if 'PATH' in env:
         ents = [e for e in env.pop('PATH').split(':') if e]
         if not all(os.path.isabs(e) for e in ents):
             sys.exit('refusing a relative PATH entry in env')
+        bad = [os.path.join(e, n) for e in ents for n in sorted(REFUSED) if os.path.lexists(os.path.join(e, n))]
+        if bad:
+            sys.exit('refusing an env PATH dir that holds ' + ', '.join(bad) + ' (it would shadow the agent PATH)')
         path = ':'.join(ents + ([_RAW_PATH] if _RAW_PATH else []))
+    if any(shutil.which(n, path=path) != shutil.which(n, path=_RAW_PATH) for n in REFUSED):
+        sys.exit('refusing a PATH that resolves a terraform-family name differently from the agent PATH')
+    # defense in depth only: argv forms that run a program string inline
+    def cluster(x, letters):
+        return re.fullmatch(r'-[A-Za-z]*[' + letters + r'][A-Za-z]*', x) is not None
     for i, a in enumerate(argv):
-        b = os.path.basename(a)
+        b, rest = os.path.basename(a), argv[i + 1:]
         if b in REFUSED:
             sys.exit('refusing ' + b + ' (no terraform-family program runs here)')
-        if b in SHELLS and any(re.fullmatch(r'-[A-Za-z]*c[A-Za-z]*', x) for x in argv[i + 1:]):
-            sys.exit('refusing ' + b + ' with -c (run an argv list, not a shell string)')
+        inline = (
+            (b in SHELLS and any(cluster(x, 'c') for x in rest))
+            or (re.fullmatch(r'python[0-9.]*', b) and any(cluster(x, 'c') for x in rest))
+            or (b in ('node', 'nodejs') and any(cluster(x, 'ep') or x.split('=')[0] in ('--eval', '--print') for x in rest))
+            or (b == 'perl' and any(cluster(x, 'eE') for x in rest))
+            or (b == 'ruby' and any(cluster(x, 'e') for x in rest))
+            or (b == 'env' and any(cluster(x, 'S') or x.startswith('--split-string') for x in rest))
+            or (b == 'git' and any(re.match(r'(-c)?alias\.', x.lower()) or (x.startswith('--config-env') and 'alias.' in x.lower()) for x in rest))
+        )
+        if inline:
+            sys.exit('refusing ' + b + ' with an inline program string (run an argv list or a script file)')
     exe = shutil.which(argv[0], path=path)
     if exe and os.path.basename(os.path.realpath(exe)) in REFUSED:
         sys.exit('refusing ' + argv[0] + ': it resolves to ' + os.path.realpath(exe))

@@ -167,6 +167,15 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
   digger, atlantis) anywhere in argv or as the resolved program, and a shell given a `-c` flag. An
   env `PATH` no longer crashes `run`: its entries (absolute only) go first, then the program's
   PATH, so a `test_cmd.env` venv path keeps working. The copy loop checks `<tmp>/` with a separator.
+- M1 addendum (security review of the M1 fix): the argv denylist is bypassable (wrapper
+  scripts, interpreters) and is defense in depth only. The primary guard is the agent PATH: in
+  `run`, a PATH lookup of a terraform-family name resolves exactly as the agent PATH resolves
+  it, that is to the nix shim the PATH-check gate verified, or to nothing. An env `PATH` dir that
+  holds such a name is refused, and so is any PATH that would resolve one differently. The
+  denylist also refuses `env -S`/`--split-string`, `git -c alias.*` (and `--config-env` alias
+  keys), and inline program strings: `python* -c`, `node -e`/`-p`/`--eval`/`--print`,
+  `perl -e`/`-E`, `ruby -e`, and a shell with `-c`. It is not a sandbox: a child can still run a
+  binary by its absolute path; the agent's own hard rules and settings denies cover that.
 - M2 (scratch Write rule): `settingsFor` allows `Write(/<scratch>/chunks/*/*.b64)` only (no nonce,
   so the settings sha holds across a resume), not `Write(/<scratch>/**)`. The plan-ref, park and
   run-state chunk dirs moved to `<scratch>/chunks/`. No Write rule covers `ci-*.json`, `parked/`,
@@ -193,6 +202,7 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
 - `v730_scratch_copy`: the new `scratch_copy.py` signatures; the env probe runs `printenv`, not
   `sh -c`. `v730_shell_programs`, `v4_s3`: the narrowed Write rule. `v502_relay_keys`, `v4_s4`,
   `build_task_run` (plan-ref chunk dir): the chunk dirs under `scratch/chunks/`.
+- New: `v730_review_scratch_guard` (the shim guard and the denylist additions).
 - New: `v730_review_branch_owner`. `v730_branch_slug`: the fixtures own their slugs, the program
   takes the source; the harness default relay adds `owned: []`.
 
