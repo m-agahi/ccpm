@@ -1560,13 +1560,13 @@ return PROGRAM_SHA256;
 // ROLE_SHA256_BEGIN
 const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
-"fleet-code-judge": "d414aec60760db31724d23bda941b0607ba0f427b1de1d48b960bf1fee65e2ad",
+"fleet-code-judge": "226f6e1534aab5ee1ada986ed8dfeea9e27871db4c4f2050efac76c1cb91fad2",
 "fleet-coder": "ee4e8960386899888881cb56e377c5ca74a23c7c93c7ac8971504890245cf3b4",
 "fleet-held-out-runner": "30cae706ba8631be377b92c3bf0d44714511b96742b54689111b2d1a29fcbe1f",
 "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
 "fleet-pr-opener": "28a9ebb7770541b23050f249997cb447453be6ab58dcc495f09490d3109e772a",
-"fleet-test-judge": "12ded7120c00c2346d4040ca132e433cef3f299ff199fe97f8f44d535918a819",
-"fleet-test-writer": "5305fd0bc8ed856a6e397b9f2df0dea8ad0857fc774100d054debae9ec18448a",
+"fleet-test-judge": "2dd18aedc8580c68583951ede4714e876a9752ac723e27558d1c17f5488b7d04",
+"fleet-test-writer": "f5c1a19c1f324274aa40b26f7c06036c7cb9102286254b52c7388998d265835c",
 "gate-change-nonweakening-sweep": "3634918d362a90dcf4a124eaeda7cf871950a124773b34ff68bd27695fae3a1b",
 "plan-audit": "652f50e283b40d5d8e5ceac2c6d6112e5b9be43d9df5143254741fabd73ddca0",
 "pr-review": "2a82c6c1413fde77cb92a973804ce3313192f5772e16023cf3bc8d3161de700e",
@@ -3957,10 +3957,12 @@ const by = (v) => ok.find((r) => !unruled([v], [r]).length);
 const d = (v) => v.id + " (" + v.path + ":" + v.line + " " + v.op + ")";
 const s = x && x.round === m ? x.findings : [];
 const left = s.filter((v) => !by(v));
-const f = (t) => ({ target: "code", criterion: null, finding: "mutation gate: " + t });
-return (left.length ? [f("surviving mutants no ruling covers: " + left.map(d).join(", ") + " -- the code judge must rule each one")] : []).concat(
-s.filter((v) => by(v) && by(v).target !== "equivalent").map((v) => f("mutant " + d(v) + " survives the frozen tests; the code judge ruled " + by(v).target + ": " + by(v).reason + (by(v).target === "tests" ? " (the test augmentation round is not built yet (G6): change the code so the frozen tests kill it, or stop)" : ""))),
+const f = (t, v) => Object.assign({ target: "code", criterion: null, finding: "mutation gate: " + t }, v ? { mutant: v } : {});
+const out = (left.length ? [f("surviving mutants no ruling covers: " + left.map(d).join(", ") + " -- the code judge must rule each one")] : []).concat(
+s.filter((v) => by(v) && by(v).target !== "equivalent").map((v) => f("mutant " + d(v) + " survives the frozen tests; the code judge ruled " + by(v).target + ": " + by(v).reason, by(v).target === "tests" && v)),
 );
+out.unruled = left.length;
+return out;
 }
 async function pushProbe(lay, ws) {
 await pathRecheck("push-probe", "Workspace");
@@ -6335,6 +6337,9 @@ if (typeof st.approved_sha !== "string" || rs.target !== st.approved_sha) mis("s
 if (rs.head !== st.approved_sha || v.head !== st.approved_sha) mis("HEAD " + rs.head + " != approved_sha " + st.approved_sha);
 if (rs.head_tree !== st.code_tree) mis("tree " + rs.head_tree + " != code_tree " + st.code_tree);
 if (rs.clean !== true) mis("worktree not clean");
+const af = st.aug_files;
+if (af !== undefined && (!Array.isArray(af) || af.some((f) => typeof f !== "string" || frozenFiles.indexOf(f) >= 0))) mis("aug_files");
+if (af) frozenFiles.push(...(state.augFiles = af));
 const hr = await hasher("hasher:resume", mainWt, hashedFiles, "Verify");
 if (mapsDigest(hr.hashes) !== st.maps_digest) mis("frozen maps changed since " + st.last_gate);
 resume = st;
@@ -6578,6 +6583,7 @@ rounds: state.rounds,
 suite_result: suiteResult,
 gates_not_run: state.gatesNotRun,
 held_out_seen: !!(state.gates.held_out || {}).seen,
+...(state.augFiles ? { aug_files: state.augFiles } : {}),
 auto_confirmed: autoConfirmed,
 ...(state.unattended ? { unattended: state.unattended, auto_decisions: state.autoDecisions } : {}),
 intent: intentForPr,
@@ -7169,6 +7175,8 @@ shipFix.findings.map((f) => f.finding).join("; "),
 shipFix.gate === "review" ? "review" : "resume",
 );
 }
+let aug = null;
+const augIn = () => (aug ? { surviving_mutants: aug.mut, frozen_tests: aug.orig } : {});
 function writerCriterion(c) {
 const o = Object.assign({}, c);
 delete o.test_files;
@@ -7205,7 +7213,7 @@ test_cmd: planFacts.test_cmd,
 ...roleEnv("w_short", writerKey(null, n)),
 routed_findings: pending.flatMap((p) => p.findings),
 },
-codeFindings ? { code_judge_findings: codeFindings.filter((f) => ids.indexOf(f.criterion) >= 0) } : {}),
+codeFindings ? { code_judge_findings: codeFindings.filter((f) => ids.indexOf(f.criterion) >= 0) } : {}, augIn()),
 );
 const opts = { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" };
 let r = await roleAgent("fleet-test-writer", label, prompt, opts);
@@ -7260,7 +7268,7 @@ test_cmd: planFacts.test_cmd,
 ...roleEnv("w_" + c.id, writerKey(c, n)),
 routed_findings: p.findings,
 },
-codeFindings ? { code_judge_findings: codeFindings.filter((f) => f.criterion === c.id) } : {}),
+codeFindings ? { code_judge_findings: codeFindings.filter((f) => f.criterion === c.id) } : {}, augIn()),
 ),
 { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" },
 ];
@@ -7298,11 +7306,12 @@ halt("needs_human", "writer committed: HEAD moved from " + pre.fingerprint.head 
 const owner = {};
 for (const p of pending) for (const f of p.criterion.test_files) owner[f] = p.criterion.id;
 const reported = {};
+const og = (p) => (aug && aug.orig.indexOf(p) >= 0 ? "hash" : "ownership");
 for (const p of pending) {
 const cid = p.criterion.id;
 for (const f of writerOut[cid].files) {
 const nf = normPath(f);
-if (owner[nf] !== cid) halt("needs_human", "writer " + cid + " touched " + logPath(nf) + " in test round " + n + " (not its own test file)", "ownership");
+if (owner[nf] !== cid) halt("needs_human", "writer " + cid + " touched " + logPath(nf) + " in test round " + n + " (not its own test file)", og(nf));
 reported[nf] = true;
 }
 }
@@ -7320,8 +7329,14 @@ const ids = pending.map((p) => p.criterion.id).join(", ");
 const uniq = changed.filter((x, i, a) => a.indexOf(x) === i);
 if (more) halt("needs_human", "writer touched " + MORE_OUTSIDE + " (" + more + " more) in test round " + n + "; listed first: " + uniq.filter((p) => !owner[p]).slice(0, 10).map(logPath).join(", "), "ownership");
 const foreign = uniq.filter((p) => !owner[p]);
-if (foreign.length) halt("needs_human", "writer touched " + foreign.map(logPath).join(", ") + " in test round " + n + " (not a test file of " + ids + ")", "ownership");
+if (foreign.length) halt("needs_human", "writer touched " + foreign.map(logPath).join(", ") + " in test round " + n + " (not a test file of " + ids + ")", foreign.some((p) => og(p) === "hash") ? "hash" : "ownership");
 for (const p of uniq) if (!reported[p]) halt("needs_human", "writer touched " + logPath(p) + " in test round " + n + " but it was not reported in any writer's files", "ownership");
+if (aug) {
+const t = [].concat(...roundOut.map((o) => o.tests));
+const miss = aug.mut.filter((v) => !t.some((x) => x && new RegExp("\\b" + v.id + "\\b").test(x.covers)));
+if (!t.length || t.some((x) => !x || x.red_kind !== "kills_mutant") || miss.length)
+halt("needs_human", "augmentation round (test round " + n + "): every test must report red_kind kills_mutant and the tests must name each survivor in a covers" + (miss.length ? "; not named: " + miss.map((v) => v.id).join(", ") : ""), "role");
+}
 gate("test round " + n + ": writers ok: " + ids + "; " + changed.length + " owned path(s) changed, HEAD unchanged");
 last = post;
 return roundOut;
@@ -7387,7 +7402,7 @@ code_tree: codeTree,
 writer_outputs: judgeFirst ? testable.map((c) => writerOut[c.id]).filter(Boolean) : roundOut,
 script_findings: SCRIPT_FINDINGS_NOT_RUN,
 ...roleEnv("tjudge", "tjudge-r" + n),
-});
+}, aug ? { surviving_mutants: aug.mut } : {});
 if (codeFindings) judgeInputs.code_judge_findings = codeFindings;
 await resetBuild("test-judge:r" + n, ["tjudge-r" + n], "Tests");
 let tl = "role:fleet-test-judge:r" + n;
@@ -7409,7 +7424,7 @@ if (tj.verdict !== "revise") halt("failed", "test-judge returned no verdict");
 const byCrit = {};
 for (const f of routed)
 if (f.target === "tests" && testable.some((c) => c.id === f.criterion)) (byCrit[f.criterion] = byCrit[f.criterion] || []).push(f);
-pending = testable.filter((c) => byCrit[c.id]).map((c) => ({ criterion: c, findings: byCrit[c.id] }));
+pending = testable.filter((c) => byCrit[c.id]).map((c) => ({ criterion: aug && aug.c.id === c.id ? aug.c : c, findings: byCrit[c.id] }));
 if (pending.length) break;
 const w = "test-judge revise r" + n + " routed no finding to a known criterion";
 if (k) halt("needs_human", w);
@@ -7443,11 +7458,12 @@ logPath(h.hashes.suspicious.join(", ")),
 if (refreeze && frozen) {
 const allowed = {};
 for (const c of testable) if (refreeze.criteria.indexOf(c.id) >= 0) for (const f of c.test_files) allowed[f] = true;
+for (const f of refreeze.files || []) allowed[f] = true;
 const changed = [];
 const keys = await expandKeys(changedKeys(frozen, h.hashes, mainWt), frozen, h.hashes, "refreeze:f" + freezes, "Freeze", null, Object.keys(allowed));
 for (const k of keys) {
 if (k.more && k.map !== "ignored") halt("needs_human", "re-freeze: " + MORE_OUTSIDE + " (" + k.more + " more)", "hash");
-if (k.map !== "files" || k.key === MAP_ALL || !allowed[k.key])
+if (k.map !== "files" || k.key === MAP_ALL || !allowed[k.key] || (refreeze.files && k.kind !== "added"))
 halt("needs_human", "re-freeze touched unrouted path " + logPath(k.map === "ignored" && (k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")).join(", ") : violationName(k)), "hash");
 changed.push({ path: k.name, change: k.kind });
 }
@@ -7459,7 +7475,7 @@ changed,
 });
 const allowedMore = keys.allowedMore || 0;
 if (allowedMore) gate("re-freeze: " + allowedMore + " more changed test file(s) of the round than the log lists");
-gate("re-freeze after fix_tests (code round " + refreeze.round + "): " + (changed.length + allowedMore) + " frozen test file(s) changed");
+gate("re-freeze after " + (refreeze.files ? "augmentation" : "fix_tests") + " (code round " + refreeze.round + "): " + (changed.length + allowedMore) + " frozen test file(s) changed");
 }
 frozen = h.hashes;
 freezeRef = h.fingerprint.head;
@@ -7515,6 +7531,7 @@ let lastRoundGate = shipFix ? shipFix.gate : null;
 let expectedHead = v.head;
 let commitsMade = v.head !== planBase;
 let updRound = false;
+let augAt = state.augFiles ? -1 : 0;
 try {
 for (;;) {
 if (state.rounds.code >= MAX_CODE_ROUNDS)
@@ -7589,6 +7606,8 @@ requireOk("fleet-coder", coder);
 }
 collect("fleet-coder", coder);
 if (coder.status === "ok") state.followUps = followUpsOf(coder);
+if (augAt && augAt + 1 === m && coder.status === "ok" && coder.frozen_tests_red_at_start)
+halt("needs_human", "code round " + m + ": the frozen tests are red at the start of the round after the augmentation round; its new tests must pass on the approved tree", "gates");
 last = h;
 if (coderDriftOk) {
 lastRoundGate = "contract";
@@ -7698,8 +7717,33 @@ gate("code round " + m + ": coverage gate: code-judge approve converted to fix_c
 continue;
 }
 const mutF = mutantsLeft(cj.mutant_rulings, m);
+const mutT = mutF.unruled ? [] : mutF.filter((f) => f.mutant);
+if (mutT.length) {
+if (updRound || augAt)
+halt(
+"needs_human",
+"code round " + m + ": the code judge ruled surviving mutant(s) " + mutT.map((f) => f.mutant.id).join(", ") + " target tests " + (updRound ? "after update-branch" : "after the augmentation round of this run") + "; one round per run",
+updRound ? "review" : "gates",
+);
+augAt = m;
+const c0 = testable[0] || halt("needs_human", "code round " + m + ": surviving mutant(s) ruled tests, but no criterion has a test file", "gates");
+const f0 = c0.test_files.find((f) => /^test_|_test\.|[.-](test|spec)\.|Test\./.test(f.split("/").pop())) || c0.test_files[0];
+const files = [f0.replace(/^(.*\/)?([^/.]*?)((?:_test)?(?:\.[^/]*)?)$/, "$1$2_mut" + m + "$3")];
+aug = { c: Object.assign({}, c0, { test_files: files }), orig: frozenFiles.slice(), files, mut: mutT.map((f) => f.mutant) };
+frozenFiles.push(...(state.augFiles = files));
+gate("code round " + m + ": mutation gate: augmentation round for " + aug.mut.map((v) => v.id).join(", ") + " -> " + files.join(", "));
+const prev = writerOut[c0.id];
+phase("Tests");
+const tl = await testLoop([{ criterion: aug.c, findings: mutT.map((f) => ({ target: "tests", criterion: c0.id, finding: f.finding })) }], null);
+if (tl) return testJudgeReplan(tl);
+phase("Freeze");
+await freeze({ round: m, criteria: [], files });
+phase("Code");
+writerOut[c0.id] = prev;
+aug = null;
+}
 if (mutF.length) {
-coderFindings = mutF;
+coderFindings = mutF.filter((f) => mutT.indexOf(f) < 0).map((f) => ({ target: "code", criterion: null, finding: f.finding }));
 judgePrior = coderFindings.slice();
 lastRoundGate = "mutation";
 gate("code round " + m + ": mutation gate: code-judge approve converted to fix_code (" + mutF.length + " finding(s))");

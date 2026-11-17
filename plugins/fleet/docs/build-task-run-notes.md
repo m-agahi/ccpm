@@ -4680,3 +4680,47 @@ After the coverage check, lastRoundGate "mutation". No kill-rate stop (Q6).
 For G6: the tests target is routed to the coder with a note today; G6 replaces that branch with
 the fix_tests augmentation round (surviving_mutants, new test_files, re-freeze).
 ```
+
+## 8.0.0 notes (G6)
+
+### The augmentation round (G6, ADR-1316)
+
+```text
+Where: the code loop, after mutantsLeft. mutantsLeft keeps G5's findings, but a survivor ruled tests
+carries {mutant} and the array carries unruled (the count of survivors no ruling covers). With
+unruled > 0 nothing changes from G5: every finding goes to the coder (stripped to target code).
+Else the tests ones run the round; the code ones become the next coder round's findings.
+Stops before the round: updRound -> review (ADR-1220 R6: no writer or re-freeze on the forge's
+merge); augAt set (a round already ran this run) -> gates. Both say "one round per run".
+The new file: testable[0]'s first test file whose basename is test-named (^test_, _test., .test.,
+-test., .spec., Test.; never conftest.py or a config file; else its first; no testable: gates),
+_mut<m> inserted before an optional _test and the extension. Same dir, so pytest, jest and go
+collect it. A test_cmd that names files explicitly will not run it; mutants.py drops <paths> and
+runs the whole suite, so the survivor survives again and the 2nd tests ruling stops (fail closed).
+The script cannot see whether the path exists (the hasher maps are summaries; hash_diff rows carry
+no values), so the writer role says needs_human when it exists and the judge checks the diff.
+Wiring: aug = {c, orig, files, mut} lives while the round runs. aug.c is testable[0] with
+test_files = [new]: same id, so roleEnv's w_<id> database, writerKey and routing all hold.
+frozenFiles.push(new) before the round: hashedFiles is the same array, so the writer-round hashers,
+the re-freeze, the next coder's frozen_tests, the gates' exclude json and changed_defs all see it.
+testLoop(pending, null): writers first (null code findings, so no judge-first round). augIn() adds
+surviving_mutants and frozen_tests to both writer prompts; the judge gets surviving_mutants; a
+revise to aug.c.id keeps aug.c. Without aug every prompt is byte-identical to G5 (G6-5).
+afterWriters: og(path) is hash for a path in aug.orig, so an edited original frozen test stops at
+hash, reported or not (the pre hasher is the code judge's state, equal to frozen on every key).
+Then red_kind kills_mutant on every test and each id in a covers (\b id \b, so m3 is not m30).
+freeze({round, criteria: [], files}): allowed = files only, and kind must be added.
+writerOut[c0.id] is put back after the round, so a later judge-first detour sees the original
+writer's report. Resume: a frozen resume (freeze_digest) after the round is refused like any re-freeze (refreezeLog).
+A run-state resume: saveState writes aug_files (state.augFiles, only after a round); the resume
+pushes them into frozenFiles before hasher:resume (else its maps would lack the key and the maps
+digest would refuse every resume), refuses a non-array, a non-string or an already frozen path at
+resume, and sets augAt -1 (no second round in the resumed build).
+Red/green: no one-mutant mode in mutants.py (a new arg changes its sha, keys and digest: not cheap).
+Green: the next round's coder must report frozen_tests_red_at_start false (augAt + 1 === m).
+Kill: the next round's mutation run; a 2nd tests ruling stops at gates.
+Cap: 13 agents per round (writers reset, writer, path check, format, post hasher, hash diff,
+judge reset, judge, judge fp hasher, purge, freeze hasher, re-freeze hash diff, freeze ref); 2
+resets and 1 path check are uncapped: 10 capped, inside reserve(1 + 5 + 0) and reserve(3).
+The round in code round 3 still runs, then the loop top stops at cap (as a fix_tests detour does).
+```

@@ -1667,9 +1667,17 @@ The script pins the role contract, not the prose:
   checked after each run. A red baseline, another runner or no python source: `not_run`; changed
   non-python source or the deadline: `partial` ("N of M not run"). The code judge rules every
   survivor in `mutant_rulings: [{id, target, reason}]`: `equivalent` passes, `code` goes to the
-  coder, and `tests` goes to the coder with a note until the augmentation round (G6). An approve
-  with an unruled survivor becomes `fix_code`. There is no kill rate. There is no result cache:
+  coder, and `tests` goes to the augmentation round (below). An approve with an unruled survivor
+  becomes `fix_code`. There is no kill rate. There is no result cache:
   a digest retry runs the gate again (code under test can write the scratch dir).
+- **Augmentation round (8.0.0, G6).** When every survivor has a ruling and some are ruled `tests`,
+  the fleet runs one fix_tests detour per run. The first testable criterion's writer adds tests in
+  one new file the script names (`_mut<m>` before the suffix of its first test file), with
+  `surviving_mutants` and `frozen_tests` as inputs, and reports each test as
+  `red_kind: "kills_mutant"` with the mutant id in `covers`. An edit to a frozen test stops at `hash`. The
+  re-freeze accepts only the new file, as an added key. The next code round checks the result: its
+  coder must find the frozen tests green at the start, and a second `tests` ruling stops the run.
+  The round counts as a code round.
 - **Held-out store (8.0.0, G3).** In plan mode, after the plan is staged, one agent
   (`infra:held-out:write`, sonnet, a write step: one attempt, no digest retry) writes the
   planner's top-level held-out examples and each criterion's visible examples as base64 chunks

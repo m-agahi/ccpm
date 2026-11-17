@@ -22,6 +22,7 @@ You write tests for ONE acceptance criterion. Nothing else. Other writers cover 
 - `test_env_prefix`: `test_env` as a shell prefix (`env K='v' ... `). Run EVERY build, test or hook command in the worktree as `<test_env_prefix><command>`; a non-empty `test_cmd.env` goes in front (`env <test_cmd.env> <test_env_prefix><command>`). Its build vars point `target/`, `__pycache__` and the other caches at your own dir outside the worktree; a command run without it writes them in the worktree, and the workflow stops the run.
 - `routed_findings` (revision rounds only): the test judge's findings for this criterion.
 - `code_judge_findings` (fix_tests re-entry only): the code judge's `tests` findings for this criterion — see below.
+- `surviving_mutants`, `frozen_tests` (mutation-augmentation round only): see "Mutation-augmentation round" below.
 
 ## Run rules (non-interactive — the workflow cannot answer questions)
 
@@ -96,9 +97,21 @@ The coder's uncommitted changes are in the working tree, so production code exis
 - **A missing behaviour:** ADD a test. It must be GREEN on the current code, and it must FAIL when that behaviour is removed. Prove the second part by reverting the relevant production hunk in a throwaway copy (see above) and running the new test there. Report `red_kind: "assertion"` with the failure excerpt from the reverted copy.
 - The workflow re-freezes the test files after this round. A re-freeze may only change test files of criteria the code judge named in its fix_tests findings; routing a revise to any other criterion stops the run for a human.
 
-## Mutation-augmentation rounds — inactive
+## Mutation-augmentation round
 
-Inactive until mutation testing ships in a later release: the workflow never sends `surviving_mutants`. If an input carries it anyway, return `needs_human` naming the input.
+The workflow runs this round at most once per run. It runs when the code judge rules that a surviving mutant shows a gap in the frozen tests. The production code exists, uncommitted in the working tree, and the code judge approved it.
+
+- `surviving_mutants`: `[{id, path, line, op}]`. Each is a mutant of an added production line (`op` names the edit, for example `flip: == -> !=`) that the frozen tests did not kill. `routed_findings` gives the code judge's reason for each.
+- `frozen_tests`: the frozen test files. They are read-only in this round: never edit, rename or delete one. A change to any of them stops the run (gate `hash`).
+- `test_files`: the NEW file the workflow assigns for this round. It does not exist yet. Create it; write only there. If it already exists, return `needs_human`.
+
+For each mutant, ADD a test that kills it:
+
+- It must be GREEN on the current code in `worktree`.
+- It must FAIL when the mutant is applied. Prove it in a throwaway copy (see above): apply the mutant's `op` to `path` at `line` with `<scratch_copy_cmd> patch`, then run the new test there.
+- The expected value still comes from the criterion's examples and the spec text, never from what the code returns.
+
+Report every test with `red_kind: "kills_mutant"` and the failure excerpt from the mutated copy. Name the mutant id in the test's `covers`, for example `AC1: kills m3 (equal inputs)`. Each mutant id must appear in some `covers`. A test without `kills_mutant`, or a mutant id no `covers` names, stops the run for a human. After the round the workflow freezes the frozen tests plus your new file. In the next code round, its mutation run must kill each mutant.
 
 ## Untestable criterion
 
@@ -131,7 +144,7 @@ Shape:
       "file": "<path>",
       "name": "<test id>",
       "covers": "<example id or phrase, or a triangulation of it>",
-      "red_kind": "assertion|missing_symbol",
+      "red_kind": "assertion|missing_symbol|kills_mutant",
       "failure_excerpt": "<1-3 lines of the real failure>"
     }
   ],

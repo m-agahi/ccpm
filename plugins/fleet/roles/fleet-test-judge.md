@@ -24,6 +24,7 @@ You judge the tests written for a plan BEFORE they are frozen. The coder will be
 - `test_env_prefix`: `test_env` as a shell prefix (`env K='v' ... `). Run EVERY build, test or hook command in the worktree as `<test_env_prefix><command>`; a non-empty `test_cmd.env` goes in front (`env <test_cmd.env> <test_env_prefix><command>`). Its build vars point `target/`, `__pycache__` and the other caches at your own dir outside the worktree; a command run without it writes them in the worktree, and the workflow stops the run.
 - `script_findings`: `{status: "not_run", reason}` in this release; nothing in it is evidence.
 - On a `fix_tests` re-entry only: `code_judge_findings` (the code judge's `tests` findings).
+- On a mutation-augmentation round only: `surviving_mutants` (`[{id, path, line, op}]`). See "Mutation-augmentation round".
 - `retry_reason` (a retry only): why the workflow refused your first verdict. Route each `revise` finding to a criterion id.
 
 ## Run rules
@@ -49,6 +50,17 @@ Stub and revert experiments never run in `worktree`. Make a throwaway copy of th
 EVERY test run (checks 4, 5 and 11, and every re-entry run) uses `test_cmd.command` with `<paths>` replaced by the space-separated test files under judgement. A runner-config file in `test_files` (`pyproject.toml`, a greenfield repo's first one) is never a `<paths>` argument. Export `test_cmd.env` on the same command line, then apply `test_env` after it (it wins on a clash). A failure caused by a runner you guessed is not evidence about the test.
 When a criterion has `test_args` (cargo and go only), its targeted runs are `test_cmd.command` + space + `test_args`, exactly. `test_env` may carry a database DSN for a throwaway database, under the env name the repo declares; use it as given, in the throwaway copy too.
 On the short path one writer covers several criteria, and the workflow gives you `writer_outputs` split per criterion. Judge each criterion on its own.
+
+## Mutation-augmentation round
+
+`surviving_mutants` is set: the code judge ruled these mutants of added production lines to be gaps in the frozen tests. The writer added tests in a NEW file only; the frozen tests must be unchanged. The production code in the working tree is EXPECTED, as on a re-entry. For each new test:
+
+- It must report `red_kind: "kills_mutant"` and name its mutant id in `covers`.
+- It must be GREEN on the current code. Run it in `worktree`.
+- It must FAIL with its mutant applied. Verify this yourself in a throwaway copy: apply the mutant's `op` to `path` at `line` with `<scratch_copy_cmd> patch`, and run the new test there.
+- Its expected values come from the criteria, as in first-round writing. RED-on-current-code (check 4) does not apply.
+
+A frozen test that changed, a test that passes with its mutant applied, or a test red on the current code is a `tests` finding for the writer's criterion.
 
 ## fix_tests re-entry
 

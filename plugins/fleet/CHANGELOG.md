@@ -220,6 +220,34 @@ not_run, budget_hit}`. A red baseline: `not_run` "baseline red in scratch copy";
   Tests changed on purpose: the program count (v4_s1), the stdlib list (`tokenize`), the default
   mutation reason in the gates_not_run tests (build_task_run, v800_gate_tools), the G2 gates stub
   (a mutation slot), v502 (`mutants`prints through`gatePrompt`), v5_prompts (`mutant_rulings`  is live), v403 READS, the 5.0.7 state keys (v508:`held_out_seen`) and the v5010 snapshot.
+- Car G6 (the augmentation round, #7, ADR-1316): a survivor of the mutation gate that the code
+  judge rules `tests` now goes into the fix_tests detour, once per run, in place of G5's note to
+  the coder. It runs only when every survivor has a ruling (an unruled one sends all of them to the
+  coder, as in G5); survivors ruled `code` go to the next coder round with it. The script assigns
+  one new file: the first test-named file of the first testable criterion (never a conftest or a
+  config file) with `_mut<m>` before its suffix (`tests/test_a.py` becomes `tests/test_a_mut1.py`,
+  `x_test.go` becomes `x_mut1_test.go`, `FooTest.java` becomes `FooTest_mut1.java`).
+  That criterion's writer (or the short path's one writer) runs first, with `test_files` set to the
+  new file, `surviving_mutants: [{id, path, line, op}]`, `frozen_tests` (the list before the round)
+  and the judge's reasons as `routed_findings`. Every reported test must carry
+  `red_kind: "kills_mutant"`, and each survivor id must appear in some `covers`, else needs_human
+  at `role`.
+  A writer change to an original frozen test stops at `hash` (it was `ownership`). The test judge
+  gets `surviving_mutants`; a revise keeps the round's criterion. The re-freeze allows only the new
+  file, as an added key ("re-freeze after augmentation"); every original frozen key must be
+  unchanged. The new file then joins `frozen_tests`, the hashed files and the gates' exclude list.
+  Red and green: the next code round is the check. Its coder must find the frozen tests green at
+  the start (else needs_human at `gates`), and its mutation run must kill the survivor: a second
+  `tests` ruling stops with needs_human at `gates`, and a `tests` ruling after update-branch stops
+  at `review` (ADR-1220 R6). `mutants.py` has no one-mutant mode, so the script does not apply the
+  mutant itself; the test judge checks it in its throwaway copy. The round counts against
+  MAX_CODE_ROUNDS as a fix_tests detour does. The run state carries `aug_files` after the round
+  (only then); a resumed build hashes them as frozen (a malformed list or an already frozen path
+  stops at `resume`) and runs no second round (v508 state keys). Cap: the round costs 13 agents, 10 of them capped,
+  inside the test round's `reserve` and the re-freeze's `reserve(3)`. The writer's
+  mutation-augmentation section is active; the test judge gains "Mutation-augmentation round"; the
+  code judge's `tests` ruling text changes (`v800_augment.test.mjs`). Tests changed on purpose:
+  G5-3 (v800_mutation: `tests` goes to the round) and v5_prompts (the section is active).
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

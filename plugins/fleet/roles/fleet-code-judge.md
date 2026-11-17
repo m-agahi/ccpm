@@ -49,9 +49,9 @@ Rule on every survivor in `script_findings.mutation.survived`, a `partial` resul
 
 - `equivalent`: the mutant behaves the same as the code (for example a boundary no input can reach). It passes.
 - `code`: the code is wrong or does more than the criteria need. The workflow routes it to the coder.
-- `tests`: the frozen tests miss a behaviour the criteria need. Until the test augmentation round ships, the workflow routes it to the coder with a note.
+- `tests`: the frozen tests miss a behaviour the criteria need. When every survivor has a ruling, the workflow runs one augmentation round per run: a test writer adds tests that kill these mutants in a new file, the new file is frozen with the others, and you judge the next code round. A `tests` ruling after that round, or after update-branch, stops the run for a human. With a survivor not ruled, the workflow routes every ruled one to the coder.
 
-On `approve`, the workflow converts the verdict to `fix_code` for any survivor with no ruling, a blank reason or another target, and for every survivor ruled `code` or `tests`. There is no kill rate to meet; you rule each survivor.
+On `approve`, the workflow converts the verdict to `fix_code` for any survivor with no ruling, a blank reason or another target, and for every survivor ruled `code`. A `tests` ruling goes to the augmentation round. There is no kill rate to meet; you rule each survivor.
 
 ## The change under judgement — the working tree
 

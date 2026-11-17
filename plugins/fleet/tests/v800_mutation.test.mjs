@@ -10,9 +10,9 @@
 // is restored from its backup and checked byte for byte. It runs as the 2nd slot (mutation) of the
 // existing infra:gates:r<m> agent, one Bash call per slot, so no new agent and no new reset. The
 // code judge gets script_findings.mutation and rules every survivor in mutant_rulings [{id, target:
-// tests|code|equivalent, reason}]; an approve with an unruled survivor, or a survivor ruled code or
-// tests, becomes fix_code (tests: routed to the coder with a note until G6 adds the augmentation
-// round). There is no kill-rate stop.
+// tests|code|equivalent, reason}]; an approve with an unruled survivor, or a survivor ruled code,
+// becomes fix_code (a survivor ruled tests: the G6 augmentation round, v800_augment). There is no
+// kill-rate stop.
 //
 // ACs (plan-8.0.0-gates.md, G5):
 // - G5-1: a weak-test fixture gives a survivor with path, line and op.
@@ -430,7 +430,7 @@ test("8.0.0 G5-2: an approve with an unruled survivor becomes fix_code; a bad ta
   assert.deepEqual(out.result.gates_not_run.map((x) => x.gate), ["coverage", "security_scan", "held_out"]);
 });
 
-test("8.0.0 G5-3: target code routes the survivor to the coder; target tests routes there too with a note until G6", async () => {
+test("8.0.0 G5-3: target code routes the survivor to the coder; target tests goes to the augmentation round (G6, v800_augment)", async () => {
   const code = [EQ[0], { id: "m3", target: "code", reason: "same() must compare by identity" }];
   let out = await run(happy({ script: Object.assign({ "infra:gates:r1": gatesStub(SURV), "role:fleet-code-judge:r1": approve(code) }, R2) }), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
@@ -438,9 +438,8 @@ test("8.0.0 G5-3: target code routes the survivor to the coder; target tests rou
   assert.deepEqual(f, [{ target: "code", criterion: null, finding: "mutation gate: mutant m3 (src/x.py:9 flip: == -> !=) survives the frozen tests; the code judge ruled code: same() must compare by identity" }]);
   const tests = [EQ[0], { id: "m3", target: "tests", reason: "no test covers equal inputs" }];
   out = await run(happy({ script: Object.assign({ "infra:gates:r1": gatesStub(SURV), "role:fleet-code-judge:r1": approve(tests) }, R2) }), ARGS);
-  f = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings;
-  assert.equal(f.length, 1);
-  assert.match(f[0].finding, /ruled tests: no test covers equal inputs \(the test augmentation round is not built yet \(G6\): change the code so the frozen tests kill it, or stop\)$/);
+  assert.ok(out.logs.includes("code round 1: mutation gate: augmentation round for m3 -> tests/test_a_mut1.py"), out.logs.join("\n"));
+  assert.match(inputsOf(call(out, "role:fleet-test-writer:AC1:r2").prompt).routed_findings[0].finding, /ruled tests: no test covers equal inputs$/);
 });
 
 test("8.0.0 G5-4: a partial result keeps mutation in gates_not_run with 'N of M not run'; its survivors still need rulings", async () => {

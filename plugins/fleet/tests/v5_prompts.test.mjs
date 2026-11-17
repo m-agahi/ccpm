@@ -105,7 +105,9 @@ test("5.0.0 R3: gates this release does not run are described as not run, never 
   // 8.0.0 (G2): exemptions is live: the script reads it (gateLeft) before it accepts an approve
   assert.match(SOURCE, /gateLeft\("coverage", cj\.exemptions, m\)/, "exemptions is read by the script");
   const tw = readFileSync(join(ROLES_SRC, "fleet-test-writer.md"), "utf8");
-  assert.match(tw, /[Ii]nactive/, "the mutation-augmentation section is marked inactive");
+  // 8.0.0 (G6): the mutation-augmentation section is active (v800_augment)
+  assert.match(tw, /## Mutation-augmentation round\n/, "the mutation-augmentation section is active");
+  assert.match(tw, /`surviving_mutants`/);
   for (const [r, t] of [["fleet-coder", coder], ["scope-and-plan", plan], ["fleet-code-judge", cj], ["fleet-test-writer", tw]])
     assert.doesNotMatch(t, /(coverage|mutation)[^.\n]*\bby script\b/i, r);
 });
