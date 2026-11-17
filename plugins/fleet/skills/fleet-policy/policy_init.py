@@ -102,11 +102,19 @@ def temp_copy(raw, fleet_dir):
     """A mode 0600 temp file in the target dir holding exactly the checked bytes."""
     fd, tmp = tempfile.mkstemp(prefix=".policy-init-", suffix=".json", dir=fleet_dir)
     try:
-        os.fchmod(fd, 0o600)
-        os.write(fd, raw)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        try:
+            os.fchmod(fd, 0o600)
+            os.write(fd, raw)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except BaseException:
+        # 7.4.0 (#31): a failed write leaves no temp file behind
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return tmp
 
 

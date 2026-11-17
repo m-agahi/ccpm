@@ -64,5 +64,5 @@ test("7.2.0 AC10: one symbol alone over the summary cap stops needs_human at the
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.equal(out.result.stop_gate, "callers");
-  assert.ok(out.result.reason.startsWith("infra:callers:file: the caller summary of s1 is over the 4096-byte summary cap"), out.result.reason);
+  assert.ok(out.result.reason.startsWith("infra:callers:file: the caller summary of s1 is over the 16384-byte summary cap"), out.result.reason);
 });

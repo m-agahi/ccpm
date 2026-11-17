@@ -93,6 +93,9 @@ try:
     before = body()
     out['body_sha256_before'] = hashlib.sha256(before.encode('utf-8')).hexdigest()
     hits = REGION.findall(before)
+    # 7.4.0 (#64): a region from an opener-written start that holds the test block is no stats block
+    if any('<!-- ccpm-fleet-tests -->' in h for h in hits):
+        raise ValueError('stats region overlaps the test block (an opener-written start marker above it); no write')
     out['replaced'] = bool(hits)
     if hits:
         # the first block becomes the new one; any other is dropped

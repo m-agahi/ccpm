@@ -109,12 +109,15 @@ test("7.3.0 review M1: the inline-code scan stops at the program's first operand
       [["python3", "a.py", "-c", "setup.cfg"], /args/],
       [["python3", "-m", "json.tool", "-c"], /./],
       [["node", "a.js", "-p", "3000"], /js-ran/],
-      [["sh", "probe.sh", "-c"], /shim-reached/],
     ]) {
       const r = f.py("run", f.wt, f.tmp, JSON.stringify(a));
       assert.equal(r.status, 0, JSON.stringify(a) + " " + r.stderr);
       assert.match(JSON.parse(r.stdout).tail, re, JSON.stringify(a));
     }
+    // 7.4.0 #70 item 1: a shell's whole argv is scanned, so a script's own -c arg is refused now
+    const sh = f.py("run", f.wt, f.tmp, JSON.stringify(["sh", "probe.sh", "-c"]));
+    assert.notEqual(sh.status, 0);
+    assert.match(sh.stderr, /refusing sh with an inline program string/);
   } finally {
     rmSync(f.root, { recursive: true, force: true });
   }

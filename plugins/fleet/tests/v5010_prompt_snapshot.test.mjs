@@ -105,10 +105,12 @@ const SCENARIOS = {
 // 7.1.0 (L2145): + infra:pr-tests after the pr-opener (one more build call), the code judge suite_result types passed, the pr-opener role sha moves (probe unchanged)
 // 7.3.0 car 2: + infra:fleet-branch in plan mode (#43, one more call each), the intake plan-path rule (#63), the plan-mode workspace fast-forward rule (#39), the parked meta prompt and its digest/args opts (#42), fast_forwarded and the parked part keys in the schemas (probe unchanged)
 // 7.3.0 car 4: the workspace exclude_add program and settings rewrite (#9), format-plan via format_files plan mode (#9), commit-plan retire via parked.py (#9), purge.py (#9), the chunk Write-tool steps (Q4 (a)), scratch_copy_cmd role inputs and role shas (#54, #60, #65), the call-shaped caller cap text (#40) (probe unchanged)
+// 7.4.0 car 1: the push and push-probe prompts run push.py (#9), the hook stop text (#36 B1) (probe unchanged)
+// 7.4.0 car 6: the role shas (#26, #45, #46, #60, #61, #72), the uv build vars (#73), touches_gate, test_conflict, target and parent in the schemas (no new call; probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 90, sha256: "bbbfc8785b9381964615f75f2d5cb35c9e4fcd534245cb547b098ac9f01a1b6a" },
-  "confirm auto (gates, then build in one run)": { calls: 92, sha256: "ca358569dc09da0392bd1be1f2236acb05c8e345603deca4e8f652d07c8ec522" },
-  "short path (one test writer)": { calls: 89, sha256: "1c1d757d0d54620e24420afb1be02b36d02346f3e8f88250ea7059b251219863" },
+  "plan then build (confirm ask)": { calls: 90, sha256: "0f514ca75005c22d5e8f697d92b1f52662230aa25127c89b68afff064c247ddb" },
+  "confirm auto (gates, then build in one run)": { calls: 92, sha256: "e94c5a28968fdc91f2f928148913ae2a852d1988f68a59bb325aae029f7d5123" },
+  "short path (one test writer)": { calls: 89, sha256: "85779206422f7020f4461f75862fd552e175b2195d5a51b331b52b6f8feba1bb" },
   "probe": { calls: 2, sha256: "a8ceccc781cf8954f6b925f6d96462387d40cede1db8d318d28eb0441753e8de" },
 };
 

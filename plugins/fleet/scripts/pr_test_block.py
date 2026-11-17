@@ -41,7 +41,8 @@ except Exception:
 # re-read: the block must be there once, the rest unchanged, and every header
 # in <headers_json> and every markdown heading of the old body still present.
 # claims: the test-count phrases of the final body outside every block (the
-# stats block included; only its '<n> test rounds)' cell is dropped), listed
+# stats block included; only the '<n> test rounds)' cell of its '| tests written |'
+# row is dropped), listed
 # until their UTF-8 bytes would pass LIMIT, then claims_truncated is true.
 # Prints {replaced, edited, block_sha256, claims, claims_truncated,
 # body_sha256_before, body_sha256_after, headers_missing, error, args,
@@ -74,8 +75,24 @@ REGION = re.compile(re.escape(START) + r'.*?' + re.escape(END), re.S)
 HEAD = re.compile(r'^#{1,6}[ \t]+\S.*$', re.M)
 P1 = re.compile(r'(?<![0-9A-Za-z_.,])[0-9][0-9,]*[ \t]+(?:tests?|passed|passing|failed|failing)\b', re.I)
 P2 = re.compile(r'\b(?:tests?|pass(?:ed)?|fail(?:ed)?)(?:[ \t]*[:=][ \t]*|[ \t]+)[0-9]+(?![0-9]|[.,][0-9])', re.I)
-# the stats block's '| tests written | <n> (<m> test rounds) |' cell
+# 7.4.0 (#64): more count forms, added to P1/P2 (each only adds claims): markdown around the
+# number, n+, one word before the noun, pass|fail, passing, NBSP or one newline before the word;
+# n/m and "n of m" with a test word on the line within 40 characters
+SP = '[ \\t' + chr(0xa0) + ']'
+WS = '(?:' + SP + '+\\n?' + SP + '*|\\n' + SP + '*)'
+NOUN = r'(?:tests?|pass(?:ed|ing)?|fail(?:ed|ing)?)\b'
+P1N = re.compile(r'(?<![0-9A-Za-z_.,*`~#])[*_`~]*[0-9][0-9,]*\+?[*_`~]*' + WS + '(?:[A-Za-z][A-Za-z-]*' + WS + ')?' + NOUN, re.I)
+P2N = re.compile(r'\b' + NOUN[:-2] + r'(?:[ \t]*[:=][ \t]*|[ \t]+)[0-9]+(?![0-9]|[.,][0-9])', re.I)
+P3 = re.compile(r'(?<![0-9A-Za-z_.,/])[0-9]+(?:[ \t]*/[ \t]*|[ \t]+of[ \t]+)[0-9]+(?![0-9/]|[.,][0-9])', re.I)
+NEAR = re.compile(r'\b' + NOUN, re.I)
+# 7.4.0 car 6 (#64 item 2, Max ruling): two exact ordinal forms are no count claim: "test N of
+# AC<k>" and "Step N tests" / "step N tests" followed by a word that is not a number. Only a
+# claim that lies wholly inside such a span is dropped; every other claim stays.
+ORDINAL = (re.compile(r'(?<![A-Za-z0-9_])[Tt]est[ \t]+[0-9]+[ \t]+of[ \t]+AC[0-9]+(?![A-Za-z0-9_])'),
+           re.compile(r'(?<![A-Za-z0-9_])[Ss]tep[ \t]+[0-9]+[ \t]+tests[ \t]+(?=[A-Za-z])'))
+# the stats block's '| tests written | <n> (<m> test rounds) |' cell, only on that row of the stats region
 ROUNDS = ' rounds)'
+STATS = re.compile(re.escape('<details><summary>Built with ccpm fleet') + r'.*?' + re.escape('<!-- ccpm-fleet-stats -->'), re.S)
 LIMIT = 16384
 
 
@@ -90,11 +107,28 @@ def body():
 def claims_of(text):
     # every block region becomes one LF, so no phrase spans a removed block
     text = REGION.sub('\n', text)
-    hits = []
-    for p in (P1, P2):
+    stats = [m.span() for m in STATS.finditer(text)]
+    def rounds_cell(m):
+        ls = text.rfind('\n', 0, m.start()) + 1
+        return text.startswith(ROUNDS, m.end()) and text.startswith('| tests written |', ls) and any(a <= m.start() < b for a, b in stats)
+    def near(m):
+        ls = text.rfind('\n', 0, m.start()) + 1
+        le = text.find('\n', m.end())
+        return NEAR.search(text[max(ls, m.start() - 40):min(len(text) if le < 0 else le, m.end() + 40)]) is not None
+    hits, at = [], set()
+    ords = [o.span() for r in ORDINAL for o in r.finditer(text)]
+    for p in (P1, P2, P1N, P2N, P3):
         for m in p.finditer(text):
-            if p is P1 and text.startswith(ROUNDS, m.end()):
+            if any(a <= m.start() and m.end() <= b for a, b in ords):
                 continue
+            if p in (P1, P1N) and rounds_cell(m):
+                continue
+            if p is P3 and not near(m):
+                continue
+            # a new form adds a claim only where no shipped form starts
+            if p in (P1N, P2N, P3) and m.start() in at:
+                continue
+            at.add(m.start())
             hits.append((m.start(), ' '.join(m.group(0).split())[:80]))
     seen, size = [], 0
     for _, c in sorted(hits, key=lambda h: h[0]):

@@ -122,14 +122,16 @@ test("5.0.4 2013: wf_839d4753-594: ignored caches under scripts/tests are purged
   }
 });
 
-test("5.0.4 2013 non-weakening: a selected file under a hook dir is hook code: it stops the run and is never purged", () => {
+// 7.4.0 (#15, Max ruling L2017 "Allow, hooks run at commit"): a selected file under a hook dir
+// is no longer refused; the hooks run on it at the commit step. It is still never purged.
+test("5.0.4 2013 (7.4.0 Max ruling L2017): a selected file under a hook dir is formatted, not refused, and is never purged", () => {
   const r = iamDb();
   try {
     r.put("scripts/tests/test_new.py", "def test_new():\n    pass\n");
     r.put("scripts/tests/__pycache__/x.cpython-312.pyc", "pyc");
     const o = r.runF({ paths: ["scripts/tests/test_new.py"] });
-    assert.deepEqual(o.refused, ["scripts/tests"]);
-    assert.equal(o.ran, false);
+    assert.deepEqual(o.refused, [], o.note);
+    assert.deepEqual(o.files, ["scripts/tests/test_new.py"]);
     assert.ok(existsSync(join(r.wt, "scripts/tests/test_new.py")));
     assert.equal(o.purged, 1);
   } finally {
@@ -260,7 +262,8 @@ test("5.0.4 2013 non-weakening, dirty mode (format-code): an untracked or a modi
       },
       [],
     ],
-    ["frozen untracked test", (r) => r.put("scripts/tests/test_frozen.py", "def test_f():\n    pass\n"), ["scripts/tests/test_frozen.py"]],
+    // 7.4.0 (#15, Max ruling L2017): a frozen dirty path is no format offender (the post-coder hash
+    // check guards it); the "frozen untracked test" case moved to v740_hook_dir_allow
   ]) {
     const r = iamDb();
     try {

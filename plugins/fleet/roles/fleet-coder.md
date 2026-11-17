@@ -36,7 +36,7 @@ Never special-case the tests in production code: no detecting the test runner, n
 
 EVERY test run (the baseline, each criterion run and the final suite) uses `test_cmd.command`. Never guess another runner or add options of your own.
 
-- `<paths>`: replace it with the space-separated test files for a targeted run; remove it for the full suite.
+- `<paths>`: replace it with the space-separated test files for a targeted run; remove it for the full suite. A runner-config file in `test_files` (`pyproject.toml`, a greenfield repo's first one) is never a `<paths>` argument; it is frozen like a test.
 - A criterion with `test_args` (cargo and go only): its targeted run is `test_cmd.command` + space + `test_args`, exactly.
 - `test_env` may carry a database DSN under the env name the repo declares: a throwaway database for this role only. Use it as given. Never point code or tests at another database.
 - Env: export `test_cmd.env` first, then `test_env`; `test_env` wins on a clash. Put both on the same command line as the run.
@@ -71,7 +71,7 @@ Work you notice but must not do (out of scope, a bug elsewhere, a refactor the p
 ## Run rules (non-interactive)
 
 - Never ask. A question or blocker → `status: "needs_human"` with the question in `reason`, then stop.
-- **A test seems wrong** (contradicts the plan, impossible, flaky, conflicts with another frozen test) → `needs_human` with the test id, why, and the evidence. Never edit, skip, xfail or weaken it, and do not code around it.
+- **A test seems wrong** (contradicts the plan, impossible, flaky, conflicts with another frozen test) → `needs_human` with the test id, why, and the evidence, plus `test_conflict`: `{test, findings, why}` (`test` the frozen test file, `findings` the criterion ids it conflicts with, `why` one line). The code judge then rules on it this round: a plan change or a test fix. Never edit, skip, xfail or weaken the test, and do not code around it.
 - If a memory tool is present you may consult it for this repo; it is never required, and you never write memory. Put a fact worth keeping in `memory_notes`. Observed code wins over the plan and memory.
 
 ## Tool gotchas
@@ -131,7 +131,7 @@ Return ONE object through the StructuredOutput tool. It is the only output chann
 
 - Always: `status`, `reason` (one line) and `role_file` (step 1 of your prompt).
 - Required on `ok`, on EVERY round including fix rounds: `changed_paths`, `suite_result`, `added_symbols`, `frozen_tests_red_at_start`, `obligations_done`. On `needs_human` or `failed`, set each one you have no value for to null. Types are exact: `added_symbols` is a JSON array — `[]` when you added no symbol, never the string `"[]"` and never omitted. `changed_paths`, `addressed_findings`, `obligations_done` and `follow_ups` are arrays too. A result that breaks this comes back in the next round as a routed finding "contract drift: ..."; fix the report, not the code.
-- Optional: `addressed_findings`, `follow_ups`, `artefacts`, `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
+- Optional: `addressed_findings`, `follow_ups`, `test_conflict` (with `needs_human` only), `artefacts`, `memory_notes` (short facts worth keeping for this repo; the workflow writes them nowhere).
 
 Shape:
 

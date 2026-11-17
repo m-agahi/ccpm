@@ -37,10 +37,10 @@ free text.
 ## Requirements
 
 - Claude Code with the Workflow tool (dynamic workflows) enabled.
-- Nothing for the role prompts (5.0.0, R1): the ten role prompts ship in the plugin as
+- Nothing for the role prompts (5.0.0, R1): the eleven role prompts ship in the plugin as
   `roles/<role>.md`: `scope-and-plan`, `plan-audit`, `fleet-test-writer`, `fleet-test-judge`,
-  `fleet-coder`, `fleet-code-judge`, `fleet-pr-opener`, `fleet-intent-judge`, `pr-review` and
-  `gate-change-nonweakening-sweep`. See "Role files" below.
+  `fleet-coder`, `fleet-code-judge`, `fleet-pr-opener`, `fleet-intent-judge`, `pr-review`,
+  `gate-change-nonweakening-sweep` and `fleet-ci-classifier`. See "Role files" below.
 - No MCP server is required (5.0.0, R2). Optional: `yaadgaar` (task ids of every project, 7.0.0;
   the yadgar ledger is retired), the Atlassian MCP (Jira input and comments), `gh` /
   `gh-personal` (GitHub input and comments) and `$CODEBERG_TOKEN` (Codeberg comments). Preflight
@@ -246,12 +246,15 @@ On-disk caller handoff (7.2.0, L2178): a grep output over 8192 bytes is not copi
 relay. `callers.py` exits with `FLEET_CALLERS_ON_DISK`, and the script runs its file mode: the full
 output goes to `<scratch>/callers/callers-<sha256>.json`, and the relay carries only a summary per
 symbol (hit count, sha256 of the sorted hits, auto doc or lock hit count, path count and path
-hash; at most 4096 bytes, else the batch splits in halves). A symbol whose mapped occurrences hash
+hash; at most 4096 bytes, else the batch splits in halves; one symbol alone may reach 16384 bytes
+since 7.4.0). A symbol whose mapped occurrences hash
 to the summary needs no read. Other symbols are read in batch-wide pages of 50 entries (read mode,
 part `auto`, `all` or `paths`), each page digest- and args-checked and joined against the summary
 count and hash. A caller check reads at most 4 pages; a list over that read budget is one finding
-(plan) or an R5 refusal (update merge). At the update merge (`infra:callers:u1`) the comparison is
-by path set, so a line shift with the same files needs no read.
+(plan) or an R5 refusal (update merge); that finding names the callers file. At the update merge
+(`infra:callers:u1`) the comparison is by path set, so a line shift with the same files needs no
+read. The disk path adds up to 18 plan-mode agents (36 with digest and args retries), so a heavy
+plan run can reach "agent cap 100 reached" and stop (fail closed).
 
 Fixer hooks on build files (3.0.0, steps 6a and 10a): the one commit step must commit exactly the
 approved tree (ADR-1151), so a pre-commit fixer that rewrote a file at commit time used to stop
@@ -961,10 +964,10 @@ under `default` and `auto` ("parked prior unreadable (fail closed)").
 
 ### Push-access probe (4.0.0, ledger 1985)
 
-Plan mode only, right after the workspace step: a PATH re-check, then `infra:push-probe` runs
-`git push --dry-run --porcelain origin <base_ref>:refs/heads/<branch>` (with a 120 s timeout).
-The dry run sends nothing, but it runs the repo's pre-push hook. `push_probe.py` classifies the
-output. An auth failure stops the run with `needs_human` before any role runs. Anything the
+Plan mode only, right after the workspace step: a PATH re-check, then `infra:push-probe` runs `push.py probe`
+(7.4.0), which runs `git push --dry-run --porcelain origin <base_ref>:refs/heads/<branch>` (with a
+120 s timeout). The dry run sends nothing, but it runs the repo's pre-push hook. The program
+classifies the output. An auth failure stops the run with `needs_human` before any role runs. Anything the
 program cannot classify, or a relay that is not the program's own, logs "push access unknown"
 and the run goes on: the real push is still gated later.
 
@@ -981,7 +984,7 @@ build past its commit) wins over `freeze_digest`.
 
 ### Role files (5.0.0, R1, ledger 1999)
 
-The ten role prompts ship as `plugins/fleet/roles/<role>.md`, and the shared prompt files as
+The eleven role prompts ship as `plugins/fleet/roles/<role>.md`, and the shared prompt files as
 `plugins/fleet/roles/_shared/<name>.md` (5.0.0 R3: one, `test-cmd-allowlist.md`), under the same
 trust model as the shipped programs. `scripts/gen.mjs` writes three tables into the workflow source
 from the files: `ROLE_SHA256` (the sha256 of each role file's exact bytes), `ROLE_DISPATCH`
@@ -1123,7 +1126,12 @@ Not defended:
   interpreter flag clusters (for example `-xc` in a hook entry), nested git config includes,
   the transport git config left unfrozen for resume (for example `credential.helper=!<command>`,
   `core.sshCommand`), virtualenv and `node_modules` internals beyond the startup hooks, and
-  anything else that runs code without changing a frozen key.
+  anything else that runs code without changing a frozen key;
+- a forged sealed plan ref (7.4.0, #69, Max ruled: no HMAC): a sealed plan ref
+  (`refs/fleet/<task>/plan`) is self-hashed, so any role with a shell can forge one, in another
+  task's namespace too. Roles are inside the trust boundary (ADR-1152), and no key can sit outside
+  a role's read scope. The sealed `kind:ref` check blocks only accidental cross-task branch
+  adoption.
 
 #### IaC tooling: Max's hard rules and the PATH shims (3.1.0)
 
@@ -1258,13 +1266,23 @@ refuses. The plan-time result is sealed in the plan ref and checked again on the
 
 **Resource caps (3.1.0).** Every embedded Python program sets `RLIMIT_AS` 1 GiB and `RLIMIT_CPU`
 300 s before anything else, and tunes git's children to stay inside them; the repo's own hooks
-that the fixer runs get the limits lifted back. The YAML loaders (60 s, 1 GiB) read at most
+that the fixer runs get the limits lifted back. A git network call (fetch, push, ls-remote) and
+the credential helper it starts get them lifted back too (7.4.0); local git keeps them. The YAML loaders (60 s, 1 GiB) read at most
 256 KiB of config, emit only string values (`args` a list of strings) and stop past 1 MiB of
 output, so an alias bomb ("billion laughs") is refused, not expanded.
 
 Every `git worktree add` the fleet runs uses `-c core.hooksPath=/dev/null`, so no `post-checkout`
 hook runs in a fleet worktree. The scope-and-plan role page creates the planner's own probe worktree;
 the script does not create it.
+
+### Known limits
+
+- Node build leftovers (7.4.0, #17, Max ruled: keep strict): `.next/`, `tsconfig.tsbuildinfo`,
+  the coverage dir and `.eslintcache` in the worktree stop the hash check, as any other changed
+  file does. Set them outside the worktree in the repo's config. The `TURBO_CACHE_DIR`,
+  `MYPY_CACHE_DIR` and `COVERAGE_FILE` rows of `BUILD_ENV_ROWS` are not verified on the real tools.
+- One fleet run per worktree at a time (7.4.0, #18): a second run's build reset deletes the first
+  run's build dirs. A drift retry empties only the retried role's own build dir.
 
 ### Frozen set
 
@@ -1331,6 +1349,16 @@ The hasher freezes every criterion test file, plus:
   `pyproject.toml#tool.pytest` (every `[tool.pytest.*]` table), `package.json#jest`,
   `package.json#vitest`, `package.json#mocha`, `package.json#scripts.test`. The rest of these files
   (dependencies) stays editable. A missing section hashes as `ABSENT`, so adding one is a change.
+
+A greenfield repo's first `pyproject.toml` (7.4.0, #72): every `pyproject.toml` the coder adds is a
+new frozen key, so the coder can never create it. The supported route: the plan lists
+`pyproject.toml` in the `test_files` of the criterion whose tests need its pytest config, that
+criterion's test writer creates it before the freeze, and the freeze takes its new content (the
+whole file as a test file, and its `[tool.pytest]` table). The writer round accepts a section
+change only of a config file the round's own criteria list. The whole file is then frozen: the
+coder cannot add a dependency to it later, so the writer writes the `[project]` metadata and
+dependencies the code needs. A runner-config file in `test_files` is never a `<paths>` argument.
+A fix_tests re-freeze still refuses a change to its `[tool.pytest]` table.
 
 The comparison runs in the script, never in an agent. A key that appears (for example a new
 `conftest.py`), disappears or changes rejects the coder round, whatever the code judge says. Roles
@@ -1558,7 +1586,8 @@ The script pins the role contract, not the prose:
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
   `commands`, `contract`, `role`, `cap`, `ownership`, `commit`, `review`, `intent`, `scope`,
-  `resume`, `iac`, `iac-push` or `callers` (`null` when the run did not stop at one of them). A
+  `resume`, `iac`, `iac-push`, `callers`, `hooks`, `db`, `relaunch`, `policy`, `stats`, `ci` or
+  `merge` (`null` when the run did not stop at one of them). A
   cap stop names the gate that rejected the last round (hash, obligations gate, commit hook, push
   hook or review).
 

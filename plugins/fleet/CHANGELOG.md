@@ -1,5 +1,510 @@
 # Changelog
 
+## [7.4.0] - 2026-11-17
+
+Fleet 7.4.0: the combined step-3 batch (plan `docs/plans/fleet-step3-batch-7.4.0-2026-11-17.md`).
+One release for every remaining step-3 fleet task the plan puts IN, built in six cars on one branch.
+
+### Deploy
+
+- Update the plugin (`/plugin`, update `fleet` to 7.4.0), then start a NEW session: the workflow
+  looks for its own `fleet/7.4.0/scripts` dir.
+
+### Changed
+
+- Car 1, #34 (L2141, Max ruling 2026-11-14 "Lift caps on git network calls"): a git child that
+  talks to a remote, and the credential helper it starts, runs without the program's 1 GiB memory
+  and CPU caps (`preexec_fn=lift`): `remote_head.py` ls-remote, `tf_gate.py` ls-remote and fetch,
+  `pr_state.py fetch` (`run(..., net=True)`), and every network call of the new `push.py`. Local
+  git commands keep the caps. No cap value changes.
+- Car 1, #9 push (L2008): the push and the plan-mode push-access probe run in one program,
+  `push.py` (`push` and `probe` modes). In push mode it checks the branch (not the default),
+  HEAD (the approved sha) and a clean worktree, pushes once, retries a network failure after 5,
+  15 and 45 s while the 540 s deadline leaves room for one more attempt and a 60 s head read
+  (each head read is bounded by what is left of the deadline), classifies git's output
+  (the `push_classify.py` rules) and reads origin's head (gh api, else ls-remote) itself. It prints
+  `{push_result, exit_code, hook_tail, tail, attempts, remote_head, args, program, digest}`; the
+  workflow checks the digest and that `args` are the ones it sent for every result. The target
+  repo's pre-push hooks run on purpose (the one fleet git call without `core.hooksPath=/dev/null`)
+  with the push's hook env, passed as a JSON argument. Probe mode runs the 120 s dry run and
+  prints the push-probe keys (the `push_probe.py` rules). The prompts hold no `$?`, no redirect and
+  no shell loop. `non_ff`, `remote_rejected` and `ambiguous` stop for a human; `network` after the
+  ladder, or any other result, fails.
+- Car 1, #36 B1 (L2143): a hook-surface or ruleset-surface read that failed with no HTTP status
+  (`HTTP None`: gh crashed or timed out) stops with "transient GitHub read failure; re-run", not
+  "hook change needs Max's confirmation". Any other read error keeps the old text.
+- Car 1, #36 B6: the gh stderr redaction of `ruleset_surface.py`, `pr_convention.py` and
+  `gh_identity.py` turns `Bearer <token>` of any length into `Bearer ***`.
+
+- Car 2, #13 (L2015): the porcelain tree diffs of `hasher.py`, `review_paths.py`, `fleet_scan.py`,
+  `verify_since.py` and `format_files.py` (`differs()`) pass `--ignore-submodules=none`, so a repo's
+  `diff.ignoreSubmodules=all` no longer hides a gitlink change. `hook_surface.py` runs git with
+  `GIT_CONFIG_NOSYSTEM=1` and `-c core.fsmonitor=false` (a system or repo fsmonitor program ran on
+  its `ls-files`); its two `core.hooksPath` reads keep the system config, so a system hooksPath
+  inside the repo stays hook surface. The hook gate's stop text and the writer-round and
+  re-freeze halts map C0, DEL, C1 and U+2028/U+2029 in a path to `?` (`logPath`), so a path with
+  a newline cannot forge a log line.
+- Car 2, #15 (L2017, Max ruling "Allow, hooks run at commit"): `format_files.py` no longer refuses
+  a selected file under a directory hook path (a writer's new `scripts/tests/test_x.py` under
+  `pytest scripts/tests/`); the hooks run on it at the commit step. In dirty mode (format-code)
+  only a selected path that is also frozen is exempt: the post-coder hash check refuses any change
+  to it (F3). The plan exempted every dirty path; an unfrozen dirty path under a hook dir stays
+  refused, because a dir only a remote hook's args or a lenient hook names is never frozen by
+  `hook_refs`, and no later gate would see it. The ruling covers plain files only (security
+  review): a selected file that loads on import or configures a tool (`conftest.py`,
+  `__init__.py`, `*.pth`, `*.ini`, `*.cfg`, `*.toml`, `setup.py`, `package.json`, dotfiles,
+  `jest.config*`, `vitest.config*` and similar) stays refused in both modes. Still refused: a symlinked or replaced hook dir, a
+  gitlink, a non-selected untracked or ignored file, a non-selected tracked edit. #12 closes with
+  this ruling (a comment at `isHookPath` names it).
+- Car 2, #16 (a) (L2021): `hasher.py` `hook_refs` freezes the repo file of a `--opt=value` token
+  (`--config=ruff.toml`), and with it that file's dir tree, as for every referenced file. A pure
+  tightening.
+- Car 2, #20 (L2026, Max ruling Q1 (a)): in a non-lenient local hook, a token of digits only, and a
+  read-only subcommand right after its PATH command (`cargo` metadata, tree; `go mod`, then
+  verify or graph; `git` diff, status, log, ls-files), are arguments. Subcommands that build or
+  run repo code (cargo build, check, clippy, test, doc, fmt; go test, build, vet, generate) stay
+  refused (security review). A cargo pass freezes `.cargo/config`, `.cargo/config.toml`,
+  `rust-toolchain` and `rust-toolchain.toml` (absent ones as MISSING): they choose the binary
+  cargo runs. The command token stays strict, a repo script named `cargo` gives no pass, and
+  every other plain token stays "unresolvable local hook".
+- Car 2, #18 (L2024): a contract-drift retry empties the role's own build dir first
+  (`infra:build-reset:<role label>:drift`): test writers (short and full path), the test judge,
+  the code judge, pr-review and the sweep; and the coder's one role_file re-ask (its steps 1 and
+  2 run the frozen tests again).
+- Car 2, #22 (cap part, L2029): `hash_diff.py` takes `--allow <JSON list of "<map>:<key>">` right
+  after `<scratch>`. `changed` and `total` cover only the keys outside the list (capped at 50);
+  the new keys `allowed` (at most 50 rows) and `allowed_changed` cover the listed ones. The writer
+  round passes its own test files and the re-freeze its criteria's test files, so 50+ owned test
+  files no longer halt the run with a mangled name ("files: (10 more)"). Past 50 keys outside the
+  list the writer round stops with "writer touched more than 50 changed files outside the round's
+  test files (<n> more)" and the re-freeze with the same text; the writer-round halt now names
+  every unowned changed path, not only the first. The workflow checks the relay's split (an
+  allowed row must be a listed test file, a changed row must not), so a forged split fails closed.
+  A re-freeze with no changed map logs 0 changed files (an early return had left NaN).
+- Car 2, #11 (L2012): tests only; the three `test_db_prefix` checks already refuse `"iam_db_\n"`
+  and accept `f_` and `fl_`.
+- Car 2 dist: 453,981 bytes (+2,216; the plan estimated ~700).
+
+- Car 3, #4 (L1995): the README Role contract lists all 22 `STOP_GATES` in src order.
+- Car 3, #28 (L2056): the README says eleven role prompts and names `fleet-ci-classifier`; so
+  does the root README's fleet section.
+- Car 3, #17 (L2023, Max ruling Q7 "keep strict, document"): a README Known limits line: Node build
+  leftovers (`.next/`, `tsconfig.tsbuildinfo`, the coverage dir, `.eslintcache`) in the worktree
+  stop the hash check; the `TURBO_CACHE_DIR`, `MYPY_CACHE_DIR` and `COVERAGE_FILE` rows are not
+  verified on real tools. #18: one fleet run per worktree at a time (a second run's build reset
+  deletes the first run's build dirs).
+- Car 3, #69 (Max ruling Q11 "decline the HMAC"): the README Threat model lists a forged sealed
+  plan ref under Not defended: the ref is self-hashed, any role with a shell can forge one, roles
+  are inside the trust boundary (ADR-1152), and the sealed `kind:ref` check blocks only accidental
+  cross-task branch adoption.
+- Car 3, #23 (L2035): when the digest-checked `session_project` ran in a worktree under the repo
+  (`<repo>/.claude/worktrees/`; car 4 Y1 took the repo root out), the gate log has "WARN
+  session_project ran in <cwd> ..."; the run goes on. The no-proof texts name the next step: intake's stop says "start the session in a directory
+  under the repo (a .yadgar/project-id or an origin remote)", and the write-back reason with no
+  project at all adds "pass args.project, or ...". `session_project.py`'s header lists where its
+  derive differs from yadgar-client c2200bb `src/project.rs` (64 vs 16 insteadOf passes; a 4096-byte
+  strict-UTF-8 project-id read that ends the program on error where the client falls through to
+  the origin remote; a 60 s timeout and core.fsmonitor off on every git call).
+- Car 3, #30 N1 (L2098): plan mode stops (needs_human) when a source body holds
+  `<!-- fleet-brief:v1 -->` and the caller's confirm is not `ask` ("re-run with confirm ask (a
+  briefed task is confirmed by Max)"), before the planner runs. Under unattended the marker stays
+  a ruling, as in 6.3.0. #30 L3: `brief_check.py` cuts a `:<line>[:<col>]` and a possessive
+  `'s`/`’s` suffix off a token before the IaC and hook checks.
+- Car 3, #31 (L2103, the leak part): `policy_init.py` `temp_copy` removes its temp file when the
+  fchmod, write or fsync raises, then raises again. P7, P8, T5 and T6 stay manual.
+- Car 3, X1 (car-2 report): `tf_gate.py` (its three tree diffs) and `changed_defs.py` (the
+  name-status and the per-path diff) pass `--ignore-submodules=none`. `tf_gate.py` reads through a
+  scratch repo, so only the user's global `diff.ignoreSubmodules=all` could hide a gitlink bump
+  there; `changed_defs.py` read the repo's own. `changed_defs.py` lists a gitlink at either end as
+  unclassified (it has no blob; the flag alone would have crashed the program on `cat-file blob`),
+  so the callers gate checks it against the plan's files.
+- Car 3, X2 (car-2 report): `logPath` maps control characters in every remaining halt and gate
+  line that carries a path from a program relay: format-tests and format-plan (refused, frozen,
+  outside, reformatted, purged), the judge fingerprint keys, changed_defs (skipped, unclassified,
+  the callers findings), the plan commit (dirty, files, DSN paths, park dirty), the scope fence,
+  the frozen-resume and freeze suspicious paths, tf_gate (problems, hints, IaC files), the fleet
+  scan, the update-branch overlap, the orchestrator scan reasons, the short-path writer, the
+  pre-freeze hook failures, the code-round hash violations, the review sweep triggers, and the
+  session cwd.
+- Car 3 dist: 455,022 bytes (+1,041; the plan estimated ~700; X2 is outside the estimate).
+
+- Car 4, #29 (L2084): the five R4 gaps the 6.1.0 entry listed as known are closed. Each one only
+  adds refusals to the update-branch rule R4; none accepts more. `hook_surface.py`: N1, an npm
+  script follows a nested `npm|pnpm|yarn run X` (and `npm test`/`npm t`) with its pre and post
+  scripts, depth 3, with a visited set; a nested run of a missing script (with no `--if-present` in
+  that call) or a deeper chain drops the `npm:<name>` entry (R4 then refuses every moved file, and
+  plan mode gives the #39 finding). N2, a tracked dir named in an npm script
+  or a make recipe is listed as `dir/` (for example `node --test test/`), and R4 matches every
+  path under it. N3, `-p mod` and `-m mod` in a script or a recipe resolve to `mod.py`,
+  `mod/__init__.py`, `mod/__main__.py` and the parent `__init__.py` files (tracked only). N5, a
+  tracked shell script a script or a recipe names adds the tracked files it sources (one level,
+  read at the rev; a `$(dirname "$0")/x`, `${BASH_SOURCE%/*}/x` or `$DIR/x` path by its tail), and
+  the new target `sh:<path>` lists them for a script test_cmd or check_cmd; R4 reads it at d, and
+  an unread script refuses every moved file. N4, test_cmd `npx jest|vitest` also runs
+  `jest|vitest.setup.*`, `jest|vitest.config.*`, `setupTests.*` and `*.setup.{js,ts,...}`. The
+  obligations gate (`cmdRuns` without the R4 flag) keeps its exact-path match: a `dir/` entry there
+  would refuse every test file the fleet writes under `tests/`. It does get the new file paths of
+  a make target: the `-m`/`-p` module files and the libs a recipe's script sources. A coder edit
+  of such a file is now refused unless the obligation lists it (stricter). Still not checked: an
+  npm test_cmd whose script runs jest (the setup files are not named in the script), a nested npm
+  run with `--prefix`/`--workspace`, a bare nested `yarn <script>` or `pnpm <script>` (no `run`),
+  and a sourced path whose variable tail does not resolve to a tracked file.
+- Car 4, #39 part 2 (L2162): plan mode passes the npm target of an npm, pnpm or yarn test_cmd to
+  the plan hook-surface read. When `package.json` with `scripts.<name>` is not tracked at the
+  worktree root at HEAD (or the script cannot be read), it is a plan finding through
+  `planFindingsStop` ("... npm would walk up into the main checkout"): a re-plan while audit rounds
+  are left, then needs_human. The finding also fires on the N1 fail-closed cases (a nested run of
+  a missing script, a chain deeper than 3). npm 11.19.0 checked again: `npm_config_prefix` and
+  `npm_config_local_prefix` do not stop the walk-up to a parent `package.json`; only `--prefix`
+  does. Not guarded: `npx jest|vitest` (`npm prefix` in a dir with no `package.json` also prints
+  the parent's dir, so npx resolves the main checkout's local prefix).
+- Car 4, Y1 (car-3 report): the #23 WARN fires only when `session_project` ran under
+  `<repo>/.claude/worktrees/` (a fleet or agent worktree, where a cd is ignored). The repo root is
+  the normal start and no longer warns.
+- Car 4 dist: 456,305 bytes (+1,283; the plan estimated ~1,600).
+
+- Car 5, Z2 (security fix, car-4 review): the N1 `--if-present` skip in `hook_surface.py` was
+  fail-open. It now holds only for the exact forms `npm|pnpm|yarn run --if-present X` and
+  `... run X --if-present`, alone in their `;`/`&`/`|`/newline segment, with no `cd`, `pushd`,
+  `popd`, `export`, `npm_config`, `(`, backtick or `--prefix` earlier in the script text. A nested
+  run of a missing script with `-w`/`--workspace(s)`, `--prefix`, `-C`, `--filter`, `-r`/`--recursive`,
+  `--if-present` after `--`, an env prefix, `env -C` or an earlier cd/subshell drops the
+  `npm:<name>` entry (fail closed). New skip = old skip AND the exact form.
+- Car 5, Z1 (#39 extension): plan mode guards `npx jest|vitest`. The plan hook-surface read asks
+  for the new target `pkg:package.json` (an entry only when `package.json` at HEAD is a JSON
+  object); no entry is a plan finding through `planFindingsStop` ("... npx would resolve the main
+  checkout's prefix"), as for the J1 npm guard. `npm exec` is not guarded: it is no allowed test
+  runner.
+- Car 5, #64 (pr_test_block follow-ups): the claim check reads more count forms, each only adding
+  claims: markdown around the number (`**147** passed`), `n+`, one word before the noun
+  (`147 unit tests`), `pass`/`fail` after a number, `passing: 5`, NBSP or one newline between
+  number and word, and `n/m` or `n of m` with a whole test word within 40 characters on its line
+  (not after `#`, no bare dash as the word, no blank line inside). The workflow's own stats and
+  test blocks give no claim (a test runs the real templates through the program). The stats row
+  skip (`<n> test rounds)`) holds only on a line that starts with `| tests written |` inside the
+  stats region. `ownClaims` exempts a claim only as a whole phrase with word bounds ("13 tests"
+  supplied no longer exempts "3 tests"). The test block says "errors not reported" for a judge
+  with no `errors` count (was "0 errors"), and the total is passed + failed. `pr_body_block.py`
+  refuses (error, no write) a stats region that holds the test block marker (an opener-written
+  `<details><summary>Built with ccpm fleet` above the block). Deviation from plan item 2 (brief
+  rule "all gate edits only tighten"): the shipped P1/P2 matches stay, so "test 2 of AC3" and
+  "Step 2 tests the parser" are still claims; Max to rule if the false positives should go.
+- Car 5, #66: `pr_test_block` and `pr_body_block` are in `ERROR_BRANCH_PROGRAMS`. A relay the agent
+  marked failed for the program's own `error` (valid digest and args) reaches the caller's stop
+  (stop_gate `stats`) instead of "returned failed". The pr-stats step routes through a new `route`
+  argument of `infra()`, with no digest retry (a write step). `hash_diff` stays out (it runs
+  through `softDispatch`). The failed-relay digest retry re-runs `format_files` and
+  `pr_test_block`; both are idempotent (the block is replaced in place, an equal body is not
+  edited).
+- Car 5, #68: `callers.py` lets the summary of one symbol reach 16384 bytes (`SUMMARY_CAP_ONE`;
+  `doctest_md` can list many docs); two or more symbols keep 4096. This is a transport cap, not a
+  gate: the content is still checked by count and sha256. The finding for auto hits over the
+  caller read budget names the callers file. The on-disk callers path adds up to 18 plan-mode
+  agents (36 with retries), so a heavy run can reach "agent cap 100 reached" (fails closed); no
+  memo in this release. The 7.2.0 entry's "every joined list is checked against the summary count
+  and hash" is reworded (the auto part is checked by count).
+- Car 5, #70 items 1, 2, 4 (item 3 parked, Q12): `scratch_copy.py run` scans a shell's whole argv
+  (sh, bash, dash, zsh, ksh), so `+O`/`+o` and value options no longer end the inline-code scan,
+  and a script's own `-c` arg is refused too. Value-taking options skip their value: ruby and perl
+  `-I`, `-r`; node `-C`, `--conditions`, `--title`, `--input-type`; python
+  `--check-hash-based-pycs`. The scan with the old table runs as well, and either one refuses. The
+  agent PATH shim stays the primary guard. `commandShapeProblems` refuses a `test_cmd` whose argv
+  has an inline-code form (`inlineCodeArgv`, the same forms and tables as `scratch_copy.py`):
+  "test_cmd runs inline code ...".
+- Car 5 dist: 459,113 bytes (+2,808; the plan estimated ~500 for #64, #66, #68, #70; Z1, Z2 and
+  the JS port of the scratch_copy form list are outside the estimate).
+- Car 6, #64 item 2 (Max ruling): `pr_test_block.py` drops a claim only when it lies wholly inside
+  one of two exact ordinal forms: "test N of AC<k>", and "Step N tests" / "step N tests" followed
+  by a word. Real counts ("2 tests pass", "tests: 5 passed", "12/12 tests") stay claims, also on
+  the same line as an ordinal form.
+- Car 6, #26 (L2054): plan-audit writes a two-sentence paraphrase of the brief's outcome before it
+  reads the plan. A gap is a routed `advisory: paraphrase gap` finding. It never changes the verdict.
+- Car 6, #45 (L2179): a Non-goal covers a brief requirement only when the brief puts it out of
+  scope, or an Open decision cites the brief line. Else plan-audit returns `plan_defect`. The
+  planner puts every narrowing in Open decisions.
+- Car 6, #46 (L2180): plan-audit traces each example through the loader, schema or validator its
+  test uses; an example that path rejects or changes is `untestable_criteria`. A test writer that
+  cannot reach an example returns `needs_human` naming the criterion.
+- Car 6, #60 step 3 (Max Q3 (a)+(c)): after plan-audit approves and before the plan is sealed, the
+  gate sweep runs on the plan (`role:gate-change-nonweakening-sweep:plan`, `mode: "plan"`) when a
+  planned path matches `GATE_PATH_RE` or the planner sets `touches_gate`. A `weakening` verdict
+  routes each loosened unit to a re-plan; at the last round it stops (`intent`). An unmeasured unit
+  stops. The sweep role gets a "Plan mode" section. Deviations: the plan-mode call gets no build
+  env (plan mode has no build scratch, as plan-audit), and `touches_gate` is a plain optional
+  planner output, not sealed (no build step reads it).
+- Car 6, #61: the coder may return `needs_human` with `test_conflict: {test, findings, why}`. A
+  well-formed one goes to the code judge in the same round (input `test_conflict`); `plan_wrong`
+  re-plans, `fix_tests` re-opens the test round, any other verdict stops on the coder's own
+  needs_human. A pr-review blocking finding with `target: "plan"` re-plans instead of a coder
+  round (after update-branch it stops, as a judge plan_wrong does).
+- Car 6, #61 Q4 (Max ruling (b), not the plan's default): unattended, a re-plan while the PR is
+  open is built in the same run. The first rebuilt commit is made on the PR's old head (the commit
+  step gets `parent`, checks `merge-base --is-ancestor`, runs `reset --soft <parent>` and commits
+  the same tree). The workflow stops (`commit`) when the reported parent is not that head. The push
+  is a fast-forward; nothing is force-pushed; the superseded ref stays. Every auto gate still runs.
+  An interactive run still asks; a second re-plan in one run asks. New tightening: an unattended
+  re-plan that touches an IaC path asks (with or without a PR), and a coder test conflict in an
+  update round stops as before (no judge).
+- Car 6, #61 Q4 limit (needs Max's ruling): before the rebuilt commit the run reserves 21 agents
+  (`OPEN_PR_SHIP_AGENTS`: commit, push, PR update and one review), so the PR is never changed
+  unless its re-review fits the 100-agent cap. A re-plan found by the review of a run that built
+  the PR (a whole build, a re-plan and a second whole build) does not fit: that run stops `cap`
+  before the commit, with the PR untouched. In practice Q4 (b) pushes only from a resumed run (for
+  example a resume at `pr_open`). The cap is not raised here.
+- Car 6, #72: the supported route for a greenfield repo's first `pyproject.toml`: the plan lists it
+  in one criterion's `test_files`, the writer creates it before the freeze, and the writer-round
+  check accepts a section change of a config file the round owns (the section's own file decides).
+  The freeze covers the whole file, so the coder cannot change it later. Planner rule, README text,
+  and a `<paths>` rule in the writer, both judges and the coder.
+- Car 6, #73: `UV_PROJECT_ENVIRONMENT` and `UV_CACHE_DIR` are per-role build env rows (`uv-venv`,
+  `uv-cache` under the role's build dir), so `uv run` writes no `.venv` in the worktree. Cost: the
+  uv cache is cold in every role (5.0.6: no role reads another role's output).
+- Car 6 dist: 463,963 bytes (+4,850).
+
+### Removed
+
+- Car 1, #9: `push_classify.py` and `push_probe.py`. Their rules moved into `push.py`; no prompt
+  ran them any more, and every shipped program must be run by some prompt (4.0.2 1997). The
+  program count is 44 (`PROGRAM_COUNT`). The plan expected both kept (46); its "resume check"
+  use of `push_classify` does not exist in the code.
+
+### Review fixes
+
+Two reviews of cars 1 to 6 (A: gate weakening and security; B: correctness and run reliability),
+fixed before the PR.
+
+- A-M1 (`push.py`): the push goes to the origin URL sealed at plan time (`remote_head.py`'s form
+  and its hard `-c` overrides, minus `core.hooksPath`: the pre-push hooks still run), with the
+  explicit refspec `refs/heads/<branch>:refs/heads/<branch>` and no `+`, so no repo config forces
+  it or sends it to another ref. Before it pushes, the program refuses any local, worktree or
+  command-scope `url.*` key, any `remote.*.push|pushurl|receivepack|mirror` key, and a remote
+  section named by the sealed URL (includes expanded). The upstream (`branch.<b>.remote`,
+  `branch.<b>.merge`, `refs/remotes/origin/<b>`) is set in separate local calls after the push.
+  The head read after the push uses gh, else `ls-remote` of the sealed URL with no repo (never the
+  repo's origin or `uploadpack`). The push args gain `<sealed_url> <parent|-> <tree|->` (12
+  args). A pre-push hook now gets the sealed URL as its remote name and URL (before: `origin`).
+  `tfGate`, which runs before every push, already stops on a missing sealed URL or an origin URL
+  that changed since the plan.
+- A-M2: the open PR's head of a re-plan is the script's expected head (the approved sha the push
+  checked on origin), never the replan-reset agent's `superseded_head`; a `superseded_head` that
+  differs stops the run. The push after the rebuilt commit passes `[parent, tree]`; `push.py`
+  then checks `approved^ == parent`, `approved^{tree} == tree` and origin's head at the sealed URL
+  == parent before it pushes.
+- A-M3: a writer may change a `[tool.pytest]` table of a `pyproject.toml` it owns only when the
+  file is new in the round. The hasher lists a section key for every existing `pyproject.toml`
+  (`ABSENT` with no table), so the workflow accepts only a section key that `hash_diff` lists as
+  `added` (the review asked for `pre.hashes.files[file] === "MISSING"`; the workflow holds map
+  summaries, not values, and the key kind is the same fact). The hasher flags a `pyproject.toml`
+  that is not in HEAD whose pytest table has an addopts token `-p`, `-k`, `-m`, `--deselect`,
+  `--ignore` or `--ignore-glob` (or unparseable addopts), sets `python_files`, `python_classes`,
+  `python_functions` or `norecursedirs`, or has `testpaths` that leave out a frozen test file in
+  its directory; the freeze stops on a flagged path. An existing (committed) file is not flagged.
+- A-M4: the coder's `test_conflict` is capped (test, why and each finding at 2000 characters, at
+  most 20 findings) and its gate line goes through `logPath`. Unattended, a `plan_wrong` that a
+  coder test conflict started asks (`plan_wrong: ask`, the re-plan ready), never an automatic
+  re-plan build: Max's Q4 covers review and sweep findings.
+- A-m1: the push tail in a stop reason and the IaC list of an unattended re-plan go through
+  `logPath`; the tail splits on CR and LF.
+- B-M2 (`push.py`): each push attempt's timeout is `max(1, left() - READ_RESERVE)`, so the head
+  read keeps its 60 s.
+- Security follow-up to A-M1 (an allowlist, option B): `push.py` also refuses any `http.*`,
+  `credential.*`, `ssh.*`, `core.sshCommand` or `core.gitProxy` key, and any `remote.*` key but
+  `<name>.url` and `<name>.fetch`, from the repo's config (local, worktree) or an inherited
+  `GIT_CONFIG_*` (command). The hard `-c` values cannot reset a URL-scoped key such as
+  `credential.<url>.helper` or `http.<url>.proxy`, so such a key is refused, not overridden. The
+  user's global and the system config (root-owned; Homebrew, Xcode and Git for Windows put
+  `credential.helper` there) are used as before: `push.py` no longer sets `GIT_CONFIG_NOSYSTEM`,
+  and a system `url.*` or remote push key is refused like a local one. The plan-mode probe is a dry run
+  before any role ran, so it reads the human's repo config unchanged. The `ls-remote` head reads
+  run with no repo and read no repo config.
+- Security follow-up to A-M3 (an allowlist): in a new `pyproject.toml` the pytest table may hold
+  only `addopts`, `testpaths`, `python_files`, `norecursedirs`, `markers`, `minversion` and
+  `xfail_strict`; an unknown key or `[tool.pytest.*]` subtable (other than `ini_options`) is
+  flagged. An addopts token passes only as `-q`, `-v`, `-x` or `-r<report chars>` (short clusters
+  read char by char, for example `-qx`, `-vv`, `-rfEs`) or exactly `--strict-markers`,
+  `--strict-config`, `--tb=<style>`, `--maxfail=N`, `--durations=N`, `--color=yes|no|auto`; every
+  other token is flagged, an abbreviated long option included (`-W` and `--import-mode` are not
+  allowed). `testpaths`, `python_files` and `norecursedirs` must keep every frozen test file in
+  the file's directory collected; `python_classes` and `python_functions` are flagged.
+- B-M1: the #39 walk-up guard reads only the new hook-surface target `pkg:scripts.<name>` (`[]`
+  when the root `package.json` at HEAD is a JSON object with a string `scripts.<name>`). The
+  nested `npm:<name>` entry is R4's only: a root `scripts.test` of `npm run -w packages/web test`
+  or `cd web && npm run build && jest` plans with no finding; no root script still stops. In the
+  nested reader a valued flag (`-w`, `--workspace`, `--prefix`, `-C`, `--dir`, `--filter`, `-F`) is
+  never the script name, and a run with such a flag (or `--workspaces`, `-r`, `--recursive`) has no
+  R4 entry (another package's script).
+- B-m8: `yarn test:unit` (and pnpm's bare `name:x` form) names that script, not `test`.
+- A-m4: yarn never takes the `--if-present` skip (`yarn run X` runs a package binary when the
+  script is missing); a missing script under yarn drops the entry.
+- B-m2: `hook_surface.py` passes `maxsplit=1` by keyword.
+- A-m2: every `git diff-tree` in `fleet_scan.py`, `branch_scan.py`, `plan_files.py`,
+  `scratch_copy.py` and `format_files.py` passes `--ignore-submodules=none` (a `.gitmodules`
+  `ignore = all` hid a gitlink change from diff-tree). `fleet_scan.py` exits non-zero when the PR
+  adds or changes a `submodule.*.ignore` key (merge base against the head), so the push and PR
+  steps stop.
+- A-m3: `format_files.py` `config_like` compares names lower-cased and covers `jest.setup.*`,
+  `setupTests.*`, `vitest.workspace.*` and any path under `__mocks__/`.
+- B-M1 deviation: the brief's empty `npm:` target for a flag-first `npm run -w X test` is not
+  needed. The test_cmd shape check refuses that form before the guard, so the guard reads
+  `pkg:scripts.<name>` only.
+- B-M3: the plan sweep runs only for a planned path on a gate path (planned files, criterion test
+  files, changed-symbol occurrences with a criterion) or `touches_gate`; a caller occurrence alone
+  (no criterion, or only an `infra:callers` hit) no longer triggers it. A sweep that did not finish (not `ok`, no units) and a unit not measured are gate
+  warnings (the post-PR sweep decides), not plan stops; a weakening verdict still stops the plan.
+  The role's plan mode: a planned gate with no shipped side gives no unit (`not_applicable`,
+  `units: []` when none is left).
+- B-M4: `UV_CACHE_DIR` is per run and per tier, outside `build/` (a build reset deletes `build/`,
+  never these dirs): `<scratch>/uv-cache/<nonce>/write` for the test writers and the coder,
+  `<scratch>/uv-cache/<nonce>/gate` for every other role and hook env (judges, sweeps, pr-review,
+  commit hooks). The cache is split so that a role that writes code can never put a wheel or build
+  in the cache a gate installs from. This relaxes the 5.0.6 rule (no role reads what another role
+  left) for this one variable, within a tier only. `UV_PROJECT_ENVIRONMENT` stays per role.
+  `build_dir.py clean` deletes `<scratch>/uv-cache` with `build/` (never through a link).
+- B-m1: the push-access probe prompt asks for a 180000 ms Bash timeout (`RUN_180S`); its git runs
+  up to 120 s.
+- B-m3: the push slug check uses `PUSH_SLUG_RE`, the same pattern as `push.py` `SLUG` (a test
+  compares the two sources).
+- B-m5: `OPEN_PR_SHIP_AGENTS` is 14, counted from the code: commit 1, push 3 (fleet scan, tf gate,
+  push), PR update 2 (fleet scan, pr-opener), the review's own reserve `REVIEW_AGENTS` (7), margin 1. Build
+  resets, path checks, the PR tail and the run-state writers after the PR is open sit outside the
+  cap. A test counts the capped agents of a resumed Q4 run (11) against it.
+- B-m7: a fleet-brief marker under confirm `default` or `auto` (not unattended) makes the run ask
+  (`confirm ask`, with a gate line) in place of a needs_human stop.
+- B-m9: the plan doc says 44 programs (`push.py` in, `push_classify.py` and `push_probe.py` out).
+- Review fixes dist: 465,052 bytes (+1,089 over car 6).
+
+### Tests changed on purpose (review fixes)
+
+- New: `v740_review_push` (A-M1 R1-R3 on real git with local bare repos, A-M2 R4, B-M2 R5, B-m6
+  R6), `v740_review_gates` (A-M2, A-M3, A-M4, A-m1).
+- `v740_push_program`: push args carry the sealed URL and `- -`; a wrapper git maps the URL to the
+  bare origin; P2 finds the push line by `'push', '--receive-pack=git-receive-pack', url`.
+- `build_task_run` push prompt test: args end `["gh", "o/r", "540", "git@github.com:o/r.git",
+"-", "-"]`; the head-read fallback is `tip(url, ...)`, never `ls-remote origin`. Harness
+  `pushOn` passes the 12 args.
+- The `infra:replan-reset` stubs (`v630_unattended`, `v4_s3`, `v630_flow`, `build_task_run`,
+  `v740_test_conflict`) echo the prompt's `expected_head` as `superseded_head`; `build_task_run`
+  and the `v740_test_conflict` Q4 test read the expected head, not `5555555`. The Q4 resume test
+  pins the push's parent and tree args.
+- `v5010_prompt_snapshot`: the three build pins move (push args); calls unchanged.
+- New: `v740_review_lows2` (B-M1, B-m2, B-m8, A-m2, A-m3, A-m4); the A-M3 allowlist test in
+  `v740_review_gates`; the transport keys in `v740_review_push` R1 (R3 no longer sets an
+  `uploadpack`: R1 refuses it).
+- `v740_if_present_npx` Z2: `yarn run lint --if-present` left the exact forms (A-m4).
+- `v503_dsn_precheck` backstop: the `plan_files` sha pin moves (A-m2 flag only).
+- `v740_npm_walkup` J1: the plan targets are `[npm:<name>, pkg:scripts.<name>]`; a tracked script
+  is the `pkg:scripts.test` entry (B-M1).
+- New: `v740_review_b` (B-M3, B-M4 tiers and cleanup, B-m1, B-m3, B-m7); the B-m5 count test in
+  `v740_test_conflict`; `v740_review_push` R3b (system config kept, command-env keys refused).
+- `v506_build_env` table test: `UV_CACHE_DIR` is the one value outside the role's dir (B-M4).
+  `build_task_run` ARRAY_SITES and `v403_schema_types` READS map the plan sweep's `sw.units`
+  (B-M3).
+- `v740_plan_sweep` Z4: an unmeasured unit is a warning and the plan goes on (B-M3).
+- `v740_uv_env` U1: `UV_CACHE_DIR` is `<scratch>/uv-cache/<nonce>`; harness `BUILD_ROWS` gives it a
+  `null` sub-dir (B-M4).
+- `v740_brief_marker` M1, M2 (body_slug): the marked brief asks (`awaiting_confirmation`) in place
+  of `needs_human` (B-m7).
+
+### Tests changed on purpose (car 1)
+
+- New: `v740_git_net_lift` (B1-B3), `v740_push_program` (P1-P4), `v740_review_lows` (H1-H5).
+- `v632_gh_rlimit`: the lift tests skip at a hard `RLIMIT_AS` of 1 GiB or less (#36 B5,
+  `harness.liftSkip`, `FLEET_TEST_HARD_AS` forces the value); the source check pins
+  `preexec_fn=lift if (not cmd or net) else None` (#34); the HTTP None relay test pins the
+  re-run text (#36 B1).
+- `v610_update_coder` 6.1.0 review 5: `g` passes `net` through.
+- `build_task_run`: the push prompt, classifier and relay tests read `push.py` (the classifier
+  fixtures run through `harness.pushOn`, a stub git); the 1959, caps and PATH prelude tests read
+  `push.py`; ARRAY_SITES drops the probe's `r.args` read. `v403_schema_types`: READS for
+  `prog:push`, no `pa` reads, no `pushProbe` args reads.
+- `v4_s3` 1985: the probe relays echo `push.py probe` args; the real-python classifier test runs
+  through `harness.pushOn`. `v4_s1`: 44 programs; the probe's wrong-program gate line names
+  `push`. `v4_s5` AC-1981-1: the push's hook env is the JSON argument. Harness: push and probe
+  relay keys, `pushArgsOf`, the hook-env check of `infra:push`.
+- Version pins 7.3.0 -> 7.4.0 (`harness`, `v4_s1`, `v4_s3`, `v5_roles`, `v600_s3`,
+  `build_task_run`, `v403_schema_types`, `v622_fixes`).
+- `v5010_prompt_snapshot` pins: the push and probe prompts and the hook stop text.
+
+### Tests changed on purpose (car 2)
+
+- New: `v740_db_prefix` (T1), `v740_hook_git` (G1-G3), `v740_hook_dir_allow` (F1-F3, Max ruling
+  L2017), `v740_hasher_hook_refs` (K1-K3), `v740_drift_reset` (R1), `v740_hash_diff_allow` (W1, W2).
+- `v503_db_prefix`: BAD adds `"iam_db_\n"`, GOOD adds `f_` and `fl_` (#11).
+- `v504_pycache` (#15, Max ruling L2017): the selected-file case (~:125) now expects no refusal;
+  the dirty-mode "frozen untracked test" case (~:250) moved to `v740_hook_dir_allow` as accepted.
+  The other v504 refusals (non-selected, ignored, untracked, hidden edits, symlinks, gitlinks) are
+  unchanged.
+- `v507_digest_relays` (#22): the hash-diff args carry `--allow` and the round's test files; the
+  past-the-cap writer halts read "more than 50 changed files outside the round's test files"; the
+  SF2 writer halt names both unavailable maps; scripted relays add `allowed` and `allowed_changed`.
+- `build_task_run`: the verify_since diff pin has `--ignore-submodules=none` (#13); ARRAY_SITES
+  maps `r.allowed @ expandKeys`. `v740_hook_dir_allow` F3 uses a plain `helpers.py` under the
+  hook dir (a `conftest.py` edit is now refused at format-code). `v403_schema_types`: READS for `prog:hash_diff:allowed` and
+  `allowed_changed`. Harness: `hashDiffOut` reads `--allow` and prints the two new keys.
+
+### Tests changed on purpose (car 3)
+
+- New: `v740_readme` (D1-D4), `v740_session_project` (S1-S3), `v740_brief_marker` (M1-M3),
+  `v740_policy_init` (L1), `v740_submodule_gates` (X1), `v740_logpath_sweep` (X2).
+- S2 deviates from the AC wording: with no args.project intake never checks the session project
+  (`yaadgaarScope` runs only with args.project), so S2 pins the intake stop with args.project and
+  no proof, and the write-back reason with neither.
+- Harness: the role list comment says eleven (#28). No existing test changed.
+
+### Tests changed on purpose (car 4)
+
+- New: `v740_r4_gaps` (N1-N5 and N1 `--if-present` on the real program and in the workflow, and the non-weakening
+  checks: the bc8998b `testCmdRuns`/`cmdRuns` and the 6.1.0 make_paths rule run beside the new
+  code; every old refusal stays, and an old missing entry stays missing), `v740_npm_walkup` (J1).
+- `v740_session_project` S1 (Y1): the repo root `/r` moved from the warning case to the no-warning
+  case; a second worktree path (`/r/.claude/worktrees/step3`) and `/r/.claude` were added.
+- `v610_update_coder` 6.1.0 review S2: `scripts/test.sh <paths>` with no `sh:` entry now refuses
+  every file (fail closed); the old "false" case passes `{"sh:scripts/test.sh": []}`.
+- `v403_schema_types`: READS for `sp array` and `b string-re` in `testCmdRuns` and
+  `makePaths[st] array` in `cmdRuns`.
+- Harness: an unscripted hook-surface read gives `[]` for a `sh:<path>` target, and at plan time
+  (`infra:hook-surface:plan*`) for an `npm:<name>` target. Other labels keep `{}` (the R4
+  refuse-all tests depend on it).
+
+### Tests changed on purpose (car 5)
+
+- New: `v740_if_present_npx` (Z2 bypass forms, exact forms, and the non-weakening check against
+  the frozen aaed9b1 skip; Z1 on the real program and in the workflow), `v740_pr_test_block`
+  (V1-V7, with the frozen shipped `ownClaims` beside the new one), `v740_error_routing` (E1 with
+  its mutation, E2 on the real program and in the workflow), `v740_callers_followups` (C1, C2),
+  `v740_scratch_copy_guard` (U1, U2, and a corpus where the JS check and `scratch_copy.py` agree),
+  `v740_state_chunks_resume` (U3 with its mutation).
+- `v710_block_text` AC3 ex3 and the AC3 property: errors null reads "errors not reported" (#64
+  item 5).
+- `v720_callers_summary_cap` AC10: one symbol over the cap names 16384 bytes (#68 item 2).
+- `v720_callers_read_budget` AC11: the auto finding ends with the callers file (#68 item 3).
+- `v730_review_scratch_guard` M1: `["sh", "probe.sh", "-c"]` moved from "runs" to "refused" (#70
+  item 1, a shell's whole argv).
+- Harness: at plan time an unscripted hook-surface read gives `[]` for `pkg:package.json` too.
+
+### Tests changed on purpose (car 6)
+
+- New: `v740_ordinal_claims` (with the frozen 1565a52 claim patterns), `v740_uv_env` (U1, U2 on
+  real uv), `v740_pyproject_route` (P1-P5), `v740_role_text`, `v740_plan_sweep` (Z1-Z4),
+  `v740_test_conflict` (Y1-Y3, Q4 both modes in one run and on a resume at `pr_open`, the real-git
+  recipe).
+- `v740_pr_test_block` V1: "test 2 of AC3" and "Step 2 tests the parser." are no claims now
+  (#64 item 2).
+- `v610_update_coder`: new Y4 (a u1 plan-target finding stops; no coder round, no re-plan) and an
+  update-round coder test conflict (stops at `role`, no code judge r2).
+- `v5010_prompt_snapshot`: the three build pins move (role shas, uv build vars, the new schema
+  keys); calls unchanged; probe unchanged.
+- `v403_schema_types` READS and `build_task_run` ARRAY_SITES: the plan-sweep reads in
+  `planAndAudit` and `testConflictOf`.
+- Harness: `BUILD_ROWS` mirrors the two uv rows; `commitStepStub` echoes `parent`; an unscripted
+  `role:gate-change-nonweakening-sweep:plan*` measures one unit and returns `non_weakening`
+  (existing fixtures whose caller map names `chart/guards.py` now trigger the plan sweep).
+- `v740_test_conflict` Q4 fixtures carry the freeze and post-coder maps forward (the harness
+  adds run-state refs to a stub's own git map on its first call only).
+- `v740_error_routing` E2 (pr_state merge, branch delete raises): the spawned `PATH` is the stub
+  dir only, no `/usr/bin:/bin`. A runner with a real `gh` in `/usr/bin` answered the delete call
+  and `error` stayed null; the fake `gh` needs no other program.
+
 ## [7.3.0] - 2026-11-17
 
 Fleet 7.3.0: the combined workflow-reliability batch (plan
@@ -353,8 +858,9 @@ missed the program digest, and its digest retry missed it the same way, so the r
 - The workflow's disk path: a symbol whose mapped set hashes to the summary needs no read; a
   symbol whose only gap is its doc or lock hits reads part `auto`; any other reads part `all` and
   gets the usual findings. Every relay is digest- and args-checked (also after the args retry);
-  every joined list is checked against the summary count and hash; the part-`all` auto hits are
-  derived by the script's own doc and lock list and checked against `auto_count`.
+  the auto part is checked by count; completeness comes from the union hash and the per-entry
+  re-check (7.4.0 #68 wording fix); the part-`all` auto hits are derived by the script's own doc
+  and lock list and checked against `auto_count`.
 - Read budget: at most 4 read pages per caller check (`CALLER_READ_BUDGET`). A list over it is
   one plan finding per symbol, or an R5 refusal at the update merge.
 
@@ -604,7 +1110,8 @@ follow-ups.
 
 - Update the plugin (`/plugin`, update `fleet` to 6.3.2), then start a NEW session: the workflow
   looks for its own `fleet/6.3.2/scripts` dir.
-- A 6.3.1 plan ref and run-state stay valid: nothing sealed changed.
+- A 6.3.1 plan ref and run-state stay valid: the sealed preflight record differs, and resume only
+  logs that. (Reworded in 7.4.0, #36 B7.)
 
 ### Fixed
 

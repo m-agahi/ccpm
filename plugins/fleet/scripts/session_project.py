@@ -41,6 +41,15 @@ except Exception:
 # the repository root, insteadOf applied to a fixed point, scheme and host
 # stripped, trailing slashes, one .git and trailing slashes stripped,
 # lowercased. No args. project is null when nothing resolves.
+# 7.4.0 (#23): where this program differs from the client's derive (read in
+# yadgar-client c2200bb, src/project.rs):
+# - insteadOf rewrites stop after 64 passes; the client stops after 16;
+# - .yadgar/project-id is read up to 4096 bytes as strict UTF-8, and a file
+#   that cannot be read or decoded ends the program (project null); the
+#   client reads the whole file and, on a read error, falls through to the
+#   origin remote;
+# - every git call has a 60 s timeout and core.fsmonitor off; the client's
+#   unhardened calls have neither.
 import hashlib, json, os, subprocess, sys
 cwd = os.path.realpath(os.getcwd())
 os.environ['GIT_TERMINAL_PROMPT'] = '0'

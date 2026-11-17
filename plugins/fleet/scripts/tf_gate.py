@@ -35,6 +35,10 @@ try:
 except Exception:
     _PROG = {'name': None, 'sha256': None}
 import hashlib, json, os, re, subprocess, sys
+def lift():
+    # 7.4.0 (#34, L2141): a git network call and its credential helper are not bound by this program's caps
+    for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
+        _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 wt, default, sha, url = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 os.chdir('/')
 import atexit, shutil, tempfile
@@ -109,7 +113,7 @@ def blob(rev, p):
 # repo lacks is fetched by its sha. Either failing refuses (fail closed).
 if not re.match(r'^[A-Za-z0-9._/-]+$', default) or default.startswith('-'):
     sys.exit('bad default branch name')
-lr = subprocess.run(G + ['ls-remote', '--exit-code', '--upload-pack=git-upload-pack', url, 'refs/heads/' + default], capture_output=True)
+lr = subprocess.run(G + ['ls-remote', '--exit-code', '--upload-pack=git-upload-pack', url, 'refs/heads/' + default], capture_output=True, preexec_fn=lift)
 if lr.returncode != 0:
     sys.exit('cannot read origin/' + default + ': ' + lr.stderr.decode('utf-8', 'replace'))
 rows = [l.split('\t') for l in lr.stdout.decode('utf-8', 'replace').splitlines() if l.strip()]
@@ -120,12 +124,13 @@ have = lambda: subprocess.run(G + ['cat-file', '-e', remote + '^{commit}'], capt
 if not have():
     # a full fetch of that one sha into the scratch repo (the repo's own
     # commits count as haves): --depth would leave a shallow history there
-    fr = subprocess.run(G + ['fetch', '--no-tags', '--no-write-fetch-head', '--upload-pack=git-upload-pack', url, remote], capture_output=True)
+    fr = subprocess.run(G + ['fetch', '--no-tags', '--no-write-fetch-head', '--upload-pack=git-upload-pack', url, remote], capture_output=True, preexec_fn=lift)
     if fr.returncode != 0 or not have():
         sys.exit('cannot fetch origin/' + default + ' at ' + remote + ': ' + fr.stderr.decode('utf-8', 'replace'))
 base = run('merge-base', remote, sha).decode().strip()
 rng = base + '..' + sha
-paths = [x.decode('utf-8', 'replace') for x in run('diff', '--name-only', '-z', '--no-renames', rng, '--').split(b'\0') if x]
+# 7.4.0 (X1): the user's diff.ignoreSubmodules cannot hide a gitlink bump from the gate
+paths = [x.decode('utf-8', 'replace') for x in run('diff', '--ignore-submodules=none', '--name-only', '-z', '--no-renames', rng, '--').split(b'\0') if x]
 iac_files = sorted(p for p in paths if iac(p))
 touched = bool(iac_files)
 # problems stop the run at iac; hints only inform Max at iac-push and never
@@ -133,7 +138,7 @@ touched = bool(iac_files)
 problems, hints = [], []
 # symlinks: a link at an IaC path, or one whose target lies in a provider
 # plugin dir, is refused (modes from git diff --raw)
-raw = run('diff', '--raw', '-z', '--no-renames', rng, '--').split(b'\0')
+raw = run('diff', '--ignore-submodules=none', '--raw', '-z', '--no-renames', rng, '--').split(b'\0')
 i = 0
 while i + 1 < len(raw):
     meta, p = raw[i].decode('utf-8', 'replace'), raw[i + 1].decode('utf-8', 'replace')
@@ -262,7 +267,7 @@ if touched:
             if required_providers(nd) != required_providers(od):
                 hints.append('provider source or version change in ' + p)
             continue
-        diff = run('diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', rng, '--', p)
+        diff = run('diff', '--ignore-submodules=none', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--no-textconv', rng, '--', p)
         if len(diff) > (8 << 20):
             hints.append('diff of ' + p + ' is too large to check')
             continue

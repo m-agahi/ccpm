@@ -55,11 +55,19 @@ if tip is not None:
     if run('rev-parse', '--verify', tip + '^{commit}').decode().strip() != tip:
         sys.exit('base tip is not a commit')
     base = tip
-diff = names(run('diff', '--name-only', '-z', '--no-renames', base + '...' + sha, '--'))
+diff = names(run('diff', '--ignore-submodules=none', '--name-only', '-z', '--no-renames', base + '...' + sha, '--'))
 commits = []
 for c in run('rev-list', base + '..' + sha).decode().split():
-    files = names(run('diff-tree', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c))
+    files = names(run('diff-tree', '--ignore-submodules=none', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c))
     commits.append({'sha': c, 'files': sorted(set(files))})
+# 7.4.0 review A-m2: a submodule ignore key hides a gitlink change from git's diffs; the PR never adds or changes one
+if '.gitmodules' in diff:
+    def ign(rev):
+        r = subprocess.run(G + ['config', '--blob', rev + ':.gitmodules', '--get-regexp', r'^submodule\..*\.ignore$'], capture_output=True)
+        return sorted(r.stdout.decode('utf-8', 'replace').splitlines()) if r.returncode == 0 else []
+    mb = run('merge-base', base, sha).decode().strip()
+    if ign(mb) != ign(sha):
+        sys.exit('the PR adds or changes a submodule ignore key in .gitmodules (it hides gitlink changes from the gates): ' + ', '.join(ign(sha))[:300])
 out = {'diff': diff, 'commits': commits}
 if tip is not None:
     out['base'] = tip

@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { PB,
@@ -34,6 +34,8 @@ import { PB,
   FP_PRE,
   scriptsProbe,
   SCRIPTS_DIR,
+  pushArgsOf,
+  pushOn,
 } from "./harness.mjs";
 
 // ---------------------------------------------------------------- 1990 tiers
@@ -357,12 +359,13 @@ test("4.0.0 1988 AC-1988-3: only the exact path with the exact bytes of this wor
 
 // ---------------------------------------------------------------- 1985 push-access probe
 
-const probe = (over) => Object.assign({ status: "ok", reason: "probed", access: "ok", result: "ok", exit_code: 0, auth_line: null, args: ["/tmp/p.out", "0"] }, over);
+// 7.4.0 (#9): push.py probe echoes the args the prompt sent it
+const probe = (over) => (prompt) => Object.assign({ status: "ok", reason: "probed", access: "ok", result: "ok", exit_code: 0, auth_line: null, args: pushArgsOf(prompt) }, over);
 
 test("4.0.0 1985 AC-1985-1: an auth line from the dry run stops plan mode before the planner", async () => {
   const s = happy();
   const line = "ERROR: Permission to m-agahi/yadgar.git denied to quinyx-max.";
-  s["infra:push-probe"] = probe({ access: "denied", result: "denied", exit_code: 128, auth_line: line, args: ["/tmp/p.out", "128"] });
+  s["infra:push-probe"] = probe({ access: "denied", result: "denied", exit_code: 128, auth_line: line });
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.ok(out.result.reason.includes(line), out.result.reason);
@@ -372,7 +375,7 @@ test("4.0.0 1985 AC-1985-1: an auth line from the dry run stops plan mode before
 test("4.0.0 1985 AC-1985-2: hook_rejected, non_ff and fetch_first are access ok; the plan goes on", async () => {
   for (const [result, code] of [["hook_rejected", 1], ["non_ff", 1], ["fetch_first", 1], ["ok", 0]]) {
     const s = happy();
-    s["infra:push-probe"] = probe({ result, exit_code: code, args: ["/tmp/p.out", String(code)] });
+    s["infra:push-probe"] = probe({ result, exit_code: code });
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "awaiting_confirmation", result + ": " + out.result.reason);
     assert.ok(out.result.gate_log.some((g) => g.includes("push access ok: dry run " + result)), result);
@@ -380,7 +383,7 @@ test("4.0.0 1985 AC-1985-2: hook_rejected, non_ff and fetch_first are access ok;
   // a timeout or an unknown result logs "push access unknown" and goes on
   for (const [result, code] of [["timeout", 124], ["unknown", 2]]) {
     const s = happy();
-    s["infra:push-probe"] = probe({ access: "unknown", result, exit_code: code, args: ["/tmp/p.out", String(code)] });
+    s["infra:push-probe"] = probe({ access: "unknown", result, exit_code: code });
     const out = await runOne(s, ARGS);
     assert.equal(out.result.status, "awaiting_confirmation", result + ": " + out.result.reason);
     assert.ok(out.result.gate_log.some((g) => g.startsWith("push access unknown")), result);
@@ -390,9 +393,9 @@ test("4.0.0 1985 AC-1985-2: hook_rejected, non_ff and fetch_first are access ok;
 test("4.0.0 1985: a probe relay that is not the program's own never halts and never passes an access verdict", async () => {
   const cases = [
     // a forged "denied" whose digest does not match: ignored, never a halt
-    () => Object.assign(probe({ access: "denied", result: "denied", exit_code: 128, auth_line: "x", args: ["/tmp/p.out", "128"] }), { digest: "0".repeat(64) }),
-    // args that are not the exit code it printed
-    () => probe({ args: ["/tmp/p.out", "1"] }),
+    (prompt) => Object.assign(probe({ access: "denied", result: "denied", exit_code: 128, auth_line: "x" })(prompt), { digest: "0".repeat(64) }),
+    // 7.4.0: args that are not the ones the workflow sent
+    probe({ args: ["probe", "/elsewhere", "B0", "fleet/y42-add-thing"] }),
     () => null,
     () => ({ status: "failed", reason: "no git" }),
   ];
@@ -407,11 +410,11 @@ test("4.0.0 1985: a probe relay that is not the program's own never halts and ne
   // a wrong program self-hash is no access verdict either
   const s = happy();
   s.__mutate = { label: "infra:push-probe", fn: (r, prompt) => {
-    r.program = { name: "push_probe", sha256: "0".repeat(64) };
+    r.program = { name: "push", sha256: "0".repeat(64) };
     return redigest("infra:push-probe", r, prompt);
   } };
   const out = await runOne(s, ARGS);
-  assert.ok(out.result.gate_log.some((g) => g.startsWith("push access unknown") && g.includes("did not run the shipped program push_probe")), out.result.gate_log.join("\n"));
+  assert.ok(out.result.gate_log.some((g) => g.startsWith("push access unknown") && g.includes("did not run the shipped program push ")), out.result.gate_log.join("\n"));
 });
 
 test("4.0.0 1985 AC-1985-3: the probe is a dry run with hooks, right after its own PATH re-check, after the workspace and before the planner", async () => {
@@ -419,10 +422,11 @@ test("4.0.0 1985 AC-1985-3: the probe is a dry run with hooks, right after its o
   noUnscripted(out);
   const c = call(out, "infra:push-probe");
   assert.match(c.prompt, /--dry-run/);
-  assert.match(c.prompt, /push --dry-run --porcelain origin 'B0:refs\/heads\/fleet\/y42-add-thing'/);
+  // 7.4.0 (#9): push.py probe runs git push --dry-run --porcelain origin <base>:refs/heads/<branch>
+  assert.match(c.prompt, /push\.py' 'probe' '[^']+' 'B0' 'fleet\/y42-add-thing'/);
   assert.doesNotMatch(c.prompt, /--no-verify/);
   assert.doesNotMatch(c.prompt, /hooksPath/);
-  assert.match(c.prompt, /push_probe\.py/);
+  assert.ok(readFileSync(join(SCRIPTS_SRC, "push.py"), "utf8").includes("'push', '--dry-run', '--porcelain', 'origin', args[2] + ':refs/heads/' + args[3]"));
   assert.equal(c.opts.model, "sonnet");
   const L = out.labels;
   const at = L.indexOf("infra:push-probe");
@@ -447,18 +451,15 @@ test("4.0.0 1985 AC-1985-4: build mode dispatches no probe", async () => {
   assert.ok(!out.build.labels.some((l) => /push-probe/.test(l)), out.build.labels.join(", "));
 });
 
-test("4.0.0 1985 (real python): push_probe.py classifies the dry-run output", { skip: !HAVE_PY }, () => {
+// 7.4.0 (#9, changed on purpose): push.py probe classifies (a stub git prints the dry-run output)
+test("4.0.0 1985 (real python): push_probe.py classifies the dry-run output (7.4.0: push.py probe)", { skip: !HAVE_PY }, () => {
   const dir = mkdtempSync(join(tmpdir(), "fleet-probe-"));
   try {
     const go = (text, code) => {
-      const f = join(dir, "out");
-      writeFileSync(f, text);
-      const r = spawnSync("python3", ["-I", join(SCRIPTS_SRC, "push_probe.py"), f, String(code)], { encoding: "utf8" });
-      assert.equal(r.status, 0, r.stderr);
-      const o = JSON.parse(r.stdout);
+      const { out: o, args } = pushOn(code, text, "probe");
       const { digest, ...rest } = o;
       assert.equal(digest, sha256(canon(rest)));
-      assert.deepEqual(o.args, [f, String(code)]);
+      assert.deepEqual(o.args, args);
       return o;
     };
     const to = "To github.com:o/r.git\n";
@@ -483,7 +484,7 @@ test("4.0.0 1985 (real python): push_probe.py classifies the dry-run output", { 
     // a hook line with a fatal: is not a clean hook verdict
     o = go("fatal: something\nerror: failed to push some refs to 'x'\n", 1);
     assert.deepEqual([o.access, o.result], ["unknown", "unknown"]);
-    assert.equal(o.program.name, "push_probe");
+    assert.equal(o.program.name, "push");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -557,7 +558,7 @@ test("5.0.0 R1 (was 4.0.0 1990 seal): plan mode seals history.preflight {fleet_v
   const ref = JSON.parse(s.__store[out.result.plan_ref.plan_commit]);
   const p = ref.history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "7.3.0");
+  assert.equal(p.fleet_version, "7.4.0");
   assert.deepEqual(Object.keys(p.role_sha256).sort(), ROLE_NAMES.slice().sort());
   const text = JSON.stringify(ref);
   assert.ok(!text.includes("scripts_dir") && !text.includes("path_check") && !text.includes("/fleet/5.0.8/scripts"), "no scripts dir or PATH check sealed");
@@ -618,7 +619,7 @@ test("5.0.0 R1 (was 4.0.0 1990 page bumped): a role file that is not its pin at 
   const b = await runOne(s, BUILD(plan.result.plan_ref));
   assert.equal(b.result.status, "needs_human");
   assert.equal(b.result.stop_gate, "contract");
-  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 7\.3\.0/);
+  assert.match(b.result.reason, /fleet-test-judge\.md hashes e{64}, not [0-9a-f]{64}.*install fleet 7\.4\.0/);
   assert.deepEqual(b.labels, ["preflight"]);
   assert.ok(!b.result.reason.includes("fresh_preflight"));
 });
@@ -658,7 +659,7 @@ test("4.0.0 1990: a build-mode re-plan seals no preflight record (the next build
     "infra:replan-worktree": { status: "ok", reason: "ok", head: "abc1234def0" },
     "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
     "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
-    "infra:replan-reset": { status: "ok", reason: "reset", head: "b0de1234567", superseded_head: "5555555" },
+    "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: "b0de1234567", superseded_head: inputsOf(p).expected_head }), // 7.4.0 review A-M2: the script's expected head
   });
   s["role:scope-and-plan:replan"] = s["role:scope-and-plan"];
   s["infra:commit-plan:replan"] = commitStub(s.__store, PC2, "d".repeat(64));

@@ -245,6 +245,18 @@ def norm(rel):
 
 LAUNCHERS = {'uv', 'uvx', 'poetry', 'pipx', 'npx', 'pnpm', 'yarn', 'npm', 'hatch', 'pdm'}
 LAUNCHER_WORDS = {'run', 'exec', '--'}
+# 7.4.0 (#20, Max ruling Q1 (a)): the subcommands a non-lenient hook may name right after its
+# PATH command; any other plain token stays an unresolvable path. Read-only subcommands only
+# (security review): none runs repo code (build.rs, proc macros, tests, go generate inputs), so
+# the hook's inputs are data. A build, check, lint or test subcommand stays refused.
+SUBCOMMANDS = {'cargo': {'metadata', 'tree'},
+               'go': {'mod'},
+               'git': {'diff', 'status', 'log', 'ls-files'}}
+# the word after `go mod`: reads only (not tidy, download, edit, init, vendor)
+SUBCOMMANDS2 = {('go', 'mod'): {'verify', 'graph'}}
+# the repo files that choose which binary a table tool runs: frozen with the pass
+# (a rustc-wrapper in .cargo/config runs on cargo metadata; a rust-toolchain path toolchain)
+TOOL_CONFIG = {'cargo': ('.cargo/config', '.cargo/config.toml', 'rust-toolchain', 'rust-toolchain.toml')}
 
 def root_json(name):
     try:
@@ -468,6 +480,11 @@ def hook_refs():
                 i += 2
                 continue
             if t.startswith('-'):
+                # 7.4.0 (#16 a): the repo file of a --opt=value token is frozen too
+                if '=' in t:
+                    f = repo_file(t.split('=', 1)[1])
+                    if f:
+                        refs.add(f)
                 i += 1
                 continue
             f = repo_file(t)
@@ -481,6 +498,16 @@ def hook_refs():
                 # its directory arguments are data for the tool, not frozen.
                 dirs.add(repo_dir(t))
             elif lenient or ('/' not in t and shutil.which(t)):
+                pass
+            elif i != cmd_at and re.fullmatch(r'[0-9]+', t):
+                # 7.4.0 (#20, Max ruling Q1 (a)): a number is an argument
+                pass
+            elif i == cmd_at + 1 and cmd_at >= 0 and t in SUBCOMMANDS.get(toks[cmd_at], ()) and not repo_file(toks[cmd_at]) and shutil.which(toks[cmd_at]):
+                # 7.4.0 (#20): a known subcommand right after its PATH command (cargo metadata),
+                # never after a repo script of that name; the tool's exec config is frozen
+                # (frozen when absent too: file_hash gives MISSING, so a new one is a change)
+                refs.update(TOOL_CONFIG.get(toks[cmd_at], ()))
+            elif i == cmd_at + 2 and cmd_at >= 0 and t in SUBCOMMANDS2.get((toks[cmd_at], toks[cmd_at + 1]), ()) and not repo_file(toks[cmd_at]) and shutil.which(toks[cmd_at]):
                 pass
             else:
                 bad.append('unresolvable local hook ' + hid + ': ' + t)
@@ -574,7 +601,7 @@ def hook_files(gitmap):
 tree = work_tree()
 out = {'fingerprint': {'head': git('rev-parse', 'HEAD').decode().strip(), 'tree': tree}}
 if base_tree:
-    out['changed'] = sorted(set(f.decode() for f in git('diff', '--name-only', '-z', '--no-renames', base_tree, tree).split(b'\x00') if f))
+    out['changed'] = sorted(set(f.decode() for f in git('diff', '--ignore-submodules=none', '--name-only', '-z', '--no-renames', base_tree, tree).split(b'\x00') if f))
 
 # one map per key kind, so a real file name can never mask a synthetic key
 files, sections, gitmap, symlinks = {}, {}, {}, {}
@@ -610,6 +637,62 @@ for rel in hook_frozen:
 if hook_launcher:
     sections.update(launcher_tables())
 SUSPICIOUS.extend(hook_bad)
+# 7.4.0 review A-M3 (security follow-up: an allowlist): a pyproject.toml new in this run (not in
+# HEAD; a test writer may create one for its criterion) may set only these pytest keys and addopts
+# tokens; anything else (a plugin, a deselect or filter, -o/-c/--rootdir/--confcutdir/--noconftest,
+# --co, --pyargs, --lf, -W, an abbreviated long option, an unknown key or subtable) stops the freeze.
+# testpaths, python_files and norecursedirs must keep every frozen test file collected
+PYTEST_KEYS = {'addopts', 'testpaths', 'python_files', 'norecursedirs', 'markers', 'minversion', 'xfail_strict'}
+LONG_OK = re.compile(r'^--(strict-markers|strict-config|tb=(auto|long|short|line|native|no)|maxfail=[0-9]+|durations=[0-9]+|color=(yes|no|auto))$')
+def short_ok(x):
+    # a cluster read char by char: q, v, x; r takes the rest as report chars
+    if not re.match(r'^-[^-]', x):
+        return False
+    c = x[1:]
+    i = c.find('r')
+    if i >= 0:
+        c, rest = c[:i], c[i + 1:]
+        if not re.match(r'^[fEsxXpPaANw]+$', rest):
+            return False
+    return all(ch in 'qvx' for ch in c)
+def strs(v):
+    return [v] if isinstance(v, str) else v if isinstance(v, list) and all(isinstance(x, str) for x in v) else None
+def narrowing(rel, sec):
+    out = []
+    d = os.path.dirname(rel)
+    io = sec.get('ini_options')
+    tests = [f for f in explicit if f.endswith('.py') and not os.path.relpath(f, d or '.').startswith('..')]
+    out += ['[tool.pytest.' + k + ']' for k, v in sec.items() if isinstance(v, dict) and k != 'ini_options']
+    for t in (sec, io if isinstance(io, dict) else {}):
+        for k, v in t.items():
+            if isinstance(v, dict):
+                continue
+            if k not in PYTEST_KEYS:
+                out.append(k)
+                continue
+            if k == 'addopts':
+                try:
+                    toks = shlex.split(v) if isinstance(v, str) else strs(v)
+                except ValueError:
+                    toks = None
+                if toks is None:
+                    out.append('addopts (unreadable)')
+                else:
+                    out += ['addopts ' + x for x in toks if not (LONG_OK.match(x) or short_ok(x))]
+            elif k in ('testpaths', 'python_files', 'norecursedirs'):
+                pats = strs(v)
+                if pats is None:
+                    out.append(k + ' (not strings)')
+                    continue
+                for f in tests:
+                    r = os.path.relpath(f, d or '.')
+                    roots = [os.path.normpath(x) for x in pats]
+                    if (k == 'testpaths' and not any(x == '.' or r == x or r.startswith(x + '/') for x in roots)
+                            or k == 'python_files' and not any(fnmatch.fnmatch(os.path.basename(r), x) for x in pats)
+                            or k == 'norecursedirs' and any(fnmatch.fnmatch(seg, x) for seg in r.split('/')[:-1] for x in pats)):
+                        out.append(k + ' leaves out ' + f)
+    return out
+
 listed = git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\x00')
 for rel in sorted(set(f.decode() for f in listed if f)):
     base = os.path.basename(rel)
@@ -621,6 +704,8 @@ for rel in sorted(set(f.decode() for f in listed if f)):
                 data = tomllib.load(fh)
             sec = data.get('tool', {}).get('pytest')
             sections[rel + '#tool.pytest'] = 'ABSENT' if sec is None else sha(canon(sec))
+            if isinstance(sec, dict) and subprocess.run(GIT + ['cat-file', '-e', 'HEAD:' + rel], capture_output=True).returncode != 0:
+                SUSPICIOUS.extend('runner config narrows the tests in a new ' + rel + ': ' + w for w in narrowing(rel, sec))
         except FileNotFoundError:
             sections[rel + '#tool.pytest'] = 'MISSING'
         except Exception:

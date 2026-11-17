@@ -27,7 +27,8 @@ test("7.2.0 AC11: auto hits over the budget (6 pages) read nothing and give one 
   assert.deepEqual(reads(out), []);
   const f = findingsOf(out);
   for (const x of names)
-    assert.ok(f.includes(x + ": 84 doc or lock hit(s) left to auto dont_care are over the caller read budget (4 reads of 50 entries); map them in changed_symbols (dont_care with a reason)"), f.join("\n"));
+    // 7.4.0 #68 item 3: the finding names the scratch file
+    assert.ok(f.some((y) => y.startsWith(x + ": 84 doc or lock hit(s) left to auto dont_care are over the caller read budget (4 reads of 50 entries); map them in changed_symbols (dont_care with a reason); the hit list is in /")), f.join("\n"));
 });
 
 test("7.2.0 AC11: a part-all list over the budget reads nothing and gives one finding per symbol", async () => {

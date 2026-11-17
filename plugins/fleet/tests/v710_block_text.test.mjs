@@ -46,9 +46,10 @@ test("AC3 ex2: env entries prefix the command, sorted by key; <paths> dropped", 
   assert.equal(line(out, 2), "Command: `CI=1 TZ=UTC pytest -q`");
 });
 
-test("AC3 ex3: errors null counts as 0; failures count in the total", async () => {
+// 7.4.0 #64 item 5: errors null is "errors not reported" (was "0 errors"), not added to the total
+test("AC3 ex3: errors null is not reported; failures count in the total", async () => {
   const out = await build(NPM, { exit_code: 1, passed: 133, failed: 2, errors: null });
-  assert.equal(line(out, 1), "**Tests (measured by the fleet):** 133 passed, 2 failed, 0 errors, 135 total.");
+  assert.equal(line(out, 1), "**Tests (measured by the fleet):** 133 passed, 2 failed, errors not reported, 135 total.");
 });
 
 test("AC3 ex4: all zero is a valid count", async () => {
@@ -96,6 +97,6 @@ test("AC3 ex10: JUDGE_SUITE types passed as integer or null, optional", () => {
 test("AC3 property: any suite_result value gives one of the two line-2 forms", async () => {
   for (const suite of [{}, { passed: 3, failed: 1 }, { passed: 3, failed: 1, errors: 2 }, { passed: 3, failed: null }]) {
     const out = await build(NPM, suite);
-    assert.match(line(out, 1), /^\*\*Tests \(measured by the fleet\):\*\* (\d+ passed, \d+ failed, \d+ errors, \d+ total\.|not reported \(the code judge's suite run gave no counts\)\.)$/);
+    assert.match(line(out, 1), /^\*\*Tests \(measured by the fleet\):\*\* (\d+ passed, \d+ failed, (\d+ errors|errors not reported), \d+ total\.|not reported \(the code judge's suite run gave no counts\)\.)$/);
   }
 });

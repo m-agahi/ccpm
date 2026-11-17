@@ -52,6 +52,10 @@ import hashlib, json, os, re, sys
 # changed), sorted; total (null on error); counts: {map: [entries a, b]};
 # resolved: {map: [full sha256 a, b]} (the workflow checks them against the
 # summaries it holds); error; args}.
+# 7.4.0 (#22): optional `--allow <JSON list of "<map>:<key>">` right after <scratch> (a writer
+# round's own test files). `changed` and `total` then cover only the keys outside the list;
+# `allowed` (the first CAP rows) and `allowed_changed` (their count) cover the listed keys.
+# Without --allow, allowed is [] and allowed_changed 0.
 SETTINGS_LOCAL = '.claude/settings.local.json'
 MAPS = ('files', 'sections', 'git', 'symlinks', 'ignored')
 CAP = 50
@@ -99,27 +103,39 @@ def load(m, path, hexname):
         d.pop(SETTINGS_LOCAL, None)
     return d
 
-if len(args) < 4 or (len(args) - 1) % 3 or len(args) > 1 + 3 * len(MAPS) or not os.path.isabs(args[0]):
-    sys.exit('need <absolute scratch> and 1 to 5 triples <map> <old> <new>, got ' + str(len(args)) + ' arguments')
-scratch = args[0]
+allow = set()
+rest = args
+if len(args) > 2 and args[1] == '--allow':
+    try:
+        lst = json.loads(args[2])
+    except ValueError:
+        sys.exit('--allow takes a JSON list of "<map>:<key>" strings')
+    if not isinstance(lst, list) or not all(isinstance(x, str) and x.partition(':')[0] in MAPS and x.partition(':')[2] for x in lst):
+        sys.exit('--allow takes a JSON list of "<map>:<key>" strings, each map one of ' + ', '.join(MAPS))
+    allow = set(tuple(x.split(':', 1)) for x in lst)
+    rest = args[:1] + args[3:]
+if len(rest) < 4 or (len(rest) - 1) % 3 or len(rest) > 1 + 3 * len(MAPS) or not os.path.isabs(rest[0]):
+    sys.exit('need <absolute scratch>, optionally --allow <list>, and 1 to 5 triples <map> <old> <new>, got ' + str(len(args)) + ' arguments')
+scratch = rest[0]
 triples, seen = [], set()
-for i in range(1, len(args), 3):
-    m = args[i]
+for i in range(1, len(rest), 3):
+    m = rest[i]
     if m not in MAPS or m in seen:
         sys.exit('unknown or repeated map ' + repr(m))
     seen.add(m)
-    triples.append((m, resolve(scratch, m, args[i + 1]), resolve(scratch, m, args[i + 2])))
-out = {'changed': [], 'total': None, 'counts': {}, 'error': None,
+    triples.append((m, resolve(scratch, m, rest[i + 1]), resolve(scratch, m, rest[i + 2])))
+out = {'changed': [], 'total': None, 'allowed': [], 'allowed_changed': None, 'counts': {}, 'error': None,
        'resolved': dict((m, [a[1], b[1]]) for m, a, b in triples), 'args': args}
 try:
-    rows = []
+    rows, okrows = [], []
     for m, (pa, ha), (pb, hb) in triples:
         a, b = load(m, pa, ha), load(m, pb, hb)
         out['counts'][m] = [len(a), len(b)]
         for k in sorted(set(a) | set(b)):
             if a.get(k) != b.get(k):
-                rows.append([m, k, 'added' if k not in a else 'removed' if k not in b else 'changed'])
+                (okrows if (m, k) in allow else rows).append([m, k, 'added' if k not in a else 'removed' if k not in b else 'changed'])
     out['changed'], out['total'] = rows[:CAP], len(rows)
+    out['allowed'], out['allowed_changed'] = okrows[:CAP], len(okrows)
 except ValueError as e:
     out['error'] = str(e)
     out['counts'] = {}

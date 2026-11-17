@@ -57,7 +57,7 @@ if anc and head != pc:
         sha, *par = ids.split(' ')
         commits.append({'sha': sha, 'subject': subj, 'parents': [p for p in par if p]})
     touched = z(run('log', '-z', '--format=%H', pc + '..' + head, '--', ':(literal)' + plan_path).stdout)
-    changed = z(run('diff', '--name-only', '-z', '--no-renames', pc + '..' + head, '--').stdout)
+    changed = z(run('diff', '--ignore-submodules=none', '--name-only', '-z', '--no-renames', pc + '..' + head, '--').stdout)
 # 6.0.0 security review: any replacement ref fails verify
 rr = [x for x in run('for-each-ref', '--format=%(refname)', 'refs/replace/').stdout.decode().splitlines() if x]
 out = {'head': head, 'is_ancestor': anc, 'commits_since': commits, 'plan_touched': touched, 'changed_since': changed, 'replace_refs': rr, 'args': [wt, base, plan_path]}

@@ -124,6 +124,7 @@ LIST_ITEM = re.compile(r"^\s*[-*]\s+(.*)$")
 GWT = re.compile(r"\bGiven\b.+\bWhen\b.+\bThen\b", re.IGNORECASE | re.DOTALL)
 NONE_RE = re.compile(r"^\(?none\)?\.?\Z", re.IGNORECASE)
 TOKEN_STRIP = "`'\"()[]{}<>,;:!?*"
+TOKEN_SUFFIX = re.compile(r"(:\d+(:\d+)?|['\u2019]s)\Z")
 RUNNER_FILES = ("Makefile", "makefile", "GNUmakefile", "pyproject.toml", "setup.cfg", "tox.ini", "pytest.ini", "package.json", "Cargo.toml", "go.mod")
 
 
@@ -271,6 +272,8 @@ def check(text, repo_dir=None, allow_open=False):
             continue
         for tok in re.split(r"[\s()\[\]<>]+", l):
             t = tok.strip(TOKEN_STRIP).rstrip(".")
+            # 7.4.0 (#30 L3): a ":<line>[:<col>]" or a possessive "'s" suffix is not part of the path
+            t = TOKEN_SUFFIX.sub("", t).strip(TOKEN_STRIP).rstrip(".")
             if not t or "://" in t or ("/" not in t and "." not in t and t.lower() != "jenkinsfile"):
                 continue
             if is_iac_path(t):

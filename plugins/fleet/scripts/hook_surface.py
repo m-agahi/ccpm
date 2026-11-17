@@ -40,6 +40,11 @@ targets = [t for t in json.loads(targets_arg) if isinstance(t, str)]
 # argv[4] == 'no-yaml' (tests only): behave as if no Python had PyYAML
 no_yaml = len(sys.argv) > 4 and sys.argv[4] == 'no-yaml'
 os.chdir('/')
+# 7.4.0 (#13): no system config and no fsmonitor program in any git call (as hasher.py). The two
+# core.hooksPath reads keep the system config (HP_ENV): there it can only add hook surface.
+HP_ENV = dict(os.environ)
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+GIT = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
 LOADER = (
     "import json, site, sys\n"
     "import resource\n"
@@ -140,14 +145,14 @@ def values(raw):
         return names, None
     return None, 'no Python with PyYAML found'
 configs = []
-r = subprocess.run(['git', '-C', wt, 'show', rev + ':.pre-commit-config.yaml'], capture_output=True)
+r = subprocess.run(GIT + ['show', rev + ':.pre-commit-config.yaml'], capture_output=True)
 if r.returncode == 0:
     configs.append(r.stdout)
 p = os.path.join(wt, '.pre-commit-config.yaml')
 if os.path.isfile(p):
     with open(p, 'rb') as fh:
         configs.append(fh.read(262145))
-ls = subprocess.run(['git', '-C', wt, 'ls-files', '-z'], capture_output=True)
+ls = subprocess.run(GIT + ['ls-files', '-z'], capture_output=True)
 tracked = set(x.decode('utf-8', 'replace') for x in ls.stdout.split(b'\0') if x)
 SCRIPT_EXT = ('.py', '.sh', '.bash', '.zsh', '.js', '.mjs', '.cjs', '.ts', '.rb', '.pl')
 FILE_CAP = 1 << 20
@@ -199,7 +204,7 @@ for raw in configs:
 # CI files and hook-manager files (actions, husky, githooks, lefthook, the
 # hooksPath dir, package.json scripts): the repo scripts they name
 CI = re.compile(r'^(\.github/workflows/.*\.ya?ml|\.github/actions/.*|\.gitea/workflows/.*|\.forgejo/workflows/.*|\.gitlab-ci\.yml|\.gitlab/.*\.ya?ml|\.circleci/.*|\.woodpecker.*|Jenkinsfile|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml|\.buildkite/.*|\.husky/.*|\.githooks/.*|(.*/)?lefthook[^/]*\.ya?ml|\.lefthook.*|(.*/)?package\.json)$', re.I)
-hp_raw = subprocess.run(['git', '-C', wt, 'config', 'core.hooksPath'], capture_output=True).stdout.decode('utf-8', 'replace').strip()
+hp_raw = subprocess.run(GIT + ['config', 'core.hooksPath'], capture_output=True, env=HP_ENV).stdout.decode('utf-8', 'replace').strip()
 hp_rel = None
 if hp_raw:
     hp_abs = os.path.expanduser(hp_raw)
@@ -277,7 +282,7 @@ for q in level1[:MAX_FILES]:
         for m in re.findall(r'(?:^|[\s;&|(])(\./[^\s;&|)]+)', t, re.M):
             resolve([m, os.path.join(d, m)])
 # core.hooksPath inside the repo: the whole dir
-hp = subprocess.run(['git', '-C', wt, 'config', 'core.hooksPath'], capture_output=True).stdout.decode('utf-8', 'replace').strip()
+hp = subprocess.run(GIT + ['config', 'core.hooksPath'], capture_output=True, env=HP_ENV).stdout.decode('utf-8', 'replace').strip()
 if hp and not os.path.isabs(os.path.expanduser(hp)):
     q = norm(hp)
     if q:
@@ -286,11 +291,95 @@ elif hp:
     rel = os.path.relpath(os.path.realpath(os.path.expanduser(hp)), os.path.realpath(wt))
     if not rel.startswith('..'):
         surface.add(rel.rstrip('/') + '/')
+# 7.4.0 (#29): what a command text runs. N2: a tracked dir it names is listed as "dir/". N3: `-p mod`
+# and `-m mod` resolve like a hook command's -m. N5: a tracked shell script it names adds the
+# tracked files that script sources (one level, read at <rev>). Each only adds paths.
+DIRS = set()
+for x in tracked:
+    parts = x.split('/')
+    for k in range(1, len(parts)):
+        DIRS.add('/'.join(parts[:k]))
+def show(rel):
+    # the file at <rev>; None when absent or over FILE_CAP
+    r = subprocess.run(GIT + ['show', rev + ':' + rel], capture_output=True)
+    return r.stdout.decode('utf-8', 'replace') if r.returncode == 0 and len(r.stdout) <= FILE_CAP else None
+SOURCE_RE = re.compile(r'(?:^|[;&|(]|\bthen|\bdo|\belse)[ \t]*(?:source|\.)[ \t]+([^;&|\n]+)', re.M)
+def sourced(rel):
+    out = set()
+    t = show(rel)
+    if t is None or not (rel.endswith(('.sh', '.bash')) or re.match(r'#!\S*(?:/|env\s+)(?:ba|z|da|k)?sh\b', t)):
+        return out
+    d = os.path.dirname(rel)
+    for arg in SOURCE_RE.findall(t):
+        m = re.match(r'\$\([^)]*\)\S*|\S+', arg.replace('"', '').replace("'", '').strip())
+        w = m.group(0) if m else ''
+        # a path built from a variable ("$(dirname "$0")/lib.sh", "${BASH_SOURCE%/*}/lib.sh", "$DIR/lib.sh"): its tail
+        if '$' in w:
+            k = max(w.rfind('}'), w.rfind(')'))
+            w = (w[k + 1:] if k > w.rfind('$') else re.sub(r'^.*\$\w+', '', w)).lstrip('/')
+        for c in (w, os.path.join(d, w)):
+            q = norm(c) if w else None
+            if q and q in tracked:
+                out.add(q)
+    return out
+def paths_in(text):
+    out = set()
+    for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', text):
+        q = norm(tok)
+        if q and q in tracked:
+            out.add(q)
+        elif q and q in DIRS:
+            out.add(q + '/')
+    for mod in re.findall(r'(?:^|\s)-[mp][ \t]*([A-Za-z_][A-Za-z0-9_.]*)', text):
+        parts = mod.split('.')
+        cands = ['/'.join(parts[:k]) + '/__init__.py' for k in range(1, len(parts) + 1)] + ['/'.join(parts) + '.py', '/'.join(parts) + '/__main__.py']
+        out.update(c for c in cands if c in tracked)
+    for q in sorted(out):
+        if q in tracked:
+            out |= sourced(q)
+    return out
+# N1: a nested `npm|pnpm|yarn run X` (or `npm test`) runs scripts.X with its pre and post; None when
+# a nested name is not a string script or the chain is deeper than 3 (no entry: R4 refuses every file)
+# 7.4.0 review B-M1: a flag that takes a value (-w X, --workspace X, --prefix X, ...) is never the
+# script name (group 2); with it, or with --workspaces/-r/--recursive (group 1, NPM_OTHER), the run
+# is another package's: no entry. B-m8: `yarn test:unit` (and pnpm's bare form) names test:unit (group 3)
+NPM_RUN = re.compile(r'\b(?:(?:npm|pnpm|yarn)[ \t]+run(?:-script)?((?:[ \t]+(?:(?:-w|--workspace|--prefix|-C|--dir|--filter|-F)(?:=|[ \t]+)\S+|-(?!w\b|-workspace\b|-prefix\b|C\b|-dir\b|-filter\b|F\b)\S+))*)[ \t]+([A-Za-z0-9_:.][A-Za-z0-9_:.-]*)'
+                     r'|(?:npm|pnpm|yarn)[ \t]+(?:test|t)(?![A-Za-z0-9_:.-])|(?:pnpm|yarn)[ \t]+([A-Za-z0-9_.-]+:[A-Za-z0-9_:.-]+))')
+NPM_OTHER = re.compile(r'(?:^|[ \t])(?:-w|--workspaces?|--prefix|-C|--dir|--filter|-F|-r|--recursive)(?:=|[ \t]|$)')
+# 7.4.0 car 5 (Z2): `--if-present` skips a missing script only in the exact forms `<mgr> run
+# --if-present X` and `<mgr> run X --if-present`, alone in their segment, with no cd, pushd, popd,
+# export, npm_config, subshell, backtick or --prefix earlier in the text (another package may run)
+def if_present_exact(t, m, n):
+    a = max(t.rfind(c, 0, m.start()) for c in ';|&\n') + 1
+    b = min([i for i in (t.find(c, m.start()) for c in ';|&\n') if i >= 0] or [len(t)])
+    w = t[a:b].split()
+    # 7.4.0 review A-m4: never yarn (`yarn run X` runs a package binary X when the script is missing)
+    return w in ([w[0], 'run', '--if-present', n], [w[0], 'run', n, '--if-present']) and w[0] in ('npm', 'pnpm') and not re.search(r'\b(?:cd|pushd|popd|export)\b|npm_config|[(`]|--prefix', t[:a], re.I)
+def npm_texts(sc, name, depth, seen):
+    v = sc.get(name)
+    side = [sc.get(k + name) for k in ('pre', 'post')]
+    if not isinstance(v, str) or not all(x is None or isinstance(x, str) for x in side):
+        return None
+    texts = [v] + [x for x in side if isinstance(x, str)]
+    for t in list(texts):
+        for m in NPM_RUN.finditer(t):
+            if m.group(1) and NPM_OTHER.search(m.group(1)):
+                return None
+            n = m.group(2) or m.group(3) or 'test'
+            # `--if-present` in the call skips a missing script
+            if n in seen or (sc.get(n) is None and '--if-present' in re.split(r'&&|[;|\n]', t[m.start():], maxsplit=1)[0] and if_present_exact(t, m, n)):
+                continue
+            seen.add(n)
+            sub = npm_texts(sc, n, depth + 1, seen) if depth < 3 else None
+            if sub is None:
+                return None
+            texts.extend(sub)
+    return texts
 # F2: the repo paths each make target's recipe names, in the root Makefile at <rev>
 make_paths = {}
 mk = None
 for name in ('GNUmakefile', 'makefile', 'Makefile'):
-    r = subprocess.run(['git', '-C', wt, 'show', rev + ':' + name], capture_output=True)
+    r = subprocess.run(GIT + ['show', rev + ':' + name], capture_output=True)
     if r.returncode == 0:
         mk = r.stdout[:FILE_CAP].decode('utf-8', 'replace')
         break
@@ -298,22 +387,36 @@ pkg = None
 for tgt in targets:
     # 6.1.0 review (R4): npm:<name> = the repo paths scripts.<name> of package.json at <rev> names;
     # no entry when package.json or that string entry cannot be read (the workflow refuses then)
-    if tgt.startswith('npm:'):
+    # 7.4.0 car 5 (Z1): pkg:package.json = [] when package.json at <rev> is a JSON object (npx
+    # resolves this dir); no entry otherwise (npx would walk up)
+    if tgt.startswith(('npm:', 'pkg:')):
         if pkg is None:
-            r = subprocess.run(['git', '-C', wt, 'show', rev + ':package.json'], capture_output=True)
+            r = subprocess.run(GIT + ['show', rev + ':package.json'], capture_output=True)
             try:
                 pkg = json.loads(r.stdout.decode('utf-8', 'replace')) if r.returncode == 0 and len(r.stdout) <= FILE_CAP else False
             except ValueError:
                 pkg = False
+        if tgt.startswith('pkg:'):
+            if tgt == 'pkg:package.json' and isinstance(pkg, dict):
+                make_paths[tgt] = []
+            # 7.4.0 review B-M1: pkg:scripts.<name> = [] when package.json at <rev> is a JSON object
+            # whose scripts.<name> is a string: npm runs it here and never walks up (the plan guard)
+            elif tgt.startswith('pkg:scripts.') and isinstance(pkg, dict) and isinstance(pkg.get('scripts'), dict) and isinstance(pkg['scripts'].get(tgt[12:]), str):
+                make_paths[tgt] = []
+            continue
         sc = pkg.get('scripts') if isinstance(pkg, dict) else None
-        v = sc.get(tgt[4:]) if isinstance(sc, dict) else None
         # npm and yarn v1 also run pre<name> and post<name> (over-counted for pnpm and yarn berry)
-        side = [sc.get(k + tgt[4:]) for k in ('pre', 'post')] if isinstance(sc, dict) else []
-        if isinstance(v, str) and all(x is None or isinstance(x, str) for x in side):
-            text = '\n'.join([v] + [x for x in side if isinstance(x, str)])
-            make_paths[tgt] = sorted(set(q for q in (norm(x) for x in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', text)) if q and q in tracked))
+        texts = npm_texts(sc, tgt[4:], 0, {tgt[4:]}) if isinstance(sc, dict) else None
+        if texts is not None:
+            make_paths[tgt] = sorted(paths_in('\n'.join(texts)))
         continue
-    paths = set()
+    # 7.4.0 (#29 N5): sh:<path> = the tracked files the script at <rev> sources; no entry when unreadable
+    if tgt.startswith('sh:'):
+        q = norm(tgt[3:])
+        if q and show(q) is not None:
+            make_paths[tgt] = sorted(sourced(q))
+        continue
+    rec = []
     if mk is not None:
         lines = mk.splitlines()
         for i, line in enumerate(lines):
@@ -322,11 +425,8 @@ for tgt in targets:
                 for rl in lines[i + 1:]:
                     if not rl.startswith('\t'):
                         break
-                    for tok in re.findall(r'[A-Za-z0-9_.][A-Za-z0-9_./-]*', rl):
-                        q = norm(tok)
-                        if q and q in tracked:
-                            paths.add(q)
-    make_paths[tgt] = sorted(paths)
+                    rec.append(rl)
+    make_paths[tgt] = sorted(paths_in('\n'.join(rec)))
 out = {'surface': [] if error else sorted(surface), 'make_paths': {} if error else make_paths, 'error': error, 'args': [wt, rev, targets_arg]}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()

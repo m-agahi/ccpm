@@ -1830,7 +1830,7 @@ for a human), else hook_rejected, hook_tail = the last 60 lines; that line
 with any other exit code -> ambiguous; anything else (no hook verdict:
 auth, network, 5xx before the hook ran) -> network. Prints
 {push_result, exit_code, hook_tail, args, digest}. Runs nothing.
-program: scripts/push_classify.py (PROGRAM_SHA256 holds its sha256)
+program: scripts/push_classify.py (7.4.0: retired; the rules moved into scripts/push.py push mode)
 ```
 
 ### `before pushPrompt` (5.0.9 line 3412)
@@ -1846,7 +1846,7 @@ repository, Repository not found) -> denied; `error: failed to push some
 refs` with exit 1 and no `fatal:` line -> hook_rejected (git reached the
 remote before the pre-push hook ran; access ok); else unknown. Prints
 {access, result, exit_code, auth_line, args, program, digest}. Runs nothing.
-program: scripts/push_probe.py (PROGRAM_SHA256 holds its sha256)
+program: scripts/push_probe.py (7.4.0: retired; the rules moved into scripts/push.py probe mode)
 ```
 
 ### `before pushPrompt` (5.0.9 line 3424)

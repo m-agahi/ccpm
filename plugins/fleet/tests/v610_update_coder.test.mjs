@@ -218,6 +218,29 @@ test("6.1.0 T11 (R6): code judge plan_wrong in the update round stops; no re-pla
   assert.equal(wbCi(out), 1, L.join(", "));
 });
 
+// 7.4.0 car 6 (#61 Y4): a u1 finding that targets the plan stops as the update round's plan_wrong does
+test("7.4.0 #61 Y4: a re-review after update-branch with a plan-target finding stops; no coder round, no re-plan", async () => {
+  const out = await run(upd({ "role:pr-review:v2": blockingReview(Object.assign({}, F1, { target: "plan" })) }), ARGS);
+  const L = L_(out);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "review");
+  assert.match(out.result.reason, /a finding targets the plan after update-branch: no re-plan runs on the forge's merge/);
+  noCoder(out);
+  assert.ok(!L.some((l) => /^infra:replan-|role:scope-and-plan:replan/.test(l)), L.join(", "));
+  assert.equal(wbCi(out), 1, L.join(", "));
+});
+
+// 7.4.0 car 6 (#61): an update round's coder test conflict halts on the coder's own needs_human (no judge)
+test("7.4.0 #61: a coder test_conflict in the update round stops at role with the coder's reason; no code judge r2", async () => {
+  const coder = { status: "needs_human", reason: "frozen test contradicts AC1", changed_paths: null, suite_result: null, added_symbols: null, frozen_tests_red_at_start: null, obligations_done: null, test_conflict: { test: "tests/test_a.py", findings: ["AC1"], why: "3 vs 4" } };
+  const out = await run(upd({ "role:fleet-coder:r2": coder }), ARGS);
+  const L = L_(out);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "role");
+  assert.match(out.result.reason, /fleet-coder returned needs_human: frozen test contradicts AC1/);
+  assert.ok(!L.includes("role:fleet-code-judge:r2"), L.join(", "));
+});
+
 test("6.1.0 T12-T15: the update round's ownership checks use d; the PR-level checks use the base tip", async () => {
   const out = await run(withSyms(upd({ "infra:pr-update": (p) => ({ status: "ok", reason: "u", mode: "update", updated: true, head: D, base: C, overlap: ["src/w.py"], error: null, args: inputsOf(p).args }) }, ["src/w.py"])), ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
@@ -529,7 +552,9 @@ test("6.1.0 review S2: R4 derives test_cmd inputs; a shape it cannot read refuse
   const { testCmdRuns } = await compile(src)(null, null, null, () => {}, () => {}, {}, {}, {}, Date, Math);
   const runs = (cmd, p, mp) => testCmdRuns(cmd, p, mp || {});
   assert.equal(runs("scripts/test.sh <paths>", "scripts/test.sh"), true);
-  assert.equal(runs("scripts/test.sh <paths>", "src/x.py"), false);
+  // 7.4.0 (#29 N5, changed on purpose): a script reads its sh: entry (the files it sources); none refuses every file
+  assert.equal(runs("scripts/test.sh <paths>", "src/x.py", { "sh:scripts/test.sh": [] }), false);
+  assert.equal(runs("scripts/test.sh <paths>", "src/x.py"), true);
   assert.equal(runs("bash scripts/test.sh <paths>", "scripts/test.sh"), true);
   assert.equal(runs("sh ./scripts/t.sh", "scripts/t.sh"), true);
   assert.equal(runs("python3 tools/run_tests.py <paths>", "tools/run_tests.py"), true);
@@ -694,7 +719,8 @@ test("6.1.0 review 4: the re-plan reset prompt and the code judge's scratch read
 
 test("6.1.0 review 5: pr_state.py fetch runs git with core.fsmonitor=false", () => {
   const src = readFileSync(join(SCRIPTS_SRC, "pr_state.py"), "utf8");
-  assert.match(src, /g = lambda \*a: run\('-c', 'core\.fsmonitor=false', '-c', 'core\.hooksPath=\/dev\/null', '-C', wt, \*a, cmd='git'\)/);
+  // 7.4.0 (#34, changed on purpose): g passes net through, so only the fetch is lifted
+  assert.match(src, /g = lambda \*a, net=False: run\('-c', 'core\.fsmonitor=false', '-c', 'core\.hooksPath=\/dev\/null', '-C', wt, \*a, cmd='git', net=net\)/);
 });
 
 // ---------------------------------------------------------------- third delta review (M1)

@@ -422,6 +422,10 @@ const READS = {
     "w.length number-literal": "parsed: a hash_diff row (prog:hash_diff:changed[], typed array of strings)",
     "w[1] string": "parsed: a hash_diff row (prog:hash_diff:changed[], typed array of strings)",
     "r.error string": "prog:hash_diff:error",
+    // 7.4.0 (#22)
+    "r.allowed array": "prog:hash_diff:allowed",
+    "r.allowed_changed integer": "prog:hash_diff:allowed_changed",
+    "r.allowed_changed number-literal": "prog:hash_diff:allowed_changed",
   },
   // 5.0.6 (ledger 2019): the bytes the build-dir teardown freed (its log line)
   buildTeardown: { "r.bytes integer": "prog:build_dir:bytes" },
@@ -433,7 +437,6 @@ const READS = {
     "r.role_file array": "!role:scope-and-plan:role_file",
     "f.sha256 string": "role:scope-and-plan:role_file.sha256",
   },
-  pushProbe: { "r.args array": "push_probe:args", "r.args.length number-literal": PARSED_LOCAL },
   // 5.0.8 (ledger 2030)
   ghPick: { "x.push boolean": ["prog:gh_identity:repos.*.tried[].push", 2], "t.push boolean": "prog:gh_identity:repos.*.tried[].push" },
   ghNoPush: { "x.push boolean": "prog:gh_identity:repos.*.tried[].push" },
@@ -524,7 +527,14 @@ const READS = {
   },
   docOrLockFile: { "b string-re": [PARSED_TOKEN, 2] },
   // 6.1.0 review: an npm:<name> entry of hookSurface's make_paths (the script maps a missing one to null)
-  testCmdRuns: { "np array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths" },
+  testCmdRuns: {
+    "np array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths",
+    // 7.4.0 (#29 N5, N4): a sh:<path> entry (null when unread); the jest setup basename of a path
+    "sp array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths",
+    "b string-re": PARSED_TOKEN,
+  },
+  // 7.4.0 (#29 N5): the R4 read of a check script's sh:<path> entry
+  cmdRuns: { "makePaths[st] array": "parsed: hookSurface make_paths, rebuilt by the script from prog:hook_surface:make_paths" },
   // 6.1.0: the grep's checks moved from callerCheck to callerGrep
   callerGrep: {
     "occ object": "prog:callers:occurrences",
@@ -618,6 +628,14 @@ const READS = {
     "plan.plan_path string": SP + "plan_path",
     // 7.3.0 (#33)
     "plan.merge_after string": SP + "merge_after",
+    // 7.4.0 (#60 step 3): the plan-mode sweep trigger, the gate path test and the unmeasured-unit stop
+    "plan.touches_gate boolean": [SP + "touches_gate", 2],
+    "p string-re": PARSED_LOCAL,
+    "u.shipped_refuses boolean": "role:gate-change-nonweakening-sweep:units[].shipped_refuses",
+    "u.new_refuses boolean": "role:gate-change-nonweakening-sweep:units[].new_refuses",
+    "u object": "role:gate-change-nonweakening-sweep:units[]",
+    // 7.4.0 review B-M3: a sweep with no units array is a warning
+    "sw.units array": ["role:gate-change-nonweakening-sweep:units", 2],
     "plan.criteria array": SP + "criteria",
     "x string": SP + "plan_diff[]",
     "plan.plan_diff array": SP + "plan_diff",
@@ -880,11 +898,9 @@ const READS = {
     "c.files array": "prog:fleet_scan:commits[].files",
     "x.gates_not_run_stated boolean": "role:fleet-pr-opener:gates_not_run_stated",
     "r.state_sha string": "prog:state_write:state_sha",
-    "pa[0] string": "prog:push_classify:args[]",
-    "pa array": "prog:push_classify:args",
-    "pa.length number-literal": PARSED_LOCAL,
-    "push.hook_tail string": "prog:push_classify:hook_tail",
-    "push.exit_code number-literal": "prog:push_classify:exit_code",
+    // 7.4.0 (#9): push.py; the args are compared whole (canonical), not read by shape
+    "push.hook_tail string": "prog:push:hook_tail",
+    "push.exit_code number-literal": "prog:push:exit_code",
     "resume.rounds object": "parsed: the run-state (JSON.parse of a digest-checked message)",
     "t object": "~role:fleet-test-writer:tests[]",
     "t.covers string": "role:fleet-test-writer:tests[].covers",
@@ -892,6 +908,12 @@ const READS = {
     "e.name string": "prog:plan_ref:refs[].name",
     "cs.head string": "infra:head",
     "cs.head string-re": "infra:head",
+  },
+  // 7.4.0 (#61): the coder's test conflict
+  testConflictOf: {
+    "x object": "role:fleet-coder:test_conflict",
+    "x.findings array": "role:fleet-coder:test_conflict.findings",
+    "v string": ["parsed: test_conflict.test, .why or a findings[] entry, each checked as a non-empty string here", 1],
   },
   reviewStep: {
     "rp.changed_paths array": "prog:review_paths:changed_paths",
@@ -1172,7 +1194,7 @@ test("4.0.3 1998: every result the happy run's agents return fits the schema the
 test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_file copied from the sha256sum line; preflight asks for no role table", async () => {
   const out = await run(happy(), ARGS);
   const p = out.calls.find((c) => c.label === "role:plan-audit").prompt;
-  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.3\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.3\.0\/roles\/plan-audit\.md with the Read tool/);
+  assert.match(p, /as one Bash call: sha256sum -- '\/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.4\.0\/roles\/plan-audit\.md'\n2\. Read \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.4\.0\/roles\/plan-audit\.md with the Read tool/);
   assert.match(p, /role_file: \{name: "plan-audit", sha256: <the hex sha256sum printed in step 1>\}, copied exactly/);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);

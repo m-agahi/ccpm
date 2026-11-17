@@ -6,7 +6,7 @@
 // from here; no test() lives in this file.
 
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync, symlinkSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync, symlinkSync, mkdirSync, chmodSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync as rawSpawnSync } from "node:child_process";
 
@@ -78,7 +78,7 @@ export function inputsOf(prompt) {
   }
 }
 
-// The ten fleet roles (5.0.0, R1: their prompts ship as plugins/fleet/roles/<role>.md).
+// The eleven fleet roles (5.0.0, R1; their prompts ship as plugins/fleet/roles/<role>.md).
 export const ROLE_NAMES = [
   "scope-and-plan",
   "plan-audit",
@@ -170,7 +170,8 @@ export const RELAY_KEYS = [
   // 3.1.0 (ledger 1959)
   [/^infra:verify-plan$/, K("verify_since")],
   // 3.1.0 (ledger 1935c)
-  [/^infra:push(:p\d+)?$/, K("push_classify")],
+  // 7.4.0 (#9): push.py
+  [/^infra:push(:p\d+)?$/, K("push:push")],
   [/^infra:hook-surface:/, K("hook_surface")],
 ];
 // 3.1.0: the IaC push gate program's output, with its digest
@@ -269,7 +270,8 @@ export function fillArgs(label, r, prompt) {
     const i = inputsOf(prompt);
     r.args = [i.main_worktree, i.plan_base, i.plan_path];
   } else if (/^infra:hook-surface:/.test(label)) r.args = [inputsOf(prompt).worktree, inputsOf(prompt).rev, JSON.stringify(inputsOf(prompt).targets)];
-  else if (/^infra:push(:p\d+)?$/.test(label) && r.push_result === "hook_rejected") r.args = ["/tmp/fleet-push.out", String(r.exit_code)];
+  // 7.4.0 (#9): push.py echoes the args the prompt passed it
+  else if (/^infra:push(:p\d+)?$/.test(label) || /^infra:push-probe$/.test(label)) r.args = pushArgsOf(prompt);
   else if (/^infra:precommit-ids/.test(label)) r.args = [inputsOf(prompt).main_worktree, inputsOf(prompt).plan_commit];
   return r;
 }
@@ -354,7 +356,10 @@ export async function runOne(script, args0) {
     }
     // 4.0.0 (1985, S3): unscripted push-access probes find access (a new branch)
     if (!(label in script) && /^infra:push-probe$/.test(label))
-      return { status: "ok", reason: "probed", access: "ok", result: "ok", exit_code: 0, auth_line: null, args: ["/tmp/fleet-probe.out", "0"] };
+      return { status: "ok", reason: "probed", access: "ok", result: "ok", exit_code: 0, auth_line: null, args: pushArgsOf(prompt) };
+    // 7.4.0 (#60): an unscripted plan-mode gate sweep measures one unit and finds no loosening
+    if (!(label in script) && /^role:gate-change-nonweakening-sweep:plan/.test(label))
+      script[label] = { status: "ok", reason: "0 loosened", verdict: "non_weakening", units: [{ unit: "planned gate", mutation: "the shipped gate at base", shipped_refuses: true, new_refuses: true }], findings: [] };
     // unscripted plan parks move the draft and leave the worktree clean
     if (!(label in script) && /^infra:park-plan/.test(label)) return parkOut(prompt);
     // unscripted plan formatting changes nothing (the hooks found nothing to fix)
@@ -382,8 +387,13 @@ export async function runOne(script, args0) {
       return pathRecheckOut({}, [i.repo, i.token]);
     }
     // 3.1.0: unscripted hook-surface reads find no hook entry file
-    if (!(label in script) && /^infra:hook-surface:/.test(label))
-      return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: {}, error: null }, prompt));
+    // 7.4.0 car 4 (#29 N5, #39): a sh:<path> target reads a script that sources nothing; at plan time an
+    // npm:<name> target finds a tracked package.json script (no walk-up finding); car 5 (Z1): so does pkg:package.json
+    if (!(label in script) && /^infra:hook-surface:/.test(label)) {
+      const mp = {};
+      for (const t of inputsOf(prompt).targets || []) if (/^sh:/.test(t) || (/^infra:hook-surface:plan/.test(label) && /^(npm|pkg):/.test(t))) mp[t] = [];
+      return withRelayDigest(label, fillArgs(label, { status: "ok", reason: "read", surface: [], make_paths: mp, error: null }, prompt));
+    }
     // 6.0.0 (ledger 2042): an unscripted convention read finds no convention (the conventional fallback)
     if (!(label in script) && /^infra:pr-convention:/.test(label))
       return { status: "ok", reason: "read", title: { style: "conventional", types: ["feat", "fix", "perf", "revert", "chore", "refactor", "docs", "style", "test", "build", "ci"], key_required: false }, body: { template: null, template_repo: null, required_sections: null, min_chars: null, checker: null }, source: ["title: no convention found; the fallback type(component): summary"], unreadable: [], args: inputsOf(prompt).args };
@@ -813,24 +823,32 @@ function byHandle(scratch, m, pre) {
 }
 // the hash-diff program over registered maps (its output, unrelayed); 5.0.7
 // review: args <scratch> (<map> <old handle> <new handle>)+
+// 7.4.0 (#22): optional --allow <JSON list of "<map>:<key>"> right after <scratch>
 export function hashDiffOut(args) {
-  const out = { changed: [], total: null, counts: {}, resolved: {}, error: null, args: args.slice() };
+  const out = { changed: [], total: null, allowed: [], allowed_changed: null, counts: {}, resolved: {}, error: null, args: args.slice() };
   const rows = [];
-  for (let i = 1; i < args.length; i += 3) {
-    const [m, pa, pb] = args.slice(i, i + 3);
-    const fa = byHandle(args[0], m, pa);
-    const fb = byHandle(args[0], m, pb);
+  const okRows = [];
+  let allow = new Set();
+  let rest = args;
+  if (args[1] === "--allow") {
+    allow = new Set(JSON.parse(args[2]));
+    rest = [args[0]].concat(args.slice(3));
+  }
+  for (let i = 1; i < rest.length; i += 3) {
+    const [m, pa, pb] = rest.slice(i, i + 3);
+    const fa = byHandle(rest[0], m, pa);
+    const fb = byHandle(rest[0], m, pb);
     // the program exits non-zero on a handle that names no file, or two
-    if (!fa || !fb) return { exit: "0 files match " + m + "-" + (fa ? pb : pa) + "*.json in " + args[0] + "/hashes: need exactly one, so a missing state never reads as no change" };
+    if (!fa || !fb) return { exit: "0 files match " + m + "-" + (fa ? pb : pa) + "*.json in " + rest[0] + "/hashes: need exactly one, so a missing state never reads as no change" };
     out.resolved[m] = [fa.slice(-69, -5), fb.slice(-69, -5)];
     const drop = (x) => Object.fromEntries(Object.entries(x).filter(([k]) => !(m === "ignored" && k === SETTINGS_LOCAL)));
     const a = drop(MAP_REG.get(fa));
     const b = drop(MAP_REG.get(fb));
     out.counts[m] = [Object.keys(a).length, Object.keys(b).length];
     for (const k of [...new Set(Object.keys(a).concat(Object.keys(b)))].sort())
-      if (a[k] !== b[k]) rows.push([m, k, !(k in a) ? "added" : !(k in b) ? "removed" : "changed"]);
+      if (a[k] !== b[k]) (allow.has(m + ":" + k) ? okRows : rows).push([m, k, !(k in a) ? "added" : !(k in b) ? "removed" : "changed"]);
   }
-  return Object.assign(out, { changed: rows.slice(0, 50), total: rows.length });
+  return Object.assign(out, { changed: rows.slice(0, 50), total: rows.length, allowed: okRows.slice(0, 50), allowed_changed: okRows.length });
 }
 // 5.0.6 (ledger 2019): the build vars a role gets, one row per tool (kept
 // here apart from the workflow's BUILD_ENV_ROWS, so a drift there fails)
@@ -841,11 +859,15 @@ export const BUILD_ROWS = [
   ["RUFF_CACHE_DIR", "ruff-cache"],
   ["COVERAGE_FILE", "coverage"],
   ["TURBO_CACHE_DIR", "turbo-cache"],
+  // 7.4.0 (#73)
+  ["UV_PROJECT_ENVIRONMENT", "uv-venv"],
+  // 7.4.0 review B-M4: uv caches per run and tier, outside build/ (null: <scratch>/uv-cache/<nonce>/write|gate)
+  ["UV_CACHE_DIR", null],
 ];
 // the happy run's scratch dir (repo /r, task y42-add-thing)
 export const BUILD_SCRATCH = "/r/.claude/worktrees/fleet-y42-add-thing/scratch";
 export function buildEnvOf(key, scratch = BUILD_SCRATCH, nonce = NONCE) {
-  return Object.fromEntries(BUILD_ROWS.map(([k, sub]) => [k, scratch + "/build/" + nonce + "/" + key + "/" + sub]));
+  return Object.fromEntries(BUILD_ROWS.map(([k, sub]) => [k, sub ? scratch + "/build/" + nonce + "/" + key + "/" + sub : scratch + "/uv-cache/" + nonce + (/^(w|coder)-/.test(key) ? "/write" : "/gate")]));
 }
 // the build vars as the shell assignments of a prefix (K='v' K='v'), as a
 // regex source
@@ -918,7 +940,9 @@ export function buildEnvSites(out) {
     assert.ok(m, c.label + ": no build dir in " + JSON.stringify(env));
     const key = m[1];
     assert.deepEqual(Object.fromEntries(Object.entries(env).filter(([k]) => BUILD_ROWS.some((r) => r[0] === k))), buildEnvOf(key, i.scratch_dir || BUILD_SCRATCH), c.label);
-    if (runsHooks) assert.ok(c.prompt.includes(prefixOf(env).slice(4)), c.label + " runs its hooks with the prefix");
+    // 7.4.0 (#9): push.py takes the hook env as a JSON argument
+    if (runsHooks && /^infra:push/.test(c.label)) assert.ok(c.prompt.includes(shq(JSON.stringify(env))) && JSON.stringify(env) === i.args[5], c.label + " runs its hooks with the env");
+    else if (runsHooks) assert.ok(c.prompt.includes(prefixOf(env).slice(4)), c.label + " runs its hooks with the prefix");
     else {
       assert.equal(i.test_env_prefix, prefixOf(env), c.label);
       assert.match(i.test_env_note, /test_env_prefix/, c.label);
@@ -1121,7 +1145,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/7.3.0/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/fleet/7.4.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1189,6 +1213,24 @@ export function stateWriteCmd(wt, stateRef, json) {
 }
 export function programOf(name) {
   return { name, sha256: programSha(name) };
+}
+// 7.4.0 (#36 B5): a cap lift is observable only when the hard RLIMIT_AS is above the
+// programs' 1 GiB cap (at or under it, soft equals hard even when capped). Returns false,
+// or the skip message naming the hard limit. FLEET_TEST_HARD_AS (bytes) forces a value.
+export const LIFT_FLOOR = 1 << 30;
+export function hardAs(env = process.env) {
+  if (env.FLEET_TEST_HARD_AS) return Number(env.FLEET_TEST_HARD_AS);
+  try {
+    const l = readFileSync("/proc/self/limits", "utf8").split("\n").find((x) => x.startsWith("Max address space"));
+    const v = l ? l.split(/\s+/)[4] : "unlimited";
+    return v === "unlimited" ? Infinity : Number(v);
+  } catch {
+    return Infinity;
+  }
+}
+export function liftSkip(env = process.env, floor = LIFT_FLOOR) {
+  const h = hardAs(env);
+  return h <= floor ? "hard RLIMIT_AS is " + h + " bytes (at or under " + floor + "): the cap lift cannot be observed" : false;
 }
 // 4.0.0 security review: the preflight probe's output lines for a scripts dir.
 // over: {home, hits: [{hit, real, symlink, roles_real, roles_symlink}],
@@ -1292,9 +1334,9 @@ export const PROGRAM_LABELS = [
   [/^infra:callers(:[a-z0-9-]+)*:file(:(digest|args)-retry)?$/, [[null, "callers", PROGRAM_KEYS["callers:file"] || null]]],
   [/^infra:callers(:[a-z0-9-]+)*:read:(all|auto|paths):[0-9]+(:(digest|args)-retry)?$/, [[null, "callers", PROGRAM_KEYS["callers:read"] || null]]],
   [/^infra:changed-defs:/, [[null, "changed_defs", K("changed_defs")]]],
-  [/^infra:push(:p\d+)?$/, [[null, "push_classify", K("push_classify")]]],
-  // 4.0.0 (1985, S3)
-  [/^infra:push-probe$/, [[null, "push_probe", K("push_probe")]]],
+  // 7.4.0 (#9): push.py pushes and probes
+  [/^infra:push(:p\d+)?$/, [[null, "push", K("push:push")]]],
+  [/^infra:push-probe$/, [[null, "push", K("push:probe")]]],
   [/^infra:hook-surface:/, [[null, "hook_surface", K("hook_surface")]]],
   // 6.0.0 (ledger 2041)
   [/^infra:ruleset-surface:/, [[null, "ruleset_surface", K("ruleset_surface")]]],
@@ -1399,6 +1441,11 @@ export function fillPrograms(label, r, prompt) {
   return r;
 }
 
+// 7.4.0 (#9): the args of the prompt's push.py command (push or probe mode)
+export function pushArgsOf(prompt) {
+  const m = /push\.py'((?: '(?:[^']|'\\'')*')+)/.exec(prompt);
+  return m ? [...m[1].matchAll(/'((?:[^']|'\\'')*)'/g)].map((x) => x[1].replace(/'\\''/g, "'")) : [];
+}
 // 7.3.0 (#9): the args of the workspace prompt's exclude_add.py command
 export function excludeArgsOf(prompt) {
   const m = /exclude_add\.py'((?: '[^']*')+)/.exec(prompt);
@@ -1441,8 +1488,11 @@ export function partOut(content, k) {
 export function commitStepStub(m, live) {
   return (prompt) => {
     const code = inputsOf(prompt).code_tree;
+    // 7.4.0 (#61): a commit on an open PR's head reports its parent
+    const parent = inputsOf(prompt).parent;
     if (live) Object.assign(live, { head: CSHA(m), tree: code });
     return {
+      ...(parent ? { parent } : {}),
       status: "ok",
       reason: "committed",
       commit_result: "committed",
@@ -1714,6 +1764,50 @@ export function extractPy(begin, end, constName) {
   assert.equal(begin, constName + "_BEGIN");
   assert.equal(end, constName + "_END");
   return programBody(constName.slice(0, -3).toLowerCase());
+}
+
+// 7.4.0 (#9): push.py on canned git output. A temp repo on fleet/x one commit past master;
+// a stub git on PATH answers `push` (and `push --dry-run`) with <output> and exit <code>
+// and runs the real git for every other verb. mode "push" runs with deadline 0 (no retry);
+// mode "probe" runs the dry run. Returns the program's JSON and the args it was given.
+export function pushOn(code, output, mode = "push") {
+  const py = rawSpawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
+  const git = rawSpawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+  const h = mkdtempSync(join(tmpdir(), "fleet-pushon-"));
+  try {
+    const repo = join(h, "repo");
+    const g = (...a) => {
+      const r = rawSpawnSync(git, ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=master", "-C", repo].concat(a), { encoding: "utf8" });
+      assert.equal(r.status, 0, a.join(" ") + ": " + r.stderr);
+      return r.stdout.trim();
+    };
+    rawSpawnSync(git, ["-c", "init.defaultBranch=master", "init", "-q", repo]);
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    g("add", "-A");
+    g("commit", "-q", "-m", "a");
+    const base = g("rev-parse", "HEAD");
+    g("checkout", "-q", "-b", "fleet/x");
+    writeFileSync(join(repo, "b.txt"), "b\n");
+    g("add", "-A");
+    g("commit", "-q", "-m", "b");
+    const sha = g("rev-parse", "HEAD");
+    const bin = join(h, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "out.txt"), output);
+    writeFileSync(
+      join(bin, "git"),
+      "#!" + py + "\nimport os, sys\nif 'push' in sys.argv[1:]:\n    sys.stdout.write(open(" + JSON.stringify(join(bin, "out.txt")) + ").read())\n    sys.exit(" + Number(code) + ")\n" +
+        "os.execv(" + JSON.stringify(git) + ", [" + JSON.stringify(git) + "] + sys.argv[1:])\n",
+    );
+    chmodSync(join(bin, "git"), 0o755);
+    // 7.4.0 review A-M1: the sealed URL (the stub git answers every push itself)
+    const args = mode === "probe" ? ["probe", repo, base, "fleet/x"] : ["push", repo, "fleet/x", sha, "master", "{}", "-", "-", "0", "https://example.com/o/r.git", "-", "-"];
+    const r = rawSpawnSync(py, ["-I", join(SCRIPTS_SRC, "push.py")].concat(args), { encoding: "utf8", env: { PATH: bin + ":/usr/bin:/bin", HOME: h, GIT_CONFIG_GLOBAL: "/dev/null" }, timeout: 60000 });
+    assert.equal(r.status, 0, r.stderr);
+    return { out: JSON.parse(r.stdout), args };
+  } finally {
+    rmSync(h, { recursive: true, force: true });
+  }
 }
 
 export function scriptCheckPy() {

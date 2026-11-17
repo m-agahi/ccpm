@@ -217,7 +217,7 @@ function planWrong(s, again) {
     "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
     "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: PSHA },
     "infra:commit-plan:replan": [commitStub(s.__store, PC2, PSHA), commitStub(s.__store, "0123456789cd", PSHA)],
-    "infra:replan-reset": { status: "ok", reason: "reset", head: PB, superseded_head: "5555555" },
+    "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: PB, superseded_head: inputsOf(p).expected_head }), // 7.4.0 review A-M2: the script's expected head
     "hasher:pre-intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "hasher:fp-post:intent:replan": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
     "role:fleet-intent-judge:replan": s["role:fleet-intent-judge"],

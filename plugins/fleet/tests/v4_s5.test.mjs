@@ -360,7 +360,11 @@ test("AC-1981-1: with a declaration the database is up before the planner; every
   // the repo's hooks get their own database in the commit step and the push
   // 5.0.6 (ledger 2019): after the build vars of the step's own dir
   assert.match(call(out.build, "infra:commit:r1").prompt, new RegExp("env GIT_CONFIG_NOSYSTEM=1 PYTHONDONTWRITEBYTECODE=1 " + buildAssignsRe("commit-r1") + " YADGAR_TEST_DSN='mysql:\\/\\/fleet_hooks:[0-9a-f]{32}@127\\.0\\.0\\.1:40000\\/fleet_hooks' git "));
-  assert.match(call(out.build, "infra:push").prompt, new RegExp("`env " + buildAssignsRe("push") + " YADGAR_TEST_DSN='mysql:\\/\\/[^']+\\/fleet_hooks' git -C <main_worktree> push -u origin <branch>`"));
+  // 7.4.0 (#9, changed on purpose): push.py takes the hook env as its JSON argument
+  const pushIn = inputsOf(call(out.build, "infra:push").prompt);
+  assert.equal(pushIn.args[5], JSON.stringify(pushIn.hook_env));
+  assert.match(pushIn.hook_env.YADGAR_TEST_DSN, /^mysql:\/\/[^']+\/fleet_hooks$/);
+  assert.match(pushIn.hook_env.CARGO_TARGET_DIR, /\/build\/[^/]+\/push\/cargo-target$/);
   // each run removes its own database at the end
   assert.equal(out.plan.labels[out.plan.labels.length - 1], "infra:db-down");
   assert.equal(out.build.labels[out.build.labels.length - 1], "infra:db-down");

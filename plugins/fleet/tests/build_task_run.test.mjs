@@ -115,6 +115,8 @@ import {
   buildEnvSites,
   sealLegacyLedger,
   YURN42,
+  pushOn,
+  K,
 } from "./harness.mjs";
 
 
@@ -208,7 +210,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 7\.3\.0 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install fleet 7\.4\.0 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -2633,7 +2635,7 @@ function planWrong(findings) {
       "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
       "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: "d".repeat(64) },
       "infra:commit-plan:replan": commitStub(s.__store, PC2, "d".repeat(64)),
-      "infra:replan-reset": { status: "ok", reason: "reset", head: PB, superseded_head: "5555555" },
+      "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: PB, superseded_head: inputsOf(p).expected_head }), // 7.4.0 review A-M2: the script's expected head
   });
 }
 
@@ -2652,7 +2654,8 @@ test("plan_wrong: re-plan from the approved plan, save the superseded head, retu
   assert.deepEqual(r.proposed_plan_change, ["split AC2 into AC2 and AC3"]);
   assert.deepEqual(r.plan_findings, [f]);
   assert.equal(r.superseded_ref, "fleet/y42-add-thing--superseded-1");
-  assert.equal(r.superseded_head, "5555555");
+  // 7.4.0 review A-M2: the script's expected head, not the agent's value
+  assert.equal(r.superseded_head, inputsOf(call(out, "infra:replan-reset").prompt).expected_head);
   assert.equal(r.tldr, "adds a thing, now with AC3");
   assert.deepEqual(r.plan_diff, ["AC3 added: the code judge found a missing behaviour"]);
   assert.equal(r.fleet_size.criteria, 3);
@@ -3165,23 +3168,27 @@ test("contract drift: a coder ok output missing added_symbols is still rejected"
 
 // ---------------------------------------------------------------- 2.0.2: push / fetch robustness
 
-test("push prompt retries with backoff, reads remote_head through the gh api, keeps non-ff fatal", async () => {
+// 7.4.0 (#9, changed on purpose): push.py retries and reads remote_head; the prompt runs it once
+test("push prompt retries with backoff, reads remote_head through the gh api, keeps non-ff fatal (7.4.0: in push.py)", async () => {
   const out = await run(happy(), ARGS);
   const p = call(out, "infra:push").prompt;
   const inp = inputsOf(p);
   assert.ok(inp.remote_slug, "push gets the remote slug");
-  assert.match(p, /5 15 45/);
-  assert.match(p, /retry up to 3 times/);
   assert.match(p, /timeout 600000 ms/);
-  assert.match(p, /api repos\/<owner>\/<name>\/branches\/<branch> --jq \.commit\.sha/);
   // 5.0.8 (ledger 2030): the gh command the script checked, never a login rule
   assert.equal(inp.gh_cmd, "gh");
-  assert.match(p, /<gh> = <gh_cmd>, exactly/);
+  // 7.4.0 review A-M1: then the sealed URL; A-M2: no parent, no tree
+  assert.deepEqual(inp.args.slice(6), ["gh", "o/r", "540", "git@github.com:o/r.git", "-", "-"]);
   assert.doesNotMatch(p, /gh-personal/);
-  assert.match(p, /`non_ff` or `remote_rejected` -> return status needs_human/);
-  assert.match(p, /non-fast-forward\|fetch first/, "the retry loop still stops on a non-fast-forward");
-  assert.match(p, /ls-remote/, "ls-remote only as the fallback");
   assert.match(p, /Never --force/);
+  const prog = readFileSync(join(SCRIPTS_SRC, "push.py"), "utf8");
+  assert.match(prog, /for wait in \(0, 5, 15, 45\):/);
+  // only a network failure is retried: non_ff, remote_rejected, a hook verdict stop the ladder
+  assert.match(prog, /if res != 'network' or left\(\) < wait \+ took \+ READ_RESERVE:\n {16}break/);
+  assert.match(prog, /\[gh, 'api', 'repos\/' \+ slug \+ '\/branches\/' \+ branch, '--jq', '\.commit\.sha'\]/);
+  // 7.4.0 review A-M1: the fallback reads the sealed URL with no repo, never the repo's origin
+  assert.match(prog, /v = tip\(url, 'refs\/heads\/' \+ branch, tmo\) or ''/, "ls-remote only as the fallback");
+  assert.doesNotMatch(prog, /'ls-remote', 'origin'/);
 });
 
 test("workspace prompt retries fetch with backoff and treats only ls-remote exit 2 as absent", async () => {
@@ -3758,21 +3765,21 @@ test("2.0.3 push: non-fast-forward stops for a human, network exhaustion fails, 
   assert.match(c.result.reason, /push_result null/);
 });
 
-test("2.0.3 push prompt classifies hook_rejected, non_ff and network, and never bypasses hooks", async () => {
+test("2.0.3 push prompt classifies hook_rejected, non_ff and network, and never bypasses hooks (7.4.0: push.py)", async () => {
   const out = await run(happy(), ARGS);
   const p = call(out, "infra:push").prompt;
-  // 4.0.0: the classifier's own text ships as a file the prompt runs
-  const shipped = readFileSync(join(SCRIPTS_SRC, "push_classify.py"), "utf8");
-  assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/push_classify.py'"));
+  // 4.0.0: the classifier's own text ships as a file the prompt runs (7.4.0: push.py)
+  const shipped = readFileSync(join(SCRIPTS_SRC, "push.py"), "utf8");
+  assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/push.py'"));
   for (const w of ["hook_rejected", "non_ff", "network", "failed to push some refs", "hook_tail", "push_result", "never --no-verify"])
     assert.ok((p + shipped).toLowerCase().indexOf(w.toLowerCase()) >= 0, w);
   // classification reads git's own lines only, never the hook's output or the
   // URL; since 3.1.0 a program classifies (ledger 1935c), never the agent
-  assert.ok(p.indexOf("Never classify the output yourself") >= 0);
-  const prog = extractPy("PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY");
+  assert.ok(p.indexOf("Never push, retry or classify yourself") >= 0);
+  const prog = extractPy("PUSH_PY_BEGIN", "PUSH_PY_END", "PUSH_PY");
   assert.match(prog, /x\.startswith\(\('error:', 'fatal:', ' ! \['\)\)/);
   assert.ok(prog.indexOf("' ! [rejected]'") >= 0 && prog.indexOf("' ! [remote rejected]'") >= 0);
-  assert.ok(p.indexOf("remote_rejected") >= 0);
+  assert.ok(prog.indexOf("remote_rejected") >= 0);
   assert.ok(p.indexOf("`HTTP`") < 0, "no free-text word list over the whole output");
 });
 
@@ -5100,7 +5107,7 @@ test("2.1.0 base-ref differential: the fence and the review diff from plan_commi
   assert.ok(!out.labels.some((l) => /^role:/.test(l)), "stops before any role");
   // 3.1.0 (ledger 1959): the program lists plan_commit..HEAD
   assert.ok(call(out, "infra:verify-plan").prompt.includes("python3 -I '" + SCRIPTS_DIR + "/verify_since.py'"));
-  assert.match(extractPy("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY"), /run\('diff', '--name-only', '-z', '--no-renames', pc \+ '\.\.' \+ head, '--'\)/);
+  assert.match(extractPy("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY"), /run\('diff', '--ignore-submodules=none', '--name-only', '-z', '--no-renames', pc \+ '\.\.' \+ head, '--'\)/);
   // the post-coder listing and the review paths diff from plan_commit, not HEAD at the first freeze
   const ok = await run(happy(), ARGS);
   assert.equal(inputsOf(call(ok, "hasher:post-coder:r1").prompt).base_tree, PB);
@@ -5631,6 +5638,10 @@ const ARRAY_SITES = {
   "plan.criteria @ planAndAudit": "role:scope-and-plan:criteria",
   "plan.plan_diff @ planAndAudit": "role:scope-and-plan:plan_diff",
   "plan.changed_symbols @ planAndAudit": "role:scope-and-plan:changed_symbols",
+  // 7.4.0 review B-M3
+  "sw.units @ planAndAudit": "parsed: the plan sweep's units (the role schema declares an array; the happy run calls no sweep, and a missing array is the not-finished warning)",
+  // 7.4.0 (#61)
+  "x.findings @ testConflictOf": "role:fleet-coder:test_conflict.findings",
   "e.occurrences @ changedSymbolFindings": "role:scope-and-plan:changed_symbols[].occurrences",
   "r.capped @ callerGrep": "infra:capped",
   // 7.2.0 (L2178): the batches merge in callerMerge (an Array.isArray of its doctest argument)
@@ -5672,6 +5683,8 @@ const ARRAY_SITES = {
   "r.purged_paths @ formatFiles": "infra:purged_paths",
   // 5.0.5 (ledger 2018)
   "r.changed @ expandKeys": "infra:changed",
+  // 7.4.0 (#22)
+  "r.allowed @ expandKeys": "parsed: the hash_diff relay (digest-checked; schema prog:hash_diff:allowed)",
   "opts.args @ digestRetry": "parsed: the args the step sent (a script-built list)",
   "r.frozen_changed @ formatFiles": "infra:frozen_changed",
   // 6.2.2 (2107)
@@ -5734,7 +5747,6 @@ const ARRAY_SITES = {
   "e.occurrences @ planScopePaths": "parsed: plan facts (checked by planFactsProblem)",
   "c.test_files @ planScopePaths": "parsed: normalised criteria",
   // 4.0.0 (1985)
-  "r.args @ pushProbe": "parsed: the push probe relay (PUSH_PROBE_SCHEMA args; digest-checked)",
   // 5.0.2 (ledger 2004)
   "pr.dirty @ planMode": "parsed: the park program relay (digest-checked; PROGRAM_OUT types dirty)",
   // 6.0.0 (ledger 2042)
@@ -6295,7 +6307,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this fleet workflow is fleet 7\.3\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this fleet workflow is fleet 7\.4\.0; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -6994,7 +7006,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.3\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 7\.3\.0 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/fleet\/7\.4\.0\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install fleet 7\.4\.0 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8704,7 +8716,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 7\.3\.0/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install fleet 7\.4\.0/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 
@@ -8860,11 +8872,12 @@ test("3.1.0 1959: every embedded program takes the worktree as an argument and r
   for (const [b, e, c] of [
     ["VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY"],
     ["PLAN_FILES_PY_BEGIN", "PLAN_FILES_PY_END", "PLAN_FILES_PY"],
-    ["PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY"],
+    // 7.4.0 (#9): push.py replaces push_classify.py, and names the worktree with git -C
+    ["PUSH_PY_BEGIN", "PUSH_PY_END", "PUSH_PY"],
   ]) {
     const p = extractPy(b, e, c);
     assert.match(p, /^os\.chdir\('\/'\)$/m, c + " leaves the worktree before it does anything");
-    if (c !== "PUSH_CLASSIFY_PY") assert.match(p, /'-C', wt\]/, c + " names the worktree with git -C");
+    assert.match(p, /'-C', wt\]/, c + " names the worktree with git -C");
   }
 });
 
@@ -8895,17 +8908,11 @@ const PUSH_FIXTURES = {
   lfs_network: [1, "batch response: Post \"https://github.com/o/r.git/info/lfs/objects/batch\": dial tcp: lookup github.com: no such host\nerror: failed to push some refs to 'github.com:o/r.git'\n", "ambiguous"],
 };
 
+// 7.4.0 (#9): push.py classifies the output of its own push (a stub git prints the fixture)
 function classifyPush(code, output) {
-  const home = mkdtempSync(join(tmpdir(), "fleet-push-"));
-  try {
-    const f = join(home, "out.txt");
-    writeFileSync(f, output);
-    const r = spawnSync("python3", ["-I", "-c", extractPy("PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY"), f, String(code)], { encoding: "utf8", cwd: home });
-    assert.equal(r.status, 0, r.stderr);
-    return JSON.parse(r.stdout);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  const { out, args } = pushOn(code, output);
+  out.sent = args;
+  return out;
 }
 
 test("3.1.0 1935c: the push classifier routes real git push output", { skip: !HAVE_PY }, () => {
@@ -8915,11 +8922,11 @@ test("3.1.0 1935c: the push classifier routes real git push output", { skip: !HA
     assert.equal(o.push_result, want, name);
     assert.equal(o.exit_code, code, name);
     assert.equal(o.hook_tail, want === "hook_rejected" ? output.replace(/\n$/, "") : "", name);
-    // the program echoes its arguments (3.1.0 review)
-    assert.equal(o.args.length, 2, name);
-    assert.ok(o.args[0].endsWith("/out.txt"), name);
-    assert.equal(o.args[1], String(code), name);
-    assert.equal(o.digest, sha256(fn({ push_result: o.push_result, exit_code: o.exit_code, hook_tail: o.hook_tail, args: o.args, program: o.program })), name);
+    // the program echoes its arguments (3.1.0 review; 7.4.0: push.py's own)
+    assert.deepEqual(o.args, o.sent, name);
+    assert.equal(o.attempts, 1, name);
+    const { sent, digest, ...printed } = o;
+    assert.equal(digest, sha256(fn(printed)), name);
   }
   // only line-start prefixes count: a hook that prints rejected-looking text mid-line stays a hook
   const o = classifyPush(1, "hook: ! [rejected] is what you get\nsee fatal: nothing\nerror: failed to push some refs to 'x'\n");
@@ -8931,40 +8938,41 @@ test("3.1.0 1935c: the push classifier routes real git push output", { skip: !HA
   assert.equal(t[59], "error: failed to push some refs to 'x'");
 });
 
-test("3.1.0 1935c: the push step runs the classifier program; a hook_rejected the program did not print stops the run", async () => {
+// 7.4.0 (#9, changed on purpose): push.py prints the result; its digest and args are checked for every push_result
+test("3.1.0 1935c: the push step runs the classifier program; a hook_rejected the program did not print stops the run (7.4.0: push.py)", async () => {
   const s = happy();
   const out = await run(s, ARGS);
   const p = call(out, "infra:push").prompt;
-  assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/push_classify.py' <file> <exit>"));
-  assert.match(p, /\{push_result, exit_code, hook_tail, args, program, digest\}/);
-  // an ambiguous result stops for a human, never a network retry
-  assert.match(p, /`ambiguous`[^\n]*needs_human[^\n]*no retry/);
-  // a relayed hook_rejected whose tail or result was changed in the copy, or
-  // whose arguments are not a temp file outside the worktree and its exit code
+  assert.ok(p.includes("python3 -I '" + SCRIPTS_DIR + "/push.py' 'push' "));
+  assert.match(p, /\{push_result, exit_code, hook_tail, tail, attempts, remote_head, args, program, digest\}/);
+  const KP = K("push:push");
+  // a relayed hook_rejected whose tail or result was changed in the copy, whose exit code
+  // is not 1, or whose arguments are not the ones the workflow sent
   for (const bad of [
     (r) => ({ ...r, hook_tail: "a different tail" }),
     (r) => ({ ...r, push_result: "hook_rejected", exit_code: 1, hook_tail: "x", digest: undefined }),
-    (r) => ({ ...r, exit_code: 128 }),
     (r) => {
-      const o = { ...r, args: ["/r/.claude/worktrees/fleet-y42-add-thing/main/out.txt", "1"] };
-      o.digest = relayDigestOf(o, ["push_result", "exit_code", "hook_tail", "args"]);
+      const o = { ...r, exit_code: 128 };
+      o.digest = relayDigestOf(o, KP);
       return o;
     },
     (r) => {
-      const o = { ...r, args: ["/tmp/x/out.txt", "0"] };
-      o.digest = relayDigestOf(o, ["push_result", "exit_code", "hook_tail", "args"]);
+      const o = { ...r, args: r.args.map((a, k) => (k === 3 ? "c000009" : a)) };
+      o.digest = relayDigestOf(o, KP);
       return o;
     },
   ]) {
     const t = happy();
-    const good = { status: "ok", reason: "hook", push_result: "hook_rejected", exit_code: 1, hook_tail: "check_version_bump: core version not bumped\nerror: failed to push some refs", args: ["/tmp/x/out.txt", "1"] };
-    good.digest = relayDigestOf(good, ["push_result", "exit_code", "hook_tail", "args"]);
-    const r = bad(good);
-    if (r.digest === undefined) delete r.digest;
-    t["infra:push"] = Object.assign(r, { __raw: true });
+    t["infra:push"] = (prompt) => {
+      const good = { status: "ok", reason: "hook", push_result: "hook_rejected", exit_code: 1, hook_tail: "check_version_bump: core version not bumped\nerror: failed to push some refs", tail: "", attempts: 1, remote_head: null, args: inputsOf(prompt).args, program: programOf("push"), file_sha256: programSha("push") };
+      good.digest = relayDigestOf(good, KP);
+      const r = bad(good);
+      if (r.digest === undefined) delete r.digest;
+      return Object.assign(r, { __raw: true });
+    };
     const o = await run(t, ARGS);
     assert.equal(o.result.status, "failed", JSON.stringify(o.result.reason));
-    assert.match(o.result.reason, /infra:push: the relayed hook_rejected result does not match the classifier program's digest/);
+    assert.match(o.result.reason, /^infra:push: the relayed (push result does not match the program's digest or arguments|hook_rejected result is not the program's)/);
     assert.ok(!o.labels.includes("role:fleet-coder:r2"), "no coder round on an unverified hook rejection");
   }
 });
@@ -9240,7 +9248,7 @@ test("3.1.0 caps: every embedded Python program and both YAML loaders set RLIMIT
 });
 
 test("3.1.0 caps: a program that allocates past its cap dies quickly instead of growing", { skip: !HAVE_PY }, () => {
-  const prog = extractPy("PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY");
+  const prog = extractPy("PUSH_PY_BEGIN", "PUSH_PY_END", "PUSH_PY"); // 7.4.0: the shared prelude, read from push.py
   const prelude = prog.slice(0, prog.indexOf("import hashlib"));
   const r = spawnSync("python3", ["-I", "-c", prelude + "x = bytearray(3 << 30)\nprint('grew')\n"], { encoding: "utf8", timeout: 60000, maxBuffer: 1 << 20 });
   assert.notEqual(r.status, 0);
@@ -9783,7 +9791,7 @@ test("3.1.0 PATH review: the workflow refuses PATH problems, a wrong repo argume
 });
 
 test("3.1.0 PATH review: every embedded program drops empty, relative and in-worktree PATH entries for its children", { skip: !HAVE_PY }, () => {
-  const prog = extractPy("PUSH_CLASSIFY_PY_BEGIN", "PUSH_CLASSIFY_PY_END", "PUSH_CLASSIFY_PY");
+  const prog = extractPy("PUSH_PY_BEGIN", "PUSH_PY_END", "PUSH_PY"); // 7.4.0: the shared prelude, read from push.py
   const prelude = prog.slice(0, prog.indexOf("import hashlib"));
   const r = spawnSync(PY3, ["-I", "-c", prelude + "import os\nprint(os.environ['PATH'])\nprint(_RAW_PATH)\n"], { encoding: "utf8", env: { PATH: ".::bin:/usr/bin:" }, timeout: 60000 });
   assert.equal(r.status, 0, r.stderr);
