@@ -1,8 +1,9 @@
 // fleet 7.3.0 review fix (#43, major): a found branch slug is adopted only with proof it is
 // this task's. fleet_branch.py <repo> <task id> <source> lists the slugs of
 // refs/heads/fleet/<task id>-* and, digest-covered, the ones it can prove: the sealed
-// refs/fleet/<task id>/plan names that branch and this source, or a parked findings.json of
-// the candidate's worktree names this task id and source. The prefix match alone also finds
+// refs/fleet/<task id>/plan names that branch and this source. A parked findings.json proves
+// nothing (security review: another task's coder can write one in its own scratch dir).
+// The prefix match alone also finds
 // another task's branch (acme/api#2, tid acme-api-2, sees fleet/acme-api-2-7-fix-x of
 // acme/api-2#7). A task id cut to 24 characters gets a hash of the full ref (yadgar-backend#45
 // and #46 shared one), short ids stay as they were. A text input is known by its source kind.
@@ -15,7 +16,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, realpathSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { ARGS, BRIEF, SCRIPTS_SRC, happy, runOne, call, inputsOf, spawnSync, chunkedContentOf } from "./harness.mjs";
+import { ARGS, BRIEF, SCRIPTS_SRC, happy, runOne, call, inputsOf, spawnSync } from "./harness.mjs";
 
 const relay = (slugs, owned) => (p) => {
   const i = inputsOf(p);
@@ -71,22 +72,13 @@ test("7.3.0 review #43 (c): a ref whose task id starts with t is read; a text in
   assert.ok(!t.labels.includes("infra:fleet-branch"), t.labels.join(", "));
 });
 
-test("7.3.0 review #43: the park findings name the task id and source", async () => {
-  const s = happy();
-  s["role:scope-and-plan"].plan_diff = [];
-  const out = await runOne(s, ARGS);
-  const f = JSON.parse(chunkedContentOf(call(out, "infra:park-plan").prompt));
-  assert.equal(f.task_id, "y42");
-  assert.equal(f.source, "yaadgaar:42");
-});
-
-// the program: proof from a sealed plan ref, or from parked findings
+// the program: proof from a sealed plan ref only
 function canon(v) {
   if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
   if (v && typeof v === "object") return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
   return JSON.stringify(v);
 }
-test("7.3.0 review #43: fleet_branch.py proves a slug by the sealed plan ref or the parked findings, not by the prefix", () => {
+test("7.3.0 review #43: fleet_branch.py proves a slug by the sealed plan ref only, not by the prefix or a forged parked findings.json", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "fleet-730o-")));
   try {
     const repo = join(root, "r");
@@ -110,7 +102,7 @@ test("7.3.0 review #43: fleet_branch.py proves a slug by the sealed plan ref or 
     const head = git(["rev-parse", "HEAD"]);
     const tag = (name, m) => git(["update-ref", name, git(["mktag"], "object " + head + "\ntype commit\ntag x\ntagger a <a@b> 0 +0000\n\n" + m + "\n")]);
     tag("refs/fleet/acme-api-2/plan", msg("sealed", [{ kind: "github", ref: "acme/api#2" }]));
-    // parked findings: this task's in fleet-acme-api-2-parked; another task's in -7-fix-x
+    // forged parked findings naming this task and source prove nothing
     const park = (key, body) => {
       const d = join(repo, ".claude", "worktrees", "fleet-" + key, "scratch", "parked", "n1-0000001");
       mkdirSync(d, { recursive: true });
@@ -124,13 +116,13 @@ test("7.3.0 review #43: fleet_branch.py proves a slug by the sealed plan ref or 
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.deepEqual(o.slugs, ["7-fix-x", "bare", "parked", "sealed", "wrongseal"]);
-    assert.deepEqual(o.owned, ["parked", "sealed"]);
+    assert.deepEqual(o.owned, ["sealed"]);
     assert.deepEqual(o.args, [repo, "acme-api-2", src]);
     // a seal that does not verify proves nothing; neither does another source in the sealed brief
     tag("refs/fleet/acme-api-2/plan", msg("wrongseal", [{ kind: "github", ref: "acme/api#2" }], true));
-    assert.deepEqual(JSON.parse(py(repo, "acme-api-2", src).stdout).owned, ["parked"]);
+    assert.deepEqual(JSON.parse(py(repo, "acme-api-2", src).stdout).owned, []);
     tag("refs/fleet/acme-api-2/plan", msg("sealed", [{ kind: "github", ref: "acme/api-2#7" }]));
-    assert.deepEqual(JSON.parse(py(repo, "acme-api-2", src).stdout).owned, ["parked"]);
+    assert.deepEqual(JSON.parse(py(repo, "acme-api-2", src).stdout).owned, []);
     assert.notEqual(py(repo, "acme-api-2").status, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });

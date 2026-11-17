@@ -1595,7 +1595,7 @@ const PROGRAM_SHA256 = {
   "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
   "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
   "exclude_add": "8e510601a0deac5baa673f1a888a78fa28c3cf49c20e2949a539252ffdea3566",
-  "fleet_branch": "b8ae42b7e44d8fb434675d04af4842b12099e322f0feced20e992c42db69d900",
+  "fleet_branch": "f1af514598ab542d58a16456f00e5cba0aeb43131fc2eab1618e2ca87bf846d7",
   "fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
   "format_files": "6890f94e46365fecdff078a39b28cda938d715b53ef7157baee5475b38a6951a",
   "gh_identity": "82885435973242bc67bbfeca19ec512f83e5ca52e7342dbd4207cff33567c357",
@@ -4214,7 +4214,7 @@ async function workspaceStep(repo, lay, wopt) {
   return { defaultBranch: ws.default_branch, baseRef: ws.base_ref, remoteSlug: slug, remoteHost: typeof ws.remote_host === "string" ? ws.remote_host : "", remoteUrl: urlOk && typeof uc.url === "string" ? uc.url : "" };
 }
 // 7.3.0 (#43): the slug of the one existing local branch fleet/<task id>-<slug> (an intake title varies per run)
-// review fix: only a slug the program proves this task's (sealed plan ref, or parked findings naming the source)
+// review fix: only a slug the program proves this task's (the sealed plan ref names its branch and this source)
 async function branchSlug(repo, names) {
   const args = [repo, names.taskId, names.source];
   const r = await infra("infra:fleet-branch", INFRA_STEP + "list the local fleet branches of this task. Read only.\n" + inputsLine({ repo, task_id: names.taskId, source: names.source }) + RUN_EXACT + progCmd("fleet_branch", args) + "\nIt prints one JSON object " + printsKeys("fleet_branch") + '. Return {status: "ok", reason, ' + returnKeys("fleet_branch") + "}" + COPY_DIGEST, "Intake", JUDGE_AGENT, "fleet_branch", args);
@@ -5871,7 +5871,7 @@ async function planMode(input, date) {
       scratch: lay.scratch,
       run: state.nonce,
       chunk_dir: lay.scratch + "/chunks/park-chunks-" + safeName(state.nonce),
-      c: chunked(JSON.stringify(stripHeldOut({ reason: e instanceof Stop ? e.reason : "stopped", rounds: ls.rounds, symbols: ls.symbols, plan_path: draft, task_id: names.taskId, source: names.source }))),
+      c: chunked(JSON.stringify(stripHeldOut({ reason: e instanceof Stop ? e.reason : "stopped", rounds: ls.rounds, symbols: ls.symbols, plan_path: draft }))),
     };
     let pk = null;
     try {

@@ -38,9 +38,9 @@ import hashlib, json, os, re, subprocess, sys
 # fleet 7.3.0 (#43, L2177): fleet_branch.py <repo> <task id> <source>: the slugs of the
 # local branches refs/heads/fleet/<task id>-<slug>, sorted, and (review fix) the ones proven
 # to be this task's, in owned. The prefix alone also matches another task's branch (task id
-# acme-api-2 sees fleet/acme-api-2-7-fix-x of task acme-api-2-7). A slug is owned when the
-# sealed refs/fleet/<task id>/plan names its branch and lists <source> (kind:ref) in its
-# brief, or when a parked findings.json of its worktree names <task id> and <source>. Read only.
+# acme-api-2 sees fleet/acme-api-2-7-fix-x of task acme-api-2-7). A slug is owned only when
+# the sealed refs/fleet/<task id>/plan names its branch and lists <source> (kind:ref) in its
+# brief. A parked findings.json is no proof: another task's coder can write one. Read only.
 if len(sys.argv) != 4:
     sys.exit('usage: <repo> <task id> <source>')
 repo, tid, source = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -74,25 +74,8 @@ def sealed_branch():
         return m['branch'] if isinstance(m.get('branch'), str) else None
     except Exception:
         return None
-def parked_owns(slug):
-    # a parked/<run>/findings.json of the candidate's worktree that names this task and source
-    d = os.path.join(repo, '.claude', 'worktrees', 'fleet-' + tid + '-' + slug, 'scratch', 'parked')
-    if os.path.islink(d) or not os.path.isdir(d):
-        return False
-    for run in sorted(os.listdir(d))[:50]:
-        f = os.path.join(d, run, 'findings.json')
-        if run == 'used' or os.path.islink(os.path.join(d, run)) or os.path.islink(f) or not os.path.isfile(f) or os.path.getsize(f) > (1 << 20):
-            continue
-        try:
-            with open(f, 'rb') as fh:
-                j = json.loads(fh.read().decode('utf-8'))
-        except (OSError, ValueError):
-            continue
-        if isinstance(j, dict) and j.get('task_id') == tid and j.get('source') == source:
-            return True
-    return False
 sb = sealed_branch()
-owned = [s for s in slugs if sb == 'fleet/' + tid + '-' + s or parked_owns(s)]
+owned = [s for s in slugs if sb == 'fleet/' + tid + '-' + s]
 out = {'slugs': slugs, 'owned': owned, 'args': [repo, tid, source]}
 out['program'] = _PROG
 out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()

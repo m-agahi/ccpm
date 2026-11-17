@@ -183,13 +183,14 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
   step (it rewrites a differing file); chunk dirs are per run, so a resume reads none.
 - #43 (cross-task branch adoption, major): `fleet_branch.py <repo> <task id> <source>` prints
   `owned` beside `slugs`, digest-covered: a slug is owned when the sealed `refs/fleet/<task id>/plan`
-  names its branch and lists `<source>` (`kind:ref`) in its brief, or when a parked
-  `findings.json` of its worktree names this task id and source. Plan mode adopts an owned slug
-  only. The prefix match alone also found another task's branch (`acme/api#2`, task id
+  names its branch and lists `<source>` (`kind:ref`) in its brief. Plan mode adopts an owned slug
+  only. A parked `findings.json` is no proof (security review: another task's coder can write one
+  in its own scratch dir), so a run stopped before its plan was sealed keeps the derived slug (a
+  new branch); slug drift only matters once a plan is sealed. The prefix match alone also found another task's branch (`acme/api#2`, task id
   `acme-api-2`, adopted `fleet/acme-api-2-7-fix-x` of `acme/api-2#7`); unowned slugs are listed in
-  a gate line and never adopted, and several of them no longer stop the run. Park findings now
-  carry `task_id` and `source`; a 7.2.0 park has neither, so it proves nothing (fail closed: the
-  derived slug). A task id that a 24-character cut would shorten keeps 15 characters plus `-` and
+  a gate line and never adopted, and several of them no longer stop the run. The seal is a hash
+  of the message, so it proves integrity, not who wrote the ref (no independent `ref_sha256`
+  exists in plan mode). A task id that a 24-character cut would shorten keeps 15 characters plus `-` and
   8 hex of the sha256 of the full ref (`yadgarhq/yadgar-backend#45` and `#46` shared one id); a
   short id is unchanged, so its branches and refs still resolve. A task in flight with such a
   long ref gets the new id: its old branch and refs are not found (re-run plan, or delete them).
