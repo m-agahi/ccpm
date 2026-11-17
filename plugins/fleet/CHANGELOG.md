@@ -7,6 +7,9 @@ Fleet 8.0.0: one major release in two cars. Car A: yaadgaar #74 and #71. Car B: 
 
 ### Changed
 
+- Version 8.0.0: FLEET_VERSION, the marketplace entry, the root README line and the test pins
+  (the harness `SCRIPTS_DIR` among them) move from 7.4.0 to 8.0.0. The plugin keeps the name
+  `fleet` until the rename car.
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or
