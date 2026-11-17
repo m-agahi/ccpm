@@ -37,7 +37,7 @@ test("7.3.0 #53 A26: unattended decides an unreadable parked prior when plan-aud
   assert.ok(!out.logs.some((l) => /^unattended: asking Max/.test(l)), out.logs.filter((l) => /unattended/.test(l)).join("\n"));
   const d = out.result.auto_decisions.filter((x) => x.gate === "default-blocker" && x.decision === "decided" && /^parked prior unreadable \(fail closed\)/.test(x.reason));
   assert.equal(d.length, 1, JSON.stringify(out.result.auto_decisions));
-  assert.match(d[0].reason, /plan-audit passed; the intent judge rules on it/);
+  assert.match(d[0].reason, /plan-audit passed; the auto gates run/);
 });
 
 test("7.3.0 #53 A26: unattended with a refusing intent judge stops; nothing is built", async () => {

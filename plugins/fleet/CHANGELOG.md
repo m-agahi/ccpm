@@ -67,7 +67,7 @@ workflow-reliability task that the plan puts IN.
   `fast_forwarded`; the run logs "fast-forwarded to origin/<default>". Build mode never does.
 - Car 2 (#53, Max ruled "Decide + log"): under unattended an unreadable parked prior is a decided
   default blocker (`auto_decisions`: `default-blocker: decided (parked prior unreadable (fail
-closed): <why>; plan-audit passed; the intent judge rules on it)`); the auto gates then run, and
+closed): <why>; plan-audit passed; the auto gates run)`); the auto gates then run, and
   a refusing intent judge still stops. Without unattended nothing changes.
 - Car 2 (#52, Max ruled Q2 (b)): a frozen resume (`freeze_digest`) checks the digest over the
   freeze ref's tree, so a worktree the coder left dirty resumes at the coder when every frozen map
@@ -203,6 +203,30 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
   `plan_diff` entry (except `"new plan"`) is, copied exactly, neither a deviation `item` nor in
   `bookkept`. A missing `bookkept` counts as `[]`, so it fails closed without being contract drift
   (`bookkept` is in the schema, not in `REQUIRED_ON_OK`).
+- m1 (#33): IaC PRs stay ready like every PR (Max's ruling; `prDraft` unchanged). A PR that is a
+  draft for another reason (`merge_after`, policy `pr_ready: false`) and carries an orchestrator or
+  IaC sign keeps the read-only CI watch again, as 7.2.0 did for its kept drafts (ADR-1199);
+  `judge()` still bars merge and rerun. A draft with no sign is "CI not run on draft" as before.
+- m2: the run's `warnings` are saved in the run-state and restored on resume. A rescan that comes
+  back clean clears `scan_warn` and rewrites the PR test block without the warning
+  (`infra:pr-tests:scan-clear`).
+- m3: `parked.py retire` moves only `<x>/scratch/parked/<run>` (a run name, not `used`) into
+  `<x>/scratch/parked/used`; any other pair is refused.
+- Parked part reads are soft on the agent cap: `partReader` skips its hard `reserve` for
+  `loadParked` (`softCap`), so a part over the cap is not run (`softDispatch` returns null) and the
+  parked draft is ignored instead of the run stopping.
+- #63: the intake `TRACKED` text now says what `briefProblem` checks: no path part that starts
+  with a dot, or is `scratch` or `parked`.
+- #39: a build whose HEAD is past `plan_base` with no build commit and no run-state stops with
+  that text ("HEAD ... is past plan_base ... with no build commit and no run-state"), not "branch
+  has build commits".
+- Nits: the #53 decision text reads "plan-audit passed; the auto gates run" (the intent judge gets
+  no `parked_unreadable` input, so it did not rule on it); the run-state chunk rewrite rounds stop
+  with stop gate `resume`; the `ws` shadow in `orchScan` is renamed `warns`; a policy draft
+  finishes "draft PR (policy pr_ready false)", not "draft PR ready for review". Not changed: a
+  part 0 with no part count keeps "plan ref missing or changed; re-run plan" because
+  `build_task_run` ("a load step that copies the right sha256 but changed content stops") pins it,
+  and such a relay does not show the ref is intact.
 
 ### Tests changed on purpose (review fixes)
 
@@ -212,6 +236,13 @@ list` registers. `run` refuses a terraform-family program (terraform, tofu, tfp,
   `build_task_run` (plan-ref chunk dir): the chunk dirs under `scratch/chunks/`.
 - New: `v730_review_bookkept`. `v403_schema_types` READS and `build_task_run` ARRAY_SITES: `r.bookkept`
   in `intentProblems`.
+- New: `v730_review_minors`. `v730_parked_unattended` A26: the #53 decision text. `v600_s3`
+  2045: the policy-draft finish reason. `v700_inputs_unchanged`: the intake TRACKED text.
+  `v730_frozen_dirty` A27: the refusal pins "freeze_digest does not match".
+- `v730_shell_programs` #9 retire: the fixture is `<x>/scratch/parked/<run>`. `v730_intake_parked_path`
+  #63: the new TRACKED text. `v508_gh_identity`: the run-state keys add `warnings`. `v403_schema_types`
+  READS and `build_task_run` ARRAY_SITES: `state.warnings`, `resume.warnings`, the second
+  `state.scanWarn` read.
 - `v730_role_text` #65 A24: the bookkeeping sentence pinned is the narrowed one.
 - `v5010_prompt_snapshot` pins: the role, schema and prompt changes above.
 - New: `v730_review_scratch_guard` (the shim guard and the denylist additions).

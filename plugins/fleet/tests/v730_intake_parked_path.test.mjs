@@ -37,6 +37,6 @@ test("7.3.0 #63: the intake prompt asks for a plan path git tracks, not one unde
   const out = await runOne(happy(), ARGS);
   const p = call(out, "intake").prompt;
   assert.match(p, /ls-files --error-unmatch/);
-  assert.match(p, /not under `\.claude\/` or a `scratch\/` dir/);
+  assert.match(p, /has no path part that starts with a dot \(such as `\.claude\/`\) or is `scratch` or `parked`/);
   assert.ok(!/plan path that exists in the repo/.test(p));
 });

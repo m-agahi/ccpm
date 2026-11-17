@@ -117,21 +117,21 @@ test("7.3.0 #9 A22: exclude_add.py run twice writes the line once; an ignored pa
 test("7.3.0 #9: parked.py retire moves the used run folder without clobbering", () => {
   const sc = mkdtempSync(join(tmpdir(), "fleet-730r-"));
   try {
-    mkdirSync(join(sc, "parked/r1"), { recursive: true });
-    writeFileSync(join(sc, "parked/r1/x.md"), "x");
-    const py = () => spawnSync("python3", ["-I", join(SCRIPTS_SRC, "parked.py"), "retire", join(sc, "parked/r1"), join(sc, "parked/used")], { encoding: "utf8" });
+    mkdirSync(join(sc, "scratch/parked/r1"), { recursive: true });
+    writeFileSync(join(sc, "scratch/parked/r1/x.md"), "x");
+    const py = () => spawnSync("python3", ["-I", join(SCRIPTS_SRC, "parked.py"), "retire", join(sc, "scratch/parked/r1"), join(sc, "scratch/parked/used")], { encoding: "utf8" });
     const r = py();
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.equal(o.moved, true);
-    assert.deepEqual(o.args, [join(sc, "parked/r1"), join(sc, "parked/used")]);
-    assert.ok(existsSync(join(sc, "parked/used/r1/x.md")) && !existsSync(join(sc, "parked/r1")));
+    assert.deepEqual(o.args, [join(sc, "scratch/parked/r1"), join(sc, "scratch/parked/used")]);
+    assert.ok(existsSync(join(sc, "scratch/parked/used/r1/x.md")) && !existsSync(join(sc, "scratch/parked/r1")));
     // again: nothing to move; an existing target is never overwritten
     assert.equal(JSON.parse(py().stdout).moved, false);
-    mkdirSync(join(sc, "parked/r1"));
-    writeFileSync(join(sc, "parked/r1/y.md"), "y");
+    mkdirSync(join(sc, "scratch/parked/r1"));
+    writeFileSync(join(sc, "scratch/parked/r1/y.md"), "y");
     assert.equal(JSON.parse(py().stdout).moved, false);
-    assert.ok(existsSync(join(sc, "parked/r1/y.md")) && existsSync(join(sc, "parked/used/r1/x.md")));
+    assert.ok(existsSync(join(sc, "scratch/parked/r1/y.md")) && existsSync(join(sc, "scratch/parked/used/r1/x.md")));
   } finally {
     rmSync(sc, { recursive: true, force: true });
   }

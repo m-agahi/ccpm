@@ -5637,6 +5637,9 @@ const ARRAY_SITES = {
   "r.symbols @ callerDisk": "parsed: the callers file-mode summary map; Array.isArray only refuses an array there",
   "r.auto_dont_care @ callerGrep": "parsed: a program map; Array.isArray only refuses an array there",
   "resume.auto_decisions @ buildFromRef": "parsed: the run-state (read-state), copied only when an array",
+  // 7.3.0 review (m2)
+  "state.warnings @ saveState": "parsed: the script's own warning list",
+  "resume.warnings @ finishOk": "parsed: the run-state (read-state), filtered to objects with a string gate",
   "r.headers_missing @ statsStep": "parsed: the pr_body_block relay (digest-checked; schema prog:pr_body_block:headers_missing)",
   // 7.1.0 (L2145)
   "r.claims @ prTestsStep": "parsed: the pr_test_block relay (digest-checked; schema prog:pr_test_block:claims)",

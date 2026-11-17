@@ -307,6 +307,12 @@ elif mode == 'retire' and len(sys.argv) == 4:
     # (made when missing), never over an existing <used>/<name>, never through a symlink.
     # Prints {moved, args}; nothing to move or a taken target is moved false, not an error.
     src, used = sys.argv[2], sys.argv[3]
+    # 7.3.0 review (m3): src is <x>/scratch/parked/<run> and used is <x>/scratch/parked/used
+    pk = os.path.dirname(os.path.realpath(src))
+    name = os.path.basename(os.path.realpath(src))
+    if os.path.basename(pk) != 'parked' or os.path.basename(os.path.dirname(pk)) != 'scratch' or not NAME_RE.fullmatch(name) or name in ('used', '.', '..') \
+            or os.path.islink(pk) or os.path.realpath(used) != os.path.join(pk, 'used'):
+        sys.exit('refusing a retire outside <scratch>/parked: ' + src + ' -> ' + used)
     dest = os.path.join(used, os.path.basename(src.rstrip('/')))
     moved = False
     if os.path.isdir(src) and not os.path.islink(src) and not os.path.islink(used):

@@ -268,7 +268,7 @@ test("6.0.0 2045: pr_ready false keeps the draft; a PR still draft or on another
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.ok(!out.build.labels.some((l) => /^infra:pr-ready/.test(l)));
-  assert.match(out.result.reason, /^draft PR ready for review/);
+  assert.match(out.result.reason, /^draft PR \(policy pr_ready false\)/);
   assert.ok(out.build.logs.some((l) => /^pr_ready false \(policy\): .* stays a draft$/.test(l)));
   for (const over of [{ is_draft: true }, { head: SHA2 }, { error: "gh pr ready: HTTP 403" }]) {
     const s2 = happy();

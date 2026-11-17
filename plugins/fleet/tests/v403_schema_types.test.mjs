@@ -808,7 +808,13 @@ const READS = {
     "resume.pr_updated boolean": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
     // 7.3.0 (#32 leftover)
     "resume.scan_warn string": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
-    "state.scanWarn string": "parsed: the script's own warning text",
+    "state.scanWarn string": ["parsed: the script's own warning text", 2],
+    // 7.3.0 review (m2)
+    "state.warnings array": "parsed: the script's own warning list (or the run-state's, filtered to objects with a string gate)",
+    "resume.warnings array": "parsed: JSON.parse of the run-state message (digest-checked read_state)",
+    "x object": "parsed: a resume.warnings entry (JSON.parse of the run-state message)",
+    "x array": "parsed: a resume.warnings entry (JSON.parse of the run-state message); an array is refused here",
+    "x.gate string": "parsed: a resume.warnings entry's gate (JSON.parse of the run-state message)",
     "ru object": "parsed: resume.update, JSON.parse of the run-state message (digest-checked read_state)",
     "rv.nits.length number-literal": "parsed: the length of reviewStep's nits, an array the script built",
     // 6.0.0 (ledger 2034)

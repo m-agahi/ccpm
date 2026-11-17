@@ -49,5 +49,7 @@ test("7.3.0 #52 A27: a dirty tree with one frozen test file changed still refuse
   const r = await runOne(s, buildArgsOf(planRef, { freeze_digest: out.result.freeze_digest }));
   assert.equal(r.result.status, "needs_human");
   assert.equal(r.result.stop_gate, "resume");
+  // review nit: the refusal is the freeze digest's, not another resume check's
+  assert.match(r.result.reason, /freeze_digest does not match/);
   assert.ok(!r.labels.some((l) => /^role:/.test(l)), r.labels.join(", "));
 });

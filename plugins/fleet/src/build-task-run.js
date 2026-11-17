@@ -1605,7 +1605,7 @@ const PROGRAM_SHA256 = {
   "hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
   "hook_surface": "2432e6d881cfa37850c4268b26cc6591fdcccf9b74f818ab70886125f34769f0",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
-  "parked": "e810605024d57e4397e80cfd5153f96448449169f7ac57b9d530425cd3a493a8",
+  "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
   "plan_dsn": "f02908de588f71426a2995b86884be5e15127fd9fc48ead3710c0e71b481277b",
   "plan_files": "360fc1c69092e8da9f11cdded6296ef429c3db870181881ffff949a5b3c8253c",
@@ -2512,7 +2512,7 @@ function hasherPrompt(inputs) {
 }
 
 // 7.3.0 (#63)
-const TRACKED = "is tracked by git (`git -C <repo> ls-files --error-unmatch <path>` exits 0) and is not under `.claude/` or a `scratch/` dir";
+const TRACKED = "is tracked by git (`git -C <repo> ls-files --error-unmatch <path>` exits 0) and has no path part that starts with a dot (such as `.claude/`) or is `scratch` or `parked`";
 function intakePrompt(inputs) {
   return (
     INFRA_STEP + "INTAKE. Read only. Never write, edit, comment, transition or post anywhere: no file edits, no git writes, no ledger, ticket, issue or PR writes.\n" +
@@ -2638,7 +2638,7 @@ async function loadParked(scratch, tip) {
     const x = await softDispatch(lbl, loadParkedPrompt({ scratch, run: k.run, part: i }), opts);
     return x && x.status === "ok" && !programProblem(x, "parked") && canonical(x.args) === canonical([scratch, k.run, String(i)]) ? x : null;
   };
-  const { partOk, readParts } = partReader({ prefix: label, what: "the parked draft parts", load: one, checked: (x) => x, soft: one });
+  const { partOk, readParts } = partReader({ prefix: label, what: "the parked draft parts", load: one, checked: (x) => x, soft: one, softCap: true });
   let p0 = await one(label + ":p0", 0);
   if (!partOk(p0, 0, n)) {
     gate(label + ":p0: unusable; reading once more");
@@ -5959,7 +5959,7 @@ async function planMode(input, date) {
   }
   const ls = ledgerSourceOf(brief, input.project);
   if (ua && confirm !== confirm0) autoDecide("confirm", "auto", "the Build confirmation (confirm " + confirm0 + (input.brief_marker ? "; the fleet-brief marker is treated as a ruling" : "") + ")");
-  for (const b of decided) autoDecide("default-blocker", "decided", b + (/^re-plan relaxed/.test(b) ? "; the intent judge rules on it" : b === PARKED_UNREADABLE ? ": " + parked.unreadable + "; plan-audit passed; the intent judge rules on it" : /^task id /.test(b) && ls ? "; ledger_source " + ls.ledger + " " + ls.ref : ""));
+  for (const b of decided) autoDecide("default-blocker", "decided", b + (/^re-plan relaxed/.test(b) ? "; the intent judge rules on it" : b === PARKED_UNREADABLE ? ": " + parked.unreadable + "; plan-audit passed; the auto gates run" : /^task id /.test(b) && ls ? "; ledger_source " + ls.ledger + " " + ls.ref : ""));
   if (ua && blockers.length) {
     gate("unattended: asking Max (" + blockers.join("; ") + ")");
     return awaiting("plan ready: confirm, then run mode build with plan_ref" + ledgerSourceText(ls), p, pc.tiny, pc.full, { ledger_source: ls, confirm_reason: blockers.join("; ") });
@@ -6323,7 +6323,8 @@ function partReader(o) {
     if (count === null) return null;
     const parts = [p0];
     if (count > 1) {
-      reserve(count - 1, o.what);
+      // 7.3.0 review: a soft caller (loadParked) never halts on the cap; softDispatch returns null over it
+      if (!o.softCap) reserve(count - 1, o.what);
       const ks = Array.from({ length: count - 1 }, (_, i) => i + 1);
       // a throw inside a thunk resolves to null: no halt() may be reached inside softDispatch here (no digest; the program slot is placed)
       const rest = await parallel(ks.map((k) => () => o.soft(o.prefix + ":p" + k + tag, k)));
@@ -6577,7 +6578,14 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       resumeState = hr;
     }
   } else if (v.head !== planBase)
-    halt("needs_human", "approved but unresumable: branch has build commits without run-state; push manually or delete branch", "resume");
+    halt(
+      "needs_human",
+      "approved but unresumable: " +
+        ((v.commits_since || []).length
+          ? "branch has build commits without run-state; push manually or delete branch"
+          : "HEAD " + v.head + " is past plan_base " + planBase + " with no build commit and no run-state; reset " + branch + " to plan_base or re-run plan"),
+      "resume",
+    );
   // 2033: sealed in the run-state; stream 3 reads state.policy.caps
   // 6.3.0 (security review): the current file (or a resume's run-state seal), never looser than the plan ref's seal
   const policy = (state.policy = ref.policy ? stricterPolicy(await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy), ref.policy, resume ? "the run-state's" : "the current file") : await policyStep(ws.remoteHost, remoteSlug, resume && resume.policy));
@@ -6842,6 +6850,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           update: state.update || null,
           // 7.3.0 (#32 leftover): the orch_scan warning stays in the PR test block across a resume
           scan_warn: typeof state.scanWarn === "string" ? state.scanWarn : null,
+          // 7.3.0 review (m2): the run's warnings survive a resume
+          warnings: Array.isArray(state.warnings) ? state.warnings : [],
         },
         wb ? { write_back: wb.write_back, ledger_adapter: wb.ledger_adapter, ledger_reason: wb.ledger_reason, ledger_status: wb.ledger_status, comment_status: wb.comment_status, comment_text: wb.comment_text } : {},
       ),
@@ -6858,7 +6868,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
         // 7.3.0 (#47a): over one writer's bound the chunks go to parallel writers first
         const pfx = "infra:state-chunks:" + label.slice("infra:state:".length);
         await writeChunksParallel(pfx, si.chunk_dir, c, c.chunks.map((x, i) => i), "PR", 0, "run-state");
-        r = await chunkRounds(label, pfx, si.chunk_dir, c, "PR", (lbl) => dispatch(lbl, writeStatePrompt(si, json, true), { schema: INFRA_SCHEMA, phase: "PR" }), "run-state", "no run-state was written");
+        r = await chunkRounds(label, pfx, si.chunk_dir, c, "PR", (lbl) => dispatch(lbl, writeStatePrompt(si, json, true), { schema: INFRA_SCHEMA, phase: "PR" }), "run-state", "no run-state was written", "resume");
         if (r.status !== "ok") halt(r.status === "failed" ? "failed" : "needs_human", label + " returned " + r.status + ": " + (r.reason || "no reason"));
       }
     } finally {
@@ -7099,7 +7109,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       return null;
     };
     if (!policy.caps.ci_watch) return done("CI watch off (policy)");
-    if (!state.prReady) return done("CI not run on draft");
+    // 7.3.0 review (m1, ADR-1199): a draft with an orchestrator or IaC sign keeps the watch; judge() bars merge and rerun
+    if (!state.prReady && !(o.orchestrator || iac)) return done("CI not run on draft");
     let head = approvedSha;
     let reran = false;
     for (;;) {
@@ -7333,8 +7344,8 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     // 7.3.0 (#32): an error gets one retry; the second result counts
     if (o.error !== null && !again) return orchScan(head, (tag ? tag + ":" : "") + "retry", true);
     // still an error: a warning on every scan path (ready, merge, u1), never an ok with no warning
-    const ws = (state.warnings = state.warnings || []);
-    if (o.error !== null && !ws.some((x) => x.gate === "orch_scan" && x.error === o.error)) ws.push({ gate: "orch_scan", error: o.error });
+    const warns = (state.warnings = state.warnings || []);
+    if (o.error !== null && !warns.some((x) => x.gate === "orch_scan" && x.error === o.error)) warns.push({ gate: "orch_scan", error: o.error });
     return (orch = o);
   }
   async function readyStep() {
@@ -7350,6 +7361,12 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       const targs = [g, remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)];
       await prTestsStep("infra:pr-tests:scan-warning", targs, tb, pr.pr_url, []);
       gate("warning: orchestrator/IaC scan error after one retry (" + o.error + "): no merge, no CI rerun; named in the PR body");
+    } else if (typeof state.scanWarn === "string") {
+      // 7.3.0 review (m2): a clean rescan takes the warning out of the PR test block
+      state.scanWarn = null;
+      const tb = testsBlock(suiteResult, ref.plan_facts.test_cmd, null);
+      await prTestsStep("infra:pr-tests:scan-clear", [g, remoteSlug, String(pr.pr_number), base64Of(tb), testsHeaders(ref.plan_facts.conventions.body, state.unattended)], tb, pr.pr_url, []);
+      gate("orchestrator/IaC scan clean: the scan warning is out of the PR body");
     }
     if (mergeAfter !== null) return gate("merge_after: " + mergeAfter + ": " + pr.pr_url + " stays a draft");
     if (!policy.caps.pr_ready) return gate("pr_ready false (policy): " + pr.pr_url + " stays a draft");
@@ -7390,7 +7407,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   function finishOk(resumedAt) {
     history.agents += state.agents - opt.agentsBase;
     gate("cumulative: run " + history.runs + ", re-plans " + history.replans + ", agents " + history.agents);
-    const out = finish("ok", resumedAt === "done" ? "resumed: the run had already finished; recorded result" : (state.prReady ? "PR ready for review" : mergeAfter !== null ? "draft PR (merge after: " + mergeAfter + ")" : "draft PR ready for review") + (state.ciNote ? "; " + state.ciNote : ""));
+    const out = finish("ok", resumedAt === "done" ? "resumed: the run had already finished; recorded result" : (state.prReady ? "PR ready for review" : mergeAfter !== null ? "draft PR (merge after: " + mergeAfter + ")" : "draft PR (policy pr_ready false)") + (state.ciNote ? "; " + state.ciNote : ""));
     out.created = pr ? pr.created : null;
     out.template_used = pr ? pr.template_used || null : null;
     out.cumulative = history;
@@ -7417,6 +7434,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
     iacTouched = resume.iac_touched === true;
     if (resume.ci && typeof resume.ci === "object") state.ci = resume.ci;
     if (typeof resume.scan_warn === "string") state.scanWarn = resume.scan_warn;
+    if (Array.isArray(resume.warnings)) state.warnings = resume.warnings.filter((x) => x && typeof x === "object" && !Array.isArray(x) && typeof x.gate === "string");
     // 6.0.1 D5: update-branch stays once per run across a resume; a corrupt update record stops (N1)
     state.prUpdated = resume.pr_updated === true;
     const ru = resume.update;
