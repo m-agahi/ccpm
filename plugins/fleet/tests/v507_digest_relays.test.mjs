@@ -241,10 +241,13 @@ test("5.0.7 2020: only a changed map is expanded, by one hash-diff call; unchang
   const diffs = out.labels.filter((l) => l.startsWith("infra:hash-diff:"));
   assert.deepEqual(diffs, ["infra:hash-diff:writers:r1"]);
   const args = inputsOf(call(out, "infra:hash-diff:writers:r1").prompt).args;
-  // the git map only (the stubs' test-file hashes do not change), by its two files
-  assert.deepEqual(args.filter((a, i) => i % 3 === 1), ["git"]);
+  // the git map only (the stubs' test-file hashes do not change), by its two files;
+  // 7.4.0 (#22): after --allow and the round's own test files
+  assert.deepEqual(args.slice(1, 3), ["--allow", JSON.stringify(["files:tests/test_a.py", "files:tests/test_b.py"])]);
+  const tr = [args[0]].concat(args.slice(3));
+  assert.deepEqual(tr.filter((a, i) => i % 3 === 1), ["git"]);
   assert.match(args[0], /\/scratch$/);
-  assert.ok(args.slice(2).every((x) => /^[0-9a-f]{12}$/.test(x)));
+  assert.ok(tr.slice(2).every((x) => /^[0-9a-f]{12}$/.test(x)));
   // the per-call schema the agent's StructuredOutput is held to: rows are string arrays
   const sch = call(out, "infra:hash-diff:writers:r1").opts.schema.properties;
   assert.deepEqual(sch.changed.items, { type: "array", items: { type: "string" } });
@@ -380,15 +383,16 @@ test("5.0.7 2020: a comparison whose file does not match its sha256, or whose co
 
 test("5.0.7 2020: a capped key list routes nothing it did not list: past the cap a writer round stops at ownership", async () => {
   const s = scenario("writers", "git");
-  s["infra:hash-diff:writers:r1"] = (p) => ({ status: "ok", reason: "x", changed: [["git", "config:local", "changed"]], total: 60, counts: { git: [1, 1] }, error: null, ...hd(p) });
+  s["infra:hash-diff:writers:r1"] = (p) => ({ status: "ok", reason: "x", changed: [["git", "config:local", "changed"]], total: 60, allowed: [], allowed_changed: 0, counts: { git: [1, 1] }, error: null, ...hd(p) });
   const out = await run(s, ARGS);
   assert.deepEqual([out.result.status, out.result.stop_gate], ["needs_human", "ownership"]);
-  assert.equal(out.result.reason, "writer touched git:config:local in test round 1 (not a test file of AC1, AC2)");
+  // 7.4.0 (#22): past the cap the halt says so, and names the listed rows
+  assert.equal(out.result.reason, "writer touched more than 50 changed files outside the round's test files (59 more) in test round 1; listed first: git:config:local");
   const s2 = scenario("writers", "git");
-  s2["infra:hash-diff:writers:r1"] = (p) => ({ status: "ok", reason: "x", changed: [["files", "tests/test_a.py", "changed"]].slice(0, 0), total: 60, counts: { git: [1, 1] }, error: null, ...hd(p) });
+  s2["infra:hash-diff:writers:r1"] = (p) => ({ status: "ok", reason: "x", changed: [["files", "tests/test_a.py", "changed"]].slice(0, 0), total: 60, allowed: [], allowed_changed: 0, counts: { git: [1, 1] }, error: null, ...hd(p) });
   const o2 = await run(s2, ARGS);
   assert.deepEqual([o2.result.status, o2.result.stop_gate], ["needs_human", "ownership"]);
-  assert.match(o2.result.reason, /^writer touched git: \(60 more\) in test round 1/);
+  assert.match(o2.result.reason, /^writer touched more than 50 changed files outside the round's test files \(60 more\) in test round 1/);
 });
 
 // ---------------------------------------------------------------- one retry on a digest-only miss
@@ -665,7 +669,8 @@ function oneMapListed(site, tag) {
 test("5.0.7 review SF2: a changed map with no listed row and no overflow fails closed (writers: ownership; post-coder: hash)", async () => {
   let out = await run(oneMapListed("writers", "writers:r1"), ARGS);
   assert.deepEqual([out.result.status, out.result.stop_gate], ["needs_human", "ownership"]);
-  assert.match(out.result.reason, /^writer touched frozen files map changed \(3 -> 3 entries; the key list is unavailable: the sections map changed but no key of it is listed\) in test round 1/);
+  // 7.4.0 (#22): the halt names every unowned row, not only the first
+  assert.match(out.result.reason, /^writer touched frozen files map changed \(3 -> 3 entries; the key list is unavailable: the sections map changed but no key of it is listed\), frozen sections map changed \(1 -> 1 entries; the key list is unavailable: the sections map changed but no key of it is listed\) in test round 1/);
   out = await run(oneMapListed("coder", "code:r1"), ARGS);
   assert.deepEqual([out.result.status, out.result.stop_gate], ["needs_human", "hash"]);
   assert.match(out.result.reason, /the key list is unavailable: the sections map changed but no key of it is listed/);

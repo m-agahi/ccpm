@@ -140,7 +140,8 @@ FIX_TIMEOUT = [False]
 # 6.3.0 (6.2.2 carry-over low 1): the fixer time and the check budget, named in a timeout note
 TIMING = ['']
 before = snapshot(wt)
-if sel.get('dirty') is True:
+DIRTY = sel.get('dirty') is True
+if DIRTY:
     cand = names(git(wt, 'diff-tree', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', before).stdout)
 else:
     cand = list(sel.get('paths') or [])
@@ -178,10 +179,29 @@ def snap():
 def gitlinks(tree, p):
     out = git(wt, 'ls-tree', '-r', '-z', tree, '--', p).stdout.split(b'\0')
     return [r.partition(b'\t')[2].decode('utf-8', 'replace') for r in out if r.split(b' ')[0] == b'160000']
+def exempt(q):
+    # 7.4.0 (#15, Max ruling L2017 "Allow, hooks run at commit"): a selected path under a
+    # directory hook path is no offender; the hooks run on it at the commit step. In dirty
+    # mode every dirty path is selected, so only a frozen one is exempt: the post-coder hash
+    # check refuses any change to it. An unfrozen dirty path stays an offender.
+    # The ruling covers plain files only (security review): a file that loads on import or
+    # configures a tool stays an offender, selected or not.
+    return q in sel_set and (not DIRTY or q in frozen) and not config_like(q)
+CONFIG_NAMES = {'conftest.py', '__init__.py', 'setup.py', 'setup.cfg', 'tox.ini', 'pytest.ini',
+                'pyproject.toml', 'sitecustomize.py', 'usercustomize.py', 'noxfile.py', 'manage.py',
+                'package.json', 'Makefile', 'makefile', 'GNUmakefile', 'Cargo.toml', 'build.rs',
+                'go.mod', 'go.work', '.pre-commit-config.yaml', '.pre-commit-hooks.yaml'}
+CONFIG_STEMS = ('jest.config', 'vitest.config', 'vite.config', 'babel.config', 'karma.conf',
+                'webpack.config', 'rollup.config', 'eslint.config', 'prettier.config', 'playwright.config',
+                'cypress.config', 'ava.config', 'tsconfig', 'jsconfig')
+def config_like(q):
+    b = q.rsplit('/', 1)[-1]
+    return (b in CONFIG_NAMES or b.endswith(('.pth', '.cfg', '.ini', '.toml'))
+            or b.startswith('.') or b.startswith(CONFIG_STEMS))
 def dir_offenders(p):
     # what under directory hook path p is not HEAD's: a path that differs
-    # between HEAD and the snapshot, any untracked or ignored path (selected
-    # paths included: a conftest.py or module there runs inside the hook). A
+    # between HEAD and the snapshot, any untracked or ignored path (exempt()
+    # paths aside: any other conftest.py or module there runs inside the hook). A
     # symlinked or replaced directory, or a gitlink under p at HEAD or in the
     # snapshot (its untracked content is invisible here), is the offender.
     fp = os.path.join(wt, p)
@@ -191,7 +211,7 @@ def dir_offenders(p):
     if links:
         return sorted(set(links))
     out = names(git(wt, 'diff-tree', '-r', '-z', '--name-only', '--no-renames', 'HEAD^{tree}', snap(), '--', p).stdout) + others(p)
-    return sorted(set(out))
+    return sorted(set(q for q in out if not exempt(q)))
 OFFENDERS = []
 def differs(p):
     if p not in tracked:
@@ -200,7 +220,7 @@ def differs(p):
             OFFENDERS.extend(hit)
             return bool(hit)
         return os.path.lexists(os.path.join(wt, p))
-    return git(wt, 'diff', '--quiet', 'HEAD', '--', p, check=False).returncode != 0
+    return git(wt, 'diff', '--ignore-submodules=none', '--quiet', 'HEAD', '--', p, check=False).returncode != 0
 CACHE_DIRS = ('__pycache__', '.pytest_cache')
 def purge_caches():
     # 5.0.4 (ledger 2013): a hook run in the worktree (format-plan, the commit

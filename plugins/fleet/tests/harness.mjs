@@ -815,24 +815,32 @@ function byHandle(scratch, m, pre) {
 }
 // the hash-diff program over registered maps (its output, unrelayed); 5.0.7
 // review: args <scratch> (<map> <old handle> <new handle>)+
+// 7.4.0 (#22): optional --allow <JSON list of "<map>:<key>"> right after <scratch>
 export function hashDiffOut(args) {
-  const out = { changed: [], total: null, counts: {}, resolved: {}, error: null, args: args.slice() };
+  const out = { changed: [], total: null, allowed: [], allowed_changed: null, counts: {}, resolved: {}, error: null, args: args.slice() };
   const rows = [];
-  for (let i = 1; i < args.length; i += 3) {
-    const [m, pa, pb] = args.slice(i, i + 3);
-    const fa = byHandle(args[0], m, pa);
-    const fb = byHandle(args[0], m, pb);
+  const okRows = [];
+  let allow = new Set();
+  let rest = args;
+  if (args[1] === "--allow") {
+    allow = new Set(JSON.parse(args[2]));
+    rest = [args[0]].concat(args.slice(3));
+  }
+  for (let i = 1; i < rest.length; i += 3) {
+    const [m, pa, pb] = rest.slice(i, i + 3);
+    const fa = byHandle(rest[0], m, pa);
+    const fb = byHandle(rest[0], m, pb);
     // the program exits non-zero on a handle that names no file, or two
-    if (!fa || !fb) return { exit: "0 files match " + m + "-" + (fa ? pb : pa) + "*.json in " + args[0] + "/hashes: need exactly one, so a missing state never reads as no change" };
+    if (!fa || !fb) return { exit: "0 files match " + m + "-" + (fa ? pb : pa) + "*.json in " + rest[0] + "/hashes: need exactly one, so a missing state never reads as no change" };
     out.resolved[m] = [fa.slice(-69, -5), fb.slice(-69, -5)];
     const drop = (x) => Object.fromEntries(Object.entries(x).filter(([k]) => !(m === "ignored" && k === SETTINGS_LOCAL)));
     const a = drop(MAP_REG.get(fa));
     const b = drop(MAP_REG.get(fb));
     out.counts[m] = [Object.keys(a).length, Object.keys(b).length];
     for (const k of [...new Set(Object.keys(a).concat(Object.keys(b)))].sort())
-      if (a[k] !== b[k]) rows.push([m, k, !(k in a) ? "added" : !(k in b) ? "removed" : "changed"]);
+      if (a[k] !== b[k]) (allow.has(m + ":" + k) ? okRows : rows).push([m, k, !(k in a) ? "added" : !(k in b) ? "removed" : "changed"]);
   }
-  return Object.assign(out, { changed: rows.slice(0, 50), total: rows.length });
+  return Object.assign(out, { changed: rows.slice(0, 50), total: rows.length, allowed: okRows.slice(0, 50), allowed_changed: okRows.length });
 }
 // 5.0.6 (ledger 2019): the build vars a role gets, one row per tool (kept
 // here apart from the workflow's BUILD_ENV_ROWS, so a drift there fails)

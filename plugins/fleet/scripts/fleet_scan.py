@@ -55,7 +55,7 @@ if tip is not None:
     if run('rev-parse', '--verify', tip + '^{commit}').decode().strip() != tip:
         sys.exit('base tip is not a commit')
     base = tip
-diff = names(run('diff', '--name-only', '-z', '--no-renames', base + '...' + sha, '--'))
+diff = names(run('diff', '--ignore-submodules=none', '--name-only', '-z', '--no-renames', base + '...' + sha, '--'))
 commits = []
 for c in run('rev-list', base + '..' + sha).decode().split():
     files = names(run('diff-tree', '-r', '-m', '--root', '--no-commit-id', '--name-only', '-z', '--no-renames', c))

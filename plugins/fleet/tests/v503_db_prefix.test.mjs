@@ -48,8 +48,10 @@ const BAD = [
   ["true", true],
   ["null", null],
   ["a list", ["iam_db_"]],
+  // 7.4.0 #11: fullmatch, not match
+  ["trailing newline", "iam_db_\n"],
 ];
-const GOOD = ["iam_db_", "a_", "a" + "b".repeat(30) + "_", "task_db_"];
+const GOOD = ["iam_db_", "a_", "a" + "b".repeat(30) + "_", "task_db_", "f_", "fl_"];
 
 // ---------------------------------------------------------------- db_up.py, against a podman stub
 

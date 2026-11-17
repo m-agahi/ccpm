@@ -832,6 +832,7 @@ const MAP_ALL = "*";
 const IGNORED_CHANGED = "ignored files changed";
 const HASH_FILES = {};
 const KEY_KINDS = ["added", "removed", "changed"];
+const MORE_OUTSIDE = "more than 50 changed files outside the round's test files";
 const RELAY_CAP_MARK = "FLEET_HASHER_RELAY_CAP:";
 function violationName(x) {
 if (x.map === "ignored" && x.settings)
@@ -1463,12 +1464,12 @@ const PROGRAM_SHA256 = {
 "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
 "exclude_add": "8e510601a0deac5baa673f1a888a78fa28c3cf49c20e2949a539252ffdea3566",
 "fleet_branch": "f1af514598ab542d58a16456f00e5cba0aeb43131fc2eab1618e2ca87bf846d7",
-"fleet_scan": "ba295b1eb2aa0d4bb2f4fcbcd13a7afb401abe3887dff23bb74f8e86db746789",
-"format_files": "6890f94e46365fecdff078a39b28cda938d715b53ef7157baee5475b38a6951a",
+"fleet_scan": "7bbeae69c4bad1a78883c0726da690dc63ef75067e5416da42feb8b086ceb3f7",
+"format_files": "1a38b2822c17227ea89e9ac345621571c39d8019e356588788b69888f15dd467",
 "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
-"hash_diff": "2b945ffa190dc75629491d17d1a52bc50d264aa31abc439eb812ff6c78feda5c",
-"hasher": "aa1fba52dcc79c8d6fb1ceba3b3f993362c3048b70acd3ac861aa2fd5b79c94e",
-"hook_surface": "2432e6d881cfa37850c4268b26cc6591fdcccf9b74f818ab70886125f34769f0",
+"hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
+"hasher": "869a4df97832a2c762934a316c83fb19923e946f2331278ab810b1acc55f5a0a",
+"hook_surface": "f4c20e8962ce3d5e283ce2b1773a62c9cd7b7e981d971ca122f928e4bd7f7e87",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1488,7 +1489,7 @@ const PROGRAM_SHA256 = {
 "read_state": "c6ce8ab9dfe4ae85b144e3cc90c007334794f8e725bd8bfba071544365e18c89",
 "remote_head": "b5ad5f009c9ca166fefd68fb54a33211465827fe7a78d7fc2e5e6c8afa612f58",
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
-"review_paths": "711143e444b4d9772c8023c22fbb93735239030d503dd58247050553d7fce29b",
+"review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
 "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
 "scratch_copy": "1807aea9a3afbaac7e63acca21df6ad4b9f1a55f392972cd753eaec6d161a690",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
@@ -1496,7 +1497,7 @@ const PROGRAM_SHA256 = {
 "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
 "test_db_decl": "c2e9f36d23fb147835a85c4421d5e38a05912d343fdaa1f08fe285c3cfc5c11d",
 "tf_gate": "f147f9c7e729aaf6b6adc39c4599112e6ac1040c385d103f970775d57cf8e070",
-"verify_since": "91524ed3b1c39d49e2f5be4497d2e118b85e56482bd5e02256a17630405bb340"
+"verify_since": "49e9c91f4bfe302b9a7c5c88c20636518521515becfd2e4a709f5f3a8ad4b786"
 };
 // PROGRAM_SHA256_END
 function programTable() {
@@ -1677,7 +1678,7 @@ const PROGRAM_KEYS = {
 "db_sweep": ["podman", "removed", "kept", "errors"],
 "db_up": ["name", "port", "dbs", "users", "expiry", "args"],
 "db_down": ["removed", "absent", "error", "args"],
-"hash_diff": ["changed", "total", "counts", "resolved", "error", "args"],
+"hash_diff": ["changed", "total", "allowed", "allowed_changed", "counts", "resolved", "error", "args"],
 "build_dir:reset": ["dirs", "args"],
 "build_dir:clean": ["removed", "bytes", "args"],
 };
@@ -1909,6 +1910,8 @@ db_down: { removed: BOOL, absent: BOOL, error: STR_OR_NULL, args: STRS, digest: 
 hash_diff: {
 changed: { type: "array", items: { type: "array", items: STR } },
 total: { type: ["integer", "null"] },
+allowed: { type: "array", items: { type: "array", items: STR } },
+allowed_changed: { type: ["integer", "null"] },
 counts: { type: "object", additionalProperties: { type: "array", items: INT } },
 resolved: { type: "object", additionalProperties: STRS },
 error: STR_OR_NULL,
@@ -3392,7 +3395,7 @@ return list
 .filter((x) => x && typeof x === "object" && typeof x.summary === "string" && x.summary.trim())
 .map((x) => ({ summary: x.summary, path: typeof x.path === "string" ? x.path : null }));
 }
-async function callRole(role, label, inputs, phaseName, agentType, deferCheck, noRetry) {
+async function callRole(role, label, inputs, phaseName, agentType, deferCheck, noRetry, buildKeys) {
 const opts = { schema: SCHEMAS[role], phase: phaseName };
 if (agentType) opts.agentType = agentType;
 if (TAIL_RE.test(label)) state.tail++;
@@ -3401,7 +3404,7 @@ state.agents++;
 const prompt = rolePrompt(role, inputs);
 let r = await roleAgent(role, label, prompt, opts);
 if (r == null) halt("failed", "agent " + label + " returned no result");
-if (!noRetry) r = await retryOnDrift(role, label, prompt, opts, r);
+if (!noRetry) r = await retryOnDrift(role, label, prompt, opts, r, buildKeys);
 if (deferCheck) return r;
 checkRole(role, r);
 collect(role, r);
@@ -3456,7 +3459,7 @@ if (VERDICTS[role] && VERDICTS[role].indexOf(r.verdict) < 0)
 return { msg: "contract drift: " + role + " verdict " + r.verdict, detail: "verdict " + r.verdict };
 return null;
 }
-async function retryOnDrift(role, label, prompt, opts, r) {
+async function retryOnDrift(role, label, prompt, opts, r, buildKeys) {
 if (r == null || r.status !== "ok") return r;
 const fp = roleFileProblem(role, r);
 const sp = fp ? null : sharedFileProblem(role, r);
@@ -3464,6 +3467,7 @@ const d = fp ? { msg: fp, detail: "role_file" } : sp ? { msg: sp, detail: "share
 if (!d) return r;
 const rl = label + ":retry";
 reserve(1, rl);
+if (buildKeys && buildKeys.length) await resetBuild(label.replace(/^role:/, "") + ":drift", buildKeys, opts.phase);
 await pathRecheck(rl.replace(/^role:/, ""), opts.phase);
 state.agents++;
 const r2 = await roleAgent(role, rl, prompt + "\nYour previous result was refused: " + d.msg + ". Return the whole object again.", opts);
@@ -3554,7 +3558,7 @@ return Object.assign({}, r, { hashes: Object.assign({}, h, view) });
 }
 const BUILD_ENV_HINT =
 " (likely cause: a build or test command ran without the fleet build env, test_env_prefix, so build output or a cache such as target/ or __pycache__ changed in the worktree)";
-async function expandKeys(keys, a, b, tag, phaseName, errGate) {
+async function expandKeys(keys, a, b, tag, phaseName, errGate, allow) {
 const maps = keys.filter((x) => x.key === MAP_ALL).map((x) => x.map);
 if (!maps.length) return keys;
 const args = [];
@@ -3569,6 +3573,9 @@ if (!args.length) args.push(f[0].replace(/\/hashes\/[^/]+$/, ""));
 args.push(m, full[m][0].slice(0, 12), full[m][1].slice(0, 12));
 }
 }
+const ok = {};
+for (const k of allow || []) ok[k] = true;
+if (allow && allow.length && args.length) args.splice(1, 0, "--allow", JSON.stringify(allow.map((k) => "files:" + k)));
 let r = null;
 if (!why) {
 reserve(1, "infra:hash-diff:" + tag);
@@ -3576,14 +3583,17 @@ r = await softDispatch("infra:hash-diff:" + tag, hashDiffPrompt({ args }), { sch
 const digestOk = !!r && r.status === "ok" && relayDigestOk(r, progKeys("hash_diff"), "hash_diff");
 const argsOk = digestOk && canonical(r.args) === canonical(args);
 const relayed = argsOk && canonical(r.resolved) === canonical(full);
+const rowOk = (w) => Array.isArray(w) && w.length === 3 && maps.indexOf(w[0]) >= 0 && typeof w[1] === "string" && KEY_KINDS.indexOf(w[2]) >= 0;
+const isOk = (w) => w[0] === "files" && ok[w[1]] === true;
 const rowsOk =
-relayed && Number.isInteger(r.total) && Array.isArray(r.changed) && r.changed.length <= r.total &&
-r.changed.every((w) => Array.isArray(w) && w.length === 3 && maps.indexOf(w[0]) >= 0 && typeof w[1] === "string" && KEY_KINDS.indexOf(w[2]) >= 0);
+relayed && Number.isInteger(r.total) && Array.isArray(r.changed) && r.changed.length <= r.total && r.changed.every((w) => rowOk(w) && !isOk(w)) &&
+Number.isInteger(r.allowed_changed) && Array.isArray(r.allowed) && r.allowed.length <= r.allowed_changed && r.allowed.every((w) => rowOk(w) && isOk(w));
+const listed = rowsOk ? r.changed.concat(r.allowed) : [];
 why = !r ? "no result" : r.status !== "ok" ? "the step returned " + r.status + ": " + String(r.reason || "no reason").slice(0, 300) : !digestOk ? "the relay does not match the program's digest" : !argsOk ? "the program ran on other arguments than the workflow sent" : !relayed ? "the program read other map files than the summaries name" : typeof r.error === "string" && r.error ? r.error
 : !rowsOk ? "no usable key list"
 : !maps.every((m) => canonical(r.counts && r.counts[m]) === canonical([countOf(a[m]), countOf(b[m])])) ? "a map file does not hold its relayed count"
-: r.total === 0 ? "no key listed although the digests differ"
-: r.total === r.changed.length && maps.find((m) => !r.changed.some((w) => w[0] === m)) ? "the " + maps.find((m) => !r.changed.some((w) => w[0] === m)) + " map changed but no key of it is listed" : null;
+: r.total === 0 && r.allowed_changed === 0 ? "no key listed although the digests differ"
+: r.total === r.changed.length && r.allowed_changed === r.allowed.length && maps.find((m) => !listed.some((w) => w[0] === m)) ? "the " + maps.find((m) => !listed.some((w) => w[0] === m)) + " map changed but no key of it is listed" : null;
 }
 if (why && errGate) halt("needs_human", "hasher maps " + tag + ": the " + maps.join(", ") + " map(s) changed and the key list is unavailable: " + why + "; a key is never routed unseen", errGate);
 const out = [];
@@ -3591,11 +3601,12 @@ for (const x of keys) {
 if (x.key !== MAP_ALL) out.push(x);
 else if (why) out.push(Object.assign({}, x, { unavailable: why, before: a[x.map], after: b[x.map] }));
 else {
-const rows = r.changed.filter((w) => w[0] === x.map);
+const rows = r.changed.concat(r.allowed).filter((w) => w[0] === x.map);
 for (const w of rows) out.push({ map: w[0], key: w[1], name: keyName(w[0], w[1]), kind: w[2], expanded: true });
 if (x.map === maps[maps.length - 1] && r.total > r.changed.length) out.push({ map: x.map, key: MAP_ALL, more: r.total - r.changed.length, expanded: true });
 }
 }
+out.allowedMore = !why && r ? r.allowed_changed - r.allowed.length : 0;
 return out;
 }
 function keyNames(keys) {
@@ -3629,7 +3640,7 @@ return relayDigestOk(r, progKeys(digest), name) && Array.isArray(args) && canoni
 }
 async function judged(role, label, roundTag, inputs, worktree, phaseName, pre, files, opts) {
 const before = pre || (await hasher(opts && opts.preLabel ? opts.preLabel : "hasher:fp-pre:" + roundTag, worktree, files, phaseName));
-const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT, true);
+const r = await callRole(role, label, inputs, phaseName, JUDGE_AGENT, true, false, opts && opts.buildKeys);
 const after = await hasher("hasher:fp-post:" + roundTag, worktree, files, phaseName);
 if (!sameState(before, after, worktree)) {
 let what = [];
@@ -4593,6 +4604,9 @@ const mp = {};
 for (const t of targets) mp[t] = Array.isArray((r.make_paths || {})[t]) ? r.make_paths[t].map((x) => normPath(String(x))) : t.indexOf("npm:") === 0 ? null : [];
 return { surface: r.surface.map((x) => (/\/$/.test(String(x)) ? (String(x) === "./" ? "./" : normPath(String(x)) + "/") : normPath(String(x)))), make_paths: mp };
 }
+function logPath(p) {
+return String(p).replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, "?");
+}
 function isHookPath(p, surface) {
 if (HOOK_PATH_RE.test(p)) return true;
 for (const s of surface) {
@@ -4606,12 +4620,12 @@ const all = surface.concat(rs ? rs.surface : []);
 const ps = Array.from(new Set(paths.map((x) => normPath(String(x))).filter(Boolean)));
 const why = (p) => {
 const hit = (rs ? rs.sources : []).filter((x) => (/\/$/.test(x.path) ? p.indexOf(x.path) === 0 : p === x.path));
-return p + hit.slice(0, 2).map((x) => " (" + (x.ruleset_id === null ? "named by " + x.via : "run by " + (x.source_type || "") + " ruleset " + (x.name === null ? "" : JSON.stringify(x.name) + " ") + x.ruleset_id + " via " + x.via) + ")").join("");
+return logPath(p) + hit.slice(0, 2).map((x) => " (" + (x.ruleset_id === null ? "named by " + x.via : "run by " + (x.source_type || "") + " ruleset " + (x.name === null ? "" : JSON.stringify(x.name) + " ") + x.ruleset_id + " via " + x.via) + ")").join("");
 };
 const hooks = ps.filter((p) => isHookPath(p, all));
 const other = ps.filter((p) => !isHookPath(p, all));
 if (hooks.length && other.length)
-halt("needs_human", "hook changes must be a separate PR (Max's rule): " + what + " touches " + hooks.map(why).join(", ") + " and " + other.join(", "), "hooks");
+halt("needs_human", "hook changes must be a separate PR (Max's rule): " + what + " touches " + hooks.map(why).join(", ") + " and " + other.map(logPath).join(", "), "hooks");
 if (hooks.length) halt("needs_human", "hook change needs Max's confirmation: " + what + " touches " + hooks.map(why).join(", "), "hooks");
 gate(what + ": no hook-surface path (read: hook config, CI and hook-manager files" + (rs ? "; " + rs.read.concat(rs.unreadable).join("; ") : "") + ")");
 }
@@ -6848,7 +6862,7 @@ codeFindings ? { code_judge_findings: codeFindings.filter((f) => ids.indexOf(f.c
 const opts = { schema: SCHEMAS["fleet-test-writer"], phase: "Tests" };
 let r = await roleAgent("fleet-test-writer", label, prompt, opts);
 if (r == null) halt("failed", "test writer short r" + n + " returned no result");
-r = await retryOnDrift("fleet-test-writer", label, prompt, opts, r);
+r = await retryOnDrift("fleet-test-writer", label, prompt, opts, r, [writerKey(null, n)]);
 checkRole("fleet-test-writer", r);
 collect("fleet-test-writer", r);
 requireOk("fleet-test-writer short", r);
@@ -6908,7 +6922,7 @@ for (let idx = 0; idx < results.length; idx++) {
 const cid = pending[idx].criterion.id;
 let r = results[idx];
 if (r == null) halt("failed", "test writer " + cid + " r" + n + " returned no result");
-r = await retryOnDrift("fleet-test-writer", wcalls[idx][0], wcalls[idx][1], wcalls[idx][2], r);
+r = await retryOnDrift("fleet-test-writer", wcalls[idx][0], wcalls[idx][1], wcalls[idx][2], r, [writerKey(pending[idx].criterion, n)]);
 checkRole("fleet-test-writer", r);
 collect("fleet-test-writer", r);
 requireOk("fleet-test-writer " + cid, r);
@@ -6940,23 +6954,26 @@ for (const p of pending) {
 const cid = p.criterion.id;
 for (const f of writerOut[cid].files) {
 const nf = normPath(f);
-if (owner[nf] !== cid) halt("needs_human", "writer " + cid + " touched " + nf + " in test round " + n + " (not its own test file)", "ownership");
+if (owner[nf] !== cid) halt("needs_human", "writer " + cid + " touched " + logPath(nf) + " in test round " + n + " (not its own test file)", "ownership");
 reported[nf] = true;
 }
 }
 fenceChanged("test round " + n, post.changed);
 const changed = post.changed.map(normPath);
-const keys = await expandKeys(changedKeys(pre.hashes, post.hashes, mainWt), pre.hashes, post.hashes, "writers:r" + n, "Tests");
+const keys = await expandKeys(changedKeys(pre.hashes, post.hashes, mainWt), pre.hashes, post.hashes, "writers:r" + n, "Tests", null, Object.keys(owner));
+let more = 0;
 for (const k of keys) {
 if (k.map === "ignored" || (k.map === "git" && k.key.indexOf(FLEETREF) === 0))
-halt("needs_human", (k.map === "ignored" && (k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")) : [violationName(k)]).join(", ") + " in test round " + n, "ownership");
-if (!(k.map === "files" && k.key !== MAP_ALL && owner[k.key])) changed.push(violationName(k));
+halt("needs_human", (k.map === "ignored" && (k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")) : [violationName(k)]).map(logPath).join(", ") + " in test round " + n, "ownership");
+if (k.more) more = k.more;
+else if (!(k.map === "files" && k.key !== MAP_ALL && owner[k.key])) changed.push(violationName(k));
 }
 const ids = pending.map((p) => p.criterion.id).join(", ");
-for (const p of changed.filter((x, i, a) => a.indexOf(x) === i)) {
-if (!owner[p]) halt("needs_human", "writer touched " + p + " in test round " + n + " (not a test file of " + ids + ")", "ownership");
-if (!reported[p]) halt("needs_human", "writer touched " + p + " in test round " + n + " but it was not reported in any writer's files", "ownership");
-}
+const uniq = changed.filter((x, i, a) => a.indexOf(x) === i);
+if (more) halt("needs_human", "writer touched " + MORE_OUTSIDE + " (" + more + " more) in test round " + n + "; listed first: " + uniq.filter((p) => !owner[p]).slice(0, 10).map(logPath).join(", "), "ownership");
+const foreign = uniq.filter((p) => !owner[p]);
+if (foreign.length) halt("needs_human", "writer touched " + foreign.map(logPath).join(", ") + " in test round " + n + " (not a test file of " + ids + ")", "ownership");
+for (const p of uniq) if (!reported[p]) halt("needs_human", "writer touched " + logPath(p) + " in test round " + n + " but it was not reported in any writer's files", "ownership");
 gate("test round " + n + ": writers ok: " + ids + "; " + changed.length + " owned path(s) changed, HEAD unchanged");
 last = post;
 return roundOut;
@@ -7027,7 +7044,7 @@ if (codeFindings) judgeInputs.code_judge_findings = codeFindings;
 await resetBuild("test-judge:r" + n, ["tjudge-r" + n], "Tests");
 await pathRecheck("test-judge:r" + n, "Tests");
 let tl = "role:fleet-test-judge:r" + n;
-let jt = await judged("fleet-test-judge", tl, "test-judge:r" + n, judgeInputs, mainWt, "Tests", last, hashedFiles);
+let jt = await judged("fleet-test-judge", tl, "test-judge:r" + n, judgeInputs, mainWt, "Tests", last, hashedFiles, { buildKeys: ["tjudge-r" + n] });
 for (let k = 0; ; k++) {
 const tj = jt.r;
 last = jt.state;
@@ -7053,7 +7070,7 @@ gate(w + "; one scripted retry (" + tl + ":again)");
 reserve(2, "test-judge retry r" + n);
 await pathRecheck("test-judge:r" + n + ":again", "Tests");
 tl += ":again";
-jt = await judged("fleet-test-judge", tl, "test-judge:r" + n + ":again", Object.assign({}, judgeInputs, { retry_reason: w }), mainWt, "Tests", last, hashedFiles);
+jt = await judged("fleet-test-judge", tl, "test-judge:r" + n + ":again", Object.assign({}, judgeInputs, { retry_reason: w }), mainWt, "Tests", last, hashedFiles, { buildKeys: ["tjudge-r" + n] });
 }
 gate("test-judge r" + n + ": revise -> " + pending.map((p) => p.criterion.id).join(", "));
 }
@@ -7080,10 +7097,11 @@ if (refreeze && frozen) {
 const allowed = {};
 for (const c of testable) if (refreeze.criteria.indexOf(c.id) >= 0) for (const f of c.test_files) allowed[f] = true;
 const changed = [];
-const keys = await expandKeys(changedKeys(frozen, h.hashes, mainWt), frozen, h.hashes, "refreeze:f" + freezes, "Freeze");
+const keys = await expandKeys(changedKeys(frozen, h.hashes, mainWt), frozen, h.hashes, "refreeze:f" + freezes, "Freeze", null, Object.keys(allowed));
 for (const k of keys) {
+if (k.more && k.map !== "ignored") halt("needs_human", "re-freeze: " + MORE_OUTSIDE + " (" + k.more + " more)", "hash");
 if (k.map !== "files" || k.key === MAP_ALL || !allowed[k.key])
-halt("needs_human", "re-freeze touched unrouted path " + (k.map === "ignored" && (k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")).join(", ") : violationName(k)), "hash");
+halt("needs_human", "re-freeze touched unrouted path " + logPath(k.map === "ignored" && (k.expanded || k.unavailable) ? keyNames(keys.filter((x) => x.map === "ignored")).join(", ") : violationName(k)), "hash");
 changed.push({ path: k.name, change: k.kind });
 }
 state.refreezeLog.push({
@@ -7092,7 +7110,9 @@ freeze_tree_before: freezeTree,
 freeze_tree_after: h.fingerprint.tree,
 changed,
 });
-gate("re-freeze after fix_tests (code round " + refreeze.round + "): " + changed.length + " frozen test file(s) changed");
+const allowedMore = keys.allowedMore || 0;
+if (allowedMore) gate("re-freeze: " + allowedMore + " more changed test file(s) of the round than the log lists");
+gate("re-freeze after fix_tests (code round " + refreeze.round + "): " + (changed.length + allowedMore) + " frozen test file(s) changed");
 }
 frozen = h.hashes;
 freezeRef = h.fingerprint.head;
@@ -7183,6 +7203,7 @@ const coderFileOnly = coder.status === "ok" && roleFileProblem("fleet-coder", co
 if (coderFileOnly) {
 const rl = "role:fleet-coder:r" + m + ":retry";
 reserve(1, rl);
+await resetBuild("fleet-coder:r" + m + ":drift", ["coder-r" + m], "Code");
 state.agents++;
 const r2 = await roleAgent(
 "fleet-coder",
@@ -7272,6 +7293,7 @@ mainWt,
 "Code",
 h,
 hashedFiles,
+{ buildKeys: ["cjudge-r" + m] },
 );
 const cj = jc.r;
 last = jc.state;
@@ -7452,7 +7474,7 @@ allowed_additions: stripHeldOut(ctx.allowedAdditions === undefined ? null : ctx.
 prior_findings: stripHeldOut(ctx.priorFindings || []),
 gh_cmd: g.gh_cmd,
 });
-const jr = await judged("pr-review", "role:pr-review:v" + k, "pr-review:v" + k, reviewIn, ctx.mainWt, "Review", pre, ctx.hashedFiles);
+const jr = await judged("pr-review", "role:pr-review:v" + k, "pr-review:v" + k, reviewIn, ctx.mainWt, "Review", pre, ctx.hashedFiles, { buildKeys: ["review-v" + k] });
 const r = jr.r;
 const blocking = r.findings.filter((f) => f && f.severity === "blocking");
 const nits = r.findings.filter((f) => f && f.severity !== "blocking");
@@ -7473,6 +7495,7 @@ ctx.mainWt,
 "Review",
 jr.state,
 ctx.hashedFiles,
+{ buildKeys: ["sweep-v" + k] },
 );
 const sw = js.r;
 if (sw.verdict === "non_weakening") {

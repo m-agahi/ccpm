@@ -422,6 +422,10 @@ const READS = {
     "w.length number-literal": "parsed: a hash_diff row (prog:hash_diff:changed[], typed array of strings)",
     "w[1] string": "parsed: a hash_diff row (prog:hash_diff:changed[], typed array of strings)",
     "r.error string": "prog:hash_diff:error",
+    // 7.4.0 (#22)
+    "r.allowed array": "prog:hash_diff:allowed",
+    "r.allowed_changed integer": "prog:hash_diff:allowed_changed",
+    "r.allowed_changed number-literal": "prog:hash_diff:allowed_changed",
   },
   // 5.0.6 (ledger 2019): the bytes the build-dir teardown freed (its log line)
   buildTeardown: { "r.bytes integer": "prog:build_dir:bytes" },

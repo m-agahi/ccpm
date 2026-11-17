@@ -36,6 +36,55 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
 - Car 1, #36 B6: the gh stderr redaction of `ruleset_surface.py`, `pr_convention.py` and
   `gh_identity.py` turns `Bearer <token>` of any length into `Bearer ***`.
 
+- Car 2, #13 (L2015): the porcelain tree diffs of `hasher.py`, `review_paths.py`, `fleet_scan.py`,
+  `verify_since.py` and `format_files.py` (`differs()`) pass `--ignore-submodules=none`, so a repo's
+  `diff.ignoreSubmodules=all` no longer hides a gitlink change. `hook_surface.py` runs git with
+  `GIT_CONFIG_NOSYSTEM=1` and `-c core.fsmonitor=false` (a system or repo fsmonitor program ran on
+  its `ls-files`); its two `core.hooksPath` reads keep the system config, so a system hooksPath
+  inside the repo stays hook surface. The hook gate's stop text and the writer-round and
+  re-freeze halts map C0, DEL, C1 and U+2028/U+2029 in a path to `?` (`logPath`), so a path with
+  a newline cannot forge a log line.
+- Car 2, #15 (L2017, Max ruling "Allow, hooks run at commit"): `format_files.py` no longer refuses
+  a selected file under a directory hook path (a writer's new `scripts/tests/test_x.py` under
+  `pytest scripts/tests/`); the hooks run on it at the commit step. In dirty mode (format-code)
+  only a selected path that is also frozen is exempt: the post-coder hash check refuses any change
+  to it (F3). The plan exempted every dirty path; an unfrozen dirty path under a hook dir stays
+  refused, because a dir only a remote hook's args or a lenient hook names is never frozen by
+  `hook_refs`, and no later gate would see it. The ruling covers plain files only (security
+  review): a selected file that loads on import or configures a tool (`conftest.py`,
+  `__init__.py`, `*.pth`, `*.ini`, `*.cfg`, `*.toml`, `setup.py`, `package.json`, dotfiles,
+  `jest.config*`, `vitest.config*` and similar) stays refused in both modes. Still refused: a symlinked or replaced hook dir, a
+  gitlink, a non-selected untracked or ignored file, a non-selected tracked edit. #12 closes with
+  this ruling (a comment at `isHookPath` names it).
+- Car 2, #16 (a) (L2021): `hasher.py` `hook_refs` freezes the repo file of a `--opt=value` token
+  (`--config=ruff.toml`), and with it that file's dir tree, as for every referenced file. A pure
+  tightening.
+- Car 2, #20 (L2026, Max ruling Q1 (a)): in a non-lenient local hook, a token of digits only, and a
+  read-only subcommand right after its PATH command (`cargo` metadata, tree; `go mod`, then
+  verify or graph; `git` diff, status, log, ls-files), are arguments. Subcommands that build or
+  run repo code (cargo build, check, clippy, test, doc, fmt; go test, build, vet, generate) stay
+  refused (security review). A cargo pass freezes `.cargo/config`, `.cargo/config.toml`,
+  `rust-toolchain` and `rust-toolchain.toml` (absent ones as MISSING): they choose the binary
+  cargo runs. The command token stays strict, a repo script named `cargo` gives no pass, and
+  every other plain token stays "unresolvable local hook".
+- Car 2, #18 (L2024): a contract-drift retry empties the role's own build dir first
+  (`infra:build-reset:<role label>:drift`): test writers (short and full path), the test judge,
+  the code judge, pr-review and the sweep; and the coder's one role_file re-ask (its steps 1 and
+  2 run the frozen tests again).
+- Car 2, #22 (cap part, L2029): `hash_diff.py` takes `--allow <JSON list of "<map>:<key>">` right
+  after `<scratch>`. `changed` and `total` cover only the keys outside the list (capped at 50);
+  the new keys `allowed` (at most 50 rows) and `allowed_changed` cover the listed ones. The writer
+  round passes its own test files and the re-freeze its criteria's test files, so 50+ owned test
+  files no longer halt the run with a mangled name ("files: (10 more)"). Past 50 keys outside the
+  list the writer round stops with "writer touched more than 50 changed files outside the round's
+  test files (<n> more)" and the re-freeze with the same text; the writer-round halt now names
+  every unowned changed path, not only the first. The workflow checks the relay's split (an
+  allowed row must be a listed test file, a changed row must not), so a forged split fails closed.
+  A re-freeze with no changed map logs 0 changed files (an early return had left NaN).
+- Car 2, #11 (L2012): tests only; the three `test_db_prefix` checks already refuse `"iam_db_\n"`
+  and accept `f_` and `fl_`.
+- Car 2 dist: 453,981 bytes (+2,216; the plan estimated ~700).
+
 ### Removed
 
 - Car 1, #9: `push_classify.py` and `push_probe.py`. Their rules moved into `push.py`; no prompt
@@ -62,6 +111,23 @@ One release for every remaining step-3 fleet task the plan puts IN, built in six
 - Version pins 7.3.0 -> 7.4.0 (`harness`, `v4_s1`, `v4_s3`, `v5_roles`, `v600_s3`,
   `build_task_run`, `v403_schema_types`, `v622_fixes`).
 - `v5010_prompt_snapshot` pins: the push and probe prompts and the hook stop text.
+
+### Tests changed on purpose (car 2)
+
+- New: `v740_db_prefix` (T1), `v740_hook_git` (G1-G3), `v740_hook_dir_allow` (F1-F3, Max ruling
+  L2017), `v740_hasher_hook_refs` (K1-K3), `v740_drift_reset` (R1), `v740_hash_diff_allow` (W1, W2).
+- `v503_db_prefix`: BAD adds `"iam_db_\n"`, GOOD adds `f_` and `fl_` (#11).
+- `v504_pycache` (#15, Max ruling L2017): the selected-file case (~:125) now expects no refusal;
+  the dirty-mode "frozen untracked test" case (~:250) moved to `v740_hook_dir_allow` as accepted.
+  The other v504 refusals (non-selected, ignored, untracked, hidden edits, symlinks, gitlinks) are
+  unchanged.
+- `v507_digest_relays` (#22): the hash-diff args carry `--allow` and the round's test files; the
+  past-the-cap writer halts read "more than 50 changed files outside the round's test files"; the
+  SF2 writer halt names both unavailable maps; scripted relays add `allowed` and `allowed_changed`.
+- `build_task_run`: the verify_since diff pin has `--ignore-submodules=none` (#13); ARRAY_SITES
+  maps `r.allowed @ expandKeys`. `v740_hook_dir_allow` F3 uses a plain `helpers.py` under the
+  hook dir (a `conftest.py` edit is now refused at format-code). `v403_schema_types`: READS for `prog:hash_diff:allowed` and
+  `allowed_changed`. Harness: `hashDiffOut` reads `--allow` and prints the two new keys.
 
 ## [7.3.0] - 2026-11-17
 

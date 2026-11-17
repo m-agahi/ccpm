@@ -40,6 +40,11 @@ targets = [t for t in json.loads(targets_arg) if isinstance(t, str)]
 # argv[4] == 'no-yaml' (tests only): behave as if no Python had PyYAML
 no_yaml = len(sys.argv) > 4 and sys.argv[4] == 'no-yaml'
 os.chdir('/')
+# 7.4.0 (#13): no system config and no fsmonitor program in any git call (as hasher.py). The two
+# core.hooksPath reads keep the system config (HP_ENV): there it can only add hook surface.
+HP_ENV = dict(os.environ)
+os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
+GIT = ['git', '-c', 'core.fsmonitor=false', '-C', wt]
 LOADER = (
     "import json, site, sys\n"
     "import resource\n"
@@ -140,14 +145,14 @@ def values(raw):
         return names, None
     return None, 'no Python with PyYAML found'
 configs = []
-r = subprocess.run(['git', '-C', wt, 'show', rev + ':.pre-commit-config.yaml'], capture_output=True)
+r = subprocess.run(GIT + ['show', rev + ':.pre-commit-config.yaml'], capture_output=True)
 if r.returncode == 0:
     configs.append(r.stdout)
 p = os.path.join(wt, '.pre-commit-config.yaml')
 if os.path.isfile(p):
     with open(p, 'rb') as fh:
         configs.append(fh.read(262145))
-ls = subprocess.run(['git', '-C', wt, 'ls-files', '-z'], capture_output=True)
+ls = subprocess.run(GIT + ['ls-files', '-z'], capture_output=True)
 tracked = set(x.decode('utf-8', 'replace') for x in ls.stdout.split(b'\0') if x)
 SCRIPT_EXT = ('.py', '.sh', '.bash', '.zsh', '.js', '.mjs', '.cjs', '.ts', '.rb', '.pl')
 FILE_CAP = 1 << 20
@@ -199,7 +204,7 @@ for raw in configs:
 # CI files and hook-manager files (actions, husky, githooks, lefthook, the
 # hooksPath dir, package.json scripts): the repo scripts they name
 CI = re.compile(r'^(\.github/workflows/.*\.ya?ml|\.github/actions/.*|\.gitea/workflows/.*|\.forgejo/workflows/.*|\.gitlab-ci\.yml|\.gitlab/.*\.ya?ml|\.circleci/.*|\.woodpecker.*|Jenkinsfile|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml|\.buildkite/.*|\.husky/.*|\.githooks/.*|(.*/)?lefthook[^/]*\.ya?ml|\.lefthook.*|(.*/)?package\.json)$', re.I)
-hp_raw = subprocess.run(['git', '-C', wt, 'config', 'core.hooksPath'], capture_output=True).stdout.decode('utf-8', 'replace').strip()
+hp_raw = subprocess.run(GIT + ['config', 'core.hooksPath'], capture_output=True, env=HP_ENV).stdout.decode('utf-8', 'replace').strip()
 hp_rel = None
 if hp_raw:
     hp_abs = os.path.expanduser(hp_raw)
@@ -277,7 +282,7 @@ for q in level1[:MAX_FILES]:
         for m in re.findall(r'(?:^|[\s;&|(])(\./[^\s;&|)]+)', t, re.M):
             resolve([m, os.path.join(d, m)])
 # core.hooksPath inside the repo: the whole dir
-hp = subprocess.run(['git', '-C', wt, 'config', 'core.hooksPath'], capture_output=True).stdout.decode('utf-8', 'replace').strip()
+hp = subprocess.run(GIT + ['config', 'core.hooksPath'], capture_output=True, env=HP_ENV).stdout.decode('utf-8', 'replace').strip()
 if hp and not os.path.isabs(os.path.expanduser(hp)):
     q = norm(hp)
     if q:
@@ -290,7 +295,7 @@ elif hp:
 make_paths = {}
 mk = None
 for name in ('GNUmakefile', 'makefile', 'Makefile'):
-    r = subprocess.run(['git', '-C', wt, 'show', rev + ':' + name], capture_output=True)
+    r = subprocess.run(GIT + ['show', rev + ':' + name], capture_output=True)
     if r.returncode == 0:
         mk = r.stdout[:FILE_CAP].decode('utf-8', 'replace')
         break
@@ -300,7 +305,7 @@ for tgt in targets:
     # no entry when package.json or that string entry cannot be read (the workflow refuses then)
     if tgt.startswith('npm:'):
         if pkg is None:
-            r = subprocess.run(['git', '-C', wt, 'show', rev + ':package.json'], capture_output=True)
+            r = subprocess.run(GIT + ['show', rev + ':package.json'], capture_output=True)
             try:
                 pkg = json.loads(r.stdout.decode('utf-8', 'replace')) if r.returncode == 0 and len(r.stdout) <= FILE_CAP else False
             except ValueError:

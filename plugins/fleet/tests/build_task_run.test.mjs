@@ -5103,7 +5103,7 @@ test("2.1.0 base-ref differential: the fence and the review diff from plan_commi
   assert.ok(!out.labels.some((l) => /^role:/.test(l)), "stops before any role");
   // 3.1.0 (ledger 1959): the program lists plan_commit..HEAD
   assert.ok(call(out, "infra:verify-plan").prompt.includes("python3 -I '" + SCRIPTS_DIR + "/verify_since.py'"));
-  assert.match(extractPy("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY"), /run\('diff', '--name-only', '-z', '--no-renames', pc \+ '\.\.' \+ head, '--'\)/);
+  assert.match(extractPy("VERIFY_SINCE_PY_BEGIN", "VERIFY_SINCE_PY_END", "VERIFY_SINCE_PY"), /run\('diff', '--ignore-submodules=none', '--name-only', '-z', '--no-renames', pc \+ '\.\.' \+ head, '--'\)/);
   // the post-coder listing and the review paths diff from plan_commit, not HEAD at the first freeze
   const ok = await run(happy(), ARGS);
   assert.equal(inputsOf(call(ok, "hasher:post-coder:r1").prompt).base_tree, PB);
@@ -5675,6 +5675,8 @@ const ARRAY_SITES = {
   "r.purged_paths @ formatFiles": "infra:purged_paths",
   // 5.0.5 (ledger 2018)
   "r.changed @ expandKeys": "infra:changed",
+  // 7.4.0 (#22)
+  "r.allowed @ expandKeys": "parsed: the hash_diff relay (digest-checked; schema prog:hash_diff:allowed)",
   "opts.args @ digestRetry": "parsed: the args the step sent (a script-built list)",
   "r.frozen_changed @ formatFiles": "infra:frozen_changed",
   // 6.2.2 (2107)
