@@ -218,6 +218,17 @@ export function remoteUrlOut(url, repo) {
 export function sessionProjectOut(project) {
   return { project, source: project ? "origin" : null, cwd: "/home/u/git/docs", args: [] };
 }
+// 8.0.0 (G1): gate_tools.py's output with every tool absent (fillPrograms adds program and digest)
+export const AUDIT_IMAGE = /\nconst AUDIT_IMAGE = "([^"]*)";/.exec(SOURCE)[1];
+export function gateToolsOut(repo) {
+  const row = (m) => ({ coverage: "unsupported", mutation: m, security: "unsupported" });
+  return {
+    languages: ["other"],
+    matrix: { python: row("builtin"), node: row("builtin"), go: row("builtin"), rust: row("builtin"), other: row("unsupported") },
+    container: { runtime: null, image: AUDIT_IMAGE, present: false, reason: "image digest not pinned" },
+    args: [repo, AUDIT_IMAGE],
+  };
+}
 // 5.0.8 (ledger 2030): gh_identity.py's output for its args. over: {<slug>:
 // tried list} (default: gh with push, so gh-personal is never tried)
 export const GH_DEFAULT_TRIED = [{ cmd: "gh", installed: true, push: true }];
@@ -320,6 +331,7 @@ export async function runOne(script, args0) {
     // 5.0.9 (ledger 2032): the session's yaadgaar project: script.__session_project, else args.project
     if (base === "preflight" && r && typeof r === "object" && !rawResults.has(r) && !("session_project" in r))
       r.session_project = sessionProjectOut("__session_project" in script ? script.__session_project : argsProject(args));
+    if (base === "preflight" && r && typeof r === "object" && !rawResults.has(r) && !("gate_tools" in r)) r.gate_tools = gateToolsOut(args && args.repo);
     if (r && typeof r === "object" && !rawResults.has(r)) r = fillPrograms(base, r, prompt);
     const mut = script.__mutate;
     if (mut && r && typeof r === "object" && (mut.label instanceof RegExp ? mut.label.test(base) : mut.label === base)) r = mut.fn(r, prompt, label);
@@ -1353,7 +1365,7 @@ export const SURFACE_PARTS = [
 export const PROGRAM_LABELS = [
   // 8.0.0 (#62 B2): the read-only surface programs of one step, each in its own slot
   [/^infra:surfaces:/, SURFACE_PARTS.map(([slot]) => [slot, slot, K(slot)])],
-  [/^preflight$/, [["path_check", "path_check", K("path_check")], ["session_project", "session_project", K("session_project")]]],
+  [/^preflight$/, [["path_check", "path_check", K("path_check")], ["session_project", "session_project", K("session_project")], ["gate_tools", "gate_tools", K("gate_tools")]]],
   [/^infra:path-check:/, [[null, "path_check", K("path_check")]]],
   [/^workspace$/, [["remote_url_check", "remote_url", K("remote_url")], ["gh_check", "gh_identity", K("gh_identity")], ["exclude", "exclude_add", PROGRAM_KEYS["exclude_add"] || null]]],
   // 5.0.8 (ledger 2030): a repo the workspace step did not check

@@ -1057,8 +1057,25 @@ roles dirs, the sha256 of every program and role file, and the PATH check. Then 
 agent (`infra:role-read:plan-audit`, as `fleet:judge`) hashes and reads `plan-audit.md` the way a
 role does and returns only `role_file`, which the script checks. That proves the role read path
 on the real runtime. It returns `status: "ok"` with `probe: {fleet_version, scripts_dir,
-roles_dir, roles: {<role>: {sha256, model, fallback}}, role_read: {role, sha256, ok}}` and
+roles_dir, roles: {<role>: {sha256, model, fallback}}, role_read: {role, sha256, ok}, gate_tools}` and
 stops: no worktree, no role agent, no write. Use it after an install or update.
+
+**Gate tool census (8.0.0, G1).** The preflight agent also runs `gate_tools.py <repo> <image>`
+(the image is the src constant `AUDIT_IMAGE`, `openfantasy/audit-lab@sha256:<digest>`; no new
+agent). It finds the repo's languages from marker files at its root (python, node, go, rust,
+else other) and prints one row per language: `coverage` (a host tool found by `which()` on a
+PATH with no entry inside the repo: python `coverage`; node `jest`, `c8`, `nyc`; go `go`; rust
+`cargo-llvm-cov`; else `unsupported`), `mutation` (`builtin` for python, node, go and rust, the
+fleet's own mutator; `unsupported` for other) and `security` (`container` only when the pinned
+image is present, else `unsupported`). The security scan runs only in the audit-lab container
+(ADR-1315): the census names the runtime (podman, else docker) and checks the image with the
+runtime's read-only `image exists` / `image inspect`, and only for an image pinned by a
+64-hex digest; a placeholder digest (`PENDING`, until G7) is `image digest not pinned`. It pulls
+and runs no image. Host semgrep and gitleaks are never reported, and the program names no IaC
+binary. The script logs one `gate census` line per language and one for the container before
+intake, and `probe.gate_tools` carries the rows. The census is advisory: an unusable relay (no
+digest, other args, a malformed shape) logs `gate census unusable` and marks no gate tool
+available; it never stops the run.
 
 ### Throwaway test database (4.0.0, ledger 1981)
 
@@ -1616,14 +1633,21 @@ The script pins the role contract, not the prose:
   by the script's check on an ok result).
 - Gates this release does not run (held-out examples, coverage, mutation, security scan) reach
   the judges as `{status: "not_run", reason}` and the PR body as `gates_not_run`; the role files
-  call them not run, never run.
+  call them not run, never run. Since 8.0.0 (G1, ADR-1316) the script derives the list: a gate
+  leaves it only with a digest-checked `ran` result of the same code round (`runGate`, stored in
+  `state.gates`); a `partial` or `not_run` result keeps the gate listed with its own reason. With
+  no gate result the list is exactly mutation, coverage, security_scan and held_out, in that order.
+  The helpers `gatePrompt`, `runGate` and `unruled` (the findings no reasoned ruling covers) carry
+  the later gates; a gate program that errs or relays no digest-checked result gets one retry,
+  then stops with `needs_human` and `stop_gate: gates`.
 - Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
   check before its contract check. The result's `stop_gate` names the gate: `hash`, `fingerprint`,
   `commands`, `contract`, `role`, `cap`, `ownership`, `commit`, `review`, `intent`, `scope`,
-  `resume`, `iac`, `iac-push`, `callers`, `hooks`, `db`, `relaunch`, `policy`, `stats`, `ci` or
-  `merge` (`null` when the run did not stop at one of them). A
+  `resume`, `iac`, `iac-push`, `callers`, `hooks`, `db`, `relaunch`, `policy`, `stats`, `ci`,
+  `merge` or `gates` (8.0.0: a gate program that errs or relays no digest-checked result twice)
+  (`null` when the run did not stop at one of them). A
   cap stop names the gate that rejected the last round (hash, obligations gate, commit hook, push
   hook or review).
 

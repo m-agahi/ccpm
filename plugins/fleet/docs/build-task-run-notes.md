@@ -4485,3 +4485,20 @@ dropping the bare hits would leave a constant or guard symbol with no listed occ
 common name with many bare hits now meets the caller read budget (4 pages of 50) instead of the
 cap.
 ```
+
+## 8.0.0 notes (G1)
+
+### `gate_tools.py`, `gateCensus`, `runGate`, `gatesNotRun` (G1, ADR-1315, ADR-1316)
+
+```text
+The census is a third slot of the preflight agent (gate_tools), so it adds no agent and no
+retry: the preflight dispatch has no digest option. gateCensus never halts (G1-4): a relay that
+fails the digest, the args [repo, AUDIT_IMAGE] or the shape check sets state.gateTools null
+and logs one line. AUDIT_IMAGE is an argument, not a constant of the program, so the args check
+proves which image the census looked at; any image that is not name@sha256:<64 hex> is never
+passed to the runtime. The program uses which() on clean_path((repo,)) so a runtime or tool
+planted inside the repo is never found or run. runGate has no caller in G1: G2, G5 and G7 add
+the gate steps (PROGRAM_SLOTS and INFRA_TIER rows come with them). gatesNotRun keeps the
+judge-list union; state.gates entries carry the code round, so a result of an earlier round
+never removes a gate, and a replan resets state.gates.
+```

@@ -42,6 +42,23 @@ Fleet 8.0.0: one major release in two cars. Car A: yaadgaar #74 and #71. Car B: 
   `changed_defs` still has no retry. `changedDefsPrompt`, `prConventionPrompt` and their
   `PROGRAM_SLOTS`/`INFRA_TIER` rows are gone; the update-branch reads keep their own steps
   (`v800_surfaces.test.mjs`).
+- Car G1 (gate plumbing, ADR-1315, ADR-1316): a 45th program, `gate_tools.py <repo> <image>`,
+  runs as a third slot of the preflight agent (no new agent) and prints the gate tool census:
+  the repo's languages (marker files) and, per language, the coverage tool (`which()` on a PATH
+  with no entry inside the repo, or `unsupported`), the mutation entry (`builtin` for python,
+  node, go and rust) and the security entry (`container` only when the pinned audit-lab image
+  is present). The container part names the runtime (podman, else docker) and runs only the
+  runtime's read-only image check, and only for an image pinned by a 64-hex digest; the src
+  constant `AUDIT_IMAGE` is `openfantasy/audit-lab@sha256:PENDING` until G7, so the security
+  entry reads `image digest not pinned`. Nothing is pulled; host semgrep and gitleaks are never
+  reported; the program names no IaC binary. Preflight logs one `gate census` line per language
+  and one for the container before intake, and probe mode returns `probe.gate_tools`. An unusable
+  census never stops the run and marks no gate tool available. New plumbing for the later cars:
+  `gatePrompt`, `runGate` (one retry, then `needs_human` at the new stop gate `gates`),
+  `unruled` and `state.gates`; `gatesNotRun()` is derived from `state.gates` (a gate leaves the
+  list only with a digest-checked `ran` result of the same code round), and with no gate result
+  it is exactly today's four entries in today's order. The size guard is 495000 bytes (was
+  480000; still under Claude Code's 524288 cap) (`v800_gate_tools.test.mjs`).
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

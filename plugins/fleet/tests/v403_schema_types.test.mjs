@@ -388,6 +388,21 @@ const READS = {
     "r.shared_file array": "!role:scope-and-plan:shared_file",
     "f.sha256 string": "role:scope-and-plan:shared_file.sha256",
   },
+  // 8.0.0 (G1): the census relay, digest- and args-checked first; advisory (never a stop)
+  gateCensus: {
+    "g object": "preflight:gate_tools",
+    "g.matrix object": "prog:gate_tools:matrix",
+    "g.matrix[l] object": "parsed: a gate_tools matrix row (PROGRAM_OUT types each row an object), digest-checked first",
+    "g.container object": "prog:gate_tools:container",
+    "g.container.present boolean": "prog:gate_tools:container.present",
+  },
+  // 8.0.0 (G1, ADR-1316): a gate program's findings and the judge's rulings; a non-list or an unnamed ruling counts as none
+  unruled: {
+    "findings array": "parsed: a gate program's findings (digest-checked by runGate), or none",
+    "rulings array": "parsed: the code judge's rulings list; any other value rules nothing",
+    "x.id string": "parsed: a ruling's id; a non-string rules nothing",
+    "x.reason string": "parsed: a ruling's reason; a non-string or blank reason rules nothing",
+  },
   preflightStep: { "pre.ledger_tools array": "preflight:ledger_tools", "x string": "preflight:ledger_tools[]", "sj object": "preflight:session_project", "sj.project string": "prog:session_project:project" },
   // 5.0.9 (ledger 2032)
   // 7.0.0 review F5: a case-insensitive project key compare (typeof-guarded)
@@ -1140,16 +1155,16 @@ test("5.0.0 R1 (was 4.0.3 1998 repro wf_d6901710-32d): the preflight and role sc
   const pre = out.calls.find((c) => c.label === "preflight").opts.schema;
   // 5.0.0 (R2): the census ledger_tools is a list of strings; PR #48 ruling 1:
   // advisory, so optional and nullable (was: required)
-  assert.deepEqual(validate(pre, { ledger_tools: [], scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, session_project: null, reason: "ok" }), []);
-  assert.ok(validate(pre, { ledger_tools: [], scripts_probe: [1], scripts_dir: null, path_check: null, session_project: null, reason: "ok" }).length);
-  assert.deepEqual(validate(pre, { scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, session_project: null, reason: "ok" }), [], "no census");
-  assert.deepEqual(validate(pre, { ledger_tools: null, scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, session_project: null, reason: "ok" }), [], "a null census");
+  assert.deepEqual(validate(pre, { ledger_tools: [], scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, session_project: null, gate_tools: null, reason: "ok" }), []);
+  assert.ok(validate(pre, { ledger_tools: [], scripts_probe: [1], scripts_dir: null, path_check: null, session_project: null, gate_tools: null, reason: "ok" }).length);
+  assert.deepEqual(validate(pre, { scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, session_project: null, gate_tools: null, reason: "ok" }), [], "no census");
+  assert.deepEqual(validate(pre, { ledger_tools: null, scripts_probe: ["home=/h"], scripts_dir: null, path_check: null, session_project: null, gate_tools: null, reason: "ok" }), [], "a null census");
   // PR #48 ruling 1: a null memory_notes / follow_ups fits the coder schema
   const coderSch = out.calls.find((c) => c.label === "role:fleet-coder:r1").opts.schema;
   const coderOk = { status: "ok", reason: "x", role_file: { name: "fleet-coder", sha256: "a".repeat(64) }, changed_paths: [], suite_result: {}, added_symbols: [], frozen_tests_red_at_start: true, obligations_done: [] };
   assert.deepEqual(validate(coderSch, Object.assign({}, coderOk, { memory_notes: null, follow_ups: null })), []);
   assert.deepEqual(validate(coderSch, coderOk), [], "both absent");
-  assert.ok(validate(pre, { ledger_tools: [7], scripts_probe: [], scripts_dir: null, path_check: null, session_project: null, reason: "ok" }).length, "a numeric tool name");
+  assert.ok(validate(pre, { ledger_tools: [7], scripts_probe: [], scripts_dir: null, path_check: null, session_project: null, gate_tools: null, reason: "ok" }).length, "a numeric tool name");
   const sch = out.calls.find((c) => c.label === "role:plan-audit").opts.schema;
   // 5.0.0 R3: plan-audit also carries the shared_file it read
   const good = { status: "ok", reason: "x", verdict: "approve", routed_findings: [], role_file: { name: "plan-audit", sha256: "a".repeat(64) }, shared_file: { name: "test-cmd-allowlist", sha256: "b".repeat(64) } };
@@ -1204,7 +1219,7 @@ test("5.0.0 R1 (was 4.0.3 1998 preflight prompt): the role prompt asks for role_
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.doesNotMatch(pre, /versions|contract|agent_prompt_get/);
   // 5.0.0 (R2): plus the ledger tool census
-  assert.match(pre, /Return \{ledger_tools, scripts_probe, scripts_dir, path_check, session_project, reason\}\./);
+  assert.match(pre, /Return \{ledger_tools, scripts_probe, scripts_dir, path_check, session_project, gate_tools, reason\}\./);
 });
 
 // ---------------------------------------------------------------- 4.0.3 review

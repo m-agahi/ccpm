@@ -139,7 +139,7 @@ test("5.0.9 preflight: the prompt runs session_project.py from the start directo
   const p = call(out, "preflight").prompt;
   assert.match(p, /sha256sum -- <scripts_dir>\/session_project\.py && python3 -I <scripts_dir>\/session_project\.py\n/);
   assert.match(p, /never cd first/);
-  assert.match(p, /session_project, reason\}/);
+  assert.match(p, /session_project, gate_tools, reason\}/);
 });
 
 // the program itself: the yaadgaar client's rule (yadgar-client project.rs)

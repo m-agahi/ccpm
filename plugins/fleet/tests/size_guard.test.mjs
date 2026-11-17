@@ -18,7 +18,8 @@ import { fileURLToPath } from "node:url";
 const PLUGINS = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Claude Code's cap, and the limit this repo holds itself to
 const CLAUDE_CODE_WORKFLOW_CAP = 524288;
-const WORKFLOW_MAX_BYTES = 480000;
+// 8.0.0 (G1, ADR-1316): 495000 for the v1.1 gates (was 480000)
+const WORKFLOW_MAX_BYTES = 495000;
 
 // every plugins/*/workflows/*.js, or the files a caller names
 export function workflowFiles(root = PLUGINS) {
@@ -40,7 +41,7 @@ test("4.0.1 1996: the size limit leaves headroom under Claude Code's workflow ca
   assert.ok(WORKFLOW_MAX_BYTES < CLAUDE_CODE_WORKFLOW_CAP);
 });
 
-test("4.0.1 1996: every plugins/*/workflows/*.js is at most 480000 bytes", () => {
+test("4.0.1 1996: every plugins/*/workflows/*.js is at most 495000 bytes (8.0.0; was 480000)", () => {
   const files = workflowFiles();
   assert.ok(files.some((f) => f.endsWith(join("fleet", "workflows", "build-task-run.js"))), "the fleet workflow is checked");
   assert.deepEqual(oversized(files), [], "workflow files over " + WORKFLOW_MAX_BYTES + " bytes (Claude Code skips files over " + CLAUDE_CODE_WORKFLOW_CAP + " bytes silently)");

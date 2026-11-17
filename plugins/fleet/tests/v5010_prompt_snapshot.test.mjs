@@ -109,11 +109,12 @@ const SCENARIOS = {
 // 7.4.0 car 6: the role shas (#26, #45, #46, #60, #61, #72), the uv build vars (#73), touches_gate, test_conflict, target and parent in the schemas (no new call; probe unchanged)
 // 8.0.0 car B1 (#62): each build-dir reset runs the PATH check of its step (repo, token, the path_check command and slot): 7 fewer build calls, no standalone infra:path-check at the paired sites (probe unchanged)
 // 8.0.0 car B2 (#62): infra:surfaces:plan runs the hook_surface, ruleset_surface and pr_convention programs (one slot each) and infra:surfaces:r<n> the hook_surface and changed_defs programs: 2 fewer plan calls, 1 fewer build call (probe unchanged)
+// 8.0.0 car G1: the preflight prompt and schema run gate_tools.py <repo> <AUDIT_IMAGE> in a gate_tools slot (no new call; the probe pin moves with the preflight prompt)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 80, sha256: "2cfc3f9f825c85db19a4883e24930eca47405f8db11f4776172c0e27b3247466" },
-  "confirm auto (gates, then build in one run)": { calls: 82, sha256: "41c970620964629dfbf3a5d841d0585ed96f14c37866650d7c9408ae796ecb8b" },
-  "short path (one test writer)": { calls: 79, sha256: "81b97ce622a7cf05597e2721ed9978da7f335d5aa5da83d23adea66257466c36" },
-  "probe": { calls: 2, sha256: "a8ceccc781cf8954f6b925f6d96462387d40cede1db8d318d28eb0441753e8de" },
+  "plan then build (confirm ask)": { calls: 80, sha256: "3d7b9fc1f133605b4daf071b1f7fa289e6d54120d4869043e48ec4659531d5a5" },
+  "confirm auto (gates, then build in one run)": { calls: 82, sha256: "6320eef688b2c1a0e820277632eb8a218f17553cb038f8fa41cbfa13542fa45a" },
+  "short path (one test writer)": { calls: 79, sha256: "a5e354908334266e843d02af5a93d16e3d0e8c8b7f30061a7b8ab7dd5081acd7" },
+  "probe": { calls: 2, sha256: "0699a53c5c939afed37e60fae64f04e0adfd8fd0c6b8e4a344d2ac53bd59e02b" },
 };
 
 for (const [name, fn] of Object.entries(SCENARIOS)) {

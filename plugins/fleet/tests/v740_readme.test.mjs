@@ -29,7 +29,7 @@ function section(title) {
 }
 
 test("7.4.0 #4 D1: the README stop_gate list names every STOP_GATES entry, in src order", () => {
-  assert.equal(STOP_GATES.length, 22);
+  assert.equal(STOP_GATES.length, 23);
   const t = flat(section("Role contract"));
   const i = t.indexOf("The result's `stop_gate` names the gate:");
   assert.ok(i >= 0, "the stop_gate sentence");

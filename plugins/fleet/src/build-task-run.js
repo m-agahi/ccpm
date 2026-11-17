@@ -206,7 +206,7 @@ const CALLER_LIMITS = [
   "the 100-hit cap counts call-shaped hits only (the name, optional spaces or tabs, then `(`); every hit is still listed and mapped",
 ];
 const PLAN_PATH_CHARS_RE = /^[A-Za-z0-9._\/-]+$/;
-const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge"];
+const STOP_GATES = ["hash", "fingerprint", "commands", "contract", "role", "cap", "ownership", "commit", "review", "intent", "scope", "resume", "iac", "iac-push", "callers", "hooks", "db", "relaunch", "policy", "stats", "ci", "merge", "gates"];
 const RESUME_NEXT = { committed: "push", pushed: "pr", pr_open: "review", reviewed: "writeback", written_back: "stats", shipped: "done" };
 const CONFIRMS = ["ask", "auto", "default"];
 const BRIEF_MARKER = "<!-- fleet-brief:v1 -->";
@@ -258,6 +258,11 @@ const PROPOSED_RE = /Proposed plan change:\s*(.+?)\s*$/m;
 const LEDGER_SECTION = "Fleet build";
 const HELD_OUT_NOT_RUN = { status: "not_run", reason: "fleet v2: held-out execution is not run yet" };
 const SCRIPT_FINDINGS_NOT_RUN = { status: "not_run", reason: "fleet v2: mutation/coverage/scan gates are not run yet" };
+// 8.0.0 (G1, ADR-1316): the gates gates_not_run lists unless a digest-checked ran result of this code round exists
+const GATE_DEFAULTS = [["mutation", SCRIPT_FINDINGS_NOT_RUN], ["coverage", SCRIPT_FINDINGS_NOT_RUN], ["security_scan", SCRIPT_FINDINGS_NOT_RUN], ["held_out", HELD_OUT_NOT_RUN]];
+const GATE_STATUS = ["ran", "partial", "not_run"];
+// 8.0.0 (G1, ADR-1315): the security-scan image, pinned by digest (G7 resolves it; PENDING: not available)
+const AUDIT_IMAGE = "openfantasy/audit-lab@sha256:PENDING";
 // The planner may emit these
 const HELD_OUT_KEY = "held_out_examples";
 const RUNNER_CONFIG_FILES = [
@@ -592,6 +597,7 @@ const PREFLIGHT_SCHEMA = {
     scripts_dir: STR_OR_NULL,
     path_check: { type: ["object", "null"], properties: { program: PROGRAM_PROP, file_sha256: STR } },
     session_project: PROGRAM_OUTPUT,
+    gate_tools: PROGRAM_OUTPUT,
     reason: STR,
   },
 };
@@ -853,13 +859,10 @@ function stripHeldOut(v) {
   }
   return v;
 }
+// 8.0.0 (G1): derived from state.gates; a partial or not_run result of this round gives its own reason
 function gatesNotRun(judgeList) {
-  const defaults = [
-    { gate: "mutation", reason: SCRIPT_FINDINGS_NOT_RUN.reason },
-    { gate: "coverage", reason: SCRIPT_FINDINGS_NOT_RUN.reason },
-    { gate: "security_scan", reason: SCRIPT_FINDINGS_NOT_RUN.reason },
-    { gate: "held_out", reason: HELD_OUT_NOT_RUN.reason },
-  ];
+  const now = (g) => (state.gates[g] && state.gates[g].round === state.rounds.code ? state.gates[g] : null);
+  const defaults = GATE_DEFAULTS.filter(([g]) => !now(g) || now(g).status !== "ran").map(([g, d]) => ({ gate: g, reason: now(g) ? now(g).reason : d.reason }));
   // the union
   const list = Array.isArray(judgeList) ? judgeList.filter((g) => g && typeof g === "object") : [];
   return list.concat(defaults.filter((d) => !list.some((g) => g.gate === d.gate)));
@@ -1656,6 +1659,7 @@ const PROGRAM_SHA256 = {
   "fleet_branch": "f1af514598ab542d58a16456f00e5cba0aeb43131fc2eab1618e2ca87bf846d7",
   "fleet_scan": "2cd4e1171e82f47fa2c1356ba175398f33bc10ae65258720cf113b65cb78969f",
   "format_files": "a8a416d1d5566038a485428fcc82d792a90923578e1ba471f9c3a12a846324ba",
+  "gate_tools": "4342db6bbd911b02171378c3b033bceac37f2d691425b9aef06d2f4d6a998da2",
   "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
   "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
   "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
@@ -1772,7 +1776,7 @@ function emitProg(name, cmd) {
   return cmd;
 }
 const PROGRAM_SLOTS = [
-  [/^preflight(:relay-retry)?$/, [["path_check", "path_check"], ["session_project", "session_project"]]],
+  [/^preflight(:relay-retry)?$/, [["path_check", "path_check"], ["session_project", "session_project"], ["gate_tools", "gate_tools"]]],
   [/^infra:path-check:/, [[null, "path_check"]]],
   [/^workspace$/, [["remote_url_check", "remote_url"], ["gh_check", "gh_identity"], ["exclude", "exclude_add"]]],
   [/^infra:gh-identity:/, [[null, "gh_identity"]]],
@@ -1828,6 +1832,8 @@ const PROGRAM_KEYS = {
   "remote_url": ["url", "args"],
   // 5.0.9
   "session_project": ["project", "source", "cwd", "args"],
+  // 8.0.0 (G1)
+  "gate_tools": ["languages", "matrix", "container", "args"],
   // 5.0.8
   "gh_identity": ["origin", "repos", "args"],
   "hasher": ["fingerprint", "hashes", "scripts"],
@@ -1925,6 +1931,13 @@ const PROGRAM_OUT = {
   },
   remote_url: { url: STR_OR_NULL, args: STRS, digest: STR },
   session_project: { project: STR_OR_NULL, source: STR_OR_NULL, cwd: STR, args: STRS, digest: STR },
+  gate_tools: {
+    languages: STRS,
+    matrix: { type: "object", additionalProperties: { type: "object", properties: { coverage: STR, mutation: STR, security: STR } } },
+    container: { type: "object", properties: { runtime: STR_OR_NULL, image: STR, present: BOOL, reason: STR_OR_NULL } },
+    args: STRS,
+    digest: STR,
+  },
   branch_scan: {
     head: STR,
     commits: { type: "array", items: { type: "object", properties: { sha: STR, subject: STR, files: STRS } } },
@@ -2487,7 +2500,11 @@ function preflightPrompt(inputs) {
     "Then, scripts_dir not null, run this one command as one Bash call from the directory your shell starts in (never cd first), with <scripts_dir> replaced and nothing else changed: " +
     emitProg("session_project", "sha256sum -- <scripts_dir>/session_project.py && python3 -I <scripts_dir>/session_project.py") +
     "\nIt prints one JSON object " + printsKeys("session_project") + ": " + relayAs("session_project") + ". Non-zero exit or not run -> session_project null.\n" +
-    "Return {ledger_tools, scripts_probe, scripts_dir, path_check, session_project, reason}."
+    // 8.0.0 (G1): the gate tool census
+    "Then, scripts_dir not null, run this one command as one Bash call, with <scripts_dir> replaced and nothing else changed: " +
+    emitProg("gate_tools", "sha256sum -- <scripts_dir>/gate_tools.py && python3 -I <scripts_dir>/gate_tools.py " + shQuote(inputs.repo) + " " + shQuote(AUDIT_IMAGE)) +
+    "\nIt prints one JSON object " + printsKeys("gate_tools") + ": " + relayAs("gate_tools") + ". Non-zero exit or not run -> gate_tools null.\n" +
+    "Return {ledger_tools, scripts_probe, scripts_dir, path_check, session_project, gate_tools, reason}."
   );
 }
 
@@ -3593,6 +3610,9 @@ const state = {
   branch: null,
   pr: null,
   gatesNotRun: null,
+  // 8.0.0 (G1): {<gate>: {status, reason, findings, round}} from runGate; the census, or null (no gate tool available)
+  gates: {},
+  gateTools: null,
   models: {},
   // the ROLE_SHA256 entries preflight found in the roles dir
   roleSha: null,
@@ -4234,6 +4254,7 @@ async function preflightStep(repo) {
   // 7.4.0 (#23; car 4 Y1: not the repo root, the normal start): the session started in a worktree under the repo
   if (sjOk && String(sj.cwd).indexOf(repo + "/.claude/worktrees/") === 0)
     gate("WARN session_project ran in " + logPath(sj.cwd) + " (a worktree under the repo): a cd there is ignored; start the session in the directory you mean");
+  gateCensus(pre.gate_tools, repo);
   state.repo = repo;
   for (const role of ROLES) {
     const line = ROLE_DISPATCH[role];
@@ -4246,6 +4267,49 @@ async function preflightStep(repo) {
   state.preflightRecord = { fleet_version: FLEET_VERSION, role_sha256: Object.assign({}, ROLE_SHA256) };
   state.rolesLoaded = true;
   gate("preflight: all " + ROLES.length + " role files at their ROLE_SHA256 pins (fleet " + FLEET_VERSION + ")");
+}
+
+// 8.0.0 (G1): advisory; an unusable relay marks no gate tool available and never stops
+function gateCensus(g, repo) {
+  const ok = !!g && typeof g === "object" && canonical(g.args) === canonical([repo, AUDIT_IMAGE]) && relayDigestOk(g, progKeys("gate_tools"), "gate_tools") &&
+    strsOf(g.languages) && !!g.matrix && typeof g.matrix === "object" && g.languages.every((l) => !!g.matrix[l] && typeof g.matrix[l] === "object") && !!g.container && typeof g.container === "object";
+  state.gateTools = ok ? g : null;
+  if (!ok) return gate("gate census unusable (no digest-checked gate_tools): no gate tool available");
+  for (const l of g.languages) gate("gate census " + l + ": " + ["coverage", "mutation", "security"].map((k) => k + " " + g.matrix[l][k]).join(", "));
+  gate("gate census security: " + (g.container.present === true ? g.container.runtime + " " + AUDIT_IMAGE : "not available: " + g.container.reason));
+}
+// 8.0.0 (G1): one agent runs a code round's gate programs, one slot per gate ([gate, program id, args]); each prints
+// {status: ran|partial|not_run, reason, findings}. An unusable or erroring slot gets one retry, then stops at gate gates.
+function gatePrompt(slots) {
+  return (
+    INFRA_STEP + "run the fleet gate programs. Read only; change no file.\n" +
+    slots.map(([g, id, args]) => RUN_EXACT + progCmd(id.split(":")[0], args) + "\nIt prints one JSON object " + printsKeys(id) + ": " + relayAs(g) + ". Non-zero exit -> " + g + " null and the stderr in reason.\n").join("") +
+    "Return {status: \"ok\", reason, " + slots.map((s) => s[0]).join(", ") + "}."
+  );
+}
+function gateResult(r, [g, id, args]) {
+  const x = r && r[g];
+  return x && relayDigestOk(x, progKeys(id), id.split(":")[0]) && canonical(x.args) === canonical(args) && GATE_STATUS.indexOf(x.status) >= 0 ? x : null;
+}
+async function runGate(label, slots, phase) {
+  const opts = { schema: INFRA_SCHEMA, agentType: JUDGE_AGENT, phase };
+  let r = await dispatch(label, gatePrompt(slots), opts);
+  const bad = () => slots.filter((s) => !gateResult(r, s)).map((s) => s[0]);
+  if (bad().length) {
+    gate(label + ": no usable result for " + bad().join(", ") + "; dispatched once more (" + label + DIGEST_RETRY + ")");
+    r = await dispatch(label + DIGEST_RETRY, gatePrompt(slots) + "\nA first run gave no usable result: run each command again and copy every value exactly.", opts);
+    if (bad().length) halt("needs_human", label + ": gate " + bad().join(", ") + " erred or relayed no digest-checked result twice", "gates");
+  }
+  for (const s of slots) {
+    const x = gateResult(r, s);
+    state.gates[s[0]] = { status: x.status, reason: x.reason, findings: x.findings, round: state.rounds.code };
+    gate("gate " + s[0] + ": " + x.status + (x.reason ? " (" + x.reason + ")" : ""));
+  }
+}
+// 8.0.0 (G1, ADR-1316): the findings no ruling covers; a ruling names the finding's id and gives a reason
+function unruled(findings, rulings) {
+  const ok = (Array.isArray(rulings) ? rulings : []).filter((x) => x && typeof x.id === "string" && typeof x.reason === "string" && x.reason.trim()).map((x) => x.id);
+  return (Array.isArray(findings) ? findings : []).filter((f) => !f || ok.indexOf(f.id) < 0);
 }
 
 // plan mode only, before the planner
@@ -8660,7 +8724,7 @@ async function replan(ctx) {
     reserve(autoGateAgents(p.planFacts.commands), "the re-plan's auto gates");
     const g = await autoGates({ sfx: ":replan", common, mainWt: lay.mainWt, planCommit: newHead, brief, callerRepo: brief.repo, branch: lay.branch, defaultBranch: common.default_branch, criteria: p.criteria, planPath: p.planPath, planDiff: p.planDiff, planFacts: p.planFacts, files: p.testable.reduce((a, c) => a.concat(c.test_files), []), relaxed: p.relaxed });
     if (!g.ok) return autoFailResult(g, p.planPath, pc.tiny);
-    Object.assign(state, { rounds: { tests: 0, code: 0 }, freezeDigest: null, gatesNotRun: null, review: null });
+    Object.assign(state, { rounds: { tests: 0, code: 0 }, freezeDigest: null, gatesNotRun: null, gates: {}, review: null });
     return buildFromRef(ctx.input, date, pc.tiny, lay, ctx.ws, { rerunGates: false, intent: g.intent, agentsBase: state.agents, full: pc.full, prHead });
   }
   return awaiting(who + " plan_wrong: re-planned; confirm the proposed plan change, then run mode build with the new plan_ref", p, pc.tiny, pc.full, {
@@ -9090,7 +9154,7 @@ async function probeMode(input) {
   const roles = {};
   for (const r of ROLES) roles[r] = { sha256: state.roleSha[r], model: state.models[r].model, fallback: state.models[r].fallback };
   return Object.assign(finish("ok", "probe: fleet " + FLEET_VERSION + " scripts and roles found, " + ROLES.length + " role files at their pins, a role read checked, PATH check clean"), {
-    probe: { fleet_version: FLEET_VERSION, scripts_dir: state.scriptsDir, roles_dir: state.rolesDir, roles, role_read: Object.assign({ role, sha256: rr.role_file.sha256, ok: true }, sh ? { shared_file: { name: sh, sha256: rr.shared_file.sha256, ok: true } } : {}) },
+    probe: { fleet_version: FLEET_VERSION, scripts_dir: state.scriptsDir, roles_dir: state.rolesDir, roles, gate_tools: state.gateTools && { languages: state.gateTools.languages, matrix: state.gateTools.matrix, container: state.gateTools.container }, role_read: Object.assign({ role, sha256: rr.role_file.sha256, ok: true }, sh ? { shared_file: { name: sh, sha256: rr.shared_file.sha256, ok: true } } : {}) },
   });
 }
 
