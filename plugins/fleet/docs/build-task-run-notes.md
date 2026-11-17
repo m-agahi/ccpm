@@ -4761,3 +4761,23 @@ pkg/a.py of six files was scanned; an empty /src/.semgrepignore and --max-target
 all six. paths.scanned is checked for every .py/.js/.mjs/.cjs/.jsx/.ts/.tsx file: a miss is
 partial. (3) secrets sort first and are never cut. (4) span: start..end, the added lines in it.
 ```
+
+### G7b: literal pathspecs, byte-safe names, no truncation (security review of G7)
+
+```text
+Pathspec: `git diff -U0 ... -- <name>` read the name as a pathspec. `:(glob)*.py` matched every
+top-level .py file (their hunks merged under one path); `a[1].py` matched itself and a1.py. A name
+that is not UTF-8 was decoded with 'replace', so the re-encoded name matched no file: sec_scan
+dropped it (no rows: a fail-open), cover_diff and mutants stopped on cat-file. Fix: the fallback the
+review allowed, not one split diff. Patch output is not NUL-delimited (-z covers name/raw output
+only), header names are C-quoted for ", \, tab and newline even with core.quotePath=false, and a
+type change prints two sections, so zipping one patch with --name-only is fragile. Instead:
+GIT_LITERAL_PATHSPECS=1 in os.environ (every git call, the mutants restore check included; the test
+child of cover_diff/mutants gets the value it had before), names via os.fsdecode (surrogateescape,
+so subprocess and open() re-encode the same bytes), show() before the digest (backslashreplace:
+caf\xe9.py; never 'replace', which can merge two names). Fail closed: a listed name whose diff does
+not start with "diff --git " exits non-zero. A section with no hunk is still G2's wholly added.
+Truncation (sec_scan): more than CAP (200) non-secret findings exits non-zero (retry, then gates:
+needs_human). partial now means only "not every file scanned" or "only the always-on part ran".
+Not changed: cover_diff's own CAP on uncovered lines (partial with a cut list; out of scope).
+```

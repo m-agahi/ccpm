@@ -601,17 +601,21 @@ test("8.0.0 G7 review fix 2: a file semgrep did not scan (paths.scanned) gives p
   assert.notEqual(y.r.status, 0, "no paths.scanned: " + y.r.stdout);
 });
 
-test("8.0.0 G7 review fix 3: a truncated list keeps every secret finding (first); the non-secret findings are cut at 200 and the status is partial", { skip: !HAVE_PY }, () => {
-  const lits = Array.from({ length: 210 }, (_, i) => "literal-number-" + String(i).padStart(3, "0"));
-  const test0 = "def test_f():\n" + lits.map((l) => "    assert f() != '" + l + "'\n").join("");
-  const add = "\n" + lits.map((l) => "X = '" + l + "'\n").join("") + "Z = 1  # gitleaks:allow\n";
-  const y = once({ test: test0, add }, { est: "null" });
+test("8.0.0 G7 review fix 3 (G7b fix 2): every secret finding sorts first; more than 200 non-secret findings is a non-zero exit (retry, then gates: needs_human), never partial; 200 are all listed", { skip: !HAVE_PY }, () => {
+  const lit = (n) => Array.from({ length: n }, (_, i) => "literal-number-" + String(i).padStart(3, "0"));
+  const fx = (n) => ({ test: "def test_f():\n" + lit(n).map((l) => "    assert f() != '" + l + "'\n").join(""), add: "\n" + lit(n).map((l) => "X = '" + l + "'\n").join("") + "Z = 1  # gitleaks:allow\n" });
+  let y = once(fx(201), { est: "null" });
+  assert.notEqual(y.r.status, 0, "201 non-secret findings: " + y.r.stdout);
+  assert.match(y.r.stderr, /more than 200 non-secret findings \(201\)/);
+  assert.equal(y.r.stdout, "", "no partial result is printed");
+  y = once(fx(200), { est: "null" });
   assert.equal(y.r.status, 0, y.r.stderr);
   assert.equal(y.out.status, "partial");
-  assert.match(y.out.reason, /more than 200 findings: the first 200 are listed/);
-  assert.deepEqual(y.out.findings[0], { path: "pkg/mod.py", lines: [217], rule: "grep: gitleaks:allow marker", kind: "secret" });
+  assert.equal(y.out.reason, "container scan not run: no container runtime (podman or docker); always-on checks only; no est_diff_lines: size not checked");
+  assert.deepEqual(y.out.findings[0], { path: "pkg/mod.py", lines: [207], rule: "grep: gitleaks:allow marker", kind: "secret" });
   assert.equal(y.out.findings.filter((f) => f.kind === "code").length, 200);
   assert.equal(y.out.findings.length, 201);
+  assert.ok(!/the first %d are listed/.test(readFileSync(PROG, "utf8")), "no truncation path is left");
 });
 
 test("8.0.0 G7 review fix 4: a semgrep or gitleaks result counts when any line of its span is added; it records the added lines it covers", { skip: !HAVE_PY }, () => {

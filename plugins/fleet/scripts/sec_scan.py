@@ -46,6 +46,9 @@ except Exception:
 # runtime, no image or no pinned digest: partial (always-on checks only). A tool that errors, or output
 # that does not parse: a non-zero exit (the workflow retries once, then stops at gate gates). This
 # program runs git and the runtime only (EXE); it runs no repo code and no host scanner.
+# G7b: every git pathspec is literal (GIT_LITERAL_PATHSPECS), names round-trip as bytes (os.fsdecode)
+# and are shown with backslashreplace; a listed name with no diff section, or more than CAP non-secret
+# findings (a human reviews such a diff), is a non-zero exit.
 import hashlib, json, os, re, secrets, shutil, subprocess, sys, tempfile, time
 EXE = ('podman', 'docker', 'git')
 RULES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(globals()['__file__']))), 'skills', 'build-task', 'sec-rules.yml')
@@ -72,9 +75,20 @@ RISKY = (
 )
 os.environ['GIT_TERMINAL_PROMPT'] = '0'
 os.environ['GIT_ATTR_NOSYSTEM'] = '1'
+# a changed name is never a pathspec (`:(glob)*.py`, `a[1].py`)
+os.environ['GIT_LITERAL_PATHSPECS'] = '1'
 start = time.monotonic()
+def show(o):
+    # a name that is not UTF-8 holds surrogates (os.fsdecode): shown as \\x.. escapes, never merged
+    if isinstance(o, str):
+        return os.fsencode(o).decode('utf-8', 'backslashreplace')
+    if isinstance(o, list):
+        return [show(x) for x in o]
+    if isinstance(o, dict):
+        return {k: show(v) for k, v in o.items()}
+    return o
 def emit(status, reason, findings):
-    out = {'status': status, 'reason': reason, 'findings': findings, 'args': sys.argv[1:], 'program': _PROG}
+    out = show({'status': status, 'reason': reason, 'findings': findings, 'args': sys.argv[1:], 'program': _PROG})
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
     print(json.dumps(out, ensure_ascii=False))
     sys.exit(0)
@@ -108,11 +122,13 @@ scratch = os.path.join(os.path.realpath(os.path.dirname(os.path.realpath(wt))), 
 os.environ['PATH'] = clean_path((wt, scratch))
 # the added lines {path: {line: text}} of the changed production files
 added = {}
-for n in git('diff', '--name-only', '-z', '--diff-filter=AMT', *D, base, tree).decode('utf-8', 'replace').split('\0'):
+for n in os.fsdecode(git('diff', '--name-only', '-z', '--diff-filter=AMT', *D, base, tree)).split('\0'):
     if not n or n in exclude:
         continue
-    rows, cur = {}, None
-    for t in git('diff', '-U0', *D, base, tree, '--', n).decode('utf-8', 'replace').split('\n'):
+    rows, cur, out = {}, None, git('diff', '-U0', *D, base, tree, '--', n)
+    if not out.startswith(b'diff --git '):
+        sys.exit('no diff section for a listed path: ' + show(n))
+    for t in out.decode('utf-8', 'replace').split('\n'):
         h = re.match(r'^@@ -\S+ \+(\d+)(?:,\d+)? @@', t)
         if h:
             cur = int(h.group(1))
@@ -152,12 +168,11 @@ for p, rows in added.items():
             if '"' + s + '"' in t or "'" + s + "'" in t:
                 hit(p, ln, 'frozen-test literal: ' + s[:60], 'code')
 def result(status, reason):
-    # every secret first and never cut; the others cut at CAP (partial)
+    # every secret first; more than CAP others is an error (never a cut list): a human reviews the diff
     out = sorted(({'path': p, 'lines': sorted(ls), 'rule': r, 'kind': k} for (p, r, k), ls in found.items()), key=lambda f: (f['kind'] != 'secret', f['path'], f['rule']))
-    sec = [f for f in out if f['kind'] == 'secret']
-    if len(out) - len(sec) > CAP:
-        out, status = sec + out[len(sec):len(sec) + CAP], 'partial'
-        notes.append('more than %d findings: the first %d are listed' % (CAP, CAP))
+    n = sum(f['kind'] != 'secret' for f in out)
+    if n > CAP:
+        sys.exit('more than %d non-secret findings (%d): a human reviews this diff' % (CAP, n))
     emit(status, '; '.join(x for x in [reason] + notes if x) or None, out)
 def skip(why):
     result('partial', 'container scan not run: ' + why + '; always-on checks only')

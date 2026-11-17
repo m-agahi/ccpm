@@ -296,6 +296,21 @@ not_run, budget_hit}`. A red baseline: `not_run` "baseline red in scratch copy";
   purpose: the program count (v4_s1), the gate census rows and the image (v800_gate_tools, harness),
   the security reason in the gates_not_run tests (build_task_run, v800_gate_tools), the gates slot
   list (v800_mutation), v502 (`sec_scan` prints through `gatePrompt`), v403 READS and the v5010 pins.
+- Car G7b (security review of G7, 2 fixes; same pattern fixed in G2 and G5): `sec_scan.py`,
+  `cover_diff.py` and `mutants.py` diffed each changed file with `-- <name>`, so git read the name
+  as a pathspec (`:(glob)*.py` matched every top-level `.py` file, `a[1].py` also matched `a1.py`),
+  and a name that is not UTF-8 was decoded with `replace` and matched nothing (sec_scan dropped the
+  file: a fail-open; the other two stopped on a git error). Now every git call runs with
+  `GIT_LITERAL_PATHSPECS=1` (the test child of cover_diff and mutants gets the old value), names
+  round-trip through `os.fsdecode`, the output shows such a name with `\xNN` escapes
+  (backslashreplace, so the digest holds), and a listed name that yields no diff section is a
+  non-zero exit, never skipped. A section with no hunk (an empty file, a mode change) keeps G2's
+  wholly-added rule. The mutants restore check (`git diff --quiet <tree> -- <files>`) is literal too.
+  sec_scan: more than 200 non-secret findings is now a non-zero exit (the workflow retries once,
+  then stops at gate `gates`: needs_human), never `partial` with a cut list; `partial` keeps only
+  "not every file scanned" and "only the always-on part ran". Tests: `v800_pathspec.test.mjs`;
+  the G7 review fix 3 test now asserts the exit at 201 and the full list at 200. Dist size unchanged
+  (program sha256 only).
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

@@ -57,10 +57,22 @@ CODE = ('.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.go', '.rs', '.sh', '.bas
 REFUSED = {'terraform', 'tofu', 'tfp', 'terragrunt', 'digger', 'atlantis'}
 os.environ['GIT_TERMINAL_PROMPT'] = '0'
 os.environ['GIT_ATTR_NOSYSTEM'] = '1'
+# G7b: a changed name is never a pathspec (`:(glob)*.py`, `a[1].py`); the test child gets the old value
+_LIT = os.environ.get('GIT_LITERAL_PATHSPECS')
+os.environ['GIT_LITERAL_PATHSPECS'] = '1'
+def show(o):
+    # a name that is not UTF-8 holds surrogates (os.fsdecode): shown as \\x.. escapes, never merged
+    if isinstance(o, str):
+        return os.fsencode(o).decode('utf-8', 'backslashreplace')
+    if isinstance(o, list):
+        return [show(x) for x in o]
+    if isinstance(o, dict):
+        return {k: show(v) for k, v in o.items()}
+    return o
 start = time.monotonic()
 left = lambda: DEADLINE - (time.monotonic() - start)
 def emit(status, reason, findings=()):
-    out = {'status': status, 'reason': reason, 'findings': list(findings), 'args': sys.argv[1:], 'program': _PROG}
+    out = {'status': status, 'reason': show(reason), 'findings': show(list(findings)), 'args': sys.argv[1:], 'program': _PROG}
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
     print(json.dumps(out, ensure_ascii=False))
     sys.exit(0)
@@ -141,14 +153,17 @@ if head[0] == 'coverage' and not shutil.which('coverage', path=path):
 # the added lines of the changed production .py files (added, modified, type-changed); other
 # changed source files are listed as not measured
 want, other = {}, []
-for n in git(wt, 'diff', '--name-only', '-z', '--diff-filter=AMT', *D, base, tree).decode('utf-8', 'replace').split('\0'):
+for n in os.fsdecode(git(wt, 'diff', '--name-only', '-z', '--diff-filter=AMT', *D, base, tree)).split('\0'):
     if not n or n in exclude:
         continue
     if not n.endswith('.py'):
         if n.endswith(CODE):
             other.append(n)
         continue
-    hunks = list(re.finditer(r'^@@ -\S+ \+(\d+)(?:,(\d+))? @@', git(wt, 'diff', '-U0', *D, base, tree, '--', n).decode('utf-8', 'replace'), re.M))
+    out = git(wt, 'diff', '-U0', *D, base, tree, '--', n)
+    if not out.startswith(b'diff --git '):
+        sys.exit('no diff section for a listed path: ' + show(n))
+    hunks = list(re.finditer(r'^@@ -\S+ \+(\d+)(?:,(\d+))? @@', out.decode('utf-8', 'replace'), re.M))
     if hunks:
         rows = [x for m in hunks for x in range(int(m.group(1)), int(m.group(1)) + int(m.group(2) if m.group(2) is not None else 1))]
     else:
@@ -177,7 +192,8 @@ try:
         fh.write('[run]\nsource = .\nrelative_files = True\n[report]\nexclude_lines =\n    (?!x)x\n')
     # no COVERAGE_* variable reaches the child (the build env's COVERAGE_FILE among them): only argv names them
     env = dict(os.environ)
-    env.update(env_in)
+    del env['GIT_LITERAL_PATHSPECS']
+    env.update({} if _LIT is None else {'GIT_LITERAL_PATHSPECS': _LIT}, **env_in)
     for k in [k for k in env if k.startswith('COVERAGE_')]:
         del env[k]
     env['PATH'] = guard + ':' + path
