@@ -1512,7 +1512,7 @@ const PROGRAM_SHA256 = {
 "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
 "changed_defs": "873f1bcb97c7631934512729941deca1e9da49bc84957f1e78ec171293840644",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
-"cover_diff": "001052d906018e187c96dcb1bf82f056183e64851d00e663aa49071f46fc7415",
+"cover_diff": "f86d5f3d873d2680138bf6cf052c9bed1c16ba86c602754a72d0f30318ff4d93",
 "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
 "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
 "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
@@ -1526,7 +1526,7 @@ const PROGRAM_SHA256 = {
 "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
 "held_out": "cd9c62029ca923706d62a815728e67297a674e917c88f2c83fd4e2c301d740aa",
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
-"mutants": "757c8844137eb133f8ad64b483271e70d30703bcd4f1f3285363ce2ab8fabdb1",
+"mutants": "96dd53c9576ce61d88d714c948f08f89e25c5abc34bd332259ff5a81f5490c86",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -3913,7 +3913,7 @@ const f = "survived" in x ? x.survived : x.findings;
 const p = (state.gates[g] || {}).seen | 0;
 state.gates[g] = { status: x.status, reason: x.reason, findings: f, round: state.rounds.code, seen: p | (x.status === "ran" ? (f.length ? 3 : 1) : x.status === "partial" && f.length ? 4 : 0) };
 gate("gate " + g + ": " + x.status + (x.reason ? " (" + x.reason + ")" : ""));
-if (/^tree red/.test(x.reason) || (x.status === "not_run" && p) || (x.status === "partial" && p & 2))
+if (/^tree red/.test(x.reason) || (x.status === "not_run" && p) || (x.status === "partial" && p & 6))
 halt("needs_human", label + ": gate " + g + " " + x.status + " (" + x.reason + ")" + (p ? " after an earlier round's result" : ""), "gates");
 }
 }

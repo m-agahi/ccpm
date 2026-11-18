@@ -197,6 +197,18 @@ test("8.0.0 G5-6: a red baseline gives not_run; no mutant runs", { skip: !HAVE_P
   assert.deepEqual(z.leftovers, []);
 });
 
+test("8.0.0 car F (security review): an ignored file the tree's run leaves in the copy cannot make the base red", { skip: !HAVE_PY }, () => {
+  const x = repo({ add: WEAK, pytest: 'echo run >> "$LOG"\ncase "$(' + CAT + ' pkg/mod.py)" in *clamp*) : > .planted; exit 1;; esac\n[ -e .planted ] && exit 1\nexit 0\n' });
+  try {
+    writeFileSync(join(x.wt, ".git", "info", "exclude"), "/.planted\n");
+    const y = prog(x);
+    assert.equal(y.r.status, 0, y.r.stderr);
+    assert.equal(y.out.reason, "tree red, base green: the judged tree fails test_cmd in the scratch copy (exit 1)");
+  } finally {
+    rmSync(x.d, { recursive: true, force: true });
+  }
+});
+
 test("8.0.0 G5: unsupported: a non-pytest test_cmd or no python source gives not_run; python plus other source gives partial", { skip: !HAVE_PY }, () => {
   for (const cmd of ["npm test", "go test ./...", "cargo test"]) {
     const y = once({ add: WEAK, pytest: 'echo run >> "$LOG"\n' }, { cmd });

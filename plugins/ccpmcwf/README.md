@@ -1199,7 +1199,7 @@ language which tool each gate would use. It is advisory and never stops a run.
 **Stop gate `gates`.** `needs_human` with `stop_gate: "gates"` when: a gate program errors twice or
 its relay fails the digest twice; sec_scan finds more than 200 non-secret findings (a human reviews
 such a diff); a gate reports `not_run` after an earlier round of the same build reported it, or
-`partial` after an earlier `ran` with findings; the judged tree is red in the copy while the plan
+`partial` after earlier findings; the judged tree is red in the copy while the plan
 base is green ("tree red, base green"); the held-out store is off its seal, unreadable, missing after an earlier round of the
 same build read it, or the runner's results do not match the sealed counts; a second `tests`
 ruling after the augmentation round; the next coder finds the frozen tests red at its start.

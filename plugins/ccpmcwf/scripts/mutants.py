@@ -294,6 +294,8 @@ try:
     if code != 0:
         # car F (G2 ruling): once more at the plan base; green there is the change's fault (the workflow stops)
         git(tmp, 'read-tree', '-u', '--reset', base)
+        # security review: no untracked or ignored file of the tree's run reaches the base run
+        git(tmp, 'clean', '-ffdxq')
         try:
             bc = run(run_argv, tmp, env, log)
         except Late:

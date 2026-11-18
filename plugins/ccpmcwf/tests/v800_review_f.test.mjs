@@ -55,6 +55,8 @@ test("8.0.0 car F A-H1: any not_run after an earlier clean ran stops; a partial 
   stopsAtGates(await rounds(gs(CLEAN), gs(NR), fixCode), /gate coverage not_run/);
   stopsAtGates(await rounds(gs(null, MCLEAN), gs(null, NR), fixCode), /gate mutation not_run/);
   stopsAtGates(await rounds(gs(UNCOV), gs({ status: "partial", reason: "the 540 s deadline was hit before the coverage report", findings: [] })), /gate coverage partial/);
+  // security review of car F: a partial after a partial with findings stops too (bit 4)
+  stopsAtGates(await rounds(gs({ status: "partial", reason: "not measured (not python): a.js", findings: UNCOV.findings }), gs({ status: "partial", reason: "not measured (not python): a.js", findings: [] })), /gate coverage partial .*after an earlier round's result/);
   const sec = { status: "ran", reason: null, findings: [{ path: "src/x.py", lines: [3], rule: "grep: shell=True", kind: "code" }] };
   stopsAtGates(await rounds(gs(null, null, sec), gs()), /gate security_scan partial/);
   // a partial after a clean ran: no stop (a .js file next to the python one is partial)

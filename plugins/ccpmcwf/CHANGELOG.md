@@ -432,11 +432,12 @@ token counts come from the smoke run, after this entry.
   example text (`25"`) is there; a sha256 or digest that ended in 25 failed the test at random.
 - A-H1: a gate result of an earlier code round is no longer lost. `runGate` keeps `seen` per gate
   (1 ran, 2 ran with findings, 4 partial with findings). A `not_run` after any earlier mark, or a
-  `partial` after a `ran` with findings, stops with `needs_human` at `gates`. A `partial` after a
-  clean `ran` does not stop (a `.js` file beside the python one). The run state carries
+  `partial` after earlier findings (`ran` or `partial`), stops with `needs_human` at `gates`. A
+  `partial` after a clean `ran` does not stop (a `.js` file beside the python one). The run state carries
   `gates_seen`; a resume restores it (round 0, so it never counts in `gates_not_run`).
 - G2 ruling (red baseline): `cover_diff.py` and `mutants.py` run the suite once more in the copy at
-  the plan base when the judged tree is red. Base green: `not_run` "tree red, base green: ...",
+  the plan base when the judged tree is red, after `git clean -ffdxq` in the copy (security review:
+  no untracked or ignored file the tree's run left can make the base red). Base green: `not_run` "tree red, base green: ...",
   and the workflow stops at `gates` in that round. Base red too: `not_run` "baseline red in
   scratch copy at the tree and at the base (exit a, b): the environment", and the PR lists it.
 - A-H2: gitleaks runs with `--config /rules/gitleaks.toml`, the plugin's

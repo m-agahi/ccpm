@@ -4855,13 +4855,17 @@ plan call (capped). Token counts are not in the harness; the smoke run gives the
 
 ```text
 runGate's state.gates[g].seen ORs 1 (ran), 2 (ran with findings) and 4 (partial with findings)
-over the build. Stop at gates: not_run with any mark, partial with mark 2, or a reason that starts
-"tree red". A partial after a clean ran goes on: changed non-python source is a legal partial. The
+over the build. Stop at gates: not_run with any mark, partial with mark 2 or 4 (security review of
+car F: a partial after a partial with findings lost them too), or a reason that starts "tree red".
+A partial after a clean ran goes on: changed non-python source is a legal partial. Cost: a fixed
+partial-with-findings round followed by a partial stops (needs_human), fail closed. The
 check is in runGate (the one place every gate result lands), so no code-round site changes. A
 re-plan resets state.gates (a new build). The run state's gates_seen holds the three marks
 (coverage, mutation, security_scan; held_out keeps held_out_seen); a resume sets {not_run, round
 0, seen} and accepts only an integer 0..7 for one of the three names.
-Red baseline: the programs run test_cmd again after read-tree -u --reset <base> in the same copy,
+Red baseline: the programs run test_cmd again after read-tree -u --reset <base> and git clean
+-ffdxq (untracked and ignored files of the tree's run go: a planted file or a cache cannot make
+the base red and turn "tree red, base green" into the environment not_run) in the same copy,
 inside the same 540 s deadline (a mutants deadline hit there is partial, as any other). The
 signal is the reason prefix, not an exit code: a non-zero exit would get runGate's retry, which
 reruns all three slots (up to 3 x 540 s) before it stops.

@@ -215,6 +215,13 @@ test("8.0.0 car F G2 ruling: the judged tree red and the plan base green gives n
   assert.deepEqual(x.leftovers.filter((n) => n.startsWith("copy-")), []);
 });
 
+test("8.0.0 car F (security review): a file the tree's run leaves in the copy cannot make the base red: the base runs from a clean copy", { skip: !HAVE_PY }, () => {
+  const C = which("cat");
+  const x = fixture({ base: '$(case "$(' + C + ' pkg/mod.py)" in *"def g"*) : > .planted; echo 1;; *) if [ -e .planted ]; then echo 1; else echo 0; fi;; esac)' });
+  assert.equal(x.r.status, 0, x.r.stderr);
+  assert.equal(x.out.reason, "tree red, base green: the judged tree fails test_cmd in the scratch copy (exit 1)");
+});
+
 test("8.0.0 G2: a coverage tool that errors after a green baseline exits non-zero (the workflow retries, then stops)", { skip: !HAVE_PY }, () => {
   const x = fixture({ runExit: 2 });
   assert.notEqual(x.r.status, 0);
