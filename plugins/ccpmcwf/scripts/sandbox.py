@@ -334,15 +334,26 @@ def plan(spec, sockdir=None):
         return None, why
     bound = [a[i + 2] for i, v in enumerate(a) if v in ('--ro-bind', '--bind', '--symlink') and i + 2 < len(a)] + [a[i + 1] for i, v in enumerate(a) if v == '--tmp-overlay']
     done = []
-    for p in sorted(set(socks)) + sorted(set(closed)):
-        d = p if p in closed else os.path.dirname(p)
+    for p in sorted(set(socks)):
+        d = os.path.dirname(p)
         if any(under(p, x) for x in done):
             continue
         if not STAY(d) and not any(under(b, d) for b in bound):
             a += ['--tmpfs', d]
             done.append(d)
-        elif p not in closed:
+        else:
             a += ['--ro-bind', '/dev/null', p]
+    # 8.2.0 review (MED b): a dir the scan cannot list but the child can enter (a socket name in it is
+    # reachable): a tmpfs over it, never a fail-open skip; when it is a kept path (a scan root, the nix
+    # profiles or gcroots, or it is or holds a dir bound back) the run is refused. A dir the child cannot
+    # enter needs nothing.
+    for d in sorted(set(closed)):
+        if any(under(d, x) for x in done) or not os.access(d, os.X_OK):
+            continue
+        if d in roots or d in ('/', '/etc', '/nix', '/nix/var/nix') or any(under(d, k) for k in ('/nix/var/nix/profiles', '/nix/var/nix/gcroots')) or any(under(b, d) for b in bound):
+            return None, 'socket scan: unreadable dir %s under a kept path' % d
+        a += ['--tmpfs', d]
+        done.append(d)
     if sockdir:
         a += ['--ro-bind', sockdir, SOCK]
     # nix: the local store (read-only here) and no daemon; with the socket hidden every NIX_REMOTE fails closed
@@ -375,6 +386,8 @@ def relay(ls, port):
         for p, q in ((c, t), (t, c)):
             threading.Thread(target=pump, args=(p, q), daemon=True).start()
 def put(spec, out):
+    if out.get('started'):
+        out['bwrap'] = bw
     with open(spec['result'], 'w') as fh:
         json.dump(out, fh)
 def bwrap_run(bw, a, argv, env, out=None):
@@ -448,6 +461,8 @@ if not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in
 bw = shutil.which('bwrap', path=_RAW_PATH)
 if not bw:
     fail('bwrap is not on PATH')
+# 8.2.0 review (MED a): resolved once; the trust check, the self-check and the run use this one path
+bw = real(bw)
 # 8.2.0 (#80): a bwrap the tree (or another user) could have planted on the agent PATH is never run
 why = trusted(bw)
 if why:

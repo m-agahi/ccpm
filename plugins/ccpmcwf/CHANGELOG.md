@@ -2,7 +2,8 @@
 
 ## [8.2.0] - 2026-11-18
 
-ccpmcwf 8.2.0 (in progress): yaadgaar #80. #78 and #79 follow in this release.
+ccpmcwf 8.2.0: yaadgaar #80 (gate sandbox hardening) and #78 (documented, Max ruling: accept the
+residual). #79 (gate verdicts from outside the process) is parked.
 
 ### Fixed
 
@@ -16,6 +17,17 @@ ccpmcwf 8.2.0 (in progress): yaadgaar #80. #78 and #79 follow in this release.
   are a tmpfs. The DB relay dir is mode 0700.
 - #80: the README documents the remaining git dir view and that the terraform PATH guard is not in
   the sandbox.
+- #80 review (MED): `sandbox.py` resolves the bwrap path once; the trust check, the self-check and
+  the run use that one real path (the result names it). An unreadable dir the child can enter is a
+  tmpfs; one that is a kept path refuses the run ("socket scan: unreadable dir ... under a kept
+  path"); one the child cannot enter needs nothing.
+
+### Documented
+
+- #78: the held-out examples are not secret from the role agents. Each has Bash as the same uid
+  and can read the store, and the text is also in the Workflow journals (mode 0644) and the
+  transcripts under `~/.claude/projects`. The held-out gate stops only an agent that does not go
+  looking (ADR-1152). A sandbox around each role agent's own Bash would close this; it is not done.
 
 ## [8.1.0] - 2026-11-18
 

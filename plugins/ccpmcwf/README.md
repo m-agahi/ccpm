@@ -1309,10 +1309,19 @@ Not defended:
   adoption;
 - the run lock (8.0.1, #76): it stops a second session on the same task by accident. A role with
   a shell can delete or rewrite `<git-common-dir>/fleet/locks/<task_id>.json`;
-- held-out examples (8.0.0, ADR-1152): the store blocks casual reads by roles only. Every role
-  has a shell and can read `~/.config`. Since 8.1.0 the code under test cannot read the store or
-  keep the examples (the sandbox below). The fleet itself never forwards an example (sentinel
-  tests);
+- held-out examples (8.0.0, ADR-1152; 8.2.0, #78, Max ruled: accept and document): the examples
+  are NOT secret from the role agents. Every role agent (the coder, the test writers, the judges)
+  has Bash as the same uid with the real HOME and XDG dirs, so it can read the store
+  (`~/.config/fleet/held-out`) itself. The text is also on disk outside the store: in the Workflow
+  journals (`~/.claude/projects/<project>/<session>/subagents/workflows/wf_*/journal.jsonl`, mode
+  0644, the planner's result) and in the agent transcripts under `~/.claude/projects` (the held-out
+  runner's `show` output, the store write's chunks), from the first code round on. The held-out
+  gate stops only an agent that does not go looking. The fix that would close this, a sandbox
+  around each role agent's own Bash that hides `~/.config/fleet` and `~/.claude/projects`, is not
+  done. Encrypting the store or moving it to another uid would not close it (the key or the text is
+  in the transcripts too). Since 8.1.0 the code under test cannot read the store or keep the
+  examples in the gate runs (the sandbox below); the role agents' own test runs are not sandboxed.
+  The fleet itself never forwards an example (sentinel tests);
 - coverage and mutation (8.0.0): advisory to the code judge. Code under test runs in the same
   process as the coverage tracer, so it can still tamper with the tracer or with the data file
   during the `coverage run` step (see the sandbox below for what 8.1.0 closes).
@@ -1393,7 +1402,8 @@ What is left (accepted residuals):
 - Other world-readable host paths stay readable (`/` is bound read-only), and so do host unix
   sockets outside `/run`, `/tmp`, `/var/tmp`, `$HOME` and the nix socket dirs.
 - The held-out store is still readable by the unsandboxed role test runs: the coder's and the
-  judges' own runs (`scratch_copy.py run`), and any role with a shell (ADR-1152).
+  judges' own runs (`scratch_copy.py run`), and by any role agent with a shell, which can also read
+  the examples in the Workflow journals and transcripts (see the held-out bullet above; #78).
 - In-process tampering: the tests share the tracer's process and its data dir in the
   `coverage run` step, and a test process can fake its own verdict (exit code, output). Code that
   the interpreter loads at start (a venv's `.pth` files, fresh per run but from the tree's own

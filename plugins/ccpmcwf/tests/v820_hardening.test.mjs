@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, existsSync, realpathSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, existsSync, realpathSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createServer } from "node:net";
@@ -184,6 +184,51 @@ test("8.2.0 #80: the relay socket dir is mode 0700", { skip: NO_SBX }, () => {
     assert.equal(r.res && r.res.started, true, r.r.stderr + JSON.stringify(r.res));
     assert.match(r.r.stdout, /MODE 700/);
   } finally {
+    x.done();
+  }
+});
+
+// 8.2.0 review (MED a): the bwrap path is resolved once; the trust check and the run use that one real path
+test("8.2.0 #80 review: sandbox.py runs the resolved bwrap path it checked, never the PATH name (no swap between check and run)", { skip: !HAVE_PY }, () => {
+  const x = plainFixture();
+  try {
+    const bin = join(x.d, "bin");
+    const store = join(x.d, "store");
+    put(join(store, "bwrap"), "#!/bin/sh\nfd=\nwhile [ \"$#\" -gt 0 ] && [ \"$1\" != \"--\" ]; do\n  [ \"$1\" = --json-status-fd ] && fd=$2\n  shift\ndone\nshift\nif [ -n \"$fd\" ]; then eval \"printf '{\\\"child-pid\\\": 1}\\n' >&$fd; exec $fd>&-\"; fi\nexec \"$@\"\n", 0o755);
+    mkdirSync(bin);
+    symlinkSync(join(store, "bwrap"), join(bin, "bwrap"));
+    const spec = { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: process.env.PATH } };
+    const r = sbx("run", spec, x.d, { PATH: bin + ":" + process.env.PATH, FLEET_SANDBOX_TEST_BWRAP: realpathSync(join(store, "bwrap")) });
+    assert.equal(r.res && r.res.started, true, r.r.stderr + JSON.stringify(r.res));
+    assert.equal(r.res.bwrap, realpathSync(join(store, "bwrap")), "the run used the checked real path: " + JSON.stringify(r.res));
+  } finally {
+    x.done();
+  }
+});
+
+// 8.2.0 review (MED b): an unreadable (traversable) dir the scan cannot list is a tmpfs; when it is or holds a
+// kept path (a dir bound back) no tmpfs can go there: the run is refused; a dir the child cannot enter needs neither
+test("8.2.0 #80 review: an unreadable dir in a scan root: a tmpfs, or a refusal when it is a kept path; a dir nobody can enter is skipped", { skip: !HAVE_PY || process.getuid() === 0 }, () => {
+  const x = plainFixture();
+  const root = join(x.d, "srv");
+  const u = join(root, "u");
+  const shut = join(root, "shut");
+  mkdirSync(u, { recursive: true });
+  mkdirSync(shut);
+  chmodSync(u, 0o311);
+  chmodSync(shut, 0o200);
+  try {
+    let p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, scan: [root] }, x.d);
+    assert.equal(p.out.reason, null, p.out.reason);
+    const tmpfs = pairs(p.out.argv, "--tmpfs");
+    assert.ok(tmpfs.includes(u), "tmpfs over the unreadable dir: " + tmpfs);
+    assert.ok(!tmpfs.includes(shut), "a dir the child cannot enter needs no tmpfs");
+    p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, scan: [root], ro: [u] }, x.d);
+    assert.equal(p.out.argv, null);
+    assert.equal(p.out.reason, "socket scan: unreadable dir " + u + " under a kept path");
+  } finally {
+    chmodSync(u, 0o755);
+    chmodSync(shut, 0o755);
     x.done();
   }
 });
