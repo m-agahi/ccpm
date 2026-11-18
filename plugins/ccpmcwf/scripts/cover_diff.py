@@ -54,7 +54,7 @@ except Exception:
 # bwrap, a failed self-check, sandbox.py off its pin): not_run "sandbox unavailable: ...", no test run.
 import hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, time
 DEADLINE, CAP = 540, 400
-SANDBOX_SHA256 = '43160327aed966eccbffe7f927b7c328b9f21c02e908552f76f5b8b9c05aef57'
+SANDBOX_SHA256 = 'c1afc3b65d1620d7623d240ea907b1e42327bf739ee9784d5c9071a4b2ddd88c'
 SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
 # the python -m pytest shape's coverage launcher: coverage from the interpreter (-I: no cwd) or a PYTHONPATH dir
 # outside the copy, then the PYTHONPATH dirs in the copy for the tests

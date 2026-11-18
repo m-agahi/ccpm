@@ -63,10 +63,9 @@ except Exception:
 # 8.2.0 (#80): bwrap runs only when its real path is under /nix/store, or the file and every dir above it
 # are root-owned and not group- or other-writable. A tmpfs over /var/lib. With git true, refs/fleet,
 # logs/refs/fleet and every worktrees/<x> but the copy's own are a tmpfs again (the objects and packed-refs
-# stay readable). Every host unix socket under SCAN_ROOTS (and a spec's scan roots) that no tmpfs hides
-# yet: a tmpfs over its dir, or /dev/null bound over the socket when its dir must stay (STAY, or it holds a
-# dir bound back); a dir the scan cannot read is a tmpfs; a scan that fails or runs past its caps refuses
-# the run ("socket scan ..."). The relay dir is 0700.
+# stay readable). Every bound host unix socket in /proc/net/unix (spec socklist: another list, tests) that
+# the child could reach: a tmpfs over its dir (sockets only), else /dev/null over it; an unreadable list
+# refuses the run ("socket list ..."). The relay dir is 0700.
 import json, os, re, shutil, socket, stat, subprocess, sys, tempfile, threading
 DSN = re.compile(r'mysql://([A-Za-z0-9_]{1,64}):([^@/\s]*)@127\.0\.0\.1:([0-9]{1,5})/([A-Za-z0-9_]{1,64})')
 DSN_KEY = re.compile(r'[A-Z][A-Z0-9_]{0,40}_TEST_DSN')
@@ -94,49 +93,31 @@ def NIX_SOCKETS():
         except OSError:
             continue
     return out
-# 8.2.0 (#80): where plan() looks for host unix sockets (a socket under /run, /tmp, HOME or another hidden
-# dir is hidden already); /nix/store is never walked
-SCAN_ROOTS = ('/var', '/srv', '/opt', '/nix/var', '/etc')
-SCAN_CAP = (200000, 5.0)
-def STAY(d):
-    # a socket's dir that stays visible (a tmpfs there would hide config or the nix profiles): /dev/null
-    # goes over the socket instead
-    return d in SCAN_ROOTS or d in ('/', '/nix', '/nix/var/nix') or any(d == r or d.startswith(r + '/') for r in ('/etc', '/nix/var/nix/profiles', '/nix/var/nix/gcroots'))
-def scan(roots, prune):
-    # ([socket paths], [unreadable dirs]) under roots, no symlink followed, no dir in prune walked; or a reason
-    import time
-    t0, n, socks, closed = time.monotonic(), 0, [], []
-    for root in roots:
-        if not os.path.isabs(root):
-            return None, None, 'socket scan: a relative root ' + root
-        if not os.path.lexists(root) or os.path.islink(root):
-            continue
-        # a dir to prune holds the root: the walk under this root prunes none of it (a spec scan root)
-        pr = [h for h in prune if not under(root, h)]
-        st = [root]
-        while st:
-            d = st.pop()
-            try:
-                ents = list(os.scandir(d))
-            except PermissionError:
-                closed.append(d)
-                continue
-            except OSError as e:
-                return None, None, 'socket scan failed at %s: %s' % (d, e)
-            for e in ents:
-                n += 1
-                if n > SCAN_CAP[0] or time.monotonic() - t0 > SCAN_CAP[1]:
-                    return None, None, 'socket scan over its caps (%d entries, %.0f s)' % SCAN_CAP
-                try:
-                    m = e.stat(follow_symlinks=False).st_mode
-                except OSError:
-                    continue
-                if stat.S_ISDIR(m):
-                    if not any(under(e.path, h) for h in pr):
-                        st.append(e.path)
-                elif stat.S_ISSOCK(m):
-                    socks.append(e.path)
-    return socks, closed, None
+# 8.2.0 (#80, CI review): the host's bound unix sockets come from the kernel's list (no dir walk: a big /opt
+# or /var would refuse every run). Path is the last column; an abstract (@) or unnamed socket is not a path
+# (the net namespace already cuts abstract ones off); a relative path names no place this program can see.
+SOCK_LIST = '/proc/net/unix'
+def unix_paths(f):
+    # ([absolute socket paths], None), or (None, why) when the list cannot be read
+    try:
+        with open(f, 'rb') as fh:
+            lines = fh.read(1 << 26).decode('utf-8', 'surrogateescape').split('\n')
+    except OSError as e:
+        return None, 'socket list %s unreadable: %s' % (f, e)
+    if not lines[0].startswith('Num'):
+        return None, 'socket list %s has no header' % f
+    out = []
+    for ln in lines[1:]:
+        c = ln.split(None, 7)
+        if len(c) == 8 and c[7].startswith('/'):
+            out.append(c[7])
+    return out, None
+def only_sockets(d):
+    # every entry of d is a socket (a daemon's socket dir); False when d cannot be listed
+    try:
+        return all(stat.S_ISSOCK(e.stat(follow_symlinks=False).st_mode) for e in os.scandir(d))
+    except OSError:
+        return False
 def trusted(bw):
     # None, or why the bwrap binary is not trusted: its real path under /nix/store, or the file and every
     # dir above it root-owned and not group- or other-writable. FLEET_SANDBOX_TEST_BWRAP (tests) names one
@@ -326,34 +307,30 @@ def plan(spec, sockdir=None):
             if not os.path.isabs(d) or not os.path.isdir(d):
                 return None, 'no dir ' + d
             a += [flag, real(d), real(d)]
-    # 8.2.0 (#80): every host unix socket left visible: a tmpfs over its dir, or /dev/null over it when the
-    # dir stays (STAY, or the dir is or holds a dir bound back above); an unreadable dir: a tmpfs
-    roots = list(SCAN_ROOTS) + list(spec.get('scan') or [])
-    socks, closed, why = scan(roots, hide + ['/tmp', '/nix/store'])
+    # 8.2.0 (#80): every bound host unix socket the child could reach (not under a hidden dir, or under a dir
+    # bound back): a tmpfs over its dir when the dir holds sockets only, is not top-level and holds no dir bound
+    # back; else /dev/null over the socket (a dir that cannot be listed included). A socket this uid cannot
+    # reach (gone, or in a dir it cannot enter) needs nothing. An unreadable list refuses the run.
+    socks, why = unix_paths(spec.get('socklist') or SOCK_LIST)
     if why:
         return None, why
     bound = [a[i + 2] for i, v in enumerate(a) if v in ('--ro-bind', '--bind', '--symlink') and i + 2 < len(a)] + [a[i + 1] for i, v in enumerate(a) if v == '--tmp-overlay']
+    gone = hide + ['/tmp', '/dev', '/proc']
     done = []
     for p in sorted(set(socks)):
-        d = os.path.dirname(p)
-        if any(under(p, x) for x in done):
+        try:
+            if not stat.S_ISSOCK(os.lstat(p).st_mode):
+                continue
+        except OSError:
             continue
-        if not STAY(d) and not any(under(b, d) for b in bound):
+        if any(under(p, x) for x in done) or (any(under(p, h) for h in gone) and not any(under(p, b) for b in bound if b != '/')):
+            continue
+        d = os.path.dirname(p)
+        if d.count('/') > 1 and only_sockets(d) and not any(under(b, d) for b in bound):
             a += ['--tmpfs', d]
             done.append(d)
         else:
             a += ['--ro-bind', '/dev/null', p]
-    # 8.2.0 review (MED b): a dir the scan cannot list but the child can enter (a socket name in it is
-    # reachable): a tmpfs over it, never a fail-open skip; when it is a kept path (a scan root, the nix
-    # profiles or gcroots, or it is or holds a dir bound back) the run is refused. A dir the child cannot
-    # enter needs nothing.
-    for d in sorted(set(closed)):
-        if any(under(d, x) for x in done) or not os.access(d, os.X_OK):
-            continue
-        if d in roots or d in ('/', '/etc', '/nix', '/nix/var/nix') or any(under(d, k) for k in ('/nix/var/nix/profiles', '/nix/var/nix/gcroots')) or any(under(b, d) for b in bound):
-            return None, 'socket scan: unreadable dir %s under a kept path' % d
-        a += ['--tmpfs', d]
-        done.append(d)
     if sockdir:
         a += ['--ro-bind', sockdir, SOCK]
     # nix: the local store (read-only here) and no daemon; with the socket hidden every NIX_REMOTE fails closed

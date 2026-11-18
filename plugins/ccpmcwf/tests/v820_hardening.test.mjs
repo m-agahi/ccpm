@@ -4,9 +4,9 @@
 // - the relay socket dir is mode 0700;
 // - /var/lib is a tmpfs;
 // - the git common dir: refs/fleet, logs/refs/fleet and every worktrees/<x> but the copy's own are tmpfs;
-// - every host unix socket under /var, /srv, /opt, /nix/var and /etc (and a spec's scan roots) is hidden:
-//   a tmpfs over its dir, or /dev/null bound over the socket when that dir must stay visible; a scan that
-//   fails refuses the run ("socket scan ...").
+// - every bound host unix socket in /proc/net/unix (a spec's socklist in tests) the child could reach is
+//   hidden: a tmpfs over its sockets-only dir, else /dev/null bound over the socket; an unreadable list
+//   refuses the run ("socket list ...").
 // The runtime tests run the real bwrap and skip when it is absent or fails its self-check (CI).
 
 import { test } from "node:test";
@@ -109,44 +109,84 @@ test("8.2.0 #80: git true: refs/fleet and every other worktree's admin dir are t
   }
 });
 
-test("8.2.0 #80: a host unix socket in a scanned dir: a tmpfs over its dir, or /dev/null over the socket when the dir is bound back; a failed scan refuses", { skip: !HAVE_PY }, async () => {
+const LIST_HEAD = "Num       RefCount Protocol Flags    Type St Inode Path\n";
+// a /proc/net/unix fixture naming these paths (plus an abstract, an unnamed and a relative one, never paths)
+function socklist(d, paths) {
+  const f = join(d, "unix-" + Math.random().toString(36).slice(2));
+  writeFileSync(f, LIST_HEAD + "0000000000000000: 00000002 00000000 00010000 0001 01 1 @abstract\n0000000000000000: 00000002 00000000 00000000 0001 03 2\n0000000000000000: 00000002 00000000 00010000 0001 01 3 rel/s.sock\n" + paths.map((p, i) => "0000000000000000: 00000002 00000000 00010000 0001 01 " + (10 + i) + " " + p + "\n").join(""));
+  return f;
+}
+
+test("8.2.0 #80: a listed host unix socket the child could reach: a tmpfs over its sockets-only dir, else /dev/null over it; a hidden one needs nothing; an unreadable list refuses", { skip: !HAVE_PY }, async () => {
   const x = plainFixture();
-  const sock = join(x.d, "srv", "sub", "s.sock");
+  const srv = join(x.d, "srv");
+  const sock = join(srv, "sub", "s.sock");
+  const mixed = join(srv, "mixed", "m.sock");
+  const hidden = join(x.d, "fleet", "h.sock");
+  for (const s of [sock, mixed, hidden]) mkdirSync(dirname(s), { recursive: true });
+  writeFileSync(join(srv, "mixed", "config"), "x");
+  const srvs = [await listen(sock), await listen(mixed), await listen(hidden)];
+  try {
+    const list = socklist(x.d, [sock, mixed, hidden]);
+    const base = { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, socklist: list };
+    let p = sbx("plan", Object.assign({ ro: [srv] }, base), x.d);
+    assert.equal(p.r.status, 0, p.r.stderr);
+    assert.equal(p.out.reason, null, p.out.reason);
+    let a = p.out.argv;
+    assert.ok(pairs(a, "--tmpfs").includes(dirname(sock)), "tmpfs over the sockets-only dir: " + pairs(a, "--tmpfs"));
+    const nul = (q) => a.findIndex((v, j) => v === "--ro-bind" && a[j + 1] === "/dev/null" && a[j + 2] === q);
+    assert.ok(nul(mixed) > a.findIndex((v, j) => v === "--ro-bind" && a[j + 1] === srv), "/dev/null over a socket in a dir with other files, after the bind of its dir");
+    assert.ok(!JSON.stringify(a).includes(hidden), "a socket under a hidden dir needs nothing");
+    assert.ok(!JSON.stringify(a).includes("abstract") && !JSON.stringify(a).includes("rel/s.sock"));
+    p = sbx("plan", Object.assign({ ro: [dirname(sock)] }, base), x.d);
+    a = p.out.argv;
+    assert.ok(nul(sock) >= 0 && !pairs(a, "--tmpfs").includes(dirname(sock)), "the dir is bound back: /dev/null over the socket");
+    p = sbx("plan", Object.assign({}, base, { socklist: join(x.d, "no-such-list") }), x.d);
+    assert.equal(p.out.argv, null);
+    assert.match(p.out.reason, /^socket list .* unreadable/);
+  } finally {
+    for (const s of srvs) s.close();
+    x.done();
+  }
+});
+
+test("8.2.0 #80: a big tree costs nothing: 30,000 files bound back, the socket deep in them is still hidden, the plan takes under 2 s", { skip: !HAVE_PY }, async () => {
+  const x = plainFixture();
+  const opt = join(x.d, "opt");
+  for (let i = 0; i < 300; i++) {
+    const dd = join(opt, "d" + i);
+    mkdirSync(dd, { recursive: true });
+    for (let k = 0; k < 100; k++) writeFileSync(join(dd, "f" + k), "");
+  }
+  const sock = join(opt, "d7", "deep", "s.sock");
   mkdirSync(dirname(sock), { recursive: true });
   const srv = await listen(sock);
   try {
-    let p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, scan: [join(x.d, "srv")] }, x.d);
-    assert.equal(p.r.status, 0, p.r.stderr);
+    const t0 = Date.now();
+    const p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, ro: [opt] }, x.d);
+    const ms = Date.now() - t0;
     assert.equal(p.out.reason, null, p.out.reason);
-    assert.ok(pairs(p.out.argv, "--tmpfs").includes(dirname(sock)), "tmpfs over the socket's dir: " + pairs(p.out.argv, "--tmpfs"));
-    p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, scan: [join(x.d, "srv")], ro: [dirname(sock)] }, x.d);
-    const a = p.out.argv;
-    const ni = a.findIndex((v, j) => v === "--ro-bind" && a[j + 1] === "/dev/null" && a[j + 2] === sock);
-    const bi = a.findIndex((v, j) => v === "--ro-bind" && a[j + 1] === dirname(sock) && a[j + 2] === dirname(sock));
-    assert.ok(ni > bi && bi >= 0, "/dev/null over the socket after the bind of its dir: " + JSON.stringify(a));
-    const file = join(x.d, "afile");
-    writeFileSync(file, "x");
-    p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, scan: [file] }, x.d);
-    assert.equal(p.out.argv, null);
-    assert.match(p.out.reason, /^socket scan /);
+    assert.ok(pairs(p.out.argv, "--tmpfs").includes(dirname(sock)), "the socket (from the real /proc/net/unix) is hidden");
+    assert.ok(ms < 2000, "plan took " + ms + " ms");
   } finally {
     srv.close();
     x.done();
   }
 });
 
-test("8.2.0 #80: a child cannot connect to a host unix socket in a scanned dir that is bound back read-only (the unscanned control can)", { skip: NO_SBX }, async () => {
+test("8.2.0 #80: a child cannot connect to a host unix socket in a dir bound back read-only (the control with an empty socket list can)", { skip: NO_SBX }, async () => {
   const x = plainFixture();
   const sock = join(x.d, "srv", "s.sock");
   mkdirSync(dirname(sock), { recursive: true });
+  writeFileSync(join(x.d, "srv", "other"), "x");
   put(join(x.cwd, "u.py"), UNIX);
   const srv = await listen(sock);
   try {
     const spec = { worktree: x.wt, cwd: x.cwd, ro: [x.cwd, dirname(sock)], argv: [PY, "-I", join(x.cwd, "u.py"), sock], env: { PATH: process.env.PATH } };
-    const c = sbx("run", spec, x.d);
+    const c = sbx("run", Object.assign({ socklist: socklist(x.d, []) }, spec), x.d);
     assert.equal(c.res && c.res.started, true, c.r.stderr + JSON.stringify(c.res));
-    assert.equal(c.res.exit, 5, "control: with no scan root the child reaches the socket");
-    const r = sbx("run", Object.assign({ scan: [dirname(sock)] }, spec), x.d);
+    assert.equal(c.res.exit, 5, "control: with the socket not listed the child reaches it");
+    const r = sbx("run", spec, x.d);
     assert.equal(r.res && r.res.started, true, r.r.stderr + JSON.stringify(r.res));
     assert.equal(r.res.exit, 0, "the socket is hidden: " + r.r.stdout);
   } finally {
@@ -206,29 +246,31 @@ test("8.2.0 #80 review: sandbox.py runs the resolved bwrap path it checked, neve
   }
 });
 
-// 8.2.0 review (MED b): an unreadable (traversable) dir the scan cannot list is a tmpfs; when it is or holds a
-// kept path (a dir bound back) no tmpfs can go there: the run is refused; a dir the child cannot enter needs neither
-test("8.2.0 #80 review: an unreadable dir in a scan root: a tmpfs, or a refusal when it is a kept path; a dir nobody can enter is skipped", { skip: !HAVE_PY || process.getuid() === 0 }, () => {
+// 8.2.0 review (MED b): a socket in a dir that cannot be listed is never skipped while the child can reach it:
+// /dev/null goes over the socket itself; one in a dir the child cannot enter needs nothing
+test("8.2.0 #80 review: a socket in an unreadable dir: /dev/null over the socket; in a dir nobody can enter: nothing", { skip: !HAVE_PY || process.getuid() === 0 }, async () => {
   const x = plainFixture();
   const root = join(x.d, "srv");
   const u = join(root, "u");
   const shut = join(root, "shut");
   mkdirSync(u, { recursive: true });
   mkdirSync(shut);
+  const s1 = join(u, "s.sock");
+  const s2 = join(shut, "s.sock");
+  const srvs = [await listen(s1), await listen(s2)];
   chmodSync(u, 0o311);
   chmodSync(shut, 0o200);
   try {
-    let p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, scan: [root] }, x.d);
+    const p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, ro: [root], socklist: socklist(x.d, [s1, s2]) }, x.d);
     assert.equal(p.out.reason, null, p.out.reason);
-    const tmpfs = pairs(p.out.argv, "--tmpfs");
-    assert.ok(tmpfs.includes(u), "tmpfs over the unreadable dir: " + tmpfs);
-    assert.ok(!tmpfs.includes(shut), "a dir the child cannot enter needs no tmpfs");
-    p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, scan: [root], ro: [u] }, x.d);
-    assert.equal(p.out.argv, null);
-    assert.equal(p.out.reason, "socket scan: unreadable dir " + u + " under a kept path");
+    const a = p.out.argv;
+    assert.ok(a.some((v, j) => v === "--ro-bind" && a[j + 1] === "/dev/null" && a[j + 2] === s1), "/dev/null over the socket in the unreadable dir: " + JSON.stringify(a));
+    assert.ok(!pairs(a, "--tmpfs").includes(u));
+    assert.ok(!JSON.stringify(a).includes(s2), "a dir the child cannot enter needs nothing");
   } finally {
     chmodSync(u, 0o755);
     chmodSync(shut, 0o755);
+    for (const s of srvs) s.close();
     x.done();
   }
 });

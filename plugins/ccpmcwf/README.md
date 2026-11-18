@@ -1343,12 +1343,13 @@ through `sandbox.py`, a bubblewrap (`bwrap`) sandbox. Each caller pins the sha25
   resolve through it. `NIX_REMOTE=local` is set; with the daemon socket hidden, every `NIX_REMOTE`
   value fails on the read-only store.
 - Hidden since 8.2.0 (#80): `/var/lib` (container stores, databases; nothing comes back), and every
-  host unix socket that is left. Before each run `sandbox.py` walks `/var`, `/srv`, `/opt`,
-  `/nix/var` and `/etc` (no symlink followed, `/nix/store` and the hidden dirs not walked) for
-  sockets. A socket's dir gets a tmpfs, or `/dev/null` is bound over the socket when the dir must
-  stay visible (the scan roots, `/etc`, `/nix/var/nix/profiles` and `gcroots`, or a dir bound back).
-  A dir the scan cannot read gets a tmpfs. A scan error, or more than 200,000 entries or 5 s, refuses
-  the run: "sandbox unavailable: socket scan ...".
+  host unix socket the child could still reach. Before each run `sandbox.py` reads the kernel's list
+  of bound unix sockets, `/proc/net/unix` (no dir walk, so a big `/opt` or `/var` costs nothing). A
+  named socket that is not under a hidden dir, or is under a dir bound back, is hidden: a tmpfs over
+  its dir when that dir holds only sockets, is not top-level and holds no dir bound back; otherwise
+  `/dev/null` is bound over the socket (also when its dir cannot be listed). Abstract sockets are cut
+  off by the network namespace. An unreadable list refuses the run: "sandbox unavailable: socket list
+  ...".
 - Writable, fresh in each run (`--tmp-overlay`, nothing reaches the host): the copy, and the env's
   private dirs (`HOME`, `TMPDIR`, `XDG_*`, the build and uv dirs) under `<root>/scratch/build` or
   `uv-cache`. Written through (`--bind`): the coverage data dir in the `coverage run` step and the
@@ -1372,7 +1373,7 @@ through `sandbox.py`, a bubblewrap (`bwrap`) sandbox. Each caller pins the sha25
 - Fail closed: no `bwrap` on the agent PATH (never the env PATH), a `bwrap` whose real path is not
   under `/nix/store` and not root-owned with root-owned, not group- or other-writable dirs above it
   (8.2.0, #80; the tests name their pass-through fake in `FLEET_SANDBOX_TEST_BWRAP`, and whoever sets
-  that env already chooses the PATH), a socket scan that fails, a failed self-check (the same
+  that env already chooses the PATH), an unreadable `/proc/net/unix`, a failed self-check (the same
   mounts running `python3 -I -S -c ''`), a mount that fails or a `sandbox.py` off its pin gives
   `not_run` "sandbox unavailable: ..." for coverage and mutation, and `store: "sandbox"` (held_out
   `not_run`) for the held-out runner. No test process runs unsandboxed. After an earlier round
@@ -1412,8 +1413,9 @@ What is left (accepted residuals):
   objects (other branches, the plan base) and `packed-refs` (a packed `refs/fleet/*` id among them)
   are readable. Since 8.2.0 the loose `refs/fleet` and the other worktrees' admin dirs are not. No
   held-out text is ever committed, so this is low.
-- A socket made after the scan in a dir that stays visible (`/etc`, the nix profiles) is
-  reachable; one in a dir the scan put a tmpfs over is not.
+- A socket bound after the list is read is reachable, unless it is in a dir that got a tmpfs. A
+  socket bound with a relative path, or in another network namespace (a container), is not in the
+  list this program reads.
 - The terraform PATH guard (`scratch_copy.py`'s `guard-*` dir and the mutation gate's
   `mut-guard-*` dir) is not in the sandbox: its dir is under the hidden scratch root. This is
   harmless: with no network and no credentials, a terraform-family program in the sandbox reaches
