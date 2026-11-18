@@ -48,8 +48,22 @@ except Exception:
 # once, then stops at gate gates). The child runs with the caps lifted, in its own process
 # group, behind the PATH guard of scratch_copy.py run (no terraform-family name resolves
 # other than on the agent PATH).
+# 8.1.0 (#75): every test run is a sandbox.py run (bwrap; no network, HOME and the worktree hidden), each in a
+# fresh sandbox (the copy a fresh overlay each time); the coverage data dir is writable in the run step only,
+# the report dir in the json step only; the base re-run follows a reset of the test database. No sandbox (no
+# bwrap, a failed self-check, sandbox.py off its pin): not_run "sandbox unavailable: ...", no test run.
 import hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, time
 DEADLINE, CAP = 540, 400
+SANDBOX_SHA256 = 'a365da154940d631cae5a765c9b1e0da28947ebbce6d51e8443c01acf49a18cf'
+SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
+# the python -m pytest shape's coverage launcher: coverage from the interpreter (-I: no cwd) or a PYTHONPATH dir
+# outside the copy, then the PYTHONPATH dirs in the copy for the tests
+LAUNCH = ("import os, sys\nsys.argv[0] = 'coverage'\nc = os.getcwd()\n"
+          "pp = [os.path.abspath(p) for p in os.environ.get('PYTHONPATH', '').split(os.pathsep) if p]\n"
+          "out = [p for p in pp if p != c and not p.startswith(c + os.sep)]\nsys.path[:0] = out\nimport coverage\n"
+          "sys.path[:0] = [p for p in pp if p not in out]\n"
+          "sys.dont_write_bytecode = sys.dont_write_bytecode or bool(os.environ.get('PYTHONDONTWRITEBYTECODE'))\n"
+          "import runpy\nrunpy.run_module('coverage', run_name='__main__', alter_sys=True)\n")
 # security review: no attributes file, no system attributes, and every diff as text with no
 # textconv or external driver, so no git attribute (binary, -diff, a diff driver) hides a line
 G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.quotePath=false', '-c', 'core.attributesFile=/dev/null']
@@ -88,13 +102,45 @@ def lift():
         _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 class Late(Exception):
     pass
-def run(argv, cwd, env, log):
+def helper(mode, spec):
+    # sandbox.py <mode> <spec> (the result file it writes, or None); the bytes must match the pin
+    try:
+        with open(SBX, 'rb') as fh:
+            ok = hashlib.sha256(fh.read()).hexdigest() == SANDBOX_SHA256
+    except OSError:
+        ok = False
+    if not ok:
+        emit('not_run', 'sandbox unavailable: sandbox.py does not hash to its pinned sha256')
+    spec = dict(spec, worktree=wt, result=os.path.join(work, 'res.json'))
+    if os.path.lexists(spec['result']):
+        os.unlink(spec['result'])
+    with open(os.path.join(work, 'spec.json'), 'w') as fh:
+        json.dump(spec, fh)
+    return [sys.executable, '-I', SBX, mode, os.path.join(work, 'spec.json')], spec['result']
+def result(f):
+    try:
+        with open(f) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+def dbsnap(env):
+    # 8.1.0 review (M1): the databases before the tree run; the reset drops one the tree run made
+    cmd, res = helper('dbsnap', {'env': env})
+    try:
+        subprocess.run(cmd, env=os.environ, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=max(1, left()))
+    except subprocess.TimeoutExpired:
+        return None
+    r = result(res)
+    return r.get('names') if r and r.get('ok') else None
+checked = []
+def run(argv, cwd, env, log, rw=(), ro=()):
     # the exit code and the output tail; the whole process group dies at the deadline
     if left() <= 1:
         raise Late()
+    cmd, res = helper('run', {'cwd': cwd, 'copy': tmp, 'argv': argv, 'env': env, 'rw': list(rw), 'ro': list(ro), 'git': True, 'check': not checked})
     with open(log, 'wb') as fh:
         try:
-            p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT, preexec_fn=lift, start_new_session=True)
+            p = subprocess.Popen(cmd, env=os.environ, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT, preexec_fn=lift, start_new_session=True)
         except OSError as e:
             return 127, str(e)
         try:
@@ -106,8 +152,12 @@ def run(argv, cwd, env, log):
                 pass
             p.wait()
             raise Late()
+    r = result(res)
+    if not r or not r.get('started'):
+        emit('not_run', 'sandbox unavailable: ' + (r['reason'] if r else 'sandbox.py gave no result (exit %d)' % code))
+    checked.append(1)
     with open(log, 'rb') as fh:
-        return code, fh.read()[-2000:].decode('utf-8', 'replace')
+        return r['exit'], fh.read()[-2000:].decode('utf-8', 'replace')
 a = sys.argv[1:]
 if len(a) != 6:
     sys.exit('usage: cover_diff.py <worktree> <base> <tree> <test_cmd> <env json> <exclude json>')
@@ -135,9 +185,9 @@ if argv[i:i + 1] == ['pytest']:
     shown = ' '.join(head)
 elif argv[:1] in (['python'], ['python3']) and argv[1:3] == ['-m', 'pytest']:
     # car F (A-M3): never python -m coverage (the copy is first on sys.path, so a tree-local coverage
-    # package is the tool): a launcher in the private work dir (set below); coverage run still gives
-    # the test run the cwd, as python -m pytest does
-    head, i, shown = argv[:1] + [None], 2, argv[0] + ' -m coverage'
+    # package is the tool); 8.1.0 (#75): an inline -I launcher, no file the tests can rewrite; coverage run
+    # still gives the test run the cwd, as python -m pytest does
+    head, i, shown = argv[:1] + ['-I', '-c', LAUNCH], 2, argv[0] + ' -m coverage'
 else:
     emit('not_run', 'unsupported: the coverage gate runs a pytest test_cmd only (got ' + cmd + ')')
 if any(os.path.basename(x) in REFUSED for x in argv):
@@ -192,11 +242,11 @@ try:
     git(wt, 'worktree', 'add', '--detach', tmp, base + '^{commit}')
     added = True
     git(tmp, 'read-tree', '-u', '--reset', tree)
-    rc, data, log, rep = (os.path.join(work, x) for x in ('rc', 'data', 'log', 'cov.json'))
-    if head[-1] is None:
-        head[-1] = os.path.join(work, 'cov.py')
-        with open(head[-1], 'w') as fh:
-            fh.write("import runpy\nrunpy.run_module('coverage', run_name='__main__', alter_sys=True)\n")
+    # 8.1.0 (#75): the rcfile read-only, the data dir writable in the run step only, the report dir in the json step only
+    dirs = [os.path.join(work, x) for x in ('ro', 'data', 'rep')]
+    for x in dirs:
+        os.mkdir(x)
+    rc, data, log, rep = os.path.join(dirs[0], 'rc'), os.path.join(dirs[1], 'data'), os.path.join(work, 'log'), os.path.join(dirs[2], 'cov.json')
     with open(rc, 'w') as fh:
         fh.write('[run]\nsource = .\nrelative_files = True\n[report]\nexclude_lines =\n    (?!x)x\n')
     # no COVERAGE_* variable reaches the child (the build env's COVERAGE_FILE among them): only argv names them
@@ -207,6 +257,7 @@ try:
         del env[k]
     env['PATH'] = guard + ':' + path
     cov = ['--rcfile=' + rc, '--data-file=' + data]
+    keep = dbsnap(env)
     try:
         code, tail = run(head + ['--version'], tmp, env, log)
         if code != 0:
@@ -217,14 +268,20 @@ try:
             git(tmp, 'read-tree', '-u', '--reset', base)
             # security review: no untracked or ignored file of the tree's run reaches the base run
             git(tmp, 'clean', '-ffdxq')
+            # 8.1.0 (#75, bypass 1): the test database dropped and created again; a fresh sandbox (HOME, /tmp, private dirs)
+            cmd2, res = helper('dbreset', {'env': env, 'keep': keep})
+            subprocess.run(cmd2, env=os.environ, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=max(1, left()))
+            r = result(res)
+            if not r or not r.get('ok'):
+                emit('not_run', 'tree red, base not re-run: ' + (r['reason'] if r else 'the database reset gave no result'))
             bc, tail = run(argv, tmp, env, log)
             if bc == 0:
                 emit('not_run', 'tree red, base green: the judged tree fails test_cmd in the scratch copy (exit %d)' % code)
             emit('not_run', 'baseline red in scratch copy at the tree and at the base (exit %d, %d): the environment' % (code, bc))
-        code, tail = run(head + ['run'] + cov + ['-m', 'pytest'] + argv[i + 1:], tmp, env, log)
+        code, tail = run(head + ['run'] + cov + ['-m', 'pytest'] + argv[i + 1:], tmp, env, log, [dirs[1]], [dirs[0]])
         if code != 0:
             sys.exit('coverage run exit %d with a green baseline: %s' % (code, tail[-500:]))
-        code, tail = run(head + ['json'] + cov + ['-o', rep], tmp, env, log)
+        code, tail = run(head + ['json'] + cov + ['-o', rep], tmp, env, log, [dirs[2]], [dirs[0], dirs[1]])
         if code != 0:
             sys.exit('coverage json exit %d: %s' % (code, tail[-500:]))
     except Late:

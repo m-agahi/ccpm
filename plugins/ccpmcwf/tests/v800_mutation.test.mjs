@@ -28,7 +28,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, readdirSync, symlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, sha256, canon, spawnSync, programSha, FP_K1, FP_K2, HASHES, stateJsonOf } from "./harness.mjs";
+import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, sha256, canon, spawnSync, programSha, FP_K1, FP_K2, HASHES, stateJsonOf, passBwrap } from "./harness.mjs";
 import { PROGRAM_COUNT } from "../scripts/gen.mjs";
 
 const PROG = join(HERE, "..", "scripts", "mutants.py");
@@ -75,6 +75,8 @@ function repo(opts) {
   const tree = spawnSync(GIT, ["write-tree"], { cwd: wt, env, encoding: "utf8" }).stdout.trim();
   rmSync(idx, { force: true });
   symlinkSync(GIT, join(bin, "git"));
+  // 8.1.0 (#75): the gate logic runs behind a pass-through bwrap (v810 runs the real one)
+  passBwrap(bin);
   if (opts.real) symlinkSync(PY, join(bin, "python3"));
   const log = join(d, "calls.log");
   if (opts.pytest !== undefined) {
@@ -487,8 +489,8 @@ test("8.0.0 G5: the code-judge schema has mutant_rulings [{id, target: tests|cod
   assert.ok(!/kill rate/i.test(SOURCE.replace(/\/\/.*$/gm, "")), "no kill-rate stop in the script");
 });
 
-test("8.0.0 G5: the program checklist: PROGRAM_COUNT 48 (49 since G7), the slot, the keys, the output types", () => {
-  assert.equal(PROGRAM_COUNT, 49);
+test("8.0.0 G5: the program checklist: PROGRAM_COUNT 48 (49 since G7, 50 since 8.1.0), the slot, the keys, the output types", () => {
+  assert.equal(PROGRAM_COUNT, 50);
   assert.match(SOURCE, /\[\/\^infra:gates:\/, \[\["coverage", "cover_diff"\], \["mutation", "mutants"\], /);
   assert.match(SOURCE, /"mutants": \["status", "reason", "killed", "survived", "not_run", "budget_hit", "args"\]/);
   assert.match(SOURCE, /\n  mutants: \{ status: STR, reason: STR_OR_NULL, killed: INT, survived: /);

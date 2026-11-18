@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, readdirSync, symlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HERE, HAVE_PY, AUDIT_IMAGE, sha256, canon, spawnSync, cacheHome } from "./harness.mjs";
+import { HERE, HAVE_PY, AUDIT_IMAGE, sha256, canon, spawnSync, cacheHome, passBwrap } from "./harness.mjs";
 
 const PY = HAVE_PY ? spawnSync("python3", ["-I", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim() : null;
 const which = (n) => spawnSync("sh", ["-c", "command -v " + n], { encoding: "utf8" }).stdout.trim();
@@ -76,6 +76,8 @@ function repo(opts = {}) {
     writeFileSync(join(bin, "git"), '#!/bin/sh\ncase " $* " in *" -U0 "*) exit 0 ;; esac\nexec ' + GIT + ' "$@"\n');
     chmodSync(join(bin, "git"), 0o755);
   } else symlinkSync(GIT, join(bin, "git"));
+  // 8.1.0 (#75): the gate logic runs behind a pass-through bwrap (v810 runs the real one)
+  passBwrap(bin);
   return { d, wt, bin, base, tree };
 }
 // G8: XDG_CACHE_HOME is a temp dir outside the temp roots (sec_scan.py refuses a scan dir under /tmp)

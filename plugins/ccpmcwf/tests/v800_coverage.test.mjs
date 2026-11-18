@@ -27,7 +27,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, readdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, sha256, canon, spawnSync, programSha, FP_K1, FP_K2, HASHES, mutOut } from "./harness.mjs";
+import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, sha256, canon, spawnSync, programSha, FP_K1, FP_K2, HASHES, mutOut, passBwrap } from "./harness.mjs";
 
 const PROG = join(HERE, "..", "scripts", "cover_diff.py");
 const PY = HAVE_PY ? spawnSync("python3", ["-I", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim() : null;
@@ -85,6 +85,8 @@ function fixture(opts = {}) {
   const log = join(d, "calls.log");
   const envlog = join(d, "env.log");
   symlinkSync(GIT, join(bin, "git"));
+  // 8.1.0 (#75): the gate logic runs behind a pass-through bwrap (v810 runs the real one)
+  passBwrap(bin);
   // 8.0.0 car F (A-M3): the real python3, for the python -m pytest shape
   if (opts.py) symlinkSync(PY, join(bin, "python3"));
   const put = (n, body) => {
@@ -253,6 +255,7 @@ test("8.0.0 G2: no added production .py line: ran with no finding, no test runs;
     const bin = join(d, "bin");
     mkdirSync(bin);
     symlinkSync(GIT, join(bin, "git"));
+    passBwrap(bin);
     writeFileSync(join(bin, "coverage"), "#!/bin/sh\nexit 9\n");
     chmodSync(join(bin, "coverage"), 0o755);
     const r = spawnSync(PY, ["-I", PROG, wt, base, tree, "pytest", "{}", JSON.stringify(["tests/test_a.py"])], { encoding: "utf8", env: { PATH: bin } });

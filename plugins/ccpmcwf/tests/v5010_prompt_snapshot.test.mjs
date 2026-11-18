@@ -120,10 +120,11 @@ const SCENARIOS = {
 // 8.0.0 car F (MEDIUM): infra:gates:r<n> runs security_scan first, then coverage, then mutation (A-M5; no new call); the gates have their own database (fleet_gates, A-M8); db_up asks for timeout 600000 ms (B-M3); the held-out runner's result schema allows store timeout and the scope-and-plan and held-out-runner role shas move (A-M6, B-M1); the program pins of cover_diff, mutants, scratch_copy, gate_tools and db_up move (probe unchanged)
 // 8.0.1 (#76): each plan and build run claims the task lock (infra:run-lock, parked.py claim) and releases it in main's finally (infra:run-lock:release): 2 more calls per run, 2 under confirm auto (one claim, one release); format-plan's plan_dsn prints plan_sha256 (its keys move); the parked, plan_dsn and plan_ref_write program pins move (probe unchanged)
 // 8.0.2 (#77): the preflight probe captures its stdout and stderr and prints probe_sha= last, and drops hash_lines= (the only change besides the version: checked with the probe command and FLEET_VERSION put back, every pin is 8.0.1's)
+// 8.1.0 (#75): the held-out runner role file (sandbox-run, store sandbox) and its schema enum move, the cover_diff, mutants and scratch_copy program pins move, the program table gains sandbox, and the version moves (probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "574fe3a3f52ddae209e45a7aa4244c481118815bce7370397aacd404bac9d109" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "c8cb6e0aacc5dacf814a3afa85ee59c6dac4604ad411cbca0ba60e4ed59fdb68" },
-  "short path (one test writer)": { calls: 88, sha256: "d76cdffb9df00ebd93d8babe68a8a8ce0d4250c365e9d440768113de3c07ddaa" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "4e2ed676455d3b95d3a0719c030028415ac2a5bbb67fb9c8c9eeb273ff9a7172" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "be5ff6f4f86ce04293917ac287b179dc3a30d10cac535e03ff4b594770b0b3e3" },
+  "short path (one test writer)": { calls: 88, sha256: "822af4ff436be9c4db40b0988e308696b06b2de2fde5b70bd6e753eccd8b1384" },
   "probe": { calls: 2, sha256: "bac3bb05ec0cd841c28e32cc5dfc99d48b27b846600995eca9d6e10eb2ca79c4" },
 };
 

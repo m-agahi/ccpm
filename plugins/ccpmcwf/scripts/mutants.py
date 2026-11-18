@@ -57,8 +57,14 @@ except Exception:
 # PATH guard, no COVERAGE_* or FLEET_* var, no bytecode written (a fresh pycache prefix outside
 # the scratch dir), no gate-data path. Changed non-python source: partial (python lines too) or
 # not_run "unsupported" (none).
+# 8.1.0 (#75): every test run is a sandbox.py run (bwrap; no network, HOME, the worktree and its git dir
+# hidden), each in a fresh sandbox (the copy a fresh overlay each run, so no run leaves state for the next);
+# the base re-run follows a reset of the test database. No sandbox (no bwrap, a failed self-check,
+# sandbox.py off its pin): not_run "sandbox unavailable: ...", no test run.
 import hashlib, io, json, os, re, shlex, shutil, signal, stat, subprocess, sys, tempfile, time, tokenize
 CAP = 200
+SANDBOX_SHA256 = 'a365da154940d631cae5a765c9b1e0da28947ebbce6d51e8443c01acf49a18cf'
+SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
 _dl = os.environ.get('FLEET_MUTANTS_DEADLINE') or ''
 # a test may lower the deadline, never raise it
 DEADLINE = min(540, int(_dl)) if re.match(r'^[1-9][0-9]{0,3}$', _dl) else 540
@@ -104,18 +110,50 @@ def lift():
         _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
 class Late(Exception):
     pass
+def helper(mode, spec):
+    # sandbox.py <mode> <spec> (the result file it writes); the bytes must match the pin
+    try:
+        with open(SBX, 'rb') as fh:
+            ok = hashlib.sha256(fh.read()).hexdigest() == SANDBOX_SHA256
+    except OSError:
+        ok = False
+    if not ok:
+        emit('not_run', 'sandbox unavailable: sandbox.py does not hash to its pinned sha256')
+    spec = dict(spec, worktree=wt, result=os.path.join(work, 'res.json'))
+    if os.path.lexists(spec['result']):
+        os.unlink(spec['result'])
+    with open(os.path.join(work, 'spec.json'), 'w') as fh:
+        json.dump(spec, fh)
+    return [sys.executable, '-I', SBX, mode, os.path.join(work, 'spec.json')], spec['result']
+def result(f):
+    try:
+        with open(f) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+def dbsnap(env):
+    # 8.1.0 review (M1): the databases before the tree run; the reset drops one the tree run made
+    cmd, res = helper('dbsnap', {'env': env})
+    try:
+        subprocess.run(cmd, env=os.environ, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=max(1, left()))
+    except subprocess.TimeoutExpired:
+        return None
+    r = result(res)
+    return r.get('names') if r and r.get('ok') else None
+checked = []
 def run(argv, cwd, env, log, cap=None):
     # the exit code; the process group dies at the deadline (Late) or at a mutant's own bound (-9: killed)
     if left() <= 1:
         raise Late()
+    cmd, res = helper('run', {'cwd': cwd, 'copy': tmp, 'argv': argv, 'env': env, 'git': False, 'check': not checked})
     with open(log, 'wb') as fh:
         try:
-            p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT, preexec_fn=lift, start_new_session=True)
+            p = subprocess.Popen(cmd, env=os.environ, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT, preexec_fn=lift, start_new_session=True)
         except OSError:
             # no runner: the baseline is red (not_run); a mutant run exits non-zero (below)
             return 127
         try:
-            return p.wait(timeout=left() if cap is None else min(left(), cap))
+            p.wait(timeout=left() if cap is None else min(left(), cap))
         except BaseException as e:
             try:
                 os.killpg(p.pid, signal.SIGKILL)
@@ -127,6 +165,11 @@ def run(argv, cwd, env, log, cap=None):
             if left() <= 1:
                 raise Late()
             return -9
+    r = result(res)
+    if not r or not r.get('started'):
+        emit('not_run', 'sandbox unavailable: ' + (r['reason'] if r else 'sandbox.py gave no result (exit %d)' % p.returncode))
+    checked.append(1)
+    return r['exit']
 a = sys.argv[1:]
 if len(a) != 6:
     sys.exit('usage: mutants.py <worktree> <base> <tree> <test_cmd> <env json> <exclude json>')
@@ -236,8 +279,8 @@ for n in os.listdir(scratch):
 subprocess.run(G + ['-C', wt, 'worktree', 'prune'], capture_output=True)
 work = tempfile.mkdtemp()
 guard = tempfile.mkdtemp(prefix='mut-guard-', dir=scratch)
-# car F (review): the copy sits in the private work dir, not beside the worktree (code under test, the same
-# uid, can still find and read the worktree: a sandbox is task #75)
+# car F (review): the copy sits in the private work dir, not beside the worktree (8.1.0, #75: the sandbox
+# hides the worktree and its git dir from code under test)
 tmp = os.path.join(work, 'copy')
 def fill(rev):
     # car F (A-M4): a plain dir with the files of <rev> and no .git (a temp index outside the copy), so
@@ -294,6 +337,7 @@ try:
     log = os.path.join(work, 'log')
     killed, surv, done = 0, [], 0
     late = lambda n: emit('partial', '; '.join(['%d of %d not run: the %d s deadline was hit' % (n, M, DEADLINE)] + notes), killed, surv, n, True)
+    keep = dbsnap(env)
     t0 = time.monotonic()
     try:
         code = run(run_argv, tmp, env, log)
@@ -303,6 +347,12 @@ try:
         # car F (G2 ruling): once more at the plan base; green there is the change's fault (the workflow stops)
         # security review: a fresh copy, so no untracked or ignored file of the tree's run reaches the base run
         fill(base)
+        # 8.1.0 (#75, bypass 1): the test database dropped and created again; a fresh sandbox (HOME, /tmp, private dirs)
+        cmd2, res = helper('dbreset', {'env': env, 'keep': keep})
+        subprocess.run(cmd2, env=os.environ, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=max(1, left()))
+        r = result(res)
+        if not r or not r.get('ok'):
+            emit('not_run', 'tree red, base not re-run: ' + (r['reason'] if r else 'the database reset gave no result'))
         try:
             bc = run(run_argv, tmp, env, log)
         except Late:

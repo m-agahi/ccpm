@@ -134,7 +134,7 @@ const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable"
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
 // The plugin version this script ships with
-const FLEET_VERSION = "8.0.2";
+const FLEET_VERSION = "8.1.0";
 // 8.0.0 car R (#38): the plugin's name (was fleet); its install dir is cache/<marketplace>/<name>/<version>
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
@@ -594,7 +594,7 @@ const SCHEMAS = {
   "fleet-ci-classifier": roleSchema({ checks: { type: "array", items: { type: "object", properties: { name: STR, cause: { type: "string", enum: CI_CAUSES } }, required: ["name", "cause"] } } }),
   // 8.0.0 (G4): no example text; store is held_out.py show's outcome
   "fleet-held-out-runner": roleSchema({
-    store: { type: "string", enum: ["ok", "missing", "mismatch", "error", "timeout"] },
+    store: { type: "string", enum: ["ok", "missing", "mismatch", "error", "timeout", "sandbox"] },
     store_digest: STR_OR_NULL,
     results: { type: ["array", "null"], items: { type: "object", properties: { criterion: STR, index: { type: "integer" }, pass: { type: "boolean" } } } },
   }),
@@ -1686,7 +1686,7 @@ const PROGRAM_SHA256 = {
   "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
   "changed_defs": "873f1bcb97c7631934512729941deca1e9da49bc84957f1e78ec171293840644",
   "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
-  "cover_diff": "75601765b02902c58eacee9a45ab87f3699a8111ac30631ad77da3b107a87e6f",
+  "cover_diff": "c6995d2884087722391aaf050342ef5333302d2828cb650e152b4fb4f75d57a0",
   "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
   "db_sweep": "f557b6d5d55d0139b0340a5d6653847566e6d105ab476e017c7f1bc2213a3f80",
   "db_up": "02675bec7b81431aebca49fb129baed379ff3b1f53f2bb6ba5fba26678e17c3c",
@@ -1700,7 +1700,7 @@ const PROGRAM_SHA256 = {
   "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
   "held_out": "58460d3adece15be446f7854af5c7467a00d3cd8508b8534937489577d9ea143",
   "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
-  "mutants": "2f2e06a3174586e7b26249032997bf722698212f15b47ea6774bf4ff157f1e41",
+  "mutants": "b2708cdcb084414ea3d2edd34e46365d1acee1ff6795d0d73bb275d4c476f278",
   "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
   "parked": "37138285a62f406863e2d0366fb6cf7bbfff9e118dc693ce048c3646e279a3ad",
   "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1722,7 +1722,8 @@ const PROGRAM_SHA256 = {
   "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
   "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
   "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
-  "scratch_copy": "d8eaf27a102911048b11238cfdc271e5adbd30c0668c1e97e7d0d074654cfa3a",
+  "sandbox": "a365da154940d631cae5a765c9b1e0da28947ebbce6d51e8443c01acf49a18cf",
+  "scratch_copy": "0b4efee4afc53eccbaba93c0e0eba5dbb075d550d1a7e6afcf1518f6c0e60ed2",
   "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
   "sec_scan": "ef33b6e2742b2f2e877be7e676f030be129b72461dd49836b0b93a3626fbf06b",
   "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",
@@ -1742,7 +1743,7 @@ const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
   "fleet-code-judge": "fdd95e92358734335190c162d165a5e72d0b10ce4c6f17397b878869810cf4eb",
   "fleet-coder": "fca268a7affc87d1257b161a8138a78e1a17965063d1ffb7fe9b1a7c6d165547",
-  "fleet-held-out-runner": "8e970c2dde23a206f93d48a70a679e413b1901ee86e6cf0b265b53be1a26307a",
+  "fleet-held-out-runner": "11794dfb10875f64afed5d985c7001b2271f98af67cdc0f4470762468310772b",
   "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
   "fleet-pr-opener": "28a9ebb7770541b23050f249997cb447453be6ab58dcc495f09490d3109e772a",
   "fleet-test-judge": "2dd18aedc8580c68583951ede4714e876a9752ac723e27558d1c17f5488b7d04",
@@ -4418,6 +4419,8 @@ async function heldOutRun(ref, m, inputs) {
   if (roleFileProblem(RUNNER, { role_file: r.role_file }) || driftOf(RUNNER, r)) halt(st, label + ": contract drift", "contract");
   const stop = (why) => halt(st, label + ": " + why, "gates");
   if (r.store === "missing") return prev.seen ? stop("store file missing after an earlier round of this build read it") : nr("store file missing on this machine");
+  // 8.1.0 (#75): scratch_copy.py sandbox-run refused (no bwrap, a failed self-check); no example ran
+  if (r.store === "sandbox") return prev.seen ? stop("sandbox unavailable after an earlier round ran") : nr("sandbox unavailable: no bwrap sandbox for the held-out runs");
   // car F (B-M1, review): a test run that hit its deadline is no failing example and no not_run (code under test can hang): a stop
   if (r.store === "timeout") stop("a held-out test run hit its deadline");
   // mismatch: the store file does not match the sealed sha256; error: any other refusal of held_out.py show
