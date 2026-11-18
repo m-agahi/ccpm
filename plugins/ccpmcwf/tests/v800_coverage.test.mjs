@@ -197,12 +197,22 @@ test("8.0.0 G2-4: no coverage tool gives not_run with the reason; no test runs",
   }
 });
 
+// 8.0.0 car F (G2 ruling): a red baseline reruns the suite at the plan base: base red too is the environment
 test("8.0.0 G2-5: a red baseline in the copy gives not_run; coverage never runs", { skip: !HAVE_PY }, () => {
   const x = fixture({ base: 1 });
   assert.equal(x.r.status, 0, x.r.stderr);
   assert.equal(x.out.status, "not_run");
-  assert.equal(x.out.reason, "baseline red in scratch copy (test_cmd exit 1)");
-  assert.deepEqual(x.calls, ["coverage --version", "pytest -q lines=9"]);
+  assert.equal(x.out.reason, "baseline red in scratch copy at the tree and at the base (exit 1, 1): the environment");
+  assert.deepEqual(x.calls, ["coverage --version", "pytest -q lines=9", "pytest -q lines=2"]);
+});
+
+test("8.0.0 car F G2 ruling: the judged tree red and the plan base green gives not_run 'tree red, base green' (the workflow stops)", { skip: !HAVE_PY }, () => {
+  const x = fixture({ base: '$(case "$(' + which("cat") + ' pkg/mod.py)" in *"def g"*) echo 1;; *) echo 0;; esac)' });
+  assert.equal(x.r.status, 0, x.r.stderr);
+  assert.equal(x.out.status, "not_run");
+  assert.equal(x.out.reason, "tree red, base green: the judged tree fails test_cmd in the scratch copy (exit 1)");
+  assert.deepEqual(x.calls, ["coverage --version", "pytest -q lines=9", "pytest -q lines=2"]);
+  assert.deepEqual(x.leftovers.filter((n) => n.startsWith("copy-")), []);
 });
 
 test("8.0.0 G2: a coverage tool that errors after a green baseline exits non-zero (the workflow retries, then stops)", { skip: !HAVE_PY }, () => {
@@ -290,6 +300,8 @@ const R2 = {
   "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
   "role:fleet-code-judge:r2": approve(),
   "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
+  // 8.0.0 car F (A-H1): round 2 reports the gate again (a not_run after round 1's findings stops at gates)
+  "infra:gates:r2": gatesStub({}),
 };
 
 test("8.0.0 G2: each code round runs infra:gates:r<m> (cover_diff, read-only, sonnet) after its own reset, before the judge", async () => {

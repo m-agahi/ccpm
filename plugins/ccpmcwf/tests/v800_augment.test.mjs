@@ -70,6 +70,8 @@ function aug(over) {
         "role:fleet-test-judge:r2": { status: "ok", reason: "good", verdict: "approve", routed_findings: [], checked: [] },
         "hasher:fp-post:test-judge:r2": { status: "ok", fingerprint: FP_A },
         "hasher:freeze:f2": { status: "ok", fingerprint: FP_A, hashes: AUG },
+        // 8.0.0 car F (A-H1): round 2 reports the mutation gate again (the new test kills m3)
+        "infra:gates:r2": gates({ status: "ran", reason: "1 killed, 0 survived of 1 mutant(s)", killed: 1, survived: [], not_run: 0, budget_hit: false }),
         "role:fleet-coder:r2": { status: "ok", reason: "green", changed_paths: [], frozen_tests_red_at_start: false },
         "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: AUG },
         "role:fleet-code-judge:r2": approve(),

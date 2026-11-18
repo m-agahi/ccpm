@@ -42,7 +42,8 @@ except Exception:
 # lines of the changed .py files (git diff -U0 <base> <tree>, the <exclude> paths aside); at
 # most 200, spread evenly over the lines (round-robin; a round larger than the room left takes
 # evenly spaced lines). The test_cmd (a pytest shape only, <paths> dropped, plus -x and no cache
-# plugin) runs once plain (red: not_run) and once per mutant, within one 540 s deadline from the
+# plugin) runs once plain (red: once more at <base>; not_run, "tree red, base green" when the base
+# is green) and once per mutant, within one 540 s deadline from the
 # start (hit: partial, "N of M not run"); a mutant run is bounded by 4x the baseline + 5 s (at
 # least 10 s; a timeout counts as killed). After each run the file is put back from its backup
 # (a fresh file, never written through a link) and checked byte for byte, and a final git diff
@@ -291,7 +292,15 @@ try:
     except Late:
         late(M)
     if code != 0:
-        emit('not_run', 'baseline red in scratch copy (test_cmd exit %d)' % code)
+        # car F (G2 ruling): once more at the plan base; green there is the change's fault (the workflow stops)
+        git(tmp, 'read-tree', '-u', '--reset', base)
+        try:
+            bc = run(run_argv, tmp, env, log)
+        except Late:
+            late(M)
+        if bc == 0:
+            emit('not_run', 'tree red, base green: the judged tree fails test_cmd in the scratch copy (exit %d)' % code)
+        emit('not_run', 'baseline red in scratch copy at the tree and at the base (exit %d, %d): the environment' % (code, bc))
     bound = max(10.0, 4 * (time.monotonic() - t0) + 5)
     try:
         for k, (p, l, c0, c1, new, op) in enumerate(sel):

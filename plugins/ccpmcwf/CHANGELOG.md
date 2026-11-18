@@ -430,6 +430,32 @@ token counts come from the smoke run, after this entry.
 
 - B-L1: the G3-3 held-out test cut every 64-hex value out of stdout before it checks that no
   example text (`25"`) is there; a sha256 or digest that ended in 25 failed the test at random.
+- A-H1: a gate result of an earlier code round is no longer lost. `runGate` keeps `seen` per gate
+  (1 ran, 2 ran with findings, 4 partial with findings). A `not_run` after any earlier mark, or a
+  `partial` after a `ran` with findings, stops with `needs_human` at `gates`. A `partial` after a
+  clean `ran` does not stop (a `.js` file beside the python one). The run state carries
+  `gates_seen`; a resume restores it (round 0, so it never counts in `gates_not_run`).
+- G2 ruling (red baseline): `cover_diff.py` and `mutants.py` run the suite once more in the copy at
+  the plan base when the judged tree is red. Base green: `not_run` "tree red, base green: ...",
+  and the workflow stops at `gates` in that round. Base red too: `not_run` "baseline red in
+  scratch copy at the tree and at the base (exit a, b): the environment", and the PR lists it.
+- A-H2: gitleaks runs with `--config /rules/gitleaks.toml`, the plugin's
+  `skills/build-task/gitleaks.toml`: the gitleaks 8.30.1 default rules with the global path
+  allowlist removed (pinned as `GITLEAKS_SHA256` in `sec_scan.py`). The default config skips lock
+  files, `node_modules/`, `go.sum`, `vendor/`, `site-packages` and binary extensions, and
+  `[extend] useDefault = true` inherits that list (checked live). The global regexes and
+  stopwords and the per-rule allowlists stay. Live check with the pinned image: a secret in
+  `package-lock.json`, `yarn.lock`, `go.sum` and `node_modules/x.js` is found (`ran`).
+
+### Tests changed on purpose (car F)
+
+- A-H1: the round-2 scripts of the G2, G5, G6 and G7 workflow tests add an `infra:gates:r2` stub
+  (round 2 reports the gate again; the default not_run or partial after round 1's findings now
+  stops). `runGate`'s stored entry has `seen`; the run-state key list has `gates_seen`.
+- G2 ruling: the red-baseline tests of `cover_diff.py` and `mutants.py` expect the base run and the
+  new reason.
+- A-H2: the sec_scan argv test expects `--config /rules/gitleaks.toml`, and the rules mount holds
+  `gitleaks.toml`.
 
 ### Upgrade notes
 

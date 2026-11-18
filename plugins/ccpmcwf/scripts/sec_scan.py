@@ -61,6 +61,9 @@ TEMP = ('/tmp', '/var/tmp', '/dev/shm')
 RUN = re.compile(r'^run-[0-9a-f]{16}$')
 RULES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(globals()['__file__']))), 'skills', 'build-task', 'sec-rules.yml')
 RULES_SHA256 = 'd342475a6e8afd3bcb31cdf74f8c4c88bb0c16a4e2630d88a29f029f46a22620'
+# car F (A-H2): the gitleaks default rules with no global path allowlist (lock files, node_modules/, go.sum ...)
+GITLEAKS = os.path.join(os.path.dirname(RULES), 'gitleaks.toml')
+GITLEAKS_SHA256 = 'bd6f8c9224d9e3d4a4b3a536da4991ceaf7f5368708702f355e9c0efa09807a1'
 CAP, BIG, LEAKS = 200, 4 << 20, 99
 _dl = os.environ.get('FLEET_SEC_SCAN_DEADLINE') or ''
 # a test may lower the deadline, never raise it
@@ -212,6 +215,10 @@ with open(RULES, 'rb') as fh:
     rules = fh.read()
 if hashlib.sha256(rules).hexdigest() != RULES_SHA256:
     sys.exit('the plugin rule file differs from RULES_SHA256: ' + RULES)
+with open(GITLEAKS, 'rb') as fh:
+    glconf = fh.read()
+if hashlib.sha256(glconf).hexdigest() != GITLEAKS_SHA256:
+    sys.exit('the plugin gitleaks config differs from GITLEAKS_SHA256: ' + GITLEAKS)
 def own(p):
     # a parent of the scan dir: a real dir of this user, mode 0700
     try:
@@ -282,6 +289,7 @@ try:
             put(os.path.join(src, d), b)
     put(os.path.join(src, '.semgrepignore'), b'')
     put(os.path.join(rd, 'fleet.yml'), rules)
+    put(os.path.join(rd, 'gitleaks.toml'), glconf)
     # the repo's own rules, from the base only (the judged tree never sets the rules)
     ls = git('ls-tree', '-r', '-z', '--name-only', base, '--', '.semgrep.yml', '.semgrep.yaml', '.semgrep').decode('utf-8', 'replace').split('\0')
     for i, n in enumerate(sorted(x for x in ls if x.endswith(('.yml', '.yaml')))):
@@ -298,7 +306,7 @@ try:
     # semgrep: exit 0 with a results list (findings do not change the exit without --error); any other exit is an error
     sg = scan(pre + ['--entrypoint', 'semgrep', image, 'scan', '--metrics=off', '--disable-version-check', '--disable-nosem', '--max-target-bytes=0', '--config', '/rules', '--json', '/src'], (0,))
     # gitleaks 8.30.1: 0 clean, LEAKS findings, 1 an error (also with findings), 126 a bad flag; secrets redacted
-    gl = scan(pre + ['--entrypoint', 'gitleaks', image, 'dir', '--no-banner', '--redact=100', '--exit-code', str(LEAKS), '-f', 'json', '-r', '-', '/src'], (0, LEAKS))
+    gl = scan(pre + ['--entrypoint', 'gitleaks', image, 'dir', '--no-banner', '--redact=100', '--exit-code', str(LEAKS), '-f', 'json', '-r', '-', '--config', '/rules/gitleaks.toml', '/src'], (0, LEAKS))
     if not isinstance(sg, dict) or not isinstance(sg.get('results'), list) or not isinstance((sg.get('paths') or {}).get('scanned'), list) or not isinstance(gl, list):
         sys.exit('scanner output has no results or paths.scanned list')
     rel = lambda p: dst.get(p[5:]) if isinstance(p, str) and p.startswith('/src/') else None

@@ -221,6 +221,7 @@ const SCRIPT_FINDINGS_NOT_RUN = { status: "not_run", reason: "fleet v2: mutation
 const SCRIPT_FINDINGS_GATES = { status: "not_run", reason: "fleet v2: the top level is no gate; see coverage, mutation and security" };
 const GATE_DEFAULTS = [["mutation", SCRIPT_FINDINGS_NOT_RUN], ["coverage", SCRIPT_FINDINGS_NOT_RUN], ["security_scan", SCRIPT_FINDINGS_NOT_RUN], ["held_out", HELD_OUT_NOT_RUN]];
 const GATE_STATUS = ["ran", "partial", "not_run"];
+const GATES3 = ["coverage", "mutation", "security_scan"];
 const MUTANT_TARGETS = ["tests", "code", "equivalent"];
 const AUDIT_IMAGE = "docker.io/openfantasy/audit-lab@sha256:cc0d88ecfa9c70ab81be01331f05ca822db0f197d212de63c571add7aaceb66b";
 const HELD_OUT_KEY = "held_out_examples";
@@ -1511,7 +1512,7 @@ const PROGRAM_SHA256 = {
 "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
 "changed_defs": "873f1bcb97c7631934512729941deca1e9da49bc84957f1e78ec171293840644",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
-"cover_diff": "2c7d2eb0a39f6a7f308f9d02a01c946df3b005f0b1ed4af3bc2efa1feb1efe42",
+"cover_diff": "001052d906018e187c96dcb1bf82f056183e64851d00e663aa49071f46fc7415",
 "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
 "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
 "db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
@@ -1525,7 +1526,7 @@ const PROGRAM_SHA256 = {
 "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
 "held_out": "cd9c62029ca923706d62a815728e67297a674e917c88f2c83fd4e2c301d740aa",
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
-"mutants": "92e6a280a8e411762c9502a933e47428726955d3e86457b7ac18769350e047c7",
+"mutants": "757c8844137eb133f8ad64b483271e70d30703bcd4f1f3285363ce2ab8fabdb1",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1549,7 +1550,7 @@ const PROGRAM_SHA256 = {
 "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
 "scratch_copy": "a32ea715f21ed91fccf4689c84f8a8e8ceab62b30439f2061ba6da35d6defae3",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
-"sec_scan": "7f68b5b8c16f96e6986ac20371dd8cc0806742c0d5a2d48c4d59caee9bdd3639",
+"sec_scan": "0fc7162ba04a3dde76540e054e173093f46da461d507ecbe1f67ba64b4f9599a",
 "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",
 "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
 "test_db_decl": "c2e9f36d23fb147835a85c4421d5e38a05912d343fdaa1f08fe285c3cfc5c11d",
@@ -3907,9 +3908,13 @@ r = await dispatch(label + DIGEST_RETRY, gatePrompt(slots) + "\nA first run gave
 if (bad().length) halt("needs_human", label + ": gate " + bad().join(", ") + " erred or relayed no digest-checked result twice", "gates");
 }
 for (const s of slots) {
-const x = gateResult(r, s);
-state.gates[s[0]] = { status: x.status, reason: x.reason, findings: "survived" in x ? x.survived : x.findings, round: state.rounds.code };
-gate("gate " + s[0] + ": " + x.status + (x.reason ? " (" + x.reason + ")" : ""));
+const g = s[0], x = gateResult(r, s);
+const f = "survived" in x ? x.survived : x.findings;
+const p = (state.gates[g] || {}).seen | 0;
+state.gates[g] = { status: x.status, reason: x.reason, findings: f, round: state.rounds.code, seen: p | (x.status === "ran" ? (f.length ? 3 : 1) : x.status === "partial" && f.length ? 4 : 0) };
+gate("gate " + g + ": " + x.status + (x.reason ? " (" + x.reason + ")" : ""));
+if (/^tree red/.test(x.reason) || (x.status === "not_run" && p) || (x.status === "partial" && p & 2))
+halt("needs_human", label + ": gate " + g + " " + x.status + " (" + x.reason + ")" + (p ? " after an earlier round's result" : ""), "gates");
 }
 }
 function unruled(findings, rulings) {
@@ -6592,6 +6597,7 @@ rounds: state.rounds,
 suite_result: suiteResult,
 gates_not_run: state.gatesNotRun,
 held_out_seen: !!(state.gates.held_out || {}).seen,
+gates_seen: Object.fromEntries(GATES3.map((g) => [g, (state.gates[g] || {}).seen | 0])),
 ...(state.augFiles ? { aug_files: state.augFiles } : {}),
 auto_confirmed: autoConfirmed,
 ...(state.unattended ? { unattended: state.unattended, auto_decisions: state.autoDecisions } : {}),
@@ -7122,6 +7128,7 @@ shipDigest = resume.maps_digest;
 suiteResult = resume.suite_result || null;
 state.gatesNotRun = resume.gates_not_run || null;
 if (resume.held_out_seen === true) state.gates.held_out = { status: "not_run", reason: null, findings: [], round: 0, seen: true };
+for (const [g, n] of Object.entries(Object(resume.gates_seen))) if (GATES3.includes(g) && n === (n & 7)) state.gates[g] = { status: "not_run", reason: null, findings: [], round: 0, seen: n };
 state.review = resume.review || null;
 reviews = resume.reviews || 0;
 if (resume.rounds && typeof resume.rounds === "object") state.rounds = resume.rounds;

@@ -1177,26 +1177,30 @@ The main worktree is never touched. Each program has a 540 s deadline inside one
 - **Security** (gate 10): always on, with no container: a risky-API grep on the added lines, a size
   check against 1.5 x `est_diff_lines` and the frozen tests' string literals in production lines.
   With a runtime: semgrep (the plugin's pinned rules plus the repo's rules read from the plan base)
-  and gitleaks, only inside the audit-lab image pinned by digest (`AUDIT_IMAGE`). The scan dir holds
+  and gitleaks (the plugin's pinned `gitleaks.toml`: the default rules with no path allowlist, so
+  lock files and `node_modules/` are scanned), only inside the audit-lab image pinned by digest
+  (`AUDIT_IMAGE`). The scan dir holds
   only the judged blobs of the changed production files, in a per-run dir
   `$XDG_CACHE_HOME/fleet/sec-scan/run-<16 hex>` (G8: a mount source under `/tmp`, `/var/tmp` or
   `/dev/shm` is refused).
 
 **Support matrix.**
 
-| Gate     | Runs fully                                               | `not_run` or `partial`, and why                                                                                                                                                 |
-| -------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| coverage | python, a pytest `test_cmd`, the coverage module present | `not_run`: no coverage tool, a test_cmd that is not pytest, another language, a red baseline in the copy. `partial`: changed non-python source, the deadline, over 400 lines    |
-| held-out | any `test_cmd` the runner can extend with one test       | `not_run`: no example sealed, a re-planned ref, a ref sealed before 8.0.0, the store file missing on this machine                                                               |
-| mutation | python with a pytest `test_cmd`                          | `not_run`: another language or runner, a red baseline. `partial`: changed non-python source beside python, a file that does not tokenize, the deadline ("N of M not run")       |
-| security | the image present (podman, else docker), any language    | `partial`: no runtime, no image, no pinned digest (only the always-on checks ran), a file semgrep did not scan, semgrep errors. semgrep's shipped rules cover python, JS and TS |
+| Gate     | Runs fully                                               | `not_run` or `partial`, and why                                                                                                                                                                       |
+| -------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| coverage | python, a pytest `test_cmd`, the coverage module present | `not_run`: no coverage tool, a test_cmd that is not pytest, another language, a red baseline in the copy at the tree and the base. `partial`: changed non-python source, the deadline, over 400 lines |
+| held-out | any `test_cmd` the runner can extend with one test       | `not_run`: no example sealed, a re-planned ref, a ref sealed before 8.0.0, the store file missing on this machine                                                                                     |
+| mutation | python with a pytest `test_cmd`                          | `not_run`: another language or runner, a red baseline at the tree and the base. `partial`: changed non-python source beside python, a file that does not tokenize, the deadline ("N of M not run")    |
+| security | the image present (podman, else docker), any language    | `partial`: no runtime, no image, no pinned digest (only the always-on checks ran), a file semgrep did not scan, semgrep errors. semgrep's shipped rules cover python, JS and TS                       |
 
 **Census.** The preflight's gate tool census (see "Gate tool census" under "Probe mode") shows per
 language which tool each gate would use. It is advisory and never stops a run.
 
 **Stop gate `gates`.** `needs_human` with `stop_gate: "gates"` when: a gate program errors twice or
 its relay fails the digest twice; sec_scan finds more than 200 non-secret findings (a human reviews
-such a diff); the held-out store is off its seal, unreadable, missing after an earlier round of the
+such a diff); a gate reports `not_run` after an earlier round of the same build reported it, or
+`partial` after an earlier `ran` with findings; the judged tree is red in the copy while the plan
+base is green ("tree red, base green"); the held-out store is off its seal, unreadable, missing after an earlier round of the
 same build read it, or the runner's results do not match the sealed counts; a second `tests`
 ruling after the augmentation round; the next coder finds the frozen tests red at its start.
 

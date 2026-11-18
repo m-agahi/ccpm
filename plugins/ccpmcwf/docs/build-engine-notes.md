@@ -4848,3 +4848,37 @@ B1: -7 build calls (PATH checks, uncapped). B2: -2 plan calls (-1 capped: pr-con
 tail label) and -1 build call (capped). G2 and G4: +2 build calls each (1 capped each). G3: +1
 plan call (capped). Token counts are not in the harness; the smoke run gives the real ones.
 ```
+
+## 8.0.0 notes (car F: reviews A and B)
+
+### A-H1 and the G2 ruling: earlier gate results, a red baseline
+
+```text
+runGate's state.gates[g].seen ORs 1 (ran), 2 (ran with findings) and 4 (partial with findings)
+over the build. Stop at gates: not_run with any mark, partial with mark 2, or a reason that starts
+"tree red". A partial after a clean ran goes on: changed non-python source is a legal partial. The
+check is in runGate (the one place every gate result lands), so no code-round site changes. A
+re-plan resets state.gates (a new build). The run state's gates_seen holds the three marks
+(coverage, mutation, security_scan; held_out keeps held_out_seen); a resume sets {not_run, round
+0, seen} and accepts only an integer 0..7 for one of the three names.
+Red baseline: the programs run test_cmd again after read-tree -u --reset <base> in the same copy,
+inside the same 540 s deadline (a mutants deadline hit there is partial, as any other). The
+signal is the reason prefix, not an exit code: a non-zero exit would get runGate's retry, which
+reruns all three slots (up to 3 x 540 s) before it stops.
+```
+
+### A-H2: the gitleaks config
+
+```text
+gitleaks 8.30.1 (the image's) with no --config uses its embedded default, whose global
+[allowlist] paths skip lock files, node_modules/, go.sum, vendor/, site-packages, *.dist-info and
+binary extensions. Checked live (podman 5.8.6 through the agent shim, the pinned image): the
+default and `[extend] useDefault = true` both found only pkg.py of five files that hold one
+github-pat. skills/build-task/gitleaks.toml is config/gitleaks.toml at tag v8.30.1 (sha256
+e163e53b...9caf) with only the global paths list removed (the global regexes and stopwords and the
+per-rule allowlists, such as an @octokit README, stay); GITLEAKS_SHA256 pins it as RULES_SHA256
+pins sec-rules.yml. It is mounted in /rules beside fleet.yml; semgrep --config /rules ignores the
+.toml (live: errors []). Live result with sec_scan.py: ran, secrets in package-lock.json,
+yarn.lock, go.sum, node_modules/x.js and pkg/keys.py. A gitleaks release that changes the rules is
+a new copy and a new pin (the image digest is pinned too).
+```

@@ -184,10 +184,17 @@ test("8.0.0 G5-6: a red baseline gives not_run; no mutant runs", { skip: !HAVE_P
   const y = once({ add: WEAK, pytest: 'echo run >> "$LOG"\nexit 1\n' });
   assert.equal(y.r.status, 0, y.r.stderr);
   assert.equal(y.out.status, "not_run");
-  assert.equal(y.out.reason, "baseline red in scratch copy (test_cmd exit 1)");
+  // 8.0.0 car F (G2 ruling): the suite runs once more at the plan base; red there too is the environment
+  assert.equal(y.out.reason, "baseline red in scratch copy at the tree and at the base (exit 1, 1): the environment");
   assert.deepEqual(y.out.survived, []);
-  assert.equal(y.calls.length, 1);
+  assert.equal(y.calls.length, 2);
   assert.deepEqual(y.leftovers, []);
+  // tree red, base green: not_run "tree red, base green" (the workflow stops at gates)
+  const z = once({ add: WEAK, pytest: 'echo run >> "$LOG"\ncase "$(' + CAT + ' pkg/mod.py)" in *clamp*) exit 1;; esac\nexit 0\n' });
+  assert.equal(z.r.status, 0, z.r.stderr);
+  assert.equal(z.out.reason, "tree red, base green: the judged tree fails test_cmd in the scratch copy (exit 1)");
+  assert.equal(z.calls.length, 2);
+  assert.deepEqual(z.leftovers, []);
 });
 
 test("8.0.0 G5: unsupported: a non-pytest test_cmd or no python source gives not_run; python plus other source gives partial", { skip: !HAVE_PY }, () => {
@@ -386,6 +393,8 @@ const R2 = {
   "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
   "role:fleet-code-judge:r2": approve(),
   "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
+  // 8.0.0 car F (A-H1): round 2 reports the gate again (a not_run after round 1's findings stops at gates)
+  "infra:gates:r2": gatesStub({}),
 };
 const EQ = [{ id: "m1", target: "equivalent", reason: "x < lo and x <= lo agree at the only call site" }, { id: "m3", target: "equivalent", reason: "a and b are never equal here" }];
 

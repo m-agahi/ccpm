@@ -278,7 +278,8 @@ test("8.0.0 G7: the scan argv: podman, network none, read-only, tmpfs, the host 
   }
   const tail = (a) => a.slice(a.indexOf("--entrypoint"));
   assert.deepEqual(tail(rs[0]), ["--entrypoint", "semgrep", AUDIT_IMAGE, "scan", "--metrics=off", "--disable-version-check", "--disable-nosem", "--max-target-bytes=0", "--config", "/rules", "--json", "/src"]);
-  assert.deepEqual(tail(rs[1]), ["--entrypoint", "gitleaks", AUDIT_IMAGE, "dir", "--no-banner", "--redact=100", "--exit-code", "99", "-f", "json", "-r", "-", "/src"]);
+  // 8.0.0 car F (A-H2): the plugin's gitleaks config (the default rules, no global path allowlist)
+  assert.deepEqual(tail(rs[1]), ["--entrypoint", "gitleaks", AUDIT_IMAGE, "dir", "--no-banner", "--redact=100", "--exit-code", "99", "-f", "json", "-r", "-", "--config", "/rules/gitleaks.toml", "/src"]);
   assert.ok(y.same);
   assert.deepEqual(y.leftovers, [], "the scan dir is removed");
   assert.equal(y.scratch, false, "no scan dir under the repo's scratch dir");
@@ -305,14 +306,15 @@ test("8.0.0 G7: the scan dir holds only the judged blobs of the changed producti
   assert.equal(y.out.status, "ran", y.out.reason);
   assert.equal(m["/src"]["pkg/mod.py"][1], BASE_MOD + SHELL, "the judged blob");
   for (const [, [mode]] of Object.entries(m["/src"]).concat(Object.entries(m["/rules"]))) assert.ok((parseInt(mode.slice(2), 8) & 0o444) === 0o444, "readable by the container uid: " + mode);
-  assert.deepEqual(Object.keys(m["/rules"]).sort(), ["fleet.yml", "repo-0.yml"]);
+  assert.deepEqual(Object.keys(m["/rules"]).sort(), ["fleet.yml", "gitleaks.toml", "repo-0.yml"]);
+  assert.equal(m["/rules"]["gitleaks.toml"][1], readFileSync(join(HERE, "..", "skills", "build-task", "gitleaks.toml"), "utf8"));
   assert.equal(m["/rules"]["fleet.yml"][1], readFileSync(RULES, "utf8"));
   assert.equal(m["/rules"]["repo-0.yml"][1], "rules: [] # the base's own rules\n", "repo rules come from the base");
   assert.ok(!JSON.stringify(m["/rules"]).includes("planted in the judged tree"));
   assert.ok(!JSON.stringify(m["/rules"]).includes("rewritten in the judged tree"));
   // a .semgrep.yml at the base is read too
   const z = once({ rt: ["podman"], baseFiles: { ".semgrep.yml": "rules: [] # base top\n" } }, { out: CLEAN });
-  assert.deepEqual(Object.values(z.mounts[0]["/rules"]).map((v) => v[1]).sort(), [readFileSync(RULES, "utf8"), "rules: [] # base top\n", "rules: [] # the base's own rules\n"].sort());
+  assert.deepEqual(Object.values(z.mounts[0]["/rules"]).map((v) => v[1]).sort(), [readFileSync(RULES, "utf8"), readFileSync(join(HERE, "..", "skills", "build-task", "gitleaks.toml"), "utf8"), "rules: [] # base top\n", "rules: [] # the base's own rules\n"].sort());
 });
 
 test("8.0.0 G7-2: tool results: semgrep and gitleaks hits on added lines only; a gitleaks hit is a secret, redacted (no secret text in the output)", { skip: !HAVE_PY }, () => {
@@ -510,6 +512,8 @@ const R2 = {
   "hasher:post-coder:r2": { status: "ok", fingerprint: FP_K2, hashes: HASHES },
   "role:fleet-code-judge:r2": approve(),
   "hasher:fp-post:code-judge:r2": { status: "ok", fingerprint: FP_K2 },
+  // 8.0.0 car F (A-H1): round 2 reports the gate again (a partial after round 1's findings stops at gates)
+  "infra:gates:r2": gatesStub({}),
 };
 
 test("8.0.0 G7: sec_scan runs as the 3rd slot of infra:gates:r<m> (no new agent), after coverage and mutation; its args", async () => {

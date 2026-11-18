@@ -303,8 +303,9 @@ test("8.0.0 G1: runGate stores each digest-checked result for the code round; on
   const a = gateRig([ok]);
   await a.runGate("infra:gates:r2", SLOTS, "Code");
   assert.deepEqual(a.labels, ["infra:gates:r2"]);
-  assert.deepEqual(a.state.gates.coverage, { status: "ran", reason: null, findings: [{ id: "f1" }], round: 2 });
-  assert.deepEqual(a.state.gates.security_scan, { status: "not_run", reason: "why", findings: [], round: 2 });
+  // 8.0.0 car F (A-H1): + seen (1 ran, 2 with findings, 4 partial with findings)
+  assert.deepEqual(a.state.gates.coverage, { status: "ran", reason: null, findings: [{ id: "f1" }], round: 2, seen: 3 });
+  assert.deepEqual(a.state.gates.security_scan, { status: "not_run", reason: "why", findings: [], round: 2, seen: 0 });
   assert.ok(a.prompts[0].includes("python3 -I /s/cover_diff.py /w b") && a.prompts[0].includes("python3 -I /s/sec_scan.py /w"));
   // a bad digest, other args or an erroring tool: one retry
   for (const bad of [Object.assign({}, ok.coverage, { digest: "bad" }), Object.assign({}, ok.coverage, { args: ["/x", "b"] }), res("error", ["/w", "b"]), null]) {

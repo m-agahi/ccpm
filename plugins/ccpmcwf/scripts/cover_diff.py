@@ -37,7 +37,8 @@ except Exception:
 # fleet 8.0.0 (G2, ADR-1316): the coverage gate. Args: <worktree> <base> <tree> <test_cmd> <env json> <exclude json>.
 # A throwaway detached worktree <dirname(worktree)>/scratch/copy-* at <base> with the judged <tree>
 # read in (read-tree -u --reset; the main worktree is never touched). The test_cmd (a pytest
-# shape only, <paths> dropped) runs once plain (red: not_run) and once under the coverage
+# shape only, <paths> dropped) runs once plain (red: once more at <base>, not_run either way, "tree
+# red, base green" when the base is green) and once under the coverage
 # module with this program's own rcfile (no repo omit list, no pragma exclusion), within one
 # 540 s deadline (hit: partial). Findings: the added lines of the changed .py files (git diff
 # -U0 <base> <tree>, the <exclude> paths aside) the run did not execute; a changed file the
@@ -204,7 +205,12 @@ try:
             emit('not_run', 'no coverage tool: ' + ' '.join(head) + ' --version exit %d' % code)
         code, tail = run(argv, tmp, env, log)
         if code != 0:
-            emit('not_run', 'baseline red in scratch copy (test_cmd exit %d)' % code)
+            # car F (G2 ruling): once more at the plan base; green there is the change's fault (the workflow stops)
+            git(tmp, 'read-tree', '-u', '--reset', base)
+            bc, tail = run(argv, tmp, env, log)
+            if bc == 0:
+                emit('not_run', 'tree red, base green: the judged tree fails test_cmd in the scratch copy (exit %d)' % code)
+            emit('not_run', 'baseline red in scratch copy at the tree and at the base (exit %d, %d): the environment' % (code, bc))
         code, tail = run(head + ['run'] + cov + ['-m', 'pytest'] + argv[i + 1:], tmp, env, log)
         if code != 0:
             sys.exit('coverage run exit %d with a green baseline: %s' % (code, tail[-500:]))
