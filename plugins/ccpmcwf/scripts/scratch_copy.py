@@ -60,7 +60,7 @@ G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c'
 # around it), and no shell given a command string
 REFUSED = {'terraform', 'tofu', 'tfp', 'terragrunt', 'digger', 'atlantis'}
 SHELLS = {'sh', 'bash', 'zsh', 'dash', 'ksh'}
-SANDBOX_SHA256 = '142e66c5318a6699250f656b31be5c5ae3cc155efe5a48d580e221c475d0f65a'
+SANDBOX_SHA256 = 'b16855761f393c5a6db5bd2ad1effa3b23d7d8a42605bfa5a0750284fc9d046c'
 SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
 os.environ['GIT_TERMINAL_PROMPT'] = '0'
 def emit(out):

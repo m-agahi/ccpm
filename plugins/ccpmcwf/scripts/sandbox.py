@@ -42,8 +42,10 @@ except Exception:
 #   run: run argv in the sandbox (stdout and stderr inherited); write {started, exit, reason} to result.
 #     started false: the sandbox did not start (no bwrap, the self-check failed, a mount failed); no
 #     test process ran. With check, the same mounts run python -I -S -c '' first (the self-check).
-#   dbreset: drop every database the env's *_TEST_DSN users see (system schemas aside) and create the
-#     DSN's own database again (the base re-run, ADR-1318); write {ok, reason} to result.
+#   dbreset: for each *_TEST_DSN, drop the DSN's own database and the ones named <it>_* that its user sees,
+#     never another (the role users share the repo's test_db_prefix grants in one container, so another
+#     role's or run's database stays), then create the DSN's own database again (the base re-run,
+#     ADR-1318); write {ok, reason} to result. A *_TEST_DSN that names no database: ok false.
 #   plan: print {argv} (the bwrap arguments; tests).
 # The sandbox: --unshare-all (net included), --die-with-parent, --new-session; / read-only, a new /dev,
 # /proc and /tmp; tmpfs over /run (host unix sockets: podman, docker, D-Bus, agents), HOME, the held-out
@@ -271,6 +273,11 @@ if mode == 'plan':
     sys.exit(0)
 if mode == 'dbreset':
     cl = shutil.which('mariadb', path=_RAW_PATH) or shutil.which('mysql', path=_RAW_PATH)
+    for k, v in spec['env'].items():
+        if DSN_KEY.fullmatch(k) and v.startswith('mysql://') and not DSN.fullmatch(v):
+            put(spec, {'ok': False, 'reason': k + ' names no test database to reset'})
+            sys.exit(0)
+    own = {d[3] for d in dsns(spec['env'])}
     for user, pw, port, db in dsns(spec['env']):
         if not cl:
             put(spec, {'ok': False, 'reason': 'no mariadb or mysql client on PATH to reset the test database'})
@@ -282,6 +289,8 @@ if mode == 'dbreset':
         if r.returncode != 0 or not all(re.fullmatch(r'[A-Za-z0-9_]{1,64}', n) for n in names):
             put(spec, {'ok': False, 'reason': 'SHOW DATABASES failed: ' + r.stderr.decode('utf-8', 'replace')[-300:]})
             sys.exit(0)
+        # the DSN's own database and its <db>_* databases (never another DSN's own database)
+        names = [n for n in names if n == db or (n.startswith(db + '_') and n not in own)]
         r = subprocess.run(base + [' '.join('DROP DATABASE `%s`;' % n for n in names) + ' CREATE DATABASE `%s`;' % db], capture_output=True, env=e, stdin=subprocess.DEVNULL, timeout=60, preexec_fn=lift)
         if r.returncode != 0:
             put(spec, {'ok': False, 'reason': 'the database reset failed: ' + r.stderr.decode('utf-8', 'replace')[-300:]})

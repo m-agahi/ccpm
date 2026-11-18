@@ -63,7 +63,7 @@ except Exception:
 # sandbox.py off its pin): not_run "sandbox unavailable: ...", no test run.
 import hashlib, io, json, os, re, shlex, shutil, signal, stat, subprocess, sys, tempfile, time, tokenize
 CAP = 200
-SANDBOX_SHA256 = '142e66c5318a6699250f656b31be5c5ae3cc155efe5a48d580e221c475d0f65a'
+SANDBOX_SHA256 = 'b16855761f393c5a6db5bd2ad1effa3b23d7d8a42605bfa5a0750284fc9d046c'
 SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
 _dl = os.environ.get('FLEET_MUTANTS_DEADLINE') or ''
 # a test may lower the deadline, never raise it

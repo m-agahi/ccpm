@@ -1357,10 +1357,13 @@ through `sandbox.py`, a bubblewrap (`bwrap`) sandbox. Each caller pins the sha25
 Closed in 8.1.0 (each has a fixture in `v810_sandbox`):
 
 1. Base re-run poisoning (ADR-1318): the base re-run runs in a new sandbox, so HOME, `/tmp` and
-   the private dirs are fresh, and the test database is dropped and created again first (every
-   database the DSN user sees, system schemas aside, with `mariadb` or `mysql` from the agent PATH
-   and the password in `MYSQL_PWD`). No client, or a failed reset: "tree red, base not re-run",
-   which stops at `gates`.
+   the private dirs are fresh, and the test database is dropped and created again first: the
+   DSN's own database and the `<db>_*` databases its user sees, never another (the role users
+   share the repo's `test_db_prefix` grants in one container, so another role's or run's database
+   stays). It uses `mariadb` or `mysql` from the agent PATH, with the password in `MYSQL_PWD`. No
+   client, a DSN with no database, or a failed reset: "tree red, base not re-run", which stops at
+   `gates`. Residual: databases under the repo's `test_db_prefix` are shared, so the reset leaves
+   them, and a tree run can leave state there for the base re-run.
 2. Coverage launcher and report tampering: the `python -m pytest` shape uses an inline
    `python3 -I -c` launcher, no file. The rcfile is read-only, the data dir is writable in the run
    step only, the report dir in the json step only, and the work dir is not visible in the plain

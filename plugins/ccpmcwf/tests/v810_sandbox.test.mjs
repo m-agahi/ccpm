@@ -223,6 +223,36 @@ test("8.1.0 #75 review: with HOME and the store's parent on PATH, a child still 
   }
 });
 
+// 8.1.0 review: the role users share the repo's test_db_prefix grants in one container, so the reset
+// drops the DSN's own database and its <db>_* databases only; another role's or run's database stays
+test("8.1.0 #75 review: dbreset drops the gate's database and its <db>_* databases only; another role's database survives; a DSN with no database is refused", { skip: !HAVE_PY }, () => {
+  const d = realpathSync(mkdtempSync(join(tmpdir(), "fleet-v810-dbr-")));
+  try {
+    const bin = join(d, "bin");
+    mkdirSync(bin);
+    const log = join(d, "db.log");
+    put(join(bin, "mariadb"), "#!/bin/sh\necho \"$*\" >> '" + log + "'\ncase \"$*\" in *'SHOW DATABASES'*) printf 'information_schema\\nfleet_gates\\nfleet_gates_gw0\\nfleet_cjudge_x\\nfleet_hrun\\napp_test_1\\n' ;; esac\nexit 0\n", 0o755);
+    const reset = (dsn) => {
+      const spec = join(d, "spec.json");
+      writeFileSync(spec, JSON.stringify({ worktree: d, cwd: d, argv: ["true"], env: { APP_TEST_DSN: dsn }, result: join(d, "res.json") }));
+      const r = spawnSync(PY, ["-I", SBX, "dbreset", spec], { encoding: "utf8", env: { PATH: bin + ":" + process.env.PATH } });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(readFileSync(join(d, "res.json"), "utf8"));
+    };
+    assert.deepEqual(reset("mysql://fleet_gates:pw@127.0.0.1:3399/fleet_gates"), { ok: true, reason: null });
+    const sql = readFileSync(log, "utf8");
+    assert.match(sql, /DROP DATABASE `fleet_gates`; DROP DATABASE `fleet_gates_gw0`; CREATE DATABASE `fleet_gates`;/);
+    for (const other of ["fleet_cjudge_x", "fleet_hrun", "app_test_1"]) assert.ok(!sql.includes("DROP DATABASE `" + other + "`"), other + " survives");
+    rmSync(log, { force: true });
+    const no = reset("mysql://fleet_gates:pw@127.0.0.1:3399/");
+    assert.equal(no.ok, false);
+    assert.match(no.reason, /APP_TEST_DSN names no test database/);
+    assert.ok(!existsSync(log), "no SQL ran");
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
 test("8.1.0 #75: a child cannot connect to 1.1.1.1:53", { skip: NO_SBX }, () => {
   const x = copyFixture();
   try {
@@ -446,7 +476,7 @@ function gateFixture(o) {
   mkdirSync(bin);
   const dblog = join(d, "db.log");
   // a stub mariadb client: logs argv and MYSQL_PWD's presence; SHOW DATABASES lists two
-  put(join(bin, "mariadb"), "#!/bin/sh\necho \"argv: $* pwd=${MYSQL_PWD:+set}\" >> '" + dblog + "'\ncase \"$*\" in *'SHOW DATABASES'*) printf 'information_schema\\nfleet_gates\\napp_extra\\n' ;; esac\nexit 0\n", 0o755);
+  put(join(bin, "mariadb"), "#!/bin/sh\necho \"argv: $* pwd=${MYSQL_PWD:+set}\" >> '" + dblog + "'\ncase \"$*\" in *'SHOW DATABASES'*) printf 'information_schema\\nfleet_gates\\nfleet_gates_gw0\\nfleet_cjudge_x\\napp_extra\\n' ;; esac\nexit 0\n", 0o755);
   const hostHome = join(d, "hosthome");
   mkdirSync(hostHome);
   // the program's own temp dir (its work dir): a daemon a control run leaves walks this dir only
@@ -488,7 +518,8 @@ for (const [name, p] of [["cover_diff", COVER], ["mutants", MUT]]) {
       assert.ok(!existsSync(poison) && !existsSync(join(x.hostHome, ".fleet-poison")) && !existsSync(join(x.venv, "poison")), "no poison reached the host");
       const db = existsSync(x.dblog) ? readFileSync(x.dblog, "utf8") : "";
       assert.match(db, /SHOW DATABASES/);
-      assert.match(db, /DROP DATABASE `fleet_gates`; DROP DATABASE `app_extra`; CREATE DATABASE `fleet_gates`;/);
+      assert.match(db, /DROP DATABASE `fleet_gates`; DROP DATABASE `fleet_gates_gw0`; CREATE DATABASE `fleet_gates`;/);
+      assert.doesNotMatch(db, /DROP DATABASE `(fleet_cjudge_x|app_extra)`/);
       assert.ok(!db.includes("pw1") && /pwd=set/.test(db), "the password goes in MYSQL_PWD, never in argv");
     } finally {
       rmSync(poison, { force: true });

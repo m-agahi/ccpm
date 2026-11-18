@@ -26,7 +26,9 @@ a bubblewrap sandbox. This closes the three same-uid bypasses that the 8.0.0 rev
 - `cover_diff.py` and `mutants.py` run every test process in the sandbox. No `bwrap`, a failed
   self-check or a helper off its pin gives `not_run` "sandbox unavailable: ..." before any test runs.
 - Bypass 1 (ADR-1318): the base re-run runs in a fresh sandbox after the test database is dropped
-  and created again. A reset that cannot run gives "tree red, base not re-run", a stop at `gates`.
+  and created again: the DSN's own database and its `<db>_*` databases only, never another role's
+  or run's. A reset that cannot run, or a DSN with no database, gives "tree red, base not re-run",
+  a stop at `gates`.
 - Bypass 2: the `python -m pytest` coverage launcher is an inline `python3 -I -c` string (no
   `cov.py`). The rcfile is read-only. The data dir is writable in the run step only, and the report
   dir in the json step only.
