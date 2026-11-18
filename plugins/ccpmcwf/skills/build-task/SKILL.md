@@ -361,8 +361,13 @@ yourself, re-run the build to open the PR: run step 8 again with the same `plan_
 goes on to the PR, the review and the write-back without a push, and only when the remote
 branch head is exactly the approved sha; any other remote state stops at `iac-push` again. The hints in it are
 not a security check. `stop_gate: "iac"` from the push gate names a provider plugin directory, a
-symlink or code that existing IaC runs at plan time, or says the plan ref holds no sealed origin URL
-or origin's URL changed since the plan (re-run plan); relay it.
+symlink or code that existing IaC runs at plan time, or says origin's URL changed since the plan
+(re-run plan), or that the plan ref holds no sealed origin URL (set a GitHub or https origin); relay it.
+
+A `needs_human` with no stop gate that says origin's URL is not an https or `git@host:` URL, that
+origin has no URL or was not read (plan mode, 8.2.1), or that the plan ref holds no sealed origin URL
+(build mode, at load-ref): the build cannot push. Relay it; the user sets a GitHub or https origin
+and plans again. Never change the remote yourself.
 
 `stop_gate: "hooks"` means the change touches the hook surface (hook config, a file a hook or CI
 runs, a CI or hook-manager path). Hook changes need their own PR and Max's confirmation; relay the

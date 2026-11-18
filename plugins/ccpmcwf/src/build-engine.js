@@ -6374,7 +6374,7 @@ async function planMode(input, date) {
 
   const ws = await workspaceStep(brief.repo, lay, { ffReused: true });
   const oh = originHalt(ws);
-  if (oh) halt("needs_human", oh, "iac");
+  if (oh) halt("needs_human", oh);
   if (ghNoPush(ws.remoteSlug)) gate("warning: " + noPushText(ws.remoteSlug) + " (the build stops at its start until one has)");
   await pushProbe(lay, ws);
   const planPolicy = await policyStep(ws.remoteHost, ws.remoteSlug, null, true);
@@ -7033,7 +7033,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
   // the origin URL sealed in the plan ref
   const remoteUrl = typeof pf.remote_url === "string" ? pf.remote_url : null;
   // 8.2.1 (#81): before any role runs
-  if (!validRemoteUrl(remoteUrl)) halt("needs_human", "plan ref " + tiny.plan_ref + " holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX + ", then plan again", "iac");
+  if (!validRemoteUrl(remoteUrl)) halt("needs_human", "plan ref " + tiny.plan_ref + " holds no sealed origin URL (https or git@host: form); " + ORIGIN_FIX + ", then plan again");
   // 7.3.0 (#33): the plan's merge condition (an older plan_ref has none: the PR opens ready)
   const mergeAfter = typeof pf.merge_after === "string" && pf.merge_after.trim() ? pf.merge_after.trim() : null;
   const mainWt = lay.mainWt;

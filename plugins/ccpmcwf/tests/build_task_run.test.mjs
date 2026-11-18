@@ -10302,7 +10302,7 @@ test("3.1.0 URL review: the plan seals origin's URL; no sealed URL, or a URL cha
     s = happy();
     s.workspace = Object.assign({}, s.workspace, { remote_url: bad });
     out = await run(s, ARGS);
-    assert.equal(out.result.stop_gate, "iac", bad);
+    assert.equal(out.result.stop_gate, null, bad);
     assert.match(out.result.reason, /^origin URL .* is not an https or git@host: URL; the build cannot push; set a GitHub or https origin$/, bad);
     assert.doesNotMatch(out.result.reason, /re-run plan/, bad);
     assert.equal(out.build, null, bad);
@@ -10900,7 +10900,7 @@ test("3.1.1 origin URL: the workspace step relays a program's output; the script
     const t = iacScript(() => happy(), "approved");
     t.workspace = Object.assign({}, t.workspace, { remote_url_check: bad });
     const o = await run(t, ARGS);
-    assert.equal(o.result.stop_gate, "iac", JSON.stringify(bad));
+    assert.equal(o.result.stop_gate, null, JSON.stringify(bad));
     assert.match(o.result.reason, /^origin URL not read \(no digest-checked remote_url_check\); the build cannot push/, JSON.stringify(bad));
     assert.equal(o.build, null, JSON.stringify(bad));
     assert.ok(!o.labels.includes("role:scope-and-plan"), JSON.stringify(bad));

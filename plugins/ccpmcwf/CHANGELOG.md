@@ -12,7 +12,9 @@ ccpmcwf 8.2.1: yaadgaar #81 and #82, found in the smoke run wf_9e6c3325-fc0.
   the log-safe path helper (control characters replaced, 200 code points, userinfo hidden). A
   build from a plan ref with no sealed origin URL halts at load-ref, before any role runs. The
   push-time halt no longer says "re-run plan" (re-planning sealed null again); all three name the
-  fix: set a GitHub or https origin. Network git still uses only the sealed URL (74377f1).
+  fix: set a GitHub or https origin. The plan and load-ref halts carry no stop gate (`iac` means
+  an IaC tool on PATH to the skill); the build-task skill says how to relay them. Network git
+  still uses only the sealed URL (74377f1).
 - #82: every infra relay whose output a program digest checks runs on sonnet first (was haiku):
   preflight, the PATH checks, branch-scan, stage-plan, verify-plan, read-state, policy, ci-logs,
   pr-view, orch-scan, ci-watch, callers, check-scripts, review-paths, remote-head, load-parked,

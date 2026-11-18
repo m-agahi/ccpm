@@ -18,6 +18,8 @@ function planHaltsInWorkspace(out, re) {
   assert.equal(out.result.status, "needs_human", out.result.reason);
   assert.match(out.result.reason, re);
   assert.match(out.result.reason, /the build cannot push; set a GitHub or https origin/);
+  // not "iac" (the skill reads that as an IaC tool on PATH)
+  assert.equal(out.result.stop_gate, null);
   assert.equal(out.build, null, "no build ran");
   assert.ok(!out.result.plan_ref, "no plan ref returned");
   for (const l of ["infra:push-probe", "infra:branch-scan", "role:scope-and-plan", "role:plan-audit", "infra:commit-plan"])
@@ -77,6 +79,7 @@ test("8.2.1 #81: a build from a plan ref with remote_url null halts at load-ref;
   const out = await runOne(s, bargs);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /^plan ref \S+ holds no sealed origin URL \(https or git@host: form\); the build cannot push; set a GitHub or https origin, then plan again$/);
+  assert.equal(out.result.stop_gate, null);
   assert.equal(out.labels.filter((l) => l.indexOf("role:") === 0).length, 0, out.labels.join(", "));
   assert.ok(!out.labels.includes("infra:verify-plan"), out.labels.join(", "));
   assert.ok(out.labels.includes("infra:load-ref"));
