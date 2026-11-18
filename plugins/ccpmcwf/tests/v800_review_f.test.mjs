@@ -7,10 +7,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { HERE, SOURCE, ARGS, happy, run, inputsOf, call, FP_K2, HASHES, mutOut, secOut, coverOut, stateJsonOf } from "./harness.mjs";
+import { HERE, SOURCE, ARGS, spawnSync, ROLE_TEXT, PB, PSHA, happy, run, runOne, inputsOf, call, commitStub, FP_K2, HASHES, mutOut, secOut, coverOut, stateJsonOf } from "./harness.mjs";
 
 const SCRIPTS = join(HERE, "..", "scripts");
 const SKILL = join(HERE, "..", "skills", "build-task");
@@ -99,4 +100,154 @@ test("8.0.0 car F A-H2: gitleaks runs with the plugin's pinned config: the defau
   assert.ok(!/node_modules|package-lock|go\\\.\(\?:mod\|sum/.test(glob));
   assert.ok((t.match(/\n\[\[rules\]\]\n/g) || []).length >= 200, "the default rules");
   assert.match(src, /'--config', '\/rules\/gitleaks\.toml'/);
+});
+
+// A-M7: a re-plan in the same run would reset state.gates and drop a held-out result this build already read
+const HO = [{ criterion_id: "AC1", given: "g", when: "f(9)", then: "10" }];
+const CRIT = [{ id: "AC1", text: "[unit] behaviour 1", test_files: ["tests/test_1.py"], examples: [{ given: "g", when: "f(1)", then: "2", kind: "main" }], dont_care: [], property: null, guards_existing: false, spec_quote: null }];
+const PLAN_WRONG = { status: "ok", reason: "plan wrong", verdict: "plan_wrong", routed_findings: [{ target: "plan", criterion: "AC1", finding: "AC1 is wrong -- Proposed plan change: fix AC1" }], hash_check: { match: true, mismatched: [] }, suite_result: { command: "pytest", exit_code: 1 }, gates_not_run: [], obligations_check: [] };
+function replanHO(pass) {
+  const s = happy({ criteria: CRIT });
+  s["role:scope-and-plan"].held_out_examples = HO;
+  return Object.assign(s, {
+    "role:fleet-held-out-runner:r1": (p) => ({ status: "ok", reason: "ran", store: "ok", store_digest: inputsOf(p).held_out.sha256, results: [{ criterion: "AC1", index: 0, pass }] }),
+    "role:fleet-code-judge:r1": PLAN_WRONG,
+    "infra:replan-worktree": (p) => ({ status: "ok", reason: "ok", head: inputsOf(p).plan_commit }),
+    "role:scope-and-plan:replan": Object.assign({}, s["role:scope-and-plan"], { tldr: "re-planned" }),
+    "role:plan-audit:replan": { status: "ok", reason: "fine", verdict: "approve", routed_findings: [] },
+    "infra:stage-plan:replan": { status: "ok", reason: "staged", plan_sha256: PSHA },
+    "infra:commit-plan:replan": commitStub(s.__store, "0123456789ab", PSHA),
+    "infra:replan-reset": (p) => ({ status: "ok", reason: "reset", head: PB, superseded_head: inputsOf(p).expected_head }),
+    // the first plan's auto gates (unattended)
+    "hasher:pre-intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+    "role:fleet-intent-judge": { status: "ok", reason: "matches the task", verdict: "approve", deviations: [], coverage: { covered: true, missing: [] }, classification: { change_kind: "approve", new_behaviour: "approve", quote: "add a thing" } },
+    "hasher:fp-post:intent": { status: "ok", fingerprint: { head: PB, tree: "P0" } },
+    "infra:precommit-ids": { status: "ok", reason: "read", present: true, ids: ["prettier", "check-json"], parser: "yaml" },
+  });
+}
+test("8.0.0 car F A-M7: an unattended re-plan after this build read the held-out store asks (needs the human, the re-plan ready)", async () => {
+  for (const pass of [false, true]) {
+    const out = await runOne(replanHO(pass), Object.assign({}, ARGS, { unattended: true }));
+    assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+    const d = (out.result.auto_decisions || []).map((x) => x.gate + ": " + x.decision + " (" + x.reason + ")");
+    assert.ok(d.includes("plan_wrong: ask (code-judge re-plan 1: this build already ran the held-out gate)"), d.join("\n"));
+  }
+});
+
+// A-M6: the planner's outputs other than the held-out list never carry a held-out example (when and then together)
+test("8.0.0 car F A-M6: a memory_notes entry that holds a held-out example is dropped; tldr, plan_diff and criteria text are redacted", async () => {
+  const s = happy({ criteria: CRIT });
+  const p = s["role:scope-and-plan"];
+  p.held_out_examples = HO;
+  p.memory_notes = ["keep this note", "f(9) gives 10 (held-out)", "f(9) alone is fine"];
+  p.tldr = "add thing; f(9) is 10";
+  p.plan_diff = ["step one", "check f(9) == 10"];
+  p.criteria = CRIT.map((c) => Object.assign({}, c, { text: c.text + " (e.g. f(9) -> 10)" }));
+  const out = await runOne(s, ARGS);
+  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
+  const all = JSON.stringify(out.result) + out.logs.join("\n") + out.calls.filter((c) => c.label !== "infra:held-out:write").map((c) => c.prompt).join("\n");
+  assert.ok(!/f\(9\)[^"]*10/.test(all), "no held-out example in the result, the logs or a later prompt");
+  const notes = [].concat(...(out.result.memory_notes || []).map((x) => x.notes));
+  assert.ok(notes.includes("keep this note") && notes.includes("f(9) alone is fine"), JSON.stringify(notes));
+  assert.ok(!notes.some((n) => /10/.test(n)));
+});
+
+// B-M1: a held-out test run that hits its deadline is not a failing example
+test("8.0.0 car F B-M1: scratch_copy run kills the child's process group at its deadline (at most 540 s) and says timed_out", () => {
+  const root = mkdtempSync(join(tmpdir(), "fleet-r8f-"));
+  const repo = join(root, "main");
+  mkdirSync(repo);
+  try {
+    const git = (...a) => spawnSync("git", ["-C", repo, ...a], { encoding: "utf8" });
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    git("add", "-A");
+    git("-c", "user.email=a@b", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init");
+    const PY = join(SCRIPTS, "scratch_copy.py");
+    const py = (env, ...a) => spawnSync("python3", ["-I", PY, ...a], { encoding: "utf8", env: Object.assign({ PATH: process.env.PATH }, env) });
+    const tmp = JSON.parse(py({}, "make", repo).stdout).tmp;
+    const t0 = Date.now();
+    // a grandchild that would outlive its parent: the whole group goes
+    writeFileSync(join(tmp, "s.sh"), "sleep 30 &\nsleep 30\n");
+    const r = py({ FLEET_SCRATCH_RUN_DEADLINE: "1" }, "run", repo, tmp, JSON.stringify(["sh", join(tmp, "s.sh")]));
+    assert.ok(Date.now() - t0 < 8000, "returns at the deadline");
+    assert.equal(r.status, 0, r.stderr);
+    const o = JSON.parse(r.stdout);
+    assert.equal(o.timed_out, true);
+    assert.equal(o.exit_code, null);
+    const ok = JSON.parse(py({}, "run", repo, tmp, JSON.stringify(["true"])).stdout);
+    assert.equal(ok.timed_out, false);
+    assert.equal(ok.exit_code, 0);
+    const src = readFileSync(PY, "utf8");
+    assert.match(src, /DEADLINE = min\(540, int\(_dl\)\)/);
+    py({}, "remove", repo, tmp);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("8.0.0 car F B-M1: a runner that reports store timeout gives held_out not_run (a stop after an earlier round read the store); the role asks for timeout 600000 ms", async () => {
+  const s = happy({ criteria: CRIT });
+  s["role:scope-and-plan"].held_out_examples = HO;
+  s["role:fleet-held-out-runner:r1"] = { status: "ok", reason: "timed out", store: "timeout", store_digest: null, results: null };
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  assert.ok(out.logs.includes("gate held_out: not_run (a held-out test run hit its deadline)"), out.logs.filter((l) => /held/.test(l)).join("\n"));
+  const s2 = happy({ criteria: CRIT, script: Object.assign({ "role:fleet-code-judge:r1": approve({ verdict: "fix_code", routed_findings: [{ target: "code", criterion: null, finding: "tidy" }] }) }, R2) });
+  s2["role:scope-and-plan"].held_out_examples = HO;
+  s2["role:fleet-held-out-runner:r1"] = (p) => ({ status: "ok", reason: "ran", store: "ok", store_digest: inputsOf(p).held_out.sha256, results: [{ criterion: "AC1", index: 0, pass: true }] });
+  s2["role:fleet-held-out-runner:r2"] = s["role:fleet-held-out-runner:r1"];
+  const o2 = await run(s2, ARGS);
+  assert.equal(o2.result.stop_gate, "gates", o2.result.reason);
+  assert.match(o2.result.reason, /role:fleet-held-out-runner:r2: a held-out test run hit its deadline after an earlier round of this build read the store/);
+  const role = ROLE_TEXT["fleet-held-out-runner"];
+  assert.match(role, /timeout 600000 ms/);
+  assert.match(role, /"timeout"/);
+});
+
+// B-M2: the preflight's image check and pull fit the 600 s Bash call: the pull <= 480 s, the whole <= 560 s
+test("8.0.0 car F B-M2: gate_tools.py bounds the pull at 480 s and the whole at 560 s (a test knob lowers it)", () => {
+  const d = mkdtempSync(join(tmpdir(), "fleet-r8f-gt-"));
+  try {
+    const sleep = spawnSync("sh", ["-c", "command -v sleep"], { encoding: "utf8" }).stdout.trim();
+    writeFileSync(join(d, "podman"), "#!/bin/sh\ncase \"$1\" in image) exit 1;; pull) exec " + sleep + " 30;; esac\nexit 0\n");
+    chmodSync(join(d, "podman"), 0o755);
+    const img = "docker.io/x/y@sha256:" + "a".repeat(64);
+    const t0 = Date.now();
+    const py = spawnSync("python3", ["-I", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim();
+    const r = spawnSync(py, ["-I", join(SCRIPTS, "gate_tools.py"), "/nonexistent-repo", img], { encoding: "utf8", env: { PATH: d, FLEET_GATE_TOOLS_DEADLINE: "2" } });
+    assert.ok(Date.now() - t0 < 10000, "stops at the deadline: " + (Date.now() - t0) + " ms");
+    assert.equal(r.status, 0, r.stderr);
+    const o = JSON.parse(r.stdout);
+    assert.equal(o.container.present, false);
+    assert.match(o.container.reason, /TimeoutExpired/);
+    const src = readFileSync(join(SCRIPTS, "gate_tools.py"), "utf8");
+    assert.match(src, /TOTAL = min\(560, int\(_dl\)\) if re\.match\(r'\^\[1-9\]\[0-9\]\{0,3\}\$', _dl\) else 560/);
+    assert.match(src, /'pull', image\], 480\)/);
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// B-M3: db_up's cold pull (podman run) fits the 600 s Bash call the prompt asks for
+test("8.0.0 car F B-M3: db_up bounds podman run (the cold pull) at 480 s and the whole at 560 s; the prompt asks for timeout 600000 ms", async () => {
+  const d = mkdtempSync(join(tmpdir(), "fleet-r8f-db-"));
+  try {
+    const sleep = spawnSync("sh", ["-c", "command -v sleep"], { encoding: "utf8" }).stdout.trim();
+    writeFileSync(join(d, "podman"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + join(d, "log") + "'\ncase \"$1\" in run) if [ \"$2\" = \"--help\" ]; then printf '      --timeout uint\\n'; exit 0; fi; exec " + sleep + " 30;; esac\nexit 0\n");
+    chmodSync(join(d, "podman"), 0o755);
+    const py = spawnSync("python3", ["-I", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim();
+    const t0 = Date.now();
+    const r = spawnSync(py, ["-I", join(SCRIPTS, "db_up.py"), "up", "fleet-db-y42-1", "docker.io/library/mariadb@sha256:" + "d".repeat(64), "21600", "n1-0000001", JSON.stringify(["fleet_plan"]), "f_"], { encoding: "utf8", env: { PATH: d, HOME: d, FLEET_DB_UP_DEADLINE: "2" } });
+    assert.ok(Date.now() - t0 < 10000, "stops at the bound: " + (Date.now() - t0) + " ms");
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /podman run .*bound/);
+    assert.ok(readFileSync(join(d, "log"), "utf8").includes("rm -f fleet-db-y42-1"), "the container is removed");
+    const src = readFileSync(join(SCRIPTS, "db_up.py"), "utf8");
+    assert.match(src, /timeout=480\)/);
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+  assert.match(SOURCE, /"Run this one command as one Bash call with timeout 600000 ms:\\n" \+\n\s+progCmd\("db_up"/);
+  assert.ok(!/900000/.test(SOURCE));
 });

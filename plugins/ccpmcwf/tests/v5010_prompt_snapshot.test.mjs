@@ -117,10 +117,11 @@ const SCENARIOS = {
 // 8.0.0 car G7: infra:gates:r<n> runs sec_scan.py as its 3rd slot (security_scan; no new call); the code judge's script_findings carries security, the code-judge role sha moves; AUDIT_IMAGE is the real digest and the preflight runs gate_tools.py with timeout 600000 ms (the preflight pull; the probe pin moves)
 // 8.0.0 car G8: the code judge's script_findings top-level reason no longer says the gates are not run yet (SCRIPT_FINDINGS_GATES; no new call; probe unchanged)
 // 8.0.0 car R (#38): the plugin is ccpmcwf: the preflight globs cache/*/ccpmcwf/<V>/scripts and every judge-type call runs on agent ccpmcwf:judge (was fleet:judge). Checked: with those two names mapped back to fleet the 8.0.0 G8 pins match, so the change is the name only (all four pins move)
+// 8.0.0 car F (MEDIUM): infra:gates:r<n> runs security_scan first, then coverage, then mutation (A-M5; no new call); the gates have their own database (fleet_gates, A-M8); db_up asks for timeout 600000 ms (B-M3); the held-out runner's result schema allows store timeout and the scope-and-plan and held-out-runner role shas move (A-M6, B-M1); the program pins of cover_diff, mutants, scratch_copy, gate_tools and db_up move (probe unchanged)
 const PINS = {
-  "plan then build (confirm ask)": { calls: 85, sha256: "d725909471c89dcf8fa5225b6d7625d2a0583adc9538648ff4cfb920cc3f37a7" },
-  "confirm auto (gates, then build in one run)": { calls: 87, sha256: "a85f090674ca60e57ced5828c475b8faec235e187781b19dd7d7f13dbe2fac8d" },
-  "short path (one test writer)": { calls: 84, sha256: "40390bac8aa65712362b2f8e860d3ff4ab0038d542014c6f8246249839531ced" },
+  "plan then build (confirm ask)": { calls: 85, sha256: "8936564bd217c4f32f1861c1d6c225e045f1c5de7e6154e4a0ba5a76d44dd90f" },
+  "confirm auto (gates, then build in one run)": { calls: 87, sha256: "b9d33f85fa2eb392f0f66cca0cfeaec2c1c6337e7954fd04284cfc757dae40ea" },
+  "short path (one test writer)": { calls: 84, sha256: "bae78cc1f9e11208eac18efb8fd40085d2fca05a824ec3e13752eee316ca8e79" },
   "probe": { calls: 2, sha256: "aab6fce7bd5df91bec804e23456a9286dec671acaed09b844d59bba45a911de2" },
 };
 

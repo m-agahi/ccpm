@@ -4886,3 +4886,26 @@ pins sec-rules.yml. It is mounted in /rules beside fleet.yml; semgrep --config /
 yarn.lock, go.sum, node_modules/x.js and pkg/keys.py. A gitleaks release that changes the rules is
 a new copy and a new pin (the image digest is pinned too).
 ```
+
+### MEDIUM: A-M3 to A-M8, B-M1 to B-M3
+
+```text
+A-M3: the review asked for PYTHONSAFEPATH on the coverage children. coverage's execfile honors
+sys.flags.safe_path, so with -P the copy's cwd is not on sys.path and a repo whose tests import
+the package through python -m pytest goes red. The launcher work/cov.py (runpy.run_module
+'coverage', alter_sys) puts the private work dir first, so `import coverage` finds the real
+package; the tests still get the cwd. json keeps cwd = the copy (relative_files).
+A-M4: no PYTHONSAFEPATH either (same reason). The copy has no .git: fill(rev) reads rev into a
+private index (GIT_INDEX_FILE=work/idx) and checkout-index -a into the copy. The restore check is
+hash-object --no-filters against rev-parse <tree>:<path>. Residual: code under test runs as the
+same uid and can still read the fleet worktree beside it and diff against that; mutation is a
+signal against reward hacking, not against a hostile coder.
+A-M5: security_scan reads its scan dir before any code under test runs in this gate step. Residual:
+the coder's own earlier runs (the test writers', the judge's suite) run as the same uid, and a
+detached process they left can still change files; the scan reads the judged tree's blobs.
+A-M6: the filter is a plain substring check on when and then together (one alone is common text).
+A-M7: the ask branch comes before the IaC and build branches; the re-plan is staged and committed.
+B-M1/B-M2/B-M3: every bound sits under the 600000 ms Bash cap: 540 s per test run, 480 s per pull,
+560 s per program (FLEET_SCRATCH_RUN_DEADLINE, FLEET_GATE_TOOLS_DEADLINE, FLEET_DB_UP_DEADLINE
+lower them for tests, never raise them).
+```

@@ -34,7 +34,7 @@ try:
         _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
 except Exception:
     _PROG = {'name': None, 'sha256': None}
-import base64, json, os, re, shutil, subprocess, sys, tempfile
+import base64, json, os, re, shutil, signal, subprocess, sys, tempfile
 # fleet 7.3.0 (#54, L2189): the throwaway copy a role runs stubs, reverts, mutants and probes
 # in, with fixed git arguments and no shell. The scratch dir is derived here from the
 # worktree (<dirname(worktree)>/scratch, the fleet layout), never taken from the caller.
@@ -43,7 +43,8 @@ import base64, json, os, re, shutil, subprocess, sys, tempfile
 #     deleted (the CURRENT working tree). A rev: that commit, nothing copied.
 #     Prints {tmp, rev, copied, deleted, args}.
 #   run <worktree> <tmp> <argv json> [<env json>]: argv with cwd <tmp> and env added; the
-#     program's caps are lifted for the child. Prints {exit_code, tail, args}.
+#     program's caps are lifted for the child; its process group dies at 540 s (car F, B-M1).
+#     Prints {exit_code (null at the deadline), timed_out, tail, args}.
 #   patch <worktree> <tmp> <file> <old b64> <new b64>: replace the one occurrence of old by new
 #     in <tmp>/<file> (a regular file). Prints {patched, args}. The judges have no Edit tool.
 #   remove <worktree> <tmp>: worktree remove --force, then prune. Prints {removed, args}.
@@ -214,14 +215,30 @@ elif mode == 'run' and len(args) in (3, 4):
         # the repo's own commands are not bound by this program's caps
         for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
             _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
+    # car F (B-M1): the child's whole process group dies at the deadline (540 s, under the role's 600 s Bash
+    # call): exit_code null, timed_out true, never a test failure
+    _dl = os.environ.get('FLEET_SCRATCH_RUN_DEADLINE') or ''
+    DEADLINE = min(540, int(_dl)) if re.match(r'^[1-9][0-9]{0,3}$', _dl) else 540
+    late = False
     try:
-        p = subprocess.run(argv, cwd=tmp, env=dict(os.environ, **env, PATH=path), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, preexec_fn=lift)
-        code, text = p.returncode, p.stdout.decode('utf-8', 'replace')
+        with tempfile.TemporaryFile() as out:
+            p = subprocess.Popen(argv, cwd=tmp, env=dict(os.environ, **env, PATH=path), stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, preexec_fn=lift, start_new_session=True)
+            try:
+                code = p.wait(timeout=DEADLINE)
+            except subprocess.TimeoutExpired:
+                late, code = True, None
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            p.wait()
+            out.seek(0)
+            text = out.read().decode('utf-8', 'replace')
     except OSError as e:
         code, text = 127, str(e)
     finally:
         shutil.rmtree(guard, ignore_errors=True)
-    emit({'exit_code': code, 'tail': text[-TAIL:], 'args': args})
+    emit({'exit_code': code, 'timed_out': late, 'tail': text[-TAIL:], 'args': args})
 elif mode == 'patch' and len(args) == 5:
     tmp = copy_of(args[0], args[1])
     rel = args[2]

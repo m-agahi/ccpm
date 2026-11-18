@@ -471,7 +471,7 @@ test("8.0.0 G7: preflight pulls the pinned digest once when it is missing (podma
   // never a tag, never an unpinned image
   for (const image of ["openfantasy/audit-lab:latest", "openfantasy/audit-lab@sha256:PENDING"]) assert.deepEqual(census({ stubs: { rt: ["podman"] }, image, env: { STUB_EXISTS: "1" } }).calls, [], image);
   const src = readFileSync(GT, "utf8");
-  assert.match(src, /\[rt, 'pull', image\], 540\)/);
+  assert.match(src, /\[rt, 'pull', image\], 480\)/);
   assert.match(src, /preexec_fn=lift/);
 });
 
@@ -481,7 +481,7 @@ test("8.0.0 G7: the census: mutation is builtin for python (pytest) only", { ski
   for (const l of ["node", "go", "rust", "other"]) assert.equal(c.out.matrix[l].mutation, "unsupported", l);
 });
 
-test("8.0.0 G7: the preflight runs gate_tools.py as one Bash call with timeout 600000 ms (the pull's 540 s fits)", async () => {
+test("8.0.0 G7: the preflight runs gate_tools.py as one Bash call with timeout 600000 ms (the pull's 480 s and the census's 560 s fit)", async () => {
   const out = await runOne(happy(), ARGS);
   const pre = out.calls.find((c) => c.label === "preflight").prompt;
   assert.match(pre, /run this one command as one Bash call with timeout 600000 ms, with <scripts_dir> replaced and nothing else changed: sha256sum -- <scripts_dir>\/gate_tools\.py/);
@@ -521,8 +521,9 @@ test("8.0.0 G7: sec_scan runs as the 3rd slot of infra:gates:r<m> (no new agent)
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.ok(!out.labels.some((l) => /sec[_-]scan|security/.test(l)), out.labels.join(", "));
   const p = call(out, "infra:gates:r1").prompt;
-  assert.ok(p.indexOf("mutants.py") < p.indexOf("sec_scan.py"), "mutation, then security");
-  assert.deepEqual(inputsOf(p).gates, ["coverage", "mutation", "security_scan"]);
+  // 8.0.0 car F (A-M5): security first, before any code under test runs (coverage, mutation)
+  assert.ok(p.indexOf("sec_scan.py") < p.indexOf("cover_diff.py") && p.indexOf("cover_diff.py") < p.indexOf("mutants.py"), "security, coverage, mutation");
+  assert.deepEqual(inputsOf(p).gates, ["security_scan", "coverage", "mutation"]);
   const a = argsOf(p, "sec_scan");
   const c = argsOf(p, "cover_diff");
   assert.deepEqual(a, [c[0], c[1], c[2], c[5], "80", AUDIT_IMAGE]);

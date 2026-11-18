@@ -73,6 +73,7 @@ function fixture(opts = {}) {
     rmSync(join(wt, "pkg", "link.py"));
     writeFileSync(join(wt, "pkg", "link.py"), "x = 1\n\ny = 2\n");
   }
+  for (const m of opts.mk || []) mkdirSync(join(wt, m), { recursive: true });
   for (const [p, t] of Object.entries(opts.files || {})) writeFileSync(join(wt, p), t);
   // the judged tree object, written through a throwaway index (the worktree index stays as it is)
   const idx = join(d, "idx");
@@ -84,6 +85,8 @@ function fixture(opts = {}) {
   const log = join(d, "calls.log");
   const envlog = join(d, "env.log");
   symlinkSync(GIT, join(bin, "git"));
+  // 8.0.0 car F (A-M3): the real python3, for the python -m pytest shape
+  if (opts.py) symlinkSync(PY, join(bin, "python3"));
   const put = (n, body) => {
     writeFileSync(join(bin, n), "#!/bin/sh\n" + body);
     chmodSync(join(bin, n), 0o755);
@@ -469,4 +472,27 @@ test("8.0.0 G2: a changed source file coverage.py cannot measure (not python) gi
   assert.equal(x.out.status, "partial");
   assert.match(x.out.reason, /not measured \(not python\): pkg\/x\.js/);
   assert.deepEqual(x.out.findings, [{ path: "pkg/mod.py", lines: [9] }]);
+});
+
+// 8.0.0 car F (A-M3): python -m coverage put the copy (the judged tree) first on sys.path, so a tree-local
+// coverage package replaced the tool and wrote a clean report. The program now loads coverage through a
+// launcher in its private work dir; coverage run still gives the test run the cwd (as python -m pytest does).
+test("8.0.0 car F A-M3: a tree-local coverage package cannot fake the report (python -m pytest shape)", { skip: !HAVE_PY || spawnSync("python3", ["-c", "import pytest"]).status !== 0 }, () => {
+  const g0 = mkdtempSync(join(tmpdir(), "fleet-cov-real-"));
+  const main = (rep) => "import sys\na = sys.argv[1:]\nif a[:1] == ['json']:\n    open(a[a.index('-o') + 1], 'w').write(" + JSON.stringify(JSON.stringify(rep)) + ")\nsys.exit(0)\n";
+  try {
+    // the "real" coverage tool (on PYTHONPATH): run exits 0, json reports line 9 missing
+    mkdirSync(join(g0, "coverage"));
+    writeFileSync(join(g0, "coverage", "__init__.py"), "");
+    writeFileSync(join(g0, "coverage", "__main__.py"), main({ files: { "pkg/mod.py": { executed_lines: [1, 2, 5, 6, 7], missing_lines: [9], excluded_lines: [] } } }));
+    // the judged tree's own coverage package: a clean report
+    const files = { "coverage/__init__.py": "", "coverage/__main__.py": main({ files: { "pkg/mod.py": { executed_lines: [1, 2, 5, 6, 7, 9], missing_lines: [], excluded_lines: [] } } }) };
+    const x = fixture({ py: true, cmd: "python3 -m pytest -q <paths>", env: { PYTHONPATH: g0, PYTHONDONTWRITEBYTECODE: "1" }, files, mk: ["coverage"] });
+    assert.equal(x.r.status, 0, x.r.stderr);
+    assert.equal(x.out.status, "ran", x.out.reason);
+    // the real tool's report, not the tree's (the tree's own coverage/ files are changed lines it never ran)
+    assert.deepEqual(x.out.findings.find((f) => f.path === "pkg/mod.py"), { path: "pkg/mod.py", lines: [9] });
+  } finally {
+    rmSync(g0, { recursive: true, force: true });
+  }
 });

@@ -132,8 +132,12 @@ if argv[:2] == ['uv', 'run']:
         i += 2 if argv[i] == '--extra' else 1
 if argv[i:i + 1] == ['pytest']:
     head = argv[:i] + ['coverage']
+    shown = ' '.join(head)
 elif argv[:1] in (['python'], ['python3']) and argv[1:3] == ['-m', 'pytest']:
-    head, i = argv[:1] + ['-m', 'coverage'], 2
+    # car F (A-M3): never python -m coverage (the copy is first on sys.path, so a tree-local coverage
+    # package is the tool): a launcher in the private work dir (set below); coverage run still gives
+    # the test run the cwd, as python -m pytest does
+    head, i, shown = argv[:1] + [None], 2, argv[0] + ' -m coverage'
 else:
     emit('not_run', 'unsupported: the coverage gate runs a pytest test_cmd only (got ' + cmd + ')')
 if any(os.path.basename(x) in REFUSED for x in argv):
@@ -189,6 +193,10 @@ try:
     added = True
     git(tmp, 'read-tree', '-u', '--reset', tree)
     rc, data, log, rep = (os.path.join(work, x) for x in ('rc', 'data', 'log', 'cov.json'))
+    if head[-1] is None:
+        head[-1] = os.path.join(work, 'cov.py')
+        with open(head[-1], 'w') as fh:
+            fh.write("import runpy\nrunpy.run_module('coverage', run_name='__main__', alter_sys=True)\n")
     with open(rc, 'w') as fh:
         fh.write('[run]\nsource = .\nrelative_files = True\n[report]\nexclude_lines =\n    (?!x)x\n')
     # no COVERAGE_* variable reaches the child (the build env's COVERAGE_FILE among them): only argv names them
@@ -202,7 +210,7 @@ try:
     try:
         code, tail = run(head + ['--version'], tmp, env, log)
         if code != 0:
-            emit('not_run', 'no coverage tool: ' + ' '.join(head) + ' --version exit %d' % code)
+            emit('not_run', 'no coverage tool: ' + shown + ' --version exit %d' % code)
         code, tail = run(argv, tmp, env, log)
         if code != 0:
             # car F (G2 ruling): once more at the plan base; green there is the change's fault (the workflow stops)

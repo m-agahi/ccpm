@@ -390,6 +390,13 @@ test("AC-1981-1: with a declaration the database is up before the planner; every
   assert.match(hr, DSN_RE);
   assert.match(hr, /\/fleet_hrun$/);
   assert.ok(!Object.values(dsns).includes(hr), "no other role's DSN");
+  // 8.0.0 car F (A-M8): the gate programs' tests use their own database (fleet_gates), not the code judge's
+  const gp = call(out.build, "infra:gates:r1").prompt;
+  const ge = JSON.parse([...gp.matchAll(/cover_diff\.py'((?: '(?:[^']|'\\'')*')+)/g)][0][1].match(/'((?:[^']|'\\'')*)'/g)[4].slice(1, -1).replace(/'\\''/g, "'"));
+  const gd = Object.values(ge).find((v) => /^mysql:/.test(v));
+  assert.match(gd, DSN_RE);
+  assert.match(gd, /\/fleet_gates$/);
+  assert.ok(!Object.values(dsns).includes(gd) && gd !== hr, "no other role's DSN");
 });
 
 test("1981: no declaration starts no database and changes no role input", async () => {
@@ -514,7 +521,7 @@ test("1981: confirm auto continues into the build and adds the build's databases
   const add = out.labels.indexOf("infra:db-up:add");
   assert.ok(add > out.labels.indexOf("infra:verify-plan"), out.labels.join(", "));
   assert.equal(out.labels[add - 1], "infra:path-check:db-up:add");
-  assert.deepEqual(inputsOf(call(out, "infra:db-up:add").prompt).dbs, ["fleet_w_ac1", "fleet_w_ac2", "fleet_tjudge", "fleet_coder", "fleet_cjudge", "fleet_review", "fleet_hooks", "fleet_hrun"]); // 8.0.0 (G4): + the held-out runner's own
+  assert.deepEqual(inputsOf(call(out, "infra:db-up:add").prompt).dbs, ["fleet_w_ac1", "fleet_w_ac2", "fleet_tjudge", "fleet_coder", "fleet_cjudge", "fleet_review", "fleet_hooks", "fleet_hrun", "fleet_gates"]); // 8.0.0 (G4): + the held-out runner's own; car F (A-M8): + the gate programs' own
   assert.match(dsnOf(out, "role:fleet-coder:r1"), /\/fleet_coder$/);
   assert.equal(out.labels.filter((l) => l === "infra:db-down").length, 1);
 });

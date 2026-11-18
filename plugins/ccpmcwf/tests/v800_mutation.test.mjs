@@ -420,8 +420,8 @@ test("8.0.0 G5: mutants runs as the 2nd slot of infra:gates:r<m> (no new agent, 
   assert.ok(p.indexOf("cover_diff.py") < p.indexOf("mutants.py"), "coverage first, then mutation");
   assert.match(p, /one after the other, never in the background or in parallel/);
   assert.deepEqual(argsOf(p, "mutants"), argsOf(p, "cover_diff"));
-  // 8.0.0 (G7): the security gate is the 3rd slot (v800_security)
-  assert.deepEqual(inputsOf(p).gates, ["coverage", "mutation", "security_scan"]);
+  // 8.0.0 (G7): the security gate is a slot too (v800_security); car F (A-M5): it runs first
+  assert.deepEqual(inputsOf(p).gates, ["security_scan", "coverage", "mutation"]);
   // the default stub: no mutation run (not_run); the judge sees it; mutation stays listed with its reason
   const cj = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
   assert.deepEqual(cj.script_findings.mutation, { status: "not_run", reason: "tool absent: no mutation run", survived: [] });
@@ -545,4 +545,15 @@ test("8.0.0 G5 step 0: the 'store read ok' mark survives a resume (saved in the 
   const st2 = stateJsonOf(call(await run(withHO({ "role:fleet-held-out-runner:r1": missing }), ARGS), "infra:state:committed:r1").prompt);
   assert.equal(st2.held_out_seen, false);
   assert.match(SOURCE, /if \(resume\.held_out_seen === true\) state\.gates\.held_out = /);
+});
+
+// 8.0.0 car F (A-M4): the mutation copy has no .git, so code under test cannot see the mutant with git diff
+test("8.0.0 car F A-M4: the mutation copy holds the judged tree with no .git (git diff cannot force a kill); the restore check still holds", { skip: !HAVE_PY }, () => {
+  const y = once({ add: WEAK, pytest: 'if [ -e .git ]; then echo git >> "$LOG"; git diff --quiet || exit 1; fi\necho run >> "$LOG"\nexit 0\n' });
+  assert.equal(y.r.status, 0, y.r.stderr);
+  assert.equal(y.out.status, "ran", y.out.reason);
+  assert.ok(!y.calls.includes("git"), "no .git in the copy: " + y.calls.join(","));
+  assert.ok(y.out.survived.length > 0 && y.out.killed === 0, "every mutant survives a suite that checks nothing");
+  assert.ok(y.same);
+  assert.deepEqual(y.leftovers, []);
 });

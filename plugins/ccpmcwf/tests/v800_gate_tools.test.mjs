@@ -158,7 +158,7 @@ test("8.0.0 G1-5: gate_tools.py names no IaC binary and no host scanner; it runs
     assert.ok(!new RegExp("\\b" + n + "\\b", "i").test(src), "gate_tools.py names " + n);
   assert.equal(src.match(/subprocess\.\w+\(/g).length, 1, "one subprocess call");
   assert.ok(!/'(run|exec)'/.test(src), "no run or exec verb");
-  assert.deepEqual(src.match(/'pull'.*$/gm), ["'pull', image], 540)"], "one pull, of the pinned image only");
+  assert.deepEqual(src.match(/'pull'.*$/gm), ["'pull', image], 480)"], "one pull, of the pinned image only");
 });
 
 // ---------------------------------------------------------------- the workflow

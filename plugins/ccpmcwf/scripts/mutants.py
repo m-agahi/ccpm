@@ -36,8 +36,8 @@ except Exception:
     _PROG = {'name': None, 'sha256': None}
 # fleet 8.0.0 (G5, ADR-1316): the mutation gate, a built-in diff-scoped mutator (no external tool).
 # Args: <worktree> <base> <tree> <test_cmd> <env json> <exclude json> (those of cover_diff.py).
-# A throwaway detached worktree <dirname(worktree)>/scratch/mut-* at <base> with the judged <tree>
-# read in (the main worktree is never touched). The mutants: comparison flip, boolean swap,
+# A throwaway dir <dirname(worktree)>/scratch/mut-* with the files of the judged <tree> and no .git
+# (car F, A-M4; the main worktree is never touched). The mutants: comparison flip, boolean swap,
 # boundary +-1 and dropped negation, on the tokens (never a string or a comment) of the added
 # lines of the changed .py files (git diff -U0 <base> <tree>, the <exclude> paths aside); at
 # most 200, spread evenly over the lines (round-robin; a round larger than the room left takes
@@ -46,8 +46,8 @@ except Exception:
 # is green) and once per mutant, within one 540 s deadline from the
 # start (hit: partial, "N of M not run"); a mutant run is bounded by 4x the baseline + 5 s (at
 # least 10 s; a timeout counts as killed). After each run the file is put back from its backup
-# (a fresh file, never written through a link) and checked byte for byte, and a final git diff
-# checks the mutated files against the tree: a restore that does not hold exits non-zero. A copy
+# (a fresh file, never written through a link) and checked byte for byte, and a final hash check
+# compares the mutated files with their blobs in the tree: a restore that does not hold exits non-zero. A copy
 # a killed run left behind is removed by the next run. Prints {status: ran|partial|not_run,
 # reason, killed, survived: [{id, path, line, op}], not_run, budget_hit, args}. No result cache
 # (security review): code under test runs as this uid and can write the scratch dir, so a digest
@@ -93,8 +93,8 @@ def emit(status, reason, killed=0, survived=(), not_run=0, budget_hit=False):
     out['digest'] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
     print(json.dumps(out, ensure_ascii=False))
     sys.exit(0)
-def git(cwd, *a):
-    r = subprocess.run(G + ['-C', cwd] + list(a), capture_output=True, stdin=subprocess.DEVNULL)
+def git(cwd, *a, env=None):
+    r = subprocess.run(G + ['-C', cwd] + list(a), capture_output=True, stdin=subprocess.DEVNULL, env=env)
     if r.returncode != 0:
         sys.exit('git ' + ' '.join(a[:2]) + ' failed: ' + r.stderr.decode('utf-8', 'replace')[-1000:])
     return r.stdout
@@ -237,13 +237,19 @@ subprocess.run(G + ['-C', wt, 'worktree', 'prune'], capture_output=True)
 work = tempfile.mkdtemp()
 guard = tempfile.mkdtemp(prefix='mut-guard-', dir=scratch)
 tmp = tempfile.mkdtemp(prefix='mut-', dir=scratch)
-added = False
+def fill(rev):
+    # car F (A-M4): a plain dir with the files of <rev> and no .git (a temp index outside the copy), so
+    # code under test cannot see a mutant with git diff; a fresh dir each time (the base run: no file of
+    # the tree's run stays)
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.mkdir(tmp, 0o700)
+    e = dict(os.environ, GIT_INDEX_FILE=os.path.join(work, 'idx'))
+    git(wt, 'read-tree', rev, env=e)
+    git(wt, 'checkout-index', '-a', '-f', '--prefix=' + tmp + '/', env=e)
 try:
     for n in REFUSED:
         os.symlink(shutil.which(n, path=_RAW_PATH) or shutil.which('false', path=_RAW_PATH) or '/bin/false', os.path.join(guard, n))
-    git(wt, 'worktree', 'add', '--detach', tmp, base + '^{commit}')
-    added = True
-    git(tmp, 'read-tree', '-u', '--reset', tree)
+    fill(tree)
     # the mutants, from the copy's own files (what the tests import)
     orig, per, bad = {}, [], []
     for p in sorted(want):
@@ -293,9 +299,8 @@ try:
         late(M)
     if code != 0:
         # car F (G2 ruling): once more at the plan base; green there is the change's fault (the workflow stops)
-        git(tmp, 'read-tree', '-u', '--reset', base)
-        # security review: no untracked or ignored file of the tree's run reaches the base run
-        git(tmp, 'clean', '-ffdxq')
+        # security review: a fresh copy, so no untracked or ignored file of the tree's run reaches the base run
+        fill(base)
         try:
             bc = run(run_argv, tmp, env, log)
         except Late:
@@ -323,15 +328,14 @@ try:
                 killed += 1
     except Late:
         pass
-    # the diff check: every mutated file is the tree's again
-    if subprocess.run(G + ['-C', tmp, 'diff', '--quiet'] + D + [tree, '--'] + sorted(orig), capture_output=True).returncode != 0:
+    # the hash check (no .git in the copy): every mutated file hashes to its blob in the tree again
+    ps = sorted(orig)
+    if ps and git(wt, 'hash-object', '--no-filters', '--', *[os.path.join(tmp, p) for p in ps]).split() != git(wt, 'rev-parse', *[tree + ':' + p for p in ps]).split():
         sys.exit('restore check: the copy differs from the judged tree after the mutant runs')
     if done < M:
         late(M - done)
     emit(st, '; '.join(['%d killed, %d survived of %d mutant(s)' % (killed, len(surv), M)] + notes), killed, surv)
 finally:
-    if added:
-        subprocess.run(G + ['-C', wt, 'worktree', 'remove', '--force', tmp], capture_output=True)
     shutil.rmtree(tmp, ignore_errors=True)
     shutil.rmtree(work, ignore_errors=True)
     shutil.rmtree(guard, ignore_errors=True)

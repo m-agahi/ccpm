@@ -56,7 +56,9 @@ Workflow({ name: "ccpmcwf:build-engine",
 ```
 
 It finds the plugin's scripts and roles dirs, checks the sha256 of every program and role file, runs the
-PATH check on `<repo>`, and has one cheap agent read one role file the way a role does. It makes no worktree, runs no role and writes nothing. Report `status`,
+PATH check on `<repo>`, and has one cheap agent read one role file the way a role does. It makes no worktree, runs no role and writes nothing in the repo. The first probe after an install
+pulls the pinned gate image once (about 10 GB, at most 480 s; the census bounds its check and pull at
+560 s inside the 600 s call); a later probe only checks it. Report `status`,
 `reason`, and the `probe` table (`scripts_dir`, `roles_dir`, and per role `sha256` and `model`). A `needs_human` reason that names a role file or the scripts dir means the install is
 stale or changed: tell the user to reinstall the ccpmcwf plugin and run `/reload-plugins`.
 

@@ -447,6 +447,32 @@ token counts come from the smoke run, after this entry.
   `[extend] useDefault = true` inherits that list (checked live). The global regexes and
   stopwords and the per-rule allowlists stay. Live check with the pinned image: a secret in
   `package-lock.json`, `yarn.lock`, `go.sum` and `node_modules/x.js` is found (`ran`).
+- A-M3: `cover_diff.py` runs `coverage` through a launcher in its private work dir
+  (`runpy.run_module('coverage')`), so the first `sys.path` entry is that dir, not the copy: a
+  tree-local `coverage/` package cannot fake the report. Not `PYTHONSAFEPATH`: coverage honors
+  `sys.flags.safe_path` and would then drop the cwd that `python -m pytest` gives the tests.
+- A-M4: `mutants.py` builds its mutation copy with `git read-tree` and `checkout-index` into the
+  private work dir: no `.git`, so code under test cannot `git diff` the mutation. The base re-run
+  refills the copy the same way. The restore check compares blob hashes with the judged tree.
+- A-M5: `infra:gates:r<n>` runs `security_scan` first, then `coverage` and `mutation`: the scan dir
+  is read before any code under test runs.
+- A-M6: the planner's `memory_notes` entries that hold a held-out example (its `when` and `then`
+  together) are dropped; `tldr`, `plan_diff` lines and criterion text that hold one are redacted.
+  The scope-and-plan role bans the values in every other output field, and no longer says a
+  later release runs them.
+- A-M7: an unattended re-plan after the held-out gate ran in this build asks (`awaiting_confirmation`,
+  the re-plan ready): the re-plan resets `state.gates`, so its auto build would lose that result.
+- A-M8: the gates get their own test database (`fleet_gates`, in the verify-plan list), not the
+  code judge's.
+- B-M1: `scratch_copy.py run` kills the child's process group at 540 s and prints
+  `timed_out`; the held-out runner role asks for one Bash call with timeout 600000 ms and returns
+  `store: "timeout"`, which the script turns into `not_run` (a stop after an earlier round read the
+  store). A slow test is no longer a failing example.
+- B-M2: `gate_tools.py` bounds its image pull at 480 s and the check, the pull and the check
+  again at 560 s (inside the preflight's 600 s call). The first probe pulls the image once.
+- B-M3: `db_up.py` bounds `podman run` (a cold image pull) at 480 s and the whole run at 560 s; the
+  prompt asks for timeout 600000 ms (was 900000, over the Bash cap). A bound hit removes the
+  container.
 
 ### Tests changed on purpose (car F)
 
@@ -457,6 +483,10 @@ token counts come from the smoke run, after this entry.
   new reason.
 - A-H2: the sec_scan argv test expects `--config /rules/gitleaks.toml`, and the rules mount holds
   `gitleaks.toml`.
+- A-M5: the gate slot order tests expect security_scan, coverage, mutation; the prompt snapshot
+  pins move (car F line).
+- A-M8: the gates' DSN ends in `/fleet_gates`; the db-up list adds it.
+- B-M2: the G1-5 and G7 pull tests expect 480 s.
 
 ### Upgrade notes
 
@@ -465,6 +495,8 @@ token counts come from the smoke run, after this entry.
   `/plugin install ccpmcwf@maxagahi-marketplace` and `/reload-plugins`. Check the install with
   `/ccpmcwf:build-task probe`.
 - `/build-task --unattended` is now `/build-task --auto`.
+- Run `/ccpmcwf:build-task probe` once after the install: its preflight pulls the pinned gate image
+  (`AUDIT_IMAGE`, about 10 GB; car F, B-M2) once. A later probe or run only checks it.
 - The rename leaves the plan and run-state refs, the branches and worktrees, the policy file and the
   held-out store where they are, under their old names.
 

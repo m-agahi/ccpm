@@ -43,7 +43,12 @@ except Exception:
 # is missing, one pull of that digest (ADR-1315: the one network step; never a
 # tag), then the check again. It runs no image and no scanner. Host scanners are
 # never named here.
-import hashlib, json, os, re, shutil, subprocess, sys
+import hashlib, json, os, re, shutil, subprocess, sys, time
+# car F (B-M2): the check, the pull and the check again fit the preflight's 600 s Bash call: the pull at
+# most 480 s, the whole at most 560 s (a test may lower it, never raise it)
+_dl = os.environ.get('FLEET_GATE_TOOLS_DEADLINE') or ''
+TOTAL = min(560, int(_dl)) if re.match(r'^[1-9][0-9]{0,3}$', _dl) else 560
+_t0 = time.monotonic()
 if len(sys.argv) != 3:
     sys.stderr.write('usage: gate_tools.py <repo> <image>\n')
     sys.exit(2)
@@ -66,14 +71,14 @@ else:
         for k in (_r.RLIMIT_AS, _r.RLIMIT_CPU):
             _r.setrlimit(k, (_r.getrlimit(k)[1],) * 2)
     def sh(argv, t):
-        return subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=t, preexec_fn=lift).returncode
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=max(0.1, min(t, TOTAL - (time.monotonic() - _t0))), preexec_fn=lift).returncode
     check = [rt, 'image', 'exists' if runtime == 'podman' else 'inspect', image]
     try:
         code = sh(check, 30)
         present = code == 0
         if not present:
             reason = 'image not present locally (exit %d)' % code
-            pull = sh([rt, 'pull', image], 540)
+            pull = sh([rt, 'pull', image], 480)
             present = pull == 0 and sh(check, 30) == 0
             reason = None if present else reason + ('; pull exit 0, still missing' if pull == 0 else '; pull failed (exit %d)' % pull)
     except Exception as e:

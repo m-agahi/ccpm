@@ -138,9 +138,9 @@ Each criterion gets a stable id (`AC1`, `AC2`, …) and must be:
 
 Also produce `held_out_examples`: at least one per criterion where feasible, in the same literal `given / when / then` form, using DIFFERENT inputs from the plan's examples. They exist to catch a coder who fits the visible examples only.
 
-- The workflow stores them outside the worktree, on this machine only, and never forwards them to another role. An example whose `when` and `then` both appear in the plan doc, or that equals one of the plan's visible examples, is dropped. A later release will execute them on the finished code, out of the coder's sight. Write them as if they were executed.
+- The workflow stores them outside the worktree, on this machine only, and never forwards them to another role. An example whose `when` and `then` both appear in the plan doc, or that equals one of the plan's visible examples, is dropped. A runner role executes them on the judged code in every code round, out of the coder's sight.
 - Return them ONLY in your StructuredOutput object.
-- NEVER write them into the plan file, any other file, a commit, a PR, or the worktree. The coder can read every file in the worktree; a held-out example written anywhere there is no longer held out. Do not mention their values in `reason` or `tldr` either.
+- NEVER write them into the plan file, any other file, a commit, a PR, or the worktree. The coder can read every file in the worktree; a held-out example written anywhere there is no longer held out. Never put their values in any other output field: `reason`, `tldr`, `plan_diff`, a criterion's `text` or `examples`, `memory_notes`, or anything else. The workflow drops a `memory_notes` entry and redacts `tldr`, `plan_diff` or criterion text that holds an example's `when` and `then` together.
 
 Plan-audit rejects a plan with an untestable criterion, a criterion without a literal example, no `allowed_additions`, an untruthful `plan_diff`, a missing repo obligation, a source requirement silently omitted, or a `test_cmd` that does not run. Fix it here. A missing "Non-goals" section, missing I/O failure paths, a missing STRIDE refusal criterion or a `source_quote` that is not verbatim is an advisory finding: fix it when a re-plan round sends it back to you.
 

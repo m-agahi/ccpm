@@ -1,7 +1,7 @@
 export const meta = {
   name: "build-engine",
   description:
-    "Internal engine of /ccpmcwf:build-task. Do not invoke directly.\nplan: /ccpmcwf:build-task runs it first, for a new task: intake, plan, audit, local plan commit, then it returns for confirmation (confirm \"auto\" or an eligible \"default\" plan: the intent, command and scope gates, then the build in the same run).\nbuild: /ccpmcwf:build-task runs it after the user confirms the plan: test writers, test judge, freeze, coder, code judge, gates, one commit, push, PR, independent review, write-back. Every gate runs in script code.\nprobe: /ccpmcwf:build-task probe runs it to check the install: scripts and role files hashed, PATH check, nothing written.",
+    "Internal engine of /ccpmcwf:build-task. Do not invoke directly.\nplan: /ccpmcwf:build-task runs it first, for a new task: intake, plan, audit, local plan commit, then it returns for confirmation (confirm \"auto\" or an eligible \"default\" plan: the intent, command and scope gates, then the build in the same run).\nbuild: /ccpmcwf:build-task runs it after the user confirms the plan: test writers, test judge, freeze, coder, code judge, gates, one commit, push, PR, independent review, write-back. Every gate runs in script code.\nprobe: /ccpmcwf:build-task probe runs it to check the install: scripts and role files hashed, PATH check, nothing written; a first probe pulls the gate image (about 10 GB) once.",
   whenToUse:
     "Run by the /build-task skill. args: {mode: \"plan\", input, repo, date, run_nonce, project?, confirm?} or {mode: \"build\", plan_ref, date, run_nonce, project?, confirm?} or {mode: \"probe\", repo, date, run_nonce} (preflight only: scripts and role files hashed, PATH check; returns the table); confirm is \"ask\" (when omitted), \"default\" (the auto gates for an eligible bug-fix plan, else ask) or \"auto\". If invoked with no args, do not call Workflow again: tell the user to run /ccpmcwf:build-task <task>.",
   phases: [
@@ -510,7 +510,7 @@ findings: REVIEW_FINDINGS,
 }),
 "fleet-ci-classifier": roleSchema({ checks: { type: "array", items: { type: "object", properties: { name: STR, cause: { type: "string", enum: CI_CAUSES } }, required: ["name", "cause"] } } }),
 "fleet-held-out-runner": roleSchema({
-store: { type: "string", enum: ["ok", "missing", "mismatch", "error"] },
+store: { type: "string", enum: ["ok", "missing", "mismatch", "error", "timeout"] },
 store_digest: STR_OR_NULL,
 results: { type: ["array", "null"], items: { type: "object", properties: { criterion: STR, index: { type: "integer" }, pass: { type: "boolean" } } } },
 }),
@@ -1512,21 +1512,21 @@ const PROGRAM_SHA256 = {
 "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
 "changed_defs": "873f1bcb97c7631934512729941deca1e9da49bc84957f1e78ec171293840644",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
-"cover_diff": "f86d5f3d873d2680138bf6cf052c9bed1c16ba86c602754a72d0f30318ff4d93",
+"cover_diff": "75601765b02902c58eacee9a45ab87f3699a8111ac30631ad77da3b107a87e6f",
 "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
 "db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
-"db_up": "7e42061a10c96ef7234e6751be79d592af1df301c9f8c0c90ab296cc44fb24a7",
+"db_up": "02675bec7b81431aebca49fb129baed379ff3b1f53f2bb6ba5fba26678e17c3c",
 "exclude_add": "8e510601a0deac5baa673f1a888a78fa28c3cf49c20e2949a539252ffdea3566",
 "fleet_branch": "f1af514598ab542d58a16456f00e5cba0aeb43131fc2eab1618e2ca87bf846d7",
 "fleet_scan": "2cd4e1171e82f47fa2c1356ba175398f33bc10ae65258720cf113b65cb78969f",
 "format_files": "a8a416d1d5566038a485428fcc82d792a90923578e1ba471f9c3a12a846324ba",
-"gate_tools": "208fd938d377ba0a051fe3e9cd0bcd13aca1040f1ee544c40cc10699db0cd784",
+"gate_tools": "328c31407cf9dff8099e1b5c60f3028db5a32d48b9eb344fa6b75c5dcd9a833c",
 "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
 "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
 "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
 "held_out": "cd9c62029ca923706d62a815728e67297a674e917c88f2c83fd4e2c301d740aa",
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
-"mutants": "96dd53c9576ce61d88d714c948f08f89e25c5abc34bd332259ff5a81f5490c86",
+"mutants": "542697eb5b0204253df1d8bca4214a9c596872244a8352d6f4825603c2fc10a6",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1548,7 +1548,7 @@ const PROGRAM_SHA256 = {
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
 "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
 "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
-"scratch_copy": "a32ea715f21ed91fccf4689c84f8a8e8ceab62b30439f2061ba6da35d6defae3",
+"scratch_copy": "d8eaf27a102911048b11238cfdc271e5adbd30c0668c1e97e7d0d074654cfa3a",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
 "sec_scan": "0fc7162ba04a3dde76540e054e173093f46da461d507ecbe1f67ba64b4f9599a",
 "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",
@@ -1566,7 +1566,7 @@ const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
 "fleet-code-judge": "fdd95e92358734335190c162d165a5e72d0b10ce4c6f17397b878869810cf4eb",
 "fleet-coder": "fca268a7affc87d1257b161a8138a78e1a17965063d1ffb7fe9b1a7c6d165547",
-"fleet-held-out-runner": "30cae706ba8631be377b92c3bf0d44714511b96742b54689111b2d1a29fcbe1f",
+"fleet-held-out-runner": "9af2ac6992de27f66ea08a98c85c5da1cd8d1966bdeb8412d58e080b9c0bf5b8",
 "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
 "fleet-pr-opener": "28a9ebb7770541b23050f249997cb447453be6ab58dcc495f09490d3109e772a",
 "fleet-test-judge": "2dd18aedc8580c68583951ede4714e876a9752ac723e27558d1c17f5488b7d04",
@@ -1574,7 +1574,7 @@ const ROLE_SHA256 = {
 "gate-change-nonweakening-sweep": "3634918d362a90dcf4a124eaeda7cf871950a124773b34ff68bd27695fae3a1b",
 "plan-audit": "652f50e283b40d5d8e5ceac2c6d6112e5b9be43d9df5143254741fabd73ddca0",
 "pr-review": "2a82c6c1413fde77cb92a973804ce3313192f5772e16023cf3bc8d3161de700e",
-"scope-and-plan": "f97df1173552dfddf503864c06a3cfb75a8fce9b1a661981566ca236c8cb023b"
+"scope-and-plan": "39b1707582cceae5e2e04024a52939eec49e2b5e6e44b8e110296856345fc59e"
 };
 // ROLE_SHA256_END
 // ROLE_DISPATCH_BEGIN
@@ -3949,6 +3949,7 @@ if (!r || r.status !== "ok") halt(st, label + " returned " + st, "role");
 if (roleFileProblem(RUNNER, { role_file: r.role_file }) || driftOf(RUNNER, r)) halt(st, label + ": contract drift", "contract");
 const stop = (why) => halt(st, label + ": " + why, "gates");
 if (r.store === "missing") return prev.seen ? stop("store file missing after an earlier round of this build read it") : nr("store file missing on this machine");
+if (r.store === "timeout") return prev.seen ? stop("a held-out test run hit its deadline after an earlier round of this build read the store") : nr("a held-out test run hit its deadline");
 if (r.store !== "ok") stop("held_out.py show: store " + r.store);
 if (r.store_digest !== ho.sha256) stop("store_digest off the seal");
 const pc = ho.per_criterion;
@@ -4980,6 +4981,10 @@ if (!Array.isArray(plan.plan_diff) || !plan.plan_diff.length || !plan.plan_diff.
 halt("needs_human", "role scope-and-plan contract drift: plan_diff must be a non-empty array of strings", "contract");
 if (typeof plan.tldr !== "string" || !plan.tldr.trim())
 halt("needs_human", "role scope-and-plan contract drift: tldr must be a non-empty string", "contract");
+const hoHit = (x) => [].concat(plan[HELD_OUT_KEY] || []).some((e) => e && e.when && e.then && (x = x === Object(x) ? JSON.stringify(x) : String(x)).includes(e.when) && x.includes(e.then));
+const red = (x) => (hoHit(x) ? "(held-out text redacted)" : x);
+for (const f of state.findings) f.notes = f.notes.filter((n) => !hoHit(n));
+Object.assign(plan, { tldr: red(plan.tldr), plan_diff: plan.plan_diff.map(red), criteria: plan.criteria.map((c) => (c && hoHit(c.text) ? { ...c, text: red(c.text) } : c)) });
 const factsProblem = planFactsProblem(plan.test_cmd, plan.repo_obligations);
 if (factsProblem) halt("needs_human", factsProblem.msg, factsProblem.gate);
 const tcProblem = testCmdProblem(plan.test_cmd);
@@ -6318,7 +6323,7 @@ state.path = shortPath ? "short" : "full";
 const maxTestRounds = shortPath ? MAX_SHORT_TEST_ROUNDS : MAX_TEST_ROUNDS;
 const testable = testableOf(criteria);
 const writerDbs = shortPath ? ["w_short"] : testable.map((c) => "w_" + c.id);
-await testDbStep(v.test_db, "infra:verify-plan", mainWt, defaultBranch, "Verify", writerDbs.concat(["plan", "audit", "tjudge", "coder", "cjudge", "review", "hooks", "hrun"]), names.taskId);
+await testDbStep(v.test_db, "infra:verify-plan", mainWt, defaultBranch, "Verify", writerDbs.concat(["plan", "audit", "tjudge", "coder", "cjudge", "review", "hooks", "hrun", "gates"]), names.taskId);
 const frozenFiles = [];
 for (const c of testable) for (const f of c.test_files) frozenFiles.push(f);
 const hashedFiles = frozenFiles;
@@ -7659,8 +7664,8 @@ continue;
 const judgeObligations = await checkScripts("infra:check-scripts:r" + m, planFacts.repo_obligations, mainWt, "Code");
 await resetBuild("gates:r" + m, ["gates-r" + m], "Code");
 const tc0 = planFacts.test_cmd;
-const ga = [mainWt, updRound ? upd.base : planBase, h.fingerprint.tree, tc0.command, JSON.stringify(Object.assign({}, tc0.env, testEnvFor("cjudge", "gates-r" + m))), JSON.stringify(frozenFiles)];
-await runGate("infra:gates:r" + m, [["coverage", "cover_diff", ga], ["mutation", "mutants", ga], ["security_scan", "sec_scan", [mainWt, ga[1], ga[2], ga[5], String(planFacts.est_diff_lines), AUDIT_IMAGE]]], "Code");
+const ga = [mainWt, updRound ? upd.base : planBase, h.fingerprint.tree, tc0.command, JSON.stringify(Object.assign({}, tc0.env, testEnvFor("gates", "gates-r" + m))), JSON.stringify(frozenFiles)];
+await runGate("infra:gates:r" + m, [["security_scan", "sec_scan", [mainWt, ga[1], ga[2], ga[5], String(planFacts.est_diff_lines), AUDIT_IMAGE]], ["coverage", "cover_diff", ga], ["mutation", "mutants", ga]], "Code");
 const cov = state.gates.coverage;
 const mut = state.gates.mutation;
 const sec = state.gates.security_scan;
@@ -8087,6 +8092,7 @@ const prHead = state.pr ? ctx.expectedHead : null;
 const iac = Array.from(new Set(planScopePaths(p.planFacts, p.criteria).map((q) => normPath(String(q))))).filter(isIacPath);
 if (state.unattended && ctx.testConflict) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": the plan_wrong started from a coder test conflict");
 else if (state.unattended && state.autoReplanned) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": the run already built one re-plan");
+else if (state.unattended && (state.gates.held_out || {}).seen) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": this build already ran the held-out gate");
 else if (state.unattended && iac.length) autoDecide("plan_wrong", "ask", who + " re-plan " + n + ": plan touches IaC path " + logPath(iac.join(", ")));
 else if (state.unattended) {
 state.autoReplanned = true;
@@ -8370,7 +8376,7 @@ inputsLine(inputs) +
 (inputs.mode === "up"
 ? "1. Run this one command:\n" + progCmd("db_sweep", []) + "\nIt prints one JSON object " + printsKeys("db_sweep") + ": " + relayAs("sweep") + " (the script recomputes the digest). Non-zero exit -> sweep null; go on.\n2. "
 : "") +
-"Run this one command as one Bash call with timeout 900000 ms:\n" +
+"Run this one command as one Bash call with timeout 600000 ms:\n" +
 progCmd("db_up", cmdArgs) +
 "\nIt prints one JSON object " + printsKeys("db_up") + ": " + relayAs("up") + " (the script recomputes the digest). Non-zero exit -> status needs_human with its stderr (the program left no container running).\n" +
 "Return {status, reason, " + (inputs.mode === "up" ? "sweep, " : "") + "up}."

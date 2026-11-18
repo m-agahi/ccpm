@@ -52,8 +52,12 @@ def fail(code, msg):
     sys.stderr.write(msg + '\n')
     sys.exit(code)
 PM = shutil.which('podman')
+# car F (B-M3): the whole run fits the prompt's 600 s Bash call (560 s; a test may lower it, never raise it)
+_dl = os.environ.get('FLEET_DB_UP_DEADLINE') or ''
+TOTAL = min(560, int(_dl)) if re.match(r'^[1-9][0-9]{0,3}$', _dl) else 560
+_T0 = time.monotonic()
 def pm(*a, timeout=120):
-    return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
+    return subprocess.run([PM] + list(a), capture_output=True, timeout=max(1, min(timeout, TOTAL - (time.monotonic() - _T0))), preexec_fn=lift)
 def tail(r):
     return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
 # usage: db_up.py up <name> <image> <ttl> <nonce> <dbs json> [<test_db_prefix>] [grant:PROCESS]
@@ -154,7 +158,12 @@ cmd = ['run', '-d', '--rm', '--name', name, '--label', 'fleet.db=1', '--label', 
        '-e', 'MARIADB_ROOT_PASSWORD=' + root]
 if mech == 'podman-timeout':
     cmd += ['--timeout', str(ttl)]
-r = pm(*(cmd + [image]), timeout=900)
+try:
+    # a cold pull happens here: at most 480 s
+    r = pm(*(cmd + [image]), timeout=480)
+except subprocess.TimeoutExpired:
+    subprocess.run([PM, 'rm', '-f', name], capture_output=True, timeout=60, preexec_fn=lift)
+    fail(5, 'podman run (with a cold image pull) hit its bound: no container left; pull the image once by hand or retry')
 if r.returncode != 0:
     pm('rm', '-f', name)
     fail(5, 'podman run failed: ' + tail(r))

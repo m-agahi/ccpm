@@ -1090,8 +1090,9 @@ the pinned image is present, else `unsupported`). The security scan runs only in
 container (ADR-1315): the census names the runtime (podman, else docker) and checks the image with
 the runtime's `image exists` / `image inspect`, and only for an image pinned by a 64-hex digest
 (else `image digest not pinned`). When the pinned image is missing, it pulls that digest once
-(540 s; the preflight runs it with timeout 600000 ms) and checks again: the one network step, never
-a tag. A failed pull is not fatal: the image is not available, with the reason. It runs no image. Host semgrep and gitleaks are never reported, and the program names no IaC
+(at most 480 s, and the check, the pull and the check again at most 560 s; the preflight runs it with
+timeout 600000 ms) and checks again: the one network step, never a tag. So the first probe after an
+install pulls the image (about 10 GB) once; run it once after an upgrade. A failed pull is not fatal: the image is not available, with the reason. It runs no image. Host semgrep and gitleaks are never reported, and the program names no IaC
 binary. The script logs one `gate census` line per language and one for the container before
 intake, and `probe.gate_tools` carries the rows. The census is advisory: an unusable relay (no
 digest, other args, a malformed shape) logs `gate census unusable` and marks no gate tool
@@ -1267,7 +1268,7 @@ digest, with the network off, a read-only root, no capabilities, the host uid an
 mounts. The rules are offline: the plugin's pinned file and the repo's rules from the plan base
 (`--metrics=off`, no registry). There is no host fallback: host semgrep and gitleaks are never
 used, and the image's IaC scanners are never invoked. The image is about 9.5 GB. A cold pull can
-take longer than the preflight's 540 s: then that run's census marks the image missing and the
+take longer than the preflight's 480 s pull bound: then that run's census marks the image missing and the
 security gate runs its always-on checks only (`partial`, listed in `gates_not_run`). A later run's
 preflight pulls again and finishes the pull. To avoid that, pull `AUDIT_IMAGE` once by hand.
 
@@ -1856,7 +1857,10 @@ The script pins the role contract, not the prose:
   it can report a failing example as passing, so the gate catches honest misses, not a colluding
   runner. Threat model (ADR-1152): code under test can still write anywhere the user can write,
   and the coder has a shell that can read the store file directly, so these measures block casual
-  leaks only.
+  leaks only. The gates (8.0.0 car F): `security_scan` runs before coverage and mutation, so no code under
+  test runs in the gate step before the scan reads its dir; a detached process an earlier step
+  left, as the same uid, still can. The mutation copy has no `.git`, but code under test can read
+  the fleet worktree beside it: mutation is a signal against reward hacking, not a boundary.
 - Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint
