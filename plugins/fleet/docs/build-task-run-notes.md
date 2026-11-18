@@ -4780,4 +4780,15 @@ not start with "diff --git " exits non-zero. A section with no hunk is still G2'
 Truncation (sec_scan): more than CAP (200) non-secret findings exits non-zero (retry, then gates:
 needs_human). partial now means only "not every file scanned" or "only the always-on part ran".
 Not changed: cover_diff's own CAP on uncovered lines (partial with a cut list; out of scope).
+Live check (2026-11-18, real podman 5.8.6 through the agent shim, image pulled by preflight's
+gate_tools.py): semgrep 1.175.0 and gitleaks 8.30.1 ran under --read-only --user <uid>:<gid>
+--network none, HOME=/tmp, -w /tmp, --entrypoint resolved on the image PATH (/usr/local/bin);
+the rootless uid read the 755/644 scan dir; `image exists` finds the image by its index digest
+(RepoDigests holds the index and the amd64 manifest digest). Found: gitleaks prints a name that is
+not UTF-8 with U+FFFD, so rel() missed it and the secret was dropped (ran). Fix: safe() gives such a
+component an ASCII scan name, _fleet_x<hex of its bytes> plus its extension (if ASCII); the
+collision check covers it. Not fixed (Max's call): the agent podman shim refuses a mount source
+under /tmp, /var/tmp or /dev/shm, so a repo there (a temp clone) has its scratch dir there and
+every run errors twice on security_scan and stops at gates (fail closed). A fix would put the scan
+dir in a uid-owned 0700 dir outside temp dirs.
 ```

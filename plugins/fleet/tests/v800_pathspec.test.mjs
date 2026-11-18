@@ -64,6 +64,7 @@ function repo(opts = {}) {
     else writeFileSync(join(wt, p), v.text);
   }
   writeFileSync(join(wt, "tests", "test_mod.py"), "def test_f():\n    pass\n\n\ndef test_g():\n    pass\n");
+  for (const [b, t] of opts.raw || []) writeFileSync(Buffer.concat([Buffer.from(wt + "/"), b]), t);
   const idx = join(d, "idx");
   const env = { PATH: process.env.PATH, GIT_INDEX_FILE: idx };
   spawnSync(GIT, ["read-tree", "HEAD"], { cwd: wt, env });
@@ -125,6 +126,39 @@ for (const rt of [false, true]) {
     }
   });
 }
+
+// a podman stub that acts like the real Go tools: names that are not UTF-8 come back with U+FFFD
+// (Go's encoding/json), so a scan-dir name must be ASCII-safe to map back; gitleaks reports line 1
+// of every *.env file, semgrep lists every file it was given
+const GO_STUB =
+  "import json, os, sys\na = sys.argv[1:]\nif a[:1] != ['run']:\n    sys.exit(0)\n" +
+  "src = [x.split(':')[0] for i, x in enumerate(a) if i and a[i - 1] == '-v' and x.split(':')[1] == '/src'][0].encode()\n" +
+  "fs = [b'/src/' + os.path.relpath(os.path.join(r, n), src) for r, ds, ns in os.walk(src) for n in ns]\n" +
+  "go = lambda b: b.decode('utf-8', 'replace')\n" +
+  "open(os.environ['MOUNTS'], 'a').write(json.dumps([f.hex() for f in fs]) + '\\n')\n" +
+  "if a[a.index('--entrypoint') + 1] == 'semgrep':\n    print(json.dumps({'results': [], 'errors': [], 'paths': {'scanned': [go(f) for f in fs]}}))\n" +
+  "else:\n    hits = [{'RuleID': 'aws-access-token', 'File': go(f), 'StartLine': 1, 'EndLine': 1, 'Secret': 'REDACTED'} for f in fs if f.endswith(b'.env')]\n" +
+  "    print(json.dumps(hits))\n    sys.exit(99 if hits else 0)\n";
+
+test("8.0.0 G7b live-check fix: a name that is not UTF-8 gets an ASCII scan name (its extension kept), so a Go tool's U+FFFD output still maps back: the secret in caf\\xe9.env is reported, caf\\xe9.py is in paths.scanned", { skip: !HAVE_PY }, () => {
+  const ENV = Buffer.concat([Buffer.from("caf"), Buffer.from([0xe9]), Buffer.from(".env")]);
+  const x = repo({ raw: [[ENV, "K = 1\n"]] });
+  try {
+    writeFileSync(join(x.bin, "podman"), "#!" + PY + " -I\n" + GO_STUB);
+    chmodSync(join(x.bin, "podman"), 0o755);
+    const env = { MOUNTS: join(x.d, "mounts.log") };
+    const { r, out } = runProg("sec_scan", x, [x.wt, x.base, x.tree, JSON.stringify(["tests/test_mod.py"]), "40", AUDIT_IMAGE], env);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(digestOk(out, ["status", "reason", "findings", "args"]));
+    assert.equal(out.status, "ran", out.reason);
+    assert.deepEqual(out.findings.filter((f) => f.kind === "secret"), [{ path: "caf\\xe9.env", lines: [1], rule: "gitleaks: aws-access-token", kind: "secret" }]);
+    const names = JSON.parse(readFileSync(env.MOUNTS, "utf8").trim().split("\n")[0]).map((h) => Buffer.from(h, "hex"));
+    assert.ok(names.every((b) => b.every((c) => c < 0x80)), "every scan-dir name is ASCII");
+    assert.ok(names.some((b) => /^\/src\/_fleet_x[0-9a-f]+\.env$/.test(b.toString())) && names.some((b) => /^\/src\/_fleet_x[0-9a-f]+\.py$/.test(b.toString())), names.map(String).join(","));
+  } finally {
+    rmSync(x.d, { recursive: true, force: true });
+  }
+});
 
 // ---------------------------------------------------------------- cover_diff.py
 

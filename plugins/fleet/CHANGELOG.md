@@ -291,7 +291,7 @@ not_run, budget_hit}`. A red baseline: `not_run` "baseline red in scratch copy";
   and semgrep runs with `--max-target-bytes=0`, so its default ignore list and size limit are off; a
   rule-language file missing from semgrep's `paths.scanned` gives `partial` with the file named (no
   `paths.scanned` is an error); a truncated list keeps every secret finding first and cuts only the
-  others at 200; a semgrep or gitleaks result counts when any line of its span (start to end) is
+  others at 200 (superseded by G7b: over 200 is a non-zero exit); a semgrep or gitleaks result counts when any line of its span (start to end) is
   added, with the added lines it covers. Tests: `v800_security.test.mjs`; v800_augment gains the forged lists. Changed on
   purpose: the program count (v4_s1), the gate census rows and the image (v800_gate_tools, harness),
   the security reason in the gates_not_run tests (build_task_run, v800_gate_tools), the gates slot
@@ -311,6 +311,10 @@ not_run, budget_hit}`. A red baseline: `not_run` "baseline red in scratch copy";
   "not every file scanned" and "only the always-on part ran". Tests: `v800_pathspec.test.mjs`;
   the G7 review fix 3 test now asserts the exit at 201 and the full list at 200. Dist size unchanged
   (program sha256 only).
+  Live check of the real container path (G7b): gitleaks (Go) prints a name that is not UTF-8 with
+  U+FFFD, so a secret in such a file did not map back and was dropped (a fail-open, status `ran`
+  for a non-language file). sec_scan now gives such a name an ASCII scan name (`_fleet_x<hex>`, the
+  extension kept for semgrep's language pick) and maps the result back.
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

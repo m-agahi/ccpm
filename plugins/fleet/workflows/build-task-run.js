@@ -1547,7 +1547,7 @@ const PROGRAM_SHA256 = {
 "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
 "scratch_copy": "a32ea715f21ed91fccf4689c84f8a8e8ceab62b30439f2061ba6da35d6defae3",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
-"sec_scan": "41911eeaabf5d446045006b071ee74ab3b9f9c68af831cf71e8e8e4a3b3267c8",
+"sec_scan": "6ff4fd728948c4d81cae3cf0e894adcfc03776ec6f1370c1f37988948bbbede4",
 "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",
 "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
 "test_db_decl": "c2e9f36d23fb147835a85c4421d5e38a05912d343fdaa1f08fe285c3cfc5c11d",

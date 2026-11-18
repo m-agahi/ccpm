@@ -193,8 +193,17 @@ if hashlib.sha256(rules).hexdigest() != RULES_SHA256:
     sys.exit('the plugin rule file differs from RULES_SHA256: ' + RULES)
 if not added:
     result('ran', 'no added production line')
+def safe(c):
+    # a scan-dir name: SKIP names renamed; a name that is not UTF-8 gets an ASCII one (_fleet_x<hex>, the
+    # extension kept so semgrep picks the language), since the Go tools print such a name with U+FFFD
+    try:
+        os.fsencode(c).decode('utf-8')
+    except UnicodeDecodeError:
+        e = os.path.splitext(c)[1]
+        return '_fleet_x' + os.fsencode(c).hex() + (e if e.isascii() else '')
+    return '_fleet_' + c if c in SKIP else c
 # scan-dir path -> changed path
-dst = {'/'.join('_fleet_' + c if c in SKIP else c for c in p.split('/')): p for p in added}
+dst = {'/'.join(safe(c) for c in p.split('/')): p for p in added}
 if len(dst) != len(added):
     sys.exit('two changed paths map to one scan path')
 os.makedirs(scratch, exist_ok=True)
