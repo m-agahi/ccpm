@@ -1333,6 +1333,13 @@ through `sandbox.py`, a bubblewrap (`bwrap`) sandbox. Each caller pins the sha25
   daemon writes the host store and fetches URLs). `/nix/var` itself stays, because the profiles
   resolve through it. `NIX_REMOTE=local` is set; with the daemon socket hidden, every `NIX_REMOTE`
   value fails on the read-only store.
+- Hidden since 8.2.0 (#80): `/var/lib` (container stores, databases; nothing comes back), and every
+  host unix socket that is left. Before each run `sandbox.py` walks `/var`, `/srv`, `/opt`,
+  `/nix/var` and `/etc` (no symlink followed, `/nix/store` and the hidden dirs not walked) for
+  sockets. A socket's dir gets a tmpfs, or `/dev/null` is bound over the socket when the dir must
+  stay visible (the scan roots, `/etc`, `/nix/var/nix/profiles` and `gcroots`, or a dir bound back).
+  A dir the scan cannot read gets a tmpfs. A scan error, or more than 200,000 entries or 5 s, refuses
+  the run: "sandbox unavailable: socket scan ...".
 - Writable, fresh in each run (`--tmp-overlay`, nothing reaches the host): the copy, and the env's
   private dirs (`HOME`, `TMPDIR`, `XDG_*`, the build and uv dirs) under `<root>/scratch/build` or
   `uv-cache`. Written through (`--bind`): the coverage data dir in the `coverage run` step and the
@@ -1345,14 +1352,18 @@ through `sandbox.py`, a bubblewrap (`bwrap`) sandbox. Each caller pins the sha25
   `~/.rustup`, `~/.cargo/bin`, `~/.cargo/registry` and `~/go/pkg/mod` (no credential file in any
   of them) and the interpreter's prefix, none of which may hold a hidden dir. And the copy's git dir
   (the held-out and coverage copies are git worktrees, so the repo's objects are readable; the
-  mutation copy has no `.git`).
+  mutation copy has no `.git`). Since 8.2.0 (#80) `refs/fleet`, `logs/refs/fleet` and every
+  `worktrees/<x>` other than the copy's own are a tmpfs again inside that git dir.
 - The test database: a podman MariaDB on `127.0.0.1:<port>` is outside the sandbox's network.
   For each `*_TEST_DSN` value `mysql://...@127.0.0.1:<port>/...` in the env, `sandbox.py` relays
   that one port: a host thread listens on a unix socket in a private dir and connects to
   `127.0.0.1:<port>`, and a launcher in the sandbox listens on `127.0.0.1:<port>` and forwards to
   the socket, bound read-only at `/tmp/.fleet-db` (the only host socket in the sandbox). No other
-  port and no other host is reachable.
-- Fail closed: no `bwrap` on the agent PATH (never the env PATH), a failed self-check (the same
+  port and no other host is reachable. The relay dir on the host is mode 0700 (8.2.0, #80).
+- Fail closed: no `bwrap` on the agent PATH (never the env PATH), a `bwrap` whose real path is not
+  under `/nix/store` and not root-owned with root-owned, not group- or other-writable dirs above it
+  (8.2.0, #80; the tests name their pass-through fake in `FLEET_SANDBOX_TEST_BWRAP`, and whoever sets
+  that env already chooses the PATH), a socket scan that fails, a failed self-check (the same
   mounts running `python3 -I -S -c ''`), a mount that fails or a `sandbox.py` off its pin gives
   `not_run` "sandbox unavailable: ..." for coverage and mutation, and `store: "sandbox"` (held_out
   `not_run`) for the held-out runner. No test process runs unsandboxed. After an earlier round
@@ -1388,8 +1399,15 @@ What is left (accepted residuals):
   the interpreter loads at start (a venv's `.pth` files, fresh per run but from the tree's own
   install) runs too.
 - The git common dir is bound read-only for the held-out and coverage copies, so the repo's
-  objects (other branches, the plan base) are readable.
-- `bwrap` is trusted as found on the agent PATH.
+  objects (other branches, the plan base) and `packed-refs` (a packed `refs/fleet/*` id among them)
+  are readable. Since 8.2.0 the loose `refs/fleet` and the other worktrees' admin dirs are not. No
+  held-out text is ever committed, so this is low.
+- A socket made after the scan in a dir that stays visible (`/etc`, the nix profiles) is
+  reachable; one in a dir the scan put a tmpfs over is not.
+- The terraform PATH guard (`scratch_copy.py`'s `guard-*` dir and the mutation gate's
+  `mut-guard-*` dir) is not in the sandbox: its dir is under the hidden scratch root. This is
+  harmless: with no network and no credentials, a terraform-family program in the sandbox reaches
+  nothing.
 
 With no network, a test run that needs to download
 (`uv run` with a cold cache) fails, and the gate reports a red baseline. The overlays also mean a

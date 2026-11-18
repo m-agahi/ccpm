@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, readdirSync, symlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HERE, HAVE_PY, AUDIT_IMAGE, sha256, canon, spawnSync, cacheHome, passBwrap } from "./harness.mjs";
+import { HERE, HAVE_PY, AUDIT_IMAGE, sha256, canon, spawnSync, cacheHome, passBwrap, bwrapOk } from "./harness.mjs";
 
 const PY = HAVE_PY ? spawnSync("python3", ["-I", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim() : null;
 const which = (n) => spawnSync("sh", ["-c", "command -v " + n], { encoding: "utf8" }).stdout.trim();
@@ -84,7 +84,7 @@ function repo(opts = {}) {
 function runProg(name, x, args, env) {
   const cache = cacheHome();
   try {
-    const r = spawnSync(PY, ["-I", prog(name)].concat(args), { encoding: "utf8", env: Object.assign({ PATH: x.bin, HOME: x.d, XDG_CACHE_HOME: cache }, env || {}) });
+    const r = spawnSync(PY, ["-I", prog(name)].concat(args), { encoding: "utf8", env: Object.assign({ PATH: x.bin, HOME: x.d, XDG_CACHE_HOME: cache }, bwrapOk(x.bin), env || {}) });
     return { r, out: r.status === 0 ? JSON.parse(r.stdout) : null };
   } finally {
     rmSync(cache, { recursive: true, force: true });

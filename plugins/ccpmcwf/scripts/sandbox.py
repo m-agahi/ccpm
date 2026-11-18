@@ -60,6 +60,13 @@ except Exception:
 # refused dir is dropped), the toolchain dirs in TOOLS and sys.base_prefix (the allowlist; none may hold a
 # hidden dir), the copy's git dir (git true). The DB: each 127.0.0.1 port of a *_TEST_DSN reaches the host through a
 # unix-socket relay pair, that port only.
+# 8.2.0 (#80): bwrap runs only when its real path is under /nix/store, or the file and every dir above it
+# are root-owned and not group- or other-writable. A tmpfs over /var/lib. With git true, refs/fleet,
+# logs/refs/fleet and every worktrees/<x> but the copy's own are a tmpfs again (the objects and packed-refs
+# stay readable). Every host unix socket under SCAN_ROOTS (and a spec's scan roots) that no tmpfs hides
+# yet: a tmpfs over its dir, or /dev/null bound over the socket when its dir must stay (STAY, or it holds a
+# dir bound back); a dir the scan cannot read is a tmpfs; a scan that fails or runs past its caps refuses
+# the run ("socket scan ..."). The relay dir is 0700.
 import json, os, re, shutil, socket, stat, subprocess, sys, tempfile, threading
 DSN = re.compile(r'mysql://([A-Za-z0-9_]{1,64}):([^@/\s]*)@127\.0\.0\.1:([0-9]{1,5})/([A-Za-z0-9_]{1,64})')
 DSN_KEY = re.compile(r'[A-Z][A-Z0-9_]{0,40}_TEST_DSN')
@@ -87,6 +94,67 @@ def NIX_SOCKETS():
         except OSError:
             continue
     return out
+# 8.2.0 (#80): where plan() looks for host unix sockets (a socket under /run, /tmp, HOME or another hidden
+# dir is hidden already); /nix/store is never walked
+SCAN_ROOTS = ('/var', '/srv', '/opt', '/nix/var', '/etc')
+SCAN_CAP = (200000, 5.0)
+def STAY(d):
+    # a socket's dir that stays visible (a tmpfs there would hide config or the nix profiles): /dev/null
+    # goes over the socket instead
+    return d in SCAN_ROOTS or d in ('/', '/nix', '/nix/var/nix') or any(d == r or d.startswith(r + '/') for r in ('/etc', '/nix/var/nix/profiles', '/nix/var/nix/gcroots'))
+def scan(roots, prune):
+    # ([socket paths], [unreadable dirs]) under roots, no symlink followed, no dir in prune walked; or a reason
+    import time
+    t0, n, socks, closed = time.monotonic(), 0, [], []
+    for root in roots:
+        if not os.path.isabs(root):
+            return None, None, 'socket scan: a relative root ' + root
+        if not os.path.lexists(root) or os.path.islink(root):
+            continue
+        # a dir to prune holds the root: the walk under this root prunes none of it (a spec scan root)
+        pr = [h for h in prune if not under(root, h)]
+        st = [root]
+        while st:
+            d = st.pop()
+            try:
+                ents = list(os.scandir(d))
+            except PermissionError:
+                closed.append(d)
+                continue
+            except OSError as e:
+                return None, None, 'socket scan failed at %s: %s' % (d, e)
+            for e in ents:
+                n += 1
+                if n > SCAN_CAP[0] or time.monotonic() - t0 > SCAN_CAP[1]:
+                    return None, None, 'socket scan over its caps (%d entries, %.0f s)' % SCAN_CAP
+                try:
+                    m = e.stat(follow_symlinks=False).st_mode
+                except OSError:
+                    continue
+                if stat.S_ISDIR(m):
+                    if not any(under(e.path, h) for h in pr):
+                        st.append(e.path)
+                elif stat.S_ISSOCK(m):
+                    socks.append(e.path)
+    return socks, closed, None
+def trusted(bw):
+    # None, or why the bwrap binary is not trusted: its real path under /nix/store, or the file and every
+    # dir above it root-owned and not group- or other-writable. FLEET_SANDBOX_TEST_BWRAP (tests) names one
+    # exact real path to accept: whoever sets this program's env already chooses its PATH.
+    r = real(bw)
+    if r.startswith('/nix/store/') or os.environ.get('FLEET_SANDBOX_TEST_BWRAP') == r:
+        return None
+    p = r
+    while True:
+        try:
+            st = os.stat(p)
+        except OSError:
+            st = None
+        if not st or st.st_uid != 0 or st.st_mode & 0o022:
+            return 'bwrap at %s is not under /nix/store or in a root-owned dir others cannot write' % r
+        if p == '/':
+            return None
+        p = os.path.dirname(p)
 # the PATH dirs plan() refused (named on stderr when the command is then not found)
 DROPPED = []
 # the launcher inside: one listener per DB port, relayed to the bound unix socket; then the argv
@@ -169,6 +237,9 @@ def plan(spec, sockdir=None):
     # /var/tmp: a channel from the host's unsandboxed runs into the sandbox
     if os.path.isdir('/var/tmp') and not os.path.islink('/var/tmp'):
         hide.append('/var/tmp')
+    # 8.2.0 (#80): /var/lib (container stores, databases, their sockets); nothing comes back
+    if os.path.isdir('/var/lib') and not os.path.islink('/var/lib'):
+        hide.append('/var/lib')
     # the nix daemon (and gc) sockets: the daemon writes the host store and fetches URLs (not /nix/var
     # itself: the profiles resolve through /nix/var/nix/profiles)
     hide += NIX_SOCKETS()
@@ -223,6 +294,23 @@ def plan(spec, sockdir=None):
         if not gc:
             return None, 'no git dir for the copy'
         a += ['--ro-bind', gc, gc]
+        # 8.2.0 (#80): the other tasks' refs and the other worktrees' admin dirs (index, HEAD, logs) are not
+        # visible; the copy's own admin dir is (its .git file names it)
+        own = None
+        try:
+            with open(os.path.join(spec.get('copy') or spec['cwd'], '.git')) as fh:
+                t = fh.read(4096).strip()
+            own = real(t[8:]) if t.startswith('gitdir: ') else None
+        except OSError:
+            pass
+        mask = [os.path.join(gc, 'refs', 'fleet'), os.path.join(gc, 'logs', 'refs', 'fleet')]
+        try:
+            mask += sorted(e.path for e in os.scandir(os.path.join(gc, 'worktrees')) if e.is_dir(follow_symlinks=False) and real(e.path) != own)
+        except OSError:
+            pass
+        for m in mask:
+            if os.path.isdir(m) and not os.path.islink(m):
+                a += ['--tmpfs', m]
     over = [spec['copy']] if spec.get('copy') else []
     for k in DIRS:
         v = env.get(k) or ''
@@ -238,6 +326,23 @@ def plan(spec, sockdir=None):
             if not os.path.isabs(d) or not os.path.isdir(d):
                 return None, 'no dir ' + d
             a += [flag, real(d), real(d)]
+    # 8.2.0 (#80): every host unix socket left visible: a tmpfs over its dir, or /dev/null over it when the
+    # dir stays (STAY, or the dir is or holds a dir bound back above); an unreadable dir: a tmpfs
+    roots = list(SCAN_ROOTS) + list(spec.get('scan') or [])
+    socks, closed, why = scan(roots, hide + ['/tmp', '/nix/store'])
+    if why:
+        return None, why
+    bound = [a[i + 2] for i, v in enumerate(a) if v in ('--ro-bind', '--bind', '--symlink') and i + 2 < len(a)] + [a[i + 1] for i, v in enumerate(a) if v == '--tmp-overlay']
+    done = []
+    for p in sorted(set(socks)) + sorted(set(closed)):
+        d = p if p in closed else os.path.dirname(p)
+        if any(under(p, x) for x in done):
+            continue
+        if not STAY(d) and not any(under(b, d) for b in bound):
+            a += ['--tmpfs', d]
+            done.append(d)
+        elif p not in closed:
+            a += ['--ro-bind', '/dev/null', p]
     if sockdir:
         a += ['--ro-bind', sockdir, SOCK]
     # nix: the local store (read-only here) and no daemon; with the socket hidden every NIX_REMOTE fails closed
@@ -343,12 +448,17 @@ if not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in
 bw = shutil.which('bwrap', path=_RAW_PATH)
 if not bw:
     fail('bwrap is not on PATH')
+# 8.2.0 (#80): a bwrap the tree (or another user) could have planted on the agent PATH is never run
+why = trusted(bw)
+if why:
+    fail(why)
 db = dsns(spec['env'])
 work = tempfile.mkdtemp(prefix='fleet-sbx-')
 try:
     socks = {}
     if db:
-        os.chmod(work, 0o755)
+        # 8.2.0 (#80): no other user reaches the relay sockets
+        os.chmod(work, 0o700)
         for port in sorted({d[2] for d in db}):
             ls = socket.socket(socket.AF_UNIX)
             ls.bind(os.path.join(work, str(port)))

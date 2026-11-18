@@ -28,7 +28,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, readdirSync, symlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, sha256, canon, spawnSync, programSha, FP_K1, FP_K2, HASHES, stateJsonOf, passBwrap } from "./harness.mjs";
+import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, sha256, canon, spawnSync, programSha, FP_K1, FP_K2, HASHES, stateJsonOf, passBwrap, bwrapOk } from "./harness.mjs";
 import { PROGRAM_COUNT } from "../scripts/gen.mjs";
 
 const PROG = join(HERE, "..", "scripts", "mutants.py");
@@ -89,7 +89,7 @@ function repo(opts) {
 // run the program on a repo; opts.env (the env json), opts.cmd, opts.deadline, opts.killAfter (ms)
 function prog(x, opts = {}) {
   const args = [x.wt, x.base, x.tree, opts.cmd || "pytest -q <paths>", JSON.stringify(opts.env || { TZ: "UTC" }), JSON.stringify(["tests/test_mod.py"])];
-  const env = Object.assign({ PATH: x.bin }, opts.deadline ? { FLEET_MUTANTS_DEADLINE: String(opts.deadline) } : {}, opts.penv || {});
+  const env = Object.assign({ PATH: x.bin }, bwrapOk(x.bin), opts.deadline ? { FLEET_MUTANTS_DEADLINE: String(opts.deadline) } : {}, opts.penv || {});
   const t0 = Date.now();
   const r = spawnSync(PY, ["-I", PROG].concat(args), Object.assign({ encoding: "utf8", env }, opts.killAfter ? { timeout: opts.killAfter, killSignal: opts.signal || "SIGTERM" } : {}));
   return {

@@ -2086,3 +2086,8 @@ export function passBwrap(bin) {
   writeFileSync(join(bin, "bwrap"), BWRAP_PASS);
   chmodSync(join(bin, "bwrap"), 0o755);
 }
+// 8.2.0 (#80): sandbox.py runs a bwrap from a user-writable dir only when this env var names its real path
+export function bwrapOk(bin) {
+  const f = join(bin, "bwrap");
+  return existsSync(f) ? { FLEET_SANDBOX_TEST_BWRAP: realpathSync(f) } : {};
+}
