@@ -10,11 +10,12 @@ residual). #79 (gate verdicts from outside the process) is parked.
 - #80: `sandbox.py` runs `bwrap` only when its real path is under `/nix/store`, or the file and
   every dir above it are root-owned and not group- or other-writable; otherwise "sandbox
   unavailable" and nothing runs.
-- #80: `/var/lib` is a tmpfs. Every bound host unix socket in `/proc/net/unix` that the child could
-  reach is hidden: a tmpfs over its dir when the dir holds only sockets, else `/dev/null` over the
-  socket. An unreadable list refuses the run ("socket list ..."). No dir is walked: a first version
-  walked `/var`, `/srv`, `/opt`, `/nix/var` and `/etc`, and its 5 s cap refused every run on the CI
-  runner (a big `/opt`).
+- #80: the whole roots `/var`, `/srv`, `/opt`, `/mnt`, `/media`, `/root` and `/home` are a tmpfs;
+  only an approved PATH or toolchain dir comes back. The sockets left visible (a bounded walk of
+  `/etc` and `/nix/var`, joined with `/proc/net/unix`) are masked by their real path. A walk error, a
+  cap hit or an unreadable list refuses the run. Earlier designs in this release walked `/var` and
+  `/opt` (its cap refused every run on the CI runner) and then trusted `/proc/net/unix` alone (it
+  misses a renamed or hard-linked socket file).
 - #80: with the git dir bound, `refs/fleet`, `logs/refs/fleet` and the other worktrees' admin dirs
   are a tmpfs. The DB relay dir is mode 0700.
 - #80: the README documents the remaining git dir view and that the terraform PATH guard is not in

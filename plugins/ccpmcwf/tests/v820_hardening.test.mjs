@@ -64,13 +64,13 @@ const listen = (p) =>
   });
 const UNIX = "import socket, sys\nhit = []\nfor p in sys.argv[1:]:\n    u = socket.socket(socket.AF_UNIX)\n    u.settimeout(3)\n    try:\n        u.connect(p)\n        hit.append(p)\n    except OSError as e:\n        print('unix connect failed', p, e)\nprint('UNIX', hit)\nsys.exit(5 if hit else 0)\n";
 
-test("8.2.0 #80: the bwrap argv puts a tmpfs over /var/lib", { skip: !HAVE_PY || !existsSync("/var/lib") }, () => {
+test("8.2.0 #80: the bwrap argv puts a tmpfs over /var (so /var/lib)", { skip: !HAVE_PY || !existsSync("/var/lib") }, () => {
   const x = plainFixture();
   try {
     const { r, out } = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" } }, x.d);
     assert.equal(r.status, 0, r.stderr);
     assert.equal(out.reason, null, out.reason);
-    assert.ok(pairs(out.argv, "--tmpfs").includes(realpathSync("/var/lib")), "tmpfs /var/lib in " + pairs(out.argv, "--tmpfs"));
+    assert.ok(pairs(out.argv, "--tmpfs").includes(realpathSync("/var")), "tmpfs /var in " + pairs(out.argv, "--tmpfs"));
   } finally {
     x.done();
   }
@@ -271,6 +271,120 @@ test("8.2.0 #80 review: a socket in an unreadable dir: /dev/null over the socket
     chmodSync(u, 0o755);
     chmodSync(shut, 0o755);
     for (const s of srvs) s.close();
+    x.done();
+  }
+});
+
+// 8.2.0 (#80, final): whole roots are a tmpfs; the visible trees are walked and every socket is masked by its
+// real path. The fixture root stands for / (hide_roots and walk add fixture dirs; socklist feeds the kernel list).
+async function rootFixture() {
+  const x = plainFixture();
+  const R = join(x.d, "R");
+  const socks = {};
+  for (const [k, p] of [["var", "var/lib/c/s.sock"], ["srv", "srv/s.sock"], ["opt", "opt/t/s.sock"]]) {
+    socks[k] = join(R, p);
+    mkdirSync(dirname(socks[k]), { recursive: true });
+  }
+  const srvs = [];
+  for (const k of Object.keys(socks)) srvs.push(await listen(socks[k]));
+  return Object.assign(x, { R, socks, close: () => srvs.forEach((s) => s.close()) });
+}
+const WHOLE_FIX = (R) => ["var", "srv", "opt"].map((n) => join(R, n));
+
+test("8.2.0 #80 final: a socket under the fixture root's /var, /srv or /opt: each root is a tmpfs after the bind of the root above it", { skip: !HAVE_PY }, async () => {
+  const x = await rootFixture();
+  try {
+    const p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, ro: [x.R], hide_roots: WHOLE_FIX(x.R), socklist: socklist(x.d, []) }, x.d);
+    assert.equal(p.out.reason, null, p.out.reason);
+    const a = p.out.argv;
+    const bi = a.findIndex((v, j) => v === "--ro-bind" && a[j + 1] === x.R);
+    for (const h of WHOLE_FIX(x.R)) assert.ok(a.findIndex((v, j) => j > bi && v === "--tmpfs" && a[j + 1] === h) > bi, h + " is a tmpfs after the bind of " + x.R);
+  } finally {
+    x.close();
+    x.done();
+  }
+});
+
+test("8.2.0 #80 final: a child cannot reach a socket under the fixture root's /var, /srv or /opt (the control without the roots can)", { skip: NO_SBX }, async () => {
+  const x = await rootFixture();
+  put(join(x.cwd, "u.py"), UNIX);
+  try {
+    const spec = { worktree: x.wt, cwd: x.cwd, ro: [x.cwd, x.R], argv: [PY, "-I", join(x.cwd, "u.py")].concat(Object.values(x.socks)), env: { PATH: process.env.PATH }, socklist: socklist(x.d, []) };
+    const c = sbx("run", spec, x.d);
+    assert.equal(c.res && c.res.exit, 5, "control: " + c.r.stdout + JSON.stringify(c.res));
+    const r = sbx("run", Object.assign({ hide_roots: WHOLE_FIX(x.R) }, spec), x.d);
+    assert.equal(r.res && r.res.exit, 0, "every socket is hidden: " + r.r.stdout + JSON.stringify(r.res));
+  } finally {
+    x.close();
+    x.done();
+  }
+});
+
+test("8.2.0 #80 final: a socket file renamed after its bind (the kernel list names the old path) is masked by the walk", { skip: !HAVE_PY }, async () => {
+  const x = plainFixture();
+  const v = join(x.d, "etc");
+  mkdirSync(v);
+  writeFileSync(join(v, "conf"), "x");
+  const old = join(v, "a.sock");
+  const srv = await listen(old);
+  const moved = join(v, "b.sock");
+  spawnSync("mv", [old, moved]);
+  put(join(x.cwd, "u.py"), UNIX);
+  try {
+    const spec = { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: process.env.PATH }, ro: [x.cwd, v], socklist: socklist(x.d, [old]), walk: [v] };
+    const p = sbx("plan", spec, x.d);
+    assert.equal(p.out.reason, null, p.out.reason);
+    const a = p.out.argv;
+    assert.ok(a.some((q, j) => q === "--ro-bind" && a[j + 1] === "/dev/null" && a[j + 2] === moved), "/dev/null over the renamed socket: " + JSON.stringify(a));
+    if (!NO_SBX) {
+      const r = sbx("run", Object.assign({}, spec, { argv: [PY, "-I", join(x.cwd, "u.py"), moved] }), x.d);
+      assert.equal(r.res && r.res.exit, 0, "the renamed socket is hidden: " + r.r.stdout + JSON.stringify(r.res));
+    }
+  } finally {
+    srv.close();
+    x.done();
+  }
+});
+
+test("8.2.0 #80 final: a socket listed through a symlinked dir is masked at its real path", { skip: !HAVE_PY }, async () => {
+  const x = plainFixture();
+  const v = join(x.d, "vis");
+  const realDir = join(v, "real");
+  mkdirSync(realDir, { recursive: true });
+  writeFileSync(join(realDir, "conf"), "x");
+  symlinkSync(realDir, join(v, "link"));
+  const srv = await listen(join(realDir, "s.sock"));
+  try {
+    const p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, ro: [v], socklist: socklist(x.d, [join(v, "link", "s.sock")]) }, x.d);
+    assert.equal(p.out.reason, null, p.out.reason);
+    const a = p.out.argv;
+    assert.ok(a.some((q, j) => q === "--ro-bind" && a[j + 1] === "/dev/null" && a[j + 2] === join(realDir, "s.sock")), "masked at the real path: " + JSON.stringify(a));
+    assert.ok(!JSON.stringify(a).includes(join(v, "link", "s.sock")), "never the symlinked path");
+  } finally {
+    srv.close();
+    x.done();
+  }
+});
+
+test("8.2.0 #80 final: a hidden root is never walked: 60,000 files under the fixture /opt (over the walk cap) cost nothing", { skip: !HAVE_PY }, () => {
+  const x = plainFixture();
+  const R = join(x.d, "R");
+  const opt = join(R, "opt");
+  for (let i = 0; i < 600; i++) {
+    const dd = join(opt, "d" + i);
+    mkdirSync(dd, { recursive: true });
+    for (let k = 0; k < 100; k++) writeFileSync(join(dd, "f" + k), "");
+  }
+  try {
+    const t0 = Date.now();
+    const p = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, hide_roots: [opt], walk: [R], socklist: socklist(x.d, []) }, x.d);
+    const ms = Date.now() - t0;
+    assert.equal(p.out.reason, null, p.out.reason);
+    assert.ok(pairs(p.out.argv, "--tmpfs").includes(opt));
+    assert.ok(ms < 2000, "plan took " + ms + " ms");
+    const w = sbx("plan", { worktree: x.wt, cwd: x.cwd, argv: ["true"], env: { PATH: "/usr/bin" }, walk: [R], socklist: socklist(x.d, []) }, x.d);
+    assert.match(w.out.reason, /^socket walk over its caps/, "control: a walked /opt this big refuses");
+  } finally {
     x.done();
   }
 });

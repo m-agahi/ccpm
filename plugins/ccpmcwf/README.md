@@ -1342,14 +1342,16 @@ through `sandbox.py`, a bubblewrap (`bwrap`) sandbox. Each caller pins the sha25
   daemon writes the host store and fetches URLs). `/nix/var` itself stays, because the profiles
   resolve through it. `NIX_REMOTE=local` is set; with the daemon socket hidden, every `NIX_REMOTE`
   value fails on the read-only store.
-- Hidden since 8.2.0 (#80): `/var/lib` (container stores, databases; nothing comes back), and every
-  host unix socket the child could still reach. Before each run `sandbox.py` reads the kernel's list
-  of bound unix sockets, `/proc/net/unix` (no dir walk, so a big `/opt` or `/var` costs nothing). A
-  named socket that is not under a hidden dir, or is under a dir bound back, is hidden: a tmpfs over
-  its dir when that dir holds only sockets, is not top-level and holds no dir bound back; otherwise
-  `/dev/null` is bound over the socket (also when its dir cannot be listed). Abstract sockets are cut
-  off by the network namespace. An unreadable list refuses the run: "sandbox unavailable: socket list
-  ...".
+- Hidden since 8.2.0 (#80): the whole roots `/var`, `/srv`, `/opt`, `/mnt`, `/media`, `/root` and
+  `/home` (real dirs, never a symlink), so every socket, database and container store under them.
+  Only a PATH or toolchain dir that passes the bind-back rules below comes back, by its real path;
+  nothing else under them does. `/etc`, `/usr`, `/nix/var` (its socket dirs hidden) and `/sys` stay
+  visible. Before each run `sandbox.py` walks `/etc` and `/nix/var` for unix sockets (hidden dirs and
+  `/nix/store` not walked; at most 50,000 entries and 3 s) and joins them with the kernel's list,
+  `/proc/net/unix`. Each socket the child could reach is masked by its real path: a tmpfs over its dir
+  when that dir holds only sockets, is not top-level and holds no dir bound back; otherwise `/dev/null`
+  is bound over it. A walk error (a dir this uid can enter but not list), a cap hit or an unreadable
+  list refuses the run: "sandbox unavailable: socket walk ..." or "socket list ...".
 - Writable, fresh in each run (`--tmp-overlay`, nothing reaches the host): the copy, and the env's
   private dirs (`HOME`, `TMPDIR`, `XDG_*`, the build and uv dirs) under `<root>/scratch/build` or
   `uv-cache`. Written through (`--bind`): the coverage data dir in the `coverage run` step and the
@@ -1373,7 +1375,7 @@ through `sandbox.py`, a bubblewrap (`bwrap`) sandbox. Each caller pins the sha25
 - Fail closed: no `bwrap` on the agent PATH (never the env PATH), a `bwrap` whose real path is not
   under `/nix/store` and not root-owned with root-owned, not group- or other-writable dirs above it
   (8.2.0, #80; the tests name their pass-through fake in `FLEET_SANDBOX_TEST_BWRAP`, and whoever sets
-  that env already chooses the PATH), an unreadable `/proc/net/unix`, a failed self-check (the same
+  that env already chooses the PATH), a socket walk or list that fails, a failed self-check (the same
   mounts running `python3 -I -S -c ''`), a mount that fails or a `sandbox.py` off its pin gives
   `not_run` "sandbox unavailable: ..." for coverage and mutation, and `store: "sandbox"` (held_out
   `not_run`) for the held-out runner. No test process runs unsandboxed. After an earlier round
@@ -1413,9 +1415,8 @@ What is left (accepted residuals):
   objects (other branches, the plan base) and `packed-refs` (a packed `refs/fleet/*` id among them)
   are readable. Since 8.2.0 the loose `refs/fleet` and the other worktrees' admin dirs are not. No
   held-out text is ever committed, so this is low.
-- A socket bound after the list is read is reachable, unless it is in a dir that got a tmpfs. A
-  socket bound with a relative path, or in another network namespace (a container), is not in the
-  list this program reads.
+- A socket created in `/etc` or `/nix/var` after the walk is reachable, unless it is in a dir that
+  got a tmpfs (the whole roots are hidden, so this is the only place left).
 - The terraform PATH guard (`scratch_copy.py`'s `guard-*` dir and the mutation gate's
   `mut-guard-*` dir) is not in the sandbox: its dir is under the hidden scratch root. This is
   harmless: with no network and no credentials, a terraform-family program in the sandbox reaches
