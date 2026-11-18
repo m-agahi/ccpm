@@ -4821,3 +4821,12 @@ it can only lower the deadline, which is a non-zero exit (fail closed).
 Tests: a temp XDG_CACHE_HOME under ~/.cache (harness cacheHome(); the test repos stay under
 tmpdir()). v800_pathspec's runProg passes one too.
 ```
+
+### The code judge's script_findings top level (G8)
+
+```text
+SCRIPT_FINDINGS_GATES replaces SCRIPT_FINDINGS_NOT_RUN at the code-judge site only. Its status
+stays not_run, and its reason keeps the "fleet v2: " prefix that build_task_run pins; the role
+text reads only coverage, mutation and security. SCRIPT_FINDINGS_NOT_RUN stays for the test judge
+and in GATE_DEFAULTS (the gates_not_run reasons before a code round has a result).
+```

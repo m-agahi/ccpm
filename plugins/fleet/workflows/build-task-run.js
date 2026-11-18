@@ -217,6 +217,7 @@ const PROPOSED_RE = /Proposed plan change:\s*(.+?)\s*$/m;
 const LEDGER_SECTION = "Fleet build";
 const HELD_OUT_NOT_RUN = { status: "not_run", reason: "runs in the code rounds only" };
 const SCRIPT_FINDINGS_NOT_RUN = { status: "not_run", reason: "fleet v2: mutation/coverage/scan gates are not run yet" };
+const SCRIPT_FINDINGS_GATES = { status: "not_run", reason: "fleet v2: the top level is no gate; see coverage, mutation and security" };
 const GATE_DEFAULTS = [["mutation", SCRIPT_FINDINGS_NOT_RUN], ["coverage", SCRIPT_FINDINGS_NOT_RUN], ["security_scan", SCRIPT_FINDINGS_NOT_RUN], ["held_out", HELD_OUT_NOT_RUN]];
 const GATE_STATUS = ["ran", "partial", "not_run"];
 const MUTANT_TARGETS = ["tests", "code", "equivalent"];
@@ -7667,7 +7668,7 @@ coder_output: stripHeldOut(coder),
 hash_recheck: hashRecheck(frozen, h.hashes, mainWt),
 prior_findings: stripHeldOut(judgePrior),
 held_out_results: hoR,
-script_findings: Object.assign({ coverage: { status: cov.status, reason: cov.reason, findings: cov.findings }, mutation: { status: mut.status, reason: mut.reason, survived: mut.findings }, security: { status: sec.status, reason: sec.reason, findings: sec.findings } }, SCRIPT_FINDINGS_NOT_RUN),
+script_findings: Object.assign({ coverage: { status: cov.status, reason: cov.reason, findings: cov.findings }, mutation: { status: mut.status, reason: mut.reason, survived: mut.findings }, security: { status: sec.status, reason: sec.reason, findings: sec.findings } }, SCRIPT_FINDINGS_GATES),
 repo_obligations: judgeObligations,
 ...roleEnv("cjudge", "cjudge-r" + m),
 }, tc ? { test_conflict: tc } : {}),

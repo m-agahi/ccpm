@@ -266,6 +266,9 @@ const LEDGER_SECTION = "Fleet build";
 // 8.0.0 (G4): the default before a code round's runner result
 const HELD_OUT_NOT_RUN = { status: "not_run", reason: "runs in the code rounds only" };
 const SCRIPT_FINDINGS_NOT_RUN = { status: "not_run", reason: "fleet v2: mutation/coverage/scan gates are not run yet" };
+// 8.0.0 (G8): the code judge's top level once the gates ran (G7 left it at "not run yet"); each gate's
+// own result is in its key, and the role reads only those
+const SCRIPT_FINDINGS_GATES = { status: "not_run", reason: "fleet v2: the top level is no gate; see coverage, mutation and security" };
 // 8.0.0 (G1, ADR-1316): the gates gates_not_run lists unless a digest-checked ran result of this code round exists
 const GATE_DEFAULTS = [["mutation", SCRIPT_FINDINGS_NOT_RUN], ["coverage", SCRIPT_FINDINGS_NOT_RUN], ["security_scan", SCRIPT_FINDINGS_NOT_RUN], ["held_out", HELD_OUT_NOT_RUN]];
 const GATE_STATUS = ["ran", "partial", "not_run"];
@@ -8546,7 +8549,7 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
           // the findings still pending for this judge ([] in round 1)
           prior_findings: stripHeldOut(judgePrior),
           held_out_results: hoR,
-          script_findings: Object.assign({ coverage: { status: cov.status, reason: cov.reason, findings: cov.findings }, mutation: { status: mut.status, reason: mut.reason, survived: mut.findings }, security: { status: sec.status, reason: sec.reason, findings: sec.findings } }, SCRIPT_FINDINGS_NOT_RUN),
+          script_findings: Object.assign({ coverage: { status: cov.status, reason: cov.reason, findings: cov.findings }, mutation: { status: mut.status, reason: mut.reason, survived: mut.findings }, security: { status: sec.status, reason: sec.reason, findings: sec.findings } }, SCRIPT_FINDINGS_GATES),
           repo_obligations: judgeObligations,
           ...roleEnv("cjudge", "cjudge-r" + m),
         }, tc ? { test_conflict: tc } : {}),

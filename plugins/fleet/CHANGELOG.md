@@ -329,6 +329,11 @@ not_run, budget_hit}`. A red baseline: `not_run` "baseline red in scratch copy";
   findings. Tests: `v800_security.test.mjs` (G8 block); the tests use a temp `XDG_CACHE_HOME`
   under `~/.cache` (harness `cacheHome()`), so v800_pathspec's runner and the G7 argv and
   leftover checks change on purpose. Dist size unchanged (program sha256 only).
+- Car G8, stale judge text: since G7 the code judge's `script_findings` carries each gate's own
+  result, but its top level still said "mutation/coverage/scan gates are not run yet". The top
+  level now says it is no gate and points to `coverage`, `mutation` and `security` (status stays
+  `not_run`; the role reads only the three keys). The test judge and the `gates_not_run` defaults
+  keep the old text: no gate runs before a code round. Dist +134 B; only the v5010 pins move.
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or
