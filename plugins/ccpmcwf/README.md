@@ -1328,7 +1328,11 @@ through `sandbox.py`, a bubblewrap (`bwrap`) sandbox. Each caller pins the sha25
   store), `$XDG_CACHE_HOME`, `$XDG_DATA_HOME`, `$XDG_RUNTIME_DIR` (also when it is outside `/run`),
   `~/.ssh`, `~/.gnupg`, the worktree, its fleet root and the main checkout with its git dir. From
   `/run` only `/run/current-system` (a symlink) and `/run/wrappers` (read-only) come back, by exact
-  path, for NixOS binaries.
+  path, for NixOS binaries. Also hidden: a real `/var/tmp` (a channel from the host's unsandboxed
+  runs into the sandbox) and every `/nix/var/nix/*-socket` dir or one that holds a socket (the nix
+  daemon writes the host store and fetches URLs). `/nix/var` itself stays, because the profiles
+  resolve through it. `NIX_REMOTE=local` is set; with the daemon socket hidden, every `NIX_REMOTE`
+  value fails on the read-only store.
 - Writable, fresh in each run (`--tmp-overlay`, nothing reaches the host): the copy, and the env's
   private dirs (`HOME`, `TMPDIR`, `XDG_*`, the build and uv dirs) under `<root>/scratch/build` or
   `uv-cache`. Written through (`--bind`): the coverage data dir in the `coverage run` step and the
@@ -1358,12 +1362,13 @@ Closed in 8.1.0 (each has a fixture in `v810_sandbox`):
 
 1. Base re-run poisoning (ADR-1318): the base re-run runs in a new sandbox, so HOME, `/tmp` and
    the private dirs are fresh, and the test database is dropped and created again first: the
-   DSN's own database and the `<db>_*` databases its user sees, never another (the role users
-   share the repo's `test_db_prefix` grants in one container, so another role's or run's database
-   stays). It uses `mariadb` or `mysql` from the agent PATH, with the password in `MYSQL_PWD`. No
-   client, a DSN with no database, or a failed reset: "tree red, base not re-run", which stops at
-   `gates`. Residual: databases under the repo's `test_db_prefix` are shared, so the reset leaves
-   them, and a tree run can leave state there for the base re-run.
+   DSN's own database, the `<db>_*` databases its user sees, and each database that was not there
+   before the tree run (a list taken before the gate's first test run: a `test_db_prefix`
+   database the tree run made). A `fleet_*` database of another role and a prefix database that
+   was there before stay (the role users share the repo's `test_db_prefix` grants in one
+   container). It uses `mariadb` or `mysql` from the agent PATH, with the password in `MYSQL_PWD`.
+   No client, a DSN with no database, no list from before the tree run, or a failed reset: "tree
+   red, base not re-run", which stops at `gates`.
 2. Coverage launcher and report tampering: the `python -m pytest` shape uses an inline
    `python3 -I -c` launcher, no file. The rcfile is read-only, the data dir is writable in the run
    step only, the report dir in the json step only, and the work dir is not visible in the plain
@@ -1372,13 +1377,21 @@ Closed in 8.1.0 (each has a fixture in `v810_sandbox`):
    not visible, and each mutant run gets a fresh overlay of the copy, so no run leaves state for
    the next.
 
-What is left: in-process tampering during the `coverage run` step (the tests share the tracer's
-process and its data dir); code that the interpreter loads from the env at start (a venv's `.pth`
-files, which are fresh per run but come from the tree's own install); a hostile role with a shell,
-which can read the store and run anything unsandboxed (ADR-1152); other copy roles (the judges,
-the test writers, plan-audit) still use the unsandboxed `scratch_copy.py run`; and `bwrap` itself
-is trusted as found on the agent PATH. Host unix sockets outside `/run`, `/tmp` and `$HOME` (for
-example the nix daemon socket under `/nix/var`) stay reachable. With no network, a test run that needs to download
+What is left (accepted residuals):
+
+- Other world-readable host paths stay readable (`/` is bound read-only), and so do host unix
+  sockets outside `/run`, `/tmp`, `/var/tmp`, `$HOME` and the nix socket dirs.
+- The held-out store is still readable by the unsandboxed role test runs: the coder's and the
+  judges' own runs (`scratch_copy.py run`), and any role with a shell (ADR-1152).
+- In-process tampering: the tests share the tracer's process and its data dir in the
+  `coverage run` step, and a test process can fake its own verdict (exit code, output). Code that
+  the interpreter loads at start (a venv's `.pth` files, fresh per run but from the tree's own
+  install) runs too.
+- The git common dir is bound read-only for the held-out and coverage copies, so the repo's
+  objects (other branches, the plan base) are readable.
+- `bwrap` is trusted as found on the agent PATH.
+
+With no network, a test run that needs to download
 (`uv run` with a cold cache) fails, and the gate reports a red baseline. The overlays also mean a
 uv venv is built again in each run.
 

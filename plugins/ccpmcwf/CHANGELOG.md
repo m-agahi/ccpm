@@ -13,6 +13,11 @@ a bubblewrap sandbox. This closes the three same-uid bypasses that the 8.0.0 rev
   and the env's private dirs are fresh overlays per run. A `*_TEST_DSN` port on 127.0.0.1 is
   relayed through a unix-socket pair, that port only. `cover_diff.py`, `mutants.py` and
   `scratch_copy.py` pin its sha256.
+- Review fixes before release: the nix daemon and gc socket dirs and a real `/var/tmp` are hidden,
+  and `NIX_REMOTE=local` is set, so a child cannot add to the host store or fetch through the
+  daemon. The base re-run's reset also drops each database that was not there before the tree run
+  (a list taken before the gate's first test run), so a `test_db_prefix` database the tree run
+  made is gone; one that was there before stays.
 - Review fixes before release: `/run` (and a real `/var/run`) is hidden, so a child cannot reach
   a host unix socket (podman, docker, D-Bus, agents); only `/run/current-system` and
   `/run/wrappers` come back. A PATH dir comes back only when its real path is outside every hidden

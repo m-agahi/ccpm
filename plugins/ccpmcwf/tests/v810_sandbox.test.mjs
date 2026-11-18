@@ -108,6 +108,11 @@ if m == 'unix':
             print('unix connect failed', p, e)
     print('UNIX:' + json.dumps(hit))
     sys.exit(5 if hit else 0)
+if m == 'nixadd':
+    import subprocess
+    r = subprocess.run(['nix-store', '--add', a[0]], capture_output=True, text=True)
+    print('NIX:', r.returncode, r.stdout.strip(), r.stderr.strip()[-300:])
+    sys.exit(6 if r.returncode == 0 else 0)
 if m == 'mark':
     open(a[0], 'w').write('ran')
 if m == 'sleep':
@@ -204,6 +209,41 @@ test("8.1.0 #75 review: a child cannot connect to a host unix socket under /run 
   }
 });
 
+// 8.1.0 review (H1): the nix daemon writes the host store and fetches URLs; its socket is hidden
+const NIX_STORE = spawnSync("sh", ["-c", "command -v nix-store"], { encoding: "utf8" }).stdout.trim();
+test("8.1.0 #75 review: a child cannot add a path to the host's /nix/store through the nix daemon", { skip: NO_SBX || !NIX_STORE || !existsSync("/nix/var/nix/daemon-socket") }, () => {
+  const x = copyFixture();
+  const leak = "fleet-v810-leak-" + rnd();
+  try {
+    // the file is in the copy, so both runs read the same bytes; the path it would get in the store
+    put(join(x.tmp, leak), "leak " + leak + "\n");
+    const r = srun(x, ["python3", "probe.py", "nixadd", leak]);
+    assert.ok(r.out, r.r.stderr);
+    assert.equal(r.out.exit_code, 0, r.out.tail);
+    assert.ok(!readdirSync("/nix/store").some((n) => n.endsWith("-" + leak)), "no new store path");
+  } finally {
+    x.done();
+  }
+});
+
+// 8.1.0 review (R1): /var/tmp is a channel from the host's unsandboxed runs into the sandbox
+test("8.1.0 #75 review: a file the host writes to /var/tmp is not visible in the sandbox (the unsandboxed control sees it)", { skip: NO_SBX || !existsSync("/var/tmp") }, () => {
+  const x = copyFixture();
+  const f = join("/var/tmp", "fleet-v810-" + rnd());
+  try {
+    writeFileSync(f, "PRISTINE-SOURCE");
+    const c = prog(COPY, ["run", x.wt, x.tmp, JSON.stringify(["python3", "probe.py", "read", f])]);
+    assert.equal(c.out.exit_code, 3, "control: the plain run reads it");
+    const r = srun(x, ["python3", "probe.py", "read", f]);
+    assert.ok(r.out, r.r.stderr);
+    assert.equal(r.out.exit_code, 0, r.out.tail);
+    assert.ok(!r.out.tail.includes("PRISTINE-SOURCE"));
+  } finally {
+    rmSync(f, { force: true });
+    x.done();
+  }
+});
+
 // 8.1.0 review (HIGH 2): a PATH dir that is HOME, or holds the held-out store, is never bound back
 test("8.1.0 #75 review: with HOME and the store's parent on PATH, a child still cannot read the held-out store", { skip: NO_SBX }, () => {
   const x = copyFixture();
@@ -232,9 +272,9 @@ test("8.1.0 #75 review: dbreset drops the gate's database and its <db>_* databas
     mkdirSync(bin);
     const log = join(d, "db.log");
     put(join(bin, "mariadb"), "#!/bin/sh\necho \"$*\" >> '" + log + "'\ncase \"$*\" in *'SHOW DATABASES'*) printf 'information_schema\\nfleet_gates\\nfleet_gates_gw0\\nfleet_cjudge_x\\nfleet_hrun\\napp_test_1\\n' ;; esac\nexit 0\n", 0o755);
-    const reset = (dsn) => {
+    const reset = (dsn, keep = ["fleet_gates", "fleet_gates_gw0", "fleet_cjudge_x", "fleet_hrun", "app_test_1"]) => {
       const spec = join(d, "spec.json");
-      writeFileSync(spec, JSON.stringify({ worktree: d, cwd: d, argv: ["true"], env: { APP_TEST_DSN: dsn }, result: join(d, "res.json") }));
+      writeFileSync(spec, JSON.stringify({ worktree: d, cwd: d, argv: ["true"], env: { APP_TEST_DSN: dsn }, keep, result: join(d, "res.json") }));
       const r = spawnSync(PY, ["-I", SBX, "dbreset", spec], { encoding: "utf8", env: { PATH: bin + ":" + process.env.PATH } });
       assert.equal(r.status, 0, r.stderr);
       return JSON.parse(readFileSync(join(d, "res.json"), "utf8"));
@@ -247,6 +287,17 @@ test("8.1.0 #75 review: dbreset drops the gate's database and its <db>_* databas
     const no = reset("mysql://fleet_gates:pw@127.0.0.1:3399/");
     assert.equal(no.ok, false);
     assert.match(no.reason, /APP_TEST_DSN names no test database/);
+    assert.ok(!existsSync(log), "no SQL ran");
+    // review M1: a <test_db_prefix>* database the tree run made (not in the list from before it) is dropped;
+    // one that was there before stays; with no list the reset is refused
+    assert.equal(reset("mysql://fleet_gates:pw@127.0.0.1:3399/fleet_gates", ["fleet_gates", "fleet_cjudge_x", "fleet_hrun"]).ok, true);
+    const sql2 = readFileSync(log, "utf8");
+    assert.match(sql2, /DROP DATABASE `fleet_gates`; DROP DATABASE `fleet_gates_gw0`; DROP DATABASE `app_test_1`; CREATE DATABASE `fleet_gates`;/);
+    for (const other of ["fleet_cjudge_x", "fleet_hrun"]) assert.ok(!sql2.includes("DROP DATABASE `" + other + "`"), other + " survives");
+    rmSync(log, { force: true });
+    const nokeep = reset("mysql://fleet_gates:pw@127.0.0.1:3399/fleet_gates", null);
+    assert.equal(nokeep.ok, false);
+    assert.match(nokeep.reason, /no database list from before the tree run/);
     assert.ok(!existsSync(log), "no SQL ran");
   } finally {
     rmSync(d, { recursive: true, force: true });
@@ -476,7 +527,9 @@ function gateFixture(o) {
   mkdirSync(bin);
   const dblog = join(d, "db.log");
   // a stub mariadb client: logs argv and MYSQL_PWD's presence; SHOW DATABASES lists two
-  put(join(bin, "mariadb"), "#!/bin/sh\necho \"argv: $* pwd=${MYSQL_PWD:+set}\" >> '" + dblog + "'\ncase \"$*\" in *'SHOW DATABASES'*) printf 'information_schema\\nfleet_gates\\nfleet_gates_gw0\\nfleet_cjudge_x\\napp_extra\\n' ;; esac\nexit 0\n", 0o755);
+  // the first SHOW DATABASES (before the tree run) has no app_poison; later ones do (the tree run made it)
+  const cnt = join(d, "db.count");
+  put(join(bin, "mariadb"), "#!/bin/sh\necho \"argv: $* pwd=${MYSQL_PWD:+set}\" >> '" + dblog + "'\ncase \"$*\" in *'SHOW DATABASES'*) printf 'information_schema\\nfleet_gates\\nfleet_gates_gw0\\nfleet_cjudge_x\\napp_extra\\n'; if [ -e '" + cnt + "' ]; then echo app_poison; fi; touch '" + cnt + "' ;; esac\nexit 0\n", 0o755);
   const hostHome = join(d, "hosthome");
   mkdirSync(hostHome);
   // the program's own temp dir (its work dir): a daemon a control run leaves walks this dir only
@@ -518,7 +571,7 @@ for (const [name, p] of [["cover_diff", COVER], ["mutants", MUT]]) {
       assert.ok(!existsSync(poison) && !existsSync(join(x.hostHome, ".fleet-poison")) && !existsSync(join(x.venv, "poison")), "no poison reached the host");
       const db = existsSync(x.dblog) ? readFileSync(x.dblog, "utf8") : "";
       assert.match(db, /SHOW DATABASES/);
-      assert.match(db, /DROP DATABASE `fleet_gates`; DROP DATABASE `fleet_gates_gw0`; CREATE DATABASE `fleet_gates`;/);
+      assert.match(db, /DROP DATABASE `fleet_gates`; DROP DATABASE `fleet_gates_gw0`; DROP DATABASE `app_poison`; CREATE DATABASE `fleet_gates`;/);
       assert.doesNotMatch(db, /DROP DATABASE `(fleet_cjudge_x|app_extra)`/);
       assert.ok(!db.includes("pw1") && /pwd=set/.test(db), "the password goes in MYSQL_PWD, never in argv");
     } finally {

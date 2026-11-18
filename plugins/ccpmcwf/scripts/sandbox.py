@@ -44,8 +44,11 @@ except Exception:
 #     test process ran. With check, the same mounts run python -I -S -c '' first (the self-check).
 #   dbreset: for each *_TEST_DSN, drop the DSN's own database and the ones named <it>_* that its user sees,
 #     never another (the role users share the repo's test_db_prefix grants in one container, so another
-#     role's or run's database stays), then create the DSN's own database again (the base re-run,
-#     ADR-1318); write {ok, reason} to result. A *_TEST_DSN that names no database: ok false.
+#     role's or run's database stays), and every other database that is not in spec keep (the dbsnap names
+#     from before the tree run: a <test_db_prefix>* database the tree run made) and is not a fleet_* one,
+#     then create the DSN's own database again (the base re-run, ADR-1318); write {ok, reason} to result.
+#     A *_TEST_DSN that names no database, or no keep list: ok false.
+#   dbsnap: write {ok, names, reason} (every database the *_TEST_DSN users see) to result.
 #   plan: print {argv} (the bwrap arguments; tests).
 # The sandbox: --unshare-all (net included), --die-with-parent, --new-session; / read-only, a new /dev,
 # /proc and /tmp; tmpfs over /run (host unix sockets: podman, docker, D-Bus, agents), HOME, the held-out
@@ -57,7 +60,7 @@ except Exception:
 # refused dir is dropped), the toolchain dirs in TOOLS and sys.base_prefix (the allowlist; none may hold a
 # hidden dir), the copy's git dir (git true). The DB: each 127.0.0.1 port of a *_TEST_DSN reaches the host through a
 # unix-socket relay pair, that port only.
-import json, os, re, shutil, socket, subprocess, sys, tempfile, threading
+import json, os, re, shutil, socket, stat, subprocess, sys, tempfile, threading
 DSN = re.compile(r'mysql://([A-Za-z0-9_]{1,64}):([^@/\s]*)@127\.0\.0\.1:([0-9]{1,5})/([A-Za-z0-9_]{1,64})')
 DSN_KEY = re.compile(r'[A-Z][A-Z0-9_]{0,40}_TEST_DSN')
 # the env vars whose dir is the child's own (made fresh per run when under the run's scratch)
@@ -68,6 +71,22 @@ SYSTEM = ('information_schema', 'mysql', 'performance_schema', 'sys')
 SOCK = '/tmp/.fleet-db'
 # what comes back from the hidden /run, by exact path (NixOS needs them for its binaries)
 RUN_BACK = ('/run/current-system', '/run/wrappers')
+def NIX_SOCKETS():
+    # every dir under /nix/var/nix named *-socket or holding a socket (daemon-socket, gc-socket)
+    out = []
+    try:
+        ents = list(os.scandir('/nix/var/nix'))[:256]
+    except OSError:
+        return out
+    for d in ents:
+        try:
+            if not d.is_dir(follow_symlinks=False):
+                continue
+            if d.name.endswith('-socket') or any(stat.S_ISSOCK(e.stat(follow_symlinks=False).st_mode) for e in list(os.scandir(d.path))[:64]):
+                out.append(d.path)
+        except OSError:
+            continue
+    return out
 # the PATH dirs plan() refused (named on stderr when the command is then not found)
 DROPPED = []
 # the launcher inside: one listener per DB port, relayed to the bound unix socket; then the argv
@@ -147,6 +166,12 @@ def plan(spec, sockdir=None):
     hide = ['/run', home, root, run_dir] + secret + ([os.path.dirname(gc)] if gc else [])
     if os.path.isdir('/var/run') and not os.path.islink('/var/run'):
         hide.append('/var/run')
+    # /var/tmp: a channel from the host's unsandboxed runs into the sandbox
+    if os.path.isdir('/var/tmp') and not os.path.islink('/var/tmp'):
+        hide.append('/var/tmp')
+    # the nix daemon (and gc) sockets: the daemon writes the host store and fetches URLs (not /nix/var
+    # itself: the profiles resolve through /nix/var/nix/profiles)
+    hide += NIX_SOCKETS()
     hide = sorted({real(h) for h in hide if os.path.isdir(h)}, key=len)
     if '/' in hide:
         return None, 'a dir to hide is /'
@@ -215,7 +240,8 @@ def plan(spec, sockdir=None):
             a += [flag, real(d), real(d)]
     if sockdir:
         a += ['--ro-bind', sockdir, SOCK]
-    a += ['--chdir', real(spec['cwd'])]
+    # nix: the local store (read-only here) and no daemon; with the socket hidden every NIX_REMOTE fails closed
+    a += ['--setenv', 'NIX_REMOTE', 'local', '--chdir', real(spec['cwd'])]
     return a, None
 def relay(ls, port):
     # host side: the unix socket to 127.0.0.1:<port>, nothing else
@@ -261,8 +287,8 @@ def bwrap_run(bw, a, argv, env, out=None):
     c = p.wait()
     return '"child-pid"' in st, (c if c >= 0 else 128 - c)
 mode = sys.argv[1] if len(sys.argv) > 1 else ''
-if mode not in ('run', 'dbreset', 'plan') or len(sys.argv) != 3:
-    sys.exit('usage: sandbox.py run|dbreset|plan <spec json file>')
+if mode not in ('run', 'dbreset', 'dbsnap', 'plan') or len(sys.argv) != 3:
+    sys.exit('usage: sandbox.py run|dbreset|dbsnap|plan <spec json file>')
 with open(sys.argv[2], 'rb') as fh:
     spec = json.loads(fh.read(1 << 22).decode('utf-8'))
 if not isinstance(spec.get('env'), dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in spec['env'].items()):
@@ -271,13 +297,18 @@ if mode == 'plan':
     a, why = plan(spec, SOCK if dsns(spec['env']) else None)
     print(json.dumps({'argv': a, 'reason': why, 'dropped': DROPPED}))
     sys.exit(0)
-if mode == 'dbreset':
+if mode in ('dbreset', 'dbsnap'):
     cl = shutil.which('mariadb', path=_RAW_PATH) or shutil.which('mysql', path=_RAW_PATH)
     for k, v in spec['env'].items():
         if DSN_KEY.fullmatch(k) and v.startswith('mysql://') and not DSN.fullmatch(v):
             put(spec, {'ok': False, 'reason': k + ' names no test database to reset'})
             sys.exit(0)
     own = {d[3] for d in dsns(spec['env'])}
+    keep = spec.get('keep')
+    if mode == 'dbreset' and own and not (isinstance(keep, list) and all(isinstance(n, str) for n in keep)):
+        put(spec, {'ok': False, 'reason': 'no database list from before the tree run'})
+        sys.exit(0)
+    seen = []
     for user, pw, port, db in dsns(spec['env']):
         if not cl:
             put(spec, {'ok': False, 'reason': 'no mariadb or mysql client on PATH to reset the test database'})
@@ -289,13 +320,17 @@ if mode == 'dbreset':
         if r.returncode != 0 or not all(re.fullmatch(r'[A-Za-z0-9_]{1,64}', n) for n in names):
             put(spec, {'ok': False, 'reason': 'SHOW DATABASES failed: ' + r.stderr.decode('utf-8', 'replace')[-300:]})
             sys.exit(0)
-        # the DSN's own database and its <db>_* databases (never another DSN's own database)
-        names = [n for n in names if n == db or (n.startswith(db + '_') and n not in own)]
+        if mode == 'dbsnap':
+            seen += [n for n in names if n not in seen]
+            continue
+        # the DSN's own database and its <db>_* databases (never another DSN's own database), and a database
+        # the tree run made (not in keep; a <test_db_prefix>* one, never a fleet_* one)
+        names = [n for n in names if n == db or (n.startswith(db + '_') and n not in own) or (n not in keep and n not in own and not n.startswith('fleet_'))]
         r = subprocess.run(base + [' '.join('DROP DATABASE `%s`;' % n for n in names) + ' CREATE DATABASE `%s`;' % db], capture_output=True, env=e, stdin=subprocess.DEVNULL, timeout=60, preexec_fn=lift)
         if r.returncode != 0:
             put(spec, {'ok': False, 'reason': 'the database reset failed: ' + r.stderr.decode('utf-8', 'replace')[-300:]})
             sys.exit(0)
-    put(spec, {'ok': True, 'reason': None})
+    put(spec, {'ok': True, 'names': seen, 'reason': None} if mode == 'dbsnap' else {'ok': True, 'reason': None})
     sys.exit(0)
 # run
 def fail(why):

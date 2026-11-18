@@ -63,7 +63,7 @@ except Exception:
 # sandbox.py off its pin): not_run "sandbox unavailable: ...", no test run.
 import hashlib, io, json, os, re, shlex, shutil, signal, stat, subprocess, sys, tempfile, time, tokenize
 CAP = 200
-SANDBOX_SHA256 = 'b16855761f393c5a6db5bd2ad1effa3b23d7d8a42605bfa5a0750284fc9d046c'
+SANDBOX_SHA256 = 'a365da154940d631cae5a765c9b1e0da28947ebbce6d51e8443c01acf49a18cf'
 SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
 _dl = os.environ.get('FLEET_MUTANTS_DEADLINE') or ''
 # a test may lower the deadline, never raise it
@@ -131,6 +131,15 @@ def result(f):
             return json.load(fh)
     except (OSError, ValueError):
         return None
+def dbsnap(env):
+    # 8.1.0 review (M1): the databases before the tree run; the reset drops one the tree run made
+    cmd, res = helper('dbsnap', {'env': env})
+    try:
+        subprocess.run(cmd, env=os.environ, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=max(1, left()))
+    except subprocess.TimeoutExpired:
+        return None
+    r = result(res)
+    return r.get('names') if r and r.get('ok') else None
 checked = []
 def run(argv, cwd, env, log, cap=None):
     # the exit code; the process group dies at the deadline (Late) or at a mutant's own bound (-9: killed)
@@ -328,6 +337,7 @@ try:
     log = os.path.join(work, 'log')
     killed, surv, done = 0, [], 0
     late = lambda n: emit('partial', '; '.join(['%d of %d not run: the %d s deadline was hit' % (n, M, DEADLINE)] + notes), killed, surv, n, True)
+    keep = dbsnap(env)
     t0 = time.monotonic()
     try:
         code = run(run_argv, tmp, env, log)
@@ -338,7 +348,7 @@ try:
         # security review: a fresh copy, so no untracked or ignored file of the tree's run reaches the base run
         fill(base)
         # 8.1.0 (#75, bypass 1): the test database dropped and created again; a fresh sandbox (HOME, /tmp, private dirs)
-        cmd2, res = helper('dbreset', {'env': env})
+        cmd2, res = helper('dbreset', {'env': env, 'keep': keep})
         subprocess.run(cmd2, env=os.environ, stdin=subprocess.DEVNULL, capture_output=True, preexec_fn=lift, timeout=max(1, left()))
         r = result(res)
         if not r or not r.get('ok'):
