@@ -121,7 +121,9 @@ test("8.0.0 G3-3: an example whose when and then both appear in the plan doc, or
     ]);
     assert.equal(o.count, 2);
     assert.deepEqual(o.per_criterion, { AC1: 1, AC2: 1 });
-    assert.ok(!r.stdout.includes("f(5)") && !r.stdout.includes("25\"") && !r.stdout.includes(SENTINEL), "no example text on stdout");
+    // B-L1: hex digests (sha256, digest, args) can end in 25; cut them before the text check
+    const bare = r.stdout.replace(/[0-9a-f]{64}/g, "");
+    assert.ok(!bare.includes("f(5)") && !bare.includes("25\"") && !bare.includes(SENTINEL), "no example text on stdout");
     // a given that differs: not the visible example
     const r2 = prog(["write"].concat(chunks(d, { examples: [ex("AC1", "f(4)", "16", "other")], visible: VISIBLE })), XENV(d));
     assert.deepEqual(JSON.parse(r2.stdout).dropped, []);

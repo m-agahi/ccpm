@@ -426,6 +426,11 @@ token counts come from the smoke run, after this entry.
     product: every old refusal stays, and `cmdRuns` without the R4 flag is unchanged. Two
     `v740_r4_gaps` assertions that a python check script reads no entry now expect the `py:` read.
 
+### Review fixes (car F: reviews A and B)
+
+- B-L1: the G3-3 held-out test cut every 64-hex value out of stdout before it checks that no
+  example text (`25"`) is there; a sha256 or digest that ended in 25 failed the test at random.
+
 ### Upgrade notes
 
 - The plugin name changes, so the old install is not updated in place. Uninstall it first:
