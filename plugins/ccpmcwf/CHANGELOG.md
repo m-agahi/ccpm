@@ -1,5 +1,19 @@
 # Changelog
 
+## [8.2.4] - 2026-11-18
+
+ccpmcwf 8.2.4: yaadgaar #86, found in the build run wf_ae59597d-2f6.
+
+### Fixed
+
+- #86: the held-out runner no longer relays the wrong hash as `store_digest`. The run stopped at
+  `role:fleet-held-out-runner:r1: store_digest off the seal`. `held_out.py show` printed `sha256`
+  (the sealed store hash) and `digest` (the relay digest of the output), and a sonnet runner
+  copied `digest`, because the names look alike. `show` now also prints `store_digest`, equal to
+  `sha256`, and `digest` covers it like every other key. The role file tells the runner to set
+  `store_digest` to the printed `store_digest` and never to `digest`. The engine check is
+  unchanged and strict: `store_digest` must equal the sealed `held_out.sha256`.
+
 ## [8.2.3] - 2026-11-18
 
 ccpmcwf 8.2.3: yaadgaar #85, found in the smoke run wf_3d096689-009.

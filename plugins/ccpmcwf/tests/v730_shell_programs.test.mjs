@@ -157,7 +157,7 @@ test("7.3.0 #9: format_files.py plan mode fails on a check hook that fails witho
     if (o.note === "pre-commit is not installed") return;
     assert.equal(o.ran, true, o.note);
     assert.equal(o.hook_failed, true);
-    // 8.2.3 (#85): a file-scoped hook that fails alone on the doc is named
+    // 8.2.4 (#85): a file-scoped hook that fails alone on the doc is named
     assert.deepEqual(o.hook_failures, [["docs/p.md", "no-todo"]]);
     assert.deepEqual(o.base_red, []);
     assert.ok(o.stable);
