@@ -2,8 +2,22 @@
 
 ## [8.0.0] - unreleased
 
-Fleet 8.0.0: one major release in two cars. Car A: yaadgaar #74 and #71. Car B: #56 and #38
-(the rename to ccpmcwf) and the version bump.
+Fleet 8.0.0: one major release, built in cars on one branch. Car A: yaadgaar #74 and #71. The
+version bump. Cars B1 and B2: #62 (fewer agents). Cars G1 to G8: the v1.1 gates (#1, #6, #7):
+coverage, held-out, mutation and security, then the release docs. Still to come: car R, #56
+(`--auto`) and #38 (the rename to ccpmcwf).
+
+#62 acceptance, from the happy two-criterion harness runs: calls and agents from the `v4_s3`
+pins; capped measured on the same runs (the count the 100-agent cap checks at the result). Real
+token counts come from the smoke run, after this entry.
+
+| Run          | 7.4.0 (931e844) calls / agents / capped | 8.0.0 calls / agents / capped |
+| ------------ | --------------------------------------- | ----------------------------- |
+| plan (ask)   | 22 / 22 / 17                            | 21 / 21 / 17                  |
+| build, happy | 68 / 67 / 41                            | 64 / 63 / 42                  |
+
+#62 alone (derived from the per-car deltas): plan 20 / 20 / 16, build 60 / 59 / 40. The gates then add 1 plan call
+(`infra:held-out:write`) and 4 build calls per code round (2 capped).
 
 ### Changed
 
@@ -188,38 +202,42 @@ Fleet 8.0.0: one major release in two cars. Car A: yaadgaar #74 and #71. Car B: 
   comparison flip (`==`/`!=`, `<`/`>=`, `>`/`<=`), boolean swap (`True`/`False`, `and`/`or`),
   boundary (`<`/`<=`, `>`/`>=`, an integer literal +1 and -1) and dropped `not`; never a string
   or a comment. At most 200 mutants, spread evenly over the changed lines (round-robin; with more
-  lines than room, evenly spaced lines). The sealed pytest `test_cmd` (plus `-x` and `-p
-no:cacheprovider`) runs once plain and once per mutant within one 540 s deadline counted from the
-  start; a mutant run is bounded by 4x the baseline plus 5 s (at least 10 s), and a timeout
-  counts as killed. It prints `{status, reason, killed, survived: [{id, path, line, op}],
-not_run, budget_hit}`. A red baseline: `not_run` "baseline red in scratch copy"; a non-pytest
-  `test_cmd` or no python source: `not_run` "unsupported"; changed non-python source beside python
-  lines: `partial`; the deadline: `partial` "N of M not run" (mutation stays in `gates_not_run`
-  with that reason). After each run the file is put back from its in-memory backup as a fresh
-  file (never written through a link), read back byte for byte, and a final `git diff --quiet`
-  against the tree checks the mutated files; a restore that does not hold exits non-zero (one retry, then
-  `gates`). A TERM unwinds and restores; a copy a killed run left behind is removed by the next
-  run. No result cache (security review, HIGH): code under test runs as the same uid and can
-  write the scratch dir, so a cached entry could forge a clean result; a digest retry runs the
-  gate again, and a `mutants-cache.json` an earlier build left is deleted unread. A mutant run that
-  cannot start the test*cmd (exit 126 or 127, a runner gone after the baseline) or a runner usage
-  error (pytest exit 4 or 5) exits non-zero (one retry, then `gates`), never a kill; a signal or
-  the per-mutant bound is a kill. The child: caps lifted, its own process group, the PATH guard of `scratch_copy.py run`,
-  no `COVERAGE*\_`or`FLEET\_\_`variable,`PYTHONDONTWRITEBYTECODE=1`and a fresh pycache prefix
-  outside the scratch dir (a stale`.pyc` of a same-length mutant would survive falsely). Every git
-  diff runs with G2's flags (`--text --no-textconv --no-ext-diff`, `core.attributesFile=/dev/null`,
-  `GIT_ATTR_NOSYSTEM=1`, `--diff-filter=AMT`; a `.py`file with no hunk counts as wholly added).
-  The code judge gets`script_findings.mutation: {status, reason, survived}`and a new optional
- `mutant_rulings: [{id, target: tests|code|equivalent, reason}]`. On an approve, `mutantsLeft`   turns a survivor with no ruling (or a blank reason, or another target) and every survivor ruled
-  `code`or`tests`into`fix_code` findings for the coder (`lastRoundGate` `mutation`);
-  `equivalent`passes;`tests`carries a note until G6 adds the augmentation round. No kill-rate
-  stop. A`ran`result removes mutation from`gates_not_run`. The code-judge role gains "Mutation
-  survivors" (`v800_mutation.test.mjs`). Limit: `FLEET_MUTANTS_DEADLINE` (tests) can only lower
-  the deadline (partial). Like G2, the gate is advisory to the judge: code under test runs as the
-  user and can tamper with the copy or the runner's exit code.
-  Tests changed on purpose: the program count (v4_s1), the stdlib list (`tokenize`), the default
-  mutation reason in the gates_not_run tests (build_task_run, v800_gate_tools), the G2 gates stub
-  (a mutation slot), v502 (`mutants`prints through`gatePrompt`), v5_prompts (`mutant_rulings`  is live), v403 READS, the 5.0.7 state keys (v508:`held_out_seen`) and the v5010 snapshot.
+  lines than room, evenly spaced lines). The sealed pytest `test_cmd` (plus `-x` and
+  `-p no:cacheprovider`) runs once plain and once per mutant within one 540 s deadline counted
+  from the start; a mutant run is bounded by 4x the baseline plus 5 s (at least 10 s), and a
+  timeout counts as killed. It prints `{status, reason, killed, survived, not_run, budget_hit}`,
+  each survivor `{id, path, line, op}`. A red baseline: `not_run` "baseline red in scratch copy";
+  a non-pytest `test_cmd` or no python source: `not_run` "unsupported"; changed non-python source
+  beside python lines: `partial`; the deadline: `partial` "N of M not run" (mutation stays in
+  `gates_not_run` with that reason). After each run the file is put back from its in-memory
+  backup as a fresh file (never written through a link), read back byte for byte, and a final
+  `git diff --quiet` against the tree checks the mutated files; a restore that does not hold
+  exits non-zero (one retry, then `gates`). A TERM unwinds and restores; a copy a killed run left
+  behind is removed by the next run. No result cache (security review, HIGH): code under test
+  runs as the same uid and can write the scratch dir, so a cached entry could forge a clean
+  result; a digest retry runs the gate again, and a `mutants-cache.json` an earlier build left is
+  deleted unread. A mutant run that cannot start the test command (exit 126 or 127, a runner gone
+  after the baseline) or a runner usage error (pytest exit 4 or 5) exits non-zero (one retry,
+  then `gates`), never a kill; a signal or the per-mutant bound is a kill. The child: caps
+  lifted, its own process group, the PATH guard of `scratch_copy.py run`, no COVERAGE or FLEET
+  variable (by prefix), `PYTHONDONTWRITEBYTECODE=1` and a fresh pycache prefix outside the
+  scratch dir (a stale `.pyc` of a same-length mutant would survive falsely). Every git diff runs
+  with G2's flags (`--text --no-textconv --no-ext-diff`, `core.attributesFile=/dev/null`,
+  `GIT_ATTR_NOSYSTEM=1`, `--diff-filter=AMT`; a `.py` file with no hunk counts as wholly added).
+  The code judge gets `script_findings.mutation` (`{status, reason, survived}`) and a new
+  optional `mutant_rulings` list, each `{id, target, reason}` with target `tests`, `code` or
+  `equivalent`. On an approve, `mutantsLeft` turns a survivor with no ruling (or a blank reason,
+  or another target) and every survivor ruled `code` or `tests` into `fix_code` findings for the
+  coder (`lastRoundGate` `mutation`); `equivalent` passes; `tests` carries a note until G6 adds
+  the augmentation round. No kill-rate stop. A `ran` result removes mutation from
+  `gates_not_run`. The code-judge role gains "Mutation survivors" (`v800_mutation.test.mjs`).
+  Limit: `FLEET_MUTANTS_DEADLINE` (tests) can only lower the deadline (partial). Like G2, the
+  gate is advisory to the judge: code under test runs as the user and can tamper with the copy or
+  the runner's exit code. Tests changed on purpose: the program count (v4_s1), the stdlib list
+  (`tokenize`), the default mutation reason in the gates_not_run tests (build_task_run,
+  v800_gate_tools), the G2 gates stub (a mutation slot), v502 (`mutants` prints through
+  `gatePrompt`), v5_prompts (`mutant_rulings` is live), v403 READS, the 5.0.7 state keys (v508:
+  `held_out_seen`) and the v5010 snapshot.
 - Car G6 (the augmentation round, #7, ADR-1316): a survivor of the mutation gate that the code
   judge rules `tests` now goes into the fix_tests detour, once per run, in place of G5's note to
   the coder. It runs only when every survivor has a ruling (an unruled one sends all of them to the
@@ -334,6 +352,13 @@ not_run, budget_hit}`. A red baseline: `not_run` "baseline red in scratch copy";
   level now says it is no gate and points to `coverage`, `mutation` and `security` (status stays
   `not_run`; the role reads only the three keys). The test judge and the `gates_not_run` defaults
   keep the old text: no gate runs before a code round. Dist +134 B; only the v5010 pins move.
+- Car G8, release docs: the README gains "Gates" (the four gates, where they run, the support
+  matrix, the census, stop gate `gates`, the agent counts after #62), a gates row in the build
+  table, the gate requirements, and threat-model lines for the held-out store (ADR-1152), the
+  advisory coverage and mutation results and the container scan (ADR-1315; the 9.5 GB image and
+  the 540 s pull). Stale lines fixed: "no scanner gate", the happy-run agent count, the 480000-byte
+  limit. `agents/judge.md` lists the surface, gates and PATH-check steps. The G5 entry above is
+  re-worded where Prettier had broken its code spans. Docs only.
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

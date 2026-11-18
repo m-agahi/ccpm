@@ -4830,3 +4830,21 @@ stays not_run, and its reason keeps the "fleet v2: " prefix that build_task_run 
 text reads only coverage, mutation and security. SCRIPT_FINDINGS_NOT_RUN stays for the test judge
 and in GATE_DEFAULTS (the gates_not_run reasons before a code round has a result).
 ```
+
+### #62 acceptance: agent counts (G8)
+
+```text
+From the harness happy runs (plan with confirm ask, then build): calls and agents are the v4_s3
+pins; capped is measured with the master
+931e844 harness and the 8.0.0 harness (state.agents minus PATH checks, build resets and the PR
+tail, at the result; the build teardown runs after the result). The "#62 only" column is
+derived from the per-car deltas, not measured:
+
+run          7.4.0 calls/agents/capped   #62 only (B1, B2)   8.0.0 (with the gates)
+plan (ask)   22 / 22 / 17                20 / 20 / 16        21 / 21 / 17
+build        68 / 67 / 41                60 / 59 / 40        64 / 63 / 42
+
+B1: -7 build calls (PATH checks, uncapped). B2: -2 plan calls (-1 capped: pr-convention was a
+tail label) and -1 build call (capped). G2 and G4: +2 build calls each (1 capped each). G3: +1
+plan call (capped). Token counts are not in the harness; the smoke run gives the real ones.
+```

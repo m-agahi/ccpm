@@ -49,6 +49,9 @@ free text.
   absent one, never a stop (see "Ledger adapters" below). Only a task-id input needs a ledger
   tool.
 - `git`, `gh` (authenticated), and `python3` >= 3.11 (or `tomli`) in the target repo's environment.
+- Optional for the gates (8.0.0): podman (or docker) and the pinned audit-lab image for the
+  security scan's semgrep and gitleaks part, and a pytest `test_cmd` with the `coverage` module for
+  the coverage gate. Without them a gate reports `not_run` or `partial`, never a pass (see "Gates").
 - GitHub command (5.0.8, ledger 2030): `gh_identity.py` picks it per repo, never an agent. `gh`
   runs `gh api repos/<o>/<n> --jq .permissions.push` first; `gh-personal` runs only when `gh` has
   no push. The first with push is `gh_cmd`; else the first that can read (push false); else none.
@@ -545,6 +548,7 @@ args: `{mode: "build", plan_ref, date, run_nonce, project?, confirm?}`.
 | 10   | coder              | works uncommitted; status checked after the hash check                     |
 | 10a  | fixers (infra)     | `pre-commit run --files` on every non-frozen dirty path (below)            |
 | 11   | hasher             | HEAD moved -> stop; any changed, new or removed hash key -> round rejected |
+| 11a  | gates (r/o)        | coverage, mutation, security scan, held-out runner (see "Gates")           |
 | 12   | code judge         | `fix_code` -> coder; `fix_tests` -> test judge; `plan_wrong` -> re-plan    |
 | 12a  | -                  | `approve` with an unmet obligation -> `fix_code` (counts as a round)       |
 | 12b  | changed-defs (r/o) | a modified existing definition outside `changed_symbols` -> stop (below)   |
@@ -999,7 +1003,7 @@ any other entry. Nothing is cached; every run (plan, build, probe) checks the fi
 
 1. `preflight` (haiku, the run's first agent) finds
    `$HOME/.claude/plugins/cache/<marketplace>/fleet/<version>/scripts` and its sibling `roles`
-   dir. Both must be their own realpath and no symlink. The roles dir must hold exactly the ten
+   dir. Both must be their own realpath and no symlink. The roles dir must hold exactly the twelve
    regular role files and one subdirectory, `_shared` (a real directory, no symlink), which holds
    exactly the shared files (no extra file, no other subdirectory, no symlink). The sha256sum
    lines of the regular files must equal `ROLE_SHA256` and `SHARED_SHA256`. Any other value stops
@@ -1117,6 +1121,85 @@ value: any other value (another privilege, a lower-case `process`, a duplicate, 
 refuses the whole declaration in all three checks. `[]` grants nothing. Without the key, the SQL
 and the `db_up.py` arguments are the same as before.
 
+### Gates (8.0.0, ADR-1315, ADR-1316)
+
+Four script gates check each code round before the code judge runs: coverage, held-out,
+mutation and security. Their logic lives in shipped programs (`cover_diff.py`, `held_out.py`,
+`mutants.py`, `sec_scan.py`), never in a role. The gates fail closed:
+
+- An absent tool or an unsupported language gives `not_run` with a reason. That is never a pass.
+- A hit budget gives `partial`. The gate stays in `gates_not_run`.
+- A tool that is present but errors, or a relay off its digest, gets one retry. Then the run stops
+  with `needs_human` at the stop gate `gates`.
+- A gate leaves `gates_not_run` only with a digest-checked `ran` result of the same code round.
+  With no gate result the list is the four gates, each with its reason. The PR body states the
+  list.
+
+The code judge rules on every finding. A coverage or security line needs an `exemptions` entry
+`{gate, path, lines, reason}` with a non-blank reason. A mutant needs a `mutant_rulings` entry
+`{id, target, reason}`, with target `tests`, `code` or `equivalent`. On `approve`, the script turns
+the verdict into `fix_code` for any finding with no ruling. A secret is never exempted, and a
+failing held-out example has no exemption path.
+
+**Where they run.** Each code round runs, in order: its own build-dir reset with the PATH check
+(`infra:build-reset:gates:r<n>`), one read-only agent `infra:gates:r<n>` (sonnet, `fleet:judge`,
+capped) that runs `cover_diff.py`, `mutants.py` and `sec_scan.py` as three slots, one Bash call
+each, one after the other, then, when the plan ref seals a held-out store,
+`infra:build-reset:held-out:r<n>` and `role:fleet-held-out-runner:r<n>`. Coverage and mutation
+work in a detached worktree under the scratch dir at the plan base, with the judged tree read in.
+The main worktree is never touched. Each program has a 540 s deadline inside one Bash call.
+
+- **Coverage** (gate 5): the added lines of the changed production `.py` files that no test ran,
+  under the sealed pytest `test_cmd` and the coverage module, with the fleet's own rcfile (no
+  omit list, no pragma). No numeric stop: the judge rules each line.
+- **Held-out** (gate 3): the planner's `held_out_examples` go to a store on this machine,
+  `$XDG_CONFIG_HOME/fleet/held-out/<task_id>/<plan_sha256>.json` (dirs 0700, file 0600). The plan
+  ref seals only its sha256 and counts. The runner role turns each example into a throwaway test
+  in a scratch copy and returns pass or fail per index, with no example text. A failing example
+  turns `approve` into `fix_code`.
+- **Mutation** (gate 2): a built-in, diff-scoped mutator (comparison flip, boolean swap, boundary
+  and integer +1 or -1, dropped `not`) on the tokens of the added lines. At most 200 mutants,
+  spread evenly. Each survivor ruled `tests` goes into one augmentation round per run: one new,
+  add-only test file, then a re-freeze. No kill-rate stop.
+- **Security** (gate 10): always on, with no container: a risky-API grep on the added lines, a size
+  check against 1.5 x `est_diff_lines` and the frozen tests' string literals in production lines.
+  With a runtime: semgrep (the plugin's pinned rules plus the repo's rules read from the plan base)
+  and gitleaks, only inside the audit-lab image pinned by digest (`AUDIT_IMAGE`). The scan dir holds
+  only the judged blobs of the changed production files, in a per-run dir
+  `$XDG_CACHE_HOME/fleet/sec-scan/run-<16 hex>` (G8: a mount source under `/tmp`, `/var/tmp` or
+  `/dev/shm` is refused).
+
+**Support matrix.**
+
+| Gate     | Runs fully                                               | `not_run` or `partial`, and why                                                                                                                                                 |
+| -------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| coverage | python, a pytest `test_cmd`, the coverage module present | `not_run`: no coverage tool, a test_cmd that is not pytest, another language, a red baseline in the copy. `partial`: changed non-python source, the deadline, over 400 lines    |
+| held-out | any `test_cmd` the runner can extend with one test       | `not_run`: no example sealed, a re-planned ref, a ref sealed before 8.0.0, the store file missing on this machine                                                               |
+| mutation | python with a pytest `test_cmd`                          | `not_run`: another language or runner, a red baseline. `partial`: changed non-python source beside python, a file that does not tokenize, the deadline ("N of M not run")       |
+| security | the image present (podman, else docker), any language    | `partial`: no runtime, no image, no pinned digest (only the always-on checks ran), a file semgrep did not scan, semgrep errors. semgrep's shipped rules cover python, JS and TS |
+
+**Census.** The preflight's gate tool census (see "Gate tool census" under "Probe mode") shows per
+language which tool each gate would use. It is advisory and never stops a run.
+
+**Stop gate `gates`.** `needs_human` with `stop_gate: "gates"` when: a gate program errors twice or
+its relay fails the digest twice; sec_scan finds more than 200 non-secret findings (a human reviews
+such a diff); the held-out store is off its seal, unreadable, missing after an earlier round of the
+same build read it, or the runner's results do not match the sealed counts; a second `tests`
+ruling after the augmentation round; the next coder finds the frozen tests red at its start.
+
+**Agent counts after #62** (the happy two-criterion harness runs: calls and agents from the
+`v4_s3` pins; capped measured on the same runs, the count the 100-agent cap checks at the result:
+no PATH check, build reset or PR tail):
+
+| Run          | 7.4.0 calls / agents / capped | 8.0.0 calls / agents / capped |
+| ------------ | ----------------------------- | ----------------------------- |
+| plan (ask)   | 22 / 22 / 17                  | 21 / 21 / 17                  |
+| build, happy | 68 / 67 / 41                  | 64 / 63 / 42                  |
+
+#62 (cars B1, B2) removes 2 plan calls and 8 build calls, one capped agent in each run. The gates add 1 plan
+call (`infra:held-out:write`) and 4 build calls per code round (2 capped: the gates agent and the
+runner).
+
 ### Threat model
 
 The freeze guards against **reward hacking**: a writer or coder that weakens tests or gates to get
@@ -1154,7 +1237,22 @@ Not defended:
   (`refs/fleet/<task>/plan`) is self-hashed, so any role with a shell can forge one, in another
   task's namespace too. Roles are inside the trust boundary (ADR-1152), and no key can sit outside
   a role's read scope. The sealed `kind:ref` check blocks only accidental cross-task branch
-  adoption.
+  adoption;
+- held-out examples (8.0.0, ADR-1152): the store blocks casual reads only. Every role has a shell
+  and can read `~/.config`, and the code under test sees the examples when the runner runs them,
+  with no sandbox. The fleet itself never forwards an example (sentinel tests);
+- coverage and mutation (8.0.0): advisory to the code judge. Code under test runs in the same
+  process as the coverage tracer, or as the user against the mutant copy, so a hostile coder can
+  tamper with the result.
+
+The security scan (8.0.0, ADR-1315) runs semgrep and gitleaks only in the audit-lab image pinned by
+digest, with the network off, a read-only root, no capabilities, the host uid and read-only
+mounts. The rules are offline: the plugin's pinned file and the repo's rules from the plan base
+(`--metrics=off`, no registry). There is no host fallback: host semgrep and gitleaks are never
+used, and the image's IaC scanners are never invoked. The image is about 9.5 GB. A cold pull can
+take longer than the preflight's 540 s: then that run's census marks the image missing and the
+security gate runs its always-on checks only (`partial`, listed in `gates_not_run`). A later run's
+preflight pulls again and finishes the pull. To avoid that, pull `AUDIT_IMAGE` once by hand.
 
 #### IaC tooling: Max's hard rules and the PATH shims (3.1.0)
 
@@ -1837,9 +1935,10 @@ change that a judge makes and reverts within its own run.
 
 ### Limits
 
-- Agent cap 100 per run (60 before 2.1.0). With `confirm: "auto"` one run holds the plan, the
-  gates, the build and the review: a two-criterion happy run uses about 35 agents, and one review
-  fix round adds about 13. Every cap hit is logged. Test rounds: 3 per entry into the test loop. Code rounds: 3 per build
+- Agent cap 100 per run (60 before 2.1.0), counted on capped agents (see "Gates" for the
+  counts). With `confirm: "auto"` one run holds the plan, the gates, the build and the review, so
+  its capped agents are the plan's and the build's together. The harness's two-criterion happy
+  runs have 17 capped agents in plan mode and 42 in build mode. Every cap hit is logged. Test rounds: 3 per entry into the test loop. Code rounds: 3 per build
   run; a `fix_tests` detour, a commit-hook rejection, a push-hook rejection and a review fix each
   count as one code round. A PR-body update for a `pr_body_claim` finding is no code round.
 - Nothing is committed before the code judge approves, so a build interrupted before its commit
@@ -1860,7 +1959,8 @@ change that a judge makes and reverts within its own run.
   change to `.github/`, IaC, Kubernetes, rulesets or secret-like paths, in every mode.
 - A re-plan after `plan_wrong` saves the uncommitted work with `git commit-tree` (a plumbing commit
   object on a side branch, no hooks). That is not a `git commit`, and it is never pushed.
-- The fleet runs no scanner gate. Mutation runs for python with pytest only (8.0.0, G5). Held-out examples run only on the machine that
+- The security scan needs podman or docker and the pinned image (see "Gates"). Coverage and
+  mutation run for python with pytest only (8.0.0, G2, G5). Held-out examples run only on the machine that
   sealed them (8.0.0, G4). Judges receive explicit `{status: "not_run"}` markers for a gate that
   did not run, and `gates_not_run` reaches the PR opener and the result.
   The planner's `held_out_examples` never reach another role; the held-out store (8.0.0, G3)
@@ -1998,4 +2098,5 @@ and drops the empty lines and the lines that are only a `//` comment (the table 
 Nothing inside a line changes. It then checks that esbuild `--minify-whitespace` (pinned
 `ESBUILD_VERSION`, run by `npx`) gives the same bytes for the source and the workflow, and fails
 when they differ (a string, template or comment that spans a line). The workflow must stay at most
-480000 bytes (ADR-1189; Claude Code skips a workflow file over 524288 bytes).
+495000 bytes (8.0.0, G1; was 480000 under ADR-1189; Claude Code skips a workflow file over 524288
+bytes).
