@@ -123,10 +123,11 @@ const SCENARIOS = {
 // 8.1.0 (#75): the held-out runner role file (sandbox-run, store sandbox) and its schema enum move, the cover_diff, mutants and scratch_copy program pins move, the program table gains sandbox, and the version moves (probe unchanged)
 // 8.2.1 (#82): every relay checked against a program digest runs on sonnet first (the model is in the pin) and the version moves: all four pins move, no prompt text or call count changes
 // 8.2.3 (#85): format_files gains the digested key base_red (the format prompts name it, the program-output schema types it): the three build pins move, probe unchanged
+// 8.2.4 (#86): the held-out runner role file names the printed store_digest (not digest) and held_out.py show prints store_digest (the held_out schema and the show key list gain it); the version moves: the three build pins move, probe unchanged
 const PINS = {
-  "plan then build (confirm ask)": { calls: 89, sha256: "4174c2cadd5dec637ede7fa228b6dd4ef32f934dc7a64ddfb5a7f004663d1ec5" },
-  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "3c247764f17e13748e673da5d5bf8994348f9b85348772307a68c92af77b02e9" },
-  "short path (one test writer)": { calls: 88, sha256: "cdd68c3bbb067ea044f49494450b16a7ff571db738e163ae978172d3f8712cbf" },
+  "plan then build (confirm ask)": { calls: 89, sha256: "a998c1fae530a5f95f8696ba388f4339e9610143e6347b8ed7cbb7fc91c23823" },
+  "confirm auto (gates, then build in one run)": { calls: 89, sha256: "c73a28e77d67af361c46d041487547861e492271bce49931095ce850049c0e59" },
+  "short path (one test writer)": { calls: 88, sha256: "ba9824113ae1d14195c9baaec63a2a8b6760cc203fdd07942cb9c0f9361a9e0b" },
   "probe": { calls: 2, sha256: "7805c6239ff4d5c7b006f48e4ed1a49481c9a56527caf363d57e125de37fb077" },
 };
 

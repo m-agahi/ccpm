@@ -43,6 +43,7 @@ except Exception:
 #     $XDG_CONFIG_HOME/fleet/held-out/<task id>/<plan_sha256>.json (dir 0700, file 0600, a random salt).
 #     Prints {sha256 (of the file bytes; null: nothing kept), count, per_criterion, dropped, args}.
 #   show <task id> <plan_sha256> <sealed sha256>: the examples, only when the file hashes to the seal.
+#     Prints {examples, sha256, store_digest (8.2.4: the same value as sha256, the key the runner relays), args, program, digest (of the output; never the store hash)}.
 # No example text ever reaches stdout or stderr in write mode: dropped holds criterion and index only.
 import atexit, base64, hashlib, json, os, re, secrets, shutil, sys
 ARGC = {'write': 9, 'show': 4}
@@ -93,7 +94,7 @@ if mode == 'show':
     d = json.loads(b.decode('utf-8'))
     if d.get('task_id') != task or d.get('plan_sha256') != psha or not isinstance(d.get('examples'), list):
         sys.exit('the store file is not this plan\'s')
-    done({'examples': d['examples'], 'sha256': sealed, 'args': a[1:]})
+    done({'examples': d['examples'], 'sha256': sealed, 'store_digest': sealed, 'args': a[1:]})
     sys.exit(0)
 def write():
     if not re.fullmatch(r'[1-9][0-9]?', n_arg) or not HEX.fullmatch(expected):

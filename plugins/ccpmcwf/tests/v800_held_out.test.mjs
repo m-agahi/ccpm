@@ -425,6 +425,6 @@ test("8.0.0 G3-5: planRefProblem accepts a ref with no held_out key (older refs)
 test("8.0.0 G3: the program wiring: one slot, keys per mode, sonnet tier, off the read-only digest-retry list", () => {
   assert.match(SOURCE, /\[\/\^infra:held-out:write\/, \[\[null, "held_out"\]\]\]/);
   assert.match(SOURCE, /"held_out:write": \["sha256", "count", "per_criterion", "dropped", "args"\]/);
-  assert.match(SOURCE, /"held_out:show": \["examples", "sha256", "args"\]/);
+  assert.match(SOURCE, /"held_out:show": \["examples", "sha256", "store_digest", "args"\]/);
   assert.match(SOURCE, /\["infra:held-out", "sonnet"\]/);
 });

@@ -107,7 +107,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.2.3";
+const FLEET_VERSION = "8.2.4";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -1525,7 +1525,7 @@ const PROGRAM_SHA256 = {
 "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
 "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
 "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
-"held_out": "58460d3adece15be446f7854af5c7467a00d3cd8508b8534937489577d9ea143",
+"held_out": "bf0a828f8463a1029b29430e2e27c1d55b1df0cdb06bf193051a7d018103c8f0",
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
 "mutants": "430e1bb6aa9de51d76b58bab9167a7ee6d8770ec75bf4573721456e233369b0c",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
@@ -1568,7 +1568,7 @@ const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
 "fleet-code-judge": "fdd95e92358734335190c162d165a5e72d0b10ce4c6f17397b878869810cf4eb",
 "fleet-coder": "fca268a7affc87d1257b161a8138a78e1a17965063d1ffb7fe9b1a7c6d165547",
-"fleet-held-out-runner": "11794dfb10875f64afed5d985c7001b2271f98af67cdc0f4470762468310772b",
+"fleet-held-out-runner": "45d8598c8c940fda09f06ca2881190181f0c7e7333ecbde7d35f11a983913284",
 "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
 "fleet-pr-opener": "28a9ebb7770541b23050f249997cb447453be6ab58dcc495f09490d3109e772a",
 "fleet-test-judge": "2dd18aedc8580c68583951ede4714e876a9752ac723e27558d1c17f5488b7d04",
@@ -1693,7 +1693,7 @@ const PROGRAM_KEYS = {
 "mutants": ["status", "reason", "killed", "survived", "not_run", "budget_hit", "args"],
 "sec_scan": ["status", "reason", "findings", "args"],
 "held_out:write": ["sha256", "count", "per_criterion", "dropped", "args"],
-"held_out:show": ["examples", "sha256", "args"],
+"held_out:show": ["examples", "sha256", "store_digest", "args"],
 "gh_identity": ["origin", "repos", "args"],
 "hasher": ["fingerprint", "hashes", "scripts"],
 "hasher:base": ["fingerprint", "hashes", "changed", "scripts"],
@@ -1788,7 +1788,7 @@ container: { type: "object", properties: { runtime: STR_OR_NULL, image: STR, pre
 args: STRS,
 digest: STR,
 },
-held_out: { sha256: STR_OR_NULL, count: INT, per_criterion: { type: "object", additionalProperties: INT }, dropped: { type: "array", items: { type: "object", properties: { criterion: STR_OR_NULL, index: INT, why: STR } } }, examples: { type: "array", items: { type: "object", properties: { criterion_id: STR, given: STR, when: STR, then: STR } } }, args: STRS, digest: STR },
+held_out: { store_digest: STR, sha256: STR_OR_NULL, count: INT, per_criterion: { type: "object", additionalProperties: INT }, dropped: { type: "array", items: { type: "object", properties: { criterion: STR_OR_NULL, index: INT, why: STR } } }, examples: { type: "array", items: { type: "object", properties: { criterion_id: STR, given: STR, when: STR, then: STR } } }, args: STRS, digest: STR },
 cover_diff: { status: STR, reason: STR_OR_NULL, findings: { type: "array", items: { type: "object", properties: { path: STR, lines: { type: "array", items: INT } } } }, args: STRS, digest: STR },
 sec_scan: { status: STR, reason: STR_OR_NULL, findings: { type: "array", items: { type: "object", properties: { path: STR, lines: { type: "array", items: INT }, rule: STR, kind: STR } } }, args: STRS, digest: STR },
 mutants: { status: STR, reason: STR_OR_NULL, killed: INT, survived: { type: "array", items: { type: "object", properties: { id: STR, path: STR, line: INT, op: STR } } }, not_run: INT, budget_hit: BOOL, args: STRS, digest: STR },

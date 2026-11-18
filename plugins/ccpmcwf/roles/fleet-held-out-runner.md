@@ -29,11 +29,11 @@ The planner wrote examples that no test writer and no coder saw. The fleet store
 
 ## Steps
 
-1. **Read the store.** Run `<held_out_cmd> show <task_id> <plan_sha256> <held_out.sha256>` as one Bash call, never with `test_env` (its `XDG_CONFIG_HOME` is not the store's). It prints `{examples, sha256, args, program, digest}` only when the store file hashes to the sealed sha256. `examples` is a list of `{criterion_id, given, when, then}` in store order.
+1. **Read the store.** Run `<held_out_cmd> show <task_id> <plan_sha256> <held_out.sha256>` as one Bash call, never with `test_env` (its `XDG_CONFIG_HOME` is not the store's). It prints `{examples, sha256, store_digest, args, program, digest}` only when the store file hashes to the sealed sha256. `examples` is a list of `{criterion_id, given, when, then}` in store order.
    - It exits non-zero with `store file missing on this machine`: set `store: "missing"`, `store_digest: null`, `results: null`, `status: "ok"`, and stop.
    - It exits non-zero with `the store file does not match the sealed sha256`: set `store: "mismatch"`, `store_digest: null`, `results: null`, `status: "ok"`, and stop.
    - Any other non-zero exit: set `store: "error"`, `store_digest: null`, `results: null`, `status: "ok"`, and stop.
-   - Exit 0: set `store: "ok"` and `store_digest` to the printed `sha256`, copied exactly.
+   - Exit 0: set `store: "ok"` and `store_digest` to the printed `store_digest` (it equals the printed `sha256` and `held_out.sha256`), copied exactly. Never use the printed `digest` key: it is the digest of the program's output, not the store hash.
 2. **Index the examples.** An example's `index` is its 0-based position among the examples of the same `criterion_id`, in store order. Criterion `AC1` with 3 examples has indexes 0, 1 and 2. Check that the counts per criterion equal `held_out.per_criterion`; when they differ, return `status: "needs_human"`.
 3. **Make a scratch copy of the judged tree.** `<scratch_copy_cmd> make <worktree> <plan_commit>` prints `{tmp}`, a detached worktree at `plan_commit` under `scratch_dir` (hooks off). Then run `git -C <tmp> -c core.hooksPath=/dev/null read-tree -u --reset <code_tree>`. Every edit and every test run below happens in `<tmp>`, never in `worktree`.
 4. **One throwaway test per example.** For each example, in order:
@@ -51,7 +51,7 @@ The frozen tests of a criterion are green on the change (the coder and the code 
 Return ONE object through the StructuredOutput tool. It is the only output channel: the workflow reads nothing else from your final message.
 
 - Always: `status`, `reason` (one line, no example text) and `role_file` (step 1 of your prompt).
-- Required on `ok`: `store` (`ok`, `missing`, `mismatch`, `error`, `timeout` or `sandbox`), `store_digest` (a string, or null when `store` is not `ok`) and `results` (one entry per sealed example when `store` is `ok`, else null). Each entry is `{criterion, index, pass}`: `criterion` a key of `held_out.per_criterion`, `index` an integer, `pass` a boolean. Every criterion's indexes are exactly 0 to its count minus 1, each once. A missing key, a wrong type or an incomplete list stops the run.
+- Required on `ok`: `store` (`ok`, `missing`, `mismatch`, `error`, `timeout` or `sandbox`), `store_digest` (the printed `store_digest`, never `digest`; null when `store` is not `ok`) and `results` (one entry per sealed example when `store` is `ok`, else null). Each entry is `{criterion, index, pass}`: `criterion` a key of `held_out.per_criterion`, `index` an integer, `pass` a boolean. Every criterion's indexes are exactly 0 to its count minus 1, each once. A missing key, a wrong type or an incomplete list stops the run.
 - `memory_notes`: never set it (the workflow ignores it for this role).
 
 Shape:
@@ -65,7 +65,7 @@ Shape:
     "sha256": "<step 1>"
   },
   "store": "ok",
-  "store_digest": "<the sha256 that show printed>",
+  "store_digest": "<the store_digest that show printed, never its digest>",
   "results": [
     {
       "criterion": "AC1",
