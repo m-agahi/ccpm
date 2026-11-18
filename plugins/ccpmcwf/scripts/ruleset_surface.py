@@ -46,6 +46,8 @@ except Exception:
 # hosted in this repo is surface. A 404 there, or a 403 / 5xx without the
 # admin:org scope, is reported in `unreadable` (the floor stands); a 403 / 5xx
 # with admin:org, and any failure of the repo or rules read, sets `error`.
+# 8.2.2 (#83): bar a rules read 403 whose API message says "Upgrade to GitHub
+# Pro" (rulesets are off for a private repo on the free plan): `unreadable`.
 # Prints {surface, sources, read, unreadable, error, args, program, digest}.
 # Read only: GET requests through the given command; no token is read.
 import base64, hashlib, json, os, re, subprocess, sys, time
@@ -126,7 +128,7 @@ TOKEN = re.compile(r'(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|[A
 # 7.4.0 (#36 B6): a Bearer token of any length
 BEARER = re.compile(r'(?i)\b(bearer)\s+\S+')
 # 6.3.2 (2130): gh's stderr of the last call with no HTTP status (first 200 characters, tokens redacted)
-LAST_ERR = {'text': ''}
+LAST_ERR = {'text': '', 'body': None}
 
 
 def http(code):
@@ -142,6 +144,7 @@ def api(path):
         time.sleep(3)
         r = api1(path)
     LAST_ERR['text'] = BEARER.sub(r'\1 ***', TOKEN.sub('[redacted]', ' '.join(r[4].split())))[:200] if r[0] is None else ''
+    LAST_ERR['body'] = r[1]
     return r[:3]
 
 
@@ -212,8 +215,12 @@ else:
     else:
         rid = repo['id']
         otype = (repo.get('owner') or {}).get('type')
-        rules, why, _, _ = api_all('repos/' + slug + '/rules/branches/' + quote(branch))
-        if why is not None:
+        rules, why, code, _ = api_all('repos/' + slug + '/rules/branches/' + quote(branch))
+        msg = LAST_ERR['body'].get('message') if isinstance(LAST_ERR['body'], dict) else None
+        if why == 'HTTP 403' and code == 403 and isinstance(msg, str) and 'Upgrade to GitHub Pro' in msg:
+            # 8.2.2 (#83): a private repo on the free plan has no rulesets: the floor stands
+            unreadable.append('rules of ' + slug + ' branch ' + branch + ' not available (HTTP 403: rulesets need GitHub Pro or a public repo): hosting-side required workflows not checked')
+        elif why is not None:
             error = 'rules of ' + slug + ' branch ' + branch + ' not readable (' + why + ')'
         else:
             read.append('rules/branches/' + branch + ': ' + str(len(rules)) + ' rule(s)')
