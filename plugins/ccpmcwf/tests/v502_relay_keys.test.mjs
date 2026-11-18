@@ -197,7 +197,8 @@ test("5.0.2 2007: the digest checks and the prompts read the one key table (sour
   const at = SOURCE.indexOf("\nconst PROGRAM_OUT = {");
   const out = new Function("const STR = {}, STR_OR_NULL = {}, STRS = {}, BOOL = {}, INT = {}, STR_LISTS = {}, PROGRAM_PROP = {};\nreturn " + SOURCE.slice(SOURCE.indexOf("{", at), SOURCE.indexOf("\n};\n", at) + 2))();
   // 7.3.0 (#54): scratch_copy.py is run by the copy roles and relayed by no step: no key table
-  const RELAYED = PROGRAMS.filter(([n]) => n !== "scratch_copy");
+  // 8.1.0 (#75): sandbox.py is run by other programs, relayed by no step
+  const RELAYED = PROGRAMS.filter(([n]) => n !== "scratch_copy" && n !== "sandbox");
   for (const [n] of RELAYED) {
     const union = [...new Set(Object.entries(table).filter(([id]) => id.split(":")[0] === n).flatMap(([, k]) => k))].sort();
     if (n === "hasher") continue;

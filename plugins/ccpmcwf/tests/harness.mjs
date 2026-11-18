@@ -1235,7 +1235,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.0.2/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.1.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -2074,4 +2074,15 @@ export function callersDisk(s, prefix, data, opts) {
   s[prefix + ":file"] = callersFileStub(data, o.file);
   for (const part of ["all", "auto", "paths"]) for (let k = 0; k < 10; k++) s[prefix + ":read:" + part + ":" + k] = callersReadStub(data, o.read);
   return s;
+}
+
+// 8.1.0 (#75): a pass-through bwrap for the gate logic tests (v800_*). It writes the child-pid status that
+// sandbox.py waits for, enters --chdir and runs the command after `--` with no sandbox, so the stubs keep
+// logging where they did. The real sandbox runs in v810_sandbox.
+export const BWRAP_PASS =
+  "#!/bin/sh\nfd=\ndir=\nwhile [ \"$#\" -gt 0 ] && [ \"$1\" != \"--\" ]; do\n  case \"$1\" in\n    --json-status-fd) fd=$2 ;;\n    --chdir) dir=$2 ;;\n  esac\n  shift\ndone\nshift\n" +
+  "[ -n \"$dir\" ] && cd \"$dir\"\nif [ -n \"$fd\" ]; then eval \"printf '{\\\"child-pid\\\": 1}\\n' >&$fd; exec $fd>&-\"; fi\nexec \"$@\"\n";
+export function passBwrap(bin) {
+  writeFileSync(join(bin, "bwrap"), BWRAP_PASS);
+  chmodSync(join(bin, "bwrap"), 0o755);
 }

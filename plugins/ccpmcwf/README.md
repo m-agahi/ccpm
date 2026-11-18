@@ -1309,12 +1309,75 @@ Not defended:
   adoption;
 - the run lock (8.0.1, #76): it stops a second session on the same task by accident. A role with
   a shell can delete or rewrite `<git-common-dir>/fleet/locks/<task_id>.json`;
-- held-out examples (8.0.0, ADR-1152): the store blocks casual reads only. Every role has a shell
-  and can read `~/.config`, and the code under test sees the examples when the runner runs them,
-  with no sandbox. The fleet itself never forwards an example (sentinel tests);
+- held-out examples (8.0.0, ADR-1152): the store blocks casual reads by roles only. Every role
+  has a shell and can read `~/.config`. Since 8.1.0 the code under test cannot read the store or
+  keep the examples (the sandbox below). The fleet itself never forwards an example (sentinel
+  tests);
 - coverage and mutation (8.0.0): advisory to the code judge. Code under test runs in the same
-  process as the coverage tracer, or as the user against the mutant copy, so a hostile coder can
-  tamper with the result.
+  process as the coverage tracer, so it can still tamper with the tracer or with the data file
+  during the `coverage run` step (see the sandbox below for what 8.1.0 closes).
+
+**The gate sandbox (8.1.0, #75, ADR-1319).** The held-out runner (`scratch_copy.py sandbox-run`),
+the coverage gate (`cover_diff.py`) and the mutation gate (`mutants.py`) run every test process
+through `sandbox.py`, a bubblewrap (`bwrap`) sandbox. Each caller pins the sha256 of `sandbox.py`.
+
+- Flags: `--unshare-all` (network included), `--die-with-parent`, `--new-session`, `--ro-bind / /`,
+  a new `/dev` and `/proc`, and a tmpfs `/tmp`.
+- Hidden (tmpfs): `/run` and a real `/var/run` (`--unshare-net` does not cover path-based unix
+  sockets: podman, docker, D-Bus, gpg and ssh agents), `$HOME`, `$XDG_CONFIG_HOME` (the held-out
+  store), `$XDG_CACHE_HOME`, `$XDG_DATA_HOME`, `$XDG_RUNTIME_DIR` (also when it is outside `/run`),
+  `~/.ssh`, `~/.gnupg`, the worktree, its fleet root and the main checkout with its git dir. From
+  `/run` only `/run/current-system` (a symlink) and `/run/wrappers` (read-only) come back, by exact
+  path, for NixOS binaries.
+- Writable, fresh in each run (`--tmp-overlay`, nothing reaches the host): the copy, and the env's
+  private dirs (`HOME`, `TMPDIR`, `XDG_*`, the build and uv dirs) under `<root>/scratch/build` or
+  `uv-cache`. Written through (`--bind`): the coverage data dir in the `coverage run` step and the
+  report dir in the `coverage json` step, nothing else.
+- Read-only again: a PATH dir that a tmpfs hides, only when its real path is outside every hidden
+  dir and holds none (a profile link such as `~/.nix-profile/bin` comes back as its `/nix/store`
+  dir). A PATH entry that is `$HOME`, holds a hidden dir or the store, or lies under a hidden dir
+  (`~/.local/bin`, say) is dropped; when the command is then not found (exit 127), the run's
+  output names the dropped dirs. The allowlist: the toolchain dirs `~/.local/share/uv/python`,
+  `~/.rustup`, `~/.cargo/bin`, `~/.cargo/registry` and `~/go/pkg/mod` (no credential file in any
+  of them) and the interpreter's prefix, none of which may hold a hidden dir. And the copy's git dir
+  (the held-out and coverage copies are git worktrees, so the repo's objects are readable; the
+  mutation copy has no `.git`).
+- The test database: a podman MariaDB on `127.0.0.1:<port>` is outside the sandbox's network.
+  For each `*_TEST_DSN` value `mysql://...@127.0.0.1:<port>/...` in the env, `sandbox.py` relays
+  that one port: a host thread listens on a unix socket in a private dir and connects to
+  `127.0.0.1:<port>`, and a launcher in the sandbox listens on `127.0.0.1:<port>` and forwards to
+  the socket, bound read-only at `/tmp/.fleet-db` (the only host socket in the sandbox). No other
+  port and no other host is reachable.
+- Fail closed: no `bwrap` on the agent PATH (never the env PATH), a failed self-check (the same
+  mounts running `python3 -I -S -c ''`), a mount that fails or a `sandbox.py` off its pin gives
+  `not_run` "sandbox unavailable: ..." for coverage and mutation, and `store: "sandbox"` (held_out
+  `not_run`) for the held-out runner. No test process runs unsandboxed. After an earlier round
+  ran, the gates' existing rule stops the run instead.
+
+Closed in 8.1.0 (each has a fixture in `v810_sandbox`):
+
+1. Base re-run poisoning (ADR-1318): the base re-run runs in a new sandbox, so HOME, `/tmp` and
+   the private dirs are fresh, and the test database is dropped and created again first (every
+   database the DSN user sees, system schemas aside, with `mariadb` or `mysql` from the agent PATH
+   and the password in `MYSQL_PWD`). No client, or a failed reset: "tree red, base not re-run",
+   which stops at `gates`.
+2. Coverage launcher and report tampering: the `python -m pytest` shape uses an inline
+   `python3 -I -c` launcher, no file. The rcfile is read-only, the data dir is writable in the run
+   step only, the report dir in the json step only, and the work dir is not visible in the plain
+   runs. The PID namespace kills a `setsid` daemon when its step ends.
+3. Mutation detection against the worktree: the worktree, the main checkout and the git dir are
+   not visible, and each mutant run gets a fresh overlay of the copy, so no run leaves state for
+   the next.
+
+What is left: in-process tampering during the `coverage run` step (the tests share the tracer's
+process and its data dir); code that the interpreter loads from the env at start (a venv's `.pth`
+files, which are fresh per run but come from the tree's own install); a hostile role with a shell,
+which can read the store and run anything unsandboxed (ADR-1152); other copy roles (the judges,
+the test writers, plan-audit) still use the unsandboxed `scratch_copy.py run`; and `bwrap` itself
+is trusted as found on the agent PATH. Host unix sockets outside `/run`, `/tmp` and `$HOME` (for
+example the nix daemon socket under `/nix/var`) stay reachable. With no network, a test run that needs to download
+(`uv run` with a cold cache) fails, and the gate reports a red baseline. The overlays also mean a
+uv venv is built again in each run.
 
 The security scan (8.0.0, ADR-1315) runs semgrep and gitleaks only in the audit-lab image pinned by
 digest, with the network off, a read-only root, no capabilities, the host uid and read-only
@@ -1914,7 +1977,8 @@ The script pins the role contract, not the prose:
   test runs in the gate step before the scan reads its dir; a detached process an earlier step
   left, as the same uid, still can. The mutation copy has no `.git`, but code under test can read
   the fleet worktree beside it (same uid) and compare its own source with it: mutation is a signal
-  against reward hacking, not a boundary; a sandbox is task #75. Auto-capture hooks: a user-level
+  against reward hacking, not a boundary. Since 8.1.0 (#75) the runner and both gates run their
+  test processes in the bwrap sandbox (see "The gate sandbox"), which closes these three. Auto-capture hooks: a user-level
   `PostToolUse` hook with no matcher (such as yadgar's `post-tool-capture`) also fires for the tool
   calls of the workflow's agents (Claude Code runs hooks for subagent tool calls; not checked live
   in a Workflow run), so the held-out write step's chunks and the runner's `show` output

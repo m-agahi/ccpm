@@ -34,7 +34,7 @@ try:
         _PROG = {'name': _o.path.basename(_fh.name)[:-3], 'sha256': _hl.sha256(_fh.read(1 << 22)).hexdigest()}
 except Exception:
     _PROG = {'name': None, 'sha256': None}
-import base64, json, os, re, shutil, signal, subprocess, sys, tempfile
+import base64, hashlib, json, os, re, shutil, signal, subprocess, sys, tempfile
 # fleet 7.3.0 (#54, L2189): the throwaway copy a role runs stubs, reverts, mutants and probes
 # in, with fixed git arguments and no shell. The scratch dir is derived here from the
 # worktree (<dirname(worktree)>/scratch, the fleet layout), never taken from the caller.
@@ -45,6 +45,10 @@ import base64, json, os, re, shutil, signal, subprocess, sys, tempfile
 #   run <worktree> <tmp> <argv json> [<env json>]: argv with cwd <tmp> and env added; the
 #     program's caps are lifted for the child; its process group dies at 540 s (car F, B-M1).
 #     Prints {exit_code (null at the deadline), timed_out, tail, args}.
+#   sandbox-run <worktree> <tmp> <argv json> [<env json>]: run, in a sandbox.py sandbox (8.1.0, #75; the
+#     held-out runner): no network, HOME, the held-out store and the worktree hidden, the copy and the env's
+#     private dirs a fresh overlay per run. No sandbox (no bwrap, a failed self-check, sandbox.py off its pin):
+#     exit non-zero with "sandbox unavailable: ..." and nothing run.
 #   patch <worktree> <tmp> <file> <old b64> <new b64>: replace the one occurrence of old by new
 #     in <tmp>/<file> (a regular file). Prints {patched, args}. The judges have no Edit tool.
 #   remove <worktree> <tmp>: worktree remove --force, then prune. Prints {removed, args}.
@@ -56,6 +60,8 @@ G = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c'
 # around it), and no shell given a command string
 REFUSED = {'terraform', 'tofu', 'tfp', 'terragrunt', 'digger', 'atlantis'}
 SHELLS = {'sh', 'bash', 'zsh', 'dash', 'ksh'}
+SANDBOX_SHA256 = '142e66c5318a6699250f656b31be5c5ae3cc155efe5a48d580e221c475d0f65a'
+SBX = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'sandbox.py')
 os.environ['GIT_TERMINAL_PROMPT'] = '0'
 def emit(out):
     out['program'] = _PROG
@@ -131,8 +137,16 @@ if mode == 'make' and len(args) in (1, 2):
                 shutil.copy2(src, dst)
             copied.append(p)
     emit({'tmp': tmp, 'rev': rev, 'copied': sorted(copied), 'deleted': sorted(deleted), 'args': args})
-elif mode == 'run' and len(args) in (3, 4):
+elif mode in ('run', 'sandbox-run') and len(args) in (3, 4):
     tmp = copy_of(args[0], args[1])
+    if mode == 'sandbox-run':
+        try:
+            with open(SBX, 'rb') as fh:
+                ok = hashlib.sha256(fh.read()).hexdigest() == SANDBOX_SHA256
+        except OSError:
+            ok = False
+        if not ok:
+            sys.exit('sandbox unavailable: sandbox.py does not hash to its pinned sha256')
     try:
         argv = json.loads(args[2])
         env = json.loads(args[3]) if len(args) == 4 else {}
@@ -220,9 +234,17 @@ elif mode == 'run' and len(args) in (3, 4):
     _dl = os.environ.get('FLEET_SCRATCH_RUN_DEADLINE') or ''
     DEADLINE = min(540, int(_dl)) if re.match(r'^[1-9][0-9]{0,3}$', _dl) else 540
     late = False
+    cmd, why = argv, None
+    if mode == 'sandbox-run':
+        # the spec and the result in a private dir of the scratch dir (hidden in the sandbox)
+        sd = tempfile.mkdtemp(prefix='sbx-', dir=scratch_of(args[0]))
+        res = os.path.join(sd, 'res.json')
+        with open(os.path.join(sd, 'spec.json'), 'w') as fh:
+            json.dump({'worktree': args[0], 'cwd': tmp, 'copy': tmp, 'argv': argv, 'env': dict(os.environ, **env, PATH=path), 'git': True, 'check': True, 'result': res}, fh)
+        cmd = [sys.executable, '-I', SBX, 'run', os.path.join(sd, 'spec.json')]
     try:
         with tempfile.TemporaryFile() as out:
-            p = subprocess.Popen(argv, cwd=tmp, env=dict(os.environ, **env, PATH=path), stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, preexec_fn=lift, start_new_session=True)
+            p = subprocess.Popen(cmd, cwd=tmp, env=dict(os.environ, **env, PATH=path) if cmd is argv else os.environ, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, preexec_fn=lift, start_new_session=True)
             try:
                 code = p.wait(timeout=DEADLINE)
             except subprocess.TimeoutExpired:
@@ -234,10 +256,22 @@ elif mode == 'run' and len(args) in (3, 4):
             p.wait()
             out.seek(0)
             text = out.read().decode('utf-8', 'replace')
+        if cmd is not argv and not late:
+            try:
+                with open(res) as fh:
+                    r = json.load(fh)
+            except (OSError, ValueError):
+                r = {'started': False, 'reason': 'sandbox.py gave no result (exit %s)' % code}
+            why = None if r.get('started') else str(r.get('reason'))
+            code = r.get('exit')
     except OSError as e:
         code, text = 127, str(e)
     finally:
         shutil.rmtree(guard, ignore_errors=True)
+        if cmd is not argv:
+            shutil.rmtree(sd, ignore_errors=True)
+    if why:
+        sys.exit('sandbox unavailable: ' + why)
     emit({'exit_code': code, 'timed_out': late, 'tail': text[-TAIL:], 'args': args})
 elif mode == 'patch' and len(args) == 5:
     tmp = copy_of(args[0], args[1])

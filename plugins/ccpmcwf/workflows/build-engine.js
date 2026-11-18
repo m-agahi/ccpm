@@ -107,7 +107,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.0.2";
+const FLEET_VERSION = "8.1.0";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -511,7 +511,7 @@ findings: REVIEW_FINDINGS,
 }),
 "fleet-ci-classifier": roleSchema({ checks: { type: "array", items: { type: "object", properties: { name: STR, cause: { type: "string", enum: CI_CAUSES } }, required: ["name", "cause"] } } }),
 "fleet-held-out-runner": roleSchema({
-store: { type: "string", enum: ["ok", "missing", "mismatch", "error", "timeout"] },
+store: { type: "string", enum: ["ok", "missing", "mismatch", "error", "timeout", "sandbox"] },
 store_digest: STR_OR_NULL,
 results: { type: ["array", "null"], items: { type: "object", properties: { criterion: STR, index: { type: "integer" }, pass: { type: "boolean" } } } },
 }),
@@ -1513,7 +1513,7 @@ const PROGRAM_SHA256 = {
 "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
 "changed_defs": "873f1bcb97c7631934512729941deca1e9da49bc84957f1e78ec171293840644",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
-"cover_diff": "75601765b02902c58eacee9a45ab87f3699a8111ac30631ad77da3b107a87e6f",
+"cover_diff": "51736924e6c1ee5421c448c0bd180103beda6f55d8fc22fe7c5b1a0aefdc497f",
 "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
 "db_sweep": "f557b6d5d55d0139b0340a5d6653847566e6d105ab476e017c7f1bc2213a3f80",
 "db_up": "02675bec7b81431aebca49fb129baed379ff3b1f53f2bb6ba5fba26678e17c3c",
@@ -1527,7 +1527,7 @@ const PROGRAM_SHA256 = {
 "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
 "held_out": "58460d3adece15be446f7854af5c7467a00d3cd8508b8534937489577d9ea143",
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
-"mutants": "2f2e06a3174586e7b26249032997bf722698212f15b47ea6774bf4ff157f1e41",
+"mutants": "0d5dcb713709e28fe5584c3911410a4519aa6d4c0d5a81b26993e6556711f8c2",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "37138285a62f406863e2d0366fb6cf7bbfff9e118dc693ce048c3646e279a3ad",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1549,7 +1549,8 @@ const PROGRAM_SHA256 = {
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
 "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
 "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
-"scratch_copy": "d8eaf27a102911048b11238cfdc271e5adbd30c0668c1e97e7d0d074654cfa3a",
+"sandbox": "142e66c5318a6699250f656b31be5c5ae3cc155efe5a48d580e221c475d0f65a",
+"scratch_copy": "e2fd57294edd0f2cd2ff76703485a808d0c2df406ba889bd82c97aaa36fb80c2",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
 "sec_scan": "ef33b6e2742b2f2e877be7e676f030be129b72461dd49836b0b93a3626fbf06b",
 "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",
@@ -1567,7 +1568,7 @@ const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
 "fleet-code-judge": "fdd95e92358734335190c162d165a5e72d0b10ce4c6f17397b878869810cf4eb",
 "fleet-coder": "fca268a7affc87d1257b161a8138a78e1a17965063d1ffb7fe9b1a7c6d165547",
-"fleet-held-out-runner": "8e970c2dde23a206f93d48a70a679e413b1901ee86e6cf0b265b53be1a26307a",
+"fleet-held-out-runner": "11794dfb10875f64afed5d985c7001b2271f98af67cdc0f4470762468310772b",
 "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
 "fleet-pr-opener": "28a9ebb7770541b23050f249997cb447453be6ab58dcc495f09490d3109e772a",
 "fleet-test-judge": "2dd18aedc8580c68583951ede4714e876a9752ac723e27558d1c17f5488b7d04",
@@ -3950,6 +3951,7 @@ if (!r || r.status !== "ok") halt(st, label + " returned " + st, "role");
 if (roleFileProblem(RUNNER, { role_file: r.role_file }) || driftOf(RUNNER, r)) halt(st, label + ": contract drift", "contract");
 const stop = (why) => halt(st, label + ": " + why, "gates");
 if (r.store === "missing") return prev.seen ? stop("store file missing after an earlier round of this build read it") : nr("store file missing on this machine");
+if (r.store === "sandbox") return prev.seen ? stop("sandbox unavailable after an earlier round ran") : nr("sandbox unavailable: no bwrap sandbox for the held-out runs");
 if (r.store === "timeout") stop("a held-out test run hit its deadline");
 if (r.store !== "ok") stop("held_out.py show: store " + r.store);
 if (r.store_digest !== ho.sha256) stop("store_digest off the seal");

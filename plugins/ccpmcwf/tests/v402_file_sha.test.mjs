@@ -147,11 +147,14 @@ test("4.0.2 1997: every shipped program a prompt can run has a PROGRAM_SLOTS ent
   // 7.3.0 (#54): scratch_copy.py is run by the copy roles (scratchCopyCmd), which relay nothing from it: no slot
   // 8.0.0 (G4): scratchCopyCmd(n = "scratch_copy") runs programSha(n); the held-out runner's held_out_cmd is scratchCopyCmd("held_out")
   const roleRun = /\nfunction scratchCopyCmd\(n = "scratch_copy"\) \{[^]*?programSha\(n\)/.test(SOURCE) ? ["scratch_copy"] : [];
-  assert.deepEqual([...names, ...roleRun].sort(), PROGRAMS.map(([n]) => n).sort(), "every shipped program is run by some prompt");
+  // 8.1.0 (#75): sandbox.py is run by cover_diff, mutants and scratch_copy (each pins its sha256; v810), by no prompt
+  const progRun = ["sandbox"];
+  assert.deepEqual([...names, ...roleRun, ...progRun].sort(), PROGRAMS.map(([n]) => n).sort(), "every shipped program is run by some prompt");
   const table = new Function(grabTable("PROGRAM_SLOTS") + "\nreturn PROGRAM_SLOTS;")();
   const slotted = new Set(table.flatMap(([, slots]) => slots.map(([, n]) => n)));
   for (const n of names) assert.ok(slotted.has(n), n + " has no PROGRAM_SLOTS entry");
   assert.ok(!slotted.has("scratch_copy"), "scratch_copy is no infra step's program");
+  assert.ok(!slotted.has("sandbox") && !names.has("sandbox"), "sandbox is no prompt's program");
   // 4.0.2 review: every builder of a program command records it (emitProg)
   // 5.0.0 (R1): the role file hash (no program; roleFileProblem checks it) is not a program command
   const roleRead = SOURCE.split("\n").filter((l) => l.includes('"sha256sum -- ') && l.includes("roleFilePath("));

@@ -1,5 +1,42 @@
 # Changelog
 
+## [8.1.0] - 2026-11-18
+
+ccpmcwf 8.1.0: yaadgaar #75 (ADR-1319). The held-out runner, coverage and mutation test runs run in
+a bubblewrap sandbox. This closes the three same-uid bypasses that the 8.0.0 reviews found.
+
+### Added
+
+- `scripts/sandbox.py` (program 50): the one bwrap sandbox for the gate test runs. No network, `/`
+  read-only, a new `/dev`, `/proc` and `/tmp`. HOME, the held-out store, the cache, data and
+  runtime dirs, `~/.ssh`, the worktree, its fleet root and the main checkout are hidden. The copy
+  and the env's private dirs are fresh overlays per run. A `*_TEST_DSN` port on 127.0.0.1 is
+  relayed through a unix-socket pair, that port only. `cover_diff.py`, `mutants.py` and
+  `scratch_copy.py` pin its sha256.
+- Review fixes before release: `/run` (and a real `/var/run`) is hidden, so a child cannot reach
+  a host unix socket (podman, docker, D-Bus, agents); only `/run/current-system` and
+  `/run/wrappers` come back. A PATH dir comes back only when its real path is outside every hidden
+  dir and holds none: `$HOME`, a parent of the held-out store or a dir under HOME is dropped.
+- `scratch_copy.py sandbox-run`: `run` in the sandbox. The held-out runner role runs every example
+  with it. A refusal ("sandbox unavailable: ...") is the new runner `store: "sandbox"`, and held_out
+  is `not_run` "sandbox unavailable: ...".
+
+### Changed
+
+- `cover_diff.py` and `mutants.py` run every test process in the sandbox. No `bwrap`, a failed
+  self-check or a helper off its pin gives `not_run` "sandbox unavailable: ..." before any test runs.
+- Bypass 1 (ADR-1318): the base re-run runs in a fresh sandbox after the test database is dropped
+  and created again. A reset that cannot run gives "tree red, base not re-run", a stop at `gates`.
+- Bypass 2: the `python -m pytest` coverage launcher is an inline `python3 -I -c` string (no
+  `cov.py`). The rcfile is read-only. The data dir is writable in the run step only, and the report
+  dir in the json step only.
+- Bypass 3: the mutation runs cannot see the worktree or the git dir, and each one gets a fresh
+  overlay of the copy.
+- The gate logic tests (v800) run behind a pass-through `bwrap` stub; `v810_sandbox` runs the real
+  `bwrap` and skips when it is absent or fails its self-check (CI).
+- README threat model: the gate sandbox, what it closes, and what is left.
+- Version 8.1.0. The role file and the version move the prompt snapshot pins.
+
 ## [8.0.2] - 2026-11-18
 
 ccpmcwf 8.0.2: yaadgaar #77. A haiku preflight relay dropped the probe's `home=` line (and swapped
