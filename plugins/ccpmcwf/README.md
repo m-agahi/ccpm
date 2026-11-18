@@ -1415,8 +1415,11 @@ What is left (accepted residuals):
   objects (other branches, the plan base) and `packed-refs` (a packed `refs/fleet/*` id among them)
   are readable. Since 8.2.0 the loose `refs/fleet` and the other worktrees' admin dirs are not. No
   held-out text is ever committed, so this is low.
-- A socket created in `/etc` or `/nix/var` after the walk is reachable, unless it is in a dir that
-  got a tmpfs (the whole roots are hidden, so this is the only place left).
+- Unix sockets in the visible top-level dirs that are not walked (`/usr`, `/boot`, `/lib*`, `/bin`
+  and the like; few or none exist on NixOS) are reachable, unless `/proc/net/unix` lists them. A
+  socket created after the walk and the list are read is reachable too, unless it is in a dir that
+  got a tmpfs. The design that would close both, an allowlist root (hide every top-level dir that is
+  not on an explicit list), is not built. Max accepted this residual on 2026-11-18.
 - The terraform PATH guard (`scratch_copy.py`'s `guard-*` dir and the mutation gate's
   `mut-guard-*` dir) is not in the sandbox: its dir is under the hidden scratch root. This is
   harmless: with no network and no credentials, a terraform-family program in the sandbox reaches

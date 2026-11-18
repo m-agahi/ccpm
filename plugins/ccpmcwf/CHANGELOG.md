@@ -16,6 +16,9 @@ residual). #79 (gate verdicts from outside the process) is parked.
   cap hit or an unreadable list refuses the run. Earlier designs in this release walked `/var` and
   `/opt` (its cap refused every run on the CI runner) and then trusted `/proc/net/unix` alone (it
   misses a renamed or hard-linked socket file).
+- #80 residual (Max accepted it on 2026-11-18): sockets in visible top-level dirs that are not walked
+  (`/usr`, `/boot`, `/lib*`, `/bin`) and sockets created after the walk stay reachable; an allowlist
+  root (hide every top-level dir not on an explicit list) would close it and is not built.
 - #80: with the git dir bound, `refs/fleet`, `logs/refs/fleet` and the other worktrees' admin dirs
   are a tmpfs. The DB relay dir is mode 0700.
 - #80: the README documents the remaining git dir view and that the terraform PATH guard is not in
