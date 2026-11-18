@@ -1235,7 +1235,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.1.0/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.2.0/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -2085,4 +2085,9 @@ export const BWRAP_PASS =
 export function passBwrap(bin) {
   writeFileSync(join(bin, "bwrap"), BWRAP_PASS);
   chmodSync(join(bin, "bwrap"), 0o755);
+}
+// 8.2.0 (#80): sandbox.py runs a bwrap from a user-writable dir only when this env var names its real path
+export function bwrapOk(bin) {
+  const f = join(bin, "bwrap");
+  return existsSync(f) ? { FLEET_SANDBOX_TEST_BWRAP: realpathSync(f) } : {};
 }

@@ -29,7 +29,7 @@ import { join, dirname } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, spawnSync, passBwrap } from "./harness.mjs";
+import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, spawnSync, passBwrap, bwrapOk } from "./harness.mjs";
 
 const SCRIPTS = join(HERE, "..", "scripts");
 const SBX = join(SCRIPTS, "sandbox.py");
@@ -138,7 +138,7 @@ function copyFixture() {
   const env = Object.fromEntries("HOME TMPDIR XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME".split(" ").map((v) => [v, join(priv, v)]));
   return { d, wt, tmp: mk.out.tmp, store, env, priv, done: () => rmSync(d, { recursive: true, force: true }) };
 }
-const srun = (x, argv, path) => prog(COPY, ["sandbox-run", x.wt, x.tmp, JSON.stringify(argv), JSON.stringify(x.env)], { XDG_CONFIG_HOME: join(x.d, "cfg"), PATH: path || process.env.PATH });
+const srun = (x, argv, path) => prog(COPY, ["sandbox-run", x.wt, x.tmp, JSON.stringify(argv), JSON.stringify(x.env)], Object.assign({ XDG_CONFIG_HOME: join(x.d, "cfg"), PATH: path || process.env.PATH }, path ? bwrapOk(path) : {}));
 
 test("8.1.0 #75: a child writes a sentinel to ~/x and /tmp/x (and its private HOME): none exists on the host afterwards", { skip: NO_SBX }, () => {
   const x = copyFixture();
@@ -539,7 +539,7 @@ function gateFixture(o) {
   const agentPath = o.noBwrap ? noBwrapPath(d, o.failing) : bin + ":" + process.env.PATH;
   const go = (p) => {
     const args = [wt, base, tree, "python3 -m pytest <paths>", JSON.stringify(env), JSON.stringify(["tests/test_mod.py", "pytest/__main__.py"])];
-    return prog(p, args, { PATH: agentPath, HOME: hostHome, TMPDIR: tmpd, FLEET_MUTANTS_DEADLINE: "200" });
+    return prog(p, args, Object.assign({ PATH: agentPath, HOME: hostHome, TMPDIR: tmpd, FLEET_MUTANTS_DEADLINE: "200" }, bwrapOk(agentPath.split(":")[0])));
   };
   return { d, wt, base, tree, priv, venv, hostHome, dblog, go, done: () => rmSync(d, { recursive: true, force: true }) };
 }

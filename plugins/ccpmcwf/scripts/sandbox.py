@@ -60,6 +60,13 @@ except Exception:
 # refused dir is dropped), the toolchain dirs in TOOLS and sys.base_prefix (the allowlist; none may hold a
 # hidden dir), the copy's git dir (git true). The DB: each 127.0.0.1 port of a *_TEST_DSN reaches the host through a
 # unix-socket relay pair, that port only.
+# 8.2.0 (#80): bwrap runs only when its real path is under /nix/store, or the file and every dir above it
+# are root-owned and not group- or other-writable. A tmpfs over /var/lib. With git true, refs/fleet,
+# logs/refs/fleet and every worktrees/<x> but the copy's own are a tmpfs again (the objects and packed-refs
+# stay readable). WHOLE roots (/var, /srv, /opt, /mnt, /media, /root, /home) are a tmpfs; only an approved
+# PATH or toolchain dir comes back. Every socket left visible (a bounded walk of /etc and /nix/var, joined with
+# /proc/net/unix) is masked by its real path; a walk error, a cap hit or an unreadable list refuses the run.
+# The relay dir is 0700.
 import json, os, re, shutil, socket, stat, subprocess, sys, tempfile, threading
 DSN = re.compile(r'mysql://([A-Za-z0-9_]{1,64}):([^@/\s]*)@127\.0\.0\.1:([0-9]{1,5})/([A-Za-z0-9_]{1,64})')
 DSN_KEY = re.compile(r'[A-Z][A-Z0-9_]{0,40}_TEST_DSN')
@@ -87,6 +94,87 @@ def NIX_SOCKETS():
         except OSError:
             continue
     return out
+# 8.2.0 (#80, CI review): the host's bound unix sockets come from the kernel's list (no dir walk: a big /opt
+# or /var would refuse every run). Path is the last column; an abstract (@) or unnamed socket is not a path
+# (the net namespace already cuts abstract ones off); a relative path names no place this program can see.
+SOCK_LIST = '/proc/net/unix'
+def unix_paths(f):
+    # ([absolute socket paths], None), or (None, why) when the list cannot be read
+    try:
+        with open(f, 'rb') as fh:
+            lines = fh.read(1 << 26).decode('utf-8', 'surrogateescape').split('\n')
+    except OSError as e:
+        return None, 'socket list %s unreadable: %s' % (f, e)
+    if not lines[0].startswith('Num'):
+        return None, 'socket list %s has no header' % f
+    out = []
+    for ln in lines[1:]:
+        c = ln.split(None, 7)
+        if len(c) == 8 and c[7].startswith('/'):
+            out.append(c[7])
+    return out, None
+# 8.2.0 (#80, final): whole roots under a tmpfs (only a PATH or toolchain dir comes back); the visible trees
+# that can hold a socket are walked (small; the caps guard against abuse) and joined with SOCK_LIST
+WHOLE = ('/var', '/srv', '/opt', '/mnt', '/media', '/root', '/home')
+WALK = ('/etc', '/nix/var')
+WALK_CAP = (50000, 3.0)
+def walk_socks(roots, prune):
+    # ([socket paths], None), or (None, why): a dir this uid can enter but not list, an error or a cap hit
+    import time
+    t0, n, out = time.monotonic(), 0, []
+    for root in roots:
+        if not os.path.isabs(root) or os.path.islink(root) or not os.path.isdir(root):
+            continue
+        pr = [h for h in prune if not under(root, h)]
+        st = [root]
+        while st:
+            d = st.pop()
+            try:
+                ents = list(os.scandir(d))
+            except PermissionError:
+                if os.access(d, os.X_OK):
+                    return None, 'socket walk: %s can be entered but not listed' % d
+                continue
+            except OSError as e:
+                return None, 'socket walk failed at %s: %s' % (d, e)
+            for e in ents:
+                n += 1
+                if n > WALK_CAP[0] or time.monotonic() - t0 > WALK_CAP[1]:
+                    return None, 'socket walk over its caps (%d entries, %.0f s)' % WALK_CAP
+                try:
+                    m = e.stat(follow_symlinks=False).st_mode
+                except OSError:
+                    continue
+                if stat.S_ISDIR(m):
+                    if not any(under(e.path, h) for h in pr):
+                        st.append(e.path)
+                elif stat.S_ISSOCK(m):
+                    out.append(e.path)
+    return out, None
+def only_sockets(d):
+    # every entry of d is a socket (a daemon's socket dir); False when d cannot be listed
+    try:
+        return all(stat.S_ISSOCK(e.stat(follow_symlinks=False).st_mode) for e in os.scandir(d))
+    except OSError:
+        return False
+def trusted(bw):
+    # None, or why the bwrap binary is not trusted: its real path under /nix/store, or the file and every
+    # dir above it root-owned and not group- or other-writable. FLEET_SANDBOX_TEST_BWRAP (tests) names one
+    # exact real path to accept: whoever sets this program's env already chooses its PATH.
+    r = real(bw)
+    if r.startswith('/nix/store/') or os.environ.get('FLEET_SANDBOX_TEST_BWRAP') == r:
+        return None
+    p = r
+    while True:
+        try:
+            st = os.stat(p)
+        except OSError:
+            st = None
+        if not st or st.st_uid != 0 or st.st_mode & 0o022:
+            return 'bwrap at %s is not under /nix/store or in a root-owned dir others cannot write' % r
+        if p == '/':
+            return None
+        p = os.path.dirname(p)
 # the PATH dirs plan() refused (named on stderr when the command is then not found)
 DROPPED = []
 # the launcher inside: one listener per DB port, relayed to the bound unix socket; then the argv
@@ -169,6 +257,9 @@ def plan(spec, sockdir=None):
     # /var/tmp: a channel from the host's unsandboxed runs into the sandbox
     if os.path.isdir('/var/tmp') and not os.path.islink('/var/tmp'):
         hide.append('/var/tmp')
+    # 8.2.0 (#80): /var/lib (container stores, databases, their sockets); nothing comes back
+    if os.path.isdir('/var/lib') and not os.path.islink('/var/lib'):
+        hide.append('/var/lib')
     # the nix daemon (and gc) sockets: the daemon writes the host store and fetches URLs (not /nix/var
     # itself: the profiles resolve through /nix/var/nix/profiles)
     hide += NIX_SOCKETS()
@@ -176,6 +267,13 @@ def plan(spec, sockdir=None):
     if '/' in hide:
         return None, 'a dir to hide is /'
     hide = [h for i, h in enumerate(hide) if not any(under(h, g) for g in hide[:i])]
+    # 8.2.0 (#80, final): whole roots (real dirs, never a symlink; a spec's hide_roots in tests) are a tmpfs too.
+    # hidden() and holds() keep the secret set: a PATH or toolchain dir under a whole root alone comes back.
+    blanket = sorted({real(d) for d in list(WHOLE) + list(spec.get('hide_roots') or []) if os.path.isabs(d) and os.path.isdir(d) and not os.path.islink(d)}, key=len)
+    if '/' in blanket:
+        return None, 'a dir to hide is /'
+    full = sorted(set(hide) | set(blanket), key=len)
+    full = [h for i, h in enumerate(full) if not any(under(h, g) for g in full[:i])]
     def hidden(p):
         return any(under(p, h) for h in hide + ['/tmp'])
     def secretly(p):
@@ -186,7 +284,7 @@ def plan(spec, sockdir=None):
         # src is, or holds, a hidden or secret dir, the worktree or the main checkout
         return any(under(k, src) for k in keep)
     a = ['--unshare-all', '--die-with-parent', '--new-session', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp']
-    for h in hide:
+    for h in full:
         a += ['--tmpfs', h]
     back = []
     for b in RUN_BACK:
@@ -199,7 +297,7 @@ def plan(spec, sockdir=None):
     ro = []
     # the allowlist: the toolchain dirs and the interpreter's prefix; never one that holds a hidden dir
     tools = [os.path.join(home, t) for t in TOOLS if os.path.isdir(os.path.join(home, t))]
-    if hidden(real(sys.executable)):
+    if any(under(sys.executable, h) for h in full + ['/tmp']):
         tools.append(sys.base_prefix)
     for d in tools:
         r = real(d)
@@ -209,7 +307,7 @@ def plan(spec, sockdir=None):
     for e in (env.get('PATH') or '').split(':'):
         n = os.path.normpath(e) if os.path.isabs(e) else ''
         # the entry as written (a link under HOME to /nix/store, say) or its real path lies under a tmpfs
-        if not (n and os.path.isdir(n) and (hidden(n) or any(n == h or n.startswith(h.rstrip('/') + '/') for h in hide + ['/tmp']))) or any(n == b or n.startswith(b + '/') or under(n, b) for b in back):
+        if not (n and os.path.isdir(n) and (hidden(n) or any(n == h or n.startswith(h.rstrip('/') + '/') for h in full + ['/tmp']))) or any(n == b or n.startswith(b + '/') or under(n, b) for b in back):
             continue
         r = real(e)
         # a PATH dir comes back only when its real path is outside every hidden dir (and /tmp) and holds none
@@ -223,6 +321,23 @@ def plan(spec, sockdir=None):
         if not gc:
             return None, 'no git dir for the copy'
         a += ['--ro-bind', gc, gc]
+        # 8.2.0 (#80): the other tasks' refs and the other worktrees' admin dirs (index, HEAD, logs) are not
+        # visible; the copy's own admin dir is (its .git file names it)
+        own = None
+        try:
+            with open(os.path.join(spec.get('copy') or spec['cwd'], '.git')) as fh:
+                t = fh.read(4096).strip()
+            own = real(t[8:]) if t.startswith('gitdir: ') else None
+        except OSError:
+            pass
+        mask = [os.path.join(gc, 'refs', 'fleet'), os.path.join(gc, 'logs', 'refs', 'fleet')]
+        try:
+            mask += sorted(e.path for e in os.scandir(os.path.join(gc, 'worktrees')) if e.is_dir(follow_symlinks=False) and real(e.path) != own)
+        except OSError:
+            pass
+        for m in mask:
+            if os.path.isdir(m) and not os.path.islink(m):
+                a += ['--tmpfs', m]
     over = [spec['copy']] if spec.get('copy') else []
     for k in DIRS:
         v = env.get(k) or ''
@@ -238,6 +353,38 @@ def plan(spec, sockdir=None):
             if not os.path.isabs(d) or not os.path.isdir(d):
                 return None, 'no dir ' + d
             a += [flag, real(d), real(d)]
+    # a spec dir bound above a whole root (tests) brings it back: the root is a tmpfs again
+    specb = [real(d) for k in ('rw', 'ro') for d in spec.get(k) or []]
+    for h in blanket:
+        if any(under(h, b) and h != b for b in specb):
+            a += ['--tmpfs', h]
+    # 8.2.0 (#80, final): the sockets left visible: a walk of WALK (and a spec's walk roots, tests) joined with
+    # SOCK_LIST (a hint: it misses a renamed or hard-linked socket file). Each is masked by its real path: a
+    # tmpfs over its dir when the dir holds sockets only, is not top-level and holds no dir bound back; else
+    # /dev/null over it. A walk error or cap hit, or an unreadable list, refuses the run.
+    gone = full + ['/tmp', '/dev', '/proc']
+    walked, why = walk_socks(list(WALK) + list(spec.get('walk') or []), gone + ['/nix/store'])
+    if why:
+        return None, why
+    listed, why = unix_paths(spec.get('socklist') or SOCK_LIST)
+    if why:
+        return None, why
+    bound = [a[i + 2] for i, v in enumerate(a) if v in ('--ro-bind', '--bind', '--symlink') and i + 2 < len(a)] + [a[i + 1] for i, v in enumerate(a) if v == '--tmp-overlay']
+    done = []
+    for rp in sorted({real(q) for q in walked + listed}):
+        try:
+            if not stat.S_ISSOCK(os.lstat(rp).st_mode):
+                continue
+        except OSError:
+            continue
+        if any(under(rp, x) for x in done) or (any(under(rp, h) for h in gone) and not any(under(rp, b) for b in bound if b != '/')):
+            continue
+        d = os.path.dirname(rp)
+        if d.count('/') > 1 and only_sockets(d) and not any(under(b, d) for b in bound):
+            a += ['--tmpfs', d]
+            done.append(d)
+        else:
+            a += ['--ro-bind', '/dev/null', rp]
     if sockdir:
         a += ['--ro-bind', sockdir, SOCK]
     # nix: the local store (read-only here) and no daemon; with the socket hidden every NIX_REMOTE fails closed
@@ -270,6 +417,8 @@ def relay(ls, port):
         for p, q in ((c, t), (t, c)):
             threading.Thread(target=pump, args=(p, q), daemon=True).start()
 def put(spec, out):
+    if out.get('started'):
+        out['bwrap'] = bw
     with open(spec['result'], 'w') as fh:
         json.dump(out, fh)
 def bwrap_run(bw, a, argv, env, out=None):
@@ -343,12 +492,19 @@ if not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in
 bw = shutil.which('bwrap', path=_RAW_PATH)
 if not bw:
     fail('bwrap is not on PATH')
+# 8.2.0 review (MED a): resolved once; the trust check, the self-check and the run use this one path
+bw = real(bw)
+# 8.2.0 (#80): a bwrap the tree (or another user) could have planted on the agent PATH is never run
+why = trusted(bw)
+if why:
+    fail(why)
 db = dsns(spec['env'])
 work = tempfile.mkdtemp(prefix='fleet-sbx-')
 try:
     socks = {}
     if db:
-        os.chmod(work, 0o755)
+        # 8.2.0 (#80): no other user reaches the relay sockets
+        os.chmod(work, 0o700)
         for port in sorted({d[2] for d in db}):
             ls = socket.socket(socket.AF_UNIX)
             ls.bind(os.path.join(work, str(port)))

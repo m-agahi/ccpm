@@ -27,7 +27,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync, readFileSync, existsSync, readdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, sha256, canon, spawnSync, programSha, FP_K1, FP_K2, HASHES, mutOut, passBwrap } from "./harness.mjs";
+import { HERE, HAVE_PY, SOURCE, ARGS, happy, run, inputsOf, call, sha256, canon, spawnSync, programSha, FP_K1, FP_K2, HASHES, mutOut, passBwrap, bwrapOk } from "./harness.mjs";
 
 const PROG = join(HERE, "..", "scripts", "cover_diff.py");
 const PY = HAVE_PY ? spawnSync("python3", ["-I", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim() : null;
@@ -113,7 +113,7 @@ function fixture(opts = {}) {
   const fp = () => [g(wt, "rev-parse", "HEAD"), g(wt, "status", "--porcelain"), g(wt, "worktree", "list", "--porcelain")].join("\n");
   const before = fp();
   const args = [wt, base, tree, opts.cmd || "pytest -q <paths>", JSON.stringify(opts.env || { TZ: "UTC" }), JSON.stringify(["tests/test_mod.py"])];
-  const r = spawnSync(PY, ["-I", PROG].concat(args), { encoding: "utf8", env: { PATH: bin } });
+  const r = spawnSync(PY, ["-I", PROG].concat(args), { encoding: "utf8", env: Object.assign({ PATH: bin }, bwrapOk(bin)) });
   const res = {
     r,
     out: r.status === 0 ? JSON.parse(r.stdout) : null,
@@ -258,7 +258,7 @@ test("8.0.0 G2: no added production .py line: ran with no finding, no test runs;
     passBwrap(bin);
     writeFileSync(join(bin, "coverage"), "#!/bin/sh\nexit 9\n");
     chmodSync(join(bin, "coverage"), 0o755);
-    const r = spawnSync(PY, ["-I", PROG, wt, base, tree, "pytest", "{}", JSON.stringify(["tests/test_a.py"])], { encoding: "utf8", env: { PATH: bin } });
+    const r = spawnSync(PY, ["-I", PROG, wt, base, tree, "pytest", "{}", JSON.stringify(["tests/test_a.py"])], { encoding: "utf8", env: Object.assign({ PATH: bin }, bwrapOk(bin)) });
     assert.equal(r.status, 0, r.stderr);
     const o = JSON.parse(r.stdout);
     assert.equal(o.status, "ran");

@@ -107,7 +107,7 @@ const RELAY_RETRY_MODEL = "sonnet";
 const RETRY_UP = { haiku: "sonnet", sonnet: "opus", opus: "opus", fable: "fable" };
 const DISPATCH_RE = /DISPATCH:\s*model=([a-z]+)(?:\s*\(fallback=([a-z]+)\b[^)]*\))?/;
 const HASH_MAPS = ["files", "sections", "git", "symlinks", "ignored"];
-const FLEET_VERSION = "8.1.0";
+const FLEET_VERSION = "8.2.0";
 const PLUGIN_NAME = "ccpmcwf";
 const SCRIPTS_DIR_RE = new RegExp("^/[A-Za-z0-9._/-]+/" + PLUGIN_NAME + "/" + FLEET_VERSION.replace(/\./g, "\\.") + "/scripts$");
 const RELOAD_HINT =
@@ -1513,7 +1513,7 @@ const PROGRAM_SHA256 = {
 "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
 "changed_defs": "873f1bcb97c7631934512729941deca1e9da49bc84957f1e78ec171293840644",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
-"cover_diff": "c6995d2884087722391aaf050342ef5333302d2828cb650e152b4fb4f75d57a0",
+"cover_diff": "e30ad673f55e543b5623c2de1848de1db4657a6ba9b5925b5e04d02818b98f22",
 "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
 "db_sweep": "f557b6d5d55d0139b0340a5d6653847566e6d105ab476e017c7f1bc2213a3f80",
 "db_up": "02675bec7b81431aebca49fb129baed379ff3b1f53f2bb6ba5fba26678e17c3c",
@@ -1527,7 +1527,7 @@ const PROGRAM_SHA256 = {
 "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
 "held_out": "58460d3adece15be446f7854af5c7467a00d3cd8508b8534937489577d9ea143",
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
-"mutants": "b2708cdcb084414ea3d2edd34e46365d1acee1ff6795d0d73bb275d4c476f278",
+"mutants": "430e1bb6aa9de51d76b58bab9167a7ee6d8770ec75bf4573721456e233369b0c",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "37138285a62f406863e2d0366fb6cf7bbfff9e118dc693ce048c3646e279a3ad",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1549,8 +1549,8 @@ const PROGRAM_SHA256 = {
 "remote_url": "d517d6bd1a652378825e115db0ecd01bfe562ca5355a460285327fd7d3b47dfb",
 "review_paths": "5ceb77f6ea2e07085bc282d83542a6b3af812e9e89695fa245e6f72c426667bf",
 "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
-"sandbox": "a365da154940d631cae5a765c9b1e0da28947ebbce6d51e8443c01acf49a18cf",
-"scratch_copy": "0b4efee4afc53eccbaba93c0e0eba5dbb075d550d1a7e6afcf1518f6c0e60ed2",
+"sandbox": "2975f754fd997782358d9d687136b6b3652f6b4b6a1263f43572f6dccfb6d16a",
+"scratch_copy": "7b2e4cdbec9ff611899cd195dea52455a62c4ce72e8daaed238770450b9bafdc",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
 "sec_scan": "ef33b6e2742b2f2e877be7e676f030be129b72461dd49836b0b93a3626fbf06b",
 "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",

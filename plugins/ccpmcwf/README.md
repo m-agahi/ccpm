@@ -1309,10 +1309,19 @@ Not defended:
   adoption;
 - the run lock (8.0.1, #76): it stops a second session on the same task by accident. A role with
   a shell can delete or rewrite `<git-common-dir>/fleet/locks/<task_id>.json`;
-- held-out examples (8.0.0, ADR-1152): the store blocks casual reads by roles only. Every role
-  has a shell and can read `~/.config`. Since 8.1.0 the code under test cannot read the store or
-  keep the examples (the sandbox below). The fleet itself never forwards an example (sentinel
-  tests);
+- held-out examples (8.0.0, ADR-1152; 8.2.0, #78, Max ruled: accept and document): the examples
+  are NOT secret from the role agents. Every role agent (the coder, the test writers, the judges)
+  has Bash as the same uid with the real HOME and XDG dirs, so it can read the store
+  (`~/.config/fleet/held-out`) itself. The text is also on disk outside the store: in the Workflow
+  journals (`~/.claude/projects/<project>/<session>/subagents/workflows/wf_*/journal.jsonl`, mode
+  0644, the planner's result) and in the agent transcripts under `~/.claude/projects` (the held-out
+  runner's `show` output, the store write's chunks), from the first code round on. The held-out
+  gate stops only an agent that does not go looking. The fix that would close this, a sandbox
+  around each role agent's own Bash that hides `~/.config/fleet` and `~/.claude/projects`, is not
+  done. Encrypting the store or moving it to another uid would not close it (the key or the text is
+  in the transcripts too). Since 8.1.0 the code under test cannot read the store or keep the
+  examples in the gate runs (the sandbox below); the role agents' own test runs are not sandboxed.
+  The fleet itself never forwards an example (sentinel tests);
 - coverage and mutation (8.0.0): advisory to the code judge. Code under test runs in the same
   process as the coverage tracer, so it can still tamper with the tracer or with the data file
   during the `coverage run` step (see the sandbox below for what 8.1.0 closes).
@@ -1333,6 +1342,16 @@ through `sandbox.py`, a bubblewrap (`bwrap`) sandbox. Each caller pins the sha25
   daemon writes the host store and fetches URLs). `/nix/var` itself stays, because the profiles
   resolve through it. `NIX_REMOTE=local` is set; with the daemon socket hidden, every `NIX_REMOTE`
   value fails on the read-only store.
+- Hidden since 8.2.0 (#80): the whole roots `/var`, `/srv`, `/opt`, `/mnt`, `/media`, `/root` and
+  `/home` (real dirs, never a symlink), so every socket, database and container store under them.
+  Only a PATH or toolchain dir that passes the bind-back rules below comes back, by its real path;
+  nothing else under them does. `/etc`, `/usr`, `/nix/var` (its socket dirs hidden) and `/sys` stay
+  visible. Before each run `sandbox.py` walks `/etc` and `/nix/var` for unix sockets (hidden dirs and
+  `/nix/store` not walked; at most 50,000 entries and 3 s) and joins them with the kernel's list,
+  `/proc/net/unix`. Each socket the child could reach is masked by its real path: a tmpfs over its dir
+  when that dir holds only sockets, is not top-level and holds no dir bound back; otherwise `/dev/null`
+  is bound over it. A walk error (a dir this uid can enter but not list), a cap hit or an unreadable
+  list refuses the run: "sandbox unavailable: socket walk ..." or "socket list ...".
 - Writable, fresh in each run (`--tmp-overlay`, nothing reaches the host): the copy, and the env's
   private dirs (`HOME`, `TMPDIR`, `XDG_*`, the build and uv dirs) under `<root>/scratch/build` or
   `uv-cache`. Written through (`--bind`): the coverage data dir in the `coverage run` step and the
@@ -1345,14 +1364,18 @@ through `sandbox.py`, a bubblewrap (`bwrap`) sandbox. Each caller pins the sha25
   `~/.rustup`, `~/.cargo/bin`, `~/.cargo/registry` and `~/go/pkg/mod` (no credential file in any
   of them) and the interpreter's prefix, none of which may hold a hidden dir. And the copy's git dir
   (the held-out and coverage copies are git worktrees, so the repo's objects are readable; the
-  mutation copy has no `.git`).
+  mutation copy has no `.git`). Since 8.2.0 (#80) `refs/fleet`, `logs/refs/fleet` and every
+  `worktrees/<x>` other than the copy's own are a tmpfs again inside that git dir.
 - The test database: a podman MariaDB on `127.0.0.1:<port>` is outside the sandbox's network.
   For each `*_TEST_DSN` value `mysql://...@127.0.0.1:<port>/...` in the env, `sandbox.py` relays
   that one port: a host thread listens on a unix socket in a private dir and connects to
   `127.0.0.1:<port>`, and a launcher in the sandbox listens on `127.0.0.1:<port>` and forwards to
   the socket, bound read-only at `/tmp/.fleet-db` (the only host socket in the sandbox). No other
-  port and no other host is reachable.
-- Fail closed: no `bwrap` on the agent PATH (never the env PATH), a failed self-check (the same
+  port and no other host is reachable. The relay dir on the host is mode 0700 (8.2.0, #80).
+- Fail closed: no `bwrap` on the agent PATH (never the env PATH), a `bwrap` whose real path is not
+  under `/nix/store` and not root-owned with root-owned, not group- or other-writable dirs above it
+  (8.2.0, #80; the tests name their pass-through fake in `FLEET_SANDBOX_TEST_BWRAP`, and whoever sets
+  that env already chooses the PATH), a socket walk or list that fails, a failed self-check (the same
   mounts running `python3 -I -S -c ''`), a mount that fails or a `sandbox.py` off its pin gives
   `not_run` "sandbox unavailable: ..." for coverage and mutation, and `store: "sandbox"` (held_out
   `not_run`) for the held-out runner. No test process runs unsandboxed. After an earlier round
@@ -1382,14 +1405,25 @@ What is left (accepted residuals):
 - Other world-readable host paths stay readable (`/` is bound read-only), and so do host unix
   sockets outside `/run`, `/tmp`, `/var/tmp`, `$HOME` and the nix socket dirs.
 - The held-out store is still readable by the unsandboxed role test runs: the coder's and the
-  judges' own runs (`scratch_copy.py run`), and any role with a shell (ADR-1152).
+  judges' own runs (`scratch_copy.py run`), and by any role agent with a shell, which can also read
+  the examples in the Workflow journals and transcripts (see the held-out bullet above; #78).
 - In-process tampering: the tests share the tracer's process and its data dir in the
   `coverage run` step, and a test process can fake its own verdict (exit code, output). Code that
   the interpreter loads at start (a venv's `.pth` files, fresh per run but from the tree's own
   install) runs too.
 - The git common dir is bound read-only for the held-out and coverage copies, so the repo's
-  objects (other branches, the plan base) are readable.
-- `bwrap` is trusted as found on the agent PATH.
+  objects (other branches, the plan base) and `packed-refs` (a packed `refs/fleet/*` id among them)
+  are readable. Since 8.2.0 the loose `refs/fleet` and the other worktrees' admin dirs are not. No
+  held-out text is ever committed, so this is low.
+- Unix sockets in the visible top-level dirs that are not walked (`/usr`, `/boot`, `/lib*`, `/bin`
+  and the like; few or none exist on NixOS) are reachable, unless `/proc/net/unix` lists them. A
+  socket created after the walk and the list are read is reachable too, unless it is in a dir that
+  got a tmpfs. The design that would close both, an allowlist root (hide every top-level dir that is
+  not on an explicit list), is not built. Max accepted this residual on 2026-11-18.
+- The terraform PATH guard (`scratch_copy.py`'s `guard-*` dir and the mutation gate's
+  `mut-guard-*` dir) is not in the sandbox: its dir is under the hidden scratch root. This is
+  harmless: with no network and no credentials, a terraform-family program in the sandbox reaches
+  nothing.
 
 With no network, a test run that needs to download
 (`uv run` with a cold cache) fails, and the gate reports a red baseline. The overlays also mean a
