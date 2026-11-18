@@ -100,7 +100,7 @@ A profile or a `repos` override may carry `unattended: true` (a bool; anything e
 `policy.py` refuse the file, and an invalid file is the strict default: unattended off). It turns
 on the fleet's unattended mode for those repos: the fleet decides the Build confirmation and the
 other judgement prompts itself and records each decision in the result, the run-state and the PR
-body. It never bypasses a safety stop. The `/build-task --unattended` argument turns it on for one
+body. It never bypasses a safety stop. The `/build-task --auto` argument turns it on for one
 run. Off when unset. The helper has no command for this key: show the example and the path; Max
 edits the file.
 

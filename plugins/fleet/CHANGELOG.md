@@ -4,8 +4,8 @@
 
 Fleet 8.0.0: one major release, built in cars on one branch. Car A: yaadgaar #74 and #71. The
 version bump. Cars B1 and B2: #62 (fewer agents). Cars G1 to G8: the v1.1 gates (#1, #6, #7):
-coverage, held-out, mutation and security, then the release docs. Still to come: car R, #56
-(`--auto`) and #38 (the rename to ccpmcwf).
+coverage, held-out, mutation and security, then the release docs. Car R: #56 (`--auto`), then
+#38 (the rename to ccpmcwf).
 
 #62 acceptance, from the happy two-criterion harness runs: calls and agents from the `v4_s3`
 pins; capped measured on the same runs (the count the 100-agent cap checks at the result). Real
@@ -359,6 +359,19 @@ token counts come from the smoke run, after this entry.
   the 540 s pull). Stale lines fixed: "no scanner gate", the happy-run agent count, the 480000-byte
   limit. `agents/judge.md` lists the surface, gates and PATH-check steps. The G5 entry above is
   re-worded where Prettier had broken its code spans. Docs only.
+- Car R, #56 (L2191, Max ruling 2026-11-16): the `/build-task` flag `--unattended` is now
+  `--auto`. The old flag is dropped at once, with no alias: 8.0.0 is a major release. The skill
+  stops on a leading `--unattended` and says "the flag is now --auto", so the old word is never
+  built as part of the input. Only the
+  flag changes: the workflow arg `unattended`, the policy key `unattended`, the result fields
+  (`unattended_source`, `auto_decisions`) and the PR body's `### Unattended run` section keep their
+  names. The build-task skill says how `--auto` differs from `confirm: "auto"`: the flag turns on
+  unattended mode and keeps the confirm mode; `confirm: "auto"` only skips the Build confirmation.
+  The flag names no confirm mode and never sets `confirm` or `user_confirm` (skill step 4 and the
+  README say so).
+  The coder role no longer says that the coverage, mutation and security-scan gates are not run
+  (`v800_auto_flag.test.mjs`). Dist unchanged in size (the flag is skill text; the role file's
+  sha256 moves).
 - Car A, #74 (run reliability): `pr_test_block.py` `claims_of` drops three false-positive forms,
   and only these: a claim wholly inside an inline code span (a backtick run, text on one line, a
   run of the same length), a claim wholly inside a closed fenced code block (3+ backticks or

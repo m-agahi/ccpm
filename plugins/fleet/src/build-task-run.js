@@ -1736,7 +1736,7 @@ function programTable() {
 const ROLE_SHA256 = {
   "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
   "fleet-code-judge": "fdd95e92358734335190c162d165a5e72d0b10ce4c6f17397b878869810cf4eb",
-  "fleet-coder": "ee4e8960386899888881cb56e377c5ca74a23c7c93c7ac8971504890245cf3b4",
+  "fleet-coder": "fca268a7affc87d1257b161a8138a78e1a17965063d1ffb7fe9b1a7c6d165547",
   "fleet-held-out-runner": "30cae706ba8631be377b92c3bf0d44714511b96742b54689111b2d1a29fcbe1f",
   "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
   "fleet-pr-opener": "28a9ebb7770541b23050f249997cb447453be6ab58dcc495f09490d3109e772a",

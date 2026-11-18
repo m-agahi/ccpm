@@ -1,7 +1,7 @@
 // fleet 6.3.0, part B: ADR-1239, the opt-in unattended mode (ledger 2108).
 //
 // Off by default. On by a policy.json profile or repos key `unattended: true`
-// or by args.unattended (the /build-task argument --unattended); the result
+// or by args.unattended (the /build-task argument --auto; --unattended before 8.0.0); the result
 // records the source. Plan mode reads the policy too (infra:policy:plan).
 // Unattended decides the Build confirmation (the auto gates, then the build in
 // the same run), the default-mode blockers change_kind, new_behaviour and a
@@ -91,7 +91,7 @@ test("6.3.0 B: off by default: plan mode reads the policy (infra:policy:plan) an
 
 // ---------------------------------------------------------------- the decisions
 
-test("6.3.0 B: --unattended (arg): the Build confirmation and the default blockers are decided; the gates pass and the same run builds", async () => {
+test("6.3.0 B: --auto (arg, --unattended before 8.0.0): the Build confirmation and the default blockers are decided; the gates pass and the same run builds", async () => {
   const s = gated();
   const out = await runOne(s, { ...U, confirm: "default" });
   noUnscripted(out);
@@ -319,10 +319,10 @@ test("6.3.0 B (ADR-1239): unattended never merges on a work owner, never merges 
   assert.ok(!b.labels.some((l) => /^role:fleet-test-writer/.test(l)));
 });
 
-test("6.3.0 B: the skill documents --unattended, the policy skill and README document the key, and the default confirm stays default", () => {
+test("6.3.0 B: the skill documents --auto, the policy skill and README document the key, and the default confirm stays default", () => {
   const R = join(SCRIPTS_SRC, "..");
   const skill = readFileSync(join(R, "skills", "build-task", "SKILL.md"), "utf8");
-  assert.match(skill, /--unattended/);
+  assert.match(skill, /--auto/);
   assert.match(skill, /unattended: true/);
   assert.match(skill, /Pass `confirm: "default"` unless the user named a mode/);
   assert.match(readFileSync(join(R, "skills", "fleet-policy", "SKILL.md"), "utf8"), /unattended/);
@@ -407,7 +407,7 @@ test("6.3.0 review H1: a plan_wrong re-plan seals the build's policy in the new 
   assert.ok(!o.labels.some((l) => /^infra:pr-merge/.test(l)));
 });
 
-test("6.3.0 review L3: --unattended never overrides the user's own confirm ask, with or without the brief marker", async () => {
+test("6.3.0 review L3: --auto never overrides the user's own confirm ask, with or without the brief marker", async () => {
   for (const marker of [true, false]) {
     const out = await runOne(gated(), { ...U, confirm: "ask", user_confirm: "ask", brief_marker: marker });
     assert.equal(out.result.status, "awaiting_confirmation", marker + ": " + out.result.reason);

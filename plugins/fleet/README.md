@@ -14,7 +14,9 @@ Role fleet for one non-trivial code change. `/build-task <anything>` runs the
 
 With `confirm: "auto"` (opt-in, for goal or unattended runs) plan mode does not ask. It runs three
 gates (intent, commands, scope) and, when they pass, builds in the same run. When one fails it
-stops with `needs_human` and a ready `needs_max_section`.
+stops with `needs_human` and a ready `needs_max_section`. The `/build-task --auto` flag is not
+`confirm: "auto"`: it turns on unattended mode (see the `unattended` policy key) and names no
+confirm mode.
 
 `confirm: "default"` (4.0.0, ADR-1186; the skill passes it unless the user names a mode) runs the
 same three gates only for an eligible plan. A plan is eligible when the planner declared
@@ -749,7 +751,7 @@ longer stops the build.
 
 - `unattended` (6.3.0, ADR-1239): a profile or `repos` key, `true` or `false`; unset is off, and
   the caps carry no key. `true` turns on the fleet's unattended mode for those repos (as the
-  `/build-task --unattended` argument does for one run): the fleet decides the Build confirmation,
+  `/build-task --auto` argument does for one run): the fleet decides the Build confirmation,
   the default-mode blockers (`change_kind`, `new_behaviour`, a task id that exactly one ledger
   answered), a relaxed re-plan (the intent judge rules on it), the fleet-brief marker and a
   `plan_wrong` re-plan (built in the same run) without asking. It never bypasses a safety stop
