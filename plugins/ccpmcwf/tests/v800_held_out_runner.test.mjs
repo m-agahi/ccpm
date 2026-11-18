@@ -96,7 +96,7 @@ test("8.0.0 G4-6: the twelfth role ships: ROLE_COUNT, ROLES, REQUIRED_ON_OK, the
   assert.match(readme, /twelve role prompts/);
   assert.match(readme, /`fleet-held-out-runner`/);
   // 8.0.0 (G4): one more capped agent per code round
-  assert.match(SOURCE, /reserve\(10 \+ \(planFacts\.changed_symbols/);
+  assert.match(SOURCE, /reserve\(11 \+ \(planFacts\.changed_symbols/);
 });
 
 test("8.0.0 G4-1: all pass -> held_out ran; it leaves gates_not_run; the runner sits after infra:gates:r1 behind its own reset, before the judge's reset", async () => {

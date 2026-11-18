@@ -40,7 +40,8 @@ The commands are `/ccpmcwf:build-task`, `/ccpmcwf:plan-task` and `/ccpmcwf:fleet
 `/build-task`, `/plan-task` and `/fleet-policy` when no other plugin has the name); the workflow is
 `ccpmcwf:build-engine` and the read-only agent is `ccpmcwf:judge`.
 
-**Upgrade from fleet (8.0.0).** The plugin was named `fleet` up to 7.4.0. Uninstall it first
+**Upgrade from fleet (8.0.0).** The plugin was named `fleet` up to 7.4.0. Run
+`/plugin marketplace update maxagahi-marketplace`, uninstall it
 (`/plugin uninstall fleet@maxagahi-marketplace`), then install `ccpmcwf` as above and run
 `/reload-plugins`. The rename leaves these names and paths unchanged: the
 `refs/fleet/*` refs, the `fleet/<task>-<slug>` branches and `fleet-` worktrees, the policy file
@@ -1160,8 +1161,10 @@ failing held-out example has no exemption path.
 capped) that runs `cover_diff.py`, `mutants.py` and `sec_scan.py` as three slots, one Bash call
 each, one after the other, then, when the plan ref seals a held-out store,
 `infra:build-reset:held-out:r<n>` and `role:fleet-held-out-runner:r<n>`. Coverage and mutation
-work in a detached worktree under the scratch dir at the plan base, with the judged tree read in.
-The main worktree is never touched. Each program has a 540 s deadline inside one Bash call.
+work in a copy of the plan base with the judged tree read in (coverage: a detached worktree under the
+scratch dir; mutation: a private temp dir with no `.git`). The main worktree is never touched. Each
+program has a deadline inside one Bash call (540 s; `sec_scan.py` 520 s). Not implemented (8.0.0): the
+dependency audit and the ruff unused-code check of the gates plan.
 
 - **Coverage** (gate 5): the added lines of the changed production `.py` files that no test ran,
   under the sealed pytest `test_cmd` and the coverage module, with the fleet's own rcfile (no
@@ -1170,7 +1173,8 @@ The main worktree is never touched. Each program has a 540 s deadline inside one
   `$XDG_CONFIG_HOME/fleet/held-out/<task_id>/<plan_sha256>.json` (dirs 0700, file 0600). The plan
   ref seals only its sha256 and counts. The runner role turns each example into a throwaway test
   in a scratch copy and returns pass or fail per index, with no example text. A failing example
-  turns `approve` into `fix_code`.
+  turns `approve` into `fix_code`. A test run that hits its 540 s deadline stops the run (`needs_human`,
+  gate `gates`): code under test could hang on purpose to skip the gate.
 - **Mutation** (gate 2): a built-in, diff-scoped mutator (comparison flip, boolean swap, boundary
   and integer +1 or -1, dropped `not`) on the tokens of the added lines. At most 200 mutants,
   spread evenly. Each survivor ruled `tests` goes into one augmentation round per run: one new,
@@ -1860,7 +1864,13 @@ The script pins the role contract, not the prose:
   leaks only. The gates (8.0.0 car F): `security_scan` runs before coverage and mutation, so no code under
   test runs in the gate step before the scan reads its dir; a detached process an earlier step
   left, as the same uid, still can. The mutation copy has no `.git`, but code under test can read
-  the fleet worktree beside it: mutation is a signal against reward hacking, not a boundary.
+  the fleet worktree beside it (same uid) and compare its own source with it: mutation is a signal
+  against reward hacking, not a boundary; a sandbox is task #75. Auto-capture hooks: a user-level
+  `PostToolUse` hook with no matcher (such as yadgar's `post-tool-capture`) also fires for the tool
+  calls of the workflow's agents (Claude Code runs hooks for subagent tool calls; not checked live
+  in a Workflow run), so the held-out write step's chunks and the runner's `show` output
+  can reach that hook's store. The fleet cannot turn such a hook off; keep it in mind when the
+  examples matter.
 - Stop reason precedence: (1) a script gate violation (hash, fingerprint) with that gate's own
   reason; (2) the role's own `needs_human`/`failed` reason; (3) contract drift, only when
   neither applies. The coder's hash check runs before its contract check, and a judge's fingerprint

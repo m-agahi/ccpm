@@ -67,8 +67,17 @@ GITLEAKS_SHA256 = 'bd6f8c9224d9e3d4a4b3a536da4991ceaf7f5368708702f355e9c0efa0980
 CAP, BIG, LEAKS = 200, 4 << 20, 99
 _dl = os.environ.get('FLEET_SEC_SCAN_DEADLINE') or ''
 # a test may lower the deadline, never raise it
-DEADLINE = min(540, int(_dl)) if re.match(r'^[1-9][0-9]{0,3}$', _dl) else 540
-signal.signal(signal.SIGTERM, lambda *_: sys.exit('sec_scan.py: terminated'))
+# car F (B-L4): 520 s, so the container removal and the cleanup fit in the 600 s Bash call
+DEADLINE = min(520, int(_dl)) if re.match(r'^[1-9][0-9]{0,3}$', _dl) else 520
+def _term(*_):
+    # car F (A-L13): a TERM removes the scan container too (rt and name exist once a scan can run)
+    try:
+        if globals().get('name') and globals().get('rt'):
+            call([rt, 'rm', '-f', name], 30)
+    except Exception:
+        pass
+    sys.exit('sec_scan.py: terminated')
+signal.signal(signal.SIGTERM, _term)
 # the attribute-safe diff of G2: no attributes file, no system attributes, text, no textconv or driver
 G = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.quotePath=false', '-c', 'core.attributesFile=/dev/null']
 D = ['--text', '--no-textconv', '--no-ext-diff', '--no-renames', '--no-color']
@@ -131,7 +140,7 @@ except ValueError:
     exclude = None
 if not os.path.isabs(wt) or not os.path.isdir(wt) or not all(re.match(r'^[0-9a-f]{40}$', x) for x in (base, tree)):
     sys.exit('bad worktree, base or tree')
-if not isinstance(exclude, list) or not all(isinstance(x, str) for x in exclude) or not re.match(r'^(null|[0-9]+(\.[0-9]+)?)$', est):
+if not isinstance(exclude, list) or not all(isinstance(x, str) for x in exclude) or not re.match(r'^(null|-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?)$', est):
     sys.exit('exclude is not a JSON list of strings or est_diff_lines is not a number or null')
 scratch = os.path.join(os.path.realpath(os.path.dirname(os.path.realpath(wt))), 'scratch')
 os.environ['PATH'] = clean_path((wt, scratch))
@@ -167,9 +176,13 @@ for p, rows in added.items():
             if re.search(rx, t):
                 hit(p, ln, rule, kind)
 total = sum(len(r) for r in added.values())
-if est == 'null':
+# car F (A-L13): an exponent or a fraction parses (an int, capped); a negative or zero one skips the check
+est = None if est == 'null' else int(min(float(est), 1e9))
+if est is None:
     notes.append('no est_diff_lines: size not checked')
-elif total > 1.5 * float(est):
+elif est <= 0:
+    notes.append('est_diff_lines not positive: size not checked')
+elif total > 1.5 * est:
     hit('<diff>', 0, 'size: %d added production lines > 1.5 x est_diff_lines %s' % (total, est), 'code')
 # the string literals (8 to 200 characters) of the frozen test files in the judged tree
 lits = set()
@@ -203,6 +216,9 @@ _x = os.environ.get('XDG_CACHE_HOME')
 if _x and not os.path.isabs(_x):
     sys.exit('XDG_CACHE_HOME is relative; set it to an absolute path or unset it')
 cache = os.path.join(_x or os.path.expanduser('~/.cache'), 'fleet', 'sec-scan')
+if ':' in cache:
+    # car F (A-L13): ':' splits a -v mount spec
+    skip("XDG_CACHE_HOME holds ':' (or ~ does), which a mount spec cannot carry")
 if not os.path.isabs(cache) or in_temp(cache):
     sys.exit('the scan dir resolves under a temp dir (%s), which the runtime refuses as a mount source: %s' % (', '.join(TEMP), cache))
 try:
@@ -293,7 +309,10 @@ try:
     # the repo's own rules, from the base only (the judged tree never sets the rules)
     ls = git('ls-tree', '-r', '-z', '--name-only', base, '--', '.semgrep.yml', '.semgrep.yaml', '.semgrep').decode('utf-8', 'replace').split('\0')
     for i, n in enumerate(sorted(x for x in ls if x.endswith(('.yml', '.yaml')))):
-        put(os.path.join(rd, 'repo-%d.yml' % i), git('cat-file', 'blob', base + ':' + n))
+        b = git('cat-file', 'blob', base + ':' + n)
+        # car F (A-L13): a YAML file with no top-level rules: key is not a rule file (semgrep would err): skipped
+        if re.search(rb'^rules\s*:', b, re.M):
+            put(os.path.join(rd, 'repo-%d.yml' % i), b)
     # world-readable: a rootless runtime maps this uid to another one inside the container
     for r, ds, ns in os.walk(tmp):
         os.chmod(r, 0o755)

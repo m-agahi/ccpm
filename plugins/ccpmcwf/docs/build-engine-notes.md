@@ -4909,3 +4909,30 @@ B-M1/B-M2/B-M3: every bound sits under the 600000 ms Bash cap: 540 s per test ru
 560 s per program (FLEET_SCRATCH_RUN_DEADLINE, FLEET_GATE_TOOLS_DEADLINE, FLEET_DB_UP_DEADLINE
 lower them for tests, never raise them).
 ```
+
+### Security review of the MEDIUM fixes; LOW
+
+```text
+A-M6 review: red() walks the plan object (arrays and objects, HELD_OUT_KEY skipped) and replaces a
+string leaf that holds an example's when and then, both normalized (lowercase, whitespace runs
+collapsed). Redact, not halt: the planner authored the examples, so this guards leaks, not
+tampering. Cost: a visible example that happens to hold a held-out pair is redacted too.
+B-M1 review: store "timeout" stops at gates in every round. not_run would let code under test that
+hangs skip the gate; fix_code would loop a slow but correct test.
+A-M4 review: the copy is work/copy (work = mkdtemp, under the gate's TMPDIR); the lstat check runs
+before hash-object, which follows a symlink. The worktree path stays readable by the same uid; a
+sandbox is task #75.
+A-L9: the payload carries ids; an older payload without ids is not filtered (the workflow and the
+program ship together).
+A-L10: atexit removes the chunk dir once it is proven under scratch; a dir outside scratch exits
+first and is never removed.
+A-L11: the sweep runs in both build_dir modes; every earlier step has finished at a reset. A swept
+copy-* stays registered as a worktree until the next git worktree prune (scratch_copy make prunes).
+A-L12: capPath = logPath + 200 characters, at display only; the exemption match uses the raw id.
+A-L13: a non-rule YAML is skipped silently (the gate stays ran); est: int(min(float, 1e9)).
+A-L14: not implemented: the dependency audit and the ruff unused-code check.
+A-L16: ~/.claude/settings.json (read only): PostToolUse with no matcher runs yadgar's
+post-tool-capture. Claude Code runs hooks for subagent tool calls (not checked live in a Workflow run), so the held-out write step's prompt (base64
+chunks) and the runner's show output can reach it. Documented in the threat model; nothing filed.
+B-L5: db_sweep 150 s total under RUN_180S; push probe: one dry run of 120 s, under RUN_180S.
+```

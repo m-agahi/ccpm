@@ -217,6 +217,41 @@ test("8.0.0 G3: a relative XDG_CONFIG_HOME is refused (as policy_init); unset fa
   }
 });
 
+test("8.0.0 car F A-L9: an example whose criterion id is not one of the plan's (payload ids) is dropped: unknown criterion", { skip: !HAVE_PY }, () => {
+  const d = root();
+  try {
+    const r = prog(["write"].concat(chunks(d, { examples: [ex("AC1", "f(7)", "49"), ex("AC9", "f(8)", "64")], visible: VISIBLE, ids: ["AC1", "AC2"] })), XENV(d));
+    assert.equal(r.status, 0, r.stderr);
+    const o = JSON.parse(r.stdout);
+    assert.deepEqual(o.dropped, [{ criterion: "AC9", index: 1, why: "unknown criterion" }]);
+    assert.deepEqual(o.per_criterion, { AC1: 1 });
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("8.0.0 car F A-L10: an early refusal (bad task id, bad plan_sha256) removes the chunk dir; a dir outside scratch is never removed", { skip: !HAVE_PY }, () => {
+  const d = root();
+  try {
+    for (const [i, v] of [[1, "BAD ID"], [3, "nothex"]]) {
+      const args = chunks(d, { examples: [ex("AC1", "f(7)", "49")], visible: VISIBLE });
+      args[i] = v;
+      const r = prog(["write"].concat(args), XENV(d));
+      assert.notEqual(r.status, 0);
+      assert.ok(!existsSync(join(d, "scratch", "chunks", "held-out-t")), v + ": the chunk dir is gone");
+    }
+    const out = join(d, "outside");
+    mkdirSync(out);
+    const args = chunks(d, { examples: [], visible: VISIBLE });
+    args[4] = out;
+    args[1] = "BAD ID";
+    assert.notEqual(prog(["write"].concat(args), XENV(d)).status, 0);
+    assert.ok(existsSync(out));
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
 test("8.0.0 G3: every example dropped: no file, count 0, sha256 null", { skip: !HAVE_PY }, () => {
   const d = root();
   try {

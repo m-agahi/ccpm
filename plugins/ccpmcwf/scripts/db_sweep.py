@@ -52,14 +52,26 @@ def fail(code, msg):
     sys.stderr.write(msg + '\n')
     sys.exit(code)
 PM = shutil.which('podman')
+# car F (B-L5): the whole sweep fits the prompt's 180 s Bash call (150 s; a test may lower it, never raise it)
+_dl = os.environ.get('FLEET_DB_SWEEP_DEADLINE') or ''
+TOTAL = min(150, int(_dl)) if re.match(r'^[1-9][0-9]{0,3}$', _dl) else 150
+_T0 = time.monotonic()
+class Bound(Exception):
+    pass
 def pm(*a, timeout=120):
-    return subprocess.run([PM] + list(a), capture_output=True, timeout=timeout, preexec_fn=lift)
+    left = TOTAL - (time.monotonic() - _T0)
+    if left < 1:
+        raise Bound()
+    try:
+        return subprocess.run([PM] + list(a), capture_output=True, timeout=min(timeout, left), preexec_fn=lift)
+    except subprocess.TimeoutExpired:
+        raise Bound()
 def tail(r):
     return (r.stderr or b'').decode('utf-8', 'replace')[-400:]
 # Removes only containers with the label fleet.db=1, a name fleet-db-*, and
 # a fleet.expires time in the past. Any other container is never touched.
 out = {'podman': PM is not None, 'removed': [], 'kept': [], 'errors': []}
-if PM:
+def sweep():
     r = pm('ps', '-a', '--filter', 'label=fleet.db=1', '--format', 'json')
     rows = None
     if r.returncode == 0:
@@ -86,4 +98,9 @@ if PM:
             out['removed'].append(n)
         else:
             out['errors'].append(n + ': ' + tail(rr))
+if PM:
+    try:
+        sweep()
+    except Bound:
+        out['errors'].append('the %d s bound was hit: the rest is swept next time' % TOTAL)
 done(out)

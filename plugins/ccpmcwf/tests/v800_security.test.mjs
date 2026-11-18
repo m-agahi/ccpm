@@ -531,7 +531,7 @@ test("8.0.0 G7: sec_scan runs as the 3rd slot of infra:gates:r<m> (no new agent)
   const cj = inputsOf(call(out, "role:fleet-code-judge:r1").prompt);
   assert.deepEqual(cj.script_findings.security, { status: "partial", reason: "container scan not run: no container runtime (podman or docker); always-on checks only", findings: [] });
   assert.deepEqual(out.result.gates_not_run.find((x) => x.gate === "security_scan"), { gate: "security_scan", reason: "container scan not run: no container runtime (podman or docker); always-on checks only" });
-  assert.match(SOURCE, /reserve\(10 \+ \(planFacts\.changed_symbols/);
+  assert.match(SOURCE, /reserve\(11 \+ \(planFacts\.changed_symbols/);
 });
 
 test("8.0.0 G7-1: an added shell=True line with no exemption turns an approve into fix_code; a reasoned exemption passes and security_scan leaves gates_not_run", async () => {
@@ -773,9 +773,11 @@ test("8.0.0 G8: the per-run dir is removed on success, on a tool error, at the d
     assert.ok(made(y), "the scan dir was made before the TERM");
     assert.notEqual(y.r.status, 0);
     assert.deepEqual(y.leftovers, [], "TERM");
+    // car F (A-L13): TERM removes the container too
+    assert.ok(y.calls.some((c) => c[1] === "rm" && c[2] === "-f" && /^fleet-sec-[0-9a-f]{12}$/.test(c[3])), "TERM removes the container: " + JSON.stringify(y.calls));
     const src = readFileSync(PROG, "utf8");
-    assert.match(src, /\nDEADLINE = min\(540, int\(_dl\)\) if re\.match\(r'\^\[1-9\]\[0-9\]\{0,3\}\$', _dl\) else 540\n/, "a test may lower the deadline, never raise it");
-    assert.match(src, /\nsignal\.signal\(signal\.SIGTERM, lambda \*_: sys\.exit\('sec_scan\.py: terminated'\)\)\n/);
+    // car F (B-L4): 520 s, so the cleanup fits in the 600 s call
+    assert.match(src, /\nDEADLINE = min\(520, int\(_dl\)\) if re\.match\(r'\^\[1-9\]\[0-9\]\{0,3\}\$', _dl\) else 520\n/, "a test may lower the deadline, never raise it");
   } finally {
     rmSync(x.d, { recursive: true, force: true });
     rmSync(x.cache, { recursive: true, force: true });
@@ -806,5 +808,32 @@ test("8.0.0 G8: before each run, per-run dirs older than 1 day are swept; a youn
     assert.equal(readFileSync(join(outside, "target.txt"), "utf8"), "t\n", "the link target is untouched");
   } finally {
     for (const p of [x.d, x.cache, outside]) rmSync(p, { recursive: true, force: true });
+  }
+});
+
+test("8.0.0 car F A-L13: sec_scan's cheap cases: a non-rule YAML under the base .semgrep is skipped; est negative or with an exponent parses; an XDG_CACHE_HOME with ':' is partial with the reason", { skip: !HAVE_PY }, () => {
+  let y = once({ rt: ["podman"], baseFiles: { ".semgrep/other.yaml": "foo: 1\n" } }, { out: CLEAN });
+  assert.equal(y.r.status, 0, y.r.stderr);
+  assert.equal(y.out.status, "ran", y.out.reason);
+  const rules = Object.values(y.mounts[0]["/rules"]).map((v) => v[1]);
+  assert.ok(rules.some((t) => t.startsWith("rules: []")) && !rules.some((t) => t.startsWith("foo:")), JSON.stringify(Object.keys(y.mounts[0]["/rules"])));
+  y = once({}, { est: "1e0" });
+  assert.equal(y.r.status, 0, y.r.stderr);
+  assert.ok(y.out.findings.some((f) => f.path === "<diff>" && /est_diff_lines 1$/.test(f.rule)), JSON.stringify(y.out.findings));
+  y = once({}, { est: "-5" });
+  assert.equal(y.r.status, 0, y.r.stderr);
+  assert.ok(!y.out.findings.some((f) => f.path === "<diff>"));
+  assert.match(y.out.reason, /est_diff_lines not positive: size not checked/);
+  const x = repo({ rt: ["podman"] });
+  try {
+    const odd = join(x.cache, "a:b");
+    y = prog(x, { out: CLEAN, env: { XDG_CACHE_HOME: odd } });
+    assert.equal(y.r.status, 0, y.r.stderr);
+    assert.equal(y.out.status, "partial");
+    assert.match(y.out.reason, /XDG_CACHE_HOME holds ':'/);
+    assert.ok(!y.calls.some((c) => c[1] === "run"));
+  } finally {
+    rmSync(x.d, { recursive: true, force: true });
+    rmSync(x.cache, { recursive: true, force: true });
   }
 });

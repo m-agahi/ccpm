@@ -37,19 +37,28 @@ except Exception:
 # fleet 8.0.0 (G3, ADR-1152): the held-out store. It keeps the planner's held-out examples out of the
 # worktree, the plan ref and every role prompt; it blocks casual reads only (roles have a shell).
 #   write <worktree> <task id> <plan_path> <plan_sha256> <chunk dir> <n> <expected sha256> <chunk sha256 list>
-#     The payload {examples, visible (one examples list per criterion)} is in base64 chunk files under the run's scratch dir; the dir is
-#     removed on every exit. An example whose when and then both appear verbatim in the plan doc, or
+#     The payload {examples, visible (one examples list per criterion), ids (the criterion ids)} is in base64 chunk files under the
+#     run's scratch dir; the dir is removed on every exit. An example for an id not in ids, one whose when and then both appear verbatim in the plan doc, or
 #     whose given, when and then equal a visible example's, is dropped. The rest go to
 #     $XDG_CONFIG_HOME/fleet/held-out/<task id>/<plan_sha256>.json (dir 0700, file 0600, a random salt).
 #     Prints {sha256 (of the file bytes; null: nothing kept), count, per_criterion, dropped, args}.
 #   show <task id> <plan_sha256> <sealed sha256>: the examples, only when the file hashes to the seal.
 # No example text ever reaches stdout or stderr in write mode: dropped holds criterion and index only.
-import base64, hashlib, json, os, re, secrets, shutil, sys
+import atexit, base64, hashlib, json, os, re, secrets, shutil, sys
 ARGC = {'write': 9, 'show': 4}
 a = sys.argv[1:]
 if not a or a[0] not in ARGC or len(a) != ARGC[a[0]]:
     sys.exit('usage: write <worktree> <task id> <plan_path> <plan_sha256> <chunk dir> <n> <expected sha256> <chunk sha256 list> | show <task id> <plan_sha256> <sealed sha256>')
 mode = a[0]
+if mode == 'write':
+    # the chunks live in a directory of the run's scratch dir (a sibling of the worktree); only that dir
+    # is removed, on every exit once it is proven under scratch (car F, A-L10: the early refusals too)
+    wt, plan_path, cdir, n_arg, expected, shas_arg = a[1], a[3], a[5], a[6], a[7], a[8]
+    scratch = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(wt)), 'scratch'))
+    real = os.path.realpath(cdir)
+    if not real.startswith(scratch + '/'):
+        sys.exit('the chunk dir is not under the run scratch dir')
+    atexit.register(shutil.rmtree, real, True)
 HEX = re.compile(r'[0-9a-f]{64}')
 CID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,31}')
 task, psha = (a[2], a[4]) if mode == 'write' else (a[1], a[2])
@@ -86,12 +95,6 @@ if mode == 'show':
         sys.exit('the store file is not this plan\'s')
     done({'examples': d['examples'], 'sha256': sealed, 'args': a[1:]})
     sys.exit(0)
-wt, plan_path, cdir, n_arg, expected, shas_arg = a[1], a[3], a[5], a[6], a[7], a[8]
-# the chunks live in a directory of the run's scratch dir (a sibling of the worktree); only that dir is removed
-scratch = os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(wt)), 'scratch'))
-real = os.path.realpath(cdir)
-if not real.startswith(scratch + '/'):
-    sys.exit('the chunk dir is not under the run scratch dir')
 def write():
     if not re.fullmatch(r'[1-9][0-9]?', n_arg) or not HEX.fullmatch(expected):
         sys.exit('bad chunk count or expected sha256')
@@ -138,6 +141,8 @@ def write():
     gwt = ('given', 'when', 'then')
     # visible: each criterion's examples list, as the plan holds it
     seen = [tuple(v.get(k) for k in gwt) for x in pl['visible'] if isinstance(x, list) for v in x if isinstance(v, dict)]
+    # car F (A-L9): ids, the plan's criterion ids; an example for another id could never run
+    ids = pl.get('ids')
     kept, dropped, per = [], [], {}
     for i, e in enumerate(pl['examples']):
         cid = e.get('criterion_id') if isinstance(e, dict) else None
@@ -145,6 +150,8 @@ def write():
         why = None
         if cid is None or not all(isinstance(e.get(k), str) for k in gwt) or not e['when'] or not e['then']:
             why = 'malformed'
+        elif isinstance(ids, list) and cid not in ids:
+            why = 'unknown criterion'
         elif e['when'] in doc and e['then'] in doc:
             why = 'in the plan doc'
         elif tuple(e[k] for k in gwt) in seen:
@@ -175,7 +182,4 @@ def write():
         os.replace(tmp, os.path.join(d, psha + '.json'))
         sha = hashlib.sha256(body).hexdigest()
     done({'sha256': sha, 'count': len(kept), 'per_criterion': per, 'dropped': dropped, 'args': a[1:]})
-try:
-    write()
-finally:
-    shutil.rmtree(real, ignore_errors=True)
+write()

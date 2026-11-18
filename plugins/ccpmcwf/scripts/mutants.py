@@ -36,8 +36,8 @@ except Exception:
     _PROG = {'name': None, 'sha256': None}
 # fleet 8.0.0 (G5, ADR-1316): the mutation gate, a built-in diff-scoped mutator (no external tool).
 # Args: <worktree> <base> <tree> <test_cmd> <env json> <exclude json> (those of cover_diff.py).
-# A throwaway dir <dirname(worktree)>/scratch/mut-* with the files of the judged <tree> and no .git
-# (car F, A-M4; the main worktree is never touched). The mutants: comparison flip, boolean swap,
+# A throwaway dir <private mkdtemp work dir>/copy with the files of the judged <tree> and no .git
+# (car F, A-M4 and review; restore check: regular files only; the main worktree is never touched). The mutants: comparison flip, boolean swap,
 # boundary +-1 and dropped negation, on the tokens (never a string or a comment) of the added
 # lines of the changed .py files (git diff -U0 <base> <tree>, the <exclude> paths aside); at
 # most 200, spread evenly over the lines (round-robin; a round larger than the room left takes
@@ -57,7 +57,7 @@ except Exception:
 # PATH guard, no COVERAGE_* or FLEET_* var, no bytecode written (a fresh pycache prefix outside
 # the scratch dir), no gate-data path. Changed non-python source: partial (python lines too) or
 # not_run "unsupported" (none).
-import hashlib, io, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, time, tokenize
+import hashlib, io, json, os, re, shlex, shutil, signal, stat, subprocess, sys, tempfile, time, tokenize
 CAP = 200
 _dl = os.environ.get('FLEET_MUTANTS_DEADLINE') or ''
 # a test may lower the deadline, never raise it
@@ -236,7 +236,9 @@ for n in os.listdir(scratch):
 subprocess.run(G + ['-C', wt, 'worktree', 'prune'], capture_output=True)
 work = tempfile.mkdtemp()
 guard = tempfile.mkdtemp(prefix='mut-guard-', dir=scratch)
-tmp = tempfile.mkdtemp(prefix='mut-', dir=scratch)
+# car F (review): the copy sits in the private work dir, not beside the worktree (code under test, the same
+# uid, can still find and read the worktree: a sandbox is task #75)
+tmp = os.path.join(work, 'copy')
 def fill(rev):
     # car F (A-M4): a plain dir with the files of <rev> and no .git (a temp index outside the copy), so
     # code under test cannot see a mutant with git diff; a fresh dir each time (the base run: no file of
@@ -330,6 +332,13 @@ try:
         pass
     # the hash check (no .git in the copy): every mutated file hashes to its blob in the tree again
     ps = sorted(orig)
+    for p in ps:
+        try:
+            reg = stat.S_ISREG(os.lstat(os.path.join(tmp, p)).st_mode)
+        except OSError:
+            reg = False
+        if not reg:
+            sys.exit('restore check: ' + p + ' is not a regular file in the copy after the mutant runs')
     if ps and git(wt, 'hash-object', '--no-filters', '--', *[os.path.join(tmp, p) for p in ps]).split() != git(wt, 'rev-parse', *[tree + ':' + p for p in ps]).split():
         sys.exit('restore check: the copy differs from the judged tree after the mutant runs')
     if done < M:

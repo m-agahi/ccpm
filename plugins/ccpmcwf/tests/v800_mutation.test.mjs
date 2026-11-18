@@ -428,7 +428,7 @@ test("8.0.0 G5: mutants runs as the 2nd slot of infra:gates:r<m> (no new agent, 
   assert.deepEqual(out.result.gates_not_run.find((x) => x.gate === "mutation"), { gate: "mutation", reason: "tool absent: no mutation run" });
   assert.ok(out.logs.includes("gate mutation: not_run (tool absent: no mutation run)"), out.logs.join("\n"));
   // the cap: unchanged (no new capped agent)
-  assert.match(SOURCE, /reserve\(10 \+ \(planFacts\.changed_symbols/);
+  assert.match(SOURCE, /reserve\(11 \+ \(planFacts\.changed_symbols/);
 });
 
 test("8.0.0 G5-2: an approve with an unruled survivor becomes fix_code; a bad target or a blank reason rules nothing", async () => {
@@ -554,6 +554,17 @@ test("8.0.0 car F A-M4: the mutation copy holds the judged tree with no .git (gi
   assert.equal(y.out.status, "ran", y.out.reason);
   assert.ok(!y.calls.includes("git"), "no .git in the copy: " + y.calls.join(","));
   assert.ok(y.out.survived.length > 0 && y.out.killed === 0, "every mutant survives a suite that checks nothing");
+  assert.ok(y.same);
+  assert.deepEqual(y.leftovers, []);
+});
+
+test("8.0.0 car F review M3: the mutation copy lives in the private work dir, not beside the worktree; a symlink planted in the copy fails the restore check", { skip: !HAVE_PY }, () => {
+  const [cp, rm, ln] = ["cp", "rm", "ln"].map((c) => which(c));
+  const plant = 'pwd >> "$LOG"\nif [ -f pkg/b.py ] && [ ! -L pkg/b.py ]; then ' + cp + " pkg/b.py .b; " + rm + " pkg/b.py; " + ln + ' -s "$PWD/.b" pkg/b.py; fi\nexit 0\n';
+  const y = once({ add: WEAK, files: { "pkg/b.py": "\n\nX = 'a'\n" }, pytest: plant });
+  assert.notEqual(y.r.status, 0, y.r.stdout + y.calls.join(","));
+  assert.match(y.r.stderr, /restore check/);
+  assert.ok(y.calls.length && y.calls.every((c) => !c.startsWith(y.x.d + "/scratch")), y.calls.join(","));
   assert.ok(y.same);
   assert.deepEqual(y.leftovers, []);
 });

@@ -1508,13 +1508,13 @@ return typeof r.digest === "string" && SHA256_RE.test(r.digest) && sha256Hex(can
 // PROGRAM_SHA256_BEGIN
 const PROGRAM_SHA256 = {
 "branch_scan": "b74d9dd5692933e455dbe90923b9687e27ac63a8c73234a8d57f97587cbf8feb",
-"build_dir": "03fb2f319b703f12a67d9ec660be2acd817d3636051ca548fdf3ee616c4c2a49",
+"build_dir": "ed37b63a41c2cebb3821cabf723330464da4ccf6711bbc83e833c509309a4f6a",
 "callers": "c75ce930aabcf85983a9c248873e1b86da730ec06d2111fa42827f6a4a1f9e8b",
 "changed_defs": "873f1bcb97c7631934512729941deca1e9da49bc84957f1e78ec171293840644",
 "ci_watch": "23838fa468ec93a14c1ef094f9ab82388780ca903cab26c826faf4cd5663ac1b",
 "cover_diff": "75601765b02902c58eacee9a45ab87f3699a8111ac30631ad77da3b107a87e6f",
 "db_down": "ededfa1ee5ca70cdf5e12dae831fb46a4f0b27ee246ff19cb81924f5480d092b",
-"db_sweep": "a88731972e31042e635b676559d93417d5a4abd02db05f24d4a8766786e6e282",
+"db_sweep": "f557b6d5d55d0139b0340a5d6653847566e6d105ab476e017c7f1bc2213a3f80",
 "db_up": "02675bec7b81431aebca49fb129baed379ff3b1f53f2bb6ba5fba26678e17c3c",
 "exclude_add": "8e510601a0deac5baa673f1a888a78fa28c3cf49c20e2949a539252ffdea3566",
 "fleet_branch": "f1af514598ab542d58a16456f00e5cba0aeb43131fc2eab1618e2ca87bf846d7",
@@ -1524,9 +1524,9 @@ const PROGRAM_SHA256 = {
 "gh_identity": "99b67e019edd377735e3a919b1ec66746d73ace9b420aad3756a235e3384418f",
 "hash_diff": "c2316c9d945dfdde8f085458f814fc3c7731f39db7e9df9d5b88d84b71702859",
 "hasher": "a51548a18c589aafe84eba8c7b1fe5b5c1d3e0544a4a1aff88c03b718e1a77e8",
-"held_out": "cd9c62029ca923706d62a815728e67297a674e917c88f2c83fd4e2c301d740aa",
+"held_out": "58460d3adece15be446f7854af5c7467a00d3cd8508b8534937489577d9ea143",
 "hook_surface": "14e0c99c025fa9c7035c7ea357f36aabb7a9066851c5242d020ccd17913936bc",
-"mutants": "542697eb5b0204253df1d8bca4214a9c596872244a8352d6f4825603c2fc10a6",
+"mutants": "2f2e06a3174586e7b26249032997bf722698212f15b47ea6774bf4ff157f1e41",
 "orch_scan": "f258c42373a7061959dab45d630af903d749a2b249dd9d3b46e19a57d707a45a",
 "parked": "348f282ab0161952cccbf7aaffed3f3525ac002002942a258977dd288e3339f7",
 "path_check": "6a4b0802e16d87850763935068826f1c9c4671ca458a93165c997721921658d7",
@@ -1550,7 +1550,7 @@ const PROGRAM_SHA256 = {
 "ruleset_surface": "a7068f6d75749d3c5747a4e9787206bd85bb04accc1d489585bb7b8e2ac2e1e5",
 "scratch_copy": "d8eaf27a102911048b11238cfdc271e5adbd30c0668c1e97e7d0d074654cfa3a",
 "script_check": "5c88c6b884d5905ff0f4ac854650ffc60ffa162aad4a3964fbedaccdc7af8573",
-"sec_scan": "0fc7162ba04a3dde76540e054e173093f46da461d507ecbe1f67ba64b4f9599a",
+"sec_scan": "ef33b6e2742b2f2e877be7e676f030be129b72461dd49836b0b93a3626fbf06b",
 "session_project": "64f18580c60a8713871da5cb26f317023b39ae6f0945172c5c352d58e11cc5bc",
 "state_write": "1cb22321d67b6ee4580a46ed6d1096ff4bebcc2b27e1af28d6a6164be2e7bb93",
 "test_db_decl": "c2e9f36d23fb147835a85c4421d5e38a05912d343fdaa1f08fe285c3cfc5c11d",
@@ -1566,7 +1566,7 @@ const ROLE_SHA256 = {
 "fleet-ci-classifier": "362eec412ce0ee49a76a24c39053a5114f66ab94853cfa37d54a5510fbd24a1a",
 "fleet-code-judge": "fdd95e92358734335190c162d165a5e72d0b10ce4c6f17397b878869810cf4eb",
 "fleet-coder": "fca268a7affc87d1257b161a8138a78e1a17965063d1ffb7fe9b1a7c6d165547",
-"fleet-held-out-runner": "9af2ac6992de27f66ea08a98c85c5da1cd8d1966bdeb8412d58e080b9c0bf5b8",
+"fleet-held-out-runner": "8e970c2dde23a206f93d48a70a679e413b1901ee86e6cf0b265b53be1a26307a",
 "fleet-intent-judge": "25fecda65cf5002622d93effa874e0be9d7448143855ee8bc9ca591d03f177e8",
 "fleet-pr-opener": "28a9ebb7770541b23050f249997cb447453be6ab58dcc495f09490d3109e772a",
 "fleet-test-judge": "2dd18aedc8580c68583951ede4714e876a9752ac723e27558d1c17f5488b7d04",
@@ -3926,7 +3926,7 @@ const x = state.gates[g];
 if (!x || x.round !== m) return [];
 const flat = (a, f) => [].concat(...a.map(f));
 const rul = flat(Array.isArray(ex) ? ex : [], (e) => (e && e.gate === g && Array.isArray(e.lines) ? e.lines.map((l) => ({ id: e.path + ":" + l, reason: e.reason })) : []));
-return unruled(flat(x.findings, (f) => f.lines.map((l) => ({ id: f.path + ":" + l }))), rul).map((f) => f.id);
+return unruled(flat(x.findings, (f) => f.lines.map((l) => ({ id: f.path + ":" + l, s: capPath(f.path) + ":" + l }))), rul).map((f) => f.s);
 }
 const RUNNER = "fleet-held-out-runner";
 async function heldOutRun(ref, m, inputs) {
@@ -3942,6 +3942,7 @@ if (!ho) return nr(ref.history.replans ? "not stored on a re-plan" : "no held-ou
 const k = "held-out-r" + m;
 await resetBuild("held-out:r" + m, [k], "Code");
 const label = "role:" + RUNNER + ":r" + m;
+reserve(1, label);
 state.agents++;
 const r = await roleAgent(RUNNER, label, rolePrompt(RUNNER, Object.assign(inputs, { task_id: ref.task_id, plan_sha256: ref.plan_sha256, held_out: ho, held_out_cmd: scratchCopyCmd("held_out") }, roleEnv("hrun", k, Object.fromEntries("HOME TMPDIR XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME".split(" ").map((v) => [v, buildDirOf(k) + "/" + v]))))), { schema: SCHEMAS[RUNNER], phase: "Code", agentType: JUDGE_AGENT });
 const st = r && r.status === "failed" ? "failed" : "needs_human";
@@ -3949,7 +3950,7 @@ if (!r || r.status !== "ok") halt(st, label + " returned " + st, "role");
 if (roleFileProblem(RUNNER, { role_file: r.role_file }) || driftOf(RUNNER, r)) halt(st, label + ": contract drift", "contract");
 const stop = (why) => halt(st, label + ": " + why, "gates");
 if (r.store === "missing") return prev.seen ? stop("store file missing after an earlier round of this build read it") : nr("store file missing on this machine");
-if (r.store === "timeout") return prev.seen ? stop("a held-out test run hit its deadline after an earlier round of this build read the store") : nr("a held-out test run hit its deadline");
+if (r.store === "timeout") stop("a held-out test run hit its deadline");
 if (r.store !== "ok") stop("held_out.py show: store " + r.store);
 if (r.store_digest !== ho.sha256) stop("store_digest off the seal");
 const pc = ho.per_criterion;
@@ -3969,7 +3970,7 @@ function mutantsLeft(rul, m) {
 const x = state.gates.mutation;
 const ok = (Array.isArray(rul) ? rul : []).filter((r) => r && MUTANT_TARGETS.indexOf(r.target) >= 0);
 const by = (v) => ok.find((r) => !unruled([v], [r]).length);
-const d = (v) => v.id + " (" + v.path + ":" + v.line + " " + v.op + ")";
+const d = (v) => v.id + " (" + capPath(v.path) + ":" + v.line + " " + v.op + ")";
 const s = x && x.round === m ? x.findings : [];
 const left = s.filter((v) => !by(v));
 const f = (t, v) => Object.assign({ target: "code", criterion: null, finding: "mutation gate: " + t }, v ? { mutant: v } : {});
@@ -4851,6 +4852,7 @@ return got;
 function logPath(p) {
 return String(p).replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, "?");
 }
+const capPath = (p) => logPath(p).slice(0, 200);
 function isHookPath(p, surface) {
 if (HOOK_PATH_RE.test(p)) return true;
 for (const s of surface) {
@@ -4981,10 +4983,12 @@ if (!Array.isArray(plan.plan_diff) || !plan.plan_diff.length || !plan.plan_diff.
 halt("needs_human", "role scope-and-plan contract drift: plan_diff must be a non-empty array of strings", "contract");
 if (typeof plan.tldr !== "string" || !plan.tldr.trim())
 halt("needs_human", "role scope-and-plan contract drift: tldr must be a non-empty string", "contract");
-const hoHit = (x) => [].concat(plan[HELD_OUT_KEY] || []).some((e) => e && e.when && e.then && (x = x === Object(x) ? JSON.stringify(x) : String(x)).includes(e.when) && x.includes(e.then));
-const red = (x) => (hoHit(x) ? "(held-out text redacted)" : x);
+const nz = (x) => (x === Object(x) ? JSON.stringify(x) : String(x)).toLowerCase().replace(/\s+/g, " ");
+const hos = [].concat(plan[HELD_OUT_KEY] || []).filter((e) => e && e.when && e.then).map((e) => [nz(e.when).trim(), nz(e.then).trim()]).filter((e) => e[0] && e[1]);
+const hoHit = (x) => hos.some(([w, t]) => (x = nz(x)).includes(w) && x.includes(t));
+const red = (x) => (x === Object(x) ? (Object.keys(x).forEach((k) => k === HELD_OUT_KEY || (x[k] = red(x[k]))), x) : String(x) === x && hoHit(x) ? "(held-out text redacted)" : x);
 for (const f of state.findings) f.notes = f.notes.filter((n) => !hoHit(n));
-Object.assign(plan, { tldr: red(plan.tldr), plan_diff: plan.plan_diff.map(red), criteria: plan.criteria.map((c) => (c && hoHit(c.text) ? { ...c, text: red(c.text) } : c)) });
+red(plan);
 const factsProblem = planFactsProblem(plan.test_cmd, plan.repo_obligations);
 if (factsProblem) halt("needs_human", factsProblem.msg, factsProblem.gate);
 const tcProblem = testCmdProblem(plan.test_cmd);
@@ -5305,7 +5309,7 @@ async function heldOutWrite(ctx, sha) {
 const ex = ctx.heldOut;
 const none = (why) => (gate("held-out: " + why + "; held_out null"), null);
 if (!Array.isArray(ex) || !ex.length) return none(ex ? "no example" : "not stored on a re-plan");
-const c = chunked(JSON.stringify({ examples: ex, visible: ctx.fields.criteria.map((k) => k.examples) }));
+const c = chunked(JSON.stringify({ examples: ex, visible: ctx.fields.criteria.map((k) => k.examples), ids: ctx.fields.criteria.map((k) => k.id) }));
 if (c.chunks.length > CHUNKS_PER_WRITER) return none("too many chunks");
 const dir = scratchOf(ctx.worktree) + "/chunks/held-out-" + safeName(state.nonce);
 const args = [ctx.worktree, ctx.fields.taskId, ctx.fields.planPath, sha, dir, String(c.chunks.length), c.expected, JSON.stringify(c.shas)];
@@ -7567,7 +7571,7 @@ updRound ? "review" : "cap",
 state.rounds.code++;
 const m = state.rounds.code;
 lastRoundGate = null;
-reserve(10 + (planFacts.changed_symbols ? 1 : 0) + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
+reserve(11 + (planFacts.changed_symbols ? 1 : 0) + (scriptPathsOf(planFacts.repo_obligations).length ? 1 : 0), "code round " + m);
 const codeInputs = Object.assign({}, common, planCtx, planFacts, {
 criteria,
 frozen_tests: frozenFiles.slice(),
@@ -7739,7 +7743,7 @@ gate("code round " + m + ": coverage gate: code-judge approve converted to fix_c
 continue;
 }
 const secX = gateLeft("security_scan", cj.exemptions, m);
-const secLeft = [].concat(...sec.findings.map((f) => f.lines.map((l) => f.path + ":" + l).filter((id) => f.kind === "secret" || secX.indexOf(id) >= 0).map((id) => id + " " + f.rule)));
+const secLeft = [].concat(...sec.findings.map((f) => f.lines.map((l) => f.path + ":" + l).filter((id) => f.kind === "secret" || secX.indexOf(id) >= 0).map((id) => capPath(id) + " " + f.rule)));
 if (secLeft.length) {
 coderFindings = [{ target: "code", criterion: null, finding: "security gate: findings no exemption covers (a secret is never exempted): " + secLeft.join(", ") + " -- fix the code or remove the secret" }];
 judgePrior = coderFindings.slice();
@@ -8374,7 +8378,7 @@ INFRA_STEP + (inputs.mode === "up" ? "start this run's throwaway test database (
 ". Run only the command(s) below, each exactly as written. Never start, stop, exec into or remove any other container; never run anything named tf-local*; no git command; change no repo file.\n" +
 inputsLine(inputs) +
 (inputs.mode === "up"
-? "1. Run this one command:\n" + progCmd("db_sweep", []) + "\nIt prints one JSON object " + printsKeys("db_sweep") + ": " + relayAs("sweep") + " (the script recomputes the digest). Non-zero exit -> sweep null; go on.\n2. "
+? "1. " + RUN_180S + progCmd("db_sweep", []) + "\nIt prints one JSON object " + printsKeys("db_sweep") + ": " + relayAs("sweep") + " (the script recomputes the digest). Non-zero exit -> sweep null; go on.\n2. "
 : "") +
 "Run this one command as one Bash call with timeout 600000 ms:\n" +
 progCmd("db_up", cmdArgs) +

@@ -1,6 +1,6 @@
 # Changelog
 
-## [8.0.0] - unreleased
+## [8.0.0] - 2026-11-18
 
 Fleet 8.0.0: one major release, built in cars on one branch. Car A: yaadgaar #74 and #71. The
 version bump. Cars B1 and B2: #62 (fewer agents). Cars G1 to G8: the v1.1 gates (#1, #6, #7):
@@ -473,6 +473,39 @@ token counts come from the smoke run, after this entry.
 - B-M3: `db_up.py` bounds `podman run` (a cold image pull) at 480 s and the whole run at 560 s; the
   prompt asks for timeout 600000 ms (was 900000, over the Bash cap). A bound hit removes the
   container.
+- Security review of the MEDIUM fixes:
+  - A-M6: the held-out filter walks every string of the planner's result but the held-out list
+    (criteria examples, `dont_care`, `property`, `spec_quote` and the rest), case and spacing
+    ignored; a match is redacted, never a stop (the planner wrote the examples).
+  - B-M1: a held-out test run that hits its deadline stops the run (`needs_human`, gate `gates`) in
+    every round: never `not_run` (code under test could hang on purpose) and never `fix_code`.
+  - A-M4: the mutation copy is `<private work dir>/copy`, not beside the worktree; the restore check
+    lstats each file and needs a regular file (no symlink) before it hashes it. Code under test runs
+    as the same uid and can still read the worktree: the README threat model says so (task #75).
+- A-L9: `held_out.py write` drops an example whose criterion id is not one of the plan's (the
+  payload's `ids`): `why: "unknown criterion"`. The runner role says every stored id is a criterion.
+- A-L10: `held_out.py` proves the chunk dir is under the run's scratch dir first, then removes it
+  on every exit, the early refusals (task id, plan_sha256) included.
+- A-L11: `build_dir.py reset` and `clean` remove leftover `scratch/copy-*` and `scratch/guard-*`
+  dirs (a step that died before its remove).
+- A-L12: a coder-written path in a gate line, the coder's gate finding and the PR's gate text has
+  control characters replaced and is cut at 200 characters (coverage, mutation, security).
+- A-L13: `sec_scan.py` skips a base `.semgrep` YAML file with no top-level `rules:`; parses
+  `est_diff_lines` with an exponent or a fraction as an int and skips the size check when it is not
+  positive; is `partial` when the scan dir path holds `:`; and removes the container on TERM.
+- A-L14: the README and the notes say the dependency audit and the ruff unused-code check of the
+  gates plan are not implemented.
+- A-L16: the README threat model says a user-level `PostToolUse` hook with no matcher (checked
+  read-only in `~/.claude/settings.json`: yadgar's `post-tool-capture`) fires for the workflow's
+  agents too, so held-out text can reach that hook's store.
+- B-L2: the held-out runner reserves its agent (`reserve(1)`) before it counts it.
+- B-L3: the code-round reserve counts `infra:state:committed` (11, was 10).
+- B-L4: `sec_scan.py`'s deadline is 520 s (was 540), so the container removal and the cleanup fit
+  in the 600 s call.
+- B-L5: `db_sweep.py` stops at 150 s (`FLEET_DB_SWEEP_DEADLINE` lowers it) and still prints; the
+  prompt runs it with timeout 180000 ms. The push probe's one 120 s dry run fits `RUN_180S`.
+- B-L6: this heading's date; `/plugin marketplace update` in the README upgrade steps; the
+  `build-workflow.mjs` header says 495000.
 
 ### Tests changed on purpose (car F)
 
@@ -487,6 +520,9 @@ token counts come from the smoke run, after this entry.
   pins move (car F line).
 - A-M8: the gates' DSN ends in `/fleet_gates`; the db-up list adds it.
 - B-M2: the G1-5 and G7 pull tests expect 480 s.
+- B-M1 (security review): the held-out timeout test expects a stop at `gates` in round 1.
+- B-L4: the G8 deadline test expects 520 s and a container removal on TERM.
+- B-L3: the G2, G4, G5 and G7 reserve checks expect `reserve(11 + ...)`.
 
 ### Upgrade notes
 

@@ -48,6 +48,7 @@ import hashlib, json, os, re, shutil, stat, sys
 #   build_dir.py reset <scratch> <nonce> <key>...  delete <scratch>/build,
 #     then create each <scratch>/build/<nonce>/<key> empty; prints
 #     {dirs, args}
+#   Both modes first delete <scratch>/copy-* and <scratch>/guard-* (car F, A-L11).
 #   build_dir.py clean <scratch>  delete <scratch>/build and <scratch>/uv-cache
 #     (the run's uv caches, which a reset keeps); prints
 #     {removed, bytes, args} (bytes: the size of the files it held)
@@ -132,7 +133,16 @@ def mkdir(parts):
         if os.path.islink(cur) or not os.path.isdir(cur):
             fail('not a directory: ' + cur)
 
+def sweep():
+    # car F (A-L11): a scratch copy (copy-*) or run guard (guard-*) that a step left when it died;
+    # every earlier step has finished. Its worktree registration goes at the next git worktree prune.
+    base = no_link(REST)
+    for n in (os.listdir(base) if os.path.isdir(base) else []):
+        if n.startswith(('copy-', 'guard-')):
+            remove(os.path.join(base, n))
+
 try:
+    sweep()
     if mode == 'reset':
         nonce, keys = names[0], names[1:]
         root = no_link(REST + ['build'])

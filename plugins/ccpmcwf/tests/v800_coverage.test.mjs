@@ -416,7 +416,7 @@ test("8.0.0 G2: a gate relay that errs twice stops at gate gates (one retry, ADR
 
 // 8.0.0 (G4): 10, the held-out runner is capped too
 test("8.0.0 G2: a code round reserves 9 agents (the gate is capped; G4: 10, with the held-out runner)", () => {
-  assert.match(SOURCE, /reserve\(10 \+ \(planFacts\.changed_symbols \? 1 : 0\)/);
+  assert.match(SOURCE, /reserve\(11 \+ \(planFacts\.changed_symbols \? 1 : 0\)/);
   assert.match(SOURCE, /\["infra:gates:", "sonnet"\]/);
 });
 
@@ -495,4 +495,16 @@ test("8.0.0 car F A-M3: a tree-local coverage package cannot fake the report (py
   } finally {
     rmSync(g0, { recursive: true, force: true });
   }
+});
+
+test("8.0.0 car F A-L12: a coder-written path reaches the gate line and the coder's finding with control characters replaced and cut at 200 characters", async () => {
+  const p = "src/a\nb\u2028" + "y".repeat(300) + ".py";
+  const s = happy({ script: Object.assign({ "infra:gates:r1": gatesStub({ reason: "1 uncovered", findings: [{ path: p, lines: [3] }] }), "role:fleet-code-judge:r1": approve() }, R2) });
+  const out = await run(s, ARGS);
+  assert.equal(out.result.status, "ok", out.result.reason);
+  const shown = ("src/a?b?" + "y".repeat(300)).slice(0, 200);
+  const line = out.logs.find((l) => /coverage gate: code-judge approve converted/.test(l));
+  assert.ok(line.includes(shown + ":3") && !/[\n\u2028]/.test(line) && !line.includes("y".repeat(201)), line);
+  const f = inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding;
+  assert.ok(f.includes(shown + ":3") && !f.includes("y".repeat(201)), f);
 });

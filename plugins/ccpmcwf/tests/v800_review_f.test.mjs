@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -186,20 +186,15 @@ test("8.0.0 car F B-M1: scratch_copy run kills the child's process group at its 
   }
 });
 
-test("8.0.0 car F B-M1: a runner that reports store timeout gives held_out not_run (a stop after an earlier round read the store); the role asks for timeout 600000 ms", async () => {
+test("8.0.0 car F B-M1 (review M2): a runner that reports store timeout stops at gates in every round (never not_run, never fix_code); the role asks for timeout 600000 ms", async () => {
   const s = happy({ criteria: CRIT });
   s["role:scope-and-plan"].held_out_examples = HO;
   s["role:fleet-held-out-runner:r1"] = { status: "ok", reason: "timed out", store: "timeout", store_digest: null, results: null };
   const out = await run(s, ARGS);
-  assert.equal(out.result.status, "ok", out.result.reason);
-  assert.ok(out.logs.includes("gate held_out: not_run (a held-out test run hit its deadline)"), out.logs.filter((l) => /held/.test(l)).join("\n"));
-  const s2 = happy({ criteria: CRIT, script: Object.assign({ "role:fleet-code-judge:r1": approve({ verdict: "fix_code", routed_findings: [{ target: "code", criterion: null, finding: "tidy" }] }) }, R2) });
-  s2["role:scope-and-plan"].held_out_examples = HO;
-  s2["role:fleet-held-out-runner:r1"] = (p) => ({ status: "ok", reason: "ran", store: "ok", store_digest: inputsOf(p).held_out.sha256, results: [{ criterion: "AC1", index: 0, pass: true }] });
-  s2["role:fleet-held-out-runner:r2"] = s["role:fleet-held-out-runner:r1"];
-  const o2 = await run(s2, ARGS);
-  assert.equal(o2.result.stop_gate, "gates", o2.result.reason);
-  assert.match(o2.result.reason, /role:fleet-held-out-runner:r2: a held-out test run hit its deadline after an earlier round of this build read the store/);
+  assert.equal(out.result.status, "needs_human", out.result.reason);
+  assert.equal(out.result.stop_gate, "gates", out.result.reason);
+  assert.match(out.result.reason, /role:fleet-held-out-runner:r1: a held-out test run hit its deadline/);
+  assert.ok(!out.labels.includes("role:fleet-code-judge:r1"), "no judge, no fix_code round");
   const role = ROLE_TEXT["fleet-held-out-runner"];
   assert.match(role, /timeout 600000 ms/);
   assert.match(role, /"timeout"/);
@@ -250,4 +245,62 @@ test("8.0.0 car F B-M3: db_up bounds podman run (the cold pull) at 480 s and the
   }
   assert.match(SOURCE, /"Run this one command as one Bash call with timeout 600000 ms:\\n" \+\n\s+progCmd\("db_up"/);
   assert.ok(!/900000/.test(SOURCE));
+});
+
+// A-L11: a scratch copy a role left (it died before remove) is swept by the next reset and the teardown
+test("8.0.0 car F A-L11: build_dir reset and clean remove leftover scratch copy-* and guard-* dirs, and nothing else in scratch", () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-r8f-bd-"));
+  try {
+    const sc = join(home, "scratch");
+    const bd = (...a) => spawnSync("python3", ["-I", join(SCRIPTS, "build_dir.py"), ...a], { encoding: "utf8" });
+    for (const mode of ["reset", "clean"]) {
+      for (const d of ["copy-abc", "guard-x", "chunks", "keep"]) mkdirSync(join(sc, d, "sub"), { recursive: true });
+      const r = mode === "reset" ? bd("reset", sc, "n1", "k1") : bd("clean", sc);
+      assert.equal(r.status, 0, r.stderr);
+      assert.ok(!existsSync(join(sc, "copy-abc")) && !existsSync(join(sc, "guard-x")), mode);
+      assert.ok(existsSync(join(sc, "chunks")) && existsSync(join(sc, "keep")), mode);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// car F security review (MEDIUM 1): every string leaf of the plan but the held-out list, matched case- and space-blind
+test("8.0.0 car F review M1: a held-out when/then in criteria examples, dont_care, property or spec_quote is redacted (case and spacing ignored)", async () => {
+  const s = happy({ criteria: CRIT });
+  const p = s["role:scope-and-plan"];
+  p.held_out_examples = HO;
+  p.criteria = CRIT.map((c) => Object.assign({}, c, { examples: c.examples.concat([{ given: "g", when: "F(9)", then: " 10", kind: "edge" }]), dont_care: ["f(9)  gives 10"], property: "F(9)\t== 10", spec_quote: "f(9) -> 10" }));
+  const out = await runOne(s, ARGS);
+  const all = JSON.stringify(out.result) + out.logs.join("\n") + out.calls.filter((c) => c.label !== "infra:held-out:write").map((c) => c.prompt).join("\n");
+  assert.ok(!/f\(9\)[^"]*10/i.test(all), "no held-out example anywhere but the write step");
+  assert.ok(out.calls.some((c) => c.prompt.includes("(held-out text redacted)")));
+});
+
+// B-L2, B-L3: the agent cap holds the held-out runner and the code round's run-state write
+test("8.0.0 car F B-L2/B-L3: heldOutRun reserves its agent before it counts it; the code-round reserve counts infra:state:committed (11)", () => {
+  const ho = SOURCE.slice(SOURCE.indexOf("async function heldOutRun("));
+  assert.match(ho.slice(0, ho.indexOf("state.agents++") + 15), /reserve\(1, label\);\n\s+state\.agents\+\+/);
+  assert.match(SOURCE, /reserve\(11 \+ \(planFacts\.changed_symbols \? 1 : 0\)/);
+});
+
+// B-L5: the db sweep fits a 180 s Bash call; the push probe's one 120 s dry run fits RUN_180S
+test("8.0.0 car F B-L5: db_sweep stops at its 150 s bound (a test knob lowers it) and still prints; the prompt asks for timeout 180000 ms", () => {
+  const d = mkdtempSync(join(tmpdir(), "fleet-r8f-sw-"));
+  try {
+    const sleep = spawnSync("sh", ["-c", "command -v sleep"], { encoding: "utf8" }).stdout.trim();
+    writeFileSync(join(d, "podman"), "#!/bin/sh\nexec " + sleep + " 30\n");
+    chmodSync(join(d, "podman"), 0o755);
+    const py = spawnSync("python3", ["-I", "-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim();
+    const t0 = Date.now();
+    const r = spawnSync(py, ["-I", join(SCRIPTS, "db_sweep.py")], { encoding: "utf8", env: { PATH: d, HOME: d, FLEET_DB_SWEEP_DEADLINE: "2" } });
+    assert.ok(Date.now() - t0 < 10000, "stops at the bound");
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(JSON.parse(r.stdout).errors.join(" "), /bound/);
+    assert.match(readFileSync(join(SCRIPTS, "db_sweep.py"), "utf8"), /TOTAL = min\(150, int\(_dl\)\)/);
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+  assert.match(SOURCE, /\? "1\. " \+ RUN_180S \+ progCmd\("db_sweep", \[\]\)/);
+  assert.match(readFileSync(join(SCRIPTS, "push.py"), "utf8"), /'--porcelain', 'origin', args\[2\] \+ ':refs\/heads\/' \+ args\[3\]\], stdout=subprocess\.PIPE, stderr=subprocess\.STDOUT, stdin=subprocess\.DEVNULL, timeout=120,/);
 });
