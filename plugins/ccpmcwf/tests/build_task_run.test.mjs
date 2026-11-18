@@ -199,9 +199,9 @@ function wrongFile(s, role) {
 test("5.0.0 R1 (was preflight missing role): a missing role file stops in preflight naming it", async () => {
   const out = await run(offPin(happy(), "fleet-coder", null), ARGS);
   assert.equal(out.result.status, "needs_human");
-  // 6.2.2 re-review D-L2: the probe counted the lines it hashed: the file is absent (6.3.0: after one retry whose count agrees)
+  // 8.0.2 (#77): the probe's digest holds, so the file is absent: no retry
   assert.match(out.result.reason, /roles\/fleet-coder\.md is absent from the installed plugin/);
-  assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
+  assert.deepEqual(out.labels, ["preflight"]);
 });
 
 // 5.0.0 (R1): was "preflight unreachable yadgar stops with needs_human". The
@@ -212,7 +212,7 @@ test("5.0.0 R1 (was preflight unreachable yadgar): a missing roles dir stops in 
   s.preflight = { scripts_probe: scriptsProbe({ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }), scripts_dir: SCRIPTS_DIR };
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.0\.1 from the marketplace/);
+  assert.match(out.result.reason, /roles dir .* resolves to "".*install ccpmcwf 8\.0\.2 from the marketplace/);
   assert.deepEqual(out.labels, ["preflight"]);
 });
 
@@ -6323,7 +6323,7 @@ test("5.0.0 R1 (was 2.1.5 contract mismatch reload hint): an unusable scripts or
   const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.match(out.result.reason, /roles dir .* resolves to ""/);
-  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.0\.1; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
+  assert.match(out.result.reason, /this workflow is ccpmcwf 8\.0\.2; if the plugin was updated after this session started, run \/reload-plugins or start a new session/);
 });
 
 // 2.1.4 trial bug #7: a criterion about NBSP was written with a raw or
@@ -7022,7 +7022,7 @@ test("2.1.6 review: a symbol over the cap stays flagged; narrower symbols only i
 test("5.0.0 R1 (was 2.1.6 page below pin): a role file off its pin names the file, the hashes and the install", async () => {
   const out = await runOne(offPin(happy(), "scope-and-plan"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.0\.1\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.0\.1 from the marketplace/);
+  assert.match(out.result.reason, /the shipped fleet role files were changed: \/home\/u\/\.claude\/plugins\/cache\/mkt\/ccpmcwf\/8\.0\.2\/roles\/scope-and-plan\.md hashes 1{64}, not [0-9a-f]{64}; install ccpmcwf 8\.0\.2 from the marketplace/);
 });
 
 test("2.1.6 review: a ref sealed before 2.1.6 still builds, and the run says it has no caller coverage", async () => {
@@ -8734,7 +8734,7 @@ test("5.0.0 R1 (was 4.0.0 pins): ROLE_SHA256 holds the sha256 of every shipped r
 test("5.0.0 R1 (was 4.0.0 pins deploy order): a role file off its pin names the install, not a deploy order", async () => {
   const out = await runOne(offPin(happy(), "fleet-code-judge"), ARGS);
   assert.equal(out.result.status, "needs_human");
-  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.0\.1/);
+  assert.match(out.result.reason, /fleet-code-judge\.md hashes .*install ccpmcwf 8\.0\.2/);
   assert.doesNotMatch(out.result.reason, /deploy order|agent_prompt_get/);
 });
 

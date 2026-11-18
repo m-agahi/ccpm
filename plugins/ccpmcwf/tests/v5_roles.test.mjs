@@ -22,7 +22,7 @@ import { SOURCE, ARGS, happy, run, runOne, spawnSync, inputsOf, ROLE_NAMES, ROLE
 async function realProbe(mutate) {
   const home = mkdtempSync(join(tmpdir(), "fleet-roles-probe-"));
   try {
-    const ver = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.0.1");
+    const ver = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", "8.0.2");
     mkdirSync(join(ver, "scripts"), { recursive: true });
     for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(ver, "scripts", n + ".py"));
     cpSync(ROLES_SRC, join(ver, "roles"), { recursive: true });
@@ -212,7 +212,7 @@ test("5.0.0 R1: preflight pins the roles dir: a hash mismatch, an extra .md, a m
   const cases = [
     [{ roleSums: { "pr-review.md": "1".repeat(64) } }, /pr-review\.md hashes 1{64}/],
     [{ roleSums: { "x.md": "1".repeat(64) } }, /x\.md is not a shipped role file/],
-    // 6.2.2 re-review D-L2: absent on disk (6.3.0: after one retry whose count agrees)
+    // 8.0.2 (#77): the probe's digest holds: absent on disk, no retry
     [{ roleSums: { "pr-review.md": undefined } }, /roles\/pr-review\.md is absent from the installed plugin/],
     [{ hits: [{ hit: SCRIPTS_DIR, roles_symlink: "yes" }] }, /roles dir .* is a symlink/],
     [{ hits: [{ hit: SCRIPTS_DIR, roles_real: "" }] }, /roles dir .* resolves to ""/],
@@ -224,7 +224,8 @@ test("5.0.0 R1: preflight pins the roles dir: a hash mismatch, an extra .md, a m
     assert.equal(out.result.status, "needs_human", JSON.stringify(over));
     assert.equal(out.result.stop_gate, "contract");
     assert.match(out.result.reason, re);
-    assert.deepEqual(out.labels, /no line for|is absent from the installed plugin/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
+    // 8.0.2 (#77): the digest holds, so an absent file stops on the first relay too
+    assert.deepEqual(out.labels, ["preflight"]);
   }
 });
 
@@ -256,7 +257,7 @@ test("5.0.0 R1: plan mode seals history.preflight {fleet_version, role_sha256}, 
   assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
   const p = JSON.parse(s.__store[out.result.plan_ref.plan_commit]).history.preflight;
   assert.deepEqual(Object.keys(p).sort(), ["fleet_version", "role_sha256"]);
-  assert.equal(p.fleet_version, "8.0.1");
+  assert.equal(p.fleet_version, "8.0.2");
   assert.deepEqual(p.role_sha256, PIN);
 });
 
@@ -337,7 +338,8 @@ test("5.0.0 R1 real execution: the probe, run by bash over a real plugin cache, 
     assert.equal(out.result.status, "needs_human", String(re));
     assert.equal(out.result.stop_gate, "contract");
     assert.match(out.result.reason, re);
-    assert.deepEqual(out.labels, /no line for|is absent from the installed plugin/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
+    // 8.0.2 (#77): the digest holds, so an absent file stops on the first relay too
+    assert.deepEqual(out.labels, ["preflight"]);
   }
 });
 

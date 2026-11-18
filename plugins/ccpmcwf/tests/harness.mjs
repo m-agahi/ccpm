@@ -1235,7 +1235,7 @@ export function verifyStub(store) {
 // script's own check (its PROGRAM_SHA256 table entry, 4.0.1) meets the file's. A stub that
 // names a program, or a __raw stub, is left alone.
 export const SCRIPTS_SRC = join(HERE, "..", "scripts");
-export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.0.1/scripts";
+export const SCRIPTS_DIR = "/home/u/.claude/plugins/cache/mkt/ccpmcwf/8.0.2/scripts";
 const GEN = await import(join(SCRIPTS_SRC, "gen.mjs"));
 // [[program name, sha256 the workflow's PROGRAM_SHA256 table holds]] (4.0.1)
 export const PROGRAMS = Object.entries(GEN.programs(SOURCE));
@@ -1367,11 +1367,14 @@ export function scriptsProbe(over = {}) {
     const rd = hits[0].hit.replace(/\/scripts$/, "") + "/roles";
     const rs = Object.assign(roleFileSums(), over.roleSums || {});
     for (const [f, v] of Object.entries(rs)) if (v !== undefined) hl.push(v + "  " + rd + "/" + f);
-    // 6.2.2 (2104): the probe's own count of its hash lines, before them
-    lines.push("hash_lines=" + hl.filter((x) => /^[0-9a-f]{64} /.test(x)).length, ...hl);
+    lines.push(...hl);
   }
-  return lines.concat(over.extra || []);
+  // 8.0.2 (#77): the probe's own sha256 of every line it printed (over.digest: a string in its place, null for none)
+  const out = lines.concat(over.extra || []);
+  if (over.digest !== null) out.push("probe_sha=" + (typeof over.digest === "string" ? over.digest : probeSha(out)));
+  return out;
 }
+export const probeSha = (lines) => sha256(lines.join("\n") + "\n");
 // the probe command a preflight prompt carries
 export async function PREFLIGHT_PROBE() {
   const o = await runOne(happy(), ARGS);

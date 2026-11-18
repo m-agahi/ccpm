@@ -9,19 +9,18 @@
 //   on each writer file. A failure sends a fix_tests round to the writers that
 //   own the failing files; the run never freezes while a listed hook fails on
 //   a test file. No list: no pre-freeze hook, as in 6.2.1.
-// 2104: the preflight probe prints its own count of hash lines. A relay with
-//   fewer hash lines than the workflow's own tables expect, or with no single
-//   count line, is retried once; then a distinct reason, never a bare
-//   "missing" (review M1).
+// 2104: a relay that drops hash lines is retried once; then a distinct
+//   reason, never a bare "missing" (review M1). 8.0.2 (#77): the probe's
+//   probe_sha= digest replaces its 6.2.2 hash_lines= count.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ARGS, happy, run, runOne, call, noUnscripted, inputsOf, H, HASHES, HASHES_FLAT, FP_PRE, FP_TESTS, FP_K1, FP_K2,
-  SCRIPTS_SRC, SCRIPTS_DIR, PROGRAMS, scriptsProbe, PREFLIGHT_PROBE, spawnSync, sh, K,
+  SCRIPTS_SRC, scriptsProbe, spawnSync, sh, K,
 } from "./harness.mjs";
 
 // ---------------------------------------------------------------- 2106
@@ -527,9 +526,11 @@ test("6.2.2 review M2: format_files.py: the failing hooks' head is at most 300 p
 });
 
 // ---------------------------------------------------------------- 2104
+// 8.0.2 (#77): the hash_lines= count is gone; the probe's probe_sha= digest
+// catches every drop below (v802_probe_digest.test.mjs has the rest)
 
 const PROSE = ["sha256sum lines for the 40 scripts and roles/* (46 files) follow."];
-// the probe's lines without its hash lines, plus a prose summary
+// the probe's lines without its hash lines, plus a prose summary (its probe_sha= line kept)
 function proseProbe() {
   return scriptsProbe().filter((x) => !/^[0-9a-f]{64} /.test(x)).concat(PROSE);
 }
@@ -547,10 +548,10 @@ test("6.2.2 2104: a prose-only scripts_probe is retried once, then stops with it
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "contract");
   assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
-  assert.match(out.result.reason, /preflight agent returned no hash lines/);
+  assert.match(out.result.reason, /preflight agent relayed lines that do not hash to their probe_sha= line/);
   assert.doesNotMatch(out.result.reason, /missing|install|reinstall/);
   const retry = call(out, "preflight:relay-retry").prompt;
-  assert.match(retry, /returned no hash lines/);
+  assert.match(retry, /do not hash to their probe_sha= line/);
   assert.match(retry, /every output line/);
 });
 
@@ -560,101 +561,20 @@ test("6.2.2 2104: a prose relay then a full relay passes preflight", async () =>
   const out = await run(s, ARGS);
   assert.equal(out.result.status, "ok", out.result.reason);
   assert.ok(out.labels.includes("preflight:relay-retry"));
-  assert.ok(out.result.gate_log.some((g) => /preflight: the agent relayed no hash lines; retried once/.test(g)), out.result.gate_log.join("\n"));
+  assert.ok(out.result.gate_log.some((g) => /preflight: the agent relayed lines that do not hash to their probe_sha= line; retried once/.test(g)), out.result.gate_log.join("\n"));
 });
 
-// the workflow's own count: every shipped program, role file and shared file
-const FULL = scriptsProbe();
-const WANT = FULL.filter((x) => /^[0-9a-f]{64} /.test(x)).length;
-const META = FULL.filter((x) => !/^[0-9a-f]{64} /.test(x) && !/^hash_lines=/.test(x));
-const FIRST10 = FULL.filter((x) => /^[0-9a-f]{64} /.test(x)).slice(0, 10);
-
-test("6.2.2 review M1: 10 of the expected hash lines is a relay drop when the count line says more, is missing or is doubled: retried, then 'relayed 10 of N expected'", async () => {
-  for (const [name, counts] of [
-    ["true count", ["hash_lines=" + WANT]],
-    ["count dropped", []],
-    ["count doubled", ["hash_lines=10", "hash_lines=10"]],
-  ]) {
-    const partial = () => META.concat(counts, FIRST10);
-    const s = happy();
-    s.__mutate = relayMutate(partial, partial);
-    const out = await runOne(s, ARGS);
-    assert.equal(out.result.status, "needs_human", name);
-    assert.equal(out.result.stop_gate, "contract", name);
-    assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"], name);
-    assert.match(out.result.reason, new RegExp("preflight agent relayed 10 of " + WANT + " expected hash lines \\(after one retry\\)"), name + ": " + out.result.reason);
-    assert.doesNotMatch(out.result.reason, /is missing/, name);
-    assert.ok(out.result.reason.includes("no line for: "), name);
-  }
-});
-
-test("6.2.2 review M1: every hash line but no single hash_lines= line (none, or two) is a relay drop too", async () => {
-  for (const counts of [[], ["hash_lines=" + WANT, "hash_lines=" + WANT]]) {
-    const relay = () => META.concat(counts, FULL.filter((x) => /^[0-9a-f]{64} /.test(x)));
-    const s = happy();
-    s.__mutate = relayMutate(relay, relay);
-    const out = await runOne(s, ARGS);
-    assert.equal(out.result.status, "needs_human", JSON.stringify(counts));
-    assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
-    assert.match(out.result.reason, new RegExp("preflight agent relayed " + counts.length + " hash_lines= lines \\(the probe prints one\\)"));
-  }
-  // and a retry that brings the full relay passes
+test("6.2.2 review M1: 10 of the expected hash lines is a relay drop: retried, then 're-run', never 'missing' or install", async () => {
+  const partial = () => {
+    const f = scriptsProbe();
+    return f.filter((x) => !/^[0-9a-f]{64} /.test(x)).concat(f.filter((x) => /^[0-9a-f]{64} /.test(x)).slice(0, 10));
+  };
   const s = happy();
-  s.__mutate = relayMutate(() => META.concat(FULL.filter((x) => /^[0-9a-f]{64} /.test(x))), () => scriptsProbe());
-  const out = await run(s, ARGS);
-  assert.equal(out.result.status, "ok", out.result.reason);
-});
-
-test("6.2.2 re-review D-L2: one count line equal to the lines relayed, short of the tables, is a file absent on disk: 6.3.0: one retry, then named with the install text when both relays agree", async () => {
-  // a real missing file: the probe hashed one file fewer and counted it
-  let s = happy();
-  s.preflight = Object.assign({}, s.preflight, { scripts_probe: scriptsProbe({ sums: { hasher: undefined } }) });
-  let out = await runOne(s, ARGS);
+  s.__mutate = relayMutate(partial, partial);
+  const out = await runOne(s, ARGS);
   assert.equal(out.result.status, "needs_human");
   assert.equal(out.result.stop_gate, "contract");
   assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
-  assert.match(out.result.reason, /hasher\.py is absent from the installed plugin/);
-  assert.match(out.result.reason, /install ccpmcwf 8\.0\.1/);
-  assert.doesNotMatch(out.result.reason, /relayed/);
-  // 10 lines with a count of 10 reads the same way
-  s = happy();
-  s.preflight = Object.assign({}, s.preflight, { scripts_probe: META.concat(["hash_lines=10"], FIRST10) });
-  out = await runOne(s, ARGS);
-  assert.deepEqual(out.labels, ["preflight", "preflight:relay-retry"]);
-  assert.match(out.result.reason, /is absent from the installed plugin/);
-  // 6.3.0 (6.2.2 carry-over low 2): a first relay that dropped lines and counted only those it kept is
-  // retried; a full second relay passes (the residual the retry removes)
-  s = happy();
-  let n = 0;
-  s.__mutate = { label: "preflight", fn: (r, prompt, label) => (label === "preflight" && n++ === 0 ? Object.assign(r, { scripts_probe: scriptsProbe({ sums: { hasher: undefined } }) }) : r) };
-  out = await runOne(s, ARGS);
-  assert.equal(out.result.status, "awaiting_confirmation", out.result.reason);
-  assert.ok(out.labels.includes("preflight:relay-retry"));
-});
-
-test("6.2.2 2104: the probe, run for real, prints hash_lines= with the count of its sha256sum lines before them", { skip: spawnSync("python3", ["-c", "1"]).status !== 0 }, async () => {
-  const home = mkdtempSync(join(tmpdir(), "fleet-622-probe-"));
-  try {
-    const ver = join(home, ".claude", "plugins", "cache", "mkt", "ccpmcwf", SCRIPTS_DIR.split("/").slice(-2)[0]);
-    mkdirSync(join(ver, "scripts"), { recursive: true });
-    for (const [n] of PROGRAMS) cpSync(join(SCRIPTS_SRC, n + ".py"), join(ver, "scripts", n + ".py"));
-    cpSync(join(SCRIPTS_SRC, "..", "roles"), join(ver, "roles"), { recursive: true });
-    const p = spawnSync("bash", ["-c", await PREFLIGHT_PROBE()], { encoding: "utf8", env: Object.assign({}, process.env, { HOME: home }) });
-    assert.equal(p.status, 0, p.stderr);
-    const lines = p.stdout.split("\n");
-    const counts = lines.filter((x) => x.startsWith("hash_lines="));
-    assert.equal(counts.length, 1, p.stdout);
-    const hashes = lines.filter((x) => /^[0-9a-f]{64} /.test(x));
-    assert.equal(counts[0], "hash_lines=" + hashes.length);
-    assert.ok(hashes.length >= PROGRAMS.length + 10);
-    assert.ok(lines.indexOf(counts[0]) < lines.indexOf(hashes[0]), "the count comes before the hash lines");
-    // and the workflow accepts the real relay
-    const s = happy();
-    delete s.__dispatch;
-    s.preflight = { scripts_probe: lines, scripts_dir: join(ver, "scripts") };
-    const out = await runOne(s, ARGS);
-    assert.ok(out.labels.length > 1 && out.labels[1] !== "preflight:relay-retry", out.result && out.result.reason);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  assert.match(out.result.reason, /\(after one retry\); the scripts on disk were not checked, so re-run/);
+  assert.doesNotMatch(out.result.reason, /is missing|install/);
 });

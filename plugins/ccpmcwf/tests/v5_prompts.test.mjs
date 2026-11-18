@@ -242,7 +242,7 @@ test("5.0.0 R3: preflight pins the shared dir: a changed, extra or missing share
   const cases = [
     [{ roleSums: { "_shared/test-cmd-allowlist.md": "1".repeat(64) } }, /_shared\/test-cmd-allowlist\.md hashes 1{64}/],
     [{ roleSums: { "_shared/x.md": "1".repeat(64) } }, /_shared\/x\.md is not a shipped role file/],
-    // 6.2.2 re-review D-L2: absent on disk (6.3.0: after one retry whose count agrees)
+    // 8.0.2 (#77): the probe's digest holds: absent on disk, no retry
     [{ roleSums: { "_shared/test-cmd-allowlist.md": undefined } }, /roles\/_shared\/test-cmd-allowlist\.md is absent from the installed plugin/],
   ];
   for (const [over, re] of cases) {
@@ -252,7 +252,8 @@ test("5.0.0 R3: preflight pins the shared dir: a changed, extra or missing share
     assert.equal(out.result.status, "needs_human", JSON.stringify(over));
     assert.equal(out.result.stop_gate, "contract");
     assert.match(out.result.reason, re);
-    assert.deepEqual(out.labels, /no line for|is absent from the installed plugin/.test(String(re)) ? ["preflight", "preflight:relay-retry"] : ["preflight"]);
+    // 8.0.2 (#77): the digest holds, so an absent file stops on the first relay too
+    assert.deepEqual(out.labels, ["preflight"]);
   }
 });
 
