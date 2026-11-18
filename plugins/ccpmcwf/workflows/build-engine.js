@@ -3926,7 +3926,7 @@ const x = state.gates[g];
 if (!x || x.round !== m) return [];
 const flat = (a, f) => [].concat(...a.map(f));
 const rul = flat(Array.isArray(ex) ? ex : [], (e) => (e && e.gate === g && Array.isArray(e.lines) ? e.lines.map((l) => ({ id: e.path + ":" + l, reason: e.reason })) : []));
-return unruled(flat(x.findings, (f) => f.lines.map((l) => ({ id: f.path + ":" + l, s: capPath(f.path) + ":" + l }))), rul).map((f) => f.s);
+return unruled(flat(x.findings, (f) => f.lines.map((l) => ({ id: f.path + ":" + l }))), rul).map((f) => f.id);
 }
 const RUNNER = "fleet-held-out-runner";
 async function heldOutRun(ref, m, inputs) {
@@ -4853,6 +4853,7 @@ function logPath(p) {
 return String(p).replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, "?");
 }
 const capPath = (p) => logPath(p).slice(0, 200);
+const capId = (id) => capPath(id.slice(0, id.lastIndexOf(":"))) + id.slice(id.lastIndexOf(":"));
 function isHookPath(p, surface) {
 if (HOOK_PATH_RE.test(p)) return true;
 for (const s of surface) {
@@ -7736,14 +7737,14 @@ continue;
 }
 const covLeft = gateLeft("coverage", cj.exemptions, m);
 if (covLeft.length) {
-coderFindings = [{ target: "code", criterion: null, finding: "coverage gate: added production lines that no test runs and no exemption covers: " + covLeft.join(", ") + " -- delete the untested code or make the frozen tests run it" }];
+coderFindings = [{ target: "code", criterion: null, finding: "coverage gate: added production lines that no test runs and no exemption covers: " + covLeft.map(capId).join(", ") + " -- delete the untested code or make the frozen tests run it" }];
 judgePrior = coderFindings.slice();
 lastRoundGate = "coverage";
-gate("code round " + m + ": coverage gate: code-judge approve converted to fix_code (" + covLeft.length + " line(s): " + covLeft.join(", ") + ")");
+gate("code round " + m + ": coverage gate: code-judge approve converted to fix_code (" + covLeft.length + " line(s): " + covLeft.map(capId).join(", ") + ")");
 continue;
 }
 const secX = gateLeft("security_scan", cj.exemptions, m);
-const secLeft = [].concat(...sec.findings.map((f) => f.lines.map((l) => f.path + ":" + l).filter((id) => f.kind === "secret" || secX.indexOf(id) >= 0).map((id) => capPath(id) + " " + f.rule)));
+const secLeft = [].concat(...sec.findings.map((f) => f.lines.map((l) => f.path + ":" + l).filter((id) => f.kind === "secret" || secX.indexOf(id) >= 0).map((id) => capId(id) + " " + f.rule)));
 if (secLeft.length) {
 coderFindings = [{ target: "code", criterion: null, finding: "security gate: findings no exemption covers (a secret is never exempted): " + secLeft.join(", ") + " -- fix the code or remove the secret" }];
 judgePrior = coderFindings.slice();

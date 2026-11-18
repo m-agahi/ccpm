@@ -4382,7 +4382,7 @@ function gateLeft(g, ex, m) {
   if (!x || x.round !== m) return [];
   const flat = (a, f) => [].concat(...a.map(f));
   const rul = flat(Array.isArray(ex) ? ex : [], (e) => (e && e.gate === g && Array.isArray(e.lines) ? e.lines.map((l) => ({ id: e.path + ":" + l, reason: e.reason })) : []));
-  return unruled(flat(x.findings, (f) => f.lines.map((l) => ({ id: f.path + ":" + l, s: capPath(f.path) + ":" + l }))), rul).map((f) => f.s);
+  return unruled(flat(x.findings, (f) => f.lines.map((l) => ({ id: f.path + ":" + l }))), rul).map((f) => f.id);
 }
 
 // 8.0.0 (G4, ADR-1152): the held-out runner role; every outcome sets state.gates.held_out for round m.
@@ -5408,6 +5408,7 @@ function logPath(p) {
 }
 // car F (A-L12): a coder-written path in a gate line or finding, capped
 const capPath = (p) => logPath(p).slice(0, 200);
+const capId = (id) => capPath(id.slice(0, id.lastIndexOf(":"))) + id.slice(id.lastIndexOf(":"));
 // #12 closed by the #15 ruling (L2017): a dir hook token without a trailing slash matches exactly
 function isHookPath(p, surface) {
   if (HOOK_PATH_RE.test(p)) return true;
@@ -8630,15 +8631,15 @@ async function buildFromRef(input, date, tiny, lay, ws, opt) {
       // 8.0.0 (G2, ADR-1316): an approve leaves no uncovered added line unexempted (routed as the obligations gate)
       const covLeft = gateLeft("coverage", cj.exemptions, m);
       if (covLeft.length) {
-        coderFindings = [{ target: "code", criterion: null, finding: "coverage gate: added production lines that no test runs and no exemption covers: " + covLeft.join(", ") + " -- delete the untested code or make the frozen tests run it" }];
+        coderFindings = [{ target: "code", criterion: null, finding: "coverage gate: added production lines that no test runs and no exemption covers: " + covLeft.map(capId).join(", ") + " -- delete the untested code or make the frozen tests run it" }];
         judgePrior = coderFindings.slice();
         lastRoundGate = "coverage";
-        gate("code round " + m + ": coverage gate: code-judge approve converted to fix_code (" + covLeft.length + " line(s): " + covLeft.join(", ") + ")");
+        gate("code round " + m + ": coverage gate: code-judge approve converted to fix_code (" + covLeft.length + " line(s): " + covLeft.map(capId).join(", ") + ")");
         continue;
       }
       // 8.0.0 (G7, ADR-1315): every security finding line needs a reasoned exemption; a secret never has one
       const secX = gateLeft("security_scan", cj.exemptions, m);
-      const secLeft = [].concat(...sec.findings.map((f) => f.lines.map((l) => f.path + ":" + l).filter((id) => f.kind === "secret" || secX.indexOf(id) >= 0).map((id) => capPath(id) + " " + f.rule)));
+      const secLeft = [].concat(...sec.findings.map((f) => f.lines.map((l) => f.path + ":" + l).filter((id) => f.kind === "secret" || secX.indexOf(id) >= 0).map((id) => capId(id) + " " + f.rule)));
       if (secLeft.length) {
         coderFindings = [{ target: "code", criterion: null, finding: "security gate: findings no exemption covers (a secret is never exempted): " + secLeft.join(", ") + " -- fix the code or remove the secret" }];
         judgePrior = coderFindings.slice();

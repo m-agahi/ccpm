@@ -490,6 +490,8 @@ token counts come from the smoke run, after this entry.
   dirs (a step that died before its remove).
 - A-L12: a coder-written path in a gate line, the coder's gate finding and the PR's gate text has
   control characters replaced and is cut at 200 characters (coverage, mutation, security).
+  The cut is display only: exemption matching and the security gate's unexempted check use the
+  raw `path:line` id, so a long or escaped path can never drop a finding (security review).
 - A-L13: `sec_scan.py` skips a base `.semgrep` YAML file with no top-level `rules:`; parses
   `est_diff_lines` with an exponent or a fraction as an int and skips the size check when it is not
   positive; is `partial` when the scan dir path holds `:`; and removes the container on TERM.

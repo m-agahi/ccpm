@@ -550,6 +550,16 @@ test("8.0.0 G7-1: an added shell=True line with no exemption turns an approve in
   assert.deepEqual(inputsOf(call(out, "role:fleet-code-judge:r1").prompt).script_findings.security.findings, [SHELL_F]);
 });
 
+test("8.0.0 car F security review: an unexempted finding on a long or escaped path is never dropped by the display cap", async () => {
+  for (const path of ["src/" + "a".repeat(250) + ".py", "src/x\ty.py"]) {
+    const F = Object.assign({}, SHELL_F, { path });
+    const out = await run(happy({ script: Object.assign({ "infra:gates:r1": gatesStub({ findings: [F] }), "role:fleet-code-judge:r1": approve() }, R2, { "role:fleet-coder:r2": { status: "ok", changed_paths: [path] } }) }), ARGS);
+    assert.equal(out.result.status, "ok", out.result.reason);
+    assert.ok(out.labels.includes("role:fleet-coder:r2"), "fix_code for " + JSON.stringify(path));
+    assert.match(inputsOf(call(out, "role:fleet-coder:r2").prompt).routed_findings[0].finding, /^security gate: findings no exemption covers/);
+  }
+});
+
 test("8.0.0 G7-2: a fixture secret always gives fix_code, even with a reasoned exemption", async () => {
   const ex = [{ gate: "security_scan", path: "src/x.py", lines: [7], reason: "a test fixture key" }];
   const out = await run(happy({ script: Object.assign({ "infra:gates:r1": gatesStub({ findings: [SECRET_F] }), "role:fleet-code-judge:r1": approve(ex) }, R2) }), ARGS);
